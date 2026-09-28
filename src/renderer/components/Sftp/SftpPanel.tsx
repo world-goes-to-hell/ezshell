@@ -21,6 +21,7 @@ interface SftpPanelProps {
 
 export function SftpPanel({ sessionId }: SftpPanelProps) {
   const store = useSftpStore()
+  const getStoreState = () => useSftpStore.getState()
 
   // Get session-specific state
   const isOpen = store.isOpen(sessionId)
@@ -30,8 +31,8 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
   const localFiles = store.localFiles(sessionId)
   const selectedRemote = store.selectedRemote(sessionId)
   const selectedLocal = store.selectedLocal(sessionId)
+  const panelHeight = store.panelHeight(sessionId)
 
-  const [panelHeight, setPanelHeight] = useState(300)
   const [isResizing, setIsResizing] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -49,6 +50,8 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
   // Directory sync state
   const [isSyncMode, setIsSyncMode] = useState(false)
   const syncTriggeredRef = useRef(false)
+  const [isLocalLoading, setIsLocalLoading] = useState(false)
+  const [isRemoteLoading, setIsRemoteLoading] = useState(false)
 
   // Resize handlers
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -64,7 +67,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
       const newHeight = windowHeight - e.clientY
       // Clamp height between 150 and 80% of window height
       const clampedHeight = Math.max(150, Math.min(newHeight, windowHeight * 0.8))
-      setPanelHeight(clampedHeight)
+      store.setPanelHeight(sessionId, clampedHeight)
     }
 
     const handleMouseUp = () => {
@@ -80,7 +83,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [isResizing])
+  }, [isResizing, sessionId, store])
 
   // Transfer queue resize handlers
   useEffect(() => {
@@ -119,12 +122,12 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     const initSftp = async () => {
       if (isOpen && sessionId) {
         try {
-          // Open SFTP session first
           await window.electronAPI.sftpOpen(sessionId)
           toast.info('SFTP session opened')
-          // Then load files
-          await loadRemoteFiles(remotePath || '/')
-          await loadLocalFiles(localPath || getDefaultLocalPath())
+          await Promise.all([
+            loadRemoteFiles(remotePath || '/'),
+            loadLocalFiles(localPath || getDefaultLocalPath())
+          ])
         } catch (error) {
           console.error('Failed to initialize SFTP:', error)
           toast.error('SFTP initialization failed', error instanceof Error ? error.message : 'Unknown error')
@@ -141,7 +144,11 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     return isWindows ? 'C:\\' : '/'
   }
 
-  const loadRemoteFiles = async (path: string) => {
+  const loadRemoteFiles = async (path: string, fromSync = false) => {
+    if (!fromSync && (isRemoteLoading || isLocalLoading)) return
+    setIsRemoteLoading(true)
+    const prevRemotePath = remotePath
+    store.setRemotePath(sessionId, path)
     try {
       const rawFiles = await window.electronAPI.sftpList(sessionId, path)
       const files = (rawFiles || []).map((f: any) => ({
@@ -152,8 +159,6 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
         permissions: f.permissions
       }))
       store.setRemoteFiles(sessionId, files)
-      const prevRemotePath = remotePath
-      store.setRemotePath(sessionId, path)
 
       // Directory sync: when remote navigates, sync local
       if (isSyncMode && !syncTriggeredRef.current && prevRemotePath !== path) {
@@ -161,28 +166,35 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
         try {
           const isGoingUp = path.split('/').filter(Boolean).length < prevRemotePath.split('/').filter(Boolean).length
           if (isGoingUp) {
-            // Going up: move local up too
-            const isWin = isWindowsPath(localPath)
+            const depthDiff = prevRemotePath.split('/').filter(Boolean).length - path.split('/').filter(Boolean).length
+            const currentLocalPath = getStoreState().localPath(sessionId)
+            const isWin = isWindowsPath(currentLocalPath)
             if (isWin) {
-              const parts = localPath.split('\\').filter(Boolean)
-              if (parts.length > 1) {
-                parts.pop()
-                await loadLocalFiles(parts.join('\\') + '\\')
+              const parts = currentLocalPath.split('\\').filter(Boolean)
+              const removeLevels = Math.min(depthDiff, parts.length - 1)
+              if (removeLevels > 0) {
+                const newParts = parts.slice(0, parts.length - removeLevels)
+                await loadLocalFiles(newParts.join('\\') + '\\', true)
               }
             } else {
-              const parts = localPath.split('/').filter(Boolean)
-              if (parts.length > 0) {
-                parts.pop()
-                await loadLocalFiles(parts.length === 0 ? '/' : `/${parts.join('/')}`)
-              }
+              const parts = currentLocalPath.split('/').filter(Boolean)
+              const removeLevels = Math.min(depthDiff, parts.length)
+              const newParts = parts.slice(0, parts.length - removeLevels)
+              await loadLocalFiles(newParts.length === 0 ? '/' : `/${newParts.join('/')}`, true)
             }
           } else {
             // Going deeper: extract entered directory name
             const enteredDir = path.split('/').filter(Boolean).pop()
             if (enteredDir) {
-              const localHasDir = localFiles.some(f => f.name === enteredDir && f.type === 'directory')
+              const currentLocalPath = getStoreState().localPath(sessionId)
+              const currentLocalFiles = getStoreState().localFiles(sessionId)
+              const localHasDir = currentLocalFiles.some(f => f.name === enteredDir && f.type === 'directory')
               if (localHasDir) {
-                await loadLocalFiles(joinPath(localPath, enteredDir, isWindowsPath(localPath)))
+                await loadLocalFiles(joinPath(currentLocalPath, enteredDir, isWindowsPath(currentLocalPath)), true)
+              } else {
+                // Target directory doesn't exist on local side
+                setIsSyncMode(false)
+                toast.info('동기화 해제', `'${enteredDir}' 디렉토리가 로컬에 없어 동기화가 해제되었습니다.`)
               }
             }
           }
@@ -193,10 +205,17 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     } catch (error) {
       console.error('Failed to load remote files:', error)
       toast.error('Failed to load remote files', error instanceof Error ? error.message : 'Unknown error')
+      store.setRemotePath(sessionId, prevRemotePath)
+    } finally {
+      setIsRemoteLoading(false)
     }
   }
 
-  const loadLocalFiles = async (path: string) => {
+  const loadLocalFiles = async (path: string, fromSync = false) => {
+    if (!fromSync && (isLocalLoading || isRemoteLoading)) return
+    setIsLocalLoading(true)
+    const prevLocalPath = localPath
+    store.setLocalPath(sessionId, path)
     try {
       const result = await window.electronAPI.localList(path)
       if (result.success) {
@@ -207,8 +226,6 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
           modifyTime: f.mtime
         }))
         store.setLocalFiles(sessionId, files)
-        const prevLocalPath = localPath
-        store.setLocalPath(sessionId, path)
 
         // Directory sync: when local navigates, sync remote
         if (isSyncMode && !syncTriggeredRef.current && prevLocalPath !== path) {
@@ -220,19 +237,25 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
             const isGoingUp = newParts.length < prevParts.length
 
             if (isGoingUp) {
-              // Going up: move remote up too
-              const remoteParts = remotePath.split('/').filter(Boolean)
-              if (remoteParts.length > 0) {
-                remoteParts.pop()
-                await loadRemoteFiles(remoteParts.length === 0 ? '/' : `/${remoteParts.join('/')}`)
-              }
+              const depthDiff = prevParts.length - newParts.length
+              const currentRemotePath = getStoreState().remotePath(sessionId)
+              const remoteParts = currentRemotePath.split('/').filter(Boolean)
+              const removeLevels = Math.min(depthDiff, remoteParts.length)
+              const newRemoteParts = remoteParts.slice(0, remoteParts.length - removeLevels)
+              await loadRemoteFiles(newRemoteParts.length === 0 ? '/' : `/${newRemoteParts.join('/')}`, true)
             } else {
               // Going deeper: extract entered directory name
               const enteredDir = newParts[newParts.length - 1]
               if (enteredDir) {
-                const remoteHasDir = remoteFiles.some(f => f.name === enteredDir && f.type === 'directory')
+                const currentRemotePath = getStoreState().remotePath(sessionId)
+                const currentRemoteFiles = getStoreState().remoteFiles(sessionId)
+                const remoteHasDir = currentRemoteFiles.some(f => f.name === enteredDir && f.type === 'directory')
                 if (remoteHasDir) {
-                  await loadRemoteFiles(joinPath(remotePath, enteredDir, false))
+                  await loadRemoteFiles(joinPath(currentRemotePath, enteredDir, false), true)
+                } else {
+                  // Target directory doesn't exist on remote side
+                  setIsSyncMode(false)
+                  toast.info('동기화 해제', `'${enteredDir}' 디렉토리가 원격에 없어 동기화가 해제되었습니다.`)
                 }
               }
             }
@@ -242,10 +265,14 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
         }
       } else {
         toast.error('Failed to load local files', result.error || 'Unknown error')
+        store.setLocalPath(sessionId, prevLocalPath)
       }
     } catch (error) {
       console.error('Failed to load local files:', error)
       toast.error('Failed to load local files', error instanceof Error ? error.message : 'Unknown error')
+      store.setLocalPath(sessionId, prevLocalPath)
+    } finally {
+      setIsLocalLoading(false)
     }
   }
 
@@ -572,6 +599,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
             sessionId={sessionId}
             onUpload={handleUpload}
             onDrop={handleDropOnLocal}
+            isLoading={isLocalLoading}
           />
         </div>
 
@@ -598,6 +626,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
             sessionId={sessionId}
             onDownload={handleDownload}
             onDrop={handleDropOnRemote}
+            isLoading={isRemoteLoading}
           />
         </div>
       </div>

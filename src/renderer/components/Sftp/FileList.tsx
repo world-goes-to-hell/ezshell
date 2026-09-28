@@ -17,6 +17,7 @@ interface FileListProps {
   onUpload?: () => void
   onDownload?: () => void
   onDrop?: (fileNames: string[]) => void
+  isLoading?: boolean
 }
 
 interface ContextMenuState {
@@ -31,14 +32,21 @@ const isWindows = () => {
          navigator.userAgent.toLowerCase().includes('windows')
 }
 
-export function FileList({ files, selected, onNavigate, currentPath, type, sessionId, onUpload, onDownload, onDrop }: FileListProps) {
+export function FileList({ files, selected, onNavigate, currentPath, type, sessionId, onUpload, onDownload, onDrop, isLoading }: FileListProps) {
   const store = useSftpStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, file: null })
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const fileListRef = useRef<HTMLDivElement>(null)
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number>(-1)
-  const [focusIndex, setFocusIndex] = useState<number>(-1)
+  const focusIndexRef = useRef<number>(-1)
+  const [, forceUpdate] = useState(0)
+  const focusIndex = focusIndexRef.current
+  const setFocusIndex = (idx: number) => {
+    focusIndexRef.current = idx
+    forceUpdate(c => c + 1)
+  }
 
   // Close context menu on click outside
   useEffect(() => {
@@ -57,6 +65,7 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
 
   // Ctrl+A handler on the file-list element itself
   const handleListKeyDown = (e: React.KeyboardEvent) => {
+    if (isLoading) return
     if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
       e.preventDefault()
       if (type === 'remote') {
@@ -69,7 +78,8 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
 
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      const nextIndex = Math.min(focusIndex + 1, files.length - 1)
+      const startFrom = focusIndex >= 0 ? focusIndex : (lastSelectedIndex >= 0 ? lastSelectedIndex - 1 : -1)
+      const nextIndex = Math.min(startFrom + 1, files.length - 1)
       setFocusIndex(nextIndex)
       if (e.shiftKey) {
         // Shift+ArrowDown: extend range selection
@@ -91,13 +101,13 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
         setLastSelectedIndex(nextIndex)
       }
       // Scroll focused item into view
-      const items = fileListRef.current?.querySelectorAll('.file-item:not(.parent-dir)')
-      items?.[nextIndex]?.scrollIntoView({ block: 'nearest' })
+      itemRefs.current[nextIndex]?.scrollIntoView({ block: 'nearest' })
     }
 
     if (e.key === 'ArrowUp') {
       e.preventDefault()
-      const prevIndex = Math.max(focusIndex - 1, 0)
+      const startFrom = focusIndex >= 0 ? focusIndex : (lastSelectedIndex >= 0 ? lastSelectedIndex + 1 : files.length)
+      const prevIndex = Math.max(startFrom - 1, 0)
       setFocusIndex(prevIndex)
       if (e.shiftKey) {
         const start = Math.min(lastSelectedIndex >= 0 ? lastSelectedIndex : prevIndex, prevIndex)
@@ -116,8 +126,28 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
         }
         setLastSelectedIndex(prevIndex)
       }
-      const items = fileListRef.current?.querySelectorAll('.file-item:not(.parent-dir)')
-      items?.[prevIndex]?.scrollIntoView({ block: 'nearest' })
+      itemRefs.current[prevIndex]?.scrollIntoView({ block: 'nearest' })
+    }
+
+    if (e.key === 'ArrowRight') {
+      if (focusIndex >= 0 && focusIndex < files.length) {
+        const file = files[focusIndex]
+        if (file.type === 'directory') {
+          e.preventDefault()
+          const separator = type === 'local' && isWindows() ? '\\' : '/'
+          const newPath = currentPath === '/' || currentPath === 'C:\\'
+            ? (type === 'local' && isWindows() ? `${currentPath}${file.name}` : `/${file.name}`)
+            : `${currentPath}${separator}${file.name}`
+          onNavigate(newPath)
+          setFocusIndex(-1)
+        }
+      }
+    }
+
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      goUp()
+      setFocusIndex(-1)
     }
 
     if (e.key === 'Enter') {
@@ -387,6 +417,12 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {isLoading && (
+        <div className="file-list-loading">
+          <div className="loading-spinner" />
+          <span>로딩 중...</span>
+        </div>
+      )}
       <div className="file-item parent-dir" onClick={goUp}>
         <RiArrowUpSFill size={14} />
         <span>..</span>
@@ -394,6 +430,7 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
       {files.map((file, index) => (
         <div
           key={file.name}
+          ref={(el) => { itemRefs.current[index] = el }}
           className={`file-item ${file.type === 'directory' ? 'is-directory' : 'is-file'} ${selected.has(file.name) ? 'selected' : ''} ${focusIndex === index ? 'focused' : ''}`}
           onClick={(e) => handleClick(e, file, index)}
           onDoubleClick={() => handleDoubleClick(file)}

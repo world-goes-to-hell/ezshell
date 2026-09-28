@@ -1415,6 +1415,34 @@ body {
   border-radius: 6px;
 }
 
+/* SFTP loading spinner */
+.file-list-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  color: var(--text-secondary, #888);
+  font-size: 12px;
+  background: var(--bg-primary, rgba(0, 0, 0, 0.3));
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-color, #333);
+  border-top-color: var(--accent, #007acc);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .file-item {
   display: flex;
   align-items: center;
@@ -1424,7 +1452,7 @@ body {
   font-size: 12px;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), color var(--transition-fast);
 }
 
 .file-item:hover {
@@ -1440,6 +1468,7 @@ body {
 .file-item.focused {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
+  transition: none;
 }
 
 .file-item.parent-dir {
@@ -3015,6 +3044,8 @@ body {
   background: var(--border);
   min-width: 0;
   min-height: 0;
+  position: relative;
+  z-index: 5;
 }
 
 .grid-divider:hover {
@@ -3030,7 +3061,7 @@ body {
 }
 
 .grid-divider-center {
-  cursor: default;
+  cursor: move;
 }
 
 /* Merge context menu */
@@ -3070,6 +3101,7 @@ body {
 .terminal-split-divider {
   background: var(--border);
   flex-shrink: 0;
+  position: relative;
 }
 
 .terminal-split-divider.horizontal {
@@ -3083,6 +3115,51 @@ body {
 }
 
 .terminal-split-divider:hover {
+  background: var(--accent);
+}
+
+.terminal-split-divider::before {
+  content: '';
+  position: absolute;
+  z-index: 10;
+}
+
+.terminal-split-divider.horizontal::before {
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  right: -4px;
+}
+
+.terminal-split-divider.vertical::before {
+  left: 0;
+  right: 0;
+  top: -4px;
+  bottom: -4px;
+}
+
+/* Resize drag interaction */
+body.resizing {
+  user-select: none;
+}
+
+body.resizing .terminal-container,
+body.resizing .terminal-container * {
+  pointer-events: none !important;
+}
+
+body.resizing .split-pane-content,
+body.resizing .split-pane-content * {
+  pointer-events: none !important;
+}
+
+.split-divider:active,
+.terminal-split-divider:active,
+.grid-divider:active {
+  background: var(--accent);
+}
+
+.split-view-container.resizing .split-divider {
   background: var(--accent);
 }
 
@@ -3339,6 +3416,8 @@ body {
   background: var(--border);
   flex-shrink: 0;
   transition: background var(--transition-fast);
+  position: relative;
+  z-index: 5;
 }
 
 .split-divider.horizontal {

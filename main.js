@@ -33,6 +33,7 @@ let currentMasterPassword = null; // In-memory only, cleared on lock
 let isAppLocked = true;
 const sshConnections = new Map();
 const sshStreams = new Map(); // sessionId:streamId -> stream (for split terminals)
+const splitStreamLastClosed = new Map(); // sessionId -> timestamp of last split stream close
 const portForwards = new Map(); // forwardId -> { type, server, sessionId, localHost, localPort, remoteHost, remotePort, connectionCount }
 
 // Connection state management
@@ -723,6 +724,8 @@ async function attemptReconnect(sessionId) {
         sessionId,
         message: 'Maximum reconnection attempts reached (5)'
       });
+      // Send ssh-closed since reconnection permanently failed
+      targetWindow.webContents.send('ssh-closed', { sessionId });
     }
     return;
   }
@@ -874,12 +877,20 @@ ipcMain.handle('ssh-connect', async (event, config) => {
           });
 
           stream.on('close', () => {
-            const targetWindow = getWindowForSession(sessionId);
-            if (targetWindow) {
-              targetWindow.webContents.send('ssh-closed', { sessionId });
+            const connState = connectionStates.get(sessionId);
+
+            // If auto-reconnect is enabled, don't send ssh-closed yet - let reconnection handle it
+            if (connState && connState.autoReconnect) {
+              updateConnectionState(sessionId, ConnectionState.RECONNECTING);
+              attemptReconnect(sessionId);
+            } else {
+              // No auto-reconnect, send ssh-closed immediately
+              const targetWindow = getWindowForSession(sessionId);
+              if (targetWindow) {
+                targetWindow.webContents.send('ssh-closed', { sessionId });
+              }
+              updateConnectionState(sessionId, ConnectionState.DISCONNECTED);
             }
-            updateConnectionState(sessionId, ConnectionState.DISCONNECTED);
-            attemptReconnect(sessionId);
           });
 
           resolve({ success: true, sessionId });
@@ -887,7 +898,21 @@ ipcMain.handle('ssh-connect', async (event, config) => {
       });
 
       conn.on('error', (err) => {
+        // Only reject if Promise hasn't resolved yet
         reject(err);
+      });
+
+      // Handle connection-level close (covers cases where connection drops without stream close)
+      conn.on('close', () => {
+        const connState = connectionStates.get(sessionId);
+        // Only handle if this connection is still the active one
+        const currentSession = sshConnections.get(sessionId);
+        if (currentSession && currentSession.conn === conn) {
+          if (connState && connState.autoReconnect && connState.state !== ConnectionState.RECONNECTING) {
+            updateConnectionState(sessionId, ConnectionState.RECONNECTING);
+            attemptReconnect(sessionId);
+          }
+        }
       });
 
       // 연결 설정 구성
@@ -1070,6 +1095,27 @@ ipcMain.handle('ssh-create-shell', async (event, { sessionId }) => {
     return { success: false, error: 'SSH 연결이 없습니다.' };
   }
 
+  // Proactively clean up any existing split streams for this session before creating new one
+  const prefix = `${sessionId}:split-`;
+  let hadStaleStreams = false;
+  for (const [streamId, stream] of sshStreams.entries()) {
+    if (streamId.startsWith(prefix)) {
+      try { stream.end(); } catch (e) {}
+      sshStreams.delete(streamId);
+      splitStreamLastClosed.set(sessionId, Date.now());
+      hadStaleStreams = true;
+    }
+  }
+
+  // Wait if any split streams were closed recently (even by ssh-split-close)
+  // Server needs time to fully process channel closure
+  const lastClosed = splitStreamLastClosed.get(sessionId);
+  const timeSinceClose = lastClosed ? Date.now() - lastClosed : Infinity;
+  if (hadStaleStreams || timeSinceClose < 1000) {
+    const waitTime = Math.max(500, 1000 - timeSinceClose);
+    await new Promise(resolve => setTimeout(resolve, waitTime));
+  }
+
   const createShell = () => {
     return new Promise((resolve) => {
       session.conn.shell({ term: 'xterm-256color', cols: 80, rows: 24 }, (err, stream) => {
@@ -1106,16 +1152,8 @@ ipcMain.handle('ssh-create-shell', async (event, { sessionId }) => {
 
   let result = await createShell();
 
-  // If channel open failed, close stale split streams for this session and retry
+  // If channel open still failed, retry once (fallback safety)
   if (!result.success && result.error && result.error.includes('Channel open failure')) {
-    const prefix = `${sessionId}:split-`;
-    for (const [streamId, stream] of sshStreams.entries()) {
-      if (streamId.startsWith(prefix)) {
-        try { stream.end(); } catch (e) {}
-        sshStreams.delete(streamId);
-      }
-    }
-    // Wait for server to process channel closes
     await new Promise(resolve => setTimeout(resolve, 500));
     result = await createShell();
   }
@@ -1143,6 +1181,9 @@ ipcMain.on('ssh-split-resize', (event, { streamId, cols, rows }) => {
 ipcMain.on('ssh-split-close', (event, { streamId }) => {
   const stream = sshStreams.get(streamId);
   if (stream) {
+    // Extract sessionId from streamId (format: "sessionId:split-timestamp")
+    const sessionId = streamId.split(':')[0];
+    splitStreamLastClosed.set(sessionId, Date.now());
     try { stream.end(); } catch (e) {}
     sshStreams.delete(streamId);
   }
@@ -1723,43 +1764,41 @@ ipcMain.handle('select-upload-files', async () => {
 
 // 로컬 디렉토리 목록 조회
 ipcMain.handle('local-list', async (event, { dirPath }) => {
-  return new Promise((resolve, reject) => {
-    fs.readdir(dirPath, { withFileTypes: true }, (err, files) => {
-      if (err) {
-        reject(err);
-        return;
-      }
+  try {
+    const dirents = await fs.promises.readdir(dirPath, { withFileTypes: true });
 
-      const fileList = files.map(dirent => {
+    const statResults = await Promise.allSettled(
+      dirents.map(async (dirent) => {
         const fullPath = path.join(dirPath, dirent.name);
-        let stats = null;
         try {
-          stats = fs.statSync(fullPath);
+          const stats = await fs.promises.stat(fullPath);
+          return {
+            name: dirent.name,
+            size: stats.size,
+            isDirectory: dirent.isDirectory(),
+            isFile: dirent.isFile(),
+            mtime: stats.mtime.getTime(),
+            path: fullPath
+          };
         } catch (e) {
-          // 권한 없는 파일은 건너뜀
           return null;
         }
+      })
+    );
 
-        if (!stats) return null;
-
-        return {
-          name: dirent.name,
-          size: stats.size,
-          isDirectory: dirent.isDirectory(),
-          isFile: dirent.isFile(),
-          mtime: stats.mtime.getTime(),
-          path: fullPath
-        };
-      }).filter(f => f !== null).sort((a, b) => {
-        // 디렉토리 먼저, 그 다음 이름순
+    const fileList = statResults
+      .filter(r => r.status === 'fulfilled' && r.value !== null)
+      .map(r => r.value)
+      .sort((a, b) => {
         if (a.isDirectory && !b.isDirectory) return -1;
         if (!a.isDirectory && b.isDirectory) return 1;
         return a.name.localeCompare(b.name);
       });
 
-      resolve({ success: true, files: fileList });
-    });
-  });
+    return { success: true, files: fileList };
+  } catch (err) {
+    throw err;
+  }
 });
 
 // 로컬 폴더 선택 다이얼로그

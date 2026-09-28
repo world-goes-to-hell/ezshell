@@ -29,6 +29,7 @@ interface SessionSftpState {
   localFiles: FileItem[]
   selectedLocal: Set<string>
   transfers: Transfer[]
+  panelHeight: number
 }
 
 const createDefaultSessionState = (): SessionSftpState => ({
@@ -39,7 +40,8 @@ const createDefaultSessionState = (): SessionSftpState => ({
   localPath: '',
   localFiles: [],
   selectedLocal: new Set(),
-  transfers: []
+  transfers: [],
+  panelHeight: 300
 })
 
 interface SftpState {
@@ -60,8 +62,10 @@ interface SftpState {
   localFiles: (sessionId: string) => FileItem[]
   selectedLocal: (sessionId: string) => Set<string>
   transfers: (sessionId: string) => Transfer[]
+  panelHeight: (sessionId: string) => number
 
   setRemotePath: (sessionId: string, path: string) => void
+  setPanelHeight: (sessionId: string, height: number) => void
   setRemoteFiles: (sessionId: string, files: FileItem[]) => void
   setLocalPath: (sessionId: string, path: string) => void
   setLocalFiles: (sessionId: string, files: FileItem[]) => void
@@ -116,6 +120,7 @@ export const useSftpStore = create<SftpState>((set, get) => ({
   localFiles: (sessionId: string) => get().getSessionState(sessionId).localFiles,
   selectedLocal: (sessionId: string) => get().getSessionState(sessionId).selectedLocal,
   transfers: (sessionId: string) => get().getSessionState(sessionId).transfers,
+  panelHeight: (sessionId: string) => get().getSessionState(sessionId).panelHeight,
 
   setRemotePath: (sessionId: string, path: string) => set((state) => {
     const sessions = new Map(state.sessions)
@@ -245,6 +250,13 @@ export const useSftpStore = create<SftpState>((set, get) => ({
     const sessionState = sessions.get(sessionId) || createDefaultSessionState()
     const transfers = sessionState.transfers.map(t => t.id === id ? { ...t, ...updates } : t)
     sessions.set(sessionId, { ...sessionState, transfers })
+    return { sessions }
+  }),
+
+  setPanelHeight: (sessionId: string, height: number) => set((state) => {
+    const sessions = new Map(state.sessions)
+    const sessionState = sessions.get(sessionId) || createDefaultSessionState()
+    sessions.set(sessionId, { ...sessionState, panelHeight: height })
     return { sessions }
   }),
 

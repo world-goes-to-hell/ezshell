@@ -40,3 +40,9 @@ nul
 
 # OMC state
 .omc/
+
+# Release artifacts
+release/
+
+# Stray empty files
+nu_

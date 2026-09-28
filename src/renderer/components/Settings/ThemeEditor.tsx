@@ -136,7 +136,7 @@ export function ThemeEditor({ editingTheme, onClose, onSave }: ThemeEditorProps)
   } as React.CSSProperties
 
   return (
-    <div className="theme-editor-overlay" onClick={onClose}>
+    <div className="theme-editor-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <motion.div
         className="theme-editor"
         variants={modalContentVariants}

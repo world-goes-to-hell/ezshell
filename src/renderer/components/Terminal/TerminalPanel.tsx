@@ -40,6 +40,14 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
   const [showMonitor, setShowMonitor] = useState(false)
   const reducedMotion = useReducedMotion()
 
+  // Split resize state
+  const [termSplitRatio, setTermSplitRatio] = useState(0.5)
+  const [isTermSplitResizing, setIsTermSplitResizing] = useState(false)
+  const [gridColRatio, setGridColRatio] = useState(0.5)
+  const [gridRowRatio, setGridRowRatio] = useState(0.5)
+  const [gridResizeAxis, setGridResizeAxis] = useState<'col' | 'row' | 'both' | null>(null)
+  const splitContainerRef = useRef<HTMLDivElement>(null)
+
   // Split terminal state
   const terminal = useTerminalStore(state => state.terminals.get(sessionId))
   const isSplit = terminal?.isSplit || false
@@ -474,6 +482,73 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
     }
   }, [sessionId])
 
+  // Terminal 2-split resize via divider drag
+  useEffect(() => {
+    if (!isTermSplitResizing) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const container = splitContainerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      let ratio: number
+      if (splitDirection === 'horizontal') {
+        ratio = (e.clientX - rect.left) / rect.width
+      } else {
+        ratio = (e.clientY - rect.top) / rect.height
+      }
+      ratio = Math.min(0.8, Math.max(0.2, ratio))
+      setTermSplitRatio(ratio)
+    }
+
+    const handleMouseUp = () => {
+      setIsTermSplitResizing(false)
+      document.body.classList.remove('resizing')
+      window.dispatchEvent(new Event('resize'))
+    }
+
+    document.body.classList.add('resizing')
+    window.addEventListener('mousemove', handleMouseMove, true)
+    window.addEventListener('mouseup', handleMouseUp, true)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove, true)
+      window.removeEventListener('mouseup', handleMouseUp, true)
+    }
+  }, [isTermSplitResizing, splitDirection])
+
+  // Grid split resize via divider drag
+  useEffect(() => {
+    if (!gridResizeAxis) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const container = splitContainerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+
+      if (gridResizeAxis === 'col' || gridResizeAxis === 'both') {
+        const colRatio = (e.clientX - rect.left) / rect.width
+        setGridColRatio(Math.min(0.8, Math.max(0.2, colRatio)))
+      }
+      if (gridResizeAxis === 'row' || gridResizeAxis === 'both') {
+        const rowRatio = (e.clientY - rect.top) / rect.height
+        setGridRowRatio(Math.min(0.8, Math.max(0.2, rowRatio)))
+      }
+    }
+
+    const handleMouseUp = () => {
+      setGridResizeAxis(null)
+      document.body.classList.remove('resizing')
+      window.dispatchEvent(new Event('resize'))
+    }
+
+    document.body.classList.add('resizing')
+    window.addEventListener('mousemove', handleMouseMove, true)
+    window.addEventListener('mouseup', handleMouseUp, true)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove, true)
+      window.removeEventListener('mouseup', handleMouseUp, true)
+    }
+  }, [gridResizeAxis])
+
   return (
     <div
       className={`terminal-panel ${isActive ? 'active' : ''} ${isDragOver ? 'drag-over' : ''}`}
@@ -588,7 +663,14 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
             </motion.div>
           )}
         </AnimatePresence>
-        <div className="terminal-split-container">
+        <div
+          ref={splitContainerRef}
+          className="terminal-split-container"
+          style={isMultiSplit ? {
+            gridTemplateColumns: `${gridColRatio}fr 6px ${1 - gridColRatio}fr`,
+            gridTemplateRows: `${gridRowRatio}fr 6px ${1 - gridRowRatio}fr`
+          } : undefined}
+        >
           <div
             ref={terminalRef}
             className="terminal-container"
@@ -596,7 +678,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
               splitDirection === 'tri-bottom' ? { gridRow: '1', gridColumn: '1 / 4' } :
               splitDirection === 'tri-right' ? { gridRow: '1 / 4', gridColumn: '1' } :
               { gridRow: '1', gridColumn: '1' }
-            ) : undefined}
+            ) : { flex: isSplit ? termSplitRatio : undefined }}
             role="application"
             aria-label="Terminal output"
           />
@@ -619,8 +701,12 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
           {/* Simple 2-split (horizontal/vertical) */}
           {isSplit && (splitDirection === 'horizontal' || splitDirection === 'vertical') && (
             <>
-              <div className={`terminal-split-divider ${splitDirection}`} />
-              <div className="terminal-container split-terminal">
+              <div
+                className={`terminal-split-divider ${splitDirection}`}
+                onMouseDown={(e) => { e.preventDefault(); setIsTermSplitResizing(true) }}
+                title="드래그로 크기 조절"
+              />
+              <div className="terminal-container split-terminal" style={{ flex: 1 - termSplitRatio }}>
                 <SplitTerminal sessionId={sessionId} key="split-1" />
               </div>
             </>
@@ -629,20 +715,25 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
           {splitDirection === 'quad' && (
             <>
               <div className="grid-divider grid-divider-v" style={{ gridRow: '1', gridColumn: '2' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }}
                 onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMergeMenu({ x: e.clientX, y: e.clientY, options: [
                   { label: '병합', action: () => { setSplit(sessionId, true, 'tri-bottom', ['split-2', 'split-3']); setMergeMenu(null) } }
                 ]})}} />
               <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '1' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('row') }}
                 onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMergeMenu({ x: e.clientX, y: e.clientY, options: [
                   { label: '병합', action: () => { setSplit(sessionId, true, 'tri-right', ['split-1', 'split-3']); setMergeMenu(null) } }
                 ]})}} />
-              <div className="grid-divider grid-divider-center" style={{ gridRow: '2', gridColumn: '2' }} />
+              <div className="grid-divider grid-divider-center" style={{ gridRow: '2', gridColumn: '2' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('both') }} />
               <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '3' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('row') }}
                 onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMergeMenu({ x: e.clientX, y: e.clientY, options: [
                   { label: '2번 터미널 기준 병합', action: () => { setSplit(sessionId, true, 'tri-left', ['split-2', 'split-1']); setMergeMenu(null) } },
                   { label: '4번 터미널 기준 병합', action: () => { setSplit(sessionId, true, 'tri-left', ['split-2', 'split-3']); setMergeMenu(null) } },
                 ]})}} />
               <div className="grid-divider grid-divider-v" style={{ gridRow: '3', gridColumn: '2' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }}
                 onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMergeMenu({ x: e.clientX, y: e.clientY, options: [
                   { label: '3번 터미널 기준 병합', action: () => { setSplit(sessionId, true, 'tri-top', ['split-1', 'split-2']); setMergeMenu(null) } },
                   { label: '4번 터미널 기준 병합', action: () => { setSplit(sessionId, true, 'tri-top', ['split-1', 'split-3']); setMergeMenu(null) } },
@@ -651,26 +742,34 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
           )}
           {splitDirection === 'tri-bottom' && (
             <>
-              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '1 / 4' }} />
-              <div className="grid-divider grid-divider-v" style={{ gridRow: '3', gridColumn: '2' }} />
+              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '1 / 4' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('row') }} />
+              <div className="grid-divider grid-divider-v" style={{ gridRow: '3', gridColumn: '2' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }} />
             </>
           )}
           {splitDirection === 'tri-top' && (
             <>
-              <div className="grid-divider grid-divider-v" style={{ gridRow: '1', gridColumn: '2' }} />
-              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '1 / 4' }} />
+              <div className="grid-divider grid-divider-v" style={{ gridRow: '1', gridColumn: '2' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }} />
+              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '1 / 4' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('row') }} />
             </>
           )}
           {splitDirection === 'tri-right' && (
             <>
-              <div className="grid-divider grid-divider-v" style={{ gridRow: '1 / 4', gridColumn: '2' }} />
-              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '3' }} />
+              <div className="grid-divider grid-divider-v" style={{ gridRow: '1 / 4', gridColumn: '2' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }} />
+              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '3' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('row') }} />
             </>
           )}
           {splitDirection === 'tri-left' && (
             <>
-              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '1' }} />
-              <div className="grid-divider grid-divider-v" style={{ gridRow: '1 / 4', gridColumn: '2' }} />
+              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '1' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('row') }} />
+              <div className="grid-divider grid-divider-v" style={{ gridRow: '1 / 4', gridColumn: '2' }}
+                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }} />
             </>
           )}
           {/* Multi-split terminals - keyed at same tree level for stable reconciliation */}

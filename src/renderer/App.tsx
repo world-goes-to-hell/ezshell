@@ -113,6 +113,11 @@ function App() {
   const [contextMenuTabId, setContextMenuTabId] = useState<string | null>(null)
   const [isSettingsLoaded, setIsSettingsLoaded] = useState(false)
 
+  // Split pane resize state
+  const [splitRatio, setSplitRatio] = useState(0.5)
+  const [isSplitResizing, setIsSplitResizing] = useState(false)
+  const splitContainerRef = useRef<HTMLDivElement>(null)
+
   // Split pane session selector dropdown
   const [splitDropdownOpen, setSplitDropdownOpen] = useState<'primary' | 'secondary' | null>(null)
   const splitDropdownRef = useRef<HTMLDivElement>(null)
@@ -197,7 +202,25 @@ function App() {
 
     // Listen for SSH closed events
     window.electronAPI.onSshClosed((data: { sessionId: string }) => {
-      removeTerminal(data.sessionId)
+      // Mark as disconnected (don't remove terminal to allow reconnection)
+      const { setDisconnected } = useTerminalStore.getState()
+      setDisconnected(data.sessionId)
+    })
+
+    // Listen for SSH reconnection events
+    window.electronAPI.onSshReconnecting((data: { sessionId: string; attempt: number; maxAttempts: number }) => {
+      const { setDisconnected } = useTerminalStore.getState()
+      setDisconnected(data.sessionId)
+    })
+
+    window.electronAPI.onSshReconnected((data: { sessionId: string }) => {
+      const { setConnected } = useTerminalStore.getState()
+      setConnected(data.sessionId)
+    })
+
+    window.electronAPI.onSshReconnectFailed((data: { sessionId: string }) => {
+      const { setDisconnected, removeTerminal } = useTerminalStore.getState()
+      setDisconnected(data.sessionId)
     })
 
     // Listen for terminal merge events (when popped-out terminal merges back)
@@ -241,6 +264,39 @@ function App() {
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [splitDropdownOpen])
+
+  // Split pane resize via divider drag
+  useEffect(() => {
+    if (!isSplitResizing) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const container = splitContainerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      let ratio: number
+      if (layout.direction === 'horizontal') {
+        ratio = (e.clientX - rect.left) / rect.width
+      } else {
+        ratio = (e.clientY - rect.top) / rect.height
+      }
+      ratio = Math.min(0.8, Math.max(0.2, ratio))
+      setSplitRatio(ratio)
+    }
+
+    const handleMouseUp = () => {
+      setIsSplitResizing(false)
+      document.body.classList.remove('resizing')
+      window.dispatchEvent(new Event('resize'))
+    }
+
+    document.body.classList.add('resizing')
+    window.addEventListener('mousemove', handleMouseMove, true)
+    window.addEventListener('mouseup', handleMouseUp, true)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove, true)
+      window.removeEventListener('mouseup', handleMouseUp, true)
+    }
+  }, [isSplitResizing, layout.direction])
 
   // Handle terminal zoom from main process (Ctrl+/-/0 intercepted at Electron level)
   useEffect(() => {
@@ -544,6 +600,13 @@ function App() {
   const terminalArray = Array.from(terminals.entries())
   const hasTerminals = terminalArray.length > 0
 
+  // Compute active session IDs (connected terminals)
+  const activeSessionIds = new Set(
+    Array.from(terminals.values())
+      .filter(t => t.connected)
+      .map(t => t.id)
+  )
+
   // Layout state
   const splitWithSession = useTerminalStore(state => state.splitWithSession)
 
@@ -763,6 +826,7 @@ function App() {
           onAddSession={handleAddSession}
           onStatsClick={() => setStatsDashboardOpen(true)}
           onBatchClick={() => setBatchModalOpen(true)}
+          activeSessionIds={activeSessionIds}
         />
         <main className="main-area" id="main-content">
           {!isSettingsLoaded ? (
@@ -838,14 +902,17 @@ function App() {
                   </>
                 )}
                 {layout.mode === 'split' && layout.secondary ? (
-                  <div className={`split-view-container ${layout.direction}`}>
+                  <div ref={splitContainerRef} className={`split-view-container ${layout.direction} ${isSplitResizing ? 'resizing' : ''}`}>
                     {/* Primary Pane */}
                     <div
                       className={`split-pane primary ${layout.activePaneType === 'primary' ? 'active-pane' : ''}`}
                       onMouseDown={() => setActivePaneType('primary')}
-                      style={layout.activePaneType === 'primary' && layout.primary.activeTerminalId && terminals.get(layout.primary.activeTerminalId)?.color
-                        ? { outlineColor: terminals.get(layout.primary.activeTerminalId)!.color }
-                        : undefined}
+                      style={{
+                        flex: splitRatio,
+                        ...(layout.activePaneType === 'primary' && layout.primary.activeTerminalId && terminals.get(layout.primary.activeTerminalId)?.color
+                          ? { outlineColor: terminals.get(layout.primary.activeTerminalId)!.color }
+                          : {})
+                      }}
                     >
                       <SplitPaneTabBar
                         paneType="primary"
@@ -919,16 +986,20 @@ function App() {
                     </div>
                     <div
                       className={`split-divider ${layout.direction}`}
+                      onMouseDown={(e) => { e.preventDefault(); setIsSplitResizing(true) }}
                       onDoubleClick={() => closeSplit()}
-                      title="더블클릭으로 분할 해제"
+                      title="드래그로 크기 조절 · 더블클릭으로 분할 해제"
                     />
                     {/* Secondary Pane */}
                     <div
                       className={`split-pane secondary ${layout.activePaneType === 'secondary' ? 'active-pane' : ''}`}
                       onMouseDown={() => setActivePaneType('secondary')}
-                      style={layout.activePaneType === 'secondary' && layout.secondary?.activeTerminalId && terminals.get(layout.secondary.activeTerminalId)?.color
-                        ? { outlineColor: terminals.get(layout.secondary.activeTerminalId)!.color }
-                        : undefined}
+                      style={{
+                        flex: 1 - splitRatio,
+                        ...(layout.activePaneType === 'secondary' && layout.secondary?.activeTerminalId && terminals.get(layout.secondary.activeTerminalId)?.color
+                          ? { outlineColor: terminals.get(layout.secondary.activeTerminalId)!.color }
+                          : {})
+                      }}
                     >
                       <SplitPaneTabBar
                         paneType="secondary"

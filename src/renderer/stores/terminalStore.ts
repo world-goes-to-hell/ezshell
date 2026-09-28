@@ -51,6 +51,7 @@ interface TerminalState {
   setActiveTerminal: (sessionId: string | null) => void
   setConnecting: (connecting: boolean) => void
   setConnected: (sessionId: string) => void
+  setDisconnected: (sessionId: string) => void
   updateTerminalTitle: (sessionId: string, title: string) => void
   updateTerminalMeta: (sessionId: string, meta: Partial<TerminalInfo>) => void
   setTerminalActivity: (sessionId: string, hasActivity: boolean) => void
@@ -257,6 +258,16 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     if (terminal) {
       const newTerminals = new Map(state.terminals)
       newTerminals.set(sessionId, { ...terminal, connected: true })
+      return { terminals: newTerminals }
+    }
+    return state
+  }),
+
+  setDisconnected: (sessionId) => set((state) => {
+    const terminal = state.terminals.get(sessionId)
+    if (terminal) {
+      const newTerminals = new Map(state.terminals)
+      newTerminals.set(sessionId, { ...terminal, connected: false })
       return { terminals: newTerminals }
     }
     return state
