@@ -15,6 +15,9 @@ export interface SSHConnectConfig {
   sessionName?: string
   color?: string
   postConnectScript?: string
+  // Id of the sidebar session this connection came from (absent for unsaved quick connects).
+  // Kept by the main process so any window can look up per-session data such as path bookmarks.
+  savedSessionId?: string
   // Connection settings (milliseconds)
   connectTimeout?: number
   keepaliveInterval?: number

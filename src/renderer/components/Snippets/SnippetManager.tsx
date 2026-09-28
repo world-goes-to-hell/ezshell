@@ -124,7 +124,7 @@ export function SnippetManager({ onClose }: SnippetManagerProps) {
             <h2>Snippet Manager</h2>
             <div className="snippet-manager-header-actions">
               <button className="btn btn-primary" onClick={handleAddNew}>
-                <RiAddLine size={16} />
+                <RiAddLine size={18} />
                 Add Snippet
               </button>
               <button className="btn-icon" onClick={onClose}>
@@ -136,7 +136,7 @@ export function SnippetManager({ onClose }: SnippetManagerProps) {
           {/* Toolbar */}
           <div className="snippet-manager-toolbar">
             <div className="snippet-search">
-              <RiSearchLine size={16} style={{ color: 'var(--text-muted)' }} />
+              <RiSearchLine size={18} style={{ color: 'var(--text-muted)' }} />
               <input
                 type="text"
                 placeholder="Search snippets..."
@@ -171,7 +171,7 @@ export function SnippetManager({ onClose }: SnippetManagerProps) {
                   </p>
                 ) : (
                   <button className="btn btn-primary" onClick={handleAddNew} style={{ marginTop: '16px' }}>
-                    <RiAddLine size={16} />
+                    <RiAddLine size={18} />
                     Create your first snippet
                   </button>
                 )}
@@ -209,21 +209,21 @@ export function SnippetManager({ onClose }: SnippetManagerProps) {
                         onClick={() => handleInsert(snippet.command)}
                         disabled={!activeSessionId}
                       >
-                        <RiPlayLine size={16} />
+                        <RiPlayLine size={18} />
                       </button>
                       <button
                         className="btn-icon"
                         title="Edit snippet"
                         onClick={() => handleEdit(snippet.id)}
                       >
-                        <RiEditLine size={16} />
+                        <RiEditLine size={18} />
                       </button>
                       <button
                         className="btn-icon btn-icon-danger"
                         title="Delete snippet"
                         onClick={() => handleDelete(snippet.id)}
                       >
-                        <RiDeleteBinLine size={16} />
+                        <RiDeleteBinLine size={18} />
                       </button>
                     </div>
                   </motion.div>

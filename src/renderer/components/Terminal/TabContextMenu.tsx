@@ -68,7 +68,7 @@ export function TabContextMenu({
               <div key={index} className="menu-separator" />
             ) : (
               <button key={index} className="menu-item" onClick={() => { item.action?.(); onClose(); }}>
-                {item.icon && <item.icon size={14} />}
+                {item.icon && <item.icon size={16} />}
                 <span>{item.label}</span>
               </button>
             )

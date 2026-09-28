@@ -26,7 +26,7 @@ export function OverwriteModal({ open, fileName, onClose, onConfirm }: Overwrite
       <div className="modal-overlay" onClick={onClose} />
       <div className="modal-content overwrite-modal">
         <button className="modal-close-btn" onClick={onClose}>
-          <RiCloseFill size={18} />
+          <RiCloseFill size={20} />
         </button>
 
         <h3 className="modal-title">파일이 이미 존재합니다</h3>
@@ -43,7 +43,7 @@ export function OverwriteModal({ open, fileName, onClose, onConfirm }: Overwrite
               onClick={() => setSelectedAction('overwrite')}
             >
               <div className="option-icon">
-                <RiFileTransferFill size={18} />
+                <RiFileTransferFill size={20} />
               </div>
               <div className="option-text">
                 <div className="option-title">덮어쓰기</div>
@@ -56,7 +56,7 @@ export function OverwriteModal({ open, fileName, onClose, onConfirm }: Overwrite
               onClick={() => setSelectedAction('skip')}
             >
               <div className="option-icon">
-                <RiCloseFill size={18} />
+                <RiCloseFill size={20} />
               </div>
               <div className="option-text">
                 <div className="option-title">건너뛰기</div>
@@ -69,7 +69,7 @@ export function OverwriteModal({ open, fileName, onClose, onConfirm }: Overwrite
               onClick={() => setSelectedAction('rename')}
             >
               <div className="option-icon">
-                <RiFileCopyFill size={18} />
+                <RiFileCopyFill size={20} />
               </div>
               <div className="option-text">
                 <div className="option-title">이름 바꾸기</div>
@@ -82,7 +82,7 @@ export function OverwriteModal({ open, fileName, onClose, onConfirm }: Overwrite
               onClick={() => setSelectedAction('size-diff')}
             >
               <div className="option-icon">
-                <RiFileSearchFill size={18} />
+                <RiFileSearchFill size={20} />
               </div>
               <div className="option-text">
                 <div className="option-title">크기 다른 것만</div>

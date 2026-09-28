@@ -38,7 +38,7 @@ function StatCard({ icon: Icon, label, value, sub }: {
 }) {
   return (
     <div className="stats-card">
-      <div className="stats-card-icon"><Icon size={18} /></div>
+      <div className="stats-card-icon"><Icon size={20} /></div>
       <div className="stats-card-info">
         <div className="stats-card-value">{value}</div>
         <div className="stats-card-label">{label}</div>
@@ -93,16 +93,16 @@ export function StatsDashboard({ open, onClose }: StatsDashboardProps) {
         {/* Header */}
         <div className="stats-header">
           <div className="stats-header-left">
-            <RiBarChartFill size={18} />
+            <RiBarChartFill size={20} />
             <h2>세션 통계</h2>
           </div>
           <div className="stats-header-right">
             <button className="stats-clear-btn" onClick={clearRecords} title="기록 초기화">
-              <RiDeleteBinLine size={14} />
+              <RiDeleteBinLine size={16} />
               <span>초기화</span>
             </button>
             <button className="stats-close-btn" onClick={onClose}>
-              <RiCloseLine size={18} />
+              <RiCloseLine size={20} />
             </button>
           </div>
         </div>

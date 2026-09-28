@@ -182,16 +182,16 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
                 animate={{ rotate: node.isExpanded ? 90 : 0 }}
                 transition={reducedMotion ? { duration: 0 } : { duration: 0.15 }}
               >
-                <RiArrowRightSLine size={14} />
+                <RiArrowRightSLine size={16} />
               </motion.span>
-              {node.isExpanded ? <RiFolderOpenFill size={14} className="folder-icon" /> : <RiFolderFill size={14} className="folder-icon" />}
+              {node.isExpanded ? <RiFolderOpenFill size={16} className="folder-icon" /> : <RiFolderFill size={16} className="folder-icon" />}
             </>
           ) : (
             <>
               <span className="expand-icon" style={{ visibility: 'hidden' }}>
-                <RiArrowRightSLine size={14} />
+                <RiArrowRightSLine size={16} />
               </span>
-              <RiFileFill size={14} className="file-icon" />
+              <RiFileFill size={16} className="file-icon" />
             </>
           )}
           <span className="file-explorer-name">{node.name}</span>
@@ -226,20 +226,20 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
             title="상위 디렉토리"
             disabled={displayPath === '/'}
           >
-            <RiArrowUpLine size={14} />
+            <RiArrowUpLine size={16} />
           </button>
           <button className="file-explorer-btn" onClick={loadRoot} title="루트(/)로 이동">
-            <RiHome4Fill size={14} />
+            <RiHome4Fill size={16} />
           </button>
           <button className="file-explorer-btn" onClick={() => loadPath(displayPath)} title="새로고침">
-            <RiRefreshLine size={14} />
+            <RiRefreshLine size={16} />
           </button>
           <button
             className={`file-explorer-btn ${autoSyncEnabled ? 'active' : ''}`}
             onClick={() => setAutoSyncEnabled(!autoSyncEnabled)}
             title={autoSyncEnabled ? '터미널 경로 자동 동기화 켜짐 (클릭하여 끄기)' : '터미널 경로 자동 동기화 꺼짐 (클릭하여 켜기)'}
           >
-            {autoSyncEnabled ? <RiLinkM size={14} /> : <RiLinkUnlinkM size={14} />}
+            {autoSyncEnabled ? <RiLinkM size={16} /> : <RiLinkUnlinkM size={16} />}
           </button>
         </div>
       </div>

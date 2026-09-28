@@ -12,12 +12,12 @@ export function Footer() {
         <div className="footer-status">
           {activeConnections > 0 ? (
             <>
-              <RiWifiFill size={12} className="status-icon connected" />
+              <RiWifiFill size={16} className="status-icon connected" />
               <span>{activeConnections}개 연결됨</span>
             </>
           ) : (
             <>
-              <RiWifiOffFill size={12} className="status-icon disconnected" />
+              <RiWifiOffFill size={16} className="status-icon disconnected" />
               <span>연결 없음</span>
             </>
           )}

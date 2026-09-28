@@ -9,10 +9,14 @@ import { SplitTerminal } from './SplitTerminal'
 import { TerminalSearch } from './TerminalSearch'
 import { PortForwardPanel } from './PortForwardPanel'
 import { ServerMonitor } from './ServerMonitor'
-import { RiFolderFill, RiUploadCloud2Fill, RiSplitCellsHorizontal, RiSplitCellsVertical, RiArrowLeftRightLine, RiPulseLine } from 'react-icons/ri'
+import { RiFolderFill, RiUploadCloud2Fill, RiSplitCellsHorizontal, RiSplitCellsVertical, RiArrowLeftRightLine, RiPulseLine, RiHistoryLine } from 'react-icons/ri'
 import { motion, AnimatePresence } from 'framer-motion'
 import { drawerVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
+import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
+import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory'
+import { insertIntoSession } from '../../lib/terminalInputTargets'
+import { CommandHistoryPanel } from './CommandHistoryPanel'
 import 'xterm/css/xterm.css'
 
 interface TerminalPanelProps {
@@ -20,10 +24,11 @@ interface TerminalPanelProps {
   isActive: boolean
   onActivate: () => void
   onClose: () => void
+  /** Session color; the panel itself is borderless, the color is shown on the tab instead */
   borderColor?: string
 }
 
-export function TerminalPanel({ sessionId, isActive, onActivate, onClose, borderColor }: TerminalPanelProps) {
+export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: TerminalPanelProps) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const terminalInstance = useRef<Terminal | null>(null)
   const fitAddon = useRef<FitAddon | null>(null)
@@ -38,7 +43,9 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
   const [mergeMenu, setMergeMenu] = useState<{x: number; y: number; options: Array<{label: string; action: () => void}>} | null>(null)
   const [showPortForward, setShowPortForward] = useState(false)
   const [showMonitor, setShowMonitor] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
   const reducedMotion = useReducedMotion()
+  const commandHistory = useTerminalCommandHistory(sessionId, 'main', (data) => window.electronAPI.sshSend(sessionId, data))
 
   // Split resize state
   const [termSplitRatio, setTermSplitRatio] = useState(0.5)
@@ -85,6 +92,8 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
     const { registerSshDataHandler, unregisterSshDataHandler } = useTerminalStore.getState()
 
     let term: Terminal | null = null
+    let disableCopyOnSelect: (() => void) | null = null
+    let detachCommandHistory: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let disposed = false
     const pendingData: string[] = []
@@ -187,6 +196,9 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
         fontFamily: `"${fontFamily}", Consolas, "D2Coding", monospace`,
         cursorBlink: true,
         cursorStyle: 'bar',
+        // xterm's default 'outline' draws a box around the cursor cell in unfocused panes,
+        // which looks like a double bar ('||') next to the prompt in split layouts
+        cursorInactiveStyle: 'bar',
         scrollback: 10000,
         allowProposedApi: true
       })
@@ -198,28 +210,25 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
       term.loadAddon(searchAddon.current)
 
       term.open(terminalRef.current)
+      disableCopyOnSelect = enableCopyOnSelect(term)
+      detachCommandHistory = commandHistory.attach(term)
       terminalInstance.current = term
       isInitialized.current = true
 
       // Handle Ctrl+C for copy when there's a selection
       term.attachCustomKeyEventHandler((event) => {
+        // Ctrl+Shift+H = command history popup
+        if (commandHistory.handleKeyEvent(event)) return false
         // Ctrl+C with selection = copy
         if (event.ctrlKey && event.key === 'c' && event.type === 'keydown') {
           const selection = term!.getSelection()
           if (selection) {
-            navigator.clipboard.writeText(selection)
+            copyToClipboard(selection)
             return false // Prevent default (don't send SIGINT)
           }
         }
-        // Ctrl+V = paste
-        if (event.ctrlKey && event.key === 'v' && event.type === 'keydown') {
-          navigator.clipboard.readText().then(text => {
-            if (text) {
-              window.electronAPI.sshSend(sessionId, text)
-            }
-          })
-          return false
-        }
+        // Ctrl+V = paste, done by xterm from the native paste event
+        if (isPasteShortcut(event)) return false
         return true // Let other keys through
       })
 
@@ -260,6 +269,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
 
       // Handle terminal input
       term.onData((data) => {
+        commandHistory.handleData(data)
         window.electronAPI.sshSend(sessionId, data)
       })
 
@@ -355,6 +365,8 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
       if (terminalRef.current && (terminalRef.current as any).__themeCleanup) {
         (terminalRef.current as any).__themeCleanup()
       }
+      disableCopyOnSelect?.()
+      detachCommandHistory?.()
       if (term) {
         term.dispose()
       }
@@ -556,10 +568,6 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      style={borderColor ? {
-        border: `2px solid ${borderColor}`,
-        borderRadius: '4px',
-      } : undefined}
     >
       <div className="terminal-header">
         <div className="terminal-header-left">
@@ -570,7 +578,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
             whileHover={reducedMotion ? undefined : { scale: 1.1 }}
             whileTap={reducedMotion ? undefined : { scale: 0.95 }}
           >
-            <RiFolderFill size={14} />
+            <RiFolderFill size={16} />
           </motion.button>
           <div className="terminal-header-divider" />
           <motion.button
@@ -592,7 +600,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
             whileHover={reducedMotion ? undefined : { scale: 1.1 }}
             whileTap={reducedMotion ? undefined : { scale: 0.95 }}
           >
-            <RiSplitCellsHorizontal size={14} />
+            <RiSplitCellsHorizontal size={16} />
           </motion.button>
           <motion.button
             className={`terminal-header-btn ${isSplit && splitDirection !== 'horizontal' ? 'active' : ''}`}
@@ -613,7 +621,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
             whileHover={reducedMotion ? undefined : { scale: 1.1 }}
             whileTap={reducedMotion ? undefined : { scale: 0.95 }}
           >
-            <RiSplitCellsVertical size={14} />
+            <RiSplitCellsVertical size={16} />
           </motion.button>
           <div className="terminal-header-divider" />
           <motion.button
@@ -623,16 +631,26 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
             whileHover={reducedMotion ? undefined : { scale: 1.1 }}
             whileTap={reducedMotion ? undefined : { scale: 0.95 }}
           >
-            <RiArrowLeftRightLine size={14} />
+            <RiArrowLeftRightLine size={16} />
           </motion.button>
           <motion.button
             className={`terminal-header-btn ${showMonitor ? 'active' : ''}`}
-            onClick={(e) => { e.stopPropagation(); setShowMonitor(!showMonitor); }}
+            onClick={(e) => { e.stopPropagation(); setShowMonitor(!showMonitor); setShowHistory(false); }}
             title="서버 모니터링"
             whileHover={reducedMotion ? undefined : { scale: 1.1 }}
             whileTap={reducedMotion ? undefined : { scale: 0.95 }}
           >
-            <RiPulseLine size={14} />
+            <RiPulseLine size={16} />
+          </motion.button>
+          <motion.button
+            className={`terminal-header-btn ${showHistory ? 'active' : ''}`}
+            onClick={(e) => { e.stopPropagation(); setShowHistory(!showHistory); setShowMonitor(false); }}
+            title="명령어 기록 (터미널에서 Ctrl+Shift+H 로 검색)"
+            aria-pressed={showHistory}
+            whileHover={reducedMotion ? undefined : { scale: 1.1 }}
+            whileTap={reducedMotion ? undefined : { scale: 0.95 }}
+          >
+            <RiHistoryLine size={16} />
           </motion.button>
         </div>
         <div className="terminal-header-right">
@@ -696,6 +714,16 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
               />
             )}
           </AnimatePresence>
+          <AnimatePresence>
+            {showHistory && (
+              <CommandHistoryPanel
+                sessionId={sessionId}
+                onInsert={(command) => insertIntoSession(sessionId, command)}
+                onClose={() => setShowHistory(false)}
+              />
+            )}
+          </AnimatePresence>
+          {commandHistory.popup}
           {/* Simple 2-split (horizontal/vertical) */}
           {isSplit && (splitDirection === 'horizontal' || splitDirection === 'vertical') && (
             <>

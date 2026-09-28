@@ -25,20 +25,23 @@ export function Spinner({ size = 'md', className = '' }: SpinnerProps) {
       aria-label="Loading"
     >
       <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle
+        {/* Square track: a short segment travels along the edge (perimeter 80) */}
+        <rect
           className="spinner-track"
-          cx="12"
-          cy="12"
-          r="10"
+          x="2"
+          y="2"
+          width="20"
+          height="20"
           strokeWidth="3"
         />
-        <circle
+        <rect
           className="spinner-indicator"
-          cx="12"
-          cy="12"
-          r="10"
+          x="2"
+          y="2"
+          width="20"
+          height="20"
           strokeWidth="3"
-          strokeLinecap="round"
+          strokeLinecap="square"
         />
       </svg>
     </div>

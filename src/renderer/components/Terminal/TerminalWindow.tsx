@@ -3,6 +3,7 @@ import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import { useThemeStore } from '../../stores/themeStore'
 import { RiSubtractFill, RiCheckboxBlankFill, RiCloseFill, RiTerminalBoxFill, RiMergeCellsHorizontal } from 'react-icons/ri'
+import { enableCopyOnSelect } from '../../lib/terminalClipboard'
 import 'xterm/css/xterm.css'
 
 interface TerminalWindowProps {
@@ -25,6 +26,7 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
     if (!terminalRef.current || terminalInstance.current) return
 
     let term: Terminal | null = null
+    let disableCopyOnSelect: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let disposed = false
     const pendingData: string[] = []
@@ -56,6 +58,9 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
         fontFamily: '"JetBrains Mono", Consolas, "D2Coding", monospace',
         cursorBlink: true,
         cursorStyle: 'bar',
+        // xterm's default 'outline' draws a box around the cursor cell in unfocused panes,
+        // which looks like a double bar ('||') next to the prompt in split layouts
+        cursorInactiveStyle: 'bar',
         scrollback: 10000,
         allowProposedApi: true
       })
@@ -64,6 +69,7 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
       term.loadAddon(fitAddon.current)
 
       term.open(terminalRef.current)
+      disableCopyOnSelect = enableCopyOnSelect(term)
       terminalInstance.current = term
       isInitialized.current = true
 
@@ -130,6 +136,7 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
       if (terminalRef.current && (terminalRef.current as any).__themeCleanup) {
         (terminalRef.current as any).__themeCleanup()
       }
+      disableCopyOnSelect?.()
       if (term) {
         term.dispose()
       }
@@ -141,7 +148,7 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
     <div className="terminal-window-container">
       <div className="title-bar">
         <div className="title-bar-drag">
-          <RiTerminalBoxFill size={16} style={{ color: 'var(--accent)' }} />
+          <RiTerminalBoxFill size={18} style={{ color: 'var(--accent)' }} />
           <span className="title-bar-title">{title}</span>
         </div>
         <div className="title-bar-controls">
@@ -156,16 +163,16 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
             }}
             title="메인 창으로 병합"
           >
-            <RiMergeCellsHorizontal size={14} />
+            <RiMergeCellsHorizontal size={16} />
           </button>
           <button className="title-bar-btn" onClick={() => window.electronAPI.minimizeWindow()}>
-            <RiSubtractFill size={14} />
+            <RiSubtractFill size={16} />
           </button>
           <button className="title-bar-btn" onClick={() => window.electronAPI.maximizeWindow()}>
-            <RiCheckboxBlankFill size={12} />
+            <RiCheckboxBlankFill size={16} />
           </button>
           <button className="title-bar-btn title-bar-close" onClick={() => window.electronAPI.closeWindow()}>
-            <RiCloseFill size={14} />
+            <RiCloseFill size={16} />
           </button>
         </div>
       </div>

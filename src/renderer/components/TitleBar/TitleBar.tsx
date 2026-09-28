@@ -17,17 +17,17 @@ export function TitleBar({ onSettingsClick }: TitleBarProps) {
       <div className="title-bar-controls">
         {onSettingsClick && (
           <button className="title-bar-btn" onClick={onSettingsClick} title="설정">
-            <RiSettings3Fill size={16} />
+            <RiSettings3Fill size={18} />
           </button>
         )}
         <button className="title-bar-btn" onClick={handleMinimize}>
-          <RiSubtractFill size={16} />
+          <RiSubtractFill size={18} />
         </button>
         <button className="title-bar-btn" onClick={handleMaximize}>
-          <RiCheckboxBlankFill size={14} />
+          <RiCheckboxBlankFill size={16} />
         </button>
         <button className="title-bar-btn title-bar-close" onClick={handleClose}>
-          <RiCloseFill size={16} />
+          <RiCloseFill size={18} />
         </button>
       </div>
     </div>

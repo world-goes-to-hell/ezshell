@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useSftpStore, FileItem } from '../../stores/sftpStore'
+import { useWheelRowScroll } from '../../hooks/useWheelRowScroll'
 import {
   RiFolderFill, RiFileFill, RiArrowUpSFill, RiUploadFill, RiDownloadFill, RiDeleteBinFill,
   RiFileTextFill, RiFileCodeFill, RiImageFill, RiVideoFill, RiMusicFill,
@@ -16,6 +17,8 @@ interface FileListProps {
   sessionId: string
   onUpload?: () => void
   onDownload?: () => void
+  /** Remote only: delete the selection. The menu item is hidden when not provided. */
+  onDelete?: () => void
   onDrop?: (fileNames: string[]) => void
   isLoading?: boolean
 }
@@ -27,16 +30,23 @@ interface ContextMenuState {
   file: FileItem | null
 }
 
+const KEEP_SELECTION_ATTR = 'data-sftp-keep-selection'
+
+/** Spread onto containers whose controls act on the current selection (e.g. the SFTP toolbar). */
+export const keepSelectionProps = { [KEEP_SELECTION_ATTR]: '' }
+
 const isWindows = () => {
   return navigator.platform.toLowerCase().includes('win') ||
          navigator.userAgent.toLowerCase().includes('windows')
 }
 
-export function FileList({ files, selected, onNavigate, currentPath, type, sessionId, onUpload, onDownload, onDrop, isLoading }: FileListProps) {
+export function FileList({ files, selected, onNavigate, currentPath, type, sessionId, onUpload, onDownload, onDelete, onDrop, isLoading }: FileListProps) {
   const store = useSftpStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, file: null })
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const fileListRef = useRef<HTMLDivElement>(null)
+  // One wheel notch scrolls 2 rows instead of the browser's ~4
+  useWheelRowScroll(fileListRef, '.file-item')
   const itemRefs = useRef<(HTMLDivElement | null)[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number>(-1)
@@ -174,6 +184,10 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
 
   const handleBlur = (e: React.FocusEvent) => {
     if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    // Toolbar buttons (upload/download) act on the selection. Clicking one moves focus
+    // to the button, so clearing here would empty the selection before its onClick runs.
+    const next = e.relatedTarget as HTMLElement | null
+    if (next?.closest(`[${KEEP_SELECTION_ATTR}]`)) return
     if (type === 'remote') {
       store.clearRemoteSelection(sessionId)
     } else {
@@ -318,8 +332,9 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
       onUpload()
     } else if (action === 'download' && onDownload) {
       onDownload()
+    } else if (action === 'delete' && onDelete) {
+      onDelete()
     }
-    // Delete can be implemented later
   }
 
   const getFileIcon = (fileName: string) => {
@@ -424,7 +439,7 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
         </div>
       )}
       <div className="file-item parent-dir" onClick={goUp}>
-        <RiArrowUpSFill size={14} />
+        <RiArrowUpSFill size={16} />
         <span>..</span>
       </div>
       {files.map((file, index) => (
@@ -438,8 +453,13 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
           draggable
           onDragStart={(e) => handleDragStart(e, file)}
         >
-          {file.type === 'directory' ? <RiFolderFill size={14} className="folder-icon" /> : getFileIcon(file.name)}
+          {file.type === 'directory' ? <RiFolderFill size={16} className="folder-icon" /> : getFileIcon(file.name)}
           <span className="file-name">{file.name}</span>
+          {type === 'remote' && file.owner && (
+            <span className="file-owner" title={`소유자: ${file.owner}${file.group ? `  그룹: ${file.group}` : ''}`}>
+              {file.owner}
+            </span>
+          )}
           {type === 'remote' && file.permissions && (
             <span className="file-permissions" title={`권한: ${file.permissions} (${formatPermissions(file.permissions)})`}>
               {formatPermissions(file.permissions)}
@@ -459,21 +479,25 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
         >
           {type === 'local' && (
             <div className="context-menu-item" onClick={() => handleContextAction('upload')}>
-              <RiUploadFill size={14} />
+              <RiUploadFill size={16} />
               <span>업로드</span>
             </div>
           )}
           {type === 'remote' && (
             <div className="context-menu-item" onClick={() => handleContextAction('download')}>
-              <RiDownloadFill size={14} />
+              <RiDownloadFill size={16} />
               <span>다운로드</span>
             </div>
           )}
-          <div className="context-menu-divider" />
-          <div className="context-menu-item danger" onClick={() => handleContextAction('delete')}>
-            <RiDeleteBinFill size={14} />
-            <span>삭제</span>
-          </div>
+          {onDelete && (
+            <>
+              <div className="context-menu-divider" />
+              <div className="context-menu-item danger" onClick={() => handleContextAction('delete')}>
+                <RiDeleteBinFill size={16} />
+                <span>삭제</span>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

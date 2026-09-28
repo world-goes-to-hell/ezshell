@@ -6,7 +6,7 @@ const DEFAULT_KEEPALIVE_INTERVAL_SEC = 30
 const DEFAULT_SSH_PORT = 22
 
 // Saved sessions and the connect modal both store timeouts in seconds
-export type SessionConnectSource = Omit<Session, 'id' | 'name' | 'icon'> & { name?: string }
+export type SessionConnectSource = Omit<Session, 'id' | 'name' | 'icon'> & { id?: string; name?: string }
 
 /**
  * Build the full SSH connect config from a saved session or connect modal input.
@@ -24,6 +24,7 @@ export function toSSHConnectConfig(session: SessionConnectSource, color?: string
     sessionName: session.name || `${session.username}@${session.host}`,
     color: color ?? session.backgroundColor,
     postConnectScript: session.postConnectScript,
+    savedSessionId: session.id,
     connectTimeout: (session.connectTimeout || DEFAULT_CONNECT_TIMEOUT_SEC) * 1000,
     keepaliveInterval: (session.keepaliveInterval || DEFAULT_KEEPALIVE_INTERVAL_SEC) * 1000,
     autoReconnect: session.autoReconnect !== false,

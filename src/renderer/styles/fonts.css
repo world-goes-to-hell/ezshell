@@ -1,54 +1,25 @@
 /*
- * Font Files - Local Bundle
+ * Font Files - Local Bundle (all OFL-1.1, licenses in assets/fonts/)
  *
- * INSTRUCTIONS: Download the following font files and place them in:
- * src/renderer/assets/fonts/
+ * Pretendard Variable - UI font. Hangul and Latin are designed as one family,
+ *   so mixed Korean/English labels keep matching weight and height.
+ *   https://github.com/orioncactus/pretendard (v1.3.9)
  *
- * Inter Font (from https://github.com/rsms/inter/releases):
- *   - Inter-Regular.woff2
- *   - Inter-Medium.woff2
- *   - Inter-SemiBold.woff2
- *   - Inter-Bold.woff2
+ * JetBrains Mono - terminal / code font for Latin.
  *
- * JetBrains Mono (from https://github.com/JetBrains/JetBrainsMono/releases):
- *   - JetBrainsMono-Regular.woff2
- *   - JetBrainsMono-Medium.woff2
+ * D2Coding - terminal fallback for Hangul. Hangul glyphs are exactly two
+ *   Latin cells wide, so Korean output stays aligned in xterm.
+ *   https://github.com/naver/d2codingfont (v1.3.2, full glyph set)
  */
 
-/* Inter Font Family - Local Bundle */
 @font-face {
-  font-family: 'Inter';
+  font-family: 'Pretendard Variable';
   font-style: normal;
-  font-weight: 400;
+  font-weight: 45 920;
   font-display: swap;
-  src: url('../assets/fonts/Inter-Regular.woff2') format('woff2');
+  src: url('../assets/fonts/PretendardVariable.woff2') format('woff2-variations');
 }
 
-@font-face {
-  font-family: 'Inter';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url('../assets/fonts/Inter-Medium.woff2') format('woff2');
-}
-
-@font-face {
-  font-family: 'Inter';
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url('../assets/fonts/Inter-SemiBold.woff2') format('woff2');
-}
-
-@font-face {
-  font-family: 'Inter';
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url('../assets/fonts/Inter-Bold.woff2') format('woff2');
-}
-
-/* JetBrains Mono - Terminal Font */
 @font-face {
   font-family: 'JetBrains Mono';
   font-style: normal;
@@ -63,4 +34,20 @@
   font-weight: 500;
   font-display: swap;
   src: url('../assets/fonts/JetBrainsMono-Medium.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'D2Coding';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/D2Coding-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'D2Coding';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../assets/fonts/D2Coding-Bold.woff2') format('woff2');
 }

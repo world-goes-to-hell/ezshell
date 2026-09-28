@@ -120,11 +120,11 @@ export function BatchCommandModal({ open, onClose }: BatchCommandModalProps) {
       >
         <div className="batch-header">
           <div className="batch-title">
-            <RiTerminalBoxFill size={18} />
+            <RiTerminalBoxFill size={20} />
             <span>배치 명령 실행</span>
           </div>
           <button className="batch-close-btn" onClick={onClose}>
-            <RiCloseFill size={18} />
+            <RiCloseFill size={20} />
           </button>
         </div>
 
@@ -180,7 +180,7 @@ export function BatchCommandModal({ open, onClose }: BatchCommandModalProps) {
                 onClick={handleExecute}
                 disabled={isRunning || !command.trim() || selectedSessions.size === 0}
               >
-                {isRunning ? <RiLoader4Fill size={16} className="spinning" /> : <RiPlayFill size={16} />}
+                {isRunning ? <RiLoader4Fill size={18} className="spinning" /> : <RiPlayFill size={18} />}
                 실행
               </button>
             </div>
@@ -211,7 +211,7 @@ export function BatchCommandModal({ open, onClose }: BatchCommandModalProps) {
                           onClick={() => removeJob(job.id)}
                           title="삭제"
                         >
-                          <RiDeleteBinLine size={12} />
+                          <RiDeleteBinLine size={16} />
                         </button>
                       </div>
                     </div>
@@ -220,10 +220,10 @@ export function BatchCommandModal({ open, onClose }: BatchCommandModalProps) {
                         <div key={result.sessionId} className={`batch-result batch-result-${result.status}`}>
                           <div className="batch-result-header">
                             <span className="batch-result-status">
-                              {result.status === 'success' && <RiCheckboxCircleFill size={13} />}
-                              {result.status === 'error' && <RiCloseCircleFill size={13} />}
-                              {result.status === 'running' && <RiLoader4Fill size={13} className="spinning" />}
-                              {result.status === 'pending' && <RiTimeLine size={13} />}
+                              {result.status === 'success' && <RiCheckboxCircleFill size={16} />}
+                              {result.status === 'error' && <RiCloseCircleFill size={16} />}
+                              {result.status === 'running' && <RiLoader4Fill size={16} className="spinning" />}
+                              {result.status === 'pending' && <RiTimeLine size={16} />}
                             </span>
                             <span className="batch-result-name">{result.sessionName}</span>
                             {result.duration !== undefined && (

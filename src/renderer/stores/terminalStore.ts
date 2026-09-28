@@ -107,6 +107,7 @@ const DEFAULT_FONT_FAMILY = 'JetBrains Mono'
 
 export const TERMINAL_FONTS = [
   { id: 'jetbrains-mono', name: 'JetBrains Mono', value: 'JetBrains Mono' },
+  { id: 'd2coding', name: 'D2Coding (한글 코딩 서체)', value: 'D2Coding' },
   { id: 'consolas', name: 'Consolas', value: 'Consolas' },
   { id: 'fira-code', name: 'Fira Code', value: 'Fira Code' },
   { id: 'source-code-pro', name: 'Source Code Pro', value: 'Source Code Pro' },

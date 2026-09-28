@@ -3,6 +3,8 @@ import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import { useThemeStore } from '../../stores/themeStore'
 import { useTerminalStore } from '../../stores/terminalStore'
+import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
+import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory'
 import 'xterm/css/xterm.css'
 
 interface SplitTerminalProps {
@@ -24,6 +26,9 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
   const [terminalReady, setTerminalReady] = useState(false)
   const [retryCount, setRetryCount] = useState(0)
   const autoRetryCount = useRef(0)
+  const commandHistory = useTerminalCommandHistory(sessionId, 'split', (data) => {
+    if (streamIdRef.current) window.electronAPI.sshSplitSend(streamIdRef.current, data)
+  })
 
   const fontSize = useTerminalStore(state => state.fontSize)
   const fontFamily = useTerminalStore(state => state.fontFamily)
@@ -62,6 +67,8 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
 
   useEffect(() => {
     let term: Terminal | null = null
+    let disableCopyOnSelect: (() => void) | null = null
+    let detachCommandHistory: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let disposed = false
     let delayTimer: ReturnType<typeof setTimeout> | null = null
@@ -72,12 +79,13 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
     setTerminalReady(false)
 
     const initTerminal = async () => {
-      // Stagger shell creation to avoid concurrent shell requests
-      if (delay > 0) {
-        await new Promise<void>(resolve => {
-          delayTimer = setTimeout(resolve, delay)
-        })
-      }
+      // Always yield at least one macrotask before opening the channel (and stagger by `delay`).
+      // StrictMode's dev-only mount/unmount/mount disposes the first run during that tick,
+      // so it never opens a shell; otherwise every split briefly held two channels and a quad
+      // layout could hit the server's MaxSessions (10) and fail.
+      await new Promise<void>(resolve => {
+        delayTimer = setTimeout(resolve, delay)
+      })
 
       if (disposed) return
 
@@ -105,7 +113,13 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
           return
         }
 
-        if (disposed) return
+        if (disposed) {
+          // Unmounted while the shell was being opened (fast split toggle, or StrictMode's
+          // dev-only mount/unmount/mount). Nobody owns this channel, so close it now;
+          // otherwise it stays open on the server and eventually hits MaxSessions.
+          if (result.streamId) window.electronAPI.sshSplitClose(result.streamId)
+          return
+        }
 
         streamIdRef.current = result.streamId ?? null
 
@@ -139,6 +153,9 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
           fontFamily: `"${fontFamily}", Consolas, "D2Coding", monospace`,
           cursorBlink: true,
           cursorStyle: 'bar',
+          // xterm's default 'outline' draws a box around the cursor cell in unfocused panes,
+          // which looks like a double bar ('||') next to the prompt in split layouts
+          cursorInactiveStyle: 'bar',
           scrollback: 10000,
           allowProposedApi: true
         })
@@ -147,28 +164,25 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
         term.loadAddon(fitAddon.current)
 
         term.open(terminalRef.current)
+        disableCopyOnSelect = enableCopyOnSelect(term)
+        detachCommandHistory = commandHistory.attach(term)
         terminalInstance.current = term
         isInitialized.current = true
 
         // Handle Ctrl+C for copy when there's a selection
         term.attachCustomKeyEventHandler((event) => {
+          // Ctrl+Shift+H = command history popup
+          if (commandHistory.handleKeyEvent(event)) return false
           // Ctrl+C with selection = copy
           if (event.ctrlKey && event.key === 'c' && event.type === 'keydown') {
             const selection = term!.getSelection()
             if (selection) {
-              navigator.clipboard.writeText(selection)
+              copyToClipboard(selection)
               return false // Prevent default (don't send SIGINT)
             }
           }
-          // Ctrl+V = paste
-          if (event.ctrlKey && event.key === 'v' && event.type === 'keydown') {
-            navigator.clipboard.readText().then(text => {
-              if (text && streamIdRef.current) {
-                window.electronAPI.sshSplitSend(streamIdRef.current, text)
-              }
-            })
-            return false
-          }
+          // Ctrl+V = paste, done by xterm from the native paste event
+          if (isPasteShortcut(event)) return false
           return true // Let other keys through
         })
 
@@ -197,6 +211,7 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
 
         // Handle terminal input - send to split stream
         term.onData((data) => {
+          commandHistory.handleData(data)
           if (streamIdRef.current) {
             window.electronAPI.sshSplitSend(streamIdRef.current, data)
           }
@@ -342,6 +357,8 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
       if (resizeObserver) {
         resizeObserver.disconnect()
       }
+      disableCopyOnSelect?.()
+      detachCommandHistory?.()
       if (term) {
         term.dispose()
       }
@@ -374,5 +391,10 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
     )
   }
 
-  return <div ref={terminalRef} className="split-terminal-content" />
+  return (
+    <>
+      <div ref={terminalRef} className="split-terminal-content" />
+      {commandHistory.popup}
+    </>
+  )
 }

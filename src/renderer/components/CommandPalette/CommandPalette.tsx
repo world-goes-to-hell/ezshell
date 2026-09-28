@@ -251,10 +251,10 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
 
   const getCategoryIcon = (category: CommandItem['category'], iconOverride?: string) => {
     if (iconOverride === 'delete') {
-      return <RiDeleteBinLine size={14} />
+      return <RiDeleteBinLine size={16} />
     }
     const Icon = categoryIcons[category]
-    return <Icon size={14} />
+    return <Icon size={16} />
   }
 
   return (
@@ -279,7 +279,7 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
             transition={{ duration: 0.15 }}
           >
             <div className="command-palette-input-wrapper">
-              <RiSearchLine size={18} className="command-palette-search-icon" />
+              <RiSearchLine size={20} className="command-palette-search-icon" />
               <input
                 ref={inputRef}
                 type="text"

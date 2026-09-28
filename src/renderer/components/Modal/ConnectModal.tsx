@@ -12,7 +12,11 @@ interface ConnectModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onConnect: (config: ConnectionConfig) => void
+  /** Edit mode "저장": persist changes without connecting */
+  onSave?: (config: ConnectionConfig) => void
   editSession?: ConnectionConfig | null
+  /** Prefill a new connection from an existing session (duplicate). Saved as a new session. */
+  duplicateFrom?: ConnectionConfig | null
   defaultFolderId?: string
 }
 
@@ -89,7 +93,9 @@ const DEFAULT_CONFIG: ConnectionConfig = {
   jumpPassphrase: ''
 }
 
-export function ConnectModal({ open, onOpenChange, onConnect, editSession, defaultFolderId }: ConnectModalProps) {
+export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSession, duplicateFrom, defaultFolderId }: ConnectModalProps) {
+  const isEditMode = Boolean(editSession)
+  const isDuplicateMode = !isEditMode && Boolean(duplicateFrom)
   const { folders, availableTags, addTag } = useSessionStore()
   const [showPassword, setShowPassword] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -103,13 +109,15 @@ export function ConnectModal({ open, onOpenChange, onConnect, editSession, defau
       // When opening, use editSession or reset to defaults with optional folder
       if (editSession) {
         setConfig({ ...editSession })
+      } else if (duplicateFrom) {
+        setConfig({ ...duplicateFrom })
       } else {
         setConfig({ ...DEFAULT_CONFIG, folderId: defaultFolderId || '' })
       }
       setShowPassword(false)
       setShowAdvanced(false)
     }
-  }, [open, editSession, defaultFolderId])
+  }, [open, editSession, duplicateFrom, defaultFolderId])
 
   // Also handle the onOpenChange to wrap with reset logic
   const handleOpenChange = (newOpen: boolean) => {
@@ -120,12 +128,21 @@ export function ConnectModal({ open, onOpenChange, onConnect, editSession, defau
     onOpenChange(newOpen)
   }
 
+  // Editing an existing session always saves it; the checkbox only applies to new connections
+  const effectiveConfig = (): ConnectionConfig => (isEditMode ? { ...config, saveSession: true } : config)
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     // Close modal immediately and start connection in background
     onOpenChange(false)
     // Start connection (don't await - it runs in background with toast notifications)
-    onConnect(config)
+    onConnect(effectiveConfig())
+  }
+
+  // "저장" always registers/updates the session, regardless of the checkbox
+  const handleSaveOnly = () => {
+    onOpenChange(false)
+    onSave?.({ ...config, saveSession: true })
   }
 
   const handleSelectPrivateKey = async () => {
@@ -175,7 +192,7 @@ export function ConnectModal({ open, onOpenChange, onConnect, editSession, defau
               >
                 <Dialog.Title className="modal-title">
                   <RiServerFill size={20} />
-                  {editSession ? '연결 편집' : '새 연결'}
+                  {isEditMode ? '연결 편집' : isDuplicateMode ? '세션 복제' : '새 연결'}
                 </Dialog.Title>
 
           <form onSubmit={handleSubmit}>
@@ -200,7 +217,7 @@ export function ConnectModal({ open, onOpenChange, onConnect, editSession, defau
                     onClick={() => updateConfig('icon', id)}
                     title={id}
                   >
-                    <IconComponent size={18} />
+                    <IconComponent size={20} />
                   </button>
                 ))}
               </div>
@@ -255,7 +272,7 @@ export function ConnectModal({ open, onOpenChange, onConnect, editSession, defau
                   className={`auth-type-btn ${config.authType === 'privateKey' ? 'active' : ''}`}
                   onClick={() => updateConfig('authType', 'privateKey')}
                 >
-                  <RiKeyFill size={14} />
+                  <RiKeyFill size={16} />
                   Private Key
                 </button>
               </div>
@@ -276,7 +293,7 @@ export function ConnectModal({ open, onOpenChange, onConnect, editSession, defau
                     className="password-toggle"
                     onClick={() => setShowPassword(!showPassword)}
                   >
-                    {showPassword ? <RiEyeOffFill size={16} /> : <RiEyeFill size={16} />}
+                    {showPassword ? <RiEyeOffFill size={18} /> : <RiEyeFill size={18} />}
                   </button>
                 </div>
               </div>
@@ -357,8 +374,8 @@ export function ConnectModal({ open, onOpenChange, onConnect, editSession, defau
             </div>
 
             <div className="advanced-settings-toggle" onClick={() => setShowAdvanced(!showAdvanced)}>
-              {showAdvanced ? <RiArrowDownSFill size={14} /> : <RiArrowRightSFill size={14} />}
-              <RiSettings3Fill size={14} />
+              {showAdvanced ? <RiArrowDownSFill size={16} /> : <RiArrowRightSFill size={16} />}
+              <RiSettings3Fill size={16} />
               <span>고급 설정</span>
             </div>
 
@@ -521,16 +538,18 @@ export function ConnectModal({ open, onOpenChange, onConnect, editSession, defau
               </div>
             )}
 
-            <div className="form-group checkbox-group">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={config.saveSession}
-                  onChange={(e) => updateConfig('saveSession', e.target.checked)}
-                />
-                <span>이 연결 정보 저장</span>
-              </label>
-            </div>
+            {!isEditMode && (
+              <div className="form-group checkbox-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={config.saveSession}
+                    onChange={(e) => updateConfig('saveSession', e.target.checked)}
+                  />
+                  <span>이 연결 정보 저장</span>
+                </label>
+              </div>
+            )}
 
             <div className="modal-actions">
               <Dialog.Close asChild>
@@ -544,13 +563,27 @@ export function ConnectModal({ open, onOpenChange, onConnect, editSession, defau
                   <RippleContainer />
                 </button>
               </Dialog.Close>
+              {(isEditMode || isDuplicateMode) && onSave && (
+                <button
+                  type="button"
+                  className="btn-secondary modal-btn"
+                  style={{ position: 'relative', overflow: 'hidden' }}
+                  onClick={(e) => {
+                    createRipple(e)
+                    handleSaveOnly()
+                  }}
+                >
+                  저장
+                  <RippleContainer />
+                </button>
+              )}
               <button
                 type="submit"
                 className="btn-primary modal-btn"
                 style={{ position: 'relative', overflow: 'hidden' }}
                 onClick={createRipple}
               >
-                연결
+                {isEditMode ? '저장 후 연결' : '연결'}
                 <RippleContainer />
               </button>
             </div>
@@ -558,7 +591,7 @@ export function ConnectModal({ open, onOpenChange, onConnect, editSession, defau
 
                 <Dialog.Close asChild>
                   <button className="modal-close-btn" aria-label="Close">
-                    <RiCloseFill size={18} />
+                    <RiCloseFill size={20} />
                   </button>
                 </Dialog.Close>
               </motion.div>

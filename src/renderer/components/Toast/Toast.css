@@ -70,8 +70,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
@@ -82,8 +82,8 @@
 }
 
 .toast-error .toast-icon {
-  background: rgba(242, 63, 67, 0.15);
-  color: var(--error);
+  background: color-mix(in srgb, var(--error) 15%, transparent);
+  color: var(--error-text);
 }
 
 .toast-warning .toast-icon {
@@ -102,14 +102,14 @@
 }
 
 .toast-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
   line-height: 1.4;
 }
 
 .toast-message {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
   margin-top: 2px;
   line-height: 1.4;

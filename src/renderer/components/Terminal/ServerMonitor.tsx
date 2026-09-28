@@ -105,10 +105,10 @@ export function ServerMonitor({ sessionId, onClose }: ServerMonitorProps) {
         <span className="monitor-title">서버 모니터링</span>
         <div className="monitor-actions">
           <button className="monitor-action-btn" onClick={handleRefresh} title="새로고침">
-            <RiRefreshLine size={14} />
+            <RiRefreshLine size={16} />
           </button>
           <button className="monitor-action-btn" onClick={onClose} title="닫기">
-            <RiCloseFill size={14} />
+            <RiCloseFill size={16} />
           </button>
         </div>
       </div>
@@ -123,7 +123,7 @@ export function ServerMonitor({ sessionId, onClose }: ServerMonitorProps) {
           {/* Uptime */}
           {currentMetrics.uptime && (
             <div className="monitor-uptime">
-              <RiTimeLine size={13} />
+              <RiTimeLine size={16} />
               <span>Uptime: {currentMetrics.uptime}</span>
             </div>
           )}
@@ -131,7 +131,7 @@ export function ServerMonitor({ sessionId, onClose }: ServerMonitorProps) {
           {/* CPU */}
           <div className="monitor-section">
             <div className="monitor-section-title">
-              <RiCpuLine size={14} />
+              <RiCpuLine size={16} />
               <span>CPU</span>
               {currentMetrics.cpu.cores > 0 && (
                 <span className="monitor-badge">{currentMetrics.cpu.cores} cores</span>
@@ -149,7 +149,7 @@ export function ServerMonitor({ sessionId, onClose }: ServerMonitorProps) {
           {/* Memory */}
           <div className="monitor-section">
             <div className="monitor-section-title">
-              <RiDatabase2Line size={14} />
+              <RiDatabase2Line size={16} />
               <span>메모리</span>
             </div>
             <MetricBar
@@ -164,7 +164,7 @@ export function ServerMonitor({ sessionId, onClose }: ServerMonitorProps) {
           {/* Disk */}
           <div className="monitor-section">
             <div className="monitor-section-title">
-              <RiHardDriveLine size={14} />
+              <RiHardDriveLine size={16} />
               <span>디스크</span>
             </div>
             {currentMetrics.disk.filesystems.map((fs, i) => (

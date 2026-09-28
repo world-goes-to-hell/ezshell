@@ -39,7 +39,7 @@ export function WelcomeScreen({ onNewConnection }: WelcomeScreenProps) {
         whileTap={reducedMotion ? undefined : { scale: 0.98 }}
         transition={SPRINGS.snappy}
       >
-        <RiAddFill size={18} />
+        <RiAddFill size={20} />
         <span>새 연결</span>
       </motion.button>
     </motion.div>

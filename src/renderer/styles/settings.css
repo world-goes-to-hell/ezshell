@@ -62,7 +62,7 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -75,7 +75,7 @@
 
 .settings-tab-trigger[data-state="active"] {
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
 }
 
 .settings-tab-content {
@@ -105,13 +105,13 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .settings-section-desc {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-muted);
   line-height: 1.5;
 }
@@ -138,7 +138,7 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -151,7 +151,7 @@
 
 .theme-filter-tab.active {
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
 }
 
 /* Theme Grid */
@@ -212,14 +212,14 @@
 .theme-preview-secondary {
   width: 45%;
   height: 55%;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
 
 .theme-preview-accent {
   width: 35%;
   height: 35%;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
 
@@ -233,8 +233,8 @@
   align-items: center;
   justify-content: center;
   background: var(--accent);
-  color: white;
-  border-radius: 50%;
+  color: var(--on-accent);
+  border-radius: var(--radius-full);
   box-shadow: var(--shadow-md);
 }
 
@@ -247,13 +247,13 @@
 }
 
 .theme-name {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .theme-category {
-  font-size: 10px;
+  font-size: 13px;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -282,7 +282,7 @@
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -296,7 +296,7 @@
 .theme-action-btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--on-accent);
 }
 
 .theme-action-btn-primary:hover {
@@ -314,8 +314,8 @@
   padding: 0 5px;
   margin-left: 6px;
   background: rgba(255, 255, 255, 0.2);
-  border-radius: 9px;
-  font-size: 11px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -342,8 +342,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border: none;
   background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(4px);
@@ -373,7 +373,7 @@
 
 .theme-grid::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .theme-grid::-webkit-scrollbar-thumb:hover {
@@ -404,7 +404,7 @@
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 15px;
   cursor: pointer;
   transition: all var(--transition-fast);
 }
@@ -426,16 +426,16 @@
 }
 
 .font-size-header label {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .font-size-value {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--accent);
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
 }
 
 .font-size-slider-container {
@@ -471,7 +471,7 @@
 .font-size-slider {
   flex: 1;
   height: 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   outline: none;
   -webkit-appearance: none;
@@ -484,7 +484,7 @@
   appearance: none;
   width: 18px;
   height: 18px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--accent);
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -500,7 +500,7 @@
   width: 18px;
   height: 18px;
   border: none;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--accent);
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -518,7 +518,7 @@
 }
 
 .shortcut-hint {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-muted);
   display: flex;
   align-items: center;
@@ -529,9 +529,9 @@
   padding: 2px 6px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 11px;
-  font-family: 'JetBrains Mono', monospace;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-family: var(--font-mono);
   color: var(--text-primary);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }

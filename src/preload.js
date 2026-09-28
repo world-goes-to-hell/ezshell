@@ -80,10 +80,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('sftp-queue-clear-completed', { sessionId }),
   sftpGetQueue: (sessionId) =>
     ipcRenderer.invoke('sftp-get-queue', { sessionId }),
-  onSftpQueueUpdate: (callback) =>
-    ipcRenderer.on('sftp-queue-update', (event, data) => callback(data)),
-  onSftpTransferProgress: (callback) =>
-    ipcRenderer.on('sftp-transfer-progress', (event, data) => callback(data)),
+  // Return an unsubscribe function so SFTP views can clean up when they close
+  onSftpQueueUpdate: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('sftp-queue-update', handler);
+    return () => ipcRenderer.removeListener('sftp-queue-update', handler);
+  },
+  onSftpTransferProgress: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('sftp-transfer-progress', handler);
+    return () => ipcRenderer.removeListener('sftp-transfer-progress', handler);
+  },
 
   // ==================== 로컬 파일 시스템 API ====================
 
@@ -105,6 +112,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
   importSessions: (mode) => ipcRenderer.invoke('import-sessions', mode),
 
   // ==================== 앱 설정 API ====================
+
+  // ==================== SFTP 경로 즐겨찾기 ====================
+
+  sshGetSessionInfo: (sessionId) => ipcRenderer.invoke('ssh-get-session-info', { sessionId }),
+  pathBookmarksGet: (key) => ipcRenderer.invoke('path-bookmarks-get', { key }),
+  pathBookmarksSet: (key, side, paths) => ipcRenderer.invoke('path-bookmarks-set', { key, side, paths }),
+  onPathBookmarksChanged: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('path-bookmarks-changed', handler);
+    return () => ipcRenderer.removeListener('path-bookmarks-changed', handler);
+  },
+
+  // ==================== 터미널 명령어 기록 ====================
+
+  commandHistoryGet: (key) => ipcRenderer.invoke('command-history-get', { key }),
+  commandHistoryAdd: (key, command) => ipcRenderer.invoke('command-history-add', { key, command }),
+  commandHistoryRemove: (key, command) => ipcRenderer.invoke('command-history-remove', { key, command }),
+  commandHistoryClear: (key) => ipcRenderer.invoke('command-history-clear', { key }),
+  onCommandHistoryChanged: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('command-history-changed', handler);
+    return () => ipcRenderer.removeListener('command-history-changed', handler);
+  },
 
   loadSettings: () => ipcRenderer.invoke('load-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),

@@ -52,7 +52,7 @@ export function FontSizeControl() {
             title="글꼴 크기 축소 (Ctrl+-)"
             aria-label="Decrease font size"
           >
-            <RiSubtractLine size={16} />
+            <RiSubtractLine size={18} />
           </button>
 
           <input
@@ -73,7 +73,7 @@ export function FontSizeControl() {
             title="글꼴 크기 확대 (Ctrl++)"
             aria-label="Increase font size"
           >
-            <RiAddLine size={16} />
+            <RiAddLine size={18} />
           </button>
 
           <button
@@ -82,7 +82,7 @@ export function FontSizeControl() {
             title="기본 크기로 재설정 (Ctrl+0)"
             aria-label="Reset font size"
           >
-            <RiRestartLine size={16} />
+            <RiRestartLine size={18} />
           </button>
         </div>
 

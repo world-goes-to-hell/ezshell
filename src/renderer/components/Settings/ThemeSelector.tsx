@@ -109,12 +109,12 @@ export function ThemeSelector() {
       {/* Action Buttons */}
       <div className="theme-actions">
         <button className="theme-action-btn theme-action-btn-primary" onClick={handleCreateTheme}>
-          <RiAddLine size={16} />
+          <RiAddLine size={18} />
           커스텀 테마 만들기
         </button>
         <div className="theme-actions-right">
           <button className="theme-action-btn" onClick={handleImportTheme}>
-            <RiUploadLine size={16} />
+            <RiUploadLine size={18} />
             가져오기
           </button>
         </div>
@@ -162,7 +162,7 @@ export function ThemeSelector() {
               {/* Selection indicator */}
               {currentThemeId === theme.id && (
                 <div className="theme-selected-badge">
-                  <RiCheckFill size={14} />
+                  <RiCheckFill size={16} />
                 </div>
               )}
               {/* Custom theme actions */}
@@ -173,21 +173,21 @@ export function ThemeSelector() {
                     onClick={(e) => handleEditTheme(theme, e)}
                     title="수정"
                   >
-                    <RiEditLine size={14} />
+                    <RiEditLine size={16} />
                   </button>
                   <button
                     className="theme-card-action"
                     onClick={(e) => handleExportTheme(theme.id, e)}
                     title="내보내기"
                   >
-                    <RiDownloadLine size={14} />
+                    <RiDownloadLine size={16} />
                   </button>
                   <button
                     className="theme-card-action theme-card-action-danger"
                     onClick={(e) => handleDeleteTheme(theme.id, e)}
                     title="삭제"
                   >
-                    <RiDeleteBinLine size={14} />
+                    <RiDeleteBinLine size={16} />
                   </button>
                 </div>
               )}

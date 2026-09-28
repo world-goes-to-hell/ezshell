@@ -22,6 +22,31 @@ export interface TerminalSession {
   connected: boolean
 }
 
+export type PathBookmarkSide = 'local' | 'remote'
+
+export interface PathBookmarkEntry {
+  local: string[]
+  remote: string[]
+}
+
+export interface CommandHistoryEntry {
+  command: string
+  lastUsedAt: number
+}
+
+export interface CommandHistoryResult {
+  success: boolean
+  entries?: CommandHistoryEntry[]
+  error?: string
+}
+
+export interface SshSessionInfo {
+  host: string
+  port: number
+  username: string
+  savedSessionId: string | null
+}
+
 // Extend Window interface for electronAPI
 declare global {
   interface Window {
@@ -83,8 +108,9 @@ declare global {
       sftpTransferCancel: (sessionId: string, transferId: string) => Promise<any>
       sftpQueueClearCompleted: (sessionId: string) => Promise<any>
       sftpGetQueue: (sessionId: string) => Promise<any>
-      onSftpQueueUpdate: (callback: (data: any) => void) => void
-      onSftpTransferProgress: (callback: (data: any) => void) => void
+      // Unsubscribe function; absent on preloads built before it was added
+      onSftpQueueUpdate: (callback: (data: any) => void) => (() => void) | void
+      onSftpTransferProgress: (callback: (data: any) => void) => (() => void) | void
 
       // Local file system
       localList: (dirPath: string) => Promise<any>
@@ -105,6 +131,19 @@ declare global {
       saveFolders: (folders: any) => Promise<any>
       exportSessions: (data: any) => Promise<any>
       importSessions: (mode: 'merge' | 'replace') => Promise<any>
+
+      // SFTP path bookmarks (stored per saved session)
+      sshGetSessionInfo: (sessionId: string) => Promise<SshSessionInfo | null>
+      pathBookmarksGet: (key: string) => Promise<PathBookmarkEntry>
+      pathBookmarksSet: (key: string, side: PathBookmarkSide, paths: string[]) => Promise<{ success: boolean; entry?: PathBookmarkEntry; error?: string }>
+      onPathBookmarksChanged: (callback: (data: { key: string; entry: PathBookmarkEntry }) => void) => () => void
+
+      // Terminal command history (per connection, encrypted in the main process)
+      commandHistoryGet: (key: string) => Promise<CommandHistoryResult>
+      commandHistoryAdd: (key: string, command: string) => Promise<CommandHistoryResult>
+      commandHistoryRemove: (key: string, command: string) => Promise<CommandHistoryResult>
+      commandHistoryClear: (key: string) => Promise<CommandHistoryResult>
+      onCommandHistoryChanged: (callback: (data: { key: string; entries: CommandHistoryEntry[] }) => void) => () => void
 
       // App settings
       loadSettings: () => Promise<any>

@@ -97,7 +97,7 @@ export function ShortcutsPanel() {
     <div className="shortcuts-panel">
       {/* Search Bar */}
       <div className="shortcuts-search">
-        <RiSearchLine size={16} className="shortcuts-search-icon" />
+        <RiSearchLine size={18} className="shortcuts-search-icon" />
         <input
           type="text"
           className="shortcuts-search-input"
@@ -111,7 +111,7 @@ export function ShortcutsPanel() {
             onClick={handleResetAll}
             title="Reset all shortcuts to defaults"
           >
-            <RiRestartLine size={14} />
+            <RiRestartLine size={16} />
             Reset All
           </button>
         )}
@@ -134,7 +134,7 @@ export function ShortcutsPanel() {
               animate="visible"
             >
               <div className="shortcuts-category-header">
-                <Icon size={16} />
+                <Icon size={18} />
                 <h4>{categoryLabels[category]}</h4>
                 <span className="shortcuts-category-count">{categoryShortcuts.length}</span>
               </div>
@@ -164,7 +164,7 @@ export function ShortcutsPanel() {
                             onClick={() => resetCustomBinding(shortcut.id)}
                             title="Reset to default"
                           >
-                            <RiRestartLine size={14} />
+                            <RiRestartLine size={16} />
                           </button>
                         )}
                       </div>

@@ -23,7 +23,7 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
   transition: all var(--transition-fast);
   text-align: left;

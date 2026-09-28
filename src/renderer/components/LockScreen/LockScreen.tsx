@@ -316,7 +316,7 @@ export function LockScreen({ hasMasterPassword, onUnlock }: LockScreenProps) {
                 onClick={() => setShowPassword(!showPassword)}
                 tabIndex={-1}
               >
-                {showPassword ? <RiEyeOffFill size={16} /> : <RiEyeFill size={16} />}
+                {showPassword ? <RiEyeOffFill size={18} /> : <RiEyeFill size={18} />}
               </button>
             </div>
 
@@ -366,7 +366,7 @@ export function LockScreen({ hasMasterPassword, onUnlock }: LockScreenProps) {
                   />
                   {confirmPassword.length > 0 && password === confirmPassword && (
                     <span className="lock-match-icon">
-                      <RiCheckboxCircleFill size={16} />
+                      <RiCheckboxCircleFill size={18} />
                     </span>
                   )}
                 </div>
@@ -384,7 +384,7 @@ export function LockScreen({ hasMasterPassword, onUnlock }: LockScreenProps) {
                 exit={{ opacity: 0, y: -4, height: 0 }}
                 transition={{ duration: 0.2 }}
               >
-                <RiErrorWarningFill size={14} />
+                <RiErrorWarningFill size={16} />
                 <span>{error}</span>
               </motion.div>
             )}
@@ -428,7 +428,7 @@ export function LockScreen({ hasMasterPassword, onUnlock }: LockScreenProps) {
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.97 }}
         >
-          <RiShutDownLine size={14} />
+          <RiShutDownLine size={16} />
           <span>프로그램 종료</span>
         </motion.button>
 

@@ -125,7 +125,7 @@ export function PortForwardPanel({ sessionId, onClose }: PortForwardPanelProps) 
     >
       <div className="pf-header">
         <div className="pf-header-left">
-          <RiArrowLeftRightLine size={16} />
+          <RiArrowLeftRightLine size={18} />
           <span className="pf-title">포트 포워딩</span>
           {sessionForwards.length > 0 && (
             <span className="pf-badge">{sessionForwards.length}</span>
@@ -137,10 +137,10 @@ export function PortForwardPanel({ sessionId, onClose }: PortForwardPanelProps) 
             onClick={() => { setShowAddForm(!showAddForm); setError('') }}
             title="포워딩 추가"
           >
-            <RiAddLine size={16} />
+            <RiAddLine size={18} />
           </button>
           <button className="pf-icon-btn" onClick={onClose} title="닫기">
-            <RiCloseLine size={16} />
+            <RiCloseLine size={18} />
           </button>
         </div>
       </div>
@@ -166,7 +166,7 @@ export function PortForwardPanel({ sessionId, onClose }: PortForwardPanelProps) 
                       className={`pf-type-btn ${form.type === t ? 'active' : ''}`}
                       onClick={() => setForm({ ...form, type: t })}
                     >
-                      <Icon size={14} />
+                      <Icon size={16} />
                       <span>{t === 'local' ? '로컬' : t === 'remote' ? '원격' : 'SOCKS5'}</span>
                     </button>
                   )
@@ -200,7 +200,7 @@ export function PortForwardPanel({ sessionId, onClose }: PortForwardPanelProps) 
                 {form.type !== 'dynamic' && (
                   <>
                     <div className="pf-arrow-divider">
-                      {form.type === 'local' ? <RiArrowRightLine size={16} /> : <RiArrowLeftLine size={16} />}
+                      {form.type === 'local' ? <RiArrowRightLine size={18} /> : <RiArrowLeftLine size={18} />}
                     </div>
                     <div className="pf-field-row">
                       <div className="pf-field">
@@ -262,7 +262,7 @@ export function PortForwardPanel({ sessionId, onClose }: PortForwardPanelProps) 
                 layout
               >
                 <div className="pf-item-icon">
-                  <Icon size={14} />
+                  <Icon size={16} />
                 </div>
                 <div className="pf-item-info">
                   <div className="pf-item-ports">
@@ -278,7 +278,7 @@ export function PortForwardPanel({ sessionId, onClose }: PortForwardPanelProps) 
                     <span className="pf-item-type">{fwd.type.toUpperCase()}</span>
                     {fwd.connectionCount > 0 && (
                       <span className="pf-item-conns">
-                        <RiLinkM size={10} /> {fwd.connectionCount}
+                        <RiLinkM size={16} /> {fwd.connectionCount}
                       </span>
                     )}
                   </div>
@@ -288,7 +288,7 @@ export function PortForwardPanel({ sessionId, onClose }: PortForwardPanelProps) 
                   onClick={() => handleStop(fwd.id)}
                   title="중지"
                 >
-                  <RiStopCircleLine size={16} />
+                  <RiStopCircleLine size={18} />
                 </button>
               </motion.div>
             )

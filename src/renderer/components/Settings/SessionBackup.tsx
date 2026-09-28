@@ -131,7 +131,7 @@ export function SessionBackup() {
                         {session.username}@{session.host}:{session.port}
                         {session.folderId && (
                           <span className="session-folder">
-                            <RiFolderLine size={12} />
+                            <RiFolderLine size={16} />
                             {getFolderName(session.folderId)}
                           </span>
                         )}
@@ -139,7 +139,7 @@ export function SessionBackup() {
                     </div>
                   </div>
                   {selectedSessions.has(session.id) && (
-                    <RiCheckLine size={18} className="session-check-icon" />
+                    <RiCheckLine size={20} className="session-check-icon" />
                   )}
                 </label>
               ))
@@ -152,7 +152,7 @@ export function SessionBackup() {
           onClick={handleExport}
           disabled={selectedSessions.size === 0 || isExporting}
         >
-          <RiDownload2Line size={18} />
+          <RiDownload2Line size={20} />
           {isExporting ? '내보내는 중...' : `선택한 세션 내보내기 (${selectedSessions.size})`}
         </button>
       </div>
@@ -199,7 +199,7 @@ export function SessionBackup() {
           onClick={handleImport}
           disabled={isImporting}
         >
-          <RiUpload2Line size={18} />
+          <RiUpload2Line size={20} />
           {isImporting ? '가져오는 중...' : '세션 가져오기'}
         </button>
       </div>

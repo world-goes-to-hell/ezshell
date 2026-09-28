@@ -33,7 +33,7 @@ export function Toast({ toast }: ToastProps) {
       layout
     >
       <div className="toast-icon">
-        <Icon size={18} />
+        <Icon size={20} />
       </div>
       <div className="toast-content">
         <div className="toast-title">{toast.title}</div>
@@ -45,7 +45,7 @@ export function Toast({ toast }: ToastProps) {
           onClick={() => removeToast(toast.id)}
           aria-label="Dismiss"
         >
-          <RiCloseLine size={16} />
+          <RiCloseLine size={18} />
         </button>
       )}
     </motion.div>

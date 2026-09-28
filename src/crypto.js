@@ -14,13 +14,36 @@ function deriveKey(password, salt) {
 }
 
 /**
+ * Same key as deriveKey, computed on libuv's thread pool so the caller's thread is not blocked
+ */
+function deriveKeyAsync(password, salt) {
+  return new Promise((resolve, reject) => {
+    crypto.pbkdf2(password, salt, PBKDF2_ITERATIONS, KEY_LENGTH, 'sha512', (err, key) => {
+      if (err) reject(err);
+      else resolve(key);
+    });
+  });
+}
+
+/**
  * Encrypt text using AES-256-GCM
  */
 function encrypt(text, masterPassword) {
   const salt = crypto.randomBytes(SALT_LENGTH);
-  const iv = crypto.randomBytes(IV_LENGTH);
-  const key = deriveKey(masterPassword, salt);
+  return encryptWithKey(text, deriveKey(masterPassword, salt), salt);
+}
 
+/**
+ * encrypt() without blocking: for frequent background saves in the Electron main process,
+ * where a synchronous PBKDF2 would stall IPC and terminal I/O
+ */
+async function encryptAsync(text, masterPassword) {
+  const salt = crypto.randomBytes(SALT_LENGTH);
+  return encryptWithKey(text, await deriveKeyAsync(masterPassword, salt), salt);
+}
+
+function encryptWithKey(text, key, salt) {
+  const iv = crypto.randomBytes(IV_LENGTH);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
   let encrypted = cipher.update(text, 'utf8', 'hex');
   encrypted += cipher.final('hex');
@@ -75,6 +98,7 @@ function verifyPassword(password, storedHash, storedSalt) {
 
 module.exports = {
   encrypt,
+  encryptAsync,
   decrypt,
   hashPassword,
   verifyPassword

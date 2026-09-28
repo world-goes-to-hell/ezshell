@@ -13,6 +13,7 @@ import { SettingsModal } from './components/Settings/SettingsModal'
 import { WelcomeScreen } from './components/MainContent/WelcomeScreen'
 import { LockScreen } from './components/LockScreen/LockScreen'
 import { ToastContainer } from './components/Toast'
+import { toast } from './stores/toastStore'
 import { UpdateNotification } from './components/Update/UpdateNotification'
 import { CommandPalette } from './components/CommandPalette'
 import { TabContextMenu } from './components/Terminal/TabContextMenu'
@@ -63,22 +64,29 @@ function App() {
   // Check for special window modes
   const windowParams = getWindowModeParams()
 
+  // Popped-out windows render their own toast area (copy confirmations, errors)
   if (windowParams?.mode === 'sftp') {
     return (
-      <SftpWindow
-        sessionId={windowParams.sessionId}
-        initialLocalPath={windowParams.localPath}
-        initialRemotePath={windowParams.remotePath}
-      />
+      <>
+        <SftpWindow
+          sessionId={windowParams.sessionId}
+          initialLocalPath={windowParams.localPath}
+          initialRemotePath={windowParams.remotePath}
+        />
+        <ToastContainer />
+      </>
     )
   }
 
   if (windowParams?.mode === 'terminal') {
     return (
-      <TerminalWindow
-        sessionId={windowParams.sessionId}
-        title={windowParams.title}
-      />
+      <>
+        <TerminalWindow
+          sessionId={windowParams.sessionId}
+          title={windowParams.title}
+        />
+        <ToastContainer />
+      </>
     )
   }
   const [connectModalOpen, setConnectModalOpen] = useState(false)
@@ -88,6 +96,7 @@ function App() {
   const [statsDashboardOpen, setStatsDashboardOpen] = useState(false)
   const [batchModalOpen, setBatchModalOpen] = useState(false)
   const [editSession, setEditSession] = useState<ConnectionConfig | null>(null)
+  const [duplicateSource, setDuplicateSource] = useState<ConnectionConfig | null>(null)
   const [defaultFolderId, setDefaultFolderId] = useState<string | undefined>(undefined)
   const [isLocked, setIsLocked] = useState(true)
   const [hasMasterPassword, setHasMasterPassword] = useState(false)
@@ -453,48 +462,63 @@ function App() {
     }
 
     // Save session first if requested (regardless of connection result)
-    if (config.saveSession) {
-      const sessionData = {
-        name: config.name || `${config.username}@${config.host}`,
-        host: config.host,
-        port: config.port,
-        username: config.username,
-        authType: config.authType,
-        password: config.password,
-        privateKeyPath: config.privateKeyPath,
-        passphrase: config.passphrase,
-        folderId: config.folderId,
-        icon: config.icon,
-        tags: config.tags,
-        backgroundColor: config.backgroundColor,
-        connectTimeout: config.connectTimeout,
-        keepaliveInterval: config.keepaliveInterval,
-        autoReconnect: config.autoReconnect,
-        postConnectScript: config.postConnectScript,
-        useJumpHost: config.useJumpHost,
-        jumpHost: config.jumpHost,
-        jumpPort: config.jumpPort,
-        jumpUsername: config.jumpUsername,
-        jumpAuthType: config.jumpAuthType,
-        jumpPassword: config.jumpPassword,
-        jumpPrivateKeyPath: config.jumpPrivateKeyPath,
-        jumpPassphrase: config.jumpPassphrase
-      }
-
-      if (config.id) {
-        // 기존 세션 업데이트
-        updateSession(config.id, sessionData)
-      } else {
-        // 새 세션 추가
-        addSession({ ...sessionData, id: crypto.randomUUID() })
-      }
-      // Save to backend
-      useSessionStore.getState().saveToBackend()
-    }
+    const savedSessionId = config.saveSession ? persistSession(config) : config.id
 
     // Then attempt connection
-    await connect(toSSHConnectConfig(config, effectiveColor))
+    await connect(toSSHConnectConfig({ ...config, id: savedSessionId }, effectiveColor))
     // Note: Toast notifications are handled in useSSH hook
+  }
+
+  /**
+   * Add or update the sidebar session for this config and write it to disk.
+   * Returns the session id; a brand-new session gets its id here so a connection
+   * started right after can carry it (path bookmarks etc.).
+   */
+  const persistSession = (config: ConnectionConfig): string => {
+    const savedSessionId = config.id ?? crypto.randomUUID()
+    const sessionData = {
+      name: config.name || `${config.username}@${config.host}`,
+      host: config.host,
+      port: config.port,
+      username: config.username,
+      authType: config.authType,
+      password: config.password,
+      privateKeyPath: config.privateKeyPath,
+      passphrase: config.passphrase,
+      folderId: config.folderId,
+      icon: config.icon,
+      tags: config.tags,
+      backgroundColor: config.backgroundColor,
+      connectTimeout: config.connectTimeout,
+      keepaliveInterval: config.keepaliveInterval,
+      autoReconnect: config.autoReconnect,
+      postConnectScript: config.postConnectScript,
+      useJumpHost: config.useJumpHost,
+      jumpHost: config.jumpHost,
+      jumpPort: config.jumpPort,
+      jumpUsername: config.jumpUsername,
+      jumpAuthType: config.jumpAuthType,
+      jumpPassword: config.jumpPassword,
+      jumpPrivateKeyPath: config.jumpPrivateKeyPath,
+      jumpPassphrase: config.jumpPassphrase
+    }
+
+    if (config.id) {
+      // 기존 세션 업데이트
+      updateSession(config.id, sessionData)
+    } else {
+      // 새 세션 추가
+      addSession({ ...sessionData, id: savedSessionId })
+    }
+    useSessionStore.getState().saveToBackend()
+    return savedSessionId
+  }
+
+  // Edit/duplicate modal "저장": save the session without connecting
+  const handleSaveSession = (config: ConnectionConfig) => {
+    persistSession(config)
+    const name = config.name || `${config.username}@${config.host}`
+    toast.success('저장됨', config.id ? `${name} 세션을 수정했습니다` : `${name} 세션을 등록했습니다`)
   }
 
   const handleQuickConnect = async (session: any) => {
@@ -522,18 +546,30 @@ function App() {
 
   const handleNewConnection = () => {
     setEditSession(null)
+    setDuplicateSource(null)
     setDefaultFolderId(undefined)
     setConnectModalOpen(true)
   }
 
   const handleAddSession = (folderId?: string) => {
     setEditSession(null)
+    setDuplicateSource(null)
     setDefaultFolderId(folderId)
     setConnectModalOpen(true)
   }
 
   const handleEditSession = (session: any) => {
+    setDuplicateSource(null)
     setEditSession(session)
+    setConnectModalOpen(true)
+  }
+
+  // Open the new-connection form prefilled from an existing session; saving creates a new session
+  const handleDuplicateSession = (session: any) => {
+    const baseName = session.name || `${session.username}@${session.host}`
+    setEditSession(null)
+    setDefaultFolderId(undefined)
+    setDuplicateSource({ ...session, id: undefined, name: `${baseName} - 복제됨`, saveSession: true })
     setConnectModalOpen(true)
   }
 
@@ -786,6 +822,7 @@ function App() {
           onNewConnection={handleNewConnection}
           onQuickConnect={handleQuickConnect}
           onEditSession={handleEditSession}
+          onDuplicateSession={handleDuplicateSession}
           onOpenQuickConnect={handleOpenQuickConnect}
           onAddSession={handleAddSession}
           onStatsClick={() => setStatsDashboardOpen(true)}
@@ -1034,10 +1071,11 @@ function App() {
                   ))
                 )}
               </div>
-              {activeTerminalId && layout.mode !== 'split' && (
+              {/* Hidden while the panel is open (it has its own close button) so the panel gets the space */}
+              {activeTerminalId && layout.mode !== 'split' && !sftpOpen && (
                 <div className="toolbar">
                   <button
-                    className={`toolbar-btn ${sftpOpen ? 'active' : ''}`}
+                    className="toolbar-btn"
                     onClick={handleToggleSftp}
                   >
                     SFTP
@@ -1059,7 +1097,9 @@ function App() {
         open={connectModalOpen}
         onOpenChange={setConnectModalOpen}
         onConnect={handleConnect}
+        onSave={handleSaveSession}
         editSession={editSession}
+        duplicateFrom={duplicateSource}
         defaultFolderId={defaultFolderId}
       />
 

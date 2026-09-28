@@ -6,6 +6,9 @@ export interface FileItem {
   size: number
   modifyTime: number
   permissions?: string
+  /** Remote only: owner / group names (numeric uid/gid when the server gives no names) */
+  owner?: string
+  group?: string
 }
 
 export interface Transfer {

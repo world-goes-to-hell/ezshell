@@ -47,7 +47,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                   </Dialog.Title>
                   <Dialog.Close asChild>
                     <button className="modal-close-btn" aria-label="Close">
-                      <RiCloseFill size={18} />
+                      <RiCloseFill size={20} />
                     </button>
                   </Dialog.Close>
                 </div>
@@ -55,19 +55,19 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                 <Tabs.Root value={activeTab} onValueChange={setActiveTab} className="settings-tabs">
                   <Tabs.List className="settings-tabs-list">
                     <Tabs.Trigger value="theme" className="settings-tab-trigger">
-                      <RiPaletteFill size={16} />
+                      <RiPaletteFill size={18} />
                       테마
                     </Tabs.Trigger>
                     <Tabs.Trigger value="terminal" className="settings-tab-trigger">
-                      <RiTerminalBoxLine size={16} />
+                      <RiTerminalBoxLine size={18} />
                       터미널
                     </Tabs.Trigger>
                     <Tabs.Trigger value="shortcuts" className="settings-tab-trigger">
-                      <RiKeyboardLine size={16} />
+                      <RiKeyboardLine size={18} />
                       키보드 단축키
                     </Tabs.Trigger>
                     <Tabs.Trigger value="backup" className="settings-tab-trigger">
-                      <RiDatabaseLine size={16} />
+                      <RiDatabaseLine size={18} />
                       백업
                     </Tabs.Trigger>
                   </Tabs.List>
@@ -76,7 +76,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                     <div className="settings-content">
                       <section className="settings-section">
                         <h3 className="settings-section-title">
-                          <RiPaletteFill size={16} />
+                          <RiPaletteFill size={18} />
                           테마
                         </h3>
                         <p className="settings-section-desc">
@@ -91,7 +91,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                     <div className="settings-content">
                       <section className="settings-section">
                         <h3 className="settings-section-title">
-                          <RiTerminalBoxLine size={16} />
+                          <RiTerminalBoxLine size={18} />
                           글꼴 크기
                         </h3>
                         <p className="settings-section-desc">
@@ -106,7 +106,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                     <div className="settings-content">
                       <section className="settings-section">
                         <h3 className="settings-section-title">
-                          <RiKeyboardLine size={16} />
+                          <RiKeyboardLine size={18} />
                           키보드 단축키
                         </h3>
                         <p className="settings-section-desc">
@@ -121,7 +121,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                     <div className="settings-content">
                       <section className="settings-section">
                         <h3 className="settings-section-title">
-                          <RiDatabaseLine size={16} />
+                          <RiDatabaseLine size={18} />
                           세션 백업
                         </h3>
                         <p className="settings-section-desc">

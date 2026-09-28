@@ -71,7 +71,7 @@
   background: transparent;
   border: none;
   outline: none;
-  font-size: 14px;
+  font-size: 15px;
   color: var(--text-primary);
 }
 
@@ -85,7 +85,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 15px;
   cursor: pointer;
   outline: none;
 }
@@ -140,7 +140,7 @@
   width: 40px;
   height: 40px;
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
   border-radius: var(--radius-md);
   flex-shrink: 0;
 }
@@ -167,12 +167,12 @@
   padding: 2px 8px;
   background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-muted);
 }
 
 .snippet-item-description {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-secondary);
   margin-bottom: 8px;
 }
@@ -182,8 +182,8 @@
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: 14px;
   color: var(--accent);
   overflow-x: auto;
   white-space: nowrap;
@@ -195,7 +195,7 @@
 
 .snippet-item-command::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .snippet-item-actions {
@@ -209,7 +209,7 @@
   padding: 8px 16px;
   border: none;
   border-radius: var(--radius-md);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -220,7 +220,7 @@
 
 .btn-primary {
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
 }
 
 .btn-primary:hover {
@@ -266,7 +266,7 @@
 
 .snippet-manager-content::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .snippet-manager-content::-webkit-scrollbar-thumb:hover {

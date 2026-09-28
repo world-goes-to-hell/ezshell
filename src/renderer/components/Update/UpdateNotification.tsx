@@ -88,7 +88,7 @@ export function UpdateNotification() {
           {info.status === 'available' && (
             <>
               <div className="update-icon update-icon-info">
-                <RiInformationFill size={16} />
+                <RiInformationFill size={18} />
               </div>
               <div className="update-content">
                 <span className="update-text">
@@ -96,11 +96,11 @@ export function UpdateNotification() {
                 </span>
               </div>
               <button className="update-action-btn update-download-btn" onClick={handleDownload}>
-                <RiDownload2Fill size={13} />
+                <RiDownload2Fill size={16} />
                 다운로드
               </button>
               <button className="update-dismiss-btn" onClick={handleDismiss}>
-                <RiCloseFill size={14} />
+                <RiCloseFill size={16} />
               </button>
             </>
           )}
@@ -108,7 +108,7 @@ export function UpdateNotification() {
           {info.status === 'downloading' && (
             <>
               <div className="update-icon update-icon-downloading">
-                <RiDownload2Fill size={16} />
+                <RiDownload2Fill size={18} />
               </div>
               <div className="update-content">
                 <span className="update-text">업데이트 다운로드 중...</span>
@@ -129,7 +129,7 @@ export function UpdateNotification() {
           {info.status === 'downloaded' && (
             <>
               <div className="update-icon update-icon-ready">
-                <RiCheckboxCircleFill size={16} />
+                <RiCheckboxCircleFill size={18} />
               </div>
               <div className="update-content">
                 <span className="update-text">
@@ -137,11 +137,11 @@ export function UpdateNotification() {
                 </span>
               </div>
               <button className="update-action-btn update-install-btn" onClick={handleInstall}>
-                <RiRestartFill size={13} />
+                <RiRestartFill size={16} />
                 재시작
               </button>
               <button className="update-dismiss-btn" onClick={handleDismiss}>
-                <RiCloseFill size={14} />
+                <RiCloseFill size={16} />
               </button>
             </>
           )}
@@ -163,7 +163,7 @@ export function VersionInfo() {
   return (
     <div className="version-info" onClick={handleCheck} title="업데이트 확인">
       <span>v{appVersion}</span>
-      {info.status === 'checking' && <RiRefreshLine size={10} className="spinning" />}
+      {info.status === 'checking' && <RiRefreshLine size={16} className="spinning" />}
       {info.status === 'available' && <span className="version-badge">NEW</span>}
       {info.status === 'downloaded' && <span className="version-badge ready">READY</span>}
     </div>

@@ -16,7 +16,7 @@
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background-color 0.15s ease;
   user-select: none;
@@ -48,9 +48,9 @@
   padding: 6px 10px;
   background: none;
   border: 1px dashed var(--border-color, rgba(255, 255, 255, 0.2));
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary, rgba(255, 255, 255, 0.6));
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   transition: all 0.15s ease;
   align-self: flex-start;
@@ -68,7 +68,7 @@
   gap: 8px;
   padding: 10px;
   background-color: var(--card-bg, rgba(255, 255, 255, 0.05));
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
 }
 
@@ -76,9 +76,9 @@
   padding: 6px 10px;
   background-color: var(--input-bg, rgba(0, 0, 0, 0.2));
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.2));
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-primary, #fff);
-  font-size: 13px;
+  font-size: 14px;
   outline: none;
   transition: border-color 0.15s ease;
 }
@@ -95,7 +95,7 @@
 .color-option {
   width: 24px;
   height: 24px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   border: 2px solid transparent;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -119,8 +119,8 @@
 
 .tag-creator-actions button {
   padding: 4px 12px;
-  border-radius: 4px;
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
   cursor: pointer;
   transition: all 0.15s ease;
   border: none;
@@ -137,8 +137,8 @@
 }
 
 .btn-create {
-  background-color: var(--primary-color, #3b82f6);
-  color: #fff;
+  background-color: var(--accent);
+  color: var(--on-accent);
 }
 
 .btn-create:hover:not(:disabled) {

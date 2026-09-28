@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { RiCloseLine, RiAddLine, RiFolderLine, RiSplitCellsHorizontal } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { readableTextColor } from '../../lib/colorContrast'
 
 interface SplitPaneTabBarProps {
   paneType: 'primary' | 'secondary'
@@ -66,7 +67,7 @@ export function SplitPaneTabBar({
 
   return (
     <div
-      className="split-pane-header"
+      className={`split-pane-header ${isActivePane ? 'is-active-pane' : ''}`}
       onMouseDown={onPaneFocus}
       style={headerBorderColor ? { borderBottomColor: headerBorderColor } : undefined}
     >
@@ -96,21 +97,18 @@ export function SplitPaneTabBar({
           const isActive = terminalId === activeTerminalId
           const displayName = terminal.title || `${terminal.username}@${terminal.host}`
 
-          // Use terminal color for tab styling
-          // Active pane + Active tab: full background color
-          // Active tab but inactive pane: border only
-          // Inactive tab: border only (if has color)
+          // Session color is an identity cue (e.g. dev vs prod), not a selection cue:
+          // - active tab of the focused pane: filled with the session color
+          // - every other tab: a 3px strip on the left, so it never looks like the selection border
+          // Text color for the non-filled states comes from CSS so it stays readable in light themes.
           const tabStyle = isActive && isActivePane && terminal.color
             ? {
                 backgroundColor: terminal.color,
                 borderColor: terminal.color,
-                color: 'white'
+                color: readableTextColor(terminal.color)
               }
             : terminal.color
-            ? {
-                border: `1px solid ${terminal.color}`,
-                backgroundColor: 'transparent'
-              }
+            ? { boxShadow: `inset 3px 0 0 ${terminal.color}` }
             : undefined
 
           return (
@@ -138,7 +136,7 @@ export function SplitPaneTabBar({
                   }}
                   title="탭 닫기"
                 >
-                  <RiCloseLine size={12} />
+                  <RiCloseLine size={16} />
                 </button>
               )}
             </div>
@@ -154,7 +152,7 @@ export function SplitPaneTabBar({
             onClick={() => setDropdownOpen(!dropdownOpen)}
             title="새 세션 추가"
           >
-            <RiAddLine size={14} />
+            <RiAddLine size={16} />
           </button>
           {dropdownOpen && (
             <div className="split-new-dropdown">
@@ -183,7 +181,7 @@ export function SplitPaneTabBar({
             onClick={onSftpToggle}
             title={sftpOpen ? 'SFTP 닫기' : 'SFTP 열기'}
           >
-            <RiFolderLine size={14} />
+            <RiFolderLine size={16} />
           </button>
         )}
 
@@ -194,7 +192,7 @@ export function SplitPaneTabBar({
             onClick={onUnsplit}
             title="분할 해제"
           >
-            <RiSplitCellsHorizontal size={14} />
+            <RiSplitCellsHorizontal size={16} />
           </button>
         )}
       </div>

@@ -90,7 +90,7 @@
 }
 
 .theme-editor-label {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
 }
@@ -101,14 +101,14 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 15px;
   transition: all var(--transition-fast);
 }
 
 .theme-editor-input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(88, 101, 242, 0.1);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .theme-editor-radio-group {
@@ -120,7 +120,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -131,7 +131,7 @@
 }
 
 .theme-editor-section-title {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
   margin: 0;
@@ -151,7 +151,7 @@
 }
 
 .color-picker-label {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--text-secondary);
 }
@@ -182,8 +182,8 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-size: 12px;
-  font-family: 'Geist Mono', monospace;
+  font-size: 13px;
+  font-family: var(--font-mono);
   transition: all var(--transition-fast);
 }
 
@@ -216,7 +216,7 @@
   align-items: center;
   gap: 8px;
   color: var(--preview-text-primary);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -244,21 +244,21 @@
 .theme-preview-dots span {
   width: 10px;
   height: 10px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--preview-text-secondary);
   opacity: 0.5;
 }
 
 .theme-preview-title {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--preview-text-secondary);
 }
 
 .theme-preview-terminal {
   padding: 16px;
   background: var(--preview-bg-tertiary);
-  font-family: 'Geist Mono', monospace;
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: 14px;
   line-height: 1.6;
   min-height: 200px;
 }
@@ -286,7 +286,7 @@
   padding: 10px 16px;
   border: none;
   border-radius: var(--radius-sm);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -304,7 +304,7 @@
 
 .theme-editor-btn-primary {
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
 }
 
 .theme-editor-btn-primary:hover {
@@ -322,7 +322,7 @@
 
 .theme-editor-content::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .theme-editor-content::-webkit-scrollbar-thumb:hover {

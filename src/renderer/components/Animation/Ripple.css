@@ -8,7 +8,7 @@
 
 .ripple {
   position: absolute;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   transform: translate(-50%, -50%) scale(0);
   animation: ripple-effect ease-out forwards;
   pointer-events: none;

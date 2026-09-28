@@ -156,7 +156,7 @@ export function SnippetModal({ snippetId, onClose }: SnippetModalProps) {
             onClick={handleSave}
             disabled={!name.trim() || !command.trim()}
           >
-            <RiSaveLine size={16} />
+            <RiSaveLine size={18} />
             {snippetId ? 'Update' : 'Create'}
           </button>
         </div>

@@ -1,55 +1,31 @@
 /* Design Tokens - Theme System */
 
-/* ===== Default Theme (Minimal Dark) ===== */
-:root,
-[data-theme="minimal-dark"] {
-  /* Background Colors */
-  --bg-primary: #313338;
-  --bg-secondary: #2b2d31;
-  --bg-tertiary: #1e1f22;
-  --bg-hover: #404249;
-  --bg-active: #4752c4;
-  --bg-modifier-hover: rgba(79, 84, 92, 0.4);
-  --bg-modifier-selected: rgba(79, 84, 92, 0.6);
+/* ===== Shared tokens (theme-independent) ===== */
+:root {
+  /* Typography: Pretendard covers Hangul + Latin as one family.
+     D2Coding follows JetBrains Mono so Hangul in mono text stays 2 cells wide. */
+  --font-sans: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Malgun Gothic', sans-serif;
+  --font-mono: 'JetBrains Mono', 'D2Coding', Consolas, monospace;
+  --line-height-base: 1.5;
+  --letter-spacing-base: -0.005em;
 
-  /* Text Colors */
-  --text-primary: #f2f3f5;
-  --text-secondary: #b5bac1;
-  --text-muted: #80848e;
-  --text-link: #00a8fc;
+  /* Shape: the whole UI is square-cornered. Components use these tokens,
+     so bringing curves back later only needs a change here. */
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --radius-full: 0;
 
-  /* Brand Colors (Blurple) */
-  --accent: #5865f2;
-  --accent-hover: #4752c4;
-  --accent-active: #3c45a5;
-
-  /* Status Colors */
-  --success: #23a55a;
-  --warning: #f0b232;
-  --error: #f23f43;
-  --info: #00a8fc;
-
-  /* Borders */
-  --border: #3f4147;
-  --border-strong: #4e5058;
-
-  /* Gradients */
-  --gradient-accent: linear-gradient(135deg, #5865f2 0%, #4752c4 100%);
-  --gradient-primary: linear-gradient(135deg, #313338 0%, #2b2d31 100%);
-  --gradient-subtle: linear-gradient(180deg, rgba(88, 101, 242, 0.05) 0%, transparent 100%);
-
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.24);
-  --shadow-lg: 0 8px 16px rgba(0, 0, 0, 0.24);
-  --shadow-glow: 0 0 12px rgba(88, 101, 242, 0.4);
-
-  /* Border Radius */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-full: 9999px;
+  /* Aliases that components referenced but no theme ever defined.
+     Resolved on :root, where data-theme is set, so they follow the active theme. */
+  --accent-alpha: color-mix(in srgb, var(--accent) 30%, transparent);
+  --accent-muted: color-mix(in srgb, var(--accent) 15%, transparent);
+  --primary: var(--accent);
+  --danger: var(--error-text);
+  --border-color: var(--border);
+  --text-tertiary: var(--text-muted);
+  --shadow-xl: 0 20px 48px rgba(0, 0, 0, 0.5);
 
   /* Transitions */
   --transition-fast: 0.1s ease;
@@ -62,30 +38,90 @@
   --spring-bouncy: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* ===== Default Theme (Minimal Dark) =====
+   Neutral graphite surfaces with a single blue accent.
+   Accent #2f6fed keeps white button text at 4.5:1 (WCAG AA). */
+:root,
+[data-theme="minimal-dark"] {
+  /* Background Colors */
+  --bg-primary: #1c1d21;
+  --bg-secondary: #17181b;
+  --bg-tertiary: #121315;
+  --bg-hover: #26282d;
+  --bg-active: #2f6fed;
+  --bg-modifier-hover: rgba(255, 255, 255, 0.05);
+  --bg-modifier-selected: rgba(255, 255, 255, 0.09);
+
+  /* Text Colors */
+  --text-primary: #e6e8eb;
+  --text-secondary: #a9aeb6;
+  --text-muted: #858b94;
+  --text-link: #6aa1ff;
+
+  /* Accent */
+  --accent: #2f6fed;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #ffffff;
+  --accent-hover: #2860d6;
+  --accent-active: #2254c0;
+
+  /* Status Colors */
+  --success: #2fa66a;
+  --warning: #d9a23a;
+  --error: #e5484d;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #e75358;
+  --info: #4c8dff;
+
+  /* Borders */
+  --border: #2a2c31;
+  --border-strong: #383b42;
+
+  /* Flat fills instead of decorative gradients */
+  --gradient-accent: linear-gradient(0deg, #2f6fed, #2f6fed);
+  --gradient-primary: linear-gradient(0deg, #1c1d21, #1c1d21);
+  --gradient-subtle: linear-gradient(0deg, transparent, transparent);
+
+  /* Shadows: only for floating layers (menus, modals); a crisp 1px ring replaces glow */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-glow: 0 0 0 1px rgba(47, 111, 237, 0.7);
+}
+
 /* ===== Minimal Light ===== */
 [data-theme="minimal-light"] {
   --bg-primary: #ffffff;
-  --bg-secondary: #f2f3f5;
-  --bg-tertiary: #e3e5e8;
-  --bg-hover: #ebedef;
-  --bg-active: #4752c4;
-  --bg-modifier-hover: rgba(79, 84, 92, 0.1);
-  --bg-modifier-selected: rgba(79, 84, 92, 0.2);
-  --text-primary: #060607;
-  --text-secondary: #4e5058;
-  --text-muted: #80848e;
-  --text-link: #006ce7;
-  --accent: #5865f2;
-  --accent-hover: #4752c4;
-  --accent-active: #3c45a5;
-  --success: #23a55a;
-  --warning: #f0b232;
-  --error: #da373c;
-  --info: #006ce7;
-  --border: #e3e5e8;
-  --border-strong: #d3d6db;
-  --shadow-glow: 0 0 12px rgba(88, 101, 242, 0.3);
-  --gradient-accent: linear-gradient(135deg, #5865f2 0%, #4752c4 100%);
+  --bg-secondary: #f4f5f7;
+  --bg-tertiary: #e9ebee;
+  --bg-hover: #eceef1;
+  --bg-active: #2f6fed;
+  --bg-modifier-hover: rgba(20, 24, 31, 0.05);
+  --bg-modifier-selected: rgba(20, 24, 31, 0.09);
+  --text-primary: #16181c;
+  --text-secondary: #4a4f57;
+  --text-muted: #6b717a;
+  --text-link: #1f5fd6;
+  --accent: #2f6fed;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #ffffff;
+  --accent-hover: #2860d6;
+  --accent-active: #2254c0;
+  --success: #1f8a55;
+  --warning: #b7791f;
+  --error: #d93036;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #c32b31;
+  --info: #2f6fed;
+  --border: #e1e4e8;
+  --border-strong: #cdd1d6;
+  --gradient-accent: linear-gradient(0deg, #2f6fed, #2f6fed);
+  --gradient-primary: linear-gradient(0deg, #ffffff, #ffffff);
+  --gradient-subtle: linear-gradient(0deg, transparent, transparent);
+  --shadow-sm: 0 1px 2px rgba(20, 24, 31, 0.08);
+  --shadow-md: 0 6px 16px rgba(20, 24, 31, 0.12);
+  --shadow-lg: 0 12px 32px rgba(20, 24, 31, 0.16);
+  --shadow-glow: 0 0 0 1px rgba(47, 111, 237, 0.6);
 }
 
 /* ===== Cyberpunk Neon ===== */
@@ -102,16 +138,20 @@
   --text-muted: #666699;
   --text-link: #00ffff;
   --accent: #ff00ff;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #cc00cc;
   --accent-active: #990099;
   --success: #00ff88;
   --warning: #ffff00;
   --error: #ff0044;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #ff0044;
   --info: #00ffff;
   --border: #333366;
   --border-strong: #4d4d99;
   --shadow-glow: 0 0 20px rgba(255, 0, 255, 0.6);
-  --gradient-accent: linear-gradient(135deg, #ff00ff 0%, #00ffff 100%);
+  --gradient-accent: linear-gradient(0deg, #ff00ff, #ff00ff);
 }
 
 /* ===== Nature Zen ===== */
@@ -128,16 +168,20 @@
   --text-muted: #6b8f7f;
   --text-link: #7bc9a6;
   --accent: #4a9f7a;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #3d8566;
   --accent-active: #316b52;
   --success: #7bc9a6;
   --warning: #d4a76a;
   --error: #c47070;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #ca7e7e;
   --info: #70a8c4;
   --border: #2a3e38;
   --border-strong: #3a5248;
   --shadow-glow: 0 0 12px rgba(74, 159, 122, 0.4);
-  --gradient-accent: linear-gradient(135deg, #4a9f7a 0%, #316b52 100%);
+  --gradient-accent: linear-gradient(0deg, #4a9f7a, #4a9f7a);
 }
 
 /* ===== Sunset Warm ===== */
@@ -154,16 +198,20 @@
   --text-muted: #8a7068;
   --text-link: #f0a070;
   --accent: #e07050;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #c85840;
   --accent-active: #a04030;
   --success: #70c070;
   --warning: #e0a050;
   --error: #e05050;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #e36262;
   --info: #70a0e0;
   --border: #3d2e2e;
   --border-strong: #504040;
   --shadow-glow: 0 0 12px rgba(224, 112, 80, 0.4);
-  --gradient-accent: linear-gradient(135deg, #e07050 0%, #f0a070 100%);
+  --gradient-accent: linear-gradient(0deg, #e07050, #e07050);
 }
 
 /* ===== Ocean Deep ===== */
@@ -180,16 +228,20 @@
   --text-muted: #607890;
   --text-link: #40a0e0;
   --accent: #2080c0;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #ffffff;
   --accent-hover: #1868a0;
   --accent-active: #105080;
   --success: #40c080;
   --warning: #e0a040;
   --error: #e05060;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #e36270;
   --info: #40a0e0;
   --border: #1e3648;
   --border-strong: #2e4860;
   --shadow-glow: 0 0 12px rgba(32, 128, 192, 0.4);
-  --gradient-accent: linear-gradient(135deg, #2080c0 0%, #40a0e0 100%);
+  --gradient-accent: linear-gradient(0deg, #2080c0, #2080c0);
 }
 
 /* ===== High Contrast ===== */
@@ -206,16 +258,20 @@
   --text-muted: #a0a0a0;
   --text-link: #00ffff;
   --accent: #ffff00;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #cccc00;
   --accent-active: #999900;
   --success: #00ff00;
   --warning: #ffff00;
   --error: #ff0000;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #ff0000;
   --info: #00ffff;
   --border: #404040;
   --border-strong: #606060;
   --shadow-glow: 0 0 12px rgba(255, 255, 0, 0.5);
-  --gradient-accent: linear-gradient(135deg, #ffff00 0%, #ffffff 100%);
+  --gradient-accent: linear-gradient(0deg, #ffff00, #ffff00);
 }
 
 /* ===== Retro Terminal ===== */
@@ -232,16 +288,20 @@
   --text-muted: #008800;
   --text-link: #00ff88;
   --accent: #00aa00;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #008800;
   --accent-active: #006600;
   --success: #00ff00;
   --warning: #ffff00;
   --error: #ff0000;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #ff0000;
   --info: #00ffff;
   --border: #004400;
   --border-strong: #006600;
   --shadow-glow: 0 0 12px rgba(0, 255, 0, 0.4);
-  --gradient-accent: linear-gradient(135deg, #00aa00 0%, #00ff00 100%);
+  --gradient-accent: linear-gradient(0deg, #00aa00, #00aa00);
 }
 
 /* ===== Dracula ===== */
@@ -258,16 +318,20 @@
   --text-muted: #6272a4;
   --text-link: #8be9fd;
   --accent: #bd93f9;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #a87de8;
   --accent-active: #9367d7;
   --success: #50fa7b;
   --warning: #ffb86c;
   --error: #ff5555;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #ff5858;
   --info: #8be9fd;
   --border: #44475a;
   --border-strong: #565970;
   --shadow-glow: 0 0 12px rgba(189, 147, 249, 0.4);
-  --gradient-accent: linear-gradient(135deg, #bd93f9 0%, #ff79c6 100%);
+  --gradient-accent: linear-gradient(0deg, #bd93f9, #bd93f9);
 }
 
 /* ===== Nord ===== */
@@ -284,16 +348,20 @@
   --text-muted: #8892a8;
   --text-link: #88c0d0;
   --accent: #88c0d0;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #7ab0c0;
   --accent-active: #6ca0b0;
   --success: #a3be8c;
   --warning: #ebcb8b;
   --error: #bf616a;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #daa3a9;
   --info: #5e81ac;
   --border: #434c5e;
   --border-strong: #4c566a;
   --shadow-glow: 0 0 12px rgba(136, 192, 208, 0.3);
-  --gradient-accent: linear-gradient(135deg, #88c0d0 0%, #81a1c1 100%);
+  --gradient-accent: linear-gradient(0deg, #88c0d0, #88c0d0);
 }
 
 /* ===== Solarized Dark ===== */
@@ -310,16 +378,20 @@
   --text-muted: #657b83;
   --text-link: #2aa198;
   --accent: #268bd2;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #2079b8;
   --accent-active: #1a679e;
   --success: #859900;
   --warning: #b58900;
   --error: #dc322f;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #e97c7a;
   --info: #2aa198;
   --border: #094654;
   --border-strong: #0a5060;
   --shadow-glow: 0 0 12px rgba(38, 139, 210, 0.3);
-  --gradient-accent: linear-gradient(135deg, #268bd2 0%, #2aa198 100%);
+  --gradient-accent: linear-gradient(0deg, #268bd2, #268bd2);
 }
 
 /* ===== Monokai Pro ===== */
@@ -336,16 +408,20 @@
   --text-muted: #727072;
   --text-link: #78dce8;
   --accent: #ffd866;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #e6c05c;
   --accent-active: #cca852;
   --success: #a9dc76;
   --warning: #fc9867;
   --error: #ff6188;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #ff87a5;
   --info: #78dce8;
   --border: #525053;
   --border-strong: #636165;
   --shadow-glow: 0 0 12px rgba(255, 216, 102, 0.3);
-  --gradient-accent: linear-gradient(135deg, #ffd866 0%, #fc9867 100%);
+  --gradient-accent: linear-gradient(0deg, #ffd866, #ffd866);
 }
 
 /* ===== Tokyo Night ===== */
@@ -362,16 +438,20 @@
   --text-muted: #565f89;
   --text-link: #7dcfff;
   --accent: #7aa2f7;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #6a92e7;
   --accent-active: #5a82d7;
   --success: #9ece6a;
   --warning: #e0af68;
   --error: #f7768e;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #f7768e;
   --info: #7dcfff;
   --border: #33467c;
   --border-strong: #3d5a9e;
   --shadow-glow: 0 0 12px rgba(122, 162, 247, 0.4);
-  --gradient-accent: linear-gradient(135deg, #7aa2f7 0%, #bb9af7 100%);
+  --gradient-accent: linear-gradient(0deg, #7aa2f7, #7aa2f7);
 }
 
 /* ===== Gruvbox Dark ===== */
@@ -388,16 +468,20 @@
   --text-muted: #928374;
   --text-link: #83a598;
   --accent: #d79921;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #c48a1d;
   --accent-active: #b17b19;
   --success: #b8bb26;
   --warning: #fe8019;
   --error: #fb4934;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #fc8071;
   --info: #83a598;
   --border: #504945;
   --border-strong: #665c54;
   --shadow-glow: 0 0 12px rgba(215, 153, 33, 0.4);
-  --gradient-accent: linear-gradient(135deg, #d79921 0%, #fe8019 100%);
+  --gradient-accent: linear-gradient(0deg, #d79921, #d79921);
 }
 
 /* ===== Catppuccin Mocha ===== */
@@ -414,16 +498,20 @@
   --text-muted: #6c7086;
   --text-link: #89dceb;
   --accent: #cba6f7;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #b896e7;
   --accent-active: #a586d7;
   --success: #a6e3a1;
   --warning: #fab387;
   --error: #f38ba8;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #f38ba8;
   --info: #89dceb;
   --border: #45475a;
   --border-strong: #585b70;
   --shadow-glow: 0 0 12px rgba(203, 166, 247, 0.4);
-  --gradient-accent: linear-gradient(135deg, #cba6f7 0%, #f38ba8 100%);
+  --gradient-accent: linear-gradient(0deg, #cba6f7, #cba6f7);
 }
 
 /* ===== One Dark Pro ===== */
@@ -440,16 +528,20 @@
   --text-muted: #5c6370;
   --text-link: #61afef;
   --accent: #61afef;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #5299d3;
   --accent-active: #4383b7;
   --success: #98c379;
   --warning: #e5c07b;
   --error: #e06c75;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #e2757d;
   --info: #56b6c2;
   --border: #3a3f4b;
   --border-strong: #4b5263;
   --shadow-glow: 0 0 12px rgba(97, 175, 239, 0.4);
-  --gradient-accent: linear-gradient(135deg, #61afef 0%, #c678dd 100%);
+  --gradient-accent: linear-gradient(0deg, #61afef, #61afef);
 }
 
 /* ===== Rosé Pine ===== */
@@ -466,16 +558,20 @@
   --text-muted: #6e6a86;
   --text-link: #9ccfd8;
   --accent: #c4a7e7;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #b497d7;
   --accent-active: #a487c7;
   --success: #31748f;
   --warning: #f6c177;
   --error: #eb6f92;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #eb6f92;
   --info: #9ccfd8;
   --border: #26233a;
   --border-strong: #393552;
   --shadow-glow: 0 0 12px rgba(196, 167, 231, 0.4);
-  --gradient-accent: linear-gradient(135deg, #c4a7e7 0%, #eb6f92 100%);
+  --gradient-accent: linear-gradient(0deg, #c4a7e7, #c4a7e7);
 }
 
 /* ===== Solarized Light ===== */
@@ -492,16 +588,20 @@
   --text-muted: #93a1a1;
   --text-link: #268bd2;
   --accent: #268bd2;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #2079b8;
   --accent-active: #1a679e;
   --success: #859900;
   --warning: #b58900;
   --error: #dc322f;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #c22c29;
   --info: #2aa198;
   --border: #e6dfcc;
   --border-strong: #d4cdb7;
   --shadow-glow: 0 0 12px rgba(38, 139, 210, 0.3);
-  --gradient-accent: linear-gradient(135deg, #268bd2 0%, #2aa198 100%);
+  --gradient-accent: linear-gradient(0deg, #268bd2, #268bd2);
 }
 
 /* ===== GitHub Light ===== */
@@ -518,16 +618,20 @@
   --text-muted: #8b949e;
   --text-link: #0969da;
   --accent: #0969da;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #ffffff;
   --accent-hover: #0759c0;
   --accent-active: #0549a6;
   --success: #1a7f37;
   --warning: #9a6700;
   --error: #d1242f;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #d1242f;
   --info: #0969da;
   --border: #d0d7de;
   --border-strong: #bbc0c5;
   --shadow-glow: 0 0 12px rgba(9, 105, 218, 0.25);
-  --gradient-accent: linear-gradient(135deg, #0969da 0%, #8250df 100%);
+  --gradient-accent: linear-gradient(0deg, #0969da, #0969da);
 }
 
 /* ===== Ayu Mirage ===== */
@@ -544,14 +648,18 @@
   --text-muted: #707a8c;
   --text-link: #73d0ff;
   --accent: #ffcc66;
+  /* Text on accent backgrounds, picked by contrast against --accent */
+  --on-accent: #16181c;
   --accent-hover: #e6b85c;
   --accent-active: #cca452;
   --success: #bae67e;
   --warning: #ffa759;
   --error: #f28779;
+  /* Error-colored text (danger menu items, messages): --error adjusted to 4.5:1 on this theme's surfaces */
+  --error-text: #f28779;
   --info: #73d0ff;
   --border: #2d3440;
   --border-strong: #3d4450;
   --shadow-glow: 0 0 12px rgba(255, 204, 102, 0.35);
-  --gradient-accent: linear-gradient(135deg, #ffcc66 0%, #ffa759 100%);
+  --gradient-accent: linear-gradient(0deg, #ffcc66, #ffcc66);
 }

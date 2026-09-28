@@ -154,7 +154,7 @@ export function QuickConnectModal({ open, onOpenChange, onConnect }: QuickConnec
                         className={`auth-type-btn ${config.authType === 'privateKey' ? 'active' : ''}`}
                         onClick={() => updateConfig('authType', 'privateKey')}
                       >
-                        <RiKeyFill size={14} />
+                        <RiKeyFill size={16} />
                         Private Key
                       </button>
                     </div>
@@ -175,7 +175,7 @@ export function QuickConnectModal({ open, onOpenChange, onConnect }: QuickConnec
                           className="password-toggle"
                           onClick={() => setShowPassword(!showPassword)}
                         >
-                          {showPassword ? <RiEyeOffFill size={16} /> : <RiEyeFill size={16} />}
+                          {showPassword ? <RiEyeOffFill size={18} /> : <RiEyeFill size={18} />}
                         </button>
                       </div>
                     </div>
@@ -247,7 +247,7 @@ export function QuickConnectModal({ open, onOpenChange, onConnect }: QuickConnec
 
                 <Dialog.Close asChild>
                   <button className="modal-close-btn" aria-label="Close">
-                    <RiCloseFill size={18} />
+                    <RiCloseFill size={20} />
                   </button>
                 </Dialog.Close>
               </motion.div>

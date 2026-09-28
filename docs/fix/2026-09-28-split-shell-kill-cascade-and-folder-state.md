@@ -43,3 +43,19 @@ The "data" argument must be of type string ... Received undefined
   folders.json 은 암호화 없이 JSON 으로만 저장되므로 토글마다 저장해도 부담이 없다.
 - `loadFromBackend` 에서 `expandedFolders` 를 Set 으로 복원한다.
 - `main.js` `save-folders`: `expandedFolders` 가 배열일 때만 저장한다.
+
+## 3. (1번 수정 후 드러남) 4분할 시 세 분할 터미널에 같은 입력/출력이 표시됨
+
+**증상**
+4분할에서 한 분할 터미널에 입력하면 나머지 두 분할 터미널에도 똑같이 입력되고 출력된다.
+
+**원인**
+split 스트림 ID 가 `sessionId:split-${Date.now()}` 라서 같은 밀리초에 열린 쉘은 ID 가 같아진다.
+4분할로 전환할 때 기존 분할 쉘이 닫히면, 새 쉘 3개가 모두 "마지막 종료 + 1초" 까지 대기한 뒤 동시에 채널을 연다.
+서버 응답도 한꺼번에 도착해 ID 가 겹치고, `sshStreams` 에서 뒤 쉘이 앞 쉘을 덮어쓴다.
+세 SplitTerminal 이 같은 streamId 를 가지므로 입력은 한 쉘로 모이고, 그 쉘의 출력은 세 곳에 모두 그려진다.
+1번의 선제 정리 코드가 다른 쉘을 끊고 있을 때는 쉘이 동시에 살아 있지 않아 드러나지 않았다.
+
+**수정**
+`main.js` 에 전역 순번(`splitStreamSeq`)을 두고 streamId 를 `sessionId:split-${Date.now()}-${seq}` 로 만든다.
+`streamId.split(':')[0]` 으로 sessionId 를 추출하는 기존 코드는 그대로 동작한다.

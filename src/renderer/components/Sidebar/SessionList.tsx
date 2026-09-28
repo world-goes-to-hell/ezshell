@@ -1,12 +1,15 @@
-import { useState, useRef, useEffect, type JSX } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSessionStore, Folder, Session } from '../../stores/sessionStore'
-import { RiServerFill, RiFolderFill, RiArrowDownSFill, RiArrowRightSFill, RiDatabase2Fill, RiCloudFill, RiGlobalFill, RiHomeFill, RiComputerFill, RiHardDriveFill, RiCpuFill, RiBaseStationFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiFilterLine, RiCloseLine, RiPaletteLine, RiAddLine } from 'react-icons/ri'
+import { RiServerFill, RiFolderFill, RiArrowDownSFill, RiArrowRightSFill, RiDatabase2Fill, RiCloudFill, RiGlobalFill, RiHomeFill, RiComputerFill, RiHardDriveFill, RiCpuFill, RiBaseStationFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiFilterLine, RiCloseLine, RiPaletteLine, RiAddLine, RiFileCopyLine } from 'react-icons/ri'
 import { SessionIcon } from '../Modal/ConnectModal'
 import { collapseVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { StatusIndicator } from '../Animation'
 import { TagBadge } from '../common/TagBadge'
+import { SessionTooltip } from './SessionTooltip'
+import { MoveToFolderSubmenu } from './MoveToFolderSubmenu'
+import { getFolderPath } from '../../lib/folderPath'
 import { SESSION_COLORS } from '../../lib/sessionColors'
 
 const ICON_MAP: Record<SessionIcon, typeof RiServerFill> = {
@@ -37,12 +40,13 @@ interface DragState {
 interface SessionListProps {
   onQuickConnect: (session: any) => void
   onEditSession?: (session: Session) => void
+  onDuplicateSession?: (session: Session) => void
   onAddSession?: (folderId?: string) => void
   isCompact?: boolean
   activeSessionIds?: Set<string>
 }
 
-export function SessionList({ onQuickConnect, onEditSession, onAddSession, isCompact = false, activeSessionIds = new Set() }: SessionListProps) {
+export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession, onAddSession, isCompact = false, activeSessionIds = new Set() }: SessionListProps) {
   const { sessions, folders, expandedFolders, toggleFolder, addFolder, updateFolder, removeFolder, removeSession, moveSessionToFolder, updateSession, saveToBackend, availableTags, activeTagFilter, filterByTag } = useSessionStore()
   const reducedMotion = useReducedMotion()
   const [showTagFilter, setShowTagFilter] = useState(false)
@@ -310,6 +314,15 @@ export function SessionList({ onQuickConnect, onEditSession, onAddSession, isCom
     setContextMenu(prev => ({ ...prev, visible: false }))
   }
 
+  const handleDuplicateSession = () => {
+    if (!contextMenu.targetId) return
+    const session = sessions.find(s => s.id === contextMenu.targetId)
+    if (session && onDuplicateSession) {
+      onDuplicateSession(session)
+    }
+    setContextMenu(prev => ({ ...prev, visible: false }))
+  }
+
   const handleDeleteSession = () => {
     if (!contextMenu.targetId) return
     if (confirm('이 연결을 삭제하시겠습니까?')) {
@@ -321,8 +334,14 @@ export function SessionList({ onQuickConnect, onEditSession, onAddSession, isCom
 
   const handleMoveToFolder = (folderId: string | undefined) => {
     if (!contextMenu.targetId) return
-    moveSessionToFolder(contextMenu.targetId, folderId)
-    saveToBackend()
+    const session = sessions.find(s => s.id === contextMenu.targetId)
+    if (!session) return
+    const sessionName = session.name || session.host
+    const destination = folderId ? `"${getFolderPath(folders, folderId)}" 폴더로` : '최상위(폴더 없음)로'
+    if (confirm(`"${sessionName}" 세션을 ${destination} 이동하시겠습니까?`)) {
+      moveSessionToFolder(contextMenu.targetId, folderId)
+      saveToBackend()
+    }
     setContextMenu(prev => ({ ...prev, visible: false }))
   }
 
@@ -372,32 +391,6 @@ export function SessionList({ onQuickConnect, onEditSession, onAddSession, isCom
     return session?.folderId
   }
 
-  // Render folder tree for move menu
-  const renderFolderTreeMenu = (parentId?: string, depth: number = 0): JSX.Element[] => {
-    const childFolders = getChildFolders(parentId)
-    const currentFolderId = getCurrentSessionFolder()
-
-    return childFolders.map(folder => {
-      const isCurrentFolder = folder.id === currentFolderId
-      const hasChildren = getChildFolders(folder.id).length > 0
-
-      return (
-        <div key={folder.id}>
-          <div
-            className={`context-menu-item ${isCurrentFolder ? 'current' : ''}`}
-            style={{ paddingLeft: 12 + depth * 16 }}
-            onClick={() => !isCurrentFolder && handleMoveToFolder(folder.id)}
-          >
-            <RiFolderFill size={14} />
-            <span>{folder.name}</span>
-            {isCurrentFolder && <span className="current-badge">현재</span>}
-          </div>
-          {hasChildren && renderFolderTreeMenu(folder.id, depth + 1)}
-        </div>
-      )
-    })
-  }
-
   // Recursive folder renderer
   const renderFolder = (folder: Folder, depth: number = 0) => {
     const isExpanded = expandedFolders.has(folder.id)
@@ -429,8 +422,8 @@ export function SessionList({ onQuickConnect, onEditSession, onAddSession, isCom
               background: `${folderEffectiveColor}20`
             } : undefined}
           >
-            {isExpanded ? <RiArrowDownSFill size={14} /> : <RiArrowRightSFill size={14} />}
-            <RiFolderFill size={14} />
+            {isExpanded ? <RiArrowDownSFill size={16} /> : <RiArrowRightSFill size={16} />}
+            <RiFolderFill size={16} />
             {isEditing ? (
               <input
                 ref={editInputRef}
@@ -531,7 +524,7 @@ export function SessionList({ onQuickConnect, onEditSession, onAddSession, isCom
             onClick={() => setShowTagFilter(!showTagFilter)}
             title="Filter by tag"
           >
-            <RiFilterLine size={14} />
+            <RiFilterLine size={16} />
             {activeTag && <span className="active-filter-count">1</span>}
           </button>
           {showTagFilter && (
@@ -544,7 +537,7 @@ export function SessionList({ onQuickConnect, onEditSession, onAddSession, isCom
                     onClick={() => filterByTag(null)}
                     title="Clear filter"
                   >
-                    <RiCloseLine size={14} />
+                    <RiCloseLine size={16} />
                   </button>
                 )}
               </div>
@@ -625,7 +618,7 @@ export function SessionList({ onQuickConnect, onEditSession, onAddSession, isCom
           </div>
           <div className="context-menu-divider" />
           <div className="context-menu-item" onClick={() => setColorPickerFolderId(null)}>
-            <RiCloseLine size={14} />
+            <RiCloseLine size={16} />
             <span>취소</span>
           </div>
         </div>
@@ -664,7 +657,7 @@ export function SessionList({ onQuickConnect, onEditSession, onAddSession, isCom
           </div>
           <div className="context-menu-divider" />
           <div className="context-menu-item" onClick={() => setColorPickerSessionId(null)}>
-            <RiCloseLine size={14} />
+            <RiCloseLine size={16} />
             <span>취소</span>
           </div>
         </div>
@@ -681,25 +674,25 @@ export function SessionList({ onQuickConnect, onEditSession, onAddSession, isCom
             <>
               {onAddSession && (
                 <div className="context-menu-item" onClick={handleAddSessionToFolder}>
-                  <RiAddLine size={14} />
+                  <RiAddLine size={16} />
                   <span>세션 추가</span>
                 </div>
               )}
               <div className="context-menu-item" onClick={handleAddSubfolder}>
-                <RiFolderAddLine size={14} />
+                <RiFolderAddLine size={16} />
                 <span>하위 폴더 추가</span>
               </div>
               <div className="context-menu-item" onClick={handleRenameFolder}>
-                <RiEditLine size={14} />
+                <RiEditLine size={16} />
                 <span>이름 변경</span>
               </div>
               <div className="context-menu-item" onClick={handleChangeFolderColor}>
-                <RiPaletteLine size={14} />
+                <RiPaletteLine size={16} />
                 <span>색상 변경</span>
               </div>
               <div className="context-menu-divider" />
               <div className="context-menu-item danger" onClick={handleDeleteFolder}>
-                <RiDeleteBinLine size={14} />
+                <RiDeleteBinLine size={16} />
                 <span>삭제</span>
               </div>
             </>
@@ -707,27 +700,27 @@ export function SessionList({ onQuickConnect, onEditSession, onAddSession, isCom
           {contextMenu.type === 'session' && (
             <>
               <div className="context-menu-item" onClick={handleEditSession}>
-                <RiEditLine size={14} />
+                <RiEditLine size={16} />
                 <span>수정</span>
               </div>
+              {onDuplicateSession && (
+                <div className="context-menu-item" onClick={handleDuplicateSession}>
+                  <RiFileCopyLine size={16} />
+                  <span>복제</span>
+                </div>
+              )}
               <div className="context-menu-item" onClick={handleChangeSessionColor}>
-                <RiPaletteLine size={14} />
+                <RiPaletteLine size={16} />
                 <span>색상 변경</span>
               </div>
-              <div className="context-menu-divider" />
-              <div className="context-menu-section-title">폴더로 이동</div>
-              <div
-                className={`context-menu-item ${!getCurrentSessionFolder() ? 'current' : ''}`}
-                onClick={() => handleMoveToFolder(undefined)}
-              >
-                <RiFolderFill size={14} />
-                <span>최상위</span>
-                {!getCurrentSessionFolder() && <span className="current-badge">현재</span>}
-              </div>
-              {renderFolderTreeMenu()}
+              <MoveToFolderSubmenu
+                folders={folders}
+                currentFolderId={getCurrentSessionFolder()}
+                onMove={handleMoveToFolder}
+              />
               <div className="context-menu-divider" />
               <div className="context-menu-item danger" onClick={handleDeleteSession}>
-                <RiDeleteBinLine size={14} />
+                <RiDeleteBinLine size={16} />
                 <span>삭제</span>
               </div>
             </>
@@ -773,41 +766,42 @@ function SessionItem({ session, onConnect, onContextMenu, onDragStart, onDragEnd
   }
 
   return (
-    <motion.div
-      className={`session-item ${isDragging ? 'dragging' : ''} ${isActive ? 'active' : ''} ${isActive && highlightColor ? 'active-custom-color' : ''}`}
-      role="treeitem"
-      aria-label={`SSH session: ${displayName}`}
-      aria-selected={isActive}
-      tabIndex={0}
-      onDoubleClick={() => onConnect(session)}
-      onContextMenu={(e) => onContextMenu(e, session.id)}
-      draggable
-      // motion.div treats onDragStart/onDragEnd as its own gesture props
-      // and never forwards them to the DOM, so use the capture variants
-      onDragStartCapture={(e) => onDragStart(e, 'session', session.id)}
-      onDragEndCapture={onDragEnd}
-      data-tooltip={isCompact ? displayName : undefined}
-      whileHover={reducedMotion ? undefined : { x: 4 }}
-      transition={{ duration: 0.15 }}
-      style={Object.keys(itemStyle).length > 0 ? itemStyle : undefined}
-    >
-      <div className="session-item-icon">
-        <IconComponent size={isCompact ? 20 : 14} />
-        {isActive && <StatusIndicator status="connected" size="sm" />}
-      </div>
-      {!isCompact && (
-        <>
-          <span className="session-name">{displayName}</span>
-          {session.tags && session.tags.length > 0 && (
-            <div className="session-tags">
-              {session.tags.map(tagId => {
-                const tag = availableTags.find(t => t.id === tagId)
-                return tag ? <TagBadge key={tagId} name={tag.name} color={tag.color} size="sm" /> : null
-              })}
-            </div>
-          )}
-        </>
-      )}
-    </motion.div>
+    <SessionTooltip session={session} isActive={isActive} enabled={isCompact}>
+      <motion.div
+        className={`session-item ${isDragging ? 'dragging' : ''} ${isActive ? 'active' : ''} ${isActive && highlightColor ? 'active-custom-color' : ''}`}
+        role="treeitem"
+        aria-label={`SSH session: ${displayName}`}
+        aria-selected={isActive}
+        tabIndex={0}
+        onDoubleClick={() => onConnect(session)}
+        onContextMenu={(e) => onContextMenu(e, session.id)}
+        draggable
+        // motion.div treats onDragStart/onDragEnd as its own gesture props
+        // and never forwards them to the DOM, so use the capture variants
+        onDragStartCapture={(e) => onDragStart(e, 'session', session.id)}
+        onDragEndCapture={onDragEnd}
+        whileHover={reducedMotion ? undefined : { x: 4 }}
+        transition={{ duration: 0.15 }}
+        style={Object.keys(itemStyle).length > 0 ? itemStyle : undefined}
+      >
+        <div className="session-item-icon">
+          <IconComponent size={isCompact ? 20 : 16} />
+          {isActive && <StatusIndicator status="connected" size="sm" />}
+        </div>
+        {!isCompact && (
+          <>
+            <span className="session-name">{displayName}</span>
+            {session.tags && session.tags.length > 0 && (
+              <div className="session-tags">
+                {session.tags.map(tagId => {
+                  const tag = availableTags.find(t => t.id === tagId)
+                  return tag ? <TagBadge key={tagId} name={tag.name} color={tag.color} size="sm" /> : null
+                })}
+              </div>
+            )}
+          </>
+        )}
+      </motion.div>
+    </SessionTooltip>
   )
 }

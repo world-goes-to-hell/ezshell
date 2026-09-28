@@ -57,7 +57,7 @@
 }
 
 .snippet-modal-field label {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--text-secondary);
 }
@@ -68,7 +68,7 @@
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  font-size: 14px;
+  font-size: 15px;
   color: var(--text-primary);
   outline: none;
   transition: border-color 0.15s ease;
@@ -80,13 +80,13 @@
 }
 
 .snippet-modal-field textarea {
-  font-family: 'Consolas', 'Monaco', monospace;
+  font-family: var(--font-mono);
   resize: vertical;
   min-height: 80px;
 }
 
 .snippet-modal-hint {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-muted);
   font-style: italic;
 }
@@ -112,7 +112,7 @@
 
 .snippet-modal-content::-webkit-scrollbar-thumb {
   background: var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .snippet-modal-content::-webkit-scrollbar-thumb:hover {

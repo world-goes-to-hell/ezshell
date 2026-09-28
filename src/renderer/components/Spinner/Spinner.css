@@ -7,25 +7,25 @@
 .spinner svg {
   width: 100%;
   height: 100%;
-  animation: spinner-rotate 1s linear infinite;
 }
 
 .spinner-track {
   stroke: var(--border);
 }
 
+/* Segment runs around the square outline (rect perimeter = 80) */
 .spinner-indicator {
   stroke: var(--accent);
-  stroke-dasharray: 45 100;
-  transform-origin: center;
+  stroke-dasharray: 20 60;
+  animation: spinner-travel 1s linear infinite;
 }
 
-@keyframes spinner-rotate {
+@keyframes spinner-travel {
   from {
-    transform: rotate(0deg);
+    stroke-dashoffset: 0;
   }
   to {
-    transform: rotate(360deg);
+    stroke-dashoffset: -80;
   }
 }
 
@@ -47,7 +47,7 @@
 
 /* Respect reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  .spinner svg {
+  .spinner-indicator {
     animation-duration: 2s;
   }
 }

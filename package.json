@@ -10,38 +10,40 @@
     "start:legacy": "electron .",
     "build:legacy": "electron-builder --win portable",
     "build:install": "electron-builder --win nsis",
-    "build:copy-extra": "node -e \"require('fs').mkdirSync('out/main/src',{recursive:true});require('fs').copyFileSync('src/crypto.js','out/main/src/crypto.js')\"",
+    "build:copy-extra": "node -e \"const fs=require('fs');fs.mkdirSync('out/main/src',{recursive:true});for(const f of ['crypto.js','commandHistory.js'])fs.copyFileSync('src/'+f,'out/main/src/'+f)\"",
     "build:publish": "electron-vite build && npm run build:copy-extra && electron-builder --win --publish always",
     "build:nsis": "electron-vite build && npm run build:copy-extra && electron-builder --win nsis",
     "build:portable": "electron-vite build && npm run build:copy-extra && electron-builder --win portable",
     "build:all": "electron-vite build && npm run build:copy-extra && electron-builder --win nsis --win portable",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "author": "SungKwan",
   "license": "MIT",
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.1.18",
-    "@types/react": "^19.2.10",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.1.3",
-    "autoprefixer": "^10.4.24",
-    "electron": "^28.0.0",
-    "electron-builder": "^24.9.1",
-    "electron-vite": "^5.0.0",
-    "postcss": "^8.5.6",
-    "tailwindcss": "^4.1.18",
-    "typescript": "^5.9.3",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
+    "@tailwindcss/postcss": "^4.1.18",
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.3",
     "@xterm/addon-canvas": "^0.7.0",
+    "autoprefixer": "^10.4.24",
     "clsx": "^2.1.1",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "electron-vite": "^5.0.0",
     "framer-motion": "^12.31.0",
     "fuse.js": "^7.1.0",
+    "postcss": "^8.5.6",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-icons": "^5.5.0",
+    "tailwindcss": "^4.1.18",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7",
     "xterm": "^5.3.0",
     "xterm-addon-fit": "^0.8.0",
     "xterm-addon-search": "^0.13.0",
@@ -65,11 +67,15 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "assets/icon.ico",

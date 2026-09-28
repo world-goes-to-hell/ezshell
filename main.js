@@ -5,6 +5,7 @@ const { Client } = require('ssh2');
 const net = require('net');
 const { autoUpdater } = require('electron-updater');
 const cryptoUtil = require('./src/crypto.js');
+const commandHistory = require('./src/commandHistory.js');
 
 let mainWindow;
 
@@ -34,6 +35,14 @@ let isAppLocked = true;
 const sshConnections = new Map();
 const sshStreams = new Map(); // sessionId:streamId -> stream (for split terminals)
 const splitStreamLastClosed = new Map(); // sessionId -> timestamp of last split stream close
+let splitStreamSeq = 0;
+
+// Diagnostics for "Channel open failure": how many channels this SSH connection holds open.
+// Reads ssh2's internal channel manager, so it degrades to '?' if that ever changes.
+function openChannelCount(conn) {
+  const mgr = conn && conn._chanMgr;
+  return mgr && typeof mgr._count === 'number' ? mgr._count : '?';
+} // makes split streamIds unique even when shells open in the same millisecond
 const portForwards = new Map(); // forwardId -> { type, server, sessionId, localHost, localPort, remoteHost, remotePort, connectionCount }
 
 // Connection state management
@@ -337,6 +346,7 @@ ipcMain.handle('open-sftp-window', (event, { sessionId, localPath, remotePath })
 });
 
 app.on('window-all-closed', () => {
+  flushCommandHistory();
   // 모든 SSH 연결 종료
   sshConnections.forEach(({ conn }) => {
     try { conn.end(); } catch (e) {}
@@ -392,6 +402,9 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
 
 // Lock the app
 ipcMain.handle('lock-app', async () => {
+  // Write pending history while the password is still known, then drop the decrypted copy
+  flushCommandHistory();
+  commandHistoryCache = null;
   currentMasterPassword = null;
   isAppLocked = true;
   return { success: true };
@@ -461,6 +474,8 @@ ipcMain.handle('reset-master-password', async () => {
   if (fs.existsSync(verificationPath)) fs.unlinkSync(verificationPath);
   if (fs.existsSync(sessionsPath)) fs.unlinkSync(sessionsPath);
   if (fs.existsSync(foldersPath)) fs.unlinkSync(foldersPath);
+  // Encrypted with the old password, so it can never be read again
+  discardCommandHistory();
 
   currentMasterPassword = null;
   isAppLocked = true;
@@ -560,6 +575,196 @@ ipcMain.handle('save-folders', (event, { folders, expandedFolders }) => {
     saveToFile(path.join(userDataPath, 'folders-expanded.json'), expandedFolders);
   }
   return true;
+});
+
+// ==================== SFTP Path Bookmarks ====================
+// Stored per saved session: { [savedSessionId]: { local: string[], remote: string[] } }
+// Kept in the main process so the main window and popped-out SFTP windows share one source.
+
+const pathBookmarksFilePath = path.join(userDataPath, 'path-bookmarks.json');
+const BOOKMARK_KEY_PATTERN = /^[\w-]{1,128}$/;
+const BOOKMARK_SIDES = ['local', 'remote'];
+const MAX_BOOKMARKS_PER_SIDE = 50;
+const MAX_BOOKMARK_PATH_LENGTH = 4096;
+
+function isValidBookmarkKey(key) {
+  // "__proto__" matches the pattern, so prototype keys are rejected explicitly
+  return typeof key === 'string' && BOOKMARK_KEY_PATTERN.test(key) && !['__proto__', 'constructor', 'prototype'].includes(key);
+}
+
+function readPathBookmarks() {
+  const data = loadFromFile(pathBookmarksFilePath, {});
+  return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+}
+
+function toBookmarkEntry(entry) {
+  const pick = (list) => (Array.isArray(list) ? list.filter((p) => typeof p === 'string') : []);
+  return { local: pick(entry && entry.local), remote: pick(entry && entry.remote) };
+}
+
+ipcMain.handle('ssh-get-session-info', (event, { sessionId }) => {
+  const connState = connectionStates.get(sessionId);
+  if (!connState || !connState.config) return null;
+  const { host, port, username, savedSessionId } = connState.config;
+  return { host, port, username, savedSessionId: savedSessionId || null };
+});
+
+ipcMain.handle('path-bookmarks-get', (event, { key }) => {
+  if (!isValidBookmarkKey(key)) return toBookmarkEntry(null);
+  const all = readPathBookmarks();
+  return toBookmarkEntry(Object.prototype.hasOwnProperty.call(all, key) ? all[key] : null);
+});
+
+ipcMain.handle('path-bookmarks-set', (event, { key, side, paths }) => {
+  if (!isValidBookmarkKey(key) || !BOOKMARK_SIDES.includes(side) || !Array.isArray(paths)) {
+    return { success: false, error: '잘못된 즐겨찾기 요청입니다.' };
+  }
+  const cleaned = [...new Set(
+    paths.filter((p) => typeof p === 'string' && p.length > 0 && p.length <= MAX_BOOKMARK_PATH_LENGTH)
+  )].slice(0, MAX_BOOKMARKS_PER_SIDE);
+
+  const all = readPathBookmarks();
+  const current = toBookmarkEntry(Object.prototype.hasOwnProperty.call(all, key) ? all[key] : null);
+  const next = { ...all, [key]: { ...current, [side]: cleaned } };
+  if (!saveToFile(pathBookmarksFilePath, next)) {
+    return { success: false, error: '즐겨찾기를 저장하지 못했습니다.' };
+  }
+
+  // Keep every window (main + popped-out SFTP windows) in sync
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) win.webContents.send('path-bookmarks-changed', { key, entry: next[key] });
+  });
+  return { success: true, entry: next[key] };
+});
+
+// ==================== Terminal Command History ====================
+// Per connection: { [savedSessionId | "quick:user@host:port"]: [{ command, lastUsedAt }] }, newest first.
+// Commands can contain secrets, so the whole map is encrypted with the master password like sessions.
+// PBKDF2 makes every encrypt slow: routine saves are batched and encrypted off the main thread,
+// while lock and quit flush synchronously so nothing is lost.
+
+const commandHistoryFilePath = path.join(userDataPath, 'command-history.json');
+const COMMAND_HISTORY_SAVE_DELAY_MS = 1500;
+let commandHistoryCache = null; // decrypted map, only while unlocked
+let commandHistorySaveTimer = null;
+// Bumped by every write (and by discard) so a slow background save never overwrites newer data
+let commandHistoryGeneration = 0;
+
+function isCommandHistoryAvailable() {
+  return !isAppLocked && Boolean(currentMasterPassword);
+}
+
+function loadCommandHistory() {
+  if (commandHistoryCache) return commandHistoryCache;
+  if (!fs.existsSync(commandHistoryFilePath)) {
+    commandHistoryCache = {};
+    return commandHistoryCache;
+  }
+  try {
+    const file = JSON.parse(fs.readFileSync(commandHistoryFilePath, 'utf8'));
+    const plain = cryptoUtil.decrypt(file.encrypted, currentMasterPassword);
+    commandHistoryCache = commandHistory.sanitizeHistory(JSON.parse(plain));
+  } catch (err) {
+    // Keep the unreadable file aside instead of overwriting it with an empty history
+    console.error('Failed to read command history, starting a new one:', err.message);
+    try {
+      fs.renameSync(commandHistoryFilePath, `${commandHistoryFilePath}.unreadable-${Date.now()}`);
+    } catch (renameErr) {
+      console.error('Failed to set aside unreadable command history:', renameErr.message);
+    }
+    commandHistoryCache = {};
+  }
+  return commandHistoryCache;
+}
+
+function writeCommandHistoryFile(encrypted) {
+  fs.writeFileSync(commandHistoryFilePath, JSON.stringify({ version: 1, encrypted }), 'utf-8');
+}
+
+/** Synchronous save for lock and quit, where the process may not wait for a background one. */
+function flushCommandHistory() {
+  if (commandHistorySaveTimer) {
+    clearTimeout(commandHistorySaveTimer);
+    commandHistorySaveTimer = null;
+  }
+  if (!commandHistoryCache || !currentMasterPassword) return;
+  commandHistoryGeneration++;
+  try {
+    writeCommandHistoryFile(cryptoUtil.encrypt(JSON.stringify(commandHistoryCache), currentMasterPassword));
+  } catch (err) {
+    console.error('Failed to save command history:', err.message);
+  }
+}
+
+async function saveCommandHistoryInBackground() {
+  commandHistorySaveTimer = null;
+  if (!commandHistoryCache || !currentMasterPassword) return;
+  const generation = ++commandHistoryGeneration;
+  try {
+    const encrypted = await cryptoUtil.encryptAsync(JSON.stringify(commandHistoryCache), currentMasterPassword);
+    // A newer save, a lock-time flush or a reset happened while encrypting
+    if (generation !== commandHistoryGeneration) return;
+    writeCommandHistoryFile(encrypted);
+  } catch (err) {
+    console.error('Failed to save command history:', err.message);
+  }
+}
+
+function scheduleCommandHistorySave() {
+  if (commandHistorySaveTimer) return;
+  commandHistorySaveTimer = setTimeout(saveCommandHistoryInBackground, COMMAND_HISTORY_SAVE_DELAY_MS);
+}
+
+function discardCommandHistory() {
+  if (commandHistorySaveTimer) clearTimeout(commandHistorySaveTimer);
+  commandHistorySaveTimer = null;
+  commandHistoryGeneration++;
+  commandHistoryCache = null;
+  if (fs.existsSync(commandHistoryFilePath)) fs.unlinkSync(commandHistoryFilePath);
+}
+
+function historyEntriesFor(all, key) {
+  return Object.prototype.hasOwnProperty.call(all, key) ? all[key] : [];
+}
+
+function updateCommandHistory(key, update) {
+  const all = loadCommandHistory();
+  const entries = update(historyEntriesFor(all, key));
+  commandHistoryCache = { ...all, [key]: entries };
+  scheduleCommandHistorySave();
+  // Every window (main + popped-out terminals) shows the same list
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) win.webContents.send('command-history-changed', { key, entries });
+  });
+  return { success: true, entries };
+}
+
+const COMMAND_HISTORY_LOCKED = { success: false, error: '앱이 잠겨 있어 명령어 기록을 사용할 수 없습니다.' };
+const COMMAND_HISTORY_BAD_REQUEST = { success: false, error: '잘못된 명령어 기록 요청입니다.' };
+
+ipcMain.handle('command-history-get', (event, { key }) => {
+  if (!isCommandHistoryAvailable()) return { ...COMMAND_HISTORY_LOCKED, entries: [] };
+  if (!commandHistory.isValidHistoryKey(key)) return { ...COMMAND_HISTORY_BAD_REQUEST, entries: [] };
+  return { success: true, entries: historyEntriesFor(loadCommandHistory(), key) };
+});
+
+ipcMain.handle('command-history-add', (event, { key, command }) => {
+  if (!isCommandHistoryAvailable()) return COMMAND_HISTORY_LOCKED;
+  const normalized = commandHistory.normalizeCommand(command);
+  if (!commandHistory.isValidHistoryKey(key) || normalized === null) return COMMAND_HISTORY_BAD_REQUEST;
+  return updateCommandHistory(key, (entries) => commandHistory.addCommand(entries, normalized, Date.now()));
+});
+
+ipcMain.handle('command-history-remove', (event, { key, command }) => {
+  if (!isCommandHistoryAvailable()) return COMMAND_HISTORY_LOCKED;
+  if (!commandHistory.isValidHistoryKey(key) || typeof command !== 'string') return COMMAND_HISTORY_BAD_REQUEST;
+  return updateCommandHistory(key, (entries) => commandHistory.removeCommand(entries, command));
+});
+
+ipcMain.handle('command-history-clear', (event, { key }) => {
+  if (!isCommandHistoryAvailable()) return COMMAND_HISTORY_LOCKED;
+  if (!commandHistory.isValidHistoryKey(key)) return COMMAND_HISTORY_BAD_REQUEST;
+  return updateCommandHistory(key, () => []);
 });
 
 // ==================== App Settings ====================
@@ -1120,11 +1325,16 @@ ipcMain.handle('ssh-create-shell', async (event, { sessionId }) => {
     return new Promise((resolve) => {
       session.conn.shell({ term: 'xterm-256color', cols: 80, rows: 24 }, (err, stream) => {
         if (err) {
-          return resolve({ success: false, error: err.message });
+          const count = openChannelCount(session.conn);
+          console.warn(`[split] open failed session=${sessionId} openChannels=${count}: ${err.message}`);
+          return resolve({ success: false, error: `${err.message} (열린 채널 ${count}개)` });
         }
 
-        const streamId = `${sessionId}:split-${Date.now()}`;
+        // Several split shells can open in the same millisecond (quad layout),
+        // and a shared id makes all panes write to and render the same stream
+        const streamId = `${sessionId}:split-${Date.now()}-${++splitStreamSeq}`;
         sshStreams.set(streamId, stream);
+        console.log(`[split] opened ${streamId} openChannels=${openChannelCount(session.conn)}`);
 
         stream.on('data', (data) => {
           const targetWindow = getWindowForSession(sessionId);
@@ -1139,6 +1349,7 @@ ipcMain.handle('ssh-create-shell', async (event, { sessionId }) => {
 
         stream.on('close', () => {
           sshStreams.delete(streamId);
+          console.log(`[split] closed ${streamId} openChannels=${openChannelCount(session.conn)}`);
           const targetWindow = getWindowForSession(sessionId);
           if (targetWindow) {
             targetWindow.webContents.send('ssh-split-closed', { streamId, sessionId });
@@ -1181,11 +1392,18 @@ ipcMain.on('ssh-split-resize', (event, { streamId, cols, rows }) => {
 ipcMain.on('ssh-split-close', (event, { streamId }) => {
   const stream = sshStreams.get(streamId);
   if (stream) {
-    // Extract sessionId from streamId (format: "sessionId:split-timestamp")
+    // Extract sessionId from streamId (format: "sessionId:split-timestamp-seq")
     const sessionId = streamId.split(':')[0];
     splitStreamLastClosed.set(sessionId, Date.now());
-    try { stream.end(); } catch (e) {}
+    // end() only sends EOF (ssh2 client channels are half-open by default) and a PTY shell
+    // ignores EOF, so the server kept every closed split alive until MaxSessions refused
+    // new channels. close() sends CHANNEL_CLOSE and the server ends the session.
+    try { stream.close(); } catch (e) {}
     sshStreams.delete(streamId);
+    const session = sshConnections.get(sessionId);
+    console.log(`[split] close requested ${streamId} openChannels(before server ack)=${openChannelCount(session && session.conn)}`);
+  } else {
+    console.warn(`[split] close requested for unknown stream ${streamId}`);
   }
 });
 
@@ -1558,6 +1776,17 @@ ipcMain.handle('sftp-close', async (event, { sessionId }) => {
 });
 
 // 디렉토리 목록 조회
+// OpenSSH's sftp-server sends an `ls -l` style line per entry:
+// "drwxr-xr-x    2 root     root         4096 Jan  1 00:00 name" -> owner/group names.
+// Other servers may omit it, so callers fall back to the numeric uid/gid.
+const LONGNAME_MODE_PATTERN = /^[-dlcbpsD][-rwxsStT]{9}/;
+function parseLongnameOwner(longname) {
+  if (typeof longname !== 'string') return null;
+  const parts = longname.trim().split(/\s+/);
+  if (parts.length < 4 || !LONGNAME_MODE_PATTERN.test(parts[0])) return null;
+  return { owner: parts[2], group: parts[3] };
+}
+
 ipcMain.handle('sftp-list', async (event, { sessionId, remotePath }) => {
   const sftp = sftpSessions.get(sessionId);
   if (!sftp) {
@@ -1576,15 +1805,20 @@ ipcMain.handle('sftp-list', async (event, { sessionId, remotePath }) => {
         return;
       }
 
-      const files = list.map(item => ({
+      const files = list.map(item => {
+        const names = parseLongnameOwner(item.longname);
+        return {
         name: item.filename,
         size: item.attrs.size,
         isDirectory: item.attrs.isDirectory(),
         isFile: item.attrs.isFile(),
         mode: item.attrs.mode,
         mtime: item.attrs.mtime * 1000,
-        permissions: (item.attrs.mode & 0o777).toString(8).padStart(3, '0')
-      })).sort((a, b) => {
+        permissions: (item.attrs.mode & 0o777).toString(8).padStart(3, '0'),
+        owner: names ? names.owner : String(item.attrs.uid),
+        group: names ? names.group : String(item.attrs.gid)
+        };
+      }).sort((a, b) => {
         // 디렉토리 먼저, 그 다음 이름순
         if (a.isDirectory && !b.isDirectory) return -1;
         if (!a.isDirectory && b.isDirectory) return 1;
@@ -1941,8 +2175,10 @@ class TransferQueue {
         if (err) return reject(err);
 
         transfer.size = stats.size;
-        const localFilePath = path.join(transfer.localPath, path.basename(transfer.remotePath));
-        const writeStream = fs.createWriteStream(localFilePath);
+        // localPath is already the full target file path (callers pass dir + name, and the
+        // "rename" overwrite option passes a new name). Joining the remote basename again
+        // produced "<file>\<file>" and every download failed with ENOENT.
+        const writeStream = fs.createWriteStream(transfer.localPath);
         const readStream = sftp.createReadStream(transfer.remotePath, { highWaterMark: CHUNK_SIZE });
 
         let downloaded = 0;

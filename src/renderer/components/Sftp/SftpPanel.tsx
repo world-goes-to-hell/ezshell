@@ -1,12 +1,14 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useSftpStore, FileItem } from '../../stores/sftpStore'
-import { FileList } from './FileList'
+import { FileList, keepSelectionProps } from './FileList'
 import { TransferQueue } from './TransferQueue'
 import { PathBar } from './PathBar'
 import { OverwriteModal, OverwriteAction } from './OverwriteModal'
 import { toast } from '../../stores/toastStore'
-import { RiCloseFill, RiUploadFill, RiDownloadFill, RiRefreshFill, RiExternalLinkFill, RiLinkM, RiLinkUnlinkM } from 'react-icons/ri'
+import { RiCloseFill, RiUploadFill, RiDownloadFill, RiRefreshFill, RiExternalLinkFill, RiLinkM, RiLinkUnlinkM, RiArrowUpDownLine } from 'react-icons/ri'
 import { RxDragHandleDots2 } from 'react-icons/rx'
+import { deleteRemoteSelection } from '../../lib/sftpRemoteDelete'
+import { useTransferQueue } from '../../hooks/useTransferQueue'
 
 interface PendingTransfer {
   type: 'upload' | 'download'
@@ -21,6 +23,7 @@ interface SftpPanelProps {
 
 export function SftpPanel({ sessionId }: SftpPanelProps) {
   const store = useSftpStore()
+  const transferQueue = useTransferQueue(sessionId)
   const getStoreState = () => useSftpStore.getState()
 
   // Get session-specific state
@@ -156,7 +159,9 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
         type: f.isDirectory ? 'directory' : 'file',
         size: f.size,
         modifyTime: f.mtime,
-        permissions: f.permissions
+        permissions: f.permissions,
+        owner: f.owner,
+        group: f.group
       }))
       store.setRemoteFiles(sessionId, files)
 
@@ -465,7 +470,10 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
   }
 
   const handleUpload = async () => {
-    if (selectedLocal.size === 0) return
+    if (selectedLocal.size === 0) {
+      toast.info('업로드할 파일 선택', '왼쪽 로컬 목록에서 업로드할 파일을 먼저 선택하세요')
+      return
+    }
 
     const transfers: PendingTransfer[] = []
     const directories: string[] = []
@@ -509,8 +517,19 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     }
   }
 
+  const handleDeleteRemote = async () => {
+    const changed = await deleteRemoteSelection(sessionId, remotePath, selectedRemote, remoteFiles)
+    if (changed) {
+      store.clearRemoteSelection(sessionId)
+      await loadRemoteFiles(remotePath)
+    }
+  }
+
   const handleDownload = async () => {
-    if (selectedRemote.size === 0) return
+    if (selectedRemote.size === 0) {
+      toast.info('다운로드할 파일 선택', '오른쪽 원격 목록에서 다운로드할 파일을 먼저 선택하세요')
+      return
+    }
 
     const transfers: PendingTransfer[] = []
     for (const fileName of selectedRemote) {
@@ -525,7 +544,10 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
       }
     }
 
-    if (transfers.length === 0) return
+    if (transfers.length === 0) {
+      toast.info('폴더는 다운로드할 수 없습니다', '파일을 선택해 주세요. 폴더 다운로드는 아직 지원하지 않습니다')
+      return
+    }
 
     setPendingTransfers(transfers)
     setCurrentTransferIndex(0)
@@ -549,30 +571,39 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     >
       {/* Resize Handle */}
       <div className="sftp-resize-handle" onMouseDown={handleMouseDown}>
-        <RxDragHandleDots2 size={14} />
+        <RxDragHandleDots2 size={16} />
       </div>
 
       <div className="sftp-header">
         <span className="sftp-title">SFTP</span>
-        <div className="sftp-actions">
+        <div className="sftp-actions" {...keepSelectionProps}>
           <button
             className={`sftp-btn sync-btn ${isSyncMode ? 'active' : ''}`}
             onClick={() => setIsSyncMode(!isSyncMode)}
             title={isSyncMode ? '디렉토리 동기화 해제' : '디렉토리 동기화'}
           >
-            {isSyncMode ? <RiLinkM size={16} /> : <RiLinkUnlinkM size={16} />}
+            {isSyncMode ? <RiLinkM size={18} /> : <RiLinkUnlinkM size={18} />}
           </button>
-          <button className="sftp-btn" onClick={handleUpload} title="Upload">
-            <RiUploadFill size={16} />
+          <button className="sftp-btn" onClick={handleUpload} title="업로드: 선택한 로컬 파일을 현재 원격 폴더로">
+            <RiUploadFill size={18} />
           </button>
-          <button className="sftp-btn" onClick={handleDownload} title="Download">
-            <RiDownloadFill size={16} />
+          <button className="sftp-btn" onClick={handleDownload} title="다운로드: 선택한 원격 파일을 현재 로컬 폴더로">
+            <RiDownloadFill size={18} />
+          </button>
+          <button
+            className={`sftp-btn transfer-queue-toggle ${transferQueue.isVisible ? 'active' : ''}`}
+            onClick={transferQueue.toggle}
+            title={transferQueue.isVisible ? '전송 큐 닫기' : '전송 큐 보기'}
+            aria-pressed={transferQueue.isVisible}
+          >
+            <RiArrowUpDownLine size={18} />
+            {transferQueue.pendingCount > 0 && <span className="transfer-queue-badge">{transferQueue.pendingCount}</span>}
           </button>
           <button className="sftp-btn" onClick={handlePopOut} title="새 창으로 열기">
-            <RiExternalLinkFill size={16} />
+            <RiExternalLinkFill size={18} />
           </button>
-          <button className="sftp-btn" onClick={handleClose} title="Close">
-            <RiCloseFill size={16} />
+          <button className="sftp-btn" onClick={handleClose} title="SFTP 닫기">
+            <RiCloseFill size={18} />
           </button>
         </div>
       </div>
@@ -585,9 +616,10 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
               onNavigate={loadLocalFiles}
               type="local"
               label="로컬"
+              sessionId={sessionId}
             />
             <button className="refresh-btn" onClick={() => loadLocalFiles(localPath)}>
-              <RiRefreshFill size={14} />
+              <RiRefreshFill size={18} />
             </button>
           </div>
           <FileList
@@ -603,7 +635,20 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
           />
         </div>
 
-        <div className="sftp-divider" />
+        <div className={`sftp-divider ${isSyncMode ? 'is-synced' : ''}`}>
+          {/* Sync-mode badge centered between the local and remote lists; click to turn sync off */}
+          {isSyncMode && (
+            <button
+              type="button"
+              className="sftp-sync-indicator"
+              onClick={() => setIsSyncMode(false)}
+              title="디렉토리 동기화 중 (클릭하여 해제)"
+              aria-label="디렉토리 동기화 켜짐, 클릭하여 해제"
+            >
+              <RiLinkM size={16} />
+            </button>
+          )}
+        </div>
 
         <div className="sftp-pane remote-pane">
           <div className="pane-header">
@@ -612,9 +657,10 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
               onNavigate={loadRemoteFiles}
               type="remote"
               label="원격"
+              sessionId={sessionId}
             />
             <button className="refresh-btn" onClick={() => loadRemoteFiles(remotePath)}>
-              <RiRefreshFill size={14} />
+              <RiRefreshFill size={18} />
             </button>
           </div>
           <FileList
@@ -625,21 +671,25 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
             type="remote"
             sessionId={sessionId}
             onDownload={handleDownload}
+            onDelete={handleDeleteRemote}
             onDrop={handleDropOnRemote}
             isLoading={isRemoteLoading}
           />
         </div>
       </div>
 
-      {/* Transfer Queue Resize Handle */}
-      <div
-        className="transfer-resize-handle"
-        onMouseDown={(e) => { e.preventDefault(); setIsTransferResizing(true) }}
-      />
-
-      <div style={{ height: transferHeight, minHeight: 60, overflow: 'hidden' }}>
-        <TransferQueue sessionId={sessionId} />
-      </div>
+      {/* Transfer queue: hidden until a transfer starts or the user opens it */}
+      {transferQueue.isVisible && (
+        <>
+          <div
+            className="transfer-resize-handle"
+            onMouseDown={(e) => { e.preventDefault(); setIsTransferResizing(true) }}
+          />
+          <div style={{ height: transferHeight, minHeight: 60, overflow: 'hidden' }}>
+            <TransferQueue sessionId={sessionId} onClose={transferQueue.hide} />
+          </div>
+        </>
+      )}
 
       <OverwriteModal
         open={overwriteModalOpen}

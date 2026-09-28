@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { RiSaveLine, RiRefreshLine, RiEyeLine, RiCloseLine } from 'react-icons/ri'
 import { ThemeDefinition, ThemeColors, TerminalColors } from '../../types/theme'
+import { PRESET_THEMES } from '../../themes/presets'
 import { modalContentVariants } from '../../lib/animation/variants'
 import './ThemeEditor.css'
 
@@ -11,62 +12,14 @@ interface ThemeEditorProps {
   onSave: (theme: ThemeDefinition) => void
 }
 
+// New custom themes start from the default preset so the two never drift apart
+const BASE_THEME = PRESET_THEMES.find(theme => theme.id === 'minimal-dark') ?? PRESET_THEMES[0]
+
 const DEFAULT_THEME: ThemeDefinition = {
+  ...BASE_THEME,
   id: '',
   name: '',
   category: 'dark',
-  colors: {
-    bgPrimary: '#313338',
-    bgSecondary: '#2b2d31',
-    bgTertiary: '#1e1f22',
-    bgHover: '#404249',
-    bgActive: '#4752c4',
-    bgModifierHover: 'rgba(79, 84, 92, 0.4)',
-    bgModifierSelected: 'rgba(79, 84, 92, 0.6)',
-    textPrimary: '#f2f3f5',
-    textSecondary: '#b5bac1',
-    textMuted: '#80848e',
-    textLink: '#00a8fc',
-    accent: '#5865f2',
-    accentHover: '#4752c4',
-    accentActive: '#3c45a5',
-    success: '#23a55a',
-    warning: '#f0b232',
-    error: '#f23f43',
-    info: '#00a8fc',
-    border: '#3f4147',
-    borderStrong: '#4e5058',
-    shadowColor: 'rgba(0, 0, 0, 0.24)',
-    glowColor: 'rgba(88, 101, 242, 0.4)',
-  },
-  terminal: {
-    background: '#1e1f22',
-    foreground: '#f2f3f5',
-    cursor: '#5865f2',
-    cursorAccent: '#1e1f22',
-    selectionBackground: 'rgba(88, 101, 242, 0.3)',
-    black: '#1e1f22',
-    red: '#f23f43',
-    green: '#23a55a',
-    yellow: '#f0b232',
-    blue: '#5865f2',
-    magenta: '#eb7cd3',
-    cyan: '#00a8fc',
-    white: '#f2f3f5',
-    brightBlack: '#4e5058',
-    brightRed: '#f54e52',
-    brightGreen: '#2dc770',
-    brightYellow: '#f5bd4f',
-    brightBlue: '#7289da',
-    brightMagenta: '#f0a4d4',
-    brightCyan: '#2dc9ff',
-    brightWhite: '#ffffff',
-  },
-  preview: {
-    primary: '#1e1f22',
-    secondary: '#313338',
-    accent: '#5865f2',
-  },
 }
 
 export function ThemeEditor({ editingTheme, onClose, onSave }: ThemeEditorProps) {
@@ -305,7 +258,7 @@ export function ThemeEditor({ editingTheme, onClose, onSave }: ThemeEditorProps)
           <div className="theme-editor-right">
             <div className="theme-editor-preview" style={previewStyle}>
               <div className="theme-preview-header">
-                <RiEyeLine size={16} />
+                <RiEyeLine size={18} />
                 <span>미리보기</span>
               </div>
               <div className="theme-preview-window">
@@ -340,11 +293,11 @@ export function ThemeEditor({ editingTheme, onClose, onSave }: ThemeEditorProps)
         {/* Footer */}
         <div className="theme-editor-footer">
           <button className="theme-editor-btn theme-editor-btn-secondary" onClick={handleReset}>
-            <RiRefreshLine size={16} />
+            <RiRefreshLine size={18} />
             초기화
           </button>
           <button className="theme-editor-btn theme-editor-btn-primary" onClick={handleSave}>
-            <RiSaveLine size={16} />
+            <RiSaveLine size={18} />
             저장
           </button>
         </div>

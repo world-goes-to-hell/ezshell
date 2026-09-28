@@ -11,6 +11,7 @@ interface SidebarProps {
   onNewConnection: () => void
   onQuickConnect: (session: any) => void
   onEditSession?: (session: any) => void
+  onDuplicateSession?: (session: any) => void
   onOpenQuickConnect?: () => void
   onAddSession?: (folderId?: string) => void
   onStatsClick?: () => void
@@ -18,7 +19,7 @@ interface SidebarProps {
   activeSessionIds?: Set<string>
 }
 
-export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onOpenQuickConnect, onAddSession, onStatsClick, onBatchClick, activeSessionIds }: SidebarProps) {
+export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onStatsClick, onBatchClick, activeSessionIds }: SidebarProps) {
   const { sidebarMode, toggleSidebarMode } = useUIStore()
   const { addFolder, saveToBackend } = useSessionStore()
   const isCompact = sidebarMode === 'compact'
@@ -72,7 +73,7 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onOpen
             animate={{ rotate: isCompact ? 180 : 0 }}
             transition={reducedMotion ? { duration: 0 } : SPRINGS.snappy}
           >
-            {isCompact ? <RiMenuUnfoldFill size={16} /> : <RiMenuFoldFill size={16} />}
+            {isCompact ? <RiMenuUnfoldFill size={18} /> : <RiMenuFoldFill size={18} />}
           </motion.div>
         </motion.button>
       </div>
@@ -85,20 +86,20 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onOpen
             whileTap={reducedMotion ? undefined : { scale: 0.98 }}
             transition={SPRINGS.snappy}
           >
-            <RiAddFill size={16} />
+            <RiAddFill size={18} />
             <span>새 연결</span>
           </motion.button>
           <button className="btn-quick-connect" onClick={onOpenQuickConnect} title="빠른 연결">
-            <RiFlashlightFill size={16} />
+            <RiFlashlightFill size={18} />
           </button>
           <button className="btn-new-folder" onClick={handleAddFolder} title="새 폴더">
-            <RiFolderAddFill size={16} />
+            <RiFolderAddFill size={18} />
           </button>
         </div>
       )}
       {!isCompact && isAddingFolder && (
         <div className="folder-input-wrapper">
-          <RiFolderFill size={14} className="folder-input-icon" />
+          <RiFolderFill size={16} className="folder-input-icon" />
           <input
             type="text"
             className="folder-input"
@@ -118,17 +119,17 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onOpen
           </button>
         </div>
       )}
-      <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onAddSession={onAddSession} isCompact={isCompact} activeSessionIds={activeSessionIds} />
+      <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} isCompact={isCompact} activeSessionIds={activeSessionIds} />
       {!isCompact && (
         <div className="sidebar-footer">
           {onBatchClick && (
             <button className="sidebar-footer-btn" onClick={onBatchClick} title="배치 명령 실행">
-              <RiTerminalBoxFill size={16} />
+              <RiTerminalBoxFill size={18} />
             </button>
           )}
           {onStatsClick && (
             <button className="sidebar-footer-btn" onClick={onStatsClick} title="세션 통계">
-              <RiBarChartFill size={16} />
+              <RiBarChartFill size={18} />
             </button>
           )}
         </div>

@@ -65,7 +65,7 @@ export function TagSelector({ availableTags, selectedTagIds, onToggleTag, onCrea
                 onChange={() => onToggleTag(tag.id)}
               />
               <TagBadge name={tag.name} color={tag.color} size="sm" />
-              {isSelected && <RiCheckLine className="check-icon" size={14} />}
+              {isSelected && <RiCheckLine className="check-icon" size={16} />}
             </label>
           )
         })}
@@ -117,7 +117,7 @@ export function TagSelector({ availableTags, selectedTagIds, onToggleTag, onCrea
           className="tag-selector-add"
           onClick={() => setIsCreating(true)}
         >
-          <RiAddLine size={14} />
+          <RiAddLine size={16} />
           <span>Create new tag</span>
         </button>
       )}
