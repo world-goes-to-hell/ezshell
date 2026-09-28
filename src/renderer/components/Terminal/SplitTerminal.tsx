@@ -85,9 +85,8 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
       try {
         console.log('Creating split shell for session:', sessionId)
         const result = await window.electronAPI.sshCreateShell(sessionId)
-        console.log('sshCreateShell result:', result)
-
         if (!result.success) {
+          console.warn('Split shell creation failed:', result.error)
           // Auto-retry with exponential backoff
           if (autoRetryCount.current < MAX_AUTO_RETRIES && !disposed) {
             autoRetryCount.current++

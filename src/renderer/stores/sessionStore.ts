@@ -97,15 +97,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setSessions: (sessions) => set({ sessions }),
   setFolders: (folders) => set({ folders }),
 
-  toggleFolder: (folderId) => set((state) => {
-    const newExpanded = new Set(state.expandedFolders)
-    if (newExpanded.has(folderId)) {
-      newExpanded.delete(folderId)
-    } else {
-      newExpanded.add(folderId)
-    }
-    return { expandedFolders: newExpanded }
-  }),
+  toggleFolder: (folderId) => {
+    set((state) => {
+      const newExpanded = new Set(state.expandedFolders)
+      if (newExpanded.has(folderId)) {
+        newExpanded.delete(folderId)
+      } else {
+        newExpanded.add(folderId)
+      }
+      return { expandedFolders: newExpanded }
+    })
+    // Folders are stored as plain JSON (no encryption), so persisting on every toggle is cheap
+    const { folders, expandedFolders } = get()
+    window.electronAPI.saveFolders({ folders, expandedFolders: Array.from(expandedFolders) })
+      .catch((error: unknown) => console.error('Failed to save folder state:', error))
+  },
 
   setActiveSession: (sessionId) => set({ activeSessionId: sessionId }),
   setLoading: (loading) => set({ isLoading: loading }),
@@ -199,7 +205,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
 
       if (foldersResult) {
-        set({ folders: foldersResult.folders || [] })
+        set({
+          folders: foldersResult.folders || [],
+          expandedFolders: new Set<string>(foldersResult.expandedFolders || [])
+        })
       }
     } catch (error) {
       console.error('Failed to load sessions:', error)
@@ -209,11 +218,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   saveToBackend: async () => {
-    const { sessions, folders } = get()
+    const { sessions, folders, expandedFolders } = get()
     try {
       await Promise.all([
         window.electronAPI.saveSessions(sessions),
-        window.electronAPI.saveFolders({ folders })
+        window.electronAPI.saveFolders({ folders, expandedFolders: Array.from(expandedFolders) })
       ])
     } catch (error) {
       console.error('Failed to save sessions:', error)

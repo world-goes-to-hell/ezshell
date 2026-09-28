@@ -555,7 +555,10 @@ ipcMain.handle('load-folders', () => {
 
 ipcMain.handle('save-folders', (event, { folders, expandedFolders }) => {
   saveToFile(foldersFilePath, folders);
-  saveToFile(path.join(userDataPath, 'folders-expanded.json'), expandedFolders);
+  // JSON.stringify(undefined) is undefined, which makes writeFileSync throw
+  if (Array.isArray(expandedFolders)) {
+    saveToFile(path.join(userDataPath, 'folders-expanded.json'), expandedFolders);
+  }
   return true;
 });
 
@@ -1100,23 +1103,15 @@ ipcMain.handle('ssh-create-shell', async (event, { sessionId }) => {
     return { success: false, error: 'SSH 연결이 없습니다.' };
   }
 
-  // Proactively clean up any existing split streams for this session before creating new one
-  const prefix = `${sessionId}:split-`;
-  let hadStaleStreams = false;
-  for (const [streamId, stream] of sshStreams.entries()) {
-    if (streamId.startsWith(prefix)) {
-      try { stream.end(); } catch (e) {}
-      sshStreams.delete(streamId);
-      splitStreamLastClosed.set(sessionId, Date.now());
-      hadStaleStreams = true;
-    }
-  }
+  // Do not close existing split streams here: every stream in sshStreams is live
+  // (renderer closes them on unmount, and 'close' removes them), and quad/tri
+  // layouts create several split shells for the same session in parallel.
 
-  // Wait if any split streams were closed recently (even by ssh-split-close)
-  // Server needs time to fully process channel closure
+  // Wait if a split stream was closed recently - the server needs time to
+  // fully process the channel closure before accepting a new channel
   const lastClosed = splitStreamLastClosed.get(sessionId);
   const timeSinceClose = lastClosed ? Date.now() - lastClosed : Infinity;
-  if (hadStaleStreams || timeSinceClose < 1000) {
+  if (timeSinceClose < 1000) {
     const waitTime = Math.max(500, 1000 - timeSinceClose);
     await new Promise(resolve => setTimeout(resolve, waitTime));
   }
