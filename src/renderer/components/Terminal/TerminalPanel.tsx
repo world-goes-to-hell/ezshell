@@ -55,7 +55,6 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
   const splitSlots = terminal?.splitSlots || []
   const setSplit = useTerminalStore(state => state.setSplit)
   const isMultiSplit = isSplit && splitDirection !== 'horizontal' && splitDirection !== 'vertical'
-  const setCurrentPath = useTerminalStore(state => state.setCurrentPath)
   const fontSize = useTerminalStore(state => state.fontSize)
   const fontFamily = useTerminalStore(state => state.fontFamily)
 
@@ -79,7 +78,6 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose, border
 
   // Buffer for detecting directory from output
   const outputBuffer = useRef('')
-  const lastCommand = useRef('')
 
   useEffect(() => {
     if (!terminalRef.current || terminalInstance.current) return

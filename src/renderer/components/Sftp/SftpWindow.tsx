@@ -30,8 +30,6 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: S
   const selectedRemote = store.selectedRemote(sessionId)
   const selectedLocal = store.selectedLocal(sessionId)
 
-  const [isReady, setIsReady] = useState(false)
-
   // Overwrite modal state
   const [overwriteModalOpen, setOverwriteModalOpen] = useState(false)
   const [conflictFileName, setConflictFileName] = useState('')
@@ -45,7 +43,6 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: S
         // SFTP session should already be open from main window
         await loadRemoteFiles(initialRemotePath || '/')
         await loadLocalFiles(initialLocalPath || getDefaultLocalPath())
-        setIsReady(true)
       } catch (error) {
         console.error('Failed to initialize SFTP window:', error)
       }

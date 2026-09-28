@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { PRESET_THEMES, getThemeById } from '../themes/presets'
+import { PRESET_THEMES } from '../themes/presets'
 import { ThemeDefinition, TerminalColors } from '../types/theme'
 
 interface ThemeState {

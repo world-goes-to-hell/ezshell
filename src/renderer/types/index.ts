@@ -37,8 +37,26 @@ declare global {
       sshSend: (sessionId: string, data: string) => void
       sshDisconnect: (sessionId: string) => void
       sshResize: (sessionId: string, cols: number, rows: number) => void
-      onSshData: (callback: (data: any) => void) => void
-      onSshClosed: (callback: (data: any) => void) => void
+      onSshData: (callback: (data: any) => void) => () => void
+      onSshClosed: (callback: (data: any) => void) => () => void
+
+      // SSH reconnection
+      onSshStateChanged: (callback: (data: any) => void) => void
+      onSshReconnecting: (callback: (data: { sessionId: string; attempt: number; maxAttempts: number }) => void) => void
+      onSshReconnected: (callback: (data: { sessionId: string }) => void) => void
+      onSshReconnectFailed: (callback: (data: { sessionId: string; message?: string }) => void) => void
+      sshCancelReconnect: (sessionId: string) => Promise<any>
+
+      // Split terminal (independent shell channels)
+      sshCreateShell: (sessionId: string) => Promise<{ success: boolean; streamId?: string; error?: string }>
+      sshSplitSend: (streamId: string, data: string) => void
+      sshSplitResize: (streamId: string, cols: number, rows: number) => void
+      sshSplitClose: (streamId: string) => void
+      onSshSplitData: (callback: (data: any) => void) => () => void
+      onSshSplitClosed: (callback: (data: any) => void) => () => void
+
+      // Command execution
+      sshExecCommand: (sessionId: string, command: string) => Promise<any>
 
       // Private Key
       selectPrivateKey: () => Promise<{ success: boolean; path?: string }>
@@ -52,6 +70,9 @@ declare global {
       sftpDelete: (sessionId: string, remotePath: string, isDirectory: boolean) => Promise<any>
       sftpRename: (sessionId: string, oldPath: string, newPath: string) => Promise<any>
       sftpMkdir: (sessionId: string, remotePath: string) => Promise<any>
+      selectDownloadPath: (defaultName: string) => Promise<any>
+      selectUploadFiles: () => Promise<any>
+      onSftpProgress: (callback: (data: any) => void) => void
 
       // Transfer Queue
       sftpQueueDownload: (sessionId: string, remotePath: string, localPath: string) => Promise<any>
@@ -74,7 +95,8 @@ declare global {
 
       // Terminal Window
       openTerminalWindow: (sessionId: string, title: string) => Promise<any>
-      onTerminalMerge: (callback: (data: any) => void) => void
+      mergeTerminalToMain: (sessionId: string, title: string, host: string, username: string) => Promise<any>
+      onTerminalMerge: (callback: (data: any) => void) => () => void
 
       // Sessions
       loadSessions: () => Promise<any>
@@ -84,6 +106,10 @@ declare global {
       exportSessions: (data: any) => Promise<any>
       importSessions: (mode: 'merge' | 'replace') => Promise<any>
 
+      // App settings
+      loadSettings: () => Promise<any>
+      saveSettings: (settings: any) => Promise<any>
+
       // Master Password
       hasMasterPassword: () => Promise<boolean>
       setupMasterPassword: (password: string) => Promise<{ success: boolean; error?: string }>
@@ -91,6 +117,27 @@ declare global {
       lockApp: () => Promise<{ success: boolean }>
       isAppLocked: () => Promise<{ locked: boolean }>
       resetMasterPassword: () => Promise<{ success: boolean }>
+
+      // Auto-unlock (OS keychain via safeStorage)
+      saveAutoUnlock: (password: string) => Promise<any>
+      loadAutoUnlock: () => Promise<any>
+      clearAutoUnlock: () => Promise<any>
+      hasAutoUnlock: () => Promise<any>
+
+      // Auto update
+      checkForUpdates: () => Promise<any>
+      downloadUpdate: () => Promise<any>
+      installUpdate: () => Promise<any>
+      getAppVersion: () => Promise<string>
+      onUpdateStatus: (callback: (data: any) => void) => () => void
+
+      // Port forwarding
+      portForwardLocal: (sessionId: string, localPort: number, remoteHost: string, remotePort: number, localHost?: string) => Promise<any>
+      portForwardRemote: (sessionId: string, remotePort: number, localHost: string, localPort: number, remoteHost?: string) => Promise<any>
+      portForwardDynamic: (sessionId: string, localPort: number, localHost?: string) => Promise<any>
+      portForwardStop: (forwardId: string) => Promise<any>
+      portForwardList: (sessionId: string) => Promise<any>
+      onPortForwardUpdate: (callback: (data: any) => void) => () => void
 
       // Terminal zoom
       onTerminalZoom?: (callback: (direction: string) => void) => (() => void)

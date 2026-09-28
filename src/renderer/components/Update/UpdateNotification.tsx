@@ -1,10 +1,10 @@
 import { useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { RiDownload2Fill, RiRefreshLine, RiCloseFill, RiCheckboxCircleFill, RiInformationFill, RiRestartFill } from 'react-icons/ri'
-import { useUpdateStore, UpdateStatus } from '../../stores/updateStore'
+import { useUpdateStore } from '../../stores/updateStore'
 
 export function UpdateNotification() {
-  const { info, dismissed, appVersion, setInfo, setDismissed, setAppVersion } = useUpdateStore()
+  const { info, dismissed, setInfo, setDismissed, setAppVersion } = useUpdateStore()
 
   useEffect(() => {
     // Get app version
@@ -57,11 +57,6 @@ export function UpdateNotification() {
 
   const handleInstall = () => {
     window.electronAPI.installUpdate?.()
-  }
-
-  const handleCheckUpdate = async () => {
-    setInfo({ status: 'checking' })
-    await window.electronAPI.checkForUpdates?.()
   }
 
   const handleDismiss = () => {

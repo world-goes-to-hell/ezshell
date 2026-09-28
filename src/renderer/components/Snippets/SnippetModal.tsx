@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { RiCloseLine, RiSaveLine } from 'react-icons/ri'
-import { useSnippetStore, Snippet } from '../../stores/snippetStore'
+import { useSnippetStore } from '../../stores/snippetStore'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { modalOverlayVariants } from '../../lib/animation/variants'
 import './SnippetModal.css'

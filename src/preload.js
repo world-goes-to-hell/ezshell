@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   minimizeWindow: () => ipcRenderer.send('window-minimize'),
   maximizeWindow: () => ipcRenderer.send('window-maximize'),
   closeWindow: () => ipcRenderer.send('window-close'),
+  toggleFullscreen: () => ipcRenderer.invoke('window-toggle-fullscreen'),
 
   // 앱 줌 (Ctrl+마우스 휠)
   appZoomIn: () => webFrame.setZoomLevel(webFrame.getZoomLevel() + 0.5),

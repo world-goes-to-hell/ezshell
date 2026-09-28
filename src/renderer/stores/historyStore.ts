@@ -20,7 +20,7 @@ interface HistoryState {
 
 export const useHistoryStore = create<HistoryState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       recentConnections: [],
       maxHistory: 10,
 

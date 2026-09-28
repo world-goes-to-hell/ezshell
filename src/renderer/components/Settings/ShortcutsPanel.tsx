@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, type Variants } from 'framer-motion'
 import { RiSearchLine, RiTerminalLine, RiServerLine, RiNavigationLine, RiAppsLine, RiRestartLine } from 'react-icons/ri'
 import { useShortcutsStore, ShortcutCategory } from '../../stores/shortcutsStore'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
@@ -74,7 +74,7 @@ export function ShortcutsPanel() {
     )
   }
 
-  const listVariants = reducedMotion
+  const listVariants: Variants = reducedMotion
     ? {}
     : {
         hidden: { opacity: 0 },
@@ -86,7 +86,7 @@ export function ShortcutsPanel() {
         }
       }
 
-  const itemVariants = reducedMotion
+  const itemVariants: Variants = reducedMotion
     ? {}
     : {
         hidden: { opacity: 0, y: -5 },

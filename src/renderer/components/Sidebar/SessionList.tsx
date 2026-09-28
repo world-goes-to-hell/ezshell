@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, type JSX } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSessionStore, Folder, Session } from '../../stores/sessionStore'
 import { RiServerFill, RiFolderFill, RiArrowDownSFill, RiArrowRightSFill, RiDatabase2Fill, RiCloudFill, RiGlobalFill, RiHomeFill, RiComputerFill, RiHardDriveFill, RiCpuFill, RiBaseStationFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiFilterLine, RiCloseLine, RiPaletteLine, RiAddLine } from 'react-icons/ri'
@@ -782,8 +782,10 @@ function SessionItem({ session, onConnect, onContextMenu, onDragStart, onDragEnd
       onDoubleClick={() => onConnect(session)}
       onContextMenu={(e) => onContextMenu(e, session.id)}
       draggable
-      onDragStart={(e) => onDragStart(e, 'session', session.id)}
-      onDragEnd={onDragEnd}
+      // motion.div treats onDragStart/onDragEnd as its own gesture props
+      // and never forwards them to the DOM, so use the capture variants
+      onDragStartCapture={(e) => onDragStart(e, 'session', session.id)}
+      onDragEndCapture={onDragEnd}
       data-tooltip={isCompact ? displayName : undefined}
       whileHover={reducedMotion ? undefined : { x: 4 }}
       transition={{ duration: 0.15 }}

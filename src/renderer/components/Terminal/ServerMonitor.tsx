@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { RiCpuLine, RiHardDriveLine, RiDatabase2Line, RiTimeLine, RiRefreshLine, RiCloseFill } from 'react-icons/ri'
-import { useMonitorStore, fetchMetrics, ServerMetrics } from '../../stores/monitorStore'
+import { useMonitorStore, fetchMetrics } from '../../stores/monitorStore'
 
 interface ServerMonitorProps {
   sessionId: string
@@ -52,7 +52,7 @@ function MiniChart({ data, color }: { data: number[]; color: string }) {
 }
 
 export function ServerMonitor({ sessionId, onClose }: ServerMonitorProps) {
-  const { metrics, history, setMetrics, startMonitoring, stopMonitoring, isMonitoring } = useMonitorStore()
+  const { metrics, history, setMetrics, startMonitoring, stopMonitoring } = useMonitorStore()
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const currentMetrics = metrics.get(sessionId)

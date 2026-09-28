@@ -108,7 +108,7 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
 
         if (disposed) return
 
-        streamIdRef.current = result.streamId
+        streamIdRef.current = result.streamId ?? null
 
         // Wait for DOM to be ready
         const waitForRef = () => {

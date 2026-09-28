@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { RiTerminalBoxFill, RiCloseFill, RiPlayFill, RiCheckboxCircleFill, RiCloseCircleFill, RiLoader4Fill, RiTimeLine, RiDeleteBinLine } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useBatchStore, BatchResult } from '../../stores/batchStore'

@@ -116,7 +116,7 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
         action: () => {
           if (activeSessionId) {
             const terminal = getTerminal(activeSessionId)
-            const context = terminal ? {
+            const context: Record<string, string> = terminal ? {
               user: terminal.username,
               host: terminal.host,
               path: terminal.currentPath || '~'

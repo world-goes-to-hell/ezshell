@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { RiSaveLine, RiRefreshLine, RiEyeLine, RiCloseLine } from 'react-icons/ri'
-import { useThemeStore } from '../../stores/themeStore'
 import { ThemeDefinition, ThemeColors, TerminalColors } from '../../types/theme'
 import { modalContentVariants } from '../../lib/animation/variants'
 import './ThemeEditor.css'

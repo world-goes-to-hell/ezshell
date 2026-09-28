@@ -691,6 +691,11 @@ ipcMain.on('window-close', (event) => {
   if (win) win.close();
 });
 
+ipcMain.handle('window-toggle-fullscreen', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win) win.setFullScreen(!win.isFullScreen());
+});
+
 // Private Key 파일 선택 다이얼로그
 ipcMain.handle('select-private-key', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {

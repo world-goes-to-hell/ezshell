@@ -12,8 +12,6 @@ interface TerminalSearchProps {
 
 export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchProps) {
   const [query, setQuery] = useState('')
-  const [matchCount, setMatchCount] = useState(0)
-  const [currentMatch, setCurrentMatch] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {

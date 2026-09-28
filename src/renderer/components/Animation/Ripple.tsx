@@ -1,11 +1,6 @@
 import { useState, useCallback } from 'react'
 import './Ripple.css'
 
-interface RippleProps {
-  color?: string
-  duration?: number
-}
-
 export function useRipple(color = 'rgba(255, 255, 255, 0.3)', duration = 600) {
   const [ripples, setRipples] = useState<Array<{ x: number; y: number; id: number }>>([])
 

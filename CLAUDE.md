@@ -8,12 +8,15 @@ Electron 기반 SSH 클라이언트 데스크톱 앱. 한국어 UI.
 ## Build & Run
 
 ```bash
-npm run dev          # 개발 모드 (electron-vite dev)
-npm run build        # 프로덕션 빌드 (electron-vite build)
-npm run typecheck    # TypeScript 타입 체크 (tsc --noEmit)
+npm run dev             # 개발 모드 (electron-vite dev)
+npm run build           # 번들 빌드 (electron-vite build → out/)
+npm run typecheck       # TypeScript 타입 체크 (tsc --noEmit)
+npm run build:nsis      # 설치형 exe
+npm run build:portable  # 포터블 exe
+npm run build:publish   # GitHub Releases 배포 (electron-updater)
 ```
 
-빌드 결과: `dist/` 폴더에 `MySSHClient.exe` 생성.
+배포 결과물: `release/` 폴더 (electron-builder). `dist/`는 예전 빌드 산출물이다.
 
 ## Architecture
 

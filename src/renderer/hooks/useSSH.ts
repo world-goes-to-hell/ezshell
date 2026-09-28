@@ -4,34 +4,43 @@ import { useHistoryStore } from '../stores/historyStore'
 import { useStatsStore } from '../stores/statsStore'
 import { toast } from '../stores/toastStore'
 
+export interface SSHConnectConfig {
+  host: string
+  port: number
+  username: string
+  authType: 'password' | 'privateKey'
+  password?: string
+  privateKeyPath?: string
+  passphrase?: string
+  sessionName?: string
+  color?: string
+  postConnectScript?: string
+  // Connection settings (milliseconds)
+  connectTimeout?: number
+  keepaliveInterval?: number
+  autoReconnect?: boolean
+  // Jump host
+  useJumpHost?: boolean
+  jumpHost?: string
+  jumpPort?: number
+  jumpUsername?: string
+  jumpAuthType?: 'password' | 'privateKey'
+  jumpPassword?: string
+  jumpPrivateKeyPath?: string
+  jumpPassphrase?: string
+}
+
 export function useSSH() {
   const { addTerminal, removeTerminal, setConnecting, setConnected, updateTerminalMeta } = useTerminalStore()
 
-  const connect = useCallback(async (config: {
-    host: string
-    port: number
-    username: string
-    authType: 'password' | 'privateKey'
-    password?: string
-    privateKeyPath?: string
-    passphrase?: string
-    sessionName?: string
-    color?: string
-    postConnectScript?: string
-  }) => {
+  const connect = useCallback(async (config: SSHConnectConfig) => {
     setConnecting(true)
     toast.info('연결 중...', `${config.username}@${config.host}에 연결을 시도합니다`)
 
     try {
-      const result = await window.electronAPI.sshConnect({
-        host: config.host,
-        port: config.port,
-        username: config.username,
-        authType: config.authType,
-        password: config.password,
-        privateKeyPath: config.privateKeyPath,
-        passphrase: config.passphrase
-      })
+      // UI-only fields stay in the renderer; everything else goes to the main process
+      const { sessionName, color, postConnectScript, ...connectionConfig } = config
+      const result = await window.electronAPI.sshConnect(connectionConfig)
 
       if (result.success) {
         addTerminal(result.sessionId, {

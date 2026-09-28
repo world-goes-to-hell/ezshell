@@ -25,8 +25,8 @@ import { useSftpStore } from './stores/sftpStore'
 import { useThemeStore } from './stores/themeStore'
 import { useCommandPaletteStore } from './stores/commandPaletteStore'
 import { useUIStore } from './stores/uiStore'
-import { useStatsStore } from './stores/statsStore'
 import { useSSH } from './hooks/useSSH'
+import { toSSHConnectConfig } from './lib/sshConnectConfig'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
 import { motion, AnimatePresence } from 'framer-motion'
 import { tabVariants } from './lib/animation/variants'
@@ -122,7 +122,7 @@ function App() {
   const [splitDropdownOpen, setSplitDropdownOpen] = useState<'primary' | 'secondary' | null>(null)
   const splitDropdownRef = useRef<HTMLDivElement>(null)
 
-  const { loadFromBackend, addSession, updateSession, sessions, folders } = useSessionStore()
+  const { loadFromBackend, addSession, updateSession } = useSessionStore()
   const {
     terminals,
     activeTerminalId,
@@ -130,7 +130,6 @@ function App() {
     removeTerminal,
     setFontSize,
     setFontFamily,
-    setLayout,
     layout,
     addTerminalToPane,
     removeTerminalFromPane,
@@ -219,17 +218,20 @@ function App() {
     })
 
     window.electronAPI.onSshReconnectFailed((data: { sessionId: string }) => {
-      const { setDisconnected, removeTerminal } = useTerminalStore.getState()
+      const { setDisconnected } = useTerminalStore.getState()
       setDisconnected(data.sessionId)
     })
 
     // Listen for terminal merge events (when popped-out terminal merges back)
     window.electronAPI.onTerminalMerge((data: { sessionId: string; title: string; host: string; username: string }) => {
       const { addTerminal, setActiveTerminal } = useTerminalStore.getState()
+      // The SSH connection lives in the main process, so the merged session is still connected
       addTerminal(data.sessionId, {
+        id: data.sessionId,
         host: data.host,
         username: data.username,
-        title: data.title
+        title: data.title,
+        connected: true
       })
       setActiveTerminal(data.sessionId)
     })
@@ -491,30 +493,7 @@ function App() {
     }
 
     // Then attempt connection
-    await connect({
-      host: config.host,
-      port: config.port,
-      username: config.username,
-      authType: config.authType,
-      password: config.password,
-      privateKeyPath: config.privateKeyPath,
-      passphrase: config.passphrase,
-      sessionName: config.name || `${config.username}@${config.host}`,
-      color: effectiveColor,
-      postConnectScript: config.postConnectScript,
-      // Connection settings (convert seconds to milliseconds for backend)
-      connectTimeout: (config.connectTimeout || 20) * 1000,
-      keepaliveInterval: (config.keepaliveInterval || 30) * 1000,
-      autoReconnect: config.autoReconnect !== false,
-      useJumpHost: config.useJumpHost,
-      jumpHost: config.jumpHost,
-      jumpPort: config.jumpPort,
-      jumpUsername: config.jumpUsername,
-      jumpAuthType: config.jumpAuthType,
-      jumpPassword: config.jumpPassword,
-      jumpPrivateKeyPath: config.jumpPrivateKeyPath,
-      jumpPassphrase: config.jumpPassphrase
-    })
+    await connect(toSSHConnectConfig(config, effectiveColor))
     // Note: Toast notifications are handled in useSSH hook
   }
 
@@ -545,21 +524,6 @@ function App() {
     setEditSession(null)
     setDefaultFolderId(undefined)
     setConnectModalOpen(true)
-  }
-
-  // Connect to session - just add as new tab
-  const handleConnectFromDropdown = async (session: any) => {
-    await connect({
-      host: session.host,
-      port: session.port || 22,
-      username: session.username,
-      authType: session.authType,
-      password: session.password,
-      privateKeyPath: session.privateKeyPath,
-      passphrase: session.passphrase,
-      sessionName: session.name,
-      color: session.backgroundColor
-    })
   }
 
   const handleAddSession = (folderId?: string) => {
@@ -617,7 +581,7 @@ function App() {
     e.dataTransfer.effectAllowed = 'move'
   }
 
-  const handleTabDragEnd = async (e: React.DragEvent) => {
+  const handleTabDragEnd = async () => {
     const sessionId = draggingTabId
     const terminal = sessionId ? terminals.get(sessionId) : null
 
@@ -845,8 +809,10 @@ function App() {
                         onClick={() => setActiveTerminal(sessionId)}
                         onContextMenu={(e) => handleTabContextMenu(e, sessionId)}
                         draggable
-                        onDragStart={(e) => handleTabDragStart(e, sessionId)}
-                        onDragEnd={handleTabDragEnd}
+                        // motion.div treats onDragStart/onDragEnd as its own gesture props
+                        // and never forwards them to the DOM, so use the capture variants
+                        onDragStartCapture={(e) => handleTabDragStart(e, sessionId)}
+                        onDragEndCapture={handleTabDragEnd}
                         variants={reducedMotion ? undefined : tabVariants}
                         initial="hidden"
                         animate="visible"
@@ -928,17 +894,7 @@ function App() {
                           handleCloseTerminal(terminalId)
                         }}
                         onAddTab={async (session) => {
-                          const result = await connect({
-                            host: session.host,
-                            port: session.port || 22,
-                            username: session.username,
-                            authType: session.authType,
-                            password: session.password,
-                            privateKeyPath: session.privateKeyPath,
-                            passphrase: session.passphrase,
-                            sessionName: session.name,
-                            color: session.backgroundColor
-                          })
+                          const result = await connect(toSSHConnectConfig(session))
                           if (result?.success && result.sessionId) {
                             addTerminalToPane('primary', result.sessionId)
                           }
@@ -1015,17 +971,7 @@ function App() {
                           handleCloseTerminal(terminalId)
                         }}
                         onAddTab={async (session) => {
-                          const result = await connect({
-                            host: session.host,
-                            port: session.port || 22,
-                            username: session.username,
-                            authType: session.authType,
-                            password: session.password,
-                            privateKeyPath: session.privateKeyPath,
-                            passphrase: session.passphrase,
-                            sessionName: session.name,
-                            color: session.backgroundColor
-                          })
+                          const result = await connect(toSSHConnectConfig(session))
                           if (result?.success && result.sessionId) {
                             addTerminalToPane('secondary', result.sessionId)
                           }

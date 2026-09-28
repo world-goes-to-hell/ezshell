@@ -22,7 +22,6 @@ interface SplitPaneTabBarProps {
 }
 
 export function SplitPaneTabBar({
-  paneType,
   terminalIds,
   activeTerminalId,
   isActivePane,
