@@ -127,3 +127,15 @@
 .file-list-header-cell.col-permissions { width: var(--sftp-col-permissions); justify-content: center; }
 .file-list-header-cell.col-mtime { width: var(--sftp-col-mtime); justify-content: flex-end; }
 .file-list-header-cell.col-size { width: var(--sftp-col-size); justify-content: flex-end; }
+
+/* Folder row (or "..") under a drag: dropping moves / transfers the entries into it */
+.file-item.drop-target {
+  background: var(--accent-alpha);
+  color: var(--text-primary);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.file-item.drop-target .folder-icon {
+  color: var(--warning);
+}

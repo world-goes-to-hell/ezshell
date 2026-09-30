@@ -128,6 +128,8 @@ declare global {
       localList: (dirPath: string) => Promise<any>
       localRename: (oldPath: string, newPath: string) => Promise<LocalFileOpResult>
       localMkdir: (dirPath: string) => Promise<LocalFileOpResult>
+      /** Move an entry into another folder (same name); absent until the app restarts after an update */
+      localMove?: (sourcePath: string, targetDir: string) => Promise<LocalFileOpResult>
       localTrash: (paths: string[]) => Promise<LocalTrashResult>
       selectLocalFolder: () => Promise<string | null>
 

@@ -52,6 +52,42 @@ async function renameLocal(oldPath, newPath) {
   }
 }
 
+/** `child` is `parent` itself or somewhere inside it (compared per path segment, not by prefix) */
+function isSameOrInside(child, parent) {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Move an entry into another folder, keeping its name. Refuses to overwrite and to move a folder
+ * into itself. fs.rename is used, so moves across drives fail with a clear message instead of copying.
+ */
+async function moveLocal(sourcePath, targetDir) {
+  if (!path.isAbsolute(sourcePath) || !path.isAbsolute(targetDir)) {
+    return { success: false, error: '잘못된 경로입니다.' };
+  }
+  const destPath = path.join(targetDir, path.basename(sourcePath));
+  try {
+    const targetStat = await fs.promises.stat(targetDir);
+    if (!targetStat.isDirectory()) return { success: false, error: '폴더로만 옮길 수 있습니다.' };
+
+    const sourceStat = await fs.promises.lstat(sourcePath);
+    if (sourceStat.isDirectory() && isSameOrInside(path.resolve(targetDir), path.resolve(sourcePath))) {
+      return { success: false, error: '폴더를 자기 자신이나 그 안의 폴더로 옮길 수 없습니다.' };
+    }
+    if (samePath(path.dirname(sourcePath), targetDir)) return { success: true };
+
+    const exists = await fs.promises.lstat(destPath).then(() => true, () => false);
+    if (exists) return { success: false, error: ERROR_MESSAGES.EEXIST };
+
+    await fs.promises.rename(sourcePath, destPath);
+    return { success: true };
+  } catch (err) {
+    if (err.code === 'EXDEV') return { success: false, error: '다른 드라이브로는 옮길 수 없습니다.' };
+    return { success: false, error: describe(err) };
+  }
+}
+
 async function mkdirLocal(dirPath) {
   if (!path.isAbsolute(dirPath)) return { success: false, error: '잘못된 경로입니다.' };
   try {
@@ -84,4 +120,4 @@ async function trashLocal(paths, trashItem) {
   return { trashed, failures };
 }
 
-module.exports = { renameLocal, mkdirLocal, trashLocal };
+module.exports = { renameLocal, mkdirLocal, trashLocal, moveLocal };

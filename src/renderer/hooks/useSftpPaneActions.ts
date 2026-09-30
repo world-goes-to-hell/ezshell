@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import type { FileItem } from '../stores/sftpStore'
-import { renameEntry, createFolder, trashLocalSelection, type PaneSide } from '../lib/sftpFileOps'
+import { useSftpStore, type FileItem } from '../stores/sftpStore'
+import { renameEntry, createFolder, trashLocalSelection, moveEntries, moveDepsFor, type PaneSide } from '../lib/sftpFileOps'
 
 interface Params {
   sessionId: string
@@ -34,6 +34,17 @@ export function useSftpPaneActions(params: Params) {
       const created = await createFolder({ side, sessionId, dirPath: dirOf(side), name })
       if (created) await reload(side)
       return created
+    },
+    // Drag and drop inside one list: move entries into a folder row or ".." (asks first)
+    onMoveInto: async (names: string[], targetDir: string) => {
+      const result = await moveEntries({ side, dirPath: dirOf(side), names, targetDir }, moveDepsFor(side, sessionId))
+      if (result.moved.length === 0 && result.failed === 0) return
+      // Moved names must not stay selected: a later file with the same name would appear pre-selected
+      const store = useSftpStore.getState()
+      if (side === 'local') store.clearLocalSelection(sessionId)
+      else store.clearRemoteSelection(sessionId)
+      // Refresh on failures too: they often mean the listing on screen is stale
+      await reload(side)
     },
     onFocusPath: () => setPathEditRequest(prev => ({ ...prev, [side]: prev[side] + 1 }))
   })

@@ -14,6 +14,18 @@ export function joinChildPath(dirPath: string, name: string, side: PaneSide): st
   return dirPath === '/' ? `/${name}` : `${dirPath.replace(/\/+$/, '')}/${name}`
 }
 
+/** Parent folder of `dirPath`, or null at the root. Windows paths stay on their own drive. */
+export function parentPath(dirPath: string, side: PaneSide): string | null {
+  if (side === 'local' && isWindowsPath(dirPath)) {
+    const parts = dirPath.split('\\').filter(Boolean)
+    if (parts.length <= 1) return null
+    return parts.length === 2 ? `${parts[0]}\\` : parts.slice(0, -1).join('\\')
+  }
+  const parts = dirPath.split('/').filter(Boolean)
+  if (parts.length === 0) return null
+  return parts.length === 1 ? '/' : `/${parts.slice(0, -1).join('/')}`
+}
+
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 // SFTP v3 servers report most rename / mkdir failures as a bare "Failure"
@@ -78,6 +90,88 @@ export async function createFolder({ side, sessionId, dirPath, name }: CreateFol
     toast.error('새 폴더 만들기 실패', side === 'remote' ? describeRemoteError(error) : messageOf(error))
     return false
   }
+}
+
+interface MoveParams {
+  side: PaneSide
+  /** Folder the entries are listed in */
+  dirPath: string
+  names: string[]
+  /** Folder to move them into (a child folder or the parent) */
+  targetDir: string
+}
+
+export interface MoveDeps {
+  confirm: (message: string) => boolean
+  /** Move one entry into `targetDir` keeping its name; throws with a readable message on failure */
+  move: (sourcePath: string, targetDir: string) => Promise<void>
+}
+
+const normalizeDir = (dirPath: string) => (dirPath.length > 1 ? dirPath.replace(/[\\/]+$/, '') : dirPath)
+const samePathOnSide = (a: string, b: string, side: PaneSide) => (side === 'local' && isWindowsPath(a)
+  ? normalizeDir(a).toLowerCase() === normalizeDir(b).toLowerCase()
+  : normalizeDir(a) === normalizeDir(b))
+
+/** Default move for each pane: SFTP rename on the server, local-move IPC on this PC. */
+export function moveDepsFor(side: PaneSide, sessionId: string): MoveDeps {
+  return {
+    confirm: (message) => window.confirm(message),
+    move: async (sourcePath, targetDir) => {
+      if (side === 'remote') {
+        const name = sourcePath.split('/').pop() ?? ''
+        try {
+          await window.electronAPI.sftpRename(sessionId, sourcePath, joinChildPath(targetDir, name, 'remote'))
+        } catch (error) {
+          throw new Error(describeRemoteError(error))
+        }
+        return
+      }
+      if (!window.electronAPI.localMove) throw new Error('앱을 다시 시작한 뒤 사용할 수 있습니다')
+      const result = await window.electronAPI.localMove(sourcePath, targetDir)
+      if (!result.success) throw new Error(result.error)
+    }
+  }
+}
+
+export interface MoveResult {
+  /** Names that were moved out of the current folder */
+  moved: string[]
+  failed: number
+}
+
+/**
+ * Move entries of the current folder into `targetDir` after confirmation (drag and drop onto a folder).
+ * Keeps going when one entry fails and reports failures together.
+ */
+export async function moveEntries({ side, dirPath, names, targetDir }: MoveParams, deps: MoveDeps): Promise<MoveResult> {
+  const nothing: MoveResult = { moved: [], failed: 0 }
+  const sources = names
+    .map(name => ({ name, path: joinChildPath(dirPath, name, side) }))
+    .filter(source => !samePathOnSide(source.path, targetDir, side))
+  if (sources.length === 0 || samePathOnSide(dirPath, targetDir, side)) return nothing
+
+  const where = side === 'remote' ? '원격 서버' : '로컬 PC'
+  const listed = sources.slice(0, MAX_NAMES_IN_CONFIRM).map(source => `  - ${source.name}`)
+  const more = sources.length > MAX_NAMES_IN_CONFIRM ? [`  외 ${sources.length - MAX_NAMES_IN_CONFIRM}개`] : []
+  const message = [`${where}의 ${sources.length}개 항목을 옮깁니다.`, '', ...listed, ...more, '', `대상 폴더: ${targetDir}`].join('\n')
+  if (!deps.confirm(message)) return nothing
+
+  const failures: string[] = []
+  const moved: string[] = []
+  for (const source of sources) {
+    try {
+      await deps.move(source.path, targetDir)
+      moved.push(source.name)
+    } catch (error) {
+      failures.push(`${source.name}: ${messageOf(error)}`)
+    }
+  }
+
+  if (failures.length > 0) {
+    toast.error(`${failures.length}개 항목 이동 실패`, failures.slice(0, 3).join('\n'))
+  }
+  if (moved.length > 0) toast.success('이동 완료', `${moved.length}개 항목을 옮겼습니다`)
+  return { moved, failed: failures.length }
 }
 
 /**

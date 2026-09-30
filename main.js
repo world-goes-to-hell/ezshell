@@ -2066,6 +2066,7 @@ ipcMain.handle('local-list', async (event, { dirPath }) => {
 // 로컬 이름 변경 / 폴더 생성 / 휴지통 이동 (SFTP 패널 로컬 목록)
 ipcMain.handle('local-rename', (event, { oldPath, newPath }) => localFileOps.renameLocal(oldPath, newPath));
 ipcMain.handle('local-mkdir', (event, { dirPath }) => localFileOps.mkdirLocal(dirPath));
+ipcMain.handle('local-move', (event, { sourcePath, targetDir }) => localFileOps.moveLocal(sourcePath, targetDir));
 ipcMain.handle('local-trash', (event, { paths }) =>
   localFileOps.trashLocal(Array.isArray(paths) ? paths : [], (target) => shell.trashItem(target)));
 

@@ -16,6 +16,8 @@ interface PendingTransfer {
   fileName: string
   localPath: string
   remotePath: string
+  /** Known when sending into a folder other than the one on screen (drop on a folder row) */
+  targetExists?: boolean
 }
 
 interface SftpPanelProps {
@@ -368,7 +370,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
 
     const transfer = transfers[index]
     const targetFiles = transfer.type === 'upload' ? remoteFiles : localFiles
-    const fileExists = targetFiles.some(f => f.name === transfer.fileName)
+    const fileExists = transfer.targetExists ?? targetFiles.some(f => f.name === transfer.fileName)
 
     if (fileExists && !globalOverwriteAction) {
       // Show modal for conflict
@@ -410,7 +412,30 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     }
   }
 
-  const handleDropOnLocal = async (fileNames: string[]) => {
+  /**
+   * Names already in a folder that is not on screen, for the overwrite check of a drop onto a folder row.
+   * Returns null (and tells the user) when the folder cannot be read.
+   */
+  const listNamesIn = async (side: 'local' | 'remote', dirPath: string): Promise<Set<string> | null> => {
+    try {
+      if (side === 'remote') {
+        const entries = await window.electronAPI.sftpList(sessionId, dirPath)
+        return new Set((entries || []).map((f: { name: string }) => f.name))
+      }
+      const result = await window.electronAPI.localList(dirPath)
+      if (!result.success) throw new Error(result.error)
+      return new Set((result.files || []).map((f: { name: string }) => f.name))
+    } catch (error) {
+      toast.error('대상 폴더를 읽을 수 없습니다', `${dirPath}: ${error instanceof Error ? error.message : String(error)}`)
+      return null
+    }
+  }
+
+  // targetDir: a local folder row the remote entries were dropped on (default: the local folder on screen)
+  const handleDropOnLocal = async (fileNames: string[], targetDir?: string) => {
+    const localBase = targetDir ?? localPath
+    const existing = targetDir ? await listNamesIn('local', targetDir) : undefined
+    if (existing === null) return
     const transfers: PendingTransfer[] = []
     for (const fileName of fileNames) {
       const file = remoteFiles.find(f => f.name === fileName)
@@ -418,8 +443,9 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
         transfers.push({
           type: 'download',
           fileName,
-          localPath: joinPath(localPath, fileName, true),
-          remotePath: joinPath(remotePath, fileName, false)
+          localPath: joinPath(localBase, fileName, true),
+          remotePath: joinPath(remotePath, fileName, false),
+          targetExists: existing?.has(fileName)
         })
       }
     }
@@ -430,7 +456,11 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     await processNextTransfer(transfers, 0)
   }
 
-  const handleDropOnRemote = async (fileNames: string[]) => {
+  // targetDir: a remote folder row the local entries were dropped on (default: the remote folder on screen)
+  const handleDropOnRemote = async (fileNames: string[], targetDir?: string) => {
+    const remoteBase = targetDir ?? remotePath
+    const existing = targetDir ? await listNamesIn('remote', targetDir) : undefined
+    if (existing === null) return
     const transfers: PendingTransfer[] = []
     const directories: string[] = []
 
@@ -444,7 +474,8 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
           type: 'upload',
           fileName,
           localPath: joinPath(localPath, fileName, true),
-          remotePath: joinPath(remotePath, fileName, false)
+          remotePath: joinPath(remoteBase, fileName, false),
+          targetExists: existing?.has(fileName)
         })
       }
     }
@@ -452,7 +483,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     for (const dirName of directories) {
       try {
         const localDir = joinPath(localPath, dirName, true)
-        const remoteDir = joinPath(remotePath, dirName, false)
+        const remoteDir = joinPath(remoteBase, dirName, false)
         await window.electronAPI.sftpUploadDirectory?.(sessionId, localDir, remoteDir)
         toast.success('폴더 업로드 완료', dirName)
       } catch (error) {

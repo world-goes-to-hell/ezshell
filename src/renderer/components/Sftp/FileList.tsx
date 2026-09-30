@@ -4,7 +4,8 @@ import { useWheelRowScroll } from '../../hooks/useWheelRowScroll'
 import { useDirectoryHistory } from '../../hooks/useDirectoryHistory'
 import { resolveFileListShortcut, type FileListShortcut } from '../../lib/fileListShortcuts'
 import { validateNewName } from '../../lib/fileNameValidation'
-import { isWindowsPath, nextFolderName } from '../../lib/sftpFileOps'
+import { isWindowsPath, nextFolderName, parentPath, joinChildPath } from '../../lib/sftpFileOps'
+import { useFolderDropTargets, FILE_LIST_DRAG_TYPE } from '../../hooks/useFolderDropTargets'
 import { sortFileItems, nextSort, DEFAULT_SORT, type FileSort, type FileSortKey } from '../../lib/fileSort'
 import { RiFolderFill, RiArrowUpSFill } from 'react-icons/ri'
 import { InlineNameInput } from './InlineNameInput'
@@ -33,7 +34,10 @@ interface FileListProps {
   onCreateFolder?: (name: string) => Promise<boolean>
   /** Ctrl+L: move focus to this pane's path bar */
   onFocusPath?: () => void
-  onDrop?: (fileNames: string[]) => void
+  /** Entries dropped from the other list: into `targetDir` when dropped on a folder row, else the current folder */
+  onDrop?: (fileNames: string[], targetDir?: string) => void
+  /** Entries of this list dropped on one of its folder rows or ".." (asks, then moves) */
+  onMoveInto?: (names: string[], targetDir: string) => void
   isLoading?: boolean
 }
 
@@ -52,14 +56,12 @@ const CONTEXT_MENU_EDGE_GAP = 10
 /** Spread onto containers whose controls act on the current selection (e.g. the SFTP toolbar). */
 export const keepSelectionProps = { [KEEP_SELECTION_ATTR]: '' }
 
-const isWindows = () => {
-  return navigator.platform.toLowerCase().includes('win') ||
-         navigator.userAgent.toLowerCase().includes('windows')
-}
+// Drop-target key of the ".." row (entry names never contain a slash)
+const PARENT_ROW_KEY = '/..'
 
 export function FileList({
   files: rawFiles, selected, onNavigate, currentPath, type, sessionId,
-  onUpload, onDownload, onDelete, onRename, onCreateFolder, onFocusPath, onDrop, isLoading
+  onUpload, onDownload, onDelete, onRename, onCreateFolder, onFocusPath, onDrop, onMoveInto, isLoading
 }: FileListProps) {
   const store = useSftpStore()
   // Kept while the panel stays open (this component stays mounted across folder changes)
@@ -74,6 +76,10 @@ export function FileList({
   const stepHistory = useDirectoryHistory(fileListRef, currentPath, !!isLoading, onNavigate)
   const itemRefs = useRef<(HTMLDivElement | null)[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
+  const folderDrop = useFolderDropTargets({
+    type, sessionId, dirPath: currentPath, onMoveInto, onTransferInto: onDrop,
+    onRowActivity: () => setIsDragOver(false)
+  })
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number>(-1)
   const [editing, setEditing] = useState<EditState | null>(null)
   // Entry to select once the refreshed listing arrives (after rename / new folder)
@@ -143,13 +149,8 @@ export function FileList({
 
   const focusList = () => fileListRef.current?.focus()
 
-  const childPath = (name: string) => {
-    const useBackslash = type === 'local' && isWindows()
-    if (currentPath === '/' || currentPath === 'C:\\') {
-      return useBackslash ? `${currentPath}${name}` : `/${name}`
-    }
-    return `${currentPath}${useBackslash ? '\\' : '/'}${name}`
-  }
+  // Handles every drive root ("D:\"), not only "C:\"
+  const childPath = (name: string) => joinChildPath(currentPath, name, type)
 
   const openDirectory = (file: FileItem) => {
     if (file.type !== 'directory') return false
@@ -219,23 +220,11 @@ export function FileList({
     return null
   }
 
+  // Parent of the current folder; null at a drive or filesystem root
+  const parentDir = parentPath(currentPath, type)
+
   const goUp = () => {
-    const isWin = isWindows()
-    if (type === 'local' && isWin) {
-      const parts = currentPath.split('\\').filter(Boolean)
-      if (parts.length > 1) {
-        parts.pop()
-        onNavigate(parts.join('\\') + '\\')
-      } else {
-        onNavigate('C:\\')
-      }
-    } else {
-      const parts = currentPath.split('/').filter(Boolean)
-      if (parts.length > 0) {
-        parts.pop()
-        onNavigate(parts.length === 0 ? '/' : `/${parts.join('/')}`)
-      }
-    }
+    if (parentDir) onNavigate(parentDir)
   }
 
   // Row indexes change with the order, so carry the range anchor and keyboard focus over by name
@@ -435,14 +424,23 @@ export function FileList({
       ? Array.from(selected)
       : [file.name]
 
-    e.dataTransfer.setData('application/json', JSON.stringify({
+    e.dataTransfer.setData(FILE_LIST_DRAG_TYPE, JSON.stringify({
       type,
+      sessionId,
       fileNames: draggedFiles
     }))
-    e.dataTransfer.effectAllowed = 'copy'
+    e.dataTransfer.effectAllowed = 'copyMove'
+    folderDrop.startDrag(draggedFiles)
   }
 
   const handleDragOver = (e: React.DragEvent) => {
+    // Inside the same list only folder rows accept a drop (they stop propagation before this),
+    // and entries never cross into another session's panel (split panes show two at once)
+    const isFileListDrag = e.dataTransfer.types.includes(FILE_LIST_DRAG_TYPE)
+    if (isFileListDrag && (folderDrop.isDraggingWithinList() || !folderDrop.isDragFromThisSession())) {
+      setIsDragOver(false)
+      return
+    }
     e.preventDefault()
     e.stopPropagation()
     e.dataTransfer.dropEffect = 'copy'
@@ -461,8 +459,8 @@ export function FileList({
     setIsDragOver(false)
 
     try {
-      const data = JSON.parse(e.dataTransfer.getData('application/json'))
-      if (data.type !== type && data.fileNames?.length > 0 && onDrop) {
+      const data = JSON.parse(e.dataTransfer.getData(FILE_LIST_DRAG_TYPE))
+      if (data.type !== type && data.sessionId === sessionId && data.fileNames?.length > 0 && onDrop) {
         onDrop(data.fileNames)
       }
     } catch {
@@ -490,7 +488,13 @@ export function FileList({
       )}
       <FileListHeader type={type} sort={sort} onSort={handleSort} />
       {/* Double-click like every other folder row; a single click only focuses the list */}
-      <div className="file-item parent-dir" onClick={focusList} onDoubleClick={goUp} title="상위 폴더 (더블클릭)">
+      <div
+        className={`file-item parent-dir ${folderDrop.dropTargetKey === PARENT_ROW_KEY ? 'drop-target' : ''}`}
+        onClick={focusList}
+        onDoubleClick={goUp}
+        title="상위 폴더 (더블클릭)"
+        {...folderDrop.rowDropProps(PARENT_ROW_KEY, parentDir)}
+      >
         <RiArrowUpSFill size={16} />
         <span>..</span>
       </div>
@@ -510,12 +514,14 @@ export function FileList({
           <div
             key={file.name}
             ref={(el) => { itemRefs.current[index] = el }}
-            className={`file-item ${file.type === 'directory' ? 'is-directory' : 'is-file'} ${selected.has(file.name) ? 'selected' : ''} ${focusIndex === index ? 'focused' : ''} ${isRenaming ? 'is-editing' : ''}`}
+            className={`file-item ${file.type === 'directory' ? 'is-directory' : 'is-file'} ${selected.has(file.name) ? 'selected' : ''} ${focusIndex === index ? 'focused' : ''} ${isRenaming ? 'is-editing' : ''} ${folderDrop.dropTargetKey === file.name ? 'drop-target' : ''}`}
             onClick={(e) => handleClick(e, file, index)}
             onDoubleClick={() => handleDoubleClick(file)}
             onContextMenu={(e) => openContextMenu(e, file)}
             draggable={!isRenaming}
             onDragStart={(e) => handleDragStart(e, file)}
+            onDragEnd={folderDrop.endDrag}
+            {...(file.type === 'directory' ? folderDrop.rowDropProps(file.name, childPath(file.name), file.name) : {})}
           >
             {file.type === 'directory' ? <RiFolderFill size={16} className="folder-icon" /> : getFileIcon(file.name)}
             {isRenaming ? (
