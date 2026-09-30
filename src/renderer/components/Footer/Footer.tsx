@@ -1,6 +1,8 @@
 import { useTerminalStore } from '../../stores/terminalStore'
 import { RiWifiFill, RiWifiOffFill } from 'react-icons/ri'
 import { VersionInfo } from '../Update/UpdateNotification'
+import { ZoomStatus } from '../Zoom/ZoomStatus'
+import { ZoomHud } from '../Zoom/ZoomHud'
 
 export function Footer() {
   const { terminals } = useTerminalStore()
@@ -24,8 +26,10 @@ export function Footer() {
         </div>
       </div>
       <div className="footer-right">
+        <ZoomStatus />
         <VersionInfo />
       </div>
+      <ZoomHud />
     </footer>
   )
 }

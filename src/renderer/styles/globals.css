@@ -1270,10 +1270,17 @@ textarea {
 }
 
 .file-list {
+  /* Column widths shared by the file rows and the column headers (FileList.css) */
+  --sftp-col-owner: 88px;
+  --sftp-col-permissions: 88px;
+  --sftp-col-mtime: 100px;
+  --sftp-col-size: 72px;
   flex: 1;
   overflow-y: auto;
-  padding: 4px;
+  padding: 0 4px 4px;
   outline: none;
+  /* Rows scrolled into view (arrow keys, Home) stop below the sticky column header */
+  scroll-padding-top: 32px;
 }
 
 .file-list.drag-over {
@@ -1294,7 +1301,8 @@ textarea {
   background: var(--bg-primary, rgba(0, 0, 0, 0.3));
   position: sticky;
   top: 0;
-  z-index: 5;
+  /* Above the sticky column header (z-index 6) so it is not hidden when the list is scrolled */
+  z-index: 7;
 }
 
 .loading-spinner {
@@ -1390,7 +1398,7 @@ textarea {
   color: var(--text-muted);
   font-family: var(--font-mono);
   flex-shrink: 0;
-  width: 88px;
+  width: var(--sftp-col-permissions);
   white-space: nowrap;
   text-align: center;
   opacity: 0.7;
@@ -1400,7 +1408,7 @@ textarea {
   font-size: 13px;
   color: var(--text-muted);
   flex-shrink: 0;
-  width: 100px;
+  width: var(--sftp-col-mtime);
   white-space: nowrap;
   text-align: right;
   font-family: var(--font-mono);
@@ -1411,7 +1419,7 @@ textarea {
   font-size: 13px;
   color: var(--text-muted);
   flex-shrink: 0;
-  width: 72px;
+  width: var(--sftp-col-size);
   white-space: nowrap;
   text-align: right;
 }
@@ -5191,7 +5199,7 @@ body.resizing .split-pane-content * {
 /* SFTP remote list: owner column (group shown in the tooltip) */
 .file-owner {
   flex-shrink: 0;
-  width: 88px;
+  width: var(--sftp-col-owner);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5368,13 +5376,25 @@ body.resizing .split-pane-content * {
   display: none;
 }
 
+/* 12px --text-muted fell to ~3.4:1 contrast on some themes; keep Korean text at 13px+ in primary/secondary colors */
 .history-empty {
-  margin: 0;
   padding: 24px 16px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-muted);
   text-align: center;
+}
+
+.history-empty-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.history-empty-hint {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
 }
 
 .history-panel-footer {

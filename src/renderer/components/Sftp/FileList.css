@@ -64,3 +64,66 @@
   border: none;
   padding: 0;
 }
+
+/* Column headers: sticky inside the scrolling list so widths match the rows with or without a scrollbar.
+   Same horizontal padding / gap as .file-item; cell widths come from the --sftp-col-* variables on .file-list. */
+.file-list-header {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -4px 2px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.file-list-header-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.file-list-header-cell:hover,
+.file-list-header-cell.is-sorted {
+  color: var(--text-primary);
+}
+
+.file-list-header-cell:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.file-list-header-cell.is-sorted svg {
+  color: var(--accent);
+}
+
+/* Name header starts where the name text starts: after the 16px row icon + 8px gap */
+.file-list-header-cell.col-name {
+  flex: 1;
+  min-width: 0;
+  padding-left: 24px;
+}
+
+.file-list-header-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-list-header-cell.col-owner { width: var(--sftp-col-owner); }
+.file-list-header-cell.col-permissions { width: var(--sftp-col-permissions); justify-content: center; }
+.file-list-header-cell.col-mtime { width: var(--sftp-col-mtime); justify-content: flex-end; }
+.file-list-header-cell.col-size { width: var(--sftp-col-size); justify-content: flex-end; }

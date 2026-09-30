@@ -5,6 +5,7 @@ import { useCommandHistory, useFilteredHistory, formatHistoryTime } from '../../
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { copyToClipboard } from '../../lib/terminalClipboard'
 import { toast } from '../../stores/toastStore'
+import { CommandHistoryEmpty } from './CommandHistoryEmpty'
 
 interface CommandHistoryPanelProps {
   sessionId: string
@@ -30,12 +31,6 @@ export function CommandHistoryPanel({ sessionId, onInsert, onClose }: CommandHis
   const handleClear = () => {
     if (confirm(`이 연결의 명령어 기록 ${entries.length}개를 모두 삭제할까요?\n삭제한 기록은 되돌릴 수 없습니다.`)) clear()
   }
-
-  const emptyMessage = !isAvailable
-    ? '이 연결은 명령어 기록을 사용할 수 없습니다'
-    : entries.length === 0
-      ? '아직 기록된 명령어가 없습니다. 터미널에서 명령을 실행하면 여기에 쌓입니다'
-      : '일치하는 명령어가 없습니다'
 
   return (
     <motion.aside
@@ -96,7 +91,7 @@ export function CommandHistoryPanel({ sessionId, onInsert, onClose }: CommandHis
           ))}
         </ul>
       ) : (
-        <p className="history-empty">{emptyMessage}</p>
+        <CommandHistoryEmpty isAvailable={isAvailable} totalCount={entries.length} />
       )}
 
       <p className="history-panel-footer">클릭하면 입력만 됩니다 · 터미널에서 Ctrl+Shift+H 로 빠르게 검색</p>

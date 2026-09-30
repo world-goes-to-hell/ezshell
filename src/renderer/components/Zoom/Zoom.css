@@ -1,0 +1,115 @@
+/* Status bar zoom indicator */
+.zoom-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.zoom-status.changed {
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.zoom-status.changed:hover {
+  background: var(--bg-hover);
+}
+
+.zoom-status:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Transient panel shown while zooming */
+.zoom-hud {
+  position: fixed;
+  top: 48px;
+  left: 50%;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+  transform: translateX(-50%);
+  animation: zoom-hud-in 120ms ease-out;
+}
+
+@keyframes zoom-hud-in {
+  from { opacity: 0; transform: translate(-50%, -4px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zoom-hud {
+    animation: none;
+  }
+}
+
+.zoom-hud-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.zoom-hud-value {
+  min-width: 48px;
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.zoom-hud-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: 4px;
+}
+
+.zoom-hud-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.zoom-hud-actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.zoom-hud-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.zoom-hud-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.zoom-hud-actions .zoom-hud-reset:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}

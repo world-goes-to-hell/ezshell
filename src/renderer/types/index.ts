@@ -200,6 +200,8 @@ declare global {
       appZoomIn?: () => void
       appZoomOut?: () => void
       appZoomReset?: () => void
+      getAppZoomFactor?: () => number
+      setAppZoomFactor?: (factor: number) => void
     }
   }
 }

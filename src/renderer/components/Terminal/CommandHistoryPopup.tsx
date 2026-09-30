@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { RiHistoryLine } from 'react-icons/ri'
 import { useCommandHistory, useFilteredHistory, formatHistoryTime } from '../../hooks/useCommandHistory'
+import { CommandHistoryEmpty } from './CommandHistoryEmpty'
 
 interface CommandHistoryPopupProps {
   sessionId: string
@@ -49,12 +50,6 @@ export function CommandHistoryPopup({ sessionId, anchor, onInsert, onClose }: Co
   const width = Math.min(POPUP_MAX_WIDTH, Math.max(anchor.width - POPUP_MARGIN * 2, 280))
   const style = { top: anchor.top + POPUP_MARGIN, left: anchor.left + anchor.width / 2 - width / 2, width }
 
-  const emptyMessage = !isAvailable
-    ? '이 연결은 명령어 기록을 사용할 수 없습니다'
-    : entries.length === 0
-      ? '아직 기록된 명령어가 없습니다. 터미널에서 명령을 실행하면 여기에 쌓입니다'
-      : '일치하는 명령어가 없습니다'
-
   return createPortal(
     <>
       <div className="history-popup-backdrop" onMouseDown={onClose} />
@@ -92,7 +87,7 @@ export function CommandHistoryPopup({ sessionId, anchor, onInsert, onClose }: Co
             ))}
           </ul>
         ) : (
-          <p className="history-empty">{emptyMessage}</p>
+          <CommandHistoryEmpty isAvailable={isAvailable} totalCount={entries.length} />
         )}
       </div>
     </>,

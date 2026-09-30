@@ -11,6 +11,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   appZoomIn: () => webFrame.setZoomLevel(webFrame.getZoomLevel() + 0.5),
   appZoomOut: () => webFrame.setZoomLevel(webFrame.getZoomLevel() - 0.5),
   appZoomReset: () => webFrame.setZoomLevel(0),
+  getAppZoomFactor: () => webFrame.getZoomFactor(),
+  setAppZoomFactor: (factor) => {
+    // Chromium accepts 0.25-5; anything else is a renderer bug, not a zoom request
+    if (typeof factor !== 'number' || !Number.isFinite(factor) || factor < 0.25 || factor > 5) return
+    webFrame.setZoomFactor(factor)
+  },
 
   // SSH 연결
   sshConnect: (config) => ipcRenderer.invoke('ssh-connect', config),

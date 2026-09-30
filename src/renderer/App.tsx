@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { Footer } from './components/Footer/Footer'
+import { useAppZoom } from './hooks/useAppZoom'
 import { TitleBar } from './components/TitleBar/TitleBar'
 import { TerminalPanel } from './components/Terminal/TerminalPanel'
 import { SplitPaneTabBar } from './components/Terminal/SplitPaneTabBar'
@@ -334,20 +335,7 @@ function App() {
   }, [])
 
   // Ctrl + mouse wheel → app zoom (프로그램 전체 확대/축소)
-  useEffect(() => {
-    const handleWheel = (e: WheelEvent) => {
-      if (e.ctrlKey) {
-        e.preventDefault()
-        if (e.deltaY < 0) {
-          window.electronAPI.appZoomIn?.()
-        } else if (e.deltaY > 0) {
-          window.electronAPI.appZoomOut?.()
-        }
-      }
-    }
-    window.addEventListener('wheel', handleWheel, { passive: false })
-    return () => window.removeEventListener('wheel', handleWheel)
-  }, [])
+  useAppZoom()
 
   const handleUnlock = async () => {
     setIsLocked(false)

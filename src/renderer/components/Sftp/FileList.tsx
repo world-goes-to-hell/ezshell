@@ -1,12 +1,14 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { useSftpStore, FileItem } from '../../stores/sftpStore'
 import { useWheelRowScroll } from '../../hooks/useWheelRowScroll'
 import { useDirectoryHistory } from '../../hooks/useDirectoryHistory'
 import { resolveFileListShortcut, type FileListShortcut } from '../../lib/fileListShortcuts'
 import { validateNewName } from '../../lib/fileNameValidation'
 import { isWindowsPath, nextFolderName } from '../../lib/sftpFileOps'
+import { sortFileItems, nextSort, DEFAULT_SORT, type FileSort, type FileSortKey } from '../../lib/fileSort'
 import { RiFolderFill, RiArrowUpSFill } from 'react-icons/ri'
 import { InlineNameInput } from './InlineNameInput'
+import { FileListHeader } from './FileListHeader'
 import { getFileIcon } from './fileIcons'
 import './FileList.css'
 import {
@@ -56,10 +58,13 @@ const isWindows = () => {
 }
 
 export function FileList({
-  files, selected, onNavigate, currentPath, type, sessionId,
+  files: rawFiles, selected, onNavigate, currentPath, type, sessionId,
   onUpload, onDownload, onDelete, onRename, onCreateFolder, onFocusPath, onDrop, isLoading
 }: FileListProps) {
   const store = useSftpStore()
+  // Kept while the panel stays open (this component stays mounted across folder changes)
+  const [sort, setSort] = useState<FileSort>(DEFAULT_SORT)
+  const files = useMemo(() => sortFileItems(rawFiles, sort), [rawFiles, sort])
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, file: null })
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const fileListRef = useRef<HTMLDivElement>(null)
@@ -128,7 +133,8 @@ export function FileList({
     setLastSelectedIndex(index)
     setFocusIndex(index)
     itemRefs.current[index]?.scrollIntoView({ block: 'nearest' })
-  }, [files])
+    // New listing only: re-sorting keeps selection and is handled in handleSort
+  }, [rawFiles])
 
   // Navigating away abandons an unfinished rename / new folder
   useEffect(() => {
@@ -230,6 +236,18 @@ export function FileList({
         onNavigate(parts.length === 0 ? '/' : `/${parts.join('/')}`)
       }
     }
+  }
+
+  // Row indexes change with the order, so carry the range anchor and keyboard focus over by name
+  const handleSort = (key: FileSortKey) => {
+    const next = nextSort(sort, key)
+    const reordered = sortFileItems(rawFiles, next)
+    const indexIn = (index: number) => (index >= 0 && index < files.length
+      ? reordered.findIndex(f => f.name === files[index].name)
+      : -1)
+    setLastSelectedIndex(indexIn(lastSelectedIndex))
+    setSort(next)
+    setFocusIndex(indexIn(focusIndex))
   }
 
   const runShortcut = (shortcut: FileListShortcut) => {
@@ -470,7 +488,9 @@ export function FileList({
           <span>로딩 중...</span>
         </div>
       )}
-      <div className="file-item parent-dir" onClick={goUp}>
+      <FileListHeader type={type} sort={sort} onSort={handleSort} />
+      {/* Double-click like every other folder row; a single click only focuses the list */}
+      <div className="file-item parent-dir" onClick={focusList} onDoubleClick={goUp} title="상위 폴더 (더블클릭)">
         <RiArrowUpSFill size={16} />
         <span>..</span>
       </div>
@@ -508,13 +528,14 @@ export function FileList({
             ) : (
               <span className="file-name">{file.name}</span>
             )}
-            {type === 'remote' && file.owner && (
-              <span className="file-owner" title={`소유자: ${file.owner}${file.group ? `  그룹: ${file.group}` : ''}`}>
-                {file.owner}
+            {/* Always render the remote cells so rows stay aligned with the column headers */}
+            {type === 'remote' && (
+              <span className="file-owner" title={file.owner ? `소유자: ${file.owner}${file.group ? `  그룹: ${file.group}` : ''}` : undefined}>
+                {file.owner ?? ''}
               </span>
             )}
-            {type === 'remote' && file.permissions && (
-              <span className="file-permissions" title={`권한: ${file.permissions} (${formatPermissions(file.permissions)})`}>
+            {type === 'remote' && (
+              <span className="file-permissions" title={file.permissions ? `권한: ${file.permissions} (${formatPermissions(file.permissions)})` : undefined}>
                 {formatPermissions(file.permissions)}
               </span>
             )}
