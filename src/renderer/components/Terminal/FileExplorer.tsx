@@ -1,17 +1,16 @@
 import { useState, useEffect, useCallback } from 'react'
-import { RiFolderFill, RiFolderOpenFill, RiFileFill, RiArrowRightSLine, RiRefreshLine, RiHome4Fill, RiArrowUpLine, RiLinkUnlinkM, RiLinkM } from 'react-icons/ri'
+import { RiArrowRightSLine, RiRefreshLine, RiHome4Fill, RiArrowUpLine, RiLinkUnlinkM, RiLinkM } from 'react-icons/ri'
 import { motion, AnimatePresence } from 'framer-motion'
 import { collapseVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { useTerminalStore } from '../../stores/terminalStore'
+import { toFileNodes, type FileNode } from '../../lib/fileExplorerNodes'
+import { FileExplorerIcon } from './FileExplorerIcon'
 
-interface FileNode {
-  name: string
-  path: string
-  type: 'file' | 'directory'
-  children?: FileNode[]
-  isLoaded?: boolean
-  isExpanded?: boolean
+function nodeTooltip(node: FileNode): string {
+  if (!node.isSymlink) return node.path
+  const target = node.linkTarget ?? '(대상을 읽을 수 없음)'
+  return `${node.path} → ${target}${node.isBrokenLink ? ' (깨진 링크)' : ''}`
 }
 
 interface FileExplorerProps {
@@ -37,21 +36,7 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
   const loadDirectory = useCallback(async (path: string): Promise<FileNode[]> => {
     try {
       const rawFiles = await window.electronAPI.sftpList(sessionId, path)
-      return (rawFiles || [])
-        .filter((f: any) => f.name !== '.' && f.name !== '..')
-        .map((f: any) => ({
-          name: f.name,
-          path: path === '/' ? `/${f.name}` : `${path}/${f.name}`,
-          type: f.isDirectory ? 'directory' : 'file',
-          children: f.isDirectory ? [] : undefined,
-          isLoaded: false,
-          isExpanded: false
-        }))
-        .sort((a: FileNode, b: FileNode) => {
-          // Directories first, then alphabetically
-          if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
-          return a.name.localeCompare(b.name)
-        })
+      return toFileNodes(rawFiles || [], path)
     } catch (error) {
       console.error('Failed to load directory:', error)
       return []
@@ -168,33 +153,33 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
     return (
       <div key={node.path}>
         <motion.div
-          className="file-explorer-item"
+          className={`file-explorer-item ${node.isSymlink ? 'is-symlink' : ''} ${node.isBrokenLink ? 'is-broken-link' : ''}`}
           style={{ paddingLeft }}
           onClick={() => toggleNode(node, path)}
-          title={node.path}
+          title={nodeTooltip(node)}
           whileHover={reducedMotion ? undefined : { backgroundColor: 'var(--bg-hover)' }}
           transition={{ duration: 0.15 }}
         >
           {isDir ? (
-            <>
-              <motion.span
-                className="expand-icon"
-                animate={{ rotate: node.isExpanded ? 90 : 0 }}
-                transition={reducedMotion ? { duration: 0 } : { duration: 0.15 }}
-              >
-                <RiArrowRightSLine size={16} />
-              </motion.span>
-              {node.isExpanded ? <RiFolderOpenFill size={16} className="folder-icon" /> : <RiFolderFill size={16} className="folder-icon" />}
-            </>
+            <motion.span
+              className="expand-icon"
+              animate={{ rotate: node.isExpanded ? 90 : 0 }}
+              transition={reducedMotion ? { duration: 0 } : { duration: 0.15 }}
+            >
+              <RiArrowRightSLine size={16} />
+            </motion.span>
           ) : (
-            <>
-              <span className="expand-icon" style={{ visibility: 'hidden' }}>
-                <RiArrowRightSLine size={16} />
-              </span>
-              <RiFileFill size={16} className="file-icon" />
-            </>
+            <span className="expand-icon" style={{ visibility: 'hidden' }}>
+              <RiArrowRightSLine size={16} />
+            </span>
           )}
-          <span className="file-explorer-name">{node.name}</span>
+          <FileExplorerIcon node={node} />
+          <span className="file-explorer-name">
+            {node.name}
+            {node.isSymlink && node.linkTarget && (
+              <span className="file-explorer-link-target"> → {node.linkTarget}</span>
+            )}
+          </span>
         </motion.div>
         <AnimatePresence initial={false}>
           {isDir && node.isExpanded && node.children && (

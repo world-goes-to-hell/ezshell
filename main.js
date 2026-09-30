@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { Client } = require('ssh2');
@@ -6,6 +6,9 @@ const net = require('net');
 const { autoUpdater } = require('electron-updater');
 const cryptoUtil = require('./src/crypto.js');
 const commandHistory = require('./src/commandHistory.js');
+const { testSshConnection } = require('./src/sshConnectionTest.js');
+const localFileOps = require('./src/localFileOps.js');
+const sftpSymlinks = require('./src/sftpSymlinks.js');
 
 let mainWindow;
 
@@ -1054,6 +1057,16 @@ async function reconnectSession(sessionId) {
   });
 }
 
+// SSH 연결 테스트 (세션 모달): 인증까지만 확인하고 바로 연결을 닫는다
+ipcMain.handle('ssh-test-connection', async (event, config) => {
+  try {
+    return await testSshConnection(config);
+  } catch (err) {
+    console.error('SSH connection test failed unexpectedly:', err);
+    return { success: false, stage: 'target', error: '연결 테스트 중 오류가 발생했습니다.', detail: err.message };
+  }
+});
+
 // SSH 연결
 ipcMain.handle('ssh-connect', async (event, config) => {
   return new Promise((resolve, reject) => {
@@ -1419,10 +1432,17 @@ ipcMain.handle('ssh-cancel-reconnect', (event, { sessionId }) => {
 
 // ==================== 자동 업데이트 API ====================
 
+// Returns the outcome itself, not only through 'update-status' events: electron-updater sends no
+// event at all when it skips the check (unpackaged dev app), so the renderer would wait forever.
 ipcMain.handle('check-for-updates', async () => {
   try {
     const result = await autoUpdater.checkForUpdates();
-    return { success: true, version: result?.updateInfo?.version };
+    if (!result) return { success: true, status: 'unsupported' };
+    return {
+      success: true,
+      status: result.isUpdateAvailable ? 'available' : 'not-available',
+      version: result.updateInfo?.version
+    };
   } catch (err) {
     return { success: false, error: err.message };
   }
@@ -1793,7 +1813,7 @@ ipcMain.handle('sftp-list', async (event, { sessionId, remotePath }) => {
     throw new Error('SFTP 세션이 없습니다.');
   }
 
-  return new Promise((resolve, reject) => {
+  const listing = await new Promise((resolve, reject) => {
     sftp.readdir(remotePath, (err, list) => {
       if (err) {
         // Permission denied 에러를 더 명확하게 전달
@@ -1810,8 +1830,11 @@ ipcMain.handle('sftp-list', async (event, { sessionId, remotePath }) => {
         return {
         name: item.filename,
         size: item.attrs.size,
+        // readdir attrs describe the link itself: a link to a directory has isDirectory false.
+        // Link details are added below without changing isDirectory, which delete/rename rely on.
         isDirectory: item.attrs.isDirectory(),
         isFile: item.attrs.isFile(),
+        isSymlink: item.attrs.isSymbolicLink(),
         mode: item.attrs.mode,
         mtime: item.attrs.mtime * 1000,
         permissions: (item.attrs.mode & 0o777).toString(8).padStart(3, '0'),
@@ -1827,6 +1850,11 @@ ipcMain.handle('sftp-list', async (event, { sessionId, remotePath }) => {
 
       resolve(files);
     });
+  });
+
+  return sftpSymlinks.resolveSymlinks(remotePath, listing, {
+    stat: (p) => new Promise((resolve, reject) => sftp.stat(p, (err, stats) => (err ? reject(err) : resolve(stats)))),
+    readlink: (p) => new Promise((resolve, reject) => sftp.readlink(p, (err, target) => (err ? reject(err) : resolve(target))))
   });
 });
 
@@ -2034,6 +2062,12 @@ ipcMain.handle('local-list', async (event, { dirPath }) => {
     throw err;
   }
 });
+
+// 로컬 이름 변경 / 폴더 생성 / 휴지통 이동 (SFTP 패널 로컬 목록)
+ipcMain.handle('local-rename', (event, { oldPath, newPath }) => localFileOps.renameLocal(oldPath, newPath));
+ipcMain.handle('local-mkdir', (event, { dirPath }) => localFileOps.mkdirLocal(dirPath));
+ipcMain.handle('local-trash', (event, { paths }) =>
+  localFileOps.trashLocal(Array.isArray(paths) ? paths : [], (target) => shell.trashItem(target)));
 
 // 로컬 폴더 선택 다이얼로그
 ipcMain.handle('select-local-folder', async () => {

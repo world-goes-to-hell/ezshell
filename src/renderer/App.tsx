@@ -9,6 +9,9 @@ import { SftpPanel } from './components/Sftp/SftpPanel'
 import { SftpWindow } from './components/Sftp/SftpWindow'
 import { ConnectModal, ConnectionConfig } from './components/Modal/ConnectModal'
 import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/QuickConnectModal'
+import { SessionPickerModal } from './components/Modal/SessionPickerModal'
+import { NewTabMenu } from './components/Terminal/NewTabMenu'
+import { getDuplicateConfig } from './lib/duplicateConnection'
 import { SettingsModal } from './components/Settings/SettingsModal'
 import { WelcomeScreen } from './components/MainContent/WelcomeScreen'
 import { LockScreen } from './components/LockScreen/LockScreen'
@@ -26,7 +29,7 @@ import { useSftpStore } from './stores/sftpStore'
 import { useThemeStore } from './stores/themeStore'
 import { useCommandPaletteStore } from './stores/commandPaletteStore'
 import { useUIStore } from './stores/uiStore'
-import { useSSH } from './hooks/useSSH'
+import { useSSH, type SSHConnectConfig } from './hooks/useSSH'
 import { toSSHConnectConfig } from './lib/sshConnectConfig'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -91,6 +94,7 @@ function App() {
   }
   const [connectModalOpen, setConnectModalOpen] = useState(false)
   const [quickConnectModalOpen, setQuickConnectModalOpen] = useState(false)
+  const [sessionPickerOpen, setSessionPickerOpen] = useState(false)
   const [settingsModalOpen, setSettingsModalOpen] = useState(false)
   const [snippetManagerOpen, setSnippetManagerOpen] = useState(false)
   const [statsDashboardOpen, setStatsDashboardOpen] = useState(false)
@@ -114,6 +118,8 @@ function App() {
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null)
   const [dropZone, setDropZone] = useState<'left' | 'right' | 'top' | 'bottom' | 'popout' | null>(null)
   const terminalAreaRef = useRef<HTMLDivElement>(null)
+  // Connect configs of tabs popped out to their own window, restored when they merge back
+  const detachedConfigsRef = useRef(new Map<string, SSHConnectConfig>())
   const [splitPaneDraggingTabId, setSplitPaneDraggingTabId] = useState<string | null>(null)
 
   // Context menu state
@@ -234,13 +240,17 @@ function App() {
     // Listen for terminal merge events (when popped-out terminal merges back)
     window.electronAPI.onTerminalMerge((data: { sessionId: string; title: string; host: string; username: string }) => {
       const { addTerminal, setActiveTerminal } = useTerminalStore.getState()
+      // Read without deleting: this effect has no cleanup, so StrictMode registers the listener twice
+      // and both calls must see the config. The entry is dropped when the tab is closed.
+      const connectConfig = detachedConfigsRef.current.get(data.sessionId)
       // The SSH connection lives in the main process, so the merged session is still connected
       addTerminal(data.sessionId, {
         id: data.sessionId,
         host: data.host,
         username: data.username,
         title: data.title,
-        connected: true
+        connected: true,
+        connectConfig
       })
       setActiveTerminal(data.sessionId)
     })
@@ -487,7 +497,6 @@ function App() {
       passphrase: config.passphrase,
       folderId: config.folderId,
       icon: config.icon,
-      tags: config.tags,
       backgroundColor: config.backgroundColor,
       connectTimeout: config.connectTimeout,
       keepaliveInterval: config.keepaliveInterval,
@@ -573,6 +582,16 @@ function App() {
     setConnectModalOpen(true)
   }
 
+  // Open another tab to the same server as `terminalId`, reusing the config it connected with
+  const handleDuplicateTab = async (terminalId: string | null) => {
+    const config = getDuplicateConfig(terminalId ? terminals.get(terminalId) : null)
+    if (!config) {
+      toast.error('복제할 수 없음', '이 탭의 접속 정보를 찾을 수 없습니다')
+      return
+    }
+    await connect(config)
+  }
+
   const handleOpenQuickConnect = () => {
     setQuickConnectModalOpen(true)
   }
@@ -588,6 +607,7 @@ function App() {
   }
 
   const handleCloseTerminal = (sessionId: string) => {
+    detachedConfigsRef.current.delete(sessionId)
     disconnect(sessionId)
   }
 
@@ -599,6 +619,11 @@ function App() {
 
   const terminalArray = Array.from(terminals.entries())
   const hasTerminals = terminalArray.length > 0
+
+  const activeTerminal = activeTerminalId ? terminals.get(activeTerminalId) : undefined
+  const activeDuplicateLabel = getDuplicateConfig(activeTerminal)
+    ? activeTerminal?.title || `${activeTerminal?.username}@${activeTerminal?.host}`
+    : null
 
   // Compute active session IDs (connected terminals)
   const activeSessionIds = new Set(
@@ -624,6 +649,7 @@ function App() {
     // Check if dropped outside window (popout)
     if (dropZone === 'popout' && sessionId && terminal) {
       const title = terminal.title || `${terminal.username}@${terminal.host}`
+      if (terminal.connectConfig) detachedConfigsRef.current.set(sessionId, terminal.connectConfig)
       // Remove terminal from main window first (this unregisters the SSH data handler)
       removeTerminal(sessionId)
       // Open new window - it will register its own handler
@@ -753,8 +779,7 @@ function App() {
     if (contextMenuTabId) {
       const terminal = terminals.get(contextMenuTabId)
       if (terminal) {
-        // Trigger new connection with same config
-        handleNewConnection()
+        void handleDuplicateTab(contextMenuTabId)
       }
     }
   }
@@ -880,12 +905,12 @@ function App() {
                       </motion.div>
                     ))}
                   </AnimatePresence>
-                  <motion.button
-                    className="new-tab-btn"
-                    onClick={handleNewConnection}
-                    whileHover={reducedMotion ? undefined : { scale: 1.05 }}
-                    whileTap={reducedMotion ? undefined : { scale: 0.95 }}
-                  >+</motion.button>
+                  <NewTabMenu
+                    duplicateLabel={activeDuplicateLabel}
+                    onDuplicate={() => void handleDuplicateTab(activeTerminalId)}
+                    onPickSession={() => setSessionPickerOpen(true)}
+                    onNewSession={handleNewConnection}
+                  />
                 </div>
               )}
               <div
@@ -1101,6 +1126,12 @@ function App() {
         editSession={editSession}
         duplicateFrom={duplicateSource}
         defaultFolderId={defaultFolderId}
+      />
+
+      <SessionPickerModal
+        open={sessionPickerOpen}
+        onOpenChange={setSessionPickerOpen}
+        onSelect={handleQuickConnect}
       />
 
       <QuickConnectModal

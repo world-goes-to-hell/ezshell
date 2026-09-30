@@ -72,6 +72,14 @@ const defaultShortcuts: Shortcut[] = [
     category: 'general',
     action: 'toggleZenMode'
   },
+  {
+    id: 'toggle-sidebar',
+    // Ctrl+B is the tmux prefix, so it must reach the terminal
+    keys: ['Ctrl', 'Shift', 'B'],
+    description: 'Toggle Sidebar',
+    category: 'general',
+    action: 'toggleSidebar'
+  },
 
   // Terminal
   {

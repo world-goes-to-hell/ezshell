@@ -228,10 +228,6 @@ textarea {
   /* height determined by flex parent's align-items: stretch (default) */
 }
 
-.sidebar.collapsed {
-  width: 48px;
-}
-
 .sidebar-header {
   display: flex;
   justify-content: space-between;
@@ -448,146 +444,6 @@ textarea {
   font-size: 14px;
   flex: 1;
   min-width: 0;
-}
-
-.session-tags {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  margin-left: auto;
-}
-
-/* Tag Filter Bar */
-.tag-filter-bar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  margin-bottom: 4px;
-  border-bottom: 1px solid var(--border);
-}
-
-.tag-filter-toggle {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.tag-filter-toggle:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-  border-color: var(--accent);
-}
-
-.tag-filter-toggle.active {
-  background: var(--accent-alpha);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.tag-filter-toggle .active-filter-count {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  width: 14px;
-  height: 14px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 11px;
-  font-weight: 600;
-  border-radius: var(--radius-full);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.tag-filter-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  margin-top: 4px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  z-index: 100;
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-.tag-filter-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.tag-filter-header .clear-filter {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.tag-filter-header .clear-filter:hover {
-  background: var(--bg-hover);
-  color: var(--accent);
-}
-
-.tag-filter-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 4px;
-}
-
-.tag-filter-item {
-  display: flex;
-  align-items: center;
-  padding: 6px 8px;
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  width: 100%;
-  text-align: left;
-}
-
-.tag-filter-item:hover {
-  background: var(--bg-hover);
-}
-
-.tag-filter-item.active {
-  background: var(--accent-alpha);
-}
-
-.active-tag-filter {
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 
 /* Main Content */
@@ -2294,103 +2150,6 @@ textarea {
   text-transform: uppercase;
 }
 
-/* Sidebar Compact Mode */
-.sidebar.compact {
-  width: 72px;
-  padding: 8px;
-}
-
-.sidebar.compact .sidebar-header {
-  justify-content: center;
-  padding: 12px 8px;
-}
-
-.sidebar.compact .sidebar-header h2 {
-  display: none;
-}
-
-.sidebar.compact .sidebar-actions {
-  justify-content: center;
-  padding: 8px;
-}
-
-.sidebar.compact .btn-new-connection-compact {
-  width: 48px;
-  height: 48px;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  color: var(--on-accent);
-  border: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all var(--transition-fast);
-}
-
-.sidebar.compact .btn-new-connection-compact:hover {
-  background: var(--accent-hover);
-  transform: scale(1.05);
-}
-
-.sidebar.compact .session-list {
-  padding: 4px;
-}
-
-.sidebar.compact .session-folder {
-  margin-bottom: 4px;
-}
-
-.sidebar.compact .folder-header {
-  display: none;
-}
-
-.sidebar.compact .folder-contents {
-  padding-left: 0;
-}
-
-.sidebar.compact .session-item {
-  width: 48px;
-  height: 48px;
-  border-radius: var(--radius-full);
-  padding: 0;
-  justify-content: center;
-  margin: 0 auto 8px;
-  position: relative;
-  background: var(--bg-hover);
-}
-
-.sidebar.compact .session-item::before {
-  content: '';
-  position: absolute;
-  left: -8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 4px;
-  height: 0;
-  background: white;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  transition: height var(--transition-base);
-}
-
-.sidebar.compact .session-item:hover {
-  background: var(--accent);
-  border-radius: var(--radius-lg);
-  color: var(--on-accent);
-}
-
-.sidebar.compact .session-item:hover::before {
-  height: 20px;
-}
-
-.sidebar.compact .session-item.active::before {
-  height: 40px;
-}
-
-.sidebar.compact .session-name {
-  display: none;
-}
-
 /* Footer */
 .app-footer {
   display: flex;
@@ -2538,6 +2297,16 @@ textarea {
 .folder-header.drop-target {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
   border-radius: var(--radius-md);
+}
+
+/* Reorder: a line on the edge where the dragged session will land. An inset shadow keeps
+   the row height unchanged, so the list does not jump while dragging. */
+.session-item.drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.session-item.drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .root-sessions.drop-target {
@@ -2950,6 +2719,41 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Symlinks: outlined icon + link badge, italic name, dimmed "→ target" */
+.file-explorer-link-icon {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.file-explorer-link-badge {
+  position: absolute;
+  right: -4px;
+  bottom: -3px;
+  padding: 1px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  color: var(--accent);
+}
+
+.file-explorer-item.is-symlink .file-explorer-name {
+  font-style: italic;
+}
+
+.file-explorer-link-target {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.file-explorer-item.is-broken-link .file-explorer-name,
+.file-explorer-item.is-broken-link .file-explorer-link-icon svg:not(.file-explorer-link-badge) {
+  color: var(--text-muted);
+}
+
+.file-explorer-item.is-broken-link .file-explorer-link-badge {
+  color: var(--error);
 }
 
 /* ===== Terminal Drag and Drop ===== */

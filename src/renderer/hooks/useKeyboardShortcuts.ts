@@ -15,6 +15,7 @@ export type ShortcutAction =
   | 'clearTerminal'
   | 'toggleSftp'
   | 'toggleZenMode'
+  | 'toggleSidebar'
   | 'nextTab'
   | 'prevTab'
   | 'jumpToTab1'

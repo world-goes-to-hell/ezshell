@@ -1,28 +1,15 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSessionStore, Folder, Session } from '../../stores/sessionStore'
-import { RiServerFill, RiFolderFill, RiArrowDownSFill, RiArrowRightSFill, RiDatabase2Fill, RiCloudFill, RiGlobalFill, RiHomeFill, RiComputerFill, RiHardDriveFill, RiCpuFill, RiBaseStationFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiFilterLine, RiCloseLine, RiPaletteLine, RiAddLine, RiFileCopyLine } from 'react-icons/ri'
-import { SessionIcon } from '../Modal/ConnectModal'
+import { RiFolderFill, RiArrowDownSFill, RiArrowRightSFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiCloseLine, RiPaletteLine, RiAddLine, RiFileCopyLine, RiServerLine } from 'react-icons/ri'
 import { collapseVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
-import { StatusIndicator } from '../Animation'
-import { TagBadge } from '../common/TagBadge'
-import { SessionTooltip } from './SessionTooltip'
 import { MoveToFolderSubmenu } from './MoveToFolderSubmenu'
+import { SessionItem } from './SessionItem'
+import { CompactFolderMarker } from './CompactFolderMarker'
+import { getDropPosition, type DropPosition } from '../../lib/sessionOrder'
 import { getFolderPath } from '../../lib/folderPath'
 import { SESSION_COLORS } from '../../lib/sessionColors'
-
-const ICON_MAP: Record<SessionIcon, typeof RiServerFill> = {
-  'server': RiServerFill,
-  'database': RiDatabase2Fill,
-  'cloud': RiCloudFill,
-  'globe': RiGlobalFill,
-  'home': RiHomeFill,
-  'monitor': RiComputerFill,
-  'hard-drive': RiHardDriveFill,
-  'cpu': RiCpuFill,
-  'radio': RiBaseStationFill,
-}
 
 interface ContextMenuState {
   visible: boolean
@@ -47,9 +34,8 @@ interface SessionListProps {
 }
 
 export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession, onAddSession, isCompact = false, activeSessionIds = new Set() }: SessionListProps) {
-  const { sessions, folders, expandedFolders, toggleFolder, addFolder, updateFolder, removeFolder, removeSession, moveSessionToFolder, updateSession, saveToBackend, availableTags, activeTagFilter, filterByTag } = useSessionStore()
+  const { sessions, folders, expandedFolders, toggleFolder, addFolder, updateFolder, removeFolder, removeSession, moveSessionToFolder, reorderSession, updateSession, saveToBackend } = useSessionStore()
   const reducedMotion = useReducedMotion()
-  const [showTagFilter, setShowTagFilter] = useState(false)
   const [colorPickerFolderId, setColorPickerFolderId] = useState<string | null>(null)
   const [colorPickerSessionId, setColorPickerSessionId] = useState<string | null>(null)
 
@@ -68,6 +54,8 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
   // Drag state
   const [dragState, setDragState] = useState<DragState>({ type: null, id: null })
   const [dropTargetId, setDropTargetId] = useState<string | null>(null)
+  // Reordering: the session under the pointer and which half of it
+  const [sessionDropTarget, setSessionDropTarget] = useState<{ id: string; position: DropPosition } | null>(null)
 
   // Helper function to get folder's effective color (traverses parent chain)
   const getFolderEffectiveColor = (folderId: string): string | undefined => {
@@ -117,7 +105,48 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
   const handleDragEnd = () => {
     setDragState({ type: null, id: null })
     setDropTargetId(null)
+    setSessionDropTarget(null)
   }
+
+  // Session dropped on a session: place it before/after that one. Folder drags fall through
+  // to the folder and root handlers underneath.
+  const handleSessionDragOver = (e: React.DragEvent, targetId: string) => {
+    if (dragState.type !== 'session' || !dragState.id) return
+    e.stopPropagation()
+    if (dragState.id === targetId) {
+      setSessionDropTarget(null)
+      return
+    }
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const position = getDropPosition(e.currentTarget.getBoundingClientRect(), e.clientY)
+    setDropTargetId(null)
+    setSessionDropTarget(prev => (prev?.id === targetId && prev.position === position ? prev : { id: targetId, position }))
+  }
+
+  const handleSessionDragLeave = (e: React.DragEvent, targetId: string) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    setSessionDropTarget(prev => (prev?.id === targetId ? null : prev))
+  }
+
+  const handleSessionDrop = (e: React.DragEvent, targetId: string) => {
+    if (dragState.type !== 'session' || !dragState.id) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (dragState.id !== targetId) {
+      reorderSession(dragState.id, targetId, getDropPosition(e.currentTarget.getBoundingClientRect(), e.clientY))
+      saveToBackend()
+    }
+    setSessionDropTarget(null)
+    setDropTargetId(null)
+  }
+
+  const sessionItemDropProps = (sessionId: string) => ({
+    onItemDragOver: handleSessionDragOver,
+    onItemDragLeave: handleSessionDragLeave,
+    onItemDrop: handleSessionDrop,
+    dropIndicator: sessionDropTarget?.id === sessionId ? sessionDropTarget.position : null
+  })
 
   const handleFolderDragOver = (e: React.DragEvent, targetFolderId: string) => {
     e.preventDefault()
@@ -368,20 +397,14 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
     return folders.filter(f => f.parentId === parentId)
   }
 
-  // Filter sessions by active tag
-  const filterSessionsByTag = (sessionList: Session[]) => {
-    if (!activeTagFilter) return sessionList
-    return sessionList.filter(s => s.tags?.includes(activeTagFilter))
-  }
-
   // Get sessions for a folder
   const getSessionsInFolder = (folderId: string) => {
-    return filterSessionsByTag(sessions.filter(s => s.folderId === folderId))
+    return sessions.filter(s => s.folderId === folderId)
   }
 
   // Get root sessions (no folder)
   const getRootSessions = () => {
-    return filterSessionsByTag(sessions.filter(s => !s.folderId))
+    return sessions.filter(s => !s.folderId)
   }
 
   // Get current session's folder for context menu
@@ -401,8 +424,42 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
     const isDropTarget = dropTargetId === folder.id
     const folderEffectiveColor = getFolderEffectiveColor(folder.id)
 
+    const sessionItems = folderSessions.map(session => (
+      <SessionItem
+        key={session.id}
+        session={session}
+        onConnect={onQuickConnect}
+        onContextMenu={handleSessionContextMenu}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        isDragging={dragState.type === 'session' && dragState.id === session.id}
+        isCompact={isCompact}
+        reducedMotion={reducedMotion}
+        isActive={activeSessionIds.has(session.id)}
+        effectiveColor={getEffectiveColor(session)}
+        {...sessionItemDropProps(session.id)}
+      />
+    ))
+
     return (
       <div key={folder.id} className="session-folder">
+        {isCompact && (
+          <CompactFolderMarker
+            folder={folder}
+            depth={depth}
+            parentPath={folder.parentId ? getFolderPath(folders, folder.parentId) : undefined}
+            subfolderCount={childFolders.length}
+            isExpanded={isExpanded}
+            sessionCount={folderSessions.length}
+            color={folderEffectiveColor}
+            isDropTarget={isDropTarget}
+            onToggle={() => toggleFolder(folder.id)}
+            onContextMenu={(e) => handleFolderContextMenu(e, folder.id)}
+            onDragOver={(e) => handleFolderDragOver(e, folder.id)}
+            onDragLeave={handleFolderDragLeave}
+            onDrop={(e) => handleFolderDrop(e, folder.id)}
+          />
+        )}
         {!isCompact && (
           <div
             className={`folder-header ${isDragging ? 'dragging' : ''} ${isDropTarget ? 'drop-target' : ''}`}
@@ -441,7 +498,7 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
           </div>
         )}
         <AnimatePresence initial={false}>
-          {(isExpanded || isCompact) && (
+          {isExpanded && (
             <motion.div
               className={`folder-contents ${isDropTarget ? 'drop-target' : ''}`}
               variants={reducedMotion ? undefined : collapseVariants}
@@ -451,23 +508,12 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
               onDragOver={(e) => handleFolderDragOver(e, folder.id)}
               onDrop={(e) => handleFolderDrop(e, folder.id)}
             >
+              {/* Icon-only mode has no indentation, so a folder's own sessions go right under its
+                  marker; otherwise they would read as part of the last subfolder */}
+              {isCompact && sessionItems}
               {childFolders.map(child => renderFolder(child, depth + 1))}
-              {folderSessions.map(session => (
-                <SessionItem
-                  key={session.id}
-                  session={session}
-                  onConnect={onQuickConnect}
-                  onContextMenu={handleSessionContextMenu}
-                  onDragStart={handleDragStart}
-                  onDragEnd={handleDragEnd}
-                  isDragging={dragState.type === 'session' && dragState.id === session.id}
-                  isCompact={isCompact}
-                  reducedMotion={reducedMotion}
-                  isActive={activeSessionIds.has(session.id)}
-                  effectiveColor={getEffectiveColor(session)}
-                />
-              ))}
-              {childFolders.length === 0 && folderSessions.length === 0 && (
+              {!isCompact && sessionItems}
+              {!isCompact && childFolders.length === 0 && folderSessions.length === 0 && (
                 <div className="folder-empty-drop-zone">폴더가 비어 있습니다</div>
               )}
             </motion.div>
@@ -480,7 +526,11 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
   if (sessions.length === 0 && folders.length === 0) {
     return (
       <div className="session-list-empty">
-        {!isCompact && (
+        {isCompact ? (
+          <span className="session-list-empty-icon" title="저장된 연결이 없습니다" aria-label="저장된 연결이 없습니다">
+            <RiServerLine size={20} />
+          </span>
+        ) : (
           <>
             <p>저장된 연결이 없습니다</p>
             <p className="text-muted">새 연결을 추가해주세요</p>
@@ -493,8 +543,6 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
   const rootFolders = getChildFolders(undefined)
   const rootSessions = getRootSessions()
   const isRootDropTarget = dropTargetId === 'root'
-
-  const activeTag = availableTags.find(t => t.id === activeTagFilter)
 
   return (
     <div
@@ -517,55 +565,6 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
       }}
       onDrop={handleRootDrop}
     >
-      {!isCompact && (
-        <div className="tag-filter-bar">
-          <button
-            className={`tag-filter-toggle ${showTagFilter ? 'active' : ''}`}
-            onClick={() => setShowTagFilter(!showTagFilter)}
-            title="Filter by tag"
-          >
-            <RiFilterLine size={16} />
-            {activeTag && <span className="active-filter-count">1</span>}
-          </button>
-          {showTagFilter && (
-            <div className="tag-filter-dropdown">
-              <div className="tag-filter-header">
-                <span>Filter by tag</span>
-                {activeTagFilter && (
-                  <button
-                    className="clear-filter"
-                    onClick={() => filterByTag(null)}
-                    title="Clear filter"
-                  >
-                    <RiCloseLine size={16} />
-                  </button>
-                )}
-              </div>
-              <div className="tag-filter-list">
-                {availableTags.map(tag => (
-                  <button
-                    key={tag.id}
-                    className={`tag-filter-item ${activeTagFilter === tag.id ? 'active' : ''}`}
-                    onClick={() => filterByTag(tag.id === activeTagFilter ? null : tag.id)}
-                  >
-                    <TagBadge name={tag.name} color={tag.color} size="sm" />
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          {activeTag && (
-            <div className="active-tag-filter">
-              <TagBadge
-                name={activeTag.name}
-                color={activeTag.color}
-                size="sm"
-                onRemove={() => filterByTag(null)}
-              />
-            </div>
-          )}
-        </div>
-      )}
       {rootFolders.map(folder => renderFolder(folder))}
       <div className={`root-sessions ${isRootDropTarget ? 'drop-target' : ''}`}>
         {rootSessions.map(session => (
@@ -581,6 +580,7 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
             reducedMotion={reducedMotion}
             isActive={activeSessionIds.has(session.id)}
             effectiveColor={getEffectiveColor(session)}
+            {...sessionItemDropProps(session.id)}
           />
         ))}
       </div>
@@ -728,80 +728,5 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
         </div>
       )}
     </div>
-  )
-}
-
-interface SessionItemProps {
-  session: Session
-  onConnect: (session: Session) => void
-  onContextMenu: (e: React.MouseEvent, sessionId: string) => void
-  onDragStart: (e: React.DragEvent, type: 'session' | 'folder', id: string) => void
-  onDragEnd: () => void
-  isDragging: boolean
-  isCompact: boolean
-  reducedMotion: boolean
-  isActive?: boolean
-  effectiveColor?: string
-}
-
-function SessionItem({ session, onConnect, onContextMenu, onDragStart, onDragEnd, isDragging, isCompact, reducedMotion, isActive = false, effectiveColor }: SessionItemProps) {
-  const iconId = session.icon as SessionIcon || 'server'
-  const IconComponent = ICON_MAP[iconId] || RiServerFill
-  const displayName = session.name || session.host
-  const { availableTags } = useSessionStore()
-
-  // Determine the highlight color: use session color if available, otherwise use CSS default
-  const highlightColor = effectiveColor
-  const itemStyle: React.CSSProperties = {}
-
-  if (highlightColor) {
-    itemStyle.borderLeft = `3px solid ${highlightColor}`
-    itemStyle.background = `${highlightColor}20`
-  }
-
-  if (isActive && highlightColor) {
-    // Override active state with session color
-    itemStyle.background = `${highlightColor}30`
-    itemStyle.borderLeft = `3px solid ${highlightColor}`
-  }
-
-  return (
-    <SessionTooltip session={session} isActive={isActive} enabled={isCompact}>
-      <motion.div
-        className={`session-item ${isDragging ? 'dragging' : ''} ${isActive ? 'active' : ''} ${isActive && highlightColor ? 'active-custom-color' : ''}`}
-        role="treeitem"
-        aria-label={`SSH session: ${displayName}`}
-        aria-selected={isActive}
-        tabIndex={0}
-        onDoubleClick={() => onConnect(session)}
-        onContextMenu={(e) => onContextMenu(e, session.id)}
-        draggable
-        // motion.div treats onDragStart/onDragEnd as its own gesture props
-        // and never forwards them to the DOM, so use the capture variants
-        onDragStartCapture={(e) => onDragStart(e, 'session', session.id)}
-        onDragEndCapture={onDragEnd}
-        whileHover={reducedMotion ? undefined : { x: 4 }}
-        transition={{ duration: 0.15 }}
-        style={Object.keys(itemStyle).length > 0 ? itemStyle : undefined}
-      >
-        <div className="session-item-icon">
-          <IconComponent size={isCompact ? 20 : 16} />
-          {isActive && <StatusIndicator status="connected" size="sm" />}
-        </div>
-        {!isCompact && (
-          <>
-            <span className="session-name">{displayName}</span>
-            {session.tags && session.tags.length > 0 && (
-              <div className="session-tags">
-                {session.tags.map(tagId => {
-                  const tag = availableTags.find(t => t.id === tagId)
-                  return tag ? <TagBadge key={tagId} name={tag.name} color={tag.color} size="sm" /> : null
-                })}
-              </div>
-            )}
-          </>
-        )}
-      </motion.div>
-    </SessionTooltip>
   )
 }

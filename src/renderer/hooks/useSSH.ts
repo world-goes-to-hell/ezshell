@@ -52,7 +52,8 @@ export function useSSH() {
           username: config.username,
           connected: true,
           color: config.color,
-          title: config.sessionName
+          title: config.sessionName,
+          connectConfig: { ...config }
         })
         setConnected(result.sessionId)
 

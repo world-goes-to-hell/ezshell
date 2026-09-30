@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // SSH 연결
   sshConnect: (config) => ipcRenderer.invoke('ssh-connect', config),
+  sshTestConnection: (config) => ipcRenderer.invoke('ssh-test-connection', config),
   sshSend: (sessionId, data) => ipcRenderer.send('ssh-send', { sessionId, data }),
   sshDisconnect: (sessionId) => ipcRenderer.send('ssh-disconnect', { sessionId }),
   sshResize: (sessionId, cols, rows) => ipcRenderer.send('ssh-resize', { sessionId, cols, rows }),
@@ -96,6 +97,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 로컬 디렉토리 목록 조회
   localList: (dirPath) => ipcRenderer.invoke('local-list', { dirPath }),
+  localRename: (oldPath, newPath) => ipcRenderer.invoke('local-rename', { oldPath, newPath }),
+  localMkdir: (dirPath) => ipcRenderer.invoke('local-mkdir', { dirPath }),
+  localTrash: (paths) => ipcRenderer.invoke('local-trash', { paths }),
 
   // 로컬 폴더 선택 다이얼로그
   selectLocalFolder: () => ipcRenderer.invoke('select-local-folder'),

@@ -8,6 +8,7 @@ import { RiUploadFill, RiDownloadFill, RiRefreshFill, RiSubtractFill, RiCheckbox
 import { toast } from '../../stores/toastStore'
 import { deleteRemoteSelection } from '../../lib/sftpRemoteDelete'
 import { useTransferQueue } from '../../hooks/useTransferQueue'
+import { useSftpPaneActions } from '../../hooks/useSftpPaneActions'
 
 interface PendingTransfer {
   type: 'upload' | 'download'
@@ -222,6 +223,17 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: S
     await processNextTransfer(transfers, 0)
   }
 
+  const paneActions = useSftpPaneActions({
+    sessionId,
+    localPath,
+    remotePath,
+    localFiles,
+    selectedLocal,
+    reloadLocal: () => loadLocalFiles(localPath),
+    reloadRemote: () => loadRemoteFiles(remotePath),
+    clearLocalSelection: () => store.clearLocalSelection(sessionId)
+  })
+
   const handleDeleteRemote = async () => {
     const changed = await deleteRemoteSelection(sessionId, remotePath, selectedRemote, remoteFiles)
     if (changed) {
@@ -309,6 +321,7 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: S
               type="local"
               label="로컬"
               sessionId={sessionId}
+              editRequest={paneActions.pathEditRequest.local}
             />
             <button className="refresh-btn" onClick={() => loadLocalFiles(localPath)}>
               <RiRefreshFill size={16} />
@@ -322,6 +335,8 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: S
             type="local"
             sessionId={sessionId}
             onUpload={handleUpload}
+            onDelete={paneActions.deleteLocal}
+            {...paneActions.local}
           />
         </div>
 
@@ -335,6 +350,7 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: S
               type="remote"
               label="원격"
               sessionId={sessionId}
+              editRequest={paneActions.pathEditRequest.remote}
             />
             <button className="refresh-btn" onClick={() => loadRemoteFiles(remotePath)}>
               <RiRefreshFill size={16} />
@@ -349,6 +365,7 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: S
             sessionId={sessionId}
             onDownload={handleDownload}
             onDelete={handleDeleteRemote}
+            {...paneActions.remote}
           />
         </div>
       </div>

@@ -1,0 +1,66 @@
+/* Inline rename / new folder field inside a file row */
+.inline-name-editor {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.inline-name-input {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  outline: none;
+}
+
+.inline-name-input.has-error {
+  border-color: var(--error);
+}
+
+/* Above the field: the list scrolls (overflow: auto), so a tooltip below the last row would be clipped.
+   The ".." row always sits above the first entry, so there is room even at the top. */
+.inline-name-error {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 0;
+  z-index: 20;
+  width: max-content;
+  padding: 2px 8px;
+  border: 1px solid var(--error);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--error-text);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  box-shadow: var(--shadow-lg);
+}
+
+.file-item.is-editing {
+  overflow: visible;
+  cursor: default;
+}
+
+/* Context menu: shortcut hint on the right of each item */
+.sftp-context-menu {
+  min-width: 210px;
+}
+
+.sftp-context-menu .context-menu-label {
+  flex: 1;
+}
+
+.context-menu-shortcut {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  padding: 0;
+}

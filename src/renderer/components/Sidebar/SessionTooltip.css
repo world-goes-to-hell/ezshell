@@ -40,13 +40,6 @@
   color: var(--success);
 }
 
-.session-tooltip-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 2px;
-}
-
 .session-tooltip-hint {
   margin-top: 2px;
   padding-top: 6px;

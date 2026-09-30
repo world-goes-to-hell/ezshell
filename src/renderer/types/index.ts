@@ -47,6 +47,17 @@ export interface SshSessionInfo {
   savedSessionId: string | null
 }
 
+export type SshConnectionTestResult =
+  | { success: true; elapsedMs: number; viaJumpHost: boolean }
+  | { success: false; stage: 'jump' | 'target'; error: string; hint?: string; detail?: string }
+
+export type LocalFileOpResult = { success: true } | { success: false; error: string }
+
+export interface LocalTrashResult {
+  trashed: number
+  failures: { path: string; error: string }[]
+}
+
 // Extend Window interface for electronAPI
 declare global {
   interface Window {
@@ -59,6 +70,7 @@ declare global {
 
       // SSH
       sshConnect: (config: any) => Promise<any>
+      sshTestConnection: (config: any) => Promise<SshConnectionTestResult>
       sshSend: (sessionId: string, data: string) => void
       sshDisconnect: (sessionId: string) => void
       sshResize: (sessionId: string, cols: number, rows: number) => void
@@ -114,6 +126,9 @@ declare global {
 
       // Local file system
       localList: (dirPath: string) => Promise<any>
+      localRename: (oldPath: string, newPath: string) => Promise<LocalFileOpResult>
+      localMkdir: (dirPath: string) => Promise<LocalFileOpResult>
+      localTrash: (paths: string[]) => Promise<LocalTrashResult>
       selectLocalFolder: () => Promise<string | null>
 
       // SFTP Window
@@ -164,7 +179,7 @@ declare global {
       hasAutoUnlock: () => Promise<any>
 
       // Auto update
-      checkForUpdates: () => Promise<any>
+      checkForUpdates: () => Promise<import('../lib/updateCheck').UpdateCheckResult>
       downloadUpdate: () => Promise<any>
       installUpdate: () => Promise<any>
       getAppVersion: () => Promise<string>

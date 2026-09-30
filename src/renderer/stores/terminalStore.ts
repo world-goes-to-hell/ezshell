@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { SSHConnectConfig } from '../hooks/useSSH'
 
 export interface TerminalInfo {
   id: string
@@ -13,6 +14,8 @@ export interface TerminalInfo {
   splitSlots?: string[]
   color?: string
   statsId?: string
+  // Config this tab connected with, kept in memory only so the tab can be duplicated
+  connectConfig?: SSHConnectConfig
 }
 
 export type SplitDirection = 'horizontal' | 'vertical' | 'quad' | 'tri-bottom' | 'tri-top' | 'tri-right' | 'tri-left'

@@ -2,6 +2,8 @@ import { useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { RiDownload2Fill, RiRefreshLine, RiCloseFill, RiCheckboxCircleFill, RiInformationFill, RiRestartFill } from 'react-icons/ri'
 import { useUpdateStore } from '../../stores/updateStore'
+import { toast } from '../../stores/toastStore'
+import { resolveManualCheck, type UpdateCheckResult } from '../../lib/updateCheck'
 
 export function UpdateNotification() {
   const { info, dismissed, setInfo, setDismissed, setAppVersion } = useUpdateStore()
@@ -156,8 +158,17 @@ export function VersionInfo() {
   const { appVersion, info } = useUpdateStore()
 
   const handleCheck = async () => {
+    // A second click while checking is fine: electron-updater joins the check already in progress
     useUpdateStore.getState().setInfo({ status: 'checking' })
-    await window.electronAPI.checkForUpdates?.()
+    let result: UpdateCheckResult | undefined
+    try {
+      result = await window.electronAPI.checkForUpdates?.()
+    } catch (error) {
+      result = { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+    const { info: settled, notice } = resolveManualCheck(useUpdateStore.getState().info.status, result)
+    if (settled) useUpdateStore.getState().setInfo(settled)
+    if (notice) toast[notice.type](notice.title, notice.message)
   }
 
   return (

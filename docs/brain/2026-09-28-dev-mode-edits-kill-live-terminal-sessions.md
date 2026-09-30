@@ -21,3 +21,9 @@ SSH 연결은 main 프로세스에 남지만 렌더러와의 연결이 끊겨 �
 
 ## 사례
 2026-09-28 SFTP 경로 즐겨찾기(Radix DropdownMenu)와 접힌 사이드바 툴팁(Radix Tooltip) 추가 중 두 번 새로 고침되어 사용자 터미널 탭이 사라졌다.
+
+## 추가 (2026-09-28): 스토어 파일 수정 시 사이드바가 빈 목록이 됨
+`stores/sessionStore.ts` 를 개발 모드에서 수정하면 HMR 이 zustand 스토어를 초기 상태(세션 0개)로 다시 만든다.
+`loadFromBackend` 는 앱 시작 때만 호출되므로 사이드바에 "저장된 연결이 없습니다" 가 뜬다.
+**위험**: 이 상태에서 세션 수정/폴더 이동 등으로 `saveToBackend` 가 실행되면 빈 목록이 sessions.json 을 덮어쓴다.
+**대응**: 스토어 파일을 고친 뒤에는 디스크의 sessions.json 개수를 확인하고, 화면을 새로 고쳐(Ctrl+R 또는 CDP `Page.reload`) 다시 불러온다.

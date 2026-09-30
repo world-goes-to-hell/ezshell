@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { reorderSession, type DropPosition } from '../lib/sessionOrder'
 
 export interface Session {
   id: string
@@ -15,7 +16,6 @@ export interface Session {
   connectTimeout?: number
   keepaliveInterval?: number
   autoReconnect?: boolean
-  tags?: string[]
   backgroundColor?: string
   postConnectScript?: string
   // Jump Host 설정
@@ -36,12 +36,6 @@ export interface Folder {
   backgroundColor?: string
 }
 
-export interface Tag {
-  id: string
-  name: string
-  color: string  // hex color
-}
-
 interface SessionState {
   sessions: Session[]
   folders: Folder[]
@@ -49,8 +43,6 @@ interface SessionState {
   activeSessionId: string | null
   isLoading: boolean
   isEncrypted: boolean
-  availableTags: Tag[]
-  activeTagFilter: string | null
 
   setSessions: (sessions: Session[]) => void
   setFolders: (folders: Folder[]) => void
@@ -67,22 +59,12 @@ interface SessionState {
   updateFolder: (folderId: string, updates: Partial<Folder>) => void
   removeFolder: (folderId: string) => void
   moveSessionToFolder: (sessionId: string, folderId: string | undefined) => void
-
-  addTag: (tag: Tag) => void
-  removeTag: (tagId: string) => void
-  filterByTag: (tagId: string | null) => void
+  /** Place a session before/after another; it joins the target's folder */
+  reorderSession: (draggedId: string, targetId: string, position: DropPosition) => void
 
   loadFromBackend: () => Promise<void>
   saveToBackend: () => Promise<void>
 }
-
-// Default tags
-const DEFAULT_TAGS: Tag[] = [
-  { id: 'production', name: 'Production', color: '#ef4444' },
-  { id: 'development', name: 'Development', color: '#22c55e' },
-  { id: 'database', name: 'Database', color: '#3b82f6' },
-  { id: 'web', name: 'Web', color: '#a855f7' }
-]
 
 export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
@@ -91,8 +73,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   activeSessionId: null,
   isLoading: false,
   isEncrypted: false,
-  availableTags: DEFAULT_TAGS,
-  activeTagFilter: null,
 
   setSessions: (sessions) => set({ sessions }),
   setFolders: (folders) => set({ folders }),
@@ -163,20 +143,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     )
   })),
 
-  addTag: (tag) => set((state) => ({
-    availableTags: [...state.availableTags, tag]
+  reorderSession: (draggedId, targetId, position) => set((state) => ({
+    sessions: reorderSession(state.sessions, draggedId, targetId, position)
   })),
-
-  removeTag: (tagId) => set((state) => ({
-    availableTags: state.availableTags.filter(t => t.id !== tagId),
-    sessions: state.sessions.map(s => ({
-      ...s,
-      tags: s.tags?.filter(t => t !== tagId)
-    })),
-    activeTagFilter: state.activeTagFilter === tagId ? null : state.activeTagFilter
-  })),
-
-  filterByTag: (tagId) => set({ activeTagFilter: tagId }),
 
   loadFromBackend: async () => {
     set({ isLoading: true })

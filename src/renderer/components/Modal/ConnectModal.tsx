@@ -1,12 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { motion, AnimatePresence } from 'framer-motion'
 import { modalOverlayVariants, modalContentVariants } from '../../lib/animation/variants'
 import { RiCloseFill, RiServerFill, RiKeyFill, RiEyeFill, RiEyeOffFill, RiDatabase2Fill, RiCloudFill, RiGlobalFill, RiHomeFill, RiComputerFill, RiHardDriveFill, RiCpuFill, RiBaseStationFill, RiArrowDownSFill, RiArrowRightSFill, RiSettings3Fill } from 'react-icons/ri'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useRipple } from '../Animation'
-import { TagSelector } from '../common/TagSelector'
 import { SESSION_COLORS } from '../../lib/sessionColors'
+import { useConnectionTest, ConnectionTestStatus } from './ConnectionTest'
 
 interface ConnectModalProps {
   open: boolean
@@ -47,7 +47,6 @@ export interface ConnectionConfig {
   saveSession: boolean
   folderId?: string
   icon?: SessionIcon
-  tags?: string[]
   backgroundColor?: string
   // Connection settings
   connectTimeout?: number      // in seconds
@@ -78,7 +77,6 @@ const DEFAULT_CONFIG: ConnectionConfig = {
   saveSession: true,
   folderId: '',
   icon: 'server',
-  tags: [],
   connectTimeout: 20,
   keepaliveInterval: 30,
   autoReconnect: true,
@@ -96,12 +94,20 @@ const DEFAULT_CONFIG: ConnectionConfig = {
 export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSession, duplicateFrom, defaultFolderId }: ConnectModalProps) {
   const isEditMode = Boolean(editSession)
   const isDuplicateMode = !isEditMode && Boolean(duplicateFrom)
-  const { folders, availableTags, addTag } = useSessionStore()
+  const { folders } = useSessionStore()
   const [showPassword, setShowPassword] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const { createRipple, RippleContainer } = useRipple('rgba(255, 255, 255, 0.2)')
 
   const [config, setConfig] = useState<ConnectionConfig>(editSession || DEFAULT_CONFIG)
+  const formRef = useRef<HTMLFormElement>(null)
+  const connectionTest = useConnectionTest()
+  const { reset: resetConnectionTest } = connectionTest
+
+  // Any edit (or reopening the modal) invalidates the previous test result
+  useEffect(() => {
+    resetConnectionTest()
+  }, [config, resetConnectionTest])
 
   // Reset form when modal opens/closes or editSession changes
   useEffect(() => {
@@ -145,6 +151,12 @@ export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSessio
     onSave?.({ ...config, saveSession: true })
   }
 
+  const handleTestConnection = () => {
+    // Show the browser's own "required" hints (host, username, jump host) before testing
+    if (!formRef.current?.reportValidity()) return
+    connectionTest.run(config)
+  }
+
   const handleSelectPrivateKey = async () => {
     const result = await window.electronAPI.selectPrivateKey()
     if (result && result.success && result.path) {
@@ -154,18 +166,6 @@ export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSessio
 
   const updateConfig = (field: keyof ConnectionConfig, value: any) => {
     setConfig({ ...config, [field]: value })
-  }
-
-  const handleToggleTag = (tagId: string) => {
-    const currentTags = config.tags || []
-    const newTags = currentTags.includes(tagId)
-      ? currentTags.filter(id => id !== tagId)
-      : [...currentTags, tagId]
-    updateConfig('tags', newTags)
-  }
-
-  const handleCreateTag = (tag: { id: string; name: string; color: string }) => {
-    addTag(tag)
   }
 
   return (
@@ -195,7 +195,7 @@ export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSessio
                   {isEditMode ? '연결 편집' : isDuplicateMode ? '세션 복제' : '새 연결'}
                 </Dialog.Title>
 
-          <form onSubmit={handleSubmit}>
+          <form ref={formRef} onSubmit={handleSubmit}>
             <div className="form-group">
               <label>연결 이름</label>
               <input
@@ -337,16 +337,6 @@ export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSessio
                   <option key={folder.id} value={folder.id}>{folder.name}</option>
                 ))}
               </select>
-            </div>
-
-            <div className="form-group">
-              <label>태그</label>
-              <TagSelector
-                availableTags={availableTags}
-                selectedTagIds={config.tags || []}
-                onToggleTag={handleToggleTag}
-                onCreateTag={handleCreateTag}
-              />
             </div>
 
             <div className="form-group">
@@ -551,7 +541,18 @@ export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSessio
               </div>
             )}
 
+            <ConnectionTestStatus state={connectionTest.state} />
+
             <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-secondary modal-btn connection-test-btn"
+                onClick={handleTestConnection}
+                disabled={connectionTest.state.status === 'testing'}
+                title="입력한 정보로 로그인만 시도하고 바로 연결을 끊습니다"
+              >
+                {connectionTest.state.status === 'testing' ? '테스트 중...' : '연결 테스트'}
+              </button>
               <Dialog.Close asChild>
                 <button
                   type="button"

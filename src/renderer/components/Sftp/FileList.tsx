@@ -1,12 +1,18 @@
 import { useState, useRef, useEffect } from 'react'
 import { useSftpStore, FileItem } from '../../stores/sftpStore'
 import { useWheelRowScroll } from '../../hooks/useWheelRowScroll'
+import { useDirectoryHistory } from '../../hooks/useDirectoryHistory'
+import { resolveFileListShortcut, type FileListShortcut } from '../../lib/fileListShortcuts'
+import { validateNewName } from '../../lib/fileNameValidation'
+import { isWindowsPath, nextFolderName } from '../../lib/sftpFileOps'
+import { RiFolderFill, RiArrowUpSFill } from 'react-icons/ri'
+import { InlineNameInput } from './InlineNameInput'
+import { getFileIcon } from './fileIcons'
+import './FileList.css'
 import {
-  RiFolderFill, RiFileFill, RiArrowUpSFill, RiUploadFill, RiDownloadFill, RiDeleteBinFill,
-  RiFileTextFill, RiFileCodeFill, RiImageFill, RiVideoFill, RiMusicFill,
-  RiFilePdfFill, RiFileZipFill, RiDatabase2Fill, RiTerminalBoxFill,
-  RiMarkdownFill, RiHtml5Fill, RiCss3Fill
-} from 'react-icons/ri'
+  FileListContextMenu, buildContextMenuItems, CONTEXT_MENU_ITEM_HEIGHT, CONTEXT_MENU_WIDTH,
+  type ContextMenuAction
+} from './FileListContextMenu'
 
 interface FileListProps {
   files: FileItem[]
@@ -17,8 +23,14 @@ interface FileListProps {
   sessionId: string
   onUpload?: () => void
   onDownload?: () => void
-  /** Remote only: delete the selection. The menu item is hidden when not provided. */
+  /** Delete the selection (remote: permanent, local: Recycle Bin). Hidden when not provided. */
   onDelete?: () => void
+  /** Rename an entry in the current folder; resolve true once the listing is refreshed */
+  onRename?: (oldName: string, newName: string) => Promise<boolean>
+  /** Create a folder in the current folder; resolve true once the listing is refreshed */
+  onCreateFolder?: (name: string) => Promise<boolean>
+  /** Ctrl+L: move focus to this pane's path bar */
+  onFocusPath?: () => void
   onDrop?: (fileNames: string[]) => void
   isLoading?: boolean
 }
@@ -30,7 +42,10 @@ interface ContextMenuState {
   file: FileItem | null
 }
 
+type EditState = { mode: 'rename'; name: string } | { mode: 'create'; initialName: string }
+
 const KEEP_SELECTION_ATTR = 'data-sftp-keep-selection'
+const CONTEXT_MENU_EDGE_GAP = 10
 
 /** Spread onto containers whose controls act on the current selection (e.g. the SFTP toolbar). */
 export const keepSelectionProps = { [KEEP_SELECTION_ATTR]: '' }
@@ -40,22 +55,54 @@ const isWindows = () => {
          navigator.userAgent.toLowerCase().includes('windows')
 }
 
-export function FileList({ files, selected, onNavigate, currentPath, type, sessionId, onUpload, onDownload, onDelete, onDrop, isLoading }: FileListProps) {
+export function FileList({
+  files, selected, onNavigate, currentPath, type, sessionId,
+  onUpload, onDownload, onDelete, onRename, onCreateFolder, onFocusPath, onDrop, isLoading
+}: FileListProps) {
   const store = useSftpStore()
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, file: null })
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const fileListRef = useRef<HTMLDivElement>(null)
   // One wheel notch scrolls 2 rows instead of the browser's ~4
   useWheelRowScroll(fileListRef, '.file-item')
+  // Mouse thumb buttons (and Alt+Left / Alt+Right): back / forward through visited directories
+  const stepHistory = useDirectoryHistory(fileListRef, currentPath, !!isLoading, onNavigate)
   const itemRefs = useRef<(HTMLDivElement | null)[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number>(-1)
+  const [editing, setEditing] = useState<EditState | null>(null)
+  // Entry to select once the refreshed listing arrives (after rename / new folder)
+  const revealNameRef = useRef<string | null>(null)
   const focusIndexRef = useRef<number>(-1)
   const [, forceUpdate] = useState(0)
   const focusIndex = focusIndexRef.current
   const setFocusIndex = (idx: number) => {
     focusIndexRef.current = idx
     forceUpdate(c => c + 1)
+  }
+
+  const selectOnly = (name: string) => {
+    if (type === 'remote') {
+      store.setRemoteSelection(sessionId, name)
+    } else {
+      store.setLocalSelection(sessionId, name)
+    }
+  }
+
+  const clearSelection = () => {
+    if (type === 'remote') {
+      store.clearRemoteSelection(sessionId)
+    } else {
+      store.clearLocalSelection(sessionId)
+    }
+  }
+
+  const setMultiSelection = (names: string[]) => {
+    if (type === 'remote') {
+      store.setRemoteMultiSelection(sessionId, names)
+    } else {
+      store.setLocalMultiSelection(sessionId, names)
+    }
   }
 
   // Close context menu on click outside
@@ -70,208 +117,100 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
   }, [])
 
   useEffect(() => {
-    setFocusIndex(-1)
-  }, [files])
-
-  // Ctrl+A handler on the file-list element itself
-  const handleListKeyDown = (e: React.KeyboardEvent) => {
-    if (isLoading) return
-    if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
-      e.preventDefault()
-      if (type === 'remote') {
-        store.selectAllRemote(sessionId)
-      } else {
-        store.selectAllLocal(sessionId)
-      }
+    const name = revealNameRef.current
+    revealNameRef.current = null
+    const index = name ? files.findIndex(f => f.name === name) : -1
+    if (index < 0) {
+      setFocusIndex(-1)
       return
     }
+    selectOnly(files[index].name)
+    setLastSelectedIndex(index)
+    setFocusIndex(index)
+    itemRefs.current[index]?.scrollIntoView({ block: 'nearest' })
+  }, [files])
 
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      const startFrom = focusIndex >= 0 ? focusIndex : (lastSelectedIndex >= 0 ? lastSelectedIndex - 1 : -1)
-      const nextIndex = Math.min(startFrom + 1, files.length - 1)
-      setFocusIndex(nextIndex)
-      if (e.shiftKey) {
-        // Shift+ArrowDown: extend range selection
-        const start = Math.min(lastSelectedIndex >= 0 ? lastSelectedIndex : nextIndex, nextIndex)
-        const end = Math.max(lastSelectedIndex >= 0 ? lastSelectedIndex : nextIndex, nextIndex)
-        const rangeNames = files.slice(start, end + 1).map(f => f.name)
-        if (type === 'remote') {
-          store.setRemoteMultiSelection(sessionId, rangeNames)
-        } else {
-          store.setLocalMultiSelection(sessionId, rangeNames)
-        }
-      } else {
-        // Normal ArrowDown: single select
-        if (type === 'remote') {
-          store.setRemoteSelection(sessionId, files[nextIndex].name)
-        } else {
-          store.setLocalSelection(sessionId, files[nextIndex].name)
-        }
-        setLastSelectedIndex(nextIndex)
-      }
-      // Scroll focused item into view
-      itemRefs.current[nextIndex]?.scrollIntoView({ block: 'nearest' })
-    }
+  // Navigating away abandons an unfinished rename / new folder
+  useEffect(() => {
+    setEditing(null)
+  }, [currentPath])
 
-    if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      const startFrom = focusIndex >= 0 ? focusIndex : (lastSelectedIndex >= 0 ? lastSelectedIndex + 1 : files.length)
-      const prevIndex = Math.max(startFrom - 1, 0)
-      setFocusIndex(prevIndex)
-      if (e.shiftKey) {
-        const start = Math.min(lastSelectedIndex >= 0 ? lastSelectedIndex : prevIndex, prevIndex)
-        const end = Math.max(lastSelectedIndex >= 0 ? lastSelectedIndex : prevIndex, prevIndex)
-        const rangeNames = files.slice(start, end + 1).map(f => f.name)
-        if (type === 'remote') {
-          store.setRemoteMultiSelection(sessionId, rangeNames)
-        } else {
-          store.setLocalMultiSelection(sessionId, rangeNames)
-        }
-      } else {
-        if (type === 'remote') {
-          store.setRemoteSelection(sessionId, files[prevIndex].name)
-        } else {
-          store.setLocalSelection(sessionId, files[prevIndex].name)
-        }
-        setLastSelectedIndex(prevIndex)
-      }
-      itemRefs.current[prevIndex]?.scrollIntoView({ block: 'nearest' })
-    }
+  const focusList = () => fileListRef.current?.focus()
 
-    if (e.key === 'ArrowRight') {
-      if (focusIndex >= 0 && focusIndex < files.length) {
-        const file = files[focusIndex]
-        if (file.type === 'directory') {
-          e.preventDefault()
-          const separator = type === 'local' && isWindows() ? '\\' : '/'
-          const newPath = currentPath === '/' || currentPath === 'C:\\'
-            ? (type === 'local' && isWindows() ? `${currentPath}${file.name}` : `/${file.name}`)
-            : `${currentPath}${separator}${file.name}`
-          onNavigate(newPath)
-          setFocusIndex(-1)
-        }
-      }
+  const childPath = (name: string) => {
+    const useBackslash = type === 'local' && isWindows()
+    if (currentPath === '/' || currentPath === 'C:\\') {
+      return useBackslash ? `${currentPath}${name}` : `/${name}`
     }
-
-    if (e.key === 'ArrowLeft') {
-      e.preventDefault()
-      goUp()
-      setFocusIndex(-1)
-    }
-
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      if (focusIndex >= 0 && focusIndex < files.length) {
-        const file = files[focusIndex]
-        if (file.type === 'directory') {
-          const separator = type === 'local' && isWindows() ? '\\' : '/'
-          const newPath = currentPath === '/' || currentPath === 'C:\\'
-            ? (type === 'local' && isWindows() ? `${currentPath}${file.name}` : `/${file.name}`)
-            : `${currentPath}${separator}${file.name}`
-          onNavigate(newPath)
-          setFocusIndex(-1)
-        }
-      }
-    }
-
-    if (e.key === 'Backspace') {
-      e.preventDefault()
-      goUp()
-      setFocusIndex(-1)
-    }
+    return `${currentPath}${useBackslash ? '\\' : '/'}${name}`
   }
 
-  const handleBlur = (e: React.FocusEvent) => {
-    if (e.currentTarget.contains(e.relatedTarget as Node)) return
-    // Toolbar buttons (upload/download) act on the selection. Clicking one moves focus
-    // to the button, so clearing here would empty the selection before its onClick runs.
-    const next = e.relatedTarget as HTMLElement | null
-    if (next?.closest(`[${KEEP_SELECTION_ATTR}]`)) return
-    if (type === 'remote') {
-      store.clearRemoteSelection(sessionId)
-    } else {
-      store.clearLocalSelection(sessionId)
-    }
-    setFocusIndex(-1)
+  const openDirectory = (file: FileItem) => {
+    if (file.type !== 'directory') return false
+    onNavigate(childPath(file.name))
+    return true
   }
 
-  const handleClick = (e: React.MouseEvent, file: FileItem, index: number) => {
-    // Focus the file list so Ctrl+A works
-    fileListRef.current?.focus()
-    if (e.ctrlKey || e.metaKey) {
-      // Ctrl+click: toggle selection (multi-select)
-      if (type === 'remote') {
-        store.toggleRemoteSelection(sessionId, file.name)
-      } else {
-        store.toggleLocalSelection(sessionId, file.name)
-      }
-      setLastSelectedIndex(index)
-    } else if (e.shiftKey && lastSelectedIndex >= 0) {
-      // Shift+click: range selection
-      const start = Math.min(lastSelectedIndex, index)
-      const end = Math.max(lastSelectedIndex, index)
-      const rangeNames = files.slice(start, end + 1).map(f => f.name)
-      if (type === 'remote') {
-        store.setRemoteMultiSelection(sessionId, rangeNames)
-      } else {
-        store.setLocalMultiSelection(sessionId, rangeNames)
-      }
-    } else {
-      // Normal click: single select
-      if (type === 'remote') {
-        store.setRemoteSelection(sessionId, file.name)
-      } else {
-        store.setLocalSelection(sessionId, file.name)
-      }
-      setLastSelectedIndex(index)
-    }
+  const selectIndex = (index: number) => {
+    if (index < 0 || index >= files.length) return
+    selectOnly(files[index].name)
+    setLastSelectedIndex(index)
+    setFocusIndex(index)
+    itemRefs.current[index]?.scrollIntoView({ block: 'nearest' })
   }
 
-  const handleContextMenu = (e: React.MouseEvent, file: FileItem) => {
-    e.preventDefault()
-
-    // Select the file if not already selected
-    if (!selected.has(file.name)) {
-      if (type === 'remote') {
-        store.setRemoteSelection(sessionId, file.name)
-      } else {
-        store.setLocalSelection(sessionId, file.name)
-      }
-    }
-
-    // Calculate position with boundary checking
-    const menuWidth = 150
-    const menuHeight = 120
-    let x = e.clientX
-    let y = e.clientY
-
-    // Adjust if menu would go off right edge
-    if (x + menuWidth > window.innerWidth) {
-      x = window.innerWidth - menuWidth - 10
-    }
-
-    // Adjust if menu would go off bottom edge
-    if (y + menuHeight > window.innerHeight) {
-      y = window.innerHeight - menuHeight - 10
-    }
-
-    setContextMenu({
-      visible: true,
-      x,
-      y,
-      file
-    })
+  // F2 renames the focused entry, like Explorer; otherwise the most recently selected one
+  const renameTarget = (): FileItem | null => {
+    const candidates = [focusIndex, lastSelectedIndex]
+      .filter(index => index >= 0 && index < files.length && selected.has(files[index].name))
+      .map(index => files[index])
+    return candidates[0] ?? files.find(file => selected.has(file.name)) ?? null
   }
 
-  const handleDoubleClick = (file: FileItem) => {
-    if (file.type === 'directory') {
-      const separator = type === 'local' && isWindows() ? '\\' : '/'
-      const newPath = currentPath === '/' || currentPath === 'C:\\'
-        ? (type === 'local' && isWindows() ? `${currentPath}${file.name}` : `/${file.name}`)
-        : `${currentPath}${separator}${file.name}`
-      onNavigate(newPath)
+  const startRename = (file: FileItem | null) => {
+    if (!onRename || !file) return
+    setEditing({ mode: 'rename', name: file.name })
+  }
+
+  const startCreateFolder = () => {
+    if (!onCreateFolder) return
+    setEditing({ mode: 'create', initialName: nextFolderName(files.map(f => f.name)) })
+    fileListRef.current?.scrollTo({ top: 0 })
+  }
+
+  const finishEditing = () => {
+    setEditing(null)
+    focusList()
+  }
+
+  const validate = (value: string, currentName?: string) => validateNewName(value, {
+    windowsRules: type === 'local' && isWindowsPath(currentPath),
+    existingNames: files.map(f => f.name),
+    currentName
+  })
+
+  const commitRename = async (oldName: string, value: string): Promise<string | null> => {
+    const result = validate(value, oldName)
+    if (!result.ok) return result.error
+    if (result.name === oldName) {
+      finishEditing()
+      return null
     }
+    revealNameRef.current = result.name
+    const renamed = await onRename!(oldName, result.name)
+    if (!renamed) revealNameRef.current = null
+    finishEditing()
+    return null
+  }
+
+  const commitCreateFolder = async (value: string): Promise<string | null> => {
+    const result = validate(value)
+    if (!result.ok) return result.error
+    revealNameRef.current = result.name
+    const created = await onCreateFolder!(result.name)
+    if (!created) revealNameRef.current = null
+    finishEditing()
+    return null
   }
 
   const goUp = () => {
@@ -291,6 +230,140 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
         onNavigate(parts.length === 0 ? '/' : `/${parts.join('/')}`)
       }
     }
+  }
+
+  const runShortcut = (shortcut: FileListShortcut) => {
+    switch (shortcut) {
+      case 'rename': return startRename(renameTarget())
+      case 'delete': return selected.size > 0 ? onDelete?.() : undefined
+      case 'newFolder': return startCreateFolder()
+      case 'refresh': return onNavigate(currentPath)
+      case 'back': return stepHistory('back')
+      case 'forward': return stepHistory('forward')
+      case 'up': return goUp()
+      case 'first': return selectIndex(0)
+      case 'last': return selectIndex(files.length - 1)
+      case 'clearSelection':
+        clearSelection()
+        return setFocusIndex(-1)
+      case 'focusPath': return onFocusPath?.()
+      case 'selectAll':
+        return type === 'remote' ? store.selectAllRemote(sessionId) : store.selectAllLocal(sessionId)
+      case 'swallow': return
+    }
+  }
+
+  const moveFocus = (e: React.KeyboardEvent, delta: 1 | -1) => {
+    e.preventDefault()
+    const fallbackStart = delta === 1
+      ? (lastSelectedIndex >= 0 ? lastSelectedIndex - 1 : -1)
+      : (lastSelectedIndex >= 0 ? lastSelectedIndex + 1 : files.length)
+    const startFrom = focusIndex >= 0 ? focusIndex : fallbackStart
+    const nextIndex = Math.min(Math.max(startFrom + delta, 0), files.length - 1)
+    setFocusIndex(nextIndex)
+    if (e.shiftKey) {
+      // Shift+Arrow: extend range selection
+      const anchor = lastSelectedIndex >= 0 ? lastSelectedIndex : nextIndex
+      setMultiSelection(files.slice(Math.min(anchor, nextIndex), Math.max(anchor, nextIndex) + 1).map(f => f.name))
+    } else {
+      selectOnly(files[nextIndex].name)
+      setLastSelectedIndex(nextIndex)
+    }
+    itemRefs.current[nextIndex]?.scrollIntoView({ block: 'nearest' })
+  }
+
+  const handleListKeyDown = (e: React.KeyboardEvent) => {
+    // Esc closes an open context menu before it clears the selection, like Explorer
+    if (contextMenu.visible) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        setContextMenu(prev => ({ ...prev, visible: false }))
+      }
+      return
+    }
+    const shortcut = resolveFileListShortcut(e)
+    if (shortcut) {
+      // Keep app-wide shortcuts (lock, close tab, terminal search, double-Esc zen mode) from also firing
+      e.preventDefault()
+      e.stopPropagation()
+      if (!isLoading && !editing) runShortcut(shortcut)
+      return
+    }
+    if (isLoading || editing) return
+
+    if (e.key === 'ArrowDown') {
+      moveFocus(e, 1)
+    } else if (e.key === 'ArrowUp') {
+      moveFocus(e, -1)
+    } else if (e.key === 'ArrowRight' || e.key === 'Enter') {
+      const file = focusIndex >= 0 && focusIndex < files.length ? files[focusIndex] : null
+      if (e.key === 'Enter') e.preventDefault()
+      if (file && openDirectory(file)) {
+        e.preventDefault()
+        setFocusIndex(-1)
+      }
+    } else if (e.key === 'ArrowLeft' || e.key === 'Backspace') {
+      e.preventDefault()
+      goUp()
+      setFocusIndex(-1)
+    }
+  }
+
+  const handleBlur = (e: React.FocusEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    // Toolbar buttons (upload/download) act on the selection. Clicking one moves focus
+    // to the button, so clearing here would empty the selection before its onClick runs.
+    const next = e.relatedTarget as HTMLElement | null
+    if (next?.closest(`[${KEEP_SELECTION_ATTR}]`)) return
+    clearSelection()
+    setFocusIndex(-1)
+  }
+
+  const handleClick = (e: React.MouseEvent, file: FileItem, index: number) => {
+    // Focus the file list so keyboard shortcuts work
+    focusList()
+    if (e.ctrlKey || e.metaKey) {
+      // Ctrl+click: toggle selection (multi-select)
+      if (type === 'remote') {
+        store.toggleRemoteSelection(sessionId, file.name)
+      } else {
+        store.toggleLocalSelection(sessionId, file.name)
+      }
+      setLastSelectedIndex(index)
+    } else if (e.shiftKey && lastSelectedIndex >= 0) {
+      // Shift+click: range selection
+      const start = Math.min(lastSelectedIndex, index)
+      const end = Math.max(lastSelectedIndex, index)
+      setMultiSelection(files.slice(start, end + 1).map(f => f.name))
+    } else {
+      selectOnly(file.name)
+      setLastSelectedIndex(index)
+    }
+    // Drop a stale keyboard focus so F2 / arrows continue from the clicked row
+    setFocusIndex(-1)
+  }
+
+  const openContextMenu = (e: React.MouseEvent, file: FileItem | null) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (editing) return
+    focusList()
+
+    // Select the file if not already selected
+    if (file && !selected.has(file.name)) selectOnly(file.name)
+
+    const itemCount = buildContextMenuItems({
+      file, type, canRename: Boolean(onRename), canCreateFolder: Boolean(onCreateFolder), canDelete: Boolean(onDelete)
+    }).length
+    const menuHeight = itemCount * CONTEXT_MENU_ITEM_HEIGHT + 24
+    const x = Math.min(e.clientX, window.innerWidth - CONTEXT_MENU_WIDTH - CONTEXT_MENU_EDGE_GAP)
+    const y = Math.min(e.clientY, window.innerHeight - menuHeight - CONTEXT_MENU_EDGE_GAP)
+    setContextMenu({ visible: true, x, y, file })
+  }
+
+  const handleDoubleClick = (file: FileItem) => {
+    openDirectory(file)
   }
 
   const formatSize = (bytes: number) => {
@@ -325,60 +398,18 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
     return perms.split('').map(c => map[c] || '---').join('')
   }
 
-  const handleContextAction = (action: 'upload' | 'download' | 'delete') => {
+  const handleContextAction = (action: ContextMenuAction) => {
+    const file = contextMenu.file
     setContextMenu(prev => ({ ...prev, visible: false }))
 
-    if (action === 'upload' && onUpload) {
-      onUpload()
-    } else if (action === 'download' && onDownload) {
-      onDownload()
-    } else if (action === 'delete' && onDelete) {
-      onDelete()
+    switch (action) {
+      case 'upload': return onUpload?.()
+      case 'download': return onDownload?.()
+      case 'delete': return onDelete?.()
+      case 'rename': return startRename(file)
+      case 'newFolder': return startCreateFolder()
+      case 'refresh': return onNavigate(currentPath)
     }
-  }
-
-  const getFileIcon = (fileName: string) => {
-    const ext = fileName.split('.').pop()?.toLowerCase() || ''
-    const iconSize = 14
-
-    // Images
-    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'bmp', 'webp', 'ico'].includes(ext))
-      return <RiImageFill size={iconSize} className="file-icon icon-image" />
-    // Videos
-    if (['mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm'].includes(ext))
-      return <RiVideoFill size={iconSize} className="file-icon icon-video" />
-    // Audio
-    if (['mp3', 'wav', 'ogg', 'flac', 'aac', 'wma', 'm4a'].includes(ext))
-      return <RiMusicFill size={iconSize} className="file-icon icon-audio" />
-    // Archives
-    if (['zip', 'tar', 'gz', 'rar', '7z', 'bz2', 'xz', 'tgz'].includes(ext))
-      return <RiFileZipFill size={iconSize} className="file-icon icon-archive" />
-    // PDF
-    if (ext === 'pdf')
-      return <RiFilePdfFill size={iconSize} className="file-icon icon-pdf" />
-    // Markdown
-    if (['md', 'mdx'].includes(ext))
-      return <RiMarkdownFill size={iconSize} className="file-icon icon-markdown" />
-    // HTML
-    if (['html', 'htm', 'xhtml'].includes(ext))
-      return <RiHtml5Fill size={iconSize} className="file-icon icon-html" />
-    // CSS
-    if (['css', 'scss', 'sass', 'less'].includes(ext))
-      return <RiCss3Fill size={iconSize} className="file-icon icon-css" />
-    // Code files
-    if (['js', 'jsx', 'ts', 'tsx', 'py', 'java', 'c', 'cpp', 'h', 'go', 'rs', 'rb', 'php', 'swift', 'kt', 'vue', 'svelte'].includes(ext))
-      return <RiFileCodeFill size={iconSize} className="file-icon icon-code" />
-    // Config/data
-    if (['json', 'yaml', 'yml', 'toml', 'xml', 'ini', 'env', 'conf', 'cfg'].includes(ext))
-      return <RiDatabase2Fill size={iconSize} className="file-icon icon-config" />
-    // Shell/scripts
-    if (['sh', 'bash', 'zsh', 'fish', 'bat', 'cmd', 'ps1'].includes(ext))
-      return <RiTerminalBoxFill size={iconSize} className="file-icon icon-shell" />
-    // Text files
-    if (['txt', 'log', 'csv', 'tsv', 'rtf'].includes(ext))
-      return <RiFileTextFill size={iconSize} className="file-icon icon-text" />
-    // Default
-    return <RiFileFill size={iconSize} className="file-icon" />
   }
 
   const handleDragStart = (e: React.DragEvent, file: FileItem) => {
@@ -428,6 +459,7 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
       tabIndex={0}
       onKeyDown={handleListKeyDown}
       onBlur={handleBlur}
+      onContextMenu={(e) => openContextMenu(e, null)}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -442,63 +474,70 @@ export function FileList({ files, selected, onNavigate, currentPath, type, sessi
         <RiArrowUpSFill size={16} />
         <span>..</span>
       </div>
-      {files.map((file, index) => (
-        <div
-          key={file.name}
-          ref={(el) => { itemRefs.current[index] = el }}
-          className={`file-item ${file.type === 'directory' ? 'is-directory' : 'is-file'} ${selected.has(file.name) ? 'selected' : ''} ${focusIndex === index ? 'focused' : ''}`}
-          onClick={(e) => handleClick(e, file, index)}
-          onDoubleClick={() => handleDoubleClick(file)}
-          onContextMenu={(e) => handleContextMenu(e, file)}
-          draggable
-          onDragStart={(e) => handleDragStart(e, file)}
-        >
-          {file.type === 'directory' ? <RiFolderFill size={16} className="folder-icon" /> : getFileIcon(file.name)}
-          <span className="file-name">{file.name}</span>
-          {type === 'remote' && file.owner && (
-            <span className="file-owner" title={`소유자: ${file.owner}${file.group ? `  그룹: ${file.group}` : ''}`}>
-              {file.owner}
-            </span>
-          )}
-          {type === 'remote' && file.permissions && (
-            <span className="file-permissions" title={`권한: ${file.permissions} (${formatPermissions(file.permissions)})`}>
-              {formatPermissions(file.permissions)}
-            </span>
-          )}
-          <span className="file-mtime">{formatDate(file.modifyTime)}</span>
-          <span className="file-size">{file.type === 'file' ? formatSize(file.size) : ''}</span>
+      {editing?.mode === 'create' && (
+        <div className="file-item is-directory is-editing">
+          <RiFolderFill size={16} className="folder-icon" />
+          <InlineNameInput
+            initialValue={editing.initialName}
+            onCommit={commitCreateFolder}
+            onCancel={finishEditing}
+          />
         </div>
-      ))}
+      )}
+      {files.map((file, index) => {
+        const isRenaming = editing?.mode === 'rename' && editing.name === file.name
+        return (
+          <div
+            key={file.name}
+            ref={(el) => { itemRefs.current[index] = el }}
+            className={`file-item ${file.type === 'directory' ? 'is-directory' : 'is-file'} ${selected.has(file.name) ? 'selected' : ''} ${focusIndex === index ? 'focused' : ''} ${isRenaming ? 'is-editing' : ''}`}
+            onClick={(e) => handleClick(e, file, index)}
+            onDoubleClick={() => handleDoubleClick(file)}
+            onContextMenu={(e) => openContextMenu(e, file)}
+            draggable={!isRenaming}
+            onDragStart={(e) => handleDragStart(e, file)}
+          >
+            {file.type === 'directory' ? <RiFolderFill size={16} className="folder-icon" /> : getFileIcon(file.name)}
+            {isRenaming ? (
+              <InlineNameInput
+                initialValue={file.name}
+                selectBaseName={file.type === 'file'}
+                onCommit={(value) => commitRename(file.name, value)}
+                onCancel={finishEditing}
+              />
+            ) : (
+              <span className="file-name">{file.name}</span>
+            )}
+            {type === 'remote' && file.owner && (
+              <span className="file-owner" title={`소유자: ${file.owner}${file.group ? `  그룹: ${file.group}` : ''}`}>
+                {file.owner}
+              </span>
+            )}
+            {type === 'remote' && file.permissions && (
+              <span className="file-permissions" title={`권한: ${file.permissions} (${formatPermissions(file.permissions)})`}>
+                {formatPermissions(file.permissions)}
+              </span>
+            )}
+            <span className="file-mtime">{formatDate(file.modifyTime)}</span>
+            <span className="file-size">{file.type === 'file' ? formatSize(file.size) : ''}</span>
+          </div>
+        )
+      })}
 
-      {/* Context Menu */}
       {contextMenu.visible && (
-        <div
+        <FileListContextMenu
           ref={contextMenuRef}
-          className="context-menu"
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-        >
-          {type === 'local' && (
-            <div className="context-menu-item" onClick={() => handleContextAction('upload')}>
-              <RiUploadFill size={16} />
-              <span>업로드</span>
-            </div>
-          )}
-          {type === 'remote' && (
-            <div className="context-menu-item" onClick={() => handleContextAction('download')}>
-              <RiDownloadFill size={16} />
-              <span>다운로드</span>
-            </div>
-          )}
-          {onDelete && (
-            <>
-              <div className="context-menu-divider" />
-              <div className="context-menu-item danger" onClick={() => handleContextAction('delete')}>
-                <RiDeleteBinFill size={16} />
-                <span>삭제</span>
-              </div>
-            </>
-          )}
-        </div>
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={buildContextMenuItems({
+            file: contextMenu.file,
+            type,
+            canRename: Boolean(onRename),
+            canCreateFolder: Boolean(onCreateFolder),
+            canDelete: Boolean(onDelete)
+          })}
+          onSelect={handleContextAction}
+        />
       )}
     </div>
   )

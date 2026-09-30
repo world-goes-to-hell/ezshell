@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { RiAddFill, RiFolderFill, RiMenuFoldFill, RiMenuUnfoldFill, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill } from 'react-icons/ri'
 import { motion } from 'framer-motion'
 import { SessionList } from './SessionList'
@@ -6,6 +6,11 @@ import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { SPRINGS } from '../../lib/animation/config'
+import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
+import { useShortcutsStore } from '../../stores/shortcutsStore'
+import './SidebarCompact.css'
+
+const TOGGLE_SHORTCUT_ID = 'toggle-sidebar'
 
 interface SidebarProps {
   onNewConnection: () => void
@@ -20,14 +25,22 @@ interface SidebarProps {
 }
 
 export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onStatsClick, onBatchClick, activeSessionIds }: SidebarProps) {
-  const { sidebarMode, toggleSidebarMode } = useUIStore()
+  const { sidebarMode, toggleSidebarMode, setSidebarMode } = useUIStore()
   const { addFolder, saveToBackend } = useSessionStore()
   const isCompact = sidebarMode === 'compact'
   const [isAddingFolder, setIsAddingFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const reducedMotion = useReducedMotion()
+  const toggleShortcut = useShortcutsStore(state => state.formatKeys(state.getEffectiveKeys(TOGGLE_SHORTCUT_ID)))
+  const toggleTitle = `${isCompact ? '사이드바 펼치기' : '사이드바 접기'} (${toggleShortcut})`
+
+  // Stable handlers so the keydown listener is not re-attached on every render
+  const shortcutHandlers = useMemo(() => ({ toggleSidebar: toggleSidebarMode }), [toggleSidebarMode])
+  useKeyboardShortcuts(shortcutHandlers)
 
   const handleAddFolder = () => {
+    // The folder name input only exists in the expanded sidebar
+    setSidebarMode('expanded')
     setIsAddingFolder(true)
     setNewFolderName('')
   }
@@ -65,7 +78,8 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
         <motion.button
           className="sidebar-toggle"
           onClick={toggleSidebarMode}
-          title={isCompact ? '사이드바 펼치기' : '사이드바 접기'}
+          title={toggleTitle}
+          aria-label={toggleTitle}
           whileHover={reducedMotion ? undefined : { scale: 1.05 }}
           whileTap={reducedMotion ? undefined : { scale: 0.95 }}
         >
@@ -114,21 +128,27 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
       )}
       {isCompact && (
         <div className="sidebar-actions">
-          <button className="btn-new-connection-compact" onClick={onNewConnection} title="새 연결">
+          <button className="btn-new-connection-compact" onClick={onNewConnection} title="새 연결" aria-label="새 연결">
             <RiAddFill size={20} />
+          </button>
+          <button className="btn-compact-action" onClick={onOpenQuickConnect} title="빠른 연결" aria-label="빠른 연결">
+            <RiFlashlightFill size={16} />
+          </button>
+          <button className="btn-compact-action" onClick={handleAddFolder} title="새 폴더" aria-label="새 폴더">
+            <RiFolderAddFill size={16} />
           </button>
         </div>
       )}
       <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} isCompact={isCompact} activeSessionIds={activeSessionIds} />
-      {!isCompact && (
+      {(onBatchClick || onStatsClick) && (
         <div className="sidebar-footer">
           {onBatchClick && (
-            <button className="sidebar-footer-btn" onClick={onBatchClick} title="배치 명령 실행">
+            <button className="sidebar-footer-btn" onClick={onBatchClick} title="배치 명령 실행" aria-label="배치 명령 실행">
               <RiTerminalBoxFill size={18} />
             </button>
           )}
           {onStatsClick && (
-            <button className="sidebar-footer-btn" onClick={onStatsClick} title="세션 통계">
+            <button className="sidebar-footer-btn" onClick={onStatsClick} title="세션 통계" aria-label="세션 통계">
               <RiBarChartFill size={18} />
             </button>
           )}

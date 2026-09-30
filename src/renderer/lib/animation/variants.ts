@@ -62,12 +62,6 @@ export const modalContentVariants: Variants = {
   },
 }
 
-// Sidebar toggle
-export const sidebarVariants: Variants = {
-  expanded: { width: 280, transition: { ...SPRINGS.snappy } },
-  collapsed: { width: 48, transition: { ...SPRINGS.snappy } },
-}
-
 // List item stagger
 export const listContainerVariants: Variants = {
   hidden: { opacity: 0 },

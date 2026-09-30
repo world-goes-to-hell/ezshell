@@ -11,6 +11,8 @@ interface PathBarProps {
   label: string
   /** Runtime SSH session id; enables per-saved-session path bookmarks */
   sessionId?: string
+  /** Increment to open the path editor from outside (Ctrl+L in the file list) */
+  editRequest?: number
 }
 
 const WINDOWS_DRIVES = ['C:', 'D:', 'E:', 'F:', 'G:', 'H:']
@@ -21,7 +23,7 @@ const isWindows = () => {
          navigator.userAgent.toLowerCase().includes('windows')
 }
 
-export function PathBar({ path, onNavigate, type, label, sessionId }: PathBarProps) {
+export function PathBar({ path, onNavigate, type, label, sessionId, editRequest = 0 }: PathBarProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [inputPath, setInputPath] = useState(path)
   const [highlightedIndex, setHighlightedIndex] = useState(NO_HIGHLIGHT)
@@ -31,6 +33,10 @@ export function PathBar({ path, onNavigate, type, label, sessionId }: PathBarPro
   useEffect(() => {
     setInputPath(path)
   }, [path])
+
+  useEffect(() => {
+    if (editRequest > 0) setIsEditing(true)
+  }, [editRequest])
 
   // Show every bookmark until the user starts typing, then filter by what was typed
   const suggestions = useMemo(() => {

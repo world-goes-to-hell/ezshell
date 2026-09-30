@@ -1,0 +1,285 @@
+/* Icon-only (compact) sidebar.
+   Rows span the full width and the 44px tile is centred inside them, so the layout
+   does not depend on whether the list currently shows a scrollbar.
+   Labels stay at 12px or larger: Hangul strokes blur together below that. */
+.sidebar.compact {
+  --compact-tile: 44px;
+  --compact-gutter: 4px;
+  width: 80px;
+}
+
+.sidebar.compact .sidebar-header {
+  justify-content: center;
+  padding: 10px 0;
+}
+
+.sidebar.compact .sidebar-actions {
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar.compact .btn-new-connection-compact,
+.sidebar.compact .btn-compact-action {
+  width: var(--compact-tile);
+  height: var(--compact-tile);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.sidebar.compact .btn-new-connection-compact {
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+}
+
+.sidebar.compact .btn-new-connection-compact:hover {
+  background: var(--accent-hover);
+}
+
+.sidebar.compact .btn-compact-action {
+  height: 32px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.sidebar.compact .btn-compact-action:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.sidebar.compact .btn-new-connection-compact:focus-visible,
+.sidebar.compact .btn-compact-action:focus-visible,
+.sidebar.compact .sidebar-footer-btn:focus-visible,
+.sidebar.compact .compact-folder-marker:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Session list: a reserved thin gutter keeps the column width fixed */
+.sidebar.compact .session-list {
+  padding: 8px 0;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+.sidebar.compact .session-list::-webkit-scrollbar {
+  width: var(--compact-gutter);
+}
+
+.sidebar.compact .folder-contents {
+  padding-left: 0;
+}
+
+.sidebar.compact .session-folder {
+  margin-bottom: 0;
+}
+
+/* Folder marker: separates groups and toggles the folder */
+.compact-folder-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: calc(100% - 12px);
+  height: 24px;
+  margin: 8px auto 4px;
+  padding: 0 2px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.compact-folder-marker.has-color {
+  border-top: 2px solid var(--session-color);
+  color: color-mix(in srgb, var(--session-color) 70%, var(--text-primary));
+}
+
+.compact-folder-marker.nested {
+  /* Indented from the left like a tree; --depth is capped in the component */
+  --indent: calc(var(--depth, 1) * 6px);
+  width: calc(100% - 12px - var(--indent));
+  margin-left: calc(6px + var(--indent));
+  margin-right: 6px;
+  justify-content: flex-start;
+  padding-left: 4px;
+  height: 22px;
+  margin-top: 4px;
+  border-top-width: 1px;
+  border-top-style: dashed;
+}
+
+.compact-folder-chevron {
+  flex-shrink: 0;
+  margin-left: -2px;
+}
+
+.compact-folder-marker:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.compact-folder-marker.drop-target {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+}
+
+.compact-folder-abbr {
+  max-width: 48px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
+}
+
+/* Session row */
+.sidebar.compact .session-item {
+  position: relative;
+  justify-content: center;
+  height: 50px;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border-radius: 0;
+}
+
+.sidebar.compact .session-item:hover,
+.sidebar.compact .session-item.active {
+  background: transparent;
+}
+
+.sidebar.compact .session-item-icon {
+  position: relative;
+  width: var(--compact-tile);
+  height: var(--compact-tile);
+  justify-content: center;
+  gap: 0;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border-radius: var(--radius-md);
+  transition: background var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.sidebar.compact .session-item.has-color .session-item-icon {
+  background: color-mix(in srgb, var(--session-color) 22%, var(--bg-hover));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--session-color) 60%, transparent);
+}
+
+.sidebar.compact .session-item:hover .session-item-icon {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: none;
+}
+
+.sidebar.compact .session-item.active .session-item-icon {
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.sidebar.compact .session-item.active.has-color .session-item-icon {
+  box-shadow: inset 0 0 0 2px var(--session-color);
+}
+
+.sidebar.compact .session-item:focus-visible {
+  outline: none;
+}
+
+.sidebar.compact .session-item:focus-visible .session-item-icon {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.session-abbr {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Left-edge bar: short on hover, tall for connected sessions */
+.sidebar.compact .session-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 0;
+  transform: translateY(-50%);
+  background: var(--accent);
+  transition: height var(--transition-base);
+}
+
+.sidebar.compact .session-item.has-color::before {
+  background: var(--session-color);
+}
+
+.sidebar.compact .session-item:hover::before {
+  height: 12px;
+}
+
+.sidebar.compact .session-item.active::before {
+  height: 28px;
+}
+
+/* Connected badge on the tile corner instead of next to the icon */
+.sidebar.compact .session-item-icon .status-indicator {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+}
+
+.sidebar.compact .session-item-icon .status-dot {
+  width: 9px;
+  height: 9px;
+  outline: 2px solid var(--bg-secondary);
+}
+
+/* Reorder drop lines span the row */
+.sidebar.compact .session-item.drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.sidebar.compact .session-item.drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.sidebar.compact .session-list-empty {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0;
+}
+
+.session-list-empty-icon {
+  display: flex;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+/* Footer actions stack vertically */
+.sidebar.compact .sidebar-footer {
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
+}
+
+.sidebar.compact .sidebar-footer-btn {
+  flex: none;
+  width: var(--compact-tile);
+  height: 32px;
+  padding: 0;
+}

@@ -1,0 +1,124 @@
+/* "기존 세션 선택" picker opened from the tab bar + menu */
+
+/* Doubled class beats the global .modal-content `width: fit-content` */
+.modal-content.session-picker-modal {
+  width: 520px;
+  max-width: min(90%, 520px);
+  display: flex;
+  flex-direction: column;
+}
+
+.session-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  transition: border-color var(--transition-fast);
+}
+
+.session-picker-search:focus-within {
+  border-color: var(--accent);
+}
+
+.session-picker-search input {
+  flex: 1;
+  height: 38px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.session-picker-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.session-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.session-picker-item.is-selected {
+  background: var(--bg-hover);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.session-picker-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+
+.session-picker-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.session-picker-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.session-picker-name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-picker-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-alpha);
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.session-picker-meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-picker-folder {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-picker-empty {
+  padding: 32px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.session-picker-hint {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: right;
+}
