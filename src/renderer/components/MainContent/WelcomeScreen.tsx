@@ -29,7 +29,7 @@ export function WelcomeScreen({ onNewConnection }: WelcomeScreenProps) {
           <RiTerminalBoxFill size={64} />
         </motion.div>
       </motion.div>
-      <motion.h1 variants={welcomeItemVariants}>My SSH Client</motion.h1>
+      <motion.h1 variants={welcomeItemVariants}>ezShell</motion.h1>
       <motion.p variants={welcomeItemVariants}>빠르고 안전한 SSH 연결을 시작하세요</motion.p>
       <motion.button
         className="btn-primary"

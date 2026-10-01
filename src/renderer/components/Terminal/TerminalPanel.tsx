@@ -18,6 +18,8 @@ import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory
 import { insertIntoSession } from '../../lib/terminalInputTargets'
 import { CommandHistoryPanel } from './CommandHistoryPanel'
 import 'xterm/css/xterm.css'
+import { SerializeAddon } from 'xterm-addon-serialize'
+import { registerTerminalSerializer, setPendingSnapshot, takePendingSnapshot, SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
 
 interface TerminalPanelProps {
   sessionId: string
@@ -95,6 +97,8 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
     let disableCopyOnSelect: (() => void) | null = null
     let detachCommandHistory: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
+    let unregisterSerializer: (() => void) | null = null
+    let serializeScreen: (() => string) | null = null
     let disposed = false
     const pendingData: string[] = []
 
@@ -209,6 +213,12 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       searchAddon.current = new SearchAddon()
       term.loadAddon(searchAddon.current)
 
+      // Screen contents travel with the tab (pop-out window, merge back, single <-> split remount)
+      const serializeAddon = new SerializeAddon()
+      term.loadAddon(serializeAddon)
+      serializeScreen = () => serializeAddon.serialize({ scrollback: SNAPSHOT_SCROLLBACK_ROWS })
+      unregisterSerializer = registerTerminalSerializer(sessionId, serializeScreen)
+
       term.open(terminalRef.current)
       disableCopyOnSelect = enableCopyOnSelect(term)
       detachCommandHistory = commandHistory.attach(term)
@@ -231,6 +241,18 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
         if (isPasteShortcut(event)) return false
         return true // Let other keys through
       })
+
+      // Earlier screen of this session first, then output that arrived while mounting.
+      // Size the terminal first so full-screen programs (vim, top) are not restored into 80x24.
+      const restored = takePendingSnapshot(sessionId)
+      if (restored) {
+        try {
+          fitTerminalWithMargin()
+        } catch {
+          // Restore at the default size
+        }
+        term.write(restored)
+      }
 
       // Write any buffered data
       if (pendingData.length > 0) {
@@ -367,6 +389,16 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       }
       disableCopyOnSelect?.()
       detachCommandHistory?.()
+      // Still a tab here = the layout remounted it (single <-> split): keep the screen for the new instance.
+      // A removed tab (closed / popped out) keeps nothing; pop-out captures its screen beforehand.
+      if (serializeScreen && useTerminalStore.getState().terminals.has(sessionId)) {
+        try {
+          setPendingSnapshot(sessionId, serializeScreen())
+        } catch {
+          // Nothing to keep
+        }
+      }
+      unregisterSerializer?.()
       if (term) {
         term.dispose()
       }
@@ -380,6 +412,15 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       terminalInstance.current.focus()
     }
   }, [isActive])
+
+  // Focus on request (moving here from the sidebar), which also covers a tab that was already active.
+  // Only a request newer than the last one seen counts, so a remount does not grab focus.
+  const focusSeq = useTerminalStore(state => (state.focusRequest?.sessionId === sessionId ? state.focusRequest.seq : 0))
+  const seenFocusSeq = useRef(focusSeq)
+  useEffect(() => {
+    if (focusSeq > seenFocusSeq.current) terminalInstance.current?.focus()
+    seenFocusSeq.current = focusSeq
+  }, [focusSeq])
 
   // Apply font settings from store when they change or terminal initializes
   useEffect(() => {
@@ -724,18 +765,13 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
             )}
           </AnimatePresence>
           {commandHistory.popup}
-          {/* Simple 2-split (horizontal/vertical) */}
+          {/* Simple 2-split (horizontal/vertical) divider; its pane is w-split-1 below, shared with quad/tri */}
           {isSplit && (splitDirection === 'horizontal' || splitDirection === 'vertical') && (
-            <>
-              <div
-                className={`terminal-split-divider ${splitDirection}`}
-                onMouseDown={(e) => { e.preventDefault(); setIsTermSplitResizing(true) }}
-                title="드래그로 크기 조절"
-              />
-              <div className="terminal-container split-terminal" style={{ flex: 1 - termSplitRatio }}>
-                <SplitTerminal sessionId={sessionId} key="split-1" />
-              </div>
-            </>
+            <div
+              className={`terminal-split-divider ${splitDirection}`}
+              onMouseDown={(e) => { e.preventDefault(); setIsTermSplitResizing(true) }}
+              title="드래그로 크기 조절"
+            />
           )}
           {/* Multi-split dividers (layout-specific, stateless) */}
           {splitDirection === 'quad' && (
@@ -798,9 +834,12 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
                 onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }} />
             </>
           )}
-          {/* Multi-split terminals - keyed at same tree level for stable reconciliation */}
-          {isMultiSplit && (splitDirection === 'quad' || splitSlots.includes('split-1')) && (
+          {/* Split terminals - keyed at the same tree level for stable reconciliation.
+              w-split-1 is also the 2-split pane: one element for every layout, so going from a 2-split
+              to quad/tri (and back) keeps its shell instead of closing it and opening a new one. */}
+          {isSplit && (!isMultiSplit || splitDirection === 'quad' || splitSlots.includes('split-1')) && (
             <div key="w-split-1" className="terminal-container split-terminal" style={
+              !isMultiSplit ? { flex: 1 - termSplitRatio } :
               splitDirection === 'quad' ? { gridRow: '1', gridColumn: '3' } :
               splitDirection === 'tri-top' ? { gridRow: '1', gridColumn: '3' } :
               splitDirection === 'tri-right' ? { gridRow: '1', gridColumn: '3' } :

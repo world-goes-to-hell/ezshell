@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { RiFileFill, RiFileTransferFill, RiFileCopyFill, RiCloseFill, RiFileSearchFill } from 'react-icons/ri'
 
 export type OverwriteAction = 'overwrite' | 'skip' | 'rename' | 'size-diff'
@@ -13,6 +13,14 @@ interface OverwriteModalProps {
 export function OverwriteModal({ open, fileName, onClose, onConfirm }: OverwriteModalProps) {
   const [selectedAction, setSelectedAction] = useState<OverwriteAction>('overwrite')
   const [applyToAll, setApplyToAll] = useState(false)
+
+  // Start every question from the defaults; a checked "apply to all" left over from a cancelled
+  // dialog would otherwise silently apply to the next batch
+  useEffect(() => {
+    if (!open) return
+    setSelectedAction('overwrite')
+    setApplyToAll(false)
+  }, [open, fileName])
 
   if (!open) return null
 

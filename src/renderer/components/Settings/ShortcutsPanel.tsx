@@ -3,6 +3,7 @@ import { motion, AnimatePresence, type Variants } from 'framer-motion'
 import { RiSearchLine, RiTerminalLine, RiServerLine, RiNavigationLine, RiAppsLine, RiRestartLine } from 'react-icons/ri'
 import { useShortcutsStore, ShortcutCategory } from '../../stores/shortcutsStore'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
+import { confirmDialog } from '../../stores/confirmStore'
 import './ShortcutsPanel.css'
 
 const categoryIcons: Record<ShortcutCategory, React.ComponentType<{ size?: number }>> = {
@@ -55,10 +56,14 @@ export function ShortcutsPanel() {
 
   const hasCustomBindings = Object.keys(customBindings).length > 0
 
-  const handleResetAll = () => {
-    if (confirm('Reset all keyboard shortcuts to defaults?')) {
-      Object.keys(customBindings).forEach(id => resetCustomBinding(id))
-    }
+  const handleResetAll = async () => {
+    const confirmed = await confirmDialog({
+      title: '단축키 초기화',
+      message: `직접 바꾼 단축키 ${Object.keys(customBindings).length}개를 모두 기본값으로 되돌립니다.`,
+      confirmLabel: '초기화',
+      danger: true
+    })
+    if (confirmed) Object.keys(customBindings).forEach(id => resetCustomBinding(id))
   }
 
   const renderKeys = (keys: string[]) => {

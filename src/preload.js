@@ -152,16 +152,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ==================== SFTP 창 분리 ====================
 
-  openSftpWindow: (sessionId, localPath, remotePath) =>
-    ipcRenderer.invoke('open-sftp-window', { sessionId, localPath, remotePath }),
+  openSftpWindow: (sessionId, localPath, remotePath, title) =>
+    ipcRenderer.invoke('open-sftp-window', { sessionId, localPath, remotePath, title }),
 
   // ==================== 터미널 창 분리 ====================
 
-  openTerminalWindow: (sessionId, title) =>
-    ipcRenderer.invoke('open-terminal-window', { sessionId, title }),
+  // snapshot: serialized screen of the tab, shown first in the new window
+  openTerminalWindow: (sessionId, title, snapshot) =>
+    ipcRenderer.invoke('open-terminal-window', { sessionId, title, snapshot }),
 
-  mergeTerminalToMain: (sessionId, title, host, username) =>
-    ipcRenderer.invoke('merge-terminal-to-main', { sessionId, title, host, username }),
+  takeTerminalSnapshot: (sessionId) => ipcRenderer.invoke('take-terminal-snapshot', { sessionId }),
+
+  mergeTerminalToMain: (sessionId, title, host, username, snapshot) =>
+    ipcRenderer.invoke('merge-terminal-to-main', { sessionId, title, host, username, snapshot }),
 
   onTerminalMerge: (callback) => {
     const handler = (event, data) => callback(data);
@@ -238,5 +241,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('terminal-zoom');
     ipcRenderer.on('terminal-zoom', (event, direction) => callback(direction));
     return () => ipcRenderer.removeAllListeners('terminal-zoom');
+  },
+
+  // MCP 서버 (Claude Code)
+  mcpGetStatus: () => ipcRenderer.invoke('mcp-get-status'),
+  mcpUpdateConfig: (patch) => ipcRenderer.invoke('mcp-update-config', patch),
+  mcpRegenerateToken: () => ipcRenderer.invoke('mcp-regenerate-token'),
+  mcpRespondApproval: (id, approved) => ipcRenderer.invoke('mcp-respond-approval', { id, approved }),
+  mcpReadAudit: (limit) => ipcRenderer.invoke('mcp-read-audit', { limit }),
+  mcpListActivity: () => ipcRenderer.invoke('mcp-list-activity'),
+  mcpCancelActivity: (id) => ipcRenderer.invoke('mcp-cancel-activity', { id }),
+  mcpSetupClient: (request) => ipcRenderer.invoke('mcp-setup-client', request),
+  onMcpActivity: (callback) => {
+    const handler = (event, item) => callback(item);
+    ipcRenderer.on('mcp-activity', handler);
+    return () => ipcRenderer.removeListener('mcp-activity', handler);
+  },
+  onMcpApprovalRequest: (callback) => {
+    const handler = (event, request) => callback(request);
+    ipcRenderer.on('mcp-approval-request', handler);
+    return () => ipcRenderer.removeListener('mcp-approval-request', handler);
+  },
+  onMcpApprovalDismiss: (callback) => {
+    const handler = (event, payload) => callback(payload);
+    ipcRenderer.on('mcp-approval-dismiss', handler);
+    return () => ipcRenderer.removeListener('mcp-approval-dismiss', handler);
   }
 });

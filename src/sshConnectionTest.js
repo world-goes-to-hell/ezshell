@@ -160,4 +160,4 @@ function testSshConnection(config, deps = {}) {
   });
 }
 
-module.exports = { describeSshError, testSshConnection };
+module.exports = { describeSshError, testSshConnection, buildOptions };

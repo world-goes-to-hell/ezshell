@@ -63,6 +63,15 @@ describe('moveEntries', () => {
     expect(d.move).not.toHaveBeenCalled()
   })
 
+  it('waits for an asynchronous confirmation (the in-app dialog)', async () => {
+    const declined = deps({ confirm: vi.fn(async () => false) })
+    expect(await moveEntries({ side: 'remote', dirPath: '/a', names: ['x'], targetDir: '/a/b' }, declined)).toEqual({ moved: [], failed: 0 })
+    expect(declined.move).not.toHaveBeenCalled()
+
+    const accepted = deps({ confirm: vi.fn(async () => true) })
+    expect(await moveEntries({ side: 'remote', dirPath: '/a', names: ['x'], targetDir: '/a/b' }, accepted)).toEqual({ moved: ['x'], failed: 0 })
+  })
+
   it('skips the target folder itself and entries already in the target', async () => {
     const d = deps()
     const moved = await moveEntries({ side: 'remote', dirPath: '/a', names: ['b', 'x'], targetDir: '/a/b' }, d)

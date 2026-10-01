@@ -1,9 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
+import { SerializeAddon } from 'xterm-addon-serialize'
 import { useThemeStore } from '../../stores/themeStore'
-import { RiSubtractFill, RiCheckboxBlankFill, RiCloseFill, RiTerminalBoxFill, RiMergeCellsHorizontal } from 'react-icons/ri'
+import { RiTerminalBoxFill, RiMergeCellsHorizontal } from 'react-icons/ri'
 import { enableCopyOnSelect } from '../../lib/terminalClipboard'
+import { SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
+import { PopoutTitleBar } from '../TitleBar/PopoutTitleBar'
+import { usePopoutTheme } from '../../hooks/usePopoutTheme'
+import { usePopoutHostLabel } from '../../hooks/usePopoutHostLabel'
 import 'xterm/css/xterm.css'
 
 interface TerminalWindowProps {
@@ -11,16 +16,31 @@ interface TerminalWindowProps {
   title: string
 }
 
+// Same defaults as the main window's terminal store
+const DEFAULT_FONT_SIZE = 14
+const DEFAULT_FONT_FAMILY = 'JetBrains Mono'
+
+/** Terminal font the user picked in settings (the popout has no terminal store of its own) */
+async function loadTerminalFont(): Promise<{ fontSize: number; fontFamily: string }> {
+  try {
+    const settings = await window.electronAPI.loadSettings()
+    return {
+      fontSize: settings?.terminalFontSize || DEFAULT_FONT_SIZE,
+      fontFamily: settings?.terminalFontFamily || DEFAULT_FONT_FAMILY
+    }
+  } catch {
+    return { fontSize: DEFAULT_FONT_SIZE, fontFamily: DEFAULT_FONT_FAMILY }
+  }
+}
+
 export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
+  usePopoutTheme()
+  const hostLabel = usePopoutHostLabel(sessionId)
   const terminalRef = useRef<HTMLDivElement>(null)
   const terminalInstance = useRef<Terminal | null>(null)
   const fitAddon = useRef<FitAddon | null>(null)
+  const serializeAddon = useRef<SerializeAddon | null>(null)
   const isInitialized = useRef(false)
-
-  // Initialize theme for popout window
-  useEffect(() => {
-    useThemeStore.getState().initializeTheme()
-  }, [])
 
   useEffect(() => {
     if (!terminalRef.current || terminalInstance.current) return
@@ -46,16 +66,22 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
       }
     })
 
-    const initTimeout = setTimeout(() => {
+    const handleThemeChange = () => {
+      if (term && !disposed) term.options.theme = useThemeStore.getState().getTerminalTheme()
+    }
+
+    const initTerminal = async () => {
+      // Screen of the tab this window came from, and the user's terminal font
+      const [snapshot, font] = await Promise.all([
+        window.electronAPI.takeTerminalSnapshot?.(sessionId).catch(() => null) ?? Promise.resolve(null),
+        loadTerminalFont()
+      ])
       if (disposed || !terminalRef.current) return
 
-      // Get theme from store
-      const terminalTheme = useThemeStore.getState().getTerminalTheme()
-
       term = new Terminal({
-        theme: terminalTheme,
-        fontSize: 14,
-        fontFamily: '"JetBrains Mono", Consolas, "D2Coding", monospace',
+        theme: useThemeStore.getState().getTerminalTheme(),
+        fontSize: font.fontSize,
+        fontFamily: `"${font.fontFamily}", Consolas, "D2Coding", monospace`,
         cursorBlink: true,
         cursorStyle: 'bar',
         // xterm's default 'outline' draws a box around the cursor cell in unfocused panes,
@@ -67,12 +93,24 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
 
       fitAddon.current = new FitAddon()
       term.loadAddon(fitAddon.current)
+      serializeAddon.current = new SerializeAddon()
+      term.loadAddon(serializeAddon.current)
 
       term.open(terminalRef.current)
       disableCopyOnSelect = enableCopyOnSelect(term)
       terminalInstance.current = term
       isInitialized.current = true
 
+      // Earlier screen first, then output that arrived while the window was opening.
+      // Size the terminal first so full-screen programs (vim, top) are not restored into 80x24.
+      if (snapshot) {
+        try {
+          fitAddon.current.fit()
+        } catch {
+          // Restore at the default size
+        }
+        term.write(snapshot)
+      }
       if (pendingData.length > 0) {
         pendingData.forEach(data => term!.write(data))
         pendingData.length = 0
@@ -108,74 +146,50 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
 
       resizeObserver.observe(terminalRef.current)
       term.focus()
-
-      // Listen for theme changes
-      const handleThemeChange = () => {
-        if (term && !disposed) {
-          const newTheme = useThemeStore.getState().getTerminalTheme()
-          term.options.theme = newTheme
-        }
-      }
       window.addEventListener('theme-changed', handleThemeChange)
+    }
 
-      // Store cleanup function
-      ;(terminalRef.current as any).__themeCleanup = () => {
-        window.removeEventListener('theme-changed', handleThemeChange)
-      }
-    }, 50)
+    const initTimeout = setTimeout(() => { void initTerminal() }, 50)
 
     return () => {
       disposed = true
       clearTimeout(initTimeout)
       isInitialized.current = false
       unsubscribe()
-      if (resizeObserver) {
-        resizeObserver.disconnect()
-      }
-      // Clean up theme listener
-      if (terminalRef.current && (terminalRef.current as any).__themeCleanup) {
-        (terminalRef.current as any).__themeCleanup()
-      }
+      resizeObserver?.disconnect()
+      window.removeEventListener('theme-changed', handleThemeChange)
       disableCopyOnSelect?.()
-      if (term) {
-        term.dispose()
-      }
+      term?.dispose()
       terminalInstance.current = null
+      serializeAddon.current = null
     }
   }, [sessionId])
 
+  // Output in the few ms between this serialize and the main process routing data back to the main
+  // window is not carried over; this window closes right after.
+  const handleMerge = async () => {
+    let snapshot: string | undefined
+    try {
+      snapshot = serializeAddon.current?.serialize({ scrollback: SNAPSHOT_SCROLLBACK_ROWS }) || undefined
+    } catch {
+      // Merge without the screen
+    }
+    const info = await window.electronAPI.sshGetSessionInfo(sessionId).catch(() => null)
+    window.electronAPI.mergeTerminalToMain(sessionId, title, info?.host ?? '', info?.username ?? '', snapshot)
+  }
+
   return (
     <div className="terminal-window-container">
-      <div className="title-bar">
-        <div className="title-bar-drag">
-          <RiTerminalBoxFill size={18} style={{ color: 'var(--accent)' }} />
-          <span className="title-bar-title">{title}</span>
-        </div>
-        <div className="title-bar-controls">
-          <button
-            className="title-bar-btn"
-            onClick={() => {
-              // Parse title to get host/username (format: "username@host" or custom title)
-              const parts = title.split('@')
-              const username = parts.length > 1 ? parts[0] : ''
-              const host = parts.length > 1 ? parts[1] : title
-              window.electronAPI.mergeTerminalToMain(sessionId, title, host, username)
-            }}
-            title="메인 창으로 병합"
-          >
+      <PopoutTitleBar
+        icon={<RiTerminalBoxFill size={16} />}
+        title={title}
+        subtitle={hostLabel && hostLabel !== title ? hostLabel : undefined}
+        actions={
+          <button className="title-bar-btn popout-title-action" onClick={handleMerge} title="메인 창으로 병합" aria-label="메인 창으로 병합">
             <RiMergeCellsHorizontal size={16} />
           </button>
-          <button className="title-bar-btn" onClick={() => window.electronAPI.minimizeWindow()}>
-            <RiSubtractFill size={16} />
-          </button>
-          <button className="title-bar-btn" onClick={() => window.electronAPI.maximizeWindow()}>
-            <RiCheckboxBlankFill size={16} />
-          </button>
-          <button className="title-bar-btn title-bar-close" onClick={() => window.electronAPI.closeWindow()}>
-            <RiCloseFill size={16} />
-          </button>
-        </div>
-      </div>
+        }
+      />
       <div ref={terminalRef} className="terminal-window-content" />
     </div>
   )

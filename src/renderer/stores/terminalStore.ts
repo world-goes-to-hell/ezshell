@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import { takePendingSnapshot } from '../lib/terminalSnapshots'
+import { findTabPane } from '../lib/sessionTabs'
 import type { SSHConnectConfig } from '../hooks/useSSH'
 
 export interface TerminalInfo {
@@ -51,7 +53,13 @@ interface TerminalState {
 
   addTerminal: (sessionId: string, info: TerminalInfo) => void
   removeTerminal: (sessionId: string) => void
+  /** Drop output buffered for a session whose screen now lives in another window */
+  discardSshDataBuffer: (sessionId: string) => void
   setActiveTerminal: (sessionId: string | null) => void
+  /** Latest focusTerminal call; the tab's terminal takes keyboard focus whenever seq grows */
+  focusRequest: { sessionId: string; seq: number } | null
+  /** Bring an open tab to the front from outside the tab bar, keeping a split view as it is */
+  focusTerminal: (sessionId: string) => void
   setConnecting: (connecting: boolean) => void
   setConnected: (sessionId: string) => void
   setDisconnected: (sessionId: string) => void
@@ -124,6 +132,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   terminals: new Map(),
   activeTerminalId: null,
   isConnecting: false,
+  focusRequest: null,
   sshDataHandlers: sshDataHandlers,
   layout: { ...defaultLayout },
   fontSize: DEFAULT_FONT_SIZE,
@@ -154,6 +163,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     newTerminals.delete(sessionId)
     // Clean up SSH data buffer
     sshDataBuffers.delete(sessionId)
+    // A screen handed over for a tab that never mounted (merged back, then closed at once) must not linger:
+    // terminal output can contain secrets
+    takePendingSnapshot(sessionId)
 
     // If active terminal was removed, switch to another
     let newActiveId = state.activeTerminalId
@@ -254,6 +266,23 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       layout: newLayout
     }
   }),
+
+  focusTerminal: (sessionId) => {
+    const { terminals, layout, setActiveTerminal, setActivePaneTerminal, setActivePaneType, setTerminalActivity } = get()
+    if (!terminals.has(sessionId)) return
+
+    const pane = findTabPane(layout, sessionId)
+    if (pane) {
+      // Same as clicking the tab in its pane; setActiveTerminal would not move the pane's own active tab
+      setActivePaneTerminal(pane, sessionId)
+      setActivePaneType(pane)
+      if (terminals.get(sessionId)?.hasActivity) setTerminalActivity(sessionId, false)
+    } else {
+      setActiveTerminal(sessionId)
+    }
+    // Becoming active already focuses a terminal, but not when the tab was active all along
+    set((state) => ({ focusRequest: { sessionId, seq: (state.focusRequest?.seq ?? 0) + 1 } }))
+  },
 
   setConnecting: (connecting) => set({ isConnecting: connecting }),
 
@@ -619,6 +648,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   unregisterSshDataHandler: (sessionId) => {
     sshDataHandlers.delete(sessionId)
+  },
+
+  discardSshDataBuffer: (sessionId) => {
+    sshDataBuffers.delete(sessionId)
   },
 
   dispatchSshData: (sessionId, data) => {

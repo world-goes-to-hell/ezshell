@@ -11,6 +11,8 @@ import { RiFolderFill, RiArrowUpSFill } from 'react-icons/ri'
 import { InlineNameInput } from './InlineNameInput'
 import { FileListHeader } from './FileListHeader'
 import { getFileIcon } from './fileIcons'
+import { TransferMarkBadge, transferMarkClass } from './TransferMarkBadge'
+import { transferMarksFor } from '../../lib/transferMarks'
 import './FileList.css'
 import {
   FileListContextMenu, buildContextMenuItems, CONTEXT_MENU_ITEM_HEIGHT, CONTEXT_MENU_WIDTH,
@@ -67,6 +69,9 @@ export function FileList({
   // Kept while the panel stays open (this component stays mounted across folder changes)
   const [sort, setSort] = useState<FileSort>(DEFAULT_SORT)
   const files = useMemo(() => sortFileItems(rawFiles, sort), [rawFiles, sort])
+  // Files this session uploaded (remote list) / downloaded (local list) into the folder on screen
+  const transfers = store.transfers(sessionId)
+  const transferMarks = useMemo(() => transferMarksFor(transfers, type, currentPath), [transfers, type, currentPath])
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, file: null })
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const fileListRef = useRef<HTMLDivElement>(null)
@@ -510,11 +515,12 @@ export function FileList({
       )}
       {files.map((file, index) => {
         const isRenaming = editing?.mode === 'rename' && editing.name === file.name
+        const mark = file.type === 'file' ? transferMarks.get(file.name) : undefined
         return (
           <div
             key={file.name}
             ref={(el) => { itemRefs.current[index] = el }}
-            className={`file-item ${file.type === 'directory' ? 'is-directory' : 'is-file'} ${selected.has(file.name) ? 'selected' : ''} ${focusIndex === index ? 'focused' : ''} ${isRenaming ? 'is-editing' : ''} ${folderDrop.dropTargetKey === file.name ? 'drop-target' : ''}`}
+            className={`file-item ${file.type === 'directory' ? 'is-directory' : 'is-file'} ${selected.has(file.name) ? 'selected' : ''} ${focusIndex === index ? 'focused' : ''} ${isRenaming ? 'is-editing' : ''} ${folderDrop.dropTargetKey === file.name ? 'drop-target' : ''} ${transferMarkClass(mark)}`}
             onClick={(e) => handleClick(e, file, index)}
             onDoubleClick={() => handleDoubleClick(file)}
             onContextMenu={(e) => openContextMenu(e, file)}
@@ -534,6 +540,7 @@ export function FileList({
             ) : (
               <span className="file-name">{file.name}</span>
             )}
+            {mark && !isRenaming && <TransferMarkBadge mark={mark} />}
             {/* Always render the remote cells so rows stay aligned with the column headers */}
             {type === 'remote' && (
               <span className="file-owner" title={file.owner ? `소유자: ${file.owner}${file.group ? `  그룹: ${file.group}` : ''}` : undefined}>

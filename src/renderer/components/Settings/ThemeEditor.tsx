@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { RiSaveLine, RiRefreshLine, RiEyeLine, RiCloseLine } from 'react-icons/ri'
 import { ThemeDefinition, ThemeColors, TerminalColors } from '../../types/theme'
@@ -24,6 +24,8 @@ const DEFAULT_THEME: ThemeDefinition = {
 
 export function ThemeEditor({ editingTheme, onClose, onSave }: ThemeEditorProps) {
   const [themeName, setThemeName] = useState('')
+  const [nameError, setNameError] = useState<string | null>(null)
+  const nameInputRef = useRef<HTMLInputElement>(null)
   const [themeCategory, setThemeCategory] = useState<'dark' | 'light' | 'special'>('dark')
   const [colors, setColors] = useState<ThemeColors>(DEFAULT_THEME.colors)
   const [terminalColors, setTerminalColors] = useState<TerminalColors>(DEFAULT_THEME.terminal)
@@ -57,7 +59,8 @@ export function ThemeEditor({ editingTheme, onClose, onSave }: ThemeEditorProps)
 
   const handleSave = () => {
     if (!themeName.trim()) {
-      alert('테마 이름을 입력해주세요')
+      setNameError('테마 이름을 입력해 주세요')
+      nameInputRef.current?.focus()
       return
     }
 
@@ -113,12 +116,22 @@ export function ThemeEditor({ editingTheme, onClose, onSave }: ThemeEditorProps)
             <div className="theme-editor-section">
               <label className="theme-editor-label">테마 이름</label>
               <input
+                ref={nameInputRef}
+                id="theme-editor-name"
                 type="text"
-                className="theme-editor-input"
+                className={`theme-editor-input ${nameError ? 'has-error' : ''}`}
                 value={themeName}
-                onChange={(e) => setThemeName(e.target.value)}
-                placeholder="My Custom Theme"
+                onChange={(e) => {
+                  setThemeName(e.target.value)
+                  if (nameError) setNameError(null)
+                }}
+                placeholder="예: 나만의 테마"
+                aria-invalid={nameError ? true : undefined}
+                aria-describedby={nameError ? 'theme-editor-name-error' : undefined}
               />
+              {nameError && (
+                <p id="theme-editor-name-error" className="theme-editor-error" role="alert">{nameError}</p>
+              )}
             </div>
 
             <div className="theme-editor-section">

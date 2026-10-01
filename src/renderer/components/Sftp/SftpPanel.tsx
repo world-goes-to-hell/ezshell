@@ -1,24 +1,18 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { useSftpStore, FileItem } from '../../stores/sftpStore'
+import { useSftpStore } from '../../stores/sftpStore'
 import { FileList, keepSelectionProps } from './FileList'
 import { TransferQueue } from './TransferQueue'
 import { PathBar } from './PathBar'
-import { OverwriteModal, OverwriteAction } from './OverwriteModal'
+import { OverwriteModal } from './OverwriteModal'
 import { toast } from '../../stores/toastStore'
 import { RiCloseFill, RiUploadFill, RiDownloadFill, RiRefreshFill, RiExternalLinkFill, RiLinkM, RiLinkUnlinkM, RiArrowUpDownLine } from 'react-icons/ri'
 import { RxDragHandleDots2 } from 'react-icons/rx'
 import { deleteRemoteSelection } from '../../lib/sftpRemoteDelete'
 import { useTransferQueue } from '../../hooks/useTransferQueue'
 import { useSftpPaneActions } from '../../hooks/useSftpPaneActions'
-
-interface PendingTransfer {
-  type: 'upload' | 'download'
-  fileName: string
-  localPath: string
-  remotePath: string
-  /** Known when sending into a folder other than the one on screen (drop on a folder row) */
-  targetExists?: boolean
-}
+import { useTerminalStore } from '../../stores/terminalStore'
+import { useReloadOnTransferActivity } from '../../hooks/useReloadOnTransferActivity'
+import { useSftpTransferBatch, sizesByName, type PendingTransfer } from '../../hooks/useSftpTransferBatch'
 
 interface SftpPanelProps {
   sessionId: string
@@ -41,13 +35,6 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
 
   const [isResizing, setIsResizing] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
-
-  // Overwrite modal state
-  const [overwriteModalOpen, setOverwriteModalOpen] = useState(false)
-  const [conflictFileName, setConflictFileName] = useState('')
-  const [pendingTransfers, setPendingTransfers] = useState<PendingTransfer[]>([])
-  const [currentTransferIndex, setCurrentTransferIndex] = useState(0)
-  const [globalOverwriteAction, setGlobalOverwriteAction] = useState<OverwriteAction | null>(null)
 
   // Transfer queue resize state
   const [transferHeight, setTransferHeight] = useState(120)
@@ -120,7 +107,9 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
   const handlePopOut = async () => {
     // Open SFTP in a new window
     if (window.electronAPI.openSftpWindow) {
-      await window.electronAPI.openSftpWindow(sessionId, localPath, remotePath)
+      const terminal = useTerminalStore.getState().terminals.get(sessionId)
+      const title = terminal?.title || (terminal ? `${terminal.username}@${terminal.host}` : '')
+      await window.electronAPI.openSftpWindow(sessionId, localPath, remotePath, title)
     }
   }
 
@@ -299,132 +288,29 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     }
   }
 
-  const generateUniqueName = (fileName: string, existingFiles: FileItem[]): string => {
-    const existingNames = new Set(existingFiles.map(f => f.name))
-    const dotIndex = fileName.lastIndexOf('.')
-    const baseName = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName
-    const extension = dotIndex > 0 ? fileName.slice(dotIndex) : ''
-
-    let counter = 1
-    let newName = `${baseName} (${counter})${extension}`
-    while (existingNames.has(newName)) {
-      counter++
-      newName = `${baseName} (${counter})${extension}`
-    }
-    return newName
-  }
-
-  const processTransfer = async (transfer: PendingTransfer, action: OverwriteAction) => {
-    if (action === 'skip') return
-
-    // size-diff: compare file sizes, skip if same
-    if (action === 'size-diff') {
-      const sourceFile = transfer.type === 'upload'
-        ? localFiles.find(f => f.name === transfer.fileName)
-        : remoteFiles.find(f => f.name === transfer.fileName)
-      const targetFile = transfer.type === 'upload'
-        ? remoteFiles.find(f => f.name === transfer.fileName)
-        : localFiles.find(f => f.name === transfer.fileName)
-      if (sourceFile && targetFile && sourceFile.size === targetFile.size) {
-        return // Same size, skip
-      }
-      // Different size, fall through to overwrite
-    }
-
-    let targetPath = transfer.type === 'upload' ? transfer.remotePath : transfer.localPath
-
-    if (action === 'rename') {
-      const targetFiles = transfer.type === 'upload' ? remoteFiles : localFiles
-      const newName = generateUniqueName(transfer.fileName, targetFiles)
-      if (transfer.type === 'upload') {
-        targetPath = joinPath(remotePath, newName, false)
-      } else {
-        targetPath = joinPath(localPath, newName, true)
-      }
-    }
-
-    try {
-      if (transfer.type === 'upload') {
-        await window.electronAPI.sftpQueueUpload(sessionId, transfer.localPath, targetPath)
-        toast.success('Upload queued', transfer.fileName)
-      } else {
-        await window.electronAPI.sftpQueueDownload(sessionId, transfer.remotePath, targetPath)
-        toast.success('Download queued', transfer.fileName)
-      }
-    } catch (error) {
-      console.error('Transfer failed:', error)
-      toast.error('Transfer failed', `${transfer.fileName}: ${error instanceof Error ? error.message : 'Unknown error'}`)
-    }
-  }
-
-  const processNextTransfer = async (transfers: PendingTransfer[], index: number) => {
-    if (index >= transfers.length) {
-      // All transfers processed, refresh file lists
+  const transferBatch = useSftpTransferBatch({
+    sessionId,
+    localFiles,
+    remoteFiles,
+    onDone: async () => {
       await loadRemoteFiles(remotePath)
       await loadLocalFiles(localPath)
-      setPendingTransfers([])
-      setCurrentTransferIndex(0)
-      setGlobalOverwriteAction(null)
-      return
     }
-
-    const transfer = transfers[index]
-    const targetFiles = transfer.type === 'upload' ? remoteFiles : localFiles
-    const fileExists = transfer.targetExists ?? targetFiles.some(f => f.name === transfer.fileName)
-
-    if (fileExists && !globalOverwriteAction) {
-      // Show modal for conflict
-      setConflictFileName(transfer.fileName)
-      setOverwriteModalOpen(true)
-    } else {
-      // No conflict or global action set, proceed
-      await processTransfer(transfer, globalOverwriteAction || 'overwrite')
-      await processNextTransfer(transfers, index + 1)
-    }
-  }
-
-  const handleOverwriteConfirm = async (action: OverwriteAction, applyToAll: boolean) => {
-    setOverwriteModalOpen(false)
-
-    if (applyToAll) {
-      setGlobalOverwriteAction(action)
-    }
-
-    const transfer = pendingTransfers[currentTransferIndex]
-    await processTransfer(transfer, action)
-
-    const nextIndex = currentTransferIndex + 1
-    setCurrentTransferIndex(nextIndex)
-
-    if (applyToAll) {
-      // Process remaining with global action
-      for (let i = nextIndex; i < pendingTransfers.length; i++) {
-        await processTransfer(pendingTransfers[i], action)
-      }
-      // All done, refresh
-      await loadRemoteFiles(remotePath)
-      await loadLocalFiles(localPath)
-      setPendingTransfers([])
-      setCurrentTransferIndex(0)
-      setGlobalOverwriteAction(null)
-    } else {
-      await processNextTransfer(pendingTransfers, nextIndex)
-    }
-  }
+  })
 
   /**
-   * Names already in a folder that is not on screen, for the overwrite check of a drop onto a folder row.
+   * Entries already in a folder that is not on screen, for the overwrite check of a drop onto a folder row.
    * Returns null (and tells the user) when the folder cannot be read.
    */
-  const listNamesIn = async (side: 'local' | 'remote', dirPath: string): Promise<Set<string> | null> => {
+  const listEntriesIn = async (side: 'local' | 'remote', dirPath: string): Promise<Map<string, number> | null> => {
     try {
       if (side === 'remote') {
         const entries = await window.electronAPI.sftpList(sessionId, dirPath)
-        return new Set((entries || []).map((f: { name: string }) => f.name))
+        return sizesByName(entries || [])
       }
       const result = await window.electronAPI.localList(dirPath)
       if (!result.success) throw new Error(result.error)
-      return new Set((result.files || []).map((f: { name: string }) => f.name))
+      return sizesByName(result.files || [])
     } catch (error) {
       toast.error('대상 폴더를 읽을 수 없습니다', `${dirPath}: ${error instanceof Error ? error.message : String(error)}`)
       return null
@@ -434,7 +320,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
   // targetDir: a local folder row the remote entries were dropped on (default: the local folder on screen)
   const handleDropOnLocal = async (fileNames: string[], targetDir?: string) => {
     const localBase = targetDir ?? localPath
-    const existing = targetDir ? await listNamesIn('local', targetDir) : undefined
+    const existing = targetDir ? await listEntriesIn('local', targetDir) : undefined
     if (existing === null) return
     const transfers: PendingTransfer[] = []
     for (const fileName of fileNames) {
@@ -445,21 +331,17 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
           fileName,
           localPath: joinPath(localBase, fileName, true),
           remotePath: joinPath(remotePath, fileName, false),
-          targetExists: existing?.has(fileName)
+          targetEntries: existing
         })
       }
     }
-    if (transfers.length === 0) return
-    setPendingTransfers(transfers)
-    setCurrentTransferIndex(0)
-    setGlobalOverwriteAction(null)
-    await processNextTransfer(transfers, 0)
+    await transferBatch.start(transfers)
   }
 
   // targetDir: a remote folder row the local entries were dropped on (default: the remote folder on screen)
   const handleDropOnRemote = async (fileNames: string[], targetDir?: string) => {
     const remoteBase = targetDir ?? remotePath
-    const existing = targetDir ? await listNamesIn('remote', targetDir) : undefined
+    const existing = targetDir ? await listEntriesIn('remote', targetDir) : undefined
     if (existing === null) return
     const transfers: PendingTransfer[] = []
     const directories: string[] = []
@@ -475,7 +357,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
           fileName,
           localPath: joinPath(localPath, fileName, true),
           remotePath: joinPath(remoteBase, fileName, false),
-          targetExists: existing?.has(fileName)
+          targetEntries: existing
         })
       }
     }
@@ -492,10 +374,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     }
 
     if (transfers.length > 0) {
-      setPendingTransfers(transfers)
-      setCurrentTransferIndex(0)
-      setGlobalOverwriteAction(null)
-      await processNextTransfer(transfers, 0)
+      await transferBatch.start(transfers)
     } else if (directories.length > 0) {
       await loadRemoteFiles(remotePath)
     }
@@ -539,15 +418,21 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
 
     // Upload individual files
     if (transfers.length > 0) {
-      setPendingTransfers(transfers)
-      setCurrentTransferIndex(0)
-      setGlobalOverwriteAction(null)
-      await processNextTransfer(transfers, 0)
+      await transferBatch.start(transfers)
     } else if (directories.length > 0) {
       // Refresh after directory uploads
       await loadRemoteFiles(remotePath)
     }
   }
+
+  useReloadOnTransferActivity({
+    sessionId,
+    localPath,
+    remotePath,
+    reloadLocal: () => loadLocalFiles(localPath),
+    reloadRemote: () => loadRemoteFiles(remotePath),
+    isBusy: isLocalLoading || isRemoteLoading
+  })
 
   const paneActions = useSftpPaneActions({
     sessionId,
@@ -592,10 +477,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
       return
     }
 
-    setPendingTransfers(transfers)
-    setCurrentTransferIndex(0)
-    setGlobalOverwriteAction(null)
-    await processNextTransfer(transfers, 0)
+    await transferBatch.start(transfers)
   }
 
   const handleClose = () => {
@@ -739,17 +621,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
         </>
       )}
 
-      <OverwriteModal
-        open={overwriteModalOpen}
-        fileName={conflictFileName}
-        onClose={() => {
-          setOverwriteModalOpen(false)
-          setPendingTransfers([])
-          setCurrentTransferIndex(0)
-          setGlobalOverwriteAction(null)
-        }}
-        onConfirm={handleOverwriteConfirm}
-      />
+      <OverwriteModal {...transferBatch.overwriteModalProps} />
     </div>
   )
 }

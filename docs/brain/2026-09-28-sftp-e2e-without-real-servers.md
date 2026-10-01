@@ -33,3 +33,22 @@
 - 창이 가려진 상태에서는 `Page.captureScreenshot`도 응답이 오지 않고 멈춘다(새 프레임이 그려지지 않음). DOM 검사로 판정하고, 스크린샷 단계에는 타임아웃을 건다.
 - 심볼릭 링크 검증: Windows에서는 `fs.symlinkSync(target, path, 'junction')`로 관리자 권한 없이 디렉토리 링크(대상이 없는 깨진 링크 포함)를 만들 수 있다.
   임시 서버는 `READDIR` attrs를 `lstat`으로, `LSTAT`/`READLINK` 핸들러를 따로 두어야 실제 서버처럼 동작한다.
+
+## 추가 (2026-10-01): 가려진 창 문제의 근본 해결
+- 검증용 앱을 아래처럼 Chromium 옵션과 함께 띄우면, 다른 창에 가려져도 `visibilityState` 가 `visible` 로 유지된다.
+  화면 갱신(rAF)이 계속 돌아서 xterm 글자가 DOM 에 그려지고, `Page.captureScreenshot` 도 멈추지 않는다.
+
+      npx electron-vite dev -- --remote-debugging-port=9333 --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling
+
+- 이 옵션 없이 가려진 창에서는 xterm 의 `.xterm-rows` 가 비어 있어 "터미널 내용이 사라졌다" 로 오진하기 쉽다.
+- xterm 에 글자를 넣을 때: `.xterm-helper-textarea` 에 value 를 넣고 `InputEvent('input', { inputType: 'insertText', data })` 를 보내면 onData 가 호출된다.
+
+## 추가 (2026-10-01): 페이지에서 스토어를 가져올 때 다른 인스턴스를 잡는 문제
+- 검증 스크립트가 `await import('/stores/terminalStore.ts')` 로 zustand 스토어를 가져오면 처음에는 앱과 같은 인스턴스다.
+- dev 서버가 떠 있는 동안 그 파일이 한 번이라도 수정되면, 앱은 `terminalStore.ts?t=<시각>` 주소로 불러온다 (페이지를 새로 고쳐도 유지됨).
+  이때 쿼리 없는 주소로 import 하면 **별도 인스턴스**가 만들어져서 `terminals.size` 가 항상 0 으로 보인다. 연결은 실제로 되는데 "연결이 안 된다" 로 오진하기 쉽다.
+- 해결: 앱이 실제로 불러온 주소를 찾아서 import 한다.
+
+      import(performance.getEntriesByType('resource').map(r => r.name).filter(n => n.includes('/stores/terminalStore.ts'))[0])
+
+- 여러 세션이 같은 작업 폴더에서 dev 앱을 동시에 띄울 때는 포트를 나눈다 (CDP 9333/9444, 임시 SSH 2222/2233, 렌더러 5173/5174). `--user-data-dir` 도 각자 따로 둔다.

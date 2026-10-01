@@ -7,6 +7,8 @@ import { useTerminalStore } from '../../stores/terminalStore'
 import { SnippetModal } from './SnippetModal'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { modalOverlayVariants } from '../../lib/animation/variants'
+import { confirmDialog } from '../../stores/confirmStore'
+import { SelectMenu } from '../ui/SelectMenu'
 import './SnippetManager.css'
 
 interface SnippetManagerProps {
@@ -26,17 +28,19 @@ export function SnippetManager({ onClose }: SnippetManagerProps) {
 
   // Get unique categories
   const categories = useMemo(() => {
-    const cats = new Set(snippets.map(s => s.category).filter(Boolean))
+    const cats = new Set(snippets.map(s => s.category).filter((category): category is string => Boolean(category)))
     return ['all', ...Array.from(cats)]
   }, [snippets])
+  // The chosen category disappears when its last snippet is deleted or moved: fall back to all
+  const activeCategory = categories.includes(categoryFilter) ? categoryFilter : 'all'
 
   // Filter snippets
   const filteredSnippets = useMemo(() => {
     let filtered = snippets
 
     // Filter by category
-    if (categoryFilter !== 'all') {
-      filtered = filtered.filter(s => s.category === categoryFilter)
+    if (activeCategory !== 'all') {
+      filtered = filtered.filter(s => s.category === activeCategory)
     }
 
     // Filter by search query
@@ -54,7 +58,7 @@ export function SnippetManager({ onClose }: SnippetManagerProps) {
     return filtered.sort((a, b) =>
       new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     )
-  }, [snippets, categoryFilter, searchQuery])
+  }, [snippets, activeCategory, searchQuery])
 
   const handleInsert = (command: string) => {
     if (!activeSessionId) {
@@ -85,10 +89,15 @@ export function SnippetManager({ onClose }: SnippetManagerProps) {
     setIsModalOpen(true)
   }
 
-  const handleDelete = (snippetId: string) => {
-    if (confirm('Are you sure you want to delete this snippet?')) {
-      deleteSnippet(snippetId)
-    }
+  const handleDelete = async (snippetId: string) => {
+    const name = snippets.find(snippet => snippet.id === snippetId)?.name ?? '이 스니펫'
+    const confirmed = await confirmDialog({
+      title: '스니펫 삭제',
+      message: `"${name}" 스니펫을 삭제합니다.`,
+      confirmLabel: '삭제',
+      danger: true
+    })
+    if (confirmed) deleteSnippet(snippetId)
   }
 
   const handleAddNew = () => {
@@ -144,17 +153,13 @@ export function SnippetManager({ onClose }: SnippetManagerProps) {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
-            <select
+            <SelectMenu
               className="snippet-category-filter"
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-            >
-              {categories.map(cat => (
-                <option key={cat} value={cat}>
-                  {cat === 'all' ? 'All Categories' : cat}
-                </option>
-              ))}
-            </select>
+              ariaLabel="분류"
+              value={activeCategory}
+              options={categories.map(cat => ({ value: cat, label: cat === 'all' ? '전체 분류' : cat }))}
+              onChange={setCategoryFilter}
+            />
           </div>
 
           {/* Content */}
@@ -165,7 +170,7 @@ export function SnippetManager({ onClose }: SnippetManagerProps) {
                   <RiCommandLine />
                 </div>
                 <p>No snippets found</p>
-                {searchQuery || categoryFilter !== 'all' ? (
+                {searchQuery || activeCategory !== 'all' ? (
                   <p style={{ fontSize: '13px', marginTop: '8px' }}>
                     Try adjusting your filters
                   </p>

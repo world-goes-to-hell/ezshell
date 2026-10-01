@@ -1,6 +1,8 @@
-import { useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react'
-import { RiFolderTransferLine, RiArrowRightSLine, RiArrowDownSFill, RiArrowRightSFill, RiFolderFill, RiHome4Line } from 'react-icons/ri'
+import { useLayoutEffect, useRef, useState } from 'react'
+import { RiFolderTransferLine, RiArrowRightSLine } from 'react-icons/ri'
 import type { Folder } from '../../stores/sessionStore'
+import { FolderTree } from '../FolderTree/FolderTree'
+import { placeSidePanel, type SidePanelPlacement } from '../../lib/sidePanelPlacement'
 import './MoveToFolderSubmenu.css'
 
 interface MoveToFolderSubmenuProps {
@@ -10,49 +12,37 @@ interface MoveToFolderSubmenuProps {
   onMove: (folderId: string | undefined) => void
 }
 
-const PANEL_GAP_PX = 4
-const VIEWPORT_MARGIN_PX = 8
 const CLOSE_DELAY_MS = 150
-
-/** Ids of the current folder's ancestors, so the tree opens with the current location visible. */
-function ancestorIds(folders: Folder[], folderId?: string): Set<string> {
-  const byId = new Map(folders.map(f => [f.id, f]))
-  const result = new Set<string>()
-  let parentId = folderId ? byId.get(folderId)?.parentId : undefined
-  while (parentId && !result.has(parentId)) {
-    result.add(parentId)
-    parentId = byId.get(parentId)?.parentId
-  }
-  return result
-}
 
 /**
  * "폴더로 이동 ›" context-menu entry. Hover or click opens a side panel with the folder tree
- * (right of the menu, or left when there is no room), instead of listing every folder inline.
+ * instead of listing every folder inline. The panel stays inside the window: right of the menu,
+ * else left, else pushed in; moved up near the bottom (re-placed as folders are expanded).
  */
 export function MoveToFolderSubmenu({ folders, currentFolderId, onMove }: MoveToFolderSubmenuProps) {
   const [isOpen, setIsOpen] = useState(false)
-  const [openLeft, setOpenLeft] = useState(false)
-  const [expanded, setExpanded] = useState<Set<string>>(() => ancestorIds(folders, currentFolderId))
+  const [placement, setPlacement] = useState<SidePanelPlacement | null>(null)
   const anchorRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const childrenOf = useMemo(() => {
-    const map = new Map<string | undefined, Folder[]>()
-    folders.forEach(folder => {
-      const list = map.get(folder.parentId) ?? []
-      map.set(folder.parentId, [...list, folder])
-    })
-    return map
-  }, [folders])
-
-  // Flip to the left side when the panel would run off the right edge of the window
   useLayoutEffect(() => {
-    if (!isOpen || !anchorRef.current || !panelRef.current) return
-    const anchor = anchorRef.current.getBoundingClientRect()
-    const panelWidth = panelRef.current.offsetWidth
-    setOpenLeft(anchor.right + PANEL_GAP_PX + panelWidth > window.innerWidth - VIEWPORT_MARGIN_PX)
+    const anchorEl = anchorRef.current
+    const panelEl = panelRef.current
+    if (!isOpen || !anchorEl || !panelEl) {
+      setPlacement(null)
+      return
+    }
+    const place = () => setPlacement(placeSidePanel(
+      anchorEl.getBoundingClientRect(),
+      { width: panelEl.offsetWidth, height: panelEl.offsetHeight },
+      { width: window.innerWidth, height: window.innerHeight }
+    ))
+    place()
+    // Expanding folders makes the panel taller: keep it inside the window
+    const observer = new ResizeObserver(place)
+    observer.observe(panelEl)
+    return () => observer.disconnect()
   }, [isOpen])
 
   const open = () => {
@@ -65,52 +55,6 @@ export function MoveToFolderSubmenu({ folders, currentFolderId, onMove }: MoveTo
     if (closeTimer.current) clearTimeout(closeTimer.current)
     closeTimer.current = setTimeout(() => setIsOpen(false), CLOSE_DELAY_MS)
   }
-
-  const toggleExpanded = (folderId: string) => {
-    setExpanded(prev => {
-      const next = new Set(prev)
-      if (next.has(folderId)) next.delete(folderId)
-      else next.add(folderId)
-      return next
-    })
-  }
-
-  const renderTree = (parentId: string | undefined, depth: number): JSX.Element[] =>
-    (childrenOf.get(parentId) ?? []).map(folder => {
-      const hasChildren = (childrenOf.get(folder.id) ?? []).length > 0
-      const isExpanded = expanded.has(folder.id)
-      const isCurrent = folder.id === currentFolderId
-      return (
-        <div key={folder.id} role="none">
-          <div
-            role="treeitem"
-            aria-expanded={hasChildren ? isExpanded : undefined}
-            aria-current={isCurrent ? 'location' : undefined}
-            className={`folder-move-item ${isCurrent ? 'is-current' : ''}`}
-            style={{ paddingLeft: 8 + depth * 16 }}
-            onClick={() => !isCurrent && onMove(folder.id)}
-          >
-            <button
-              type="button"
-              className="folder-move-toggle"
-              aria-label={isExpanded ? '접기' : '펼치기'}
-              tabIndex={-1}
-              style={{ visibility: hasChildren ? 'visible' : 'hidden' }}
-              onClick={e => {
-                e.stopPropagation()
-                toggleExpanded(folder.id)
-              }}
-            >
-              {isExpanded ? <RiArrowDownSFill size={16} /> : <RiArrowRightSFill size={16} />}
-            </button>
-            <RiFolderFill size={16} className="folder-move-icon" style={folder.backgroundColor ? { color: folder.backgroundColor } : undefined} />
-            <span className="folder-move-name">{folder.name}</span>
-            {isCurrent && <span className="current-badge">현재</span>}
-          </div>
-          {hasChildren && isExpanded && renderTree(folder.id, depth + 1)}
-        </div>
-      )
-    })
 
   return (
     <div className="folder-move" ref={anchorRef} onMouseEnter={open} onMouseLeave={scheduleClose}>
@@ -129,25 +73,24 @@ export function MoveToFolderSubmenu({ folders, currentFolderId, onMove }: MoveTo
       {isOpen && (
         <div
           ref={panelRef}
-          className={`folder-move-panel ${openLeft ? 'open-left' : ''}`}
+          className="folder-move-panel"
+          style={placement ? {
+            left: placement.left,
+            top: placement.top,
+            maxHeight: `min(420px, 70vh, ${placement.maxHeight}px)`
+          } : { visibility: 'hidden' }}
           role="tree"
           aria-label="이동할 폴더"
           onMouseEnter={open}
         >
           <div className="folder-move-title">이동할 폴더 선택</div>
-          <div
-            role="treeitem"
-            aria-current={!currentFolderId ? 'location' : undefined}
-            className={`folder-move-item ${!currentFolderId ? 'is-current' : ''}`}
-            style={{ paddingLeft: 8 }}
-            onClick={() => currentFolderId && onMove(undefined)}
-          >
-            <span className="folder-move-toggle" aria-hidden="true" />
-            <RiHome4Line size={16} className="folder-move-icon" />
-            <span className="folder-move-name">최상위 (폴더 없음)</span>
-            {!currentFolderId && <span className="current-badge">현재</span>}
-          </div>
-          {renderTree(undefined, 0)}
+          <FolderTree
+            folders={folders}
+            markedFolderId={currentFolderId}
+            markLabel="현재"
+            rootLabel="최상위 (폴더 없음)"
+            onPick={onMove}
+          />
         </div>
       )}
     </div>

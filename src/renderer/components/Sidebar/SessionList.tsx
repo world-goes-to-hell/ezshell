@@ -1,6 +1,8 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSessionStore, Folder, Session } from '../../stores/sessionStore'
+import { useTerminalStore } from '../../stores/terminalStore'
+import { groupTabsBySession } from '../../lib/sessionTabs'
 import { RiFolderFill, RiArrowDownSFill, RiArrowRightSFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiCloseLine, RiPaletteLine, RiAddLine, RiFileCopyLine, RiServerLine } from 'react-icons/ri'
 import { collapseVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
@@ -9,6 +11,8 @@ import { SessionItem } from './SessionItem'
 import { CompactFolderMarker } from './CompactFolderMarker'
 import { getDropPosition, type DropPosition } from '../../lib/sessionOrder'
 import { getFolderPath } from '../../lib/folderPath'
+import { confirmDialog } from '../../stores/confirmStore'
+import { placeContextMenu } from '../../lib/sidePanelPlacement'
 import { SESSION_COLORS } from '../../lib/sessionColors'
 
 interface ContextMenuState {
@@ -30,12 +34,13 @@ interface SessionListProps {
   onDuplicateSession?: (session: Session) => void
   onAddSession?: (folderId?: string) => void
   isCompact?: boolean
-  activeSessionIds?: Set<string>
 }
 
-export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession, onAddSession, isCompact = false, activeSessionIds = new Set() }: SessionListProps) {
+export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession, onAddSession, isCompact = false }: SessionListProps) {
   const { sessions, folders, expandedFolders, toggleFolder, addFolder, updateFolder, removeFolder, removeSession, moveSessionToFolder, reorderSession, updateSession, saveToBackend } = useSessionStore()
   const reducedMotion = useReducedMotion()
+  const terminals = useTerminalStore(state => state.terminals)
+  const sessionTabs = useMemo(() => groupTabsBySession(terminals), [terminals])
   const [colorPickerFolderId, setColorPickerFolderId] = useState<string | null>(null)
   const [colorPickerSessionId, setColorPickerSessionId] = useState<string | null>(null)
 
@@ -76,6 +81,23 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
     }
     return undefined
   }
+
+  // Keep the menu inside the window: open upward / leftward from the pointer near the edges.
+  // Without this the lower items ("폴더로 이동", "삭제") of a session near the bottom were off-screen.
+  const contextMenuRef = useRef<HTMLDivElement>(null)
+  const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(null)
+  useLayoutEffect(() => {
+    const menu = contextMenuRef.current
+    if (!contextMenu.visible || !menu) {
+      setContextMenuPosition(null)
+      return
+    }
+    setContextMenuPosition(placeContextMenu(
+      { x: contextMenu.x, y: contextMenu.y },
+      { width: menu.offsetWidth, height: menu.offsetHeight },
+      { width: window.innerWidth, height: window.innerHeight }
+    ))
+  }, [contextMenu.visible, contextMenu.x, contextMenu.y, contextMenu.type])
 
   // Close context menu on click outside
   useEffect(() => {
@@ -293,13 +315,20 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
     setContextMenu(prev => ({ ...prev, visible: false }))
   }
 
-  const handleDeleteFolder = () => {
-    if (!contextMenu.targetId) return
-    if (confirm('이 폴더를 삭제하시겠습니까? 하위 폴더도 함께 삭제됩니다.')) {
-      removeFolder(contextMenu.targetId)
-      saveToBackend()
-    }
+  const handleDeleteFolder = async () => {
+    const folderId = contextMenu.targetId
+    if (!folderId) return
     setContextMenu(prev => ({ ...prev, visible: false }))
+    const confirmed = await confirmDialog({
+      title: '폴더 삭제',
+      message: `"${getFolderPath(folders, folderId)}" 폴더와 하위 폴더를 삭제합니다.
+안에 있던 세션은 지워지지 않고 최상위로 옮겨집니다.`,
+      confirmLabel: '삭제',
+      danger: true
+    })
+    if (!confirmed) return
+    removeFolder(folderId)
+    saveToBackend()
   }
 
   const handleChangeFolderColor = () => {
@@ -352,26 +381,38 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
     setContextMenu(prev => ({ ...prev, visible: false }))
   }
 
-  const handleDeleteSession = () => {
-    if (!contextMenu.targetId) return
-    if (confirm('이 연결을 삭제하시겠습니까?')) {
-      removeSession(contextMenu.targetId)
-      saveToBackend()
-    }
+  const handleDeleteSession = async () => {
+    const sessionId = contextMenu.targetId
+    if (!sessionId) return
     setContextMenu(prev => ({ ...prev, visible: false }))
+    const session = sessions.find(s => s.id === sessionId)
+    const confirmed = await confirmDialog({
+      title: '연결 삭제',
+      message: `"${session?.name || session?.host || '이 연결'}" 연결 정보를 삭제합니다.
+삭제한 연결은 되돌릴 수 없습니다.`,
+      confirmLabel: '삭제',
+      danger: true
+    })
+    if (!confirmed) return
+    removeSession(sessionId)
+    saveToBackend()
   }
 
-  const handleMoveToFolder = (folderId: string | undefined) => {
-    if (!contextMenu.targetId) return
-    const session = sessions.find(s => s.id === contextMenu.targetId)
+  const handleMoveToFolder = async (folderId: string | undefined) => {
+    const sessionId = contextMenu.targetId
+    if (!sessionId) return
+    const session = sessions.find(s => s.id === sessionId)
     if (!session) return
-    const sessionName = session.name || session.host
-    const destination = folderId ? `"${getFolderPath(folders, folderId)}" 폴더로` : '최상위(폴더 없음)로'
-    if (confirm(`"${sessionName}" 세션을 ${destination} 이동하시겠습니까?`)) {
-      moveSessionToFolder(contextMenu.targetId, folderId)
-      saveToBackend()
-    }
     setContextMenu(prev => ({ ...prev, visible: false }))
+    const destination = folderId ? `"${getFolderPath(folders, folderId)}" 폴더로` : '최상위(폴더 없음)로'
+    const confirmed = await confirmDialog({
+      title: '세션 이동',
+      message: `"${session.name || session.host}" 세션을 ${destination} 이동합니다.`,
+      confirmLabel: '이동'
+    })
+    if (!confirmed) return
+    moveSessionToFolder(sessionId, folderId)
+    saveToBackend()
   }
 
   const handleEditSubmit = () => {
@@ -435,7 +476,7 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
         isDragging={dragState.type === 'session' && dragState.id === session.id}
         isCompact={isCompact}
         reducedMotion={reducedMotion}
-        isActive={activeSessionIds.has(session.id)}
+        tabs={sessionTabs.get(session.id)}
         effectiveColor={getEffectiveColor(session)}
         {...sessionItemDropProps(session.id)}
       />
@@ -578,7 +619,7 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
             isDragging={dragState.type === 'session' && dragState.id === session.id}
             isCompact={isCompact}
             reducedMotion={reducedMotion}
-            isActive={activeSessionIds.has(session.id)}
+            tabs={sessionTabs.get(session.id)}
             effectiveColor={getEffectiveColor(session)}
             {...sessionItemDropProps(session.id)}
           />
@@ -666,8 +707,11 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
       {/* Context Menu */}
       {contextMenu.visible && (
         <div
+          ref={contextMenuRef}
           className="context-menu"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          style={contextMenuPosition
+            ? { left: contextMenuPosition.x, top: contextMenuPosition.y }
+            : { left: contextMenu.x, top: contextMenu.y, visibility: 'hidden' }}
           onClick={(e) => e.stopPropagation()}
         >
           {contextMenu.type === 'folder' && (

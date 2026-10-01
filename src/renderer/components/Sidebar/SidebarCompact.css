@@ -235,19 +235,6 @@
   height: 28px;
 }
 
-/* Connected badge on the tile corner instead of next to the icon */
-.sidebar.compact .session-item-icon .status-indicator {
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-}
-
-.sidebar.compact .session-item-icon .status-dot {
-  width: 9px;
-  height: 9px;
-  outline: 2px solid var(--bg-secondary);
-}
-
 /* Reorder drop lines span the row */
 .sidebar.compact .session-item.drop-before {
   box-shadow: inset 0 2px 0 var(--accent);

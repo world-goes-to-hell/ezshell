@@ -18,6 +18,8 @@ export interface Session {
   autoReconnect?: boolean
   backgroundColor?: string
   postConnectScript?: string
+  /** Claude Code may run commands on this session through the local MCP server */
+  mcpEnabled?: boolean
   // Jump Host 설정
   useJumpHost?: boolean
   jumpHost?: string

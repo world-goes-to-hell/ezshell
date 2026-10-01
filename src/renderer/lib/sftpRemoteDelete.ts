@@ -1,5 +1,6 @@
 import type { FileItem } from '../stores/sftpStore'
 import { toast } from '../stores/toastStore'
+import { confirmDialog } from '../stores/confirmStore'
 
 const MAX_NAMES_IN_CONFIRM = 5
 
@@ -43,7 +44,7 @@ export async function deleteRemoteSelection(
     ...more,
     ...(hasFolder ? ['', '폴더는 비어 있을 때만 삭제됩니다.'] : [])
   ].join('\n')
-  if (!confirm(message)) return false
+  if (!(await confirmDialog({ title: '원격 파일 삭제', message, confirmLabel: '삭제', danger: true }))) return false
 
   const failures: string[] = []
   let deleted = 0

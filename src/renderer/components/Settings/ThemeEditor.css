@@ -349,3 +349,14 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Missing theme name: shown under the field instead of an OS alert */
+.theme-editor-input.has-error {
+  border-color: var(--error);
+}
+
+.theme-editor-error {
+  margin: 4px 0 0;
+  color: var(--error-text);
+  font-size: 13px;
+}

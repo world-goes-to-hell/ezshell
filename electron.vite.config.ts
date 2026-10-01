@@ -4,7 +4,10 @@ import path from 'path'
 import fs from 'fs'
 
 // CommonJS modules main.js loads at runtime with require('./src/...'); they are not bundled
-const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js']
+const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js']
+
+// Directories under src/ that main.js loads at runtime; copied whole, without their tests
+const MAIN_RUNTIME_DIRECTORIES = ['mcp']
 
 function copyCryptoPlugin() {
   return {
@@ -16,6 +19,14 @@ function copyCryptoPlugin() {
           path.resolve(__dirname, 'src', file),
           path.resolve(__dirname, 'out/main/src', file)
         )
+      }
+      // Window / taskbar icon, loaded by main.js next to the bundle (assets/ is not packaged)
+      fs.copyFileSync(path.resolve(__dirname, 'assets/icon.ico'), path.resolve(__dirname, 'out/main/icon.ico'))
+      for (const dir of MAIN_RUNTIME_DIRECTORIES) {
+        fs.cpSync(path.resolve(__dirname, 'src', dir), path.resolve(__dirname, 'out/main/src', dir), {
+          recursive: true,
+          filter: (source) => !source.endsWith('.test.js')
+        })
       }
     }
   }

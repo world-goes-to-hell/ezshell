@@ -1,0 +1,157 @@
+/* Open-tab count next to a sidebar session: green box = connected tabs, red box = disconnected tabs */
+
+.session-tab-badges {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-tab-badge {
+  --badge-color: var(--success);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--badge-color);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--badge-color) 14%, var(--bg-secondary));
+  /* The number stays in the text color: --success / --error alone miss 4.5:1 on some themes */
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.session-tab-badge--disconnected {
+  --badge-color: var(--error);
+}
+
+.session-tab-badge:hover,
+.session-tab-badge[data-state="open"] {
+  background: color-mix(in srgb, var(--badge-color) 34%, var(--bg-secondary));
+}
+
+.session-tab-badge:active {
+  background: color-mix(in srgb, var(--badge-color) 50%, var(--bg-secondary));
+}
+
+.session-tab-badge:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Icon-only sidebar: badges hang off the top corners of the session tile, connected on the left and
+   disconnected on the right. Both sit at the same height so a tile's badges never crowd the next tile's. */
+.sidebar.compact .session-tab-badges {
+  position: absolute;
+  inset: -4px -7px 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0;
+  pointer-events: none;
+}
+
+.sidebar.compact .session-tab-badge {
+  min-width: 16px;
+  height: 15px;
+  padding: 0 3px;
+  font-size: 10px;
+  pointer-events: auto;
+}
+
+/* A lone disconnected badge keeps the right corner, where it sits when both are shown */
+.sidebar.compact .session-tab-badge--disconnected:only-child {
+  margin-left: auto;
+}
+
+/* Tab list shown when a badge stands for several tabs */
+.session-tab-menu {
+  z-index: 1000;
+  min-width: 200px;
+  max-width: 320px;
+  max-height: min(360px, var(--radix-dropdown-menu-content-available-height));
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.session-tab-menu-label {
+  --badge-color: var(--success);
+  margin: 2px 4px 4px;
+  padding-left: 8px;
+  border-left: 2px solid var(--badge-color);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.session-tab-menu-label--disconnected {
+  --badge-color: var(--error);
+}
+
+.session-tab-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+}
+
+.session-tab-menu-item[data-highlighted] {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.session-tab-menu-item[aria-current="true"] .session-tab-menu-title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.session-tab-menu-index {
+  flex-shrink: 0;
+  min-width: 14px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.session-tab-menu-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.session-tab-menu-title,
+.session-tab-menu-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-tab-menu-path {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.session-tab-menu-current {
+  flex-shrink: 0;
+  color: var(--accent);
+}

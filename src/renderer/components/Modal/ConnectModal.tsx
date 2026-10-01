@@ -7,6 +7,7 @@ import { useSessionStore } from '../../stores/sessionStore'
 import { useRipple } from '../Animation'
 import { SESSION_COLORS } from '../../lib/sessionColors'
 import { useConnectionTest, ConnectionTestStatus } from './ConnectionTest'
+import { FolderPicker } from './FolderPicker'
 
 interface ConnectModalProps {
   open: boolean
@@ -53,6 +54,7 @@ export interface ConnectionConfig {
   keepaliveInterval?: number   // in seconds
   autoReconnect?: boolean
   postConnectScript?: string
+  mcpEnabled?: boolean
   // Jump Host
   useJumpHost?: boolean
   jumpHost?: string
@@ -81,6 +83,7 @@ const DEFAULT_CONFIG: ConnectionConfig = {
   keepaliveInterval: 30,
   autoReconnect: true,
   postConnectScript: '',
+  mcpEnabled: false,
   useJumpHost: false,
   jumpHost: '',
   jumpPort: 22,
@@ -97,6 +100,7 @@ export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSessio
   const { folders } = useSessionStore()
   const [showPassword, setShowPassword] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false)
   const { createRipple, RippleContainer } = useRipple('rgba(255, 255, 255, 0.2)')
 
   const [config, setConfig] = useState<ConnectionConfig>(editSession || DEFAULT_CONFIG)
@@ -121,6 +125,7 @@ export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSessio
         setConfig({ ...DEFAULT_CONFIG, folderId: defaultFolderId || '' })
       }
       setShowPassword(false)
+      setIsFolderPickerOpen(false)
       setShowAdvanced(false)
     }
   }, [open, editSession, duplicateFrom, defaultFolderId])
@@ -182,7 +187,15 @@ export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSessio
                 exit="exit"
               />
             </Dialog.Overlay>
-            <Dialog.Content asChild>
+            <Dialog.Content
+              asChild
+              onEscapeKeyDown={(e) => {
+                // Esc closes the open folder tree first, not the whole form
+                if (!isFolderPickerOpen) return
+                e.preventDefault()
+                setIsFolderPickerOpen(false)
+              }}
+            >
               <motion.div
                 className="modal-content"
                 variants={modalContentVariants}
@@ -328,15 +341,13 @@ export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSessio
 
             <div className="form-group">
               <label>폴더</label>
-              <select
-                value={config.folderId || ''}
-                onChange={(e) => updateConfig('folderId', e.target.value || undefined)}
-              >
-                <option value="">폴더 없음</option>
-                {folders.map(folder => (
-                  <option key={folder.id} value={folder.id}>{folder.name}</option>
-                ))}
-              </select>
+              <FolderPicker
+                folders={folders}
+                value={config.folderId}
+                onChange={(folderId) => updateConfig('folderId', folderId)}
+                open={isFolderPickerOpen}
+                onOpenChange={setIsFolderPickerOpen}
+              />
             </div>
 
             <div className="form-group">
@@ -402,6 +413,19 @@ export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSessio
                     />
                     <span>연결 끊김 시 자동 재연결</span>
                   </label>
+                </div>
+                <div className="form-group checkbox-group">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={config.mcpEnabled === true}
+                      onChange={(e) => updateConfig('mcpEnabled', e.target.checked)}
+                    />
+                    <span>Claude Code(MCP)에서 이 세션 접근 허용</span>
+                  </label>
+                  <p className="form-hint">
+                    설정 &gt; MCP 에서 서버를 켜면 Claude 가 이 세션으로 명령을 실행할 수 있습니다. 위험한 명령은 실행 전에 확인을 받습니다.
+                  </p>
                 </div>
                 <div className="form-group">
                   <label>연결 후 자동 실행 스크립트</label>

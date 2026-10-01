@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useId, KeyboardEvent } from 'react'
 import { RiHardDrive2Fill } from 'react-icons/ri'
 import { PathBookmarkButton } from './PathBookmarkButton'
+import { SelectMenu } from '../ui/SelectMenu'
 import { PathBookmarkSuggestions } from './PathBookmarkSuggestions'
 import { usePathBookmarks } from '../../hooks/usePathBookmarks'
 
@@ -99,16 +100,14 @@ export function PathBar({ path, onNavigate, type, label, sessionId, editRequest 
       {/* Drive selector for Windows local */}
       {type === 'local' && isWindows() && (
         <div className="drive-selector">
-          <RiHardDrive2Fill size={16} />
-          <select
+          <SelectMenu
+            size="compact"
+            ariaLabel="드라이브"
+            icon={<RiHardDrive2Fill size={16} className="drive-selector-icon" />}
             value={currentDrive || 'C:'}
-            onChange={(e) => handleDriveChange(e.target.value)}
-            className="drive-select"
-          >
-            {WINDOWS_DRIVES.map(drive => (
-              <option key={drive} value={drive}>{drive}</option>
-            ))}
-          </select>
+            options={WINDOWS_DRIVES.map(drive => ({ value: drive, label: drive }))}
+            onChange={handleDriveChange}
+          />
         </div>
       )}
 

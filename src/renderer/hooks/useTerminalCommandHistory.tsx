@@ -2,7 +2,9 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import type { Terminal } from 'xterm'
 import { CommandHistoryPopup } from '../components/Terminal/CommandHistoryPopup'
 import { useCommandHistoryStore } from '../stores/commandHistoryStore'
-import { buildInsertSequence, extractCommand, isHistoryShortcut, readInputLine } from '../lib/commandCapture'
+import { useHistorySuggestions } from './useHistorySuggestions'
+import { useCommandRecorder } from './useCommandRecorder'
+import { buildInsertSequence, isHistoryShortcut } from '../lib/commandCapture'
 import {
   registerMainInputTarget,
   setFocusedInputTarget,
@@ -14,7 +16,7 @@ type PaneRole = 'main' | 'split'
 
 /**
  * Command history wiring for one xterm pane (a tab's main terminal or a split):
- * records commands on Enter, opens the Ctrl+Shift+H popup, and registers the pane as the
+ * records commands on Enter, opens the Ctrl+Shift+H popup, suggests saved commands while typing, and registers the pane as the
  * insert target for the history panel. Terminals are created inside effects, so the pane
  * hands its instance over with attach() and routes key/data events through the returned handlers.
  */
@@ -24,15 +26,24 @@ export function useTerminalCommandHistory(sessionId: string, role: PaneRole, sen
   sendRef.current = send
   const [popupAnchor, setPopupAnchor] = useState<DOMRect | null>(null)
 
+  const recorder = useCommandRecorder(sessionId)
+  const noteLineReplacedRef = useRef(recorder.noteLineReplaced)
+  noteLineReplacedRef.current = recorder.noteLineReplaced
+
   const target = useMemo<InputTarget>(() => ({
     insert: (command) => {
+      noteLineReplacedRef.current()
       sendRef.current(buildInsertSequence(command))
       termRef.current?.focus()
     }
   }), [])
 
+  const suggestions = useHistorySuggestions(sessionId, (command) => target.insert(command))
+
   const attach = useCallback((term: Terminal) => {
     termRef.current = term
+    const detachSuggestions = suggestions.attach(term)
+    const detachRecorder = recorder.attach(term)
     if (role === 'main') registerMainInputTarget(sessionId, target)
     const handleFocus = () => setFocusedInputTarget(sessionId, target)
     const textarea = term.textarea
@@ -41,33 +52,31 @@ export function useTerminalCommandHistory(sessionId: string, role: PaneRole, sen
     useCommandHistoryStore.getState().resolveKey(sessionId)
 
     return () => {
+      detachRecorder()
+      detachSuggestions()
       textarea?.removeEventListener('focus', handleFocus)
       unregisterInputTarget(sessionId, target)
       if (termRef.current === term) termRef.current = null
     }
-  }, [sessionId, role, target])
+  }, [sessionId, role, target, suggestions.attach, recorder.attach])
 
-  /** Call from term.onData before sending; records the line when the user presses Enter. */
+  /** Call from term.onData before sending: feeds the suggestions and records commands on Enter. */
   const handleData = useCallback((data: string) => {
-    const term = termRef.current
-    // Only a typed Enter: pasted text arrives as one chunk and may contain several lines
-    if (data !== '\r' || !term) return
-    const buffer = term.buffer.active
-    // vim, less, top and other full-screen programs draw on the alternate buffer
-    if (buffer.type !== 'normal') return
-    const command = extractCommand(readInputLine(buffer))
-    if (command) useCommandHistoryStore.getState().record(sessionId, command)
-  }, [sessionId])
+    suggestions.handleData(data)
+    recorder.handleData(data)
+  }, [suggestions.handleData, recorder.handleData])
 
   /** Call from attachCustomKeyEventHandler; true means the event was handled and xterm must ignore it. */
   const handleKeyEvent = useCallback((event: KeyboardEvent) => {
+    // While the suggestion list is open, ↑↓ / Enter / Esc belong to it
+    if (suggestions.handleKeyEvent(event)) return true
     if (!isHistoryShortcut(event)) return false
     const term = termRef.current
     if (event.type === 'keydown' && term?.element && term.buffer.active.type === 'normal') {
       setPopupAnchor(term.element.getBoundingClientRect())
     }
     return true
-  }, [])
+  }, [suggestions.handleKeyEvent])
 
   const closePopup = useCallback(() => {
     setPopupAnchor(null)
@@ -86,5 +95,15 @@ export function useTerminalCommandHistory(sessionId: string, role: PaneRole, sen
     />
   ) : null
 
-  return { attach, handleData, handleKeyEvent, popup }
+  return {
+    attach,
+    handleData,
+    handleKeyEvent,
+    popup: (
+      <>
+        {popup}
+        {suggestions.popup}
+      </>
+    )
+  }
 }

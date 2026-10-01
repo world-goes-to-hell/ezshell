@@ -139,3 +139,67 @@
 .file-item.drop-target .folder-icon {
   color: var(--warning);
 }
+
+/* Files this session uploaded (remote list) / downloaded (local list): tinted row, bar on the left edge, arrow badge.
+   The selection keeps its own background; the bar stays so a selected file still shows it was transferred. */
+.file-item.transfer-mark {
+  box-shadow: inset 3px 0 0 var(--transfer-mark-color);
+  --transfer-mark-color: var(--accent);
+  --transfer-mark-tint: var(--accent-muted);
+}
+
+.file-item.transfer-mark--error {
+  --transfer-mark-color: var(--error);
+  --transfer-mark-tint: color-mix(in srgb, var(--error) 14%, transparent);
+}
+
+.file-item.transfer-mark:not(.selected) {
+  background: var(--transfer-mark-tint);
+}
+
+.file-item.transfer-mark:not(.selected):hover {
+  background: color-mix(in srgb, var(--transfer-mark-color) 24%, transparent);
+}
+
+.transfer-mark-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--transfer-mark-color);
+}
+
+.transfer-ring {
+  display: block;
+  fill: none;
+}
+
+.transfer-ring-track {
+  stroke: color-mix(in srgb, var(--success) 25%, transparent);
+}
+
+/* Progress arrives every ~0.5s; ease the arc between updates so it fills smoothly */
+.transfer-ring-value {
+  stroke: var(--success);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.5s linear;
+}
+
+/* Waiting for a free slot: an empty ring in the muted ink */
+.file-item.transfer-mark--queued .transfer-ring-track {
+  stroke: color-mix(in srgb, var(--text-muted) 45%, transparent);
+}
+
+/* Paused: the arc stops and greys out */
+.file-item.transfer-mark--paused .transfer-ring-track {
+  stroke: color-mix(in srgb, var(--text-muted) 30%, transparent);
+}
+
+.file-item.transfer-mark--paused .transfer-ring-value {
+  stroke: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .transfer-ring-value {
+    transition: none;
+  }
+}

@@ -1,0 +1,58 @@
+/* History autocomplete under the terminal input line. Same surface as the history popup, but compact:
+   it shows while typing, so it stays small and never takes focus. */
+.command-suggest {
+  position: fixed;
+  z-index: 1000;
+  min-width: 240px;
+  max-width: min(560px, calc(100vw - 16px));
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xl);
+  overflow: hidden;
+  font-family: var(--font-mono, monospace);
+  font-size: 12.5px;
+}
+
+.command-suggest-list {
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+}
+
+.command-suggest-item {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.command-suggest-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Same treatment as the history popup's highlighted row */
+.command-suggest-item.selected {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--text-primary);
+}
+
+/* The part that matches what was typed */
+.command-suggest-item mark {
+  background: none;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.command-suggest-hint {
+  padding: 4px 10px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--text-muted);
+}

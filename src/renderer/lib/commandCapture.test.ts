@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { extractCommand, readInputLine, buildInsertSequence, getHistoryKey, isHistoryShortcut, type BufferLike } from './commandCapture'
+import { extractCommand, readInputLine, buildInsertSequence, getHistoryKey, isHistoryShortcut, appendTypedInput, type BufferLike } from './commandCapture'
 
 describe('extractCommand', () => {
   it.each([
@@ -81,6 +81,17 @@ describe('readInputLine', () => {
     const buffer = makeBuffer([{ text: 'scrollback' }, { text: '$ pwd' }], 0, 1)
     expect(readInputLine(buffer)).toBe('$ pwd')
   })
+
+  it('reads a given row instead of the cursor row (the line Enter was pressed on, read after the echo)', () => {
+    // Cursor already moved to the next prompt; row 0 holds the finished command, wrapped onto row 1
+    const buffer = makeBuffer([
+      { text: '$ docker compose ' },
+      { text: 'logs -f', isWrapped: true },
+      { text: '$ ' }
+    ], 2)
+    expect(readInputLine(buffer, 0)).toBe('$ docker compose logs -f')
+    expect(readInputLine(buffer, 1)).toBe('$ docker compose logs -f')
+  })
 })
 
 describe('buildInsertSequence', () => {
@@ -120,5 +131,22 @@ describe('isHistoryShortcut', () => {
     ['Ctrl+Shift+J', { ctrlKey: true, shiftKey: true, code: 'KeyJ' }]
   ])('does not match %s', (_label, init) => {
     expect(isHistoryShortcut(key(init))).toBe(false)
+  })
+})
+
+describe('appendTypedInput', () => {
+  const empty = { text: '', certain: true }
+
+  it('collects printable characters and applies backspace', () => {
+    let typed = empty
+    for (const data of ['c', 'm', 'x', '\x7f', 'd', ' two']) typed = appendTypedInput(typed, data)
+    expect(typed).toEqual({ text: 'cmd two', certain: true })
+  })
+
+  it('becomes uncertain once the shell may have changed the line (Tab completion, arrows, Ctrl keys)', () => {
+    expect(appendTypedInput({ text: 'ls', certain: true }, '\t').certain).toBe(false)
+    expect(appendTypedInput({ text: 'ls', certain: true }, '\x1b[A').certain).toBe(false)
+    expect(appendTypedInput({ text: 'ls', certain: true }, '\x15').certain).toBe(false)
+    expect(appendTypedInput({ text: 'ls', certain: false }, 'x')).toEqual({ text: 'lsx', certain: false })
   })
 })

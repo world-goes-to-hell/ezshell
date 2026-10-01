@@ -31,22 +31,31 @@ const CONTINUATION_PROMPT = /^[\s>-]+$/
 // Readline: Ctrl+E moves to the end of the line, Ctrl+U deletes everything before the cursor
 const CLEAR_INPUT_LINE = '\x05\x15'
 
-/** The command typed after the prompt, or null when the line should not be recorded. */
-export function extractCommand(line: string): string | null {
+/** Everything after the prompt as typed (trailing spaces kept), or null when the line has no shell prompt. */
+export function textAfterPrompt(line: string): string | null {
   const match = PROMPT_PATTERN.exec(line)
   if (!match || CONTINUATION_PROMPT.test(match[0].trimEnd())) return null
-  const command = line.slice(match[0].length).trimEnd()
+  return line.slice(match[0].length)
+}
+
+/** The command typed after the prompt, or null when the line should not be recorded. */
+export function extractCommand(line: string): string | null {
+  const typed = textAfterPrompt(line)
+  if (typed === null) return null
+  const command = typed.trimEnd()
   // A leading space means "keep this out of history", as with bash's HISTCONTROL=ignorespace
   if (command.length === 0 || command.startsWith(' ')) return null
   return command
 }
 
-/** The logical line under the cursor, joining rows that the terminal soft-wrapped. */
-export function readInputLine(buffer: BufferLike): string {
-  const cursorRow = buffer.baseY + buffer.cursorY
-  let first = cursorRow
+/**
+ * The logical line at `row` (default: under the cursor), joining rows that the terminal soft-wrapped.
+ * Recording passes the row Enter was pressed on and reads it once the shell's echo has arrived.
+ */
+export function readInputLine(buffer: BufferLike, row = buffer.baseY + buffer.cursorY): string {
+  let first = row
   while (first > 0 && buffer.getLine(first)?.isWrapped) first--
-  let last = cursorRow
+  let last = row
   while (buffer.getLine(last + 1)?.isWrapped) last++
 
   const rows: string[] = []
@@ -75,4 +84,23 @@ export function getHistoryKey(info: HistoryKeySource | null): string | null {
   if (!info) return null
   if (info.savedSessionId) return info.savedSessionId
   return `quick:${info.username}@${info.host}:${info.port ?? DEFAULT_SSH_PORT}`
+}
+
+export interface TypedInput {
+  text: string
+  /** False once the line may differ from the keystrokes (Tab completion, history recall, Ctrl edits) */
+  certain: boolean
+}
+
+const BACKSPACE = new Set(['\x7f', '\b'])
+
+/**
+ * The keystrokes typed since the last Enter. Recording only uses them to confirm a line that was typed ahead
+ * of the shell's echo; the screen stays the source of truth for what ran.
+ */
+export function appendTypedInput(typed: TypedInput, data: string): TypedInput {
+  if (BACKSPACE.has(data)) return { ...typed, text: typed.text.slice(0, -1) }
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f]/.test(data)) return { ...typed, certain: false }
+  return { ...typed, text: typed.text + data }
 }

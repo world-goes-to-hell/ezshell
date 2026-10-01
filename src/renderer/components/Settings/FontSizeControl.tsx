@@ -1,4 +1,5 @@
 import { useTerminalStore, TERMINAL_FONTS } from '../../stores/terminalStore'
+import { SelectMenu } from '../ui/SelectMenu'
 import { RiAddLine, RiSubtractLine, RiRestartLine } from 'react-icons/ri'
 
 export function FontSizeControl() {
@@ -14,9 +15,6 @@ export function FontSizeControl() {
     setFontSize(parseInt(e.target.value, 10))
   }
 
-  const handleFontFamilyChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setFontFamily(e.target.value)
-  }
 
   return (
     <div className="font-size-control">
@@ -24,19 +22,14 @@ export function FontSizeControl() {
         <div className="font-size-header">
           <label htmlFor="font-family-select">글꼴</label>
         </div>
-        <select
+        {/* Each option is set in its own font, so the list doubles as a preview */}
+        <SelectMenu
           id="font-family-select"
+          ariaLabel="글꼴"
           value={fontFamily}
-          onChange={handleFontFamilyChange}
-          className="font-family-select"
-          style={{ fontFamily }}
-        >
-          {TERMINAL_FONTS.map(font => (
-            <option key={font.id} value={font.value} style={{ fontFamily: font.value }}>
-              {font.name}
-            </option>
-          ))}
-        </select>
+          options={TERMINAL_FONTS.map(font => ({ value: font.value, label: font.name, style: { fontFamily: font.value } }))}
+          onChange={setFontFamily}
+        />
       </div>
 
       <div className="font-setting-group">

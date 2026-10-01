@@ -2,9 +2,10 @@ import { motion } from 'framer-motion'
 import { RiServerFill, RiDatabase2Fill, RiCloudFill, RiGlobalFill, RiHomeFill, RiComputerFill, RiHardDriveFill, RiCpuFill, RiBaseStationFill } from 'react-icons/ri'
 import type { Session } from '../../stores/sessionStore'
 import { SessionIcon } from '../Modal/ConnectModal'
-import { StatusIndicator } from '../Animation'
 import { SessionTooltip } from './SessionTooltip'
+import { SessionTabBadge } from './SessionTabBadge'
 import type { DropPosition } from '../../lib/sessionOrder'
+import type { SessionTabGroup } from '../../lib/sessionTabs'
 import { getAbbreviation } from '../../lib/sessionAbbreviation'
 
 const ICON_MAP: Record<SessionIcon, typeof RiServerFill> = {
@@ -34,7 +35,8 @@ interface SessionItemProps {
   isDragging: boolean
   isCompact: boolean
   reducedMotion: boolean
-  isActive?: boolean
+  /** Tabs currently open from this session; absent when there are none */
+  tabs?: SessionTabGroup
   effectiveColor?: string
 }
 
@@ -54,8 +56,17 @@ function getItemStyle(color: string | undefined, isActive: boolean, isCompact: b
 
 export function SessionItem({
   session, onConnect, onContextMenu, onDragStart, onDragEnd, onItemDragOver, onItemDragLeave, onItemDrop,
-  dropIndicator, isDragging, isCompact, reducedMotion, isActive = false, effectiveColor
+  dropIndicator, isDragging, isCompact, reducedMotion, tabs, effectiveColor
 }: SessionItemProps) {
+  const isActive = (tabs?.connected.length ?? 0) > 0
+  const tabBadges = tabs && (
+    // Focus moving to a badge or into its tab list (a portal, still a React child) must not reach the row:
+    // the icon-only sidebar would open the session hover card on top of the list
+    <div className="session-tab-badges" onFocus={(e) => e.stopPropagation()}>
+      <SessionTabBadge status="connected" tabs={tabs.connected} />
+      <SessionTabBadge status="disconnected" tabs={tabs.disconnected} />
+    </div>
+  )
   const iconId = (session.icon as SessionIcon) || DEFAULT_ICON
   const IconComponent = ICON_MAP[iconId] || RiServerFill
   const displayName = session.name || session.host
@@ -72,7 +83,7 @@ export function SessionItem({
   ].filter(Boolean).join(' ')
 
   return (
-    <SessionTooltip session={session} isActive={isActive} enabled={isCompact}>
+    <SessionTooltip session={session} tabs={tabs} enabled={isCompact}>
       <motion.div
         className={classNames}
         role="treeitem"
@@ -98,11 +109,13 @@ export function SessionItem({
           {showAbbreviation
             ? <span className="session-abbr" aria-hidden="true">{getAbbreviation(displayName)}</span>
             : <IconComponent size={isCompact ? 18 : 16} />}
-          {isActive && <StatusIndicator status="connected" size="sm" />}
+          {/* Icon-only sidebar: the badges sit on the tile corners */}
+          {isCompact && tabBadges}
         </div>
         {!isCompact && (
           <span className="session-name">{displayName}</span>
         )}
+        {!isCompact && tabBadges}
       </motion.div>
     </SessionTooltip>
   )

@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { Footer } from './components/Footer/Footer'
+import { McpApprovalDialog } from './components/Mcp/McpApprovalDialog'
 import { useAppZoom } from './hooks/useAppZoom'
 import { TitleBar } from './components/TitleBar/TitleBar'
 import { TerminalPanel } from './components/Terminal/TerminalPanel'
@@ -13,6 +14,7 @@ import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/Qui
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
 import { NewTabMenu } from './components/Terminal/NewTabMenu'
 import { getDuplicateConfig } from './lib/duplicateConnection'
+import { captureTerminalSnapshot, setPendingSnapshot } from './lib/terminalSnapshots'
 import { SettingsModal } from './components/Settings/SettingsModal'
 import { WelcomeScreen } from './components/MainContent/WelcomeScreen'
 import { LockScreen } from './components/LockScreen/LockScreen'
@@ -37,6 +39,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { tabVariants } from './lib/animation/variants'
 import { useReducedMotion } from './hooks/useReducedMotion'
 import { SPRINGS } from './lib/animation/config'
+import { ConfirmDialogHost } from './components/Modal/ConfirmDialogHost'
 
 // Check if we're in a special window mode
 function getWindowModeParams() {
@@ -48,7 +51,8 @@ function getWindowModeParams() {
       mode: 'sftp' as const,
       sessionId: params.get('sessionId') || '',
       localPath: decodeURIComponent(params.get('localPath') || ''),
-      remotePath: decodeURIComponent(params.get('remotePath') || '')
+      remotePath: decodeURIComponent(params.get('remotePath') || ''),
+      title: decodeURIComponent(params.get('title') || '')
     }
   }
 
@@ -76,8 +80,10 @@ function App() {
           sessionId={windowParams.sessionId}
           initialLocalPath={windowParams.localPath}
           initialRemotePath={windowParams.remotePath}
+          sessionTitle={windowParams.title}
         />
         <ToastContainer />
+        <ConfirmDialogHost />
       </>
     )
   }
@@ -90,6 +96,7 @@ function App() {
           title={windowParams.title}
         />
         <ToastContainer />
+        <ConfirmDialogHost />
       </>
     )
   }
@@ -239,7 +246,9 @@ function App() {
     })
 
     // Listen for terminal merge events (when popped-out terminal merges back)
-    window.electronAPI.onTerminalMerge((data: { sessionId: string; title: string; host: string; username: string }) => {
+    window.electronAPI.onTerminalMerge((data: { sessionId: string; title: string; host: string; username: string; snapshot?: string }) => {
+      // Screen of the popped-out window, drawn by the tab's terminal before new output
+      if (data.snapshot) setPendingSnapshot(data.sessionId, data.snapshot)
       const { addTerminal, setActiveTerminal } = useTerminalStore.getState()
       // Read without deleting: this effect has no cleanup, so StrictMode registers the listener twice
       // and both calls must see the config. The entry is dropped when the tab is closed.
@@ -490,6 +499,7 @@ function App() {
       keepaliveInterval: config.keepaliveInterval,
       autoReconnect: config.autoReconnect,
       postConnectScript: config.postConnectScript,
+      mcpEnabled: config.mcpEnabled === true,
       useJumpHost: config.useJumpHost,
       jumpHost: config.jumpHost,
       jumpPort: config.jumpPort,
@@ -566,7 +576,7 @@ function App() {
     const baseName = session.name || `${session.username}@${session.host}`
     setEditSession(null)
     setDefaultFolderId(undefined)
-    setDuplicateSource({ ...session, id: undefined, name: `${baseName} - 복제됨`, saveSession: true })
+    setDuplicateSource({ ...session, id: undefined, name: `${baseName} - 복제됨`, saveSession: true, mcpEnabled: false })
     setConnectModalOpen(true)
   }
 
@@ -613,13 +623,6 @@ function App() {
     ? activeTerminal?.title || `${activeTerminal?.username}@${activeTerminal?.host}`
     : null
 
-  // Compute active session IDs (connected terminals)
-  const activeSessionIds = new Set(
-    Array.from(terminals.values())
-      .filter(t => t.connected)
-      .map(t => t.id)
-  )
-
   // Layout state
   const splitWithSession = useTerminalStore(state => state.splitWithSession)
 
@@ -638,10 +641,16 @@ function App() {
     if (dropZone === 'popout' && sessionId && terminal) {
       const title = terminal.title || `${terminal.username}@${terminal.host}`
       if (terminal.connectConfig) detachedConfigsRef.current.set(sessionId, terminal.connectConfig)
+      // Take the screen before the tab's terminal is disposed so the new window continues from it
+      const snapshot = captureTerminalSnapshot(sessionId) ?? undefined
       // Remove terminal from main window first (this unregisters the SSH data handler)
       removeTerminal(sessionId)
       // Open new window - it will register its own handler
-      await window.electronAPI.openTerminalWindow(sessionId, title)
+      await window.electronAPI.openTerminalWindow(sessionId, title, snapshot)
+      // Output that reached this window between the capture and the new window taking over is neither in
+      // the snapshot nor in the new window. Drop it: kept here, it would be replayed after the newer screen
+      // on merge back and show up out of order.
+      useTerminalStore.getState().discardSshDataBuffer(sessionId)
     }
 
     // Check if dropped in a split zone - only the dragged tab moves to the new pane
@@ -840,7 +849,6 @@ function App() {
           onAddSession={handleAddSession}
           onStatsClick={() => setStatsDashboardOpen(true)}
           onBatchClick={() => setBatchModalOpen(true)}
-          activeSessionIds={activeSessionIds}
         />
         <main className="main-area" id="main-content">
           {!isSettingsLoaded ? (
@@ -1105,6 +1113,8 @@ function App() {
         </main>
       </div>
       <Footer />
+      <McpApprovalDialog />
+      <ConfirmDialogHost />
 
       <ConnectModal
         open={connectModalOpen}

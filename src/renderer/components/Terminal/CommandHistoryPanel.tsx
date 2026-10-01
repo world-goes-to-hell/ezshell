@@ -5,6 +5,7 @@ import { useCommandHistory, useFilteredHistory, formatHistoryTime } from '../../
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { copyToClipboard } from '../../lib/terminalClipboard'
 import { toast } from '../../stores/toastStore'
+import { confirmDialog } from '../../stores/confirmStore'
 import { CommandHistoryEmpty } from './CommandHistoryEmpty'
 
 interface CommandHistoryPanelProps {
@@ -28,8 +29,14 @@ export function CommandHistoryPanel({ sessionId, onInsert, onClose }: CommandHis
     }
   }
 
-  const handleClear = () => {
-    if (confirm(`이 연결의 명령어 기록 ${entries.length}개를 모두 삭제할까요?\n삭제한 기록은 되돌릴 수 없습니다.`)) clear()
+  const handleClear = async () => {
+    const confirmed = await confirmDialog({
+      title: '명령어 기록 삭제',
+      message: `이 연결의 명령어 기록 ${entries.length}개를 모두 삭제합니다.\n삭제한 기록은 되돌릴 수 없습니다.`,
+      confirmLabel: '모두 삭제',
+      danger: true
+    })
+    if (confirmed) clear()
   }
 
   return (

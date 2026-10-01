@@ -15,8 +15,9 @@
 
 .folder-move-panel {
   position: absolute;
-  top: -5px; /* line up the first row with the trigger (menu padding + border) */
-  left: calc(100% + 8px);
+  /* left / top come from placeSidePanel (kept inside the window); hidden until measured */
+  top: 0;
+  left: 0;
   z-index: 1001;
   min-width: 240px;
   max-width: 360px;
@@ -29,11 +30,6 @@
   box-shadow: var(--shadow-lg);
 }
 
-.folder-move-panel.open-left {
-  left: auto;
-  right: calc(100% + 8px);
-}
-
 .folder-move-title {
   padding: 6px 8px;
   color: var(--text-muted);
@@ -41,70 +37,4 @@
   font-weight: 600;
 }
 
-.folder-move-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  padding-right: 8px;
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 14px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.folder-move-item:hover {
-  background: var(--bg-hover);
-}
-
-.folder-move-item.is-current {
-  color: var(--text-muted);
-  cursor: default;
-}
-
-.folder-move-item.is-current:hover {
-  background: transparent;
-}
-
-.folder-move-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.folder-move-toggle:hover {
-  background: var(--bg-modifier-selected);
-  color: var(--text-primary);
-}
-
-.folder-move-icon {
-  flex-shrink: 0;
-  color: var(--warning);
-}
-
-.folder-move-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.folder-move-item .current-badge {
-  margin-left: auto;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 12px;
-}
+/* Tree rows: components/FolderTree/FolderTree.css */

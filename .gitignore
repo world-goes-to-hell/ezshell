@@ -46,3 +46,9 @@ release/
 
 # Stray empty files
 nu_
+
+# Test coverage reports
+coverage/
+
+# Local packaging checks (electron-builder --dir output)
+release-verify/

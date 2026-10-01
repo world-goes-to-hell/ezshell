@@ -3,6 +3,7 @@ import { RiWifiFill, RiWifiOffFill } from 'react-icons/ri'
 import { VersionInfo } from '../Update/UpdateNotification'
 import { ZoomStatus } from '../Zoom/ZoomStatus'
 import { ZoomHud } from '../Zoom/ZoomHud'
+import { McpActivityIndicator } from '../Mcp/McpActivityIndicator'
 
 export function Footer() {
   const { terminals } = useTerminalStore()
@@ -26,6 +27,7 @@ export function Footer() {
         </div>
       </div>
       <div className="footer-right">
+        <McpActivityIndicator />
         <ZoomStatus />
         <VersionInfo />
       </div>

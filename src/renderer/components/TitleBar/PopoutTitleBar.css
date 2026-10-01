@@ -1,0 +1,62 @@
+/* Popped-out terminal / SFTP window title bar: same 32px bar and buttons as the main window (.title-bar*),
+   plus an icon, the session name and user@host */
+
+.popout-title-bar {
+  flex-shrink: 0;
+}
+
+.popout-title-drag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.popout-title-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.popout-title-text {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.popout-title-main {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.popout-title-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+/* Window-specific actions (e.g. merge back into the main window) */
+.popout-title-bar .popout-title-action {
+  color: var(--accent);
+}
+
+.popout-title-bar .popout-title-action:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.popout-title-separator {
+  align-self: center;
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--border);
+}

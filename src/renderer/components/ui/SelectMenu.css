@@ -1,0 +1,121 @@
+/* Themed select (SelectMenu): trigger looks like the surrounding inputs, list like the app's dropdowns */
+
+.select-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid transparent;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+/* Form field size: same box as .form-group inputs */
+.select-menu-trigger.is-field {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  font-size: 15px;
+}
+
+/* Toolbar size: SFTP path bar */
+.select-menu-trigger.is-compact {
+  gap: 4px;
+  min-height: 28px;
+  padding: 4px 6px 4px 8px;
+  border-color: var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-size: 13px;
+}
+
+.select-menu-trigger:hover,
+.select-menu-trigger[data-state='open'] {
+  border-color: var(--accent);
+}
+
+.select-menu-trigger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.select-menu-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-menu-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.select-menu-trigger[data-state='open'] .select-menu-chevron {
+  transform: rotate(180deg);
+}
+
+.select-menu-content {
+  z-index: 15002; /* above every dialog that can contain a SelectMenu (snippet manager is 10000), below MCP approval (20000) */
+  min-width: var(--radix-dropdown-menu-trigger-width);
+  max-height: min(360px, var(--radix-dropdown-menu-content-available-height));
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+}
+
+.select-menu-content.is-field {
+  font-size: 14px;
+}
+
+.select-menu-content.is-compact {
+  font-size: 13px;
+}
+
+.select-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+}
+
+.select-menu-item[data-highlighted] {
+  background: var(--bg-hover);
+}
+
+.select-menu-item[data-state='checked'] {
+  color: var(--accent);
+}
+
+.select-menu-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-menu-check {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .select-menu-chevron {
+    transition: none;
+  }
+}

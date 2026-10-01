@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { PRESET_THEMES } from '../themes/presets'
 import { ThemeDefinition, TerminalColors } from '../types/theme'
+import { colorSchemeFor } from '../lib/colorScheme'
+import { normalizeTheme, sanitizeStoredThemes } from '../lib/themeValidation'
 
 interface ThemeState {
   currentThemeId: string
@@ -17,6 +19,16 @@ interface ThemeState {
   getAllThemes: () => ThemeDefinition[]
 }
 
+/**
+ * data-theme picks the CSS variables; color-scheme makes the parts Chromium draws itself
+ * (open select lists, color picker, scrollbars, form controls) dark or light to match the theme.
+ */
+function applyThemeToDocument(themeId: string, background: string) {
+  const root = document.documentElement
+  root.setAttribute('data-theme', themeId)
+  root.style.colorScheme = colorSchemeFor(background) ?? ''
+}
+
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set, get) => ({
@@ -30,7 +42,7 @@ export const useThemeStore = create<ThemeState>()(
         set({ currentThemeId: themeId })
 
         // Apply theme to DOM
-        document.documentElement.setAttribute('data-theme', themeId)
+        applyThemeToDocument(themeId, theme.colors.bgPrimary)
 
         // Dispatch event for terminal sync
         window.dispatchEvent(new CustomEvent('theme-changed', { detail: { themeId } }))
@@ -49,7 +61,7 @@ export const useThemeStore = create<ThemeState>()(
 
       initializeTheme: () => {
         const { currentThemeId } = get()
-        document.documentElement.setAttribute('data-theme', currentThemeId)
+        applyThemeToDocument(currentThemeId, get().getCurrentTheme().colors.bgPrimary)
       },
 
       saveCustomTheme: (theme: ThemeDefinition) => {
@@ -86,20 +98,13 @@ export const useThemeStore = create<ThemeState>()(
 
       importTheme: (json: string) => {
         try {
-          const theme = JSON.parse(json) as ThemeDefinition
+          // Every color is checked and a missing preview / category is derived; a file lacking
+          // preview used to be stored as is and blank the app whenever the theme list rendered
+          const theme = normalizeTheme(JSON.parse(json))
+          if (!theme) return false
 
-          // Validate theme structure
-          if (!theme.id || !theme.name || !theme.colors || !theme.terminal) {
-            return false
-          }
-
-          // Generate new ID to avoid conflicts
-          const newTheme = {
-            ...theme,
-            id: `custom-${Date.now()}`
-          }
-
-          get().saveCustomTheme(newTheme)
+          // New id: never replace a preset or an existing custom theme
+          get().saveCustomTheme({ ...theme, id: `custom-${Date.now()}` })
           return true
         } catch (error) {
           console.error('Failed to import theme:', error)
@@ -117,6 +122,15 @@ export const useThemeStore = create<ThemeState>()(
         currentThemeId: state.currentThemeId,
         customThemes: state.customThemes
       }),
+      // Stored custom themes may predate validation (or be edited by hand): repair or drop them before use,
+      // and fall back to the default theme if the chosen one did not survive
+      merge: (persisted, current) => {
+        const stored = (persisted ?? {}) as Partial<Pick<ThemeState, 'currentThemeId' | 'customThemes'>>
+        const customThemes = sanitizeStoredThemes(stored.customThemes)
+        const chosen = stored.currentThemeId
+        const isKnown = [...PRESET_THEMES, ...customThemes].some(theme => theme.id === chosen)
+        return { ...current, customThemes, currentThemeId: isKnown && chosen ? chosen : current.currentThemeId }
+      },
     }
   )
 )

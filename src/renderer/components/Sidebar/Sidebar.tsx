@@ -21,10 +21,9 @@ interface SidebarProps {
   onAddSession?: (folderId?: string) => void
   onStatsClick?: () => void
   onBatchClick?: () => void
-  activeSessionIds?: Set<string>
 }
 
-export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onStatsClick, onBatchClick, activeSessionIds }: SidebarProps) {
+export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onStatsClick, onBatchClick }: SidebarProps) {
   const { sidebarMode, toggleSidebarMode, setSidebarMode } = useUIStore()
   const { addFolder, saveToBackend } = useSessionStore()
   const isCompact = sidebarMode === 'compact'
@@ -139,7 +138,7 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
           </button>
         </div>
       )}
-      <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} isCompact={isCompact} activeSessionIds={activeSessionIds} />
+      <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} isCompact={isCompact} />
       {(onBatchClick || onStatsClick) && (
         <div className="sidebar-footer">
           {onBatchClick && (

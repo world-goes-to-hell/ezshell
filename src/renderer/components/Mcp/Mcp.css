@@ -1,0 +1,375 @@
+/* MCP settings tab and approval dialog. Square corners and tokens follow variables.css. */
+.mcp-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.mcp-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.mcp-toggle,
+.mcp-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.mcp-toggle input,
+.mcp-radio input {
+  accent-color: var(--accent);
+}
+
+.mcp-state {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.mcp-state.running {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.mcp-error {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--error);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  color: var(--error-text);
+  font-size: 13px;
+}
+
+.mcp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.mcp-field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.mcp-port-input {
+  width: 120px;
+  padding: 6px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.mcp-radio {
+  flex-wrap: wrap;
+}
+
+.mcp-radio-label {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.mcp-radio-desc {
+  flex-basis: 100%;
+  padding-left: 24px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.mcp-token,
+.mcp-command {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.mcp-token code,
+.mcp-command pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.mcp-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.mcp-icon-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.mcp-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mcp-icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mcp-audit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.mcp-audit-scroll {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border);
+}
+
+.mcp-audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.mcp-audit-table th,
+.mcp-audit-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.mcp-audit-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.mcp-audit-table code {
+  display: block;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.mcp-risk {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mcp-risk-low {
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success);
+}
+
+.mcp-risk-medium {
+  background: color-mix(in srgb, var(--warning) 20%, transparent);
+  color: var(--warning);
+}
+
+.mcp-risk-danger,
+.mcp-risk-forbidden {
+  background: color-mix(in srgb, var(--error) 20%, transparent);
+  color: var(--error-text);
+}
+
+/* Approval dialog: above every other overlay in the app (snippets 10001, palette 9999) */
+.modal-overlay.mcp-approval-overlay {
+  z-index: 20000;
+}
+
+.modal-content.mcp-approval {
+  z-index: 20001;
+}
+
+.mcp-approval-fields code {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.mcp-approval-warning {
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--warning, #d29922);
+  border-radius: var(--radius-md);
+  color: var(--warning, #d29922);
+  font-size: 13px;
+}
+
+.mcp-approval {
+  width: min(560px, calc(100vw - 32px));
+  padding: 20px;
+}
+
+.mcp-approval-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.mcp-approval-timer {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--warning);
+}
+
+.mcp-approval-fields {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 8px 12px;
+  margin: 0 0 12px;
+}
+
+.mcp-approval-fields dt {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.mcp-approval-fields dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.mcp-approval-folder {
+  color: var(--text-muted);
+}
+
+.mcp-approval-command {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 160px;
+  overflow: auto;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.mcp-approval-reasons {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.mcp-approval-hint {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.mcp-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.mcp-approve-btn {
+  padding: 8px 16px;
+  background: var(--error);
+  border: 1px solid var(--error);
+  border-radius: var(--radius-sm);
+  color: var(--on-accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mcp-approve-btn:hover {
+  filter: brightness(1.1);
+}
+
+.mcp-approve-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Claude Code 자동 설정 */
+.mcp-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mcp-setup-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mcp-setup-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.mcp-setup-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mcp-setup-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mcp-setup-result {
+  padding: 8px 10px;
+  border-left: 3px solid var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.mcp-setup-result.warning {
+  border-left-color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
+.mcp-setup-result ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}

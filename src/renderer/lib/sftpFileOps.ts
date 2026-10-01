@@ -1,5 +1,6 @@
 import type { FileItem } from '../stores/sftpStore'
 import { toast } from '../stores/toastStore'
+import { confirmDialog } from '../stores/confirmStore'
 
 export type PaneSide = 'local' | 'remote'
 
@@ -102,7 +103,8 @@ interface MoveParams {
 }
 
 export interface MoveDeps {
-  confirm: (message: string) => boolean
+  /** The in-app dialog resolves asynchronously; tests may answer synchronously */
+  confirm: (message: string) => boolean | Promise<boolean>
   /** Move one entry into `targetDir` keeping its name; throws with a readable message on failure */
   move: (sourcePath: string, targetDir: string) => Promise<void>
 }
@@ -115,7 +117,7 @@ const samePathOnSide = (a: string, b: string, side: PaneSide) => (side === 'loca
 /** Default move for each pane: SFTP rename on the server, local-move IPC on this PC. */
 export function moveDepsFor(side: PaneSide, sessionId: string): MoveDeps {
   return {
-    confirm: (message) => window.confirm(message),
+    confirm: (message) => confirmDialog({ title: '항목 이동', message, confirmLabel: '이동' }),
     move: async (sourcePath, targetDir) => {
       if (side === 'remote') {
         const name = sourcePath.split('/').pop() ?? ''
@@ -154,7 +156,7 @@ export async function moveEntries({ side, dirPath, names, targetDir }: MoveParam
   const listed = sources.slice(0, MAX_NAMES_IN_CONFIRM).map(source => `  - ${source.name}`)
   const more = sources.length > MAX_NAMES_IN_CONFIRM ? [`  외 ${sources.length - MAX_NAMES_IN_CONFIRM}개`] : []
   const message = [`${where}의 ${sources.length}개 항목을 옮깁니다.`, '', ...listed, ...more, '', `대상 폴더: ${targetDir}`].join('\n')
-  if (!deps.confirm(message)) return nothing
+  if (!(await deps.confirm(message))) return nothing
 
   const failures: string[] = []
   const moved: string[] = []
@@ -188,7 +190,7 @@ export async function trashLocalSelection(dirPath: string, selectedNames: Set<st
   const listed = targets.slice(0, MAX_NAMES_IN_CONFIRM).map(file => `  - ${file.name}${file.type === 'directory' ? '\\' : ''}`)
   const more = targets.length > MAX_NAMES_IN_CONFIRM ? [`  외 ${targets.length - MAX_NAMES_IN_CONFIRM}개`] : []
   const message = [`로컬 PC의 ${targets.length}개 항목을 휴지통으로 이동합니다.`, '', ...listed, ...more].join('\n')
-  if (!confirm(message)) return false
+  if (!(await confirmDialog({ title: '휴지통으로 이동', message, confirmLabel: '휴지통으로 이동', danger: true }))) return false
 
   try {
     const result = await window.electronAPI.localTrash(targets.map(file => joinChildPath(dirPath, file.name, 'local')))

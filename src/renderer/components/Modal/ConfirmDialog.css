@@ -1,0 +1,55 @@
+/* In-app confirmation dialog (confirmDialog / ConfirmDialogHost)
+   Layering: it can open over any dialog (settings 101, snippet manager 10000, snippet editor 10001), so it sits
+   above all of them, below only the MCP approval prompt (20000). SelectMenu lists use 15002. */
+
+.modal-overlay.confirm-dialog-overlay {
+  z-index: 15000;
+}
+
+.modal-content.confirm-dialog {
+  width: min(420px, 90vw);
+  z-index: 15001;
+}
+
+.confirm-dialog-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.confirm-dialog-icon.is-danger {
+  color: var(--error-text);
+}
+
+.confirm-dialog-message {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+/* Destructive confirm button: same shape as .btn-primary, error color */
+.btn-danger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-md);
+  /* Darkened so white text stays readable in every theme (>= 5:1; plain --error can be under 4:1) */
+  background: color-mix(in srgb, var(--error) 65%, #000000);
+  color: #ffffff;
+  font-weight: 500;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--error) 55%, #000000);
+}
+
+.confirm-dialog .modal-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

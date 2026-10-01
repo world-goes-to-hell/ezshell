@@ -1,29 +1,31 @@
-import { useEffect, useState } from 'react'
-import { useSftpStore, FileItem } from '../../stores/sftpStore'
+import { useEffect } from 'react'
+import { useSftpStore } from '../../stores/sftpStore'
 import { FileList, keepSelectionProps } from './FileList'
 import { TransferQueue } from './TransferQueue'
 import { PathBar } from './PathBar'
-import { OverwriteModal, OverwriteAction } from './OverwriteModal'
-import { RiUploadFill, RiDownloadFill, RiRefreshFill, RiSubtractFill, RiCheckboxBlankFill, RiCloseFill, RiArrowUpDownLine } from 'react-icons/ri'
+import { OverwriteModal } from './OverwriteModal'
+import { RiUploadFill, RiDownloadFill, RiRefreshFill, RiArrowUpDownLine, RiFolderTransferFill } from 'react-icons/ri'
+import { PopoutTitleBar } from '../TitleBar/PopoutTitleBar'
+import { usePopoutTheme } from '../../hooks/usePopoutTheme'
+import { usePopoutHostLabel } from '../../hooks/usePopoutHostLabel'
 import { toast } from '../../stores/toastStore'
 import { deleteRemoteSelection } from '../../lib/sftpRemoteDelete'
 import { useTransferQueue } from '../../hooks/useTransferQueue'
 import { useSftpPaneActions } from '../../hooks/useSftpPaneActions'
-
-interface PendingTransfer {
-  type: 'upload' | 'download'
-  fileName: string
-  localPath: string
-  remotePath: string
-}
+import { useReloadOnTransferActivity } from '../../hooks/useReloadOnTransferActivity'
+import { useSftpTransferBatch, type PendingTransfer } from '../../hooks/useSftpTransferBatch'
 
 interface SftpWindowProps {
   sessionId: string
   initialLocalPath: string
   initialRemotePath: string
+  /** Name of the terminal tab the panel was popped out of */
+  sessionTitle?: string
 }
 
-export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: SftpWindowProps) {
+export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, sessionTitle }: SftpWindowProps) {
+  usePopoutTheme()
+  const hostLabel = usePopoutHostLabel(sessionId)
   const store = useSftpStore()
   const transferQueue = useTransferQueue(sessionId)
 
@@ -34,13 +36,6 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: S
   const localFiles = store.localFiles(sessionId)
   const selectedRemote = store.selectedRemote(sessionId)
   const selectedLocal = store.selectedLocal(sessionId)
-
-  // Overwrite modal state
-  const [overwriteModalOpen, setOverwriteModalOpen] = useState(false)
-  const [conflictFileName, setConflictFileName] = useState('')
-  const [pendingTransfers, setPendingTransfers] = useState<PendingTransfer[]>([])
-  const [currentTransferIndex, setCurrentTransferIndex] = useState(0)
-  const [globalOverwriteAction, setGlobalOverwriteAction] = useState<OverwriteAction | null>(null)
 
   useEffect(() => {
     const initSftp = async () => {
@@ -109,92 +104,15 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: S
     }
   }
 
-  const generateUniqueName = (fileName: string, existingFiles: FileItem[]): string => {
-    const existingNames = new Set(existingFiles.map(f => f.name))
-    const dotIndex = fileName.lastIndexOf('.')
-    const baseName = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName
-    const extension = dotIndex > 0 ? fileName.slice(dotIndex) : ''
-
-    let counter = 1
-    let newName = `${baseName} (${counter})${extension}`
-    while (existingNames.has(newName)) {
-      counter++
-      newName = `${baseName} (${counter})${extension}`
-    }
-    return newName
-  }
-
-  const processTransfer = async (transfer: PendingTransfer, action: OverwriteAction) => {
-    if (action === 'skip') return
-
-    let targetPath = transfer.type === 'upload' ? transfer.remotePath : transfer.localPath
-
-    if (action === 'rename') {
-      const targetFiles = transfer.type === 'upload' ? remoteFiles : localFiles
-      const newName = generateUniqueName(transfer.fileName, targetFiles)
-      if (transfer.type === 'upload') {
-        targetPath = joinPath(remotePath, newName, false)
-      } else {
-        targetPath = joinPath(localPath, newName, true)
-      }
-    }
-
-    if (transfer.type === 'upload') {
-      await window.electronAPI.sftpQueueUpload(sessionId, transfer.localPath, targetPath)
-    } else {
-      await window.electronAPI.sftpQueueDownload(sessionId, transfer.remotePath, targetPath)
-    }
-  }
-
-  const processNextTransfer = async (transfers: PendingTransfer[], index: number) => {
-    if (index >= transfers.length) {
+  const transferBatch = useSftpTransferBatch({
+    sessionId,
+    localFiles,
+    remoteFiles,
+    onDone: async () => {
       await loadRemoteFiles(remotePath)
       await loadLocalFiles(localPath)
-      setPendingTransfers([])
-      setCurrentTransferIndex(0)
-      setGlobalOverwriteAction(null)
-      return
     }
-
-    const transfer = transfers[index]
-    const targetFiles = transfer.type === 'upload' ? remoteFiles : localFiles
-    const fileExists = targetFiles.some(f => f.name === transfer.fileName)
-
-    if (fileExists && !globalOverwriteAction) {
-      setConflictFileName(transfer.fileName)
-      setOverwriteModalOpen(true)
-    } else {
-      await processTransfer(transfer, globalOverwriteAction || 'overwrite')
-      await processNextTransfer(transfers, index + 1)
-    }
-  }
-
-  const handleOverwriteConfirm = async (action: OverwriteAction, applyToAll: boolean) => {
-    setOverwriteModalOpen(false)
-
-    if (applyToAll) {
-      setGlobalOverwriteAction(action)
-    }
-
-    const transfer = pendingTransfers[currentTransferIndex]
-    await processTransfer(transfer, action)
-
-    const nextIndex = currentTransferIndex + 1
-    setCurrentTransferIndex(nextIndex)
-
-    if (applyToAll) {
-      for (let i = nextIndex; i < pendingTransfers.length; i++) {
-        await processTransfer(pendingTransfers[i], action)
-      }
-      await loadRemoteFiles(remotePath)
-      await loadLocalFiles(localPath)
-      setPendingTransfers([])
-      setCurrentTransferIndex(0)
-      setGlobalOverwriteAction(null)
-    } else {
-      await processNextTransfer(pendingTransfers, nextIndex)
-    }
-  }
+  })
 
   const handleUpload = async () => {
     if (selectedLocal.size === 0) {
@@ -215,13 +133,16 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: S
       }
     }
 
-    if (transfers.length === 0) return
-
-    setPendingTransfers(transfers)
-    setCurrentTransferIndex(0)
-    setGlobalOverwriteAction(null)
-    await processNextTransfer(transfers, 0)
+    await transferBatch.start(transfers)
   }
+
+  useReloadOnTransferActivity({
+    sessionId,
+    localPath,
+    remotePath,
+    reloadLocal: () => loadLocalFiles(localPath),
+    reloadRemote: () => loadRemoteFiles(remotePath)
+  })
 
   const paneActions = useSftpPaneActions({
     sessionId,
@@ -261,36 +182,19 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: S
       }
     }
 
-    if (transfers.length === 0) return
-
-    setPendingTransfers(transfers)
-    setCurrentTransferIndex(0)
-    setGlobalOverwriteAction(null)
-    await processNextTransfer(transfers, 0)
+    await transferBatch.start(transfers)
   }
 
   return (
     <div className="sftp-window">
-      {/* Title Bar */}
-      <div className="title-bar">
-        <div className="title-bar-drag">
-          <span className="title-bar-title">SFTP - {sessionId.slice(0, 8)}</span>
-        </div>
-        <div className="title-bar-controls">
-          <button className="title-btn" onClick={() => window.electronAPI.minimizeWindow()}>
-            <RiSubtractFill size={16} />
-          </button>
-          <button className="title-btn" onClick={() => window.electronAPI.maximizeWindow()}>
-            <RiCheckboxBlankFill size={16} />
-          </button>
-          <button className="title-btn close" onClick={() => window.electronAPI.closeWindow()}>
-            <RiCloseFill size={16} />
-          </button>
-        </div>
-      </div>
+      <PopoutTitleBar
+        icon={<RiFolderTransferFill size={16} />}
+        title={`SFTP · ${sessionTitle || hostLabel || '연결'}`}
+        subtitle={sessionTitle && hostLabel !== sessionTitle ? hostLabel : undefined}
+      />
 
       {/* Toolbar */}
-      <div className="sftp-toolbar" {...keepSelectionProps}>
+      <div className="sftp-toolbar sftp-window-toolbar" {...keepSelectionProps}>
         <button className="sftp-btn" onClick={handleUpload} title="업로드: 선택한 로컬 파일을 현재 원격 폴더로">
           <RiUploadFill size={18} />
           <span>업로드</span>
@@ -372,17 +276,7 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath }: S
 
       {transferQueue.isVisible && <TransferQueue sessionId={sessionId} onClose={transferQueue.hide} />}
 
-      <OverwriteModal
-        open={overwriteModalOpen}
-        fileName={conflictFileName}
-        onClose={() => {
-          setOverwriteModalOpen(false)
-          setPendingTransfers([])
-          setCurrentTransferIndex(0)
-          setGlobalOverwriteAction(null)
-        }}
-        onConfirm={handleOverwriteConfirm}
-      />
+      <OverwriteModal {...transferBatch.overwriteModalProps} />
     </div>
   )
 }

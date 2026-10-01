@@ -6,6 +6,7 @@ import { useTerminalStore } from '../../stores/terminalStore'
 import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
 import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory'
 import 'xterm/css/xterm.css'
+import { createEarlyStreamBuffer } from '../../lib/earlyStreamBuffer'
 
 interface SplitTerminalProps {
   sessionId: string
@@ -72,6 +73,8 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
     let resizeObserver: ResizeObserver | null = null
     let disposed = false
     let delayTimer: ReturnType<typeof setTimeout> | null = null
+    // Split output that arrives before this pane can show it (see handleSplitData)
+    const earlyOutput = createEarlyStreamBuffer()
 
     // Reset state on retry
     setStatus('connecting')
@@ -168,6 +171,10 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
         detachCommandHistory = commandHistory.attach(term)
         terminalInstance.current = term
         isInitialized.current = true
+        // Output that arrived before the pane could show it (login banner, first prompt).
+        // Written in the same tick as isInitialized flips, so later chunks cannot overtake it.
+        const earlyText = earlyOutput.take(streamIdRef.current ?? '')
+        if (earlyText) term.write(earlyText)
 
         // Handle Ctrl+C for copy when there's a selection
         term.attachCustomKeyEventHandler((event) => {
@@ -313,10 +320,20 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
       }
     }
 
-    // Listen for data from split stream
+    // Listen for data from split stream. The main process forwards output as soon as the channel
+    // opens, which can be before sshCreateShell resolves (our stream id unknown) or before the xterm
+    // exists; those chunks are held instead of dropped.
     const handleSplitData = (data: { streamId: string; sessionId: string; data: string }) => {
-      if (data.streamId === streamIdRef.current && terminalInstance.current && isInitialized.current) {
+      const ownStream = streamIdRef.current
+      if (ownStream === null) {
+        earlyOutput.push(data.streamId, data.data)
+        return
+      }
+      if (data.streamId !== ownStream) return
+      if (terminalInstance.current && isInitialized.current) {
         terminalInstance.current.write(data.data)
+      } else {
+        earlyOutput.push(data.streamId, data.data)
       }
     }
 

@@ -40,6 +40,10 @@
   color: var(--success);
 }
 
+.session-tooltip-disconnected {
+  color: var(--error-text);
+}
+
 .session-tooltip-hint {
   margin-top: 2px;
   padding-top: 6px;

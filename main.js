@@ -1,6 +1,20 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const userDataDir = require('./src/userDataDir.js');
+
+// The app was renamed from my-ssh-client to ezshell. Keep the old user data folder (sessions,
+// master password, settings, theme) when it exists. Must run before anything reads userData.
+// An explicit --user-data-dir (separate test instances) always wins.
+if (!app.commandLine.hasSwitch('user-data-dir')) {
+  app.setPath('userData', userDataDir.resolveUserDataDir({
+    appDataDir: app.getPath('appData'),
+    defaultDir: app.getPath('userData'),
+    legacyNames: userDataDir.legacyDataDirNames(),
+    exists: (dir) => fs.existsSync(dir)
+  }));
+}
+
 const { Client } = require('ssh2');
 const net = require('net');
 const { autoUpdater } = require('electron-updater');
@@ -9,8 +23,15 @@ const commandHistory = require('./src/commandHistory.js');
 const { testSshConnection } = require('./src/sshConnectionTest.js');
 const localFileOps = require('./src/localFileOps.js');
 const sftpSymlinks = require('./src/sftpSymlinks.js');
+const sftpUploadCheck = require('./src/sftpUploadCheck.js');
+const { createMcpController } = require('./src/mcp/controller.js');
+const { registerMcpIpc } = require('./src/mcp/ipc.js');
 
 let mainWindow;
+
+// Window / taskbar icon, copied next to the bundle at build time (electron.vite.config.ts). Set on every window so
+// the taskbar shows it even where the exe still carries Electron's icon (`npm run dev` runs electron.exe).
+const WINDOW_ICON = path.join(__dirname, 'icon.ico');
 
 // 터미널 전용 창 저장소
 const terminalWindows = new Map();
@@ -35,6 +56,10 @@ function getWindowForSession(sessionId) {
 let masterPasswordVerification = null; // { hash, salt }
 let currentMasterPassword = null; // In-memory only, cleared on lock
 let isAppLocked = true;
+let mcpController = null; // Local MCP server for Claude Code (src/mcp), created once the window exists
+// Decrypted sessions for MCP calls while unlocked; decrypting (sync PBKDF2 per session) on every call froze the window.
+// Cleared on save-sessions, import-sessions, lock-app and reset-master-password.
+let mcpSessionsCache = null;
 const sshConnections = new Map();
 const sshStreams = new Map(); // sessionId:streamId -> stream (for split terminals)
 const splitStreamLastClosed = new Map(); // sessionId -> timestamp of last split stream close
@@ -101,6 +126,7 @@ function saveToFile(filePath, data) {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
+    icon: WINDOW_ICON,
     width: 1200,
     height: 800,
     minWidth: 800,
@@ -207,6 +233,7 @@ function sendUpdateStatus(status, data = {}) {
 
 app.whenReady().then(() => {
   createWindow();
+  startMcp();
 
   // Auto-updater setup (production only)
   if (!process.env.ELECTRON_RENDERER_URL && !process.argv.includes('--dev')) {
@@ -217,8 +244,9 @@ app.whenReady().then(() => {
 // SFTP 별도 창 저장소
 const sftpWindows = new Map();
 
-function createSftpWindow(sessionId, localPath, remotePath) {
+function createSftpWindow(sessionId, localPath, remotePath, title) {
   const sftpWindow = new BrowserWindow({
+    icon: WINDOW_ICON,
     width: 900,
     height: 600,
     minWidth: 600,
@@ -237,7 +265,8 @@ function createSftpWindow(sessionId, localPath, remotePath) {
     sftpMode: 'true',
     sessionId,
     localPath: encodeURIComponent(localPath),
-    remotePath: encodeURIComponent(remotePath)
+    remotePath: encodeURIComponent(remotePath),
+    title: encodeURIComponent(title || '')
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -246,7 +275,14 @@ function createSftpWindow(sessionId, localPath, remotePath) {
     sftpWindow.loadURL(`http://localhost:5173?${params.toString()}`)
   } else {
     sftpWindow.loadFile(path.join(__dirname, '../renderer/index.html'), {
-      query: { sftpMode: 'true', sessionId, localPath, remotePath }
+      // Same encoding as the dev URL above: the renderer decodes each value once more
+      query: {
+        sftpMode: 'true',
+        sessionId,
+        localPath: encodeURIComponent(localPath),
+        remotePath: encodeURIComponent(remotePath),
+        title: encodeURIComponent(title || '')
+      }
     })
   }
 
@@ -261,6 +297,7 @@ function createSftpWindow(sessionId, localPath, remotePath) {
 
 function createTerminalWindow(sessionId, title) {
   const terminalWindow = new BrowserWindow({
+    icon: WINDOW_ICON,
     width: 800,
     height: 600,
     minWidth: 400,
@@ -286,7 +323,8 @@ function createTerminalWindow(sessionId, title) {
     terminalWindow.loadURL(`http://localhost:5173?${params.toString()}`)
   } else {
     terminalWindow.loadFile(path.join(__dirname, '../renderer/index.html'), {
-      query: { terminalMode: 'true', sessionId, title }
+      // Same encoding as the dev URL above: the renderer decodes the title once more
+      query: { terminalMode: 'true', sessionId, title: encodeURIComponent(title || sessionId) }
     })
   }
 
@@ -294,13 +332,21 @@ function createTerminalWindow(sessionId, title) {
 
   terminalWindow.on('closed', () => {
     terminalWindows.delete(sessionId);
+    terminalSnapshots.delete(sessionId);
   });
 
   return terminalWindow;
 }
 
+// Screen contents of a terminal tab being popped out, kept until its new window picks them up.
+// Memory only: terminal output can contain secrets.
+const terminalSnapshots = new Map();
+
 // 터미널 창 열기 핸들러
-ipcMain.handle('open-terminal-window', (event, { sessionId, title }) => {
+ipcMain.handle('open-terminal-window', (event, { sessionId, title, snapshot }) => {
+  if (typeof snapshot === 'string' && snapshot) terminalSnapshots.set(sessionId, snapshot);
+  else terminalSnapshots.delete(sessionId);
+
   if (terminalWindows.has(sessionId)) {
     const existingWindow = terminalWindows.get(sessionId);
     if (!existingWindow.isDestroyed()) {
@@ -313,11 +359,19 @@ ipcMain.handle('open-terminal-window', (event, { sessionId, title }) => {
   return { success: true };
 });
 
+// A popped-out terminal window takes the screen contents it should start with (once)
+ipcMain.handle('take-terminal-snapshot', (event, { sessionId }) => {
+  const snapshot = terminalSnapshots.get(sessionId) || null;
+  terminalSnapshots.delete(sessionId);
+  return snapshot;
+});
+
 // 터미널 창을 메인 창으로 병합
-ipcMain.handle('merge-terminal-to-main', (event, { sessionId, title, host, username }) => {
-  // 메인 창에 터미널 추가 요청
+ipcMain.handle('merge-terminal-to-main', (event, { sessionId, title, host, username, snapshot }) => {
+  // 메인 창에 터미널 추가 요청 (화면 내용을 함께 넘겨 이어서 표시)
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('terminal-merge', { sessionId, title, host, username });
+    const screen = typeof snapshot === 'string' ? snapshot : undefined;
+    mainWindow.webContents.send('terminal-merge', { sessionId, title, host, username, snapshot: screen });
     mainWindow.focus();
   }
 
@@ -334,7 +388,7 @@ ipcMain.handle('merge-terminal-to-main', (event, { sessionId, title, host, usern
 });
 
 // SFTP 창 열기 핸들러
-ipcMain.handle('open-sftp-window', (event, { sessionId, localPath, remotePath }) => {
+ipcMain.handle('open-sftp-window', (event, { sessionId, localPath, remotePath, title }) => {
   // Check if window already exists
   if (sftpWindows.has(sessionId)) {
     const existingWindow = sftpWindows.get(sessionId);
@@ -344,11 +398,16 @@ ipcMain.handle('open-sftp-window', (event, { sessionId, localPath, remotePath })
     }
   }
 
-  createSftpWindow(sessionId, localPath, remotePath);
+  createSftpWindow(sessionId, localPath, remotePath, title);
   return { success: true };
 });
 
+app.on('before-quit', () => {
+  mcpController?.shutdown().catch(() => {});
+});
+
 app.on('window-all-closed', () => {
+  mcpController?.shutdown().catch(() => {});
   flushCommandHistory();
   // 모든 SSH 연결 종료
   sshConnections.forEach(({ conn }) => {
@@ -410,6 +469,8 @@ ipcMain.handle('lock-app', async () => {
   commandHistoryCache = null;
   currentMasterPassword = null;
   isAppLocked = true;
+  mcpSessionsCache = null;
+  mcpController?.onLocked();
   return { success: true };
 });
 
@@ -482,6 +543,8 @@ ipcMain.handle('reset-master-password', async () => {
 
   currentMasterPassword = null;
   isAppLocked = true;
+  mcpSessionsCache = null;
+  mcpController?.onLocked();
   masterPasswordVerification = null;
 
   return { success: true };
@@ -489,45 +552,44 @@ ipcMain.handle('reset-master-password', async () => {
 
 // ==================== Encrypted Session Storage ====================
 
+/** Decrypt sessions.json with the current master password. Callers check the lock state first. */
+function readDecryptedSessions() {
+  const sessionsPath = path.join(app.getPath('userData'), 'sessions.json');
+  if (!fs.existsSync(sessionsPath)) return [];
+
+  const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf8'));
+  return sessions.map(session => {
+    // Handle legacy unencrypted sessions (migration)
+    if (!session.encrypted && !session.encryptedVersion) {
+      // This is a legacy session, mark for migration on next save
+      return { ...session, needsMigration: true };
+    }
+
+    try {
+      const decrypted = JSON.parse(
+        cryptoUtil.decrypt(session.encrypted, currentMasterPassword)
+      );
+
+      const { encrypted, encryptedVersion, ...safeSession } = session;
+      return {
+        ...safeSession,
+        ...decrypted
+      };
+    } catch (err) {
+      console.error('Failed to decrypt session:', session.name);
+      return { ...session, decryptionFailed: true };
+    }
+  });
+}
+
 // 세션 저장/로드 IPC (with encryption)
 ipcMain.handle('load-sessions', async () => {
   if (isAppLocked || !currentMasterPassword) {
     return { success: false, error: 'App is locked', sessions: [] };
   }
 
-  const sessionsPath = path.join(app.getPath('userData'), 'sessions.json');
-
-  if (!fs.existsSync(sessionsPath)) {
-    return { success: true, sessions: [] };
-  }
-
   try {
-    const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf8'));
-
-    const decryptedSessions = sessions.map(session => {
-      // Handle legacy unencrypted sessions (migration)
-      if (!session.encrypted && !session.encryptedVersion) {
-        // This is a legacy session, mark for migration on next save
-        return { ...session, needsMigration: true };
-      }
-
-      try {
-        const decrypted = JSON.parse(
-          cryptoUtil.decrypt(session.encrypted, currentMasterPassword)
-        );
-
-        const { encrypted, encryptedVersion, ...safeSession } = session;
-        return {
-          ...safeSession,
-          ...decrypted
-        };
-      } catch (err) {
-        console.error('Failed to decrypt session:', session.name);
-        return { ...session, decryptionFailed: true };
-      }
-    });
-
-    return { success: true, sessions: decryptedSessions };
+    return { success: true, sessions: readDecryptedSessions() };
   } catch (err) {
     console.error('Failed to load sessions:', err);
     return { success: false, error: err.message, sessions: [] };
@@ -560,6 +622,8 @@ ipcMain.handle('save-sessions', async (event, sessions) => {
 
   const sessionsPath = path.join(app.getPath('userData'), 'sessions.json');
   fs.writeFileSync(sessionsPath, JSON.stringify(encryptedSessions, null, 2));
+  mcpSessionsCache = null;
+  mcpController?.onSessionsSaved();
 
   return { success: true };
 });
@@ -770,6 +834,90 @@ ipcMain.handle('command-history-clear', (event, { key }) => {
   return updateCommandHistory(key, () => []);
 });
 
+// ==================== MCP Server (Claude Code) ====================
+
+function sendToMainWindow(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isLoading()) return false;
+  mainWindow.webContents.send(channel, payload);
+  return true;
+}
+
+const MCP_LEVEL_LABELS = { low: '낮음', medium: '중간', danger: '위험' };
+let mcpFlashHandlerAttached = false;
+let mcpNotice = null; // keep a reference so the notification is not garbage-collected before its click fires
+
+/** Bring the main window back (notification click); it may already be closed while a pop-out stays open */
+function revealMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+/** Flash the taskbar and show an OS notification. Never includes the command (toasts persist in the Action Center). */
+function alertMcpApproval(request) {
+  if (!mcpFlashHandlerAttached) {
+    mainWindow.on('focus', () => mainWindow.flashFrame(false));
+    mcpFlashHandlerAttached = true;
+  }
+  mainWindow.flashFrame(true);
+  if (Notification.isSupported()) {
+    mcpNotice = new Notification({
+      title: 'MCP 명령 확인 요청',
+      body: `${request.sessionName} · 위험도 ${MCP_LEVEL_LABELS[request.level] || request.level}`
+    });
+    mcpNotice.on('click', revealMainWindow);
+    mcpNotice.show();
+  }
+}
+
+/** Ask in the app; when the window is in the background, also flash it and show a notification */
+function showMcpApproval(request) {
+  const delivered = sendToMainWindow('mcp-approval-request', request);
+  if (delivered && !mainWindow.isFocused()) {
+    try {
+      alertMcpApproval(request);
+    } catch (err) {
+      console.error('Failed to alert MCP approval:', err);
+    }
+  }
+  return delivered;
+}
+
+/** Sessions for the MCP tools: decrypted once per unlock (and after each save), not on every call */
+function loadMcpSessions() {
+  if (isAppLocked || !currentMasterPassword) return [];
+  if (!mcpSessionsCache) mcpSessionsCache = readDecryptedSessions();
+  return mcpSessionsCache;
+}
+
+function startMcp() {
+  mcpController = createMcpController({
+    userDataPath,
+    version: app.getVersion(),
+    isUnlocked: () => !isAppLocked && Boolean(currentMasterPassword),
+    loadSessions: loadMcpSessions,
+    loadFolders: () => loadFromFile(foldersFilePath, []),
+    showApproval: showMcpApproval,
+    dismissApproval: (id) => sendToMainWindow('mcp-approval-dismiss', { id }),
+    emitActivity: (item) => sendToMainWindow('mcp-activity', item)
+  });
+  mcpController.start().catch(err => console.error('Failed to start MCP server:', err));
+}
+
+/** Folder for the "MCP 자동 설정" project option; null when the dialog is cancelled */
+async function pickMcpProjectDir() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Claude Code 프로젝트 폴더 선택',
+    properties: ['openDirectory']
+  });
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+}
+
+registerMcpIpc(ipcMain, () => mcpController, () => !isAppLocked && Boolean(currentMasterPassword), {
+  pickDirectory: pickMcpProjectDir
+});
+
 // ==================== App Settings ====================
 
 ipcMain.handle('load-settings', () => {
@@ -829,7 +977,10 @@ ipcMain.handle('import-sessions', async (event, mode) => {
       return { success: false, error: 'Invalid session file format' };
     }
 
-    const importedSessions = importData.sessions;
+    // An imported backup must never opt sessions into MCP access on its own
+    const importedSessions = importData.sessions.map(session => (
+      session && typeof session === 'object' ? { ...session, mcpEnabled: false } : session
+    ));
     const importedFolders = importData.folders || [];
 
     // Load existing sessions
@@ -853,6 +1004,8 @@ ipcMain.handle('import-sessions', async (event, mode) => {
 
     // Save merged/replaced sessions
     fs.writeFileSync(sessionsPath, JSON.stringify(finalSessions, null, 2));
+    mcpSessionsCache = null;
+    mcpController?.onSessionsSaved();
 
     // Handle folders
     if (importedFolders.length > 0) {
@@ -2316,8 +2469,12 @@ class TransferQueue {
           writeStream.end();
         });
 
+        // 'close' also follows a WRITE the server rejected (no 'error' from ssh2), so check the result
         writeStream.on('close', () => {
-          resolve();
+          readStream.destroy();
+          if (abortController.aborted) return resolve();
+          const stat = (p) => new Promise((ok, fail) => sftp.stat(p, (statErr, s) => (statErr ? fail(statErr) : ok(s))));
+          sftpUploadCheck.verifyUploadedSize(stat, remotePath, transfer.size).then(resolve, reject);
         });
 
         readStream.on('error', (err) => {
@@ -2332,34 +2489,46 @@ class TransferQueue {
     });
   }
 
+  /** Queue as the renderer sees it (queue updates and sftp-get-queue use the same shape) */
+  snapshot() {
+    return this.queue.map(t => ({
+      id: t.id,
+      type: t.type,
+      fileName: path.basename(t.type === 'download' ? t.remotePath : t.localPath),
+      // Full source/target paths: the file lists mark the names each transfer landed on
+      localPath: t.localPath,
+      remotePath: t.remotePath,
+      status: t.status,
+      progress: t.progress,
+      size: t.size,
+      speed: t.speed,
+      error: t.error
+    }));
+  }
+
   emitQueueUpdate() {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('sftp-queue-update', {
-        sessionId: this.sessionId,
-        queue: this.queue.map(t => ({
-          id: t.id,
-          type: t.type,
-          fileName: path.basename(t.type === 'download' ? t.remotePath : t.localPath),
-          status: t.status,
-          progress: t.progress,
-          size: t.size,
-          speed: t.speed,
-          error: t.error
-        }))
-      });
-    }
+    sendToSftpViews(this.sessionId, 'sftp-queue-update', {
+      sessionId: this.sessionId,
+      queue: this.snapshot()
+    });
   }
 
   emitProgress(transfer) {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('sftp-transfer-progress', {
-        sessionId: this.sessionId,
-        transferId: transfer.id,
-        progress: transfer.progress,
-        speed: transfer.speed,
-        size: transfer.size
-      });
-    }
+    sendToSftpViews(this.sessionId, 'sftp-transfer-progress', {
+      sessionId: this.sessionId,
+      transferId: transfer.id,
+      progress: transfer.progress,
+      speed: transfer.speed,
+      size: transfer.size
+    });
+  }
+}
+
+// The SFTP panel lives in the main window, and a session may also have its own SFTP window
+function sendToSftpViews(sessionId, channel, payload) {
+  const targets = [mainWindow, sftpWindows.get(sessionId)];
+  for (const win of targets) {
+    if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
   }
 }
 
@@ -2454,5 +2623,5 @@ ipcMain.handle('sftp-queue-clear-completed', (event, { sessionId }) => {
 
 ipcMain.handle('sftp-get-queue', (event, { sessionId }) => {
   const queue = getTransferQueue(sessionId);
-  return { queue: queue.queue };
+  return { queue: queue.snapshot() };
 });

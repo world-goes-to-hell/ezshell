@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useSftpStore } from '../stores/sftpStore'
+import { useSftpStore, type Transfer } from '../stores/sftpStore'
 
 const PENDING_STATUSES = new Set(['queued', 'active', 'paused'])
 
@@ -18,8 +18,11 @@ export function useTransferQueue(sessionId: string) {
   const seenIds = useRef<Set<string> | null>(null)
 
   useEffect(() => {
+    let disposed = false
+    let receivedUpdate = false
     const handleQueueUpdate = (data: any) => {
       if (data.sessionId === sessionId && data.queue) {
+        receivedUpdate = true
         useSftpStore.getState().setTransfers(sessionId, data.queue)
       }
     }
@@ -35,7 +38,19 @@ export function useTransferQueue(sessionId: string) {
 
     const offQueue = window.electronAPI.onSftpQueueUpdate(handleQueueUpdate)
     const offProgress = window.electronAPI.onSftpTransferProgress(handleProgressUpdate)
+
+    // A popped-out SFTP window starts with an empty store: load what this session already sent,
+    // unless a live update arrived first (it is newer). These do not count as new transfers.
+    window.electronAPI.sftpGetQueue?.(sessionId)
+      .then((result: { queue?: Transfer[] }) => {
+        if (disposed || receivedUpdate || !Array.isArray(result?.queue)) return
+        seenIds.current = new Set([...(seenIds.current ?? []), ...result.queue.map(t => t.id)])
+        useSftpStore.getState().setTransfers(sessionId, result.queue)
+      })
+      .catch((error: unknown) => console.error('Failed to load the transfer queue:', error))
+
     return () => {
+      disposed = true
       // Older preloads return nothing; newer ones return an unsubscribe function
       if (typeof offQueue === 'function') offQueue()
       if (typeof offProgress === 'function') offProgress()

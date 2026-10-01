@@ -180,7 +180,18 @@ textarea {
 
 .title-bar-drag {
   flex: 1;
-  padding-left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 10px;
+}
+
+/* App icon before the title (decorative: the title text names the app) */
+.title-bar-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
 }
 
 .title-bar-title {
@@ -1075,6 +1086,28 @@ textarea {
   color: var(--text-primary);
 }
 
+/* Pop-out window toolbar: labelled buttons. The docked panel's .sftp-btn is a 32px icon button,
+   which squeezed these labels into a square and collapsed their icons. */
+.sftp-window-toolbar {
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.sftp-window-toolbar .sftp-btn {
+  width: auto;
+  height: 30px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.sftp-window-toolbar .sftp-btn svg {
+  flex-shrink: 0;
+}
+
+.sftp-window-toolbar .transfer-queue-toggle {
+  margin-left: auto;
+}
+
 .sftp-window-content {
   flex: 1;
   display: flex;
@@ -1195,28 +1228,9 @@ textarea {
   flex-shrink: 0;
 }
 
-.drive-selector svg {
+.drive-selector-icon {
+  flex-shrink: 0;
   color: var(--text-muted);
-}
-
-.drive-select {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-size: 13px;
-  padding: 4px 8px;
-  min-height: 28px;
-  cursor: pointer;
-}
-
-.drive-select:hover {
-  border-color: var(--accent);
-}
-
-.drive-select:focus {
-  outline: none;
-  border-color: var(--accent);
 }
 
 .path-display {
@@ -3101,68 +3115,6 @@ body.resizing .split-pane-content * {
   flex-direction: column;
   height: 100vh;
   background: var(--bg-primary);
-}
-
-.terminal-window-container .title-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  height: 38px;
-  background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border);
-  -webkit-app-region: drag;
-  padding: 0;
-}
-
-.terminal-window-container .title-bar-drag {
-  flex: 1;
-  padding-left: 16px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.terminal-window-container .title-bar-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
-.terminal-window-container .title-bar-controls {
-  display: flex;
-  -webkit-app-region: no-drag;
-}
-
-.terminal-window-container .title-bar-btn {
-  width: 46px;
-  height: 38px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all var(--transition-fast);
-}
-
-.terminal-window-container .title-bar-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.terminal-window-container .title-bar-close:hover {
-  background: var(--error);
-  color: white;
-}
-
-.terminal-window-container .title-bar-btn:first-child {
-  color: var(--accent);
-}
-
-.terminal-window-container .title-bar-btn:first-child:hover {
-  background: var(--accent);
-  color: var(--on-accent);
 }
 
 .terminal-window-content {
@@ -5159,7 +5111,10 @@ body.resizing .split-pane-content * {
 /* SFTP directory sync: accent divider + badge centered between the local and remote lists */
 .sftp-divider {
   position: relative;
-  z-index: 2; /* keep the badge above the neighbouring panes */
+  /* Above the lists' sticky column headers (6) and loading overlay (7), below the rename error tooltip (20).
+     At fractional UI zoom (e.g. 80%) the 1px divider and the remote header's left edge round onto the same
+     screen pixel; with a lower z-index the header covered it and the sync line broke at the header row. */
+  z-index: 8;
   flex-shrink: 0;
 }
 

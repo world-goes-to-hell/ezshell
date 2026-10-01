@@ -3,11 +3,12 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
 import { motion, AnimatePresence } from 'framer-motion'
 import { modalOverlayVariants, modalContentVariants } from '../../lib/animation/variants'
-import { RiCloseFill, RiSettings3Fill, RiPaletteFill, RiKeyboardLine, RiDatabaseLine, RiTerminalBoxLine } from 'react-icons/ri'
+import { RiCloseFill, RiSettings3Fill, RiPaletteFill, RiKeyboardLine, RiDatabaseLine, RiTerminalBoxLine, RiPlugLine } from 'react-icons/ri'
 import { ThemeSelector } from './ThemeSelector'
 import { ShortcutsPanel } from './ShortcutsPanel'
 import { SessionBackup } from './SessionBackup'
 import { FontSizeControl } from './FontSizeControl'
+import { McpSettings } from '../Mcp/McpSettings'
 import '../../styles/settings.css'
 
 interface SettingsModalProps {
@@ -70,6 +71,10 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                       <RiDatabaseLine size={18} />
                       백업
                     </Tabs.Trigger>
+                    <Tabs.Trigger value="mcp" className="settings-tab-trigger">
+                      <RiPlugLine size={18} />
+                      MCP
+                    </Tabs.Trigger>
                   </Tabs.List>
 
                   <Tabs.Content value="theme" className="settings-tab-content">
@@ -128,6 +133,21 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                           세션을 파일로 내보내거나 가져와서 백업하세요.
                         </p>
                         <SessionBackup />
+                      </section>
+                    </div>
+                  </Tabs.Content>
+
+                  <Tabs.Content value="mcp" className="settings-tab-content">
+                    <div className="settings-content">
+                      <section className="settings-section">
+                        <h3 className="settings-section-title">
+                          <RiPlugLine size={18} />
+                          MCP 서버 (Claude Code)
+                        </h3>
+                        <p className="settings-section-desc">
+                          Claude Code 가 허용한 세션으로 서버를 조회할 수 있게 합니다. 비밀번호는 Claude 에게 전달되지 않습니다.
+                        </p>
+                        <McpSettings />
                       </section>
                     </div>
                   </Tabs.Content>

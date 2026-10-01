@@ -439,7 +439,7 @@ export function LockScreen({ hasMasterPassword, onUnlock }: LockScreenProps) {
           animate={{ opacity: 1 }}
           transition={{ delay: 0.6, duration: 0.5 }}
         >
-          My SSH Client
+          ezShell
         </motion.div>
       </motion.div>
     </div>

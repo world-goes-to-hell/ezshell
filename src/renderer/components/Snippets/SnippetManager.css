@@ -79,15 +79,13 @@
   color: var(--text-muted);
 }
 
-.snippet-category-filter {
+/* Category filter (SelectMenu trigger): fixed width next to the search box, same box as the search field */
+.select-menu-trigger.snippet-category-filter {
+  width: 180px;
+  flex-shrink: 0;
   padding: 8px 12px;
+  border-color: var(--border);
   background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text-primary);
-  font-size: 15px;
-  cursor: pointer;
-  outline: none;
 }
 
 /* Content Area */

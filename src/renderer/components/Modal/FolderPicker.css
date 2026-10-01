@@ -1,0 +1,50 @@
+/* Connection form folder field: looks like the form's other inputs; the tree unfolds inline below it */
+
+.folder-picker-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+  transition: box-shadow var(--transition-fast);
+}
+
+.folder-picker-trigger:focus-visible,
+.folder-picker.is-open .folder-picker-trigger {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.folder-picker-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-picker-icon {
+  flex-shrink: 0;
+  color: var(--warning);
+}
+
+.folder-picker-icon.is-root {
+  color: var(--text-secondary);
+}
+
+.folder-picker-panel {
+  margin-top: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}

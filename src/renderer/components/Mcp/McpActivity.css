@@ -1,0 +1,251 @@
+/* MCP activity: status bar entry and right-hand panel. Stays below the approval dialog (20000+). */
+.mcp-activity-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mcp-activity-indicator:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.mcp-activity-indicator:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.mcp-activity-indicator.busy {
+  color: var(--text-link);
+  font-weight: 600;
+}
+
+.mcp-activity-dot {
+  width: 7px;
+  height: 7px;
+  background: currentColor;
+  animation: mcp-activity-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes mcp-activity-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mcp-activity-dot { animation: none; }
+}
+
+.mcp-activity-panel {
+  position: fixed;
+  top: 32px;
+  bottom: 30px;
+  right: 0;
+  z-index: 9200;
+  width: min(440px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.mcp-activity-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 12px 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mcp-activity-header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.mcp-activity-header p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mcp-activity-empty {
+  margin: 0;
+  padding: 24px 16px;
+  color: var(--text-secondary);
+}
+
+.mcp-activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.mcp-activity-item {
+  border-bottom: 1px solid var(--border);
+}
+
+.mcp-activity-item.state-waiting {
+  border-left: 3px solid var(--accent);
+}
+
+.mcp-activity-item.state-running {
+  border-left: 3px solid var(--accent);
+}
+
+.mcp-activity-row {
+  display: flex;
+  align-items: stretch;
+}
+
+.mcp-activity-summary {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mcp-activity-summary:hover {
+  background: var(--bg-hover);
+}
+
+.mcp-activity-summary:focus-visible,
+.mcp-activity-stop:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.mcp-activity-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mcp-activity-time {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.mcp-activity-session {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.mcp-activity-extra {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mcp-activity-state {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mcp-activity-state-waiting,
+.mcp-activity-state-running {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text-link);
+}
+
+.mcp-activity-state-done {
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success);
+}
+
+.mcp-activity-state-timeout,
+.mcp-activity-state-expired {
+  background: color-mix(in srgb, var(--warning) 20%, transparent);
+  color: var(--warning);
+}
+
+.mcp-activity-state-denied,
+.mcp-activity-state-cancelled,
+.mcp-activity-state-blocked,
+.mcp-activity-state-failed {
+  background: color-mix(in srgb, var(--error) 20%, transparent);
+  color: var(--error-text);
+}
+
+.mcp-activity-command {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.mcp-activity-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 8px 12px 8px 0;
+  padding: 0 10px;
+  align-self: center;
+  height: 28px;
+  border: 1px solid var(--error);
+  background: transparent;
+  color: var(--error-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mcp-activity-stop:hover {
+  background: color-mix(in srgb, var(--error) 20%, transparent);
+}
+
+.mcp-activity-detail {
+  padding: 4px 16px 12px;
+  background: var(--bg-tertiary);
+}
+
+.mcp-activity-reasons {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+}
+
+.mcp-activity-output {
+  margin: 8px 0 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

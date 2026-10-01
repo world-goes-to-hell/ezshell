@@ -58,6 +58,92 @@ export interface LocalTrashResult {
   failures: { path: string; error: string }[]
 }
 
+export type McpAlertLevel = 'all' | 'medium' | 'danger'
+export type McpRiskLevel = 'low' | 'medium' | 'danger' | 'forbidden'
+export type McpAuditOutcome = 'executed' | 'approved' | 'denied' | 'expired' | 'cancelled' | 'blocked' | 'failed'
+
+export interface McpConfig {
+  enabled: boolean
+  port: number
+  alertLevel: McpAlertLevel
+  token: string
+}
+
+export interface McpStatus {
+  config: McpConfig
+  running: boolean
+  error: string | null
+  registerCommand: string
+}
+
+export type McpStatusResult = { success: true; status: McpStatus } | { success: false; error: string }
+
+export interface McpApprovalRequest {
+  id: string
+  sessionName: string
+  folder: string
+  cwd: string | null
+  command: string
+  level: McpRiskLevel
+  reasons: string[]
+  expiresAt: number
+}
+
+export type McpActivityState = 'waiting' | 'running' | 'done' | 'timeout' | 'denied' | 'expired' | 'cancelled' | 'blocked' | 'failed'
+
+export interface McpActivityItem {
+  id: string
+  time: string
+  sessionId: string
+  sessionName: string
+  command: string
+  level: McpRiskLevel
+  reasons: string[]
+  state: McpActivityState
+  startedAt: number
+  finishedAt: number | null
+  exitCode?: number | null
+  timedOut?: boolean
+  truncated?: boolean
+  error?: string
+  output?: string
+}
+
+export interface McpAuditEntry {
+  time: string
+  requestId: string
+  sessionId: string
+  sessionName: string
+  command: string
+  level: McpRiskLevel
+  reasons: string[]
+  outcome: McpAuditOutcome
+  exitCode?: number | null
+  timedOut?: boolean
+  truncated?: boolean
+  cancelled?: boolean
+  phase?: 'end'
+  error?: string
+}
+
+export type McpSetupScope = 'project' | 'global'
+
+export interface McpSetupOutcome {
+  scope: McpSetupScope
+  filePath: string
+  result: 'added' | 'replaced' | 'unchanged' | 'conflict'
+  backupPath: string | null
+  /** Projects in ~/.claude.json whose own registration of the same name wins over the global one */
+  shadowedProjects: string[]
+  existingUrl?: string
+  tokenEnv: 'set' | 'unsupported' | 'failed' | null
+  tokenEnvError: string | null
+}
+
+export type McpSetupResult =
+  | { success: true; outcome: McpSetupOutcome }
+  | { success: false; error?: string; cancelled?: boolean }
+
 // Extend Window interface for electronAPI
 declare global {
   interface Window {
@@ -134,11 +220,13 @@ declare global {
       selectLocalFolder: () => Promise<string | null>
 
       // SFTP Window
-      openSftpWindow?: (sessionId: string, localPath: string, remotePath: string) => Promise<any>
+      openSftpWindow?: (sessionId: string, localPath: string, remotePath: string, title?: string) => Promise<any>
 
       // Terminal Window
-      openTerminalWindow: (sessionId: string, title: string) => Promise<any>
-      mergeTerminalToMain: (sessionId: string, title: string, host: string, username: string) => Promise<any>
+      openTerminalWindow: (sessionId: string, title: string, snapshot?: string) => Promise<any>
+      /** Screen contents handed over by the main window; absent until the app restarts after an update */
+      takeTerminalSnapshot?: (sessionId: string) => Promise<string | null>
+      mergeTerminalToMain: (sessionId: string, title: string, host: string, username: string, snapshot?: string) => Promise<any>
       onTerminalMerge: (callback: (data: any) => void) => () => void
 
       // Sessions
@@ -202,6 +290,17 @@ declare global {
       appZoomIn?: () => void
       appZoomOut?: () => void
       appZoomReset?: () => void
+      mcpGetStatus?: () => Promise<McpStatusResult>
+      mcpUpdateConfig?: (patch: Partial<Pick<McpConfig, 'enabled' | 'port' | 'alertLevel'>>) => Promise<McpStatusResult>
+      mcpRegenerateToken?: () => Promise<McpStatusResult>
+      mcpRespondApproval?: (id: string, approved: boolean) => Promise<{ success: boolean }>
+      mcpReadAudit?: (limit: number) => Promise<{ success: boolean; entries: McpAuditEntry[]; error?: string }>
+      mcpListActivity?: () => Promise<{ success: boolean; items: McpActivityItem[] }>
+      mcpCancelActivity?: (id: string) => Promise<{ success: boolean }>
+      mcpSetupClient?: (request: { scope: McpSetupScope; overwrite?: boolean; reuseDir?: boolean; setTokenEnv?: boolean }) => Promise<McpSetupResult>
+      onMcpActivity?: (callback: (item: McpActivityItem) => void) => () => void
+      onMcpApprovalRequest?: (callback: (request: McpApprovalRequest) => void) => () => void
+      onMcpApprovalDismiss?: (callback: (payload: { id: string }) => void) => () => void
       getAppZoomFactor?: () => number
       setAppZoomFactor?: (factor: number) => void
     }

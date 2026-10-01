@@ -4,6 +4,8 @@ import { AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../../stores/themeStore'
 import { ThemeCategory, ThemeDefinition } from '../../types/theme'
 import { ThemeEditor } from './ThemeEditor'
+import { confirmDialog } from '../../stores/confirmStore'
+import { toast } from '../../stores/toastStore'
 
 type FilterTab = 'all' | ThemeCategory | 'custom'
 
@@ -50,11 +52,16 @@ export function ThemeSelector() {
     setShowEditor(true)
   }
 
-  const handleDeleteTheme = (id: string, e: React.MouseEvent) => {
+  const handleDeleteTheme = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    if (confirm('이 테마를 삭제하시겠습니까?')) {
-      deleteCustomTheme(id)
-    }
+    const name = allThemes.find(theme => theme.id === id)?.name ?? '이 테마'
+    const confirmed = await confirmDialog({
+      title: '테마 삭제',
+      message: `"${name}" 테마를 삭제합니다.`,
+      confirmLabel: '삭제',
+      danger: true
+    })
+    if (confirmed) deleteCustomTheme(id)
   }
 
   const handleSaveTheme = (theme: ThemeDefinition) => {
@@ -89,9 +96,9 @@ export function ThemeSelector() {
         reader.onload = (event) => {
           const json = event.target?.result as string
           if (importTheme(json)) {
-            alert('테마를 가져왔습니다')
+            toast.success('테마 가져오기', '테마를 가져왔습니다')
           } else {
-            alert('테마 파일이 올바르지 않습니다')
+            toast.error('테마 가져오기 실패', '테마 파일이 올바르지 않습니다')
           }
         }
         reader.readAsText(file)
@@ -138,72 +145,87 @@ export function ThemeSelector() {
 
       {/* Theme Grid */}
       <div className="theme-grid">
-        {filteredThemes.map(theme => (
-          <button
-            key={theme.id}
-            className={`theme-card ${currentThemeId === theme.id ? 'selected' : ''}`}
-            onClick={() => setTheme(theme.id)}
-          >
-            {/* Preview Thumbnail */}
-            <div className="theme-preview">
-              <div
-                className="theme-preview-bg"
-                style={{ background: theme.preview.primary }}
+        {filteredThemes.map(theme => {
+          const isSelected = currentThemeId === theme.id
+          return (
+            // The card is a container: selecting is one button, and the custom-theme actions are buttons next to it
+            // (a button may not contain buttons)
+            <div key={theme.id} className={`theme-card ${isSelected ? 'selected' : ''}`}>
+              <button
+                type="button"
+                className="theme-card-main"
+                aria-pressed={isSelected}
+                onClick={() => setTheme(theme.id)}
               >
-                <div
-                  className="theme-preview-secondary"
-                  style={{ background: theme.preview.secondary }}
-                />
-                <div
-                  className="theme-preview-accent"
-                  style={{ background: theme.preview.accent }}
-                />
-              </div>
-              {/* Selection indicator */}
-              {currentThemeId === theme.id && (
-                <div className="theme-selected-badge">
-                  <RiCheckFill size={16} />
+                {/* Preview Thumbnail */}
+                <div className="theme-preview">
+                  <div
+                    className="theme-preview-bg"
+                    style={{ background: theme.preview.primary }}
+                  >
+                    <div
+                      className="theme-preview-secondary"
+                      style={{ background: theme.preview.secondary }}
+                    />
+                    <div
+                      className="theme-preview-accent"
+                      style={{ background: theme.preview.accent }}
+                    />
+                  </div>
+                  {/* Selection indicator */}
+                  {isSelected && (
+                    <div className="theme-selected-badge">
+                      <RiCheckFill size={16} />
+                    </div>
+                  )}
                 </div>
-              )}
-              {/* Custom theme actions */}
+
+                {/* Theme Info */}
+                <div className="theme-info">
+                  <span className="theme-name">{theme.name}</span>
+                  <span className="theme-category">
+                    {theme.category === 'dark' && '다크'}
+                    {theme.category === 'light' && '라이트'}
+                    {theme.category === 'special' && '특수'}
+                  </span>
+                </div>
+              </button>
+
+              {/* Custom theme actions: over the preview, shown on hover or keyboard focus */}
               {isCustomTheme(theme.id) && (
                 <div className="theme-card-actions">
                   <button
+                    type="button"
                     className="theme-card-action"
                     onClick={(e) => handleEditTheme(theme, e)}
                     title="수정"
+                    aria-label={`${theme.name} 수정`}
                   >
                     <RiEditLine size={16} />
                   </button>
                   <button
+                    type="button"
                     className="theme-card-action"
                     onClick={(e) => handleExportTheme(theme.id, e)}
                     title="내보내기"
+                    aria-label={`${theme.name} 내보내기`}
                   >
                     <RiDownloadLine size={16} />
                   </button>
                   <button
+                    type="button"
                     className="theme-card-action theme-card-action-danger"
                     onClick={(e) => handleDeleteTheme(theme.id, e)}
                     title="삭제"
+                    aria-label={`${theme.name} 삭제`}
                   >
                     <RiDeleteBinLine size={16} />
                   </button>
                 </div>
               )}
             </div>
-
-            {/* Theme Info */}
-            <div className="theme-info">
-              <span className="theme-name">{theme.name}</span>
-              <span className="theme-category">
-                {theme.category === 'dark' && '다크'}
-                {theme.category === 'light' && '라이트'}
-                {theme.category === 'special' && '특수'}
-              </span>
-            </div>
-          </button>
-        ))}
+          )
+        })}
       </div>
 
       {/* Theme Editor Modal */}
