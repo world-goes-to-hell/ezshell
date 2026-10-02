@@ -8,6 +8,7 @@ import { stopMcpRequest } from './stopMcpRequest'
 /** Keep following new output only while the view is scrolled to (about) the bottom */
 const FOLLOW_THRESHOLD_PX = 24
 const WAITING_TEXT = '앱에서 확인을 기다리는 중입니다.'
+const TRIMMED_TEXT = '출력이 길어 앞부분은 표시하지 않습니다.'
 
 function statusText(item: McpActivityItem, now: number): string {
   const label = ACTIVITY_STATE_LABELS[item.state] ?? item.state
@@ -37,8 +38,10 @@ const TerminalEntry = memo(function TerminalEntry({ item, now }: { item: McpActi
         <span className="mcp-term-sigil" aria-hidden="true">$</span>
         <code className="mcp-term-command">{command}</code>
         {item.level !== 'low' && <span className={`mcp-risk mcp-risk-${item.level}`}>{RISK_LABELS[item.level] ?? item.level}</span>}
+        {item.background && <span className="mcp-job-tag">백그라운드</span>}
         <time className="mcp-term-time">{formatClock(item.time)}</time>
       </div>
+      {item.outputTrimmed && <p className="mcp-term-notice">{TRIMMED_TEXT}</p>}
       {parts.length > 0 && (
         <pre className="mcp-term-output">
           {parts.map((part, index) => (

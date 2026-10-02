@@ -35,6 +35,7 @@ function ActivityRow({ item, now }: { item: McpActivityItem; now: number }) {
             <span className="mcp-activity-time">{formatClock(item.time)}</span>
             <span className="mcp-activity-session" title={item.sessionName}>{item.sessionName}</span>
             <span className={`mcp-risk mcp-risk-${item.level}`}>{RISK_LABELS[item.level] ?? item.level}</span>
+            {item.background && <span className="mcp-job-tag">백그라운드</span>}
             <span className={`mcp-activity-state mcp-activity-state-${item.state}`}>{ACTIVITY_STATE_LABELS[item.state] ?? item.state}</span>
             <span className="mcp-activity-extra">
               {active

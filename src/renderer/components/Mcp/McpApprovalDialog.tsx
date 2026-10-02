@@ -91,6 +91,15 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
             <dd><code>{cwd?.text ?? '알 수 없음'}</code></dd>
             <dt>명령</dt>
             <dd><pre id="mcp-approval-command" className="mcp-approval-command">{command.text}</pre></dd>
+            {request.background && (
+              <>
+                <dt>실행 방식</dt>
+                <dd>
+                  백그라운드 실행 · 최대 {request.background.limitMinutes}분
+                  <div className="mcp-approval-requested">허용하면 끝날 때까지 서버에서 계속 실행됩니다. MCP 활동 패널에서 중지할 수 있고, 앱을 잠그면 함께 중지됩니다.</div>
+                </dd>
+              </>
+            )}
           </>
         )}
         <dt>위험도</dt>

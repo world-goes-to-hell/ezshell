@@ -31,6 +31,9 @@ const stubHandlers = (overrides = {}) => ({
   runCommand: async (args) => text(`ran ${args.command}`),
   writeFile: async (args) => text(`wrote ${args.path}`),
   editFile: async (args) => text(`edited ${args.path}`),
+  jobOutput: async (args) => text(`output of ${args.job}`),
+  stopJob: async (args) => text(`stopped ${args.job}`),
+  listJobs: () => text('[]'),
   ...overrides
 })
 
@@ -56,7 +59,7 @@ describe('createMcpHttpServer', () => {
   it('lists the tools', async () => {
     const client = await connect(await startServer())
     const { tools } = await client.listTools()
-    expect(tools.map(tool => tool.name).sort()).toEqual(['cd', 'edit_file', 'list_sessions', 'run_command', 'write_file'])
+    expect(tools.map(tool => tool.name).sort()).toEqual(['cd', 'edit_file', 'job_output', 'list_jobs', 'list_sessions', 'run_command', 'stop_job', 'write_file'])
     await client.close()
   })
 
@@ -83,6 +86,44 @@ describe('createMcpHttpServer', () => {
       { name: 'write_file', arguments: { session: 's1', path: '/tmp/a' } },
       { name: 'edit_file', arguments: { session: 's1', path: '/tmp/a', old_string: '', new_string: 'x' } },
       { name: 'edit_file', arguments: { session: 's1', path: '/tmp/a', old_string: 'a', new_string: 'b', replace_all: 'yes' } }
+    ]
+    for (const request of bad) {
+      const outcome = await client.callTool(request).then(result => (result.isError ? 'error' : 'ok'), () => 'error')
+      expect(outcome).toBe('error')
+    }
+    expect(called).toBe(0)
+    await client.close()
+  })
+
+  it('hands the job tools their arguments', async () => {
+    const seen = []
+    const record = (name) => async (args) => { seen.push([name, args]); return text('ok') }
+    const client = await connect(await startServer(stubHandlers({ runCommand: record('run'), jobOutput: record('output'), stopJob: record('stop') })))
+    await client.callTool({ name: 'run_command', arguments: { session: 's1', command: 'make', background: true, timeout_minutes: 30 } })
+    await client.callTool({ name: 'job_output', arguments: { job: 'job-1', wait_seconds: 5 } })
+    await client.callTool({ name: 'stop_job', arguments: { job: 'job-1' } })
+    expect((await client.callTool({ name: 'list_jobs', arguments: {} })).content[0].text).toBe('[]')
+    expect(seen).toEqual([
+      ['run', { session: 's1', command: 'make', background: true, timeout_minutes: 30 }],
+      ['output', { job: 'job-1', wait_seconds: 5 }],
+      ['stop', { job: 'job-1' }]
+    ])
+    await client.close()
+  })
+
+  it('refuses job tool input the schema does not allow, before any handler runs', async () => {
+    let called = 0
+    const count = async () => { called++; return text('ok') }
+    const client = await connect(await startServer(stubHandlers({ runCommand: count, jobOutput: count, stopJob: count })))
+    const bad = [
+      { name: 'run_command', arguments: { session: 's1', command: 'make', background: 'yes' } },
+      { name: 'run_command', arguments: { session: 's1', command: 'make', background: true, timeout_minutes: 61 } },
+      { name: 'run_command', arguments: { session: 's1', command: 'make', background: true, timeout_minutes: 0 } },
+      { name: 'run_command', arguments: { session: 's1', command: 'make', background: true, timeout_minutes: 1.5 } },
+      { name: 'job_output', arguments: { job: 'job-1', wait_seconds: 26 } },
+      { name: 'job_output', arguments: { job: '' } },
+      { name: 'stop_job', arguments: { job: 'x'.repeat(65) } },
+      { name: 'stop_job', arguments: {} }
     ]
     for (const request of bad) {
       const outcome = await client.callTool(request).then(result => (result.isError ? 'error' : 'ok'), () => 'error')

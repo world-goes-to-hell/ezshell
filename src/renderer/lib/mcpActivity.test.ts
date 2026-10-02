@@ -64,6 +64,31 @@ describe('mcpActivity', () => {
     expect(list[1].outputParts).toEqual([{ stream: 'stdout', text: 'x' }])
   })
 
+  it('drops the oldest finished request, never one that is still running', () => {
+    const list = [item('job', 1), { ...item('a', 2, 'done'), finishedAt: 3 }, { ...item('b', 3, 'done'), finishedAt: 4 }]
+    const next = upsertActivity(list, { ...item('c', 4, 'done'), finishedAt: 5 }, 3)
+    expect(next.map(entry => entry.id)).toEqual(['c', 'b', 'job'])
+  })
+
+  it('keeps only the end of a long output and marks the item', () => {
+    const list = [{ ...item('a', 1), outputParts: [{ stream: 'stdout' as const, text: 'abcd' }] }]
+    const same = appendOutputParts(list, 'a', [{ stream: 'stderr', text: 'ef' }], 6)
+    expect(same[0].outputParts).toEqual([{ stream: 'stdout', text: 'abcd' }, { stream: 'stderr', text: 'ef' }])
+    expect(same[0].outputTrimmed).toBeUndefined()
+    const trimmed = appendOutputParts(same, 'a', [{ stream: 'stdout', text: 'ghij' }], 6)
+    expect(trimmed[0].outputParts).toEqual([{ stream: 'stderr', text: 'ef' }, { stream: 'stdout', text: 'ghij' }])
+    expect(trimmed[0].outputTrimmed).toBe(true)
+    const again = appendOutputParts(trimmed, 'a', [{ stream: 'stdout', text: 'klmnopqr' }], 6)
+    expect(again[0].outputParts).toEqual([{ stream: 'stdout', text: 'mnopqr' }])
+  })
+
+  it('joins the oldest pieces when output keeps switching streams', () => {
+    const list = [{ ...item('a', 1), outputParts: [{ stream: 'stdout' as const, text: 'a' }, { stream: 'stderr' as const, text: 'b' }] }]
+    const next = appendOutputParts(list, 'a', [{ stream: 'stdout', text: 'c' }, { stream: 'stderr', text: 'd' }, { stream: 'stdout', text: 'e' }], 100, 3)
+    expect(next[0].outputParts).toEqual([{ stream: 'stdout', text: 'abc' }, { stream: 'stderr', text: 'd' }, { stream: 'stdout', text: 'e' }])
+    expect(next[0].outputTrimmed).toBeUndefined()
+  })
+
   it('leaves the list untouched for an unknown or finished request', () => {
     const list = [{ ...item('a', 1, 'done'), finishedAt: 5 }]
     expect(appendOutputParts(list, 'a', [{ stream: 'stdout', text: 'late' }])).toBe(list)

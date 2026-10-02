@@ -204,6 +204,16 @@
   color: var(--error-text);
 }
 
+/* Marks a request that runs as a background job (activity list, terminal view) */
+.mcp-job-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 /* Approval dialog: above every other overlay in the app (snippets 10001, palette 9999) */
 .modal-overlay.mcp-approval-overlay {
   z-index: 20000;

@@ -98,6 +98,8 @@ export interface McpApprovalRequest {
   level: McpRiskLevel
   reasons: string[]
   expiresAt: number
+  /** Set when the command is started as a background job: it may run this long after being allowed */
+  background?: { limitMinutes: number }
   /** Set for write_file / edit_file: the dialog shows the change instead of a command */
   kind?: 'file'
   /** The real file that will be written (links resolved) */
@@ -164,6 +166,12 @@ export interface McpActivityItem {
   output?: string
   /** What the command printed, for the terminal view */
   outputParts?: McpOutputPart[]
+  /** The start of `outputParts` was dropped because the request printed more than is kept */
+  outputTrimmed?: boolean
+  /** A background job (run_command with `background`): stays running until the job ends */
+  background?: boolean
+  /** Id of the background job, once it has started */
+  jobId?: string
 }
 
 export interface McpAuditEntry {

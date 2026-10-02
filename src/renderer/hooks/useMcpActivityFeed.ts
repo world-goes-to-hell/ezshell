@@ -6,7 +6,7 @@ export function useMcpActivityFeed(): void {
   useEffect(() => {
     const api = window.electronAPI
     if (typeof api?.onMcpActivity !== 'function' || typeof api?.mcpListActivity !== 'function') return
-    const { mergeSnapshot, upsert, appendOutput } = useMcpActivityStore.getState()
+    const { mergeSnapshot, upsert, appendOutput, clear } = useMcpActivityStore.getState()
     // Ids updated by a live event during this subscription; only those may be newer than the snapshot
     const liveIds = new Set<string>()
     let isMounted = true
@@ -26,6 +26,9 @@ export function useMcpActivityFeed(): void {
       isMounted = false
       off()
       offOutput()
+      // The feed stops when the app locks; output must not stay in memory behind the lock screen.
+      // The next subscription starts from the main process's snapshot.
+      clear()
     }
   }, [])
 }

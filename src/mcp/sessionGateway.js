@@ -1,10 +1,11 @@
 // SSH connections used by the MCP tools: one reusable connection per session, commands
 // run one at a time per session, each from the working directory the gateway remembers.
 const fs = require('fs')
-const { StringDecoder } = require('string_decoder')
 const { Client } = require('ssh2')
 const { buildOptions, describeSshError } = require('../sshConnectionTest.js')
 const { shellQuote, quoteCdTarget } = require('./shellQuote.js')
+const { GatewayError, createReporter, ANSI_PATTERN, CLOSE_GRACE_MS, CANCELLED_MESSAGE, DROPPED_MESSAGE, OPEN_FAILED_MESSAGE } = require('./gatewayShared.js')
+const { openJobChannel, PID_LINE, DEFAULT_MAX_JOB_OUTPUT_BYTES } = require('./jobChannel.js')
 
 const DEFAULT_IDLE_MS = 5 * 60 * 1000
 const DEFAULT_EXEC_TIMEOUT_MS = 30 * 1000
@@ -13,13 +14,8 @@ const DEFAULT_WRITE_TIMEOUT_MS = 120 * 1000
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024
 /** Same default as the connect dialog and the terminal path (sshConnectConfig.ts) */
 const DEFAULT_CONNECT_TIMEOUT_SEC = 20
-/** How long to wait for a stopped channel to report that it closed */
-const CLOSE_GRACE_MS = 2000
 /** Detect a dead peer within about 45s instead of waiting for TCP to give up */
 const KEEPALIVE_OPTIONS = { keepaliveInterval: 15000, keepaliveCountMax: 3 }
-const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]/g
-const CANCELLED_MESSAGE = '요청이 취소되었습니다.'
-const DROPPED_MESSAGE = '서버와의 연결이 끊겼습니다.'
 const CLOSED_MESSAGE = '세션 연결이 닫혔습니다.'
 const HOME_FAILED_MESSAGE = '홈 디렉터리를 확인하지 못했습니다.'
 const CD_FAILED_MESSAGE = '디렉터리로 이동할 수 없습니다.'
@@ -28,16 +24,10 @@ const CWD_CHANGED_MESSAGE = '작업 디렉터리가 바뀌어 실행하지 않�
 const SFTP_FAILED_MESSAGE = '이 서버에서는 파일 전송(SFTP)을 사용할 수 없습니다.'
 const FILE_TIMEOUT_MESSAGE = '파일 작업이 시간 제한을 넘었습니다. 파일 상태를 확인하세요.'
 const CWD_MISSING_MESSAGE = (cwd) => `작업 디렉터리 ${cwd} 에 들어갈 수 없습니다. cd 로 다른 위치를 지정하세요.`
+/** A background job has no result to attach an error to, so its guard prints the reason into the job's output */
+const JOB_CWD_MISSING_MESSAGE = 'ezShell: 작업 디렉터리에 들어갈 수 없습니다. cd 로 다른 위치를 지정하세요.'
 /** Printed by the cd guard when the remembered directory cannot be entered */
 const CWD_MISSING_MARKER = '__EZSHELL_CWD_MISSING__'
-
-class GatewayError extends Error {
-  constructor(userMessage, detail) {
-    super(userMessage)
-    this.userMessage = userMessage
-    this.detail = detail
-  }
-}
 
 function createOutputBuffer(limit) {
   const chunks = []
@@ -55,50 +45,6 @@ function createOutputBuffer(limit) {
     },
     text: () => Buffer.concat(chunks).toString('utf8').replace(ANSI_PATTERN, ''),
     isTruncated: () => truncated
-  }
-}
-
-/** An escape character that starts no complete sequence within this many characters is just dropped */
-const MAX_HELD_SEQUENCE = 64
-const ESC = '\x1b'
-
-/**
- * Passes what a command prints to a watcher (the activity view) as it arrives: only what the output
- * buffer kept, decoded without splitting a multi-byte character, control sequences removed.
- * The start of a sequence that is cut off by the end of a chunk waits for the next chunk.
- * `push(piece)` takes what the buffer kept; `end()` hands over whatever is still waiting.
- */
-function createReporter(onOutput, stream) {
-  if (typeof onOutput !== 'function') return { push() {}, end() {} }
-  const decoder = new StringDecoder('utf8')
-  let held = ''
-  const emit = (text) => {
-    if (text === '') return
-    try {
-      onOutput(stream, text)
-    } catch {
-      // Watching must never affect the command
-    }
-  }
-  return {
-    push(piece) {
-      if (!piece || piece.length === 0) return
-      const text = (held + decoder.write(piece)).replace(ANSI_PATTERN, '')
-      // Complete sequences are gone, so a remaining escape character is an unfinished (or stray) one
-      const cut = text.indexOf(ESC)
-      if (cut === -1 || text.length - cut > MAX_HELD_SEQUENCE) {
-        held = ''
-        emit(text.split(ESC).join(''))
-        return
-      }
-      held = text.slice(cut)
-      emit(text.slice(0, cut))
-    },
-    end() {
-      const rest = held.split(ESC).join('')
-      held = ''
-      emit(rest)
-    }
   }
 }
 
@@ -125,7 +71,9 @@ function createSessionGateway({
   idleMs = DEFAULT_IDLE_MS,
   execTimeoutMs = DEFAULT_EXEC_TIMEOUT_MS,
   writeTimeoutMs = DEFAULT_WRITE_TIMEOUT_MS,
-  maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES
+  maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
+  maxJobOutputBytes = DEFAULT_MAX_JOB_OUTPUT_BYTES,
+  jobPidWaitMs
 } = {}) {
   const entries = new Map()
   /** Working directory per session id; kept across reconnects, idle drops and closeAll() */
@@ -241,7 +189,7 @@ function createSessionGateway({
       client.on('error', onDrop)
       try {
         client.exec(command, (err, opened) => {
-          if (err) { settle(reject, new GatewayError('명령을 실행할 채널을 열지 못했습니다.', err.message)); return }
+          if (err) { settle(reject, new GatewayError(OPEN_FAILED_MESSAGE, err.message)); return }
           stream = opened
           stream.on('data', (chunk) => reportStdout.push(stdout.push(chunk)))
           stream.stderr.on('data', (chunk) => reportStderr.push(stderr.push(chunk)))
@@ -256,17 +204,46 @@ function createSessionGateway({
     })
   }
 
+  /** Retired connections that are still open because a background job runs on them */
+  const lingering = new Set()
+  let settledWaiters = []
+
+  function endClients(entry) {
+    lingering.delete(entry)
+    if (lingering.size === 0) {
+      const waiting = settledWaiters
+      settledWaiters = []
+      waiting.forEach(resume => resume())
+    }
+    entry.connection.then((conn) => conn.clients.forEach(endQuietly), () => {})
+  }
+
+  /** Close the connection now. Background jobs on it end as dropped. */
   function drop(sessionId, entry) {
     if (entries.get(sessionId) !== entry) return
     entries.delete(sessionId)
     clearTimeout(entry.idleTimer)
-    entry.connection.then((conn) => conn.clients.forEach(endQuietly), () => {})
+    endClients(entry)
+  }
+
+  /**
+   * Take the connection out of use without cutting off its background jobs: new requests connect anew,
+   * and this connection closes when its last job ends, or after `graceMs` when that is given.
+   */
+  function retire(sessionId, entry, graceMs) {
+    if (entries.get(sessionId) !== entry) return
+    entries.delete(sessionId)
+    clearTimeout(entry.idleTimer)
+    if (entry.jobs === 0) { endClients(entry); return }
+    entry.retired = true
+    lingering.add(entry)
+    if (graceMs !== undefined) setTimeout(() => endClients(entry), graceMs).unref()
   }
 
   function getEntry(session) {
     const existing = entries.get(session.id)
     if (existing) return existing
-    const entry = { idleTimer: null, queue: Promise.resolve(), connection: null }
+    const entry = { idleTimer: null, queue: Promise.resolve(), connection: null, jobs: 0, retired: false }
     entry.connection = connect(session).then((conn) => {
       conn.client.on('close', () => drop(session.id, entry))
       conn.client.on('error', () => drop(session.id, entry))
@@ -279,7 +256,15 @@ function createSessionGateway({
 
   function touch(sessionId, entry) {
     clearTimeout(entry.idleTimer)
-    entry.idleTimer = setTimeout(() => drop(sessionId, entry), idleMs)
+    // A connection with a running background job stays open; jobEnded() starts the idle time again.
+    entry.idleTimer = setTimeout(() => { if (entry.jobs === 0) drop(sessionId, entry) }, idleMs)
+  }
+
+  function jobEnded(sessionId, entry) {
+    entry.jobs -= 1
+    if (entry.jobs > 0) return
+    if (entry.retired) endClients(entry)
+    else if (entries.get(sessionId) === entry) touch(sessionId, entry)
   }
 
   /** Queue a task on the session's connection; tasks of one session run one at a time. */
@@ -336,6 +321,35 @@ function createSessionGateway({
       assertGuardPassed(result, cwd)
       touch(session.id, entry)
       return { cwd, ...result }
+    })
+  }
+
+  const jobGuard = (cwd) => `cd -- ${shellQuote(cwd)} || { echo ${shellQuote(JOB_CWD_MISSING_MESSAGE)} >&2; exit 1; }`
+
+  /**
+   * Start a background job. The session's queue is held only until the job's channel is open; the job
+   * then runs beside the session's other commands. Resolves with `{ cwd, stop(), done }`, where `done`
+   * resolves (never rejects) with `{ exitCode, signal, timedOut, cancelled, dropped, overflow, unconfirmed }`.
+   * `signal` only cancels the start; a started job ends through `stop()`, its time limit (`limitMs`),
+   * the output limit, or the connection closing.
+   */
+  function startJob(session, command, { signal, expectedCwd, limitMs, onOutput } = {}) {
+    return enqueue(session, signal, async (entry) => {
+      const { client, cwd } = await prepare(session, entry, signal, expectedCwd)
+      const script = [PID_LINE, jobGuard(cwd), STDIN_OFF, command].join('\n')
+      // Counted from here, not from when the channel is open: a connection retired in between must
+      // stay until this job is over, or the job would be left on the server with no way to stop it.
+      entry.jobs += 1
+      const channel = await openJobChannel(client, script, {
+        limitMs,
+        openTimeoutMs: execTimeoutMs,
+        signal,
+        onOutput,
+        onEnd: () => jobEnded(session.id, entry),
+        maxOutputBytes: maxJobOutputBytes,
+        ...(jobPidWaitMs === undefined ? {} : { pidWaitMs: jobPidWaitMs })
+      })
+      return { cwd, stop: channel.stop, done: channel.done }
     })
   }
 
@@ -420,6 +434,7 @@ function createSessionGateway({
 
   return {
     run,
+    startJob,
     changeDirectory,
     useSftp,
     resolveCwd,
@@ -427,7 +442,13 @@ function createSessionGateway({
     /** Directories outlive connections; this resets every session to its home directory (after a lock). */
     forgetCwds: () => { cwds.clear(); homes.clear() },
     close: (sessionId) => { const entry = entries.get(sessionId); if (entry) drop(sessionId, entry) },
-    closeAll: () => [...entries.entries()].forEach(([sessionId, entry]) => drop(sessionId, entry))
+    closeAll: () => [...entries.entries()].forEach(([sessionId, entry]) => drop(sessionId, entry)),
+    /** Like closeAll(), but a connection with running background jobs closes when they end (or after `graceMs`). */
+    retireAll: ({ graceMs } = {}) => [...entries.entries()].forEach(([sessionId, entry]) => retire(sessionId, entry, graceMs)),
+    /** Whether a retired connection is still open for its background jobs */
+    hasLingering: () => lingering.size > 0,
+    /** Resolves once no retired connection is left open */
+    whenSettled: () => (lingering.size === 0 ? Promise.resolve() : new Promise((resolve) => { settledWaiters = [...settledWaiters, resolve] }))
   }
 }
 

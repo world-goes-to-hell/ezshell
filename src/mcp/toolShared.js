@@ -11,6 +11,19 @@ const DENIAL_MESSAGES = {
   cancelled: '요청이 취소되어 실행하지 않았습니다.'
 }
 
+/** What Claude reads for the state of a background job (jobStore.js) */
+const JOB_STATE_LABELS = {
+  running: '실행 중',
+  done: '완료',
+  timeout: '시간 초과로 중지됨',
+  stopped: '중지됨',
+  overflow: '출력 한도 초과로 중지됨',
+  failed: '연결 끊김'
+}
+const DROPPED_JOB_NOTE = '[주의] 서버와의 연결이 끊겨 작업이 끝났는지 확인하지 못했습니다. 명령이 서버에서 계속 실행 중일 수 있습니다.'
+
+const UNCONFIRMED_JOB_NOTE = '[주의] 중지를 요청했지만 서버가 작업의 끝을 알려 주지 않았습니다. 명령이 서버에서 계속 실행 중일 수 있습니다.'
+
 const textResult = (text, isError = false) => (isError
   ? { content: [{ type: 'text', text }], isError: true }
   : { content: [{ type: 'text', text }] })
@@ -39,6 +52,9 @@ function exposedName(session) {
   return hidden ? `세션-${String(session.id).slice(0, 8)}` : name
 }
 
+/** Whether Claude may use this saved session */
+const isAllowedSession = (session) => session.mcpEnabled === true && !session.decryptionFailed && !session.needsMigration
+
 function activityFields(base) {
   return { id: base.requestId, time: new Date().toISOString(), sessionId: base.sessionId, sessionName: base.sessionName, command: base.command, level: base.level, reasons: base.reasons }
 }
@@ -53,5 +69,6 @@ function activityState(fields) {
 
 module.exports = {
   LOCKED_MESSAGE, SESSION_CHANGED_MESSAGE, UNKNOWN_ERROR_MESSAGE, SESSIONS_UNREADABLE_MESSAGE, AUDIT_FAILED_MESSAGE, DENIAL_MESSAGES,
-  textResult, folderPath, exposedName, activityFields, activityState
+  JOB_STATE_LABELS, DROPPED_JOB_NOTE, UNCONFIRMED_JOB_NOTE,
+  textResult, folderPath, exposedName, isAllowedSession, activityFields, activityState
 }

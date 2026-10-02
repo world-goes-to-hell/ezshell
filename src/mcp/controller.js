@@ -8,11 +8,15 @@ const { createApprovalBroker } = require('./approval.js')
 const { createSessionGateway } = require('./sessionGateway.js')
 const { createToolHandlers } = require('./tools.js')
 const { createActivityLog } = require('./activityLog.js')
+const { createJobStore } = require('./jobStore.js')
+const { isAllowedSession } = require('./toolShared.js')
 const { createMcpHttpServer, MCP_PATH } = require('./server.js')
 const { buildServerEntry, applyServerEntry, findLocalRegistrations, SetupError } = require('./clientSetup.js')
 const { setTokenEnv: setTokenEnvDefault } = require('./tokenEnv.js')
 
 const SERVER_NAME = 'my-ssh-client'
+/** After a lock, a connection with background jobs stays open this long so the stop reaches the server */
+const JOB_STOP_GRACE_MS = 3500
 
 const serverUrl = (port) => `http://127.0.0.1:${port}${MCP_PATH}`
 
@@ -53,6 +57,7 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
       try { if (emitActivityOutput) emitActivityOutput(payload) } catch { /* the window may be gone */ }
     }
   })
+  const jobs = deps.jobs || createJobStore()
   const handlers = createToolHandlers({
     isUnlocked,
     getSessions: loadSessions,
@@ -61,7 +66,8 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
     approvals,
     gateway,
     audit,
-    activity
+    activity,
+    jobs
   })
   const homeDir = deps.homeDir || os.homedir()
   const setTokenEnv = deps.setTokenEnv || setTokenEnvDefault
@@ -108,9 +114,26 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
     }
   }
 
+  /** Nothing of Claude's keeps running: pending dialogs are cancelled, background jobs stopped and forgotten, connections closed. */
   function disconnectAll() {
     approvals.cancelAll()
-    gateway.closeAll()
+    jobs.clear()
+    gateway.retireAll({ graceMs: JOB_STOP_GRACE_MS })
+  }
+
+  /**
+   * Saved sessions changed. New requests must connect with the new settings, but a running background
+   * job keeps its connection, unless its session is no longer allowed (or that cannot be told).
+   */
+  function onSessionsSaved() {
+    let allowedIds = null
+    try {
+      allowedIds = new Set(loadSessions().filter(isAllowedSession).map(session => session.id))
+    } catch {
+      // Unreadable sessions: no job can be shown to be allowed
+    }
+    jobs.stopWhere(job => allowedIds === null || !allowedIds.has(job.sessionId))
+    gateway.retireAll()
   }
 
   async function sync() {
@@ -152,10 +175,14 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
       gateway.forgetCwds()
       activity.clear()
     },
-    onSessionsSaved: () => gateway.closeAll(),
+    onSessionsSaved,
+    /** Whether a background job is running, or its stop is still on the way to the server */
+    hasJobs: () => jobs.list().some(job => job.state === 'running') || gateway.hasLingering(),
+    /** Resolves once the server is stopped and the stop of every background job has reached its server (or the grace time is over). */
     shutdown: () => enqueue(async () => {
       disconnectAll()
       await server.stop()
+      await gateway.whenSettled()
     })
   }
 }

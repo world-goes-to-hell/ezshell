@@ -4,6 +4,7 @@ import os from 'os'
 import path from 'path'
 import controllerModule from './controller.js'
 import activityModule from './activityLog.js'
+import jobStoreModule from './jobStore.js'
 
 const { createMcpController } = controllerModule
 
@@ -30,17 +31,17 @@ function setup(options = {}, extra = {}) {
   const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-controller-'))
   const server = fakeServerFactory(options)
   const approvals = { cancelAll: vi.fn(), respond: vi.fn(() => true), request: vi.fn() }
-  const gateway = { closeAll: vi.fn(), forgetCwds: vi.fn(), getCwd: () => null }
+  const gateway = { closeAll: vi.fn(), retireAll: vi.fn(), forgetCwds: vi.fn(), getCwd: () => null, hasLingering: () => false, whenSettled: vi.fn(async () => {}) }
   const controller = createMcpController({
     userDataPath,
     version: 'test',
     isUnlocked: () => true,
-    loadSessions: () => [],
+    loadSessions: extra.loadSessions || (() => []),
     loadFolders: () => [],
     showApproval: () => true,
     dismissApproval: () => {},
     ...(extra.emitActivity ? { emitActivity: extra.emitActivity } : {}),
-    deps: { createServer: server.factory, approvals, gateway, ...(extra.activity ? { activity: extra.activity } : {}) }
+    deps: { createServer: server.factory, approvals, gateway, ...(extra.activity ? { activity: extra.activity } : {}), ...(extra.jobs ? { jobs: extra.jobs } : {}) }
   })
   return { controller, server, approvals, gateway, userDataPath }
 }
@@ -63,7 +64,7 @@ describe('createMcpController', () => {
     const { controller, approvals, gateway } = setup({}, { activity })
     controller.onLocked()
     expect(approvals.cancelAll).toHaveBeenCalled()
-    expect(gateway.closeAll).toHaveBeenCalled()
+    expect(gateway.retireAll).toHaveBeenCalled()
     expect(controller.listActivity()).toEqual([])
     expect(emitted).toEqual([])
   })
@@ -72,7 +73,7 @@ describe('createMcpController', () => {
     const { controller, gateway } = setup()
     controller.onLocked()
     expect(gateway.forgetCwds).toHaveBeenCalledTimes(1)
-    expect(gateway.closeAll.mock.invocationCallOrder[0]).toBeLessThan(gateway.forgetCwds.mock.invocationCallOrder[0])
+    expect(gateway.retireAll.mock.invocationCallOrder[0]).toBeLessThan(gateway.forgetCwds.mock.invocationCallOrder[0])
   })
 
   it('keeps working directories when sessions are saved or the server stops', async () => {
@@ -80,7 +81,7 @@ describe('createMcpController', () => {
     controller.onSessionsSaved()
     await controller.updateConfig({ enabled: true })
     await controller.updateConfig({ enabled: false })
-    expect(gateway.closeAll).toHaveBeenCalledTimes(2)
+    expect(gateway.retireAll).toHaveBeenCalledTimes(2)
     expect(gateway.forgetCwds).not.toHaveBeenCalled()
   })
 
@@ -114,7 +115,7 @@ describe('createMcpController', () => {
     expect(status.running).toBe(false)
     expect(server.calls.stop).toBe(1)
     expect(approvals.cancelAll).toHaveBeenCalled()
-    expect(gateway.closeAll).toHaveBeenCalled()
+    expect(gateway.retireAll).toHaveBeenCalled()
   })
 
   it('restarts on a new port', async () => {
@@ -143,13 +144,78 @@ describe('createMcpController', () => {
     const { controller, approvals, gateway } = setup()
     controller.onLocked()
     expect(approvals.cancelAll).toHaveBeenCalled()
-    expect(gateway.closeAll).toHaveBeenCalled()
+    expect(gateway.retireAll).toHaveBeenCalled()
   })
 
   it('closes connections when sessions are saved', () => {
     const { controller, gateway } = setup()
     controller.onSessionsSaved()
-    expect(gateway.closeAll).toHaveBeenCalled()
+    expect(gateway.retireAll).toHaveBeenCalled()
+  })
+
+  describe('background jobs', () => {
+    const { createJobStore } = jobStoreModule
+    const startJob = (jobs, sessionId) => {
+      const stop = vi.fn()
+      const { id } = jobs.create({ sessionId, sessionName: sessionId, command: 'make', limitMs: 60000 })
+      jobs.attach(id, { cwd: '/', stop })
+      return stop
+    }
+
+    it('stops and forgets every job before closing connections when the app locks', () => {
+      const jobs = createJobStore()
+      const stop = startJob(jobs, 's1')
+      const { controller, gateway } = setup({}, { jobs })
+      controller.onLocked()
+      expect(stop).toHaveBeenCalledTimes(1)
+      expect(jobs.list()).toEqual([])
+      expect(gateway.retireAll).toHaveBeenCalledWith({ graceMs: 3500 })
+      expect(stop.mock.invocationCallOrder[0]).toBeLessThan(gateway.retireAll.mock.invocationCallOrder[0])
+    })
+
+    it('tells whether a job is running, and a shutdown waits for retired connections', async () => {
+      const jobs = createJobStore()
+      const { controller, gateway } = setup({}, { jobs })
+      expect(controller.hasJobs()).toBe(false)
+      startJob(jobs, 's1')
+      expect(controller.hasJobs()).toBe(true)
+      await controller.shutdown()
+      expect(gateway.whenSettled).toHaveBeenCalledTimes(1)
+      expect(controller.hasJobs()).toBe(false)
+    })
+
+    it('stops every job when MCP is turned off', async () => {
+      const jobs = createJobStore()
+      const stop = startJob(jobs, 's1')
+      const { controller } = setup({}, { jobs })
+      await controller.updateConfig({ enabled: true })
+      await controller.updateConfig({ enabled: false })
+      expect(stop).toHaveBeenCalledTimes(1)
+      expect(jobs.list()).toEqual([])
+    })
+
+    it('keeps jobs of sessions that are still allowed when sessions are saved', () => {
+      const jobs = createJobStore()
+      const kept = startJob(jobs, 's1')
+      const revoked = startJob(jobs, 's2')
+      const broken = startJob(jobs, 's3')
+      const loadSessions = () => [{ id: 's1', mcpEnabled: true }, { id: 's2', mcpEnabled: false }, { id: 's3', mcpEnabled: true, decryptionFailed: true }]
+      const { controller, gateway } = setup({}, { jobs, loadSessions })
+      controller.onSessionsSaved()
+      expect(kept).not.toHaveBeenCalled()
+      expect(revoked).toHaveBeenCalledTimes(1)
+      expect(broken).toHaveBeenCalledTimes(1)
+      expect(jobs.list()).toHaveLength(3)
+      expect(gateway.retireAll).toHaveBeenCalledWith()
+    })
+
+    it('stops every job when the saved sessions cannot be read', () => {
+      const jobs = createJobStore()
+      const stop = startJob(jobs, 's1')
+      const { controller } = setup({}, { jobs, loadSessions: () => { throw new Error('locked') } })
+      controller.onSessionsSaved()
+      expect(stop).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('stores settings in mcp.json', async () => {

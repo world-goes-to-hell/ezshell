@@ -18,10 +18,21 @@ export function isActiveState(state: McpActivityState): boolean {
   return state === 'waiting' || state === 'running'
 }
 
+/**
+ * At most `max` items of a newest-first list. The oldest finished ones go first: a request that is
+ * still active (a background job runs for up to an hour) stays, so it can always be seen and stopped.
+ */
+function capItems(list: McpActivityItem[], max: number): McpActivityItem[] {
+  let excess = list.length - max
+  if (excess <= 0) return list
+  return list.reduceRight<McpActivityItem[]>((kept, item) => {
+    if (excess > 0 && !isActiveState(item.state)) { excess -= 1; return kept }
+    return [item, ...kept]
+  }, []).slice(0, max)
+}
+
 export function upsertActivity(list: McpActivityItem[], next: McpActivityItem, max: number = MAX_ACTIVITY): McpActivityItem[] {
-  return [next, ...list.filter(item => item.id !== next.id)]
-    .sort((a, b) => b.startedAt - a.startedAt)
-    .slice(0, max)
+  return capItems([next, ...list.filter(item => item.id !== next.id)].sort((a, b) => b.startedAt - a.startedAt), max)
 }
 
 /**
@@ -46,13 +57,45 @@ function joinParts(parts: McpOutputPart[], added: McpOutputPart[]): McpOutputPar
 }
 
 /**
+ * Characters of output kept per request (the end of it); a background job can print for an hour.
+ * Same limit as the main process (DEFAULT_MAX_OUTPUT_CHARS in src/mcp/activityLog.js).
+ */
+export const MAX_OUTPUT_CHARS = 512 * 1024
+
+/** Pieces of output kept per request; output that switches streams all the time would otherwise pile up without end */
+export const MAX_OUTPUT_PARTS = 2000
+
+/** Drop output from the start until at most `max` characters are left. */
+function trimParts(parts: McpOutputPart[], max: number): McpOutputPart[] {
+  const total = parts.reduce((sum, part) => sum + part.text.length, 0)
+  if (total <= max) return parts
+  let excess = total - max
+  let index = 0
+  while (excess >= parts[index].text.length) {
+    excess -= parts[index].text.length
+    index += 1
+  }
+  const first = parts[index]
+  return excess > 0 ? [{ stream: first.stream, text: first.text.slice(excess) }, ...parts.slice(index + 1)] : parts.slice(index)
+}
+
+/** At most `max` pieces: the oldest ones become one piece (their text stays, which stream it came from is lost). */
+function mergeOldest(parts: McpOutputPart[], max: number): McpOutputPart[] {
+  if (parts.length <= max) return parts
+  const cut = parts.length - max + 1
+  return [{ stream: 'stdout', text: parts.slice(0, cut).map(part => part.text).join('') }, ...parts.slice(cut)]
+}
+
+/**
  * Add live output to a request that is still active. A finished request already carries all of its
  * output (the main process sends it with the final state), so anything arriving later is ignored.
  */
-export function appendOutputParts(list: McpActivityItem[], id: string, parts: McpOutputPart[]): McpActivityItem[] {
+export function appendOutputParts(list: McpActivityItem[], id: string, parts: McpOutputPart[], maxChars: number = MAX_OUTPUT_CHARS, maxParts: number = MAX_OUTPUT_PARTS): McpActivityItem[] {
   const target = list.find(item => item.id === id)
   if (!target || !isActiveState(target.state) || parts.length === 0) return list
-  const next = { ...target, outputParts: joinParts(target.outputParts ?? [], parts) }
+  const joined = joinParts(target.outputParts ?? [], parts)
+  const kept = trimParts(joined, maxChars)
+  const next = { ...target, outputParts: mergeOldest(kept, maxParts), ...(kept === joined ? {} : { outputTrimmed: true }) }
   return list.map(item => (item.id === id ? next : item))
 }
 

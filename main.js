@@ -407,9 +407,22 @@ ipcMain.handle('open-sftp-window', (event, { sessionId, localPath, remotePath, t
   return { success: true };
 });
 
-app.on('before-quit', () => {
-  mcpController?.shutdown().catch(() => {});
+// Set once the MCP side has shut down, so the quit that follows goes through
+let isMcpShutDownForQuit = false;
+
+app.on('before-quit', (event) => {
   sessionLogger?.closeAllNow();
+  if (!mcpController || isMcpShutDownForQuit) return;
+  // A background job is stopped by a command sent to its server; quitting at once would lose that
+  // command and leave the job running there. The wait is bounded (a few seconds at most).
+  const mustWait = mcpController.hasJobs();
+  const shutdown = mcpController.shutdown().catch(() => {});
+  if (!mustWait) return;
+  event.preventDefault();
+  shutdown.finally(() => {
+    isMcpShutDownForQuit = true;
+    app.quit();
+  });
 });
 
 app.on('window-all-closed', () => {

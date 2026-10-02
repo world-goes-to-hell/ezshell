@@ -12,13 +12,19 @@ const MAX_COMMAND_LENGTH = 4000
 const MAX_PATH_LENGTH = 1024
 /** Characters; the handlers check the size in bytes (256KB) */
 const MAX_FILE_CHARS = 256 * 1024
+const MAX_JOB_MINUTES = 60
+const MAX_JOB_WAIT_SECONDS = 25
+const MAX_JOB_ID_LENGTH = 64
 
 const DESCRIPTIONS = {
   listSessions: '이 SSH 클라이언트 앱에서 MCP 접근이 허용된 세션 목록(id, 이름, 폴더, 서버 표지, 현재 작업 디렉터리)을 돌려줍니다. 다른 도구의 session 인자에는 여기서 받은 id 를 넘기세요. server 값이 같은 세션은 같은 서버에 접속하므로 한 번만 조회하면 됩니다. 값이 달라도 같은 서버일 수 있습니다(주소를 다르게 등록한 경우). 번호는 이 목록 안에서만 의미가 있습니다.',
   cd: '세션의 작업 디렉터리를 바꿉니다. 이후 run_command 는 이 디렉터리에서 실행됩니다. run_command 안에서 실행한 cd 는 그 명령에만 적용됩니다.',
   writeFile: '세션 서버에 텍스트 파일을 새로 만들거나 파일 전체를 새 내용으로 바꿉니다. 셸을 거치지 않고 쓰므로 따옴표나 변수 치환 걱정이 없습니다. 사용자가 앱에서 변경 내용(diff)을 보고 허용해야 쓰이며, 최대 180초 기다립니다. 256KB 이하의 UTF-8 텍스트만 됩니다. 상위 폴더는 미리 있어야 하고, 접속 계정의 권한으로 씁니다(sudo 없음). 파일의 일부만 고칠 때는 edit_file 을 쓰세요.',
   editFile: '세션 서버의 텍스트 파일에서 old_string 을 new_string 으로 바꿉니다. old_string 은 파일에 정확히 한 번만 나와야 합니다(여러 곳을 모두 바꾸려면 replace_all). 먼저 run_command 로 파일 내용을 확인하고, 공백과 줄바꿈까지 그대로 지정하세요. 사용자가 앱에서 변경 내용(diff)을 보고 허용해야 쓰이며, 최대 180초 기다립니다.',
-  runCommand: '세션 서버에서 셸 명령을 실행하고 종료 코드와 출력을 돌려줍니다. 30초 제한, 출력 64KB 제한이 있습니다. 서버 상태를 바꾸는 명령은 사용자가 앱에서 승인해야 실행되고, 시스템 종료·루트 삭제 같은 명령은 항상 차단됩니다. 가능하면 조회 명령을 쓰세요.'
+  runCommand: '세션 서버에서 셸 명령을 실행하고 종료 코드와 출력을 돌려줍니다. 30초 제한, 출력 64KB 제한이 있습니다. 30초를 넘길 명령(빌드, 설치, 테스트 등)은 background: true 로 시작하세요. 그러면 작업 ID 를 바로 돌려주고, 출력과 종료 상태는 job_output 으로 읽습니다. 명령 끝에 & 를 붙이거나 nohup 을 쓰지 마세요. 서버 상태를 바꾸는 명령은 사용자가 앱에서 승인해야 실행되고, 시스템 종료·루트 삭제 같은 명령은 항상 차단됩니다. 가능하면 조회 명령을 쓰세요.',
+  jobOutput: 'run_command 의 background: true 로 시작한 작업의 상태, 종료 코드, 그리고 지난번 호출 뒤로 새로 나온 출력을 돌려줍니다(stdout 과 stderr 를 나온 순서대로 합친 것). 작업이 실행 중이면 끝나기를 wait_seconds 만큼 기다린 뒤 그동안 나온 출력을 모아서 돌려주므로, 짧은 간격으로 여러 번 부르지 말고 wait_seconds 를 넉넉히 주세요. 기다리지 않으려면 0 을 주세요. 한 번에 64KB 까지 주므로 읽지 않은 출력이 더 있다는 안내가 있으면 다시 호출하세요. 작업마다 마지막 1MB 까지만 보관합니다.',
+  stopJob: '백그라운드 작업을 중지하고 마지막 상태를 돌려줍니다. 이미 끝난 작업이면 그 상태를 그대로 돌려줍니다.',
+  listJobs: '백그라운드 작업 목록(작업 ID, 세션, 명령, 상태, 경과 시간)을 돌려줍니다. 작업 ID 를 잊었을 때 쓰세요. 작업과 출력은 앱의 메모리에만 있어서, 앱을 잠그거나 종료하면 실행 중인 작업이 모두 중지되고 목록이 지워집니다.'
 }
 
 const BODY_DRAIN_MS = 1000
@@ -94,8 +100,26 @@ function buildMcpServer(handlers, { version, signal }) {
   }, async (args, extra) => safely(() => handlers.changeDirectory(args, { signal: signalFor(extra) })))
   server.registerTool('run_command', {
     description: DESCRIPTIONS.runCommand,
-    inputSchema: { session: sessionArg, command: z.string().min(1).max(MAX_COMMAND_LENGTH).describe('실행할 셸 명령') }
+    inputSchema: {
+      session: sessionArg,
+      command: z.string().min(1).max(MAX_COMMAND_LENGTH).describe('실행할 셸 명령'),
+      background: z.boolean().optional().describe('true 면 백그라운드 작업으로 시작하고 작업 ID 를 바로 돌려줍니다 (30초를 넘길 명령에 사용)'),
+      timeout_minutes: z.number().int().min(1).max(MAX_JOB_MINUTES).optional().describe(`백그라운드 작업의 제한 시간(분). 기본 10, 최대 ${MAX_JOB_MINUTES}. background: true 일 때만 쓸 수 있습니다`)
+    }
   }, async (args, extra) => safely(() => handlers.runCommand(args, { signal: signalFor(extra) })))
+  const jobArg = z.string().min(1).max(MAX_JOB_ID_LENGTH).describe('run_command 가 돌려준 작업 ID')
+  server.registerTool('job_output', {
+    description: DESCRIPTIONS.jobOutput,
+    inputSchema: {
+      job: jobArg,
+      wait_seconds: z.number().min(0).max(MAX_JOB_WAIT_SECONDS).optional().describe(`작업이 끝나기를 기다릴 시간(초). 기본 10, 최대 ${MAX_JOB_WAIT_SECONDS}, 0 이면 기다리지 않음`)
+    }
+  }, async (args, extra) => safely(() => handlers.jobOutput(args, { signal: signalFor(extra) })))
+  server.registerTool('stop_job', {
+    description: DESCRIPTIONS.stopJob,
+    inputSchema: { job: jobArg }
+  }, async (args) => safely(() => handlers.stopJob(args)))
+  server.registerTool('list_jobs', { description: DESCRIPTIONS.listJobs }, async () => safely(() => handlers.listJobs()))
   const filePath = z.string().min(1).max(MAX_PATH_LENGTH).describe('파일 경로 (절대 경로, ~/로 시작하는 경로, 또는 현재 작업 디렉터리 기준 상대 경로)')
   server.registerTool('write_file', {
     description: DESCRIPTIONS.writeFile,

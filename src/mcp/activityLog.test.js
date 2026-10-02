@@ -13,6 +13,28 @@ function setup(max) {
 const base = (id, state = 'running') => ({ id, time: 't', sessionId: 's1', sessionName: 'dev', command: 'ls', level: 'low', reasons: [], state })
 
 describe('createActivityLog', () => {
+  it('drops the oldest finished request, never one that is still running', () => {
+    const { log } = setup(3)
+    log.begin(base('job'))
+    log.begin(base('a', 'done'))
+    log.begin(base('b', 'done'))
+    log.begin(base('c', 'done'))
+    log.begin(base('d', 'done'))
+    expect(log.list().map(item => item.id)).toEqual(['d', 'c', 'job'])
+    expect(log.cancel('job')).toBe(false)
+  })
+
+  it('keeps the stop function of a running request that outlives the list size', () => {
+    const { log } = setup(2)
+    let stopped = 0
+    log.begin(base('job'), { cancel: () => { stopped += 1 } })
+    log.begin(base('a', 'done'))
+    log.begin(base('b', 'done'))
+    log.begin(base('c', 'done'))
+    expect(log.cancel('job')).toBe(true)
+    expect(stopped).toBe(1)
+  })
+
   it('records a request and publishes it', () => {
     const { log, emitted } = setup()
     log.begin(base('r1'))
@@ -124,6 +146,28 @@ describe('createActivityLog: live output', () => {
     vi.advanceTimersByTime(50)
     expect(outputs).toHaveLength(3)
     expect(outputs[2]).toEqual({ id: 'r1', parts: [out('c')] })
+  })
+
+  it('keeps only the end of a long output and marks the item', () => {
+    const outputs = []
+    const log = createActivityLog({ emitOutput: (payload) => outputs.push(payload), maxOutputChars: 6 })
+    log.begin(base('r1'))
+    log.appendOutput('r1', 'stdout', 'abcd')
+    expect(log.list()[0].outputParts).toEqual([out('abcd')])
+    expect('outputTrimmed' in log.list()[0]).toBe(false)
+    log.appendOutput('r1', 'stderr', 'ef')
+    log.appendOutput('r1', 'stdout', 'ghij')
+    expect(log.list()[0]).toMatchObject({ outputParts: [err('ef'), out('ghij')], outputTrimmed: true })
+    log.appendOutput('r1', 'stdout', 'klmnopqr')
+    expect(log.list()[0].outputParts).toEqual([out('mnopqr')])
+  })
+
+  it('joins the oldest pieces when output keeps switching streams', () => {
+    const log = createActivityLog({ maxOutputParts: 3 })
+    log.begin(base('r1'))
+    for (const [stream, text] of [['stdout', 'a'], ['stderr', 'b'], ['stdout', 'c'], ['stderr', 'd'], ['stdout', 'e']]) log.appendOutput('r1', stream, text)
+    expect(log.list()[0].outputParts).toEqual([out('abc'), err('d'), out('e')])
+    expect('outputTrimmed' in log.list()[0]).toBe(false)
   })
 
   it('ignores output for an unknown or finished request, and empty output', () => {
