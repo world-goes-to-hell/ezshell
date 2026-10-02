@@ -10,7 +10,7 @@ const hidden = { id: 's2', name: '[운영] DB', mcpEnabled: false, host: '10.0.0
 const folders = [{ id: 'f1', name: '개발' }, { id: 'f2', name: '[개발] 소상공인 바우처', parentId: 'f1' }]
 const okResult = { cwd: '/home/app', exitCode: 0, signal: null, stdout: 'ok\n', stderr: '', truncated: false, timedOut: false, cancelled: false }
 
-function setup({ sessions = [allowed, hidden], alertLevel = 'danger', answer = 'approved', runResult = okResult, runError, auditFails = false, onApproval, approvalError, alertLevelError, foldersError, sessionsError, throwNull, activity, request, runImpl } = {}) {
+function setup({ sessions = [allowed, hidden], alertLevel = 'danger', answer = 'approved', runResult = okResult, runError, auditFails = false, onApproval, approvalError, alertLevelError, foldersError, sessionsError, throwNull, activity, request, runImpl, knownCwd = '/home/app' } = {}) {
   const state = { unlocked: true, sessions }
   const auditEntries = []
   const approvalRequests = []
@@ -30,7 +30,8 @@ function setup({ sessions = [allowed, hidden], alertLevel = 'danger', answer = '
       })
     },
     gateway: {
-      getCwd: () => '/home/app',
+      getCwd: () => knownCwd,
+      resolveCwd: async () => '/home/app',
       run: async (session, command, options) => {
         runs.push({ session, command, options })
         if (runImpl) return runImpl(options)
@@ -58,7 +59,7 @@ describe('listSessions', () => {
     const { handlers } = setup()
     const result = handlers.listSessions()
     expect(JSON.parse(textOf(result))).toEqual([
-      { id: 's1', name: '[개발] 바우처 WAS', folder: '개발 / [개발] 소상공인 바우처', cwd: '/home/app' }
+      { id: 's1', name: '[개발] 바우처 WAS', folder: '개발 / [개발] 소상공인 바우처', server: '서버-1', cwd: '/home/app' }
     ])
     expect(textOf(result)).not.toContain('10.0.0.1')
     expect(textOf(result)).not.toContain('deploy')
@@ -391,6 +392,38 @@ describe('activity log', () => {
     expect(item).toMatchObject({ sessionId: 's1', command: 'ls', level: 'low', exitCode: 0 })
     expect(item.output).toContain('종료 코드: 0')
     expect(item.finishedAt).not.toBeNull()
+  })
+
+  it('collects live output on the activity item and keeps it out of the audit log', async () => {
+    const activity = createActivityLog()
+    const runImpl = async (options) => {
+      options.onOutput('stdout', 'LIVE-OUT\n')
+      options.onOutput('stderr', 'LIVE-ERR\n')
+      return okResult
+    }
+    const { handlers, auditEntries } = setup({ activity, runImpl })
+    await handlers.runCommand({ session: 's1', command: 'ls' })
+    expect(activity.list()[0].outputParts).toEqual([{ stream: 'stdout', text: 'LIVE-OUT\n' }, { stream: 'stderr', text: 'LIVE-ERR\n' }])
+    expect(JSON.stringify(auditEntries)).not.toContain('LIVE-')
+  })
+
+  it('shows the directory a request starts in, and fills it in after a run when it was not known yet', async () => {
+    const known = createActivityLog()
+    await setup({ activity: known }).handlers.runCommand({ session: 's1', command: 'ls' })
+    expect(known.list()[0].cwd).toBe('/home/app')
+
+    const seen = []
+    const unknown = createActivityLog({ emit: (item) => seen.push(item.cwd) })
+    const { handlers, auditEntries } = setup({ activity: unknown, knownCwd: null, runResult: { ...okResult, cwd: '/srv/app' } })
+    await handlers.runCommand({ session: 's1', command: 'ls' })
+    expect(seen).toEqual([null, '/srv/app'])
+    expect(auditEntries.every(entry => !('cwd' in entry))).toBe(true)
+  })
+
+  it('does not show the new directory as the place a cd ran in', async () => {
+    const activity = createActivityLog()
+    await setup({ activity, knownCwd: null }).handlers.changeDirectory({ session: 's1', path: 'logs' })
+    expect(activity.list()[0].cwd).toBeNull()
   })
 
   it('records an approved dangerous command as waiting, running, done', async () => {

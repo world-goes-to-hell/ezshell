@@ -37,6 +37,27 @@ describe('createApprovalBroker', () => {
     await expect(answer).resolves.toBe('denied')
   })
 
+  it('gives a request its own time limit when it asks for one', async () => {
+    const { broker, shown, dismissed } = setup()
+    const slow = broker.request({ kind: 'file' }, { timeoutMs: 5000 })
+    expect(shown[0].expiresAt).toBe(5000)
+    vi.advanceTimersByTime(4999)
+    expect(dismissed).toEqual([])
+    vi.advanceTimersByTime(1)
+    await expect(slow).resolves.toBe('expired')
+    // The next request is back to the default
+    const quick = broker.request({})
+    expect(shown[1].expiresAt).toBe(1000)
+    vi.advanceTimersByTime(1000)
+    await expect(quick).resolves.toBe('expired')
+  })
+
+  it.each([[0], [-5], ['long'], [Infinity]])('ignores an unusable time limit (%j)', (timeoutMs) => {
+    const { broker, shown } = setup()
+    broker.request({}, { timeoutMs })
+    expect(shown[0].expiresAt).toBe(1000)
+  })
+
   it('expires after the timeout and closes the dialog', async () => {
     const { broker, dismissed } = setup()
     const answer = broker.request({})

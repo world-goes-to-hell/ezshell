@@ -2,30 +2,18 @@ import { useEffect, useState } from 'react'
 import { RiCloseLine, RiStopCircleLine } from 'react-icons/ri'
 import type { McpActivityItem } from '../../types'
 import { useMcpActivityStore } from '../../stores/mcpActivityStore'
-import { ACTIVITY_STATE_LABELS, formatElapsed, isActiveState } from '../../lib/mcpActivity'
+import type { McpActivityView } from '../../stores/mcpActivityStore'
+import { ACTIVITY_STATE_LABELS, formatClock, formatElapsed, isActiveState } from '../../lib/mcpActivity'
 import { RISK_LABELS, revealHiddenChars } from '../../lib/mcpLabels'
-import { toast } from '../../stores/toastStore'
+import { McpActivityTerminal } from './McpActivityTerminal'
+import { stopMcpRequest } from './stopMcpRequest'
 import './Mcp.css'
 
 const TICK_MS = 1000
-
-function formatClock(iso: string): string {
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return iso
-  const pad = (value: number) => String(value).padStart(2, '0')
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-}
-
-async function stopRequest(id: string): Promise<void> {
-  const cancel = window.electronAPI?.mcpCancelActivity
-  if (typeof cancel !== 'function') return
-  try {
-    const result = await cancel(id)
-    if (!result.success) toast.error('중지하지 못했습니다', '이미 끝났거나 중지할 수 없는 요청입니다.')
-  } catch {
-    toast.error('중지하지 못했습니다')
-  }
-}
+const VIEWS: ReadonlyArray<{ id: McpActivityView; label: string }> = [
+  { id: 'list', label: '목록' },
+  { id: 'terminal', label: '터미널' }
+]
 
 function ActivityRow({ item, now }: { item: McpActivityItem; now: number }) {
   const [isExpanded, setIsExpanded] = useState(false)
@@ -57,7 +45,7 @@ function ActivityRow({ item, now }: { item: McpActivityItem; now: number }) {
           <code className="mcp-activity-command" title={command}>{command}</code>
         </button>
         {active && (
-          <button type="button" className="mcp-activity-stop" onClick={() => stopRequest(item.id)} title="이 요청 중지">
+          <button type="button" className="mcp-activity-stop" onClick={() => stopMcpRequest(item.id)} title="이 요청 중지">
             <RiStopCircleLine size={14} aria-hidden="true" />
             <span>중지</span>
           </button>
@@ -81,6 +69,8 @@ function ActivityRow({ item, now }: { item: McpActivityItem; now: number }) {
 export function McpActivityPanel() {
   const items = useMcpActivityStore(state => state.items)
   const setPanelOpen = useMcpActivityStore(state => state.setPanelOpen)
+  const view = useMcpActivityStore(state => state.view)
+  const setView = useMcpActivityStore(state => state.setView)
   const [now, setNow] = useState(() => Date.now())
   const hasActive = items.some(item => isActiveState(item.state))
 
@@ -100,18 +90,35 @@ export function McpActivityPanel() {
   }, [setPanelOpen])
 
   return (
-    <aside className="mcp-activity-panel" id="mcp-activity-panel" role="complementary" aria-label="MCP 활동">
+    <aside className={`mcp-activity-panel view-${view}`} id="mcp-activity-panel" role="complementary" aria-label="MCP 활동">
       <header className="mcp-activity-header">
         <div>
           <h2>MCP 활동</h2>
           <p>출력은 앱이 켜져 있는 동안만 보관합니다.</p>
         </div>
-        <button type="button" className="mcp-icon-btn" onClick={() => setPanelOpen(false)} aria-label="MCP 활동 닫기" title="닫기 (Esc)">
-          <RiCloseLine size={18} />
-        </button>
+        <div className="mcp-activity-tools">
+          <div className="mcp-activity-views" role="group" aria-label="보기 방식">
+            {VIEWS.map(option => (
+              <button
+                key={option.id}
+                type="button"
+                className={`mcp-activity-view-btn${view === option.id ? ' is-active' : ''}`}
+                aria-pressed={view === option.id}
+                onClick={() => setView(option.id)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="mcp-icon-btn" onClick={() => setPanelOpen(false)} aria-label="MCP 활동 닫기" title="닫기 (Esc)">
+            <RiCloseLine size={18} />
+          </button>
+        </div>
       </header>
       {items.length === 0 ? (
         <p className="mcp-activity-empty">아직 MCP 요청이 없습니다.</p>
+      ) : view === 'terminal' ? (
+        <McpActivityTerminal items={items} now={now} />
       ) : (
         <ul className="mcp-activity-list">
           {items.map(item => <ActivityRow key={item.id} item={item} now={now} />)}

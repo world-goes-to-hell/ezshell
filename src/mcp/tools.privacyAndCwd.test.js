@@ -171,3 +171,47 @@ describe('I5: unnamed sessions do not reveal host or user to Claude', () => {
     expect(runs).toHaveLength(0)
   })
 })
+
+describe('server labels: sessions on the same machine share a neutral label', () => {
+  const session = (id, change) => ({ id, name: `세션 ${id}`, mcpEnabled: true, host: 'db.example.com', username: 'deploy', ...change })
+  const labels = (sessions) => JSON.parse(textOf(setup({ sessions }).handlers.listSessions())).map(entry => entry.server)
+
+  it('gives the same label to sessions with the same host and port, numbered in list order', () => {
+    expect(labels([session('a'), session('b', { host: '10.0.0.9' }), session('c', { username: 'root' })]))
+      .toEqual(['서버-1', '서버-2', '서버-1'])
+  })
+
+  it('treats a different port as a different server, and a missing port as 22', () => {
+    expect(labels([session('a'), session('b', { port: 2222 }), session('c', { port: 22 }), session('d', { port: '22' })]))
+      .toEqual(['서버-1', '서버-2', '서버-1', '서버-1'])
+  })
+
+  it('ignores letter case and surrounding spaces in the host', () => {
+    expect(labels([session('a'), session('b', { host: '  DB.Example.com ' })])).toEqual(['서버-1', '서버-1'])
+  })
+
+  it('separates the same target address behind different jump hosts', () => {
+    const viaOne = { useJumpHost: true, jumpHost: 'bastion-1' }
+    expect(labels([
+      session('a', { host: '10.0.0.5', ...viaOne }),
+      session('b', { host: '10.0.0.5', useJumpHost: true, jumpHost: 'bastion-2' }),
+      session('c', { host: '10.0.0.5', ...viaOne, jumpPort: 22 }),
+      session('d', { host: '10.0.0.5' }),
+      // A jump host that is filled in but switched off is not used for the connection.
+      session('e', { host: '10.0.0.5', useJumpHost: false, jumpHost: 'bastion-1' })
+    ])).toEqual(['서버-1', '서버-2', '서버-1', '서버-3', '서버-3'])
+  })
+
+  it('never groups sessions that have no host', () => {
+    expect(labels([session('a', { host: '' }), session('b', { host: undefined })])).toEqual(['서버-1', '서버-2'])
+  })
+
+  it('does not reveal the host, the account or the jump host', () => {
+    const { handlers } = setup({ sessions: [session('a', { useJumpHost: true, jumpHost: 'bastion-1', jumpUsername: 'jumper' })] })
+    const text = textOf(handlers.listSessions())
+    expect(text).not.toContain('db.example.com')
+    expect(text).not.toContain('deploy')
+    expect(text).not.toContain('bastion-1')
+    expect(text).not.toContain('jumper')
+  })
+})

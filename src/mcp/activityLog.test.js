@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import activityModule from './activityLog.js'
 
 const { createActivityLog } = activityModule
@@ -84,5 +84,97 @@ describe('createActivityLog', () => {
     const log = createActivityLog({ emit: () => { throw new Error('window gone') } })
     expect(() => log.begin(base('r1'))).not.toThrow()
     expect(log.list()).toHaveLength(1)
+  })
+})
+
+describe('createActivityLog: live output', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  function live() {
+    const emitted = []
+    const outputs = []
+    const log = createActivityLog({ emit: (item) => emitted.push(item), emitOutput: (payload) => outputs.push(payload) })
+    return { log, emitted, outputs }
+  }
+  const out = (text) => ({ stream: 'stdout', text })
+  const err = (text) => ({ stream: 'stderr', text })
+
+  it('collects output in arrival order and joins neighbours of the same stream', () => {
+    const { log } = live()
+    log.begin(base('r1'))
+    log.appendOutput('r1', 'stdout', 'a')
+    log.appendOutput('r1', 'stdout', 'b')
+    log.appendOutput('r1', 'stderr', 'e')
+    log.appendOutput('r1', 'stdout', 'c')
+    expect(log.list()[0].outputParts).toEqual([out('ab'), err('e'), out('c')])
+  })
+
+  it('sends what arrived within 50ms as one message per request', () => {
+    const { log, outputs } = live()
+    log.begin(base('r1'))
+    log.begin(base('r2'))
+    log.appendOutput('r1', 'stdout', 'a')
+    log.appendOutput('r2', 'stderr', 'x')
+    log.appendOutput('r1', 'stdout', 'b')
+    expect(outputs).toEqual([])
+    vi.advanceTimersByTime(50)
+    expect(outputs).toEqual([{ id: 'r1', parts: [out('ab')] }, { id: 'r2', parts: [err('x')] }])
+    log.appendOutput('r1', 'stdout', 'c')
+    vi.advanceTimersByTime(50)
+    expect(outputs).toHaveLength(3)
+    expect(outputs[2]).toEqual({ id: 'r1', parts: [out('c')] })
+  })
+
+  it('ignores output for an unknown or finished request, and empty output', () => {
+    const { log, outputs } = live()
+    log.begin(base('r1', 'done'))
+    log.begin(base('r2'))
+    log.appendOutput('nope', 'stdout', 'a')
+    log.appendOutput('r1', 'stdout', 'a')
+    log.appendOutput('r2', 'stdout', '')
+    vi.advanceTimersByTime(50)
+    expect(outputs).toEqual([])
+    expect(log.list().some(item => 'outputParts' in item)).toBe(false)
+  })
+
+  it('does not send pending output on its own once the request finished: the finished item carries all of it', () => {
+    const { log, emitted, outputs } = live()
+    log.begin(base('r1'))
+    log.appendOutput('r1', 'stdout', 'a')
+    log.update('r1', { state: 'done', output: 'formatted' })
+    vi.advanceTimersByTime(50)
+    expect(outputs).toEqual([])
+    expect(emitted.at(-1)).toMatchObject({ state: 'done', output: 'formatted', outputParts: [out('a')] })
+  })
+
+  it('sends pending output before handing out a snapshot, so a new subscriber never gets it twice', () => {
+    const order = []
+    const log = createActivityLog({ emitOutput: (payload) => order.push(payload) })
+    log.begin(base('r1'))
+    log.appendOutput('r1', 'stdout', 'a')
+    const snapshot = log.list()
+    order.push('snapshot')
+    vi.advanceTimersByTime(50)
+    expect(order).toEqual([{ id: 'r1', parts: [out('a')] }, 'snapshot'])
+    expect(snapshot[0].outputParts).toEqual([out('a')])
+  })
+
+  it('clear() drops pending output', () => {
+    const { log, outputs } = live()
+    log.begin(base('r1'))
+    log.appendOutput('r1', 'stdout', 'secret')
+    log.clear()
+    vi.advanceTimersByTime(50)
+    expect(outputs).toEqual([])
+    expect(log.list()).toEqual([])
+  })
+
+  it('keeps working when sending output fails', () => {
+    const log = createActivityLog({ emitOutput: () => { throw new Error('window gone') } })
+    log.begin(base('r1'))
+    log.appendOutput('r1', 'stdout', 'a')
+    expect(() => vi.advanceTimersByTime(50)).not.toThrow()
+    expect(log.list()[0].outputParts).toEqual([out('a')])
   })
 })

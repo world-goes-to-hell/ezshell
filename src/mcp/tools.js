@@ -4,50 +4,47 @@ const crypto = require('crypto')
 const { classifyCommand, needsApproval } = require('./commandPolicy.js')
 const { quoteCdTarget } = require('./shellQuote.js')
 const { combineSignals } = require('./signals.js')
+const { createFileHandlers } = require('./fileTools.js')
+const {
+  LOCKED_MESSAGE, SESSION_CHANGED_MESSAGE, UNKNOWN_ERROR_MESSAGE, SESSIONS_UNREADABLE_MESSAGE, AUDIT_FAILED_MESSAGE, DENIAL_MESSAGES,
+  textResult, folderPath, exposedName, activityFields, activityState
+} = require('./toolShared.js')
 
-const LOCKED_MESSAGE = '앱이 잠겨 있습니다. 앱에서 잠금을 해제하세요.'
 const NOT_ALLOWED_MESSAGE = '허용되지 않은 세션입니다. list_sessions 로 사용할 수 있는 세션을 확인하세요.'
 const NO_SESSIONS_MESSAGE = 'MCP 접근이 허용된 세션이 없습니다. 앱의 세션 편집 > 고급 설정에서 "MCP 접근 허용"을 켜세요.'
-const SESSION_CHANGED_MESSAGE = '세션 설정이 바뀌어 실행하지 않았습니다.'
-const UNKNOWN_ERROR_MESSAGE = '알 수 없는 오류가 발생했습니다.'
 const EMPTY_COMMAND_MESSAGE = '명령이 비어 있습니다.'
 const EMPTY_PATH_MESSAGE = '경로가 비어 있습니다.'
 const FORMAT_FAILED_MESSAGE = (exitCode) => `명령은 실행되었지만 결과를 표시하지 못했습니다. (종료 코드: ${exitCode ?? '없음'})`
-const SESSIONS_UNREADABLE_MESSAGE = '세션 정보를 읽지 못했습니다.'
-const DENIAL_MESSAGES = {
-  denied: '사용자가 실행을 거부했습니다.',
-  expired: '제한 시간 안에 승인되지 않아 실행하지 않았습니다.',
-  cancelled: '요청이 취소되어 실행하지 않았습니다.'
-}
+const NO_ACTIVITY = { begin() {}, update() {}, appendOutput() {}, cancel() { return false } }
 
-const NO_ACTIVITY = { begin() {}, update() {}, cancel() { return false } }
+const DEFAULT_SSH_PORT = 22
+const normalizeHost = (value) => (typeof value === 'string' ? value.trim().toLowerCase() : '')
+const portOf = (value) => Number(value) || DEFAULT_SSH_PORT
 
-const textResult = (text, isError = false) => (isError
-  ? { content: [{ type: 'text', text }], isError: true }
-  : { content: [{ type: 'text', text }] })
-
-function folderPath(folders, folderId) {
-  const byId = new Map(folders.map(folder => [folder.id, folder]))
-  const names = []
-  const visited = new Set()
-  let current = folderId ? byId.get(folderId) : undefined
-  while (current && !visited.has(current.id)) {
-    visited.add(current.id)
-    names.unshift(current.name)
-    current = current.parentId ? byId.get(current.parentId) : undefined
-  }
-  return names.join(' / ')
+/**
+ * Sessions that reach the same machine share a key: the target address, plus the jump host when one
+ * is used (a private address behind another jump host can be another machine). The account is left
+ * out on purpose. A session without a host never shares a key.
+ */
+function serverKey(session) {
+  const host = normalizeHost(session.host)
+  if (host === '') return JSON.stringify(['session', session.id])
+  const target = [host, portOf(session.port)]
+  const jump = session.useJumpHost ? [normalizeHost(session.jumpHost), portOf(session.jumpPort)] : []
+  return JSON.stringify([...target, ...jump])
 }
 
 /**
- * The name Claude sees. A session saved without a name is called "user@host", and names often
- * contain the address; those are replaced so the host and account never reach Claude.
+ * A neutral label per server ("서버-1", ...), numbered in list order, so Claude can tell which sessions
+ * are the same machine without seeing the address. Not a hash: a hashed IP address can be guessed back.
  */
-function exposedName(session) {
-  const name = typeof session.name === 'string' ? session.name : ''
-  const host = typeof session.host === 'string' ? session.host.trim() : ''
-  const hidden = name.trim() === '' || name === `${session.username}@${session.host}` || (host !== '' && name.includes(host))
-  return hidden ? `세션-${String(session.id).slice(0, 8)}` : name
+function serverLabels(sessions) {
+  const numbers = new Map()
+  return sessions.map((session) => {
+    const key = serverKey(session)
+    if (!numbers.has(key)) numbers.set(key, numbers.size + 1)
+    return `서버-${numbers.get(key)}`
+  })
 }
 
 function formatRunResult(session, result) {
@@ -62,18 +59,6 @@ function formatRunResult(session, result) {
   lines.push('--- stdout ---', result.stdout || '(없음)')
   if (result.stderr) lines.push('--- stderr ---', result.stderr)
   return lines.join('\n')
-}
-
-function activityFields(base) {
-  return { id: base.requestId, time: new Date().toISOString(), sessionId: base.sessionId, sessionName: base.sessionName, command: base.command, level: base.level, reasons: base.reasons }
-}
-
-function activityState(fields) {
-  if (fields.outcome === 'executed' || fields.outcome === 'approved') {
-    if (fields.cancelled) return 'cancelled'
-    return fields.timedOut ? 'timeout' : 'done'
-  }
-  return fields.outcome
 }
 
 function createToolHandlers({ isUnlocked, getSessions, getFolders, getAlertLevel, approvals, gateway, audit, activity = NO_ACTIVITY, newRequestId = () => crypto.randomUUID() }) {
@@ -130,7 +115,17 @@ function createToolHandlers({ isUnlocked, getSessions, getFolders, getAlertLevel
     return { outcome, cwd }
   }
 
-  async function guarded({ ref, command, signal, perform, format }) {
+  /** The directory the activity view shows for a request; null until the gateway has learned it. */
+  function knownCwd(sessionId) {
+    try {
+      return gateway.getCwd(sessionId) ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /** `ranIn(result)` tells where the request ran, for the activity view, when that was not known at the start. */
+  async function guarded({ ref, command, signal, perform, format, ranIn }) {
     if (!isUnlocked()) return textResult(LOCKED_MESSAGE, true)
     let sessions
     try {
@@ -144,10 +139,12 @@ function createToolHandlers({ isUnlocked, getSessions, getFolders, getAlertLevel
 
     const verdict = classifyCommand(command)
     const base = { requestId: newRequestId(), sessionId: session.id, sessionName: session.name, command, level: verdict.level, reasons: verdict.reasons }
+    // Only for the activity view; the audit log keeps the command and the verdict, nothing else.
+    const startCwd = knownCwd(session.id)
     if (verdict.level === 'forbidden') {
       writeLog({ ...base, phase: 'end', outcome: 'blocked' })
       const blockedResult = textResult(`차단된 명령입니다 (${verdict.reasons.join(', ')}). 이 명령은 MCP 로 실행할 수 없습니다.`, true)
-      track(() => activity.begin({ ...activityFields(base), state: 'blocked', output: blockedResult.content[0].text }))
+      track(() => activity.begin({ ...activityFields(base), cwd: startCwd, state: 'blocked', output: blockedResult.content[0].text }))
       return blockedResult
     }
     // "중지" in the activity panel aborts this controller; the caller's own signal still counts too.
@@ -162,16 +159,18 @@ function createToolHandlers({ isUnlocked, getSessions, getFolders, getAlertLevel
     } catch (err) {
       policyError = { err }
     }
-    if (!writeLog({ ...base, phase: 'start' })) return textResult('감사 로그를 기록할 수 없어 실행하지 않았습니다.', true)
-    track(() => activity.begin({ ...activityFields(base), state: askFirst ? 'waiting' : 'running' }, { cancel: () => stop.abort() }))
+    if (!writeLog({ ...base, phase: 'start' })) return textResult(AUDIT_FAILED_MESSAGE, true)
+    track(() => activity.begin({ ...activityFields(base), cwd: startCwd, state: askFirst ? 'waiting' : 'running' }, { cancel: () => stop.abort() }))
     let finished = false
-    const finish = (fields, output) => {
+    // `view` goes to the activity view only, never to the audit log.
+    const finish = (fields, output, view = {}) => {
       if (finished) return
       finished = true
       writeLog({ ...base, phase: 'end', ...fields })
       const { outcome, ...details } = fields
-      track(() => activity.update(base.requestId, { ...details, state: activityState(fields), output }))
+      track(() => activity.update(base.requestId, { ...details, ...view, state: activityState(fields), output }))
     }
+    const onOutput = (stream, text) => track(() => activity.appendOutput(base.requestId, stream, text))
 
     try {
       if (policyError) throw policyError.err
@@ -209,14 +208,15 @@ function createToolHandlers({ isUnlocked, getSessions, getFolders, getAlertLevel
         return changed
       }
 
-      const result = await perform(fresh, requestSignal, expectedCwd)
+      const result = await perform(fresh, requestSignal, expectedCwd, onOutput)
       let text
       try {
         text = format(fresh, result)
       } catch {
         text = FORMAT_FAILED_MESSAGE(result.exitCode)
       }
-      finish({ outcome: approved ? 'approved' : 'executed', exitCode: result.exitCode ?? null, timedOut: result.timedOut === true, cancelled: result.cancelled === true, truncated: result.truncated === true }, text)
+      const view = startCwd === null && ranIn ? { cwd: ranIn(result) ?? null } : {}
+      finish({ outcome: approved ? 'approved' : 'executed', exitCode: result.exitCode ?? null, timedOut: result.timedOut === true, cancelled: result.cancelled === true, truncated: result.truncated === true }, text, view)
       return textResult(text)
     } catch (err) {
       const message = (err && err.userMessage) || UNKNOWN_ERROR_MESSAGE
@@ -232,10 +232,12 @@ function createToolHandlers({ isUnlocked, getSessions, getFolders, getAlertLevel
       const sessions = allowedSessions()
       if (sessions.length === 0) return textResult(NO_SESSIONS_MESSAGE)
       const folders = getFolders()
-      const list = sessions.map(session => ({
+      const servers = serverLabels(sessions)
+      const list = sessions.map((session, index) => ({
         id: session.id,
         name: exposedName(session),
         folder: folderPath(folders, session.folderId),
+        server: servers[index],
         cwd: gateway.getCwd(session.id)
       }))
       return textResult(JSON.stringify(list, null, 2))
@@ -253,8 +255,9 @@ function createToolHandlers({ isUnlocked, getSessions, getFolders, getAlertLevel
       ref: session,
       command,
       signal,
-      perform: (target, cancel, expectedCwd) => gateway.run(target, command, { signal: cancel, expectedCwd }),
-      format: formatRunResult
+      perform: (target, cancel, expectedCwd, onOutput) => gateway.run(target, command, { signal: cancel, expectedCwd, onOutput }),
+      format: formatRunResult,
+      ranIn: (result) => result.cwd
     })
   }
 
@@ -271,7 +274,9 @@ function createToolHandlers({ isUnlocked, getSessions, getFolders, getAlertLevel
     })
   }
 
-  return { listSessions, runCommand, changeDirectory }
+  const fileHandlers = createFileHandlers({ isUnlocked, allowedSessions, findSession, getFolders, getAlertLevel, approvals, gateway, writeLog, track, activity, newRequestId })
+
+  return { listSessions, runCommand, changeDirectory, writeFile: fileHandlers.writeFile, editFile: fileHandlers.editFile }
 }
 
 module.exports = { createToolHandlers, folderPath, exposedName }

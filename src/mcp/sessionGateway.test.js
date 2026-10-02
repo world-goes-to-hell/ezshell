@@ -20,8 +20,9 @@ const DROPPED = '서버와의 연결이 끊겼습니다.'
  * Options: pwdReply (reply for pwd), holdConnect (never becomes ready until the test emits 'ready'),
  * holdOpen(command) (channel-open callback is parked in `opens`), openError, execThrows.
  */
-function fakeSsh({ respond = () => ({}), failWith, pwdReply, holdConnect, holdOpen, openError, execThrows } = {}) {
+function fakeSsh({ respond = () => ({}), failWith, pwdReply, holdConnect, holdOpen, openError, execThrows, sftp } = {}) {
   const created = []
+  const sftpOpens = []
   const commands = []
   const streams = []
   const opens = []
@@ -35,6 +36,12 @@ function fakeSsh({ respond = () => ({}), failWith, pwdReply, holdConnect, holdOp
     }
     client.end = () => { client.ended = true; client.emit('close') }
     client.forwardOut = (srcIp, srcPort, host, port, cb) => setImmediate(() => cb(null, { tunnelTo: `${host}:${port}` }))
+    // sftp: () => channel object, or a function that throws / returns an Error to fail the subsystem request
+    client.sftp = (cb) => {
+      sftpOpens.push(client)
+      const channel = sftp ? sftp(sftpOpens.length) : { end() { this.ended = true } }
+      setImmediate(() => (channel instanceof Error ? cb(channel) : cb(null, channel)))
+    }
     client.exec = (command, cb) => {
       if (execThrows) throw new Error('Not connected')
       commands.push(command)
@@ -53,6 +60,8 @@ function fakeSsh({ respond = () => ({}), failWith, pwdReply, holdConnect, holdOp
         cb(null, stream)
         if (reply.hang) return
         setImmediate(() => {
+          // chunks: [['stdout' | 'stderr', data], ...] delivered one by one, in this order
+          for (const [name, data] of reply.chunks || []) (name === 'stderr' ? stream.stderr : stream).emit('data', Buffer.from(data))
           if (reply.stdout) stream.emit('data', Buffer.isBuffer(reply.stdout) ? reply.stdout : Buffer.from(reply.stdout))
           if (reply.stderr) stream.stderr.emit('data', Buffer.from(reply.stderr))
           stream.emit('close', reply.code ?? 0, undefined)
@@ -64,7 +73,7 @@ function fakeSsh({ respond = () => ({}), failWith, pwdReply, holdConnect, holdOp
     created.push(client)
     return client
   }
-  return { createClient, created, commands, streams, opens }
+  return { createClient, created, commands, streams, opens, sftpOpens }
 }
 
 describe('createSessionGateway', () => {
@@ -549,6 +558,171 @@ describe('final fix wave', () => {
       expect(ssh.commands.at(-1)).toBe("cd -- '/tmp' && pwd")
       await gateway.changeDirectory(session, '~/x')
       expect(ssh.commands.at(-1)).toBe("cd -- ~/'x' && pwd")
+      gateway.closeAll()
+    })
+  })
+
+  describe('SFTP channel for the file tools', () => {
+    it('hands the task a channel, the working directory and the home directory', async () => {
+      const ssh = fakeSsh({ respond: (command) => (command.includes('cd --') ? { stdout: '/var/log\n' } : {}) })
+      const gateway = createSessionGateway({ createClient: ssh.createClient })
+      await gateway.changeDirectory(session, '/var/log')
+      const seen = await gateway.useSftp(session, {}, async (sftp, where) => ({ hasChannel: typeof sftp.end === 'function', where }))
+      expect(seen.hasChannel).toBe(true)
+      expect(seen.where).toMatchObject({ cwd: '/var/log', home: HOME })
+      expect(typeof seen.where.beginWrite).toBe('function')
+      gateway.closeAll()
+    })
+
+    it('opens one channel per connection and reuses it', async () => {
+      const ssh = fakeSsh()
+      const gateway = createSessionGateway({ createClient: ssh.createClient })
+      const first = await gateway.useSftp(session, {}, async (sftp) => sftp)
+      const second = await gateway.useSftp(session, {}, async (sftp) => sftp)
+      expect(second).toBe(first)
+      expect(ssh.sftpOpens).toHaveLength(1)
+      gateway.closeAll()
+    })
+
+    it('reports a server without SFTP, keeps commands working, and asks again next time', async () => {
+      let allow = false
+      const ssh = fakeSsh({ respond: () => ({ stdout: 'ok\n' }), sftp: () => (allow ? { end() {} } : new Error('Unable to start subsystem: sftp at 10.0.0.1')) })
+      const gateway = createSessionGateway({ createClient: ssh.createClient })
+      await expect(gateway.useSftp(session, {}, async () => 'ran')).rejects.toMatchObject({ userMessage: '이 서버에서는 파일 전송(SFTP)을 사용할 수 없습니다.' })
+      expect(await gateway.run(session, 'ls')).toMatchObject({ stdout: 'ok\n' })
+      allow = true
+      expect(await gateway.useSftp(session, {}, async () => 'ran')).toBe('ran')
+      gateway.closeAll()
+    })
+
+    it('runs file work in turn with commands of the same session', async () => {
+      const order = []
+      const ssh = fakeSsh({ respond: (command) => { order.push(command.split('\n').pop()); return {} } })
+      const gateway = createSessionGateway({ createClient: ssh.createClient })
+      const slowFile = gateway.useSftp(session, {}, async () => {
+        order.push('file start')
+        await new Promise(resolve => setTimeout(resolve, 20))
+        order.push('file end')
+      })
+      const command = gateway.run(session, 'ls')
+      await Promise.all([slowFile, command])
+      expect(order).toEqual(['file start', 'file end', 'ls'])
+      gateway.closeAll()
+    })
+
+    it('gives up on file work that takes too long, and closes the channel', async () => {
+      const channels = []
+      const ssh = fakeSsh({ sftp: () => { const channel = { ended: false, end() { this.ended = true } }; channels.push(channel); return channel } })
+      const gateway = createSessionGateway({ createClient: ssh.createClient, execTimeoutMs: 20 })
+      await expect(gateway.useSftp(session, {}, () => new Promise(() => {}))).rejects.toMatchObject({ userMessage: '파일 작업이 시간 제한을 넘었습니다. 파일 상태를 확인하세요.' })
+      expect(channels[0].ended).toBe(true)
+      expect(await gateway.useSftp(session, {}, async () => 'again')).toBe('again')
+      expect(channels).toHaveLength(2)
+      gateway.closeAll()
+    })
+
+    it('gives a task more time once it says it starts writing, so a write is not cut off halfway', async () => {
+      const ssh = fakeSsh()
+      const gateway = createSessionGateway({ createClient: ssh.createClient, execTimeoutMs: 20, writeTimeoutMs: 500 })
+      const result = await gateway.useSftp(session, {}, async (sftp, where) => {
+        where.beginWrite()
+        await new Promise(resolve => setTimeout(resolve, 80))
+        return 'written'
+      })
+      expect(result).toBe('written')
+      gateway.closeAll()
+    })
+
+    it('still gives up on a write that never finishes', async () => {
+      const ssh = fakeSsh()
+      const gateway = createSessionGateway({ createClient: ssh.createClient, execTimeoutMs: 20, writeTimeoutMs: 40 })
+      const stuck = gateway.useSftp(session, {}, (sftp, where) => { where.beginWrite(); return new Promise(() => {}) })
+      await expect(stuck).rejects.toMatchObject({ userMessage: '파일 작업이 시간 제한을 넘었습니다. 파일 상태를 확인하세요.' })
+      gateway.closeAll()
+    })
+
+    it('opens a new channel after the server closed the old one', async () => {
+      const channels = []
+      const ssh = fakeSsh({ sftp: () => { const channel = Object.assign(new EventEmitter(), { end() {} }); channels.push(channel); return channel } })
+      const gateway = createSessionGateway({ createClient: ssh.createClient })
+      await gateway.useSftp(session, {}, async () => {})
+      channels[0].emit('close')
+      const second = await gateway.useSftp(session, {}, async (sftp) => sftp)
+      expect(channels).toHaveLength(2)
+      expect(second).toBe(channels[1])
+      gateway.closeAll()
+    })
+
+    it('does not start file work for a request that was already cancelled', async () => {
+      const ssh = fakeSsh()
+      const gateway = createSessionGateway({ createClient: ssh.createClient })
+      const controller = new AbortController()
+      controller.abort()
+      let ran = false
+      await expect(gateway.useSftp(session, { signal: controller.signal }, async () => { ran = true })).rejects.toMatchObject({ userMessage: CANCELLED })
+      expect(ran).toBe(false)
+      gateway.closeAll()
+    })
+
+    it('passes on the error of the task itself', async () => {
+      const ssh = fakeSsh()
+      const gateway = createSessionGateway({ createClient: ssh.createClient })
+      const error = Object.assign(new Error('x'), { userMessage: '상위 폴더가 없습니다.' })
+      await expect(gateway.useSftp(session, {}, async () => { throw error })).rejects.toBe(error)
+      gateway.closeAll()
+    })
+  })
+
+  describe('live output for the activity view', () => {
+    async function watch(reply, options = {}) {
+      const ssh = fakeSsh({ respond: () => reply })
+      const gateway = createSessionGateway({ createClient: ssh.createClient, ...options })
+      const seen = []
+      const result = await gateway.run(session, 'make', { onOutput: (stream, text) => seen.push([stream, text]) })
+      gateway.closeAll()
+      return { seen, result }
+    }
+
+    it('reports each chunk as it arrives, in order, and never the home directory lookup', async () => {
+      const { seen, result } = await watch({ chunks: [['stdout', 'a\n'], ['stderr', 'warn\n'], ['stdout', 'b\n']] })
+      expect(seen).toEqual([['stdout', 'a\n'], ['stderr', 'warn\n'], ['stdout', 'b\n']])
+      expect(result).toMatchObject({ stdout: 'a\nb\n', stderr: 'warn\n' })
+    })
+
+    it('stops reporting at the output limit', async () => {
+      const { seen, result } = await watch({ chunks: [['stdout', 'abc'], ['stdout', 'defg'], ['stdout', 'hi']] }, { maxOutputBytes: 5 })
+      expect(seen).toEqual([['stdout', 'abc'], ['stdout', 'de']])
+      expect(result).toMatchObject({ stdout: 'abcde', truncated: true })
+    })
+
+    it('keeps a multi-byte character whole when it is split across chunks', async () => {
+      const bytes = Buffer.from('한글')
+      const { seen } = await watch({ chunks: [['stdout', bytes.subarray(0, 1)], ['stdout', bytes.subarray(1, 4)], ['stdout', bytes.subarray(4)]] })
+      const text = seen.map(([, piece]) => piece).join('')
+      expect(text).toBe('한글')
+      expect(seen.every(([, piece]) => piece !== '')).toBe(true)
+    })
+
+    it('removes terminal control sequences', async () => {
+      const { seen } = await watch({ chunks: [['stdout', '\x1b[31mred\x1b[0m\n'], ['stdout', '\x1b[2K']] })
+      expect(seen).toEqual([['stdout', 'red\n']])
+    })
+
+    it('removes a control sequence that is split across chunks', async () => {
+      const { seen } = await watch({ chunks: [['stdout', 'a\x1b[3'], ['stdout', '1mred\x1b'], ['stdout', '[0m\n']] })
+      expect(seen.map(([, piece]) => piece).join('')).toBe('ared\n')
+    })
+
+    it('does not hold text back forever after a stray escape character', async () => {
+      const { seen } = await watch({ chunks: [['stdout', `a\x1b${'x'.repeat(100)}`], ['stdout', 'tail\x1b']] })
+      expect(seen.map(([, piece]) => piece).join('')).toBe(`a${'x'.repeat(100)}tail`)
+    })
+
+    it('still returns the result when the watcher throws', async () => {
+      const ssh = fakeSsh({ respond: () => ({ stdout: 'ok\n' }) })
+      const gateway = createSessionGateway({ createClient: ssh.createClient })
+      const result = await gateway.run(session, 'ls', { onOutput: () => { throw new Error('window gone') } })
+      expect(result).toMatchObject({ exitCode: 0, stdout: 'ok\n' })
       gateway.closeAll()
     })
   })

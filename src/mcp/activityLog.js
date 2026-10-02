@@ -2,10 +2,22 @@
 // Outputs can contain secrets, so nothing here is ever written to disk.
 const DEFAULT_MAX = 100
 const ACTIVE_STATES = new Set(['waiting', 'running'])
+/** Live output is sent to the window in batches, not chunk by chunk */
+const OUTPUT_FLUSH_MS = 50
 
-function createActivityLog({ emit = () => {}, now = () => Date.now(), max = DEFAULT_MAX } = {}) {
+/** Add a piece of output; a piece from the same stream as the last one extends it. */
+function joinPart(parts, stream, text) {
+  const last = parts[parts.length - 1]
+  if (last && last.stream === stream) return [...parts.slice(0, -1), { stream, text: last.text + text }]
+  return [...parts, { stream, text }]
+}
+
+function createActivityLog({ emit = () => {}, emitOutput = () => {}, now = () => Date.now(), max = DEFAULT_MAX } = {}) {
   let items = []
   const cancellers = new Map()
+  /** Output not sent to the window yet, per request id */
+  let pendingOutput = new Map()
+  let flushTimer = null
 
   function publish(item) {
     try {
@@ -32,8 +44,37 @@ function createActivityLog({ emit = () => {}, now = () => Date.now(), max = DEFA
     const finished = !ACTIVE_STATES.has(state)
     const next = { ...current, ...patch, finishedAt: finished ? (current.finishedAt ?? now()) : null }
     items = items.map(item => (item.id === id ? next : item))
-    if (finished) cancellers.delete(id)
+    if (finished) {
+      cancellers.delete(id)
+      // The finished item published below carries all of its output
+      pendingOutput.delete(id)
+    }
     publish(next)
+  }
+
+  function flushOutput() {
+    clearTimeout(flushTimer)
+    flushTimer = null
+    const batch = pendingOutput
+    pendingOutput = new Map()
+    for (const [id, parts] of batch) {
+      try {
+        emitOutput({ id, parts })
+      } catch {
+        // The window may be gone; the item keeps the output for the next listActivity()
+      }
+    }
+  }
+
+  /** Output of a running command, as it arrives. Kept on the item and sent to the window in batches. */
+  function appendOutput(id, stream, text) {
+    if (typeof text !== 'string' || text === '') return
+    const current = items.find(item => item.id === id)
+    if (!current || !ACTIVE_STATES.has(current.state)) return
+    const next = { ...current, outputParts: joinPart(current.outputParts || [], stream, text) }
+    items = items.map(item => (item.id === id ? next : item))
+    pendingOutput.set(id, joinPart(pendingOutput.get(id) || [], stream, text))
+    if (flushTimer === null) flushTimer = setTimeout(flushOutput, OUTPUT_FLUSH_MS)
   }
 
   function cancel(id) {
@@ -48,9 +89,21 @@ function createActivityLog({ emit = () => {}, now = () => Date.now(), max = DEFA
   function clear() {
     items = []
     cancellers.clear()
+    pendingOutput = new Map()
+    clearTimeout(flushTimer)
+    flushTimer = null
   }
 
-  return { begin, update, cancel, clear, list: () => items }
+  /**
+   * The snapshot for a window that (re)subscribes. Output still waiting for its batch is sent first:
+   * the snapshot already contains it, and sending it afterwards would show it twice.
+   */
+  function list() {
+    if (pendingOutput.size > 0) flushOutput()
+    return items
+  }
+
+  return { begin, update, appendOutput, cancel, clear, list }
 }
 
 module.exports = { createActivityLog }

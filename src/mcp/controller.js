@@ -40,7 +40,7 @@ function describeStartError(err, port) {
   return `MCP 서버를 시작하지 못했습니다: ${err && err.message}`
 }
 
-function createMcpController({ userDataPath, version, isUnlocked, loadSessions, loadFolders, showApproval, dismissApproval, emitActivity, deps = {} }) {
+function createMcpController({ userDataPath, version, isUnlocked, loadSessions, loadFolders, showApproval, dismissApproval, emitActivity, emitActivityOutput, deps = {} }) {
   const configStore = deps.configStore || createMcpConfigStore({ filePath: path.join(userDataPath, 'mcp.json') })
   const audit = deps.audit || createAuditLog({ filePath: path.join(userDataPath, 'mcp-audit.log') })
   const approvals = deps.approvals || createApprovalBroker({ show: showApproval, dismiss: dismissApproval })
@@ -48,6 +48,9 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
   const activity = deps.activity || createActivityLog({
     emit: (item) => {
       try { if (emitActivity) emitActivity(item) } catch { /* the window may be gone */ }
+    },
+    emitOutput: (payload) => {
+      try { if (emitActivityOutput) emitActivityOutput(payload) } catch { /* the window may be gone */ }
     }
   })
   const handlers = createToolHandlers({

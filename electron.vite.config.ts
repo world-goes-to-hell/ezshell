@@ -7,7 +7,7 @@ import fs from 'fs'
 const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js']
 
 // Directories under src/ that main.js loads at runtime; copied whole, without their tests
-const MAIN_RUNTIME_DIRECTORIES = ['mcp']
+const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog']
 
 function copyCryptoPlugin() {
   return {
@@ -25,7 +25,7 @@ function copyCryptoPlugin() {
       for (const dir of MAIN_RUNTIME_DIRECTORIES) {
         fs.cpSync(path.resolve(__dirname, 'src', dir), path.resolve(__dirname, 'out/main/src', dir), {
           recursive: true,
-          filter: (source) => !source.endsWith('.test.js')
+          filter: (source) => !source.endsWith('.test.js') && !source.endsWith('.testhelper.js')
         })
       }
     }
@@ -54,6 +54,11 @@ export default defineConfig({
   },
   renderer: {
     root: path.resolve(__dirname, 'src/renderer'),
+    // Not Vite's default 5173: other Vite projects on this machine use it, and on Windows
+    // both servers can listen on it at once (keep in sync with DEV_RENDERER_URL in main.js)
+    server: {
+      port: 15173
+    },
     build: {
       rollupOptions: {
         input: {

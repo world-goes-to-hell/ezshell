@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   RiCloseLine, RiCloseFill, RiArrowRightLine,
   RiFileCopyLine, RiEditLine, RiSplitCellsHorizontal,
-  RiSplitCellsVertical
+  RiSplitCellsVertical, RiRecordCircleLine, RiStopCircleLine, RiFolderOpenLine
 } from 'react-icons/ri'
 import './TabContextMenu.css'
 
@@ -19,12 +19,17 @@ interface TabContextMenuProps {
   onRename: () => void
   onSplitHorizontal: () => void
   onSplitVertical: () => void
+  /** Whether this tab's terminal output is being written to a log file */
+  isLogging: boolean
+  onToggleLog: () => void
+  onOpenLogFolder: () => void
 }
 
 export function TabContextMenu({
   isOpen, position, onClose,
   onCloseTab, onCloseOthers, onCloseToRight,
-  onDuplicate, onRename, onSplitHorizontal, onSplitVertical
+  onDuplicate, onRename, onSplitHorizontal, onSplitVertical,
+  isLogging, onToggleLog, onOpenLogFolder
 }: TabContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -50,6 +55,11 @@ export function TabContextMenu({
     { type: 'separator' },
     { icon: RiSplitCellsHorizontal, label: '가로 분할', action: onSplitHorizontal },
     { icon: RiSplitCellsVertical, label: '세로 분할', action: onSplitVertical },
+    { type: 'separator' },
+    isLogging
+      ? { icon: RiStopCircleLine, label: '로그 저장 중지', action: onToggleLog }
+      : { icon: RiRecordCircleLine, label: '로그 저장 시작', action: onToggleLog },
+    { icon: RiFolderOpenLine, label: '로그 폴더 열기', action: onOpenLogFolder },
   ]
 
   return (

@@ -1,0 +1,19 @@
+/* Mark on a tab whose terminal output is being written to a log file (both tab bars) */
+.tab-log-indicator {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--error);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--error) 28%, transparent);
+  animation: tab-log-blink 1.6s ease-in-out infinite;
+}
+
+@keyframes tab-log-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-log-indicator { animation: none; }
+}

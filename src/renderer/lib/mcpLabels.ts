@@ -57,15 +57,45 @@ export function formatAuditTime(iso: string): string {
   return `${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
-// C0/C1 controls (except \n and \t), zero-width characters and bidi controls
-const HIDDEN_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F​-‏⁠﻿‪-‮⁦-⁩]/g
+// Characters that are invisible, or that look like an ordinary space, or that change how the text
+// around them is laid out. Shown as tokens so nobody approves text that reads differently from what it is.
+//   controls: C0/C1 except \n and \t
+//   invisible: soft hyphen, combining grapheme joiner, Hangul and other fillers, Mongolian selectors,
+//              zero-width characters, word joiner and invisible operators, variation selectors, BOM,
+//              interlinear annotation marks, tag characters
+//   layout: bidi marks, embeddings, overrides and isolates, line and paragraph separators
+//   space look-alikes: no-break space, ogham space, en/em and other fixed spaces, ideographic space, braille blank
+const HIDDEN_CHARS = new RegExp(
+  '[' +
+  '\\u0000-\\u0008\\u000B-\\u001F\\u007F-\\u009F' +
+  '\\u00AD\\u034F\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180E\\u200B-\\u200D\\u2060-\\u2064\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\uFFF9-\\uFFFB' +
+  '\\u{E0000}-\\u{E007F}\\u{E0100}-\\u{E01EF}' +
+  '\\u061C\\u200E\\u200F\\u2028\\u2029\\u202A-\\u202E\\u2066-\\u206F' +
+  '\\u00A0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u2800\\u3000' +
+  ']',
+  'gu'
+)
+
+const token = (char: string): string => `⟨U+${(char.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}⟩`
 
 /** Replace invisible or deceptive characters with visible ⟨U+XXXX⟩ tokens */
 export function revealHiddenChars(text: string): { text: string; hasHidden: boolean } {
   let hasHidden = false
   const revealed = text.replace(HIDDEN_CHARS, (char) => {
     hasHidden = true
-    return `⟨U+${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}⟩`
+    return token(char)
   })
   return { text: revealed, hasHidden }
+}
+
+/**
+ * A file path for the approval dialog. A path is one line, so a line break or a tab in it is as
+ * suspicious as a hidden character, and so is a blank at either end ("/etc/hosts " is another file).
+ */
+export function revealPath(path: string): { text: string; hasHidden: boolean } {
+  const revealed = revealHiddenChars(path)
+  const text = revealed.text
+    .replace(/[\n\t]/g, token)
+    .replace(/^ +| +$/g, (blanks) => token(' ').repeat(blanks.length))
+  return { text, hasHidden: revealed.hasHidden || text !== revealed.text }
 }

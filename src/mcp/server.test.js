@@ -29,6 +29,8 @@ const stubHandlers = (overrides = {}) => ({
   listSessions: () => text('[]'),
   changeDirectory: async () => text('cd ok'),
   runCommand: async (args) => text(`ran ${args.command}`),
+  writeFile: async (args) => text(`wrote ${args.path}`),
+  editFile: async (args) => text(`edited ${args.path}`),
   ...overrides
 })
 
@@ -51,10 +53,42 @@ const postInit = (url, headers) => fetch(url, {
 })
 
 describe('createMcpHttpServer', () => {
-  it('lists the three tools', async () => {
+  it('lists the tools', async () => {
     const client = await connect(await startServer())
     const { tools } = await client.listTools()
-    expect(tools.map(tool => tool.name).sort()).toEqual(['cd', 'list_sessions', 'run_command'])
+    expect(tools.map(tool => tool.name).sort()).toEqual(['cd', 'edit_file', 'list_sessions', 'run_command', 'write_file'])
+    await client.close()
+  })
+
+  it('hands the file tools their arguments and the request signal', async () => {
+    const seen = []
+    const record = (name) => async (args, options) => { seen.push([name, args, typeof options.signal?.aborted]); return text('ok') }
+    const client = await connect(await startServer(stubHandlers({ writeFile: record('write'), editFile: record('edit') })))
+    await client.callTool({ name: 'write_file', arguments: { session: 's1', path: '/tmp/a.txt', content: '' } })
+    await client.callTool({ name: 'edit_file', arguments: { session: 's1', path: 'a.txt', old_string: 'a', new_string: '', replace_all: true } })
+    expect(seen).toEqual([
+      ['write', { session: 's1', path: '/tmp/a.txt', content: '' }, 'boolean'],
+      ['edit', { session: 's1', path: 'a.txt', old_string: 'a', new_string: '', replace_all: true }, 'boolean']
+    ])
+    await client.close()
+  })
+
+  it('refuses file tool input the schema does not allow, before any handler runs', async () => {
+    let called = 0
+    const count = async () => { called++; return text('ok') }
+    const client = await connect(await startServer(stubHandlers({ writeFile: count, editFile: count })))
+    const bad = [
+      { name: 'write_file', arguments: { session: 's1', path: '/tmp/a', content: 'a'.repeat(256 * 1024 + 1) } },
+      { name: 'write_file', arguments: { session: 's1', path: '', content: 'x' } },
+      { name: 'write_file', arguments: { session: 's1', path: '/tmp/a' } },
+      { name: 'edit_file', arguments: { session: 's1', path: '/tmp/a', old_string: '', new_string: 'x' } },
+      { name: 'edit_file', arguments: { session: 's1', path: '/tmp/a', old_string: 'a', new_string: 'b', replace_all: 'yes' } }
+    ]
+    for (const request of bad) {
+      const outcome = await client.callTool(request).then(result => (result.isError ? 'error' : 'ok'), () => 'error')
+      expect(outcome).toBe('error')
+    }
+    expect(called).toBe(0)
     await client.close()
   })
 

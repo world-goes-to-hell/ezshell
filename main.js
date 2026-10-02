@@ -26,12 +26,17 @@ const sftpSymlinks = require('./src/sftpSymlinks.js');
 const sftpUploadCheck = require('./src/sftpUploadCheck.js');
 const { createMcpController } = require('./src/mcp/controller.js');
 const { registerMcpIpc } = require('./src/mcp/ipc.js');
+const { createSessionLogger } = require('./src/sessionLog/sessionLogger.js');
 
 let mainWindow;
 
 // Window / taskbar icon, copied next to the bundle at build time (electron.vite.config.ts). Set on every window so
 // the taskbar shows it even where the exe still carries Electron's icon (`npm run dev` runs electron.exe).
 const WINDOW_ICON = path.join(__dirname, 'icon.ico');
+
+// Renderer dev server when electron-vite did not pass ELECTRON_RENDERER_URL (`electron . --dev`).
+// Same port as renderer.server.port in electron.vite.config.ts.
+const DEV_RENDERER_URL = 'http://localhost:15173';
 
 // 터미널 전용 창 저장소
 const terminalWindows = new Map();
@@ -145,7 +150,7 @@ function createWindow() {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
     mainWindow.webContents.openDevTools()
   } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
-    mainWindow.loadURL('http://localhost:5173')
+    mainWindow.loadURL(DEV_RENDERER_URL)
     mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
@@ -272,7 +277,7 @@ function createSftpWindow(sessionId, localPath, remotePath, title) {
   if (process.env.ELECTRON_RENDERER_URL) {
     sftpWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${params.toString()}`)
   } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
-    sftpWindow.loadURL(`http://localhost:5173?${params.toString()}`)
+    sftpWindow.loadURL(`${DEV_RENDERER_URL}?${params.toString()}`)
   } else {
     sftpWindow.loadFile(path.join(__dirname, '../renderer/index.html'), {
       // Same encoding as the dev URL above: the renderer decodes each value once more
@@ -320,7 +325,7 @@ function createTerminalWindow(sessionId, title) {
   if (process.env.ELECTRON_RENDERER_URL) {
     terminalWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${params.toString()}`)
   } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
-    terminalWindow.loadURL(`http://localhost:5173?${params.toString()}`)
+    terminalWindow.loadURL(`${DEV_RENDERER_URL}?${params.toString()}`)
   } else {
     terminalWindow.loadFile(path.join(__dirname, '../renderer/index.html'), {
       // Same encoding as the dev URL above: the renderer decodes the title once more
@@ -404,10 +409,12 @@ ipcMain.handle('open-sftp-window', (event, { sessionId, localPath, remotePath, t
 
 app.on('before-quit', () => {
   mcpController?.shutdown().catch(() => {});
+  sessionLogger?.closeAllNow();
 });
 
 app.on('window-all-closed', () => {
   mcpController?.shutdown().catch(() => {});
+  sessionLogger?.closeAllNow();
   flushCommandHistory();
   // 모든 SSH 연결 종료
   sshConnections.forEach(({ conn }) => {
@@ -842,6 +849,36 @@ function sendToMainWindow(channel, payload) {
   return true;
 }
 
+// Session logs: terminal output of a tab written to a text file, started per tab by the user (src/sessionLog)
+const SESSION_LOG_FOLDER = 'ezShell Logs';
+const MAX_SESSION_LOG_NAME = 200;
+let sessionLogger = null;
+const sessionLogDir = () => path.join(app.getPath('documents'), SESSION_LOG_FOLDER);
+
+function notifySessionLog(sessionId, payload) {
+  sendToMainWindow('session-log-changed', { sessionId, ...payload });
+}
+
+function getSessionLogger() {
+  if (!sessionLogger) {
+    sessionLogger = createSessionLogger({
+      dir: sessionLogDir(),
+      onStopped: ({ sessionId, filePath, error }) => notifySessionLog(sessionId, { isLogging: false, filePath, error })
+    });
+  }
+  return sessionLogger;
+}
+
+/** The tab was closed or its connection ended for good: finish its log, if it has one. */
+function endSessionLog(sessionId) {
+  if (!sessionLogger) return;
+  sessionLogger.forget(sessionId);
+  if (!sessionLogger.isLogging(sessionId)) return;
+  sessionLogger.stop(sessionId)
+    .then((result) => notifySessionLog(sessionId, { isLogging: false, filePath: result.filePath, error: result.success ? undefined : result.error }))
+    .catch((err) => console.error('Failed to end session log:', err));
+}
+
 const MCP_LEVEL_LABELS = { low: '낮음', medium: '중간', danger: '위험' };
 let mcpFlashHandlerAttached = false;
 let mcpNotice = null; // keep a reference so the notification is not garbage-collected before its click fires
@@ -863,7 +900,7 @@ function alertMcpApproval(request) {
   mainWindow.flashFrame(true);
   if (Notification.isSupported()) {
     mcpNotice = new Notification({
-      title: 'MCP 명령 확인 요청',
+      title: request.kind === 'file' ? 'MCP 파일 쓰기 확인 요청' : 'MCP 명령 확인 요청',
       body: `${request.sessionName} · 위험도 ${MCP_LEVEL_LABELS[request.level] || request.level}`
     });
     mcpNotice.on('click', revealMainWindow);
@@ -900,7 +937,8 @@ function startMcp() {
     loadFolders: () => loadFromFile(foldersFilePath, []),
     showApproval: showMcpApproval,
     dismissApproval: (id) => sendToMainWindow('mcp-approval-dismiss', { id }),
-    emitActivity: (item) => sendToMainWindow('mcp-activity', item)
+    emitActivity: (item) => sendToMainWindow('mcp-activity', item),
+    emitActivityOutput: (payload) => sendToMainWindow('mcp-activity-output', payload)
   });
   mcpController.start().catch(err => console.error('Failed to start MCP server:', err));
 }
@@ -1096,6 +1134,7 @@ async function attemptReconnect(sessionId) {
       // Send ssh-closed since reconnection permanently failed
       targetWindow.webContents.send('ssh-closed', { sessionId });
     }
+    endSessionLog(sessionId);
     return;
   }
 
@@ -1158,7 +1197,10 @@ async function reconnectSession(sessionId) {
         connState.retryCount = 0;
         updateConnectionState(sessionId, ConnectionState.CONNECTED);
 
+        if (sessionLogger) sessionLogger.note(sessionId, '재연결됨');
+
         stream.on('data', (data) => {
+          if (sessionLogger) sessionLogger.write(sessionId, data);
           const targetWindow = getWindowForSession(sessionId);
           if (targetWindow) {
             targetWindow.webContents.send('ssh-data', { sessionId, data: data.toString() });
@@ -1246,6 +1288,7 @@ ipcMain.handle('ssh-connect', async (event, config) => {
           });
 
           stream.on('data', (data) => {
+            if (sessionLogger) sessionLogger.write(sessionId, data);
             const targetWindow = getWindowForSession(sessionId);
             if (targetWindow) {
               targetWindow.webContents.send('ssh-data', {
@@ -1269,6 +1312,7 @@ ipcMain.handle('ssh-connect', async (event, config) => {
                 targetWindow.webContents.send('ssh-closed', { sessionId });
               }
               updateConnectionState(sessionId, ConnectionState.DISCONNECTED);
+              endSessionLog(sessionId);
             }
           });
 
@@ -1395,6 +1439,8 @@ ipcMain.on('ssh-resize', (event, { sessionId, cols, rows }) => {
   if (session && session.stream) {
     session.stream.setWindow(rows, cols, 0, 0);
   }
+  // Remembered even when no log is running, so a log started later uses the real width
+  if (session) getSessionLogger().resize(sessionId, cols, rows);
 });
 
 // SSH 명령어 실행 (단일 명령어, 결과 반환)
@@ -1437,6 +1483,7 @@ ipcMain.handle('ssh-exec-command', async (event, { sessionId, command }) => {
 
 // SSH 연결 종료
 ipcMain.on('ssh-disconnect', (event, { sessionId }) => {
+  endSessionLog(sessionId);
   const session = sshConnections.get(sessionId);
   if (session) {
     session.conn.end();
@@ -1464,6 +1511,39 @@ ipcMain.on('ssh-disconnect', (event, { sessionId }) => {
     connState.autoReconnect = false;
     connState.state = ConnectionState.DISCONNECTED;
     connectionStates.delete(sessionId);
+  }
+});
+
+// Session log: start / stop for one tab, the tabs being logged, and the log folder
+ipcMain.handle('session-log-start', (event, payload) => {
+  const { sessionId, name } = payload || {};
+  if (typeof sessionId !== 'string' || !sshConnections.has(sessionId)) {
+    return { success: false, error: '연결된 탭에서만 로그를 저장할 수 있습니다.' };
+  }
+  const result = getSessionLogger().start(sessionId, typeof name === 'string' ? name.slice(0, MAX_SESSION_LOG_NAME) : '');
+  if (result.success) notifySessionLog(sessionId, { isLogging: true, filePath: result.filePath });
+  return result;
+});
+
+ipcMain.handle('session-log-stop', async (event, payload) => {
+  const { sessionId } = payload || {};
+  if (typeof sessionId !== 'string') return { success: false, error: '탭을 찾을 수 없습니다.' };
+  const result = await getSessionLogger().stop(sessionId);
+  notifySessionLog(sessionId, { isLogging: false, filePath: result.filePath });
+  return result;
+});
+
+ipcMain.handle('session-log-list', () => ({ success: true, items: sessionLogger ? sessionLogger.list() : [] }));
+
+ipcMain.handle('session-log-open-folder', async () => {
+  try {
+    const dir = sessionLogDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const failure = await shell.openPath(dir);
+    return failure ? { success: false, error: '로그 폴더를 열 수 없습니다.' } : { success: true };
+  } catch (err) {
+    console.error('Failed to open the session log folder:', err);
+    return { success: false, error: '로그 폴더를 열 수 없습니다.' };
   }
 });
 

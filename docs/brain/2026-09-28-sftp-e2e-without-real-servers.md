@@ -51,4 +51,5 @@
 
       import(performance.getEntriesByType('resource').map(r => r.name).filter(n => n.includes('/stores/terminalStore.ts'))[0])
 
-- 여러 세션이 같은 작업 폴더에서 dev 앱을 동시에 띄울 때는 포트를 나눈다 (CDP 9333/9444, 임시 SSH 2222/2233, 렌더러 5173/5174). `--user-data-dir` 도 각자 따로 둔다.
+- 여러 세션이 같은 작업 폴더에서 dev 앱을 동시에 띄울 때는 포트를 나눈다 (CDP 9333/9444, 임시 SSH 2222/2233, 렌더러 15173/15174). `--user-data-dir` 도 각자 따로 둔다.
+  - 렌더러 포트는 2026-10-02 에 5173 에서 15173 으로 옮겼다 (`electron.vite.config.ts`). 5173 은 다른 Vite 프로젝트가 쓰고, Windows 에서는 두 서버가 같은 번호를 동시에 들을 수 있어서 `localhost:5173` 이 ezShell 로 연결됐다.

@@ -8,6 +8,8 @@ import { useHistoryStore } from '../../stores/historyStore'
 import { useThemeStore } from '../../stores/themeStore'
 import { useSnippetStore } from '../../stores/snippetStore'
 import { useTerminalStore } from '../../stores/terminalStore'
+import { useSessionLogStore } from '../../stores/sessionLogStore'
+import { openSessionLogFolder, toggleSessionLog } from '../../lib/sessionLogActions'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { modalOverlayVariants } from '../../lib/animation/variants'
 import { formatRelativeTime } from '../../utils/timeFormat'
@@ -37,6 +39,8 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
   const themes = getAllThemes()
   const { snippets, expandVariables } = useSnippetStore()
   const { getTerminal } = useTerminalStore()
+  const activeTerminalId = useTerminalStore(state => state.activeTerminalId)
+  const sessionLogFiles = useSessionLogStore(state => state.files)
   const reducedMotion = useReducedMotion()
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -129,6 +133,29 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
       })
     })
 
+    // Session log of the active tab (the only way to reach it in split layout, where tabs have no context menu)
+    const activeTab = activeTerminalId ? getTerminal(activeTerminalId) : undefined
+    if (activeTerminalId && activeTab) {
+      const isLogging = activeTerminalId in sessionLogFiles
+      const tabName = activeTab.title || `${activeTab.username}@${activeTab.host}`
+      items.push({
+        id: 'toggle-session-log',
+        title: isLogging ? '로그 저장 중지' : '로그 저장 시작',
+        subtitle: isLogging ? sessionLogFiles[activeTerminalId] : `${tabName} 탭의 터미널 출력을 파일로 저장`,
+        category: 'command',
+        action: () => { toggleSessionLog(activeTerminalId, tabName) },
+        keywords: ['log', 'logging', '로그', '기록', '저장'],
+      })
+    }
+    items.push({
+      id: 'open-session-log-folder',
+      title: '로그 폴더 열기',
+      subtitle: '저장된 세션 로그 파일이 있는 폴더',
+      category: 'command',
+      action: () => { openSessionLogFolder() },
+      keywords: ['log', 'folder', '로그', '폴더'],
+    })
+
     // Add clear history command if there are recent connections
     if (recentConnections.length > 0) {
       items.push({
@@ -158,7 +185,7 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
     })
 
     return items
-  }, [sessions, recentConnections, themes, currentThemeId, snippets, activeSessionId, onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, setTheme, clearHistory, close, expandVariables, getTerminal])
+  }, [sessions, recentConnections, themes, currentThemeId, snippets, activeSessionId, activeTerminalId, sessionLogFiles, onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, setTheme, clearHistory, close, expandVariables, getTerminal])
 
   // Fuse.js search
   const fuse = useMemo(() => {

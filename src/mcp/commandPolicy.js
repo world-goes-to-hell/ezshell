@@ -145,4 +145,4 @@ function needsApproval(level, alertLevel) {
   return rank(level) >= rank(threshold)
 }
 
-module.exports = { classifyCommand, needsApproval, LEVEL_ORDER }
+module.exports = { classifyCommand, needsApproval, sensitiveFindings, LEVEL_ORDER }

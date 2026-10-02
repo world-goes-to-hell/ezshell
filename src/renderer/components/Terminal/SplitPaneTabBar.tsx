@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { RiCloseLine, RiAddLine, RiFolderLine, RiSplitCellsHorizontal } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useSessionLogStore } from '../../stores/sessionLogStore'
 import { readableTextColor } from '../../lib/colorContrast'
 
 interface SplitPaneTabBarProps {
@@ -43,6 +44,7 @@ export function SplitPaneTabBar({
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   const terminals = useTerminalStore(state => state.terminals)
+  const sessionLogFiles = useSessionLogStore(state => state.files)
   const { sessions } = useSessionStore()
 
   // Close dropdown when clicking outside
@@ -127,6 +129,7 @@ export function SplitPaneTabBar({
               style={tabStyle}
             >
               <span className="split-pane-tab-name">{displayName}</span>
+              {terminalId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[terminalId]}`} />}
               {terminalIds.length > 1 && (
                 <button
                   className="split-pane-tab-close"

@@ -243,6 +243,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeAllListeners('terminal-zoom');
   },
 
+  // 세션 로그 (터미널 출력을 파일로 저장)
+  sessionLogStart: (sessionId, name) => ipcRenderer.invoke('session-log-start', { sessionId, name }),
+  sessionLogStop: (sessionId) => ipcRenderer.invoke('session-log-stop', { sessionId }),
+  sessionLogList: () => ipcRenderer.invoke('session-log-list'),
+  sessionLogOpenFolder: () => ipcRenderer.invoke('session-log-open-folder'),
+  onSessionLogChanged: (callback) => {
+    const handler = (event, payload) => callback(payload);
+    ipcRenderer.on('session-log-changed', handler);
+    return () => ipcRenderer.removeListener('session-log-changed', handler);
+  },
+
   // MCP 서버 (Claude Code)
   mcpGetStatus: () => ipcRenderer.invoke('mcp-get-status'),
   mcpUpdateConfig: (patch) => ipcRenderer.invoke('mcp-update-config', patch),
@@ -256,6 +267,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (event, item) => callback(item);
     ipcRenderer.on('mcp-activity', handler);
     return () => ipcRenderer.removeListener('mcp-activity', handler);
+  },
+  onMcpActivityOutput: (callback) => {
+    const handler = (event, payload) => callback(payload);
+    ipcRenderer.on('mcp-activity-output', handler);
+    return () => ipcRenderer.removeListener('mcp-activity-output', handler);
   },
   onMcpApprovalRequest: (callback) => {
     const handler = (event, request) => callback(request);

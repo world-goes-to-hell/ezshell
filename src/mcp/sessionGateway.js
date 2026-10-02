@@ -1,12 +1,15 @@
 // SSH connections used by the MCP tools: one reusable connection per session, commands
 // run one at a time per session, each from the working directory the gateway remembers.
 const fs = require('fs')
+const { StringDecoder } = require('string_decoder')
 const { Client } = require('ssh2')
 const { buildOptions, describeSshError } = require('../sshConnectionTest.js')
 const { shellQuote, quoteCdTarget } = require('./shellQuote.js')
 
 const DEFAULT_IDLE_MS = 5 * 60 * 1000
 const DEFAULT_EXEC_TIMEOUT_MS = 30 * 1000
+/** Once a file write has started it gets this long before its channel is closed */
+const DEFAULT_WRITE_TIMEOUT_MS = 120 * 1000
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024
 /** Same default as the connect dialog and the terminal path (sshConnectConfig.ts) */
 const DEFAULT_CONNECT_TIMEOUT_SEC = 20
@@ -22,6 +25,8 @@ const HOME_FAILED_MESSAGE = '홈 디렉터리를 확인하지 못했습니다.'
 const CD_FAILED_MESSAGE = '디렉터리로 이동할 수 없습니다.'
 const CD_TIMEOUT_MESSAGE = '디렉터리 이동이 시간 제한을 넘었습니다.'
 const CWD_CHANGED_MESSAGE = '작업 디렉터리가 바뀌어 실행하지 않았습니다. 다시 요청하세요.'
+const SFTP_FAILED_MESSAGE = '이 서버에서는 파일 전송(SFTP)을 사용할 수 없습니다.'
+const FILE_TIMEOUT_MESSAGE = '파일 작업이 시간 제한을 넘었습니다. 파일 상태를 확인하세요.'
 const CWD_MISSING_MESSAGE = (cwd) => `작업 디렉터리 ${cwd} 에 들어갈 수 없습니다. cd 로 다른 위치를 지정하세요.`
 /** Printed by the cd guard when the remembered directory cannot be entered */
 const CWD_MISSING_MARKER = '__EZSHELL_CWD_MISSING__'
@@ -39,15 +44,61 @@ function createOutputBuffer(limit) {
   let size = 0
   let truncated = false
   return {
+    /** Returns the part of the chunk that was kept, or null when the limit was already reached. */
     push(chunk) {
-      if (size >= limit) { truncated = true; return }
+      if (size >= limit) { truncated = true; return null }
       const piece = chunk.length > limit - size ? chunk.subarray(0, limit - size) : chunk
       if (piece.length < chunk.length) truncated = true
       chunks.push(piece)
       size += piece.length
+      return piece
     },
     text: () => Buffer.concat(chunks).toString('utf8').replace(ANSI_PATTERN, ''),
     isTruncated: () => truncated
+  }
+}
+
+/** An escape character that starts no complete sequence within this many characters is just dropped */
+const MAX_HELD_SEQUENCE = 64
+const ESC = '\x1b'
+
+/**
+ * Passes what a command prints to a watcher (the activity view) as it arrives: only what the output
+ * buffer kept, decoded without splitting a multi-byte character, control sequences removed.
+ * The start of a sequence that is cut off by the end of a chunk waits for the next chunk.
+ * `push(piece)` takes what the buffer kept; `end()` hands over whatever is still waiting.
+ */
+function createReporter(onOutput, stream) {
+  if (typeof onOutput !== 'function') return { push() {}, end() {} }
+  const decoder = new StringDecoder('utf8')
+  let held = ''
+  const emit = (text) => {
+    if (text === '') return
+    try {
+      onOutput(stream, text)
+    } catch {
+      // Watching must never affect the command
+    }
+  }
+  return {
+    push(piece) {
+      if (!piece || piece.length === 0) return
+      const text = (held + decoder.write(piece)).replace(ANSI_PATTERN, '')
+      // Complete sequences are gone, so a remaining escape character is an unfinished (or stray) one
+      const cut = text.indexOf(ESC)
+      if (cut === -1 || text.length - cut > MAX_HELD_SEQUENCE) {
+        held = ''
+        emit(text.split(ESC).join(''))
+        return
+      }
+      held = text.slice(cut)
+      emit(text.slice(0, cut))
+    },
+    end() {
+      const rest = held.split(ESC).join('')
+      held = ''
+      emit(rest)
+    }
   }
 }
 
@@ -73,11 +124,14 @@ function createSessionGateway({
   readFile = fs.readFileSync,
   idleMs = DEFAULT_IDLE_MS,
   execTimeoutMs = DEFAULT_EXEC_TIMEOUT_MS,
+  writeTimeoutMs = DEFAULT_WRITE_TIMEOUT_MS,
   maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES
 } = {}) {
   const entries = new Map()
   /** Working directory per session id; kept across reconnects, idle drops and closeAll() */
   const cwds = new Map()
+  /** Home directory per session id, learned together with the first working directory */
+  const homes = new Map()
 
   function connect(session) {
     let options
@@ -124,10 +178,12 @@ function createSessionGateway({
    * Run one command. Abort handling and the timeout start before the channel is requested, so an abort
    * or timeout that happens while the channel is still opening is applied as soon as it opens.
    */
-  function exec(client, command, signal) {
+  function exec(client, command, signal, onOutput) {
     return new Promise((resolve, reject) => {
       const stdout = createOutputBuffer(maxOutputBytes)
       const stderr = createOutputBuffer(maxOutputBytes)
+      const reportStdout = createReporter(onOutput, 'stdout')
+      const reportStderr = createReporter(onOutput, 'stderr')
       let stream = null
       let timedOut = false
       let cancelled = false
@@ -146,6 +202,8 @@ function createSessionGateway({
         if (done) return
         done = true
         cleanup()
+        reportStdout.end()
+        reportStderr.end()
         action(value)
       }
       const finish = (code, signalName) => {
@@ -185,8 +243,8 @@ function createSessionGateway({
         client.exec(command, (err, opened) => {
           if (err) { settle(reject, new GatewayError('명령을 실행할 채널을 열지 못했습니다.', err.message)); return }
           stream = opened
-          stream.on('data', (chunk) => stdout.push(chunk))
-          stream.stderr.on('data', (chunk) => stderr.push(chunk))
+          stream.on('data', (chunk) => reportStdout.push(stdout.push(chunk)))
+          stream.stderr.on('data', (chunk) => reportStderr.push(stderr.push(chunk)))
           stream.on('close', (code, signalName) => finish(code, signalName))
           stream.on('error', () => finish(null, null))
           // stdin stays open on purpose: ssh2 drops every signal (KILL) once the channel's stdin is ended.
@@ -255,6 +313,7 @@ function createSessionGateway({
       }
       assertCurrent(session.id, entry)
       cwds.set(session.id, dir)
+      homes.set(session.id, dir)
     }
     assertCurrent(session.id, entry)
     const cwd = cwds.get(session.id)
@@ -267,15 +326,76 @@ function createSessionGateway({
     return enqueue(session, signal, async (entry) => (await prepare(session, entry, signal)).cwd)
   }
 
-  function run(session, command, { signal, expectedCwd } = {}) {
+  /** `onOutput(stream, text)` is called with the command's output as it arrives (never for the home lookup). */
+  function run(session, command, { signal, expectedCwd, onOutput } = {}) {
     return enqueue(session, signal, async (entry) => {
       const { client, cwd } = await prepare(session, entry, signal, expectedCwd)
       // The guard sits on its own line: `cd && cmd` would only guard the first pipeline of `a; b`.
       // STDIN_OFF gives `cat`, `grep x` or a password prompt EOF at once instead of hanging until the timeout.
-      const result = await exec(client, `${cdGuard(cwd)}\n${STDIN_OFF}\n${command}`, signal)
+      const result = await exec(client, `${cdGuard(cwd)}\n${STDIN_OFF}\n${command}`, signal, onOutput)
       assertGuardPassed(result, cwd)
       touch(session.id, entry)
       return { cwd, ...result }
+    })
+  }
+
+  /** One SFTP channel per connection, opened on first use. A failed request is asked again next time. */
+  function openSftp(entry, client) {
+    if (!entry.sftp) {
+      const opening = new Promise((resolve, reject) => {
+        try {
+          client.sftp((err, sftp) => (err ? reject(new GatewayError(SFTP_FAILED_MESSAGE, err.message)) : resolve(sftp)))
+        } catch (err) {
+          reject(new GatewayError(SFTP_FAILED_MESSAGE, err.message))
+        }
+      })
+      entry.sftp = opening
+      const forget = () => { if (entry.sftp === opening) entry.sftp = null }
+      // A channel the server closed must not be handed out again
+      opening.then((sftp) => {
+        if (typeof sftp.on !== 'function') return
+        sftp.on('close', forget)
+        sftp.on('end', forget)
+      }, forget)
+    }
+    return entry.sftp
+  }
+
+  /**
+   * Run `task(sftp, { cwd, home, beginWrite })` for the file tools, in turn with the session's commands.
+   * A cancel only keeps the task from starting; once it runs it decides itself where it may still stop.
+   * A task over the time limit is abandoned and its channel closed. Closing the channel in the middle
+   * of a write would leave a truncated file, so the task calls `beginWrite()` when it starts writing
+   * and gets the longer write limit from then on.
+   */
+  function useSftp(session, { signal } = {}, task) {
+    return enqueue(session, signal, async (entry) => {
+      const { client, cwd } = await prepare(session, entry, signal)
+      const opening = openSftp(entry, client)
+      const sftp = await opening
+      assertNotCancelled(signal)
+      assertCurrent(session.id, entry)
+      let timer = null
+      let giveUp = () => {}
+      const timeLimit = new Promise((resolve, reject) => {
+        giveUp = () => {
+          if (entry.sftp === opening) entry.sftp = null
+          try { sftp.end() } catch { /* already closed */ }
+          reject(new GatewayError(FILE_TIMEOUT_MESSAGE))
+        }
+      })
+      const allow = (ms) => {
+        clearTimeout(timer)
+        timer = setTimeout(giveUp, ms)
+      }
+      allow(execTimeoutMs)
+      const where = { cwd, home: homes.get(session.id) ?? null, beginWrite: () => allow(writeTimeoutMs) }
+      try {
+        return await Promise.race([task(sftp, where), timeLimit])
+      } finally {
+        clearTimeout(timer)
+        if (entries.get(session.id) === entry) touch(session.id, entry)
+      }
     })
   }
 
@@ -301,10 +421,11 @@ function createSessionGateway({
   return {
     run,
     changeDirectory,
+    useSftp,
     resolveCwd,
     getCwd: (sessionId) => (cwds.has(sessionId) ? cwds.get(sessionId) : null),
     /** Directories outlive connections; this resets every session to its home directory (after a lock). */
-    forgetCwds: () => cwds.clear(),
+    forgetCwds: () => { cwds.clear(); homes.clear() },
     close: (sessionId) => { const entry = entries.get(sessionId); if (entry) drop(sessionId, entry) },
     closeAll: () => [...entries.entries()].forEach(([sessionId, entry]) => drop(sessionId, entry))
   }

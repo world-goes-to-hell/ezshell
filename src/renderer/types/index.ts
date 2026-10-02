@@ -78,6 +78,17 @@ export interface McpStatus {
 
 export type McpStatusResult = { success: true; status: McpStatus } | { success: false; error: string }
 
+/** One line of a file change shown for approval; `note` is a remark such as a missing final line break */
+export interface McpDiffLine {
+  type: 'add' | 'remove' | 'context' | 'note'
+  text: string
+}
+
+export interface McpDiffHunk {
+  header: string
+  lines: McpDiffLine[]
+}
+
 export interface McpApprovalRequest {
   id: string
   sessionName: string
@@ -87,9 +98,50 @@ export interface McpApprovalRequest {
   level: McpRiskLevel
   reasons: string[]
   expiresAt: number
+  /** Set for write_file / edit_file: the dialog shows the change instead of a command */
+  kind?: 'file'
+  /** The real file that will be written (links resolved) */
+  path?: string
+  /** What the tool asked for, when it differs from `path` */
+  requestedPath?: string
+  isNew?: boolean
+  /** The content sent is what the file already holds; asked only where confirming that is sensitive */
+  noChange?: boolean
+  /** The change is shown as the whole file replaced (an exact diff would have taken too long) */
+  isWholeFile?: boolean
+  added?: number
+  removed?: number
+  hunks?: McpDiffHunk[]
 }
 
 export type McpActivityState = 'waiting' | 'running' | 'done' | 'timeout' | 'denied' | 'expired' | 'cancelled' | 'blocked' | 'failed'
+
+/** Answer to starting or stopping a session log (terminal output written to a text file) */
+export interface SessionLogResult {
+  success: boolean
+  filePath?: string
+  error?: string
+}
+
+/** A tab started or stopped being logged; `error` is set when the log ended because the file could not be written */
+export interface SessionLogChange {
+  sessionId: string
+  isLogging: boolean
+  filePath?: string
+  error?: string
+}
+
+/** A piece of what a command printed, in arrival order */
+export interface McpOutputPart {
+  stream: 'stdout' | 'stderr'
+  text: string
+}
+
+/** Live output of a running request, sent in batches */
+export interface McpActivityOutput {
+  id: string
+  parts: McpOutputPart[]
+}
 
 export interface McpActivityItem {
   id: string
@@ -102,11 +154,16 @@ export interface McpActivityItem {
   state: McpActivityState
   startedAt: number
   finishedAt: number | null
+  /** Directory the request ran in; null while the gateway has not learned it yet */
+  cwd?: string | null
   exitCode?: number | null
   timedOut?: boolean
   truncated?: boolean
   error?: string
+  /** The result text Claude received */
   output?: string
+  /** What the command printed, for the terminal view */
+  outputParts?: McpOutputPart[]
 }
 
 export interface McpAuditEntry {
@@ -298,7 +355,13 @@ declare global {
       mcpListActivity?: () => Promise<{ success: boolean; items: McpActivityItem[] }>
       mcpCancelActivity?: (id: string) => Promise<{ success: boolean }>
       mcpSetupClient?: (request: { scope: McpSetupScope; overwrite?: boolean; reuseDir?: boolean; setTokenEnv?: boolean }) => Promise<McpSetupResult>
+      sessionLogStart?: (sessionId: string, name: string) => Promise<SessionLogResult>
+      sessionLogStop?: (sessionId: string) => Promise<SessionLogResult>
+      sessionLogList?: () => Promise<{ success: boolean; items: Array<{ sessionId: string; filePath: string }> }>
+      sessionLogOpenFolder?: () => Promise<{ success: boolean; error?: string }>
+      onSessionLogChanged?: (callback: (change: SessionLogChange) => void) => () => void
       onMcpActivity?: (callback: (item: McpActivityItem) => void) => () => void
+      onMcpActivityOutput?: (callback: (payload: McpActivityOutput) => void) => () => void
       onMcpApprovalRequest?: (callback: (request: McpApprovalRequest) => void) => () => void
       onMcpApprovalDismiss?: (callback: (payload: { id: string }) => void) => () => void
       getAppZoomFactor?: () => number

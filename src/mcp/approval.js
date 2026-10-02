@@ -35,13 +35,13 @@ function createApprovalBroker({ show, dismiss = () => {}, timeoutMs = DEFAULT_TI
       if (item.signal && item.signal.aborted) { finish(item, 'cancelled'); continue }
       let delivered
       try {
-        delivered = show({ ...item.details, id: item.id, expiresAt: now() + timeoutMs })
+        delivered = show({ ...item.details, id: item.id, expiresAt: now() + item.timeoutMs })
       } catch {
         finish(item, 'denied')
         continue
       }
       if (!delivered) { finish(item, 'denied'); continue }
-      active = { item, timer: setTimeout(() => closeActive('expired', true), timeoutMs) }
+      active = { item, timer: setTimeout(() => closeActive('expired', true), item.timeoutMs) }
     }
   }
 
@@ -51,9 +51,11 @@ function createApprovalBroker({ show, dismiss = () => {}, timeoutMs = DEFAULT_TI
     if (index >= 0) finish(queue.splice(index, 1)[0], 'cancelled')
   }
 
-  function request(details, { signal } = {}) {
+  /** `timeoutMs` gives this request its own time limit (a file change takes longer to read than a command). */
+  function request(details, { signal, timeoutMs: ownTimeoutMs } = {}) {
     return new Promise((resolve) => {
-      const item = { id: newId(), details, resolve, signal, onAbort: null }
+      const hasOwnLimit = Number.isFinite(ownTimeoutMs) && ownTimeoutMs > 0
+      const item = { id: newId(), details, resolve, signal, onAbort: null, timeoutMs: hasOwnLimit ? ownTimeoutMs : timeoutMs }
       if (signal) {
         if (signal.aborted) { resolve('cancelled'); return }
         item.onAbort = () => cancel(item.id)

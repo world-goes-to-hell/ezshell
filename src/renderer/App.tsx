@@ -40,6 +40,10 @@ import { tabVariants } from './lib/animation/variants'
 import { useReducedMotion } from './hooks/useReducedMotion'
 import { SPRINGS } from './lib/animation/config'
 import { ConfirmDialogHost } from './components/Modal/ConfirmDialogHost'
+import { useSessionLogStore } from './stores/sessionLogStore'
+import { useSessionLogFeed } from './hooks/useSessionLogFeed'
+import { openSessionLogFolder, toggleSessionLog } from './lib/sessionLogActions'
+import './styles/sessionLog.css'
 
 // Check if we're in a special window mode
 function getWindowModeParams() {
@@ -121,6 +125,10 @@ function App() {
   }, [initializeTheme])
 
   const reducedMotion = useReducedMotion()
+
+  // Tabs whose terminal output is being written to a log file
+  useSessionLogFeed()
+  const sessionLogFiles = useSessionLogStore(state => state.files)
 
   // Tab drag state
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null)
@@ -806,6 +814,12 @@ function App() {
     }
   }
 
+  const handleContextToggleLog = () => {
+    if (!contextMenuTabId) return
+    const tab = terminals.get(contextMenuTabId)
+    toggleSessionLog(contextMenuTabId, tab ? (tab.title || `${tab.username}@${tab.host}`) : '')
+  }
+
   // Show loading while checking lock status
   if (isCheckingLock) {
     return (
@@ -891,6 +905,7 @@ function App() {
                           />
                         )}
                         <span>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
+                        {sessionId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[sessionId]}`} />}
                         {terminal.hasActivity && <span className="activity-indicator" />}
                         <motion.button
                           className="tab-close"
@@ -1170,6 +1185,9 @@ function App() {
         onRename={handleContextRename}
         onSplitHorizontal={handleContextSplitHorizontal}
         onSplitVertical={handleContextSplitVertical}
+        isLogging={contextMenuTabId !== null && contextMenuTabId in sessionLogFiles}
+        onToggleLog={handleContextToggleLog}
+        onOpenLogFolder={openSessionLogFolder}
       />
 
       <ToastContainer />

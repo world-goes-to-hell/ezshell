@@ -115,13 +115,29 @@ exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다
 
 ### MCP Server (Claude Code)
 `src/mcp/` 에 로컬 MCP 서버가 있다. 설정 > MCP 에서 켜면 `127.0.0.1:<포트>/mcp` (Streamable HTTP, stateless) 로 열린다.
-- 도구: `list_sessions`, `cd`, `run_command`. 세션 편집 > 고급 설정의 "MCP 접근 허용"(`mcpEnabled`)을 켠 세션만 보인다.
+- 도구: `list_sessions`, `cd`, `run_command`, `write_file`, `edit_file`. 세션 편집 > 고급 설정의 "MCP 접근 허용"(`mcpEnabled`)을 켠 세션만 보인다.
+- 파일 쓰기(`write_file`, `edit_file`, `fileTools.js`)는 셸을 거치지 않고 SFTP 로 한다. 알림 수준과 무관하게 항상 확인 창을 띄우고, 창에는 명령 대신 변경 내용(diff)과 실제 경로(심볼릭 링크를 푼 경로)를 보여 준다. 제한 시간은 180초. 허용한 뒤 파일이 확인 창에 보여 준 내용과 달라졌으면 쓰지 않는다(`remoteFile.js` 의 `writeIfUnchanged`). 기존 파일은 같은 파일에 덮어써서 소유자·권한을 유지하고, 실패하면 이전 내용으로 되돌린다. 256KB·10,000줄 이하 UTF-8 텍스트만, 접속 계정 권한으로만 쓴다. 감사 로그에는 도구 이름, 경로, 승인 여부, 내용의 SHA-256 만 남고 내용은 남지 않는다. 설계와 보안 검토 반영: `docs/plan/2026-10-02-mcp-file-tools-design.md`.
+  - 바꾸면 안 되는 것: 덮어쓰기는 파일을 `r+` 로 한 번 열어 그 핸들의 내용을 비교하고 같은 핸들에 쓴다 (경로를 다시 여는 방식으로 바꾸면 그 사이에 링크로 바뀐 경로를 따라간다). 읽기는 핸들에서 256KB+1 까지만 한다 (`readFile` 은 크기 0 으로 보이는 파일을 끝없이 읽는다). `/proc`, `/sys`, `/dev` 는 거부한다.
+  - diff 계산(`fileEdit.js`)은 300ms 제한이 있고, 넘으면 전체 교체로 표시한다. 제한을 없애면 줄이 많은 입력에 main 프로세스가 멈춘다.
+  - `cat` 으로 읽을 때 확인이 필요한 알림 수준·경로에서는 `edit_file` 을 거부한다 ("찾지 못함" 같은 답으로 내용을 추정할 수 있어서).
+  - 확인 창의 "허용"은 창이 뜬 뒤 0.8초, 그리고 변경 내용을 끝까지 내려 보기 전에는 눌리지 않는다.
+- 호스트 주소와 계정은 Claude 에게 넘기지 않는다. 대신 `list_sessions` 가 `server` 표지(`서버-1`, ...)를 붙여 같은 서버에 접속하는 세션을 알려 준다 (호스트+포트, 점프 호스트를 쓰면 그 주소까지 같아야 같은 서버). 표지는 목록 순서 번호이고 주소의 해시가 아니다 (IP 해시는 역산할 수 있음).
 - 명령은 `commandPolicy.js` 가 낮음/중간/위험/절대 차단으로 판정한다. 처음 보는 명령은 위험. 위험은 항상 앱 확인 창(60초 안에 응답 없으면 거부), 절대 차단은 실행 불가.
 - 설정은 `userData/mcp.json`(main 전용), 감사 로그는 `userData/mcp-audit.log`(명령과 판정만, 출력은 기록하지 않음).
 - 상태바의 "MCP 활동" 패널이 요청과 상태(대기/실행/완료/거부/취소/차단)를 실시간으로 보여준다. 이 목록과 명령 출력은 메모리에만 있고 디스크에 쓰지 않는다 (출력에 비밀이 섞일 수 있음).
+- 패널에는 `목록 | 터미널` 두 보기가 있다 (기본은 터미널). 터미널 보기(`McpActivityTerminal.tsx`)는 명령과 출력을 시간순으로 잇는 읽기 전용 화면이고 xterm 이 아니다. 실행 중 출력은 `sessionGateway` 의 `onOutput` → `activityLog.appendOutput`(50ms 묶음) → `mcp-activity-output` 채널로 온다. 요청이 끝날 때 오는 `mcp-activity` 항목이 `outputParts` 전체를 담고 있어 그쪽이 기준이다. 탭으로 만들지 않은 이유: 탭은 모두 SSH 연결 하나를 전제로 한다.
 - 설정 > MCP 의 "Claude Code 자동 설정"(`clientSetup.js`): 프로젝트는 고른 폴더의 `.mcp.json` 에 토큰 대신 `${EZSHELL_MCP_TOKEN}` 참조를 쓰고(Windows 는 `tokenEnv.js` 가 PowerShell 절대 경로로 사용자 환경 변수 설정. 토큰은 명령줄이 아니라 stdin 으로 넘기고, 오류 메시지에 명령줄이 섞이지 않게 한다), 전체는 `~/.claude.json` 의 `mcpServers` 에 토큰을 직접 쓴다. 다른 항목은 보존하고 `<파일>.ezshell-backup` 으로 백업하며, 깨진 JSON 은 거부하고, 같은 이름 항목은 확인 후 덮어쓴다. 폴더는 main 의 선택 창으로만 고른다.
 - Electron 28(Node 18)에는 `globalThis.crypto` 가 없어서 `src/mcp/sdk.js` 가 채운 뒤 SDK 를 불러온다.
 - `src/mcp` 는 번들되지 않고 `electron.vite.config.ts` 가 `out/main/src/mcp` 로 복사한다.
+
+### Session Log (터미널 출력을 파일로 저장)
+탭 우클릭 메뉴 또는 명령 팔레트의 `로그 저장 시작/중지` 로 켜고 끈다. 기록 중인 탭에는 붉은 점이 붙는다 (`.tab-log-indicator`).
+- 파일: `문서\ezShell Logs\<세션 이름>_<YYYYMMDD-HHmmss>.log`. 이름은 `logFile.js` 의 `safeFileName` 이 경로 문자를 `_` 로 바꾸고, 파일은 `wx` 로 열어 덮어쓰지 않는다.
+- main 프로세스가 기록한다 (`src/sessionLog/`). SSH 스트림의 data 이벤트에서 `sessionLogger.write` 를 부르고, 로그의 어떤 실패도 터미널로 가는 데이터를 막지 않는다.
+- 터미널 해석은 `@xterm/headless` 에 맡기고 줄바꿈이 처리될 때 완성된 줄을 읽는다 (`lineRecorder.js`). 전체 화면 프로그램 구간은 표시 한 줄만 남긴다. 직접 만든 필터로 바꾸지 말 것: 너비를 넘는 명령줄과 두 칸 글자에서 깨진다 (`docs/brain/2026-10-02-xterm-headless-wide-char-wrap-padding.md`).
+- 탭의 주 터미널만 기록한다 (탭 안 분할 셸 제외). 자동 재연결되면 같은 파일에 이어 쓰고, 탭을 닫거나 연결이 완전히 끊기면 끝낸다.
+- 출력된 내용은 평문으로 남는다 (`cat .env` 의 결과도). 그래서 사용자가 켠 탭만 기록한다.
+- `src/sessionLog` 는 번들되지 않고 `electron.vite.config.ts` 가 `out/main/src/sessionLog` 로 복사한다.
 
 ### LockScreen Safe API Pattern
 `window.electronAPI` 함수 호출 전 `typeof` 체크로 graceful degradation.

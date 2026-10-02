@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ALERT_LEVEL_OPTIONS, OUTCOME_LABELS, RISK_LABELS, formatAuditTime, maskToken, maskRegisterCommand, parsePort, revealHiddenChars, secondsLeft } from './mcpLabels'
+import { ALERT_LEVEL_OPTIONS, OUTCOME_LABELS, RISK_LABELS, formatAuditTime, maskToken, maskRegisterCommand, parsePort, revealHiddenChars, revealPath, secondsLeft } from './mcpLabels'
 
 describe('mcpLabels', () => {
   it('labels every risk level and outcome', () => {
@@ -62,8 +62,50 @@ describe('mcpLabels', () => {
       expect(revealHiddenChars('a\u0007b\u0085c﻿').text).toBe('a⟨U+0007⟩b⟨U+0085⟩c⟨U+FEFF⟩')
     })
 
+    it.each([
+      ['soft hyphen', '\u00AD', '00AD'],
+      ['Hangul filler', '\u3164', '3164'],
+      ['halfwidth Hangul filler', '\uFFA0', 'FFA0'],
+      ['Arabic letter mark', '\u061C', '061C'],
+      ['line separator', '\u2028', '2028'],
+      ['invisible times', '\u2062', '2062'],
+      ['variation selector', '\uFE0F', 'FE0F'],
+      ['no-break space', '\u00A0', '00A0'],
+      ['en quad', '\u2000', '2000'],
+      ['ideographic space', '\u3000', '3000'],
+      ['braille blank', '\u2800', '2800'],
+      ['tag character', '\u{E0041}', 'E0041']
+    ])('shows a %s', (_label, char, code) => {
+      expect(revealHiddenChars(`a${char}b`)).toEqual({ text: `a⟨U+${code}⟩b`, hasHidden: true })
+    })
+
+    it('leaves ordinary spaces, Korean, CJK and emoji bases alone', () => {
+      const text = 'echo "한글 漢字 かな" && ls -la 😀'
+      expect(revealHiddenChars(text)).toEqual({ text, hasHidden: false })
+    })
+
     it('keeps newline and tab', () => {
       expect(revealHiddenChars('a\n\tb')).toEqual({ text: 'a\n\tb', hasHidden: false })
+    })
+  })
+
+  describe('revealPath', () => {
+    it('leaves an ordinary path alone, spaces inside included', () => {
+      expect(revealPath('/srv/my app/배포 메모.txt')).toEqual({ text: '/srv/my app/배포 메모.txt', hasHidden: false })
+    })
+
+    it('shows a line break or a tab, which a path should not have', () => {
+      expect(revealPath('/etc/hosts\n요청 경로: /tmp/a')).toEqual({ text: '/etc/hosts⟨U+000A⟩요청 경로: /tmp/a', hasHidden: true })
+      expect(revealPath('/tmp/a\tb')).toEqual({ text: '/tmp/a⟨U+0009⟩b', hasHidden: true })
+    })
+
+    it('shows blanks at either end, which make it another file', () => {
+      expect(revealPath('/etc/hosts ')).toEqual({ text: '/etc/hosts⟨U+0020⟩', hasHidden: true })
+      expect(revealPath('  /etc/hosts')).toEqual({ text: '⟨U+0020⟩⟨U+0020⟩/etc/hosts', hasHidden: true })
+    })
+
+    it('shows hidden characters like any other text', () => {
+      expect(revealPath('/tmp/\u202Etxt.exe')).toEqual({ text: '/tmp/⟨U+202E⟩txt.exe', hasHidden: true })
     })
   })
 })
