@@ -113,34 +113,37 @@ export function ThemeSelector() {
 
   return (
     <div className="theme-selector">
-      {/* Action Buttons */}
-      <div className="theme-actions">
-        <button className="theme-action-btn theme-action-btn-primary" onClick={handleCreateTheme}>
-          <RiAddLine size={18} />
-          커스텀 테마 만들기
-        </button>
-        <div className="theme-actions-right">
-          <button className="theme-action-btn" onClick={handleImportTheme}>
-            <RiUploadLine size={18} />
-            가져오기
+      {/* Actions and filters stay pinned while the settings tab scrolls the grid */}
+      <div className="theme-toolbar">
+        {/* Action Buttons */}
+        <div className="theme-actions">
+          <button className="theme-action-btn theme-action-btn-primary" onClick={handleCreateTheme}>
+            <RiAddLine size={18} />
+            커스텀 테마 만들기
           </button>
+          <div className="theme-actions-right">
+            <button className="theme-action-btn" onClick={handleImportTheme}>
+              <RiUploadLine size={18} />
+              가져오기
+            </button>
+          </div>
         </div>
-      </div>
 
-      {/* Filter Tabs */}
-      <div className="theme-filter-tabs">
-        {tabs.map(tab => (
-          <button
-            key={tab.id}
-            className={`theme-filter-tab ${filter === tab.id ? 'active' : ''}`}
-            onClick={() => setFilter(tab.id)}
-          >
-            {tab.label}
-            {tab.id === 'custom' && customThemes.length > 0 && (
-              <span className="theme-tab-badge">{customThemes.length}</span>
-            )}
-          </button>
-        ))}
+        {/* Filter Tabs */}
+        <div className="theme-filter-tabs">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              className={`theme-filter-tab ${filter === tab.id ? 'active' : ''}`}
+              onClick={() => setFilter(tab.id)}
+            >
+              {tab.label}
+              {tab.id === 'custom' && customThemes.length > 0 && (
+                <span className="theme-tab-badge">{customThemes.length}</span>
+              )}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Theme Grid */}

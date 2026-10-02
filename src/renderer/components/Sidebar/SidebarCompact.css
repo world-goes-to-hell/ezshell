@@ -75,8 +75,14 @@
   width: var(--compact-gutter);
 }
 
+/* folder-contents clips (overflow: hidden) for the collapse animation, and the tab badges plus their
+   focus ring rise above the first session row. The padding gives them room; the negative margin
+   cancels it against the marker's bottom margin so the gap under the marker stays the same.
+   That leaves the contents 2px over the marker's bottom edge, so the marker is raised above it. */
 .sidebar.compact .folder-contents {
   padding-left: 0;
+  padding-top: 6px;
+  margin-top: -6px;
 }
 
 .sidebar.compact .session-folder {
@@ -85,6 +91,8 @@
 
 /* Folder marker: separates groups and toggles the folder */
 .compact-folder-marker {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;

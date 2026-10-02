@@ -123,6 +123,22 @@
   gap: 16px;
 }
 
+/* The settings tab (.settings-content) is the only scroller; the grid has no scroll of its own,
+   so the actions and filters stick to the top while the cards scroll under them */
+.theme-toolbar {
+  position: sticky;
+  /* Sticky stops inside the scroller's padding; pull it over .settings-content's 8px padding-top */
+  top: -8px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  /* Opaque so cards scrolling under it don't show through; the extra bottom room is given back */
+  padding-bottom: 8px;
+  margin-bottom: -8px;
+  background: var(--bg-secondary);
+}
+
 .theme-filter-tabs {
   display: flex;
   gap: 4px;
@@ -159,8 +175,6 @@
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
-  max-height: 360px;
-  overflow-y: auto;
   padding: 4px;
 }
 

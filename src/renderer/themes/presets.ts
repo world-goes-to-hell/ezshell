@@ -1,4 +1,5 @@
 import { ThemeDefinition } from '../types/theme'
+import { LIGHT_PRESETS } from './lightPresets'
 
 export const PRESET_THEMES: ThemeDefinition[] = [
   // 1. Minimal Dark (graphite + blue) - Default
@@ -1187,6 +1188,9 @@ export const PRESET_THEMES: ThemeDefinition[] = [
       accent: '#ffcc66',
     },
   },
+
+  // 21~26. Light counterparts of the dark presets
+  ...LIGHT_PRESETS,
 ]
 
 export const getThemeById = (id: string): ThemeDefinition | undefined => {

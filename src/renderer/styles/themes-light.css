@@ -1,0 +1,194 @@
+/* Light themes that pair with the dark presets (themes/lightPresets.ts holds the same colors).
+   --on-accent and --error-text are picked for 4.5:1 contrast, as in variables.css. */
+
+/* ===== Catppuccin Latte ===== */
+[data-theme="catppuccin-latte"] {
+  --bg-primary: #eff1f5;
+  --bg-secondary: #e6e9ef;
+  --bg-tertiary: #dce0e8;
+  --bg-hover: #dce0e8;
+  --bg-active: #8839ef;
+  --bg-modifier-hover: rgba(136, 57, 239, 0.1);
+  --bg-modifier-selected: rgba(136, 57, 239, 0.2);
+  --text-primary: #4c4f69;
+  --text-secondary: #5c5f77;
+  --text-muted: #6c6f85;
+  --text-link: #1c5fe4;
+  --accent: #8839ef;
+  --on-accent: #ffffff;
+  --accent-hover: #7832d2;
+  --accent-active: #6a2cba;
+  --success: #40a02b;
+  --warning: #df8e1d;
+  --error: #d20f39;
+  --error-text: #c50e36;
+  --info: #04a5e5;
+  --border: #ccd0da;
+  --border-strong: #bcc0cc;
+  --gradient-accent: linear-gradient(0deg, #8839ef, #8839ef);
+  --gradient-primary: linear-gradient(0deg, #eff1f5, #eff1f5);
+  --shadow-sm: 0 1px 2px rgba(76, 79, 105, 0.08);
+  --shadow-md: 0 6px 16px rgba(76, 79, 105, 0.12);
+  --shadow-lg: 0 12px 32px rgba(76, 79, 105, 0.16);
+  --shadow-glow: 0 0 0 1px rgba(136, 57, 239, 0.6);
+}
+
+/* ===== Gruvbox Light ===== */
+[data-theme="gruvbox-light"] {
+  --bg-primary: #fbf1c7;
+  --bg-secondary: #f2e5bc;
+  --bg-tertiary: #ebdbb2;
+  --bg-hover: #e8d8ae;
+  --bg-active: #b57614;
+  --bg-modifier-hover: rgba(181, 118, 20, 0.1);
+  --bg-modifier-selected: rgba(181, 118, 20, 0.2);
+  --text-primary: #3c3836;
+  --text-secondary: #504945;
+  --text-muted: #7c6f64;
+  --text-link: #076678;
+  --accent: #b57614;
+  --on-accent: #16181c;
+  --accent-hover: #be8630;
+  --accent-active: #c59448;
+  --success: #79740e;
+  --warning: #b57614;
+  --error: #9d0006;
+  --error-text: #9d0006;
+  --info: #076678;
+  --border: #d5c4a1;
+  --border-strong: #bdae93;
+  --gradient-accent: linear-gradient(0deg, #b57614, #b57614);
+  --gradient-primary: linear-gradient(0deg, #fbf1c7, #fbf1c7);
+  --shadow-sm: 0 1px 2px rgba(60, 56, 54, 0.08);
+  --shadow-md: 0 6px 16px rgba(60, 56, 54, 0.12);
+  --shadow-lg: 0 12px 32px rgba(60, 56, 54, 0.16);
+  --shadow-glow: 0 0 0 1px rgba(181, 118, 20, 0.6);
+}
+
+/* ===== Tokyo Night Day ===== */
+[data-theme="tokyo-night-day"] {
+  --bg-primary: #e1e2e7;
+  --bg-secondary: #e9e9ed;
+  --bg-tertiary: #dcdee7;
+  --bg-hover: #d5d7e0;
+  --bg-active: #2a75d7;
+  --bg-modifier-hover: rgba(42, 117, 215, 0.1);
+  --bg-modifier-selected: rgba(42, 117, 215, 0.2);
+  --text-primary: #3459b4;
+  --text-secondary: #4c5a8f;
+  --text-muted: #68709a;
+  --text-link: #2463b8;
+  --accent: #2a75d7;
+  --on-accent: #ffffff;
+  --accent-hover: #2567bd;
+  --accent-active: #215ba8;
+  --success: #587539;
+  --warning: #8c6c3e;
+  --error: #f52a65;
+  --error-text: #ba204d;
+  --info: #007197;
+  --border: #c4c8da;
+  --border-strong: #a8aecb;
+  --gradient-accent: linear-gradient(0deg, #2a75d7, #2a75d7);
+  --gradient-primary: linear-gradient(0deg, #e1e2e7, #e1e2e7);
+  --shadow-sm: 0 1px 2px rgba(55, 96, 191, 0.08);
+  --shadow-md: 0 6px 16px rgba(55, 96, 191, 0.12);
+  --shadow-lg: 0 12px 32px rgba(55, 96, 191, 0.16);
+  --shadow-glow: 0 0 0 1px rgba(42, 117, 215, 0.6);
+}
+
+/* ===== Rosé Pine Dawn ===== */
+[data-theme="rose-pine-dawn"] {
+  --bg-primary: #faf4ed;
+  --bg-secondary: #fffaf3;
+  --bg-tertiary: #f2e9e1;
+  --bg-hover: #f4ede8;
+  --bg-active: #907aa9;
+  --bg-modifier-hover: rgba(144, 122, 169, 0.1);
+  --bg-modifier-selected: rgba(144, 122, 169, 0.2);
+  --text-primary: #575279;
+  --text-secondary: #625e80;
+  --text-muted: #797593;
+  --text-link: #286983;
+  --accent: #907aa9;
+  --on-accent: #16181c;
+  --accent-hover: #9d8ab3;
+  --accent-active: #a897bc;
+  --success: #286983;
+  --warning: #ea9d34;
+  --error: #b4637a;
+  --error-text: #995468;
+  --info: #56949f;
+  --border: #dfdad9;
+  --border-strong: #cecacd;
+  --gradient-accent: linear-gradient(0deg, #907aa9, #907aa9);
+  --gradient-primary: linear-gradient(0deg, #faf4ed, #faf4ed);
+  --shadow-sm: 0 1px 2px rgba(87, 82, 121, 0.08);
+  --shadow-md: 0 6px 16px rgba(87, 82, 121, 0.12);
+  --shadow-lg: 0 12px 32px rgba(87, 82, 121, 0.16);
+  --shadow-glow: 0 0 0 1px rgba(144, 122, 169, 0.6);
+}
+
+/* ===== One Light ===== */
+[data-theme="one-light"] {
+  --bg-primary: #fafafa;
+  --bg-secondary: #f0f0f1;
+  --bg-tertiary: #e5e5e6;
+  --bg-hover: #e8e8e9;
+  --bg-active: #3c70de;
+  --bg-modifier-hover: rgba(60, 112, 222, 0.1);
+  --bg-modifier-selected: rgba(60, 112, 222, 0.2);
+  --text-primary: #383a42;
+  --text-secondary: #5b5e69;
+  --text-muted: #696c77;
+  --text-link: #3868d3;
+  --accent: #3c70de;
+  --on-accent: #ffffff;
+  --accent-hover: #3563c3;
+  --accent-active: #2f57ad;
+  --success: #50a14f;
+  --warning: #986801;
+  --error: #e45649;
+  --error-text: #b04238;
+  --info: #0184bc;
+  --border: #dbdbdc;
+  --border-strong: #c8c8ca;
+  --gradient-accent: linear-gradient(0deg, #3c70de, #3c70de);
+  --gradient-primary: linear-gradient(0deg, #fafafa, #fafafa);
+  --shadow-sm: 0 1px 2px rgba(56, 58, 66, 0.08);
+  --shadow-md: 0 6px 16px rgba(56, 58, 66, 0.12);
+  --shadow-lg: 0 12px 32px rgba(56, 58, 66, 0.16);
+  --shadow-glow: 0 0 0 1px rgba(60, 112, 222, 0.6);
+}
+
+/* ===== Ayu Light ===== */
+[data-theme="ayu-light"] {
+  --bg-primary: #fcfcfc;
+  --bg-secondary: #f3f4f5;
+  --bg-tertiary: #e9ebed;
+  --bg-hover: #eceef0;
+  --bg-active: #ffaa33;
+  --bg-modifier-hover: rgba(255, 170, 51, 0.1);
+  --bg-modifier-selected: rgba(255, 170, 51, 0.2);
+  --text-primary: #5c6166;
+  --text-secondary: #5c6166;
+  --text-muted: #787b80;
+  --text-link: #2a75aa;
+  --accent: #ffaa33;
+  --on-accent: #16181c;
+  --accent-hover: #ffb44b;
+  --accent-active: #ffbd60;
+  --success: #86b300;
+  --warning: #fa8d3e;
+  --error: #e65050;
+  --error-text: #b84040;
+  --info: #399ee6;
+  --border: #e0e2e4;
+  --border-strong: #cfd2d6;
+  --gradient-accent: linear-gradient(0deg, #ffaa33, #ffaa33);
+  --gradient-primary: linear-gradient(0deg, #fcfcfc, #fcfcfc);
+  --shadow-sm: 0 1px 2px rgba(92, 97, 102, 0.08);
+  --shadow-md: 0 6px 16px rgba(92, 97, 102, 0.12);
+  --shadow-lg: 0 12px 32px rgba(92, 97, 102, 0.16);
+  --shadow-glow: 0 0 0 1px rgba(255, 170, 51, 0.6);
+}
