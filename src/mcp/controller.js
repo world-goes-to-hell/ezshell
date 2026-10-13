@@ -2,7 +2,8 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { createMcpConfigStore } = require('./mcpConfig.js')
+const { createMcpConfigStore, MAX_TRANSFER_ROOTS } = require('./mcpConfig.js')
+const { isInside } = require('./localPath.js')
 const { createAuditLog } = require('./auditLog.js')
 const { createApprovalBroker } = require('./approval.js')
 const { createSessionGateway } = require('./sessionGateway.js')
@@ -17,6 +18,10 @@ const { setTokenEnv: setTokenEnvDefault } = require('./tokenEnv.js')
 const SERVER_NAME = 'my-ssh-client'
 /** After a lock, a connection with background jobs stays open this long so the stop reaches the server */
 const JOB_STOP_GRACE_MS = 3500
+
+const ROOT_NOT_FOLDER_MESSAGE = '폴더를 찾을 수 없습니다.'
+const ROOT_HOLDS_APP_DATA_MESSAGE = '앱의 데이터 폴더(세션, 비밀번호, MCP 토큰)를 포함하는 폴더는 등록할 수 없습니다. 더 좁은 폴더를 고르세요.'
+const ROOT_LIMIT_MESSAGE = `전송 허용 폴더는 ${MAX_TRANSFER_ROOTS}개까지 등록할 수 있습니다.`
 
 const serverUrl = (port) => `http://127.0.0.1:${port}${MCP_PATH}`
 
@@ -67,7 +72,9 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
     gateway,
     audit,
     activity,
-    jobs
+    jobs,
+    getTransferRoots: () => configStore.get().transferRoots,
+    userDataPath
   })
   const homeDir = deps.homeDir || os.homedir()
   const setTokenEnv = deps.setTokenEnv || setTokenEnvDefault
@@ -112,6 +119,33 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
       tokenEnv: env ? env.status : null,
       tokenEnvError: env && env.error ? env.error : null
     }
+  }
+
+  /**
+   * Register a folder the transfer tools may read and write. `dir` comes from the folder dialog of
+   * the main process. Stored by its real path; a folder that reaches the app's own data is refused.
+   */
+  async function addTransferRoot(dir) {
+    if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error(ROOT_NOT_FOLDER_MESSAGE)
+    let real
+    try {
+      real = await fs.promises.realpath(dir)
+      if (!(await fs.promises.stat(real)).isDirectory()) throw new Error('not a folder')
+    } catch {
+      throw new Error(ROOT_NOT_FOLDER_MESSAGE)
+    }
+    const realUserData = await fs.promises.realpath(userDataPath).catch(() => userDataPath)
+    if (isInside(path, real, realUserData) || isInside(path, realUserData, real)) throw new Error(ROOT_HOLDS_APP_DATA_MESSAGE)
+    const roots = configStore.get().transferRoots
+    if (roots.some(root => path.relative(root, real) === '')) return getStatus()
+    if (roots.length >= MAX_TRANSFER_ROOTS) throw new Error(ROOT_LIMIT_MESSAGE)
+    configStore.setTransferRoots([...roots, real])
+    return getStatus()
+  }
+
+  function removeTransferRoot(dir) {
+    configStore.setTransferRoots(configStore.get().transferRoots.filter(root => root !== dir))
+    return getStatus()
   }
 
   /** Nothing of Claude's keeps running: pending dialogs are cancelled, background jobs stopped and forgotten, connections closed. */
@@ -165,6 +199,8 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
       return getStatus()
     }),
     setupClient,
+    addTransferRoot: (dir) => enqueue(() => addTransferRoot(dir)),
+    removeTransferRoot: (dir) => enqueue(async () => removeTransferRoot(dir)),
     respondApproval: (id, approved) => approvals.respond(id, approved),
     readAudit: (limit) => audit.readRecent(limit),
     listActivity: () => activity.list(),

@@ -46,6 +46,27 @@ export function parsePort(text: string): number | null {
   return port >= MIN_PORT && port <= MAX_PORT ? port : null
 }
 
+export const TRANSFER_DIRECTION_LABELS: Record<'upload' | 'download', string> = {
+  upload: 'PC → 서버 (올리기)',
+  download: '서버 → PC (내려받기)'
+}
+
+const KILOBYTE = 1024
+
+/** A file size for reading at a glance; the exact byte count is shown next to it */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '알 수 없음'
+  if (bytes < KILOBYTE) return `${bytes}바이트`
+  const units = ['KB', 'MB', 'GB']
+  let value = bytes / KILOBYTE
+  let unit = 0
+  while (value >= KILOBYTE && unit < units.length - 1) {
+    value /= KILOBYTE
+    unit += 1
+  }
+  return `${value.toFixed(1)}${units[unit]}`
+}
+
 export function secondsLeft(expiresAt: number, now: number): number {
   return Math.max(0, Math.ceil((expiresAt - now) / 1000))
 }

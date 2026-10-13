@@ -1,5 +1,22 @@
 import { describe, it, expect } from 'vitest'
-import { ALERT_LEVEL_OPTIONS, OUTCOME_LABELS, RISK_LABELS, formatAuditTime, maskToken, maskRegisterCommand, parsePort, revealHiddenChars, revealPath, secondsLeft } from './mcpLabels'
+import { ALERT_LEVEL_OPTIONS, OUTCOME_LABELS, RISK_LABELS, formatAuditTime, formatBytes, maskToken, maskRegisterCommand, parsePort, revealHiddenChars, revealPath, secondsLeft } from './mcpLabels'
+
+describe('formatBytes', () => {
+  it('picks a unit that reads at a glance', () => {
+    expect(formatBytes(0)).toBe('0바이트')
+    expect(formatBytes(1023)).toBe('1023바이트')
+    expect(formatBytes(1024)).toBe('1.0KB')
+    expect(formatBytes(1536)).toBe('1.5KB')
+    expect(formatBytes(5 * 1024 * 1024)).toBe('5.0MB')
+    expect(formatBytes(1024 * 1024 * 1024)).toBe('1.0GB')
+    expect(formatBytes(3000 * 1024 * 1024 * 1024)).toBe('3000.0GB')
+  })
+
+  it('does not print a number it was not given', () => {
+    expect(formatBytes(Number.NaN)).toBe('알 수 없음')
+    expect(formatBytes(-1)).toBe('알 수 없음')
+  })
+})
 
 describe('mcpLabels', () => {
   it('labels every risk level and outcome', () => {

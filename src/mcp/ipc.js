@@ -5,7 +5,7 @@ const NOT_READY_MESSAGE = 'MCP 기능이 아직 준비되지 않았습니다.'
 const LOCKED_MESSAGE = '앱 잠금을 해제하세요.'
 
 /** While the app is locked the token, the audit log and the activity list stay hidden and settings cannot change. */
-function registerMcpIpc(ipcMain, getController, isUnlocked, { pickDirectory } = {}) {
+function registerMcpIpc(ipcMain, getController, isUnlocked, { pickDirectory, pickTransferDirectory } = {}) {
   const unlocked = () => typeof isUnlocked === 'function' && isUnlocked() === true
   const withStatus = (task, { whileLocked } = {}) => async (event, payload) => {
     const controller = getController()
@@ -81,6 +81,24 @@ function registerMcpIpc(ipcMain, getController, isUnlocked, { pickDirectory } = 
       return { success: false, error: err.message }
     }
   })
+
+  // A folder the transfer tools may use is whatever the dialog of the main process returned; the
+  // renderer sends no path, so a compromised page cannot open up the disk.
+  ipcMain.handle('mcp-add-transfer-folder', async () => {
+    const controller = getController()
+    if (!controller || typeof pickTransferDirectory !== 'function') return { success: false, error: NOT_READY_MESSAGE }
+    if (!unlocked()) return { success: false, error: LOCKED_MESSAGE }
+    try {
+      const dir = await pickTransferDirectory()
+      if (!dir) return { success: false, cancelled: true }
+      // The app may have been locked while the dialog was open
+      if (!unlocked()) return { success: false, error: LOCKED_MESSAGE }
+      return { success: true, status: await controller.addTransferRoot(dir) }
+    } catch (err) {
+      return { success: false, error: err.message }
+    }
+  })
+  ipcMain.handle('mcp-remove-transfer-folder', withStatus((controller, payload) => controller.removeTransferRoot(payload && payload.path)))
 
   ipcMain.handle('mcp-read-audit', (event, payload) => {
     const controller = getController()

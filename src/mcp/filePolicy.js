@@ -26,9 +26,12 @@ const EXECUTION_PATHS = [
   /^\/etc\/sudoers\.d\//
 ]
 
+const isSystemPath = (path) => SYSTEM_ROOTS.some(root => path === root || path.startsWith(`${root}/`))
+const isExecutionPath = (path) => EXECUTION_PATHS.some(pattern => pattern.test(path))
+
 /** A message when the path must not be written at all, otherwise null. */
 function refuseSystemPath(path) {
-  return SYSTEM_ROOTS.some(root => path === root || path.startsWith(`${root}/`)) ? SYSTEM_PATH_MESSAGE : null
+  return isSystemPath(path) ? SYSTEM_PATH_MESSAGE : null
 }
 
 /**
@@ -46,10 +49,10 @@ function classifyFileWrite({ requestedPath, path, exists, isSymlink }) {
   }
   const secrets = sensitiveFindings(paths).map(finding => finding.reason)
   reasons.push(...secrets)
-  reasons.push(...paths.filter(candidate => EXECUTION_PATHS.some(pattern => pattern.test(candidate))).map(candidate => `로그인·예약 실행·권한에 영향을 주는 파일: ${candidate}`))
+  reasons.push(...paths.filter(isExecutionPath).map(candidate => `로그인·예약 실행·권한에 영향을 주는 파일: ${candidate}`))
   const isSecretNewFile = !exists && secrets.length > 0
   if (isSecretNewFile) reasons.push('비밀 경로이므로 소유자만 읽을 수 있게 만듦 (권한 600)')
   return { level: DANGER, reasons, newFileMode: isSecretNewFile ? SECRET_NEW_FILE_MODE : DEFAULT_NEW_FILE_MODE }
 }
 
-module.exports = { classifyFileWrite, refuseSystemPath }
+module.exports = { classifyFileWrite, refuseSystemPath, isSystemPath, isExecutionPath }

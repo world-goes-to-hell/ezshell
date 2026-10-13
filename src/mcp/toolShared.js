@@ -18,7 +18,9 @@ const JOB_STATE_LABELS = {
   timeout: '시간 초과로 중지됨',
   stopped: '중지됨',
   overflow: '출력 한도 초과로 중지됨',
-  failed: '연결 끊김'
+  failed: '연결 끊김',
+  /** A file transfer that ended with an error (the reason is in the job's output) */
+  error: '실패'
 }
 const DROPPED_JOB_NOTE = '[주의] 서버와의 연결이 끊겨 작업이 끝났는지 확인하지 못했습니다. 명령이 서버에서 계속 실행 중일 수 있습니다.'
 

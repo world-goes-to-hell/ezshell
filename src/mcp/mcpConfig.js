@@ -1,6 +1,7 @@
 // MCP settings in userData/mcp.json. Kept apart from settings.json because the renderer
 // rewrites that whole file; only the main process touches this one.
 const fs = require('fs')
+const path = require('path')
 const crypto = require('crypto')
 
 const DEFAULT_PORT = 47521
@@ -9,6 +10,9 @@ const MAX_PORT = 65535
 const ALERT_LEVELS = ['all', 'medium', 'danger']
 const DEFAULT_ALERT_LEVEL = 'danger'
 const TOKEN_PATTERN = /^[0-9a-f]{64}$/
+/** Folders on this PC the transfer tools may read and write */
+const MAX_TRANSFER_ROOTS = 10
+const isRootPath = (value) => typeof value === 'string' && value !== '' && path.isAbsolute(value)
 
 const isValidPort = (value) => Number.isInteger(value) && value >= MIN_PORT && value <= MAX_PORT
 
@@ -43,7 +47,8 @@ function createMcpConfigStore({ filePath, fileSystem = fs, randomBytes = crypto.
       enabled: raw.enabled === true,
       port: isValidPort(raw.port) ? raw.port : DEFAULT_PORT,
       alertLevel: ALERT_LEVELS.includes(raw.alertLevel) ? raw.alertLevel : DEFAULT_ALERT_LEVEL,
-      token: typeof raw.token === 'string' && TOKEN_PATTERN.test(raw.token) ? raw.token : newToken()
+      token: typeof raw.token === 'string' && TOKEN_PATTERN.test(raw.token) ? raw.token : newToken(),
+      transferRoots: Array.isArray(raw.transferRoots) ? [...new Set(raw.transferRoots.filter(isRootPath))].slice(0, MAX_TRANSFER_ROOTS) : []
     }
   }
 
@@ -72,7 +77,20 @@ function createMcpConfigStore({ filePath, fileSystem = fs, randomBytes = crypto.
     return current
   }
 
-  return { get: () => current, update, regenerateToken }
+  /**
+   * Kept out of update() on purpose: that takes what the renderer sends, and the folders the
+   * transfer tools may use must only come from the folder dialog of the main process.
+   */
+  function setTransferRoots(roots) {
+    if (!Array.isArray(roots) || !roots.every(isRootPath)) throw new Error('전송 허용 폴더는 절대 경로의 목록이어야 합니다.')
+    if (roots.length > MAX_TRANSFER_ROOTS) throw new Error(`전송 허용 폴더는 ${MAX_TRANSFER_ROOTS}개까지 등록할 수 있습니다.`)
+    const next = { ...current, transferRoots: [...new Set(roots)] }
+    save(next)
+    current = next
+    return current
+  }
+
+  return { get: () => current, update, regenerateToken, setTransferRoots }
 }
 
-module.exports = { createMcpConfigStore, DEFAULT_PORT, ALERT_LEVELS }
+module.exports = { createMcpConfigStore, DEFAULT_PORT, ALERT_LEVELS, MAX_TRANSFER_ROOTS }

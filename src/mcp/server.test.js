@@ -34,6 +34,8 @@ const stubHandlers = (overrides = {}) => ({
   jobOutput: async (args) => text(`output of ${args.job}`),
   stopJob: async (args) => text(`stopped ${args.job}`),
   listJobs: () => text('[]'),
+  uploadFile: async (args) => text(`uploaded ${args.local_path}`),
+  downloadFile: async (args) => text(`downloaded ${args.remote_path}`),
   ...overrides
 })
 
@@ -59,7 +61,7 @@ describe('createMcpHttpServer', () => {
   it('lists the tools', async () => {
     const client = await connect(await startServer())
     const { tools } = await client.listTools()
-    expect(tools.map(tool => tool.name).sort()).toEqual(['cd', 'edit_file', 'job_output', 'list_jobs', 'list_sessions', 'run_command', 'stop_job', 'write_file'])
+    expect(tools.map(tool => tool.name).sort()).toEqual(['cd', 'download_file', 'edit_file', 'job_output', 'list_jobs', 'list_sessions', 'run_command', 'stop_job', 'upload_file', 'write_file'])
     await client.close()
   })
 
@@ -86,6 +88,38 @@ describe('createMcpHttpServer', () => {
       { name: 'write_file', arguments: { session: 's1', path: '/tmp/a' } },
       { name: 'edit_file', arguments: { session: 's1', path: '/tmp/a', old_string: '', new_string: 'x' } },
       { name: 'edit_file', arguments: { session: 's1', path: '/tmp/a', old_string: 'a', new_string: 'b', replace_all: 'yes' } }
+    ]
+    for (const request of bad) {
+      const outcome = await client.callTool(request).then(result => (result.isError ? 'error' : 'ok'), () => 'error')
+      expect(outcome).toBe('error')
+    }
+    expect(called).toBe(0)
+    await client.close()
+  })
+
+  it('hands the transfer tools their arguments and the request signal', async () => {
+    const seen = []
+    const record = (name) => async (args, options) => { seen.push([name, args, typeof options.signal?.aborted]); return text('ok') }
+    const client = await connect(await startServer(stubHandlers({ uploadFile: record('upload'), downloadFile: record('download') })))
+    await client.callTool({ name: 'upload_file', arguments: { session: 's1', local_path: 'C:/work/app.jar', remote_path: 'app.jar', overwrite: true } })
+    await client.callTool({ name: 'download_file', arguments: { session: 's1', remote_path: '/var/log/app.log', local_path: 'C:/work/app.log' } })
+    expect(seen).toEqual([
+      ['upload', { session: 's1', local_path: 'C:/work/app.jar', remote_path: 'app.jar', overwrite: true }, 'boolean'],
+      ['download', { session: 's1', remote_path: '/var/log/app.log', local_path: 'C:/work/app.log' }, 'boolean']
+    ])
+    await client.close()
+  })
+
+  it('refuses transfer tool input the schema does not allow, before any handler runs', async () => {
+    let called = 0
+    const count = async () => { called++; return text('ok') }
+    const client = await connect(await startServer(stubHandlers({ uploadFile: count, downloadFile: count })))
+    const bad = [
+      { name: 'upload_file', arguments: { session: 's1', local_path: '', remote_path: '/tmp/a' } },
+      { name: 'upload_file', arguments: { session: 's1', local_path: 'C:/work/a' } },
+      { name: 'upload_file', arguments: { session: 's1', local_path: 'C:/work/a', remote_path: '/tmp/a', overwrite: 'yes' } },
+      { name: 'download_file', arguments: { session: 's1', remote_path: '/tmp/a', local_path: `C:/work/${'a'.repeat(1100)}` } },
+      { name: 'download_file', arguments: { remote_path: '/tmp/a', local_path: 'C:/work/a' } }
     ]
     for (const request of bad) {
       const outcome = await client.callTool(request).then(result => (result.isError ? 'error' : 'ok'), () => 'error')

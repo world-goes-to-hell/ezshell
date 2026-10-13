@@ -384,6 +384,57 @@
   overflow-wrap: anywhere;
 }
 
+/* Folders on this PC the transfer tools may use */
+.mcp-transfer-folders {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-transfer-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-transfer-folder code {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.mcp-transfer-empty {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.mcp-transfer-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+}
+
+/* Transfer approval: which way the file goes stands out, and long paths wrap instead of being cut */
+.mcp-transfer-direction {
+  font-weight: 600;
+}
+
+.mcp-approval-fields .mcp-transfer-path {
+  overflow-wrap: anywhere;
+}
+
 /* File change approval (write_file / edit_file): wider dialog with the change in full */
 .mcp-approval.mcp-approval-file {
   width: min(860px, calc(100vw - 32px));

@@ -263,6 +263,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   mcpListActivity: () => ipcRenderer.invoke('mcp-list-activity'),
   mcpCancelActivity: (id) => ipcRenderer.invoke('mcp-cancel-activity', { id }),
   mcpSetupClient: (request) => ipcRenderer.invoke('mcp-setup-client', request),
+  mcpAddTransferFolder: () => ipcRenderer.invoke('mcp-add-transfer-folder'),
+  mcpRemoveTransferFolder: (path) => ipcRenderer.invoke('mcp-remove-transfer-folder', { path }),
   onMcpActivity: (callback) => {
     const handler = (event, item) => callback(item);
     ipcRenderer.on('mcp-activity', handler);

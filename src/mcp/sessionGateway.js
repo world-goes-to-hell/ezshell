@@ -413,6 +413,65 @@ function createSessionGateway({
     })
   }
 
+  /**
+   * Open an SFTP channel of its own for one file transfer: `{ sftp, close(), closed }`. The session's
+   * queue is held only until the channel is open, so the transfer runs beside the session's commands.
+   * Like a background job it keeps a retired connection open until `close()` is called; `closed`
+   * resolves when the channel ends for any reason. `signal` only cancels the opening.
+   */
+  function openTransfer(session, { signal } = {}) {
+    return enqueue(session, signal, async (entry) => {
+      const { client } = await prepare(session, entry, signal)
+      // Counted before the channel is requested, for the same reason as in startJob()
+      entry.jobs += 1
+      let isOver = false
+      const release = () => {
+        if (isOver) return
+        isOver = true
+        jobEnded(session.id, entry)
+      }
+      let timer = null
+      try {
+        const sftp = await new Promise((resolve, reject) => {
+          let isSettled = false
+          const settle = (action, value) => {
+            if (isSettled) return false
+            isSettled = true
+            action(value)
+            return true
+          }
+          timer = setTimeout(() => settle(reject, new GatewayError(SFTP_FAILED_MESSAGE, 'timed out')), execTimeoutMs)
+          try {
+            client.sftp((err, opened) => {
+              if (err) { settle(reject, new GatewayError(SFTP_FAILED_MESSAGE, err.message)); return }
+              // Opened after the time limit: nobody is waiting for it any more
+              if (!settle(resolve, opened)) { try { opened.end() } catch { /* already closed */ } }
+            })
+          } catch (err) {
+            settle(reject, new GatewayError(SFTP_FAILED_MESSAGE, err.message))
+          }
+        })
+        assertNotCancelled(signal)
+        const closed = new Promise((resolve) => {
+          if (typeof sftp.on !== 'function') return
+          sftp.on('close', resolve)
+          sftp.on('end', resolve)
+        })
+        const close = () => {
+          try { sftp.end() } catch { /* already closed */ }
+          release()
+        }
+        if (signal && signal.aborted) { close(); throw new GatewayError(CANCELLED_MESSAGE) }
+        return { sftp, close, closed }
+      } catch (err) {
+        release()
+        throw err
+      } finally {
+        clearTimeout(timer)
+      }
+    })
+  }
+
   function changeDirectory(session, target, { signal, expectedCwd } = {}) {
     return enqueue(session, signal, async (entry) => {
       const { client, cwd } = await prepare(session, entry, signal, expectedCwd)
@@ -437,6 +496,7 @@ function createSessionGateway({
     startJob,
     changeDirectory,
     useSftp,
+    openTransfer,
     resolveCwd,
     getCwd: (sessionId) => (cwds.has(sessionId) ? cwds.get(sessionId) : null),
     /** Directories outlive connections; this resets every session to its home directory (after a lock). */

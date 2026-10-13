@@ -1,11 +1,14 @@
 // In-memory stand-in for ssh2's SFTP wrapper, for tests only (not copied into the build).
 // `tree` maps absolute paths to nodes:
-//   { type: 'file', data: string | Buffer, mode?, endless? } | { type: 'dir' } | { type: 'link', target } | { type: 'special' }
+//   { type: 'file', data: string | Buffer, mode?, mtime?, uid?, endless? } | { type: 'dir' } | { type: 'link', target } | { type: 'special' }
 // `endless` files report size 0 and never reach the end when read (like some files under /proc).
 // Options:
 //   failRead        paths that cannot be opened for reading
 //   failWriteCalls  fail the n-th write() calls (1-based); likewise failFsetstatCalls, failCloseCalls
 //   onBeforeOpen(path, flags)  hook, e.g. to change the tree at the last moment
+//   beforeWrite(n) / beforeRead(n)  may return a promise; the n-th write()/read() waits for it
+//   noPosixRename   the server lacks the posix-rename extension
+//   failRename      rename requests fail
 const path = require('path').posix
 
 const NO_SUCH_FILE = 2
@@ -15,11 +18,11 @@ const MAX_LINK_DEPTH = 8
 
 const failure = (code, message) => Object.assign(new Error(message), { code })
 
-function createFakeSftp(initialTree = {}, { failRead = [], failWriteCalls = [], failFsetstatCalls = [], failCloseCalls = [], onBeforeOpen } = {}) {
+function createFakeSftp(initialTree = {}, { failRead = [], failWriteCalls = [], failFsetstatCalls = [], failCloseCalls = [], onBeforeOpen, beforeWrite, beforeRead, noPosixRename = false, failRename = false } = {}) {
   const tree = new Map([['/', { type: 'dir' }], ...Object.entries(initialTree)])
   const calls = []
   const handles = new Map()
-  const counts = { write: 0, fsetstat: 0, close: 0 }
+  const counts = { write: 0, fsetstat: 0, close: 0, read: 0 }
   let nextHandle = 1
   let ended = false
 
@@ -49,12 +52,26 @@ function createFakeSftp(initialTree = {}, { failRead = [], failWriteCalls = [], 
   const statsOf = (node) => ({
     size: sizeOf(node),
     mode: node.mode ?? 0o100644,
+    mtime: node.mtime ?? 1000,
+    uid: node.uid ?? 1000,
     isFile: () => node.type === 'file',
     isDirectory: () => node.type === 'dir',
     isSymbolicLink: () => node.type === 'link'
   })
 
   /** Run `work` and hand its result to the node-style callback on a later tick. */
+  const TYPE_BITS = 0o170000
+  const withMode = (node, mode) => ({ ...node, mode: ((node.mode ?? 0o100644) & TYPE_BITS) | (mode & 0o7777) })
+  /** Run `work` once `gate` (a hook's return value, maybe a promise) lets it through. */
+  const after = (gate, cb, work) => { Promise.resolve(gate).then(() => reply(cb, work), (err) => setImmediate(() => cb(err))) }
+  const move = (from, to, mayReplace) => {
+    if (failRename) throw failure(FAILURE, 'Rename failed')
+    const source = existing(locate(from, false))
+    const target = locate(to, false)
+    if (target.node && !mayReplace) throw failure(FAILURE, 'File exists')
+    tree.delete(source.path)
+    tree.set(target.path, source.node)
+  }
   const reply = (cb, work) => {
     let outcome
     try {
@@ -127,7 +144,8 @@ function createFakeSftp(initialTree = {}, { failRead = [], failWriteCalls = [], 
     },
     read(handle, buffer, offset, length, position, cb) {
       calls.push(['read', targetOf(handle), position])
-      reply(cb, () => {
+      counts.read++
+      after(beforeRead ? beforeRead(counts.read) : undefined, cb, () => {
         const node = nodeOf(handle)
         if (node.type !== 'file') throw failure(FAILURE, 'Not a file')
         if (node.endless) { buffer.fill(0x61, offset, offset + length); return length }
@@ -140,7 +158,7 @@ function createFakeSftp(initialTree = {}, { failRead = [], failWriteCalls = [], 
       const target = targetOf(handle)
       calls.push(['write', target, length])
       const fails = failsNow('write', failWriteCalls)
-      reply(cb, () => {
+      after(beforeWrite ? beforeWrite(counts.write) : undefined, cb, () => {
         if (fails) throw failure(FAILURE, 'Write failed')
         const node = nodeOf(handle)
         const previous = Buffer.from(node.data)
@@ -162,6 +180,7 @@ function createFakeSftp(initialTree = {}, { failRead = [], failWriteCalls = [], 
           Buffer.from(node.data).copy(resized, 0, 0, attrs.size)
           tree.set(target, { ...node, data: resized })
         }
+        if (attrs && typeof attrs.mode === 'number') tree.set(target, withMode(tree.get(target), attrs.mode))
       })
     },
     close(handle, cb) {
@@ -171,6 +190,15 @@ function createFakeSftp(initialTree = {}, { failRead = [], failWriteCalls = [], 
         handles.delete(handle.toString())
         if (fails) throw failure(FAILURE, 'Close failed')
       })
+    },
+    rename(from, to, cb) {
+      calls.push(['rename', from, to])
+      reply(cb, () => move(from, to, false))
+    },
+    ext_openssh_rename(from, to, cb) {
+      if (noPosixRename) throw new Error('Server does not support this extended request')
+      calls.push(['posix-rename', from, to])
+      reply(cb, () => move(from, to, true))
     },
     unlink(target, cb) {
       calls.push(['unlink', target])

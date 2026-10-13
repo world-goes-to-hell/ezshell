@@ -6,6 +6,7 @@ const { quoteCdTarget } = require('./shellQuote.js')
 const { combineSignals } = require('./signals.js')
 const { createFileHandlers } = require('./fileTools.js')
 const { createJobHandlers } = require('./jobTools.js')
+const { createTransferHandlers } = require('./transferTools.js')
 const { createJobStore } = require('./jobStore.js')
 const {
   LOCKED_MESSAGE, SESSION_CHANGED_MESSAGE, UNKNOWN_ERROR_MESSAGE, SESSIONS_UNREADABLE_MESSAGE, AUDIT_FAILED_MESSAGE, DENIAL_MESSAGES,
@@ -90,7 +91,10 @@ function describeJobEnd(id, result, approved) {
   return { state, fields, text: lines.join('\n') }
 }
 
-function createToolHandlers({ isUnlocked, getSessions, getFolders, getAlertLevel, approvals, gateway, audit, activity = NO_ACTIVITY, jobs = createJobStore(), newRequestId = () => crypto.randomUUID() }) {
+function createToolHandlers({
+  isUnlocked, getSessions, getFolders, getAlertLevel, approvals, gateway, audit, activity = NO_ACTIVITY, jobs = createJobStore(), newRequestId = () => crypto.randomUUID(),
+  getTransferRoots, userDataPath, transfer
+}) {
   function allowedSessions() {
     return getSessions().filter(isAllowedSession)
   }
@@ -380,9 +384,15 @@ function createToolHandlers({ isUnlocked, getSessions, getFolders, getAlertLevel
 
   const jobHandlers = createJobHandlers({ isUnlocked, allowedSessions, jobs })
 
+  const transferHandlers = createTransferHandlers({
+    isUnlocked, allowedSessions, findSession, getFolders, approvals, gateway, writeLog, track, activity, newRequestId, jobs,
+    getTransferRoots, userDataPath, options: transfer
+  })
+
   return {
     listSessions, runCommand, changeDirectory,
     writeFile: fileHandlers.writeFile, editFile: fileHandlers.editFile,
+    uploadFile: transferHandlers.uploadFile, downloadFile: transferHandlers.downloadFile,
     jobOutput: jobHandlers.jobOutput, stopJob: jobHandlers.stopJob, listJobs: jobHandlers.listJobs
   }
 }

@@ -5,6 +5,7 @@ import type { McpStatus, McpStatusResult } from '../../types'
 import { ALERT_LEVEL_OPTIONS, maskRegisterCommand, maskToken, parsePort } from '../../lib/mcpLabels'
 import { McpAuditList } from './McpAuditList'
 import { McpClientSetup } from './McpClientSetup'
+import { McpTransferFolders } from './McpTransferFolders'
 import './Mcp.css'
 
 async function copyText(text: string, label: string): Promise<void> {
@@ -163,6 +164,8 @@ export function McpSettings() {
         </div>
         <p className="form-hint">터미널에서 실행하면 Claude Code 에 등록됩니다. 세션 편집 &gt; 고급 설정에서 "MCP 접근 허용"을 켠 세션만 Claude 에게 보입니다.</p>
       </div>
+
+      <McpTransferFolders folders={config.transferRoots ?? []} disabled={isBusy || !hasToken} onChange={run} />
 
       <McpClientSetup disabled={!hasToken} />
 

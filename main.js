@@ -965,8 +965,18 @@ async function pickMcpProjectDir() {
   return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
 }
 
+/** Folder the MCP transfer tools may read and write; null when the dialog is cancelled */
+async function pickMcpTransferDir() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'MCP 파일 전송 허용 폴더 선택',
+    properties: ['openDirectory']
+  });
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+}
+
 registerMcpIpc(ipcMain, () => mcpController, () => !isAppLocked && Boolean(currentMasterPassword), {
-  pickDirectory: pickMcpProjectDir
+  pickDirectory: pickMcpProjectDir,
+  pickTransferDirectory: pickMcpTransferDir
 });
 
 // ==================== App Settings ====================

@@ -17,12 +17,12 @@ const saved = () => JSON.parse(fs.readFileSync(filePath, 'utf8'))
 describe('createMcpConfigStore', () => {
   it('creates safe defaults with a token and saves them', () => {
     const store = createMcpConfigStore({ filePath, randomBytes: bytesOf(1) })
-    expect(store.get()).toEqual({ enabled: false, port: 47521, alertLevel: 'danger', token: '01'.repeat(32) })
+    expect(store.get()).toEqual({ enabled: false, port: 47521, alertLevel: 'danger', token: '01'.repeat(32), transferRoots: [] })
     expect(saved().token).toBe('01'.repeat(32))
   })
 
   it('keeps valid stored values', () => {
-    const stored = { enabled: true, port: 50000, alertLevel: 'all', token: 'ab'.repeat(32) }
+    const stored = { enabled: true, port: 50000, alertLevel: 'all', token: 'ab'.repeat(32), transferRoots: [] }
     fs.writeFileSync(filePath, JSON.stringify(stored))
     expect(createMcpConfigStore({ filePath, randomBytes: bytesOf(1) }).get()).toEqual(stored)
   })
@@ -30,7 +30,7 @@ describe('createMcpConfigStore', () => {
   it('repairs invalid stored values', () => {
     fs.writeFileSync(filePath, JSON.stringify({ enabled: 'yes', port: 80, alertLevel: 'loud', token: 'short' }))
     expect(createMcpConfigStore({ filePath, randomBytes: bytesOf(2) }).get())
-      .toEqual({ enabled: false, port: 47521, alertLevel: 'danger', token: '02'.repeat(32) })
+      .toEqual({ enabled: false, port: 47521, alertLevel: 'danger', token: '02'.repeat(32), transferRoots: [] })
   })
 
   it('recovers from a corrupted file', () => {

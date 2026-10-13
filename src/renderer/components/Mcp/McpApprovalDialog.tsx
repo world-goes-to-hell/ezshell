@@ -4,6 +4,7 @@ import type { McpApprovalRequest } from '../../types'
 import { RISK_LABELS, revealHiddenChars, revealPath, secondsLeft } from '../../lib/mcpLabels'
 import { revealDiff } from '../../lib/mcpDiff'
 import { McpDiffView } from './McpDiffView'
+import { McpTransferFields } from './McpTransferFields'
 import { toast } from '../../stores/toastStore'
 import './Mcp.css'
 
@@ -15,6 +16,7 @@ const TICK_MS = 250
 const APPROVE_DELAY_MS = 800
 const COMMAND_HINT = 'Claude Code 가 요청한 명령입니다. 내용을 확인한 뒤 허용하세요. 응답하지 않으면 시간이 지나 자동으로 거부됩니다.'
 const FILE_HINT = 'Claude Code 가 요청한 파일 변경입니다. 허용하면 위 내용 그대로 서버의 파일에 씁니다. 응답하지 않으면 시간이 지나 자동으로 거부됩니다.'
+const TRANSFER_HINT = 'Claude Code 가 요청한 파일 전송입니다. 양쪽 경로와 방향을 확인한 뒤 허용하세요. 파일 내용은 여기에 표시되지 않습니다. 응답하지 않으면 시간이 지나 자동으로 거부됩니다.'
 const NO_CHANGE_HINT = 'Claude Code 가 보낸 내용이 지금 파일과 같습니다. 허용하면 파일은 그대로 두고, 내용이 같다는 사실만 알려 줍니다.'
 
 interface ApprovalContentProps {
@@ -29,6 +31,8 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
   const [shownAt] = useState(() => Date.now())
   // A file change (write_file / edit_file) shows what changes instead of a command
   const isFile = request.kind === 'file'
+  // A transfer (upload_file / download_file) shows both ends; there is no content to show
+  const isTransfer = request.kind === 'transfer'
   const hasDiff = isFile && (request.hunks?.length ?? 0) > 0
   // The whole change must have been on screen before it can be allowed
   const [hasSeenEnd, setHasSeenEnd] = useState(!hasDiff)
@@ -40,24 +44,33 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
   const cwd = request.cwd === null ? null : revealHiddenChars(request.cwd)
   const filePath = revealPath(request.path ?? '')
   const requestedPath = request.requestedPath && request.requestedPath !== request.path ? revealPath(request.requestedPath) : null
-  const hasHidden = isFile
-    ? filePath.hasHidden || requestedPath?.hasHidden === true || diff.hasHidden
-    : command.hasHidden || cwd?.hasHidden === true
+  const transferPaths = [request.localPath, request.requestedLocalPath, request.remotePath, request.requestedRemotePath]
+  const hasHiddenInTransfer = isTransfer && transferPaths.some(value => typeof value === 'string' && revealPath(value).hasHidden)
+  const hasHiddenInFile = filePath.hasHidden || requestedPath?.hasHidden === true || diff.hasHidden
+  const hasHiddenInCommand = command.hasHidden || cwd?.hasHidden === true
+  // Reasons quote paths (a server may answer with any text for one), so they are shown the same way
+  const reasons = request.reasons.map(reason => revealHiddenChars(reason))
+  const hasHiddenInReasons = reasons.some(reason => reason.hasHidden)
+  const hasHidden = hasHiddenInReasons || (isTransfer ? hasHiddenInTransfer : isFile ? hasHiddenInFile : hasHiddenInCommand)
   const isArmed = now - shownAt >= APPROVE_DELAY_MS
   const canApprove = isArmed && hasSeenEnd
   const changeKind = request.noChange ? '변경 없음' : request.isNew ? '새 파일' : '기존 파일 수정'
+  const title = isTransfer ? 'MCP 파일 전송 요청' : isFile ? 'MCP 파일 쓰기 요청' : 'MCP 명령 실행 요청'
+  const fileHint = request.noChange ? NO_CHANGE_HINT : FILE_HINT
+  const hint = isTransfer ? TRANSFER_HINT : isFile ? fileHint : COMMAND_HINT
+  const checkedThing = isTransfer ? '경로를' : isFile ? '변경 내용을' : '명령을'
 
   return (
     <Dialog.Content
       className={`modal-content mcp-approval${isFile ? ' mcp-approval-file' : ''}`}
-      aria-describedby={hasDiff ? 'mcp-approval-diff' : isFile ? 'mcp-approval-hint' : 'mcp-approval-command'}
+      aria-describedby={hasDiff ? 'mcp-approval-diff' : isFile || isTransfer ? 'mcp-approval-hint' : 'mcp-approval-command'}
       onOpenAutoFocus={(event) => {
         event.preventDefault()
         denyRef.current?.focus()
       }}
     >
       <div className="mcp-approval-header">
-        <Dialog.Title className="modal-title">{isFile ? 'MCP 파일 쓰기 요청' : 'MCP 명령 실행 요청'}</Dialog.Title>
+        <Dialog.Title className="modal-title">{title}</Dialog.Title>
         <span className="mcp-approval-timer">남은 시간 {remaining}초</span>
       </div>
       <dl className="mcp-approval-fields">
@@ -66,7 +79,7 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
           {request.sessionName}
           {request.folder && <span className="mcp-approval-folder"> ({request.folder})</span>}
         </dd>
-        {isFile ? (
+        {isTransfer ? <McpTransferFields request={request} /> : isFile ? (
           <>
             <dt>파일</dt>
             <dd>
@@ -105,18 +118,18 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
         <dt>위험도</dt>
         <dd>
           <span className={`mcp-risk mcp-risk-${request.level}`}>{RISK_LABELS[request.level] ?? request.level}</span>
-          {request.reasons.length > 0 && (
+          {reasons.length > 0 && (
             <ul className="mcp-approval-reasons">
-              {request.reasons.map((reason, index) => <li key={`${index}-${reason}`}>{reason}</li>)}
+              {reasons.map((reason, index) => <li key={`${index}-${reason.text}`}>{reason.text}</li>)}
             </ul>
           )}
         </dd>
       </dl>
       {hasDiff && <McpDiffView hunks={diff.hunks} id="mcp-approval-diff" onSeenEnd={markSeenEnd} />}
       {hasHidden && (
-        <p className="mcp-approval-warning" role="alert">보이지 않는 문자가 포함되어 있습니다. {isFile ? '변경 내용' : '명령'}을 꼼꼼히 확인하세요.</p>
+        <p className="mcp-approval-warning" role="alert">보이지 않는 문자가 포함되어 있습니다. {hasHiddenInReasons ? '위험도의 이유와 ' : ''}{checkedThing} 꼼꼼히 확인하세요.</p>
       )}
-      <p className="mcp-approval-hint" id="mcp-approval-hint">{!isFile ? COMMAND_HINT : request.noChange ? NO_CHANGE_HINT : FILE_HINT}</p>
+      <p className="mcp-approval-hint" id="mcp-approval-hint">{hint}</p>
       {!hasSeenEnd && <p className="mcp-approval-scroll-note">변경 내용을 끝까지 내려 본 뒤에 허용할 수 있습니다.</p>}
       <div className="mcp-approval-actions">
         <button ref={denyRef} type="button" className="btn-secondary" onClick={() => onRespond(false)}>거부</button>
@@ -126,7 +139,7 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
   )
 }
 
-/** "May Claude do this?" dialog for the commands and file changes the MCP server holds for approval */
+/** "May Claude do this?" dialog for the commands, file changes and file transfers the MCP server holds for approval */
 export function McpApprovalDialog() {
   const [request, setRequest] = useState<McpApprovalRequest | null>(null)
   const [now, setNow] = useState(() => Date.now())

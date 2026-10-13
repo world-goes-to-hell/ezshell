@@ -67,7 +67,12 @@ export interface McpConfig {
   port: number
   alertLevel: McpAlertLevel
   token: string
+  /** Folders on this PC the transfer tools (upload_file / download_file) may read and write */
+  transferRoots: string[]
 }
+
+/** Answer to adding a transfer folder: the folder comes from a dialog of the main process, which may be cancelled */
+export type McpTransferFolderResult = McpStatusResult | { success: false; cancelled: true }
 
 export interface McpStatus {
   config: McpConfig
@@ -100,8 +105,21 @@ export interface McpApprovalRequest {
   expiresAt: number
   /** Set when the command is started as a background job: it may run this long after being allowed */
   background?: { limitMinutes: number }
-  /** Set for write_file / edit_file: the dialog shows the change instead of a command */
-  kind?: 'file'
+  /**
+   * 'file' for write_file / edit_file: the dialog shows the change instead of a command.
+   * 'transfer' for upload_file / download_file: it shows both ends of the transfer.
+   */
+  kind?: 'file' | 'transfer'
+  /** Transfers only: which way the file goes */
+  direction?: 'upload' | 'download'
+  /** Transfers only: the real file on this PC, and what the tool asked for */
+  localPath?: string
+  requestedLocalPath?: string
+  /** Transfers only: the real file on the server (links resolved), and what the tool asked for */
+  remotePath?: string
+  requestedRemotePath?: string
+  /** Transfers only: bytes to be transferred */
+  size?: number
   /** The real file that will be written (links resolved) */
   path?: string
   /** What the tool asked for, when it differs from `path` */
@@ -363,6 +381,8 @@ declare global {
       mcpListActivity?: () => Promise<{ success: boolean; items: McpActivityItem[] }>
       mcpCancelActivity?: (id: string) => Promise<{ success: boolean }>
       mcpSetupClient?: (request: { scope: McpSetupScope; overwrite?: boolean; reuseDir?: boolean; setTokenEnv?: boolean }) => Promise<McpSetupResult>
+      mcpAddTransferFolder?: () => Promise<McpTransferFolderResult>
+      mcpRemoveTransferFolder?: (path: string) => Promise<McpStatusResult>
       sessionLogStart?: (sessionId: string, name: string) => Promise<SessionLogResult>
       sessionLogStop?: (sessionId: string) => Promise<SessionLogResult>
       sessionLogList?: () => Promise<{ success: boolean; items: Array<{ sessionId: string; filePath: string }> }>

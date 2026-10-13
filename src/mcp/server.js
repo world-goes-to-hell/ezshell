@@ -24,6 +24,8 @@ const DESCRIPTIONS = {
   runCommand: '세션 서버에서 셸 명령을 실행하고 종료 코드와 출력을 돌려줍니다. 30초 제한, 출력 64KB 제한이 있습니다. 30초를 넘길 명령(빌드, 설치, 테스트 등)은 background: true 로 시작하세요. 그러면 작업 ID 를 바로 돌려주고, 출력과 종료 상태는 job_output 으로 읽습니다. 명령 끝에 & 를 붙이거나 nohup 을 쓰지 마세요. 서버 상태를 바꾸는 명령은 사용자가 앱에서 승인해야 실행되고, 시스템 종료·루트 삭제 같은 명령은 항상 차단됩니다. 가능하면 조회 명령을 쓰세요.',
   jobOutput: 'run_command 의 background: true 로 시작한 작업의 상태, 종료 코드, 그리고 지난번 호출 뒤로 새로 나온 출력을 돌려줍니다(stdout 과 stderr 를 나온 순서대로 합친 것). 작업이 실행 중이면 끝나기를 wait_seconds 만큼 기다린 뒤 그동안 나온 출력을 모아서 돌려주므로, 짧은 간격으로 여러 번 부르지 말고 wait_seconds 를 넉넉히 주세요. 기다리지 않으려면 0 을 주세요. 한 번에 64KB 까지 주므로 읽지 않은 출력이 더 있다는 안내가 있으면 다시 호출하세요. 작업마다 마지막 1MB 까지만 보관합니다.',
   stopJob: '백그라운드 작업을 중지하고 마지막 상태를 돌려줍니다. 이미 끝난 작업이면 그 상태를 그대로 돌려줍니다.',
+  uploadFile: '이 PC 의 파일 하나를 세션 서버에 올립니다. 바이너리도 되고 1GB 까지입니다. local_path 는 앱의 설정 > MCP 에 등록된 "파일 전송 허용 폴더" 안의 절대 경로여야 합니다(등록된 폴더가 없으면 쓸 수 없고, 폴더는 사용자가 앱에서만 등록할 수 있습니다). 사용자가 앱에서 양쪽 경로와 크기를 보고 허용해야 전송되며, 최대 60초 기다립니다. 서버에 같은 이름의 파일이 있으면 overwrite: true 가 있어야 덮어씁니다. 전송은 임시 파일에 쓴 뒤 이름을 바꾸므로 실패하거나 중지해도 원래 파일은 그대로입니다. 20초 안에 끝나면 결과(크기, SHA-256)를, 아니면 작업 ID 를 돌려주며 진행과 결과는 job_output, 중지는 stop_job 으로 합니다. 폴더는 전송할 수 없으니 필요하면 tar 로 묶으세요. 작은 텍스트 파일을 만들거나 고칠 때는 write_file, edit_file 을 쓰세요.',
+  downloadFile: '세션 서버의 파일 하나를 이 PC 에 내려받습니다. 바이너리도 되고 1GB 까지입니다. local_path 는 앱의 설정 > MCP 에 등록된 "파일 전송 허용 폴더" 안의 절대 경로여야 합니다. 사용자가 앱에서 양쪽 경로와 크기를 보고 허용해야 전송되며, 최대 60초 기다립니다. PC 에 같은 이름의 파일이 있으면 overwrite: true 가 있어야 덮어씁니다. 20초 안에 끝나면 결과(크기, SHA-256)를, 아니면 작업 ID 를 돌려주며 진행과 결과는 job_output, 중지는 stop_job 으로 합니다. 내려받은 파일은 열거나 실행하지 않습니다.',
   listJobs: '백그라운드 작업 목록(작업 ID, 세션, 명령, 상태, 경과 시간)을 돌려줍니다. 작업 ID 를 잊었을 때 쓰세요. 작업과 출력은 앱의 메모리에만 있어서, 앱을 잠그거나 종료하면 실행 중인 작업이 모두 중지되고 목록이 지워집니다.'
 }
 
@@ -135,6 +137,16 @@ function buildMcpServer(handlers, { version, signal }) {
       replace_all: z.boolean().optional().describe('old_string 이 나오는 모든 곳을 바꿉니다 (기본: 한 곳만, 여러 번 나오면 오류)')
     }
   }, async (args, extra) => safely(() => handlers.editFile(args, { signal: signalFor(extra) })))
+  const transferArgs = {
+    session: sessionArg,
+    local_path: z.string().min(1).max(MAX_PATH_LENGTH).describe('이 PC 의 파일 경로. 절대 경로이고, 앱에 등록된 파일 전송 허용 폴더 안이어야 합니다 (예: C:\\work\\dist\\app.jar)'),
+    remote_path: z.string().min(1).max(MAX_PATH_LENGTH).describe('서버의 파일 경로 (절대 경로, ~/로 시작하는 경로, 또는 현재 작업 디렉터리 기준 상대 경로). 폴더가 아니라 파일 이름까지 지정합니다'),
+    overwrite: z.boolean().optional().describe('받는 쪽에 같은 이름의 파일이 있을 때 덮어씁니다 (기본: 덮어쓰지 않고 오류)')
+  }
+  server.registerTool('upload_file', { description: DESCRIPTIONS.uploadFile, inputSchema: transferArgs },
+    async (args, extra) => safely(() => handlers.uploadFile(args, { signal: signalFor(extra) })))
+  server.registerTool('download_file', { description: DESCRIPTIONS.downloadFile, inputSchema: transferArgs },
+    async (args, extra) => safely(() => handlers.downloadFile(args, { signal: signalFor(extra) })))
   return server
 }
 
