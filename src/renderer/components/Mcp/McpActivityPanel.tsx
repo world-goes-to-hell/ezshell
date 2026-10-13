@@ -5,6 +5,7 @@ import { useMcpActivityStore } from '../../stores/mcpActivityStore'
 import type { McpActivityView } from '../../stores/mcpActivityStore'
 import { ACTIVITY_STATE_LABELS, formatClock, formatElapsed, isActiveState } from '../../lib/mcpActivity'
 import { RISK_LABELS, revealHiddenChars } from '../../lib/mcpLabels'
+import { McpActivityLanes } from './McpActivityLanes'
 import { McpActivityTerminal } from './McpActivityTerminal'
 import { stopMcpRequest } from './stopMcpRequest'
 import './Mcp.css'
@@ -12,7 +13,8 @@ import './Mcp.css'
 const TICK_MS = 1000
 const VIEWS: ReadonlyArray<{ id: McpActivityView; label: string }> = [
   { id: 'list', label: '목록' },
-  { id: 'terminal', label: '터미널' }
+  { id: 'terminal', label: '터미널' },
+  { id: 'lanes', label: '서버별' }
 ]
 
 function ActivityRow({ item, now }: { item: McpActivityItem; now: number }) {
@@ -120,6 +122,8 @@ export function McpActivityPanel() {
         <p className="mcp-activity-empty">아직 MCP 요청이 없습니다.</p>
       ) : view === 'terminal' ? (
         <McpActivityTerminal items={items} now={now} />
+      ) : view === 'lanes' ? (
+        <McpActivityLanes items={items} now={now} />
       ) : (
         <ul className="mcp-activity-list">
           {items.map(item => <ActivityRow key={item.id} item={item} now={now} />)}

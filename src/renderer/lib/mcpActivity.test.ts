@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { McpActivityItem } from '../types'
-import { ACTIVITY_STATE_LABELS, MAX_ACTIVITY, appendOutputParts, cleanTerminalText, countActive, formatClock, formatDuration, formatElapsed, hasRun, isActiveState, mergeSnapshot, upsertActivity } from './mcpActivity'
+import { ACTIVITY_STATE_LABELS, MAX_ACTIVITY, appendOutputParts, cleanTerminalText, countActive, formatClock, formatDuration, formatElapsed, groupBySession, hasRun, isActiveState, mergeSnapshot, upsertActivity } from './mcpActivity'
 
 const item = (id: string, startedAt: number, state: McpActivityItem['state'] = 'running'): McpActivityItem => ({
   id, time: 't', sessionId: 's', sessionName: 'dev', command: 'ls', level: 'low', reasons: [], state, startedAt, finishedAt: null
@@ -123,5 +123,40 @@ describe('mcpActivity', () => {
   it('shows an unreadable timestamp as it is', () => {
     expect(formatClock('not a date')).toBe('not a date')
     expect(formatClock('2026-10-02T01:02:03')).toBe('01:02:03')
+  })
+})
+
+describe('groupBySession', () => {
+  const on = (sessionId: string, id: string, startedAt: number, state: McpActivityItem['state'] = 'done', sessionName = sessionId): McpActivityItem => ({
+    ...item(id, startedAt, state), sessionId, sessionName
+  })
+
+  it('returns nothing for an empty list', () => {
+    expect(groupBySession([])).toEqual([])
+  })
+
+  it('groups by session with the oldest request first inside a lane', () => {
+    const lanes = groupBySession([on('web', 'c', 3), on('db', 'b', 2), on('web', 'a', 1)])
+    expect(lanes.map(lane => lane.sessionId)).toEqual(['web', 'db'])
+    expect(lanes[0].items.map(entry => entry.id)).toEqual(['a', 'c'])
+    expect(lanes[1].items.map(entry => entry.id)).toEqual(['b'])
+  })
+
+  it('orders lanes by their oldest request, so a new request does not move them', () => {
+    const before = groupBySession([on('db', 'b', 2), on('web', 'a', 1)])
+    const after = groupBySession([on('db', 'c', 3), on('db', 'b', 2), on('web', 'a', 1)])
+    expect(before.map(lane => lane.sessionId)).toEqual(['web', 'db'])
+    expect(after.map(lane => lane.sessionId)).toEqual(['web', 'db'])
+  })
+
+  it('names a lane after its most recent request', () => {
+    const [lane] = groupBySession([on('web', 'b', 2, 'done', 'web-new'), on('web', 'a', 1, 'done', 'web-old')])
+    expect(lane.sessionName).toBe('web-new')
+  })
+
+  it('counts waiting and running requests per lane', () => {
+    const lanes = groupBySession([on('web', 'c', 3, 'running'), on('web', 'b', 2, 'waiting'), on('db', 'a', 1)])
+    expect(lanes.find(lane => lane.sessionId === 'web')).toMatchObject({ waiting: 1, running: 1 })
+    expect(lanes.find(lane => lane.sessionId === 'db')).toMatchObject({ waiting: 0, running: 0 })
   })
 })

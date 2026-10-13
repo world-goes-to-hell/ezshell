@@ -22,7 +22,7 @@ function statusText(item: McpActivityItem, now: number): string {
 }
 
 /** One request: a prompt line, what the command printed, then how it ended. */
-const TerminalEntry = memo(function TerminalEntry({ item, now }: { item: McpActivityItem; now: number }) {
+export const TerminalEntry = memo(function TerminalEntry({ item, now }: { item: McpActivityItem; now: number }) {
   const active = isActiveState(item.state)
   const command = revealHiddenChars(item.command).text
   const parts = item.outputParts ?? []
@@ -64,22 +64,29 @@ const TerminalEntry = memo(function TerminalEntry({ item, now }: { item: McpActi
   )
 })
 
-/** Every MCP request as one continuous, read-only log: oldest at the top, newest at the bottom. */
-export function McpActivityTerminal({ items, now }: { items: McpActivityItem[]; now: number }) {
-  const scrollRef = useRef<HTMLOListElement>(null)
+/** Keeps a scrolling log at its bottom as `content` changes, until the user scrolls up to read. */
+export function useFollowBottom<T extends HTMLElement>(content: unknown) {
+  const scrollRef = useRef<T>(null)
   const isFollowing = useRef(true)
-  const oldestFirst = useMemo(() => [...items].reverse(), [items])
 
   useLayoutEffect(() => {
     const element = scrollRef.current
     if (element && isFollowing.current) element.scrollTop = element.scrollHeight
-  }, [items])
+  }, [content])
 
   const onScroll = () => {
     const element = scrollRef.current
     if (!element) return
     isFollowing.current = element.scrollHeight - element.scrollTop - element.clientHeight <= FOLLOW_THRESHOLD_PX
   }
+
+  return { scrollRef, onScroll }
+}
+
+/** Every MCP request as one continuous, read-only log: oldest at the top, newest at the bottom. */
+export function McpActivityTerminal({ items, now }: { items: McpActivityItem[]; now: number }) {
+  const { scrollRef, onScroll } = useFollowBottom<HTMLOListElement>(items)
+  const oldestFirst = useMemo(() => [...items].reverse(), [items])
 
   return (
     <ol className="mcp-term" ref={scrollRef} onScroll={onScroll} aria-label="MCP 명령 기록" aria-live="off" tabIndex={0}>

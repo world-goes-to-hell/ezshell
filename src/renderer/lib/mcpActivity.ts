@@ -115,6 +115,35 @@ export function countActive(list: McpActivityItem[]): { waiting: number; running
   }
 }
 
+/** The requests of one session, for the per-server view */
+export interface McpActivityLane {
+  sessionId: string
+  /** Name on the most recent request (the session may have been renamed since the first one) */
+  sessionName: string
+  /** Oldest first, the order the terminal view reads in */
+  items: McpActivityItem[]
+  waiting: number
+  running: number
+}
+
+/**
+ * One lane per session. Lanes are ordered by their oldest request, so a lane keeps its place
+ * while new requests arrive.
+ */
+export function groupBySession(list: McpActivityItem[]): McpActivityLane[] {
+  const oldestFirst = [...list].sort((a, b) => a.startedAt - b.startedAt)
+  const bySession = oldestFirst.reduce<Map<string, McpActivityItem[]>>(
+    (map, item) => new Map(map).set(item.sessionId, [...(map.get(item.sessionId) ?? []), item]),
+    new Map()
+  )
+  return [...bySession].map(([sessionId, items]) => ({
+    sessionId,
+    sessionName: items[items.length - 1].sessionName,
+    items,
+    ...countActive(items)
+  }))
+}
+
 export function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000))
   const minutes = Math.floor(seconds / 60)

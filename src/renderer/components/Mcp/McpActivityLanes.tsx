@@ -1,0 +1,57 @@
+import { useId, useMemo, useState } from 'react'
+import type { McpActivityItem } from '../../types'
+import { groupBySession, isActiveState } from '../../lib/mcpActivity'
+import type { McpActivityLane } from '../../lib/mcpActivity'
+import { TerminalEntry, useFollowBottom } from './McpActivityTerminal'
+
+/** One session's requests as its own log, with its own scroll position. */
+function Lane({ lane, now }: { lane: McpActivityLane; now: number }) {
+  const { scrollRef, onScroll } = useFollowBottom<HTMLOListElement>(lane.items)
+  const isActive = lane.waiting + lane.running > 0
+  const titleId = useId()
+
+  return (
+    <section className={`mcp-lane${isActive ? ' is-active' : ''}`} aria-labelledby={titleId}>
+      <header className="mcp-lane-header">
+        <h3 className="mcp-lane-title" id={titleId} title={lane.sessionName}>{lane.sessionName}</h3>
+        <span className="mcp-lane-counts">
+          {lane.waiting > 0 && <span className="mcp-lane-count mcp-lane-count-waiting">확인 대기 {lane.waiting}</span>}
+          {lane.running > 0 && <span className="mcp-lane-count mcp-lane-count-running">실행 중 {lane.running}</span>}
+          {!isActive && <span className="mcp-lane-count">요청 {lane.items.length}개</span>}
+        </span>
+      </header>
+      <ol className="mcp-term mcp-lane-log" ref={scrollRef} onScroll={onScroll} aria-label={`${lane.sessionName} 명령 기록`} aria-live="off" tabIndex={0}>
+        {lane.items.map(item => (
+          // Finished entries get a constant `now`, so the one-second tick re-renders only the active ones
+          <TerminalEntry key={item.id} item={item} now={isActiveState(item.state) ? now : 0} />
+        ))}
+      </ol>
+    </section>
+  )
+}
+
+/** Every MCP request, split into one area per session so that work on several servers does not interleave. */
+export function McpActivityLanes({ items, now }: { items: McpActivityItem[]; now: number }) {
+  const [isActiveOnly, setIsActiveOnly] = useState(false)
+  const lanes = useMemo(() => groupBySession(items), [items])
+  const shown = isActiveOnly ? lanes.filter(lane => lane.waiting + lane.running > 0) : lanes
+
+  return (
+    <div className="mcp-lanes">
+      <div className="mcp-lanes-bar">
+        <span>서버 {lanes.length}곳{isActiveOnly && ` 중 ${shown.length}곳 작업 중`}</span>
+        <label className="mcp-lanes-filter">
+          <input type="checkbox" checked={isActiveOnly} onChange={event => setIsActiveOnly(event.target.checked)} />
+          <span>작업 중만</span>
+        </label>
+      </div>
+      {shown.length === 0 ? (
+        <p className="mcp-activity-empty">지금 작업 중인 서버가 없습니다.</p>
+      ) : (
+        <div className="mcp-lanes-grid">
+          {shown.map(lane => <Lane key={lane.sessionId} lane={lane} now={now} />)}
+        </div>
+      )}
+    </div>
+  )
+}

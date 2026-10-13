@@ -2,8 +2,8 @@ import { create } from 'zustand'
 import type { McpActivityItem, McpOutputPart } from '../types'
 import { appendOutputParts, mergeSnapshot, upsertActivity } from '../lib/mcpActivity'
 
-/** How the activity panel shows requests: a list to expand, or one continuous terminal-like log */
-export type McpActivityView = 'list' | 'terminal'
+/** How the activity panel shows requests: a list to expand, one continuous terminal-like log, or one such log per session */
+export type McpActivityView = 'list' | 'terminal' | 'lanes'
 
 interface McpActivityState {
   items: McpActivityItem[]
