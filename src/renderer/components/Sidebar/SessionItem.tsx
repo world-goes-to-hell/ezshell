@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { RiServerFill, RiDatabase2Fill, RiCloudFill, RiGlobalFill, RiHomeFill, RiComputerFill, RiHardDriveFill, RiCpuFill, RiBaseStationFill } from 'react-icons/ri'
+import { RiServerFill, RiDatabase2Fill, RiCloudFill, RiGlobalFill, RiHomeFill, RiComputerFill, RiHardDriveFill, RiCpuFill, RiBaseStationFill, RiPlugLine } from 'react-icons/ri'
 import type { Session } from '../../stores/sessionStore'
 import { SessionIcon } from '../Modal/ConnectModal'
 import { SessionTooltip } from './SessionTooltip'
@@ -7,6 +7,9 @@ import { SessionTabBadge } from './SessionTabBadge'
 import type { DropPosition } from '../../lib/sessionOrder'
 import type { SessionTabGroup } from '../../lib/sessionTabs'
 import { getAbbreviation } from '../../lib/sessionAbbreviation'
+import './SessionMcpMark.css'
+
+const MCP_MARK_LABEL = 'Claude Code(MCP) 접근 허용됨'
 
 const ICON_MAP: Record<SessionIcon, typeof RiServerFill> = {
   'server': RiServerFill,
@@ -67,6 +70,18 @@ export function SessionItem({
       <SessionTabBadge status="disconnected" tabs={tabs.disconnected} />
     </div>
   )
+  // The icon-only sidebar says it in the hover card instead of a native title, which would open on top of it
+  const mcpMark = session.mcpEnabled === true && (
+    <span
+      className="session-mcp-mark"
+      title={isCompact ? undefined : MCP_MARK_LABEL}
+      role={isCompact ? undefined : 'img'}
+      aria-label={isCompact ? undefined : MCP_MARK_LABEL}
+      aria-hidden={isCompact || undefined}
+    >
+      <RiPlugLine size={isCompact ? 10 : 12} />
+    </span>
+  )
   const iconId = (session.icon as SessionIcon) || DEFAULT_ICON
   const IconComponent = ICON_MAP[iconId] || RiServerFill
   const displayName = session.name || session.host
@@ -111,10 +126,12 @@ export function SessionItem({
             : <IconComponent size={isCompact ? 18 : 16} />}
           {/* Icon-only sidebar: the badges sit on the tile corners */}
           {isCompact && tabBadges}
+          {isCompact && mcpMark}
         </div>
         {!isCompact && (
           <span className="session-name">{displayName}</span>
         )}
+        {!isCompact && mcpMark}
         {!isCompact && tabBadges}
       </motion.div>
     </SessionTooltip>

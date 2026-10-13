@@ -40,9 +40,10 @@ export function SessionTooltip({ session, tabs, enabled, children }: SessionTool
             <div className="session-tooltip-address">
               {session.username}@{session.host}{port !== DEFAULT_SSH_PORT ? `:${port}` : ''}
             </div>
-            {(folderName || tabs) && (
+            {(folderName || tabs || session.mcpEnabled === true) && (
               <div className="session-tooltip-meta">
                 {folderName && <span>폴더: {folderName}</span>}
+                {session.mcpEnabled === true && <span className="session-tooltip-mcp">MCP 접근 허용</span>}
                 {connectedCount > 0 && (
                   <span className="session-tooltip-connected">{badgeLabel('connected', connectedCount)}</span>
                 )}

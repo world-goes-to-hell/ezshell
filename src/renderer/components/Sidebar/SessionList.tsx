@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useSessionStore, Folder, Session } from '../../stores/sessionStore'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { groupTabsBySession } from '../../lib/sessionTabs'
-import { RiFolderFill, RiArrowDownSFill, RiArrowRightSFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiCloseLine, RiPaletteLine, RiAddLine, RiFileCopyLine, RiServerLine } from 'react-icons/ri'
+import { RiFolderFill, RiArrowDownSFill, RiArrowRightSFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiCloseLine, RiPaletteLine, RiAddLine, RiFileCopyLine, RiServerLine, RiPlugLine, RiCheckLine } from 'react-icons/ri'
 import { collapseVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { MoveToFolderSubmenu } from './MoveToFolderSubmenu'
@@ -381,6 +381,16 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
     setContextMenu(prev => ({ ...prev, visible: false }))
   }
 
+  // Same flag as the checkbox in the edit dialog's advanced settings. Saving goes through
+  // save-sessions, so main drops this session's MCP connection and jobs when it is turned off.
+  const handleToggleMcpAccess = () => {
+    const session = sessions.find(s => s.id === contextMenu.targetId)
+    setContextMenu(prev => ({ ...prev, visible: false }))
+    if (!session) return
+    updateSession(session.id, { mcpEnabled: session.mcpEnabled !== true })
+    saveToBackend()
+  }
+
   const handleDeleteSession = async () => {
     const sessionId = contextMenu.targetId
     if (!sessionId) return
@@ -454,6 +464,9 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
     const session = sessions.find(s => s.id === contextMenu.targetId)
     return session?.folderId
   }
+
+  const isMcpAllowedForMenuTarget = contextMenu.type === 'session'
+    && sessions.find(s => s.id === contextMenu.targetId)?.mcpEnabled === true
 
   // Recursive folder renderer
   const renderFolder = (folder: Folder, depth: number = 0) => {
@@ -762,6 +775,17 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
                 currentFolderId={getCurrentSessionFolder()}
                 onMove={handleMoveToFolder}
               />
+              <div className="context-menu-divider" />
+              <div
+                className="context-menu-item"
+                role="menuitemcheckbox"
+                aria-checked={isMcpAllowedForMenuTarget}
+                onClick={handleToggleMcpAccess}
+              >
+                <RiPlugLine size={16} />
+                <span>MCP 접근 허용</span>
+                {isMcpAllowedForMenuTarget && <RiCheckLine size={16} className="context-menu-check" />}
+              </div>
               <div className="context-menu-divider" />
               <div className="context-menu-item danger" onClick={handleDeleteSession}>
                 <RiDeleteBinLine size={16} />

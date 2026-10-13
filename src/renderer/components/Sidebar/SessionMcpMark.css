@@ -1,0 +1,30 @@
+/* Marks a session Claude Code may reach through the MCP server. Uses --info so it does not read as
+   connection state (green / red belong to the tab badges). */
+.session-mcp-mark {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--info) 16%, transparent);
+  color: var(--info);
+}
+
+/* Icon-only sidebar: the top corners hold the tab badges, so the mark takes the bottom right one */
+.sidebar.compact .session-mcp-mark {
+  position: absolute;
+  right: -5px;
+  bottom: -4px;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--info);
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  pointer-events: none;
+}
+
+.session-tooltip-mcp {
+  color: var(--info);
+}

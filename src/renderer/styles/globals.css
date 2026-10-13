@@ -2251,6 +2251,12 @@ textarea {
   background: color-mix(in srgb, var(--error) 10%, transparent);
 }
 
+/* Check mark of a toggle item, pushed to the right edge */
+.context-menu-check {
+  margin-left: auto;
+  color: var(--accent);
+}
+
 .context-menu-divider {
   height: 1px;
   background: var(--border);

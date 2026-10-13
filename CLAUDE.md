@@ -115,7 +115,7 @@ exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다
 
 ### MCP Server (Claude Code)
 `src/mcp/` 에 로컬 MCP 서버가 있다. 설정 > MCP 에서 켜면 `127.0.0.1:<포트>/mcp` (Streamable HTTP, stateless) 로 열린다.
-- 도구: `list_sessions`, `cd`, `run_command`, `write_file`, `edit_file`, `job_output`, `stop_job`, `list_jobs`. 세션 편집 > 고급 설정의 "MCP 접근 허용"(`mcpEnabled`)을 켠 세션만 보인다.
+- 도구: `list_sessions`, `cd`, `run_command`, `write_file`, `edit_file`, `job_output`, `stop_job`, `list_jobs`. 세션 편집 > 고급 설정의 "MCP 접근 허용"(`mcpEnabled`)을 켠 세션만 보인다. 사이드바 세션 우클릭 메뉴의 `MCP 접근 허용` 으로도 같은 값을 켜고 끄며, 켠 세션은 목록에 플러그 표지(`.session-mcp-mark`)가 붙는다.
 - 파일 쓰기(`write_file`, `edit_file`, `fileTools.js`)는 셸을 거치지 않고 SFTP 로 한다. 알림 수준과 무관하게 항상 확인 창을 띄우고, 창에는 명령 대신 변경 내용(diff)과 실제 경로(심볼릭 링크를 푼 경로)를 보여 준다. 제한 시간은 180초. 허용한 뒤 파일이 확인 창에 보여 준 내용과 달라졌으면 쓰지 않는다(`remoteFile.js` 의 `writeIfUnchanged`). 기존 파일은 같은 파일에 덮어써서 소유자·권한을 유지하고, 실패하면 이전 내용으로 되돌린다. 256KB·10,000줄 이하 UTF-8 텍스트만, 접속 계정 권한으로만 쓴다. 감사 로그에는 도구 이름, 경로, 승인 여부, 내용의 SHA-256 만 남고 내용은 남지 않는다. 설계와 보안 검토 반영: `docs/plan/2026-10-02-mcp-file-tools-design.md`.
   - 바꾸면 안 되는 것: 덮어쓰기는 파일을 `r+` 로 한 번 열어 그 핸들의 내용을 비교하고 같은 핸들에 쓴다 (경로를 다시 여는 방식으로 바꾸면 그 사이에 링크로 바뀐 경로를 따라간다). 읽기는 핸들에서 256KB+1 까지만 한다 (`readFile` 은 크기 0 으로 보이는 파일을 끝없이 읽는다). `/proc`, `/sys`, `/dev` 는 거부한다.
   - diff 계산(`fileEdit.js`)은 300ms 제한이 있고, 넘으면 전체 교체로 표시한다. 제한을 없애면 줄이 많은 입력에 main 프로세스가 멈춘다.
