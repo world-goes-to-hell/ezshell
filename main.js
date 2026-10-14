@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification } 
 const path = require('path');
 const fs = require('fs');
 const userDataDir = require('./src/userDataDir.js');
+const navigationGuard = require('./src/navigationGuard.js');
 
 // The app was renamed from my-ssh-client to ezshell. Keep the old user data folder (sessions,
 // master password, settings, theme) when it exists. Must run before anything reads userData.
@@ -158,6 +159,7 @@ function createWindow() {
   }
 
   // Disable Electron's built-in zoom, use IPC for terminal-only font size control
+      sandbox: true,
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.control && !input.alt && !input.meta) {
       if (input.key === '=' || input.key === '+') {
@@ -253,6 +255,18 @@ const sftpWindows = new Map();
 function createSftpWindow(sessionId, localPath, remotePath, title) {
   const sftpWindow = new BrowserWindow({
     icon: WINDOW_ICON,
+// Windows show only the app's own page: no navigation elsewhere, no new windows, no webviews.
+app.on('web-contents-created', (event, contents) => {
+  const devUrls = [
+    process.env.ELECTRON_RENDERER_URL,
+    process.argv.includes('--dev') ? DEV_RENDERER_URL : null
+  ].filter(Boolean);
+  navigationGuard.guardWebContents(contents, {
+    rendererFile: path.join(__dirname, '../renderer/index.html'),
+    devUrls
+  });
+});
+
     width: 900,
     height: 600,
     minWidth: 600,
@@ -278,6 +292,7 @@ function createSftpWindow(sessionId, localPath, remotePath, title) {
   if (process.env.ELECTRON_RENDERER_URL) {
     sftpWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${params.toString()}`)
   } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
+      sandbox: true,
     sftpWindow.loadURL(`${DEV_RENDERER_URL}?${params.toString()}`)
   } else {
     sftpWindow.loadFile(path.join(__dirname, '../renderer/index.html'), {
@@ -329,6 +344,7 @@ function createTerminalWindow(sessionId, title) {
     terminalWindow.loadURL(`${DEV_RENDERER_URL}?${params.toString()}`)
   } else {
     terminalWindow.loadFile(path.join(__dirname, '../renderer/index.html'), {
+      sandbox: true,
       // Same encoding as the dev URL above: the renderer decodes the title once more
       query: { terminalMode: 'true', sessionId, title: encodeURIComponent(title || sessionId) }
     })
