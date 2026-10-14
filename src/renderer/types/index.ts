@@ -94,6 +94,17 @@ export interface McpDiffHunk {
   lines: McpDiffLine[]
 }
 
+/** Question from main about an SSH host key that is not saved yet ('unknown') or differs from the saved one ('changed') */
+export interface HostKeyPrompt {
+  id: string
+  status: 'unknown' | 'changed'
+  host: string
+  port: number
+  keyType: string
+  fingerprint: string
+  previous?: { keyType: string; fingerprint: string }
+}
+
 export interface McpApprovalRequest {
   id: string
   sessionName: string
@@ -218,6 +229,11 @@ export interface McpSetupOutcome {
   backupPath: string | null
   /** Projects in ~/.claude.json whose own registration of the same name wins over the global one */
   shadowedProjects: string[]
+  /** Old names of the server whose entries were removed from the file in the same write */
+  renamedFrom?: string[]
+  /** The old name, and the projects in ~/.claude.json that still register the server under it */
+  legacyName?: string
+  legacyProjects?: string[]
   existingUrl?: string
   tokenEnv: 'set' | 'unsupported' | 'failed' | null
   tokenEnvError: string | null
@@ -229,11 +245,6 @@ export type McpSetupResult =
 
 // Extend Window interface for electronAPI
 declare global {
-  /** Old names of the server whose entries were removed from the file in the same write */
-  renamedFrom?: string[]
-  /** The old name, and the projects in ~/.claude.json that still register the server under it */
-  legacyName?: string
-  legacyProjects?: string[]
   interface Window {
     electronAPI: {
       // Window controls
@@ -397,6 +408,9 @@ declare global {
       onMcpActivityOutput?: (callback: (payload: McpActivityOutput) => void) => () => void
       onMcpApprovalRequest?: (callback: (request: McpApprovalRequest) => void) => () => void
       onMcpApprovalDismiss?: (callback: (payload: { id: string }) => void) => () => void
+      onHostKeyPrompt?: (callback: (request: HostKeyPrompt) => void) => () => void
+      onHostKeyDismiss?: (callback: (payload: { id: string }) => void) => () => void
+      respondHostKey?: (id: string, decision: 'trust' | 'reject') => void
       getAppZoomFactor?: () => number
       setAppZoomFactor?: (factor: number) => void
     }

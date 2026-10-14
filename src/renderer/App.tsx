@@ -41,6 +41,7 @@ import { tabVariants } from './lib/animation/variants'
 import { useReducedMotion } from './hooks/useReducedMotion'
 import { SPRINGS } from './lib/animation/config'
 import { ConfirmDialogHost } from './components/Modal/ConfirmDialogHost'
+import { HostKeyDialog } from './components/Modal/HostKeyDialog'
 import { useSessionLogStore } from './stores/sessionLogStore'
 import { useSessionLogFeed } from './hooks/useSessionLogFeed'
 import { openSessionLogFolder, toggleSessionLog } from './lib/sessionLogActions'
@@ -1122,6 +1123,7 @@ function App() {
       <Footer />
       <McpApprovalDialog />
       <ConfirmDialogHost />
+      <HostKeyDialog />
 
       <ConnectModal
         open={connectModalOpen}

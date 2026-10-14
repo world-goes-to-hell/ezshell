@@ -284,5 +284,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (event, payload) => callback(payload);
     ipcRenderer.on('mcp-approval-dismiss', handler);
     return () => ipcRenderer.removeListener('mcp-approval-dismiss', handler);
-  }
+  },
+
+  // SSH host key check: main asks, the window answers with the request id and 'trust' | 'reject'
+  onHostKeyPrompt: (callback) => {
+    const handler = (event, request) => callback(request);
+    ipcRenderer.on('host-key-prompt', handler);
+    return () => ipcRenderer.removeListener('host-key-prompt', handler);
+  },
+  onHostKeyDismiss: (callback) => {
+    const handler = (event, payload) => callback(payload);
+    ipcRenderer.on('host-key-dismiss', handler);
+    return () => ipcRenderer.removeListener('host-key-dismiss', handler);
+  },
+  respondHostKey: (id, decision) => ipcRenderer.send('host-key-respond', { id, decision })
 });

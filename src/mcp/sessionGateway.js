@@ -6,6 +6,11 @@ const { buildOptions, describeSshError } = require('../sshConnectionTest.js')
 const { shellQuote, quoteCdTarget } = require('./shellQuote.js')
 const { GatewayError, createReporter, ANSI_PATTERN, CLOSE_GRACE_MS, CANCELLED_MESSAGE, DROPPED_MESSAGE, OPEN_FAILED_MESSAGE } = require('./gatewayShared.js')
 const { openJobChannel, PID_LINE, DEFAULT_MAX_JOB_OUTPUT_BYTES } = require('./jobChannel.js')
+const { withHostKeyCheck, isHostKeyError, hostKeyMessage } = require('../hostKeys/hostKeyCheck.js')
+const { describeHostKey } = require('../hostKeys/hostKeyStore.js')
+
+/** Used when no host key store is given: every server counts as unchecked, so nothing connects */
+const REFUSE_ALL_HOST_KEYS = { check: (host, port, key) => ({ status: 'unknown', ...describeHostKey(key) }), trust: () => {} }
 
 const DEFAULT_IDLE_MS = 5 * 60 * 1000
 const DEFAULT_EXEC_TIMEOUT_MS = 30 * 1000
@@ -73,7 +78,8 @@ function createSessionGateway({
   writeTimeoutMs = DEFAULT_WRITE_TIMEOUT_MS,
   maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES,
   maxJobOutputBytes = DEFAULT_MAX_JOB_OUTPUT_BYTES,
-  jobPidWaitMs
+  jobPidWaitMs,
+  hostKeys = REFUSE_ALL_HOST_KEYS
 } = {}) {
   const entries = new Map()
   /** Working directory per session id; kept across reconnects, idle drops and closeAll() */
@@ -91,6 +97,15 @@ function createSessionGateway({
     } catch (err) {
       return Promise.reject(new GatewayError(err.userMessage || '접속 정보를 읽지 못했습니다.', err.detail))
     }
+    // Nobody may be at the app to confirm a key, so a key that is not saved is refused without asking.
+    return withHostKeyCheck({ store: hostKeys }, (verifierFor) => connectOnce(options, verifierFor)).catch((err) => {
+      if (!isHostKeyError(err)) throw err
+      const { error, hint } = hostKeyMessage(err)
+      throw new GatewayError(`${error} ${hint}`)
+    })
+  }
+
+  function connectOnce(options, verifierFor) {
     return new Promise((resolve, reject) => {
       const clients = []
       let settled = false
@@ -109,7 +124,8 @@ function createSessionGateway({
           resolve({ client, clients })
         })
         client.on('error', fail)
-        client.connect({ ...KEEPALIVE_OPTIONS, ...options.target, ...(sock ? { sock } : {}) })
+        const hostVerifier = verifierFor(options.target.host, options.target.port)
+        client.connect({ ...KEEPALIVE_OPTIONS, ...options.target, hostVerifier, ...(sock ? { sock } : {}) })
       }
       if (!options.jump) { connectTarget(null); return }
       const jump = createClient()
@@ -118,7 +134,7 @@ function createSessionGateway({
         jump.forwardOut('127.0.0.1', 0, options.target.host, options.target.port, (err, stream) => (err ? fail(err) : connectTarget(stream)))
       })
       jump.on('error', fail)
-      jump.connect({ ...KEEPALIVE_OPTIONS, ...options.jump })
+      jump.connect({ ...KEEPALIVE_OPTIONS, ...options.jump, hostVerifier: verifierFor(options.jump.host, options.jump.port) })
     })
   }
 

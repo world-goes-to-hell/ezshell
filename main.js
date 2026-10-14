@@ -27,8 +27,11 @@ const sftpSymlinks = require('./src/sftpSymlinks.js');
 const sftpUploadCheck = require('./src/sftpUploadCheck.js');
 const { createMcpController } = require('./src/mcp/controller.js');
 const { registerMcpIpc } = require('./src/mcp/ipc.js');
-const { createSessionLogger } = require('./src/sessionLog/sessionLogger.js');
 const { approvalNoticeTitle } = require('./src/mcp/approvalNotice.js');
+const { createSessionLogger } = require('./src/sessionLog/sessionLogger.js');
+const { createHostKeyStore } = require('./src/hostKeys/hostKeyStore.js');
+const { withHostKeyCheck, isHostKeyError, hostKeyMessage } = require('./src/hostKeys/hostKeyCheck.js');
+const { createHostKeyPrompter } = require('./src/hostKeys/hostKeyPrompt.js');
 
 let mainWindow;
 
@@ -107,6 +110,19 @@ const sessionsFilePath = path.join(userDataPath, 'sessions.json');
 const foldersFilePath = path.join(userDataPath, 'folders.json');
 const settingsFilePath = path.join(userDataPath, 'settings.json');
 
+// SSH host keys (src/hostKeys): every connection checks the server's key against the saved one.
+// Terminal connections and the connection test ask in the main window; reconnects and MCP never ask.
+const hostKeyStore = createHostKeyStore({ filePath: path.join(userDataPath, 'known-hosts.json') });
+const hostKeyPrompter = createHostKeyPrompter({
+  send: (request) => sendToMainWindow('host-key-prompt', request),
+  onDismiss: (id) => sendToMainWindow('host-key-dismiss', { id })
+});
+const checkHostKeyAsking = (attempt) => withHostKeyCheck({ store: hostKeyStore, prompt: hostKeyPrompter.prompt }, attempt);
+const hostKeyFailureText = (err) => {
+  const { error, hint } = hostKeyMessage(err);
+  return `${error} ${hint}`;
+};
+
 // 파일에서 데이터 로드
 function loadFromFile(filePath, defaultValue = []) {
   try {
@@ -143,6 +159,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
       preload: path.join(__dirname, '../preload/index.js')
     }
   });
@@ -159,7 +176,6 @@ function createWindow() {
   }
 
   // Disable Electron's built-in zoom, use IPC for terminal-only font size control
-      sandbox: true,
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.control && !input.alt && !input.meta) {
       if (input.key === '=' || input.key === '+') {
@@ -239,6 +255,18 @@ function sendUpdateStatus(status, data = {}) {
   }
 }
 
+// Windows show only the app's own page: no navigation elsewhere, no new windows, no webviews.
+app.on('web-contents-created', (event, contents) => {
+  const devUrls = [
+    process.env.ELECTRON_RENDERER_URL,
+    process.argv.includes('--dev') ? DEV_RENDERER_URL : null
+  ].filter(Boolean);
+  navigationGuard.guardWebContents(contents, {
+    rendererFile: path.join(__dirname, '../renderer/index.html'),
+    devUrls
+  });
+});
+
 app.whenReady().then(() => {
   createWindow();
   startMcp();
@@ -255,18 +283,6 @@ const sftpWindows = new Map();
 function createSftpWindow(sessionId, localPath, remotePath, title) {
   const sftpWindow = new BrowserWindow({
     icon: WINDOW_ICON,
-// Windows show only the app's own page: no navigation elsewhere, no new windows, no webviews.
-app.on('web-contents-created', (event, contents) => {
-  const devUrls = [
-    process.env.ELECTRON_RENDERER_URL,
-    process.argv.includes('--dev') ? DEV_RENDERER_URL : null
-  ].filter(Boolean);
-  navigationGuard.guardWebContents(contents, {
-    rendererFile: path.join(__dirname, '../renderer/index.html'),
-    devUrls
-  });
-});
-
     width: 900,
     height: 600,
     minWidth: 600,
@@ -276,6 +292,7 @@ app.on('web-contents-created', (event, contents) => {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
       preload: path.join(__dirname, '../preload/index.js')
     }
   });
@@ -292,7 +309,6 @@ app.on('web-contents-created', (event, contents) => {
   if (process.env.ELECTRON_RENDERER_URL) {
     sftpWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${params.toString()}`)
   } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
-      sandbox: true,
     sftpWindow.loadURL(`${DEV_RENDERER_URL}?${params.toString()}`)
   } else {
     sftpWindow.loadFile(path.join(__dirname, '../renderer/index.html'), {
@@ -328,6 +344,7 @@ function createTerminalWindow(sessionId, title) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
       preload: path.join(__dirname, '../preload/index.js')
     }
   });
@@ -344,7 +361,6 @@ function createTerminalWindow(sessionId, title) {
     terminalWindow.loadURL(`${DEV_RENDERER_URL}?${params.toString()}`)
   } else {
     terminalWindow.loadFile(path.join(__dirname, '../renderer/index.html'), {
-      sandbox: true,
       // Same encoding as the dev URL above: the renderer decodes the title once more
       query: { terminalMode: 'true', sessionId, title: encodeURIComponent(title || sessionId) }
     })
@@ -508,6 +524,7 @@ ipcMain.handle('lock-app', async () => {
   isAppLocked = true;
   mcpSessionsCache = null;
   mcpController?.onLocked();
+  hostKeyPrompter.dismissAll();
   return { success: true };
 });
 
@@ -968,7 +985,8 @@ function startMcp() {
     showApproval: showMcpApproval,
     dismissApproval: (id) => sendToMainWindow('mcp-approval-dismiss', { id }),
     emitActivity: (item) => sendToMainWindow('mcp-activity', item),
-    emitActivityOutput: (payload) => sendToMainWindow('mcp-activity-output', payload)
+    emitActivityOutput: (payload) => sendToMainWindow('mcp-activity-output', payload),
+    hostKeys: hostKeyStore
   });
   mcpController.start().catch(err => console.error('Failed to start MCP server:', err));
 }
@@ -1204,9 +1222,25 @@ async function attemptReconnect(sessionId) {
   try {
     await reconnectSession(sessionId);
   } catch (err) {
+    if (isHostKeyError(err)) {
+      // A different key while reconnecting is a strong sign of interception: stop, and let the user
+      // connect again by hand, where the full warning is shown.
+      stopReconnectForHostKey(sessionId, err);
+      return;
+    }
     console.error('Reconnect attempt failed:', err.message);
     attemptReconnect(sessionId); // Retry
   }
+}
+
+function stopReconnectForHostKey(sessionId, err) {
+  updateConnectionState(sessionId, ConnectionState.DISCONNECTED);
+  const targetWindow = getWindowForSession(sessionId);
+  if (targetWindow) {
+    targetWindow.webContents.send('ssh-reconnect-failed', { sessionId, message: hostKeyFailureText(err) });
+    targetWindow.webContents.send('ssh-closed', { sessionId });
+  }
+  endSessionLog(sessionId);
 }
 
 async function reconnectSession(sessionId) {
@@ -1214,7 +1248,11 @@ async function reconnectSession(sessionId) {
   if (!connState || !connState.config) {
     throw new Error('No config available for reconnection');
   }
+  // Never asks: nobody may be watching while the app reconnects in the background
+  return withHostKeyCheck({ store: hostKeyStore }, (verifierFor) => reconnectOnce(sessionId, connState, verifierFor));
+}
 
+function reconnectOnce(sessionId, connState, verifierFor) {
   return new Promise((resolve, reject) => {
     const conn = new Client();
     const config = connState.config;
@@ -1272,7 +1310,8 @@ async function reconnectSession(sessionId) {
       username: config.username,
       keepaliveInterval: config.keepaliveInterval || 30000,
       keepaliveCountMax: 3,
-      readyTimeout: config.connectTimeout || 20000
+      readyTimeout: config.connectTimeout || 20000,
+      hostVerifier: verifierFor(config.host, config.port || 22)
     };
 
     if (config.authType === 'privateKey') {
@@ -1295,8 +1334,14 @@ async function reconnectSession(sessionId) {
 // SSH 연결 테스트 (세션 모달): 인증까지만 확인하고 바로 연결을 닫는다
 ipcMain.handle('ssh-test-connection', async (event, config) => {
   try {
-    return await testSshConnection(config);
+    return await checkHostKeyAsking((verifierFor) => testSshConnection(config, { verifierFor }));
   } catch (err) {
+    if (isHostKeyError(err)) {
+      const { host, port } = err.info;
+      const isJump = Boolean(config && config.useJumpHost && config.jumpHost)
+        && host === config.jumpHost.trim() && port === (Number(config.jumpPort) || 22);
+      return { success: false, stage: isJump ? 'jump' : 'target', ...hostKeyMessage(err) };
+    }
     console.error('SSH connection test failed unexpectedly:', err);
     return { success: false, stage: 'target', error: '연결 테스트 중 오류가 발생했습니다.', detail: err.message };
   }
@@ -1304,11 +1349,20 @@ ipcMain.handle('ssh-test-connection', async (event, config) => {
 
 // SSH 연결
 ipcMain.handle('ssh-connect', async (event, config) => {
-  return new Promise((resolve, reject) => {
-    const sessionId = Date.now().toString();
+  const sessionId = Date.now().toString();
+  try {
+    return await checkHostKeyAsking((verifierFor) => openShellConnection(sessionId, config, verifierFor));
+  } catch (err) {
+    if (!isHostKeyError(err)) throw err;
+    return { success: false, error: hostKeyFailureText(err) };
+  }
+});
 
+function openShellConnection(sessionId, config, verifierFor) {
+  return new Promise((resolve, reject) => {
     const connectFinalHost = (sock) => {
       const conn = new Client();
+      let opened = false;
 
       conn.on('ready', () => {
         conn.shell({ term: 'xterm-256color', cols: 80, rows: 24 }, (err, stream) => {
@@ -1356,11 +1410,16 @@ ipcMain.handle('ssh-connect', async (event, config) => {
             }
           });
 
+          opened = true;
           resolve({ success: true, sessionId });
         });
       });
 
       conn.on('error', (err) => {
+        // A target that failed before the shell opened (refused host key included) leaves no use for the tunnel
+        if (!opened && sock && sock._client) {
+          try { sock._client.end(); } catch (e) { /* already closed */ }
+        }
         // Only reject if Promise hasn't resolved yet
         reject(err);
       });
@@ -1385,7 +1444,8 @@ ipcMain.handle('ssh-connect', async (event, config) => {
         username: config.username,
         keepaliveInterval: config.keepaliveInterval || 30000,
         keepaliveCountMax: 3,
-        readyTimeout: config.connectTimeout || 20000
+        readyTimeout: config.connectTimeout || 20000,
+        hostVerifier: verifierFor(config.host, config.port || 22)
       };
 
       // sock이 있으면 Jump Host 터널 사용
@@ -1440,7 +1500,8 @@ ipcMain.handle('ssh-connect', async (event, config) => {
         username: config.jumpUsername || config.username,
         keepaliveInterval: 30000,
         keepaliveCountMax: 3,
-        readyTimeout: config.connectTimeout || 20000
+        readyTimeout: config.connectTimeout || 20000,
+        hostVerifier: verifierFor(config.jumpHost, config.jumpPort || 22)
       };
 
       if (config.jumpAuthType === 'privateKey' && config.jumpPrivateKeyPath) {
@@ -1463,6 +1524,13 @@ ipcMain.handle('ssh-connect', async (event, config) => {
       connectFinalHost(null);
     }
   });
+}
+
+// Answer from the host key dialog: only the request id and a decision, never a key or fingerprint
+ipcMain.on('host-key-respond', (event, payload) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return;
+  if (!payload || typeof payload.id !== 'string') return;
+  hostKeyPrompter.respond(payload.id, payload.decision);
 });
 
 // SSH 데이터 전송

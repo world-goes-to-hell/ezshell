@@ -1,0 +1,55 @@
+/* SSH host key question (HostKeyDialog). Above the in-app confirmation dialog (15000), below the MCP approval prompt (20000). */
+
+.modal-overlay.host-key-dialog-overlay {
+  z-index: 16000;
+}
+
+.modal-content.confirm-dialog.host-key-dialog {
+  width: min(520px, 92vw);
+  z-index: 16001;
+}
+
+.host-key-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 12px;
+  margin: 16px 0 0;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  font-size: 13px;
+}
+
+.host-key-fields dt {
+  color: var(--text-secondary);
+}
+
+.host-key-fields dd {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  min-width: 0;
+}
+
+.host-key-type {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.host-key-fingerprint {
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.host-key-fingerprint.is-new {
+  color: var(--error-text);
+}
+
+.host-key-dialog .modal-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

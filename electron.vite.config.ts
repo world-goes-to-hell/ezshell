@@ -7,7 +7,7 @@ import fs from 'fs'
 const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js', 'navigationGuard.js']
 
 // Directories under src/ that main.js loads at runtime; copied whole, without their tests
-const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog']
+const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys']
 
 function copyCryptoPlugin() {
   return {

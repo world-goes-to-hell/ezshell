@@ -174,6 +174,24 @@ describe('testSshConnection', () => {
     expect(created[0].ended).toBe(true)
   })
 
+  it('gives each client the host key check for its own server', async () => {
+    const { createClient, created } = fakeClientFactory([ready, ready])
+    const asked = []
+    const verifierFor = (host, port) => { asked.push(`${host}:${port}`); return () => true }
+    const config = { ...baseConfig, useJumpHost: true, jumpHost: 'bastion', jumpPort: 2222, jumpUsername: 'jump' }
+    await testSshConnection(config, { createClient, verifierFor })
+
+    expect(asked).toEqual(['bastion:2222', 'example.com:22'])
+    expect(typeof created[0].options.hostVerifier).toBe('function')
+    expect(typeof created[1].options.hostVerifier).toBe('function')
+  })
+
+  it('refuses every host key when no check is given', async () => {
+    const { createClient, created } = fakeClientFactory([ready])
+    await testSshConnection(baseConfig, { createClient })
+    expect(created[0].options.hostVerifier(Buffer.from('key'))).toBe(false)
+  })
+
   it('rejects a config without host or username', async () => {
     const { createClient, created } = fakeClientFactory([])
     const result = await testSshConnection({ ...baseConfig, host: ' ' }, { createClient })

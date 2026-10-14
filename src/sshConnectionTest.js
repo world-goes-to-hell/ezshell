@@ -90,9 +90,12 @@ const failure = (stage, err) => ({ success: false, stage, ...describeSshError(er
  * Try to authenticate against the target (optionally through a jump host) and disconnect.
  * Resolves with { success, elapsedMs, viaJumpHost } or { success: false, stage, error, hint?, detail? }.
  * `deps` exists for tests; production uses ssh2's Client and fs.readFileSync.
+ * `deps.verifierFor(host, port)` gives each connection its host key check (hostKeys/hostKeyCheck.js);
+ * without it every host key is refused, so the test never sends credentials to an unchecked server.
  */
 function testSshConnection(config, deps = {}) {
   const createClient = deps.createClient || (() => new Client());
+  const verifierFor = deps.verifierFor || (() => () => false);
   const readFile = deps.readFile || fs.readFileSync;
   const graceMs = deps.graceMs ?? DEFAULT_GRACE_MS;
 
@@ -136,7 +139,8 @@ function testSshConnection(config, deps = {}) {
       clients.push(client);
       client.on('ready', () => finish({ success: true, elapsedMs: Date.now() - startedAt, viaJumpHost: Boolean(sock) }));
       client.on('error', (err) => finish(failure('target', err)));
-      client.connect(sock ? { ...options.target, sock } : options.target);
+      const target = { ...options.target, hostVerifier: verifierFor(options.target.host, options.target.port) };
+      client.connect(sock ? { ...target, sock } : target);
     };
 
     if (!options.jump) {
@@ -156,7 +160,7 @@ function testSshConnection(config, deps = {}) {
       });
     });
     jumpClient.on('error', (err) => finish(failure('jump', err)));
-    jumpClient.connect(options.jump);
+    jumpClient.connect({ ...options.jump, hostVerifier: verifierFor(options.jump.host, options.jump.port) });
   });
 }
 

@@ -61,11 +61,12 @@ function describeStartError(err, port) {
   return `MCP 서버를 시작하지 못했습니다: ${err && err.message}`
 }
 
-function createMcpController({ userDataPath, version, isUnlocked, loadSessions, loadFolders, showApproval, dismissApproval, emitActivity, emitActivityOutput, deps = {} }) {
+/** `hostKeys` is the app's saved host key store; without it the gateway refuses every server. */
+function createMcpController({ userDataPath, version, isUnlocked, loadSessions, loadFolders, showApproval, dismissApproval, emitActivity, emitActivityOutput, hostKeys, deps = {} }) {
   const configStore = deps.configStore || createMcpConfigStore({ filePath: path.join(userDataPath, 'mcp.json') })
   const audit = deps.audit || createAuditLog({ filePath: path.join(userDataPath, 'mcp-audit.log') })
   const approvals = deps.approvals || createApprovalBroker({ show: showApproval, dismiss: dismissApproval })
-  const gateway = deps.gateway || createSessionGateway()
+  const gateway = deps.gateway || createSessionGateway(hostKeys ? { hostKeys } : {})
   const activity = deps.activity || createActivityLog({
     emit: (item) => {
       try { if (emitActivity) emitActivity(item) } catch { /* the window may be gone */ }
@@ -118,25 +119,25 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
       throw err instanceof SetupError ? new Error(err.message) : err
     }
     // A local-scope entry left by the copied `claude mcp add` command wins over the project's .mcp.json
-    const shadowedProjects = scope === 'project'
     const userConfigPath = path.join(homeDir, '.claude.json')
+    const shadowedProjects = scope === 'project'
       ? findLocalRegistrations({ filePath: userConfigPath, projectDir: request.projectDir, name: SERVER_NAME })
       : outcome.shadowedProjects
-    const wantsEnv = target.useEnvToken && request.setTokenEnv === true && outcome.result !== 'conflict'
     // Registrations made with the old `claude mcp add` command live per project in ~/.claude.json;
     // this app does not edit those, so the user is told where the old name is still registered
     const legacyProjects = [...new Set(LEGACY_SERVER_NAMES.flatMap(legacy => (scope === 'project'
       ? findLocalRegistrations({ filePath: userConfigPath, projectDir: request.projectDir, name: legacy })
       : findLegacyProjects(userConfigPath, legacy))))]
+    const wantsEnv = target.useEnvToken && request.setTokenEnv === true && outcome.result !== 'conflict'
     const env = wantsEnv ? await setTokenEnv(token) : null
     return {
       scope,
       filePath: target.filePath,
       ...outcome,
       shadowedProjects,
-      tokenEnv: env ? env.status : null,
       legacyName: LEGACY_SERVER_NAMES[0],
       legacyProjects,
+      tokenEnv: env ? env.status : null,
       tokenEnvError: env && env.error ? env.error : null
     }
   }

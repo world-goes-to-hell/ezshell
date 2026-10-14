@@ -156,6 +156,14 @@ exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다
 - 출력된 내용은 평문으로 남는다 (`cat .env` 의 결과도). 그래서 사용자가 켠 탭만 기록한다.
 - `src/sessionLog` 는 번들되지 않고 `electron.vite.config.ts` 가 `out/main/src/sessionLog` 로 복사한다.
 
+### SSH Host Key Verification
+모든 ssh2 연결(터미널, 점프 호스트, 자동 재연결, 연결 테스트, MCP)은 `hostVerifier` 로 서버의 호스트 키를 `userData/known-hosts.json` 과 비교한다 (`src/hostKeys/`). 설계와 보안 검토 반영: `docs/plan/2026-10-14-ssh-host-key-verification.md`.
+- 처음 보는 서버나 바뀐 키는 연결을 바로 끊고 확인 창(`HostKeyDialog.tsx`)을 띄운 뒤, 신뢰하면 저장하고 처음부터 다시 접속한다. 핸드셰이크 중에 기다리면 readyTimeout 에 걸리기 때문이다.
+- 묻는 곳은 터미널 연결과 연결 테스트뿐이다. 자동 재연결은 키가 다르면 재연결을 멈추고, MCP 는 저장된 키가 없거나 다르면 거부한다 (사람이 없을 수 있어서).
+- 바꾸면 안 되는 것: 렌더러는 요청 ID 와 결정만 보낸다 (`host-key-respond`). 저장하는 키는 main 이 거부할 때 붙잡아 둔 값이다. `createSessionGateway` 와 `testSshConnection` 은 저장소/검증 함수가 없으면 모든 키를 거부한다.
+- 파일의 서버 주소는 HMAC 으로만 남긴다 (세션 파일은 암호화되어 있음). 파일을 읽지 못하면 저장하지 않는다 (덮어쓰면 저장된 키가 모두 사라져 "바뀜" 이 "처음 보는 서버" 로 보인다).
+- `src/hostKeys` 는 번들되지 않고 `electron.vite.config.ts` 가 `out/main/src/hostKeys` 로 복사한다.
+
 ### LockScreen Safe API Pattern
 `window.electronAPI` 함수 호출 전 `typeof` 체크로 graceful degradation.
 앱 빌드 후 재시작 전 새 API가 없을 수 있음.
