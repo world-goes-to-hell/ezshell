@@ -144,6 +144,37 @@ export function groupBySession(list: McpActivityItem[]): McpActivityLane[] {
   }))
 }
 
+/** How the activity panel shows requests: a list to expand, one continuous terminal-like log, or one such log per session */
+export type McpActivityView = 'list' | 'terminal' | 'lanes'
+
+/** What the panel remembers across restarts */
+export interface McpActivityPrefs {
+  view: McpActivityView
+  /** Per-server view: hide the sessions that have nothing waiting or running */
+  isActiveOnly: boolean
+}
+
+export const ACTIVITY_PREFS_KEY = 'mcpActivityPrefs'
+export const DEFAULT_ACTIVITY_PREFS: McpActivityPrefs = { view: 'terminal', isActiveOnly: false }
+
+const ACTIVITY_VIEWS: readonly string[] = ['list', 'terminal', 'lanes']
+
+/** Stored preferences as read from localStorage; anything missing or not understood becomes the default. */
+export function parseActivityPrefs(raw: string | null | undefined): McpActivityPrefs {
+  if (!raw) return DEFAULT_ACTIVITY_PREFS
+  try {
+    const stored: unknown = JSON.parse(raw)
+    if (typeof stored !== 'object' || stored === null) return DEFAULT_ACTIVITY_PREFS
+    const { view, isActiveOnly } = stored as Record<string, unknown>
+    return {
+      view: typeof view === 'string' && ACTIVITY_VIEWS.includes(view) ? (view as McpActivityView) : DEFAULT_ACTIVITY_PREFS.view,
+      isActiveOnly: typeof isActiveOnly === 'boolean' ? isActiveOnly : DEFAULT_ACTIVITY_PREFS.isActiveOnly
+    }
+  } catch {
+    return DEFAULT_ACTIVITY_PREFS
+  }
+}
+
 export function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000))
   const minutes = Math.floor(seconds / 60)

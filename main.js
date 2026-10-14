@@ -27,6 +27,7 @@ const sftpUploadCheck = require('./src/sftpUploadCheck.js');
 const { createMcpController } = require('./src/mcp/controller.js');
 const { registerMcpIpc } = require('./src/mcp/ipc.js');
 const { createSessionLogger } = require('./src/sessionLog/sessionLogger.js');
+const { approvalNoticeTitle } = require('./src/mcp/approvalNotice.js');
 
 let mainWindow;
 
@@ -913,7 +914,7 @@ function alertMcpApproval(request) {
   mainWindow.flashFrame(true);
   if (Notification.isSupported()) {
     mcpNotice = new Notification({
-      title: request.kind === 'file' ? 'MCP 파일 쓰기 확인 요청' : 'MCP 명령 확인 요청',
+      title: approvalNoticeTitle(request),
       body: `${request.sessionName} · 위험도 ${MCP_LEVEL_LABELS[request.level] || request.level}`
     });
     mcpNotice.on('click', revealMainWindow);

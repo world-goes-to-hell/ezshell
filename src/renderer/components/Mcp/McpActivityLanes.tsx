@@ -1,7 +1,8 @@
-import { useId, useMemo, useState } from 'react'
+import { useId, useMemo } from 'react'
 import type { McpActivityItem } from '../../types'
 import { groupBySession, isActiveState } from '../../lib/mcpActivity'
 import type { McpActivityLane } from '../../lib/mcpActivity'
+import { useMcpActivityStore } from '../../stores/mcpActivityStore'
 import { TerminalEntry, useFollowBottom } from './McpActivityTerminal'
 
 /** One session's requests as its own log, with its own scroll position. */
@@ -32,7 +33,8 @@ function Lane({ lane, now }: { lane: McpActivityLane; now: number }) {
 
 /** Every MCP request, split into one area per session so that work on several servers does not interleave. */
 export function McpActivityLanes({ items, now }: { items: McpActivityItem[]; now: number }) {
-  const [isActiveOnly, setIsActiveOnly] = useState(false)
+  const isActiveOnly = useMcpActivityStore(state => state.isActiveOnly)
+  const setActiveOnly = useMcpActivityStore(state => state.setActiveOnly)
   const lanes = useMemo(() => groupBySession(items), [items])
   const shown = isActiveOnly ? lanes.filter(lane => lane.waiting + lane.running > 0) : lanes
 
@@ -41,7 +43,7 @@ export function McpActivityLanes({ items, now }: { items: McpActivityItem[]; now
       <div className="mcp-lanes-bar">
         <span>서버 {lanes.length}곳{isActiveOnly && ` 중 ${shown.length}곳 작업 중`}</span>
         <label className="mcp-lanes-filter">
-          <input type="checkbox" checked={isActiveOnly} onChange={event => setIsActiveOnly(event.target.checked)} />
+          <input type="checkbox" checked={isActiveOnly} onChange={event => setActiveOnly(event.target.checked)} />
           <span>작업 중만</span>
         </label>
       </div>

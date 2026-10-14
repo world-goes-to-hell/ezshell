@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { McpActivityItem } from '../types'
-import { ACTIVITY_STATE_LABELS, MAX_ACTIVITY, appendOutputParts, cleanTerminalText, countActive, formatClock, formatDuration, formatElapsed, groupBySession, hasRun, isActiveState, mergeSnapshot, upsertActivity } from './mcpActivity'
+import { ACTIVITY_STATE_LABELS, DEFAULT_ACTIVITY_PREFS, MAX_ACTIVITY, appendOutputParts, cleanTerminalText, countActive, formatClock, formatDuration, formatElapsed, groupBySession, hasRun, isActiveState, mergeSnapshot, parseActivityPrefs, upsertActivity } from './mcpActivity'
 
 const item = (id: string, startedAt: number, state: McpActivityItem['state'] = 'running'): McpActivityItem => ({
   id, time: 't', sessionId: 's', sessionName: 'dev', command: 'ls', level: 'low', reasons: [], state, startedAt, finishedAt: null
@@ -158,5 +158,27 @@ describe('groupBySession', () => {
     const lanes = groupBySession([on('web', 'c', 3, 'running'), on('web', 'b', 2, 'waiting'), on('db', 'a', 1)])
     expect(lanes.find(lane => lane.sessionId === 'web')).toMatchObject({ waiting: 1, running: 1 })
     expect(lanes.find(lane => lane.sessionId === 'db')).toMatchObject({ waiting: 0, running: 0 })
+  })
+})
+
+describe('parseActivityPrefs', () => {
+  it('reads a stored view and filter', () => {
+    expect(parseActivityPrefs('{"view":"lanes","isActiveOnly":true}')).toEqual({ view: 'lanes', isActiveOnly: true })
+  })
+
+  it('uses the defaults when nothing is stored', () => {
+    expect(parseActivityPrefs(null)).toEqual(DEFAULT_ACTIVITY_PREFS)
+    expect(parseActivityPrefs('')).toEqual(DEFAULT_ACTIVITY_PREFS)
+  })
+
+  it('uses the defaults for text that is not JSON or not an object', () => {
+    expect(parseActivityPrefs('{view')).toEqual(DEFAULT_ACTIVITY_PREFS)
+    expect(parseActivityPrefs('null')).toEqual(DEFAULT_ACTIVITY_PREFS)
+    expect(parseActivityPrefs('"lanes"')).toEqual(DEFAULT_ACTIVITY_PREFS)
+  })
+
+  it('replaces only the field it does not understand', () => {
+    expect(parseActivityPrefs('{"view":"grid","isActiveOnly":true}')).toEqual({ view: 'terminal', isActiveOnly: true })
+    expect(parseActivityPrefs('{"view":"list","isActiveOnly":"yes"}')).toEqual({ view: 'list', isActiveOnly: false })
   })
 })
