@@ -40,7 +40,7 @@ describe('controller.setupClient', () => {
     const outcome = await controller.setupClient({ scope: 'project', projectDir, setTokenEnv: true })
     const filePath = path.join(projectDir, '.mcp.json')
     expect(outcome).toMatchObject({ scope: 'project', filePath, result: 'added', tokenEnv: 'set' })
-    expect(readJson(filePath).mcpServers['my-ssh-client']).toEqual({
+    expect(readJson(filePath).mcpServers['ez-shell']).toEqual({
       type: 'http',
       url: `http://127.0.0.1:${port}/mcp`,
       headers: { Authorization: 'Bearer ${EZSHELL_MCP_TOKEN}' }
@@ -53,7 +53,7 @@ describe('controller.setupClient', () => {
     const { controller, setTokenEnv } = setup()
     const projectDir = tempDir('mcp-setup-project-')
     expect((await controller.setupClient({ scope: 'project', projectDir, setTokenEnv: false })).tokenEnv).toBeNull()
-    fs.writeFileSync(path.join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { 'my-ssh-client': { url: 'old' } } }))
+    fs.writeFileSync(path.join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { 'ez-shell': { url: 'old' } } }))
     const conflict = await controller.setupClient({ scope: 'project', projectDir, setTokenEnv: true })
     expect(conflict).toMatchObject({ result: 'conflict', existingUrl: 'old', tokenEnv: null })
     expect(setTokenEnv).not.toHaveBeenCalled()
@@ -63,11 +63,80 @@ describe('controller.setupClient', () => {
     const { controller, homeDir } = setup()
     const projectDir = tempDir('mcp-setup-project-')
     const asSaved = projectDir.replace(/\\/g, '/')
-    fs.writeFileSync(path.join(homeDir, '.claude.json'), JSON.stringify({ projects: { [asSaved]: { mcpServers: { 'my-ssh-client': { url: 'old' } } } } }))
+    fs.writeFileSync(path.join(homeDir, '.claude.json'), JSON.stringify({ projects: { [asSaved]: { mcpServers: { 'ez-shell': { url: 'old' } } } } }))
     const outcome = await controller.setupClient({ scope: 'project', projectDir })
     expect(outcome.result).toBe('added')
     expect(outcome.shadowedProjects).toEqual([asSaved])
-    expect(readJson(path.join(homeDir, '.claude.json')).projects[asSaved].mcpServers['my-ssh-client']).toEqual({ url: 'old' })
+    expect(readJson(path.join(homeDir, '.claude.json')).projects[asSaved].mcpServers['ez-shell']).toEqual({ url: 'old' })
+  })
+
+  describe('registrations under the old name (my-ssh-client)', () => {
+    it('replaces the old entry of a project file instead of adding a second server', async () => {
+      const { controller, port } = setup()
+      const projectDir = tempDir('mcp-setup-project-')
+      const filePath = path.join(projectDir, '.mcp.json')
+      fs.writeFileSync(filePath, JSON.stringify({ mcpServers: { other: { url: 'keep' }, 'my-ssh-client': { type: 'http', url: 'http://127.0.0.1:1/mcp' } } }))
+      const outcome = await controller.setupClient({ scope: 'project', projectDir })
+      expect(outcome).toMatchObject({ result: 'added', renamedFrom: ['my-ssh-client'], backupPath: `${filePath}.ezshell-backup` })
+      expect(Object.keys(readJson(filePath).mcpServers)).toEqual(['other', 'ez-shell'])
+      expect(readJson(filePath).mcpServers['ez-shell'].url).toBe(`http://127.0.0.1:${port}/mcp`)
+      expect(readJson(`${filePath}.ezshell-backup`).mcpServers['my-ssh-client']).toBeDefined()
+    })
+
+    it('removes the old entry even when the new one is already there and correct', async () => {
+      const { controller } = setup()
+      const projectDir = tempDir('mcp-setup-project-')
+      const filePath = path.join(projectDir, '.mcp.json')
+      await controller.setupClient({ scope: 'project', projectDir })
+      const withBoth = readJson(filePath)
+      fs.writeFileSync(filePath, JSON.stringify({ mcpServers: { ...withBoth.mcpServers, 'my-ssh-client': { url: 'old' } } }))
+      const outcome = await controller.setupClient({ scope: 'project', projectDir })
+      expect(outcome.renamedFrom).toEqual(['my-ssh-client'])
+      expect(Object.keys(readJson(filePath).mcpServers)).toEqual(['ez-shell'])
+      expect((await controller.setupClient({ scope: 'project', projectDir })).result).toBe('unchanged')
+    })
+
+    it('keeps the old entry when the new name is taken by something else and the user has not agreed to overwrite', async () => {
+      const { controller } = setup()
+      const projectDir = tempDir('mcp-setup-project-')
+      const filePath = path.join(projectDir, '.mcp.json')
+      const before = JSON.stringify({ mcpServers: { 'ez-shell': { url: 'someone-else' }, 'my-ssh-client': { url: 'old' } } })
+      fs.writeFileSync(filePath, before)
+      const outcome = await controller.setupClient({ scope: 'project', projectDir })
+      expect(outcome).toMatchObject({ result: 'conflict', renamedFrom: [] })
+      expect(fs.readFileSync(filePath, 'utf8')).toBe(before)
+    })
+
+    it('replaces the old user-scope entry and names the projects that still register the old name', async () => {
+      const { controller, homeDir } = setup()
+      const filePath = path.join(homeDir, '.claude.json')
+      fs.writeFileSync(filePath, JSON.stringify({
+        mcpServers: { 'my-ssh-client': { url: 'old' } },
+        projects: { 'D:/work/app': { mcpServers: { 'my-ssh-client': { url: 'old' } } }, 'D:/work/other': {} }
+      }))
+      const outcome = await controller.setupClient({ scope: 'global' })
+      expect(outcome).toMatchObject({ result: 'added', renamedFrom: ['my-ssh-client'], legacyName: 'my-ssh-client', legacyProjects: ['D:/work/app'] })
+      const saved = readJson(filePath)
+      expect(Object.keys(saved.mcpServers)).toEqual(['ez-shell'])
+      // Per-project registrations are Claude Code's own records; they are reported, not edited
+      expect(saved.projects['D:/work/app'].mcpServers['my-ssh-client']).toEqual({ url: 'old' })
+    })
+
+    it('tells a project setup that this folder is still registered under the old name', async () => {
+      const { controller, homeDir } = setup()
+      const projectDir = tempDir('mcp-setup-project-')
+      const asSaved = projectDir.replace(/\\/g, '/')
+      fs.writeFileSync(path.join(homeDir, '.claude.json'), JSON.stringify({ projects: { [asSaved]: { mcpServers: { 'my-ssh-client': { url: 'old' } } } } }))
+      const outcome = await controller.setupClient({ scope: 'project', projectDir })
+      expect(outcome.legacyProjects).toEqual([asSaved])
+      expect(outcome.shadowedProjects).toEqual([])
+    })
+
+    it('reports nothing when there is no old registration', async () => {
+      const { controller } = setup()
+      const outcome = await controller.setupClient({ scope: 'project', projectDir: tempDir('mcp-setup-project-') })
+      expect(outcome).toMatchObject({ renamedFrom: [], legacyProjects: [] })
+    })
   })
 
   it('writes the token itself into ~/.claude.json for the global scope', async () => {
@@ -76,7 +145,7 @@ describe('controller.setupClient', () => {
     fs.writeFileSync(filePath, JSON.stringify({ numStartups: 1 }))
     const outcome = await controller.setupClient({ scope: 'global', setTokenEnv: true })
     expect(outcome).toMatchObject({ scope: 'global', filePath, result: 'added', tokenEnv: null })
-    expect(readJson(filePath).mcpServers['my-ssh-client'].headers).toEqual({ Authorization: `Bearer ${token}` })
+    expect(readJson(filePath).mcpServers['ez-shell'].headers).toEqual({ Authorization: `Bearer ${token}` })
     expect(readJson(filePath).numStartups).toBe(1)
     expect(setTokenEnv).not.toHaveBeenCalled()
   })

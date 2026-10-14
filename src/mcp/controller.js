@@ -12,10 +12,12 @@ const { createActivityLog } = require('./activityLog.js')
 const { createJobStore } = require('./jobStore.js')
 const { isAllowedSession } = require('./toolShared.js')
 const { createMcpHttpServer, MCP_PATH } = require('./server.js')
-const { buildServerEntry, applyServerEntry, findLocalRegistrations, SetupError } = require('./clientSetup.js')
+const { buildServerEntry, applyServerEntry, findLocalRegistrations, findShadowedProjects, SetupError } = require('./clientSetup.js')
 const { setTokenEnv: setTokenEnvDefault } = require('./tokenEnv.js')
 
-const SERVER_NAME = 'my-ssh-client'
+const SERVER_NAME = 'ez-shell'
+/** What the server was registered as before; "자동 설정" replaces such an entry instead of adding a second one */
+const LEGACY_SERVER_NAMES = ['my-ssh-client']
 /** After a lock, a connection with background jobs stays open this long so the stop reaches the server */
 const JOB_STOP_GRACE_MS = 3500
 
@@ -27,6 +29,16 @@ const serverUrl = (port) => `http://127.0.0.1:${port}${MCP_PATH}`
 
 function buildRegisterCommand({ port, token }) {
   return `claude mcp add --transport http ${SERVER_NAME} ${serverUrl(port)} --header "Authorization: Bearer ${token}"`
+}
+
+/** Projects in ~/.claude.json that still register the server under `name`. Read only; nothing to report when the file cannot be read. */
+function findLegacyProjects(filePath, name) {
+  try {
+    const doc = JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''))
+    return doc !== null && typeof doc === 'object' ? findShadowedProjects(doc, name) : []
+  } catch {
+    return []
+  }
 }
 
 const isDirectory = (dir) => {
@@ -101,15 +113,21 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
     const entry = buildServerEntry({ url: serverUrl(port), token, useEnvToken: target.useEnvToken })
     let outcome
     try {
-      outcome = applyServerEntry({ ...target, name: SERVER_NAME, entry, overwrite: request.overwrite === true })
+      outcome = applyServerEntry({ ...target, name: SERVER_NAME, entry, overwrite: request.overwrite === true, legacyNames: LEGACY_SERVER_NAMES })
     } catch (err) {
       throw err instanceof SetupError ? new Error(err.message) : err
     }
     // A local-scope entry left by the copied `claude mcp add` command wins over the project's .mcp.json
     const shadowedProjects = scope === 'project'
-      ? findLocalRegistrations({ filePath: path.join(homeDir, '.claude.json'), projectDir: request.projectDir, name: SERVER_NAME })
+    const userConfigPath = path.join(homeDir, '.claude.json')
+      ? findLocalRegistrations({ filePath: userConfigPath, projectDir: request.projectDir, name: SERVER_NAME })
       : outcome.shadowedProjects
     const wantsEnv = target.useEnvToken && request.setTokenEnv === true && outcome.result !== 'conflict'
+    // Registrations made with the old `claude mcp add` command live per project in ~/.claude.json;
+    // this app does not edit those, so the user is told where the old name is still registered
+    const legacyProjects = [...new Set(LEGACY_SERVER_NAMES.flatMap(legacy => (scope === 'project'
+      ? findLocalRegistrations({ filePath: userConfigPath, projectDir: request.projectDir, name: legacy })
+      : findLegacyProjects(userConfigPath, legacy))))]
     const env = wantsEnv ? await setTokenEnv(token) : null
     return {
       scope,
@@ -117,6 +135,8 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
       ...outcome,
       shadowedProjects,
       tokenEnv: env ? env.status : null,
+      legacyName: LEGACY_SERVER_NAMES[0],
+      legacyProjects,
       tokenEnvError: env && env.error ? env.error : null
     }
   }

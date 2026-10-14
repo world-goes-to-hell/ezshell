@@ -97,7 +97,7 @@ describe('createMcpController', () => {
     expect(status.running).toBe(true)
     expect(status.error).toBeNull()
     expect(status.registerCommand).toBe(
-      `claude mcp add --transport http my-ssh-client http://127.0.0.1:47521/mcp --header "Authorization: Bearer ${status.config.token}"`
+      `claude mcp add --transport http ez-shell http://127.0.0.1:47521/mcp --header "Authorization: Bearer ${status.config.token}"`
     )
   })
 

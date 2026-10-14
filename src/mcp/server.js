@@ -92,7 +92,7 @@ async function safely(call) {
 }
 
 function buildMcpServer(handlers, { version, signal }) {
-  const server = new McpServer({ name: 'my-ssh-client', version })
+  const server = new McpServer({ name: 'ez-shell', version })
   const sessionArg = z.string().min(1).describe('list_sessions 에서 받은 세션 id')
   const signalFor = (extra) => combineSignals([signal, extra && extra.signal])
   server.registerTool('list_sessions', { description: DESCRIPTIONS.listSessions }, async () => safely(() => handlers.listSessions()))

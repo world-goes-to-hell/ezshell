@@ -229,6 +229,11 @@ export type McpSetupResult =
 
 // Extend Window interface for electronAPI
 declare global {
+  /** Old names of the server whose entries were removed from the file in the same write */
+  renamedFrom?: string[]
+  /** The old name, and the projects in ~/.claude.json that still register the server under it */
+  legacyName?: string
+  legacyProjects?: string[]
   interface Window {
     electronAPI: {
       // Window controls

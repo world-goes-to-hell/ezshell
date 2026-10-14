@@ -79,7 +79,7 @@ describe('applyServerEntry', () => {
     const original = JSON.stringify({ mcpServers: { [NAME]: old } })
     const filePath = tempFile(original)
     const conflict = applyServerEntry({ filePath, name: NAME, entry })
-    expect(conflict).toEqual({ result: 'conflict', existingUrl: 'http://127.0.0.1:1111/mcp', backupPath: null, shadowedProjects: [] })
+    expect(conflict).toEqual({ result: 'conflict', existingUrl: 'http://127.0.0.1:1111/mcp', backupPath: null, shadowedProjects: [], renamedFrom: [] })
     expect(JSON.stringify(conflict)).not.toContain('secret')
     expect(fs.readFileSync(filePath, 'utf8')).toBe(original)
     expect(applyServerEntry({ filePath, name: NAME, entry, overwrite: true }).result).toBe('replaced')

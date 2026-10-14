@@ -118,10 +118,12 @@ function writeSafely(fileSystem, filePath, originalText, nextText) {
 }
 
 /**
- * Put `entry` under mcpServers[name].
- * @returns {{ result: 'added'|'replaced'|'unchanged'|'conflict', backupPath: string|null, shadowedProjects: string[], existingUrl?: string }}
+ * Put `entry` under mcpServers[name]. Entries under `legacyNames` (what this app's server was called
+ * before) are removed in the same write, so the tools do not show up twice under two names;
+ * `renamedFrom` lists the names that were removed. Nothing is removed on a conflict.
+ * @returns {{ result: 'added'|'replaced'|'unchanged'|'conflict', backupPath: string|null, shadowedProjects: string[], renamedFrom: string[], existingUrl?: string }}
  */
-function applyServerEntry({ filePath, name, entry, overwrite = false, createIfMissing = false, fileSystem = fs }) {
+function applyServerEntry({ filePath, name, entry, overwrite = false, createIfMissing = false, legacyNames = [], fileSystem = fs }) {
   const original = readFile(fileSystem, filePath)
   if (original === null && !createIfMissing) {
     throw new SetupError(`${filePath} 이(가) 없습니다. Claude Code 를 한 번 실행한 뒤 다시 시도하세요.`)
@@ -131,17 +133,20 @@ function applyServerEntry({ filePath, name, entry, overwrite = false, createIfMi
   const servers = doc.mcpServers || {}
   const shadowedProjects = findShadowedProjects(doc, name)
   const existing = Object.hasOwn(servers, name) ? servers[name] : undefined
+  const renamedFrom = legacyNames.filter(legacy => legacy !== name && Object.hasOwn(servers, legacy))
+  const isSame = existing !== undefined && JSON.stringify(existing) === JSON.stringify(entry)
 
-  if (existing !== undefined && JSON.stringify(existing) === JSON.stringify(entry)) {
-    return { result: 'unchanged', backupPath: null, shadowedProjects }
+  if (isSame && renamedFrom.length === 0) {
+    return { result: 'unchanged', backupPath: null, shadowedProjects, renamedFrom }
   }
-  if (existing !== undefined && !overwrite) {
+  if (existing !== undefined && !isSame && !overwrite) {
     // Only the url: the old headers may hold a token
     const existingUrl = isPlainObject(existing) && typeof existing.url === 'string' ? existing.url : ''
-    return { result: 'conflict', existingUrl, backupPath: null, shadowedProjects }
+    return { result: 'conflict', existingUrl, backupPath: null, shadowedProjects, renamedFrom: [] }
   }
 
-  const nextText = formatLike(originalText, { ...doc, mcpServers: { ...servers, [name]: entry } })
+  const kept = Object.fromEntries(Object.entries(servers).filter(([key]) => !renamedFrom.includes(key)))
+  const nextText = formatLike(originalText, { ...doc, mcpServers: { ...kept, [name]: entry } })
   let backupPath = null
   if (original) {
     backupPath = `${filePath}${BACKUP_SUFFIX}`
@@ -152,7 +157,7 @@ function applyServerEntry({ filePath, name, entry, overwrite = false, createIfMi
     }
   }
   writeSafely(fileSystem, filePath, originalText, nextText)
-  return { result: existing === undefined ? 'added' : 'replaced', backupPath, shadowedProjects }
+  return { result: existing === undefined ? 'added' : 'replaced', backupPath, shadowedProjects, renamedFrom }
 }
 
-module.exports = { buildServerEntry, applyServerEntry, findLocalRegistrations, SetupError, TOKEN_ENV_VAR }
+module.exports = { buildServerEntry, applyServerEntry, findLocalRegistrations, findShadowedProjects, SetupError, TOKEN_ENV_VAR }

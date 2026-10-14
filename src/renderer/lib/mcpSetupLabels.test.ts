@@ -12,6 +12,25 @@ const base: McpSetupOutcome = {
   tokenEnvError: null
 }
 
+describe('describeSetupOutcome: the server used to be called my-ssh-client', () => {
+  it('says that the old entry was replaced and what to fix in the permission list', () => {
+    const view = describeSetupOutcome({ ...base, renamedFrom: ['my-ssh-client'] })
+    expect(view.tone).toBe('success')
+    expect(view.lines).toContain('예전 이름(my-ssh-client)의 항목을 지우고 ez-shell 로 바꿨습니다. Claude Code 의 권한 허용 목록에 mcp__my-ssh-client__ 로 시작하는 항목이 있으면 mcp__ez-shell__ 로 고치세요.')
+  })
+
+  it('warns about projects that still register the old name, and how to remove it', () => {
+    const view = describeSetupOutcome({ ...base, legacyName: 'my-ssh-client', legacyProjects: ['D:/a', 'D:/b', 'D:/c', 'D:/d'] })
+    expect(view.tone).toBe('warning')
+    expect(view.lines).toContain('프로젝트 4곳에 예전 이름(my-ssh-client)의 등록이 남아 있어 그 프로젝트에서는 도구가 두 이름으로 보입니다: D:/a, D:/b, D:/c 외 1곳')
+    expect(view.lines).toContain('지우려면 그 프로젝트 폴더에서 claude mcp remove my-ssh-client -s local 을 실행하세요.')
+  })
+
+  it('adds nothing when there was no old registration', () => {
+    expect(describeSetupOutcome({ ...base, renamedFrom: [], legacyProjects: [], legacyName: 'my-ssh-client' }).lines).toHaveLength(3)
+  })
+})
+
 describe('describeSetupOutcome', () => {
   it('describes a new project file with the variable set', () => {
     expect(describeSetupOutcome(base)).toEqual({
@@ -54,7 +73,7 @@ describe('describeSetupOutcome', () => {
     expect(view.lines).toEqual([
       '파일: C:\\Users\\me\\.claude.json',
       '프로젝트 4곳에 예전 등록이 남아 있어 그 프로젝트에서는 예전 등록이 먼저 쓰입니다: D:/a, D:/b, D:/c 외 1곳',
-      '지우려면 그 프로젝트 폴더에서 claude mcp remove my-ssh-client -s local 을 실행하세요.'
+      '지우려면 그 프로젝트 폴더에서 claude mcp remove ez-shell -s local 을 실행하세요.'
     ])
   })
 })
@@ -62,7 +81,7 @@ describe('describeSetupOutcome', () => {
 describe('conflictQuestion', () => {
   it('names the file and the old address', () => {
     expect(conflictQuestion({ ...base, result: 'conflict', existingUrl: 'http://127.0.0.1:1111/mcp' }))
-      .toBe("D:\\work\\app\\.mcp.json 에 이미 'my-ssh-client' 항목이 있습니다 (http://127.0.0.1:1111/mcp).\n덮어쓸까요? 원래 파일은 백업합니다.")
+      .toBe("D:\\work\\app\\.mcp.json 에 이미 'ez-shell' 항목이 있습니다 (http://127.0.0.1:1111/mcp).\n덮어쓸까요? 원래 파일은 백업합니다.")
     expect(conflictQuestion({ ...base, result: 'conflict', existingUrl: '' })).toContain('(주소 없음)')
   })
 })
