@@ -14,6 +14,7 @@ import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/Qui
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
 import { NewTabMenu } from './components/Terminal/NewTabMenu'
 import { getDuplicateConfig } from './lib/duplicateConnection'
+import { detachTab, restoreMergedTab, type DetachedTab } from './lib/detachedTab'
 import { captureTerminalSnapshot, setPendingSnapshot } from './lib/terminalSnapshots'
 import { SettingsModal } from './components/Settings/SettingsModal'
 import { WelcomeScreen } from './components/MainContent/WelcomeScreen'
@@ -32,7 +33,7 @@ import { useSftpStore } from './stores/sftpStore'
 import { useThemeStore } from './stores/themeStore'
 import { useCommandPaletteStore } from './stores/commandPaletteStore'
 import { useUIStore } from './stores/uiStore'
-import { useSSH, type SSHConnectConfig } from './hooks/useSSH'
+import { useSSH } from './hooks/useSSH'
 import { toSSHConnectConfig } from './lib/sshConnectConfig'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -134,8 +135,8 @@ function App() {
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null)
   const [dropZone, setDropZone] = useState<'left' | 'right' | 'top' | 'bottom' | 'popout' | null>(null)
   const terminalAreaRef = useRef<HTMLDivElement>(null)
-  // Connect configs of tabs popped out to their own window, restored when they merge back
-  const detachedConfigsRef = useRef(new Map<string, SSHConnectConfig>())
+  // Color and connect config of tabs popped out to their own window, restored when they merge back
+  const detachedTabsRef = useRef(new Map<string, DetachedTab>())
   const [splitPaneDraggingTabId, setSplitPaneDraggingTabId] = useState<string | null>(null)
 
   // Context menu state
@@ -259,17 +260,8 @@ function App() {
       if (data.snapshot) setPendingSnapshot(data.sessionId, data.snapshot)
       const { addTerminal, setActiveTerminal } = useTerminalStore.getState()
       // Read without deleting: this effect has no cleanup, so StrictMode registers the listener twice
-      // and both calls must see the config. The entry is dropped when the tab is closed.
-      const connectConfig = detachedConfigsRef.current.get(data.sessionId)
-      // The SSH connection lives in the main process, so the merged session is still connected
-      addTerminal(data.sessionId, {
-        id: data.sessionId,
-        host: data.host,
-        username: data.username,
-        title: data.title,
-        connected: true,
-        connectConfig
-      })
+      // and both calls must see the entry. It is dropped when the tab is closed.
+      addTerminal(data.sessionId, restoreMergedTab(data, detachedTabsRef.current.get(data.sessionId)))
       setActiveTerminal(data.sessionId)
     })
   }, [])
@@ -613,7 +605,7 @@ function App() {
   }
 
   const handleCloseTerminal = (sessionId: string) => {
-    detachedConfigsRef.current.delete(sessionId)
+    detachedTabsRef.current.delete(sessionId)
     disconnect(sessionId)
   }
 
@@ -648,7 +640,7 @@ function App() {
     // Check if dropped outside window (popout)
     if (dropZone === 'popout' && sessionId && terminal) {
       const title = terminal.title || `${terminal.username}@${terminal.host}`
-      if (terminal.connectConfig) detachedConfigsRef.current.set(sessionId, terminal.connectConfig)
+      detachedTabsRef.current.set(sessionId, detachTab(terminal))
       // Take the screen before the tab's terminal is disposed so the new window continues from it
       const snapshot = captureTerminalSnapshot(sessionId) ?? undefined
       // Remove terminal from main window first (this unregisters the SSH data handler)
