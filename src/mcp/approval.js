@@ -1,16 +1,25 @@
 // Queue of "may Claude run this?" questions for the user. One dialog at a time;
-// no answer within the timeout means no.
+// no answer within the timeout means no. `onClose(id)` is told whenever a shown question ends,
+// however it ends (`dismiss` is not called when the user answered).
 const crypto = require('crypto')
 
 const DEFAULT_TIMEOUT_MS = 60 * 1000
 
-function createApprovalBroker({ show, dismiss = () => {}, timeoutMs = DEFAULT_TIMEOUT_MS, newId = () => crypto.randomUUID(), now = () => Date.now() }) {
+function createApprovalBroker({ show, dismiss = () => {}, onClose = () => {}, timeoutMs = DEFAULT_TIMEOUT_MS, newId = () => crypto.randomUUID(), now = () => Date.now() }) {
   const queue = []
   let active = null
 
   function finish(item, outcome) {
     if (item.signal && item.onAbort) item.signal.removeEventListener('abort', item.onAbort)
     item.resolve(outcome)
+  }
+
+  function reportClosed(id) {
+    try {
+      onClose(id)
+    } catch {
+      // onClose threw; the question is over either way
+    }
   }
 
   function closeActive(outcome, closeDialog) {
@@ -26,6 +35,7 @@ function createApprovalBroker({ show, dismiss = () => {}, timeoutMs = DEFAULT_TI
         // dismiss threw; outcome already delivered to caller
       }
     }
+    reportClosed(item.id)
     showNext()
   }
 
@@ -85,6 +95,7 @@ function createApprovalBroker({ show, dismiss = () => {}, timeoutMs = DEFAULT_TI
       } catch {
         // dismiss threw; outcome already delivered to caller
       }
+      reportClosed(item.id)
     }
     waiting.forEach(item => finish(item, 'cancelled'))
   }

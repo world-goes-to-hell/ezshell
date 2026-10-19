@@ -200,3 +200,70 @@ describe('createApprovalBroker', () => {
     expect(shown[0].id).toBe('a1')
   })
 })
+
+describe('createApprovalBroker onClose', () => {
+  function withClose() {
+    const closed = []
+    const { broker, shown } = setup({ onClose: (id) => closed.push(id) })
+    return { broker, shown, closed }
+  }
+
+  it('reports the end of a question when it is answered, without dismissing it', () => {
+    const closed = []
+    const { broker, dismissed } = setup({ onClose: (id) => closed.push(id) })
+    broker.request({})
+    expect(closed).toEqual([])
+    broker.respond('a1', false)
+    expect(closed).toEqual(['a1'])
+    expect(dismissed).toEqual([])
+  })
+
+  it('reports the end when the question expires or is cancelled', () => {
+    const { broker, closed } = withClose()
+    const controller = new AbortController()
+    broker.request({})
+    broker.request({}, { signal: controller.signal })
+    vi.advanceTimersByTime(1000)
+    expect(closed).toEqual(['a1'])
+    controller.abort()
+    expect(closed).toEqual(['a1', 'a2'])
+  })
+
+  it('reports the end before the next question is shown', () => {
+    const events = []
+    const { broker } = setup({
+      show: (request) => { events.push(`show ${request.id}`); return true },
+      onClose: (id) => events.push(`close ${id}`)
+    })
+    broker.request({})
+    broker.request({})
+    broker.respond('a1', true)
+    expect(events).toEqual(['show a1', 'close a1', 'show a2'])
+  })
+
+  it('reports only the shown question on cancelAll, not the waiting ones', () => {
+    const { broker, closed } = withClose()
+    broker.request({})
+    broker.request({})
+    broker.cancelAll()
+    expect(closed).toEqual(['a1'])
+  })
+
+  it('does not report a question that was never shown', () => {
+    const { broker, closed } = withClose()
+    broker.request({})
+    const queued = broker.request({})
+    broker.cancelAll()
+    expect(closed).toEqual(['a1'])
+    return expect(queued).resolves.toBe('cancelled')
+  })
+
+  it('still answers and moves on when onClose throws', async () => {
+    const { broker, shown } = setup({ onClose: () => { throw new Error('window gone') } })
+    const first = broker.request({})
+    broker.request({})
+    broker.respond('a1', true)
+    await expect(first).resolves.toBe('approved')
+    expect(shown.map(request => request.id)).toEqual(['a1', 'a2'])
+  })
+})

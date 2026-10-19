@@ -955,9 +955,26 @@ function alertMcpApproval(request) {
   }
 }
 
-/** Ask in the app; when the window is in the background, also flash it and show a notification */
+/**
+ * Keep the main window above other windows while a question is shown, restoring it if minimized.
+ * It does not take keyboard focus: an Enter or Esc typed into another program would answer the dialog.
+ */
+function keepMainWindowOnTop(onTop) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.setAlwaysOnTop(onTop);
+    if (!onTop) return;
+    if (mainWindow.isMinimized() || !mainWindow.isVisible()) mainWindow.showInactive();
+    mainWindow.moveTop();
+  } catch (err) {
+    console.error('Failed to raise the window for MCP approval:', err);
+  }
+}
+
+/** Ask in the app, with the window on top; when it is in the background, also flash it and show a notification */
 function showMcpApproval(request) {
   const delivered = sendToMainWindow('mcp-approval-request', request);
+  if (delivered) keepMainWindowOnTop(true);
   if (delivered && !mainWindow.isFocused()) {
     try {
       alertMcpApproval(request);
@@ -984,6 +1001,7 @@ function startMcp() {
     loadFolders: () => loadFromFile(foldersFilePath, []),
     showApproval: showMcpApproval,
     dismissApproval: (id) => sendToMainWindow('mcp-approval-dismiss', { id }),
+    approvalClosed: () => keepMainWindowOnTop(false),
     emitActivity: (item) => sendToMainWindow('mcp-activity', item),
     emitActivityOutput: (payload) => sendToMainWindow('mcp-activity-output', payload),
     hostKeys: hostKeyStore
