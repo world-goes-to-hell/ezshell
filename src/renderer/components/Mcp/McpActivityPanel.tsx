@@ -3,7 +3,7 @@ import { RiCloseLine, RiStopCircleLine } from 'react-icons/ri'
 import type { McpActivityItem } from '../../types'
 import { useMcpActivityStore } from '../../stores/mcpActivityStore'
 import type { McpActivityView } from '../../stores/mcpActivityStore'
-import { ACTIVITY_STATE_LABELS, formatClock, formatElapsed, isActiveState } from '../../lib/mcpActivity'
+import { ACTIVITY_STATE_LABELS, collapsesMcpPanel, countActive, formatClock, formatElapsed, isActiveState } from '../../lib/mcpActivity'
 import { RISK_LABELS, revealHiddenChars } from '../../lib/mcpLabels'
 import { McpActivityLanes } from './McpActivityLanes'
 import { McpActivityTerminal } from './McpActivityTerminal'
@@ -74,8 +74,11 @@ export function McpActivityPanel() {
   const setPanelOpen = useMcpActivityStore(state => state.setPanelOpen)
   const view = useMcpActivityStore(state => state.view)
   const setView = useMcpActivityStore(state => state.setView)
+  const isCollapsed = useMcpActivityStore(state => state.isPanelCollapsed)
+  const setCollapsed = useMcpActivityStore(state => state.setPanelCollapsed)
   const [now, setNow] = useState(() => Date.now())
   const hasActive = items.some(item => isActiveState(item.state))
+  const { waiting, running } = countActive(items)
 
   useEffect(() => {
     if (!hasActive) return
@@ -84,16 +87,38 @@ export function McpActivityPanel() {
     return () => clearInterval(timer)
   }, [hasActive])
 
+  // While collapsed, Esc belongs to the shell (vim and the like), not to the panel
   useEffect(() => {
+    if (isCollapsed) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented) setPanelOpen(false)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [setPanelOpen])
+  }, [isCollapsed, setPanelOpen])
+
+  // A press on the shell or SFTP behind the panel slides it aside. Capture phase, so a terminal that
+  // stops the event still counts; the press itself goes on to the shell as usual.
+  useEffect(() => {
+    if (isCollapsed) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (collapsesMcpPanel(event.target instanceof Element ? event.target : null)) setCollapsed(true)
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [isCollapsed, setCollapsed])
 
   return (
-    <aside className={`mcp-activity-panel view-${view}`} id="mcp-activity-panel" role="complementary" aria-label="MCP 활동">
+    <aside className={`mcp-activity-panel view-${view}${isCollapsed ? ' is-collapsed' : ''}`} id="mcp-activity-panel" role="complementary" aria-label="MCP 활동">
+      {isCollapsed && (
+        <button type="button" className="mcp-activity-strip" onClick={() => setCollapsed(false)} aria-label="MCP 활동 펼치기" title="MCP 활동 펼치기">
+          {waiting > 0 && <span className="mcp-activity-strip-count is-waiting" title={`확인 대기 ${waiting}`}>{waiting}</span>}
+          {running > 0 && <span className="mcp-activity-strip-count is-running" title={`실행 중 ${running}`}>{running}</span>}
+          <span className="mcp-activity-strip-label">MCP 활동</span>
+        </button>
+      )}
+      {/* Off screen while collapsed: kept mounted so scroll positions survive, but out of reach of Tab */}
+      <div className="mcp-activity-body" inert={isCollapsed}>
       <header className="mcp-activity-header">
         <div>
           <h2>MCP 활동</h2>
@@ -129,6 +154,7 @@ export function McpActivityPanel() {
           {items.map(item => <ActivityRow key={item.id} item={item} now={now} />)}
         </ul>
       )}
+      </div>
     </aside>
   )
 }

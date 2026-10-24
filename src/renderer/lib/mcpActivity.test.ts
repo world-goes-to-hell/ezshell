@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { McpActivityItem } from '../types'
-import { ACTIVITY_STATE_LABELS, DEFAULT_ACTIVITY_PREFS, MAX_ACTIVITY, appendOutputParts, cleanTerminalText, countActive, formatClock, formatDuration, formatElapsed, groupBySession, hasRun, isActiveState, mergeSnapshot, parseActivityPrefs, upsertActivity } from './mcpActivity'
+import { ACTIVITY_STATE_LABELS, collapsesMcpPanel, DEFAULT_ACTIVITY_PREFS, MAX_ACTIVITY, appendOutputParts, cleanTerminalText, countActive, formatClock, formatDuration, formatElapsed, groupBySession, hasRun, hideLane, isLaneHidden, isActiveState, mergeSnapshot, parseActivityPrefs, upsertActivity } from './mcpActivity'
 
 const item = (id: string, startedAt: number, state: McpActivityItem['state'] = 'running'): McpActivityItem => ({
   id, time: 't', sessionId: 's', sessionName: 'dev', command: 'ls', level: 'low', reasons: [], state, startedAt, finishedAt: null
@@ -158,6 +158,67 @@ describe('groupBySession', () => {
     const lanes = groupBySession([on('web', 'c', 3, 'running'), on('web', 'b', 2, 'waiting'), on('db', 'a', 1)])
     expect(lanes.find(lane => lane.sessionId === 'web')).toMatchObject({ waiting: 1, running: 1 })
     expect(lanes.find(lane => lane.sessionId === 'db')).toMatchObject({ waiting: 0, running: 0 })
+  })
+})
+
+describe('hiding a lane', () => {
+  const on = (sessionId: string, id: string, startedAt: number, state: McpActivityItem['state'] = 'done'): McpActivityItem => ({
+    ...item(id, startedAt, state), sessionId, sessionName: sessionId
+  })
+  const laneOf = (list: McpActivityItem[], sessionId: string) => groupBySession(list).find(lane => lane.sessionId === sessionId)!
+
+  it('shows every lane until one is hidden', () => {
+    expect(isLaneHidden(laneOf([on('web', 'a', 1)], 'web'), {})).toBe(false)
+  })
+
+  it('hides only the lane that was closed', () => {
+    const list = [on('web', 'a', 1), on('db', 'b', 2)]
+    const hidden = hideLane({}, laneOf(list, 'web'))
+    expect(isLaneHidden(laneOf(list, 'web'), hidden)).toBe(true)
+    expect(isLaneHidden(laneOf(list, 'db'), hidden)).toBe(false)
+  })
+
+  it('shows the lane again when the session gets a new request', () => {
+    const before = [on('web', 'a', 1)]
+    const hidden = hideLane({}, laneOf(before, 'web'))
+    expect(isLaneHidden(laneOf([on('web', 'b', 2, 'waiting'), ...before], 'web'), hidden)).toBe(false)
+  })
+
+  it('keeps the lane hidden while a request it already had runs on or finishes', () => {
+    const hidden = hideLane({}, laneOf([on('web', 'a', 1, 'running')], 'web'))
+    expect(isLaneHidden(laneOf([on('web', 'a', 1, 'done')], 'web'), hidden)).toBe(true)
+  })
+
+  it('does not change the map it was given', () => {
+    const original = {}
+    hideLane(original, laneOf([on('web', 'a', 1)], 'web'))
+    expect(original).toEqual({})
+  })
+})
+
+describe('collapsesMcpPanel', () => {
+  /** A click target that sits inside the elements matching `inside` */
+  const target = (...inside: string[]) => ({
+    closest: (selector: string) => (selector.split(',').some(part => inside.includes(part.trim())) ? {} : null)
+  })
+
+  it('collapses for a press on the app behind the panel (shell, SFTP, sidebar)', () => {
+    expect(collapsesMcpPanel(target('#root'))).toBe(true)
+  })
+
+  it('does not collapse for a press inside the panel or on its status bar button', () => {
+    expect(collapsesMcpPanel(target('#root', '#mcp-activity-panel'))).toBe(false)
+    expect(collapsesMcpPanel(target('#root', '.mcp-activity-indicator'))).toBe(false)
+  })
+
+  it('does not collapse for dialogs and menus drawn outside the app root, or for toasts', () => {
+    expect(collapsesMcpPanel(target())).toBe(false)
+    expect(collapsesMcpPanel(target('#root', '.toast-container'))).toBe(false)
+  })
+
+  it('ignores targets that are not elements', () => {
+    expect(collapsesMcpPanel(null)).toBe(false)
+    expect(collapsesMcpPanel({} as never)).toBe(false)
   })
 })
 

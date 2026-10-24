@@ -9,7 +9,7 @@ export function McpActivityIndicator() {
   useMcpActivityFeed()
   const items = useMcpActivityStore(state => state.items)
   const isOpen = useMcpActivityStore(state => state.isPanelOpen)
-  const setPanelOpen = useMcpActivityStore(state => state.setPanelOpen)
+  const togglePanel = useMcpActivityStore(state => state.togglePanel)
 
   if (items.length === 0) return null
 
@@ -22,7 +22,7 @@ export function McpActivityIndicator() {
       <button
         type="button"
         className={`mcp-activity-indicator${isBusy ? ' busy' : ''}`}
-        onClick={() => setPanelOpen(!isOpen)}
+        onClick={togglePanel}
         aria-expanded={isOpen}
         aria-controls="mcp-activity-panel"
         title="MCP 활동 보기"

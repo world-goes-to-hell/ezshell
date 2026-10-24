@@ -144,6 +144,42 @@ export function groupBySession(list: McpActivityItem[]): McpActivityLane[] {
   }))
 }
 
+/** Lanes closed in the per-server view: session id → id of its most recent request when it was closed */
+export type McpHiddenLanes = Readonly<Record<string, string>>
+
+const newestId = (lane: McpActivityLane): string | undefined => lane.items[lane.items.length - 1]?.id
+
+/** Close a lane until its session gets a new request */
+export function hideLane(hidden: McpHiddenLanes, lane: McpActivityLane): McpHiddenLanes {
+  const id = newestId(lane)
+  return id === undefined ? hidden : { ...hidden, [lane.sessionId]: id }
+}
+
+/**
+ * Hidden while its most recent request is the one it had when it was closed. A new request (waiting or
+ * running) brings it back; output or a state change of a request it already had does not.
+ */
+export function isLaneHidden(lane: McpActivityLane, hidden: McpHiddenLanes): boolean {
+  const id = newestId(lane)
+  return id !== undefined && hidden[lane.sessionId] === id
+}
+
+/** Something a press landed on; only `closest` is used, so tests can pass a stand-in */
+export interface McpPressTarget {
+  closest?: (selector: string) => unknown
+}
+
+/**
+ * A press on the app behind the activity panel (shell, SFTP, sidebar) slides the panel aside.
+ * Presses on the panel, its status bar button, toasts, and anything drawn outside the app root
+ * (dialogs, menus) leave it as it is: answering an approval dialog must not fold the panel away.
+ */
+export function collapsesMcpPanel(target: McpPressTarget | null): boolean {
+  if (!target || typeof target.closest !== 'function') return false
+  if (!target.closest('#root')) return false
+  return !target.closest('#mcp-activity-panel, .mcp-activity-indicator, .toast-container')
+}
+
 /** How the activity panel shows requests: a list to expand, one continuous terminal-like log, or one such log per session */
 export type McpActivityView = 'list' | 'terminal' | 'lanes'
 
