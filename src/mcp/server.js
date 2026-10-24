@@ -10,6 +10,8 @@ const BIND_HOST = '127.0.0.1'
 const MAX_BODY_BYTES = 1024 * 1024
 const MAX_COMMAND_LENGTH = 4000
 const MAX_PATH_LENGTH = 1024
+/** Longer reasons are accepted and cut to 500 characters by the handlers (tools.js) */
+const MAX_REASON_LENGTH = 2000
 /** Characters; the handlers check the size in bytes (256KB) */
 const MAX_FILE_CHARS = 256 * 1024
 const MAX_JOB_MINUTES = 60
@@ -18,10 +20,10 @@ const MAX_JOB_ID_LENGTH = 64
 
 const DESCRIPTIONS = {
   listSessions: '이 SSH 클라이언트 앱에서 MCP 접근이 허용된 세션 목록(id, 이름, 폴더, 서버 표지, 현재 작업 디렉터리)을 돌려줍니다. 다른 도구의 session 인자에는 여기서 받은 id 를 넘기세요. server 값이 같은 세션은 같은 서버에 접속하므로 한 번만 조회하면 됩니다. 값이 달라도 같은 서버일 수 있습니다(주소를 다르게 등록한 경우). 번호는 이 목록 안에서만 의미가 있습니다.',
-  cd: '세션의 작업 디렉터리를 바꿉니다. 이후 run_command 는 이 디렉터리에서 실행됩니다. run_command 안에서 실행한 cd 는 그 명령에만 적용됩니다.',
+  cd: '세션의 작업 디렉터리를 바꿉니다. 이후 run_command 는 이 디렉터리에서 실행됩니다. run_command 안에서 실행한 cd 는 그 명령에만 적용됩니다. 비밀 파일이 있는 폴더처럼 사용자 확인이 필요한 경로면 reason 이 있어야 합니다.',
   writeFile: '세션 서버에 텍스트 파일을 새로 만들거나 파일 전체를 새 내용으로 바꿉니다. 셸을 거치지 않고 쓰므로 따옴표나 변수 치환 걱정이 없습니다. 사용자가 앱에서 변경 내용(diff)을 보고 허용해야 쓰이며, 최대 180초 기다립니다. 256KB 이하의 UTF-8 텍스트만 됩니다. 상위 폴더는 미리 있어야 하고, 접속 계정의 권한으로 씁니다(sudo 없음). 파일의 일부만 고칠 때는 edit_file 을 쓰세요.',
   editFile: '세션 서버의 텍스트 파일에서 old_string 을 new_string 으로 바꿉니다. old_string 은 파일에 정확히 한 번만 나와야 합니다(여러 곳을 모두 바꾸려면 replace_all). 먼저 run_command 로 파일 내용을 확인하고, 공백과 줄바꿈까지 그대로 지정하세요. 사용자가 앱에서 변경 내용(diff)을 보고 허용해야 쓰이며, 최대 180초 기다립니다.',
-  runCommand: '세션 서버에서 셸 명령을 실행하고 종료 코드와 출력을 돌려줍니다. 30초 제한, 출력 64KB 제한이 있습니다. 30초를 넘길 명령(빌드, 설치, 테스트 등)은 background: true 로 시작하세요. 그러면 작업 ID 를 바로 돌려주고, 출력과 종료 상태는 job_output 으로 읽습니다. 명령 끝에 & 를 붙이거나 nohup 을 쓰지 마세요. 서버 상태를 바꾸는 명령은 사용자가 앱에서 승인해야 실행되고, 시스템 종료·루트 삭제 같은 명령은 항상 차단됩니다. 가능하면 조회 명령을 쓰세요.',
+  runCommand: '세션 서버에서 셸 명령을 실행하고 종료 코드와 출력을 돌려줍니다. 30초 제한, 출력 64KB 제한이 있습니다. 30초를 넘길 명령(빌드, 설치, 테스트 등)은 background: true 로 시작하세요. 그러면 작업 ID 를 바로 돌려주고, 출력과 종료 상태는 job_output 으로 읽습니다. 명령 끝에 & 를 붙이거나 nohup 을 쓰지 마세요. 서버 상태를 바꾸는 명령은 사용자가 앱에서 승인해야 실행되고, 시스템 종료·루트 삭제 같은 명령은 항상 차단됩니다. 가능하면 조회 명령을 쓰세요. 사용자 승인이 필요한 명령(서버 상태를 바꾸는 명령과 모든 background 실행)은 reason 에 왜 실행하는지 적어야 하며, 없으면 실행하지 않고 오류를 돌려줍니다. 조회가 아닌 명령에는 항상 reason 을 넣으세요.',
   jobOutput: 'run_command 의 background: true 로 시작한 작업의 상태, 종료 코드, 그리고 지난번 호출 뒤로 새로 나온 출력을 돌려줍니다(stdout 과 stderr 를 나온 순서대로 합친 것). 작업이 실행 중이면 끝나기를 wait_seconds 만큼 기다린 뒤 그동안 나온 출력을 모아서 돌려주므로, 짧은 간격으로 여러 번 부르지 말고 wait_seconds 를 넉넉히 주세요. 기다리지 않으려면 0 을 주세요. 한 번에 64KB 까지 주므로 읽지 않은 출력이 더 있다는 안내가 있으면 다시 호출하세요. 작업마다 마지막 1MB 까지만 보관합니다.',
   stopJob: '백그라운드 작업을 중지하고 마지막 상태를 돌려줍니다. 이미 끝난 작업이면 그 상태를 그대로 돌려줍니다.',
   uploadFile: '이 PC 의 파일 하나를 세션 서버에 올립니다. 바이너리도 되고 1GB 까지입니다. local_path 는 앱의 설정 > MCP 에 등록된 "파일 전송 허용 폴더" 안의 절대 경로여야 합니다(등록된 폴더가 없으면 쓸 수 없고, 폴더는 사용자가 앱에서만 등록할 수 있습니다). 사용자가 앱에서 양쪽 경로와 크기를 보고 허용해야 전송되며, 최대 60초 기다립니다. 서버에 같은 이름의 파일이 있으면 overwrite: true 가 있어야 덮어씁니다. 전송은 임시 파일에 쓴 뒤 이름을 바꾸므로 실패하거나 중지해도 원래 파일은 그대로입니다. 20초 안에 끝나면 결과(크기, SHA-256)를, 아니면 작업 ID 를 돌려주며 진행과 결과는 job_output, 중지는 stop_job 으로 합니다. 폴더는 전송할 수 없으니 필요하면 tar 로 묶으세요. 작은 텍스트 파일을 만들거나 고칠 때는 write_file, edit_file 을 쓰세요.',
@@ -95,16 +97,19 @@ function buildMcpServer(handlers, { version, signal }) {
   const server = new McpServer({ name: 'ez-shell', version })
   const sessionArg = z.string().min(1).describe('list_sessions 에서 받은 세션 id')
   const signalFor = (extra) => combineSignals([signal, extra && extra.signal])
+  const reasonArg = z.string().max(MAX_REASON_LENGTH).optional()
+    .describe('이 명령을 실행하려는 이유 (한두 문장, 최대 500자). 사용자 확인 창에 그대로 표시됩니다. 사용자 승인이 필요한 명령에는 필수입니다. 예: "디스크가 가득 차 30일 지난 로그를 지웁니다"')
   server.registerTool('list_sessions', { description: DESCRIPTIONS.listSessions }, async () => safely(() => handlers.listSessions()))
   server.registerTool('cd', {
     description: DESCRIPTIONS.cd,
-    inputSchema: { session: sessionArg, path: z.string().min(1).max(MAX_PATH_LENGTH).describe('이동할 경로 (절대 경로 또는 현재 위치 기준 상대 경로)') }
+    inputSchema: { session: sessionArg, path: z.string().min(1).max(MAX_PATH_LENGTH).describe('이동할 경로 (절대 경로 또는 현재 위치 기준 상대 경로)'), reason: reasonArg }
   }, async (args, extra) => safely(() => handlers.changeDirectory(args, { signal: signalFor(extra) })))
   server.registerTool('run_command', {
     description: DESCRIPTIONS.runCommand,
     inputSchema: {
       session: sessionArg,
       command: z.string().min(1).max(MAX_COMMAND_LENGTH).describe('실행할 셸 명령'),
+      reason: reasonArg,
       background: z.boolean().optional().describe('true 면 백그라운드 작업으로 시작하고 작업 ID 를 바로 돌려줍니다 (30초를 넘길 명령에 사용)'),
       timeout_minutes: z.number().int().min(1).max(MAX_JOB_MINUTES).optional().describe(`백그라운드 작업의 제한 시간(분). 기본 10, 최대 ${MAX_JOB_MINUTES}. background: true 일 때만 쓸 수 있습니다`)
     }

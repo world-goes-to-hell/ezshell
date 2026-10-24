@@ -28,6 +28,8 @@ const JOB_LIMIT_MESSAGES = {
   session: `이 세션에서 동시에 실행할 수 있는 백그라운드 작업 수를 넘었습니다. ${JOB_LIMIT_HINT}`,
   total: `동시에 실행할 수 있는 백그라운드 작업 수를 넘었습니다. ${JOB_LIMIT_HINT}`
 }
+const MAX_PURPOSE_LENGTH = 500
+const PURPOSE_REQUIRED_MESSAGE = '이 명령은 사용자 확인이 필요합니다. reason 에 이 명령을 실행하려는 이유를 한두 문장으로 적어 다시 요청하세요. 앱의 확인 창에 그대로 표시됩니다.'
 const NO_ACTIVITY = { begin() {}, update() {}, appendOutput() {}, cancel() { return false } }
 
 const DEFAULT_SSH_PORT = 22
@@ -58,6 +60,13 @@ function serverLabels(sessions) {
     if (!numbers.has(key)) numbers.set(key, numbers.size + 1)
     return `서버-${numbers.get(key)}`
   })
+}
+
+/** The reason Claude gave for a request, on one line and at most 500 characters; '' when there is none */
+function cleanPurpose(value) {
+  if (typeof value !== 'string') return ''
+  const flat = value.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim()
+  return Array.from(flat).slice(0, MAX_PURPOSE_LENGTH).join('')
 }
 
 function formatRunResult(session, result) {
@@ -133,7 +142,7 @@ function createToolHandlers({
    * so the dialog never shows a guess. Resolves with null when the app locked or the request was
    * cancelled before the dialog could open.
    */
-  async function askApproval({ session, command, verdict, signal, job }) {
+  async function askApproval({ session, command, purpose, verdict, signal, job }) {
     let cwd = gateway.getCwd(session.id)
     if (cwd === null) cwd = await gateway.resolveCwd(session, { signal })
     if (!isUnlocked() || signal.aborted) return null
@@ -142,6 +151,7 @@ function createToolHandlers({
       folder: folderPath(getFolders(), session.folderId),
       cwd,
       command,
+      purpose,
       level: verdict.level,
       reasons: verdict.reasons,
       ...(job ? { background: { limitMinutes: job.limitMinutes } } : {})
@@ -212,8 +222,9 @@ function createToolHandlers({
   /**
    * `ranIn(result)` tells where the request ran, for the activity view, when that was not known at the start.
    * With `job` ({ limitMinutes }) the command is started as a background job instead of being run to its end.
+   * `purpose` is the reason Claude gave (cleaned); a request the user has to approve is refused without one.
    */
-  async function guarded({ ref, command, signal, perform, format, ranIn, job }) {
+  async function guarded({ ref, command, purpose = '', signal, perform, format, ranIn, job }) {
     if (!isUnlocked()) return textResult(LOCKED_MESSAGE, true)
     let sessions
     try {
@@ -228,9 +239,10 @@ function createToolHandlers({
     const verdict = classifyCommand(command)
     const base = {
       requestId: newRequestId(), sessionId: session.id, sessionName: session.name, command, level: verdict.level, reasons: verdict.reasons,
+      ...(purpose ? { purpose } : {}),
       ...(job ? { background: true, limitMinutes: job.limitMinutes } : {})
     }
-    // Only for the activity view; the audit log keeps the command and the verdict, nothing else.
+    // Only for the activity view; the audit log keeps the command, the verdict and the reason given, nothing else.
     const startCwd = knownCwd(session.id)
     if (verdict.level === 'forbidden') {
       writeLog({ ...base, phase: 'end', outcome: 'blocked' })
@@ -257,6 +269,8 @@ function createToolHandlers({
     } catch (err) {
       policyError = { err }
     }
+    // An input error like an empty command: nothing ran and nobody was asked, so nothing is logged
+    if (askFirst && !purpose) return textResult(PURPOSE_REQUIRED_MESSAGE, true)
     if (!writeLog({ ...base, phase: 'start' })) return textResult(AUDIT_FAILED_MESSAGE, true)
     track(() => activity.begin({ ...activityFields(base), cwd: startCwd, state: askFirst ? 'waiting' : 'running', ...(job ? { background: true } : {}) }, { cancel: () => stop.abort() }))
     let finished = false
@@ -283,7 +297,7 @@ function createToolHandlers({
       // The directory shown in the dialog; the gateway refuses to run anywhere else.
       let expectedCwd
       if (askFirst) {
-        const answer = await askApproval({ session, command, verdict, signal: requestSignal, job })
+        const answer = await askApproval({ session, command, purpose, verdict, signal: requestSignal, job })
         if (answer === null) return interrupted()
         if (answer.outcome !== 'approved') {
           const denied = textResult(DENIAL_MESSAGES[answer.outcome] || DENIAL_MESSAGES.denied, true)
@@ -349,17 +363,19 @@ function createToolHandlers({
   const isBlank = (value) => typeof value !== 'string' || value.trim() === ''
 
   function runCommand(args, { signal } = {}) {
-    const { session, command, background, timeout_minutes: minutes } = args || {}
+    const { session, command, background, timeout_minutes: minutes, reason } = args || {}
+    const purpose = cleanPurpose(reason)
     if (isBlank(command)) return Promise.resolve(textResult(EMPTY_COMMAND_MESSAGE, true))
     if (background === true) {
       const limitMinutes = minutes === undefined ? DEFAULT_JOB_MINUTES : minutes
       if (!Number.isInteger(limitMinutes) || limitMinutes < 1 || limitMinutes > MAX_JOB_MINUTES) return Promise.resolve(textResult(JOB_MINUTES_MESSAGE, true))
-      return guarded({ ref: session, command, signal, job: { limitMinutes } })
+      return guarded({ ref: session, command, purpose, signal, job: { limitMinutes } })
     }
     if (minutes !== undefined) return Promise.resolve(textResult(JOB_MINUTES_ALONE_MESSAGE, true))
     return guarded({
       ref: session,
       command,
+      purpose,
       signal,
       perform: (target, cancel, expectedCwd, onOutput) => gateway.run(target, command, { signal: cancel, expectedCwd, onOutput }),
       format: formatRunResult,
@@ -368,11 +384,12 @@ function createToolHandlers({
   }
 
   function changeDirectory(args, { signal } = {}) {
-    const { session, path } = args || {}
+    const { session, path, reason } = args || {}
     if (isBlank(path)) return Promise.resolve(textResult(EMPTY_PATH_MESSAGE, true))
     return guarded({
       ref: session,
       command: `cd ${quoteCdTarget(path)}`,
+      purpose: cleanPurpose(reason),
       signal,
       perform: (target, cancel, expectedCwd) => gateway.changeDirectory(target, path, { signal: cancel, expectedCwd }),
       format: (target, result) => `세션: ${exposedName(target)}

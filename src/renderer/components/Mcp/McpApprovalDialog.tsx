@@ -17,6 +17,7 @@ const APPROVE_DELAY_MS = 800
 const COMMAND_HINT = 'Claude Code 가 요청한 명령입니다. 내용을 확인한 뒤 허용하세요. 응답하지 않으면 시간이 지나 자동으로 거부됩니다.'
 const FILE_HINT = 'Claude Code 가 요청한 파일 변경입니다. 허용하면 위 내용 그대로 서버의 파일에 씁니다. 응답하지 않으면 시간이 지나 자동으로 거부됩니다.'
 const TRANSFER_HINT = 'Claude Code 가 요청한 파일 전송입니다. 양쪽 경로와 방향을 확인한 뒤 허용하세요. 파일 내용은 여기에 표시되지 않습니다. 응답하지 않으면 시간이 지나 자동으로 거부됩니다.'
+const PURPOSE_NOTE = 'Claude Code 가 직접 적은 설명입니다. 실제 명령과 다를 수 있으니 아래 명령을 기준으로 판단하세요.'
 const NO_CHANGE_HINT = 'Claude Code 가 보낸 내용이 지금 파일과 같습니다. 허용하면 파일은 그대로 두고, 내용이 같다는 사실만 알려 줍니다.'
 
 interface ApprovalContentProps {
@@ -42,12 +43,14 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
   const remaining = secondsLeft(request.expiresAt, now)
   const command = revealHiddenChars(request.command)
   const cwd = request.cwd === null ? null : revealHiddenChars(request.cwd)
+  // Claude's own words: shown, but it is the command that counts
+  const purpose = request.purpose ? revealHiddenChars(request.purpose) : null
   const filePath = revealPath(request.path ?? '')
   const requestedPath = request.requestedPath && request.requestedPath !== request.path ? revealPath(request.requestedPath) : null
   const transferPaths = [request.localPath, request.requestedLocalPath, request.remotePath, request.requestedRemotePath]
   const hasHiddenInTransfer = isTransfer && transferPaths.some(value => typeof value === 'string' && revealPath(value).hasHidden)
   const hasHiddenInFile = filePath.hasHidden || requestedPath?.hasHidden === true || diff.hasHidden
-  const hasHiddenInCommand = command.hasHidden || cwd?.hasHidden === true
+  const hasHiddenInCommand = command.hasHidden || cwd?.hasHidden === true || purpose?.hasHidden === true
   // Reasons quote paths (a server may answer with any text for one), so they are shown the same way
   const reasons = request.reasons.map(reason => revealHiddenChars(reason))
   const hasHiddenInReasons = reasons.some(reason => reason.hasHidden)
@@ -100,6 +103,15 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
           </>
         ) : (
           <>
+            {purpose && (
+              <>
+                <dt>요청 사유</dt>
+                <dd>
+                  <p className="mcp-approval-purpose">{purpose.text}</p>
+                  <div className="mcp-approval-requested">{PURPOSE_NOTE}</div>
+                </dd>
+              </>
+            )}
             <dt>위치</dt>
             <dd><code>{cwd?.text ?? '알 수 없음'}</code></dd>
             <dt>명령</dt>

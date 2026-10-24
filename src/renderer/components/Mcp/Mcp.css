@@ -440,6 +440,14 @@
   width: min(860px, calc(100vw - 32px));
 }
 
+.mcp-approval-purpose {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 96px;
+  overflow: auto;
+}
+
 .mcp-approval-requested {
   margin-top: 2px;
   font-size: 12px;

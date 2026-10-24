@@ -137,7 +137,8 @@ exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다
   - 서버의 기존 파일 덮어쓰기는 `posix-rename` 확장이 있어야 한다. 없으면 거부하고, 지우고 다시 쓰는 방식으로 바꾸지 않는다 (중간에 끊기면 원래 파일을 잃는다).
 - 호스트 주소와 계정은 Claude 에게 넘기지 않는다. 대신 `list_sessions` 가 `server` 표지(`서버-1`, ...)를 붙여 같은 서버에 접속하는 세션을 알려 준다 (호스트+포트, 점프 호스트를 쓰면 그 주소까지 같아야 같은 서버). 표지는 목록 순서 번호이고 주소의 해시가 아니다 (IP 해시는 역산할 수 있음).
 - 명령은 `commandPolicy.js` 가 낮음/중간/위험/절대 차단으로 판정한다. 처음 보는 명령은 위험. 위험은 항상 앱 확인 창(60초 안에 응답 없으면 거부), 절대 차단은 실행 불가.
-- 설정은 `userData/mcp.json`(main 전용), 감사 로그는 `userData/mcp-audit.log`(명령과 판정만, 출력은 기록하지 않음).
+- `run_command`, `cd` 는 `reason`(요청 사유)을 받는다. 확인 창이 필요한 명령인데 사유가 없으면 창을 띄우지 않고 거부한다 (감사 로그에도 남기지 않음). 사유는 한 줄로 정리해 500자까지 쓰고, 확인 창에 "Claude 가 직접 적은 설명" 이라는 안내와 함께 보여 준다. 판단 기준은 명령이다 (사유는 거짓일 수 있음). Windows 알림에는 넣지 않는다. 설계: `docs/plan/2026-10-23-mcp-command-reason.md`.
+- 설정은 `userData/mcp.json`(main 전용), 감사 로그는 `userData/mcp-audit.log`(명령, 판정, 요청 사유만. 출력은 기록하지 않음).
 - 상태바의 "MCP 활동" 패널이 요청과 상태(대기/실행/완료/거부/취소/차단)를 실시간으로 보여준다. 이 목록과 명령 출력은 메모리에만 있고 디스크에 쓰지 않는다 (출력에 비밀이 섞일 수 있음).
 - 패널에는 `목록 | 터미널` 두 보기가 있다 (기본은 터미널). 터미널 보기(`McpActivityTerminal.tsx`)는 명령과 출력을 시간순으로 잇는 읽기 전용 화면이고 xterm 이 아니다. 실행 중 출력은 `sessionGateway` 의 `onOutput` → `activityLog.appendOutput`(50ms 묶음) → `mcp-activity-output` 채널로 온다. 요청이 끝날 때 오는 `mcp-activity` 항목이 `outputParts` 전체를 담고 있어 그쪽이 기준이다. 탭으로 만들지 않은 이유: 탭은 모두 SSH 연결 하나를 전제로 한다.
 - 세 번째 보기 `서버별`(`McpActivityLanes.tsx`)은 세션마다 영역을 나눠 같은 형식의 기록을 보여 준다 (`lib/mcpActivity.ts` 의 `groupBySession`). 영역마다 스크롤이 따로이고, 영역 순서는 첫 요청 순서로 고정이다 (활동 때마다 바꾸면 읽던 영역이 움직인다). 기준은 서버 주소가 아니라 세션이고, 요청을 보낸 에이전트는 구분하지 못한다 (stateless, 토큰 하나).

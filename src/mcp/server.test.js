@@ -145,6 +145,23 @@ describe('createMcpHttpServer', () => {
     await client.close()
   })
 
+  it('hands run_command and cd the reason, and lists it in their schema', async () => {
+    const seen = []
+    const record = (name) => async (args) => { seen.push([name, args]); return text('ok') }
+    const client = await connect(await startServer(stubHandlers({ runCommand: record('run'), changeDirectory: record('cd') })))
+    const { tools } = await client.listTools()
+    for (const name of ['run_command', 'cd']) {
+      expect(tools.find(tool => tool.name === name).inputSchema.properties.reason).toBeDefined()
+    }
+    await client.callTool({ name: 'run_command', arguments: { session: 's1', command: 'rm a.log', reason: '로그 정리' } })
+    await client.callTool({ name: 'cd', arguments: { session: 's1', path: '/etc', reason: '설정 확인' } })
+    expect(seen).toEqual([
+      ['run', { session: 's1', command: 'rm a.log', reason: '로그 정리' }],
+      ['cd', { session: 's1', path: '/etc', reason: '설정 확인' }]
+    ])
+    await client.close()
+  })
+
   it('refuses job tool input the schema does not allow, before any handler runs', async () => {
     let called = 0
     const count = async () => { called++; return text('ok') }

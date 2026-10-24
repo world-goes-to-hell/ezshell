@@ -111,6 +111,8 @@ export interface McpApprovalRequest {
   folder: string
   cwd: string | null
   command: string
+  /** Commands only: why Claude says it wants to run it (its own words, at most 500 characters) */
+  purpose?: string
   level: McpRiskLevel
   reasons: string[]
   expiresAt: number
