@@ -1021,7 +1021,10 @@ function keepMainWindowOnTop(onTop) {
   try {
     mainWindow.setAlwaysOnTop(onTop);
     if (!onTop) return;
-    if (mainWindow.isMinimized() || !mainWindow.isVisible()) mainWindow.showInactive();
+    // Always, not only when minimized: a window that was covered by others stays "hidden" to Chromium
+    // (native occlusion) after setAlwaysOnTop/moveTop alone, so it keeps showing its old frame without
+    // the dialog until clicked. showInactive makes it visible again and keeps a maximized window maximized.
+    mainWindow.showInactive();
     mainWindow.moveTop();
   } catch (err) {
     console.error('Failed to raise the window for MCP approval:', err);
