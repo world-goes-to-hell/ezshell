@@ -176,6 +176,15 @@ export interface McpActivityOutput {
   parts: McpOutputPart[]
 }
 
+/** upload_file / download_file: how far the copy got, for the progress bar */
+export interface McpTransferProgress {
+  direction: 'upload' | 'download'
+  size: number
+  done: number
+  /** When the copy began (not the request: that may have waited for the user) */
+  startedAt: number
+}
+
 export interface McpActivityItem {
   id: string
   time: string
@@ -203,6 +212,8 @@ export interface McpActivityItem {
   background?: boolean
   /** Id of the background job, once it has started */
   jobId?: string
+  /** File transfers only */
+  transfer?: McpTransferProgress
 }
 
 export interface McpAuditEntry {
@@ -325,6 +336,8 @@ declare global {
 
       // Terminal Window
       openTerminalWindow: (sessionId: string, title: string, snapshot?: string) => Promise<any>
+      /** Opens (or brings forward) the MCP activity window; refused while the app is locked */
+      openMcpActivityWindow?: () => Promise<{ success: boolean; error?: string }>
       /** Screen contents handed over by the main window; absent until the app restarts after an update */
       takeTerminalSnapshot?: (sessionId: string) => Promise<string | null>
       mergeTerminalToMain: (sessionId: string, title: string, host: string, username: string, snapshot?: string) => Promise<any>

@@ -64,7 +64,7 @@ function countingFs() {
   return { fsp, calls }
 }
 
-function setup({ sessions = [named], alertLevel = 'danger', answer = 'approved', tree = baseTree(), sftpOptions, roots, auditFails = false, transfer = {}, jobs = createJobStore() } = {}) {
+function setup({ sessions = [named], alertLevel = 'danger', answer = 'approved', tree = baseTree(), sftpOptions, roots, auditFails = false, transfer = {}, jobs = createJobStore(), activity } = {}) {
   const local = makeLocal()
   const state = { unlocked: true, sessions, roots: roots === undefined ? [local.work] : roots }
   const sftp = createFakeSftp(tree, sftpOptions)
@@ -88,6 +88,7 @@ function setup({ sessions = [named], alertLevel = 'danger', answer = 'approved',
     getTransferRoots: () => state.roots,
     userDataPath: local.userData,
     jobs,
+    activity,
     transfer: { fsp: hooked, quickWaitMs: 2000, ...transfer },
     approvals: {
       request: async (details, options) => {
@@ -639,6 +640,43 @@ describe('upload_file / download_file: failing and stopping', () => {
     const result = await handlers.uploadFile({ session: 's1', local_path: inWork('empty'), remote_path: '/srv/app/empty' })
     expect(result.isError).toBeUndefined()
     expect(sftp.tree.get('/srv/app/empty').data.length).toBe(0)
+  })
+})
+
+describe('upload_file / download_file: progress for the activity view', () => {
+  const recorder = () => {
+    const updates = []
+    return { updates, activity: { begin() {}, update: (id, patch) => updates.push(patch), appendOutput() {}, cancel: () => false } }
+  }
+
+  it('shows how far an upload got, from nothing to the whole file, before it ends', async () => {
+    const { updates, activity } = recorder()
+    const { handlers, inWork } = setup({ activity, transfer: { chunkBytes: 4, window: 1, progressMs: 0 } })
+    await handlers.uploadFile({ session: 's1', local_path: inWork('app.jar'), remote_path: '/srv/app/new.jar' })
+    const progress = updates.filter(patch => patch.transfer).map(patch => patch.transfer)
+    expect(progress[0]).toMatchObject({ direction: 'upload', size: JAR_BYTES.length, done: 0 })
+    expect(progress.map(entry => entry.done)).toEqual([0, 4, 8, JAR_BYTES.length])
+    expect(progress.every(entry => typeof entry.startedAt === 'number')).toBe(true)
+    const lastProgress = updates.findLastIndex(patch => patch.transfer)
+    const ended = updates.findIndex(patch => patch.state === 'done')
+    expect(lastProgress).toBeLessThan(ended)
+    expect(updates[ended].transfer).toBeUndefined()
+  })
+
+  it('shows a download the same way', async () => {
+    const { updates, activity } = recorder()
+    const { handlers, inWork } = setup({ activity, transfer: { progressMs: 0 } })
+    await handlers.downloadFile({ session: 's1', remote_path: REMOTE_LOG, local_path: inWork('app.log') })
+    const progress = updates.filter(patch => patch.transfer).map(patch => patch.transfer)
+    expect(progress[0]).toMatchObject({ direction: 'download', done: 0 })
+    expect(progress[progress.length - 1].done).toBe(progress[0].size)
+  })
+
+  it('keeps the progress out of the audit log', async () => {
+    const { activity } = recorder()
+    const { handlers, inWork, auditEntries } = setup({ activity, transfer: { progressMs: 0 } })
+    await handlers.uploadFile({ session: 's1', local_path: inWork('app.jar'), remote_path: '/srv/app/new.jar' })
+    expect(auditEntries.some(entry => 'transfer' in entry)).toBe(false)
   })
 })
 

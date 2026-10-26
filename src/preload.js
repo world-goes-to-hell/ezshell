@@ -261,6 +261,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   mcpRespondApproval: (id, approved) => ipcRenderer.invoke('mcp-respond-approval', { id, approved }),
   mcpReadAudit: (limit) => ipcRenderer.invoke('mcp-read-audit', { limit }),
   mcpListActivity: () => ipcRenderer.invoke('mcp-list-activity'),
+  openMcpActivityWindow: () => ipcRenderer.invoke('open-mcp-activity-window'),
   mcpCancelActivity: (id) => ipcRenderer.invoke('mcp-cancel-activity', { id }),
   mcpSetupClient: (request) => ipcRenderer.invoke('mcp-setup-client', request),
   mcpAddTransferFolder: () => ipcRenderer.invoke('mcp-add-transfer-folder'),

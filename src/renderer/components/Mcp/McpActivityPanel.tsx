@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RiCloseLine, RiStopCircleLine } from 'react-icons/ri'
+import { RiCloseLine, RiExternalLinkLine, RiStopCircleLine } from 'react-icons/ri'
 import type { McpActivityItem } from '../../types'
 import { useMcpActivityStore } from '../../stores/mcpActivityStore'
 import type { McpActivityView } from '../../stores/mcpActivityStore'
@@ -8,6 +8,8 @@ import { RISK_LABELS, revealHiddenChars } from '../../lib/mcpLabels'
 import { McpActivityLanes } from './McpActivityLanes'
 import { McpActivityTerminal } from './McpActivityTerminal'
 import { stopMcpRequest } from './stopMcpRequest'
+import { McpTransferBar } from './McpTransferBar'
+import { toast } from '../../stores/toastStore'
 import './Mcp.css'
 
 const TICK_MS = 1000
@@ -54,6 +56,7 @@ function ActivityRow({ item, now }: { item: McpActivityItem; now: number }) {
           </button>
         )}
       </div>
+      {item.transfer && <McpTransferBar transfer={item.transfer} state={item.state} now={now} />}
       {isExpanded && (
         <div className="mcp-activity-detail" id={detailId}>
           {item.reasons.length > 0 && (
@@ -69,13 +72,19 @@ function ActivityRow({ item, now }: { item: McpActivityItem; now: number }) {
   )
 }
 
-export function McpActivityPanel() {
+/**
+ * `overlay`: the panel over the main window, opened from the status bar; it slides aside on a press behind it.
+ * `window`: the whole content of the popped-out MCP activity window, which has its own title bar.
+ */
+export function McpActivityPanel({ variant = 'overlay' }: { variant?: 'overlay' | 'window' }) {
+  const isWindow = variant === 'window'
   const items = useMcpActivityStore(state => state.items)
   const setPanelOpen = useMcpActivityStore(state => state.setPanelOpen)
   const view = useMcpActivityStore(state => state.view)
   const setView = useMcpActivityStore(state => state.setView)
-  const isCollapsed = useMcpActivityStore(state => state.isPanelCollapsed)
+  const isCollapsed = useMcpActivityStore(state => state.isPanelCollapsed) && !isWindow
   const setCollapsed = useMcpActivityStore(state => state.setPanelCollapsed)
+  const canPopOut = !isWindow && typeof window.electronAPI?.openMcpActivityWindow === 'function'
   const [now, setNow] = useState(() => Date.now())
   const hasActive = items.some(item => isActiveState(item.state))
   const { waiting, running } = countActive(items)
@@ -89,27 +98,40 @@ export function McpActivityPanel() {
 
   // While collapsed, Esc belongs to the shell (vim and the like), not to the panel
   useEffect(() => {
-    if (isCollapsed) return
+    if (isWindow || isCollapsed) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented) setPanelOpen(false)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [isCollapsed, setPanelOpen])
+  }, [isWindow, isCollapsed, setPanelOpen])
 
   // A press on the shell or SFTP behind the panel slides it aside. Capture phase, so a terminal that
   // stops the event still counts; the press itself goes on to the shell as usual.
   useEffect(() => {
-    if (isCollapsed) return
+    if (isWindow || isCollapsed) return
     const onPointerDown = (event: PointerEvent) => {
       if (collapsesMcpPanel(event.target instanceof Element ? event.target : null)) setCollapsed(true)
     }
     document.addEventListener('pointerdown', onPointerDown, true)
     return () => document.removeEventListener('pointerdown', onPointerDown, true)
-  }, [isCollapsed, setCollapsed])
+  }, [isWindow, isCollapsed, setCollapsed])
+
+  const openInWindow = async () => {
+    try {
+      const result = await window.electronAPI.openMcpActivityWindow?.()
+      if (result?.success) {
+        setPanelOpen(false)
+        return
+      }
+      toast.error('MCP 활동', result?.error ?? '새 창을 열지 못했습니다.')
+    } catch {
+      toast.error('MCP 활동', '새 창을 열지 못했습니다.')
+    }
+  }
 
   return (
-    <aside className={`mcp-activity-panel view-${view}${isCollapsed ? ' is-collapsed' : ''}`} id="mcp-activity-panel" role="complementary" aria-label="MCP 활동">
+    <aside className={`mcp-activity-panel view-${view}${isCollapsed ? ' is-collapsed' : ''}${isWindow ? ' is-window' : ''}`} id="mcp-activity-panel" role="complementary" aria-label="MCP 활동">
       {isCollapsed && (
         <button type="button" className="mcp-activity-strip" onClick={() => setCollapsed(false)} aria-label="MCP 활동 펼치기" title="MCP 활동 펼치기">
           {waiting > 0 && <span className="mcp-activity-strip-count is-waiting" title={`확인 대기 ${waiting}`}>{waiting}</span>}
@@ -138,9 +160,16 @@ export function McpActivityPanel() {
               </button>
             ))}
           </div>
-          <button type="button" className="mcp-icon-btn" onClick={() => setPanelOpen(false)} aria-label="MCP 활동 닫기" title="닫기 (Esc)">
-            <RiCloseLine size={18} />
-          </button>
+          {canPopOut && (
+            <button type="button" className="mcp-icon-btn" onClick={() => void openInWindow()} aria-label="MCP 활동 새 창으로 열기" title="새 창으로 열기">
+              <RiExternalLinkLine size={16} />
+            </button>
+          )}
+          {!isWindow && (
+            <button type="button" className="mcp-icon-btn" onClick={() => setPanelOpen(false)} aria-label="MCP 활동 닫기" title="닫기 (Esc)">
+              <RiCloseLine size={18} />
+            </button>
+          )}
         </div>
       </header>
       {items.length === 0 ? (

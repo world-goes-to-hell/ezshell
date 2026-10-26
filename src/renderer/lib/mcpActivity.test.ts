@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { McpActivityItem } from '../types'
-import { ACTIVITY_STATE_LABELS, collapsesMcpPanel, DEFAULT_ACTIVITY_PREFS, MAX_ACTIVITY, appendOutputParts, cleanTerminalText, countActive, formatClock, formatDuration, formatElapsed, groupBySession, hasRun, hideLane, isLaneHidden, isActiveState, mergeSnapshot, parseActivityPrefs, upsertActivity } from './mcpActivity'
+import { ACTIVITY_STATE_LABELS, collapsesMcpPanel, DEFAULT_ACTIVITY_PREFS, MAX_ACTIVITY, appendOutputParts, cleanTerminalText, countActive, formatClock, formatDuration, formatElapsed, groupBySession, hasRun, hideLane, isLaneHidden, moveLane, orderLanes, isActiveState, mergeSnapshot, parseActivityPrefs, upsertActivity } from './mcpActivity'
 
 const item = (id: string, startedAt: number, state: McpActivityItem['state'] = 'running'): McpActivityItem => ({
   id, time: 't', sessionId: 's', sessionName: 'dev', command: 'ls', level: 'low', reasons: [], state, startedAt, finishedAt: null
@@ -193,6 +193,42 @@ describe('hiding a lane', () => {
     const original = {}
     hideLane(original, laneOf([on('web', 'a', 1)], 'web'))
     expect(original).toEqual({})
+  })
+})
+
+describe('lane order', () => {
+  const lane = (sessionId: string) => ({ sessionId, sessionName: sessionId, items: [], waiting: 0, running: 0 })
+  const ids = (lanes: Array<{ sessionId: string }>) => lanes.map(entry => entry.sessionId)
+  const natural = [lane('a'), lane('b'), lane('c')]
+
+  it('keeps the natural order until the user moves a lane', () => {
+    expect(ids(orderLanes(natural, []))).toEqual(['a', 'b', 'c'])
+  })
+
+  it('puts a dragged lane where it was dropped, before the lane it was dropped on', () => {
+    const order = moveLane(natural, [], 'c', 'a')
+    expect(order).toEqual(['c', 'a', 'b'])
+    expect(ids(orderLanes(natural, order))).toEqual(['c', 'a', 'b'])
+  })
+
+  it('moves a lane to a later place, after the lane it was dropped on', () => {
+    expect(moveLane(natural, [], 'a', 'c')).toEqual(['b', 'c', 'a'])
+    expect(moveLane(natural, [], 'a', 'b')).toEqual(['b', 'a', 'c'])
+  })
+
+  it('adds a session seen for the first time at the end', () => {
+    const order = moveLane(natural, [], 'c', 'a')
+    expect(ids(orderLanes([...natural, lane('d')], order))).toEqual(['c', 'a', 'b', 'd'])
+  })
+
+  it('skips sessions that are no longer in the list', () => {
+    expect(ids(orderLanes([lane('b'), lane('a')], ['c', 'a', 'b']))).toEqual(['a', 'b'])
+  })
+
+  it('changes nothing for a drop on itself or on a lane that is not there', () => {
+    expect(moveLane(natural, ['c', 'a', 'b'], 'a', 'a')).toEqual(['c', 'a', 'b'])
+    expect(moveLane(natural, ['c', 'a', 'b'], 'x', 'a')).toEqual(['c', 'a', 'b'])
+    expect(moveLane(natural, ['c', 'a', 'b'], 'a', 'x')).toEqual(['c', 'a', 'b'])
   })
 })
 

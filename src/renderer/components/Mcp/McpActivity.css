@@ -656,3 +656,117 @@
 .mcp-term-stop:hover {
   background: color-mix(in srgb, var(--error) 20%, transparent);
 }
+
+/* ---- File transfer progress (upload_file / download_file) ---- */
+.mcp-transfer {
+  margin: 6px 0 2px;
+  font-size: 12px;
+}
+
+.mcp-activity-item > .mcp-transfer {
+  margin: 0;
+  padding: 0 12px 10px 16px;
+}
+
+.mcp-transfer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.mcp-transfer-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mcp-transfer-details {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.mcp-transfer-track {
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+}
+
+.mcp-transfer-fill {
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform 0.4s ease-out;
+}
+
+.mcp-transfer.is-done .mcp-transfer-fill {
+  background: var(--success);
+}
+
+.mcp-transfer.is-stopped .mcp-transfer-fill {
+  background: var(--text-muted);
+}
+
+.mcp-transfer.is-stopped .mcp-transfer-label {
+  color: var(--text-secondary);
+}
+
+/* ---- Per-server view: dragging a lane by its header ---- */
+.mcp-lane-header[draggable='true'] {
+  cursor: grab;
+}
+
+.mcp-lane-header[draggable='true']:active {
+  cursor: grabbing;
+}
+
+.mcp-lane-grip {
+  flex-shrink: 0;
+  margin-right: -4px;
+  color: var(--text-muted);
+}
+
+.mcp-lane-header .mcp-lane-title {
+  flex: 1;
+}
+
+.mcp-lane.is-dragging {
+  opacity: 0.45;
+}
+
+.mcp-lane.is-drop-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ---- The panel in a window of its own ---- */
+.mcp-activity-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-primary);
+}
+
+.mcp-activity-panel.is-window {
+  position: static;
+  flex: 1;
+  min-height: 0;
+  width: auto;
+  border-left: none;
+  box-shadow: none;
+  transform: none;
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mcp-transfer-fill { transition: none; }
+}

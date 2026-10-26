@@ -46,6 +46,7 @@ import { useSessionLogStore } from './stores/sessionLogStore'
 import { useSessionLogFeed } from './hooks/useSessionLogFeed'
 import { openSessionLogFolder, toggleSessionLog } from './lib/sessionLogActions'
 import './styles/sessionLog.css'
+import { McpActivityWindow } from './components/Mcp/McpActivityWindow'
 
 // Check if we're in a special window mode
 function getWindowModeParams() {
@@ -71,6 +72,10 @@ function getWindowModeParams() {
     }
   }
 
+  if (params.get('mcpActivityMode') === 'true') {
+    return { mode: 'mcpActivity' as const }
+  }
+
   return null
 }
 
@@ -90,6 +95,15 @@ function App() {
         />
         <ToastContainer />
         <ConfirmDialogHost />
+      </>
+    )
+  }
+
+  if (windowParams?.mode === 'mcpActivity') {
+    return (
+      <>
+        <McpActivityWindow />
+        <ToastContainer />
       </>
     )
   }

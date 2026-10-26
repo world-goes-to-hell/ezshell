@@ -125,11 +125,17 @@ function createTransferHandlers({
       jobs.append(jobId, `${text}\n`)
       track(() => activity.appendOutput(requestId, 'stdout', `${text}\n`))
     }
+    // The bar in the activity view; activity only, never the audit log. Speed counts from here, not from
+    // the request, which may have waited for the user.
+    const copyStartedAt = Date.now()
+    const showProgress = (done) => track(() => activity.update(requestId, { transfer: { direction, size, done, startedAt: copyStartedAt } }))
+    showProgress(0)
     const onProgress = (done) => {
       const now = Date.now()
       if (now - lastReport < progressMs || done >= size) return
       lastReport = now
       report(`진행: ${formatBytes(done)} / ${formatBytes(size)} (${Math.floor((done / size) * 100)}%)`)
+      showProgress(done)
     }
     const copyOptions = { size, signal: run.signal, hash, onProgress, ...(chunkBytes ? { chunkBytes } : {}), ...(window ? { window } : {}) }
 
@@ -251,6 +257,7 @@ function createTransferHandlers({
     if (!failure) {
       const digest = hash.digest('hex')
       const text = describe({ direction, session, localFile, remoteFile, isNew, size, digest }).join('\n')
+      showProgress(size)
       jobs.append(jobId, `${text}\n`)
       jobs.finish(jobId, { state: 'done' })
       finish({ outcome: 'approved', exitCode: null, timedOut: false, cancelled: false, contentSha256: digest }, text)

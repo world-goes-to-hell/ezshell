@@ -15,6 +15,8 @@ interface McpActivityState {
   isActiveOnly: boolean
   /** Per-server view: lanes the user closed (memory only, like the requests) */
   hiddenLanes: McpHiddenLanes
+  /** Per-server view: session ids in the order the user dragged the lanes to (memory only) */
+  laneOrder: string[]
   mergeSnapshot: (items: McpActivityItem[], liveIds: ReadonlySet<string>) => void
   upsert: (item: McpActivityItem) => void
   appendOutput: (id: string, parts: McpOutputPart[]) => void
@@ -30,6 +32,7 @@ interface McpActivityState {
   /** Close a lane in the per-server view until its session gets a new request */
   hideLane: (lane: McpActivityLane) => void
   showAllLanes: () => void
+  setLaneOrder: (order: string[]) => void
 }
 
 // Only the view and the filter are stored, never the requests or their output.
@@ -59,10 +62,11 @@ export const useMcpActivityStore = create<McpActivityState>((set, get) => ({
   view: initialPrefs.view,
   isActiveOnly: initialPrefs.isActiveOnly,
   hiddenLanes: {},
+  laneOrder: [],
   mergeSnapshot: (items, liveIds) => set((state) => ({ items: mergeSnapshot(state.items, items, liveIds) })),
   upsert: (item) => set((state) => ({ items: upsertActivity(state.items, item) })),
   appendOutput: (id, parts) => set((state) => ({ items: appendOutputParts(state.items, id, parts) })),
-  clear: () => set({ items: [], hiddenLanes: {} }),
+  clear: () => set({ items: [], hiddenLanes: {}, laneOrder: [] }),
   setPanelOpen: (open) => set({ isPanelOpen: open, isPanelCollapsed: false }),
   setPanelCollapsed: (isCollapsed) => set((state) => ({ isPanelCollapsed: state.isPanelOpen && isCollapsed })),
   togglePanel: () => set((state) => {
@@ -79,5 +83,6 @@ export const useMcpActivityStore = create<McpActivityState>((set, get) => ({
     savePrefs({ view: get().view, isActiveOnly })
   },
   hideLane: (lane) => set((state) => ({ hiddenLanes: hideLane(state.hiddenLanes, lane) })),
-  showAllLanes: () => set({ hiddenLanes: {} })
+  showAllLanes: () => set({ hiddenLanes: {} }),
+  setLaneOrder: (order) => set({ laneOrder: order })
 }))

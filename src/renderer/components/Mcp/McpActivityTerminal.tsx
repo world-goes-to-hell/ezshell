@@ -4,6 +4,7 @@ import type { McpActivityItem } from '../../types'
 import { ACTIVITY_STATE_LABELS, cleanTerminalText, formatClock, formatDuration, formatElapsed, hasRun, isActiveState } from '../../lib/mcpActivity'
 import { RISK_LABELS, revealHiddenChars } from '../../lib/mcpLabels'
 import { stopMcpRequest } from './stopMcpRequest'
+import { McpTransferBar } from './McpTransferBar'
 
 /** Keep following new output only while the view is scrolled to (about) the bottom */
 const FOLLOW_THRESHOLD_PX = 24
@@ -49,6 +50,7 @@ export const TerminalEntry = memo(function TerminalEntry({ item, now }: { item: 
           ))}
         </pre>
       )}
+      {item.transfer && <McpTransferBar transfer={item.transfer} state={item.state} now={now} />}
       {item.state === 'waiting' && <p className="mcp-term-notice">{WAITING_TEXT}</p>}
       {notice && <p className="mcp-term-notice mcp-term-notice-stopped">{notice}</p>}
       <div className="mcp-term-status">

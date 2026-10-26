@@ -144,6 +144,30 @@ export function groupBySession(list: McpActivityItem[]): McpActivityLane[] {
   }))
 }
 
+/**
+ * Lanes in the order the user dragged them to (`order`, session ids). Sessions not in `order` keep their
+ * natural place after the ordered ones, so a new session shows up at the end.
+ */
+export function orderLanes<T extends { sessionId: string }>(lanes: T[], order: readonly string[]): T[] {
+  const rank = new Map(order.map((id, index) => [id, index]))
+  const placed = lanes.filter(lane => rank.has(lane.sessionId)).sort((a, b) => rank.get(a.sessionId)! - rank.get(b.sessionId)!)
+  return [...placed, ...lanes.filter(lane => !rank.has(lane.sessionId))]
+}
+
+/**
+ * The order after dropping lane `fromId` on lane `toId`: it takes the target's place, before it when
+ * moving up and after it when moving down. Unchanged for a drop on itself or on a lane not shown.
+ */
+export function moveLane<T extends { sessionId: string }>(lanes: T[], order: readonly string[], fromId: string, toId: string): string[] {
+  const current = orderLanes(lanes, order).map(lane => lane.sessionId)
+  const from = current.indexOf(fromId)
+  const to = current.indexOf(toId)
+  if (from < 0 || to < 0 || from === to) return [...order]
+  const without = current.filter(id => id !== fromId)
+  const at = without.indexOf(toId) + (from < to ? 1 : 0)
+  return [...without.slice(0, at), fromId, ...without.slice(at)]
+}
+
 /** Lanes closed in the per-server view: session id → id of its most recent request when it was closed */
 export type McpHiddenLanes = Readonly<Record<string, string>>
 

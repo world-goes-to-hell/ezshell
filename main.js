@@ -376,6 +376,55 @@ function createTerminalWindow(sessionId, title) {
   return terminalWindow;
 }
 
+// The MCP activity panel in its own window (one at a time). It shows command output, so it is closed
+// when the app locks and cannot be opened while locked.
+let mcpActivityWindow = null;
+
+function createMcpActivityWindow() {
+  mcpActivityWindow = new BrowserWindow({
+    icon: WINDOW_ICON,
+    width: 960,
+    height: 680,
+    minWidth: 480,
+    minHeight: 320,
+    frame: false,
+    backgroundColor: '#1e1e2e',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      preload: path.join(__dirname, '../preload/index.js')
+    }
+  });
+
+  if (process.env.ELECTRON_RENDERER_URL) {
+    mcpActivityWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}?mcpActivityMode=true`)
+  } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
+    mcpActivityWindow.loadURL(`${DEV_RENDERER_URL}?mcpActivityMode=true`)
+  } else {
+    mcpActivityWindow.loadFile(path.join(__dirname, '../renderer/index.html'), { query: { mcpActivityMode: 'true' } })
+  }
+
+  mcpActivityWindow.on('closed', () => {
+    mcpActivityWindow = null;
+  });
+}
+
+ipcMain.handle('open-mcp-activity-window', () => {
+  if (isAppLocked) return { success: false, error: '앱 잠금을 해제하세요.' };
+  if (mcpActivityWindow && !mcpActivityWindow.isDestroyed()) {
+    if (mcpActivityWindow.isMinimized()) mcpActivityWindow.restore();
+    mcpActivityWindow.focus();
+    return { success: true, existing: true };
+  }
+  createMcpActivityWindow();
+  return { success: true };
+});
+
+function closeMcpActivityWindow() {
+  if (mcpActivityWindow && !mcpActivityWindow.isDestroyed()) mcpActivityWindow.close();
+}
+
 // Screen contents of a terminal tab being popped out, kept until its new window picks them up.
 // Memory only: terminal output can contain secrets.
 const terminalSnapshots = new Map();
@@ -525,6 +574,7 @@ ipcMain.handle('lock-app', async () => {
   mcpSessionsCache = null;
   mcpController?.onLocked();
   hostKeyPrompter.dismissAll();
+  closeMcpActivityWindow();
   return { success: true };
 });
 
@@ -896,6 +946,13 @@ function sendToMainWindow(channel, payload) {
   return true;
 }
 
+/** Activity updates go to every window showing the activity: the main window and the MCP activity window */
+function sendToActivityViews(channel, payload) {
+  sendToMainWindow(channel, payload);
+  if (!mcpActivityWindow || mcpActivityWindow.isDestroyed() || mcpActivityWindow.webContents.isLoading()) return;
+  mcpActivityWindow.webContents.send(channel, payload);
+}
+
 // Session logs: terminal output of a tab written to a text file, started per tab by the user (src/sessionLog)
 const SESSION_LOG_FOLDER = 'ezShell Logs';
 const MAX_SESSION_LOG_NAME = 200;
@@ -1002,8 +1059,8 @@ function startMcp() {
     showApproval: showMcpApproval,
     dismissApproval: (id) => sendToMainWindow('mcp-approval-dismiss', { id }),
     approvalClosed: () => keepMainWindowOnTop(false),
-    emitActivity: (item) => sendToMainWindow('mcp-activity', item),
-    emitActivityOutput: (payload) => sendToMainWindow('mcp-activity-output', payload),
+    emitActivity: (item) => sendToActivityViews('mcp-activity', item),
+    emitActivityOutput: (payload) => sendToActivityViews('mcp-activity-output', payload),
     hostKeys: hostKeyStore
   });
   mcpController.start().catch(err => console.error('Failed to start MCP server:', err));
