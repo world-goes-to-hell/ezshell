@@ -143,6 +143,7 @@ exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다
 - 패널에는 `목록 | 터미널` 두 보기가 있다 (기본은 터미널). 터미널 보기(`McpActivityTerminal.tsx`)는 명령과 출력을 시간순으로 잇는 읽기 전용 화면이고 xterm 이 아니다. 실행 중 출력은 `sessionGateway` 의 `onOutput` → `activityLog.appendOutput`(50ms 묶음) → `mcp-activity-output` 채널로 온다. 요청이 끝날 때 오는 `mcp-activity` 항목이 `outputParts` 전체를 담고 있어 그쪽이 기준이다. 탭으로 만들지 않은 이유: 탭은 모두 SSH 연결 하나를 전제로 한다.
 - 세 번째 보기 `서버별`(`McpActivityLanes.tsx`)은 세션마다 영역을 나눠 같은 형식의 기록을 보여 준다 (`lib/mcpActivity.ts` 의 `groupBySession`). 영역마다 스크롤이 따로이고, 영역 순서는 첫 요청 순서로 고정이다 (활동 때마다 바꾸면 읽던 영역이 움직인다). 기준은 서버 주소가 아니라 세션이고, 요청을 보낸 에이전트는 구분하지 못한다 (stateless, 토큰 하나).
   - 영역 머리줄의 X 로 영역을 숨긴다. 숨길 때의 가장 최근 요청 ID 를 기억하고(`mcpActivityStore` 의 `hiddenLanes`, 판정은 `lib/mcpActivity.ts` 의 `isLaneHidden`), 그 세션에 새 요청이 오면 다시 보인다. 이미 있던 요청의 출력·상태 변화로는 다시 뜨지 않는다. 메모리에만 두고 목록을 지우면 함께 지운다. 상단 막대의 "모두 보기" 로 되돌린다. 설계: `docs/plan/2026-10-24-mcp-lane-hide.md`.
+- 패널은 `z-index: 95` 다. 터미널·SFTP 위, 대화상자(100)·메뉴(1000)·업데이트 알림(900)·안내(9999) 아래다. 다시 높이지 말 것: 9200 이던 때 업데이트 알림과 대화상자가 패널 뒤에 가려졌다 (`docs/fix/2026-10-26-mcp-panel-layer-and-host-key-message.md`).
 - 패널이 열린 채로 앱 화면(`#root`)의 다른 곳(셸, SFTP, 사이드바)을 누르면 패널이 오른쪽으로 밀려 36px 띠만 남는다 (`lib/mcpActivity.ts` 의 `collapsesMcpPanel`, 캡처 단계 `pointerdown`). 누른 동작은 셸로 그대로 간다. 확인 창·메뉴처럼 `#root` 밖에 그려지는 것과 알림은 접지 않는다. 띠나 상태바 버튼을 누르면 펼친다 (`togglePanel`). 접힌 동안 내용은 마운트된 채 `inert` 이고(스크롤 유지), Esc 로 닫지 않는다 (셸의 Esc). 설계: `docs/plan/2026-10-24-mcp-panel-collapse.md`.
 - 서버별 보기의 영역은 머리줄을 끌어서 순서를 바꾼다 (HTML5 끌기, 형식 `application/x-ezshell-mcp-lane` 만 받음). 순서는 `mcpActivityStore` 의 `laneOrder`(메모리)이고 `lib/mcpActivity.ts` 의 `orderLanes`, `moveLane` 이 계산한다. 처음 보는 세션은 끝에 붙는다. 개별 기록은 시간순이라 옮기지 않는다.
 - 파일 전송 요청은 활동 항목의 `transfer`(방향, 크기, 보낸 크기, 복사 시작 시각)로 진행 막대를 그린다 (`McpTransferBar.tsx`, 계산은 `lib/mcpTransfer.ts`). `transferTools.js` 가 1초마다 갱신하며 감사 로그에는 넣지 않는다. 속도는 복사 시작부터 센다 (확인 창 대기 시간 제외).
@@ -167,6 +168,7 @@ exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다
 모든 ssh2 연결(터미널, 점프 호스트, 자동 재연결, 연결 테스트, MCP)은 `hostVerifier` 로 서버의 호스트 키를 `userData/known-hosts.json` 과 비교한다 (`src/hostKeys/`). 설계와 보안 검토 반영: `docs/plan/2026-10-14-ssh-host-key-verification.md`.
 - 처음 보는 서버나 바뀐 키는 연결을 바로 끊고 확인 창(`HostKeyDialog.tsx`)을 띄운 뒤, 신뢰하면 저장하고 처음부터 다시 접속한다. 핸드셰이크 중에 기다리면 readyTimeout 에 걸리기 때문이다.
 - 묻는 곳은 터미널 연결과 연결 테스트뿐이다. 자동 재연결은 키가 다르면 재연결을 멈추고, MCP 는 저장된 키가 없거나 다르면 거부한다 (사람이 없을 수 있어서).
+- MCP 로 가는 거부 문구에는 서버 주소를 넣지 않는다 (`hostKeyMessage(err, { subject })`, 게이트웨이는 "이 세션의 서버"/"이 세션의 점프 호스트"). 앱 화면 문구에만 주소가 들어간다.
 - 바꾸면 안 되는 것: 렌더러는 요청 ID 와 결정만 보낸다 (`host-key-respond`). 저장하는 키는 main 이 거부할 때 붙잡아 둔 값이다. `createSessionGateway` 와 `testSshConnection` 은 저장소/검증 함수가 없으면 모든 키를 거부한다.
 - 파일의 서버 주소는 HMAC 으로만 남긴다 (세션 파일은 암호화되어 있음). 파일을 읽지 못하면 저장하지 않는다 (덮어쓰면 저장된 키가 모두 사라져 "바뀜" 이 "처음 보는 서버" 로 보인다).
 - `src/hostKeys` 는 번들되지 않고 `electron.vite.config.ts` 가 `out/main/src/hostKeys` 로 복사한다.

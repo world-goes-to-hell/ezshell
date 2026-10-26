@@ -78,6 +78,29 @@ describe('sessionGateway host keys', () => {
     gateway.closeAll()
   })
 
+  it('never tells Claude the server address in a host key refusal', async () => {
+    const hostKeys = tempStore()
+    const ssh = verifyingSsh(hostKey())
+    const gateway = createSessionGateway({ createClient: ssh.createClient, hostKeys })
+    const err = await gateway.resolveCwd(session).catch(e => e)
+    expect(err.userMessage).toContain('이 세션의 서버')
+    expect(err.userMessage).not.toContain('dev.example')
+    expect(err.userMessage).not.toContain(':22')
+    gateway.closeAll()
+  })
+
+  it('names the jump host without its address when that is the server refused', async () => {
+    const hostKeys = tempStore()
+    const ssh = verifyingSsh(hostKey())
+    const jumpSession = { ...session, useJumpHost: true, jumpHost: 'bastion', jumpPort: 2222, jumpUsername: 'j', jumpAuthType: 'password', jumpPassword: 'p' }
+    const gateway = createSessionGateway({ createClient: ssh.createClient, hostKeys })
+    const err = await gateway.resolveCwd(jumpSession).catch(e => e)
+    expect(err.userMessage).toContain('점프 호스트')
+    expect(err.userMessage).not.toContain('bastion')
+    expect(err.userMessage).not.toContain('2222')
+    gateway.closeAll()
+  })
+
   it('connects to a server whose key is saved', async () => {
     const hostKeys = tempStore()
     hostKeys.trust('dev.example', 22, hostKey())

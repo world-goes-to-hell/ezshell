@@ -72,29 +72,32 @@ async function withHostKeyCheck({ store, prompt, maxPrompts = DEFAULT_MAX_PROMPT
 
 const isHostKeyError = (err) => err instanceof HostKeyError
 
-/** Korean message for a refused host key; `hint` says what to do next */
-function hostKeyMessage(err) {
-  const where = `${err.info.host}:${err.info.port}`
+/**
+ * Korean message for a refused host key; `hint` says what to do next. The server is named by its address
+ * unless `subject` names it otherwise: MCP passes "이 세션의 서버", since Claude never gets host addresses.
+ */
+function hostKeyMessage(err, { subject } = {}) {
+  const where = subject || `${err.info.host}:${err.info.port} 서버`
   if (err.reason === 'changed') {
     return {
-      error: `${where} 서버의 호스트 키가 저장된 키와 다릅니다. 접속하지 않았습니다.`,
+      error: `${where}의 호스트 키가 저장된 키와 다릅니다. 접속하지 않았습니다.`,
       hint: '서버를 다시 설치했거나 키를 바꾼 것이 아니라면 중간에서 가로채는 공격일 수 있습니다. 앱에서 직접 접속해 지문을 확인하세요.'
     }
   }
   if (err.reason === 'unsaved') {
     return {
-      error: `${where} 서버의 호스트 키를 저장하지 못해 접속하지 않았습니다.`,
+      error: `${where}의 호스트 키를 저장하지 못해 접속하지 않았습니다.`,
       hint: '앱 데이터 폴더의 known-hosts.json 을 다른 프로그램이 쓰고 있지 않은지, 디스크 공간이 남아 있는지 확인한 뒤 다시 접속하세요.'
     }
   }
   if (err.reason === 'unknown') {
     return {
-      error: `${where} 서버의 호스트 키를 아직 확인하지 않아 접속하지 않았습니다.`,
+      error: `${where}의 호스트 키를 아직 확인하지 않아 접속하지 않았습니다.`,
       hint: '앱에서 이 세션에 한 번 접속(또는 연결 테스트)해 호스트 키를 확인한 뒤 다시 요청하세요.'
     }
   }
   return {
-    error: `${where} 서버의 호스트 키를 신뢰하지 않아 접속하지 않았습니다.`,
+    error: `${where}의 호스트 키를 신뢰하지 않아 접속하지 않았습니다.`,
     hint: '지문이 서버 관리자가 알려 준 값과 같은지 확인한 뒤 다시 접속하세요.'
   }
 }

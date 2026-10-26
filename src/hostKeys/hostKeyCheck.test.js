@@ -163,6 +163,14 @@ describe('hostKeyMessage', () => {
     expect(hostKeyMessage(err).hint).toContain('접속')
   })
 
+  it('names the server by its address in the app, or by what the caller says', () => {
+    const err = new HostKeyError('changed', { host: 'dev.example', port: 2201, keyType: 'ssh-ed25519', fingerprint: 'SHA256:x' })
+    expect(hostKeyMessage(err).error).toContain('dev.example:2201')
+    const told = hostKeyMessage(err, { subject: '이 세션의 서버' })
+    expect(told.error).toContain('이 세션의 서버의 호스트 키')
+    expect(`${told.error} ${told.hint}`).not.toContain('dev.example')
+  })
+
   it('warns about a changed key', () => {
     const err = new HostKeyError('changed', { host: 'dev.example', port: 22, keyType: 'ssh-ed25519', fingerprint: 'SHA256:x' })
     expect(hostKeyMessage(err).error).toContain('다릅니다')

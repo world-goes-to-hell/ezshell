@@ -100,7 +100,10 @@ function createSessionGateway({
     // Nobody may be at the app to confirm a key, so a key that is not saved is refused without asking.
     return withHostKeyCheck({ store: hostKeys }, (verifierFor) => connectOnce(options, verifierFor)).catch((err) => {
       if (!isHostKeyError(err)) throw err
-      const { error, hint } = hostKeyMessage(err)
+      // The message goes to Claude, which never gets host addresses: name the server by its role
+      const { jump } = options
+      const isJump = Boolean(jump) && err.info.host === jump.host && err.info.port === (Number(jump.port) || 22)
+      const { error, hint } = hostKeyMessage(err, { subject: isJump ? '이 세션의 점프 호스트' : '이 세션의 서버' })
       throw new GatewayError(`${error} ${hint}`)
     })
   }
