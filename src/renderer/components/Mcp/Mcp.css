@@ -523,9 +523,15 @@
   color: var(--warning);
 }
 
-.mcp-approve-btn:disabled {
+.mcp-approve-btn:disabled,
+.mcp-approval-actions .btn-secondary:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* The dialog itself takes focus (not a button); no ring on the whole box */
+.mcp-approval:focus {
+  outline: none;
 }
 
 .mcp-diff-add {

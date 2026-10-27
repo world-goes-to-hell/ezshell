@@ -6,14 +6,11 @@ import { revealDiff } from '../../lib/mcpDiff'
 import { McpDiffView } from './McpDiffView'
 import { McpTransferFields } from './McpTransferFields'
 import { toast } from '../../stores/toastStore'
+import { isApprovalArmed } from '../../lib/approvalArming'
 import './Mcp.css'
 
 const TICK_MS = 250
-/**
- * "허용" stays off for a moment after a request appears. Requests queue up, and the next dialog opens
- * where the last one closed: without this a double click would allow a request nobody has read.
- */
-const APPROVE_DELAY_MS = 800
+const UNFOCUSED_NOTE = '이 창을 한 번 누르면 잠시 뒤 응답할 수 있습니다.'
 const COMMAND_HINT = 'Claude Code 가 요청한 명령입니다. 내용을 확인한 뒤 허용하세요. 응답하지 않으면 시간이 지나 자동으로 거부됩니다.'
 const FILE_HINT = 'Claude Code 가 요청한 파일 변경입니다. 허용하면 위 내용 그대로 서버의 파일에 씁니다. 응답하지 않으면 시간이 지나 자동으로 거부됩니다.'
 const TRANSFER_HINT = 'Claude Code 가 요청한 파일 전송입니다. 양쪽 경로와 방향을 확인한 뒤 허용하세요. 파일 내용은 여기에 표시되지 않습니다. 응답하지 않으면 시간이 지나 자동으로 거부됩니다.'
@@ -28,8 +25,25 @@ interface ApprovalContentProps {
 
 /** One request. Mounted anew for every request (keyed by id), so its state never carries over. */
 function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
-  const denyRef = useRef<HTMLButtonElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const [shownAt] = useState(() => Date.now())
+  // The window comes forward by itself without focus; the buttons wait until it has focus for a moment
+  const [hasFocus, setHasFocus] = useState(() => document.hasFocus())
+  const [focusedAt, setFocusedAt] = useState<number | null>(() => (document.hasFocus() ? Date.now() : null))
+
+  useEffect(() => {
+    const onFocus = () => {
+      setHasFocus(true)
+      setFocusedAt(Date.now())
+    }
+    const onBlur = () => setHasFocus(false)
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [])
   // A file change (write_file / edit_file) shows what changes instead of a command
   const isFile = request.kind === 'file'
   // A transfer (upload_file / download_file) shows both ends; there is no content to show
@@ -55,7 +69,7 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
   const reasons = request.reasons.map(reason => revealHiddenChars(reason))
   const hasHiddenInReasons = reasons.some(reason => reason.hasHidden)
   const hasHidden = hasHiddenInReasons || (isTransfer ? hasHiddenInTransfer : isFile ? hasHiddenInFile : hasHiddenInCommand)
-  const isArmed = now - shownAt >= APPROVE_DELAY_MS
+  const isArmed = isApprovalArmed({ shownAt, focusedAt, hasFocus, now })
   const canApprove = isArmed && hasSeenEnd
   const changeKind = request.noChange ? '변경 없음' : request.isNew ? '새 파일' : '기존 파일 수정'
   const title = isTransfer ? 'MCP 파일 전송 요청' : isFile ? 'MCP 파일 쓰기 요청' : 'MCP 명령 실행 요청'
@@ -65,12 +79,18 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
 
   return (
     <Dialog.Content
+      ref={contentRef}
       className={`modal-content mcp-approval${isFile ? ' mcp-approval-file' : ''}`}
       aria-describedby={hasDiff ? 'mcp-approval-diff' : isFile || isTransfer ? 'mcp-approval-hint' : 'mcp-approval-command'}
+      // Focus the dialog itself, not a button: Enter or Space typed for something else must not answer
       onOpenAutoFocus={(event) => {
         event.preventDefault()
-        denyRef.current?.focus()
+        contentRef.current?.focus()
       }}
+      // Only the two buttons answer (or the time limit). A stray click outside or Esc leaves it open.
+      onEscapeKeyDown={(event) => event.preventDefault()}
+      onPointerDownOutside={(event) => event.preventDefault()}
+      onInteractOutside={(event) => event.preventDefault()}
     >
       <div className="mcp-approval-header">
         <Dialog.Title className="modal-title">{title}</Dialog.Title>
@@ -143,8 +163,9 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
       )}
       <p className="mcp-approval-hint" id="mcp-approval-hint">{hint}</p>
       {!hasSeenEnd && <p className="mcp-approval-scroll-note">변경 내용을 끝까지 내려 본 뒤에 허용할 수 있습니다.</p>}
+      {!hasFocus && <p className="mcp-approval-scroll-note">{UNFOCUSED_NOTE}</p>}
       <div className="mcp-approval-actions">
-        <button ref={denyRef} type="button" className="btn-secondary" onClick={() => onRespond(false)}>거부</button>
+        <button type="button" className="btn-secondary" disabled={!isArmed} onClick={() => onRespond(false)}>거부</button>
         <button type="button" className="mcp-approve-btn" disabled={!canApprove} onClick={() => onRespond(true)}>허용</button>
       </div>
     </Dialog.Content>
@@ -194,7 +215,8 @@ export function McpApprovalDialog() {
   }
 
   return (
-    <Dialog.Root open onOpenChange={(open) => { if (!open) void respond(false) }}>
+    // No onOpenChange: the dialog closes only through the buttons, the time limit or a dismiss from main
+    <Dialog.Root open>
       <Dialog.Portal>
         <Dialog.Overlay className="modal-overlay mcp-approval-overlay" />
         <ApprovalContent key={request.id} request={request} now={now} onRespond={(approved) => void respond(approved)} />
