@@ -42,10 +42,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeAllListeners('ssh-closed');
   },
   onSshStateChanged: (callback) => ipcRenderer.on('ssh-state-changed', (event, data) => callback(data)),
-  onSshReconnecting: (callback) => ipcRenderer.on('ssh-reconnecting', (event, data) => callback(data)),
-  onSshReconnected: (callback) => ipcRenderer.on('ssh-reconnected', (event, data) => callback(data)),
-  onSshReconnectFailed: (callback) => ipcRenderer.on('ssh-reconnect-failed', (event, data) => callback(data)),
+  // Each returns its remover, so a popped-out terminal window can stop listening when it closes
+  onSshReconnecting: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('ssh-reconnecting', handler);
+    return () => ipcRenderer.removeListener('ssh-reconnecting', handler);
+  },
+  onSshReconnected: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('ssh-reconnected', handler);
+    return () => ipcRenderer.removeListener('ssh-reconnected', handler);
+  },
+  onSshReconnectFailed: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('ssh-reconnect-failed', handler);
+    return () => ipcRenderer.removeListener('ssh-reconnect-failed', handler);
+  },
   sshCancelReconnect: (sessionId) => ipcRenderer.invoke('ssh-cancel-reconnect', { sessionId }),
+  sshReconnectNow: (sessionId) => ipcRenderer.invoke('ssh-reconnect-now', { sessionId }),
 
   // ==================== SFTP API ====================
 

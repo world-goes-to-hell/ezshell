@@ -17,6 +17,7 @@ import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/
 import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory'
 import { insertIntoSession } from '../../lib/terminalInputTargets'
 import { CommandHistoryPanel } from './CommandHistoryPanel'
+import { ConnectionLostOverlay } from './ConnectionLostOverlay'
 import 'xterm/css/xterm.css'
 import { SerializeAddon } from 'xterm-addon-serialize'
 import { registerTerminalSerializer, setPendingSnapshot, takePendingSnapshot, SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
@@ -62,6 +63,8 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
   const isSplit = terminal?.isSplit || false
   const splitDirection = useTerminalStore(state => state.getSplitDirection(sessionId)) || 'horizontal'
   const splitSlots = terminal?.splitSlots || []
+  // The connection dropped: the terminal is dimmed and the "연결 끊김" card offers 재연결 / 종료
+  const isDisconnected = terminal ? !terminal.connected : false
   const setSplit = useTerminalStore(state => state.setSplit)
   const isMultiSplit = isSplit && splitDirection !== 'horizontal' && splitDirection !== 'vertical'
   const fontSize = useTerminalStore(state => state.fontSize)
@@ -467,6 +470,16 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
+  // Connected again (재연결 or the automatic reconnect): the new shell opened at 80x24, so tell it the real size
+  const wasConnected = useRef(!isDisconnected)
+  useEffect(() => {
+    if (!isDisconnected && !wasConnected.current) {
+      const dims = fitTerminalWithMargin()
+      if (dims) window.electronAPI.sshResize(sessionId, dims.cols, dims.rows)
+    }
+    wasConnected.current = !isDisconnected
+  }, [isDisconnected, sessionId, fitTerminalWithMargin])
+
   // Refit terminal when file explorer is toggled
   useEffect(() => {
     if (fitAddon.current && isInitialized.current) {
@@ -698,7 +711,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
           <button className="terminal-close" onClick={(e) => { e.stopPropagation(); onClose(); }}>×</button>
         </div>
       </div>
-      <div className={`terminal-body ${isSplit ? `split-${splitDirection}` : ''}`}>
+      <div className={`terminal-body ${isSplit ? `split-${splitDirection}` : ''}${isDisconnected ? ' is-disconnected' : ''}`}>
         <AnimatePresence>
           {showFileExplorer && (
             <motion.div
@@ -876,6 +889,16 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
             </div>
           )}
         </div>
+        {isDisconnected && (
+          <ConnectionLostOverlay
+            sessionId={sessionId}
+            reconnect={terminal?.reconnect}
+            note={terminal?.disconnectNote}
+            onClose={onClose}
+            onReconnected={() => useTerminalStore.getState().setConnected(sessionId)}
+            onReconnectFailed={(note) => useTerminalStore.getState().setDisconnected(sessionId, note)}
+          />
+        )}
       </div>
 
       {/* Merge context menu */}

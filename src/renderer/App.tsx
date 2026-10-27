@@ -47,6 +47,7 @@ import { useSessionLogFeed } from './hooks/useSessionLogFeed'
 import { openSessionLogFolder, toggleSessionLog } from './lib/sessionLogActions'
 import './styles/sessionLog.css'
 import { McpActivityWindow } from './components/Mcp/McpActivityWindow'
+import { reconnectFailureText } from './lib/connectionLost'
 
 // Check if we're in a special window mode
 function getWindowModeParams() {
@@ -255,8 +256,8 @@ function App() {
 
     // Listen for SSH reconnection events
     window.electronAPI.onSshReconnecting((data: { sessionId: string; attempt: number; maxAttempts: number }) => {
-      const { setDisconnected } = useTerminalStore.getState()
-      setDisconnected(data.sessionId)
+      const { setReconnecting } = useTerminalStore.getState()
+      setReconnecting(data.sessionId, data.attempt, data.maxAttempts)
     })
 
     window.electronAPI.onSshReconnected((data: { sessionId: string }) => {
@@ -264,9 +265,9 @@ function App() {
       setConnected(data.sessionId)
     })
 
-    window.electronAPI.onSshReconnectFailed((data: { sessionId: string }) => {
+    window.electronAPI.onSshReconnectFailed((data: { sessionId: string; message?: string }) => {
       const { setDisconnected } = useTerminalStore.getState()
-      setDisconnected(data.sessionId)
+      setDisconnected(data.sessionId, reconnectFailureText(data.message))
     })
 
     // Listen for terminal merge events (when popped-out terminal merges back)

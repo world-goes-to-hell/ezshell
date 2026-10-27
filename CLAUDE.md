@@ -174,6 +174,13 @@ exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다
 - 파일의 서버 주소는 HMAC 으로만 남긴다 (세션 파일은 암호화되어 있음). 파일을 읽지 못하면 저장하지 않는다 (덮어쓰면 저장된 키가 모두 사라져 "바뀜" 이 "처음 보는 서버" 로 보인다).
 - `src/hostKeys` 는 번들되지 않고 `electron.vite.config.ts` 가 `out/main/src/hostKeys` 로 복사한다.
 
+### Connection Lost Overlay (탭 연결 끊김)
+탭의 연결이 끊기면(`TerminalInfo.connected: false`) 터미널 영역(분할 셸 포함)을 흐리게 하고 `ConnectionLostOverlay.tsx` 가 "연결 끊김" 과 `재연결` / `종료` 를 보여 준다. 문구는 `lib/connectionLost.ts`. 자동 재연결 중에는 시도 횟수(`TerminalInfo.reconnect`)를, 실패하면 이유(`disconnectNote`)를 보여 준다. 설계: `docs/plan/2026-10-27-terminal-connection-lost-overlay.md`.
+- `재연결` 은 `ssh-reconnect-now` 로 탭을 처음 열 때와 같은 `openShellConnection` 을 같은 세션 ID 로 다시 부른다 (점프 호스트 포함, 바뀐 호스트 키는 확인 창). 자동 재연결(`reconnectOnce`)은 여전히 점프 호스트를 무시한다.
+- 바꾸면 안 되는 것: 두 연결 함수의 `stream.on('close')` 는 그 셸이 아직 `sshConnections` 의 현재 셸일 때만 처리한다. 재연결로 바뀐 옛 셸의 늦은 close 가 새 연결을 끊김으로 표시하거나 자동 재연결을 또 시작하면 안 된다. 같은 이유로 자동 재연결은 상태가 `reconnecting` 일 때만 셸을 붙이고 다시 시도한다.
+- 다시 연결되면 `TerminalPanel` 이 터미널 크기를 서버에 다시 보낸다 (새 셸은 80x24 로 열린다).
+- 별도 창으로 분리한 터미널(`TerminalWindow.tsx`)도 같은 카드를 쓴다. 그 창은 터미널 스토어가 없어 연결 이벤트를 직접 듣고 같은 계산(`lib/connectionLost.ts` 의 `linkConnected`/`linkDisconnected`/`linkReconnecting`)으로 상태를 둔다. `종료` 는 연결을 끊고 창을 닫는다.
+
 ### LockScreen Safe API Pattern
 `window.electronAPI` 함수 호출 전 `typeof` 체크로 graceful degradation.
 앱 빌드 후 재시작 전 새 API가 없을 수 있음.

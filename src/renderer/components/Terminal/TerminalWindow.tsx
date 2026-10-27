@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import { SerializeAddon } from 'xterm-addon-serialize'
@@ -9,6 +9,9 @@ import { SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
 import { PopoutTitleBar } from '../TitleBar/PopoutTitleBar'
 import { usePopoutTheme } from '../../hooks/usePopoutTheme'
 import { usePopoutHostLabel } from '../../hooks/usePopoutHostLabel'
+import { linkConnected, linkDisconnected, linkReconnecting, reconnectFailureText } from '../../lib/connectionLost'
+import type { ConnectionLink } from '../../lib/connectionLost'
+import { ConnectionLostOverlay } from './ConnectionLostOverlay'
 import 'xterm/css/xterm.css'
 
 interface TerminalWindowProps {
@@ -41,6 +44,49 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
   const fitAddon = useRef<FitAddon | null>(null)
   const serializeAddon = useRef<SerializeAddon | null>(null)
   const isInitialized = useRef(false)
+  // This window has no terminal store; it follows the connection events for its own session
+  const [link, setLink] = useState<ConnectionLink>(linkConnected)
+
+  useEffect(() => {
+    const api = window.electronAPI
+    const isMine = (id: string) => id === sessionId
+    const removers = [
+      api.onSshClosed?.((data: { sessionId: string }) => {
+        if (isMine(data.sessionId)) setLink(previous => linkDisconnected(previous))
+      }),
+      api.onSshReconnecting?.((data) => {
+        if (isMine(data.sessionId)) setLink(linkReconnecting(data.attempt, data.maxAttempts))
+      }),
+      api.onSshReconnected?.((data) => {
+        if (isMine(data.sessionId)) setLink(linkConnected())
+      }),
+      api.onSshReconnectFailed?.((data) => {
+        if (isMine(data.sessionId)) setLink(previous => linkDisconnected(previous, reconnectFailureText(data.message)))
+      })
+    ]
+    return () => removers.forEach(remove => { if (typeof remove === 'function') remove() })
+  }, [sessionId])
+
+  // Connected again: the new shell opened at 80x24, so tell it the real size
+  const wasConnected = useRef(true)
+  useEffect(() => {
+    if (link.connected && !wasConnected.current && fitAddon.current) {
+      try {
+        fitAddon.current.fit()
+        const dims = fitAddon.current.proposeDimensions()
+        if (dims) window.electronAPI.sshResize(sessionId, dims.cols, dims.rows)
+      } catch {
+        // The next resize sends it
+      }
+    }
+    wasConnected.current = link.connected
+  }, [link.connected, sessionId])
+
+  // 종료 on a dropped connection: end what is left of it and close this window
+  const closeSession = () => {
+    window.electronAPI.sshDisconnect(sessionId)
+    window.electronAPI.closeWindow()
+  }
 
   useEffect(() => {
     if (!terminalRef.current || terminalInstance.current) return
@@ -190,7 +236,19 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
           </button>
         }
       />
-      <div ref={terminalRef} className="terminal-window-content" />
+      <div className={`terminal-window-body${link.connected ? '' : ' is-disconnected'}`}>
+        <div ref={terminalRef} className="terminal-window-content" />
+        {!link.connected && (
+          <ConnectionLostOverlay
+            sessionId={sessionId}
+            reconnect={link.reconnect}
+            note={link.disconnectNote}
+            onClose={closeSession}
+            onReconnected={() => setLink(linkConnected())}
+            onReconnectFailed={(note) => setLink(previous => linkDisconnected(previous, note))}
+          />
+        )}
+      </div>
     </div>
   )
 }

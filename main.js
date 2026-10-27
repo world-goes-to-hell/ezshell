@@ -21,7 +21,7 @@ const net = require('net');
 const { autoUpdater } = require('electron-updater');
 const cryptoUtil = require('./src/crypto.js');
 const commandHistory = require('./src/commandHistory.js');
-const { testSshConnection } = require('./src/sshConnectionTest.js');
+const { testSshConnection, describeSshError } = require('./src/sshConnectionTest.js');
 const localFileOps = require('./src/localFileOps.js');
 const sftpSymlinks = require('./src/sftpSymlinks.js');
 const sftpUploadCheck = require('./src/sftpUploadCheck.js');
@@ -1265,7 +1265,7 @@ async function attemptReconnect(sessionId) {
     if (targetWindow) {
       targetWindow.webContents.send('ssh-reconnect-failed', {
         sessionId,
-        message: 'Maximum reconnection attempts reached (5)'
+        message: '자동 재연결을 5번 시도했지만 실패했습니다.'
       });
       // Send ssh-closed since reconnection permanently failed
       targetWindow.webContents.send('ssh-closed', { sessionId });
@@ -1307,6 +1307,8 @@ async function attemptReconnect(sessionId) {
       return;
     }
     console.error('Reconnect attempt failed:', err.message);
+    // The user may have pressed 재연결 (or closed the tab) meanwhile; only an automatic run goes on
+    if (connectionStates.get(sessionId)?.state !== ConnectionState.RECONNECTING) return;
     attemptReconnect(sessionId); // Retry
   }
 }
@@ -1341,6 +1343,11 @@ function reconnectOnce(sessionId, connState, verifierFor) {
           conn.end();
           return reject(err);
         }
+        // The user pressed 재연결 while this automatic attempt was connecting: that connection wins
+        if (connectionStates.get(sessionId) !== connState || connState.state !== ConnectionState.RECONNECTING) {
+          conn.end();
+          return reject(new Error('Superseded by a manual reconnect'));
+        }
 
         // Clean up old connection if exists
         const oldConn = sshConnections.get(sessionId);
@@ -1364,6 +1371,8 @@ function reconnectOnce(sessionId, connState, verifierFor) {
         });
 
         stream.on('close', () => {
+          // A shell replaced by a newer connection (the tab's 재연결) closing late must not touch the new one
+          if (sshConnections.get(sessionId)?.stream !== stream) return;
           updateConnectionState(sessionId, ConnectionState.DISCONNECTED);
           attemptReconnect(sessionId);
         });
@@ -1471,6 +1480,8 @@ function openShellConnection(sessionId, config, verifierFor) {
           });
 
           stream.on('close', () => {
+            // A shell replaced by a newer connection (the tab's 재연결) or closed with its tab is not this tab's news
+            if (sshConnections.get(sessionId)?.stream !== stream) return;
             const connState = connectionStates.get(sessionId);
 
             // If auto-reconnect is enabled, don't send ssh-closed yet - let reconnection handle it
@@ -1840,6 +1851,38 @@ ipcMain.on('ssh-split-close', (event, { streamId }) => {
 });
 
 // Cancel reconnection
+// "재연결" on a dropped tab: connect again the way the tab first connected (jump host included), under the
+// same session id so the tab's terminal carries on. The user pressed it, so a changed host key is asked about.
+ipcMain.handle('ssh-reconnect-now', async (event, payload) => {
+  const sessionId = payload && typeof payload.sessionId === 'string' ? payload.sessionId : '';
+  const connState = sessionId ? connectionStates.get(sessionId) : null;
+  if (!connState || !connState.config) {
+    return { success: false, error: '다시 연결할 접속 정보가 없습니다. 탭을 닫고 새로 접속하세요.' };
+  }
+  if (isAppLocked) return { success: false, error: '앱 잠금을 해제하세요.' };
+  // An automatic attempt waiting for its turn sees the state change and gives up
+  connState.state = ConnectionState.CONNECTING;
+  // Take the old connection off the list first: its late close events then see they are not current
+  const old = sshConnections.get(sessionId);
+  if (old) {
+    sshConnections.delete(sessionId);
+    try { old.conn.end(); } catch (e) { /* already closed */ }
+    if (old.jumpConn) {
+      try { old.jumpConn.end(); } catch (e) { /* already closed */ }
+    }
+  }
+  try {
+    await checkHostKeyAsking((verifierFor) => openShellConnection(sessionId, connState.config, verifierFor));
+    if (sessionLogger) sessionLogger.note(sessionId, '재연결됨');
+    return { success: true };
+  } catch (err) {
+    // The saved config stays, so the user can press 재연결 again
+    connState.state = ConnectionState.DISCONNECTED;
+    if (isHostKeyError(err)) return { success: false, error: hostKeyFailureText(err) };
+    return { success: false, error: describeSshError(err).error };
+  }
+});
+
 ipcMain.handle('ssh-cancel-reconnect', (event, { sessionId }) => {
   const connState = connectionStates.get(sessionId);
   if (connState) {

@@ -277,10 +277,12 @@ declare global {
 
       // SSH reconnection
       onSshStateChanged: (callback: (data: any) => void) => void
-      onSshReconnecting: (callback: (data: { sessionId: string; attempt: number; maxAttempts: number }) => void) => void
-      onSshReconnected: (callback: (data: { sessionId: string }) => void) => void
-      onSshReconnectFailed: (callback: (data: { sessionId: string; message?: string }) => void) => void
+      onSshReconnecting: (callback: (data: { sessionId: string; attempt: number; maxAttempts: number }) => void) => (() => void) | void
+      onSshReconnected: (callback: (data: { sessionId: string }) => void) => (() => void) | void
+      onSshReconnectFailed: (callback: (data: { sessionId: string; message?: string }) => void) => (() => void) | void
       sshCancelReconnect: (sessionId: string) => Promise<any>
+      /** Connect a dropped tab again the way it first connected, under the same session id */
+      sshReconnectNow?: (sessionId: string) => Promise<{ success: boolean; error?: string }>
 
       // Split terminal (independent shell channels)
       sshCreateShell: (sessionId: string) => Promise<{ success: boolean; streamId?: string; error?: string }>

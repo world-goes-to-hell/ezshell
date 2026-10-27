@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { takePendingSnapshot } from '../lib/terminalSnapshots'
 import { findTabPane } from '../lib/sessionTabs'
+import { linkConnected, linkDisconnected, linkReconnecting } from '../lib/connectionLost'
 import type { SSHConnectConfig } from '../hooks/useSSH'
 
 export interface TerminalInfo {
@@ -18,6 +19,10 @@ export interface TerminalInfo {
   statsId?: string
   // Config this tab connected with, kept in memory only so the tab can be duplicated
   connectConfig?: SSHConnectConfig
+  /** Automatic reconnect in progress after the connection dropped */
+  reconnect?: { attempt: number; maxAttempts: number } | null
+  /** Why the connection could not be brought back, shown on the "연결 끊김" overlay */
+  disconnectNote?: string | null
 }
 
 export type SplitDirection = 'horizontal' | 'vertical' | 'quad' | 'tri-bottom' | 'tri-top' | 'tri-right' | 'tri-left'
@@ -62,7 +67,9 @@ interface TerminalState {
   focusTerminal: (sessionId: string) => void
   setConnecting: (connecting: boolean) => void
   setConnected: (sessionId: string) => void
-  setDisconnected: (sessionId: string) => void
+  /** `note` says why; without one the reason already shown is kept (a close follows the failure message) */
+  setDisconnected: (sessionId: string, note?: string) => void
+  setReconnecting: (sessionId: string, attempt: number, maxAttempts: number) => void
   updateTerminalTitle: (sessionId: string, title: string) => void
   updateTerminalMeta: (sessionId: string, meta: Partial<TerminalInfo>) => void
   setTerminalActivity: (sessionId: string, hasActivity: boolean) => void
@@ -290,20 +297,28 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const terminal = state.terminals.get(sessionId)
     if (terminal) {
       const newTerminals = new Map(state.terminals)
-      newTerminals.set(sessionId, { ...terminal, connected: true })
+      newTerminals.set(sessionId, { ...terminal, ...linkConnected() })
       return { terminals: newTerminals }
     }
     return state
   }),
 
-  setDisconnected: (sessionId) => set((state) => {
+  setDisconnected: (sessionId, note) => set((state) => {
     const terminal = state.terminals.get(sessionId)
     if (terminal) {
       const newTerminals = new Map(state.terminals)
-      newTerminals.set(sessionId, { ...terminal, connected: false })
+      newTerminals.set(sessionId, { ...terminal, ...linkDisconnected(terminal, note) })
       return { terminals: newTerminals }
     }
     return state
+  }),
+
+  setReconnecting: (sessionId, attempt, maxAttempts) => set((state) => {
+    const terminal = state.terminals.get(sessionId)
+    if (!terminal) return state
+    const newTerminals = new Map(state.terminals)
+    newTerminals.set(sessionId, { ...terminal, ...linkReconnecting(attempt, maxAttempts) })
+    return { terminals: newTerminals }
   }),
 
   updateTerminalTitle: (sessionId, title) => set((state) => {
