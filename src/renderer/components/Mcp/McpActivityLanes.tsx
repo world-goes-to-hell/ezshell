@@ -4,8 +4,10 @@ import { RiCloseLine, RiDraggable } from 'react-icons/ri'
 import type { McpActivityItem } from '../../types'
 import { groupBySession, isActiveState, isLaneHidden, moveLane, orderLanes } from '../../lib/mcpActivity'
 import type { McpActivityLane } from '../../lib/mcpActivity'
+import { pinnedRequests } from '../../lib/mcpPinned'
 import { useMcpActivityStore } from '../../stores/mcpActivityStore'
 import { TerminalEntry, useFollowBottom } from './McpActivityTerminal'
+import { McpPinnedRequests } from './McpPinnedRequests'
 
 /** Drag data of a lane; anything else dragged over a lane (tabs, files) is ignored */
 const LANE_DRAG_TYPE = 'application/x-ezshell-mcp-lane'
@@ -24,7 +26,10 @@ interface LaneDrag {
 
 /** One session's requests as its own log, with its own scroll position. Dragged by its header. */
 function Lane({ lane, now, onHide, drag }: { lane: McpActivityLane; now: number; onHide: () => void; drag: LaneDrag }) {
-  const { scrollRef, onScroll } = useFollowBottom<HTMLOListElement>(lane.items)
+  const pinned = pinnedRequests(lane.items, now)
+  // The pinned cards take room from the log, which must stay at its bottom when they appear
+  const followed = useMemo(() => [lane.items, pinned.length], [lane.items, pinned.length])
+  const { scrollRef, onScroll } = useFollowBottom<HTMLOListElement>(followed)
   const isActive = lane.waiting + lane.running > 0
   const titleId = useId()
   const className = [
@@ -54,6 +59,7 @@ function Lane({ lane, now, onHide, drag }: { lane: McpActivityLane; now: number;
           </button>
         </span>
       </header>
+      <McpPinnedRequests items={pinned} now={now} />
       <ol className="mcp-term mcp-lane-log" ref={scrollRef} onScroll={onScroll} aria-label={`${lane.sessionName} 명령 기록`} aria-live="off" tabIndex={0}>
         {lane.items.map(item => (
           // Finished entries get a constant `now`, so the one-second tick re-renders only the active ones

@@ -4,6 +4,8 @@ import type { McpActivityItem } from '../../types'
 import { ACTIVITY_STATE_LABELS, cleanTerminalText, formatClock, formatDuration, formatElapsed, hasRun, isActiveState } from '../../lib/mcpActivity'
 import { RISK_LABELS, revealHiddenChars } from '../../lib/mcpLabels'
 import { stopMcpRequest } from './stopMcpRequest'
+import { pinnedRequests } from '../../lib/mcpPinned'
+import { McpPinnedRequests } from './McpPinnedRequests'
 import { McpTransferBar } from './McpTransferBar'
 
 /** Keep following new output only while the view is scrolled to (about) the bottom */
@@ -87,15 +89,21 @@ export function useFollowBottom<T extends HTMLElement>(content: unknown) {
 
 /** Every MCP request as one continuous, read-only log: oldest at the top, newest at the bottom. */
 export function McpActivityTerminal({ items, now }: { items: McpActivityItem[]; now: number }) {
-  const { scrollRef, onScroll } = useFollowBottom<HTMLOListElement>(items)
+  const pinned = pinnedRequests(items, now)
+  // The pinned cards take room from the log, which must stay at its bottom when they appear
+  const followed = useMemo(() => [items, pinned.length], [items, pinned.length])
+  const { scrollRef, onScroll } = useFollowBottom<HTMLOListElement>(followed)
   const oldestFirst = useMemo(() => [...items].reverse(), [items])
 
   return (
-    <ol className="mcp-term" ref={scrollRef} onScroll={onScroll} aria-label="MCP 명령 기록" aria-live="off" tabIndex={0}>
-      {oldestFirst.map(item => (
-        // Finished entries get a constant `now`, so the one-second tick re-renders only the active ones
-        <TerminalEntry key={item.id} item={item} now={isActiveState(item.state) ? now : 0} />
-      ))}
-    </ol>
+    <>
+      <McpPinnedRequests items={pinned} now={now} />
+      <ol className="mcp-term" ref={scrollRef} onScroll={onScroll} aria-label="MCP 명령 기록" aria-live="off" tabIndex={0}>
+        {oldestFirst.map(item => (
+          // Finished entries get a constant `now`, so the one-second tick re-renders only the active ones
+          <TerminalEntry key={item.id} item={item} now={isActiveState(item.state) ? now : 0} />
+        ))}
+      </ol>
+    </>
   )
 }

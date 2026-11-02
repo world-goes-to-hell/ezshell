@@ -8,6 +8,8 @@ import { RISK_LABELS, revealHiddenChars } from '../../lib/mcpLabels'
 import { McpActivityLanes } from './McpActivityLanes'
 import { McpActivityTerminal } from './McpActivityTerminal'
 import { stopMcpRequest } from './stopMcpRequest'
+import { pinnedRequests } from '../../lib/mcpPinned'
+import { McpPinnedRequests } from './McpPinnedRequests'
 import { McpTransferBar } from './McpTransferBar'
 import { toast } from '../../stores/toastStore'
 import './Mcp.css'
@@ -179,9 +181,12 @@ export function McpActivityPanel({ variant = 'overlay' }: { variant?: 'overlay' 
       ) : view === 'lanes' ? (
         <McpActivityLanes items={items} now={now} />
       ) : (
-        <ul className="mcp-activity-list">
-          {items.map(item => <ActivityRow key={item.id} item={item} now={now} />)}
-        </ul>
+        <>
+          <McpPinnedRequests items={pinnedRequests(items, now)} now={now} />
+          <ul className="mcp-activity-list">
+            {items.map(item => <ActivityRow key={item.id} item={item} now={now} />)}
+          </ul>
+        </>
       )}
       </div>
     </aside>

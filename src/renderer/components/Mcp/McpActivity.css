@@ -772,3 +772,104 @@
 @media (prefers-reduced-motion: reduce) {
   .mcp-transfer-fill { transition: none; }
 }
+
+/* ---- Requests in progress, pinned above the log ---- */
+.mcp-pinned {
+  flex-shrink: 0;
+  max-height: 40%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-strong);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mcp-pinned-card {
+  padding: 6px 10px 6px 11px;
+  border-left: 3px solid var(--accent);
+}
+
+.mcp-pinned-card + .mcp-pinned-card {
+  border-top: 1px solid var(--border);
+}
+
+.mcp-pinned-card.state-waiting {
+  border-left-color: var(--warning);
+}
+
+.mcp-pinned-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mcp-pinned-head .mcp-term-session {
+  flex-shrink: 0;
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-pinned-command {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-family: inherit;
+}
+
+.mcp-pinned-state {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.mcp-pinned-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.mcp-pinned-toggle:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.mcp-pinned-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Always three lines high: a card that grew with each line of output would shake the log below */
+.mcp-pinned-body {
+  min-height: 4.5em;
+  margin-top: 4px;
+}
+
+.mcp-pinned-line {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.mcp-pinned-empty {
+  color: var(--text-muted);
+}
