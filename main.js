@@ -22,6 +22,7 @@ const { autoUpdater } = require('electron-updater');
 const cryptoUtil = require('./src/crypto.js');
 const commandHistory = require('./src/commandHistory.js');
 const { testSshConnection, describeSshError } = require('./src/sshConnectionTest.js');
+const { createUpdateChecker } = require('./src/updateChecker.js');
 const localFileOps = require('./src/localFileOps.js');
 const sftpSymlinks = require('./src/sftpSymlinks.js');
 const sftpUploadCheck = require('./src/sftpUploadCheck.js');
@@ -204,15 +205,28 @@ function createWindow() {
   });
 }
 
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+// Coming back to the window checks again, but not more often than this
+const UPDATE_FOCUS_RECHECK_MS = 10 * 60 * 1000;
+const UPDATE_FIRST_CHECK_DELAY_MS = 3000;
+
 function setupAutoUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
 
+  // A running app used to check only at start, so a release made while it ran went unnoticed
+  const updateChecker = createUpdateChecker({
+    check: () => autoUpdater.checkForUpdates(),
+    focusGapMs: UPDATE_FOCUS_RECHECK_MS
+  });
+
+  // Background checks show nothing unless an update is found; a manual check (footer) still shows all
   autoUpdater.on('checking-for-update', () => {
-    sendUpdateStatus('checking');
+    if (!updateChecker.isQuiet()) sendUpdateStatus('checking');
   });
 
   autoUpdater.on('update-available', (info) => {
+    updateChecker.setStage('available');
     sendUpdateStatus('available', {
       version: info.version,
       releaseDate: info.releaseDate,
@@ -221,10 +235,11 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-not-available', () => {
-    sendUpdateStatus('not-available');
+    if (!updateChecker.isQuiet()) sendUpdateStatus('not-available');
   });
 
   autoUpdater.on('download-progress', (progress) => {
+    updateChecker.setStage('downloading');
     sendUpdateStatus('downloading', {
       percent: Math.round(progress.percent),
       transferred: progress.transferred,
@@ -234,19 +249,23 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
+    updateChecker.setStage('downloaded');
     sendUpdateStatus('downloaded', {
       version: info.version
     });
   });
 
   autoUpdater.on('error', (err) => {
-    sendUpdateStatus('error', { message: err.message });
+    // A failed download lets the checks start again
+    updateChecker.setStage('idle');
+    if (!updateChecker.isQuiet()) sendUpdateStatus('error', { message: err.message });
   });
 
-  // Check for updates after 3 seconds
-  setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(() => {});
-  }, 3000);
+  setTimeout(() => { void updateChecker.run(); }, UPDATE_FIRST_CHECK_DELAY_MS);
+  setInterval(() => { void updateChecker.run(); }, UPDATE_CHECK_INTERVAL_MS);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.on('focus', () => { void updateChecker.onFocus(); });
+  }
 }
 
 function sendUpdateStatus(status, data = {}) {

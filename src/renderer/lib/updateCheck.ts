@@ -1,5 +1,16 @@
 import type { UpdateInfo, UpdateStatus } from '../stores/updateStore'
 
+/** Which notice a close (X) hides: the state and version, so a newer version or the next step shows again */
+export function updateNoticeKey(info: UpdateInfo): string {
+  return `${info.status}:${info.version ?? ''}`
+}
+
+/** The update card shows for an available, downloading or downloaded update, unless that notice was closed */
+export function isUpdateNoticeVisible(info: UpdateInfo, dismissedKey: string | null): boolean {
+  if (info.status !== 'available' && info.status !== 'downloading' && info.status !== 'downloaded') return false
+  return updateNoticeKey(info) !== dismissedKey
+}
+
 /** What the main process returns from 'check-for-updates' */
 export interface UpdateCheckResult {
   success: boolean

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveManualCheck } from './updateCheck'
+import { isUpdateNoticeVisible, resolveManualCheck, updateNoticeKey } from './updateCheck'
 
 describe('resolveManualCheck', () => {
   it('ends the check when the updater sent no event (dev mode)', () => {
@@ -38,5 +38,30 @@ describe('resolveManualCheck', () => {
 
   it('does not override a download that already started', () => {
     expect(resolveManualCheck('downloading', { success: true, status: 'available', version: '1.3.0' })).toEqual({ info: null, notice: null })
+  })
+})
+
+describe('update notice per version', () => {
+  it('shows a new version until the user closes it', () => {
+    const info = { status: 'available' as const, version: '2.9.0' }
+    expect(isUpdateNoticeVisible(info, null)).toBe(true)
+    expect(isUpdateNoticeVisible(info, updateNoticeKey(info))).toBe(false)
+  })
+
+  it('shows a newer version again after an older one was closed', () => {
+    const closed = updateNoticeKey({ status: 'available', version: '2.9.0' })
+    expect(isUpdateNoticeVisible({ status: 'available', version: '2.9.1' }, closed)).toBe(true)
+  })
+
+  it('shows the downloaded notice even if the available one was closed', () => {
+    const closed = updateNoticeKey({ status: 'available', version: '2.9.0' })
+    expect(isUpdateNoticeVisible({ status: 'downloaded', version: '2.9.0' }, closed)).toBe(true)
+  })
+
+  it('shows a download in progress, and nothing for other states', () => {
+    expect(isUpdateNoticeVisible({ status: 'downloading', percent: 10 }, null)).toBe(true)
+    for (const status of ['idle', 'checking', 'not-available', 'error'] as const) {
+      expect(isUpdateNoticeVisible({ status }, null)).toBe(false)
+    }
   })
 })

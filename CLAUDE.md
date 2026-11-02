@@ -19,6 +19,8 @@ npm run build:publish   # GitHub Releases 배포 (electron-updater)
 
 배포 결과물: `release/` 폴더 (electron-builder). `dist/`는 예전 빌드 산출물이다.
 
+실행 중인 앱은 시작 3초 뒤, 30분마다, 창에 다시 포커스가 올 때(10분 간격) 새 버전을 확인한다 (`src/updateChecker.js`). 자동 확인은 새 버전을 찾았을 때만 화면에 알리고, 알림 닫기는 버전 단위다 (`updateStore` 의 `dismissedKey`). 설명: `docs/fix/2026-10-27-update-check-while-running.md`.
+
 ## Architecture
 
 ### Process Model

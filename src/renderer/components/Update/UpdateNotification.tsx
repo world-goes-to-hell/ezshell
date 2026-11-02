@@ -3,10 +3,10 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { RiDownload2Fill, RiRefreshLine, RiCloseFill, RiCheckboxCircleFill, RiInformationFill, RiRestartFill } from 'react-icons/ri'
 import { useUpdateStore } from '../../stores/updateStore'
 import { toast } from '../../stores/toastStore'
-import { resolveManualCheck, type UpdateCheckResult } from '../../lib/updateCheck'
+import { isUpdateNoticeVisible, resolveManualCheck, type UpdateCheckResult } from '../../lib/updateCheck'
 
 export function UpdateNotification() {
-  const { info, dismissed, setInfo, setDismissed, setAppVersion } = useUpdateStore()
+  const { info, dismissedKey, setInfo, dismissCurrent, setAppVersion } = useUpdateStore()
 
   useEffect(() => {
     // Get app version
@@ -62,7 +62,7 @@ export function UpdateNotification() {
   }
 
   const handleDismiss = () => {
-    setDismissed(true)
+    dismissCurrent()
   }
 
   const formatBytes = (bytes: number) => {
@@ -71,11 +71,7 @@ export function UpdateNotification() {
     return `${(bytes / 1048576).toFixed(1)} MB`
   }
 
-  const showNotification = !dismissed && (
-    info.status === 'available' ||
-    info.status === 'downloading' ||
-    info.status === 'downloaded'
-  )
+  const showNotification = isUpdateNoticeVisible(info, dismissedKey)
 
   return (
     <AnimatePresence>
@@ -159,6 +155,7 @@ export function VersionInfo() {
 
   const handleCheck = async () => {
     // A second click while checking is fine: electron-updater joins the check already in progress
+    useUpdateStore.getState().clearDismissed()
     useUpdateStore.getState().setInfo({ status: 'checking' })
     let result: UpdateCheckResult | undefined
     try {
