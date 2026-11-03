@@ -35,14 +35,18 @@ export const TerminalEntry = memo(function TerminalEntry({ item, now }: { item: 
 
   return (
     <li className={`mcp-term-entry state-${item.state}`}>
+      {/* Flows like a terminal line: the tags float at the top right, and a long command wraps under
+          them across the whole width instead of in a column between the directory and the tags */}
       <div className="mcp-term-prompt">
+        <span className="mcp-term-tags">
+          {item.level !== 'low' && <span className={`mcp-risk mcp-risk-${item.level}`}>{RISK_LABELS[item.level] ?? item.level}</span>}
+          {item.background && <span className="mcp-job-tag">백그라운드</span>}
+          <time className="mcp-term-time">{formatClock(item.time)}</time>
+        </span>
         <span className="mcp-term-session">{item.sessionName}</span>
         {item.cwd && <span className="mcp-term-cwd">{cleanTerminalText(item.cwd)}</span>}
         <span className="mcp-term-sigil" aria-hidden="true">$</span>
         <code className="mcp-term-command">{command}</code>
-        {item.level !== 'low' && <span className={`mcp-risk mcp-risk-${item.level}`}>{RISK_LABELS[item.level] ?? item.level}</span>}
-        {item.background && <span className="mcp-job-tag">백그라운드</span>}
-        <time className="mcp-term-time">{formatClock(item.time)}</time>
       </div>
       {item.outputTrimmed && <p className="mcp-term-notice">{TRIMMED_TEXT}</p>}
       {parts.length > 0 && (
