@@ -169,6 +169,9 @@ exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다
 - 출력된 내용은 평문으로 남는다 (`cat .env` 의 결과도). 그래서 사용자가 켠 탭만 기록한다.
 - `src/sessionLog` 는 번들되지 않고 `electron.vite.config.ts` 가 `out/main/src/sessionLog` 로 복사한다.
 
+### SSH Algorithms (오래된 서버)
+모든 ssh2 연결은 `src/sshAlgorithms.js` 의 `SSH_ALGORITHMS` 를 `algorithms` 로 넘긴다 (`main.js` 의 세 연결, `sshConnectionTest.js` 의 `buildOptions` → 연결 테스트·MCP). ssh2 기본값 뒤에 SHA-1 키 교환, CBC 암호, `ssh-dss`, `hmac-md5` 등을 `append` 로 붙여 PuTTY 로만 되던 오래된 서버에도 접속한다. 앞에 붙이거나 기본값을 바꾸지 말 것: 맨 뒤라서 새 방식을 아는 서버는 새 방식을 쓴다. 런타임이 지원하지 않는 이름은 빼고 붙인다 (ssh2 가 예외를 던짐). 새 `src/*.js` 라서 `MAIN_RUNTIME_MODULES` 에 있어야 한다. 설명: `docs/fix/2026-11-04-legacy-ssh-algorithms.md`.
+
 ### SSH Host Key Verification
 모든 ssh2 연결(터미널, 점프 호스트, 자동 재연결, 연결 테스트, MCP)은 `hostVerifier` 로 서버의 호스트 키를 `userData/known-hosts.json` 과 비교한다 (`src/hostKeys/`). 설계와 보안 검토 반영: `docs/plan/2026-10-14-ssh-host-key-verification.md`.
 - 처음 보는 서버나 바뀐 키는 연결을 바로 끊고 확인 창(`HostKeyDialog.tsx`)을 띄운 뒤, 신뢰하면 저장하고 처음부터 다시 접속한다. 핸드셰이크 중에 기다리면 readyTimeout 에 걸리기 때문이다.

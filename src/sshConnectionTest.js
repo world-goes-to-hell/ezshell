@@ -2,6 +2,7 @@
 // No shell is opened, so nothing runs on the server.
 const fs = require('fs');
 const { Client } = require('ssh2');
+const { SSH_ALGORITHMS } = require('./sshAlgorithms.js');
 
 const DEFAULT_READY_TIMEOUT_MS = 20000;
 const DEFAULT_SSH_PORT = 22;
@@ -62,6 +63,7 @@ function buildOptions(config, readFile) {
     port: config.port || DEFAULT_SSH_PORT,
     username: config.username.trim(),
     readyTimeout,
+    algorithms: SSH_ALGORITHMS,
     ...buildAuthOptions(config, readFile, '')
   };
   if (!config.useJumpHost) return { target, jump: null, readyTimeout };
@@ -74,6 +76,7 @@ function buildOptions(config, readFile) {
     port: config.jumpPort || DEFAULT_SSH_PORT,
     username: (config.jumpUsername || config.username).trim(),
     readyTimeout,
+    algorithms: SSH_ALGORITHMS,
     ...buildAuthOptions({
       authType: config.jumpAuthType,
       password: config.jumpPassword,

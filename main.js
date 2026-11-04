@@ -23,6 +23,7 @@ const cryptoUtil = require('./src/crypto.js');
 const commandHistory = require('./src/commandHistory.js');
 const { testSshConnection, describeSshError } = require('./src/sshConnectionTest.js');
 const { createUpdateChecker } = require('./src/updateChecker.js');
+const { SSH_ALGORITHMS } = require('./src/sshAlgorithms.js');
 const localFileOps = require('./src/localFileOps.js');
 const sftpSymlinks = require('./src/sftpSymlinks.js');
 const sftpUploadCheck = require('./src/sftpUploadCheck.js');
@@ -1417,6 +1418,7 @@ function reconnectOnce(sessionId, connState, verifierFor) {
       keepaliveInterval: config.keepaliveInterval || 30000,
       keepaliveCountMax: 3,
       readyTimeout: config.connectTimeout || 20000,
+      algorithms: SSH_ALGORITHMS,
       hostVerifier: verifierFor(config.host, config.port || 22)
     };
 
@@ -1553,6 +1555,7 @@ function openShellConnection(sessionId, config, verifierFor) {
         keepaliveInterval: config.keepaliveInterval || 30000,
         keepaliveCountMax: 3,
         readyTimeout: config.connectTimeout || 20000,
+        algorithms: SSH_ALGORITHMS,
         hostVerifier: verifierFor(config.host, config.port || 22)
       };
 
@@ -1609,6 +1612,7 @@ function openShellConnection(sessionId, config, verifierFor) {
         keepaliveInterval: 30000,
         keepaliveCountMax: 3,
         readyTimeout: config.connectTimeout || 20000,
+        algorithms: SSH_ALGORITHMS,
         hostVerifier: verifierFor(config.jumpHost, config.jumpPort || 22)
       };
 
