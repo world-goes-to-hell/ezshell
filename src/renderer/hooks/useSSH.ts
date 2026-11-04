@@ -94,11 +94,11 @@ export function useSSH() {
 
         return { success: true, sessionId: result.sessionId }
       } else {
-        toast.error('Connection Failed', result.error)
+        toast.error('연결 실패', result.error)
         return { success: false, error: result.error }
       }
     } catch (error: any) {
-      toast.error('Connection Error', error.message)
+      toast.error('연결 실패', error.message)
       return { success: false, error: error.message }
     } finally {
       setConnecting(false)

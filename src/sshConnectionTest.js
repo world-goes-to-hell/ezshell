@@ -56,6 +56,20 @@ function buildAuthOptions({ authType, password, privateKeyPath, passphrase }, re
   return passphrase ? { privateKey, passphrase } : { privateKey };
 }
 
+const TRIMMED_FIELDS = ['host', 'username', 'jumpHost', 'jumpUsername'];
+
+/**
+ * A copy of a connection config with spaces and line breaks around the hosts and user names removed.
+ * A saved host like "203.227.160.8 " is no longer an IP to ssh2, which looks it up as a name and fails
+ * with "getaddrinfo ENOTFOUND". Passwords are left alone (a space can be part of one).
+ */
+function normalizeConnectConfig(config) {
+  const trimmed = TRIMMED_FIELDS
+    .filter(field => typeof config[field] === 'string')
+    .map(field => [field, config[field].trim()]);
+  return { ...config, ...Object.fromEntries(trimmed) };
+}
+
 function buildOptions(config, readFile) {
   const readyTimeout = config.connectTimeout || DEFAULT_READY_TIMEOUT_MS;
   const target = {
@@ -167,4 +181,4 @@ function testSshConnection(config, deps = {}) {
   });
 }
 
-module.exports = { describeSshError, testSshConnection, buildOptions };
+module.exports = { describeSshError, testSshConnection, buildOptions, normalizeConnectConfig };

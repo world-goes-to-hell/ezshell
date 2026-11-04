@@ -21,7 +21,7 @@ const net = require('net');
 const { autoUpdater } = require('electron-updater');
 const cryptoUtil = require('./src/crypto.js');
 const commandHistory = require('./src/commandHistory.js');
-const { testSshConnection, describeSshError } = require('./src/sshConnectionTest.js');
+const { testSshConnection, describeSshError, normalizeConnectConfig } = require('./src/sshConnectionTest.js');
 const { createUpdateChecker } = require('./src/updateChecker.js');
 const { SSH_ALGORITHMS } = require('./src/sshAlgorithms.js');
 const localFileOps = require('./src/localFileOps.js');
@@ -1456,13 +1456,19 @@ ipcMain.handle('ssh-test-connection', async (event, config) => {
 });
 
 // SSH 연결
-ipcMain.handle('ssh-connect', async (event, config) => {
+ipcMain.handle('ssh-connect', async (event, rawConfig) => {
   const sessionId = Date.now().toString();
+  // A host saved with a space around it reached ssh2 as-is and failed with "getaddrinfo ENOTFOUND".
+  // The trimmed config is also what reconnects use (connectionStates keeps it).
+  const config = normalizeConnectConfig(rawConfig);
   try {
     return await checkHostKeyAsking((verifierFor) => openShellConnection(sessionId, config, verifierFor));
   } catch (err) {
-    if (!isHostKeyError(err)) throw err;
-    return { success: false, error: hostKeyFailureText(err) };
+    if (isHostKeyError(err)) return { success: false, error: hostKeyFailureText(err) };
+    // The same Korean wording as the connection test, instead of Electron's raw "Error invoking remote method"
+    console.error('SSH connect failed:', err);
+    const { error, hint } = describeSshError(err);
+    return { success: false, error: hint ? `${error} ${hint}` : error };
   }
 });
 

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'events'
 import sshTest from './sshConnectionTest.js'
 
-const { describeSshError, testSshConnection } = sshTest
+const { describeSshError, testSshConnection, normalizeConnectConfig } = sshTest
 
 const sshError = (message, props = {}) => Object.assign(new Error(message), props)
 
@@ -42,6 +42,19 @@ const baseConfig = {
   password: 'secret',
   connectTimeout: 5000
 }
+
+describe('normalizeConnectConfig', () => {
+  it('trims spaces and line breaks around hosts and user names, which made ssh2 look the IP up as a name', () => {
+    const config = { host: ' 203.227.160.8 \n', username: 'root ', jumpHost: '\tbastion ', jumpUsername: ' j', password: ' keep me ' }
+    expect(normalizeConnectConfig(config)).toEqual({ host: '203.227.160.8', username: 'root', jumpHost: 'bastion', jumpUsername: 'j', password: ' keep me ' })
+  })
+
+  it('leaves missing fields missing and does not change the config it was given', () => {
+    const config = { host: 'a ', port: 22 }
+    expect(normalizeConnectConfig(config)).toEqual({ host: 'a', port: 22 })
+    expect(config.host).toBe('a ')
+  })
+})
 
 describe('describeSshError', () => {
   it('explains authentication failure', () => {
