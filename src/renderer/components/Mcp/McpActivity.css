@@ -884,3 +884,35 @@
 .mcp-pinned-empty {
   color: var(--text-muted);
 }
+
+/* ---- Command layout in the log (lib/shellFormat): one command per line, parts in colour ---- */
+.mcp-term-command .sh-command {
+  color: var(--text-link);
+  font-weight: 700;
+}
+
+.mcp-term-command .sh-option {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.mcp-term-command .sh-string {
+  color: var(--success);
+  font-weight: 400;
+}
+
+.mcp-term-command .sh-variable {
+  color: var(--warning);
+  font-weight: 400;
+}
+
+.mcp-term-command .sh-operator,
+.mcp-term-command .sh-redirect {
+  color: var(--text-muted);
+}
+
+.mcp-term-command .sh-comment {
+  color: var(--text-muted);
+  font-style: italic;
+  font-weight: 400;
+}

@@ -1,8 +1,9 @@
-import { memo, useLayoutEffect, useMemo, useRef } from 'react'
+import { Fragment, memo, useLayoutEffect, useMemo, useRef } from 'react'
 import { RiStopCircleLine } from 'react-icons/ri'
 import type { McpActivityItem } from '../../types'
 import { ACTIVITY_STATE_LABELS, cleanTerminalText, formatClock, formatDuration, formatElapsed, hasRun, isActiveState } from '../../lib/mcpActivity'
 import { RISK_LABELS, revealHiddenChars } from '../../lib/mcpLabels'
+import { formatShellCommand } from '../../lib/shellFormat'
 import { stopMcpRequest } from './stopMcpRequest'
 import { pinnedRequests } from '../../lib/mcpPinned'
 import { McpPinnedRequests } from './McpPinnedRequests'
@@ -27,7 +28,8 @@ function statusText(item: McpActivityItem, now: number): string {
 /** One request: a prompt line, what the command printed, then how it ended. */
 export const TerminalEntry = memo(function TerminalEntry({ item, now }: { item: McpActivityItem; now: number }) {
   const active = isActiveState(item.state)
-  const command = revealHiddenChars(item.command).text
+  // One-liners joined with ; && | are laid out one command per line (display only, see lib/shellFormat)
+  const commandLines = useMemo(() => formatShellCommand(revealHiddenChars(item.command).text), [item.command])
   const parts = item.outputParts ?? []
   // A request that never reached the server has a reason instead of output
   const notice = !active && !hasRun(item) ? (item.output ?? item.error ?? null) : null
@@ -46,7 +48,18 @@ export const TerminalEntry = memo(function TerminalEntry({ item, now }: { item: 
         <span className="mcp-term-session">{item.sessionName}</span>
         {item.cwd && <span className="mcp-term-cwd">{cleanTerminalText(item.cwd)}</span>}
         <span className="mcp-term-sigil" aria-hidden="true">$</span>
-        <code className="mcp-term-command">{command}</code>
+        <code className="mcp-term-command">
+          {commandLines.map((line, lineIndex) => (
+            <Fragment key={lineIndex}>
+              {lineIndex > 0 && `\n${'  '.repeat(line.indent)}`}
+              {line.tokens.map((token, tokenIndex) => (
+                token.kind === 'text' || token.kind === 'space'
+                  ? token.text
+                  : <span key={tokenIndex} className={`sh-${token.kind}`}>{token.text}</span>
+              ))}
+            </Fragment>
+          ))}
+        </code>
       </div>
       {item.outputTrimmed && <p className="mcp-term-notice">{TRIMMED_TEXT}</p>}
       {parts.length > 0 && (
