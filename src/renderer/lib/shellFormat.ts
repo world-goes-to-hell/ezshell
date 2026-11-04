@@ -4,7 +4,11 @@
 // formatted text still runs the same when copied into bash. Anything it cannot read safely (a heredoc,
 // an unclosed quote) is left exactly as it was.
 
-export type ShellTokenKind = 'command' | 'option' | 'string' | 'variable' | 'operator' | 'redirect' | 'comment' | 'text' | 'space'
+/**
+ * `heredoc`: a line of a heredoc body, kept exactly; `heredoc-end`: the line that closes it.
+ * `keyword`: only from highlightCodeLine, for the code in a heredoc body.
+ */
+export type ShellTokenKind = 'command' | 'option' | 'string' | 'variable' | 'operator' | 'redirect' | 'comment' | 'text' | 'space' | 'heredoc' | 'heredoc-end' | 'keyword'
 
 export interface ShellToken {
   kind: ShellTokenKind
@@ -67,12 +71,37 @@ function expansionEnd(command: string, start: number): number {
   return start + 1
 }
 
+interface PendingHeredoc {
+  delimiter: string
+  /** <<- : the body and the end line may start with tabs */
+  stripTabs: boolean
+}
+
+/** Where a heredoc operator at `start` (<< or <<-, then the delimiter) ends, and what ends its body */
+function readHeredocOperator(command: string, start: number): { end: number; heredoc: PendingHeredoc } {
+  let index = start + 2
+  const stripTabs = command[index] === '-'
+  if (stripTabs) index += 1
+  while (command[index] === ' ' || command[index] === '\t') index += 1
+  const wordStart = index
+  while (index < command.length && !/[\s;&|()<>]/.test(command[index])) {
+    if (command[index] === "'" || command[index] === '"') index = closingQuote(command, index)
+    else index += 1
+  }
+  // Quotes only say the body is taken literally; the delimiter is the word without them
+  const delimiter = command.slice(wordStart, index).replace(/['"\\]/g, '')
+  if (!delimiter) throw new Unreadable()
+  return { end: index, heredoc: { delimiter, stripTabs } }
+}
+
 function tokenize(command: string): ShellLine[] {
   const lines: ShellLine[] = [{ indent: 0, tokens: [] }]
   let line = lines[0]
   let expectCommand = true
   let groupDepth = 0
   let index = 0
+  // Heredocs opened on the current line; their bodies start after it
+  let pendingHeredocs: PendingHeredoc[] = []
 
   const push = (kind: ShellTokenKind, text: string) => {
     if (kind === 'space' && line.tokens.length === 0) return
@@ -91,9 +120,28 @@ function tokenize(command: string): ShellLine[] {
   const operator = (text: string) => {
     push('operator', text)
     expectCommand = true
-    if (groupDepth > 0) return
+    // The body of a heredoc starts after the line that opens it: nothing on that line may move down
+    if (groupDepth > 0 || pendingHeredocs.length > 0) return
     if (CONTINUING.has(text)) newLine(1)
     else if (LIST_ENDS.has(text)) newLine(0)
+  }
+  /** At the newline that ends a line opening heredocs: each body, line by line, exactly as written */
+  const readHeredocBodies = () => {
+    for (const { delimiter, stripTabs } of pendingHeredocs) {
+      for (;;) {
+        if (index >= command.length) throw new Unreadable()
+        const lineEnd = command.indexOf('\n', index + 1)
+        const stop = lineEnd < 0 ? command.length : lineEnd
+        const body = command.slice(index + 1, stop)
+        index = stop
+        const isEnd = (stripTabs ? body.replace(/^\t+/, '') : body) === delimiter
+        trimEnd()
+        line = { indent: 0, tokens: [{ kind: isEnd ? 'heredoc-end' : 'heredoc', text: body }] }
+        lines.push(line)
+        if (isEnd) break
+      }
+    }
+    pendingHeredocs = []
   }
 
   while (index < command.length) {
@@ -101,6 +149,12 @@ function tokenize(command: string): ShellLine[] {
     const two = command.slice(index, index + 2)
 
     if (char === '\n') {
+      if (pendingHeredocs.length > 0) {
+        // A heredoc inside ( ) would need its body kept inside the group's line; not worth the risk
+        if (groupDepth > 0) throw new Unreadable()
+        readHeredocBodies()
+        continue
+      }
       if (groupDepth > 0) push('space', char)
       else newLine(0)
       index += 1
@@ -127,8 +181,11 @@ function tokenize(command: string): ShellLine[] {
       push(end === index + 1 ? 'text' : 'variable', command.slice(index, end))
       index = end
     } else if (two === '<<' && command[index + 2] !== '<') {
-      // A heredoc body is not shell syntax; splitting it would change the text the program receives
-      throw new Unreadable()
+      // A heredoc body is not shell syntax: it is kept line for line (readHeredocBodies)
+      const { end, heredoc } = readHeredocOperator(command, index)
+      push('redirect', command.slice(index, end))
+      pendingHeredocs = [...pendingHeredocs, heredoc]
+      index = end
     } else if (char === '<' || char === '>') {
       let end = index + 1
       while (command[end] === '<' || command[end] === '>') end += 1
@@ -182,7 +239,9 @@ function expandInlineScripts(lines: ShellLine[]): ShellLine[] {
     let current = out[0]
     line.tokens.forEach((token, position) => {
       const previous = line.tokens.slice(0, position).filter(entry => entry.kind !== 'space').pop()
-      const isScript = token.kind === 'string' && token.text.startsWith("'") && previous?.text === '-c'
+      // Only a one-line script: indenting a script that already has lines would change their text
+      // (a heredoc body or a multi-line string inside it)
+      const isScript = token.kind === 'string' && token.text.startsWith("'") && !token.text.includes('\n') && previous?.text === '-c'
       const inner = isScript ? formatShellCommand(token.text.slice(1, -1)) : null
       if (!inner || inner.length < 2) {
         current.tokens.push(token)
@@ -213,6 +272,50 @@ export function formatShellCommand(command: string): ShellLine[] {
     if (!(error instanceof Unreadable)) throw error
     return command.split('\n').map(text => ({ indent: 0, tokens: [{ kind: 'text', text }] }))
   }
+}
+
+// Words coloured in a heredoc body. Bodies are mostly Python, shell or SQL scripts; a word of another
+// language that happens to be here only gets a colour, the text never changes.
+const CODE_KEYWORDS = new Set([
+  'import', 'from', 'as', 'def', 'class', 'return', 'if', 'elif', 'else', 'for', 'while', 'in', 'not', 'and', 'or',
+  'is', 'None', 'True', 'False', 'try', 'except', 'finally', 'with', 'lambda', 'pass', 'break', 'continue', 'raise',
+  'yield', 'global', 'then', 'fi', 'do', 'done', 'case', 'esac', 'function', 'local', 'export',
+  'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'UPDATE', 'SET', 'DELETE', 'JOIN', 'ON', 'AND', 'OR', 'ORDER', 'BY', 'GROUP', 'LIMIT', 'VALUES'
+])
+
+/** Colours for one line of a heredoc body: strings, a # comment and common keywords. The text is unchanged. */
+export function highlightCodeLine(text: string): ShellToken[] {
+  const tokens: ShellToken[] = []
+  const add = (kind: ShellTokenKind, value: string) => {
+    const last = tokens[tokens.length - 1]
+    if (kind === 'text' && last?.kind === 'text') last.text += value
+    else tokens.push({ kind, text: value })
+  }
+  let index = 0
+  while (index < text.length) {
+    const char = text[index]
+    if (char === '#') {
+      add('comment', text.slice(index))
+      break
+    }
+    if (char === "'" || char === '"') {
+      let end = index + 1
+      while (end < text.length && text[end] !== char) end += text[end] === '\\' ? 2 : 1
+      end = Math.min(end + 1, text.length)
+      add('string', text.slice(index, end))
+      index = end
+      continue
+    }
+    const word = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(index))
+    if (word) {
+      add(CODE_KEYWORDS.has(word[0]) ? 'keyword' : 'text', word[0])
+      index += word[0].length
+      continue
+    }
+    add('text', char)
+    index += 1
+  }
+  return tokens
 }
 
 /** The formatted command as text: what is shown, and what a copy gives */

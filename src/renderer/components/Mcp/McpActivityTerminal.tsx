@@ -3,7 +3,7 @@ import { RiStopCircleLine } from 'react-icons/ri'
 import type { McpActivityItem } from '../../types'
 import { ACTIVITY_STATE_LABELS, cleanTerminalText, formatClock, formatDuration, formatElapsed, hasRun, isActiveState } from '../../lib/mcpActivity'
 import { RISK_LABELS, revealHiddenChars } from '../../lib/mcpLabels'
-import { formatShellCommand } from '../../lib/shellFormat'
+import { formatShellCommand, highlightCodeLine } from '../../lib/shellFormat'
 import { stopMcpRequest } from './stopMcpRequest'
 import { pinnedRequests } from '../../lib/mcpPinned'
 import { McpPinnedRequests } from './McpPinnedRequests'
@@ -52,11 +52,20 @@ export const TerminalEntry = memo(function TerminalEntry({ item, now }: { item: 
           {commandLines.map((line, lineIndex) => (
             <Fragment key={lineIndex}>
               {lineIndex > 0 && `\n${'  '.repeat(line.indent)}`}
-              {line.tokens.map((token, tokenIndex) => (
-                token.kind === 'text' || token.kind === 'space'
-                  ? token.text
-                  : <span key={tokenIndex} className={`sh-${token.kind}`}>{token.text}</span>
-              ))}
+              {line.tokens.map((token, tokenIndex) => {
+                if (token.kind === 'text' || token.kind === 'space') return token.text
+                if (token.kind === 'heredoc') {
+                  // A heredoc body is another program's code (often Python): coloured, never changed
+                  return (
+                    <span key={tokenIndex} className="sh-heredoc">
+                      {highlightCodeLine(token.text).map((part, partIndex) => (
+                        part.kind === 'text' ? part.text : <span key={partIndex} className={`sh-${part.kind}`}>{part.text}</span>
+                      ))}
+                    </span>
+                  )
+                }
+                return <span key={tokenIndex} className={`sh-${token.kind}`}>{token.text}</span>
+              })}
             </Fragment>
           ))}
         </code>

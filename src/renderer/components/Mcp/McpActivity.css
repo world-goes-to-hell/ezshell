@@ -916,3 +916,18 @@
   font-style: italic;
   font-weight: 400;
 }
+
+/* Heredoc body: the code of another program, in normal weight so it reads apart from the shell line */
+.mcp-term-command .sh-heredoc {
+  font-weight: 400;
+  color: var(--text-primary);
+}
+
+.mcp-term-command .sh-heredoc .sh-keyword {
+  color: var(--text-link);
+  font-weight: 600;
+}
+
+.mcp-term-command .sh-heredoc-end {
+  color: var(--text-muted);
+}

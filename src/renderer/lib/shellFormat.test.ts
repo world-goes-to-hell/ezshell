@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatShellCommand, formattedText } from './shellFormat'
+import { formatShellCommand, formattedText, highlightCodeLine } from './shellFormat'
 
 /** Lines as plain text, with two spaces per indent level */
 const text = (command: string) => formattedText(formatShellCommand(command)).split('\n')
@@ -55,15 +55,59 @@ describe('formatShellCommand', () => {
     expect(kinds('ls # list').map(token => token.kind)).toEqual(['command', 'comment'])
   })
 
-  it('leaves a heredoc or an unclosed quote exactly as it is', () => {
-    const heredoc = "cat <<EOF > f\na; b | c\nEOF"
-    expect(text(heredoc)).toEqual(heredoc.split('\n'))
+  it('leaves an unclosed quote exactly as it is', () => {
     expect(text("echo 'open; x")).toEqual(["echo 'open; x"])
   })
 
+  it('formats the command before a heredoc and keeps its body exactly, indentation included', () => {
+    const command = "cd /x && python3 - <<'EOF'\nimport os\nfor n in names:\n    a = 1; b = 2\nEOF"
+    expect(text(command)).toEqual(['cd /x &&', "  python3 - <<'EOF'", 'import os', 'for n in names:', '    a = 1; b = 2', 'EOF'])
+    const lines = formatShellCommand(command)
+    expect(lines[0].tokens[0]).toEqual({ kind: 'command', text: 'cd' })
+    expect(lines.slice(2, 5).every(line => line.indent === 0 && line.tokens.every(token => token.kind === 'heredoc'))).toBe(true)
+    expect(lines[5].tokens).toEqual([{ kind: 'heredoc-end', text: 'EOF' }])
+  })
+
+  it('does not split the rest of the line that starts a heredoc, and goes on after it', () => {
+    expect(text('cat <<EOF | grep a\nb; c\nEOF\necho done; ls')).toEqual(['cat <<EOF | grep a', 'b; c', 'EOF', 'echo done;', 'ls'])
+  })
+
+  it('ends a <<- heredoc at a tab-indented delimiter', () => {
+    expect(text('cat <<-END\n\tx\n\tEND\nls')).toEqual(['cat <<-END', '\tx', '\tEND', 'ls'])
+  })
+
+  it('leaves a heredoc without its end line, or one inside ( ), exactly as it is', () => {
+    expect(text('cat <<EOF\nno end; x')).toEqual(['cat <<EOF', 'no end; x'])
+    expect(text('(cat <<EOF\na\nEOF\n)')).toEqual(['(cat <<EOF', 'a', 'EOF', ')'])
+  })
+
+  it('does not lay out a sh -c script that holds a heredoc', () => {
+    const command = "sh -c 'cat <<EOF\na | b\nEOF' | wc -l"
+    expect(text(command)).toEqual(["sh -c 'cat <<EOF", 'a | b', "EOF' |", '  wc -l'])
+  })
+
   it('never loses or adds characters other than line breaks and indents', () => {
-    const command = `echo '=== x' ; docker exec m sh -c 'grep -h "/a" f | tail -4' | sed -E 's/t=[^& ]*/t=***/' | cut -c1-300 && echo ok`
+    const command = `echo '=== x' ; docker exec m sh -c 'grep -h "/a" f | tail -4' | sed -E 's/t=[^& ]*/t=***/' | cut -c1-300 && cat <<'EOF' | wc\n  a; b\nEOF\necho ok`
     const squash = (value: string) => value.replace(/\s+/g, '')
     expect(squash(formattedText(formatShellCommand(command)))).toBe(squash(command))
+  })
+})
+
+describe('highlightCodeLine', () => {
+  const join = (line: string) => highlightCodeLine(line).map(token => token.text).join('')
+
+  it('colours keywords, strings and a comment without changing the text', () => {
+    const line = "    if p.pw_dir!=f'/home/{n}': errs.append('home')  # check"
+    expect(join(line)).toBe(line)
+    const kinds = highlightCodeLine(line).filter(token => token.kind !== 'text').map(token => [token.kind, token.text])
+    expect(kinds).toEqual([['keyword', 'if'], ['string', "'/home/{n}'"], ['string', "'home'"], ['comment', '# check']])
+  })
+
+  it('does not take a keyword inside a longer name or a # inside a string', () => {
+    expect(highlightCodeLine('information = "a#b"').map(token => token.kind)).toEqual(['text', 'string'])
+  })
+
+  it('treats an unclosed quote as a string to the end of the line', () => {
+    expect(highlightCodeLine("x = 'abc").map(token => [token.kind, token.text])).toEqual([['text', 'x = '], ['string', "'abc"]])
   })
 })
