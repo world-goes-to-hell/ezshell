@@ -4,10 +4,10 @@ import path from 'path'
 import fs from 'fs'
 
 // CommonJS modules main.js loads at runtime with require('./src/...'); they are not bundled
-const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js', 'navigationGuard.js', 'updateChecker.js', 'sshAlgorithms.js']
+const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js', 'navigationGuard.js', 'updateChecker.js', 'sshAlgorithms.js', 'rootSwitch.js']
 
 // Directories under src/ that main.js loads at runtime; copied whole, without their tests
-const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys']
+const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient']
 
 function copyCryptoPlugin() {
   return {

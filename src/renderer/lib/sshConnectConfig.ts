@@ -28,6 +28,8 @@ export function toSSHConnectConfig(session: SessionConnectSource, color?: string
     connectTimeout: (session.connectTimeout || DEFAULT_CONNECT_TIMEOUT_SEC) * 1000,
     keepaliveInterval: (session.keepaliveInterval || DEFAULT_KEEPALIVE_INTERVAL_SEC) * 1000,
     autoReconnect: session.autoReconnect !== false,
+    suRoot: session.suRoot === true,
+    suPassword: session.suPassword,
     useJumpHost: session.useJumpHost,
     jumpHost: session.jumpHost,
     jumpPort: session.jumpPort,

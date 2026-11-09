@@ -87,11 +87,10 @@ function createActivityLog({ emit = () => {}, emitOutput = () => {}, now = () =>
     const finished = !ACTIVE_STATES.has(state)
     const next = { ...current, ...patch, finishedAt: finished ? (current.finishedAt ?? now()) : null }
     items = items.map(item => (item.id === id ? next : item))
-    if (finished) {
-      cancellers.delete(id)
-      // The finished item published below carries all of its output
-      pendingOutput.delete(id)
-    }
+    if (finished) cancellers.delete(id)
+    // The item published below carries all of its output so far (the window replaces its copy with it).
+    // Sending the waiting batch afterwards would show those lines twice, as transfer progress lines were.
+    pendingOutput.delete(id)
     publish(next)
   }
 

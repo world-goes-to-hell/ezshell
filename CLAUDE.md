@@ -143,7 +143,7 @@ exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다
 - `run_command`, `cd` 는 `reason`(요청 사유)을 받는다. 확인 창이 필요한 명령인데 사유가 없으면 창을 띄우지 않고 거부한다 (감사 로그에도 남기지 않음). 사유는 한 줄로 정리해 500자까지 쓰고, 확인 창에 "Claude 가 직접 적은 설명" 이라는 안내와 함께 보여 준다. 판단 기준은 명령이다 (사유는 거짓일 수 있음). Windows 알림에는 넣지 않는다. 설계: `docs/plan/2026-10-23-mcp-command-reason.md`.
 - 설정은 `userData/mcp.json`(main 전용), 감사 로그는 `userData/mcp-audit.log`(명령, 판정, 요청 사유만. 출력은 기록하지 않음).
 - 상태바의 "MCP 활동" 패널이 요청과 상태(대기/실행/완료/거부/취소/차단)를 실시간으로 보여준다. 이 목록과 명령 출력은 메모리에만 있고 디스크에 쓰지 않는다 (출력에 비밀이 섞일 수 있음).
-- 패널에는 `목록 | 터미널` 두 보기가 있다 (기본은 터미널). 터미널 보기(`McpActivityTerminal.tsx`)는 명령과 출력을 시간순으로 잇는 읽기 전용 화면이고 xterm 이 아니다. 실행 중 출력은 `sessionGateway` 의 `onOutput` → `activityLog.appendOutput`(50ms 묶음) → `mcp-activity-output` 채널로 온다. 요청이 끝날 때 오는 `mcp-activity` 항목이 `outputParts` 전체를 담고 있어 그쪽이 기준이다. 탭으로 만들지 않은 이유: 탭은 모두 SSH 연결 하나를 전제로 한다.
+- 패널에는 `목록 | 터미널` 두 보기가 있다 (기본은 터미널). 터미널 보기(`McpActivityTerminal.tsx`)는 명령과 출력을 시간순으로 잇는 읽기 전용 화면이고 xterm 이 아니다. 실행 중 출력은 `sessionGateway` 의 `onOutput` → `activityLog.appendOutput`(50ms 묶음) → `mcp-activity-output` 채널로 온다. 요청이 끝날 때 오는 `mcp-activity` 항목이 `outputParts` 전체를 담고 있어 그쪽이 기준이다. 실행 중에도 `update` 로 항목을 보내면 그 요청의 대기 중인 출력 묶음은 버린다 (창이 항목으로 사본을 바꾸므로, 묶음까지 보내면 줄이 두 번 보인다. `docs/fix/2026-11-05-mcp-transfer-progress-line-twice.md`). 탭으로 만들지 않은 이유: 탭은 모두 SSH 연결 하나를 전제로 한다.
 - 세 번째 보기 `서버별`(`McpActivityLanes.tsx`)은 세션마다 영역을 나눠 같은 형식의 기록을 보여 준다 (`lib/mcpActivity.ts` 의 `groupBySession`). 영역마다 스크롤이 따로이고, 영역 순서는 첫 요청 순서로 고정이다 (활동 때마다 바꾸면 읽던 영역이 움직인다). 기준은 서버 주소가 아니라 세션이고, 요청을 보낸 에이전트는 구분하지 못한다 (stateless, 토큰 하나).
   - 영역 머리줄의 X 로 영역을 숨긴다. 숨길 때의 가장 최근 요청 ID 를 기억하고(`mcpActivityStore` 의 `hiddenLanes`, 판정은 `lib/mcpActivity.ts` 의 `isLaneHidden`), 그 세션에 새 요청이 오면 다시 보인다. 이미 있던 요청의 출력·상태 변화로는 다시 뜨지 않는다. 메모리에만 두고 목록을 지우면 함께 지운다. 상단 막대의 "모두 보기" 로 되돌린다. 설계: `docs/plan/2026-10-24-mcp-lane-hide.md`.
 - 패널은 `z-index: 95` 다. 터미널·SFTP 위, 대화상자(100)·메뉴(1000)·업데이트 알림(900)·안내(9999) 아래다. 다시 높이지 말 것: 9200 이던 때 업데이트 알림과 대화상자가 패널 뒤에 가려졌다 (`docs/fix/2026-10-26-mcp-panel-layer-and-host-key-message.md`).
@@ -168,6 +168,39 @@ exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다
 - 탭의 주 터미널만 기록한다 (탭 안 분할 셸 제외). 자동 재연결되면 같은 파일에 이어 쓰고, 탭을 닫거나 연결이 완전히 끊기면 끝낸다.
 - 출력된 내용은 평문으로 남는다 (`cat .env` 의 결과도). 그래서 사용자가 켠 탭만 기록한다.
 - `src/sessionLog` 는 번들되지 않고 `electron.vite.config.ts` 가 `out/main/src/sessionLog` 로 복사한다.
+
+### Root Switch (로그인 후 su -)
+세션 편집 > 고급 설정의 "로그인 후 root 로 전환"(`suRoot`, `suPassword`)을 켜면 셸이 열린 뒤 main 이 `su -` 를 보내고 비밀번호를 넣는다 (`src/rootSwitch.js` 의 `switchToRoot`). `ssh-connect` 는 전환이 끝난 뒤 답하므로 자동 실행 스크립트는 root 로 실행된다. 자동 재연결·재연결 버튼 뒤에도 다시 전환한다. 결과(`switched`/`failed`/`no-prompt`/`unknown`)만 렌더러로 가고 알림은 `lib/rootSwitch.ts`. 설계: `docs/plan/2026-11-04-su-root-switch.md` (MCP 의 root 실행은 2단계).
+- 바꾸면 안 되는 것: 비밀번호는 출력 끝에 비밀번호 입력 문구(`Password:`/`암호:`/`비밀번호:`)가 보일 때만, 한 번만 보낸다. 10초 안에 문구가 없으면 보내지 않는다 (이미 root 이거나 su 가 묻지 않으면 비밀번호가 명령으로 실행·표시된다). 비밀번호를 보내기 전에는 `su:` 로 시작하는 줄만 실패로 본다 (로그인 안내문의 sorry 등을 실패로 오인하지 않게).
+- 새 `src/*.js` 라서 `MAIN_RUNTIME_MODULES` 에 있다.
+
+### Server File Window (SFTP 미리보기·편집)
+SFTP 패널(본창·분리 창)의 서버 파일 우클릭 메뉴 `미리보기` / `편집` 으로 파일마다 창 하나(`?remoteFileMode=true&docId=...`, `RemoteFileWindow.tsx`)를 연다. main 은 `src/remoteFiles/` (`documents.js` 가 문서 상태, `ipc.js` 가 IPC, `remoteRead.js` 가 읽기, `backups.js` 가 백업). 같은 탭의 파일 창들은 그 탭 SSH 연결의 SFTP 채널 하나를 함께 쓰고(`documents.js` 의 `channels`, 마지막 창이 닫힐 때 닫음), SFTP 패널을 닫아도 쓸 수 있다. 창마다 채널을 열면 서버의 연결당 채널 수 제한(OpenSSH `MaxSessions`, 기본 10)에 걸려 분할 터미널이 열리지 않을 수 있다. 설계: `docs/plan/2026-11-05-sftp-file-edit-preview.md`.
+- 편집기는 CodeMirror 6, Windows 단축키(Ctrl+F/H/G/S/Z/Y). Vim/Emacs 키는 사용자가 원하지 않았다. 편집기 코드는 파일 창에서만 불러온다 (`App.tsx` 의 `lazy`).
+- 편집: 5MB 이하 UTF-8 텍스트. CRLF 파일은 CRLF 로 저장하고, 섞인 줄바꿈은 LF 로 통일된다 (`lib/remoteFileText.ts`). 쓰기 권한은 열 때 `r+` 로 열어 보고 닫아서 판단한다.
+- 미리보기: 이미지·PDF 는 50MB 까지 `blob:` URL (PDF 는 iframe 의 Chromium 뷰어, CSP 에 `img-src blob:` `frame-src blob:`), 그 밖은 텍스트로 5MB 까지 전체, 넘으면 마지막 1MB.
+- 바꾸면 안 되는 것: 저장은 `review`(diff 와 토큰) → `save`(같은 내용의 SHA-256) 순서로만 된다. 저장 직전에 서버 내용을 PC 에 백업하고(`문서\ezShell Backups\<세션> (<계정>@<호스트>)\<서버 경로>\<이름>.<시각>.bak`, 파일마다 20개), 백업을 못 쓰면 저장하지 않는다. 쓰기는 MCP 와 같은 `remoteFile.writeIfUnchanged` (한 핸들로 비교 후 덮어쓰기, 소유자·권한 유지). 서버에 `.bak` 을 만들지 않는다 (`conf.d`, `cron.d` 처럼 폴더의 모든 파일을 읽는 곳에서 적용될 수 있음).
+- 보안 검토 반영 (바꾸지 말 것): 오래된 백업 정리는 저장이 성공한 뒤에만 한다 (충돌로 거부될 때마다 정리하면 기록이 사라진다). 저장 중인 창을 닫으면 저장이 끝난 뒤 채널을 닫는다 (쓰는 도중 끊으면 서버 파일이 잘린다). 검토 토큰은 검토마다 새 난수이고 한 번만 쓴다. diff 가 잘리면 "나머지를 보지 않고 저장" 을 체크해야 저장된다. 백업 폴더 이름은 세션 이름을 40자로 자른 뒤 main 이 가진 `(계정@호스트)` 를 붙인다. 파일 창은 20개까지.
+- 같은 초에 백업이 여러 개면 번호를 가장 큰 번호 다음으로 붙인다. 정리로 비운 번호를 다시 쓰면 새 백업이 가장 오래된 것으로 정렬돼 바로 지워진다 (테스트로 잡은 버그).
+- 요청마다 `docId` 와 보낸 창(webContents id)이 맞아야 답한다 (`documents.js` 의 `own`). 저장하지 않은 변경이 있으면 main 이 창 닫기를 막고 창에 묻는다 (`remote-file-close-requested` → `remote-file-close`).
+- 새 `src/` 폴더라서 `MAIN_RUNTIME_DIRECTORIES` 에 `remoteFiles` 가 있다. MCP 모듈(`../mcp/remoteFile.js` 등)을 상대 경로로 쓴다.
+- 실시간 보기(로그 따라가기): 우클릭 `실시간 보기`(모드 `tail`, 이미지·PDF 제외) 또는 텍스트 미리보기 창의 재생 버튼. main 의 `logTail.js` 가 한 번 볼 때마다 SFTP `stat` 하나만 보내고, 크기가 바뀌었을 때만 파일을 열어 늘어난 부분(최대 1MB, 넘으면 "N 건너뜀")을 읽고 바로 닫는다. 화면(`RemoteLogView.tsx`)은 답을 받은 뒤에만 다음 확인을 예약한다 (보일 때 1초, 가려지면 5초, 실패하면 3초). 설계: `docs/plan/2026-11-05-log-live-view.md`.
+  - 바꾸면 안 되는 것: 운영 서버 부담 때문에 서버에서 `tail -f` 같은 명령을 실행하지 않고, 파일을 열어 둔 채로 두지 않는다 (logrotate 가 지운 옛 파일의 디스크 공간이 풀리지 않는다). 확인 요청은 겹치지 않는다 (`documents.js` 의 `isTailing`, 진행 중이면 `busy`). 30초 안에 답이 없으면 포기한다.
+  - 줄이 빠지지 않게: main 은 답마다 `cursor` 를 붙이고, 다음 요청이 그 cursor 를 가져와야 위치를 넘긴다 (아니면 마지막으로 받은 위치에서 다시 읽어 같은 줄을 보낸다). 일시정지·창 닫기로 화면이 버린 답 때문이다. `load` 마다 `generation` 이 바뀌고, 새로고침 전 화면의 요청은 `stale` 로 답한다. 로그 추가는 되돌리기 기록에 넣지 않는다 (`Transaction.addToHistory.of(false)`, 넣으면 지운 줄이 기록에 쌓여 메모리 상한이 깨진다).
+  - 새 파일 판단: 크기가 줄었거나, 앞 256바이트가 달라졌거나, 링크가 다른 파일을 가리키거나, 없다가 다시 생기면 처음부터 읽는다 (logrotate `create`·`copytruncate`). 줄바꿈 전 조각은 main 이 최대 1MB 까지 붙잡는다. NUL 바이트는 지운다.
+  - 강조는 `lib/logLevels.ts` 가 줄마다 첫 로그 수준 단어로 정한다 ("INFO ... ERROR" 는 오류 아님). 수준 단어가 없으면 예외 이름·스택 줄·Traceback 만 오류로 본다. 소문자 `error` 단어는 오류로 보지 않는다. 화면에 보이는 줄만 꾸미고(ViewPlugin), 개수는 붙인 줄과 지운 줄만 다시 센다 (`lib/logAppend.ts`). 창에는 최근 약 5MB 만 둔다.
+  - 앱을 잠그면 미리보기·실시간 창은 닫고(`ipc.js` 의 `closeViewWindows`), 잠긴 동안 `remote-file-tail` 을 거부한다. 편집 창은 저장하지 않은 내용 때문에 닫지 않는다. 창이 뒤에 있을 때 새 오류가 오면 작업표시줄만 깜빡인다 (알림 센터에는 남기지 않음).
+
+### DB Client (SSH 터널로 DB 조회)
+상태바 왼쪽의 `DB` 표지(`DbIndicator.tsx`)가 활성 탭 서버의 DB 를 보여 주고, 고르면 계정 창(`DbConnectDialog.tsx`)을 거쳐 DB 창(`?dbMode=true&dbId=...`, `DbClientWindow.tsx`)을 연다. main 은 `src/dbClient/` (`discovery.js` 탐색, `connections.js` 창별 접속, `drivers/mysql.js`·`drivers/postgres.js`, `sqlGuard.js` 조회 문장 검사, `ipc.js`). 1단계는 조회만 된다 (MySQL/MariaDB, PostgreSQL). 설계: `docs/plan/2026-11-09-db-client.md`.
+- 터널은 탭의 SSH 연결에서 `forwardOut` 으로 받은 스트림을 드라이버에 바로 넘긴다 (PC 에 포트를 열지 않음). pg 는 net.Socket 을 기대해서 `asSocket` 이 `connect`/`setNoDelay` 를 채운다.
+- 탐색은 연결마다 한 번 실행 채널로 `ss`/`netstat` 과 `ps` 만 본다 (`createDiscoveryCache`, 연결 객체 기준). 바꾸면 안 되는 것: DB 포트에 접속해 확인하지 않는다 (MySQL 은 끝까지 가지 않은 접속을 세다가 `max_connect_errors` 를 넘으면 그 호스트를 막는다).
+- 바꾸면 안 되는 것 (운영 DB 보호): 읽기 전용은 DB 서버가 강제한다. MySQL 은 접속마다 `SET SESSION TRANSACTION READ ONLY` 가 실패하면 접속을 쓰지 않고, PostgreSQL 은 시작 옵션 `default_transaction_read_only=on` 이 `on` 으로 확인돼야 쓴다. 그리고 두 엔진 모두 쿼리마다 `START TRANSACTION READ ONLY` / `BEGIN TRANSACTION READ ONLY` … `ROLLBACK` 으로 감싼다 (세션 설정은 SQL 로 바뀔 수 있다: PostgreSQL `SELECT set_config(...)`, `docs/brain/2026-11-09-postgres-read-only-session-bypass-with-set-config.md`). `sqlGuard.js` 는 두 번째 겹이다 (첫 단어 허용 목록, 문장 하나). PostgreSQL 쿼리는 pg-cursor(확장 프로토콜, 문장 하나)로만 보낸다. 트랜잭션을 열어 두지 않는다 (자동 커밋).
+- 제한: 결과 1,000행·50MB (`results.js`), 쿼리 30초 (MySQL `MAX_EXECUTION_TIME`, MariaDB `max_statement_time`, PostgreSQL `statement_timeout`, 서버가 못 멈추면 앱이 취소 후 끊음), 창마다 접속 하나·요청 하나, DB 창 10개. MySQL 은 `sql_select_limit` 를 1,001 로 두고, 쿼리의 LIMIT 이 더 커서 2행 넘게 더 오면 접속을 끊고 다음 쿼리 때 다시 접속한다. 취소는 두 번째 짧은 접속으로 `KILL QUERY` / `pg_cancel_backend`.
+- DB 창은 자기 webContents id 로만 답을 받는다 (`connections.js` 의 `own`). 계정은 main 창의 대화상자에서 main 으로만 가고 DB 창에는 가지 않는다. 앱을 잠그면 DB 창을 모두 닫고 접속을 끊는다 (`dbIpc.closeAll()`). 결과는 디스크에 쓰지 않는다.
+- 계정 저장은 세션의 `dbConnections` (세션 파일과 함께 마스터 비밀번호로 암호화). "이 세션에 저장" 을 끄고 접속하면 그 저장 계정을 지운다.
+- 자동완성(`DbClient/dbCompletion.ts`, 계산은 `lib/sqlCompletion.ts`): 키워드는 `@codemirror/lang-sql` 의 MySQL/PostgreSQL 문법(요청 없음), 테이블은 기본 스키마 것만, 열은 문장의 FROM/JOIN 에 나온 테이블(최대 4개)이나 `별칭.` 뒤에서 그 테이블 하나만 읽고 창이 열린 동안 기억한다. 바꾸면 안 되는 것: 스키마 전체의 열을 한 번에 읽지 않는다 (MySQL 5.7 은 `information_schema.COLUMNS` 를 스키마 단위로 읽으면 모든 테이블 파일을 연다). 쿼리가 실행 중이면 새로 읽지 않는다. 창의 요청(쿼리, 트리, 자동완성)은 `lib/serialQueue.ts` 로 한 줄로 세운다 (main 은 겹친 요청을 "처리하는 중" 으로 거부한다). 편집기 파일 이름을 확장자 없는 `query` 로 두는 것은 편집기가 표준 SQL 을 따로 불러와 방언 설정과 겹치지 않게 하려는 것이다.
+- 새 `src/` 폴더라서 `MAIN_RUNTIME_DIRECTORIES` 에 `dbClient` 가 있다. 의존성 `mysql2`, `pg`, `pg-cursor` 는 정확한 버전으로 고정했다.
 
 ### SSH Algorithms (오래된 서버)
 모든 ssh2 연결은 `src/sshAlgorithms.js` 의 `SSH_ALGORITHMS` 를 `algorithms` 로 넘긴다 (`main.js` 의 세 연결, `sshConnectionTest.js` 의 `buildOptions` → 연결 테스트·MCP). ssh2 기본값 뒤에 SHA-1 키 교환, CBC 암호, `ssh-dss`, `hmac-md5` 등을 `append` 로 붙여 PuTTY 로만 되던 오래된 서버에도 접속한다. 앞에 붙이거나 기본값을 바꾸지 말 것: 맨 뒤라서 새 방식을 아는 서버는 새 방식을 쓴다. 런타임이 지원하지 않는 이름은 빼고 붙인다 (ssh2 가 예외를 던짐). 새 `src/*.js` 라서 `MAIN_RUNTIME_MODULES` 에 있어야 한다. 설명: `docs/fix/2026-11-04-legacy-ssh-algorithms.md`.

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { lazy, Suspense, useEffect, useState, useRef } from 'react'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { Footer } from './components/Footer/Footer'
 import { McpApprovalDialog } from './components/Mcp/McpApprovalDialog'
@@ -48,6 +48,10 @@ import { openSessionLogFolder, toggleSessionLog } from './lib/sessionLogActions'
 import './styles/sessionLog.css'
 import { McpActivityWindow } from './components/Mcp/McpActivityWindow'
 import { reconnectFailureText } from './lib/connectionLost'
+// Only the server file window uses the code editor: loaded there, not in the main window
+const RemoteFileWindow = lazy(() => import('./components/RemoteFile/RemoteFileWindow').then(module => ({ default: module.RemoteFileWindow })))
+// The editor and grid are loaded only in DB windows
+const DbClientWindow = lazy(() => import('./components/DbClient/DbClientWindow').then(module => ({ default: module.DbClientWindow })))
 
 // Check if we're in a special window mode
 function getWindowModeParams() {
@@ -77,6 +81,14 @@ function getWindowModeParams() {
     return { mode: 'mcpActivity' as const }
   }
 
+  if (params.get('remoteFileMode') === 'true') {
+    return { mode: 'remoteFile' as const, docId: params.get('docId') || '' }
+  }
+
+  if (params.get('dbMode') === 'true') {
+    return { mode: 'db' as const, dbId: params.get('dbId') || '' }
+  }
+
   return null
 }
 
@@ -96,6 +108,29 @@ function App() {
         />
         <ToastContainer />
         <ConfirmDialogHost />
+      </>
+    )
+  }
+
+  if (windowParams?.mode === 'remoteFile') {
+    return (
+      <>
+        <Suspense fallback={null}>
+          <RemoteFileWindow docId={windowParams.docId} />
+        </Suspense>
+        <ToastContainer />
+        <ConfirmDialogHost />
+      </>
+    )
+  }
+
+  if (windowParams?.mode === 'db') {
+    return (
+      <>
+        <Suspense fallback={null}>
+          <DbClientWindow dbId={windowParams.dbId} />
+        </Suspense>
+        <ToastContainer />
       </>
     )
   }
@@ -516,6 +551,8 @@ function App() {
       autoReconnect: config.autoReconnect,
       postConnectScript: config.postConnectScript,
       mcpEnabled: config.mcpEnabled === true,
+      suRoot: config.suRoot === true,
+      suPassword: config.suPassword,
       useJumpHost: config.useJumpHost,
       jumpHost: config.jumpHost,
       jumpPort: config.jumpPort,

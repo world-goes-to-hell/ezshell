@@ -247,4 +247,5 @@ async function writeIfUnchanged(sftp, seen, content, { signal, maxBytes = MAX_FI
   return { path: seen.path, bytes: data.length, created: !seen.exists }
 }
 
-module.exports = { inspectTarget, writeIfUnchanged, RemoteFileError, MAX_FILE_BYTES }
+// MESSAGES is also read by the SFTP file window (src/remoteFiles), which tells "changed" apart and has its own size limit
+module.exports = { inspectTarget, writeIfUnchanged, RemoteFileError, MAX_FILE_BYTES, MESSAGES }

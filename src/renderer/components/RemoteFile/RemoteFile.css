@@ -1,0 +1,450 @@
+/* Server file window (edit / preview): title bar, editor or preview, status bar */
+
+.remote-file-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.remote-file-window .popout-title-action.is-active {
+  background: var(--accent-muted);
+}
+
+.remote-file-window .popout-title-action:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  background: transparent;
+}
+
+.remote-file-banner {
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--warning) 14%, var(--bg-secondary));
+  color: var(--text-primary);
+  font-size: 12.5px;
+}
+
+.remote-file-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.remote-file-editor {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+.remote-file-status {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 26px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.remote-file-status-spacer {
+  flex: 1;
+}
+
+.remote-file-status-keys {
+  color: var(--text-muted);
+}
+
+@media (max-width: 760px) {
+  .remote-file-status-keys {
+    display: none;
+  }
+}
+
+.remote-file-message {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+}
+
+.remote-file-message-icon {
+  flex-shrink: 0;
+  color: var(--error-text);
+}
+
+/* Preview: image and PDF */
+
+.remote-file-image-stage {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 16px;
+  /* Checkerboard behind transparent images */
+  background-color: var(--bg-tertiary);
+  background-image:
+    linear-gradient(45deg, var(--bg-secondary) 25%, transparent 25%, transparent 75%, var(--bg-secondary) 75%),
+    linear-gradient(45deg, var(--bg-secondary) 25%, transparent 25%, transparent 75%, var(--bg-secondary) 75%);
+  background-position: 0 0, 10px 10px;
+  background-size: 20px 20px;
+}
+
+.remote-file-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: zoom-in;
+  box-shadow: var(--shadow-md);
+}
+
+.remote-file-image-stage.is-actual {
+  align-items: flex-start;
+  justify-content: flex-start;
+  overflow: auto;
+}
+
+.remote-file-image-stage.is-actual .remote-file-image {
+  max-width: none;
+  max-height: none;
+  cursor: zoom-out;
+}
+
+.remote-file-image-info {
+  position: fixed;
+  right: 14px;
+  bottom: 36px;
+  padding: 3px 8px;
+  background: color-mix(in srgb, var(--bg-tertiary) 85%, transparent);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.remote-file-pdf {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg-tertiary);
+}
+
+/* Backups */
+
+.remote-backup-panel {
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-secondary);
+  min-height: 0;
+}
+
+.remote-backup-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.remote-backup-title {
+  flex: 1;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.remote-file-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.remote-file-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.remote-file-icon-btn:focus-visible,
+.remote-backup-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.remote-backup-hint,
+.remote-backup-empty {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.remote-backup-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  max-height: 40%;
+  flex-shrink: 0;
+}
+
+.remote-backup-item {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 12px;
+  border: none;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  text-align: left;
+}
+
+.remote-backup-item:hover {
+  background: var(--bg-hover);
+}
+
+.remote-backup-item.is-selected {
+  border-left-color: var(--accent);
+  background: var(--bg-modifier-selected);
+}
+
+.remote-backup-size {
+  color: var(--text-muted);
+}
+
+.remote-backup-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+
+.remote-backup-text {
+  flex: 1;
+  margin: 0;
+  padding: 8px 12px;
+  overflow: auto;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.remote-backup-restore {
+  margin: 8px 12px 12px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+/* Dialogs (save review, conflict) */
+
+.modal-overlay.remote-file-dialog-overlay {
+  z-index: 14000;
+}
+
+.modal-content.remote-file-dialog {
+  z-index: 14001;
+  width: min(520px, 92vw);
+}
+
+.modal-content.remote-file-save-dialog {
+  width: min(860px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.remote-file-save-dialog .mcp-diff {
+  flex: 1;
+  min-height: 120px;
+  max-height: 56vh;
+}
+
+.remote-file-dialog-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.remote-file-dialog-icon.is-warning {
+  color: var(--warning);
+}
+
+.remote-file-dialog-text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.remote-file-dialog-path {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.remote-file-dialog-note {
+  margin: 6px 0 0;
+  color: var(--warning);
+  font-size: 12.5px;
+}
+
+.remote-file-added {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.remote-file-removed {
+  color: var(--error-text);
+  font-weight: 600;
+}
+
+.remote-file-dialog-actions {
+  flex-wrap: wrap;
+}
+
+.remote-file-dialog-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--warning);
+  font-size: 12.5px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.remote-file-dialog-check input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+/* Log view (text preview, "실시간 보기") */
+
+.remote-log-body {
+  position: relative;
+}
+
+.remote-log-new-lines {
+  position: absolute;
+  right: 22px;
+  bottom: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--accent);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+}
+
+.remote-log-new-lines:hover {
+  background: var(--bg-hover);
+}
+
+.remote-log-new-lines:focus-visible,
+.remote-log-jump:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.remote-log-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.remote-log-follow.is-live::before,
+.remote-log-follow.is-error::before {
+  content: '';
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.remote-log-follow.is-live::before {
+  animation: remote-log-pulse 1.6s ease-in-out infinite;
+}
+
+.remote-log-follow.is-error {
+  color: var(--warning);
+}
+
+.remote-log-follow.is-error::before {
+  background: var(--warning);
+}
+
+@keyframes remote-log-pulse {
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .remote-log-follow.is-live::before {
+    animation: none;
+  }
+}
+
+.remote-log-note {
+  color: var(--text-muted);
+}
+
+.remote-log-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.remote-log-count.is-error {
+  color: var(--error-text);
+  font-weight: 600;
+}
+
+.remote-log-count.is-warn {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.remote-file-status .remote-log-jump {
+  width: 22px;
+  height: 22px;
+  margin: 0 -8px;
+}

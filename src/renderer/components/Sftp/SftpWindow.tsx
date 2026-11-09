@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useSftpStore } from '../../stores/sftpStore'
 import { FileList, keepSelectionProps } from './FileList'
+import { openRemoteFileWindow } from '../../lib/remoteFileOpen'
 import { TransferQueue } from './TransferQueue'
 import { PathBar } from './PathBar'
 import { OverwriteModal } from './OverwriteModal'
@@ -270,6 +271,7 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
             onDownload={handleDownload}
             onDelete={handleDeleteRemote}
             {...paneActions.remote}
+            onOpenFile={(file, mode) => void openRemoteFileWindow(sessionId, sessionTitle || hostLabel || '', remotePath, file.name, mode)}
           />
         </div>
       </div>

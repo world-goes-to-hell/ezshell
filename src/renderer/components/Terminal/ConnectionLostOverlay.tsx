@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { RiCloseCircleLine, RiLinkUnlinkM, RiLoader4Line, RiRefreshLine } from 'react-icons/ri'
 import { describeConnectionLost } from '../../lib/connectionLost'
+import { rootSwitchNotice } from '../../lib/rootSwitch'
+import { toast } from '../../stores/toastStore'
 import './ConnectionLostOverlay.css'
 
 const FAILED_TEXT = '다시 연결하지 못했습니다.'
@@ -32,8 +34,13 @@ export function ConnectionLostOverlay({ sessionId, reconnect, note, onClose, onR
     setIsReconnecting(true)
     try {
       const result = await window.electronAPI.sshReconnectNow?.(sessionId)
-      if (result?.success) onReconnected()
-      else onReconnectFailed(result?.error || FAILED_TEXT)
+      if (result?.success) {
+        onReconnected()
+        const rootNotice = rootSwitchNotice(result.rootSwitch)
+        if (rootNotice) toast[rootNotice.type](rootNotice.title, rootNotice.message)
+      } else {
+        onReconnectFailed(result?.error || FAILED_TEXT)
+      }
     } catch {
       onReconnectFailed(FAILED_TEXT)
     } finally {

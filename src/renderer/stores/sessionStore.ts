@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { reorderSession, type DropPosition } from '../lib/sessionOrder'
+import type { SavedDbConnection } from '../types/db'
 
 export interface Session {
   id: string
@@ -20,6 +21,11 @@ export interface Session {
   postConnectScript?: string
   /** Claude Code may run commands on this session through the local MCP server */
   mcpEnabled?: boolean
+  /** After login, become root with `su -` (main answers the password prompt) */
+  suRoot?: boolean
+  suPassword?: string
+  /** Database accounts saved from the DB client (encrypted with the sessions) */
+  dbConnections?: SavedDbConnection[]
   // Jump Host 설정
   useJumpHost?: boolean
   jumpHost?: string

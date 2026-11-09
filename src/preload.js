@@ -169,6 +169,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openSftpWindow: (sessionId, localPath, remotePath, title) =>
     ipcRenderer.invoke('open-sftp-window', { sessionId, localPath, remotePath, title }),
 
+  // ==================== 서버 파일 편집 / 미리보기 창 ====================
+  // mode: 'edit' | 'preview'. The window's own calls name its docId (from the window URL).
+  openRemoteFile: (sessionId, sessionName, remotePath, mode) =>
+    ipcRenderer.invoke('remote-file-open', { sessionId, sessionName, remotePath, mode }),
+  remoteFileLoad: (docId) => ipcRenderer.invoke('remote-file-load', { docId }),
+  remoteFileTail: (docId, generation, cursor) => ipcRenderer.invoke('remote-file-tail', { docId, generation, cursor }),
+  remoteFileAttention: (docId) => ipcRenderer.send('remote-file-attention', { docId }),
+  // DB client (src/dbClient): discovery and opening from the main window, the rest from a DB window
+  dbDiscover: (sessionId) => ipcRenderer.invoke('db-discover', { sessionId }),
+  dbOpen: (sessionId, sessionName, endpoint, credentials) => ipcRenderer.invoke('db-open', { sessionId, sessionName, endpoint, credentials }),
+  dbInfo: (dbId) => ipcRenderer.invoke('db-info', { dbId }),
+  dbQuery: (dbId, sql) => ipcRenderer.invoke('db-query', { dbId, sql }),
+  dbCancel: (dbId) => ipcRenderer.invoke('db-cancel', { dbId }),
+  dbSchemas: (dbId) => ipcRenderer.invoke('db-schemas', { dbId }),
+  dbTables: (dbId, schema) => ipcRenderer.invoke('db-tables', { dbId, schema }),
+  dbColumns: (dbId, schema, table) => ipcRenderer.invoke('db-columns', { dbId, schema, table }),
+  remoteFileReview: (docId, content) => ipcRenderer.invoke('remote-file-review', { docId, content }),
+  remoteFileSave: (docId, content, token) => ipcRenderer.invoke('remote-file-save', { docId, content, token }),
+  remoteFileBackups: (docId) => ipcRenderer.invoke('remote-file-backups', { docId }),
+  remoteFileReadBackup: (docId, name) => ipcRenderer.invoke('remote-file-read-backup', { docId, name }),
+  remoteFileOpenBackupFolder: (docId) => ipcRenderer.invoke('remote-file-open-backup-folder', { docId }),
+  remoteFileSetDirty: (docId, isDirty) => ipcRenderer.send('remote-file-dirty', { docId, isDirty }),
+  remoteFileClose: (docId) => ipcRenderer.invoke('remote-file-close', { docId }),
+  onRemoteFileCloseRequested: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('remote-file-close-requested', handler);
+    return () => ipcRenderer.removeListener('remote-file-close-requested', handler);
+  },
+
   // ==================== 터미널 창 분리 ====================
 
   // snapshot: serialized screen of the tab, shown first in the new window

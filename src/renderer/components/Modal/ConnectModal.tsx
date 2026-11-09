@@ -55,6 +55,8 @@ export interface ConnectionConfig {
   autoReconnect?: boolean
   postConnectScript?: string
   mcpEnabled?: boolean
+  suRoot?: boolean
+  suPassword?: string
   // Jump Host
   useJumpHost?: boolean
   jumpHost?: string
@@ -84,6 +86,8 @@ const DEFAULT_CONFIG: ConnectionConfig = {
   autoReconnect: true,
   postConnectScript: '',
   mcpEnabled: false,
+  suRoot: false,
+  suPassword: '',
   useJumpHost: false,
   jumpHost: '',
   jumpPort: 22,
@@ -427,6 +431,31 @@ export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSessio
                     설정 &gt; MCP 에서 서버를 켜면 Claude 가 이 세션으로 명령을 실행할 수 있습니다. 위험한 명령은 실행 전에 확인을 받습니다.
                   </p>
                 </div>
+                <div className="form-group checkbox-group">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={config.suRoot === true}
+                      onChange={(e) => updateConfig('suRoot', e.target.checked)}
+                    />
+                    <span>로그인 후 root 로 전환 (su -)</span>
+                  </label>
+                  <p className="form-hint">
+                    root 로 바로 접속할 수 없는 서버에서 씁니다. 접속하면 <code>su -</code> 를 실행하고, 비밀번호를 묻는 문구가 나올 때만 아래 비밀번호를 넣습니다. 자동 실행 스크립트는 전환한 뒤에 실행됩니다.
+                  </p>
+                </div>
+                {config.suRoot && (
+                  <div className="form-group">
+                    <label>root 비밀번호</label>
+                    <input
+                      type="password"
+                      value={config.suPassword || ''}
+                      onChange={(e) => updateConfig('suPassword', e.target.value)}
+                      placeholder="su 에 입력할 root 비밀번호"
+                      autoComplete="off"
+                    />
+                  </div>
+                )}
                 <div className="form-group">
                   <label>연결 후 자동 실행 스크립트</label>
                   <textarea

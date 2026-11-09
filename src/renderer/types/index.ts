@@ -1,3 +1,6 @@
+import type { RootSwitchOutcome } from '../lib/rootSwitch'
+import type { DbCredentials, DbEndpoint, DbQueryResult, DbResult, DbServerInfo, DbTable, DbTableColumn, DbWindowInfo, DiscoveredDb } from './db'
+
 export interface SessionConfig {
   id: string
   name: string
@@ -92,6 +95,59 @@ export interface McpDiffLine {
 export interface McpDiffHunk {
   header: string
   lines: McpDiffLine[]
+}
+
+// ==================== Server file window (edit / preview) ====================
+
+/** 'tail' is a text preview that follows the end of the file ("실시간 보기") */
+export type RemoteFileMode = 'edit' | 'preview' | 'tail'
+
+/** Where following a log stands: the load it belongs to, and the last answer the window took in */
+export interface RemoteFileFollow {
+  generation: number
+  cursor: number
+}
+
+/**
+ * One look at the end of a followed log. Pass `cursor` back on the next look once its text is shown
+ * (an answer not taken in is sent again). 'busy' and 'stale' (from before a refresh) carry none.
+ */
+export type RemoteFileTailResult =
+  | { status: 'busy' | 'stale'; cursor?: undefined }
+  | { status: 'same' | 'missing'; cursor: number }
+  | { status: 'append'; text: string; cursor: number }
+  | { status: 'skipped'; skippedBytes: number; text: string; cursor: number }
+  | { status: 'rotated'; skippedBytes?: number; text: string; cursor: number }
+
+/** Every answer of the file window's IPC: the fields on success, a message to show otherwise */
+export type RemoteFileResult<T> = ({ success: true } & T) | { success: false; error: string }
+
+interface RemoteFileLoadedBase {
+  sessionName: string
+  requestedPath: string
+  /** The real path behind links */
+  path: string
+  mode: RemoteFileMode
+}
+
+export type RemoteFileLoaded = RemoteFileLoadedBase & (
+  | { kind: 'text'; editable: true; content: string; canWrite: boolean }
+  | { kind: 'text'; editable: false; content: string; truncated: boolean; size: number; follow: RemoteFileFollow }
+  | { kind: 'image' | 'pdf'; mime: string; size: number; data: Uint8Array<ArrayBuffer> }
+)
+
+export type RemoteFileReview =
+  | { unchanged: true }
+  | { unchanged: false; token: string; change: { added: number; removed: number; isWholeFile: boolean; hunks: McpDiffHunk[]; truncated: boolean } }
+
+export type RemoteFileSaveResult =
+  | { ok: true; backupName: string }
+  | { ok: false; conflict: true; message: string }
+
+export interface RemoteFileBackup {
+  name: string
+  createdAt: number
+  size: number
 }
 
 /** Question from main about an SSH host key that is not saved yet ('unknown') or differs from the saved one ('changed') */
@@ -282,7 +338,7 @@ declare global {
       onSshReconnectFailed: (callback: (data: { sessionId: string; message?: string }) => void) => (() => void) | void
       sshCancelReconnect: (sessionId: string) => Promise<any>
       /** Connect a dropped tab again the way it first connected, under the same session id */
-      sshReconnectNow?: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+      sshReconnectNow?: (sessionId: string) => Promise<{ success: boolean; error?: string; rootSwitch?: RootSwitchOutcome }>
 
       // Split terminal (independent shell channels)
       sshCreateShell: (sessionId: string) => Promise<{ success: boolean; streamId?: string; error?: string }>
@@ -335,6 +391,30 @@ declare global {
 
       // SFTP Window
       openSftpWindow?: (sessionId: string, localPath: string, remotePath: string, title?: string) => Promise<any>
+
+      // Server file window (edit / preview); absent until the app restarts after an update
+      openRemoteFile?: (sessionId: string, sessionName: string, remotePath: string, mode: RemoteFileMode) => Promise<RemoteFileResult<{ existing: boolean }>>
+      remoteFileLoad?: (docId: string) => Promise<RemoteFileResult<RemoteFileLoaded>>
+      remoteFileTail?: (docId: string, generation: number, cursor: number) => Promise<RemoteFileResult<RemoteFileTailResult>>
+      remoteFileAttention?: (docId: string) => void
+      remoteFileReview?: (docId: string, content: string) => Promise<RemoteFileResult<RemoteFileReview>>
+      remoteFileSave?: (docId: string, content: string, token: string) => Promise<RemoteFileResult<RemoteFileSaveResult>>
+      remoteFileBackups?: (docId: string) => Promise<RemoteFileResult<{ folder: string; backups: RemoteFileBackup[] }>>
+      remoteFileReadBackup?: (docId: string, name: string) => Promise<RemoteFileResult<{ content: string }>>
+      remoteFileOpenBackupFolder?: (docId: string) => Promise<RemoteFileResult<object>>
+      remoteFileSetDirty?: (docId: string, isDirty: boolean) => void
+      remoteFileClose?: (docId: string) => Promise<RemoteFileResult<object>>
+      onRemoteFileCloseRequested?: (callback: () => void) => () => void
+
+      // DB client
+      dbDiscover?: (sessionId: string) => Promise<DbResult<{ databases: DiscoveredDb[] }>>
+      dbOpen?: (sessionId: string, sessionName: string, endpoint: DbEndpoint, credentials: DbCredentials) => Promise<DbResult<{ info: DbServerInfo }>>
+      dbInfo?: (dbId: string) => Promise<DbResult<DbWindowInfo>>
+      dbQuery?: (dbId: string, sql: string) => Promise<DbResult<DbQueryResult>>
+      dbCancel?: (dbId: string) => Promise<DbResult<{ cancelled: boolean }>>
+      dbSchemas?: (dbId: string) => Promise<DbResult<{ schemas: string[]; current: string }>>
+      dbTables?: (dbId: string, schema: string) => Promise<DbResult<{ tables: DbTable[] }>>
+      dbColumns?: (dbId: string, schema: string, table: string) => Promise<DbResult<{ columns: DbTableColumn[] }>>
 
       // Terminal Window
       openTerminalWindow: (sessionId: string, title: string, snapshot?: string) => Promise<any>

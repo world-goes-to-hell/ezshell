@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useSftpStore } from '../../stores/sftpStore'
 import { FileList, keepSelectionProps } from './FileList'
+import { openRemoteFileWindow } from '../../lib/remoteFileOpen'
 import { TransferQueue } from './TransferQueue'
 import { PathBar } from './PathBar'
 import { OverwriteModal } from './OverwriteModal'
@@ -602,6 +603,11 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
             onDownload={handleDownload}
             onDelete={handleDeleteRemote}
             {...paneActions.remote}
+            onOpenFile={(file, mode) => {
+              const terminal = useTerminalStore.getState().terminals.get(sessionId)
+              const name = terminal?.title || (terminal ? `${terminal.username}@${terminal.host}` : '')
+              void openRemoteFileWindow(sessionId, name, remotePath, file.name, mode)
+            }}
             onDrop={handleDropOnRemote}
             isLoading={isRemoteLoading}
           />

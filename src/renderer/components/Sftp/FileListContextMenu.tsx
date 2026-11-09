@@ -1,10 +1,11 @@
 import { forwardRef, type ReactElement } from 'react'
 import {
-  RiUploadFill, RiDownloadFill, RiDeleteBinFill, RiEditFill, RiFolderAddFill, RiRefreshFill
+  RiUploadFill, RiDownloadFill, RiDeleteBinFill, RiEditFill, RiFolderAddFill, RiRefreshFill, RiEyeFill, RiFileEditFill, RiPulseLine
 } from 'react-icons/ri'
 import type { FileItem } from '../../stores/sftpStore'
+import { EDIT_MAX_BYTES, canFollowFile } from '../../lib/remoteFileText'
 
-export type ContextMenuAction = 'upload' | 'download' | 'rename' | 'newFolder' | 'refresh' | 'delete'
+export type ContextMenuAction = 'upload' | 'download' | 'rename' | 'newFolder' | 'refresh' | 'delete' | 'preview' | 'tail' | 'edit'
 
 interface MenuItem {
   action: ContextMenuAction
@@ -23,6 +24,8 @@ interface MenuOptions {
   canRename: boolean
   canCreateFolder: boolean
   canDelete: boolean
+  /** Remote files can be opened in the server file window (preview / edit) */
+  canOpenFile?: boolean
 }
 
 const ICON_SIZE = 16
@@ -30,7 +33,7 @@ export const CONTEXT_MENU_ITEM_HEIGHT = 34
 export const CONTEXT_MENU_WIDTH = 210
 
 /** Items shown for the clicked row (or for empty space when `file` is null) */
-export function buildContextMenuItems({ file, type, canRename, canCreateFolder, canDelete }: MenuOptions): MenuItem[] {
+export function buildContextMenuItems({ file, type, canRename, canCreateFolder, canDelete, canOpenFile = false }: MenuOptions): MenuItem[] {
   if (!file) {
     return [
       ...(canCreateFolder ? [{ action: 'newFolder' as const, label: '새 폴더', shortcut: 'Ctrl+Shift+N', icon: <RiFolderAddFill size={ICON_SIZE} /> }] : []),
@@ -38,9 +41,15 @@ export function buildContextMenuItems({ file, type, canRename, canCreateFolder, 
     ]
   }
 
-  const items: MenuItem[] = type === 'local'
-    ? [{ action: 'upload', label: '업로드', icon: <RiUploadFill size={ICON_SIZE} /> }]
-    : [{ action: 'download', label: '다운로드', icon: <RiDownloadFill size={ICON_SIZE} /> }]
+  const opensFile = canOpenFile && type === 'remote' && file.type === 'file'
+  const items: MenuItem[] = [
+    ...(opensFile ? [{ action: 'preview' as const, label: '미리보기', icon: <RiEyeFill size={ICON_SIZE} /> }] : []),
+    ...(opensFile && canFollowFile(file.name) ? [{ action: 'tail' as const, label: '실시간 보기', icon: <RiPulseLine size={ICON_SIZE} /> }] : []),
+    ...(opensFile && file.size <= EDIT_MAX_BYTES ? [{ action: 'edit' as const, label: '편집', icon: <RiFileEditFill size={ICON_SIZE} /> }] : []),
+    type === 'local'
+      ? { action: 'upload', label: '업로드', icon: <RiUploadFill size={ICON_SIZE} />, separated: opensFile }
+      : { action: 'download', label: '다운로드', icon: <RiDownloadFill size={ICON_SIZE} />, separated: opensFile }
+  ]
   if (canRename) items.push({ action: 'rename', label: '이름 바꾸기', shortcut: 'F2', icon: <RiEditFill size={ICON_SIZE} />, separated: true })
   if (canCreateFolder) items.push({ action: 'newFolder', label: '새 폴더', shortcut: 'Ctrl+Shift+N', icon: <RiFolderAddFill size={ICON_SIZE} />, separated: !canRename })
   if (canDelete) {

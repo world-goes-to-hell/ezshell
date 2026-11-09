@@ -192,6 +192,20 @@ describe('createActivityLog: live output', () => {
     expect(emitted.at(-1)).toMatchObject({ state: 'done', output: 'formatted', outputParts: [out('a')] })
   })
 
+  it('does not send pending output after an update of a running request: the published item already carries it', () => {
+    // A transfer reports a progress line, then updates its progress bar: the line was shown twice
+    const { log, emitted, outputs } = live()
+    log.begin(base('r1'))
+    log.appendOutput('r1', 'stdout', 'line 1\n')
+    log.update('r1', { transfer: { done: 1 } })
+    vi.advanceTimersByTime(50)
+    expect(outputs).toEqual([])
+    expect(emitted.at(-1)).toMatchObject({ state: 'running', outputParts: [out('line 1\n')] })
+    log.appendOutput('r1', 'stdout', 'line 2\n')
+    vi.advanceTimersByTime(50)
+    expect(outputs).toEqual([{ id: 'r1', parts: [out('line 2\n')] }])
+  })
+
   it('sends pending output before handing out a snapshot, so a new subscriber never gets it twice', () => {
     const order = []
     const log = createActivityLog({ emitOutput: (payload) => order.push(payload) })

@@ -13,6 +13,7 @@ import { FileListHeader } from './FileListHeader'
 import { getFileIcon } from './fileIcons'
 import { TransferMarkBadge, transferMarkClass } from './TransferMarkBadge'
 import { transferMarksFor } from '../../lib/transferMarks'
+import type { RemoteFileMode } from '../../types'
 import './FileList.css'
 import {
   FileListContextMenu, buildContextMenuItems, CONTEXT_MENU_ITEM_HEIGHT, CONTEXT_MENU_WIDTH,
@@ -40,6 +41,8 @@ interface FileListProps {
   onDrop?: (fileNames: string[], targetDir?: string) => void
   /** Entries of this list dropped on one of its folder rows or ".." (asks, then moves) */
   onMoveInto?: (names: string[], targetDir: string) => void
+  /** Remote list: open a file in the server file window (preview or edit). Hidden when not provided. */
+  onOpenFile?: (file: FileItem, mode: RemoteFileMode) => void
   isLoading?: boolean
 }
 
@@ -63,7 +66,7 @@ const PARENT_ROW_KEY = '/..'
 
 export function FileList({
   files: rawFiles, selected, onNavigate, currentPath, type, sessionId,
-  onUpload, onDownload, onDelete, onRename, onCreateFolder, onFocusPath, onDrop, onMoveInto, isLoading
+  onUpload, onDownload, onDelete, onRename, onCreateFolder, onFocusPath, onDrop, onMoveInto, onOpenFile, isLoading
 }: FileListProps) {
   const store = useSftpStore()
   // Kept while the panel stays open (this component stays mounted across folder changes)
@@ -366,7 +369,7 @@ export function FileList({
     if (file && !selected.has(file.name)) selectOnly(file.name)
 
     const itemCount = buildContextMenuItems({
-      file, type, canRename: Boolean(onRename), canCreateFolder: Boolean(onCreateFolder), canDelete: Boolean(onDelete)
+      file, type, canRename: Boolean(onRename), canCreateFolder: Boolean(onCreateFolder), canDelete: Boolean(onDelete), canOpenFile: Boolean(onOpenFile)
     }).length
     const menuHeight = itemCount * CONTEXT_MENU_ITEM_HEIGHT + 24
     const x = Math.min(e.clientX, window.innerWidth - CONTEXT_MENU_WIDTH - CONTEXT_MENU_EDGE_GAP)
@@ -421,6 +424,10 @@ export function FileList({
       case 'rename': return startRename(file)
       case 'newFolder': return startCreateFolder()
       case 'refresh': return onNavigate(currentPath)
+      case 'preview':
+      case 'tail':
+      case 'edit':
+        return file ? onOpenFile?.(file, action) : undefined
     }
   }
 
@@ -568,7 +575,8 @@ export function FileList({
             type,
             canRename: Boolean(onRename),
             canCreateFolder: Boolean(onCreateFolder),
-            canDelete: Boolean(onDelete)
+            canDelete: Boolean(onDelete),
+            canOpenFile: Boolean(onOpenFile)
           })}
           onSelect={handleContextAction}
         />

@@ -24,6 +24,13 @@ const commandHistory = require('./src/commandHistory.js');
 const { testSshConnection, describeSshError, normalizeConnectConfig } = require('./src/sshConnectionTest.js');
 const { createUpdateChecker } = require('./src/updateChecker.js');
 const { SSH_ALGORITHMS } = require('./src/sshAlgorithms.js');
+const { switchToRoot } = require('./src/rootSwitch.js');
+const { createRemoteDocuments } = require('./src/remoteFiles/documents.js');
+const { createBackupStore } = require('./src/remoteFiles/backups.js');
+const { registerRemoteFileIpc } = require('./src/remoteFiles/ipc.js');
+const { registerDbIpc } = require('./src/dbClient/ipc.js');
+const { createDbConnections } = require('./src/dbClient/connections.js');
+const { createDiscoveryCache } = require('./src/dbClient/discovery.js');
 const localFileOps = require('./src/localFileOps.js');
 const sftpSymlinks = require('./src/sftpSymlinks.js');
 const sftpUploadCheck = require('./src/sftpUploadCheck.js');
@@ -445,6 +452,133 @@ function closeMcpActivityWindow() {
   if (mcpActivityWindow && !mcpActivityWindow.isDestroyed()) mcpActivityWindow.close();
 }
 
+// ==================== 서버 파일 편집 / 미리보기 창 ====================
+// One window per server file. Each window gets its own SFTP channel on the tab's connection and a
+// document id; main answers a window only about its own document (src/remoteFiles).
+const REMOTE_FILE_BACKUP_FOLDER = 'ezShell Backups';
+
+function createRemoteFileWindow(docId) {
+  const win = new BrowserWindow({
+    icon: WINDOW_ICON,
+    width: 1000,
+    height: 720,
+    minWidth: 520,
+    minHeight: 360,
+    frame: false,
+    backgroundColor: '#1e1e2e',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      preload: path.join(__dirname, '../preload/index.js')
+    }
+  });
+  const query = { remoteFileMode: 'true', docId };
+  if (process.env.ELECTRON_RENDERER_URL) {
+    win.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${new URLSearchParams(query).toString()}`);
+  } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
+    win.loadURL(`${DEV_RENDERER_URL}?${new URLSearchParams(query).toString()}`);
+  } else {
+    win.loadFile(path.join(__dirname, '../renderer/index.html'), { query });
+  }
+  return win;
+}
+
+const remoteBackupRoot = () => path.join(app.getPath('documents'), REMOTE_FILE_BACKUP_FOLDER);
+
+const remoteDocuments = createRemoteDocuments({
+  openSftp: (sessionId) => new Promise((resolve, reject) => {
+    const session = sshConnections.get(sessionId);
+    if (!session || !session.conn) return reject(Object.assign(new Error('no connection'), { code: 'NO_CONNECTION' }));
+    session.conn.sftp((err, sftp) => (err ? reject(err) : resolve(sftp)));
+  }),
+  serverOf: (sessionId) => {
+    const config = connectionStates.get(sessionId)?.config;
+    return config ? { username: config.username, host: config.host } : null;
+  },
+  backups: {
+    get root() { return remoteBackupRoot(); },
+    store: {
+      // Created on first use: app.getPath('documents') needs the app to be ready
+      save: (target, content) => remoteBackupStore().save(target, content),
+      list: (target) => remoteBackupStore().list(target),
+      read: (target, name) => remoteBackupStore().read(target, name),
+      remove: (target, name) => remoteBackupStore().remove(target, name),
+      prune: (target, justMade) => remoteBackupStore().prune(target, justMade)
+    }
+  }
+});
+let backupStore = null;
+function remoteBackupStore() {
+  if (!backupStore) backupStore = createBackupStore({ root: remoteBackupRoot() });
+  return backupStore;
+}
+
+const remoteFileIpc = registerRemoteFileIpc({
+  ipcMain,
+  docs: remoteDocuments,
+  createWindow: createRemoteFileWindow,
+  // Followed logs stop while the app is locked
+  isLocked: () => isAppLocked,
+  openFolder: async (dir) => {
+    await fs.promises.mkdir(dir, { recursive: true });
+    const failure = await shell.openPath(dir);
+    if (failure) throw new Error(failure);
+  }
+});
+
+// ==================== DB 클라이언트 창 ====================
+// One window per database connection, reached through a channel of the tab's SSH connection
+// (no port is opened on this PC). Read-only; see src/dbClient.
+function createDbWindow(dbId) {
+  const win = new BrowserWindow({
+    icon: WINDOW_ICON,
+    width: 1180,
+    height: 780,
+    minWidth: 640,
+    minHeight: 420,
+    frame: false,
+    backgroundColor: '#1e1e2e',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      preload: path.join(__dirname, '../preload/index.js')
+    }
+  });
+  const query = { dbMode: 'true', dbId };
+  if (process.env.ELECTRON_RENDERER_URL) {
+    win.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${new URLSearchParams(query).toString()}`);
+  } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
+    win.loadURL(`${DEV_RENDERER_URL}?${new URLSearchParams(query).toString()}`);
+  } else {
+    win.loadFile(path.join(__dirname, '../renderer/index.html'), { query });
+  }
+  return win;
+}
+
+const dbDiscovery = createDiscoveryCache();
+const dbConnections = createDbConnections({
+  openStream: (sessionId, host, port) => new Promise((resolve, reject) => {
+    const session = sshConnections.get(sessionId);
+    if (!session || !session.conn) return reject(Object.assign(new Error('no connection'), { code: 'NO_CONNECTION' }));
+    session.conn.forwardOut('127.0.0.1', 0, host, port, (err, stream) => (err ? reject(err) : resolve(stream)));
+  })
+});
+const dbIpc = registerDbIpc({
+  ipcMain,
+  connections: dbConnections,
+  // Once per connection (a reconnected tab is looked at again); a tab without a connection has none
+  discover: async (sessionId) => {
+    const session = sshConnections.get(sessionId);
+    return session && session.conn ? dbDiscovery.discover(session.conn) : [];
+  },
+  createWindow: createDbWindow,
+  isLocked: () => isAppLocked,
+  // Discovery and opening come only from the main window, which holds the sessions
+  isMainWindow: (senderId) => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.id === senderId)
+});
+
 // Screen contents of a terminal tab being popped out, kept until its new window picks them up.
 // Memory only: terminal output can contain secrets.
 const terminalSnapshots = new Map();
@@ -595,6 +729,10 @@ ipcMain.handle('lock-app', async () => {
   mcpController?.onLocked();
   hostKeyPrompter.dismissAll();
   closeMcpActivityWindow();
+  // File previews and followed logs must not stay on screen behind the lock (edit windows keep unsaved text)
+  remoteFileIpc.closeViewWindows();
+  // Query results must not stay on screen behind the lock
+  dbIpc.closeAll();
   return { success: true };
 });
 
@@ -669,6 +807,9 @@ ipcMain.handle('reset-master-password', async () => {
   isAppLocked = true;
   mcpSessionsCache = null;
   mcpController?.onLocked();
+  remoteFileIpc.closeViewWindows();
+  // Query results must not stay on screen behind the lock
+  dbIpc.closeAll();
   masterPasswordVerification = null;
 
   return { success: true };
@@ -1401,6 +1542,8 @@ function reconnectOnce(sessionId, connState, verifierFor) {
         if (reconnectWindow) {
           reconnectWindow.webContents.send('ssh-reconnected', { sessionId });
         }
+        // Back to root after an automatic reconnect too; a failure shows in the terminal itself
+        if (config.suRoot && config.suPassword) void switchToRoot(stream, { password: config.suPassword });
 
         resolve();
       });
@@ -1527,7 +1670,14 @@ function openShellConnection(sessionId, config, verifierFor) {
           });
 
           opened = true;
-          resolve({ success: true, sessionId });
+          // "로그인 후 root 로 전환": su before answering, so the post-connect script runs as root.
+          // Only the outcome goes back to the window, never the password.
+          if (config.suRoot && config.suPassword) {
+            switchToRoot(stream, { password: config.suPassword })
+              .then(({ outcome }) => resolve({ success: true, sessionId, rootSwitch: outcome }));
+          } else {
+            resolve({ success: true, sessionId });
+          }
         });
       });
 
@@ -1901,9 +2051,9 @@ ipcMain.handle('ssh-reconnect-now', async (event, payload) => {
     }
   }
   try {
-    await checkHostKeyAsking((verifierFor) => openShellConnection(sessionId, connState.config, verifierFor));
+    const result = await checkHostKeyAsking((verifierFor) => openShellConnection(sessionId, connState.config, verifierFor));
     if (sessionLogger) sessionLogger.note(sessionId, '재연결됨');
-    return { success: true };
+    return result.rootSwitch ? { success: true, rootSwitch: result.rootSwitch } : { success: true };
   } catch (err) {
     // The saved config stays, so the user can press 재연결 again
     connState.state = ConnectionState.DISCONNECTED;

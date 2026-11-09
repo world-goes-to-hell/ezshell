@@ -4,6 +4,7 @@ import { VersionInfo } from '../Update/UpdateNotification'
 import { ZoomStatus } from '../Zoom/ZoomStatus'
 import { ZoomHud } from '../Zoom/ZoomHud'
 import { McpActivityIndicator } from '../Mcp/McpActivityIndicator'
+import { DbIndicator } from '../DbClient/DbIndicator'
 
 export function Footer() {
   const { terminals } = useTerminalStore()
@@ -25,6 +26,7 @@ export function Footer() {
             </>
           )}
         </div>
+        <DbIndicator />
       </div>
       <div className="footer-right">
         <McpActivityIndicator />

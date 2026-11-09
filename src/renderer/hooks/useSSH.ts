@@ -3,6 +3,7 @@ import { useTerminalStore } from '../stores/terminalStore'
 import { useHistoryStore } from '../stores/historyStore'
 import { useStatsStore } from '../stores/statsStore'
 import { toast } from '../stores/toastStore'
+import { rootSwitchNotice } from '../lib/rootSwitch'
 
 export interface SSHConnectConfig {
   host: string
@@ -15,6 +16,8 @@ export interface SSHConnectConfig {
   sessionName?: string
   color?: string
   postConnectScript?: string
+  suRoot?: boolean
+  suPassword?: string
   // Id of the sidebar session this connection came from (absent for unsaved quick connects).
   // Kept by the main process so any window can look up per-session data such as path bookmarks.
   savedSessionId?: string
@@ -75,6 +78,8 @@ export function useSSH() {
         updateTerminalMeta(result.sessionId, { statsId })
 
         toast.success('Connected', `Successfully connected to ${config.username}@${config.host}`)
+        const rootNotice = rootSwitchNotice(result.rootSwitch)
+        if (rootNotice) toast[rootNotice.type](rootNotice.title, rootNotice.message)
 
         // Post-connect script execution
         if (config.postConnectScript?.trim()) {
