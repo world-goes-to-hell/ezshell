@@ -1,21 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Prec } from '@codemirror/state'
 import { keymap } from '@codemirror/view'
 import { RiDatabase2Line, RiErrorWarningLine, RiFileCopyLine, RiLoader4Line, RiPlayFill, RiShieldCheckLine, RiStopFill } from 'react-icons/ri'
 import { PopoutTitleBar } from '../TitleBar/PopoutTitleBar'
 import { CodeEditor, type CodeEditorHandle } from '../RemoteFile/CodeEditor'
-import { SchemaTree } from './SchemaTree'
+import { DatabaseTree } from './DatabaseTree'
 import { ResultGrid, resultAsTsv } from './ResultGrid'
 import { usePopoutTheme } from '../../hooks/usePopoutTheme'
 import { copyToClipboard } from '../../lib/terminalClipboard'
 import { previewQuery, quoteIdentifier, statementAt } from '../../lib/sqlStatements'
 import { createSerialQueue } from '../../lib/serialQueue'
+import { EMPTY_FILTER, filterStorageKey, loadFilter, saveFilter, type TreeFilter } from '../../lib/dbTreeFilter'
 import { completionExtensions, createDbMetadata } from './dbCompletion'
-import type { DbQueryResult, DbWindowInfo } from '../../types/db'
+import type { DbDatabase, DbQueryResult, DbWindowInfo } from '../../types/db'
 import '../RemoteFile/RemoteFile.css'
 import './DbClient.css'
 
 type InfoState = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; info: DbWindowInfo }
+type Loaded<T> = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; items: T }
 type RunState =
   | { status: 'idle' }
   | { status: 'running'; sql: string; startedAt: number }
@@ -35,12 +37,15 @@ function summary(result: DbQueryResult): string {
   return `${result.rows.length.toLocaleString()}행 · ${seconds}초${cut}`
 }
 
-/** A database in its own window (`?dbMode=true&dbId=...`): schema tree, SQL editor and result grid. Read-only. */
+/** A database account in its own window (`?dbMode=true&dbId=...`): database tree, SQL editor and result grid. Read-only. */
 export function DbClientWindow({ dbId }: { dbId: string }) {
   usePopoutTheme()
   const [infoState, setInfoState] = useState<InfoState>({ status: 'loading' })
   const [run, setRun] = useState<RunState>({ status: 'idle' })
   const [database, setDatabase] = useState('')
+  const [databases, setDatabases] = useState<Loaded<DbDatabase[]>>({ status: 'loading' })
+  const [filter, setFilter] = useState<TreeFilter>(EMPTY_FILTER)
+  const [isSwitching, setIsSwitching] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [runSeq, setRunSeq] = useState(0)
   const editorRef = useRef<CodeEditorHandle>(null)
@@ -50,8 +55,17 @@ export function DbClientWindow({ dbId }: { dbId: string }) {
   const isRunningRef = useRef(false)
   const databaseRef = useRef('')
   databaseRef.current = database
-  const metadata = useMemo(() => createDbMetadata({ dbId, queue, isIdle: () => !isRunningRef.current }), [dbId, queue])
   const engine = infoState.status === 'ready' ? infoState.info.engine : null
+  const metadata = useMemo(() => (engine === 'mysql' || engine === 'postgres'
+    ? createDbMetadata({ dbId, engine, queue, database: () => databaseRef.current, isIdle: () => !isRunningRef.current })
+    : null), [dbId, engine, queue])
+
+  const loadDatabases = useCallback(async () => {
+    setDatabases({ status: 'loading' })
+    const result = await queue.run(async () => window.electronAPI.dbDatabases?.(dbId))
+    if (!result?.success) setDatabases({ status: 'error', message: result && !result.success ? result.error : '앱을 다시 시작해 주세요.' })
+    else setDatabases({ status: 'ready', items: result.databases })
+  }, [dbId, queue])
 
   useEffect(() => {
     void window.electronAPI.dbInfo?.(dbId).then(result => {
@@ -60,9 +74,11 @@ export function DbClientWindow({ dbId }: { dbId: string }) {
       else {
         setInfoState({ status: 'ready', info: result })
         setDatabase(result.database)
+        setFilter(loadFilter(filterStorageKey(result)))
+        void loadDatabases()
       }
     })
-  }, [dbId])
+  }, [dbId, loadDatabases])
 
   useEffect(() => {
     if (infoState.status !== 'ready') return
@@ -78,9 +94,15 @@ export function DbClientWindow({ dbId }: { dbId: string }) {
 
   const isRunning = run.status === 'running'
   isRunningRef.current = isRunning
+  const isBusy = isRunning || isSwitching
+
+  const changeFilter = (next: TreeFilter): void => {
+    setFilter(next)
+    if (infoState.status === 'ready') saveFilter(filterStorageKey(infoState.info), next)
+  }
 
   const execute = async (sql: string): Promise<void> => {
-    if (isRunning || !sql.trim()) return
+    if (isBusy || !sql.trim()) return
     setElapsed(0)
     setRun({ status: 'running', sql, startedAt: Date.now() })
     const result = await queue.run(async () => window.electronAPI.dbQuery?.(dbId, sql))
@@ -90,8 +112,24 @@ export function DbClientWindow({ dbId }: { dbId: string }) {
       // A new grid for every result: scroll position and selection belong to the old one
       setRunSeq(seq => seq + 1)
       setRun({ status: 'done', sql, result })
+      if (result.database !== databaseRef.current) metadata?.reset()
       setDatabase(result.database)
     }
+  }
+
+  /** The database queries run in; completion forgets what it read for the old one */
+  const switchDatabase = async (name: string): Promise<boolean> => {
+    if (isBusy || name === databaseRef.current) return name === databaseRef.current
+    setIsSwitching(true)
+    const result = await queue.run(async () => window.electronAPI.dbSwitchDatabase?.(dbId, name))
+    setIsSwitching(false)
+    if (!result?.success) {
+      setRun({ status: 'error', sql: '', message: result && !result.success ? `${name} 으로 바꾸지 못했습니다: ${result.error}` : '앱을 다시 시작해 주세요.' })
+      return false
+    }
+    metadata?.reset()
+    setDatabase(result.database)
+    return true
   }
 
   /** The selection, or the statement the cursor is in */
@@ -109,12 +147,10 @@ export function DbClientWindow({ dbId }: { dbId: string }) {
 
   // Ctrl+Enter runs; fixed for the editor's life (made once the engine is known), so it calls through refs
   const extensions = useMemo(() => {
-    if (engine !== 'mysql' && engine !== 'postgres') return []
-    const defaultSchema = async (): Promise<string> =>
-      engine === 'mysql' ? databaseRef.current : (await metadata.schemas())?.current ?? 'public'
+    if (!metadata || (engine !== 'mysql' && engine !== 'postgres')) return []
     return [
       Prec.highest(keymap.of([{ key: 'Mod-Enter', run: () => { runRef.current(); return true } }])),
-      ...completionExtensions({ engine, metadata, defaultSchema })
+      ...completionExtensions({ engine, metadata })
     ]
   }, [engine, metadata])
 
@@ -126,10 +162,12 @@ export function DbClientWindow({ dbId }: { dbId: string }) {
     view.focus()
   }
 
-  /** Adds the preview statement on its own line at the end and runs it */
-  const preview = (schema: string, table: string): void => {
+  /** Adds the preview statement on its own line at the end and runs it (in that table's database) */
+  const preview = async (db: string, schema: string, table: string): Promise<void> => {
     const view = editorRef.current?.getView()
     if (!view || infoState.status !== 'ready') return
+    // PostgreSQL reads only the database it is connected to; MySQL names the database in the query
+    if (engine === 'postgres' && db !== databaseRef.current && !(await switchDatabase(db))) return
     const sql = previewQuery(schema, table, infoState.info.engine)
     const doc = view.state.doc
     const prefix = doc.length === 0 || doc.toString().endsWith('\n') ? '' : '\n'
@@ -138,14 +176,14 @@ export function DbClientWindow({ dbId }: { dbId: string }) {
     void execute(sql)
   }
 
-  if (infoState.status !== 'ready') {
+  if (infoState.status !== 'ready' || !engine || (engine !== 'mysql' && engine !== 'postgres')) {
     return (
       <div className="remote-file-window">
         <PopoutTitleBar icon={<RiDatabase2Line size={16} />} title="DB" />
         <div className="remote-file-message" role={infoState.status === 'error' ? 'alert' : 'status'}>
-          {infoState.status === 'loading'
-            ? <><RiLoader4Line className="spinning" size={22} aria-hidden="true" /><span>접속 정보를 읽는 중…</span></>
-            : <><RiErrorWarningLine size={22} className="remote-file-message-icon" aria-hidden="true" /><span>{infoState.message}</span></>}
+          {infoState.status === 'error'
+            ? <><RiErrorWarningLine size={22} className="remote-file-message-icon" aria-hidden="true" /><span>{infoState.message}</span></>
+            : <><RiLoader4Line className="spinning" size={22} aria-hidden="true" /><span>접속 정보를 읽는 중…</span></>}
         </div>
       </div>
     )
@@ -153,6 +191,7 @@ export function DbClientWindow({ dbId }: { dbId: string }) {
 
   const { info } = infoState
   const result = run.status === 'done' ? run.result : null
+  const databaseNames = databases.status === 'ready' ? databases.items.map(d => d.name) : []
 
   return (
     <div className="remote-file-window db-window">
@@ -162,12 +201,27 @@ export function DbClientWindow({ dbId }: { dbId: string }) {
         subtitle={`${info.user}@${info.endpoint.host}:${info.endpoint.port} · ${info.sessionName}`}
       />
       <div className="db-body">
-        <SchemaTree dbId={dbId} queue={queue} isIdle={!isRunning} onPreview={preview} onInsert={(name) => insertText(quoteIdentifier(name, info.engine))} />
+        <DatabaseTree
+          dbId={dbId} engine={engine} queue={queue} isIdle={!isBusy}
+          databases={databases} current={database} filter={filter} onFilterChange={changeFilter}
+          onRefresh={() => void loadDatabases()}
+          onSwitch={(name) => void switchDatabase(name)}
+          onPreview={(db, schema, table) => void preview(db, schema, table)}
+          onInsert={(name) => insertText(quoteIdentifier(name, info.engine))}
+        />
         <div className="db-main">
           <div className="db-toolbar">
             {isRunning
               ? <button type="button" className="db-run-button is-stop" onClick={cancel}><RiStopFill size={14} /> 취소</button>
-              : <button type="button" className="db-run-button" onClick={runCurrent}><RiPlayFill size={14} /> 실행 <kbd>Ctrl+Enter</kbd></button>}
+              : <button type="button" className="db-run-button" onClick={runCurrent} disabled={isSwitching}><RiPlayFill size={14} /> 실행 <kbd>Ctrl+Enter</kbd></button>}
+            <label className="db-database-select" title="쿼리를 실행할 DB">
+              <RiDatabase2Line size={13} aria-hidden="true" />
+              <select value={database} disabled={isBusy || databaseNames.length === 0} onChange={(e) => void switchDatabase(e.target.value)} aria-label="쿼리를 실행할 DB">
+                {!databaseNames.includes(database) && <option value={database}>{database || '(선택 안 됨)'}</option>}
+                {databaseNames.map(name => <option key={name} value={name}>{name}</option>)}
+              </select>
+              {isSwitching && <RiLoader4Line className="spinning" size={13} aria-label="바꾸는 중" />}
+            </label>
             <span className="db-readonly-badge" title="DB 서버가 쓰기를 거부하도록 접속했습니다. 쿼리는 30초, 결과는 1,000행까지입니다.">
               <RiShieldCheckLine size={13} aria-hidden="true" /> 읽기 전용
             </span>

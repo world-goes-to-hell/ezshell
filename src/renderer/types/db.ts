@@ -16,6 +16,8 @@ export interface DiscoveredDb {
 /** A database account kept with a saved session (encrypted with the sessions) */
 export interface SavedDbConnection {
   id: string
+  /** Name the user gave the account ("MBRIS 조회용"), shown in the list */
+  label?: string
   engine: DbEngine
   host: string
   port: number
@@ -65,6 +67,18 @@ export interface DbQueryResult {
   affectedRows: number | null
   elapsedMs: number
   database: string
+}
+
+/** A database the account may see; system ones are hidden in the tree by default */
+export interface DbDatabase {
+  name: string
+  isSystem: boolean
+}
+
+/** A schema of a database (in MySQL the database itself) */
+export interface DbSchema {
+  name: string
+  isSystem: boolean
 }
 
 export interface DbTable {

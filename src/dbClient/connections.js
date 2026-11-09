@@ -16,7 +16,8 @@ const MESSAGES = {
   busy: '앞의 요청을 처리하는 중입니다. 끝난 뒤 다시 실행해 주세요.',
   tooMany: `DB 창은 ${MAX_WINDOWS}개까지 열 수 있습니다.`,
   badInput: '접속 정보가 올바르지 않습니다.',
-  unsupported: '아직 지원하지 않는 DB 입니다. 지금은 MySQL·MariaDB·PostgreSQL 만 됩니다.'
+  unsupported: '아직 지원하지 않는 DB 입니다. 지금은 MySQL·MariaDB·PostgreSQL 만 됩니다.',
+  unknownDatabase: '이 계정으로 볼 수 있는 DB 목록에 없습니다.'
 }
 
 const SESSION_FACTORIES = { mysql: createMysqlSession, postgres: createPostgresSession }
@@ -121,19 +122,73 @@ function createDbConnections({ openStream, createSession = (engine, options) => 
     return { cancelled: await entry.session.cancel() }
   }
 
-  const schemas = (ownerId, dbId) => {
-    const entry = own(ownerId, dbId)
-    return exclusive(entry, async () => ({ schemas: await entry.session.listSchemas(), current: entry.session.defaultSchema ?? entry.session.database }))
+  /** Databases the account may see; remembered so later requests can only name one of them */
+  async function refreshDatabases(entry) {
+    const list = await entry.session.listDatabases()
+    entry.knownDatabases = new Set(list.map((d) => d.name))
+    return list
   }
-  const tables = (ownerId, dbId, schema) => {
+
+  /** A database named by the window must be one the server listed (PostgreSQL connects to it) */
+  async function knownDatabase(entry, name) {
+    if (!isText(name, 128, { isRequired: true })) throw new DbError(MESSAGES.badInput)
+    if (!entry.knownDatabases?.has(name)) await refreshDatabases(entry)
+    if (!entry.knownDatabases.has(name)) throw new DbError(MESSAGES.unknownDatabase)
+    return name
+  }
+
+  const databases = (ownerId, dbId) => {
+    const entry = own(ownerId, dbId)
+    return exclusive(entry, async () => ({ databases: await refreshDatabases(entry), current: entry.session.database }))
+  }
+  const schemas = (ownerId, dbId, database) => {
+    const entry = own(ownerId, dbId)
+    return exclusive(entry, async () => {
+      const db = await knownDatabase(entry, database)
+      return {
+        schemas: await entry.session.listSchemas(db),
+        // Where unqualified names go, known only for the database queries run in
+        defaultSchema: db === entry.session.database ? entry.session.defaultSchema ?? db : null
+      }
+    })
+  }
+  const tables = (ownerId, dbId, database, schema) => {
     const entry = own(ownerId, dbId)
     if (!isText(schema, 128, { isRequired: true })) throw new DbError(MESSAGES.badInput)
-    return exclusive(entry, async () => ({ tables: await entry.session.listTables(schema) }))
+    return exclusive(entry, async () => ({ tables: await entry.session.listTables(await knownDatabase(entry, database), schema) }))
   }
-  const columns = (ownerId, dbId, schema, table) => {
+  const columns = (ownerId, dbId, database, schema, table) => {
     const entry = own(ownerId, dbId)
     if (!isText(schema, 128, { isRequired: true }) || !isText(table, 128, { isRequired: true })) throw new DbError(MESSAGES.badInput)
-    return exclusive(entry, async () => ({ columns: await entry.session.listColumns(schema, table) }))
+    return exclusive(entry, async () => ({ columns: await entry.session.listColumns(await knownDatabase(entry, database), schema, table) }))
+  }
+
+  /** The database queries run in. MySQL: USE on the same connection; PostgreSQL: a new connection to it. */
+  const switchDatabase = (ownerId, dbId, database) => {
+    const entry = own(ownerId, dbId)
+    return exclusive(entry, async () => {
+      await entry.session.useDatabase(await knownDatabase(entry, database))
+      return describe(ownerId, dbId)
+    })
+  }
+
+  /**
+   * Logs in once to check an account and closes again (no window). Same checks as opening:
+   * the read-only setting must hold, or the test fails.
+   */
+  async function test({ sessionId, ...request }) {
+    const { endpoint, credentials } = validateRequest(request)
+    const session = createSession(endpoint.engine, {
+      openStream: () => openStream(sessionId, endpoint.host, endpoint.port),
+      credentials,
+      limits
+    })
+    try {
+      const info = await session.open()
+      return { info, database: session.database }
+    } finally {
+      session.close()
+    }
   }
 
   function close(dbId) {
@@ -147,7 +202,7 @@ function createDbConnections({ openStream, createSession = (engine, options) => 
     for (const dbId of [...connections.keys()]) close(dbId)
   }
 
-  return { open, attach, describe, query, cancel, schemas, tables, columns, close, closeAll, has: (dbId) => connections.has(dbId) }
+  return { open, test, attach, describe, query, cancel, databases, schemas, tables, columns, switchDatabase, close, closeAll, has: (dbId) => connections.has(dbId) }
 }
 
 module.exports = { createDbConnections, validateRequest, MESSAGES, MAX_WINDOWS }

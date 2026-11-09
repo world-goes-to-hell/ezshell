@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildChoices, upsertSavedConnection, removeSavedConnection, endpointProblem, endpointKey } from './dbChoices'
+import { buildGroups, accountTitle, upsertSavedConnection, removeSavedConnection, endpointProblem, endpointKey } from './dbChoices'
 import { splitStatements, statementAt, quoteIdentifier, previewQuery } from './sqlStatements'
 import type { DiscoveredDb, SavedDbConnection } from '../types/db'
 
@@ -10,18 +10,25 @@ const FOUND: DiscoveredDb[] = [
 ]
 const SAVED: SavedDbConnection = { id: 's1', engine: 'mysql', host: 'localhost', port: 3306, user: 'reader', password: 'pw', database: 'shop' }
 
-describe('buildChoices', () => {
-  it('puts saved accounts first and leaves out found databases they already cover', () => {
-    const choices = buildChoices(FOUND, [SAVED])
-    expect(choices.map(c => c.key)).toEqual(['saved:s1', `found:${endpointKey(FOUND[1])}`, `found:${endpointKey(FOUND[2])}`])
-    expect(choices[0]).toMatchObject({ label: 'MySQL', detail: 'reader/shop · localhost:3306', isGuess: false })
-    expect(choices[1].isGuess).toBe(true)
-    expect(choices[2].isSupported).toBe(false)
+describe('buildGroups', () => {
+  it('groups saved accounts by server, then adds found servers without accounts', () => {
+    const admin: SavedDbConnection = { id: 's2', label: '관리자', engine: 'mysql', host: '127.0.0.1', port: 3306, user: 'root' }
+    const groups = buildGroups(FOUND, [SAVED, admin])
+    expect(groups.map(g => g.key)).toEqual([endpointKey(FOUND[0]), endpointKey(FOUND[1]), endpointKey(FOUND[2])])
+    expect(groups[0]).toMatchObject({ label: 'MySQL', detail: 'localhost:3306 · 서버 안에서만 열림', isGuess: false })
+    expect(groups[0].accounts.map(a => a.id)).toEqual(['s1', 's2'])
+    expect(groups[1]).toMatchObject({ isGuess: true, accounts: [] })
+    expect(groups[2].isSupported).toBe(false)
   })
 
   it('works with nothing found', () => {
-    expect(buildChoices([], [SAVED])[0].label).toBe('MySQL/MariaDB')
-    expect(buildChoices([], [])).toEqual([])
+    expect(buildGroups([], [SAVED])[0].label).toBe('MySQL/MariaDB')
+    expect(buildGroups([], [])).toEqual([])
+  })
+
+  it('names an account by its label, or user and database', () => {
+    expect(accountTitle(SAVED)).toBe('reader/shop')
+    expect(accountTitle({ ...SAVED, label: 'MBRIS 조회용' })).toBe('MBRIS 조회용 (reader/shop)')
   })
 })
 
@@ -32,6 +39,8 @@ describe('saved connections', () => {
     expect(next).toEqual([{ ...SAVED, id: 's2', host: '127.0.0.1', password: 'new' }])
     expect(list).toEqual([SAVED])
     expect(upsertSavedConnection(list, { ...SAVED, id: 's3', user: 'other' }).length).toBe(2)
+    // One user for two databases is two accounts
+    expect(upsertSavedConnection(list, { ...SAVED, id: 's4', database: 'meta' }).length).toBe(2)
     expect(removeSavedConnection(next, 's2')).toEqual([])
   })
 })

@@ -1,5 +1,5 @@
 import type { RootSwitchOutcome } from '../lib/rootSwitch'
-import type { DbCredentials, DbEndpoint, DbQueryResult, DbResult, DbServerInfo, DbTable, DbTableColumn, DbWindowInfo, DiscoveredDb } from './db'
+import type { DbCredentials, DbDatabase, DbEndpoint, DbQueryResult, DbResult, DbSchema, DbServerInfo, DbTable, DbTableColumn, DbWindowInfo, DiscoveredDb } from './db'
 
 export interface SessionConfig {
   id: string
@@ -409,12 +409,15 @@ declare global {
       // DB client
       dbDiscover?: (sessionId: string) => Promise<DbResult<{ databases: DiscoveredDb[] }>>
       dbOpen?: (sessionId: string, sessionName: string, endpoint: DbEndpoint, credentials: DbCredentials) => Promise<DbResult<{ info: DbServerInfo }>>
+      dbTest?: (sessionId: string, endpoint: DbEndpoint, credentials: DbCredentials) => Promise<DbResult<{ info: DbServerInfo; database: string }>>
       dbInfo?: (dbId: string) => Promise<DbResult<DbWindowInfo>>
+      dbDatabases?: (dbId: string) => Promise<DbResult<{ databases: DbDatabase[]; current: string }>>
+      dbSwitchDatabase?: (dbId: string, database: string) => Promise<DbResult<DbWindowInfo>>
       dbQuery?: (dbId: string, sql: string) => Promise<DbResult<DbQueryResult>>
       dbCancel?: (dbId: string) => Promise<DbResult<{ cancelled: boolean }>>
-      dbSchemas?: (dbId: string) => Promise<DbResult<{ schemas: string[]; current: string }>>
-      dbTables?: (dbId: string, schema: string) => Promise<DbResult<{ tables: DbTable[] }>>
-      dbColumns?: (dbId: string, schema: string, table: string) => Promise<DbResult<{ columns: DbTableColumn[] }>>
+      dbSchemas?: (dbId: string, database: string) => Promise<DbResult<{ schemas: DbSchema[]; defaultSchema: string | null }>>
+      dbTables?: (dbId: string, database: string, schema: string) => Promise<DbResult<{ tables: DbTable[] }>>
+      dbColumns?: (dbId: string, database: string, schema: string, table: string) => Promise<DbResult<{ columns: DbTableColumn[] }>>
 
       // Terminal Window
       openTerminalWindow: (sessionId: string, title: string, snapshot?: string) => Promise<any>

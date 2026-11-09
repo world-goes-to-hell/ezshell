@@ -216,13 +216,27 @@ function createMysqlSession({ openStream, credentials, limits = {} }) {
     })
   }
 
-  async function listSchemas() {
+  /** Every database the account may see; system ones are flagged (the tree hides them by default) */
+  async function listDatabases() {
     const active = await ensure()
     const { rows } = await run(active, 'SELECT SCHEMA_NAME FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME')
-    return rows.map((r) => String(r[0])).filter((name) => !SYSTEM_SCHEMAS.includes(name.toLowerCase()))
+    return rows.map((r) => String(r[0])).map((name) => ({ name, isSystem: SYSTEM_SCHEMAS.includes(name.toLowerCase()) }))
   }
 
-  async function listTables(schema) {
+  /** In MySQL a database is a schema: one level, the database itself */
+  async function listSchemas(db) {
+    return [{ name: db, isSystem: SYSTEM_SCHEMAS.includes(String(db).toLowerCase()) }]
+  }
+
+  /** The current database for unqualified names (USE); the connection stays the same */
+  async function useDatabase(name) {
+    const active = await ensure()
+    await run(active, 'USE ??', [name])
+    database = name
+  }
+
+  // One connection reads every database's catalog, so `db` is only the schema name here
+  async function listTables(db, schema = db) {
     const active = await ensure()
     // Only name columns: MySQL 5.7 then answers without opening every table
     const { rows } = await run(active,
@@ -231,7 +245,7 @@ function createMysqlSession({ openStream, credentials, limits = {} }) {
     return rows.map((r) => ({ name: String(r[0]), kind: /view/i.test(String(r[1])) ? 'view' : 'table' }))
   }
 
-  async function listColumns(schema, table) {
+  async function listColumns(db, schema, table) {
     const active = await ensure()
     const { rows } = await run(active,
       'SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
@@ -243,7 +257,9 @@ function createMysqlSession({ openStream, credentials, limits = {} }) {
     open,
     query,
     cancel,
+    listDatabases,
     listSchemas,
+    useDatabase,
     listTables,
     listColumns,
     close() {

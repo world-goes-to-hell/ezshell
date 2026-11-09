@@ -645,3 +645,199 @@
   color: var(--text-secondary);
   font-size: 11.5px;
 }
+
+/* ---------- Database tree (several databases, DataGrip-like) ---------- */
+.db-tree-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.db-tree-row.is-database .db-tree-name {
+  color: var(--text-primary);
+}
+
+.db-tree-icon.is-db {
+  color: var(--accent);
+}
+
+.db-tree-icon.is-schema {
+  color: var(--warning);
+}
+
+.db-tree-row.is-system .db-tree-name,
+.db-tree-row.is-system .db-tree-icon {
+  opacity: 0.6;
+}
+
+.db-tree-count {
+  flex-shrink: 0;
+  margin-left: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.db-tree-tag {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.db-database-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+}
+
+.db-database-select select {
+  max-width: 220px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.db-database-select select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---------- Tree filter menu ---------- */
+.db-filter-menu {
+  min-width: 240px;
+  max-height: min(460px, var(--radix-dropdown-menu-content-available-height));
+}
+
+.db-filter-item {
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
+.db-filter-box {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+}
+
+.db-filter-box.is-checked {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--text-on-accent, #fff);
+}
+
+.db-filter-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-filter-label strong {
+  font-family: var(--font-sans, inherit);
+  font-weight: 600;
+}
+
+.db-filter-system {
+  flex-shrink: 0;
+  color: var(--warning);
+}
+
+.db-filter-more {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+/* ---------- Grouped accounts in the status bar list, dialog actions ---------- */
+.db-menu-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.db-menu-group .db-menu-title {
+  font-weight: 600;
+}
+
+.db-menu-group .db-menu-detail {
+  margin-left: auto;
+  padding-left: 10px;
+}
+
+.db-menu-item.is-account {
+  min-height: 28px;
+  padding: 4px 8px 4px 22px;
+}
+
+.db-menu-account {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-menu-account.is-muted {
+  color: var(--text-muted);
+}
+
+.db-menu-separator.is-light {
+  opacity: 0.5;
+}
+
+.db-connect-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.db-connect-actions .modal-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.db-connect-spacer {
+  flex: 1;
+}
+
+.db-connect-delete {
+  color: var(--error-text, var(--error));
+}
+
+.db-connect-ok {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+  font-size: 12.5px;
+  line-height: 1.5;
+  word-break: break-word;
+}

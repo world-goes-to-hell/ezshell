@@ -84,7 +84,20 @@ function createPostgresSession({ openStream, credentials, limits = {} }) {
   let isCancelling = false
 
   async function open() {
-    const next = await connectOnce({ openStream, ...credentials, connectTimeoutMs, queryTimeoutMs })
+    // `database` follows useDatabase; the first open uses the one typed in. Left empty, the server
+    // would pick the database named like the user, which often does not exist (an admin account):
+    // the maintenance database "postgres" is tried first, like DataGrip, then the user's own.
+    let next
+    if (database) {
+      next = await connectOnce({ openStream, ...credentials, database, connectTimeoutMs, queryTimeoutMs })
+    } else {
+      try {
+        next = await connectOnce({ openStream, ...credentials, database: 'postgres', connectTimeoutMs, queryTimeoutMs })
+      } catch (err) {
+        if (err?.code !== '3D000' && err?.code !== '42501') throw err
+        next = await connectOnce({ openStream, ...credentials, database: credentials.user, connectTimeoutMs, queryTimeoutMs })
+      }
+    }
     try {
       const { rows } = await next.query({ text: "SELECT version(), current_database(), current_setting('default_transaction_read_only'), current_schema()", rowMode: 'array' })
       // Never used unless the server took the read-only setting
@@ -188,22 +201,57 @@ function createPostgresSession({ openStream, credentials, limits = {} }) {
     }
   }
 
-  const rowsOf = async (text, values) => (await (await ensure()).query({ text, values, rowMode: 'array' })).rows
-
-  async function listSchemas() {
-    const rows = await rowsOf("SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' ORDER BY 1")
-    return rows.map((r) => String(r[0]))
+  /**
+   * Catalog reads of `db`: the window's own connection for the current database, otherwise a short
+   * connection to that database, closed as soon as the answer is in (PostgreSQL cannot read another
+   * database's catalog, and connections kept open would stay on the server).
+   */
+  async function rowsIn(db, text, values) {
+    if (!db || db === database) return (await (await ensure()).query({ text, values, rowMode: 'array' })).rows
+    const helper = await connectOnce({ openStream, ...credentials, database: db, connectTimeoutMs, queryTimeoutMs })
+    try {
+      return (await helper.query({ text, values, rowMode: 'array' })).rows
+    } finally {
+      discard(helper)
+    }
   }
 
-  async function listTables(schema) {
-    const rows = await rowsOf(
+  /** Databases the account may connect to (templates and closed ones left out) */
+  async function listDatabases() {
+    const rows = await rowsIn(null,
+      "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate AND has_database_privilege(datname, 'CONNECT') ORDER BY 1")
+    return rows.map((r) => ({ name: String(r[0]), isSystem: false }))
+  }
+
+  /** Schemas of `db`; the catalog ones are flagged (the tree hides them by default), toast/temp left out */
+  async function listSchemas(db) {
+    const rows = await rowsIn(db, "SELECT nspname FROM pg_namespace WHERE nspname !~ '^pg_(toast|temp_)' ORDER BY 1")
+    return rows.map((r) => String(r[0])).map((name) => ({ name, isSystem: name === 'information_schema' || name.startsWith('pg_') }))
+  }
+
+  /** Queries run in one database: switching connects to the other one (read-only checked again) */
+  async function useDatabase(name) {
+    const previous = database
+    drop()
+    database = name
+    try {
+      await open()
+    } catch (err) {
+      database = previous
+      await open().catch(() => {})
+      throw err
+    }
+  }
+
+  async function listTables(db, schema) {
+    const rows = await rowsIn(db,
       `SELECT c.relname, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
        WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','f') ORDER BY 1 LIMIT ${MAX_OBJECTS}`, [schema])
     return rows.map((r) => ({ name: String(r[0]), kind: r[1] === 'v' || r[1] === 'm' ? 'view' : 'table' }))
   }
 
-  async function listColumns(schema, table) {
-    const rows = await rowsOf(
+  async function listColumns(db, schema, table) {
+    const rows = await rowsIn(db,
       `SELECT a.attname, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull,
               EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisprimary AND a.attnum = ANY(i.indkey))
        FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -215,7 +263,9 @@ function createPostgresSession({ openStream, credentials, limits = {} }) {
     open,
     query,
     cancel,
+    listDatabases,
     listSchemas,
+    useDatabase,
     listTables,
     listColumns,
     close() {

@@ -18,59 +18,80 @@ const MAX_TABLES_FOR_COLUMNS = 4
 
 interface MetadataOptions {
   dbId: string
+  engine: 'mysql' | 'postgres'
   queue: SerialQueue
+  /** The database queries run in (completion follows it) */
+  database: () => string
   /** False while a query runs: only what is already known is offered then */
   isIdle: () => boolean
 }
 
 export interface DbMetadata {
-  schemas: () => Promise<{ schemas: string[]; current: string } | null>
+  /** Names a qualifier may be: MySQL databases, PostgreSQL schemas of the current database */
+  schemaNames: () => Promise<string[] | null>
+  /** Where unqualified names go: MySQL the current database, PostgreSQL its search_path schema */
+  defaultSchema: () => Promise<string>
   tables: (schema: string) => Promise<DbTable[] | null>
   columns: (schema: string, table: string) => Promise<DbTableColumn[] | null>
+  /** Forget everything (another database was chosen) */
+  reset: () => void
 }
 
 /**
  * Remembers what was read, and shares one request among callers asking at the same time.
  * A failed read is not remembered (the next keystroke may try again).
  */
-export function createDbMetadata({ dbId, queue, isIdle }: MetadataOptions): DbMetadata {
+export function createDbMetadata({ dbId, engine, queue, database, isIdle }: MetadataOptions): DbMetadata {
   const known = new Map<string, unknown>()
   const pending = new Map<string, Promise<unknown>>()
 
   function read<T>(key: string, fetch: () => Promise<T | null>): Promise<T | null> {
-    if (known.has(key)) return Promise.resolve(known.get(key) as T)
-    const inFlight = pending.get(key)
+    // The database is part of every key: names mean other things in another database
+    const fullKey = `${database()}\u0000${key}`
+    if (known.has(fullKey)) return Promise.resolve(known.get(fullKey) as T)
+    const inFlight = pending.get(fullKey)
     if (inFlight) return inFlight as Promise<T | null>
-    if (!isIdle()) return Promise.resolve(null)
+    if (!isIdle() || !database()) return Promise.resolve(null)
     const request = queue.run(fetch).then((value) => {
-      if (value !== null) known.set(key, value)
+      if (value !== null) known.set(fullKey, value)
       return value
-    }, () => null).finally(() => pending.delete(key))
-    pending.set(key, request)
+    }, () => null).finally(() => pending.delete(fullKey))
+    pending.set(fullKey, request)
     return request
   }
 
+  const schemasOfCurrent = () => read('schemas', async () => {
+    const result = await window.electronAPI.dbSchemas?.(dbId, database())
+    return result?.success ? { names: result.schemas.map(s => s.name), defaultSchema: result.defaultSchema } : null
+  })
+
   return {
-    schemas: () => read('schemas', async () => {
-      const result = await window.electronAPI.dbSchemas?.(dbId)
-      return result?.success ? { schemas: result.schemas, current: result.current } : null
-    }),
+    schemaNames: async () => {
+      if (engine === 'postgres') return (await schemasOfCurrent())?.names ?? null
+      return read('databases', async () => {
+        const result = await window.electronAPI.dbDatabases?.(dbId)
+        return result?.success ? result.databases.map(d => d.name) : null
+      })
+    },
+    defaultSchema: async () => (engine === 'mysql' ? database() : (await schemasOfCurrent())?.defaultSchema ?? 'public'),
     tables: (schema) => read(`tables\u0000${schema}`, async () => {
-      const result = await window.electronAPI.dbTables?.(dbId, schema)
+      const result = await window.electronAPI.dbTables?.(dbId, database(), schema)
       return result?.success ? result.tables : null
     }),
     columns: (schema, table) => read(`columns\u0000${schema}\u0000${table}`, async () => {
-      const result = await window.electronAPI.dbColumns?.(dbId, schema, table)
+      const result = await window.electronAPI.dbColumns?.(dbId, database(), schema, table)
       return result?.success ? result.columns : null
-    })
+    }),
+    reset: () => {
+      known.clear()
+      pending.clear()
+    }
   }
 }
 
 interface SourceOptions {
   engine: 'mysql' | 'postgres'
   metadata: DbMetadata
-  /** The schema unqualified names belong to (MySQL: the current database, after USE too) */
-  defaultSchema: () => Promise<string>
 }
 
 const findTable = (tables: DbTable[] | null, name: string): DbTable | undefined =>
@@ -97,7 +118,7 @@ function tableOptions(tables: DbTable[], engine: string, schema: string): Comple
 }
 
 /** Tables and columns; keywords come from the dialect's own source */
-export function schemaSource({ engine, metadata, defaultSchema }: SourceOptions) {
+export function schemaSource({ engine, metadata }: SourceOptions) {
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
     const before = context.state.sliceDoc(Math.max(0, context.pos - 300), context.pos)
     const spot = completionSpot(before)
@@ -106,7 +127,7 @@ export function schemaSource({ engine, metadata, defaultSchema }: SourceOptions)
     const doc = context.state.doc.toString()
     const statement = statementAt(doc, context.pos)?.text ?? ''
     const refs = referencedTables(statement)
-    const fallbackSchema = await defaultSchema()
+    const fallbackSchema = await metadata.defaultSchema()
 
     if (spot.kind === 'qualified') {
       const ref = resolveQualifier(spot.qualifier, refs)
@@ -118,8 +139,8 @@ export function schemaSource({ engine, metadata, defaultSchema }: SourceOptions)
         return columns ? { from, options: columnOptions(columns, engine, match.name), validFor: /^[\w$]*$/ } : null
       }
       // `schema.` → that schema's tables
-      const schemas = await metadata.schemas()
-      const named = schemas?.schemas.find(s => s.toLowerCase() === spot.qualifier.toLowerCase())
+      const names = await metadata.schemaNames()
+      const named = names?.find(s => s.toLowerCase() === spot.qualifier.toLowerCase())
       if (!named) return null
       const tables = await metadata.tables(named)
       return tables ? { from, options: tableOptions(tables, engine, named), validFor: /^[\w$]*$/ } : null

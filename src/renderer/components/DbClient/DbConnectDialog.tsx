@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
-import { RiDatabase2Line, RiLoader4Line, RiShieldCheckLine } from 'react-icons/ri'
+import { RiCheckboxCircleLine, RiDatabase2Line, RiDeleteBinLine, RiLoader4Line, RiPlugLine, RiShieldCheckLine } from 'react-icons/ri'
 import { useSessionStore } from '../../stores/sessionStore'
 import { DEFAULT_PORTS, endpointProblem, removeSavedConnection, upsertSavedConnection } from '../../lib/dbChoices'
-import type { DbEndpoint, SavedDbConnection } from '../../types/db'
+import type { DbCredentials, DbEndpoint, SavedDbConnection } from '../../types/db'
 
 export interface DbConnectTarget {
   /** The tab whose SSH connection carries the tunnel */
@@ -11,12 +11,15 @@ export interface DbConnectTarget {
   sessionName: string
   /** Sidebar session the account can be saved with (null for quick connects) */
   savedSessionId: string | null
-  /** Found or saved database; null = typed in by the user */
+  /** Found or saved database server; null = typed in by the user */
   endpoint: DbEndpoint | null
+  /** The saved account being used or edited; null = a new account */
   saved: SavedDbConnection | null
 }
 
 type Engine = 'mysql' | 'postgres'
+type Busy = null | 'test' | 'connect' | 'save'
+type Outcome = { kind: 'error'; text: string } | { kind: 'ok'; text: string } | null
 
 interface DbConnectDialogProps {
   target: DbConnectTarget
@@ -24,9 +27,9 @@ interface DbConnectDialogProps {
 }
 
 /**
- * Account form for a database reached through the tab's SSH server. Connecting checks the account
- * at once (main opens the DB window only when the login worked); saving keeps it with the session,
- * encrypted with the other session data.
+ * Account form for a database reached through the tab's SSH server. One server may have several
+ * saved accounts (a name tells them apart). "연결 테스트" logs in once and closes again; "접속" logs in
+ * and opens the DB window; saving keeps the account with the session, encrypted with the session data.
  */
 export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
   const { saved, endpoint } = target
@@ -34,19 +37,33 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
   const [engine, setEngine] = useState<Engine>(endpoint?.engine === 'postgres' ? 'postgres' : 'mysql')
   const [host, setHost] = useState(endpoint?.host ?? '127.0.0.1')
   const [port, setPort] = useState(String(endpoint?.port ?? DEFAULT_PORTS.mysql))
+  const [label, setLabel] = useState(saved?.label ?? '')
   const [user, setUser] = useState(saved?.user ?? '')
   const [password, setPassword] = useState(saved?.password ?? '')
   const [database, setDatabase] = useState(saved?.database ?? '')
-  const [isSaving, setIsSaving] = useState(saved !== null)
-  const [isBusy, setIsBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const updateSession = useSessionStore(state => state.updateSession)
   const saveToBackend = useSessionStore(state => state.saveToBackend)
   const session = useSessionStore(state => (target.savedSessionId ? state.sessions.find(s => s.id === target.savedSessionId) : undefined))
+  const [isSaving, setIsSaving] = useState(Boolean(session))
+  const [busy, setBusy] = useState<Busy>(null)
+  const [outcome, setOutcome] = useState<Outcome>(null)
 
   const changeEngine = (next: Engine): void => {
     if (port === String(DEFAULT_PORTS[engine])) setPort(String(DEFAULT_PORTS[next]))
     setEngine(next)
+  }
+
+  /** The form as a request, or null after showing what is missing */
+  const read = (): { chosen: DbEndpoint; credentials: DbCredentials } | null => {
+    const problem = endpointProblem({ host, port }, user)
+    if (problem) {
+      setOutcome({ kind: 'error', text: problem })
+      return null
+    }
+    return {
+      chosen: { engine, host: host.trim(), port: Number(port) },
+      credentials: { user: user.trim(), password, database: database.trim() }
+    }
   }
 
   const storeAccounts = async (next: SavedDbConnection[]): Promise<void> => {
@@ -55,40 +72,72 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
     await saveToBackend()
   }
 
-  const submit = async (event: FormEvent): Promise<void> => {
-    event.preventDefault()
-    const problem = endpointProblem({ host, port }, user)
-    if (problem) {
-      setError(problem)
-      return
+  const accountOf = (chosen: DbEndpoint, credentials: DbCredentials): SavedDbConnection => ({
+    id: saved?.id ?? crypto.randomUUID(),
+    label: label.trim() || undefined,
+    ...chosen,
+    user: credentials.user,
+    password: credentials.password,
+    database: credentials.database || undefined
+  })
+
+  const runTest = async (): Promise<void> => {
+    const request = read()
+    if (!request) return
+    setBusy('test')
+    setOutcome(null)
+    const result = await window.electronAPI.dbTest?.(target.sessionId, request.chosen, request.credentials)
+    setBusy(null)
+    if (!result) setOutcome({ kind: 'error', text: '앱을 다시 시작한 뒤에 사용할 수 있습니다.' })
+    else if (!result.success) setOutcome({ kind: 'error', text: result.error })
+    else {
+      const guards = result.info.missingGuards.length ? ' · 일부 서버 측 제한 없음' : ''
+      setOutcome({ kind: 'ok', text: `연결 성공 · ${result.info.product} ${result.info.version} · DB ${result.database || '(없음)'} · 읽기 전용 확인${guards}` })
     }
-    const chosen: DbEndpoint = { engine, host: host.trim(), port: Number(port) }
-    setIsBusy(true)
-    setError(null)
-    const result = await window.electronAPI.dbOpen?.(target.sessionId, target.sessionName, chosen, { user: user.trim(), password, database: database.trim() })
-    setIsBusy(false)
+  }
+
+  const saveOnly = async (): Promise<void> => {
+    const request = read()
+    if (!request || !session) return
+    setBusy('save')
+    await storeAccounts(upsertSavedConnection(session.dbConnections ?? [], accountOf(request.chosen, request.credentials)))
+    setBusy(null)
+    onClose()
+  }
+
+  const remove = async (): Promise<void> => {
+    if (!session || !saved) return
+    setBusy('save')
+    await storeAccounts(removeSavedConnection(session.dbConnections ?? [], saved.id))
+    setBusy(null)
+    onClose()
+  }
+
+  const connect = async (event: FormEvent): Promise<void> => {
+    event.preventDefault()
+    const request = read()
+    if (!request) return
+    setBusy('connect')
+    setOutcome(null)
+    const result = await window.electronAPI.dbOpen?.(target.sessionId, target.sessionName, request.chosen, request.credentials)
+    setBusy(null)
     if (!result) {
-      setError('앱을 다시 시작한 뒤에 사용할 수 있습니다.')
+      setOutcome({ kind: 'error', text: '앱을 다시 시작한 뒤에 사용할 수 있습니다.' })
       return
     }
     if (!result.success) {
-      setError(result.error)
+      setOutcome({ kind: 'error', text: result.error })
       return
     }
     if (session && isSaving) {
-      const account: SavedDbConnection = {
-        id: saved?.id ?? crypto.randomUUID(),
-        ...chosen,
-        user: user.trim(),
-        password,
-        database: database.trim() || undefined
-      }
-      await storeAccounts(upsertSavedConnection(session.dbConnections ?? [], account))
+      await storeAccounts(upsertSavedConnection(session.dbConnections ?? [], accountOf(request.chosen, request.credentials)))
     } else if (session && saved && !isSaving) {
       await storeAccounts(removeSavedConnection(session.dbConnections ?? [], saved.id))
     }
     onClose()
   }
+
+  const isBusy = busy !== null
 
   return (
     <Dialog.Root open onOpenChange={(isOpen) => { if (!isOpen && !isBusy) onClose() }}>
@@ -97,13 +146,13 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
         <Dialog.Content className="modal-content db-connect-dialog" aria-describedby="db-connect-note">
           <Dialog.Title className="modal-title">
             <RiDatabase2Line size={18} aria-hidden="true" />
-            DB 접속 · {target.sessionName}
+            {saved ? 'DB 계정' : 'DB 계정 추가'} · {target.sessionName}
           </Dialog.Title>
           <p id="db-connect-note" className="db-connect-note">
             <RiShieldCheckLine size={15} aria-hidden="true" />
             <span>이 탭의 SSH 연결을 거쳐 <strong>읽기 전용</strong>으로 접속합니다. DB 서버가 쓰기를 막고, 쿼리는 30초·1,000행까지입니다.</span>
           </p>
-          <form onSubmit={(e) => void submit(e)}>
+          <form onSubmit={(e) => void connect(e)}>
             <div className="form-row">
               <div className="form-group flex-1">
                 <label htmlFor="db-engine">종류</label>
@@ -111,6 +160,10 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
                   <option value="mysql">MySQL / MariaDB</option>
                   <option value="postgres">PostgreSQL</option>
                 </select>
+              </div>
+              <div className="form-group flex-1">
+                <label htmlFor="db-label">계정 이름 (선택)</label>
+                <input id="db-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="예: MBRIS 조회용" maxLength={60} />
               </div>
             </div>
             <div className="form-row">
@@ -134,21 +187,37 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
               </div>
             </div>
             <div className="form-group">
-              <label htmlFor="db-database">데이터베이스 (선택)</label>
+              <label htmlFor="db-database">기본 DB (선택)</label>
               <input id="db-database" value={database} onChange={(e) => setDatabase(e.target.value)} spellCheck={false}
-                placeholder={engine === 'postgres' ? '비우면 사용자 이름과 같은 DB' : '비우면 접속 뒤 고를 수 있음'} />
+                placeholder={engine === 'postgres' ? '비우면 postgres DB · 접속 뒤 바꿀 수 있음' : '비우면 접속 뒤 고를 수 있음'} />
             </div>
             <div className="form-group checkbox-group">
               <label>
                 <input type="checkbox" checked={isSaving && Boolean(session)} disabled={!session} onChange={(e) => setIsSaving(e.target.checked)} />
-                <span>{session ? '이 세션에 저장 (비밀번호 포함, 세션 파일과 함께 암호화)' : '저장한 세션에서만 계정을 저장할 수 있습니다'}</span>
+                <span>{session ? '접속할 때 이 세션에 저장 (비밀번호 포함, 세션 파일과 함께 암호화)' : '저장한 세션에서만 계정을 저장할 수 있습니다'}</span>
               </label>
             </div>
-            {error && <p className="db-connect-error" role="alert">{error}</p>}
-            <div className="modal-actions">
+            {outcome && (
+              <p className={outcome.kind === 'ok' ? 'db-connect-ok' : 'db-connect-error'} role={outcome.kind === 'ok' ? 'status' : 'alert'}>
+                {outcome.kind === 'ok' && <RiCheckboxCircleLine size={14} aria-hidden="true" />} {outcome.text}
+              </p>
+            )}
+            <div className="modal-actions db-connect-actions">
+              {saved && session && (
+                <button type="button" className="btn-secondary modal-btn db-connect-delete" onClick={() => void remove()} disabled={isBusy} title="저장된 이 계정을 지웁니다">
+                  <RiDeleteBinLine size={14} aria-hidden="true" /> 삭제
+                </button>
+              )}
+              <button type="button" className="btn-secondary modal-btn" onClick={() => void runTest()} disabled={isBusy}>
+                {busy === 'test' ? <RiLoader4Line className="spinning" size={14} aria-hidden="true" /> : <RiPlugLine size={14} aria-hidden="true" />} 연결 테스트
+              </button>
+              <span className="db-connect-spacer" />
               <button type="button" className="btn-secondary modal-btn" onClick={onClose} disabled={isBusy}>취소</button>
+              {session && (
+                <button type="button" className="btn-secondary modal-btn" onClick={() => void saveOnly()} disabled={isBusy} title="접속하지 않고 계정만 저장합니다">저장</button>
+              )}
               <button type="submit" className="btn-primary modal-btn" disabled={isBusy}>
-                {isBusy ? <><RiLoader4Line className="spinning" size={14} aria-hidden="true" /> 접속 중…</> : '접속'}
+                {busy === 'connect' ? <><RiLoader4Line className="spinning" size={14} aria-hidden="true" /> 접속 중…</> : '접속'}
               </button>
             </div>
           </form>

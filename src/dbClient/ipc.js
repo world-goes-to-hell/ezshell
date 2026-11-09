@@ -58,12 +58,19 @@ function registerDbIpc({ ipcMain, connections, discover, createWindow, isLocked 
     return { info }
   }))
 
+  ipcMain.handle('db-test', answer(async (senderId, request) => {
+    fromMainWindow(senderId)
+    return connections.test(request)
+  }))
+
   ipcMain.handle('db-info', answer((senderId, { dbId }) => connections.describe(senderId, dbId)))
   ipcMain.handle('db-query', answer((senderId, { dbId, sql }) => connections.query(senderId, dbId, sql)))
   ipcMain.handle('db-cancel', answer((senderId, { dbId }) => connections.cancel(senderId, dbId)))
-  ipcMain.handle('db-schemas', answer((senderId, { dbId }) => connections.schemas(senderId, dbId)))
-  ipcMain.handle('db-tables', answer((senderId, { dbId, schema }) => connections.tables(senderId, dbId, schema)))
-  ipcMain.handle('db-columns', answer((senderId, { dbId, schema, table }) => connections.columns(senderId, dbId, schema, table)))
+  ipcMain.handle('db-databases', answer((senderId, { dbId }) => connections.databases(senderId, dbId)))
+  ipcMain.handle('db-switch-database', answer((senderId, { dbId, database }) => connections.switchDatabase(senderId, dbId, database)))
+  ipcMain.handle('db-schemas', answer((senderId, { dbId, database }) => connections.schemas(senderId, dbId, database)))
+  ipcMain.handle('db-tables', answer((senderId, { dbId, database, schema }) => connections.tables(senderId, dbId, database, schema)))
+  ipcMain.handle('db-columns', answer((senderId, { dbId, database, schema, table }) => connections.columns(senderId, dbId, database, schema, table)))
 
   /** The app locked: close every DB window and its connection. */
   function closeAll() {

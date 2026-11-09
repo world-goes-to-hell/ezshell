@@ -11,17 +11,24 @@ export const ENGINE_NAMES: Record<DbEngine, string> = {
   mssql: 'SQL Server'
 }
 
-export interface DbChoice {
+/** One database server in the list, with the accounts saved for it (several are allowed) */
+export interface DbGroup {
   key: string
   endpoint: DbEndpoint
   /** "MySQL", "PostgreSQL" ... */
   label: string
-  /** "reader · 127.0.0.1:3306" */
+  /** "127.0.0.1:3306 · 서버 안에서만 열림" */
   detail: string
   isSupported: boolean
   /** A port alone may be something else: shown as a guess */
   isGuess: boolean
-  saved: SavedDbConnection | null
+  accounts: SavedDbConnection[]
+}
+
+/** What the list shows for one saved account: its name, or user/database */
+export function accountTitle(account: SavedDbConnection): string {
+  const who = `${account.user}${account.database ? `/${account.database}` : ''}`
+  return account.label ? `${account.label} (${who})` : who
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1'])
@@ -32,39 +39,54 @@ export function endpointKey(endpoint: DbEndpoint): string {
   return `${endpoint.engine}|${hostKey(endpoint.host)}|${endpoint.port}`
 }
 
-export function buildChoices(found: DiscoveredDb[], saved: SavedDbConnection[]): DbChoice[] {
+/**
+ * Database servers of the tab: those with saved accounts first (in the order they were saved), then
+ * the ones found on the server without an account yet. A found server keeps its found label.
+ */
+export function buildGroups(found: DiscoveredDb[], saved: SavedDbConnection[]): DbGroup[] {
   const foundByKey = new Map(found.map(db => [endpointKey(db), db]))
-  const savedKeys = new Set(saved.map(s => endpointKey(s)))
-  const fromSaved = saved.map((s): DbChoice => {
-    const match = foundByKey.get(endpointKey(s))
-    return {
-      key: `saved:${s.id}`,
-      endpoint: { engine: s.engine, host: s.host, port: s.port },
-      label: match?.label ?? ENGINE_NAMES[s.engine],
-      detail: `${s.user}${s.database ? `/${s.database}` : ''} · ${s.host}:${s.port}`,
-      isSupported: s.engine === 'mysql' || s.engine === 'postgres',
-      isGuess: false,
-      saved: s
+  const groups = new Map<string, DbGroup>()
+  for (const account of saved) {
+    const key = endpointKey(account)
+    const existing = groups.get(key)
+    if (existing) {
+      groups.set(key, { ...existing, accounts: [...existing.accounts, account] })
+      continue
     }
-  })
-  const fromFound = found
-    .filter(db => !savedKeys.has(endpointKey(db)))
-    .map((db): DbChoice => ({
-      key: `found:${endpointKey(db)}`,
+    const match = foundByKey.get(key)
+    groups.set(key, {
+      key,
+      endpoint: { engine: account.engine, host: account.host, port: account.port },
+      label: match?.label ?? ENGINE_NAMES[account.engine],
+      detail: `${account.host}:${account.port}${match?.isLocalOnly ? ' · 서버 안에서만 열림' : ''}`,
+      isSupported: account.engine === 'mysql' || account.engine === 'postgres',
+      isGuess: false,
+      accounts: [account]
+    })
+  }
+  for (const db of found) {
+    const key = endpointKey(db)
+    if (groups.has(key)) continue
+    groups.set(key, {
+      key,
       endpoint: { engine: db.engine, host: db.host, port: db.port },
       label: db.label,
       detail: `${db.host}:${db.port}${db.isLocalOnly ? ' · 서버 안에서만 열림' : ''}`,
       isSupported: db.isSupported,
       isGuess: !db.isConfirmed,
-      saved: null
-    }))
-  return [...fromSaved, ...fromFound]
+      accounts: []
+    })
+  }
+  return [...groups.values()]
 }
 
-/** Adds or replaces (same id, or same database and user) without changing the given list. */
+/**
+ * Adds or replaces without changing the given list. The same account is the same id, or the same
+ * server, user and database (one user may be saved twice for two databases).
+ */
 export function upsertSavedConnection(list: SavedDbConnection[], next: SavedDbConnection): SavedDbConnection[] {
   const sameAccount = (s: SavedDbConnection): boolean =>
-    s.id === next.id || (endpointKey(s) === endpointKey(next) && s.user === next.user)
+    s.id === next.id || (endpointKey(s) === endpointKey(next) && s.user === next.user && (s.database ?? '') === (next.database ?? ''))
   const kept = list.filter(s => !sameAccount(s))
   return [...kept, next]
 }

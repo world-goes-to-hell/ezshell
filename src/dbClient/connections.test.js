@@ -15,12 +15,15 @@ function fakeSession({ queryResult = { columns: [], rows: [], truncatedBy: null,
     open: vi.fn().mockResolvedValue({ engine: 'mysql', product: 'MySQL', version: '8.0.36', missingGuards: [] }),
     query: vi.fn().mockImplementation(() => new Promise((resolve) => { release = () => resolve(queryResult) })),
     cancel: vi.fn().mockResolvedValue(true),
-    listSchemas: vi.fn().mockResolvedValue(['shop']),
+    listDatabases: vi.fn().mockResolvedValue([{ name: 'shop', isSystem: false }, { name: 'mysql', isSystem: true }]),
+    listSchemas: vi.fn().mockImplementation(async (db) => [{ name: db, isSystem: false }]),
     listTables: vi.fn().mockResolvedValue([{ name: 'orders', kind: 'table' }]),
     listColumns: vi.fn().mockResolvedValue([]),
+    useDatabase: vi.fn().mockImplementation(async function (name) { this.database = name }),
     close: vi.fn(),
     info: { engine: 'mysql', product: 'MySQL', version: '8.0.36', missingGuards: [] },
     database: 'shop',
+    defaultSchema: 'shop',
     finishQuery: () => release()
   }
 }
@@ -83,11 +86,42 @@ describe('createDbConnections', () => {
     expect(await connections.cancel(7, dbId)).toEqual({ cancelled: false })
 
     const running = connections.query(7, dbId, 'SELECT * FROM orders')
-    await expect(connections.schemas(7, dbId)).rejects.toThrow('처리하는 중')
+    await expect(connections.databases(7, dbId)).rejects.toThrow('처리하는 중')
     expect(await connections.cancel(7, dbId)).toEqual({ cancelled: true })
     session.finishQuery()
     await expect(running).resolves.toMatchObject({ database: 'shop' })
-    await expect(connections.schemas(7, dbId)).resolves.toEqual({ schemas: ['shop'], current: 'shop' })
+    await expect(connections.schemas(7, dbId, 'shop')).resolves.toEqual({ schemas: [{ name: 'shop', isSystem: false }], defaultSchema: 'shop' })
+  })
+
+  it('lists every database and accepts only names from that list', async () => {
+    const { connections, session } = setup()
+    const { dbId } = await connections.open(REQUEST)
+    connections.attach(dbId, 7)
+    expect(await connections.databases(7, dbId)).toEqual({ databases: [{ name: 'shop', isSystem: false }, { name: 'mysql', isSystem: true }], current: 'shop' })
+    // Another database's schemas: no default schema there (queries do not run in it)
+    expect(await connections.schemas(7, dbId, 'mysql')).toEqual({ schemas: [{ name: 'mysql', isSystem: false }], defaultSchema: null })
+    await expect(connections.tables(7, dbId, 'secret_db', 'x')).rejects.toThrow('DB 목록에 없습니다')
+    expect(session.listTables).not.toHaveBeenCalled()
+    await connections.tables(7, dbId, 'mysql', 'mysql')
+    expect(session.listTables).toHaveBeenCalledWith('mysql', 'mysql')
+  })
+
+  it('switches the database queries run in', async () => {
+    const { connections, session } = setup()
+    const { dbId } = await connections.open(REQUEST)
+    connections.attach(dbId, 7)
+    await expect(connections.switchDatabase(7, dbId, 'nope')).rejects.toThrow('DB 목록에 없습니다')
+    expect(await connections.switchDatabase(7, dbId, 'mysql')).toMatchObject({ database: 'mysql' })
+    expect(session.useDatabase).toHaveBeenCalledWith('mysql')
+  })
+
+  it('tests an account by logging in once and closing again', async () => {
+    const { connections, session } = setup()
+    expect(await connections.test(REQUEST)).toEqual({ info: session.info, database: 'shop' })
+    expect(session.close).toHaveBeenCalledTimes(1)
+    session.open.mockRejectedValueOnce(new Error('denied'))
+    await expect(connections.test(REQUEST)).rejects.toThrow('denied')
+    expect(session.close).toHaveBeenCalledTimes(2)
   })
 
   it('closes the session with its window', async () => {
@@ -130,9 +164,9 @@ describe('registerDbIpc', () => {
     const opened = await ipcMain.call('db-open', 1, REQUEST)
     expect(opened).toMatchObject({ success: true, info: { product: 'MySQL' } })
     expect(opened.dbId).toBeUndefined()
-    expect(await ipcMain.call('db-schemas', 11, { dbId: windowDbId })).toMatchObject({ success: true, schemas: ['shop'] })
+    expect(await ipcMain.call('db-databases', 11, { dbId: windowDbId })).toMatchObject({ success: true, current: 'shop' })
     // The main window (sender 1) opened it, but only the DB window is answered
-    expect((await ipcMain.call('db-schemas', 1, { dbId: windowDbId })).success).toBe(false)
+    expect((await ipcMain.call('db-databases', 1, { dbId: windowDbId })).success).toBe(false)
 
     closeAll()
     expect(win.close).toHaveBeenCalled()
@@ -149,6 +183,7 @@ describe('registerDbIpc', () => {
     registerDbIpc({ ipcMain, connections, discover, createWindow: () => fakeWindow(11), isMainWindow: (id) => id === 1 })
     expect(await ipcMain.call('db-open', 11, REQUEST)).toEqual({ success: false, error: '이 창에서는 DB 에 접속할 수 없습니다.' })
     expect((await ipcMain.call('db-discover', 11, { sessionId: 'tab-1' })).success).toBe(false)
+    expect((await ipcMain.call('db-test', 11, REQUEST)).success).toBe(false)
     expect(createSession).not.toHaveBeenCalled()
     expect(discover).not.toHaveBeenCalled()
   })
