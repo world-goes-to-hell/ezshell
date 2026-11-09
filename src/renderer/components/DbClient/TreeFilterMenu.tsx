@@ -15,6 +15,40 @@ interface TreeFilterMenuProps {
   onLoadSchemas: (database: string) => void
 }
 
+/**
+ * The "10/12" next to a database in the tree: a button that opens that database's schema checkboxes
+ * (the same choices as in the filter menu), like DataGrip.
+ */
+export function SchemaCountMenu({ database, loaded, filter, onFilterChange, onOpen }: {
+  database: string
+  loaded: Loaded<DbSchema[]> | undefined
+  filter: TreeFilter
+  onFilterChange: (filter: TreeFilter) => void
+  onOpen: () => void
+}) {
+  return (
+    <DropdownMenu.Root onOpenChange={(isOpen) => { if (isOpen) onOpen() }}>
+      <DropdownMenu.Trigger asChild>
+        <button type="button" className="db-tree-count-button" title="보일 스키마 고르기" aria-label={`${database} 의 보일 스키마 고르기`}>
+          {loaded?.status === 'ready' ? shownCount(filter, database, loaded.items) : '…'}
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content className="db-menu db-filter-menu" align="start" sideOffset={4} collisionPadding={8}>
+          <DropdownMenu.Label className="db-menu-label">{database} · 보일 스키마</DropdownMenu.Label>
+          {loaded?.status !== 'ready' && <div className="db-menu-empty">{loaded?.status === 'error' ? loaded.message : '읽는 중…'}</div>}
+          {loaded?.status === 'ready' && loaded.items.map(schema => (
+            <Check key={schema.name} checked={isSchemaShown(filter, database, schema)} isSystem={schema.isSystem}
+              onChange={(next) => onFilterChange(withSchema(filter, database, schema.name, next))}>
+              {schema.name}
+            </Check>
+          ))}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  )
+}
+
 /** A menu item that toggles without closing the menu */
 function Check({ checked, onChange, children, isSystem }: { checked: boolean; onChange: (next: boolean) => void; children: React.ReactNode; isSystem?: boolean }) {
   return (

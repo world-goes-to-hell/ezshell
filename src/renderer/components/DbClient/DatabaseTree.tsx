@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import {
   RiArrowDownSLine, RiArrowRightSLine, RiDatabase2Line, RiEyeLine, RiFolderLine, RiKey2Line, RiPlayLine, RiRefreshLine, RiTableLine
 } from 'react-icons/ri'
-import { TreeFilterMenu } from './TreeFilterMenu'
-import { isDatabaseShown, isSchemaShown, shownCount, type TreeFilter } from '../../lib/dbTreeFilter'
+import { SchemaCountMenu, TreeFilterMenu } from './TreeFilterMenu'
+import { isDatabaseShown, isSchemaShown, type TreeFilter } from '../../lib/dbTreeFilter'
 import type { SerialQueue } from '../../lib/serialQueue'
 import type { DbDatabase, DbSchema, DbTable, DbTableColumn } from '../../types/db'
 
@@ -18,6 +18,9 @@ interface DatabaseTreeProps {
   databases: Loaded<DbDatabase[]>
   /** The database queries run in */
   current: string
+  /** PostgreSQL: the schema unqualified names go to in the current database */
+  currentSchema: string
+  onSetSchema: (database: string, schema: string) => void
   filter: TreeFilter
   onFilterChange: (filter: TreeFilter) => void
   onRefresh: () => void
@@ -163,15 +166,20 @@ export function DatabaseTree(props: DatabaseTreeProps) {
         {shown.map(schema => {
           const id = key('s', database, schema.name)
           const isOpen = open.has(id)
+          const isDefault = database === current && schema.name === props.currentSchema
           return (
             <li key={schema.name} role="treeitem" aria-expanded={isOpen}>
-              <button type="button" className={`db-tree-row${schema.isSystem ? ' is-system' : ''}`} style={{ paddingLeft: 22 }}
-                onClick={() => { if (toggle(id)) void loadTables(database, schema.name) }}
-                onDoubleClick={() => props.onInsert(schema.name)}>
-                {isOpen ? <RiArrowDownSLine size={14} /> : <RiArrowRightSLine size={14} />}
-                <RiFolderLine size={14} className="db-tree-icon is-schema" />
-                <span className="db-tree-name">{schema.name}</span>
-              </button>
+              <div className="db-tree-line">
+                <button type="button" className={`db-tree-row${schema.isSystem ? ' is-system' : ''}${isDefault ? ' is-current' : ''}`} style={{ paddingLeft: 22 }}
+                  onClick={() => { if (toggle(id)) void loadTables(database, schema.name) }}
+                  onDoubleClick={() => { if (!isDefault) props.onSetSchema(database, schema.name) }}
+                  title={isDefault ? '기본 스키마: 테이블 이름만 써도 이 스키마에서 찾습니다' : '두 번 누르면 기본 스키마로 정합니다 (테이블 이름만 써도 됨)'}>
+                  {isOpen ? <RiArrowDownSLine size={14} /> : <RiArrowRightSLine size={14} />}
+                  <RiFolderLine size={14} className="db-tree-icon is-schema" />
+                  <span className="db-tree-name">{schema.name}</span>
+                </button>
+                {isDefault && <span className="db-tree-tag">기본</span>}
+              </div>
               {isOpen && renderTables(database, schema.name, 2)}
             </li>
           )
@@ -204,18 +212,21 @@ export function DatabaseTree(props: DatabaseTreeProps) {
             const loadedSchemas = schemas[database.name]
             return (
               <li key={database.name} role="treeitem" aria-expanded={isOpen}>
-                <button type="button" className={`db-tree-row is-database${isCurrent ? ' is-current' : ''}${database.isSystem ? ' is-system' : ''}`}
-                  onClick={() => openDatabase(database.name)}
-                  onDoubleClick={() => { if (!isCurrent) props.onSwitch(database.name) }}
-                  title={isCurrent ? '쿼리를 실행하는 DB' : '두 번 누르면 이 DB 에서 쿼리를 실행합니다'}>
-                  {isOpen ? <RiArrowDownSLine size={14} /> : <RiArrowRightSLine size={14} />}
-                  <RiDatabase2Line size={14} className="db-tree-icon is-db" />
-                  <span className="db-tree-name">{database.name}</span>
-                  {engine === 'postgres' && loadedSchemas?.status === 'ready' && (
-                    <span className="db-tree-count">{shownCount(filter, database.name, loadedSchemas.items)}</span>
+                <div className="db-tree-line">
+                  <button type="button" className={`db-tree-row is-database${isCurrent ? ' is-current' : ''}${database.isSystem ? ' is-system' : ''}`}
+                    onClick={() => openDatabase(database.name)}
+                    onDoubleClick={() => { if (!isCurrent) props.onSwitch(database.name) }}
+                    title={isCurrent ? '쿼리를 실행하는 DB' : '두 번 누르면 이 DB 에서 쿼리를 실행합니다'}>
+                    {isOpen ? <RiArrowDownSLine size={14} /> : <RiArrowRightSLine size={14} />}
+                    <RiDatabase2Line size={14} className="db-tree-icon is-db" />
+                    <span className="db-tree-name">{database.name}</span>
+                  </button>
+                  {engine === 'postgres' && (
+                    <SchemaCountMenu database={database.name} loaded={loadedSchemas} filter={filter}
+                      onFilterChange={props.onFilterChange} onOpen={() => void loadSchemas(database.name)} />
                   )}
                   {isCurrent && <span className="db-tree-tag">현재</span>}
-                </button>
+                </div>
                 {isOpen && (engine === 'mysql' ? renderTables(database.name, database.name, 1) : renderSchemas(database.name))}
               </li>
             )

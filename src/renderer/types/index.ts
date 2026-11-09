@@ -408,11 +408,15 @@ declare global {
 
       // DB client
       dbDiscover?: (sessionId: string) => Promise<DbResult<{ databases: DiscoveredDb[] }>>
-      dbOpen?: (sessionId: string, sessionName: string, endpoint: DbEndpoint, credentials: DbCredentials) => Promise<DbResult<{ info: DbServerInfo }>>
+      /** Opens as a tab of the main window (default, answers dbId) or as its own window */
+      dbOpen?: (sessionId: string, sessionName: string, endpoint: DbEndpoint, credentials: DbCredentials, target?: 'tab' | 'window') => Promise<DbResult<{ info: DbServerInfo; dbId?: string }>>
+      dbClose?: (dbId: string) => Promise<DbResult<object>>
+      dbDetach?: (dbId: string) => Promise<DbResult<object>>
       dbTest?: (sessionId: string, endpoint: DbEndpoint, credentials: DbCredentials) => Promise<DbResult<{ info: DbServerInfo; database: string }>>
       dbInfo?: (dbId: string) => Promise<DbResult<DbWindowInfo>>
       dbDatabases?: (dbId: string) => Promise<DbResult<{ databases: DbDatabase[]; current: string }>>
       dbSwitchDatabase?: (dbId: string, database: string) => Promise<DbResult<DbWindowInfo>>
+      dbSetSchema?: (dbId: string, schema: string) => Promise<DbResult<DbWindowInfo>>
       dbQuery?: (dbId: string, sql: string) => Promise<DbResult<DbQueryResult>>
       dbCancel?: (dbId: string) => Promise<DbResult<{ cancelled: boolean }>>
       dbSchemas?: (dbId: string, database: string) => Promise<DbResult<{ schemas: DbSchema[]; defaultSchema: string | null }>>

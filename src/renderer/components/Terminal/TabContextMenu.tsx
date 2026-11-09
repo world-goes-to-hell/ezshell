@@ -23,13 +23,15 @@ interface TabContextMenuProps {
   isLogging: boolean
   onToggleLog: () => void
   onOpenLogFolder: () => void
+  /** False for a DB tab: no duplicate or log items */
+  isTerminal?: boolean
 }
 
 export function TabContextMenu({
   isOpen, position, onClose,
   onCloseTab, onCloseOthers, onCloseToRight,
   onDuplicate, onRename, onSplitHorizontal, onSplitVertical,
-  isLogging, onToggleLog, onOpenLogFolder
+  isLogging, onToggleLog, onOpenLogFolder, isTerminal = true
 }: TabContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -50,16 +52,19 @@ export function TabContextMenu({
     { icon: RiCloseFill, label: '다른 탭 닫기', action: onCloseOthers },
     { icon: RiArrowRightLine, label: '오른쪽 탭 닫기', action: onCloseToRight },
     { type: 'separator' },
-    { icon: RiFileCopyLine, label: '탭 복제', action: onDuplicate },
+    // A DB tab has no shell to duplicate or log
+    ...(isTerminal ? [{ icon: RiFileCopyLine, label: '탭 복제', action: onDuplicate }] : []),
     { icon: RiEditLine, label: '탭 이름 변경', action: onRename },
     { type: 'separator' },
     { icon: RiSplitCellsHorizontal, label: '가로 분할', action: onSplitHorizontal },
     { icon: RiSplitCellsVertical, label: '세로 분할', action: onSplitVertical },
-    { type: 'separator' },
-    isLogging
-      ? { icon: RiStopCircleLine, label: '로그 저장 중지', action: onToggleLog }
-      : { icon: RiRecordCircleLine, label: '로그 저장 시작', action: onToggleLog },
-    { icon: RiFolderOpenLine, label: '로그 폴더 열기', action: onOpenLogFolder },
+    ...(isTerminal ? [
+      { type: 'separator' },
+      isLogging
+        ? { icon: RiStopCircleLine, label: '로그 저장 중지', action: onToggleLog }
+        : { icon: RiRecordCircleLine, label: '로그 저장 시작', action: onToggleLog },
+      { icon: RiFolderOpenLine, label: '로그 폴더 열기', action: onOpenLogFolder }
+    ] : []),
   ]
 
   return (

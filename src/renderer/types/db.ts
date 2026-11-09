@@ -48,6 +48,8 @@ export interface DbServerInfo {
 
 export interface DbWindowInfo extends DbServerInfo {
   database: string
+  /** Where unqualified names go (PostgreSQL search_path; MySQL the database) */
+  defaultSchema: string
   endpoint: DbEndpoint
   sessionName: string
   user: string

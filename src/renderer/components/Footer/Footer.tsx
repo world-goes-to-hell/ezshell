@@ -8,7 +8,8 @@ import { DbIndicator } from '../DbClient/DbIndicator'
 
 export function Footer() {
   const { terminals } = useTerminalStore()
-  const activeConnections = terminals.size
+  // SSH connections only: a DB tab rides on one of them
+  const activeConnections = Array.from(terminals.values()).filter(t => !t.db).length
 
   return (
     <footer className="app-footer">

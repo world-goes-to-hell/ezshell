@@ -77,6 +77,8 @@ function createPostgresSession({ openStream, credentials, limits = {} }) {
   let database = credentials.database || ''
   // Where unqualified table names are looked up (search_path), for the tree and completion
   let defaultSchema = 'public'
+  // The schema the user chose to put first in search_path (null: the server's own search_path)
+  let searchSchema = null
   let isClosed = false
   // Which query is running, so a late cancel does not stop the next one
   let runningQuery = 0
@@ -105,6 +107,7 @@ function createPostgresSession({ openStream, credentials, limits = {} }) {
       info = { engine: 'postgres', product: 'PostgreSQL', version: String(rows[0][0]).split(' on ')[0].replace(/^PostgreSQL /, ''), missingGuards: [] }
       database = rows[0][1]
       defaultSchema = rows[0][3] || 'public'
+      await applySearchPath(next)
     } catch (err) {
       discard(next)
       throw err
@@ -230,14 +233,43 @@ function createPostgresSession({ openStream, credentials, limits = {} }) {
   }
 
   /** Queries run in one database: switching connects to the other one (read-only checked again) */
+  /**
+   * The chosen schema first in search_path, so `SELECT * FROM t` finds its tables; public stays after
+   * it (extensions such as PostGIS live there). Set on the session outside the per-query read-only
+   * transactions, so it lasts; set again after every reconnect (open).
+   */
+  async function applySearchPath(target) {
+    if (!searchSchema) return
+    const path = searchSchema === 'public' ? 'public' : `${target.escapeIdentifier(searchSchema)}, public`
+    await target.query("SELECT set_config('search_path', $1, false)", [path])
+    const { rows } = await target.query({ text: 'SELECT current_schema()', rowMode: 'array' })
+    defaultSchema = rows[0][0] || 'public'
+  }
+
+  /** Unqualified names in this database go to `name` first (DataGrip: "기본 스키마") */
+  async function useSchema(name) {
+    const previous = searchSchema
+    searchSchema = name
+    try {
+      await applySearchPath(await ensure())
+    } catch (err) {
+      searchSchema = previous
+      throw err
+    }
+  }
+
   async function useDatabase(name) {
     const previous = database
+    const previousSchema = searchSchema
     drop()
     database = name
+    // A schema chosen for the old database means nothing in the new one
+    searchSchema = null
     try {
       await open()
     } catch (err) {
       database = previous
+      searchSchema = previousSchema
       await open().catch(() => {})
       throw err
     }
@@ -266,6 +298,7 @@ function createPostgresSession({ openStream, credentials, limits = {} }) {
     listDatabases,
     listSchemas,
     useDatabase,
+    useSchema,
     listTables,
     listColumns,
     close() {

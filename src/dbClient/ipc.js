@@ -34,7 +34,22 @@ function registerDbIpc({ ipcMain, connections, discover, createWindow, isLocked 
     return { databases: await discover(sessionId) }
   }))
 
-  ipcMain.handle('db-open', answer(async (senderId, request) => {
+  /** A DB window for the connection; the connection is closed with it */
+  function openWindowFor(dbId) {
+    const win = createWindow(dbId)
+    connections.attach(dbId, win.webContents.id)
+    windows.set(dbId, win)
+    win.on('closed', () => {
+      windows.delete(dbId)
+      connections.close(dbId)
+    })
+  }
+
+  /**
+   * Opens a connection as a tab of the main window (the default: the main window owns it and closes
+   * it with db-close) or as its own window (`target: 'window'`).
+   */
+  ipcMain.handle('db-open', answer(async (senderId, { target, ...request }) => {
     fromMainWindow(senderId)
     const { dbId, info } = await connections.open(request)
     // The app may have locked while the login went on
@@ -42,20 +57,32 @@ function registerDbIpc({ ipcMain, connections, discover, createWindow, isLocked 
       connections.close(dbId)
       throw new DbError(LOCKED_MESSAGE)
     }
-    let win
+    if (target !== 'window') {
+      connections.attach(dbId, senderId)
+      return { dbId, info }
+    }
     try {
-      win = createWindow(dbId)
+      openWindowFor(dbId)
     } catch (err) {
       connections.close(dbId)
       throw err
     }
-    connections.attach(dbId, win.webContents.id)
-    windows.set(dbId, win)
-    win.on('closed', () => {
-      windows.delete(dbId)
-      connections.close(dbId)
-    })
     return { info }
+  }))
+
+  /** The main window closed a DB tab */
+  ipcMain.handle('db-close', answer((senderId, { dbId }) => {
+    fromMainWindow(senderId)
+    connections.closeOwned(senderId, dbId)
+    return {}
+  }))
+
+  /** A DB tab moves to its own window; the connection (and what it was doing) stays */
+  ipcMain.handle('db-detach', answer((senderId, { dbId }) => {
+    fromMainWindow(senderId)
+    connections.describe(senderId, dbId)
+    openWindowFor(dbId)
+    return {}
   }))
 
   ipcMain.handle('db-test', answer(async (senderId, request) => {
@@ -68,6 +95,7 @@ function registerDbIpc({ ipcMain, connections, discover, createWindow, isLocked 
   ipcMain.handle('db-cancel', answer((senderId, { dbId }) => connections.cancel(senderId, dbId)))
   ipcMain.handle('db-databases', answer((senderId, { dbId }) => connections.databases(senderId, dbId)))
   ipcMain.handle('db-switch-database', answer((senderId, { dbId, database }) => connections.switchDatabase(senderId, dbId, database)))
+  ipcMain.handle('db-set-schema', answer((senderId, { dbId, schema }) => connections.setSchema(senderId, dbId, schema)))
   ipcMain.handle('db-schemas', answer((senderId, { dbId, database }) => connections.schemas(senderId, dbId, database)))
   ipcMain.handle('db-tables', answer((senderId, { dbId, database, schema }) => connections.tables(senderId, dbId, database, schema)))
   ipcMain.handle('db-columns', answer((senderId, { dbId, database, schema, table }) => connections.columns(senderId, dbId, database, schema, table)))

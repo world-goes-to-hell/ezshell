@@ -17,7 +17,9 @@ const MESSAGES = {
   tooMany: `DB 창은 ${MAX_WINDOWS}개까지 열 수 있습니다.`,
   badInput: '접속 정보가 올바르지 않습니다.',
   unsupported: '아직 지원하지 않는 DB 입니다. 지금은 MySQL·MariaDB·PostgreSQL 만 됩니다.',
-  unknownDatabase: '이 계정으로 볼 수 있는 DB 목록에 없습니다.'
+  unknownDatabase: '이 계정으로 볼 수 있는 DB 목록에 없습니다.',
+  unknownSchema: '이 DB 의 스키마 목록에 없습니다.',
+  noSchemas: '이 DB 는 기본 스키마를 따로 고르지 않습니다 (DB 가 곧 스키마).'
 }
 
 const SESSION_FACTORIES = { mysql: createMysqlSession, postgres: createPostgresSession }
@@ -105,7 +107,7 @@ function createDbConnections({ openStream, createSession = (engine, options) => 
 
   function describe(ownerId, dbId) {
     const { session, endpoint, sessionName, user } = own(ownerId, dbId)
-    return { ...session.info, database: session.database, endpoint, sessionName, user }
+    return { ...session.info, database: session.database, defaultSchema: session.defaultSchema ?? session.database, endpoint, sessionName, user }
   }
 
   function query(ownerId, dbId, sql) {
@@ -173,6 +175,22 @@ function createDbConnections({ openStream, createSession = (engine, options) => 
   }
 
   /**
+   * PostgreSQL: the schema unqualified names go to first (search_path) in the current database.
+   * Only a schema the server listed for that database is accepted. MySQL has no such level.
+   */
+  const setSchema = (ownerId, dbId, schema) => {
+    const entry = own(ownerId, dbId)
+    if (typeof entry.session.useSchema !== 'function') throw new DbError(MESSAGES.noSchemas)
+    if (!isText(schema, 128, { isRequired: true })) throw new DbError(MESSAGES.badInput)
+    return exclusive(entry, async () => {
+      const listed = await entry.session.listSchemas(entry.session.database)
+      if (!listed.some((s) => s.name === schema)) throw new DbError(MESSAGES.unknownSchema)
+      await entry.session.useSchema(schema)
+      return describe(ownerId, dbId)
+    })
+  }
+
+  /**
    * Logs in once to check an account and closes again (no window). Same checks as opening:
    * the read-only setting must hold, or the test fails.
    */
@@ -198,11 +216,17 @@ function createDbConnections({ openStream, createSession = (engine, options) => 
     entry.session.close()
   }
 
+  /** Closes a connection the asking window owns (a DB tab of the main window) */
+  function closeOwned(ownerId, dbId) {
+    own(ownerId, dbId)
+    close(dbId)
+  }
+
   function closeAll() {
     for (const dbId of [...connections.keys()]) close(dbId)
   }
 
-  return { open, test, attach, describe, query, cancel, databases, schemas, tables, columns, switchDatabase, close, closeAll, has: (dbId) => connections.has(dbId) }
+  return { open, test, attach, describe, query, cancel, databases, schemas, tables, columns, switchDatabase, setSchema, close, closeOwned, closeAll, has: (dbId) => connections.has(dbId) }
 }
 
 module.exports = { createDbConnections, validateRequest, MESSAGES, MAX_WINDOWS }

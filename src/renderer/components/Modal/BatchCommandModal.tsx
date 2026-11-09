@@ -18,7 +18,8 @@ export function BatchCommandModal({ open, onClose }: BatchCommandModalProps) {
 
   // Get list of connected terminals
   const connectedTerminals = Array.from(terminals.entries())
-    .filter(([_, info]) => info.connected)
+    // DB tabs have no shell to send a command to
+    .filter(([_, info]) => info.connected && !info.db)
     .map(([id, info]) => ({ id, name: info.title || `${info.username}@${info.host}`, host: info.host, username: info.username }))
 
   useEffect(() => {

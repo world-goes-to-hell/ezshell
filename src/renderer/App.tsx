@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState, useRef } from 'react'
+import { RiDatabase2Line } from 'react-icons/ri'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { Footer } from './components/Footer/Footer'
 import { McpApprovalDialog } from './components/Mcp/McpApprovalDialog'
@@ -52,6 +53,7 @@ import { reconnectFailureText } from './lib/connectionLost'
 const RemoteFileWindow = lazy(() => import('./components/RemoteFile/RemoteFileWindow').then(module => ({ default: module.RemoteFileWindow })))
 // The editor and grid are loaded only in DB windows
 const DbClientWindow = lazy(() => import('./components/DbClient/DbClientWindow').then(module => ({ default: module.DbClientWindow })))
+const DbTab = lazy(() => import('./components/DbClient/DbTab'))
 
 // Check if we're in a special window mode
 function getWindowModeParams() {
@@ -659,8 +661,37 @@ function App() {
 
   const handleCloseTerminal = (sessionId: string) => {
     detachedTabsRef.current.delete(sessionId)
+    const db = terminals.get(sessionId)?.db
+    if (db) {
+      // A DB tab: only its database connection closes, the SSH tab stays
+      void window.electronAPI.dbClose?.(db.dbId)
+      removeTerminal(sessionId)
+      return
+    }
     disconnect(sessionId)
   }
+
+  /** The tab's content: a terminal, or a DB tab (its code loads only when one exists) */
+  const renderTabContent = (sessionId: string, isActive: boolean, onActivate: () => void, onClose: () => void, borderColor?: string) => {
+    const db = terminals.get(sessionId)?.db
+    if (db) {
+      return (
+        <Suspense fallback={null}>
+          <DbTab terminalId={sessionId} dbId={db.dbId} label={db.label} />
+        </Suspense>
+      )
+    }
+    return <TerminalPanel sessionId={sessionId} isActive={isActive} onActivate={onActivate} onClose={onClose} borderColor={borderColor} />
+  }
+
+  // Query results must not stay behind the lock screen: main closes the connections, the tabs go too
+  useEffect(() => {
+    if (!isLocked) return
+    const { terminals: current, removeTerminal: remove } = useTerminalStore.getState()
+    for (const [id, info] of current) {
+      if (info.db) remove(id)
+    }
+  }, [isLocked])
 
   const handleToggleSftp = () => {
     if (activeTerminalId) {
@@ -690,8 +721,11 @@ function App() {
     const sessionId = draggingTabId
     const terminal = sessionId ? terminals.get(sessionId) : null
 
-    // Check if dropped outside window (popout)
-    if (dropZone === 'popout' && sessionId && terminal) {
+    // A DB tab dropped outside moves to its own DB window (the connection stays)
+    if (dropZone === 'popout' && sessionId && terminal?.db) {
+      const result = await window.electronAPI.dbDetach?.(terminal.db.dbId)
+      if (result?.success) removeTerminal(sessionId)
+    } else if (dropZone === 'popout' && sessionId && terminal) {
       const title = terminal.title || `${terminal.username}@${terminal.host}`
       detachedTabsRef.current.set(sessionId, detachTab(terminal))
       // Take the screen before the tab's terminal is disposed so the new window continues from it
@@ -949,6 +983,7 @@ function App() {
                             style={{ backgroundColor: terminal.color }}
                           />
                         )}
+                        {terminal.db && <RiDatabase2Line size={13} className="tab-db-icon" aria-label="DB" />}
                         <span>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
                         {sessionId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[sessionId]}`} />}
                         {terminal.hasActivity && <span className="activity-indicator" />}
@@ -1018,7 +1053,7 @@ function App() {
                           }
                         }}
                         onUnsplit={closeSplit}
-                        onSftpToggle={layout.primary.activeTerminalId ? () => {
+                        onSftpToggle={layout.primary.activeTerminalId && !terminals.get(layout.primary.activeTerminalId)?.db ? () => {
                           const activeId = layout.primary.activeTerminalId!
                           setOpen(activeId, !isOpen(activeId))
                         } : undefined}
@@ -1038,19 +1073,19 @@ function App() {
                             key={terminalId}
                             className={`terminal-wrapper ${terminalId === layout.primary.activeTerminalId ? 'visible' : 'hidden'}`}
                           >
-                            <TerminalPanel
-                              sessionId={terminalId}
-                              isActive={terminalId === layout.primary.activeTerminalId}
-                              onActivate={() => {
+                            {renderTabContent(
+                              terminalId,
+                              terminalId === layout.primary.activeTerminalId,
+                              () => {
                                 setActivePaneTerminal('primary', terminalId)
                                 setActivePaneType('primary')
-                              }}
-                              onClose={() => {
+                              },
+                              () => {
                                 removeTerminalFromPane('primary', terminalId)
                                 handleCloseTerminal(terminalId)
-                              }}
-                              borderColor={terminals.get(terminalId)?.color}
-                            />
+                              },
+                              terminals.get(terminalId)?.color
+                            )}
                           </div>
                         ))}
                         {layout.primary.activeTerminalId && isOpen(layout.primary.activeTerminalId) && (
@@ -1094,7 +1129,7 @@ function App() {
                             addTerminalToPane('secondary', result.sessionId)
                           }
                         }}
-                        onSftpToggle={layout.secondary.activeTerminalId ? () => {
+                        onSftpToggle={layout.secondary.activeTerminalId && !terminals.get(layout.secondary.activeTerminalId)?.db ? () => {
                           const activeId = layout.secondary!.activeTerminalId!
                           setOpen(activeId, !isOpen(activeId))
                         } : undefined}
@@ -1114,19 +1149,19 @@ function App() {
                             key={terminalId}
                             className={`terminal-wrapper ${terminalId === layout.secondary!.activeTerminalId ? 'visible' : 'hidden'}`}
                           >
-                            <TerminalPanel
-                              sessionId={terminalId}
-                              isActive={terminalId === layout.secondary!.activeTerminalId}
-                              onActivate={() => {
+                            {renderTabContent(
+                              terminalId,
+                              terminalId === layout.secondary!.activeTerminalId,
+                              () => {
                                 setActivePaneTerminal('secondary', terminalId)
                                 setActivePaneType('secondary')
-                              }}
-                              onClose={() => {
+                              },
+                              () => {
                                 removeTerminalFromPane('secondary', terminalId)
                                 handleCloseTerminal(terminalId)
-                              }}
-                              borderColor={terminals.get(terminalId)?.color}
-                            />
+                              },
+                              terminals.get(terminalId)?.color
+                            )}
                           </div>
                         ))}
                         {layout.secondary.activeTerminalId && isOpen(layout.secondary.activeTerminalId) && (
@@ -1141,19 +1176,19 @@ function App() {
                       key={sessionId}
                       className={`terminal-wrapper ${sessionId === activeTerminalId ? 'visible' : 'hidden'}`}
                     >
-                      <TerminalPanel
-                        sessionId={sessionId}
-                        isActive={sessionId === activeTerminalId}
-                        onActivate={() => setActiveTerminal(sessionId)}
-                        onClose={() => handleCloseTerminal(sessionId)}
-                        borderColor={terminal.color}
-                      />
+                      {renderTabContent(
+                        sessionId,
+                        sessionId === activeTerminalId,
+                        () => setActiveTerminal(sessionId),
+                        () => handleCloseTerminal(sessionId),
+                        terminal.color
+                      )}
                     </div>
                   ))
                 )}
               </div>
               {/* Hidden while the panel is open (it has its own close button) so the panel gets the space */}
-              {activeTerminalId && layout.mode !== 'split' && !sftpOpen && (
+              {activeTerminalId && layout.mode !== 'split' && !sftpOpen && !activeTerminal?.db && (
                 <div className="toolbar">
                   <button
                     className="toolbar-btn"
@@ -1232,6 +1267,7 @@ function App() {
         onSplitHorizontal={handleContextSplitHorizontal}
         onSplitVertical={handleContextSplitVertical}
         isLogging={contextMenuTabId !== null && contextMenuTabId in sessionLogFiles}
+        isTerminal={!(contextMenuTabId && terminals.get(contextMenuTabId)?.db)}
         onToggleLog={handleContextToggleLog}
         onOpenLogFolder={openSessionLogFolder}
       />

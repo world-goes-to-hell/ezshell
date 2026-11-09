@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiCheckboxCircleLine, RiDatabase2Line, RiDeleteBinLine, RiLoader4Line, RiPlugLine, RiShieldCheckLine } from 'react-icons/ri'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useTerminalStore } from '../../stores/terminalStore'
 import { DEFAULT_PORTS, endpointProblem, removeSavedConnection, upsertSavedConnection } from '../../lib/dbChoices'
 import type { DbCredentials, DbEndpoint, SavedDbConnection } from '../../types/db'
 
@@ -119,7 +120,7 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
     if (!request) return
     setBusy('connect')
     setOutcome(null)
-    const result = await window.electronAPI.dbOpen?.(target.sessionId, target.sessionName, request.chosen, request.credentials)
+    const result = await window.electronAPI.dbOpen?.(target.sessionId, target.sessionName, request.chosen, request.credentials, 'tab')
     setBusy(null)
     if (!result) {
       setOutcome({ kind: 'error', text: '앱을 다시 시작한 뒤에 사용할 수 있습니다.' })
@@ -129,12 +130,29 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
       setOutcome({ kind: 'error', text: result.error })
       return
     }
+    if (result.dbId) openDbTab(result.dbId, `${result.info.product} · ${request.credentials.database || request.credentials.user}`, request.chosen.host, request.credentials.user)
     if (session && isSaving) {
       await storeAccounts(upsertSavedConnection(session.dbConnections ?? [], accountOf(request.chosen, request.credentials)))
     } else if (session && saved && !isSaving) {
       await storeAccounts(removeSavedConnection(session.dbConnections ?? [], saved.id))
     }
     onClose()
+  }
+
+  /** A tab next to the current one, in the pane that has the focus (like a new SSH tab) */
+  const openDbTab = (dbId: string, title: string, host: string, dbUser: string): void => {
+    const store = useTerminalStore.getState()
+    const id = `db:${dbId}`
+    const accountLabel = label.trim() || undefined
+    store.addTerminal(id, {
+      id, host, username: dbUser, connected: true,
+      title: accountLabel ? `${title} (${accountLabel})` : title,
+      db: { dbId, sshSessionId: target.sessionId, label: accountLabel }
+    })
+    const { layout } = useTerminalStore.getState()
+    if (layout.mode === 'split' && layout.activePaneType === 'secondary') {
+      store.moveTerminalBetweenPanes(id, 'primary', 'secondary')
+    }
   }
 
   const isBusy = busy !== null

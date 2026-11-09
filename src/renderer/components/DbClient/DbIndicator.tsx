@@ -32,8 +32,12 @@ function writeAuto(isOn: boolean): void {
  * one per database). Discovery runs once per connection in main (ports and process names only).
  */
 export function DbIndicator() {
-  const activeId = useTerminalStore(state => state.activeTerminalId)
-  const terminal = useTerminalStore(state => (state.activeTerminalId ? state.terminals.get(state.activeTerminalId) : undefined))
+  // A DB tab in front: the list is about the SSH tab its tunnel rides on
+  const activeId = useTerminalStore(state => {
+    const active = state.activeTerminalId ? state.terminals.get(state.activeTerminalId) : undefined
+    return active?.db ? active.db.sshSessionId : state.activeTerminalId
+  })
+  const terminal = useTerminalStore(state => (activeId ? state.terminals.get(activeId) : undefined))
   const savedSessionId = terminal?.connectConfig?.savedSessionId
   const savedSession = useSessionStore(state => (savedSessionId ? state.sessions.find(s => s.id === savedSessionId) : undefined))
   const [foundBySession, setFoundBySession] = useState<Record<string, DiscoveredDb[]>>({})

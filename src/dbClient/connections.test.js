@@ -115,6 +115,17 @@ describe('createDbConnections', () => {
     expect(session.useDatabase).toHaveBeenCalledWith('mysql')
   })
 
+  it('sets the default schema only to one the database has, and not for MySQL-like sessions', async () => {
+    const { connections, session } = setup()
+    const { dbId } = await connections.open(REQUEST)
+    connections.attach(dbId, 7)
+    expect(() => connections.setSchema(7, dbId, 'shop')).toThrow('DB 가 곧 스키마')
+    session.useSchema = vi.fn().mockImplementation(async function (name) { this.defaultSchema = name })
+    await expect(connections.setSchema(7, dbId, 'secret')).rejects.toThrow('스키마 목록에 없습니다')
+    expect(session.useSchema).not.toHaveBeenCalled()
+    expect(await connections.setSchema(7, dbId, 'shop')).toMatchObject({ defaultSchema: 'shop' })
+  })
+
   it('tests an account by logging in once and closing again', async () => {
     const { connections, session } = setup()
     expect(await connections.test(REQUEST)).toEqual({ info: session.info, database: 'shop' })
@@ -161,7 +172,7 @@ describe('registerDbIpc', () => {
     const createWindow = (dbId) => { windowDbId = dbId; return win }
     const { closeAll } = registerDbIpc({ ipcMain, connections, discover: async () => [], createWindow, isLocked: () => isLocked })
 
-    const opened = await ipcMain.call('db-open', 1, REQUEST)
+    const opened = await ipcMain.call('db-open', 1, { ...REQUEST, target: 'window' })
     expect(opened).toMatchObject({ success: true, info: { product: 'MySQL' } })
     expect(opened.dbId).toBeUndefined()
     expect(await ipcMain.call('db-databases', 11, { dbId: windowDbId })).toMatchObject({ success: true, current: 'shop' })
@@ -202,8 +213,36 @@ describe('registerDbIpc', () => {
     const ipc2 = fakeIpc()
     const second = setup()
     registerDbIpc({ ipcMain: ipc2, connections: second.connections, discover: async () => [], createWindow: () => { throw new Error('no window') } })
-    expect((await ipc2.call('db-open', 1, REQUEST)).success).toBe(false)
+    expect((await ipc2.call('db-open', 1, { ...REQUEST, target: 'window' })).success).toBe(false)
     expect(second.session.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens as a tab of the main window, closes it there, and can move it to a window', async () => {
+    const ipcMain = fakeIpc()
+    const { connections, session } = setup()
+    const win = fakeWindow(21)
+    const createWindow = vi.fn(() => win)
+    registerDbIpc({ ipcMain, connections, discover: async () => [], createWindow, isMainWindow: (id) => id === 1 })
+
+    const opened = await ipcMain.call('db-open', 1, REQUEST)
+    expect(opened).toMatchObject({ success: true, info: { product: 'MySQL' } })
+    expect(typeof opened.dbId).toBe('string')
+    expect(createWindow).not.toHaveBeenCalled()
+    // The main window owns the tab's connection
+    expect(await ipcMain.call('db-databases', 1, { dbId: opened.dbId })).toMatchObject({ success: true })
+
+    // Moved to a window: the window owns it now, the main window no longer
+    expect(await ipcMain.call('db-detach', 1, { dbId: opened.dbId })).toEqual({ success: true })
+    expect((await ipcMain.call('db-databases', 1, { dbId: opened.dbId })).success).toBe(false)
+    expect((await ipcMain.call('db-databases', 21, { dbId: opened.dbId })).success).toBe(true)
+    expect(session.close).not.toHaveBeenCalled()
+
+    // A second tab, closed from the main window; another window cannot close it
+    const second = await ipcMain.call('db-open', 1, REQUEST)
+    expect((await ipcMain.call('db-close', 21, { dbId: second.dbId })).success).toBe(false)
+    expect(await ipcMain.call('db-close', 1, { dbId: second.dbId })).toEqual({ success: true })
+    expect(connections.has(second.dbId)).toBe(false)
+    expect(connections.has(opened.dbId)).toBe(true)
   })
 
   it('counts logins still in progress towards the window limit', async () => {

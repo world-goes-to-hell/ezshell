@@ -106,6 +106,8 @@ export function useKeyboardShortcuts(
     if (!enabled) return
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // A view already used the key (a DB tab's Ctrl+W closes a query console, not the tab)
+      if (event.defaultPrevented) return
       // Don't handle shortcuts when typing in inputs (except command palette)
       const target = event.target as HTMLElement
       const isInput = target.tagName === 'INPUT' ||

@@ -23,6 +23,11 @@ export interface TerminalInfo {
   reconnect?: { attempt: number; maxAttempts: number } | null
   /** Why the connection could not be brought back, shown on the "연결 끊김" overlay */
   disconnectNote?: string | null
+  /**
+   * A database tab (src/dbClient) instead of a terminal: no shell, SFTP, log or duplicate.
+   * `sshSessionId` is the tab whose SSH connection carries the tunnel.
+   */
+  db?: { dbId: string; sshSessionId: string; label?: string }
 }
 
 export type SplitDirection = 'horizontal' | 'vertical' | 'quad' | 'tri-bottom' | 'tri-top' | 'tri-right' | 'tri-left'
