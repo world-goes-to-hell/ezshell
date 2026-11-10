@@ -2725,6 +2725,35 @@ textarea {
   background: var(--bg-hover);
 }
 
+/* The row the context menu acts on */
+.file-explorer-item.is-selected {
+  background: var(--bg-modifier-selected, var(--bg-hover));
+}
+
+/* Rename and new folder are typed in the tree, like in the SFTP list */
+.file-explorer-inline-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+.file-explorer-create {
+  cursor: default;
+}
+
+.file-explorer-create-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
 .file-explorer-item .expand-icon {
   display: flex;
   align-items: center;

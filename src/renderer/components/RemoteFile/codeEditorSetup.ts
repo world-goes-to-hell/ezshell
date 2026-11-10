@@ -71,7 +71,8 @@ const appTheme = EditorView.theme({
   '.cm-matchingBracket': { outline: '1px solid var(--accent)', backgroundColor: 'transparent' },
   '.cm-panels': { backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)', borderColor: 'var(--border)' },
   '.cm-panels.cm-panels-top': { borderBottom: '1px solid var(--border)' },
-  '.cm-panel.cm-search': { padding: '6px 10px', fontFamily: 'var(--font-sans)', fontSize: '12.5px' },
+  // Room on the right so the bigger × does not cover the last option
+  '.cm-panel.cm-search': { padding: '6px 40px 6px 10px', fontFamily: 'var(--font-sans)', fontSize: '12.5px' },
   '.cm-panel input[type=text], .cm-textfield': {
     backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-strong)',
     padding: '3px 6px', fontSize: '12.5px'
@@ -83,7 +84,14 @@ const appTheme = EditorView.theme({
   },
   '.cm-button:hover': { backgroundColor: 'var(--bg-modifier-selected)' },
   '.cm-panel.cm-search label': { color: 'var(--text-secondary)', fontSize: '12px' },
-  '.cm-panel button[name=close]': { color: 'var(--text-secondary)', fontSize: '18px' },
+  // CodeMirror's own `.cm-panel.cm-search [name=close] { font: inherit }` outranks a plainer selector and
+  // left the × at text size; this one is as specific plus the element name, so it wins
+  '.cm-panel.cm-search button[name=close]': {
+    top: '6px', right: '8px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: '4px', color: 'var(--text-secondary)', fontSize: '18px', lineHeight: '1', cursor: 'pointer'
+  },
+  '.cm-panel.cm-search button[name=close]:hover': { backgroundColor: 'var(--bg-hover)', color: 'var(--text-primary)' },
+  '.cm-panel.cm-search button[name=close]:focus-visible': { outline: '2px solid var(--accent)', outlineOffset: '1px' },
   '.cm-foldPlaceholder': { backgroundColor: 'var(--bg-hover)', border: 'none', color: 'var(--text-secondary)' },
   '.cm-tooltip': { backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-strong)', color: 'var(--text-primary)' }
 }, { dark: true })

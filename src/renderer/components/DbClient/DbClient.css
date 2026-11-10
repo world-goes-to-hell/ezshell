@@ -414,7 +414,7 @@
   border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
   border-radius: var(--radius-sm);
   background: var(--accent);
-  color: var(--text-on-accent, #fff);
+  color: var(--on-accent);
   font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
@@ -433,9 +433,11 @@
   filter: brightness(1.08);
 }
 
+/* Red in every theme, so its text is white whatever --on-accent is (dark on yellow accents) */
 .db-run-button.is-stop {
   border-color: color-mix(in srgb, var(--error) 60%, transparent);
   background: var(--error);
+  color: #fff;
 }
 
 .db-readonly-badge {
@@ -739,7 +741,7 @@
 .db-filter-box.is-checked {
   border-color: var(--accent);
   background: var(--accent);
-  color: var(--text-on-accent, #fff);
+  color: var(--on-accent);
 }
 
 .db-filter-label {

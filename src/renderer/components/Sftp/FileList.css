@@ -203,3 +203,9 @@
     transition: none;
   }
 }
+
+/* A window lower than the menu: it scrolls instead of being cut */
+.sftp-context-menu {
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+}

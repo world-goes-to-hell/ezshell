@@ -1,4 +1,5 @@
-import { forwardRef, type ReactElement } from 'react'
+import { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactElement } from 'react'
+import { createPortal } from 'react-dom'
 import {
   RiUploadFill, RiDownloadFill, RiDeleteBinFill, RiEditFill, RiFolderAddFill, RiRefreshFill, RiEyeFill, RiFileEditFill, RiPulseLine
 } from 'react-icons/ri'
@@ -72,10 +73,37 @@ interface FileListContextMenuProps {
   onSelect: (action: ContextMenuAction) => void
 }
 
+/** Gap kept between the menu and the window edge */
+const EDGE_GAP = 8
+
+/**
+ * Where the menu fits: at the click, or opening upwards when there is no room below, and moved in
+ * from the right edge. Uses the menu's real size (dividers and longer item lists made estimates wrong).
+ */
+export function fitMenu(click: { x: number; y: number }, size: { width: number; height: number }, viewport: { width: number; height: number }): { top: number; left: number } {
+  const fitsBelow = click.y + size.height <= viewport.height - EDGE_GAP
+  const top = fitsBelow ? click.y : Math.max(EDGE_GAP, Math.min(click.y - size.height, viewport.height - size.height - EDGE_GAP))
+  const left = Math.max(EDGE_GAP, Math.min(click.x, viewport.width - size.width - EDGE_GAP))
+  return { top, left }
+}
+
 export const FileListContextMenu = forwardRef<HTMLDivElement, FileListContextMenuProps>(
   function FileListContextMenu({ x, y, items, onSelect }, ref) {
-    return (
-      <div ref={ref} className="context-menu sftp-context-menu" style={{ top: y, left: x }} role="menu">
+    const menuRef = useRef<HTMLDivElement>(null)
+    useImperativeHandle(ref, () => menuRef.current as HTMLDivElement)
+    const [position, setPosition] = useState({ top: y, left: x })
+
+    // Measured before the first paint, so the menu never shows cut off for a frame
+    useLayoutEffect(() => {
+      const menu = menuRef.current
+      if (!menu) return
+      const { width, height } = menu.getBoundingClientRect()
+      setPosition(fitMenu({ x, y }, { width, height }, { width: window.innerWidth, height: window.innerHeight }))
+    }, [x, y, items.length])
+
+    // On the page itself: inside the SFTP panel a transformed ancestor would clip a fixed menu
+    return createPortal(
+      <div ref={menuRef} className="context-menu sftp-context-menu" style={{ top: position.top, left: position.left }} role="menu">
         {items.map(item => (
           <div key={item.action}>
             {item.separated && <div className="context-menu-divider" />}
@@ -90,7 +118,8 @@ export const FileListContextMenu = forwardRef<HTMLDivElement, FileListContextMen
             </div>
           </div>
         ))}
-      </div>
+      </div>,
+      document.body
     )
   }
 )

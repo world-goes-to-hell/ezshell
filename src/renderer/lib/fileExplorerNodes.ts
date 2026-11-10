@@ -9,6 +9,8 @@ export interface RemoteListEntry {
   targetIsDirectory?: boolean
   /** The link target does not exist */
   isBrokenLink?: boolean
+  /** Bytes (decides whether the file can be opened for editing) */
+  size?: number
 }
 
 export interface FileNode {
@@ -18,6 +20,7 @@ export interface FileNode {
   isSymlink: boolean
   linkTarget?: string
   isBrokenLink?: boolean
+  size?: number
   children?: FileNode[]
   isLoaded?: boolean
   isExpanded?: boolean
@@ -43,6 +46,7 @@ export function toFileNodes(entries: RemoteListEntry[], dirPath: string): FileNo
         isSymlink,
         linkTarget: entry.linkTarget,
         isBrokenLink: isSymlink ? Boolean(entry.isBrokenLink) : undefined,
+        size: entry.size,
         children: isDirectory ? [] : undefined,
         isLoaded: false,
         isExpanded: false
