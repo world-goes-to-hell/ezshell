@@ -115,11 +115,12 @@ export const collapseVariants: Variants = {
 // Drawer (for file explorer)
 export const drawerVariants: Variants = {
   hidden: { width: 0, opacity: 0 },
-  visible: {
-    width: 220,
+  // custom: { width, instant } - instant while the user drags the edge, so the drawer follows the pointer
+  visible: (custom?: { width?: number; instant?: boolean }) => ({
+    width: custom?.width ?? 220,
     opacity: 1,
-    transition: { ...SPRINGS.snappy }
-  },
+    transition: custom?.instant ? { duration: 0 } : { ...SPRINGS.snappy }
+  }),
   exit: {
     width: 0,
     opacity: 0,

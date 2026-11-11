@@ -322,3 +322,14 @@ export function highlightCodeLine(text: string): ShellToken[] {
 export function formattedText(lines: ShellLine[]): string {
   return lines.map(line => INDENT.repeat(line.indent) + line.tokens.map(token => token.text).join('')).join('\n')
 }
+
+/**
+ * Whether the layout shows exactly the command: the same characters in the same order once
+ * whitespace is set aside (the layout only adds line breaks and indents). The approval dialog shows
+ * the original instead when this fails, so a formatter bug can never show a different command
+ * from the one that will run.
+ */
+export function isFaithfulLayout(lines: ShellLine[], original: string): boolean {
+  const strip = (text: string): string => text.replace(/\s+/g, '')
+  return strip(formattedText(lines)) === strip(original)
+}

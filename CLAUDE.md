@@ -95,12 +95,25 @@ App.tsx에서 single → split 모드 전환 시 TerminalPanel이 React 트리�
 그래서 2분할 ↔ quad/tri, quad ↔ tri 전환 모두 남는 패널의 셸이 유지된다.
 감싸개를 조건부 Fragment 안에 따로 두면 key 가 같아도 부모가 달라 React 가 새로 만들고, 기존 분할 셸이 닫힌다 (2026-10-01 수정한 버그).
 
+### Terminal Right-Click Menu
+터미널(탭의 주 터미널과 분할 셸)에서 우클릭하면 메뉴가 뜬다 (`Terminal/useTerminalContextMenu.tsx`, `TerminalContextMenu.tsx`). 맨 위에 복사·붙여넣기, 그 아래 `분할`(좌우·상하·4분할·해제), `편의`(이름 찾기, 내용 찾기, 화면에서 찾기, 화면 지우기, 파일 탐색기), `세션`(탭 복제, 로그 저장, SFTP, 연결 종료) 하위 메뉴가 있다. 포인터 위치에 빈 기준점을 두고 여는 Radix DropdownMenu 이다 (modal 아님: 다른 곳을 우클릭하면 메뉴가 옮겨 간다).
+- 복사·붙여넣기·화면 지우기·찾기는 우클릭한 그 터미널에 적용한다. 터미널마다 그려지는 요소를 `lib/terminalPanes.ts` 에 등록해 두고 `terminalPaneAt` 으로 찾는다. 터미널 영역 위에 그려지는 패널(포트 포워딩 등)에서는 메뉴를 띄우지 않는다.
+- 이름 찾기·내용 찾기(`TerminalFindDialog.tsx`, 명령 생성은 `lib/terminalFind.ts`)는 `find` / `grep -rnIF` 명령을 만들어 `terminal.paste` 로 입력줄에 넣는다. 찾을 위치는 현재 폴더(`.`), 루트(`/`, `/proc` `/sys` `/dev` 제외), 폴더 지정 중에서 고르고 `localStorage` 의 `terminalFindPrefs` 에 기억한다.
+  - 바꾸면 안 되는 것: 앱이 명령을 실행하지 않는다 (줄바꿈을 붙이지 않고, 사용자가 Enter 를 누른다). 큰 폴더 검색은 운영 서버 디스크를 오래 읽는다. 입력값은 작은따옴표로 감싸고, 줄바꿈·제어 문자는 앞뒤 공백을 자르기 전에 거부한다 (줄바꿈이 들어가면 입력되는 순간 앞부분이 실행된다).
+- 탭 복제는 `ezshell:duplicate-tab` 이벤트로 `App.tsx` 에 넘긴다 (복제 로직이 App 에 있다).
+- 시험할 때: 하위 메뉴는 포인터가 지나온 경로로 열림 유지를 판단한다. CDP 로 포인터를 한 번에 옮기면 하위 메뉴가 닫히므로 여러 번에 나눠 움직인다.
+
+### Sidebar Tree and Folded Rail
+사이드바 목록 모양은 `Sidebar/SidebarTree.css` 에 있다. 줄에는 배경색을 칠하지 않는다: 폴더 색은 폴더 왼쪽의 선 하나(`--folder-color`), 세션 자체 색은 줄 옆의 짧은 선(`--session-color`)이다. 기본 아이콘 자리에는 상태 점(`.session-dot`, 연결된 탭이 있으면 초록, 끊긴 탭만 있으면 빨강)을 둔다. 세션 이름은 입력한 그대로 보여 준다.
+접힌 상태(`sidebarMode === 'compact'`, 클래스 `.sidebar.rail`)는 46px 띠에 버튼과 세로 글자 "세션", 연결된 탭 수(`.rail-session-summary`)만 보이고 목록은 그리지 않는다 (이름 없는 화살표·점만 줄지어 있어 알아볼 수 없었다), 마우스를 올리거나 키보드 포커스가 들어오면 전체 사이드바가 터미널 위로 겹쳐서 열린다 (`hooks/useSidebarPeek.ts`, `.peek-open`, 자리를 차지하지 않으므로 터미널 크기가 바뀌지 않는다). 사이드바의 메뉴·호버 카드·이름 입력칸을 쓰는 동안에는 닫지 않는다. 줄임말 타일은 없앴다 (사용자가 원하지 않았다). 띠와 열린 상태는 같은 DOM 이고 CSS 로만 다르다.
+접기 버튼은 상태마다 아이콘이 다르다 (펼침 `«`, 띠 `»`, 겹쳐 열림은 핀). 아이콘을 돌리는 애니메이션을 다시 넣지 말 것: 좌우 대칭 아이콘을 180도 돌리면 두 상태가 같은 모양이 된다.
+
 ### Sidebar Session Tab Badge
 사이드바 세션 옆에 그 세션에서 열린 탭 개수를 배지로 표시한다 (초록 테두리 = 연결됨, 빨강 테두리 = 끊김, 섞이면 둘 다).
 탭 ID 는 메인 프로세스가 연결마다 만드는 값이라 사이드바 세션 ID 와 다르다. 둘은 `TerminalInfo.connectConfig.savedSessionId` 로만 이어진다 (`lib/sessionTabs.ts`).
 배지의 탭이 1개면 바로 이동, 2개 이상이면 목록에서 고른다. 이동은 `terminalStore.focusTerminal` 을 쓴다 (분할 유지, 터미널에 키보드 포커스).
 별도 창으로 분리한 탭과 저장하지 않은 빠른 연결은 세지 않는다.
-축소 사이드바에서는 세션 행이 Tooltip Trigger 라서 배지/목록의 이벤트가 포털을 통과해 행까지 올라간다. 처리 내용은 `docs/brain/2026-10-01-react-events-bubble-through-portals-into-tooltip-trigger.md` 참고.
+세션 행이 Tooltip Trigger 라서 배지/목록의 이벤트가 포털을 통과해 행까지 올라간다. 처리 내용은 `docs/brain/2026-10-01-react-events-bubble-through-portals-into-tooltip-trigger.md` 참고.
 
 ### App Name and User Data Folder
 앱 이름은 `ezShell` (이전 이름 `My SSH Client`). Electron 사용자 데이터 폴더는 앱 이름을 따르므로,
@@ -151,7 +164,7 @@ exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다
 - 서버별 보기의 영역은 머리줄을 끌어서 순서를 바꾼다 (HTML5 끌기, 형식 `application/x-ezshell-mcp-lane` 만 받음). 순서는 `mcpActivityStore` 의 `laneOrder`(메모리)이고 `lib/mcpActivity.ts` 의 `orderLanes`, `moveLane` 이 계산한다. 처음 보는 세션은 끝에 붙는다. 개별 기록은 시간순이라 옮기지 않는다.
 - 파일 전송 요청은 활동 항목의 `transfer`(방향, 크기, 보낸 크기, 복사 시작 시각)로 진행 막대를 그린다 (`McpTransferBar.tsx`, 계산은 `lib/mcpTransfer.ts`). `transferTools.js` 가 1초마다 갱신하며 감사 로그에는 넣지 않는다. 속도는 복사 시작부터 센다 (확인 창 대기 시간 제외).
 - 패널 머리줄의 "새 창으로 열기" 로 MCP 활동 창(`?mcpActivityMode=true`, `McpActivityWindow.tsx`, 패널의 `window` 형태)을 연다. 창은 하나이고 main 의 `sendToActivityViews` 가 활동 갱신을 본창과 이 창에 보낸다. 앱을 잠그면 닫고, 잠긴 동안에는 열 수 없다 (명령 출력이 잠금 화면 뒤에 남지 않게). 확인 창은 본창에만 뜬다. 설계: `docs/plan/2026-10-24-mcp-activity-window-progress-reorder.md`.
-- 터미널·서버별 보기의 명령 줄은 `lib/shellFormat.ts` 가 `;` `&&` `|` 마다 줄을 나누고 색을 입혀 보여 준다 (`sh -c '...'` 안 스크립트는 한 단계 더 들여씀). 표시만 바꾸고, 확인 창·감사 로그·실행은 원문이다. 연산자를 줄 끝에 두어 복사해도 같은 뜻으로 실행된다. heredoc 은 여는 줄까지만 나누고(그 줄의 `<<EOF` 뒤로는 나누지 않음) 본문은 글자 그대로 두며 문자열·주석·키워드에만 색을 입힌다. 끝 줄 없는 heredoc·닫히지 않은 따옴표는 원문 그대로 둔다. 설계: `docs/plan/2026-11-03-mcp-activity-command-layout.md`.
+- 터미널·서버별 보기의 명령 줄은 `lib/shellFormat.ts` 가 `;` `&&` `|` 마다 줄을 나누고 색을 입혀 보여 준다 (`sh -c '...'` 안 스크립트는 한 단계 더 들여씀). 표시만 바꾸고, 감사 로그·실행은 원문이다. 확인 창(`McpApprovalDialog`)도 같은 정렬로 보여 주되(`ShellCommandText.tsx`), `원문 보기` 로 바꿀 수 있고, 정렬 결과에서 공백을 뺀 글자가 원문과 다르면 원문만 보여 준다 (`isFaithfulLayout`, 바꾸면 안 되는 것: 판단하는 화면이 실행될 명령과 다른 글자를 보여 주면 안 된다). 연산자를 줄 끝에 두어 복사해도 같은 뜻으로 실행된다. heredoc 은 여는 줄까지만 나누고(그 줄의 `<<EOF` 뒤로는 나누지 않음) 본문은 글자 그대로 두며 문자열·주석·키워드에만 색을 입힌다. 끝 줄 없는 heredoc·닫히지 않은 따옴표는 원문 그대로 둔다. 설계: `docs/plan/2026-11-03-mcp-activity-command-layout.md`.
 - 시작한 지 3초가 지나도 진행 중인 요청은 패널 위에 고정한다 (`McpPinnedRequests.tsx`, 계산은 `lib/mcpPinned.ts`). 터미널·목록 보기는 기록 위, 서버별 보기는 영역마다 위에 둔다. 카드는 명령 한 줄(길면 말줄임), 접기/펼치기, 출력 마지막 3줄이고 오래 실행된 순서다. 기록에서는 빼지 않는다 (전체 출력은 기록에서 본다). 3초 기준을 없애면 바로 끝나는 명령마다 카드가 나타났다 사라져 기록이 흔들린다. 설계: `docs/plan/2026-11-02-mcp-activity-pinned-requests.md`.
 - 선택한 보기와 서버별 보기의 `작업 중만` 값은 `localStorage` 의 `mcpActivityPrefs` 에 남는다 (`lib/mcpActivity.ts` 의 `parseActivityPrefs`). 요청과 출력은 저장하지 않는다.
 - 확인 창이 뜰 때 앱 창에 포커스가 없으면 작업표시줄을 깜빡이고 Windows 알림을 띄운다 (`main.js` 의 `alertMcpApproval`). 알림에는 요청 종류(`approvalNotice.js`), 세션 이름, 위험도만 넣는다. 알림은 알림 센터에 남으므로 명령과 경로는 넣지 않는다.
@@ -182,10 +195,12 @@ SFTP 패널(본창·분리 창)의 서버 파일 우클릭 메뉴 `미리보기`
 - 미리보기: 이미지·PDF 는 50MB 까지 `blob:` URL (PDF 는 iframe 의 Chromium 뷰어, CSP 에 `img-src blob:` `frame-src blob:`), 그 밖은 텍스트로 5MB 까지 전체, 넘으면 마지막 1MB.
 - 바꾸면 안 되는 것: 저장은 `review`(diff 와 토큰) → `save`(같은 내용의 SHA-256) 순서로만 된다. 저장 직전에 서버 내용을 PC 에 백업하고(`문서\ezShell Backups\<세션> (<계정>@<호스트>)\<서버 경로>\<이름>.<시각>.bak`, 파일마다 20개), 백업을 못 쓰면 저장하지 않는다. 쓰기는 MCP 와 같은 `remoteFile.writeIfUnchanged` (한 핸들로 비교 후 덮어쓰기, 소유자·권한 유지). 서버에 `.bak` 을 만들지 않는다 (`conf.d`, `cron.d` 처럼 폴더의 모든 파일을 읽는 곳에서 적용될 수 있음).
 - 보안 검토 반영 (바꾸지 말 것): 오래된 백업 정리는 저장이 성공한 뒤에만 한다 (충돌로 거부될 때마다 정리하면 기록이 사라진다). 저장 중인 창을 닫으면 저장이 끝난 뒤 채널을 닫는다 (쓰는 도중 끊으면 서버 파일이 잘린다). 검토 토큰은 검토마다 새 난수이고 한 번만 쓴다. diff 가 잘리면 "나머지를 보지 않고 저장" 을 체크해야 저장된다. 백업 폴더 이름은 세션 이름을 40자로 자른 뒤 main 이 가진 `(계정@호스트)` 를 붙인다. 파일 창은 20개까지.
+- 백업 목록에는 앱 백업(PC 아이콘)과 서버의 백업 파일(서버 아이콘, `compose.yaml.bak_20261020_1516` 처럼 같은 폴더에 사람이 남긴 것)이 시간순으로 섞인다 (`lib/backupCompare.ts`). 서버 파일 판정과 목록은 main 의 `serverBackups.js` (readdir 한 번, 일반 파일만, 50개, 이름의 날짜가 없으면 수정 시각). 바꾸면 안 되는 것: 창에는 이름만 보내고, 읽기(`remote-file-read-server-backup`)는 main 이 마지막으로 만든 목록에 있는 이름만 받는다. 읽은 실제 경로가 목록의 경로와 다르면(그 사이 링크로 바뀜) 거부한다. 설계: `docs/plan/2026-11-11-backup-compare-and-server-backups.md`.
+- 백업 좌우 비교(`RemoteCompareView.tsx`, `@codemirror/merge` 의 MergeView): 왼쪽 백업(읽기 전용), 오른쪽 현재 내용, 가운데 » 로 그 부분만 백업 내용으로 바꾼다. 바꾸면 안 되는 것: 오른쪽은 편집기의 거울이다. 오른쪽의 모든 변경을 그대로 본 편집기(숨겨 두고 마운트 유지)에 보내므로, 저장·닫기 확인·Ctrl+Z 는 본 편집기 기준으로 동작한다. 편집기 내용을 통째로 바꾸는 동작(서버에서 다시 불러오기)은 비교를 먼저 닫는다.
 - 같은 초에 백업이 여러 개면 번호를 가장 큰 번호 다음으로 붙인다. 정리로 비운 번호를 다시 쓰면 새 백업이 가장 오래된 것으로 정렬돼 바로 지워진다 (테스트로 잡은 버그).
 - 요청마다 `docId` 와 보낸 창(webContents id)이 맞아야 답한다 (`documents.js` 의 `own`). 저장하지 않은 변경이 있으면 main 이 창 닫기를 막고 창에 묻는다 (`remote-file-close-requested` → `remote-file-close`).
 - 새 `src/` 폴더라서 `MAIN_RUNTIME_DIRECTORIES` 에 `remoteFiles` 가 있다. MCP 모듈(`../mcp/remoteFile.js` 등)을 상대 경로로 쓴다.
-- 실시간 보기(로그 따라가기): 우클릭 `실시간 보기`(모드 `tail`, 이미지·PDF 제외) 또는 텍스트 미리보기 창의 재생 버튼. main 의 `logTail.js` 가 한 번 볼 때마다 SFTP `stat` 하나만 보내고, 크기가 바뀌었을 때만 파일을 열어 늘어난 부분(최대 1MB, 넘으면 "N 건너뜀")을 읽고 바로 닫는다. 화면(`RemoteLogView.tsx`)은 답을 받은 뒤에만 다음 확인을 예약한다 (보일 때 1초, 가려지면 5초, 실패하면 3초). 설계: `docs/plan/2026-11-05-log-live-view.md`.
+- 실시간 보기(로그 따라가기): 우클릭 `실시간 보기`(모드 `tail`, 이미지·PDF 제외) 또는 텍스트 미리보기 창의 재생 버튼. main 의 `logTail.js` 가 한 번 볼 때마다 SFTP `stat` 하나만 보내고, 크기가 바뀌었을 때만 파일을 열어 늘어난 부분(최대 1MB, 넘으면 "N 건너뜀")을 읽고 바로 닫는다. 화면(`RemoteLogView.tsx`)은 답을 받은 뒤에만 다음 확인을 예약한다. 간격은 로그를 따른다 (`lib/logPollPace.ts`): 새 줄을 받으면 0.2초, 조용하면 0.4 → 0.8 → 1초로 늘리고, 가려지면 5초, 실패하면 3초. 조용한 로그의 서버 부담은 예전(1초마다 stat 하나)과 같다. 설계: `docs/plan/2026-11-05-log-live-view.md`.
   - 바꾸면 안 되는 것: 운영 서버 부담 때문에 서버에서 `tail -f` 같은 명령을 실행하지 않고, 파일을 열어 둔 채로 두지 않는다 (logrotate 가 지운 옛 파일의 디스크 공간이 풀리지 않는다). 확인 요청은 겹치지 않는다 (`documents.js` 의 `isTailing`, 진행 중이면 `busy`). 30초 안에 답이 없으면 포기한다.
   - 줄이 빠지지 않게: main 은 답마다 `cursor` 를 붙이고, 다음 요청이 그 cursor 를 가져와야 위치를 넘긴다 (아니면 마지막으로 받은 위치에서 다시 읽어 같은 줄을 보낸다). 일시정지·창 닫기로 화면이 버린 답 때문이다. `load` 마다 `generation` 이 바뀌고, 새로고침 전 화면의 요청은 `stale` 로 답한다. 로그 추가는 되돌리기 기록에 넣지 않는다 (`Transaction.addToHistory.of(false)`, 넣으면 지운 줄이 기록에 쌓여 메모리 상한이 깨진다).
   - 새 파일 판단: 크기가 줄었거나, 앞 256바이트가 달라졌거나, 링크가 다른 파일을 가리키거나, 없다가 다시 생기면 처음부터 읽는다 (logrotate `create`·`copytruncate`). 줄바꿈 전 조각은 main 이 최대 1MB 까지 붙잡는다. NUL 바이트는 지운다.
@@ -201,6 +216,7 @@ SFTP 패널(본창·분리 창)의 서버 파일 우클릭 메뉴 `미리보기`
 - DB 창은 자기 webContents id 로만 답을 받는다 (`connections.js` 의 `own`). 계정은 main 창의 대화상자에서 main 으로만 가고 DB 창에는 가지 않는다. 앱을 잠그면 DB 창을 모두 닫고 접속을 끊는다 (`dbIpc.closeAll()`). 결과는 디스크에 쓰지 않는다.
 - 계정 저장은 세션의 `dbConnections` (세션 파일과 함께 마스터 비밀번호로 암호화). "이 세션에 저장" 을 끄고 접속하면 그 저장 계정을 지운다.
 - 다중 계정: 한 DB 서버에 계정을 여러 개 저장한다 (같은 계정은 id, 또는 서버·사용자·기본 DB 가 모두 같은 것). 계정마다 이름(`label`)을 붙이고, 상태바 목록은 서버별로 묶어 계정과 `다른 계정으로 접속…` 을 보여 준다 (`lib/dbChoices.ts` 의 `buildGroups`). DB 창은 계정마다 따로 연다. 계정 창의 `연결 테스트`(`db-test`)는 한 번 로그인해 읽기 전용까지 확인하고 바로 닫는다.
+- DB 별칭: 상태바 목록의 서버 머리줄 연필로 DB 서버에 이름을 붙인다 (`DbAliasDialog.tsx`). 세션의 `dbAliases`(키는 `lib/dbChoices.ts` 의 `endpointKey`, 루프백 표기 무관)에 저장되어 세션 파일과 함께 암호화된다. 별칭이 있으면 머리줄에 별칭, 그 옆에 `엔진 · 주소` 를 보여 준다. 저장하지 않은 빠른 연결에는 연필이 없다.
 - DB 트리(`DatabaseTree.tsx`)는 계정이 볼 수 있는 DB 를 모두 보여 준다 (PostgreSQL: DB → 스키마 → 테이블, MySQL: DB → 테이블). 보일 DB·스키마는 `TreeFilterMenu.tsx` 에서 고르고, 고른 것만 `localStorage` 의 `dbTreeFilter:<엔진>:<호스트>:<포트>:<사용자>` 에 남는다 (기본은 시스템 DB·스키마만 숨김, `lib/dbTreeFilter.ts`). 쿼리를 실행할 DB 는 도구 모음 선택 상자나 트리의 DB 두 번 누르기로 바꾼다 (`db-switch-database`, MySQL 은 `USE`, PostgreSQL 은 그 DB 로 다시 접속하고 읽기 전용을 다시 확인). 바꾸면 자동완성 기억을 비운다.
   - 바꾸면 안 되는 것: PostgreSQL 의 다른 DB 목록은 그 DB 에 짧게 접속해 읽고 바로 끊는다 (`rowsIn`). 접속을 붙잡아 두지 않는다. 창이 이름을 보내는 DB 는 서버가 준 목록에 있어야 한다 (`connections.js` 의 `knownDatabase`, PostgreSQL 은 그 이름으로 접속한다). PostgreSQL 기본 DB 를 비우면 `postgres` 로, 안 되면 사용자 이름 DB 로 접속한다 (관리자 계정은 사용자 이름 DB 가 없는 경우가 많다).
 - 자동완성(`DbClient/dbCompletion.ts`, 계산은 `lib/sqlCompletion.ts`): 키워드는 `@codemirror/lang-sql` 의 MySQL/PostgreSQL 문법(요청 없음), 테이블은 기본 스키마 것만, 열은 문장의 FROM/JOIN 에 나온 테이블(최대 4개)이나 `별칭.` 뒤에서 그 테이블 하나만 읽고 창이 열린 동안 기억한다. 바꾸면 안 되는 것: 스키마 전체의 열을 한 번에 읽지 않는다 (MySQL 5.7 은 `information_schema.COLUMNS` 를 스키마 단위로 읽으면 모든 테이블 파일을 연다). 쿼리가 실행 중이면 새로 읽지 않는다. 창의 요청(쿼리, 트리, 자동완성)은 `lib/serialQueue.ts` 로 한 줄로 세운다 (main 은 겹친 요청을 "처리하는 중" 으로 거부한다). 편집기 파일 이름을 확장자 없는 `query` 로 두는 것은 편집기가 표준 SQL 을 따로 불러와 방언 설정과 겹치지 않게 하려는 것이다.

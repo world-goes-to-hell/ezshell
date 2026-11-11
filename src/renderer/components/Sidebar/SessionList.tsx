@@ -3,12 +3,11 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useSessionStore, Folder, Session } from '../../stores/sessionStore'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { groupTabsBySession } from '../../lib/sessionTabs'
-import { RiFolderFill, RiArrowDownSFill, RiArrowRightSFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiCloseLine, RiPaletteLine, RiAddLine, RiFileCopyLine, RiServerLine, RiPlugLine, RiCheckLine } from 'react-icons/ri'
+import { RiArrowDownSFill, RiArrowRightSFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiCloseLine, RiPaletteLine, RiAddLine, RiFileCopyLine, RiPlugLine, RiCheckLine } from 'react-icons/ri'
 import { collapseVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { MoveToFolderSubmenu } from './MoveToFolderSubmenu'
 import { SessionItem } from './SessionItem'
-import { CompactFolderMarker } from './CompactFolderMarker'
 import { getDropPosition, type DropPosition } from '../../lib/sessionOrder'
 import { getFolderPath } from '../../lib/folderPath'
 import { confirmDialog } from '../../stores/confirmStore'
@@ -33,10 +32,9 @@ interface SessionListProps {
   onEditSession?: (session: Session) => void
   onDuplicateSession?: (session: Session) => void
   onAddSession?: (folderId?: string) => void
-  isCompact?: boolean
 }
 
-export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession, onAddSession, isCompact = false }: SessionListProps) {
+export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession, onAddSession }: SessionListProps) {
   const { sessions, folders, expandedFolders, toggleFolder, addFolder, updateFolder, removeFolder, removeSession, moveSessionToFolder, reorderSession, updateSession, saveToBackend } = useSessionStore()
   const reducedMotion = useReducedMotion()
   const terminals = useTerminalStore(state => state.terminals)
@@ -69,15 +67,6 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
     if (folder.backgroundColor) return folder.backgroundColor
     if (folder.parentId) {
       return getFolderEffectiveColor(folder.parentId)
-    }
-    return undefined
-  }
-
-  // Helper function to get effective color (session color or folder chain color)
-  const getEffectiveColor = (session: Session): string | undefined => {
-    if (session.backgroundColor) return session.backgroundColor
-    if (session.folderId) {
-      return getFolderEffectiveColor(session.folderId)
     }
     return undefined
   }
@@ -487,70 +476,54 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         isDragging={dragState.type === 'session' && dragState.id === session.id}
-        isCompact={isCompact}
-        reducedMotion={reducedMotion}
         tabs={sessionTabs.get(session.id)}
-        effectiveColor={getEffectiveColor(session)}
         {...sessionItemDropProps(session.id)}
       />
     ))
 
     return (
-      <div key={folder.id} className="session-folder">
-        {isCompact && (
-          <CompactFolderMarker
-            folder={folder}
-            depth={depth}
-            parentPath={folder.parentId ? getFolderPath(folders, folder.parentId) : undefined}
-            subfolderCount={childFolders.length}
-            isExpanded={isExpanded}
-            sessionCount={folderSessions.length}
-            color={folderEffectiveColor}
-            isDropTarget={isDropTarget}
-            onToggle={() => toggleFolder(folder.id)}
-            onContextMenu={(e) => handleFolderContextMenu(e, folder.id)}
-            onDragOver={(e) => handleFolderDragOver(e, folder.id)}
-            onDragLeave={handleFolderDragLeave}
-            onDrop={(e) => handleFolderDrop(e, folder.id)}
-          />
-        )}
-        {!isCompact && (
-          <div
-            className={`folder-header ${isDragging ? 'dragging' : ''} ${isDropTarget ? 'drop-target' : ''}`}
-            role="treeitem"
-            aria-expanded={isExpanded}
-            aria-label={`Folder: ${folder.name}`}
-            onClick={() => toggleFolder(folder.id)}
-            onContextMenu={(e) => handleFolderContextMenu(e, folder.id)}
-            draggable={!isEditing}
-            onDragStart={(e) => handleDragStart(e, 'folder', folder.id)}
-            onDragEnd={handleDragEnd}
-            onDragOver={(e) => handleFolderDragOver(e, folder.id)}
-            onDragLeave={handleFolderDragLeave}
-            onDrop={(e) => handleFolderDrop(e, folder.id)}
-            style={folderEffectiveColor ? {
-              borderLeft: `3px solid ${folderEffectiveColor}`,
-              background: `${folderEffectiveColor}20`
-            } : undefined}
-          >
-            {isExpanded ? <RiArrowDownSFill size={16} /> : <RiArrowRightSFill size={16} />}
-            <RiFolderFill size={16} />
-            {isEditing ? (
-              <input
-                ref={editInputRef}
-                type="text"
-                className="folder-edit-input"
-                value={editingName}
-                onChange={(e) => setEditingName(e.target.value)}
-                onBlur={handleEditSubmit}
-                onKeyDown={handleEditKeyDown}
-                onClick={(e) => e.stopPropagation()}
-              />
-            ) : (
-              <span>{folder.name}</span>
-            )}
-          </div>
-        )}
+      // A folder with a colour of its own draws one thin line down its left side; rows carry no fill
+      <div
+        key={folder.id}
+        className={`session-folder ${depth === 0 ? 'is-top' : 'is-nested'} ${folder.backgroundColor ? 'has-own-color' : ''}`}
+        style={folderEffectiveColor ? { '--folder-color': folderEffectiveColor } as React.CSSProperties : undefined}
+      >
+        <div
+          className={`folder-header ${isDragging ? 'dragging' : ''} ${isDropTarget ? 'drop-target' : ''}`}
+          role="treeitem"
+          aria-expanded={isExpanded}
+          aria-label={`Folder: ${folder.name}`}
+          onClick={() => toggleFolder(folder.id)}
+          onContextMenu={(e) => handleFolderContextMenu(e, folder.id)}
+          draggable={!isEditing}
+          onDragStart={(e) => handleDragStart(e, 'folder', folder.id)}
+          onDragEnd={handleDragEnd}
+          onDragOver={(e) => handleFolderDragOver(e, folder.id)}
+          onDragLeave={handleFolderDragLeave}
+          onDrop={(e) => handleFolderDrop(e, folder.id)}
+        >
+          {isExpanded ? <RiArrowDownSFill size={14} className="folder-chevron" /> : <RiArrowRightSFill size={14} className="folder-chevron" />}
+          {isEditing ? (
+            <input
+              ref={editInputRef}
+              type="text"
+              className="folder-edit-input"
+              value={editingName}
+              onChange={(e) => setEditingName(e.target.value)}
+              onBlur={handleEditSubmit}
+              onKeyDown={handleEditKeyDown}
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <span className="folder-name">{folder.name}</span>
+          )}
+          {/* What a closed folder holds */}
+          {!isExpanded && !isEditing && (folderSessions.length + childFolders.length) > 0 && (
+            <span className="folder-count" title={`세션 ${folderSessions.length}개${childFolders.length ? ` · 하위 폴더 ${childFolders.length}개` : ''}`}>
+              {folderSessions.length + childFolders.length}
+            </span>
+          )}
+        </div>
         <AnimatePresence initial={false}>
           {isExpanded && (
             <motion.div
@@ -562,12 +535,9 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
               onDragOver={(e) => handleFolderDragOver(e, folder.id)}
               onDrop={(e) => handleFolderDrop(e, folder.id)}
             >
-              {/* Icon-only mode has no indentation, so a folder's own sessions go right under its
-                  marker; otherwise they would read as part of the last subfolder */}
-              {isCompact && sessionItems}
               {childFolders.map(child => renderFolder(child, depth + 1))}
-              {!isCompact && sessionItems}
-              {!isCompact && childFolders.length === 0 && folderSessions.length === 0 && (
+              {sessionItems}
+              {childFolders.length === 0 && folderSessions.length === 0 && (
                 <div className="folder-empty-drop-zone">폴더가 비어 있습니다</div>
               )}
             </motion.div>
@@ -580,16 +550,8 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
   if (sessions.length === 0 && folders.length === 0) {
     return (
       <div className="session-list-empty">
-        {isCompact ? (
-          <span className="session-list-empty-icon" title="저장된 연결이 없습니다" aria-label="저장된 연결이 없습니다">
-            <RiServerLine size={20} />
-          </span>
-        ) : (
-          <>
-            <p>저장된 연결이 없습니다</p>
-            <p className="text-muted">새 연결을 추가해주세요</p>
-          </>
-        )}
+        <p>저장된 연결이 없습니다</p>
+        <p className="text-muted">새 연결을 추가해주세요</p>
       </div>
     )
   }
@@ -630,11 +592,8 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
             isDragging={dragState.type === 'session' && dragState.id === session.id}
-            isCompact={isCompact}
-            reducedMotion={reducedMotion}
             tabs={sessionTabs.get(session.id)}
-            effectiveColor={getEffectiveColor(session)}
-            {...sessionItemDropProps(session.id)}
+                {...sessionItemDropProps(session.id)}
           />
         ))}
       </div>

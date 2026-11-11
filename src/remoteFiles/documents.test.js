@@ -367,3 +367,77 @@ describe('file window: SFTP channel', () => {
     await expect(make(new Error('(SSH) Channel open failure: open failed'))).rejects.toMatchObject({ userMessage: MESSAGES.channelRefused })
   })
 })
+
+describe('file window: backups left on the server', () => {
+  const tree = {
+    '/srv': { type: 'dir' },
+    '/srv/compose.yaml': file('now\n'),
+    '/srv/compose.yaml.bak_20261020_1516': file('old\r\n'),
+    '/srv/compose.yaml.orig': file('orig\n'),
+    '/srv/secret.txt': file('do not read\n')
+  }
+
+  it('lists backups beside the file without their paths', async () => {
+    const { docs, open } = setup(tree)
+    const docId = open('/srv/compose.yaml')
+    await docs.load(OWNER, docId)
+    const { backups } = await docs.listServerBackups(OWNER, docId)
+    expect(backups.map(b => b.name)).toEqual(['compose.yaml.bak_20261020_1516', 'compose.yaml.orig'])
+    expect(backups[0]).not.toHaveProperty('path')
+    expect(backups[0]).toMatchObject({ size: 5, timeFrom: 'name' })
+  })
+
+  it('reads a listed backup as it is', async () => {
+    const { docs, open } = setup(tree)
+    const docId = open('/srv/compose.yaml')
+    await docs.load(OWNER, docId)
+    await docs.listServerBackups(OWNER, docId)
+    expect(await docs.readServerBackup(OWNER, docId, 'compose.yaml.bak_20261020_1516')).toEqual({ content: 'old\r\n' })
+  })
+
+  it('refuses names that were not in the last list', async () => {
+    const { docs, open } = setup(tree)
+    const docId = open('/srv/compose.yaml')
+    await docs.load(OWNER, docId)
+    await expect(docs.readServerBackup(OWNER, docId, 'compose.yaml.orig')).rejects.toMatchObject({ userMessage: MESSAGES.noBackup })
+    await docs.listServerBackups(OWNER, docId)
+    for (const name of ['secret.txt', '../srv/secret.txt', '/srv/secret.txt', 'compose.yaml']) {
+      await expect(docs.readServerBackup(OWNER, docId, name)).rejects.toMatchObject({ userMessage: MESSAGES.noBackup })
+    }
+  })
+
+  it('answers only the window the file was opened in', async () => {
+    const { docs, open } = setup(tree)
+    const docId = open('/srv/compose.yaml')
+    await docs.load(OWNER, docId)
+    await docs.listServerBackups(OWNER, docId)
+    await expect(docs.listServerBackups(OWNER + 1, docId)).rejects.toMatchObject({ userMessage: MESSAGES.gone })
+    await expect(docs.readServerBackup(OWNER + 1, docId, 'compose.yaml.orig')).rejects.toMatchObject({ userMessage: MESSAGES.gone })
+  })
+
+  it('refuses a backup that became a link after it was listed', async () => {
+    const { docs, open, sftp } = setup(tree)
+    const docId = open('/srv/compose.yaml')
+    await docs.load(OWNER, docId)
+    await docs.listServerBackups(OWNER, docId)
+    sftp.tree.set('/srv/compose.yaml.orig', { type: 'link', target: '/srv/secret.txt' })
+    await expect(docs.readServerBackup(OWNER, docId, 'compose.yaml.orig')).rejects.toMatchObject({ userMessage: MESSAGES.noBackup })
+  })
+
+  it('refuses a backup larger than the editor takes', async () => {
+    const big = { ...tree, '/srv/compose.yaml.bak': file('x'.repeat(5 * 1024 * 1024 + 1)) }
+    const { docs, open } = setup(big)
+    const docId = open('/srv/compose.yaml')
+    await docs.load(OWNER, docId)
+    await docs.listServerBackups(OWNER, docId)
+    await expect(docs.readServerBackup(OWNER, docId, 'compose.yaml.bak')).rejects.toMatchObject({ userMessage: MESSAGES.backupTooLarge })
+  })
+
+  it('gives an empty list when the folder cannot be listed', async () => {
+    const { docs, open, sftp } = setup(tree)
+    const docId = open('/srv/compose.yaml')
+    await docs.load(OWNER, docId)
+    sftp.readdir = (target, cb) => setImmediate(() => cb(Object.assign(new Error('denied'), { code: 3 })))
+    expect(await docs.listServerBackups(OWNER, docId)).toEqual({ backups: [] })
+  })
+})

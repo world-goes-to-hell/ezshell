@@ -195,6 +195,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   remoteFileSave: (docId, content, token) => ipcRenderer.invoke('remote-file-save', { docId, content, token }),
   remoteFileBackups: (docId) => ipcRenderer.invoke('remote-file-backups', { docId }),
   remoteFileReadBackup: (docId, name) => ipcRenderer.invoke('remote-file-read-backup', { docId, name }),
+  remoteFileServerBackups: (docId) => ipcRenderer.invoke('remote-file-server-backups', { docId }),
+  remoteFileReadServerBackup: (docId, name) => ipcRenderer.invoke('remote-file-read-server-backup', { docId, name }),
   remoteFileOpenBackupFolder: (docId) => ipcRenderer.invoke('remote-file-open-backup-folder', { docId }),
   remoteFileSetDirty: (docId, isDirty) => ipcRenderer.send('remote-file-dirty', { docId, isDirty }),
   remoteFileClose: (docId) => ipcRenderer.invoke('remote-file-close', { docId }),

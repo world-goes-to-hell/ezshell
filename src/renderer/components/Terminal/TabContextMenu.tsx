@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  RiCloseLine, RiCloseFill, RiArrowRightLine,
+  RiCloseLine, RiCloseFill, RiArrowLeftLine, RiArrowRightLine,
   RiFileCopyLine, RiEditLine, RiSplitCellsHorizontal,
   RiSplitCellsVertical, RiRecordCircleLine, RiStopCircleLine, RiFolderOpenLine
 } from 'react-icons/ri'
@@ -14,6 +14,7 @@ interface TabContextMenuProps {
   onClose: () => void
   onCloseTab: () => void
   onCloseOthers: () => void
+  onCloseToLeft: () => void
   onCloseToRight: () => void
   onDuplicate: () => void
   onRename: () => void
@@ -29,7 +30,7 @@ interface TabContextMenuProps {
 
 export function TabContextMenu({
   isOpen, position, onClose,
-  onCloseTab, onCloseOthers, onCloseToRight,
+  onCloseTab, onCloseOthers, onCloseToLeft, onCloseToRight,
   onDuplicate, onRename, onSplitHorizontal, onSplitVertical,
   isLogging, onToggleLog, onOpenLogFolder, isTerminal = true
 }: TabContextMenuProps) {
@@ -50,6 +51,7 @@ export function TabContextMenu({
   const menuItems = [
     { icon: RiCloseLine, label: '탭 닫기', action: onCloseTab },
     { icon: RiCloseFill, label: '다른 탭 닫기', action: onCloseOthers },
+    { icon: RiArrowLeftLine, label: '왼쪽 탭 닫기', action: onCloseToLeft },
     { icon: RiArrowRightLine, label: '오른쪽 탭 닫기', action: onCloseToRight },
     { type: 'separator' },
     // A DB tab has no shell to duplicate or log

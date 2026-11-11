@@ -2,7 +2,7 @@
 // adding the lines a followed log printed, and moving between errors.
 import { RangeSetBuilder, Transaction, type Extension } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin, keymap, type DecorationSet, type ViewUpdate } from '@codemirror/view'
-import { classifyLine, type LogLevel } from '../../lib/logLevels'
+import { classifyLine, type LogLevel, findLevelLine, type JumpLevel } from '../../lib/logLevels'
 import { planAppend, type AppendLimits, type AppendPlan, type LevelCounts } from '../../lib/logAppend'
 
 const LINE_CLASS: Record<LogLevel, Decoration> = {
@@ -65,27 +65,32 @@ export function scrollToEnd(view: EditorView): void {
   view.dispatch({ effects: EditorView.scrollIntoView(view.state.doc.length, { y: 'end' }) })
 }
 
-/** Put the cursor on the next (1) or previous (-1) error line; false when there is none that way. */
-export function jumpToError(view: EditorView, direction: 1 | -1): boolean {
+export const PROBLEM_LEVELS: ReadonlySet<JumpLevel> = new Set<JumpLevel>(['error', 'warn'])
+
+export type JumpOutcome = 'found' | 'wrapped' | 'none'
+
+/**
+ * Put the cursor on the next (1) or previous (-1) line of one of `levels`, going round the end of the
+ * log. 'wrapped' when it went past the end, 'none' when the log has no other such line.
+ */
+export function jumpToLevel(view: EditorView, direction: 1 | -1, levels: ReadonlySet<JumpLevel> = PROBLEM_LEVELS): JumpOutcome {
   const doc = view.state.doc
   const current = doc.lineAt(view.state.selection.main.head).number
-  for (let number = current + direction; number >= 1 && number <= doc.lines; number += direction) {
-    const line = doc.line(number)
-    if (classifyLine(line.text) !== 'error') continue
-    view.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) })
-    return true
-  }
-  return false
+  const hit = findLevelLine(doc.lines, (number) => doc.line(number).text, current, direction, levels)
+  if (!hit) return 'none'
+  const line = doc.line(hit.line)
+  view.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) })
+  return hit.wrapped ? 'wrapped' : 'found'
 }
 
-/** Colours, and F8 / Shift+F8 between errors. `onJump(false)` when there is no error that way. */
-export function logExtensions(onJump: (found: boolean) => void): Extension[] {
+/** Colours, and F8 / Shift+F8 between error and warning lines. */
+export function logExtensions(onJump: (outcome: JumpOutcome) => void): Extension[] {
   return [
     levelColours,
     levelTheme,
     keymap.of([
-      { key: 'F8', run: (view) => { onJump(jumpToError(view, 1)); return true }, preventDefault: true },
-      { key: 'Shift-F8', run: (view) => { onJump(jumpToError(view, -1)); return true }, preventDefault: true }
+      { key: 'F8', run: (view) => { onJump(jumpToLevel(view, 1)); return true }, preventDefault: true },
+      { key: 'Shift-F8', run: (view) => { onJump(jumpToLevel(view, -1)); return true }, preventDefault: true }
     ])
   ]
 }

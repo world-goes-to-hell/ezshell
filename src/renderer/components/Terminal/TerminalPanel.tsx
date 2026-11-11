@@ -13,11 +13,14 @@ import { RiFolderFill, RiUploadCloud2Fill, RiSplitCellsHorizontal, RiSplitCellsV
 import { motion, AnimatePresence } from 'framer-motion'
 import { drawerVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
+import { clampExplorerWidth, loadExplorerWidth, saveExplorerWidth, FILE_EXPLORER_DEFAULT_WIDTH } from '../../lib/fileExplorerWidth'
 import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
 import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory'
 import { insertIntoSession } from '../../lib/terminalInputTargets'
 import { CommandHistoryPanel } from './CommandHistoryPanel'
 import { ConnectionLostOverlay } from './ConnectionLostOverlay'
+import { useTerminalContextMenu } from './useTerminalContextMenu'
+import { registerTerminalPane } from '../../lib/terminalPanes'
 import 'xterm/css/xterm.css'
 import { SerializeAddon } from 'xterm-addon-serialize'
 import { registerTerminalSerializer, setPendingSnapshot, takePendingSnapshot, SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
@@ -39,6 +42,9 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
   const isInitialized = useRef(false)
 
   const [showFileExplorer, setShowFileExplorer] = useState(false)
+  const [explorerWidth, setExplorerWidth] = useState(loadExplorerWidth)
+  const [isExplorerResizing, setIsExplorerResizing] = useState(false)
+  const terminalBodyRef = useRef<HTMLDivElement>(null)
   const [isDragOver, setIsDragOver] = useState(false)
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
@@ -69,6 +75,14 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
   const isMultiSplit = isSplit && splitDirection !== 'horizontal' && splitDirection !== 'vertical'
   const fontSize = useTerminalStore(state => state.fontSize)
   const fontFamily = useTerminalStore(state => state.fontFamily)
+
+  const { onContextMenu: handleTerminalContextMenu, contextMenu: terminalContextMenu } = useTerminalContextMenu({
+    sessionId,
+    isFileExplorerOpen: showFileExplorer,
+    onToggleFileExplorer: () => setShowFileExplorer(isShown => !isShown),
+    onOpenSearch: () => setIsSearchOpen(true),
+    onCloseSession: onClose
+  })
 
   // Helper: fit terminal with 1 empty line at bottom for readability
   const fitTerminalWithMargin = useCallback(() => {
@@ -101,6 +115,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
     let detachCommandHistory: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let unregisterSerializer: (() => void) | null = null
+    let unregisterPane: (() => void) | null = null
     let serializeScreen: (() => string) | null = null
     let disposed = false
     const pendingData: string[] = []
@@ -223,6 +238,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       unregisterSerializer = registerTerminalSerializer(sessionId, serializeScreen)
 
       term.open(terminalRef.current)
+      unregisterPane = registerTerminalPane(terminalRef.current, term)
       disableCopyOnSelect = enableCopyOnSelect(term)
       detachCommandHistory = commandHistory.attach(term)
       terminalInstance.current = term
@@ -402,6 +418,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
         }
       }
       unregisterSerializer?.()
+      unregisterPane?.()
       if (term) {
         term.dispose()
       }
@@ -495,6 +512,52 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       }, 100)
     }
   }, [showFileExplorer, sessionId])
+
+  // File explorer width: drag the right edge, double-click to reset
+  const handleExplorerResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    const handle = e.currentTarget
+    const body = terminalBodyRef.current
+    if (!body) return
+    handle.setPointerCapture(e.pointerId)
+    setIsExplorerResizing(true)
+    const left = body.getBoundingClientRect().left
+    let latest = explorerWidth
+
+    const onMove = (ev: PointerEvent) => {
+      latest = clampExplorerWidth(ev.clientX - left, body.clientWidth)
+      setExplorerWidth(latest)
+    }
+    const onEnd = () => {
+      handle.removeEventListener('pointermove', onMove)
+      handle.removeEventListener('pointerup', onEnd)
+      handle.removeEventListener('pointercancel', onEnd)
+      setIsExplorerResizing(false)
+      saveExplorerWidth(latest)
+    }
+    handle.addEventListener('pointermove', onMove)
+    handle.addEventListener('pointerup', onEnd)
+    handle.addEventListener('pointercancel', onEnd)
+  }, [explorerWidth])
+
+  const handleExplorerResizeReset = useCallback(() => {
+    setExplorerWidth(FILE_EXPLORER_DEFAULT_WIDTH)
+    saveExplorerWidth(FILE_EXPLORER_DEFAULT_WIDTH)
+  }, [])
+
+  const handleExplorerResizeKey = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    e.preventDefault()
+    const step = e.shiftKey ? 40 : 10
+    const next = clampExplorerWidth(
+      explorerWidth + (e.key === 'ArrowRight' ? step : -step),
+      terminalBodyRef.current?.clientWidth
+    )
+    setExplorerWidth(next)
+    saveExplorerWidth(next)
+  }, [explorerWidth])
 
   // Drag and drop handlers - only for file uploads, not tab drags
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -711,16 +774,30 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
           <button className="terminal-close" onClick={(e) => { e.stopPropagation(); onClose(); }}>×</button>
         </div>
       </div>
-      <div className={`terminal-body ${isSplit ? `split-${splitDirection}` : ''}${isDisconnected ? ' is-disconnected' : ''}`}>
+      <div ref={terminalBodyRef} className={`terminal-body ${isSplit ? `split-${splitDirection}` : ''}${isDisconnected ? ' is-disconnected' : ''}${isExplorerResizing ? ' is-explorer-resizing' : ''}`}>
         <AnimatePresence>
           {showFileExplorer && (
             <motion.div
+              className="file-explorer-drawer"
               variants={reducedMotion ? undefined : drawerVariants}
+              custom={{ width: explorerWidth, instant: isExplorerResizing }}
               initial="hidden"
               animate="visible"
               exit="exit"
-              style={{ overflow: 'hidden' }}
+              style={{ width: explorerWidth }}
             >
+              <div
+                className={`file-explorer-resize-handle${isExplorerResizing ? ' is-active' : ''}`}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="파일 탐색기 너비 조정"
+                aria-valuenow={explorerWidth}
+                tabIndex={0}
+                title="끌어서 너비 조정 (두 번 누르면 기본 너비)"
+                onPointerDown={handleExplorerResizeStart}
+                onDoubleClick={handleExplorerResizeReset}
+                onKeyDown={handleExplorerResizeKey}
+              />
               <FileExplorer
                 sessionId={sessionId}
                 onFileSelect={(path) => {
@@ -736,6 +813,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
         <div
           ref={splitContainerRef}
           className="terminal-split-container"
+          onContextMenu={handleTerminalContextMenu}
           style={isMultiSplit ? {
             gridTemplateColumns: `${gridColRatio}fr 6px ${1 - gridColRatio}fr`,
             gridTemplateRows: `${gridRowRatio}fr 6px ${1 - gridRowRatio}fr`
@@ -929,6 +1007,8 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
           {uploadStatus}
         </div>
       )}
+
+      {terminalContextMenu}
 
       {/* Terminal search */}
       <TerminalSearch

@@ -150,6 +150,15 @@ export interface RemoteFileBackup {
   size: number
 }
 
+/** A backup someone left next to the file on the server ("compose.yaml.bak_20261020_1516") */
+export interface RemoteServerBackup {
+  name: string
+  size: number
+  /** From the date in the name ('name'), otherwise the file's modification time ('modified') */
+  time: number
+  timeFrom: 'name' | 'modified'
+}
+
 /** Question from main about an SSH host key that is not saved yet ('unknown') or differs from the saved one ('changed') */
 export interface HostKeyPrompt {
   id: string
@@ -401,6 +410,8 @@ declare global {
       remoteFileSave?: (docId: string, content: string, token: string) => Promise<RemoteFileResult<RemoteFileSaveResult>>
       remoteFileBackups?: (docId: string) => Promise<RemoteFileResult<{ folder: string; backups: RemoteFileBackup[] }>>
       remoteFileReadBackup?: (docId: string, name: string) => Promise<RemoteFileResult<{ content: string }>>
+      remoteFileServerBackups?: (docId: string) => Promise<RemoteFileResult<{ backups: RemoteServerBackup[] }>>
+      remoteFileReadServerBackup?: (docId: string, name: string) => Promise<RemoteFileResult<{ content: string }>>
       remoteFileOpenBackupFolder?: (docId: string) => Promise<RemoteFileResult<object>>
       remoteFileSetDirty?: (docId: string, isDirty: boolean) => void
       remoteFileClose?: (docId: string) => Promise<RemoteFileResult<object>>

@@ -226,7 +226,7 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
                   <RiDeleteBinLine size={14} aria-hidden="true" /> 삭제
                 </button>
               )}
-              <button type="button" className="btn-secondary modal-btn" onClick={() => void runTest()} disabled={isBusy}>
+              <button type="button" className="btn-secondary modal-btn db-connect-test" onClick={() => void runTest()} disabled={isBusy}>
                 {busy === 'test' ? <RiLoader4Line className="spinning" size={14} aria-hidden="true" /> : <RiPlugLine size={14} aria-hidden="true" />} 연결 테스트
               </button>
               <span className="db-connect-spacer" />

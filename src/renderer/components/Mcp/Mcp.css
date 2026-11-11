@@ -554,3 +554,27 @@
   color: var(--text-muted);
   font-style: italic;
 }
+
+/* "원문 보기" next to the 명령 label */
+.mcp-approval-raw-toggle {
+  margin-left: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.mcp-approval-raw-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Laid-out commands are longer: more room before scrolling */
+.mcp-approval-command.sh-code {
+  max-height: 260px;
+  font-weight: 400;
+}

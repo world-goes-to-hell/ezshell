@@ -15,9 +15,11 @@ export const ENGINE_NAMES: Record<DbEngine, string> = {
 export interface DbGroup {
   key: string
   endpoint: DbEndpoint
-  /** "MySQL", "PostgreSQL" ... */
+  /** The user's alias, or "MySQL", "PostgreSQL" ... */
   label: string
-  /** "127.0.0.1:3306 · 서버 안에서만 열림" */
+  /** Name the user gave this database server, if any */
+  alias?: string
+  /** "127.0.0.1:3306 · 서버 안에서만 열림"; with an alias the engine name moves here ("PostgreSQL · 127.0.0.1:5432") */
   detail: string
   isSupported: boolean
   /** A port alone may be something else: shown as a guess */
@@ -39,11 +41,36 @@ export function endpointKey(endpoint: DbEndpoint): string {
   return `${endpoint.engine}|${hostKey(endpoint.host)}|${endpoint.port}`
 }
 
+/** Aliases of database servers, kept with the session and keyed by endpointKey */
+export type DbAliases = Record<string, string>
+
+export const ALIAS_MAX_LENGTH = 40
+
+/** One line, single spaces, at most ALIAS_MAX_LENGTH characters; '' means no alias */
+export function normalizeAlias(raw: string): string {
+  return Array.from(raw.replace(/\s+/g, ' ').trim()).slice(0, ALIAS_MAX_LENGTH).join('').trim()
+}
+
+/** Sets (or, for an empty alias, removes) one alias without changing the given map */
+export function withAlias(aliases: DbAliases | undefined, key: string, raw: string): DbAliases {
+  const { [key]: _previous, ...rest } = aliases ?? {}
+  const alias = normalizeAlias(raw)
+  return alias ? { ...rest, [key]: alias } : rest
+}
+
+/** Puts the alias in front; the found or engine name then goes to the detail line */
+function applyAlias(group: DbGroup, aliases: DbAliases | undefined): DbGroup {
+  const alias = aliases?.[group.key]
+  if (!alias) return group
+  return { ...group, alias, label: alias, detail: `${group.label} · ${group.detail}` }
+}
+
 /**
  * Database servers of the tab: those with saved accounts first (in the order they were saved), then
- * the ones found on the server without an account yet. A found server keeps its found label.
+ * the ones found on the server without an account yet. A found server keeps its found label unless
+ * the user gave it an alias.
  */
-export function buildGroups(found: DiscoveredDb[], saved: SavedDbConnection[]): DbGroup[] {
+export function buildGroups(found: DiscoveredDb[], saved: SavedDbConnection[], aliases?: DbAliases): DbGroup[] {
   const foundByKey = new Map(found.map(db => [endpointKey(db), db]))
   const groups = new Map<string, DbGroup>()
   for (const account of saved) {
@@ -77,7 +104,7 @@ export function buildGroups(found: DiscoveredDb[], saved: SavedDbConnection[]): 
       accounts: []
     })
   }
-  return [...groups.values()]
+  return [...groups.values()].map(group => applyAlias(group, aliases))
 }
 
 /**

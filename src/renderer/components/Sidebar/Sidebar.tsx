@@ -1,14 +1,16 @@
 import { useMemo, useState } from 'react'
-import { RiAddFill, RiFolderFill, RiMenuFoldFill, RiMenuUnfoldFill, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill } from 'react-icons/ri'
+import { RiAddFill, RiFolderFill, RiArrowLeftDoubleLine, RiArrowRightDoubleLine, RiPushpinLine, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill, RiListUnordered } from 'react-icons/ri'
 import { motion } from 'framer-motion'
 import { SessionList } from './SessionList'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useTerminalStore } from '../../stores/terminalStore'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { SPRINGS } from '../../lib/animation/config'
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
-import './SidebarCompact.css'
+import { useSidebarPeek } from '../../hooks/useSidebarPeek'
+import './SidebarTree.css'
 
 const TOGGLE_SHORTCUT_ID = 'toggle-sidebar'
 
@@ -26,12 +28,25 @@ interface SidebarProps {
 export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onStatsClick, onBatchClick }: SidebarProps) {
   const { sidebarMode, toggleSidebarMode, setSidebarMode } = useUIStore()
   const { addFolder, saveToBackend } = useSessionStore()
-  const isCompact = sidebarMode === 'compact'
+  // Folded: a narrow rail of status dots that opens over the terminal while the pointer is on it
+  const isFolded = sidebarMode === 'compact'
+  const { sidebarRef, isPeekOpen, peekHandlers } = useSidebarPeek(isFolded)
+  // The rail shows the small buttons; the open sidebar (pinned or peeking) shows everything
+  const isCompact = isFolded && !isPeekOpen
+  // The rail shows how many SSH tabs are connected instead of rows it cannot label
+  const connectedTabs = useTerminalStore(state => {
+    let count = 0
+    state.terminals.forEach(t => { if (t.connected && !t.db) count++ })
+    return count
+  })
   const [isAddingFolder, setIsAddingFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const reducedMotion = useReducedMotion()
   const toggleShortcut = useShortcutsStore(state => state.formatKeys(state.getEffectiveKeys(TOGGLE_SHORTCUT_ID)))
-  const toggleTitle = `${isCompact ? '사이드바 펼치기' : '사이드바 접기'} (${toggleShortcut})`
+  const toggleTitle = `${isFolded ? '사이드바 펼쳐 두기' : '사이드바 접기'} (${toggleShortcut})`
+  // One shape per state. The old pair was a mirrored icon that was also turned 180 degrees when
+  // folded, which made both states look the same.
+  const ToggleIcon = !isFolded ? RiArrowLeftDoubleLine : isPeekOpen ? RiPushpinLine : RiArrowRightDoubleLine
 
   // Stable handlers so the keydown listener is not re-attached on every render
   const shortcutHandlers = useMemo(() => ({ toggleSidebar: toggleSidebarMode }), [toggleSidebarMode])
@@ -68,10 +83,13 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
 
   return (
     <aside
-      className={`sidebar ${isCompact ? 'compact' : ''}`}
+      ref={sidebarRef}
+      className={`sidebar ${isFolded ? 'rail' : ''} ${isPeekOpen ? 'peek-open' : ''}`}
       role="navigation"
       aria-label="SSH session navigation"
+      {...peekHandlers}
     >
+      <div className="sidebar-panel">
       <div className="sidebar-header">
         {!isCompact && <h2>연결 목록</h2>}
         <motion.button
@@ -82,12 +100,7 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
           whileHover={reducedMotion ? undefined : { scale: 1.05 }}
           whileTap={reducedMotion ? undefined : { scale: 0.95 }}
         >
-          <motion.div
-            animate={{ rotate: isCompact ? 180 : 0 }}
-            transition={reducedMotion ? { duration: 0 } : SPRINGS.snappy}
-          >
-            {isCompact ? <RiMenuUnfoldFill size={18} /> : <RiMenuFoldFill size={18} />}
-          </motion.div>
+          <ToggleIcon size={18} />
         </motion.button>
       </div>
       {!isCompact && (
@@ -138,7 +151,15 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
           </button>
         </div>
       )}
-      <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} isCompact={isCompact} />
+      {isFolded && (
+        // Stands in for the list on the folded rail; pointing at the rail opens the whole sidebar
+        <div className="rail-session-summary" aria-hidden="true" title={connectedTabs > 0 ? `세션 · 연결된 탭 ${connectedTabs}개` : '세션'}>
+          <RiListUnordered size={16} />
+          <span className="rail-session-label">세션</span>
+          {connectedTabs > 0 && <span className="rail-session-count">{connectedTabs}</span>}
+        </div>
+      )}
+      <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} />
       {(onBatchClick || onStatsClick) && (
         <div className="sidebar-footer">
           {onBatchClick && (
@@ -153,6 +174,7 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
           )}
         </div>
       )}
+      </div>
     </aside>
   )
 }

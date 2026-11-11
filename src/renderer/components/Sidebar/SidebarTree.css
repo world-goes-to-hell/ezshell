@@ -1,0 +1,323 @@
+/* Sidebar session tree.
+   Open: colour is one thin line (a folder's down its left side, a session's own next to its row),
+   folders and sessions differ by type, and a state dot stands where every row had the same icon.
+   Folded (.rail): a narrow strip of dots; the whole sidebar opens over the terminal while the
+   pointer is on it (.peek-open, useSidebarPeek). */
+
+.sidebar-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-secondary);
+}
+
+.sidebar .session-list {
+  padding: 6px;
+}
+
+/* ---- Folders ---- */
+
+.sidebar .session-folder {
+  margin-bottom: 0;
+}
+
+.sidebar .session-folder.is-top {
+  margin-top: 6px;
+}
+
+.sidebar .session-folder.is-top:first-child {
+  margin-top: 0;
+}
+
+.sidebar .session-folder.has-own-color {
+  box-shadow: inset 2px 0 0 var(--folder-color);
+}
+
+.sidebar .folder-header {
+  gap: 4px;
+  height: 28px;
+  padding: 0 8px 0 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.sidebar .session-folder.is-top > .folder-header {
+  color: var(--text-secondary);
+}
+
+.sidebar .folder-header:hover {
+  color: var(--text-primary);
+}
+
+.folder-chevron {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.folder-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-count {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar .folder-contents {
+  padding-left: 12px;
+}
+
+/* ---- Sessions ---- */
+
+.sidebar .session-item {
+  position: relative;
+  gap: 6px;
+  height: 30px;
+  padding: 0 6px 0 8px;
+  font-size: 13px;
+}
+
+.sidebar .session-item.active {
+  color: var(--text-primary);
+}
+
+/* A session with a colour of its own: a short line of it */
+.sidebar .session-item.has-own-color::before {
+  content: '';
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--session-color);
+}
+
+.sidebar .session-item-icon {
+  flex-shrink: 0;
+  justify-content: center;
+  width: 16px;
+  color: var(--text-muted);
+}
+
+.session-dot {
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 50%;
+  opacity: 0.7;
+}
+
+.session-item.active .session-dot {
+  border-color: var(--success);
+  background: var(--success);
+  opacity: 1;
+}
+
+.session-item.has-lost .session-dot {
+  border-color: var(--error);
+  background: var(--error);
+  opacity: 1;
+}
+
+.sidebar .session-name {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Marks without boxes ---- */
+
+.sidebar .session-mcp-mark {
+  width: 14px;
+  height: 14px;
+  background: none;
+  opacity: 0.85;
+}
+
+.sidebar .session-tab-badge {
+  gap: 4px;
+  min-width: 0;
+  padding: 0 4px;
+  border: none;
+  background: none;
+}
+
+.sidebar .session-tab-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--badge-color);
+}
+
+.sidebar .session-tab-badge:hover,
+.sidebar .session-tab-badge[data-state="open"] {
+  background: color-mix(in srgb, var(--badge-color) 26%, transparent);
+}
+
+/* ---- Folded: the rail ---- */
+
+.sidebar.rail {
+  position: relative;
+  z-index: 90; /* over the terminal, under the MCP panel (95) and dialogs (100) */
+  width: 46px;
+  overflow: visible;
+}
+
+.sidebar.rail .sidebar-panel {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  flex: none;
+  width: 46px;
+  overflow: hidden;
+  transition: width 0.16s ease, box-shadow 0.16s ease;
+}
+
+.sidebar.rail.peek-open .sidebar-panel {
+  width: 280px;
+  border-right: 1px solid var(--border);
+  box-shadow: 8px 0 24px rgba(0, 0, 0, 0.28);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar.rail .sidebar-panel {
+    transition: none;
+  }
+}
+
+/* The strip itself: the buttons and a "세션" marker. The tree is not drawn there: unlabelled
+   arrows and dots said nothing, and pointing at the rail opens the whole sidebar anyway. */
+.rail-session-summary {
+  display: none;
+}
+
+.sidebar.rail:not(.peek-open) .rail-session-summary {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-height: 0;
+  padding: 14px 0;
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.rail-session-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  writing-mode: vertical-rl;
+}
+
+.rail-session-count {
+  min-width: 18px;
+  padding: 1px 5px;
+  border: 1px solid var(--success);
+  border-radius: 999px;
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+}
+
+.sidebar.rail:not(.peek-open) .session-list {
+  display: none;
+}
+
+.sidebar.rail:not(.peek-open) .sidebar-header {
+  justify-content: center;
+  padding: 10px 0;
+}
+
+.sidebar.rail:not(.peek-open) .sidebar-actions {
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.btn-new-connection-compact,
+.btn-compact-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.btn-new-connection-compact {
+  background: var(--accent-alpha);
+  color: var(--accent);
+}
+
+.btn-new-connection-compact:hover,
+.btn-compact-action:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sidebar.rail:not(.peek-open) .session-list {
+  padding: 6px 0;
+  scrollbar-width: none;
+}
+
+.sidebar.rail:not(.peek-open) .session-list::-webkit-scrollbar {
+  display: none;
+}
+
+.sidebar.rail:not(.peek-open) .folder-contents {
+  padding-left: 0;
+}
+
+.sidebar.rail:not(.peek-open) .folder-header {
+  justify-content: center;
+  height: 18px;
+  padding: 0;
+}
+
+.sidebar.rail:not(.peek-open) .session-item {
+  justify-content: center;
+  height: 22px;
+  padding: 0;
+  border-radius: 0;
+}
+
+.sidebar.rail:not(.peek-open) .session-name,
+.sidebar.rail:not(.peek-open) .session-mcp-mark,
+.sidebar.rail:not(.peek-open) .session-tab-badges,
+.sidebar.rail:not(.peek-open) .folder-name,
+.sidebar.rail:not(.peek-open) .folder-count,
+.sidebar.rail:not(.peek-open) .folder-edit-input,
+.sidebar.rail:not(.peek-open) .folder-empty-drop-zone,
+.sidebar.rail:not(.peek-open) .session-list-empty {
+  display: none;
+}
+
+.sidebar.rail:not(.peek-open) .sidebar-footer {
+  flex-direction: column;
+  padding: 8px;
+}

@@ -74,6 +74,8 @@ function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLock
   ipcMain.handle('remote-file-save', answer((senderId, { docId, content, token }) => docs.save(senderId, docId, content, token)))
   ipcMain.handle('remote-file-backups', answer((senderId, { docId }) => docs.listBackups(senderId, docId)))
   ipcMain.handle('remote-file-read-backup', answer((senderId, { docId, name }) => docs.readBackup(senderId, docId, name)))
+  ipcMain.handle('remote-file-server-backups', answer((senderId, { docId }) => docs.listServerBackups(senderId, docId)))
+  ipcMain.handle('remote-file-read-server-backup', answer((senderId, { docId, name }) => docs.readServerBackup(senderId, docId, name)))
   ipcMain.handle('remote-file-open-backup-folder', answer(async (senderId, { docId }) => {
     await openFolder(docs.backupFolder(senderId, docId))
     return {}

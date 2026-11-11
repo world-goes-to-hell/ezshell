@@ -6,7 +6,6 @@ import { SessionTooltip } from './SessionTooltip'
 import { SessionTabBadge } from './SessionTabBadge'
 import type { DropPosition } from '../../lib/sessionOrder'
 import type { SessionTabGroup } from '../../lib/sessionTabs'
-import { getAbbreviation } from '../../lib/sessionAbbreviation'
 import './SessionMcpMark.css'
 
 const MCP_MARK_LABEL = 'Claude Code(MCP) 접근 허용됨'
@@ -36,69 +35,56 @@ interface SessionItemProps {
   /** Where a dropped session would land relative to this one, shown as a line */
   dropIndicator?: DropPosition | null
   isDragging: boolean
-  isCompact: boolean
-  reducedMotion: boolean
   /** Tabs currently open from this session; absent when there are none */
   tabs?: SessionTabGroup
-  effectiveColor?: string
 }
 
 const DEFAULT_ICON: SessionIcon = 'server'
 
-/** Session and folder colors go through a CSS variable in the icon-only sidebar so hover rules still apply */
+/** A session's own color goes through a CSS variable so hover rules still apply */
 type ColorStyle = React.CSSProperties & { '--session-color'?: string }
 
-function getItemStyle(color: string | undefined, isActive: boolean, isCompact: boolean): ColorStyle | undefined {
+function getItemStyle(color: string | undefined): ColorStyle | undefined {
   if (!color) return undefined
-  if (isCompact) return { '--session-color': color }
-  return {
-    borderLeft: `3px solid ${color}`,
-    background: `${color}${isActive ? '30' : '20'}`
-  }
+  // Rows carry no fill: the folder's line shows the colour, and a session with a colour of its own
+  // gets a short line of it (SidebarTree.css)
+  return { '--session-color': color }
 }
 
 export function SessionItem({
   session, onConnect, onContextMenu, onDragStart, onDragEnd, onItemDragOver, onItemDragLeave, onItemDrop,
-  dropIndicator, isDragging, isCompact, reducedMotion, tabs, effectiveColor
+  dropIndicator, isDragging, tabs
 }: SessionItemProps) {
   const isActive = (tabs?.connected.length ?? 0) > 0
   const tabBadges = tabs && (
-    // Focus moving to a badge or into its tab list (a portal, still a React child) must not reach the row:
-    // the icon-only sidebar would open the session hover card on top of the list
+    // Focus moving to a badge or into its tab list (a portal, still a React child) must not reach the row
     <div className="session-tab-badges" onFocus={(e) => e.stopPropagation()}>
       <SessionTabBadge status="connected" tabs={tabs.connected} />
       <SessionTabBadge status="disconnected" tabs={tabs.disconnected} />
     </div>
   )
-  // The icon-only sidebar says it in the hover card instead of a native title, which would open on top of it
+  // The hover card says it instead of a native title, which would open on top of the card
   const mcpMark = session.mcpEnabled === true && (
-    <span
-      className="session-mcp-mark"
-      title={isCompact ? undefined : MCP_MARK_LABEL}
-      role={isCompact ? undefined : 'img'}
-      aria-label={isCompact ? undefined : MCP_MARK_LABEL}
-      aria-hidden={isCompact || undefined}
-    >
-      <RiPlugLine size={isCompact ? 10 : 12} />
+    <span className="session-mcp-mark" role="img" aria-label={MCP_MARK_LABEL}>
+      <RiPlugLine size={12} />
     </span>
   )
   const iconId = (session.icon as SessionIcon) || DEFAULT_ICON
   const IconComponent = ICON_MAP[iconId] || RiServerFill
   const displayName = session.name || session.host
-  // Every session shares the default icon, so the icon-only sidebar shows a short label instead
-  const showAbbreviation = isCompact && iconId === DEFAULT_ICON
 
   const classNames = [
     'session-item',
     isDragging && 'dragging',
     isActive && 'active',
-    isActive && effectiveColor && 'active-custom-color',
-    effectiveColor && 'has-color',
+    // Only lost tabs: the state dot turns red
+    !isActive && (tabs?.disconnected.length ?? 0) > 0 && 'has-lost',
+    session.backgroundColor && 'has-own-color',
     dropIndicator && `drop-${dropIndicator}`
   ].filter(Boolean).join(' ')
 
   return (
-    <SessionTooltip session={session} tabs={tabs} enabled={isCompact}>
+    <SessionTooltip session={session} tabs={tabs} compact={false}>
       <motion.div
         className={classNames}
         role="treeitem"
@@ -115,24 +101,17 @@ export function SessionItem({
         onDragOver={(e) => onItemDragOver(e, session.id)}
         onDragLeave={(e) => onItemDragLeave(e, session.id)}
         onDrop={(e) => onItemDrop(e, session.id)}
-        // Sliding sideways would push the icon-only column into horizontal overflow
-        whileHover={reducedMotion || isCompact ? undefined : { x: 4 }}
-        transition={{ duration: 0.15 }}
-        style={getItemStyle(effectiveColor, isActive, isCompact)}
+        style={getItemStyle(session.backgroundColor)}
       >
         <div className="session-item-icon">
-          {showAbbreviation
-            ? <span className="session-abbr" aria-hidden="true">{getAbbreviation(displayName)}</span>
-            : <IconComponent size={isCompact ? 18 : 16} />}
-          {/* Icon-only sidebar: the badges sit on the tile corners */}
-          {isCompact && tabBadges}
-          {isCompact && mcpMark}
+          {/* Every session shares the default icon, so a state dot says more: green while a tab is connected */}
+          {iconId === DEFAULT_ICON
+            ? <span className="session-dot" aria-hidden="true" />
+            : <IconComponent size={14} />}
         </div>
-        {!isCompact && (
-          <span className="session-name">{displayName}</span>
-        )}
-        {!isCompact && mcpMark}
-        {!isCompact && tabBadges}
+        <span className="session-name">{displayName}</span>
+        {mcpMark}
+        {tabBadges}
       </motion.div>
     </SessionTooltip>
   )

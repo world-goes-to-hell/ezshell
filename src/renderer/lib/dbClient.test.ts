@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildGroups, accountTitle, upsertSavedConnection, removeSavedConnection, endpointProblem, endpointKey } from './dbChoices'
+import { buildGroups, accountTitle, upsertSavedConnection, removeSavedConnection, endpointProblem, endpointKey, normalizeAlias, withAlias, ALIAS_MAX_LENGTH } from './dbChoices'
 import { splitStatements, statementAt, quoteIdentifier, previewQuery } from './sqlStatements'
 import type { DiscoveredDb, SavedDbConnection } from '../types/db'
 
@@ -29,6 +29,37 @@ describe('buildGroups', () => {
   it('names an account by its label, or user and database', () => {
     expect(accountTitle(SAVED)).toBe('reader/shop')
     expect(accountTitle({ ...SAVED, label: 'MBRIS 조회용' })).toBe('MBRIS 조회용 (reader/shop)')
+  })
+})
+
+describe('database aliases', () => {
+  it('shows the alias as the title and keeps the engine in the detail', () => {
+    const aliases = { [endpointKey(FOUND[1])]: 'MBRIS 운영 DB' }
+    const groups = buildGroups(FOUND, [], aliases)
+    expect(groups[1]).toMatchObject({ label: 'MBRIS 운영 DB', alias: 'MBRIS 운영 DB', detail: 'PostgreSQL · 127.0.0.1:5432' })
+    expect(groups[0].label).toBe('MySQL')
+    expect(groups[0].alias).toBeUndefined()
+  })
+
+  it('finds the alias whatever the loopback spelling of a saved account', () => {
+    const aliases = { [endpointKey(FOUND[0])]: '쇼핑몰' }
+    expect(buildGroups([], [SAVED], aliases)[0]).toMatchObject({ label: '쇼핑몰', detail: 'MySQL/MariaDB · localhost:3306' })
+  })
+
+  it('cleans up what the user typed', () => {
+    expect(normalizeAlias('  운영   DB \n')).toBe('운영 DB')
+    expect(normalizeAlias('   ')).toBe('')
+    expect(normalizeAlias('가'.repeat(80))).toHaveLength(ALIAS_MAX_LENGTH)
+  })
+
+  it('sets and clears an alias without changing the given map', () => {
+    const key = endpointKey(FOUND[1])
+    const before = { other: '다른 DB' }
+    const after = withAlias(before, key, ' 운영 DB ')
+    expect(after).toEqual({ other: '다른 DB', [key]: '운영 DB' })
+    expect(before).toEqual({ other: '다른 DB' })
+    expect(withAlias(after, key, '  ')).toEqual({ other: '다른 DB' })
+    expect(withAlias(undefined, key, '운영')).toEqual({ [key]: '운영' })
   })
 })
 

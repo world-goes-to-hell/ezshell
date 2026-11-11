@@ -2529,10 +2529,55 @@ textarea {
 }
 
 /* ===== File Explorer ===== */
+/* The drawer owns the width (TerminalPanel, lib/fileExplorerWidth.ts); the explorer fills it */
+.file-explorer-drawer {
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.file-explorer-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 5;
+  touch-action: none;
+}
+
+.file-explorer-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 2px;
+  background: transparent;
+  transition: background var(--transition-fast);
+}
+
+.file-explorer-resize-handle:hover::after,
+.file-explorer-resize-handle:focus-visible::after,
+.file-explorer-resize-handle.is-active::after {
+  background: var(--accent);
+}
+
+.file-explorer-resize-handle:focus-visible {
+  outline: none;
+}
+
+/* While dragging, keep the col-resize cursor over the shell and don't select text */
+.terminal-body.is-explorer-resizing,
+.terminal-body.is-explorer-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
 .file-explorer {
-  width: 220px;
-  min-width: 180px;
-  max-width: 300px;
+  width: 100%;
+  min-width: 160px;
   /* Fill the terminal height even when the tree has only a few entries */
   height: 100%;
   max-height: 100%;

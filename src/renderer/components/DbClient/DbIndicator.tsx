@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { RiAddLine, RiDatabase2Line, RiCheckLine, RiKey2Line, RiUserAddLine } from 'react-icons/ri'
+import { RiAddLine, RiDatabase2Line, RiCheckLine, RiKey2Line, RiUserAddLine, RiPencilLine } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { accountTitle, buildGroups, type DbGroup } from '../../lib/dbChoices'
 import { DbConnectDialog, type DbConnectTarget } from './DbConnectDialog'
+import { DbAliasDialog, type DbAliasTarget } from './DbAliasDialog'
 import type { DiscoveredDb, SavedDbConnection } from '../../types/db'
 import './DbClient.css'
 
@@ -43,6 +44,7 @@ export function DbIndicator() {
   const [foundBySession, setFoundBySession] = useState<Record<string, DiscoveredDb[]>>({})
   const [isAuto, setIsAuto] = useState(readAuto)
   const [target, setTarget] = useState<DbConnectTarget | null>(null)
+  const [aliasTarget, setAliasTarget] = useState<DbAliasTarget | null>(null)
   const isConnected = terminal?.connected === true
 
   const discover = (sessionId: string): void => {
@@ -56,7 +58,10 @@ export function DbIndicator() {
   }, [activeId, isConnected, isAuto])
 
   const found = activeId ? foundBySession[activeId] : undefined
-  const groups = useMemo(() => buildGroups(found ?? [], savedSession?.dbConnections ?? []), [found, savedSession?.dbConnections])
+  const groups = useMemo(
+    () => buildGroups(found ?? [], savedSession?.dbConnections ?? [], savedSession?.dbAliases),
+    [found, savedSession?.dbConnections, savedSession?.dbAliases]
+  )
 
   if (!activeId || !terminal || !isConnected || typeof window.electronAPI.dbDiscover !== 'function') return null
 
@@ -97,7 +102,18 @@ export function DbIndicator() {
                     {group.isGuess && <span className="db-menu-tag">추정</span>}
                     {!group.isSupported && <span className="db-menu-tag">지원 예정</span>}
                   </span>
-                  <span className="db-menu-detail">{group.detail}</span>
+                  <span className="db-menu-detail" title={group.detail}>{group.detail}</span>
+                  {/* Aliases are saved with the sidebar session; quick connects have nowhere to keep one */}
+                  {savedSession && (
+                    <DropdownMenu.Item
+                      className="db-menu-alias-btn"
+                      aria-label={group.alias ? `${group.alias} 별칭 바꾸기` : `${group.label} ${group.detail} 에 별칭 붙이기`}
+                      title={group.alias ? '별칭 바꾸기' : '별칭 붙이기'}
+                      onSelect={() => setAliasTarget({ savedSessionId: savedSession.id, group })}
+                    >
+                      <RiPencilLine size={12} aria-hidden="true" />
+                    </DropdownMenu.Item>
+                  )}
                 </div>
                 {group.accounts.map(account => (
                   <DropdownMenu.Item key={account.id} className="db-menu-item is-account" disabled={!group.isSupported} onSelect={() => pick(group, account)}>
@@ -135,6 +151,7 @@ export function DbIndicator() {
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
       {target && <DbConnectDialog target={target} onClose={() => setTarget(null)} />}
+      {aliasTarget && <DbAliasDialog target={aliasTarget} onClose={() => setAliasTarget(null)} />}
     </>
   )
 }

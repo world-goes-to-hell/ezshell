@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatShellCommand, formattedText, highlightCodeLine } from './shellFormat'
+import { formatShellCommand, formattedText, highlightCodeLine, isFaithfulLayout } from './shellFormat'
 
 /** Lines as plain text, with two spaces per indent level */
 const text = (command: string) => formattedText(formatShellCommand(command)).split('\n')
@@ -109,5 +109,24 @@ describe('highlightCodeLine', () => {
 
   it('treats an unclosed quote as a string to the end of the line', () => {
     expect(highlightCodeLine("x = 'abc").map(token => [token.kind, token.text])).toEqual([['text', 'x = '], ['string', "'abc"]])
+  })
+})
+
+describe('isFaithfulLayout (approval dialog safety check)', () => {
+  it('holds for laid-out commands: only line breaks and indents were added', () => {
+    const commands = [
+      "echo a; docker exec app sh -c 'ls | tail -4' | sed 's/x/y/' && echo done",
+      "cd /x && python3 - <<'EOF'\nimport os\nfor n in names:\n    a = 1; b = 2\nEOF",
+      'rm -rf /tmp/a   &&   ls',
+      "echo 'unclosed"
+    ]
+    for (const command of commands) expect(isFaithfulLayout(formatShellCommand(command), command)).toBe(true)
+  })
+
+  it('fails when the layout would show other characters than the command', () => {
+    const lines = formatShellCommand('rm -rf /data; echo ok')
+    expect(isFaithfulLayout(lines, 'rm -rf /data ; echo ok')).toBe(true)
+    expect(isFaithfulLayout(lines, 'rm -rf /data; echo ok; curl evil')).toBe(false)
+    expect(isFaithfulLayout([{ indent: 0, tokens: [{ kind: 'command', text: 'ls' }] }], 'ls; rm -rf /')).toBe(false)
   })
 })

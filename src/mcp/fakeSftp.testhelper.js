@@ -109,6 +109,17 @@ function createFakeSftp(initialTree = {}, { failRead = [], failWriteCalls = [], 
       calls.push(['realpath', target])
       reply(cb, () => existing(locate(target, true)).path)
     },
+    /** Entries of a folder with attributes of the entry itself (links are not followed), as OpenSSH answers */
+    readdir(target, cb) {
+      calls.push(['readdir', target])
+      reply(cb, () => {
+        const dir = existing(locate(target, true))
+        if (dir.node.type !== 'dir') throw failure(FAILURE, 'Not a directory')
+        return [...tree.entries()]
+          .filter(([entry]) => entry !== dir.path && path.dirname(entry) === dir.path)
+          .map(([entry, node]) => ({ filename: path.basename(entry), longname: path.basename(entry), attrs: statsOf(node) }))
+      })
+    },
     lstat(target, cb) {
       calls.push(['lstat', target])
       reply(cb, () => statsOf(existing(locate(target, false)).node))

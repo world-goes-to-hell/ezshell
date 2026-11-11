@@ -1,8 +1,10 @@
+import { INITIAL_PACE, RETRY_MS, nextPace, waitFor } from '../../lib/logPollPace'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RiArrowDownLine, RiArrowDownSLine, RiArrowUpSLine, RiEyeLine, RiPauseLine, RiPlayLine, RiRefreshLine } from 'react-icons/ri'
 import { PopoutTitleBar } from '../TitleBar/PopoutTitleBar'
 import { CodeEditor, type CodeEditorHandle, type CursorInfo } from './CodeEditor'
-import { appendLog, isAtBottom, jumpToError, logExtensions, scrollToEnd } from './logView'
+import { appendLog, isAtBottom, jumpToLevel, logExtensions, scrollToEnd, PROBLEM_LEVELS, type JumpOutcome } from './logView'
+import type { JumpLevel } from '../../lib/logLevels'
 import { countLevels, NO_COUNTS, type LevelCounts } from '../../lib/logAppend'
 import { markerLine } from '../../lib/logLevels'
 import type { RemoteFileLoaded, RemoteFileTailResult } from '../../types'
@@ -12,11 +14,9 @@ import { toast } from '../../stores/toastStore'
 
 export type TextPreviewFile = Extract<RemoteFileLoaded, { kind: 'text'; editable: false }>
 
-// One stat per second while the window is seen, one per 5s while hidden; a failed look waits 3s.
-// The next look is set only after the previous answer came, so looks never pile up on a slow server.
-const POLL_VISIBLE_MS = 1000
-const POLL_HIDDEN_MS = 5000
-const RETRY_MS = 3000
+// The wait between looks follows the log (lib/logPollPace): 0.2s while lines arrive, back to 1s when
+// quiet, 5s while hidden; a failed look waits 3s. The next look is set only after the previous answer
+// came, so looks never pile up on a slow server.
 // The window keeps the latest ~5MB of text; past that the oldest lines go (down to 4MB)
 const LIMITS = { maxChars: 5_000_000, keepChars: 4_000_000 }
 
@@ -45,6 +45,14 @@ function followLabel(follow: Follow, isTailMode: boolean): string {
   return isTailMode ? '일시정지' : '미리보기 (읽기 전용)'
 }
 
+const ERROR_ONLY: ReadonlySet<JumpLevel> = new Set<JumpLevel>(['error'])
+const WARN_ONLY: ReadonlySet<JumpLevel> = new Set<JumpLevel>(['warn'])
+
+function reportJump(outcome: JumpOutcome, name: string): void {
+  if (outcome === 'none') toast.info(`다른 ${name} 줄이 없습니다`)
+  else if (outcome === 'wrapped') toast.info('끝을 지나 처음부터 다시 찾았습니다')
+}
+
 /** A text file to look at, and a log to follow ("실시간 보기"): errors red, warnings yellow, F8 between errors. Nothing here writes to the server. */
 export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   const editorRef = useRef<CodeEditorHandle>(null)
@@ -64,7 +72,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   // Up to 5MB: converted once, the editor reads it only when it is made
   const initialText = useMemo(() => toEditorText(file.content), [file.content])
 
-  const extensions = useMemo(() => logExtensions((found) => { if (!found) toast.info('그쪽으로는 오류 줄이 없습니다') }), [])
+  const extensions = useMemo(() => logExtensions((outcome) => reportJump(outcome, '오류·경고')), [])
 
   // Count what the file showed at first, start at its end when following, and track whether the user left the end
   useEffect(() => {
@@ -120,6 +128,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
     }
     let isCancelled = false
     let timer: number | undefined
+    let pace = INITIAL_PACE
     const schedule = (ms: number) => { timer = window.setTimeout(() => void look(), ms) }
     async function look() {
       const tail = window.electronAPI.remoteFileTail
@@ -133,7 +142,8 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
       if (isCancelled) return
       if (result.success) {
         handleRef.current(result)
-        schedule(document.hidden ? POLL_HIDDEN_MS : POLL_VISIBLE_MS)
+        pace = nextPace(pace, 'text' in result && result.text.length > 0)
+        schedule(waitFor(pace, document.hidden))
       } else {
         setFollow({ kind: 'error', message: result.error })
         schedule(RETRY_MS)
@@ -164,10 +174,11 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
     scrollToEnd(view)
   }
 
-  const jump = (direction: 1 | -1) => {
+  /** Arrows and F8 go through errors and warnings; the counts jump within their own level */
+  const jump = (direction: 1 | -1, levels: ReadonlySet<JumpLevel> = PROBLEM_LEVELS, name = '오류·경고') => {
     const view = editorRef.current?.getView()
     if (!view) return
-    if (!jumpToError(view, direction)) toast.info('그쪽으로는 오류 줄이 없습니다')
+    reportJump(jumpToLevel(view, direction, levels), name)
     view.focus()
   }
 
@@ -207,16 +218,18 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
         <span className={`remote-log-follow is-${follow.kind}`} role="status">{followLabel(follow, isTailMode)}</span>
         {isTrimmed && <span className="remote-log-note" title="창에는 최근 약 5MB 만 둡니다">오래된 줄 정리됨</span>}
         <span className="remote-file-status-spacer" />
-        <span className={`remote-log-count${counts.error > 0 ? ' is-error' : ''}`}>오류 {counts.error.toLocaleString()}</span>
-        <span className={`remote-log-count${counts.warn > 0 ? ' is-warn' : ''}`}>경고 {counts.warn.toLocaleString()}</span>
-        <button type="button" className="remote-file-icon-btn remote-log-jump" onClick={() => jump(-1)} title="이전 오류 (Shift+F8)" aria-label="이전 오류">
+        <button type="button" className={`remote-log-count${counts.error > 0 ? ' is-error' : ''}`} disabled={counts.error === 0}
+          onClick={() => jump(1, ERROR_ONLY, '오류')} title="다음 오류 줄로 이동">오류 {counts.error.toLocaleString()}</button>
+        <button type="button" className={`remote-log-count${counts.warn > 0 ? ' is-warn' : ''}`} disabled={counts.warn === 0}
+          onClick={() => jump(1, WARN_ONLY, '경고')} title="다음 경고 줄로 이동">경고 {counts.warn.toLocaleString()}</button>
+        <button type="button" className="remote-file-icon-btn remote-log-jump" onClick={() => jump(-1)} title="이전 오류·경고 (Shift+F8)" aria-label="이전 오류·경고">
           <RiArrowUpSLine size={16} />
         </button>
-        <button type="button" className="remote-file-icon-btn remote-log-jump" onClick={() => jump(1)} title="다음 오류 (F8)" aria-label="다음 오류">
+        <button type="button" className="remote-file-icon-btn remote-log-jump" onClick={() => jump(1)} title="다음 오류·경고 (F8)" aria-label="다음 오류·경고">
           <RiArrowDownSLine size={16} />
         </button>
         <span>줄 {cursor.line}, 열 {cursor.column}</span>
-        <span className="remote-file-status-keys">F8 다음 오류 · Ctrl+F 찾기 · Ctrl+G 줄 이동</span>
+        <span className="remote-file-status-keys">F8 다음 오류·경고 · Ctrl+F 찾기 · Ctrl+G 줄 이동</span>
       </div>
     </div>
   )

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
+import * as Dialog from '@radix-ui/react-dialog'
 import { RiSaveLine, RiRefreshLine, RiEyeLine, RiCloseLine } from 'react-icons/ri'
 import { ThemeDefinition, ThemeColors, TerminalColors } from '../../types/theme'
 import { PRESET_THEMES } from '../../themes/presets'
@@ -90,7 +91,13 @@ export function ThemeEditor({ editingTheme, onClose, onSave }: ThemeEditorProps)
     '--preview-border': colors.border,
   } as React.CSSProperties
 
+  // A dialog of its own, drawn on the page. Inside the settings dialog it was laid out against that
+  // dialog's box (a transformed ancestor contains position: fixed) and cut off at its edges; a plain
+  // portal would not do either, since the settings dialog traps focus and pointer events.
   return (
+    <Dialog.Root open onOpenChange={(isOpen) => { if (!isOpen) onClose() }}>
+    <Dialog.Portal>
+    <Dialog.Content asChild aria-describedby={undefined}>
     <div className="theme-editor-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <motion.div
         className="theme-editor"
@@ -102,7 +109,7 @@ export function ThemeEditor({ editingTheme, onClose, onSave }: ThemeEditorProps)
       >
         {/* Header */}
         <div className="theme-editor-header">
-          <h2>{editingTheme ? '테마 수정' : '커스텀 테마 만들기'}</h2>
+          <Dialog.Title asChild><h2>{editingTheme ? '테마 수정' : '커스텀 테마 만들기'}</h2></Dialog.Title>
           <button className="theme-editor-close" onClick={onClose}>
             <RiCloseLine size={20} />
           </button>
@@ -316,6 +323,9 @@ export function ThemeEditor({ editingTheme, onClose, onSave }: ThemeEditorProps)
         </div>
       </motion.div>
     </div>
+    </Dialog.Content>
+    </Dialog.Portal>
+    </Dialog.Root>
   )
 }
 

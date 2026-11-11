@@ -1,0 +1,46 @@
+/* ---- Command layout (lib/shellFormat, ShellCommandText.tsx): one command per line, parts in colour ---- */
+.sh-code .sh-command {
+  color: var(--text-link);
+  font-weight: 700;
+}
+
+.sh-code .sh-option {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.sh-code .sh-string {
+  color: var(--success);
+  font-weight: 400;
+}
+
+.sh-code .sh-variable {
+  color: var(--warning);
+  font-weight: 400;
+}
+
+.sh-code .sh-operator,
+.sh-code .sh-redirect {
+  color: var(--text-muted);
+}
+
+.sh-code .sh-comment {
+  color: var(--text-muted);
+  font-style: italic;
+  font-weight: 400;
+}
+
+/* Heredoc body: the code of another program, in normal weight so it reads apart from the shell line */
+.sh-code .sh-heredoc {
+  font-weight: 400;
+  color: var(--text-primary);
+}
+
+.sh-code .sh-heredoc .sh-keyword {
+  color: var(--text-link);
+  font-weight: 600;
+}
+
+.sh-code .sh-heredoc-end {
+  color: var(--text-muted);
+}

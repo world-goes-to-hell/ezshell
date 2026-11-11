@@ -26,6 +26,8 @@ export interface Session {
   suPassword?: string
   /** Database accounts saved from the DB client (encrypted with the sessions) */
   dbConnections?: SavedDbConnection[]
+  /** Names the user gave database servers of this session, keyed by lib/dbChoices endpointKey */
+  dbAliases?: Record<string, string>
   // Jump Host 설정
   useJumpHost?: boolean
   jumpHost?: string

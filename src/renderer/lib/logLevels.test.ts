@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { classifyLine, markerLine } from './logLevels'
+import { classifyLine, markerLine, findLevelLine, type JumpLevel } from './logLevels'
 
 describe('log line levels', () => {
   it.each([
@@ -50,5 +50,32 @@ describe('log line levels', () => {
   it('tells the window marker lines from log lines', () => {
     expect(classifyLine(markerLine('파일이 새로 시작됨'))).toBe('marker')
     expect(markerLine('3MB 건너뜀')).toContain('3MB 건너뜀')
+  })
+})
+
+describe('findLevelLine', () => {
+  const lines = ['INFO a', 'WARN b', 'INFO c', 'ERROR d', 'INFO e', 'WARN f']
+  const textOf = (n: number) => lines[n - 1]
+  const both = new Set<JumpLevel>(['error', 'warn'])
+  const warn = new Set<JumpLevel>(['warn'])
+
+  it('goes through errors and warnings in order', () => {
+    expect(findLevelLine(6, textOf, 1, 1, both)).toEqual({ line: 2, wrapped: false })
+    expect(findLevelLine(6, textOf, 2, 1, both)).toEqual({ line: 4, wrapped: false })
+    expect(findLevelLine(6, textOf, 4, -1, both)).toEqual({ line: 2, wrapped: false })
+  })
+
+  it('finds only the asked level', () => {
+    expect(findLevelLine(6, textOf, 2, 1, warn)).toEqual({ line: 6, wrapped: false })
+  })
+
+  it('goes round the end and says so', () => {
+    expect(findLevelLine(6, textOf, 6, 1, both)).toEqual({ line: 2, wrapped: true })
+    expect(findLevelLine(6, textOf, 1, -1, warn)).toEqual({ line: 6, wrapped: true })
+  })
+
+  it('answers null when there is no other such line', () => {
+    expect(findLevelLine(3, (n) => ['INFO', 'WARN x', 'INFO'][n - 1], 2, 1, warn)).toBeNull()
+    expect(findLevelLine(2, () => 'INFO', 1, 1, both)).toBeNull()
   })
 })

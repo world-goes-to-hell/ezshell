@@ -54,8 +54,9 @@
   margin: 2px 4px 6px;
   padding-left: 8px;
   border-left: 2px solid var(--accent);
-  color: var(--text-muted);
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .db-menu-item {
@@ -109,14 +110,19 @@
 .db-menu-detail {
   overflow: hidden;
   color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
+  /* Addresses in the mono face; Korean ("서버 안에서만 열림") falls through to the UI face
+     instead of whatever CJK font the generic monospace picks, which renders thin and blurry */
+  font-family: 'JetBrains Mono', Consolas, 'Pretendard Variable', Pretendard, 'Malgun Gothic', sans-serif;
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .db-menu-check .db-menu-detail {
+  color: var(--text-secondary);
   font-family: inherit;
+  font-size: 12px;
+  line-height: 1.45;
   white-space: normal;
 }
 
@@ -124,15 +130,15 @@
   padding: 0 5px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  color: var(--text-muted);
-  font-size: 10px;
-  line-height: 15px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .db-menu-empty {
   padding: 8px 10px;
-  color: var(--text-muted);
-  font-size: 12px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
   line-height: 1.5;
 }
 
@@ -784,9 +790,54 @@
   font-weight: 600;
 }
 
+.db-menu-group .db-menu-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .db-menu-group .db-menu-detail {
   margin-left: auto;
   padding-left: 10px;
+}
+
+/* Pencil at the end of a server header: faint until the header is hovered or the item is highlighted */
+.db-menu-alias-btn {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.35;
+  outline: none;
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.db-menu-group:hover .db-menu-alias-btn {
+  opacity: 1;
+}
+
+.db-menu-alias-btn[data-highlighted] {
+  opacity: 1;
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.db-alias-dialog {
+  width: min(420px, calc(100vw - 32px));
+}
+
+.db-alias-note {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .db-menu-item.is-account {
@@ -797,13 +848,13 @@
 .db-menu-account {
   overflow: hidden;
   color: var(--text-primary);
-  font-size: 12.5px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .db-menu-account.is-muted {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .db-menu-separator.is-light {
@@ -1068,4 +1119,42 @@
 
 .db-console.is-hidden {
   display: none;
+}
+
+/* Five buttons in one row: secondary ones (삭제, 연결 테스트) are compact on the left, the main three
+   sit on the right. Nothing wraps or leaves the dialog; text and icon are centred in every button. */
+.db-connect-dialog {
+  width: min(580px, calc(100vw - 32px));
+}
+
+.db-connect-actions {
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+}
+
+.db-connect-actions .modal-btn {
+  flex-shrink: 0;
+  justify-content: center;
+  min-width: 72px;
+  height: 38px;
+  padding: 0 16px;
+  font-size: 14px;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.db-connect-actions .modal-btn svg {
+  flex-shrink: 0;
+}
+
+.db-connect-actions .db-connect-delete,
+.db-connect-actions .db-connect-test {
+  min-width: 0;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.db-connect-spacer {
+  min-width: 8px;
 }

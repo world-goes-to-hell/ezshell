@@ -25,6 +25,7 @@ import { toast } from './stores/toastStore'
 import { UpdateNotification } from './components/Update/UpdateNotification'
 import { CommandPalette } from './components/CommandPalette'
 import { TabContextMenu } from './components/Terminal/TabContextMenu'
+import { DUPLICATE_TAB_EVENT } from './components/Terminal/useTerminalContextMenu'
 import { SnippetManager } from './components/Snippets/SnippetManager'
 import { StatsDashboard } from './components/Modal/StatsDashboard'
 import { BatchCommandModal } from './components/Modal/BatchCommandModal'
@@ -635,6 +636,13 @@ function App() {
     setConnectModalOpen(true)
   }
 
+  // "탭 복제" in a terminal's right-click menu
+  useEffect(() => {
+    const onDuplicate = (event: Event) => { void handleDuplicateTab((event as CustomEvent<string>).detail) }
+    window.addEventListener(DUPLICATE_TAB_EVENT, onDuplicate)
+    return () => window.removeEventListener(DUPLICATE_TAB_EVENT, onDuplicate)
+  })
+
   // Open another tab to the same server as `terminalId`, reusing the config it connected with
   const handleDuplicateTab = async (terminalId: string | null) => {
     const config = getDuplicateConfig(terminalId ? terminals.get(terminalId) : null)
@@ -844,6 +852,18 @@ function App() {
           handleCloseTerminal(sessionId)
         }
       })
+    }
+  }
+
+  const handleContextCloseToLeft = () => {
+    if (contextMenuTabId) {
+      const terminalIds = Array.from(terminals.keys())
+      const currentIndex = terminalIds.indexOf(contextMenuTabId)
+      if (currentIndex > 0) {
+        terminalIds.slice(0, currentIndex).forEach(sessionId => {
+          handleCloseTerminal(sessionId)
+        })
+      }
     }
   }
 
@@ -1261,6 +1281,7 @@ function App() {
         onClose={handleCloseContextMenu}
         onCloseTab={handleContextCloseTab}
         onCloseOthers={handleContextCloseOthers}
+        onCloseToLeft={handleContextCloseToLeft}
         onCloseToRight={handleContextCloseToRight}
         onDuplicate={handleContextDuplicate}
         onRename={handleContextRename}

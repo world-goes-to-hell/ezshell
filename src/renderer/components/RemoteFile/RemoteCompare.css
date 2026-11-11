@@ -1,0 +1,266 @@
+/* Backup list entries (app / server) and the side-by-side comparison of the server file window.
+   Kept apart from RemoteFile.css. */
+
+/* ---------- Where a backup lives ---------- */
+.backup-source-icon {
+  flex-shrink: 0;
+  vertical-align: -2px;
+}
+
+.backup-source-icon.is-app {
+  color: var(--accent);
+}
+
+.backup-source-icon.is-server {
+  color: var(--warning);
+}
+
+.remote-backup-hint code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.remote-backup-item.backup-entry {
+  align-items: center;
+  gap: 8px;
+}
+
+.backup-entry-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.backup-entry-name {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-entry-note {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 10.5px;
+}
+
+/* Server files get a warm stripe when selected so the two kinds stay apart at a glance */
+.remote-backup-item.backup-entry.is-server.is-selected {
+  border-left-color: var(--warning);
+}
+
+.backup-preview-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 12px 12px;
+}
+
+.backup-compare-btn,
+.backup-restore-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.backup-compare-btn {
+  flex: 1;
+}
+
+/* ---------- The file window body while comparing ---------- */
+.remote-edit-pane {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.remote-edit-pane[hidden] {
+  display: none;
+}
+
+.remote-compare {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-primary);
+}
+
+.remote-compare-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 38px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.remote-compare-pick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 2px;
+}
+
+.remote-compare-label {
+  color: var(--text-secondary);
+}
+
+.remote-compare-pick select {
+  max-width: 320px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12.5px;
+}
+
+.remote-compare-pick select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.remote-compare-toolbar .remote-file-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: transparent;
+}
+
+.remote-compare-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--border);
+}
+
+.remote-compare-summary {
+  margin-left: 6px;
+  color: var(--text-primary);
+}
+
+.remote-compare-spacer {
+  flex: 1;
+}
+
+.remote-compare-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.remote-compare-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+}
+
+/* Titles above the two sides; the merge view puts its revert column between them */
+.remote-compare-heads {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.remote-compare-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 12px;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.remote-compare-head + .remote-compare-head {
+  border-left: 1px solid var(--border);
+}
+
+.remote-compare-tag {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+}
+
+.remote-compare-message {
+  margin: 0;
+  padding: 10px 14px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.remote-compare-host {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The merge view does not scroll by itself: one scroll for both sides keeps them lined up */
+.remote-compare-host .cm-mergeView {
+  height: 100%;
+  overflow: auto;
+}
+
+.remote-compare-host .cm-mergeViewEditors {
+  min-height: 100%;
+}
+
+.remote-compare-host .cm-merge-revert {
+  width: 26px;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+.remote-compare-host .cm-merge-revert button {
+  width: 22px;
+  height: 20px;
+  margin: 0 1px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--accent);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.remote-compare-host .cm-merge-revert button:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-primary);
+}
+
+.remote-compare-host .cm-collapsedLines {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}

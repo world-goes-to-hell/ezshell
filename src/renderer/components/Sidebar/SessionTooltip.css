@@ -29,6 +29,32 @@
   overflow-wrap: anywhere;
 }
 
+.session-tooltip-details {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 12px;
+  row-gap: 2px;
+  margin: 4px 0 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+/* Each row is a wrapper so dt/dd pairs stay together; contents lets them join the parent grid */
+.session-tooltip-row {
+  display: contents;
+}
+
+.session-tooltip-details dt {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.session-tooltip-details dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
 .session-tooltip-meta {
   display: flex;
   flex-wrap: wrap;

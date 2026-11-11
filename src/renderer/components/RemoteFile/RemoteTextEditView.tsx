@@ -4,6 +4,8 @@ import { PopoutTitleBar } from '../TitleBar/PopoutTitleBar'
 import { CodeEditor, type CodeEditorHandle, type CursorInfo } from './CodeEditor'
 import { ConflictDialog, SaveReviewDialog, type ConflictChoice, type SaveReview } from './RemoteFileDialogs'
 import { RemoteBackupPanel } from './RemoteBackupPanel'
+import { RemoteCompareView } from './RemoteCompareView'
+import { useBackupEntries } from './useBackupEntries'
 import { LINE_ENDING_LABELS, detectLineEnding, fileNameOf, fromEditorText, toEditorText, type LineEnding } from '../../lib/remoteFileText'
 import { confirmDialog } from '../../stores/confirmStore'
 import { toast } from '../../stores/toastStore'
@@ -44,6 +46,10 @@ export function RemoteTextEditView({ docId, file }: RemoteTextEditViewProps) {
   const [hasConflict, setHasConflict] = useState(false)
   const [showBackups, setShowBackups] = useState(false)
   const [backupVersion, setBackupVersion] = useState(0)
+  const [selectedBackup, setSelectedBackup] = useState<string | null>(null)
+  const [isComparing, setIsComparing] = useState(false)
+  const backups = useBackupEntries(docId, backupVersion, showBackups || isComparing)
+  const getEditor = useCallback(() => editorRef.current?.getView() ?? null, [])
   const [cursor, setCursor] = useState<CursorInfo>({ line: 1, column: 1, selected: 0 })
   const isBusy = useRef(false)
 
@@ -118,6 +124,8 @@ export function RemoteTextEditView({ docId, file }: RemoteTextEditViewProps) {
     }
     setCanWrite(result.canWrite)
     if (intoEditor) {
+      // The comparison's right side mirrors the editor; a whole new text would leave it out of step
+      setIsComparing(false)
       setEnding(detectLineEnding(result.content))
       editorRef.current?.setText(toEditorText(result.content), { asBaseline: true })
     } else {
@@ -148,6 +156,17 @@ export function RemoteTextEditView({ docId, file }: RemoteTextEditViewProps) {
     if (await readServer(true)) toast.info('서버 내용을 다시 불러왔습니다')
   }
 
+  const compareWith = (key: string) => {
+    setSelectedBackup(key)
+    setIsComparing(true)
+  }
+
+  const closeCompare = () => {
+    setIsComparing(false)
+    // The editor was hidden meanwhile: let it measure again before it takes the keyboard
+    requestAnimationFrame(() => editorRef.current?.focus())
+  }
+
   const restoreBackup = (content: string) => {
     editorRef.current?.setText(toEditorText(content))
     editorRef.current?.focus()
@@ -174,16 +193,43 @@ export function RemoteTextEditView({ docId, file }: RemoteTextEditViewProps) {
       <PopoutTitleBar icon={<RiFileEditLine size={16} />} title={`${isDirty ? '● ' : ''}${name}`} subtitle={`${file.sessionName} · ${file.path}`} actions={actions} />
       {!canWrite && <div className="remote-file-banner">읽기 전용: 접속 계정에 이 파일을 쓸 권한이 없습니다.</div>}
       <div className="remote-file-body">
-        <CodeEditor
-          ref={editorRef}
-          initialText={toEditorText(file.content)}
-          fileName={name}
-          readOnly={!canWrite}
-          onDirtyChange={setIsDirty}
-          onSave={() => void startSave()}
-          onCursor={setCursor}
-        />
-        {showBackups && <RemoteBackupPanel docId={docId} version={backupVersion} onRestore={restoreBackup} onClose={() => setShowBackups(false)} />}
+        {/* Kept mounted while comparing: it holds the text, the undo history and the unsaved state */}
+        <div className="remote-edit-pane" hidden={isComparing}>
+          <CodeEditor
+            ref={editorRef}
+            initialText={toEditorText(file.content)}
+            fileName={name}
+            readOnly={!canWrite}
+            onDirtyChange={setIsDirty}
+            onSave={() => void startSave()}
+            onCursor={setCursor}
+          />
+        </div>
+        {isComparing && selectedBackup && backups.entries && (
+          <RemoteCompareView
+            docId={docId}
+            fileName={name}
+            entries={backups.entries}
+            backupKey={selectedBackup}
+            onBackupKey={setSelectedBackup}
+            getEditor={getEditor}
+            readOnly={!canWrite}
+            onSave={() => void startSave()}
+            onClose={closeCompare}
+          />
+        )}
+        {showBackups && !isComparing && (
+          <RemoteBackupPanel
+            docId={docId}
+            entries={backups.entries}
+            error={backups.error}
+            selectedKey={selectedBackup}
+            onSelect={setSelectedBackup}
+            onRestore={restoreBackup}
+            onCompare={compareWith}
+            onClose={() => setShowBackups(false)}
+          />
+        )}
       </div>
       <div className="remote-file-status">
         <span>{isDirty ? '저장하지 않은 변경 있음' : '저장됨'}</span>

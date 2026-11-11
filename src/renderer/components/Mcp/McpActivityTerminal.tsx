@@ -1,9 +1,10 @@
-import { Fragment, memo, useLayoutEffect, useMemo, useRef } from 'react'
+import { memo, useLayoutEffect, useMemo, useRef } from 'react'
 import { RiStopCircleLine } from 'react-icons/ri'
 import type { McpActivityItem } from '../../types'
 import { ACTIVITY_STATE_LABELS, cleanTerminalText, formatClock, formatDuration, formatElapsed, hasRun, isActiveState } from '../../lib/mcpActivity'
 import { RISK_LABELS, revealHiddenChars } from '../../lib/mcpLabels'
-import { formatShellCommand, highlightCodeLine } from '../../lib/shellFormat'
+import { formatShellCommand } from '../../lib/shellFormat'
+import { ShellCommandText } from './ShellCommandText'
 import { stopMcpRequest } from './stopMcpRequest'
 import { pinnedRequests } from '../../lib/mcpPinned'
 import { McpPinnedRequests } from './McpPinnedRequests'
@@ -48,26 +49,8 @@ export const TerminalEntry = memo(function TerminalEntry({ item, now }: { item: 
         <span className="mcp-term-session">{item.sessionName}</span>
         {item.cwd && <span className="mcp-term-cwd">{cleanTerminalText(item.cwd)}</span>}
         <span className="mcp-term-sigil" aria-hidden="true">$</span>
-        <code className="mcp-term-command">
-          {commandLines.map((line, lineIndex) => (
-            <Fragment key={lineIndex}>
-              {lineIndex > 0 && `\n${'  '.repeat(line.indent)}`}
-              {line.tokens.map((token, tokenIndex) => {
-                if (token.kind === 'text' || token.kind === 'space') return token.text
-                if (token.kind === 'heredoc') {
-                  // A heredoc body is another program's code (often Python): coloured, never changed
-                  return (
-                    <span key={tokenIndex} className="sh-heredoc">
-                      {highlightCodeLine(token.text).map((part, partIndex) => (
-                        part.kind === 'text' ? part.text : <span key={partIndex} className={`sh-${part.kind}`}>{part.text}</span>
-                      ))}
-                    </span>
-                  )
-                }
-                return <span key={tokenIndex} className={`sh-${token.kind}`}>{token.text}</span>
-              })}
-            </Fragment>
-          ))}
+        <code className="mcp-term-command sh-code">
+          <ShellCommandText lines={commandLines} />
         </code>
       </div>
       {item.outputTrimmed && <p className="mcp-term-notice">{TRIMMED_TEXT}</p>}

@@ -23,6 +23,9 @@ export interface CursorInfo {
   selected: number
 }
 
+/** Above this size the file is shown as plain text (no syntax colours) */
+export const LANGUAGE_MAX_CHARS = 1_000_000
+
 interface CodeEditorProps {
   initialText: string
   fileName: string
@@ -92,7 +95,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     view.focus()
 
     let isCancelled = false
-    void languageFor(fileName).then((language) => {
+    // A large file gets no syntax colours: its parser works on the page's own thread in slices of up to
+    // 100ms until it has reached the part on screen, which made dragging the scrollbar stutter
+    // (measured on 5MB .sql/.json/.js files; plain text stays at about 8ms a frame)
+    const loadsLanguage = initialText.length <= LANGUAGE_MAX_CHARS
+    void (loadsLanguage ? languageFor(fileName) : Promise.resolve(null)).then((language) => {
       if (!isCancelled && language) view.dispatch({ effects: languageSlot.reconfigure(language) })
     })
     return () => {

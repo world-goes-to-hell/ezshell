@@ -6,6 +6,7 @@ import { useTerminalStore } from '../../stores/terminalStore'
 import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
 import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory'
 import 'xterm/css/xterm.css'
+import { registerTerminalPane } from '../../lib/terminalPanes'
 import { createEarlyStreamBuffer } from '../../lib/earlyStreamBuffer'
 
 interface SplitTerminalProps {
@@ -69,6 +70,7 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
   useEffect(() => {
     let term: Terminal | null = null
     let disableCopyOnSelect: (() => void) | null = null
+    let unregisterPane: (() => void) | null = null
     let detachCommandHistory: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let disposed = false
@@ -167,6 +169,8 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
         term.loadAddon(fitAddon.current)
 
         term.open(terminalRef.current)
+        // The tab's right-click menu acts on the shell that was clicked
+        unregisterPane = registerTerminalPane(terminalRef.current, term)
         disableCopyOnSelect = enableCopyOnSelect(term)
         detachCommandHistory = commandHistory.attach(term)
         terminalInstance.current = term
@@ -375,6 +379,7 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
         resizeObserver.disconnect()
       }
       disableCopyOnSelect?.()
+      unregisterPane?.()
       detachCommandHistory?.()
       if (term) {
         term.dispose()

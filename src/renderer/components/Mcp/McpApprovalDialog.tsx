@@ -7,6 +7,8 @@ import { McpDiffView } from './McpDiffView'
 import { McpTransferFields } from './McpTransferFields'
 import { toast } from '../../stores/toastStore'
 import { isApprovalArmed } from '../../lib/approvalArming'
+import { formatShellCommand, isFaithfulLayout } from '../../lib/shellFormat'
+import { ShellCommandText } from './ShellCommandText'
 import './Mcp.css'
 
 const TICK_MS = 250
@@ -56,6 +58,11 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
 
   const remaining = secondsLeft(request.expiresAt, now)
   const command = revealHiddenChars(request.command)
+  // Laid out like the MCP activity log (one command per line, in colour). Display only: what runs is
+  // the original, and the original is shown instead whenever the layout does not hold exactly its text.
+  const commandLines = useMemo(() => formatShellCommand(command.text), [command.text])
+  const canLayOut = useMemo(() => isFaithfulLayout(commandLines, command.text), [commandLines, command.text])
+  const [showsOriginal, setShowsOriginal] = useState(false)
   const cwd = request.cwd === null ? null : revealHiddenChars(request.cwd)
   // Claude's own words: shown, but it is the command that counts
   const purpose = request.purpose ? revealHiddenChars(request.purpose) : null
@@ -134,8 +141,21 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
             )}
             <dt>위치</dt>
             <dd><code>{cwd?.text ?? '알 수 없음'}</code></dd>
-            <dt>명령</dt>
-            <dd><pre id="mcp-approval-command" className="mcp-approval-command">{command.text}</pre></dd>
+            <dt>
+              명령
+              {canLayOut && (
+                <button type="button" className="mcp-approval-raw-toggle" onClick={() => setShowsOriginal(value => !value)}
+                  title={showsOriginal ? '명령마다 줄을 나눠 보여 줍니다' : 'AI 가 보낸 글자 그대로 보여 줍니다'}>
+                  {showsOriginal ? '정렬해서 보기' : '원문 보기'}
+                </button>
+              )}
+            </dt>
+            <dd>
+              <pre id="mcp-approval-command" className="mcp-approval-command sh-code">
+                {canLayOut && !showsOriginal ? <ShellCommandText lines={commandLines} /> : command.text}
+              </pre>
+              {canLayOut && !showsOriginal && <div className="mcp-approval-requested">읽기 쉽게 줄만 나눠 보여 줍니다. 실행되는 것은 원문입니다.</div>}
+            </dd>
             {request.background && (
               <>
                 <dt>실행 방식</dt>

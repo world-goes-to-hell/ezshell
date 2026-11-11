@@ -49,3 +49,26 @@ export function classifyLine(line: string): LogLevel | null {
   }
   return CRASH_LINES.some(pattern => pattern.test(line)) ? 'error' : null
 }
+
+export type JumpLevel = 'error' | 'warn'
+
+/**
+ * The next (1) or previous (-1) line of one of `levels`, starting after line `current` (1-based) and
+ * going round the end of the text. `wrapped` says the search went past the end; null when no line
+ * of those levels exists (or only the current one).
+ */
+export function findLevelLine(
+  lineCount: number,
+  textOf: (lineNumber: number) => string,
+  current: number,
+  direction: 1 | -1,
+  levels: ReadonlySet<JumpLevel>
+): { line: number; wrapped: boolean } | null {
+  for (let step = 1; step < lineCount; step++) {
+    const raw = current + direction * step
+    const line = ((raw - 1) % lineCount + lineCount) % lineCount + 1
+    const level = classifyLine(textOf(line))
+    if (level !== null && levels.has(level as JumpLevel)) return { line, wrapped: raw < 1 || raw > lineCount }
+  }
+  return null
+}

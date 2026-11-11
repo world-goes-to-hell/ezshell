@@ -10,6 +10,7 @@ const { previewKind } = require('./fileKind.js')
 const read = require('./remoteRead.js')
 const { backupTarget } = require('./backups.js')
 const { pollTail, startTail } = require('./logTail.js')
+const { listServerBackups: findServerBackups } = require('./serverBackups.js')
 
 const MAX_DIFF_LINES = 3000
 // A look at a followed log that gets no answer this long is given up (a half-dead connection)
@@ -30,6 +31,7 @@ const MESSAGES = {
   channelRefused: '서버가 파일 창용 채널을 열어 주지 않았습니다 (연결당 채널 수 제한). 분할 터미널이나 다른 창을 닫은 뒤 다시 시도해 주세요.',
   slow: '서버가 30초 동안 답하지 않았습니다.',
   noBackup: '백업을 읽지 못했습니다.',
+  backupTooLarge: `백업은 ${read.EDIT_MAX_BYTES / 1024 / 1024}MB 까지 열 수 있습니다.`,
   notFollowable: '텍스트 미리보기에서만 실시간으로 볼 수 있습니다.',
   tooMany: `파일 창은 ${MAX_OPEN_DOCUMENTS}개까지 열 수 있습니다. 다른 창을 닫아 주세요.`
 }
@@ -297,6 +299,43 @@ function createRemoteDocuments({ openSftp, serverOf, backups, newId = () => cryp
     }
   }
 
+  /**
+   * Backups people left next to the file on the server ("compose.yaml.bak_20261020_1516"). The window
+   * gets names only; the paths stay here, and only a name from the latest list can be read back.
+   * A folder that cannot be listed gives an empty list (the file itself may still be readable).
+   */
+  async function listServerBackups(ownerId, docId) {
+    const doc = editable(ownerId, docId)
+    const sftp = await sftpOf(doc)
+    let found = []
+    try {
+      found = await findServerBackups(sftp, doc.seen.path, doc.requestedPath)
+    } catch {
+      found = []
+    }
+    patch(docId, { serverBackups: new Map(found.map(b => [b.name, b.path])) })
+    return { backups: found.map(({ name, size, time, timeFrom }) => ({ name, size, time, timeFrom })) }
+  }
+
+  /** Text of a listed server backup, whole and up to the editor's limit. */
+  async function readServerBackup(ownerId, docId, name) {
+    const doc = editable(ownerId, docId)
+    const listed = typeof name === 'string' && doc.serverBackups ? doc.serverBackups.get(name) : undefined
+    if (!listed) throw new DocumentError(MESSAGES.noBackup)
+    const sftp = await sftpOf(doc)
+    let text
+    try {
+      // tailBytes 0: a file over the limit is refused, not shown in part
+      text = await read.readTextPreview(sftp, listed, { wholeMaxBytes: read.EDIT_MAX_BYTES, tailBytes: 0 })
+    } catch (err) {
+      throw new DocumentError(err && err.userMessage === read.MESSAGES.notText ? err.userMessage : MESSAGES.noBackup)
+    }
+    if (text.truncated) throw new DocumentError(MESSAGES.backupTooLarge)
+    // Swapped for a link (or moved) since it was listed: not the file the list showed
+    if (text.path !== listed) throw new DocumentError(MESSAGES.noBackup)
+    return { content: text.text }
+  }
+
   function backupFolder(ownerId, docId) {
     const doc = editable(ownerId, docId)
     return targetOf(doc).dir
@@ -318,7 +357,7 @@ function createRemoteDocuments({ openSftp, serverOf, backups, newId = () => cryp
 
   const find = (docId) => docs.get(docId) || null
 
-  return { register, attach, load, tail, review, save, listBackups, readBackup, backupFolder, close, find }
+  return { register, attach, load, tail, review, save, listBackups, readBackup, listServerBackups, readServerBackup, backupFolder, close, find }
 }
 
 /** `promise`, or a DocumentError once `ms` passed without an answer. */
