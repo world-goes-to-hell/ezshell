@@ -33,6 +33,7 @@ const { createDbConnections } = require('./src/dbClient/connections.js');
 const { createDiscoveryCache } = require('./src/dbClient/discovery.js');
 const { createLocalShells } = require('./src/localShell.js');
 const windowState = require('./src/windowState.js');
+const lastVersion = require('./src/lastVersion.js');
 const { readDirectory } = require('./src/sftpListing.js');
 const localFileOps = require('./src/localFileOps.js');
 const sftpSymlinks = require('./src/sftpSymlinks.js');
@@ -2167,6 +2168,18 @@ ipcMain.handle('install-update', () => {
 
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
+});
+
+// "업데이트 내용" after an update: the window compares the last version whose notes were seen with
+// this one (src/lastVersion.js). Saved data means an existing user even without a record.
+const lastVersionPath = () => path.join(app.getPath('userData'), 'last-version.json');
+ipcMain.handle('whats-new-state', () => lastVersion.resolveWhatsNew({
+  file: lastVersionPath(),
+  current: app.getVersion(),
+  existingUser: fs.existsSync(sessionsFilePath) || fs.existsSync(path.join(app.getPath('userData'), 'master.json'))
+}));
+ipcMain.handle('whats-new-seen', () => {
+  lastVersion.writeLastVersion(lastVersionPath(), app.getVersion());
 });
 
 // ==================== 포트 포워딩 기능 ====================

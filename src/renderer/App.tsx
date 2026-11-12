@@ -12,6 +12,8 @@ import { SftpPanel } from './components/Sftp/SftpPanel'
 import { SftpWindow } from './components/Sftp/SftpWindow'
 import { ConnectModal, ConnectionConfig, DEFAULT_CONFIG } from './components/Modal/ConnectModal'
 import { SessionImportDialog } from './components/Sidebar/SessionImportDialog'
+import { WhatsNewDialog, BUNDLED_NOTES } from './components/WhatsNew/WhatsNewDialog'
+import { notesToShow, type VersionNotes } from './lib/releaseNotes'
 import type { SharedSession } from './lib/sessionShare'
 import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/QuickConnectModal'
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
@@ -175,6 +177,8 @@ function App() {
   const [duplicateTitle, setDuplicateTitle] = useState<string | undefined>(undefined)
   // "텍스트로 세션 추가": the folder to add into (null = closed)
   const [importTarget, setImportTarget] = useState<{ folderId?: string } | null>(null)
+  // "업데이트 내용": notes to show, and whether closing records them as seen (automatic opening only)
+  const [whatsNew, setWhatsNew] = useState<{ entries: VersionNotes[]; markSeen: boolean } | null>(null)
   const [defaultFolderId, setDefaultFolderId] = useState<string | undefined>(undefined)
   const [isLocked, setIsLocked] = useState(true)
   const [hasMasterPassword, setHasMasterPassword] = useState(false)
@@ -744,6 +748,33 @@ function App() {
       )
     }
     return <TerminalPanel sessionId={sessionId} isActive={isActive} onActivate={onActivate} onClose={onClose} borderColor={borderColor} />
+  }
+
+  // First start after an update: once unlocked, show what changed since the last version seen
+  const whatsNewCheckedRef = useRef(false)
+  useEffect(() => {
+    if (isLocked || whatsNewCheckedRef.current || typeof window.electronAPI.whatsNewState !== 'function') return
+    whatsNewCheckedRef.current = true
+    window.electronAPI.whatsNewState()
+      .then(state => {
+        const entries = notesToShow({ ...state, available: BUNDLED_NOTES })
+        if (entries.length > 0) setWhatsNew({ entries, markSeen: true })
+        else if (state.previous !== state.current) void window.electronAPI.whatsNewSeen()
+      })
+      .catch(() => { /* not shown this time */ })
+  }, [isLocked])
+
+  const closeWhatsNew = () => {
+    if (whatsNew?.markSeen) void window.electronAPI.whatsNewSeen()
+    setWhatsNew(null)
+  }
+
+  // Command palette "업데이트 내용 보기": this version's notes, without changing the record
+  const handleOpenWhatsNew = async () => {
+    const current = await window.electronAPI.getAppVersion()
+    const entries = notesToShow({ previous: null, current, existingUser: true, available: BUNDLED_NOTES })
+    if (entries.length > 0) setWhatsNew({ entries, markSeen: false })
+    else toast.info('업데이트 내용 없음', `${current} 버전의 업데이트 내용이 없습니다`)
   }
 
   // Query results must not stay behind the lock screen: main closes the connections, the tabs go too
@@ -1332,7 +1363,10 @@ function App() {
         onQuickConnect={handleQuickConnect}
         onOpenSettings={handleOpenSettings}
         onOpenSnippetManager={handleOpenSnippetManager}
+        onOpenWhatsNew={() => void handleOpenWhatsNew()}
       />
+
+      {whatsNew && <WhatsNewDialog entries={whatsNew.entries} onClose={closeWhatsNew} />}
 
       {snippetManagerOpen && (
         <SnippetManager onClose={() => setSnippetManagerOpen(false)} />

@@ -5003,19 +5003,20 @@ body.resizing .split-pane-content * {
   flex-shrink: 0;
 }
 
+/* Tinted from the theme's own colours (fixed blue and green stood out in other themes) */
 .update-icon-info {
-  background: rgba(59, 130, 246, 0.15);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
 }
 
 .update-icon-downloading {
-  background: rgba(59, 130, 246, 0.15);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
   animation: pulse 1.5s ease-in-out infinite;
 }
 
 .update-icon-ready {
-  background: rgba(34, 197, 94, 0.15);
+  background: color-mix(in srgb, var(--success) 16%, transparent);
   color: var(--success);
 }
 
@@ -5071,22 +5072,17 @@ body.resizing .split-pane-content * {
   transition: all var(--transition-fast);
 }
 
-.update-download-btn {
+/* Both are the notice's main button, so both look like the app's other main buttons: the theme's
+   accent with its own text colour (white on a bright success green was unreadable) */
+.update-download-btn,
+.update-install-btn {
   background: var(--accent);
   color: var(--on-accent);
 }
 
-.update-download-btn:hover {
-  opacity: 0.9;
-}
-
-.update-install-btn {
-  background: var(--success);
-  color: #fff;
-}
-
+.update-download-btn:hover,
 .update-install-btn:hover {
-  opacity: 0.9;
+  background: var(--accent-hover);
 }
 
 .update-dismiss-btn {
@@ -5138,9 +5134,7 @@ body.resizing .split-pane-content * {
   letter-spacing: 0.5px;
 }
 
-.version-badge.ready {
-  background: var(--success);
-}
+/* "READY" keeps the accent of "NEW": on a success green the accent's text colour was hard to read */
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

@@ -59,14 +59,53 @@ export function nameAtPointer(terminal: Terminal, clientX: number, clientY: numb
 }
 
 /** How long an answer about a path is reused (hovering a line asks about each of its words) */
-const REMEMBER_MS = 30_000
+const REMEMBER_MS = 60_000
 const remembered = new Map<string, { at: number; target: TerminalTarget | null }>()
+// The login folder of a session does not change: asked once, not for every word of a line
+const homes = new Map<string, Promise<string | null>>()
+const knownHomes = new Map<string, string>()
+
+function homeOf(sessionId: string): Promise<string | null> {
+  let home = homes.get(sessionId)
+  if (!home) {
+    home = Promise.resolve(window.electronAPI.sftpRealpath?.(sessionId, '.') ?? null)
+      .then((path) => {
+        if (path) knownHomes.set(sessionId, path)
+        // A failed question is asked again next time
+        else homes.delete(sessionId)
+        return path
+      })
+      .catch(() => {
+        homes.delete(sessionId)
+        return null
+      })
+    homes.set(sessionId, home)
+  }
+  return home
+}
+
+const remembering = (sessionId: string, path: string): { at: number; target: TerminalTarget | null } | undefined => {
+  const known = remembered.get(`${sessionId}\n${path}`)
+  return known && Date.now() - known.at < REMEMBER_MS ? known : undefined
+}
+
+/**
+ * What is already known about a name, without asking the server: the target, null (not a file
+ * there), or undefined when the server has to be asked.
+ */
+export function knownTarget(sessionId: string, name: string, cwd: string | undefined): TerminalTarget | null | undefined {
+  const home = needsHome(name, cwd) ? knownHomes.get(sessionId) : null
+  if (home === undefined) return undefined
+  const path = resolveName(name, cwd, home)
+  if (!path || path === '/') return null
+  return remembering(sessionId, path)?.target
+}
 
 /** What the server said about a path, asked again only after a while */
 async function statTarget(sessionId: string, path: string): Promise<TerminalTarget | null> {
   const key = `${sessionId}\n${path}`
-  const known = remembered.get(key)
-  if (known && Date.now() - known.at < REMEMBER_MS) return known.target
+  const known = remembering(sessionId, path)
+  if (known) return known.target
   const stat = await window.electronAPI.sftpStat?.(sessionId, path)
   const target = stat && (stat.isFile || stat.isDirectory)
     ? { path, name: splitPath(path).name, isDirectory: stat.isDirectory, size: stat.size }
@@ -83,7 +122,7 @@ async function statTarget(sessionId: string, path: string): Promise<TerminalTarg
 export async function findTarget(sessionId: string, name: string, cwd: string | undefined): Promise<TerminalTarget | null> {
   try {
     await window.electronAPI.sftpOpen(sessionId)
-    const home = needsHome(name, cwd) ? await window.electronAPI.sftpRealpath?.(sessionId, '.') ?? null : null
+    const home = needsHome(name, cwd) ? await homeOf(sessionId) : null
     const path = resolveName(name, cwd, home)
     if (!path || path === '/') return null
     return await statTarget(sessionId, path)

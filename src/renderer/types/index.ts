@@ -499,6 +499,9 @@ declare global {
       downloadUpdate: () => Promise<any>
       installUpdate: () => Promise<any>
       getAppVersion: () => Promise<string>
+      /** Last version whose release notes were seen (src/lastVersion.js) */
+      whatsNewState: () => Promise<{ previous: string | null; current: string; existingUser: boolean }>
+      whatsNewSeen: () => Promise<void>
       onUpdateStatus: (callback: (data: any) => void) => () => void
 
       // Port forwarding

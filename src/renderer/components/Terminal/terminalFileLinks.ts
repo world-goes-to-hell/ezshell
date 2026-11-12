@@ -3,10 +3,13 @@ import { cleanName, looksLikeName, splitPath, wordsInCells, type TerminalCell } 
 import { EDIT_MAX_BYTES } from '../../lib/remoteFileText'
 import { openRemoteFileWindow } from '../../lib/remoteFileOpen'
 import { openSftpAt } from '../../lib/sftpSync'
-import { findTarget, type TerminalTarget } from './terminalTargetMenu'
+import { findTarget, knownTarget, type TerminalTarget } from './terminalTargetMenu'
 
-/** The pointer has to rest on a line this long before the server is asked about its words */
-const HOVER_DELAY_MS = 150
+/**
+ * The pointer has to rest on a line this long before the server is asked about its words (a pointer
+ * swept across the screen passes a line faster). Names already known are answered without waiting.
+ */
+const HOVER_DELAY_MS = 60
 /** Words of one line looked up at most (a wide `ls` line has a dozen names) */
 const MAX_WORDS_PER_LINE = 12
 
@@ -57,29 +60,35 @@ export function attachFileLinks(terminal: Terminal, { sessionId, getCwd, getSess
         .slice(0, MAX_WORDS_PER_LINE)
       if (words.length === 0) return callback(undefined)
 
+      const answer = (targets: Array<TerminalTarget | null>): void => {
+        const links: ILink[] = []
+        targets.forEach((target, i) => {
+          if (!target) return
+          const word = words[i]
+          links.push({
+            text: word.text,
+            range: { start: { x: word.start + 1, y: lineNumber }, end: { x: word.end + 1, y: lineNumber } },
+            // Underlined, but the pointer stays as it is: a plain click still only places the cursor
+            decorations: { underline: true, pointerCursor: false },
+            activate: (event) => {
+              if (event.ctrlKey || event.metaKey) openTarget(sessionId, getSessionName(), target)
+            },
+            hover: () => { if (element) element.title = hintFor(target) },
+            leave: () => { element?.removeAttribute('title') }
+          })
+        })
+        callback(links.length > 0 ? links : undefined)
+      }
+
+      // Everything on this line was asked about a moment ago: no waiting, no request
+      const cwd = getCwd()
+      const known = words.map(word => knownTarget(sessionId, word.name, cwd))
+      if (known.every(target => target !== undefined)) return answer(known as Array<TerminalTarget | null>)
+
       window.setTimeout(() => {
         // The pointer moved on to another line: nothing is asked for this one
         if (request !== latest) return callback(undefined)
-        const cwd = getCwd()
-        void Promise.all(words.map(word => findTarget(sessionId, word.name, cwd))).then((targets) => {
-          const links: ILink[] = []
-          targets.forEach((target, i) => {
-            if (!target) return
-            const word = words[i]
-            links.push({
-              text: word.text,
-              range: { start: { x: word.start + 1, y: lineNumber }, end: { x: word.end + 1, y: lineNumber } },
-              // Underlined, but the pointer stays as it is: a plain click still only places the cursor
-              decorations: { underline: true, pointerCursor: false },
-              activate: (event) => {
-                if (event.ctrlKey || event.metaKey) openTarget(sessionId, getSessionName(), target)
-              },
-              hover: () => { if (element) element.title = hintFor(target) },
-              leave: () => { element?.removeAttribute('title') }
-            })
-          })
-          callback(links.length > 0 ? links : undefined)
-        })
+        void Promise.all(words.map(word => findTarget(sessionId, word.name, cwd))).then(answer)
       }, HOVER_DELAY_MS)
     }
   })

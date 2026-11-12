@@ -1,0 +1,93 @@
+/* "업데이트 내용" after an update. .modal-content caps dialogs at 480px; notes need more room. */
+.modal-content.whats-new-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+}
+
+.whats-new-dialog .modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.whats-new-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+
+.whats-new-version + .whats-new-version {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.whats-new-version h2 {
+  margin: 0 0 4px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.whats-new-body h3 {
+  margin: 16px 0 6px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.whats-new-body h3:first-child,
+.whats-new-version h2 + h3 {
+  margin-top: 4px;
+}
+
+.whats-new-body h4 {
+  margin: 12px 0 4px;
+  color: var(--text-primary);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.whats-new-body p {
+  margin: 6px 0;
+}
+
+.whats-new-body ul {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.whats-new-body li {
+  margin: 3px 0;
+}
+
+.whats-new-body li.is-nested {
+  margin-left: 18px;
+  list-style-type: circle;
+}
+
+.whats-new-body code {
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.whats-new-body strong {
+  color: var(--text-primary);
+}
+
+.whats-new-dialog .modal-actions {
+  flex-shrink: 0;
+}

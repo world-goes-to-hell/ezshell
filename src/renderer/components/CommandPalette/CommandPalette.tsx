@@ -20,6 +20,7 @@ interface CommandPaletteProps {
   onQuickConnect: (session: any) => void
   onOpenSettings: () => void
   onOpenSnippetManager?: () => void
+  onOpenWhatsNew?: () => void
 }
 
 const categoryIcons = {
@@ -31,7 +32,7 @@ const categoryIcons = {
   snippet: RiFileTextLine,
 }
 
-export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager }: CommandPaletteProps) {
+export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, onOpenWhatsNew }: CommandPaletteProps) {
   const { isOpen, query, selectedIndex, recentCommands, close, setQuery, setSelectedIndex, addRecentCommand } = useCommandPaletteStore()
   const { sessions, activeSessionId } = useSessionStore()
   const { recentConnections, clearHistory } = useHistoryStore()
@@ -96,6 +97,17 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
       action: onOpenSettings,
       keywords: ['settings', 'preferences', '설정'],
     })
+
+    if (onOpenWhatsNew) {
+      items.push({
+        id: 'whats-new',
+        title: '업데이트 내용 보기',
+        subtitle: '이 버전에서 바뀐 내용',
+        category: 'command',
+        action: onOpenWhatsNew,
+        keywords: ['update', 'release', 'notes', 'changelog', '업데이트', '변경', '새 기능'],
+      })
+    }
 
     // Add snippet manager command
     if (onOpenSnippetManager) {
@@ -185,7 +197,7 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
     })
 
     return items
-  }, [sessions, recentConnections, themes, currentThemeId, snippets, activeSessionId, activeTerminalId, sessionLogFiles, onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, setTheme, clearHistory, close, expandVariables, getTerminal])
+  }, [sessions, recentConnections, themes, currentThemeId, snippets, activeSessionId, activeTerminalId, sessionLogFiles, onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, onOpenWhatsNew, setTheme, clearHistory, close, expandVariables, getTerminal])
 
   // Fuse.js search
   const fuse = useMemo(() => {
