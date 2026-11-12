@@ -157,3 +157,29 @@
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* ---- The file or folder under the pointer ---- */
+
+.terminal-menu-target {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 300px;
+  padding: 6px 8px 5px;
+}
+
+.terminal-menu-target-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-menu-target-hint {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}

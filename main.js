@@ -32,6 +32,8 @@ const { registerDbIpc } = require('./src/dbClient/ipc.js');
 const { createDbConnections } = require('./src/dbClient/connections.js');
 const { createDiscoveryCache } = require('./src/dbClient/discovery.js');
 const { createLocalShells } = require('./src/localShell.js');
+const windowState = require('./src/windowState.js');
+const { readDirectory } = require('./src/sftpListing.js');
 const localFileOps = require('./src/localFileOps.js');
 const sftpSymlinks = require('./src/sftpSymlinks.js');
 const sftpUploadCheck = require('./src/sftpUploadCheck.js');
@@ -158,10 +160,17 @@ function saveToFile(filePath, data) {
 }
 
 function createWindow() {
+  // Opens where it was closed (also after an update restarts the app), if that place is still on a screen
+  const windowStatePath = path.join(app.getPath('userData'), 'window-state.json');
+  const lastPlace = windowState.usableState(
+    windowState.readState(windowStatePath),
+    require('electron').screen.getAllDisplays().map(display => display.workArea)
+  );
   mainWindow = new BrowserWindow({
     icon: WINDOW_ICON,
-    width: 1200,
-    height: 800,
+    width: lastPlace ? lastPlace.width : 1200,
+    height: lastPlace ? lastPlace.height : 800,
+    ...(lastPlace ? { x: lastPlace.x, y: lastPlace.y } : {}),
     minWidth: 800,
     minHeight: 600,
     frame: false,
@@ -173,6 +182,9 @@ function createWindow() {
       preload: path.join(__dirname, '../preload/index.js')
     }
   });
+
+  if (lastPlace && lastPlace.isMaximized) mainWindow.maximize();
+  windowState.trackWindow(mainWindow, windowStatePath);
 
   // Load from Vite dev server in development, built files in production
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -2148,7 +2160,9 @@ ipcMain.handle('download-update', async () => {
 });
 
 ipcMain.handle('install-update', () => {
-  autoUpdater.quitAndInstall(false, true);
+  // Silent: the installer runs without its pages, into the folder the app is installed in, and starts
+  // the app again when it is done
+  autoUpdater.quitAndInstall(true, true);
 });
 
 ipcMain.handle('get-app-version', () => {
@@ -2503,18 +2517,12 @@ ipcMain.handle('sftp-list', async (event, { sessionId, remotePath }) => {
     throw new Error('SFTP 세션이 없습니다.');
   }
 
-  const listing = await new Promise((resolve, reject) => {
-    sftp.readdir(remotePath, (err, list) => {
-      if (err) {
-        // Permission denied 에러를 더 명확하게 전달
-        if (err.code === 2 || err.message.includes('Permission denied')) {
-          reject(new Error('Permission denied: 이 폴더에 접근할 권한이 없습니다.'));
-        } else {
-          reject(new Error(err.message || '폴더를 읽을 수 없습니다.'));
-        }
-        return;
-      }
-
+  // Read in parts, telling the window how many entries have arrived (a big folder takes a while)
+  const reportProgress = (count) => {
+    if (!event.sender.isDestroyed()) event.sender.send('sftp-list-progress', { sessionId, remotePath, count });
+  };
+  const listing = await readDirectory(sftp, remotePath, reportProgress).then((list) => {
+    {
       const files = list.map(item => {
         const names = parseLongnameOwner(item.longname);
         return {
@@ -2538,8 +2546,14 @@ ipcMain.handle('sftp-list', async (event, { sessionId, remotePath }) => {
         return a.name.localeCompare(b.name);
       });
 
-      resolve(files);
-    });
+      return files;
+    }
+  }, (err) => {
+    // Permission denied 에러를 더 명확하게 전달
+    if (err.code === 2 || String(err.message).includes('Permission denied')) {
+      throw new Error('Permission denied: 이 폴더에 접근할 권한이 없습니다.');
+    }
+    throw new Error(err.message || '폴더를 읽을 수 없습니다.');
   });
 
   return sftpSymlinks.resolveSymlinks(remotePath, listing, {
@@ -2656,6 +2670,27 @@ ipcMain.handle('sftp-delete', async (event, { sessionId, remotePath, isDirectory
 });
 
 // 이름 변경
+// What a path is (links followed), for a name right-clicked in the terminal. Null when it is not there.
+ipcMain.handle('sftp-stat', (event, { sessionId, remotePath }) => {
+  const sftp = sftpSessions.get(sessionId);
+  if (!sftp) throw new Error('SFTP 세션이 없습니다.');
+  return new Promise((resolve) => {
+    sftp.stat(String(remotePath), (err, stats) => {
+      if (err || !stats) return resolve(null);
+      resolve({ isFile: stats.isFile(), isDirectory: stats.isDirectory(), size: stats.size });
+    });
+  });
+});
+
+// The server's own spelling of a path ('.' is the login folder), for "SFTP 를 현재 폴더로"
+ipcMain.handle('sftp-realpath', (event, { sessionId, remotePath }) => {
+  const sftp = sftpSessions.get(sessionId);
+  if (!sftp) throw new Error('SFTP 세션이 없습니다.');
+  return new Promise((resolve, reject) => {
+    sftp.realpath(String(remotePath), (err, resolved) => (err ? reject(err) : resolve(resolved)));
+  });
+});
+
 ipcMain.handle('sftp-rename', async (event, { sessionId, oldPath, newPath }) => {
   const sftp = sftpSessions.get(sessionId);
   if (!sftp) {

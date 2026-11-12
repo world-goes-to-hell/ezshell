@@ -15,6 +15,7 @@ import { TransferMarkBadge, transferMarkClass } from './TransferMarkBadge'
 import { transferMarksFor } from '../../lib/transferMarks'
 import type { RemoteFileMode } from '../../types'
 import './FileList.css'
+import { useListWindow } from '../../hooks/useListWindow'
 import {
   FileListContextMenu, buildContextMenuItems, type ContextMenuAction
 } from './FileListContextMenu'
@@ -43,6 +44,8 @@ interface FileListProps {
   /** Remote list: open a file in the server file window (preview or edit). Hidden when not provided. */
   onOpenFile?: (file: FileItem, mode: RemoteFileMode) => void
   isLoading?: boolean
+  /** Entries read so far while a big folder is being listed */
+  loadingCount?: number
 }
 
 interface ContextMenuState {
@@ -55,6 +58,8 @@ interface ContextMenuState {
 type EditState = { mode: 'rename'; name: string } | { mode: 'create'; initialName: string }
 
 const KEEP_SELECTION_ATTR = 'data-sftp-keep-selection'
+/** The column header stays at the top of the list; a row scrolled into view stops below it */
+const STICKY_HEADER_HEIGHT = 32
 
 /** Spread onto containers whose controls act on the current selection (e.g. the SFTP toolbar). */
 export const keepSelectionProps = { [KEEP_SELECTION_ATTR]: '' }
@@ -64,7 +69,7 @@ const PARENT_ROW_KEY = '/..'
 
 export function FileList({
   files: rawFiles, selected, onNavigate, currentPath, type, sessionId,
-  onUpload, onDownload, onDelete, onRename, onCreateFolder, onFocusPath, onDrop, onMoveInto, onOpenFile, isLoading
+  onUpload, onDownload, onDelete, onRename, onCreateFolder, onFocusPath, onDrop, onMoveInto, onOpenFile, isLoading, loadingCount
 }: FileListProps) {
   const store = useSftpStore()
   // Kept while the panel stays open (this component stays mounted across folder changes)
@@ -80,7 +85,9 @@ export function FileList({
   useWheelRowScroll(fileListRef, '.file-item')
   // Mouse thumb buttons (and Alt+Left / Alt+Right): back / forward through visited directories
   const stepHistory = useDirectoryHistory(fileListRef, currentPath, !!isLoading, onNavigate)
-  const itemRefs = useRef<(HTMLDivElement | null)[]>([])
+  // Only the rows in view are drawn (a folder can hold tens of thousands of files)
+  const rowsRef = useRef<HTMLDivElement>(null)
+  const listWindow = useListWindow(fileListRef, rowsRef, files.length, STICKY_HEADER_HEIGHT)
   const [isDragOver, setIsDragOver] = useState(false)
   const folderDrop = useFolderDropTargets({
     type, sessionId, dirPath: currentPath, onMoveInto, onTransferInto: onDrop,
@@ -144,7 +151,7 @@ export function FileList({
     selectOnly(files[index].name)
     setLastSelectedIndex(index)
     setFocusIndex(index)
-    itemRefs.current[index]?.scrollIntoView({ block: 'nearest' })
+    listWindow.scrollToIndex(index)
     // New listing only: re-sorting keeps selection and is handled in handleSort
   }, [rawFiles])
 
@@ -169,7 +176,7 @@ export function FileList({
     selectOnly(files[index].name)
     setLastSelectedIndex(index)
     setFocusIndex(index)
-    itemRefs.current[index]?.scrollIntoView({ block: 'nearest' })
+    listWindow.scrollToIndex(index)
   }
 
   // F2 renames the focused entry, like Explorer; otherwise the most recently selected one
@@ -282,7 +289,7 @@ export function FileList({
       selectOnly(files[nextIndex].name)
       setLastSelectedIndex(nextIndex)
     }
-    itemRefs.current[nextIndex]?.scrollIntoView({ block: 'nearest' })
+    listWindow.scrollToIndex(nextIndex)
   }
 
   const handleListKeyDown = (e: React.KeyboardEvent) => {
@@ -489,7 +496,7 @@ export function FileList({
       {isLoading && (
         <div className="file-list-loading">
           <div className="loading-spinner" />
-          <span>로딩 중...</span>
+          <span>{loadingCount ? `불러오는 중… ${loadingCount.toLocaleString()}개` : '불러오는 중…'}</span>
         </div>
       )}
       <FileListHeader type={type} sort={sort} onSort={handleSort} />
@@ -514,13 +521,16 @@ export function FileList({
           />
         </div>
       )}
-      {files.map((file, index) => {
+      <div ref={rowsRef} className="file-rows" style={{ height: files.length * listWindow.rowHeight }}>
+      {listWindow.start > 0 && <div style={{ height: listWindow.start * listWindow.rowHeight }} aria-hidden="true" />}
+      {files.slice(listWindow.start, listWindow.end).map((file, offset) => {
+        const index = listWindow.start + offset
         const isRenaming = editing?.mode === 'rename' && editing.name === file.name
         const mark = file.type === 'file' ? transferMarks.get(file.name) : undefined
         return (
           <div
             key={file.name}
-            ref={(el) => { itemRefs.current[index] = el }}
+            data-list-row=""
             className={`file-item ${file.type === 'directory' ? 'is-directory' : 'is-file'} ${selected.has(file.name) ? 'selected' : ''} ${focusIndex === index ? 'focused' : ''} ${isRenaming ? 'is-editing' : ''} ${folderDrop.dropTargetKey === file.name ? 'drop-target' : ''} ${transferMarkClass(mark)}`}
             onClick={(e) => handleClick(e, file, index)}
             onDoubleClick={() => handleDoubleClick(file)}
@@ -558,6 +568,7 @@ export function FileList({
           </div>
         )
       })}
+      </div>
 
       {contextMenu.visible && (
         <FileListContextMenu

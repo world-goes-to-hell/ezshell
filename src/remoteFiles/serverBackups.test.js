@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { createRequire } from 'module'
 
 const require = createRequire(import.meta.url)
-const { matchServerBackup, stampOf, listServerBackups, MAX_SERVER_BACKUPS } = require('./serverBackups.js')
+const { matchServerBackup, stampOf, stampInName, listServerBackups, MAX_SERVER_BACKUPS } = require('./serverBackups.js')
 const { createFakeSftp } = require('../mcp/fakeSftp.testhelper.js')
 
 const at = (y, mo, d, h = 0, mi = 0, s = 0) => new Date(y, mo - 1, d, h, mi, s).getTime()
@@ -39,6 +39,64 @@ describe('matchServerBackup', () => {
     ]) {
       expect(matchServerBackup(name, base), name).toBe(false)
     }
+  })
+})
+
+describe('matchServerBackup: the many ways people name a backup', () => {
+  const BASE = 'index.jsp'
+
+  it('takes a mark after the name', () => {
+    for (const name of [
+      'index.jsp.261102', 'index.jsp_261102', 'index.jsp-261102', 'index.jsp.26.11.02', 'index.jsp.261102_1530',
+      'index.jsp.org', 'index.jsp.ori', 'index.jsp_bak', 'index.jsp.bak2', 'index.jsp.bak_kim', 'index.jsp.261102.kim',
+      'index.jsp.1', 'index.jsp_1102', 'index.jspbak', 'index.jsp261102', 'index.jsp.백업', 'index.jsp_수정전'
+    ]) expect(matchServerBackup(name, BASE), name).toBe(true)
+  })
+
+  it('takes a mark before the extension', () => {
+    for (const name of [
+      'index_261102.jsp', 'index.261102.jsp', 'index-20261102.jsp', 'index_bak.jsp', 'index.bak.jsp', 'index_old.jsp',
+      'index (1).jsp', 'index(2).jsp', 'index - 복사본.jsp', 'index - 복사본 (2).jsp', 'index_1102.jsp',
+      'index_backup_261102.jsp', 'index_v2_bak.jsp', 'indexold.jsp'
+    ]) expect(matchServerBackup(name, BASE), name).toBe(true)
+  })
+
+  it('takes a mark in front of the name', () => {
+    for (const name of ['bak_index.jsp', 'old_index.jsp', '261102_index.jsp', '20261102-index.jsp', 'Copy of index.jsp', '복사본 - index.jsp', 'backup.index.jsp']) {
+      expect(matchServerBackup(name, BASE), name).toBe(true)
+    }
+  })
+
+  it('leaves files that are something else', () => {
+    for (const name of [
+      'index.jsp.template', 'index.jsp.sample', 'index.jsp.sha256', 'index_admin.jsp', 'index2.jsp', 'index_1.jsp', 'index_new.jsp',
+      'index_2025.jsp', 'indexer.jsp', 'main_index.jsp', 'sub.index.jsp', 'my-index.jsp', '.index.jsp', 'index.jspx',
+      'index.jspx.bak', 'index_backup_admin.jsp', 'index.json'
+    ]) expect(matchServerBackup(name, BASE), name).toBe(false)
+  })
+
+  it('works for names without an extension and hidden files', () => {
+    expect(matchServerBackup('hosts.261102', 'hosts')).toBe(true)
+    expect(matchServerBackup('bak_hosts', 'hosts')).toBe(true)
+    expect(matchServerBackup('ghosts', 'hosts')).toBe(false)
+    expect(matchServerBackup('.env_261102', '.env')).toBe(true)
+    expect(matchServerBackup('prod.env', '.env')).toBe(false)
+  })
+})
+
+describe('stampInName', () => {
+  it('reads a short date (year, month, day) wherever the mark is', () => {
+    expect(stampInName('index.jsp.261102', 'index.jsp')).toBe(at(2026, 11, 2))
+    expect(stampInName('index_261102.jsp', 'index.jsp')).toBe(at(2026, 11, 2))
+    expect(stampInName('261102_index.jsp', 'index.jsp')).toBe(at(2026, 11, 2))
+    expect(stampInName('index.jsp.261102_1530', 'index.jsp')).toBe(at(2026, 11, 2, 15, 30))
+    expect(stampInName('index.jsp.26.11.02', 'index.jsp')).toBe(at(2026, 11, 2))
+  })
+
+  it('takes a two-digit year far ahead as the last century, and has no date for a month and day alone', () => {
+    expect(stampInName('index.jsp.991231', 'index.jsp')).toBe(at(1999, 12, 31))
+    expect(stampInName('index.jsp_1102', 'index.jsp')).toBeNull()
+    expect(stampInName('index.jsp.bak', 'index.jsp')).toBeNull()
   })
 })
 

@@ -1,9 +1,10 @@
-import { useCallback, useState, type MouseEvent, type ReactNode } from 'react'
+import { useCallback, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { Terminal } from 'xterm'
 import {
   RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine,
   RiLayoutLine, RiMagicLine, RiFileSearchLine, RiSearchLine, RiFindReplaceLine, RiFolderLine, RiCodeSSlashLine,
-  RiTerminalBoxLine, RiFileCopy2Line, RiRecordCircleLine, RiStopCircleLine, RiFolderTransferLine, RiCloseCircleLine
+  RiTerminalBoxLine, RiFileCopy2Line, RiRecordCircleLine, RiStopCircleLine, RiFolderTransferLine, RiCloseCircleLine, RiFolderSharedLine, RiAddLine, RiSettings3Line
 } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useSessionLogStore } from '../../stores/sessionLogStore'
@@ -11,14 +12,23 @@ import { useSftpStore } from '../../stores/sftpStore'
 import { toggleSessionLog } from '../../lib/sessionLogActions'
 import { useSnippetStore } from '../../stores/snippetStore'
 import { findQueryFromSelection } from '../../lib/terminalText'
+import { syncSftpToTerminal } from '../../lib/sftpSync'
 import { terminalPaneAt } from '../../lib/terminalPanes'
 import { FIND_QUERY_MAX_LENGTH, type FindKind } from '../../lib/terminalFind'
 import { commonTerminalItems } from './terminalMenuCommon'
-import { TerminalContextMenu, type TerminalMenuGroup, type TerminalMenuItem } from './TerminalContextMenu'
+import { TerminalContextMenu, MENU_SEPARATOR, type TerminalMenuGroup, type TerminalMenuItem } from './TerminalContextMenu'
+import { SnippetModal } from '../Snippets/SnippetModal'
+import { findTarget, nameAtPointer, targetHint, targetItems, type TerminalTarget } from './terminalTargetMenu'
 import { TerminalFindDialog } from './TerminalFindDialog'
 
 /** Snippets listed in the menu; the rest are in the snippet manager */
 const MAX_SNIPPETS_IN_MENU = 15
+
+/** How long the menu waits for the server to say what the right-clicked name is, before opening without it */
+const TARGET_WAIT_MS = 400
+
+/** App.tsx opens the snippet manager when it hears this */
+export const OPEN_SNIPPET_MANAGER_EVENT = 'ezshell:open-snippet-manager'
 
 /** App.tsx opens another tab to the same server when it hears this (detail: the tab's id) */
 export const DUPLICATE_TAB_EVENT = 'ezshell:duplicate-tab'
@@ -41,9 +51,13 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
   onContextMenu: (event: MouseEvent) => void
   contextMenu: ReactNode
 } {
-  const [menu, setMenu] = useState<{ x: number; y: number; terminal: Terminal } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; terminal: Terminal; target: TerminalTarget | null } | null>(null)
+  // Only the latest right-click may open the menu (an earlier one may still be asking the server)
+  const requestRef = useRef(0)
   const [find, setFind] = useState<{ kind: FindKind; terminal: Terminal; query: string } | null>(null)
   const snippets = useSnippetStore(state => state.snippets)
+  // A new snippet being written from the menu (its command starts as the selected text)
+  const [snippetDraft, setSnippetDraft] = useState<{ command: string; terminal: Terminal } | null>(null)
   const tab = useTerminalStore(state => state.terminals.get(sessionId))
   const setSplit = useTerminalStore(state => state.setSplit)
   const isLogging = useSessionLogStore(state => sessionId in state.files)
@@ -54,8 +68,24 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
     const terminal = terminalPaneAt(event.target)
     if (!terminal) return
     event.preventDefault()
-    setMenu({ x: event.clientX, y: event.clientY, terminal })
-  }, [])
+    const at = { x: event.clientX, y: event.clientY, terminal }
+    const request = ++requestRef.current
+    const name = nameAtPointer(terminal, event.clientX, event.clientY)
+    if (!name) {
+      setMenu({ ...at, target: null })
+      return
+    }
+    // The folder is known for the tab's main terminal only (read from its prompt); a split shell
+    // is in a folder of its own, so only absolute paths are looked up there
+    const isSplitShell = event.target instanceof Element && event.target.closest('.split-terminal') !== null
+    const cwd = isSplitShell ? undefined : useTerminalStore.getState().terminals.get(sessionId)?.currentPath
+    // The menu opens once, with the file's actions already in it: adding them afterwards would move
+    // the items under the pointer. A server that takes too long gets the plain menu.
+    const wait = new Promise<null>(resolve => { window.setTimeout(() => resolve(null), TARGET_WAIT_MS) })
+    void Promise.race([findTarget(sessionId, name, cwd), wait]).then((target) => {
+      if (requestRef.current === request) setMenu({ ...at, target })
+    })
+  }, [sessionId])
 
   let contextMenu: ReactNode = null
   if (menu) {
@@ -97,11 +127,29 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
           { label: '이름 찾기…', icon: RiFileSearchLine, onSelect: () => setFind({ kind: 'name', terminal, query }) },
           { label: '내용 찾기…', icon: RiSearchLine, onSelect: () => setFind({ kind: 'content', terminal, query }) },
           { label: '화면에서 찾기', icon: RiFindReplaceLine, onSelect: onOpenSearch },
+          MENU_SEPARATOR,
           ...output,
+          MENU_SEPARATOR,
+          { label: 'SFTP 를 현재 폴더로', icon: RiFolderSharedLine, onSelect: then(() => void syncSftpToTerminal(sessionId)) },
           { label: isFileExplorerOpen ? '파일 탐색기 닫기' : '파일 탐색기 열기', icon: RiFolderLine, onSelect: then(onToggleFileExplorer) }
         ]
       },
-      ...(snippetItems.length > 0 ? [{ label: '스니펫', icon: RiCodeSSlashLine, items: snippetItems }] : []),
+      {
+        label: '스니펫',
+        icon: RiCodeSSlashLine,
+        items: [
+          ...snippetItems,
+          ...(snippetItems.length > 0 ? [MENU_SEPARATOR] : []),
+          {
+            label: selection.trim() ? '선택한 내용을 스니펫으로 추가…' : '스니펫 추가…',
+            icon: RiAddLine,
+            // Opened after this click has ended: the form closes on a click outside it, and the click that
+            // chose this item would land on the form's backdrop once the menu is gone
+            onSelect: () => { window.setTimeout(() => setSnippetDraft({ command: selection.trim(), terminal }), 0) }
+          },
+          { label: '스니펫 관리…', icon: RiSettings3Line, onSelect: () => window.dispatchEvent(new CustomEvent(OPEN_SNIPPET_MANAGER_EVENT)) }
+        ]
+      },
       {
         label: '세션',
         icon: RiTerminalBoxLine,
@@ -113,11 +161,15 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
             onSelect: then(() => void toggleSessionLog(sessionId, tab ? tabName : ''))
           },
           { label: isSftpOpen ? 'SFTP 닫기' : 'SFTP 열기', icon: RiFolderTransferLine, onSelect: then(() => useSftpStore.getState().setOpen(sessionId, !isSftpOpen)) },
+          MENU_SEPARATOR,
           { label: '연결 종료', icon: RiCloseCircleLine, onSelect: onCloseSession }
         ]
       }
     ]
-    contextMenu = <TerminalContextMenu key={`${menu.x}:${menu.y}`} position={menu} top={top} groups={groups} onClose={() => setMenu(null)} />
+    const target = menu.target
+      ? { name: menu.target.name, hint: targetHint(menu.target), items: targetItems(sessionId, tabName, menu.target, terminal, then) }
+      : undefined
+    contextMenu = <TerminalContextMenu key={`${menu.x}:${menu.y}`} position={menu} target={target} top={top} groups={groups} onClose={() => setMenu(null)} />
   }
 
   return {
@@ -125,6 +177,18 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
     contextMenu: (
       <>
         {contextMenu}
+        {snippetDraft && createPortal(
+          <SnippetModal
+            snippetId={null}
+            initialCommand={snippetDraft.command}
+            onClose={() => {
+              const { terminal } = snippetDraft
+              setSnippetDraft(null)
+              window.setTimeout(() => terminal.focus(), 0)
+            }}
+          />,
+          document.body
+        )}
         {find && (
           <TerminalFindDialog
             kind={find.kind}

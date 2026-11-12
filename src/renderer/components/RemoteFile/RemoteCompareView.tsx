@@ -14,6 +14,65 @@ import './RemoteCompare.css'
 const LANGUAGE_MAX_CHARS = 1_000_000
 /** Exact diffing gives up after this and falls back to a rougher one (same budget as the save review) */
 const DIFF_TIMEOUT_MS = 300
+const SYNC_SCROLL_KEY = 'remoteCompareSyncScroll'
+
+function readSyncScroll(): boolean {
+  try {
+    return localStorage.getItem(SYNC_SCROLL_KEY) !== 'off'
+  } catch {
+    return true
+  }
+}
+
+/**
+ * Keeps the two sides at the same horizontal position (up and down they already move as one: the
+ * merge view has a single vertical scroll), and drives them from one scroll bar under the view.
+ * Each side's own horizontal bar is at the end of the file, out of sight in a long one.
+ * Returns the function that stops it.
+ */
+function linkHorizontalScroll(a: HTMLElement, b: HTMLElement, bar: HTMLElement, isOn: () => boolean): () => void {
+  const all = [a, b, bar]
+  // An element we just moved reports a scroll of its own; that one must not be sent on. The shorter
+  // side stops at its own end, and sending that position on would pull the longer side back with it.
+  const moved = new WeakSet<HTMLElement>()
+  const follow = (source: HTMLElement) => () => {
+    if (moved.has(source)) {
+      moved.delete(source)
+      return
+    }
+    if (!isOn()) return
+    for (const target of all) {
+      if (target === source || target.scrollLeft === source.scrollLeft) continue
+      const before = target.scrollLeft
+      target.scrollLeft = source.scrollLeft
+      if (target.scrollLeft !== before) moved.add(target)
+    }
+  }
+  // The bar is as long as the longer side
+  const measure = () => {
+    const range = Math.max(a.scrollWidth - a.clientWidth, b.scrollWidth - b.clientWidth, 0)
+    const track = bar.firstElementChild as HTMLElement | null
+    if (track) track.style.width = `${bar.clientWidth + range}px`
+    bar.classList.toggle('is-needed', range > 0)
+  }
+  const handlers = all.map(element => {
+    const handler = follow(element)
+    element.addEventListener('scroll', handler, { passive: true })
+    return () => element.removeEventListener('scroll', handler)
+  })
+  const observer = new ResizeObserver(measure)
+  for (const side of [a, b]) {
+    observer.observe(side)
+    const content = side.querySelector('.cm-content')
+    if (content) observer.observe(content)
+  }
+  observer.observe(bar)
+  measure()
+  return () => {
+    observer.disconnect()
+    for (const stop of handlers) stop()
+  }
+}
 
 interface RemoteCompareViewProps {
   docId: string
@@ -47,10 +106,14 @@ const optionLabel = (entry: BackupEntry): string =>
  */
 export function RemoteCompareView({ docId, fileName, entries, backupKey, onBackupKey, getEditor, readOnly, onSave, onClose }: RemoteCompareViewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
+  const barRef = useRef<HTMLDivElement>(null)
   const mergeRef = useRef<MergeView | null>(null)
   const [loaded, setLoaded] = useState<Loaded>(null)
   const [collapse, setCollapse] = useState(true)
   const [chunkCount, setChunkCount] = useState<number | null>(null)
+  const [syncScroll, setSyncScroll] = useState(readSyncScroll)
+  const syncScrollRef = useRef(syncScroll)
+  syncScrollRef.current = syncScroll
   const onSaveRef = useRef(onSave)
   onSaveRef.current = onSave
   const onCloseRef = useRef(onClose)
@@ -123,6 +186,8 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
     })
     mergeRef.current = merge
     setChunkCount(merge.chunks.length)
+    const bar = barRef.current
+    const unlinkScroll = bar ? linkHorizontalScroll(merge.a.scrollDOM, merge.b.scrollDOM, bar, () => syncScrollRef.current) : () => {}
 
     let isCancelled = false
     const bigger = Math.max(backupText.length, editor.state.doc.length)
@@ -134,10 +199,26 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
     merge.b.focus()
     return () => {
       isCancelled = true
+      unlinkScroll()
       merge.destroy()
       mergeRef.current = null
     }
   }, [loaded, collapse, getEditor, readOnly, fileName])
+
+  const changeSyncScroll = (isOn: boolean) => {
+    setSyncScroll(isOn)
+    try {
+      localStorage.setItem(SYNC_SCROLL_KEY, isOn ? 'on' : 'off')
+    } catch {
+      // Only a convenience
+    }
+    // Turned on: the backup side comes to where the editor side is
+    const merge = mergeRef.current
+    if (isOn && merge) {
+      merge.a.scrollDOM.scrollLeft = merge.b.scrollDOM.scrollLeft
+      if (barRef.current) barRef.current.scrollLeft = merge.b.scrollDOM.scrollLeft
+    }
+  }
 
   const goChunk = (direction: 'previous' | 'next') => {
     const view = mergeRef.current?.b
@@ -172,6 +253,10 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
         </button>
         <span className="remote-compare-summary" role="status">{summary}</span>
         <span className="remote-compare-spacer" />
+        <label className="remote-compare-check" title="좌우로 넘길 때 양쪽이 같이 움직입니다. 위아래는 항상 같이 움직입니다.">
+          <input type="checkbox" checked={syncScroll} onChange={(e) => changeSyncScroll(e.target.checked)} />
+          <span>스크롤 동기화</span>
+        </label>
         <label className="remote-compare-check">
           <input type="checkbox" checked={collapse} onChange={(e) => setCollapse(e.target.checked)} />
           <span>같은 줄 접기</span>
@@ -194,6 +279,8 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
       {loaded && 'error' in loaded && <p className="remote-compare-message" role="alert">{loaded.error}</p>}
       {!loaded && <p className="remote-compare-message">백업을 읽는 중…</p>}
       <div className="remote-compare-host" ref={hostRef} />
+      {/* One horizontal scroll bar for both sides, always in view (only while they move together) */}
+      <div className="remote-compare-hscroll" ref={barRef} hidden={!syncScroll} aria-hidden="true"><div /></div>
     </section>
   )
 }

@@ -15,12 +15,50 @@
   color: var(--warning);
 }
 
-.remote-backup-hint code {
-  padding: 0 3px;
+/* What the two icons in the list mean: icon, name and explanation line up in columns */
+.backup-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.backup-legend-row {
+  display: grid;
+  grid-template-columns: 15px 1fr;
+  column-gap: 8px;
+  row-gap: 1px;
+  align-items: center;
+}
+
+.backup-legend-row .backup-source-icon {
+  vertical-align: 0;
+}
+
+.backup-legend dt {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.backup-legend dd {
+  grid-column: 2;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.backup-legend code {
+  padding: 1px 4px;
   border-radius: 3px;
   background: var(--bg-tertiary);
+  color: var(--text-primary);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .remote-backup-item.backup-entry {
@@ -263,4 +301,23 @@
   color: var(--text-secondary);
   font-family: var(--font-sans);
   font-size: 12px;
+}
+
+/* One horizontal scroll bar under the comparison, for both sides */
+.remote-compare-hscroll {
+  display: none;
+  flex: none;
+  height: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.remote-compare-hscroll.is-needed:not([hidden]) {
+  display: block;
+}
+
+.remote-compare-hscroll > div {
+  height: 1px;
 }

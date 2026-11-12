@@ -72,6 +72,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sftpDownload: (sessionId, remotePath, localPath) => ipcRenderer.invoke('sftp-download', { sessionId, remotePath, localPath }),
   sftpUpload: (sessionId, localPath, remotePath) => ipcRenderer.invoke('sftp-upload', { sessionId, localPath, remotePath }),
   sftpDelete: (sessionId, remotePath, isDirectory) => ipcRenderer.invoke('sftp-delete', { sessionId, remotePath, isDirectory }),
+  onSftpListProgress: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('sftp-list-progress', handler);
+    return () => ipcRenderer.removeListener('sftp-list-progress', handler);
+  },
+  sftpStat: (sessionId, remotePath) => ipcRenderer.invoke('sftp-stat', { sessionId, remotePath }),
+  sftpRealpath: (sessionId, remotePath) => ipcRenderer.invoke('sftp-realpath', { sessionId, remotePath }),
   sftpRename: (sessionId, oldPath, newPath) => ipcRenderer.invoke('sftp-rename', { sessionId, oldPath, newPath }),
   sftpMkdir: (sessionId, remotePath) => ipcRenderer.invoke('sftp-mkdir', { sessionId, remotePath }),
 

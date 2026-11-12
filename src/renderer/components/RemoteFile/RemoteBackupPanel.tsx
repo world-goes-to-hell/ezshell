@@ -70,10 +70,18 @@ export function RemoteBackupPanel({ docId, entries, error, selectedKey, onSelect
           <RiCloseLine size={16} />
         </button>
       </div>
-      <p className="remote-backup-hint">
-        <RiComputerLine size={12} className="backup-source-icon is-app" aria-hidden="true" /> 앱 백업: 저장 직전 서버 내용을 이 PC 에 평문으로 남깁니다 (최근 20개).{' '}
-        <RiServerLine size={12} className="backup-source-icon is-server" aria-hidden="true" /> 서버 파일: 같은 폴더의 <code>이름.bak_날짜</code> 같은 파일입니다.
-      </p>
+      <dl className="backup-legend">
+        <div className="backup-legend-row">
+          <RiComputerLine size={15} className="backup-source-icon is-app" aria-hidden="true" />
+          <dt>앱 백업</dt>
+          <dd>저장하기 직전의 서버 내용입니다. 이 PC 에 평문으로 최근 20개를 남깁니다.</dd>
+        </div>
+        <div className="backup-legend-row">
+          <RiServerLine size={15} className="backup-source-icon is-server" aria-hidden="true" />
+          <dt>서버 파일</dt>
+          <dd>같은 폴더에 있는 <code>이름.bak_날짜</code> 같은 파일입니다.</dd>
+        </div>
+      </dl>
       {error && <p className="remote-backup-empty">{error}</p>}
       {entries && entries.length === 0 && <p className="remote-backup-empty">아직 백업이 없습니다. 저장하면 생깁니다.</p>}
       <ul className="remote-backup-list">

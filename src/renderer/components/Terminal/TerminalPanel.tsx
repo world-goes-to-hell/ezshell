@@ -21,6 +21,7 @@ import { CommandHistoryPanel } from './CommandHistoryPanel'
 import { ConnectionLostOverlay } from './ConnectionLostOverlay'
 import { useTerminalContextMenu } from './useTerminalContextMenu'
 import { registerTerminalPane } from '../../lib/terminalPanes'
+import { attachFileLinks } from './terminalFileLinks'
 import 'xterm/css/xterm.css'
 import { SerializeAddon } from 'xterm-addon-serialize'
 import { registerTerminalSerializer, setPendingSnapshot, takePendingSnapshot, SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
@@ -238,7 +239,20 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       unregisterSerializer = registerTerminalSerializer(sessionId, serializeScreen)
 
       term.open(terminalRef.current)
-      unregisterPane = registerTerminalPane(terminalRef.current, term)
+      const unregister = registerTerminalPane(terminalRef.current, term)
+      // File and folder names under the pointer are underlined (right-click offers their actions)
+      const fileLinks = attachFileLinks(term, {
+        sessionId,
+        getCwd: () => useTerminalStore.getState().terminals.get(sessionId)?.currentPath,
+        getSessionName: () => {
+          const tab = useTerminalStore.getState().terminals.get(sessionId)
+          return tab ? (tab.title || `${tab.username}@${tab.host}`) : ''
+        }
+      })
+      unregisterPane = () => {
+        fileLinks.dispose()
+        unregister()
+      }
       disableCopyOnSelect = enableCopyOnSelect(term)
       detachCommandHistory = commandHistory.attach(term)
       terminalInstance.current = term

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useSessionStore, Folder, Session } from '../../stores/sessionStore'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { groupTabsBySession } from '../../lib/sessionTabs'
-import { RiArrowDownSFill, RiArrowRightSFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiCloseLine, RiPaletteLine, RiAddLine, RiFileCopyLine, RiPlugLine, RiCheckLine } from 'react-icons/ri'
+import { RiArrowDownSFill, RiArrowRightSFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiCloseLine, RiPaletteLine, RiAddLine, RiFileCopyLine, RiPlugLine, RiCheckLine, RiShareLine, RiKey2Line, RiClipboardLine } from 'react-icons/ri'
 import { collapseVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { MoveToFolderSubmenu } from './MoveToFolderSubmenu'
@@ -13,6 +13,9 @@ import { getFolderPath } from '../../lib/folderPath'
 import { confirmDialog } from '../../stores/confirmStore'
 import { placeContextMenu } from '../../lib/sidePanelPlacement'
 import { SESSION_COLORS } from '../../lib/sessionColors'
+import { buildShareText, buildFolderShareText, ShareTooLargeError } from '../../lib/sessionShare'
+import { toast } from '../../stores/toastStore'
+import { SharePassphraseDialog } from './SharePassphraseDialog'
 
 interface ContextMenuState {
   visible: boolean
@@ -32,9 +35,11 @@ interface SessionListProps {
   onEditSession?: (session: Session) => void
   onDuplicateSession?: (session: Session) => void
   onAddSession?: (folderId?: string) => void
+  /** Opens the paste dialog for session text, adding into the given folder */
+  onImportSession?: (folderId?: string) => void
 }
 
-export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession, onAddSession }: SessionListProps) {
+export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession, onAddSession, onImportSession }: SessionListProps) {
   const { sessions, folders, expandedFolders, toggleFolder, addFolder, updateFolder, removeFolder, removeSession, moveSessionToFolder, reorderSession, updateSession, saveToBackend } = useSessionStore()
   const reducedMotion = useReducedMotion()
   const terminals = useTerminalStore(state => state.terminals)
@@ -370,6 +375,80 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
     setContextMenu(prev => ({ ...prev, visible: false }))
   }
 
+  // Connection info as text for a messenger. A folder carries every sub-folder and session under it.
+  // Passwords go only sealed with a shared passphrase the user picks in SharePassphraseDialog.
+  const [shareTarget, setShareTarget] = useState<{ type: 'session' | 'folder'; id: string } | null>(null)
+
+  const shareTextFor = async (target: { type: 'session' | 'folder'; id: string }, passphrase?: string): Promise<string | null> => {
+    if (target.type === 'session') {
+      const session = sessions.find(s => s.id === target.id)
+      return session ? buildShareText(session, { passphrase }) : null
+    }
+    return buildFolderShareText(target.id, folders, sessions, { passphrase })
+  }
+
+  const copyShareText = async (target: { type: 'session' | 'folder'; id: string }, passphrase?: string): Promise<void> => {
+    let text: string | null
+    try {
+      text = await shareTextFor(target, passphrase)
+    } catch (error) {
+      toast.error('복사하지 못했습니다', error instanceof ShareTooLargeError ? error.message : '연결 정보를 만들지 못했습니다')
+      return
+    }
+    if (!text) {
+      toast.error('복사하지 못했습니다', '세션이나 폴더가 그 사이 지워졌습니다')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      toast.error('복사하지 못했습니다', '클립보드를 쓸 수 없습니다')
+      return
+    }
+    const sealed = text.split('\n')[1]?.includes('.') === true
+    // Start-up scripts always travel in plain text, passwords or not
+    const scriptNote = sharesScript(target) ? ' 자동 실행 스크립트는 그대로 들어가니, 스크립트에 비밀번호나 토큰이 있다면 지우고 보내세요.' : ''
+    toast.success('연결 정보를 복사했습니다', (sealed
+      ? '비밀번호는 공유 암호로 암호화되어 있습니다. 공유 암호는 전화 등 다른 방법으로 알려 주세요.'
+      : '비밀번호는 빠져 있습니다. 받은 사람은 사이드바의 "텍스트로 세션 추가" 로 넣습니다.') + scriptNote)
+  }
+
+  /** Whether any session that goes into the text has a start-up script */
+  const sharesScript = (target: { type: 'session' | 'folder'; id: string }): boolean => {
+    if (target.type === 'session') return Boolean(sessions.find(s => s.id === target.id)?.postConnectScript?.trim())
+    const inside = new Set([target.id])
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const f of folders) {
+        if (f.parentId && inside.has(f.parentId) && !inside.has(f.id)) { inside.add(f.id); grew = true }
+      }
+    }
+    return sessions.some(s => s.folderId !== undefined && inside.has(s.folderId) && Boolean(s.postConnectScript?.trim()))
+  }
+
+  const handleCopyShareText = (includeSecrets: boolean) => {
+    const { type, targetId } = contextMenu
+    setContextMenu(prev => ({ ...prev, visible: false }))
+    if (!targetId || (type !== 'session' && type !== 'folder')) return
+    const target = { type, id: targetId }
+    if (includeSecrets) setShareTarget(target)
+    else void copyShareText(target)
+  }
+
+  const shareSubject = (target: { type: 'session' | 'folder'; id: string }): string => {
+    if (target.type === 'session') {
+      const session = sessions.find(s => s.id === target.id)
+      return `"${session?.name || session?.host || '이'}" 세션`
+    }
+    return `"${getFolderPath(folders, target.id)}" 폴더 안 모든 세션`
+  }
+
+  const handleImportToFolder = () => {
+    if (contextMenu.targetId && onImportSession) onImportSession(contextMenu.targetId)
+    setContextMenu(prev => ({ ...prev, visible: false }))
+  }
+
   // Same flag as the checkbox in the edit dialog's advanced settings. Saving goes through
   // save-sessions, so main drops this session's MCP connection and jobs when it is turned off.
   const handleToggleMcpAccess = () => {
@@ -694,6 +773,12 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
                   <span>세션 추가</span>
                 </div>
               )}
+              {onImportSession && (
+                <div className="context-menu-item" onClick={handleImportToFolder}>
+                  <RiClipboardLine size={16} />
+                  <span>텍스트로 세션 추가</span>
+                </div>
+              )}
               <div className="context-menu-item" onClick={handleAddSubfolder}>
                 <RiFolderAddLine size={16} />
                 <span>하위 폴더 추가</span>
@@ -705,6 +790,14 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
               <div className="context-menu-item" onClick={handleChangeFolderColor}>
                 <RiPaletteLine size={16} />
                 <span>색상 변경</span>
+              </div>
+              <div className="context-menu-item" onClick={() => handleCopyShareText(false)}>
+                <RiShareLine size={16} />
+                <span>폴더 연결 정보 복사</span>
+              </div>
+              <div className="context-menu-item" onClick={() => handleCopyShareText(true)}>
+                <RiKey2Line size={16} />
+                <span>비밀번호 포함 복사…</span>
               </div>
               <div className="context-menu-divider" />
               <div className="context-menu-item danger" onClick={handleDeleteFolder}>
@@ -725,6 +818,14 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
                   <span>복제</span>
                 </div>
               )}
+              <div className="context-menu-item" onClick={() => handleCopyShareText(false)}>
+                <RiShareLine size={16} />
+                <span>연결 정보 복사</span>
+              </div>
+              <div className="context-menu-item" onClick={() => handleCopyShareText(true)}>
+                <RiKey2Line size={16} />
+                <span>비밀번호 포함 복사…</span>
+              </div>
               <div className="context-menu-item" onClick={handleChangeSessionColor}>
                 <RiPaletteLine size={16} />
                 <span>색상 변경</span>
@@ -753,6 +854,16 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
             </>
           )}
         </div>
+      )}
+      {shareTarget && (
+        <SharePassphraseDialog
+          subject={shareSubject(shareTarget)}
+          onCancel={() => setShareTarget(null)}
+          onConfirm={async (passphrase) => {
+            await copyShareText(shareTarget, passphrase)
+            setShareTarget(null)
+          }}
+        />
       )}
     </div>
   )

@@ -1,3 +1,4 @@
+import './FileExplorer.css'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { RiArrowRightSLine, RiRefreshLine, RiHome4Fill, RiArrowUpLine, RiLinkUnlinkM, RiLinkM, RiFolderAddFill } from 'react-icons/ri'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -20,6 +21,11 @@ function nodeTooltip(node: FileNode): string {
   return `${node.path} → ${target}${node.isBrokenLink ? ' (깨진 링크)' : ''}`
 }
 
+/** Entries of one folder drawn at a time; the rest come with "더 보기" */
+const EXPLORER_PAGE_SIZE = 300
+/** Folders up to this size open with the height animation */
+const ANIMATED_CHILDREN_MAX = 100
+
 interface FileExplorerProps {
   sessionId: string
   onFileSelect?: (path: string) => void
@@ -34,6 +40,11 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
   const [isEditingPath, setIsEditingPath] = useState(false)
   const [editingPathValue, setEditingPathValue] = useState('')
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(true)
+  // Folders being read right now, and the entries that have arrived so far for one of them
+  const [loadingDirs, setLoadingDirs] = useState<ReadonlySet<string>>(new Set())
+  const [listProgress, setListProgress] = useState<{ path: string; count: number } | null>(null)
+  // How many entries of a long folder are drawn (the rest wait behind "더 보기")
+  const [shownCounts, setShownCounts] = useState<Record<string, number>>({})
   const reducedMotion = useReducedMotion()
 
   // Get current path from terminal store
@@ -41,14 +52,51 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
   const currentPath = terminal?.currentPath || '/'
 
   const loadDirectory = useCallback(async (path: string): Promise<FileNode[]> => {
+    setLoadingDirs(current => new Set(current).add(path))
     try {
       const rawFiles = await window.electronAPI.sftpList(sessionId, path)
       return toFileNodes(rawFiles || [], path)
     } catch (error) {
       console.error('Failed to load directory:', error)
       return []
+    } finally {
+      setLoadingDirs(current => {
+        const next = new Set(current)
+        next.delete(path)
+        return next
+      })
+      setListProgress(current => (current?.path === path ? null : current))
     }
   }, [sessionId])
+
+  // The main process reports how many entries of a big folder have arrived
+  useEffect(() => window.electronAPI.onSftpListProgress?.((data) => {
+    if (data.sessionId === sessionId) setListProgress({ path: data.remotePath, count: data.count })
+  }), [sessionId])
+
+  const loadingLabel = (path: string): string =>
+    listProgress?.path === path ? `불러오는 중… ${listProgress.count.toLocaleString()}개` : '불러오는 중…'
+
+  /** The entries of a folder that are drawn, and the row that shows more of them */
+  const renderEntries = (folderPath: string, nodes: FileNode[], basePath: number[], depth: number) => {
+    const shown = shownCounts[folderPath] ?? EXPLORER_PAGE_SIZE
+    const rest = nodes.length - shown
+    return (
+      <>
+        {nodes.slice(0, shown).map((child, i) => renderNode(child, [...basePath, i], depth))}
+        {rest > 0 && (
+          <button
+            type="button"
+            className="file-explorer-more"
+            style={{ paddingLeft: depth * 16 + 28 }}
+            onClick={() => setShownCounts(current => ({ ...current, [folderPath]: shown + EXPLORER_PAGE_SIZE }))}
+          >
+            {rest.toLocaleString()}개 더 있음 · {Math.min(rest, EXPLORER_PAGE_SIZE).toLocaleString()}개 더 보기
+          </button>
+        )}
+      </>
+    )
+  }
 
   const loadPath = useCallback(async (path: string) => {
     setLoading(true)
@@ -274,7 +322,7 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
 
     return (
       <div key={node.path}>
-        <motion.div
+        <div
           className={`file-explorer-item ${node.isSymlink ? 'is-symlink' : ''} ${node.isBrokenLink ? 'is-broken-link' : ''} ${selectedPath === node.path ? 'is-selected' : ''}`}
           style={{ paddingLeft }}
           onClick={() => {
@@ -283,17 +331,11 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
           }}
           onContextMenu={(e) => openMenu(e, node)}
           title={nodeTooltip(node)}
-          whileHover={reducedMotion ? undefined : { backgroundColor: 'var(--bg-hover)' }}
-          transition={{ duration: 0.15 }}
         >
           {isDir ? (
-            <motion.span
-              className="expand-icon"
-              animate={{ rotate: node.isExpanded ? 90 : 0 }}
-              transition={reducedMotion ? { duration: 0 } : { duration: 0.15 }}
-            >
+            <span className={`expand-icon${node.isExpanded ? ' is-open' : ''}`}>
               <RiArrowRightSLine size={16} />
-            </motion.span>
+            </span>
           ) : (
             <span className="expand-icon" style={{ visibility: 'hidden' }}>
               <RiArrowRightSLine size={16} />
@@ -326,9 +368,19 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
               )}
             </span>
           )}
-        </motion.div>
+        </div>
+        {isDir && node.isExpanded && !node.isLoaded && loadingDirs.has(node.path) && (
+          <div className="file-explorer-loading-row" style={{ paddingLeft: paddingLeft + 20 }} role="status">
+            <span className="loading-spinner" aria-hidden="true" />
+            {loadingLabel(node.path)}
+          </div>
+        )}
+        {/* A long folder opens at once: animating the height of hundreds of rows stutters */}
+        {isDir && node.isExpanded && node.children && node.children.length > ANIMATED_CHILDREN_MAX && (
+          <div className="file-explorer-children">{renderEntries(node.path, node.children, path, depth + 1)}</div>
+        )}
         <AnimatePresence initial={false}>
-          {isDir && node.isExpanded && node.children && (
+          {isDir && node.isExpanded && node.children && node.children.length <= ANIMATED_CHILDREN_MAX && (
             <motion.div
               className="file-explorer-children"
               variants={reducedMotion ? undefined : collapseVariants}
@@ -336,7 +388,7 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
               animate="visible"
               exit="hidden"
             >
-              {node.children.map((child, i) => renderNode(child, [...path, i], depth + 1))}
+              {renderEntries(node.path, node.children, path, depth + 1)}
             </motion.div>
           )}
         </AnimatePresence>
@@ -423,7 +475,10 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
           </div>
         )}
         {loading ? (
-          <div className="file-explorer-loading">연결 중...</div>
+          <div className="file-explorer-loading" role="status">
+            <span className="loading-spinner" aria-hidden="true" />
+            {initialized ? loadingLabel([...loadingDirs][0] ?? displayPath) : '연결 중…'}
+          </div>
         ) : error ? (
           <div className="file-explorer-error">
             <span>{error}</span>
@@ -446,7 +501,7 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
         ) : rootNodes.length === 0 ? (
           <div className="file-explorer-empty">파일 없음</div>
         ) : (
-          rootNodes.map((node, i) => renderNode(node, [i], 0))
+          renderEntries(displayPath, rootNodes, [], 0)
         )}
       </div>
       {menu && (

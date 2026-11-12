@@ -8,10 +8,12 @@ import './SnippetModal.css'
 
 interface SnippetModalProps {
   snippetId: string | null
+  /** For a new snippet: the command to start with (text selected in a terminal) */
+  initialCommand?: string
   onClose: () => void
 }
 
-export function SnippetModal({ snippetId, onClose }: SnippetModalProps) {
+export function SnippetModal({ snippetId, initialCommand = '', onClose }: SnippetModalProps) {
   const { snippets, addSnippet, updateSnippet } = useSnippetStore()
   const reducedMotion = useReducedMotion()
 
@@ -19,7 +21,7 @@ export function SnippetModal({ snippetId, onClose }: SnippetModalProps) {
 
   const [name, setName] = useState(editingSnippet?.name || '')
   const [description, setDescription] = useState(editingSnippet?.description || '')
-  const [command, setCommand] = useState(editingSnippet?.command || '')
+  const [command, setCommand] = useState(editingSnippet?.command || initialCommand)
   const [category, setCategory] = useState(editingSnippet?.category || 'General')
 
   // Get existing categories for dropdown
@@ -83,8 +85,8 @@ export function SnippetModal({ snippetId, onClose }: SnippetModalProps) {
       >
         {/* Header */}
         <div className="snippet-modal-header">
-          <h3>{snippetId ? 'Edit Snippet' : 'Add New Snippet'}</h3>
-          <button className="btn-icon" onClick={onClose}>
+          <h3>{snippetId ? '스니펫 수정' : '스니펫 추가'}</h3>
+          <button className="btn-icon" onClick={onClose} aria-label="닫기" title="닫기">
             <RiCloseLine size={20} />
           </button>
         </div>
@@ -92,25 +94,25 @@ export function SnippetModal({ snippetId, onClose }: SnippetModalProps) {
         {/* Content */}
         <div className="snippet-modal-content">
           <div className="snippet-modal-field">
-            <label htmlFor="snippet-name">Name *</label>
+            <label htmlFor="snippet-name">이름 *</label>
             <input
               id="snippet-name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g., List files"
+              placeholder="예: 로그 따라가기"
               autoFocus
             />
           </div>
 
           <div className="snippet-modal-field">
-            <label htmlFor="snippet-category">Category</label>
+            <label htmlFor="snippet-category">분류</label>
             <input
               id="snippet-category"
               type="text"
               value={category}
               onChange={(e) => setCategory(e.target.value)}
-              placeholder="e.g., File System"
+              placeholder="예: 로그"
               list="category-suggestions"
             />
             <datalist id="category-suggestions">
@@ -121,27 +123,27 @@ export function SnippetModal({ snippetId, onClose }: SnippetModalProps) {
           </div>
 
           <div className="snippet-modal-field">
-            <label htmlFor="snippet-description">Description</label>
+            <label htmlFor="snippet-description">설명</label>
             <input
               id="snippet-description"
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Brief description of what this command does"
+              placeholder="이 명령이 하는 일 (선택)"
             />
           </div>
 
           <div className="snippet-modal-field">
-            <label htmlFor="snippet-command">Command *</label>
+            <label htmlFor="snippet-command">명령 *</label>
             <textarea
               id="snippet-command"
               value={command}
               onChange={(e) => setCommand(e.target.value)}
-              placeholder="Enter your command here..."
+              placeholder="예: tail -f /var/log/nginx/error.log"
               rows={4}
             />
             <div className="snippet-modal-hint">
-              You can use variables: ${'{'}date{'}'}, ${'{'}time{'}'}, ${'{'}user{'}'}, ${'{'}host{'}'}, ${'{'}path{'}'}
+              쓸 수 있는 변수: ${'{'}date{'}'}, ${'{'}time{'}'}, ${'{'}user{'}'}, ${'{'}host{'}'}, ${'{'}path{'}'}
             </div>
           </div>
         </div>
@@ -149,7 +151,7 @@ export function SnippetModal({ snippetId, onClose }: SnippetModalProps) {
         {/* Footer */}
         <div className="snippet-modal-footer">
           <button className="btn btn-secondary" onClick={onClose}>
-            Cancel
+            취소
           </button>
           <button
             className="btn btn-primary"
@@ -157,7 +159,7 @@ export function SnippetModal({ snippetId, onClose }: SnippetModalProps) {
             disabled={!name.trim() || !command.trim()}
           >
             <RiSaveLine size={18} />
-            {snippetId ? 'Update' : 'Create'}
+            {snippetId ? '저장' : '추가'}
           </button>
         </div>
       </motion.div>

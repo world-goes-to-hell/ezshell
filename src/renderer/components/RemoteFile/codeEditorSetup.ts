@@ -8,8 +8,9 @@ import {
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { gotoLine, highlightSelectionMatches, openSearchPanel, search, searchKeymap } from '@codemirror/search'
 import {
-  HighlightStyle, LanguageDescription, bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting
+  HighlightStyle, LanguageDescription, StreamLanguage, bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting
 } from '@codemirror/language'
+import { configLanguage, fallbackLanguage, namesWithoutBackupMarks } from './configLanguage'
 import { languages } from '@codemirror/language-data'
 import { tags } from '@lezer/highlight'
 
@@ -50,6 +51,7 @@ const highlightStyle = HighlightStyle.define([
   { tag: [tags.comment, tags.lineComment, tags.blockComment], color: 'var(--text-muted)', fontStyle: 'italic' },
   { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: 'var(--code-function, #61afef)' },
   { tag: [tags.propertyName, tags.attributeName], color: 'var(--code-property, #e5c07b)' },
+  { tag: tags.operator, color: 'var(--text-secondary)' },
   { tag: [tags.typeName, tags.className, tags.namespace], color: 'var(--code-type, #56b6c2)' },
   { tag: [tags.tagName, tags.heading], color: 'var(--code-tag, #e06c75)', fontWeight: '600' },
   { tag: [tags.meta, tags.processingInstruction], color: 'var(--text-secondary)' },
@@ -157,10 +159,23 @@ export function editorExtensions(options: EditorOptions, onChange: (state: Edito
 
 /** The language support for a file name, loaded on demand; null when none matches. */
 export async function languageFor(fileName: string): Promise<Extension | null> {
-  const description = LanguageDescription.matchFilename(languages, fileName)
-  if (!description) return null
+  // A backup copy has the language of the file it was made from ("compose.yaml.bak_20261020")
+  const names = namesWithoutBackupMarks(fileName)
   try {
-    return await description.load()
+    for (const name of names) {
+      const description = LanguageDescription.matchFilename(languages, name)
+      if (description) return await description.load()
+    }
+    // Configuration files the bundled list does not know (.env, .conf, hosts) and shell start-up files
+    for (const name of names) {
+      const fallback = fallbackLanguage(name)
+      if (fallback === 'config') return configLanguage
+      if (fallback === 'shell') {
+        const { shell } = await import('@codemirror/legacy-modes/mode/shell')
+        return StreamLanguage.define(shell)
+      }
+    }
+    return null
   } catch {
     return null
   }

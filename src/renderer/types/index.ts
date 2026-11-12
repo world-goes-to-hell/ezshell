@@ -370,6 +370,10 @@ declare global {
       sftpDownload: (sessionId: string, remotePath: string, localPath: string) => Promise<any>
       sftpUpload: (sessionId: string, localPath: string, remotePath: string) => Promise<any>
       sftpDelete: (sessionId: string, remotePath: string, isDirectory: boolean) => Promise<any>
+      /** Entries read so far while a big folder is being listed */
+      onSftpListProgress?: (callback: (data: { sessionId: string; remotePath: string; count: number }) => void) => () => void
+      sftpStat?: (sessionId: string, remotePath: string) => Promise<{ isFile: boolean; isDirectory: boolean; size: number } | null>
+      sftpRealpath?: (sessionId: string, remotePath: string) => Promise<string>
       sftpRename: (sessionId: string, oldPath: string, newPath: string) => Promise<any>
       sftpMkdir: (sessionId: string, remotePath: string) => Promise<any>
       selectDownloadPath: (defaultName: string) => Promise<any>

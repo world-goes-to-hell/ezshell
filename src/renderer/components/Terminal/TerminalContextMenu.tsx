@@ -10,14 +10,19 @@ export interface TerminalMenuItem {
   disabled?: boolean
 }
 
+/** A divider between the categories of a submenu */
+export const MENU_SEPARATOR = 'separator' as const
+
 export interface TerminalMenuGroup {
   label: string
   icon: IconType
-  items: TerminalMenuItem[]
+  items: Array<TerminalMenuItem | typeof MENU_SEPARATOR>
 }
 
 interface TerminalContextMenuProps {
   position: { x: number; y: number }
+  /** The file or folder the pointer is on: its name, what it is, and its actions, above everything else */
+  target?: { name: string; hint: string; items: TerminalMenuItem[] }
   /** Shown directly in the menu, above the groups */
   top: TerminalMenuItem[]
   /** Each opens a submenu to the side */
@@ -39,7 +44,7 @@ function Item({ item }: { item: TerminalMenuItem }) {
  * point there), so submenus, keyboard use and staying inside the window come from Radix.
  * Not modal: a right-click elsewhere in the terminal moves the menu instead of only closing it.
  */
-export function TerminalContextMenu({ position, top, groups, onClose }: TerminalContextMenuProps) {
+export function TerminalContextMenu({ position, target, top, groups, onClose }: TerminalContextMenuProps) {
   return (
     <DropdownMenu.Root open modal={false} onOpenChange={(isOpen) => { if (!isOpen) onClose() }}>
       <DropdownMenu.Trigger asChild>
@@ -56,6 +61,16 @@ export function TerminalContextMenu({ position, top, groups, onClose }: Terminal
           onCloseAutoFocus={(event) => event.preventDefault()}
           onContextMenu={(event) => event.preventDefault()}
         >
+          {target && (
+            <>
+              <DropdownMenu.Label className="terminal-menu-target" title={target.name}>
+                <span className="terminal-menu-target-name">{target.name}</span>
+                <span className="terminal-menu-target-hint">{target.hint}</span>
+              </DropdownMenu.Label>
+              {target.items.map(item => <Item key={item.label} item={item} />)}
+              <DropdownMenu.Separator className="terminal-menu-separator" />
+            </>
+          )}
           {top.map(item => <Item key={item.label} item={item} />)}
           {top.length > 0 && <DropdownMenu.Separator className="terminal-menu-separator" />}
           {groups.map(group => (
@@ -67,7 +82,9 @@ export function TerminalContextMenu({ position, top, groups, onClose }: Terminal
               </DropdownMenu.SubTrigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.SubContent className="terminal-menu" sideOffset={4} collisionPadding={8}>
-                  {group.items.map(item => <Item key={item.label} item={item} />)}
+                  {group.items.map((item, index) => item === MENU_SEPARATOR
+                    ? <DropdownMenu.Separator key={`separator-${index}`} className="terminal-menu-separator" />
+                    : <Item key={`${index}:${item.label}`} item={item} />)}
                 </DropdownMenu.SubContent>
               </DropdownMenu.Portal>
             </DropdownMenu.Sub>

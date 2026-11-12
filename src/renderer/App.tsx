@@ -10,7 +10,9 @@ import { SplitPaneTabBar } from './components/Terminal/SplitPaneTabBar'
 import { TerminalWindow } from './components/Terminal/TerminalWindow'
 import { SftpPanel } from './components/Sftp/SftpPanel'
 import { SftpWindow } from './components/Sftp/SftpWindow'
-import { ConnectModal, ConnectionConfig } from './components/Modal/ConnectModal'
+import { ConnectModal, ConnectionConfig, DEFAULT_CONFIG } from './components/Modal/ConnectModal'
+import { SessionImportDialog } from './components/Sidebar/SessionImportDialog'
+import type { SharedSession } from './lib/sessionShare'
 import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/QuickConnectModal'
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
 import { NewTabMenu } from './components/Terminal/NewTabMenu'
@@ -26,7 +28,7 @@ import { toast } from './stores/toastStore'
 import { UpdateNotification } from './components/Update/UpdateNotification'
 import { CommandPalette } from './components/CommandPalette'
 import { TabContextMenu } from './components/Terminal/TabContextMenu'
-import { DUPLICATE_TAB_EVENT } from './components/Terminal/useTerminalContextMenu'
+import { DUPLICATE_TAB_EVENT, OPEN_SNIPPET_MANAGER_EVENT } from './components/Terminal/useTerminalContextMenu'
 import { SnippetManager } from './components/Snippets/SnippetManager'
 import { StatsDashboard } from './components/Modal/StatsDashboard'
 import { BatchCommandModal } from './components/Modal/BatchCommandModal'
@@ -170,6 +172,9 @@ function App() {
   const [batchModalOpen, setBatchModalOpen] = useState(false)
   const [editSession, setEditSession] = useState<ConnectionConfig | null>(null)
   const [duplicateSource, setDuplicateSource] = useState<ConnectionConfig | null>(null)
+  const [duplicateTitle, setDuplicateTitle] = useState<string | undefined>(undefined)
+  // "텍스트로 세션 추가": the folder to add into (null = closed)
+  const [importTarget, setImportTarget] = useState<{ folderId?: string } | null>(null)
   const [defaultFolderId, setDefaultFolderId] = useState<string | undefined>(undefined)
   const [isLocked, setIsLocked] = useState(true)
   const [hasMasterPassword, setHasMasterPassword] = useState(false)
@@ -635,14 +640,29 @@ function App() {
     setEditSession(null)
     setDefaultFolderId(undefined)
     setDuplicateSource({ ...session, id: undefined, name: `${baseName} - 복제됨`, saveSession: true, mcpEnabled: false })
+    setDuplicateTitle(undefined)
+    setConnectModalOpen(true)
+  }
+
+  // A session from shared text opens the new-connection form, where passwords and keys are entered
+  const handleOpenSharedSession = (shared: SharedSession, folderId?: string) => {
+    setEditSession(null)
+    setDefaultFolderId(undefined)
+    setDuplicateSource({ ...DEFAULT_CONFIG, ...shared, id: undefined, folderId: folderId ?? '', saveSession: true, mcpEnabled: false })
+    setDuplicateTitle('공유받은 세션 추가')
     setConnectModalOpen(true)
   }
 
   // "탭 복제" in a terminal's right-click menu
   useEffect(() => {
     const onDuplicate = (event: Event) => { void handleDuplicateTab((event as CustomEvent<string>).detail) }
+    const onSnippets = () => setSnippetManagerOpen(true)
     window.addEventListener(DUPLICATE_TAB_EVENT, onDuplicate)
-    return () => window.removeEventListener(DUPLICATE_TAB_EVENT, onDuplicate)
+    window.addEventListener(OPEN_SNIPPET_MANAGER_EVENT, onSnippets)
+    return () => {
+      window.removeEventListener(DUPLICATE_TAB_EVENT, onDuplicate)
+      window.removeEventListener(OPEN_SNIPPET_MANAGER_EVENT, onSnippets)
+    }
   })
 
   // Open another tab to the same server as `terminalId`, reusing the config it connected with
@@ -996,6 +1016,7 @@ function App() {
           onDuplicateSession={handleDuplicateSession}
           onOpenQuickConnect={handleOpenQuickConnect}
           onAddSession={handleAddSession}
+          onImportSession={(folderId) => setImportTarget({ folderId })}
           onStatsClick={() => setStatsDashboardOpen(true)}
           onBatchClick={() => setBatchModalOpen(true)}
         />
@@ -1277,8 +1298,17 @@ function App() {
         onSave={handleSaveSession}
         editSession={editSession}
         duplicateFrom={duplicateSource}
+        duplicateTitle={duplicateTitle}
         defaultFolderId={defaultFolderId}
       />
+
+      {importTarget && (
+        <SessionImportDialog
+          folderId={importTarget.folderId}
+          onClose={() => setImportTarget(null)}
+          onOpenSession={handleOpenSharedSession}
+        />
+      )}
 
       <SessionPickerModal
         open={sessionPickerOpen}

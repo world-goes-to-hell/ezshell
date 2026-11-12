@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useSftpStore } from '../../stores/sftpStore'
 import { FileList, keepSelectionProps } from './FileList'
 import { openRemoteFileWindow } from '../../lib/remoteFileOpen'
@@ -8,6 +8,7 @@ import { OverwriteModal } from './OverwriteModal'
 import { RiUploadFill, RiDownloadFill, RiRefreshFill, RiArrowUpDownLine, RiFolderTransferFill } from 'react-icons/ri'
 import { PopoutTitleBar } from '../TitleBar/PopoutTitleBar'
 import { usePopoutTheme } from '../../hooks/usePopoutTheme'
+import { useSftpListProgress } from '../../hooks/useSftpListProgress'
 import { usePopoutHostLabel } from '../../hooks/usePopoutHostLabel'
 import { toast } from '../../stores/toastStore'
 import { deleteRemoteSelection } from '../../lib/sftpRemoteDelete'
@@ -57,7 +58,12 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
     return isWindows ? 'C:\\' : '/'
   }
 
+  // The folder being read (null when none): the list shows "불러오는 중…" with the count so far
+  const [remoteLoadingPath, setRemoteLoadingPath] = useState<string | null>(null)
+  const remoteLoadingCount = useSftpListProgress(sessionId, remoteLoadingPath ?? '', remoteLoadingPath !== null)
+
   const loadRemoteFiles = async (path: string) => {
+    setRemoteLoadingPath(path)
     try {
       const rawFiles = await window.electronAPI.sftpList(sessionId, path)
       const files = (rawFiles || []).map((f: any) => ({
@@ -73,6 +79,8 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
       store.setRemotePath(sessionId, path)
     } catch (error) {
       console.error('Failed to load remote files:', error)
+    } finally {
+      setRemoteLoadingPath(null)
     }
   }
 
@@ -272,6 +280,8 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
             onDelete={handleDeleteRemote}
             {...paneActions.remote}
             onOpenFile={(file, mode) => void openRemoteFileWindow(sessionId, sessionTitle || hostLabel || '', remotePath, file.name, mode)}
+            isLoading={remoteLoadingPath !== null}
+            loadingCount={remoteLoadingCount}
           />
         </div>
       </div>

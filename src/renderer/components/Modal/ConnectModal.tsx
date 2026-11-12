@@ -19,6 +19,8 @@ interface ConnectModalProps {
   /** Prefill a new connection from an existing session (duplicate). Saved as a new session. */
   duplicateFrom?: ConnectionConfig | null
   defaultFolderId?: string
+  /** Title for the prefilled (duplicate) form, e.g. a session added from shared text */
+  duplicateTitle?: string
 }
 
 export type SessionIcon = 'server' | 'database' | 'cloud' | 'globe' | 'home' | 'monitor' | 'hard-drive' | 'cpu' | 'radio'
@@ -69,7 +71,7 @@ export interface ConnectionConfig {
 }
 
 // Default config for new connections (outside component to maintain stable reference)
-const DEFAULT_CONFIG: ConnectionConfig = {
+export const DEFAULT_CONFIG: ConnectionConfig = {
   name: '',
   host: '',
   port: 22,
@@ -98,7 +100,7 @@ const DEFAULT_CONFIG: ConnectionConfig = {
   jumpPassphrase: ''
 }
 
-export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSession, duplicateFrom, defaultFolderId }: ConnectModalProps) {
+export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSession, duplicateFrom, defaultFolderId, duplicateTitle }: ConnectModalProps) {
   const isEditMode = Boolean(editSession)
   const isDuplicateMode = !isEditMode && Boolean(duplicateFrom)
   const { folders } = useSessionStore()
@@ -209,7 +211,7 @@ export function ConnectModal({ open, onOpenChange, onConnect, onSave, editSessio
               >
                 <Dialog.Title className="modal-title">
                   <RiServerFill size={20} />
-                  {isEditMode ? '연결 편집' : isDuplicateMode ? '세션 복제' : '새 연결'}
+                  {isEditMode ? '연결 편집' : isDuplicateMode ? (duplicateTitle ?? '세션 복제') : '새 연결'}
                 </Dialog.Title>
 
           <form ref={formRef} onSubmit={handleSubmit}>

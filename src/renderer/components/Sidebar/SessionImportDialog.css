@@ -1,0 +1,300 @@
+/* "텍스트로 세션 추가" dialog. .modal-content caps dialogs at 480px; this one needs room for the preview. */
+.modal-content.session-import-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.session-import-dialog .modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-import-note {
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.session-import-text {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 84px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.session-import-text:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.session-import-error {
+  margin: 10px 0 0;
+  color: var(--error-text, var(--error));
+  font-size: 13px;
+}
+
+.session-import-preview {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-size: 13px;
+}
+
+.session-import-preview dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 14px;
+  margin: 0;
+}
+
+.session-import-preview dt {
+  color: var(--text-muted);
+}
+
+.session-import-preview dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.session-import-preview .mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.session-import-secret {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--warning);
+}
+
+.session-import-summary {
+  margin: 0 0 8px;
+  color: var(--text-primary);
+}
+
+.session-import-tree,
+.session-import-tree ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-import-tree {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.session-import-tree ul {
+  padding-left: 16px;
+}
+
+.session-import-tree li {
+  padding: 2px 0;
+}
+
+.session-import-tree-folder {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.session-import-tree-session {
+  color: var(--text-secondary);
+}
+
+.session-import-tree-session span {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.session-import-hint {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.session-import-script {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+}
+
+.session-import-script p {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 8px;
+  color: var(--warning);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.session-import-script p svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.session-import-script strong {
+  display: block;
+  margin: 6px 0 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.session-import-script pre {
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.session-import-secret.is-open {
+  color: var(--accent);
+}
+
+.session-import-script-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.share-passphrase-generated {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -4px 0 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.share-passphrase-generated code {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  user-select: all;
+}
+
+.share-passphrase-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.share-passphrase-generate {
+  border: none;
+  background: none;
+  color: var(--text-link, var(--accent));
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* Shared passphrase for sealed passwords */
+.session-import-unlock {
+  margin-top: 12px;
+}
+
+.session-import-unlock label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.session-import-unlock-row {
+  display: flex;
+  gap: 8px;
+}
+
+.session-import-unlock-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-import-unlock-row .modal-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  margin-top: 0;
+  padding: 0 14px;
+}
+
+.session-import-dialog .modal-actions .modal-btn,
+.share-passphrase-dialog .modal-actions .modal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+/* "비밀번호 포함 복사…" passphrase dialog */
+.modal-content.share-passphrase-dialog {
+  width: min(460px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+}
+
+.share-passphrase-dialog .modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.share-passphrase-note {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.share-passphrase-note p {
+  margin: 0;
+}
+
+.share-passphrase-note p + p {
+  margin-top: 6px;
+}
+
+.share-passphrase-note strong {
+  color: var(--text-primary);
+}

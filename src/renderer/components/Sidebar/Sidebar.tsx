@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { RiAddFill, RiFolderFill, RiArrowLeftDoubleLine, RiArrowRightDoubleLine, RiPushpinLine, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill, RiListUnordered } from 'react-icons/ri'
+import { RiAddFill, RiFolderFill, RiArrowLeftDoubleLine, RiArrowRightDoubleLine, RiPushpinLine, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill, RiListUnordered, RiClipboardFill } from 'react-icons/ri'
 import { motion } from 'framer-motion'
 import { SessionList } from './SessionList'
 import { useUIStore } from '../../stores/uiStore'
@@ -21,11 +21,13 @@ interface SidebarProps {
   onDuplicateSession?: (session: any) => void
   onOpenQuickConnect?: () => void
   onAddSession?: (folderId?: string) => void
+  /** Opens "텍스트로 세션 추가" for the given folder (undefined = top level) */
+  onImportSession?: (folderId?: string) => void
   onStatsClick?: () => void
   onBatchClick?: () => void
 }
 
-export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onStatsClick, onBatchClick }: SidebarProps) {
+export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onImportSession, onStatsClick, onBatchClick }: SidebarProps) {
   const { sidebarMode, toggleSidebarMode, setSidebarMode } = useUIStore()
   const { addFolder, saveToBackend } = useSessionStore()
   // Folded: a narrow rail of status dots that opens over the terminal while the pointer is on it
@@ -121,6 +123,11 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
           <button className="btn-new-folder" onClick={handleAddFolder} title="새 폴더">
             <RiFolderAddFill size={18} />
           </button>
+          {onImportSession && (
+            <button className="btn-new-folder" onClick={() => onImportSession()} title="텍스트로 세션 추가" aria-label="텍스트로 세션 추가">
+              <RiClipboardFill size={18} />
+            </button>
+          )}
         </div>
       )}
       {!isCompact && isAddingFolder && (
@@ -149,6 +156,11 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
           <button className="btn-compact-action" onClick={handleAddFolder} title="새 폴더" aria-label="새 폴더">
             <RiFolderAddFill size={16} />
           </button>
+          {onImportSession && (
+            <button className="btn-compact-action" onClick={() => onImportSession()} title="텍스트로 세션 추가" aria-label="텍스트로 세션 추가">
+              <RiClipboardFill size={16} />
+            </button>
+          )}
         </div>
       )}
       {isFolded && (
@@ -159,7 +171,7 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
           {connectedTabs > 0 && <span className="rail-session-count">{connectedTabs}</span>}
         </div>
       )}
-      <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} />
+      <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} onImportSession={onImportSession} />
       {(onBatchClick || onStatsClick) && (
         <div className="sidebar-footer">
           {onBatchClick && (

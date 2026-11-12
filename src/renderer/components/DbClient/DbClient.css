@@ -1127,9 +1127,22 @@
   width: min(580px, calc(100vw - 32px));
 }
 
+/* .modal-content caps every dialog at 480px, which is narrower than the five buttons: lift it here */
+.modal-content.db-connect-dialog {
+  max-width: calc(100vw - 32px);
+}
+
 .db-connect-actions {
   flex-wrap: nowrap;
   justify-content: flex-start;
+}
+
+/* A window too narrow even for 580px puts the left pair on its own row instead of cutting it off */
+@media (max-width: 600px) {
+  .db-connect-actions {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
 }
 
 .db-connect-actions .modal-btn {

@@ -13,6 +13,8 @@ import { useTransferQueue } from '../../hooks/useTransferQueue'
 import { useSftpPaneActions } from '../../hooks/useSftpPaneActions'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useReloadOnTransferActivity } from '../../hooks/useReloadOnTransferActivity'
+import { SFTP_GOTO_EVENT } from '../../lib/sftpSync'
+import { useSftpListProgress } from '../../hooks/useSftpListProgress'
 import { useSftpTransferBatch, sizesByName, type PendingTransfer } from '../../hooks/useSftpTransferBatch'
 
 interface SftpPanelProps {
@@ -46,6 +48,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
   const syncTriggeredRef = useRef(false)
   const [isLocalLoading, setIsLocalLoading] = useState(false)
   const [isRemoteLoading, setIsRemoteLoading] = useState(false)
+  const remoteLoadingCount = useSftpListProgress(sessionId, remotePath, isRemoteLoading)
 
   // Resize handlers
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -132,6 +135,16 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     }
     initSftp()
   }, [isOpen, sessionId])
+
+  // The terminal's right-click menu sends the panel to the folder the terminal is in
+  useEffect(() => {
+    const onGoto = (event: Event) => {
+      const { sessionId: target, path } = (event as CustomEvent<{ sessionId: string; path: string }>).detail
+      if (target === sessionId && isOpen) void loadRemoteFiles(path)
+    }
+    window.addEventListener(SFTP_GOTO_EVENT, onGoto)
+    return () => window.removeEventListener(SFTP_GOTO_EVENT, onGoto)
+  })
 
   const getDefaultLocalPath = () => {
     // Check if Windows by looking at navigator.platform or userAgent
@@ -610,6 +623,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
             }}
             onDrop={handleDropOnRemote}
             isLoading={isRemoteLoading}
+            loadingCount={remoteLoadingCount}
           />
         </div>
       </div>
