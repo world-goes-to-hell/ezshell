@@ -1,14 +1,15 @@
 import { motion } from 'framer-motion'
-import { RiTerminalBoxFill, RiAddFill } from 'react-icons/ri'
+import { RiTerminalBoxFill, RiAddFill, RiComputerLine } from 'react-icons/ri'
 import { welcomeContainerVariants, welcomeItemVariants, floatVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { SPRINGS } from '../../lib/animation/config'
 
 interface WelcomeScreenProps {
   onNewConnection: () => void
+  onLocalTerminal: () => void
 }
 
-export function WelcomeScreen({ onNewConnection }: WelcomeScreenProps) {
+export function WelcomeScreen({ onNewConnection, onLocalTerminal }: WelcomeScreenProps) {
   const reducedMotion = useReducedMotion()
 
   return (
@@ -41,6 +42,10 @@ export function WelcomeScreen({ onNewConnection }: WelcomeScreenProps) {
       >
         <RiAddFill size={20} />
         <span>새 연결</span>
+      </motion.button>
+      <motion.button className="welcome-local-terminal" onClick={onLocalTerminal} variants={welcomeItemVariants}>
+        <RiComputerLine size={16} />
+        <span>로컬 터미널 열기</span>
       </motion.button>
     </motion.div>
   )

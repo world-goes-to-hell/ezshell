@@ -67,6 +67,7 @@
     "diff": "9.0.0",
     "electron-updater": "^6.7.3",
     "mysql2": "3.24.6",
+    "node-pty": "1.1.0",
     "pg": "8.23.1",
     "pg-cursor": "2.22.1",
     "ssh2": "^1.15.0",
@@ -80,6 +81,10 @@
       "out/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "node_modules/node-pty/**"
+    ],
+    "npmRebuild": false,
     "directories": {
       "output": "release"
     },

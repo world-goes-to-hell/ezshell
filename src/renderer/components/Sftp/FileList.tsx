@@ -16,8 +16,7 @@ import { transferMarksFor } from '../../lib/transferMarks'
 import type { RemoteFileMode } from '../../types'
 import './FileList.css'
 import {
-  FileListContextMenu, buildContextMenuItems, CONTEXT_MENU_ITEM_HEIGHT, CONTEXT_MENU_WIDTH,
-  type ContextMenuAction
+  FileListContextMenu, buildContextMenuItems, type ContextMenuAction
 } from './FileListContextMenu'
 
 interface FileListProps {
@@ -56,7 +55,6 @@ interface ContextMenuState {
 type EditState = { mode: 'rename'; name: string } | { mode: 'create'; initialName: string }
 
 const KEEP_SELECTION_ATTR = 'data-sftp-keep-selection'
-const CONTEXT_MENU_EDGE_GAP = 10
 
 /** Spread onto containers whose controls act on the current selection (e.g. the SFTP toolbar). */
 export const keepSelectionProps = { [KEEP_SELECTION_ATTR]: '' }
@@ -368,13 +366,9 @@ export function FileList({
     // Select the file if not already selected
     if (file && !selected.has(file.name)) selectOnly(file.name)
 
-    const itemCount = buildContextMenuItems({
-      file, type, canRename: Boolean(onRename), canCreateFolder: Boolean(onCreateFolder), canDelete: Boolean(onDelete), canOpenFile: Boolean(onOpenFile)
-    }).length
-    const menuHeight = itemCount * CONTEXT_MENU_ITEM_HEIGHT + 24
-    const x = Math.min(e.clientX, window.innerWidth - CONTEXT_MENU_WIDTH - CONTEXT_MENU_EDGE_GAP)
-    const y = Math.min(e.clientY, window.innerHeight - menuHeight - CONTEXT_MENU_EDGE_GAP)
-    setContextMenu({ visible: true, x, y, file })
+    // The click itself: the menu measures its real size and fits itself (fitMenu). Moving the point
+    // here first made it open upwards from the moved point, far above the pointer.
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, file })
   }
 
   const handleDoubleClick = (file: FileItem) => {

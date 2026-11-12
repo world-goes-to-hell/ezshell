@@ -1,20 +1,24 @@
 import { useCallback, useState, type MouseEvent, type ReactNode } from 'react'
 import type { Terminal } from 'xterm'
 import {
-  RiFileCopyLine, RiClipboardLine, RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine,
-  RiLayoutLine, RiMagicLine, RiFileSearchLine, RiSearchLine, RiFindReplaceLine, RiEraserLine, RiFolderLine,
+  RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine,
+  RiLayoutLine, RiMagicLine, RiFileSearchLine, RiSearchLine, RiFindReplaceLine, RiFolderLine, RiCodeSSlashLine,
   RiTerminalBoxLine, RiFileCopy2Line, RiRecordCircleLine, RiStopCircleLine, RiFolderTransferLine, RiCloseCircleLine
 } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useSessionLogStore } from '../../stores/sessionLogStore'
 import { useSftpStore } from '../../stores/sftpStore'
 import { toggleSessionLog } from '../../lib/sessionLogActions'
-import { copyToClipboard } from '../../lib/terminalClipboard'
+import { useSnippetStore } from '../../stores/snippetStore'
+import { findQueryFromSelection } from '../../lib/terminalText'
 import { terminalPaneAt } from '../../lib/terminalPanes'
-import { toast } from '../../stores/toastStore'
-import type { FindKind } from '../../lib/terminalFind'
+import { FIND_QUERY_MAX_LENGTH, type FindKind } from '../../lib/terminalFind'
+import { commonTerminalItems } from './terminalMenuCommon'
 import { TerminalContextMenu, type TerminalMenuGroup, type TerminalMenuItem } from './TerminalContextMenu'
 import { TerminalFindDialog } from './TerminalFindDialog'
+
+/** Snippets listed in the menu; the rest are in the snippet manager */
+const MAX_SNIPPETS_IN_MENU = 15
 
 /** App.tsx opens another tab to the same server when it hears this (detail: the tab's id) */
 export const DUPLICATE_TAB_EVENT = 'ezshell:duplicate-tab'
@@ -38,7 +42,8 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
   contextMenu: ReactNode
 } {
   const [menu, setMenu] = useState<{ x: number; y: number; terminal: Terminal } | null>(null)
-  const [find, setFind] = useState<{ kind: FindKind; terminal: Terminal } | null>(null)
+  const [find, setFind] = useState<{ kind: FindKind; terminal: Terminal; query: string } | null>(null)
+  const snippets = useSnippetStore(state => state.snippets)
   const tab = useTerminalStore(state => state.terminals.get(sessionId))
   const setSplit = useTerminalStore(state => state.setSplit)
   const isLogging = useSessionLogStore(state => sessionId in state.files)
@@ -62,18 +67,18 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
       action()
       window.setTimeout(() => terminal.focus(), 0)
     }
-    const paste = async (): Promise<void> => {
-      try {
-        const text = await navigator.clipboard.readText()
-        if (text) terminal.paste(text)
-      } catch {
-        toast.error('붙여넣기 실패', '클립보드에 접근할 수 없습니다')
-      }
-    }
-    const top: TerminalMenuItem[] = [
-      { label: '복사', icon: RiFileCopyLine, disabled: !selection, onSelect: then(() => void copyToClipboard(selection)) },
-      { label: '붙여넣기', icon: RiClipboardLine, onSelect: then(() => void paste()) }
-    ]
+    const tabName = tab ? (tab.title || `${tab.username}@${tab.host}`) : 'terminal'
+    const { top, output } = commonTerminalItems(terminal, tabName, then)
+    // A selected word or path is what the find dialogs start with
+    const query = findQueryFromSelection(selection, FIND_QUERY_MAX_LENGTH)
+    // Typed into the input line like the find commands, not run: the user presses Enter
+    const snippetItems: TerminalMenuItem[] = snippets.slice(0, MAX_SNIPPETS_IN_MENU).map(snippet => ({
+      label: snippet.name,
+      icon: RiCodeSSlashLine,
+      onSelect: then(() => terminal.paste(useSnippetStore.getState().expandVariables(snippet.command, {
+        user: tab?.username ?? '', host: tab?.host ?? '', path: tab?.currentPath || '~'
+      })))
+    }))
     const groups: TerminalMenuGroup[] = [
       {
         label: '분할',
@@ -89,13 +94,14 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
         label: '편의',
         icon: RiMagicLine,
         items: [
-          { label: '이름 찾기…', icon: RiFileSearchLine, onSelect: () => setFind({ kind: 'name', terminal }) },
-          { label: '내용 찾기…', icon: RiSearchLine, onSelect: () => setFind({ kind: 'content', terminal }) },
+          { label: '이름 찾기…', icon: RiFileSearchLine, onSelect: () => setFind({ kind: 'name', terminal, query }) },
+          { label: '내용 찾기…', icon: RiSearchLine, onSelect: () => setFind({ kind: 'content', terminal, query }) },
           { label: '화면에서 찾기', icon: RiFindReplaceLine, onSelect: onOpenSearch },
-          { label: '화면 지우기', icon: RiEraserLine, onSelect: then(() => terminal.clear()) },
+          ...output,
           { label: isFileExplorerOpen ? '파일 탐색기 닫기' : '파일 탐색기 열기', icon: RiFolderLine, onSelect: then(onToggleFileExplorer) }
         ]
       },
+      ...(snippetItems.length > 0 ? [{ label: '스니펫', icon: RiCodeSSlashLine, items: snippetItems }] : []),
       {
         label: '세션',
         icon: RiTerminalBoxLine,
@@ -104,7 +110,7 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
           {
             label: isLogging ? '로그 저장 중지' : '로그 저장 시작',
             icon: isLogging ? RiStopCircleLine : RiRecordCircleLine,
-            onSelect: then(() => void toggleSessionLog(sessionId, tab ? (tab.title || `${tab.username}@${tab.host}`) : ''))
+            onSelect: then(() => void toggleSessionLog(sessionId, tab ? tabName : ''))
           },
           { label: isSftpOpen ? 'SFTP 닫기' : 'SFTP 열기', icon: RiFolderTransferLine, onSelect: then(() => useSftpStore.getState().setOpen(sessionId, !isSftpOpen)) },
           { label: '연결 종료', icon: RiCloseCircleLine, onSelect: onCloseSession }
@@ -122,6 +128,7 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
         {find && (
           <TerminalFindDialog
             kind={find.kind}
+            initialQuery={find.query}
             onClose={() => {
               const { terminal } = find
               setFind(null)

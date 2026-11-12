@@ -54,3 +54,8 @@ export function badgeLabel(status: TabStatus, count: number): string {
 export function badgeHint(status: TabStatus, count: number): string {
   return `${badgeLabel(status, count)} · ${count === 1 ? '눌러서 이동' : '눌러서 선택'}`
 }
+
+/** A tab with an SSH shell: not a DB tab and not a terminal of this PC (those have no SFTP, log or duplicate) */
+export function isSshTab(terminal: TerminalInfo | null | undefined): boolean {
+  return Boolean(terminal) && !terminal?.db && !terminal?.local
+}

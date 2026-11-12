@@ -135,7 +135,7 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
 
     // Session log of the active tab (the only way to reach it in split layout, where tabs have no context menu)
     const activeTab = activeTerminalId ? getTerminal(activeTerminalId) : undefined
-    if (activeTerminalId && activeTab) {
+    if (activeTerminalId && activeTab && !activeTab.db && !activeTab.local) {
       const isLogging = activeTerminalId in sessionLogFiles
       const tabName = activeTab.title || `${activeTab.username}@${activeTab.host}`
       items.push({

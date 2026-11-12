@@ -117,6 +117,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 로컬 디렉토리 목록 조회
   localList: (dirPath) => ipcRenderer.invoke('local-list', { dirPath }),
+  // Local terminal tabs (shells of this PC)
+  localShellOpen: (size) => ipcRenderer.invoke('local-shell-open', size),
+  localShellAttach: (id) => ipcRenderer.invoke('local-shell-attach', id),
+  localShellWrite: (id, data) => ipcRenderer.send('local-shell-write', { id, data }),
+  localShellResize: (id, cols, rows) => ipcRenderer.send('local-shell-resize', { id, cols, rows }),
+  localShellClose: (id) => ipcRenderer.send('local-shell-close', id),
+  onLocalShellData: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('local-shell-data', handler);
+    return () => ipcRenderer.removeListener('local-shell-data', handler);
+  },
+  onLocalShellExit: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('local-shell-exit', handler);
+    return () => ipcRenderer.removeListener('local-shell-exit', handler);
+  },
+  saveTerminalOutput: (defaultName, text) => ipcRenderer.invoke('save-terminal-output', { defaultName, text }),
   localRename: (oldPath, newPath) => ipcRenderer.invoke('local-rename', { oldPath, newPath }),
   localMkdir: (dirPath) => ipcRenderer.invoke('local-mkdir', { dirPath }),
   localMove: (sourcePath, targetDir) => ipcRenderer.invoke('local-move', { sourcePath, targetDir }),

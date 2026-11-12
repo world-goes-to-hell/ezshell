@@ -96,12 +96,20 @@ App.tsx에서 single → split 모드 전환 시 TerminalPanel이 React 트리�
 감싸개를 조건부 Fragment 안에 따로 두면 key 가 같아도 부모가 달라 React 가 새로 만들고, 기존 분할 셸이 닫힌다 (2026-10-01 수정한 버그).
 
 ### Terminal Right-Click Menu
-터미널(탭의 주 터미널과 분할 셸)에서 우클릭하면 메뉴가 뜬다 (`Terminal/useTerminalContextMenu.tsx`, `TerminalContextMenu.tsx`). 맨 위에 복사·붙여넣기, 그 아래 `분할`(좌우·상하·4분할·해제), `편의`(이름 찾기, 내용 찾기, 화면에서 찾기, 화면 지우기, 파일 탐색기), `세션`(탭 복제, 로그 저장, SFTP, 연결 종료) 하위 메뉴가 있다. 포인터 위치에 빈 기준점을 두고 여는 Radix DropdownMenu 이다 (modal 아님: 다른 곳을 우클릭하면 메뉴가 옮겨 간다).
+터미널(탭의 주 터미널과 분할 셸)에서 우클릭하면 메뉴가 뜬다 (`Terminal/useTerminalContextMenu.tsx`, `TerminalContextMenu.tsx`). 맨 위에 복사·붙여넣기·모두 선택, 그 아래 `분할`(좌우·상하·4분할·해제), `편의`(이름 찾기, 내용 찾기, 화면에서 찾기, 화면 지우기, 전체 출력 복사, 출력을 파일로 저장, 파일 탐색기), `스니펫`(저장한 스니펫 15개까지를 입력줄에 넣음, 실행하지 않음), `세션`(탭 복제, 로그 저장, SFTP, 연결 종료) 하위 메뉴가 있다. 포인터 위치에 빈 기준점을 두고 여는 Radix DropdownMenu 이다 (modal 아님: 다른 곳을 우클릭하면 메뉴가 옮겨 간다).
 - 복사·붙여넣기·화면 지우기·찾기는 우클릭한 그 터미널에 적용한다. 터미널마다 그려지는 요소를 `lib/terminalPanes.ts` 에 등록해 두고 `terminalPaneAt` 으로 찾는다. 터미널 영역 위에 그려지는 패널(포트 포워딩 등)에서는 메뉴를 띄우지 않는다.
 - 이름 찾기·내용 찾기(`TerminalFindDialog.tsx`, 명령 생성은 `lib/terminalFind.ts`)는 `find` / `grep -rnIF` 명령을 만들어 `terminal.paste` 로 입력줄에 넣는다. 찾을 위치는 현재 폴더(`.`), 루트(`/`, `/proc` `/sys` `/dev` 제외), 폴더 지정 중에서 고르고 `localStorage` 의 `terminalFindPrefs` 에 기억한다.
   - 바꾸면 안 되는 것: 앱이 명령을 실행하지 않는다 (줄바꿈을 붙이지 않고, 사용자가 Enter 를 누른다). 큰 폴더 검색은 운영 서버 디스크를 오래 읽는다. 입력값은 작은따옴표로 감싸고, 줄바꿈·제어 문자는 앞뒤 공백을 자르기 전에 거부한다 (줄바꿈이 들어가면 입력되는 순간 앞부분이 실행된다).
+- 복사·붙여넣기·모두 선택과 화면 지우기·출력 복사·출력 저장은 `terminalMenuCommon.tsx` 에 있고 로컬 터미널 탭도 같은 항목을 쓴다. 출력 글자는 `lib/terminalText.ts` 가 버퍼에서 읽는다 (너비에서 접힌 줄은 한 줄로 잇는다). 찾기 창은 터미널에서 선택한 한 줄 글자를 찾을 말로 채운다.
 - 탭 복제는 `ezshell:duplicate-tab` 이벤트로 `App.tsx` 에 넘긴다 (복제 로직이 App 에 있다).
 - 시험할 때: 하위 메뉴는 포인터가 지나온 경로로 열림 유지를 판단한다. CDP 로 포인터를 한 번에 옮기면 하위 메뉴가 닫히므로 여러 번에 나눠 움직인다.
+
+### Local Terminal Tab (이 PC 의 셸)
+탭 줄의 + 메뉴와 시작 화면의 `로컬 터미널` 로 이 PC 의 셸을 탭으로 연다. main 이 `node-pty` 로 실행하고(`src/localShell.js`, Windows 는 PowerShell), 탭은 `TerminalInfo.local`, id 는 `local:<번호>`, 화면은 `Terminal/LocalTerminalTab.tsx` 다 (`TerminalPanel` 을 쓰지 않는다). 설계: `docs/plan/2026-11-12-local-terminal-and-terminal-menu-additions.md`.
+- 탭이 다시 그려져도(패인 분할, 탭 이동) 셸은 유지된다. main 이 셸마다 마지막 256KB 출력을 갖고 있다가 `local-shell-attach` 로 돌려준다. 화면은 attach 답을 받기 전에 온 출력을 버린다 (그 출력은 답에 이미 들어 있어서 두 번 그려진다).
+- 10개까지. 탭을 닫으면 셸을 끝내고 앱을 종료하면 모두 끝낸다. SFTP, 분할, 로그 저장, 탭 복제, 창 분리, 일괄 명령, 연결 수에서는 뺀다 (`lib/sessionTabs.ts` 의 `isSshTab`, SSH 탭인지 볼 때는 `.db` 만 보지 말고 이 함수를 쓴다).
+- 바꾸면 안 되는 것: `local-shell-*` IPC 는 본창에서 온 것만 받는다. MCP 도구가 로컬 셸에 닿는 경로를 만들지 않는다 (PC 에서 임의 명령을 실행하는 통로가 된다).
+- 패키징: `node-pty` 는 사전 빌드(N-API)를 쓴다. `build.asarUnpack` 의 `node_modules/node-pty/**` 와 `npmRebuild: false` 를 지우지 말 것 (asar 안에서는 셸 실행 파일을 띄울 수 없고, 다시 빌드하려면 Visual Studio 빌드 도구가 필요하다). 새 `src/*.js` 라서 `MAIN_RUNTIME_MODULES` 에 있다.
 
 ### Sidebar Tree and Folded Rail
 사이드바 목록 모양은 `Sidebar/SidebarTree.css` 에 있다. 줄에는 배경색을 칠하지 않는다: 폴더 색은 폴더 왼쪽의 선 하나(`--folder-color`), 세션 자체 색은 줄 옆의 짧은 선(`--session-color`)이다. 기본 아이콘 자리에는 상태 점(`.session-dot`, 연결된 탭이 있으면 초록, 끊긴 탭만 있으면 빨강)을 둔다. 세션 이름은 입력한 그대로 보여 준다.

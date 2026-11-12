@@ -1,5 +1,5 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { RiAddLine, RiFileCopyLine, RiServerLine, RiAddCircleLine } from 'react-icons/ri'
+import { RiAddLine, RiFileCopyLine, RiServerLine, RiAddCircleLine, RiComputerLine } from 'react-icons/ri'
 import './NewTabMenu.css'
 
 interface NewTabMenuProps {
@@ -8,9 +8,11 @@ interface NewTabMenuProps {
   onDuplicate: () => void
   onPickSession: () => void
   onNewSession: () => void
+  /** A terminal of this PC */
+  onLocalTerminal: () => void
 }
 
-export function NewTabMenu({ duplicateLabel, onDuplicate, onPickSession, onNewSession }: NewTabMenuProps) {
+export function NewTabMenu({ duplicateLabel, onDuplicate, onPickSession, onNewSession, onLocalTerminal }: NewTabMenuProps) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
@@ -31,6 +33,10 @@ export function NewTabMenu({ duplicateLabel, onDuplicate, onPickSession, onNewSe
           <DropdownMenu.Item className="new-tab-menu-item" onSelect={onPickSession}>
             <RiServerLine size={16} />
             <span>기존 세션 선택…</span>
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className="new-tab-menu-item" onSelect={onLocalTerminal}>
+            <RiComputerLine size={16} />
+            <span>로컬 터미널</span>
           </DropdownMenu.Item>
           <DropdownMenu.Separator className="new-tab-menu-separator" />
           <DropdownMenu.Item className="new-tab-menu-item" onSelect={onNewSession}>

@@ -36,7 +36,7 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
   // The rail shows how many SSH tabs are connected instead of rows it cannot label
   const connectedTabs = useTerminalStore(state => {
     let count = 0
-    state.terminals.forEach(t => { if (t.connected && !t.db) count++ })
+    state.terminals.forEach(t => { if (t.connected && !t.db && !t.local) count++ })
     return count
   })
   const [isAddingFolder, setIsAddingFolder] = useState(false)

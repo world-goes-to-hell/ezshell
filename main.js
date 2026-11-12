@@ -31,6 +31,7 @@ const { registerRemoteFileIpc } = require('./src/remoteFiles/ipc.js');
 const { registerDbIpc } = require('./src/dbClient/ipc.js');
 const { createDbConnections } = require('./src/dbClient/connections.js');
 const { createDiscoveryCache } = require('./src/dbClient/discovery.js');
+const { createLocalShells } = require('./src/localShell.js');
 const localFileOps = require('./src/localFileOps.js');
 const sftpSymlinks = require('./src/sftpSymlinks.js');
 const sftpUploadCheck = require('./src/sftpUploadCheck.js');
@@ -641,6 +642,54 @@ ipcMain.handle('open-sftp-window', (event, { sessionId, localPath, remotePath, t
 
   createSftpWindow(sessionId, localPath, remotePath, title);
   return { success: true };
+});
+
+// ==================== Local terminal tabs ====================
+// Shells of this PC (src/localShell.js). Only the main window opens and drives them.
+const fromMainWindow = (event) => Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+let localShells = null;
+function getLocalShells() {
+  if (!localShells) {
+    // Loaded on first use: a native module, and most runs of the app never open a local terminal
+    const pty = require('node-pty');
+    localShells = createLocalShells({
+      spawn: pty.spawn,
+      send: (channel, payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+      }
+    });
+  }
+  return localShells;
+}
+ipcMain.handle('local-shell-open', (event, size) => {
+  if (!fromMainWindow(event)) return { success: false, error: '본창에서만 열 수 있습니다.' };
+  try {
+    return { success: true, ...getLocalShells().open(size || {}) };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+ipcMain.handle('local-shell-attach', (event, id) => (fromMainWindow(event) && localShells ? localShells.attach(id) : null));
+ipcMain.on('local-shell-write', (event, { id, data }) => { if (fromMainWindow(event)) localShells?.write(id, data); });
+ipcMain.on('local-shell-resize', (event, { id, cols, rows }) => { if (fromMainWindow(event)) localShells?.resize(id, cols, rows); });
+ipcMain.on('local-shell-close', (event, id) => { if (fromMainWindow(event)) localShells?.close(id); });
+app.on('will-quit', () => localShells?.closeAll());
+
+// Terminal output chosen in the right-click menu, saved where the user picks
+ipcMain.handle('save-terminal-output', async (event, { defaultName, text }) => {
+  if (!fromMainWindow(event) || typeof text !== 'string') return { success: false, error: '저장할 수 없습니다.' };
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '터미널 출력 저장',
+      defaultPath: path.basename(String(defaultName || 'terminal.txt')),
+      filters: [{ name: '텍스트', extensions: ['txt', 'log'] }, { name: '모든 파일', extensions: ['*'] }]
+    });
+    if (result.canceled || !result.filePath) return { success: false, cancelled: true };
+    await fs.promises.writeFile(result.filePath, text, 'utf-8');
+    return { success: true, filePath: result.filePath };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 // Set once the MCP side has shut down, so the quit that follows goes through

@@ -29,6 +29,8 @@ const SCOPES: Array<{ value: FindScope; label: string }> = [
 
 interface TerminalFindDialogProps {
   kind: FindKind
+  /** Text selected in the terminal, offered as what to look for */
+  initialQuery?: string
   onClose: () => void
   /** The command line to put in the shell's input line (not run) */
   onInsert: (command: string) => void
@@ -39,9 +41,9 @@ interface TerminalFindDialogProps {
  * The user presses Enter: a search from a large folder reads the server's disks for a long time, so
  * the app never starts one by itself.
  */
-export function TerminalFindDialog({ kind, onClose, onInsert }: TerminalFindDialogProps) {
+export function TerminalFindDialog({ kind, initialQuery = '', onClose, onInsert }: TerminalFindDialogProps) {
   const [prefs, setPrefs] = useState(readPrefs)
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(initialQuery)
   const [problem, setProblem] = useState<string | null>(null)
   const isName = kind === 'name'
   const result = buildFindCommand({ kind, query, scope: prefs.scope, customDir: prefs.customDir, ignoreCase: prefs.ignoreCase })

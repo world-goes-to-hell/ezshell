@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState, useRef } from 'react'
-import { RiDatabase2Line } from 'react-icons/ri'
+import { RiDatabase2Line, RiComputerLine } from 'react-icons/ri'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { Footer } from './components/Footer/Footer'
 import { McpApprovalDialog } from './components/Mcp/McpApprovalDialog'
@@ -15,6 +15,7 @@ import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/Qui
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
 import { NewTabMenu } from './components/Terminal/NewTabMenu'
 import { getDuplicateConfig } from './lib/duplicateConnection'
+import { isSshTab } from './lib/sessionTabs'
 import { detachTab, restoreMergedTab, type DetachedTab } from './lib/detachedTab'
 import { captureTerminalSnapshot, setPendingSnapshot } from './lib/terminalSnapshots'
 import { SettingsModal } from './components/Settings/SettingsModal'
@@ -54,6 +55,7 @@ import { reconnectFailureText } from './lib/connectionLost'
 const RemoteFileWindow = lazy(() => import('./components/RemoteFile/RemoteFileWindow').then(module => ({ default: module.RemoteFileWindow })))
 // The editor and grid are loaded only in DB windows
 const DbClientWindow = lazy(() => import('./components/DbClient/DbClientWindow').then(module => ({ default: module.DbClientWindow })))
+const LocalTerminalTab = lazy(() => import('./components/Terminal/LocalTerminalTab'))
 const DbTab = lazy(() => import('./components/DbClient/DbTab'))
 
 // Check if we're in a special window mode
@@ -676,7 +678,32 @@ function App() {
       removeTerminal(sessionId)
       return
     }
+    if (terminals.get(sessionId)?.local) {
+      window.electronAPI.localShellClose?.(sessionId)
+      removeTerminal(sessionId)
+      return
+    }
     disconnect(sessionId)
+  }
+
+  // A terminal of this PC as a new tab (the shell runs in the main process)
+  const handleOpenLocalTerminal = async () => {
+    const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24 })
+    if (!result || !result.success) {
+      toast.error('로컬 터미널을 열지 못했습니다', result ? result.error : '앱을 다시 시작해 주세요.')
+      return
+    }
+    const store = useTerminalStore.getState()
+    const count = Array.from(store.terminals.values()).filter(info => info.local).length
+    store.addTerminal(result.id, {
+      id: result.id, host: '이 PC', username: '', connected: true,
+      title: count === 0 ? result.name : `${result.name} (${count + 1})`,
+      local: { shell: result.name }
+    })
+    const { layout: current } = useTerminalStore.getState()
+    if (current.mode === 'split' && current.activePaneType === 'secondary') {
+      store.moveTerminalBetweenPanes(result.id, 'primary', 'secondary')
+    }
   }
 
   /** The tab's content: a terminal, or a DB tab (its code loads only when one exists) */
@@ -686,6 +713,13 @@ function App() {
       return (
         <Suspense fallback={null}>
           <DbTab terminalId={sessionId} dbId={db.dbId} label={db.label} />
+        </Suspense>
+      )
+    }
+    if (terminals.get(sessionId)?.local) {
+      return (
+        <Suspense fallback={null}>
+          <LocalTerminalTab terminalId={sessionId} isActive={isActive} onActivate={onActivate} />
         </Suspense>
       )
     }
@@ -730,7 +764,9 @@ function App() {
     const terminal = sessionId ? terminals.get(sessionId) : null
 
     // A DB tab dropped outside moves to its own DB window (the connection stays)
-    if (dropZone === 'popout' && sessionId && terminal?.db) {
+    if (dropZone === 'popout' && sessionId && terminal?.local) {
+      // A local terminal has no window of its own: it stays a tab
+    } else if (dropZone === 'popout' && sessionId && terminal?.db) {
       const result = await window.electronAPI.dbDetach?.(terminal.db.dbId)
       if (result?.success) removeTerminal(sessionId)
     } else if (dropZone === 'popout' && sessionId && terminal) {
@@ -1004,6 +1040,7 @@ function App() {
                           />
                         )}
                         {terminal.db && <RiDatabase2Line size={13} className="tab-db-icon" aria-label="DB" />}
+                        {terminal.local && <RiComputerLine size={13} className="tab-local-icon" aria-label="로컬" />}
                         <span>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
                         {sessionId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[sessionId]}`} />}
                         {terminal.hasActivity && <span className="activity-indicator" />}
@@ -1021,6 +1058,7 @@ function App() {
                     onDuplicate={() => void handleDuplicateTab(activeTerminalId)}
                     onPickSession={() => setSessionPickerOpen(true)}
                     onNewSession={handleNewConnection}
+                    onLocalTerminal={() => void handleOpenLocalTerminal()}
                   />
                 </div>
               )}
@@ -1073,7 +1111,7 @@ function App() {
                           }
                         }}
                         onUnsplit={closeSplit}
-                        onSftpToggle={layout.primary.activeTerminalId && !terminals.get(layout.primary.activeTerminalId)?.db ? () => {
+                        onSftpToggle={layout.primary.activeTerminalId && isSshTab(terminals.get(layout.primary.activeTerminalId)) ? () => {
                           const activeId = layout.primary.activeTerminalId!
                           setOpen(activeId, !isOpen(activeId))
                         } : undefined}
@@ -1149,7 +1187,7 @@ function App() {
                             addTerminalToPane('secondary', result.sessionId)
                           }
                         }}
-                        onSftpToggle={layout.secondary.activeTerminalId && !terminals.get(layout.secondary.activeTerminalId)?.db ? () => {
+                        onSftpToggle={layout.secondary.activeTerminalId && isSshTab(terminals.get(layout.secondary.activeTerminalId)) ? () => {
                           const activeId = layout.secondary!.activeTerminalId!
                           setOpen(activeId, !isOpen(activeId))
                         } : undefined}
@@ -1208,7 +1246,7 @@ function App() {
                 )}
               </div>
               {/* Hidden while the panel is open (it has its own close button) so the panel gets the space */}
-              {activeTerminalId && layout.mode !== 'split' && !sftpOpen && !activeTerminal?.db && (
+              {activeTerminalId && layout.mode !== 'split' && !sftpOpen && isSshTab(activeTerminal) && (
                 <div className="toolbar">
                   <button
                     className="toolbar-btn"
@@ -1223,7 +1261,7 @@ function App() {
               )}
             </>
           ) : (
-            <WelcomeScreen onNewConnection={handleNewConnection} />
+            <WelcomeScreen onNewConnection={handleNewConnection} onLocalTerminal={() => void handleOpenLocalTerminal()} />
           )}
         </main>
       </div>
@@ -1288,7 +1326,7 @@ function App() {
         onSplitHorizontal={handleContextSplitHorizontal}
         onSplitVertical={handleContextSplitVertical}
         isLogging={contextMenuTabId !== null && contextMenuTabId in sessionLogFiles}
-        isTerminal={!(contextMenuTabId && terminals.get(contextMenuTabId)?.db)}
+        isTerminal={!contextMenuTabId || isSshTab(terminals.get(contextMenuTabId))}
         onToggleLog={handleContextToggleLog}
         onOpenLogFolder={openSessionLogFolder}
       />

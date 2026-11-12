@@ -30,8 +30,6 @@ interface MenuOptions {
 }
 
 const ICON_SIZE = 16
-export const CONTEXT_MENU_ITEM_HEIGHT = 34
-export const CONTEXT_MENU_WIDTH = 210
 
 /** Items shown for the clicked row (or for empty space when `file` is null) */
 export function buildContextMenuItems({ file, type, canRename, canCreateFolder, canDelete, canOpenFile = false }: MenuOptions): MenuItem[] {
@@ -103,7 +101,15 @@ export const FileListContextMenu = forwardRef<HTMLDivElement, FileListContextMen
 
     // On the page itself: inside the SFTP panel a transformed ancestor would clip a fixed menu
     return createPortal(
-      <div ref={menuRef} className="context-menu sftp-context-menu" style={{ top: position.top, left: position.left }} role="menu">
+      <div
+        ref={menuRef}
+        className="context-menu sftp-context-menu"
+        style={{ top: position.top, left: position.left }}
+        role="menu"
+        // Keep the keyboard focus in the file list: the menu is outside it, and a list that loses focus
+        // clears its selection before the chosen action (download, delete) reads it
+        onMouseDown={(e) => e.preventDefault()}
+      >
         {items.map(item => (
           <div key={item.action}>
             {item.separated && <div className="context-menu-divider" />}

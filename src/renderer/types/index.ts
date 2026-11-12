@@ -391,6 +391,14 @@ declare global {
 
       // Local file system
       localList: (dirPath: string) => Promise<any>
+      localShellOpen?: (size: { cols: number; rows: number }) => Promise<{ success: true; id: string; name: string } | { success: false; error: string }>
+      localShellAttach?: (id: string) => Promise<{ backlog: string; exited: boolean; exitCode: number | null } | null>
+      localShellWrite?: (id: string, data: string) => void
+      localShellResize?: (id: string, cols: number, rows: number) => void
+      localShellClose?: (id: string) => void
+      onLocalShellData?: (callback: (data: { id: string; data: string }) => void) => () => void
+      onLocalShellExit?: (callback: (data: { id: string; exitCode: number | null }) => void) => () => void
+      saveTerminalOutput?: (defaultName: string, text: string) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
       localRename: (oldPath: string, newPath: string) => Promise<LocalFileOpResult>
       localMkdir: (dirPath: string) => Promise<LocalFileOpResult>
       /** Move an entry into another folder (same name); absent until the app restarts after an update */

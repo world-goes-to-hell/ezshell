@@ -71,3 +71,29 @@
   margin: 4px 2px;
   background: var(--border);
 }
+
+/* Local terminal: the mark on its tab and the button on the start screen (loaded with the app, the tab's own styles load with the tab) */
+.tab-local-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.welcome-local-terminal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.welcome-local-terminal:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}

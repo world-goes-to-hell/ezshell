@@ -28,6 +28,8 @@ export interface TerminalInfo {
    * `sshSessionId` is the tab whose SSH connection carries the tunnel.
    */
   db?: { dbId: string; sshSessionId: string; label?: string }
+  /** A terminal of this PC (src/localShell.js) instead of an SSH one: no SFTP, split, log or duplicate */
+  local?: { shell: string }
 }
 
 export type SplitDirection = 'horizontal' | 'vertical' | 'quad' | 'tri-bottom' | 'tri-top' | 'tri-right' | 'tri-left'
