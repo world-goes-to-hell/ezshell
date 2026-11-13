@@ -215,3 +215,494 @@ button.ghost {
   background: var(--accent);
   color: #fff;
 }
+
+/* ---- Colours shared with the PC (MCP risk, tab state) ---- */
+:root {
+  --success: #3fb950;
+  --warning: #d29922;
+  --danger: #f2777a;
+  --tab-height: 56px;
+}
+
+button.chip {
+  min-height: 32px;
+  padding: 2px 12px;
+  border-radius: 16px;
+  font-size: 13px;
+}
+
+button.chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button.icon {
+  min-width: 36px;
+  font-size: 18px;
+}
+
+/* ---- Screens with the tab bar ---- */
+.tabbed-view {
+  padding-bottom: calc(var(--tab-height) + 12px + env(safe-area-inset-bottom));
+}
+
+.tabs {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 20;
+  display: flex;
+  height: calc(var(--tab-height) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.tabs button {
+  flex: 1;
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.tabs button[aria-current="page"] {
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+/* ---- Session tree (like the PC sidebar: a line for the folder colour, a short line for the session's) ---- */
+.tree-folder.has-color {
+  box-shadow: inset 2px 0 0 var(--folder-color);
+}
+
+.tree-folder-head,
+.tree-session {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  margin: 0;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+}
+
+.tree-folder-head {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tree-children {
+  margin-left: 14px;
+}
+
+.tree-chevron {
+  width: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.tree-session {
+  position: relative;
+  color: var(--text);
+}
+
+.tree-session:active,
+.tree-folder-head:active {
+  background: var(--panel);
+}
+
+.tree-session.has-color::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 3px;
+  height: 18px;
+  border-radius: 2px;
+  background: var(--session-color);
+  transform: translateY(-50%);
+}
+
+/* Open tabs on the PC: green while connected, red when only lost ones are left, a ring when none */
+.tree-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+}
+
+.tree-dot.is-connected {
+  border-color: var(--success);
+  background: var(--success);
+}
+
+.tree-dot.is-lost {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.tree-tabs {
+  min-width: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ---- Risk badge (the PC's MCP colours) ---- */
+.risk-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.risk-badge.risk-low { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+.risk-badge.risk-medium { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+.risk-badge.risk-danger,
+.risk-badge.risk-forbidden { background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
+
+/* ---- Approval card: over every screen, the terminal included ---- */
+.approval-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  padding: calc(12px + env(safe-area-inset-top)) 10px calc(12px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.6);
+  -webkit-overflow-scrolling: touch;
+}
+
+.approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--danger);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.approval-card.risk-low { border-left-color: var(--success); }
+.approval-card.risk-medium { border-left-color: var(--warning); }
+
+.approval-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.approval-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.approval-timer {
+  flex: none;
+  color: var(--warning);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.approval-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 12px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.approval-fields dt {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.approval-fields dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.approval-fields code,
+.approval-command {
+  font-family: ui-monospace, Menlo, Consolas, "D2Coding", monospace;
+  font-size: 13px;
+}
+
+.approval-command {
+  max-height: 40vh;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--bg);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.approval-folder,
+.approval-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.approval-sub {
+  margin-top: 4px;
+}
+
+.approval-purpose {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.approval-reasons {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.approval-diff {
+  max-height: 45vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  font-family: ui-monospace, Menlo, Consolas, "D2Coding", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.diff-header {
+  padding: 2px 8px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.diff-line {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diff-line.is-add { background: color-mix(in srgb, var(--success) 16%, transparent); }
+.diff-line.is-remove { background: color-mix(in srgb, var(--danger) 16%, transparent); }
+.diff-line.is-note { color: var(--muted); font-style: italic; }
+.diff-stat.is-add { color: var(--success); }
+.diff-stat.is-remove { color: var(--danger); }
+
+.approval-warning {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.approval-hint,
+.approval-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.approval-note {
+  color: var(--warning);
+}
+
+/* Not side by side: two equal buttons next to each other are easy to miss with a thumb. 거부 is
+   the full-width bottom button (where the thumb rests and a slip lands), 허용 sits above it with a
+   wide gap and a divider, so reaching it takes a deliberate move. */
+.approval-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  margin-top: 4px;
+}
+
+.approval-actions button {
+  width: 100%;
+  min-height: 52px;
+}
+
+.approval-allow {
+  position: relative;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.approval-allow::after {
+  content: "";
+  position: absolute;
+  right: 20%;
+  bottom: -15px;
+  left: 20%;
+  border-bottom: 1px solid var(--line);
+  pointer-events: none;
+}
+
+.approval-actions button:disabled {
+  opacity: 0.45;
+}
+
+/* At the bottom (above the tab bar): at the top it covered the title of the next card */
+.approval-toast {
+  position: fixed;
+  bottom: calc(var(--tab-height) + 16px + env(safe-area-inset-bottom));
+  left: 50%;
+  z-index: 60;
+  max-width: calc(100% - 32px);
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--panel);
+  font-size: 14px;
+  transform: translateX(-50%);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+/* ---- MCP activity (like the PC panel's terminal view) ---- */
+.activity {
+  font-family: ui-monospace, Menlo, Consolas, "D2Coding", monospace;
+  font-size: 12.5px;
+}
+
+.act-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.act-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  font-size: 13px;
+}
+
+.act-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.act-session {
+  font-weight: 600;
+}
+
+.act-state {
+  color: var(--muted);
+}
+
+.act-state.is-running,
+.act-state.is-waiting { color: var(--warning); }
+.act-state.is-done { color: var(--success); }
+.act-state.is-denied,
+.act-state.is-blocked,
+.act-state.is-failed,
+.act-state.is-timeout { color: var(--danger); }
+
+.act-tag {
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.act-stop {
+  min-height: 30px;
+  margin-left: auto;
+  padding: 2px 12px;
+  border-color: var(--danger);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.act-cwd {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.act-command,
+.act-output {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.act-command {
+  color: #79c0ff;
+}
+
+.act-output {
+  max-height: 50vh;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.act-output .is-stderr {
+  color: var(--danger);
+}
+
+.act-result,
+.act-note {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.act-note.is-error {
+  color: var(--danger);
+}
+
+.act-progress {
+  height: 6px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--line);
+}
+
+.act-progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}

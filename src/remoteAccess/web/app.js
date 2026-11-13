@@ -1,15 +1,28 @@
 // The phone page of ezShell's remote access: register once (the address carries a one-time code),
-// sign in with the authenticator's code, pick a session, use its terminal.
+// sign in with the authenticator's code, pick a session, use its terminal; answer MCP approval
+// requests (approvals.js), watch MCP activity (activity.js), turn on notifications (push.js).
 // Plain script (no build step): served as it is by src/remoteAccess/server.js.
 (() => {
   'use strict'
   const TOKEN_KEY = 'ezshell-device-token'
   const $ = (id) => document.getElementById(id)
-  const views = ['signin', 'message', 'sessions', 'terminal']
-  const show = (name) => views.forEach((view) => { $(`view-${view}`).hidden = view !== name })
+  const views = ['signin', 'message', 'sessions', 'activity', 'terminal']
+  const TABBED = new Set(['sessions', 'activity'])
+  let currentView = null
+  const show = (name) => {
+    views.forEach((view) => { $(`view-${view}`).hidden = view !== name })
+    $('tabs').hidden = !TABBED.has(name)
+    for (const tab of $('tabs').querySelectorAll('button')) {
+      if (tab.dataset.view === name) tab.setAttribute('aria-current', 'page')
+      else tab.removeAttribute('aria-current')
+    }
+    // Activity is sent only while it is on screen
+    if (currentView === 'activity' && name !== 'activity') activity.leave()
+    if (name === 'activity' && currentView !== 'activity') activity.enter()
+    currentView = name
+  }
 
   let socket = null
-  let sessions = []
   let terminal = null
   let fit = null
   let shellId = null
@@ -37,6 +50,12 @@
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
   }
 
+  const ez = window.ezRemote
+  const tree = ez.createSessionTree({ list: $('session-list'), filter: $('session-filter'), onOpen: (session) => openTerminal(session) })
+  const approvals = ez.createApprovals({ send })
+  const activity = ez.createActivity({ list: $('activity-list'), send })
+  const push = ez.createPush({ button: $('push-toggle'), status: $('push-status'), send })
+
   function message(text, { canRetry = false } = {}) {
     $('message-text').textContent = text
     $('message-retry').hidden = !canRetry
@@ -51,7 +70,9 @@
 
   // ---- Connection ----
   function connect(onOpen) {
-    const next = new WebSocket(`ws://${location.host}/ws`)
+    // HTTPS (a Tailscale certificate) needs the secure socket on the same name
+    const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
+    const next = new WebSocket(`${scheme}://${location.host}/ws`)
     let didOpen = false
     socket = next
     next.addEventListener('open', () => {
@@ -62,6 +83,9 @@
     next.addEventListener('close', () => {
       if (socket === next) socket = null
       closeTerminal()
+      approvals.reset()
+      activity.reset()
+      push.reset()
       // Whatever the reason, signing in again needs a new code
       if (wasReady) message('연결이 끊겼습니다.', { canRetry: true })
       else if (!didOpen) {
@@ -84,14 +108,38 @@
         break
       case 'ready':
         wasReady = true
-        sessions = msg.sessions
         $('device-name').textContent = msg.device
-        renderSessions()
+        tree.update(msg.folders, msg.sessions)
         show('sessions')
+        for (const request of Array.isArray(msg.approvals) ? msg.approvals : []) approvals.add(request)
+        void push.setAvailability(msg.push)
         break
       case 'sessions':
-        sessions = msg.sessions
-        renderSessions()
+        tree.update(msg.folders, msg.sessions)
+        break
+      case 'approval':
+        approvals.add(msg.request)
+        break
+      case 'approval-closed':
+        approvals.closed(msg)
+        break
+      case 'approval-result':
+        approvals.result(msg)
+        break
+      case 'activity':
+        activity.setItems(msg.items)
+        break
+      case 'activity-item':
+        activity.upsert(msg.item)
+        break
+      case 'activity-output':
+        activity.output(msg.id, msg.parts)
+        break
+      case 'activity-stop-result':
+        activity.stopResult(msg)
+        break
+      case 'push-result':
+        push.result(msg)
         break
       case 'error':
         if (!readToken() || msg.code === 'unknown-device') message(msg.message)
@@ -135,36 +183,14 @@
     }
   }
 
-  // ---- Sessions ----
-  function renderSessions() {
-    const list = $('session-list')
-    const filter = $('session-filter').value.trim().toLowerCase()
-    list.textContent = ''
-    const shown = sessions.filter((s) => !filter || s.name.toLowerCase().includes(filter) || s.folder.toLowerCase().includes(filter))
-    if (shown.length === 0) {
-      const empty = document.createElement('p')
-      empty.className = 'empty'
-      empty.textContent = sessions.length === 0 ? '저장된 세션이 없습니다.' : '찾는 세션이 없습니다.'
-      list.append(empty)
-      return
-    }
-    let folder = null
-    for (const session of shown) {
-      if (session.folder !== folder) {
-        folder = session.folder
-        const title = document.createElement('div')
-        title.className = 'folder'
-        title.textContent = folder || '폴더 없음'
-        list.append(title)
-      }
-      const button = document.createElement('button')
-      button.type = 'button'
-      button.className = 'session'
-      button.textContent = session.name
-      button.addEventListener('click', () => openTerminal(session))
-      list.append(button)
-    }
-  }
+  // ---- Screens ----
+  $('tabs').addEventListener('click', (event) => {
+    const tab = event.target.closest('button[data-view]')
+    if (!tab || tab.dataset.view === currentView) return
+    show(tab.dataset.view)
+    if (tab.dataset.view === 'sessions') send({ type: 'sessions' })
+  })
+  $('sessions-refresh').addEventListener('click', () => send({ type: 'sessions' }))
 
   // ---- Terminal ----
   function fitTerminal() {
@@ -239,7 +265,6 @@
     show('sessions')
     send({ type: 'sessions' })
   })
-  $('session-filter').addEventListener('input', renderSessions)
   window.addEventListener('resize', fitTerminal)
   if (window.visualViewport) window.visualViewport.addEventListener('resize', fitTerminal)
 

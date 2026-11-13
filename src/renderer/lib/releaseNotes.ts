@@ -51,6 +51,15 @@ export function notesToShow({ previous, current, existingUser, available }: {
     .map(version => ({ version, markdown: available[version] }))
 }
 
+/** The history for "업데이트 내용 보기": the versions up to `current`, newest first, at most ten */
+export function recentNotes(current: string, available: Record<string, string>): VersionNotes[] {
+  return Object.keys(available)
+    .filter(version => compareVersions(version, current) <= 0)
+    .sort((a, b) => compareVersions(b, a))
+    .slice(0, MAX_VERSIONS_SHOWN)
+    .map(version => ({ version, markdown: available[version] }))
+}
+
 export type Inline = { type: 'text' | 'code' | 'bold'; text: string }
 export type Block =
   | { type: 'heading'; level: 2 | 3; inlines: Inline[] }

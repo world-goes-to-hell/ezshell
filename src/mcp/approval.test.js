@@ -267,3 +267,66 @@ describe('createApprovalBroker onClose', () => {
     expect(shown.map(request => request.id)).toEqual(['a1', 'a2'])
   })
 })
+
+describe('createApprovalBroker and answers from a remote device', () => {
+  it('tells how a question ended', async () => {
+    const closed = []
+    const { broker } = setup({ onClose: (id, outcome) => closed.push(`${id}:${outcome}`) })
+    broker.request({})
+    broker.respond('a1', true)
+    broker.request({})
+    broker.respond('a2', false)
+    broker.request({})
+    vi.advanceTimersByTime(1000)
+    broker.request({})
+    broker.cancelAll()
+    expect(closed).toEqual(['a1:approved', 'a2:denied', 'a3:expired', 'a4:cancelled'])
+  })
+
+  it('closes the dialog when the answer came from elsewhere', async () => {
+    const { broker, dismissed } = setup()
+    const first = broker.request({})
+    expect(broker.respond('a1', true, { closeDialog: true })).toBe(true)
+    await expect(first).resolves.toBe('approved')
+    expect(dismissed).toEqual(['a1'])
+    // An answer in the dialog itself does not dismiss it (it closed itself)
+    broker.request({})
+    broker.respond('a2', true)
+    expect(dismissed).toEqual(['a1'])
+  })
+
+  it('gives the question being asked now, as it was shown', () => {
+    const { broker } = setup()
+    expect(broker.current()).toBeNull()
+    broker.request({ command: 'ls' })
+    broker.request({ command: 'second' })
+    expect(broker.current()).toEqual({ id: 'a1', command: 'ls', expiresAt: 1000 })
+    broker.respond('a1', false)
+    expect(broker.current()).toEqual({ id: 'a2', command: 'second', expiresAt: 1000 })
+    broker.respond('a2', false)
+    expect(broker.current()).toBeNull()
+  })
+
+  it('waits longer while answers may come from afar, and never shorter than the question asks', async () => {
+    let least = 5000
+    const { broker, shown } = setup({ minTimeoutMs: () => least })
+    const first = broker.request({})
+    expect(shown[0].expiresAt).toBe(5000)
+    vi.advanceTimersByTime(4999)
+    expect(broker.pendingCount()).toBe(1)
+    vi.advanceTimersByTime(1)
+    await expect(first).resolves.toBe('expired')
+    // A question with a longer limit of its own keeps it
+    broker.request({}, { timeoutMs: 9000 })
+    expect(shown[1].expiresAt).toBe(9000)
+    broker.respond('a2', false)
+    // Switched off again: back to the question's own limit; a failing source changes nothing
+    least = 0
+    broker.request({})
+    expect(shown[2].expiresAt).toBe(1000)
+    broker.respond('a3', false)
+    const { broker: other, shown: otherShown } = setup({ minTimeoutMs: () => { throw new Error('gone') } })
+    other.request({})
+    expect(otherShown[0].expiresAt).toBe(1000)
+  })
+})

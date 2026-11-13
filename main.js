@@ -734,6 +734,37 @@ const remoteAccess = require('./src/remoteAccess/controller.js').registerRemoteA
   isLocked: () => isAppLocked,
   readSessions: () => readDecryptedSessions(),
   readFolders: () => loadFromFile(foldersFilePath, []),
+  readExpandedFolders: () => loadFromFile(path.join(userDataPath, 'folders-expanded.json'), []),
+  // Tabs open on the PC, by the saved session they were opened from (the dots in the phone's list)
+  readOpenTabs: () => {
+    const tabs = new Map();
+    for (const connState of connectionStates.values()) {
+      const savedId = connState && connState.config && connState.config.savedSessionId;
+      if (!savedId) continue;
+      const count = tabs.get(savedId) || { connected: 0, disconnected: 0 };
+      if (connState.state === ConnectionState.CONNECTED) count.connected += 1;
+      else count.disconnected += 1;
+      tabs.set(savedId, count);
+    }
+    return tabs;
+  },
+  // What a phone notification says about a question: its kind and risk only (see approvalNotice.js)
+  describeApproval: (request) => `${approvalNoticeTitle(request)} · 위험도 ${MCP_LEVEL_LABELS[request.level] || request.level}`,
+  // Nobody at the PC for a minute: a question is announced on the phones without waiting
+  isUserAway: () => {
+    try {
+      return require('electron').powerMonitor.getSystemIdleTime() >= 60;
+    } catch {
+      return false;
+    }
+  },
+  // MCP questions and activity, for a signed-in device (the controller exists once MCP was started)
+  mcp: {
+    currentApproval: () => (mcpController ? mcpController.currentApproval() : null),
+    respondApproval: (id, approved, device) => Boolean(mcpController) && mcpController.respondApprovalFrom(id, approved, device),
+    listActivity: () => (mcpController && !isAppLocked ? mcpController.listActivity() : []),
+    cancelActivity: (id, device) => Boolean(mcpController) && mcpController.cancelActivityFrom(id, device) === true
+  },
   fromMainWindow,
   notify: (channel, payload) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
@@ -1323,6 +1354,14 @@ function keepMainWindowOnTop(onTop) {
 function showMcpApproval(request) {
   const delivered = sendToMainWindow('mcp-approval-request', request);
   if (delivered) keepMainWindowOnTop(true);
+  // Also to the phones that are signed in (remote access), when the user wants answers from there
+  if (delivered) {
+    try {
+      remoteAccess.showApproval(request);
+    } catch (err) {
+      console.error('Failed to send the MCP approval to remote devices:', err);
+    }
+  }
   if (delivered && !mainWindow.isFocused()) {
     try {
       alertMcpApproval(request);
@@ -1349,9 +1388,19 @@ function startMcp() {
     loadFolders: () => loadFromFile(foldersFilePath, []),
     showApproval: showMcpApproval,
     dismissApproval: (id) => sendToMainWindow('mcp-approval-dismiss', { id }),
-    approvalClosed: () => keepMainWindowOnTop(false),
-    emitActivity: (item) => sendToActivityViews('mcp-activity', item),
-    emitActivityOutput: (payload) => sendToActivityViews('mcp-activity-output', payload),
+    approvalClosed: (id, outcome) => {
+      keepMainWindowOnTop(false);
+      remoteAccess.approvalClosed(id, outcome);
+    },
+    approvalMinTimeoutMs: () => remoteAccess.approvalWaitMs(),
+    emitActivity: (item) => {
+      sendToActivityViews('mcp-activity', item);
+      remoteAccess.activityItem(item);
+    },
+    emitActivityOutput: (payload) => {
+      sendToActivityViews('mcp-activity-output', payload);
+      remoteAccess.activityOutput(payload);
+    },
     hostKeys: hostKeyStore
   });
   mcpController.start().catch(err => console.error('Failed to start MCP server:', err));

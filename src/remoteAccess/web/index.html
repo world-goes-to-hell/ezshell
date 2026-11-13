@@ -28,15 +28,32 @@
     <button id="message-retry" type="button" class="primary" hidden>다시 접속</button>
   </main>
 
-  <!-- Saved sessions, by folder -->
-  <main id="view-sessions" class="view" hidden>
+  <!-- Saved sessions, as the PC sidebar shows them -->
+  <main id="view-sessions" class="view tabbed-view" hidden>
     <header class="bar">
       <strong>세션</strong>
       <span id="device-name" class="muted"></span>
+      <button id="push-toggle" type="button" class="chip" aria-pressed="false" hidden>알림 켜기</button>
+      <button id="sessions-refresh" type="button" class="ghost icon" aria-label="세션 목록 새로 받기">↻</button>
     </header>
+    <p id="push-status" class="muted" role="status" hidden></p>
     <input id="session-filter" type="search" placeholder="세션 이름으로 찾기" aria-label="세션 찾기">
-    <div id="session-list" class="list"></div>
+    <div id="session-list" class="list tree"></div>
   </main>
+
+  <!-- MCP activity: requests and what they printed -->
+  <main id="view-activity" class="view tabbed-view" hidden>
+    <header class="bar">
+      <strong>MCP 활동</strong>
+      <span class="muted">이 화면을 보는 동안만 받습니다</span>
+    </header>
+    <div id="activity-list" class="list activity" aria-live="polite"></div>
+  </main>
+
+  <nav id="tabs" class="tabs" aria-label="화면" hidden>
+    <button type="button" data-view="sessions" aria-current="page">세션</button>
+    <button type="button" data-view="activity">MCP 활동</button>
+  </nav>
 
   <!-- One terminal -->
   <main id="view-terminal" class="view terminal-view" hidden>
@@ -63,6 +80,10 @@
 
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/xterm-addon-fit.js"></script>
+  <script src="/sessions.js"></script>
+  <script src="/approvals.js"></script>
+  <script src="/activity.js"></script>
+  <script src="/push.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

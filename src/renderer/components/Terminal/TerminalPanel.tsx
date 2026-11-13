@@ -246,7 +246,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       // File and folder names under the pointer are underlined (right-click offers their actions)
       const fileLinks = attachFileLinks(term, {
         sessionId,
-        allowsName: fileZone.allows,
+        lookupName: fileZone.lookup,
         getCwd: () => useTerminalStore.getState().terminals.get(sessionId)?.currentPath,
         getSessionName: () => {
           const tab = useTerminalStore.getState().terminals.get(sessionId)

@@ -62,10 +62,10 @@ function describeStartError(err, port) {
 }
 
 /** `hostKeys` is the app's saved host key store; without it the gateway refuses every server. */
-function createMcpController({ userDataPath, version, isUnlocked, loadSessions, loadFolders, showApproval, dismissApproval, approvalClosed, emitActivity, emitActivityOutput, hostKeys, deps = {} }) {
+function createMcpController({ userDataPath, version, isUnlocked, loadSessions, loadFolders, showApproval, dismissApproval, approvalClosed, approvalMinTimeoutMs, emitActivity, emitActivityOutput, hostKeys, deps = {} }) {
   const configStore = deps.configStore || createMcpConfigStore({ filePath: path.join(userDataPath, 'mcp.json') })
   const audit = deps.audit || createAuditLog({ filePath: path.join(userDataPath, 'mcp-audit.log') })
-  const approvals = deps.approvals || createApprovalBroker({ show: showApproval, dismiss: dismissApproval, onClose: approvalClosed })
+  const approvals = deps.approvals || createApprovalBroker({ show: showApproval, dismiss: dismissApproval, onClose: approvalClosed, minTimeoutMs: approvalMinTimeoutMs })
   const gateway = deps.gateway || createSessionGateway(hostKeys ? { hostKeys } : {})
   const activity = deps.activity || createActivityLog({
     emit: (item) => {
@@ -223,9 +223,36 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
     addTransferRoot: (dir) => enqueue(() => addTransferRoot(dir)),
     removeTransferRoot: (dir) => enqueue(async () => removeTransferRoot(dir)),
     respondApproval: (id, approved) => approvals.respond(id, approved),
+    /** The question being asked now (what the dialog shows), for a remote device; null when none */
+    currentApproval: () => approvals.current(),
+    /**
+     * An answer from a remote-access device. Who answered goes to the audit log before the answer
+     * takes effect; if that cannot be written the answer is not taken (as for commands).
+     */
+    respondApprovalFrom: (id, approved, device) => {
+      const asked = approvals.current()
+      if (!asked || asked.id !== id || typeof approved !== 'boolean') return false
+      try {
+        audit.append({ phase: 'remote-answer', device: String(device ?? ''), approved, sessionName: asked.sessionName, command: asked.command, level: asked.level, kind: asked.kind ?? 'command' })
+      } catch {
+        return false
+      }
+      return approvals.respond(id, approved, { closeDialog: true })
+    },
     readAudit: (limit) => audit.readRecent(limit),
     listActivity: () => activity.list(),
     cancelActivity: (id) => activity.cancel(id),
+    /** A request stopped from a remote-access device: who stopped what goes to the audit log first */
+    cancelActivityFrom: (id, device) => {
+      const item = activity.list().find((entry) => entry.id === id)
+      if (!item) return false
+      try {
+        audit.append({ phase: 'remote-stop', device: String(device ?? ''), requestId: id, sessionName: item.sessionName, command: item.command, level: item.level })
+      } catch {
+        return false
+      }
+      return activity.cancel(id)
+    },
     onLocked: () => {
       disconnectAll()
       // Fresh start after unlock: home directories again, and nothing from before the lock on screen

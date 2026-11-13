@@ -103,6 +103,7 @@ export function RemoteAccessSettings() {
   }
 
   const setEnabled = (isEnabled: boolean) => run(async () => apply(await api.remoteAccessSetEnabled!(isEnabled)))
+  const setAnswerMcp = (isOn: boolean) => run(async () => apply(await api.remoteAccessSetAnswerMcp!(isOn)))
 
   const showPairing = () => run(async () => {
     const result = await api.remoteAccessPairing!()
@@ -211,6 +212,26 @@ export function RemoteAccessSettings() {
           </section>
 
           <section className="mcp-field">
+            <span className="mcp-field-label">MCP 확인 요청</span>
+            <label className="mcp-toggle">
+              <input type="checkbox" checked={status.answerMcp} disabled={isBusy} onChange={(event) => setAnswerMcp(event.target.checked)} />
+              <span>휴대폰에서도 확인 요청에 답하기</span>
+            </label>
+            <p className="remote-access-desc">
+              켜면 Claude 의 확인 요청이 접속한 휴대폰에도 뜹니다. 휴대폰이 접속해 있거나 알림을 받을 수 있는 동안에는, 휴대폰으로 답할 시간을 두기 위해 답을 기다리는 시간이 60초에서 4분으로 늘어납니다.
+            </p>
+            {status.isRunning && (status.push?.available ? (
+              <p className="remote-access-desc">
+                알림: 휴대폰 페이지의 <strong>알림 켜기</strong>를 누르면, PC 에서 15초 안에 답하지 않은 요청을 휴대폰 알림으로 알려 줍니다. 알림에는 요청 종류와 위험도만 들어갑니다.
+              </p>
+            ) : (
+              <div className="mcp-setup-result warning">
+                휴대폰 알림을 쓸 수 없습니다. {status.push?.note ?? ''} 알림 없이도 휴대폰 페이지를 열어 두면 요청이 뜹니다.
+              </div>
+            ))}
+          </section>
+
+          <section className="mcp-field">
             <span className="mcp-field-label">등록된 기기 ({status.devices.length})</span>
             {status.devices.length === 0 ? (
               <p className="mcp-transfer-empty">등록된 기기가 없습니다.</p>
@@ -223,6 +244,7 @@ export function RemoteAccessSettings() {
                       <span className="remote-access-device-name">
                         {device.name}
                         {connectedIds.has(device.id) && <span className="remote-access-live">접속 중</span>}
+                        {device.hasPush && <span className="remote-access-tag">알림</span>}
                       </span>
                       <span className="remote-access-device-times">
                         등록 {dateLabel(device.createdAt)} · 마지막 접속 {dateLabel(device.lastSeenAt)}

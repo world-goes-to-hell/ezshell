@@ -13,7 +13,7 @@ import { SftpWindow } from './components/Sftp/SftpWindow'
 import { ConnectModal, ConnectionConfig, DEFAULT_CONFIG } from './components/Modal/ConnectModal'
 import { SessionImportDialog } from './components/Sidebar/SessionImportDialog'
 import { WhatsNewDialog, BUNDLED_NOTES } from './components/WhatsNew/WhatsNewDialog'
-import { notesToShow, type VersionNotes } from './lib/releaseNotes'
+import { notesToShow, recentNotes, type VersionNotes } from './lib/releaseNotes'
 import type { SharedSession } from './lib/sessionShare'
 import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/QuickConnectModal'
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
@@ -769,10 +769,10 @@ function App() {
     setWhatsNew(null)
   }
 
-  // Command palette "업데이트 내용 보기": this version's notes, without changing the record
+  // Command palette "업데이트 내용 보기": the last ten versions' notes, without changing the record
   const handleOpenWhatsNew = async () => {
     const current = await window.electronAPI.getAppVersion()
-    const entries = notesToShow({ previous: null, current, existingUser: true, available: BUNDLED_NOTES })
+    const entries = recentNotes(current, BUNDLED_NOTES)
     if (entries.length > 0) setWhatsNew({ entries, markSeen: false })
     else toast.info('업데이트 내용 없음', `${current} 버전의 업데이트 내용이 없습니다`)
   }

@@ -93,7 +93,7 @@ describe('createAccessStore', () => {
     const { code } = store.startPairing()
     const first = store.redeemPairing(code, '  내 폰\n ')
     expect(first.token).toMatch(/^[\w-]{43}$/)
-    expect(store.devices()).toEqual([{ id: first.deviceId, name: '내 폰', createdAt: clock, lastSeenAt: null }])
+    expect(store.devices()).toEqual([{ id: first.deviceId, name: '내 폰', createdAt: clock, lastSeenAt: null, hasPush: false }])
     expect(store.redeemPairing(code, 'again')).toEqual({ error: 'bad-code' })
     // The token itself is not in the file
     expect(fs.readFileSync(filePath, 'utf-8')).not.toContain(first.token)
@@ -104,7 +104,8 @@ describe('createAccessStore', () => {
     store.setEnabled(true)
     expect(store.redeemPairing('anything', 'x')).toEqual({ error: 'bad-code' })
     const { code } = store.startPairing()
-    expect(store.redeemPairing(`${code.slice(0, -1)}x`, 'x')).toEqual({ error: 'bad-code' })
+    // The last character changed (to one it is not: the code is random and may end in any of them)
+    expect(store.redeemPairing(`${code.slice(0, -1)}${code.endsWith('x') ? 'y' : 'x'}`, 'x')).toEqual({ error: 'bad-code' })
     clock += PAIRING_MS + 1
     expect(store.redeemPairing(code, 'x')).toEqual({ error: 'bad-code' })
   })
@@ -257,5 +258,57 @@ describe('hardening from the security review', () => {
     const file = fs.readFileSync(filePath, 'utf-8')
     expect(file).not.toContain(secret)
     expect(JSON.parse(file).totpSecret).toBeUndefined()
+  })
+})
+
+describe('createAccessStore: notifications', () => {
+  let filePath
+  const sealer = {
+    seal: (text) => Buffer.from(`sealed:${text}`).toString('base64'),
+    unseal: (sealed) => Buffer.from(sealed, 'base64').toString().replace(/^sealed:/, '')
+  }
+  const SUBSCRIPTION = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', p256dh: 'point', auth: 'secret' }
+
+  beforeEach(() => {
+    filePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-access-')), 'remote-access.json')
+  })
+
+  it('makes the signing keys once and never writes the private half in plain', () => {
+    const store = createAccessStore({ filePath, sealer })
+    const keys = store.vapidKeys()
+    expect(Buffer.from(keys.publicKey, 'base64url')).toHaveLength(65)
+    expect(store.vapidKeys()).toEqual(keys)
+    expect(fs.readFileSync(filePath, 'utf-8')).not.toContain(keys.privateKey)
+    expect(createAccessStore({ filePath, sealer }).vapidKeys()).toEqual(keys)
+  })
+
+  it('remembers where to notify a device, and lists it without the address', () => {
+    const store = createAccessStore({ filePath, sealer })
+    store.setEnabled(true)
+    const { deviceId } = store.redeemPairing(store.startPairing().code, 'phone')
+    store.setPush(deviceId, SUBSCRIPTION)
+    expect(store.pushTargets()).toEqual([{ deviceId, name: 'phone', subscription: SUBSCRIPTION }])
+    expect(store.devices()[0]).toMatchObject({ id: deviceId, hasPush: true })
+    expect(JSON.stringify(store.devices())).not.toContain('fcm.googleapis.com')
+    expect(createAccessStore({ filePath, sealer }).pushTargets()).toHaveLength(1)
+    store.setPush(deviceId, null)
+    expect(store.pushTargets()).toEqual([])
+    expect(store.devices()[0].hasPush).toBe(false)
+  })
+
+  it('forgets a device\'s subscription with the device, and all of them with the keys', () => {
+    const store = createAccessStore({ filePath, sealer })
+    store.setEnabled(true)
+    const first = store.redeemPairing(store.startPairing().code, 'phone')
+    store.vapidKeys()
+    store.setPush(first.deviceId, SUBSCRIPTION)
+    // The keys cannot be opened any more (another Windows account): new keys, and the old subscriptions go
+    const broken = createAccessStore({ filePath, sealer: { seal: sealer.seal, unseal: () => { throw new Error('no key') } } })
+    expect(broken.pushTargets()).toHaveLength(1)
+    broken.vapidKeys()
+    expect(broken.pushTargets()).toEqual([])
+    store.setPush(first.deviceId, SUBSCRIPTION)
+    store.revoke(first.deviceId)
+    expect(store.pushTargets()).toEqual([])
   })
 })

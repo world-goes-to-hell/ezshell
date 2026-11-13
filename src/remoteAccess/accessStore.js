@@ -5,6 +5,7 @@
 const crypto = require('crypto')
 const fs = require('fs')
 const totp = require('./totp.js')
+const webPush = require('./webPush.js')
 
 const PAIRING_MS = 2 * 60 * 1000
 const MAX_DEVICES = 5
@@ -29,7 +30,11 @@ const cleanName = (name) => String(name ?? '').replace(/[\u0000-\u001f]/g, ' ').
  *   keeps the authenticator secret unreadable in the file; both may answer null when they cannot
  */
 function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.randomBytes, sealer = null }) {
-  let state = { enabled: false, port: DEFAULT_PORT, totpSecret: null, devices: [] }
+  // answerMcp: MCP questions are also sent to signed-in devices and wait longer for an answer
+  // vapid: the key pair notifications are signed with ({ publicKey, privateKeySealed | privateKey })
+  let state = { enabled: false, port: DEFAULT_PORT, answerMcp: true, totpSecret: null, vapid: null, devices: [] }
+  // The private half, opened (memory only)
+  let vapidPrivate = null
   // The secret as it is in the file. Opened on first use: the OS cannot open it before the app is ready.
   let sealedSecret = null
   try {
@@ -37,6 +42,8 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
     if (saved && typeof saved === 'object') {
       state = {
         enabled: saved.enabled === true,
+        answerMcp: saved.answerMcp !== false,
+        vapid: saved.vapid && typeof saved.vapid.publicKey === 'string' ? saved.vapid : null,
         port: Number.isInteger(saved.port) && saved.port >= 1024 && saved.port <= 65535 ? saved.port : DEFAULT_PORT,
         totpSecret: typeof saved.totpSecret === 'string' ? saved.totpSecret : null,
         devices: Array.isArray(saved.devices) ? saved.devices.filter((d) => d && typeof d.id === 'string' && typeof d.tokenHash === 'string') : []
@@ -82,6 +89,54 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
     fs.writeFileSync(filePath, JSON.stringify({ ...rest, ...kept }, null, 2), { encoding: 'utf-8', mode: 0o600 })
   }
 
+  /**
+   * The key pair notifications are signed with, made on first use. The private half is sealed like
+   * the authenticator secret. New keys (first use, or the old ones cannot be opened) end every
+   * subscription: a browser subscribes to one public key.
+   */
+  function vapidKeys() {
+    if (state.vapid && !vapidPrivate) {
+      if (sealer && typeof state.vapid.privateKeySealed === 'string') {
+        try {
+          vapidPrivate = sealer.unseal(state.vapid.privateKeySealed) || null
+        } catch {
+          vapidPrivate = null
+        }
+      } else if (!sealer && typeof state.vapid.privateKey === 'string') {
+        vapidPrivate = state.vapid.privateKey
+      }
+    }
+    if (!state.vapid || !vapidPrivate) {
+      const made = webPush.generateVapidKeys()
+      let sealed = null
+      if (sealer) {
+        try {
+          sealed = sealer.seal(made.privateKey) || null
+        } catch {
+          sealed = null
+        }
+      }
+      vapidPrivate = made.privateKey
+      const kept = sealer ? (sealed ? { privateKeySealed: sealed } : {}) : { privateKey: made.privateKey }
+      state = { ...state, vapid: { publicKey: made.publicKey, ...kept }, devices: state.devices.map(({ push, ...device }) => device) }
+      save()
+    }
+    return { publicKey: state.vapid.publicKey, privateKey: vapidPrivate }
+  }
+
+  /** Where to notify a device ({ endpoint, p256dh, auth }), or null to stop notifying it */
+  function setPush(deviceId, subscription) {
+    state = {
+      ...state,
+      devices: state.devices.map((device) => {
+        if (device.id !== deviceId) return device
+        const { push, ...rest } = device
+        return subscription ? { ...rest, push: { endpoint: subscription.endpoint, p256dh: subscription.p256dh, auth: subscription.auth } } : rest
+      })
+    }
+    save()
+  }
+
   const isLockedOut = (deviceId) => now() < (failures.get(deviceId)?.lockedUntil ?? 0)
   function failed(deviceId) {
     const count = (failures.get(deviceId)?.count ?? 0) + 1
@@ -92,6 +147,11 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
     state = { ...state, enabled: enabled === true }
     // The secret is made when remote access is first switched on
     if (state.enabled && !secret()) state = { ...state, totpSecret: totp.generateSecret() }
+    save()
+  }
+
+  function setAnswerMcp(isOn) {
+    state = { ...state, answerMcp: isOn === true }
     save()
   }
 
@@ -148,6 +208,8 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
 
   return {
     setEnabled,
+    setAnswerMcp,
+    get answerMcp() { return state.answerMcp },
     startPairing,
     redeemPairing,
     signIn,
@@ -156,8 +218,12 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
     get enabled() { return state.enabled },
     get port() { return state.port },
     get totpSecret() { return secret() },
-    /** Without the token hashes */
-    devices: () => state.devices.map(({ id, name, createdAt, lastSeenAt }) => ({ id, name, createdAt, lastSeenAt })),
+    vapidKeys,
+    setPush,
+    /** The devices that asked for notifications, with where to send them */
+    pushTargets: () => state.devices.filter((d) => d.push && typeof d.push.endpoint === 'string').map((d) => ({ deviceId: d.id, name: d.name, subscription: d.push })),
+    /** Without the token hashes and without where notifications go */
+    devices: () => state.devices.map(({ id, name, createdAt, lastSeenAt, push }) => ({ id, name, createdAt, lastSeenAt, hasPush: Boolean(push) })),
     hasDevice: (deviceId) => state.devices.some((d) => d.id === deviceId)
   }
 }

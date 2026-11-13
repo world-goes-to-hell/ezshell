@@ -145,6 +145,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Remote access (settings page of the main window)
   remoteAccessStatus: () => ipcRenderer.invoke('remote-access-status'),
   remoteAccessSetEnabled: (isEnabled) => ipcRenderer.invoke('remote-access-set-enabled', isEnabled),
+  remoteAccessSetAnswerMcp: (isOn) => ipcRenderer.invoke('remote-access-set-answer-mcp', isOn),
   remoteAccessPairing: () => ipcRenderer.invoke('remote-access-pairing'),
   remoteAccessAuthenticator: () => ipcRenderer.invoke('remote-access-authenticator'),
   remoteAccessRevoke: (deviceId) => ipcRenderer.invoke('remote-access-revoke', deviceId),

@@ -46,9 +46,9 @@ function cellsAt(terminal: Terminal, screenRow: number): { cells: TerminalCell[]
  */
 export function nameAtPointer(terminal: Terminal, clientX: number, clientY: number): string | null {
   if (terminal.buffer.active.type === 'alternate') return null
-  // In a tab's main terminal a relative name counts only inside the file zone (output since the last cd)
+  // In a tab's main terminal a relative name is placed in the folder its command listed (terminalFileZone)
   const zone = fileZoneOf(terminal)
-  const allowed = (name: string | null, row: number): string | null => (name && (!zone || zone.allows(name, row)) ? name : null)
+  const allowed = (name: string | null, row: number): string | null => (name && zone ? zone.lookup(name, row) : name)
   const selection = terminal.getSelection()
   if (selection && !/[\r\n]/.test(selection.trim())) {
     return allowed(cleanName(selection), (terminal.getSelectionPosition()?.start.y ?? 1) - 1)

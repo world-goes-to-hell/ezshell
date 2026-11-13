@@ -332,6 +332,8 @@ export interface QrMatrix {
 export interface RemoteAccessDevice {
   id: string
   name: string
+  /** The device asked to be notified of MCP questions */
+  hasPush?: boolean
   createdAt?: number
   lastSeenAt?: number | null
 }
@@ -339,10 +341,14 @@ export interface RemoteAccessDevice {
 export interface RemoteAccessStatus {
   success: true
   enabled: boolean
+  /** MCP questions also go to signed-in devices and wait up to five minutes for an answer */
+  answerMcp: boolean
   isRunning: boolean
   hasTailscale: boolean
   /** The address a phone opens, when it is listening */
   url: string | null
+  /** Phone notifications: possible only over HTTPS (a Tailscale certificate); `note` says what is missing */
+  push?: { available: boolean; note: string | null }
   devices: RemoteAccessDevice[]
   connected: RemoteAccessDevice[]
   error: string | null
@@ -430,6 +436,7 @@ declare global {
       onLocalShellExit?: (callback: (data: { id: string; exitCode: number | null }) => void) => () => void
       remoteAccessStatus?: () => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessSetEnabled?: (isEnabled: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
+      remoteAccessSetAnswerMcp?: (isOn: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessPairing?: () => Promise<{ success: true; url: string; expiresAt: number; qr: QrMatrix } | { success: false; error: string }>
       remoteAccessAuthenticator?: () => Promise<{ success: true; secret: string; qr: QrMatrix } | { success: false; error: string }>
       remoteAccessRevoke?: (deviceId: string) => Promise<RemoteAccessStatus | { success: false; error: string }>

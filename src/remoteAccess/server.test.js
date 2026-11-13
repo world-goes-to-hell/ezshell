@@ -4,7 +4,8 @@ import os from 'os'
 import path from 'path'
 import http from 'http'
 import { WebSocket } from 'ws'
-import { createAccessServer } from './server.js'
+import { createAccessServer, trimOutput, activityForDevice, APPROVAL_ARM_MS } from './server.js'
+import { sessionTree } from './controller.js'
 import { createAccessStore } from './accessStore.js'
 import totp from './totp.js'
 
@@ -15,7 +16,12 @@ let isAllowed = true
 const PORT = 18722
 const ORIGIN = `http://127.0.0.1:${PORT}`
 
-function setup({ isLocked = () => false } = {}) {
+const TREE = {
+  folders: [{ id: 'f1', name: '운영', parentId: null, color: '#2f6fed', expanded: true }],
+  sessions: [{ id: 's1', name: 'web-01', folderId: 'f1', color: null, folder: '운영', openTabs: { connected: 1, disconnected: 0 } }]
+}
+
+function setup({ isLocked = () => false, now } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-remote-'))
   const store = createAccessStore({ filePath: path.join(dir, 'remote-access.json') })
   store.setEnabled(true)
@@ -34,8 +40,12 @@ function setup({ isLocked = () => false } = {}) {
     closeAll: vi.fn()
   }
   const log = vi.fn()
-  const server = createAccessServer({ store, shells, listSessions: () => [{ id: 's1', name: 'web-01', folder: '운영' }], isLocked, log, isAllowedAddress: () => isAllowed })
-  return { store, shells, opened, server, log }
+  // The MCP side: the question being asked on the PC, answers from a device, requests and stopping one
+  const mcp = { asked: null, items: [] }
+  const approvals = { current: () => mcp.asked, respond: vi.fn((id) => id === mcp.asked?.id) }
+  const activity = { list: () => mcp.items, cancel: vi.fn((id) => id === 'run1') }
+  const server = createAccessServer({ store, shells, listSessions: () => TREE, isLocked, approvals, activity, log, isAllowedAddress: () => isAllowed, ...(now ? { now } : {}) })
+  return { store, shells, opened, server, log, mcp, approvals, activity }
 }
 
 /** A WebSocket with a queue of the messages it received */
@@ -113,7 +123,7 @@ describe('createAccessServer', () => {
     context = setup()
     await context.server.start('127.0.0.1', PORT)
     const client = await signedIn(context)
-    expect(client.ready).toEqual({ type: 'ready', device: 'phone', sessions: [{ id: 's1', name: 'web-01', folder: '운영' }] })
+    expect(client.ready).toEqual({ type: 'ready', device: 'phone', ...TREE, approvals: [], push: { available: false, publicKey: null } })
     expect(context.server.connected()).toEqual([{ id: expect.any(String), name: 'phone' }])
   })
 
@@ -308,5 +318,201 @@ describe('createAccessServer: low findings of the security review', () => {
     client.send({ type: 'signin', token: 'nope', code: '000000' })
     await client.next()
     expect(context.log).toHaveBeenCalledWith('signin-failed', { reason: 'unknown-device', from: expect.stringContaining('127.0.0.1') })
+  })
+})
+
+describe('createAccessServer: MCP questions and activity on a device', () => {
+  let context
+  let clock
+  afterEach(() => context?.server.stop())
+  const QUESTION = { id: 'q1', sessionName: 'web-01', command: 'systemctl restart nginx', level: 'danger', reasons: [], expiresAt: 0 }
+
+  async function start() {
+    clock = Date.now()
+    context = setup({ now: () => clock })
+    await context.server.start('127.0.0.1', PORT)
+    return signedIn(context)
+  }
+
+  it('hands a device the question that was already being asked, with the time it has left', async () => {
+    clock = Date.now()
+    context = setup({ now: () => clock })
+    context.mcp.asked = { ...QUESTION, expiresAt: clock + 120_000 }
+    await context.server.start('127.0.0.1', PORT)
+    const client = await signedIn(context)
+    expect(client.ready.approvals).toEqual([{ ...QUESTION, expiresAt: clock + 120_000, remainingMs: 120_000 }])
+  })
+
+  it('sends a new question to signed-in devices only, and tells them when it ends', async () => {
+    const client = await start()
+    const waiting = connect()
+    await waiting.opened
+    context.server.showApproval({ ...QUESTION, expiresAt: clock + 60_000 })
+    expect(await client.next()).toEqual({ type: 'approval', request: { ...QUESTION, expiresAt: clock + 60_000, remainingMs: 60_000 } })
+    context.server.closeApproval('q1', 'approved', 'pc')
+    expect(await client.next()).toEqual({ type: 'approval-closed', id: 'q1', outcome: 'approved', by: 'pc' })
+    // The connection that has not signed in got neither
+    waiting.send({ type: 'signin', token: 'nope', code: '000000' })
+    expect(await waiting.next()).toMatchObject({ type: 'error' })
+  })
+
+  it('takes an answer only after the first moment, and only for a question the device was sent', async () => {
+    const client = await start()
+    context.mcp.asked = { ...QUESTION, expiresAt: clock + 60_000 }
+    context.server.showApproval(context.mcp.asked)
+    await client.next()
+    client.send({ type: 'approval-respond', id: 'q1', approved: true })
+    expect(await client.next()).toMatchObject({ type: 'approval-result', id: 'q1', ok: false })
+    expect(context.approvals.respond).not.toHaveBeenCalled()
+    clock += APPROVAL_ARM_MS
+    client.send({ type: 'approval-respond', id: 'other', approved: true })
+    expect(await client.next()).toMatchObject({ type: 'approval-result', id: 'other', ok: false })
+    client.send({ type: 'approval-respond', id: 'q1', approved: 'yes' })
+    expect(await client.next()).toMatchObject({ type: 'approval-result', id: 'q1', ok: false })
+    expect(context.approvals.respond).not.toHaveBeenCalled()
+    client.send({ type: 'approval-respond', id: 'q1', approved: false })
+    expect(await client.next()).toEqual({ type: 'approval-result', id: 'q1', ok: true })
+    expect(context.approvals.respond).toHaveBeenCalledWith('q1', false, 'phone')
+    expect(context.log).toHaveBeenCalledWith('approval', { device: 'phone', approved: false })
+  })
+
+  it('does not take an answer once the question is over', async () => {
+    const client = await start()
+    context.mcp.asked = { ...QUESTION, expiresAt: clock + 60_000 }
+    context.server.showApproval(context.mcp.asked)
+    await client.next()
+    context.mcp.asked = null
+    context.server.closeApproval('q1', 'expired', null)
+    await client.next()
+    clock += APPROVAL_ARM_MS
+    client.send({ type: 'approval-respond', id: 'q1', approved: true })
+    expect(await client.next()).toMatchObject({ type: 'approval-result', ok: false })
+    expect(context.approvals.respond).not.toHaveBeenCalled()
+  })
+
+  it('lists the requests with the end of their output, and streams changes only while watched', async () => {
+    const client = await start()
+    context.mcp.items = [{ id: 'run1', command: 'tail -f log', state: 'running', outputParts: [{ stream: 'stdout', text: 'x'.repeat(40_000) }] }]
+    client.send({ type: 'activity-list' })
+    const listed = await client.next()
+    expect(listed.items).toHaveLength(1)
+    expect(listed.items[0].outputParts[0].text).toHaveLength(16 * 1024)
+    expect(listed.items[0].outputTrimmed).toBe(true)
+
+    // Not watching: nothing is sent
+    context.server.activityItem({ id: 'run1', state: 'running' })
+    context.server.activityOutput({ id: 'run1', parts: [{ stream: 'stdout', text: 'quiet' }] })
+    client.send({ type: 'activity-watch', on: true })
+    client.send({ type: 'sessions' })
+    expect(await client.next()).toMatchObject({ type: 'sessions', folders: TREE.folders })
+    context.server.activityOutput({ id: 'run1', parts: [{ stream: 'stderr', text: 'line' }] })
+    expect(await client.next()).toEqual({ type: 'activity-output', id: 'run1', parts: [{ stream: 'stderr', text: 'line' }] })
+    context.server.activityItem({ id: 'run1', state: 'done', outputParts: [{ stream: 'stdout', text: 'end' }] })
+    expect(await client.next()).toEqual({ type: 'activity-item', item: { id: 'run1', state: 'done', outputParts: [{ stream: 'stdout', text: 'end' }] } })
+
+    client.send({ type: 'activity-stop', id: 'run1' })
+    expect(await client.next()).toEqual({ type: 'activity-stop-result', id: 'run1', ok: true })
+    client.send({ type: 'activity-stop', id: 'gone' })
+    expect(await client.next()).toMatchObject({ type: 'activity-stop-result', id: 'gone', ok: false })
+    expect(context.log).toHaveBeenCalledWith('activity-stop', { device: 'phone' })
+  })
+})
+
+describe('what a device gets of the MCP activity', () => {
+  it('keeps the end of the output and says when the start was dropped', () => {
+    const item = { id: 'a', outputParts: [{ stream: 'stdout', text: 'abcdef' }, { stream: 'stderr', text: 'XYZ' }] }
+    expect(trimOutput(item, 100)).toEqual(item)
+    expect(trimOutput(item, 5)).toEqual({ id: 'a', outputParts: [{ stream: 'stdout', text: 'ef' }, { stream: 'stderr', text: 'XYZ' }], outputTrimmed: true })
+    expect(trimOutput(item, 3).outputParts).toEqual([{ stream: 'stderr', text: 'XYZ' }])
+    expect(trimOutput(item, 0)).toEqual({ id: 'a', outputParts: [], outputTrimmed: true })
+    expect(trimOutput({ id: 'b' })).toEqual({ id: 'b' })
+  })
+
+  it('gives the newest requests their output first and never more than a hundred', () => {
+    const items = Array.from({ length: 130 }, (_, i) => ({ id: `r${i}`, outputParts: [{ stream: 'stdout', text: 'y'.repeat(16 * 1024) }] }))
+    const sent = activityForDevice(items)
+    expect(sent).toHaveLength(100)
+    expect(sent[0].id).toBe('r30')
+    expect(sent[99].outputParts[0].text).toHaveLength(16 * 1024)
+    expect(sent[0].outputParts).toEqual([])
+    const total = sent.reduce((sum, item) => sum + item.outputParts.reduce((s, part) => s + part.text.length, 0), 0)
+    expect(total).toBeLessThanOrEqual(400 * 1024)
+  })
+})
+
+describe('sessionTree (what the phone gets of the sidebar)', () => {
+  const folders = [{ id: 'f1', name: '운영', backgroundColor: '#2f6fed' }, { id: 'f2', name: 'DB', parentId: 'f1', backgroundColor: 'url(javascript:alert(1))' }]
+  const sessions = [
+    { id: 's2', name: 'db-01', host: '10.0.0.9', port: 22, username: 'root', password: 'secret', folderId: 'f2', backgroundColor: 'rgb(10, 20, 30)', suPassword: 'x', privateKeyPath: 'C:/k' },
+    { id: 's1', name: '', host: 'web.internal', username: 'deploy', folderId: 'gone' },
+    { id: 's3', name: 'broken', host: 'h', decryptionFailed: true }
+  ]
+
+  it('keeps the order, colours, open folders and tab counts', () => {
+    const tree = sessionTree({ folders, sessions, expandedIds: ['f1'], openTabs: new Map([['s2', { connected: 2, disconnected: 1 }]]) })
+    expect(tree.folders).toEqual([
+      { id: 'f1', name: '운영', parentId: null, color: '#2f6fed', expanded: true },
+      { id: 'f2', name: 'DB', parentId: 'f1', color: null, expanded: false }
+    ])
+    expect(tree.sessions).toEqual([
+      { id: 's2', name: 'db-01', folderId: 'f2', color: 'rgb(10, 20, 30)', folder: 'DB', openTabs: { connected: 2, disconnected: 1 } },
+      // A session without a name gets a label, never its address
+      { id: 's1', name: '이름 없는 세션', folderId: null, color: null, folder: '', openTabs: { connected: 0, disconnected: 0 } }
+    ])
+  })
+
+  it('copies nothing else of a session', () => {
+    const text = JSON.stringify(sessionTree({ folders, sessions }))
+    for (const secret of ['10.0.0.9', 'web.internal', 'root', 'secret', 'deploy', 'C:/k', 'javascript']) expect(text).not.toContain(secret)
+  })
+})
+
+describe('createAccessServer under a name (HTTPS by the tailnet name)', () => {
+  let context
+  afterEach(() => context?.server.stop())
+  const NAME = 'pc.example.ts.net'
+
+  it('answers to the name it was started with, not to the address', async () => {
+    context = setup()
+    await context.server.start('127.0.0.1', PORT, { name: NAME })
+    expect(context.server.address).toMatchObject({ host: '127.0.0.1', port: PORT, name: NAME, scheme: 'http' })
+    const page = await get('/', { host: `${NAME}:${PORT}` })
+    expect(page.status).toBe(200)
+    expect(page.headers['content-security-policy']).toContain(`connect-src 'self' ws://${NAME}:${PORT};`)
+    // By the address: sent to the name
+    const byAddress = await get('/')
+    expect(byAddress.status).toBe(302)
+    expect(byAddress.headers.location).toBe(`http://${NAME}:${PORT}/`)
+    await expect(connect().opened).rejects.toThrow()
+    const named = connect({ origin: `http://${NAME}:${PORT}`, headers: { host: `${NAME}:${PORT}` } })
+    await named.opened
+    named.socket.close()
+  })
+
+  it('offers notifications only over HTTPS, and takes no subscription without it', async () => {
+    context = setup()
+    await context.server.start('127.0.0.1', PORT)
+    const client = await signedIn(context)
+    expect(client.ready.push).toEqual({ available: false, publicKey: null })
+    client.send({ type: 'push-subscribe', subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/x', keys: { p256dh: 'x', auth: 'y' } } })
+    expect(await client.next()).toMatchObject({ type: 'push-result', ok: false })
+    expect(context.store.pushTargets()).toEqual([])
+  })
+})
+
+describe('activity sent to a device: named fields only', () => {
+  it('drops what is not on the list (a file change\'s content) and cuts the result text like the output', () => {
+    const item = { id: 'a', command: 'write_file /etc/app.conf', state: 'done', level: 'danger', view: { hunks: ['secret=1'] }, content: 'secret=1', output: 'r'.repeat(40_000), outputParts: [{ stream: 'stdout', text: 'ok' }] }
+    const sent = trimOutput(item)
+    expect(Object.keys(sent).sort()).toEqual(['command', 'id', 'level', 'output', 'outputParts', 'state'])
+    expect(sent.output).toHaveLength(16 * 1024)
+    expect(JSON.stringify(sent)).not.toContain('secret=1')
+  })
+
+  it('counts the result text toward the total as well', () => {
+    const items = Array.from({ length: 100 }, (_, i) => ({ id: `r${i}`, output: 'o'.repeat(16 * 1024), outputParts: [{ stream: 'stdout', text: 'y'.repeat(16 * 1024) }] }))
+    const total = activityForDevice(items).reduce((sum, item) => sum + (item.output?.length ?? 0) + item.outputParts.reduce((s, part) => s + part.text.length, 0), 0)
+    // The total for output, and at most one character of result text for each request after it is used up
+    expect(total).toBeLessThanOrEqual(400 * 1024 + 16 * 1024 + 100)
   })
 })

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'fs'
 import path from 'path'
-import { compareVersions, notesFromFiles, notesToShow, parseMarkdown, MAX_VERSIONS_SHOWN } from './releaseNotes'
+import { compareVersions, notesFromFiles, notesToShow, recentNotes, parseMarkdown, MAX_VERSIONS_SHOWN } from './releaseNotes'
 
 describe('compareVersions', () => {
   it('orders by number, not text', () => {
@@ -55,6 +55,21 @@ describe('notesToShow', () => {
     const shown = notesToShow({ previous: '0.1.0', current: '1.29.0', existingUser: true, available: many })
     expect(shown).toHaveLength(MAX_VERSIONS_SHOWN)
     expect(shown[0].version).toBe('1.29.0')
+  })
+})
+
+describe('recentNotes', () => {
+  it('lists the versions up to the current one, newest first, at most ten', () => {
+    const many = Object.fromEntries(Array.from({ length: 14 }, (_, i) => [`2.${i}.0`, `n${i}`]))
+    const shown = recentNotes('2.12.0', many)
+    expect(shown).toHaveLength(MAX_VERSIONS_SHOWN)
+    expect(shown.map(n => n.version).slice(0, 3)).toEqual(['2.12.0', '2.11.0', '2.10.0'])
+    expect(shown[shown.length - 1].version).toBe('2.3.0')
+  })
+
+  it('leaves out versions newer than the running one and is empty without notes', () => {
+    expect(recentNotes('2.1.0', { '2.0.0': 'a', '2.1.0': 'b', '2.2.0': 'c' }).map(n => n.version)).toEqual(['2.1.0', '2.0.0'])
+    expect(recentNotes('2.1.0', {})).toEqual([])
   })
 })
 

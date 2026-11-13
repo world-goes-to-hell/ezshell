@@ -114,6 +114,13 @@
   color: var(--success);
 }
 
+.remote-access-tag {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .remote-access-confirm {
   display: inline-flex;
   gap: 6px;
