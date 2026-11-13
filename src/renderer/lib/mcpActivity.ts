@@ -212,10 +212,12 @@ export interface McpActivityPrefs {
   view: McpActivityView
   /** Per-server view: hide the sessions that have nothing waiting or running */
   isActiveOnly: boolean
+  /** Output lines wrap at the panel's edge. Off by default: tables (psql, docker ps) stay aligned and scroll sideways */
+  isOutputWrapped: boolean
 }
 
 export const ACTIVITY_PREFS_KEY = 'mcpActivityPrefs'
-export const DEFAULT_ACTIVITY_PREFS: McpActivityPrefs = { view: 'terminal', isActiveOnly: false }
+export const DEFAULT_ACTIVITY_PREFS: McpActivityPrefs = { view: 'terminal', isActiveOnly: false, isOutputWrapped: false }
 
 const ACTIVITY_VIEWS: readonly string[] = ['list', 'terminal', 'lanes']
 
@@ -225,10 +227,11 @@ export function parseActivityPrefs(raw: string | null | undefined): McpActivityP
   try {
     const stored: unknown = JSON.parse(raw)
     if (typeof stored !== 'object' || stored === null) return DEFAULT_ACTIVITY_PREFS
-    const { view, isActiveOnly } = stored as Record<string, unknown>
+    const { view, isActiveOnly, isOutputWrapped } = stored as Record<string, unknown>
     return {
       view: typeof view === 'string' && ACTIVITY_VIEWS.includes(view) ? (view as McpActivityView) : DEFAULT_ACTIVITY_PREFS.view,
-      isActiveOnly: typeof isActiveOnly === 'boolean' ? isActiveOnly : DEFAULT_ACTIVITY_PREFS.isActiveOnly
+      isActiveOnly: typeof isActiveOnly === 'boolean' ? isActiveOnly : DEFAULT_ACTIVITY_PREFS.isActiveOnly,
+      isOutputWrapped: typeof isOutputWrapped === 'boolean' ? isOutputWrapped : DEFAULT_ACTIVITY_PREFS.isOutputWrapped
     }
   } catch {
     return DEFAULT_ACTIVITY_PREFS

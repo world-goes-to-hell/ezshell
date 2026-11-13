@@ -5,6 +5,8 @@
 (() => {
   'use strict'
   const TOKEN_KEY = 'ezshell-device-token'
+  // A ticket from a code sign-in that lets this device resume without a code for a day
+  const TRUST_KEY = 'ezshell-device-trust'
   const $ = (id) => document.getElementById(id)
   const views = ['signin', 'message', 'sessions', 'activity', 'terminal']
   const TABBED = new Set(['sessions', 'activity'])
@@ -45,6 +47,27 @@
       // Private mode: the device has to be registered again next time
     }
   }
+
+  // The resume ticket is kept as { ticket, expiresAt }; the server holds only its hash and the real expiry
+  const readTrust = () => {
+    try {
+      const raw = localStorage.getItem(TRUST_KEY)
+      if (!raw) return null
+      const trust = JSON.parse(raw)
+      return trust && typeof trust.ticket === 'string' && typeof trust.expiresAt === 'number' ? trust : null
+    } catch {
+      return null
+    }
+  }
+  const saveTrust = (trust) => {
+    try {
+      if (trust && typeof trust.ticket === 'string') localStorage.setItem(TRUST_KEY, JSON.stringify({ ticket: trust.ticket, expiresAt: Number(trust.expiresAt) || 0 }))
+      else localStorage.removeItem(TRUST_KEY)
+    } catch {
+      // Private mode: a code is needed on every connection, as before
+    }
+  }
+  const clearTrust = () => saveTrust(null)
 
   const send = (message) => {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
@@ -106,6 +129,10 @@
         show('signin')
         $('signin-code').focus()
         break
+      case 'trust':
+        // A fresh ticket, sent right after a code sign-in that asked to be remembered
+        saveTrust(msg)
+        break
       case 'ready':
         wasReady = true
         $('device-name').textContent = msg.device
@@ -142,10 +169,12 @@
         push.result(msg)
         break
       case 'error':
+        // A stored ticket that no longer works (a day passed, or it did not match): forget it and ask for a code
+        if (msg.code === 'trust-expired' || msg.code === 'bad-ticket') clearTrust()
         if (!readToken() || msg.code === 'unknown-device') message(msg.message)
         else {
           show('signin')
-          signinError(msg.message)
+          signinError(msg.code === 'trust-expired' ? '' : msg.message)
           $('signin-code').value = ''
           $('signin-code').focus()
         }
@@ -275,8 +304,10 @@
     if (!/^\d{6}$/.test(code)) return signinError('6자리 숫자를 입력하세요.')
     signinError('')
     const token = readToken()
-    if (socket && socket.readyState === WebSocket.OPEN) send({ type: 'signin', token, code })
-    else connect(() => send({ type: 'signin', token, code }))
+    const remember = $('signin-remember').checked
+    const payload = { type: 'signin', token, code, remember }
+    if (socket && socket.readyState === WebSocket.OPEN) send(payload)
+    else connect(() => send(payload))
   })
   $('message-retry').addEventListener('click', start)
 
@@ -288,9 +319,17 @@
       message('이 기기를 등록하는 중…')
       connect(() => send({ type: 'pair', code: pairCode, name: deviceName() }))
     } else if (readToken()) {
-      $('signin-note').textContent = '인증 앱의 6자리 코드를 입력하세요.'
-      show('signin')
-      $('signin-code').focus()
+      const trust = readTrust()
+      // Within the day the device was remembered: come straight in with the ticket, no code
+      if (trust && trust.expiresAt > Date.now()) {
+        message('접속하는 중…')
+        connect(() => send({ type: 'resume', token: readToken(), ticket: trust.ticket }))
+      } else {
+        if (trust) clearTrust()
+        $('signin-note').textContent = '인증 앱의 6자리 코드를 입력하세요.'
+        show('signin')
+        $('signin-code').focus()
+      }
     } else {
       message('이 기기는 등록되어 있지 않습니다. PC 의 ezShell 설정 > 원격 접속에서 QR 을 찍어 등록하세요.')
     }

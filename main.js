@@ -43,6 +43,10 @@ const { createDiscoveryCache } = require('./src/dbClient/discovery.js');
 const { createLocalShells } = require('./src/localShell.js');
 const windowState = require('./src/windowState.js');
 const lastVersion = require('./src/lastVersion.js');
+const localPlaces = require('./src/localPlaces.js');
+const sessionImport = require('./src/sessionImport/ipc.js');
+// Key files from this PC only (no network share or device paths): src/localKeyPath.js
+const { readPrivateKeyFile } = require('./src/localKeyPath.js');
 const { readDirectory } = require('./src/sftpListing.js');
 const localFileOps = require('./src/localFileOps.js');
 const sftpSymlinks = require('./src/sftpSymlinks.js');
@@ -581,7 +585,11 @@ function createDbWindow(dbId) {
 }
 
 const dbDiscovery = createDiscoveryCache();
+// Oracle's client libraries for servers older than 12.1: installed by the user from the account
+// dialog (downloaded from Oracle, checked, kept in the app's data folder). See src/dbClient/oracleClient.js.
+const oracleClient = require('./src/dbClient/oracleClient.js').createOracleClientManager({ baseDir: path.join(userDataPath, 'oracle-client') });
 const dbConnections = createDbConnections({
+  oracleClient: () => oracleClient.location(),
   openStream: (sessionId, host, port) => new Promise((resolve, reject) => {
     const session = sshConnections.get(sessionId);
     if (!session || !session.conn) return reject(Object.assign(new Error('no connection'), { code: 'NO_CONNECTION' }));
@@ -722,6 +730,48 @@ ipcMain.handle('save-export-file', async (event, { defaultName, extension, data 
   } catch (err) {
     return { success: false, error: err.message };
   }
+});
+
+// ==================== Oracle client libraries (old Oracle servers) ====================
+/** What the account dialog shows: installed or not, and whether this run already connected without them */
+function oracleClientStatus() {
+  // The driver is loaded only once an Oracle connection was made; asking must not load it
+  let isInUse = false;
+  try {
+    const loaded = require.cache[require.resolve('./src/dbClient/drivers/oracle.js')];
+    isInUse = Boolean(loaded) && loaded.exports.isThickLoaded();
+  } catch (err) {
+    isInUse = false;
+  }
+  // In use: the files are held by this run and cannot be removed until the app restarts
+  return { success: true, ...oracleClient.status(), needsRestart: false, isInUse };
+}
+ipcMain.handle('oracle-client-status', (event) => (fromMainWindow(event) ? oracleClientStatus() : { success: false, error: '본창에서만 볼 수 있습니다.' }));
+ipcMain.handle('oracle-client-install', async (event) => {
+  if (!fromMainWindow(event)) return { success: false, error: '본창에서만 설치할 수 있습니다.' };
+  try {
+    await oracleClient.install((progress) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('oracle-client-progress', progress);
+    });
+    return oracleClientStatus();
+  } catch (err) {
+    console.error('Oracle client install failed:', err && err.message);
+    return { success: false, error: String((err && err.message) || '설치하지 못했습니다.').slice(0, 300) };
+  }
+});
+ipcMain.handle('oracle-client-remove', (event) => {
+  if (!fromMainWindow(event)) return { success: false, error: '본창에서만 제거할 수 있습니다.' };
+  try {
+    oracleClient.remove();
+    return oracleClientStatus();
+  } catch (err) {
+    return { success: false, error: '사용 중이라 지울 수 없습니다. ezShell 을 다시 시작한 뒤 제거하세요.' };
+  }
+});
+// The licence page is opened by the app itself: the address is fixed here, not taken from the window
+ipcMain.handle('oracle-client-license', (event) => {
+  if (fromMainWindow(event)) void shell.openExternal(oracleClient.status().licenseUrl);
+  return { success: true };
 });
 
 // ==================== Remote access (a phone's browser, over Tailscale) ====================
@@ -1589,6 +1639,42 @@ ipcMain.handle('select-private-key', async () => {
   return { success: true, path: result.filePaths[0] };
 });
 
+// Why a tab's shell ended, written to the console. The shell exited by itself (an exit code or
+// signal: `exit`, or a server that logs idle shells out with TMOUT), or the connection was lost
+// (an error, the server ending it, no answer to keepalives).
+function traceShellEnd(sessionId, config, stream, conn) {
+  const name = (config && config.name) || sessionId;
+  const startedAt = Date.now();
+  const since = () => `${Math.round((Date.now() - startedAt) / 1000)}s`;
+  stream.on('exit', (code, signal) => console.log(`[ssh-end] ${name}: shell exited after ${since()} (code=${code}, signal=${signal || '-'})`));
+  stream.on('close', () => console.log(`[ssh-end] ${name}: shell channel closed after ${since()}`));
+  conn.on('error', (err) => console.log(`[ssh-end] ${name}: connection error after ${since()}: ${err && err.level ? `${err.level} ` : ''}${err && err.message}`));
+  conn.on('end', () => console.log(`[ssh-end] ${name}: the server ended the connection after ${since()}`));
+  conn.on('close', () => console.log(`[ssh-end] ${name}: connection closed after ${since()}`));
+}
+
+const SHELL_EXIT_MESSAGE = '셸이 종료되었습니다. exit 를 입력했거나, 서버가 입력 없는 셸을 자동으로 로그아웃시킨 경우입니다(TMOUT). 계속 쓰려면 재연결을 누르세요.';
+
+/**
+ * Whether the shell ended by itself with an exit status (`exit`, a server's idle auto-logout). That
+ * is not a lost connection: reconnecting would only repeat it every few minutes. A shell killed by
+ * a signal (the server going down) is still reconnected.
+ */
+function endedByItself(shellExit) {
+  return Boolean(shellExit) && typeof shellExit.code === 'number' && !shellExit.signal;
+}
+
+/** The tab is told its shell ended; no automatic reconnect follows (the user presses 재연결) */
+function reportShellExit(sessionId) {
+  updateConnectionState(sessionId, ConnectionState.DISCONNECTED);
+  const targetWindow = getWindowForSession(sessionId);
+  if (targetWindow) {
+    targetWindow.webContents.send('ssh-reconnect-failed', { sessionId, message: SHELL_EXIT_MESSAGE });
+    targetWindow.webContents.send('ssh-closed', { sessionId });
+  }
+  endSessionLog(sessionId);
+}
+
 // Auto-reconnect logic
 async function attemptReconnect(sessionId) {
   const connState = connectionStates.get(sessionId);
@@ -1707,9 +1793,13 @@ function reconnectOnce(sessionId, connState, verifierFor) {
           }
         });
 
+        traceShellEnd(sessionId, config, stream, conn);
+        let shellExit = null;
+        stream.on('exit', (code, signal) => { shellExit = { code, signal }; });
         stream.on('close', () => {
           // A shell replaced by a newer connection (the tab's 재연결) closing late must not touch the new one
           if (sshConnections.get(sessionId)?.stream !== stream) return;
+          if (endedByItself(shellExit)) return reportShellExit(sessionId);
           updateConnectionState(sessionId, ConnectionState.DISCONNECTED);
           attemptReconnect(sessionId);
         });
@@ -1743,7 +1833,7 @@ function reconnectOnce(sessionId, connState, verifierFor) {
 
     if (config.authType === 'privateKey') {
       try {
-        connectOpts.privateKey = fs.readFileSync(config.privateKeyPath);
+        connectOpts.privateKey = readPrivateKeyFile(config.privateKeyPath);
         if (config.passphrase) {
           connectOpts.passphrase = config.passphrase;
         }
@@ -1825,10 +1915,14 @@ function openShellConnection(sessionId, config, verifierFor) {
             }
           });
 
+          traceShellEnd(sessionId, config, stream, conn);
+          let shellExit = null;
+          stream.on('exit', (code, signal) => { shellExit = { code, signal }; });
           stream.on('close', () => {
             // A shell replaced by a newer connection (the tab's 재연결) or closed with its tab is not this tab's news
             if (sshConnections.get(sessionId)?.stream !== stream) return;
             const connState = connectionStates.get(sessionId);
+            if (endedByItself(shellExit)) return reportShellExit(sessionId);
 
             // If auto-reconnect is enabled, don't send ssh-closed yet - let reconnection handle it
             if (connState && connState.autoReconnect) {
@@ -1872,7 +1966,8 @@ function openShellConnection(sessionId, config, verifierFor) {
         // Only handle if this connection is still the active one
         const currentSession = sshConnections.get(sessionId);
         if (currentSession && currentSession.conn === conn) {
-          if (connState && connState.autoReconnect && connState.state !== ConnectionState.RECONNECTING) {
+          // DISCONNECTED: the shell ended by itself, or reconnecting was given up; the user decides
+          if (connState && connState.autoReconnect && connState.state !== ConnectionState.RECONNECTING && connState.state !== ConnectionState.DISCONNECTED) {
             updateConnectionState(sessionId, ConnectionState.RECONNECTING);
             attemptReconnect(sessionId);
           }
@@ -1899,7 +1994,7 @@ function openShellConnection(sessionId, config, verifierFor) {
       // 인증 방식에 따른 설정
       if (config.authType === 'privateKey' && config.privateKeyPath) {
         try {
-          connectConfig.privateKey = fs.readFileSync(config.privateKeyPath);
+          connectConfig.privateKey = readPrivateKeyFile(config.privateKeyPath);
           if (config.passphrase) {
             connectConfig.passphrase = config.passphrase;
           }
@@ -1950,7 +2045,7 @@ function openShellConnection(sessionId, config, verifierFor) {
 
       if (config.jumpAuthType === 'privateKey' && config.jumpPrivateKeyPath) {
         try {
-          jumpConfig.privateKey = fs.readFileSync(config.jumpPrivateKeyPath);
+          jumpConfig.privateKey = readPrivateKeyFile(config.jumpPrivateKeyPath);
           if (config.jumpPassphrase) {
             jumpConfig.passphrase = config.jumpPassphrase;
           }
@@ -2881,6 +2976,34 @@ ipcMain.handle('select-upload-files', async () => {
 // ==================== 로컬 파일 시스템 ====================
 
 // 로컬 디렉토리 목록 조회
+// The SFTP panel's local path bar: the usual folders and the drives of this PC (src/localPlaces.js).
+// Takes nothing from the window; only fixed places come back.
+const localPlacesReader = localPlaces.createPlacesReader({
+  platform: process.platform,
+  getPath: (name) => app.getPath(name),
+  isDirectory: (p) => fs.promises.stat(p).then(stat => stat.isDirectory(), () => false),
+  runPowerShell: localPlaces.powerShellRunner({ execFile: require('child_process').execFile }),
+  readDir: (dir) => fs.promises.readdir(dir),
+  username: require('os').userInfo().username
+});
+ipcMain.handle('local-places', () => localPlacesReader.read());
+
+// Other programs' sessions (Xshell, PuTTY, MobaXterm, Tabby, OpenSSH config): structure only, no
+// passwords (src/sessionImport). Main window only; the window never sends a path.
+sessionImport.registerSessionImportIpc({
+  ipcMain,
+  dialog,
+  fromMainWindow,
+  getMainWindow: () => mainWindow,
+  importer: sessionImport.createSessionImport({
+    platform: process.platform,
+    getPath: (name) => app.getPath(name),
+    env: process.env,
+    home: require('os').homedir(),
+    execFile: require('child_process').execFile
+  })
+});
+
 ipcMain.handle('local-list', async (event, { dirPath }) => {
   try {
     const dirents = await fs.promises.readdir(dirPath, { withFileTypes: true });

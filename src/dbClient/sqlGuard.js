@@ -8,8 +8,18 @@ const READ_KEYWORDS = {
   // USE only changes the default database of this connection
   mysql: new Set(['SELECT', 'WITH', 'SHOW', 'DESC', 'DESCRIBE', 'EXPLAIN', 'TABLE', 'VALUES', 'USE']),
   postgres: new Set(['SELECT', 'WITH', 'SHOW', 'EXPLAIN', 'TABLE', 'VALUES']),
-  mssql: new Set(['SELECT', 'WITH'])
+  mssql: new Set(['SELECT', 'WITH']),
+  oracle: new Set(['SELECT', 'WITH'])
 }
+
+// Oracle: the driver's read-only transaction stops INSERT, UPDATE and DELETE, but DDL ends the
+// transaction first and PL/SQL can do anything (also inside WITH FUNCTION, and in a function
+// declared autonomous). So these words are refused anywhere outside strings and quoted names.
+const ORACLE_BLOCKED_WORDS = new Set([
+  'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TRUNCATE', 'DROP', 'ALTER', 'CREATE', 'RENAME', 'GRANT', 'REVOKE',
+  'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'LOCK', 'CALL', 'EXEC', 'EXECUTE', 'BEGIN', 'DECLARE', 'FUNCTION', 'PROCEDURE', 'PRAGMA',
+  'AUDIT', 'NOAUDIT', 'PURGE', 'FLASHBACK', 'ANALYZE', 'COMMENT', 'SET'
+])
 
 // SQL Server cannot keep a session read-only, and its statements need no semicolon between them
 // ("SELECT 1 DELETE FROM t" is two statements). So these words are refused anywhere outside strings
@@ -50,6 +60,9 @@ const MESSAGES = {
   executableComment: '실행되는 주석(/*! ... */)은 쓸 수 없습니다.',
   blockedFunction: (name) => `${name.toLowerCase()} 함수는 다른 세션·서버 파일·설정에 영향을 줄 수 있어 실행할 수 없습니다.`,
   mssqlWord: (word) => `SQL Server 접속에서는 ${word} 를 쓸 수 없습니다 (조회만 됩니다). 이름으로 쓰려면 [${word.toLowerCase()}] 처럼 대괄호로 감싸세요.`,
+  oracleWord: (word) => `Oracle 접속에서는 ${word} 를 쓸 수 없습니다 (조회만 됩니다). 이름으로 쓰려면 "${word}" 처럼 큰따옴표로 감싸세요.`,
+  oraclePackage: (name) => `${name.toLowerCase()} 같은 내장 패키지는 서버 밖으로 나가거나 서버 파일을 다룰 수 있어 실행할 수 없습니다.`,
+  oracleQuote: "q'[...]' 형식의 문자열은 쓸 수 없습니다. 작은따옴표 문자열을 쓰세요.",
   unclosed: '닫히지 않은 따옴표나 주석이 있습니다.'
 }
 
@@ -98,7 +111,7 @@ function scan(sql, engine) {
       const isEscapeString = engine === 'postgres' && c === "'" && /[Ee]/.test(sql[i - 1] || '') && !/[\w$]/.test(sql[i - 2] || '')
       const end = closingQuote(sql, i, c, engine, isEscapeString)
       if (end < 0) return result(false)
-      const isIdentifier = c === '`' || (c === '"' && (engine === 'postgres' || engine === 'mssql'))
+      const isIdentifier = c === '`' || (c === '"' && (engine === 'postgres' || engine === 'mssql' || engine === 'oracle'))
       if (isIdentifier) names.push(sql.slice(i + 1, end).split(c + c).join(c).toUpperCase())
       hasContent = true
       i = end + 1
@@ -182,6 +195,15 @@ function checkReadOnly(sql, engine) {
     // Extended and system procedures reach the server itself
     const procedure = names.find((name) => /^(XP|SP)_/.test(name))
     if (procedure) return { ok: false, reason: MESSAGES.blockedFunction(procedure) }
+  }
+  if (engine === 'oracle') {
+    // The alternative quoting (q'[ it's ]') is not read by this check: what it would hide is refused instead
+    if (/(^|[^A-Za-z0-9_$#])[nN]?[qQ]'/.test(text)) return { ok: false, reason: MESSAGES.oracleQuote }
+    const word = words.find((w) => ORACLE_BLOCKED_WORDS.has(w))
+    if (word) return { ok: false, reason: MESSAGES.oracleWord(word) }
+    // UTL_HTTP, UTL_FILE, DBMS_SCHEDULER ...: they reach the network, server files and other sessions
+    const packaged = [...words, ...names].find((w) => /^(UTL|DBMS)_/.test(w))
+    if (packaged) return { ok: false, reason: MESSAGES.oraclePackage(packaged) }
   }
   const blocked = blockedFunction(names, engine)
   if (blocked) return { ok: false, reason: MESSAGES.blockedFunction(blocked) }

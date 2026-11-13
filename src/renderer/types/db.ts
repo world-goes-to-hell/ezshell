@@ -11,6 +11,8 @@ export interface DiscoveredDb {
   isLocalOnly: boolean
   isSupported: boolean
   isConfirmed: boolean
+  /** The Docker container that publishes the port, when it was found that way */
+  container?: string
 }
 
 /** A database account kept with a saved session (encrypted with the sessions) */

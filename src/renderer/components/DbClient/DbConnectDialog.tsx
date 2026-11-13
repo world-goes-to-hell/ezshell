@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { OracleClientSetup } from './OracleClientSetup'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiCheckboxCircleLine, RiDatabase2Line, RiDeleteBinLine, RiLoader4Line, RiPlugLine, RiShieldCheckLine } from 'react-icons/ri'
 import { useSessionStore } from '../../stores/sessionStore'
@@ -206,6 +207,7 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
                   <option value="mysql">MySQL / MariaDB</option>
                   <option value="postgres">PostgreSQL</option>
                   <option value="mssql">SQL Server</option>
+                  <option value="oracle">Oracle</option>
                 </select>
               </div>
               <div className="form-group flex-1">
@@ -234,9 +236,9 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
               </div>
             </div>
             <div className="form-group">
-              <label htmlFor="db-database">기본 DB (선택)</label>
-              <input id="db-database" value={database} onChange={(e) => setDatabase(e.target.value)} spellCheck={false}
-                placeholder={engine === 'postgres' ? '비우면 postgres DB · 접속 뒤 바꿀 수 있음' : engine === 'mssql' ? '비우면 계정의 기본 DB · 접속 뒤 바꿀 수 있음' : '비우면 접속 뒤 고를 수 있음'} />
+              <label htmlFor="db-database">{engine === 'oracle' ? '서비스 이름 또는 SID' : '기본 DB (선택)'}</label>
+              <input id="db-database" value={database} onChange={(e) => setDatabase(e.target.value)} spellCheck={false} required={engine === 'oracle'}
+                placeholder={engine === 'oracle' ? '예: ORCL, XEPDB1 (꼭 넣어야 합니다)' : engine === 'postgres' ? '비우면 postgres DB · 접속 뒤 바꿀 수 있음' : engine === 'mssql' ? '비우면 계정의 기본 DB · 접속 뒤 바꿀 수 있음' : '비우면 접속 뒤 고를 수 있음'} />
             </div>
             <div className="form-group checkbox-group">
               <label>
@@ -256,6 +258,14 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
               <p className={outcome.kind === 'ok' ? 'db-connect-ok' : 'db-connect-error'} role={outcome.kind === 'ok' ? 'status' : 'alert'}>
                 {outcome.kind === 'ok' && <RiCheckboxCircleLine size={14} aria-hidden="true" />} {outcome.text}
               </p>
+            )}
+            {engine === 'oracle' && (
+              <OracleClientSetup
+                isNeeded={outcome?.kind === 'error' && /NJS-138/.test(outcome.text)}
+                isDisabled={Boolean(busy)}
+                // Installed: the failure it explains is no longer the state of things
+                onChanged={(status) => { if (status.isInstalled && !status.needsRestart) setOutcome(null) }}
+              />
             )}
             <div className="modal-actions db-connect-actions">
               {saved && session && (

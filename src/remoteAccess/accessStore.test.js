@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { createAccessStore, PAIRING_MS, LOCKOUT_MS, MAX_DEVICES } from './accessStore.js'
+import { createAccessStore, PAIRING_MS, LOCKOUT_MS, MAX_DEVICES, TRUST_MS } from './accessStore.js'
 import totp from './totp.js'
 import { isTailnetAddress, findTailnetAddress } from './tailnet.js'
 
@@ -120,6 +120,87 @@ describe('createAccessStore', () => {
     clock += 30_000
     expect(store.signIn(token, codeNow(store))).toEqual({ device: { id: deviceId, name: 'phone' } })
     expect(store.signIn('not-a-token', codeNow(store))).toEqual({ error: 'unknown-device' })
+  })
+
+  it('remembers a device for a day so it can resume without a code', () => {
+    const store = make()
+    store.setEnabled(true)
+    const { token, deviceId } = store.redeemPairing(store.startPairing().code, 'phone')
+    expect(store.signIn(token, codeNow(store)).device).toBeTruthy()
+    const { ticket, expiresAt } = store.rememberDevice(deviceId)
+    expect(ticket).toMatch(/^[\w-]{43}$/)
+    expect(expiresAt).toBe(clock + TRUST_MS)
+    // The ticket itself is not in the file (only its hash)
+    expect(fs.readFileSync(filePath, 'utf-8')).not.toContain(ticket)
+    // It survives a restart and lets the device in with no code
+    const next = make()
+    expect(next.resume(token, ticket)).toEqual({ device: { id: deviceId, name: 'phone' } })
+    expect(next.devices()[0].lastSeenAt).toBe(clock)
+  })
+
+  it('stops resuming once the day has passed, without counting it as a failure', () => {
+    const store = make()
+    store.setEnabled(true)
+    const { token, deviceId } = store.redeemPairing(store.startPairing().code, 'phone')
+    store.signIn(token, codeNow(store))
+    const { ticket } = store.rememberDevice(deviceId)
+    clock += TRUST_MS + 1
+    expect(store.resume(token, ticket)).toEqual({ error: 'trust-expired', benign: true })
+    // The stale ticket is dropped: a second resume says the same, still benign
+    expect(store.resume(token, ticket)).toEqual({ error: 'trust-expired', benign: true })
+    // A plain code still works right after (the expiry did not lock the device)
+    clock += 30_000
+    expect(store.signIn(token, codeNow(store)).device).toBeTruthy()
+  })
+
+  it('counts a wrong ticket as a failure and locks after five', () => {
+    const store = make()
+    store.setEnabled(true)
+    const { token, deviceId } = store.redeemPairing(store.startPairing().code, 'phone')
+    store.signIn(token, codeNow(store))
+    store.rememberDevice(deviceId)
+    // A present ticket that does not match is suspicious: counted like a wrong code
+    for (let i = 0; i < 5; i++) expect(store.resume(token, 'definitely-not-the-ticket').error).toBe('bad-ticket')
+    expect(store.resume(token, 'x')).toEqual({ error: 'locked' })
+  })
+
+  it('does not count a missing ticket toward the lockout', () => {
+    const store = make()
+    store.setEnabled(true)
+    const { token } = store.redeemPairing(store.startPairing().code, 'phone')
+    store.signIn(token, codeNow(store))
+    // Never remembered: resume is benign every time and never locks the device
+    for (let i = 0; i < 10; i++) expect(store.resume(token, 'whatever')).toEqual({ error: 'trust-expired', benign: true })
+    clock += 30_000
+    expect(store.signIn(token, codeNow(store)).device).toBeTruthy()
+  })
+
+  it('drops every remembered ticket when remote access is switched off', () => {
+    const store = make()
+    store.setEnabled(true)
+    const { token, deviceId } = store.redeemPairing(store.startPairing().code, 'phone')
+    store.signIn(token, codeNow(store))
+    const { ticket } = store.rememberDevice(deviceId)
+    store.setEnabled(false)
+    store.setEnabled(true)
+    // A device remembered before it was switched off cannot resume after it is switched on again
+    expect(store.resume(token, ticket)).toEqual({ error: 'trust-expired', benign: true })
+    // The device itself is still registered (only the ticket went)
+    expect(store.devices().map((d) => d.id)).toEqual([deviceId])
+  })
+
+  it('forgets the remembered ticket when the device is revoked or forgotten', () => {
+    const store = make()
+    store.setEnabled(true)
+    const { token, deviceId } = store.redeemPairing(store.startPairing().code, 'phone')
+    store.signIn(token, codeNow(store))
+    const { ticket } = store.rememberDevice(deviceId)
+    store.forgetDevice(deviceId)
+    expect(store.resume(token, ticket)).toEqual({ error: 'trust-expired', benign: true })
+    // Remember again, then revoke: the device is gone entirely
+    store.rememberDevice(deviceId)
+    store.revoke(deviceId)
+    expect(store.resume(token, ticket)).toEqual({ error: 'unknown-device' })
   })
 
   it('stops answering a device for a while after five wrong codes, and only that device', () => {

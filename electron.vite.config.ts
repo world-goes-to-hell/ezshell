@@ -4,10 +4,10 @@ import path from 'path'
 import fs from 'fs'
 
 // CommonJS modules main.js loads at runtime with require('./src/...'); they are not bundled
-const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js', 'navigationGuard.js', 'updateChecker.js', 'sshAlgorithms.js', 'rootSwitch.js', 'localShell.js', 'windowState.js', 'sftpListing.js', 'lastVersion.js']
+const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js', 'navigationGuard.js', 'updateChecker.js', 'sshAlgorithms.js', 'rootSwitch.js', 'localShell.js', 'windowState.js', 'sftpListing.js', 'lastVersion.js', 'localPlaces.js', 'localKeyPath.js']
 
 // Directories under src/ that main.js loads at runtime; copied whole, without their tests
-const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient', 'remoteAccess']
+const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient', 'remoteAccess', 'sessionImport']
 
 // The terminal library of the remote access page (a phone's browser), served by the main process.
 // xterm is a devDependency (the renderer bundles it), so the packaged app has no copy to serve:

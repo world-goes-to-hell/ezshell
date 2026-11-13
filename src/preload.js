@@ -142,6 +142,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   dbDdl: (dbId, database, schema, table) => ipcRenderer.invoke('db-ddl', { dbId, database, schema, table }),
   dbRelations: (dbId, sources) => ipcRenderer.invoke('db-relations', { dbId, sources }),
+  // Oracle's client libraries, for Oracle servers older than 12.1 (the DB account dialog)
+  oracleClientStatus: () => ipcRenderer.invoke('oracle-client-status'),
+  oracleClientInstall: () => ipcRenderer.invoke('oracle-client-install'),
+  oracleClientRemove: () => ipcRenderer.invoke('oracle-client-remove'),
+  oracleClientLicense: () => ipcRenderer.invoke('oracle-client-license'),
+  onOracleClientProgress: (callback) => {
+    const handler = (event, progress) => callback(progress);
+    ipcRenderer.on('oracle-client-progress', handler);
+    return () => ipcRenderer.removeListener('oracle-client-progress', handler);
+  },
   // Remote access (settings page of the main window)
   remoteAccessStatus: () => ipcRenderer.invoke('remote-access-status'),
   remoteAccessSetEnabled: (isEnabled) => ipcRenderer.invoke('remote-access-set-enabled', isEnabled),
@@ -303,6 +313,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installUpdate: () => ipcRenderer.invoke('install-update'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   whatsNewState: () => ipcRenderer.invoke('whats-new-state'),
+  localPlaces: () => ipcRenderer.invoke('local-places'),
+  sessionImportSources: () => ipcRenderer.invoke('session-import-sources'),
+  sessionImportRead: (id) => ipcRenderer.invoke('session-import-read', id),
+  sessionImportFile: () => ipcRenderer.invoke('session-import-file'),
   whatsNewSeen: () => ipcRenderer.invoke('whats-new-seen'),
   onUpdateStatus: (callback) => {
     const handler = (event, data) => callback(data);

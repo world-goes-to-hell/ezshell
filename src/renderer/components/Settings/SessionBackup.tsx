@@ -3,6 +3,7 @@ import { RiDownload2Line, RiUpload2Line, RiCheckLine, RiFolderLine, RiFileTextLi
 import { useSessionStore } from '../../stores/sessionStore'
 import { useToastStore } from '../../stores/toastStore'
 import './SessionBackup.css'
+import { ExternalImportDialog } from './ExternalImportDialog'
 
 export function SessionBackup() {
   const { sessions, folders } = useSessionStore()
@@ -11,6 +12,8 @@ export function SessionBackup() {
   const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge')
   const [isExporting, setIsExporting] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
+  // "다른 프로그램에서 가져오기" (Xshell, PuTTY, MobaXterm, Tabby, OpenSSH config)
+  const [isExternalOpen, setIsExternalOpen] = useState(false)
 
   const toggleSessionSelection = (sessionId: string) => {
     const newSelection = new Set(selectedSessions)
@@ -202,6 +205,19 @@ export function SessionBackup() {
           <RiUpload2Line size={20} />
           {isImporting ? '가져오는 중...' : '세션 가져오기'}
         </button>
+      </div>
+
+      {/* From other programs */}
+      <div className="backup-section">
+        <div className="backup-section-header">
+          <h4>다른 프로그램에서 가져오기</h4>
+          <p>Xshell·Xftp·PuTTY·MobaXterm·Tabby·OpenSSH config 의 세션을 옮겨 옵니다. 저장된 비밀번호는 가져오지 않습니다.</p>
+        </div>
+        <button className="backup-btn backup-btn-secondary" onClick={() => setIsExternalOpen(true)}>
+          <RiUpload2Line size={20} />
+          다른 프로그램에서 가져오기…
+        </button>
+        {isExternalOpen && <ExternalImportDialog onClose={() => setIsExternalOpen(false)} />}
       </div>
 
       {/* Info Box */}

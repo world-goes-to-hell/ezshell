@@ -322,6 +322,29 @@ export type McpSetupResult =
   | { success: false; error?: string; cancelled?: boolean }
 
 // Extend Window interface for electronAPI
+export interface OracleClientProgress {
+  step: 'download' | 'unpack'
+  received: number
+  total: number
+}
+
+/** Oracle's client libraries (Instant Client), needed for Oracle servers older than 12.1 */
+export interface OracleClientStatus {
+  success: true
+  /** Windows x64 only */
+  isSupported: boolean
+  isInstalled: boolean
+  version: string
+  /** Size of the download */
+  bytes: number
+  licenseUrl: string
+  progress: OracleClientProgress | null
+  /** Installed, but this run already made an Oracle connection without them: applies after a restart */
+  needsRestart: boolean
+  /** Loaded by this run (the files cannot be removed until the app restarts) */
+  isInUse: boolean
+}
+
 /** A QR code as its cells, drawn by the page (no image URL: the page's CSP allows none) */
 export interface QrMatrix {
   size: number
@@ -434,6 +457,11 @@ declare global {
       localShellClose?: (id: string) => void
       onLocalShellData?: (callback: (data: { id: string; data: string }) => void) => () => void
       onLocalShellExit?: (callback: (data: { id: string; exitCode: number | null }) => void) => () => void
+      oracleClientStatus?: () => Promise<OracleClientStatus | { success: false; error: string }>
+      oracleClientInstall?: () => Promise<OracleClientStatus | { success: false; error: string }>
+      oracleClientRemove?: () => Promise<OracleClientStatus | { success: false; error: string }>
+      oracleClientLicense?: () => Promise<{ success: boolean }>
+      onOracleClientProgress?: (callback: (progress: OracleClientProgress) => void) => () => void
       remoteAccessStatus?: () => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessSetEnabled?: (isEnabled: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessSetAnswerMcp?: (isOn: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
@@ -547,6 +575,15 @@ declare global {
       /** Last version whose release notes were seen (src/lastVersion.js) */
       whatsNewState: () => Promise<{ previous: string | null; current: string; existingUser: boolean }>
       whatsNewSeen: () => Promise<void>
+      /** The usual folders and the drives of this PC, for the SFTP local path bar (src/localPlaces.js) */
+      /** Other programs' sessions (src/sessionImport): structure only, no passwords */
+      sessionImportSources?: () => Promise<{ ok: true; sources: Array<{ id: string; label: string; detail: string }> } | { ok: false; error: string }>
+      sessionImportRead?: (id: string) => Promise<{ ok: true; result: import('../lib/externalImport').ImportResult } | { ok: false; error: string }>
+      sessionImportFile?: () => Promise<{ ok: true; canceled: true } | { ok: true; canceled?: undefined; result: import('../lib/externalImport').ImportResult } | { ok: false; error: string }>
+      localPlaces?: () => Promise<{
+        places: Array<{ kind: 'desktop' | 'home' | 'documents' | 'downloads' | 'pictures' | 'music' | 'videos'; label: string; path: string }>
+        drives: Array<{ path: string; label: string; kind: 'local' | 'removable' | 'network' | 'cd' }>
+      }>
       onUpdateStatus: (callback: (data: any) => void) => () => void
 
       // Port forwarding

@@ -29,6 +29,9 @@ interface McpActivityState {
   togglePanel: () => void
   setView: (view: McpActivityView) => void
   setActiveOnly: (isActiveOnly: boolean) => void
+  /** Output lines wrap at the panel's edge (off: they scroll sideways, so tables stay aligned) */
+  isOutputWrapped: boolean
+  setOutputWrapped: (isOutputWrapped: boolean) => void
   /** Close a lane in the per-server view until its session gets a new request */
   hideLane: (lane: McpActivityLane) => void
   showAllLanes: () => void
@@ -61,6 +64,7 @@ export const useMcpActivityStore = create<McpActivityState>((set, get) => ({
   isPanelCollapsed: false,
   view: initialPrefs.view,
   isActiveOnly: initialPrefs.isActiveOnly,
+  isOutputWrapped: initialPrefs.isOutputWrapped,
   hiddenLanes: {},
   laneOrder: [],
   mergeSnapshot: (items, liveIds) => set((state) => ({ items: mergeSnapshot(state.items, items, liveIds) })),
@@ -76,11 +80,15 @@ export const useMcpActivityStore = create<McpActivityState>((set, get) => ({
   }),
   setView: (view) => {
     set({ view })
-    savePrefs({ view, isActiveOnly: get().isActiveOnly })
+    savePrefs({ view, isActiveOnly: get().isActiveOnly, isOutputWrapped: get().isOutputWrapped })
   },
   setActiveOnly: (isActiveOnly) => {
     set({ isActiveOnly })
-    savePrefs({ view: get().view, isActiveOnly })
+    savePrefs({ view: get().view, isActiveOnly, isOutputWrapped: get().isOutputWrapped })
+  },
+  setOutputWrapped: (isOutputWrapped) => {
+    set({ isOutputWrapped })
+    savePrefs({ view: get().view, isActiveOnly: get().isActiveOnly, isOutputWrapped })
   },
   hideLane: (lane) => set((state) => ({ hiddenLanes: hideLane(state.hiddenLanes, lane) })),
   showAllLanes: () => set({ hiddenLanes: {} }),

@@ -16,6 +16,7 @@
     <p id="signin-note" class="note">인증 앱의 6자리 코드를 입력하세요.</p>
     <form id="signin-form" autocomplete="off">
       <input id="signin-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="000000" aria-label="인증 코드" required>
+      <label id="signin-remember-row" class="check"><input id="signin-remember" type="checkbox" checked> 하루 동안 이 기기 기억 (코드 없이 접속)</label>
       <button type="submit" class="primary">접속</button>
     </form>
     <p id="signin-error" class="error" role="alert" hidden></p>

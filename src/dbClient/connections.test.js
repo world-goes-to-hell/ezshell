@@ -51,7 +51,11 @@ describe('validateRequest', () => {
       { endpoint: { ...REQUEST.endpoint, host: 'a b' } },
       { endpoint: { ...REQUEST.endpoint, host: 'user@host' } },
       { credentials: { ...REQUEST.credentials, user: ' ' } },
-      { endpoint: { ...REQUEST.endpoint, engine: 'oracle' } }
+      { endpoint: { ...REQUEST.endpoint, engine: 'sqlite' } },
+      // Oracle needs a service name, and one that cannot add to the connect string
+      { endpoint: { ...REQUEST.endpoint, engine: 'oracle' }, credentials: { ...REQUEST.credentials, database: '' } },
+      { endpoint: { ...REQUEST.endpoint, engine: 'oracle' }, credentials: { ...REQUEST.credentials, database: 'ORCL)(HOST=evil' } },
+      { endpoint: { ...REQUEST.endpoint, engine: 'oracle' }, credentials: { ...REQUEST.credentials, database: 'a/b' } }
     ]
     for (const change of bad) expect(() => validateRequest({ ...REQUEST, ...change })).toThrow()
   })
@@ -303,5 +307,13 @@ describe('DDL and foreign keys', () => {
       expect(() => connections.relations(7, dbId, bad), JSON.stringify(bad)?.slice(0, 40)).toThrow('올바르지 않습니다')
     }
     expect(session.relations).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('validateRequest: Oracle', () => {
+  it('takes a service name or SID', () => {
+    const request = { ...REQUEST, endpoint: { ...REQUEST.endpoint, engine: 'oracle' }, credentials: { ...REQUEST.credentials, database: ' XEPDB1 ' } }
+    expect(validateRequest(request).credentials.database).toBe('XEPDB1')
+    expect(validateRequest({ ...request, credentials: { ...request.credentials, database: 'orcl.example.com' } }).endpoint.engine).toBe('oracle')
   })
 })

@@ -7,7 +7,7 @@ import type { Extension } from '@codemirror/state'
 import { Prec } from '@codemirror/state'
 import { keymap } from '@codemirror/view'
 import { acceptCompletion, autocompletion, type Completion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete'
-import { MSSQL, MySQL, PostgreSQL, keywordCompletionSource, sql } from '@codemirror/lang-sql'
+import { MSSQL, MySQL, PLSQL, PostgreSQL, keywordCompletionSource, sql } from '@codemirror/lang-sql'
 import type { ConnectableEngine } from '../../lib/dbChoices'
 import { completionSpot, identifierText, referencedTables, resolveQualifier } from '../../lib/sqlCompletion'
 import { statementAt } from '../../lib/sqlStatements'
@@ -167,7 +167,7 @@ export function schemaSource({ engine, metadata }: SourceOptions) {
 
 /** Editor extensions: SQL dialect, completion (typing or Ctrl+Space), Tab and Enter accept */
 export function completionExtensions(options: SourceOptions): Extension[] {
-  const dialect = options.engine === 'mysql' ? MySQL : options.engine === 'mssql' ? MSSQL : PostgreSQL
+  const dialect = options.engine === 'mysql' ? MySQL : options.engine === 'mssql' ? MSSQL : options.engine === 'oracle' ? PLSQL : PostgreSQL
   const keywords = keywordCompletionSource(dialect, true)
   // After `name.` only columns or tables make sense
   const keywordSource = (context: CompletionContext) =>

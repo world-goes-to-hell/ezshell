@@ -12,6 +12,8 @@ const MAX_DEVICES = 5
 const MAX_FAILURES = 5
 const LOCKOUT_MS = 5 * 60 * 1000
 const DEFAULT_PORT = 8722
+/** After a code sign-in the device may resume without a code for this long */
+const TRUST_MS = 24 * 60 * 60 * 1000
 
 const hashOf = (token) => crypto.createHash('sha256').update(String(token)).digest('hex')
 /**
@@ -144,9 +146,12 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
   }
 
   function setEnabled(enabled) {
-    state = { ...state, enabled: enabled === true }
+    const on = enabled === true
+    // Switching remote access off drops every remembered ticket: a device lost while it was on
+    // cannot resume after it is switched on again (it would need a code).
+    state = { ...state, enabled: on, devices: on ? state.devices : state.devices.map(({ trust, ...device }) => device) }
     // The secret is made when remote access is first switched on
-    if (state.enabled && !secret()) state = { ...state, totpSecret: totp.generateSecret() }
+    if (on && !secret()) state = { ...state, totpSecret: totp.generateSecret() }
     save()
   }
 
@@ -206,6 +211,59 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
     save()
   }
 
+  /** Drops a device's remembered ticket without removing the device (a code is needed next time) */
+  function forgetDevice(deviceId) {
+    state = {
+      ...state,
+      devices: state.devices.map((d) => {
+        if (d.id !== deviceId) return d
+        const { trust, ...rest } = d
+        return rest
+      })
+    }
+    save()
+  }
+
+  /**
+   * After a code sign-in: remember this device so it can resume for a day without a code. Returns
+   * { ticket, expiresAt } — the ticket is shown to the device once and stored here only as a hash.
+   * A new ticket replaces any earlier one.
+   */
+  function rememberDevice(deviceId) {
+    if (!state.devices.some((d) => d.id === deviceId)) return null
+    const ticket = randomBytes(32).toString('base64url')
+    const trust = { hash: hashOf(ticket), expiresAt: now() + TRUST_MS }
+    state = { ...state, devices: state.devices.map((d) => (d.id === deviceId ? { ...d, trust } : d)) }
+    save()
+    return { ticket, expiresAt: trust.expiresAt }
+  }
+
+  /**
+   * A device resuming within the day with its remembered ticket (no code). Returns { device } or
+   * { error, benign? }. benign means no code-less resume is possible (no ticket, or the day passed):
+   * the caller asks for a code without counting it as a failure. A ticket that is present and not
+   * expired but does not match is counted like a wrong code.
+   */
+  function resume(token, ticket) {
+    const hash = hashOf(token)
+    const device = state.devices.find((d) => sameSecret(d.tokenHash, hash))
+    if (!device) return { error: 'unknown-device' }
+    if (isLockedOut(device.id)) return { error: 'locked' }
+    const trust = device.trust
+    if (!trust || typeof trust.hash !== 'string' || now() >= (trust.expiresAt ?? 0)) {
+      if (trust) forgetDevice(device.id)
+      return { error: 'trust-expired', benign: true }
+    }
+    if (!sameSecret(trust.hash, hashOf(ticket))) {
+      failed(device.id)
+      return { error: 'bad-ticket' }
+    }
+    const updated = { ...device, lastSeenAt: now() }
+    state = { ...state, devices: state.devices.map((d) => (d.id === device.id ? updated : d)) }
+    save()
+    return { device: { id: updated.id, name: updated.name } }
+  }
+
   return {
     setEnabled,
     setAnswerMcp,
@@ -213,6 +271,9 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
     startPairing,
     redeemPairing,
     signIn,
+    rememberDevice,
+    resume,
+    forgetDevice,
     revoke,
     isLockedOut,
     get enabled() { return state.enabled },
@@ -228,4 +289,4 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
   }
 }
 
-module.exports = { createAccessStore, PAIRING_MS, MAX_DEVICES, MAX_FAILURES, LOCKOUT_MS, DEFAULT_PORT }
+module.exports = { createAccessStore, PAIRING_MS, MAX_DEVICES, MAX_FAILURES, LOCKOUT_MS, DEFAULT_PORT, TRUST_MS }

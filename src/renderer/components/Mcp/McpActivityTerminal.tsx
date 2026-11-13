@@ -9,6 +9,8 @@ import { stopMcpRequest } from './stopMcpRequest'
 import { pinnedRequests } from '../../lib/mcpPinned'
 import { McpPinnedRequests } from './McpPinnedRequests'
 import { McpTransferBar } from './McpTransferBar'
+import { useMcpActivityStore } from '../../stores/mcpActivityStore'
+import { hasWideCharacters, splitWideRuns } from '../../lib/terminalCells'
 
 /** Keep following new output only while the view is scrolled to (about) the bottom */
 const FOLLOW_THRESHOLD_PX = 24
@@ -26,12 +28,64 @@ function statusText(item: McpActivityItem, now: number): string {
   ].filter(Boolean).join(' · ')
 }
 
+/** Above this much text the wide characters are not sized one run at a time (it would make too many elements) */
+const MAX_ALIGNED_CHARS = 200_000
+
+// Width of one character cell, by font: measured on screen. The CSS "ch" unit is not it: it is taken
+// from the first font of the list that has a "0", which need not be the font the text is drawn in,
+// and a difference of a tenth of a pixel adds up to whole columns over a line of Korean text.
+const cellWidths = new Map<string, number>()
+const PROBE_CHARS = 200
+
+function cellWidthOf(element: HTMLElement): number | null {
+  const style = getComputedStyle(element)
+  const key = `${style.fontFamily}|${style.fontSize}|${style.fontWeight}|${style.letterSpacing}`
+  const known = cellWidths.get(key)
+  if (known) return known
+  const probe = document.createElement('span')
+  probe.textContent = '0'.repeat(PROBE_CHARS)
+  probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;pointer-events:none'
+  element.appendChild(probe)
+  const width = probe.getBoundingClientRect().width / PROBE_CHARS
+  probe.remove()
+  // Not laid out yet (a hidden panel): asked again next time
+  if (!(width > 0)) return null
+  cellWidths.set(key, width)
+  return width
+}
+
+/**
+ * Output as a terminal shows it: a Korean or Chinese character takes exactly two cells, so the
+ * columns a program padded (psql, docker ps) line up whatever width the font draws it in.
+ */
+const AlignedText = memo(function AlignedText({ text }: { text: string }) {
+  const runs = useMemo(() => (text.length <= MAX_ALIGNED_CHARS && hasWideCharacters(text) ? splitWideRuns(text) : null), [text])
+  if (!runs) return <>{text}</>
+  return (
+    <>
+      {runs.map((run, index) => (run.isWide
+        ? <span key={index} className="mcp-term-wide" style={{ width: `calc(var(--mcp-cell, 1ch) * ${run.cells})` }}>{run.text}</span>
+        : run.text))}
+    </>
+  )
+})
+
 /** One request: a prompt line, what the command printed, then how it ended. */
 export const TerminalEntry = memo(function TerminalEntry({ item, now }: { item: McpActivityItem; now: number }) {
   const active = isActiveState(item.state)
   // One-liners joined with ; && | are laid out one command per line (display only, see lib/shellFormat)
   const commandLines = useMemo(() => formatShellCommand(revealHiddenChars(item.command).text), [item.command])
   const parts = item.outputParts ?? []
+  const isOutputWrapped = useMcpActivityStore(state => state.isOutputWrapped)
+  const outputRef = useRef<HTMLPreElement>(null)
+  const hasOutput = parts.length > 0
+  // The cell width the wide runs are sized with, for the font this output is drawn in
+  useLayoutEffect(() => {
+    const output = outputRef.current
+    if (!output || isOutputWrapped) return
+    const cell = cellWidthOf(output)
+    if (cell) output.style.setProperty('--mcp-cell', `${cell}px`)
+  }, [hasOutput, isOutputWrapped])
   // A request that never reached the server has a reason instead of output
   const notice = !active && !hasRun(item) ? (item.output ?? item.error ?? null) : null
   const hasFailedExit = item.exitCode != null && item.exitCode !== 0
@@ -55,9 +109,12 @@ export const TerminalEntry = memo(function TerminalEntry({ item, now }: { item: 
       </div>
       {item.outputTrimmed && <p className="mcp-term-notice">{TRIMMED_TEXT}</p>}
       {parts.length > 0 && (
-        <pre className="mcp-term-output">
+        // Lines stay whole and the block scrolls sideways, unless wrapping was switched on
+        <pre ref={outputRef} className={`mcp-term-output${isOutputWrapped ? ' is-wrapped' : ''}`} tabIndex={isOutputWrapped ? undefined : 0}>
           {parts.map((part, index) => (
-            <span key={index} className={part.stream === 'stderr' ? 'mcp-term-stderr' : undefined}>{cleanTerminalText(part.text)}</span>
+            <span key={index} className={part.stream === 'stderr' ? 'mcp-term-stderr' : undefined}>
+              {isOutputWrapped ? cleanTerminalText(part.text) : <AlignedText text={cleanTerminalText(part.text)} />}
+            </span>
           ))}
         </pre>
       )}

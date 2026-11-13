@@ -4,6 +4,8 @@ import { PathBookmarkButton } from './PathBookmarkButton'
 import { SelectMenu } from '../ui/SelectMenu'
 import { PathBookmarkSuggestions } from './PathBookmarkSuggestions'
 import { usePathBookmarks } from '../../hooks/usePathBookmarks'
+import { useLocalPlaces } from '../../hooks/useLocalPlaces'
+import { buildPathSuggestions } from '../../lib/pathSuggestions'
 
 interface PathBarProps {
   path: string
@@ -16,7 +18,8 @@ interface PathBarProps {
   editRequest?: number
 }
 
-const WINDOWS_DRIVES = ['C:', 'D:', 'E:', 'F:', 'G:', 'H:']
+// Until main has answered with the drives this PC really has
+const FALLBACK_DRIVES = ['C:']
 const NO_HIGHLIGHT = -1
 
 const isWindows = () => {
@@ -29,6 +32,13 @@ export function PathBar({ path, onNavigate, type, label, sessionId, editRequest 
   const [inputPath, setInputPath] = useState(path)
   const [highlightedIndex, setHighlightedIndex] = useState(NO_HIGHLIGHT)
   const bookmarks = usePathBookmarks(sessionId, type)
+  const isLocal = type === 'local'
+  // The local side also offers the usual folders and the drives; asked again when editing starts
+  // (a USB drive may have been plugged in since)
+  const { places, refresh: refreshPlaces } = useLocalPlaces(isLocal)
+  useEffect(() => {
+    if (isLocal && isEditing) refreshPlaces()
+  }, [isLocal, isEditing, refreshPlaces])
   const listId = useId()
 
   useEffect(() => {
@@ -39,12 +49,14 @@ export function PathBar({ path, onNavigate, type, label, sessionId, editRequest 
     if (editRequest > 0) setIsEditing(true)
   }, [editRequest])
 
-  // Show every bookmark until the user starts typing, then filter by what was typed
-  const suggestions = useMemo(() => {
-    const query = inputPath.trim().toLowerCase()
-    if (!query || inputPath === path) return bookmarks.bookmarks
-    return bookmarks.bookmarks.filter(bookmark => bookmark.toLowerCase().includes(query))
-  }, [bookmarks.bookmarks, inputPath, path])
+  // Everything until the user starts typing, then filtered by what was typed
+  const suggestions = useMemo(() => buildPathSuggestions({
+    bookmarks: bookmarks.bookmarks,
+    places: places.places,
+    drives: places.drives,
+    query: inputPath === path ? '' : inputPath,
+    isLocal
+  }), [bookmarks.bookmarks, places, inputPath, path, isLocal])
 
   const showSuggestions = isEditing && suggestions.length > 0
 
@@ -67,7 +79,7 @@ export function PathBar({ path, onNavigate, type, label, sessionId, editRequest 
       setHighlightedIndex(i => (i <= 0 ? suggestions.length - 1 : i - 1))
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      const picked = showSuggestions && highlightedIndex >= 0 ? suggestions[highlightedIndex] : undefined
+      const picked = showSuggestions && highlightedIndex >= 0 ? suggestions[highlightedIndex]?.path : undefined
       const trimmedPath = (picked ?? inputPath).trim()
       if (trimmedPath) {
         navigateTo(trimmedPath)
@@ -92,6 +104,10 @@ export function PathBar({ path, onNavigate, type, label, sessionId, editRequest 
   const currentDrive = isWindows() && type === 'local'
     ? path.substring(0, 2).toUpperCase()
     : null
+  const driveOptions = places.drives.length > 0
+    // Letters only: the trigger is narrow; the names are in the path list
+    ? places.drives.map(drive => ({ value: drive.path.slice(0, 2).toUpperCase(), label: drive.path.slice(0, 2).toUpperCase() }))
+    : FALLBACK_DRIVES.map(drive => ({ value: drive, label: drive }))
 
   return (
     <div className="path-bar">
@@ -105,7 +121,7 @@ export function PathBar({ path, onNavigate, type, label, sessionId, editRequest 
             ariaLabel="드라이브"
             icon={<RiHardDrive2Fill size={16} className="drive-selector-icon" />}
             value={currentDrive || 'C:'}
-            options={WINDOWS_DRIVES.map(drive => ({ value: drive, label: drive }))}
+            options={driveOptions}
             onChange={handleDriveChange}
           />
         </div>

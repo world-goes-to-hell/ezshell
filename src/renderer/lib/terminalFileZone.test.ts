@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fileZone, visiblePart, isRelativeName, zoneHasOutput, listingBase, zoneBlocks, lookupName } from './terminalFileZone'
+import { fileZone, visiblePart, isRelativeName, zoneHasOutput, listingBase, isListing, zoneBlocks, lookupName } from './terminalFileZone'
 
 describe('fileZone', () => {
   it('runs from the line where the folder last changed to the line above the cursor', () => {
@@ -113,29 +113,43 @@ describe('listingBase', () => {
   })
 })
 
+describe('isListing', () => {
+  it('is true for commands that print a file list', () => {
+    for (const command of ['ll', 'ls -la', 'ls ../', 'LANG=C ls /var/log', 'sudo -u app ls /srv', 'ls -l | grep .log', 'la']) {
+      expect(isListing(command)).toBe(true)
+    }
+  })
+
+  it('is false for other commands, even when their output has names', () => {
+    for (const command of ['docker ps | grep ora', 'cat compose.yaml', 'grep -rn error logs', 'tail -f app.log', 'find . -name x', 'tree', 'ls; pwd', '', null]) {
+      expect(isListing(command)).toBe(false)
+    }
+  })
+})
+
 describe('zoneBlocks and lookupName', () => {
   const zone = { start: 10, end: 30 }
   const commands = [
-    { row: 10, base: { kind: 'cwd' as const } },
-    { row: 15, base: { kind: 'dir' as const, dir: '..' } },
-    { row: 22, base: { kind: 'none' as const } }
+    { row: 10, base: { kind: 'cwd' as const }, listing: true },
+    { row: 15, base: { kind: 'dir' as const, dir: '..' }, listing: true },
+    { row: 22, base: { kind: 'none' as const }, listing: false }
   ]
 
   it('cuts the zone at each command line', () => {
     expect(zoneBlocks(zone, commands)).toEqual([
-      { start: 10, end: 14, base: { kind: 'cwd' } },
-      { start: 15, end: 21, base: { kind: 'dir', dir: '..' } },
-      { start: 22, end: 30, base: { kind: 'none' } }
+      { start: 10, end: 14, base: { kind: 'cwd' }, listing: true },
+      { start: 15, end: 21, base: { kind: 'dir', dir: '..' }, listing: true },
+      { start: 22, end: 30, base: { kind: 'none' }, listing: false }
     ])
   })
 
   it('treats rows before the first command (or without commands) as the current folder', () => {
     expect(zoneBlocks(zone, [{ row: 12, base: { kind: 'none' } }])).toEqual([
-      { start: 10, end: 11, base: { kind: 'cwd' } },
-      { start: 12, end: 30, base: { kind: 'none' } }
+      { start: 10, end: 11, base: { kind: 'cwd' }, listing: false },
+      { start: 12, end: 30, base: { kind: 'none' }, listing: false }
     ])
-    expect(zoneBlocks(zone, [])).toEqual([{ start: 10, end: 30, base: { kind: 'cwd' } }])
-    expect(zoneBlocks(zone, [{ row: 5, base: { kind: 'none' } }])).toEqual([{ start: 10, end: 30, base: { kind: 'cwd' } }])
+    expect(zoneBlocks(zone, [])).toEqual([{ start: 10, end: 30, base: { kind: 'cwd' }, listing: false }])
+    expect(zoneBlocks(zone, [{ row: 5, base: { kind: 'none' } }])).toEqual([{ start: 10, end: 30, base: { kind: 'cwd' }, listing: false }])
   })
 
   it('looks a name up in the folder its command listed', () => {

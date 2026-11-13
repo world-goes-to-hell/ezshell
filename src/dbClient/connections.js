@@ -18,7 +18,8 @@ const MESSAGES = {
   busy: '앞의 요청을 처리하는 중입니다. 끝난 뒤 다시 실행해 주세요.',
   tooMany: `DB 창은 ${MAX_WINDOWS}개까지 열 수 있습니다.`,
   badInput: '접속 정보가 올바르지 않습니다.',
-  unsupported: '아직 지원하지 않는 DB 입니다. 지금은 MySQL·MariaDB·PostgreSQL·SQL Server 만 됩니다.',
+  unsupported: '아직 지원하지 않는 DB 입니다. 지금은 MySQL·MariaDB·PostgreSQL·SQL Server·Oracle 만 됩니다.',
+  oracleService: 'Oracle 은 서비스 이름(또는 SID)을 넣어야 접속할 수 있습니다. 예: ORCL, XEPDB1',
   noDdl: '이 DB 는 아직 DDL 복사를 지원하지 않습니다.',
   unknownDatabase: '이 계정으로 볼 수 있는 DB 목록에 없습니다.',
   unknownSchema: '이 DB 의 스키마 목록에 없습니다.',
@@ -29,8 +30,11 @@ const SESSION_FACTORIES = {
   mysql: createMysqlSession,
   postgres: createPostgresSession,
   // Loaded when first used: its library is large, and a failure to load it must not stop the app
-  mssql: (options) => require('./drivers/mssql.js').createMssqlSession(options)
+  mssql: (options) => require('./drivers/mssql.js').createMssqlSession(options),
+  oracle: (options) => require('./drivers/oracle.js').createOracleSession(options)
 }
+/** An Oracle service name or SID: it goes into the driver's connect string, so nothing else is taken */
+const ORACLE_SERVICE = /^[A-Za-z0-9_.$#-]{1,128}$/
 
 const isText = (value, max, { isRequired = false } = {}) =>
   typeof value === 'string' && value.length <= max && (!isRequired || value.trim().length > 0)
@@ -46,6 +50,7 @@ function validateRequest({ endpoint, credentials } = {}) {
   if (!isText(credentials.user, 128, { isRequired: true }) || !isText(credentials.password ?? '', 1024) || !isText(credentials.database ?? '', 128)) {
     throw new DbError(MESSAGES.badInput)
   }
+  if (endpoint.engine === 'oracle' && !ORACLE_SERVICE.test((credentials.database ?? '').trim())) throw new DbError(MESSAGES.oracleService)
   return {
     endpoint: { engine: endpoint.engine, host, port },
     credentials: { user: credentials.user.trim(), password: credentials.password ?? '', database: (credentials.database ?? '').trim() }
@@ -56,7 +61,7 @@ function validateRequest({ endpoint, credentials } = {}) {
  * `openStream(sessionId, host, port)` opens a channel to host:port from the tab's SSH server.
  * `createSession` is for tests.
  */
-function createDbConnections({ openStream, createSession = (engine, options) => SESSION_FACTORIES[engine](options), limits = {} }) {
+function createDbConnections({ openStream, oracleClient = () => null, createSession = (engine, options) => SESSION_FACTORIES[engine]({ ...options, oracleClient }), limits = {} }) {
   const connections = new Map()
   // Opens still logging in count towards the window limit
   let pendingOpens = 0

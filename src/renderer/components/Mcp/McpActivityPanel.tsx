@@ -84,6 +84,8 @@ export function McpActivityPanel({ variant = 'overlay' }: { variant?: 'overlay' 
   const setPanelOpen = useMcpActivityStore(state => state.setPanelOpen)
   const view = useMcpActivityStore(state => state.view)
   const setView = useMcpActivityStore(state => state.setView)
+  const isOutputWrapped = useMcpActivityStore(state => state.isOutputWrapped)
+  const setOutputWrapped = useMcpActivityStore(state => state.setOutputWrapped)
   const isCollapsed = useMcpActivityStore(state => state.isPanelCollapsed) && !isWindow
   const setCollapsed = useMcpActivityStore(state => state.setPanelCollapsed)
   const canPopOut = !isWindow && typeof window.electronAPI?.openMcpActivityWindow === 'function'
@@ -162,6 +164,17 @@ export function McpActivityPanel({ variant = 'overlay' }: { variant?: 'overlay' 
               </button>
             ))}
           </div>
+          {view !== 'list' && (
+            <button
+              type="button"
+              className={`mcp-activity-view-btn mcp-activity-wrap-btn${isOutputWrapped ? ' is-active' : ''}`}
+              aria-pressed={isOutputWrapped}
+              onClick={() => setOutputWrapped(!isOutputWrapped)}
+              title={isOutputWrapped ? '출력을 창 너비에서 줄바꿈하는 중입니다. 끄면 표 모양을 유지하고 좌우로 스크롤합니다.' : '출력의 줄을 그대로 두고 좌우로 스크롤합니다 (표가 정렬됩니다). 켜면 창 너비에서 줄바꿈합니다.'}
+            >
+              줄바꿈
+            </button>
+          )}
           {canPopOut && (
             <button type="button" className="mcp-icon-btn" onClick={() => void openInWindow()} aria-label="MCP 활동 새 창으로 열기" title="새 창으로 열기">
               <RiExternalLinkLine size={16} />

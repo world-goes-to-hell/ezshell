@@ -3,11 +3,11 @@
 import type { DbEndpoint, DbEngine, DiscoveredDb, SavedDbConnection } from '../types/db'
 
 /** The engines the app can connect to (the others are only recognised on a server) */
-export type ConnectableEngine = 'mysql' | 'postgres' | 'mssql'
-export const CONNECTABLE_ENGINES: ConnectableEngine[] = ['mysql', 'postgres', 'mssql']
+export type ConnectableEngine = 'mysql' | 'postgres' | 'mssql' | 'oracle'
+export const CONNECTABLE_ENGINES: ConnectableEngine[] = ['mysql', 'postgres', 'mssql', 'oracle']
 export const isConnectable = (engine: string | null | undefined): engine is ConnectableEngine => CONNECTABLE_ENGINES.includes(engine as ConnectableEngine)
 
-export const DEFAULT_PORTS: Record<ConnectableEngine, number> = { mysql: 3306, postgres: 5432, mssql: 1433 }
+export const DEFAULT_PORTS: Record<ConnectableEngine, number> = { mysql: 3306, postgres: 5432, mssql: 1433, oracle: 1521 }
 
 export const ENGINE_NAMES: Record<DbEngine, string> = {
   mysql: 'MySQL/MariaDB',
@@ -103,7 +103,7 @@ export function buildGroups(found: DiscoveredDb[], saved: SavedDbConnection[], a
       key,
       endpoint: { engine: db.engine, host: db.host, port: db.port },
       label: db.label,
-      detail: `${db.host}:${db.port}${db.isLocalOnly ? ' · 서버 안에서만 열림' : ''}`,
+      detail: `${db.host}:${db.port}${db.isLocalOnly ? ' · 서버 안에서만 열림' : ''}${db.container ? ` · 컨테이너 ${db.container}` : ''}`,
       isSupported: db.isSupported,
       isGuess: !db.isConfirmed,
       accounts: []

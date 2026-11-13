@@ -1297,17 +1297,7 @@ function App() {
                   ))
                 )}
               </div>
-              {/* Hidden while the panel is open (it has its own close button) so the panel gets the space */}
-              {activeTerminalId && layout.mode !== 'split' && !sftpOpen && isSshTab(activeTerminal) && (
-                <div className="toolbar">
-                  <button
-                    className="toolbar-btn"
-                    onClick={handleToggleSftp}
-                  >
-                    SFTP
-                  </button>
-                </div>
-              )}
+              {/* The SFTP button is in the terminal's header (TerminalPanel), not in a bar under it */}
               {sftpOpen && activeTerminalId && layout.mode !== 'split' && (
                 <SftpPanel sessionId={activeTerminalId} />
               )}

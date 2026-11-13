@@ -6,7 +6,7 @@ import http from 'http'
 import { WebSocket } from 'ws'
 import { createAccessServer, trimOutput, activityForDevice, APPROVAL_ARM_MS } from './server.js'
 import { sessionTree } from './controller.js'
-import { createAccessStore } from './accessStore.js'
+import { createAccessStore, TRUST_MS } from './accessStore.js'
 import totp from './totp.js'
 
 // The server answers only Tailscale addresses; the tests connect over loopback, so the check is
@@ -23,7 +23,7 @@ const TREE = {
 
 function setup({ isLocked = () => false, now } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-remote-'))
-  const store = createAccessStore({ filePath: path.join(dir, 'remote-access.json') })
+  const store = createAccessStore({ filePath: path.join(dir, 'remote-access.json'), ...(now ? { now } : {}) })
   store.setEnabled(true)
   const opened = []
   const shells = {
@@ -125,6 +125,66 @@ describe('createAccessServer', () => {
     const client = await signedIn(context)
     expect(client.ready).toEqual({ type: 'ready', device: 'phone', ...TREE, approvals: [], push: { available: false, publicKey: null } })
     expect(context.server.connected()).toEqual([{ id: expect.any(String), name: 'phone' }])
+  })
+
+  it('remembers a device for a day and lets it resume without a code', async () => {
+    context = setup()
+    await context.server.start('127.0.0.1', PORT)
+    const { store } = context
+    // Sign in asking to be remembered: the ready message carries a ticket
+    const client = connect()
+    await client.opened
+    client.send({ type: 'pair', code: store.startPairing().code, name: 'phone' })
+    const { token } = await client.next()
+    client.send({ type: 'signin', token, code: totp.codeFor(store.totpSecret, totp.counterAt(Date.now())), remember: true })
+    const ready = await client.next()
+    expect(ready.type).toBe('ready')
+    // The ticket arrives on its own, right after ready
+    const trust = await client.next()
+    expect(trust).toMatchObject({ type: 'trust' })
+    expect(trust.ticket).toMatch(/^[\w-]{43}$/)
+    client.socket.close()
+
+    // A new connection resumes with the ticket, no code, and is signed in
+    const again = connect()
+    await again.opened
+    again.send({ type: 'resume', token, ticket: trust.ticket })
+    const back = await again.next()
+    expect(back.type).toBe('ready')
+    expect(back.device).toBe('phone')
+    expect(back.trust).toBeUndefined()
+    again.socket.close()
+
+    // A wrong ticket is refused (and counts), a missing one asks for a code without counting
+    const bad = connect()
+    await bad.opened
+    bad.send({ type: 'resume', token, ticket: 'not-the-ticket' })
+    expect((await bad.next())).toMatchObject({ type: 'error', code: 'bad-ticket' })
+    bad.socket.close()
+  })
+
+  it('tells a device whose remembered day has passed to use a code, without ending the connection', async () => {
+    let clock = 1_800_000_000_000
+    context = setup({ now: () => clock })
+    await context.server.start('127.0.0.1', PORT)
+    const { store } = context
+    const client = connect()
+    await client.opened
+    client.send({ type: 'pair', code: store.startPairing().code, name: 'phone' })
+    const { token } = await client.next()
+    client.send({ type: 'signin', token, code: totp.codeFor(store.totpSecret, totp.counterAt(clock)), remember: true })
+    await client.next()
+    const trust = await client.next()
+    client.socket.close()
+
+    clock += TRUST_MS + 1
+    const again = connect()
+    await again.opened
+    again.send({ type: 'resume', token, ticket: trust.ticket })
+    const answer = await again.next()
+    expect(answer).toMatchObject({ type: 'error', code: 'trust-expired' })
+    // The connection stays open so the device can now send a code
+    expect(again.socket.readyState).toBe(again.socket.OPEN)
   })
 
   it('answers nothing but errors before signing in', async () => {

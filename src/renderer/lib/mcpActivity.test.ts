@@ -260,7 +260,14 @@ describe('collapsesMcpPanel', () => {
 
 describe('parseActivityPrefs', () => {
   it('reads a stored view and filter', () => {
-    expect(parseActivityPrefs('{"view":"lanes","isActiveOnly":true}')).toEqual({ view: 'lanes', isActiveOnly: true })
+    expect(parseActivityPrefs('{"view":"lanes","isActiveOnly":true}')).toEqual({ view: 'lanes', isActiveOnly: true, isOutputWrapped: false })
+    expect(parseActivityPrefs('{"view":"terminal","isActiveOnly":false,"isOutputWrapped":true}')).toEqual({ view: 'terminal', isActiveOnly: false, isOutputWrapped: true })
+  })
+
+  it('keeps output lines whole unless wrapping was switched on', () => {
+    // Tables (psql, docker ps) stay aligned and scroll sideways by default
+    expect(DEFAULT_ACTIVITY_PREFS.isOutputWrapped).toBe(false)
+    expect(parseActivityPrefs('{"view":"terminal","isOutputWrapped":"yes"}').isOutputWrapped).toBe(false)
   })
 
   it('uses the defaults when nothing is stored', () => {
@@ -275,7 +282,7 @@ describe('parseActivityPrefs', () => {
   })
 
   it('replaces only the field it does not understand', () => {
-    expect(parseActivityPrefs('{"view":"grid","isActiveOnly":true}')).toEqual({ view: 'terminal', isActiveOnly: true })
-    expect(parseActivityPrefs('{"view":"list","isActiveOnly":"yes"}')).toEqual({ view: 'list', isActiveOnly: false })
+    expect(parseActivityPrefs('{"view":"grid","isActiveOnly":true}')).toEqual({ view: 'terminal', isActiveOnly: true, isOutputWrapped: false })
+    expect(parseActivityPrefs('{"view":"list","isActiveOnly":"yes"}')).toEqual({ view: 'list', isActiveOnly: false, isOutputWrapped: false })
   })
 })

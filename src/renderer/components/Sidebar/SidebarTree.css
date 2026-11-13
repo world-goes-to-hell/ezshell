@@ -201,123 +201,62 @@
   }
 }
 
-/* The strip itself: the buttons and a "세션" marker. The tree is not drawn there: unlabelled
-   arrows and dots said nothing, and pointing at the rail opens the whole sidebar anyway. */
-.rail-session-summary {
+/* The strip itself shows state, not buttons: pointing at it opens the whole sidebar before a button
+   could be pressed (the buttons are on the open sidebar). No tree either: unlabelled arrows and
+   dots said nothing. */
+.rail-summary {
   display: none;
 }
 
-.sidebar.rail:not(.peek-open) .rail-session-summary {
+.sidebar.rail:not(.peek-open) .rail-summary {
   display: flex;
   flex: 1;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 18px;
   min-height: 0;
-  padding: 14px 0;
+  padding: 16px 0;
   color: var(--text-secondary);
   cursor: default;
 }
 
-.rail-session-label {
+.rail-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.rail-label {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.2em;
   writing-mode: vertical-rl;
 }
 
-.rail-session-count {
+/* Green: connected tabs, red: tabs whose connection was lost, amber: MCP requests in progress */
+.rail-count {
   min-width: 18px;
   padding: 1px 5px;
-  border: 1px solid var(--success);
+  border: 1px solid currentColor;
   border-radius: 999px;
-  color: var(--success);
   font-size: 11px;
   font-weight: 600;
   line-height: 14px;
   text-align: center;
 }
 
-.sidebar.rail:not(.peek-open) .session-list {
+.rail-count.is-connected { color: var(--success); }
+.rail-count.is-lost { color: var(--error-text, var(--error)); }
+.rail-count.is-busy { color: var(--warning); }
+
+.sidebar.rail:not(.peek-open) .session-list,
+.sidebar.rail:not(.peek-open) .sidebar-actions,
+.sidebar.rail:not(.peek-open) .sidebar-footer {
   display: none;
 }
 
 .sidebar.rail:not(.peek-open) .sidebar-header {
   justify-content: center;
   padding: 10px 0;
-}
-
-.sidebar.rail:not(.peek-open) .sidebar-actions {
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 0;
-}
-
-.btn-new-connection-compact,
-.btn-compact-action {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
-}
-
-.btn-new-connection-compact {
-  background: var(--accent-alpha);
-  color: var(--accent);
-}
-
-.btn-new-connection-compact:hover,
-.btn-compact-action:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.sidebar.rail:not(.peek-open) .session-list {
-  padding: 6px 0;
-  scrollbar-width: none;
-}
-
-.sidebar.rail:not(.peek-open) .session-list::-webkit-scrollbar {
-  display: none;
-}
-
-.sidebar.rail:not(.peek-open) .folder-contents {
-  padding-left: 0;
-}
-
-.sidebar.rail:not(.peek-open) .folder-header {
-  justify-content: center;
-  height: 18px;
-  padding: 0;
-}
-
-.sidebar.rail:not(.peek-open) .session-item {
-  justify-content: center;
-  height: 22px;
-  padding: 0;
-  border-radius: 0;
-}
-
-.sidebar.rail:not(.peek-open) .session-name,
-.sidebar.rail:not(.peek-open) .session-mcp-mark,
-.sidebar.rail:not(.peek-open) .session-tab-badges,
-.sidebar.rail:not(.peek-open) .folder-name,
-.sidebar.rail:not(.peek-open) .folder-count,
-.sidebar.rail:not(.peek-open) .folder-edit-input,
-.sidebar.rail:not(.peek-open) .folder-empty-drop-zone,
-.sidebar.rail:not(.peek-open) .session-list-empty {
-  display: none;
-}
-
-.sidebar.rail:not(.peek-open) .sidebar-footer {
-  flex-direction: column;
-  padding: 8px;
 }

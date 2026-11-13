@@ -146,7 +146,8 @@
   left: 0;
   right: 0;
   z-index: 50;
-  max-height: min(240px, 40vh);
+  /* Taller than for bookmarks alone: the local side also lists usual folders and drives */
+  max-height: min(360px, 55vh);
   overflow-y: auto;
   margin: 0;
   padding: 4px;
@@ -191,4 +192,42 @@
 
 .path-suggestion.is-current {
   color: var(--accent);
+}
+
+/* Usual folders and drives: icon, name, and the path after it */
+.path-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.path-suggestion-icon {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.path-suggestion-label {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.path-suggestion-icon + .path-suggestion-label {
+  font-family: var(--font-sans, inherit);
+}
+
+.path-suggestion-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+}
+
+.path-suggestions-header:not(:first-child) {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }

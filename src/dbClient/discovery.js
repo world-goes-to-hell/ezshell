@@ -1,10 +1,14 @@
-// Finds the databases a server runs, from its listening ports and process names. Runs one short
-// command on an exec channel of the tab's connection, once per connection. It never connects to a
-// database: an unfinished MySQL handshake counts towards max_connect_errors, which can block the host.
+// Finds the databases a server runs: from its listening ports and the processes that hold them,
+// and from the ports Docker publishes for its containers (a database in a container is mostly
+// published on another port than its usual one). Runs one short command on an exec channel of the
+// tab's connection, once per connection: it only reads lists (ss, ps, docker ps). It never connects
+// to a database: an unfinished MySQL handshake counts towards max_connect_errors, which can block the host.
 // Loaded by main.js at runtime (copied to out/main/src), so keep it CommonJS.
 
 // sh -c: the login shell may be csh, where 2>/dev/null does not work
-const DISCOVERY_COMMAND = "sh -c '(ss -ltnH || netstat -ltn) 2>/dev/null; echo ---ezshell---; ps -eo comm= 2>/dev/null'"
+// -p: the process of each listening port (only one's own without root; that is enough or it is simply missing).
+// docker ps is given three seconds: a daemon that hangs must not hold the answer up.
+const DISCOVERY_COMMAND = 'sh -c \'(ss -ltnpH || netstat -ltnp) 2>/dev/null; echo ---ezshell---; ps -eo comm= 2>/dev/null; echo ---ezshell---; (command -v docker >/dev/null 2>&1 && timeout 3 docker ps --format "{{.Ports}}|{{.Image}}|{{.Names}}") 2>/dev/null\''
 const SEPARATOR = '---ezshell---'
 const DISCOVERY_TIMEOUT_MS = 10000
 const MAX_OUTPUT_BYTES = 256 * 1024
@@ -18,7 +22,47 @@ const KNOWN_PORTS = {
   1433: 'mssql'
 }
 
-const SUPPORTED_ENGINES = new Set(['mysql', 'postgres', 'mssql'])
+const SUPPORTED_ENGINES = new Set(['mysql', 'postgres', 'mssql', 'oracle'])
+
+/** The engine a process belongs to; null for anything else */
+function engineOfProcess(name) {
+  if (name === 'mysqld' || name === 'mariadbd') return 'mysql'
+  if (name === 'postgres' || name === 'postmaster') return 'postgres'
+  if (name === 'tnslsnr') return 'oracle'
+  if (name === 'sqlservr') return 'mssql'
+  return null
+}
+
+/** The process that holds a listening port: ss prints users:(("name",pid=1,fd=3)), netstat "123/name" last */
+function listenerProcess(line) {
+  const ss = /users:\(\("([^"]+)"/.exec(line)
+  if (ss) return ss[1]
+  const netstat = /\s\d+\/([^\s/]+)\s*$/.exec(line)
+  return netstat ? netstat[1] : null
+}
+
+/**
+ * The ports Docker publishes, from `docker ps` lines ("0.0.0.0:51521->1521/tcp, :::51521->1521/tcp|image|name").
+ * A container port that is a database's usual one says which engine it is, whatever the host port.
+ */
+function dockerPorts(text) {
+  const found = new Map()
+  for (const line of text.split('\n')) {
+    const [ports, image = '', name = ''] = line.trim().split('|')
+    if (!ports) continue
+    for (const mapping of ports.split(',')) {
+      const match = /^\s*(\[[^\]]*\]|[0-9a-fA-F.:]*?):(\d{1,5})->(\d{1,5})\/tcp\s*$/.exec(mapping)
+      if (!match) continue
+      const engine = KNOWN_PORTS[Number(match[3])]
+      const port = Number(match[2])
+      if (!engine || port < 1 || port > 65535) continue
+      const host = match[1].replace(/^\[|\]$/g, '')
+      const entry = found.get(port) || { engine, hosts: [], image: image.toLowerCase(), container: name.slice(0, 80) }
+      found.set(port, { ...entry, hosts: [...entry.hosts, host] })
+    }
+  }
+  return found
+}
 
 const ENGINE_LABELS = { mysql: 'MySQL/MariaDB', postgres: 'PostgreSQL', oracle: 'Oracle', mssql: 'SQL Server' }
 
@@ -54,6 +98,11 @@ function engineLabel(engine, processes) {
   return ENGINE_LABELS[engine]
 }
 
+function dockerLabel(engine, image) {
+  if (engine === 'mysql') return /mariadb/.test(image) ? 'MariaDB' : /mysql|percona/.test(image) ? 'MySQL' : ENGINE_LABELS.mysql
+  return ENGINE_LABELS[engine]
+}
+
 function isEngineRunning(engine, processes) {
   if (engine === 'mysql') return processes.has('mysqld') || processes.has('mariadbd')
   if (engine === 'postgres') return processes.has('postgres') || processes.has('postmaster')
@@ -69,33 +118,48 @@ function isEngineRunning(engine, processes) {
  */
 function parseDiscovery(output) {
   const text = typeof output === 'string' ? output : ''
-  const at = text.indexOf(SEPARATOR)
-  const ports = at < 0 ? text : text.slice(0, at)
-  const psText = at < 0 ? '' : text.slice(at + SEPARATOR.length)
+  const [ports = '', psText = '', dockerText = ''] = text.split(SEPARATOR)
   const processes = new Set(psText.split('\n').map((name) => name.trim().split('/').pop()).filter(Boolean))
 
-  const hostsByPort = new Map()
+  // port -> { engine, hosts, isByProcess }: a usual port, or any port a database process listens on
+  const listening = new Map()
   for (const line of ports.split('\n')) {
     if (!/LISTEN/i.test(line)) continue
     const address = localAddress(line)
-    if (!address || !KNOWN_PORTS[address.port]) continue
-    hostsByPort.set(address.port, [...(hostsByPort.get(address.port) || []), address.host])
+    if (!address) continue
+    const byProcess = engineOfProcess(listenerProcess(line))
+    const engine = byProcess || KNOWN_PORTS[address.port]
+    if (!engine) continue
+    const entry = listening.get(address.port) || { engine, hosts: [], isByProcess: false }
+    listening.set(address.port, { engine: byProcess || entry.engine, hosts: [...entry.hosts, address.host], isByProcess: entry.isByProcess || Boolean(byProcess) })
   }
 
-  return [...hostsByPort.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([port, hosts]) => {
-      const engine = KNOWN_PORTS[port]
-      return {
-        engine,
-        label: engineLabel(engine, processes),
-        host: reachableHost(hosts),
-        port,
-        isLocalOnly: hosts.every((h) => isLoopback(h)),
-        isSupported: SUPPORTED_ENGINES.has(engine),
-        isConfirmed: isEngineRunning(engine, processes)
-      }
+  const found = new Map()
+  for (const [port, { engine, hosts, isByProcess }] of listening) {
+    found.set(port, {
+      engine,
+      label: engineLabel(engine, processes),
+      host: reachableHost(hosts),
+      port,
+      isLocalOnly: hosts.every((h) => isLoopback(h)),
+      isSupported: SUPPORTED_ENGINES.has(engine),
+      isConfirmed: isByProcess || isEngineRunning(engine, processes)
     })
+  }
+  // What Docker publishes says more than the port alone (the listener there is docker-proxy)
+  for (const [port, { engine, hosts, image, container }] of dockerPorts(dockerText)) {
+    found.set(port, {
+      engine,
+      label: dockerLabel(engine, image),
+      host: reachableHost(hosts),
+      port,
+      isLocalOnly: hosts.every((h) => isLoopback(h)),
+      isSupported: SUPPORTED_ENGINES.has(engine),
+      isConfirmed: true,
+      ...(container ? { container } : {})
+    })
+  }
+  return [...found.values()].sort((a, b) => a.port - b.port)
 }
 
 /** Runs the command on `conn` (ssh2 Client) and returns its stdout, at most 256KB, within 10 seconds. */

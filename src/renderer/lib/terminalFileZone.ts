@@ -149,10 +149,25 @@ export interface ZoneCommand {
   /** Buffer row of the command line */
   row: number
   base: ListingBase
+  /** The command prints a file list (isListing): only such output gets a border */
+  listing?: boolean
 }
 
 export interface ZoneBlock extends FileZone {
   base: ListingBase
+  listing: boolean
+}
+
+/**
+ * Whether the command prints a file list (`ls`, `ll`, `la` ..., also through `| grep`): the output
+ * a border is drawn around. Names in other output (`cat`, `grep -rn`, a log) can still be looked up,
+ * but a border there (`docker ps`) only suggests files that are not there.
+ */
+export function isListing(command: string | null): boolean {
+  if (!command || !command.trim()) return false
+  const stage = firstStageWords(command)
+  const words = stage && skipPrefixes(stage)
+  return Boolean(words && words[0] && LS_COMMANDS.has(words[0]))
 }
 
 /** The zone cut at each command line; rows before the first command are the current folder's */
@@ -160,10 +175,10 @@ export function zoneBlocks(zone: FileZone, commands: ZoneCommand[]): ZoneBlock[]
   const inside = commands.filter(c => c.row >= zone.start && c.row <= zone.end).sort((a, b) => a.row - b.row)
   const blocks: ZoneBlock[] = []
   if (inside.length === 0 || inside[0].row > zone.start) {
-    blocks.push({ start: zone.start, end: (inside[0]?.row ?? zone.end + 1) - 1, base: { kind: 'cwd' } })
+    blocks.push({ start: zone.start, end: (inside[0]?.row ?? zone.end + 1) - 1, base: { kind: 'cwd' }, listing: false })
   }
   inside.forEach((command, i) => {
-    blocks.push({ start: command.row, end: (inside[i + 1]?.row ?? zone.end + 1) - 1, base: command.base })
+    blocks.push({ start: command.row, end: (inside[i + 1]?.row ?? zone.end + 1) - 1, base: command.base, listing: command.listing === true })
   })
   return blocks
 }

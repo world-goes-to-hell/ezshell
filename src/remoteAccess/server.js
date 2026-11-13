@@ -137,6 +137,8 @@ const ERRORS = {
   'bad-code': '코드가 맞지 않습니다.',
   'unknown-device': '등록되지 않은 기기입니다. PC 의 ezShell 설정에서 다시 등록하세요.',
   'too-many': '등록할 수 있는 기기 수를 넘었습니다. PC 에서 쓰지 않는 기기를 해제하세요.',
+  'trust-expired': '하루가 지나 다시 인증이 필요합니다. 인증 앱의 코드를 입력하세요.',
+  'bad-ticket': '저장된 인증이 맞지 않습니다. 인증 앱의 코드를 입력하세요.',
   full: '접속한 기기가 너무 많습니다.',
   appLocked: 'PC 의 ezShell 이 잠겨 있습니다.',
   tooManyFailures: '여러 번 실패해서 연결을 끊었습니다. 잠시 뒤에 다시 시도하세요.'
@@ -267,6 +269,23 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
       }
     })
 
+    /**
+     * A device that has just proved itself (by a code, or by its remembered ticket) joins and is sent
+     * the session list. Every check that guards a sign-in guards both ways in here. Returns false when
+     * the connection was dropped (too many devices), so the caller stops.
+     */
+    function enter(device) {
+      if ([...clients].filter((c) => c.device).length >= MAX_CLIENTS) { drop(ERRORS.full); return false }
+      client.device = device
+      arm(IDLE_MS)
+      onChange()
+      // A question that was already being asked when the device came in
+      const asked = approvals ? approvals.current() : null
+      if (asked) client.askedAt.set(asked.id, now())
+      send({ type: 'ready', device: device.name, ...listSessions(), approvals: asked ? [forDevice(asked)] : [], push: pushInfo() })
+      return true
+    }
+
     /** A failed registration or sign-in: answered, counted, and the connection dropped when there are too many */
     function refuse(kind, code) {
       log(kind, { reason: code, from: remote })
@@ -369,15 +388,25 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
         if (message.type === 'signin') {
           const result = store.signIn(message.token, message.code)
           if (result.error) return refuse('signin-failed', result.error)
-          if ([...clients].filter((c) => c.device).length >= MAX_CLIENTS) return drop(ERRORS.full)
-          client.device = result.device
-          arm(IDLE_MS)
           log('signin', { device: result.device.name })
-          onChange()
-          // A question that was already being asked when the device came in
-          const asked = approvals ? approvals.current() : null
-          if (asked) client.askedAt.set(asked.id, now())
-          return send({ type: 'ready', device: result.device.name, ...listSessions(), approvals: asked ? [forDevice(asked)] : [], push: pushInfo() })
+          // Not asked to be remembered: drop any earlier ticket so the choice is honoured
+          if (message.remember !== true) store.forgetDevice(result.device.id)
+          if (!enter(result.device)) return
+          // The ticket is issued only once the device is in, and sent on its own: if the ticket were
+          // made first and enter() then failed (too many devices), a valid earlier ticket would be
+          // overwritten by one the device never received.
+          if (message.remember === true) {
+            const trust = store.rememberDevice(result.device.id)
+            if (trust) send({ type: 'trust', ticket: trust.ticket, expiresAt: trust.expiresAt })
+          }
+          return
+        }
+        if (message.type === 'resume') {
+          const result = store.resume(message.token, message.ticket)
+          // The day simply passed (or no ticket): ask for a code, and do not count it as a failure
+          if (result.error) return result.benign ? send({ type: 'error', code: 'trust-expired', message: ERRORS['trust-expired'] }) : refuse('signin-failed', result.error)
+          log('resume', { device: result.device.name })
+          return enter(result.device)
         }
         return drop()
       }

@@ -15,7 +15,7 @@ describe('parseDiscovery', () => {
     const found = parseDiscovery(`${SS}\n---ezshell---\nsystemd\nmysqld\npostgres\npostgres\n`)
     expect(found).toEqual([
       { engine: 'mysql', label: 'MySQL', host: '127.0.0.1', port: 3306, isLocalOnly: true, isSupported: true, isConfirmed: true },
-      { engine: 'oracle', label: 'Oracle', host: '10.0.0.5', port: 1521, isLocalOnly: false, isSupported: false, isConfirmed: false },
+      { engine: 'oracle', label: 'Oracle', host: '10.0.0.5', port: 1521, isLocalOnly: false, isSupported: true, isConfirmed: false },
       { engine: 'postgres', label: 'PostgreSQL', host: '127.0.0.1', port: 5432, isLocalOnly: false, isSupported: true, isConfirmed: true }
     ].sort((a, b) => a.port - b.port))
   })
@@ -91,5 +91,48 @@ describe('createDiscoveryCache', () => {
     expect((await cache.discover(first)).length).toBe(3)
     expect(await cache.discover(second)).toEqual([])
     expect(run).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('parseDiscovery: ports that are not the usual ones', () => {
+  const PS = 'systemd\ndockerd\ndocker-proxy\ntnslsnr\nmysqld'
+
+  it('finds a database Docker publishes on another port, by the container\'s port', () => {
+    const ss = [
+      'LISTEN 0 4096 0.0.0.0:51521 0.0.0.0:* users:(("docker-proxy",pid=2211,fd=4))',
+      'LISTEN 0 4096    [::]:51521    [::]:* users:(("docker-proxy",pid=2217,fd=4))',
+      'LISTEN 0 4096 0.0.0.0:55901 0.0.0.0:* users:(("docker-proxy",pid=2230,fd=4))'
+    ].join('\n')
+    const docker = [
+      '0.0.0.0:51521->1521/tcp, :::51521->1521/tcp, 0.0.0.0:55901->5901/tcp|oracle/database:12.2|neworacle',
+      '127.0.0.1:13306->3306/tcp|mariadb:10.11|shop-db',
+      '5432/tcp|postgres:16|not-published',
+      '0.0.0.0:8000-8010->8000-8010/tcp|nginx|web'
+    ].join('\n')
+    expect(parseDiscovery(`${ss}\n---ezshell---\n${PS}\n---ezshell---\n${docker}`)).toEqual([
+      { engine: 'mysql', label: 'MariaDB', host: '127.0.0.1', port: 13306, isLocalOnly: true, isSupported: true, isConfirmed: true, container: 'shop-db' },
+      { engine: 'oracle', label: 'Oracle', host: '127.0.0.1', port: 51521, isLocalOnly: false, isSupported: true, isConfirmed: true, container: 'neworacle' }
+    ])
+  })
+
+  it('finds a database on another port by the process that listens there', () => {
+    const ss = [
+      'LISTEN 0 151 127.0.0.1:13307 0.0.0.0:* users:(("mysqld",pid=901,fd=22))',
+      'LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=700,fd=3))',
+      'LISTEN 0 128 0.0.0.0:8080 0.0.0.0:* users:(("java",pid=800,fd=9))'
+    ].join('\n')
+    expect(parseDiscovery(`${ss}\n---ezshell---\nmysqld\nsshd\njava`)).toEqual([
+      { engine: 'mysql', label: 'MySQL', host: '127.0.0.1', port: 13307, isLocalOnly: true, isSupported: true, isConfirmed: true }
+    ])
+    const netstat = 'tcp        0      0 0.0.0.0:15432           0.0.0.0:*               LISTEN      1234/postgres'
+    expect(parseDiscovery(`${netstat}\n---ezshell---\npostgres`)).toEqual([
+      { engine: 'postgres', label: 'PostgreSQL', host: '127.0.0.1', port: 15432, isLocalOnly: false, isSupported: true, isConfirmed: true }
+    ])
+  })
+
+  it('reads only lists: the command connects to nothing and gives docker a time limit', () => {
+    expect(DISCOVERY_COMMAND).toContain('ss -ltnpH')
+    expect(DISCOVERY_COMMAND).toContain('timeout 3 docker ps')
+    expect(DISCOVERY_COMMAND).not.toMatch(/mysql |psql|sqlplus|nc |telnet|curl/)
   })
 })

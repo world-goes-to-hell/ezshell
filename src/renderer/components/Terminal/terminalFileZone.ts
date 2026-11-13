@@ -1,6 +1,6 @@
 import type { IDecoration, IDisposable, IMarker, Terminal } from 'xterm'
 import {
-  fileZone, listingBase, lookupName, visiblePart, zoneBlocks, zoneHasOutput,
+  fileZone, isListing, listingBase, lookupName, visiblePart, zoneBlocks, zoneHasOutput,
   type FileZone, type ListingBase, type ZoneBlock, type ZoneCommand
 } from '../../lib/terminalFileZone'
 import { extractCommand, readInputLine } from '../../lib/commandCapture'
@@ -65,7 +65,7 @@ export function attachFileZone(terminal: Terminal, sessionId: string): FileZoneC
   const cwdOf = () => useTerminalStore.getState().terminals.get(sessionId)?.currentPath
   let startMarker: IMarker | null = null
   let startLost = false
-  let commands: Array<{ marker: IMarker; base: ListingBase }> = []
+  let commands: Array<{ marker: IMarker; base: ListingBase; listing: boolean }> = []
   // Bumped on every folder change: a marker requested for an older folder is not set
   let generation = 0
   let drawn: Drawn[] = []
@@ -82,7 +82,7 @@ export function attachFileZone(terminal: Terminal, sessionId: string): FileZoneC
 
   const zoneCommands = (): ZoneCommand[] => commands
     .filter(c => !c.marker.isDisposed)
-    .map(c => ({ row: c.marker.line, base: c.base }))
+    .map(c => ({ row: c.marker.line, base: c.base, listing: c.listing }))
 
   /** Whether a block holds a line that is not a prompt; a block longer than what is checked has output */
   const hasOutput = (block: FileZone): boolean => {
@@ -136,7 +136,8 @@ export function attachFileZone(terminal: Terminal, sessionId: string): FileZoneC
     const viewportTop = terminal.buffer.active.viewportY
     // Off-screen blocks first, then the line reading: while output streams this runs every frame
     const visible = blocks
-      .filter(block => block.base.kind !== 'none')
+      // Only file lists get a border; names elsewhere are still looked up (lookup), just not framed
+      .filter(block => block.listing && block.base.kind !== 'none')
       .map(block => ({ block, part: visiblePart(block, viewportTop, terminal.rows) }))
       .filter(({ block, part }) => part !== null && hasOutput(block))
     const key = visible.map(({ block, part }) =>
@@ -198,7 +199,7 @@ export function attachFileZone(terminal: Terminal, sessionId: string): FileZoneC
         marker.dispose()
         return
       }
-      commands = [...commands.filter(c => !c.marker.isDisposed), { marker, base: listingBase(command) }]
+      commands = [...commands.filter(c => !c.marker.isDisposed), { marker, base: listingBase(command), listing: isListing(command) }]
       while (commands.length > MAX_COMMANDS) commands.shift()?.marker.dispose()
       schedule()
     })

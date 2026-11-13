@@ -107,3 +107,47 @@ describe('checkReadOnly: SQL Server', () => {
     expect(checkReadOnly('SELECT * FROM [orders', 'mssql')).toEqual({ ok: false, reason: expect.stringContaining('닫히지 않은') })
   })
 })
+
+describe('checkReadOnly: Oracle', () => {
+  const ok = (sql) => expect(checkReadOnly(sql, 'oracle'), sql).toEqual({ ok: true })
+  const refused = (sql) => expect(checkReadOnly(sql, 'oracle').ok, sql).toBe(false)
+
+  it('lets one reading statement through', () => {
+    ok('SELECT * FROM "SHOP"."ORDERS" WHERE ROWNUM <= 100;')
+    ok('WITH recent AS (SELECT id FROM orders WHERE created > SYSDATE - 7) SELECT COUNT(*) FROM recent')
+    ok("SELECT 'DELETE me', update_date, \"COMMENT\" FROM notes")
+  })
+
+  it('refuses everything that writes, ends the transaction or runs code', () => {
+    for (const sql of [
+      'DELETE FROM orders',
+      'UPDATE orders SET paid = 1',
+      'SELECT * FROM orders FOR UPDATE',
+      'CREATE TABLE t (id NUMBER)',
+      'DROP TABLE orders',
+      'TRUNCATE TABLE orders',
+      'COMMIT',
+      'BEGIN DELETE FROM orders; END;',
+      'CALL purge_orders()',
+      'WITH FUNCTION f RETURN NUMBER IS PRAGMA AUTONOMOUS_TRANSACTION; BEGIN DELETE FROM orders; COMMIT; RETURN 1; END; SELECT f FROM dual',
+      'ALTER SESSION SET CURRENT_SCHEMA = SYS',
+      'SELECT 1 FROM dual; SELECT 2 FROM dual'
+    ]) refused(sql)
+  })
+
+  it('refuses the packages that reach the network, files and other sessions', () => {
+    refused("SELECT UTL_HTTP.REQUEST('http://10.0.0.1/') FROM dual")
+    refused("SELECT dbms_xmlgen.getxml('select 1 from dual') FROM dual")
+    refused('SELECT sys.dbms_random.value FROM dual')
+  })
+
+  it('refuses the alternative quoting, which this check does not read', () => {
+    refused("SELECT q'[it's]' FROM dual")
+    refused("SELECT nq'{x}' FROM dual")
+    ok("SELECT faq'' FROM dual".replace("faq''", "'faq'"))
+  })
+
+  it('names the word in its message', () => {
+    expect(checkReadOnly('DROP TABLE orders', 'oracle').reason).toContain('DROP')
+  })
+})

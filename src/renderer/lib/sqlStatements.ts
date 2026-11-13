@@ -76,11 +76,13 @@ export function quoteIdentifier(name: string, engine: string): string {
 /** The rows of a table whose `column` holds one value; `literal` is already written as SQL (sqlLiteral) */
 export function lookupQuery(target: { schema: string; table: string; column: string }, literal: string, engine: string, limit = 100): string {
   const from = `${quoteIdentifier(target.schema, engine)}.${quoteIdentifier(target.table, engine)} WHERE ${quoteIdentifier(target.column, engine)} = ${literal}`
-  // SQL Server limits with TOP
+  // SQL Server limits with TOP, Oracle with ROWNUM (works on every version)
+  if (engine === 'oracle') return `SELECT * FROM ${from} AND ROWNUM <= ${limit};`
   return engine === 'mssql' ? `SELECT TOP ${limit} * FROM ${from};` : `SELECT * FROM ${from} LIMIT ${limit};`
 }
 
 export function previewQuery(schema: string, table: string, engine: string, limit = 100): string {
   const name = `${quoteIdentifier(schema, engine)}.${quoteIdentifier(table, engine)}`
+  if (engine === 'oracle') return `SELECT * FROM ${name} WHERE ROWNUM <= ${limit};`
   return engine === 'mssql' ? `SELECT TOP ${limit} * FROM ${name};` : `SELECT * FROM ${name} LIMIT ${limit};`
 }

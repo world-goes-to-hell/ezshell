@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
-import { RiAddFill, RiFolderFill, RiArrowLeftDoubleLine, RiPushpinLine, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill, RiListUnordered, RiClipboardFill } from 'react-icons/ri'
+import { RiAddFill, RiFolderFill, RiArrowLeftDoubleLine, RiPushpinLine, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill, RiListUnordered, RiClipboardFill, RiPlugLine } from 'react-icons/ri'
 import { motion } from 'framer-motion'
 import { SessionList } from './SessionList'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTerminalStore } from '../../stores/terminalStore'
+import { useMcpActivityStore } from '../../stores/mcpActivityStore'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { SPRINGS } from '../../lib/animation/config'
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
@@ -35,12 +36,19 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
   const { sidebarRef, isPeekOpen, peekHandlers } = useSidebarPeek(isFolded)
   // The rail shows the small buttons; the open sidebar (pinned or peeking) shows everything
   const isCompact = isFolded && !isPeekOpen
-  // The rail shows how many SSH tabs are connected instead of rows it cannot label
+  // The rail has no buttons (pointing at it opens the whole sidebar first): it shows the state of
+  // the SSH tabs and of MCP requests instead
   const connectedTabs = useTerminalStore(state => {
     let count = 0
     state.terminals.forEach(t => { if (t.connected && !t.db && !t.local) count++ })
     return count
   })
+  const lostTabs = useTerminalStore(state => {
+    let count = 0
+    state.terminals.forEach(t => { if (!t.connected && !t.db && !t.local) count++ })
+    return count
+  })
+  const mcpBusy = useMcpActivityStore(state => state.items.filter(item => item.state === 'running' || item.state === 'waiting').length)
   const [isAddingFolder, setIsAddingFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const reducedMotion = useReducedMotion()
@@ -149,30 +157,22 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
           />
         </div>
       )}
-      {isCompact && (
-        <div className="sidebar-actions">
-          <button className="btn-new-connection-compact" onClick={onNewConnection} title="새 연결" aria-label="새 연결">
-            <RiAddFill size={20} />
-          </button>
-          <button className="btn-compact-action" onClick={onOpenQuickConnect} title="빠른 연결" aria-label="빠른 연결">
-            <RiFlashlightFill size={16} />
-          </button>
-          <button className="btn-compact-action" onClick={handleAddFolder} title="새 폴더" aria-label="새 폴더">
-            <RiFolderAddFill size={16} />
-          </button>
-          {onImportSession && (
-            <button className="btn-compact-action" onClick={() => onImportSession()} title="텍스트로 세션 추가" aria-label="텍스트로 세션 추가">
-              <RiClipboardFill size={16} />
-            </button>
-          )}
-        </div>
-      )}
       {isFolded && (
-        // Stands in for the list on the folded rail; pointing at the rail opens the whole sidebar
-        <div className="rail-session-summary" aria-hidden="true" title={connectedTabs > 0 ? `세션 · 연결된 탭 ${connectedTabs}개` : '세션'}>
-          <RiListUnordered size={16} />
-          <span className="rail-session-label">세션</span>
-          {connectedTabs > 0 && <span className="rail-session-count">{connectedTabs}</span>}
+        // Stands in for the list and the buttons on the folded rail; pointing at it opens the whole sidebar
+        <div className="rail-summary" aria-hidden="true">
+          <div className="rail-group" title={`세션 · 연결된 탭 ${connectedTabs}개${lostTabs > 0 ? ` · 끊긴 탭 ${lostTabs}개` : ''}`}>
+            <RiListUnordered size={16} />
+            <span className="rail-label">세션</span>
+            {connectedTabs > 0 && <span className="rail-count is-connected">{connectedTabs}</span>}
+            {lostTabs > 0 && <span className="rail-count is-lost">{lostTabs}</span>}
+          </div>
+          {mcpBusy > 0 && (
+            <div className="rail-group" title={`MCP 요청 진행 중 ${mcpBusy}개`}>
+              <RiPlugLine size={16} />
+              <span className="rail-label">MCP</span>
+              <span className="rail-count is-busy">{mcpBusy}</span>
+            </div>
+          )}
         </div>
       )}
       <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} onImportSession={onImportSession} />

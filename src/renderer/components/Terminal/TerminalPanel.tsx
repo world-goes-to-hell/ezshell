@@ -9,7 +9,8 @@ import { SplitTerminal } from './SplitTerminal'
 import { TerminalSearch } from './TerminalSearch'
 import { PortForwardPanel } from './PortForwardPanel'
 import { ServerMonitor } from './ServerMonitor'
-import { RiFolderFill, RiUploadCloud2Fill, RiSplitCellsHorizontal, RiSplitCellsVertical, RiArrowLeftRightLine, RiPulseLine, RiHistoryLine } from 'react-icons/ri'
+import { RiFolderFill, RiUploadCloud2Fill, RiSplitCellsHorizontal, RiSplitCellsVertical, RiArrowLeftRightLine, RiPulseLine, RiHistoryLine, RiFolderTransferFill } from 'react-icons/ri'
+import { useSftpStore } from '../../stores/sftpStore'
 import { motion, AnimatePresence } from 'framer-motion'
 import { drawerVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
@@ -37,6 +38,8 @@ interface TerminalPanelProps {
 }
 
 export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: TerminalPanelProps) {
+  // The SFTP panel of this tab (was the "SFTP" button under the terminal); open per tab in the store
+  const isSftpOpen = useSftpStore(state => state.sessions.get(sessionId)?.isOpen === true)
   const terminalRef = useRef<HTMLDivElement>(null)
   const terminalInstance = useRef<Terminal | null>(null)
   const fitAddon = useRef<FitAddon | null>(null)
@@ -715,6 +718,16 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
             whileTap={reducedMotion ? undefined : { scale: 0.95 }}
           >
             <RiFolderFill size={16} />
+          </motion.button>
+          <motion.button
+            className={`terminal-header-btn ${isSftpOpen ? 'active' : ''}`}
+            onClick={(e) => { e.stopPropagation(); useSftpStore.getState().setOpen(sessionId, !isSftpOpen) }}
+            title={isSftpOpen ? 'SFTP 패널 닫기' : 'SFTP 패널 열기'}
+            aria-pressed={isSftpOpen}
+            whileHover={reducedMotion ? undefined : { scale: 1.1 }}
+            whileTap={reducedMotion ? undefined : { scale: 0.95 }}
+          >
+            <RiFolderTransferFill size={16} />
           </motion.button>
           <div className="terminal-header-divider" />
           <motion.button

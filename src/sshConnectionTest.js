@@ -3,6 +3,7 @@
 const fs = require('fs');
 const { Client } = require('ssh2');
 const { SSH_ALGORITHMS } = require('./sshAlgorithms.js');
+const { readPrivateKeyFile } = require('./localKeyPath.js');
 
 const DEFAULT_READY_TIMEOUT_MS = 20000;
 const DEFAULT_SSH_PORT = 22;
@@ -49,7 +50,8 @@ function buildAuthOptions({ authType, password, privateKeyPath, passphrase }, re
   if (!privateKeyPath) throw new ConnectionTestError(`${label}Private Key 파일이 선택되지 않았습니다.`);
   let privateKey;
   try {
-    privateKey = readFile(privateKeyPath);
+    // Local files only: a network path would hand the Windows credentials to that host
+    privateKey = readPrivateKeyFile(privateKeyPath, readFile);
   } catch (err) {
     throw new ConnectionTestError(`${label}Private Key 파일을 읽을 수 없습니다.`, err.message);
   }
