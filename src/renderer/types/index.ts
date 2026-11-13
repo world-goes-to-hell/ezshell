@@ -1,5 +1,5 @@
 import type { RootSwitchOutcome } from '../lib/rootSwitch'
-import type { DbCredentials, DbDatabase, DbEndpoint, DbQueryResult, DbResult, DbSchema, DbServerInfo, DbTable, DbTableColumn, DbWindowInfo, DiscoveredDb } from './db'
+import type { DbColumnSource, DbCredentials, DbDatabase, DbEndpoint, DbQueryResult, DbRelations, DbResult, DbSchema, DbServerInfo, DbTable, DbTableColumn, DbWindowInfo, DiscoveredDb } from './db'
 
 export interface SessionConfig {
   id: string
@@ -322,6 +322,32 @@ export type McpSetupResult =
   | { success: false; error?: string; cancelled?: boolean }
 
 // Extend Window interface for electronAPI
+/** A QR code as its cells, drawn by the page (no image URL: the page's CSP allows none) */
+export interface QrMatrix {
+  size: number
+  /** size * size cells, row by row; 1 = dark */
+  cells: number[]
+}
+
+export interface RemoteAccessDevice {
+  id: string
+  name: string
+  createdAt?: number
+  lastSeenAt?: number | null
+}
+
+export interface RemoteAccessStatus {
+  success: true
+  enabled: boolean
+  isRunning: boolean
+  hasTailscale: boolean
+  /** The address a phone opens, when it is listening */
+  url: string | null
+  devices: RemoteAccessDevice[]
+  connected: RemoteAccessDevice[]
+  error: string | null
+}
+
 declare global {
   interface Window {
     electronAPI: {
@@ -402,6 +428,14 @@ declare global {
       localShellClose?: (id: string) => void
       onLocalShellData?: (callback: (data: { id: string; data: string }) => void) => () => void
       onLocalShellExit?: (callback: (data: { id: string; exitCode: number | null }) => void) => () => void
+      remoteAccessStatus?: () => Promise<RemoteAccessStatus | { success: false; error: string }>
+      remoteAccessSetEnabled?: (isEnabled: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
+      remoteAccessPairing?: () => Promise<{ success: true; url: string; expiresAt: number; qr: QrMatrix } | { success: false; error: string }>
+      remoteAccessAuthenticator?: () => Promise<{ success: true; secret: string; qr: QrMatrix } | { success: false; error: string }>
+      remoteAccessRevoke?: (deviceId: string) => Promise<RemoteAccessStatus | { success: false; error: string }>
+      onRemoteAccessChanged?: (callback: () => void) => () => void
+      /** Saves an exported query result where the user picks (text, or the bytes of a spreadsheet file) */
+      saveExportFile?: (defaultName: string, extension: string, data: string | Uint8Array) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
       saveTerminalOutput?: (defaultName: string, text: string) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
       localRename: (oldPath: string, newPath: string) => Promise<LocalFileOpResult>
       localMkdir: (dirPath: string) => Promise<LocalFileOpResult>
@@ -444,6 +478,10 @@ declare global {
       dbCancel?: (dbId: string) => Promise<DbResult<{ cancelled: boolean }>>
       dbSchemas?: (dbId: string, database: string) => Promise<DbResult<{ schemas: DbSchema[]; defaultSchema: string | null }>>
       dbTables?: (dbId: string, database: string, schema: string) => Promise<DbResult<{ tables: DbTable[] }>>
+      /** CREATE statements of a table, or of every table of a schema when `table` is left out */
+      dbDdl?: (dbId: string, database: string, schema: string, table?: string) => Promise<DbResult<{ ddl: string; tableCount: number; isCut: boolean }>>
+      /** Foreign keys of result columns, one entry per source sent */
+      dbRelations?: (dbId: string, sources: DbColumnSource[]) => Promise<DbResult<{ relations: DbRelations[] }>>
       dbColumns?: (dbId: string, database: string, schema: string, table: string) => Promise<DbResult<{ columns: DbTableColumn[] }>>
 
       // Terminal Window

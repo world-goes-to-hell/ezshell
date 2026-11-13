@@ -19,6 +19,8 @@ interface Options {
   getCwd: () => string | undefined
   /** The tab's name, shown in the title of a file window opened from here */
   getSessionName: () => string
+  /** Whether a name on a buffer row (0-based) may be looked up (terminalFileZone: relative names only in the zone) */
+  allowsName?: (name: string, row: number) => boolean
 }
 
 /** Ctrl+click: what one would most likely do with it */
@@ -39,7 +41,7 @@ const hintFor = (target: TerminalTarget): string =>
  * (or Ctrl+click) does something with them. The server is asked only about the line the pointer
  * rests on (one SFTP stat per word, remembered for a while), never about the whole screen.
  */
-export function attachFileLinks(terminal: Terminal, { sessionId, getCwd, getSessionName }: Options): IDisposable {
+export function attachFileLinks(terminal: Terminal, { sessionId, getCwd, getSessionName, allowsName }: Options): IDisposable {
   let latest = 0
   const element = terminal.element
 
@@ -57,6 +59,8 @@ export function attachFileLinks(terminal: Terminal, { sessionId, getCwd, getSess
       const words = wordsInCells(cells)
         .map(word => ({ ...word, name: cleanName(word.text) }))
         .filter((word): word is typeof word & { name: string } => word.name !== null && looksLikeName(word.name))
+        // A relative name printed before the last cd belongs to another folder: not asked about
+        .filter(word => !allowsName || allowsName(word.name, lineNumber - 1))
         .slice(0, MAX_WORDS_PER_LINE)
       if (words.length === 0) return callback(undefined)
 

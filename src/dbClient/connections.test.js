@@ -271,3 +271,37 @@ describe('registerDbIpc', () => {
     expect(result.error).not.toContain('secret')
   })
 })
+
+describe('DDL and foreign keys', () => {
+  async function opened() {
+    const made = setup()
+    made.session.ddl = vi.fn().mockResolvedValue({ ddl: 'CREATE TABLE t ();\n', tableCount: 1, isCut: false })
+    made.session.relations = vi.fn().mockImplementation(async (sources) => sources.map(() => ({ to: [], from: [] })))
+    const { dbId } = await made.connections.open(REQUEST)
+    made.connections.attach(dbId, 7)
+    return { ...made, dbId }
+  }
+
+  it('reads the DDL of a table or a schema of a listed database only', async () => {
+    const { connections, session, dbId } = await opened()
+    await expect(connections.ddl(7, dbId, 'shop', 'shop', 'orders')).resolves.toMatchObject({ tableCount: 1 })
+    expect(session.ddl).toHaveBeenLastCalledWith('shop', 'shop', 'orders')
+    await connections.ddl(7, dbId, 'shop', 'shop')
+    expect(session.ddl).toHaveBeenLastCalledWith('shop', 'shop', null)
+    await expect(connections.ddl(7, dbId, 'elsewhere', 'shop', 'orders')).rejects.toThrow('목록에 없습니다')
+    expect(() => connections.ddl(7, dbId, 'shop', '', 'orders')).toThrow('올바르지 않습니다')
+    expect(() => connections.ddl(7, dbId, 'shop', 'shop', 'x'.repeat(200))).toThrow('올바르지 않습니다')
+    expect(() => connections.ddl(8, dbId, 'shop', 'shop', 'orders')).toThrow('접속 정보가 없습니다')
+  })
+
+  it('passes on only clean column sources', async () => {
+    const { connections, session, dbId } = await opened()
+    await connections.relations(7, dbId, [{ tableId: 16385, columnId: 2, extra: 'x' }, { schema: 'shop', table: 'orders', column: 'id', more: 1 }])
+    expect(session.relations).toHaveBeenCalledWith([{ tableId: 16385, columnId: 2 }, { schema: 'shop', table: 'orders', column: 'id' }])
+    await expect(connections.relations(7, dbId, [])).resolves.toEqual({ relations: [] })
+    for (const bad of [null, 'x', [{ tableId: -1, columnId: 1 }], [{ tableId: 1.5, columnId: 1 }], [{ schema: 'a', table: '', column: 'c' }], [{}], new Array(301).fill({ tableId: 1, columnId: 1 })]) {
+      expect(() => connections.relations(7, dbId, bad), JSON.stringify(bad)?.slice(0, 40)).toThrow('올바르지 않습니다')
+    }
+    expect(session.relations).toHaveBeenCalledTimes(1)
+  })
+})

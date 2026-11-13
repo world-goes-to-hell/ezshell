@@ -7,8 +7,19 @@
 const READ_KEYWORDS = {
   // USE only changes the default database of this connection
   mysql: new Set(['SELECT', 'WITH', 'SHOW', 'DESC', 'DESCRIBE', 'EXPLAIN', 'TABLE', 'VALUES', 'USE']),
-  postgres: new Set(['SELECT', 'WITH', 'SHOW', 'EXPLAIN', 'TABLE', 'VALUES'])
+  postgres: new Set(['SELECT', 'WITH', 'SHOW', 'EXPLAIN', 'TABLE', 'VALUES']),
+  mssql: new Set(['SELECT', 'WITH'])
 }
+
+// SQL Server cannot keep a session read-only, and its statements need no semicolon between them
+// ("SELECT 1 DELETE FROM t" is two statements). So these words are refused anywhere outside strings
+// and quoted names: everything that writes, runs code, or ends the transaction the driver rolls back.
+const MSSQL_BLOCKED_WORDS = new Set([
+  'INTO', 'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TRUNCATE', 'DROP', 'ALTER', 'CREATE',
+  'EXEC', 'EXECUTE', 'GRANT', 'REVOKE', 'DENY', 'BACKUP', 'RESTORE', 'DBCC', 'SHUTDOWN', 'KILL', 'RECONFIGURE',
+  'BULK', 'WAITFOR', 'USE', 'SET', 'DECLARE', 'BEGIN', 'COMMIT', 'ROLLBACK', 'SAVE', 'GO', 'PRINT', 'RAISERROR', 'THROW',
+  'OPENROWSET', 'OPENQUERY', 'OPENDATASOURCE'
+])
 
 // Function names (upper case) refused anywhere in the query, quoted or schema-qualified.
 // A read-only transaction does not stop these: they reach other sessions, files or server settings.
@@ -38,6 +49,7 @@ const MESSAGES = {
   outfile: 'INTO OUTFILE / DUMPFILE 은 서버에 파일을 만들므로 실행할 수 없습니다.',
   executableComment: '실행되는 주석(/*! ... */)은 쓸 수 없습니다.',
   blockedFunction: (name) => `${name.toLowerCase()} 함수는 다른 세션·서버 파일·설정에 영향을 줄 수 있어 실행할 수 없습니다.`,
+  mssqlWord: (word) => `SQL Server 접속에서는 ${word} 를 쓸 수 없습니다 (조회만 됩니다). 이름으로 쓰려면 [${word.toLowerCase()}] 처럼 대괄호로 감싸세요.`,
   unclosed: '닫히지 않은 따옴표나 주석이 있습니다.'
 }
 
@@ -86,7 +98,7 @@ function scan(sql, engine) {
       const isEscapeString = engine === 'postgres' && c === "'" && /[Ee]/.test(sql[i - 1] || '') && !/[\w$]/.test(sql[i - 2] || '')
       const end = closingQuote(sql, i, c, engine, isEscapeString)
       if (end < 0) return result(false)
-      const isIdentifier = c === '`' || (c === '"' && engine === 'postgres')
+      const isIdentifier = c === '`' || (c === '"' && (engine === 'postgres' || engine === 'mssql'))
       if (isIdentifier) names.push(sql.slice(i + 1, end).split(c + c).join(c).toUpperCase())
       hasContent = true
       i = end + 1
@@ -96,6 +108,14 @@ function scan(sql, engine) {
       if (end < 0) return result(false)
       hasContent = true
       i = end + tag.length
+    } else if (c === '[' && engine === 'mssql') {
+      // [name], with ]] for a bracket inside
+      let end = i + 1
+      while (end < n && !(sql[end] === ']' && sql[end + 1] !== ']')) end += sql[end] === ']' ? 2 : 1
+      if (end >= n) return result(false)
+      names.push(sql.slice(i + 1, end).split(']]').join(']').toUpperCase())
+      hasContent = true
+      i = end + 1
     } else if (c === ';') {
       endStatement()
       i++
@@ -155,6 +175,13 @@ function checkReadOnly(sql, engine) {
         return { ok: false, reason: MESSAGES.outfile }
       }
     }
+  }
+  if (engine === 'mssql') {
+    const word = words.find((w) => MSSQL_BLOCKED_WORDS.has(w))
+    if (word) return { ok: false, reason: MESSAGES.mssqlWord(word) }
+    // Extended and system procedures reach the server itself
+    const procedure = names.find((name) => /^(XP|SP)_/.test(name))
+    if (procedure) return { ok: false, reason: MESSAGES.blockedFunction(procedure) }
   }
   const blocked = blockedFunction(names, engine)
   if (blocked) return { ok: false, reason: MESSAGES.blockedFunction(blocked) }

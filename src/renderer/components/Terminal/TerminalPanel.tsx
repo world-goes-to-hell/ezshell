@@ -22,6 +22,7 @@ import { ConnectionLostOverlay } from './ConnectionLostOverlay'
 import { useTerminalContextMenu } from './useTerminalContextMenu'
 import { registerTerminalPane } from '../../lib/terminalPanes'
 import { attachFileLinks } from './terminalFileLinks'
+import { attachFileZone } from './terminalFileZone'
 import 'xterm/css/xterm.css'
 import { SerializeAddon } from 'xterm-addon-serialize'
 import { registerTerminalSerializer, setPendingSnapshot, takePendingSnapshot, SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
@@ -240,9 +241,12 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
 
       term.open(terminalRef.current)
       const unregister = registerTerminalPane(terminalRef.current, term)
+      // The output since the last folder change is bordered; relative names count only inside it
+      const fileZone = attachFileZone(term, sessionId)
       // File and folder names under the pointer are underlined (right-click offers their actions)
       const fileLinks = attachFileLinks(term, {
         sessionId,
+        allowsName: fileZone.allows,
         getCwd: () => useTerminalStore.getState().terminals.get(sessionId)?.currentPath,
         getSessionName: () => {
           const tab = useTerminalStore.getState().terminals.get(sessionId)
@@ -251,6 +255,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       })
       unregisterPane = () => {
         fileLinks.dispose()
+        fileZone.dispose()
         unregister()
       }
       disableCopyOnSelect = enableCopyOnSelect(term)

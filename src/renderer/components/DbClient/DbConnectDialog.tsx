@@ -1,9 +1,9 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiCheckboxCircleLine, RiDatabase2Line, RiDeleteBinLine, RiLoader4Line, RiPlugLine, RiShieldCheckLine } from 'react-icons/ri'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTerminalStore } from '../../stores/terminalStore'
-import { DEFAULT_PORTS, endpointProblem, removeSavedConnection, upsertSavedConnection } from '../../lib/dbChoices'
+import { DEFAULT_PORTS, endpointProblem, isConnectable, removeSavedConnection, upsertSavedConnection, type ConnectableEngine } from '../../lib/dbChoices'
 import type { DbCredentials, DbEndpoint, SavedDbConnection } from '../../types/db'
 
 export interface DbConnectTarget {
@@ -18,9 +18,16 @@ export interface DbConnectTarget {
   saved: SavedDbConnection | null
 }
 
-type Engine = 'mysql' | 'postgres'
+type Engine = ConnectableEngine
 type Busy = null | 'test' | 'connect' | 'save'
 type Outcome = { kind: 'error'; text: string } | { kind: 'ok'; text: string } | null
+
+/** What the dialog says while it works (a login through the tunnel can take several seconds) */
+const BUSY_TEXT: Record<Exclude<Busy, null>, string> = {
+  connect: 'DB 에 접속하는 중입니다. SSH 연결로 터널을 열고 로그인합니다.',
+  test: '연결을 확인하는 중입니다.',
+  save: '저장하는 중입니다.'
+}
 
 interface DbConnectDialogProps {
   target: DbConnectTarget
@@ -35,7 +42,7 @@ interface DbConnectDialogProps {
 export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
   const { saved, endpoint } = target
   const isTyped = endpoint === null
-  const [engine, setEngine] = useState<Engine>(endpoint?.engine === 'postgres' ? 'postgres' : 'mysql')
+  const [engine, setEngine] = useState<Engine>(isConnectable(endpoint?.engine) ? endpoint.engine : 'mysql')
   const [host, setHost] = useState(endpoint?.host ?? '127.0.0.1')
   const [port, setPort] = useState(String(endpoint?.port ?? DEFAULT_PORTS.mysql))
   const [label, setLabel] = useState(saved?.label ?? '')
@@ -48,6 +55,15 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
   const [isSaving, setIsSaving] = useState(Boolean(session))
   const [busy, setBusy] = useState<Busy>(null)
   const [outcome, setOutcome] = useState<Outcome>(null)
+  // Seconds the current work has taken, shown once it is more than a moment
+  const [busySeconds, setBusySeconds] = useState(0)
+  useEffect(() => {
+    setBusySeconds(0)
+    if (busy === null) return
+    const startedAt = Date.now()
+    const timer = window.setInterval(() => setBusySeconds(Math.floor((Date.now() - startedAt) / 1000)), 500)
+    return () => window.clearInterval(timer)
+  }, [busy])
 
   const changeEngine = (next: Engine): void => {
     if (port === String(DEFAULT_PORTS[engine])) setPort(String(DEFAULT_PORTS[next]))
@@ -120,23 +136,34 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
     if (!request) return
     setBusy('connect')
     setOutcome(null)
-    const result = await window.electronAPI.dbOpen?.(target.sessionId, target.sessionName, request.chosen, request.credentials, 'tab')
-    setBusy(null)
+    let result: Awaited<ReturnType<NonNullable<typeof window.electronAPI.dbOpen>>> | undefined
+    try {
+      result = await window.electronAPI.dbOpen?.(target.sessionId, target.sessionName, request.chosen, request.credentials, 'tab')
+    } catch (error) {
+      setBusy(null)
+      setOutcome({ kind: 'error', text: error instanceof Error ? error.message : String(error) })
+      return
+    }
     if (!result) {
+      setBusy(null)
       setOutcome({ kind: 'error', text: '앱을 다시 시작한 뒤에 사용할 수 있습니다.' })
       return
     }
     if (!result.success) {
+      setBusy(null)
       setOutcome({ kind: 'error', text: result.error })
       return
     }
     if (result.dbId) openDbTab(result.dbId, `${result.info.product} · ${request.credentials.database || request.credentials.user}`, request.chosen.host, request.credentials.user)
-    if (session && isSaving) {
-      await storeAccounts(upsertSavedConnection(session.dbConnections ?? [], accountOf(request.chosen, request.credentials)))
-    } else if (session && saved && !isSaving) {
-      await storeAccounts(removeSavedConnection(session.dbConnections ?? [], saved.id))
+    try {
+      if (session && isSaving) {
+        await storeAccounts(upsertSavedConnection(session.dbConnections ?? [], accountOf(request.chosen, request.credentials)))
+      } else if (session && saved && !isSaving) {
+        await storeAccounts(removeSavedConnection(session.dbConnections ?? [], saved.id))
+      }
+    } finally {
+      onClose()
     }
-    onClose()
   }
 
   /** A tab next to the current one, in the pane that has the focus (like a new SSH tab) */
@@ -170,13 +197,15 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
             <RiShieldCheckLine size={15} aria-hidden="true" />
             <span>이 탭의 SSH 연결을 거쳐 <strong>읽기 전용</strong>으로 접속합니다. DB 서버가 쓰기를 막고, 쿼리는 30초·1,000행까지입니다.</span>
           </p>
-          <form onSubmit={(e) => void connect(e)}>
+          <form onSubmit={(e) => void connect(e)} aria-busy={isBusy}>
+            <fieldset className="db-connect-fields" disabled={isBusy}>
             <div className="form-row">
               <div className="form-group flex-1">
                 <label htmlFor="db-engine">종류</label>
                 <select id="db-engine" value={engine} disabled={!isTyped} onChange={(e) => changeEngine(e.target.value as Engine)}>
                   <option value="mysql">MySQL / MariaDB</option>
                   <option value="postgres">PostgreSQL</option>
+                  <option value="mssql">SQL Server</option>
                 </select>
               </div>
               <div className="form-group flex-1">
@@ -207,7 +236,7 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
             <div className="form-group">
               <label htmlFor="db-database">기본 DB (선택)</label>
               <input id="db-database" value={database} onChange={(e) => setDatabase(e.target.value)} spellCheck={false}
-                placeholder={engine === 'postgres' ? '비우면 postgres DB · 접속 뒤 바꿀 수 있음' : '비우면 접속 뒤 고를 수 있음'} />
+                placeholder={engine === 'postgres' ? '비우면 postgres DB · 접속 뒤 바꿀 수 있음' : engine === 'mssql' ? '비우면 계정의 기본 DB · 접속 뒤 바꿀 수 있음' : '비우면 접속 뒤 고를 수 있음'} />
             </div>
             <div className="form-group checkbox-group">
               <label>
@@ -215,7 +244,15 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
                 <span>{session ? '접속할 때 이 세션에 저장 (비밀번호 포함, 세션 파일과 함께 암호화)' : '저장한 세션에서만 계정을 저장할 수 있습니다'}</span>
               </label>
             </div>
-            {outcome && (
+            </fieldset>
+            {busy && (
+              <p className="db-connect-progress" role="status">
+                <RiLoader4Line className="spinning" size={16} aria-hidden="true" />
+                <span className="db-connect-progress-text">{BUSY_TEXT[busy]}</span>
+                {busySeconds >= 2 && <span className="db-connect-progress-time">{busySeconds}초</span>}
+              </p>
+            )}
+            {outcome && !busy && (
               <p className={outcome.kind === 'ok' ? 'db-connect-ok' : 'db-connect-error'} role={outcome.kind === 'ok' ? 'status' : 'alert'}>
                 {outcome.kind === 'ok' && <RiCheckboxCircleLine size={14} aria-hidden="true" />} {outcome.text}
               </p>

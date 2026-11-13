@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  RiArrowDownSLine, RiArrowRightSLine, RiDatabase2Line, RiEyeLine, RiFolderLine, RiKey2Line, RiPlayLine, RiRefreshLine, RiTableLine
+  RiArrowDownSLine, RiArrowRightSLine, RiDatabase2Line, RiEyeLine, RiFolderLine, RiFileCodeLine, RiKey2Line, RiPlayLine, RiRefreshLine, RiTableLine
 } from 'react-icons/ri'
 import { SchemaCountMenu, TreeFilterMenu } from './TreeFilterMenu'
 import { isDatabaseShown, isSchemaShown, type TreeFilter } from '../../lib/dbTreeFilter'
 import type { SerialQueue } from '../../lib/serialQueue'
 import type { DbDatabase, DbSchema, DbTable, DbTableColumn } from '../../types/db'
+import type { ConnectableEngine } from '../../lib/dbChoices'
 
 type Loaded<T> = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; items: T }
 
 interface DatabaseTreeProps {
   dbId: string
-  engine: 'mysql' | 'postgres'
+  engine: ConnectableEngine
   queue: SerialQueue
   /** False while a query runs: nothing new is read then */
   isIdle: boolean
@@ -27,6 +28,10 @@ interface DatabaseTreeProps {
   onSwitch: (database: string) => void
   onPreview: (database: string, schema: string, table: string) => void
   onInsert: (text: string) => void
+  /** Copy the CREATE statements of a table, or of a whole schema when no table is given */
+  onCopyDdl: (database: string, schema: string, table?: string) => void
+  /** Width in pixels (the handle beside the tree changes it) */
+  width: number
 }
 
 const key = (...parts: string[]): string => parts.join('\u0000')
@@ -126,11 +131,16 @@ export function DatabaseTree(props: DatabaseTreeProps) {
             <li key={table.name} role="treeitem" aria-expanded={isOpen}>
               <div className="db-tree-line">
                 <button type="button" className="db-tree-row is-table" style={{ paddingLeft: 8 + depth * 14 }}
+                  data-ddl-database={database} data-ddl-schema={schema} data-ddl-table={table.name}
                   onClick={() => { if (toggle(key('t', id))) void loadColumns(database, schema, table.name) }}
                   onDoubleClick={() => props.onInsert(table.name)}>
                   {isOpen ? <RiArrowDownSLine size={14} /> : <RiArrowRightSLine size={14} />}
                   {table.kind === 'view' ? <RiEyeLine size={14} className="db-tree-icon" /> : <RiTableLine size={14} className="db-tree-icon" />}
                   <span className="db-tree-name">{table.name}</span>
+                </button>
+                <button type="button" className="db-icon-button db-tree-preview" disabled={!isIdle}
+                  onClick={() => props.onCopyDdl(database, schema, table.name)} title="DDL 복사 (Ctrl+Shift+C)" aria-label={`${table.name} DDL 복사`}>
+                  <RiFileCodeLine size={13} />
                 </button>
                 <button type="button" className="db-icon-button db-tree-preview" disabled={!isIdle}
                   onClick={() => props.onPreview(database, schema, table.name)} title="처음 100행 보기" aria-label={`${table.name} 처음 100행 보기`}>
@@ -171,12 +181,17 @@ export function DatabaseTree(props: DatabaseTreeProps) {
             <li key={schema.name} role="treeitem" aria-expanded={isOpen}>
               <div className="db-tree-line">
                 <button type="button" className={`db-tree-row${schema.isSystem ? ' is-system' : ''}${isDefault ? ' is-current' : ''}`} style={{ paddingLeft: 22 }}
+                  data-ddl-database={database} data-ddl-schema={schema.name}
                   onClick={() => { if (toggle(id)) void loadTables(database, schema.name) }}
                   onDoubleClick={() => { if (!isDefault) props.onSetSchema(database, schema.name) }}
                   title={isDefault ? '기본 스키마: 테이블 이름만 써도 이 스키마에서 찾습니다' : '두 번 누르면 기본 스키마로 정합니다 (테이블 이름만 써도 됨)'}>
                   {isOpen ? <RiArrowDownSLine size={14} /> : <RiArrowRightSLine size={14} />}
                   <RiFolderLine size={14} className="db-tree-icon is-schema" />
                   <span className="db-tree-name">{schema.name}</span>
+                </button>
+                <button type="button" className="db-icon-button db-tree-preview" disabled={!isIdle}
+                  onClick={() => props.onCopyDdl(database, schema.name)} title="스키마 전체 DDL 복사 (Ctrl+Shift+C)" aria-label={`${schema.name} 스키마 DDL 복사`}>
+                  <RiFileCodeLine size={13} />
                 </button>
                 {isDefault && <span className="db-tree-tag">기본</span>}
               </div>
@@ -188,10 +203,21 @@ export function DatabaseTree(props: DatabaseTreeProps) {
     )
   }
 
+  // Ctrl+Shift+C on the table or schema that has the focus copies its DDL (DataGrip's key);
+  // Ctrl+Shift+V does the same, as it was asked for
+  const onTreeKey = (event: React.KeyboardEvent): void => {
+    if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || !['c', 'v'].includes(event.key.toLowerCase())) return
+    const row = (event.target as HTMLElement).closest<HTMLElement>('[data-ddl-schema]')
+    if (!row) return
+    event.preventDefault()
+    event.stopPropagation()
+    props.onCopyDdl(row.dataset.ddlDatabase ?? '', row.dataset.ddlSchema ?? '', row.dataset.ddlTable)
+  }
+
   const shownDatabases = databases.status === 'ready' ? databases.items.filter(d => isDatabaseShown(filter, d)) : []
 
   return (
-    <nav className="db-tree" aria-label="데이터베이스">
+    <nav className="db-tree" aria-label="데이터베이스" style={{ width: props.width }} onKeyDown={onTreeKey}>
       <div className="db-tree-header">
         <span>데이터베이스</span>
         <div className="db-tree-actions">
@@ -214,6 +240,7 @@ export function DatabaseTree(props: DatabaseTreeProps) {
               <li key={database.name} role="treeitem" aria-expanded={isOpen}>
                 <div className="db-tree-line">
                   <button type="button" className={`db-tree-row is-database${isCurrent ? ' is-current' : ''}${database.isSystem ? ' is-system' : ''}`}
+                    {...(engine === 'mysql' ? { 'data-ddl-database': database.name, 'data-ddl-schema': database.name } : {})}
                     onClick={() => openDatabase(database.name)}
                     onDoubleClick={() => { if (!isCurrent) props.onSwitch(database.name) }}
                     title={isCurrent ? '쿼리를 실행하는 DB' : '두 번 누르면 이 DB 에서 쿼리를 실행합니다'}>
@@ -221,7 +248,7 @@ export function DatabaseTree(props: DatabaseTreeProps) {
                     <RiDatabase2Line size={14} className="db-tree-icon is-db" />
                     <span className="db-tree-name">{database.name}</span>
                   </button>
-                  {engine === 'postgres' && (
+                  {engine !== 'mysql' && (
                     <SchemaCountMenu database={database.name} loaded={loadedSchemas} filter={filter}
                       onFilterChange={props.onFilterChange} onOpen={() => void loadSchemas(database.name)} />
                   )}

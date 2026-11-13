@@ -3,12 +3,13 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
 import { motion, AnimatePresence } from 'framer-motion'
 import { modalOverlayVariants, modalContentVariants } from '../../lib/animation/variants'
-import { RiCloseFill, RiSettings3Fill, RiPaletteFill, RiKeyboardLine, RiDatabaseLine, RiTerminalBoxLine, RiPlugLine } from 'react-icons/ri'
+import { RiCloseFill, RiSettings3Fill, RiPaletteFill, RiKeyboardLine, RiDatabaseLine, RiTerminalBoxLine, RiPlugLine, RiSmartphoneLine } from 'react-icons/ri'
 import { ThemeSelector } from './ThemeSelector'
 import { ShortcutsPanel } from './ShortcutsPanel'
 import { SessionBackup } from './SessionBackup'
 import { FontSizeControl } from './FontSizeControl'
 import { McpSettings } from '../Mcp/McpSettings'
+import { RemoteAccessSettings } from '../RemoteAccess/RemoteAccessSettings'
 import '../../styles/settings.css'
 
 interface SettingsModalProps {
@@ -74,6 +75,10 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                     <Tabs.Trigger value="mcp" className="settings-tab-trigger">
                       <RiPlugLine size={18} />
                       MCP
+                    </Tabs.Trigger>
+                    <Tabs.Trigger value="remote" className="settings-tab-trigger">
+                      <RiSmartphoneLine size={18} />
+                      원격 접속
                     </Tabs.Trigger>
                   </Tabs.List>
 
@@ -148,6 +153,21 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                           Claude Code 가 허용한 세션으로 서버를 조회할 수 있게 합니다. 비밀번호는 Claude 에게 전달되지 않습니다.
                         </p>
                         <McpSettings />
+                      </section>
+                    </div>
+                  </Tabs.Content>
+
+                  <Tabs.Content value="remote" className="settings-tab-content">
+                    <div className="settings-content">
+                      <section className="settings-section">
+                        <h3 className="settings-section-title">
+                          <RiSmartphoneLine size={18} />
+                          원격 접속 (휴대폰 브라우저)
+                        </h3>
+                        <p className="settings-section-desc">
+                          밖에서 휴대폰 브라우저로 이 PC 의 ezShell 에 들어와 저장된 세션의 터미널을 씁니다. Tailscale 로만 연결됩니다.
+                        </p>
+                        <RemoteAccessSettings />
                       </section>
                     </div>
                   </Tabs.Content>

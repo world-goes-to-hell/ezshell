@@ -18,7 +18,7 @@ const KNOWN_PORTS = {
   1433: 'mssql'
 }
 
-const SUPPORTED_ENGINES = new Set(['mysql', 'postgres'])
+const SUPPORTED_ENGINES = new Set(['mysql', 'postgres', 'mssql'])
 
 const ENGINE_LABELS = { mysql: 'MySQL/MariaDB', postgres: 'PostgreSQL', oracle: 'Oracle', mssql: 'SQL Server' }
 

@@ -16,6 +16,15 @@ if (!app.commandLine.hasSwitch('user-data-dir')) {
   }));
 }
 
+// Windows groups taskbar buttons by AppUserModelID. The installer's shortcuts (pinned, Start menu)
+// carry build.appId; the windows had no ID of their own, and a live-view window showed up as a second
+// ezShell button (Electron can fall back to its own "electron.app.<name>" ID). Keep in sync with
+// build.appId in package.json. Not in dev, so a dev run does not join the installed app's button.
+const WINDOWS_APP_USER_MODEL_ID = 'com.sungkwan.ssh-client';
+if (process.platform === 'win32' && app.isPackaged) {
+  app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
+}
+
 const { Client } = require('ssh2');
 const net = require('net');
 const { autoUpdater } = require('electron-updater');
@@ -688,6 +697,56 @@ ipcMain.on('local-shell-resize', (event, { id, cols, rows }) => { if (fromMainWi
 ipcMain.on('local-shell-close', (event, id) => { if (fromMainWindow(event)) localShells?.close(id); });
 app.on('will-quit', () => localShells?.closeAll());
 
+// A query result the user chose to export ("추출" in a DB tab or DB window), saved where they pick.
+// The only way a result reaches the disk; text or the bytes of a spreadsheet file.
+const EXPORT_MAX_BYTES = 128 * 1024 * 1024;
+const EXPORT_FILTERS = {
+  xlsx: 'Excel 파일', csv: 'CSV', tsv: 'TSV', sql: 'SQL', json: 'JSON', md: 'Markdown'
+};
+ipcMain.handle('save-export-file', async (event, { defaultName, extension, data }) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  if (!owner || isAppLocked) return { success: false, error: '저장할 수 없습니다.' };
+  const isText = typeof data === 'string';
+  if (!isText && !(data instanceof Uint8Array)) return { success: false, error: '저장할 수 없는 내용입니다.' };
+  if (!Object.prototype.hasOwnProperty.call(EXPORT_FILTERS, extension)) return { success: false, error: '지원하지 않는 형식입니다.' };
+  if ((isText ? Buffer.byteLength(data, 'utf-8') : data.byteLength) > EXPORT_MAX_BYTES) return { success: false, error: '내용이 너무 큽니다.' };
+  try {
+    const result = await dialog.showSaveDialog(owner, {
+      title: '결과 추출',
+      defaultPath: path.basename(String(defaultName || `query.${extension}`)),
+      filters: [{ name: EXPORT_FILTERS[extension], extensions: [extension] }, { name: '모든 파일', extensions: ['*'] }]
+    });
+    if (result.canceled || !result.filePath) return { success: false, cancelled: true };
+    await fs.promises.writeFile(result.filePath, isText ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength), isText ? 'utf-8' : undefined);
+    return { success: true, filePath: result.filePath };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// ==================== Remote access (a phone's browser, over Tailscale) ====================
+// Off unless switched on in the settings. Listens only on this PC's Tailscale address, only while
+// the app is unlocked. Design: docs/plan/2026-11-13-remote-access-over-tailscale.md
+const remoteAccess = require('./src/remoteAccess/controller.js').registerRemoteAccess({
+  ipcMain,
+  userDataPath,
+  hostKeys: hostKeyStore,
+  isLocked: () => isAppLocked,
+  readSessions: () => readDecryptedSessions(),
+  readFolders: () => loadFromFile(foldersFilePath, []),
+  fromMainWindow,
+  notify: (channel, payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+  },
+  // The authenticator secret is sealed with the OS account (DPAPI on Windows), like the auto-unlock password
+  sealer: {
+    isAvailable: () => safeStorage.isEncryptionAvailable(),
+    seal: (text) => (safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(text).toString('base64') : null),
+    unseal: (sealed) => (safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(Buffer.from(sealed, 'base64')) : null)
+  }
+});
+app.on('will-quit', () => remoteAccess.stop());
+
 // Terminal output chosen in the right-click menu, saved where the user picks
 ipcMain.handle('save-terminal-output', async (event, { defaultName, text }) => {
   if (!fromMainWindow(event) || typeof text !== 'string') return { success: false, error: '저장할 수 없습니다.' };
@@ -757,6 +816,7 @@ ipcMain.handle('setup-master-password', async (event, { password }) => {
   masterPasswordVerification = verification;
   currentMasterPassword = password;
   isAppLocked = false;
+  void remoteAccess.start();
 
   return { success: true };
 });
@@ -774,6 +834,7 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
   if (cryptoUtil.verifyPassword(password, verification.hash, verification.salt)) {
     currentMasterPassword = password;
     isAppLocked = false;
+    void remoteAccess.start();
     return { success: true };
   }
 
@@ -795,6 +856,8 @@ ipcMain.handle('lock-app', async () => {
   remoteFileIpc.closeViewWindows();
   // Query results must not stay on screen behind the lock
   dbIpc.closeAll();
+  // Remote devices are dropped and the port is closed until the app is unlocked again
+  remoteAccess.stop({ wasLocked: true });
   return { success: true };
 });
 
@@ -872,6 +935,8 @@ ipcMain.handle('reset-master-password', async () => {
   remoteFileIpc.closeViewWindows();
   // Query results must not stay on screen behind the lock
   dbIpc.closeAll();
+  // Remote devices are dropped and the port is closed until the app is unlocked again
+  remoteAccess.stop({ wasLocked: true });
   masterPasswordVerification = null;
 
   return { success: true };
@@ -2173,11 +2238,15 @@ ipcMain.handle('get-app-version', () => {
 // "업데이트 내용" after an update: the window compares the last version whose notes were seen with
 // this one (src/lastVersion.js). Saved data means an existing user even without a record.
 const lastVersionPath = () => path.join(app.getPath('userData'), 'last-version.json');
-ipcMain.handle('whats-new-state', () => lastVersion.resolveWhatsNew({
+const whatsNewState = () => lastVersion.resolveWhatsNew({
   file: lastVersionPath(),
   current: app.getVersion(),
   existingUser: fs.existsSync(sessionsFilePath) || fs.existsSync(path.join(app.getPath('userData'), 'master.json'))
-}));
+});
+// A fresh install is decided now, at startup. The window asks only after the first unlock, and by
+// then the master password file exists, so a new user looked like an existing one and got the notes.
+whatsNewState();
+ipcMain.handle('whats-new-state', whatsNewState);
 ipcMain.handle('whats-new-seen', () => {
   lastVersion.writeLastVersion(lastVersionPath(), app.getVersion());
 });

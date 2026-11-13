@@ -69,9 +69,18 @@ export function statementAt(sql: string, pos: number): StatementRange | null {
 
 /** An identifier quoted for the engine (`a`.`b` or "a"."b") */
 export function quoteIdentifier(name: string, engine: string): string {
+  if (engine === 'mssql') return `[${name.replace(/]/g, ']]')}]`
   return engine === 'mysql' ? `\`${name.replace(/`/g, '``')}\`` : `"${name.replace(/"/g, '""')}"`
 }
 
+/** The rows of a table whose `column` holds one value; `literal` is already written as SQL (sqlLiteral) */
+export function lookupQuery(target: { schema: string; table: string; column: string }, literal: string, engine: string, limit = 100): string {
+  const from = `${quoteIdentifier(target.schema, engine)}.${quoteIdentifier(target.table, engine)} WHERE ${quoteIdentifier(target.column, engine)} = ${literal}`
+  // SQL Server limits with TOP
+  return engine === 'mssql' ? `SELECT TOP ${limit} * FROM ${from};` : `SELECT * FROM ${from} LIMIT ${limit};`
+}
+
 export function previewQuery(schema: string, table: string, engine: string, limit = 100): string {
-  return `SELECT * FROM ${quoteIdentifier(schema, engine)}.${quoteIdentifier(table, engine)} LIMIT ${limit};`
+  const name = `${quoteIdentifier(schema, engine)}.${quoteIdentifier(table, engine)}`
+  return engine === 'mssql' ? `SELECT TOP ${limit} * FROM ${name};` : `SELECT * FROM ${name} LIMIT ${limit};`
 }

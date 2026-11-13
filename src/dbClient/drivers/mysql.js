@@ -7,6 +7,10 @@ const { LIMITS, createCollector } = require('../results.js')
 
 const SYSTEM_SCHEMAS = ['mysql', 'information_schema', 'performance_schema', 'sys']
 const MAX_OBJECTS = 5000
+// DDL of a whole schema stops here (each table costs the server a few catalog reads)
+const MAX_DDL_TABLES = 200
+// Tables of one result whose foreign keys are looked up
+const MAX_RELATION_TABLES = 16
 
 function connectOnce({ stream, user, password, database, connectTimeoutMs }) {
   return new Promise((resolve, reject) => {
@@ -183,7 +187,8 @@ function createMysqlSession({ openStream, credentials, limits = {} }) {
 
       const running = active.query({ sql, rowsAsArray: true })
       running.on('fields', (fields) => {
-        columns = (fields || []).map((f) => ({ name: f.name, type: typeName(f) }))
+        // `source`: the table column a result column comes from (none for an expression), for foreign keys
+        columns = (fields || []).map((f) => ({ name: f.name, type: typeName(f), ...(f.orgTable && f.orgName && f.schema ? { source: { schema: f.schema, table: f.orgTable, column: f.orgName } } : {}) }))
       })
       running.on('result', (row) => {
         if (!Array.isArray(row)) {
@@ -253,6 +258,56 @@ function createMysqlSession({ openStream, credentials, limits = {} }) {
     return rows.map((r) => ({ name: String(r[0]), type: String(r[1]), isNullable: r[2] === 'YES', isKey: r[3] === 'PRI' }))
   }
 
+  /**
+   * CREATE statements of one table, or of every table of a database (at most MAX_DDL_TABLES), as the
+   * server itself writes them (SHOW CREATE TABLE). Names go in as identifiers (??), never as SQL text.
+   */
+  async function ddl(db, schema, table) {
+    const active = await ensure()
+    let names = [table]
+    let isCut = false
+    if (!table) {
+      const listed = await listTables(db, schema)
+      isCut = listed.length > MAX_DDL_TABLES
+      names = listed.slice(0, MAX_DDL_TABLES).map((t) => t.name)
+    }
+    const statements = []
+    for (const name of names) {
+      // One row: the name, then the statement (tables and views alike)
+      const { rows } = await run(active, 'SHOW CREATE TABLE ??.??', [schema, name])
+      if (rows[0] && rows[0][1] !== undefined && rows[0][1] !== null) statements.push(`${String(rows[0][1]).replace(/;\s*$/, '')};`)
+    }
+    return { ddl: statements.join('\n\n') + (statements.length > 0 ? '\n' : ''), tableCount: statements.length, isCut }
+  }
+
+  /**
+   * Foreign keys of result columns. `sources` are the { schema, table, column } triples `query`
+   * attached to the columns; one entry per source comes back. Only what the column refers to (`to`):
+   * asking which tables refer to it cannot be narrowed to one table, and MySQL 5.7 then opens every
+   * table of the server. Single-column keys only.
+   */
+  async function relations(sources) {
+    const active = await ensure()
+    const tables = [...new Map(sources.map((s) => [`${s.schema}\n${s.table}`, s])).values()].slice(0, MAX_RELATION_TABLES)
+    const found = []
+    for (const { schema, table } of tables) {
+      const { rows } = await run(active,
+        `SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+         FROM information_schema.KEY_COLUMN_USAGE
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL LIMIT 200`, [schema, table])
+      const perConstraint = new Map()
+      for (const row of rows) perConstraint.set(String(row[0]), (perConstraint.get(String(row[0])) ?? 0) + 1)
+      for (const row of rows) {
+        if (perConstraint.get(String(row[0])) !== 1) continue
+        found.push({ schema, table, column: String(row[1]), to: { schema: String(row[2]), table: String(row[3]), column: String(row[4]) } })
+      }
+    }
+    return sources.map((s) => ({
+      to: found.filter((f) => f.schema === s.schema && f.table === s.table && f.column === s.column).map((f) => f.to),
+      from: []
+    }))
+  }
+
   return {
     open,
     query,
@@ -262,6 +317,8 @@ function createMysqlSession({ openStream, credentials, limits = {} }) {
     useDatabase,
     listTables,
     listColumns,
+    ddl,
+    relations,
     close() {
       isClosed = true
       drop()

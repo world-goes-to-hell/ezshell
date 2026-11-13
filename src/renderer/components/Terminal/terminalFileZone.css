@@ -1,0 +1,47 @@
+/* Border around the output whose names are looked up in the terminal's current folder
+   (terminalFileZone.ts). Drawn over the text by xterm; clicks and selection go through. */
+.xterm .xterm-decoration.terminal-file-zone {
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  pointer-events: none;
+}
+
+.xterm .xterm-decoration.terminal-file-zone.is-cut-top {
+  border-top: none;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.xterm .xterm-decoration.terminal-file-zone.is-cut-bottom {
+  border-bottom: none;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* The folder the names are found in, on the top edge */
+.terminal-file-zone-label {
+  position: absolute;
+  top: 0;
+  right: 10px;
+  transform: translateY(-55%);
+  max-width: 60%;
+  padding: 0 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--bg-primary);
+  color: var(--accent);
+  font-family: var(--font-mono, inherit);
+  font-size: 10.5px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.9;
+}
+
+/* The zone started above the screen: the label sits inside the top edge */
+.terminal-file-zone.is-cut-top .terminal-file-zone-label {
+  top: 2px;
+  transform: none;
+}

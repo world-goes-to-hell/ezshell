@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { RiAddFill, RiFolderFill, RiArrowLeftDoubleLine, RiArrowRightDoubleLine, RiPushpinLine, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill, RiListUnordered, RiClipboardFill } from 'react-icons/ri'
+import { RiAddFill, RiFolderFill, RiArrowLeftDoubleLine, RiPushpinLine, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill, RiListUnordered, RiClipboardFill } from 'react-icons/ri'
 import { motion } from 'framer-motion'
 import { SessionList } from './SessionList'
 import { useUIStore } from '../../stores/uiStore'
@@ -48,7 +48,9 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
   const toggleTitle = `${isFolded ? '사이드바 펼쳐 두기' : '사이드바 접기'} (${toggleShortcut})`
   // One shape per state. The old pair was a mirrored icon that was also turned 180 degrees when
   // folded, which made both states look the same.
-  const ToggleIcon = !isFolded ? RiArrowLeftDoubleLine : isPeekOpen ? RiPushpinLine : RiArrowRightDoubleLine
+  // The strip itself has no button: pointing at it opens the sidebar before the button can be
+  // pressed, and the opened sidebar shows the pin. So the button exists only on an open sidebar.
+  const ToggleIcon = isFolded ? RiPushpinLine : RiArrowLeftDoubleLine
 
   // Stable handlers so the keydown listener is not re-attached on every render
   const shortcutHandlers = useMemo(() => ({ toggleSidebar: toggleSidebarMode }), [toggleSidebarMode])
@@ -92,8 +94,9 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
       {...peekHandlers}
     >
       <div className="sidebar-panel">
+      {!isCompact && (
       <div className="sidebar-header">
-        {!isCompact && <h2>연결 목록</h2>}
+        <h2>연결 목록</h2>
         <motion.button
           className="sidebar-toggle"
           onClick={toggleSidebarMode}
@@ -105,6 +108,7 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
           <ToggleIcon size={18} />
         </motion.button>
       </div>
+      )}
       {!isCompact && (
         <div className="sidebar-actions">
           <motion.button

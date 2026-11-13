@@ -2,11 +2,12 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { RiCheckLine, RiFilter3Line, RiFlashlightLine, RiArrowRightSLine } from 'react-icons/ri'
 import { isDatabaseShown, isSchemaShown, shownCount, withAllDatabases, withDatabase, withSchema, type TreeFilter } from '../../lib/dbTreeFilter'
 import type { DbDatabase, DbSchema } from '../../types/db'
+import type { ConnectableEngine } from '../../lib/dbChoices'
 
 type Loaded<T> = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; items: T }
 
 interface TreeFilterMenuProps {
-  engine: 'mysql' | 'postgres'
+  engine: ConnectableEngine
   databases: DbDatabase[]
   /** Schemas the tree already read, by database */
   schemas: Record<string, Loaded<DbSchema[]>>
@@ -88,7 +89,7 @@ export function TreeFilterMenu({ engine, databases, schemas, filter, onFilterCha
               {database.name}
             </Check>
           ))}
-          {engine === 'postgres' && shownDatabases.length > 0 && (
+          {engine !== 'mysql' && shownDatabases.length > 0 && (
             <>
               <DropdownMenu.Separator className="db-menu-separator" />
               <DropdownMenu.Label className="db-menu-label">보일 스키마</DropdownMenu.Label>

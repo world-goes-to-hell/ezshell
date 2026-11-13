@@ -77,3 +77,33 @@ describe('checkReadOnly', () => {
     expect(checkReadOnly('SELECT 1 /* open', 'postgres').ok).toBe(false)
   })
 })
+
+describe('checkReadOnly: SQL Server', () => {
+  const ok = (sql) => checkReadOnly(sql, 'mssql').ok
+
+  it('lets one reading statement through', () => {
+    for (const sql of ['SELECT TOP 10 * FROM [dbo].[orders]', 'WITH x AS (SELECT 1 a) SELECT * FROM x', 'select 1 -- DROP TABLE t', "SELECT 'DELETE INTO' AS x", 'SELECT [delete], "update" FROM dbo.t', 'SELECT a]] FROM [we]]ird]']) {
+      expect(ok(sql), sql).toBe(true)
+    }
+  })
+
+  it('refuses writing words anywhere: statements need no semicolon there', () => {
+    for (const sql of [
+      'DELETE FROM dbo.orders', 'UPDATE dbo.orders SET amount = 0', 'SELECT * INTO dbo.copy FROM dbo.orders',
+      'WITH x AS (SELECT 1 a) DELETE FROM dbo.orders', 'SELECT 1 DELETE FROM dbo.orders', 'SELECT 1 EXEC sp_who',
+      'SELECT 1 COMMIT DELETE FROM t', 'USE master', 'SELECT 1; DROP TABLE dbo.orders', "SELECT * FROM OPENROWSET('a', 'b', 'c')",
+      'SELECT 1 WAITFOR DELAY \'00:10:00\'', 'EXEC xp_cmdshell \'dir\'', 'SELECT dbo.xp_something()'
+    ]) {
+      expect(ok(sql), sql).toBe(false)
+    }
+  })
+
+  it('says which word was refused and how to use it as a name', () => {
+    expect(checkReadOnly('SELECT 1 DELETE FROM t', 'mssql').reason).toContain('DELETE')
+    expect(checkReadOnly('SELECT 1 DELETE FROM t', 'mssql').reason).toContain('[delete]')
+  })
+
+  it('refuses an unclosed bracket name', () => {
+    expect(checkReadOnly('SELECT * FROM [orders', 'mssql')).toEqual({ ok: false, reason: expect.stringContaining('닫히지 않은') })
+  })
+})

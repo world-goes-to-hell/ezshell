@@ -4,7 +4,7 @@ import type { Terminal } from 'xterm'
 import {
   RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine,
   RiLayoutLine, RiMagicLine, RiFileSearchLine, RiSearchLine, RiFindReplaceLine, RiFolderLine, RiCodeSSlashLine,
-  RiTerminalBoxLine, RiFileCopy2Line, RiRecordCircleLine, RiStopCircleLine, RiFolderTransferLine, RiCloseCircleLine, RiFolderSharedLine, RiAddLine, RiSettings3Line
+  RiTerminalBoxLine, RiFileCopy2Line, RiRecordCircleLine, RiStopCircleLine, RiFolderTransferLine, RiCloseCircleLine, RiFolderSharedLine, RiAddLine, RiSettings3Line, RiCheckboxBlankLine
 } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useSessionLogStore } from '../../stores/sessionLogStore'
@@ -17,6 +17,7 @@ import { terminalPaneAt } from '../../lib/terminalPanes'
 import { FIND_QUERY_MAX_LENGTH, type FindKind } from '../../lib/terminalFind'
 import { commonTerminalItems } from './terminalMenuCommon'
 import { TerminalContextMenu, MENU_SEPARATOR, type TerminalMenuGroup, type TerminalMenuItem } from './TerminalContextMenu'
+import { fileZoneOf, isFileZoneShown, setFileZoneShown } from './terminalFileZone'
 import { SnippetModal } from '../Snippets/SnippetModal'
 import { findTarget, nameAtPointer, targetHint, targetItems, type TerminalTarget } from './terminalTargetMenu'
 import { TerminalFindDialog } from './TerminalFindDialog'
@@ -131,7 +132,13 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
           ...output,
           MENU_SEPARATOR,
           { label: 'SFTP 를 현재 폴더로', icon: RiFolderSharedLine, onSelect: then(() => void syncSftpToTerminal(sessionId)) },
-          { label: isFileExplorerOpen ? '파일 탐색기 닫기' : '파일 탐색기 열기', icon: RiFolderLine, onSelect: then(onToggleFileExplorer) }
+          { label: isFileExplorerOpen ? '파일 탐색기 닫기' : '파일 탐색기 열기', icon: RiFolderLine, onSelect: then(onToggleFileExplorer) },
+          // Only the tab's main terminal has a file zone (a split shell's folder is not known)
+          ...(fileZoneOf(terminal) ? [{
+            label: isFileZoneShown() ? '파일 영역 테두리 끄기' : '파일 영역 테두리 켜기',
+            icon: RiCheckboxBlankLine,
+            onSelect: then(() => setFileZoneShown(!isFileZoneShown()))
+          }] : [])
         ]
       },
       {

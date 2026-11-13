@@ -11,13 +11,18 @@ import {
   MAX_CONSOLES, addConsole, neighbourOf, parseConsoles, removeConsole, renameConsole, serializeConsoles, withSql, type ConsoleDraft
 } from '../../lib/dbConsoles'
 import { completionExtensions, createDbMetadata } from './dbCompletion'
-import type { DbDatabase, DbWindowInfo } from '../../types/db'
+import { copyToClipboard } from '../../lib/terminalClipboard'
+import { toast } from '../../stores/toastStore'
+import { TREE_DEFAULT_WIDTH, clampTreeWidth } from '../../lib/dbGrid'
+import { isConnectable } from '../../lib/dbChoices'
+import type { DbColumnSource, DbDatabase, DbRelations, DbWindowInfo } from '../../types/db'
 import '../RemoteFile/RemoteFile.css'
 import './DbClient.css'
 
 type InfoState = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; info: DbWindowInfo }
 type Loaded<T> = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; items: T }
 
+const TREE_WIDTH_KEY = 'dbTreeWidth'
 const schemaKey = (info: DbWindowInfo, database: string): string => `dbDefaultSchema:${filterStorageKey(info)}:${database}`
 const consolesKey = (info: DbWindowInfo): string => `dbConsoles:${filterStorageKey(info)}`
 
@@ -62,6 +67,15 @@ export function DbClientView({ dbId, onDetach, onTitle, renderMessage = (c) => c
   const [databases, setDatabases] = useState<Loaded<DbDatabase[]>>({ status: 'loading' })
   const [filter, setFilter] = useState<TreeFilter>(EMPTY_FILTER)
   const [isSwitching, setIsSwitching] = useState(false)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const [isResizingTree, setIsResizingTree] = useState(false)
+  const [treeWidth, setTreeWidth] = useState(() => {
+    try {
+      return clampTreeWidth(Number(localStorage.getItem(TREE_WIDTH_KEY) ?? TREE_DEFAULT_WIDTH))
+    } catch {
+      return TREE_DEFAULT_WIDTH
+    }
+  })
   const [notice, setNotice] = useState<string | null>(null)
   // PostgreSQL: the schema unqualified names go to, and the schemas of the current database to pick from
   const [defaultSchema, setDefaultSchema] = useState('')
@@ -78,7 +92,7 @@ export function DbClientView({ dbId, onDetach, onTitle, renderMessage = (c) => c
   const databaseRef = useRef('')
   databaseRef.current = database
   const engine = infoState.status === 'ready' ? infoState.info.engine : null
-  const metadata = useMemo(() => (engine === 'mysql' || engine === 'postgres'
+  const metadata = useMemo(() => (isConnectable(engine)
     ? createDbMetadata({ dbId, engine, queue, database: () => databaseRef.current, isIdle: () => !isRunningRef.current })
     : null), [dbId, engine, queue])
   const isRunning = runningConsole !== null
@@ -218,13 +232,69 @@ export function DbClientView({ dbId, onDetach, onTitle, renderMessage = (c) => c
   const preview = async (db: string, schema: string, table: string): Promise<void> => {
     if (infoState.status !== 'ready') return
     // PostgreSQL reads only the database it is connected to; MySQL names the database in the query
-    if (engine === 'postgres' && db !== databaseRef.current && !(await switchDatabase(db))) return
-    activeHandle()?.appendAndRun(previewQuery(schema, table, infoState.info.engine))
+    // MySQL names the database in the query; the others run in one database at a time
+    const needsSwitch = engine !== 'mysql' && db !== databaseRef.current
+    if (needsSwitch && !(await switchDatabase(db))) return
+    // Right after the switch the consoles are still marked as waiting for it (until the next render):
+    // without saying so the query was typed in but not run
+    activeHandle()?.appendAndRun(previewQuery(schema, table, infoState.info.engine), needsSwitch)
   }
 
   const cancel = (): void => { void window.electronAPI.dbCancel?.(dbId) }
 
-  const extensions = useMemo(() => (metadata && (engine === 'mysql' || engine === 'postgres') ? completionExtensions({ engine, metadata }) : []), [engine, metadata])
+  /** CREATE statements of a table (or a whole schema) to the clipboard */
+  const copyDdl = async (db: string, schema: string, table?: string): Promise<void> => {
+    if (!db || !schema) return
+    const result = await queue.run(async () => window.electronAPI.dbDdl?.(dbId, db, schema, table))
+    if (!result || !result.success) {
+      toast.error('DDL 을 복사하지 못했습니다', result ? result.error : '앱을 다시 시작해 주세요.')
+      return
+    }
+    if (!result.ddl) {
+      toast.info('복사할 DDL 이 없습니다', table ?? `${schema} 에 테이블이 없습니다`)
+      return
+    }
+    await copyToClipboard(result.ddl)
+    if (result.isCut) toast.info('일부만 복사했습니다', `테이블이 많아 앞의 ${result.tableCount}개만 넣었습니다.`)
+  }
+
+  /** Foreign keys of a result's columns; null when they cannot be read (the grid then shows no marks) */
+  const loadRelations = async (sources: DbColumnSource[]): Promise<DbRelations[] | null> => {
+    const result = await queue.run(async () => window.electronAPI.dbRelations?.(dbId, sources))
+    return result?.success ? result.relations : null
+  }
+
+  // ---- Width of the tree, changed with the handle beside it and remembered ----
+  const saveTreeWidth = (width: number): void => {
+    const next = clampTreeWidth(width, bodyRef.current?.clientWidth)
+    setTreeWidth(next)
+    try {
+      localStorage.setItem(TREE_WIDTH_KEY, String(next))
+    } catch {
+      // Only a convenience
+    }
+  }
+  const startTreeResize = (event: React.MouseEvent): void => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = treeWidth
+    let latest = startWidth
+    setIsResizingTree(true)
+    const onMove = (move: MouseEvent): void => {
+      latest = clampTreeWidth(startWidth + move.clientX - startX, bodyRef.current?.clientWidth)
+      setTreeWidth(latest)
+    }
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      setIsResizingTree(false)
+      saveTreeWidth(latest)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const extensions = useMemo(() => (metadata && isConnectable(engine) ? completionExtensions({ engine, metadata }) : []), [engine, metadata])
 
   const newConsole = (): void => {
     if (consoles.length >= MAX_CONSOLES) return
@@ -259,7 +329,7 @@ export function DbClientView({ dbId, onDetach, onTitle, renderMessage = (c) => c
     }
   }
 
-  if (infoState.status !== 'ready' || !engine || (engine !== 'mysql' && engine !== 'postgres')) {
+  if (infoState.status !== 'ready' || !isConnectable(engine)) {
     return (
       <>
         {renderMessage(
@@ -277,7 +347,7 @@ export function DbClientView({ dbId, onDetach, onTitle, renderMessage = (c) => c
   const databaseNames = databases.status === 'ready' ? databases.items.map(d => d.name) : []
 
   return (
-    <div className="db-body" onKeyDown={onConsoleKey}>
+    <div className={`db-body${isResizingTree ? ' is-resizing' : ''}`} ref={bodyRef} onKeyDown={onConsoleKey}>
       <DatabaseTree
         dbId={dbId} engine={engine} queue={queue} isIdle={!isBusy}
         databases={databases} current={database} filter={filter} onFilterChange={changeFilter}
@@ -287,6 +357,17 @@ export function DbClientView({ dbId, onDetach, onTitle, renderMessage = (c) => c
         onSwitch={(name) => void switchDatabase(name)}
         onPreview={(db, schema, table) => void preview(db, schema, table)}
         onInsert={(name) => activeHandle()?.insertText(quoteIdentifier(name, info.engine))}
+        onCopyDdl={(db, schema, table) => void copyDdl(db, schema, table)}
+        width={treeWidth}
+      />
+      <div
+        className={`db-tree-resizer${isResizingTree ? ' is-dragging' : ''}`}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="데이터베이스 목록 너비"
+        title="끌어서 너비 조절 · 두 번 누르면 처음 너비"
+        onMouseDown={startTreeResize}
+        onDoubleClick={() => saveTreeWidth(TREE_DEFAULT_WIDTH)}
       />
       <div className="db-main">
         <div className="db-toolbar">
@@ -372,6 +453,8 @@ export function DbClientView({ dbId, onDetach, onTitle, renderMessage = (c) => c
               initialSql={console_.sql}
               isActive={console_.id === activeConsole}
               isBlocked={isSwitching || (runningConsole !== null && runningConsole !== console_.id)}
+              engine={engine ?? ''}
+              loadRelations={loadRelations}
               extensions={extensions}
               runQuery={runQuery}
               onRunningChange={(id, running) => setRunningConsole(running ? id : null)}

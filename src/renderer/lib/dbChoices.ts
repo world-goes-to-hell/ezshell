@@ -2,7 +2,12 @@
 // databases found on the server that have no saved account yet.
 import type { DbEndpoint, DbEngine, DiscoveredDb, SavedDbConnection } from '../types/db'
 
-export const DEFAULT_PORTS: Record<'mysql' | 'postgres', number> = { mysql: 3306, postgres: 5432 }
+/** The engines the app can connect to (the others are only recognised on a server) */
+export type ConnectableEngine = 'mysql' | 'postgres' | 'mssql'
+export const CONNECTABLE_ENGINES: ConnectableEngine[] = ['mysql', 'postgres', 'mssql']
+export const isConnectable = (engine: string | null | undefined): engine is ConnectableEngine => CONNECTABLE_ENGINES.includes(engine as ConnectableEngine)
+
+export const DEFAULT_PORTS: Record<ConnectableEngine, number> = { mysql: 3306, postgres: 5432, mssql: 1433 }
 
 export const ENGINE_NAMES: Record<DbEngine, string> = {
   mysql: 'MySQL/MariaDB',
@@ -86,7 +91,7 @@ export function buildGroups(found: DiscoveredDb[], saved: SavedDbConnection[], a
       endpoint: { engine: account.engine, host: account.host, port: account.port },
       label: match?.label ?? ENGINE_NAMES[account.engine],
       detail: `${account.host}:${account.port}${match?.isLocalOnly ? ' · 서버 안에서만 열림' : ''}`,
-      isSupported: account.engine === 'mysql' || account.engine === 'postgres',
+      isSupported: isConnectable(account.engine),
       isGuess: false,
       accounts: [account]
     })

@@ -52,12 +52,14 @@
 }
 
 .settings-tab-trigger {
-  flex: 1;
+  /* Six tabs in one row: each as wide as its label needs, never wrapped onto two lines */
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 10px 16px;
+  gap: 6px;
+  padding: 10px 10px;
+  white-space: nowrap;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;

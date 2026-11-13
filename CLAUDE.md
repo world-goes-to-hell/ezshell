@@ -21,7 +21,7 @@ npm run build:publish   # GitHub Releases 배포 (electron-updater)
 
 실행 중인 앱은 시작 3초 뒤, 30분마다, 창에 다시 포커스가 올 때(10분 간격) 새 버전을 확인한다 (`src/updateChecker.js`). 자동 확인은 새 버전을 찾았을 때만 화면에 알리고, 알림 닫기는 버전 단위다 (`updateStore` 의 `dismissedKey`). 설명: `docs/fix/2026-10-27-update-check-while-running.md`.
 
-**릴리스 노트:** 버전을 올리기 전에 `release-notes/<버전>.md` 를 쓴다 (사용자에게 보이는 한국어, `##`/`###` 제목·`-` 목록·`코드`·**굵게** 만 그려진다). 없으면 `releaseNotes.test.ts` 가 실패한다. GitHub 릴리스 본문도 이 파일로 만든다 (`gh release create v<버전> --notes-file release-notes/<버전>.md`). 업데이트 뒤 처음 잠금을 풀면 본창에 "업데이트 내용"(`WhatsNew/WhatsNewDialog.tsx`)이 뜬다: main 의 `src/lastVersion.js` 가 `userData/last-version.json` 에 마지막으로 본 버전을 두고, 그 뒤 버전들의 노트를 최신순으로 보여 준다 (`lib/releaseNotes.ts`). `확인` 을 눌러야 기록한다. 새 설치는 띄우지 않고, 기록이 없는 기존 사용자(세션 파일 있음)는 지금 버전 노트를 본다. 명령 팔레트 `업데이트 내용 보기` 로 다시 연다. 설계: `docs/plan/2026-11-12-whats-new-after-update.md`.
+**릴리스 노트:** 버전을 올리기 전에 `release-notes/<버전>.md` 를 쓴다 (사용자에게 보이는 한국어, `##`/`###` 제목·`-` 목록·`코드`·**굵게** 만 그려진다). 없으면 `releaseNotes.test.ts` 가 실패한다. GitHub 릴리스 본문도 이 파일로 만든다 (`gh release create v<버전> --notes-file release-notes/<버전>.md`). 업데이트 뒤 처음 잠금을 풀면 본창에 "업데이트 내용"(`WhatsNew/WhatsNewDialog.tsx`)이 뜬다: main 의 `src/lastVersion.js` 가 `userData/last-version.json` 에 마지막으로 본 버전을 두고, 그 뒤 버전들의 노트를 최신순으로 보여 준다 (`lib/releaseNotes.ts`). `확인` 을 눌러야 기록한다. 새 설치는 띄우지 않고(새 설치인지는 앱이 시작할 때 정한다: 창이 묻는 때는 첫 잠금 해제 뒤라 마스터 비밀번호 파일이 이미 있다), 기록이 없는 기존 사용자(세션 파일 있음)는 지금 버전 노트를 본다. 명령 팔레트 `업데이트 내용 보기` 로 다시 연다. 설계: `docs/plan/2026-11-12-whats-new-after-update.md`.
 
 업데이트 설치(`install-update`)는 `quitAndInstall(true, true)` 로 설치 화면 없이 진행하고 끝나면 앱을 다시 띄운다. 본창은 닫힐 때의 위치·크기·최대화 여부를 `userData/window-state.json` 에 남기고 다음 실행 때 복원한다 (`src/windowState.js`, 저장된 위치가 지금 연결된 화면에 보이지 않으면 기본 위치). 열려 있던 탭은 복원하지 않는다.
 
@@ -109,6 +109,7 @@ App.tsx에서 single → split 모드 전환 시 TerminalPanel이 React 트리�
 - 화면에 찍힌 파일·폴더 이름을 우클릭하면 메뉴 맨 위에 그 이름과 SFTP 목록에서 하던 동작이 먼저 나온다 (파일: 미리보기·편집·실시간 보기·다운로드·SFTP 에서 위치 열기·경로 복사, 폴더: SFTP 에서 열기·`cd` 입력·경로 복사). 이름은 포인터 아래 낱말(한 줄 선택이 있으면 그 선택)이고 `lib/terminalTarget.ts` 가 읽는다. 경로는 탭의 `currentPath`(프롬프트에서 읽은 폴더) 기준이며 분할 셸은 폴더를 모르므로 절대 경로만 찾는다. 서버에는 SFTP `stat` 하나만 보낸다 (`sftp-stat`, 60초 기억. 로그인 폴더는 세션마다 한 번만 묻는다). 전체 화면 프로그램(vim 등)에서는 찾지 않는다. 구현: `terminalTargetMenu.tsx`.
   - 바꾸면 안 되는 것: 메뉴는 파일 정보를 받은 뒤에 한 번에 연다 (최대 0.4초 기다림). 연 뒤에 항목을 끼워 넣으면 포인터 아래 항목이 밀려 다른 것을 누르게 된다.
 - 파일·폴더 이름에 포인터를 올리면 밑줄이 생기고 안내가 뜬다 (`terminalFileLinks.ts`, xterm 링크 제공자). `Ctrl+클릭` 은 편집(큰 파일은 미리보기)·폴더는 SFTP 에서 열기, 그냥 클릭은 아무것도 하지 않는다 (포커스를 주려는 클릭에 창이 열리면 안 된다). 바꾸면 안 되는 것: 포인터가 0.06초 머문 줄의 낱말만(줄당 12개까지) 서버에 묻고, 이미 답을 아는 줄은 기다리지 않고 바로 밑줄을 긋는다. 화면 전체를 미리 조회하지 않는다 (운영 서버에 요청이 쏟아진다).
+- 파일 영역(`terminalFileZone.ts`, 계산은 `lib/terminalFileZone.ts`): 탭의 주 터미널에서 폴더(`currentPath`)가 마지막으로 바뀐 프롬프트 줄부터 지금 커서 줄 위까지를 테두리로 두르고 오른쪽 위에 그 폴더를 적는다. 상대 이름은 이 영역 안에서만 밑줄·우클릭 메뉴를 낸다 (`cd` 전에 찍힌 이름은 다른 폴더의 파일이라 지금 폴더에서 찾으면 엉뚱한 파일을 연다). `/`·`~` 로 시작하는 이름은 어디서나. `편의` 의 `파일 영역 테두리 끄기/켜기` 는 테두리만 감추고(`localStorage` 의 `terminalFileZone`) 규칙은 그대로다. 바꾸면 안 되는 것: 시작 표식은 폴더가 바뀐 뒤 그 출력이 처리된 다음(`onWriteParsed`) 커서 줄에 둔다 (먼저 두면 `cd` 명령 줄에 박힌다). xterm 은 표식 줄이 화면 밖이면 꾸밈을 숨기므로 보이는 부분만, 그 첫 줄에 임시 표식을 두고 그린다. 스크롤 막대 이동은 `onScroll` 을 내지 않아 `onRender` 로도 다시 그린다. 설계: `docs/plan/2026-11-13-terminal-file-zone.md`.
 - 하위 메뉴는 종류별로 구분선(`MENU_SEPARATOR`)을 둔다: `편의` 는 찾기 / 출력 / 파일, `세션` 은 `연결 종료` 를 따로. 항목을 더할 때 맞는 묶음에 넣는다.
 - 스니펫 추가 창(`SnippetModal`)은 메뉴 항목을 누른 동작이 끝난 뒤에(`setTimeout`) 연다. 이 창은 바깥을 누르면 닫히므로, 같은 클릭이 창의 배경에 닿으면 열리자마자 닫힌다.
 - 탭 복제는 `ezshell:duplicate-tab` 이벤트로 `App.tsx` 에 넘긴다 (복제 로직이 App 에 있다).
@@ -124,7 +125,7 @@ App.tsx에서 single → split 모드 전환 시 TerminalPanel이 React 트리�
 ### Sidebar Tree and Folded Rail
 사이드바 목록 모양은 `Sidebar/SidebarTree.css` 에 있다. 줄에는 배경색을 칠하지 않는다: 폴더 색은 폴더 왼쪽의 선 하나(`--folder-color`), 세션 자체 색은 줄 옆의 짧은 선(`--session-color`)이다. 기본 아이콘 자리에는 상태 점(`.session-dot`, 연결된 탭이 있으면 초록, 끊긴 탭만 있으면 빨강)을 둔다. 세션 이름은 입력한 그대로 보여 준다.
 접힌 상태(`sidebarMode === 'compact'`, 클래스 `.sidebar.rail`)는 46px 띠에 버튼과 세로 글자 "세션", 연결된 탭 수(`.rail-session-summary`)만 보이고 목록은 그리지 않는다 (이름 없는 화살표·점만 줄지어 있어 알아볼 수 없었다), 마우스를 올리거나 키보드 포커스가 들어오면 전체 사이드바가 터미널 위로 겹쳐서 열린다 (`hooks/useSidebarPeek.ts`, `.peek-open`, 자리를 차지하지 않으므로 터미널 크기가 바뀌지 않는다). 사이드바의 메뉴·호버 카드·이름 입력칸을 쓰는 동안에는 닫지 않는다. 줄임말 타일은 없앴다 (사용자가 원하지 않았다). 띠와 열린 상태는 같은 DOM 이고 CSS 로만 다르다.
-접기 버튼은 상태마다 아이콘이 다르다 (펼침 `«`, 띠 `»`, 겹쳐 열림은 핀). 아이콘을 돌리는 애니메이션을 다시 넣지 말 것: 좌우 대칭 아이콘을 180도 돌리면 두 상태가 같은 모양이 된다.
+접기 버튼은 펼친 사이드바(`«`)와 겹쳐 열린 사이드바(핀)에만 있다. 접힌 띠에는 버튼을 두지 않는다 (포인터를 가져가면 사이드바가 먼저 열려 누를 수 없었다). 아이콘을 돌리는 애니메이션을 다시 넣지 말 것: 좌우 대칭 아이콘을 180도 돌리면 두 상태가 같은 모양이 된다.
 
 ### Session Share Text (연결 정보 복사·텍스트로 세션 추가)
 세션·폴더 우클릭의 `연결 정보 복사` 로 연결 정보를 메신저용 텍스트로 복사하고, 받은 사람은 사이드바 버튼 줄이나 폴더 우클릭의 `텍스트로 세션 추가`(`Sidebar/SessionImportDialog.tsx`)로 넣는다. 폴더는 하위 폴더·세션 전부가 같은 구조로 만들어진다 (`materializeFolder`, 새 id). 세션 하나는 기존 새 연결 창(`duplicateFrom`, 제목 `공유받은 세션 추가`)으로 열어 저장한다. 형식과 검사는 `lib/sessionShare.ts`, 설계: `docs/plan/2026-11-12-session-share-text.md`.
@@ -144,6 +145,7 @@ App.tsx에서 single → split 모드 전환 시 TerminalPanel이 React 트리�
 `main.js` 시작 부분에서 `src/userDataDir.js` 로 옛 폴더(`%APPDATA%\my-ssh-client`)가 있으면 그 폴더를 계속 쓴다.
 폴더 이름은 `build.productName` 이 아니라 package.json `name` 을 따른다 (패키징된 package.json 에 productName 이 없음). 설치본과 dev 가 같은 폴더를 쓴다.
 `appId`(`com.sungkwan.ssh-client`)는 바꾸지 않는다. 바꾸면 설치형이 다른 앱으로 인식된다.
+`main.js` 시작 부분이 설치본에서 `app.setAppUserModelId` 로 같은 값을 정한다 (`WINDOWS_APP_USER_MODEL_ID`, 바로가기의 ID 와 같아야 모든 창이 작업 표시줄 버튼 하나로 묶인다. 없으면 실시간 보기 창이 버튼을 하나 더 만들었다: `docs/fix/2026-11-13-taskbar-second-button.md`).
 
 ### App Icon
 원본은 `assets/icon.svg`, `npm run build:icon` 으로 icon.ico/icon.png 를 만든다 (`scripts/build-icon.cjs`, ICO 작성은 `scripts/ico.cjs`).
@@ -237,11 +239,15 @@ SFTP 패널(본창·분리 창)의 서버 파일 우클릭 메뉴 `미리보기`
 
 ### DB Client (SSH 터널로 DB 조회)
 상태바 왼쪽의 `DB` 표지(`DbIndicator.tsx`)가 활성 탭 서버의 DB 를 보여 주고, 고르면 계정 창(`DbConnectDialog.tsx`)을 거쳐 **본창의 DB 탭**을 연다 (`TerminalInfo.db`, id `db:<dbId>`, 내용은 `DbTab.tsx` → `DbClientView.tsx`). DB 탭의 `창으로 분리`(또는 탭을 창 밖으로 끌기)는 같은 접속을 DB 창(`?dbMode=true&dbId=...`, `DbClientWindow.tsx`)으로 옮긴다 (`db-detach`, 접속의 주인이 새 창으로 바뀐다). main 은 `src/dbClient/` (`discovery.js` 탐색, `connections.js` 창별 접속, `drivers/mysql.js`·`drivers/postgres.js`, `sqlGuard.js` 조회 문장 검사, `ipc.js`). 1단계는 조회만 된다 (MySQL/MariaDB, PostgreSQL). 설계: `docs/plan/2026-11-09-db-client.md`.
+- SQL Server(`drivers/mssql.js`, `tedious` 18): 같은 방식(스트림을 `connector` 로 넘김)으로 접속한다. 탐색·트리·조회·추출·자동완성이 되고 DDL 복사와 외래 키는 아직 없다 (`connections.js` 가 드라이버에 함수가 없으면 안내·빈 결과로 답한다). 연결할 수 있는 엔진 목록은 `lib/dbChoices.ts` 의 `CONNECTABLE_ENGINES`, main 은 `discovery.js` 의 `SUPPORTED_ENGINES` 와 `connections.js` 의 `SESSION_FACTORIES`.
+  - 바꾸면 안 되는 것 (읽기 보호): SQL Server 는 세션을 읽기 전용으로 둘 수 없다. 그래서 쿼리마다 트랜잭션으로 감싸 항상 되돌리고(`query` 의 `finally`), `sqlGuard.js` 가 SELECT·WITH 로 시작하는 문장만 받되 INTO·DML·EXEC·COMMIT 같은 낱말을 문장 어디에서든 거부한다 (T-SQL 은 세미콜론 없이 문장을 이어 쓸 수 있다: `SELECT 1 DELETE FROM t`). 이 보호가 서버 강제가 아니라는 점은 `info.missingGuards` 로 창에 표시한다. 대괄호 이름(`[delete]`)은 낱말로 치지 않는다.
+  - 바꾸면 안 되는 것 (로드): tedious 는 로드될 때 Azure 로그인 라이브러리(`@azure/*`)를 불러오는데, 현재 판은 Electron 28 의 Node 18 에서 로드되지 않아 앱이 시작하지 못했다. `loadTedious` 가 그 요청만 빈 대역으로 답한다 (SQL 로그인만 쓴다). 드라이버는 접속할 때 처음 불러온다 (`SESSION_FACTORIES` 의 `require`). 설치본에서는 `build.files` 가 `@azure`, `@typespec` 을 뺀다 (약 45MB).
+  - 숫자: tedious 는 decimal 을 JS 숫자로 준다 (15자리를 넘으면 정밀도가 줄어든다). bigint 는 글자로 온다.
 - 터널은 탭의 SSH 연결에서 `forwardOut` 으로 받은 스트림을 드라이버에 바로 넘긴다 (PC 에 포트를 열지 않음). pg 는 net.Socket 을 기대해서 `asSocket` 이 `connect`/`setNoDelay` 를 채운다.
 - 탐색은 연결마다 한 번 실행 채널로 `ss`/`netstat` 과 `ps` 만 본다 (`createDiscoveryCache`, 연결 객체 기준). 바꾸면 안 되는 것: DB 포트에 접속해 확인하지 않는다 (MySQL 은 끝까지 가지 않은 접속을 세다가 `max_connect_errors` 를 넘으면 그 호스트를 막는다).
 - 바꾸면 안 되는 것 (운영 DB 보호): 읽기 전용은 DB 서버가 강제한다. MySQL 은 접속마다 `SET SESSION TRANSACTION READ ONLY` 가 실패하면 접속을 쓰지 않고, PostgreSQL 은 시작 옵션 `default_transaction_read_only=on` 이 `on` 으로 확인돼야 쓴다. 그리고 두 엔진 모두 쿼리마다 `START TRANSACTION READ ONLY` / `BEGIN TRANSACTION READ ONLY` … `ROLLBACK` 으로 감싼다 (세션 설정은 SQL 로 바뀔 수 있다: PostgreSQL `SELECT set_config(...)`, `docs/brain/2026-11-09-postgres-read-only-session-bypass-with-set-config.md`). `sqlGuard.js` 는 두 번째 겹이다 (첫 단어 허용 목록, 문장 하나). PostgreSQL 쿼리는 pg-cursor(확장 프로토콜, 문장 하나)로만 보낸다. 트랜잭션을 열어 두지 않는다 (자동 커밋).
 - 제한: 결과 1,000행·50MB (`results.js`), 쿼리 30초 (MySQL `MAX_EXECUTION_TIME`, MariaDB `max_statement_time`, PostgreSQL `statement_timeout`, 서버가 못 멈추면 앱이 취소 후 끊음), 창마다 접속 하나·요청 하나, DB 창 10개. MySQL 은 `sql_select_limit` 를 1,001 로 두고, 쿼리의 LIMIT 이 더 커서 2행 넘게 더 오면 접속을 끊고 다음 쿼리 때 다시 접속한다. 취소는 두 번째 짧은 접속으로 `KILL QUERY` / `pg_cancel_backend`.
-- DB 창은 자기 webContents id 로만 답을 받는다 (`connections.js` 의 `own`). 계정은 main 창의 대화상자에서 main 으로만 가고 DB 창에는 가지 않는다. 앱을 잠그면 DB 창을 모두 닫고 접속을 끊는다 (`dbIpc.closeAll()`). 결과는 디스크에 쓰지 않는다.
+- DB 창은 자기 webContents id 로만 답을 받는다 (`connections.js` 의 `own`). 계정은 main 창의 대화상자에서 main 으로만 가고 DB 창에는 가지 않는다. 앱을 잠그면 DB 창을 모두 닫고 접속을 끊는다 (`dbIpc.closeAll()`). 결과는 사용자가 `추출` 로 저장할 때만 디스크에 쓴다 (그 밖에는 쓰지 않는다).
 - 계정 저장은 세션의 `dbConnections` (세션 파일과 함께 마스터 비밀번호로 암호화). "이 세션에 저장" 을 끄고 접속하면 그 저장 계정을 지운다.
 - 다중 계정: 한 DB 서버에 계정을 여러 개 저장한다 (같은 계정은 id, 또는 서버·사용자·기본 DB 가 모두 같은 것). 계정마다 이름(`label`)을 붙이고, 상태바 목록은 서버별로 묶어 계정과 `다른 계정으로 접속…` 을 보여 준다 (`lib/dbChoices.ts` 의 `buildGroups`). DB 창은 계정마다 따로 연다. 계정 창의 `연결 테스트`(`db-test`)는 한 번 로그인해 읽기 전용까지 확인하고 바로 닫는다.
 - DB 별칭: 상태바 목록의 서버 머리줄 연필로 DB 서버에 이름을 붙인다 (`DbAliasDialog.tsx`). 세션의 `dbAliases`(키는 `lib/dbChoices.ts` 의 `endpointKey`, 루프백 표기 무관)에 저장되어 세션 파일과 함께 암호화된다. 별칭이 있으면 머리줄에 별칭, 그 옆에 `엔진 · 주소` 를 보여 준다. 저장하지 않은 빠른 연결에는 연필이 없다.
@@ -251,9 +257,34 @@ SFTP 패널(본창·분리 창)의 서버 파일 우클릭 메뉴 `미리보기`
 - DB 탭: 탭 줄·분할 패인에서 SSH 탭과 같이 다루되 SFTP·탭 복제·로그 저장은 없다 (`TabContextMenu` 의 `isTerminal`). 닫으면 `db-close` 로 DB 접속만 끊는다 (SSH 탭은 그대로). 일괄 명령(`BatchCommandModal`)과 상태바 연결 수에서는 뺀다. DB 탭이 앞에 있으면 상태바 `DB` 목록은 그 탭의 SSH 탭(`db.sshSessionId`) 기준이다.
   - 바꾸면 안 되는 것: 앱을 잠그면 렌더러가 DB 탭을 모두 지운다 (`App.tsx`, `isLocked` effect). main 은 접속을 닫으므로, 지우지 않으면 잠금 해제 뒤 죽은 탭이 남고 조회 결과가 잠금 화면 뒤 메모리에 남는다. `db-open`/`db-close`/`db-detach` 는 본창에서만 받는다.
   - 전역 단축키 처리기(`useKeyboardShortcuts`)는 `event.defaultPrevented` 인 키를 건너뛴다. DB 탭 안의 Ctrl+W(콘솔 닫기)가 탭 전체를 닫지 않게 하려는 것이다.
+- 결과 표(`ResultGrid.tsx`, 계산은 `lib/dbGrid.ts`): 누른 셀의 행이 계속 강조되고, 끌거나 Shift+클릭·Shift+방향키로 여러 셀을 고르며 Ctrl+C 로 탭 구분 복사한다 (한 칸은 글자 그대로, 여러 칸은 NULL 을 빈칸으로). 행 번호를 누르면 그 행 전체, Ctrl+A 는 전체. 머리글을 끌어 열 순서를 바꾼다. 위치는 화면상의 자리(`place`)로 다룬다: 열을 옮긴 뒤에는 자리와 열 번호가 다르다 (`order[place]`).
+- 추출(`DbExportDialog.tsx`, 변환은 `lib/dbExport.ts`): 결과 막대의 `추출` 이 받은 결과(최대 1,000행)를 Excel·CSV·TSV·SQL INSERT·JSON·Markdown 으로 저장하거나 복사한다. DB 에 다시 묻지 않는다. xlsx 는 라이브러리 없이 `lib/zipStore.ts`(압축 없는 ZIP)로 쓴다. 저장은 main 의 `save-export-file`(잠긴 동안 거부). 바꾸면 안 되는 것: CSV·TSV 파일 앞의 UTF-8 표시(BOM)를 지우지 말 것 (엑셀에서 한글이 깨진다). xlsx 의 글자 칸은 `inlineStr` 이라 `=1+1` 같은 값이 수식이 되지 않는다. 15자리를 넘는 숫자는 글자로 둔다 (엑셀이 자릿수를 버린다).
+- DDL 복사: 트리의 테이블·스키마(MySQL 은 DB) 줄의 버튼, 또는 그 줄에 포커스를 두고 `Ctrl+Shift+C`(`Ctrl+Shift+V` 도 같음). main 의 `db-ddl`: MySQL 은 `SHOW CREATE TABLE`, PostgreSQL 은 카탈로그를 읽어 `src/dbClient/ddl.js` 가 조립한다 (열·제약·인덱스·주석·뷰 정의). 스키마 전체는 200개까지. 이름은 식별자 자리(`??`, `$1`)로만 들어간다.
+- 외래 키: 드라이버가 결과 열마다 출처(`source`: PostgreSQL 은 테이블·열 번호, MySQL 은 이름)를 붙이고, 결과가 뜬 뒤 `db-relations` 로 그 열들의 외래 키를 읽는다. 머리글의 고리 표지를 누르면 연결된 테이블 목록이, 그 열의 셀을 우클릭하면 `연관 테이블 조회`(`SELECT * FROM 대상 WHERE 열 = 값 LIMIT 100`)가 나온다. 만든 쿼리는 콘솔에 붙여서 실행한다 (무엇이 실행됐는지 보이게). 한 열짜리 외래 키만 다룬다. 바꾸면 안 되는 것: MySQL 은 "이 열이 참조하는 테이블"만 읽는다. "이 열을 참조하는 테이블"은 테이블 하나로 좁힐 수 없어 MySQL 5.7 에서 서버의 모든 테이블을 연다. 창이 돌려보내는 `source` 는 `connections.js` 가 형식을 검사한다.
+- 트리 너비는 트리 옆 손잡이로 바꾸고 `localStorage` 의 `dbTreeWidth` 에 남긴다 (두 번 누르면 처음 너비).
+- 트리의 테이블 실행 버튼(처음 100행)은 다른 DB 의 테이블이면 DB 를 바꾼 뒤 실행한다. 바꾸면 안 되는 것: 그 직후의 실행은 `appendAndRun(sql, true)` 로 "DB 전환 중" 막힘을 건너뛴다 (전환이 끝나도 콘솔은 다음 렌더까지 막힌 것으로 남아, 쿼리가 입력만 되고 실행되지 않았다).
+- 계정 창(`DbConnectDialog.tsx`)은 접속·테스트·저장 중에 진행 줄(하는 일과 경과 초)을 보이고 입력칸을 잠근다. 접속 뒤 계정을 저장하는 동안에도 진행 중으로 둔다.
 - 쿼리 콘솔(하위 탭, `DbConsole.tsx`, 계산은 `lib/dbConsoles.ts`): 콘솔마다 편집기·결과·실행 상태가 따로이고 접속은 하나를 함께 쓴다 (한 번에 하나만 실행, 다른 콘솔은 그동안 막힘). 최대 10개, Ctrl+T 새 콘솔, Ctrl+W 닫기, 두 번 눌러 이름 바꾸기. 콘솔의 SQL 은 계정별로 `localStorage` 의 `dbConsoles:<계정 키>` 에 남고(0.5초 뒤, 화면이 닫힐 때) 결과는 남기지 않는다.
 - 기본 스키마(PostgreSQL): 도구 모음 선택 상자나 트리에서 스키마 두 번 누르기로 `search_path` 를 `"<스키마>", public` 으로 둔다 (`useSchema`, 쿼리마다의 읽기 전용 트랜잭션 밖에서 세션에 설정, 다시 접속하면 다시 설정). 계정·DB 별로 `dbDefaultSchema:<계정 키>:<DB>` 에 기억한다. 이름은 서버가 준 스키마 목록에 있어야 한다. DB 를 바꾸면 초기화.
 - 새 `src/` 폴더라서 `MAIN_RUNTIME_DIRECTORIES` 에 `dbClient` 가 있다. 의존성 `mysql2`, `pg`, `pg-cursor` 는 정확한 버전으로 고정했다.
+
+### Remote Access (휴대폰 브라우저, Tailscale)
+설정 > 원격 접속에서 켜면 main 이 이 PC 의 Tailscale 주소(100.64.0.0/10, fd7a:115c:a1e0::/48)의 8722 포트에 HTTP·WebSocket 서버를 열고, 휴대폰 브라우저가 저장된 세션의 터미널을 쓴다 (`src/remoteAccess/`: `controller.js` 가 main 연결·IPC, `server.js` 서버, `accessStore.js` 기기·인증, `shells.js` SSH 셸, `web/` 휴대폰 화면). SSH 접속은 PC 가 하고 휴대폰에는 세션 이름·폴더와 셸 입출력만 간다. 기본은 꺼짐. 설계: `docs/plan/2026-11-13-remote-access-over-tailscale.md` (MCP 승인을 휴대폰에서 하는 것은 2단계).
+- 인증은 둘 다 필요하다: 등록된 기기 토큰(설정 화면의 QR 로 등록, 1회용 코드 2분, PC 에는 SHA-256 만 저장)과 인증 앱의 6자리 코드(TOTP, 기기마다 같은 코드는 한 번만). 코드를 5번 틀리면 그 기기만 5분 동안 막고, 15분 입력이 없으면 끊는다. 기기는 5대, 동시 접속 4개, 셸 6개까지.
+- 바꾸면 안 되는 것: Tailscale 주소에만 포트를 열고(`0.0.0.0`·LAN 으로 여는 선택지를 만들지 않는다), 들어온 접속의 주소도 Tailscale 대역인지 다시 본다. WebSocket 은 Origin 이 이 서버 주소일 때만 받는다 (다른 사이트 페이지가 소켓을 열지 못하게). 앱이 잠겨 있으면 포트를 닫고, 잠그면 모든 기기와 셸을 끊는다. `remote-access-*` IPC 는 본창에서 온 것만 받는다.
+- 보안 검토 반영 (바꾸지 말 것):
+  - 주소는 Tailscale 인터페이스(Windows·Linux 는 이름에 tailscale, macOS 는 `utunN`)의 것만 쓴다. 100.64.0.0/10 은 통신사 NAT·테더링도 쓰는 대역이라, 대역만 보면 그 망에 포트를 연다.
+  - WebSocket 의 Origin 과 Host 는 서로 비교하지 않고 서버가 연 주소(`http://<주소>:<포트>`)와 비교한다 (이 주소를 가리키게 만든 도메인의 페이지는 둘이 서로 같다). 다른 이름으로 온 페이지 요청은 주소로 돌려보낸다.
+  - 실패 횟수는 모두에게 걸지 않는다: 같은 tailnet 의 아무 기기가 틀린 값을 보내 주인을 막을 수 있었다. 인증 코드 실패는 기기별(토큰이 맞을 때만), 그 밖의 실패는 연결별(5번이면 끊음)·주소별(5분에 10번이면 접속 거부)로 센다.
+  - 기기가 보낸 값은 어떤 글자든 예외 없이 처리해야 한다: 비밀 비교는 양쪽을 해시한 뒤 한다 (`timingSafeEqual` 은 바이트 길이가 다르면 던진다), 소켓의 `error` 처리기는 맨 먼저 붙인다, 메시지 처리 전체를 try/catch 로 감싼다. main 에는 잡히지 않은 예외를 받는 처리기가 없다.
+  - 인증하지 않은 연결은 동시 접속 수(4)에 세지 않고 따로 제한한다 (주소당 3개, 전체 12개). 같이 세면 인증 없이 자리를 채워 주인을 막는다.
+  - 셸 출력은 20ms 마다 묶어 보내고, 휴대폰이 1MB 넘게 밀리면 셸 읽기를 멈춘다 (`shells.setPaused`). 멈추지 않으면 느린 휴대폰 앞에서 main 의 메모리가 끝없이 는다.
+- 바꾸면 안 되는 것: 저장된 호스트 키만 받는다 (PC 앞에 사람이 없다: MCP 와 같은 규칙). 휴대폰으로 가는 오류 문구에 서버 주소를 넣지 않는다. 셸 입력·크기 변경·닫기는 그 셸을 연 연결만 할 수 있다 (`shells.js` 의 `owned`).
+- 셸이 열리는 중에 기기가 끊기거나 앱이 잠기면 `closeAll` 이 닫을 대상이 아직 없다. 그래서 열리는 셸이 준비된 뒤 `goneOwners`·`epoch` 를 보고 스스로 닫는다. 이 확인을 지우면 주인 없는 SSH 연결이 남는다.
+- 인증 앱 비밀 키는 `userData/remote-access.json` 에 safeStorage 로 봉인해 둔다 (`totpSecretSealed`, 앱이 준비된 뒤 처음 쓸 때 연다). 평문으로는 쓰지 않는다: 봉인할 수 없는 PC 에서는 원격 접속을 켤 수 없다. 끊는 소켓은 2초 뒤 강제로 닫고(`closeSocket`), 닫히는 중인 소켓의 메시지는 처리하지 않는다 (끈 뒤에 온 `open` 이 셸을 열면 안 된다). 기록은 `userData/remote-access.log` 에 시각·기기·한 일만 남기고 입력과 출력은 남기지 않는다 (1MB 를 넘으면 뒤쪽 절반만 남김, 시작할 때와 200줄마다 확인).
+- QR 은 main 이 `qrcode` 로 칸 배열만 만들고 화면이 SVG 로 그린다 (`lib/qrSvg.ts`, 페이지 CSP 가 data: 이미지를 막는다). 테마와 상관없이 흰 바탕에 검정이다.
+- 휴대폰 화면(`web/`)은 빌드 단계가 없는 일반 스크립트다. xterm 은 devDependency 라 설치본에 없으므로 `electron.vite.config.ts` 가 `web/vendor` 로 복사한다 (`REMOTE_ACCESS_VENDOR`, 이름은 `server.js` 의 `VENDOR` 와 같아야 한다). 새 `src/` 폴더라서 `MAIN_RUNTIME_DIRECTORIES` 에 `remoteAccess` 가 있다.
+- 시험할 때: 개발 실행(`npx electron out/main/index.js`)은 `app.getVersion()` 이 Electron 버전이라 `업데이트 내용` 창이 뜨지 않지만 패키징된 앱은 뜬다. 창이 가려져 있으면(`document.hidden`) 닫힘 애니메이션이 끝나지 않아 배경이 클릭을 막는다.
 
 ### SSH Algorithms (오래된 서버)
 모든 ssh2 연결은 `src/sshAlgorithms.js` 의 `SSH_ALGORITHMS` 를 `algorithms` 로 넘긴다 (`main.js` 의 세 연결, `sshConnectionTest.js` 의 `buildOptions` → 연결 테스트·MCP). ssh2 기본값 뒤에 SHA-1 키 교환, CBC 암호, `ssh-dss`, `hmac-md5` 등을 `append` 로 붙여 PuTTY 로만 되던 오래된 서버에도 접속한다. 앞에 붙이거나 기본값을 바꾸지 말 것: 맨 뒤라서 새 방식을 아는 서버는 새 방식을 쓴다. 런타임이 지원하지 않는 이름은 빼고 붙인다 (ssh2 가 예외를 던짐). 새 `src/*.js` 라서 `MAIN_RUNTIME_MODULES` 에 있어야 한다. 설명: `docs/fix/2026-11-04-legacy-ssh-algorithms.md`.

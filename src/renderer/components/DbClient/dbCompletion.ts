@@ -7,7 +7,8 @@ import type { Extension } from '@codemirror/state'
 import { Prec } from '@codemirror/state'
 import { keymap } from '@codemirror/view'
 import { acceptCompletion, autocompletion, type Completion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete'
-import { MySQL, PostgreSQL, keywordCompletionSource, sql } from '@codemirror/lang-sql'
+import { MSSQL, MySQL, PostgreSQL, keywordCompletionSource, sql } from '@codemirror/lang-sql'
+import type { ConnectableEngine } from '../../lib/dbChoices'
 import { completionSpot, identifierText, referencedTables, resolveQualifier } from '../../lib/sqlCompletion'
 import { statementAt } from '../../lib/sqlStatements'
 import type { SerialQueue } from '../../lib/serialQueue'
@@ -18,7 +19,7 @@ const MAX_TABLES_FOR_COLUMNS = 4
 
 interface MetadataOptions {
   dbId: string
-  engine: 'mysql' | 'postgres'
+  engine: ConnectableEngine
   queue: SerialQueue
   /** The database queries run in (completion follows it) */
   database: () => string
@@ -67,13 +68,13 @@ export function createDbMetadata({ dbId, engine, queue, database, isIdle }: Meta
 
   return {
     schemaNames: async () => {
-      if (engine === 'postgres') return (await schemasOfCurrent())?.names ?? null
+      if (engine !== 'mysql') return (await schemasOfCurrent())?.names ?? null
       return read('databases', async () => {
         const result = await window.electronAPI.dbDatabases?.(dbId)
         return result?.success ? result.databases.map(d => d.name) : null
       })
     },
-    defaultSchema: async () => (engine === 'mysql' ? database() : (await schemasOfCurrent())?.defaultSchema ?? 'public'),
+    defaultSchema: async () => (engine === 'mysql' ? database() : (await schemasOfCurrent())?.defaultSchema ?? (engine === 'mssql' ? 'dbo' : 'public')),
     tables: (schema) => read(`tables\u0000${schema}`, async () => {
       const result = await window.electronAPI.dbTables?.(dbId, database(), schema)
       return result?.success ? result.tables : null
@@ -90,7 +91,7 @@ export function createDbMetadata({ dbId, engine, queue, database, isIdle }: Meta
 }
 
 interface SourceOptions {
-  engine: 'mysql' | 'postgres'
+  engine: ConnectableEngine
   metadata: DbMetadata
 }
 
@@ -166,7 +167,7 @@ export function schemaSource({ engine, metadata }: SourceOptions) {
 
 /** Editor extensions: SQL dialect, completion (typing or Ctrl+Space), Tab and Enter accept */
 export function completionExtensions(options: SourceOptions): Extension[] {
-  const dialect = options.engine === 'mysql' ? MySQL : PostgreSQL
+  const dialect = options.engine === 'mysql' ? MySQL : options.engine === 'mssql' ? MSSQL : PostgreSQL
   const keywords = keywordCompletionSource(dialect, true)
   // After `name.` only columns or tables make sense
   const keywordSource = (context: CompletionContext) =>

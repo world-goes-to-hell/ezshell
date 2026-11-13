@@ -1,24 +1,31 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Prec, type Extension } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
-import { RiErrorWarningLine, RiFileCopyLine, RiLoader4Line } from 'react-icons/ri'
+import { RiErrorWarningLine, RiLoader4Line, RiShareForwardBoxLine } from 'react-icons/ri'
 import { CodeEditor, type CodeEditorHandle } from '../RemoteFile/CodeEditor'
-import { ResultGrid, resultAsTsv } from './ResultGrid'
+import { ResultGrid } from './ResultGrid'
+import { DbExportDialog } from './DbExportDialog'
+import { tableOfQuery } from '../../lib/dbExport'
 import { copyToClipboard } from '../../lib/terminalClipboard'
-import { statementAt } from '../../lib/sqlStatements'
-import type { DbQueryResult, DbResult } from '../../types/db'
+import { lookupQuery, previewQuery, statementAt } from '../../lib/sqlStatements'
+import { sqlLiteral } from '../../lib/dbExport'
+import type { DbColumn, DbColumnSource, DbQueryResult, DbRelations, DbResult } from '../../types/db'
 
 type RunState =
   | { status: 'idle' }
   | { status: 'running'; startedAt: number }
-  | { status: 'done'; result: DbQueryResult }
+  | { status: 'done'; result: DbQueryResult; sql: string }
   | { status: 'error'; message: string }
 
 export interface DbConsoleHandle {
   /** Runs the selection, or the statement at the cursor */
   runCurrent: () => void
-  /** Adds `sql` on its own line at the end, selects it and runs it */
-  appendAndRun: (sql: string) => void
+  /**
+   * Adds `sql` on its own line at the end, selects it and runs it. `afterOwnSwitch`: the caller has
+   * just finished switching the database for this query, so the block that switch put on the
+   * console (still set until the next render) does not apply.
+   */
+  appendAndRun: (sql: string, afterOwnSwitch?: boolean) => void
   insertText: (text: string) => void
   focus: () => void
 }
@@ -29,9 +36,13 @@ interface DbConsoleProps {
   isActive: boolean
   /** Another console (or a database switch) is busy: this one waits */
   isBlocked: boolean
+  /** `mysql` or `postgres`: how exported INSERT statements quote names */
+  engine: string
   /** Completion and dialect, fixed for the editor's life */
   extensions: Extension[]
   runQuery: (sql: string) => Promise<DbResult<DbQueryResult> | undefined>
+  /** Foreign keys of result columns (one entry per source), or null when they cannot be read */
+  loadRelations: (sources: DbColumnSource[]) => Promise<DbRelations[] | null>
   onRunningChange: (consoleId: string, isRunning: boolean) => void
   onSqlChange: (consoleId: string, sql: string) => void
 }
@@ -54,6 +65,9 @@ export const DbConsole = forwardRef<DbConsoleHandle, DbConsoleProps>(function Db
   const [run, setRun] = useState<RunState>({ status: 'idle' })
   const [runSeq, setRunSeq] = useState(0)
   const [elapsed, setElapsed] = useState(0)
+  const [isExporting, setIsExporting] = useState(false)
+  // Foreign keys of the result's columns, read after the result is shown (null where a column has none)
+  const [relations, setRelations] = useState<Array<DbRelations | null>>([])
   const editorRef = useRef<CodeEditorHandle>(null)
   const callbacks = useRef(props)
   callbacks.current = props
@@ -65,8 +79,8 @@ export const DbConsole = forwardRef<DbConsoleHandle, DbConsoleProps>(function Db
     return () => clearInterval(timer)
   }, [run])
 
-  const execute = async (sql: string): Promise<void> => {
-    if (isRunning || callbacks.current.isBlocked || !sql.trim()) return
+  const execute = async (sql: string, ignoreBlock = false): Promise<void> => {
+    if (isRunning || (!ignoreBlock && callbacks.current.isBlocked) || !sql.trim()) return
     setElapsed(0)
     setRun({ status: 'running', startedAt: Date.now() })
     callbacks.current.onRunningChange(consoleId, true)
@@ -77,8 +91,39 @@ export const DbConsole = forwardRef<DbConsoleHandle, DbConsoleProps>(function Db
     else {
       // A new grid for every result: scroll position and selection belong to the old one
       setRunSeq(seq => seq + 1)
-      setRun({ status: 'done', result })
+      setRelations([])
+      setRun({ status: 'done', result, sql })
+      void readRelations(result.columns)
     }
+  }
+
+  /** Marks the columns that carry a foreign key; the result is on screen meanwhile */
+  const readRelations = async (columns: DbColumn[]): Promise<void> => {
+    const withSource = columns.map((column, index) => ({ index, source: column.source })).filter((entry): entry is { index: number; source: DbColumnSource } => Boolean(entry.source))
+    if (withSource.length === 0) return
+    const found = await callbacks.current.loadRelations(withSource.map(entry => entry.source))
+    if (!found) return
+    const byColumn: Array<DbRelations | null> = columns.map(() => null)
+    withSource.forEach((entry, i) => {
+      const relation = found[i]
+      if (relation && (relation.to.length > 0 || relation.from.length > 0)) byColumn[entry.index] = relation
+    })
+    // Only for the result these columns belong to (another query may have run since)
+    setRun(current => {
+      if (current.status === 'done' && current.result.columns === columns) setRelations(byColumn)
+      return current
+    })
+  }
+
+  /** Adds a statement on its own line at the end of the editor, selects it and runs it */
+  const appendAndRunSql = (sql: string, ignoreBlock = false): void => {
+    const view = editorRef.current?.getView()
+    if (!view) return
+    const doc = view.state.doc
+    const prefix = doc.length === 0 || doc.toString().endsWith('\n') ? '' : '\n'
+    const at = doc.length + prefix.length
+    view.dispatch({ changes: { from: doc.length, insert: `${prefix}${sql}\n` }, selection: { anchor: at, head: at + sql.length }, scrollIntoView: true })
+    void execute(sql, ignoreBlock)
   }
 
   const runCurrent = (): void => {
@@ -93,15 +138,7 @@ export const DbConsole = forwardRef<DbConsoleHandle, DbConsoleProps>(function Db
 
   useImperativeHandle(ref, () => ({
     runCurrent: () => runRef.current(),
-    appendAndRun: (sql) => {
-      const view = editorRef.current?.getView()
-      if (!view) return
-      const doc = view.state.doc
-      const prefix = doc.length === 0 || doc.toString().endsWith('\n') ? '' : '\n'
-      const at = doc.length + prefix.length
-      view.dispatch({ changes: { from: doc.length, insert: `${prefix}${sql}\n` }, selection: { anchor: at, head: at + sql.length }, scrollIntoView: true })
-      void execute(sql)
-    },
+    appendAndRun: (sql, afterOwnSwitch = false) => appendAndRunSql(sql, afterOwnSwitch),
     insertText: (text) => {
       const view = editorRef.current?.getView()
       if (!view) return
@@ -141,15 +178,26 @@ export const DbConsole = forwardRef<DbConsoleHandle, DbConsoleProps>(function Db
           {run.status === 'done' && <span className={run.result.truncatedBy ? 'db-result-cut' : undefined}>{summary(run.result)}</span>}
           {run.status === 'error' && <span className="db-result-error"><RiErrorWarningLine size={13} aria-hidden="true" /> {run.message}</span>}
           {result && result.columns.length > 0 && (
-            <button type="button" className="db-icon-button db-copy-all" onClick={() => void copyToClipboard(resultAsTsv(result.columns, result.rows))} title="결과 전체를 탭으로 구분해 복사 (엑셀에 붙여넣기)">
-              <RiFileCopyLine size={14} /> 복사
+            <button type="button" className="db-icon-button db-copy-all" onClick={() => setIsExporting(true)} title="결과를 엑셀·CSV·SQL 등으로 저장하거나 복사">
+              <RiShareForwardBoxLine size={14} /> 추출
             </button>
           )}
         </div>
         {result && result.columns.length > 0 && (
-          <ResultGrid key={runSeq} columns={result.columns} rows={result.rows} onCopy={(text) => void copyToClipboard(text)} />
+          <ResultGrid
+            key={runSeq}
+            columns={result.columns}
+            rows={result.rows}
+            relations={relations}
+            onCopy={(text) => void copyToClipboard(text)}
+            onOpenTable={(target) => appendAndRunSql(previewQuery(target.schema, target.table, props.engine))}
+            onLookup={(target, value, column) => appendAndRunSql(lookupQuery(target, sqlLiteral(value, column, props.engine), props.engine))}
+          />
         )}
       </section>
+      {isExporting && run.status === 'done' && (
+        <DbExportDialog result={run.result} table={tableOfQuery(run.sql)} engine={props.engine} onClose={() => setIsExporting(false)} />
+      )}
     </div>
   )
 })

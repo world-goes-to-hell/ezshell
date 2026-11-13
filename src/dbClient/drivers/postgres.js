@@ -7,8 +7,13 @@
 const { Client } = require('pg')
 const Cursor = require('pg-cursor')
 const { LIMITS, createCollector } = require('../results.js')
+const { buildPostgresDdl } = require('../ddl.js')
 
 const MAX_OBJECTS = 5000
+// DDL of a whole schema stops here (each table costs the server a few catalog reads)
+const MAX_DDL_TABLES = 200
+// Tables of one result whose foreign keys are looked up
+const MAX_RELATION_TABLES = 16
 const BATCH_ROWS = 200
 
 // Values stay as the server wrote them (dates without time zone shifts, big numbers exact);
@@ -74,6 +79,8 @@ function createPostgresSession({ openStream, credentials, limits = {} }) {
   const { maxRows = LIMITS.maxRows, maxBytes = LIMITS.maxBytes, queryTimeoutMs = LIMITS.queryTimeoutMs, connectTimeoutMs = 15000 } = limits
   let client = null
   let info = null
+  // server_version_num (150004 = 15.4): which catalog columns exist
+  let serverVersion = 0
   let database = credentials.database || ''
   // Where unqualified table names are looked up (search_path), for the tree and completion
   let defaultSchema = 'public'
@@ -101,12 +108,13 @@ function createPostgresSession({ openStream, credentials, limits = {} }) {
       }
     }
     try {
-      const { rows } = await next.query({ text: "SELECT version(), current_database(), current_setting('default_transaction_read_only'), current_schema()", rowMode: 'array' })
+      const { rows } = await next.query({ text: "SELECT version(), current_database(), current_setting('default_transaction_read_only'), current_schema(), current_setting('server_version_num')", rowMode: 'array' })
       // Never used unless the server took the read-only setting
       if (rows[0][2] !== 'on') throw Object.assign(new Error('read-only setting not applied'), { code: 'EZ_NOT_READ_ONLY' })
       info = { engine: 'postgres', product: 'PostgreSQL', version: String(rows[0][0]).split(' on ')[0].replace(/^PostgreSQL /, ''), missingGuards: [] }
       database = rows[0][1]
       defaultSchema = rows[0][3] || 'public'
+      serverVersion = Number(rows[0][4]) || 0
       await applySearchPath(next)
     } catch (err) {
       discard(next)
@@ -178,7 +186,8 @@ function createPostgresSession({ openStream, credentials, limits = {} }) {
       let affected = null
       for (;;) {
         const { rows, result } = await Promise.race([readCursor(cursor, BATCH_ROWS), giveUp])
-        if (result?.fields?.length) columns = result.fields.map((f) => ({ name: f.name, type: String(f.dataTypeID) }))
+        // `source`: the table column a result column comes from (none for an expression), for foreign keys
+        if (result?.fields?.length) columns = result.fields.map((f) => ({ name: f.name, type: String(f.dataTypeID), ...(f.tableID ? { source: { tableId: f.tableID, columnId: f.columnID } } : {}) }))
         if (result?.command) command = result.command
         if (typeof result?.rowCount === 'number') affected = result.rowCount
         for (const row of rows) {
@@ -291,6 +300,78 @@ function createPostgresSession({ openStream, credentials, limits = {} }) {
     return rows.map((r) => ({ name: String(r[0]), type: String(r[1]), isNullable: r[2] === true, isKey: r[3] === true }))
   }
 
+  /**
+   * CREATE statements of one table, or of every table of a schema (at most MAX_DDL_TABLES), put
+   * together from the catalog. Fixed catalog reads only; nothing the caller sends becomes SQL text.
+   */
+  async function ddl(db, schema, table) {
+    const one = table ? ' AND c.relname = $2' : ''
+    const values = table ? [schema, table] : [schema]
+    const tableRows = await rowsIn(db,
+      `SELECT c.relname, c.relkind, obj_description(c.oid, 'pg_class'),
+              CASE WHEN c.relkind IN ('v','m') THEN pg_get_viewdef(c.oid, true) END
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','f')${one} ORDER BY 1 LIMIT ${MAX_DDL_TABLES + 1}`, values)
+    const isCut = tableRows.length > MAX_DDL_TABLES
+    const tables = tableRows.slice(0, MAX_DDL_TABLES).map((r) => ({ table: String(r[0]), kind: String(r[1]), comment: r[2] ?? null, viewDefinition: r[3] ?? null }))
+    if (tables.length === 0) return { ddl: '', tableCount: 0, isCut: false }
+    const names = tables.map((t) => t.table)
+    const columnRows = await rowsIn(db,
+      `SELECT c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, pg_get_expr(d.adbin, d.adrelid),
+              ${serverVersion >= 100000 ? 'a.attidentity' : "''"}, col_description(c.oid, a.attnum)
+       FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+       LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+       WHERE n.nspname = $1 AND c.relname = ANY($2::text[]) AND a.attnum > 0 AND NOT a.attisdropped
+       ORDER BY c.relname, a.attnum`, [schema, names])
+    const constraintRows = await rowsIn(db,
+      `SELECT c.relname, con.conname, pg_get_constraintdef(con.oid)
+       FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = $1 AND c.relname = ANY($2::text[])
+       ORDER BY c.relname, CASE con.contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'f' THEN 2 ELSE 3 END, con.conname`, [schema, names])
+    const indexRows = await rowsIn(db,
+      `SELECT c.relname, pg_get_indexdef(i.indexrelid)
+       FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = $1 AND c.relname = ANY($2::text[])
+         AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.indexrelid)
+       ORDER BY c.relname, 2`, [schema, names])
+    return {
+      ddl: buildPostgresDdl(schema, {
+        tables,
+        columns: columnRows.map((r) => ({ table: String(r[0]), name: String(r[1]), type: String(r[2]), isNotNull: r[3] === true, defaultValue: r[4] ?? null, identity: String(r[5] ?? ''), comment: r[6] ?? null })),
+        constraints: constraintRows.map((r) => ({ table: String(r[0]), name: String(r[1]), definition: String(r[2]) })),
+        indexes: indexRows.map((r) => ({ table: String(r[0]), definition: String(r[1]) }))
+      }),
+      tableCount: tables.length,
+      isCut
+    }
+  }
+
+  /**
+   * Foreign keys of result columns, in the current database. `sources` are the { tableId, columnId }
+   * pairs `query` attached to the columns; the answer has one entry per source: `to` (what the
+   * column refers to) and `from` (columns that refer to it). Single-column keys only: a value of
+   * one column is what gets looked up.
+   */
+  async function relations(sources) {
+    const tableIds = [...new Set(sources.map((s) => s.tableId))].slice(0, MAX_RELATION_TABLES)
+    if (tableIds.length === 0) return sources.map(() => ({ to: [], from: [] }))
+    const rows = await rowsIn(null,
+      `SELECT con.conrelid::int8, con.conkey[1], n.nspname, c.relname, a.attname,
+              con.confrelid::int8, con.confkey[1], fn.nspname, fc.relname, fa.attname
+       FROM pg_constraint con
+       JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+       JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = con.conkey[1]
+       JOIN pg_class fc ON fc.oid = con.confrelid JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+       JOIN pg_attribute fa ON fa.attrelid = con.confrelid AND fa.attnum = con.confkey[1]
+       WHERE con.contype = 'f' AND array_length(con.conkey, 1) = 1
+         AND (con.conrelid = ANY($1::oid[]) OR con.confrelid = ANY($1::oid[]))
+       ORDER BY 3, 4, 5 LIMIT 500`, [tableIds])
+    return sources.map(({ tableId, columnId }) => ({
+      to: rows.filter((r) => Number(r[0]) === tableId && Number(r[1]) === columnId).map((r) => ({ schema: String(r[7]), table: String(r[8]), column: String(r[9]) })),
+      from: rows.filter((r) => Number(r[5]) === tableId && Number(r[6]) === columnId).map((r) => ({ schema: String(r[2]), table: String(r[3]), column: String(r[4]) }))
+    }))
+  }
+
   return {
     open,
     query,
@@ -301,6 +382,8 @@ function createPostgresSession({ openStream, credentials, limits = {} }) {
     useSchema,
     listTables,
     listColumns,
+    ddl,
+    relations,
     close() {
       isClosed = true
       drop()

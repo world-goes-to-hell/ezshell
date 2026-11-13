@@ -9,6 +9,7 @@ import { copyToClipboard } from '../../lib/terminalClipboard'
 import { formatBytes } from '../../lib/mcpLabels'
 import { toast } from '../../stores/toastStore'
 import type { TerminalMenuItem } from './TerminalContextMenu'
+import { fileZoneOf } from './terminalFileZone'
 
 /** A file or folder on the server that the right-clicked word names */
 export interface TerminalTarget {
@@ -45,8 +46,13 @@ function cellsAt(terminal: Terminal, screenRow: number): { cells: TerminalCell[]
  */
 export function nameAtPointer(terminal: Terminal, clientX: number, clientY: number): string | null {
   if (terminal.buffer.active.type === 'alternate') return null
+  // In a tab's main terminal a relative name counts only inside the file zone (output since the last cd)
+  const zone = fileZoneOf(terminal)
+  const allowed = (name: string | null, row: number): string | null => (name && (!zone || zone.allows(name, row)) ? name : null)
   const selection = terminal.getSelection()
-  if (selection && !/[\r\n]/.test(selection.trim())) return cleanName(selection)
+  if (selection && !/[\r\n]/.test(selection.trim())) {
+    return allowed(cleanName(selection), (terminal.getSelectionPosition()?.start.y ?? 1) - 1)
+  }
   const screen = terminal.element?.querySelector('.xterm-screen')
   if (!screen) return null
   const box = screen.getBoundingClientRect()
@@ -55,7 +61,7 @@ export function nameAtPointer(terminal: Terminal, clientX: number, clientY: numb
   const row = Math.floor((clientY - box.top) / (box.height / terminal.rows))
   if (column < 0 || column >= terminal.cols || row < 0 || row >= terminal.rows) return null
   const line = cellsAt(terminal, row)
-  return line ? cleanName(wordAtColumn(line.cells, line.offset + column)) : null
+  return line ? allowed(cleanName(wordAtColumn(line.cells, line.offset + column)), terminal.buffer.active.viewportY + row) : null
 }
 
 /** How long an answer about a path is reused (hovering a line asks about each of its words) */

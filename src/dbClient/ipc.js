@@ -98,6 +98,8 @@ function registerDbIpc({ ipcMain, connections, discover, createWindow, isLocked 
   ipcMain.handle('db-set-schema', answer((senderId, { dbId, schema }) => connections.setSchema(senderId, dbId, schema)))
   ipcMain.handle('db-schemas', answer((senderId, { dbId, database }) => connections.schemas(senderId, dbId, database)))
   ipcMain.handle('db-tables', answer((senderId, { dbId, database, schema }) => connections.tables(senderId, dbId, database, schema)))
+  ipcMain.handle('db-ddl', answer((senderId, { dbId, database, schema, table }) => connections.ddl(senderId, dbId, database, schema, table)))
+  ipcMain.handle('db-relations', answer((senderId, { dbId, sources }) => connections.relations(senderId, dbId, sources)))
   ipcMain.handle('db-columns', answer((senderId, { dbId, database, schema, table }) => connections.columns(senderId, dbId, database, schema, table)))
 
   /** The app locked: close every DB window and its connection. */

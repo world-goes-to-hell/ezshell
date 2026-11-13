@@ -10,19 +10,27 @@ const { createMysqlSession } = require('./drivers/mysql.js')
 const { createPostgresSession } = require('./drivers/postgres.js')
 
 const MAX_WINDOWS = 10
+// Columns of one result whose foreign keys a window may ask about
+const MAX_RELATION_SOURCES = 300
 
 const MESSAGES = {
   notFound: '이 DB 창의 접속 정보가 없습니다. 창을 닫고 다시 열어 주세요.',
   busy: '앞의 요청을 처리하는 중입니다. 끝난 뒤 다시 실행해 주세요.',
   tooMany: `DB 창은 ${MAX_WINDOWS}개까지 열 수 있습니다.`,
   badInput: '접속 정보가 올바르지 않습니다.',
-  unsupported: '아직 지원하지 않는 DB 입니다. 지금은 MySQL·MariaDB·PostgreSQL 만 됩니다.',
+  unsupported: '아직 지원하지 않는 DB 입니다. 지금은 MySQL·MariaDB·PostgreSQL·SQL Server 만 됩니다.',
+  noDdl: '이 DB 는 아직 DDL 복사를 지원하지 않습니다.',
   unknownDatabase: '이 계정으로 볼 수 있는 DB 목록에 없습니다.',
   unknownSchema: '이 DB 의 스키마 목록에 없습니다.',
   noSchemas: '이 DB 는 기본 스키마를 따로 고르지 않습니다 (DB 가 곧 스키마).'
 }
 
-const SESSION_FACTORIES = { mysql: createMysqlSession, postgres: createPostgresSession }
+const SESSION_FACTORIES = {
+  mysql: createMysqlSession,
+  postgres: createPostgresSession,
+  // Loaded when first used: its library is large, and a failure to load it must not stop the app
+  mssql: (options) => require('./drivers/mssql.js').createMssqlSession(options)
+}
 
 const isText = (value, max, { isRequired = false } = {}) =>
   typeof value === 'string' && value.length <= max && (!isRequired || value.trim().length > 0)
@@ -165,6 +173,35 @@ function createDbConnections({ openStream, createSession = (engine, options) => 
     return exclusive(entry, async () => ({ columns: await entry.session.listColumns(await knownDatabase(entry, database), schema, table) }))
   }
 
+  /** CREATE statements of a table (or, without `table`, of every table of the schema) for the clipboard */
+  const ddl = (ownerId, dbId, database, schema, table) => {
+    const entry = own(ownerId, dbId)
+    if (!isText(schema, 128, { isRequired: true }) || (table !== undefined && table !== null && !isText(table, 128, { isRequired: true }))) throw new DbError(MESSAGES.badInput)
+    if (typeof entry.session.ddl !== 'function') throw new DbError(MESSAGES.noDdl)
+    return exclusive(entry, async () => entry.session.ddl(await knownDatabase(entry, database), schema, table ?? null))
+  }
+
+  /**
+   * Foreign keys of result columns. `sources` is what the driver attached to the columns of a result
+   * and the window sends back: checked here, because it comes from the window.
+   */
+  const relations = (ownerId, dbId, sources) => {
+    const entry = own(ownerId, dbId)
+    if (!Array.isArray(sources) || sources.length > MAX_RELATION_SOURCES) throw new DbError(MESSAGES.badInput)
+    const isId = (value) => Number.isInteger(value) && value > 0 && value <= 0xffffffff
+    const clean = sources.map((source) => {
+      if (!source || typeof source !== 'object') throw new DbError(MESSAGES.badInput)
+      if (isId(source.tableId) && isId(source.columnId)) return { tableId: source.tableId, columnId: source.columnId }
+      if (isText(source.schema, 128, { isRequired: true }) && isText(source.table, 128, { isRequired: true }) && isText(source.column, 128, { isRequired: true })) {
+        return { schema: source.schema, table: source.table, column: source.column }
+      }
+      throw new DbError(MESSAGES.badInput)
+    })
+    // A driver that does not read foreign keys (SQL Server for now): no marks
+    if (clean.length === 0 || typeof entry.session.relations !== 'function') return Promise.resolve({ relations: clean.map(() => ({ to: [], from: [] })) })
+    return exclusive(entry, async () => ({ relations: await entry.session.relations(clean) }))
+  }
+
   /** The database queries run in. MySQL: USE on the same connection; PostgreSQL: a new connection to it. */
   const switchDatabase = (ownerId, dbId, database) => {
     const entry = own(ownerId, dbId)
@@ -226,7 +263,7 @@ function createDbConnections({ openStream, createSession = (engine, options) => 
     for (const dbId of [...connections.keys()]) close(dbId)
   }
 
-  return { open, test, attach, describe, query, cancel, databases, schemas, tables, columns, switchDatabase, setSchema, close, closeOwned, closeAll, has: (dbId) => connections.has(dbId) }
+  return { open, test, attach, describe, query, cancel, databases, schemas, tables, columns, ddl, relations, switchDatabase, setSchema, close, closeOwned, closeAll, has: (dbId) => connections.has(dbId) }
 }
 
 module.exports = { createDbConnections, validateRequest, MESSAGES, MAX_WINDOWS }

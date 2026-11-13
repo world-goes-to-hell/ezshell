@@ -140,6 +140,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('local-shell-exit', handler);
     return () => ipcRenderer.removeListener('local-shell-exit', handler);
   },
+  dbDdl: (dbId, database, schema, table) => ipcRenderer.invoke('db-ddl', { dbId, database, schema, table }),
+  dbRelations: (dbId, sources) => ipcRenderer.invoke('db-relations', { dbId, sources }),
+  // Remote access (settings page of the main window)
+  remoteAccessStatus: () => ipcRenderer.invoke('remote-access-status'),
+  remoteAccessSetEnabled: (isEnabled) => ipcRenderer.invoke('remote-access-set-enabled', isEnabled),
+  remoteAccessPairing: () => ipcRenderer.invoke('remote-access-pairing'),
+  remoteAccessAuthenticator: () => ipcRenderer.invoke('remote-access-authenticator'),
+  remoteAccessRevoke: (deviceId) => ipcRenderer.invoke('remote-access-revoke', deviceId),
+  onRemoteAccessChanged: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('remote-access-changed', handler);
+    return () => ipcRenderer.removeListener('remote-access-changed', handler);
+  },
+  saveExportFile: (defaultName, extension, data) => ipcRenderer.invoke('save-export-file', { defaultName, extension, data }),
   saveTerminalOutput: (defaultName, text) => ipcRenderer.invoke('save-terminal-output', { defaultName, text }),
   localRename: (oldPath, newPath) => ipcRenderer.invoke('local-rename', { oldPath, newPath }),
   localMkdir: (dirPath) => ipcRenderer.invoke('local-mkdir', { dirPath }),

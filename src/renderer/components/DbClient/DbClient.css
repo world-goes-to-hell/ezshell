@@ -220,9 +220,8 @@
   flex-direction: column;
   width: 248px;
   min-width: 180px;
-  border-right: 1px solid var(--border);
+  flex-shrink: 0;
   background: var(--bg-secondary);
-  resize: horizontal;
   overflow: hidden;
 }
 
@@ -1170,4 +1169,340 @@
 
 .db-connect-spacer {
   min-width: 8px;
+}
+
+/* ---------- DB account dialog while it works ---------- */
+.db-connect-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.db-connect-fields:disabled {
+  opacity: 0.6;
+}
+
+.db-connect-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.db-connect-progress > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.db-connect-progress-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.db-connect-progress-time {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Result export ("추출") ---------- */
+.modal-content.db-export-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+}
+
+.db-export-summary {
+  margin: -6px 0 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.db-export-cut {
+  color: var(--warning);
+}
+
+.db-export-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.db-export-label {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.db-export-formats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.db-export-format {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.db-export-format:hover {
+  border-color: var(--border-strong);
+}
+
+.db-export-format.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.db-export-format:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.db-export-format-name {
+  font-weight: 600;
+}
+
+.db-export-format-ext {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.db-export-hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* The dialog's form rules stretch inputs and style labels as captions: keep the checkbox a checkbox */
+.db-export-dialog .db-export-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: auto;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.db-export-dialog .db-export-check input {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.db-export-input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.db-export-input:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.db-export-preview {
+  max-height: 150px;
+  margin: 0;
+  padding: 9px 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.db-export-preview.is-note {
+  font-family: inherit;
+  font-size: 12.5px;
+  white-space: normal;
+}
+
+.db-export-actions .modal-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* ---------- Handle between the tree and the query side ---------- */
+.db-tree-resizer {
+  flex: none;
+  width: 5px;
+  margin-right: -2px;
+  border-left: 1px solid var(--border);
+  cursor: col-resize;
+  transition: background var(--transition-fast);
+  z-index: 3;
+}
+
+.db-tree-resizer:hover,
+.db-tree-resizer.is-dragging {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* While dragging: no text gets selected and the pointer keeps its shape over the editor */
+.db-body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.db-body.is-resizing .db-main {
+  pointer-events: none;
+}
+
+/* Two buttons on a tree line (DDL, preview) */
+.db-tree-preview + .db-tree-preview {
+  margin-left: -2px;
+}
+
+/* ---------- Result grid: row in use, blocks of cells, movable headers, foreign keys ---------- */
+.db-grid-cell {
+  user-select: none;
+}
+
+/* The row of the cell last clicked stays marked */
+.db-grid-row.is-current .db-grid-cell {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.db-grid-row.is-current .db-grid-index {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-secondary));
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.db-grid-row:not(.db-grid-head) .db-grid-index {
+  cursor: pointer;
+}
+
+.db-grid-row .db-grid-cell.is-in-range {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.db-grid-row .db-grid-cell.is-selected {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.db-grid-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: grab;
+}
+
+.db-grid-header-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Where a dragged header would land */
+.db-grid-header.is-drop-target {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-tertiary));
+}
+
+.db-grid-link {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.db-grid-link:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.db-grid-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---------- Menu of the grid ---------- */
+.db-grid-menu {
+  min-width: 200px;
+  max-width: 420px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.db-grid-menu-heading {
+  padding: 6px 10px 3px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.db-grid-menu .db-grid-menu-item {
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.db-grid-menu-item svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.db-grid-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-grid-menu-detail {
+  flex-shrink: 0;
+  max-width: 200px;
+  margin-left: auto;
+  padding-left: 12px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

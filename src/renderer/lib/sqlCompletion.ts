@@ -62,6 +62,7 @@ export function resolveQualifier(qualifier: string, tables: TableReference[]): T
 /** The name as it must be typed: quoted when it would not be read back the same way */
 export function identifierText(name: string, engine: string): string {
   if (engine === 'mysql') return /^[A-Za-z_][\w$]*$/.test(name) ? name : `\`${name.replace(/`/g, '``')}\``
+  if (engine === 'mssql') return /^[A-Za-z_][\w$#@]*$/.test(name) ? name : `[${name.replace(/]/g, ']]')}]`
   // PostgreSQL folds bare names to lower case
   return /^[a-z_][a-z0-9_$]*$/.test(name) ? name : `"${name.replace(/"/g, '""')}"`
 }

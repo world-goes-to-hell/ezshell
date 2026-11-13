@@ -55,9 +55,36 @@ export interface DbWindowInfo extends DbServerInfo {
   user: string
 }
 
+/**
+ * Which table column a result column comes from, as the driver reports it (PostgreSQL: ids,
+ * MySQL: names). The window only hands it back to ask for foreign keys.
+ */
+export interface DbColumnSource {
+  tableId?: number
+  columnId?: number
+  schema?: string
+  table?: string
+  column?: string
+}
+
 export interface DbColumn {
   name: string
   type: string
+  /** Absent for an expression (`amount * 2`, `count(*)`) */
+  source?: DbColumnSource
+}
+
+/** A column a foreign key ties to */
+export interface DbRelationTarget {
+  schema: string
+  table: string
+  column: string
+}
+
+/** Foreign keys of one column: what it refers to, and the columns that refer to it */
+export interface DbRelations {
+  to: DbRelationTarget[]
+  from: DbRelationTarget[]
 }
 
 export type DbCell = string | number | boolean | null

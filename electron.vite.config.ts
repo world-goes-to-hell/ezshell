@@ -7,7 +7,16 @@ import fs from 'fs'
 const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js', 'navigationGuard.js', 'updateChecker.js', 'sshAlgorithms.js', 'rootSwitch.js', 'localShell.js', 'windowState.js', 'sftpListing.js', 'lastVersion.js']
 
 // Directories under src/ that main.js loads at runtime; copied whole, without their tests
-const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient']
+const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient', 'remoteAccess']
+
+// The terminal library of the remote access page (a phone's browser), served by the main process.
+// xterm is a devDependency (the renderer bundles it), so the packaged app has no copy to serve:
+// these are copied next to the page. Names must match VENDOR in src/remoteAccess/server.js.
+const REMOTE_ACCESS_VENDOR: Record<string, string> = {
+  'xterm.js': 'xterm/lib/xterm.js',
+  'xterm.css': 'xterm/css/xterm.css',
+  'xterm-addon-fit.js': 'xterm-addon-fit/lib/xterm-addon-fit.js'
+}
 
 function copyCryptoPlugin() {
   return {
@@ -27,6 +36,11 @@ function copyCryptoPlugin() {
           recursive: true,
           filter: (source) => !source.endsWith('.test.js') && !source.endsWith('.testhelper.js')
         })
+      }
+      const vendorDir = path.resolve(__dirname, 'out/main/src/remoteAccess/web/vendor')
+      fs.mkdirSync(vendorDir, { recursive: true })
+      for (const [name, source] of Object.entries(REMOTE_ACCESS_VENDOR)) {
+        fs.copyFileSync(path.resolve(__dirname, 'node_modules', source), path.join(vendorDir, name))
       }
     }
   }
