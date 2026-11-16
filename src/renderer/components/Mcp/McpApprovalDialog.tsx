@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { McpApprovalRequest } from '../../types'
 import { RISK_LABELS, revealHiddenChars, revealPath, secondsLeft } from '../../lib/mcpLabels'
@@ -87,7 +87,8 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
   return (
     <Dialog.Content
       ref={contentRef}
-      className={`modal-content mcp-approval${isFile ? ' mcp-approval-file' : ''}`}
+      className={`modal-content mcp-approval${isFile ? ' mcp-approval-file' : ''}${request.sessionColor ? ' mcp-approval-colored' : ''}`}
+      style={request.sessionColor ? ({ '--mcp-session-color': request.sessionColor } as CSSProperties) : undefined}
       aria-describedby={hasDiff ? 'mcp-approval-diff' : isFile || isTransfer ? 'mcp-approval-hint' : 'mcp-approval-command'}
       // Focus the dialog itself, not a button: Enter or Space typed for something else must not answer
       onOpenAutoFocus={(event) => {
@@ -106,6 +107,9 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
       <dl className="mcp-approval-fields">
         <dt>세션</dt>
         <dd>
+          {request.sessionColor && (
+            <span className="mcp-approval-swatch" style={{ backgroundColor: request.sessionColor }} aria-hidden="true" />
+          )}
           {request.sessionName}
           {request.folder && <span className="mcp-approval-folder"> ({request.folder})</span>}
         </dd>

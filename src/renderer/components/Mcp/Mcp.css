@@ -242,6 +242,23 @@
   padding: 20px;
 }
 
+/* The session's own colour, so the request is recognised at a glance: a left edge on the dialog
+   and a swatch beside the session name. Only present when the session has a colour. */
+.mcp-approval.mcp-approval-colored {
+  border-left: 4px solid var(--mcp-session-color);
+  padding-left: 16px;
+}
+
+.mcp-approval-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 7px;
+  border-radius: 3px;
+  vertical-align: baseline;
+  background: var(--mcp-session-color);
+}
+
 .mcp-approval-header {
   display: flex;
   align-items: center;

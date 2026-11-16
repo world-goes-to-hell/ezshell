@@ -174,6 +174,8 @@ export interface McpApprovalRequest {
   id: string
   sessionName: string
   folder: string
+  /** The colour the user gave this session in the sidebar, shown as a swatch (null when none) */
+  sessionColor?: string | null
   cwd: string | null
   command: string
   /** Commands only: why Claude says it wants to run it (its own words, at most 500 characters) */

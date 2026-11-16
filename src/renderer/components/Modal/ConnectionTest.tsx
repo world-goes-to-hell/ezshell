@@ -1,9 +1,20 @@
 import { useCallback, useRef, useState } from 'react'
 import { RiCheckboxCircleFill, RiErrorWarningFill, RiLoader4Line } from 'react-icons/ri'
-import { toSSHConnectConfig } from '../../lib/sshConnectConfig'
+import { toSSHConnectConfig, type SessionConnectSource } from '../../lib/sshConnectConfig'
+import { toast } from '../../stores/toastStore'
 import type { SshConnectionTestResult } from '../../types'
-import type { ConnectionConfig } from './ConnectModal'
 import './ConnectionTest.css'
+
+const formatElapsed = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}초`)
+
+/** The same outcome shown inline, also raised as a toast so it is noticed away from the modal's foot */
+function notifyResult(result: SshConnectionTestResult) {
+  if (result.success) {
+    toast.success('연결 테스트', `연결에 성공했습니다. (${formatElapsed(result.elapsedMs)}${result.viaJumpHost ? ', Jump Host 경유' : ''})`)
+  } else {
+    toast.error('연결 테스트 실패', `${result.stage === 'jump' ? '[Jump Host] ' : ''}${result.error}`)
+  }
+}
 
 export type ConnectionTestState =
   | { status: 'idle' }
@@ -25,14 +36,16 @@ export function useConnectionTest() {
     setState(IDLE)
   }, [])
 
-  const run = useCallback(async (config: ConnectionConfig) => {
+  const run = useCallback(async (config: SessionConnectSource) => {
     const runId = ++runIdRef.current
     setState({ status: 'testing' })
     let result: SshConnectionTestResult
     // The preload bridge only picks up new APIs after an app restart
     if (typeof window.electronAPI?.sshTestConnection !== 'function') {
       if (runIdRef.current === runId) {
-        setState({ status: 'done', result: { success: false, stage: 'target', error: '앱을 다시 시작한 뒤 연결 테스트를 사용할 수 있습니다.' } })
+        const result: SshConnectionTestResult = { success: false, stage: 'target', error: '앱을 다시 시작한 뒤 연결 테스트를 사용할 수 있습니다.' }
+        setState({ status: 'done', result })
+        notifyResult(result)
       }
       return
     }
@@ -47,13 +60,14 @@ export function useConnectionTest() {
         detail: error instanceof Error ? error.message : String(error)
       }
     }
-    if (runIdRef.current === runId) setState({ status: 'done', result })
+    if (runIdRef.current === runId) {
+      setState({ status: 'done', result })
+      notifyResult(result)
+    }
   }, [])
 
   return { state, run, reset }
 }
-
-const formatElapsed = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}초`)
 
 export function ConnectionTestStatus({ state }: { state: ConnectionTestState }) {
   if (state.status === 'idle') return null

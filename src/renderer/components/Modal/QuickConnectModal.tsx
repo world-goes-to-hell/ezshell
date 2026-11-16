@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { motion, AnimatePresence } from 'framer-motion'
 import { modalOverlayVariants, modalContentVariants } from '../../lib/animation/variants'
 import { RiCloseFill, RiFlashlightFill, RiKeyFill, RiEyeFill, RiEyeOffFill } from 'react-icons/ri'
 import { LoadingButton, useRipple } from '../Animation'
+import { useConnectionTest, ConnectionTestStatus } from './ConnectionTest'
 import './QuickConnectModal.css'
 
 interface QuickConnectModalProps {
@@ -25,6 +26,14 @@ export interface QuickConnectionConfig {
 export function QuickConnectModal({ open, onOpenChange, onConnect }: QuickConnectModalProps) {
   const [showPassword, setShowPassword] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
+  const connectionTest = useConnectionTest()
+  const { reset: resetConnectionTest } = connectionTest
+  const formRef = useRef<HTMLFormElement>(null)
+
+  // Clear a previous verdict when the modal closes, so reopening starts clean
+  useEffect(() => {
+    if (!open) resetConnectionTest()
+  }, [open, resetConnectionTest])
   const { createRipple, RippleContainer } = useRipple('rgba(255, 255, 255, 0.2)')
   const [config, setConfig] = useState<QuickConnectionConfig>({
     host: '',
@@ -41,6 +50,7 @@ export function QuickConnectModal({ open, onOpenChange, onConnect }: QuickConnec
     try {
       await onConnect(config, saveSession)
       onOpenChange(false)
+      resetConnectionTest()
       // Reset form
       setConfig({
         host: '',
@@ -54,6 +64,13 @@ export function QuickConnectModal({ open, onOpenChange, onConnect }: QuickConnec
     } finally {
       setIsConnecting(false)
     }
+  }
+
+  const handleTestConnection = () => {
+    // Show the browser's own "required" hints (host, username) before testing
+    if (!formRef.current?.reportValidity()) return
+    // The result also pops up as a toast at the corner (ConnectionTest.notifyResult)
+    connectionTest.run(config)
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -74,6 +91,8 @@ export function QuickConnectModal({ open, onOpenChange, onConnect }: QuickConnec
 
   const updateConfig = (field: keyof QuickConnectionConfig, value: any) => {
     setConfig({ ...config, [field]: value })
+    // An edit makes an earlier verdict stale, so clear it
+    resetConnectionTest()
   }
 
   return (
@@ -103,7 +122,7 @@ export function QuickConnectModal({ open, onOpenChange, onConnect }: QuickConnec
                   빠른 연결
                 </Dialog.Title>
 
-                <form onSubmit={handleSubmit}>
+                <form ref={formRef} onSubmit={handleSubmit}>
                   <div className="form-row">
                     <div className="form-group flex-1">
                       <label>호스트</label>
@@ -212,7 +231,18 @@ export function QuickConnectModal({ open, onOpenChange, onConnect }: QuickConnec
                     연결 정보는 저장되지 않습니다. 저장하려면 "연결 및 저장"을 클릭하세요.
                   </div>
 
+                  <ConnectionTestStatus state={connectionTest.state} />
+
                   <div className="modal-actions">
+                    <button
+                      type="button"
+                      className="btn-secondary connection-test-btn"
+                      onClick={handleTestConnection}
+                      disabled={isConnecting || connectionTest.state.status === 'testing'}
+                      title="입력한 정보로 로그인만 시도하고 바로 연결을 끊습니다"
+                    >
+                      {connectionTest.state.status === 'testing' ? '테스트 중...' : '연결 테스트'}
+                    </button>
                     <Dialog.Close asChild>
                       <button
                         type="button"

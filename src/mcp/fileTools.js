@@ -142,6 +142,7 @@ function createFileHandlers({ isUnlocked, allowedSessions, findSession, getFolde
         kind: 'file',
         sessionName: session.name,
         folder: folderPath(getFolders(), session.folderId),
+        sessionColor: session.color ?? null,
         cwd: null,
         command: base.command,
         path: seen.path,

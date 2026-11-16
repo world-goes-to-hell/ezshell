@@ -382,6 +382,7 @@ function createTransferHandlers({
         direction,
         sessionName: session.name,
         folder: folderPath(getFolders(), session.folderId),
+        sessionColor: session.color ?? null,
         cwd: null,
         command,
         localPath: localFile.path,

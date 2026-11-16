@@ -149,6 +149,7 @@ function createToolHandlers({
     const outcome = await approvals.request({
       sessionName: session.name,
       folder: folderPath(getFolders(), session.folderId),
+      sessionColor: session.color ?? null,
       cwd,
       command,
       purpose,
