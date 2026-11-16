@@ -3727,6 +3727,27 @@ body.resizing .split-pane-content * {
   background: var(--bg-hover);
 }
 
+/* "직접 선택": a rainbow swatch that opens the native colour picker (holds a hidden color input) */
+.color-option.color-option-custom {
+  background: conic-gradient(red, yellow, lime, aqua, blue, magenta, red);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.color-option.color-option-custom input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  opacity: 0;
+  cursor: pointer;
+}
+
 /* ===== Tab Color Dot ===== */
 .tab-color-dot {
   width: 8px;

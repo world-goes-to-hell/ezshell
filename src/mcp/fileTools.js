@@ -11,7 +11,7 @@ const { classifyFileWrite, refuseSystemPath } = require('./filePolicy.js')
 const { inspectTarget, writeIfUnchanged, RemoteFileError, MAX_FILE_BYTES } = require('./remoteFile.js')
 const {
   LOCKED_MESSAGE, SESSION_CHANGED_MESSAGE, UNKNOWN_ERROR_MESSAGE, SESSIONS_UNREADABLE_MESSAGE, AUDIT_FAILED_MESSAGE,
-  textResult, folderPath, exposedName, activityFields, activityState
+  textResult, folderPath, effectiveColor, exposedName, activityFields, activityState
 } = require('./toolShared.js')
 
 /** A change takes longer to read than a command, so its dialog stays longer */
@@ -142,7 +142,7 @@ function createFileHandlers({ isUnlocked, allowedSessions, findSession, getFolde
         kind: 'file',
         sessionName: session.name,
         folder: folderPath(getFolders(), session.folderId),
-        sessionColor: session.color ?? null,
+        sessionColor: effectiveColor(session, getFolders()),
         cwd: null,
         command: base.command,
         path: seen.path,

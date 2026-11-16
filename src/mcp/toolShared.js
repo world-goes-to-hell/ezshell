@@ -44,6 +44,24 @@ function folderPath(folders, folderId) {
 }
 
 /**
+ * The colour shown for a session in the approval dialog: the session's own colour, or the nearest
+ * ancestor folder's colour when the session has none. Matches the sidebar (getFolderEffectiveColor).
+ * Returns null when neither has one.
+ */
+function effectiveColor(session, folders) {
+  if (typeof session.backgroundColor === 'string' && session.backgroundColor) return session.backgroundColor
+  const byId = new Map(folders.map(folder => [folder.id, folder]))
+  const visited = new Set()
+  let current = session.folderId ? byId.get(session.folderId) : undefined
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id)
+    if (typeof current.backgroundColor === 'string' && current.backgroundColor) return current.backgroundColor
+    current = current.parentId ? byId.get(current.parentId) : undefined
+  }
+  return null
+}
+
+/**
  * The name Claude sees. A session saved without a name is called "user@host", and names often
  * contain the address; those are replaced so the host and account never reach Claude.
  */
@@ -72,5 +90,5 @@ function activityState(fields) {
 module.exports = {
   LOCKED_MESSAGE, SESSION_CHANGED_MESSAGE, UNKNOWN_ERROR_MESSAGE, SESSIONS_UNREADABLE_MESSAGE, AUDIT_FAILED_MESSAGE, DENIAL_MESSAGES,
   JOB_STATE_LABELS, DROPPED_JOB_NOTE, UNCONFIRMED_JOB_NOTE,
-  textResult, folderPath, exposedName, isAllowedSession, activityFields, activityState
+  textResult, folderPath, effectiveColor, exposedName, isAllowedSession, activityFields, activityState
 }

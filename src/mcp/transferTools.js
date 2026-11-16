@@ -14,7 +14,7 @@ const remote = require('./remoteTransfer.js')
 const { combineSignals } = require('./signals.js')
 const {
   LOCKED_MESSAGE, SESSION_CHANGED_MESSAGE, UNKNOWN_ERROR_MESSAGE, SESSIONS_UNREADABLE_MESSAGE, AUDIT_FAILED_MESSAGE,
-  textResult, folderPath, exposedName, activityFields, activityState
+  textResult, folderPath, effectiveColor, exposedName, activityFields, activityState
 } = require('./toolShared.js')
 
 const MAX_TRANSFER_BYTES = 1024 * 1024 * 1024
@@ -382,7 +382,7 @@ function createTransferHandlers({
         direction,
         sessionName: session.name,
         folder: folderPath(getFolders(), session.folderId),
-        sessionColor: session.color ?? null,
+        sessionColor: effectiveColor(session, getFolders()),
         cwd: null,
         command,
         localPath: localFile.path,

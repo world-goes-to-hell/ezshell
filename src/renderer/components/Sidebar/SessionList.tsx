@@ -707,6 +707,13 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
                 title={colorItem.name}
               />
             ))}
+            <label className="color-option color-option-custom" title="직접 선택">
+              <input
+                type="color"
+                defaultValue={folders.find(f => f.id === colorPickerFolderId)?.backgroundColor || '#3fb950'}
+                onChange={(e) => handleSelectFolderColor(e.target.value)}
+              />
+            </label>
           </div>
           <div className="context-menu-divider" />
           <div className="context-menu-item" onClick={() => setColorPickerFolderId(null)}>
@@ -746,6 +753,13 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
                 title={colorItem.name}
               />
             ))}
+            <label className="color-option color-option-custom" title="직접 선택">
+              <input
+                type="color"
+                defaultValue={sessions.find(s => s.id === colorPickerSessionId)?.backgroundColor || '#3fb950'}
+                onChange={(e) => handleSelectSessionColor(e.target.value)}
+              />
+            </label>
           </div>
           <div className="context-menu-divider" />
           <div className="context-menu-item" onClick={() => setColorPickerSessionId(null)}>

@@ -11,7 +11,7 @@ const { createJobStore } = require('./jobStore.js')
 const {
   LOCKED_MESSAGE, SESSION_CHANGED_MESSAGE, UNKNOWN_ERROR_MESSAGE, SESSIONS_UNREADABLE_MESSAGE, AUDIT_FAILED_MESSAGE, DENIAL_MESSAGES,
   JOB_STATE_LABELS, DROPPED_JOB_NOTE, UNCONFIRMED_JOB_NOTE,
-  textResult, folderPath, exposedName, isAllowedSession, activityFields, activityState
+  textResult, folderPath, effectiveColor, exposedName, isAllowedSession, activityFields, activityState
 } = require('./toolShared.js')
 
 const NOT_ALLOWED_MESSAGE = '허용되지 않은 세션입니다. list_sessions 로 사용할 수 있는 세션을 확인하세요.'
@@ -149,7 +149,7 @@ function createToolHandlers({
     const outcome = await approvals.request({
       sessionName: session.name,
       folder: folderPath(getFolders(), session.folderId),
-      sessionColor: session.color ?? null,
+      sessionColor: effectiveColor(session, getFolders()),
       cwd,
       command,
       purpose,

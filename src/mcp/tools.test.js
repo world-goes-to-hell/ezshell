@@ -5,7 +5,7 @@ import activityModule from './activityLog.js'
 const { createToolHandlers } = toolsModule
 const { createActivityLog } = activityModule
 
-const allowed = { id: 's1', name: '[개발] 바우처 WAS', folderId: 'f2', color: '#3fb950', mcpEnabled: true, host: '10.0.0.1', username: 'deploy', password: 'pw' }
+const allowed = { id: 's1', name: '[개발] 바우처 WAS', folderId: 'f2', backgroundColor: '#3fb950', mcpEnabled: true, host: '10.0.0.1', username: 'deploy', password: 'pw' }
 const hidden = { id: 's2', name: '[운영] DB', mcpEnabled: false, host: '10.0.0.2' }
 const folders = [{ id: 'f1', name: '개발' }, { id: 'f2', name: '[개발] 소상공인 바우처', parentId: 'f1' }]
 const okResult = { cwd: '/home/app', exitCode: 0, signal: null, stdout: 'ok\n', stderr: '', truncated: false, timedOut: false, cancelled: false }
