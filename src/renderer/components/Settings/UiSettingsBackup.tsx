@@ -38,7 +38,7 @@ export function UiSettingsBackup() {
         addToast({ type: 'info', title: '내보낼 설정이 없습니다', message: '아직 바꾼 화면 설정이 없습니다' })
         return
       }
-      const result = await save(`ezshell-ui-settings-${fileStamp(new Date())}.json`, 'json', JSON.stringify(file, null, 2))
+      const result = await save(`ezshell-ui-settings-${fileStamp(new Date())}.json`, 'json', JSON.stringify(file, null, 2), 'ui-settings')
       if (result.success) addToast({ type: 'success', title: '화면 설정을 내보냈습니다', message: `${count}개 항목` })
       else if (!result.cancelled) addToast({ type: 'error', title: '화면 설정 내보내기 실패', message: result.error })
     } catch (error) {
