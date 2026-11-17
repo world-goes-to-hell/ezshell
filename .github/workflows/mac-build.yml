@@ -9,12 +9,18 @@
 # (src/manualUpdate.js). So this workflow attaches the files to the release.
 #
 # - A release is published (the Windows deploy does that): build, then attach to that release.
-# - Run workflow (Actions tab): build only, files are kept as a workflow artifact.
+# - Run workflow (Actions tab): build only, files are kept as a workflow artifact. With a release
+#   tag given (v2.19.0), the files are also attached to that release (for a release whose build failed).
 
 name: macOS build (unsigned)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach the files to (empty: build only)'
+        required: false
+        default: ''
   release:
     types: [published]
 
@@ -23,7 +29,8 @@ permissions:
 
 jobs:
   build-mac:
-    runs-on: macos-14
+    # The newest image GitHub offers: a pinned one (macos-14) was retired and the job could not start
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -51,8 +58,8 @@ jobs:
             release/*.zip
 
       - name: Attach to the release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.tag != ''
         run: gh release upload "$TAG" release/*.dmg release/*.zip --clobber
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
