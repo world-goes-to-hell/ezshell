@@ -12,6 +12,7 @@ import { usePopoutHostLabel } from '../../hooks/usePopoutHostLabel'
 import { linkConnected, linkDisconnected, linkReconnecting, reconnectFailureText } from '../../lib/connectionLost'
 import type { ConnectionLink } from '../../lib/connectionLost'
 import { ConnectionLostOverlay } from './ConnectionLostOverlay'
+import { attachLogHighlight } from './terminalLogHighlight'
 import 'xterm/css/xterm.css'
 
 interface TerminalWindowProps {
@@ -93,6 +94,7 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
 
     let term: Terminal | null = null
     let disableCopyOnSelect: (() => void) | null = null
+    let logHighlight: { dispose: () => void } | null = null
     let resizeObserver: ResizeObserver | null = null
     let disposed = false
     const pendingData: string[] = []
@@ -144,6 +146,7 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
 
       term.open(terminalRef.current)
       disableCopyOnSelect = enableCopyOnSelect(term)
+      logHighlight = attachLogHighlight(term)
       terminalInstance.current = term
       isInitialized.current = true
 
@@ -205,6 +208,7 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
       resizeObserver?.disconnect()
       window.removeEventListener('theme-changed', handleThemeChange)
       disableCopyOnSelect?.()
+      logHighlight?.dispose()
       term?.dispose()
       terminalInstance.current = null
       serializeAddon.current = null

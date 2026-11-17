@@ -246,7 +246,12 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 12px;
+  /* As tall as the tab strip beside it (.terminal-tabs: 8px + a 38px tab + the line), so the two
+     bottom lines meet as one. It was 53px and the line stepped down 6px at the sidebar's edge. */
+  box-sizing: border-box;
+  height: 47px;
+  flex-shrink: 0;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border);
 }
 

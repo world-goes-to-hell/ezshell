@@ -16,12 +16,13 @@ const isNumber = (value) => typeof value === 'number' && Number.isFinite(value);
  * been unplugged or its resolution changed since).
  * @param {unknown} saved
  * @param {Array<{ x: number, y: number, width: number, height: number }>} workAreas
+ * @param {{ width: number, height: number }} [min] smallest size accepted (the main window's by default)
  */
-function usableState(saved, workAreas) {
+function usableState(saved, workAreas, min = { width: MIN_WIDTH, height: MIN_HEIGHT }) {
   if (!saved || typeof saved !== 'object') return null;
   const { x, y, width, height } = saved;
   if (![x, y, width, height].every(isNumber)) return null;
-  if (width < MIN_WIDTH || height < MIN_HEIGHT) return null;
+  if (width < min.width || height < min.height) return null;
   const isVisible = workAreas.some((area) => {
     const overlapWidth = Math.min(x + width, area.x + area.width) - Math.max(x, area.x);
     // The title bar is at the top: it has to be on the screen to move the window

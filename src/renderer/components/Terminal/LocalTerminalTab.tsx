@@ -11,6 +11,7 @@ import { MAIN_PANE, MAX_PANES, singlePane, layoutOf, leafCount, paneIds, closePa
 import { ensureLocalPaneShell, closeLocalPaneShells } from '../../lib/localPaneShells'
 import { TerminalContextMenu, MENU_SEPARATOR, type TerminalMenuGroup } from './TerminalContextMenu'
 import { commonTerminalItems } from './terminalMenuCommon'
+import { attachLogHighlight } from './terminalLogHighlight'
 import { SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
 import './LocalTerminalTab.css'
 
@@ -86,6 +87,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     terminalRef.current = terminal
     fitRef.current = addon
     const disableCopyOnSelect = enableCopyOnSelect(terminal)
+    const logHighlight = attachLogHighlight(terminal)
 
     terminal.attachCustomKeyEventHandler((event) => {
       // Ctrl+C with a selection copies instead of interrupting
@@ -137,6 +139,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       observer.disconnect()
       refit.cancel()
       disableCopyOnSelect()
+      logHighlight.dispose()
       terminal.dispose()
       terminalRef.current = null
       fitRef.current = null

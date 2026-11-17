@@ -1,0 +1,16 @@
+/* Error and warning lines in a terminal (terminalLogHighlight.ts): a tint over the row and a bar
+   on its left edge. Drawn by xterm as a decoration; clicks and selection go through. */
+.xterm .xterm-decoration.terminal-log-row {
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.xterm .xterm-decoration.terminal-log-row.is-error {
+  border-left: 2px solid var(--error);
+  background: color-mix(in srgb, var(--error) 18%, transparent);
+}
+
+.xterm .xterm-decoration.terminal-log-row.is-warn {
+  border-left: 2px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}

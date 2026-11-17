@@ -1,9 +1,10 @@
 import type { Terminal } from 'xterm'
-import { RiFileCopyLine, RiClipboardLine, RiCheckboxMultipleLine, RiEraserLine, RiFileList2Line, RiSave3Line } from 'react-icons/ri'
+import { RiFileCopyLine, RiClipboardLine, RiCheckboxMultipleLine, RiEraserLine, RiFileList2Line, RiSave3Line, RiMarkPenLine } from 'react-icons/ri'
 import { copyToClipboard } from '../../lib/terminalClipboard'
 import { bufferText, outputFileName } from '../../lib/terminalText'
 import { toast } from '../../stores/toastStore'
 import type { TerminalMenuItem } from './TerminalContextMenu'
+import { isLogHighlightOn, setLogHighlightOn } from './terminalLogHighlight'
 
 async function paste(terminal: Terminal): Promise<void> {
   try {
@@ -52,7 +53,13 @@ export function commonTerminalItems(terminal: Terminal, tabName: string, then: (
           else toast.info('복사할 출력이 없습니다')
         })
       },
-      { label: '출력을 파일로 저장…', icon: RiSave3Line, onSelect: then(() => void saveOutput(terminal, tabName)) }
+      { label: '출력을 파일로 저장…', icon: RiSave3Line, onSelect: then(() => void saveOutput(terminal, tabName)) },
+      // Error and warning lines tinted in every terminal (terminalLogHighlight.ts)
+      {
+        label: isLogHighlightOn() ? '오류·경고 줄 강조 끄기' : '오류·경고 줄 강조 켜기',
+        icon: RiMarkPenLine,
+        onSelect: then(() => setLogHighlightOn(!isLogHighlightOn()))
+      }
     ]
   }
 }

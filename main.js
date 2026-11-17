@@ -47,6 +47,7 @@ const { createDbConnections } = require('./src/dbClient/connections.js');
 const { createDiscoveryCache } = require('./src/dbClient/discovery.js');
 const { createLocalShells } = require('./src/localShell.js');
 const windowState = require('./src/windowState.js');
+const detachedPlaces = require('./src/detachedPlaces.js');
 const nativeBackdrop = require('./src/nativeBackdrop.js');
 const { downloadDirectory } = require('./src/sftpDownloadDir.js');
 
@@ -436,13 +437,48 @@ ipcMain.on('sftp-window-paths', (event, { sessionId, localPath, remotePath } = {
   sftpWindowPaths.set(sessionId, { localPath, remotePath });
 });
 
+// Detached windows open where the last window of their kind was left (src/detachedPlaces.js).
+// `open(kind, fallback, min)` gives the place for a new window, `options(place)` its BrowserWindow
+// options; `track(win, kind, place, fill)` restores "maximized", remembers the window while it is
+// open (a second window of the kind steps aside from it) and saves its place as it moves and closes.
+const detachedWindows = new Map();
+const detachedPlacesFile = () => path.join(app.getPath('userData'), 'detached-window-state.json');
+const detachedWindowPlace = {
+  open(kind, fallback, min) {
+    const open = [...(detachedWindows.get(kind) || [])].filter(win => !win.isDestroyed());
+    return detachedPlaces.placeFor({
+      saved: detachedPlaces.readPlaces(detachedPlacesFile())[kind],
+      workAreas: require('electron').screen.getAllDisplays().map(display => display.workArea),
+      others: open.map(win => win.getBounds()),
+      fallback,
+      min
+    });
+  },
+  options(place) {
+    return { width: place.width, height: place.height, ...(place.x === undefined ? {} : { x: place.x, y: place.y }) };
+  },
+  track(win, kind, place, fill) {
+    if (!detachedWindows.has(kind)) detachedWindows.set(kind, new Set());
+    detachedWindows.get(kind).add(win);
+    win.on('closed', () => detachedWindows.get(kind).delete(win));
+    if (place.isMaximized) {
+      // A window with acrylic must not be maximized natively: it fills its screen's work area instead
+      if (fill) fill.fill(win.getBounds());
+      else win.maximize();
+    }
+    detachedPlaces.trackWindow(win, detachedPlacesFile(), kind, fill
+      ? { normalBounds: fill.normalBounds, isMaximized: fill.isFilled }
+      : undefined);
+  }
+};
+
 function createSftpWindow(sessionId, localPath, remotePath, title) {
+  const place = detachedWindowPlace.open('sftp', { width: 900, height: 600 }, { width: 600, height: 400 });
   // Acrylic behind this window too when glass is chosen (see glassWindowOptions)
   const glassOptions = glassWindowOptions();
   const sftpWindow = new BrowserWindow({
     icon: WINDOW_ICON,
-    width: 900,
-    height: 600,
+    ...detachedWindowPlace.options(place),
     minWidth: 600,
     minHeight: 400,
     frame: false,
@@ -456,6 +492,7 @@ function createSftpWindow(sessionId, localPath, remotePath, title) {
     }
   });
   registerGlassWindow(sftpWindow, glassOptions);
+  detachedWindowPlace.track(sftpWindow, 'sftp', place, glassWindows.get(sftpWindow) || null);
 
   // Pass session info via query params
   const params = new URLSearchParams({
@@ -500,12 +537,12 @@ function createSftpWindow(sessionId, localPath, remotePath, title) {
 }
 
 function createTerminalWindow(sessionId, title) {
+  const place = detachedWindowPlace.open('terminal', { width: 800, height: 600 }, { width: 400, height: 300 });
   // Acrylic behind this window too when glass is chosen (see glassWindowOptions)
   const glassOptions = glassWindowOptions();
   const terminalWindow = new BrowserWindow({
     icon: WINDOW_ICON,
-    width: 800,
-    height: 600,
+    ...detachedWindowPlace.options(place),
     minWidth: 400,
     minHeight: 300,
     frame: false,
@@ -519,6 +556,7 @@ function createTerminalWindow(sessionId, title) {
     }
   });
   registerGlassWindow(terminalWindow, glassOptions);
+  detachedWindowPlace.track(terminalWindow, 'terminal', place, glassWindows.get(terminalWindow) || null);
 
   const params = new URLSearchParams({
     terminalMode: 'true',
@@ -552,10 +590,10 @@ function createTerminalWindow(sessionId, title) {
 let mcpActivityWindow = null;
 
 function createMcpActivityWindow() {
+  const place = detachedWindowPlace.open('mcpActivity', { width: 960, height: 680 }, { width: 480, height: 320 });
   mcpActivityWindow = new BrowserWindow({
     icon: WINDOW_ICON,
-    width: 960,
-    height: 680,
+    ...detachedWindowPlace.options(place),
     minWidth: 480,
     minHeight: 320,
     frame: false,
@@ -579,6 +617,7 @@ function createMcpActivityWindow() {
   mcpActivityWindow.on('closed', () => {
     mcpActivityWindow = null;
   });
+  detachedWindowPlace.track(mcpActivityWindow, 'mcpActivity', place, null);
 }
 
 ipcMain.handle('open-mcp-activity-window', () => {
@@ -602,10 +641,10 @@ function closeMcpActivityWindow() {
 const REMOTE_FILE_BACKUP_FOLDER = 'ezShell Backups';
 
 function createRemoteFileWindow(docId) {
+  const place = detachedWindowPlace.open('remoteFile', { width: 1000, height: 720 }, { width: 520, height: 360 });
   const win = new BrowserWindow({
     icon: WINDOW_ICON,
-    width: 1000,
-    height: 720,
+    ...detachedWindowPlace.options(place),
     minWidth: 520,
     minHeight: 360,
     frame: false,
@@ -618,6 +657,7 @@ function createRemoteFileWindow(docId) {
     }
   });
   const query = { remoteFileMode: 'true', docId };
+  detachedWindowPlace.track(win, 'remoteFile', place, null);
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${new URLSearchParams(query).toString()}`);
   } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
@@ -680,10 +720,10 @@ const remoteFileIpc = registerRemoteFileIpc({
 // One window per database connection, reached through a channel of the tab's SSH connection
 // (no port is opened on this PC). Read-only; see src/dbClient.
 function createDbWindow(dbId) {
+  const place = detachedWindowPlace.open('db', { width: 1180, height: 780 }, { width: 640, height: 420 });
   const win = new BrowserWindow({
     icon: WINDOW_ICON,
-    width: 1180,
-    height: 780,
+    ...detachedWindowPlace.options(place),
     minWidth: 640,
     minHeight: 420,
     frame: false,
@@ -696,6 +736,7 @@ function createDbWindow(dbId) {
     }
   });
   const query = { dbMode: 'true', dbId };
+  detachedWindowPlace.track(win, 'db', place, null);
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${new URLSearchParams(query).toString()}`);
   } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {

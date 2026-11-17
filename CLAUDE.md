@@ -82,6 +82,12 @@ src/renderer/
 
 ## Important Patterns
 
+### Detached Window Places (분리 창의 위치 기억)
+분리되는 창 다섯 종류(SFTP, 터미널, MCP 활동, 서버 파일, DB)는 종류마다 마지막으로 두었던 위치·크기·최대화 여부를 `userData/detached-window-state.json` 에 남기고, 그 종류의 다음 창을 그 자리에 연다 (`src/detachedPlaces.js`, `main.js` 의 `detachedWindowPlace`). 종류당 하나만 기억한다 (마지막으로 옮기거나 닫은 창의 자리). 같은 종류의 창이 그 자리에 이미 열려 있으면 30px 씩 오른쪽 아래로 비켜 연다. 저장된 자리가 지금 연결된 화면에 보이지 않으면 기본 크기로, 위치는 OS 가 정한다 (본창과 같은 검사: `windowState.usableState`, 최소 크기만 창 종류의 것). 탭을 끌어서 분리할 때도 같은 자리에 연다 (놓은 위치에 여는 동작은 원래 없었다). 설계: `docs/plan/2026-11-17-detached-window-places.md`.
+- 새 분리 창을 만들면 `detachedPlaces.js` 의 `KINDS` 에 종류를 더하고 `detachedWindowPlace.open` → `options` → `track` 을 부른다. 파일에는 목록에 있는 종류만 쓴다.
+- 바꾸면 안 되는 것: 아크릴이 있는 창(Glass 의 SFTP·터미널 창)은 `maximize()` 를 부르지 않고 `fill` 로 화면을 채운다 (`track` 의 네 번째 인자, 본창과 같은 이유).
+- 새 `src/*.js` 라서 `MAIN_RUNTIME_MODULES` 에 있다.
+
 ### Tab Content Hosts (배치가 바뀌어도 탭을 다시 만들지 않는다)
 탭의 내용(TerminalPanel, DB 탭, 로컬 터미널)은 `App.tsx` 의 한 자리에서 `createPortal(..., tabHost(id), id)` 로 한 번만 그린다 (`lib/tabHosts.ts`: 탭마다 DOM 노드 하나). 단일 화면·주 패인·보조 패인의 자리는 `Terminal/TabSlot.tsx` 이고 그 노드를 자기 안으로 옮겨 붙인다. 그래서 single ↔ split 전환은 DOM 노드만 옮기고 탭을 언마운트하지 않는다. 예전에는 전환마다 TerminalPanel 이 다시 만들어져 탭 안 분할 셸이 닫혔다 새로 열렸다 (`docs/fix/2026-11-17-split-close-recreated-remaining-tab.md`).
 - 포털을 그리는 자리는 `.terminal-area` 안이다. 탭 끌어 놓기 처리기가 `.terminal-area` 에 있고 React 이벤트는 React 트리를 따라 올라가므로, 밖에 두면 터미널 위에서의 끌어 놓기가 동작하지 않는다 (실제로 겪은 문제). 패인 포커스는 포털 내용의 감싸개(`.tab-host-content`)의 `onMouseDown` 이 준다.
@@ -121,6 +127,12 @@ src/renderer/
 - 스니펫 추가 창(`SnippetModal`)은 메뉴 항목을 누른 동작이 끝난 뒤에(`setTimeout`) 연다. 이 창은 바깥을 누르면 닫히므로, 같은 클릭이 창의 배경에 닿으면 열리자마자 닫힌다.
 - 탭 복제는 `ezshell:duplicate-tab` 이벤트로 `App.tsx` 에 넘긴다 (복제 로직이 App 에 있다).
 - 시험할 때: 하위 메뉴는 포인터가 지나온 경로로 열림 유지를 판단한다. CDP 로 포인터를 한 번에 옮기면 하위 메뉴가 닫히므로 여러 번에 나눠 움직인다.
+
+### Terminal Log Highlight (오류·경고 줄 강조)
+모든 터미널(탭의 주 터미널, 분할 셸, 로컬 터미널, 분리한 창)은 화면의 오류·경고 줄에 옅은 바탕색과 왼쪽 선을 그린다 (`Terminal/terminalLogHighlight.ts` 의 `attachLogHighlight`, 줄 판정은 `lib/terminalLogRows.ts`). `tail -f`, `docker logs -f` 같은 로그를 보기 위한 것이고 명령을 가리지 않고 모든 출력에 적용한다. 수준 규칙은 파일 실시간 보기와 같은 `lib/logLevels.ts` 의 `classifyLine` 이다. 우클릭 `편의` 의 `오류·경고 줄 강조 끄기/켜기`(`localStorage` 의 `terminalLogHighlight`, 기본 켜짐). 설계: `docs/plan/2026-11-17-terminal-log-highlight.md`.
+- 화면에 보이는 줄만, 프레임당 한 번 읽는다. 서버에는 아무것도 보내지 않는다. 전체 화면 프로그램(vim, less)에서는 그리지 않는다.
+- 너비에서 접힌 줄은 한 줄로 이어 판정한다. 커서가 있는 줄(입력 중)과 명령 줄은 뺀다 (`isCommandLine`). 바꾸면 안 되는 것: 명령 줄 판정에 `commandCapture` 의 프롬프트 규칙을 쓰지 말 것. 그 규칙은 `> ` 나 `% ` 가 있으면 모두 프롬프트로 봐서, 그런 글자가 든 로그 줄이 강조에서 빠진다.
+- 바꾸면 안 되는 것: 줄의 꾸밈은 그 줄의 표식(marker)에 달고, 수준이 그대로인 줄은 다시 만들지 않는다. 프레임마다 지우고 새로 만들면 출력이 흐르는 동안 깜빡인다.
 
 ### Local Terminal Tab (이 PC 의 셸)
 탭 줄의 + 메뉴와 시작 화면의 `로컬 터미널` 로 이 PC 의 셸을 탭으로 연다. main 이 `node-pty` 로 실행하고(`src/localShell.js`, Windows 는 PowerShell), 탭은 `TerminalInfo.local`, id 는 `local:<번호>`, 화면은 `Terminal/LocalTerminalTab.tsx` 다 (`TerminalPanel` 을 쓰지 않는다). 설계: `docs/plan/2026-11-12-local-terminal-and-terminal-menu-additions.md`.

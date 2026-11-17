@@ -11,6 +11,7 @@ import { useTerminalStore } from '../../stores/terminalStore'
 import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
 import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory'
 import 'xterm/css/xterm.css'
+import { attachLogHighlight } from './terminalLogHighlight'
 import { registerTerminalPane } from '../../lib/terminalPanes'
 import { createEarlyStreamBuffer } from '../../lib/earlyStreamBuffer'
 
@@ -198,7 +199,12 @@ export function SplitTerminal({ sessionId, pane, delay = 0 }: SplitTerminalProps
 
         term.open(terminalRef.current)
         // The tab's right-click menu acts on the shell that was clicked
-        unregisterPane = registerTerminalPane(terminalRef.current, term)
+        const unregister = registerTerminalPane(terminalRef.current, term)
+        const logHighlight = attachLogHighlight(term)
+        unregisterPane = () => {
+          logHighlight.dispose()
+          unregister()
+        }
         disableCopyOnSelect = enableCopyOnSelect(term)
         detachCommandHistory = commandHistory.attach(term)
         terminalInstance.current = term

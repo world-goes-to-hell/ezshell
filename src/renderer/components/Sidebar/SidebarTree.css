@@ -258,5 +258,5 @@
 
 .sidebar.rail:not(.peek-open) .sidebar-header {
   justify-content: center;
-  padding: 10px 0;
+  padding: 0;
 }

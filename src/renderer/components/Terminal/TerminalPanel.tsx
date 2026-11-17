@@ -28,6 +28,7 @@ import { MAIN_PANE, singlePane, layoutOf, paneBox } from '../../lib/splitTree'
 import { SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
 import { attachFileLinks } from './terminalFileLinks'
 import { attachFileZone } from './terminalFileZone'
+import { attachLogHighlight } from './terminalLogHighlight'
 import 'xterm/css/xterm.css'
 import { SerializeAddon } from 'xterm-addon-serialize'
 import { registerTerminalSerializer, setPendingSnapshot, takePendingSnapshot, SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
@@ -260,7 +261,10 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
           return tab ? (tab.title || `${tab.username}@${tab.host}`) : ''
         }
       })
+      // Error and warning lines of logs on screen are tinted
+      const logHighlight = attachLogHighlight(term)
       unregisterPane = () => {
+        logHighlight.dispose()
         fileLinks.dispose()
         fileZone.dispose()
         unregister()
