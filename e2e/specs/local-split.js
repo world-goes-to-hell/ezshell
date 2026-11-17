@@ -1,0 +1,124 @@
+// A local terminal tab splits into panes of its own shells, a pane moves to a tab keeping its shell,
+// and the vacated place merges back. Run by e2e/run.js (fresh profile, no server needed).
+const fs = require('fs'), path = require('path')
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+let failures = 0
+const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? '  -- ' + d : ''}`) }
+;(async () => {
+  let list = []
+  for (let i = 0; i < 60 && !list.some((t) => t.type === 'page'); i++) { try { list = await (await fetch(process.env.E2E_CDP + '/json')).json() } catch {} await sleep(500) }
+  const ws = new WebSocket(list.find((t) => t.type === 'page').webSocketDebuggerUrl)
+  await new Promise((res) => { ws.onopen = res })
+  let id = 0; const pending = new Map()
+  ws.onmessage = (e) => { const m = JSON.parse(e.data); if (pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) } }
+  const send = (method, params = {}) => new Promise((res) => { const n = ++id; pending.set(n, res); ws.send(JSON.stringify({ id: n, method, params })) })
+  const js = async (expression) => { const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }); if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails)); return r.result?.result?.value }
+  const shot = async (name) => { await send('Page.bringToFront'); const r = await Promise.race([send('Page.captureScreenshot', { format: 'png' }), sleep(5000).then(() => null)]); if (r?.result?.data) fs.writeFileSync(path.join(process.env.E2E_OUT, `panelocal-${name}.png`), Buffer.from(r.result.data, 'base64')) }
+  const until = async (expr, ms = 15000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await js(expr)) return true; await sleep(200) } return false }
+  let at = [600, 400]
+  const rawMouse = async (type, x, y, button = 'none') => send('Input.dispatchMouseEvent', { type, x, y, button, clickCount: button === 'none' ? 0 : 1 })
+  const mouse = async (type, x, y, button = 'none') => {
+    if (type === 'mouseMoved') { const [fx, fy] = at; for (let i = 1; i <= 10; i++) { await rawMouse('mouseMoved', fx + (x - fx) * i / 10, fy + (y - fy) * i / 10); await sleep(15) } at = [x, y]; return }
+    return rawMouse(type, x, y, button)
+  }
+  const click = async (x, y, button = 'left') => { await mouse('mouseMoved', x, y); await mouse('mousePressed', x, y, button); await mouse('mouseReleased', x, y, button) }
+  const center = (expr) => js(`(() => { const el = ${expr}; if (!el) return null; const r = el.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2] })()`)
+  const item = (label) => `[...document.querySelectorAll('.terminal-menu-item')].find(i => i.textContent.trim() === ${JSON.stringify(label)})`
+  const pick = async (label) => { const c = await center(item(label)); if (!c) throw new Error('no item ' + label); await click(c[0], c[1]); await sleep(350) }
+  const hover = async (label) => { const c = await center(item(label)); if (!c) throw new Error('no item ' + label); await mouse('mouseMoved', c[0] - 3, c[1]); await sleep(60); await mouse('mouseMoved', c[0], c[1]); await sleep(450) }
+  const SET = `(el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })) }`
+
+  const PANES = `[...document.querySelectorAll('.local-terminal-tab')].filter(t => t.offsetParent !== null && getComputedStyle(t).visibility !== 'hidden').flatMap(t => [...t.querySelectorAll(':scope > .local-terminal-pane')])`
+  const rects = () => js(`${PANES}.map(el => { const r = el.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)] })`)
+  const texts = () => js(`${PANES}.map(el => [...el.querySelectorAll('.xterm-rows > div')].map(r => r.textContent).join('\\n'))`)
+  const typeIn = async (index, text) => {
+    await js(`${PANES}[${index}].querySelector('.xterm-helper-textarea').focus()`)
+    await send('Input.insertText', { text })
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+    // PowerShell can take a while on a busy machine: wait for the echoed word instead of a fixed time
+    const word = text.replace(/^echo /, '')
+    await until(`(${PANES}[${index}]?.textContent || '').split(${JSON.stringify(word)}).length > 2`, 30000)
+    await sleep(300)
+  }
+  const menuAt = async (index) => {
+    const r = await rects()
+    await click(r[index][0] + r[index][2] / 2, r[index][1] + r[index][3] / 2, 'right'); await until(`!!document.querySelector('.terminal-menu-item')`, 4000); await sleep(150)
+    // The submenu opens from the pointer's path; on a busy machine the first try can miss
+    for (let i = 0; i < 4; i++) {
+      await hover('분할')
+      if (await js(`document.querySelectorAll('.terminal-menu').length >= 2`)) break
+      await mouse('mouseMoved', at[0] - 40, at[1] - 6)
+    }
+  }
+  const subItems = () => js(`[...[...document.querySelectorAll('.terminal-menu')].pop().querySelectorAll('.terminal-menu-item')].map(i => i.textContent.trim() + (i.hasAttribute('data-disabled') ? '(x)' : '')).join(',')`)
+  const ready = (count) => until(`${PANES}.length === ${count} && ${PANES}.every(el => /PS [A-Z]:/.test(el.textContent))`, 90000)
+  const tabCount = () => js(`document.querySelectorAll('.terminal-tab').length`)
+
+  await until(`document.querySelectorAll('input[type=password]').length > 0 || !!document.querySelector('.btn-quick-connect')`, 20000)
+  if (await js(`document.querySelectorAll('input[type=password]').length > 0`)) await js(`(() => { const set = ${SET}; [...document.querySelectorAll('input[type=password]')].forEach(i => set(i, 'test-pass-1234')); document.querySelector('button[type=submit]').click() })()`)
+  await until(`!!document.querySelector('.btn-quick-connect')`)
+  await sleep(800)
+  await js(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('로컬 터미널'))?.click()`)
+  check('a local terminal tab opens with a PowerShell prompt', await ready(1), String((await texts())[0] || '').slice(-80))
+
+  await menuAt(0)
+  check('the local terminal has the 분할 menu', (await subItems()) === '좌우 분할,상하 분할,칸 크기 균등화(x),이 칸 닫기(x)', await subItems())
+  await pick('좌우 분할')
+  check('좌우 분할 opens a second shell of this PC beside the first', await ready(2), JSON.stringify(await js(`${PANES}.map(el => el.className + ' | ' + el.textContent.slice(0, 80))`)))
+  let r = await rects()
+  check('side by side', r[0][0] < r[1][0] && Math.abs(r[0][3] - r[1][3]) < 4, JSON.stringify(r))
+  await typeIn(0, 'echo PANE-ONE')
+  await typeIn(1, 'echo PANE-TWO')
+  let t = await texts()
+  check('each pane is its own shell', /PANE-ONE/.test(t[0]) && !/PANE-TWO/.test(t[0]) && /PANE-TWO/.test(t[1]) && !/PANE-ONE/.test(t[1]), JSON.stringify(t.map(x => x.slice(-60))))
+
+  await menuAt(1); await pick('상하 분할')
+  check('a split pane can be split again', await ready(3))
+  await typeIn(2, 'echo PANE-THREE')
+  await shot('1-three')
+
+  // ---- Close a pane ----
+  await menuAt(2); await pick('이 칸 닫기')
+  check('이 칸 닫기 removes the pane', await until(`${PANES}.length === 2`, 5000))
+  await sleep(600)
+  t = await texts()
+  check('the others keep their shells and output', /PANE-ONE/.test(t[0]) && /PANE-TWO/.test(t[1]))
+
+  // ---- Move the second pane out to a tab ----
+  r = await rects()
+  await mouse('mouseMoved', r[1][0] + r[1][2] / 2, r[1][1] + 40)
+  await mouse('mouseMoved', r[1][0] + r[1][2] / 2, r[1][1] + 8)
+  await sleep(250)
+  const dropped = await js(`(() => {
+    const grip = document.querySelector('.pane-grip.is-shown')
+    if (!grip) return 'no grip'
+    const dt = new DataTransfer()
+    grip.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }))
+    const strip = document.querySelector('.terminal-tabs')
+    const over = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt })
+    strip.dispatchEvent(over)
+    strip.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
+    grip.dispatchEvent(new DragEvent('dragend', { bubbles: true }))
+    return 'ok accepted=' + over.defaultPrevented
+  })()`)
+  check('the pane can be dropped on the tab strip', dropped === 'ok accepted=true', dropped)
+  check('a second local tab appears', await until(`document.querySelectorAll('.terminal-tab').length === 2`, 8000), String(await tabCount()))
+  await sleep(1500)
+  t = await texts()
+  check('the new tab shows that same shell (its earlier output is there)', t.length === 1 && /PANE-TWO/.test(t[0]) && !/PANE-ONE/.test(t[0]), JSON.stringify(t.map(x => x.slice(-80))))
+  await typeIn(0, 'echo STILL-ALIVE')
+  check('and the shell still answers', /STILL-ALIVE/.test((await texts())[0]))
+  await js(`document.querySelectorAll('.terminal-tab')[0].click()`); await sleep(800)
+  check('the old tab keeps an empty place with merge buttons', await js(`[...document.querySelectorAll('.pane-vacant')].some(v => v.offsetParent !== null)`))
+  await shot('2-vacant')
+
+  // ---- Closing the tab closes its panes' shells ----
+  await js(`document.querySelectorAll('.terminal-tab')[0].querySelector('.tab-close')?.click()`); await sleep(800)
+  check('the old tab closes', (await tabCount()) === 1, String(await tabCount()))
+  await sleep(600)
+  check('the moved tab is not affected', /STILL-ALIVE/.test((await texts())[0] || ''))
+
+  console.log(failures ? `${failures} FAILED` : 'ALL PASSED')
+  process.exit(failures ? 1 : 0)
+})().catch((e) => { console.error(e); process.exit(1) })

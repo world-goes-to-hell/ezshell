@@ -17,6 +17,10 @@ npm run build:portable  # 포터블 exe
 npm run build:publish   # GitHub Releases 배포 (electron-updater)
 ```
 
+화면 테스트: `npm run build` 뒤 `npm run e2e` (전부) 또는 `npm run e2e -- shortcuts` (하나). `e2e/run.js` 가 명세(`e2e/specs/*.js`)마다 빌드된 앱을 새 프로필(시스템 임시 폴더)로 띄우고 CDP 로 조작한 뒤 끝낸다. 실제 앱 데이터는 건드리지 않는다. 화면 캡처는 `e2e/.out/`(커밋 안 함). 지금 있는 명세는 서버가 필요 없는 것들이다 (로컬 터미널 분할·탭으로 빼기, 단축키, 로그 강조, 분리 창 위치).
+- 앱은 `npx` 를 거치지 않고 Electron 실행 파일로 직접 띄운다 (`npx` 를 끝내면 Electron 이 남아 디버깅 포트를 잡고, 다음 명세가 옛 앱에 붙는다).
+- 명세를 쓸 때: 앞에 있지 않은 탭은 `display: none` 이 아니라 `visibility: hidden` 으로 숨는다 (탭 내용이 배치를 유지한다). 보이는 탭을 고를 때 `offsetParent` 만 보면 숨은 탭도 잡힌다.
+
 배포 결과물: `release/` 폴더 (electron-builder). `dist/`는 예전 빌드 산출물이다.
 
 실행 중인 앱은 시작 3초 뒤, 30분마다, 창에 다시 포커스가 올 때(10분 간격) 새 버전을 확인한다 (`src/updateChecker.js`). 자동 확인은 새 버전을 찾았을 때만 화면에 알리고, 알림 닫기는 버전 단위다 (`updateStore` 의 `dismissedKey`). 설명: `docs/fix/2026-10-27-update-check-while-running.md`.

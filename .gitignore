@@ -52,3 +52,6 @@ coverage/
 
 # Local packaging checks (electron-builder --dir output)
 release-verify/
+
+# Screen test screenshots
+e2e/.out/

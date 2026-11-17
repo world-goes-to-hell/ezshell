@@ -18,7 +18,8 @@
     "build:mac": "electron-vite build && npm run build:copy-extra && electron-builder --mac",
     "typecheck": "tsc --noEmit",
     "build:icon": "electron scripts/build-icon.cjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "node e2e/run.js"
   },
   "author": "SungKwan",
   "license": "PolyForm-Noncommercial-1.0.0",
