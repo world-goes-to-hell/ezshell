@@ -52,9 +52,12 @@ async function connect(match = isMainPage) {
   await new Promise((resolve) => { ws.onopen = resolve })
   let id = 0
   const pending = new Map()
+  // CDP events of this page (for example Log.entryAdded after `send('Log.enable')`)
+  const events = []
   ws.onmessage = (event) => {
     const message = JSON.parse(event.data)
     if (pending.has(message.id)) { pending.get(message.id)(message); pending.delete(message.id) }
+    else if (message.method) events.push(message)
   }
   const send = (method, params = {}) => new Promise((resolve) => {
     const n = ++id
@@ -144,7 +147,7 @@ async function connect(match = isMainPage) {
     if (r.result?.data && process.env.E2E_OUT) fs.writeFileSync(path.join(process.env.E2E_OUT, `${name}.png`), Buffer.from(r.result.data, 'base64'))
   }
 
-  return { send, js, until, move, click, center, pointer, type, enter, item, pick, hover, openSubmenu, menuPick, shot, close: () => ws.close() }
+  return { send, js, until, move, click, center, pointer, type, enter, item, pick, hover, openSubmenu, menuPick, shot, events, close: () => ws.close() }
 }
 
 /** Sets an input's value the way React notices */
@@ -189,4 +192,16 @@ async function connectSsh(driver) {
   return ok
 }
 
-module.exports = { sleep, createChecks, connect, pages, findPage, isMainPage, unlock, connectSsh, SET, PANEL }
+/**
+ * Console errors and Content Security Policy refusals of a page so far. `Log.enable` replays the
+ * entries the browser kept, so this also sees what happened before the spec attached.
+ */
+async function pageProblems(page) {
+  await page.send('Log.enable')
+  await sleep(400)
+  return page.events
+    .filter((e) => e.method === 'Log.entryAdded' && (e.params.entry.level === 'error' || /Content Security Policy/i.test(e.params.entry.text)))
+    .map((e) => e.params.entry.text.slice(0, 240))
+}
+
+module.exports = { pageProblems, sleep, createChecks, connect, pages, findPage, isMainPage, unlock, connectSsh, SET, PANEL }
