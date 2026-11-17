@@ -182,7 +182,10 @@ macOS 용 `icon.icns` 는 mac 도구(iconutil) 없이 Windows 에서 PNG(32~1024
 - `window-all-closed` 는 플랫폼과 무관하게 종료한다 (`main.js`). 이 핸들러가 MCP 종료·SSH 정리까지 하므로, macOS 기본값(창을 닫아도 유지)으로 두면 정리가 끝난 반쯤 죽은 상태로 Dock 에 남는다 (단일 창 앱이라 되살릴 경로도 없다). 바꾸면 안 되는 것: darwin 예외를 되살리려면 `activate` 처리기와 MCP 재시작을 함께 넣어야 한다.
 - macOS 빌드(비서명): `package.json` 의 `build.mac`(dmg+zip, arm64+x64, `identity: null`), 스크립트 `build:mac`. GitHub Actions 워크플로 `.github/workflows/mac-build.yml`(`macos-latest` 러너, `CSC_IDENTITY_AUTO_DISCOVERY=false`. 고정한 이미지 `macos-14` 는 없어져서 작업이 시작되지 못했다. 수동 실행에 릴리스 태그를 주면 그 릴리스에 파일을 붙인다)가 산출물을 만든다. Windows 개발기에서는 mac 바이너리를 만들 수 없어 CI 로 돌린다. 인증서 서명·공증을 하지 않으므로 Gatekeeper 가 막는다 (우클릭 열기 또는 `xattr -dr com.apple.quarantine`). 바꾸면 안 되는 것: `build.afterPack` 의 `scripts/mac-adhoc-sign.cjs` 가 앱을 임시(ad-hoc) 서명한다. 포장 과정이 Electron 의 원래 서명을 깨뜨리는데, Apple Silicon 은 서명이 없거나 깨진 앱을 "손상되었다"며 실행하지 않는다 (2.19.0 첫 mac 빌드가 그랬다). 같은 스크립트가 서명 전에 `node-pty` 의 `spawn-helper` 에 실행 권한을 준다 (npm 패키지의 그 파일에는 실행 권한이 없어, 없으면 로컬 터미널이 `posix_spawnp failed` 로 열리지 않는다). 서명 뒤에 파일을 바꾸면 서명이 다시 깨지므로 순서를 바꾸지 말 것. electron-updater mac 자동 업데이트는 서명이 필요해 쓰지 않는다.
 - macOS 업데이트 안내(`src/manualUpdate.js`, `main.js` 의 `USES_MANUAL_UPDATE`): darwin 에서는 electron-updater 대신 GitHub 의 최신 릴리스를 같은 주기(시작 3초 뒤, 30분, 포커스)로 확인하고, 더 새 버전이면 알림의 `다운로드 페이지` 버튼이 릴리스 페이지를 브라우저로 연다 (`open-update-page`). 앱은 아무것도 내려받거나 실행하지 않는다. 워크플로는 릴리스가 공개되면(`release: published`) 빌드해서 그 릴리스에 `.dmg`/`.zip` 을 붙인다. 바꾸면 안 되는 것: 이 PC 아키텍처의 `ezShell-<버전>-<arch>.dmg` 가 릴리스에 붙기 전에는 알리지 않는다 (Windows 배포 직후 몇 분은 mac 파일이 없다). 여는 주소는 검사한 버전 번호로 main 이 만들고(응답의 `html_url` 을 쓰지 않는다), 창은 주소를 보내지 않는다. 새 `src/*.js` 라서 `MAIN_RUNTIME_MODULES` 에 있다.
-- 아직 안 된 것 (mac 실행 검증이 가능해질 때, Phase 1.5): 렌더러 단축키의 Cmd/Ctrl 매핑(지금은 Ctrl 고정, macOS 기본 편집 메뉴로 Cmd+C/V/A/Q/W 는 동작), 네이티브 신호등 버튼(`titleBarStyle`) 전환.
+- macOS 앱 메뉴(`src/macMenu.js`, `main.js` 의 `whenReady`): darwin 에서만 종료·편집·창 메뉴를 단다. 바꾸면 안 되는 것: 메뉴를 달지 않으면 Electron 기본 메뉴가 붙는데, macOS 에서는 그 단축키가 앱 전체에서 동작한다. `Cmd+R`(새로고침)은 열린 탭과 셸을 모두 끊고 `Cmd+W`(창 닫기)는 앱을 종료한다. `reload`·`close`·개발자 도구·확대 역할을 메뉴에 넣지 말 것 (`FORBIDDEN_ROLES`, 테스트가 본다).
+- macOS 의 키: 앱 단축키의 `Ctrl` 은 Command 키다 (`lib/shortcutModifiers.ts` 의 `primaryModifiersMatch`). Control 키는 셸의 것으로 남긴다. Tab 만 Control 을 유지한다 (`Cmd+Tab` 은 시스템의 앱 전환). 터미널의 붙여넣기 가로채기(`isPasteShortcut`)는 mac 에서 끈다 (붙여넣기는 메뉴의 `Cmd+V`, `Ctrl+V` 는 셸로). 글자 크기 조절은 `Cmd +/-/0`.
+- macOS 로컬 터미널의 기본 셸은 `SHELL` → 로그인 셸(`os.userInfo().shell`) → `/bin/zsh` 순이다 (Dock 에서 실행하면 환경 변수에 `SHELL` 이 없다).
+- 아직 안 된 것: 네이티브 신호등 버튼(`titleBarStyle`) 전환, DB 결과 표처럼 자체 `Ctrl+C` 처리가 있는 곳의 Command 대응. mac 에서 실제로 실행해 확인한 것은 사용자 보고(설치·로컬 터미널 오류)뿐이다.
 
 ### MCP Server (Claude Code)
 `src/mcp/` 에 로컬 MCP 서버가 있다. Claude Code 에 등록되는 이름은 `ez-shell` 이다 (도구는 `mcp__ez-shell__...`). 2.4.1 까지는 `my-ssh-client` 였고, "Claude Code 자동 설정"이 같은 파일의 옛 이름 항목을 지우고 새 이름으로 바꾼다 (`controller.js` 의 `LEGACY_SERVER_NAMES`). `~/.claude.json` 의 프로젝트별 등록은 고치지 않고 화면에 알려 주기만 한다. 설정 > MCP 에서 켜면 `127.0.0.1:<포트>/mcp` (Streamable HTTP, stateless) 로 열린다.
@@ -277,6 +280,7 @@ SFTP 패널(본창·분리 창)의 서버 파일 우클릭 메뉴 `미리보기`
 - 바꾸면 안 되는 것: 앱이 스스로 조회하지 않는다. 패널을 연 때와 `새로고침` 을 누른 때만 묻고, `자동 새로고침`(10초, 기본 꺼짐)도 패널이 열려 있고 창이 보이는 동안만 돈다. 컨테이너를 바꾸는 명령(`셸`·`재시작`·`중지`·`시작`)은 앱이 실행하지 않고 터미널 입력줄에 넣기만 한다 (`lib/containers.ts` 의 `containerCommand`, `insertIntoSession`).
 - 바꾸면 안 되는 것 (명령): 서버에서 실행할 명령은 main 이 고정된 형태로만 만든다 (`parse.js` 의 `listCommand`, `logs.js` 의 `logCommand`). 창은 세션 id·`all` 여부·컨테이너 이름만 보낸다. 이름은 형식(`[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`)을 검사하고, 로그는 그 탭에 마지막으로 보여 준 목록에 있던 이름만 받는다 (`ipc.js` 의 `isKnown`). 기존 `ssh-exec-command`(서버 모니터링이 쓰는, 받은 명령을 그대로 실행하는 통로)에 얹지 말 것. 모든 명령에 `timeout 5` 가 있고 `exec.js` 의 `runCommand` 가 출력 상한과 8초 제한으로 채널을 닫는다 (멈춘 도커 데몬이 채널을 붙잡지 않게). `sudo` 는 쓰지 않는다.
 - 컨테이너 로그는 파일 실시간 보기 창을 그대로 쓴다: `documents.js` 의 `registerContainerLog` 가 파일 대신 `container` 를 가진 문서를 만들고, `loadPreview`·`tail` 이 그 문서에서는 `logs.js` 의 조회를 부른다 (`container-log-open` 은 본창에서 온 것만). 바꾸면 안 되는 것: 서버에 `docker logs -f` 를 띄워 두지 않고 짧은 조회(`docker logs --timestamps --since <마지막 시각> --tail 2000`)를 되풀이한다. `-f` 는 연결의 채널 하나를 계속 차지하고, 창을 닫아도 다음 출력 때까지 프로세스가 남을 수 있다. 같은 줄이 두 번 붙지 않게 줄마다의 시각으로 잇는다 (도커는 물어본 시각의 줄을 다시 주므로 그 시각 이하를 버린다. 소수 자릿수가 달라도 비교되게 9자리로 맞춘다). 조회마다 서버에서 도커 명령이 하나 실행되므로 간격이 파일보다 길다 (`lib/logPollPace.ts` 의 `command`: 1초 → 최대 5초, 가려지면 15초).
+- 바꾸면 안 되는 것 (목록 형식): `docker ps` 의 형식에 `{{json .}}` 이나 `.Size` 를 넣지 말 것. 그 템플릿은 모든 필드를 건드려 도커가 컨테이너마다 디스크 사용량을 계산하게 하고(`docker ps -s` 와 같음), 컨테이너가 많은 서버에서 `timeout 5` 를 넘겨 목록이 뜨지 않았다. 필요한 필드만 받는다 (`parse.js` 의 `LIST_FORMAT`). `.State` 도 뺐다 (도커 20.10 미만에서 템플릿 전체가 실패): 실행 여부는 `Status` 의 "Up" 으로 본다. `docs/fix/2026-11-17-container-list-timeout-and-glass-welcome-text.md`.
 - 새 `src/` 폴더라서 `MAIN_RUNTIME_DIRECTORIES` 에 `containers` 가 있다.
 
 ### DB Client (SSH 터널로 DB 조회)
@@ -387,6 +391,16 @@ SFTP 패널(본창·분리 창)의 서버 파일 우클릭 메뉴 `미리보기`
 `title` 속성의 안내는 OS 가 그려서 테마를 따르지 않았다. `lib/themedTooltip.ts` 가 창마다 한 번(`main.tsx`) 설치되어, 포인터가 `title` 이 있는 요소에 올라가면 속성을 잠시 떼어 두고(`data-held-title`, OS 안내가 뜨지 않게) 같은 글자를 테마 색의 상자(`.app-tooltip`, `styles/tooltip.css`)로 보여 준 뒤, 벗어나면 속성을 되돌린다. 컴포넌트는 지금처럼 `title="..."` 만 쓰면 된다 (새 컴포넌트를 쓰거나 버튼마다 고칠 필요 없음). 위치는 요소 아래, 자리가 없으면 위 (`lib/tooltipPosition.ts`).
 - 바꾸면 안 되는 것: 속성을 떼어 둔 동안 React 가 새 `title` 을 쓰면(누르면 "열기"가 "닫기"로 바뀌는 버튼) 그 값을 다시 가져간다 (MutationObserver). 되돌릴 때 이미 새 `title` 이 있으면 덮어쓰지 않는다. 글자 없는 아이콘 버튼은 `title` 이 이름이었으므로 떼어 둔 동안 `aria-label` 로 채운다.
 - 누르거나 키를 누르거나 스크롤하면 닫는다. 요소가 사라졌는데(메뉴가 닫힘) 상자가 남지 않게 포인터가 움직일 때 요소가 아직 문서에 있는지 본다.
+
+### Keyboard Shortcuts (단축키와 사용자 지정)
+앱 단축키는 `stores/shortcutsStore.ts` 의 목록이고 `hooks/useKeyboardShortcuts.ts` 가 처리한다. 설정 > 키보드 단축키(`Settings/ShortcutsPanel.tsx`)에서 줄의 키를 누른 뒤 새 조합을 누르면 바뀐다 (`customBindings`, `localStorage` 의 `customShortcuts`). 읽기와 검사는 `lib/shortcutCapture.ts`.
+- 저장 형식은 기본값과 같은 `['Ctrl', 'Shift', 'P']` 이고 `Ctrl` 은 "앱의 주 수정키"다: Windows·Linux 는 Control, macOS 는 Command. 그래서 저장값의 뜻이 어느 OS 에서나 같다.
+- 글자·숫자는 키의 자리(`event.code`)로 읽고 비교한다 (`mainKeyOf`): 한글 입력 상태에서는 `event.key` 가 `ㅔ` 라서 `Ctrl+P` 가 맞지 않았다.
+- 거부하는 조합: 수정키 없는 글자, 복사·붙여넣기·실행 취소 키(`Ctrl+C/V/X/A/Z`), macOS 의 메뉴 키(`⌘Q/H/M`)와 Control 조합, 다른 단축키가 쓰는 조합 (이유를 줄 아래에 보여 준다). 저장된 값은 시작할 때 형식을 검사해 읽는다 (`parseCustomBindings`).
+- 바꾸면 안 되는 것: 녹화 중에는 창의 캡처 단계에서 모든 키를 가로채 `stopImmediatePropagation` 한다 (누른 조합이 다른 단축키를 실행하거나 설정 창을 닫으면 안 된다).
+- 바꾸면 안 되는 것: 이 훅은 여러 곳(App, Sidebar)에서 쓰인다. 처리기가 있는 호출만 `preventDefault` 한다. 처리기가 없는 쪽이 먼저 `preventDefault` 하면 처리기가 있는 쪽이 `defaultPrevented` 를 보고 건너뛴다 (명령 팔레트 단축키가 그래서 훅으로는 동작하지 않았고, `CommandPalette` 가 따로 듣던 고정 `Ctrl+P` 가 가려 주고 있었다. 그 고정 처리기는 없앴다: 단축키를 바꿔도 옛 키가 계속 동작했다).
+- 터미널에 입력 중일 때는 명령 팔레트 단축키만 동작한다 (xterm 의 입력칸이 `TEXTAREA` 라서 나머지는 건너뛴다).
+- 시험할 때: 시험용 앱을 `TaskStop` 으로 끄면 `npx` 만 끝나고 Electron 은 남아 CDP 포트를 잡고 있다. 새로 띄운 앱 대신 옛 앱(옛 코드)에 붙게 되므로, 프로필 경로로 남은 `electron.exe` 를 찾아 끝낸 뒤 다시 띄운다.
 
 ### LockScreen Safe API Pattern
 `window.electronAPI` 함수 호출 전 `typeof` 체크로 graceful degradation.

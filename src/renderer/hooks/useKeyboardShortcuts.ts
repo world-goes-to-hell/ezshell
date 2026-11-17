@@ -1,5 +1,7 @@
 import { useEffect, useCallback } from 'react'
 import { useShortcutsStore } from '../stores/shortcutsStore'
+import { isMac, primaryModifiersMatch } from '../lib/shortcutModifiers'
+import { mainKeyOf } from '../lib/shortcutCapture'
 
 export type ShortcutAction =
   | 'openCommandPalette'
@@ -71,11 +73,10 @@ export function useKeyboardShortcuts(
       }
     }
 
-    // Check modifiers match
-    if (event.ctrlKey !== expectedModifiers.ctrl) return false
+    // Check modifiers match (on macOS a binding's Ctrl is the Command key: lib/shortcutModifiers.ts)
+    if (!primaryModifiersMatch(event, expectedModifiers, mainKey, isMac())) return false
     if (event.shiftKey !== expectedModifiers.shift) return false
     if (event.altKey !== expectedModifiers.alt) return false
-    if (event.metaKey !== expectedModifiers.meta) return false
 
     // Check main key matches
     if (!mainKey) return false
@@ -83,6 +84,10 @@ export function useKeyboardShortcuts(
     // Handle special keys
     const eventKey = event.key.toLowerCase()
     const expectedKey = mainKey.toLowerCase()
+
+    // By the key's place on the keyboard first: with the Korean input mode on, event.key is 'ㅔ' for P
+    const placedKey = mainKeyOf(event)
+    if (placedKey && placedKey.toLowerCase() === expectedKey) return true
 
     // Special key mappings
     const keyMap: Record<string, string[]> = {
@@ -119,9 +124,12 @@ export function useKeyboardShortcuts(
       if (commandPaletteShortcut) {
         const effectiveKeys = customBindings[commandPaletteShortcut.id] || commandPaletteShortcut.keys
         if (matchesShortcut(event, effectiveKeys)) {
-          event.preventDefault()
           const handler = handlers[commandPaletteShortcut.action]
+          // Only the caller that has a handler takes the key. This hook is used in more than one
+          // place (App, Sidebar): one without the handler marking the key as taken made the one
+          // with it skip the key (see the defaultPrevented check above).
           if (handler) {
+            event.preventDefault()
             handler()
             return
           }

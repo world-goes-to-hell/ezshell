@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const userDataDir = require('./src/userDataDir.js');
@@ -34,6 +34,7 @@ const { testSshConnection, describeSshError, normalizeConnectConfig } = require(
 const { createUpdateChecker } = require('./src/updateChecker.js');
 const manualUpdate = require('./src/manualUpdate.js');
 const sharedConn = require('./src/sharedConn.js');
+const { macMenuTemplate } = require('./src/macMenu.js');
 const { registerContainerIpc } = require('./src/containers/ipc.js');
 const { createContainerLogs } = require('./src/containers/logs.js');
 const { SSH_ALGORITHMS } = require('./src/sshAlgorithms.js');
@@ -273,7 +274,9 @@ function createWindow() {
 
   // Disable Electron's built-in zoom, use IPC for terminal-only font size control
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    if (input.control && !input.alt && !input.meta) {
+    // Ctrl +/-/0 changes the terminal font size instead of Chromium's zoom (Command on macOS)
+    const isZoomKey = process.platform === 'darwin' ? (input.meta && !input.control) : (input.control && !input.meta);
+    if (isZoomKey && !input.alt) {
       if (input.key === '=' || input.key === '+') {
         event.preventDefault()
         mainWindow.webContents.send('terminal-zoom', 'in')
@@ -408,6 +411,10 @@ app.on('web-contents-created', (event, contents) => {
 });
 
 app.whenReady().then(() => {
+  // macOS always shows an application menu and its shortcuts work app-wide. Electron's default one
+  // has Reload (Cmd+R drops every open tab) and Close Window (Cmd+W would quit): src/macMenu.js
+  // replaces it with quit / edit / window only. Other platforms have no menu (frameless windows).
+  if (process.platform === 'darwin') Menu.setApplicationMenu(Menu.buildFromTemplate(macMenuTemplate(app.name)));
   createWindow();
   startMcp();
 

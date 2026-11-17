@@ -120,7 +120,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                           키보드 단축키
                         </h3>
                         <p className="settings-section-desc">
-                          앱 전체에서 사용할 수 있는 키보드 단축키를 확인하세요.
+                          앱 전체에서 쓰는 키보드 단축키를 확인하고 원하는 키로 바꿀 수 있습니다.
                         </p>
                         <ShortcutsPanel />
                       </section>

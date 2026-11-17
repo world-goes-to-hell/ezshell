@@ -269,18 +269,9 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
     }
   }, [selectedIndex])
 
-  // Global keyboard shortcut
-  useEffect(() => {
-    const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'p') {
-        e.preventDefault()
-        useCommandPaletteStore.getState().toggle()
-      }
-    }
-
-    window.addEventListener('keydown', handleGlobalKeyDown)
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
-  }, [])
+  // Opening and closing by shortcut is done by the app's shortcut handler (App.tsx, openCommandPalette),
+  // which follows the binding the user set in settings. A handler here used to listen for Ctrl+P by
+  // itself, so the old key kept working after the shortcut was changed.
 
   const executeCommand = useCallback((command: CommandItem) => {
     addRecentCommand(command.id)

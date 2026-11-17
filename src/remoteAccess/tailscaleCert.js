@@ -19,7 +19,8 @@ const TAILNET_NAME = /^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)*\.ts\.net$/i
 // By its full path. On Windows only there: a bare name would also be looked up in the current folder
 const programs = () => (process.platform === 'win32'
   ? [path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Tailscale', 'tailscale.exe')]
-  : ['/usr/bin/tailscale', '/usr/local/bin/tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale', 'tailscale'])
+  // Homebrew puts it under /opt/homebrew on Apple Silicon; an app started from the Dock has no PATH for it
+  : ['/usr/bin/tailscale', '/usr/local/bin/tailscale', '/opt/homebrew/bin/tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale', 'tailscale'])
 
 /** Runs the Tailscale program with `args`; resolves with its output, rejects when none could be run or it failed */
 function runTailscale(args, { timeout }) {

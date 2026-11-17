@@ -1,3 +1,4 @@
+import { isMac } from './shortcutModifiers'
 import type { Terminal } from 'xterm'
 import { toast, useToastStore } from '../stores/toastStore'
 
@@ -30,8 +31,10 @@ export async function copyToClipboard(text: string): Promise<boolean> {
  * not send ^V; the browser still fires its native paste event, which xterm turns into input
  * (with bracketed paste and newline handling). Sending the clipboard ourselves as well pasted twice.
  * Matched on the physical key: with the Korean input mode on, event.key is 'ㅍ' instead of 'v'.
+ * Not on macOS: paste is Cmd+V there (the Edit menu does it), and Ctrl+V belongs to the shell.
  */
-export function isPasteShortcut(event: KeyboardEvent): boolean {
+export function isPasteShortcut(event: KeyboardEvent, onMac: boolean = isMac()): boolean {
+  if (onMac) return false
   return event.type === 'keydown' && event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'KeyV'
 }
 

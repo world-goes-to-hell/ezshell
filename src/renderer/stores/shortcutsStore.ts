@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import { parseCustomBindings } from '../lib/shortcutCapture'
+import { shortcutLabel } from '../lib/shortcutModifiers'
 
 export type ShortcutCategory = 'general' | 'terminal' | 'sftp' | 'navigation'
 
@@ -26,49 +28,49 @@ const defaultShortcuts: Shortcut[] = [
   {
     id: 'command-palette',
     keys: ['Ctrl', 'P'],
-    description: 'Open Command Palette',
+    description: '명령 팔레트 열기',
     category: 'general',
     action: 'openCommandPalette'
   },
   {
     id: 'new-connection',
     keys: ['Ctrl', 'N'],
-    description: 'New Connection',
+    description: '새 연결',
     category: 'general',
     action: 'newConnection'
   },
   {
     id: 'settings',
     keys: ['Ctrl', ','],
-    description: 'Open Settings',
+    description: '설정 열기',
     category: 'general',
     action: 'openSettings'
   },
   {
     id: 'snippet-manager',
     keys: ['Ctrl', 'Shift', 'P'],
-    description: 'Open Snippet Manager',
+    description: '스니펫 관리 열기',
     category: 'general',
     action: 'openSnippetManager'
   },
   {
     id: 'fullscreen',
     keys: ['F11'],
-    description: 'Toggle Fullscreen',
+    description: '전체 화면 켜고 끄기',
     category: 'general',
     action: 'toggleFullscreen'
   },
   {
     id: 'lock-app',
     keys: ['Ctrl', 'L'],
-    description: 'Lock Application',
+    description: '앱 잠금',
     category: 'general',
     action: 'lockApp'
   },
   {
     id: 'zen-mode',
     keys: ['Ctrl', 'Shift', 'Z'],
-    description: 'Toggle Zen Mode',
+    description: '집중 모드 켜고 끄기',
     category: 'general',
     action: 'toggleZenMode'
   },
@@ -76,7 +78,7 @@ const defaultShortcuts: Shortcut[] = [
     id: 'toggle-sidebar',
     // Ctrl+B is the tmux prefix, so it must reach the terminal
     keys: ['Ctrl', 'Shift', 'B'],
-    description: 'Toggle Sidebar',
+    description: '사이드바 접기·펼치기',
     category: 'general',
     action: 'toggleSidebar'
   },
@@ -85,42 +87,42 @@ const defaultShortcuts: Shortcut[] = [
   {
     id: 'close-tab',
     keys: ['Ctrl', 'W'],
-    description: 'Close Current Terminal',
+    description: '현재 탭 닫기',
     category: 'terminal',
     action: 'closeCurrentTerminal'
   },
   {
     id: 'zoom-in',
     keys: ['Ctrl', '+'],
-    description: 'Zoom In Terminal',
+    description: '터미널 글자 크게',
     category: 'terminal',
     action: 'zoomIn'
   },
   {
     id: 'zoom-out',
     keys: ['Ctrl', '-'],
-    description: 'Zoom Out Terminal',
+    description: '터미널 글자 작게',
     category: 'terminal',
     action: 'zoomOut'
   },
   {
     id: 'reset-zoom',
     keys: ['Ctrl', '0'],
-    description: 'Reset Terminal Zoom',
+    description: '터미널 글자 크기 되돌리기',
     category: 'terminal',
     action: 'resetZoom'
   },
   {
     id: 'clear-terminal',
     keys: ['Ctrl', 'K'],
-    description: 'Clear Terminal',
+    description: '터미널 화면 지우기',
     category: 'terminal',
     action: 'clearTerminal'
   },
   {
     id: 'search-terminal',
     keys: ['Ctrl', 'F'],
-    description: 'Search in Terminal',
+    description: '터미널에서 찾기',
     category: 'terminal',
     action: 'searchTerminal'
   },
@@ -129,7 +131,7 @@ const defaultShortcuts: Shortcut[] = [
   {
     id: 'toggle-sftp',
     keys: ['Ctrl', 'Shift', 'S'],
-    description: 'Toggle SFTP Panel',
+    description: 'SFTP 패널 열고 닫기',
     category: 'sftp',
     action: 'toggleSftp'
   },
@@ -138,93 +140,102 @@ const defaultShortcuts: Shortcut[] = [
   {
     id: 'next-tab',
     keys: ['Ctrl', 'Tab'],
-    description: 'Next Terminal Tab',
+    description: '다음 탭',
     category: 'navigation',
     action: 'nextTab'
   },
   {
     id: 'prev-tab',
     keys: ['Ctrl', 'Shift', 'Tab'],
-    description: 'Previous Terminal Tab',
+    description: '이전 탭',
     category: 'navigation',
     action: 'prevTab'
   },
   {
     id: 'tab-1',
     keys: ['Ctrl', '1'],
-    description: 'Jump to Terminal 1',
+    description: '1번 탭으로 이동',
     category: 'navigation',
     action: 'jumpToTab1'
   },
   {
     id: 'tab-2',
     keys: ['Ctrl', '2'],
-    description: 'Jump to Terminal 2',
+    description: '2번 탭으로 이동',
     category: 'navigation',
     action: 'jumpToTab2'
   },
   {
     id: 'tab-3',
     keys: ['Ctrl', '3'],
-    description: 'Jump to Terminal 3',
+    description: '3번 탭으로 이동',
     category: 'navigation',
     action: 'jumpToTab3'
   },
   {
     id: 'tab-4',
     keys: ['Ctrl', '4'],
-    description: 'Jump to Terminal 4',
+    description: '4번 탭으로 이동',
     category: 'navigation',
     action: 'jumpToTab4'
   },
   {
     id: 'tab-5',
     keys: ['Ctrl', '5'],
-    description: 'Jump to Terminal 5',
+    description: '5번 탭으로 이동',
     category: 'navigation',
     action: 'jumpToTab5'
   },
   {
     id: 'tab-6',
     keys: ['Ctrl', '6'],
-    description: 'Jump to Terminal 6',
+    description: '6번 탭으로 이동',
     category: 'navigation',
     action: 'jumpToTab6'
   },
   {
     id: 'tab-7',
     keys: ['Ctrl', '7'],
-    description: 'Jump to Terminal 7',
+    description: '7번 탭으로 이동',
     category: 'navigation',
     action: 'jumpToTab7'
   },
   {
     id: 'tab-8',
     keys: ['Ctrl', '8'],
-    description: 'Jump to Terminal 8',
+    description: '8번 탭으로 이동',
     category: 'navigation',
     action: 'jumpToTab8'
   },
   {
     id: 'tab-9',
     keys: ['Ctrl', '9'],
-    description: 'Jump to Terminal 9',
+    description: '9번 탭으로 이동',
     category: 'navigation',
     action: 'jumpToTab9'
   }
 ]
 
+function readSavedBindings(): string | null {
+  try {
+    return localStorage.getItem('customShortcuts')
+  } catch {
+    return null
+  }
+}
+
 export const useShortcutsStore = create<ShortcutsState>((set, get) => ({
   shortcuts: defaultShortcuts,
-  customBindings: JSON.parse(localStorage.getItem('customShortcuts') || '{}'),
+  // Saved bindings are checked before use: a damaged value must not stop the app from starting
+  customBindings: parseCustomBindings(readSavedBindings(), defaultShortcuts.map(shortcut => shortcut.id)),
 
   getShortcut: (id: string) => {
     return get().shortcuts.find(s => s.id === id)
   },
 
   formatKeys: (keys: string[]) => {
-    // Format keys array into readable string (e.g., ['Ctrl', 'P'] -> 'Ctrl+P')
-    return keys.join('+')
+    // ['Ctrl', 'P'] -> 'Ctrl+P', and '⌘ P' on macOS where the main modifier is the Command key
+    return shortcutLabel(keys)
   },
 
   getEffectiveKeys: (id: string) => {

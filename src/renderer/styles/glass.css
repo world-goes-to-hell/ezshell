@@ -61,6 +61,31 @@
   background: transparent;
 }
 
+/* The start screen has text of its own, and with nothing painted behind it that text sat directly on
+   whatever is behind the window (a bright desktop under a dark theme's light-gray text: unreadable).
+   A nearly solid card behind the text keeps the contrast; the rest of the area stays clear glass. */
+[data-surface="glass"] .welcome-screen {
+  position: relative;
+}
+
+[data-surface="glass"] .welcome-screen::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(420px, calc(100% - 32px));
+  height: min(400px, calc(100% - 32px));
+  transform: translate(-50%, -50%);
+  background: var(--glass-content);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--radius-lg, 0);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+[data-surface="glass"] .welcome-screen > * {
+  position: relative;
+}
+
 /* Content: nearly solid, so text keeps its contrast */
 [data-surface="glass"] .terminal-panel,
 [data-surface="glass"] .sftp-content {
@@ -116,9 +141,11 @@
   background: transparent;
 }
 
-/* The OS already blurs what is behind: panels only add a tint, lighter than over the wash */
+/* The OS already blurs what is behind: panels only add a tint. It has to be strong enough for the
+   panel's muted text over a desktop of the opposite brightness (at 42% the sidebar's empty-list text
+   and the status bar were hard to read on a bright wallpaper under a dark theme). */
 [data-surface="glass"][data-backdrop="native"] {
-  --glass-panel: color-mix(in srgb, var(--bg-secondary) 42%, transparent);
+  --glass-panel: color-mix(in srgb, var(--bg-secondary) 66%, transparent);
 }
 
 /* While a divider is being dragged, floating blur is dropped too (cheap frames matter more than the

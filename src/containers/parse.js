@@ -11,12 +11,24 @@ const NO_DOCKER_MARK = '__EZSHELL_NO_DOCKER__'
 const CONTAINER_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
 const isContainerName = (value) => typeof value === 'string' && CONTAINER_NAME.test(value)
 
+// Only the fields the panel shows. Not `{{json .}}`: that template touches every field, `.Size`
+// among them, and docker then measures the disk use of every container (as `docker ps -s` does).
+// On a server with twenty-odd containers that took longer than the 5 seconds allowed, so the list
+// never arrived while a plain `docker ps` in the terminal answered at once. `.State` is left out
+// too (docker older than 20.10 fails the whole template on it): the window reads "Up ..." instead.
+// The double quotes are escaped because the command is wrapped in sh -c "...".
+const LIST_FORMAT = ['ID', 'Names', 'Image', 'Status', 'Ports']
+  .map(field => `\\"${field}\\":{{json .${field}}}`)
+  .join(',')
+  .replace(/^/, '{')
+  .concat('}')
+
 /**
  * `timeout`: a daemon that hangs must not hold the channel. Without docker the mark is printed and
  * the command still succeeds, so "no docker" is told apart from a failure.
  */
 function listCommand({ all = false } = {}) {
-  const ps = `timeout 5 docker ps${all ? ' -a' : ''} --format '{{json .}}'`
+  const ps = `timeout 5 docker ps${all ? ' -a' : ''} --format '${LIST_FORMAT}'`
   return `sh -c "command -v docker >/dev/null 2>&1 || { echo ${NO_DOCKER_MARK}; exit 0; }; ${ps}"`
 }
 

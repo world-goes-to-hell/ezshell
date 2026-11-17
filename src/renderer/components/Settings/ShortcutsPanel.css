@@ -262,3 +262,76 @@
     justify-content: space-between;
   }
 }
+
+/* Changing a shortcut: the keys are a button; pressed, it waits for the new combination */
+.shortcuts-hint {
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.shortcuts-hint kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-tertiary);
+  font: inherit;
+  font-size: 11px;
+}
+
+.shortcut-change-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.shortcut-change-btn:hover,
+.shortcut-change-btn:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.shortcut-change-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.shortcut-change-btn.is-recording {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.shortcut-edit-icon {
+  color: var(--text-muted);
+  opacity: 0;
+}
+
+.shortcut-item:hover .shortcut-edit-icon,
+.shortcut-change-btn:focus-visible .shortcut-edit-icon {
+  opacity: 1;
+}
+
+.shortcut-recording {
+  padding: 2px 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.shortcut-item.is-recording {
+  border-color: var(--accent);
+}
+
+.shortcut-problem {
+  margin-top: 4px;
+  color: var(--error-text, var(--error));
+  font-size: 12px;
+  line-height: 1.4;
+}

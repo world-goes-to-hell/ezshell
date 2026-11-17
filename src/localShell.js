@@ -11,9 +11,20 @@ const MIN_SIZE = 2;
 const MAX_SIZE = 500;
 const MAX_WRITE_CHARS = 1024 * 1024;
 
+function loginShell() {
+  try {
+    const shell = os.userInfo().shell;
+    return typeof shell === 'string' && shell.startsWith('/') ? shell : null;
+  } catch {
+    return null;
+  }
+}
+
 function defaultShell(platform = process.platform, env = process.env) {
   if (platform === 'win32') return { file: 'powershell.exe', args: ['-NoLogo'], name: 'PowerShell' };
-  const file = env.SHELL || '/bin/bash';
+  // An app started from the Dock or Finder often has no SHELL in its environment: ask the system
+  // for the user's login shell before falling back (zsh is the macOS default)
+  const file = env.SHELL || loginShell() || (platform === 'darwin' ? '/bin/zsh' : '/bin/bash');
   return { file, args: ['-l'], name: path.basename(file) };
 }
 
