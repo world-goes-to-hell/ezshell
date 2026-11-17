@@ -26,12 +26,8 @@ if (process.platform === 'win32' && app.isPackaged) {
 }
 
 const { Client } = require('ssh2');
-const { autoUpdater } = require('electron-updater');
 const cryptoUtil = require('./src/crypto.js');
-const commandHistory = require('./src/commandHistory.js');
 const { testSshConnection, describeSshError, normalizeConnectConfig } = require('./src/sshConnectionTest.js');
-const { createUpdateChecker } = require('./src/updateChecker.js');
-const manualUpdate = require('./src/manualUpdate.js');
 const sharedConn = require('./src/sharedConn.js');
 const { macMenuTemplate } = require('./src/macMenu.js');
 const { registerContainerIpc } = require('./src/containers/ipc.js');
@@ -83,7 +79,6 @@ function registerGlassWindow(win, options) {
   }
   return fill;
 }
-const lastVersion = require('./src/lastVersion.js');
 const sessionImport = require('./src/sessionImport/ipc.js');
 // Key files from this PC only (no network share or device paths): src/localKeyPath.js
 const { readPrivateKeyFile } = require('./src/localKeyPath.js');
@@ -300,100 +295,13 @@ function createWindow() {
   });
 }
 
-const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
-// Coming back to the window checks again, but not more often than this
-const UPDATE_FOCUS_RECHECK_MS = 10 * 60 * 1000;
-const UPDATE_FIRST_CHECK_DELAY_MS = 3000;
-
-// macOS: the build is unsigned, and Squirrel.Mac only applies an update whose signature matches the
-// running app. So the app does not update itself there: it looks for a newer release and sends the
-// user to its page (src/manualUpdate.js). The page address is kept here, the window never sends one.
-const USES_MANUAL_UPDATE = process.platform === 'darwin';
-let manualUpdateUrl = null;
-
-async function checkManualUpdate() {
-  const result = await manualUpdate.checkLatest({ currentVersion: app.getVersion() });
-  manualUpdateUrl = result.status === 'available' ? result.url : null;
-  if (result.status === 'available') sendUpdateStatus('available', { version: result.version, manual: true });
-  return result;
-}
-
-function setupManualUpdater() {
-  const updateChecker = createUpdateChecker({ check: checkManualUpdate, focusGapMs: UPDATE_FOCUS_RECHECK_MS });
-  setTimeout(() => { void updateChecker.run(); }, UPDATE_FIRST_CHECK_DELAY_MS);
-  setInterval(() => { void updateChecker.run(); }, UPDATE_CHECK_INTERVAL_MS);
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.on('focus', () => { void updateChecker.onFocus(); });
-  }
-}
-
-function setupAutoUpdater() {
-  if (USES_MANUAL_UPDATE) {
-    setupManualUpdater();
-    return;
-  }
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
-
-  // A running app used to check only at start, so a release made while it ran went unnoticed
-  const updateChecker = createUpdateChecker({
-    check: () => autoUpdater.checkForUpdates(),
-    focusGapMs: UPDATE_FOCUS_RECHECK_MS
-  });
-
-  // Background checks show nothing unless an update is found; a manual check (footer) still shows all
-  autoUpdater.on('checking-for-update', () => {
-    if (!updateChecker.isQuiet()) sendUpdateStatus('checking');
-  });
-
-  autoUpdater.on('update-available', (info) => {
-    updateChecker.setStage('available');
-    sendUpdateStatus('available', {
-      version: info.version,
-      releaseDate: info.releaseDate,
-      releaseNotes: info.releaseNotes
-    });
-  });
-
-  autoUpdater.on('update-not-available', () => {
-    if (!updateChecker.isQuiet()) sendUpdateStatus('not-available');
-  });
-
-  autoUpdater.on('download-progress', (progress) => {
-    updateChecker.setStage('downloading');
-    sendUpdateStatus('downloading', {
-      percent: Math.round(progress.percent),
-      transferred: progress.transferred,
-      total: progress.total,
-      bytesPerSecond: progress.bytesPerSecond
-    });
-  });
-
-  autoUpdater.on('update-downloaded', (info) => {
-    updateChecker.setStage('downloaded');
-    sendUpdateStatus('downloaded', {
-      version: info.version
-    });
-  });
-
-  autoUpdater.on('error', (err) => {
-    // A failed download lets the checks start again
-    updateChecker.setStage('idle');
-    if (!updateChecker.isQuiet()) sendUpdateStatus('error', { message: err.message });
-  });
-
-  setTimeout(() => { void updateChecker.run(); }, UPDATE_FIRST_CHECK_DELAY_MS);
-  setInterval(() => { void updateChecker.run(); }, UPDATE_CHECK_INTERVAL_MS);
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.on('focus', () => { void updateChecker.onFocus(); });
-  }
-}
-
-function sendUpdateStatus(status, data = {}) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('update-status', { status, ...data });
-  }
-}
+// Updates and the "업데이트 내용" state: src/ipc/updates.js
+const { setupAutoUpdater } = require('./src/ipc/updates.js').registerUpdateIpc({
+  ipcMain, app, shell, sessionsFilePath,
+  // Declared further down the file: looked up when a request arrives, not now
+  fromMainWindow: (event) => fromMainWindow(event),
+  get mainWindow() { return mainWindow; }
+});
 
 // Windows show only the app's own page: no navigation elsewhere, no new windows, no webviews.
 app.on('web-contents-created', (event, contents) => {
@@ -1088,7 +996,7 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
 ipcMain.handle('lock-app', async () => {
   // Write pending history while the password is still known, then drop the decrypted copy
   flushCommandHistory();
-  commandHistoryCache = null;
+  forgetCommandHistory();
   currentMasterPassword = null;
   isAppLocked = true;
   mcpSessionsCache = null;
@@ -1279,194 +1187,16 @@ ipcMain.handle('save-folders', (event, { folders, expandedFolders }) => {
   return true;
 });
 
-// ==================== SFTP Path Bookmarks ====================
-// Stored per saved session: { [savedSessionId]: { local: string[], remote: string[] } }
-// Kept in the main process so the main window and popped-out SFTP windows share one source.
-
-const pathBookmarksFilePath = path.join(userDataPath, 'path-bookmarks.json');
-const BOOKMARK_KEY_PATTERN = /^[\w-]{1,128}$/;
-const BOOKMARK_SIDES = ['local', 'remote'];
-const MAX_BOOKMARKS_PER_SIDE = 50;
-const MAX_BOOKMARK_PATH_LENGTH = 4096;
-
-function isValidBookmarkKey(key) {
-  // "__proto__" matches the pattern, so prototype keys are rejected explicitly
-  return typeof key === 'string' && BOOKMARK_KEY_PATTERN.test(key) && !['__proto__', 'constructor', 'prototype'].includes(key);
-}
-
-function readPathBookmarks() {
-  const data = loadFromFile(pathBookmarksFilePath, {});
-  return data && typeof data === 'object' && !Array.isArray(data) ? data : {};
-}
-
-function toBookmarkEntry(entry) {
-  const pick = (list) => (Array.isArray(list) ? list.filter((p) => typeof p === 'string') : []);
-  return { local: pick(entry && entry.local), remote: pick(entry && entry.remote) };
-}
-
-ipcMain.handle('ssh-get-session-info', (event, { sessionId }) => {
-  const connState = connectionStates.get(sessionId);
-  if (!connState || !connState.config) return null;
-  const { host, port, username, savedSessionId } = connState.config;
-  return { host, port, username, savedSessionId: savedSessionId || null };
+// SFTP path bookmarks: src/ipc/pathBookmarks.js
+require('./src/ipc/pathBookmarks.js').registerPathBookmarksIpc({
+  ipcMain, BrowserWindow, userDataPath, loadFromFile, saveToFile, connectionStates
 });
 
-ipcMain.handle('path-bookmarks-get', (event, { key }) => {
-  if (!isValidBookmarkKey(key)) return toBookmarkEntry(null);
-  const all = readPathBookmarks();
-  return toBookmarkEntry(Object.prototype.hasOwnProperty.call(all, key) ? all[key] : null);
-});
-
-ipcMain.handle('path-bookmarks-set', (event, { key, side, paths }) => {
-  if (!isValidBookmarkKey(key) || !BOOKMARK_SIDES.includes(side) || !Array.isArray(paths)) {
-    return { success: false, error: '잘못된 즐겨찾기 요청입니다.' };
-  }
-  const cleaned = [...new Set(
-    paths.filter((p) => typeof p === 'string' && p.length > 0 && p.length <= MAX_BOOKMARK_PATH_LENGTH)
-  )].slice(0, MAX_BOOKMARKS_PER_SIDE);
-
-  const all = readPathBookmarks();
-  const current = toBookmarkEntry(Object.prototype.hasOwnProperty.call(all, key) ? all[key] : null);
-  const next = { ...all, [key]: { ...current, [side]: cleaned } };
-  if (!saveToFile(pathBookmarksFilePath, next)) {
-    return { success: false, error: '즐겨찾기를 저장하지 못했습니다.' };
-  }
-
-  // Keep every window (main + popped-out SFTP windows) in sync
-  BrowserWindow.getAllWindows().forEach((win) => {
-    if (!win.isDestroyed()) win.webContents.send('path-bookmarks-changed', { key, entry: next[key] });
-  });
-  return { success: true, entry: next[key] };
-});
-
-// ==================== Terminal Command History ====================
-// Per connection: { [savedSessionId | "quick:user@host:port"]: [{ command, lastUsedAt }] }, newest first.
-// Commands can contain secrets, so the whole map is encrypted with the master password like sessions.
-// PBKDF2 makes every encrypt slow: routine saves are batched and encrypted off the main thread,
-// while lock and quit flush synchronously so nothing is lost.
-
-const commandHistoryFilePath = path.join(userDataPath, 'command-history.json');
-const COMMAND_HISTORY_SAVE_DELAY_MS = 1500;
-let commandHistoryCache = null; // decrypted map, only while unlocked
-let commandHistorySaveTimer = null;
-// Bumped by every write (and by discard) so a slow background save never overwrites newer data
-let commandHistoryGeneration = 0;
-
-function isCommandHistoryAvailable() {
-  return !isAppLocked && Boolean(currentMasterPassword);
-}
-
-function loadCommandHistory() {
-  if (commandHistoryCache) return commandHistoryCache;
-  if (!fs.existsSync(commandHistoryFilePath)) {
-    commandHistoryCache = {};
-    return commandHistoryCache;
-  }
-  try {
-    const file = JSON.parse(fs.readFileSync(commandHistoryFilePath, 'utf8'));
-    const plain = cryptoUtil.decrypt(file.encrypted, currentMasterPassword);
-    commandHistoryCache = commandHistory.sanitizeHistory(JSON.parse(plain));
-  } catch (err) {
-    // Keep the unreadable file aside instead of overwriting it with an empty history
-    console.error('Failed to read command history, starting a new one:', err.message);
-    try {
-      fs.renameSync(commandHistoryFilePath, `${commandHistoryFilePath}.unreadable-${Date.now()}`);
-    } catch (renameErr) {
-      console.error('Failed to set aside unreadable command history:', renameErr.message);
-    }
-    commandHistoryCache = {};
-  }
-  return commandHistoryCache;
-}
-
-function writeCommandHistoryFile(encrypted) {
-  fs.writeFileSync(commandHistoryFilePath, JSON.stringify({ version: 1, encrypted }), 'utf-8');
-}
-
-/** Synchronous save for lock and quit, where the process may not wait for a background one. */
-function flushCommandHistory() {
-  if (commandHistorySaveTimer) {
-    clearTimeout(commandHistorySaveTimer);
-    commandHistorySaveTimer = null;
-  }
-  if (!commandHistoryCache || !currentMasterPassword) return;
-  commandHistoryGeneration++;
-  try {
-    writeCommandHistoryFile(cryptoUtil.encrypt(JSON.stringify(commandHistoryCache), currentMasterPassword));
-  } catch (err) {
-    console.error('Failed to save command history:', err.message);
-  }
-}
-
-async function saveCommandHistoryInBackground() {
-  commandHistorySaveTimer = null;
-  if (!commandHistoryCache || !currentMasterPassword) return;
-  const generation = ++commandHistoryGeneration;
-  try {
-    const encrypted = await cryptoUtil.encryptAsync(JSON.stringify(commandHistoryCache), currentMasterPassword);
-    // A newer save, a lock-time flush or a reset happened while encrypting
-    if (generation !== commandHistoryGeneration) return;
-    writeCommandHistoryFile(encrypted);
-  } catch (err) {
-    console.error('Failed to save command history:', err.message);
-  }
-}
-
-function scheduleCommandHistorySave() {
-  if (commandHistorySaveTimer) return;
-  commandHistorySaveTimer = setTimeout(saveCommandHistoryInBackground, COMMAND_HISTORY_SAVE_DELAY_MS);
-}
-
-function discardCommandHistory() {
-  if (commandHistorySaveTimer) clearTimeout(commandHistorySaveTimer);
-  commandHistorySaveTimer = null;
-  commandHistoryGeneration++;
-  commandHistoryCache = null;
-  if (fs.existsSync(commandHistoryFilePath)) fs.unlinkSync(commandHistoryFilePath);
-}
-
-function historyEntriesFor(all, key) {
-  return Object.prototype.hasOwnProperty.call(all, key) ? all[key] : [];
-}
-
-function updateCommandHistory(key, update) {
-  const all = loadCommandHistory();
-  const entries = update(historyEntriesFor(all, key));
-  commandHistoryCache = { ...all, [key]: entries };
-  scheduleCommandHistorySave();
-  // Every window (main + popped-out terminals) shows the same list
-  BrowserWindow.getAllWindows().forEach((win) => {
-    if (!win.isDestroyed()) win.webContents.send('command-history-changed', { key, entries });
-  });
-  return { success: true, entries };
-}
-
-const COMMAND_HISTORY_LOCKED = { success: false, error: '앱이 잠겨 있어 명령어 기록을 사용할 수 없습니다.' };
-const COMMAND_HISTORY_BAD_REQUEST = { success: false, error: '잘못된 명령어 기록 요청입니다.' };
-
-ipcMain.handle('command-history-get', (event, { key }) => {
-  if (!isCommandHistoryAvailable()) return { ...COMMAND_HISTORY_LOCKED, entries: [] };
-  if (!commandHistory.isValidHistoryKey(key)) return { ...COMMAND_HISTORY_BAD_REQUEST, entries: [] };
-  return { success: true, entries: historyEntriesFor(loadCommandHistory(), key) };
-});
-
-ipcMain.handle('command-history-add', (event, { key, command }) => {
-  if (!isCommandHistoryAvailable()) return COMMAND_HISTORY_LOCKED;
-  const normalized = commandHistory.normalizeCommand(command);
-  if (!commandHistory.isValidHistoryKey(key) || normalized === null) return COMMAND_HISTORY_BAD_REQUEST;
-  return updateCommandHistory(key, (entries) => commandHistory.addCommand(entries, normalized, Date.now()));
-});
-
-ipcMain.handle('command-history-remove', (event, { key, command }) => {
-  if (!isCommandHistoryAvailable()) return COMMAND_HISTORY_LOCKED;
-  if (!commandHistory.isValidHistoryKey(key) || typeof command !== 'string') return COMMAND_HISTORY_BAD_REQUEST;
-  return updateCommandHistory(key, (entries) => commandHistory.removeCommand(entries, command));
-});
-
-ipcMain.handle('command-history-clear', (event, { key }) => {
-  if (!isCommandHistoryAvailable()) return COMMAND_HISTORY_LOCKED;
-  if (!commandHistory.isValidHistoryKey(key)) return COMMAND_HISTORY_BAD_REQUEST;
-  return updateCommandHistory(key, () => []);
+// Terminal command history: src/ipc/commandHistory.js
+const { flushCommandHistory, discardCommandHistory, forgetCommandHistory } = require('./src/ipc/commandHistory.js').registerCommandHistoryIpc({
+  ipcMain, BrowserWindow, userDataPath,
+  get currentMasterPassword() { return currentMasterPassword; },
+  get isAppLocked() { return isAppLocked; }
 });
 
 // ==================== MCP Server (Claude Code) ====================
@@ -2605,73 +2335,6 @@ ipcMain.handle('ssh-cancel-reconnect', (event, { sessionId }) => {
     connState.state = ConnectionState.DISCONNECTED;
   }
   return { success: true };
-});
-
-// ==================== 자동 업데이트 API ====================
-
-// Returns the outcome itself, not only through 'update-status' events: electron-updater sends no
-// event at all when it skips the check (unpackaged dev app), so the renderer would wait forever.
-ipcMain.handle('check-for-updates', async () => {
-  try {
-    if (USES_MANUAL_UPDATE) {
-      if (!app.isPackaged) return { success: true, status: 'unsupported' };
-      const latest = await checkManualUpdate();
-      return { success: true, status: latest.status, version: latest.version };
-    }
-    const result = await autoUpdater.checkForUpdates();
-    if (!result) return { success: true, status: 'unsupported' };
-    return {
-      success: true,
-      status: result.isUpdateAvailable ? 'available' : 'not-available',
-      version: result.updateInfo?.version
-    };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-});
-
-ipcMain.handle('download-update', async () => {
-  if (USES_MANUAL_UPDATE) return { success: false, error: '이 빌드는 자동으로 업데이트할 수 없습니다' };
-  try {
-    await autoUpdater.downloadUpdate();
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-});
-
-ipcMain.handle('install-update', () => {
-  if (USES_MANUAL_UPDATE) return;
-  // Silent: the installer runs without its pages, into the folder the app is installed in, and starts
-  // the app again when it is done
-  autoUpdater.quitAndInstall(true, true);
-});
-
-// Opens the release page of the version the last check found (macOS). Takes no address from the window.
-ipcMain.handle('open-update-page', async (event) => {
-  if (!fromMainWindow(event) || !manualUpdateUrl) return { success: false };
-  await shell.openExternal(manualUpdateUrl);
-  return { success: true };
-});
-
-ipcMain.handle('get-app-version', () => {
-  return app.getVersion();
-});
-
-// "업데이트 내용" after an update: the window compares the last version whose notes were seen with
-// this one (src/lastVersion.js). Saved data means an existing user even without a record.
-const lastVersionPath = () => path.join(app.getPath('userData'), 'last-version.json');
-const whatsNewState = () => lastVersion.resolveWhatsNew({
-  file: lastVersionPath(),
-  current: app.getVersion(),
-  existingUser: fs.existsSync(sessionsFilePath) || fs.existsSync(path.join(app.getPath('userData'), 'master.json'))
-});
-// A fresh install is decided now, at startup. The window asks only after the first unlock, and by
-// then the master password file exists, so a new user looked like an existing one and got the notes.
-whatsNewState();
-ipcMain.handle('whats-new-state', whatsNewState);
-ipcMain.handle('whats-new-seen', () => {
-  lastVersion.writeLastVersion(lastVersionPath(), app.getVersion());
 });
 
 // SFTP panel, this PC's files and the transfer queue: src/ipc/sftp.js
