@@ -269,8 +269,9 @@ function createWindow() {
 
   // 렌더러 콘솔 로그를 메인 프로세스에 출력 (개발 모드만)
   if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
-    mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
-      console.log(`[Renderer] ${message}`);
+    // The message is a property of the event (the separate arguments are deprecated since Electron 35)
+    mainWindow.webContents.on('console-message', (event) => {
+      console.log(`[Renderer] ${event.message}`);
     });
   }
 

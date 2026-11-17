@@ -36,7 +36,7 @@
     "@xterm/addon-canvas": "^0.7.0",
     "autoprefixer": "^10.4.24",
     "clsx": "^2.1.1",
-    "electron": "^28.0.0",
+    "electron": "45.3.3",
     "electron-builder": "^24.9.1",
     "electron-vite": "^5.0.0",
     "framer-motion": "^12.31.0",
@@ -141,6 +141,7 @@
       "icon": "assets/icon.icns",
       "category": "public.app-category.developer-tools",
       "identity": null,
+      "minimumSystemVersion": "13.0",
       "artifactName": "ezShell-${version}-${arch}.${ext}"
     },
     "nsis": {

@@ -1,4 +1,5 @@
 // Runs the screen tests against the built app: `npm run e2e` (all) or `npm run e2e -- shortcuts`.
+// With E2E_APP=<path to a packaged ezShell.exe> the packaged app is tested instead of out/.
 // Each spec gets its own app with a fresh profile in the system temp folder, so the real app data
 // (%APPDATA%\my-ssh-client) is never touched. The app is started directly (not through npx): killing
 // npx leaves Electron running with the debugging port held, and the next spec would attach to it.
@@ -71,7 +72,9 @@ async function runSpec(name) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), `ezshell-e2e-${name}-`))
   const sshDir = name.startsWith('ssh-') ? fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-e2e-sshd-')) : null
   const sshd = sshDir ? await startSshd(sshDir) : null
-  const app = spawn(require('electron'), [path.join(ROOT, 'out/main/index.js'), `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, ...APP_FLAGS], { cwd: ROOT, stdio: 'ignore' })
+  // E2E_APP: a packaged ezShell.exe (release/<version>/win-unpacked) instead of the build in out/
+  const packaged = process.env.E2E_APP
+  const app = spawn(packaged || require('electron'), [...(packaged ? [] : [path.join(ROOT, 'out/main/index.js')]), `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, ...APP_FLAGS], { cwd: ROOT, stdio: 'ignore' })
   try {
     if (!(await waitUntil(portAnswers, 60000))) throw new Error('the app did not open its debugging port')
     const code = await new Promise((resolve, reject) => {
@@ -106,7 +109,8 @@ async function runSpec(name) {
 }
 
 async function main() {
-  if (!fs.existsSync(path.join(ROOT, 'out/main/index.js'))) throw new Error('out/ is missing: run `npm run build` first')
+  if (process.env.E2E_APP && !fs.existsSync(process.env.E2E_APP)) throw new Error(`E2E_APP does not exist: ${process.env.E2E_APP}`)
+  if (!process.env.E2E_APP && !fs.existsSync(path.join(ROOT, 'out/main/index.js'))) throw new Error('out/ is missing: run `npm run build` first')
   if (await portAnswers()) throw new Error(`port ${PORT} is in use (a test app left running?): close it or set E2E_PORT`)
   const all = fs.readdirSync(SPECS_DIR).filter((file) => file.endsWith('.js')).map((file) => file.slice(0, -3)).sort()
   const wanted = process.argv.slice(2)

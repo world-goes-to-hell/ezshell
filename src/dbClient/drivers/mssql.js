@@ -7,10 +7,11 @@
 const Module = require('module')
 
 /**
- * tedious loads the Azure sign-in libraries (@azure/*) as soon as it is loaded. Their current
- * versions need a newer Node than Electron 28 has and fail to load there, which stopped the whole
- * app from starting. Only SQL logins (user and password) are used here, so while tedious loads,
- * those libraries are answered with an empty stand-in. Nothing of them runs for a SQL login.
+ * tedious loads the Azure sign-in libraries (@azure/*) as soon as it is loaded. The installed app
+ * does not ship them (`build.files` leaves out @azure and @typespec, about 45MB), so without this
+ * tedious would not load there. Only SQL logins (user and password) are used here, so while
+ * tedious loads, those libraries are answered with an empty stand-in. Nothing of them runs for a
+ * SQL login. (It began as a way round Electron 28's Node 18, which could not load them at all.)
  */
 function loadTedious() {
   const standIn = new Proxy(function () {}, {

@@ -17,9 +17,16 @@ npm run build:portable  # 포터블 exe
 npm run build:publish   # GitHub Releases 배포 (electron-updater)
 ```
 
-화면 테스트: `npm run build` 뒤 `npm run e2e` (전부) 또는 `npm run e2e -- shortcuts` (하나). `e2e/run.js` 가 명세(`e2e/specs/*.js`)마다 빌드된 앱을 새 프로필(시스템 임시 폴더)로 띄우고 CDP 로 조작한 뒤 끝낸다. 실제 앱 데이터는 건드리지 않는다. 화면 캡처는 `e2e/.out/`(커밋 안 함). 명세: 서버가 필요 없는 것(로컬 터미널 분할·탭으로 빼기 `local-split`, 단축키 `shortcuts`, 로그 강조 `log-highlight`, 분리 창 위치 `window-place`, 화면 설정 백업 `ui-settings`)과, 이름이 `ssh-` 로 시작해 실행기가 시험용 SSH 서버(`e2e/support/sshd.js`)를 띄워 주는 것(`ssh-sftp`, 칸 나누기·자리 바꾸기·탭으로 빼기 `ssh-panes`, 끊김·셸 종료·재연결 `ssh-reconnect`). 새 명세는 공용 도우미 `e2e/support/driver.js`(CDP 연결, 포인터·키 입력, 잠금 해제, 시험 서버 접속)를 쓴다.
+화면 테스트: `npm run build` 뒤 `npm run e2e` (전부) 또는 `npm run e2e -- shortcuts` (하나). `e2e/run.js` 가 명세(`e2e/specs/*.js`)마다 빌드된 앱을 새 프로필(시스템 임시 폴더)로 띄우고 CDP 로 조작한 뒤 끝낸다. 실제 앱 데이터는 건드리지 않는다. 화면 캡처는 `e2e/.out/`(커밋 안 함). 명세: 서버가 필요 없는 것(로컬 터미널 분할·탭으로 빼기 `local-split`, 단축키 `shortcuts`, 로그 강조 `log-highlight`, 분리 창 위치 `window-place`, 화면 설정 백업 `ui-settings`)과, 이름이 `ssh-` 로 시작해 실행기가 시험용 SSH 서버(`e2e/support/sshd.js`)를 띄워 주는 것(`ssh-sftp`, 칸 나누기·자리 바꾸기·탭으로 빼기 `ssh-panes`, 끊김·셸 종료·재연결 `ssh-reconnect`, 재연결 실패 `ssh-reconnect-fail`(약 90초), 분할 셸 채널 재시도 `ssh-split-retry`, 터미널·SFTP 창 분리와 병합 `ssh-detach`, 터미널에 파일 끌어 놓기 업로드 `ssh-drop-upload`). 시험 서버의 셸은 낱말 몇 개를 안다: `exit`, `drop`(연결 끊기), `refuse`(다음 채널 요청 두 번 거부), `halt N`(N초 동안 새 연결 거부). 새 명세는 공용 도우미 `e2e/support/driver.js`(CDP 연결, 포인터·키 입력, 잠금 해제, 시험 서버 접속)를 쓴다.
 - 앱은 `npx` 를 거치지 않고 Electron 실행 파일로 직접 띄운다 (`npx` 를 끝내면 Electron 이 남아 디버깅 포트를 잡고, 다음 명세가 옛 앱에 붙는다).
 - 명세를 쓸 때: 앞에 있지 않은 탭은 `display: none` 이 아니라 `visibility: hidden` 으로 숨는다 (탭 내용이 배치를 유지한다). 보이는 탭을 고를 때 `offsetParent` 만 보면 숨은 탭도 잡힌다.
+
+Electron 은 45.3.3 이다 (2026-11-17 에 28 에서 올림, 조사: `docs/plan/2026-11-17-electron-upgrade-notes.md`).
+- `npm install`/`npm ci` 뒤에 `npx install-electron --no` 를 한 번 실행한다. Electron 42 부터 npm 패키지가 설치 때 실행 파일을 받지 않는데, `electron-vite` 5 는 그 파일이 없으면 `npm run dev` 가 실패한다. mac 빌드 워크플로에도 같은 단계가 있다.
+- 다음에 올릴 때 걸리는 것: 46 에서 `safeStorage` 의 동기 메서드(`encryptString` 등)가 없어진다. 자동 잠금 해제(`main.js`)와 원격 접속의 봉인(`sealer`)이 쓰고 있어, 46 으로 가기 전에 비동기 메서드로 바꿔야 한다 (45 에서는 경고만 나온다).
+- 패키징된 앱으로 화면 테스트: `E2E_APP=<release/.../win-unpacked/ezShell.exe 의 전체 경로> npm run e2e`.
+- 화면 테스트에서 창 크기를 잴 때: 페이지의 `outerWidth`·`screenX` 는 프레임 없는 창의 보이지 않는 크기 조절 테두리(좌우·아래 8px)를 포함하고, main 의 `getBounds`(앱이 저장하는 값)는 포함하지 않는다. 페이지의 `window.moveTo`·`resizeTo` 도 준 숫자에 정확히 놓지 않는다 (`e2e/specs/window-place.js` 의 `isAt`).
+- macOS 는 13(Ventura) 이상에서만 실행된다 (Electron 44 부터, `build.mac.minimumSystemVersion`).
 
 배포 결과물: `release/` 폴더 (electron-builder). `dist/`는 예전 빌드 산출물이다.
 
@@ -254,7 +261,7 @@ macOS 용 `icon.icns` 는 mac 도구(iconutil) 없이 Windows 에서 PNG(32~1024
 - 확인 창이 뜰 때 앱 창에 포커스가 없으면 작업표시줄을 깜빡이고 Windows 알림을 띄운다 (`main.js` 의 `alertMcpApproval`). 알림에는 요청 종류(`approvalNotice.js`), 세션 이름, 위험도만 넣는다. 알림은 알림 센터에 남으므로 명령과 경로는 넣지 않는다.
 - 확인 창이 떠 있는 동안 본창은 "항상 위" 이고, 최소화되어 있으면 복원된다 (`main.js` 의 `keepMainWindowOnTop`). 확인이 어떻게 끝나든 브로커의 `onClose` 로 풀린다. 가려져 있던 창은 `moveTop` 만으로는 Chromium 이 다시 그리지 않으므로 `showInactive()` 를 항상 부른다 (`docs/brain/2026-10-26-electron-occluded-window-not-repainted-after-raise.md`). 포커스는 가져오지 않는다: 다른 프로그램에 입력하던 Enter·Esc 가 확인 창의 응답이 되면 안 된다. 설계: `docs/plan/2026-10-19-mcp-approval-window-on-top.md`.
 - 설정 > MCP 의 "Claude Code 자동 설정"(`clientSetup.js`): 프로젝트는 고른 폴더의 `.mcp.json` 에 토큰 대신 `${EZSHELL_MCP_TOKEN}` 참조를 쓰고(Windows 는 `tokenEnv.js` 가 PowerShell 절대 경로로 사용자 환경 변수 설정. 토큰은 명령줄이 아니라 stdin 으로 넘기고, 오류 메시지에 명령줄이 섞이지 않게 한다), 전체는 `~/.claude.json` 의 `mcpServers` 에 토큰을 직접 쓴다. 다른 항목은 보존하고 `<파일>.ezshell-backup` 으로 백업하며, 깨진 JSON 은 거부하고, 같은 이름 항목은 확인 후 덮어쓴다. 폴더는 main 의 선택 창으로만 고른다.
-- Electron 28(Node 18)에는 `globalThis.crypto` 가 없어서 `src/mcp/sdk.js` 가 채운 뒤 SDK 를 불러온다.
+- MCP SDK 는 `src/mcp/sdk.js` 한 곳에서만 불러온다 (SDK 가 전역 Web Crypto 를 쓴다. Electron 28 때는 이 파일이 채워 줬고 45 에서는 필요 없어 뺐다).
 - `src/mcp` 는 번들되지 않고 `electron.vite.config.ts` 가 `out/main/src/mcp` 로 복사한다.
 
 ### Session Log (터미널 출력을 파일로 저장)
@@ -431,7 +438,7 @@ SFTP 패널(본창·분리 창)의 서버 파일 우클릭 메뉴 `미리보기`
 앱 빌드 후 재시작 전 새 API가 없을 수 있음.
 
 ## Tech Stack
-- Electron 28 + electron-vite 5
+- Electron 45 (Chromium 156, Node 24) + electron-vite 5
 - React 19 + TypeScript 5.9
 - xterm.js 5 (터미널 렌더링)
 - ssh2 (SSH 프로토콜)
