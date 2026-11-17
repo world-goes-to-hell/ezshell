@@ -494,6 +494,8 @@ declare global {
       remoteAccessRevoke?: (deviceId: string) => Promise<RemoteAccessStatus | { success: false; error: string }>
       onRemoteAccessChanged?: (callback: () => void) => () => void
       /** Saves an exported query result where the user picks (text, or the bytes of a spreadsheet file) */
+      /** Where a File dropped from the OS is on this PC (webUtils.getPathForFile); '' when it cannot be told */
+      getPathForFile?: (file: File) => string
       saveExportFile?: (defaultName: string, extension: string, data: string | Uint8Array, kind?: 'result' | 'ui-settings') => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
       saveTerminalOutput?: (defaultName: string, text: string) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
       localRename: (oldPath: string, newPath: string) => Promise<LocalFileOpResult>

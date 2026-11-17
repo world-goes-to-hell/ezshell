@@ -1,3 +1,4 @@
+import { droppedFilePaths, dropUploadStatus } from '../../lib/droppedFiles'
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { throttle, REFIT_INTERVAL_MS, type Throttled } from '../../lib/throttle'
 import { Terminal } from 'xterm'
@@ -628,15 +629,14 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
 
       setUploadStatus(`업로드 중: ${files.length}개 파일...`)
 
-      for (const file of files) {
-        const localPath = (file as any).path
-        if (localPath) {
-          const remoteFilePath = `${remotePath}/${file.name}`
-          await window.electronAPI.sftpQueueUpload(sessionId, localPath, remoteFilePath)
-        }
+      // File.path is gone from Electron 32 on: the preload asks webUtils for the path instead
+      // (lib/droppedFiles.ts). A file with no path is counted as failed, never as uploaded.
+      const { paths, missing } = droppedFilePaths(files, window.electronAPI.getPathForFile)
+      for (const { name, localPath } of paths) {
+        await window.electronAPI.sftpQueueUpload(sessionId, localPath, `${remotePath}/${name}`)
       }
 
-      setUploadStatus(`${files.length}개 파일 업로드 완료`)
+      setUploadStatus(dropUploadStatus(paths.length, missing))
       setTimeout(() => setUploadStatus(null), 3000)
     } catch (error) {
       console.error('Upload failed:', error)
