@@ -1,8 +1,9 @@
 # Builds an unsigned macOS app (.dmg + .zip, arm64 + x64) on a GitHub-hosted macOS runner.
 # The Windows dev machine cannot produce macOS binaries, so this runs the pack there instead.
 #
-# Personal / unsigned: no Apple Developer certificate is used. The files are NOT notarized,
-# so on first launch macOS Gatekeeper blocks them: open with right-click > 열기 (Open), or run
+# Personal build: no Apple Developer certificate is used. The app is ad-hoc signed
+# (scripts/mac-adhoc-sign.cjs, without it an Apple Silicon Mac says the app "is damaged") but NOT
+# notarized, so on first launch macOS Gatekeeper asks: open with right-click > 열기 (Open), or run
 #   xattr -dr com.apple.quarantine "/Applications/ezShell.app"
 # The macOS app does not update itself (Squirrel.Mac needs a signed app). It looks at the latest
 # release and, once the .dmg for its architecture is attached there, sends the user to that page
