@@ -7,7 +7,7 @@ import fs from 'fs'
 const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js', 'navigationGuard.js', 'updateChecker.js', 'sshAlgorithms.js', 'rootSwitch.js', 'localShell.js', 'windowState.js', 'sftpListing.js', 'lastVersion.js', 'localPlaces.js', 'localKeyPath.js', 'manualUpdate.js', 'sharedConn.js', 'macMenu.js', 'nativeBackdrop.js', 'sftpDownloadDir.js', 'detachedPlaces.js']
 
 // Directories under src/ that main.js loads at runtime; copied whole, without their tests
-const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient', 'remoteAccess', 'sessionImport', 'containers']
+const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient', 'remoteAccess', 'sessionImport', 'containers', 'ipc']
 
 // The terminal library of the remote access page (a phone's browser), served by the main process.
 // xterm is a devDependency (the renderer bundles it), so the packaged app has no copy to serve:

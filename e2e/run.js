@@ -11,6 +11,7 @@ const ROOT = path.resolve(__dirname, '..')
 const SPECS_DIR = path.join(__dirname, 'specs')
 const OUT_DIR = path.join(__dirname, '.out')
 const PORT = Number(process.env.E2E_PORT) || 9333
+const SSH_PORT = Number(process.env.E2E_SSH_PORT) || 2222
 const SPEC_TIMEOUT_MS = 5 * 60 * 1000
 // A window covered by another stops repainting and throttles timers: the specs read the screen
 const APP_FLAGS = ['--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-background-timer-throttling']
@@ -44,15 +45,39 @@ function stop(child) {
   })
 }
 
+function portOpen(port) {
+  return new Promise((resolve) => {
+    const socket = require('net').connect(port, '127.0.0.1')
+    socket.once('connect', () => { socket.destroy(); resolve(true) })
+    socket.once('error', () => resolve(false))
+  })
+}
+
+/** The test SSH server (e2e/support/sshd.js), for specs named ssh-* */
+async function startSshd(workDir) {
+  if (await portOpen(SSH_PORT)) throw new Error(`port ${SSH_PORT} is in use: set E2E_SSH_PORT`)
+  const sshd = spawn(process.execPath, [path.join(__dirname, 'support/sshd.js')], {
+    stdio: 'ignore',
+    env: { ...process.env, E2E_SSH_PORT: String(SSH_PORT), E2E_SSH_DIR: workDir }
+  })
+  if (!(await waitUntil(() => portOpen(SSH_PORT), 15000))) {
+    await stop(sshd)
+    throw new Error('the test SSH server did not start')
+  }
+  return sshd
+}
+
 async function runSpec(name) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), `ezshell-e2e-${name}-`))
+  const sshDir = name.startsWith('ssh-') ? fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-e2e-sshd-')) : null
+  const sshd = sshDir ? await startSshd(sshDir) : null
   const app = spawn(require('electron'), [path.join(ROOT, 'out/main/index.js'), `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, ...APP_FLAGS], { cwd: ROOT, stdio: 'ignore' })
   try {
     if (!(await waitUntil(portAnswers, 60000))) throw new Error('the app did not open its debugging port')
     const code = await new Promise((resolve, reject) => {
       const spec = spawn(process.execPath, [path.join(SPECS_DIR, `${name}.js`)], {
         stdio: 'inherit',
-        env: { ...process.env, E2E_CDP: `http://127.0.0.1:${PORT}`, E2E_PROFILE: profile, E2E_OUT: OUT_DIR }
+        env: { ...process.env, E2E_CDP: `http://127.0.0.1:${PORT}`, E2E_PROFILE: profile, E2E_OUT: OUT_DIR, E2E_SSH_PORT: String(SSH_PORT) }
       })
       const timer = setTimeout(() => {
         spec.kill()
@@ -67,12 +92,15 @@ async function runSpec(name) {
     return code === 0
   } finally {
     await stop(app)
+    if (sshd) await stop(sshd)
     // The port must be free before the next app starts, or the next spec talks to this one
     await waitUntil(async () => !(await portAnswers()), 10000)
-    try {
-      fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 })
-    } catch {
-      // Left in the temp folder: a file was still held
+    for (const dir of [profile, sshDir]) {
+      try {
+        if (dir) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 })
+      } catch {
+        // Left in the temp folder: a file was still held
+      }
     }
   }
 }
