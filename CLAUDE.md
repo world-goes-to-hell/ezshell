@@ -33,7 +33,7 @@ npm run build:publish   # GitHub Releases 배포 (electron-updater)
 
 ### Process Model
 - **Main Process** (`main.js` + `src/ipc/`): SSH 연결(ssh2), SFTP, IPC 핸들러, 마스터 비밀번호/암호화, safeStorage
-  - `main.js` 에는 앱 시작·본창·잠금과 세션 저장·SSH 연결이 있고, 그 밖의 IPC 묶음은 `src/ipc/` 에 있다: `sftp.js`(SFTP·이 PC 의 파일·전송 대기열), `portForward.js`, `commandHistory.js`, `pathBookmarks.js`, `updates.js`, `detachedWindows.js`(분리 창 다섯 종류). 묶음마다 `register…(ctx)` 함수 하나이고, `main.js` 가 함께 쓰는 것(연결 목록, 창)을 `ctx` 로 넘긴다.
+  - `main.js`(약 1,280줄)에는 앱 시작·본창·잠금과 세션 저장·MCP 와 원격 접속 연결이 있고, 그 밖의 IPC 묶음은 `src/ipc/` 에 있다: `sshSessions.js`(탭의 SSH 연결·재연결·세션 로그 IPC), `splitShells.js`(분할 셸·탭으로 빼기), `sftp.js`(SFTP·이 PC 의 파일·전송 대기열), `portForward.js`, `commandHistory.js`, `pathBookmarks.js`, `updates.js`, `detachedWindows.js`(분리 창 다섯 종류). 이 문서의 다른 절이 `main.js` 의 함수라고 적은 것(`openShellConnection`, `reconnectOnce`, `ssh-adopt-split`, `endedByItself` 등)은 이제 이 파일들에 있다. 묶음마다 `register…(ctx)` 함수 하나이고, `main.js` 가 함께 쓰는 것(연결 목록, 창)을 `ctx` 로 넘긴다.
   - 바뀌는 값(`mainWindow`, `isAppLocked`, `currentMasterPassword`)은 `ctx` 의 getter 로 넘긴다 (`ctx.mainWindow`): 값을 그대로 넘기면 넘긴 순간의 값(`undefined`)에 머문다.
   - 바꾸면 안 되는 것: `ctx` 에 넘기는 이름이 `main.js` 에서 그 호출보다 아래에 `const` 로 선언돼 있으면 앱이 시작할 때 죽는다 (선언 전 접근). 그런 것은 `fromMainWindow: (event) => fromMainWindow(event)` 처럼 호출로 감싸 넘긴다. 묶음을 옮기거나 더한 뒤에는 화면 테스트로 앱이 뜨는지 본다 (단위 테스트는 `main.js` 를 실행하지 않아 잡지 못한다).
   - `src/ipc/` 의 파일에서 `__dirname` 은 `main.js` 의 폴더가 아니다. preload·페이지 경로가 필요한 묶음은 `main.js` 의 `__dirname` 을 받아 쓴다 (`detachedWindows.js`).
@@ -50,7 +50,7 @@ Split 터미널은 별도 IPC 채널 사용: `ssh-split-data`, `ssh-split-send`
 
 ### Key Directories
 ```
-main.js                          # Electron 메인 프로세스 (시작, 본창, 잠금, SSH 연결)
+main.js                          # Electron 메인 프로세스 (시작, 본창, 잠금, 세션 저장)
 src/ipc/                         # main.js 에서 나눈 IPC 묶음 (SFTP, 포트 포워딩, 업데이트, 분리 창 등)
 src/preload.js                   # IPC 브릿지
 src/renderer/
