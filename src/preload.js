@@ -184,7 +184,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('remote-access-changed', handler);
     return () => ipcRenderer.removeListener('remote-access-changed', handler);
   },
-  saveExportFile: (defaultName, extension, data) => ipcRenderer.invoke('save-export-file', { defaultName, extension, data }),
+  saveExportFile: (defaultName, extension, data, kind) => ipcRenderer.invoke('save-export-file', { defaultName, extension, data, kind }),
   saveTerminalOutput: (defaultName, text) => ipcRenderer.invoke('save-terminal-output', { defaultName, text }),
   localRename: (oldPath, newPath) => ipcRenderer.invoke('local-rename', { oldPath, newPath }),
   localMkdir: (dirPath) => ipcRenderer.invoke('local-mkdir', { dirPath }),
