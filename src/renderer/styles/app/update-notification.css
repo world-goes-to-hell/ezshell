@@ -1,0 +1,307 @@
+/* ===== Update Notification ===== */
+.update-notification {
+  position: fixed;
+  bottom: 36px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  z-index: 900;
+  max-width: 400px;
+}
+
+.update-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+/* Tinted from the theme's own colours (fixed blue and green stood out in other themes) */
+.update-icon-info {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.update-icon-downloading {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.update-icon-ready {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
+}
+
+.update-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.update-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.update-text strong {
+  color: var(--accent);
+}
+
+.update-progress-bar {
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+  transition: width 0.3s ease;
+}
+
+.update-progress-text {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.update-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+
+/* Both are the notice's main button, so both look like the app's other main buttons: the theme's
+   accent with its own text colour (white on a bright success green was unreadable) */
+.update-download-btn,
+.update-install-btn {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.update-download-btn:hover,
+.update-install-btn:hover {
+  background: var(--accent-hover);
+}
+
+.update-dismiss-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+}
+
+.update-dismiss-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Version info in footer */
+.version-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  user-select: none;
+}
+
+.version-info:hover {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.version-badge {
+  font-size: 13px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--on-accent);
+  letter-spacing: 0.5px;
+}
+
+/* "READY" keeps the accent of "NEW": on a success green the accent's text colour was hard to read */
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+
+/* Connect/edit modal: keep the action buttons visible while the long form scrolls */
+.modal-content form > .modal-actions {
+  position: sticky;
+  bottom: -24px; /* cancels .modal-content padding so the bar sits on the bottom edge */
+  z-index: 1;
+  margin-bottom: -24px;
+  padding-bottom: 24px;
+  background: var(--bg-secondary);
+}
+
+/* Terminal: hide the scrollbar UI only. Scrolling (wheel, scrollback, keyboard) still works
+   because xterm scrolls the viewport itself. */
+.xterm .xterm-viewport {
+  scrollbar-width: none;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+/* Only the focused pane shows the filled accent tab; other panes keep a quiet selection */
+.split-pane-header.is-active-pane .split-pane-tab-item.active {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* The DB / local icons have their own color (accent, muted), which disappears on the filled tab:
+   there they take the tab's text color (also right for a tab filled with the session color) */
+.split-pane-header.is-active-pane .split-pane-tab-item.active .tab-db-icon,
+.split-pane-header.is-active-pane .split-pane-tab-item.active .tab-local-icon {
+  color: inherit;
+}
+
+/* Split terminals inside one tab: mark the pane that receives keyboard input.
+   Drawn as an inset overlay rather than an outline: edges that coincide with an
+   ancestor's overflow:hidden boundary were clipped away at fractional zoom (e.g. 83%),
+   so only the edge touching another pane showed. The overlay's border lies fully inside
+   the pane, takes no layout space (xterm size unchanged) and lets clicks through.
+   ::after is left free for the retro-terminal scanline effect. */
+.terminal-body[class*="split-"] .terminal-container:focus-within::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 10; /* above xterm's viewport and helper layers */
+  border: 2px solid var(--accent);
+  pointer-events: none;
+}
+
+/* SFTP directory sync: accent divider + badge centered between the local and remote lists */
+.sftp-divider {
+  position: relative;
+  /* Above the lists' sticky column headers (6) and loading overlay (7), below the rename error tooltip (20).
+     At fractional UI zoom (e.g. 80%) the 1px divider and the remote header's left edge round onto the same
+     screen pixel; with a lower z-index the header covered it and the sync line broke at the header row. */
+  z-index: 8;
+  flex-shrink: 0;
+}
+
+.sftp-divider.is-synced {
+  background: var(--accent);
+}
+
+.sftp-sync-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 2px solid var(--bg-primary);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.sftp-sync-indicator:hover {
+  background: var(--accent-hover);
+}
+
+.sftp-sync-indicator:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* SFTP remote list: owner column (group shown in the tooltip) */
+.file-owner {
+  flex-shrink: 0;
+  width: var(--sftp-col-owner);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* Transfer queue toggle (SFTP toolbar) with pending-count badge */
+.transfer-queue-toggle {
+  position: relative;
+}
+
+.transfer-queue-toggle.active {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.transfer-queue-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.transfer-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.transfer-empty {
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+}

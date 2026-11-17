@@ -1,0 +1,259 @@
+/* Context Menu */
+.context-menu {
+  position: fixed;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  min-width: 150px;
+  z-index: 1000;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.context-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.context-menu-item.danger {
+  color: var(--error-text);
+}
+
+.context-menu-item.danger:hover {
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+}
+
+/* Check mark of a toggle item, pushed to the right edge */
+.context-menu-check {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.context-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* Context Submenu */
+.context-menu-submenu {
+  position: relative;
+}
+
+.context-menu-submenu > .context-menu-item {
+  justify-content: flex-start;
+}
+
+.context-submenu {
+  position: absolute;
+  left: 100%;
+  top: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  min-width: 120px;
+  display: none;
+  z-index: 1001;
+}
+
+.context-menu-submenu:hover .context-submenu {
+  display: block;
+}
+
+/* Folder Edit Input */
+.folder-edit-input {
+  flex: 1;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  font-size: 14px;
+  color: var(--text-primary);
+  outline: none;
+  min-width: 0;
+}
+
+.folder-edit-input:focus {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* Drag and Drop */
+.session-item.dragging,
+.folder-header.dragging {
+  opacity: 0.5;
+}
+
+.session-item[draggable="true"],
+.folder-header[draggable="true"] {
+  cursor: grab;
+}
+
+.session-item[draggable="true"]:active,
+.folder-header[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.folder-header.drop-target {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-radius: var(--radius-md);
+}
+
+/* Reorder: a line on the edge where the dragged session will land. An inset shadow keeps
+   the row height unchanged, so the list does not jump while dragging. */
+.session-item.drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.session-item.drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.root-sessions.drop-target {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: var(--radius-md);
+}
+
+.folder-contents.drop-target {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: var(--radius-md);
+}
+
+.folder-empty-drop-zone {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Context Menu Section Title */
+.context-menu-section-title {
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+/* Context Menu Item Current Badge */
+.context-menu-item .current-badge {
+  margin-left: auto;
+  padding: 2px 6px;
+  font-size: 13px;
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: var(--radius-sm);
+}
+
+.context-menu-item.current {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.context-menu-item.current:hover {
+  background: transparent;
+}
+
+/* File Overwrite Modal */
+.overwrite-modal {
+  max-width: 400px;
+}
+
+.overwrite-modal .modal-body {
+  padding: 16px 0;
+}
+
+.overwrite-modal .file-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+}
+
+.overwrite-modal .file-info .file-icon {
+  color: var(--text-muted);
+}
+
+.overwrite-modal .file-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.overwrite-modal .overwrite-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.overwrite-modal .overwrite-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.overwrite-modal .overwrite-option:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.overwrite-modal .overwrite-option.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.overwrite-modal .option-icon {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.overwrite-modal .option-text {
+  flex: 1;
+}
+
+.overwrite-modal .option-title {
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.overwrite-modal .option-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.overwrite-modal .apply-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text-secondary);
+}

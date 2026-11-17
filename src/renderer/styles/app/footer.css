@@ -1,0 +1,41 @@
+/* Footer */
+.app-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 30px;
+  padding: 0 12px;
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.footer-left,
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.footer-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.footer-status .status-icon {
+  font-size: 13px;
+}
+
+.footer-status .status-icon.connected {
+  color: var(--success);
+}
+
+.footer-status .status-icon.disconnected {
+  color: var(--text-muted);
+}
+
+.footer-version {
+  color: var(--text-muted);
+}

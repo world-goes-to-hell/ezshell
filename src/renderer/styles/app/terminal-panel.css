@@ -1,0 +1,60 @@
+/* Terminal Panel */
+.terminal-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-primary);
+  border: none;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.terminal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.terminal-title {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.terminal-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  transition: all var(--transition-fast);
+}
+
+.terminal-close:hover {
+  background: var(--error);
+  color: white;
+}
+
+.terminal-container {
+  flex: 1;
+  padding: 8px 8px 0 8px;
+  min-height: 200px;
+  height: 100%;
+  position: relative;
+}
+
+.terminal-container .xterm {
+  height: 100%;
+  width: 100%;
+}
+
+.terminal-container .xterm-viewport {
+  overflow-y: auto !important;
+}

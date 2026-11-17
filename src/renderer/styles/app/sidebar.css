@@ -1,0 +1,234 @@
+/* Sidebar */
+.sidebar {
+  width: 280px;
+  min-height: 0; /* Allow flex shrinking */
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  transition: width var(--transition-base);
+  /* height determined by flex parent's align-items: stretch (default) */
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  /* As tall as the tab strip beside it (.terminal-tabs: 8px + a 38px tab + the line), so the two
+     bottom lines meet as one. It was 53px and the line stepped down 6px at the sidebar's edge. */
+  box-sizing: border-box;
+  height: 47px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-header h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sidebar-toggle {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.sidebar-toggle:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.sidebar-actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+}
+
+.btn-new-connection {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--gradient-accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-new-connection:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-glow);
+}
+
+.btn-quick-connect {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.btn-quick-connect:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-new-folder {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.btn-new-folder:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Sidebar Footer */
+.sidebar-footer {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  margin-top: auto;
+}
+
+.btn-stats {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-stats:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+/* Session List */
+.session-list {
+  flex: 1;
+  min-height: 0; /* Required for flex child to allow overflow scroll */
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.session-list-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.session-list-empty p:first-child {
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+
+.session-folder {
+  display: block;
+  width: 100%;
+  margin-bottom: 2px;
+}
+
+.folder-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-size: 14px;
+}
+
+.folder-header:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.folder-contents {
+  display: block;
+  width: 100%;
+  padding-left: 12px; /* Indent folder contents */
+  overflow: hidden; /* Required for framer-motion collapse animation */
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-size: 14px;
+}
+
+.session-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.session-item.active {
+  background: var(--accent-alpha);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.session-item.active.active-custom-color {
+  /* Use inline style colors instead of accent */
+  color: inherit;
+}
+
+.session-item-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-name {
+  font-size: 14px;
+  flex: 1;
+  min-width: 0;
+}

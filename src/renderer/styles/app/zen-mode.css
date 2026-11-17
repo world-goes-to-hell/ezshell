@@ -1,0 +1,84 @@
+/* ==================== Zen Mode ==================== */
+
+.app-main.zen-mode .sidebar {
+  width: 0 !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: width 0.3s ease, opacity 0.2s ease, padding 0.3s ease;
+}
+
+.app-main.zen-mode .terminal-tabs {
+  height: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: height 0.3s ease, opacity 0.2s ease, padding 0.3s ease;
+}
+
+.app-main.zen-mode .footer {
+  height: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: height 0.3s ease, opacity 0.2s ease;
+}
+
+.app-main.zen-mode .split-pane-tab-bar {
+  height: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: height 0.3s ease, opacity 0.2s ease;
+}
+
+/* Smooth reverse transition when exiting Zen mode */
+.app-main .sidebar {
+  transition: width 0.3s ease, opacity 0.2s ease 0.1s, padding 0.3s ease;
+}
+
+.app-main .terminal-tabs {
+  transition: height 0.3s ease, opacity 0.2s ease 0.1s, padding 0.3s ease;
+}
+
+.app-main .footer {
+  transition: height 0.3s ease, opacity 0.2s ease 0.1s;
+}
+
+.app-main .split-pane-tab-bar {
+  transition: height 0.3s ease, opacity 0.2s ease 0.1s;
+}
+
+/* Zen mode indicator - subtle hint at top center */
+.zen-mode-indicator {
+  position: fixed;
+  top: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 4px 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.app-main.zen-mode:hover .zen-mode-indicator {
+  opacity: 0.7;
+}

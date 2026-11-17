@@ -1,0 +1,112 @@
+/* ===== Theme Transition System ===== */
+:root {
+  --theme-transition: background-color 0.3s ease-out,
+                      color 0.3s ease-out,
+                      border-color 0.3s ease-out,
+                      box-shadow 0.3s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --theme-transition: none;
+  }
+}
+
+/* Apply transitions to main elements */
+body,
+.app-container,
+.sidebar,
+.main-area,
+.main-content,
+.terminal-panel,
+.terminal-header,
+.terminal-tabs,
+.terminal-tab,
+.title-bar,
+.modal-content,
+.modal-overlay,
+.sftp-panel,
+.welcome-screen,
+.app-footer,
+.toolbar,
+.context-menu {
+  transition: var(--theme-transition);
+}
+
+/* Performance: will-change hints for animated elements */
+.sidebar {
+  will-change: width;
+}
+
+.terminal-tab {
+  will-change: transform, opacity;
+}
+
+.modal-overlay,
+.modal-content {
+  will-change: opacity, transform;
+}
+
+.file-explorer {
+  will-change: width, opacity;
+}
+
+.folder-contents {
+  will-change: height, opacity;
+}
+
+/* ===== Special Theme Effects ===== */
+
+/* Cyberpunk Neon Glow Effects */
+[data-theme="cyberpunk-neon"] .terminal-panel.active {
+  box-shadow: 0 0 20px rgba(255, 0, 255, 0.4), 0 0 40px rgba(0, 255, 255, 0.2);
+}
+
+[data-theme="cyberpunk-neon"] .accent,
+[data-theme="cyberpunk-neon"] .btn-primary,
+[data-theme="cyberpunk-neon"] .btn-new-connection {
+  text-shadow: 0 0 10px currentColor;
+}
+
+[data-theme="cyberpunk-neon"] .terminal-tab.active {
+  box-shadow: 0 0 10px rgba(255, 0, 255, 0.5);
+}
+
+/* Retro Terminal CRT Scanlines */
+[data-theme="retro-terminal"] .terminal-container::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.1) 0px,
+    rgba(0, 0, 0, 0.1) 1px,
+    transparent 1px,
+    transparent 2px
+  );
+  pointer-events: none;
+  z-index: 10;
+}
+
+[data-theme="retro-terminal"] .terminal-container {
+  position: relative;
+}
+
+[data-theme="retro-terminal"] .text-primary,
+[data-theme="retro-terminal"] .terminal-panel {
+  text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+}
+
+/* Retro Terminal Glow */
+[data-theme="retro-terminal"] .terminal-panel.active {
+  box-shadow: 0 0 15px rgba(0, 255, 0, 0.3), inset 0 0 30px rgba(0, 255, 0, 0.05);
+}
+
+/* High Contrast Focus Indicators */
+[data-theme="high-contrast"] *:focus {
+  outline: 2px solid #ffff00 !important;
+  outline-offset: 2px;
+}

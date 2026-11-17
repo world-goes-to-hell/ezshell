@@ -1,0 +1,213 @@
+/* ==================== Terminal Command History ==================== */
+
+.command-history-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.history-count {
+  margin-left: 6px;
+  font-weight: 400;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.monitor-action-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.history-panel-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 10px;
+  padding: 0 8px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+}
+
+.history-panel-search:focus-within {
+  border-color: var(--accent);
+}
+
+.history-panel-search input,
+.history-popup-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.history-panel-list,
+.history-popup-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px 4px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.history-panel-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+}
+
+.history-panel-item:hover {
+  background: var(--bg-hover);
+}
+
+.history-panel-insert {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.history-panel-insert:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.history-command {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.history-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Copy/delete only show on hover or keyboard focus, so long commands keep their width */
+.history-panel-item-actions {
+  display: none;
+  gap: 2px;
+  padding-right: 4px;
+}
+
+.history-panel-item:hover .history-panel-item-actions,
+.history-panel-item:focus-within .history-panel-item-actions {
+  display: flex;
+}
+
+.history-panel-item:hover .history-time,
+.history-panel-item:focus-within .history-time {
+  display: none;
+}
+
+/* 12px --text-muted fell to ~3.4:1 contrast on some themes; keep Korean text at 13px+ in primary/secondary colors */
+.history-empty {
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.history-empty-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.history-empty-hint {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.history-panel-footer {
+  margin: 0;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.history-popup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
+
+.history-popup {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  max-height: min(420px, 60vh);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xl);
+  overflow: hidden;
+}
+
+.history-popup-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 40px;
+  border-bottom: 1px solid var(--border);
+  color: var(--accent);
+}
+
+.history-popup-hint {
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.history-popup-list {
+  padding-top: 4px;
+}
+
+.history-popup-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+/* A faint accent tint: a solid accent background makes the command text unreadable on bright accents */
+.history-popup-item.highlighted {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}

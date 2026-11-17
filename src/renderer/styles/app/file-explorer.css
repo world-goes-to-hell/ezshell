@@ -1,0 +1,330 @@
+/* ===== File Explorer ===== */
+/* The drawer owns the width (TerminalPanel, lib/fileExplorerWidth.ts); the explorer fills it */
+.file-explorer-drawer {
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.file-explorer-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 5;
+  touch-action: none;
+}
+
+.file-explorer-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 2px;
+  background: transparent;
+  transition: background var(--transition-fast);
+}
+
+.file-explorer-resize-handle:hover::after,
+.file-explorer-resize-handle:focus-visible::after,
+.file-explorer-resize-handle.is-active::after {
+  background: var(--accent);
+}
+
+.file-explorer-resize-handle:focus-visible {
+  outline: none;
+}
+
+/* While dragging, keep the col-resize cursor over the shell and don't select text */
+.terminal-body.is-explorer-resizing,
+.terminal-body.is-explorer-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+.file-explorer {
+  width: 100%;
+  min-width: 160px;
+  /* Fill the terminal height even when the tree has only a few entries */
+  height: 100%;
+  max-height: 100%;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.file-explorer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-tertiary);
+}
+
+.file-explorer-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.file-explorer-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.file-explorer-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.file-explorer-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.file-explorer-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.file-explorer-btn.active {
+  color: var(--accent);
+  background: var(--accent-alpha);
+}
+
+.file-explorer-path {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.file-explorer-path:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.file-explorer-path-input {
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: none;
+  border-bottom: 1px solid var(--accent);
+  font-family: var(--font-mono);
+  outline: none;
+}
+
+.file-explorer-path-input::placeholder {
+  color: var(--text-muted);
+}
+
+.file-explorer-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.file-explorer-refresh:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.file-explorer-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+  min-height: 0;
+}
+
+.file-explorer-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.file-explorer-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.file-explorer-content::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.file-explorer-content::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+.file-explorer-loading,
+.file-explorer-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.file-explorer-error {
+  padding: 16px;
+  text-align: center;
+  color: var(--error-text);
+  font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
+.file-explorer-retry-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.file-explorer-retry-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.file-explorer-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  user-select: none;
+}
+
+.file-explorer-item:hover {
+  background: var(--bg-hover);
+}
+
+/* The row the context menu acts on */
+.file-explorer-item.is-selected {
+  background: var(--bg-modifier-selected, var(--bg-hover));
+}
+
+/* Rename and new folder are typed in the tree, like in the SFTP list */
+.file-explorer-inline-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+.file-explorer-create {
+  cursor: default;
+}
+
+.file-explorer-create-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.file-explorer-item .expand-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--text-muted);
+}
+
+.file-explorer-item .folder-icon {
+  color: var(--accent);
+}
+
+.file-explorer-item .file-icon {
+  color: var(--text-muted);
+}
+
+.file-explorer-name {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Symlinks: outlined icon + link badge, italic name, dimmed "→ target" */
+.file-explorer-link-icon {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.file-explorer-link-badge {
+  position: absolute;
+  right: -4px;
+  bottom: -3px;
+  padding: 1px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  color: var(--accent);
+}
+
+.file-explorer-item.is-symlink .file-explorer-name {
+  font-style: italic;
+}
+
+.file-explorer-link-target {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.file-explorer-item.is-broken-link .file-explorer-name,
+.file-explorer-item.is-broken-link .file-explorer-link-icon svg:not(.file-explorer-link-badge) {
+  color: var(--text-muted);
+}
+
+.file-explorer-item.is-broken-link .file-explorer-link-badge {
+  color: var(--error);
+}

@@ -1,0 +1,513 @@
+/* ===== Terminal Drag and Drop ===== */
+.terminal-panel.drag-over {
+  position: relative;
+}
+
+.terminal-drag-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--accent) 90%, transparent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--on-accent);
+  font-size: 16px;
+  font-weight: 500;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.terminal-upload-status {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  box-shadow: var(--shadow-lg);
+  z-index: 50;
+}
+
+/* ===== Terminal Container Fix ===== */
+.terminal-container {
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ===== Terminal Header Divider ===== */
+.terminal-header-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+/* ===== Terminal Split Layout ===== */
+.terminal-split-container {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.terminal-body.split-horizontal .terminal-split-container {
+  flex-direction: row;
+}
+
+.terminal-body.split-vertical .terminal-split-container {
+  flex-direction: column;
+}
+
+.terminal-body.split-horizontal .terminal-container,
+.terminal-body.split-horizontal .split-terminal {
+  flex: 1;
+  min-width: 0;
+}
+
+.terminal-body.split-vertical .terminal-container,
+.terminal-body.split-vertical .split-terminal {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Split panes: every pane, divider line and grip is a flat child of the split container, placed
+   by the rectangle lib/splitTree.ts computes from the tab's split tree. The per-layout rules below
+   (split-horizontal, split-quad, split-tri-*) are from the older fixed layouts and no longer match. */
+.terminal-body.split-tree .terminal-split-container {
+  position: relative;
+}
+
+.terminal-body.split-tree .terminal-container,
+.terminal-body.split-tree .split-terminal {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pane-divider {
+  z-index: 5;
+  background: var(--border);
+}
+
+.pane-divider:hover,
+.pane-divider:active {
+  background: var(--accent);
+}
+
+.pane-divider-v {
+  cursor: col-resize;
+}
+
+.pane-divider-h {
+  cursor: row-resize;
+}
+
+/* Grip on a pane's top edge: appears when the pointer comes near, drag it to swap panes.
+   The area covers the pane but lets every pointer event through; only the grip takes them. */
+.pane-grip-area {
+  z-index: 6;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.pane-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 14px;
+  margin-top: 2px;
+  border-radius: var(--radius-full, 999px);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  cursor: grab;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.pane-grip.is-shown {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.pane-grip:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.pane-grip:active {
+  cursor: grabbing;
+}
+
+/* The empty place of a pane that became a tab */
+.pane-vacant {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pane-vacant-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.pane-vacant-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pane-vacant-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.pane-vacant-btn:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.6;
+}
+
+.pane-vacant-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A tab strip while a pane is dragged over it: dropping makes the pane a tab */
+.pane-drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* Shown over every other pane while one is dragged */
+.pane-drop-zone {
+  z-index: 7;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius-md, 6px);
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.pane-drop-zone.is-over {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text-primary);
+}
+
+.pane-drop-zone span {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane-grip { transition: none; }
+}
+
+/* Multi-split grid (quad + tri layouts) */
+.terminal-body.split-quad .terminal-split-container,
+.terminal-body.split-tri-bottom .terminal-split-container,
+.terminal-body.split-tri-top .terminal-split-container,
+.terminal-body.split-tri-right .terminal-split-container,
+.terminal-body.split-tri-left .terminal-split-container {
+  display: grid;
+  grid-template-columns: 1fr 6px 1fr;
+  grid-template-rows: 1fr 6px 1fr;
+}
+
+.terminal-body.split-quad .terminal-container,
+.terminal-body.split-quad .split-terminal,
+.terminal-body.split-tri-bottom .terminal-container,
+.terminal-body.split-tri-bottom .split-terminal,
+.terminal-body.split-tri-top .terminal-container,
+.terminal-body.split-tri-top .split-terminal,
+.terminal-body.split-tri-right .terminal-container,
+.terminal-body.split-tri-right .split-terminal,
+.terminal-body.split-tri-left .terminal-container,
+.terminal-body.split-tri-left .split-terminal {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Grid dividers */
+.grid-divider {
+  background: var(--border);
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  z-index: 5;
+}
+
+.grid-divider:hover {
+  background: var(--accent);
+}
+
+.grid-divider-v {
+  cursor: col-resize;
+}
+
+.grid-divider-h {
+  cursor: row-resize;
+}
+
+.grid-divider-center {
+  cursor: move;
+}
+
+/* Merge context menu */
+.split-context-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 999;
+}
+
+.split-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 4px 0;
+  min-width: 120px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.split-context-menu-item {
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.split-context-menu-item:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.terminal-split-divider {
+  background: var(--border);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.terminal-split-divider.horizontal {
+  width: 6px;
+  cursor: col-resize;
+}
+
+.terminal-split-divider.vertical {
+  height: 6px;
+  cursor: row-resize;
+}
+
+.terminal-split-divider:hover {
+  background: var(--accent);
+}
+
+.terminal-split-divider::before {
+  content: '';
+  position: absolute;
+  z-index: 10;
+}
+
+.terminal-split-divider.horizontal::before {
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  right: -4px;
+}
+
+.terminal-split-divider.vertical::before {
+  left: 0;
+  right: 0;
+  top: -4px;
+  bottom: -4px;
+}
+
+/* Resize drag interaction */
+body.resizing {
+  user-select: none;
+}
+
+body.resizing .terminal-container,
+body.resizing .terminal-container * {
+  pointer-events: none !important;
+}
+
+body.resizing .split-pane-content,
+body.resizing .split-pane-content * {
+  pointer-events: none !important;
+}
+
+.split-divider:active,
+.terminal-split-divider:active,
+.grid-divider:active {
+  background: var(--accent);
+}
+
+.split-view-container.resizing .split-divider {
+  background: var(--accent);
+}
+
+.split-terminal {
+  display: flex;
+  overflow: hidden;
+}
+
+.split-terminal-content {
+  flex: 1;
+  overflow: hidden;
+}
+
+.split-terminal-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.split-terminal-error {
+  color: var(--danger);
+}
+
+.split-terminal-retry-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.split-terminal-retry-btn:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* ===== Tab Drag and Drop ===== */
+.terminal-tab.dragging {
+  opacity: 0.5;
+}
+
+.terminal-tab[draggable="true"] {
+  cursor: grab;
+}
+
+.terminal-tab[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.terminal-area.drag-active {
+  position: relative;
+}
+
+.drop-zone {
+  position: absolute;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 2px dashed transparent;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--transition-fast), background var(--transition-fast);
+  z-index: 100;
+}
+
+.drop-zone.active {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
+}
+
+.drop-zone-left {
+  top: 0;
+  left: 0;
+  width: 30%;
+  height: 100%;
+}
+
+.drop-zone-right {
+  top: 0;
+  right: 0;
+  width: 30%;
+  height: 100%;
+}
+
+.drop-zone-top {
+  top: 0;
+  left: 30%;
+  right: 30%;
+  height: 30%;
+}
+
+.drop-zone-bottom {
+  bottom: 0;
+  left: 30%;
+  right: 30%;
+  height: 30%;
+}
+
+/* ===== Terminal Window (Pop-out) ===== */
+.terminal-window-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-primary);
+}
+
+.terminal-window-content {
+  flex: 1;
+  overflow: hidden;
+  padding: 8px;
+  background: var(--bg-secondary);
+}
+
+.terminal-window-content .xterm {
+  height: 100%;
+}
+
+.terminal-window-content .xterm-viewport {
+  border-radius: var(--radius-md);
+}
