@@ -5,13 +5,15 @@ import { useToastStore } from '../../stores/toastStore'
 import './SessionBackup.css'
 import { ExternalImportDialog } from './ExternalImportDialog'
 import { BackupSessionTree } from './BackupSessionTree'
+import { UiSettingsBackup } from './UiSettingsBackup'
 
-type BackupSection = 'export' | 'import' | 'external'
+type BackupSection = 'export' | 'import' | 'external' | 'ui'
 
 const BACKUP_SECTIONS: { id: BackupSection; label: string }[] = [
   { id: 'export', label: '세션 백업' },
   { id: 'import', label: '세션 가져오기' },
-  { id: 'external', label: '다른 프로그램에서 가져오기' }
+  { id: 'external', label: '다른 프로그램에서 가져오기' },
+  { id: 'ui', label: '화면 설정' }
 ]
 
 export function SessionBackup() {
@@ -210,7 +212,10 @@ export function SessionBackup() {
       )}
 
       {/* Notes for the tab in view (other programs: its own dialog explains what is taken) */}
-      {section !== 'external' && (
+      {/* Theme, shortcuts, panel sizes (its own notes) */}
+      {section === 'ui' && <UiSettingsBackup />}
+
+      {section !== 'external' && section !== 'ui' && (
       <div className="backup-info">
         <h5>주의사항</h5>
         <ul>

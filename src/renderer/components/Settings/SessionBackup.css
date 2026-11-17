@@ -422,3 +422,64 @@ button.backup-tree-arrow:hover {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+
+/* 화면 설정 tab (UiSettingsBackup.tsx): what travels, and the file waiting to be applied */
+.ui-settings-list {
+  margin: 0 0 16px 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ui-settings-list li {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.ui-settings-list strong {
+  flex: 0 0 108px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ui-settings-pending {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent-muted);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ui-settings-pending p {
+  margin: 0 0 6px 0;
+}
+
+.ui-settings-pending-file {
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.ui-settings-pending ul {
+  margin: 0 0 8px 0;
+  padding-left: 20px;
+  list-style: disc;
+  line-height: 1.6;
+}
+
+.ui-settings-pending-skipped {
+  color: var(--text-muted);
+}
+
+.ui-settings-pending-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
