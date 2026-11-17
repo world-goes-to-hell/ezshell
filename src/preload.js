@@ -184,6 +184,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('remote-access-changed', handler);
     return () => ipcRenderer.removeListener('remote-access-changed', handler);
   },
+  // The path on this PC of a file dropped onto the window. Electron 32 removed `File.path`; from 29
+  // on `webUtils.getPathForFile` gives it. Empty when it cannot be told (callers must not treat an
+  // empty path as a file).
+  getPathForFile: (file) => {
+    try {
+      const { webUtils } = require('electron');
+      if (webUtils && typeof webUtils.getPathForFile === 'function') return webUtils.getPathForFile(file) || '';
+    } catch {
+      // Falls through to the old property
+    }
+    return file && typeof file.path === 'string' ? file.path : '';
+  },
   saveExportFile: (defaultName, extension, data, kind) => ipcRenderer.invoke('save-export-file', { defaultName, extension, data, kind }),
   saveTerminalOutput: (defaultName, text) => ipcRenderer.invoke('save-terminal-output', { defaultName, text }),
   localRename: (oldPath, newPath) => ipcRenderer.invoke('local-rename', { oldPath, newPath }),

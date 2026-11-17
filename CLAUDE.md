@@ -17,7 +17,7 @@ npm run build:portable  # 포터블 exe
 npm run build:publish   # GitHub Releases 배포 (electron-updater)
 ```
 
-화면 테스트: `npm run build` 뒤 `npm run e2e` (전부) 또는 `npm run e2e -- shortcuts` (하나). `e2e/run.js` 가 명세(`e2e/specs/*.js`)마다 빌드된 앱을 새 프로필(시스템 임시 폴더)로 띄우고 CDP 로 조작한 뒤 끝낸다. 실제 앱 데이터는 건드리지 않는다. 화면 캡처는 `e2e/.out/`(커밋 안 함). 지금 있는 명세는 서버가 필요 없는 것들이다 (로컬 터미널 분할·탭으로 빼기, 단축키, 로그 강조, 분리 창 위치).
+화면 테스트: `npm run build` 뒤 `npm run e2e` (전부) 또는 `npm run e2e -- shortcuts` (하나). `e2e/run.js` 가 명세(`e2e/specs/*.js`)마다 빌드된 앱을 새 프로필(시스템 임시 폴더)로 띄우고 CDP 로 조작한 뒤 끝낸다. 실제 앱 데이터는 건드리지 않는다. 화면 캡처는 `e2e/.out/`(커밋 안 함). 명세: 서버가 필요 없는 것(로컬 터미널 분할·탭으로 빼기 `local-split`, 단축키 `shortcuts`, 로그 강조 `log-highlight`, 분리 창 위치 `window-place`, 화면 설정 백업 `ui-settings`)과, 이름이 `ssh-` 로 시작해 실행기가 시험용 SSH 서버(`e2e/support/sshd.js`)를 띄워 주는 것(`ssh-sftp`, 칸 나누기·자리 바꾸기·탭으로 빼기 `ssh-panes`, 끊김·셸 종료·재연결 `ssh-reconnect`). 새 명세는 공용 도우미 `e2e/support/driver.js`(CDP 연결, 포인터·키 입력, 잠금 해제, 시험 서버 접속)를 쓴다.
 - 앱은 `npx` 를 거치지 않고 Electron 실행 파일로 직접 띄운다 (`npx` 를 끝내면 Electron 이 남아 디버깅 포트를 잡고, 다음 명세가 옛 앱에 붙는다).
 - 명세를 쓸 때: 앞에 있지 않은 탭은 `display: none` 이 아니라 `visibility: hidden` 으로 숨는다 (탭 내용이 배치를 유지한다). 보이는 탭을 고를 때 `offsetParent` 만 보면 숨은 탭도 잡힌다.
 
@@ -32,7 +32,11 @@ npm run build:publish   # GitHub Releases 배포 (electron-updater)
 ## Architecture
 
 ### Process Model
-- **Main Process** (`main.js`): SSH 연결(ssh2), SFTP, IPC 핸들러, 마스터 비밀번호/암호화, safeStorage
+- **Main Process** (`main.js` + `src/ipc/`): SSH 연결(ssh2), SFTP, IPC 핸들러, 마스터 비밀번호/암호화, safeStorage
+  - `main.js` 에는 앱 시작·본창·잠금과 세션 저장·SSH 연결이 있고, 그 밖의 IPC 묶음은 `src/ipc/` 에 있다: `sftp.js`(SFTP·이 PC 의 파일·전송 대기열), `portForward.js`, `commandHistory.js`, `pathBookmarks.js`, `updates.js`, `detachedWindows.js`(분리 창 다섯 종류). 묶음마다 `register…(ctx)` 함수 하나이고, `main.js` 가 함께 쓰는 것(연결 목록, 창)을 `ctx` 로 넘긴다.
+  - 바뀌는 값(`mainWindow`, `isAppLocked`, `currentMasterPassword`)은 `ctx` 의 getter 로 넘긴다 (`ctx.mainWindow`): 값을 그대로 넘기면 넘긴 순간의 값(`undefined`)에 머문다.
+  - 바꾸면 안 되는 것: `ctx` 에 넘기는 이름이 `main.js` 에서 그 호출보다 아래에 `const` 로 선언돼 있으면 앱이 시작할 때 죽는다 (선언 전 접근). 그런 것은 `fromMainWindow: (event) => fromMainWindow(event)` 처럼 호출로 감싸 넘긴다. 묶음을 옮기거나 더한 뒤에는 화면 테스트로 앱이 뜨는지 본다 (단위 테스트는 `main.js` 를 실행하지 않아 잡지 못한다).
+  - `src/ipc/` 의 파일에서 `__dirname` 은 `main.js` 의 폴더가 아니다. preload·페이지 경로가 필요한 묶음은 `main.js` 의 `__dirname` 을 받아 쓴다 (`detachedWindows.js`).
 - **Preload** (`src/preload.js`): contextBridge로 `window.electronAPI` 노출
 - **Renderer** (`src/renderer/`): React 앱, Vite 빌드
 
@@ -46,7 +50,8 @@ Split 터미널은 별도 IPC 채널 사용: `ssh-split-data`, `ssh-split-send`
 
 ### Key Directories
 ```
-main.js                          # Electron 메인 프로세스 (SSH, SFTP, IPC)
+main.js                          # Electron 메인 프로세스 (시작, 본창, 잠금, SSH 연결)
+src/ipc/                         # main.js 에서 나눈 IPC 묶음 (SFTP, 포트 포워딩, 업데이트, 분리 창 등)
 src/preload.js                   # IPC 브릿지
 src/renderer/
   App.tsx                        # 루트 컴포넌트, 레이아웃 상태 관리
