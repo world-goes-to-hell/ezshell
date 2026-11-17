@@ -21,15 +21,33 @@ function createChecks() {
   }
 }
 
-/** Attaches to the app's main page (E2E_CDP) */
-async function connect() {
-  let list = []
-  for (let i = 0; i < 60 && !list.some((t) => t.type === 'page'); i++) {
-    try { list = await (await fetch(process.env.E2E_CDP + '/json')).json() } catch { /* not up yet */ }
-    await sleep(500)
+/** The app's windows, as CDP page targets */
+async function pages() {
+  try {
+    return (await (await fetch(process.env.E2E_CDP + '/json')).json()).filter((t) => t.type === 'page')
+  } catch {
+    return []
   }
-  const page = list.find((t) => t.type === 'page')
-  if (!page) throw new Error('the app has no page')
+}
+
+/** The main window's page: the detached windows carry a `...Mode=true` query */
+const isMainPage = (target) => !/Mode=/.test(target.url)
+
+/** Waits for a window whose page matches (for example `t => t.url.includes('terminalMode')`) */
+async function findPage(match, ms = 30000) {
+  const start = Date.now()
+  while (Date.now() - start < ms) {
+    const page = (await pages()).find(match)
+    if (page) return page
+    await sleep(300)
+  }
+  return null
+}
+
+/** Attaches to a window of the app: the main one, or the one `match` picks */
+async function connect(match = isMainPage) {
+  const page = await findPage(match)
+  if (!page) throw new Error('the app has no such page')
   const ws = new WebSocket(page.webSocketDebuggerUrl)
   await new Promise((resolve) => { ws.onopen = resolve })
   let id = 0
@@ -79,6 +97,8 @@ async function connect() {
   // Terminal right-click menu
   const item = (label) => `[...document.querySelectorAll('.terminal-menu-item')].find(i => i.textContent.trim() === ${JSON.stringify(label)})`
   const pick = async (label) => {
+    // A submenu's items are not there the moment it opens
+    await until(`!!${item(label)}`, 3000)
     const c = await center(item(label))
     if (!c) throw new Error('no menu item ' + label)
     await click(c[0], c[1])
@@ -102,13 +122,29 @@ async function connect() {
     }
     throw new Error('the submenu did not open: ' + label)
   }
+  /** Right-click, submenu, item; tried again once from the start (a menu can close under a moving pointer) */
+  const menuPick = async (x, y, submenu, label) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await openSubmenu(x, y, submenu)
+        await pick(label)
+        return
+      } catch (error) {
+        if (attempt >= 1) throw error
+        console.log(`  (menu retry: ${error.message})`)
+        await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+        await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+        await sleep(500)
+      }
+    }
+  }
 
   const shot = async (name) => {
     const r = await send('Page.captureScreenshot', { format: 'png' })
     if (r.result?.data && process.env.E2E_OUT) fs.writeFileSync(path.join(process.env.E2E_OUT, `${name}.png`), Buffer.from(r.result.data, 'base64'))
   }
 
-  return { send, js, until, move, click, center, pointer, type, enter, item, pick, hover, openSubmenu, shot }
+  return { send, js, until, move, click, center, pointer, type, enter, item, pick, hover, openSubmenu, menuPick, shot, close: () => ws.close() }
 }
 
 /** Sets an input's value the way React notices */
@@ -153,4 +189,4 @@ async function connectSsh(driver) {
   return ok
 }
 
-module.exports = { sleep, createChecks, connect, unlock, connectSsh, SET, PANEL }
+module.exports = { sleep, createChecks, connect, pages, findPage, isMainPage, unlock, connectSsh, SET, PANEL }

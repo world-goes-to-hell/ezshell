@@ -1,5 +1,5 @@
 // Test SSH server for the screen tests (specs named ssh-*): any login is accepted, the shell echoes
-// what is typed and knows a few words (ls, ll, etc, home, exit, drop), and SFTP serves a small folder.
+// what is typed and knows a few words (ls, ll, etc, home, exit, drop, refuse, halt N), and SFTP serves a small folder.
 // Started by e2e/run.js with E2E_SSH_PORT (127.0.0.1 only) and E2E_SSH_DIR (a temp folder for the
 // host key and the served files).
 const path = require('path')
@@ -18,7 +18,8 @@ fs.mkdirSync(path.join(disk, 'etc'), { recursive: true })
 fs.writeFileSync(path.join(disk, 'var', 'log', 'app.log'), '2026-11-10 09:00:00 INFO start\n2026-11-10 09:00:01 ERROR db down\n')
 fs.writeFileSync(path.join(disk, 'etc', 'hosts'), '127.0.0.1 localhost\n')
 fs.writeFileSync(path.join(disk, 'var', 'old.txt'), 'old\n')
-const local = (p) => path.join(disk, ...String(p).split('/').filter(Boolean))
+// `~` is the login folder, which is the root here (the app uploads dropped files to `~/name`)
+const local = (p) => path.join(disk, ...String(p).split('/').filter((part) => part && part !== '~'))
 const attrsOf = (st) => ({ mode: st.mode, uid: 0, gid: 0, size: st.size, atime: Math.floor(st.atimeMs / 1000), mtime: Math.floor(st.mtimeMs / 1000) })
 const codeOf = (err) => (err.code === 'ENOENT' ? STATUS_CODE.NO_SUCH_FILE : (err.code === 'EPERM' || err.code === 'EACCES') ? STATUS_CODE.PERMISSION_DENIED : STATUS_CODE.FAILURE)
 
@@ -84,10 +85,25 @@ function serveSftp(sftp) {
 const keyFile = path.join(WORK_DIR, 'hostkey.pem')
 if (!fs.existsSync(keyFile)) fs.writeFileSync(keyFile, utils.generateKeyPairSync('ed25519').private)
 
+// `halt N` typed in a shell: every connection is dropped and new ones are refused for N seconds
+// (a server that went down and came back)
+const clients = new Set()
+function haltFor(seconds) {
+  server.close()
+  for (const client of clients) client.end()
+  setTimeout(() => server.listen(PORT, '127.0.0.1'), seconds * 1000)
+}
+
 const server = new Server({ hostKeys: [fs.readFileSync(keyFile)] }, (client) => {
+  clients.add(client)
+  client.on('close', () => clients.delete(client))
   client.on('authentication', (ctx) => ctx.accept())
   client.on('ready', () => {
-    client.on('session', (accept) => {
+    // `refuse` typed in a shell: the next two channels this connection asks for are rejected
+    // (what a server at its channel limit does), then channels open again
+    let refusals = 0
+    client.on('session', (accept, reject) => {
+      if (refusals > 0) { refusals--; reject(); return }
       const session = accept()
       session.on('sftp', (acceptSftp) => serveSftp(acceptSftp()))
       session.on('pty', (ok) => ok && ok())
@@ -105,6 +121,9 @@ const server = new Server({ hostKeys: [fs.readFileSync(keyFile)] }, (client) => 
               stream.write('\r\n')
               if (cmd === 'exit') { stream.write('timed out waiting for input: auto-logout\r\n'); stream.exit(0); stream.end(); return }
               if (cmd === 'drop') { client.end(); return }
+              if (cmd === 'refuse') refusals = 2
+              const halt = /^halt (\d+)$/.exec(cmd)
+              if (halt) { haltFor(Number(halt[1])); return }
               if (cmd === 'home') where = '~'
               if (cmd === 'etc') where = '/etc'
               if (cmd === 'ls') stream.write('log  newdir  old.txt  wide.conf  nothere.txt\r\n')
