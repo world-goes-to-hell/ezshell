@@ -4,6 +4,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 창 컨트롤
   minimizeWindow: () => ipcRenderer.send('window-minimize'),
   maximizeWindow: () => ipcRenderer.send('window-maximize'),
+  // See-through window (설정 > 테마 > 창 투명도); main clamps the value
+  setWindowOpacity: (opacity) => ipcRenderer.send('window-set-opacity', opacity),
+  // Glass surface style: the choice kept for the next start, and whether this window has acrylic now
+  setAppearance: (value) => ipcRenderer.send('appearance-set', value),
+  getBackdrop: () => ipcRenderer.invoke('appearance-backdrop'),
+  // Popped-out SFTP window: it reports the folders it shows, and the main window hears when it closes
+  sftpWindowPaths: (sessionId, localPath, remotePath) => ipcRenderer.send('sftp-window-paths', { sessionId, localPath, remotePath }),
+  onSftpWindowClosed: (callback) => {
+    const listener = (_event, info) => callback(info);
+    ipcRenderer.on('sftp-window-closed', listener);
+    return () => ipcRenderer.removeListener('sftp-window-closed', listener);
+  },
+  // A double press somewhere in a glass window (main cannot tell drag regions; the page can)
+  onCaptionDoubleClick: (callback) => {
+    const listener = (_event, point) => callback(point);
+    ipcRenderer.on('window-caption-double-click', listener);
+    return () => ipcRenderer.removeListener('window-caption-double-click', listener);
+  },
   closeWindow: () => ipcRenderer.send('window-close'),
   toggleFullscreen: () => ipcRenderer.invoke('window-toggle-fullscreen'),
 
@@ -98,6 +116,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('sftp-queue-upload', { sessionId, localPath, remotePath }),
   sftpUploadDirectory: (sessionId, localDir, remoteDir) =>
     ipcRenderer.invoke('sftp-upload-directory', { sessionId, localDir, remoteDir }),
+  sftpDownloadDirectory: (sessionId, remoteDir, localDir) =>
+    ipcRenderer.invoke('sftp-download-directory', { sessionId, remoteDir, localDir }),
   sftpTransferPause: (sessionId, transferId) =>
     ipcRenderer.invoke('sftp-transfer-pause', { sessionId, transferId }),
   sftpTransferResume: (sessionId, transferId) =>
@@ -291,6 +311,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sshSplitSend: (streamId, data) => ipcRenderer.send('ssh-split-send', { streamId, data }),
   sshSplitResize: (streamId, cols, rows) => ipcRenderer.send('ssh-split-resize', { streamId, cols, rows }),
   sshSplitClose: (streamId) => ipcRenderer.send('ssh-split-close', { streamId }),
+  sshAdoptSplit: (streamId) => ipcRenderer.invoke('ssh-adopt-split', { streamId }),
+  containerList: (sessionId, all) => ipcRenderer.invoke('container-list', { sessionId, all }),
+  containerLogOpen: (sessionId, sessionName, name) => ipcRenderer.invoke('container-log-open', { sessionId, sessionName, name }),
   onSshSplitData: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('ssh-split-data', handler);
@@ -311,6 +334,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
+  openUpdatePage: () => ipcRenderer.invoke('open-update-page'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   whatsNewState: () => ipcRenderer.invoke('whats-new-state'),
   localPlaces: () => ipcRenderer.invoke('local-places'),

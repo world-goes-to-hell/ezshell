@@ -8,6 +8,8 @@ export interface UpdateInfo {
   version?: string
   releaseDate?: string
   releaseNotes?: string
+  /** The app cannot update itself (unsigned macOS build): the notice opens the release page instead */
+  manual?: boolean
   percent?: number
   transferred?: number
   total?: number

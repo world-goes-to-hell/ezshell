@@ -4,10 +4,18 @@ import { PRESET_THEMES } from '../themes/presets'
 import { ThemeDefinition, TerminalColors } from '../types/theme'
 import { colorSchemeFor } from '../lib/colorScheme'
 import { normalizeTheme, sanitizeStoredThemes } from '../lib/themeValidation'
+import { detectDefaultThemeId } from '../lib/defaultTheme'
+import { clampWindowOpacity, effectiveSurface, parseSurface, type SurfaceStyle } from '../lib/appearance'
 
 interface ThemeState {
   currentThemeId: string
   customThemes: ThemeDefinition[]
+  /** Flat (solid panels) or glass (translucent, blurred); independent of the color theme */
+  surface: SurfaceStyle
+  /** 0.5 to 1: the whole window made see-through */
+  windowOpacity: number
+  setSurface: (surface: SurfaceStyle) => void
+  setWindowOpacity: (opacity: number) => void
   setTheme: (themeId: string) => void
   getCurrentTheme: () => ThemeDefinition
   getTerminalTheme: () => TerminalColors
@@ -23,17 +31,90 @@ interface ThemeState {
  * data-theme picks the CSS variables; color-scheme makes the parts Chromium draws itself
  * (open select lists, color picker, scrollbars, form controls) dark or light to match the theme.
  */
-function applyThemeToDocument(themeId: string, background: string) {
+function applyThemeToDocument(theme: ThemeDefinition, surface: SurfaceStyle) {
   const root = document.documentElement
-  root.setAttribute('data-theme', themeId)
-  root.style.colorScheme = colorSchemeFor(background) ?? ''
+  root.setAttribute('data-theme', theme.id)
+  // Surface style (styles/glass.css) and the scheme it needs to pick its edge color
+  const drawn = effectiveSurface(theme.id, surface)
+  const scheme = colorSchemeFor(theme.colors.bgPrimary) ?? 'dark'
+  root.setAttribute('data-surface', drawn)
+  root.setAttribute('data-scheme', scheme)
+  syncNativeBackdrop(drawn, scheme)
+  // data-chrome switches shape rules (title bar layout, field style) that colors alone cannot express
+  if (theme.chrome) root.setAttribute('data-chrome', theme.chrome)
+  else root.removeAttribute('data-chrome')
+  root.style.colorScheme = colorSchemeFor(theme.colors.bgPrimary) ?? ''
+}
+
+type BackdropApi = {
+  setAppearance?: (value: { surface: SurfaceStyle; scheme: 'light' | 'dark' }) => void
+  getBackdrop?: () => Promise<{ active: boolean; supported: boolean }>
+}
+
+/**
+ * Glass with the real desktop behind it (Windows acrylic). Main can only give a window that material
+ * when it creates it, so: tell main what is chosen (for the next start), and mark the document when
+ * this window already has it. `data-backdrop`: "native" = acrylic is behind this window (glass.css
+ * drops the painted wash), "restart" = it will be after a restart, absent = not available here.
+ */
+function syncNativeBackdrop(surface: SurfaceStyle, scheme: 'light' | 'dark') {
+  const root = document.documentElement
+  const api = (window as unknown as { electronAPI?: BackdropApi }).electronAPI
+  if (typeof api?.setAppearance !== 'function' || typeof api.getBackdrop !== 'function') {
+    root.removeAttribute('data-backdrop')
+    return
+  }
+  try {
+    api.setAppearance({ surface, scheme })
+    void api.getBackdrop()
+      .then(state => {
+        if (surface === 'glass' && state?.active) root.setAttribute('data-backdrop', 'native')
+        else if (surface === 'glass' && state?.supported) root.setAttribute('data-backdrop', 'restart')
+        else root.removeAttribute('data-backdrop')
+      })
+      .catch(() => root.removeAttribute('data-backdrop'))
+  } catch {
+    root.removeAttribute('data-backdrop')
+  }
+}
+
+/** Asks main to make this window see-through; an app built before this existed has no such call */
+function applyWindowOpacity(opacity: number) {
+  try {
+    const api = (window as unknown as { electronAPI?: { setWindowOpacity?: (value: number) => void } }).electronAPI
+    if (typeof api?.setWindowOpacity === 'function') api.setWindowOpacity(clampWindowOpacity(opacity))
+  } catch {
+    // The window stays opaque
+  }
+}
+
+// Window focus as an attribute, so CSS can gray the mac-style window buttons of a background window
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  const markFocus = () => document.documentElement.toggleAttribute('data-window-blurred', !document.hasFocus())
+  window.addEventListener('focus', markFocus)
+  window.addEventListener('blur', markFocus)
+  markFocus()
 }
 
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set, get) => ({
-      currentThemeId: 'minimal-dark',
+      // First run only: a saved choice replaces this in merge below
+      currentThemeId: detectDefaultThemeId(),
       customThemes: [],
+      surface: 'flat',
+      windowOpacity: 1,
+
+      setSurface: (surface: SurfaceStyle) => {
+        set({ surface })
+        applyThemeToDocument(get().getCurrentTheme(), surface)
+      },
+
+      setWindowOpacity: (opacity: number) => {
+        const windowOpacity = clampWindowOpacity(opacity)
+        set({ windowOpacity })
+        applyWindowOpacity(windowOpacity)
+      },
 
       setTheme: (themeId: string) => {
         const theme = get().getAllThemes().find(t => t.id === themeId)
@@ -42,7 +123,7 @@ export const useThemeStore = create<ThemeState>()(
         set({ currentThemeId: themeId })
 
         // Apply theme to DOM
-        applyThemeToDocument(themeId, theme.colors.bgPrimary)
+        applyThemeToDocument(theme, get().surface)
 
         // Dispatch event for terminal sync
         window.dispatchEvent(new CustomEvent('theme-changed', { detail: { themeId } }))
@@ -60,8 +141,8 @@ export const useThemeStore = create<ThemeState>()(
       },
 
       initializeTheme: () => {
-        const { currentThemeId } = get()
-        applyThemeToDocument(currentThemeId, get().getCurrentTheme().colors.bgPrimary)
+        applyThemeToDocument(get().getCurrentTheme(), get().surface)
+        applyWindowOpacity(get().windowOpacity)
       },
 
       saveCustomTheme: (theme: ThemeDefinition) => {
@@ -86,7 +167,7 @@ export const useThemeStore = create<ThemeState>()(
 
         // If deleted theme was active, switch to default
         if (get().currentThemeId === id) {
-          get().setTheme('minimal-dark')
+          get().setTheme(detectDefaultThemeId())
         }
       },
 
@@ -120,16 +201,24 @@ export const useThemeStore = create<ThemeState>()(
       name: 'theme-store',
       partialize: (state) => ({
         currentThemeId: state.currentThemeId,
-        customThemes: state.customThemes
+        customThemes: state.customThemes,
+        surface: state.surface,
+        windowOpacity: state.windowOpacity
       }),
       // Stored custom themes may predate validation (or be edited by hand): repair or drop them before use,
       // and fall back to the default theme if the chosen one did not survive
       merge: (persisted, current) => {
-        const stored = (persisted ?? {}) as Partial<Pick<ThemeState, 'currentThemeId' | 'customThemes'>>
+        const stored = (persisted ?? {}) as Partial<Pick<ThemeState, 'currentThemeId' | 'customThemes' | 'surface' | 'windowOpacity'>>
         const customThemes = sanitizeStoredThemes(stored.customThemes)
         const chosen = stored.currentThemeId
         const isKnown = [...PRESET_THEMES, ...customThemes].some(theme => theme.id === chosen)
-        return { ...current, customThemes, currentThemeId: isKnown && chosen ? chosen : current.currentThemeId }
+        return {
+          ...current,
+          customThemes,
+          currentThemeId: isKnown && chosen ? chosen : current.currentThemeId,
+          surface: parseSurface(stored.surface),
+          windowOpacity: clampWindowOpacity(stored.windowOpacity)
+        }
       },
     }
   )

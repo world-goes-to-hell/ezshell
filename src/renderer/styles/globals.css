@@ -1,6 +1,8 @@
 /* Import design tokens */
 @import './variables.css';
 @import './themes-light.css';
+@import './themes-macos.css';
+@import './glass.css';
 @import './fonts.css';
 
 /* Tailwind directives */
@@ -1021,32 +1023,6 @@ textarea {
   user-select: none;
 }
 
-.sftp-resize-handle {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 8px;
-  cursor: ns-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border);
-  color: var(--text-muted);
-  transition: all var(--transition-fast);
-  z-index: 10;
-}
-
-.sftp-resize-handle:hover {
-  background: var(--bg-hover);
-  color: var(--accent);
-}
-
-.sftp-resize-handle svg {
-  transform: rotate(90deg);
-}
-
 /* SFTP Window (Pop-out) */
 .sftp-window {
   display: flex;
@@ -1057,56 +1033,6 @@ textarea {
 
 .sftp-window .title-bar {
   flex-shrink: 0;
-}
-
-.sftp-toolbar {
-  display: flex;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border);
-}
-
-.sftp-toolbar .sftp-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.sftp-toolbar .sftp-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--accent);
-  color: var(--text-primary);
-}
-
-/* Pop-out window toolbar: labelled buttons. The docked panel's .sftp-btn is a 32px icon button,
-   which squeezed these labels into a square and collapsed their icons. */
-.sftp-window-toolbar {
-  flex-shrink: 0;
-  align-items: center;
-}
-
-.sftp-window-toolbar .sftp-btn {
-  width: auto;
-  height: 30px;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-.sftp-window-toolbar .sftp-btn svg {
-  flex-shrink: 0;
-}
-
-.sftp-window-toolbar .transfer-queue-toggle {
-  margin-left: auto;
 }
 
 .sftp-window-content {
@@ -1127,10 +1053,8 @@ textarea {
   background: var(--border);
 }
 
-.sftp-window .transfer-queue {
-  flex-shrink: 0;
-  max-height: 150px;
-}
+/* (No max-height here: the queue's height is set by dragging its header, TransferQueue.tsx. A fixed
+   150px cap made the popped-out window's queue stop growing almost at once.) */
 
 .sftp-header {
   display: flex;
@@ -1140,6 +1064,60 @@ textarea {
   padding-top: 12px;
   background: var(--bg-tertiary);
   border-bottom: 1px solid var(--border);
+}
+
+/* The SFTP bar is one compact line: it only holds a label and a few icon buttons, and every pixel it
+   takes comes off the file lists. The docked panel and the popped-out window draw the same bar. */
+:is(.sftp-panel, .sftp-window) .sftp-header {
+  position: relative;
+  flex-shrink: 0;
+  padding: 3px 8px 3px 12px;
+}
+
+/* In the panel the bar itself is the resize handle (SftpPanel.tsx): no separate strip above it */
+.sftp-panel .sftp-header {
+  cursor: ns-resize;
+}
+
+.sftp-panel .sftp-actions {
+  cursor: default;
+}
+
+/* The grip in the middle says the bar can be dragged */
+.sftp-header-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  color: var(--text-muted);
+  opacity: 0.7;
+  pointer-events: none;
+  transform: translate(-50%, -50%) rotate(90deg);
+  transition: color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.sftp-panel .sftp-header:hover .sftp-header-grip,
+.sftp-panel.resizing .sftp-header-grip {
+  color: var(--accent);
+  opacity: 1;
+}
+
+:is(.sftp-panel, .sftp-window) .sftp-title {
+  font-size: 12px;
+}
+
+:is(.sftp-panel, .sftp-window) .sftp-actions {
+  gap: 2px;
+}
+
+:is(.sftp-panel, .sftp-window) .sftp-btn {
+  width: 26px;
+  height: 24px;
+}
+
+:is(.sftp-panel, .sftp-window) .sftp-btn svg {
+  width: 15px;
+  height: 15px;
 }
 
 .sftp-title {
@@ -1440,27 +1418,44 @@ textarea {
 }
 
 /* Transfer Queue Resize Handle */
-.transfer-resize-handle {
-  height: 4px;
-  cursor: ns-resize;
-  background: var(--border);
-  flex-shrink: 0;
-  transition: background 0.15s ease;
-}
-
-.transfer-resize-handle:hover,
-.transfer-resize-handle:active {
-  background: var(--accent);
-}
-
 /* Transfer Queue */
+/* Its height is set by dragging its header (TransferQueue.tsx); never squeezed by the lists above */
 .transfer-queue {
+  flex: none;
+  min-height: 60px;
   border-top: 1px solid var(--border);
-  height: 100%;
   overflow-y: auto;
 }
 
+.transfer-queue.is-resizing {
+  user-select: none;
+}
+
+/* The grip in the middle of the header: the header is the handle that resizes the queue */
+.transfer-header-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  color: var(--text-muted);
+  opacity: 0.7;
+  pointer-events: none;
+  transform: translate(-50%, -50%) rotate(90deg);
+  transition: color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.transfer-header:hover .transfer-header-grip,
+.transfer-queue.is-resizing .transfer-header-grip {
+  color: var(--accent);
+  opacity: 1;
+}
+
 .transfer-header {
+  /* Stays in view while the list scrolls, and is the resize handle */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  cursor: ns-resize;
   padding: 6px 12px;
   font-size: 13px;
   font-weight: 600;
@@ -1547,7 +1542,35 @@ textarea {
   margin-bottom: 4px;
 }
 
+/* Upload / download badge before the file name: an arrow and a word, in two colors */
+.transfer-direction {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  margin-right: 8px;
+  padding: 1px 7px 1px 5px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.transfer-direction.is-upload {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-link);
+}
+
+.transfer-direction.is-download {
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success);
+}
+
 .transfer-name {
+  /* Takes the room between the badge and the status */
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   color: var(--text-primary);
   overflow: hidden;
@@ -1720,6 +1743,12 @@ textarea {
   padding: 8px;
   display: flex;
   flex-direction: column;
+}
+
+/* The node that carries a tab's content between layouts (lib/tabHosts.ts): no box of its own */
+.tab-host,
+.tab-host-content {
+  display: contents;
 }
 
 .terminal-wrapper.hidden {
@@ -2938,6 +2967,166 @@ textarea {
   min-height: 0;
 }
 
+/* Split panes: every pane, divider line and grip is a flat child of the split container, placed
+   by the rectangle lib/splitTree.ts computes from the tab's split tree. The per-layout rules below
+   (split-horizontal, split-quad, split-tri-*) are from the older fixed layouts and no longer match. */
+.terminal-body.split-tree .terminal-split-container {
+  position: relative;
+}
+
+.terminal-body.split-tree .terminal-container,
+.terminal-body.split-tree .split-terminal {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pane-divider {
+  z-index: 5;
+  background: var(--border);
+}
+
+.pane-divider:hover,
+.pane-divider:active {
+  background: var(--accent);
+}
+
+.pane-divider-v {
+  cursor: col-resize;
+}
+
+.pane-divider-h {
+  cursor: row-resize;
+}
+
+/* Grip on a pane's top edge: appears when the pointer comes near, drag it to swap panes.
+   The area covers the pane but lets every pointer event through; only the grip takes them. */
+.pane-grip-area {
+  z-index: 6;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.pane-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 14px;
+  margin-top: 2px;
+  border-radius: var(--radius-full, 999px);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  cursor: grab;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.pane-grip.is-shown {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.pane-grip:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.pane-grip:active {
+  cursor: grabbing;
+}
+
+/* The empty place of a pane that became a tab */
+.pane-vacant {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pane-vacant-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.pane-vacant-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pane-vacant-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.pane-vacant-btn:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.6;
+}
+
+.pane-vacant-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A tab strip while a pane is dragged over it: dropping makes the pane a tab */
+.pane-drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* Shown over every other pane while one is dragged */
+.pane-drop-zone {
+  z-index: 7;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius-md, 6px);
+  background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.pane-drop-zone.is-over {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text-primary);
+}
+
+.pane-drop-zone span {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane-grip { transition: none; }
+}
+
 /* Multi-split grid (quad + tri layouts) */
 .terminal-body.split-quad .terminal-split-container,
 .terminal-body.split-tri-bottom .terminal-split-container,
@@ -3268,11 +3457,15 @@ body.resizing .split-pane-content * {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  /* The pane is the one rounded shape (themes with curves): its focus outline follows these corners,
+     and the header and terminal inside stay square so nothing sticks out of the outline */
+  border-radius: var(--radius-md);
 }
 
 .split-pane .terminal-panel {
   flex: 1;
   height: 100%;
+  border-radius: 0;
 }
 
 .split-divider {
@@ -3312,7 +3505,6 @@ body.resizing .split-pane-content * {
   padding: 4px 8px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
   min-height: 36px;
 }
 
@@ -3600,7 +3792,8 @@ body.resizing .split-pane-content * {
 
 .split-pane-tab-close:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.2);
+  /* From the tab's own text color, so it shows on light tabs as well as on session-colored ones */
+  background: color-mix(in srgb, currentColor 20%, transparent);
 }
 
 .split-pane-tab-item:not(.active) .split-pane-tab-close:hover {
@@ -5187,6 +5380,13 @@ body.resizing .split-pane-content * {
 .split-pane-header.is-active-pane .split-pane-tab-item.active {
   background: var(--accent);
   color: var(--on-accent);
+}
+
+/* The DB / local icons have their own color (accent, muted), which disappears on the filled tab:
+   there they take the tab's text color (also right for a tab filled with the session color) */
+.split-pane-header.is-active-pane .split-pane-tab-item.active .tab-db-icon,
+.split-pane-header.is-active-pane .split-pane-tab-item.active .tab-local-icon {
+  color: inherit;
 }
 
 /* Split terminals inside one tab: mark the pane that receives keyboard input.

@@ -1,5 +1,6 @@
 import { ThemeDefinition } from '../types/theme'
 import { LIGHT_PRESETS } from './lightPresets'
+import { MACOS_PRESETS } from './macosPresets'
 
 export const PRESET_THEMES: ThemeDefinition[] = [
   // 1. Minimal Dark (graphite + blue) - Default
@@ -1191,6 +1192,9 @@ export const PRESET_THEMES: ThemeDefinition[] = [
 
   // 21~26. Light counterparts of the dark presets
   ...LIGHT_PRESETS,
+
+  // macOS-style pair (colors plus rounded shape and traffic-light window buttons)
+  ...MACOS_PRESETS,
 ]
 
 export const getThemeById = (id: string): ThemeDefinition | undefined => {

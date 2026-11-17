@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useSftpDropTransfers } from '../../hooks/useSftpDropTransfers'
+import { localFollowsRemote, remoteFollowsLocal, type SyncMove } from '../../lib/directorySync'
 import { useSftpStore } from '../../stores/sftpStore'
 import { FileList, keepSelectionProps } from './FileList'
 import { openRemoteFileWindow } from '../../lib/remoteFileOpen'
 import { TransferQueue } from './TransferQueue'
 import { PathBar } from './PathBar'
 import { OverwriteModal } from './OverwriteModal'
-import { RiUploadFill, RiDownloadFill, RiRefreshFill, RiArrowUpDownLine, RiFolderTransferFill } from 'react-icons/ri'
+import { RiUploadFill, RiDownloadFill, RiRefreshLine, RiArrowUpDownLine, RiFolderTransferFill, RiLinkM, RiLinkUnlinkM, RiMergeCellsHorizontal } from 'react-icons/ri'
 import { PopoutTitleBar } from '../TitleBar/PopoutTitleBar'
 import { usePopoutTheme } from '../../hooks/usePopoutTheme'
 import { useSftpListProgress } from '../../hooks/useSftpListProgress'
@@ -15,7 +17,7 @@ import { deleteRemoteSelection } from '../../lib/sftpRemoteDelete'
 import { useTransferQueue } from '../../hooks/useTransferQueue'
 import { useSftpPaneActions } from '../../hooks/useSftpPaneActions'
 import { useReloadOnTransferActivity } from '../../hooks/useReloadOnTransferActivity'
-import { useSftpTransferBatch, type PendingTransfer } from '../../hooks/useSftpTransferBatch'
+import { useSftpTransferBatch } from '../../hooks/useSftpTransferBatch'
 
 interface SftpWindowProps {
   sessionId: string
@@ -38,6 +40,11 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
   const localFiles = store.localFiles(sessionId)
   const selectedRemote = store.selectedRemote(sessionId)
   const selectedLocal = store.selectedLocal(sessionId)
+
+  // Tell main which folders this window shows, so the docked panel can come back to them
+  useEffect(() => {
+    if (localPath && remotePath) window.electronAPI.sftpWindowPaths?.(sessionId, localPath, remotePath)
+  }, [sessionId, localPath, remotePath])
 
   useEffect(() => {
     const initSftp = async () => {
@@ -62,7 +69,34 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
   const [remoteLoadingPath, setRemoteLoadingPath] = useState<string | null>(null)
   const remoteLoadingCount = useSftpListProgress(sessionId, remoteLoadingPath ?? '', remoteLoadingPath !== null)
 
+  // Directory sync, as in the SFTP panel: moving in one list moves the other the same way
+  // (lib/directorySync.ts). The ref is the value the async loaders read; the guard keeps the list that
+  // follows from making the first one follow back.
+  const [isSyncMode, setIsSyncModeState] = useState(false)
+  const syncModeRef = useRef(false)
+  const isFollowing = useRef(false)
+  const setIsSyncMode = (on: boolean) => {
+    syncModeRef.current = on
+    setIsSyncModeState(on)
+  }
+
+  const follow = async (move: SyncMove, side: '로컬' | '원격', go: (path: string) => Promise<void>) => {
+    if (!move) return
+    if (move.kind === 'missing') {
+      setIsSyncMode(false)
+      toast.info('동기화 해제', `'${move.name}' 디렉토리가 ${side}에 없어 동기화가 해제되었습니다.`)
+      return
+    }
+    isFollowing.current = true
+    try {
+      await go(move.path)
+    } finally {
+      isFollowing.current = false
+    }
+  }
+
   const loadRemoteFiles = async (path: string) => {
+    const prevRemotePath = useSftpStore.getState().remotePath(sessionId)
     setRemoteLoadingPath(path)
     try {
       const rawFiles = await window.electronAPI.sftpList(sessionId, path)
@@ -77,6 +111,10 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
       }))
       store.setRemoteFiles(sessionId, files)
       store.setRemotePath(sessionId, path)
+      if (syncModeRef.current && !isFollowing.current) {
+        const state = useSftpStore.getState()
+        await follow(localFollowsRemote(prevRemotePath, path, state.localPath(sessionId), state.localFiles(sessionId)), '로컬', loadLocalFiles)
+      }
     } catch (error) {
       console.error('Failed to load remote files:', error)
     } finally {
@@ -85,6 +123,7 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
   }
 
   const loadLocalFiles = async (path: string) => {
+    const prevLocalPath = useSftpStore.getState().localPath(sessionId)
     try {
       const result = await window.electronAPI.localList(path)
       if (result.success) {
@@ -96,20 +135,13 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
         }))
         store.setLocalFiles(sessionId, files)
         store.setLocalPath(sessionId, path)
+        if (syncModeRef.current && !isFollowing.current) {
+          const state = useSftpStore.getState()
+          await follow(remoteFollowsLocal(prevLocalPath, path, state.remotePath(sessionId), state.remoteFiles(sessionId)), '원격', loadRemoteFiles)
+        }
       }
     } catch (error) {
       console.error('Failed to load local files:', error)
-    }
-  }
-
-  const isWindowsPath = (path: string) => /^[A-Za-z]:[\\/]/.test(path)
-
-  const joinPath = (basePath: string, fileName: string, isLocal: boolean) => {
-    if (isLocal && isWindowsPath(basePath)) {
-      const separator = '\\'
-      return basePath.endsWith(separator) ? `${basePath}${fileName}` : `${basePath}${separator}${fileName}`
-    } else {
-      return basePath === '/' ? `/${fileName}` : `${basePath}/${fileName}`
     }
   }
 
@@ -123,26 +155,25 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
     }
   })
 
+  // Dropping entries from one list onto the other, as in the SFTP panel
+  const { dropOnLocal, dropOnRemote } = useSftpDropTransfers({
+    sessionId,
+    localPath,
+    remotePath,
+    localFiles,
+    remoteFiles,
+    startTransfers: transferBatch.start,
+    reloadRemote: () => loadRemoteFiles(remotePath),
+    reloadLocal: () => loadLocalFiles(localPath)
+  })
+
+  // Files and folders alike (the same path as dropping the selection onto the remote list)
   const handleUpload = async () => {
     if (selectedLocal.size === 0) {
       toast.info('업로드할 파일 선택', '왼쪽 로컬 목록에서 업로드할 파일을 먼저 선택하세요')
       return
     }
-
-    const transfers: PendingTransfer[] = []
-    for (const fileName of selectedLocal) {
-      const file = localFiles.find(f => f.name === fileName)
-      if (file && file.type === 'file') {
-        transfers.push({
-          type: 'upload',
-          fileName,
-          localPath: joinPath(localPath, fileName, true),
-          remotePath: joinPath(remotePath, fileName, false)
-        })
-      }
-    }
-
-    await transferBatch.start(transfers)
+    await dropOnRemote([...selectedLocal])
   }
 
   useReloadOnTransferActivity({
@@ -177,21 +208,7 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
       toast.info('다운로드할 파일 선택', '오른쪽 원격 목록에서 다운로드할 파일을 먼저 선택하세요')
       return
     }
-
-    const transfers: PendingTransfer[] = []
-    for (const fileName of selectedRemote) {
-      const file = remoteFiles.find(f => f.name === fileName)
-      if (file && file.type === 'file') {
-        transfers.push({
-          type: 'download',
-          fileName,
-          localPath: joinPath(localPath, fileName, true),
-          remotePath: joinPath(remotePath, fileName, false)
-        })
-      }
-    }
-
-    await transferBatch.start(transfers)
+    await dropOnLocal([...selectedRemote])
   }
 
   return (
@@ -200,28 +217,43 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
         icon={<RiFolderTransferFill size={16} />}
         title={`SFTP · ${sessionTitle || hostLabel || '연결'}`}
         subtitle={sessionTitle && hostLabel !== sessionTitle ? hostLabel : undefined}
+        actions={
+          // Closing the window is the merge: main tells the main window, which shows the docked panel again
+          <button className="title-bar-btn popout-title-action" onClick={() => window.electronAPI.closeWindow()} title="메인 창으로 병합" aria-label="메인 창으로 병합">
+            <RiMergeCellsHorizontal size={16} />
+          </button>
+        }
       />
 
-      {/* Toolbar */}
-      <div className="sftp-toolbar sftp-window-toolbar" {...keepSelectionProps}>
-        <button className="sftp-btn" onClick={handleUpload} title="업로드: 선택한 로컬 파일을 현재 원격 폴더로">
-          <RiUploadFill size={18} />
-          <span>업로드</span>
-        </button>
-        <button className="sftp-btn" onClick={handleDownload} title="다운로드: 선택한 원격 파일을 현재 로컬 폴더로">
-          <RiDownloadFill size={18} />
-          <span>다운로드</span>
-        </button>
-        <button
-          className={`sftp-btn transfer-queue-toggle ${transferQueue.isVisible ? 'active' : ''}`}
-          onClick={transferQueue.toggle}
-          title={transferQueue.isVisible ? '전송 큐 닫기' : '전송 큐 보기'}
-          aria-pressed={transferQueue.isVisible}
-        >
-          <RiArrowUpDownLine size={18} />
-          <span>전송 큐</span>
-          {transferQueue.pendingCount > 0 && <span className="transfer-queue-badge">{transferQueue.pendingCount}</span>}
-        </button>
+      {/* The same bar as the docked SFTP panel: name on the left, the same icon buttons in the same order
+          on the right (without the panel's own "new window" and "close") */}
+      <div className="sftp-header">
+        <span className="sftp-title">SFTP</span>
+        <div className="sftp-actions" {...keepSelectionProps}>
+          <button
+            className={`sftp-btn sync-btn ${isSyncMode ? 'active' : ''}`}
+            onClick={() => setIsSyncMode(!isSyncMode)}
+            title={isSyncMode ? '디렉토리 동기화 해제' : '디렉토리 동기화'}
+            aria-pressed={isSyncMode}
+          >
+            {isSyncMode ? <RiLinkM size={18} /> : <RiLinkUnlinkM size={18} />}
+          </button>
+          <button className="sftp-btn" onClick={handleUpload} title="업로드: 선택한 로컬 파일을 현재 원격 폴더로">
+            <RiUploadFill size={18} />
+          </button>
+          <button className="sftp-btn" onClick={handleDownload} title="다운로드: 선택한 원격 파일을 현재 로컬 폴더로">
+            <RiDownloadFill size={18} />
+          </button>
+          <button
+            className={`sftp-btn transfer-queue-toggle ${transferQueue.isVisible ? 'active' : ''}`}
+            onClick={transferQueue.toggle}
+            title={transferQueue.isVisible ? '전송 큐 닫기' : '전송 큐 보기'}
+            aria-pressed={transferQueue.isVisible}
+          >
+            <RiArrowUpDownLine size={18} />
+            {transferQueue.pendingCount > 0 && <span className="transfer-queue-badge">{transferQueue.pendingCount}</span>}
+          </button>
+        </div>
       </div>
 
       {/* Content */}
@@ -236,8 +268,8 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
               sessionId={sessionId}
               editRequest={paneActions.pathEditRequest.local}
             />
-            <button className="refresh-btn" onClick={() => loadLocalFiles(localPath)}>
-              <RiRefreshFill size={16} />
+            <button className="refresh-btn" onClick={() => loadLocalFiles(localPath)} title="로컬 목록 새로고침" aria-label="로컬 목록 새로고침">
+              <RiRefreshLine size={16} />
             </button>
           </div>
           <FileList
@@ -250,10 +282,23 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
             onUpload={handleUpload}
             onDelete={paneActions.deleteLocal}
             {...paneActions.local}
+            onDrop={dropOnLocal}
           />
         </div>
 
-        <div className="sftp-divider" />
+        <div className={`sftp-divider ${isSyncMode ? 'is-synced' : ''}`}>
+          {isSyncMode && (
+            <button
+              type="button"
+              className="sftp-sync-indicator"
+              onClick={() => setIsSyncMode(false)}
+              title="디렉토리 동기화 중 (클릭하여 해제)"
+              aria-label="디렉토리 동기화 켜짐, 클릭하여 해제"
+            >
+              <RiLinkM size={16} />
+            </button>
+          )}
+        </div>
 
         <div className="sftp-pane remote-pane">
           <div className="pane-header">
@@ -265,8 +310,8 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
               sessionId={sessionId}
               editRequest={paneActions.pathEditRequest.remote}
             />
-            <button className="refresh-btn" onClick={() => loadRemoteFiles(remotePath)}>
-              <RiRefreshFill size={16} />
+            <button className="refresh-btn" onClick={() => loadRemoteFiles(remotePath)} title="원격 목록 새로고침" aria-label="원격 목록 새로고침">
+              <RiRefreshLine size={16} />
             </button>
           </div>
           <FileList
@@ -279,6 +324,7 @@ export function SftpWindow({ sessionId, initialLocalPath, initialRemotePath, ses
             onDownload={handleDownload}
             onDelete={handleDeleteRemote}
             {...paneActions.remote}
+            onDrop={dropOnRemote}
             onOpenFile={(file, mode) => void openRemoteFileWindow(sessionId, sessionTitle || hostLabel || '', remotePath, file.name, mode)}
             isLoading={remoteLoadingPath !== null}
             loadingCount={remoteLoadingCount}

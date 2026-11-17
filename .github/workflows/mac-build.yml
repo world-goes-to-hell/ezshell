@@ -1,0 +1,58 @@
+# Builds an unsigned macOS app (.dmg + .zip, arm64 + x64) on a GitHub-hosted macOS runner.
+# The Windows dev machine cannot produce macOS binaries, so this runs the pack there instead.
+#
+# Personal / unsigned: no Apple Developer certificate is used. The files are NOT notarized,
+# so on first launch macOS Gatekeeper blocks them: open with right-click > 열기 (Open), or run
+#   xattr -dr com.apple.quarantine "/Applications/ezShell.app"
+# The macOS app does not update itself (Squirrel.Mac needs a signed app). It looks at the latest
+# release and, once the .dmg for its architecture is attached there, sends the user to that page
+# (src/manualUpdate.js). So this workflow attaches the files to the release.
+#
+# - A release is published (the Windows deploy does that): build, then attach to that release.
+# - Run workflow (Actions tab): build only, files are kept as a workflow artifact.
+
+name: macOS build (unsigned)
+
+on:
+  workflow_dispatch: {}
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build macOS app (dmg + zip, unsigned)
+        run: npm run build:mac -- --publish never
+        env:
+          # Do not pick up any signing identity from the runner keychain: this is an unsigned build.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ezshell-macos
+          if-no-files-found: error
+          path: |
+            release/*.dmg
+            release/*.zip
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        run: gh release upload "$TAG" release/*.dmg release/*.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}

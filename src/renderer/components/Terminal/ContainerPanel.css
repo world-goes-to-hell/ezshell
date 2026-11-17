@@ -1,0 +1,140 @@
+/* Docker containers of the tab's server: a panel over the right side of the terminal area,
+   like the server monitor (its header classes are shared) */
+
+.container-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: min(340px, 100%);
+  overflow: hidden;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.container-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.container-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.container-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.container-note {
+  margin: 0;
+  padding: 16px 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.container-note-error {
+  color: var(--error-text, var(--error));
+  word-break: break-word;
+}
+
+.container-row {
+  padding: 9px 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.container-row.is-stopped .container-name,
+.container-row.is-stopped .container-meta {
+  color: var(--text-muted);
+}
+
+.container-row-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.container-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.container-dot.is-running {
+  background: var(--success);
+}
+
+.container-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.container-meta {
+  margin-top: 2px;
+  padding-left: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.container-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 7px;
+  padding-left: 15px;
+}
+
+.container-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.container-action:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.container-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.container-foot {
+  flex: none;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 11px;
+}

@@ -77,30 +77,37 @@ src/renderer/
 - `sshDataBuffers`: 핸들러 미등록 시 데이터 버퍼링 (언마운트/리마운트 전환 중 데이터 보존)
 
 ### Two Split Systems
-1. **Per-Terminal Split** (TerminalPanel 내부): `SplitTerminal`로 추가 쉘 채널 생성. `SplitDirection = 'horizontal' | 'vertical' | 'quad'`
+1. **Per-Terminal Split** (TerminalPanel 내부): 탭의 터미널 영역을 칸으로 나눈다. 칸마다 `SplitTerminal` 이 추가 셸 채널을 연다. 배치는 분할 트리(`TerminalInfo.splitTree`, `lib/splitTree.ts`)다. 아래 `Split Panes` 절 참고
 2. **Pane-Level Split** (App.tsx): `LayoutState`로 primary/secondary 패인 관리, 탭 드래그로 활성화
 
 ## Important Patterns
 
-### React Tree Restructuring
-App.tsx에서 single → split 모드 전환 시 TerminalPanel이 React 트리에서 이동하면서 unmount/remount 발생.
-- xterm 인스턴스 dispose 후 재생성
-- SSH 데이터 핸들러 해제 후 재등록
-- `sshDataBuffers`로 전환 중 데이터 손실 방지
+### Tab Content Hosts (배치가 바뀌어도 탭을 다시 만들지 않는다)
+탭의 내용(TerminalPanel, DB 탭, 로컬 터미널)은 `App.tsx` 의 한 자리에서 `createPortal(..., tabHost(id), id)` 로 한 번만 그린다 (`lib/tabHosts.ts`: 탭마다 DOM 노드 하나). 단일 화면·주 패인·보조 패인의 자리는 `Terminal/TabSlot.tsx` 이고 그 노드를 자기 안으로 옮겨 붙인다. 그래서 single ↔ split 전환은 DOM 노드만 옮기고 탭을 언마운트하지 않는다. 예전에는 전환마다 TerminalPanel 이 다시 만들어져 탭 안 분할 셸이 닫혔다 새로 열렸다 (`docs/fix/2026-11-17-split-close-recreated-remaining-tab.md`).
+- 포털을 그리는 자리는 `.terminal-area` 안이다. 탭 끌어 놓기 처리기가 `.terminal-area` 에 있고 React 이벤트는 React 트리를 따라 올라가므로, 밖에 두면 터미널 위에서의 끌어 놓기가 동작하지 않는다 (실제로 겪은 문제). 패인 포커스는 포털 내용의 감싸개(`.tab-host-content`)의 `onMouseDown` 이 준다.
+- 바꾸면 안 되는 것: 탭 내용을 `TabSlot` 자리에서 직접 그리지 말 것. `TabSlot` 은 언마운트 때 노드를 떼지 않는다. 탭 내용의 React 이벤트는 패인(DOM 부모)이 아니라 그린 자리로 올라간다.
+- 창 분리 등으로 TerminalPanel 이 실제로 언마운트되는 경우에는 여전히 xterm 을 다시 만들고, 화면은 스냅숏(`lib/terminalSnapshots`)과 `sshDataBuffers` 로 잇는다.
+- 새 탭은 포커스가 있는 패인에 열린다 (스토어는 항상 주 패인에 넣으므로 `App.tsx` 의 effect 가 보조 패인으로 옮긴다). 분할 패인의 탭 줄에도 본 탭 줄과 같은 + 메뉴(`NewTabMenu`)가 있다.
 
 ### SSH Channel Open Failure
 분할 터미널 생성 시 이전 스트림이 완전히 닫히지 않으면 서버가 새 채널 거부.
 - main.js `ssh-create-shell`에서 실패 시 해당 세션의 모든 stale split 스트림 자동 정리 후 재시도
 - SplitTerminal에서 exponential backoff 자동 재시도 (최대 3회)
 
-### SplitTerminal Key Stability
-모든 SplitTerminal은 `.terminal-split-container` 바로 아래, 같은 트리 레벨의 안정적 key 감싸개(`w-split-1/2/3`) 안에서 렌더링한다.
-2분할(horizontal/vertical) 패널도 별도 요소가 아니라 `w-split-1` 이다 (2분할은 flex 비율, quad/tri 는 grid 위치 스타일만 다름).
-그래서 2분할 ↔ quad/tri, quad ↔ tri 전환 모두 남는 패널의 셸이 유지된다.
-감싸개를 조건부 Fragment 안에 따로 두면 key 가 같아도 부모가 달라 React 가 새로 만들고, 기존 분할 셸이 닫힌다 (2026-10-01 수정한 버그).
+### Split Panes (칸 나누기·자리 바꾸기·탭으로 빼기)
+탭의 터미널 영역은 분할 트리로 나뉜다 (`lib/splitTree.ts`): 잎은 칸(또는 빈 자리), 안쪽 노드는 나눔(`row` 좌우 / `col` 상하)과 비율. 우클릭 `분할` 의 `좌우 분할`/`상하 분할` 은 우클릭한 칸만 반으로 나누고(새 칸은 오른쪽·아래), 나눈 칸을 또 나눌 수 있다. `이 칸 닫기` 는 함께 나뉘었던 쪽이 자리를 채우고, `칸 크기 균등화` 는 나란한 칸 수에 맞춰 모든 경계를 다시 둔다 (세 칸은 1/3 씩, 구분선을 두 번 누르면 그 선만). 한 탭에 6칸까지(`MAX_PANES`: 서버의 연결당 채널 제한을 SFTP·DB 와 함께 쓴다), 나누면 20칸·5줄 미만이 되는 방향은 비활성, 탭의 첫 터미널(`main`)은 닫을 수 없다. 예전의 고정 배치(2분할·4분할·tri, `splitDirection`/`splitSlots`)와 `4분할`·`분할 해제`·구분선 우클릭 병합은 없앴다. 설계: `docs/plan/2026-11-17-terminal-pane-drag.md`.
+- 그리기: 칸·구분선·손잡이·빈 자리는 모두 분할 영역(`.terminal-split-container`)의 평평한 자식이고, 트리에서 계산한 사각형으로 `position: absolute` 배치한다 (`paneBox`, `dividerBox`). 터미널이 아닌 것들은 `Terminal/SplitChrome.tsx` 가 그리고 SSH 탭과 로컬 터미널 탭이 함께 쓴다.
+- 바꾸면 안 되는 것: 칸 감싸개의 key(`w-<칸 id>`)·부모·문서 안 순서(id 순)는 배치와 무관하게 고정이다. 감싸개가 다른 부모나 key 로 가면 React 가 새로 만들고 그 칸의 셸이 닫힌다 (2026-10-01 버그). 칸 id(`split-<번호>`)는 탭 안에서 다시 쓰지 않는다 (`TerminalInfo.paneSeq`). 구분선의 끝은 다른 나눔과 맞닿는 쪽에서 반 선만큼 짧다: 겹치면 선이 만나는 곳을 잡을 때 다른 선이 잡힌다.
+- 손잡이: 칸 위 가장자리 28px 안에 포인터가 오면 `⋯` 가 나타난다 (터미널 본문은 글자 선택에 쓰므로 손잡이만 끌 수 있다). 다른 칸에 놓으면 두 칸의 자리가 바뀐다 (트리의 잎만 바꾸므로 셸은 그대로). 끄는 동안에는 칸마다 놓을 자리(`.pane-drop-zone`)를 덮는다: xterm 이 끌기 이벤트를 삼킨다. 끌기 형식은 `application/x-ezshell-term-pane` (`lib/paneDrag.ts`).
+- 탭으로 빼기: 손잡이를 탭 줄(`.terminal-tabs`, 분할 화면은 `.split-pane-header`)에 놓으면 그 칸의 셸이 그대로 새 탭이 된다 (`hooks/usePaneDropOnTabs.ts` → `lib/paneToTab.ts`). 문서에 캡처 단계로 건 처리기다: 탭 줄의 자체 놓기 처리(탭 이동)가 칸의 놓기를 보면 안 된다. 빠져나간 자리는 빈 칸으로 남고 `가로로 병합`/`세로로 병합` 으로 옆 칸이 채운다 (`mergeVacant`: 함께 나뉘었던 쪽은 항상, 다른 방향은 두 나눔이 2x2 블록처럼 맞물릴 때만).
+  - SSH: main 의 `ssh-adopt-split` 이 그 채널에 새 세션 id 를 주고 `sshConnections[새 id] = { conn(원래 탭과 같은 객체), stream, jumpConn }` 으로 등록한다. 그래서 옮긴 탭은 일반 SSH 탭이다 (SFTP, 분할, 로그, 탭 복제, 재연결). 화면은 main 이 넘겨준 뒤에 옛 칸의 xterm 이 받은 출력을 다 그리고 나서 `xterm-addon-serialize` 로 떠서 `setPendingSnapshot(새 id)` 로 넘긴다 (그 사이 온 출력은 스토어의 `sshDataBuffers` 가 뒤에 쌓는다). `SplitTerminal` 은 넘겨준 채널을 닫지 않는다 (`lib/splitShells.ts`).
+  - 바꾸면 안 되는 것 (연결 공유, `src/sharedConn.js`): 같은 `conn` 을 쓰는 세션이 남아 있으면 탭을 닫거나 다시 연결해도 연결을 끝내지 않고 그 탭의 채널만 `close()` 한다 (`end()` 는 PTY 셸이 무시해 서버에 남는다). 마지막 세션이 닫힐 때 연결과 점프 호스트를 끝낸다. `conn.end()` 를 직접 부르지 말고 `sharedConn.release` 를 쓴다 (`ssh-disconnect`, `ssh-reconnect-now`, `reconnectOnce`). `ssh-adopt-split` 은 본창에서 온 것만, 살아 있는 분할 채널 id 하나만 받는다. 연결이 끊기면 탭마다 자기 채널의 종료를 보고 따로 재연결하고, 그 뒤에는 각자 자기 연결을 갖는다. 두 탭이 연결을 함께 쓰는 동안에는 연결당 채널 제한도 함께 센다.
+  - 로컬 터미널: 칸마다 이 PC 의 셸이 따로다 (`lib/localPaneShells.ts`, 전체 10개 제한). 셸은 칸의 요소보다 오래 살므로 탭·칸 기준으로 기억했다가, 칸이 분할에서 빠지거나 탭이 닫힐 때 닫는다 (`closeLocalPaneShells`). 탭으로 빼면 새 탭이 그 셸의 id 를 그대로 갖는다.
+- 탭의 첫 터미널 칸(`main`)은 탭 자체라서 탭으로 뺄 수 없고 자리 바꾸기만 된다.
+- 시험할 때: 시험용 앱 창이 다른 창에 가려지면 화면 갱신이 멈춰 xterm 글자를 읽지 못한다. `--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling` 으로 띄운다. 구분선·손잡이의 HTML5 끌기는 CDP 포인터로 일어나지 않아 `DragEvent` 를 직접 보낸다.
 
 ### Terminal Right-Click Menu
-터미널(탭의 주 터미널과 분할 셸)에서 우클릭하면 메뉴가 뜬다 (`Terminal/useTerminalContextMenu.tsx`, `TerminalContextMenu.tsx`). 맨 위에 복사·붙여넣기·모두 선택, 그 아래 `분할`(좌우·상하·4분할·해제), `편의`(이름 찾기, 내용 찾기, 화면에서 찾기, 화면 지우기, 전체 출력 복사, 출력을 파일로 저장, 파일 탐색기), `스니펫`(저장한 스니펫 15개까지를 입력줄에 넣음, 실행하지 않음. 그 아래 `스니펫 추가…`(선택한 글자가 있으면 그 글자가 명령으로 들어간 채 열림)와 `스니펫 관리…`), `세션`(탭 복제, 로그 저장, SFTP, 연결 종료) 하위 메뉴가 있다. 포인터 위치에 빈 기준점을 두고 여는 Radix DropdownMenu 이다 (modal 아님: 다른 곳을 우클릭하면 메뉴가 옮겨 간다).
+터미널(탭의 주 터미널과 분할 셸)에서 우클릭하면 메뉴가 뜬다 (`Terminal/useTerminalContextMenu.tsx`, `TerminalContextMenu.tsx`). 맨 위에 복사·붙여넣기·모두 선택, 그 아래 `분할`(좌우 분할·상하 분할·칸 크기 균등화·이 칸 닫기, 우클릭한 칸에 적용: 감싸개의 `data-pane`), `편의`(이름 찾기, 내용 찾기, 화면에서 찾기, 화면 지우기, 전체 출력 복사, 출력을 파일로 저장, 파일 탐색기), `스니펫`(저장한 스니펫 15개까지를 입력줄에 넣음, 실행하지 않음. 그 아래 `스니펫 추가…`(선택한 글자가 있으면 그 글자가 명령으로 들어간 채 열림)와 `스니펫 관리…`), `세션`(탭 복제, 로그 저장, SFTP, 연결 종료) 하위 메뉴가 있다. 포인터 위치에 빈 기준점을 두고 여는 Radix DropdownMenu 이다 (modal 아님: 다른 곳을 우클릭하면 메뉴가 옮겨 간다).
 - 복사·붙여넣기·화면 지우기·찾기는 우클릭한 그 터미널에 적용한다. 터미널마다 그려지는 요소를 `lib/terminalPanes.ts` 에 등록해 두고 `terminalPaneAt` 으로 찾는다. 터미널 영역 위에 그려지는 패널(포트 포워딩 등)에서는 메뉴를 띄우지 않는다.
 - 이름 찾기·내용 찾기(`TerminalFindDialog.tsx`, 명령 생성은 `lib/terminalFind.ts`)는 `find` / `grep -rnIF` 명령을 만들어 `terminal.paste` 로 입력줄에 넣는다. 찾을 위치는 현재 폴더(`.`), 루트(`/`, `/proc` `/sys` `/dev` 제외), 폴더 지정 중에서 고르고 `localStorage` 의 `terminalFindPrefs` 에 기억한다.
   - 바꾸면 안 되는 것: 앱이 명령을 실행하지 않는다 (줄바꿈을 붙이지 않고, 사용자가 Enter 를 누른다). 큰 폴더 검색은 운영 서버 디스크를 오래 읽는다. 입력값은 작은따옴표로 감싸고, 줄바꿈·제어 문자는 앞뒤 공백을 자르기 전에 거부한다 (줄바꿈이 들어가면 입력되는 순간 앞부분이 실행된다).
@@ -118,13 +125,13 @@ App.tsx에서 single → split 모드 전환 시 TerminalPanel이 React 트리�
 ### Local Terminal Tab (이 PC 의 셸)
 탭 줄의 + 메뉴와 시작 화면의 `로컬 터미널` 로 이 PC 의 셸을 탭으로 연다. main 이 `node-pty` 로 실행하고(`src/localShell.js`, Windows 는 PowerShell), 탭은 `TerminalInfo.local`, id 는 `local:<번호>`, 화면은 `Terminal/LocalTerminalTab.tsx` 다 (`TerminalPanel` 을 쓰지 않는다). 설계: `docs/plan/2026-11-12-local-terminal-and-terminal-menu-additions.md`.
 - 탭이 다시 그려져도(패인 분할, 탭 이동) 셸은 유지된다. main 이 셸마다 마지막 256KB 출력을 갖고 있다가 `local-shell-attach` 로 돌려준다. 화면은 attach 답을 받기 전에 온 출력을 버린다 (그 출력은 답에 이미 들어 있어서 두 번 그려진다).
-- 10개까지. 탭을 닫으면 셸을 끝내고 앱을 종료하면 모두 끝낸다. SFTP, 분할, 로그 저장, 탭 복제, 창 분리, 일괄 명령, 연결 수에서는 뺀다 (`lib/sessionTabs.ts` 의 `isSshTab`, SSH 탭인지 볼 때는 `.db` 만 보지 말고 이 함수를 쓴다).
+- 10개까지. 탭을 닫으면 셸을 끝내고 앱을 종료하면 모두 끝낸다. SFTP, 로그 저장, 탭 복제, 창 분리, 일괄 명령, 연결 수에서는 뺀다 (분할은 된다: `Split Panes` 절) (`lib/sessionTabs.ts` 의 `isSshTab`, SSH 탭인지 볼 때는 `.db` 만 보지 말고 이 함수를 쓴다).
 - 바꾸면 안 되는 것: `local-shell-*` IPC 는 본창에서 온 것만 받는다. MCP 도구가 로컬 셸에 닿는 경로를 만들지 않는다 (PC 에서 임의 명령을 실행하는 통로가 된다).
 - 패키징: `node-pty` 는 사전 빌드(N-API)를 쓴다. `build.asarUnpack` 의 `node_modules/node-pty/**` 와 `npmRebuild: false` 를 지우지 말 것 (asar 안에서는 셸 실행 파일을 띄울 수 없고, 다시 빌드하려면 Visual Studio 빌드 도구가 필요하다). 새 `src/*.js` 라서 `MAIN_RUNTIME_MODULES` 에 있다.
 
 ### Sidebar Tree and Folded Rail
 사이드바 목록 모양은 `Sidebar/SidebarTree.css` 에 있다. 줄에는 배경색을 칠하지 않는다: 폴더 색은 폴더 왼쪽의 선 하나(`--folder-color`), 세션 자체 색은 줄 옆의 짧은 선(`--session-color`)이다. 기본 아이콘 자리에는 상태 점(`.session-dot`, 연결된 탭이 있으면 초록, 끊긴 탭만 있으면 빨강)을 둔다. 세션 이름은 입력한 그대로 보여 준다.
-접힌 상태(`sidebarMode === 'compact'`, 클래스 `.sidebar.rail`)는 46px 띠에 상태만 보인다: 세로 글자 "세션" 과 연결된 탭 수(초록)·끊긴 탭 수(빨강), MCP 요청이 진행 중이면 "MCP" 와 그 수(노랑) (`.rail-summary`). 목록도 버튼도 그리지 않는다 (목록은 이름 없는 화살표·점만 줄지어 알아볼 수 없었고, 버튼은 포인터를 올리는 순간 사이드바가 열려 누를 수 없었다), 마우스를 올리거나 키보드 포커스가 들어오면 전체 사이드바가 터미널 위로 겹쳐서 열린다 (`hooks/useSidebarPeek.ts`, `.peek-open`, 자리를 차지하지 않으므로 터미널 크기가 바뀌지 않는다). 사이드바의 메뉴·호버 카드·이름 입력칸을 쓰는 동안에는 닫지 않는다. 줄임말 타일은 없앴다 (사용자가 원하지 않았다). 띠와 열린 상태는 같은 DOM 이고 CSS 로만 다르다.
+접힌 상태(`sidebarMode === 'compact'`, 클래스 `.sidebar.rail`)는 46px 띠에 상태만 보인다: 아이콘과 숫자만 둔다 (글자 표지는 사용자가 원하지 않았다): 목록 아이콘 아래 연결된 탭 수(초록)·끊긴 탭 수(빨강), 로컬 터미널이 있으면 PC 아이콘과 그 수, MCP 요청이 진행 중이면 플러그 아이콘과 그 수(노랑) (`.rail-summary`). 목록도 버튼도 그리지 않는다 (목록은 이름 없는 화살표·점만 줄지어 알아볼 수 없었고, 버튼은 포인터를 올리는 순간 사이드바가 열려 누를 수 없었다), 마우스를 올리거나 키보드 포커스가 들어오면 전체 사이드바가 터미널 위로 겹쳐서 열린다 (`hooks/useSidebarPeek.ts`, `.peek-open`, 자리를 차지하지 않으므로 터미널 크기가 바뀌지 않는다). 사이드바의 메뉴·호버 카드·이름 입력칸을 쓰는 동안에는 닫지 않는다. 줄임말 타일은 없앴다 (사용자가 원하지 않았다). 띠와 열린 상태는 같은 DOM 이고 CSS 로만 다르다.
 접기 버튼은 펼친 사이드바(`«`)와 겹쳐 열린 사이드바(핀)에만 있다. 접힌 띠에는 버튼을 두지 않는다 (포인터를 가져가면 사이드바가 먼저 열려 누를 수 없었다). 아이콘을 돌리는 애니메이션을 다시 넣지 말 것: 좌우 대칭 아이콘을 180도 돌리면 두 상태가 같은 모양이 된다.
 
 ### Session Share Text (연결 정보 복사·텍스트로 세션 추가)
@@ -141,6 +148,12 @@ App.tsx에서 single → split 모드 전환 시 TerminalPanel이 React 트리�
 - MobaXterm 형식은 공식 문서가 없어 커뮤니티 분석(호스트 1, 포트 2, 계정 3, 게이트웨이 8~10, 키 14)을 따른다. 실제 내보내기 파일로 확인하지 못했다.
 - 의존성 `iconv-lite`(cp949 이름), `js-yaml`(Tabby, 기본 스키마), `yauzl`(`.xts`) 은 정확한 버전으로 고정했다. 새 `src/` 폴더라서 `MAIN_RUNTIME_DIRECTORIES` 에 `sessionImport` 가 있다.
 
+### Sidebar Local Terminal List (세션 목록 아래의 로컬 터미널 목록)
+로컬 터미널 탭이 하나라도 열려 있으면 사이드바의 목록 영역(`.sidebar-lists`)이 위아래로 나뉘어, 아래에 열린 로컬 터미널 목록이 생긴다 (`Sidebar/LocalTerminalList.tsx`, 계산은 `lib/localTerminalPane.ts`). 높이는 터미널 개수만큼 늘어나되 목록 영역의 절반에서 멈추고(CSS `max-height: 50%`), 가운데 손잡이를 끌면 그 높이로 고정한다 (세션 목록에 96px 은 남김, 두 번 누르면 자동 높이). 줄을 누르면 그 탭으로 이동(`focusTerminal`), X 는 탭 닫기와 같은 경로, + 는 새 로컬 터미널. 높이·접힘은 `localStorage` 의 `sidebarLocalPane`. 접힌 띠에는 PC 아이콘과 개수를 더한다. 설계: `docs/plan/2026-11-17-sidebar-local-terminal-list.md`.
+- 탭 안을 분할한 로컬 터미널 줄에는 `N세션` 표지(`Sidebar/PaneLayoutBadge.tsx`)가 붙는다. 포인터를 올리거나 누르면 그 탭의 분할 배치를 작은 그림으로 보여 주고(`splitTree.layoutOf`), 칸을 누르면 그 탭으로 가서 그 칸에 키보드를 준다 (탭의 DOM 노드 `tabHost(id)` 안에서 `[data-pane]` 으로 찾는다. 스토어를 바꾸지 않는다). 지금 입력 중인 칸은 강조색. 그림은 `document.body` 에 그리고 `.sidebar-popover` 클래스로 접힌 사이드바가 닫히지 않게 한다 (`useSidebarPeek`).
+- 클래스 이름은 `local-terms*` 다. 처음에 `local-pane` 으로 지었다가 SFTP 로컬 패인(`sftp-pane local-pane`)에 규칙이 적용돼 파일 목록이 절반 높이로 잘렸다 (전역 CSS 라서 새 클래스 이름은 먼저 검색해 본다).
+- 바꾸면 안 되는 것: 포인터를 뗄 때 저장하는 높이는 끄는 동안 ref 에 둔 최신 값이다. 뗄 때의 처리기는 직전 렌더의 state 를 갖고 있어서, state 를 저장하면 한 단계 전 높이가 남는다.
+
 ### Sidebar Session Tab Badge
 사이드바 세션 옆에 그 세션에서 열린 탭 개수를 배지로 표시한다 (초록 테두리 = 연결됨, 빨강 테두리 = 끊김, 섞이면 둘 다).
 탭 ID 는 메인 프로세스가 연결마다 만드는 값이라 사이드바 세션 ID 와 다르다. 둘은 `TerminalInfo.connectConfig.savedSessionId` 로만 이어진다 (`lib/sessionTabs.ts`).
@@ -156,11 +169,20 @@ App.tsx에서 single → split 모드 전환 시 TerminalPanel이 React 트리�
 `main.js` 시작 부분이 설치본에서 `app.setAppUserModelId` 로 같은 값을 정한다 (`WINDOWS_APP_USER_MODEL_ID`, 바로가기의 ID 와 같아야 모든 창이 작업 표시줄 버튼 하나로 묶인다. 없으면 실시간 보기 창이 버튼을 하나 더 만들었다: `docs/fix/2026-11-13-taskbar-second-button.md`).
 
 ### App Icon
-원본은 `assets/icon.svg`, `npm run build:icon` 으로 icon.ico/icon.png 를 만든다 (`scripts/build-icon.cjs`, ICO 작성은 `scripts/ico.cjs`).
+원본은 `assets/icon.svg`, `npm run build:icon` 으로 icon.ico/icon.png/icon.icns 를 만든다 (`scripts/build-icon.cjs`, ICO 작성은 `scripts/ico.cjs`, ICNS 는 `scripts/icns.cjs`).
 exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다 (false 면 Electron 기본 아이콘).
 창/작업표시줄 아이콘은 빌드 때 `out/main/icon.ico` 로 복사되고 모든 BrowserWindow 의 `icon` 으로 지정된다.
 타이틀바 왼쪽 아이콘은 같은 명령이 만드는 `src/renderer/assets/app-icon.svg`(작은 크기용, 직접 수정 금지)를 `?no-inline` 으로 불러온다.
 작은 SVG 가 data: URL 로 인라인되면 페이지 CSP(`default-src 'self'`)에 막히기 때문이다.
+macOS 용 `icon.icns` 는 mac 도구(iconutil) 없이 Windows 에서 PNG(32~1024px)를 ICNS 컨테이너로 직접 포장해 만든다 (`scripts/icns.cjs`, `ico.cjs` 와 같은 방식). 저장소에 커밋해 두어 CI 가 바로 쓴다.
+
+### Cross-platform / macOS build
+지금 정식 패키징은 Windows 전용(`--win`, NSIS·portable)이지만, macOS 에서도 실행되도록 코드와 빌드를 맞추는 중이다. 설계·결정·진행: `docs/plan/2026-11-17-macos-support.md`.
+- 많은 main 모듈이 이미 `platform` 파라미터로 플랫폼을 구분한다: `localShell.js`(win→PowerShell, 그 외→`$SHELL`), `localPlaces.js`, `remoteAccess/tailnet.js`(darwin→`utunN`), `sessionImport/sources.js`(PuTTY·Xshell 은 win 전용), `mcp/tokenEnv.js`(win 외 `unsupported`), `dbClient/oracleClient.js`(Instant Client 는 `win32 && x64` 만). macOS 는 Oracle thin(12.1+) 전용이고 thick(구버전) 접속은 미지원이다.
+- `window-all-closed` 는 플랫폼과 무관하게 종료한다 (`main.js`). 이 핸들러가 MCP 종료·SSH 정리까지 하므로, macOS 기본값(창을 닫아도 유지)으로 두면 정리가 끝난 반쯤 죽은 상태로 Dock 에 남는다 (단일 창 앱이라 되살릴 경로도 없다). 바꾸면 안 되는 것: darwin 예외를 되살리려면 `activate` 처리기와 MCP 재시작을 함께 넣어야 한다.
+- macOS 빌드(비서명): `package.json` 의 `build.mac`(dmg+zip, arm64+x64, `identity: null`), 스크립트 `build:mac`. GitHub Actions 워크플로 `.github/workflows/mac-build.yml`(macos-14 러너, `CSC_IDENTITY_AUTO_DISCOVERY=false`)가 산출물을 만든다. Windows 개발기에서는 mac 바이너리를 만들 수 없어 CI 로 돌린다. 서명·공증을 하지 않으므로 Gatekeeper 가 막는다 (우클릭 열기 또는 `xattr -dr com.apple.quarantine`). electron-updater mac 자동 업데이트는 서명이 필요해 쓰지 않는다.
+- macOS 업데이트 안내(`src/manualUpdate.js`, `main.js` 의 `USES_MANUAL_UPDATE`): darwin 에서는 electron-updater 대신 GitHub 의 최신 릴리스를 같은 주기(시작 3초 뒤, 30분, 포커스)로 확인하고, 더 새 버전이면 알림의 `다운로드 페이지` 버튼이 릴리스 페이지를 브라우저로 연다 (`open-update-page`). 앱은 아무것도 내려받거나 실행하지 않는다. 워크플로는 릴리스가 공개되면(`release: published`) 빌드해서 그 릴리스에 `.dmg`/`.zip` 을 붙인다. 바꾸면 안 되는 것: 이 PC 아키텍처의 `ezShell-<버전>-<arch>.dmg` 가 릴리스에 붙기 전에는 알리지 않는다 (Windows 배포 직후 몇 분은 mac 파일이 없다). 여는 주소는 검사한 버전 번호로 main 이 만들고(응답의 `html_url` 을 쓰지 않는다), 창은 주소를 보내지 않는다. 새 `src/*.js` 라서 `MAIN_RUNTIME_MODULES` 에 있다.
+- 아직 안 된 것 (mac 실행 검증이 가능해질 때, Phase 1.5): 렌더러 단축키의 Cmd/Ctrl 매핑(지금은 Ctrl 고정, macOS 기본 편집 메뉴로 Cmd+C/V/A/Q/W 는 동작), 네이티브 신호등 버튼(`titleBarStyle`) 전환.
 
 ### MCP Server (Claude Code)
 `src/mcp/` 에 로컬 MCP 서버가 있다. Claude Code 에 등록되는 이름은 `ez-shell` 이다 (도구는 `mcp__ez-shell__...`). 2.4.1 까지는 `my-ssh-client` 였고, "Claude Code 자동 설정"이 같은 파일의 옛 이름 항목을 지우고 새 이름으로 바꾼다 (`controller.js` 의 `LEGACY_SERVER_NAMES`). `~/.claude.json` 의 프로젝트별 등록은 고치지 않고 화면에 알려 주기만 한다. 설정 > MCP 에서 켜면 `127.0.0.1:<포트>/mcp` (Streamable HTTP, stateless) 로 열린다.
@@ -196,7 +218,7 @@ exe 아이콘은 `build.win.signAndEditExecutable: true` 일 때만 들어간다
 - 세 번째 보기 `서버별`(`McpActivityLanes.tsx`)은 세션마다 영역을 나눠 같은 형식의 기록을 보여 준다 (`lib/mcpActivity.ts` 의 `groupBySession`). 영역마다 스크롤이 따로이고, 영역 순서는 첫 요청 순서로 고정이다 (활동 때마다 바꾸면 읽던 영역이 움직인다). 기준은 서버 주소가 아니라 세션이고, 요청을 보낸 에이전트는 구분하지 못한다 (stateless, 토큰 하나).
   - 영역 머리줄의 X 로 영역을 숨긴다. 숨길 때의 가장 최근 요청 ID 를 기억하고(`mcpActivityStore` 의 `hiddenLanes`, 판정은 `lib/mcpActivity.ts` 의 `isLaneHidden`), 그 세션에 새 요청이 오면 다시 보인다. 이미 있던 요청의 출력·상태 변화로는 다시 뜨지 않는다. 메모리에만 두고 목록을 지우면 함께 지운다. 상단 막대의 "모두 보기" 로 되돌린다. 설계: `docs/plan/2026-10-24-mcp-lane-hide.md`.
 - 패널은 `z-index: 95` 다. 터미널·SFTP 위, 대화상자(100)·메뉴(1000)·업데이트 알림(900)·안내(9999) 아래다. 다시 높이지 말 것: 9200 이던 때 업데이트 알림과 대화상자가 패널 뒤에 가려졌다 (`docs/fix/2026-10-26-mcp-panel-layer-and-host-key-message.md`).
-- 패널이 열린 채로 앱 화면(`#root`)의 다른 곳(셸, SFTP, 사이드바)을 누르면 패널이 오른쪽으로 밀려 36px 띠만 남는다 (`lib/mcpActivity.ts` 의 `collapsesMcpPanel`, 캡처 단계 `pointerdown`). 누른 동작은 셸로 그대로 간다. 확인 창·메뉴처럼 `#root` 밖에 그려지는 것과 알림은 접지 않는다. 띠나 상태바 버튼을 누르면 펼친다 (`togglePanel`). 접힌 동안 내용은 마운트된 채 `inert` 이고(스크롤 유지), Esc 로 닫지 않는다 (셸의 Esc). 설계: `docs/plan/2026-10-24-mcp-panel-collapse.md`.
+- 패널이 열린 채로 앱 화면(`#root`)의 다른 곳(셸, SFTP, 사이드바)을 누르면 패널이 화면 밖으로 완전히 밀려나고(`transform: translateX(100%)`) 오른쪽 가장자리에 세로 탭(`.mcp-activity-tab`, 북마크 모양 손잡이) 하나만 떠 있는다 (`lib/mcpActivity.ts` 의 `collapsesMcpPanel`, 캡처 단계 `pointerdown`). 누른 동작은 셸로 그대로 간다. 확인 창·메뉴처럼 `#root` 밖에 그려지는 것과 알림은 접지 않는다. 탭이나 상태바 버튼을 누르면 펼친다 (`togglePanel`). 접힌 동안 내용은 마운트된 채 `inert` 이고(스크롤 유지), Esc 로 닫지 않는다 (셸의 Esc). 바꾸면 안 되는 것: 탭은 `<aside>` 밖의 형제로 그린다. 예전처럼 전체 높이짜리 36px 띠를 화면에 남기면 뒤의 표·터미널 오른쪽 끝이 그 띠에 가려 잘려 보였다. 설계: `docs/plan/2026-10-24-mcp-panel-collapse.md`.
 - 서버별 보기의 영역은 머리줄을 끌어서 순서를 바꾼다 (HTML5 끌기, 형식 `application/x-ezshell-mcp-lane` 만 받음). 순서는 `mcpActivityStore` 의 `laneOrder`(메모리)이고 `lib/mcpActivity.ts` 의 `orderLanes`, `moveLane` 이 계산한다. 처음 보는 세션은 끝에 붙는다. 개별 기록은 시간순이라 옮기지 않는다.
 - 파일 전송 요청은 활동 항목의 `transfer`(방향, 크기, 보낸 크기, 복사 시작 시각)로 진행 막대를 그린다 (`McpTransferBar.tsx`, 계산은 `lib/mcpTransfer.ts`). `transferTools.js` 가 1초마다 갱신하며 감사 로그에는 넣지 않는다. 속도는 복사 시작부터 센다 (확인 창 대기 시간 제외).
 - 패널 머리줄의 "새 창으로 열기" 로 MCP 활동 창(`?mcpActivityMode=true`, `McpActivityWindow.tsx`, 패널의 `window` 형태)을 연다. 창은 하나이고 main 의 `sendToActivityViews` 가 활동 갱신을 본창과 이 창에 보낸다. 앱을 잠그면 닫고, 잠긴 동안에는 열 수 없다 (명령 출력이 잠금 화면 뒤에 남지 않게). 확인 창은 본창에만 뜬다. 설계: `docs/plan/2026-10-24-mcp-activity-window-progress-reorder.md`.
@@ -249,6 +271,13 @@ SFTP 패널(본창·분리 창)의 서버 파일 우클릭 메뉴 `미리보기`
   - 강조는 `lib/logLevels.ts` 가 줄마다 첫 로그 수준 단어로 정한다 ("INFO ... ERROR" 는 오류 아님). 수준 단어가 없으면 예외 이름·스택 줄·Traceback 만 오류로 본다. 소문자 `error` 단어는 오류로 보지 않는다. 화면에 보이는 줄만 꾸미고(ViewPlugin), 개수는 붙인 줄과 지운 줄만 다시 센다 (`lib/logAppend.ts`). 창에는 최근 약 5MB 만 둔다.
   - 기준점(`lib/logMarkers.ts`, 화면은 `logMarkerView.ts`): 깃발 버튼·`Ctrl+M` 은 지금 로그 끝, 줄 번호 클릭은 그 줄 위에 `기준점 N · 시각` 띠를 둔다 (최대 10개, 저장 안 함, 새로고침하면 사라짐). 띠는 블록 위젯이라 복사·찾기·오류 개수에 섞이지 않는다. 상태 줄에 가장 최근 기준점 뒤의 줄 수. 바꾸면 안 되는 것: 위치는 `mapPos(pos, -1, MapMode.TrackAfter)` 로 옮긴다 (끝에 찍은 기준점이 새로 붙는 줄보다 앞에 남아야 하고, 정리로 그 줄이 지워지면 기준점도 빠져야 한다). 설계: `docs/plan/2026-11-12-log-view-markers.md`.
   - 앱을 잠그면 미리보기·실시간 창은 닫고(`ipc.js` 의 `closeViewWindows`), 잠긴 동안 `remote-file-tail` 을 거부한다. 편집 창은 저장하지 않은 내용 때문에 닫지 않는다. 창이 뒤에 있을 때 새 오류가 오면 작업표시줄만 깜빡인다 (알림 센터에는 남기지 않음).
+
+### Container Panel (도커 컨테이너·컨테이너 로그)
+터미널 머리줄의 `컨테이너` 버튼이 그 서버의 도커 컨테이너 패널을 연다 (`Terminal/ContainerPanel.tsx`, main 은 `src/containers/`). 목록(이름·이미지·상태·내보낸 포트)과 줄마다 `로그`, `셸`, `이름`, `재시작`, `중지`(또는 `시작`). 설계: `docs/plan/2026-11-17-docker-containers-panel.md`.
+- 바꾸면 안 되는 것: 앱이 스스로 조회하지 않는다. 패널을 연 때와 `새로고침` 을 누른 때만 묻고, `자동 새로고침`(10초, 기본 꺼짐)도 패널이 열려 있고 창이 보이는 동안만 돈다. 컨테이너를 바꾸는 명령(`셸`·`재시작`·`중지`·`시작`)은 앱이 실행하지 않고 터미널 입력줄에 넣기만 한다 (`lib/containers.ts` 의 `containerCommand`, `insertIntoSession`).
+- 바꾸면 안 되는 것 (명령): 서버에서 실행할 명령은 main 이 고정된 형태로만 만든다 (`parse.js` 의 `listCommand`, `logs.js` 의 `logCommand`). 창은 세션 id·`all` 여부·컨테이너 이름만 보낸다. 이름은 형식(`[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`)을 검사하고, 로그는 그 탭에 마지막으로 보여 준 목록에 있던 이름만 받는다 (`ipc.js` 의 `isKnown`). 기존 `ssh-exec-command`(서버 모니터링이 쓰는, 받은 명령을 그대로 실행하는 통로)에 얹지 말 것. 모든 명령에 `timeout 5` 가 있고 `exec.js` 의 `runCommand` 가 출력 상한과 8초 제한으로 채널을 닫는다 (멈춘 도커 데몬이 채널을 붙잡지 않게). `sudo` 는 쓰지 않는다.
+- 컨테이너 로그는 파일 실시간 보기 창을 그대로 쓴다: `documents.js` 의 `registerContainerLog` 가 파일 대신 `container` 를 가진 문서를 만들고, `loadPreview`·`tail` 이 그 문서에서는 `logs.js` 의 조회를 부른다 (`container-log-open` 은 본창에서 온 것만). 바꾸면 안 되는 것: 서버에 `docker logs -f` 를 띄워 두지 않고 짧은 조회(`docker logs --timestamps --since <마지막 시각> --tail 2000`)를 되풀이한다. `-f` 는 연결의 채널 하나를 계속 차지하고, 창을 닫아도 다음 출력 때까지 프로세스가 남을 수 있다. 같은 줄이 두 번 붙지 않게 줄마다의 시각으로 잇는다 (도커는 물어본 시각의 줄을 다시 주므로 그 시각 이하를 버린다. 소수 자릿수가 달라도 비교되게 9자리로 맞춘다). 조회마다 서버에서 도커 명령이 하나 실행되므로 간격이 파일보다 길다 (`lib/logPollPace.ts` 의 `command`: 1초 → 최대 5초, 가려지면 15초).
+- 새 `src/` 폴더라서 `MAIN_RUNTIME_DIRECTORIES` 에 `containers` 가 있다.
 
 ### DB Client (SSH 터널로 DB 조회)
 상태바 왼쪽의 `DB` 표지(`DbIndicator.tsx`)가 활성 탭 서버의 DB 를 보여 주고, 고르면 계정 창(`DbConnectDialog.tsx`)을 거쳐 **본창의 DB 탭**을 연다 (`TerminalInfo.db`, id `db:<dbId>`, 내용은 `DbTab.tsx` → `DbClientView.tsx`). DB 탭의 `창으로 분리`(또는 탭을 창 밖으로 끌기)는 같은 접속을 DB 창(`?dbMode=true&dbId=...`, `DbClientWindow.tsx`)으로 옮긴다 (`db-detach`, 접속의 주인이 새 창으로 바뀐다). main 은 `src/dbClient/` (`discovery.js` 탐색, `connections.js` 창별 접속, `drivers/mysql.js`·`drivers/postgres.js`, `sqlGuard.js` 조회 문장 검사, `ipc.js`). 1단계는 조회만 된다 (MySQL/MariaDB, PostgreSQL). 설계: `docs/plan/2026-11-09-db-client.md`.
@@ -338,6 +367,26 @@ SFTP 패널(본창·분리 창)의 서버 파일 우클릭 메뉴 `미리보기`
 - 셸이 스스로 끝난 경우(`exit`, 서버의 `TMOUT` 자동 로그아웃)는 끊김이 아니다: 셸 채널의 `exit` 이벤트로 종료 코드를 받았으면 자동 재연결하지 않고 "셸이 종료되었습니다" 안내와 `재연결` 을 보여 준다 (`main.js` 의 `endedByItself`, `reportShellExit`). 바꾸면 안 되는 것: 이때 SSH 연결은 닫지 않는다 (SFTP 패널과 DB 탭이 같은 연결을 쓴다. 셸이 끝나도 DB 조회는 계속된다). 예전에는 가리지 않고 재연결해서 `TMOUT=300` 서버의 탭이 5분마다 끊겼다 붙었고 DB 접속도 그때마다 끊겼다 (`docs/fix/2026-11-13-shell-exit-reconnect-loop.md`). 신호로 죽은 셸과 종료 코드 없이 닫힌 채널은 지금처럼 재연결한다. 끊긴 이유는 콘솔에 남는다 (`traceShellEnd`).
 - 다시 연결되면 `TerminalPanel` 이 터미널 크기를 서버에 다시 보낸다 (새 셸은 80x24 로 열린다).
 - 별도 창으로 분리한 터미널(`TerminalWindow.tsx`)도 같은 카드를 쓴다. 그 창은 터미널 스토어가 없어 연결 이벤트를 직접 듣고 같은 계산(`lib/connectionLost.ts` 의 `linkConnected`/`linkDisconnected`/`linkReconnecting`)으로 상태를 둔다. `종료` 는 연결을 끊고 창을 닫는다.
+
+### macOS Themes (모양까지 바꾸는 테마)
+`macOS Light` / `macOS Dark`(`themes/macosPresets.ts`, `styles/themes-macos.css`)는 색과 함께 모양을 바꾼다. 테마 정의의 `chrome: 'mac'` 이 루트에 `data-chrome="mac"` 을 붙이고(`themeStore` 의 `applyThemeToDocument`), CSS 가 그 속성으로 타이틀바(왼쪽 신호등 `.title-bar-close/-min/-max`, 가운데 제목), 입력칸(밝은 바탕·가는 테두리·부드러운 포커스 고리), 스크롤 막대를 바꾼다. 둥근 모서리는 테마 블록이 `--radius-*` 를 덮어쓴 것이다 (다른 테마는 모두 0). 컴포넌트에 테마 id 를 적지 않는다. 설계: `docs/plan/2026-11-17-macos-theme.md`.
+- 강조색은 `#0071e3` 이다. 순정 시스템 파랑 `#007aff` 는 흰 글자와 4.0:1 이라 쓰지 않는다.
+- 사용자 지정 테마는 `chrome` 을 갖지 못한다 (`normalizeTheme` 이 버린다). 둥근 모서리가 프리셋의 CSS 블록에 있어서, `chrome` 만 남으면 각진 화면에 둥근 신호등이 붙는다.
+- 창에 포커스가 없으면 루트에 `data-window-blurred` 가 붙고 신호등이 회색이 된다.
+- 저장된 테마가 없는 첫 실행에서 macOS 이면 시스템 모양에 따라 이 테마가 기본값이다 (`lib/defaultTheme.ts`). 그 밖의 OS 는 `minimal-dark`.
+- 새 화면을 확인할 때: 개발 서버(`http://localhost:15173`)를 Chrome 에서 열고 `window.electronAPI` 를 흉내 내면 잠금 없이 본창·연결 창·설정을 볼 수 있다 (터미널·SFTP·DB 는 안 된다).
+
+### Glass Surface and Window Opacity (표면 스타일·창 투명도)
+색 테마와 따로 고르는 두 가지 (설정 > 테마 맨 위, `themeStore` 의 `surface`·`windowOpacity`, 계산은 `lib/appearance.ts`). 설계: `docs/plan/2026-11-17-glass-surface-and-window-opacity.md`.
+- Glass: 루트의 `data-surface="glass"` 로 `styles/glass.css` 가 패널과 떠 있는 창을 반투명 + 뒤 흐림으로 그리고, 앱 뒤에 테마 색에서 만든 색 번짐을 깐다. 터미널·목록은 거의 불투명. `high-contrast` 테마와 OS 의 투명도 줄이기에서는 플랫. 새 패널·떠 있는 창을 만들면 `glass.css` 의 목록에 클래스를 더한다.
+- 창 뒤가 비치는 Glass (Windows 아크릴): 재질은 창을 만들 때만 줄 수 있다 (Electron 28 에서 실행 중 `setBackgroundMaterial` 은 그려지지 않는 것을 시험으로 확인). 그래서 선택을 main 이 `userData/appearance.json` 에 두고(`src/nativeBackdrop.js`) 다음 실행 때 본창을 `backgroundMaterial: 'acrylic'` 로 만든다. 재질이 있으면 루트에 `data-backdrop="native"` 가 붙어 색 번짐이 사라진다. Windows 11 22H2 미만·macOS·분리 창은 색 번짐 배경. 아크릴이 있는 창은 최대화하면 재질이 사라지고 되살릴 수 없다 (시험으로 확인): 그래서 그 본창은 `maximizable: false` 이고, 최대화 버튼과 저장된 최대화 상태는 화면의 작업 영역을 채우는 것으로 대신한다 (`createFillToggle`, 그 창에 `maximize()` 를 부르지 말 것). 바꾸면 안 되는 것: `appearance-set` 은 본창에서만, 파일에는 정해진 두 낱말만 쓴다. 새 `src/*.js` 라서 `MAIN_RUNTIME_MODULES` 에 있다.
+- 창 투명도: `window-set-opacity` IPC 가 보낸 창에 `setOpacity` 를 건다 (50~100%, 렌더러와 main 양쪽에서 제한). 상태 줄의 물방울 버튼(`Footer/OpacityStatus.tsx`)으로도 바꾼다.
+- 설정 > 백업은 하위 탭 셋(세션 백업 / 세션 가져오기 / 다른 프로그램에서 가져오기)이고, 내보낼 세션은 폴더 트리(`Settings/BackupSessionTree.tsx`, `lib/backupTree.ts`)에서 폴더 체크박스로 한 번에 고른다.
+
+### Themed Tooltips (title 안내를 앱이 그린다)
+`title` 속성의 안내는 OS 가 그려서 테마를 따르지 않았다. `lib/themedTooltip.ts` 가 창마다 한 번(`main.tsx`) 설치되어, 포인터가 `title` 이 있는 요소에 올라가면 속성을 잠시 떼어 두고(`data-held-title`, OS 안내가 뜨지 않게) 같은 글자를 테마 색의 상자(`.app-tooltip`, `styles/tooltip.css`)로 보여 준 뒤, 벗어나면 속성을 되돌린다. 컴포넌트는 지금처럼 `title="..."` 만 쓰면 된다 (새 컴포넌트를 쓰거나 버튼마다 고칠 필요 없음). 위치는 요소 아래, 자리가 없으면 위 (`lib/tooltipPosition.ts`).
+- 바꾸면 안 되는 것: 속성을 떼어 둔 동안 React 가 새 `title` 을 쓰면(누르면 "열기"가 "닫기"로 바뀌는 버튼) 그 값을 다시 가져간다 (MutationObserver). 되돌릴 때 이미 새 `title` 이 있으면 덮어쓰지 않는다. 글자 없는 아이콘 버튼은 `title` 이 이름이었으므로 떼어 둔 동안 `aria-label` 로 채운다.
+- 누르거나 키를 누르거나 스크롤하면 닫는다. 요소가 사라졌는데(메뉴가 닫힘) 상자가 남지 않게 포인터가 움직일 때 요소가 아직 문서에 있는지 본다.
 
 ### LockScreen Safe API Pattern
 `window.electronAPI` 함수 호출 전 `typeof` 체크로 graceful degradation.

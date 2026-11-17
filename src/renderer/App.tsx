@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { RiDatabase2Line, RiComputerLine } from 'react-icons/ri'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { Footer } from './components/Footer/Footer'
@@ -19,6 +20,9 @@ import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/Qui
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
 import { NewTabMenu } from './components/Terminal/NewTabMenu'
 import { getDuplicateConfig } from './lib/duplicateConnection'
+import { tabHost, dropTabHostsExcept } from './lib/tabHosts'
+import { perFrame } from './lib/throttle'
+import { TabSlot } from './components/Terminal/TabSlot'
 import { isSshTab } from './lib/sessionTabs'
 import { detachTab, restoreMergedTab, type DetachedTab } from './lib/detachedTab'
 import { captureTerminalSnapshot, setPendingSnapshot } from './lib/terminalSnapshots'
@@ -27,6 +31,8 @@ import { WelcomeScreen } from './components/MainContent/WelcomeScreen'
 import { LockScreen } from './components/LockScreen/LockScreen'
 import { ToastContainer } from './components/Toast'
 import { toast } from './stores/toastStore'
+import { usePaneDropOnTabs } from './hooks/usePaneDropOnTabs'
+import { closeLocalPaneShells } from './lib/localPaneShells'
 import { UpdateNotification } from './components/Update/UpdateNotification'
 import { CommandPalette } from './components/CommandPalette'
 import { TabContextMenu } from './components/Terminal/TabContextMenu'
@@ -102,6 +108,8 @@ function getWindowModeParams() {
 }
 
 function App() {
+  // A split pane dropped on a tab strip becomes a tab of its own
+  usePaneDropOnTabs()
   // Check for special window modes
   const windowParams = getWindowModeParams()
 
@@ -228,7 +236,6 @@ function App() {
     setFontSize,
     setFontFamily,
     layout,
-    addTerminalToPane,
     removeTerminalFromPane,
     setActivePaneTerminal,
     setActivePaneType,
@@ -258,6 +265,27 @@ function App() {
       setIsSettingsLoaded(true) // Set to true even on error to prevent infinite loading
     }
   }
+
+  // Closed tabs: drop the DOM node that held their content
+  useEffect(() => {
+    dropTabHostsExcept(terminals.keys())
+  }, [terminals])
+
+  // A new tab opens in the pane that has focus. The store always adds it to the primary pane, so a
+  // tab that just appeared there while the secondary pane is the focused one is moved over. (This is
+  // what the + menu of the secondary pane, the sidebar and the session picker rely on.)
+  const knownTabIds = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const added = Array.from(terminals.keys()).filter(id => !knownTabIds.current.has(id))
+    knownTabIds.current = new Set(terminals.keys())
+    const current = useTerminalStore.getState().layout
+    if (current.mode !== 'split' || current.activePaneType !== 'secondary' || !current.secondary) return
+    for (const id of added) {
+      if (current.primary.terminalIds.includes(id) && !current.secondary.terminalIds.includes(id)) {
+        moveTerminalBetweenPanes(id, 'primary', 'secondary')
+      }
+    }
+  }, [terminals, moveTerminalBetweenPanes])
 
   // Check master password status on mount
   useEffect(() => {
@@ -365,6 +393,8 @@ function App() {
   useEffect(() => {
     if (!isSplitResizing) return
 
+    // One ratio update (one render of the whole layout) per frame, however many mouse moves arrive
+    const applyRatio = perFrame((ratio: number) => setSplitRatio(ratio))
     const handleMouseMove = (e: MouseEvent) => {
       const container = splitContainerRef.current
       if (!container) return
@@ -376,10 +406,11 @@ function App() {
         ratio = (e.clientY - rect.top) / rect.height
       }
       ratio = Math.min(0.8, Math.max(0.2, ratio))
-      setSplitRatio(ratio)
+      applyRatio(ratio)
     }
 
     const handleMouseUp = () => {
+      applyRatio.cancel()
       setIsSplitResizing(false)
       document.body.classList.remove('resizing')
       window.dispatchEvent(new Event('resize'))
@@ -703,6 +734,8 @@ function App() {
       return
     }
     if (terminals.get(sessionId)?.local) {
+      // The shells of its split panes go with the tab
+      closeLocalPaneShells(sessionId)
       window.electronAPI.localShellClose?.(sessionId)
       removeTerminal(sessionId)
       return
@@ -799,6 +832,30 @@ function App() {
   const activeDuplicateLabel = getDuplicateConfig(activeTerminal)
     ? activeTerminal?.title || `${activeTerminal?.username}@${activeTerminal?.host}`
     : null
+
+  // Which pane shows the tab on a split screen (null on a single screen)
+  const paneOfTab = (tabId: string): 'primary' | 'secondary' | null => {
+    if (layout.mode !== 'split' || !layout.secondary) return null
+    return layout.secondary.terminalIds.includes(tabId) ? 'secondary' : 'primary'
+  }
+
+  // The + menu of a split pane: the same menu as the single tab bar, about that pane's active tab.
+  // Pressing it focuses the pane, and a new tab goes to the focused pane (effect below).
+  const renderPaneNewTabMenu = (pane: 'primary' | 'secondary') => {
+    const paneActiveId = (pane === 'primary' ? layout.primary : layout.secondary)?.activeTerminalId ?? null
+    const paneTerminal = paneActiveId ? terminals.get(paneActiveId) : undefined
+    const label = getDuplicateConfig(paneTerminal) ? paneTerminal?.title || `${paneTerminal?.username}@${paneTerminal?.host}` : null
+    return (
+      <NewTabMenu
+        triggerClassName="split-pane-btn"
+        duplicateLabel={label}
+        onDuplicate={() => void handleDuplicateTab(paneActiveId)}
+        onPickSession={() => setSessionPickerOpen(true)}
+        onNewSession={handleNewConnection}
+        onLocalTerminal={() => void handleOpenLocalTerminal()}
+      />
+    )
+  }
 
   // Layout state
   const splitWithSession = useTerminalStore(state => state.splitWithSession)
@@ -1050,6 +1107,8 @@ function App() {
           onImportSession={(folderId) => setImportTarget({ folderId })}
           onStatsClick={() => setStatsDashboardOpen(true)}
           onBatchClick={() => setBatchModalOpen(true)}
+          onLocalTerminal={() => void handleOpenLocalTerminal()}
+          onCloseTerminal={handleCloseTerminal}
         />
         <main className="main-area" id="main-content">
           {!isSettingsLoaded ? (
@@ -1156,12 +1215,7 @@ function App() {
                           removeTerminalFromPane('primary', terminalId)
                           handleCloseTerminal(terminalId)
                         }}
-                        onAddTab={async (session) => {
-                          const result = await connect(toSSHConnectConfig(session))
-                          if (result?.success && result.sessionId) {
-                            addTerminalToPane('primary', result.sessionId)
-                          }
-                        }}
+                        newTabMenu={renderPaneNewTabMenu('primary')}
                         onUnsplit={closeSplit}
                         onSftpToggle={layout.primary.activeTerminalId && isSshTab(terminals.get(layout.primary.activeTerminalId)) ? () => {
                           const activeId = layout.primary.activeTerminalId!
@@ -1179,24 +1233,11 @@ function App() {
                       />
                       <div className="split-pane-content">
                         {layout.primary.terminalIds.map(terminalId => (
-                          <div
+                          <TabSlot
                             key={terminalId}
+                            tabId={terminalId}
                             className={`terminal-wrapper ${terminalId === layout.primary.activeTerminalId ? 'visible' : 'hidden'}`}
-                          >
-                            {renderTabContent(
-                              terminalId,
-                              terminalId === layout.primary.activeTerminalId,
-                              () => {
-                                setActivePaneTerminal('primary', terminalId)
-                                setActivePaneType('primary')
-                              },
-                              () => {
-                                removeTerminalFromPane('primary', terminalId)
-                                handleCloseTerminal(terminalId)
-                              },
-                              terminals.get(terminalId)?.color
-                            )}
-                          </div>
+                          />
                         ))}
                         {layout.primary.activeTerminalId && isOpen(layout.primary.activeTerminalId) && (
                           <SftpPanel sessionId={layout.primary.activeTerminalId} />
@@ -1233,12 +1274,7 @@ function App() {
                           removeTerminalFromPane('secondary', terminalId)
                           handleCloseTerminal(terminalId)
                         }}
-                        onAddTab={async (session) => {
-                          const result = await connect(toSSHConnectConfig(session))
-                          if (result?.success && result.sessionId) {
-                            addTerminalToPane('secondary', result.sessionId)
-                          }
-                        }}
+                        newTabMenu={renderPaneNewTabMenu('secondary')}
                         onSftpToggle={layout.secondary.activeTerminalId && isSshTab(terminals.get(layout.secondary.activeTerminalId)) ? () => {
                           const activeId = layout.secondary!.activeTerminalId!
                           setOpen(activeId, !isOpen(activeId))
@@ -1255,24 +1291,11 @@ function App() {
                       />
                       <div className="split-pane-content">
                         {layout.secondary.terminalIds.map(terminalId => (
-                          <div
+                          <TabSlot
                             key={terminalId}
+                            tabId={terminalId}
                             className={`terminal-wrapper ${terminalId === layout.secondary!.activeTerminalId ? 'visible' : 'hidden'}`}
-                          >
-                            {renderTabContent(
-                              terminalId,
-                              terminalId === layout.secondary!.activeTerminalId,
-                              () => {
-                                setActivePaneTerminal('secondary', terminalId)
-                                setActivePaneType('secondary')
-                              },
-                              () => {
-                                removeTerminalFromPane('secondary', terminalId)
-                                handleCloseTerminal(terminalId)
-                              },
-                              terminals.get(terminalId)?.color
-                            )}
-                          </div>
+                          />
                         ))}
                         {layout.secondary.activeTerminalId && isOpen(layout.secondary.activeTerminalId) && (
                           <SftpPanel sessionId={layout.secondary.activeTerminalId} />
@@ -1281,21 +1304,49 @@ function App() {
                     </div>
                   </div>
                 ) : (
-                  terminalArray.map(([sessionId, terminal]) => (
-                    <div
+                  terminalArray.map(([sessionId]) => (
+                    <TabSlot
                       key={sessionId}
+                      tabId={sessionId}
                       className={`terminal-wrapper ${sessionId === activeTerminalId ? 'visible' : 'hidden'}`}
-                    >
-                      {renderTabContent(
-                        sessionId,
-                        sessionId === activeTerminalId,
-                        () => setActiveTerminal(sessionId),
-                        () => handleCloseTerminal(sessionId),
-                        terminal.color
-                      )}
-                    </div>
+                    />
                   ))
                 )}
+                {/* Every tab's content, rendered here once and shown through its TabSlot above. This place does
+                    not depend on the layout, so single <-> split never unmounts a tab (lib/tabHosts.ts).
+                    It is inside .terminal-area on purpose: React events from the content go up this React
+                    tree, not the DOM, and the tab drag-and-drop handlers are on .terminal-area. */}
+                {terminalArray.map(([sessionId, terminal]) => {
+                  const pane = paneOfTab(sessionId)
+                  const paneState = pane === 'secondary' ? layout.secondary : layout.primary
+                  return createPortal(
+                    <div className="tab-host-content" onMouseDown={pane ? () => setActivePaneType(pane) : undefined}>
+                    {pane
+                      ? renderTabContent(
+                          sessionId,
+                          sessionId === paneState?.activeTerminalId,
+                          () => {
+                            setActivePaneTerminal(pane, sessionId)
+                            setActivePaneType(pane)
+                          },
+                          () => {
+                            removeTerminalFromPane(pane, sessionId)
+                            handleCloseTerminal(sessionId)
+                          },
+                          terminal.color
+                        )
+                      : renderTabContent(
+                          sessionId,
+                          sessionId === activeTerminalId,
+                          () => setActiveTerminal(sessionId),
+                          () => handleCloseTerminal(sessionId),
+                          terminal.color
+                        )}
+                    </div>,
+                    tabHost(sessionId),
+                    sessionId
+                  )
+                })}
               </div>
               {/* The SFTP button is in the terminal's header (TerminalPanel), not in a bar under it */}
               {sftpOpen && activeTerminalId && layout.mode !== 'split' && (

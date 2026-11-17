@@ -2,6 +2,9 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import './styles/globals.css'
+import { installThemedTooltips } from './lib/themedTooltip'
+import { installCaptionDoubleClick } from './lib/captionDoubleClick'
+import { installSftpWindowReturn } from './lib/sftpDetach'
 
 // Suppress ResizeObserver loop warning (harmless)
 const resizeObserverErr = window.onerror
@@ -20,6 +23,11 @@ if (document.fonts?.load) {
     document.fonts.load('14px "D2Coding"', '가')
   ]).catch(() => { /* fall back to system fonts */ })
 }
+
+// Every window (main, popped-out terminal / SFTP / DB / file windows) goes through this entry
+installThemedTooltips()
+installCaptionDoubleClick()
+installSftpWindowReturn()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

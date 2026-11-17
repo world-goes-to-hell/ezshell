@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react'
 import type { IconType } from 'react-icons'
 import {
   RiStarFill, RiComputerLine, RiHome4Line, RiFileTextLine, RiDownload2Line, RiImageLine, RiMusic2Line,
@@ -29,6 +30,27 @@ const ICONS: Record<string, IconType> = {
   cd: RiDiscLine
 }
 
+const EDGE_GAP = 8
+const MIN_LIST_HEIGHT = 90
+
+/**
+ * Height left for the list before the nearest ancestor that clips its content (the SFTP pane is
+ * overflow: hidden). Without this the list keeps its CSS height in a short pane: its lower part is
+ * cut off, and scrolling to the end still leaves the last rows out of sight.
+ */
+function roomBelow(list: HTMLElement): number | null {
+  const top = list.getBoundingClientRect().top
+  let bottom = window.innerHeight
+  for (let node = list.parentElement; node; node = node.parentElement) {
+    if (getComputedStyle(node).overflowY !== 'visible') {
+      bottom = Math.min(bottom, node.getBoundingClientRect().bottom)
+      break
+    }
+  }
+  const room = Math.floor(bottom - top - EDGE_GAP)
+  return Number.isFinite(room) ? Math.max(MIN_LIST_HEIGHT, room) : null
+}
+
 interface PathBookmarkSuggestionsProps {
   id: string
   items: PathSuggestion[]
@@ -41,8 +63,34 @@ interface PathBookmarkSuggestionsProps {
 /** The list shown under the path input while it is being edited: bookmarks, then (local) usual folders and drives */
 export function PathBookmarkSuggestions({ id, items, highlightedIndex, currentPath, onSelect, onHighlight }: PathBookmarkSuggestionsProps) {
   const label = items.every(item => item.section === 'bookmark') ? '즐겨찾기 경로' : '이동할 위치'
+  const listRef = useRef<HTMLUListElement>(null)
+  const [room, setRoom] = useState<number | null>(null)
+
+  // CSS caps the height (max-height); this only lowers it when the pane is shorter than that
+  useLayoutEffect(() => {
+    const measure = () => { if (listRef.current) setRoom(roomBelow(listRef.current)) }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [items.length])
+
+  // Arrow keys move the highlight; keep the highlighted row in view
+  useLayoutEffect(() => {
+    if (highlightedIndex < 0) return
+    listRef.current?.querySelector('.is-highlighted')?.scrollIntoView({ block: 'nearest' })
+  }, [highlightedIndex])
+
   return (
-    <ul id={id} className="path-suggestions" role="listbox" aria-label={label}>
+    <ul
+      ref={listRef}
+      id={id}
+      className="path-suggestions"
+      role="listbox"
+      aria-label={label}
+      // Pressing the list's scrollbar must not take focus from the input: its blur closes the list
+      onMouseDown={e => e.preventDefault()}
+      style={room === null ? undefined : { maxHeight: `min(360px, 55vh, ${room}px)` }}
+    >
       {items.map((item, index) => {
         const Icon = item.section === 'bookmark' ? null : ICONS[item.kind ?? ''] ?? RiHardDrive2Line
         const startsSection = index === 0 || items[index - 1].section !== item.section

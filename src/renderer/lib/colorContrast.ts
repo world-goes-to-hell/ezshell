@@ -23,15 +23,18 @@ function contrastRatio(a: number, b: number): number {
   return (lighter + 0.05) / (darker + 0.05)
 }
 
+// White text needs at least this much contrast to be used (WCAG's floor for UI components and bold text)
+const MIN_LIGHT_TEXT_CONTRAST = 3
+
 /**
- * Pick white or near-black text for the given background, whichever contrasts more.
+ * Text color for the given background: white wherever it is legible, near-black on backgrounds too
+ * light for it (yellow, green, pastel). White is preferred over "whichever contrasts more" because a
+ * filled blue or red tab with black text reads as unstyled, although black measures higher there.
  * Non-hex colors fall back to white.
  */
 export function readableTextColor(background: string): string {
   const rgb = parseHex(background)
   if (!rgb) return LIGHT_TEXT
-  const bg = luminance(rgb)
-  const onLight = contrastRatio(bg, luminance([255, 255, 255]))
-  const onDark = contrastRatio(bg, luminance(parseHex(DARK_TEXT)!))
-  return onLight >= onDark ? LIGHT_TEXT : DARK_TEXT
+  const onLight = contrastRatio(luminance(rgb), luminance([255, 255, 255]))
+  return onLight >= MIN_LIGHT_TEXT_CONTRAST ? LIGHT_TEXT : DARK_TEXT
 }

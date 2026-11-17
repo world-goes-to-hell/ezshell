@@ -10,7 +10,7 @@ const LOCKED_MESSAGE = '앱이 잠겨 있습니다.'
  * on this PC (made first when missing). `isLocked()` is true while the app is locked: logs are not
  * followed then. Returns `closeViewWindows()`, which main calls when the app locks.
  */
-function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLocked = () => false }) {
+function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLocked = () => false, fromMainWindow = () => false, isKnownContainer = () => false }) {
   const windows = new Map()
   // Documents whose window has unsaved changes, and those the user chose to close anyway
   const dirty = new Set()
@@ -34,9 +34,8 @@ function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLock
     if (isLocked()) throw new DocumentError(LOCKED_MESSAGE)
   }
 
-  ipcMain.handle('remote-file-open', answer((senderId, { sessionId, sessionName, remotePath, mode }) => {
-    refuseWhileLocked()
-    const { docId, existing } = docs.register({ sessionId, sessionName, remotePath, mode })
+  /** The window of a registered document: the open one brought forward, or a new one */
+  function openWindowFor({ docId, existing }) {
     const open = windows.get(docId)
     if (existing && open && !open.isDestroyed()) {
       showWindow(open)
@@ -60,7 +59,30 @@ function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLock
       docs.close(docId)
     })
     return { existing: false }
+  }
+
+  ipcMain.handle('remote-file-open', answer((senderId, { sessionId, sessionName, remotePath, mode }) => {
+    refuseWhileLocked()
+    return openWindowFor(docs.register({ sessionId, sessionName, remotePath, mode }))
   }))
+
+  // A container's log in the same kind of window (the container panel's 로그). Only the main window
+  // may ask, and only for a container that was in the list it was just shown: the name becomes
+  // part of a command line on the server.
+  ipcMain.handle('container-log-open', async (event, request) => {
+    try {
+      const { sessionId, sessionName, name } = request || {}
+      if (!fromMainWindow(event)) throw new DocumentError('본창에서만 열 수 있습니다.')
+      refuseWhileLocked()
+      if (typeof sessionId !== 'string' || typeof name !== 'string' || !isKnownContainer(sessionId, name)) {
+        throw new DocumentError('목록을 새로고침한 뒤 다시 열어 주세요.')
+      }
+      openWindowFor(docs.registerContainerLog({ sessionId, sessionName, container: name }))
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: userMessage(err) }
+    }
+  })
 
   ipcMain.handle('remote-file-load', answer((senderId, { docId }) => {
     refuseWhileLocked()

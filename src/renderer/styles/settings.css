@@ -125,6 +125,70 @@
   gap: 16px;
 }
 
+/* Surface style and window opacity, above the theme list */
+.appearance-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.appearance-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.appearance-label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.appearance-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.appearance-note {
+  color: var(--text-secondary);
+}
+
+.appearance-segment {
+  flex: none;
+  width: 190px;
+}
+
+.appearance-slider {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  width: 190px;
+}
+
+.appearance-slider input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.appearance-value {
+  width: 40px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 /* The settings tab (.settings-content) is the only scroller; the grid has no scroll of its own,
    so the actions and filters stick to the top while the cards scroll under them */
 .theme-toolbar {
@@ -139,6 +203,19 @@
   padding-bottom: 8px;
   margin-bottom: -8px;
   background: var(--bg-secondary);
+}
+
+/* The same cover above the toolbar: where the toolbar stops a few pixels under the scroller's top edge
+   (the padding there), cards showed in that strip while scrolling. Nothing else is ever in the 12px
+   above the toolbar (the gap to the description), so covering it is safe when not stuck too. */
+.theme-toolbar::before {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  height: 12px;
+  background: inherit;
 }
 
 .theme-filter-tabs {

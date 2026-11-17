@@ -1,4 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import { throttle, REFIT_INTERVAL_MS, type Throttled } from '../../lib/throttle'
+import { SerializeAddon } from 'xterm-addon-serialize'
+import { registerSplitShell } from '../../lib/splitShells'
+import { SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
+import type { PaneId } from '../../lib/splitTree'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import { useThemeStore } from '../../stores/themeStore'
@@ -11,13 +16,15 @@ import { createEarlyStreamBuffer } from '../../lib/earlyStreamBuffer'
 
 interface SplitTerminalProps {
   sessionId: string
+  /** Which pane of the tab this shell is drawn in (lib/splitTree.ts) */
+  pane: PaneId
   delay?: number
 }
 
 const MAX_AUTO_RETRIES = 3
 const BASE_RETRY_DELAY = 1000 // 1 second
 
-export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
+export function SplitTerminal({ sessionId, pane, delay = 0 }: SplitTerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const terminalInstance = useRef<Terminal | null>(null)
   const fitAddon = useRef<FitAddon | null>(null)
@@ -73,8 +80,26 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
     let unregisterPane: (() => void) | null = null
     let detachCommandHistory: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
+    let refit: Throttled<[]> | null = null
     let disposed = false
     let delayTimer: ReturnType<typeof setTimeout> | null = null
+    let serializeScreen: (() => string) | null = null
+    // The pane can give its shell up (it becomes a tab, lib/paneToTab.ts): everything received so
+    // far is drawn, the screen is taken, and this pane lets go of the channel without closing it
+    const unregisterShell = registerSplitShell(sessionId, pane, {
+      streamId: () => (isInitialized.current ? streamIdRef.current : null),
+      detach: async () => {
+        const terminal = terminalInstance.current
+        let screen = ''
+        if (terminal && serializeScreen) {
+          await new Promise<void>(resolve => terminal.write('', () => resolve()))
+          try { screen = serializeScreen() } catch { screen = '' }
+        }
+        streamIdRef.current = null
+        isInitialized.current = false
+        return screen
+      }
+    })
     // Split output that arrives before this pane can show it (see handleSplitData)
     const earlyOutput = createEarlyStreamBuffer()
 
@@ -167,6 +192,9 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
 
         fitAddon.current = new FitAddon()
         term.loadAddon(fitAddon.current)
+        const serializeAddon = new SerializeAddon()
+        term.loadAddon(serializeAddon)
+        serializeScreen = () => serializeAddon.serialize({ scrollback: SNAPSHOT_SCROLLBACK_ROWS })
 
         term.open(terminalRef.current)
         // The tab's right-click menu acts on the shell that was clicked
@@ -229,19 +257,24 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
         })
 
         // Handle resize
-        resizeObserver = new ResizeObserver(() => {
+        // Same limits as the tab's main terminal: refit at most every REFIT_INTERVAL_MS while a divider
+        // is dragged, and tell the server only when the size really changed
+        let sentSize = ''
+        refit = throttle(() => {
           if (fitAddon.current && isInitialized.current && !disposed) {
             try {
               fitAddon.current.fit()
               const dims = fitAddon.current.proposeDimensions()
-              if (dims && streamIdRef.current) {
+              if (dims && streamIdRef.current && `${streamIdRef.current}:${dims.cols}x${dims.rows}` !== sentSize) {
+                sentSize = `${streamIdRef.current}:${dims.cols}x${dims.rows}`
                 window.electronAPI.sshSplitResize(streamIdRef.current, dims.cols, dims.rows)
               }
             } catch (e) {
               // Ignore resize errors
             }
           }
-        })
+        }, REFIT_INTERVAL_MS)
+        resizeObserver = new ResizeObserver(() => refit?.())
 
         resizeObserver.observe(terminalRef.current)
 
@@ -359,12 +392,13 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
       isInitialized.current = false
 
       if (delayTimer) clearTimeout(delayTimer)
+      unregisterShell()
 
       // Clean up IPC listeners
       if (cleanupDataListener) cleanupDataListener()
       if (cleanupClosedListener) cleanupClosedListener()
 
-      // Close the split stream
+      // Close the split stream (not one that was given up: it lives on as a tab)
       if (streamIdRef.current) {
         window.electronAPI.sshSplitClose(streamIdRef.current)
         streamIdRef.current = null
@@ -377,6 +411,7 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
 
       if (resizeObserver) {
         resizeObserver.disconnect()
+        refit?.cancel()
       }
       disableCopyOnSelect?.()
       unregisterPane?.()
@@ -386,7 +421,7 @@ export function SplitTerminal({ sessionId, delay = 0 }: SplitTerminalProps) {
       }
       terminalInstance.current = null
     }
-  }, [sessionId, retryCount])
+  }, [sessionId, pane, retryCount])
 
   if (status === 'connecting') {
     return (

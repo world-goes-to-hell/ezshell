@@ -7,7 +7,7 @@ import { validateNewName } from '../../lib/fileNameValidation'
 import { isWindowsPath, nextFolderName, parentPath, joinChildPath } from '../../lib/sftpFileOps'
 import { useFolderDropTargets, FILE_LIST_DRAG_TYPE } from '../../hooks/useFolderDropTargets'
 import { sortFileItems, nextSort, DEFAULT_SORT, type FileSort, type FileSortKey } from '../../lib/fileSort'
-import { RiFolderFill, RiArrowUpSFill } from 'react-icons/ri'
+import { RiFolderFill, RiArrowUpSFill, RiUploadLine, RiDownloadLine } from 'react-icons/ri'
 import { InlineNameInput } from './InlineNameInput'
 import { FileListHeader } from './FileListHeader'
 import { getFileIcon } from './fileIcons'
@@ -446,6 +446,29 @@ export function FileList({
     folderDrop.startDrag(draggedFiles)
   }
 
+  // A drag coming from the other list of this session. While it lasts, the column header turns into a
+  // "drop here for this folder" bar: in a folder full of folders every row is a folder target, and
+  // the empty space that meant "this folder" could be far below. The header is always in view.
+  const [isIncomingDrag, setIsIncomingDrag] = useState(false)
+  const [isDropHereHot, setIsDropHereHot] = useState(false)
+  useEffect(() => {
+    // After the source list's own dragstart handler has recorded the drag
+    const onStart = () => window.setTimeout(() => setIsIncomingDrag(folderDrop.isDragFromThisSession() && !folderDrop.isDraggingWithinList()), 0)
+    const onEnd = () => {
+      setIsIncomingDrag(false)
+      setIsDropHereHot(false)
+    }
+    window.addEventListener('dragstart', onStart)
+    window.addEventListener('dragend', onEnd)
+    window.addEventListener('drop', onEnd)
+    return () => {
+      window.removeEventListener('dragstart', onStart)
+      window.removeEventListener('dragend', onEnd)
+      window.removeEventListener('drop', onEnd)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type, sessionId, currentPath])
+
   const handleDragOver = (e: React.DragEvent) => {
     // Inside the same list only folder rows accept a drop (they stop propagation before this),
     // and entries never cross into another session's panel (split panes show two at once)
@@ -500,6 +523,27 @@ export function FileList({
         </div>
       )}
       <FileListHeader type={type} sort={sort} onSort={handleSort} />
+      {isIncomingDrag && onDrop && (
+        <div
+          className={`file-list-drop-here ${isDropHereHot ? 'is-hot' : ''}`}
+          onDragOver={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            e.dataTransfer.dropEffect = 'copy'
+            setIsDragOver(false)
+            setIsDropHereHot(true)
+          }}
+          onDragLeave={() => setIsDropHereHot(false)}
+          onDrop={(e) => {
+            setIsDropHereHot(false)
+            handleDrop(e)
+          }}
+        >
+          {type === 'remote' ? <RiUploadLine size={14} /> : <RiDownloadLine size={14} />}
+          <span className="file-list-drop-here-label">여기에 놓으면 현재 폴더로 {type === 'remote' ? '업로드' : '다운로드'}</span>
+          <span className="file-list-drop-here-path">{currentPath}</span>
+        </div>
+      )}
       {/* Double-click like every other folder row; a single click only focuses the list */}
       <div
         className={`file-item parent-dir ${folderDrop.dropTargetKey === PARENT_ROW_KEY ? 'drop-target' : ''}`}
@@ -526,7 +570,8 @@ export function FileList({
       {files.slice(listWindow.start, listWindow.end).map((file, offset) => {
         const index = listWindow.start + offset
         const isRenaming = editing?.mode === 'rename' && editing.name === file.name
-        const mark = file.type === 'file' ? transferMarks.get(file.name) : undefined
+        // Files: their own transfer. Folders: everything this session sent into them (lib/transferMarks.ts)
+        const mark = transferMarks.get(file.name)
         return (
           <div
             key={file.name}

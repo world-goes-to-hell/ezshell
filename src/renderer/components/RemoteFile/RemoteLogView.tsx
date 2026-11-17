@@ -1,4 +1,4 @@
-import { INITIAL_PACE, RETRY_MS, nextPace, waitFor } from '../../lib/logPollPace'
+import { initialPace, retryWait, nextPace, waitFor, type PaceKind } from '../../lib/logPollPace'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RiArrowDownLine, RiArrowDownSLine, RiArrowUpSLine, RiEyeLine, RiFlagLine, RiPauseLine, RiPlayLine, RiRefreshLine } from 'react-icons/ri'
 import type { EditorState } from '@codemirror/state'
@@ -152,7 +152,9 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
     }
     let isCancelled = false
     let timer: number | undefined
-    let pace = INITIAL_PACE
+    // A container's log is read by running a command each time: those looks are further apart
+    const kind: PaceKind = file.pace === 'command' ? 'command' : 'file'
+    let pace = initialPace(kind)
     const schedule = (ms: number) => { timer = window.setTimeout(() => void look(), ms) }
     async function look() {
       const tail = window.electronAPI.remoteFileTail
@@ -166,11 +168,11 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
       if (isCancelled) return
       if (result.success) {
         handleRef.current(result)
-        pace = nextPace(pace, 'text' in result && result.text.length > 0)
-        schedule(waitFor(pace, document.hidden))
+        pace = nextPace(pace, 'text' in result && result.text.length > 0, kind)
+        schedule(waitFor(pace, document.hidden, kind))
       } else {
         setFollow({ kind: 'error', message: result.error })
-        schedule(RETRY_MS)
+        schedule(retryWait(kind))
       }
     }
     setFollow({ kind: 'live' })
@@ -179,7 +181,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
       isCancelled = true
       window.clearTimeout(timer)
     }
-  }, [isLive, docId])
+  }, [isLive, docId, file.pace])
 
   const toggleLive = () => {
     const view = editorRef.current?.getView()

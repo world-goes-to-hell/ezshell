@@ -209,3 +209,43 @@
   max-height: calc(100vh - 16px);
   overflow-y: auto;
 }
+
+/* "Drop here for this folder": shown over the column header while entries are dragged in from the
+   other list (FileList.tsx). It covers the header exactly, so no row moves under the pointer. */
+.file-list-drop-here {
+  position: sticky;
+  top: 0;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 29px;
+  margin: -31px -4px 2px;
+  padding: 0 14px;
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-secondary));
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.file-list-drop-here.is-hot {
+  border-style: solid;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.file-list-drop-here svg {
+  flex: none;
+}
+
+.file-list-drop-here-path {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-weight: 400;
+  opacity: 0.8;
+  text-overflow: ellipsis;
+}

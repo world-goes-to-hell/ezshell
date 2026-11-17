@@ -23,13 +23,13 @@ export function TitleBar({ onSettingsClick }: TitleBarProps) {
             <RiSettings3Fill size={18} />
           </button>
         )}
-        <button className="title-bar-btn" onClick={handleMinimize}>
+        <button className="title-bar-btn title-bar-min" onClick={handleMinimize} title="최소화" aria-label="최소화">
           <RiSubtractFill size={18} />
         </button>
-        <button className="title-bar-btn" onClick={handleMaximize}>
+        <button className="title-bar-btn title-bar-max" onClick={handleMaximize} title="최대화" aria-label="최대화">
           <RiCheckboxBlankFill size={16} />
         </button>
-        <button className="title-bar-btn title-bar-close" onClick={handleClose}>
+        <button className="title-bar-btn title-bar-close" onClick={handleClose} title="닫기" aria-label="닫기">
           <RiCloseFill size={18} />
         </button>
       </div>

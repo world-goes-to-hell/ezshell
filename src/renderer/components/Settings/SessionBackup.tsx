@@ -1,9 +1,18 @@
 import { useState } from 'react'
-import { RiDownload2Line, RiUpload2Line, RiCheckLine, RiFolderLine, RiFileTextLine } from 'react-icons/ri'
+import { RiDownload2Line, RiUpload2Line, RiFileTextLine } from 'react-icons/ri'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useToastStore } from '../../stores/toastStore'
 import './SessionBackup.css'
 import { ExternalImportDialog } from './ExternalImportDialog'
+import { BackupSessionTree } from './BackupSessionTree'
+
+type BackupSection = 'export' | 'import' | 'external'
+
+const BACKUP_SECTIONS: { id: BackupSection; label: string }[] = [
+  { id: 'export', label: '세션 백업' },
+  { id: 'import', label: '세션 가져오기' },
+  { id: 'external', label: '다른 프로그램에서 가져오기' }
+]
 
 export function SessionBackup() {
   const { sessions, folders } = useSessionStore()
@@ -14,16 +23,8 @@ export function SessionBackup() {
   const [isImporting, setIsImporting] = useState(false)
   // "다른 프로그램에서 가져오기" (Xshell, PuTTY, MobaXterm, Tabby, OpenSSH config)
   const [isExternalOpen, setIsExternalOpen] = useState(false)
-
-  const toggleSessionSelection = (sessionId: string) => {
-    const newSelection = new Set(selectedSessions)
-    if (newSelection.has(sessionId)) {
-      newSelection.delete(sessionId)
-    } else {
-      newSelection.add(sessionId)
-    }
-    setSelectedSessions(newSelection)
-  }
+  // The three jobs of this tab, one at a time (all on one page was a long scroll)
+  const [section, setSection] = useState<BackupSection>('export')
 
   const toggleSelectAll = () => {
     if (selectedSessions.size === sessions.length) {
@@ -83,16 +84,25 @@ export function SessionBackup() {
     }
   }
 
-  // Get folder name by id
-  const getFolderName = (folderId?: string): string => {
-    if (!folderId) return '폴더 없음'
-    const folder = folders.find(f => f.id === folderId)
-    return folder?.name || '알 수 없음'
-  }
-
   return (
     <div className="session-backup">
+      <div className="theme-filter-tabs backup-tabs" role="tablist" aria-label="세션 백업">
+        {BACKUP_SECTIONS.map(item => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={section === item.id}
+            className={`theme-filter-tab ${section === item.id ? 'active' : ''}`}
+            onClick={() => setSection(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
       {/* Export Section */}
+      {section === 'export' && (
       <div className="backup-section">
         <div className="backup-section-header">
           <h4>세션 내보내기</h4>
@@ -119,33 +129,7 @@ export function SessionBackup() {
                 <p>저장된 세션이 없습니다</p>
               </div>
             ) : (
-              sessions.map(session => (
-                <label key={session.id} className="session-item">
-                  <div className="session-item-left">
-                    <input
-                      type="checkbox"
-                      checked={selectedSessions.has(session.id)}
-                      onChange={() => toggleSessionSelection(session.id)}
-                      className="session-checkbox"
-                    />
-                    <div className="session-info">
-                      <div className="session-name">{session.name}</div>
-                      <div className="session-details">
-                        {session.username}@{session.host}:{session.port}
-                        {session.folderId && (
-                          <span className="session-folder">
-                            <RiFolderLine size={16} />
-                            {getFolderName(session.folderId)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  {selectedSessions.has(session.id) && (
-                    <RiCheckLine size={20} className="session-check-icon" />
-                  )}
-                </label>
-              ))
+              <BackupSessionTree folders={folders} sessions={sessions} selected={selectedSessions} onChange={setSelectedSessions} />
             )}
           </div>
         </div>
@@ -159,8 +143,10 @@ export function SessionBackup() {
           {isExporting ? '내보내는 중...' : `선택한 세션 내보내기 (${selectedSessions.size})`}
         </button>
       </div>
+      )}
 
       {/* Import Section */}
+      {section === 'import' && (
       <div className="backup-section">
         <div className="backup-section-header">
           <h4>세션 가져오기</h4>
@@ -206,8 +192,10 @@ export function SessionBackup() {
           {isImporting ? '가져오는 중...' : '세션 가져오기'}
         </button>
       </div>
+      )}
 
       {/* From other programs */}
+      {section === 'external' && (
       <div className="backup-section">
         <div className="backup-section-header">
           <h4>다른 프로그램에서 가져오기</h4>
@@ -219,16 +207,19 @@ export function SessionBackup() {
         </button>
         {isExternalOpen && <ExternalImportDialog onClose={() => setIsExternalOpen(false)} />}
       </div>
+      )}
 
-      {/* Info Box */}
+      {/* Notes for the tab in view (other programs: its own dialog explains what is taken) */}
+      {section !== 'external' && (
       <div className="backup-info">
         <h5>주의사항</h5>
         <ul>
-          <li>내보낸 파일에는 비밀번호가 포함되어 있습니다. 안전하게 보관하세요.</li>
-          <li>교체 모드는 기존 세션을 모두 삭제합니다. 신중하게 선택하세요.</li>
-          <li>폴더 정보도 함께 내보내지고 가져와집니다.</li>
+          {section === 'export' && <li>내보낸 파일에는 비밀번호가 포함되어 있습니다. 안전하게 보관하세요.</li>}
+          {section === 'import' && <li>교체 모드는 기존 세션을 모두 삭제합니다. 신중하게 선택하세요.</li>}
+          <li>폴더 정보도 함께 {section === 'export' ? '내보내집니다' : '가져와집니다'}.</li>
         </ul>
       </div>
+      )}
     </div>
   )
 }

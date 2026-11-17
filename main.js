@@ -32,6 +32,10 @@ const cryptoUtil = require('./src/crypto.js');
 const commandHistory = require('./src/commandHistory.js');
 const { testSshConnection, describeSshError, normalizeConnectConfig } = require('./src/sshConnectionTest.js');
 const { createUpdateChecker } = require('./src/updateChecker.js');
+const manualUpdate = require('./src/manualUpdate.js');
+const sharedConn = require('./src/sharedConn.js');
+const { registerContainerIpc } = require('./src/containers/ipc.js');
+const { createContainerLogs } = require('./src/containers/logs.js');
 const { SSH_ALGORITHMS } = require('./src/sshAlgorithms.js');
 const { switchToRoot } = require('./src/rootSwitch.js');
 const { createRemoteDocuments } = require('./src/remoteFiles/documents.js');
@@ -42,6 +46,43 @@ const { createDbConnections } = require('./src/dbClient/connections.js');
 const { createDiscoveryCache } = require('./src/dbClient/discovery.js');
 const { createLocalShells } = require('./src/localShell.js');
 const windowState = require('./src/windowState.js');
+const nativeBackdrop = require('./src/nativeBackdrop.js');
+const { downloadDirectory } = require('./src/sftpDownloadDir.js');
+
+// Glass surface style (src/nativeBackdrop.js). A window gets acrylic only through its creation options,
+// so each window that should have it spreads glassWindowOptions() into them and is then registered:
+// the registry answers "does this window have the material" and holds its maximize replacement.
+const glassWindows = new WeakMap();
+function glassWindowOptions() {
+  return nativeBackdrop.backdropOptions(nativeBackdrop.readAppearance(app.getPath('userData')), process.platform, require('os').release());
+}
+function registerGlassWindow(win, options) {
+  if (!options.backgroundMaterial) return null;
+  const fill = nativeBackdrop.createFillToggle(win, () => require('electron').screen.getDisplayMatching(win.getBounds()).workArea);
+  glassWindows.set(win, fill);
+  // The window is not maximizable (a maximized window loses the material), so double-clicking the title
+  // bar does nothing by itself. Measured: the top-level window gets no WM_NCLBUTTONDBLCLK for a drag
+  // region (the clicks go to Chromium's child window); what it does get is WM_PARENTNOTIFY for each
+  // button press, with the point. Two presses close in time and place are passed to the page, which
+  // knows whether that point is a drag region and, if so, asks for the same fill as the maximize button.
+  if (process.platform === 'win32') {
+    const WM_PARENTNOTIFY = 0x0210;
+    const WM_LBUTTONDOWN = 0x0201;
+    const DOUBLE_CLICK_MS = 500;
+    const DOUBLE_CLICK_PX = 4;
+    let last = null;
+    win.hookWindowMessage(WM_PARENTNOTIFY, (wParam, lParam) => {
+      if (win.isDestroyed() || wParam.readUInt16LE(0) !== WM_LBUTTONDOWN) return;
+      const press = { x: lParam.readInt16LE(0), y: lParam.readInt16LE(2), at: Date.now() };
+      const isSecond = last && press.at - last.at <= DOUBLE_CLICK_MS &&
+        Math.abs(press.x - last.x) <= DOUBLE_CLICK_PX && Math.abs(press.y - last.y) <= DOUBLE_CLICK_PX;
+      last = isSecond ? null : press;
+      // Physical pixels inside the window; the page converts with its devicePixelRatio
+      if (isSecond) win.webContents.send('window-caption-double-click', { x: press.x, y: press.y });
+    });
+  }
+  return fill;
+}
 const lastVersion = require('./src/lastVersion.js');
 const localPlaces = require('./src/localPlaces.js');
 const sessionImport = require('./src/sessionImport/ipc.js');
@@ -99,6 +140,9 @@ let mcpSessionsCache = null;
 const sshConnections = new Map();
 const sshStreams = new Map(); // sessionId:streamId -> stream (for split terminals)
 const splitStreamLastClosed = new Map(); // sessionId -> timestamp of last split stream close
+// streamId -> the listeners a split shell was opened with, so they can be taken off when the shell
+// becomes a tab of its own (ssh-adopt-split)
+const splitStreamHandlers = new Map();
 let splitStreamSeq = 0;
 
 // Diagnostics for "Channel open failure": how many channels this SSH connection holds open.
@@ -180,6 +224,13 @@ function createWindow() {
     windowState.readState(windowStatePath),
     require('electron').screen.getAllDisplays().map(display => display.workArea)
   );
+  // Glass surface style: acrylic behind the window has to be asked for here, at creation
+  // (src/nativeBackdrop.js). Empty unless settings chose glass and this Windows can draw it.
+  const appearance = nativeBackdrop.readAppearance(app.getPath('userData'));
+  const backdrop = nativeBackdrop.backdropOptions(appearance, process.platform, require('os').release());
+  mainWindowHasBackdrop = Object.keys(backdrop).length > 0;
+  // The material's tint follows the app's light/dark setting
+  if (mainWindowHasBackdrop) require('electron').nativeTheme.themeSource = appearance.scheme;
   mainWindow = new BrowserWindow({
     icon: WINDOW_ICON,
     width: lastPlace ? lastPlace.width : 1200,
@@ -189,6 +240,7 @@ function createWindow() {
     minHeight: 600,
     frame: false,
     backgroundColor: '#1e1e2e',
+    ...backdrop,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -197,8 +249,16 @@ function createWindow() {
     }
   });
 
-  if (lastPlace && lastPlace.isMaximized) mainWindow.maximize();
-  windowState.trackWindow(mainWindow, windowStatePath);
+  // With acrylic the window must never be maximized natively (the material is lost for good): it fills
+  // the work area of its screen instead (nativeBackdrop.createFillToggle)
+  mainWindowFill = registerGlassWindow(mainWindow, backdrop);
+  if (lastPlace && lastPlace.isMaximized) {
+    if (mainWindowFill) mainWindowFill.fill(mainWindow.getBounds());
+    else mainWindow.maximize();
+  }
+  windowState.trackWindow(mainWindow, windowStatePath, mainWindowFill
+    ? { normalBounds: mainWindowFill.normalBounds, isMaximized: mainWindowFill.isFilled }
+    : undefined);
 
   // Load from Vite dev server in development, built files in production
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -245,7 +305,33 @@ const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const UPDATE_FOCUS_RECHECK_MS = 10 * 60 * 1000;
 const UPDATE_FIRST_CHECK_DELAY_MS = 3000;
 
+// macOS: the build is unsigned, and Squirrel.Mac only applies an update whose signature matches the
+// running app. So the app does not update itself there: it looks for a newer release and sends the
+// user to its page (src/manualUpdate.js). The page address is kept here, the window never sends one.
+const USES_MANUAL_UPDATE = process.platform === 'darwin';
+let manualUpdateUrl = null;
+
+async function checkManualUpdate() {
+  const result = await manualUpdate.checkLatest({ currentVersion: app.getVersion() });
+  manualUpdateUrl = result.status === 'available' ? result.url : null;
+  if (result.status === 'available') sendUpdateStatus('available', { version: result.version, manual: true });
+  return result;
+}
+
+function setupManualUpdater() {
+  const updateChecker = createUpdateChecker({ check: checkManualUpdate, focusGapMs: UPDATE_FOCUS_RECHECK_MS });
+  setTimeout(() => { void updateChecker.run(); }, UPDATE_FIRST_CHECK_DELAY_MS);
+  setInterval(() => { void updateChecker.run(); }, UPDATE_CHECK_INTERVAL_MS);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.on('focus', () => { void updateChecker.onFocus(); });
+  }
+}
+
 function setupAutoUpdater() {
+  if (USES_MANUAL_UPDATE) {
+    setupManualUpdater();
+    return;
+  }
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
 
@@ -333,8 +419,19 @@ app.whenReady().then(() => {
 
 // SFTP 별도 창 저장소
 const sftpWindows = new Map();
+// The folders each SFTP window shows now (reported by the window), handed back when it closes
+const sftpWindowPaths = new Map();
+ipcMain.on('sftp-window-paths', (event, { sessionId, localPath, remotePath } = {}) => {
+  const win = sftpWindows.get(sessionId);
+  // Only the SFTP window of that session may report for it
+  if (!win || win.isDestroyed() || event.sender !== win.webContents) return;
+  if (typeof localPath !== 'string' || typeof remotePath !== 'string' || localPath.length > 4096 || remotePath.length > 4096) return;
+  sftpWindowPaths.set(sessionId, { localPath, remotePath });
+});
 
 function createSftpWindow(sessionId, localPath, remotePath, title) {
+  // Acrylic behind this window too when glass is chosen (see glassWindowOptions)
+  const glassOptions = glassWindowOptions();
   const sftpWindow = new BrowserWindow({
     icon: WINDOW_ICON,
     width: 900,
@@ -343,6 +440,7 @@ function createSftpWindow(sessionId, localPath, remotePath, title) {
     minHeight: 400,
     frame: false,
     backgroundColor: '#1e1e2e',
+    ...glassOptions,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -350,6 +448,7 @@ function createSftpWindow(sessionId, localPath, remotePath, title) {
       preload: path.join(__dirname, '../preload/index.js')
     }
   });
+  registerGlassWindow(sftpWindow, glassOptions);
 
   // Pass session info via query params
   const params = new URLSearchParams({
@@ -381,12 +480,21 @@ function createSftpWindow(sessionId, localPath, remotePath, title) {
 
   sftpWindow.on('closed', () => {
     sftpWindows.delete(sessionId);
+    // The docked panel was hidden while this window was open: tell the main window to show it again,
+    // in the folders this window was last showing
+    const last = sftpWindowPaths.get(sessionId) || {};
+    sftpWindowPaths.delete(sessionId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('sftp-window-closed', { sessionId, localPath: last.localPath, remotePath: last.remotePath });
+    }
   });
 
   return sftpWindow;
 }
 
 function createTerminalWindow(sessionId, title) {
+  // Acrylic behind this window too when glass is chosen (see glassWindowOptions)
+  const glassOptions = glassWindowOptions();
   const terminalWindow = new BrowserWindow({
     icon: WINDOW_ICON,
     width: 800,
@@ -395,6 +503,7 @@ function createTerminalWindow(sessionId, title) {
     minHeight: 300,
     frame: false,
     backgroundColor: '#1e1e2e',
+    ...glassOptions,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -402,6 +511,7 @@ function createTerminalWindow(sessionId, title) {
       preload: path.join(__dirname, '../preload/index.js')
     }
   });
+  registerGlassWindow(terminalWindow, glassOptions);
 
   const params = new URLSearchParams({
     terminalMode: 'true',
@@ -514,6 +624,8 @@ function createRemoteFileWindow(docId) {
 const remoteBackupRoot = () => path.join(app.getPath('documents'), REMOTE_FILE_BACKUP_FOLDER);
 
 const remoteDocuments = createRemoteDocuments({
+  // A container's log is shown in the same window as a followed file (src/containers/logs.js)
+  containerLogs: createContainerLogs({ connectionOf: (sessionId) => sshConnections.get(sessionId)?.conn || null }),
   openSftp: (sessionId) => new Promise((resolve, reject) => {
     const session = sshConnections.get(sessionId);
     if (!session || !session.conn) return reject(Object.assign(new Error('no connection'), { code: 'NO_CONNECTION' }));
@@ -547,6 +659,9 @@ const remoteFileIpc = registerRemoteFileIpc({
   createWindow: createRemoteFileWindow,
   // Followed logs stop while the app is locked
   isLocked: () => isAppLocked,
+  // The container log window opens from the main window's panel, for a container it listed
+  fromMainWindow: (event) => fromMainWindow(event),
+  isKnownContainer: (sessionId, name) => containers.isKnown(sessionId, name),
   openFolder: async (dir) => {
     await fs.promises.mkdir(dir, { recursive: true });
     const failure = await shell.openPath(dir);
@@ -871,9 +986,10 @@ app.on('window-all-closed', () => {
   sshConnections.forEach(({ conn }) => {
     try { conn.end(); } catch (e) {}
   });
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  // 이 핸들러는 이미 MCP 종료·SSH 정리까지 하므로, 창을 모두 닫으면 플랫폼과 무관하게 종료한다.
+  // macOS 기본값(창을 닫아도 유지)으로 두면, 정리가 끝난 반쯤 죽은 상태로 앱만 Dock 에 남는다
+  // (단일 창 앱이고 창을 되살릴 경로도 없다). 그래서 Windows 와 같이 바로 종료한다.
+  app.quit();
 });
 
 // ==================== Master Password Handlers ====================
@@ -1595,6 +1711,36 @@ ipcMain.handle('import-sessions', async (event, mode) => {
 });
 
 // 창 컨트롤 - 요청한 창에서 실행
+// Glass surface style. The renderer tells what settings chose (kept for the next start, when the main
+// window can be created with acrylic) and asks whether its window has the material now.
+// Main window only; the stored value is two fixed words, whatever is sent.
+let mainWindowHasBackdrop = false;
+let mainWindowFill = null;
+ipcMain.on('appearance-set', (event, value) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) return;
+  try {
+    const saved = nativeBackdrop.writeAppearance(app.getPath('userData'), value);
+    if (mainWindowHasBackdrop) require('electron').nativeTheme.themeSource = saved.scheme;
+  } catch (error) {
+    console.error('appearance.json could not be written:', error.message);
+  }
+});
+ipcMain.handle('appearance-backdrop', (event) => ({
+  // Drawn behind this window right now
+  active: glassWindows.has(BrowserWindow.fromWebContents(event.sender)),
+  // Could be drawn after a restart with glass chosen
+  supported: nativeBackdrop.supportsAcrylic(process.platform, require('os').release())
+}));
+
+// See-through window: the sender's own window only, and never fainter than half (a window that cannot
+// be seen cannot be found again). The renderer keeps the setting and sends it on start.
+ipcMain.on('window-set-opacity', (event, opacity) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return;
+  const value = typeof opacity === 'number' && Number.isFinite(opacity) ? Math.min(1, Math.max(0.5, opacity)) : 1;
+  win.setOpacity(value);
+});
+
 ipcMain.on('window-minimize', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win) win.minimize();
@@ -1603,7 +1749,11 @@ ipcMain.on('window-minimize', (event) => {
 ipcMain.on('window-maximize', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win) {
-    if (win.isMaximized()) {
+    const fill = glassWindows.get(win);
+    if (fill) {
+      // A window with acrylic must not be maximized (the material is lost): it fills the work area
+      fill.toggle();
+    } else if (win.isMaximized()) {
       win.unmaximize();
     } else {
       win.maximize();
@@ -1773,10 +1923,9 @@ function reconnectOnce(sessionId, connState, verifierFor) {
         }
 
         // Clean up old connection if exists
+        // (only this tab's channel when the old connection is shared with a tab made from a split shell)
         const oldConn = sshConnections.get(sessionId);
-        if (oldConn) {
-          try { oldConn.conn.end(); } catch (e) {}
-        }
+        if (oldConn) sharedConn.release(sshConnections, sessionId, oldConn);
 
         sshConnections.set(sessionId, { conn, stream });
         setupRemoteForwardHandler(sessionId, conn);
@@ -2128,24 +2277,34 @@ ipcMain.handle('ssh-exec-command', async (event, { sessionId, command }) => {
   });
 });
 
+// Docker containers of a tab's server (src/containers): listed only while the user has the panel open
+const containers = registerContainerIpc({
+  ipcMain,
+  connectionOf: (sessionId) => sshConnections.get(sessionId)?.conn || null,
+  fromMainWindow: (event) => fromMainWindow(event),
+  isLocked: () => isAppLocked
+});
+
 // SSH 연결 종료
 ipcMain.on('ssh-disconnect', (event, { sessionId }) => {
   endSessionLog(sessionId);
+  containers.forget(sessionId);
   const session = sshConnections.get(sessionId);
   if (session) {
-    session.conn.end();
-    // Jump Host 연결도 종료
-    if (session.jumpConn) {
-      try { session.jumpConn.end(); } catch (e) {}
-    }
+    // Off the list first: the shell's late close event then sees it is not this tab's news
     sshConnections.delete(sessionId);
+    // The connection (and its jump host) ends unless a tab made from one of its split shells still
+    // uses it; then only this tab's shell closes and the connection ends with the last such tab
+    sharedConn.release(sshConnections, sessionId, session);
   }
 
-  // Clean up any split terminal streams
+  // Clean up any split terminal streams (close(), not end(): on a connection that stays open a PTY
+  // shell would ignore the EOF and remain on the server)
   for (const [key, stream] of sshStreams.entries()) {
     if (key.startsWith(sessionId + ':')) {
-      try { stream.end(); } catch (e) {}
+      try { stream.close(); } catch (e) {}
       sshStreams.delete(key);
+      splitStreamHandlers.delete(key);
     }
   }
 
@@ -2229,7 +2388,7 @@ ipcMain.handle('ssh-create-shell', async (event, { sessionId }) => {
         sshStreams.set(streamId, stream);
         console.log(`[split] opened ${streamId} openChannels=${openChannelCount(session.conn)}`);
 
-        stream.on('data', (data) => {
+        const onData = (data) => {
           const targetWindow = getWindowForSession(sessionId);
           if (targetWindow) {
             targetWindow.webContents.send('ssh-split-data', {
@@ -2238,16 +2397,19 @@ ipcMain.handle('ssh-create-shell', async (event, { sessionId }) => {
               data: data.toString('utf-8')
             });
           }
-        });
-
-        stream.on('close', () => {
+        };
+        const onClose = () => {
           sshStreams.delete(streamId);
+          splitStreamHandlers.delete(streamId);
           console.log(`[split] closed ${streamId} openChannels=${openChannelCount(session.conn)}`);
           const targetWindow = getWindowForSession(sessionId);
           if (targetWindow) {
             targetWindow.webContents.send('ssh-split-closed', { streamId, sessionId });
           }
-        });
+        };
+        stream.on('data', onData);
+        stream.on('close', onClose);
+        splitStreamHandlers.set(streamId, { onData, onClose });
 
         resolve({ success: true, streamId });
       });
@@ -2263,6 +2425,64 @@ ipcMain.handle('ssh-create-shell', async (event, { sessionId }) => {
   }
 
   return result;
+});
+
+// A split shell becomes a tab of its own, as it is: the same channel on the same SSH connection gets
+// a session id, so everything that works per tab (SFTP, more splits, log, duplicate, reconnect) works
+// for it. The window names an open split shell and nothing else; the connection and the login come
+// from the tab the shell was split from.
+ipcMain.handle('ssh-adopt-split', (event, payload) => {
+  if (!fromMainWindow(event)) return { success: false, error: '본창에서만 할 수 있습니다.' };
+  if (isAppLocked) return { success: false, error: '앱 잠금을 해제하세요.' };
+  const streamId = payload && typeof payload.streamId === 'string' ? payload.streamId : '';
+  const stream = sshStreams.get(streamId);
+  const handlers = splitStreamHandlers.get(streamId);
+  const ownerId = streamId.split(':')[0];
+  const owner = sshConnections.get(ownerId);
+  const ownerState = connectionStates.get(ownerId);
+  if (!stream || !handlers || !owner || !ownerState || !ownerState.config) {
+    return { success: false, error: '옮길 셸을 찾지 못했습니다.' };
+  }
+
+  const sessionId = sharedConn.newSessionId(sshConnections);
+  // From here on the shell is the new tab's: its output goes out as that tab's, and its end is
+  // handled like any tab's shell (ended by itself: say so; lost: reconnect with a connection of its own)
+  stream.removeListener('data', handlers.onData);
+  stream.removeListener('close', handlers.onClose);
+  sshStreams.delete(streamId);
+  splitStreamHandlers.delete(streamId);
+  sshConnections.set(sessionId, { conn: owner.conn, stream, jumpConn: owner.jumpConn || null });
+  connectionStates.set(sessionId, {
+    state: ConnectionState.CONNECTED,
+    config: { ...ownerState.config },
+    retryCount: 0,
+    autoReconnect: ownerState.autoReconnect
+  });
+
+  stream.on('data', (data) => {
+    if (sessionLogger) sessionLogger.write(sessionId, data);
+    const targetWindow = getWindowForSession(sessionId);
+    if (targetWindow) targetWindow.webContents.send('ssh-data', { sessionId, data: data.toString('utf-8') });
+  });
+  let shellExit = null;
+  stream.on('exit', (code, signal) => { shellExit = { code, signal }; });
+  stream.on('close', () => {
+    // Replaced by a reconnect, or closed with its tab: not this tab's news
+    if (sshConnections.get(sessionId)?.stream !== stream) return;
+    if (endedByItself(shellExit)) return reportShellExit(sessionId);
+    const connState = connectionStates.get(sessionId);
+    if (connState && connState.autoReconnect) {
+      updateConnectionState(sessionId, ConnectionState.RECONNECTING);
+      attemptReconnect(sessionId);
+    } else {
+      const targetWindow = getWindowForSession(sessionId);
+      if (targetWindow) targetWindow.webContents.send('ssh-closed', { sessionId });
+      updateConnectionState(sessionId, ConnectionState.DISCONNECTED);
+      endSessionLog(sessionId);
+    }
+  });
+  console.log(`[split] ${streamId} became tab ${sessionId} openChannels=${openChannelCount(owner.conn)}`);
+  return { success: true, sessionId };
 });
 
 // Send data to split terminal stream
@@ -2293,6 +2513,7 @@ ipcMain.on('ssh-split-close', (event, { streamId }) => {
     // new channels. close() sends CHANNEL_CLOSE and the server ends the session.
     try { stream.close(); } catch (e) {}
     sshStreams.delete(streamId);
+    splitStreamHandlers.delete(streamId);
     const session = sshConnections.get(sessionId);
     console.log(`[split] close requested ${streamId} openChannels(before server ack)=${openChannelCount(session && session.conn)}`);
   } else {
@@ -2316,10 +2537,8 @@ ipcMain.handle('ssh-reconnect-now', async (event, payload) => {
   const old = sshConnections.get(sessionId);
   if (old) {
     sshConnections.delete(sessionId);
-    try { old.conn.end(); } catch (e) { /* already closed */ }
-    if (old.jumpConn) {
-      try { old.jumpConn.end(); } catch (e) { /* already closed */ }
-    }
+    // Only this tab's shell when a tab made from a split shell still uses the old connection
+    sharedConn.release(sshConnections, sessionId, old);
   }
   try {
     const result = await checkHostKeyAsking((verifierFor) => openShellConnection(sessionId, connState.config, verifierFor));
@@ -2348,6 +2567,11 @@ ipcMain.handle('ssh-cancel-reconnect', (event, { sessionId }) => {
 // event at all when it skips the check (unpackaged dev app), so the renderer would wait forever.
 ipcMain.handle('check-for-updates', async () => {
   try {
+    if (USES_MANUAL_UPDATE) {
+      if (!app.isPackaged) return { success: true, status: 'unsupported' };
+      const latest = await checkManualUpdate();
+      return { success: true, status: latest.status, version: latest.version };
+    }
     const result = await autoUpdater.checkForUpdates();
     if (!result) return { success: true, status: 'unsupported' };
     return {
@@ -2361,6 +2585,7 @@ ipcMain.handle('check-for-updates', async () => {
 });
 
 ipcMain.handle('download-update', async () => {
+  if (USES_MANUAL_UPDATE) return { success: false, error: '이 빌드는 자동으로 업데이트할 수 없습니다' };
   try {
     await autoUpdater.downloadUpdate();
     return { success: true };
@@ -2370,9 +2595,17 @@ ipcMain.handle('download-update', async () => {
 });
 
 ipcMain.handle('install-update', () => {
+  if (USES_MANUAL_UPDATE) return;
   // Silent: the installer runs without its pages, into the folder the app is installed in, and starts
   // the app again when it is done
   autoUpdater.quitAndInstall(true, true);
+});
+
+// Opens the release page of the version the last check found (macOS). Takes no address from the window.
+ipcMain.handle('open-update-page', async (event) => {
+  if (!fromMainWindow(event) || !manualUpdateUrl) return { success: false };
+  await shell.openExternal(manualUpdateUrl);
+  return { success: true };
 });
 
 ipcMain.handle('get-app-version', () => {
@@ -2693,9 +2926,9 @@ const sftpSessions = new Map();
 
 // SFTP 세션 열기
 ipcMain.handle('sftp-open', async (event, { sessionId }) => {
-  // 이미 SFTP 세션이 열려있으면 그대로 사용
+  // 이미 SFTP 세션이 열려있으면 그대로 사용 (alreadyOpen: the panel then neither announces it nor reloads)
   if (sftpSessions.has(sessionId)) {
-    return { success: true };
+    return { success: true, alreadyOpen: true };
   }
 
   const session = sshConnections.get(sessionId);
@@ -3378,6 +3611,26 @@ ipcMain.handle('sftp-queue-upload', (event, { sessionId, localPath, remotePath }
   const queue = getTransferQueue(sessionId);
   const id = queue.add({ type: 'upload', localPath, remotePath });
   return { success: true, transferId: id };
+});
+
+// Recursive folder download (src/sftpDownloadDir.js): the same folders on this PC, every file through the
+// transfer queue. Links are not followed and names this PC cannot take are left out; the answer lists them.
+ipcMain.handle('sftp-download-directory', async (event, { sessionId, remoteDir, localDir }) => {
+  const sftp = sftpSessions.get(sessionId);
+  if (!sftp) {
+    throw new Error('SFTP 세션이 없습니다.');
+  }
+  if (typeof remoteDir !== 'string' || typeof localDir !== 'string' || !path.isAbsolute(localDir)) {
+    throw new Error('폴더 경로가 올바르지 않습니다.');
+  }
+  const queue = getTransferQueue(sessionId);
+  const result = await downloadDirectory({
+    platform: process.platform,
+    readdir: (dir) => new Promise((resolve, reject) => sftp.readdir(dir, (err, list) => (err ? reject(err) : resolve(list)))),
+    mkdir: (dir) => fs.promises.mkdir(dir, { recursive: true }),
+    queueDownload: ({ remotePath, localPath }) => queue.add({ type: 'download', remotePath, localPath })
+  }, remoteDir, localDir);
+  return { success: true, ...result };
 });
 
 // Recursive folder upload

@@ -1,5 +1,18 @@
+import { useEffect, useRef, useState } from 'react'
+import { RxDragHandleDots2 } from 'react-icons/rx'
+import { perFrame } from '../../lib/throttle'
+import { QUEUE_HEIGHT_STORAGE_KEY, LISTS_MIN_HEIGHT, clampQueueHeight, maxQueueHeight, parseQueueHeight } from '../../lib/transferQueueHeight'
+
+function readQueueHeight(): number {
+  try {
+    return parseQueueHeight(localStorage.getItem(QUEUE_HEIGHT_STORAGE_KEY))
+  } catch {
+    return parseQueueHeight(null)
+  }
+}
+
 import { useSftpStore, Transfer } from '../../stores/sftpStore'
-import { RiCheckboxCircleFill, RiErrorWarningFill, RiPauseFill, RiPlayFill, RiCloseFill, RiDeleteBinFill } from 'react-icons/ri'
+import { RiCheckboxCircleFill, RiErrorWarningFill, RiPauseFill, RiPlayFill, RiCloseFill, RiDeleteBinFill, RiUploadLine, RiDownloadLine } from 'react-icons/ri'
 
 const LOCAL_WRITE_DENIED = /\b(EPERM|EACCES)\b/
 
@@ -15,10 +28,15 @@ interface TransferQueueProps {
   sessionId: string
   /** Hide the queue panel (the SFTP toolbar button shows it again) */
   onClose?: () => void
+  /**
+   * The drag asks for more height than the container can give: the host may make the container this
+   * tall (the bottom panel does; the popped-out window is as tall as its window).
+   */
+  onNeedRoom?: (containerHeight: number) => void
 }
 
 /** Transfer list view. Queue sync with the main process lives in useTransferQueue. */
-export function TransferQueue({ sessionId, onClose }: TransferQueueProps) {
+export function TransferQueue({ sessionId, onClose, onNeedRoom }: TransferQueueProps) {
   const store = useSftpStore()
   const transfers = store.transfers(sessionId)
 
@@ -76,11 +94,85 @@ export function TransferQueue({ sessionId, onClose }: TransferQueueProps) {
     await window.electronAPI.sftpQueueClearCompleted(sessionId)
   }
 
+  // Height: dragged by the header, remembered across sessions. Measured from the queue's own bottom
+  // edge, and from where in the header the press landed, so nothing jumps when the drag starts.
+  const rootRef = useRef<HTMLDivElement>(null)
+  const [height, setHeight] = useState(readQueueHeight)
+  const [isResizing, setIsResizing] = useState(false)
+  const grabOffset = useRef(0)
+  const onNeedRoomRef = useRef(onNeedRoom)
+  onNeedRoomRef.current = onNeedRoom
+
+  const startResize = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || (event.target as Element).closest('button')) return
+    event.preventDefault()
+    grabOffset.current = event.clientY - event.currentTarget.getBoundingClientRect().top
+    setIsResizing(true)
+  }
+
+  useEffect(() => {
+    if (!isResizing) return
+    let latest = height
+    let lastY = 0
+    // Follow-ups left for the current pointer position (see below); a new mouse move refills them
+    let followUps = 0
+    const apply = perFrame((clientY: number) => {
+      const root = rootRef.current
+      if (!root) return
+      const bottom = root.getBoundingClientRect().bottom
+      const containerHeight = root.parentElement?.clientHeight ?? window.innerHeight
+      const wanted = bottom - (clientY - grabOffset.current)
+      latest = clampQueueHeight(wanted, containerHeight)
+      setHeight(latest)
+      if (wanted > maxQueueHeight(containerHeight)) {
+        // Dragged past what fits: ask the host to make the container tall enough (an absolute height,
+        // not a step: steps sent every frame before the layout caught up added up and overshot).
+        onNeedRoomRef.current?.(Math.ceil(wanted + LISTS_MIN_HEIGHT))
+        // The container grows on the next render with no mouse move to tell us: look again then, so
+        // the queue reaches the pointer. Limited, because the host may refuse (panel at its maximum).
+        if (followUps > 0) {
+          followUps--
+          apply(clientY)
+        }
+      }
+    })
+    const onMove = (event: MouseEvent) => {
+      lastY = event.clientY
+      followUps = 3
+      apply(lastY)
+    }
+    let settle = 0
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      // A few frames for pending follow-ups (the panel may still be growing), then keep the result
+      settle = window.setTimeout(() => {
+        apply.cancel()
+        setIsResizing(false)
+        try {
+          localStorage.setItem(QUEUE_HEIGHT_STORAGE_KEY, String(latest))
+        } catch {
+          // Not remembered this time
+        }
+      }, 90)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+    return () => {
+      window.clearTimeout(settle)
+      apply.cancel()
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isResizing])
+
   const hasCompletedOrError = transfers.some(t => t.status === 'completed' || t.status === 'error')
 
   return (
-    <div className="transfer-queue">
-      <div className="transfer-header">
+    <div ref={rootRef} className={`transfer-queue ${isResizing ? 'is-resizing' : ''}`} style={{ height }}>
+      {/* The header is the resize handle: drag it up or down (its buttons are not part of the handle) */}
+      <div className="transfer-header" onMouseDown={startResize} title="끌어서 전송 큐 높이 조절">
+        <span className="transfer-header-grip" aria-hidden="true"><RxDragHandleDots2 size={16} /></span>
         <span>전송 큐 ({transfers.filter(t => t.status === 'active' || t.status === 'queued').length})</span>
         <div className="transfer-header-actions">
           {hasCompletedOrError && (
@@ -106,6 +198,20 @@ export function TransferQueue({ sessionId, onClose }: TransferQueueProps) {
         {transfers.map((transfer) => (
           <div key={transfer.id} className={`transfer-item ${transfer.status}`}>
             <div className="transfer-info">
+              {/* Which way the file goes, and from where to where (the full paths are in the hint) */}
+              <span
+                className={`transfer-direction is-${transfer.type}`}
+                title={transfer.type === 'upload'
+                  ? `업로드
+${transfer.localPath}
+→ ${transfer.remotePath}`
+                  : `다운로드
+${transfer.remotePath}
+→ ${transfer.localPath}`}
+              >
+                {transfer.type === 'upload' ? <RiUploadLine size={13} /> : <RiDownloadLine size={13} />}
+                {transfer.type === 'upload' ? '업로드' : '다운로드'}
+              </span>
               <span className="transfer-name" title={transfer.fileName}>{transfer.fileName}</span>
               <span className={`transfer-status ${transfer.status}`}>
                 {getStatusIcon(transfer)}

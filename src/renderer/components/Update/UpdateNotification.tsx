@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { RiDownload2Fill, RiRefreshLine, RiCloseFill, RiCheckboxCircleFill, RiInformationFill, RiRestartFill } from 'react-icons/ri'
+import { RiDownload2Fill, RiRefreshLine, RiCloseFill, RiCheckboxCircleFill, RiInformationFill, RiRestartFill, RiExternalLinkLine } from 'react-icons/ri'
 import { useUpdateStore } from '../../stores/updateStore'
 import { toast } from '../../stores/toastStore'
 import { isUpdateNoticeVisible, resolveManualCheck, type UpdateCheckResult } from '../../lib/updateCheck'
@@ -25,7 +25,8 @@ export function UpdateNotification() {
             status: 'available',
             version: data.version,
             releaseDate: data.releaseDate,
-            releaseNotes: data.releaseNotes
+            releaseNotes: data.releaseNotes,
+            manual: data.manual === true
           })
           break
         case 'not-available':
@@ -55,6 +56,15 @@ export function UpdateNotification() {
   const handleDownload = async () => {
     setInfo({ status: 'downloading', percent: 0 })
     await window.electronAPI.downloadUpdate?.()
+  }
+
+  const handleOpenPage = async () => {
+    try {
+      const result = await window.electronAPI.openUpdatePage?.()
+      if (!result?.success) toast.error('업데이트', '다운로드 페이지를 열지 못했습니다.')
+    } catch {
+      toast.error('업데이트', '다운로드 페이지를 열지 못했습니다.')
+    }
   }
 
   const handleInstall = () => {
@@ -93,10 +103,17 @@ export function UpdateNotification() {
                   새 버전 <strong>v{info.version}</strong> 사용 가능
                 </span>
               </div>
-              <button className="update-action-btn update-download-btn" onClick={handleDownload}>
-                <RiDownload2Fill size={16} />
-                다운로드
-              </button>
+              {info.manual ? (
+                <button className="update-action-btn update-download-btn" onClick={() => void handleOpenPage()} title="브라우저에서 다운로드 페이지를 엽니다">
+                  <RiExternalLinkLine size={16} />
+                  다운로드 페이지
+                </button>
+              ) : (
+                <button className="update-action-btn update-download-btn" onClick={handleDownload}>
+                  <RiDownload2Fill size={16} />
+                  다운로드
+                </button>
+              )}
               <button className="update-dismiss-btn" onClick={handleDismiss}>
                 <RiCloseFill size={16} />
               </button>

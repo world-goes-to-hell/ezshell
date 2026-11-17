@@ -1,7 +1,6 @@
-import { useState, useRef, useEffect } from 'react'
-import { RiCloseLine, RiAddLine, RiDatabase2Line, RiFolderLine, RiSplitCellsHorizontal, RiComputerLine } from 'react-icons/ri'
+import { useState, type ReactNode } from 'react'
+import { RiCloseLine, RiDatabase2Line, RiFolderLine, RiSplitCellsHorizontal, RiComputerLine } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
-import { useSessionStore } from '../../stores/sessionStore'
 import { useSessionLogStore } from '../../stores/sessionLogStore'
 import { readableTextColor } from '../../lib/colorContrast'
 
@@ -12,7 +11,8 @@ interface SplitPaneTabBarProps {
   isActivePane: boolean  // 이 pane이 현재 포커스 상태인지
   onTabSelect: (terminalId: string) => void
   onTabClose: (terminalId: string) => void
-  onAddTab: (session: any) => void
+  /** The + menu shown right after the tabs (same menu as the single tab bar) */
+  newTabMenu?: ReactNode
   onUnsplit?: () => void
   onSftpToggle?: () => void
   sftpOpen?: boolean
@@ -29,7 +29,7 @@ export function SplitPaneTabBar({
   isActivePane,
   onTabSelect,
   onTabClose,
-  onAddTab,
+  newTabMenu,
   onUnsplit,
   onSftpToggle,
   sftpOpen,
@@ -39,29 +39,10 @@ export function SplitPaneTabBar({
   onTabDrop,
   draggingTabId
 }: SplitPaneTabBarProps) {
-  const [dropdownOpen, setDropdownOpen] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
-  const dropdownRef = useRef<HTMLDivElement>(null)
 
   const terminals = useTerminalStore(state => state.terminals)
   const sessionLogFiles = useSessionLogStore(state => state.files)
-  const { sessions } = useSessionStore()
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownOpen && dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [dropdownOpen])
-
-  const handleSessionSelect = (session: any) => {
-    setDropdownOpen(false)
-    onAddTab(session)
-  }
 
   // 활성 탭의 색상으로 header border 표시 (활성 패인일 때만)
   const activeTerminal = activeTerminalId ? terminals.get(activeTerminalId) : null
@@ -132,53 +113,25 @@ export function SplitPaneTabBar({
               {terminal.local && <RiComputerLine size={12} className="tab-local-icon" aria-label="로컬" />}
               <span className="split-pane-tab-name">{displayName}</span>
               {terminalId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[terminalId]}`} />}
-              {terminalIds.length > 1 && (
-                <button
-                  className="split-pane-tab-close"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onTabClose(terminalId)
-                  }}
-                  title="탭 닫기"
-                >
-                  <RiCloseLine size={16} />
-                </button>
-              )}
+              {/* Shown on a pane's only tab too: closing it ends the split (removeTerminalFromPane) */}
+              <button
+                className="split-pane-tab-close"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onTabClose(terminalId)
+                }}
+                title="탭 닫기"
+                aria-label="탭 닫기"
+              >
+                <RiCloseLine size={16} />
+              </button>
             </div>
           )
         })}
+        {newTabMenu}
       </div>
 
       <div className="split-pane-actions">
-        {/* Add tab dropdown */}
-        <div className="split-new-dropdown-container" ref={dropdownRef}>
-          <button
-            className="split-pane-btn"
-            onClick={() => setDropdownOpen(!dropdownOpen)}
-            title="새 세션 추가"
-          >
-            <RiAddLine size={16} />
-          </button>
-          {dropdownOpen && (
-            <div className="split-new-dropdown">
-              <div className="split-new-dropdown-title">세션 선택</div>
-              {sessions.length > 0 ? (
-                sessions.map(session => (
-                  <div
-                    key={session.id}
-                    className="split-new-dropdown-item"
-                    onClick={() => handleSessionSelect(session)}
-                  >
-                    {session.name || `${session.username}@${session.host}`}
-                  </div>
-                ))
-              ) : (
-                <div className="split-new-dropdown-empty">저장된 세션 없음</div>
-              )}
-            </div>
-          )}
-        </div>
-
         {/* SFTP toggle */}
         {onSftpToggle && (
           <button

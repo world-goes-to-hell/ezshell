@@ -25,10 +25,10 @@ export function PopoutTitleBar({ icon, title, subtitle, actions }: PopoutTitleBa
       <div className="title-bar-controls">
         {actions}
         {actions && <span className="popout-title-separator" aria-hidden="true" />}
-        <button className="title-bar-btn" onClick={() => window.electronAPI.minimizeWindow()} title="최소화" aria-label="최소화">
+        <button className="title-bar-btn title-bar-min" onClick={() => window.electronAPI.minimizeWindow()} title="최소화" aria-label="최소화">
           <RiSubtractFill size={18} />
         </button>
-        <button className="title-bar-btn" onClick={() => window.electronAPI.maximizeWindow()} title="최대화" aria-label="최대화">
+        <button className="title-bar-btn title-bar-max" onClick={() => window.electronAPI.maximizeWindow()} title="최대화" aria-label="최대화">
           <RiCheckboxBlankFill size={16} />
         </button>
         <button className="title-bar-btn title-bar-close" onClick={() => window.electronAPI.closeWindow()} title="닫기" aria-label="닫기">

@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
-import { RiAddFill, RiFolderFill, RiArrowLeftDoubleLine, RiPushpinLine, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill, RiListUnordered, RiClipboardFill, RiPlugLine } from 'react-icons/ri'
+import { RiAddFill, RiFolderFill, RiArrowLeftDoubleLine, RiPushpinLine, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill, RiListUnordered, RiClipboardFill, RiPlugLine, RiComputerLine } from 'react-icons/ri'
 import { motion } from 'framer-motion'
 import { SessionList } from './SessionList'
+import { LocalTerminalList } from './LocalTerminalList'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTerminalStore } from '../../stores/terminalStore'
@@ -26,9 +27,13 @@ interface SidebarProps {
   onImportSession?: (folderId?: string) => void
   onStatsClick?: () => void
   onBatchClick?: () => void
+  /** Opens a new local terminal tab (the + of the local terminal list) */
+  onLocalTerminal?: () => void
+  /** Closes a tab; used by the local terminal list */
+  onCloseTerminal?: (terminalId: string) => void
 }
 
-export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onImportSession, onStatsClick, onBatchClick }: SidebarProps) {
+export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onImportSession, onStatsClick, onBatchClick, onLocalTerminal, onCloseTerminal }: SidebarProps) {
   const { sidebarMode, toggleSidebarMode, setSidebarMode } = useUIStore()
   const { addFolder, saveToBackend } = useSessionStore()
   // Folded: a narrow rail of status dots that opens over the terminal while the pointer is on it
@@ -46,6 +51,11 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
   const lostTabs = useTerminalStore(state => {
     let count = 0
     state.terminals.forEach(t => { if (!t.connected && !t.db && !t.local) count++ })
+    return count
+  })
+  const localTabs = useTerminalStore(state => {
+    let count = 0
+    state.terminals.forEach(t => { if (t.local) count++ })
     return count
   })
   const mcpBusy = useMcpActivityStore(state => state.items.filter(item => item.state === 'running' || item.state === 'waiting').length)
@@ -162,20 +172,28 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
         <div className="rail-summary" aria-hidden="true">
           <div className="rail-group" title={`세션 · 연결된 탭 ${connectedTabs}개${lostTabs > 0 ? ` · 끊긴 탭 ${lostTabs}개` : ''}`}>
             <RiListUnordered size={16} />
-            <span className="rail-label">세션</span>
             {connectedTabs > 0 && <span className="rail-count is-connected">{connectedTabs}</span>}
             {lostTabs > 0 && <span className="rail-count is-lost">{lostTabs}</span>}
           </div>
+          {localTabs > 0 && (
+            <div className="rail-group" title={`로컬 터미널 ${localTabs}개`}>
+              <RiComputerLine size={16} />
+              <span className="rail-count">{localTabs}</span>
+            </div>
+          )}
           {mcpBusy > 0 && (
             <div className="rail-group" title={`MCP 요청 진행 중 ${mcpBusy}개`}>
               <RiPlugLine size={16} />
-              <span className="rail-label">MCP</span>
               <span className="rail-count is-busy">{mcpBusy}</span>
             </div>
           )}
         </div>
       )}
-      <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} onImportSession={onImportSession} />
+      {/* The list area: sessions above, the open local terminals (when there are any) below */}
+      <div className="sidebar-lists">
+        <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} onImportSession={onImportSession} />
+        {onCloseTerminal && <LocalTerminalList onOpen={onLocalTerminal} onClose={onCloseTerminal} />}
+      </div>
       {(onBatchClick || onStatsClick) && (
         <div className="sidebar-footer">
           {onBatchClick && (

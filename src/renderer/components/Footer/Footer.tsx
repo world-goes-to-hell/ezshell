@@ -4,6 +4,7 @@ import { VersionInfo } from '../Update/UpdateNotification'
 import { ZoomStatus } from '../Zoom/ZoomStatus'
 import { ZoomHud } from '../Zoom/ZoomHud'
 import { McpActivityIndicator } from '../Mcp/McpActivityIndicator'
+import { OpacityStatus } from './OpacityStatus'
 import { DbIndicator } from '../DbClient/DbIndicator'
 
 export function Footer() {
@@ -31,6 +32,7 @@ export function Footer() {
       </div>
       <div className="footer-right">
         <McpActivityIndicator />
+        <OpacityStatus />
         <ZoomStatus />
         <VersionInfo />
       </div>

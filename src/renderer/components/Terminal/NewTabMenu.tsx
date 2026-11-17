@@ -10,13 +10,15 @@ interface NewTabMenuProps {
   onNewSession: () => void
   /** A terminal of this PC */
   onLocalTerminal: () => void
+  /** Extra class for the + button (the split pane header styles it like its other buttons) */
+  triggerClassName?: string
 }
 
-export function NewTabMenu({ duplicateLabel, onDuplicate, onPickSession, onNewSession, onLocalTerminal }: NewTabMenuProps) {
+export function NewTabMenu({ duplicateLabel, onDuplicate, onPickSession, onNewSession, onLocalTerminal, triggerClassName }: NewTabMenuProps) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button type="button" className="new-tab-btn" title="새 탭" aria-label="새 탭">
+        <button type="button" className={`new-tab-btn ${triggerClassName ?? ''}`} title="새 탭" aria-label="새 탭">
           <RiAddLine size={18} />
         </button>
       </DropdownMenu.Trigger>

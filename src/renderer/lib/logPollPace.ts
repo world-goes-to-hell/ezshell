@@ -15,13 +15,30 @@ export interface PollPace {
 
 export const INITIAL_PACE: PollPace = { waitMs: POLL_IDLE_MS }
 
+/**
+ * 'file': a look is one SFTP stat. 'command': a look runs a command on the server (a container's
+ * log through `docker logs`), which costs it a process each time, so every wait is longer.
+ */
+export type PaceKind = 'file' | 'command'
+
+interface PaceRule { activeMs: number; idleMs: number; hiddenMs: number; retryMs: number }
+
+const RULES: Record<PaceKind, PaceRule> = {
+  file: { activeMs: POLL_ACTIVE_MS, idleMs: POLL_IDLE_MS, hiddenMs: POLL_HIDDEN_MS, retryMs: RETRY_MS },
+  command: { activeMs: 1000, idleMs: 5000, hiddenMs: 15000, retryMs: 5000 }
+}
+
+export const initialPace = (kind: PaceKind = 'file'): PollPace => ({ waitMs: RULES[kind].idleMs })
+export const retryWait = (kind: PaceKind = 'file'): number => RULES[kind].retryMs
+
 /** The pace after a look: new text speeds up to the active pace, a quiet look backs off */
-export function nextPace(pace: PollPace, hadNewText: boolean): PollPace {
-  if (hadNewText) return { waitMs: POLL_ACTIVE_MS }
-  return { waitMs: Math.min(POLL_IDLE_MS, pace.waitMs * 2) }
+export function nextPace(pace: PollPace, hadNewText: boolean, kind: PaceKind = 'file'): PollPace {
+  const rule = RULES[kind]
+  if (hadNewText) return { waitMs: rule.activeMs }
+  return { waitMs: Math.min(rule.idleMs, pace.waitMs * 2) }
 }
 
 /** A window nobody sees keeps the slow pace whatever the log does */
-export function waitFor(pace: PollPace, isHidden: boolean): number {
-  return isHidden ? POLL_HIDDEN_MS : pace.waitMs
+export function waitFor(pace: PollPace, isHidden: boolean, kind: PaceKind = 'file'): number {
+  return isHidden ? RULES[kind].hiddenMs : pace.waitMs
 }

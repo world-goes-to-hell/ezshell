@@ -4,7 +4,7 @@ import { PRESET_THEMES } from './presets'
 import { colorSchemeFor } from '../lib/colorScheme'
 
 // A preset lives twice: the TS definition (terminal colors, previews) and a [data-theme] CSS block (the UI).
-const css = ['../styles/variables.css', '../styles/themes-light.css']
+const css = ['../styles/variables.css', '../styles/themes-light.css', '../styles/themes-macos.css']
   .map(file => fs.readFileSync(new URL(file, import.meta.url), 'utf8'))
   .join('\n')
 
@@ -30,6 +30,17 @@ describe('preset themes', () => {
     expect(block!['--accent']).toBe(theme.colors.accent.toLowerCase())
     expect(block!['--on-accent']).toBeDefined()
     expect(block!['--error-text']).toBeDefined()
+  })
+
+  // The shape rules ([data-chrome="mac"]) assume curves: a mac-chrome theme left square would show round
+  // traffic lights on a square UI
+  it('give mac-chrome themes rounded corners, and only those', () => {
+    const mac = PRESET_THEMES.filter(t => t.chrome === 'mac')
+    expect(mac.map(t => t.id)).toEqual(['macos-light', 'macos-dark'])
+    for (const theme of mac) expect(cssBlock(theme.id)!['--radius-md']).toMatch(/^[1-9]\d*px$/)
+    for (const theme of PRESET_THEMES.filter(t => t.chrome !== 'mac')) {
+      expect(cssBlock(theme.id)!['--radius-md']).toBeUndefined()
+    }
   })
 
   it('put light-category themes on light backgrounds', () => {

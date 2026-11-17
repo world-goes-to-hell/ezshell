@@ -65,7 +65,7 @@ class DocumentError extends Error {
  * `openSftp(sessionId)` resolves with a new SFTP channel on the tab's connection (rejects without one).
  * `serverOf(sessionId)` gives { username, host } for the backup folder. `backups` is a backup store.
  */
-function createRemoteDocuments({ openSftp, serverOf, backups, newId = () => crypto.randomUUID(), tailTimeoutMs = TAIL_TIMEOUT_MS }) {
+function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = null, newId = () => crypto.randomUUID(), tailTimeoutMs = TAIL_TIMEOUT_MS }) {
   const docs = new Map()
   // One SFTP channel per tab connection, shared by its file windows: a server allows only a few
   // channels per connection (OpenSSH MaxSessions, 10 by default) and the tab's shells need them too.
@@ -91,6 +91,28 @@ function createRemoteDocuments({ openSftp, serverOf, backups, newId = () => cryp
       server: serverOf(sessionId) || {},
       ownerId: null, seen: null, canWrite: false, review: null, isSaving: false,
       // Following the end of a text preview: { generation, committed, pending } and whether a look is running
+      tail: null, isTailing: false
+    })
+    return { docId, existing: false }
+  }
+
+  /**
+   * A container's log (src/containers/logs.js) shown in the same window as a followed file. It has
+   * no file behind it: `container` names what is read, and the looks run a short command instead
+   * of reading the end of a file. The caller has checked the name against the tab's container list.
+   */
+  function registerContainerLog({ sessionId, sessionName, container }) {
+    if (typeof sessionId !== 'string' || !sessionId) throw new DocumentError(MESSAGES.noConnection)
+    if (!containerLogs || typeof container !== 'string' || !container) throw new DocumentError(MESSAGES.gone)
+    const existing = [...docs.values()].find(doc => doc.sessionId === sessionId && doc.container === container)
+    if (existing) return { docId: existing.docId, existing: true }
+    if (docs.size >= MAX_OPEN_DOCUMENTS) throw new DocumentError(MESSAGES.tooMany)
+    const docId = newId()
+    docs.set(docId, {
+      docId, sessionId, mode: 'tail', container, requestedPath: `컨테이너/${container}`,
+      sessionName: typeof sessionName === 'string' ? sessionName.slice(0, 200) : '',
+      server: serverOf(sessionId) || {},
+      ownerId: null, seen: null, canWrite: false, review: null, isSaving: false,
       tail: null, isTailing: false
     })
     return { docId, existing: false }
@@ -159,7 +181,22 @@ function createRemoteDocuments({ openSftp, serverOf, backups, newId = () => cryp
     return { kind: 'text', editable: true, path: seen.path, content: seen.content, canWrite }
   }
 
+  /** The last lines of a container's log; following goes on from the newest line's timestamp */
+  async function loadContainerLog(doc) {
+    const first = await containerLogs.read(doc.sessionId, doc.container)
+    if (!first.ok) throw new DocumentError(first.error)
+    const generation = ++followSeq
+    patch(doc.docId, { tail: { generation, committed: { since: first.last, seq: generation }, pending: null } })
+    return {
+      kind: 'text', editable: false, path: doc.requestedPath, content: first.text, truncated: false,
+      size: Buffer.byteLength(first.text), follow: { generation, cursor: generation },
+      // Each look runs a command on the server: the window looks less often than at a file
+      pace: 'command'
+    }
+  }
+
   async function loadPreview(doc) {
+    if (doc.container) return loadContainerLog(doc)
     const sftp = await sftpOf(doc)
     const { kind, mime } = doc.mode === 'tail' ? { kind: 'text' } : previewKind(doc.requestedPath)
     if (kind === 'text') {
@@ -201,6 +238,16 @@ function createRemoteDocuments({ openSftp, serverOf, backups, newId = () => cryp
     const base = pending && cursor === pending.seq ? pending : committed
     patch(docId, { isTailing: true })
     try {
+      if (doc.container) {
+        const look = await withTimeout(containerLogs.read(doc.sessionId, doc.container, { since: base.since }), tailTimeoutMs)
+        if (!look.ok) throw new DocumentError(look.error)
+        const next = { since: look.last, seq: ++followSeq }
+        const latest = docs.get(docId)
+        if (latest && latest.tail && latest.tail.generation === generation) {
+          patch(docId, { tail: { generation, committed: base, pending: next } })
+        }
+        return look.lines > 0 ? { status: 'append', text: look.text, cursor: next.seq } : { status: 'same', cursor: next.seq }
+      }
       const sftp = await sftpOf(doc)
       const { result, state } = await withTimeout(pollTail(sftp, base), tailTimeoutMs)
       const next = { ...state, seq: ++followSeq }
@@ -357,7 +404,7 @@ function createRemoteDocuments({ openSftp, serverOf, backups, newId = () => cryp
 
   const find = (docId) => docs.get(docId) || null
 
-  return { register, attach, load, tail, review, save, listBackups, readBackup, listServerBackups, readServerBackup, backupFolder, close, find }
+  return { register, registerContainerLog, attach, load, tail, review, save, listBackups, readBackup, listServerBackups, readServerBackup, backupFolder, close, find }
 }
 
 /** `promise`, or a DocumentError once `ms` passed without an answer. */

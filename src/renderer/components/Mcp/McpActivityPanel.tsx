@@ -135,14 +135,21 @@ export function McpActivityPanel({ variant = 'overlay' }: { variant?: 'overlay' 
   }
 
   return (
-    <aside className={`mcp-activity-panel view-${view}${isCollapsed ? ' is-collapsed' : ''}${isWindow ? ' is-window' : ''}`} id="mcp-activity-panel" role="complementary" aria-label="MCP 활동">
+    <>
+      {/* Collapsed: the panel is fully off screen, only this tab floats at the right edge so the
+          content behind stays whole (a full-height strip looked like the content was sliced off) */}
       {isCollapsed && (
-        <button type="button" className="mcp-activity-strip" onClick={() => setCollapsed(false)} aria-label="MCP 활동 펼치기" title="MCP 활동 펼치기">
-          {waiting > 0 && <span className="mcp-activity-strip-count is-waiting" title={`확인 대기 ${waiting}`}>{waiting}</span>}
-          {running > 0 && <span className="mcp-activity-strip-count is-running" title={`실행 중 ${running}`}>{running}</span>}
+        <button type="button" className="mcp-activity-tab" onClick={() => setCollapsed(false)} aria-label="MCP 활동 펼치기" title="MCP 활동 펼치기">
+          {(waiting > 0 || running > 0) && (
+            <span className="mcp-activity-tab-counts">
+              {waiting > 0 && <span className="mcp-activity-strip-count is-waiting" title={`확인 대기 ${waiting}`}>{waiting}</span>}
+              {running > 0 && <span className="mcp-activity-strip-count is-running" title={`실행 중 ${running}`}>{running}</span>}
+            </span>
+          )}
           <span className="mcp-activity-strip-label">MCP 활동</span>
         </button>
       )}
+      <aside className={`mcp-activity-panel view-${view}${isCollapsed ? ' is-collapsed' : ''}${isWindow ? ' is-window' : ''}`} id="mcp-activity-panel" role="complementary" aria-label="MCP 활동">
       {/* Off screen while collapsed: kept mounted so scroll positions survive, but out of reach of Tab */}
       <div className="mcp-activity-body" inert={isCollapsed}>
       <header className="mcp-activity-header">
@@ -203,5 +210,6 @@ export function McpActivityPanel({ variant = 'overlay' }: { variant?: 'overlay' 
       )}
       </div>
     </aside>
+    </>
   )
 }

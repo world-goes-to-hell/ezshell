@@ -1,0 +1,36 @@
+/* The app's own tooltip (lib/themedTooltip.ts), shown for `title` instead of the OS one.
+   Colors and corners come from the theme tokens, so every theme styles it. Above everything else:
+   a hint must not be hidden by the dialog or menu its button is in. */
+.app-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  max-width: min(360px, calc(100vw - 12px));
+  padding: 5px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-line; /* titles with line breaks keep them */
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.08s ease;
+}
+
+.app-tooltip.is-visible {
+  visibility: visible;
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-tooltip {
+    transition: none;
+  }
+}

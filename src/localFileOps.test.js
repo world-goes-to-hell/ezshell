@@ -89,6 +89,8 @@ describe('trashLocal', () => {
     }
     const good = path.join(dir, 'good')
     const bad = path.join(dir, 'bad')
+    fs.writeFileSync(good, 'x')
+    fs.writeFileSync(bad, 'x')
     const result = await trashLocal([good, bad], trashItem)
     expect(trashed).toEqual([good])
     expect(result.trashed).toBe(1)
@@ -100,6 +102,39 @@ describe('trashLocal', () => {
     const result = await trashLocal(['rel', path.parse(dir).root], trashItem)
     expect(result.trashed).toBe(0)
     expect(result.failures).toHaveLength(2)
+  })
+})
+
+describe('trashLocal path spelling', () => {
+  // Electron's shell.trashItem answers "Failed to parse path" for these spellings (measured on Windows)
+  it('hands the trash a normalized path whatever separators the caller used', async () => {
+    const trashed = []
+    const trashItem = async (p) => { trashed.push(p) }
+    fs.mkdirSync(path.join(dir, 'folder'))
+    fs.mkdirSync(path.join(dir, 'other'))
+    const forward = path.join(dir, 'folder').split(path.sep).join('/')
+    const doubled = dir + path.sep + path.sep + 'other'
+    const result = await trashLocal([forward, doubled], trashItem)
+    expect(result).toEqual({ trashed: 2, failures: [] })
+    expect(trashed).toEqual([path.join(dir, 'folder'), path.join(dir, 'other')])
+  })
+
+  it('names a missing item instead of passing it to the trash', async () => {
+    const trashItem = async () => { throw new Error('should not be called') }
+    const gone = path.join(dir, 'gone')
+    const result = await trashLocal([gone], trashItem)
+    expect(result.trashed).toBe(0)
+    expect(result.failures[0].path).toBe(gone)
+    expect(result.failures[0].error).toContain('찾을 수 없습니다')
+  })
+
+  it('still refuses a root reached through an odd spelling', async () => {
+    const trashItem = async () => { throw new Error('should not be called') }
+    const root = path.parse(dir).root
+    const result = await trashLocal([path.join(dir, '..', '..', '..', '..', '..', '..', '..', '..')], trashItem)
+    expect(result.trashed).toBe(0)
+    expect(result.failures).toHaveLength(1)
+    expect(path.resolve(path.join(dir, '..', '..', '..', '..', '..', '..', '..', '..'))).toBe(root)
   })
 })
 

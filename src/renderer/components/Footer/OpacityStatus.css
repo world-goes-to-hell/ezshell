@@ -1,0 +1,73 @@
+/* Window opacity control in the status bar (OpacityStatus.tsx). The button reuses .zoom-status. */
+
+.opacity-status {
+  position: relative;
+  display: flex;
+}
+
+.opacity-status-btn {
+  cursor: pointer;
+}
+
+.opacity-status-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Opens upward from the status bar, right-aligned to the button */
+.opacity-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 96; /* over the MCP panel (95), under dialogs (100) */
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 220px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.opacity-panel-head {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+.opacity-panel-value {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.opacity-panel input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.opacity-panel-reset {
+  align-self: flex-end;
+  padding: 4px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.opacity-panel-reset:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+[data-surface="glass"] .opacity-panel {
+  background: var(--glass-float);
+  border-color: var(--glass-edge);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}

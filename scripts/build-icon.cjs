@@ -1,5 +1,6 @@
-// Renders assets/icon.svg into assets/icon.ico (16-256px) and assets/icon.png (256px),
-// and writes the small-size SVG the title bar shows (src/renderer/assets/app-icon.svg).
+// Renders assets/icon.svg into assets/icon.ico (16-256px), assets/icon.png (256px) and
+// assets/icon.icns (32-1024px, for the macOS build), and writes the small-size SVG the
+// title bar shows (src/renderer/assets/app-icon.svg).
 // Usage: npm run build:icon            (optionally ICON_PREVIEW=<file.png> to also save a size sheet)
 // Runs inside Electron so Chromium rasterizes the SVG at every size (crisper than downscaling one bitmap).
 
@@ -7,11 +8,13 @@ const { app, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { encodeBmpEntry, packIco } = require('./ico.cjs');
+const { packIcns, ICNS_TYPE_BY_SIZE } = require('./icns.cjs');
 const { smallIconSvg } = require('./iconSvg.cjs');
 
 const ASSETS = path.join(__dirname, '..', 'assets');
 const TITLE_BAR_ICON = path.join(__dirname, '..', 'src', 'renderer', 'assets', 'app-icon.svg');
 const SIZES = [16, 20, 24, 32, 40, 48, 64, 256];
+const ICNS_SIZES = [32, 64, 128, 256, 512, 1024]; // macOS .icns slots (see icns.cjs)
 const PNG_ONLY_FROM = 256; // Windows expects PNG for the 256px entry
 const DETAIL_FROM = 32; // class="detail" elements are dropped below this size
 
@@ -84,13 +87,27 @@ async function main() {
 
   fs.writeFileSync(path.join(ASSETS, 'icon.ico'), packIco(images));
   fs.writeFileSync(path.join(ASSETS, 'icon.png'), dataUrlToBuffer(pngBySize[256]));
+
+  // macOS .icns: render the larger sizes Chromium did not already draw for the .ico
+  const icnsEntries = [];
+  for (const size of ICNS_SIZES) {
+    let png = pngBySize[size];
+    if (!png) {
+      const call = `(${renderInPage.toString()})(${JSON.stringify(svgText)}, ${size}, ${DETAIL_FROM})`;
+      png = (await win.webContents.executeJavaScript(call)).png;
+      pngBySize[size] = png;
+    }
+    icnsEntries.push({ type: ICNS_TYPE_BY_SIZE[size], data: dataUrlToBuffer(png) });
+  }
+  fs.writeFileSync(path.join(ASSETS, 'icon.icns'), packIcns(icnsEntries));
+
   fs.writeFileSync(TITLE_BAR_ICON, smallIconSvg(svgText));
 
   if (process.env.ICON_PREVIEW) {
     const sheet = await win.webContents.executeJavaScript(`(${previewInPage.toString()})(${JSON.stringify(pngBySize)})`);
     fs.writeFileSync(process.env.ICON_PREVIEW, dataUrlToBuffer(sheet));
   }
-  console.log(`icon.ico (${SIZES.join(', ')}) and icon.png written to ${ASSETS}; title bar icon: ${TITLE_BAR_ICON}`);
+  console.log(`icon.ico (${SIZES.join(', ')}), icon.png and icon.icns (${ICNS_SIZES.join(', ')}) written to ${ASSETS}; title bar icon: ${TITLE_BAR_ICON}`);
 }
 
 app.disableHardwareAcceleration();

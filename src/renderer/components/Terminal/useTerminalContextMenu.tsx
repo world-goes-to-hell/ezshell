@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import type { Terminal } from 'xterm'
 import {
   RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine,
-  RiLayoutLine, RiMagicLine, RiFileSearchLine, RiSearchLine, RiFindReplaceLine, RiFolderLine, RiCodeSSlashLine,
+  RiCloseLine, RiMagicLine, RiFileSearchLine, RiSearchLine, RiFindReplaceLine, RiFolderLine, RiCodeSSlashLine,
   RiTerminalBoxLine, RiFileCopy2Line, RiRecordCircleLine, RiStopCircleLine, RiFolderTransferLine, RiCloseCircleLine, RiFolderSharedLine, RiAddLine, RiSettings3Line, RiCheckboxBlankLine
 } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
@@ -14,6 +14,7 @@ import { useSnippetStore } from '../../stores/snippetStore'
 import { findQueryFromSelection } from '../../lib/terminalText'
 import { syncSftpToTerminal } from '../../lib/sftpSync'
 import { terminalPaneAt } from '../../lib/terminalPanes'
+import { MAIN_PANE, MAX_PANES, singlePane, leafCount, closePane, equalize, type PaneId } from '../../lib/splitTree'
 import { FIND_QUERY_MAX_LENGTH, type FindKind } from '../../lib/terminalFind'
 import { commonTerminalItems } from './terminalMenuCommon'
 import { TerminalContextMenu, MENU_SEPARATOR, type TerminalMenuGroup, type TerminalMenuItem } from './TerminalContextMenu'
@@ -27,6 +28,10 @@ const MAX_SNIPPETS_IN_MENU = 15
 
 /** How long the menu waits for the server to say what the right-clicked name is, before opening without it */
 const TARGET_WAIT_MS = 400
+
+/** A pane is not split when a half would be smaller than this (columns / rows of text) */
+const MIN_PANE_COLS = 20
+const MIN_PANE_ROWS = 5
 
 /** App.tsx opens the snippet manager when it hears this */
 export const OPEN_SNIPPET_MANAGER_EVENT = 'ezshell:open-snippet-manager'
@@ -52,7 +57,7 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
   onContextMenu: (event: MouseEvent) => void
   contextMenu: ReactNode
 } {
-  const [menu, setMenu] = useState<{ x: number; y: number; terminal: Terminal; target: TerminalTarget | null } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; terminal: Terminal; pane: PaneId; target: TerminalTarget | null } | null>(null)
   // Only the latest right-click may open the menu (an earlier one may still be asking the server)
   const requestRef = useRef(0)
   const [find, setFind] = useState<{ kind: FindKind; terminal: Terminal; query: string } | null>(null)
@@ -60,7 +65,8 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
   // A new snippet being written from the menu (its command starts as the selected text)
   const [snippetDraft, setSnippetDraft] = useState<{ command: string; terminal: Terminal } | null>(null)
   const tab = useTerminalStore(state => state.terminals.get(sessionId))
-  const setSplit = useTerminalStore(state => state.setSplit)
+  const splitTerminalPane = useTerminalStore(state => state.splitTerminalPane)
+  const setSplitTree = useTerminalStore(state => state.setSplitTree)
   const isLogging = useSessionLogStore(state => sessionId in state.files)
   const isSftpOpen = useSftpStore(state => state.isOpen(sessionId))
 
@@ -69,7 +75,9 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
     const terminal = terminalPaneAt(event.target)
     if (!terminal) return
     event.preventDefault()
-    const at = { x: event.clientX, y: event.clientY, terminal }
+    // The pane that was clicked: 분할 divides that one, 이 칸 닫기 closes that one
+    const pane = (event.target instanceof Element && event.target.closest('[data-pane]')?.getAttribute('data-pane')) || MAIN_PANE
+    const at = { x: event.clientX, y: event.clientY, terminal, pane }
     const request = ++requestRef.current
     const name = nameAtPointer(terminal, event.clientX, event.clientY)
     if (!name) {
@@ -93,6 +101,12 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
     const { terminal } = menu
     const selection = terminal.getSelection()
     const isSplit = tab?.isSplit === true
+    const tree = tab?.splitTree ?? singlePane()
+    const isFull = leafCount(tree) >= MAX_PANES
+    // A half of the clicked pane must still be usable as a terminal
+    const isTooNarrow = Math.floor(terminal.cols / 2) < MIN_PANE_COLS
+    const isTooShort = Math.floor(terminal.rows / 2) < MIN_PANE_ROWS
+    const refit = () => requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
     // Runs after the menu has closed, so the keyboard ends up in the terminal that was clicked
     const then = (action: () => void) => () => {
       action()
@@ -115,10 +129,28 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
         label: '분할',
         icon: RiLayoutColumnLine,
         items: [
-          { label: '좌우 분할', icon: RiSplitCellsHorizontal, onSelect: then(() => setSplit(sessionId, true, 'horizontal')) },
-          { label: '상하 분할', icon: RiSplitCellsVertical, onSelect: then(() => setSplit(sessionId, true, 'vertical')) },
-          { label: '4분할', icon: RiLayoutGridLine, onSelect: then(() => setSplit(sessionId, true, 'quad')) },
-          { label: '분할 해제', icon: RiLayoutLine, disabled: !isSplit, onSelect: then(() => setSplit(sessionId, false)) }
+          // Divides the pane that was clicked only: the new shell opens to its right or below it
+          {
+            label: isFull ? `좌우 분할 (칸은 ${MAX_PANES}개까지)` : isTooNarrow ? '좌우 분할 (칸이 좁습니다)' : '좌우 분할',
+            icon: RiSplitCellsHorizontal,
+            disabled: isFull || isTooNarrow,
+            onSelect: then(() => splitTerminalPane(sessionId, menu.pane, 'row'))
+          },
+          {
+            label: isFull ? `상하 분할 (칸은 ${MAX_PANES}개까지)` : isTooShort ? '상하 분할 (칸이 낮습니다)' : '상하 분할',
+            icon: RiSplitCellsVertical,
+            disabled: isFull || isTooShort,
+            onSelect: then(() => splitTerminalPane(sessionId, menu.pane, 'col'))
+          },
+          MENU_SEPARATOR,
+          { label: '칸 크기 균등화', icon: RiLayoutGridLine, disabled: !isSplit, onSelect: then(() => { setSplitTree(sessionId, equalize(tree)); refit() }) },
+          // The tab's first terminal is the tab itself: it closes with the tab
+          {
+            label: menu.pane === MAIN_PANE && isSplit ? '이 칸 닫기 (탭의 첫 터미널)' : '이 칸 닫기',
+            icon: RiCloseLine,
+            disabled: !isSplit || menu.pane === MAIN_PANE,
+            onSelect: () => { setSplitTree(sessionId, closePane(tree, menu.pane)); refit() }
+          }
         ]
       },
       {

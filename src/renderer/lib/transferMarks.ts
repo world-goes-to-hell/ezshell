@@ -59,17 +59,59 @@ function landsIn(transfer: MarkableTransfer, side: Side, dirKey: string): string
 }
 
 /**
+ * The folder directly under `dirPath` that a transfer landed somewhere inside (a file of a folder that
+ * was sent whole), in the spelling the transfer used. Null when it landed in `dirPath` itself or elsewhere.
+ */
+function folderUnder(transfer: MarkableTransfer, side: Side, dirPath: string): string | null {
+  const target = targetPathOn(transfer, side)
+  if (!target) return null
+  const isWindows = /^[A-Za-z]:/.test(dirPath)
+  const segments = (value: string) => value.split(/[\\/]+/).filter(Boolean)
+  const same = (a: string, b: string) => (isWindows ? a.toLowerCase() === b.toLowerCase() : a === b)
+  const base = segments(dirPath)
+  const parts = segments(target)
+  // base folders + the folder + at least the file name
+  if (parts.length < base.length + 2) return null
+  return base.every((segment, index) => same(segment, parts[index])) ? parts[base.length] : null
+}
+
+/** One mark for a folder from the marks of everything sent into it */
+function folderMark(marks: readonly TransferMark[]): TransferMark {
+  const { direction } = marks[0]
+  const pending = marks.filter(mark => mark.state === 'queued' || mark.state === 'transferring' || mark.state === 'paused')
+  if (pending.length > 0) {
+    const done = marks.length - pending.length
+    const progress = (done * 100 + pending.reduce((sum, mark) => sum + (mark.progress ?? 0), 0)) / marks.length
+    const state = pending.some(mark => mark.state === 'transferring') ? 'transferring' : pending.some(mark => mark.state === 'queued') ? 'queued' : 'paused'
+    return { direction, state, progress: clampProgress(progress) }
+  }
+  const failed = marks.filter(mark => mark.state === 'error')
+  if (failed.length > 0) return { direction, state: 'error', error: `${marks.length}개 중 ${failed.length}개 실패` }
+  return { direction, state: 'done' }
+}
+
+/**
  * Names in `dirPath` that this session sent there, with direction and state.
- * When the same name was sent more than once the latest transfer wins.
+ * A file: its own transfer (when the same name was sent more than once the latest wins).
+ * A folder: everything this session sent into it, summed up (transferring until all of it is through).
  */
 export function transferMarksFor(transfers: readonly MarkableTransfer[], side: Side, dirPath: string): Map<string, TransferMark> {
   const dirKey = folderKey(dirPath)
-  const entries = transfers.flatMap(transfer => {
+  const marks = new Map<string, TransferMark>()
+  const inFolders = new Map<string, TransferMark[]>()
+  for (const transfer of transfers) {
     const name = landsIn(transfer, side, dirKey)
-    if (!name) return []
-    return [[name, markOf(transfer)] as const]
-  })
-  return new Map(entries)
+    if (name) {
+      marks.set(name, markOf(transfer))
+      continue
+    }
+    const folder = folderUnder(transfer, side, dirPath)
+    if (folder) inFolders.set(folder, [...(inFolders.get(folder) ?? []), markOf(transfer)])
+  }
+  for (const [folder, sent] of inFolders) {
+    if (!marks.has(folder)) marks.set(folder, folderMark(sent))
+  }
+  return marks
 }
 
 /** True when a transfer into `dirPath` finished (completed or failed) between two queue snapshots */

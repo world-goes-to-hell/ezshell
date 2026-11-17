@@ -317,3 +317,108 @@
     gap: 4px;
   }
 }
+
+/* Export list as a tree (BackupSessionTree.tsx): one compact line per folder or session */
+.backup-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.backup-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding-right: 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.backup-tree-row.is-session {
+  cursor: pointer;
+}
+
+.backup-tree-row:hover {
+  background: var(--bg-modifier-hover);
+}
+
+.backup-tree-row.is-selected {
+  background: var(--bg-modifier-selected);
+}
+
+/* Same width on session rows (an empty spacer), so checkboxes line up under their folder's */
+.backup-tree-arrow {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+button.backup-tree-arrow {
+  cursor: pointer;
+}
+
+button.backup-tree-arrow:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.backup-tree-folder {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.backup-tree-folder svg {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.backup-tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-tree-row.is-session .backup-tree-name {
+  flex: 0 1 auto;
+}
+
+.backup-tree-address {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-tree-count {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}

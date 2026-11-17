@@ -52,11 +52,15 @@ function writeState(filePath, state) {
  * Saves the window's place when it is moved or resized (after it settles) and when it closes.
  * A maximized window keeps the size it had before, so un-maximizing after a restart works.
  */
-function trackWindow(win, filePath) {
+function trackWindow(win, filePath, place) {
   let timer = null;
+  // `place` replaces the window's own answers where "maximized" is not the native state
+  // (a window with acrylic fills the work area instead: src/nativeBackdrop.js)
+  const normalBounds = place ? place.normalBounds : () => win.getNormalBounds();
+  const isMaximized = place ? place.isMaximized : () => win.isMaximized();
   const save = () => {
     if (win.isDestroyed() || win.isMinimized() || win.isFullScreen()) return;
-    writeState(filePath, { ...win.getNormalBounds(), isMaximized: win.isMaximized() });
+    writeState(filePath, { ...normalBounds(), isMaximized: isMaximized() });
   };
   const later = () => {
     clearTimeout(timer);

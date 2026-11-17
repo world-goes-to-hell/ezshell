@@ -1,0 +1,227 @@
+/* macOS-style themes (themes/macosPresets.ts holds the same colors).
+   Besides colors, these blocks override the shape tokens: every other theme is square-cornered.
+   --on-accent and --error-text are picked for 4.5:1 contrast, as in variables.css
+   (system blue #007aff gives white text only 4.0:1, so the accent is the darker #0071e3). */
+
+/* ===== macOS Light ===== */
+[data-theme="macos-light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f3f3f3;
+  --bg-tertiary: #e8e8e8;
+  --bg-hover: #e4e4e6;
+  --bg-active: #0071e3;
+  --bg-modifier-hover: rgba(0, 0, 0, 0.05);
+  --bg-modifier-selected: rgba(0, 0, 0, 0.09);
+  --text-primary: #1d1d1f;
+  --text-secondary: #48484c;
+  --text-muted: #66666b;
+  --text-link: #0066cc;
+  --accent: #0071e3;
+  --on-accent: #ffffff;
+  --accent-hover: #0066cc;
+  --accent-active: #005bb8;
+  --success: #1f8a55;
+  --warning: #b7791f;
+  --error: #d93036;
+  --error-text: #c32b31;
+  --info: #0071e3;
+  --border: #dcdcde;
+  --border-strong: #c4c4c7;
+  --gradient-accent: linear-gradient(0deg, #0071e3, #0071e3);
+  --gradient-primary: linear-gradient(0deg, #ffffff, #ffffff);
+  --gradient-subtle: linear-gradient(0deg, transparent, transparent);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.14);
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.22);
+  --shadow-glow: 0 0 0 3px rgba(0, 113, 227, 0.3);
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-full: 999px;
+  --mac-field: #ffffff;
+  --mac-field-border: #c4c4c7;
+}
+
+/* ===== macOS Dark ===== */
+[data-theme="macos-dark"] {
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #282828;
+  --bg-tertiary: #323232;
+  --bg-hover: #3c3c3e;
+  --bg-active: #0071e3;
+  --bg-modifier-hover: rgba(255, 255, 255, 0.06);
+  --bg-modifier-selected: rgba(255, 255, 255, 0.1);
+  --text-primary: #e8e8ea;
+  --text-secondary: #b4b4b9;
+  --text-muted: #a0a0a5;
+  --text-link: #409cff;
+  --accent: #0071e3;
+  --on-accent: #ffffff;
+  --accent-hover: #0a7cf0;
+  --accent-active: #0066cc;
+  --success: #2fa66a;
+  --warning: #d9a23a;
+  --error: #e5484d;
+  --error-text: #f0696d;
+  --info: #409cff;
+  --border: #3a3a3c;
+  --border-strong: #4a4a4d;
+  --gradient-accent: linear-gradient(0deg, #0071e3, #0071e3);
+  --gradient-primary: linear-gradient(0deg, #1e1e1e, #1e1e1e);
+  --gradient-subtle: linear-gradient(0deg, transparent, transparent);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.55);
+  --shadow-glow: 0 0 0 3px rgba(10, 132, 255, 0.4);
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-full: 999px;
+  --mac-field: #3a3a3c;
+  --mac-field-border: #505053;
+}
+
+/* ===== Shape rules shared by the macOS themes =====
+   Keyed on data-chrome (set from the theme's `chrome` field), not on theme ids, and prefixed so they
+   outrank the component rules that follow this file. */
+
+/* Text fields: a lighter well with a hairline border, and a soft accent ring on focus */
+[data-chrome="mac"] .form-group input,
+[data-chrome="mac"] .form-group select,
+[data-chrome="mac"] .post-connect-script,
+[data-chrome="mac"] .lock-input,
+[data-chrome="mac"] .pf-field input {
+  background: var(--mac-field);
+  box-shadow: inset 0 0 0 1px var(--mac-field-border);
+}
+
+[data-chrome="mac"] .form-group input:focus,
+[data-chrome="mac"] .form-group select:focus,
+[data-chrome="mac"] .post-connect-script:focus,
+[data-chrome="mac"] .lock-input:focus,
+[data-chrome="mac"] .pf-field input:focus {
+  box-shadow: inset 0 0 0 1px var(--accent), var(--shadow-glow);
+}
+
+/* Title bar: traffic lights on the left, title in the middle, other buttons stay on the right.
+   The controls wrapper dissolves so its buttons can be ordered around the drag area. */
+[data-chrome="mac"] .title-bar {
+  position: relative;
+}
+
+[data-chrome="mac"] .title-bar-controls {
+  display: contents;
+}
+
+[data-chrome="mac"] .title-bar-drag {
+  justify-content: center;
+  padding-left: 0;
+}
+
+[data-chrome="mac"] .title-bar-icon {
+  display: none;
+}
+
+/* Centered on the window, not on the space left between the buttons */
+[data-chrome="mac"] .title-bar-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-weight: 600;
+  color: var(--text-primary);
+  pointer-events: none;
+}
+
+[data-chrome="mac"] .title-bar-btn {
+  order: 1;
+  width: 36px;
+  -webkit-app-region: no-drag;
+}
+
+[data-chrome="mac"] .popout-title-separator {
+  display: none;
+}
+
+[data-chrome="mac"] .title-bar-btn.title-bar-close,
+[data-chrome="mac"] .title-bar-btn.title-bar-min,
+[data-chrome="mac"] .title-bar-btn.title-bar-max {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  margin-left: 8px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.18);
+  /* The glyph stays hidden until the pointer is over the group */
+  color: transparent;
+}
+
+[data-chrome="mac"] .title-bar-btn.title-bar-close,
+[data-chrome="mac"] .title-bar-btn.title-bar-close:hover {
+  order: -3;
+  margin-left: 12px;
+  background: #ff5f57;
+}
+
+[data-chrome="mac"] .title-bar-btn.title-bar-min,
+[data-chrome="mac"] .title-bar-btn.title-bar-min:hover {
+  order: -2;
+  background: #febc2e;
+}
+
+[data-chrome="mac"] .title-bar-btn.title-bar-max,
+[data-chrome="mac"] .title-bar-btn.title-bar-max:hover {
+  order: -1;
+  margin-right: 12px;
+  background: #28c840;
+}
+
+[data-chrome="mac"] .title-bar-btn.title-bar-close svg,
+[data-chrome="mac"] .title-bar-btn.title-bar-min svg,
+[data-chrome="mac"] .title-bar-btn.title-bar-max svg {
+  width: 9px;
+  height: 9px;
+}
+
+[data-chrome="mac"] .title-bar-btn.title-bar-max svg {
+  width: 6px;
+  height: 6px;
+}
+
+[data-chrome="mac"] .title-bar-controls:hover .title-bar-close,
+[data-chrome="mac"] .title-bar-controls:hover .title-bar-min,
+[data-chrome="mac"] .title-bar-controls:hover .title-bar-max {
+  color: rgba(0, 0, 0, 0.62);
+}
+
+[data-chrome="mac"] .title-bar-btn.title-bar-close:active,
+[data-chrome="mac"] .title-bar-btn.title-bar-min:active,
+[data-chrome="mac"] .title-bar-btn.title-bar-max:active {
+  filter: brightness(0.85);
+}
+
+/* A window without focus shows gray lights (until the pointer is over them) */
+[data-chrome="mac"][data-window-blurred] .title-bar-controls:not(:hover) .title-bar-close,
+[data-chrome="mac"][data-window-blurred] .title-bar-controls:not(:hover) .title-bar-min,
+[data-chrome="mac"][data-window-blurred] .title-bar-controls:not(:hover) .title-bar-max {
+  background: var(--border-strong);
+}
+
+/* Scrollbars: no track, a rounded thumb inset from the edge. A painted track is square and shows
+   outside the rounded corners of a scrolling dialog. */
+[data-chrome="mac"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-chrome="mac"] ::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 45%, transparent);
+  background-clip: content-box;
+}
+
+[data-chrome="mac"] ::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-muted) 75%, transparent);
+  background-clip: content-box;
+}

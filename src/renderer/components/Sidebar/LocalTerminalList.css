@@ -1,0 +1,319 @@
+/* Local terminals below the session list (LocalTerminalList.tsx).
+   .sidebar-lists is the area the two lists share. Left alone, the pane is as tall as its rows and stops
+   at half of that area; .is-sized carries the height the user dragged. */
+
+.sidebar-lists {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Whatever the session list renders (the tree or its empty state) takes the room the pane leaves,
+   so the pane always sits at the bottom of the area */
+.sidebar-lists > :first-child {
+  flex: 1;
+  min-height: 0;
+}
+
+.local-terms {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 50%;
+  border-top: 1px solid var(--border);
+}
+
+/* A dragged height may pass half, but the session list keeps about three rows
+   (SESSION_LIST_MIN_HEIGHT in lib/localTerminalPane.ts) */
+.local-terms.is-sized {
+  min-height: 64px;
+  max-height: calc(100% - 96px);
+}
+
+.local-terms-divider {
+  position: relative;
+  flex: none;
+  height: 7px;
+  margin-top: -4px; /* straddles the border, so the grab area is wider than the line */
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.local-terms-divider::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 32px;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity var(--transition-fast);
+}
+
+.local-terms-divider:hover::after,
+.local-terms-divider:focus-visible::after,
+.local-terms-divider:active::after {
+  opacity: 1;
+}
+
+.local-terms-divider:active::after {
+  background: var(--accent);
+}
+
+.local-terms-divider:focus-visible {
+  outline: none;
+}
+
+.local-terms-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 6px;
+}
+
+.local-terms-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.local-terms-toggle:hover {
+  color: var(--text-primary);
+}
+
+.local-terms-count {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.local-terms-btn,
+.local-terms-close {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.local-terms-btn:hover,
+.local-terms-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.local-terms-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0 6px 6px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.local-terms-row {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding-right: 4px;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+}
+
+.local-terms-row:hover {
+  background: var(--bg-modifier-hover);
+}
+
+.local-terms-row.is-current {
+  background: var(--bg-modifier-selected);
+}
+
+.local-terms-open {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 4px 0 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.local-terms-icon {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.local-terms-row.is-current .local-terms-icon {
+  color: var(--accent);
+}
+
+.local-terms-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-terms-row.is-current .local-terms-name {
+  font-weight: 600;
+}
+
+/* Same meaning as the dot of a session row: green while the shell runs */
+.local-terms-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+
+.local-terms-dot.is-on {
+  background: var(--success);
+}
+
+/* Close shows on the row in use (pointer, keyboard, or the current tab) */
+.local-terms-close {
+  opacity: 0;
+}
+
+.local-terms-row:hover .local-terms-close,
+.local-terms-row:focus-within .local-terms-close,
+.local-terms-row.is-current .local-terms-close {
+  opacity: 1;
+}
+
+.sidebar.rail:not(.peek-open) .sidebar-lists {
+  display: none;
+}
+
+/* "3세션" on a split tab's row: opens the layout map (PaneLayoutBadge.tsx) */
+.local-terms-panes {
+  flex: none;
+  margin-right: 2px;
+  padding: 0 7px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--bg-modifier-selected);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.local-terms-panes:hover,
+.local-terms-panes[aria-expanded='true'] {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* The map: a small picture of the tab's panes, drawn on document.body (the list scrolls and clips) */
+.pane-map {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
+.pane-map-title {
+  max-width: 208px;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-map-area {
+  position: relative;
+}
+
+.pane-map-cell {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  /* The border is the gap between panes: cells touch, their borders take the map's background */
+  border: 2px solid var(--bg-secondary);
+  border-radius: calc(var(--radius-sm) + 2px);
+  background: var(--bg-primary);
+  background-clip: padding-box;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.pane-map-cell:hover,
+.pane-map-cell:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+  color: var(--text-primary);
+}
+
+/* The pane that has the keyboard */
+.pane-map-cell.is-current {
+  background-color: var(--accent);
+  box-shadow: none;
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+/* The place of a pane that moved out to a tab of its own */
+.pane-map-cell.is-vacant {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
+  cursor: default;
+}
+
+.pane-map-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+[data-surface="glass"] .pane-map {
+  background: var(--glass-float);
+  border-color: var(--glass-edge);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}

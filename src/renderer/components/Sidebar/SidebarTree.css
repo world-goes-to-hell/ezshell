@@ -213,7 +213,8 @@
   flex: 1;
   flex-direction: column;
   align-items: center;
-  gap: 18px;
+  justify-content: center; /* sit in the vertical middle instead of crammed at the top */
+  gap: 22px;
   min-height: 0;
   padding: 16px 0;
   color: var(--text-secondary);
@@ -224,25 +225,24 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
 }
 
-.rail-label {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.2em;
-  writing-mode: vertical-rl;
+.rail-group svg {
+  opacity: 0.85;
 }
 
-/* Green: connected tabs, red: tabs whose connection was lost, amber: MCP requests in progress */
+/* Green: connected tabs, red: tabs whose connection was lost, amber: MCP requests in progress.
+   A soft tinted fill reads cleaner than a hollow ring on the narrow rail. */
 .rail-count {
-  min-width: 18px;
-  padding: 1px 5px;
-  border: 1px solid currentColor;
+  min-width: 17px;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+  background: color-mix(in srgb, currentColor 16%, transparent);
   border-radius: 999px;
   font-size: 11px;
-  font-weight: 600;
-  line-height: 14px;
+  font-weight: 700;
+  line-height: 15px;
   text-align: center;
 }
 

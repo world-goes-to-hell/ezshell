@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { throttle, REFIT_INTERVAL_MS, type Throttled } from '../../lib/throttle'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import { SearchAddon } from 'xterm-addon-search'
@@ -9,7 +10,8 @@ import { SplitTerminal } from './SplitTerminal'
 import { TerminalSearch } from './TerminalSearch'
 import { PortForwardPanel } from './PortForwardPanel'
 import { ServerMonitor } from './ServerMonitor'
-import { RiFolderFill, RiUploadCloud2Fill, RiSplitCellsHorizontal, RiSplitCellsVertical, RiArrowLeftRightLine, RiPulseLine, RiHistoryLine, RiFolderTransferFill } from 'react-icons/ri'
+import { ContainerPanel } from './ContainerPanel'
+import { RiFolderFill, RiUploadCloud2Fill, RiArrowLeftRightLine, RiPulseLine, RiHistoryLine, RiFolderTransferFill, RiStackLine } from 'react-icons/ri'
 import { useSftpStore } from '../../stores/sftpStore'
 import { motion, AnimatePresence } from 'framer-motion'
 import { drawerVariants } from '../../lib/animation/variants'
@@ -22,6 +24,8 @@ import { CommandHistoryPanel } from './CommandHistoryPanel'
 import { ConnectionLostOverlay } from './ConnectionLostOverlay'
 import { useTerminalContextMenu } from './useTerminalContextMenu'
 import { registerTerminalPane } from '../../lib/terminalPanes'
+import { MAIN_PANE, singlePane, layoutOf, paneBox } from '../../lib/splitTree'
+import { SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
 import { attachFileLinks } from './terminalFileLinks'
 import { attachFileZone } from './terminalFileZone'
 import 'xterm/css/xterm.css'
@@ -54,30 +58,29 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [terminalReady, setTerminalReady] = useState(false)
-  const [mergeMenu, setMergeMenu] = useState<{x: number; y: number; options: Array<{label: string; action: () => void}>} | null>(null)
   const [showPortForward, setShowPortForward] = useState(false)
   const [showMonitor, setShowMonitor] = useState(false)
+  const [showContainers, setShowContainers] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const reducedMotion = useReducedMotion()
   const commandHistory = useTerminalCommandHistory(sessionId, 'main', (data) => window.electronAPI.sshSend(sessionId, data))
 
-  // Split resize state
-  const [termSplitRatio, setTermSplitRatio] = useState(0.5)
-  const [isTermSplitResizing, setIsTermSplitResizing] = useState(false)
-  const [gridColRatio, setGridColRatio] = useState(0.5)
-  const [gridRowRatio, setGridRowRatio] = useState(0.5)
-  const [gridResizeAxis, setGridResizeAxis] = useState<'col' | 'row' | 'both' | null>(null)
   const splitContainerRef = useRef<HTMLDivElement>(null)
 
   // Split terminal state
   const terminal = useTerminalStore(state => state.terminals.get(sessionId))
   const isSplit = terminal?.isSplit || false
-  const splitDirection = useTerminalStore(state => state.getSplitDirection(sessionId)) || 'horizontal'
-  const splitSlots = terminal?.splitSlots || []
   // The connection dropped: the terminal is dimmed and the "연결 끊김" card offers 재연결 / 종료
   const isDisconnected = terminal ? !terminal.connected : false
-  const setSplit = useTerminalStore(state => state.setSplit)
-  const isMultiSplit = isSplit && splitDirection !== 'horizontal' && splitDirection !== 'vertical'
+  // Where each pane sits: rectangles computed from the tab's split tree (lib/splitTree.ts)
+  const splitTree = terminal?.splitTree
+  const splitLayout = useMemo(() => layoutOf(splitTree ?? singlePane()), [splitTree])
+  const mainRect = splitLayout.panes.find(entry => entry.pane === MAIN_PANE)?.rect
+  // In a fixed order (by id), whatever their places: swapping two panes then changes only their boxes
+  // and never moves their elements in the document
+  const splitPanes = isSplit
+    ? splitLayout.panes.filter(entry => entry.pane !== MAIN_PANE).sort((a, b) => a.pane.localeCompare(b.pane, undefined, { numeric: true }))
+    : []
   const fontSize = useTerminalStore(state => state.fontSize)
   const fontFamily = useTerminalStore(state => state.fontFamily)
 
@@ -119,6 +122,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
     let disableCopyOnSelect: (() => void) | null = null
     let detachCommandHistory: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
+    let refit: Throttled<[]> | null = null
     let unregisterSerializer: (() => void) | null = null
     let unregisterPane: (() => void) | null = null
     let serializeScreen: (() => string) | null = null
@@ -337,18 +341,23 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       })
 
       // Handle resize
-      resizeObserver = new ResizeObserver(() => {
+      // Dragging a divider changes the size every frame. Refitting reflows the whole buffer, so it runs
+      // at most every REFIT_INTERVAL_MS (and once at the end), and the server hears only real changes.
+      let sentSize = ''
+      refit = throttle(() => {
         if (fitAddon.current && isInitialized.current && !disposed) {
           try {
             const dims = fitTerminalWithMargin()
-            if (dims) {
+            if (dims && `${dims.cols}x${dims.rows}` !== sentSize) {
+              sentSize = `${dims.cols}x${dims.rows}`
               window.electronAPI.sshResize(sessionId, dims.cols, dims.rows)
             }
           } catch (e) {
             // Ignore resize errors
           }
         }
-      })
+      }, REFIT_INTERVAL_MS)
+      resizeObserver = new ResizeObserver(() => refit?.())
 
       resizeObserver.observe(terminalRef.current)
 
@@ -424,6 +433,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       if (resizeObserver) {
         resizeObserver.disconnect()
       }
+      refit?.cancel()
       // Clean up theme listener
       if (terminalRef.current && (terminalRef.current as any).__themeCleanup) {
         (terminalRef.current as any).__themeCleanup()
@@ -631,73 +641,6 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
     }
   }, [sessionId])
 
-  // Terminal 2-split resize via divider drag
-  useEffect(() => {
-    if (!isTermSplitResizing) return
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const container = splitContainerRef.current
-      if (!container) return
-      const rect = container.getBoundingClientRect()
-      let ratio: number
-      if (splitDirection === 'horizontal') {
-        ratio = (e.clientX - rect.left) / rect.width
-      } else {
-        ratio = (e.clientY - rect.top) / rect.height
-      }
-      ratio = Math.min(0.8, Math.max(0.2, ratio))
-      setTermSplitRatio(ratio)
-    }
-
-    const handleMouseUp = () => {
-      setIsTermSplitResizing(false)
-      document.body.classList.remove('resizing')
-      window.dispatchEvent(new Event('resize'))
-    }
-
-    document.body.classList.add('resizing')
-    window.addEventListener('mousemove', handleMouseMove, true)
-    window.addEventListener('mouseup', handleMouseUp, true)
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove, true)
-      window.removeEventListener('mouseup', handleMouseUp, true)
-    }
-  }, [isTermSplitResizing, splitDirection])
-
-  // Grid split resize via divider drag
-  useEffect(() => {
-    if (!gridResizeAxis) return
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const container = splitContainerRef.current
-      if (!container) return
-      const rect = container.getBoundingClientRect()
-
-      if (gridResizeAxis === 'col' || gridResizeAxis === 'both') {
-        const colRatio = (e.clientX - rect.left) / rect.width
-        setGridColRatio(Math.min(0.8, Math.max(0.2, colRatio)))
-      }
-      if (gridResizeAxis === 'row' || gridResizeAxis === 'both') {
-        const rowRatio = (e.clientY - rect.top) / rect.height
-        setGridRowRatio(Math.min(0.8, Math.max(0.2, rowRatio)))
-      }
-    }
-
-    const handleMouseUp = () => {
-      setGridResizeAxis(null)
-      document.body.classList.remove('resizing')
-      window.dispatchEvent(new Event('resize'))
-    }
-
-    document.body.classList.add('resizing')
-    window.addEventListener('mousemove', handleMouseMove, true)
-    window.addEventListener('mouseup', handleMouseUp, true)
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove, true)
-      window.removeEventListener('mouseup', handleMouseUp, true)
-    }
-  }, [gridResizeAxis])
-
   return (
     <div
       className={`terminal-panel ${isActive ? 'active' : ''} ${isDragOver ? 'drag-over' : ''}`}
@@ -731,49 +674,6 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
           </motion.button>
           <div className="terminal-header-divider" />
           <motion.button
-            className={`terminal-header-btn ${isSplit && splitDirection !== 'vertical' ? 'active' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (!isSplit) {
-                setSplit(sessionId, true, 'horizontal')
-              } else if (splitDirection === 'horizontal') {
-                setSplit(sessionId, false)
-              } else if (splitDirection === 'vertical') {
-                setSplit(sessionId, true, 'quad')
-              } else {
-                // quad or any tri → vertical
-                setSplit(sessionId, true, 'vertical')
-              }
-            }}
-            title="가로 분할"
-            whileHover={reducedMotion ? undefined : { scale: 1.1 }}
-            whileTap={reducedMotion ? undefined : { scale: 0.95 }}
-          >
-            <RiSplitCellsHorizontal size={16} />
-          </motion.button>
-          <motion.button
-            className={`terminal-header-btn ${isSplit && splitDirection !== 'horizontal' ? 'active' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (!isSplit) {
-                setSplit(sessionId, true, 'vertical')
-              } else if (splitDirection === 'vertical') {
-                setSplit(sessionId, false)
-              } else if (splitDirection === 'horizontal') {
-                setSplit(sessionId, true, 'quad')
-              } else {
-                // quad or any tri → horizontal
-                setSplit(sessionId, true, 'horizontal')
-              }
-            }}
-            title="세로 분할"
-            whileHover={reducedMotion ? undefined : { scale: 1.1 }}
-            whileTap={reducedMotion ? undefined : { scale: 0.95 }}
-          >
-            <RiSplitCellsVertical size={16} />
-          </motion.button>
-          <div className="terminal-header-divider" />
-          <motion.button
             className={`terminal-header-btn ${showPortForward ? 'active' : ''}`}
             onClick={(e) => { e.stopPropagation(); setShowPortForward(!showPortForward); }}
             title="포트 포워딩"
@@ -784,7 +684,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
           </motion.button>
           <motion.button
             className={`terminal-header-btn ${showMonitor ? 'active' : ''}`}
-            onClick={(e) => { e.stopPropagation(); setShowMonitor(!showMonitor); setShowHistory(false); }}
+            onClick={(e) => { e.stopPropagation(); setShowMonitor(!showMonitor); setShowHistory(false); setShowContainers(false); }}
             title="서버 모니터링"
             whileHover={reducedMotion ? undefined : { scale: 1.1 }}
             whileTap={reducedMotion ? undefined : { scale: 0.95 }}
@@ -792,8 +692,18 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
             <RiPulseLine size={16} />
           </motion.button>
           <motion.button
+            className={`terminal-header-btn ${showContainers ? 'active' : ''}`}
+            onClick={(e) => { e.stopPropagation(); setShowContainers(!showContainers); setShowMonitor(false); setShowHistory(false); }}
+            title="도커 컨테이너 (열려 있는 동안에만 서버에 묻습니다)"
+            aria-pressed={showContainers}
+            whileHover={reducedMotion ? undefined : { scale: 1.1 }}
+            whileTap={reducedMotion ? undefined : { scale: 0.95 }}
+          >
+            <RiStackLine size={16} />
+          </motion.button>
+          <motion.button
             className={`terminal-header-btn ${showHistory ? 'active' : ''}`}
-            onClick={(e) => { e.stopPropagation(); setShowHistory(!showHistory); setShowMonitor(false); }}
+            onClick={(e) => { e.stopPropagation(); setShowHistory(!showHistory); setShowMonitor(false); setShowContainers(false); }}
             title="명령어 기록 (터미널에서 Ctrl+Shift+H 로 검색)"
             aria-pressed={showHistory}
             whileHover={reducedMotion ? undefined : { scale: 1.1 }}
@@ -806,7 +716,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
           <button className="terminal-close" onClick={(e) => { e.stopPropagation(); onClose(); }}>×</button>
         </div>
       </div>
-      <div ref={terminalBodyRef} className={`terminal-body ${isSplit ? `split-${splitDirection}` : ''}${isDisconnected ? ' is-disconnected' : ''}${isExplorerResizing ? ' is-explorer-resizing' : ''}`}>
+      <div ref={terminalBodyRef} className={`terminal-body ${isSplit ? 'split-tree' : ''}${isDisconnected ? ' is-disconnected' : ''}${isExplorerResizing ? ' is-explorer-resizing' : ''}`}>
         <AnimatePresence>
           {showFileExplorer && (
             <motion.div
@@ -846,19 +756,12 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
           ref={splitContainerRef}
           className="terminal-split-container"
           onContextMenu={handleTerminalContextMenu}
-          style={isMultiSplit ? {
-            gridTemplateColumns: `${gridColRatio}fr 6px ${1 - gridColRatio}fr`,
-            gridTemplateRows: `${gridRowRatio}fr 6px ${1 - gridRowRatio}fr`
-          } : undefined}
         >
           <div
             ref={terminalRef}
             className="terminal-container"
-            style={isMultiSplit ? (
-              splitDirection === 'tri-bottom' ? { gridRow: '1', gridColumn: '1 / 4' } :
-              splitDirection === 'tri-right' ? { gridRow: '1 / 4', gridColumn: '1' } :
-              { gridRow: '1', gridColumn: '1' }
-            ) : { flex: isSplit ? termSplitRatio : undefined }}
+            data-pane={MAIN_PANE}
+            style={isSplit && mainRect ? paneBox(mainRect, PANE_DIVIDER_PX) : undefined}
             role="application"
             aria-label="Terminal output"
           />
@@ -879,6 +782,14 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
             )}
           </AnimatePresence>
           <AnimatePresence>
+            {showContainers && (
+              <ContainerPanel
+                sessionId={sessionId}
+                onClose={() => setShowContainers(false)}
+              />
+            )}
+          </AnimatePresence>
+          <AnimatePresence>
             {showHistory && (
               <CommandHistoryPanel
                 sessionId={sessionId}
@@ -888,116 +799,16 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
             )}
           </AnimatePresence>
           {commandHistory.popup}
-          {/* Simple 2-split (horizontal/vertical) divider; its pane is w-split-1 below, shared with quad/tri */}
-          {isSplit && (splitDirection === 'horizontal' || splitDirection === 'vertical') && (
-            <div
-              className={`terminal-split-divider ${splitDirection}`}
-              onMouseDown={(e) => { e.preventDefault(); setIsTermSplitResizing(true) }}
-              title="드래그로 크기 조절"
-            />
-          )}
-          {/* Multi-split dividers (layout-specific, stateless) */}
-          {splitDirection === 'quad' && (
-            <>
-              <div className="grid-divider grid-divider-v" style={{ gridRow: '1', gridColumn: '2' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }}
-                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMergeMenu({ x: e.clientX, y: e.clientY, options: [
-                  { label: '병합', action: () => { setSplit(sessionId, true, 'tri-bottom', ['split-2', 'split-3']); setMergeMenu(null) } }
-                ]})}} />
-              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '1' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('row') }}
-                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMergeMenu({ x: e.clientX, y: e.clientY, options: [
-                  { label: '병합', action: () => { setSplit(sessionId, true, 'tri-right', ['split-1', 'split-3']); setMergeMenu(null) } }
-                ]})}} />
-              <div className="grid-divider grid-divider-center" style={{ gridRow: '2', gridColumn: '2' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('both') }} />
-              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '3' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('row') }}
-                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMergeMenu({ x: e.clientX, y: e.clientY, options: [
-                  { label: '2번 터미널 기준 병합', action: () => { setSplit(sessionId, true, 'tri-left', ['split-2', 'split-1']); setMergeMenu(null) } },
-                  { label: '4번 터미널 기준 병합', action: () => { setSplit(sessionId, true, 'tri-left', ['split-2', 'split-3']); setMergeMenu(null) } },
-                ]})}} />
-              <div className="grid-divider grid-divider-v" style={{ gridRow: '3', gridColumn: '2' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }}
-                onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMergeMenu({ x: e.clientX, y: e.clientY, options: [
-                  { label: '3번 터미널 기준 병합', action: () => { setSplit(sessionId, true, 'tri-top', ['split-1', 'split-2']); setMergeMenu(null) } },
-                  { label: '4번 터미널 기준 병합', action: () => { setSplit(sessionId, true, 'tri-top', ['split-1', 'split-3']); setMergeMenu(null) } },
-                ]})}} />
-            </>
-          )}
-          {splitDirection === 'tri-bottom' && (
-            <>
-              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '1 / 4' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('row') }} />
-              <div className="grid-divider grid-divider-v" style={{ gridRow: '3', gridColumn: '2' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }} />
-            </>
-          )}
-          {splitDirection === 'tri-top' && (
-            <>
-              <div className="grid-divider grid-divider-v" style={{ gridRow: '1', gridColumn: '2' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }} />
-              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '1 / 4' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('row') }} />
-            </>
-          )}
-          {splitDirection === 'tri-right' && (
-            <>
-              <div className="grid-divider grid-divider-v" style={{ gridRow: '1 / 4', gridColumn: '2' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }} />
-              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '3' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('row') }} />
-            </>
-          )}
-          {splitDirection === 'tri-left' && (
-            <>
-              <div className="grid-divider grid-divider-h" style={{ gridRow: '2', gridColumn: '1' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('row') }} />
-              <div className="grid-divider grid-divider-v" style={{ gridRow: '1 / 4', gridColumn: '2' }}
-                onMouseDown={(e) => { e.preventDefault(); setGridResizeAxis('col') }} />
-            </>
-          )}
-          {/* Split terminals - keyed at the same tree level for stable reconciliation.
-              w-split-1 is also the 2-split pane: one element for every layout, so going from a 2-split
-              to quad/tri (and back) keeps its shell instead of closing it and opening a new one. */}
-          {isSplit && (!isMultiSplit || splitDirection === 'quad' || splitSlots.includes('split-1')) && (
-            <div key="w-split-1" className="terminal-container split-terminal" style={
-              !isMultiSplit ? { flex: 1 - termSplitRatio } :
-              splitDirection === 'quad' ? { gridRow: '1', gridColumn: '3' } :
-              splitDirection === 'tri-top' ? { gridRow: '1', gridColumn: '3' } :
-              splitDirection === 'tri-right' ? { gridRow: '1', gridColumn: '3' } :
-              splitDirection === 'tri-left' && splitSlots[0] === 'split-1' ? { gridRow: '3', gridColumn: '1' } :
-              splitDirection === 'tri-left' && splitSlots[1] === 'split-1' ? { gridRow: '1 / 4', gridColumn: '3' } :
-              {}
-            }>
-              <SplitTerminal sessionId={sessionId} key="split-1" />
+          {/* Split terminals: one stably keyed wrapper per pane, all at this tree level. Only the box
+              changes between layouts, so a pane that stays keeps its shell (a wrapper that moves to
+              another parent or key is remounted, which closes the shell). */}
+          {splitPanes.map(({ pane, rect }) => (
+            <div key={`w-${pane}`} className="terminal-container split-terminal" data-pane={pane} style={paneBox(rect, PANE_DIVIDER_PX)}>
+              <SplitTerminal sessionId={sessionId} pane={pane} key={pane} />
             </div>
-          )}
-          {isMultiSplit && (splitDirection === 'quad' || splitSlots.includes('split-2')) && (
-            <div key="w-split-2" className="terminal-container split-terminal" style={
-              splitDirection === 'quad' ? { gridRow: '3', gridColumn: '1' } :
-              splitDirection === 'tri-bottom' && splitSlots[0] === 'split-2' ? { gridRow: '3', gridColumn: '1' } :
-              splitDirection === 'tri-bottom' && splitSlots[1] === 'split-2' ? { gridRow: '3', gridColumn: '3' } :
-              splitDirection === 'tri-top' && splitSlots[1] === 'split-2' ? { gridRow: '3', gridColumn: '1 / 4' } :
-              splitDirection === 'tri-left' && splitSlots[0] === 'split-2' ? { gridRow: '3', gridColumn: '1' } :
-              {}
-            }>
-              <SplitTerminal sessionId={sessionId} key="split-2" delay={200} />
-            </div>
-          )}
-          {isMultiSplit && (splitDirection === 'quad' || splitSlots.includes('split-3')) && (
-            <div key="w-split-3" className="terminal-container split-terminal" style={
-              splitDirection === 'quad' ? { gridRow: '3', gridColumn: '3' } :
-              splitDirection === 'tri-bottom' && splitSlots[0] === 'split-3' ? { gridRow: '3', gridColumn: '1' } :
-              splitDirection === 'tri-bottom' && splitSlots[1] === 'split-3' ? { gridRow: '3', gridColumn: '3' } :
-              splitDirection === 'tri-top' && splitSlots[1] === 'split-3' ? { gridRow: '3', gridColumn: '1 / 4' } :
-              splitDirection === 'tri-right' && splitSlots[1] === 'split-3' ? { gridRow: '3', gridColumn: '3' } :
-              splitDirection === 'tri-left' && splitSlots[1] === 'split-3' ? { gridRow: '1 / 4', gridColumn: '3' } :
-              {}
-            }>
-              <SplitTerminal sessionId={sessionId} key="split-3" delay={400} />
-            </div>
-          )}
+          ))}
+          {/* Divider lines, grips, drop zones and empty places (also flat children, placed the same way) */}
+          {isSplit && splitTree && <SplitChrome tabId={sessionId} tree={splitTree} containerRef={splitContainerRef} />}
         </div>
         {isDisconnected && (
           <ConnectionLostOverlay
@@ -1010,20 +821,6 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
           />
         )}
       </div>
-
-      {/* Merge context menu */}
-      {mergeMenu && (
-        <>
-          <div className="split-context-overlay" onClick={() => setMergeMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMergeMenu(null) }} />
-          <div className="split-context-menu" style={{ left: mergeMenu.x, top: mergeMenu.y }}>
-            {mergeMenu.options.map((option, i) => (
-              <div key={i} className="split-context-menu-item" onClick={option.action}>
-                {option.label}
-              </div>
-            ))}
-          </div>
-        </>
-      )}
 
       {/* Drag overlay */}
       {isDragOver && (

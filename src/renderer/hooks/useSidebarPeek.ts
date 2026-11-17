@@ -5,7 +5,7 @@ const CLOSE_DELAY_MS = 300
 
 /** A menu, hover card or name input that belongs to the sidebar is still in use */
 function isSidebarBusy(sidebar: HTMLElement | null): boolean {
-  if (document.querySelector('[data-radix-popper-content-wrapper], .context-menu')) return true
+  if (document.querySelector('[data-radix-popper-content-wrapper], .context-menu, .sidebar-popover')) return true
   return Boolean(sidebar?.querySelector('input:focus'))
 }
 

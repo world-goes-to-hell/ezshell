@@ -132,7 +132,8 @@ interface RemoteFileLoadedBase {
 
 export type RemoteFileLoaded = RemoteFileLoadedBase & (
   | { kind: 'text'; editable: true; content: string; canWrite: boolean }
-  | { kind: 'text'; editable: false; content: string; truncated: boolean; size: number; follow: RemoteFileFollow }
+  /** `pace: 'command'`: each look runs a command on the server (a container's log), so looks are further apart */
+  | { kind: 'text'; editable: false; content: string; truncated: boolean; size: number; follow: RemoteFileFollow; pace?: 'command' }
   | { kind: 'image' | 'pdf'; mime: string; size: number; data: Uint8Array<ArrayBuffer> }
 )
 
@@ -384,6 +385,18 @@ declare global {
     electronAPI: {
       // Window controls
       minimizeWindow: () => void
+      /** See-through window, 0.5 to 1 (main clamps). Missing in an app built before it existed */
+      setWindowOpacity?: (opacity: number) => void
+      /** Glass: what settings chose, kept by main for the next start */
+      setAppearance?: (value: { surface: 'flat' | 'glass'; scheme: 'light' | 'dark' }) => void
+      /** Glass: whether acrylic is behind this window now, and whether this system can draw it */
+      getBackdrop?: () => Promise<{ active: boolean; supported: boolean }>
+      /** Popped-out SFTP window: reports the folders it shows now */
+      sftpWindowPaths?: (sessionId: string, localPath: string, remotePath: string) => void
+      /** Main window: a popped-out SFTP window closed (with the folders it last showed, when known) */
+      onSftpWindowClosed?: (callback: (info: { sessionId: string; localPath?: string; remotePath?: string }) => void) => () => void
+      /** A double press in a glass window, in physical pixels of the window (see lib/captionDoubleClick.ts) */
+      onCaptionDoubleClick?: (callback: (point: { x: number; y: number }) => void) => () => void
       maximizeWindow: () => void
       closeWindow: () => void
       toggleFullscreen: () => Promise<void>
@@ -411,6 +424,12 @@ declare global {
       sshSplitSend: (streamId: string, data: string) => void
       sshSplitResize: (streamId: string, cols: number, rows: number) => void
       sshSplitClose: (streamId: string) => void
+      /** Opens a log window for a container that was in the tab's last list */
+      containerLogOpen?: (sessionId: string, sessionName: string, name: string) => Promise<{ success: true } | { success: false; error: string }>
+      /** Docker containers of the tab's server (asked only while the container panel is open) */
+      containerList?: (sessionId: string, all: boolean) => Promise<import('../lib/containers').ContainerListResult>
+      /** A split shell becomes a tab of its own; answers with the new tab's session id */
+      sshAdoptSplit: (streamId: string) => Promise<{ success: boolean; sessionId?: string; error?: string }>
       onSshSplitData: (callback: (data: any) => void) => () => void
       onSshSplitClosed: (callback: (data: any) => void) => () => void
 
@@ -421,7 +440,8 @@ declare global {
       selectPrivateKey: () => Promise<{ success: boolean; path?: string }>
 
       // SFTP
-      sftpOpen: (sessionId: string) => Promise<any>
+      /** `alreadyOpen`: the tab's SFTP channel was open already (nothing was connected now) */
+      sftpOpen: (sessionId: string) => Promise<{ success: boolean; alreadyOpen?: boolean }>
       sftpClose: (sessionId: string) => Promise<any>
       sftpList: (sessionId: string, remotePath: string) => Promise<any>
       sftpDownload: (sessionId: string, remotePath: string, localPath: string) => Promise<any>
@@ -441,6 +461,8 @@ declare global {
       sftpQueueDownload: (sessionId: string, remotePath: string, localPath: string) => Promise<any>
       sftpQueueUpload: (sessionId: string, localPath: string, remotePath: string) => Promise<any>
       sftpUploadDirectory?: (sessionId: string, localDir: string, remoteDir: string) => Promise<{ success: boolean; uploadedFiles: string[] }>
+      /** Downloads a remote folder with everything in it; `skipped` lists what was left out (links, names this PC cannot take) */
+      sftpDownloadDirectory?: (sessionId: string, remoteDir: string, localDir: string) => Promise<{ success: boolean; files: number; folders: number; skipped: string[] }>
       sftpTransferPause: (sessionId: string, transferId: string) => Promise<any>
       sftpTransferResume: (sessionId: string, transferId: string) => Promise<any>
       sftpTransferCancel: (sessionId: string, transferId: string) => Promise<any>
@@ -573,6 +595,7 @@ declare global {
       checkForUpdates: () => Promise<import('../lib/updateCheck').UpdateCheckResult>
       downloadUpdate: () => Promise<any>
       installUpdate: () => Promise<any>
+      openUpdatePage?: () => Promise<{ success: boolean }>
       getAppVersion: () => Promise<string>
       /** Last version whose release notes were seen (src/lastVersion.js) */
       whatsNewState: () => Promise<{ previous: string | null; current: string; existingUser: boolean }>

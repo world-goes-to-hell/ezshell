@@ -1,0 +1,156 @@
+/* Glass surface style (설정 > 테마 > 표면 스타일). Works on top of any color theme: data-surface="glass" is
+   set on the root next to data-theme (themeStore, lib/appearance.ts), and everything here is derived
+   from the theme's own variables.
+
+   Three layers:
+   1. a soft color wash behind the whole app (glass needs something behind it to look like glass)
+   2. panels (title bar, sidebar, tab bars, status bar, headers): translucent, blurring the wash
+   3. floating layers (dialogs, menus, tooltips): translucent, blurring the content under them
+   Content the user reads (terminal, file lists, tables) stays almost opaque. */
+
+[data-surface="glass"] {
+  --glass-panel: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
+  --glass-float: color-mix(in srgb, var(--bg-secondary) 66%, transparent);
+  --glass-content: color-mix(in srgb, var(--bg-primary) 86%, transparent);
+  --glass-blur: blur(22px) saturate(1.5);
+  /* The bright rim of a glass edge: faint on dark themes, strong on light ones */
+  --glass-edge: color-mix(in srgb, #ffffff 13%, transparent);
+}
+
+[data-surface="glass"][data-scheme="light"] {
+  --glass-edge: color-mix(in srgb, #ffffff 70%, transparent);
+}
+
+/* 1. The wash */
+/* Only where the window has no acrylic behind it (older Windows, macOS, or before the restart that
+   turns it on). One hue, the theme's accent, kept faint: the first version mixed in red and green
+   blobs, which read as an odd gradient rather than as glass. */
+[data-surface="glass"] .app-container,
+[data-surface="glass"] .sftp-window,
+[data-surface="glass"] .terminal-window-container {
+  background:
+    radial-gradient(circle at 10% 0%, color-mix(in srgb, var(--accent) 26%, transparent) 0, transparent 55%),
+    radial-gradient(circle at 95% 100%, color-mix(in srgb, var(--accent) 16%, transparent) 0, transparent 50%),
+    var(--bg-tertiary);
+}
+
+/* 2. Panels */
+[data-surface="glass"] .title-bar,
+[data-surface="glass"] .sidebar-panel,
+[data-surface="glass"] .terminal-tabs,
+[data-surface="glass"] .split-pane-header,
+[data-surface="glass"] .app-footer,
+[data-surface="glass"] .sftp-header,
+[data-surface="glass"] .sftp-panel {
+  /* Tint only, no backdrop-filter. Behind a panel there is only the wash (already smooth) or the
+     window's acrylic (already blurred by the OS), so a blur adds nothing to see, and it made every
+     frame of a resize (SFTP panel height, pane divider) recompute a blur over these large areas:
+     dragging stuttered badly. Blur is kept for floating layers, which cover real content. */
+  background: var(--glass-panel);
+  border-color: var(--glass-edge);
+}
+
+/* Containers between the wash and the panels must not paint over it */
+[data-surface="glass"] .sidebar,
+[data-surface="glass"] .app-main,
+[data-surface="glass"] .main-area,
+[data-surface="glass"] .main-content,
+[data-surface="glass"] .welcome-screen,
+[data-surface="glass"] .split-view-container,
+[data-surface="glass"] .split-pane {
+  background: transparent;
+}
+
+/* Content: nearly solid, so text keeps its contrast */
+[data-surface="glass"] .terminal-panel,
+[data-surface="glass"] .sftp-content {
+  background: var(--glass-content);
+}
+
+/* 3. Floating layers */
+[data-surface="glass"] .context-menu,
+[data-surface="glass"] .tab-context-menu,
+[data-surface="glass"] .new-tab-menu,
+[data-surface="glass"] .path-suggestions,
+[data-surface="glass"] .app-tooltip,
+[data-surface="glass"] .sidebar.rail.peek-open .sidebar-panel {
+  background: var(--glass-float);
+  border: 1px solid var(--glass-edge);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+
+/* The OS asks for less transparency: solid surfaces again */
+@media (prefers-reduced-transparency: reduce) {
+  [data-surface="glass"] .title-bar,
+  [data-surface="glass"] .sidebar-panel,
+  [data-surface="glass"] .terminal-tabs,
+  [data-surface="glass"] .split-pane-header,
+  [data-surface="glass"] .app-footer,
+  [data-surface="glass"] .sftp-header,
+  [data-surface="glass"] .sftp-panel,
+  [data-surface="glass"] .modal-content,
+  [data-surface="glass"] .context-menu,
+  [data-surface="glass"] .tab-context-menu,
+  [data-surface="glass"] .new-tab-menu,
+  [data-surface="glass"] .path-suggestions,
+  [data-surface="glass"] .app-tooltip {
+    background: var(--bg-secondary);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* Bars pinned inside a dialog (button row, theme toolbar) keep their solid fill: the dialog is nearly
+   solid too (below), so they match it, and content scrolling under them stays hidden. */
+
+/* Real glass: acrylic is behind this window (data-backdrop="native", set by themeStore when main
+   created the window with the material). The painted wash goes away and the page lets the window
+   show through wherever a panel does not cover it. */
+[data-surface="glass"][data-backdrop="native"],
+[data-surface="glass"][data-backdrop="native"] body,
+[data-surface="glass"][data-backdrop="native"] #root,
+[data-surface="glass"][data-backdrop="native"] .app-container,
+[data-surface="glass"][data-backdrop="native"] .sftp-window,
+[data-surface="glass"][data-backdrop="native"] .terminal-window-container {
+  background: transparent;
+}
+
+/* The OS already blurs what is behind: panels only add a tint, lighter than over the wash */
+[data-surface="glass"][data-backdrop="native"] {
+  --glass-panel: color-mix(in srgb, var(--bg-secondary) 42%, transparent);
+}
+
+/* While a divider is being dragged, floating blur is dropped too (cheap frames matter more than the
+   effect for those moments) */
+[data-surface="glass"] body.resizing * {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* Dialogs. A dialog sits on the dimming overlay, not on the app: at the menu's translucency the dark
+   overlay showed through and a light theme's dialog turned a dull gray. So dialogs are nearly solid,
+   and the glass is in the overlay instead: a lighter dim with a stronger blur of the app behind. */
+[data-surface="glass"] .modal-overlay {
+  background: color-mix(in srgb, var(--bg-tertiary) 30%, rgba(0, 0, 0, 0.32));
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  backdrop-filter: blur(14px) saturate(1.3);
+}
+
+[data-surface="glass"] .modal-content {
+  background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
+  border: 1px solid var(--glass-edge);
+}
+
+/* Parts of a dialog with a fill of their own would show as a different shade on the dialog */
+[data-surface="glass"] .settings-modal-header {
+  background: transparent;
+}
+
+/* Popped-out SFTP window: only the window's frame (its title bar) is glass. The file lists and the
+   transfer queue are content, and with the window itself transparent they had nothing behind them:
+   the desktop showed through the files. They get the theme's solid surface back. */
+[data-surface="glass"] .sftp-window .sftp-window-content,
+[data-surface="glass"] .sftp-window .transfer-queue {
+  background: var(--bg-primary);
+}

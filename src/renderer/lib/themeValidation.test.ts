@@ -8,8 +8,16 @@ const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 describe('normalizeTheme', () => {
   it('accepts every preset as is', () => {
     for (const preset of PRESET_THEMES) {
-      expect(normalizeTheme(clone(preset))).toEqual(preset)
+      const { chrome: _chrome, ...colorsOnly } = preset
+      expect(normalizeTheme(clone(preset))).toEqual(colorsOnly)
     }
+  })
+
+  // The rounded shape lives in the preset's CSS block; a custom theme has none, so keeping `chrome`
+  // would put round traffic-light buttons on a square UI
+  it('drops chrome: a theme copied or imported from a macOS preset is colors only', () => {
+    const mac = PRESET_THEMES.find(theme => theme.chrome === 'mac')!
+    expect(normalizeTheme(clone(mac))).not.toHaveProperty('chrome')
   })
 
   it('fills a missing preview from the theme colors (the file that blanked the app)', () => {

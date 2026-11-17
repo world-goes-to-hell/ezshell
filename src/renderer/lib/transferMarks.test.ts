@@ -18,7 +18,8 @@ describe('transferMarksFor', () => {
 
     const marks = transferMarksFor(transfers, 'remote', '/var/www')
 
-    expect([...marks.keys()]).toEqual(['a.txt', 'b (1).txt', 'c.txt'])
+    // 'sub': the folder the fourth upload went into (folders sent whole are marked too)
+    expect([...marks.keys()]).toEqual(['a.txt', 'b (1).txt', 'c.txt', 'sub'])
     expect(marks.get('a.txt')).toEqual({ direction: 'upload', state: 'done' })
     expect(marks.get('b (1).txt')).toEqual({ direction: 'upload', state: 'transferring', progress: 42 })
     expect(marks.get('c.txt')).toEqual({ direction: 'upload', state: 'error', error: 'Permission denied' })
@@ -108,3 +109,37 @@ describe('startedInto', () => {
     expect(startedInto([], [upload('/a/q.txt', 'queued')], 'remote', '/a')).toBe(false)
   })
 })
+
+describe('transferMarksFor: folders sent whole', () => {
+  it('marks the folder a transfer landed inside, at any depth', () => {
+    const marks = transferMarksFor([upload('/var/www/site/index.html', 'completed'), upload('/var/www/site/css/a.css', 'completed')], 'remote', '/var/www')
+    expect(marks.get('site')).toEqual({ direction: 'upload', state: 'done' })
+    expect(marks.size).toBe(1)
+  })
+
+  it('keeps the folder transferring until everything in it is through, with the overall progress', () => {
+    const marks = transferMarksFor([upload('/a/dir/1.txt', 'completed'), upload('/a/dir/2.txt', 'active', undefined, 50), upload('/a/dir/3.txt', 'queued')], 'remote', '/a')
+    expect(marks.get('dir')).toEqual({ direction: 'upload', state: 'transferring', progress: 50 })
+  })
+
+  it('reports how many failed once nothing is pending', () => {
+    const marks = transferMarksFor([upload('/a/dir/1.txt', 'completed'), upload('/a/dir/2.txt', 'error', 'denied')], 'remote', '/a')
+    expect(marks.get('dir')).toEqual({ direction: 'upload', state: 'error', error: '2개 중 1개 실패' })
+  })
+
+  it('works for downloads into a Windows folder, whatever the case and separators of the paths', () => {
+    const marks = transferMarksFor([download('C:\\Work\\app\\conf\\a.yaml', 'completed')], 'local', 'c:/work')
+    expect(marks.get('app')).toEqual({ direction: 'download', state: 'done' })
+  })
+
+  it('does not mark folders for transfers elsewhere, or on the other side', () => {
+    expect(transferMarksFor([upload('/other/dir/1.txt', 'completed')], 'remote', '/a').size).toBe(0)
+    expect(transferMarksFor([upload('/a/dir/1.txt', 'completed')], 'local', 'C:\\src').size).toBe(0)
+    expect(transferMarksFor([upload('/a/1.txt', 'completed')], 'remote', '/a').has('a')).toBe(false)
+  })
+
+  it('marks a folder under the root', () => {
+    expect(transferMarksFor([upload('/dir/1.txt', 'completed')], 'remote', '/').get('dir')?.state).toBe('done')
+  })
+})
+

@@ -106,12 +106,24 @@ async function trashLocal(paths, trashItem) {
   const failures = [];
   let trashed = 0;
   for (const target of paths) {
-    if (typeof target !== 'string' || !path.isAbsolute(target) || isDriveOrFsRoot(target)) {
+    if (typeof target !== 'string' || !path.isAbsolute(target)) {
       failures.push({ path: String(target), error: '잘못된 경로입니다.' });
       continue;
     }
+    // The shell's trash takes only the system's own spelling of a path: with a forward slash, a doubled
+    // separator or a missing item it answers "Failed to parse path", which says nothing to the user.
+    // Normalize first (and judge the root on the normalized path), and name a missing item as such.
+    const resolved = path.resolve(target);
+    if (isDriveOrFsRoot(resolved)) {
+      failures.push({ path: target, error: '잘못된 경로입니다.' });
+      continue;
+    }
+    if (!fs.existsSync(resolved)) {
+      failures.push({ path: target, error: '항목을 찾을 수 없습니다 (이미 지워졌거나 이름이 바뀌었습니다).' });
+      continue;
+    }
     try {
-      await trashItem(target);
+      await trashItem(resolved);
       trashed++;
     } catch (err) {
       failures.push({ path: target, error: describe(err) });

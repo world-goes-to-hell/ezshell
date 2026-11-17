@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
+import { perFrame } from '../../lib/throttle'
 import { useSftpStore } from '../../stores/sftpStore'
 import { FileList, keepSelectionProps } from './FileList'
 import { openRemoteFileWindow } from '../../lib/remoteFileOpen'
@@ -6,7 +7,7 @@ import { TransferQueue } from './TransferQueue'
 import { PathBar } from './PathBar'
 import { OverwriteModal } from './OverwriteModal'
 import { toast } from '../../stores/toastStore'
-import { RiCloseFill, RiUploadFill, RiDownloadFill, RiRefreshFill, RiExternalLinkFill, RiLinkM, RiLinkUnlinkM, RiArrowUpDownLine } from 'react-icons/ri'
+import { RiCloseFill, RiUploadFill, RiDownloadFill, RiRefreshLine, RiExternalLinkFill, RiLinkM, RiLinkUnlinkM, RiArrowUpDownLine } from 'react-icons/ri'
 import { RxDragHandleDots2 } from 'react-icons/rx'
 import { deleteRemoteSelection } from '../../lib/sftpRemoteDelete'
 import { useTransferQueue } from '../../hooks/useTransferQueue'
@@ -15,7 +16,8 @@ import { useTerminalStore } from '../../stores/terminalStore'
 import { useReloadOnTransferActivity } from '../../hooks/useReloadOnTransferActivity'
 import { SFTP_GOTO_EVENT } from '../../lib/sftpSync'
 import { useSftpListProgress } from '../../hooks/useSftpListProgress'
-import { useSftpTransferBatch, sizesByName, type PendingTransfer } from '../../hooks/useSftpTransferBatch'
+import { useSftpTransferBatch } from '../../hooks/useSftpTransferBatch'
+import { useSftpDropTransfers } from '../../hooks/useSftpDropTransfers'
 
 interface SftpPanelProps {
   sessionId: string
@@ -40,8 +42,6 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null)
 
   // Transfer queue resize state
-  const [transferHeight, setTransferHeight] = useState(120)
-  const [isTransferResizing, setIsTransferResizing] = useState(false)
 
   // Directory sync state
   const [isSyncMode, setIsSyncMode] = useState(false)
@@ -51,20 +51,32 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
   const remoteLoadingCount = useSftpListProgress(sessionId, remotePath, isRemoteLoading)
 
   // Resize handlers
+  // The whole top bar is the resize handle (a separate strip above it cost height). Presses on its
+  // buttons are not a resize. `grabOffset` is where in the bar the press landed, so the panel's top
+  // edge does not jump to the pointer when the drag starts.
+  const grabOffset = useRef(0)
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0 || (e.target as Element).closest('button, .sftp-actions')) return
     e.preventDefault()
+    grabOffset.current = e.clientY - e.currentTarget.getBoundingClientRect().top
     setIsResizing(true)
   }, [])
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizing) return
-
+    // Mouse moves arrive faster than frames: one height update (one render of the panel) per frame
+    const applyHeight = perFrame((clientY: number) => {
       const windowHeight = window.innerHeight
-      const newHeight = windowHeight - e.clientY
+      // Measured from the panel's own bottom edge: the status bar is under the panel, so measuring
+      // from the window's bottom made the panel jump by that bar's height when a drag started
+      const bottom = panelRef.current?.getBoundingClientRect().bottom ?? windowHeight
+      const newHeight = bottom - (clientY - grabOffset.current)
       // Clamp height between 150 and 80% of window height
       const clampedHeight = Math.max(150, Math.min(newHeight, windowHeight * 0.8))
       store.setPanelHeight(sessionId, clampedHeight)
+    })
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return
+      applyHeight(e.clientY)
     }
 
     const handleMouseUp = () => {
@@ -77,43 +89,21 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     }
 
     return () => {
+      applyHeight.cancel()
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
   }, [isResizing, sessionId, store])
-
-  // Transfer queue resize handlers
-  useEffect(() => {
-    const handleTransferMouseMove = (e: MouseEvent) => {
-      if (!isTransferResizing || !panelRef.current) return
-      const panelRect = panelRef.current.getBoundingClientRect()
-      const newHeight = panelRect.bottom - e.clientY
-      const maxHeight = panelRect.height * 0.5
-      const clampedHeight = Math.max(60, Math.min(newHeight, maxHeight))
-      setTransferHeight(clampedHeight)
-    }
-
-    const handleTransferMouseUp = () => {
-      setIsTransferResizing(false)
-    }
-
-    if (isTransferResizing) {
-      document.addEventListener('mousemove', handleTransferMouseMove)
-      document.addEventListener('mouseup', handleTransferMouseUp)
-    }
-
-    return () => {
-      document.removeEventListener('mousemove', handleTransferMouseMove)
-      document.removeEventListener('mouseup', handleTransferMouseUp)
-    }
-  }, [isTransferResizing])
 
   const handlePopOut = async () => {
     // Open SFTP in a new window
     if (window.electronAPI.openSftpWindow) {
       const terminal = useTerminalStore.getState().terminals.get(sessionId)
       const title = terminal?.title || (terminal ? `${terminal.username}@${terminal.host}` : '')
-      await window.electronAPI.openSftpWindow(sessionId, localPath, remotePath, title)
+      const result = await window.electronAPI.openSftpWindow(sessionId, localPath, remotePath, title)
+      // The window takes over: the docked panel hides until the window closes (lib/sftpDetach.ts brings
+      // it back). Hiding only hides: the tab's SFTP connection stays open for the window.
+      if (result?.success) store.setOpen(sessionId, false)
     }
   }
 
@@ -121,8 +111,16 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     const initSftp = async () => {
       if (isOpen && sessionId) {
         try {
-          await window.electronAPI.sftpOpen(sessionId)
-          toast.info('SFTP session opened')
+          const opened = await window.electronAPI.sftpOpen(sessionId)
+          // The panel is one element that follows the tab in front, so this runs on every return to a
+          // tab. The tab's SFTP channel stays open meanwhile: coming back is not a new connection, and
+          // the lists shown before are still there. Only a channel opened now is announced and loaded
+          // (the refresh button reloads on demand).
+          const isReturn = opened?.alreadyOpen === true
+          const state = getStoreState()
+          const hasLists = state.remoteFiles(sessionId).length > 0 && state.localFiles(sessionId).length > 0
+          if (!isReturn) toast.info('SFTP 연결을 열었습니다')
+          if (isReturn && hasLists) return
           await Promise.all([
             loadRemoteFiles(remotePath || '/'),
             loadLocalFiles(localPath || getDefaultLocalPath())
@@ -312,131 +310,25 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
     }
   })
 
-  /**
-   * Entries already in a folder that is not on screen, for the overwrite check of a drop onto a folder row.
-   * Returns null (and tells the user) when the folder cannot be read.
-   */
-  const listEntriesIn = async (side: 'local' | 'remote', dirPath: string): Promise<Map<string, number> | null> => {
-    try {
-      if (side === 'remote') {
-        const entries = await window.electronAPI.sftpList(sessionId, dirPath)
-        return sizesByName(entries || [])
-      }
-      const result = await window.electronAPI.localList(dirPath)
-      if (!result.success) throw new Error(result.error)
-      return sizesByName(result.files || [])
-    } catch (error) {
-      toast.error('대상 폴더를 읽을 수 없습니다', `${dirPath}: ${error instanceof Error ? error.message : String(error)}`)
-      return null
-    }
-  }
+  // Dropping entries from one list onto the other (shared with the popped-out SFTP window)
+  const { dropOnLocal: handleDropOnLocal, dropOnRemote: handleDropOnRemote } = useSftpDropTransfers({
+    sessionId,
+    localPath,
+    remotePath,
+    localFiles,
+    remoteFiles,
+    startTransfers: transferBatch.start,
+    reloadRemote: () => loadRemoteFiles(remotePath),
+    reloadLocal: () => loadLocalFiles(localPath)
+  })
 
-  // targetDir: a local folder row the remote entries were dropped on (default: the local folder on screen)
-  const handleDropOnLocal = async (fileNames: string[], targetDir?: string) => {
-    const localBase = targetDir ?? localPath
-    const existing = targetDir ? await listEntriesIn('local', targetDir) : undefined
-    if (existing === null) return
-    const transfers: PendingTransfer[] = []
-    for (const fileName of fileNames) {
-      const file = remoteFiles.find(f => f.name === fileName)
-      if (file && file.type === 'file') {
-        transfers.push({
-          type: 'download',
-          fileName,
-          localPath: joinPath(localBase, fileName, true),
-          remotePath: joinPath(remotePath, fileName, false),
-          targetEntries: existing
-        })
-      }
-    }
-    await transferBatch.start(transfers)
-  }
-
-  // targetDir: a remote folder row the local entries were dropped on (default: the remote folder on screen)
-  const handleDropOnRemote = async (fileNames: string[], targetDir?: string) => {
-    const remoteBase = targetDir ?? remotePath
-    const existing = targetDir ? await listEntriesIn('remote', targetDir) : undefined
-    if (existing === null) return
-    const transfers: PendingTransfer[] = []
-    const directories: string[] = []
-
-    for (const fileName of fileNames) {
-      const file = localFiles.find(f => f.name === fileName)
-      if (!file) continue
-      if (file.type === 'directory') {
-        directories.push(fileName)
-      } else {
-        transfers.push({
-          type: 'upload',
-          fileName,
-          localPath: joinPath(localPath, fileName, true),
-          remotePath: joinPath(remoteBase, fileName, false),
-          targetEntries: existing
-        })
-      }
-    }
-
-    for (const dirName of directories) {
-      try {
-        const localDir = joinPath(localPath, dirName, true)
-        const remoteDir = joinPath(remoteBase, dirName, false)
-        await window.electronAPI.sftpUploadDirectory?.(sessionId, localDir, remoteDir)
-        toast.success('폴더 업로드 완료', dirName)
-      } catch (error) {
-        toast.error('폴더 업로드 실패', `${dirName}: ${error instanceof Error ? error.message : 'Unknown error'}`)
-      }
-    }
-
-    if (transfers.length > 0) {
-      await transferBatch.start(transfers)
-    } else if (directories.length > 0) {
-      await loadRemoteFiles(remotePath)
-    }
-  }
-
+  // Files and folders alike (the same path as dropping the selection onto the remote list)
   const handleUpload = async () => {
     if (selectedLocal.size === 0) {
       toast.info('업로드할 파일 선택', '왼쪽 로컬 목록에서 업로드할 파일을 먼저 선택하세요')
       return
     }
-
-    const transfers: PendingTransfer[] = []
-    const directories: string[] = []
-
-    for (const fileName of selectedLocal) {
-      const file = localFiles.find(f => f.name === fileName)
-      if (!file) continue
-      if (file.type === 'directory') {
-        directories.push(fileName)
-      } else {
-        transfers.push({
-          type: 'upload',
-          fileName,
-          localPath: joinPath(localPath, fileName, true),
-          remotePath: joinPath(remotePath, fileName, false)
-        })
-      }
-    }
-
-    // Upload directories recursively
-    for (const dirName of directories) {
-      try {
-        const localDir = joinPath(localPath, dirName, true)
-        const remoteDir = joinPath(remotePath, dirName, false)
-        await window.electronAPI.sftpUploadDirectory?.(sessionId, localDir, remoteDir)
-        toast.success('폴더 업로드 완료', dirName)
-      } catch (error) {
-        toast.error('폴더 업로드 실패', `${dirName}: ${error instanceof Error ? error.message : 'Unknown error'}`)
-      }
-    }
-
-    // Upload individual files
-    if (transfers.length > 0) {
-      await transferBatch.start(transfers)
-    } else if (directories.length > 0) {
-      // Refresh after directory uploads
-      await loadRemoteFiles(remotePath)
-    }
+    await handleDropOnRemote([...selectedLocal])
   }
 
   useReloadOnTransferActivity({
@@ -472,26 +364,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
       toast.info('다운로드할 파일 선택', '오른쪽 원격 목록에서 다운로드할 파일을 먼저 선택하세요')
       return
     }
-
-    const transfers: PendingTransfer[] = []
-    for (const fileName of selectedRemote) {
-      const file = remoteFiles.find(f => f.name === fileName)
-      if (file && file.type === 'file') {
-        transfers.push({
-          type: 'download',
-          fileName,
-          localPath: joinPath(localPath, fileName, true),
-          remotePath: joinPath(remotePath, fileName, false)
-        })
-      }
-    }
-
-    if (transfers.length === 0) {
-      toast.info('폴더는 다운로드할 수 없습니다', '파일을 선택해 주세요. 폴더 다운로드는 아직 지원하지 않습니다')
-      return
-    }
-
-    await transferBatch.start(transfers)
+    await handleDropOnLocal([...selectedRemote])
   }
 
   const handleClose = () => {
@@ -503,18 +376,17 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
   return (
     <div
       ref={panelRef}
-      className={`sftp-panel ${isResizing || isTransferResizing ? 'resizing' : ''}`}
+      className={`sftp-panel ${isResizing ? 'resizing' : ''}`}
       style={{ height: panelHeight }}
       onDragOver={(e) => { if (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes('application/json')) e.stopPropagation() }}
       onDrop={(e) => { if (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes('application/json')) e.stopPropagation() }}
     >
-      {/* Resize Handle */}
-      <div className="sftp-resize-handle" onMouseDown={handleMouseDown}>
-        <RxDragHandleDots2 size={16} />
-      </div>
-
-      <div className="sftp-header">
+      {/* Top bar: label, buttons, and the handle that resizes the panel (drag it up or down) */}
+      <div className="sftp-header" onMouseDown={handleMouseDown} title="끌어서 SFTP 패널 높이 조절">
         <span className="sftp-title">SFTP</span>
+        <span className="sftp-header-grip" aria-hidden="true">
+          <RxDragHandleDots2 size={16} />
+        </span>
         <div className="sftp-actions" {...keepSelectionProps}>
           <button
             className={`sftp-btn sync-btn ${isSyncMode ? 'active' : ''}`}
@@ -558,8 +430,8 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
               sessionId={sessionId}
               editRequest={paneActions.pathEditRequest.local}
             />
-            <button className="refresh-btn" onClick={() => loadLocalFiles(localPath)}>
-              <RiRefreshFill size={18} />
+            <button className="refresh-btn" onClick={() => loadLocalFiles(localPath)} title="로컬 목록 새로고침" aria-label="로컬 목록 새로고침">
+              <RiRefreshLine size={16} />
             </button>
           </div>
           <FileList
@@ -602,8 +474,8 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
               sessionId={sessionId}
               editRequest={paneActions.pathEditRequest.remote}
             />
-            <button className="refresh-btn" onClick={() => loadRemoteFiles(remotePath)}>
-              <RiRefreshFill size={18} />
+            <button className="refresh-btn" onClick={() => loadRemoteFiles(remotePath)} title="원격 목록 새로고침" aria-label="원격 목록 새로고침">
+              <RiRefreshLine size={16} />
             </button>
           </div>
           <FileList
@@ -630,15 +502,12 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
 
       {/* Transfer queue: hidden until a transfer starts or the user opens it */}
       {transferQueue.isVisible && (
-        <>
-          <div
-            className="transfer-resize-handle"
-            onMouseDown={(e) => { e.preventDefault(); setIsTransferResizing(true) }}
-          />
-          <div style={{ height: transferHeight, minHeight: 60, overflow: 'hidden' }}>
-            <TransferQueue sessionId={sessionId} onClose={transferQueue.hide} />
-          </div>
-        </>
+        <TransferQueue
+          sessionId={sessionId}
+          onClose={transferQueue.hide}
+          // The queue's header was dragged higher than the panel allows: the panel grows with it
+          onNeedRoom={needed => { if (needed > panelHeight) store.setPanelHeight(sessionId, Math.min(needed, window.innerHeight * 0.8)) }}
+        />
       )}
 
       <OverwriteModal {...transferBatch.overwriteModalProps} />

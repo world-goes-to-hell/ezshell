@@ -75,6 +75,8 @@ export interface ThemeDefinition {
   colors: ThemeColors
   terminal: TerminalColors
   preview: ThemePreview
+  /** Window-chrome style beyond colors. 'mac': rounded corners, traffic-light buttons on the left (presets only) */
+  chrome?: 'mac'
   // Special effects
   effects?: {
     glow?: boolean

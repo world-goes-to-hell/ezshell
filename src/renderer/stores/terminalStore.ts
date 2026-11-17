@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { singlePane, splitPane, nextPaneSeq, paneId, isSplitTree, type SplitNode, type SplitAxis, type PaneId } from '../lib/splitTree'
 import { takePendingSnapshot } from '../lib/terminalSnapshots'
 import { findTabPane } from '../lib/sessionTabs'
 import { linkConnected, linkDisconnected, linkReconnecting } from '../lib/connectionLost'
@@ -13,8 +14,10 @@ export interface TerminalInfo {
   hasActivity?: boolean
   currentPath?: string
   isSplit?: boolean
-  splitDirection?: SplitDirection
-  splitSlots?: string[]
+  /** How the tab's terminal area is divided into panes (lib/splitTree.ts); absent when it is one pane */
+  splitTree?: SplitNode
+  /** Last number used for a pane id in this tab; ids are not reused, so pane elements keep unique keys */
+  paneSeq?: number
   color?: string
   statsId?: string
   // Config this tab connected with, kept in memory only so the tab can be duplicated
@@ -84,8 +87,10 @@ interface TerminalState {
   setCurrentPath: (sessionId: string, path: string) => void
 
   // Per-terminal split (same session, two shells)
-  getSplitDirection: (sessionId: string) => SplitDirection | undefined
-  setSplit: (sessionId: string, isSplit: boolean, direction?: SplitDirection, splitSlots?: string[]) => void
+  /** Halves one pane of the tab: a new shell opens to its right ('row') or below it ('col') */
+  splitTerminalPane: (sessionId: string, pane: PaneId, axis: SplitAxis) => void
+  /** A tree changed by closing, swapping, resizing or merging; one pane left ends the split */
+  setSplitTree: (sessionId: string, tree: SplitNode) => void
 
   // Layout management
   setLayout: (layout: Partial<LayoutState>) => void
@@ -370,24 +375,25 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     return state
   }),
 
-  getSplitDirection: (sessionId) => {
-    const terminal = get().terminals.get(sessionId)
-    return terminal?.splitDirection
-  },
-
-  setSplit: (sessionId, isSplit, direction = 'horizontal', splitSlots?) => set((state) => {
+  splitTerminalPane: (sessionId, pane, axis) => set((state) => {
     const terminal = state.terminals.get(sessionId)
-    if (terminal) {
-      const newTerminals = new Map(state.terminals)
-      newTerminals.set(sessionId, {
-        ...terminal,
-        isSplit,
-        splitDirection: isSplit ? direction : undefined,
-        splitSlots: isSplit ? splitSlots : undefined
-      })
-      return { terminals: newTerminals }
-    }
-    return state
+    if (!terminal) return state
+    const tree = terminal.splitTree ?? singlePane()
+    const seq = nextPaneSeq(tree, terminal.paneSeq ?? 0)
+    const next = splitPane(tree, pane, axis, paneId(seq))
+    if (next === tree) return state
+    const newTerminals = new Map(state.terminals)
+    newTerminals.set(sessionId, { ...terminal, isSplit: true, splitTree: next, paneSeq: seq })
+    return { terminals: newTerminals }
+  }),
+
+  setSplitTree: (sessionId, tree) => set((state) => {
+    const terminal = state.terminals.get(sessionId)
+    if (!terminal) return state
+    const isSplit = isSplitTree(tree)
+    const newTerminals = new Map(state.terminals)
+    newTerminals.set(sessionId, { ...terminal, isSplit, splitTree: isSplit ? tree : undefined })
+    return { terminals: newTerminals }
   }),
 
   setLayout: (layoutUpdate) => set((state) => ({
