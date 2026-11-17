@@ -67,7 +67,9 @@ src/renderer/
     themeStore.ts                # 테마 관리
     uiStore.ts                   # UI 상태
   styles/
-    globals.css                  # 전역 스타일 (매우 큰 파일)
+    globals.css                  # 전역 스타일의 목록만 (부품을 불러오는 순서: 같은 우선순위의 규칙은 순서로 정해지므로 바꾸지 말 것)
+    app/*.css                    # 전역 스타일 부품 (기능별, 예전 globals.css 를 순서대로 나눈 것)
+    tailwind.css                 # @tailwind 지시문
     variables.css                # CSS 변수 (색상, 테마)
 ```
 
