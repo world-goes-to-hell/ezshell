@@ -56,6 +56,58 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* Search: matching containers go first, marked; the others follow below a line */
+.container-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.container-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.container-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.container-search-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.container-search-count.is-none {
+  color: var(--text-muted);
+}
+
+.container-row.is-match {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.container-row.starts-others {
+  border-top: 2px solid var(--border-strong, var(--border));
+}
+
+.container-name-mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: inherit;
+}
+
 .container-row.is-stopped .container-name,
 .container-row.is-stopped .container-meta {
   color: var(--text-muted);

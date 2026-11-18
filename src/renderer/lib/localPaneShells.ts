@@ -12,6 +12,8 @@ const opening = new Map<string, Promise<LocalPaneShell>>()
 const opened = new Map<string, string>()
 const keyOf = (tabId: string, pane: PaneId) => `${tabId}\n${pane}`
 
+export const hasLocalPaneShell = (tabId: string, pane: PaneId): boolean => opened.has(keyOf(tabId, pane))
+
 /** The pane's shell, opened on first ask (asked twice at once, it is still opened once) */
 export function ensureLocalPaneShell(tabId: string, pane: PaneId): Promise<LocalPaneShell> {
   const key = keyOf(tabId, pane)
@@ -43,6 +45,13 @@ export function ensureLocalPaneShell(tabId: string, pane: PaneId): Promise<Local
     if (!result.ok && opening.get(key) === open) opening.delete(key)
   })
   return open
+}
+
+/** A shell that already runs (a local terminal tab merged into this pane) becomes the pane's shell */
+export function adoptLocalPaneShell(tabId: string, pane: PaneId, shellId: string): void {
+  const key = keyOf(tabId, pane)
+  opened.set(key, shellId)
+  opening.set(key, Promise.resolve({ ok: true, id: shellId }))
 }
 
 /** Forgets a pane's shell without closing it (the shell became a tab) and gives its id */

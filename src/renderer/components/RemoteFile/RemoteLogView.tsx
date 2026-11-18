@@ -1,6 +1,6 @@
 import { initialPace, retryWait, nextPace, waitFor, type PaceKind } from '../../lib/logPollPace'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { RiArrowDownLine, RiEyeLine, RiFlagLine, RiListCheck2, RiPauseLine, RiPlayLine, RiRefreshLine, RiTextWrap } from 'react-icons/ri'
+import { RiArrowDownLine, RiCloseLine, RiErrorWarningLine, RiEyeLine, RiFlagLine, RiListCheck2, RiPauseLine, RiPlayLine, RiRefreshLine, RiTextWrap } from 'react-icons/ri'
 import type { EditorState } from '@codemirror/state'
 import { PopoutTitleBar } from '../TitleBar/PopoutTitleBar'
 import { CodeEditor, type CodeEditorHandle, type CursorInfo } from './CodeEditor'
@@ -16,6 +16,7 @@ import { toast } from '../../stores/toastStore'
 import { addMarkerAtEnd, logMarkerExtensions, type MarkerNotice } from './logMarkerView'
 import { logMarkerField, removeMarker, renameMarker, MAX_MARKERS } from '../../lib/logMarkers'
 import { buildOutline, sameOutline, type LogOutline } from '../../lib/logOutline'
+import { trackLogBurst } from '../../lib/logBurst'
 import { readLogViewPrefs, saveLogViewPrefs } from '../../lib/logViewPrefs'
 import { LogOutlinePanel, StepButtons, type ProblemFilter } from './LogOutlinePanel'
 import './RemoteLog.css'
@@ -84,7 +85,12 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   const [follow, setFollow] = useState<Follow>({ kind: 'off' })
   // Whether the view sticks to the end: true while the user looks at the last lines
   const stickRef = useRef(isTailMode)
-  const [unseen, setUnseen] = useState({ lines: 0, errors: 0 })
+  const reviewingError = useRef(false)
+  const [unseenLines, setUnseenLines] = useState(0)
+  const unreadErrors = useRef<readonly number[]>([])
+  const [unreadErrorCount, setUnreadErrorCount] = useState(0)
+  const [burstLines, setBurstLines] = useState(0)
+  const burst = useMemo(() => trackLogBurst(setBurstLines), [])
   const [isTrimmed, setIsTrimmed] = useState(false)
   const [cursor, setCursor] = useState<CursorInfo>({ line: 1, column: 1, selected: 0 })
   // The answer last shown: main moves on only when a look names its cursor (a dropped answer comes again)
@@ -95,15 +101,20 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
 
   const [prefs, setPrefs] = useState(readLogViewPrefs)
   const [filter, setFilter] = useState<ProblemFilter>('all')
+  const [afterMarkerId, setAfterMarkerId] = useState<number | null>(null)
   const [outline, setOutline] = useState<LogOutline>(EMPTY_OUTLINE)
   // What the outline is built for; the editor's listener reads it through a ref (made once)
-  const outlineOptions = useRef({ levels: LEVELS_OF[filter], withRows: prefs.isOutlineOpen })
-  outlineOptions.current = { levels: LEVELS_OF[filter], withRows: prefs.isOutlineOpen }
+  const outlineOptions = useRef({ levels: LEVELS_OF[filter], withRows: prefs.isOutlineOpen, afterMarkerId })
+  outlineOptions.current = { levels: LEVELS_OF[filter], withRows: prefs.isOutlineOpen, afterMarkerId }
   const lostRef = useRef(0)
+
+  useEffect(() => () => burst.reset(), [burst])
 
   const onState = useCallback((state: EditorState) => {
     const next = buildOutline(state, outlineOptions.current)
     setOutline(previous => (sameOutline(previous, next) ? previous : next))
+    const scope = outlineOptions.current.afterMarkerId
+    if (scope !== null && !next.markers.some(marker => marker.id === scope)) setAfterMarkerId(null)
     const { lost } = state.field(logMarkerField)
     if (lost > lostRef.current) {
       toast.info('오래된 줄이 정리되면서 기준점이 사라졌습니다', `${lost - lostRef.current}개`)
@@ -118,7 +129,10 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   /** What a move did: the view stops following the end, and the user hears why nothing moved */
   const onNavigate = useCallback((kind: NavKind, outcome: JumpOutcome, target: NavTarget, levelName = FILTER_NAME[filterRef.current]) => {
     const what = kind === 'marker' ? '기준점' : `${levelName} 줄`
-    if (outcome === 'found' || outcome === 'wrapped') stickRef.current = false
+    if (outcome === 'found' || outcome === 'wrapped') {
+      reviewingError.current = false
+      stickRef.current = false
+    }
     if (outcome === 'wrapped') toast.info(target === 1 ? '끝을 지나 처음부터 다시 찾았습니다' : '처음을 지나 끝에서부터 다시 찾았습니다')
     else if (outcome === 'none' && kind === 'marker') toast.info('기준점이 없습니다', 'Ctrl+M 으로 지금 로그 끝에 찍을 수 있습니다')
     else if (outcome === 'none') toast.info(`다른 ${what}이 없습니다`)
@@ -130,7 +144,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
 
   const extensions = useMemo(() => [
     // Read once: the editor is made once, later changes go through setWrapped
-    ...logExtensions({ isWrapped: readLogViewPrefs().isWrapped, levels: () => LEVELS_OF[filterRef.current], onNavigate, onState }),
+    ...logExtensions({ isWrapped: readLogViewPrefs().isWrapped, selection: () => outlineOptions.current, onNavigate, onState }),
     ...logMarkerExtensions({ onNotice: reportMarkerNotice })
   ], [onNavigate, onState])
 
@@ -141,8 +155,11 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
     onState(view.state)
     if (isTailMode) scrollToEnd(view)
     const onScroll = () => {
-      stickRef.current = isAtBottom(view)
-      if (stickRef.current) setUnseen({ lines: 0, errors: 0 })
+      const atBottom = isAtBottom(view)
+      if (!atBottom) reviewingError.current = false
+      // An error near the end can be revealed without leaving the bottom threshold.
+      stickRef.current = atBottom && !reviewingError.current
+      if (stickRef.current) setUnseenLines(0)
     }
     view.scrollDOM.addEventListener('scroll', onScroll, { passive: true })
     return () => view.scrollDOM.removeEventListener('scroll', onScroll)
@@ -152,7 +169,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   useEffect(() => {
     const view = editorRef.current?.getView()
     if (view) onState(view.state)
-  }, [filter, prefs.isOutlineOpen, onState])
+  }, [filter, prefs.isOutlineOpen, afterMarkerId, onState])
 
   const showAdded = useCallback((result: Extract<RemoteFileTailResult, { text: string }>) => {
     const view = editorRef.current?.getView()
@@ -165,13 +182,16 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
     const text = marker ? `${startsLine ? '' : '\n'}${marker}\n${added}` : added
     if (!text) return
     const sticks = stickRef.current
-    const plan = appendLog(view, text, LIMITS)
+    const plan = appendLog(view, text, LIMITS, unreadErrors.current)
+    unreadErrors.current = plan.unreadErrors
+    setUnreadErrorCount(plan.unreadErrors.length)
     if (plan.trimmed) setIsTrimmed(true)
     if (sticks) scrollToEnd(view)
-    else setUnseen(previous => ({ lines: previous.lines + plan.addedLines, errors: previous.errors + plan.newErrors }))
+    else if (plan.addedLines > 0) setUnseenLines(lines => lines + plan.addedLines)
+    burst.add(plan.addedLines - (marker ? (startsLine ? 1 : 2) : 0))
     // A new error while the user looks elsewhere: flash the taskbar button (no notification)
-    if (plan.newErrors > 0 && !document.hasFocus()) window.electronAPI.remoteFileAttention?.(docId)
-  }, [docId])
+    if (plan.newErrorCount > 0 && !document.hasFocus()) window.electronAPI.remoteFileAttention?.(docId)
+  }, [burst, docId])
 
   const handle = useCallback((result: RemoteFileTailResult) => {
     // 'busy': a look still runs; 'stale': from before a refresh (this view is about to be replaced)
@@ -224,8 +244,13 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
 
   const toggleLive = () => {
     const view = editorRef.current?.getView()
-    if (!isLive && view) {
+    if (isLive) {
+      burst.reset()
+      setBurstLines(0)
+    } else if (view) {
+      reviewingError.current = false
       stickRef.current = true
+      setUnseenLines(0)
       scrollToEnd(view)
     }
     setIsLive(live => !live)
@@ -234,9 +259,11 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   const goToEnd = () => {
     const view = editorRef.current?.getView()
     if (!view) return
+    reviewingError.current = false
     stickRef.current = true
-    setUnseen({ lines: 0, errors: 0 })
+    setUnseenLines(0)
     scrollToEnd(view)
+    view.focus()
   }
 
   const markNow = () => {
@@ -255,18 +282,32 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   }
 
   /** A row of the list: the line comes into view and the view stops following the end */
-  const goTo = (pos: number, kind: NavKind) => {
+  const goTo = (pos: number, kind: NavKind, reviewingNewError = false) => {
     const view = editorRef.current?.getView()
     if (!view) return
+    reviewingError.current = reviewingNewError
     stickRef.current = false
     revealLine(view, pos, kind === 'marker' ? 'start' : 'center')
     view.focus()
   }
 
+  const goToNewError = () => {
+    const first = unreadErrors.current[0]
+    if (first === undefined) return
+    unreadErrors.current = unreadErrors.current.slice(1)
+    setUnreadErrorCount(unreadErrors.current.length)
+    goTo(first, 'problem', true)
+  }
+
+  const toggleMarkerScope = (id: number) => {
+    setAfterMarkerId(current => current === id ? null : id)
+    editorRef.current?.getView()?.focus()
+  }
+
   const stepProblem = (target: NavTarget, levels: ProblemFilter = filter) => {
     const view = editorRef.current?.getView()
     if (!view) return
-    onNavigate('problem', goToProblem(view, target, LEVELS_OF[levels]), target, FILTER_NAME[levels])
+    onNavigate('problem', goToProblem(view, target, { levels: LEVELS_OF[levels], afterMarkerId }), target, FILTER_NAME[levels])
     view.focus()
   }
 
@@ -282,6 +323,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   }
 
   const { counts, latestMarker } = outline
+  const scopeMarker = outline.markers.find(marker => marker.id === afterMarkerId)
   const actions = (
     <>
       <button
@@ -332,12 +374,21 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
       <div className="remote-file-body">
         <div className="remote-log-body">
           <CodeEditor ref={editorRef} initialText={initialText} fileName={name} readOnly onCursor={setCursor} extensions={extensions} />
-          {unseen.lines > 0 && (
-            <button type="button" className={`remote-log-new-lines${unseen.errors > 0 ? ' has-error' : ''}`} onClick={goToEnd}>
-              새 줄 {unseen.lines.toLocaleString()}개
-              {unseen.errors > 0 && <strong> · 오류 {unseen.errors.toLocaleString()}</strong>}
-              <RiArrowDownLine size={14} aria-hidden="true" />
-            </button>
+          {(unseenLines > 0 || unreadErrorCount > 0) && (
+            <div className="remote-log-arrivals">
+              {unreadErrorCount > 0 && (
+                <button type="button" className="remote-log-new-lines remote-log-new-errors" onClick={goToNewError} title="아직 확인하지 않은 첫 오류로 이동">
+                  <RiErrorWarningLine size={14} aria-hidden="true" />
+                  새 오류 {unreadErrorCount.toLocaleString()}개
+                </button>
+              )}
+              {unseenLines > 0 && (
+                <button type="button" className="remote-log-new-lines" onClick={goToEnd} title="로그 끝으로 이동">
+                  새 줄 {unseenLines.toLocaleString()}개
+                  <RiArrowDownLine size={14} aria-hidden="true" />
+                </button>
+              )}
+            </div>
           )}
         </div>
         {prefs.isOutlineOpen && (
@@ -345,6 +396,8 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
             outline={outline}
             filter={filter}
             onFilter={setFilter}
+            afterMarkerId={afterMarkerId}
+            onScope={toggleMarkerScope}
             onGoTo={goTo}
             onStepProblem={target => stepProblem(target)}
             onStepMarker={stepMarker}
@@ -355,10 +408,21 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
         )}
       </div>
       <div className="remote-file-status">
-        <span className={`remote-log-follow is-${follow.kind}`} role="status">{followLabel(follow, isTailMode)}</span>
+        <div className="remote-log-live-status">
+          <span className={`remote-log-follow is-${follow.kind}`} role="status">{followLabel(follow, isTailMode)}</span>
+          {isLive && follow.kind === 'live' && !follow.note && (
+            <span className="remote-log-burst-slot">
+              {burstLines > 0 && <span className="remote-log-burst" title="이번 로그 급증에서 들어온 줄 수">+{burstLines.toLocaleString()}줄</span>}
+            </span>
+          )}
+        </div>
         {isTrimmed && <span className="remote-log-note" title="창에는 최근 약 5MB 만 둡니다">오래된 줄 정리됨</span>}
         <span className="remote-file-status-spacer" />
-        {latestMarker && (
+        {scopeMarker ? (
+          <button type="button" className="remote-log-count remote-log-marker remote-log-scope" onClick={() => toggleMarkerScope(scopeMarker.id)} title="기준점 범위 해제">
+            <RiFlagLine size={12} aria-hidden="true" /> {scopeMarker.label ?? `기준점 ${scopeMarker.id}`} 이후 <RiCloseLine size={12} aria-hidden="true" />
+          </button>
+        ) : latestMarker && (
           <button type="button" className="remote-log-count remote-log-marker" onClick={() => goTo(latestMarker.pos, 'marker')}
             title={`가장 최근 기준점(${latestMarker.time})으로 이동 · 기준점 ${outline.markers.length}개 · F9 로 기준점 사이를 이동합니다`}>
             <RiFlagLine size={12} aria-hidden="true" /> {latestMarker.label ?? `기준점 ${latestMarker.id}`} · 뒤 {latestMarker.linesAfter.toLocaleString()}줄

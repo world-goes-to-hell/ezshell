@@ -32,6 +32,14 @@ import { LockScreen } from './components/LockScreen/LockScreen'
 import { ToastContainer } from './components/Toast'
 import { toast } from './stores/toastStore'
 import { usePaneDropOnTabs } from './hooks/usePaneDropOnTabs'
+import { useTabDropOnPane, SCREEN_SPLIT_BAND_PX } from './hooks/useTabDropOnPane'
+import { sideWord } from './lib/paneDropZones'
+import { MERGE_BLOCKED_TITLE, mergeChoices, type MergeChoice } from './lib/tabMerge'
+import { mergeTabIntoPane } from './lib/tabToPane'
+import { setRestoreSource } from './lib/updateInstall'
+import { readRestoreRecord, type RestoreTab } from './lib/restoreTabs'
+import { restoreTabs } from './lib/restoreTabsRun'
+import { RestoreTabsBanner, type RestoreBannerState } from './components/Restore/RestoreTabsBanner'
 import { closeLocalPaneShells } from './lib/localPaneShells'
 import { UpdateNotification } from './components/Update/UpdateNotification'
 import { CommandPalette } from './components/CommandPalette'
@@ -40,7 +48,7 @@ import { DUPLICATE_TAB_EVENT, OPEN_SNIPPET_MANAGER_EVENT } from './components/Te
 import { SnippetManager } from './components/Snippets/SnippetManager'
 import { StatsDashboard } from './components/Modal/StatsDashboard'
 import { BatchCommandModal } from './components/Modal/BatchCommandModal'
-import { useSessionStore } from './stores/sessionStore'
+import { useSessionStore, type Session } from './stores/sessionStore'
 import { useTerminalStore } from './stores/terminalStore'
 import { useSftpStore } from './stores/sftpStore'
 import { useThemeStore } from './stores/themeStore'
@@ -53,6 +61,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { tabVariants } from './lib/animation/variants'
 import { useReducedMotion } from './hooks/useReducedMotion'
 import { SPRINGS } from './lib/animation/config'
+import { captureTabFlightSource, flyToTab } from './lib/animation/sessionTabFlight'
 import { ConfirmDialogHost } from './components/Modal/ConfirmDialogHost'
 import { HostKeyDialog } from './components/Modal/HostKeyDialog'
 import { useSessionLogStore } from './stores/sessionLogStore'
@@ -211,6 +220,10 @@ function App() {
   // Color and connect config of tabs popped out to their own window, restored when they merge back
   const detachedTabsRef = useRef(new Map<string, DetachedTab>())
   const [splitPaneDraggingTabId, setSplitPaneDraggingTabId] = useState<string | null>(null)
+  // A tab dragged onto a pane of another tab of the same session becomes a pane of that tab.
+  // From the single tab strip the edges of the terminal area mean "split the screen" (drop zones below).
+  const mergeDropTaken = useRef(false)
+  const mergeHover = useTabDropOnPane(draggingTabId ?? splitPaneDraggingTabId, draggingTabId !== null, mergeDropTaken)
 
   // Context menu state
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
@@ -568,8 +581,7 @@ function App() {
     const savedSessionId = config.saveSession ? persistSession(config) : config.id
 
     // Then attempt connection
-    await connect(toSSHConnectConfig({ ...config, id: savedSessionId }, effectiveColor))
-    // Note: Toast notifications are handled in useSSH hook
+    return connect(toSSHConnectConfig({ ...config, id: savedSessionId }, effectiveColor))
   }
 
   /**
@@ -626,7 +638,7 @@ function App() {
     toast.success('저장됨', config.id ? `${name} 세션을 수정했습니다` : `${name} 세션을 등록했습니다`)
   }
 
-  const handleQuickConnect = async (session: any) => {
+  const handleQuickConnect = async (session: Session, source?: HTMLElement) => {
     // Get effective color (session color or folder color chain)
     const getFolderEffectiveColor = (folderId: string): string | undefined => {
       const { folders } = useSessionStore.getState()
@@ -642,11 +654,17 @@ function App() {
       effectiveColor = getFolderEffectiveColor(session.folderId)
     }
 
-    await handleConnect({
-      ...session,
+    const { icon: _icon, ...connection } = session
+    const result = await handleConnect({
+      ...connection,
       backgroundColor: effectiveColor,
       saveSession: false
     })
+    if (source && result.success && result.sessionId) {
+      const origin = captureTabFlightSource(source.querySelector('.session-name'), source.closest('.session-list'))
+      if (origin) void flyToTab(origin, result.sessionId)
+    }
+    return result
   }
 
   const handleNewConnection = () => {
@@ -733,10 +751,11 @@ function App() {
       removeTerminal(sessionId)
       return
     }
-    if (terminals.get(sessionId)?.local) {
+    const local = terminals.get(sessionId)?.local
+    if (local) {
       // The shells of its split panes go with the tab
       closeLocalPaneShells(sessionId)
-      window.electronAPI.localShellClose?.(sessionId)
+      window.electronAPI.localShellClose?.(local.shellId ?? sessionId)
       removeTerminal(sessionId)
       return
     }
@@ -744,11 +763,11 @@ function App() {
   }
 
   // A terminal of this PC as a new tab (the shell runs in the main process)
-  const handleOpenLocalTerminal = async () => {
+  const handleOpenLocalTerminal = async (): Promise<string | null> => {
     const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24 })
     if (!result || !result.success) {
       toast.error('로컬 터미널을 열지 못했습니다', result ? result.error : '앱을 다시 시작해 주세요.')
-      return
+      return null
     }
     const store = useTerminalStore.getState()
     const count = Array.from(store.terminals.values()).filter(info => info.local).length
@@ -761,6 +780,71 @@ function App() {
     if (current.mode === 'split' && current.activePaneType === 'secondary') {
       store.moveTerminalBetweenPanes(result.id, 'primary', 'secondary')
     }
+    return result.id
+  }
+
+  const handleOpenWelcomeLocalTerminal = async (button: HTMLButtonElement) => {
+    const origin = captureTabFlightSource(button.querySelector('span'))
+    const tabId = await handleOpenLocalTerminal()
+    if (origin && tabId) void flyToTab(origin, tabId)
+  }
+
+  // ---- Tabs open before an update, opened again (docs/plan/2026-11-18-restore-tabs-after-update.md) ----
+  // The update notice writes the tabs down through this, popped-out ones included
+  useEffect(() => setRestoreSource(() => {
+    const { terminals: tabs, layout: current, activeTerminalId: activeId } = useTerminalStore.getState()
+    const sftp = useSftpStore.getState()
+    return {
+      terminals: tabs, layout: current, activeId,
+      sftpPathOf: (tabId: string) => (sftp.isOpen(tabId) ? sftp.remotePath(tabId) : null),
+      detached: Array.from(detachedTabsRef.current.values())
+    }
+  }), [])
+
+  const [restoreBanner, setRestoreBanner] = useState<RestoreBannerState | null>(null)
+  const restoreCheckedRef = useRef(false)
+  // Once, after the first unlock: the main process gives the record only once and removes it
+  useEffect(() => {
+    if (isLocked || restoreCheckedRef.current || typeof window.electronAPI.restoreTabsTake !== 'function') return
+    restoreCheckedRef.current = true
+    window.electronAPI.restoreTabsTake()
+      .then((taken) => {
+        const record = taken ? readRestoreRecord(taken.record) : null
+        if (record) setRestoreBanner({ phase: 'ask', record })
+      })
+      .catch(() => { /* nothing to offer */ })
+  }, [isLocked])
+
+  const handleRestoreTabs = async () => {
+    if (restoreBanner?.phase !== 'ask') return
+    const { record } = restoreBanner
+    const total = record.tabs.filter(tab => tab.kind !== 'quick').length
+    setRestoreBanner({ phase: 'running', done: 0, total })
+    const outcome = await restoreTabs(record, {
+      openSaved: async (savedSessionId) => {
+        const session = useSessionStore.getState().sessions.find(s => s.id === savedSessionId)
+        if (!session) return { error: '세션 목록에 없는 세션입니다 (지워졌을 수 있습니다).' }
+        const result = await handleQuickConnect(session)
+        return result.success && result.sessionId ? { id: result.sessionId } : { error: result.error || '연결하지 못했습니다.' }
+      },
+      openLocal: () => handleOpenLocalTerminal(),
+      onProgress: (done) => setRestoreBanner({ phase: 'running', done, total })
+    })
+    setRestoreBanner(outcome.failed.length === 0 && outcome.quick.length === 0 ? null : { phase: 'done', outcome })
+    if (outcome.failed.length === 0) toast.success('탭을 다시 열었습니다', `업데이트 전에 열려 있던 탭 ${outcome.opened}개`)
+  }
+
+  // A quick connect from before the update: the connect dialog with its login filled in (no password was kept)
+  const handleRestoreQuick = (tab: Extract<RestoreTab, { kind: 'quick' }>) => {
+    setEditSession(null)
+    setDuplicateSource({
+      ...DEFAULT_CONFIG, id: undefined, name: tab.title || `${tab.username}@${tab.host}`,
+      host: tab.host, port: tab.port, username: tab.username,
+      authType: tab.authType ?? 'password', privateKeyPath: tab.privateKeyPath ?? '',
+      saveSession: false, mcpEnabled: false
+    })
+    setDuplicateTitle('업데이트 전에 열려 있던 연결')
+    setConnectModalOpen(true)
   }
 
   /** The tab's content: a terminal, or a DB tab (its code loads only when one exists) */
@@ -868,6 +952,13 @@ function App() {
   }
 
   const handleTabDragEnd = async () => {
+    // Dropped on a pane or a tab to merge (or refused there): neither popped out nor split
+    if (mergeDropTaken.current) {
+      mergeDropTaken.current = false
+      setDraggingTabId(null)
+      setDropZone(null)
+      return
+    }
     const sessionId = draggingTabId
     const terminal = sessionId ? terminals.get(sessionId) : null
 
@@ -928,9 +1019,10 @@ function App() {
     const width = rect.width
     const height = rect.height
 
-    // Larger drop zones - 30% of each edge
-    const horizontalThreshold = width * 0.3
-    const verticalThreshold = height * 0.3
+    // A band along each edge: inside it the pointer is over a pane, where the tab merges into that tab
+    // (hooks/useTabDropOnPane.ts) on the side it chooses
+    const horizontalThreshold = Math.min(SCREEN_SPLIT_BAND_PX, width * 0.3)
+    const verticalThreshold = Math.min(SCREEN_SPLIT_BAND_PX, height * 0.3)
 
     if (x < horizontalThreshold) {
       setDropZone('left')
@@ -987,6 +1079,19 @@ function App() {
     if (contextMenuTabId) {
       handleCloseTerminal(contextMenuTabId)
     }
+  }
+
+  // "칸으로 병합" in the tab's menu: a blocked choice tells why instead of doing nothing
+  const handleContextMergeInto = (choice: MergeChoice) => {
+    const sourceId = contextMenuTabId
+    if (!sourceId) return
+    if (choice.blocked) {
+      toast.warning(MERGE_BLOCKED_TITLE, choice.blocked)
+      return
+    }
+    void mergeTabIntoPane(sourceId, choice.id)
+      .then((result) => { if (!result.ok) toast.warning(MERGE_BLOCKED_TITLE, result.error) })
+      .catch(() => toast.error('탭을 병합하지 못했습니다', '잠시 후 다시 시도해 주세요.'))
   }
 
   const handleContextCloseOthers = () => {
@@ -1111,6 +1216,14 @@ function App() {
           onCloseTerminal={handleCloseTerminal}
         />
         <main className="main-area" id="main-content">
+          {restoreBanner && (
+            <RestoreTabsBanner
+              state={restoreBanner}
+              onRestore={() => void handleRestoreTabs()}
+              onClose={() => setRestoreBanner(null)}
+              onReconnect={handleRestoreQuick}
+            />
+          )}
           {!isSettingsLoaded ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
               <span style={{ color: 'var(--text-muted)' }}>Loading settings...</span>
@@ -1123,6 +1236,7 @@ function App() {
                     {terminalArray.map(([sessionId, terminal]) => (
                       <motion.div
                         key={sessionId}
+                        data-tab-id={sessionId}
                         className={`terminal-tab ${sessionId === activeTerminalId ? 'active' : ''} ${terminal.hasActivity ? 'has-activity' : ''} ${draggingTabId === sessionId ? 'dragging' : ''}`}
                         onClick={() => setActiveTerminal(sessionId)}
                         onContextMenu={(e) => handleTabContextMenu(e, sessionId)}
@@ -1152,7 +1266,7 @@ function App() {
                         )}
                         {terminal.db && <RiDatabase2Line size={13} className="tab-db-icon" aria-label="DB" />}
                         {terminal.local && <RiComputerLine size={13} className="tab-local-icon" aria-label="로컬" />}
-                        <span>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
+                        <span data-tab-label>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
                         {sessionId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[sessionId]}`} />}
                         {terminal.hasActivity && <span className="activity-indicator" />}
                         <motion.button
@@ -1354,7 +1468,7 @@ function App() {
               )}
             </>
           ) : (
-            <WelcomeScreen onNewConnection={handleNewConnection} onLocalTerminal={() => void handleOpenLocalTerminal()} />
+            <WelcomeScreen onNewConnection={handleNewConnection} onLocalTerminal={handleOpenWelcomeLocalTerminal} />
           )}
         </main>
       </div>
@@ -1434,7 +1548,15 @@ function App() {
         isTerminal={!contextMenuTabId || isSshTab(terminals.get(contextMenuTabId))}
         onToggleLog={handleContextToggleLog}
         onOpenLogFolder={openSessionLogFolder}
+        mergeChoices={contextMenuTabId && !terminals.get(contextMenuTabId)?.db ? mergeChoices(terminals, contextMenuTabId) : undefined}
+        onMergeInto={handleContextMergeInto}
       />
+      {mergeHover && (
+        <div className={`tab-merge-marker${mergeHover.blocked ? ' is-blocked' : ''}${mergeHover.onTab ? ' on-tab' : ''}`} style={mergeHover.box} role="status">
+          <span>{mergeHover.blocked ?? (mergeHover.place?.isVacant ? '여기에 놓으면 이 빈 자리로 병합'
+            : mergeHover.place?.side ? `여기에 놓으면 이 칸의 ${sideWord(mergeHover.place.side)}에 병합` : '여기에 놓으면 이 탭의 칸으로 병합')}</span>
+        </div>
+      )}
 
       <ToastContainer />
       <UpdateNotification />

@@ -8,6 +8,8 @@ type Serializer = () => string
 
 // Live xterm instances, so a snapshot can be taken right before the tab leaves the window
 const serializers = new Map<string, Serializer>()
+// Resolves once everything the terminal has received so far is drawn
+const flushers = new Map<string, () => Promise<void>>()
 // Snapshots waiting for the next terminal of that session to mount
 const pending = new Map<string, string>()
 
@@ -15,12 +17,25 @@ const pending = new Map<string, string>()
 export const SNAPSHOT_SCROLLBACK_ROWS = 5000
 
 /** Register the serializer of a mounted terminal. Returns an unregister function. */
-export function registerTerminalSerializer(sessionId: string, serialize: Serializer): () => void {
+export function registerTerminalSerializer(sessionId: string, serialize: Serializer, flush?: () => Promise<void>): () => void {
   serializers.set(sessionId, serialize)
+  if (flush) flushers.set(sessionId, flush)
+  else flushers.delete(sessionId)
   return () => {
     // A remounted terminal may already have replaced this one
-    if (serializers.get(sessionId) === serialize) serializers.delete(sessionId)
+    if (serializers.get(sessionId) !== serialize) return
+    serializers.delete(sessionId)
+    flushers.delete(sessionId)
   }
+}
+
+/** Like captureTerminalSnapshot, after the output received so far has been drawn (xterm writes are queued) */
+export async function captureDrawnSnapshot(sessionId: string): Promise<string | null> {
+  const flush = flushers.get(sessionId)
+  if (flush) {
+    try { await flush() } catch { /* take what is there */ }
+  }
+  return captureTerminalSnapshot(sessionId)
 }
 
 /** Current screen of the session's terminal, or null when there is none (or nothing on it). */
@@ -48,5 +63,6 @@ export function takePendingSnapshot(sessionId: string): string | null {
 /** Test helper */
 export function resetTerminalSnapshots(): void {
   serializers.clear()
+  flushers.clear()
   pending.clear()
 }

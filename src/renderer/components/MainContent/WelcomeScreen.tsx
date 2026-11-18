@@ -6,7 +6,7 @@ import { SPRINGS } from '../../lib/animation/config'
 
 interface WelcomeScreenProps {
   onNewConnection: () => void
-  onLocalTerminal: () => void
+  onLocalTerminal: (button: HTMLButtonElement) => void
 }
 
 export function WelcomeScreen({ onNewConnection, onLocalTerminal }: WelcomeScreenProps) {
@@ -43,7 +43,12 @@ export function WelcomeScreen({ onNewConnection, onLocalTerminal }: WelcomeScree
         <RiAddFill size={20} />
         <span>새 연결</span>
       </motion.button>
-      <motion.button className="welcome-local-terminal" onClick={onLocalTerminal} variants={welcomeItemVariants}>
+      <motion.button
+        className="welcome-local-terminal"
+        onClick={event => onLocalTerminal(event.currentTarget)}
+        variants={welcomeItemVariants}
+        whileTap={reducedMotion ? undefined : { scale: 0.98 }}
+      >
         <RiComputerLine size={16} />
         <span>로컬 터미널 열기</span>
       </motion.button>

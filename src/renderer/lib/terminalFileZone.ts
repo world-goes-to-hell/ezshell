@@ -1,10 +1,10 @@
-import { textAfterPrompt } from './commandCapture'
+import { textAfterPrompt, type BufferLike } from './commandCapture'
+import { resolveName } from './terminalTarget'
 
 /**
  * The "file zone" of a terminal: the output printed since the shell last changed folder. Relative
- * names in it ("catalina.log") mean files of the folder the tab is in now; names printed before the
- * last `cd` belong to another folder, so they are not looked up as relative names. Rows are buffer
- * rows (0-based, scrollback included).
+ * names in it ("catalina.log") mean files of the folder the tab is in now. A completed listing can
+ * also keep a separate range with its original absolute folder. Rows include scrollback.
  */
 export interface FileZone {
   start: number
@@ -107,6 +107,7 @@ function firstStageWords(command: string): string[] | null {
     word += ch
     hasWord = true
   }
+  if (quote) return null
   if (hasWord) words.push(word)
   return words
 }
@@ -168,6 +169,52 @@ export function isListing(command: string | null): boolean {
   const stage = firstStageWords(command)
   const words = stage && skipPrefixes(stage)
   return Boolean(words && words[0] && LS_COMMANDS.has(words[0]))
+}
+
+export interface HistoricalListing {
+  folder: string
+  checkDirectory: boolean
+}
+
+const SIMPLE_LIST_FLAGS = /^-[aAbBCfFgGhiklmNnopqQrSstUuvxXZ1]+$/
+const SIMPLE_LONG_FLAGS = new Set(['--all', '--almost-all', '--color=auto', '--color=always', '--color=never', '--group-directories-first', '--human-readable', '--long'])
+const ABSOLUTE_PROMPT_PATH = /^(?:[\w.-]+@[\w.-]+:|\[[\w.-]+@[\w.-]+\s+)?(\/(?:[\w./-]*))(?:\])?[#$>] $/
+
+/** Only a single literal directory whose base can be placed at the time of the listing. */
+export function historicalListing(command: string, prompt: string, cwd: string): HistoricalListing | null {
+  // Leave shell expansion, pipelines, redirection and command prefixes to the live zone.
+  if (!/^[\p{L}\p{N}\p{M}\s_./=+'"-]+$/u.test(command)) return null
+  const words = firstStageWords(command)
+  if (!words || !LS_COMMANDS.has(words[0])) return null
+  let index = 1
+  while (index < words.length && words[index].startsWith('-')) {
+    const option = words[index++]
+    if (option === '--') break
+    if (!SIMPLE_LIST_FLAGS.test(option) && !SIMPLE_LONG_FLAGS.has(option)) return null
+  }
+  if (words.length - index > 1) return null
+  const argument = words[index] ?? '.'
+  // Preserve the server's path semantics when a parent component could follow a symlink.
+  if (!argument || argument.split('/').includes('..')) return null
+  const inCwd = argument === '.' || argument === './'
+  // The runtime's currentPath can represent '~' as '/'; confirm a literal absolute path on screen.
+  const promptPath = ABSOLUTE_PROMPT_PATH.exec(prompt)?.[1]
+  const confirmedCwd = promptPath === cwd ? promptPath : undefined
+  const folder = resolveName(argument, confirmedCwd, null)
+  return folder ? { folder, checkDirectory: !inCwd } : null
+}
+
+/** Output strictly between this typed command and the next occurrence of its shell prompt. */
+export function completedListingRange(buffer: BufferLike, commandRow: number, lastRow: number, prompt: string): FileZone | null {
+  let first = commandRow + 1
+  while (first <= lastRow && buffer.getLine(first)?.isWrapped) first++
+  for (let row = first; row <= lastRow; row++) {
+    const line = buffer.getLine(row)
+    if (!line || line.isWrapped) continue
+    const text = line.translateToString(true)
+    if (text === prompt.trimEnd() || text.startsWith(prompt)) return first < row ? { start: first, end: row - 1 } : null
+  }
+  return null
 }
 
 /** The zone cut at each command line; rows before the first command are the current folder's */

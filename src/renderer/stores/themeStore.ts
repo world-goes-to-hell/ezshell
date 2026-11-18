@@ -34,6 +34,10 @@ interface ThemeState {
 function applyThemeToDocument(theme: ThemeDefinition, surface: SurfaceStyle) {
   const root = document.documentElement
   root.setAttribute('data-theme', theme.id)
+  // CSS motion effects use the selected palette, including values from custom themes.
+  root.style.setProperty('--motion-accent', theme.colors.accent)
+  root.style.setProperty('--terminal-background', theme.terminal.background)
+  root.style.setProperty('--terminal-foreground', theme.terminal.foreground)
   // Surface style (styles/glass.css) and the scheme it needs to pick its edge color
   const drawn = effectiveSurface(theme.id, surface)
   const scheme = colorSchemeFor(theme.colors.bgPrimary) ?? 'dark'

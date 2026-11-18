@@ -361,10 +361,19 @@
   min-width: 0;
 }
 
-.remote-log-new-lines {
+.remote-log-arrivals {
   position: absolute;
   right: 22px;
   bottom: 14px;
+  left: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.remote-log-new-lines {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -375,6 +384,7 @@
   font-size: 12.5px;
   box-shadow: var(--shadow-md);
   cursor: pointer;
+  pointer-events: auto;
 }
 
 .remote-log-new-lines:hover {

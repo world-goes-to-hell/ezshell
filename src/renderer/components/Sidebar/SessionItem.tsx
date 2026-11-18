@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { RiServerFill, RiDatabase2Fill, RiCloudFill, RiGlobalFill, RiHomeFill, RiComputerFill, RiHardDriveFill, RiCpuFill, RiBaseStationFill, RiPlugLine } from 'react-icons/ri'
 import type { Session } from '../../stores/sessionStore'
+import { useTerminalStore } from '../../stores/terminalStore'
 import { SessionIcon } from '../Modal/ConnectModal'
 import { SessionTooltip } from './SessionTooltip'
 import { SessionTabBadge } from './SessionTabBadge'
@@ -24,7 +25,7 @@ const ICON_MAP: Record<SessionIcon, typeof RiServerFill> = {
 
 interface SessionItemProps {
   session: Session
-  onConnect: (session: Session) => void
+  onConnect: (session: Session, source: HTMLElement) => void
   onContextMenu: (e: React.MouseEvent, sessionId: string) => void
   onDragStart: (e: React.DragEvent, type: 'session' | 'folder', id: string) => void
   onDragEnd: () => void
@@ -55,6 +56,7 @@ export function SessionItem({
   session, onConnect, onContextMenu, onDragStart, onDragEnd, onItemDragOver, onItemDragLeave, onItemDrop,
   dropIndicator, isDragging, tabs
 }: SessionItemProps) {
+  const isConnecting = useTerminalStore(state => state.pendingSessionConnections.has(session.id))
   const isActive = (tabs?.connected.length ?? 0) > 0
   const tabBadges = tabs && (
     // Focus moving to a badge or into its tab list (a portal, still a React child) must not reach the row
@@ -77,6 +79,7 @@ export function SessionItem({
     'session-item',
     isDragging && 'dragging',
     isActive && 'active',
+    isConnecting && 'is-connecting',
     // Only lost tabs: the state dot turns red
     !isActive && (tabs?.disconnected.length ?? 0) > 0 && 'has-lost',
     session.backgroundColor && 'has-own-color',
@@ -87,11 +90,13 @@ export function SessionItem({
     <SessionTooltip session={session} tabs={tabs} compact={false}>
       <motion.div
         className={classNames}
+        data-session-id={session.id}
         role="treeitem"
         aria-label={`SSH session: ${displayName}`}
         aria-selected={isActive}
+        aria-busy={isConnecting || undefined}
         tabIndex={0}
-        onDoubleClick={() => onConnect(session)}
+        onDoubleClick={(event) => onConnect(session, event.currentTarget)}
         onContextMenu={(e) => onContextMenu(e, session.id)}
         draggable
         // motion.div treats onDragStart/onDragEnd as its own gesture props

@@ -14,7 +14,7 @@ const { testSshConnection, describeSshError, normalizeConnectConfig } = require(
 const { withHostKeyCheck, isHostKeyError, hostKeyMessage } = require('../hostKeys/hostKeyCheck.js');
 
 function registerSshSessionIpc(ctx) {
-  const { ipcMain, shell, sshConnections, sshStreams, splitStreamHandlers, connectionStates, ConnectionState, updateConnectionState, getWindowForSession, hostKeyStore, hostKeyPrompter, checkHostKeyAsking, hostKeyFailureText, setupRemoteForwardHandler, cleanupPortForwards, containers, getSessionLogger, notifySessionLog, endSessionLog, sessionLogDir, MAX_SESSION_LOG_NAME } = ctx;
+  const { ipcMain, shell, sshConnections, sshStreams, splitStreamHandlers, connectionStates, ConnectionState, updateConnectionState, getWindowForSession, hostKeyStore, hostKeyPrompter, checkHostKeyAsking, hostKeyFailureText, setupRemoteForwardHandler, cleanupPortForwards, containers, getSessionLogger, notifySessionLog, endSessionLog, sessionLogDir, MAX_SESSION_LOG_NAME, closeSftpSession } = ctx;
 
   // Why a tab's shell ended, written to the console. The shell exited by itself (an exit code or
   // signal: `exit`, or a server that logs idle shells out with TMOUT), or the connection was lost
@@ -152,9 +152,11 @@ function registerSshSessionIpc(ctx) {
           // Clean up old connection if exists
           // (only this tab's channel when the old connection is shared with a tab made from a split shell)
           const oldConn = sshConnections.get(sessionId);
+          closeSftpSession(sessionId);
           if (oldConn) sharedConn.release(sshConnections, sessionId, oldConn);
 
-          sshConnections.set(sessionId, { conn, stream });
+          const session = { conn, stream };
+          sshConnections.set(sessionId, session);
           setupRemoteForwardHandler(sessionId, conn);
           connState.retryCount = 0;
           updateConnectionState(sessionId, ConnectionState.CONNECTED);
@@ -174,7 +176,7 @@ function registerSshSessionIpc(ctx) {
           stream.on('exit', (code, signal) => { shellExit = { code, signal }; });
           stream.on('close', () => {
             // A shell replaced by a newer connection (the tab's 재연결) closing late must not touch the new one
-            if (sshConnections.get(sessionId)?.stream !== stream) return;
+            if (sshConnections.get(sessionId) !== session) return;
             if (endedByItself(shellExit)) return reportShellExit(sessionId);
             updateConnectionState(sessionId, ConnectionState.DISCONNECTED);
             attemptReconnect(sessionId);
@@ -269,7 +271,8 @@ function registerSshSessionIpc(ctx) {
               reject(err);
               return;
             }
-            sshConnections.set(sessionId, { conn, stream, jumpConn: sock ? sock._client : null });
+            const session = { conn, stream, jumpConn: sock ? sock._client : null };
+            sshConnections.set(sessionId, session);
             setupRemoteForwardHandler(sessionId, conn);
 
             // Store connection state for reconnection
@@ -296,7 +299,7 @@ function registerSshSessionIpc(ctx) {
             stream.on('exit', (code, signal) => { shellExit = { code, signal }; });
             stream.on('close', () => {
               // A shell replaced by a newer connection (the tab's 재연결) or closed with its tab is not this tab's news
-              if (sshConnections.get(sessionId)?.stream !== stream) return;
+              if (sshConnections.get(sessionId) !== session) return;
               const connState = connectionStates.get(sessionId);
               if (endedByItself(shellExit)) return reportShellExit(sessionId);
 
@@ -508,6 +511,7 @@ function registerSshSessionIpc(ctx) {
   ipcMain.on('ssh-disconnect', (event, { sessionId }) => {
     endSessionLog(sessionId);
     containers.forget(sessionId);
+    closeSftpSession(sessionId);
     const session = sshConnections.get(sessionId);
     if (session) {
       // Off the list first: the shell's late close event then sees it is not this tab's news
@@ -587,6 +591,7 @@ function registerSshSessionIpc(ctx) {
     connState.state = ConnectionState.CONNECTING;
     // Take the old connection off the list first: its late close events then see they are not current
     const old = sshConnections.get(sessionId);
+    closeSftpSession(sessionId);
     if (old) {
       sshConnections.delete(sessionId);
       // Only this tab's shell when a tab made from a split shell still uses the old connection

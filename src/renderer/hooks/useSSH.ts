@@ -37,13 +37,14 @@ export interface SSHConnectConfig {
 }
 
 export function useSSH() {
-  const { addTerminal, removeTerminal, setConnecting, setConnected, updateTerminalMeta } = useTerminalStore()
+  const { addTerminal, removeTerminal, changePendingSessionConnections, setConnected, updateTerminalMeta } = useTerminalStore()
 
   const connect = useCallback(async (config: SSHConnectConfig) => {
-    setConnecting(true)
-    toast.info('연결 중...', `${config.username}@${config.host}에 연결을 시도합니다`)
+    const { savedSessionId } = config
+    if (savedSessionId) changePendingSessionConnections(savedSessionId, 1)
 
     try {
+      toast.info('연결 중...', `${config.username}@${config.host}에 연결을 시도합니다`)
       // UI-only fields stay in the renderer; everything else goes to the main process
       const { sessionName, color, postConnectScript, ...connectionConfig } = config
       const result = await window.electronAPI.sshConnect(connectionConfig)
@@ -54,6 +55,7 @@ export function useSSH() {
           host: config.host,
           username: config.username,
           connected: true,
+          revealOnConnect: true,
           color: config.color,
           title: config.sessionName,
           connectConfig: { ...config }
@@ -106,9 +108,9 @@ export function useSSH() {
       toast.error('연결 실패', error.message)
       return { success: false, error: error.message }
     } finally {
-      setConnecting(false)
+      if (savedSessionId) changePendingSessionConnections(savedSessionId, -1)
     }
-  }, [addTerminal, setConnecting, setConnected, updateTerminalMeta])
+  }, [addTerminal, changePendingSessionConnections, setConnected, updateTerminalMeta])
 
   const disconnect = useCallback((sessionId: string) => {
     // End stats record

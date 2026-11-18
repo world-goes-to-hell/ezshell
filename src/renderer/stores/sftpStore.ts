@@ -20,6 +20,7 @@ export interface Transfer {
   progress: number
   speed: number
   status: 'queued' | 'active' | 'paused' | 'completed' | 'error'
+  completedAt?: number
   error?: string
 }
 

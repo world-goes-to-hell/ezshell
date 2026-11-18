@@ -59,7 +59,31 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   if (await js(`document.querySelectorAll('input[type=password]').length > 0`)) await js(`(() => { const set = ${SET}; [...document.querySelectorAll('input[type=password]')].forEach(i => set(i, 'test-pass-1234')); document.querySelector('button[type=submit]').click() })()`)
   await until(`!!document.querySelector('.btn-quick-connect')`)
   await sleep(800)
-  await js(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('로컬 터미널'))?.click()`)
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+  await js(`(() => {
+    const button = document.querySelector('.welcome-local-terminal')
+    const label = button.querySelector('span')
+    const origin = label.getBoundingClientRect()
+    const observer = new MutationObserver(() => {
+      const chip = document.querySelector('.session-tab-flight')
+      if (!chip) return
+      window.__localTabFlight = {
+        tabId: chip.dataset.destinationId,
+        fromButton: chip.textContent === label.textContent &&
+          Math.abs(chip.offsetLeft + 7 - origin.left) < 2 &&
+          Math.abs(chip.offsetTop + chip.offsetHeight / 2 - origin.top - origin.height / 2) < 2,
+        welcomeGone: !button.isConnected
+      }
+      observer.disconnect()
+    })
+    observer.observe(document.body, { childList: true })
+    button.click()
+  })()`)
+  check('the welcome button flies into the new local tab after the welcome screen leaves', await until(`
+    window.__localTabFlight?.fromButton && window.__localTabFlight.welcomeGone &&
+    window.__localTabFlight.tabId === document.querySelector('.terminal-tab.active')?.dataset.tabId &&
+    !document.querySelector('.session-tab-flight, .session-tab-receiver')
+  `, 5000), JSON.stringify(await js('window.__localTabFlight')))
   check('a local terminal tab opens with a PowerShell prompt', await ready(1), String((await texts())[0] || '').slice(-80))
 
   await menuAt(0)
@@ -113,11 +137,38 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   check('the old tab keeps an empty place with merge buttons', await js(`[...document.querySelectorAll('.pane-vacant')].some(v => v.offsetParent !== null)`))
   await shot('2-vacant')
 
-  // ---- Closing the tab closes its panes' shells ----
+  // ---- The moved tab merges back into the empty place (from the tab's menu) ----
+  const second = await center(`document.querySelectorAll('.terminal-tab')[1]`)
+  await click(second[0], second[1], 'right')
+  await until(`!!document.querySelector('.tab-context-menu')`, 4000)
+  const mergeItem = `[...document.querySelectorAll('.tab-context-menu .menu-item')].find(b => b.textContent.includes('칸으로 병합:'))`
+  check('the tab menu offers the other local terminal tab', await js(`!!${mergeItem} && !${mergeItem}.classList.contains('is-dimmed')`))
+  await js(`${mergeItem}?.click()`)
+  check('merging removes the tab', await until(`document.querySelectorAll('.terminal-tab').length === 1`, 8000), String(await tabCount()))
+  check('and fills the empty place', await until(`![...document.querySelectorAll('.pane-vacant')].some(v => v.offsetParent !== null)`, 5000))
+  await sleep(1500)
+  t = await texts()
+  const back = t.findIndex(x => /STILL-ALIVE/.test(x))
+  check('the pane shows the same shell with its output', t.length === 2 && back >= 0 && /PANE-TWO/.test(t[back]), JSON.stringify(t.map(x => x.slice(-80))))
+  await typeIn(back, 'echo MERGED-BACK')
+  check('and the shell still answers', /MERGED-BACK/.test((await texts())[back]))
+  await shot('3-merged-back')
+
+  // Alt-drag from the second shell onto the main: keep the second process and close the first.
+  const mainId = await js(`document.querySelector('.terminal-tab').dataset.tabId`)
+  r = await rects()
+  const [x, y] = [r[back][0] + r[back][2] / 2, r[back][1] + r[back][3] / 2]
+  const [destinationX, destinationY] = [r[0][0] + r[0][2] / 2, r[0][1] + r[0][3] / 2]
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, modifiers: 1, button: 'left', buttons: 1, clickCount: 1 })
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: destinationX, y: destinationY, modifiers: 1, button: 'none', buttons: 1 })
+  check('Alt drag previews a merge between local shells', await until(`!!document.querySelector('.pane-merge-preview.is-area')`, 4000))
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: destinationX, y: destinationY, modifiers: 1, button: 'left', buttons: 0, clickCount: 1 })
+  check('the original tab promotes the source shell without opening a tab', await until(`document.querySelectorAll('.terminal-tab').length === 1 && ${PANES}.length === 1 && ${PANES}[0].textContent.includes('MERGED-BACK')`, 12000))
+  check('the main process closed the original shell', await until(`window.electronAPI.localShellAttach(${JSON.stringify(mainId)}).then(state => state === null)`, 8000))
+  await typeIn(0, 'echo LOCAL-PROMOTED')
+  check('the promoted local shell still answers', /LOCAL-PROMOTED/.test((await texts())[0]))
   await js(`document.querySelectorAll('.terminal-tab')[0].querySelector('.tab-close')?.click()`); await sleep(800)
-  check('the old tab closes', (await tabCount()) === 1, String(await tabCount()))
-  await sleep(600)
-  check('the moved tab is not affected', /STILL-ALIVE/.test((await texts())[0] || ''))
+  check('the last tab closes', (await tabCount()) === 0, String(await tabCount()))
 
   console.log(failures ? `${failures} FAILED` : 'ALL PASSED')
   process.exit(failures ? 1 : 0)

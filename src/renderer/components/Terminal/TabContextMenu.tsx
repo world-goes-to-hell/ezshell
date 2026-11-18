@@ -3,8 +3,9 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   RiCloseLine, RiCloseFill, RiArrowLeftLine, RiArrowRightLine,
   RiFileCopyLine, RiEditLine, RiSplitCellsHorizontal,
-  RiSplitCellsVertical, RiRecordCircleLine, RiStopCircleLine, RiFolderOpenLine
+  RiSplitCellsVertical, RiRecordCircleLine, RiStopCircleLine, RiFolderOpenLine, RiMergeCellsHorizontal
 } from 'react-icons/ri'
+import type { MergeChoice } from '../../lib/tabMerge'
 import './TabContextMenu.css'
 
 interface TabContextMenuProps {
@@ -26,13 +27,27 @@ interface TabContextMenuProps {
   onOpenLogFolder: () => void
   /** False for a DB tab: no duplicate or log items */
   isTerminal?: boolean
+  /** Other tabs of the same session this tab can become a pane of (lib/tabMerge.ts); absent for a DB tab */
+  mergeChoices?: MergeChoice[]
+  /** A choice was picked; a blocked one is passed too, so the reason can be told */
+  onMergeInto?: (choice: MergeChoice) => void
+}
+
+interface MenuEntry {
+  type?: string
+  icon?: typeof RiCloseLine
+  label?: string
+  action?: () => void
+  /** Shown dimmed, with the reason as its tooltip (it can still be picked: the reason is then told) */
+  dimmed?: boolean
+  title?: string
 }
 
 export function TabContextMenu({
   isOpen, position, onClose,
   onCloseTab, onCloseOthers, onCloseToLeft, onCloseToRight,
   onDuplicate, onRename, onSplitHorizontal, onSplitVertical,
-  isLogging, onToggleLog, onOpenLogFolder, isTerminal = true
+  isLogging, onToggleLog, onOpenLogFolder, isTerminal = true, mergeChoices, onMergeInto
 }: TabContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -48,7 +63,18 @@ export function TabContextMenu({
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [isOpen, onClose])
 
-  const menuItems = [
+  // "칸으로 병합": one item per tab of the same session. With none, one dimmed item says why.
+  const mergeItems: MenuEntry[] = !mergeChoices ? [] : mergeChoices.length === 0
+    ? [{ icon: RiMergeCellsHorizontal, label: '다른 탭의 칸으로 병합', dimmed: true, title: '같은 세션에서 연 다른 탭이 없습니다' }]
+    : mergeChoices.map(choice => ({
+        icon: RiMergeCellsHorizontal,
+        label: `칸으로 병합: ${choice.label}`,
+        action: () => onMergeInto?.(choice),
+        dimmed: choice.blocked !== null,
+        title: choice.blocked ?? '이 탭의 셸을 그대로 그 탭의 칸으로 옮깁니다'
+      }))
+
+  const menuItems: MenuEntry[] = [
     { icon: RiCloseLine, label: '탭 닫기', action: onCloseTab },
     { icon: RiCloseFill, label: '다른 탭 닫기', action: onCloseOthers },
     { icon: RiArrowLeftLine, label: '왼쪽 탭 닫기', action: onCloseToLeft },
@@ -60,6 +86,7 @@ export function TabContextMenu({
     { type: 'separator' },
     { icon: RiSplitCellsHorizontal, label: '가로 분할', action: onSplitHorizontal },
     { icon: RiSplitCellsVertical, label: '세로 분할', action: onSplitVertical },
+    ...(mergeItems.length > 0 ? [{ type: 'separator' }, ...mergeItems] : []),
     ...(isTerminal ? [
       { type: 'separator' },
       isLogging
@@ -84,7 +111,7 @@ export function TabContextMenu({
             item.type === 'separator' ? (
               <div key={index} className="menu-separator" />
             ) : (
-              <button key={index} className="menu-item" onClick={() => { item.action?.(); onClose(); }}>
+              <button key={index} className={`menu-item${item.dimmed ? ' is-dimmed' : ''}`} title={item.title} onClick={() => { item.action?.(); onClose(); }}>
                 {item.icon && <item.icon size={16} />}
                 <span>{item.label}</span>
               </button>

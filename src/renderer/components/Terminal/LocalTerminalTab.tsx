@@ -12,11 +12,11 @@ import { ensureLocalPaneShell, closeLocalPaneShells } from '../../lib/localPaneS
 import { TerminalContextMenu, MENU_SEPARATOR, type TerminalMenuGroup } from './TerminalContextMenu'
 import { commonTerminalItems } from './terminalMenuCommon'
 import { attachLogHighlight } from './terminalLogHighlight'
-import { SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
+import { PaneArrival, SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
 import './LocalTerminalTab.css'
 
 interface LocalTerminalTabProps {
-  /** The tab's id, which is also the id of its first shell in the main process */
+  /** The tab's stable id, including when a split shell takes over the main pane */
   terminalId: string
   isActive: boolean
   onActivate: () => void
@@ -70,6 +70,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
+    setExit(null)
     const { fontSize: size, fontFamily: family } = useTerminalStore.getState()
     const terminal = new Terminal({
       theme: useThemeStore.getState().getTerminalTheme(),
@@ -275,6 +276,7 @@ function LocalSplitPane({ tabId, pane, style }: { tabId: string; pane: PaneId; s
 export function LocalTerminalTab({ terminalId, isActive, onActivate }: LocalTerminalTabProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const splitTree = useTerminalStore(state => state.terminals.get(terminalId)?.splitTree)
+  const mainShellId = useTerminalStore(state => state.terminals.get(terminalId)?.local?.shellId ?? terminalId)
   const isSplit = !!splitTree
   const layout = useMemo(() => layoutOf(splitTree ?? singlePane()), [splitTree])
   const mainRect = layout.panes.find(entry => entry.pane === MAIN_PANE)?.rect
@@ -293,14 +295,15 @@ export function LocalTerminalTab({ terminalId, isActive, onActivate }: LocalTerm
       <LocalShellView
         tabId={terminalId}
         pane={MAIN_PANE}
-        shellId={terminalId}
+        shellId={mainShellId}
         takesFocus={isActive}
         style={isSplit && mainRect ? paneBox(mainRect, PANE_DIVIDER_PX) : undefined}
       />
       {splitPanes.map(({ pane, rect }) => (
         <LocalSplitPane key={`w-${pane}`} tabId={terminalId} pane={pane} style={paneBox(rect, PANE_DIVIDER_PX)} />
       ))}
-      {isSplit && splitTree && <SplitChrome tabId={terminalId} tree={splitTree} containerRef={containerRef} />}
+      <SplitChrome tabId={terminalId} tree={splitTree ?? singlePane()} containerRef={containerRef} />
+      {!isSplit && <PaneArrival tabId={terminalId} />}
     </div>
   )
 }

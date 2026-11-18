@@ -17,7 +17,18 @@ const { check, finish } = createChecks()
   fs.writeFileSync(file, 'dropped on the terminal\n')
 
   await unlock(driver)
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
   check('an SSH tab connects to the test server', await connectSsh(driver))
+  await js(`(() => {
+    window.__transferCompletions = []
+    document.addEventListener('animationstart', event => {
+      if (event.animationName === 'transfer-check') {
+        window.__transferCompletions.push(event.target.closest('.file-item')?.querySelector('.file-name')?.textContent)
+      }
+    })
+    ;[...${PANEL}.querySelectorAll('.terminal-header-btn')].find(b => (b.title || b.dataset.heldTitle || '').includes('SFTP')).click()
+  })()`)
+  await until(`!!document.querySelector('.sftp-panel')`, 10000)
 
   const at = await js(`(() => { const r = ${PANEL}.querySelector('.terminal-container[data-pane="main"]').getBoundingClientRect(); return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)] })()`)
   const data = { items: [], files: [file], dragOperationsMask: 1 }
@@ -41,8 +52,6 @@ const { check, finish } = createChecks()
   check('one file is queued, none left out', shown.includes('1개 파일 업로드 시작') && !shown.includes('제외') && !shown.includes('실패'), shown)
 
   // The file arrives in the login folder of the server: the SFTP panel lists it there
-  await js(`[...${PANEL}.querySelectorAll('.terminal-header-btn')].find(b => (b.title || b.dataset.heldTitle || '').includes('SFTP')).click()`)
-  await until(`!!document.querySelector('.sftp-panel')`, 10000)
   const listed = `[...document.querySelectorAll('.sftp-panel .remote-pane .file-item')].some(r => r.textContent.includes(${JSON.stringify(name)}))`
   let arrived = await until(listed, 6000)
   if (!arrived) {
@@ -51,6 +60,11 @@ const { check, finish } = createChecks()
     arrived = await until(listed, 10000)
   }
   check('the file is on the server', arrived, String(await js(`[...document.querySelectorAll('.sftp-panel .remote-pane .file-item')].map(r => r.textContent.trim().slice(0, 30)).join(' | ')`)))
+  const completed = `[...document.querySelectorAll('.remote-pane .file-item.transfer-mark--done')].find(r => r.querySelector('.file-name')?.textContent === ${JSON.stringify(name)})`
+  check('a real upload plays the completion check on its own row',
+    await until(`window.__transferCompletions.includes(${JSON.stringify(name)})`))
+  check('the temporary highlight clears and leaves the direction badge',
+    await until(`!!${completed}?.querySelector('.transfer-mark-badge') && !${completed}?.querySelector('.transfer-completion')`))
   await shot('ssh-drop-upload-2-listed')
 
   finish()

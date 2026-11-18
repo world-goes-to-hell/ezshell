@@ -29,6 +29,10 @@
   text-align: left;
 }
 
+.menu-item.is-dimmed {
+  opacity: 0.5;
+}
+
 .menu-item:hover {
   background: rgba(137, 180, 250, 0.15);
   color: var(--text-primary);

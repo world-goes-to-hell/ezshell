@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { singlePane, splitPane, nextPaneSeq, paneId, isSplitTree, type SplitNode, type SplitAxis, type PaneId } from '../lib/splitTree'
+import { singlePane, splitPane, nextPaneSeq, paneId, panePath, isSplitTree, type SplitNode, type SplitAxis, type PaneId } from '../lib/splitTree'
 import { takePendingSnapshot } from '../lib/terminalSnapshots'
 import { findTabPane } from '../lib/sessionTabs'
 import { linkConnected, linkDisconnected, linkReconnecting } from '../lib/connectionLost'
@@ -18,10 +18,14 @@ export interface TerminalInfo {
   splitTree?: SplitNode
   /** Last number used for a pane id in this tab; ids are not reused, so pane elements keep unique keys */
   paneSeq?: number
+  /** Highlight the destination of a split or move once */
+  paneArrival?: { pane: PaneId; seq: number; dividerPath?: string }
   color?: string
   statsId?: string
   // Config this tab connected with, kept in memory only so the tab can be duplicated
   connectConfig?: SSHConnectConfig
+  /** Play the opening animation when a new SSH connection gets its first tab */
+  revealOnConnect?: boolean
   /** Automatic reconnect in progress after the connection dropped */
   reconnect?: { attempt: number; maxAttempts: number } | null
   /** Why the connection could not be brought back, shown on the "연결 끊김" overlay */
@@ -30,9 +34,9 @@ export interface TerminalInfo {
    * A database tab (src/dbClient) instead of a terminal: no shell, SFTP, log or duplicate.
    * `sshSessionId` is the tab whose SSH connection carries the tunnel.
    */
-  db?: { dbId: string; sshSessionId: string; label?: string }
-  /** A terminal of this PC (src/localShell.js) instead of an SSH one: no SFTP, split, log or duplicate */
-  local?: { shell: string }
+  db?: { dbId: string; sshSessionId: string; label?: string; /** The saved account it was opened with (opened again after an update) */ savedAccountId?: string }
+  /** A local terminal. A reassigned main shell can have a different id from its tab. */
+  local?: { shell: string; shellId?: string }
 }
 
 export type SplitDirection = 'horizontal' | 'vertical' | 'quad' | 'tri-bottom' | 'tri-top' | 'tri-right' | 'tri-left'
@@ -56,7 +60,7 @@ type SshDataHandler = (data: string) => void
 interface TerminalState {
   terminals: Map<string, TerminalInfo>
   activeTerminalId: string | null
-  isConnecting: boolean
+  pendingSessionConnections: ReadonlyMap<string, number>
   sshDataHandlers: Map<string, SshDataHandler>
 
   // Layout state for split view
@@ -75,7 +79,7 @@ interface TerminalState {
   focusRequest: { sessionId: string; seq: number } | null
   /** Bring an open tab to the front from outside the tab bar, keeping a split view as it is */
   focusTerminal: (sessionId: string) => void
-  setConnecting: (connecting: boolean) => void
+  changePendingSessionConnections: (savedSessionId: string, change: 1 | -1) => void
   setConnected: (sessionId: string) => void
   /** `note` says why; without one the reason already shown is kept (a close follows the failure message) */
   setDisconnected: (sessionId: string, note?: string) => void
@@ -88,9 +92,9 @@ interface TerminalState {
 
   // Per-terminal split (same session, two shells)
   /** Halves one pane of the tab: a new shell opens to its right ('row') or below it ('col') */
-  splitTerminalPane: (sessionId: string, pane: PaneId, axis: SplitAxis) => void
+  splitTerminalPane: (sessionId: string, pane: PaneId, axis: SplitAxis, ratio?: number) => void
   /** A tree changed by closing, swapping, resizing or merging; one pane left ends the split */
-  setSplitTree: (sessionId: string, tree: SplitNode) => void
+  setSplitTree: (sessionId: string, tree: SplitNode, arrivedPane?: PaneId) => void
 
   // Layout management
   setLayout: (layout: Partial<LayoutState>) => void
@@ -150,7 +154,7 @@ export const TERMINAL_FONTS = [
 export const useTerminalStore = create<TerminalState>((set, get) => ({
   terminals: new Map(),
   activeTerminalId: null,
-  isConnecting: false,
+  pendingSessionConnections: new Map(),
   focusRequest: null,
   sshDataHandlers: sshDataHandlers,
   layout: { ...defaultLayout },
@@ -303,7 +307,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     set((state) => ({ focusRequest: { sessionId, seq: (state.focusRequest?.seq ?? 0) + 1 } }))
   },
 
-  setConnecting: (connecting) => set({ isConnecting: connecting }),
+  changePendingSessionConnections: (savedSessionId, change) => set((state) => {
+    const pendingSessionConnections = new Map(state.pendingSessionConnections)
+    const count = (pendingSessionConnections.get(savedSessionId) ?? 0) + change
+    if (count > 0) pendingSessionConnections.set(savedSessionId, count)
+    else pendingSessionConnections.delete(savedSessionId)
+    return { pendingSessionConnections }
+  }),
 
   setConnected: (sessionId) => set((state) => {
     const terminal = state.terminals.get(sessionId)
@@ -375,24 +385,36 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     return state
   }),
 
-  splitTerminalPane: (sessionId, pane, axis) => set((state) => {
+  splitTerminalPane: (sessionId, pane, axis, ratio) => set((state) => {
     const terminal = state.terminals.get(sessionId)
     if (!terminal) return state
     const tree = terminal.splitTree ?? singlePane()
     const seq = nextPaneSeq(tree, terminal.paneSeq ?? 0)
-    const next = splitPane(tree, pane, axis, paneId(seq))
+    const newPane = paneId(seq)
+    const next = splitPane(tree, pane, axis, newPane, ratio)
     if (next === tree) return state
     const newTerminals = new Map(state.terminals)
-    newTerminals.set(sessionId, { ...terminal, isSplit: true, splitTree: next, paneSeq: seq })
+    newTerminals.set(sessionId, {
+      ...terminal,
+      isSplit: true,
+      splitTree: next,
+      paneSeq: seq,
+      paneArrival: { pane: newPane, seq: (terminal.paneArrival?.seq ?? 0) + 1, dividerPath: panePath(tree, pane) }
+    })
     return { terminals: newTerminals }
   }),
 
-  setSplitTree: (sessionId, tree) => set((state) => {
+  setSplitTree: (sessionId, tree, arrivedPane) => set((state) => {
     const terminal = state.terminals.get(sessionId)
     if (!terminal) return state
     const isSplit = isSplitTree(tree)
     const newTerminals = new Map(state.terminals)
-    newTerminals.set(sessionId, { ...terminal, isSplit, splitTree: isSplit ? tree : undefined })
+    newTerminals.set(sessionId, {
+      ...terminal,
+      isSplit,
+      splitTree: isSplit ? tree : undefined,
+      paneArrival: arrivedPane ? { pane: arrivedPane, seq: (terminal.paneArrival?.seq ?? 0) + 1 } : undefined
+    })
     return { terminals: newTerminals }
   }),
 

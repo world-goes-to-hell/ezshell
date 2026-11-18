@@ -42,6 +42,36 @@
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
+.session-tab-flight {
+  --flight-accent: var(--motion-accent, var(--accent));
+  position: fixed;
+  z-index: 94;
+  box-sizing: border-box;
+  width: max-content;
+  height: 25px;
+  padding: 0 7px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--flight-accent) 14%, var(--bg-secondary));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--flight-accent) 50%, transparent), var(--shadow-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 25px;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-tab-receiver {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-tab-flight { display: none; }
+  .session-tab-receiver { opacity: 1; }
+}
+
 .terminal-tab.has-activity:not(.active) {
   border-color: var(--success);
 }

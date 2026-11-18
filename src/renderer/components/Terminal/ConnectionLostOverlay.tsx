@@ -1,11 +1,35 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion, useIsPresent } from 'framer-motion'
 import { RiCloseCircleLine, RiLinkUnlinkM, RiLoader4Line, RiRefreshLine } from 'react-icons/ri'
+import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { describeConnectionLost } from '../../lib/connectionLost'
 import { rootSwitchNotice } from '../../lib/rootSwitch'
 import { toast } from '../../stores/toastStore'
 import './ConnectionLostOverlay.css'
 
 const FAILED_TEXT = '다시 연결하지 못했습니다.'
+
+export function ConnectionLostOverlay({ connected, ...props }: ConnectionLostOverlayProps & { connected: boolean }) {
+  const wasConnected = useRef(connected)
+  const [showRestored, setShowRestored] = useState(false)
+
+  useLayoutEffect(() => {
+    if (connected === wasConnected.current) return
+    wasConnected.current = connected
+    setShowRestored(connected)
+  }, [connected])
+
+  return (
+    <>
+      <AnimatePresence initial={false}>
+        {!connected && <ConnectionLostCard key="lost" {...props} />}
+      </AnimatePresence>
+      {showRestored && (
+        <div className="connection-restored" aria-hidden="true" onAnimationEnd={() => setShowRestored(false)} />
+      )}
+    </>
+  )
+}
 
 interface ConnectionLostOverlayProps {
   sessionId: string
@@ -23,9 +47,11 @@ interface ConnectionLostOverlayProps {
  * Over a tab whose connection dropped: says so, and offers 재연결 (the same way the tab first connected)
  * or 종료. It takes no keyboard focus, so keys typed for something else do not press a button.
  */
-export function ConnectionLostOverlay({ sessionId, reconnect, note, onClose, onReconnected, onReconnectFailed }: ConnectionLostOverlayProps) {
+function ConnectionLostCard({ sessionId, reconnect, note, onClose, onReconnected, onReconnectFailed }: ConnectionLostOverlayProps) {
   const [isReconnecting, setIsReconnecting] = useState(false)
   const isMounted = useRef(true)
+  const isPresent = useIsPresent()
+  const reducedMotion = useReducedMotion()
   useEffect(() => () => { isMounted.current = false }, [])
   const view = describeConnectionLost({ reconnect, note, isReconnecting })
   const canReconnect = typeof window.electronAPI?.sshReconnectNow === 'function'
@@ -49,8 +75,14 @@ export function ConnectionLostOverlay({ sessionId, reconnect, note, onClose, onR
   }
 
   return (
-    <div className="connection-lost" role="alertdialog" aria-labelledby={`connection-lost-${sessionId}`} onClick={(event) => event.stopPropagation()}>
-      <div className="connection-lost-card">
+    <div className="connection-lost" role="alertdialog" aria-labelledby={`connection-lost-${sessionId}`}
+      inert={!isPresent} onClick={(event) => event.stopPropagation()}>
+      <motion.div
+        className="connection-lost-card"
+        exit={reducedMotion
+          ? { opacity: 0, transition: { duration: 0 } }
+          : { opacity: 0, y: -8, scale: 0.97, transition: { duration: 0.17, ease: 'easeOut' } }}
+      >
         <span className="connection-lost-icon" aria-hidden="true">
           <RiLinkUnlinkM size={26} />
         </span>
@@ -71,7 +103,7 @@ export function ConnectionLostOverlay({ sessionId, reconnect, note, onClose, onR
             <span>종료</span>
           </button>
         </div>
-      </div>
+      </motion.div>
     </div>
   )
 }

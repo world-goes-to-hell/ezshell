@@ -2,8 +2,8 @@
 // line's numbers and the rows of the list panel.
 import type { EditorState } from '@codemirror/state'
 import type { JumpLevel } from './logLevels'
-import { linesAfter, markersOf } from './logMarkers'
-import { countProblems, problemOrdinal, problemsOf, type LevelCounts } from './logProblems'
+import { linesAfter, markerStart, markersOf } from './logMarkers'
+import { countProblems, firstIndexFrom, problemOrdinal, problemsOf, type LevelCounts } from './logProblems'
 
 export interface MarkerRow {
   id: number
@@ -64,7 +64,7 @@ export function splitStamp(line: string): { time: string | null; text: string } 
 
 export function buildOutline(
   state: EditorState,
-  options: { levels: ReadonlySet<JumpLevel>; withRows: boolean; limit?: number }
+  options: { levels: ReadonlySet<JumpLevel>; withRows: boolean; limit?: number; afterMarkerId?: number | null }
 ): LogOutline {
   const { doc } = state
   const problems = problemsOf(state)
@@ -81,7 +81,8 @@ export function buildOutline(
   const above = [...markers].reverse().find(marker => marker.pos <= head)
 
   // The position and the rows follow the chosen levels, as moving does
-  const matching = problems.filter(problem => options.levels.has(problem.level))
+  const from = markerStart(state, options.afterMarkerId)
+  const matching = problems.slice(firstIndexFrom(problems, from)).filter(problem => options.levels.has(problem.level))
   const ordinal = problemOrdinal(matching, head)
   const rows: ProblemRow[] = options.withRows
     ? matching.slice(-(options.limit ?? OUTLINE_ROW_LIMIT)).reverse().map(problem => {
@@ -91,7 +92,7 @@ export function buildOutline(
     : []
 
   return {
-    counts: countProblems(problems),
+    counts: countProblems(problems, from),
     ordinal,
     total: matching.length,
     markers,

@@ -213,10 +213,6 @@
   opacity: 1;
 }
 
-.sidebar.rail:not(.peek-open) .sidebar-lists {
-  display: none;
-}
-
 /* "3세션" on a split tab's row: opens the layout map (PaneLayoutBadge.tsx) */
 .local-terms-panes {
   flex: none;

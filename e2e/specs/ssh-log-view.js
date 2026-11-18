@@ -116,6 +116,20 @@ const KEYS = { F8: 119, F9: 120, m: 77, Enter: 13 }
   check('the marker tells what came after it (3 lines, 1 error)', (await text('.remote-log-marker-row .remote-log-row-sub')) === '뒤 3줄 · 오류 1', await text('.remote-log-marker-row .remote-log-row-sub'))
   check('and so does the status line', (await text('.remote-file-status .remote-log-marker')).includes('뒤 3줄') && (await text('.remote-file-status .remote-log-marker')).includes('오류 1'), await text('.remote-file-status .remote-log-marker'))
 
+  check('new errors have a separate button from new lines', (await text('.remote-log-new-errors')) === '새 오류 1개' && (await text('.remote-log-new-lines:not(.remote-log-new-errors)')) === '새 줄 3개')
+  check('an ordinary three-line append does not show a surge', !(await text('.remote-log-burst')))
+  await page.js(`document.querySelector('.remote-log-new-errors').click()`)
+  check('the new error button jumps to and highlights the error', await page.until(`document.querySelector('.cm-log-arrived')?.textContent.includes('ERROR burst failure')`, 3000))
+  check('the visited error is acknowledged', await page.until(`!document.querySelector('.remote-log-new-errors')`, 3000))
+
+  await page.js(`document.querySelector('.remote-log-row-sub').click()`)
+  check('a marker count limits the list and the status counts', await page.until(`!!document.querySelector('.remote-log-scope') && document.querySelectorAll('.remote-log-problem-row').length === 1`, 3000) && (await counts()) === '오류 1 | 경고 0' && (await rows()) === 'ERROR burst failure')
+  await focusLog()
+  await key('F8', CTRL | SHIFT)
+  check('F8 also respects the marker range', (await position()) === '1/1' && (await cursorLine()) === 132)
+  await page.js(`document.querySelector('.remote-log-scope').click()`)
+  check('clearing the marker range restores all problems', await page.until(`!document.querySelector('.remote-log-scope') && document.querySelectorAll('.remote-log-problem-row').length === 4`, 3000))
+
   await focusLog()
   await page.js(`document.querySelector('.remote-log-marker-row button[aria-label$="이름 붙이기"]').click()`)
   await page.until(`!!document.querySelector('.remote-log-marker-input')`, 3000)
@@ -171,6 +185,36 @@ const KEYS = { F8: 119, F9: 120, m: 77, Enter: 13 }
   check('the list panel closes with its button', await page.until(`!document.querySelector('.remote-log-outline')`, 3000))
   check('the status line still shows the position', (await position()).endsWith('/4'), await position())
   await page.shot('ssh-log-view-2-closed')
+
+  // ---- A high-volume arrival while already following the end ----
+  const atBottom = `(() => { const s = document.querySelector('.cm-scroller'); return s.scrollHeight - s.clientHeight - s.scrollTop < 40 })()`
+  await page.js(`(() => { const s = document.querySelector('.cm-scroller'); s.scrollTop = s.scrollHeight })()`)
+  await page.until(atBottom, 3000)
+  await page.until(`!document.querySelector('.toast')`, 7000)
+  await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+  await page.js(`(() => {
+    window.burstPulses = 0;
+    document.addEventListener('animationstart', event => {
+      if (event.animationName === 'remote-log-burst-arrival') window.burstPulses++;
+    });
+  })()`)
+  await main.send('Page.bringToFront')
+  await main.click(term[0], term[1])
+  await main.type('spike')
+  await main.enter()
+  await page.send('Page.bringToFront')
+  check('following the end shows the 240-line surge in the status bar', await page.until(`document.querySelector('.remote-log-burst')?.textContent === '+240줄'`, 15000))
+  check('the surge uses one entrance animation', await page.until(`window.burstPulses === 1`, 2000))
+  check('following stays at the end and exposes both passed errors', await page.until(`${atBottom} && document.querySelector('.remote-log-new-errors')?.textContent === '새 오류 2개' && !document.querySelector('.remote-log-new-lines:not(.remote-log-new-errors)')`, 4000))
+  await page.shot('ssh-log-view-3-surge')
+  check('the surge fades back to ordinary live view', await page.until(`!document.querySelector('.remote-log-burst')`, 6000))
+  check('the two errors remain available after the surge', (await text('.remote-log-new-errors')) === '새 오류 2개')
+  await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+  check('reduced motion keeps the error button without its entrance animation', await page.js(`getComputedStyle(document.querySelector('.remote-log-new-errors')).animationName === 'none'`))
+  await page.js(`document.querySelector('.remote-log-new-errors').click()`)
+  check('the button highlights the first passed error and keeps the second', await page.until(`document.querySelector('.cm-log-arrived')?.textContent.includes('ERROR spike first') && document.querySelector('.remote-log-new-errors')?.textContent === '새 오류 1개'`, 3000))
+  await page.js(`document.querySelector('.remote-log-new-errors').click()`)
+  check('a second click highlights the second error and clears the button', await page.until(`document.querySelector('.cm-log-arrived')?.textContent.includes('ERROR spike second') && !document.querySelector('.remote-log-new-errors')`, 3000))
 
   const problems = await pageProblems(page)
   check('no console errors or CSP refusals', problems.length === 0, problems.join(' || '))

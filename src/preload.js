@@ -324,6 +324,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sshSplitResize: (streamId, cols, rows) => ipcRenderer.send('ssh-split-resize', { streamId, cols, rows }),
   sshSplitClose: (streamId) => ipcRenderer.send('ssh-split-close', { streamId }),
   sshAdoptSplit: (streamId) => ipcRenderer.invoke('ssh-adopt-split', { streamId }),
+  sshPromotePane: (sessionId, streamId, closePrevious) => ipcRenderer.invoke('ssh-promote-pane', { sessionId, streamId, closePrevious }),
+  sshResumePromotedPane: (sessionId, streamId) => ipcRenderer.send('ssh-resume-promoted-pane', { sessionId, streamId }),
+  sshMergeTab: (sourceId, targetId) => ipcRenderer.invoke('ssh-merge-tab', { sourceId, targetId }),
   containerList: (sessionId, all) => ipcRenderer.invoke('container-list', { sessionId, all }),
   containerLogOpen: (sessionId, sessionName, name) => ipcRenderer.invoke('container-log-open', { sessionId, sessionName, name }),
   onSshSplitData: (callback) => {
@@ -345,6 +348,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  restoreTabsSave: (record) => ipcRenderer.invoke('restore-tabs-save', record),
+  restoreTabsTake: () => ipcRenderer.invoke('restore-tabs-take'),
+  updateBusyWork: () => ipcRenderer.invoke('update-busy-work'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
   openUpdatePage: () => ipcRenderer.invoke('open-update-page'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),

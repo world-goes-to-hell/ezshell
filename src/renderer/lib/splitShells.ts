@@ -26,3 +26,14 @@ export function registerSplitShell(sessionId: string, pane: PaneId, handle: Spli
 }
 
 export const splitShellOf = (sessionId: string, pane: PaneId): SplitShellHandle | undefined => handles.get(keyOf(sessionId, pane))
+
+const mainScreens = new Map<string, (screen: string) => void>()
+
+export function registerMainScreen(sessionId: string, replace: (screen: string) => void): () => void {
+  mainScreens.set(sessionId, replace)
+  return () => {
+    if (mainScreens.get(sessionId) === replace) mainScreens.delete(sessionId)
+  }
+}
+
+export const mainScreenOf = (sessionId: string) => mainScreens.get(sessionId)

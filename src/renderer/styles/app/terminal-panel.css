@@ -50,6 +50,38 @@
   position: relative;
 }
 
+/* Let the shell fit and receive input while the cover slides out of the viewport. */
+.terminal-connection-reveal {
+  --reveal-accent: var(--motion-accent, var(--accent));
+  --reveal-background: var(--terminal-background, var(--bg-primary));
+  --reveal-foreground: var(--terminal-foreground, var(--text-primary));
+  position: absolute;
+  inset: 0;
+  z-index: 11; /* Above the terminal and its CRT scanlines in the retro theme. */
+  border-top: 2px solid color-mix(in srgb, var(--reveal-accent) 75%, var(--reveal-foreground));
+  background-color: var(--bg-primary);
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--reveal-accent) 28%, var(--reveal-background)),
+    color-mix(in srgb, var(--reveal-accent) 9%, var(--reveal-background)) 28px,
+    var(--reveal-background) 88px
+  );
+  box-shadow: 0 -5px 18px color-mix(in srgb, var(--reveal-accent) 24%, transparent);
+  pointer-events: none;
+  animation: ssh-terminal-reveal 500ms cubic-bezier(.42, 0, .3, 1) both;
+}
+
+@keyframes ssh-terminal-reveal {
+  from { transform: translateY(0); opacity: 1; }
+  88% { transform: translateY(100%); opacity: 1; }
+  to { transform: translateY(calc(100% + 20px)); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-connection-reveal {
+    visibility: hidden;
+  }
+}
+
 .terminal-container .xterm {
   height: 100%;
   width: 100%;

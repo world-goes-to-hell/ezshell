@@ -17,6 +17,7 @@ fs.mkdirSync(path.join(disk, 'var', 'log'), { recursive: true })
 fs.mkdirSync(path.join(disk, 'etc'), { recursive: true })
 fs.writeFileSync(path.join(disk, 'var', 'log', 'app.log'), '2026-11-10 09:00:00 INFO start\n2026-11-10 09:00:01 ERROR db down\n')
 fs.writeFileSync(path.join(disk, 'etc', 'hosts'), '127.0.0.1 localhost\n')
+fs.writeFileSync(path.join(disk, 'etc', 'old.txt'), 'different folder\n')
 fs.writeFileSync(path.join(disk, 'var', 'old.txt'), 'old\n')
 // A one-page PDF and a 1x1 PNG, for the preview window
 fs.writeFileSync(path.join(disk, 'var', 'doc.pdf'), ['%PDF-1.4', '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj', '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj', '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj', 'trailer<</Root 1 0 R>>', '%%EOF', ''].join('\n'))
@@ -122,15 +123,24 @@ const server = new Server({ hostKeys: [fs.readFileSync(keyFile)] }, (client) => 
     // `refuse` typed in a shell: the next two channels this connection asks for are rejected
     // (what a server at its channel limit does), then channels open again
     let refusals = 0
+    let openShells = 0
+    let openSftp = 0
     client.on('session', (accept, reject) => {
       if (refusals > 0) { refusals--; reject(); return }
       const session = accept()
-      session.on('sftp', (acceptSftp) => serveSftp(acceptSftp()))
+      session.on('sftp', (acceptSftp) => {
+        const sftp = acceptSftp()
+        openSftp++
+        sftp.once('close', () => { openSftp-- })
+        serveSftp(sftp)
+      })
       session.on('pty', (ok) => ok && ok())
       session.on('window-change', (ok) => ok && ok())
       session.on('env', (ok) => ok && ok())
       session.on('shell', (ok) => {
         const stream = ok()
+        openShells++
+        stream.once('close', () => { openShells-- })
         let where = '/var', line = ''
         const prompt = () => stream.write('tester@fake:' + where + '$ ')
         stream.write('fake shell\r\n'); prompt()
@@ -144,20 +154,41 @@ const server = new Server({ hostKeys: [fs.readFileSync(keyFile)] }, (client) => 
               if (cmd === 'refuse') refusals = 2
               // `burst`: the followed log gets a new error with a stack frame
               if (cmd === 'burst') fs.appendFileSync(traceLog, '2026-11-18 10:02:00 ERROR burst failure\n\tat x.Y.z(Y.java:1)\n2026-11-18 10:02:01 INFO after burst\n')
+              if (cmd === 'spike') {
+                const lines = Array.from({ length: 240 }, (_, i) => `2026-11-18 10:03:00 ${i === 12 ? 'ERROR spike first' : i === 180 ? 'ERROR spike second' : `INFO spike line ${i}`}`)
+                fs.appendFileSync(traceLog, `${lines.join('\n')}\n`)
+              }
               const halt = /^halt (\d+)$/.exec(cmd)
               if (halt) { haltFor(Number(halt[1])); return }
               if (cmd === 'home') where = '~'
               if (cmd === 'etc') where = '/etc'
+              if (cmd === 'shell-count') stream.write(`OPEN-SHELLS ${openShells}\r\n`)
+              if (cmd === 'sftp-count') stream.write(`OPEN-SFTP ${openSftp}\r\n`)
               if (cmd === 'ls') stream.write('log  newdir  old.txt  wide.conf  nothere.txt\r\n')
               if (cmd === 'll') stream.write('drwxr-xr-x 2 root root 4096 Nov 10 09:00 log\r\n-rw-r--r-- 1 root root    4 Nov 10 09:00 old.txt\r\n-rw-r--r-- 1 root root  110 Nov 10 09:00 /etc/hosts\r\n')
+              if (cmd === 'll /var/log') stream.write('total 1\r\n-rw-r--r-- 1 root root 67 Nov 10 09:00 app.log\r\n')
+              if (cmd === 'll /var /etc') stream.write('/var:\r\nold.txt\r\n\r\n/etc:\r\nhosts\r\n')
               prompt()
             } else { line += ch; stream.write(ch) }
           }
         })
       })
-      session.on('exec', (ok) => {
-        // Commands the app runs by itself (database discovery) get an empty answer
+      session.on('exec', (ok, reject, info) => {
         const stream = ok()
+        // The container panel's list (src/containers/parse.js): a few made-up containers, one stopped
+        if (/docker ps/.test(info.command || '')) {
+          const all = / -a /.test(info.command)
+          const rows = [
+            ['a1', 'web-nginx', 'nginx:1.27', 'Up 2 hours', '0.0.0.0:8080->80/tcp'],
+            ['a2', 'api-server', 'node:24', 'Up 2 hours', ''],
+            ['a3', 'cache-redis', 'redis:7', 'Up 5 days', '6379/tcp'],
+            ['a4', 'db-main', 'mysql:8', 'Up 5 days', '0.0.0.0:3306->3306/tcp'],
+            ['a5', 'nginx-proxy', 'nginx:1.27', 'Up 1 hour', ''],
+            ...(all ? [['a6', 'old-redis-job', 'redis:6', 'Exited (0) 3 days ago', '']] : [])
+          ]
+          stream.write(rows.map(([ID, Names, Image, Status, Ports]) => JSON.stringify({ ID, Names, Image, Status, Ports })).join('\n') + '\n')
+        }
+        // Other commands the app runs by itself (database discovery) get an empty answer
         stream.exit(0)
         stream.end()
       })

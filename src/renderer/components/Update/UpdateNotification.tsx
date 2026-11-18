@@ -4,6 +4,7 @@ import { RiDownload2Fill, RiRefreshLine, RiCloseFill, RiCheckboxCircleFill, RiIn
 import { useUpdateStore } from '../../stores/updateStore'
 import { toast } from '../../stores/toastStore'
 import { isUpdateNoticeVisible, resolveManualCheck, type UpdateCheckResult } from '../../lib/updateCheck'
+import { installUpdateKeepingTabs } from '../../lib/updateInstall'
 
 export function UpdateNotification() {
   const { info, dismissedKey, setInfo, dismissCurrent, setAppVersion } = useUpdateStore()
@@ -67,8 +68,9 @@ export function UpdateNotification() {
     }
   }
 
+  // Checks what the restart would cut off and writes the open tabs down first (lib/updateInstall.ts)
   const handleInstall = () => {
-    window.electronAPI.installUpdate?.()
+    void installUpdateKeepingTabs().catch(() => toast.error('업데이트', '업데이트를 시작하지 못했습니다.'))
   }
 
   const handleDismiss = () => {
@@ -148,7 +150,7 @@ export function UpdateNotification() {
               </div>
               <div className="update-content">
                 <span className="update-text">
-                  v{info.version} 다운로드 완료. 재시작하여 설치하세요.
+                  v{info.version} 다운로드 완료. 재시작해도 열린 탭은 잠금을 푼 뒤 다시 열 수 있습니다.
                 </span>
               </div>
               <button className="update-action-btn update-install-btn" onClick={handleInstall}>

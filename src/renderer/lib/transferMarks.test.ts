@@ -59,6 +59,19 @@ describe('transferMarksFor', () => {
     expect(marks.get('x.txt')).toEqual({ direction: 'upload', state: 'done' })
   })
 
+  it('uses the successful completion time for the destination file or a fully transferred folder', () => {
+    const transfers = [
+      { ...upload('/a/x.txt', 'completed'), completedAt: 1000 },
+      { ...upload('/a/dir/1.txt', 'completed'), completedAt: 2000 },
+      { ...upload('/a/dir/2.txt', 'completed'), completedAt: 3000 },
+      { ...download('C:\\work\\y.txt', 'completed'), completedAt: 4000 }
+    ]
+    const remote = transferMarksFor(transfers, 'remote', '/a')
+    expect(remote.get('x.txt')?.completedAt).toBe(1000)
+    expect(remote.get('dir')?.completedAt).toBe(3000)
+    expect(transferMarksFor(transfers, 'local', 'C:\\work').get('y.txt')?.completedAt).toBe(4000)
+  })
+
   it('skips transfers without a target path (older main process)', () => {
     const legacy = { id: 'old', type: 'upload', status: 'completed' } as MarkableTransfer
 

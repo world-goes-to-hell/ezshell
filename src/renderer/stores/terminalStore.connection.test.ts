@@ -35,3 +35,21 @@ describe('connection state of a tab', () => {
     expect(useTerminalStore.getState().terminals.has('missing')).toBe(false)
   })
 })
+
+it('keeps a saved session busy until all of its connection attempts finish', () => {
+  useTerminalStore.setState({ pendingSessionConnections: new Map() })
+  const { changePendingSessionConnections: change } = useTerminalStore.getState()
+  const pending = () => [...useTerminalStore.getState().pendingSessionConnections]
+
+  change('first', 1)
+  change('first', 1)
+  change('second', 1)
+  change('first', -1)
+  expect(pending()).toEqual([['first', 1], ['second', 1]])
+
+  change('first', -1)
+  expect(pending()).toEqual([['second', 1]])
+
+  change('second', -1)
+  expect(pending()).toEqual([])
+})

@@ -51,6 +51,8 @@ interface LogOutlinePanelProps {
   outline: LogOutline
   filter: ProblemFilter
   onFilter: (filter: ProblemFilter) => void
+  afterMarkerId: number | null
+  onScope: (id: number) => void
   onGoTo: (pos: number, kind: 'problem' | 'marker') => void
   onStepProblem: (target: NavTarget) => void
   onStepMarker: (target: NavTarget) => void
@@ -60,7 +62,7 @@ interface LogOutlinePanelProps {
 }
 
 /** Beside the log: the markers (what came after each) and the latest errors and warnings. A click goes there. */
-export function LogOutlinePanel({ outline, filter, onFilter, onGoTo, onStepProblem, onStepMarker, onMark, onRename, onRemove }: LogOutlinePanelProps) {
+export function LogOutlinePanel({ outline, filter, onFilter, afterMarkerId, onScope, onGoTo, onStepProblem, onStepMarker, onMark, onRename, onRemove }: LogOutlinePanelProps) {
   const [editing, setEditing] = useState<{ id: number; label: string } | null>(null)
 
   const finishEdit = (isSaved: boolean) => {
@@ -104,14 +106,20 @@ export function LogOutlinePanel({ outline, filter, onFilter, onGoTo, onStepProbl
                     onBlur={() => finishEdit(true)}
                   />
                 ) : (
-                  <button type="button" className="remote-log-row-main" onClick={() => onGoTo(marker.pos, 'marker')} title={`기준점 ${marker.id} 로 이동 (${marker.line.toLocaleString()}번 줄)`}>
-                    <span className="remote-log-row-top">
-                      <RiFlagLine size={12} aria-hidden="true" />
-                      <span className="remote-log-marker-name">{marker.label ?? `기준점 ${marker.id}`}</span>
-                      <span className="remote-log-row-time">{marker.time}</span>
-                    </span>
-                    <span className={`remote-log-row-sub${marker.after.error > 0 ? ' has-error' : ''}`}>{afterText(marker)}</span>
-                  </button>
+                  <div className="remote-log-marker-entry">
+                    <button type="button" className="remote-log-row-main" onClick={() => onGoTo(marker.pos, 'marker')} title={`기준점 ${marker.id} 로 이동 (${marker.line.toLocaleString()}번 줄)`}>
+                      <span className="remote-log-row-top">
+                        <RiFlagLine size={12} aria-hidden="true" />
+                        <span className="remote-log-marker-name">{marker.label ?? `기준점 ${marker.id}`}</span>
+                        <span className="remote-log-row-time">{marker.time}</span>
+                      </span>
+                    </button>
+                    <button type="button" className={`remote-log-row-sub${marker.after.error > 0 ? ' has-error' : ''}`}
+                      aria-pressed={afterMarkerId === marker.id} onClick={() => onScope(marker.id)}
+                      title={`${marker.label ?? `기준점 ${marker.id}`} 이후 오류·경고만 보기`}>
+                      {afterText(marker)}
+                    </button>
+                  </div>
                 )}
                 <button type="button" className="remote-file-icon-btn remote-log-step" onClick={() => setEditing({ id: marker.id, label: marker.label ?? '' })} title="이름 붙이기" aria-label={`기준점 ${marker.id} 이름 붙이기`}>
                   <RiPencilLine size={13} />

@@ -155,10 +155,13 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
       setOutcome({ kind: 'error', text: result.error })
       return
     }
-    if (result.dbId) openDbTab(result.dbId, `${result.info.product} · ${request.credentials.database || request.credentials.user}`, request.chosen.host, request.credentials.user)
+    // The same account object is saved and named in the tab, so the tab can be opened again after an update
+    const account = accountOf(request.chosen, request.credentials)
+    const savedAccountId = session && isSaving ? account.id : undefined
+    if (result.dbId) openDbTab(result.dbId, `${result.info.product} · ${request.credentials.database || request.credentials.user}`, request.chosen.host, request.credentials.user, savedAccountId)
     try {
       if (session && isSaving) {
-        await storeAccounts(upsertSavedConnection(session.dbConnections ?? [], accountOf(request.chosen, request.credentials)))
+        await storeAccounts(upsertSavedConnection(session.dbConnections ?? [], account))
       } else if (session && saved && !isSaving) {
         await storeAccounts(removeSavedConnection(session.dbConnections ?? [], saved.id))
       }
@@ -168,14 +171,14 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
   }
 
   /** A tab next to the current one, in the pane that has the focus (like a new SSH tab) */
-  const openDbTab = (dbId: string, title: string, host: string, dbUser: string): void => {
+  const openDbTab = (dbId: string, title: string, host: string, dbUser: string, savedAccountId?: string): void => {
     const store = useTerminalStore.getState()
     const id = `db:${dbId}`
     const accountLabel = label.trim() || undefined
     store.addTerminal(id, {
       id, host, username: dbUser, connected: true,
       title: accountLabel ? `${title} (${accountLabel})` : title,
-      db: { dbId, sshSessionId: target.sessionId, label: accountLabel }
+      db: { dbId, sshSessionId: target.sessionId, label: accountLabel, savedAccountId }
     })
     const { layout } = useTerminalStore.getState()
     if (layout.mode === 'split' && layout.activePaneType === 'secondary') {

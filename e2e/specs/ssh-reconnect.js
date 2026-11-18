@@ -7,7 +7,7 @@ const { check, finish } = createChecks()
 
 ;(async () => {
   const driver = await connect()
-  const { js, until, type, enter, shot } = driver
+  const { js, send, until, type, enter, shot } = driver
 
   const text = () => js(`[...(${PANEL}?.querySelectorAll('.terminal-container[data-pane="main"] .xterm-rows > div') || [])].map(r => r.textContent).join('\\n')`)
   // Each new shell of the test server greets with this line
@@ -22,7 +22,15 @@ const { check, finish } = createChecks()
   const tabCount = () => js(`document.querySelectorAll('.terminal-tab').length`)
 
   await unlock(driver)
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
+  await js(`(() => {
+    window.__restoreCues = 0
+    document.addEventListener('animationstart', event => {
+      if (event.animationName === 'connection-restored') window.__restoreCues++
+    })
+  })()`)
   check('an SSH tab connects to the test server', await connectSsh(driver))
+  check('the restored cue is reserved for reconnects', await js('window.__restoreCues === 0'))
   await say('BEFORE-DROP')
   await until(`(${PANEL}?.textContent || '').includes('BEFORE-DROP')`, 5000)
   const first = await greetings()
@@ -36,6 +44,7 @@ const { check, finish } = createChecks()
   check('the tab reconnects by itself', await until(`!${PANEL}?.querySelector('.connection-lost')`, 40000), JSON.stringify(await overlay()))
   check('with a new shell on the same tab', await (async () => { const start = Date.now(); while (Date.now() - start < 15000) { if ((await greetings()) > first) return true; await sleep(300) } return false })(), (await text()).trim().slice(-160))
   check('still one tab', (await tabCount()) === 1, String(await tabCount()))
+  check('automatic recovery plays the restored cue once', await until('window.__restoreCues === 1'))
   await sleep(800)
   await say('AFTER-RECONNECT')
   check('the new shell answers', await until(`(${PANEL}?.textContent || '').includes('AFTER-RECONNECT')`, 8000))
@@ -56,6 +65,7 @@ const { check, finish } = createChecks()
   // ---- 3. 재연결 opens a new shell on the same tab ----
   await js(`${overlayButton('재연결')}.click()`)
   check('재연결 brings the tab back', await until(`!${PANEL}?.querySelector('.connection-lost')`, 30000), JSON.stringify(await overlay()))
+  check('manual recovery plays the same cue once', await until('window.__restoreCues === 2'))
   check('with a new shell', await (async () => { const start = Date.now(); while (Date.now() - start < 15000) { if ((await greetings()) > beforeExit) return true; await sleep(300) } return false })(), (await text()).trim().slice(-160))
   await sleep(800)
   await say('AFTER-BUTTON')

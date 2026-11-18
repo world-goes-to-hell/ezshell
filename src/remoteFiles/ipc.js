@@ -139,7 +139,10 @@ function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLock
     }
   }
 
-  return { closeViewWindows }
+  /** Edit windows with unsaved changes (they hold an update's restart until the user decides) */
+  const unsavedEditCount = () => [...dirty].filter(docId => windows.has(docId)).length
+
+  return { closeViewWindows, unsavedEditCount }
 }
 
 module.exports = { registerRemoteFileIpc }

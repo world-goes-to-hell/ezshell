@@ -1,6 +1,6 @@
 import type { Transfer } from '../stores/sftpStore'
 
-export type MarkableTransfer = Pick<Transfer, 'id' | 'type' | 'localPath' | 'remotePath' | 'status' | 'error' | 'progress'>
+export type MarkableTransfer = Pick<Transfer, 'id' | 'type' | 'localPath' | 'remotePath' | 'status' | 'error' | 'progress' | 'completedAt'>
 
 export type TransferMarkState = 'queued' | 'transferring' | 'paused' | 'done' | 'error'
 
@@ -9,6 +9,7 @@ export interface TransferMark {
   state: TransferMarkState
   /** 0..100, while queued / transferring / paused */
   progress?: number
+  completedAt?: number
   error?: string
 }
 
@@ -29,7 +30,10 @@ const clampProgress = (value: number) => (Number.isFinite(value) ? Math.min(100,
 function markOf(transfer: MarkableTransfer): TransferMark {
   const state = STATE_OF[transfer.status]
   if (state === 'error') return { direction: transfer.type, state, error: transfer.error }
-  if (state === 'done') return { direction: transfer.type, state }
+  if (state === 'done') {
+    const { completedAt } = transfer
+    return completedAt === undefined ? { direction: transfer.type, state } : { direction: transfer.type, state, completedAt }
+  }
   return { direction: transfer.type, state, progress: clampProgress(transfer.progress) }
 }
 
@@ -87,7 +91,8 @@ function folderMark(marks: readonly TransferMark[]): TransferMark {
   }
   const failed = marks.filter(mark => mark.state === 'error')
   if (failed.length > 0) return { direction, state: 'error', error: `${marks.length}개 중 ${failed.length}개 실패` }
-  return { direction, state: 'done' }
+  const completedAt = marks.reduce((newest, mark) => Math.max(newest, mark.completedAt ?? 0), 0)
+  return completedAt > 0 ? { direction, state: 'done', completedAt } : { direction, state: 'done' }
 }
 
 /**

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { EditorState } from '@codemirror/state'
 import { buildOutline, splitStamp } from './logOutline'
-import { addMarker, logMarkerField, markerAtLine, renameMarker } from './logMarkers'
+import { addMarker, logMarkerField, markerAtLine, removeMarker, renameMarker } from './logMarkers'
 import { logProblemField } from './logProblems'
 import type { JumpLevel } from './logLevels'
 
@@ -70,5 +70,16 @@ describe('the outline of a log', () => {
     ])
     expect(outline.latestMarker?.id).toBe(2)
     expect(outline.currentMarkerId).toBe(2)
+  })
+
+  it('scopes problems to the selected marker and restores the full range after removal', () => {
+    let state = make()
+    state = state.update({ effects: addMarker.of(markerAtLine(state, 5, 'b')) }).state
+    const options = { levels: BOTH, withRows: true, afterMarkerId: 1 }
+    const scoped = buildOutline(state, options)
+    expect(scoped).toMatchObject({ counts: { error: 1, warn: 1 }, ordinal: 0, total: 2 })
+    expect(scoped.rows.map(row => row.line)).toEqual([7, 5])
+    state = state.update({ effects: removeMarker.of(1) }).state
+    expect(buildOutline(state, options).total).toBe(3)
   })
 })

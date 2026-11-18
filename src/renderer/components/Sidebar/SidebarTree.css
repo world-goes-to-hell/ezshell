@@ -5,12 +5,28 @@
    pointer is on it (.peek-open, useSidebarPeek). */
 
 .sidebar-panel {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--sidebar-width);
+  overflow: hidden;
+  border-right: 1px solid var(--border);
   background: var(--bg-secondary);
+  transition: width var(--sidebar-motion-duration) var(--sidebar-motion-ease),
+    box-shadow var(--sidebar-motion-duration) ease;
+}
+
+/* Keep the lists at their full width while the panel clips them during the slide. */
+.sidebar-content {
+  display: flex;
+  flex-direction: column;
+  width: calc(var(--sidebar-width) - 1px);
+  height: 100%;
+  min-height: 0;
+  transition: opacity var(--sidebar-motion-duration) var(--sidebar-motion-ease);
+}
+
+.sidebar.rail:not(.peek-open) .sidebar-content {
+  opacity: 0;
 }
 
 .sidebar .session-list {
@@ -92,6 +108,37 @@
   color: var(--text-primary);
 }
 
+.sidebar .session-item.is-connecting {
+  --connection-accent: var(--motion-accent, var(--accent));
+}
+
+.sidebar .session-item.is-connecting:not(.active) {
+  background-color: color-mix(in srgb, var(--connection-accent) 10%, transparent);
+}
+
+.sidebar .session-item.is-connecting::after {
+  content: '';
+  position: absolute;
+  right: 6px;
+  bottom: 1px;
+  left: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, transparent, var(--connection-accent), transparent) left / 48% 100% no-repeat;
+  background-color: color-mix(in srgb, var(--connection-accent) 24%, transparent);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sidebar .session-item.is-connecting::after {
+    animation: ssh-connecting-sweep 850ms ease-in-out infinite alternate;
+  }
+}
+
+@keyframes ssh-connecting-sweep {
+  to { background-position: right; }
+}
+
 /* A session with a colour of its own: a short line of it */
 .sidebar .session-item.has-own-color::before {
   content: '';
@@ -118,17 +165,26 @@
   border: 1.5px solid var(--text-muted);
   border-radius: 50%;
   opacity: 0.7;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .session-item.active .session-dot {
   border-color: var(--success);
   background: var(--success);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--success) 55%, transparent);
   opacity: 1;
 }
 
 .session-item.has-lost .session-dot {
   border-color: var(--error);
   background: var(--error);
+  opacity: 1;
+}
+
+.session-item.is-connecting:not(.active):not(.has-lost) .session-dot {
+  border-color: var(--warning);
+  background: var(--warning);
   opacity: 1;
 }
 
@@ -156,8 +212,8 @@
   background: none;
 }
 
-.sidebar .session-tab-badge::before {
-  content: '';
+.sidebar .session-tab-badge-dot {
+  flex: none;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -172,45 +228,36 @@
 /* ---- Folded: the rail ---- */
 
 .sidebar.rail {
-  position: relative;
   z-index: 90; /* over the terminal, under the MCP panel (95) and dialogs (100) */
-  width: 46px;
+  width: var(--rail-width);
   overflow: visible;
 }
 
-.sidebar.rail .sidebar-panel {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  flex: none;
-  width: 46px;
-  overflow: hidden;
-  transition: width 0.16s ease, box-shadow 0.16s ease;
+.sidebar.rail:not(.peek-open) .sidebar-panel {
+  width: var(--rail-width);
+  pointer-events: none;
 }
 
 .sidebar.rail.peek-open .sidebar-panel {
-  width: 280px;
-  border-right: 1px solid var(--border);
   box-shadow: 8px 0 24px rgba(0, 0, 0, 0.28);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .sidebar.rail .sidebar-panel {
-    transition: none;
-  }
+.sidebar :is(.folder-name, .session-name) {
+  transition: transform var(--sidebar-motion-duration) var(--sidebar-motion-ease);
+}
+
+.sidebar.rail:not(.peek-open) :is(.folder-name, .session-name) {
+  transform: translateX(-10px);
 }
 
 /* The strip itself shows state, not buttons: pointing at it opens the whole sidebar before a button
    could be pressed (the buttons are on the open sidebar). No tree either: unlabelled arrows and
    dots said nothing. */
 .rail-summary {
-  display: none;
-}
-
-.sidebar.rail:not(.peek-open) .rail-summary {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--rail-width) - 1px);
   display: flex;
-  flex: 1;
   flex-direction: column;
   align-items: center;
   justify-content: center; /* sit in the vertical middle instead of crammed at the top */
@@ -219,6 +266,14 @@
   padding: 16px 0;
   color: var(--text-secondary);
   cursor: default;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity var(--sidebar-motion-duration) var(--sidebar-motion-ease);
+}
+
+.sidebar.rail:not(.peek-open) .rail-summary {
+  visibility: visible;
+  opacity: 1;
 }
 
 .rail-group {
@@ -246,17 +301,36 @@
   text-align: center;
 }
 
-.rail-count.is-connected { color: var(--success); }
+.rail-count.is-connected {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-inline: 4px;
+  color: var(--success);
+}
 .rail-count.is-lost { color: var(--error-text, var(--error)); }
 .rail-count.is-busy { color: var(--warning); }
 
-.sidebar.rail:not(.peek-open) .session-list,
-.sidebar.rail:not(.peek-open) .sidebar-actions,
-.sidebar.rail:not(.peek-open) .sidebar-footer {
-  display: none;
+.rail-connection-dot,
+.sidebar-connection-flight {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
 }
 
-.sidebar.rail:not(.peek-open) .sidebar-header {
-  justify-content: center;
-  padding: 0;
+.sidebar-connection-flight {
+  --sidebar-flight-accent: var(--motion-accent, var(--accent));
+  position: fixed;
+  z-index: 94;
+  pointer-events: none;
+}
+
+.sidebar-connection-arrival { visibility: hidden; }
+
+@media (prefers-reduced-motion: reduce) {
+  .app-main .sidebar { --sidebar-motion-duration: 0ms; }
+  .sidebar-connection-flight { display: none; }
+  .sidebar-connection-arrival { visibility: visible; }
 }

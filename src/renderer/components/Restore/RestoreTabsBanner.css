@@ -1,0 +1,113 @@
+/* After an update: "open the tabs that were open before?" (RestoreTabsBanner.tsx) */
+.restore-tabs-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.restore-tabs-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.restore-tabs-main > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.restore-tabs-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.restore-tabs-btn {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.restore-tabs-btn:hover {
+  border-color: var(--accent);
+}
+
+.restore-tabs-btn.is-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+}
+
+.restore-tabs-close {
+  display: flex;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.restore-tabs-list {
+  margin: 0;
+  padding: 0 0 0 26px;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.restore-tabs-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.restore-tabs-list svg {
+  color: var(--warning);
+}
+
+.restore-tabs-quick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-left: 26px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.restore-tabs-chip {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.restore-tabs-chip:hover {
+  border-color: var(--accent);
+}
+
+.restore-tabs-spin {
+  animation: restore-tabs-spin 1s linear infinite;
+}
+
+@keyframes restore-tabs-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .restore-tabs-spin { animation: none; }
+}

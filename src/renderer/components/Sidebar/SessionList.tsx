@@ -31,7 +31,7 @@ interface DragState {
 }
 
 interface SessionListProps {
-  onQuickConnect: (session: any) => void
+  onQuickConnect: (session: Session, source?: HTMLElement) => void
   onEditSession?: (session: Session) => void
   onDuplicateSession?: (session: Session) => void
   onAddSession?: (folderId?: string) => void

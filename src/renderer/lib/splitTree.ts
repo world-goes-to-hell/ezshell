@@ -51,6 +51,12 @@ export function paneIds(node: SplitNode): PaneId[] {
   return [...paneIds(node.first), ...paneIds(node.second)]
 }
 
+/** The path of a pane can become the divider's path when that pane is split. */
+export function panePath(node: SplitNode, pane: PaneId, path = 'r'): string | undefined {
+  if (node.kind === 'split') return panePath(node.first, pane, path + '0') ?? panePath(node.second, pane, path + '1')
+  return node.kind === 'pane' && node.pane === pane ? path : undefined
+}
+
 /** Panes and empty places together: what the limit and the "is it split" question count */
 export function leafCount(node: SplitNode): number {
   return node.kind === 'split' ? leafCount(node.first) + leafCount(node.second) : 1
@@ -66,10 +72,10 @@ function mapLeaf(node: SplitNode, pane: PaneId, change: (leaf: SplitNode) => Spl
 }
 
 /** The pane is halved: it keeps the left / upper half, the new pane gets the other. Others do not move. */
-export function splitPane(tree: SplitNode, pane: PaneId, axis: SplitAxis, newPane: PaneId): SplitNode {
+export function splitPane(tree: SplitNode, pane: PaneId, axis: SplitAxis, newPane: PaneId, ratio = 0.5): SplitNode {
   if (leafCount(tree) >= MAX_PANES || paneIds(tree).includes(newPane)) return tree
   return mapLeaf(tree, pane, leaf => (leaf.kind === 'pane'
-    ? { kind: 'split', axis, ratio: 0.5, first: leaf, second: { kind: 'pane', pane: newPane } }
+    ? { kind: 'split', axis, ratio: clampRatio(ratio), first: leaf, second: { kind: 'pane', pane: newPane } }
     : leaf))
 }
 
@@ -101,10 +107,21 @@ export function swapPanes(tree: SplitNode, a: PaneId, b: PaneId): SplitNode {
   return swap(tree)
 }
 
+/** Once the old main pane has been removed, use its id for the shell taking over the tab. */
+export function assignMainPane(tree: SplitNode, pane: PaneId): SplitNode {
+  return mapLeaf(tree, pane, leaf => leaf.kind === 'pane' ? singlePane() : leaf)
+}
+
 /** The pane's shell moved out to a tab: its place stays, empty, until it is merged away */
 export function vacatePane(tree: SplitNode, pane: PaneId): SplitNode {
   if (pane === MAIN_PANE) return tree
   return mapLeaf(tree, pane, leaf => (leaf.kind === 'pane' ? { kind: 'vacant', pane } : leaf))
+}
+
+/** An empty place gets a shell again (a tab merged into it), under a pane id not used before */
+export function fillVacant(tree: SplitNode, pane: PaneId, newPane: PaneId): SplitNode {
+  if (paneIds(tree).includes(newPane)) return tree
+  return mapLeaf(tree, pane, leaf => (leaf.kind === 'vacant' ? { kind: 'pane', pane: newPane } : leaf))
 }
 
 interface Found { parent: Extract<SplitNode, { kind: 'split' }>; isFirst: boolean; grand?: Extract<SplitNode, { kind: 'split' }>; parentIsFirst?: boolean }
@@ -234,6 +251,78 @@ export function nextPaneSeq(tree: SplitNode, lastSeq = 0): number {
 }
 
 const EDGE = 1e-6
+
+type LayoutCell = { leaf: Exclude<SplitNode, { kind: 'split' }>; rect: Rect }
+const CUTS = [
+  { axis: 'row', start: 'x', size: 'w' },
+  { axis: 'col', start: 'y', size: 'h' }
+] as const
+const endOf = (rect: Rect, { start, size }: typeof CUTS[number]) => rect[start] + rect[size]
+const sameEdge = (a: number, b: number) => Math.abs(a - b) < EDGE
+
+/** Rebuild a split tree by cutting only at lines no cell crosses, preserving every cell's bounds. */
+function treeOfCells(cells: LayoutCell[]): SplitNode | null {
+  if (cells.length === 1) return cells[0].leaf
+  for (const cut of CUTS) {
+    const { axis, start } = cut
+    const sorted = [...cells].sort((a, b) => a.rect[start] - b.rect[start])
+    const startAt = sorted[0].rect[start]
+    const endAt = Math.max(...sorted.map(cell => endOf(cell.rect, cut)))
+    let end = endOf(sorted[0].rect, cut)
+    for (let index = 1; index < sorted.length; index++) {
+      const next = sorted[index].rect
+      if (sameEdge(end, next[start])) {
+        const first = treeOfCells(sorted.slice(0, index))
+        const second = treeOfCells(sorted.slice(index))
+        if (first && second) return { kind: 'split', axis, ratio: (end - startAt) / (endAt - startAt), first, second }
+      }
+      end = Math.max(end, endOf(next, cut))
+    }
+  }
+  return null
+}
+
+/** Merge across the shared part of an edge and turn the longer pane's remaining strips into empty places. */
+export function mergePaneLayout(tree: SplitNode, from: PaneId, to: PaneId, lastSeq = 0): { tree: SplitNode; expanded: Rect; seq: number } | null {
+  if (from === to) return null
+  const { panes, vacants } = layoutOf(tree)
+  const first = panes.find(entry => entry.pane === from)?.rect
+  const second = panes.find(entry => entry.pane === to)?.rect
+  if (!first || !second) return null
+  const cut = CUTS.find(axis => sameEdge(endOf(first, axis), second[axis.start]) || sameEdge(endOf(second, axis), first[axis.start]))
+  if (!cut) return null
+  const across = cut.axis === 'row' ? CUTS[1] : CUTS[0]
+  const overlapStart = Math.max(first[across.start], second[across.start])
+  const overlapEnd = Math.min(endOf(first, across), endOf(second, across))
+  const overlap = overlapEnd - overlapStart
+  if (overlap <= EDGE) return null
+  const alongStart = Math.min(first[cut.start], second[cut.start])
+  const expanded = {
+    ...first,
+    [cut.start]: alongStart,
+    [cut.size]: Math.max(endOf(first, cut), endOf(second, cut)) - alongStart,
+    [across.start]: overlapStart,
+    [across.size]: overlap
+  }
+  const cells: LayoutCell[] = [
+    ...panes.filter(({ pane }) => pane !== from && pane !== to).map(({ pane, rect }): LayoutCell => ({ leaf: { kind: 'pane', pane }, rect })),
+    ...vacants.map(({ pane, rect }): LayoutCell => ({ leaf: { kind: 'vacant', pane }, rect })),
+    { leaf: { kind: 'pane', pane: from }, rect: expanded }
+  ]
+  let seq = nextPaneSeq(tree, lastSeq) - 1
+  for (const rect of [first, second]) {
+    const spanEnd = endOf(rect, across)
+    for (const [start, end] of [[rect[across.start], overlapStart], [overlapEnd, spanEnd]]) {
+      if (end - start > EDGE) cells.push({
+        leaf: { kind: 'vacant', pane: paneId(++seq) },
+        rect: { ...rect, [across.start]: start, [across.size]: end - start }
+      })
+    }
+  }
+  if (cells.length > MAX_PANES) return null
+  const combined = treeOfCells(cells)
+  return combined ? { tree: combined, expanded, seq } : null
+}
 
 /**
  * CSS box of a pane inside the terminal area: its rectangle, minus half a divider on every side

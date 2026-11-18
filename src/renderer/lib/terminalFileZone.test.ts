@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fileZone, visiblePart, isRelativeName, zoneHasOutput, listingBase, isListing, zoneBlocks, lookupName } from './terminalFileZone'
+import { completedListingRange, fileZone, historicalListing, visiblePart, isRelativeName, zoneHasOutput, listingBase, isListing, zoneBlocks, lookupName } from './terminalFileZone'
 
 describe('fileZone', () => {
   it('runs from the line where the folder last changed to the line above the cursor', () => {
@@ -124,6 +124,35 @@ describe('isListing', () => {
     for (const command of ['docker ps | grep ora', 'cat compose.yaml', 'grep -rn error logs', 'tail -f app.log', 'find . -name x', 'tree', 'ls; pwd', '', null]) {
       expect(isListing(command)).toBe(false)
     }
+  })
+})
+
+describe('completed listings in scrollback', () => {
+  const prompt = 'user@host:/var$ '
+
+  it('uses the absolute directory from the prompt or the literal argument', () => {
+    expect(historicalListing('ll -al', prompt, '/var')).toEqual({ folder: '/var', checkDirectory: false })
+    expect(historicalListing('ll "my logs/"', prompt, '/var')).toEqual({ folder: '/var/my logs', checkDirectory: true })
+    expect(historicalListing('ll /var/log', 'user@host:~$ ', '/')).toEqual({ folder: '/var/log', checkDirectory: true })
+  })
+
+  it('skips a mismatch and commands with ambiguous directories', () => {
+    expect(historicalListing('ll', 'user@host:~$ ', '/')).toBeNull()
+    expect(historicalListing('ll', prompt, '/etc')).toBeNull()
+    for (const command of ['ll ../log', 'll $LOG_DIR', 'll *.log', 'll a b', 'll -R', 'ls -d log', 'ls -w 80', 'll; pwd', 'll | head', 'll "unclosed']) {
+      expect(historicalListing(command, prompt, '/var'), command).toBeNull()
+    }
+  })
+
+  it('ends before the next prompt and leaves wrapped command lines outside the range', () => {
+    const lines = [`${prompt}ll`, ' -al', 'old.log', prompt.trimEnd(), `${prompt}cd /etc`, 'user@host:/etc$']
+    const buffer = {
+      baseY: 0,
+      cursorY: 5,
+      getLine: (row: number) => lines[row] === undefined ? undefined : { isWrapped: row === 1, translateToString: () => lines[row] }
+    }
+    expect(completedListingRange(buffer, 0, 5, prompt)).toEqual({ start: 2, end: 2 })
+    expect(completedListingRange(buffer, 0, 2, prompt)).toBeNull()
   })
 })
 

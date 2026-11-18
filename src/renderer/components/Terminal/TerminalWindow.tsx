@@ -242,16 +242,15 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
       />
       <div className={`terminal-window-body${link.connected ? '' : ' is-disconnected'}`}>
         <div ref={terminalRef} className="terminal-window-content" />
-        {!link.connected && (
-          <ConnectionLostOverlay
-            sessionId={sessionId}
-            reconnect={link.reconnect}
-            note={link.disconnectNote}
-            onClose={closeSession}
-            onReconnected={() => setLink(linkConnected())}
-            onReconnectFailed={(note) => setLink(previous => linkDisconnected(previous, note))}
-          />
-        )}
+        <ConnectionLostOverlay
+          connected={link.connected}
+          sessionId={sessionId}
+          reconnect={link.reconnect}
+          note={link.disconnectNote}
+          onClose={closeSession}
+          onReconnected={() => setLink(linkConnected())}
+          onReconnectFailed={(note) => setLink(previous => linkDisconnected(previous, note))}
+        />
       </div>
     </div>
   )

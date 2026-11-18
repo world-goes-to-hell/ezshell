@@ -73,6 +73,11 @@ export const logMarkerField = StateField.define<LogMarkerState>({
 
 export const markersOf = (state: EditorState): LogMarker[] => state.field(logMarkerField).markers
 
+/** The start of the chosen range, or the whole log once that marker is gone. */
+export function markerStart(state: EditorState, id: number | null | undefined): number {
+  return id == null ? 0 : markersOf(state).find(marker => marker.id === id)?.pos ?? 0
+}
+
 /** A marker at the end of the log: what is appended later comes below it */
 export function markerAtEnd(state: EditorState, time: string): { pos: number; time: string } {
   return { pos: state.doc.length, time }

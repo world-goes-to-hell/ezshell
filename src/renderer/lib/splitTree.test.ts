@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   singlePane, splitPane, closePane, swapPanes, vacatePane, mergeVacant, layoutOf, setRatio, equalize, equalizeAt,
-  paneIds, leafCount, leafAt, nextPaneSeq, isSplitTree, MAX_PANES, type SplitNode, type Rect
+  paneIds, leafCount, leafAt, nextPaneSeq, isSplitTree, mergePaneLayout, MAX_PANES, type SplitNode, type Rect
 } from './splitTree'
 
 const rectOf = (tree: SplitNode, pane: string): Rect | undefined => {
@@ -59,6 +59,34 @@ describe('closePane', () => {
     const two = splitPane(singlePane(), 'main', 'row', 'a')
     expect(closePane(two, 'main')).toBe(two)
     expect(isSplitTree(closePane(two, 'a'))).toBe(false)
+  })
+})
+
+describe('mergePaneLayout', () => {
+  const tee = () => splitPane(splitPane(singlePane(), 'main', 'row', 'right', 0.6), 'main', 'col', 'bottom', 0.4)
+
+  it('widens the bottom pane into the large right pane and leaves its upper part vacant', () => {
+    const plan = mergePaneLayout(tee(), 'bottom', 'right', 5)!
+    expect(near(plan.expanded, 0, 0.4, 1, 0.6)).toBe(true)
+    expect(near(rectOf(plan.tree, 'main'), 0, 0, 0.6, 0.4)).toBe(true)
+    expect(near(rectOf(plan.tree, 'bottom'), 0, 0.4, 1, 0.6)).toBe(true)
+    expect(paneIds(plan.tree)).toEqual(['main', 'bottom'])
+    expect(layoutOf(plan.tree).vacants.map(entry => entry.pane)).toEqual(['split-6'])
+    expect(near(rectOf(plan.tree, 'split-6'), 0.6, 0, 0.4, 0.4)).toBe(true)
+    expect(near(rectOf(mergeVacant(plan.tree, 'split-6', 'row')!, 'main'), 0, 0, 1, 0.4)).toBe(true)
+  })
+
+  it('keeps the shell at the drag origin in either direction', () => {
+    const plan = mergePaneLayout(tee(), 'right', 'bottom')!
+    expect(paneIds(plan.tree)).toEqual(['main', 'right'])
+    expect(near(rectOf(plan.tree, 'right'), 0, 0.4, 1, 0.6)).toBe(true)
+  })
+
+  it('combines panes across equal edges while declining diagonal targets', () => {
+    const plan = mergePaneLayout(quad(), 'main', 'a')!
+    expect(near(plan.expanded, 0, 0, 1, 0.5)).toBe(true)
+    expect(layoutOf(plan.tree).vacants).toEqual([])
+    expect(mergePaneLayout(quad(), 'main', 'c')).toBeNull()
   })
 })
 

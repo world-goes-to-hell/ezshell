@@ -1,11 +1,11 @@
 // CodeMirror parts of the log view: line colours by level (only the lines on screen are looked at),
 // adding the lines a followed log printed, and moving between problems and markers (keys and wheel).
-import { Compartment, Prec, RangeSetBuilder, StateEffect, StateField, Transaction, type EditorState, type Extension } from '@codemirror/state'
+import { Compartment, MapMode, Prec, RangeSetBuilder, StateEffect, StateField, Transaction, type EditorState, type Extension } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin, keymap, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { classifyLine, type LogLevel, type JumpLevel } from '../../lib/logLevels'
 import { planAppend, type AppendLimits, type AppendPlan } from '../../lib/logAppend'
-import { countProblems, findProblem, logProblemField, problemsOf, type JumpOutcome, type ProblemTarget } from '../../lib/logProblems'
-import { findMarker, logMarkerField, markersOf, type MarkerTarget } from '../../lib/logMarkers'
+import { findProblem, firstIndexFrom, logProblemField, problemsOf, type JumpOutcome, type ProblemTarget } from '../../lib/logProblems'
+import { findMarker, logMarkerField, markerStart, markersOf, type MarkerTarget } from '../../lib/logMarkers'
 import { createWheelStepper } from '../../lib/logWheel'
 
 const LINE_CLASS: Record<LogLevel, Decoration> = {
@@ -54,14 +54,42 @@ const levelTheme = EditorView.theme({
  * many errors the new text brought. Kept out of the undo history: it would hold every dropped line
  * and break the window's memory limit.
  */
-export function appendLog(view: EditorView, text: string, limits: AppendLimits): AppendPlan & { newErrors: number } {
+export function appendLog(
+  view: EditorView, text: string, limits: AppendLimits, unreadErrors: readonly number[]
+): AppendPlan & { newErrorCount: number; unreadErrors: readonly number[] } {
   const { doc } = view.state
   const plan = planAppend(doc, text, limits)
-  // The last line is counted on both sides: the new text may finish it
-  const before = countProblems(problemsOf(view.state), doc.line(doc.lines).from).error
-  view.dispatch({ changes: plan.changes, annotations: Transaction.addToHistory.of(false) })
-  const after = countProblems(problemsOf(view.state), plan.resumedAt).error
-  return { ...plan, newErrors: Math.max(0, after - before) }
+  // Appended text can finish the previous last line, so compare that line on both sides.
+  const before = problemsOf(view.state)
+  const lastLineFrom = doc.line(doc.lines).from
+  const previous = before[firstIndexFrom(before, lastLineFrom)]
+  const tr = view.state.update({ changes: plan.changes, annotations: Transaction.addToHistory.of(false) })
+  const previousError = previous?.level === 'error' ? tr.changes.mapPos(previous.pos, -1, MapMode.TrackAfter) : null
+  const after = problemsOf(tr.state)
+  const newErrors = after.slice(firstIndexFrom(after, plan.resumedAt))
+    .filter(problem => problem.level === 'error' && problem.pos !== previousError)
+    .map(problem => problem.pos)
+
+  const isErrorAt = (pos: number) => {
+    const problem = after[firstIndexFrom(after, pos)]
+    return problem?.pos === pos && problem.level === 'error'
+  }
+  // Without trimming, only an unfinished last line can invalidate an unread position.
+  let retained = unreadErrors
+  if (plan.trimmed) {
+    retained = unreadErrors.flatMap(pos => {
+      const mapped = tr.changes.mapPos(pos, -1, MapMode.TrackAfter)
+      return mapped !== null && isErrorAt(mapped) ? [mapped] : []
+    })
+  } else if (unreadErrors[unreadErrors.length - 1] === lastLineFrom && !isErrorAt(lastLineFrom)) {
+    retained = unreadErrors.slice(0, -1)
+  }
+  view.dispatch(tr)
+  return {
+    ...plan,
+    newErrorCount: newErrors.length,
+    unreadErrors: newErrors.length ? [...retained, ...newErrors] : retained
+  }
 }
 
 export function isAtBottom(view: EditorView): boolean {
@@ -134,8 +162,10 @@ export function revealLine(view: EditorView, pos: number, y: 'center' | 'start' 
 }
 
 /** Go to the next / previous / first / last problem of `levels` (a stack trace is one problem) */
-export function goToProblem(view: EditorView, target: NavTarget, levels: ReadonlySet<JumpLevel> = PROBLEM_LEVELS, wrap = true): JumpOutcome {
-  const { outcome, problem } = findProblem(problemsOf(view.state), startPos(view, target), target, levels, wrap)
+export function goToProblem(view: EditorView, target: NavTarget, selection: ProblemSelection, wrap = true): JumpOutcome {
+  const problems = problemsOf(view.state)
+  const from = markerStart(view.state, selection.afterMarkerId)
+  const { outcome, problem } = findProblem(problems.slice(firstIndexFrom(problems, from)), startPos(view, target), target, selection.levels, wrap)
   if (problem) revealLine(view, problem.pos)
   return outcome
 }
@@ -150,15 +180,20 @@ export function goToMarker(view: EditorView, target: NavTarget, wrap = true): Ju
 }
 
 export type NavReport = (kind: NavKind, outcome: JumpOutcome, target: NavTarget) => void
-/** The levels the keys and the wheel move between, asked at each move (the list panel's choice) */
-export type LevelChoice = () => ReadonlySet<JumpLevel>
+interface ProblemSelection {
+  levels: ReadonlySet<JumpLevel>
+  afterMarkerId: number | null
+}
+
+/** The same level and range selection for the panel, keys and wheel. */
+type ProblemChoice = () => ProblemSelection
 
 /**
  * Ctrl or Alt + wheel: one problem a notch; with Shift too: one marker a notch. Stops at the ends.
  * Both keys, because a lone Alt does not always reach the window: on the PC this was written for, some
  * program held the key back until its release, and the wheel events came without altKey.
  */
-const wheelNavigation = (report: NavReport, levels: LevelChoice) => ViewPlugin.define((view) => {
+const wheelNavigation = (report: NavReport, selection: ProblemChoice) => ViewPlugin.define((view) => {
   const stepOf = createWheelStepper()
   const onWheel = (event: WheelEvent) => {
     if (!(event.altKey || event.ctrlKey) || event.metaKey) return
@@ -168,18 +203,18 @@ const wheelNavigation = (report: NavReport, levels: LevelChoice) => ViewPlugin.d
     const step = stepOf(event)
     if (step === 0) return
     const kind: NavKind = event.shiftKey ? 'marker' : 'problem'
-    report(kind, kind === 'marker' ? goToMarker(view, step, false) : goToProblem(view, step, levels(), false), step)
+    report(kind, kind === 'marker' ? goToMarker(view, step, false) : goToProblem(view, step, selection(), false), step)
   }
   view.scrollDOM.addEventListener('wheel', onWheel, { passive: false })
   return { destroy: () => view.scrollDOM.removeEventListener('wheel', onWheel) }
 })
 
-function navigationKeys(report: NavReport, levels: LevelChoice): Extension {
+function navigationKeys(report: NavReport, selection: ProblemChoice): Extension {
   const bind = (key: string, kind: NavKind, target: NavTarget) => ({
     key,
     preventDefault: true,
     run: (view: EditorView) => {
-      report(kind, kind === 'marker' ? goToMarker(view, target) : goToProblem(view, target, levels()), target)
+      report(kind, kind === 'marker' ? goToMarker(view, target) : goToProblem(view, target, selection()), target)
       return true
     }
   })
@@ -194,9 +229,9 @@ function navigationKeys(report: NavReport, levels: LevelChoice): Extension {
  * Ctrl+Shift: first), Ctrl or Alt + wheel. `onState` gets the state whenever the text, the cursor or the
  * markers change (for the status line and the list panel).
  */
-export function logExtensions({ isWrapped, levels, onNavigate, onState }: {
+export function logExtensions({ isWrapped, selection, onNavigate, onState }: {
   isWrapped: boolean
-  levels: LevelChoice
+  selection: ProblemChoice
   onNavigate: NavReport
   onState: (state: EditorState) => void
 }): Extension[] {
@@ -206,8 +241,8 @@ export function logExtensions({ isWrapped, levels, onNavigate, onState }: {
     levelColours,
     levelTheme,
     wrapSlot.of(isWrapped ? EditorView.lineWrapping : []),
-    navigationKeys(onNavigate, levels),
-    wheelNavigation(onNavigate, levels),
+    navigationKeys(onNavigate, selection),
+    wheelNavigation(onNavigate, selection),
     EditorView.updateListener.of((update) => {
       const markersChanged = update.startState.field(logMarkerField, false) !== update.state.field(logMarkerField, false)
       if (update.docChanged || update.selectionSet || markersChanged) onState(update.state)

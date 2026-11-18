@@ -16,40 +16,69 @@ function registerSftpIpc(ctx) {
 
   // ==================== SFTP 기능 ====================
 
-  // SFTP 세션 저장소
+  // One panel channel per tab, including the time while the server is opening it.
   const sftpSessions = new Map();
 
-  // SFTP 세션 열기
+  const sftpOf = (sessionId) => {
+    const entry = sftpSessions.get(sessionId);
+    return entry && entry.conn === sshConnections.get(sessionId)?.conn ? entry.channel : null;
+  };
+
+  function endChannel(sftp) {
+    try { sftp?.end(); } catch { /* already closed */ }
+  }
+
+  function closeSftpSession(sessionId) {
+    const entry = sftpSessions.get(sessionId);
+    if (!entry) return;
+    sftpSessions.delete(sessionId);
+    entry.reject(new Error('SFTP 세션이 닫혔습니다.'));
+    endChannel(entry.channel);
+  }
+
   ipcMain.handle('sftp-open', async (event, { sessionId }) => {
-    // 이미 SFTP 세션이 열려있으면 그대로 사용 (alreadyOpen: the panel then neither announces it nor reloads)
-    if (sftpSessions.has(sessionId)) {
+    const conn = sshConnections.get(sessionId)?.conn;
+    const existing = sftpSessions.get(sessionId);
+    if (existing && existing.conn === conn) {
+      await existing.ready;
       return { success: true, alreadyOpen: true };
     }
+    closeSftpSession(sessionId);
+    if (!conn) throw new Error('SSH 연결이 없습니다.');
 
-    const session = sshConnections.get(sessionId);
-    if (!session || !session.conn) {
-      throw new Error('SSH 연결이 없습니다.');
-    }
+    let resolveOpen, rejectOpen;
+    const ready = new Promise((resolve, reject) => { resolveOpen = resolve; rejectOpen = reject; });
+    const entry = { conn, ready, reject: rejectOpen, channel: null };
+    sftpSessions.set(sessionId, entry);
 
-    return new Promise((resolve, reject) => {
-      session.conn.sftp((err, sftp) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        sftpSessions.set(sessionId, sftp);
-        resolve({ success: true });
-      });
-    });
+    const forget = () => {
+      if (sftpSessions.get(sessionId) === entry) sftpSessions.delete(sessionId);
+    };
+    const opened = (err, channel) => {
+      if (err) {
+        forget();
+        rejectOpen(err);
+        return;
+      }
+      // A close or reconnect that won the race must not leave an untracked channel on the server.
+      if (sftpSessions.get(sessionId) !== entry || sshConnections.get(sessionId)?.conn !== conn) {
+        forget();
+        endChannel(channel);
+        rejectOpen(new Error('SFTP 세션이 닫혔습니다.'));
+        return;
+      }
+      entry.channel = channel;
+      channel.once('close', forget);
+      resolveOpen();
+    };
+    try { conn.sftp(opened); } catch (err) { opened(err); }
+    await ready;
+    return { success: true };
   });
 
   // SFTP 세션 닫기
   ipcMain.handle('sftp-close', async (event, { sessionId }) => {
-    const sftp = sftpSessions.get(sessionId);
-    if (sftp) {
-      sftp.end();
-      sftpSessions.delete(sessionId);
-    }
+    closeSftpSession(sessionId);
     return { success: true };
   });
 
@@ -66,7 +95,7 @@ function registerSftpIpc(ctx) {
   }
 
   ipcMain.handle('sftp-list', async (event, { sessionId, remotePath }) => {
-    const sftp = sftpSessions.get(sessionId);
+    const sftp = sftpOf(sessionId);
     if (!sftp) {
       throw new Error('SFTP 세션이 없습니다.');
     }
@@ -118,7 +147,7 @@ function registerSftpIpc(ctx) {
 
   // 파일 다운로드
   ipcMain.handle('sftp-download', async (event, { sessionId, remotePath, localPath }) => {
-    const sftp = sftpSessions.get(sessionId);
+    const sftp = sftpOf(sessionId);
     if (!sftp) {
       throw new Error('SFTP 세션이 없습니다.');
     }
@@ -164,7 +193,7 @@ function registerSftpIpc(ctx) {
 
   // 파일 업로드
   ipcMain.handle('sftp-upload', async (event, { sessionId, localPath, remotePath }) => {
-    const sftp = sftpSessions.get(sessionId);
+    const sftp = sftpOf(sessionId);
     if (!sftp) {
       throw new Error('SFTP 세션이 없습니다.');
     }
@@ -203,7 +232,7 @@ function registerSftpIpc(ctx) {
 
   // 파일/폴더 삭제
   ipcMain.handle('sftp-delete', async (event, { sessionId, remotePath, isDirectory }) => {
-    const sftp = sftpSessions.get(sessionId);
+    const sftp = sftpOf(sessionId);
     if (!sftp) {
       throw new Error('SFTP 세션이 없습니다.');
     }
@@ -226,7 +255,7 @@ function registerSftpIpc(ctx) {
   // 이름 변경
   // What a path is (links followed), for a name right-clicked in the terminal. Null when it is not there.
   ipcMain.handle('sftp-stat', (event, { sessionId, remotePath }) => {
-    const sftp = sftpSessions.get(sessionId);
+    const sftp = sftpOf(sessionId);
     if (!sftp) throw new Error('SFTP 세션이 없습니다.');
     return new Promise((resolve) => {
       sftp.stat(String(remotePath), (err, stats) => {
@@ -238,7 +267,7 @@ function registerSftpIpc(ctx) {
 
   // The server's own spelling of a path ('.' is the login folder), for "SFTP 를 현재 폴더로"
   ipcMain.handle('sftp-realpath', (event, { sessionId, remotePath }) => {
-    const sftp = sftpSessions.get(sessionId);
+    const sftp = sftpOf(sessionId);
     if (!sftp) throw new Error('SFTP 세션이 없습니다.');
     return new Promise((resolve, reject) => {
       sftp.realpath(String(remotePath), (err, resolved) => (err ? reject(err) : resolve(resolved)));
@@ -246,7 +275,7 @@ function registerSftpIpc(ctx) {
   });
 
   ipcMain.handle('sftp-rename', async (event, { sessionId, oldPath, newPath }) => {
-    const sftp = sftpSessions.get(sessionId);
+    const sftp = sftpOf(sessionId);
     if (!sftp) {
       throw new Error('SFTP 세션이 없습니다.');
     }
@@ -261,7 +290,7 @@ function registerSftpIpc(ctx) {
 
   // 폴더 생성
   ipcMain.handle('sftp-mkdir', async (event, { sessionId, remotePath }) => {
-    const sftp = sftpSessions.get(sessionId);
+    const sftp = sftpOf(sessionId);
     if (!sftp) {
       throw new Error('SFTP 세션이 없습니다.');
     }
@@ -474,6 +503,7 @@ function registerSftpIpc(ctx) {
         if (!abortController.aborted) {
           transfer.status = 'completed';
           transfer.progress = 100;
+          transfer.completedAt = Date.now();
         }
       } catch (err) {
         if (!abortController.aborted) {
@@ -492,7 +522,7 @@ function registerSftpIpc(ctx) {
       const session = sshConnections.get(this.sessionId);
       if (!session || !session.conn) throw new Error('No SSH connection');
 
-      const sftp = sftpSessions.get(this.sessionId);
+      const sftp = sftpOf(this.sessionId);
       if (!sftp) throw new Error('No SFTP connection');
 
       const CHUNK_SIZE = 64 * 1024; // 64KB
@@ -556,7 +586,7 @@ function registerSftpIpc(ctx) {
       const session = sshConnections.get(this.sessionId);
       if (!session || !session.conn) throw new Error('No SSH connection');
 
-      const sftp = sftpSessions.get(this.sessionId);
+      const sftp = sftpOf(this.sessionId);
       if (!sftp) throw new Error('No SFTP connection');
 
       const CHUNK_SIZE = 64 * 1024;
@@ -639,6 +669,7 @@ function registerSftpIpc(ctx) {
         remotePath: t.remotePath,
         status: t.status,
         progress: t.progress,
+        completedAt: t.completedAt,
         size: t.size,
         speed: t.speed,
         error: t.error
@@ -696,7 +727,7 @@ function registerSftpIpc(ctx) {
   // Recursive folder download (src/sftpDownloadDir.js): the same folders on this PC, every file through the
   // transfer queue. Links are not followed and names this PC cannot take are left out; the answer lists them.
   ipcMain.handle('sftp-download-directory', async (event, { sessionId, remoteDir, localDir }) => {
-    const sftp = sftpSessions.get(sessionId);
+    const sftp = sftpOf(sessionId);
     if (!sftp) {
       throw new Error('SFTP 세션이 없습니다.');
     }
@@ -715,7 +746,7 @@ function registerSftpIpc(ctx) {
 
   // Recursive folder upload
   ipcMain.handle('sftp-upload-directory', async (event, { sessionId, localDir, remoteDir }) => {
-    const sftp = sftpSessions.get(sessionId);
+    const sftp = sftpOf(sessionId);
     if (!sftp) {
       throw new Error('SFTP 세션이 없습니다.');
     }
@@ -784,6 +815,17 @@ function registerSftpIpc(ctx) {
     const queue = getTransferQueue(sessionId);
     return { queue: queue.snapshot() };
   });
+
+  // Transfers waiting or running, in every tab (an update would cut them off)
+  const activeTransferCount = () => {
+    let count = 0;
+    for (const queue of transferQueues.values()) {
+      count += queue.queue.filter(t => t.status === 'queued' || t.status === 'active' || t.status === 'paused').length;
+    }
+    return count;
+  };
+
+  return { closeSftpSession, activeTransferCount };
 }
 
 module.exports = { registerSftpIpc };

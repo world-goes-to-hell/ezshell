@@ -27,6 +27,7 @@ if (process.platform === 'win32' && app.isPackaged) {
 
 const { Client } = require('ssh2');
 const cryptoUtil = require('./src/crypto.js');
+const sessionSecrets = require('./src/sessionSecrets.js');
 const sharedConn = require('./src/sharedConn.js');
 const { macMenuTemplate } = require('./src/macMenu.js');
 const { registerContainerIpc } = require('./src/containers/ipc.js');
@@ -127,7 +128,7 @@ const sshStreams = new Map(); // sessionId:streamId -> stream (for split termina
 // becomes a tab of its own (ssh-adopt-split)
 const splitStreamHandlers = new Map();
 // Port forwarding (-L, -R, -D): src/ipc/portForward.js
-const { setupRemoteForwardHandler, cleanupPortForwards } = require('./src/ipc/portForward.js').registerPortForwardIpc({
+const { setupRemoteForwardHandler, cleanupPortForwards, portForwardCount } = require('./src/ipc/portForward.js').registerPortForwardIpc({
   ipcMain, sshConnections, getWindowForSession
 });
 
@@ -650,6 +651,7 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
   if (cryptoUtil.verifyPassword(password, verification.hash, verification.salt)) {
     currentMasterPassword = password;
     isAppLocked = false;
+    resealSessionsFile();
     void remoteAccess.start();
     return { success: true };
   }
@@ -766,28 +768,39 @@ function readDecryptedSessions() {
   if (!fs.existsSync(sessionsPath)) return [];
 
   const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf8'));
+  // Secret fields are in the encrypted blob (src/sessionSecrets.js); older files still open
   return sessions.map(session => {
-    // Handle legacy unencrypted sessions (migration)
-    if (!session.encrypted && !session.encryptedVersion) {
-      // This is a legacy session, mark for migration on next save
-      return { ...session, needsMigration: true };
-    }
-
-    try {
-      const decrypted = JSON.parse(
-        cryptoUtil.decrypt(session.encrypted, currentMasterPassword)
-      );
-
-      const { encrypted, encryptedVersion, ...safeSession } = session;
-      return {
-        ...safeSession,
-        ...decrypted
-      };
-    } catch (err) {
-      console.error('Failed to decrypt session:', session.name);
-      return { ...session, decryptionFailed: true };
-    }
+    const opened = sessionSecrets.openSession(session, currentMasterPassword);
+    if (opened.decryptionFailed) console.error('Failed to decrypt session:', session.name);
+    return opened;
   });
+}
+
+/** Writes sessions.json through a temporary file, so a failed write cannot leave half a file */
+function writeSessionsFile(sessions) {
+  const sessionsPath = path.join(app.getPath('userData'), 'sessions.json');
+  const temporary = `${sessionsPath}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(sessions, null, 2));
+  fs.renameSync(temporary, sessionsPath);
+}
+
+/**
+ * Right after unlocking: secrets that older versions wrote in plain text (root switch and jump host
+ * passwords, saved database accounts) move into the encrypted blob. Sessions that do not open with
+ * this password are left as they are. Failing here must not stop the unlock.
+ */
+function resealSessionsFile() {
+  try {
+    const sessionsPath = path.join(app.getPath('userData'), 'sessions.json');
+    if (!fs.existsSync(sessionsPath) || !currentMasterPassword) return;
+    const resealed = sessionSecrets.resealAll(JSON.parse(fs.readFileSync(sessionsPath, 'utf8')), currentMasterPassword);
+    if (!resealed) return;
+    writeSessionsFile(resealed);
+    mcpSessionsCache = null;
+    console.log('[sessions] secrets written in plain text by an older version are now encrypted');
+  } catch (error) {
+    console.error('[sessions] could not encrypt the remaining secrets:', error.message);
+  }
 }
 
 // 세션 저장/로드 IPC (with encryption)
@@ -797,6 +810,8 @@ ipcMain.handle('load-sessions', async () => {
   }
 
   try {
+    // Whatever way the window got unlocked: no secret stays in plain text once sessions are read
+    resealSessionsFile();
     return { success: true, sessions: readDecryptedSessions() };
   } catch (err) {
     console.error('Failed to load sessions:', err);
@@ -809,27 +824,9 @@ ipcMain.handle('save-sessions', async (event, sessions) => {
     return { success: false, error: 'App is locked' };
   }
 
-  const encryptedSessions = sessions.map(session => {
-    // Encrypt sensitive fields
-    const sensitiveData = JSON.stringify({
-      password: session.password || null,
-      passphrase: session.passphrase || null,
-      privateKeyPath: session.privateKeyPath || null
-    });
-
-    const encrypted = cryptoUtil.encrypt(sensitiveData, currentMasterPassword);
-
-    // Return session without sensitive fields, with encrypted blob
-    const { password, passphrase, privateKeyPath, needsMigration, decryptionFailed, ...safeSession } = session;
-    return {
-      ...safeSession,
-      encrypted,
-      encryptedVersion: 1
-    };
-  });
-
-  const sessionsPath = path.join(app.getPath('userData'), 'sessions.json');
-  fs.writeFileSync(sessionsPath, JSON.stringify(encryptedSessions, null, 2));
+  if (!Array.isArray(sessions)) return { success: false, error: 'Invalid sessions' };
+  // Every secret field (passwords, key paths, saved database accounts) goes into the encrypted blob
+  writeSessionsFile(sessions.map(session => sessionSecrets.sealSession(session, currentMasterPassword)));
   mcpSessionsCache = null;
   mcpController?.onSessionsSaved();
 
@@ -1121,8 +1118,9 @@ ipcMain.handle('import-sessions', async (event, mode) => {
       finalSessions = [...existingSessions, ...newSessions];
     }
 
-    // Save merged/replaced sessions
-    fs.writeFileSync(sessionsPath, JSON.stringify(finalSessions, null, 2));
+    // Save merged/replaced sessions. A backup holds its passwords in plain text: they are encrypted now
+    writeSessionsFile(finalSessions);
+    resealSessionsFile();
     mcpSessionsCache = null;
     mcpController?.onSessionsSaved();
 
@@ -1239,11 +1237,27 @@ const containers = registerContainerIpc({
   isLocked: () => isAppLocked
 });
 
+// The tabs open when an update is installed, opened again after it: src/ipc/restoreTabs.js
+require('./src/ipc/restoreTabs.js').registerRestoreTabsIpc({
+  ipcMain, app, fromMainWindow,
+  // Declared further down the file: looked up when a request arrives, not now
+  activeTransferCount: () => activeTransferCount(),
+  unsavedEditCount: () => remoteFileIpc.unsavedEditCount(),
+  get isAppLocked() { return isAppLocked; },
+  get currentMasterPassword() { return currentMasterPassword; }
+});
+
+// SFTP panel, this PC's files and the transfer queue: src/ipc/sftp.js
+const { closeSftpSession, activeTransferCount } = require('./src/ipc/sftp.js').registerSftpIpc({
+  ipcMain, dialog, app, shell, sshConnections, sftpWindows,
+  get mainWindow() { return mainWindow; }
+});
+
 // A tab's SSH connection, reconnecting and the session log IPC: src/ipc/sshSessions.js
 const { attemptReconnect, endedByItself, reportShellExit } = require('./src/ipc/sshSessions.js').registerSshSessionIpc({
   ipcMain, shell, sshConnections, sshStreams, splitStreamHandlers, connectionStates, ConnectionState, updateConnectionState,
   getWindowForSession, hostKeyStore, hostKeyPrompter, checkHostKeyAsking, hostKeyFailureText, setupRemoteForwardHandler, cleanupPortForwards, containers,
-  getSessionLogger, notifySessionLog, endSessionLog, sessionLogDir, MAX_SESSION_LOG_NAME,
+  getSessionLogger, notifySessionLog, endSessionLog, sessionLogDir, MAX_SESSION_LOG_NAME, closeSftpSession,
   get mainWindow() { return mainWindow; },
   get isAppLocked() { return isAppLocked; },
   get sessionLogger() { return sessionLogger; }
@@ -1251,15 +1265,9 @@ const { attemptReconnect, endedByItself, reportShellExit } = require('./src/ipc/
 // Split shells and moving one out to a tab: src/ipc/splitShells.js
 require('./src/ipc/splitShells.js').registerSplitShellIpc({
   ipcMain, sshConnections, sshStreams, splitStreamHandlers, connectionStates, ConnectionState, updateConnectionState, getWindowForSession,
-  fromMainWindow, attemptReconnect, endedByItself, reportShellExit, endSessionLog,
+  fromMainWindow, attemptReconnect, endedByItself, reportShellExit, endSessionLog, portForwardCount, containers, closeSftpSession,
   get isAppLocked() { return isAppLocked; },
   get sessionLogger() { return sessionLogger; }
-});
-
-// SFTP panel, this PC's files and the transfer queue: src/ipc/sftp.js
-require('./src/ipc/sftp.js').registerSftpIpc({
-  ipcMain, dialog, app, shell, sshConnections, sftpWindows,
-  get mainWindow() { return mainWindow; }
 });
 
 // Other programs' sessions (Xshell, PuTTY, MobaXterm, Tabby, OpenSSH config): structure only, no

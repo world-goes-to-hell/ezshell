@@ -1,4 +1,5 @@
-import { RiArrowUpLine, RiArrowDownLine } from 'react-icons/ri'
+import { useState, type CSSProperties } from 'react'
+import { RiArrowUpLine, RiArrowDownLine, RiCheckLine } from 'react-icons/ri'
 import type { TransferMark } from '../../lib/transferMarks'
 
 const VERB = { upload: '업로드', download: '다운로드' } as const
@@ -7,6 +8,7 @@ const RING_SIZE = 14
 const RING_STROKE = 2.5
 const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
+const COMPLETION_MS = 1100
 
 export function transferMarkTitle(mark: TransferMark): string {
   const verb = VERB[mark.direction]
@@ -49,7 +51,7 @@ function ProgressRing({ progress }: { progress: number }) {
 
 /**
  * Next to the file name: a progress donut while the transfer is queued / running / paused,
- * then an arrow (up = uploaded, remote list; down = downloaded, local list).
+ * followed by a completion check and the usual direction arrow.
  */
 export function TransferMarkBadge({ mark }: { mark: TransferMark }) {
   const title = transferMarkTitle(mark)
@@ -72,7 +74,30 @@ export function TransferMarkBadge({ mark }: { mark: TransferMark }) {
   const Icon = mark.direction === 'upload' ? RiArrowUpLine : RiArrowDownLine
   return (
     <span className="transfer-mark-badge" title={title} aria-label={title}>
-      <Icon size={13} />
+      {mark.state === 'done' && mark.completedAt !== undefined ? (
+        <TransferCompletion key={mark.completedAt} completedAt={mark.completedAt} Icon={Icon} />
+      ) : <Icon size={13} />}
+    </span>
+  )
+}
+
+function TransferCompletion({ completedAt, Icon }: { completedAt: number; Icon: typeof RiArrowUpLine }) {
+  // Resume at the transfer's current age if a newly listed or virtualized row mounts late.
+  const [elapsed] = useState(() => Math.max(0, Date.now() - completedAt))
+  const [finished, setFinished] = useState(false)
+  if (finished || elapsed >= COMPLETION_MS) return <Icon size={13} />
+
+  const timing = {
+    '--transfer-completion-duration': `${COMPLETION_MS}ms`,
+    '--transfer-completion-delay': `${-elapsed}ms`
+  } as CSSProperties
+
+  return (
+    <span className="transfer-completion" style={timing} aria-hidden="true">
+      <span className="transfer-completion-ring"><ProgressRing progress={100} /></span>
+      <RiCheckLine className="transfer-completion-check" size={14} />
+      <Icon className="transfer-completion-direction" size={13} />
+      <span className="transfer-completion-row" onAnimationEnd={() => setFinished(true)} />
     </span>
   )
 }

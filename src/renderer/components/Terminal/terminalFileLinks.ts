@@ -62,13 +62,14 @@ export function attachFileLinks(terminal: Terminal, { sessionId, getCwd, getSess
       const words = wordsInCells(cells)
         .map(word => ({ ...word, name: cleanName(word.text) }))
         .filter((word): word is typeof word & { name: string } => word.name !== null && looksLikeName(word.name))
-        // Placed in the folder its command listed; a relative name printed before the last cd is left
+        // Use the current zone or the original directory of a completed listing in scrollback.
         .map(word => ({ ...word, name: lookupName ? lookupName(word.name, lineNumber - 1) : word.name }))
         .filter((word): word is typeof word & { name: string } => word.name !== null)
         .slice(0, MAX_WORDS_PER_LINE)
       if (words.length === 0) return callback(undefined)
 
       const answer = (targets: Array<TerminalTarget | null>): void => {
+        if (request !== latest) return
         const links: ILink[] = []
         targets.forEach((target, i) => {
           if (!target) return
@@ -95,7 +96,7 @@ export function attachFileLinks(terminal: Terminal, { sessionId, getCwd, getSess
 
       window.setTimeout(() => {
         // The pointer moved on to another line: nothing is asked for this one
-        if (request !== latest) return callback(undefined)
+        if (request !== latest) return
         void Promise.all(words.map(word => findTarget(sessionId, word.name, cwd))).then(answer)
       }, HOVER_DELAY_MS)
     }

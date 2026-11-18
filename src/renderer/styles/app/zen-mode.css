@@ -46,7 +46,7 @@
 
 /* Smooth reverse transition when exiting Zen mode */
 .app-main .sidebar {
-  transition: width 0.3s ease, opacity 0.2s ease 0.1s, padding 0.3s ease;
+  transition: opacity 0.2s ease 0.1s, padding 0.3s ease;
 }
 
 .app-main .terminal-tabs {

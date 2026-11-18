@@ -2,10 +2,25 @@ import { useCallback, useEffect, useMemo, useState, type DragEvent, type RefObje
 import { RiMoreFill } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import {
-  MAIN_PANE, layoutOf, leafAt, swapPanes, setRatio, equalizeAt, mergeVacant, paneBox, dividerBox,
-  type PaneId, type DividerLine, type SplitAxis, type SplitNode
+  layoutOf, leafAt, swapPanes, setRatio, equalizeAt, mergeVacant, paneBox, dividerBox,
+  type PaneId, type DividerLine, type SplitAxis, type SplitLayout, type SplitNode
 } from '../../lib/splitTree'
-import { PANE_DRAG_TYPE, startPaneDrag, endPaneDrag, isPaneDrag } from '../../lib/paneDrag'
+import { PANE_DRAG_TYPE, currentPaneDrag, startPaneDrag, endPaneDrag, isPaneDrag } from '../../lib/paneDrag'
+import { zoneAt, canHalve, movePaneBeside, sideWord, TOO_NARROW, type DropZone } from '../../lib/paneDropZones'
+import { usePaneGesture } from '../../hooks/usePaneGesture'
+
+/** Where a dragged pane would go on the pane under the pointer, and whether it can */
+interface PaneDropTarget { pane: PaneId; zone: DropZone; blocked: string | null }
+
+function paneDropTarget(event: DragEvent, pane: PaneId): PaneDropTarget {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  const zone = zoneAt({ x: rect.left, y: rect.top, w: rect.width, h: rect.height }, event.clientX, event.clientY, true)
+  const blocked = zone !== 'center' && !canHalve(rect.width, rect.height, zone) ? TOO_NARROW : null
+  return { pane, zone, blocked }
+}
+
+const dropLabel = (target: PaneDropTarget) =>
+  target.blocked ?? (target.zone === 'center' ? '여기와 자리 바꾸기' : `이 칸의 ${sideWord(target.zone)}으로 옮기기`)
 
 /** Width of the line between two panes */
 export const PANE_DIVIDER_PX = 6
@@ -13,6 +28,30 @@ export const PANE_DIVIDER_PX = 6
 const PANE_GRIP_ZONE_PX = 28
 
 const refit = () => requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
+
+/** An input-transparent outline over the pane that just opened or moved. */
+export function PaneArrival({ tabId, layout }: { tabId: string; layout?: SplitLayout }) {
+  const arrival = useTerminalStore(state => state.terminals.get(tabId)?.paneArrival)
+  if (!arrival) return null
+  const rect = layout?.panes.find(({ pane }) => pane === arrival.pane)?.rect
+  if (layout && !rect) return null
+
+  return (
+    <div
+      key={arrival.seq}
+      className="pane-arrival"
+      data-pane-arrival={arrival.pane}
+      style={rect ? paneBox(rect, PANE_DIVIDER_PX) : undefined}
+      aria-hidden="true"
+      onAnimationEnd={() => {
+        const store = useTerminalStore.getState()
+        if (store.terminals.get(tabId)?.paneArrival === arrival) {
+          store.updateTerminalMeta(tabId, { paneArrival: undefined })
+        }
+      }}
+    />
+  )
+}
 
 interface SplitChromeProps {
   /** The tab whose split tree this is (an SSH tab or a local terminal tab) */
@@ -30,17 +69,19 @@ interface SplitChromeProps {
  */
 export function SplitChrome({ tabId, tree, containerRef }: SplitChromeProps) {
   const setSplitTree = useTerminalStore(state => state.setSplitTree)
+  const drawnDivider = useTerminalStore(state => state.terminals.get(tabId)?.paneArrival?.dividerPath)
   const layout = useMemo(() => layoutOf(tree), [tree])
+  const { canvas, preview, trail } = usePaneGesture(tabId, containerRef)
   // Grip of the pane whose top edge the pointer is near, the pane being dragged, the pane under it
   const [gripPane, setGripPane] = useState<PaneId | null>(null)
   const [dragPane, setDragPane] = useState<PaneId | null>(null)
-  const [dropPane, setDropPane] = useState<PaneId | null>(null)
+  const [dropTarget, setDropTarget] = useState<PaneDropTarget | null>(null)
   const [resizingLine, setResizingLine] = useState<DividerLine | null>(null)
 
   // The grip shows for the pane whose top edge the pointer is near
   useEffect(() => {
     const container = containerRef.current
-    if (!container) return
+    if (!container || layout.dividers.length === 0) return
     const onMove = (event: MouseEvent) => {
       const rect = container.getBoundingClientRect()
       const leaf = leafAt(layout, (event.clientX - rect.left) / rect.width, (event.clientY - rect.top) / rect.height)
@@ -60,25 +101,34 @@ export function SplitChrome({ tabId, tree, containerRef }: SplitChromeProps) {
     event.stopPropagation()
     event.dataTransfer.setData(PANE_DRAG_TYPE, JSON.stringify({ sessionId: tabId, pane }))
     event.dataTransfer.effectAllowed = 'move'
-    startPaneDrag({ sessionId: tabId, pane })
+    const drag = { sessionId: tabId, pane }
+    startPaneDrag(drag)
     // After the drag has started: changing the page inside dragstart can cancel the drag
-    setTimeout(() => setDragPane(pane), 0)
+    setTimeout(() => {
+      if (currentPaneDrag() === drag) setDragPane(pane)
+    }, 0)
   }, [tabId])
 
   const handleGripDragEnd = useCallback(() => {
     endPaneDrag()
     setDragPane(null)
-    setDropPane(null)
+    setDropTarget(null)
     setGripPane(null)
   }, [])
 
-  // The panes keep their shells; only their places change, so every terminal is fitted again
+  // The panes keep their shells; only their places change, so every terminal is fitted again.
+  // In the middle of a pane the two trade places; near a side the dragged pane leaves its place and
+  // takes that half of the pane.
   const handlePaneDrop = useCallback((event: DragEvent, target: PaneId) => {
     event.preventDefault()
     event.stopPropagation()
-    if (dragPane && dragPane !== target) {
-      setSplitTree(tabId, swapPanes(tree, dragPane, target))
-      refit()
+    const drop = paneDropTarget(event, target)
+    if (dragPane && dragPane !== target && !drop.blocked) {
+      const next = drop.zone === 'center' ? swapPanes(tree, dragPane, target) : movePaneBeside(tree, dragPane, target, drop.zone)
+      if (next !== tree) {
+        setSplitTree(tabId, next, dragPane)
+        refit()
+      }
     }
     handleGripDragEnd()
   }, [dragPane, tree, tabId, setSplitTree, handleGripDragEnd])
@@ -120,27 +170,45 @@ export function SplitChrome({ tabId, tree, containerRef }: SplitChromeProps) {
     refit()
   }
 
+  const from = preview && layout.panes.find(entry => entry.pane === preview.from)?.rect
+  const action = preview?.action
+  const merge = action?.kind === 'merge' ? action : null
+  const to = merge && layout.panes.find(entry => entry.pane === merge.to)?.rect
+  const split = action?.kind === 'split' ? action : null
+  const gesture = (
+    <>
+      <canvas ref={canvas} className={`pane-merge-trail${trail ? ` is-${trail}` : ''}`} aria-hidden="true" />
+      {from && <div className="pane-merge-preview is-source" style={paneBox(from, PANE_DIVIDER_PX)} aria-hidden="true" />}
+      {merge && <div className="pane-merge-preview is-area" style={paneBox(merge.expanded, PANE_DIVIDER_PX)} aria-hidden="true" />}
+      {to && <div className="pane-merge-preview is-destination" style={paneBox(to, PANE_DIVIDER_PX)} aria-hidden="true"><span>놓으면 이 셸을 닫습니다</span></div>}
+      {from && split && <div className={`pane-gesture-divider is-${split.axis}`} style={dividerBox({ ...split, path: '', region: from }, PANE_DIVIDER_PX)} aria-hidden="true" />}
+    </>
+  )
+
   return (
     <>
+      {gesture}
+      {tree.kind === 'split' && <>
       {/* One line per division of the split tree */}
       {layout.dividers.map(line => (
         <div
           key={`divider-${line.path}`}
-          className={`pane-divider ${line.axis === 'row' ? 'pane-divider-v' : 'pane-divider-h'}`}
+          className={`pane-divider ${line.axis === 'row' ? 'pane-divider-v' : 'pane-divider-h'}${drawnDivider === line.path ? ' is-drawing' : ''}`}
           style={dividerBox(line, PANE_DIVIDER_PX)}
           title="끌어서 크기 조절 · 두 번 눌러 양쪽을 같은 크기로"
           onMouseDown={(event) => { event.preventDefault(); setResizingLine(line) }}
           onDoubleClick={() => { setSplitTree(tabId, equalizeAt(tree, line.path)); refit() }}
         />
       ))}
+      <PaneArrival tabId={tabId} layout={layout} />
       {/* The place of a pane whose shell became a tab: it stays empty until a neighbour takes it */}
       {layout.vacants.map(({ pane, rect }) => {
         const mergeTo = (axis: SplitAxis) => mergeVacant(tree, pane, axis)
         const sideways = mergeTo('row')
         const upDown = mergeTo('col')
         return (
-          <div key={`vacant-${pane}`} className="pane-vacant" style={paneBox(rect, PANE_DIVIDER_PX)}>
-            <span className="pane-vacant-text">탭으로 옮긴 칸입니다</span>
+          <div key={`vacant-${pane}`} className="pane-vacant" data-vacant={pane} style={paneBox(rect, PANE_DIVIDER_PX)}>
+            <span className="pane-vacant-text">빈 칸</span>
             <div className="pane-vacant-actions">
               <button type="button" className="pane-vacant-btn" disabled={!sideways} onClick={() => mergeInto(sideways)}
                 title={sideways ? '옆 칸이 이 자리까지 넓어집니다' : '옆에 넓힐 수 있는 칸이 없습니다'}>
@@ -160,7 +228,7 @@ export function SplitChrome({ tabId, tree, containerRef }: SplitChromeProps) {
           <div
             className={`pane-grip${gripPane === pane || dragPane === pane ? ' is-shown' : ''}`}
             draggable
-            title={pane === MAIN_PANE ? '끌어서 다른 칸과 자리 바꾸기' : '끌어서 다른 칸과 자리 바꾸기 · 탭 줄에 놓으면 새 탭으로'}
+            title="끌어서 다른 칸과 자리 바꾸기 · 탭 줄에 놓으면 새 탭으로 · Alt+본문 드래그로 분할·병합"
             aria-hidden="true"
             onDragStart={(event) => handleGripDragStart(event, pane)}
             onDragEnd={handleGripDragEnd}
@@ -174,21 +242,27 @@ export function SplitChrome({ tabId, tree, containerRef }: SplitChromeProps) {
       {dragPane && layout.panes.filter(entry => entry.pane !== dragPane).map(({ pane, rect }) => (
         <div
           key={`drop-${pane}`}
-          className={`pane-drop-zone${dropPane === pane ? ' is-over' : ''}`}
+          className={`pane-drop-zone${dropTarget?.pane === pane ? ' is-over' : ''}${dropTarget?.pane === pane && dropTarget.blocked ? ' is-blocked' : ''}`}
+          data-drop-zone={dropTarget?.pane === pane ? dropTarget.zone : undefined}
           style={paneBox(rect, PANE_DIVIDER_PX)}
           onDragOver={(event) => {
             if (!isPaneDrag(event.dataTransfer.types)) return
             event.preventDefault()
             event.stopPropagation()
-            event.dataTransfer.dropEffect = 'move'
-            setDropPane(pane)
+            const next = paneDropTarget(event, pane)
+            event.dataTransfer.dropEffect = next.blocked ? 'none' : 'move'
+            setDropTarget(current => (current && current.pane === next.pane && current.zone === next.zone && current.blocked === next.blocked ? current : next))
           }}
-          onDragLeave={() => setDropPane(current => (current === pane ? null : current))}
+          onDragLeave={() => setDropTarget(current => (current?.pane === pane ? null : current))}
           onDrop={(event) => handlePaneDrop(event, pane)}
         >
-          <span>여기와 자리 바꾸기</span>
+          {/* The part of the pane the dragged one would take (all of it: swap) */}
+          {dropTarget?.pane === pane
+            ? <div className="pane-drop-preview"><span>{dropLabel(dropTarget)}</span></div>
+            : <span>가운데: 자리 바꾸기 · 가장자리: 그쪽으로 옮기기</span>}
         </div>
       ))}
+      </>}
     </>
   )
 }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { throttle, REFIT_INTERVAL_MS, type Throttled } from '../../lib/throttle'
 import { SerializeAddon } from 'xterm-addon-serialize'
 import { registerSplitShell } from '../../lib/splitShells'
+import { claimIncomingShell, forgetIncomingShell, isIncomingShell, markIncomingDrawn, releaseIncomingShell } from '../../lib/incomingShells'
 import { SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
 import type { PaneId } from '../../lib/splitTree'
 import { Terminal } from 'xterm'
@@ -98,11 +99,20 @@ export function SplitTerminal({ sessionId, pane, delay = 0 }: SplitTerminalProps
         }
         streamIdRef.current = null
         isInitialized.current = false
+        forgetIncomingShell(sessionId, pane)
         return screen
       }
     })
     // Split output that arrives before this pane can show it (see handleSplitData)
     const earlyOutput = createEarlyStreamBuffer()
+    // A tab merged into this pane: its shell is already open and is taken over instead of opening one
+    // (lib/tabToPane.ts). Claimed here, in the same tick the listeners below start, so its output is
+    // neither missed nor held twice.
+    const incoming = claimIncomingShell(sessionId, pane)
+    if (incoming) {
+      streamIdRef.current = incoming.streamId
+      if (incoming.output) earlyOutput.push(incoming.streamId, incoming.output)
+    }
 
     // Reset state on retry
     setStatus('connecting')
@@ -123,7 +133,9 @@ export function SplitTerminal({ sessionId, pane, delay = 0 }: SplitTerminalProps
       // Create a new independent shell channel first
       try {
         console.log('Creating split shell for session:', sessionId)
-        const result = await window.electronAPI.sshCreateShell(sessionId)
+        const result = incoming
+          ? { success: true, streamId: incoming.streamId }
+          : await window.electronAPI.sshCreateShell(sessionId)
         if (!result.success) {
           console.warn('Split shell creation failed:', result.error)
           // Auto-retry with exponential backoff
@@ -148,7 +160,8 @@ export function SplitTerminal({ sessionId, pane, delay = 0 }: SplitTerminalProps
           // Unmounted while the shell was being opened (fast split toggle, or StrictMode's
           // dev-only mount/unmount/mount). Nobody owns this channel, so close it now;
           // otherwise it stays open on the server and eventually hits MaxSessions.
-          if (result.streamId) window.electronAPI.sshSplitClose(result.streamId)
+          // (A shell taken over from a tab was let go by the cleanup already.)
+          if (result.streamId && !incoming) window.electronAPI.sshSplitClose(result.streamId)
           return
         }
 
@@ -211,6 +224,12 @@ export function SplitTerminal({ sessionId, pane, delay = 0 }: SplitTerminalProps
         isInitialized.current = true
         // Output that arrived before the pane could show it (login banner, first prompt).
         // Written in the same tick as isInitialized flips, so later chunks cannot overtake it.
+        // The screen of the tab this shell came from first, in the pane's real size
+        if (incoming?.screen) {
+          try { fitAddon.current.fit() } catch { /* drawn in the default size */ }
+          term.write(incoming.screen)
+          markIncomingDrawn(sessionId, pane, '')
+        }
         const earlyText = earlyOutput.take(streamIdRef.current ?? '')
         if (earlyText) term.write(earlyText)
 
@@ -383,6 +402,9 @@ export function SplitTerminal({ sessionId, pane, delay = 0 }: SplitTerminalProps
     // Listen for stream closed
     const handleSplitClosed = (data: { streamId: string; sessionId: string }) => {
       if (data.streamId === streamIdRef.current) {
+        // A retry opens a shell of this tab's own
+        forgetIncomingShell(sessionId, pane)
+        streamIdRef.current = null
         setErrorMsg('분할 터미널 연결 종료')
         setStatus('error')
       }
@@ -405,7 +427,15 @@ export function SplitTerminal({ sessionId, pane, delay = 0 }: SplitTerminalProps
       if (cleanupClosedListener) cleanupClosedListener()
 
       // Close the split stream (not one that was given up: it lives on as a tab)
-      if (streamIdRef.current) {
+      if (isIncomingShell(sessionId, pane, streamIdRef.current)) {
+        // Taken over from a tab: kept for a moment in case this pane mounts again (see incomingShells.ts)
+        let screen = ''
+        try { screen = serializeScreen ? serializeScreen() : '' } catch { screen = '' }
+        // Torn down before the terminal existed: nothing was drawn, the held output goes back
+        const unshown = term ? '' : earlyOutput.take(streamIdRef.current ?? '')
+        releaseIncomingShell(sessionId, pane, screen, unshown)
+        streamIdRef.current = null
+      } else if (streamIdRef.current) {
         window.electronAPI.sshSplitClose(streamIdRef.current)
         streamIdRef.current = null
       }

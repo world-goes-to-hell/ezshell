@@ -26,13 +26,14 @@ import { ConnectionLostOverlay } from './ConnectionLostOverlay'
 import { useTerminalContextMenu } from './useTerminalContextMenu'
 import { registerTerminalPane } from '../../lib/terminalPanes'
 import { MAIN_PANE, singlePane, layoutOf, paneBox } from '../../lib/splitTree'
-import { SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
+import { PaneArrival, SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
 import { attachFileLinks } from './terminalFileLinks'
 import { attachFileZone } from './terminalFileZone'
 import { attachLogHighlight } from './terminalLogHighlight'
 import 'xterm/css/xterm.css'
 import { SerializeAddon } from 'xterm-addon-serialize'
 import { registerTerminalSerializer, setPendingSnapshot, takePendingSnapshot, SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
+import { registerMainScreen } from '../../lib/splitShells'
 
 interface TerminalPanelProps {
   sessionId: string
@@ -246,7 +247,8 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       const serializeAddon = new SerializeAddon()
       term.loadAddon(serializeAddon)
       serializeScreen = () => serializeAddon.serialize({ scrollback: SNAPSHOT_SCROLLBACK_ROWS })
-      unregisterSerializer = registerTerminalSerializer(sessionId, serializeScreen)
+      const drawn = term
+      unregisterSerializer = registerTerminalSerializer(sessionId, serializeScreen, () => new Promise<void>(resolve => drawn.write('', () => resolve())))
 
       term.open(terminalRef.current)
       const unregister = registerTerminalPane(terminalRef.current, term)
@@ -264,7 +266,14 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       })
       // Error and warning lines of logs on screen are tinted
       const logHighlight = attachLogHighlight(term)
+      const unregisterMainScreen = registerMainScreen(sessionId, screen => {
+        drawn.reset()
+        outputBuffer.current = ''
+        useTerminalStore.getState().updateTerminalMeta(sessionId, { currentPath: undefined })
+        if (screen) handleSshData(screen)
+      })
       unregisterPane = () => {
+        unregisterMainScreen()
         logHighlight.dispose()
         fileLinks.dispose()
         fileZone.dispose()
@@ -624,8 +633,9 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       // Open SFTP session first
       await window.electronAPI.sftpOpen(sessionId)
 
-      // Get current working directory from terminal (default to home)
-      const remotePath = '~'
+      // Use the server's login-folder path so the SFTP list can match the queued destination.
+      const home = await window.electronAPI.sftpRealpath?.(sessionId, '.').catch(() => null) || '~'
+      const remotePath = home.replace(/\/+$/, '')
 
       setUploadStatus(`업로드 중: ${files.length}개 파일...`)
 
@@ -768,7 +778,16 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
             style={isSplit && mainRect ? paneBox(mainRect, PANE_DIVIDER_PX) : undefined}
             role="application"
             aria-label="Terminal output"
-          />
+          >
+            {!isSplit && <PaneArrival tabId={sessionId} />}
+            {terminal?.revealOnConnect && (
+              <div
+                className="terminal-connection-reveal"
+                aria-hidden="true"
+                onAnimationEnd={() => useTerminalStore.getState().updateTerminalMeta(sessionId, { revealOnConnect: false })}
+              />
+            )}
+          </div>
           <AnimatePresence>
             {showPortForward && (
               <PortForwardPanel
@@ -812,18 +831,17 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
             </div>
           ))}
           {/* Divider lines, grips, drop zones and empty places (also flat children, placed the same way) */}
-          {isSplit && splitTree && <SplitChrome tabId={sessionId} tree={splitTree} containerRef={splitContainerRef} />}
+          <SplitChrome tabId={sessionId} tree={splitTree ?? singlePane()} containerRef={splitContainerRef} />
         </div>
-        {isDisconnected && (
-          <ConnectionLostOverlay
-            sessionId={sessionId}
-            reconnect={terminal?.reconnect}
-            note={terminal?.disconnectNote}
-            onClose={onClose}
-            onReconnected={() => useTerminalStore.getState().setConnected(sessionId)}
-            onReconnectFailed={(note) => useTerminalStore.getState().setDisconnected(sessionId, note)}
-          />
-        )}
+        <ConnectionLostOverlay
+          connected={!isDisconnected}
+          sessionId={sessionId}
+          reconnect={terminal?.reconnect}
+          note={terminal?.disconnectNote}
+          onClose={onClose}
+          onReconnected={() => useTerminalStore.getState().setConnected(sessionId)}
+          onReconnectFailed={(note) => useTerminalStore.getState().setDisconnected(sessionId, note)}
+        />
       </div>
 
       {/* Drag overlay */}

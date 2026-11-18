@@ -4,7 +4,7 @@ import { motion } from 'framer-motion'
 import { SessionList } from './SessionList'
 import { LocalTerminalList } from './LocalTerminalList'
 import { useUIStore } from '../../stores/uiStore'
-import { useSessionStore } from '../../stores/sessionStore'
+import { useSessionStore, type Session } from '../../stores/sessionStore'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useMcpActivityStore } from '../../stores/mcpActivityStore'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
@@ -12,13 +12,14 @@ import { SPRINGS } from '../../lib/animation/config'
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
 import { useSidebarPeek } from '../../hooks/useSidebarPeek'
+import { useSidebarConnectionMotion } from '../../hooks/useSidebarConnectionMotion'
 import './SidebarTree.css'
 
 const TOGGLE_SHORTCUT_ID = 'toggle-sidebar'
 
 interface SidebarProps {
   onNewConnection: () => void
-  onQuickConnect: (session: any) => void
+  onQuickConnect: (session: Session, source?: HTMLElement) => void
   onEditSession?: (session: any) => void
   onDuplicateSession?: (session: any) => void
   onOpenQuickConnect?: () => void
@@ -35,6 +36,7 @@ interface SidebarProps {
 
 export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onImportSession, onStatsClick, onBatchClick, onLocalTerminal, onCloseTerminal }: SidebarProps) {
   const { sidebarMode, toggleSidebarMode, setSidebarMode } = useUIStore()
+  const zenMode = useUIStore(state => state.zenMode)
   const { addFolder, saveToBackend } = useSessionStore()
   // Folded: a narrow rail of status dots that opens over the terminal while the pointer is on it
   const isFolded = sidebarMode === 'compact'
@@ -62,6 +64,7 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
   const [isAddingFolder, setIsAddingFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const reducedMotion = useReducedMotion()
+  useSidebarConnectionMotion(sidebarRef, isCompact, !reducedMotion && !zenMode)
   const toggleShortcut = useShortcutsStore(state => state.formatKeys(state.getEffectiveKeys(TOGGLE_SHORTCUT_ID)))
   const toggleTitle = `${isFolded ? '사이드바 펼쳐 두기' : '사이드바 접기'} (${toggleShortcut})`
   // One shape per state. The old pair was a mirrored icon that was also turned 180 degrees when
@@ -112,67 +115,84 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
       {...peekHandlers}
     >
       <div className="sidebar-panel">
-      {!isCompact && (
-      <div className="sidebar-header">
-        <h2>연결 목록</h2>
-        <motion.button
-          className="sidebar-toggle"
-          onClick={toggleSidebarMode}
-          title={toggleTitle}
-          aria-label={toggleTitle}
-          whileHover={reducedMotion ? undefined : { scale: 1.05 }}
-          whileTap={reducedMotion ? undefined : { scale: 0.95 }}
-        >
-          <ToggleIcon size={18} />
-        </motion.button>
-      </div>
-      )}
-      {!isCompact && (
-        <div className="sidebar-actions">
-          <motion.button
-            className="btn-new-connection"
-            onClick={onNewConnection}
-            whileHover={reducedMotion ? undefined : { scale: 1.02, y: -2 }}
-            whileTap={reducedMotion ? undefined : { scale: 0.98 }}
-            transition={SPRINGS.snappy}
-          >
-            <RiAddFill size={18} />
-            <span>새 연결</span>
-          </motion.button>
-          <button className="btn-quick-connect" onClick={onOpenQuickConnect} title="빠른 연결">
-            <RiFlashlightFill size={18} />
-          </button>
-          <button className="btn-new-folder" onClick={handleAddFolder} title="새 폴더">
-            <RiFolderAddFill size={18} />
-          </button>
-          {onImportSession && (
-            <button className="btn-new-folder" onClick={() => onImportSession()} title="텍스트로 세션 추가" aria-label="텍스트로 세션 추가">
-              <RiClipboardFill size={18} />
+        <div className="sidebar-content" inert={isCompact || zenMode}>
+          <div className="sidebar-header">
+            <h2>연결 목록</h2>
+            <motion.button
+              className="sidebar-toggle"
+              onClick={toggleSidebarMode}
+              title={toggleTitle}
+              aria-label={toggleTitle}
+              whileHover={reducedMotion ? undefined : { scale: 1.05 }}
+              whileTap={reducedMotion ? undefined : { scale: 0.95 }}
+            >
+              <ToggleIcon size={18} />
+            </motion.button>
+          </div>
+          <div className="sidebar-actions">
+            <motion.button
+              className="btn-new-connection"
+              onClick={onNewConnection}
+              whileHover={reducedMotion ? undefined : { scale: 1.02, y: -2 }}
+              whileTap={reducedMotion ? undefined : { scale: 0.98 }}
+              transition={SPRINGS.snappy}
+            >
+              <RiAddFill size={18} />
+              <span>새 연결</span>
+            </motion.button>
+            <button className="btn-quick-connect" onClick={onOpenQuickConnect} title="빠른 연결">
+              <RiFlashlightFill size={18} />
             </button>
+            <button className="btn-new-folder" onClick={handleAddFolder} title="새 폴더">
+              <RiFolderAddFill size={18} />
+            </button>
+            {onImportSession && (
+              <button className="btn-new-folder" onClick={() => onImportSession()} title="텍스트로 세션 추가" aria-label="텍스트로 세션 추가">
+                <RiClipboardFill size={18} />
+              </button>
+            )}
+          </div>
+          {!isCompact && isAddingFolder && (
+            <div className="folder-input-wrapper">
+              <RiFolderFill size={16} className="folder-input-icon" />
+              <input
+                type="text"
+                className="folder-input"
+                placeholder="폴더 이름"
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onKeyDown={handleFolderKeyDown}
+                onBlur={handleFolderSubmit}
+                autoFocus
+              />
+            </div>
+          )}
+          {/* The list area: sessions above, the open local terminals (when there are any) below */}
+          <div className="sidebar-lists">
+            <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} onImportSession={onImportSession} />
+            {onCloseTerminal && <LocalTerminalList onOpen={onLocalTerminal} onClose={onCloseTerminal} />}
+          </div>
+          {(onBatchClick || onStatsClick) && (
+            <div className="sidebar-footer">
+              {onBatchClick && (
+                <button className="sidebar-footer-btn" onClick={onBatchClick} title="배치 명령 실행" aria-label="배치 명령 실행">
+                  <RiTerminalBoxFill size={18} />
+                </button>
+              )}
+              {onStatsClick && (
+                <button className="sidebar-footer-btn" onClick={onStatsClick} title="세션 통계" aria-label="세션 통계">
+                  <RiBarChartFill size={18} />
+                </button>
+              )}
+            </div>
           )}
         </div>
-      )}
-      {!isCompact && isAddingFolder && (
-        <div className="folder-input-wrapper">
-          <RiFolderFill size={16} className="folder-input-icon" />
-          <input
-            type="text"
-            className="folder-input"
-            placeholder="폴더 이름"
-            value={newFolderName}
-            onChange={(e) => setNewFolderName(e.target.value)}
-            onKeyDown={handleFolderKeyDown}
-            onBlur={handleFolderSubmit}
-            autoFocus
-          />
-        </div>
-      )}
-      {isFolded && (
-        // Stands in for the list and the buttons on the folded rail; pointing at it opens the whole sidebar
         <div className="rail-summary" aria-hidden="true">
           <div className="rail-group" title={`세션 · 연결된 탭 ${connectedTabs}개${lostTabs > 0 ? ` · 끊긴 탭 ${lostTabs}개` : ''}`}>
             <RiListUnordered size={16} />
-            {connectedTabs > 0 && <span className="rail-count is-connected">{connectedTabs}</span>}
+            {connectedTabs > 0 && (
+              <span className="rail-count is-connected"><span className="rail-connection-dot" />{connectedTabs}</span>
+            )}
             {lostTabs > 0 && <span className="rail-count is-lost">{lostTabs}</span>}
           </div>
           {localTabs > 0 && (
@@ -188,26 +208,6 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
             </div>
           )}
         </div>
-      )}
-      {/* The list area: sessions above, the open local terminals (when there are any) below */}
-      <div className="sidebar-lists">
-        <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} onImportSession={onImportSession} />
-        {onCloseTerminal && <LocalTerminalList onOpen={onLocalTerminal} onClose={onCloseTerminal} />}
-      </div>
-      {(onBatchClick || onStatsClick) && (
-        <div className="sidebar-footer">
-          {onBatchClick && (
-            <button className="sidebar-footer-btn" onClick={onBatchClick} title="배치 명령 실행" aria-label="배치 명령 실행">
-              <RiTerminalBoxFill size={18} />
-            </button>
-          )}
-          {onStatsClick && (
-            <button className="sidebar-footer-btn" onClick={onStatsClick} title="세션 통계" aria-label="세션 통계">
-              <RiBarChartFill size={18} />
-            </button>
-          )}
-        </div>
-      )}
       </div>
     </aside>
   )

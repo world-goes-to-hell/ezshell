@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
 import { currentPaneDrag, endPaneDrag, isPaneDrag } from '../lib/paneDrag'
 import { movePaneToTab } from '../lib/paneToTab'
-import { MAIN_PANE } from '../lib/splitTree'
+import { MAIN_PANE, paneIds } from '../lib/splitTree'
+import { useTerminalStore } from '../stores/terminalStore'
 import { toast } from '../stores/toastStore'
 
 /** The tab strips a pane can be dropped on (single view, and each side of the split view) */
@@ -25,8 +26,9 @@ export function usePaneDropOnTabs(): void {
     const stripOf = (event: DragEvent): Element | null => {
       if (!event.dataTransfer || !isPaneDrag(event.dataTransfer.types)) return null
       const drag = currentPaneDrag()
-      // The tab's first terminal is the tab itself: it cannot become another tab
-      if (!drag || drag.pane === MAIN_PANE) return null
+      if (!drag) return null
+      const tree = useTerminalStore.getState().terminals.get(drag.sessionId)?.splitTree
+      if (drag.pane === MAIN_PANE && (!tree || paneIds(tree).length < 2)) return null
       return event.target instanceof Element ? event.target.closest(TAB_STRIPS) : null
     }
 

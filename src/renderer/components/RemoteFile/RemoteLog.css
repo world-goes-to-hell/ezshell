@@ -32,13 +32,55 @@
   color: var(--error-text);
 }
 
-.remote-log-new-lines.has-error {
+.remote-log-new-lines.remote-log-new-errors {
   border-color: var(--error-text);
+  color: var(--error-text);
+  animation: remote-log-error-arrival 480ms ease-out;
 }
 
-.remote-log-new-lines strong {
-  color: var(--error-text);
+.remote-log-live-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.remote-log-burst-slot {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  inline-size: 12ch;
+}
+
+.remote-log-burst {
+  max-inline-size: 100%;
+  padding: 1px 5px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--accent-muted);
+  color: var(--accent);
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  animation: remote-log-burst-arrival 480ms ease-out;
+}
+
+@keyframes remote-log-burst-arrival {
+  from { background-color: color-mix(in srgb, var(--accent) 34%, var(--bg-secondary)); }
+  to { background-color: var(--accent-muted); }
+}
+
+@keyframes remote-log-error-arrival {
+  from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--error-text) 32%, transparent); }
+  to { box-shadow: var(--shadow-md); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .remote-log-burst,
+  .remote-log-new-lines.remote-log-new-errors {
+    animation: none;
+  }
 }
 
 /* The list panel */
@@ -173,13 +215,19 @@
   background: var(--accent-muted);
 }
 
-.remote-log-row-main {
+.remote-log-marker-entry {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 1px;
   min-width: 0;
-  padding: 4px 4px 4px 10px;
+  padding: 2px 0;
+}
+
+.remote-log-row-main,
+.remote-log-row-sub {
+  display: block;
+  min-width: 0;
+  padding: 2px 4px 2px 10px;
   border: none;
   background: transparent;
   color: inherit;
@@ -189,6 +237,7 @@
 }
 
 .remote-log-row-main:hover,
+.remote-log-row-sub:hover,
 .remote-log-problem-row:hover {
   background: var(--bg-hover);
 }
@@ -217,13 +266,19 @@
 }
 
 .remote-log-row-sub {
-  padding-left: 17px;
+  padding-left: 27px;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
 
 .remote-log-row-sub.has-error {
   color: var(--error-text);
+}
+
+.remote-log-row-sub[aria-pressed='true'],
+.remote-log-count.remote-log-scope {
+  background: var(--accent-muted);
+  color: var(--accent);
 }
 
 .remote-log-marker-input {
@@ -278,6 +333,7 @@
 }
 
 .remote-log-row-main:focus-visible,
+.remote-log-row-sub:focus-visible,
 .remote-log-problem-row:focus-visible,
 .remote-log-filter button:focus-visible,
 .remote-log-marker-input:focus-visible {

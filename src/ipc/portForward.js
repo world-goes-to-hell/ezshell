@@ -300,7 +300,14 @@ function registerPortForwardIpc(ctx) {
     }
   }
 
-  return { setupRemoteForwardHandler, cleanupPortForwards };
+  // How many forwards a tab holds (a tab with forwards cannot be merged into another tab)
+  const portForwardCount = (sessionId) => {
+    let count = 0;
+    for (const fwd of portForwards.values()) if (fwd.sessionId === sessionId) count += 1;
+    return count;
+  };
+
+  return { setupRemoteForwardHandler, cleanupPortForwards, portForwardCount };
 }
 
 module.exports = { registerPortForwardIpc };

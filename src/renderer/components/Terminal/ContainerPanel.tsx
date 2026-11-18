@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  RiRefreshLine, RiCloseFill, RiFileList3Line, RiTerminalBoxLine, RiFileCopyLine, RiRestartLine, RiStopCircleLine, RiPlayCircleLine
+  RiRefreshLine, RiCloseFill, RiFileList3Line, RiTerminalBoxLine, RiFileCopyLine, RiRestartLine, RiStopCircleLine, RiPlayCircleLine, RiSearchLine
 } from 'react-icons/ri'
 import { toast } from '../../stores/toastStore'
 import { useTerminalStore } from '../../stores/terminalStore'
@@ -10,7 +10,11 @@ import {
   containerCommand, isRunning, publishedPorts, CONTAINER_AUTO_REFRESH_MS,
   type ContainerAction, type ContainerInfo, type ContainerListResult
 } from '../../lib/containers'
+import { searchTerms, orderBySearch } from '../../lib/containerSearch'
 import './ContainerPanel.css'
+
+// The search of each tab, kept while the app runs: closing and opening the panel keeps it
+const searches = new Map<string, string>()
 
 interface ContainerPanelProps {
   sessionId: string
@@ -42,7 +46,14 @@ export function ContainerPanel({ sessionId, onClose }: ContainerPanelProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs)
   const [loadedAt, setLoadedAt] = useState<number | null>(null)
+  const [query, setQuery] = useState(() => searches.get(sessionId) ?? '')
   const isAlive = useRef(true)
+
+  const changeQuery = (value: string) => {
+    setQuery(value)
+    if (value) searches.set(sessionId, value)
+    else searches.delete(sessionId)
+  }
 
   const load = useCallback(async (showAll: boolean) => {
     if (typeof window.electronAPI.containerList !== 'function') {
@@ -124,6 +135,10 @@ export function ContainerPanel({ sessionId, onClose }: ContainerPanelProps) {
   }
 
   const containers = result?.kind === 'list' ? result.containers : []
+  const terms = useMemo(() => searchTerms(query), [query])
+  // Matching containers first (marked), every other one below in its usual order
+  const rows = useMemo(() => orderBySearch(containers, terms), [containers, terms])
+  const matchCount = rows.filter(row => row.parts).length
 
   return (
     <motion.div
@@ -158,6 +173,22 @@ export function ContainerPanel({ sessionId, onClose }: ContainerPanelProps) {
         </label>
       </div>
 
+      <div className="container-search">
+        <RiSearchLine size={14} aria-hidden="true" />
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => changeQuery(event.target.value)}
+          onKeyDown={(event) => { if (event.key === 'Escape' && query) { event.preventDefault(); event.stopPropagation(); changeQuery('') } }}
+          placeholder="이름 검색 · 여러 개는 공백이나 쉼표로"
+          aria-label="컨테이너 이름 검색"
+          spellCheck={false}
+        />
+        {terms.length > 0 && result?.kind === 'list' && (
+          <span className={`container-search-count${matchCount === 0 ? ' is-none' : ''}`}>{matchCount}개 일치</span>
+        )}
+      </div>
+
       <div className="container-body">
         {!result && <p className="container-note">불러오는 중...</p>}
         {result?.kind === 'no-docker' && <p className="container-note">이 서버에는 도커가 없습니다.</p>}
@@ -168,14 +199,23 @@ export function ContainerPanel({ sessionId, onClose }: ContainerPanelProps) {
         {result?.kind === 'list' && containers.length === 0 && (
           <p className="container-note">{prefs.showAll ? '컨테이너가 없습니다.' : '실행 중인 컨테이너가 없습니다.'}</p>
         )}
-        {containers.map((container) => {
+        {terms.length > 0 && result?.kind === 'list' && matchCount === 0 && containers.length > 0 && (
+          <p className="container-note">
+            일치하는 컨테이너가 없습니다.{prefs.showAll ? '' : ' 중지된 컨테이너는 `중지된 것도 보기` 를 켜야 찾습니다.'}
+          </p>
+        )}
+        {rows.map(({ item: container, parts }, index) => {
           const running = isRunning(container)
           const ports = publishedPorts(container.ports)
+          // The first container that does not match starts "the others" when something matched
+          const startsOthers = matchCount > 0 && index === matchCount
           return (
-            <div key={container.id || container.name} className={`container-row${running ? '' : ' is-stopped'}`}>
+            <div key={container.id || container.name} className={`container-row${running ? '' : ' is-stopped'}${parts ? ' is-match' : ''}${startsOthers ? ' starts-others' : ''}`}>
               <div className="container-row-head">
                 <span className={`container-dot${running ? ' is-running' : ''}`} aria-hidden="true" />
-                <span className="container-name" title={container.name}>{container.name}</span>
+                <span className="container-name" title={container.name}>
+                  {parts ? parts.map((part, i) => (part.isMatch ? <mark key={i} className="container-name-mark">{part.text}</mark> : <span key={i}>{part.text}</span>)) : container.name}
+                </span>
               </div>
               <div className="container-meta" title={container.image}>{container.image}</div>
               <div className="container-meta">

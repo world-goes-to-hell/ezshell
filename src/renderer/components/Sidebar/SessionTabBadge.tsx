@@ -92,6 +92,7 @@ export function SessionTabBadge({ status, tabs }: SessionTabBadgeProps) {
 
   const hint = badgeHint(status, tabs.length)
   const className = `session-tab-badge session-tab-badge--${status}`
+  const count = <><span className="session-tab-badge-dot" aria-hidden="true" />{tabs.length}</>
 
   if (tabs.length === 1 && !tabs[0].splitTree) {
     return (
@@ -103,7 +104,7 @@ export function SessionTabBadge({ status, tabs }: SessionTabBadgeProps) {
         onClick={() => focusTerminal(tabs[0].id)}
         onDoubleClick={stopRowGesture}
       >
-        {tabs.length}
+        {count}
       </button>
     )
   }
@@ -120,7 +121,7 @@ export function SessionTabBadge({ status, tabs }: SessionTabBadgeProps) {
           onPointerDown={rememberPanes}
           onDoubleClick={stopRowGesture}
         >
-          {tabs.length}
+          {count}
         </button>
       </DropdownMenu.Trigger>
 

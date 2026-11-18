@@ -430,6 +430,9 @@ declare global {
       containerList?: (sessionId: string, all: boolean) => Promise<import('../lib/containers').ContainerListResult>
       /** A split shell becomes a tab of its own; answers with the new tab's session id */
       sshAdoptSplit: (streamId: string) => Promise<{ success: boolean; sessionId?: string; error?: string }>
+      sshPromotePane?: (sessionId: string, streamId: string, closePrevious?: boolean) => Promise<{ success: boolean; sessionId?: string; error?: string }>
+      sshResumePromotedPane?: (sessionId: string, streamId: string) => void
+      sshMergeTab?: (sourceId: string, targetId: string) => Promise<{ success: boolean; streamId?: string; error?: string }>
       onSshSplitData: (callback: (data: any) => void) => () => void
       onSshSplitClosed: (callback: (data: any) => void) => () => void
 
@@ -597,6 +600,12 @@ declare global {
       checkForUpdates: () => Promise<import('../lib/updateCheck').UpdateCheckResult>
       downloadUpdate: () => Promise<any>
       installUpdate: () => Promise<any>
+      /** Tabs open when an update is installed (lib/restoreTabs.ts), kept encrypted until the next start */
+      restoreTabsSave?: (record: unknown) => Promise<{ success: boolean; error?: string }>
+      /** Those tabs, once (the file is removed); null when there are none */
+      restoreTabsTake?: () => Promise<{ savedAt: number; record: unknown } | null>
+      /** What an update would cut off */
+      updateBusyWork?: () => Promise<{ transfers: number; unsavedEdits: number }>
       openUpdatePage?: () => Promise<{ success: boolean }>
       getAppVersion: () => Promise<string>
       /** Last version whose release notes were seen (src/lastVersion.js) */
