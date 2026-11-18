@@ -146,6 +146,22 @@ const KEYS = { F8: 119, F9: 120, m: 77, Enter: 13 }
   await wheel(-100, ALT | SHIFT)
   check('and stops at the first marker', (await cursorLine()) === 2, `line ${await cursorLine()}`)
 
+  // ---- The list's level choice also decides where the keys and the wheel go ----
+  const pickLevel = (label) => page.js(`[...document.querySelectorAll('.remote-log-filter button')].find(b => b.textContent === ${JSON.stringify(label)}).click()`)
+  await pickLevel('오류')
+  await focusLog()
+  await key('F8', CTRL | SHIFT)
+  await key('F8')
+  check('with 오류 chosen, F8 skips the warning', (await cursorLine()) === 130 && (await position()) === '오류 2/3', `line ${await cursorLine()}, ${await position()}`)
+  await wheel(-100, CTRL)
+  check('and so does the wheel', (await cursorLine()) === 2, `line ${await cursorLine()}`)
+  await pickLevel('경고')
+  await focusLog()
+  await key('F8', CTRL)
+  check('with 경고 chosen, the keys go to warnings only', (await cursorLine()) === 9 && (await position()) === '경고 1/1', `line ${await cursorLine()}, ${await position()}`)
+  await pickLevel('전체')
+  await sleep(200)
+
   // ---- Line folding and the panel's button ----
   await page.js(`document.querySelector('.popout-title-action[aria-label="줄바꿈"]').click()`)
   check('the 줄바꿈 button folds long lines', await page.until(`!!document.querySelector('.cm-content.cm-lineWrapping')`, 3000))

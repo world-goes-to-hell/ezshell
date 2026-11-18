@@ -128,9 +128,9 @@ export function LogOutlinePanel({ outline, filter, onFilter, onGoTo, onStepProbl
       <section className="remote-log-outline-section is-problems">
         <header className="remote-log-outline-head">
           <span className="remote-log-outline-title">오류·경고 {outline.matching > 0 && <em>{outline.matching.toLocaleString()}</em>}</span>
-          <StepButtons name="오류·경고" keyName="F8" disabled={outline.matching === 0} onStep={onStepProblem} />
+          <StepButtons name={filter === 'all' ? '오류·경고' : filter === 'error' ? '오류' : '경고'} keyName="F8" disabled={outline.matching === 0} onStep={onStepProblem} />
         </header>
-        <div className="remote-log-filter" role="group" aria-label="목록에 보일 수준">
+        <div className="remote-log-filter" role="group" aria-label="목록과 이동에 쓸 수준" title="고른 수준만 목록에 보이고, F8·휠·화살표도 그 수준 사이로만 이동합니다">
           {FILTERS.map(({ id, label }) => (
             <button key={id} type="button" className={filter === id ? 'is-active' : ''} aria-pressed={filter === id} onClick={() => onFilter(id)}>{label}</button>
           ))}

@@ -28,8 +28,9 @@ export interface ProblemRow {
 
 export interface LogOutline {
   counts: LevelCounts
-  /** Which problem the cursor is at or below: 3 of "3/15" (0 above the first) */
+  /** Which problem of the chosen levels the cursor is at or below: 3 of "3/15" (0 above the first) */
   ordinal: number
+  /** Problems of the chosen levels */
   total: number
   markers: MarkerRow[]
   /** The marker set last (the status line shows it) */
@@ -68,7 +69,6 @@ export function buildOutline(
   const { doc } = state
   const problems = problemsOf(state)
   const head = doc.lineAt(state.selection.main.head).from
-  const ordinal = problemOrdinal(problems, head)
 
   const stored = markersOf(state)
   const markers: MarkerRow[] = stored.map(marker => ({
@@ -80,7 +80,9 @@ export function buildOutline(
   const latestMarker = markers.length > 0 ? markers.reduce((a, b) => (b.id > a.id ? b : a)) : null
   const above = [...markers].reverse().find(marker => marker.pos <= head)
 
+  // The position and the rows follow the chosen levels, as moving does
   const matching = problems.filter(problem => options.levels.has(problem.level))
+  const ordinal = problemOrdinal(matching, head)
   const rows: ProblemRow[] = options.withRows
     ? matching.slice(-(options.limit ?? OUTLINE_ROW_LIMIT)).reverse().map(problem => {
       const line = doc.lineAt(problem.pos)
@@ -91,11 +93,11 @@ export function buildOutline(
   return {
     counts: countProblems(problems),
     ordinal,
-    total: problems.length,
+    total: matching.length,
     markers,
     latestMarker,
     currentMarkerId: above ? above.id : null,
-    currentProblemPos: ordinal > 0 ? problems[ordinal - 1].pos : null,
+    currentProblemPos: ordinal > 0 ? matching[ordinal - 1].pos : null,
     rows,
     matching: matching.length
   }

@@ -150,13 +150,15 @@ export function goToMarker(view: EditorView, target: NavTarget, wrap = true): Ju
 }
 
 export type NavReport = (kind: NavKind, outcome: JumpOutcome, target: NavTarget) => void
+/** The levels the keys and the wheel move between, asked at each move (the list panel's choice) */
+export type LevelChoice = () => ReadonlySet<JumpLevel>
 
 /**
  * Ctrl or Alt + wheel: one problem a notch; with Shift too: one marker a notch. Stops at the ends.
  * Both keys, because a lone Alt does not always reach the window: on the PC this was written for, some
  * program held the key back until its release, and the wheel events came without altKey.
  */
-const wheelNavigation = (report: NavReport) => ViewPlugin.define((view) => {
+const wheelNavigation = (report: NavReport, levels: LevelChoice) => ViewPlugin.define((view) => {
   const stepOf = createWheelStepper()
   const onWheel = (event: WheelEvent) => {
     if (!(event.altKey || event.ctrlKey) || event.metaKey) return
@@ -166,18 +168,18 @@ const wheelNavigation = (report: NavReport) => ViewPlugin.define((view) => {
     const step = stepOf(event)
     if (step === 0) return
     const kind: NavKind = event.shiftKey ? 'marker' : 'problem'
-    report(kind, kind === 'marker' ? goToMarker(view, step, false) : goToProblem(view, step, PROBLEM_LEVELS, false), step)
+    report(kind, kind === 'marker' ? goToMarker(view, step, false) : goToProblem(view, step, levels(), false), step)
   }
   view.scrollDOM.addEventListener('wheel', onWheel, { passive: false })
   return { destroy: () => view.scrollDOM.removeEventListener('wheel', onWheel) }
 })
 
-function navigationKeys(report: NavReport): Extension {
+function navigationKeys(report: NavReport, levels: LevelChoice): Extension {
   const bind = (key: string, kind: NavKind, target: NavTarget) => ({
     key,
     preventDefault: true,
     run: (view: EditorView) => {
-      report(kind, kind === 'marker' ? goToMarker(view, target) : goToProblem(view, target), target)
+      report(kind, kind === 'marker' ? goToMarker(view, target) : goToProblem(view, target, levels()), target)
       return true
     }
   })
@@ -192,8 +194,9 @@ function navigationKeys(report: NavReport): Extension {
  * Ctrl+Shift: first), Ctrl or Alt + wheel. `onState` gets the state whenever the text, the cursor or the
  * markers change (for the status line and the list panel).
  */
-export function logExtensions({ isWrapped, onNavigate, onState }: {
+export function logExtensions({ isWrapped, levels, onNavigate, onState }: {
   isWrapped: boolean
+  levels: LevelChoice
   onNavigate: NavReport
   onState: (state: EditorState) => void
 }): Extension[] {
@@ -203,8 +206,8 @@ export function logExtensions({ isWrapped, onNavigate, onState }: {
     levelColours,
     levelTheme,
     wrapSlot.of(isWrapped ? EditorView.lineWrapping : []),
-    navigationKeys(onNavigate),
-    wheelNavigation(onNavigate),
+    navigationKeys(onNavigate, levels),
+    wheelNavigation(onNavigate, levels),
     EditorView.updateListener.of((update) => {
       const markersChanged = update.startState.field(logMarkerField, false) !== update.state.field(logMarkerField, false)
       if (update.docChanged || update.selectionSet || markersChanged) onState(update.state)

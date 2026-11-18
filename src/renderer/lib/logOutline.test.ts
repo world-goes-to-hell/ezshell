@@ -38,6 +38,14 @@ describe('the outline of a log', () => {
     expect(outline.currentProblemPos).toBe(state.doc.line(2).from)
   })
 
+  it('counts the position among the chosen levels only', () => {
+    let state = make()
+    state = state.update({ selection: { anchor: state.doc.line(7).from } }).state
+    expect(buildOutline(state, { levels: BOTH, withRows: false })).toMatchObject({ ordinal: 3, total: 3 })
+    const warns = buildOutline(state, { levels: new Set<JumpLevel>(['warn']), withRows: false })
+    expect(warns).toMatchObject({ ordinal: 1, total: 1, currentProblemPos: state.doc.line(5).from, counts: { error: 2, warn: 1 } })
+  })
+
   it('lists the newest problems first, of the chosen levels, up to the limit', () => {
     const state = make()
     const all = buildOutline(state, { levels: BOTH, withRows: true })

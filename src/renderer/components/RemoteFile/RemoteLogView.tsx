@@ -111,9 +111,12 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
     }
   }, [])
 
+  // The list's choice (전체 / 오류 / 경고) is also what F8, the wheel and the arrows move between
+  const filterRef = useRef(filter)
+  filterRef.current = filter
   const endNoticeAt = useRef(0)
   /** What a move did: the view stops following the end, and the user hears why nothing moved */
-  const onNavigate = useCallback((kind: NavKind, outcome: JumpOutcome, target: NavTarget, levelName = '오류·경고') => {
+  const onNavigate = useCallback((kind: NavKind, outcome: JumpOutcome, target: NavTarget, levelName = FILTER_NAME[filterRef.current]) => {
     const what = kind === 'marker' ? '기준점' : `${levelName} 줄`
     if (outcome === 'found' || outcome === 'wrapped') stickRef.current = false
     if (outcome === 'wrapped') toast.info(target === 1 ? '끝을 지나 처음부터 다시 찾았습니다' : '처음을 지나 끝에서부터 다시 찾았습니다')
@@ -127,7 +130,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
 
   const extensions = useMemo(() => [
     // Read once: the editor is made once, later changes go through setWrapped
-    ...logExtensions({ isWrapped: readLogViewPrefs().isWrapped, onNavigate, onState }),
+    ...logExtensions({ isWrapped: readLogViewPrefs().isWrapped, levels: () => LEVELS_OF[filterRef.current], onNavigate, onState }),
     ...logMarkerExtensions({ onNotice: reportMarkerNotice })
   ], [onNavigate, onState])
 
@@ -260,7 +263,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
     view.focus()
   }
 
-  const stepProblem = (target: NavTarget, levels: ProblemFilter = 'all') => {
+  const stepProblem = (target: NavTarget, levels: ProblemFilter = filter) => {
     const view = editorRef.current?.getView()
     if (!view) return
     onNavigate('problem', goToProblem(view, target, LEVELS_OF[levels]), target, FILTER_NAME[levels])
@@ -343,7 +346,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
             filter={filter}
             onFilter={setFilter}
             onGoTo={goTo}
-            onStepProblem={target => stepProblem(target, filter)}
+            onStepProblem={target => stepProblem(target)}
             onStepMarker={stepMarker}
             onMark={markNow}
             onRename={(id, label) => dispatchMarker(renameMarker.of({ id, label }))}
@@ -366,8 +369,8 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
           onClick={() => stepProblem(1, 'error')} title="다음 오류로 이동 (스택 트레이스는 한 건으로 셉니다)">오류 {counts.error.toLocaleString()}</button>
         <button type="button" className={`remote-log-count${counts.warn > 0 ? ' is-warn' : ''}`} disabled={counts.warn === 0}
           onClick={() => stepProblem(1, 'warn')} title="다음 경고로 이동">경고 {counts.warn.toLocaleString()}</button>
-        <StepButtons name="오류·경고" keyName="F8" disabled={outline.total === 0} onStep={target => stepProblem(target)}
-          position={outline.total > 0 ? `${outline.ordinal.toLocaleString()}/${outline.total.toLocaleString()}` : undefined} />
+        <StepButtons name={FILTER_NAME[filter]} keyName="F8" disabled={outline.total === 0} onStep={target => stepProblem(target)}
+          position={outline.total > 0 ? `${filter === 'all' ? '' : `${FILTER_NAME[filter]} `}${outline.ordinal.toLocaleString()}/${outline.total.toLocaleString()}` : undefined} />
         <span>줄 {cursor.line}, 열 {cursor.column}</span>
         <span className="remote-file-status-keys">F8 오류·경고 · F9 기준점 · Ctrl+휠 이동 · Ctrl+M 기준점 찍기</span>
       </div>
