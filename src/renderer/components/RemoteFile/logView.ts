@@ -151,12 +151,16 @@ export function goToMarker(view: EditorView, target: NavTarget, wrap = true): Ju
 
 export type NavReport = (kind: NavKind, outcome: JumpOutcome, target: NavTarget) => void
 
-/** Alt + wheel: one problem a notch; Alt + Shift + wheel: one marker a notch. Stops at the ends. */
+/**
+ * Ctrl or Alt + wheel: one problem a notch; with Shift too: one marker a notch. Stops at the ends.
+ * Both keys, because a lone Alt does not always reach the window: on the PC this was written for, some
+ * program held the key back until its release, and the wheel events came without altKey.
+ */
 const wheelNavigation = (report: NavReport) => ViewPlugin.define((view) => {
   const stepOf = createWheelStepper()
   const onWheel = (event: WheelEvent) => {
-    if (!event.altKey || event.ctrlKey || event.metaKey) return
-    // The text must not scroll while the key is held
+    if (!(event.altKey || event.ctrlKey) || event.metaKey) return
+    // The text must not scroll while the key is held (and Ctrl + wheel must not zoom the window)
     event.preventDefault()
     event.stopPropagation()
     const step = stepOf(event)
@@ -185,7 +189,7 @@ function navigationKeys(report: NavReport): Extension {
 
 /**
  * Colours, the problem list, and moving: F8 problems, F9 markers (Shift: previous, Ctrl: last,
- * Ctrl+Shift: first), Alt + wheel. `onState` gets the state whenever the text, the cursor or the
+ * Ctrl+Shift: first), Ctrl or Alt + wheel. `onState` gets the state whenever the text, the cursor or the
  * markers change (for the status line and the list panel).
  */
 export function logExtensions({ isWrapped, onNavigate, onState }: {

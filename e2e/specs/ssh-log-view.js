@@ -92,6 +92,10 @@ const KEYS = { F8: 119, F9: 120, m: 77, Enter: 13 }
   await wheel(100, ALT)
   check('at the last one the text does not scroll either', (await page.js(`document.querySelector('.cm-scroller').scrollTop`)) === scrollBefore && (await position()) === '3/3')
 
+  await wheel(-100, CTRL)
+  check('Ctrl + wheel does the same (a lone Alt does not reach the window on every PC)', (await position()) === '2/3', await position())
+  await wheel(100, CTRL)
+
   // ---- A list row ----
   await page.js(`[...document.querySelectorAll('.remote-log-problem-row')].find(r => r.textContent.includes('request failed')).click()`)
   await sleep(300)

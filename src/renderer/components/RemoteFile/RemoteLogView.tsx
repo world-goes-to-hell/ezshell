@@ -75,7 +75,7 @@ const EMPTY_OUTLINE: LogOutline = {
 
 /**
  * A text file to look at, and a log to follow ("실시간 보기"): errors red, warnings yellow, a list of
- * markers and problems beside it, F8 / F9 and Alt + wheel between them. Nothing here writes to the server.
+ * markers and problems beside it, F8 / F9 and Ctrl + wheel between them. Nothing here writes to the server.
  */
 export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   const editorRef = useRef<CodeEditorHandle>(null)
@@ -369,7 +369,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
         <StepButtons name="오류·경고" keyName="F8" disabled={outline.total === 0} onStep={target => stepProblem(target)}
           position={outline.total > 0 ? `${outline.ordinal.toLocaleString()}/${outline.total.toLocaleString()}` : undefined} />
         <span>줄 {cursor.line}, 열 {cursor.column}</span>
-        <span className="remote-file-status-keys">F8 오류·경고 · F9 기준점 · Alt+휠 이동 · Ctrl+M 기준점 찍기</span>
+        <span className="remote-file-status-keys">F8 오류·경고 · F9 기준점 · Ctrl+휠 이동 · Ctrl+M 기준점 찍기</span>
       </div>
     </div>
   )
