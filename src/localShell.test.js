@@ -12,7 +12,7 @@ function fakePty() {
   return pty
 }
 
-function setup() {
+function setup(options = {}) {
   const ptys = []
   const sent = []
   const spawn = vi.fn((file, args, options) => {
@@ -21,7 +21,7 @@ function setup() {
     ptys.push(pty)
     return pty
   })
-  const shells = createLocalShells({ spawn, send: (channel, payload) => sent.push({ channel, payload }), shell: { file: 'sh', args: [], name: 'sh' }, cwd: '/home', env: {} })
+  const shells = createLocalShells({ spawn, send: (channel, payload) => sent.push({ channel, payload }), shell: { file: 'sh', args: [], name: 'sh' }, cwd: '/home', env: {}, ...options })
   return { shells, ptys, sent, spawn }
 }
 
@@ -34,6 +34,38 @@ describe('defaultShell', () => {
 })
 
 describe('createLocalShells', () => {
+  it('sets the PTY color capabilities without changing the parent environment', () => {
+    const env = { Term: 'dumb', No_Color: '1', ColorTerm: '24bit', Path: 'shell-path' }
+    const { shells, ptys } = setup({ env, platform: 'win32' })
+    shells.open()
+    expect(ptys[0].options.name).toBe('xterm-256color')
+    expect(ptys[0].options.env).toEqual({ Term: 'xterm-256color', ColorTerm: 'truecolor', Path: 'shell-path' })
+    expect(env).toEqual({ Term: 'dumb', No_Color: '1', ColorTerm: '24bit', Path: 'shell-path' })
+  })
+
+  it('passes the corrected environment through agent registration', () => {
+    const register = vi.fn((kind, id, cwd, env) => ({ env: { ...env, EZSHELL_AGENT_PIPE: 'test-pipe' } }))
+    const { shells, ptys } = setup({ env: { TERM: 'dumb', NO_COLOR: '1' }, agents: { register } })
+    const { id } = shells.open({ agent: 'codex' })
+    const terminalEnv = { TERM: 'xterm-256color', COLORTERM: 'truecolor' }
+    expect(register).toHaveBeenCalledWith('codex', id, '/home', terminalEnv)
+    expect(ptys[0].options.env).toEqual({ ...terminalEnv, EZSHELL_AGENT_PIPE: 'test-pipe' })
+  })
+
+  it('clears the Orca color override even when its TERM advertises colors', () => {
+    const env = { TERM_PROGRAM: 'Orca', TERM: 'xterm-256color', COLORTERM: 'truecolor', NO_COLOR: '1' }
+    const { shells, ptys } = setup({ env })
+    shells.open()
+    expect(ptys[0].options.env).toEqual({ TERM_PROGRAM: 'Orca', TERM: 'xterm-256color', COLORTERM: 'truecolor' })
+    expect(env.NO_COLOR).toBe('1')
+  })
+
+  it('preserves NO_COLOR from a parent with a color-capable terminal', () => {
+    const { shells, ptys } = setup({ env: { TERM: 'xterm', NO_COLOR: '1' } })
+    shells.open()
+    expect(ptys[0].options.env).toEqual({ TERM: 'xterm-256color', COLORTERM: 'truecolor', NO_COLOR: '1' })
+  })
+
   it('continues through PTY output and exit when the message registration has no status callbacks', () => {
     const pty = fakePty()
     const close = vi.fn()

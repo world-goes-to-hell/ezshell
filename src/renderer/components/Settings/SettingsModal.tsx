@@ -20,6 +20,7 @@ interface SettingsModalProps {
 
 export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState('theme')
+  const [activeMcpTab, setActiveMcpTab] = useState('ssh')
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -56,7 +57,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                 </div>
 
                 <Tabs.Root value={activeTab} onValueChange={setActiveTab} className="settings-tabs">
-                  <Tabs.List className="settings-tabs-list">
+                  <Tabs.List className="settings-tabs-list" aria-label="설정">
                     <Tabs.Trigger value="theme" className="settings-tab-trigger">
                       <RiPaletteFill size={18} />
                       테마
@@ -75,11 +76,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                     </Tabs.Trigger>
                     <Tabs.Trigger value="mcp" className="settings-tab-trigger">
                       <RiPlugLine size={18} />
-                      SSH MCP
-                    </Tabs.Trigger>
-                    <Tabs.Trigger value="agent-messages" className="settings-tab-trigger">
-                      <RiMailLine size={18} />
-                      에이전트 메시지
+                      MCP
                     </Tabs.Trigger>
                     <Tabs.Trigger value="remote" className="settings-tab-trigger">
                       <RiSmartphoneLine size={18} />
@@ -147,31 +144,43 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                     </div>
                   </Tabs.Content>
 
-                  <Tabs.Content value="agent-messages" className="settings-tab-content">
-                    <div className="settings-content">
-                      <section className="settings-section">
-                        <h3 className="settings-section-title">에이전트 메시지 MCP · ezshell-cli-mcp</h3>
-                        <p className="settings-section-desc">
-                          사용자 설정에 등록하면 일반 터미널에서 연 Codex와 Claude Code도 실행 중인 ezShell과 메시지를 주고받을 수 있습니다.
-                        </p>
-                        <AgentMessageMcpSetup />
-                      </section>
-                    </div>
-                  </Tabs.Content>
+                  <Tabs.Content value="mcp" className="settings-tab-content settings-mcp-content">
+                    <Tabs.Root value={activeMcpTab} onValueChange={setActiveMcpTab} className="settings-mcp-tabs">
+                      <Tabs.List className="settings-mcp-tabs-list" aria-label="MCP 설정">
+                        <Tabs.Trigger value="ssh" className="settings-tab-trigger">
+                          <RiPlugLine size={16} />
+                          SSH MCP
+                        </Tabs.Trigger>
+                        <Tabs.Trigger value="agent-messages" className="settings-tab-trigger">
+                          <RiMailLine size={16} />
+                          에이전트 메시지
+                        </Tabs.Trigger>
+                      </Tabs.List>
 
-                  <Tabs.Content value="mcp" className="settings-tab-content">
-                    <div className="settings-content">
-                      <section className="settings-section">
-                        <h3 className="settings-section-title">
-                          <RiPlugLine size={18} />
-                          SSH MCP 서버 · ezshell-ssh-mcp
-                        </h3>
-                        <p className="settings-section-desc">
-                          Claude Code 가 허용한 세션으로 서버를 조회할 수 있게 합니다. 비밀번호는 Claude 에게 전달되지 않습니다.
-                        </p>
-                        <McpSettings />
-                      </section>
-                    </div>
+                      <Tabs.Content value="ssh" className="settings-tab-content">
+                        <div className="settings-content">
+                          <section className="settings-section">
+                            <h3 className="settings-section-title">SSH MCP 서버 · ezshell-ssh-mcp</h3>
+                            <p className="settings-section-desc">
+                              Claude Code 가 허용한 세션으로 서버를 조회할 수 있게 합니다. 비밀번호는 Claude 에게 전달되지 않습니다.
+                            </p>
+                            <McpSettings />
+                          </section>
+                        </div>
+                      </Tabs.Content>
+
+                      <Tabs.Content value="agent-messages" className="settings-tab-content">
+                        <div className="settings-content">
+                          <section className="settings-section">
+                            <h3 className="settings-section-title">에이전트 메시지 MCP · ezshell-cli-mcp</h3>
+                            <p className="settings-section-desc">
+                              사용자 설정에 등록하면 일반 터미널에서 연 Codex와 Claude Code도 실행 중인 ezShell과 메시지를 주고받을 수 있습니다.
+                            </p>
+                            <AgentMessageMcpSetup />
+                          </section>
+                        </div>
+                      </Tabs.Content>
+                    </Tabs.Root>
                   </Tabs.Content>
 
                   <Tabs.Content value="remote" className="settings-tab-content">

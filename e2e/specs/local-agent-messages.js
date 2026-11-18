@@ -98,24 +98,40 @@ async function run() {
     const list = await cli('codex-1', 'agent list')
     check('the bundled CLI can see both agents with independent ids on the same folder', list.self === 'codex-1' && list.agents.length === 2 && list.agents.every(agent => agent.cwd === profile))
 
-    await js(`window.flightsSeen = 0
+    await js(`window.deliveriesSeen = 0
       new MutationObserver(records => {
         for (const record of records) for (const node of record.addedNodes) {
-          if (node instanceof HTMLElement && node.matches('.agent-message-flight')) window.flightsSeen++
+          if (node instanceof HTMLElement && node.matches('.agent-delivery-notice')) window.deliveriesSeen++
         }
-      }).observe(document.body, { childList: true })`)
+      }).observe(document.querySelector('.agent-delivery-status'), { childList: true })`)
+    const noticeAt = (target, route) => until(`(() => {
+      const notice = document.querySelector('.agent-delivery-notice')
+      const anchor = ${target}
+      if (!notice || !anchor || notice.querySelector('strong').textContent !== ${JSON.stringify(route)}) return false
+      const noteBox = notice.getBoundingClientRect()
+      const anchorBox = anchor.getBoundingClientRect()
+      return noteBox.left < anchorBox.right && noteBox.right > anchorBox.left &&
+        Math.abs(noteBox.top - anchorBox.bottom - 8) < 2
+    })()`)
     const request = await cli('codex-1', 'message send --to claude-2 --text review-please --request-id review-1')
-    check('delivery animates to the recipient and updates its tab badge', await until(`
-      window.flightsSeen === 1 && [...document.querySelectorAll('.terminal-tab')].some(tab => tab.textContent.includes('Claude') && tab.querySelector('.agent-tab-mail')?.textContent === '1')
+    const claudeMail = 'document.querySelector(\'[aria-label="claude-2 메시지함"]\')'
+    check('the arrival is shown beside the receiver with the sender and recipient', await noticeAt(claudeMail, 'codex-1 → claude-2'))
+    check('the receiver has an unread mailbox and tab badge', await until(`
+      ${claudeMail}?.dataset.unread === 'true' &&
+      [...document.querySelectorAll('.terminal-tab')].some(tab => tab.textContent.includes('Claude') && tab.querySelector('.agent-tab-mail')?.textContent === '1')
     `))
+    await driver.shot('local-agent-delivery')
     const duplicate = await cli('codex-1', 'message send --to claude-2 --text review-please --request-id review-1')
-    check('retry returns the original id without replaying the animation', request.id === duplicate.id && await js('window.flightsSeen') === 1)
+    check('retry returns the original id without showing another arrival', request.id === duplicate.id && await js('window.deliveriesSeen') === 1)
     const inbox = await cli('claude-2', 'message inbox --unread')
     check('Claude receives the exact request, including its sender', inbox.messages.length === 1 && inbox.messages[0].from === 'codex-1' && inbox.messages[0].text === 'review-please')
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
     const reply = await cli('claude-2', `message reply --reply-to ${request.id} --text looks-good`)
+    const codexBadge = `[...document.querySelectorAll('.terminal-tab')].find(tab => tab.dataset.tabId === ${paneTab('codex-1')})?.querySelector('.agent-tab-mail')`
+    check('the reply appears alongside the inactive Codex tab with reduced motion enabled', await noticeAt(codexBadge, 'claude-2 → codex-1'))
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
     const result = await cli('codex-1', 'message inbox --unread')
     check('Codex receives a reply linked to the original message', result.messages.some(message => message.id === reply.id && message.replyTo === request.id && message.text === 'looks-good'))
-    check('the reply travels in the opposite direction', await until('window.flightsSeen === 2'))
     await cli('codex-1', `message ack --id ${reply.id}`)
     check('reading the reply clears both unread badges', await until(`!document.querySelector('.agent-tab-mail')`))
 
@@ -259,6 +275,29 @@ async function run() {
     `))
     const live = await mcp('codex-1', 'list_agents')
     check('list_agents returns only connected agents', live.agents.map(agent => agent.id).join(',') === 'codex-1')
+
+    const plainShell = await js(`[...document.querySelectorAll('.local-terminal-pane')]
+      .find(pane => pane.dataset.localTabId === ${JSON.stringify(targetId)} && !pane.querySelector('.agent-pane-mail'))
+      .dataset.localShellId`)
+    await js(`window.electronAPI.localShellWrite(${JSON.stringify(plainShell)}, 'claude\\r')`)
+    check('Claude started by typing claude attaches its global MCP connection to the same pane', await until(`
+      window.electronAPI.agentMessagesSnapshot().then(state => state.agents.some(agent =>
+        agent.id === 'claude-4' && agent.shellId === ${JSON.stringify(plainShell)} && agent.mcpConnected))
+    `), read('manual-claude-mcp-error'))
+    const manualTask = await mcp('codex-1', 'send_message', { to: 'claude-4', text: 'hello-manual-claude' })
+    check('the incoming Codex message wakes manually launched Claude', await waitFor(() => read('manual-claude-wakes') === '1'))
+    const manualInbox = await mcp('manual-claude', 'read_inbox')
+    check('manually launched Claude receives the queued message over its global MCP connection',
+      manualInbox.messages.some(message => message.id === manualTask.id && message.text === 'hello-manual-claude'))
+    const manualReply = await mcp('manual-claude', 'reply_to_message', { message_id: manualTask.id, text: 'hello-codex' })
+    check('Codex receives the reply from manually launched Claude',
+      (await mcp('codex-1', 'read_inbox')).messages.some(message => message.id === manualReply.id && message.replyTo === manualTask.id))
+    fs.writeFileSync(file('manual-claude-mcp-disconnect'), '')
+    check('the disconnected global MCP releases the pane and retains message history', await until(`
+      window.electronAPI.agentMessagesSnapshot().then(state =>
+        state.agents.some(agent => agent.id === 'claude-4' && !agent.shellId && !agent.mcpConnected) &&
+        state.messages.some(message => message.id === ${JSON.stringify(manualTask.id)}))
+    `))
   } finally {
     driver.close()
   }

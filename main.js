@@ -422,6 +422,7 @@ const agentBridgeFile = path.join(userDataPath, 'agent-message-connection');
 const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages({
   notify: sendToLocalWindow, isLocked: () => isAppLocked,
   onInboxChanged: id => localShells?.wakeInbox(id),
+  bindLocalAgent: request => localShells?.bindAgentProcess(request),
   bridgeFile: agentBridgeFile
 });
 const { installAgentMessageMcp } = require('./src/ipc/agentMessageSetup.js');

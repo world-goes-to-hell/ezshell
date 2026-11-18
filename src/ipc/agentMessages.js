@@ -10,7 +10,7 @@ const MAX_TEXT = 8000
 const INBOX_WAIT_MS = 30000
 const USER = 'user'
 
-function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bridgeFile, platform = process.platform }) {
+function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bindLocalAgent, bridgeFile, platform = process.platform }) {
   const agents = new Map()
   const tokens = new Map()
   const mcpReady = new Map()
@@ -75,7 +75,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, brid
       finishWait(socket, { success: true, messages: readInbox(to, true) })
       deliveredToWaiter = true
     }
-    changed({ fromShell: agents.get(from)?.shellId, toShell: agents.get(to)?.shellId })
+    changed({ id: message.id, from, to, toShell: agents.get(to)?.shellId })
     const recipient = agents.get(to)?.shellId
     if (recipient && !deliveredToWaiter) onInboxChanged(recipient)
     return { id: message.id }
@@ -92,10 +92,6 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, brid
   }
 
   function respond(request, socket) {
-    if (request?.method === 'watch-mcp') {
-      watchMcp(request, socket)
-      return null
-    }
     const from = tokens.get(request?.token)
     if (!from) throw new Error('활성 ezShell 에이전트 세션에서 실행해 주세요.')
     if (isLocked()) throw new Error('먼저 앱 잠금을 해제해 주세요.')
@@ -123,7 +119,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, brid
     tokens.delete(token)
     const agent = agents.get(id)
     if (messages.some(message => message.from === id || message.to === id)) {
-      agents.set(id, { ...agent, active: false, status: 'ended' })
+      agents.set(id, { ...agent, shellId: '', active: false, status: 'ended' })
     } else {
       agents.delete(id)
     }
@@ -132,10 +128,18 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, brid
     }
   }
 
-  function watchMcp(request, socket) {
+  function setStatus(id, status) {
+    const agent = agents.get(id)
+    if (!agent?.active || agent.status === status) return
+    agents.set(id, { ...agent, status })
+    changed()
+  }
+
+  async function watchMcp(request, socket) {
     let token = request.token
     let id = tokens.get(token)
     const external = id === undefined
+    let binding
     if (external) {
       if (!bridgeFile || token !== bridgeToken || !['codex', 'claude'].includes(request.kind)
         || typeof request.cwd !== 'string' || !path.isAbsolute(request.cwd) || request.cwd.length > 4096) {
@@ -143,13 +147,25 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, brid
       }
       if (mcpReady.size >= 40) throw new Error('실행 중인 메시지 MCP 연결이 너무 많습니다.')
       id = `${request.kind}-${++serial}`
+      if (Number.isSafeInteger(request.pid) && request.pid > 0) {
+        binding = await bindLocalAgent?.({
+          pid: request.pid, kind: request.kind,
+          setStatus: status => setStatus(id, status),
+          disconnect: () => socket.destroy()
+        })
+      }
+      if (socket.destroyed || mcpReady.size >= 40) {
+        binding?.close()
+        if (socket.destroyed) return
+        throw new Error('실행 중인 메시지 MCP 연결이 너무 많습니다.')
+      }
       token = randomUUID()
       tokens.set(token, id)
-      agents.set(id, { id, shellId: '', kind: request.kind, cwd: request.cwd, active: true, status: 'unknown' })
+      agents.set(id, { id, shellId: binding?.shellId ?? '', kind: request.kind, cwd: request.cwd, active: true, status: binding?.status ?? 'unknown' })
     }
     const previous = mcpReady.get(id)
     mcpReady.set(id, socket)
-    leases.set(socket, { id, token, external })
+    leases.set(socket, { id, token, external, binding })
     socket.setTimeout(0)
     socket.write(JSON.stringify({ success: true, token }) + '\n')
     previous?.destroy()
@@ -193,6 +209,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, brid
         leases.delete(socket)
         if (mcpReady.get(lease.id) === socket) {
           mcpReady.delete(lease.id)
+          lease.binding?.close()
           if (lease.external) archiveExternal(lease.id, lease.token)
           changed()
         }
@@ -203,14 +220,19 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, brid
     socket.setTimeout(5000, () => socket.destroy())
     socket.setEncoding('utf8')
     let pending = ''
-    socket.on('data', chunk => {
+    socket.on('data', async chunk => {
       pending += chunk
       if (Buffer.byteLength(pending) > MAX_REQUEST) return socket.destroy()
       const end = pending.indexOf('\n')
       if (end < 0) return
       socket.removeAllListeners('data')
       try {
-        const result = respond(JSON.parse(pending.slice(0, end)), socket)
+        const request = JSON.parse(pending.slice(0, end))
+        if (request?.method === 'watch-mcp') {
+          await watchMcp(request, socket)
+          return
+        }
+        const result = respond(request, socket)
         if (result) answer(socket, { success: true, ...result })
       } catch (error) {
         answer(socket, { success: false, error: error.message })
@@ -307,12 +329,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, brid
     }
     return {
       env,
-      setStatus(status) {
-        const agent = agents.get(id)
-        if (!agent?.active || agent.status === status) return
-        agents.set(id, { ...agent, status })
-        changed()
-      },
+      setStatus: status => setStatus(id, status),
       finish(exitCode) {
         const agent = agents.get(id)
         if (!agent?.active) return

@@ -4,7 +4,9 @@ const path = require('path')
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js')
 const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js')
 
-const { EZSHELL_AGENT_ID: id, EZSHELL_TEST_AGENT_PROFILE: profile } = process.env
+const { EZSHELL_AGENT_ID: managedId, EZSHELL_TEST_AGENT_PROFILE: profile } = process.env
+const kind = process.argv[2]
+const id = managedId ?? 'manual-' + kind
 const commandPath = path.join(profile, id + '-command')
 const resultPath = path.join(profile, id + '-result')
 const titlePath = path.join(profile, id + '-title')
@@ -14,7 +16,7 @@ const requestPath = path.join(profile, id + '-mcp-request')
 const responsePath = path.join(profile, id + '-mcp-response')
 const disconnectPath = path.join(profile, id + '-mcp-disconnect')
 const draftPath = path.join(profile, id + '-draft')
-const claude = id.startsWith('claude-')
+const claude = kind === 'claude'
 const indicator = claude ? '> ' : '› '
 let draft = ''
 let client = null
@@ -29,8 +31,12 @@ draw()
 process.stdout.on('resize', draw)
 
 async function connectMcp() {
-  const args = process.argv.slice(2)
-  if (claude) {
+  const args = process.argv.slice(3)
+  let entry
+  if (!managedId) {
+    const { createEntry } = require('../../src/ipc/agentMessageSetup.js')
+    entry = createEntry(kind, path.join(profile, 'agent-message-connection'))
+  } else if (claude) {
     const configIndex = args.indexOf('--mcp-config')
     if (configIndex < 0) throw new Error('No Claude MCP config argument')
     const spec = JSON.parse(fs.readFileSync(args[configIndex + 1], 'utf8')).mcpServers['ezshell-cli-mcp']
@@ -40,11 +46,9 @@ async function connectMcp() {
       if (!args.some(value => value.startsWith('mcp_servers.ezshell-cli-mcp.' + field))) throw new Error('Missing Codex MCP argument ' + field)
     }
   }
+  entry ??= { command: process.execPath, args: [process.env.EZSHELL_AGENT_MCP_SCRIPT], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } }
   const connected = new Client({ name: 'fixture-agent', version: '1' })
-  await connected.connect(new StdioClientTransport({
-    command: process.execPath, args: [process.env.EZSHELL_AGENT_MCP_SCRIPT],
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
-  }))
+  await connected.connect(new StdioClientTransport(entry))
   client = connected
   const { tools } = await client.listTools()
   fs.writeFileSync(path.join(profile, id + '-tools'), JSON.stringify(tools.map(tool => tool.name)))

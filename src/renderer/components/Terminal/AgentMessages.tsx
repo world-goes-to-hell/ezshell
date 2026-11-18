@@ -1,4 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
+import { createPortal } from 'react-dom'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiMailLine } from 'react-icons/ri'
 import { create } from 'zustand'
@@ -37,74 +38,109 @@ function isVisible(element: HTMLElement | null): boolean {
   return box.width > 0 && box.height > 0 && box.right > 0 && box.bottom > 0 && box.left < innerWidth && box.top < innerHeight
 }
 
-function anchor(shellId?: string): HTMLElement | null {
-  if (!shellId) return document.querySelector('.agent-messages-button')
-  const pane = document.querySelector<HTMLElement>(`[data-local-shell-id="${CSS.escape(shellId)}"]`)
-  if (pane && isVisible(pane)) return pane.querySelector('.agent-pane-mail') ?? pane
-  const tabId = pane?.dataset.localTabId ?? useMessages.getState().panes[shellId]
-  if (!tabId) return null
-  return [...document.querySelectorAll<HTMLElement>(`:is(.terminal-tab, .split-pane-tab-item)[data-tab-id="${CSS.escape(tabId)}"]`)].find(isVisible) ?? null
-}
-
-function playDelivery({ fromShell, toShell }: AgentMessageDelivery) {
-  const reduce = matchMedia('(prefers-reduced-motion: reduce)')
-  if (document.hidden || reduce.matches) return
-  const source = anchor(fromShell)
-  const destination = anchor(toShell)
-  if (!destination || !isVisible(destination)) return
-
-  const emphasize = () => {
-    if (destination.isConnected && !reduce.matches && !document.hidden) {
-      destination.animate([{ boxShadow: 'inset 0 0 0 2px var(--accent)' }, { boxShadow: 'inset 0 0 0 0 transparent' }], 380)
+function deliveryAnchor(shellId?: string): HTMLElement | undefined {
+  if (shellId) {
+    const pane = document.querySelector<HTMLElement>(`[data-local-shell-id="${CSS.escape(shellId)}"]`)
+    const mail = pane?.querySelector<HTMLElement>('.agent-pane-mail')
+    if (mail && isVisible(mail)) return mail
+    const tabId = pane?.dataset.localTabId ?? useMessages.getState().panes[shellId]
+    if (tabId) {
+      const tabs = document.querySelectorAll<HTMLElement>(`:is(.terminal-tab, .split-pane-tab-item)[data-tab-id="${CSS.escape(tabId)}"]`)
+      const tab = [...tabs].find(isVisible)
+      const badge = tab?.querySelector<HTMLElement>('.agent-tab-mail')
+      if (badge && isVisible(badge)) return badge
+      if (tab) return tab
     }
   }
-  if (!source || !isVisible(source) || source === destination) {
-    emphasize()
-    return
-  }
-  const from = source.getBoundingClientRect()
-  const to = destination.getBoundingClientRect()
-  const dx = to.left + to.width / 2 - (from.left + from.width / 2)
-  const dy = to.top + to.height / 2 - (from.top + from.height / 2)
-  const chip = document.createElement('span')
-  chip.className = 'agent-message-flight'
-  chip.textContent = '메시지'
-  chip.setAttribute('aria-hidden', 'true')
-  chip.style.left = `${from.left + from.width / 2}px`
-  chip.style.top = `${from.top + from.height / 2}px`
-  document.body.append(chip)
-  const frames = [0, .25, .5, .75, 1].map(progress => ({
-    transform: `translate3d(${dx * progress}px, ${dy * progress - 92 * progress * (1 - progress)}px, 0) translate(-50%, -50%)`,
-    opacity: progress === 1 ? .35 : 1
-  }))
-  const flight = chip.animate(frames, { duration: 430, easing: 'ease-out' })
-  const cancel = () => flight.cancel()
-  reduce.addEventListener('change', cancel)
-  window.addEventListener('resize', cancel, { once: true })
-  document.addEventListener('visibilitychange', cancel, { once: true })
-  void flight.finished.then(emphasize, () => {}).finally(() => {
-    chip.remove()
-    reduce.removeEventListener('change', cancel)
-    window.removeEventListener('resize', cancel)
-    document.removeEventListener('visibilitychange', cancel)
-  })
+  const inbox = document.querySelector<HTMLElement>('.agent-messages-button')
+  return inbox && isVisible(inbox) ? inbox : undefined
+}
+
+function AgentDeliveryNotice({ delivery }: { delivery: AgentMessageDelivery | null }) {
+  const noticeRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const notice = noticeRef.current
+    if (!delivery || !notice) return
+    const position = () => {
+      const target = deliveryAnchor(delivery.toShell)
+      const edge = 8
+      const box = target?.getBoundingClientRect()
+      const width = notice.offsetWidth
+      const height = notice.offsetHeight
+      const left = box
+        ? (box.left + width <= innerWidth - edge ? box.left : box.right - width)
+        : innerWidth - width - edge
+      const top = box
+        ? (box.bottom + edge + height <= innerHeight ? box.bottom + edge : box.top - edge - height)
+        : edge
+      notice.style.left = `${Math.max(edge, Math.min(left, innerWidth - width - edge))}px`
+      notice.style.top = `${Math.max(edge, top)}px`
+      return target
+    }
+    const target = position()
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)')
+    const highlight = !reduce.matches && target?.animate([
+      { boxShadow: '0 0 0 2px var(--accent)' },
+      { boxShadow: '0 0 0 4px transparent' }
+    ], { duration: 600, easing: 'ease-out' })
+    window.addEventListener('resize', position)
+    window.addEventListener('scroll', position, true)
+    return () => {
+      if (highlight) highlight.cancel()
+      window.removeEventListener('resize', position)
+      window.removeEventListener('scroll', position, true)
+    }
+  }, [delivery])
+  return createPortal(
+    <div role="status" className="agent-delivery-status">
+      {delivery && (
+        <div ref={noticeRef} key={delivery.id} className="agent-delivery-notice">
+          <RiMailLine size={16} aria-hidden="true" />
+          <div className="agent-delivery-text">
+            <span>메시지 도착</span>
+            <strong>{label(delivery.from)} → {label(delivery.to)}</strong>
+          </div>
+        </div>
+      )}
+    </div>,
+    document.body
+  )
 }
 
 export function AgentMessagesHost() {
   const panel = useMessages(state => state.panel)
+  const [delivery, setDelivery] = useState<AgentMessageDelivery | null>(null)
   useEffect(() => {
     let active = true
+    let timer: number | undefined
     const stopState = window.electronAPI.onAgentMessagesState(receive)
-    const stopDelivery = window.electronAPI.onAgentMessageDelivered(playDelivery)
+    const hideDelivery = () => {
+      window.clearTimeout(timer)
+      setDelivery(null)
+    }
+    const stopDelivery = window.electronAPI.onAgentMessageDelivered(event => {
+      if (document.hidden) return
+      window.clearTimeout(timer)
+      setDelivery(event)
+      timer = window.setTimeout(hideDelivery, 2400)
+    })
+    document.addEventListener('visibilitychange', hideDelivery)
     void window.electronAPI.agentMessagesSnapshot().then(snapshot => { if (active) receive(snapshot) })
     return () => {
       active = false
       stopState()
       stopDelivery()
+      window.clearTimeout(timer)
+      document.removeEventListener('visibilitychange', hideDelivery)
       useMessages.setState({ panel: null })
     }
   }, [])
-  return panel ? <AgentMessagesDialog key={panel.agentId ?? 'all'} initialAgent={panel.agentId} onClose={() => useMessages.setState({ panel: null })} /> : null
+  return (
+    <>
+      <AgentDeliveryNotice delivery={delivery} />
+      {panel && <AgentMessagesDialog key={panel.agentId ?? 'all'} initialAgent={panel.agentId} onClose={() => useMessages.setState({ panel: null })} />}
+    </>
+  )
 }
 
 function unreadCount(messages: AgentMessage[], ids: Set<string>) {
@@ -145,7 +181,7 @@ export function AgentPaneMessages({ shellId, tabId }: { shellId: string; tabId: 
   }, [shellId, tabId])
   if (!agent) return null
   return (
-    <button type="button" className="agent-pane-mail" onClick={() => openPanel(agent.id)} title={`${agent.id} 메시지함`} aria-label={`${agent.id} 메시지함`}>
+    <button type="button" className="agent-pane-mail" data-unread={count > 0} onClick={() => openPanel(agent.id)} title={`${agent.id} 메시지함`} aria-label={`${agent.id} 메시지함`}>
       <RiMailLine size={15} />
       {count > 0 && <span className="agent-mail-count">{count}</span>}
     </button>

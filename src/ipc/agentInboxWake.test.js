@@ -4,6 +4,9 @@ import { createAgentInboxWake, PROMPT } from './agentInboxWake.js'
 const paste = '\x1b[200~' + PROMPT + '\x1b[201~'
 const claudeDraft = text => '\x1b[?2004h\x1b[2J\x1b[H' + '─'.repeat(70) + '\r\n> ' + text
 const codexDraft = text => '\x1b[?2004h\x1b[2J\x1b[H› ' + text
+const paintedClaudeDraft = text => '\x1b[?2004h\x1b[?25l\x1b[2J\x1b[20;1H' +
+  '─'.repeat(70) + '\r\n❯\u00a0' + text + '\x1b[7m \x1b[0m\r\n' +
+  '─'.repeat(70) + '\r\n  ⏵⏵ auto mode on'
 
 let wake
 function setup(kind = 'claude') {
@@ -34,6 +37,18 @@ describe('wake an idle agent with unread messages', () => {
     expect(write).toHaveBeenCalledTimes(2)
   })
 
+  it('wakes Claude when it paints its composer cursor and leaves the terminal cursor in the footer', async () => {
+    const { write, state } = setup()
+    state.ids.push('first')
+    wake.writeOutput(paintedClaudeDraft('a user draft'))
+    await new Promise(resolve => setTimeout(resolve, 80))
+    expect(write).not.toHaveBeenCalled()
+    wake.writeOutput(paintedClaudeDraft(''))
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste]]))
+    wake.writeOutput(paintedClaudeDraft(PROMPT))
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r']]))
+  })
+
   it('keeps queued messages while the agent is busy or a user draft is open', async () => {
     const { write, state } = setup('codex')
     state.busy = true
@@ -60,6 +75,16 @@ describe('wake an idle agent with unread messages', () => {
     wake.writeOutput(claudeDraft(''))
     await vi.waitFor(() => expect(write).toHaveBeenCalledWith(paste))
     wake.writeOutput(claudeDraft(PROMPT) + '\r\nDo you want to allow this?\r\n❯ 1. Yes')
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(write.mock.calls).toEqual([[paste]])
+  })
+
+  it('does not submit a painted composer when a choice prompt has appeared below it', async () => {
+    const { write, state } = setup()
+    state.ids.push('first')
+    wake.writeOutput(paintedClaudeDraft(''))
+    await vi.waitFor(() => expect(write).toHaveBeenCalledWith(paste))
+    wake.writeOutput(paintedClaudeDraft(PROMPT) + '\r\nDo you want to allow this?\r\n❯ 1. Yes')
     await new Promise(resolve => setTimeout(resolve, 100))
     expect(write.mock.calls).toEqual([[paste]])
   })

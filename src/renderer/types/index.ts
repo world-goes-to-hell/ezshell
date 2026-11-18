@@ -359,7 +359,9 @@ export interface AgentMessagesSnapshot {
 }
 
 export interface AgentMessageDelivery {
-  fromShell?: string
+  id: string
+  from: string
+  to: string
   toShell?: string
 }
 

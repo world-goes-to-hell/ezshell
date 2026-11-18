@@ -6,6 +6,7 @@ const DRAW_SETTLE = 35
 const INPUT_TIMEOUT = 1500
 const submitKey = data => /^(?:\r|\n|\x1b\[13(?:;1)?u)$/.test(data)
 const compact = text => text.replace(/\s/g, '')
+const claudeRule = /^\s*─{8,}\s*$/u
 
 function createAgentInboxWake({ kind, cols, rows, pendingMessages, isWorking, write }) {
   const screen = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true })
@@ -18,26 +19,63 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, isWorking, wr
   let holdUntil = 0
   const prompt = kind === 'codex' ? /^\s*›[ \u00a0]/u : /^\s*[>❯][ \u00a0]/u
 
+  function paintedClaudeComposer(buffer, line, maxInputRows) {
+    // Claude can leave the terminal cursor in the footer and paint its input cursor with inverse video.
+    let bottom = buffer.baseY + screen.rows - 1
+    while (bottom > buffer.baseY && !claudeRule.test(line(bottom))) {
+      if (prompt.test(line(bottom))) return null
+      bottom--
+    }
+    for (let first = bottom - 1; first >= Math.max(buffer.baseY + 1, bottom - maxInputRows); first--) {
+      const prefix = prompt.exec(line(first))
+      if (!prefix || !claudeRule.test(line(first - 1))) continue
+      let painted
+      const input = []
+      for (let row = first; row < bottom; row++) {
+        input.push(row === first ? line(row).slice(prefix[0].length) : line(row))
+        const cells = buffer.getLine(row)
+        const start = row === first ? prefix[0].length : 0
+        for (let x = start; x < screen.cols; x++) {
+          const cell = cells?.getCell(x)
+          if (!cell?.isInverse()) continue
+          if (painted || cell.getChars() !== ' ') return null
+          painted = { row, x }
+        }
+      }
+      if (!painted) return null
+      const text = compact(input.join(''))
+      const afterCursor = line(painted.row).slice(painted.x) + input.slice(painted.row - first + 1).join('')
+      return {
+        atStart: !text && painted.row === first && painted.x === prefix[0].length,
+        endsAtCursor: !compact(afterCursor),
+        text
+      }
+    }
+    return null
+  }
+
   function composer() {
     if (!screen.modes.bracketedPasteMode) return null
     const { active: buffer } = screen.buffer
     const cursor = buffer.baseY + buffer.cursorY
     const line = index => buffer.getLine(index)?.translateToString(false) ?? ''
     // A pasted line can wrap. Look above the cursor only as far as the app-written prompt.
-    const first = Math.max(buffer.baseY, cursor - Math.ceil(PROMPT.length / Math.max(1, screen.cols - 2)) - 1)
+    const maxInputRows = Math.ceil(PROMPT.length / Math.max(1, screen.cols - 2)) + 1
+    const first = Math.max(buffer.baseY, cursor - maxInputRows)
     for (let index = cursor; index >= first; index--) {
       const row = line(index)
       const prefix = prompt.exec(row)
       if (!prefix) continue
-      if (kind === 'claude' && !/^─{8,}\s*$/u.test(line(index - 1))) return null
+      if (kind === 'claude' && !claudeRule.test(line(index - 1))) continue
       const tail = row.slice(prefix[0].length)
       const lines = Array.from({ length: cursor - index }, (_, offset) => line(index + offset + 1))
+      if (kind === 'claude' && lines.some(line => claudeRule.test(line))) continue
       // The empty prompt can have placeholder text to the right of the cursor.
       const atStart = index === cursor && buffer.cursorX === prefix[0].length
       const endsAtCursor = line(cursor).slice(buffer.cursorX).trim() === ''
       return { atStart, endsAtCursor, text: compact([tail, ...lines].join('')) }
     }
-    return null
+    return kind === 'claude' ? paintedClaudeComposer(buffer, line, maxInputRows) : null
   }
 
   function schedule(delay = DRAW_SETTLE) {
@@ -51,7 +89,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, isWorking, wr
     if (stopped || composing) return
     const now = Date.now()
     const waiting = pendingMessages().filter(id => !dispatched.has(id))
-    const input = composer()
+    const input = waiting.length ? composer() : null
     if (stage) {
       const { expires } = stage
       if (now >= expires) {

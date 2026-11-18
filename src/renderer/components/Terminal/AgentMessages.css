@@ -26,19 +26,30 @@
   background: var(--bg-secondary);
   cursor: pointer;
 }
-.agent-pane-mail:hover { color: var(--accent); }
-.agent-message-flight {
+.agent-pane-mail:hover,
+.agent-pane-mail[data-unread="true"] { color: var(--accent); }
+.agent-pane-mail[data-unread="true"] { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
+.agent-delivery-notice {
   position: fixed;
   z-index: 120;
   pointer-events: none;
-  padding: 4px 9px;
-  border-radius: 12px;
-  background: var(--accent);
-  color: var(--on-accent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-inline-start: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
   font-size: 12px;
-  font-weight: 600;
+  line-height: 1.35;
   box-shadow: var(--shadow-lg);
 }
+.agent-delivery-notice svg { flex: none; color: var(--accent); }
+.agent-delivery-text { display: grid; gap: 2px; overflow-wrap: anywhere; }
+.agent-delivery-text span { color: var(--text-secondary); font-size: 11px; }
 .agent-message-thread {
   max-height: 36vh;
   overflow: auto;

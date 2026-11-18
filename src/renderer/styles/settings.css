@@ -89,6 +89,39 @@
   padding-right: 4px;
 }
 
+.settings-mcp-content {
+  overflow: hidden;
+  padding-right: 0;
+}
+
+.settings-mcp-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+
+.settings-mcp-tabs-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-mcp-tabs-list .settings-tab-trigger {
+  flex: 0 1 auto;
+  padding: 8px 12px;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.settings-mcp-tabs-list .settings-tab-trigger[data-state="active"] {
+  border-bottom-color: var(--accent);
+  background: transparent;
+  color: var(--accent);
+}
+
 .settings-content {
   display: flex;
   flex-direction: column;

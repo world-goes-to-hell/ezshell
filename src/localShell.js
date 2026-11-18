@@ -4,6 +4,7 @@
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
+const { getProcessParents } = require('./ipc/agentProcessParents.js');
 
 const MAX_SHELLS = 10;
 /** Output kept per shell so a tab that is drawn again (pane split, tab moved) continues from it */
@@ -11,6 +12,22 @@ const BACKLOG_CHARS = 256 * 1024;
 const MIN_SIZE = 2;
 const MAX_SIZE = 500;
 const MAX_WRITE_CHARS = 1024 * 1024;
+const TERMINAL_TYPE = 'xterm-256color';
+
+function localTerminalEnvironment(env, platform) {
+  const shellEnv = { ...env };
+  const keys = Object.keys(shellEnv);
+  const envKey = name => platform === 'win32' ? keys.find(key => key.toUpperCase() === name) ?? name : name;
+  const termKey = envKey('TERM');
+  const terminalProgram = shellEnv[envKey('TERM_PROGRAM')]?.toLowerCase();
+  // Orca can pass NO_COLOR even when its TERM advertises colors.
+  if (terminalProgram === 'orca' || shellEnv[termKey]?.toLowerCase() === 'dumb') {
+    delete shellEnv[envKey('NO_COLOR')];
+  }
+  shellEnv[termKey] = TERMINAL_TYPE;
+  shellEnv[envKey('COLORTERM')] = 'truecolor';
+  return shellEnv;
+}
 
 function loginShell() {
   try {
@@ -80,15 +97,17 @@ function agentStatus(entry) {
 
 // Keep partial OSC reports across chunks. Prefer each agent's program state
 // over the display title and progress bar used by earlier CLI versions.
-function trackAgentActivity(entry, data) {
+function trackAgentActivity(entry, data, replyToProbe = true) {
   const output = entry.oscTail + data;
   const sequences = /\x1b\](0|2|9|7501);([^\x07\x1b]{0,4096})(?:\x07|\x1b\\)/g;
   for (const [, code, value] of output.matchAll(sequences)) {
+    if (code === '7501' && value === '?') {
+      // A CLI in a plain shell may ask before its MCP connection is ready.
+      if (replyToProbe) entry.pty.write(PROGRAM_STATUS_REPLY);
+      continue;
+    }
+    if (!entry.agent) continue;
     if (code === '7501') {
-      if (value === '?') {
-        entry.pty.write(PROGRAM_STATUS_REPLY);
-        continue;
-      }
       const fields = value.split(':');
       const app = fields.find(field => field.startsWith('app='))?.slice(4);
       if (app && app !== entry.agent && !(entry.agent === 'claude' && app === 'claude-code')) continue;
@@ -133,9 +152,75 @@ function trackCodexInput(input, data) {
  * @param {(file: string, args: string[], options: object) => object} deps.spawn node-pty's spawn
  * @param {(channel: string, payload: object) => void} deps.send to the main window
  */
-function createLocalShells({ spawn, send, agents, shell = defaultShell(), cwd = os.homedir(), env = process.env, platform = process.platform }) {
+function createLocalShells({
+  spawn, send, agents, shell = defaultShell(), cwd = os.homedir(), env = process.env,
+  platform = process.platform, processParents = () => getProcessParents(platform)
+}) {
   const shells = new Map();
   let nextId = 1;
+
+  function observeInbox(id, entry) {
+    const { createAgentInboxWake } = require('./ipc/agentInboxWake.js');
+    const pendingMessages = () => agents.unreadFor?.(id) ?? [];
+    entry.inbox = createAgentInboxWake({
+      kind: entry.agent, cols: entry.cols, rows: entry.rows,
+      pendingMessages,
+      isWorking: () => {
+        const status = agentStatus(entry);
+        return status !== 'idle' && !(entry.disconnectAgent && status === 'unknown');
+      },
+      write(data) {
+        if (entry.exited || !pendingMessages().length) return false;
+        try {
+          entry.pty.write(data);
+          if (entry.codexInput) trackCodexInput(entry.codexInput, data);
+          return true;
+        } catch { return false; }
+      }
+    });
+    entry.inbox.setComposing(entry.composing);
+  }
+
+  // Global MCP registrations work outside ezShell too. Only a connection launched
+  // from this shell's process tree may use its already-guarded composer wake.
+  async function bindAgentProcess({ pid, kind, setStatus, disconnect }) {
+    const candidates = new Map();
+    for (const [id, entry] of shells) {
+      if (!entry.exited && !entry.agent && entry.pty.pid > 0) candidates.set(entry.pty.pid, { id, entry });
+    }
+    if (!candidates.size) return;
+    let parents;
+    try { parents = await processParents(); }
+    catch { return; }
+    const visited = new Set();
+    for (let parent = parents.get(pid); parent > 0 && !visited.has(parent); parent = parents.get(parent)) {
+      visited.add(parent);
+      const candidate = candidates.get(parent);
+      if (!candidate) continue;
+      const { id, entry } = candidate;
+      if (shells.get(id) !== entry || entry.exited || entry.agent || entry.pty.pid !== parent) return;
+      entry.agent = kind;
+      entry.reportStatus = setStatus;
+      entry.disconnectAgent = disconnect;
+      entry.codexInput = kind === 'codex' ? { hasDraft: false, submitted: false } : null;
+      entry.oscTail = '';
+      trackAgentActivity(entry, entry.backlog, false);
+      observeInbox(id, entry);
+      entry.inbox.writeOutput(entry.backlog);
+      return {
+        shellId: id,
+        status: agentStatus(entry),
+        close() {
+          if (entry.disconnectAgent !== disconnect) return;
+          entry.inbox?.close();
+          Object.assign(entry, {
+            agent: undefined, reportStatus: undefined, disconnectAgent: undefined, inbox: undefined,
+            codexInput: null, titleStatus: 'unknown', reportedStatus: null, oscTail: ''
+          });
+        }
+      };
+    }
+  }
 
   function open({ cols, rows, cwd: directory, agent } = {}) {
     if (shells.size >= MAX_SHELLS) throw new Error(`로컬 터미널은 ${MAX_SHELLS}개까지 열 수 있습니다.`);
@@ -144,44 +229,33 @@ function createLocalShells({ spawn, send, agents, shell = defaultShell(), cwd = 
     const args = shellArgs(shell, agent, platform, Boolean(agents));
     const columns = size(cols, 80);
     const lines = size(rows, 24);
-    const registration = agent && agents?.register(agent, id, workingDirectory, env);
+    const shellEnv = localTerminalEnvironment(env, platform);
+    const registration = agent && agents?.register(agent, id, workingDirectory, shellEnv);
     let pty;
     try {
       pty = spawn(shell.file, args, {
-        name: 'xterm-256color',
+        name: TERMINAL_TYPE,
         cols: columns,
         rows: lines,
         cwd: workingDirectory,
-        env: registration?.env ?? env
+        env: registration?.env ?? shellEnv
       });
     } catch (error) {
       registration?.close();
       throw error;
     }
     const codexInput = agent === 'codex' ? { hasDraft: false, submitted: false } : null;
-    const entry = { pty, agent, registration, codexInput, backlog: '', exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, oscTail: '' };
-    if (registration) {
-      const { createAgentInboxWake } = require('./ipc/agentInboxWake.js');
-      const pendingMessages = () => agents.unreadFor?.(id) ?? [];
-      entry.inbox = createAgentInboxWake({
-        kind: agent, cols: columns, rows: lines,
-        pendingMessages,
-        isWorking: () => agentStatus(entry) !== 'idle',
-        write(data) {
-          if (entry.exited || !pendingMessages().length) return false;
-          try {
-            pty.write(data);
-            if (codexInput) trackCodexInput(codexInput, data);
-            return true;
-          } catch { return false; }
-        }
-      });
-    }
+    const entry = {
+      pty, agent, registration, codexInput, cols: columns, rows: lines, composing: false,
+      reportStatus: status => registration?.setStatus?.(status),
+      backlog: '', exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, oscTail: ''
+    };
+    if (registration) observeInbox(id, entry);
     shells.set(id, entry);
     pty.onData((data) => {
-      if (entry.agent && !entry.exited) {
+      if (!entry.exited) {
         trackAgentActivity(entry, data);
-        registration?.setStatus?.(agentStatus(entry));
+        entry.reportStatus?.(agentStatus(entry));
       }
       entry.inbox?.writeOutput(data);
       entry.backlog += data;
@@ -193,6 +267,7 @@ function createLocalShells({ spawn, send, agents, shell = defaultShell(), cwd = 
       entry.exited = true;
       entry.exitCode = exitCode;
       entry.inbox?.close();
+      entry.disconnectAgent?.();
       if (registration?.finish) registration.finish(exitCode);
       else registration?.close();
       send('local-shell-exit', { id, exitCode });
@@ -214,7 +289,7 @@ function createLocalShells({ spawn, send, agents, shell = defaultShell(), cwd = 
     entry.pty.write(data);
     if (entry.codexInput && !entry.codexInput.submitted) {
       trackCodexInput(entry.codexInput, data);
-      if (entry.codexInput.submitted) entry.registration?.setStatus?.(agentStatus(entry));
+      if (entry.codexInput.submitted) entry.reportStatus?.(agentStatus(entry));
     }
   }
 
@@ -225,6 +300,8 @@ function createLocalShells({ spawn, send, agents, shell = defaultShell(), cwd = 
       const columns = size(cols, 80);
       const lines = size(rows, 24);
       entry.pty.resize(columns, lines);
+      entry.cols = columns;
+      entry.rows = lines;
       entry.inbox?.resize(columns, lines);
     } catch {
       // The shell ended between the check and the call
@@ -236,6 +313,7 @@ function createLocalShells({ spawn, send, agents, shell = defaultShell(), cwd = 
     if (!entry) return;
     shells.delete(id);
     entry.inbox?.close();
+    entry.disconnectAgent?.();
     entry.registration?.close();
     if (entry.exited) return;
     try {
@@ -250,8 +328,13 @@ function createLocalShells({ spawn, send, agents, shell = defaultShell(), cwd = 
   }
 
   return {
-    open, attach, write, resize, close, closeAll,
-    setComposing: (id, value) => shells.get(id)?.inbox?.setComposing(value),
+    open, attach, write, resize, close, closeAll, bindAgentProcess,
+    setComposing(id, value) {
+      const entry = shells.get(id);
+      if (!entry) return;
+      entry.composing = value;
+      entry.inbox?.setComposing(value);
+    },
     wakeInbox: id => shells.get(id)?.inbox?.kick(),
     wakeInboxes: () => { for (const entry of shells.values()) entry.inbox?.kick(); },
     isRunning: id => shells.get(id)?.exited === false,

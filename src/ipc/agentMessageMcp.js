@@ -28,7 +28,7 @@ function openLease({ pipe, token, kind }) {
     socket.setTimeout(5000, () => socket.destroy(offline()))
     socket.on('error', () => reject(offline()))
     socket.on('end', () => reject(offline()))
-    socket.on('connect', () => socket.write(JSON.stringify({ method: 'watch-mcp', token, kind, cwd: process.cwd() }) + '\n'))
+    socket.on('connect', () => socket.write(JSON.stringify({ method: 'watch-mcp', token, kind, cwd: process.cwd(), pid: process.pid }) + '\n'))
     let response = ''
     const receive = chunk => {
       response += chunk

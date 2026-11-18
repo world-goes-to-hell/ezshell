@@ -8,15 +8,21 @@ const { check, finish } = createChecks()
   const driver = await connect()
   const { send, js, until, shot } = driver
 
-  const openBackupTab = async () => {
+  const selectTab = (list, label) => js(`
+    [...document.querySelectorAll('${list} > [role=tab]')]
+      .find(tab => tab.textContent.trim() === ${JSON.stringify(label)})
+      .dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+  `)
+  const openSettings = async () => {
     // Ctrl+, opens the settings
     const comma = { key: ',', code: 'Comma', windowsVirtualKeyCode: 188, modifiers: 2 }
     await js(`document.activeElement && document.activeElement.blur()`)
     await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...comma })
     await send('Input.dispatchKeyEvent', { type: 'keyUp', ...comma })
-    await until(`!!document.querySelector('.settings-tab-trigger')`, 5000)
-    // Radix tabs switch on mousedown, not on click
-    await js(`[...document.querySelectorAll('.settings-tab-trigger')].find(t => t.textContent.includes('백업')).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))`)
+    return until(`!!document.querySelector('.settings-tabs-list')`, 5000)
+  }
+  const openBackupTab = async () => {
+    await selectTab('.settings-tabs-list', '백업')
     await until(`!!document.querySelector('.backup-tabs')`, 5000)
     await js(`[...document.querySelectorAll('.backup-tabs button')].find(b => b.textContent.includes('화면 설정')).click()`)
     return until(`!!document.querySelector('.session-backup input[type=file]')`, 5000)
@@ -33,6 +39,26 @@ const { check, finish } = createChecks()
 
   await unlock(driver)
   const startTheme = await theme()
+  check('Ctrl+, opens settings', await openSettings())
+  const topTabs = '.settings-tabs-list'
+  const mcpTabs = '.settings-mcp-tabs-list'
+  const labels = list => js(`[...document.querySelectorAll('${list} > [role=tab]')].map(tab => tab.textContent.trim())`)
+  const topLabels = await labels(topTabs)
+  check('MCP is a single top-level settings tab', topLabels.includes('MCP') && !topLabels.includes('SSH MCP') && !topLabels.includes('에이전트 메시지'), topLabels.join(' | '))
+  await selectTab(topTabs, 'MCP')
+  check('MCP contains two subtabs', (await labels(mcpTabs)).join(' | ') === 'SSH MCP | 에이전트 메시지')
+  const activeMcpPanel = 'document.querySelector(".settings-mcp-tabs > [role=tabpanel][data-state=active]")'
+  check('SSH settings open first', await until(`${activeMcpPanel}?.textContent.includes('ezshell-ssh-mcp')`))
+  await js(`document.querySelector('${mcpTabs} [aria-selected=true]').focus()`)
+  const right = { key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 }
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...right })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', ...right })
+  check('keyboard selection opens the agent registration settings', await until(`${activeMcpPanel}?.textContent.includes('ezshell-cli-mcp') &&
+    ${activeMcpPanel}.textContent.includes('Codex에 등록') && ${activeMcpPanel}.textContent.includes('Claude Code에 등록')`))
+  check('the top-level MCP tab stays selected', await js(`document.querySelector('${topTabs} [aria-selected=true]').textContent.trim() === 'MCP'`))
+  await selectTab(mcpTabs, 'SSH MCP')
+  check('selecting the SSH subtab returns to its settings', await until(`${activeMcpPanel}?.textContent.includes('ezshell-ssh-mcp')`))
+
   check('the 화면 설정 tab is in 설정 > 백업', await openBackupTab(), String(await js(`[...document.querySelectorAll('.backup-tabs button')].map(b => b.textContent).join(' | ')`)))
   check('it lists what travels', await js(`document.querySelectorAll('.ui-settings-list li').length === 4`))
 

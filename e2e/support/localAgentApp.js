@@ -15,11 +15,13 @@ process.env[envKey] = [bin, ...(system ? [path.join(system, 'WindowsPowerShell',
 process.env.EZSHELL_TEST_AGENT_PROFILE = profile
 process.env.EZSHELL_TEST_AGENT_EXE = process.execPath
 process.env.EZSHELL_TEST_AGENT_SCRIPT = path.join(__dirname, 'localAgentFixture.js')
+// Simulate an existing user-level MCP registration so the app starts its bridge.
+fs.writeFileSync(path.join(profile, 'agent-message-connection'), '')
 for (const name of ['codex', 'claude']) {
   if (process.platform === 'win32') {
-    fs.writeFileSync(path.join(bin, name + '.cmd'), '@echo off\r\nsetlocal\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%EZSHELL_TEST_AGENT_EXE%" "%EZSHELL_TEST_AGENT_SCRIPT%" %*\r\n')
+    fs.writeFileSync(path.join(bin, name + '.cmd'), '@echo off\r\nsetlocal\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%EZSHELL_TEST_AGENT_EXE%" "%EZSHELL_TEST_AGENT_SCRIPT%" ' + name + ' %*\r\n')
   } else {
-    fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "$EZSHELL_TEST_AGENT_EXE" "$EZSHELL_TEST_AGENT_SCRIPT" "$@"\n', { mode: 0o700 })
+    fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "$EZSHELL_TEST_AGENT_EXE" "$EZSHELL_TEST_AGENT_SCRIPT" ' + name + ' "$@"\n', { mode: 0o700 })
   }
 }
 clipboard.readText = () => {
@@ -29,21 +31,20 @@ clipboard.readImage = () => nativeImage.createFromBitmap(Buffer.from([0, 0, 255,
 const spawn = pty.spawn
 pty.spawn = (file, args, options) => {
   const child = spawn(file, args, options)
-  const id = options.env.EZSHELL_AGENT_ID
-  if (!id) return child
+  let id = options.env.EZSHELL_AGENT_ID
   // Give the fake agent a composer without relying on Electron's run-as-node console input modes.
   const write = child.write.bind(child)
-  const draft = path.join(profile, id + '-draft')
   let pending = false
   let turns = 0
   child.write = data => {
-    if (data === '\x1b[200~' + PROMPT + '\x1b[201~') {
+    if (!id && data === 'claude\r') id = 'manual-claude'
+    if (id && data === '\x1b[200~' + PROMPT + '\x1b[201~') {
       pending = true
-      fs.writeFileSync(draft, PROMPT)
+      fs.writeFileSync(path.join(profile, id + '-draft'), PROMPT)
     } else if (pending && data === '\r') {
       pending = false
       fs.writeFileSync(path.join(profile, id + '-wakes'), String(++turns))
-      fs.writeFileSync(draft, '')
+      fs.writeFileSync(path.join(profile, id + '-draft'), '')
     } else {
       write(data)
     }
