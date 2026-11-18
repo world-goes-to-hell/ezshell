@@ -31,7 +31,7 @@ async function saveOutput(terminal: Terminal, tabName: string): Promise<void> {
  * Menu items every terminal has (SSH tabs, split shells, local terminals). `then` wraps an action so
  * the keyboard goes back to the terminal after the menu closes.
  */
-export function commonTerminalItems(terminal: Terminal, tabName: string, then: (action: () => void) => () => void): {
+export function commonTerminalItems(terminal: Terminal, tabName: string, then: (action: () => void) => () => void, onPaste: () => void = () => void paste(terminal)): {
   top: TerminalMenuItem[]
   output: TerminalMenuItem[]
 } {
@@ -39,7 +39,7 @@ export function commonTerminalItems(terminal: Terminal, tabName: string, then: (
   return {
     top: [
       { label: '복사', icon: RiFileCopyLine, disabled: !selection, onSelect: then(() => void copyToClipboard(selection)) },
-      { label: '붙여넣기', icon: RiClipboardLine, onSelect: then(() => void paste(terminal)) },
+      { label: '붙여넣기', icon: RiClipboardLine, onSelect: then(onPaste) },
       { label: '모두 선택', icon: RiCheckboxMultipleLine, onSelect: then(() => terminal.selectAll()) }
     ],
     output: [

@@ -32,7 +32,13 @@
   color: var(--text-primary);
 }
 
-.sidebar-toggle {
+.sidebar-header-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.sidebar-toggle,
+.sidebar-session-search {
   width: 32px;
   height: 32px;
   border: none;
@@ -46,7 +52,8 @@
   transition: all var(--transition-fast);
 }
 
-.sidebar-toggle:hover {
+.sidebar-toggle:hover,
+.sidebar-session-search:hover {
   background: var(--accent);
   color: var(--on-accent);
 }

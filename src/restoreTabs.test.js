@@ -17,7 +17,7 @@ const record = { version: 1, tabs: [{ kind: 'ssh', savedSessionId: 's1', current
 describe('restore tabs file', () => {
   it('keeps the record encrypted and gives it back once', () => {
     const io = memoryFs()
-    expect(saveRestoreTabs(PATH, record, 'master-pass', 1000, io)).toEqual({ success: true })
+    expect(saveRestoreTabs(PATH, record, 'master-pass', { now: 1000, io })).toEqual({ success: true })
     const written = io.files.get(PATH)
     // Nothing of the record is readable in the file
     expect(written).not.toContain('/var/log')
@@ -29,23 +29,30 @@ describe('restore tabs file', () => {
 
   it('does not save while locked or a record too large', () => {
     const io = memoryFs()
-    expect(saveRestoreTabs(PATH, record, null, 1000, io).success).toBe(false)
-    expect(saveRestoreTabs(PATH, { blob: 'x'.repeat(300 * 1024) }, 'p', 1000, io).success).toBe(false)
+    expect(saveRestoreTabs(PATH, record, null, { now: 1000, io }).success).toBe(false)
+    expect(saveRestoreTabs(PATH, { blob: 'x'.repeat(300 * 1024) }, 'p', { now: 1000, io }).success).toBe(false)
     expect(io.files.size).toBe(0)
   })
 
   it('drops an old file, a file from the future and one of another password, removing it', () => {
     const io = memoryFs()
-    saveRestoreTabs(PATH, record, 'master-pass', 1000, io)
+    saveRestoreTabs(PATH, record, 'master-pass', { now: 1000, io })
     expect(takeRestoreTabs(PATH, 'master-pass', 1000 + MAX_AGE_MS + 1, io)).toBeNull()
     expect(io.files.has(PATH)).toBe(false)
 
-    saveRestoreTabs(PATH, record, 'master-pass', 10 * 60 * 1000, io)
+    saveRestoreTabs(PATH, record, 'master-pass', { now: 10 * 60 * 1000, io })
     expect(takeRestoreTabs(PATH, 'master-pass', 1000, io)).toBeNull()
 
-    saveRestoreTabs(PATH, record, 'master-pass', 1000, io)
+    saveRestoreTabs(PATH, record, 'master-pass', { now: 1000, io })
     expect(takeRestoreTabs(PATH, 'other-pass', 2000, io)).toBeNull()
     expect(io.files.has(PATH)).toBe(false)
+  })
+
+  it('keeps the previous work after a normal exit until the next unlock, even after a day', () => {
+    const io = memoryFs()
+    saveRestoreTabs(PATH, record, 'master-pass', { now: 1000, io, source: 'close' })
+    expect(takeRestoreTabs(PATH, 'master-pass', 1000 + MAX_AGE_MS + 1, io)).toEqual({ savedAt: 1000, record, source: 'close' })
+    expect(takeRestoreTabs(PATH, 'master-pass', 1000 + MAX_AGE_MS + 2, io)).toBeNull()
   })
 
   it('ignores a file that is not one of ours', () => {

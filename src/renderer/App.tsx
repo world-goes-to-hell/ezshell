@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, useRef } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { RiDatabase2Line, RiComputerLine } from 'react-icons/ri'
 import { Sidebar } from './components/Sidebar/Sidebar'
@@ -17,8 +17,10 @@ import { WhatsNewDialog, BUNDLED_NOTES } from './components/WhatsNew/WhatsNewDia
 import { notesToShow, recentNotes, type VersionNotes } from './lib/releaseNotes'
 import type { SharedSession } from './lib/sessionShare'
 import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/QuickConnectModal'
+import { LocalProjectDialog, type LocalProjectTerminal } from './components/Modal/LocalProjectDialog'
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
 import { NewTabMenu } from './components/Terminal/NewTabMenu'
+import { AgentMessagesHost, AgentTabMessages } from './components/Terminal/AgentMessages'
 import { getDuplicateConfig } from './lib/duplicateConnection'
 import { tabHost, dropTabHostsExcept } from './lib/tabHosts'
 import { perFrame } from './lib/throttle'
@@ -37,13 +39,14 @@ import { sideWord } from './lib/paneDropZones'
 import { MERGE_BLOCKED_TITLE, mergeChoices, type MergeChoice } from './lib/tabMerge'
 import { mergeTabIntoPane } from './lib/tabToPane'
 import { setRestoreSource } from './lib/updateInstall'
-import { readRestoreRecord, type RestoreTab } from './lib/restoreTabs'
+import { buildRestoreRecord, readRestoreRecord, type RecordSource, type RestoreTab } from './lib/restoreTabs'
 import { restoreTabs } from './lib/restoreTabsRun'
 import { RestoreTabsBanner, type RestoreBannerState } from './components/Restore/RestoreTabsBanner'
 import { closeLocalPaneShells } from './lib/localPaneShells'
 import { UpdateNotification } from './components/Update/UpdateNotification'
 import { CommandPalette } from './components/CommandPalette'
 import { TabContextMenu } from './components/Terminal/TabContextMenu'
+import { TabRenameDialog } from './components/Terminal/TabRenameDialog'
 import { DUPLICATE_TAB_EVENT, OPEN_SNIPPET_MANAGER_EVENT } from './components/Terminal/useTerminalContextMenu'
 import { SnippetManager } from './components/Snippets/SnippetManager'
 import { StatsDashboard } from './components/Modal/StatsDashboard'
@@ -184,6 +187,7 @@ function App() {
   }
   const [connectModalOpen, setConnectModalOpen] = useState(false)
   const [quickConnectModalOpen, setQuickConnectModalOpen] = useState(false)
+  const [localProjectOpen, setLocalProjectOpen] = useState(false)
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false)
   const [settingsModalOpen, setSettingsModalOpen] = useState(false)
   const [snippetManagerOpen, setSnippetManagerOpen] = useState(false)
@@ -219,6 +223,15 @@ function App() {
   const terminalAreaRef = useRef<HTMLDivElement>(null)
   // Color and connect config of tabs popped out to their own window, restored when they merge back
   const detachedTabsRef = useRef(new Map<string, DetachedTab>())
+  const readRestoreSource = useCallback((): RecordSource => {
+    const { terminals, layout, activeTerminalId } = useTerminalStore.getState()
+    const sftp = useSftpStore.getState()
+    return {
+      terminals, layout, activeId: activeTerminalId,
+      sftpPathOf: tabId => sftp.isOpen(tabId) ? sftp.remotePath(tabId) : null,
+      detached: Array.from(detachedTabsRef.current.values())
+    }
+  }, [])
   const [splitPaneDraggingTabId, setSplitPaneDraggingTabId] = useState<string | null>(null)
   // A tab dragged onto a pane of another tab of the same session becomes a pane of that tab.
   // From the single tab strip the edges of the terminal area mean "split the screen" (drop zones below).
@@ -229,6 +242,7 @@ function App() {
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
   const [contextMenuTabId, setContextMenuTabId] = useState<string | null>(null)
+  const [renamingTab, setRenamingTab] = useState<{ id: string; title: string } | null>(null)
   const [isSettingsLoaded, setIsSettingsLoaded] = useState(false)
 
   // Split pane resize state
@@ -240,7 +254,7 @@ function App() {
   const [splitDropdownOpen, setSplitDropdownOpen] = useState<'primary' | 'secondary' | null>(null)
   const splitDropdownRef = useRef<HTMLDivElement>(null)
 
-  const { loadFromBackend, addSession, updateSession } = useSessionStore()
+  const { sessions, isLoading: areSessionsLoading, loadFromBackend, addSession, updateSession } = useSessionStore()
   const {
     terminals,
     activeTerminalId,
@@ -311,8 +325,7 @@ function App() {
           const { locked } = await window.electronAPI.isAppLocked()
           setIsLocked(locked)
           if (!locked) {
-            await loadSettings()
-            loadFromBackend()
+            await Promise.all([loadSettings(), loadFromBackend()])
           } else {
             // When locked, mark settings as loaded (will load after unlock)
             setIsSettingsLoaded(true)
@@ -456,11 +469,11 @@ function App() {
   useAppZoom()
 
   const handleUnlock = async () => {
+    const loadingSessions = loadFromBackend()
     setIsLocked(false)
     setHasMasterPassword(true)
     setIsSettingsLoaded(false) // Reset to false before loading
-    await loadSettings()
-    loadFromBackend()
+    await Promise.all([loadSettings(), loadingSessions])
   }
 
   // Keyboard shortcuts handler
@@ -482,7 +495,7 @@ function App() {
     },
     lockApp: async () => {
       if (hasMasterPassword) {
-        await window.electronAPI.lockApp()
+        await window.electronAPI.lockApp(buildRestoreRecord(readRestoreSource()))
         setIsLocked(true)
       }
     },
@@ -763,8 +776,8 @@ function App() {
   }
 
   // A terminal of this PC as a new tab (the shell runs in the main process)
-  const handleOpenLocalTerminal = async (): Promise<string | null> => {
-    const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24 })
+  const handleOpenLocalTerminal = async ({ cwd, agent, workspaceLabel }: Partial<LocalProjectTerminal> = {}): Promise<string | null> => {
+    const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd, agent })
     if (!result || !result.success) {
       toast.error('로컬 터미널을 열지 못했습니다', result ? result.error : '앱을 다시 시작해 주세요.')
       return null
@@ -773,8 +786,10 @@ function App() {
     const count = Array.from(store.terminals.values()).filter(info => info.local).length
     store.addTerminal(result.id, {
       id: result.id, host: '이 PC', username: '', connected: true,
-      title: count === 0 ? result.name : `${result.name} (${count + 1})`,
-      local: { shell: result.name }
+      title: workspaceLabel
+        ? (agent ? `${workspaceLabel} · ${agent === 'codex' ? 'Codex' : 'Claude Code'}` : workspaceLabel)
+        : (count === 0 ? result.name : `${result.name} (${count + 1})`),
+      local: { shell: result.name, cwd: result.cwd, workspaceLabel }
     })
     const { layout: current } = useTerminalStore.getState()
     if (current.mode === 'split' && current.activePaneType === 'secondary') {
@@ -789,31 +804,29 @@ function App() {
     if (origin && tabId) void flyToTab(origin, tabId)
   }
 
-  // ---- Tabs open before an update, opened again (docs/plan/2026-11-18-restore-tabs-after-update.md) ----
-  // The update notice writes the tabs down through this, popped-out ones included
-  useEffect(() => setRestoreSource(() => {
-    const { terminals: tabs, layout: current, activeTerminalId: activeId } = useTerminalStore.getState()
-    const sftp = useSftpStore.getState()
-    return {
-      terminals: tabs, layout: current, activeId,
-      sftpPathOf: (tabId: string) => (sftp.isOpen(tabId) ? sftp.remotePath(tabId) : null),
-      detached: Array.from(detachedTabsRef.current.values())
+  useEffect(() => {
+    const clearUpdateSource = setRestoreSource(readRestoreSource)
+    const offClose = window.electronAPI.onRestoreTabsBeforeClose?.(() => buildRestoreRecord(readRestoreSource()))
+    return () => {
+      clearUpdateSource()
+      offClose?.()
     }
-  }), [])
+  }, [readRestoreSource])
 
   const [restoreBanner, setRestoreBanner] = useState<RestoreBannerState | null>(null)
   const restoreCheckedRef = useRef(false)
   // Once, after the first unlock: the main process gives the record only once and removes it
   useEffect(() => {
-    if (isLocked || restoreCheckedRef.current || typeof window.electronAPI.restoreTabsTake !== 'function') return
+    if (isLocked || isCheckingLock || areSessionsLoading || restoreCheckedRef.current
+      || typeof window.electronAPI.restoreTabsTake !== 'function') return
     restoreCheckedRef.current = true
     window.electronAPI.restoreTabsTake()
       .then((taken) => {
         const record = taken ? readRestoreRecord(taken.record) : null
-        if (record) setRestoreBanner({ phase: 'ask', record })
+        if (record) setRestoreBanner({ phase: 'ask', record, source: taken?.source ?? 'update' })
       })
       .catch(() => { /* nothing to offer */ })
-  }, [isLocked])
+  }, [isLocked, isCheckingLock, areSessionsLoading])
 
   const handleRestoreTabs = async () => {
     if (restoreBanner?.phase !== 'ask') return
@@ -827,11 +840,11 @@ function App() {
         const result = await handleQuickConnect(session)
         return result.success && result.sessionId ? { id: result.sessionId } : { error: result.error || '연결하지 못했습니다.' }
       },
-      openLocal: () => handleOpenLocalTerminal(),
+      openLocal: ({ cwd, workspaceLabel }) => handleOpenLocalTerminal({ cwd, workspaceLabel }),
       onProgress: (done) => setRestoreBanner({ phase: 'running', done, total })
     })
     setRestoreBanner(outcome.failed.length === 0 && outcome.quick.length === 0 ? null : { phase: 'done', outcome })
-    if (outcome.failed.length === 0) toast.success('탭을 다시 열었습니다', `업데이트 전에 열려 있던 탭 ${outcome.opened}개`)
+    if (outcome.failed.length === 0) toast.success('탭을 다시 열었습니다', `이전에 열려 있던 탭 ${outcome.opened}개`)
   }
 
   // A quick connect from before the update: the connect dialog with its login filled in (no password was kept)
@@ -937,6 +950,7 @@ function App() {
         onPickSession={() => setSessionPickerOpen(true)}
         onNewSession={handleNewConnection}
         onLocalTerminal={() => void handleOpenLocalTerminal()}
+        onLocalProject={() => setLocalProjectOpen(true)}
       />
     )
   }
@@ -1138,10 +1152,9 @@ function App() {
   }
 
   const handleContextRename = () => {
-    if (contextMenuTabId) {
-      // TODO: Implement rename functionality
-      console.log('Rename tab:', contextMenuTabId)
-    }
+    if (!contextMenuTabId) return
+    const tab = terminals.get(contextMenuTabId)
+    if (tab) setRenamingTab({ id: contextMenuTabId, title: tab.title || `${tab.username}@${tab.host}` })
   }
 
   const handleContextSplitHorizontal = () => {
@@ -1208,11 +1221,13 @@ function App() {
           onEditSession={handleEditSession}
           onDuplicateSession={handleDuplicateSession}
           onOpenQuickConnect={handleOpenQuickConnect}
+          onPickSession={() => setSessionPickerOpen(true)}
           onAddSession={handleAddSession}
           onImportSession={(folderId) => setImportTarget({ folderId })}
           onStatsClick={() => setStatsDashboardOpen(true)}
           onBatchClick={() => setBatchModalOpen(true)}
           onLocalTerminal={() => void handleOpenLocalTerminal()}
+          onLocalProject={() => setLocalProjectOpen(true)}
           onCloseTerminal={handleCloseTerminal}
         />
         <main className="main-area" id="main-content">
@@ -1267,6 +1282,7 @@ function App() {
                         {terminal.db && <RiDatabase2Line size={13} className="tab-db-icon" aria-label="DB" />}
                         {terminal.local && <RiComputerLine size={13} className="tab-local-icon" aria-label="로컬" />}
                         <span data-tab-label>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
+                        {terminal.local && <AgentTabMessages tabId={sessionId} />}
                         {sessionId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[sessionId]}`} />}
                         {terminal.hasActivity && <span className="activity-indicator" />}
                         <motion.button
@@ -1284,6 +1300,7 @@ function App() {
                     onPickSession={() => setSessionPickerOpen(true)}
                     onNewSession={handleNewConnection}
                     onLocalTerminal={() => void handleOpenLocalTerminal()}
+                    onLocalProject={() => setLocalProjectOpen(true)}
                   />
                 </div>
               )}
@@ -1468,7 +1485,11 @@ function App() {
               )}
             </>
           ) : (
-            <WelcomeScreen onNewConnection={handleNewConnection} onLocalTerminal={handleOpenWelcomeLocalTerminal} />
+            <WelcomeScreen
+              onNewConnection={handleNewConnection}
+              onLocalTerminal={handleOpenWelcomeLocalTerminal}
+              onPickSession={sessions.length > 0 ? () => setSessionPickerOpen(true) : undefined}
+            />
           )}
         </main>
       </div>
@@ -1507,6 +1528,13 @@ function App() {
         onOpenChange={setQuickConnectModalOpen}
         onConnect={handleQuickConnectSubmit}
       />
+      {localProjectOpen && (
+        <LocalProjectDialog
+          onClose={() => setLocalProjectOpen(false)}
+          onOpenTerminal={async options => Boolean(await handleOpenLocalTerminal(options))}
+        />
+      )}
+      <AgentMessagesHost />
 
       <SettingsModal
         open={settingsModalOpen}
@@ -1551,6 +1579,16 @@ function App() {
         mergeChoices={contextMenuTabId && !terminals.get(contextMenuTabId)?.db ? mergeChoices(terminals, contextMenuTabId) : undefined}
         onMergeInto={handleContextMergeInto}
       />
+      {renamingTab && (
+        <TabRenameDialog
+          title={renamingTab.title}
+          onClose={() => setRenamingTab(null)}
+          onSave={title => {
+            useTerminalStore.getState().updateTerminalTitle(renamingTab.id, title)
+            setRenamingTab(null)
+          }}
+        />
+      )}
       {mergeHover && (
         <div className={`tab-merge-marker${mergeHover.blocked ? ' is-blocked' : ''}${mergeHover.onTab ? ' on-tab' : ''}`} style={mergeHover.box} role="status">
           <span>{mergeHover.blocked ?? (mergeHover.place?.isVacant ? '여기에 놓으면 이 빈 자리로 병합'

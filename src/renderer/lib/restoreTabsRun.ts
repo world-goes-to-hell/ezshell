@@ -10,7 +10,7 @@ export interface RestoreDeps {
   /** Opens a tab of a saved session the way the sidebar does; the new tab's id, or why not */
   openSaved: (savedSessionId: string) => Promise<{ id?: string; error?: string }>
   /** Opens a local terminal tab; its id, or null */
-  openLocal: () => Promise<string | null>
+  openLocal: (tab: Extract<RestoreTab, { kind: 'local' }>) => Promise<string | null>
   /** Tells how far it got */
   onProgress?: (done: number, total: number) => void
 }
@@ -114,7 +114,7 @@ export async function restoreTabs(record: RestoreRecord, deps: RestoreDeps): Pro
         }
         goBackToFolder(opened.id, tab)
       } else if (tab.kind === 'local') {
-        const id = await deps.openLocal()
+        const id = await deps.openLocal(tab)
         if (!id) throw new Error('로컬 터미널을 열지 못했습니다.')
         ids[index] = id
         shapeTab(id, tab)

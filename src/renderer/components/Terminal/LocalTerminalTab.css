@@ -38,6 +38,18 @@
   background: var(--terminal-bg, var(--bg-primary));
 }
 
+/* Split: mark the pane that receives keyboard input, the same way as SSH split panes
+   (styles/app/update-notification.css): an inset overlay, so edges along an overflow:hidden
+   ancestor are not clipped at fractional zoom, xterm keeps its size and clicks pass through */
+.local-terminal-tab.is-split .local-terminal-pane:focus-within::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 10; /* above xterm's viewport and helper layers */
+  border: 2px solid var(--accent);
+  pointer-events: none;
+}
+
 .local-terminal-pane-status {
   align-items: center;
   justify-content: center;

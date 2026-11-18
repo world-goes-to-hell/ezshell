@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { RiTerminalBoxFill, RiAddFill, RiComputerLine } from 'react-icons/ri'
+import { RiTerminalBoxFill, RiAddFill, RiComputerLine, RiSearchLine } from 'react-icons/ri'
 import { welcomeContainerVariants, welcomeItemVariants, floatVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { SPRINGS } from '../../lib/animation/config'
@@ -7,9 +7,10 @@ import { SPRINGS } from '../../lib/animation/config'
 interface WelcomeScreenProps {
   onNewConnection: () => void
   onLocalTerminal: (button: HTMLButtonElement) => void
+  onPickSession?: () => void
 }
 
-export function WelcomeScreen({ onNewConnection, onLocalTerminal }: WelcomeScreenProps) {
+export function WelcomeScreen({ onNewConnection, onLocalTerminal, onPickSession }: WelcomeScreenProps) {
   const reducedMotion = useReducedMotion()
 
   return (
@@ -43,6 +44,12 @@ export function WelcomeScreen({ onNewConnection, onLocalTerminal }: WelcomeScree
         <RiAddFill size={20} />
         <span>새 연결</span>
       </motion.button>
+      {onPickSession && (
+        <motion.button className="welcome-pick-session" onClick={onPickSession} variants={welcomeItemVariants}>
+          <RiSearchLine size={16} />
+          <span>저장된 세션 찾기</span>
+        </motion.button>
+      )}
       <motion.button
         className="welcome-local-terminal"
         onClick={event => onLocalTerminal(event.currentTarget)}

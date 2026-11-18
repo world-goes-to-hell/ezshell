@@ -450,8 +450,36 @@ function registerSftpIpc(ctx) {
       }
     }
 
-    cancel(id) {
+    async retry(id, overwrite) {
+      const transfer = this.queue.find(t => t.id === id && t.status === 'error');
+      if (!transfer) return { success: false };
+      const failedAt = transfer.startTime;
+
+      const sftp = sftpOf(this.sessionId);
+      if (!sftp) return { success: false, error: 'SFTP 연결이 끊겼습니다. 연결한 뒤 다시 시도하세요.' };
+      const isDownload = transfer.type === 'download';
+      const targetPath = isDownload ? transfer.localPath : transfer.remotePath;
+      try {
+        const stats = isDownload
+          ? await fs.promises.lstat(targetPath)
+          : await new Promise((resolve, reject) => sftp.stat(targetPath, (error, result) => error ? reject(error) : resolve(result)));
+        if (stats.isDirectory()) return { success: false, error: '대상 경로에 같은 이름의 폴더가 있습니다.' };
+        if (!overwrite) return { success: false, needsOverwrite: true };
+      } catch (error) {
+        if (error.code !== (isDownload ? 'ENOENT' : 2)) return { success: false, error: error.message };
+      }
+
+      // Another window may have already retried or dismissed the error while the target was checked.
+      if (transfer.status !== 'error' || transfer.startTime !== failedAt || !this.queue.includes(transfer)) return { success: false };
+      Object.assign(transfer, { status: 'queued', progress: 0, speed: 0, size: undefined, error: undefined, startTime: null });
+      this.emitQueueUpdate();
+      this.processQueue();
+      return { success: true };
+    }
+
+    cancel(id, failedOnly) {
       const transfer = this.queue.find(t => t.id === id);
+      if (failedOnly && transfer?.status !== 'error') return;
       if (transfer) {
         const controller = this.abortControllers.get(id);
         if (controller) {
@@ -466,7 +494,7 @@ function registerSftpIpc(ctx) {
     }
 
     clearCompleted() {
-      this.queue = this.queue.filter(t => t.status !== 'completed' && t.status !== 'error');
+      this.queue = this.queue.filter(t => t.status !== 'completed');
       this.emitQueueUpdate();
     }
 
@@ -563,10 +591,7 @@ function registerSftpIpc(ctx) {
             }
           });
 
-          readStream.on('end', () => {
-            writeStream.end();
-            resolve();
-          });
+          writeStream.on('finish', resolve);
 
           readStream.on('error', (err) => {
             writeStream.destroy();
@@ -799,9 +824,13 @@ function registerSftpIpc(ctx) {
     return { success: true };
   });
 
-  ipcMain.handle('sftp-transfer-cancel', (event, { sessionId, transferId }) => {
+  ipcMain.handle('sftp-transfer-retry', (event, { sessionId, transferId, overwrite }) => {
+    return getTransferQueue(sessionId).retry(transferId, overwrite === true);
+  });
+
+  ipcMain.handle('sftp-transfer-cancel', (event, { sessionId, transferId, failedOnly }) => {
     const queue = getTransferQueue(sessionId);
-    queue.cancel(transferId);
+    queue.cancel(transferId, failedOnly === true);
     return { success: true };
   });
 

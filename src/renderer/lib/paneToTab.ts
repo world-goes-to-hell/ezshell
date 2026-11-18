@@ -115,15 +115,15 @@ function promoteLocal(owner: TerminalInfo, replacement: PaneId): string | null {
 
 function moveLocal(owner: TerminalInfo, pane: PaneId, replacement?: PaneId): TerminalInfo | { error: string } {
   const store = useTerminalStore.getState()
-  const shell = owner.local!.shell
+  const { shell, cwd, workspaceLabel } = owner.local!
   const shellId = replacement ? promoteLocal(owner, replacement) : releaseLocalPaneShell(owner.id, pane)
   if (!shellId) return { error: '이 칸의 셸이 아직 열리지 않았습니다.' }
   let id = shellId
   while (store.terminals.has(id)) id = `local-tab-${id}`
   const count = Array.from(store.terminals.values()).filter(info => info.local).length
   return {
-    id, host: '이 PC', username: '', connected: true, title: `${shell} (${count + 1})`,
-    local: { shell, shellId }
+    id, host: '이 PC', username: '', connected: true, title: `${workspaceLabel ?? shell} (${count + 1})`,
+    local: { shell, shellId, cwd, workspaceLabel }
   }
 }
 

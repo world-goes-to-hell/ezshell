@@ -43,6 +43,7 @@
 
 .settings-tabs-list {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 4px;
   background: var(--bg-tertiary);
@@ -52,13 +53,13 @@
 }
 
 .settings-tab-trigger {
-  /* Six tabs in one row: each as wide as its label needs, never wrapped onto two lines */
+  /* Keep each label together as the tabs wrap in narrower windows. */
   flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 10px 10px;
+  padding: 10px 7px;
   white-space: nowrap;
   border: none;
   border-radius: var(--radius-sm);

@@ -123,7 +123,7 @@ function writeSafely(fileSystem, filePath, originalText, nextText) {
  * `renamedFrom` lists the names that were removed. Nothing is removed on a conflict.
  * @returns {{ result: 'added'|'replaced'|'unchanged'|'conflict', backupPath: string|null, shadowedProjects: string[], renamedFrom: string[], existingUrl?: string }}
  */
-function applyServerEntry({ filePath, name, entry, overwrite = false, createIfMissing = false, legacyNames = [], fileSystem = fs }) {
+function applyServerEntry({ filePath, name, entry, overwrite = false, createIfMissing = false, legacyNames = [], ownsExisting = () => false, ownsLegacy = () => true, fileSystem = fs }) {
   const original = readFile(fileSystem, filePath)
   if (original === null && !createIfMissing) {
     throw new SetupError(`${filePath} 이(가) 없습니다. Claude Code 를 한 번 실행한 뒤 다시 시도하세요.`)
@@ -133,13 +133,13 @@ function applyServerEntry({ filePath, name, entry, overwrite = false, createIfMi
   const servers = doc.mcpServers || {}
   const shadowedProjects = findShadowedProjects(doc, name)
   const existing = Object.hasOwn(servers, name) ? servers[name] : undefined
-  const renamedFrom = legacyNames.filter(legacy => legacy !== name && Object.hasOwn(servers, legacy))
+  const renamedFrom = legacyNames.filter(legacy => legacy !== name && Object.hasOwn(servers, legacy) && ownsLegacy(servers[legacy]))
   const isSame = existing !== undefined && JSON.stringify(existing) === JSON.stringify(entry)
 
   if (isSame && renamedFrom.length === 0) {
     return { result: 'unchanged', backupPath: null, shadowedProjects, renamedFrom }
   }
-  if (existing !== undefined && !isSame && !overwrite) {
+  if (existing !== undefined && !isSame && !overwrite && !ownsExisting(existing)) {
     // Only the url: the old headers may hold a token
     const existingUrl = isPlainObject(existing) && typeof existing.url === 'string' ? existing.url : ''
     return { result: 'conflict', existingUrl, backupPath: null, shadowedProjects, renamedFrom: [] }

@@ -6,6 +6,7 @@ import 'xterm/css/xterm.css'
 import { RiToolsLine, RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine, RiCloseLine } from 'react-icons/ri'
 import { useThemeStore } from '../../stores/themeStore'
 import { useTerminalStore } from '../../stores/terminalStore'
+import { toast } from '../../stores/toastStore'
 import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
 import { MAIN_PANE, MAX_PANES, singlePane, layoutOf, leafCount, paneIds, closePane, equalize, paneBox, type PaneId } from '../../lib/splitTree'
 import { ensureLocalPaneShell, closeLocalPaneShells } from '../../lib/localPaneShells'
@@ -13,6 +14,7 @@ import { TerminalContextMenu, MENU_SEPARATOR, type TerminalMenuGroup } from './T
 import { commonTerminalItems } from './terminalMenuCommon'
 import { attachLogHighlight } from './terminalLogHighlight'
 import { PaneArrival, SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
+import { AgentPaneMessages } from './AgentMessages'
 import './LocalTerminalTab.css'
 
 interface LocalTerminalTabProps {
@@ -46,6 +48,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const hostRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const pasteRef = useRef<(() => void) | undefined>(undefined)
   const [exit, setExit] = useState<{ code: number | null } | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const fontSize = useTerminalStore(state => state.fontSize)
@@ -90,6 +93,42 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     const disableCopyOnSelect = enableCopyOnSelect(terminal)
     const logHighlight = attachLogHighlight(terminal)
 
+    let isDisposed = false
+    let deferredInput: string[] | null = null
+    const write = (data: string) => window.electronAPI.localShellWrite?.(shellId, data)
+    const startComposing = () => window.electronAPI.localShellComposing?.(shellId, true)
+    const endComposing = () => window.electronAPI.localShellComposing?.(shellId, false)
+    host.addEventListener('compositionstart', startComposing, true)
+    host.addEventListener('compositionend', endComposing, true)
+    const readClipboard = window.electronAPI.localShellClipboard
+    const paste = async () => {
+      if (!readClipboard || isDisposed || deferredInput) return
+      deferredInput = []
+      let text = ''
+      try {
+        const result = await readClipboard(shellId)
+        if (result.success) text = result.text
+        else if (!isDisposed) toast.error('붙여넣기 실패', result.error)
+      } catch {
+        if (!isDisposed) toast.error('붙여넣기 실패', '클립보드에 접근할 수 없습니다.')
+      } finally {
+        // A following Enter must reach the shell after the clipboard contents.
+        const queued = deferredInput
+        deferredInput = null
+        if (!isDisposed) {
+          if (text) terminal.paste(text)
+          queued.forEach(write)
+        }
+      }
+    }
+    pasteRef.current = readClipboard ? () => void paste() : undefined
+    const onNativePaste = (event: ClipboardEvent) => {
+      if (!readClipboard || !Array.from(event.clipboardData?.items ?? []).some(item => item.type.startsWith('image/'))) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      void paste()
+    }
+    host.addEventListener('paste', onNativePaste, true)
     terminal.attachCustomKeyEventHandler((event) => {
       // Ctrl+C with a selection copies instead of interrupting
       if (event.ctrlKey && event.key === 'c' && event.type === 'keydown') {
@@ -99,15 +138,19 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
           return false
         }
       }
-      // Ctrl+V = paste, done by xterm from the native paste event
-      if (isPasteShortcut(event)) return false
+      if (isPasteShortcut(event)) {
+        if (readClipboard) {
+          event.preventDefault()
+          if (!event.repeat) void paste()
+        }
+        return false
+      }
       return true
     })
-    terminal.onData(data => window.electronAPI.localShellWrite?.(shellId, data))
+    terminal.onData(data => { if (deferredInput) deferredInput.push(data); else write(data) })
 
     // Output sent before the answer to `attach` is already part of that answer, so it is not drawn twice
     let isAttached = false
-    let isDisposed = false
     const stopData = window.electronAPI.onLocalShellData?.(({ id, data }) => {
       if (id === shellId && isAttached) terminal.write(data)
     })
@@ -134,6 +177,11 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
 
     return () => {
       isDisposed = true
+      pasteRef.current = undefined
+      host.removeEventListener('compositionstart', startComposing, true)
+      host.removeEventListener('compositionend', endComposing, true)
+      endComposing()
+      host.removeEventListener('paste', onNativePaste, true)
       stopData?.()
       stopExit?.()
       window.removeEventListener('theme-changed', onTheme)
@@ -181,7 +229,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       action()
       window.setTimeout(() => terminal.focus(), 0)
     }
-    const items = commonTerminalItems(terminal, tabName, then)
+    const items = commonTerminalItems(terminal, tabName, then, pasteRef.current)
     top = items.top
     const tree = tab?.splitTree ?? singlePane()
     const isSplit = tab?.isSplit === true
@@ -221,8 +269,9 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   }
 
   return (
-    <div className="local-terminal-pane" data-pane={pane} style={style}>
+    <div className="local-terminal-pane" data-pane={pane} data-local-shell-id={shellId} data-local-tab-id={tabId} style={style}>
       <div ref={hostRef} className="local-terminal-host" onContextMenu={onContextMenu} />
+      <AgentPaneMessages shellId={shellId} tabId={tabId} />
       {exit && (
         <div className="local-terminal-exit" role="status">
           셸이 종료되었습니다{exit.code !== null && exit.code !== 0 ? ` (종료 코드 ${exit.code})` : ''}.

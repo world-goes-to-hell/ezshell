@@ -14,7 +14,7 @@ export type RestoreTab =
   | { kind: 'ssh'; savedSessionId: string; title?: string; color?: string; splitTree?: SplitNode; paneSeq?: number; currentPath?: string; sftpPath?: string }
   /** Not saved as a session: shown so the user can connect again (no password is kept) */
   | { kind: 'quick'; title?: string; host: string; port: number; username: string; authType?: 'password' | 'privateKey'; privateKeyPath?: string }
-  | { kind: 'local'; title?: string; splitTree?: SplitNode; paneSeq?: number }
+  | { kind: 'local'; title?: string; splitTree?: SplitNode; paneSeq?: number; cwd?: string; workspaceLabel?: string }
   /** A DB tab opened with a saved account, on the SSH tab at index `parent` */
   | { kind: 'db'; parent: number; savedAccountId: string; title?: string }
 
@@ -31,6 +31,7 @@ export interface RestoreRecord {
 export interface DetachedTabSource {
   connectConfig?: TerminalInfo['connectConfig']
   color?: string
+  title?: string
 }
 
 export interface RecordSource {
@@ -67,7 +68,7 @@ function tabOf(info: TerminalInfo, sftpPath: string | null): RestoreTab | null {
   const title = text(info.title)
   const splitTree = withoutVacants(info.splitTree)
   const paneSeq = splitTree ? info.paneSeq : undefined
-  if (info.local) return { kind: 'local', title, splitTree, paneSeq }
+  if (info.local) return { kind: 'local', title, splitTree, paneSeq, cwd: path(info.local.cwd), workspaceLabel: text(info.local.workspaceLabel) }
   const config = info.connectConfig
   if (!config) return null
   if (config.savedSessionId) {
@@ -82,7 +83,7 @@ function tabOf(info: TerminalInfo, sftpPath: string | null): RestoreTab | null {
   }
 }
 
-/** What to write down right before the update: the tabs in strip order, then popped-out ones */
+/** The tabs in strip order, then popped-out ones. */
 export function buildRestoreRecord(source: RecordSource): RestoreRecord {
   const tabs: RestoreTab[] = []
   const indexOf = new Map<string, number>()
@@ -95,7 +96,7 @@ export function buildRestoreRecord(source: RecordSource): RestoreRecord {
     tabs.push(tab)
   }
   for (const detached of source.detached) {
-    const tab = detached.connectConfig ? tabOf({ id: '', host: '', username: '', connected: true, connectConfig: detached.connectConfig, color: detached.color }, null) : null
+    const tab = detached.connectConfig ? tabOf({ ...detached, id: '', host: '', username: '', connected: true }, null) : null
     if (tab) tabs.push(tab)
   }
   // DB tabs come after the tab whose connection they use, so it is open by then
@@ -174,7 +175,7 @@ function readTab(value: unknown, index: number): RestoreTab | null {
       return { kind: 'quick', title, host, port, username, authType, privateKeyPath: authType === 'privateKey' ? path(t.privateKeyPath) : undefined }
     }
     case 'local':
-      return { kind: 'local', title, splitTree: tree, paneSeq }
+      return { kind: 'local', title, splitTree: tree, paneSeq, cwd: path(t.cwd), workspaceLabel: text(t.workspaceLabel) }
     case 'db': {
       const savedAccountId = text(t.savedAccountId, 100)
       const parent = typeof t.parent === 'number' && Number.isInteger(t.parent) && t.parent >= 0 && t.parent < index ? t.parent : -1

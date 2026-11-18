@@ -1,0 +1,79 @@
+.agent-messages-dialog { width: 560px; max-width: min(92vw, 560px); }
+.agent-messages-button { position: relative; }
+.agent-messages-button .agent-mail-count { position: absolute; top: -3px; right: -5px; }
+.agent-mail-count {
+  border-radius: 10px;
+  padding: 0 4px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 10px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.agent-tab-mail { flex: 0 0 auto; margin-left: 3px; }
+.agent-pane-mail {
+  position: absolute;
+  top: 5px;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  cursor: pointer;
+}
+.agent-pane-mail:hover { color: var(--accent); }
+.agent-message-flight {
+  position: fixed;
+  z-index: 120;
+  pointer-events: none;
+  padding: 4px 9px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: var(--shadow-lg);
+}
+.agent-message-thread {
+  max-height: 36vh;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.agent-thread-message {
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  min-width: 0;
+}
+.agent-thread-message header { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.agent-thread-message header span { color: var(--text-muted); }
+.agent-thread-message p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.agent-thread-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+.agent-thread-actions button, .agent-message-compose > button[type='button'] {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+}
+.agent-message-compose textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+.agent-message-compose .btn-primary { margin-left: auto; }
+.agent-message-compose .btn-primary:disabled { opacity: .55; cursor: default; }
+.agent-message-error { color: var(--error); font-size: 13px; }

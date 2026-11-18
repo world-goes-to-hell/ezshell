@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification, Menu, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const userDataDir = require('./src/userDataDir.js');
@@ -238,6 +238,7 @@ function createWindow() {
   windowState.trackWindow(mainWindow, windowStatePath, mainWindowFill
     ? { normalBounds: mainWindowFill.normalBounds, isMaximized: mainWindowFill.isFilled }
     : undefined);
+  restoreTabsIpc.trackClose(mainWindow);
 
   // Load from Vite dev server in development, built files in production
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -309,6 +310,9 @@ app.whenReady().then(() => {
   if (process.platform === 'darwin') Menu.setApplicationMenu(Menu.buildFromTemplate(macMenuTemplate(app.name)));
   createWindow();
   startMcp();
+  if (fs.existsSync(agentBridgeFile)) {
+    void agentMessages.enableExternalBridge().catch(error => console.error('Failed to start the agent message bridge:', error.code || error.name));
+  }
 
   // Auto-updater setup (production only)
   if (!process.env.ELECTRON_RENDERER_URL && !process.argv.includes('--dev')) {
@@ -410,33 +414,95 @@ const dbIpc = registerDbIpc({
 // ==================== Local terminal tabs ====================
 // Shells of this PC (src/localShell.js). Only the main window opens and drives them.
 const fromMainWindow = (event) => Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+const sendToLocalWindow = (channel, payload) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+};
 let localShells = null;
+const agentBridgeFile = path.join(userDataPath, 'agent-message-connection');
+const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages({
+  notify: sendToLocalWindow, isLocked: () => isAppLocked,
+  onInboxChanged: id => localShells?.wakeInbox(id),
+  bridgeFile: agentBridgeFile
+});
+const { installAgentMessageMcp } = require('./src/ipc/agentMessageSetup.js');
+const agentSetupInProgress = new Set();
+ipcMain.handle('agent-message-mcp-setup', async (event, kind) => {
+  if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
+  if (!['codex', 'claude'].includes(kind)) return { success: false, error: '지원하지 않는 실행 도구입니다.' };
+  if (agentSetupInProgress.has(kind)) return { success: false, error: '이미 등록 중입니다.' };
+  agentSetupInProgress.add(kind);
+  try {
+    const result = await installAgentMessageMcp(kind, { bridgeFile: agentBridgeFile, enableBridge: agentMessages.enableExternalBridge });
+    return { success: true, result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  } finally {
+    agentSetupInProgress.delete(kind);
+  }
+});
 function getLocalShells() {
   if (!localShells) {
     // Loaded on first use: a native module, and most runs of the app never open a local terminal
     const pty = require('node-pty');
     localShells = createLocalShells({
       spawn: pty.spawn,
-      send: (channel, payload) => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
-      }
+      send: sendToLocalWindow,
+      agents: agentMessages
     });
   }
   return localShells;
 }
-ipcMain.handle('local-shell-open', (event, size) => {
+ipcMain.handle('local-shell-open', async (event, size) => {
   if (!fromMainWindow(event)) return { success: false, error: '본창에서만 열 수 있습니다.' };
+  if (isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
   try {
+    if (size?.agent === 'codex' || size?.agent === 'claude') {
+      await agentMessages.ready();
+      if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
+    }
     return { success: true, ...getLocalShells().open(size || {}) };
   } catch (err) {
     return { success: false, error: err.message };
   }
 });
 ipcMain.handle('local-shell-attach', (event, id) => (fromMainWindow(event) && localShells ? localShells.attach(id) : null));
+ipcMain.handle('local-shell-working-agent', (event, ids) =>
+  Boolean(fromMainWindow(event) && !isAppLocked && Array.isArray(ids) && ids.length <= 20 && localShells?.hasWorkingAgent(ids))
+);
 ipcMain.on('local-shell-write', (event, { id, data }) => { if (fromMainWindow(event)) localShells?.write(id, data); });
+ipcMain.on('local-shell-composing', (event, { id, value }) => {
+  if (fromMainWindow(event) && typeof value === 'boolean') localShells?.setComposing(id, value);
+});
 ipcMain.on('local-shell-resize', (event, { id, cols, rows }) => { if (fromMainWindow(event)) localShells?.resize(id, cols, rows); });
 ipcMain.on('local-shell-close', (event, id) => { if (fromMainWindow(event)) localShells?.close(id); });
-app.on('will-quit', () => localShells?.closeAll());
+const localTerminalClipboard = require('./src/ipc/localTerminalClipboard.js').createLocalTerminalClipboard(clipboard);
+ipcMain.handle('local-shell-clipboard', (event, id) => {
+  if (!fromMainWindow(event) || isAppLocked || !localShells?.isRunning(id)) return { success: true, text: '' };
+  try {
+    return { success: true, text: localTerminalClipboard.read() };
+  } catch (error) {
+    return { success: false, error: error.code ? '클립보드 이미지를 저장하지 못했습니다.' : error.message };
+  }
+});
+app.on('will-quit', () => localTerminalClipboard.dispose());
+app.on('will-quit', () => {
+  localShells?.closeAll();
+  agentMessages.stop();
+});
+ipcMain.handle('agent-messages-state', event =>
+  fromMainWindow(event) && !isAppLocked ? agentMessages.snapshot() : null
+);
+ipcMain.handle('agent-message-send', (event, request) => {
+  if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
+  try { return { success: true, ...agentMessages.sendAsUser(request ?? {}) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+ipcMain.handle('agent-message-ack', (event, id) => {
+  if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
+  try { return { success: true, ...agentMessages.acknowledge(id) }; }
+  catch (error) { return { success: false, error: error.message }; }
+});
+require('./src/ipc/localProjects.js').registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked: () => isAppLocked });
 
 // A query result the user chose to export ("추출" in a DB tab or DB window), saved where they pick.
 // The only way a result reaches the disk; text or the bytes of a spreadsheet file.
@@ -633,6 +699,7 @@ ipcMain.handle('setup-master-password', async (event, { password }) => {
   masterPasswordVerification = verification;
   currentMasterPassword = password;
   isAppLocked = false;
+  localShells?.wakeInboxes();
   void remoteAccess.start();
 
   return { success: true };
@@ -651,6 +718,7 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
   if (cryptoUtil.verifyPassword(password, verification.hash, verification.salt)) {
     currentMasterPassword = password;
     isAppLocked = false;
+    localShells?.wakeInboxes();
     resealSessionsFile();
     void remoteAccess.start();
     return { success: true };
@@ -660,7 +728,8 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
 });
 
 // Lock the app
-ipcMain.handle('lock-app', async () => {
+ipcMain.handle('lock-app', async (event, restoreRecord) => {
+  if (fromMainWindow(event)) restoreTabsIpc.rememberBeforeLock(restoreRecord);
   // Write pending history while the password is still known, then drop the decrypted copy
   flushCommandHistory();
   forgetCommandHistory();
@@ -1237,8 +1306,8 @@ const containers = registerContainerIpc({
   isLocked: () => isAppLocked
 });
 
-// The tabs open when an update is installed, opened again after it: src/ipc/restoreTabs.js
-require('./src/ipc/restoreTabs.js').registerRestoreTabsIpc({
+// The tabs open at exit or before an update: src/ipc/restoreTabs.js
+const restoreTabsIpc = require('./src/ipc/restoreTabs.js').registerRestoreTabsIpc({
   ipcMain, app, fromMainWindow,
   // Declared further down the file: looked up when a request arrives, not now
   activeTransferCount: () => activeTransferCount(),

@@ -4,7 +4,8 @@
 // attaches to the same shell, and a shell is closed only when its pane leaves the split or its
 // tab closes.
 
-import type { PaneId } from './splitTree'
+import { MAIN_PANE, type PaneId } from './splitTree'
+import { useTerminalStore } from '../stores/terminalStore'
 
 export type LocalPaneShell = { ok: true; id: string } | { ok: false; error: string }
 
@@ -13,6 +14,13 @@ const opened = new Map<string, string>()
 const keyOf = (tabId: string, pane: PaneId) => `${tabId}\n${pane}`
 
 export const hasLocalPaneShell = (tabId: string, pane: PaneId): boolean => opened.has(keyOf(tabId, pane))
+
+/** Reads the current shell without opening a pane. A promoted main shell can have its own ID. */
+export function getLocalPaneShellId(tabId: string, pane: PaneId): string | undefined {
+  const local = useTerminalStore.getState().terminals.get(tabId)?.local
+  if (!local) return undefined
+  return pane === MAIN_PANE ? local.shellId ?? tabId : opened.get(keyOf(tabId, pane))
+}
 
 /** The pane's shell, opened on first ask (asked twice at once, it is still opened once) */
 export function ensureLocalPaneShell(tabId: string, pane: PaneId): Promise<LocalPaneShell> {
@@ -24,7 +32,8 @@ export function ensureLocalPaneShell(tabId: string, pane: PaneId): Promise<Local
   const isStillWanted = () => opening.get(key) === holder.promise
   holder.promise = (async (): Promise<LocalPaneShell> => {
     try {
-      const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24 })
+      const cwd = useTerminalStore.getState().terminals.get(tabId)?.local?.cwd
+      const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd })
       if (!result) return { ok: false, error: '앱을 다시 시작해 주세요.' }
       if (!result.success) return { ok: false, error: result.error }
       // The pane was closed while the shell was opening: nobody will use it

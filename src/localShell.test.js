@@ -34,6 +34,25 @@ describe('defaultShell', () => {
 })
 
 describe('createLocalShells', () => {
+  it('continues through PTY output and exit when the message registration has no status callbacks', () => {
+    const pty = fakePty()
+    const close = vi.fn()
+    const send = vi.fn()
+    const shells = createLocalShells({
+      spawn: () => pty,
+      send,
+      agents: { register: () => ({ env: {}, close }) },
+      shell: { file: 'sh', args: [], name: 'sh' },
+      cwd: '/home',
+      env: {}
+    })
+    const { id } = shells.open({ agent: 'claude' })
+    pty.emit('\x1b]0;✳ Claude Code\x07')
+    pty.exit({ exitCode: 0 })
+    expect(send).toHaveBeenCalledWith('local-shell-exit', { id, exitCode: 0 })
+    expect(close).toHaveBeenCalledOnce()
+  })
+
   it('opens a shell with a clamped size and forwards its output', () => {
     const { shells, ptys, sent } = setup()
     const { id, name } = shells.open({ cols: 100000, rows: 'x' })
@@ -97,5 +116,55 @@ describe('createLocalShells', () => {
     const { shells } = setup()
     for (let i = 0; i < MAX_SHELLS; i++) shells.open()
     expect(() => shells.open()).toThrow(/10개/)
+  })
+
+  it('tracks the activity of the launched agent across split OSC sequences', () => {
+    const { shells, ptys } = setup()
+    const { id } = shells.open({ agent: 'claude' })
+    expect(shells.hasWorkingAgent([id])).toBe(false)
+    ptys[0].emit('\x1b]0;⠋')
+    ptys[0].emit(' Codex\x07')
+    expect(shells.hasWorkingAgent([id])).toBe(true)
+    ptys[0].emit('\x1b]2;Codex\x1b')
+    ptys[0].emit('\\')
+    expect(shells.hasWorkingAgent([id])).toBe(false)
+    ptys[0].emit('\x1b]9;4;3\x07')
+    expect(shells.hasWorkingAgent([id])).toBe(true)
+    ptys[0].exit({ exitCode: 0 })
+    expect(shells.hasWorkingAgent([id])).toBe(false)
+  })
+
+  it('ignores Codex startup progress and an unsubmitted draft, then reports work after submission', () => {
+    const { shells, ptys } = setup()
+    const { id } = shells.open({ agent: 'codex' })
+    ptys[0].emit('\x1b]0;⠋ ezshell\x07\x1b]9;4;3\x07')
+    expect(shells.hasWorkingAgent([id])).toBe(false)
+    shells.write(id, '\x1b[I')
+    shells.write(id, '\r')
+    expect(shells.hasWorkingAgent([id])).toBe(false)
+
+    shells.write(id, '\x1b[200~Check the output\rfrom this command\x1b[201~')
+    expect(shells.hasWorkingAgent([id])).toBe(false)
+    shells.write(id, '\r')
+    expect(shells.hasWorkingAgent([id])).toBe(true)
+    ptys[0].emit('\x1b]0;ezshell\x07')
+    expect(shells.hasWorkingAgent([id])).toBe(false)
+    ptys[0].emit('\x1b]0;⠙ ezshell\x07')
+    expect(shells.hasWorkingAgent([id])).toBe(true)
+  })
+
+  it('answers the program status probe and prefers root state over title and child reports', () => {
+    const { shells, ptys } = setup()
+    const { id } = shells.open({ agent: 'claude' })
+    ptys[0].emit('\x1b]750')
+    ptys[0].emit('1;?\x07')
+    expect(ptys[0].write).toHaveBeenCalledWith('\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\')
+    ptys[0].emit('\x1b]7501;state=blocked:app=claude-code:kind=permission\x1b\\')
+    ptys[0].emit('\x1b]0;⠋ Claude\x07\x1b]7501;state=working:app=claude-code:id=job\x07')
+    expect(shells.hasWorkingAgent([id])).toBe(false)
+    ptys[0].emit('\x1b]7501;state=working:app=claude-code\x1b\\')
+    expect(shells.hasWorkingAgent([id])).toBe(true)
+    ptys[0].emit('\x1b]7501;state=done:app=claude-code\x07')
+    expect(shells.hasWorkingAgent([id])).toBe(false)
   })
 })

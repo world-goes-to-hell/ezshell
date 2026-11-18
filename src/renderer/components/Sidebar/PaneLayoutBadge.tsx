@@ -3,14 +3,20 @@ import { createPortal } from 'react-dom'
 import { layoutOf, type PaneId, type SplitNode } from '../../lib/splitTree'
 import { placeTooltip } from '../../lib/tooltipPosition'
 import { cellStyle } from '../../lib/paneFocus'
+import { getLocalPaneShellId } from '../../lib/localPaneShells'
+import type { AgentMessageSession } from '../../types'
+import { useAgentMessagesStore } from '../Terminal/AgentMessages'
+import { localAgentAppearance } from './LocalSessionAgents'
 import './PaneMap.css'
 
 const OPEN_DELAY_MS = 150
 const CLOSE_DELAY_MS = 220
 const MAP_WIDTH = 208
 const MAP_HEIGHT = 128
+const NO_AGENTS: AgentMessageSession[] = []
 
 interface PaneLayoutBadgeProps {
+  tabId: string
   tabName: string
   tree: SplitNode
   /** The pane that has the keyboard now, if this tab is the one in view */
@@ -23,8 +29,9 @@ interface PaneLayoutBadgeProps {
  * divided; pressing a pane of the map goes to that pane. Replaces one list row per pane, which said
  * nothing about where each pane is.
  */
-export function PaneLayoutBadge({ tabName, tree, currentPane, onPick }: PaneLayoutBadgeProps) {
+export function PaneLayoutBadge({ tabId, tabName, tree, currentPane, onPick }: PaneLayoutBadgeProps) {
   const [isOpen, setIsOpen] = useState(false)
+  const agents = useAgentMessagesStore(state => isOpen ? state.snapshot.agents : NO_AGENTS)
   const [place, setPlace] = useState<{ left: number; top: number } | null>(null)
   const [current, setCurrent] = useState<PaneId | null>(null)
   const badgeRef = useRef<HTMLButtonElement>(null)
@@ -105,18 +112,35 @@ export function PaneLayoutBadge({ tabName, tree, currentPane, onPick }: PaneLayo
                 aria-hidden="true"
               />
             ))}
-            {layout.panes.map(({ pane, rect }, index) => (
-              <button
-                key={pane}
-                type="button"
-                className={`pane-map-cell ${pane === current ? 'is-current' : ''}`}
-                style={cellStyle(rect)}
-                onClick={() => pick(pane)}
-                aria-label={`세션 ${index + 1}로 이동${pane === current ? ' (지금 입력 중)' : ''}`}
-              >
-                <span>{index + 1}</span>
-              </button>
-            ))}
+            {layout.panes.map(({ pane, rect }, index) => {
+              const shellId = getLocalPaneShellId(tabId, pane)
+              const agent = agents.find(item => item.shellId === shellId)
+              const appearance = agent && localAgentAppearance(agent)
+              const title = `세션 ${index + 1}로 이동${pane === current ? ' (지금 입력 중)' : ''}`
+              return (
+                <button
+                  key={pane}
+                  type="button"
+                  className={`pane-map-cell${pane === current ? ' is-current' : ''}${agent ? ' has-agent' : ''}`}
+                  style={cellStyle(rect)}
+                  onClick={() => pick(pane)}
+                  aria-label={appearance ? `${title} · ${appearance.description}` : title}
+                  title={appearance?.description}
+                  data-agent-id={agent?.id}
+                  data-status={appearance?.status}
+                >
+                  <span className="pane-map-cell-content">
+                    <span>{index + 1}</span>
+                    {appearance && (
+                      <span className="pane-map-agent">
+                        {appearance.icons}
+                        <span className="pane-map-agent-label">{appearance.label}</span>
+                      </span>
+                    )}
+                  </span>
+                </button>
+              )
+            })}
           </div>
           <div className="pane-map-hint">칸을 누르면 그 세션으로 이동합니다</div>
         </div>,

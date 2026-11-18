@@ -1,0 +1,21 @@
+.local-project-dialog {
+  width: 500px;
+}
+
+.local-project-folders {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.local-project-dialog button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.local-project-error {
+  color: var(--error);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}

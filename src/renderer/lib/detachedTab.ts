@@ -5,6 +5,7 @@ import type { SSHConnectConfig } from '../hooks/useSSH'
 export interface DetachedTab {
   connectConfig?: SSHConnectConfig
   color?: string
+  title?: string
 }
 
 /** What a popped-out window sends when it moves back */
@@ -19,7 +20,8 @@ export interface MergedTabData {
 export function detachTab(terminal: TerminalInfo): DetachedTab {
   return {
     connectConfig: terminal.connectConfig,
-    color: terminal.color ?? terminal.connectConfig?.color
+    color: terminal.color ?? terminal.connectConfig?.color,
+    title: terminal.title
   }
 }
 

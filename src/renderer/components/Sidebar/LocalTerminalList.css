@@ -126,14 +126,61 @@
   color: var(--text-primary);
 }
 
-.local-terms-list {
+.local-terms-scroll {
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+}
+
+.local-terms-list {
   margin: 0;
   padding: 0 6px 6px;
-  overflow-y: auto;
   list-style: none;
 }
+
+.local-agent-strip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 6px 0 26px;
+  padding: 0 1px 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.local-agent-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.local-agent-chip:hover,
+.local-agent-chip:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--bg-modifier-hover);
+  color: var(--text-primary);
+}
+
+.local-agent-icons {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.local-agent-status { color: var(--text-muted); }
+.local-agent-icons[data-status='idle'] .local-agent-status { color: var(--success); }
+.local-agent-icons:is([data-status='working'], [data-status='reply']) .local-agent-status { color: var(--accent); }
+.local-agent-icons[data-status='blocked'] .local-agent-status { color: var(--warning); }
+.local-agent-icons[data-status='error'] .local-agent-status { color: var(--error); }
+.local-agent-icons[data-agent-kind='claude'] .local-agent-provider { color: var(--warning); }
 
 .local-terms-row {
   display: flex;
@@ -150,6 +197,24 @@
 
 .local-terms-row.is-current {
   background: var(--bg-modifier-selected);
+}
+
+.local-terms-item:has(> .local-agent-strip) {
+  margin-bottom: 3px;
+  padding-bottom: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.local-terms-item:has(> .local-agent-strip):hover {
+  background: var(--bg-modifier-hover);
+}
+
+.local-terms-item:has(> .local-terms-row.is-current + .local-agent-strip) {
+  background: var(--bg-modifier-selected);
+}
+
+.local-terms-item:has(> .local-agent-strip) .local-terms-row {
+  background: transparent;
 }
 
 .local-terms-open {

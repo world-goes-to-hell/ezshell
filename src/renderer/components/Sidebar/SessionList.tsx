@@ -17,6 +17,21 @@ import { buildShareText, buildFolderShareText, ShareTooLargeError } from '../../
 import { toast } from '../../stores/toastStore'
 import { SharePassphraseDialog } from './SharePassphraseDialog'
 
+const TREE_ROW = '[role="treeitem"]'
+
+function parentFolderRow(row: HTMLElement): HTMLElement | null {
+  const parent = row.closest('.folder-contents')?.previousElementSibling
+  return parent instanceof HTMLElement ? parent : null
+}
+
+function isVisibleTreeRow(row: HTMLElement): boolean {
+  // Framer Motion keeps the closing group's rows in the DOM during the exit animation.
+  for (let parent = parentFolderRow(row); parent; parent = parentFolderRow(parent)) {
+    if (parent.getAttribute('aria-expanded') === 'false') return false
+  }
+  return true
+}
+
 interface ContextMenuState {
   visible: boolean
   x: number
@@ -536,6 +551,52 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
   const isMcpAllowedForMenuTarget = contextMenu.type === 'session'
     && sessions.find(s => s.id === contextMenu.targetId)?.mcpEnabled === true
 
+  const handleTreeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const row = event.target
+    if (!(row instanceof HTMLElement) || !row.matches(TREE_ROW)
+      || !event.currentTarget.contains(row) || event.nativeEvent.isComposing
+      || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+
+    const folderId = row.dataset.folderId
+    const expanded = row.getAttribute('aria-expanded') === 'true'
+    let next: HTMLElement | null | undefined
+    switch (event.key) {
+      case 'Enter':
+      case ' ':
+        if (folderId) {
+          if (!event.repeat) toggleFolder(folderId)
+        } else if (event.key === 'Enter') {
+          const session = sessions.find(item => item.id === row.dataset.sessionId)
+          if (session && !event.repeat) onQuickConnect(session, row)
+        } else return
+        break
+      case 'ArrowRight':
+        if (folderId && !expanded) toggleFolder(folderId)
+        else if (folderId) next = row.nextElementSibling?.querySelector<HTMLElement>(TREE_ROW)
+        break
+      case 'ArrowLeft':
+        if (folderId && expanded) toggleFolder(folderId)
+        else next = parentFolderRow(row)
+        break
+      case 'ArrowDown':
+      case 'ArrowUp':
+      case 'Home':
+      case 'End': {
+        const rows = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(TREE_ROW)).filter(isVisibleTreeRow)
+        const index = rows.indexOf(row)
+        if (event.key === 'Home') next = rows[0]
+        else if (event.key === 'End') next = rows[rows.length - 1]
+        else next = rows[index + (event.key === 'ArrowDown' ? 1 : -1)]
+        break
+      }
+      default:
+        return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    next?.focus()
+  }
+
   // Recursive folder renderer
   const renderFolder = (folder: Folder, depth: number = 0) => {
     const isExpanded = expandedFolders.has(folder.id)
@@ -569,9 +630,12 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
       >
         <div
           className={`folder-header ${isDragging ? 'dragging' : ''} ${isDropTarget ? 'drop-target' : ''}`}
+          data-folder-id={folder.id}
           role="treeitem"
           aria-expanded={isExpanded}
-          aria-label={`Folder: ${folder.name}`}
+          aria-label={`폴더: ${folder.name}`}
+          aria-owns={isExpanded ? `session-folder-contents-${folder.id}` : undefined}
+          tabIndex={0}
           onClick={() => toggleFolder(folder.id)}
           onContextMenu={(e) => handleFolderContextMenu(e, folder.id)}
           draggable={!isEditing}
@@ -607,6 +671,8 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
           {isExpanded && (
             <motion.div
               className={`folder-contents ${isDropTarget ? 'drop-target' : ''}`}
+              id={`session-folder-contents-${folder.id}`}
+              role="group"
               variants={reducedMotion ? undefined : collapseVariants}
               initial="hidden"
               animate="visible"
@@ -643,7 +709,8 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
     <div
       className="session-list"
       role="tree"
-      aria-label="SSH session list"
+      aria-label="SSH 세션 목록"
+      onKeyDown={handleTreeKeyDown}
       onDragOver={(e) => {
         e.preventDefault()
         if (dragState.type) {

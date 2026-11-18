@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { RxDragHandleDots2 } from 'react-icons/rx'
 import { perFrame } from '../../lib/throttle'
 import { QUEUE_HEIGHT_STORAGE_KEY, LISTS_MIN_HEIGHT, clampQueueHeight, maxQueueHeight, parseQueueHeight } from '../../lib/transferQueueHeight'
+import { confirmDialog } from '../../stores/confirmStore'
+import { toast } from '../../stores/toastStore'
 
 function readQueueHeight(): number {
   try {
@@ -12,7 +14,7 @@ function readQueueHeight(): number {
 }
 
 import { useSftpStore, Transfer } from '../../stores/sftpStore'
-import { RiCheckboxCircleFill, RiErrorWarningFill, RiPauseFill, RiPlayFill, RiCloseFill, RiDeleteBinFill, RiUploadLine, RiDownloadLine } from 'react-icons/ri'
+import { RiCheckboxCircleFill, RiErrorWarningFill, RiPauseFill, RiPlayFill, RiCloseFill, RiDeleteBinFill, RiUploadLine, RiDownloadLine, RiRestartLine } from 'react-icons/ri'
 
 const LOCAL_WRITE_DENIED = /\b(EPERM|EACCES)\b/
 
@@ -39,6 +41,8 @@ interface TransferQueueProps {
 export function TransferQueue({ sessionId, onClose, onNeedRoom }: TransferQueueProps) {
   const store = useSftpStore()
   const transfers = store.transfers(sessionId)
+  const retrying = useRef(new Set<string>())
+  const [retryingIds, setRetryingIds] = useState<ReadonlySet<string>>(new Set())
 
   const formatSpeed = (bytesPerSec: number) => {
     if (bytesPerSec < 1024) return `${bytesPerSec} B/s`
@@ -86,8 +90,36 @@ export function TransferQueue({ sessionId, onClose, onNeedRoom }: TransferQueueP
     await window.electronAPI.sftpTransferResume(sessionId, transferId)
   }
 
-  const handleCancel = async (transferId: string) => {
-    await window.electronAPI.sftpTransferCancel(sessionId, transferId)
+  const handleRetry = async (transfer: Transfer) => {
+    if (retrying.current.has(transfer.id)) return
+    retrying.current.add(transfer.id)
+    setRetryingIds(new Set(retrying.current))
+    try {
+      const api = window.electronAPI
+      let result = await api.sftpTransferRetry(sessionId, transfer.id)
+      if (result.needsOverwrite) {
+        const target = transfer.type === 'download' ? transfer.localPath : transfer.remotePath
+        const overwrite = await confirmDialog({
+          title: '전송 대상 파일이 이미 있습니다',
+          message: `${target}\n파일을 덮어쓰고 다시 전송할까요?`,
+          confirmLabel: '덮어쓰고 다시 전송',
+          cancelLabel: '취소',
+          danger: true
+        })
+        if (!overwrite) return
+        result = await api.sftpTransferRetry(sessionId, transfer.id, true)
+      }
+      if (result.error) toast.error('다시 전송하지 못했습니다', result.error)
+    } catch (error) {
+      toast.error('다시 전송하지 못했습니다', error instanceof Error ? error.message : undefined)
+    } finally {
+      retrying.current.delete(transfer.id)
+      setRetryingIds(new Set(retrying.current))
+    }
+  }
+
+  const handleCancel = async (transferId: string, failedOnly = false) => {
+    await window.electronAPI.sftpTransferCancel(sessionId, transferId, failedOnly)
   }
 
   const handleClearCompleted = async () => {
@@ -166,7 +198,7 @@ export function TransferQueue({ sessionId, onClose, onNeedRoom }: TransferQueueP
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isResizing])
 
-  const hasCompletedOrError = transfers.some(t => t.status === 'completed' || t.status === 'error')
+  const hasCompleted = transfers.some(t => t.status === 'completed')
 
   return (
     <div ref={rootRef} className={`transfer-queue ${isResizing ? 'is-resizing' : ''}`} style={{ height }}>
@@ -175,11 +207,12 @@ export function TransferQueue({ sessionId, onClose, onNeedRoom }: TransferQueueP
         <span className="transfer-header-grip" aria-hidden="true"><RxDragHandleDots2 size={16} /></span>
         <span>전송 큐 ({transfers.filter(t => t.status === 'active' || t.status === 'queued').length})</span>
         <div className="transfer-header-actions">
-          {hasCompletedOrError && (
+          {hasCompleted && (
             <button
               className="transfer-clear-btn"
               onClick={handleClearCompleted}
               title="완료된 항목 삭제"
+              aria-label="완료된 항목 삭제"
             >
               <RiDeleteBinFill size={16} />
             </button>
@@ -228,6 +261,30 @@ ${transfer.remotePath}
               </div>
             )}
             <div className="transfer-actions">
+              {transfer.status === 'error' && (
+                <>
+                  <button
+                    type="button"
+                    className="transfer-action-btn"
+                    onClick={() => void handleRetry(transfer)}
+                    title="다시 시도"
+                    aria-label={`${transfer.fileName} 다시 시도`}
+                    disabled={retryingIds.has(transfer.id)}
+                  >
+                    <RiRestartLine size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    className="transfer-action-btn cancel"
+                    onClick={() => void handleCancel(transfer.id, true)}
+                    title="실패 항목 삭제"
+                    aria-label={`${transfer.fileName} 실패 항목 삭제`}
+                    disabled={retryingIds.has(transfer.id)}
+                  >
+                    <RiCloseFill size={16} />
+                  </button>
+                </>
+              )}
               {transfer.status === 'active' && (
                 <button
                   className="transfer-action-btn"

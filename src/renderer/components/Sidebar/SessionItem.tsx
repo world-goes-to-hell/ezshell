@@ -92,7 +92,7 @@ export function SessionItem({
         className={classNames}
         data-session-id={session.id}
         role="treeitem"
-        aria-label={`SSH session: ${displayName}`}
+        aria-label={`SSH 세션: ${displayName}`}
         aria-selected={isActive}
         aria-busy={isConnecting || undefined}
         tabIndex={0}

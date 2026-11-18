@@ -1,6 +1,6 @@
 // Which tabs may be merged into a pane of another tab, and why not when they may not.
 // Only tabs of the same session: the same saved session (opened twice, duplicated, or a pane moved
-// out to a tab), the same server and account for quick connects, or two terminals of this PC.
+// out to a tab), the same server and account for quick connects, or two local tabs of the same folder.
 
 import type { TerminalInfo } from '../stores/terminalStore'
 import { MAX_PANES, leafCount, singlePane, type SplitAxis } from './splitTree'
@@ -14,7 +14,7 @@ const label = (tab: TerminalInfo) => tab.title || `${tab.username}@${tab.host}`
 /** Both tabs come from the same session */
 export function isSameSession(a: TerminalInfo, b: TerminalInfo): boolean {
   if (a.db || b.db) return false
-  if (a.local || b.local) return Boolean(a.local && b.local)
+  if (a.local || b.local) return Boolean(a.local && b.local && a.local.cwd === b.local.cwd)
   const savedA = a.connectConfig?.savedSessionId
   const savedB = b.connectConfig?.savedSessionId
   if (savedA || savedB) return savedA === savedB
@@ -37,6 +37,7 @@ export function mergeBlock(tabs: Tabs, sourceId: string, targetId: string, hasPo
   if (!source || !target) return '병합할 탭을 찾지 못했습니다.'
   if (sourceId === targetId) return '같은 탭에는 병합할 수 없습니다.'
   if (source.db || target.db) return 'DB 탭은 병합할 수 없습니다. 터미널 탭끼리만 한 탭의 칸으로 합칠 수 있습니다.'
+  if (source.local && target.local && source.local.cwd !== target.local.cwd) return '같은 작업 폴더에서 연 로컬 탭만 병합할 수 있습니다.'
   if (!isSameSession(source, target)) return '다른 세션의 탭은 병합할 수 없습니다. 같은 세션에서 연 탭만 한 탭의 칸으로 합칠 수 있습니다.'
   if (!source.connected || !target.connected) return '연결된 탭끼리만 병합할 수 있습니다.'
   if (source.splitTree) return '칸을 나눈 탭은 병합할 수 없습니다. 칸을 닫거나 탭으로 뺀 뒤에 다시 시도해 주세요.'

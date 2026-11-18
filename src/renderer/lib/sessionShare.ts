@@ -151,7 +151,7 @@ const sessionSchema = z.object({
   return { ...kept, name: kept.name || `${kept.username}@${kept.host}` }
 })
 
-const folderSchema: z.ZodType<SharedFolder, z.ZodTypeDef, unknown> = z.lazy(() => z.object({
+const folderSchema: z.ZodType<SharedFolder, unknown> = z.lazy(() => z.object({
   name: line(100).pipe(z.string().min(1)),
   backgroundColor: loose(color),
   folders: z.array(folderSchema).max(MAX_SHARED_FOLDERS).default([]),
@@ -311,8 +311,8 @@ function sessionsInOrder(folder: SharedFolder): SharedSession[] {
   return [...folder.sessions, ...folder.folders.flatMap(sessionsInOrder)]
 }
 
-function describeIssue(error: z.ZodError): string {
-  const path = error.issues[0]?.path ?? []
+function describeIssue(issues: readonly z.core.$ZodIssue[]): string {
+  const path = issues[0]?.path ?? []
   const key = [...path].reverse().find(part => typeof part === 'string' && part in FIELD_NAMES)
   return `${key ? FIELD_NAMES[key as string] : '세션 정보'} 값이 올바르지 않습니다.`
 }
@@ -354,8 +354,8 @@ export function parseShareText(text: string): ParseResult {
   if (!result.success) {
     const first = result.error.issues[0]
     // A union reports both branches failing; show the field problem from the branch that matched a key
-    const branch = first?.code === 'invalid_union' ? first.unionErrors.find(e => (e.issues[0]?.path.length ?? 0) > 1) : undefined
-    return { ok: false, error: describeIssue(branch ?? result.error) }
+    const branch = first?.code === 'invalid_union' ? first.errors.find(issues => (issues[0]?.path.length ?? 0) > 1) : undefined
+    return { ok: false, error: describeIssue(branch ?? result.error.issues) }
   }
 
   const hasSecrets = locked !== undefined

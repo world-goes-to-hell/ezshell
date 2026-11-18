@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
-import { mergePanes } from '../lib/paneToTab'
-import { layoutOf, leafAt, leafCount, MAX_PANES, mergePaneLayout, singlePane, type PaneId, type Rect, type SplitAxis } from '../lib/splitTree'
+import { commitPaneGesture, type PaneGestureAction } from '../lib/paneGesture'
+import { layoutOf, leafAt, leafCount, MAX_PANES, mergePaneLayout, singlePane, type PaneId } from '../lib/splitTree'
 import { splitGestureLine } from '../lib/paneDropZones'
 import { useTerminalStore } from '../stores/terminalStore'
 import { toast } from '../stores/toastStore'
@@ -18,13 +18,11 @@ interface Drag {
   leftPane: boolean
 }
 
-type GestureAction = { kind: 'merge'; to: PaneId; expanded: Rect } | { kind: 'split'; axis: SplitAxis; ratio: number }
-
 /** Alt+drag is captured before xterm starts a text selection or sends a mouse event to the shell. */
 export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElement | null>) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [trail, setTrail] = useState<'active' | 'fading' | null>(null)
-  const [preview, setPreview] = useState<{ from: PaneId; action: GestureAction | null } | null>(null)
+  const [preview, setPreview] = useState<{ from: PaneId; action: PaneGestureAction | null } | null>(null)
 
   useEffect(() => {
     const root = container.current
@@ -32,9 +30,10 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
     let drag: Drag | null = null
     let hide = 0
     let moving = false
+    let disposed = false
     const tabOf = () => useTerminalStore.getState().terminals.get(tabId)
 
-    const actionAt = (gesture: Drag): GestureAction | null => {
+    const actionAt = (gesture: Drag): PaneGestureAction | null => {
       const tab = tabOf()
       if (!tab) return null
       const tree = tab.splitTree ?? singlePane()
@@ -101,14 +100,12 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       const action = actionAt(drag)
       stop(true)
       if (!action) return
-      if (action.kind === 'split') {
-        useTerminalStore.getState().splitTerminalPane(tabId, from, action.axis, action.ratio)
-        return
-      }
       moving = true
-      void mergePanes(tabId, from, action.to).then(result => {
-        if (!result.ok) toast.error('분할 칸을 병합하지 못했습니다', result.error)
-      }).catch(() => toast.error('분할 칸을 병합하지 못했습니다', '잠시 후 다시 시도해 주세요.'))
+      const failure = action.kind === 'merge' ? '분할 칸을 병합하지 못했습니다' : '터미널을 분할하지 못했습니다'
+      const isVisible = () => !disposed && root.isConnected && getComputedStyle(root).visibility === 'visible'
+      void commitPaneGesture(tabId, from, action, isVisible).then(result => {
+        if (result && !result.ok) toast.error(failure, result.error)
+      }).catch(() => toast.error(failure, '잠시 후 다시 시도해 주세요.'))
         .finally(() => { moving = false })
     }
 
@@ -146,6 +143,7 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
 
     root.addEventListener('pointerdown', onDown, true)
     return () => {
+      disposed = true
       root.removeEventListener('pointerdown', onDown, true)
       cancel()
       window.clearTimeout(hide)

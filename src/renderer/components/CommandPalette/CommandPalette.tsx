@@ -13,6 +13,7 @@ import { openSessionLogFolder, toggleSessionLog } from '../../lib/sessionLogActi
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { modalOverlayVariants } from '../../lib/animation/variants'
 import { formatRelativeTime } from '../../utils/timeFormat'
+import { getFolderPath } from '../../lib/sessionPicker'
 import './CommandPalette.css'
 
 interface CommandPaletteProps {
@@ -34,7 +35,7 @@ const categoryIcons = {
 
 export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, onOpenWhatsNew }: CommandPaletteProps) {
   const { isOpen, query, selectedIndex, recentCommands, close, setQuery, setSelectedIndex, addRecentCommand } = useCommandPaletteStore()
-  const { sessions, activeSessionId } = useSessionStore()
+  const { sessions, folders, activeSessionId } = useSessionStore()
   const { recentConnections, clearHistory } = useHistoryStore()
   const { currentThemeId, setTheme, getAllThemes } = useThemeStore()
   const themes = getAllThemes()
@@ -54,26 +55,28 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
     recentConnections.forEach(record => {
       const session = sessions.find(s => s.id === record.sessionId)
       if (session) {
+        const folderPath = getFolderPath(session.folderId, folders)
         items.push({
           id: `history-${record.id}`,
           title: record.sessionName,
-          subtitle: `${record.username}@${record.host} · ${formatRelativeTime(record.connectedAt)}`,
+          subtitle: [`${record.username}@${record.host}`, folderPath, formatRelativeTime(record.connectedAt)].filter(Boolean).join(' · '),
           category: 'history',
           action: () => onQuickConnect(session),
-          keywords: [record.host, record.username, record.sessionName, 'history', '기록'],
+          keywords: [record.host, record.username, record.sessionName, folderPath, 'history', '기록'],
         })
       }
     })
 
     // Add connection commands
     sessions.forEach(session => {
+      const folderPath = getFolderPath(session.folderId, folders)
       items.push({
         id: `connect-${session.id}`,
         title: session.name || `${session.username}@${session.host}`,
-        subtitle: `${session.username}@${session.host}:${session.port}`,
+        subtitle: [`${session.username}@${session.host}:${session.port}`, folderPath].filter(Boolean).join(' · '),
         category: 'connection',
         action: () => onQuickConnect(session),
-        keywords: [session.host, session.username, session.name || ''],
+        keywords: [session.host, session.username, session.name || '', folderPath],
       })
     })
 
@@ -197,7 +200,7 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
     })
 
     return items
-  }, [sessions, recentConnections, themes, currentThemeId, snippets, activeSessionId, activeTerminalId, sessionLogFiles, onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, onOpenWhatsNew, setTheme, clearHistory, close, expandVariables, getTerminal])
+  }, [sessions, folders, recentConnections, themes, currentThemeId, snippets, activeSessionId, activeTerminalId, sessionLogFiles, onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, onOpenWhatsNew, setTheme, clearHistory, close, expandVariables, getTerminal])
 
   // Fuse.js search
   const fuse = useMemo(() => {
@@ -226,6 +229,7 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
     if (!isOpen) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.isComposing) return
       switch (e.key) {
         case 'ArrowDown':
           e.preventDefault()

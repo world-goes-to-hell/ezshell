@@ -1,5 +1,5 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { RiAddLine, RiFileCopyLine, RiServerLine, RiAddCircleLine, RiComputerLine } from 'react-icons/ri'
+import { RiAddLine, RiFileCopyLine, RiServerLine, RiAddCircleLine, RiComputerLine, RiFolderOpenLine } from 'react-icons/ri'
 import './NewTabMenu.css'
 
 interface NewTabMenuProps {
@@ -10,11 +10,12 @@ interface NewTabMenuProps {
   onNewSession: () => void
   /** A terminal of this PC */
   onLocalTerminal: () => void
+  onLocalProject: () => void
   /** Extra class for the + button (the split pane header styles it like its other buttons) */
   triggerClassName?: string
 }
 
-export function NewTabMenu({ duplicateLabel, onDuplicate, onPickSession, onNewSession, onLocalTerminal, triggerClassName }: NewTabMenuProps) {
+export function NewTabMenu({ duplicateLabel, onDuplicate, onPickSession, onNewSession, onLocalTerminal, onLocalProject, triggerClassName }: NewTabMenuProps) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
@@ -39,6 +40,10 @@ export function NewTabMenu({ duplicateLabel, onDuplicate, onPickSession, onNewSe
           <DropdownMenu.Item className="new-tab-menu-item" onSelect={onLocalTerminal}>
             <RiComputerLine size={16} />
             <span>로컬 터미널</span>
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className="new-tab-menu-item" onSelect={onLocalProject}>
+            <RiFolderOpenLine size={16} />
+            <span>로컬 작업…</span>
           </DropdownMenu.Item>
           <DropdownMenu.Separator className="new-tab-menu-separator" />
           <DropdownMenu.Item className="new-tab-menu-item" onSelect={onNewSession}>

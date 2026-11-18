@@ -23,8 +23,8 @@ const terminal = (overrides: Partial<TerminalInfo> = {}): TerminalInfo => ({
 const merged = { sessionId: 't1', title: 'web', host: 'example.com', username: 'root' }
 
 describe('detachTab', () => {
-  it('keeps the color of the tab', () => {
-    expect(detachTab(terminal({ color: '#ff0000', connectConfig }))).toEqual({ connectConfig, color: '#ff0000' })
+  it('keeps the title and color of the tab', () => {
+    expect(detachTab(terminal({ title: 'deploy', color: '#ff0000', connectConfig }))).toEqual({ connectConfig, color: '#ff0000', title: 'deploy' })
   })
 
   it('falls back to the color the tab connected with', () => {
@@ -32,7 +32,7 @@ describe('detachTab', () => {
   })
 
   it('has no color for a tab without one', () => {
-    expect(detachTab(terminal())).toEqual({ connectConfig: undefined, color: undefined })
+    expect(detachTab(terminal())).toEqual({ connectConfig: undefined, color: undefined, title: undefined })
   })
 })
 

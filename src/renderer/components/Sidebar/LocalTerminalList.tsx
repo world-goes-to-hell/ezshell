@@ -4,6 +4,7 @@ import { useTerminalStore } from '../../stores/terminalStore'
 import { LOCAL_PANE_STORAGE_KEY, clampPaneHeight, parseLocalPanePrefs, visibleTerminalId, type LocalPanePrefs } from '../../lib/localTerminalPane'
 import { isSplitTree, paneIds } from '../../lib/splitTree'
 import { PaneLayoutBadge } from './PaneLayoutBadge'
+import { LocalSessionAgents } from './LocalSessionAgents'
 import { focusTabPane, focusedPaneOf } from '../../lib/paneFocus'
 import './LocalTerminalList.css'
 
@@ -135,29 +136,35 @@ export function LocalTerminalList({ onOpen, onClose }: LocalTerminalListProps) {
         )}
       </div>
       {!prefs.collapsed && (
-        <ul className="local-terms-list">
-          {locals.map(([id, terminal]) => {
-            const name = terminal.title || '로컬 터미널'
-            const panes = isSplitTree(terminal.splitTree) && terminal.splitTree ? paneIds(terminal.splitTree) : []
-            return (
-              <li key={id} className="local-terms-item">
-              <div className={`local-terms-row ${id === visibleId ? 'is-current' : ''}`}>
-                <button type="button" className="local-terms-open" onClick={() => focusTerminal(id)} title={`${name} 탭으로 이동`}>
-                  <RiComputerLine size={15} className="local-terms-icon" />
-                  <span className="local-terms-name">{name}</span>
-                  <span className={`local-terms-dot ${terminal.connected ? 'is-on' : ''}`} aria-hidden="true" />
-                </button>
-                {panes.length > 1 && terminal.splitTree && (
-                  <PaneLayoutBadge tabName={name} tree={terminal.splitTree} currentPane={() => focusedPaneOf(id)} onPick={pane => focusTabPane(focusTerminal, id, pane)} />
-                )}
-                <button type="button" className="local-terms-close" onClick={() => onClose(id)} title="닫기" aria-label={`${name} 닫기`}>
-                  <RiCloseLine size={15} />
-                </button>
-              </div>
-              </li>
-            )
-          })}
-        </ul>
+        <div className="local-terms-scroll">
+          <ul className="local-terms-list">
+            {locals.map(([id, terminal]) => {
+              const { title, local } = terminal
+              const workspace = local?.workspaceLabel
+              const isAgentTitle = workspace && (title === `${workspace} · Codex` || title === `${workspace} · Claude Code`)
+              const name = isAgentTitle ? workspace : title || '로컬 터미널'
+              const panes = isSplitTree(terminal.splitTree) && terminal.splitTree ? paneIds(terminal.splitTree) : []
+              return (
+                <li key={id} className="local-terms-item" data-local-session-id={id}>
+                  <div className={`local-terms-row ${id === visibleId ? 'is-current' : ''}`}>
+                    <button type="button" className="local-terms-open" onClick={() => focusTerminal(id)} title={`${name} 탭으로 이동`}>
+                      <RiComputerLine size={15} className="local-terms-icon" />
+                      <span className="local-terms-name">{name}</span>
+                      <span className={`local-terms-dot ${terminal.connected ? 'is-on' : ''}`} aria-hidden="true" />
+                    </button>
+                    {panes.length > 1 && terminal.splitTree && (
+                      <PaneLayoutBadge tabId={id} tabName={name} tree={terminal.splitTree} currentPane={() => focusedPaneOf(id)} onPick={pane => focusTabPane(focusTerminal, id, pane)} />
+                    )}
+                    <button type="button" className="local-terms-close" onClick={() => onClose(id)} title="닫기" aria-label={`${name} 닫기`}>
+                      <RiCloseLine size={15} />
+                    </button>
+                  </div>
+                  <LocalSessionAgents tabId={id} />
+                </li>
+              )
+            })}
+          </ul>
+        </div>
       )}
     </div>
   )

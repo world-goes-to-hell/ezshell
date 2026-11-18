@@ -74,7 +74,8 @@ async function runSpec(name) {
   const sshd = sshDir ? await startSshd(sshDir) : null
   // E2E_APP: a packaged ezShell.exe (release/<version>/win-unpacked) instead of the build in out/
   const packaged = process.env.E2E_APP
-  const app = spawn(packaged || require('electron'), [...(packaged ? [] : [path.join(ROOT, 'out/main/index.js')]), `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, ...APP_FLAGS], { cwd: ROOT, stdio: 'ignore' })
+  const appEntry = name === 'local-agent-messages' ? 'e2e/support/localAgentApp.js' : 'out/main/index.js'
+  const app = spawn(packaged || require('electron'), [...(packaged ? [] : [path.join(ROOT, appEntry)]), `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, ...APP_FLAGS], { cwd: ROOT, stdio: 'ignore' })
   try {
     if (!(await waitUntil(portAnswers, 60000))) throw new Error('the app did not open its debugging port')
     const code = await new Promise((resolve, reject) => {

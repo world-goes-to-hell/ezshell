@@ -1,7 +1,5 @@
-// The tabs that were open when an update was installed, kept until the app starts again so they can be
-// opened again (docs/plan/2026-11-18-restore-tabs-after-update.md). Encrypted with the master
-// password like the session file: it names saved sessions, folders on servers and quick-connect
-// logins (no passwords). Read once and removed; an old file is not used.
+// The tabs that were open at exit or before an update, encrypted with the master password.
+// Read once and removed. Records from an update expire in case the update did not finish.
 
 const fs = require('fs')
 const cryptoUtil = require('./crypto.js')
@@ -12,11 +10,8 @@ const MAX_AGE_MS = 24 * 60 * 60 * 1000
 /** The record is a list of tabs; anything larger is not one */
 const MAX_TEXT_LENGTH = 256 * 1024
 
-/**
- * Writes the record. `record` is what the window sent: it is checked when it is read back.
- * @returns {{ success: boolean, error?: string }}
- */
-function saveRestoreTabs(filePath, record, masterPassword, now = Date.now(), io = fs) {
+/** Seal a snapshot while the app still has the master password. */
+function sealRestoreTabs(record, masterPassword, { now = Date.now(), source = 'update' } = {}) {
   if (!masterPassword) return { success: false, error: '앱 잠금을 해제하세요.' }
   let text
   try {
@@ -25,18 +20,31 @@ function saveRestoreTabs(filePath, record, masterPassword, now = Date.now(), io 
     return { success: false, error: '탭 정보를 저장하지 못했습니다.' }
   }
   if (typeof text !== 'string' || text.length > MAX_TEXT_LENGTH) return { success: false, error: '탭 정보가 너무 큽니다.' }
-  const file = { format: FORMAT, savedAt: now, data: cryptoUtil.encrypt(text, masterPassword) }
   try {
-    io.writeFileSync(filePath, JSON.stringify(file), { mode: 0o600 })
+    const file = { format: FORMAT, savedAt: now, source, data: cryptoUtil.encrypt(text, masterPassword) }
+    return { success: true, sealed: JSON.stringify(file) }
+  } catch {
+    return { success: false, error: '탭 정보를 암호화하지 못했습니다.' }
+  }
+}
+
+function writeRestoreTabs(filePath, sealed, io = fs) {
+  try {
+    io.writeFileSync(filePath, sealed, { mode: 0o600 })
     return { success: true }
   } catch {
     return { success: false, error: '탭 정보를 저장하지 못했습니다.' }
   }
 }
 
+/** The window's record is checked when it is read back. */
+function saveRestoreTabs(filePath, record, masterPassword, options = {}) {
+  const result = sealRestoreTabs(record, masterPassword, options)
+  return result.success ? writeRestoreTabs(filePath, result.sealed, options.io) : result
+}
+
 /**
- * The record, once: the file is removed whatever is in it. Null when there is none, it is too old,
- * or it cannot be read with this password.
+ * The record, once: the file is removed whatever is in it.
  */
 function takeRestoreTabs(filePath, masterPassword, now = Date.now(), io = fs) {
   let raw
@@ -50,11 +58,13 @@ function takeRestoreTabs(filePath, masterPassword, now = Date.now(), io = fs) {
   try {
     const file = JSON.parse(raw)
     if (!file || file.format !== FORMAT || typeof file.savedAt !== 'number') return null
-    if (now - file.savedAt > MAX_AGE_MS || file.savedAt - now > 60 * 1000) return null
-    return { savedAt: file.savedAt, record: JSON.parse(cryptoUtil.decrypt(file.data, masterPassword)) }
+    const fromClose = file.source === 'close'
+    if ((!fromClose && now - file.savedAt > MAX_AGE_MS) || file.savedAt - now > 60 * 1000) return null
+    const record = JSON.parse(cryptoUtil.decrypt(file.data, masterPassword))
+    return { savedAt: file.savedAt, record, ...(fromClose ? { source: 'close' } : {}) }
   } catch {
     return null
   }
 }
 
-module.exports = { saveRestoreTabs, takeRestoreTabs, MAX_AGE_MS }
+module.exports = { saveRestoreTabs, takeRestoreTabs, sealRestoreTabs, writeRestoreTabs, MAX_AGE_MS }

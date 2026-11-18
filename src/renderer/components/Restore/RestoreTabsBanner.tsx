@@ -4,7 +4,7 @@ import type { RestoreOutcome } from '../../lib/restoreTabsRun'
 import './RestoreTabsBanner.css'
 
 export type RestoreBannerState =
-  | { phase: 'ask'; record: RestoreRecord }
+  | { phase: 'ask'; record: RestoreRecord; source: 'update' | 'close' }
   | { phase: 'running'; done: number; total: number }
   | { phase: 'done'; outcome: RestoreOutcome }
 
@@ -20,13 +20,10 @@ const quickTabsOf = (state: RestoreBannerState) =>
   state.phase === 'ask' ? state.record.tabs.filter((tab): tab is Extract<RestoreTab, { kind: 'quick' }> => tab.kind === 'quick')
     : state.phase === 'done' ? state.outcome.quick : []
 
-/**
- * After an update: offers to open the tabs that were open before it (docs/plan/2026-11-18-restore-tabs-after-update.md).
- * Nothing connects until the user says so.
- */
 export function RestoreTabsBanner({ state, onRestore, onClose, onReconnect }: RestoreTabsBannerProps) {
   const quick = quickTabsOf(state)
   const count = state.phase === 'ask' ? reopenable(state.record).length : 0
+  const when = state.phase === 'ask' && state.source === 'close' ? '지난번에' : '업데이트 전에'
   return (
     <div className="restore-tabs-banner" role="status">
       <div className="restore-tabs-main">
@@ -35,8 +32,8 @@ export function RestoreTabsBanner({ state, onRestore, onClose, onReconnect }: Re
           : <RiHistoryLine size={16} aria-hidden="true" />}
         <span className="restore-tabs-text">
           {state.phase === 'ask' && (count > 0
-            ? `업데이트 전에 열려 있던 탭 ${count}개를 다시 열까요?`
-            : '업데이트 전에 열려 있던 탭은 저장하지 않은 연결이라 자동으로 열 수 없습니다.')}
+            ? `${when} 열려 있던 탭 ${count}개를 다시 열까요?`
+            : `${when} 열려 있던 탭은 저장하지 않은 연결이라 자동으로 열 수 없습니다.`)}
           {state.phase === 'running' && `탭을 다시 여는 중… ${state.done}/${state.total}`}
           {state.phase === 'done' && (state.outcome.failed.length === 0
             ? `탭 ${state.outcome.opened}개를 다시 열었습니다.`

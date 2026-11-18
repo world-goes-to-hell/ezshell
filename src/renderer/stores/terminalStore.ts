@@ -36,7 +36,7 @@ export interface TerminalInfo {
    */
   db?: { dbId: string; sshSessionId: string; label?: string; /** The saved account it was opened with (opened again after an update) */ savedAccountId?: string }
   /** A local terminal. A reassigned main shell can have a different id from its tab. */
-  local?: { shell: string; shellId?: string }
+  local?: { shell: string; shellId?: string; cwd?: string; workspaceLabel?: string }
 }
 
 export type SplitDirection = 'horizontal' | 'vertical' | 'quad' | 'tri-bottom' | 'tri-top' | 'tri-right' | 'tri-left'

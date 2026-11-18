@@ -1,6 +1,6 @@
 import type { McpSetupOutcome } from '../types'
 
-const SERVER_NAME = 'ez-shell'
+const SERVER_NAME = 'ezshell-ssh-mcp'
 const TOKEN_ENV_VAR = 'EZSHELL_MCP_TOKEN'
 const SHOWN_PROJECTS = 3
 
@@ -56,14 +56,17 @@ export function describeSetupOutcome(outcome: McpSetupOutcome): SetupView {
   }
   const renamedFrom = outcome.renamedFrom ?? []
   if (renamedFrom.length > 0) {
-    lines.push(`예전 이름(${renamedFrom.join(', ')})의 항목을 지우고 ${SERVER_NAME} 로 바꿨습니다. Claude Code 의 권한 허용 목록에 mcp__${renamedFrom[0]}__ 로 시작하는 항목이 있으면 mcp__${SERVER_NAME}__ 로 고치세요.`)
+    const prefixes = renamedFrom.map(name => `mcp__${name}__`).join(', ')
+    lines.push(`예전 이름(${renamedFrom.join(', ')})의 항목을 지우고 ${SERVER_NAME} 로 바꿨습니다. Claude Code 의 권한 허용 목록에 ${prefixes} 로 시작하는 항목이 있으면 mcp__${SERVER_NAME}__ 로 고치세요.`)
   }
   const legacyProjects = outcome.legacyProjects ?? []
-  if (legacyProjects.length > 0 && outcome.legacyName) {
-    lines.push(legacyLine(legacyProjects, outcome.legacyName))
-    lines.push(`지우려면 그 프로젝트 폴더에서 claude mcp remove ${outcome.legacyName} -s local 을 실행하세요.`)
+  const registrations = outcome.legacyRegistrations ??
+    (legacyProjects.length > 0 && outcome.legacyName ? [{ name: outcome.legacyName, projects: legacyProjects }] : [])
+  for (const { name, projects } of registrations) {
+    lines.push(legacyLine(projects, name))
+    lines.push(`지우려면 그 프로젝트 폴더에서 claude mcp remove ${name} -s local 을 실행하세요.`)
   }
-  const isWarning = outcome.tokenEnv === 'failed' || outcome.tokenEnv === 'unsupported' || outcome.shadowedProjects.length > 0 || legacyProjects.length > 0
+  const isWarning = outcome.tokenEnv === 'failed' || outcome.tokenEnv === 'unsupported' || outcome.shadowedProjects.length > 0 || registrations.length > 0
   return { title: RESULT_TITLES[outcome.result], tone: isWarning ? 'warning' : 'success', lines }
 }
 

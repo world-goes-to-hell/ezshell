@@ -97,6 +97,16 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   let t = await texts()
   check('each pane is its own shell', /PANE-ONE/.test(t[0]) && !/PANE-TWO/.test(t[0]) && /PANE-TWO/.test(t[1]) && !/PANE-ONE/.test(t[1]), JSON.stringify(t.map(x => x.slice(-60))))
 
+  // ---- The pane that takes the keyboard is outlined (the test window may sit behind others) ----
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const outlines = () => js(`${PANES}.map(el => { const s = getComputedStyle(el, '::before'); return s.content !== 'none' && s.borderTopWidth === '2px' })`)
+  await js(`${PANES}[1].querySelector('.xterm-helper-textarea').focus()`); await sleep(100)
+  check('only the pane with the keyboard is outlined', JSON.stringify(await outlines()) === '[false,true]', JSON.stringify(await outlines()))
+  r = await rects()
+  await click(r[0][0] + r[0][2] / 2, r[0][1] + r[0][3] / 2); await sleep(150)
+  check('clicking the other pane moves the outline', JSON.stringify(await outlines()) === '[true,false]', JSON.stringify(await outlines()))
+  await shot('0-focus-outline')
+
   await menuAt(1); await pick('상하 분할')
   check('a split pane can be split again', await ready(3))
   await typeIn(2, 'echo PANE-THREE')
@@ -167,6 +177,7 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   check('the main process closed the original shell', await until(`window.electronAPI.localShellAttach(${JSON.stringify(mainId)}).then(state => state === null)`, 8000))
   await typeIn(0, 'echo LOCAL-PROMOTED')
   check('the promoted local shell still answers', /LOCAL-PROMOTED/.test((await texts())[0]))
+  check('a tab of one pane draws no outline', JSON.stringify(await outlines()) === '[false]', JSON.stringify(await outlines()))
   await js(`document.querySelectorAll('.terminal-tab')[0].querySelector('.tab-close')?.click()`); await sleep(800)
   check('the last tab closes', (await tabCount()) === 0, String(await tabCount()))
 

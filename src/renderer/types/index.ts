@@ -314,6 +314,7 @@ export interface McpSetupOutcome {
   renamedFrom?: string[]
   /** The old name, and the projects in ~/.claude.json that still register the server under it */
   legacyName?: string
+  legacyRegistrations?: Array<{ name: string; projects: string[] }>
   legacyProjects?: string[]
   existingUrl?: string
   tokenEnv: 'set' | 'unsupported' | 'failed' | null
@@ -325,6 +326,53 @@ export type McpSetupResult =
   | { success: false; error?: string; cancelled?: boolean }
 
 // Extend Window interface for electronAPI
+export type LocalAgent = 'codex' | 'claude'
+
+export type LocalAgentStatus = 'unknown' | 'starting' | 'idle' | 'working' | 'blocked' | 'error' | 'ended'
+
+export interface AgentMessageSession {
+  id: string
+  shellId: string
+  kind: LocalAgent
+  cwd: string
+  active: boolean
+  status: LocalAgentStatus
+  waitingForReply: boolean
+  mcpConnected: boolean
+  exitCode?: number | null
+}
+
+export interface AgentMessage {
+  id: string
+  from: string
+  to: string
+  text: string
+  replyTo?: string
+  sentAt: number
+  read: boolean
+}
+
+export interface AgentMessagesSnapshot {
+  revision: number
+  agents: AgentMessageSession[]
+  messages: AgentMessage[]
+}
+
+export interface AgentMessageDelivery {
+  fromShell?: string
+  toShell?: string
+}
+
+export interface LocalWorktree {
+  path: string
+  branch: string | null
+}
+
+export interface LocalProjectInfo {
+  repo: { root: string; branch: string | null; worktrees: LocalWorktree[] } | null
+  gitMissing: boolean
+}
+
 export interface OracleClientProgress {
   step: 'download' | 'unpack'
   received: number
@@ -468,7 +516,8 @@ declare global {
       sftpDownloadDirectory?: (sessionId: string, remoteDir: string, localDir: string) => Promise<{ success: boolean; files: number; folders: number; skipped: string[] }>
       sftpTransferPause: (sessionId: string, transferId: string) => Promise<any>
       sftpTransferResume: (sessionId: string, transferId: string) => Promise<any>
-      sftpTransferCancel: (sessionId: string, transferId: string) => Promise<any>
+      sftpTransferRetry: (sessionId: string, transferId: string, overwrite?: boolean) => Promise<{ success: boolean; needsOverwrite?: boolean; error?: string }>
+      sftpTransferCancel: (sessionId: string, transferId: string, failedOnly?: boolean) => Promise<any>
       sftpQueueClearCompleted: (sessionId: string) => Promise<any>
       sftpGetQueue: (sessionId: string) => Promise<any>
       // Unsubscribe function; absent on preloads built before it was added
@@ -477,9 +526,22 @@ declare global {
 
       // Local file system
       localList: (dirPath: string) => Promise<any>
-      localShellOpen?: (size: { cols: number; rows: number }) => Promise<{ success: true; id: string; name: string } | { success: false; error: string }>
+      localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: LocalAgent }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
+      localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
+      localWorktreeCreate: (options: { folder: string; branch: string; base: string }) => Promise<({ success: true } & LocalWorktree) | { success: false; error: string }>
       localShellAttach?: (id: string) => Promise<{ backlog: string; exited: boolean; exitCode: number | null } | null>
+      localShellClipboard?: (id: string) => Promise<{ success: true; text: string } | { success: false; error: string }>
+      localShellHasWorkingAgent?: (ids: string[]) => Promise<boolean>
+      agentMessagesSnapshot: () => Promise<AgentMessagesSnapshot | null>
+      agentMessageMcpSetup: (kind: LocalAgent) => Promise<
+        { success: true; result: 'added' | 'unchanged' | 'conflict' } | { success: false; error: string }
+      >
+      agentMessageSend: (message: { to: string; text: string; replyTo?: string }) => Promise<{ success: true; id: string } | { success: false; error: string }>
+      agentMessageAck: (id: string) => Promise<{ success: true; id: string } | { success: false; error: string }>
+      onAgentMessagesState: (callback: (snapshot: AgentMessagesSnapshot) => void) => () => void
+      onAgentMessageDelivered: (callback: (delivery: AgentMessageDelivery) => void) => () => void
       localShellWrite?: (id: string, data: string) => void
+      localShellComposing?: (id: string, value: boolean) => void
       localShellResize?: (id: string, cols: number, rows: number) => void
       localShellClose?: (id: string) => void
       onLocalShellData?: (callback: (data: { id: string; data: string }) => void) => () => void
@@ -506,7 +568,7 @@ declare global {
       /** Move an entry into another folder (same name); absent until the app restarts after an update */
       localMove?: (sourcePath: string, targetDir: string) => Promise<LocalFileOpResult>
       localTrash: (paths: string[]) => Promise<LocalTrashResult>
-      selectLocalFolder: () => Promise<string | null>
+      selectLocalFolder: () => Promise<{ success: true; path: string } | { success: false }>
 
       // SFTP Window
       openSftpWindow?: (sessionId: string, localPath: string, remotePath: string, title?: string) => Promise<any>
@@ -586,7 +648,7 @@ declare global {
       hasMasterPassword: () => Promise<boolean>
       setupMasterPassword: (password: string) => Promise<{ success: boolean; error?: string }>
       unlockApp: (password: string) => Promise<{ success: boolean; error?: string }>
-      lockApp: () => Promise<{ success: boolean }>
+      lockApp: (restoreRecord?: unknown) => Promise<{ success: boolean }>
       isAppLocked: () => Promise<{ locked: boolean }>
       resetMasterPassword: () => Promise<{ success: boolean }>
 
@@ -603,7 +665,8 @@ declare global {
       /** Tabs open when an update is installed (lib/restoreTabs.ts), kept encrypted until the next start */
       restoreTabsSave?: (record: unknown) => Promise<{ success: boolean; error?: string }>
       /** Those tabs, once (the file is removed); null when there are none */
-      restoreTabsTake?: () => Promise<{ savedAt: number; record: unknown } | null>
+      restoreTabsTake?: () => Promise<{ savedAt: number; record: unknown; source?: 'close' } | null>
+      onRestoreTabsBeforeClose?: (readRecord: () => unknown) => () => void
       /** What an update would cut off */
       updateBusyWork?: () => Promise<{ transfers: number; unsavedEdits: number }>
       openUpdatePage?: () => Promise<{ success: boolean }>

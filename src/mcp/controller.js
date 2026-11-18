@@ -15,9 +15,9 @@ const { createMcpHttpServer, MCP_PATH } = require('./server.js')
 const { buildServerEntry, applyServerEntry, findLocalRegistrations, findShadowedProjects, SetupError } = require('./clientSetup.js')
 const { setTokenEnv: setTokenEnvDefault } = require('./tokenEnv.js')
 
-const SERVER_NAME = 'ez-shell'
+const SERVER_NAME = 'ezshell-ssh-mcp'
 /** What the server was registered as before; "자동 설정" replaces such an entry instead of adding a second one */
-const LEGACY_SERVER_NAMES = ['my-ssh-client']
+const LEGACY_SERVER_NAMES = ['ez-shell', 'my-ssh-client']
 /** After a lock, a connection with background jobs stays open this long so the stop reaches the server */
 const JOB_STOP_GRACE_MS = 3500
 
@@ -125,9 +125,13 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
       : outcome.shadowedProjects
     // Registrations made with the old `claude mcp add` command live per project in ~/.claude.json;
     // this app does not edit those, so the user is told where the old name is still registered
-    const legacyProjects = [...new Set(LEGACY_SERVER_NAMES.flatMap(legacy => (scope === 'project'
-      ? findLocalRegistrations({ filePath: userConfigPath, projectDir: request.projectDir, name: legacy })
-      : findLegacyProjects(userConfigPath, legacy))))]
+    const legacyRegistrations = LEGACY_SERVER_NAMES.map(name => ({
+      name,
+      projects: scope === 'project'
+        ? findLocalRegistrations({ filePath: userConfigPath, projectDir: request.projectDir, name })
+        : findLegacyProjects(userConfigPath, name)
+    })).filter(item => item.projects.length > 0)
+    const legacyProjects = [...new Set(legacyRegistrations.flatMap(item => item.projects))]
     const wantsEnv = target.useEnvToken && request.setTokenEnv === true && outcome.result !== 'conflict'
     const env = wantsEnv ? await setTokenEnv(token) : null
     return {
@@ -135,8 +139,9 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
       filePath: target.filePath,
       ...outcome,
       shadowedProjects,
-      legacyName: LEGACY_SERVER_NAMES[0],
+      legacyName: legacyRegistrations[0]?.name ?? LEGACY_SERVER_NAMES[0],
       legacyProjects,
+      legacyRegistrations,
       tokenEnv: env ? env.status : null,
       tokenEnvError: env && env.error ? env.error : null
     }

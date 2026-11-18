@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
-import { RiAddFill, RiFolderFill, RiArrowLeftDoubleLine, RiPushpinLine, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill, RiListUnordered, RiClipboardFill, RiPlugLine, RiComputerLine } from 'react-icons/ri'
+import { RiAddFill, RiFolderFill, RiArrowLeftDoubleLine, RiPushpinLine, RiFolderAddFill, RiFlashlightFill, RiBarChartFill, RiTerminalBoxFill, RiListUnordered, RiClipboardFill, RiPlugLine, RiComputerLine, RiSearchLine } from 'react-icons/ri'
 import { motion } from 'framer-motion'
 import { SessionList } from './SessionList'
 import { LocalTerminalList } from './LocalTerminalList'
+import { AgentMessagesButton } from '../Terminal/AgentMessages'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore, type Session } from '../../stores/sessionStore'
 import { useTerminalStore } from '../../stores/terminalStore'
@@ -23,6 +24,7 @@ interface SidebarProps {
   onEditSession?: (session: any) => void
   onDuplicateSession?: (session: any) => void
   onOpenQuickConnect?: () => void
+  onPickSession: () => void
   onAddSession?: (folderId?: string) => void
   /** Opens "텍스트로 세션 추가" for the given folder (undefined = top level) */
   onImportSession?: (folderId?: string) => void
@@ -30,11 +32,12 @@ interface SidebarProps {
   onBatchClick?: () => void
   /** Opens a new local terminal tab (the + of the local terminal list) */
   onLocalTerminal?: () => void
+  onLocalProject?: () => void
   /** Closes a tab; used by the local terminal list */
   onCloseTerminal?: (terminalId: string) => void
 }
 
-export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onImportSession, onStatsClick, onBatchClick, onLocalTerminal, onCloseTerminal }: SidebarProps) {
+export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onPickSession, onAddSession, onImportSession, onStatsClick, onBatchClick, onLocalTerminal, onLocalProject, onCloseTerminal }: SidebarProps) {
   const { sidebarMode, toggleSidebarMode, setSidebarMode } = useUIStore()
   const zenMode = useUIStore(state => state.zenMode)
   const { addFolder, saveToBackend } = useSessionStore()
@@ -118,16 +121,21 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
         <div className="sidebar-content" inert={isCompact || zenMode}>
           <div className="sidebar-header">
             <h2>연결 목록</h2>
-            <motion.button
-              className="sidebar-toggle"
-              onClick={toggleSidebarMode}
-              title={toggleTitle}
-              aria-label={toggleTitle}
-              whileHover={reducedMotion ? undefined : { scale: 1.05 }}
-              whileTap={reducedMotion ? undefined : { scale: 0.95 }}
-            >
-              <ToggleIcon size={18} />
-            </motion.button>
+            <div className="sidebar-header-actions">
+              <button type="button" className="sidebar-session-search" onClick={onPickSession} title="저장된 세션 찾기" aria-label="저장된 세션 찾기">
+                <RiSearchLine size={17} />
+              </button>
+              <motion.button
+                className="sidebar-toggle"
+                onClick={toggleSidebarMode}
+                title={toggleTitle}
+                aria-label={toggleTitle}
+                whileHover={reducedMotion ? undefined : { scale: 1.05 }}
+                whileTap={reducedMotion ? undefined : { scale: 0.95 }}
+              >
+                <ToggleIcon size={18} />
+              </motion.button>
+            </div>
           </div>
           <div className="sidebar-actions">
             <motion.button
@@ -172,8 +180,14 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
             <SessionList onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} onImportSession={onImportSession} />
             {onCloseTerminal && <LocalTerminalList onOpen={onLocalTerminal} onClose={onCloseTerminal} />}
           </div>
-          {(onBatchClick || onStatsClick) && (
+          {(onLocalProject || onBatchClick || onStatsClick) && (
             <div className="sidebar-footer">
+              <AgentMessagesButton />
+              {onLocalProject && (
+                <button className="sidebar-footer-btn" onClick={onLocalProject} title="로컬 작업" aria-label="로컬 작업">
+                  <RiComputerLine size={18} />
+                </button>
+              )}
               {onBatchClick && (
                 <button className="sidebar-footer-btn" onClick={onBatchClick} title="배치 명령 실행" aria-label="배치 명령 실행">
                   <RiTerminalBoxFill size={18} />

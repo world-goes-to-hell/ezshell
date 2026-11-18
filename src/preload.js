@@ -122,8 +122,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('sftp-transfer-pause', { sessionId, transferId }),
   sftpTransferResume: (sessionId, transferId) =>
     ipcRenderer.invoke('sftp-transfer-resume', { sessionId, transferId }),
-  sftpTransferCancel: (sessionId, transferId) =>
-    ipcRenderer.invoke('sftp-transfer-cancel', { sessionId, transferId }),
+  sftpTransferRetry: (sessionId, transferId, overwrite = false) =>
+    ipcRenderer.invoke('sftp-transfer-retry', { sessionId, transferId, overwrite }),
+  sftpTransferCancel: (sessionId, transferId, failedOnly = false) =>
+    ipcRenderer.invoke('sftp-transfer-cancel', { sessionId, transferId, failedOnly }),
   sftpQueueClearCompleted: (sessionId) =>
     ipcRenderer.invoke('sftp-queue-clear-completed', { sessionId }),
   sftpGetQueue: (sessionId) =>
@@ -145,9 +147,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 로컬 디렉토리 목록 조회
   localList: (dirPath) => ipcRenderer.invoke('local-list', { dirPath }),
   // Local terminal tabs (shells of this PC)
-  localShellOpen: (size) => ipcRenderer.invoke('local-shell-open', size),
+  localShellOpen: (options) => ipcRenderer.invoke('local-shell-open', options),
+  localProjectInspect: (folder) => ipcRenderer.invoke('local-project-inspect', folder),
+  localWorktreeCreate: (options) => ipcRenderer.invoke('local-worktree-create', options),
   localShellAttach: (id) => ipcRenderer.invoke('local-shell-attach', id),
+  localShellClipboard: (id) => ipcRenderer.invoke('local-shell-clipboard', id),
+  localShellHasWorkingAgent: (ids) => ipcRenderer.invoke('local-shell-working-agent', ids),
+  agentMessagesSnapshot: () => ipcRenderer.invoke('agent-messages-state'),
+  agentMessageMcpSetup: (kind) => ipcRenderer.invoke('agent-message-mcp-setup', kind),
+  agentMessageSend: (message) => ipcRenderer.invoke('agent-message-send', message),
+  agentMessageAck: (id) => ipcRenderer.invoke('agent-message-ack', id),
+  onAgentMessagesState: (callback) => {
+    const handler = (_event, snapshot) => callback(snapshot);
+    ipcRenderer.on('agent-messages-state', handler);
+    return () => ipcRenderer.removeListener('agent-messages-state', handler);
+  },
+  onAgentMessageDelivered: (callback) => {
+    const handler = (_event, delivery) => callback(delivery);
+    ipcRenderer.on('agent-message-delivered', handler);
+    return () => ipcRenderer.removeListener('agent-message-delivered', handler);
+  },
   localShellWrite: (id, data) => ipcRenderer.send('local-shell-write', { id, data }),
+  localShellComposing: (id, value) => ipcRenderer.send('local-shell-composing', { id, value }),
   localShellResize: (id, cols, rows) => ipcRenderer.send('local-shell-resize', { id, cols, rows }),
   localShellClose: (id) => ipcRenderer.send('local-shell-close', id),
   onLocalShellData: (callback) => {
@@ -309,7 +330,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   hasMasterPassword: () => ipcRenderer.invoke('has-master-password'),
   setupMasterPassword: (password) => ipcRenderer.invoke('setup-master-password', { password }),
   unlockApp: (password) => ipcRenderer.invoke('unlock-app', { password }),
-  lockApp: () => ipcRenderer.invoke('lock-app'),
+  lockApp: (restoreRecord) => ipcRenderer.invoke('lock-app', restoreRecord),
   isAppLocked: () => ipcRenderer.invoke('is-app-locked'),
   resetMasterPassword: () => ipcRenderer.invoke('reset-master-password'),
   saveAutoUnlock: (password) => ipcRenderer.invoke('save-auto-unlock', { password }),
@@ -350,6 +371,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
   restoreTabsSave: (record) => ipcRenderer.invoke('restore-tabs-save', record),
   restoreTabsTake: () => ipcRenderer.invoke('restore-tabs-take'),
+  onRestoreTabsBeforeClose: (readRecord) => {
+    const handler = (_, id) => {
+      let record = null;
+      try { record = readRecord(); } finally { ipcRenderer.send('restore-tabs-close-record', { id, record }); }
+    };
+    ipcRenderer.on('restore-tabs-before-close', handler);
+    return () => ipcRenderer.removeListener('restore-tabs-before-close', handler);
+  },
   updateBusyWork: () => ipcRenderer.invoke('update-busy-work'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
   openUpdatePage: () => ipcRenderer.invoke('open-update-page'),
