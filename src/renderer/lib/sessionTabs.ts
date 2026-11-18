@@ -1,4 +1,5 @@
 import type { TerminalInfo, LayoutState } from '../stores/terminalStore'
+import { isSplitTree, type SplitNode } from './splitTree'
 
 export type TabStatus = 'connected' | 'disconnected'
 
@@ -8,6 +9,8 @@ export interface SessionTab {
   /** 1-based position among all open tabs */
   index: number
   path?: string
+  /** How the tab is divided, when it holds more than one pane (the list draws it, a pane can be picked) */
+  splitTree?: SplitNode
 }
 
 export type SessionTabGroup = Record<TabStatus, SessionTab[]>
@@ -31,7 +34,8 @@ export function groupTabsBySession(terminals: ReadonlyMap<string, TerminalInfo>)
       id: terminal.id,
       label: terminal.title || `${terminal.username}@${terminal.host}`,
       index,
-      path: terminal.currentPath
+      path: terminal.currentPath,
+      ...(isSplitTree(terminal.splitTree) ? { splitTree: terminal.splitTree } : {})
     }
     groups.set(savedSessionId, { ...group, [status]: [...group[status], sessionTab] })
   }

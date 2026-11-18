@@ -187,7 +187,8 @@ src/renderer/
 ### Sidebar Session Tab Badge
 사이드바 세션 옆에 그 세션에서 열린 탭 개수를 배지로 표시한다 (초록 테두리 = 연결됨, 빨강 테두리 = 끊김, 섞이면 둘 다).
 탭 ID 는 메인 프로세스가 연결마다 만드는 값이라 사이드바 세션 ID 와 다르다. 둘은 `TerminalInfo.connectConfig.savedSessionId` 로만 이어진다 (`lib/sessionTabs.ts`).
-배지의 탭이 1개면 바로 이동, 2개 이상이면 목록에서 고른다. 이동은 `terminalStore.focusTerminal` 을 쓴다 (분할 유지, 터미널에 키보드 포커스).
+배지의 탭이 1개이고 분할되지 않았으면 바로 이동, 그 밖에는 목록에서 고른다. 이동은 `terminalStore.focusTerminal` 을 쓴다 (분할 유지, 터미널에 키보드 포커스).
+분할된 탭은 목록에서 `N세션` 표지와 함께 그 아래에 배치 그림이 나오고, 칸을 누르면(방향키·Enter 로도) 그 탭으로 가서 그 칸의 셸에 키보드를 준다. 로컬 터미널 목록의 배치 그림(`PaneLayoutBadge`)과 같은 동작이고, 칸 이동·지금 칸 읽기·칸 위치는 `lib/paneFocus.ts`, 칸 모양은 `Sidebar/PaneMap.css` 를 함께 쓴다. 칸은 `DropdownMenu.Item` 이라 방향키가 닿는다. 지금 입력 중인 칸은 배지를 누르는 순간(`pointerdown`)에 읽는다: 목록이 열리면 포커스가 목록으로 가서 그 뒤에는 알 수 없다.
 별도 창으로 분리한 탭과 저장하지 않은 빠른 연결은 세지 않는다.
 세션 행이 Tooltip Trigger 라서 배지/목록의 이벤트가 포털을 통과해 행까지 올라간다. 처리 내용은 `docs/brain/2026-10-01-react-events-bubble-through-portals-into-tooltip-trigger.md` 참고.
 

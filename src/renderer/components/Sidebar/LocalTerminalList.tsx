@@ -2,9 +2,9 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiComputerLine } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { LOCAL_PANE_STORAGE_KEY, clampPaneHeight, parseLocalPanePrefs, visibleTerminalId, type LocalPanePrefs } from '../../lib/localTerminalPane'
-import { isSplitTree, paneIds, type PaneId } from '../../lib/splitTree'
+import { isSplitTree, paneIds } from '../../lib/splitTree'
 import { PaneLayoutBadge } from './PaneLayoutBadge'
-import { tabHost } from '../../lib/tabHosts'
+import { focusTabPane, focusedPaneOf } from '../../lib/paneFocus'
 import './LocalTerminalList.css'
 
 const KEY_STEP = 30
@@ -91,24 +91,6 @@ export function LocalTerminalList({ onOpen, onClose }: LocalTerminalListProps) {
     update({ collapsed: false, height }, true)
   }
 
-  // A split tab shows how many sessions it holds; its layout map (PaneLayoutBadge) calls this to go to
-  // the tab and put the keyboard in the picked pane. The pane is found in the tab's own DOM node
-  // (lib/tabHosts.ts) by its data-pane attribute.
-  const focusPane = (tabId: string, pane: PaneId) => {
-    focusTerminal(tabId)
-    window.setTimeout(() => {
-      const element = tabHost(tabId).querySelector<HTMLElement>(`[data-pane="${CSS.escape(pane)}"] .xterm-helper-textarea`)
-      element?.focus()
-    }, 60)
-  }
-
-  // The pane of this tab that holds the keyboard now (null when the focus is elsewhere)
-  const focusedPane = (tabId: string): PaneId | null => {
-    const active = document.activeElement
-    if (!active || !tabHost(tabId).contains(active)) return null
-    return active.closest<HTMLElement>('[data-pane]')?.dataset.pane ?? null
-  }
-
   if (locals.length === 0) return null
 
   const isSized = prefs.height !== undefined && !prefs.collapsed
@@ -166,7 +148,7 @@ export function LocalTerminalList({ onOpen, onClose }: LocalTerminalListProps) {
                   <span className={`local-terms-dot ${terminal.connected ? 'is-on' : ''}`} aria-hidden="true" />
                 </button>
                 {panes.length > 1 && terminal.splitTree && (
-                  <PaneLayoutBadge tabName={name} tree={terminal.splitTree} currentPane={() => focusedPane(id)} onPick={pane => focusPane(id, pane)} />
+                  <PaneLayoutBadge tabName={name} tree={terminal.splitTree} currentPane={() => focusedPaneOf(id)} onPick={pane => focusTabPane(focusTerminal, id, pane)} />
                 )}
                 <button type="button" className="local-terms-close" onClick={() => onClose(id)} title="닫기" aria-label={`${name} 닫기`}>
                   <RiCloseLine size={15} />

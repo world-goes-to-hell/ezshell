@@ -262,50 +262,6 @@
   white-space: nowrap;
 }
 
-.pane-map-area {
-  position: relative;
-}
-
-.pane-map-cell {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  /* The border is the gap between panes: cells touch, their borders take the map's background */
-  border: 2px solid var(--bg-secondary);
-  border-radius: calc(var(--radius-sm) + 2px);
-  background: var(--bg-primary);
-  background-clip: padding-box;
-  box-shadow: inset 0 0 0 1px var(--border-strong);
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-}
-
-.pane-map-cell:hover,
-.pane-map-cell:focus-visible {
-  outline: none;
-  box-shadow: inset 0 0 0 2px var(--accent);
-  color: var(--text-primary);
-}
-
-/* The pane that has the keyboard */
-.pane-map-cell.is-current {
-  background-color: var(--accent);
-  box-shadow: none;
-  color: var(--on-accent);
-  font-weight: 600;
-}
-
-/* The place of a pane that moved out to a tab of its own */
-.pane-map-cell.is-vacant {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--border);
-  cursor: default;
-}
-
 .pane-map-hint {
   color: var(--text-muted);
   font-size: 11px;

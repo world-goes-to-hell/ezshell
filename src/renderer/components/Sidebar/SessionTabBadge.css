@@ -155,3 +155,28 @@
   flex-shrink: 0;
   color: var(--accent);
 }
+
+/* A split tab: "3세션" on its row and its layout under it; a pane of the map goes to that shell */
+.session-tab-menu-panes {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-tab-map {
+  padding: 0 8px 6px 32px;
+}
+
+.session-tab-map-area {
+  width: 100%;
+  max-width: 240px;
+  height: 84px;
+}
+
+.session-tab-menu-entry + .session-tab-menu-entry {
+  margin-top: 2px;
+}

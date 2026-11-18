@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { groupTabsBySession, findTabPane, badgeLabel, badgeHint } from './sessionTabs'
 import type { TerminalInfo, LayoutState } from '../stores/terminalStore'
+import { singlePane, splitPane } from './splitTree'
 
 const tab = (id: string, savedSessionId: string | undefined, overrides: Partial<TerminalInfo> = {}): TerminalInfo => ({
   id,
@@ -60,6 +61,13 @@ describe('groupTabsBySession', () => {
     const groups = groupTabsBySession(terminalsOf(tab('1', 'web', { currentPath: '/var/log' }), tab('2', 'web')))
 
     expect(groups.get('web')!.connected.map(t => t.path)).toEqual(['/var/log', undefined])
+  })
+
+  it('carries the layout of a split tab only (the list draws it)', () => {
+    const split = splitPane(singlePane(), 'main', 'row', 'split-1')
+    const groups = groupTabsBySession(terminalsOf(tab('1', 'web', { splitTree: split }), tab('2', 'web', { splitTree: singlePane() }), tab('3', 'web')))
+
+    expect(groups.get('web')!.connected.map(t => t.splitTree)).toEqual([split, undefined, undefined])
   })
 })
 

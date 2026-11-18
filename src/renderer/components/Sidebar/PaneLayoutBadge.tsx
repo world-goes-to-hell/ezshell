@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createPortal } from 'react-dom'
 import { layoutOf, type PaneId, type SplitNode } from '../../lib/splitTree'
 import { placeTooltip } from '../../lib/tooltipPosition'
+import { cellStyle } from '../../lib/paneFocus'
+import './PaneMap.css'
 
 const OPEN_DELAY_MS = 150
 const CLOSE_DELAY_MS = 220
@@ -99,7 +101,7 @@ export function PaneLayoutBadge({ tabName, tree, currentPane, onPick }: PaneLayo
               <div
                 key={`vacant-${pane}`}
                 className="pane-map-cell is-vacant"
-                style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.w * 100}%`, height: `${rect.h * 100}%` }}
+                style={cellStyle(rect)}
                 aria-hidden="true"
               />
             ))}
@@ -108,7 +110,7 @@ export function PaneLayoutBadge({ tabName, tree, currentPane, onPick }: PaneLayo
                 key={pane}
                 type="button"
                 className={`pane-map-cell ${pane === current ? 'is-current' : ''}`}
-                style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.w * 100}%`, height: `${rect.h * 100}%` }}
+                style={cellStyle(rect)}
                 onClick={() => pick(pane)}
                 aria-label={`세션 ${index + 1}로 이동${pane === current ? ' (지금 입력 중)' : ''}`}
               >
