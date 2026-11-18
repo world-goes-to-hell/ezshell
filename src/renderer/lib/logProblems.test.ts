@@ -43,6 +43,27 @@ describe('problems of a log', () => {
     expect(linesOf(doc, scanProblems(doc))).toEqual(['1:warn'])
   })
 
+  it('takes a Python traceback as one error, source lines included', () => {
+    const doc = docOf([
+      'INFO a',
+      'ERROR job crashed',
+      'Traceback (most recent call last):',
+      '  File "/app/job.py", line 88, in run',
+      '    rows = fetch(cursor)',
+      '  File "/app/db.py", line 12, in fetch',
+      '    return int(value)',
+      'ValueError: invalid literal for int()',
+      'INFO b',
+      'Traceback (most recent call last):',
+      '  File "/app/x.py", line 1, in <module>',
+      '    main()',
+      'KeyError: 1'
+    ].join('\n'))
+    expect(linesOf(doc, scanProblems(doc))).toEqual(['2:error', '10:error'])
+    expect(linesOf(doc, scanProblems(doc, 8, 8))).toEqual([])
+    expect(linesOf(doc, scanProblems(doc, 13, 13))).toEqual([])
+  })
+
   it('reads a range with the line above it in mind', () => {
     const doc = docOf(TRACE)
     expect(linesOf(doc, scanProblems(doc, 3, 6))).toEqual([])
@@ -101,6 +122,8 @@ describe('moving between problems', () => {
 
 describe('the problem list in the editor state', () => {
   const CHUNKS = [
+    'Traceback (most recent call last):\n', '  File "/app/j.py", line 3, in run\n', '    go()\n', 'ValueError: bad\n',
+    '  File "/app/k.py", line 9, in go', '\n', '    stray()\nKeyError: 2\n',
     'ERROR a\n', 'java.lang.X', 'Exception: boom\n', '\tat a.B.c(B.java:1)\n', 'INFO ok\n', 'WARN w\nINFO x',
     ' more\n', '\tat stray.Frame.run(F.java:9)\n', 'ERR', 'OR late\n', 'Caused by: java.io.IOException: ERROR x\n', 'INFO end\n'
   ]

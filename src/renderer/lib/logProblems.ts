@@ -2,7 +2,7 @@
 // of 50 lines is one error. The list lives in the editor state and follows every change of the text
 // (lines added at the end, old lines trimmed at the start) by reading only the lines that changed.
 import { StateField, type ChangeDesc, type EditorState, type Text } from '@codemirror/state'
-import { classifyDetail, classifyLine, type JumpLevel, type LogLevel } from './logLevels'
+import { classifyDetail, classifyLine, isFrameSource, type JumpLevel, type LogLevel } from './logLevels'
 
 export interface LogProblem {
   /** Start of the problem's first line */
@@ -22,33 +22,42 @@ const isProblemLevel = (level: LogLevel | null): level is JumpLevel => level ===
 /**
  * The problems that start in lines `fromLine`..`toLine` (1-based, inclusive). A line with a level
  * word always starts one; a crash line without one (exception name, "at ...") starts one only when
- * the line above is not an error or warning, otherwise it belongs to the problem above.
+ * the line above is not an error or warning, otherwise it belongs to the problem above. The source
+ * line a Python traceback prints under a frame keeps the report going (the exception name after it
+ * is not a new error).
  */
 export function scanProblems(doc: Text, fromLine = 1, toLine = doc.lines): LogProblem[] {
   const first = Math.max(1, fromLine)
   const last = Math.min(toLine, doc.lines)
   const found: LogProblem[] = []
-  let isAfterProblem = first > 1 && isProblemLevel(classifyLine(doc.line(first - 1).text))
+  let previous = first > 1 ? doc.line(first - 1).text : ''
+  // Whether the line above is part of a report: an error or warning line, or the source line of a Python frame
+  let isInsideReport = first > 1 && (isProblemLevel(classifyLine(previous)) || (first > 2 && isFrameSource(doc.line(first - 2).text, previous)))
   for (let number = first; number <= last; number++) {
     const line = doc.line(number)
     const { level, explicit } = classifyDetail(line.text)
     const isProblem = isProblemLevel(level)
-    if (isProblem && (explicit || !isAfterProblem)) found.push({ pos: line.from, level })
-    isAfterProblem = isProblem
+    if (isProblem && (explicit || !isInsideReport)) found.push({ pos: line.from, level })
+    isInsideReport = isProblem || isFrameSource(previous, line.text)
+    previous = line.text
   }
   return found
 }
 
+/** A line can change what the two lines below it are (a frame line, its source line, the line after) */
+const LINES_BELOW = 2
+
 /**
- * The list after a change. Every changed line is read again, and the line after it too (whether that
- * one starts a problem depends on the line above); the rest only moves.
+ * The list after a change. Every changed line is read again, and the two lines after it too (whether a
+ * line starts a problem depends on the lines above); the rest only moves.
  */
 export function remapProblems(problems: readonly LogProblem[], oldDoc: Text, doc: Text, changes: ChangeDesc): LogProblem[] {
   const dropped: Array<[number, number]> = []
   const scanned: LogProblem[] = []
   changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-    dropped.push([oldDoc.lineAt(fromA).from, oldDoc.lineAt(toA).to + 1])
-    scanned.push(...scanProblems(doc, doc.lineAt(fromB).number, doc.lineAt(toB).number + 1))
+    const lastOld = Math.min(oldDoc.lines, oldDoc.lineAt(toA).number + LINES_BELOW)
+    dropped.push([oldDoc.lineAt(fromA).from, oldDoc.line(lastOld).from])
+    scanned.push(...scanProblems(doc, doc.lineAt(fromB).number, doc.lineAt(toB).number + LINES_BELOW))
   })
   const kept = problems
     .filter(problem => !dropped.some(([from, to]) => problem.pos >= from && problem.pos <= to))

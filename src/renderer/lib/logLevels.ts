@@ -50,6 +50,16 @@ const CONTINUATION_LINES = [
   /^[\w.$]+(?:Exception|Error)(?::|\s*$)/
 ]
 
+const PYTHON_FRAME = /^\s+File ".*", line \d+/
+
+/**
+ * A Python traceback prints the source line under each `File "...", line N` line. That line is plain
+ * code (no level, no crash words) but belongs to the report: the lines after it continue the same one.
+ */
+export function isFrameSource(previousLine: string, line: string): boolean {
+  return PYTHON_FRAME.test(previousLine) && /^\s/.test(line)
+}
+
 export interface LineClass {
   level: LogLevel | null
   /** The line names its level itself (a level word); false for a line that only looks like part of a crash */
