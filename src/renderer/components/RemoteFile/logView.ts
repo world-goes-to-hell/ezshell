@@ -1,6 +1,6 @@
 // CodeMirror parts of the log view: line colours by level (only the lines on screen are looked at),
 // adding the lines a followed log printed, and moving between problems and markers (keys and wheel).
-import { Compartment, Prec, RangeSetBuilder, Transaction, type EditorState, type Extension } from '@codemirror/state'
+import { Compartment, Prec, RangeSetBuilder, StateEffect, StateField, Transaction, type EditorState, type Extension } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin, keymap, type DecorationSet, type ViewUpdate } from '@codemirror/view'
 import { classifyLine, type LogLevel, type JumpLevel } from '../../lib/logLevels'
 import { planAppend, type AppendLimits, type AppendPlan } from '../../lib/logAppend'
@@ -87,9 +87,10 @@ export type NavKind = 'problem' | 'marker'
 export type NavTarget = ProblemTarget & MarkerTarget
 
 /**
- * Where "next" and "previous" start: the cursor's line while it is on screen, otherwise the edge of
- * what is shown (the wheel scrolls without moving the cursor, and going on from a cursor left far
- * away would jump to a place the user is not looking at).
+ * Where "next" and "previous" start: the cursor's line while it is on screen. Otherwise (the wheel
+ * scrolls without moving the cursor) what is shown counts as seen: next is the first problem below
+ * the view, previous the last one above it. Going to a problem already on screen would not move the
+ * view, which looks like nothing happened (at the end of a followed log every step did that).
  */
 function referencePos(view: EditorView, direction: 1 | -1): number {
   const head = view.state.doc.lineAt(view.state.selection.main.head)
@@ -97,15 +98,39 @@ function referencePos(view: EditorView, direction: 1 | -1): number {
   const bottom = top + view.scrollDOM.clientHeight
   const block = view.lineBlockAt(head.from)
   if (block.bottom > top && block.top < bottom) return head.from
-  return direction === 1 ? view.lineBlockAtHeight(top).from - 1 : view.lineBlockAtHeight(bottom).to + 1
+  return direction === 1 ? view.lineBlockAtHeight(bottom).to : view.lineBlockAtHeight(top).from
 }
 
 const startPos = (view: EditorView, target: NavTarget): number => (typeof target === 'number' ? referencePos(view, target) : 0)
 
+/** The line a move arrived at lights up for a moment (styles/RemoteLog.css), so the eye finds it */
+const arriveAt = StateEffect.define<number | null>()
+const arrivedLine = Decoration.line({ class: 'cm-log-arrived' })
+const arrivedField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    let next = value.map(tr.changes)
+    for (const effect of tr.effects) {
+      if (!effect.is(arriveAt)) continue
+      next = effect.value === null ? Decoration.none : Decoration.set([arrivedLine.range(tr.state.doc.lineAt(effect.value).from)])
+    }
+    return next
+  },
+  provide: field => EditorView.decorations.from(field)
+})
+const ARRIVED_MS = 1200
+const arrivedTimers = new WeakMap<EditorView, number>()
+
 /** Cursor on the line at `pos`, the line in the middle of the view (or at its top) */
 export function revealLine(view: EditorView, pos: number, y: 'center' | 'start' = 'center'): void {
   const at = Math.min(pos, view.state.doc.length)
-  view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, y === 'start' ? { y, yMargin: 32 } : { y }) })
+  view.dispatch({
+    selection: { anchor: at },
+    effects: [EditorView.scrollIntoView(at, y === 'start' ? { y, yMargin: 32 } : { y }), arriveAt.of(at)]
+  })
+  window.clearTimeout(arrivedTimers.get(view))
+  // The view may be gone by then (window closed): dispatching to a destroyed view does nothing
+  arrivedTimers.set(view, window.setTimeout(() => view.dispatch({ effects: arriveAt.of(null) }), ARRIVED_MS))
 }
 
 /** Go to the next / previous / first / last problem of `levels` (a stack trace is one problem) */
@@ -170,6 +195,7 @@ export function logExtensions({ isWrapped, onNavigate, onState }: {
 }): Extension[] {
   return [
     logProblemField,
+    arrivedField,
     levelColours,
     levelTheme,
     wrapSlot.of(isWrapped ? EditorView.lineWrapping : []),

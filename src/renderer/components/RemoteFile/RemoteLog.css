@@ -284,3 +284,22 @@
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+
+/* The line a move arrived at: a short flash over the line's own colour */
+
+.cm-editor .cm-line.cm-log-arrived {
+  animation: remote-log-arrived 1.1s ease-out;
+}
+
+@keyframes remote-log-arrived {
+  from { background-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+  35% { background-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-editor .cm-line.cm-log-arrived {
+    animation: none;
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+  }
+}

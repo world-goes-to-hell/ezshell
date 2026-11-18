@@ -52,6 +52,17 @@ const KEYS = { F8: 119, F9: 120, m: 77, Enter: 13 }
   check('the list panel shows the three problems, newest first', (await rows()) === 'ERROR second failure | WARN slow query | ERROR request failed', await rows())
   check('with the time of each', (await page.js(`document.querySelector('.remote-log-problem-row .remote-log-row-time').textContent`)) === '10:01:10')
 
+  // ---- At the end of the log, cursor not on screen: a step goes to a problem outside the view ----
+  // (the last error is on screen there; "moving" to it would not move the view)
+  const scrollTop = () => page.js(`Math.round(document.querySelector('.cm-scroller').scrollTop)`)
+  const wheelAt = await page.center(`document.querySelector('.cm-scroller')`)
+  const endTop = await scrollTop()
+  await page.send('Page.bringToFront')
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: wheelAt[0], y: wheelAt[1], deltaX: 0, deltaY: -100, modifiers: ALT })
+  await sleep(400)
+  check('Alt + wheel up at the end of the log scrolls to a problem above the view', (await scrollTop()) < endTop && (await position()) === '2/3', `${endTop} -> ${await scrollTop()}, ${await position()}`)
+  check('the line it arrived at is lit', await page.js(`!!document.querySelector('.cm-line.cm-log-arrived')`))
+
   // ---- Keys: first, next, last, previous ----
   await focusLog()
   await key('F8', CTRL | SHIFT)
