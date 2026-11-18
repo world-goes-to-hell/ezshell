@@ -14,6 +14,8 @@ export interface LogMarker {
   pos: number
   /** Local time it was set, "15:42:10" */
   time: string
+  /** A name the user gave it ("배포 전") */
+  label?: string
 }
 
 export interface LogMarkerState {
@@ -25,6 +27,14 @@ export interface LogMarkerState {
 
 export const addMarker = StateEffect.define<{ pos: number; time: string }>()
 export const removeMarker = StateEffect.define<number>()
+export const renameMarker = StateEffect.define<{ id: number; label: string }>()
+
+export const MAX_LABEL_LENGTH = 30
+
+/** A name as it is kept: one line, no control characters, at most 30 characters ('' takes the name away) */
+export function cleanLabel(raw: string): string {
+  return raw.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, MAX_LABEL_LENGTH).trim()
+}
 
 const EMPTY: LogMarkerState = { markers: [], nextId: 1, lost: 0 }
 
@@ -51,6 +61,10 @@ export const logMarkerField = StateField.define<LogMarkerState>({
         next = { ...next, markers, nextId: next.nextId + 1 }
       } else if (effect.is(removeMarker)) {
         next = { ...next, markers: next.markers.filter(m => m.id !== effect.value) }
+      } else if (effect.is(renameMarker)) {
+        const { id } = effect.value
+        const label = cleanLabel(effect.value.label)
+        next = { ...next, markers: next.markers.map(m => (m.id === id ? { id: m.id, pos: m.pos, time: m.time, ...(label ? { label } : {}) } : m)) }
       }
     }
     return next
@@ -91,10 +105,17 @@ export function markerSummary(state: EditorState): { count: number; latest: LogM
   return { count: markers.length, latest, linesAfter: linesAfter(state, latest) }
 }
 
-/** The next marker after `pos` (1) or before it (-1) in the document, going round the ends */
-export function neighbourMarker(state: EditorState, pos: number, direction: 1 | -1): LogMarker | null {
+export type MarkerTarget = 1 | -1 | 'first' | 'last'
+
+/**
+ * The marker to go to from `pos`: the next (1) or previous (-1) one in the document, or the first /
+ * last. `wrap` goes round the ends; without it null at the ends.
+ */
+export function findMarker(state: EditorState, pos: number, target: MarkerTarget, wrap = true): LogMarker | null {
   const markers = markersOf(state)
   if (markers.length === 0) return null
-  if (direction === 1) return markers.find(m => m.pos > pos) ?? markers[0]
-  return [...markers].reverse().find(m => m.pos < pos) ?? markers[markers.length - 1]
+  if (target === 'first') return markers[0]
+  if (target === 'last') return markers[markers.length - 1]
+  if (target === 1) return markers.find(m => m.pos > pos) ?? (wrap ? markers[0] : null)
+  return [...markers].reverse().find(m => m.pos < pos) ?? (wrap ? markers[markers.length - 1] : null)
 }

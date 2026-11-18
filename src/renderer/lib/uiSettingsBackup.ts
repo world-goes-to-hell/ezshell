@@ -10,6 +10,7 @@ import { parseQueueHeight, QUEUE_HEIGHT_STORAGE_KEY } from './transferQueueHeigh
 import { parseLocalPanePrefs, LOCAL_PANE_STORAGE_KEY } from './localTerminalPane'
 import { parseActivityPrefs, ACTIVITY_PREFS_KEY } from './mcpActivity'
 import { THEME_STORAGE_KEY } from './themeSync'
+import { parseLogViewPrefs, LOG_VIEW_PREFS_KEY } from './logViewPrefs'
 
 /**
  * 화면 설정 내보내기·가져오기 (설정 > 백업 > 화면 설정).
@@ -123,6 +124,7 @@ export const UI_SETTING_ENTRIES: readonly UiSettingEntry[] = [
   { key: 'dbExportPrefs', group: 'view', label: 'DB 결과 추출 형식', normalize: viaParser(parseExportPrefs) },
   { key: 'dbDiscoveryAuto', group: 'view', label: 'DB 자동 찾기', normalize: onOff },
   { key: 'remoteCompareSyncScroll', group: 'view', label: '백업 비교 스크롤 동기화', normalize: onOff },
+  { key: LOG_VIEW_PREFS_KEY, group: 'view', label: '실시간 보기의 목록 패널·줄바꿈', normalize: viaParser(parseLogViewPrefs) },
   { key: 'terminalFileZone', group: 'view', label: '터미널 파일 영역 테두리', normalize: onOff },
   { key: 'terminalLogHighlight', group: 'view', label: '터미널 오류·경고 줄 강조', normalize: onOff }
 ]

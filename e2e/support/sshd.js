@@ -1,5 +1,5 @@
 // Test SSH server for the screen tests (specs named ssh-*): any login is accepted, the shell echoes
-// what is typed and knows a few words (ls, ll, etc, home, exit, drop, refuse, halt N), and SFTP serves a small folder.
+// what is typed and knows a few words (ls, ll, etc, home, exit, drop, refuse, halt N, burst), and SFTP serves a small folder.
 // Started by e2e/run.js with E2E_SSH_PORT (127.0.0.1 only) and E2E_SSH_DIR (a temp folder for the
 // host key and the served files).
 const path = require('path')
@@ -21,6 +21,23 @@ fs.writeFileSync(path.join(disk, 'var', 'old.txt'), 'old\n')
 // A one-page PDF and a 1x1 PNG, for the preview window
 fs.writeFileSync(path.join(disk, 'var', 'doc.pdf'), ['%PDF-1.4', '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj', '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj', '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj', 'trailer<</Root 1 0 R>>', '%%EOF', ''].join('\n'))
 fs.writeFileSync(path.join(disk, 'var', 'pic.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'))
+// A log for the live view: two errors (the first with a stack trace) and a warning, far enough apart to need scrolling
+const traceLog = path.join(disk, 'var', 'trace.log')
+fs.writeFileSync(traceLog, [
+  '2026-11-18 10:00:00 INFO start',
+  '2026-11-18 10:00:01 ERROR request failed',
+  'java.lang.IllegalStateException: boom',
+  '\tat com.example.A.run(A.java:1)',
+  '\tat com.example.B.run(B.java:2)',
+  'Caused by: java.sql.SQLException: ERROR: relation "t" does not exist',
+  '\t... 12 more',
+  '2026-11-18 10:00:02 INFO next',
+  '2026-11-18 10:00:03 WARN slow query',
+  ...Array.from({ length: 120 }, (_, i) => `2026-11-18 10:00:${String(10 + (i % 50)).padStart(2, '0')} INFO filler ${i}`),
+  '2026-11-18 10:01:10 ERROR second failure',
+  '2026-11-18 10:01:11 INFO done',
+  ''
+].join('\n'))
 // `~` is the login folder, which is the root here (the app uploads dropped files to `~/name`)
 const local = (p) => path.join(disk, ...String(p).split('/').filter((part) => part && part !== '~'))
 const attrsOf = (st) => ({ mode: st.mode, uid: 0, gid: 0, size: st.size, atime: Math.floor(st.atimeMs / 1000), mtime: Math.floor(st.mtimeMs / 1000) })
@@ -125,6 +142,8 @@ const server = new Server({ hostKeys: [fs.readFileSync(keyFile)] }, (client) => 
               if (cmd === 'exit') { stream.write('timed out waiting for input: auto-logout\r\n'); stream.exit(0); stream.end(); return }
               if (cmd === 'drop') { client.end(); return }
               if (cmd === 'refuse') refusals = 2
+              // `burst`: the followed log gets a new error with a stack frame
+              if (cmd === 'burst') fs.appendFileSync(traceLog, '2026-11-18 10:02:00 ERROR burst failure\n\tat x.Y.z(Y.java:1)\n2026-11-18 10:02:01 INFO after burst\n')
               const halt = /^halt (\d+)$/.exec(cmd)
               if (halt) { haltFor(Number(halt[1])); return }
               if (cmd === 'home') where = '~'

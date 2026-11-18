@@ -1,20 +1,24 @@
 import { initialPace, retryWait, nextPace, waitFor, type PaceKind } from '../../lib/logPollPace'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { RiArrowDownLine, RiArrowDownSLine, RiArrowUpSLine, RiEyeLine, RiFlagLine, RiPauseLine, RiPlayLine, RiRefreshLine } from 'react-icons/ri'
+import { RiArrowDownLine, RiEyeLine, RiFlagLine, RiListCheck2, RiPauseLine, RiPlayLine, RiRefreshLine, RiTextWrap } from 'react-icons/ri'
 import type { EditorState } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
 import { PopoutTitleBar } from '../TitleBar/PopoutTitleBar'
 import { CodeEditor, type CodeEditorHandle, type CursorInfo } from './CodeEditor'
-import { appendLog, isAtBottom, jumpToLevel, logExtensions, scrollToEnd, PROBLEM_LEVELS, type JumpOutcome } from './logView'
-import type { JumpLevel } from '../../lib/logLevels'
-import { countLevels, NO_COUNTS, type LevelCounts } from '../../lib/logAppend'
-import { markerLine } from '../../lib/logLevels'
+import {
+  appendLog, goToMarker, goToProblem, isAtBottom, logExtensions, revealLine, scrollToEnd, setWrapped, PROBLEM_LEVELS,
+  type JumpOutcome, type NavKind, type NavTarget
+} from './logView'
+import { markerLine, type JumpLevel } from '../../lib/logLevels'
 import type { RemoteFileLoaded, RemoteFileTailResult } from '../../types'
 import { formatBytes } from '../../lib/mcpLabels'
 import { fileNameOf, toEditorText } from '../../lib/remoteFileText'
 import { toast } from '../../stores/toastStore'
 import { addMarkerAtEnd, logMarkerExtensions, type MarkerNotice } from './logMarkerView'
-import { logMarkerField, markerSummary, neighbourMarker, MAX_MARKERS, type LogMarker } from '../../lib/logMarkers'
+import { logMarkerField, removeMarker, renameMarker, MAX_MARKERS } from '../../lib/logMarkers'
+import { buildOutline, sameOutline, type LogOutline } from '../../lib/logOutline'
+import { readLogViewPrefs, saveLogViewPrefs } from '../../lib/logViewPrefs'
+import { LogOutlinePanel, StepButtons, type ProblemFilter } from './LogOutlinePanel'
+import './RemoteLog.css'
 
 export type TextPreviewFile = Extract<RemoteFileLoaded, { kind: 'text'; editable: false }>
 
@@ -49,30 +53,38 @@ function followLabel(follow: Follow, isTailMode: boolean): string {
   return isTailMode ? '일시정지' : '미리보기 (읽기 전용)'
 }
 
-const ERROR_ONLY: ReadonlySet<JumpLevel> = new Set<JumpLevel>(['error'])
-const WARN_ONLY: ReadonlySet<JumpLevel> = new Set<JumpLevel>(['warn'])
+const LEVELS_OF: Record<ProblemFilter, ReadonlySet<JumpLevel>> = {
+  all: PROBLEM_LEVELS,
+  error: new Set<JumpLevel>(['error']),
+  warn: new Set<JumpLevel>(['warn'])
+}
+const FILTER_NAME: Record<ProblemFilter, string> = { all: '오류·경고', error: '오류', warn: '경고' }
+
+/** The wheel can reach an end many times in a row: say so once in a while */
+const END_NOTICE_GAP_MS = 1500
 
 function reportMarkerNotice(notice: MarkerNotice): void {
   if (notice === 'limit') toast.info(`기준점은 ${MAX_MARKERS}개까지 둘 수 있습니다`, '띠의 ✕ 로 지운 뒤 다시 찍어 주세요')
   else toast.info('로그 끝에 이미 기준점이 있습니다', '새 줄이 쌓인 뒤에 다시 찍을 수 있습니다')
 }
 
-function reportJump(outcome: JumpOutcome, name: string): void {
-  if (outcome === 'none') toast.info(`다른 ${name} 줄이 없습니다`)
-  else if (outcome === 'wrapped') toast.info('끝을 지나 처음부터 다시 찾았습니다')
+const EMPTY_OUTLINE: LogOutline = {
+  counts: { error: 0, warn: 0 }, ordinal: 0, total: 0, markers: [], latestMarker: null,
+  currentMarkerId: null, currentProblemPos: null, rows: [], matching: 0
 }
 
-/** A text file to look at, and a log to follow ("실시간 보기"): errors red, warnings yellow, F8 between errors. Nothing here writes to the server. */
+/**
+ * A text file to look at, and a log to follow ("실시간 보기"): errors red, warnings yellow, a list of
+ * markers and problems beside it, F8 / F9 and Alt + wheel between them. Nothing here writes to the server.
+ */
 export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   const editorRef = useRef<CodeEditorHandle>(null)
   const isTailMode = file.mode === 'tail'
   const [isLive, setIsLive] = useState(isTailMode)
   const [follow, setFollow] = useState<Follow>({ kind: 'off' })
-  const [counts, setCounts] = useState<LevelCounts>(NO_COUNTS)
-  const countsRef = useRef<LevelCounts>(NO_COUNTS)
   // Whether the view sticks to the end: true while the user looks at the last lines
   const stickRef = useRef(isTailMode)
-  const [newLines, setNewLines] = useState(0)
+  const [unseen, setUnseen] = useState({ lines: 0, errors: 0 })
   const [isTrimmed, setIsTrimmed] = useState(false)
   const [cursor, setCursor] = useState<CursorInfo>({ line: 1, column: 1, selected: 0 })
   // The answer last shown: main moves on only when a look names its cursor (a dropped answer comes again)
@@ -81,11 +93,17 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   // Up to 5MB: converted once, the editor reads it only when it is made
   const initialText = useMemo(() => toEditorText(file.content), [file.content])
 
-  // Markers ("기준점"): the status line shows the latest one; trimmed-away ones are reported
-  const [markers, setMarkers] = useState<ReturnType<typeof markerSummary>>(null)
+  const [prefs, setPrefs] = useState(readLogViewPrefs)
+  const [filter, setFilter] = useState<ProblemFilter>('all')
+  const [outline, setOutline] = useState<LogOutline>(EMPTY_OUTLINE)
+  // What the outline is built for; the editor's listener reads it through a ref (made once)
+  const outlineOptions = useRef({ levels: LEVELS_OF[filter], withRows: prefs.isOutlineOpen })
+  outlineOptions.current = { levels: LEVELS_OF[filter], withRows: prefs.isOutlineOpen }
   const lostRef = useRef(0)
-  const onMarkerState = useCallback((state: EditorState) => {
-    setMarkers(markerSummary(state))
+
+  const onState = useCallback((state: EditorState) => {
+    const next = buildOutline(state, outlineOptions.current)
+    setOutline(previous => (sameOutline(previous, next) ? previous : next))
     const { lost } = state.field(logMarkerField)
     if (lost > lostRef.current) {
       toast.info('오래된 줄이 정리되면서 기준점이 사라졌습니다', `${lost - lostRef.current}개`)
@@ -93,25 +111,45 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
     }
   }, [])
 
-  const extensions = useMemo(() => [
-    ...logExtensions((outcome) => reportJump(outcome, '오류·경고')),
-    ...logMarkerExtensions({ onChange: onMarkerState, onNotice: reportMarkerNotice })
-  ], [onMarkerState])
+  const endNoticeAt = useRef(0)
+  /** What a move did: the view stops following the end, and the user hears why nothing moved */
+  const onNavigate = useCallback((kind: NavKind, outcome: JumpOutcome, target: NavTarget, levelName = '오류·경고') => {
+    const what = kind === 'marker' ? '기준점' : `${levelName} 줄`
+    if (outcome === 'found' || outcome === 'wrapped') stickRef.current = false
+    if (outcome === 'wrapped') toast.info(target === 1 ? '끝을 지나 처음부터 다시 찾았습니다' : '처음을 지나 끝에서부터 다시 찾았습니다')
+    else if (outcome === 'none' && kind === 'marker') toast.info('기준점이 없습니다', 'Ctrl+M 으로 지금 로그 끝에 찍을 수 있습니다')
+    else if (outcome === 'none') toast.info(`다른 ${what}이 없습니다`)
+    else if (outcome === 'end' && Date.now() - endNoticeAt.current > END_NOTICE_GAP_MS) {
+      endNoticeAt.current = Date.now()
+      toast.info(target === 1 ? `마지막 ${what}입니다` : `첫 ${what}입니다`)
+    }
+  }, [])
 
-  // Count what the file showed at first, start at its end when following, and track whether the user left the end
+  const extensions = useMemo(() => [
+    // Read once: the editor is made once, later changes go through setWrapped
+    ...logExtensions({ isWrapped: readLogViewPrefs().isWrapped, onNavigate, onState }),
+    ...logMarkerExtensions({ onNotice: reportMarkerNotice })
+  ], [onNavigate, onState])
+
+  // Start at the end when following, and track whether the user left the end
   useEffect(() => {
     const view = editorRef.current?.getView()
     if (!view) return
-    countsRef.current = countLevels(view.state.doc)
-    setCounts(countsRef.current)
+    onState(view.state)
     if (isTailMode) scrollToEnd(view)
     const onScroll = () => {
       stickRef.current = isAtBottom(view)
-      if (stickRef.current) setNewLines(0)
+      if (stickRef.current) setUnseen({ lines: 0, errors: 0 })
     }
     view.scrollDOM.addEventListener('scroll', onScroll, { passive: true })
     return () => view.scrollDOM.removeEventListener('scroll', onScroll)
-  }, [isTailMode])
+  }, [isTailMode, onState])
+
+  // The list's level and the panel being open change what the outline holds
+  useEffect(() => {
+    const view = editorRef.current?.getView()
+    if (view) onState(view.state)
+  }, [filter, prefs.isOutlineOpen, onState])
 
   const showAdded = useCallback((result: Extract<RemoteFileTailResult, { text: string }>) => {
     const view = editorRef.current?.getView()
@@ -124,12 +162,10 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
     const text = marker ? `${startsLine ? '' : '\n'}${marker}\n${added}` : added
     if (!text) return
     const sticks = stickRef.current
-    const plan = appendLog(view, text, countsRef.current, LIMITS)
-    countsRef.current = plan.counts
-    setCounts(plan.counts)
+    const plan = appendLog(view, text, LIMITS)
     if (plan.trimmed) setIsTrimmed(true)
     if (sticks) scrollToEnd(view)
-    else setNewLines(count => count + plan.addedLines)
+    else setUnseen(previous => ({ lines: previous.lines + plan.addedLines, errors: previous.errors + plan.newErrors }))
     // A new error while the user looks elsewhere: flash the taskbar button (no notification)
     if (plan.newErrors > 0 && !document.hasFocus()) window.electronAPI.remoteFileAttention?.(docId)
   }, [docId])
@@ -196,7 +232,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
     const view = editorRef.current?.getView()
     if (!view) return
     stickRef.current = true
-    setNewLines(0)
+    setUnseen({ lines: 0, errors: 0 })
     scrollToEnd(view)
   }
 
@@ -207,28 +243,42 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
     view.focus()
   }
 
-  /** Puts the marker's line at the top; the view stops following the end so it stays there */
-  const goToMarker = (marker: LogMarker | null) => {
+  const updatePrefs = (change: Partial<typeof prefs>) => {
+    const next = { ...prefs, ...change }
+    setPrefs(next)
+    saveLogViewPrefs(next)
     const view = editorRef.current?.getView()
-    if (!view || !marker) return
-    stickRef.current = false
-    view.dispatch({ selection: { anchor: marker.pos }, effects: EditorView.scrollIntoView(marker.pos, { y: 'start', yMargin: 32 }) })
-    view.focus()
+    if (view && change.isWrapped !== undefined) setWrapped(view, change.isWrapped)
   }
 
-  const stepMarker = (direction: 1 | -1) => {
-    const view = editorRef.current?.getView()
-    if (view) goToMarker(neighbourMarker(view.state, view.state.selection.main.head, direction))
-  }
-
-  /** Arrows and F8 go through errors and warnings; the counts jump within their own level */
-  const jump = (direction: 1 | -1, levels: ReadonlySet<JumpLevel> = PROBLEM_LEVELS, name = '오류·경고') => {
+  /** A row of the list: the line comes into view and the view stops following the end */
+  const goTo = (pos: number, kind: NavKind) => {
     const view = editorRef.current?.getView()
     if (!view) return
-    reportJump(jumpToLevel(view, direction, levels), name)
+    stickRef.current = false
+    revealLine(view, pos, kind === 'marker' ? 'start' : 'center')
     view.focus()
   }
 
+  const stepProblem = (target: NavTarget, levels: ProblemFilter = 'all') => {
+    const view = editorRef.current?.getView()
+    if (!view) return
+    onNavigate('problem', goToProblem(view, target, LEVELS_OF[levels]), target, FILTER_NAME[levels])
+    view.focus()
+  }
+
+  const stepMarker = (target: NavTarget) => {
+    const view = editorRef.current?.getView()
+    if (!view) return
+    onNavigate('marker', goToMarker(view, target), target)
+    view.focus()
+  }
+
+  const dispatchMarker = (effect: ReturnType<typeof removeMarker.of> | ReturnType<typeof renameMarker.of>) => {
+    editorRef.current?.getView()?.dispatch({ effects: effect })
+  }
+
+  const { counts, latestMarker } = outline
   const actions = (
     <>
       <button
@@ -244,6 +294,26 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
       <button type="button" className="title-bar-btn popout-title-action" onClick={markNow} title="기준점 찍기 (Ctrl+M): 지금 로그 끝에 표시하고, 이후 줄은 그 아래로 쌓입니다. 줄 번호를 눌러 그 줄에도 찍을 수 있습니다" aria-label="기준점 찍기">
         <RiFlagLine size={16} />
       </button>
+      <button
+        type="button"
+        className={`title-bar-btn popout-title-action${prefs.isWrapped ? ' is-active' : ''}`}
+        onClick={() => updatePrefs({ isWrapped: !prefs.isWrapped })}
+        title={prefs.isWrapped ? '줄바꿈 끄기 (긴 줄을 한 줄로)' : '줄바꿈 (긴 줄을 창 너비에서 접기)'}
+        aria-label="줄바꿈"
+        aria-pressed={prefs.isWrapped}
+      >
+        <RiTextWrap size={16} />
+      </button>
+      <button
+        type="button"
+        className={`title-bar-btn popout-title-action${prefs.isOutlineOpen ? ' is-active' : ''}`}
+        onClick={() => updatePrefs({ isOutlineOpen: !prefs.isOutlineOpen })}
+        title={prefs.isOutlineOpen ? '기준점·오류 목록 닫기' : '기준점·오류 목록 열기'}
+        aria-label="기준점·오류 목록"
+        aria-pressed={prefs.isOutlineOpen}
+      >
+        <RiListCheck2 size={16} />
+      </button>
       <button type="button" className="title-bar-btn popout-title-action" onClick={onRefresh} title="처음부터 다시 읽기" aria-label="새로고침">
         <RiRefreshLine size={16} />
       </button>
@@ -256,48 +326,50 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
       {file.truncated && (
         <div className="remote-file-banner">파일이 커서 ({formatBytes(file.size)}) 마지막 1MB 부터 보여 줍니다. 앞부분은 생략했습니다.</div>
       )}
-      <div className="remote-file-body remote-log-body">
-        <CodeEditor ref={editorRef} initialText={initialText} fileName={name} readOnly onCursor={setCursor} extensions={extensions} />
-        {newLines > 0 && (
-          <button type="button" className="remote-log-new-lines" onClick={goToEnd}>
-            새 줄 {newLines.toLocaleString()}개 <RiArrowDownLine size={14} aria-hidden="true" />
-          </button>
+      <div className="remote-file-body">
+        <div className="remote-log-body">
+          <CodeEditor ref={editorRef} initialText={initialText} fileName={name} readOnly onCursor={setCursor} extensions={extensions} />
+          {unseen.lines > 0 && (
+            <button type="button" className={`remote-log-new-lines${unseen.errors > 0 ? ' has-error' : ''}`} onClick={goToEnd}>
+              새 줄 {unseen.lines.toLocaleString()}개
+              {unseen.errors > 0 && <strong> · 오류 {unseen.errors.toLocaleString()}</strong>}
+              <RiArrowDownLine size={14} aria-hidden="true" />
+            </button>
+          )}
+        </div>
+        {prefs.isOutlineOpen && (
+          <LogOutlinePanel
+            outline={outline}
+            filter={filter}
+            onFilter={setFilter}
+            onGoTo={goTo}
+            onStepProblem={target => stepProblem(target, filter)}
+            onStepMarker={stepMarker}
+            onMark={markNow}
+            onRename={(id, label) => dispatchMarker(renameMarker.of({ id, label }))}
+            onRemove={id => dispatchMarker(removeMarker.of(id))}
+          />
         )}
       </div>
       <div className="remote-file-status">
         <span className={`remote-log-follow is-${follow.kind}`} role="status">{followLabel(follow, isTailMode)}</span>
         {isTrimmed && <span className="remote-log-note" title="창에는 최근 약 5MB 만 둡니다">오래된 줄 정리됨</span>}
         <span className="remote-file-status-spacer" />
-        {markers && (
-          <>
-            <button type="button" className="remote-log-count remote-log-marker" onClick={() => goToMarker(markers.latest)}
-              title={`가장 최근 기준점(${markers.latest.time})으로 이동 · 기준점 ${markers.count}개`}>
-              <RiFlagLine size={12} aria-hidden="true" /> 기준점 {markers.latest.id} · 뒤 {markers.linesAfter.toLocaleString()}줄
-            </button>
-            {markers.count > 1 && (
-              <>
-                <button type="button" className="remote-file-icon-btn remote-log-jump" onClick={() => stepMarker(-1)} title="이전 기준점" aria-label="이전 기준점">
-                  <RiArrowUpSLine size={16} />
-                </button>
-                <button type="button" className="remote-file-icon-btn remote-log-jump" onClick={() => stepMarker(1)} title="다음 기준점" aria-label="다음 기준점">
-                  <RiArrowDownSLine size={16} />
-                </button>
-              </>
-            )}
-          </>
+        {latestMarker && (
+          <button type="button" className="remote-log-count remote-log-marker" onClick={() => goTo(latestMarker.pos, 'marker')}
+            title={`가장 최근 기준점(${latestMarker.time})으로 이동 · 기준점 ${outline.markers.length}개 · F9 로 기준점 사이를 이동합니다`}>
+            <RiFlagLine size={12} aria-hidden="true" /> {latestMarker.label ?? `기준점 ${latestMarker.id}`} · 뒤 {latestMarker.linesAfter.toLocaleString()}줄
+            {latestMarker.after.error > 0 && <span className="remote-log-marker-errors"> · 오류 {latestMarker.after.error.toLocaleString()}</span>}
+          </button>
         )}
         <button type="button" className={`remote-log-count${counts.error > 0 ? ' is-error' : ''}`} disabled={counts.error === 0}
-          onClick={() => jump(1, ERROR_ONLY, '오류')} title="다음 오류 줄로 이동">오류 {counts.error.toLocaleString()}</button>
+          onClick={() => stepProblem(1, 'error')} title="다음 오류로 이동 (스택 트레이스는 한 건으로 셉니다)">오류 {counts.error.toLocaleString()}</button>
         <button type="button" className={`remote-log-count${counts.warn > 0 ? ' is-warn' : ''}`} disabled={counts.warn === 0}
-          onClick={() => jump(1, WARN_ONLY, '경고')} title="다음 경고 줄로 이동">경고 {counts.warn.toLocaleString()}</button>
-        <button type="button" className="remote-file-icon-btn remote-log-jump" onClick={() => jump(-1)} title="이전 오류·경고 (Shift+F8)" aria-label="이전 오류·경고">
-          <RiArrowUpSLine size={16} />
-        </button>
-        <button type="button" className="remote-file-icon-btn remote-log-jump" onClick={() => jump(1)} title="다음 오류·경고 (F8)" aria-label="다음 오류·경고">
-          <RiArrowDownSLine size={16} />
-        </button>
+          onClick={() => stepProblem(1, 'warn')} title="다음 경고로 이동">경고 {counts.warn.toLocaleString()}</button>
+        <StepButtons name="오류·경고" keyName="F8" disabled={outline.total === 0} onStep={target => stepProblem(target)}
+          position={outline.total > 0 ? `${outline.ordinal.toLocaleString()}/${outline.total.toLocaleString()}` : undefined} />
         <span>줄 {cursor.line}, 열 {cursor.column}</span>
-        <span className="remote-file-status-keys">F8 다음 오류·경고 · Ctrl+M 기준점 · Ctrl+F 찾기 · Ctrl+G 줄 이동</span>
+        <span className="remote-file-status-keys">F8 오류·경고 · F9 기준점 · Alt+휠 이동 · Ctrl+M 기준점 찍기</span>
       </div>
     </div>
   )

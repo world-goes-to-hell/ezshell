@@ -1,4 +1,4 @@
-import { EditorState, Prec, type Extension } from '@codemirror/state'
+import { Prec, type Extension } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from '@codemirror/view'
 import {
   addMarker, removeMarker, logMarkerField, markerAtEnd, markersOf, toggleMarkerAtLine, MAX_MARKERS,
@@ -12,12 +12,17 @@ export function clockTime(date = new Date()): string {
 
 export type MarkerNotice = 'limit' | 'duplicate'
 
+/** "기준점 3 · 배포 전 · 15:42:10" */
+export function markerTitle(marker: LogMarker): string {
+  return [`기준점 ${marker.id}`, marker.label, marker.time].filter(Boolean).join(' · ')
+}
+
 /** A band above the marked line: label and a remove button. Not text in the document. */
 class MarkerWidget extends WidgetType {
   constructor(private readonly marker: LogMarker) { super() }
 
   eq(other: MarkerWidget): boolean {
-    return other.marker.id === this.marker.id && other.marker.time === this.marker.time
+    return other.marker.id === this.marker.id && other.marker.time === this.marker.time && other.marker.label === this.marker.label
   }
 
   toDOM(view: EditorView): HTMLElement {
@@ -25,7 +30,7 @@ class MarkerWidget extends WidgetType {
     band.className = 'cm-log-marker'
     const label = document.createElement('span')
     label.className = 'cm-log-marker-label'
-    label.textContent = `기준점 ${this.marker.id} · ${this.marker.time}`
+    label.textContent = markerTitle(this.marker)
     const remove = document.createElement('button')
     remove.type = 'button'
     remove.className = 'cm-log-marker-remove'
@@ -115,22 +120,13 @@ const lineNumberClicks = (onNotice: (notice: MarkerNotice) => void) => ViewPlugi
   return { destroy: () => view.dom.removeEventListener('mousedown', onDown) }
 })
 
-/**
- * Markers for the log view: the field, the bands, line-number clicks and Ctrl+M (marker at the end).
- * `onChange` gets the state whenever the markers or the document change (for the status line).
- */
-export function logMarkerExtensions({ onChange, onNotice }: {
-  onChange: (state: EditorState) => void
-  onNotice: (notice: MarkerNotice) => void
-}): Extension[] {
+/** Markers for the log view: the field, the bands, line-number clicks and Ctrl+M (marker at the end). */
+export function logMarkerExtensions({ onNotice }: { onNotice: (notice: MarkerNotice) => void }): Extension[] {
   return [
     logMarkerField,
     markerDecorations,
     markerTheme,
     lineNumberClicks(onNotice),
-    Prec.high(keymap.of([{ key: 'Mod-m', run: (view) => { addMarkerAtEnd(view, onNotice); return true }, preventDefault: true }])),
-    EditorView.updateListener.of((update) => {
-      if (update.docChanged || update.startState.field(logMarkerField) !== update.state.field(logMarkerField)) onChange(update.state)
-    })
+    Prec.high(keymap.of([{ key: 'Mod-m', run: (view) => { addMarkerAtEnd(view, onNotice); return true }, preventDefault: true }]))
   ]
 }

@@ -356,6 +356,9 @@
 
 .remote-log-body {
   position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
 }
 
 .remote-log-new-lines {
@@ -378,8 +381,7 @@
   background: var(--bg-hover);
 }
 
-.remote-log-new-lines:focus-visible,
-.remote-log-jump:focus-visible {
+.remote-log-new-lines:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
@@ -450,12 +452,6 @@
   gap: 4px;
   color: var(--accent);
   font-weight: 600;
-}
-
-.remote-file-status .remote-log-jump {
-  width: 22px;
-  height: 22px;
-  margin: 0 -8px;
 }
 
 /* The counts are buttons: a click goes to the next line of that level */

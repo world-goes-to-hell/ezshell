@@ -40,35 +40,35 @@ export function markerLine(text: string): string {
   return `${MARKER_EDGE} ${text} ${MARKER_EDGE}`
 }
 
-export function classifyLine(line: string): LogLevel | null {
-  if (line.startsWith(`${MARKER_EDGE} `) && line.endsWith(` ${MARKER_EDGE}`)) return 'marker'
+// Lines that belong to the crash report above them, whatever words they carry
+// ("Caused by: ...: ERROR: relation does not exist" is not a new error)
+const CONTINUATION_LINES = [
+  /^\s+at\s/,
+  /^\s*Caused by:/,
+  /^\s+\.\.\. \d+ (?:more|common frames)/,
+  /^\s+File "/,
+  /^[\w.$]+(?:Exception|Error)(?::|\s*$)/
+]
+
+export interface LineClass {
+  level: LogLevel | null
+  /** The line names its level itself (a level word); false for a line that only looks like part of a crash */
+  explicit: boolean
+}
+
+export function classifyDetail(line: string): LineClass {
+  if (line.startsWith(`${MARKER_EDGE} `) && line.endsWith(` ${MARKER_EDGE}`)) return { level: 'marker', explicit: true }
+  if (CONTINUATION_LINES.some(pattern => pattern.test(line))) return { level: 'error', explicit: false }
   const token = LEVEL_TOKEN.exec(line)
   if (token) {
     const word = (token[1] ?? token[2] ?? token[3] ?? token[4]).toUpperCase()
-    if (word in LEVEL_OF) return LEVEL_OF[word]
+    if (word in LEVEL_OF) return { level: LEVEL_OF[word], explicit: true }
   }
-  return CRASH_LINES.some(pattern => pattern.test(line)) ? 'error' : null
+  return { level: CRASH_LINES.some(pattern => pattern.test(line)) ? 'error' : null, explicit: false }
+}
+
+export function classifyLine(line: string): LogLevel | null {
+  return classifyDetail(line).level
 }
 
 export type JumpLevel = 'error' | 'warn'
-
-/**
- * The next (1) or previous (-1) line of one of `levels`, starting after line `current` (1-based) and
- * going round the end of the text. `wrapped` says the search went past the end; null when no line
- * of those levels exists (or only the current one).
- */
-export function findLevelLine(
-  lineCount: number,
-  textOf: (lineNumber: number) => string,
-  current: number,
-  direction: 1 | -1,
-  levels: ReadonlySet<JumpLevel>
-): { line: number; wrapped: boolean } | null {
-  for (let step = 1; step < lineCount; step++) {
-    const raw = current + direction * step
-    const line = ((raw - 1) % lineCount + lineCount) % lineCount + 1
-    const level = classifyLine(textOf(line))
-    if (level !== null && levels.has(level as JumpLevel)) return { line, wrapped: raw < 1 || raw > lineCount }
-  }
-  return null
-}

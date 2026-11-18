@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { classifyLine, markerLine, findLevelLine, type JumpLevel } from './logLevels'
+import { classifyLine, classifyDetail, markerLine } from './logLevels'
 
 describe('log line levels', () => {
   it.each([
@@ -53,29 +53,21 @@ describe('log line levels', () => {
   })
 })
 
-describe('findLevelLine', () => {
-  const lines = ['INFO a', 'WARN b', 'INFO c', 'ERROR d', 'INFO e', 'WARN f']
-  const textOf = (n: number) => lines[n - 1]
-  const both = new Set<JumpLevel>(['error', 'warn'])
-  const warn = new Set<JumpLevel>(['warn'])
-
-  it('goes through errors and warnings in order', () => {
-    expect(findLevelLine(6, textOf, 1, 1, both)).toEqual({ line: 2, wrapped: false })
-    expect(findLevelLine(6, textOf, 2, 1, both)).toEqual({ line: 4, wrapped: false })
-    expect(findLevelLine(6, textOf, 4, -1, both)).toEqual({ line: 2, wrapped: false })
+describe('lines that continue a crash report', () => {
+  it.each([
+    ['Caused by: org.postgresql.util.PSQLException: ERROR: relation "t" does not exist'],
+    ['	at com.example.DEBUG.run(Main.java:12)'],
+    ['java.lang.IllegalStateException: WARN flag set'],
+    ['	... 12 more'],
+    ['  File "/app/main.py", line 3, in <module>'],
+    ['ValueError: bad input']
+  ])('%s is an error line without a level of its own', (line) => {
+    expect(classifyDetail(line)).toEqual({ level: 'error', explicit: false })
   })
 
-  it('finds only the asked level', () => {
-    expect(findLevelLine(6, textOf, 2, 1, warn)).toEqual({ line: 6, wrapped: false })
-  })
-
-  it('goes round the end and says so', () => {
-    expect(findLevelLine(6, textOf, 6, 1, both)).toEqual({ line: 2, wrapped: true })
-    expect(findLevelLine(6, textOf, 1, -1, warn)).toEqual({ line: 6, wrapped: true })
-  })
-
-  it('answers null when there is no other such line', () => {
-    expect(findLevelLine(3, (n) => ['INFO', 'WARN x', 'INFO'][n - 1], 2, 1, warn)).toBeNull()
-    expect(findLevelLine(2, () => 'INFO', 1, 1, both)).toBeNull()
+  it('a level word makes the line explicit', () => {
+    expect(classifyDetail('2026-11-05 ERROR db down')).toEqual({ level: 'error', explicit: true })
+    expect(classifyDetail('INFO ok')).toEqual({ level: null, explicit: true })
+    expect(classifyDetail('plain text')).toEqual({ level: null, explicit: false })
   })
 })

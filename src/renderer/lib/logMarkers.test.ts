@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { EditorState } from '@codemirror/state'
 import {
   logMarkerField, addMarker, removeMarker, markerAtEnd, markerAtLine, toggleMarkerAtLine,
-  markersOf, linesAfter, markerSummary, neighbourMarker, MAX_MARKERS
+  markersOf, linesAfter, markerSummary, findMarker, renameMarker, MAX_MARKERS, MAX_LABEL_LENGTH
 } from './logMarkers'
 
 const make = (doc: string) => EditorState.create({ doc, extensions: [logMarkerField] })
@@ -75,10 +75,32 @@ describe('logMarkers', () => {
     state = state.update({ effects: [addMarker.of(markerAtLine(state, 2, 'a')), addMarker.of(markerAtLine(state, 4, 'b'))] }).state
     expect(markerSummary(state)).toEqual({ count: 2, latest: expect.objectContaining({ id: 2 }), linesAfter: 2 })
     const [first, second] = markersOf(state)
-    expect(neighbourMarker(state, 0, 1)?.id).toBe(first.id)
-    expect(neighbourMarker(state, first.pos, 1)?.id).toBe(second.id)
-    expect(neighbourMarker(state, second.pos, 1)?.id).toBe(first.id) // wraps
-    expect(neighbourMarker(state, second.pos, -1)?.id).toBe(first.id)
-    expect(neighbourMarker(state, first.pos, -1)?.id).toBe(second.id) // wraps
+    expect(findMarker(state, 0, 1)?.id).toBe(first.id)
+    expect(findMarker(state, first.pos, 1)?.id).toBe(second.id)
+    expect(findMarker(state, second.pos, 1)?.id).toBe(first.id) // wraps
+    expect(findMarker(state, second.pos, -1)?.id).toBe(first.id)
+    expect(findMarker(state, first.pos, -1)?.id).toBe(second.id) // wraps
+  })
+
+  it('goes to the first and last marker, and stops at the ends when asked not to go round', () => {
+    let state = make('1\n2\n3\n4\n5\n')
+    expect(findMarker(state, 0, 'last')).toBeNull()
+    state = state.update({ effects: [addMarker.of(markerAtLine(state, 2, 'a')), addMarker.of(markerAtLine(state, 4, 'b'))] }).state
+    const [first, second] = markersOf(state)
+    expect(findMarker(state, second.pos, 'first')?.id).toBe(first.id)
+    expect(findMarker(state, 0, 'last')?.id).toBe(second.id)
+    expect(findMarker(state, second.pos, 1, false)).toBeNull()
+    expect(findMarker(state, first.pos, -1, false)).toBeNull()
+  })
+
+  it('gives a marker a name, cleaned to one short line, and takes it away again', () => {
+    let state = make('1\n2\n')
+    state = state.update({ effects: addMarker.of(markerAtLine(state, 2, 'a')) }).state
+    state = state.update({ effects: renameMarker.of({ id: 1, label: '  배포\n전  ' }) }).state
+    expect(markersOf(state)[0]).toMatchObject({ id: 1, label: '배포 전' })
+    state = state.update({ effects: renameMarker.of({ id: 1, label: 'x'.repeat(80) }) }).state
+    expect(markersOf(state)[0].label).toHaveLength(MAX_LABEL_LENGTH)
+    state = state.update({ effects: renameMarker.of({ id: 1, label: '   ' }) }).state
+    expect(markersOf(state)[0]).not.toHaveProperty('label')
   })
 })
