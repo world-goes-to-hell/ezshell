@@ -51,7 +51,10 @@
 }
 
 /* ===== Terminal Split Layout ===== */
+/* Always the box that its overlays are placed in (Alt+drag trail and previews, side panels), also with
+   one pane: otherwise they took a box further out that holds the file explorer and the header too */
 .terminal-split-container {
+  position: relative;
   display: flex;
   flex: 1;
   overflow: hidden;
