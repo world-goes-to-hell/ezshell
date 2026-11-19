@@ -38,6 +38,7 @@ textarea {
 }
 
 .app-main {
+  --terminal-tab-strip-height: 47px;
   display: flex;
   flex: 1;
   height: 0; /* Needed for flex child to respect parent height */

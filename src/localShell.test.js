@@ -48,7 +48,8 @@ describe('createLocalShells', () => {
     const { shells, ptys } = setup({ env: { TERM: 'dumb', NO_COLOR: '1' }, agents: { register } })
     const { id } = shells.open({ agent: 'codex' })
     const terminalEnv = { TERM: 'xterm-256color', COLORTERM: 'truecolor' }
-    expect(register).toHaveBeenCalledWith('codex', id, '/home', terminalEnv)
+    // No resumed session: the last argument (the session the usage watcher looks for) is empty
+    expect(register).toHaveBeenCalledWith('codex', id, '/home', terminalEnv, null)
     expect(ptys[0].options.env).toEqual({ ...terminalEnv, EZSHELL_AGENT_PIPE: 'test-pipe' })
   })
 
@@ -58,6 +59,20 @@ describe('createLocalShells', () => {
     shells.open()
     expect(ptys[0].options.env).toEqual({ TERM_PROGRAM: 'Orca', TERM: 'xterm-256color', COLORTERM: 'truecolor' })
     expect(env.NO_COLOR).toBe('1')
+  })
+
+  it('drops the markers of a Claude Code session the app was started from, keeping Claude settings', () => {
+    // Started from inside Claude Code, every Claude in a local shell took itself for a sub-session of it
+    // (transcript saving off, so its conversation could not be resumed)
+    const { shells, ptys } = setup({ env: {
+      TERM: 'xterm', CLAUDECODE: '1', CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SESSION_ID: 'abc', CLAUDE_CODE_ENTRYPOINT: 'cli',
+      CLAUDE_CODE_MESSAGING_SOCKET: 'pipe', CLAUDE_CODE_MESSAGING_TOKEN: 'secret', CLAUDE_PID: '42',
+      CLAUDE_CONFIG_DIR: 'D:\\claude', CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Git\\bin\\bash.exe'
+    } })
+    shells.open()
+    expect(ptys[0].options.env).toEqual({
+      TERM: 'xterm-256color', COLORTERM: 'truecolor', CLAUDE_CONFIG_DIR: 'D:\\claude', CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Git\\bin\\bash.exe'
+    })
   })
 
   it('preserves NO_COLOR from a parent with a color-capable terminal', () => {
@@ -92,6 +107,17 @@ describe('createLocalShells', () => {
     expect(ptys[0].options).toMatchObject({ cols: 500, rows: 24, cwd: '/home' })
     ptys[0].emit('hello')
     expect(sent).toEqual([{ channel: 'local-shell-data', payload: { id, data: 'hello' } }])
+  })
+
+  it('reports a Windows shell directory from a split OSC sequence and ignores network URLs', async () => {
+    const { shells, ptys } = setup({ platform: 'win32', cwd: 'C:\\launch' })
+    const { id } = shells.open()
+    expect(await shells.currentDirectory(id)).toBe('C:\\launch')
+    ptys[0].emit('\x1b]7;file:///C:/my%20')
+    ptys[0].emit('work\x07')
+    expect(await shells.currentDirectory(id)).toBe('C:\\my work')
+    ptys[0].emit('\x1b]7;file://example.com/share\x07')
+    expect(await shells.currentDirectory(id)).toBe('C:\\my work')
   })
 
   it('gives a redrawn tab the output so far and the exit state', () => {
@@ -150,6 +176,28 @@ describe('createLocalShells', () => {
     expect(() => shells.open()).toThrow(/10개/)
   })
 
+  it('prepares one replacement at the limit and keeps the original shell until adoption', () => {
+    const { shells, ptys, spawn } = setup()
+    const previous = shells.open({ cols: 96, rows: 35 })
+    const others = Array.from({ length: MAX_SHELLS - 1 }, () => shells.open())
+    const options = { agent: 'claude', resume: 'abcdef12-1111-4222-8333-444455556666', replacementFor: previous.id }
+    spawn.mockImplementationOnce(() => { throw new Error('PTY failed') })
+    expect(() => shells.open(options)).toThrow('PTY failed')
+    expect(shells.count()).toBe(MAX_SHELLS)
+    expect(ptys[0].kill).not.toHaveBeenCalled()
+
+    const replacement = shells.open(options)
+    expect(replacement.id).not.toBe(previous.id)
+    expect(ptys[MAX_SHELLS].options).toMatchObject({ cols: 96, rows: 35 })
+    expect(() => shells.open(options)).toThrow(/바꾸는 중/)
+    expect(() => shells.open({ ...options, replacementFor: others[0].id })).toThrow(/10개/)
+    expect(ptys[0].kill).not.toHaveBeenCalled()
+    shells.close(previous.id)
+    expect(ptys[0].kill).toHaveBeenCalledOnce()
+    expect(shells.count()).toBe(MAX_SHELLS)
+    expect(shells.attach(replacement.id)?.exited).toBe(false)
+  })
+
   it('tracks the activity of the launched agent across split OSC sequences', () => {
     const { shells, ptys } = setup()
     const { id } = shells.open({ agent: 'claude' })
@@ -183,6 +231,21 @@ describe('createLocalShells', () => {
     expect(shells.hasWorkingAgent([id])).toBe(false)
     ptys[0].emit('\x1b]0;⠙ ezshell\x07')
     expect(shells.hasWorkingAgent([id])).toBe(true)
+  })
+
+  // Recorded from Claude Code (2026-11): working spins ◐/◑ in the title, idle is ✳, and it sends no
+  // program status report even after the probe is answered
+  it('reads the half-circle spinner of Claude Code as working and ✳ as idle', () => {
+    const { shells, ptys } = setup()
+    const { id } = shells.open({ agent: 'claude' })
+    ptys[0].emit('\x1b]0;✳ Claude Code\x07')
+    expect(shells.hasWorkingAgent([id])).toBe(false)
+    ptys[0].emit('\x1b]0;◐ Claude Code\x07')
+    expect(shells.hasWorkingAgent([id])).toBe(true)
+    ptys[0].emit('\x1b]0;◑ 인사 응답 테스트\x07')
+    expect(shells.hasWorkingAgent([id])).toBe(true)
+    ptys[0].emit('\x1b]0;✳ 인사 응답 테스트\x07')
+    expect(shells.hasWorkingAgent([id])).toBe(false)
   })
 
   it('answers the program status probe and prefers root state over title and child reports', () => {

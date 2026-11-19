@@ -441,3 +441,95 @@ describe('file window: backups left on the server', () => {
     expect(await docs.listServerBackups(OWNER, docId)).toEqual({ backups: [] })
   })
 })
+
+describe('files on this PC', () => {
+  const localRead = require('../localFiles/localRead.js')
+  let dir
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-localdoc-')) })
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+
+  const setup = (head = null) => {
+    let n = 0
+    const docs = createRemoteDocuments({
+      openSftp: async () => { throw new Error('no SFTP for local files') }, serverOf: () => ({}), backups: null,
+      localFiles: { read: localRead, headOf: async () => head }, newId: () => `doc-${++n}`
+    })
+    return docs
+  }
+
+  it('edits and saves a file on this PC without SFTP or a backup', async () => {
+    const file = path.join(dir, 'a.txt')
+    fs.writeFileSync(file, 'one\n')
+    const docs = setup()
+    const { docId } = docs.registerLocal({ root: dir, path: file, label: 'work', mode: 'edit' })
+    docs.attach(docId, 7)
+    const loaded = await docs.load(7, docId)
+    expect(loaded).toMatchObject({ local: true, kind: 'text', editable: true, content: 'one\n', canWrite: true, sessionName: 'work' })
+    const reviewed = docs.review(7, docId, 'two\n')
+    expect(await docs.save(7, docId, 'two\n', reviewed.token)).toEqual({ ok: true, backupName: null })
+    expect(fs.readFileSync(file, 'utf8')).toBe('two\n')
+    expect(await docs.listBackups(7, docId)).toEqual({ folder: '', backups: [] })
+  })
+
+  it('refuses to save over a file changed since it was opened', async () => {
+    const file = path.join(dir, 'a.txt')
+    fs.writeFileSync(file, 'one\n')
+    const docs = setup()
+    const { docId } = docs.registerLocal({ root: dir, path: file, mode: 'edit' })
+    docs.attach(docId, 7)
+    await docs.load(7, docId)
+    fs.writeFileSync(file, 'someone else\n')
+    const reviewed = docs.review(7, docId, 'two\n')
+    expect(await docs.save(7, docId, 'two\n', reviewed.token)).toMatchObject({ ok: false, conflict: true })
+    expect(fs.readFileSync(file, 'utf8')).toBe('someone else\n')
+  })
+
+  it('offers the file at Git HEAD in the backup list, readable by name only', async () => {
+    const file = path.join(dir, 'a.txt')
+    fs.writeFileSync(file, 'now\n')
+    const docs = setup({ content: 'committed\n', size: 10, time: 1795000000000 })
+    const { docId } = docs.registerLocal({ root: dir, path: file, mode: 'edit' })
+    docs.attach(docId, 7)
+    await docs.load(7, docId)
+    expect(await docs.listServerBackups(7, docId)).toEqual({ backups: [{ name: 'HEAD', size: 10, time: 1795000000000, timeFrom: 'git' }] })
+    expect(await docs.readServerBackup(7, docId, 'HEAD')).toEqual({ content: 'committed\n' })
+    await expect(docs.readServerBackup(7, docId, 'other')).rejects.toThrow(MESSAGES.noBackup)
+  })
+
+  it('tells every load in the first seconds to compare with HEAD (a page in development loads twice)', async () => {
+    const file = path.join(dir, 'a.txt')
+    fs.writeFileSync(file, 'now\n')
+    const docs = setup()
+    const { docId } = docs.registerLocal({ root: dir, path: file, mode: 'edit', compareHead: true })
+    docs.attach(docId, 7)
+    const [first, second] = await Promise.all([docs.load(7, docId), docs.load(7, docId)])
+    expect(first.compareHead).toBe(true)
+    expect(second.compareHead).toBe(true)
+    const plain = docs.registerLocal({ root: dir, path: path.join(dir, 'b.txt'), mode: 'edit' })
+    fs.writeFileSync(path.join(dir, 'b.txt'), 'x\n')
+    docs.attach(plain.docId, 8)
+    expect((await docs.load(8, plain.docId)).compareHead).toBeUndefined()
+  })
+
+  it('stops telling it once the window has been open a while (a reload keeps what the window shows)', async () => {
+    const file = path.join(dir, 'a.txt')
+    fs.writeFileSync(file, 'now\n')
+    const docs = setup()
+    const realNow = Date.now
+    try {
+      const start = realNow()
+      Date.now = () => start
+      const { docId } = docs.registerLocal({ root: dir, path: file, mode: 'edit', compareHead: true })
+      docs.attach(docId, 7)
+      Date.now = () => start + 6000
+      expect((await docs.load(7, docId)).compareHead).toBeUndefined()
+    } finally {
+      Date.now = realNow
+    }
+  })
+
+  it('does not follow a local file and refuses unknown modes', async () => {
+    const docs = setup()
+    expect(() => docs.registerLocal({ root: dir, path: path.join(dir, 'x'), mode: 'tail' })).toThrow()
+  })
+})

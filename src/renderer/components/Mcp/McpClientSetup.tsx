@@ -57,8 +57,9 @@ export function McpClientSetup({ disabled }: McpClientSetupProps) {
   const isDisabled = disabled || isBusy
 
   return (
-    <div className="mcp-field">
-      <span className="mcp-field-label">Claude Code 자동 설정</span>
+    <section className="mcp-field settings-section mcp-settings-group">
+      <h3 className="settings-section-title mcp-field-label">Claude Code 자동 설정</h3>
+      <p className="settings-section-desc">현재 프로젝트 또는 모든 프로젝트에 SSH MCP를 등록합니다.</p>
       <div className="mcp-setup-actions">
         <button type="button" className="mcp-setup-btn" onClick={() => void runSetup('project')} disabled={isDisabled}>
           <RiFolderOpenLine size={16} />
@@ -88,6 +89,6 @@ export function McpClientSetup({ disabled }: McpClientSetupProps) {
           </ul>
         </div>
       )}
-    </div>
+    </section>
   )
 }

@@ -436,7 +436,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
         <StepButtons name={FILTER_NAME[filter]} keyName="F8" disabled={outline.total === 0} onStep={target => stepProblem(target)}
           position={outline.total > 0 ? `${filter === 'all' ? '' : `${FILTER_NAME[filter]} `}${outline.ordinal.toLocaleString()}/${outline.total.toLocaleString()}` : undefined} />
         <span>줄 {cursor.line}, 열 {cursor.column}</span>
-        <span className="remote-file-status-keys">F8 오류·경고 · F9 기준점 · Ctrl+휠 이동 · Ctrl+M 기준점 찍기</span>
+        <span className="remote-file-status-keys">F8 오류·경고 · F9 기준점 · Alt+휠 이동 · Ctrl+휠 화면 배율 · Ctrl+M 기준점 찍기</span>
       </div>
     </div>
   )

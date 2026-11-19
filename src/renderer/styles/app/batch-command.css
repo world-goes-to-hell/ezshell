@@ -343,31 +343,3 @@
   animation: spin 1s linear infinite;
 }
 
-/* Sidebar footer button */
-.sidebar-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px;
-  border-top: 1px solid var(--border);
-}
-
-.sidebar-footer-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 1;
-  padding: 8px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-muted);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.sidebar-footer-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-  border-color: var(--accent);
-}

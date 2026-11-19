@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 interface LockScreenProps {
   hasMasterPassword: boolean
   onUnlock: () => void
+  onReady: () => void
 }
 
 // Animated terminal text lines for background ambiance
@@ -65,7 +66,7 @@ function TerminalBackground() {
   )
 }
 
-export function LockScreen({ hasMasterPassword, onUnlock }: LockScreenProps) {
+export function LockScreen({ hasMasterPassword, onUnlock, onReady }: LockScreenProps) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -111,36 +112,47 @@ export function LockScreen({ hasMasterPassword, onUnlock }: LockScreenProps) {
 
   // Check for saved auto-unlock token on mount
   useEffect(() => {
+    let cancelled = false
+    let unlockTimer: ReturnType<typeof setTimeout> | undefined
     const tryAutoUnlock = async () => {
-      if (!hasMasterPassword) return
-
       try {
+        if (!hasMasterPassword) return
         const hasSaved = await apiHasAutoUnlock()
+        if (cancelled) return
         setHasAutoUnlock(hasSaved)
 
         if (hasSaved) {
           setAutoUnlocking(true)
           const tokenResult = await apiLoadAutoUnlock()
+          if (cancelled) return
           if (tokenResult.success && (tokenResult as any).password) {
             const result = await window.electronAPI.unlockApp((tokenResult as any).password)
+            if (cancelled) return
             if (result.success) {
               setSuccess(true)
-              setTimeout(() => onUnlock(), 600)
+              unlockTimer = setTimeout(onUnlock, 600)
               return
             } else {
               await apiClearAutoUnlock()
+              if (cancelled) return
               setHasAutoUnlock(false)
             }
           }
           setAutoUnlocking(false)
         }
-      } catch (err) {
-        setAutoUnlocking(false)
+      } catch {
+        if (!cancelled) setAutoUnlocking(false)
+      } finally {
+        if (!cancelled && unlockTimer === undefined) onReady()
       }
     }
 
-    tryAutoUnlock()
-  }, [hasMasterPassword])
+    void tryAutoUnlock()
+    return () => {
+      cancelled = true
+      clearTimeout(unlockTimer)
+    }
+  }, [hasMasterPassword, onReady])
 
   // Focus input after auto-unlock check
   useEffect(() => {

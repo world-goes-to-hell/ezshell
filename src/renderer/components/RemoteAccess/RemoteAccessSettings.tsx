@@ -134,33 +134,40 @@ export function RemoteAccessSettings() {
 
   return (
     <div className="mcp-settings remote-access">
-      <div className="mcp-row">
+      <section className="settings-section mcp-settings-group">
+        <div className="mcp-group-heading">
+          <h3 className="settings-section-title"><RiSmartphoneLine size={18} />원격 접속 (휴대폰 브라우저)</h3>
+          <div className="remote-access-summary">
+            <span className={`mcp-state mcp-state-badge${status.isRunning ? ' running' : ''}`}>{stateText}</span>
+            {status.url && (
+              <span className="remote-access-address">
+                <code>{status.url}</code>
+                <button type="button" className="mcp-icon-btn" onClick={() => copyText(status.url!, '주소')} aria-label="주소 복사" title="주소 복사">
+                  <RiFileCopyLine size={16} />
+                </button>
+              </span>
+            )}
+          </div>
+        </div>
+        <p className="settings-section-desc">
+          밖에서 휴대폰 브라우저로 이 PC 의 ezShell 에 들어와 저장된 세션의 터미널을 씁니다. Tailscale 로만 연결됩니다.
+        </p>
         <label className="mcp-toggle">
           <input type="checkbox" checked={status.enabled} disabled={isBusy} onChange={(event) => setEnabled(event.target.checked)} />
           <span>휴대폰에서 접속 허용</span>
         </label>
-        <span className={`mcp-state${status.isRunning ? ' running' : ''}`}>{stateText}</span>
-        {status.url && (
-          <span className="remote-access-address">
-            <code>{status.url}</code>
-            <button type="button" className="mcp-icon-btn" onClick={() => copyText(status.url!, '주소')} aria-label="주소 복사" title="주소 복사">
-              <RiFileCopyLine size={16} />
-            </button>
-          </span>
+        {!status.hasTailscale && (
+          <div className="mcp-setup-result warning">
+            이 PC 에서 Tailscale 주소를 찾지 못했습니다. Tailscale 을 켜고 로그인한 뒤 다시 켜세요. 원격 접속은 Tailscale 주소로만 열립니다.
+          </div>
         )}
-      </div>
-
-      {!status.hasTailscale && (
-        <div className="mcp-setup-result warning">
-          이 PC 에서 Tailscale 주소를 찾지 못했습니다. Tailscale 을 켜고 로그인한 뒤 다시 켜세요. 원격 접속은 Tailscale 주소로만 열립니다.
-        </div>
-      )}
-      {status.error && <p className="mcp-error">{status.error}</p>}
+        {status.error && <p className="mcp-error">{status.error}</p>}
+      </section>
 
       {status.enabled && (
         <>
-          <section className="mcp-field">
-            <span className="mcp-field-label">1. 인증 앱 등록 (처음 한 번)</span>
+          <section className="mcp-field settings-section mcp-settings-group">
+            <h3 className="settings-section-title mcp-field-label">1. 인증 앱 등록 (처음 한 번)</h3>
             <p className="remote-access-desc">
               휴대폰의 인증 앱(Google Authenticator, Microsoft Authenticator 등)으로 QR 을 찍어 두세요. 접속할 때마다 이 앱의 6자리 코드를 입력합니다.
             </p>
@@ -188,8 +195,8 @@ export function RemoteAccessSettings() {
             )}
           </section>
 
-          <section className="mcp-field">
-            <span className="mcp-field-label">2. 휴대폰 등록</span>
+          <section className="mcp-field settings-section mcp-settings-group">
+            <h3 className="settings-section-title mcp-field-label">2. 휴대폰 등록</h3>
             <p className="remote-access-desc">
               Tailscale 이 켜진 휴대폰의 카메라로 QR 을 찍으면 브라우저가 열리고 그 휴대폰이 등록됩니다. QR 은 2분 동안, 한 번만 쓸 수 있습니다.
             </p>
@@ -211,15 +218,15 @@ export function RemoteAccessSettings() {
             )}
           </section>
 
-          <section className="mcp-field">
-            <span className="mcp-field-label">MCP 확인 요청</span>
+          <section className="mcp-field settings-section mcp-settings-group">
+            <h3 className="settings-section-title mcp-field-label">MCP 확인 요청</h3>
+            <p className="remote-access-desc">
+              켜면 Claude 의 확인 요청이 접속한 휴대폰에도 뜹니다. 휴대폰이 접속해 있거나 알림을 받을 수 있는 동안에는, 휴대폰으로 답할 시간을 두기 위해 답을 기다리는 시간이 60초에서 4분으로 늘어납니다.
+            </p>
             <label className="mcp-toggle">
               <input type="checkbox" checked={status.answerMcp} disabled={isBusy} onChange={(event) => setAnswerMcp(event.target.checked)} />
               <span>휴대폰에서도 확인 요청에 답하기</span>
             </label>
-            <p className="remote-access-desc">
-              켜면 Claude 의 확인 요청이 접속한 휴대폰에도 뜹니다. 휴대폰이 접속해 있거나 알림을 받을 수 있는 동안에는, 휴대폰으로 답할 시간을 두기 위해 답을 기다리는 시간이 60초에서 4분으로 늘어납니다.
-            </p>
             {status.isRunning && (status.push?.available ? (
               <p className="remote-access-desc">
                 알림: 휴대폰 페이지의 <strong>알림 켜기</strong>를 누르면, PC 에서 15초 안에 답하지 않은 요청을 휴대폰 알림으로 알려 줍니다. 알림에는 요청 종류와 위험도만 들어갑니다.
@@ -231,8 +238,9 @@ export function RemoteAccessSettings() {
             ))}
           </section>
 
-          <section className="mcp-field">
-            <span className="mcp-field-label">등록된 기기 ({status.devices.length})</span>
+          <section className="mcp-field settings-section mcp-settings-group">
+            <h3 className="settings-section-title mcp-field-label">등록된 기기 ({status.devices.length})</h3>
+            <p className="settings-section-desc">기기별 접속 상태와 마지막 접속 시간을 확인합니다.</p>
             {status.devices.length === 0 ? (
               <p className="mcp-transfer-empty">등록된 기기가 없습니다.</p>
             ) : (
@@ -268,13 +276,16 @@ export function RemoteAccessSettings() {
         </>
       )}
 
-      <ul className="remote-access-facts">
-        <li>이 PC 의 ezShell 이 켜져 있고 잠금이 풀려 있을 때만 접속할 수 있습니다. 잠그면 접속 중인 기기를 모두 끊습니다.</li>
-        <li>같은 Tailscale 네트워크의 기기에서만 열립니다. 인터넷이나 사내망에는 열리지 않습니다.</li>
-        <li>휴대폰에는 세션 이름과 폴더만 보이고, 서버 주소·계정·비밀번호는 PC 밖으로 나가지 않습니다.</li>
-        <li>15분 동안 입력이 없으면 연결을 끊고, 코드를 5번 틀리면 그 기기를 5분 동안 막습니다.</li>
-        <li>휴대폰을 잃어버리면 위 목록에서 그 기기를 해제하고, Tailscale 에서도 그 기기를 빼세요.</li>
-      </ul>
+      <section className="settings-section mcp-settings-group">
+        <h3 className="settings-section-title">접속 및 보안 안내</h3>
+        <ul className="remote-access-facts">
+          <li>이 PC 의 ezShell 이 켜져 있고 잠금이 풀려 있을 때만 접속할 수 있습니다. 잠그면 접속 중인 기기를 모두 끊습니다.</li>
+          <li>같은 Tailscale 네트워크의 기기에서만 열립니다. 인터넷이나 사내망에는 열리지 않습니다.</li>
+          <li>휴대폰에는 세션 이름과 폴더만 보이고, 서버 주소·계정·비밀번호는 PC 밖으로 나가지 않습니다.</li>
+          <li>15분 동안 입력이 없으면 연결을 끊고, 코드를 5번 틀리면 그 기기를 5분 동안 막습니다.</li>
+          <li>휴대폰을 잃어버리면 위 목록에서 그 기기를 해제하고, Tailscale 에서도 그 기기를 빼세요.</li>
+        </ul>
+      </section>
     </div>
   )
 }

@@ -30,8 +30,8 @@ async function pages() {
   }
 }
 
-/** The main window's page: the detached windows carry a `...Mode=true` query */
-const isMainPage = (target) => !/Mode=/.test(target.url)
+/** The main window's page: the startup splash and detached windows carry a `...Mode=true` query */
+const isMainPage = (target) => Boolean(target.url) && target.url !== 'about:blank' && !/Mode=/.test(target.url)
 
 /** Waits for a window whose page matches (for example `t => t.url.includes('terminalMode')`) */
 async function findPage(match, ms = 30000) {
@@ -166,6 +166,36 @@ async function unlock({ js, until }) {
 /** The SSH tab in front (a tab behind is hidden with visibility, not display) */
 const PANEL = `[...document.querySelectorAll('.terminal-panel')].find(p => p.offsetParent !== null && getComputedStyle(p).visibility !== 'hidden')`
 
+/** Opens the local project dialog from the + menu or, without a tab, from the command palette. */
+async function openLocalProject({ send, js, until, center, click }) {
+  const plus = await center(`[...document.querySelectorAll('.new-tab-btn')].find(b => b.offsetParent !== null)`)
+  if (plus) {
+    await click(plus[0], plus[1])
+    const item = `[...document.querySelectorAll('.new-tab-menu-item')].find(i => i.textContent.includes('로컬 작업'))`
+    if (!(await until(`!!${item}`, 4000))) throw new Error('the + menu did not open')
+    const at = await center(item)
+    await click(at[0], at[1])
+  } else {
+    const key = { key: 'p', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: process.platform === 'darwin' ? 4 : 2 }
+    await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+    const item = `[...document.querySelectorAll('.command-item')].find(i => i.textContent.includes('로컬 작업 열기'))`
+    if (!(await until(`!!${item}`, 4000))) throw new Error('the command palette did not open')
+    await js(`${item}.click()`)
+  }
+  if (!(await until(`!!document.querySelector('.local-project-dialog')`))) throw new Error('local project dialog did not open')
+}
+
+/** Picks a work group from the selector at the start of the tab strip (the group's name as shown) */
+async function pickTabGroup({ js, until, center, click }, name) {
+  const at = await center(`document.querySelector('.tab-group-select')`)
+  await click(at[0], at[1])
+  const option = `[...document.querySelectorAll('.tab-group-option')].find(o => o.querySelector('.tab-group-option-name')?.textContent === ${JSON.stringify(name)})`
+  if (!(await until(`!!${option}`, 4000))) throw new Error(`no work group named ${name}`)
+  const spot = await center(option)
+  await click(spot[0], spot[1])
+}
+
 /** Quick connect to the test server; trusts its host key the first time. Resolves when a shell is on screen. */
 async function connectSsh(driver) {
   const { send, js, until, click, center } = driver
@@ -204,4 +234,4 @@ async function pageProblems(page) {
     .map((e) => e.params.entry.text.slice(0, 240))
 }
 
-module.exports = { pageProblems, sleep, createChecks, connect, pages, findPage, isMainPage, unlock, connectSsh, SET, PANEL }
+module.exports = { pageProblems, sleep, createChecks, connect, pages, findPage, isMainPage, unlock, connectSsh, openLocalProject, pickTabGroup, SET, PANEL }

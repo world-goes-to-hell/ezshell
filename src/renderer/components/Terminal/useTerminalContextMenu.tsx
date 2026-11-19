@@ -14,7 +14,9 @@ import { useSnippetStore } from '../../stores/snippetStore'
 import { findQueryFromSelection } from '../../lib/terminalText'
 import { syncSftpToTerminal } from '../../lib/sftpSync'
 import { terminalPaneAt } from '../../lib/terminalPanes'
-import { MAIN_PANE, MAX_PANES, singlePane, leafCount, closePane, equalize, type PaneId } from '../../lib/splitTree'
+import { MAIN_PANE, MAX_PANES, singlePane, leafCount, equalize, type PaneId } from '../../lib/splitTree'
+import { closeTabPane } from '../../lib/paneToTab'
+import { toast } from '../../stores/toastStore'
 import { FIND_QUERY_MAX_LENGTH, type FindKind } from '../../lib/terminalFind'
 import { commonTerminalItems } from './terminalMenuCommon'
 import { TerminalContextMenu, MENU_SEPARATOR, type TerminalMenuGroup, type TerminalMenuItem } from './TerminalContextMenu'
@@ -144,12 +146,17 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
           },
           MENU_SEPARATOR,
           { label: '칸 크기 균등화', icon: RiLayoutGridLine, disabled: !isSplit, onSelect: then(() => { setSplitTree(sessionId, equalize(tree)); refit() }) },
-          // The tab's first terminal is the tab itself: it closes with the tab
+          // The tab's first terminal closes too: another shell of the tab becomes the main one
           {
-            label: menu.pane === MAIN_PANE && isSplit ? '이 칸 닫기 (탭의 첫 터미널)' : '이 칸 닫기',
+            label: '이 칸 닫기',
             icon: RiCloseLine,
-            disabled: !isSplit || menu.pane === MAIN_PANE,
-            onSelect: () => { setSplitTree(sessionId, closePane(tree, menu.pane)); refit() }
+            disabled: !isSplit,
+            onSelect: () => {
+              void closeTabPane(sessionId, menu.pane).then((result) => {
+                if (result.ok) refit()
+                else toast.error('칸을 닫지 못했습니다', result.error)
+              })
+            }
           }
         ]
       },

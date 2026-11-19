@@ -200,7 +200,7 @@ const { check, finish } = createChecks()
     foldedFlight?.followsDots && foldedFlight.color === connectedColor &&
     foldedFlight.accent.toLowerCase() === '#bd93f9' && foldedFlight.pointerEvents === 'none', JSON.stringify(foldedFlight))
   const compactLeft = await js(mainLeft)
-  const railPoint = await driver.center(sidebar)
+  const railPoint = await driver.center(`${sidebar}.querySelector('[data-peek-target="sessions"]')`)
   await driver.move(...railPoint)
   check('hover opens the sidebar over the terminal and returns the green dot to the row', await until(`
     ${sidebar}.matches('.rail.peek-open') && ${mainLeft} === ${compactLeft} &&

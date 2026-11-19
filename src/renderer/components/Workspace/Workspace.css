@@ -1,0 +1,247 @@
+/* The work panel: a column right of the main area (.app-main is a row), beside the terminals */
+.workspace-panel {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+/* The left edge: drag to change the width */
+.workspace-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  z-index: 2;
+  width: 6px;
+  cursor: col-resize;
+}
+
+.workspace-resize:hover,
+.workspace-resize:focus-visible {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  outline: none;
+}
+
+.workspace-header {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  gap: 8px;
+  height: var(--terminal-tab-strip-height);
+  padding: 8px 6px 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.workspace-sections {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workspace-section {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  border: none;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.workspace-section:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.workspace-section.is-active {
+  background: var(--bg-primary);
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.workspace-section:focus-visible,
+.workspace-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.workspace-close {
+  display: grid;
+  align-self: center;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  margin-left: auto;
+  border: none;
+  border-radius: var(--radius-sm, 0);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.workspace-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.workspace-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-secondary);
+}
+
+.workspace-browser-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.workspace-browser-header > svg { flex: none; }
+
+.workspace-browser-path,
+.workspace-branch,
+.workspace-file > span,
+.workspace-commit-subject,
+.workspace-commit-author,
+.workspace-commit-refs {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-browser-path {
+  flex: 1;
+  font: 11px var(--font-mono);
+  direction: rtl;
+  text-align: start;
+}
+
+.workspace-branch {
+  display: block;
+  max-width: 38%;
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-alpha);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.workspace-branch svg { margin-inline-end: 4px; vertical-align: -3px; }
+
+.workspace-file-list,
+.workspace-git-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.workspace-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 3px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-file svg { flex: none; color: var(--text-muted); }
+.workspace-file[data-kind="directory"] svg { color: var(--accent); }
+.workspace-file:hover, .workspace-git-commit:hover { background: var(--bg-modifier-hover); }
+
+.workspace-git-commit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding-inline: 6px 10px;
+  box-shadow: inset 0 -1px var(--border);
+}
+
+.workspace-git-graph {
+  flex: none;
+  height: 44px;
+  max-width: 34%;
+  overflow: visible;
+}
+
+.workspace-git-graph path { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.workspace-git-graph circle { fill: currentColor; stroke: var(--bg-secondary); stroke-width: 1; }
+.workspace-git-graph [data-graph-color="0"] { color: var(--accent); }
+.workspace-git-graph [data-graph-color="1"] { color: var(--success); }
+.workspace-git-graph [data-graph-color="2"] { color: var(--warning); }
+.workspace-git-graph [data-graph-color="3"] { color: var(--info); }
+.workspace-git-graph [data-graph-color="4"] { color: var(--text-link); }
+
+.workspace-git-detail { flex: 1; min-width: 0; }
+.workspace-commit-subject { display: block; font-weight: 600; }
+
+.workspace-commit-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.workspace-commit-meta code { font-family: var(--font-mono); user-select: text; }
+.workspace-commit-meta time { flex: none; margin-inline-start: auto; }
+
+.workspace-commit-refs {
+  padding-inline: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-alpha);
+  color: var(--text-primary);
+}
+
+.workspace-note {
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.workspace-note.is-error { color: var(--error-text); }
+
+/* Status bar entry */
+.workspace-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.workspace-indicator:hover,
+.workspace-indicator.is-open {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.workspace-indicator:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

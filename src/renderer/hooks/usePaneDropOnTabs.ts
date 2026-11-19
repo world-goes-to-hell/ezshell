@@ -48,9 +48,9 @@ export function usePaneDropOnTabs(): void {
       event.preventDefault()
       event.stopPropagation()
       endPaneDrag()
-      // In the split view each side has its own strip: the first one in the document is the primary side
+      // In the split view each screen has its own strip; its place among the strips is the screen's index
       const strips = Array.from(document.querySelectorAll('.split-pane-header'))
-      const side = strips.length < 2 || !strips.includes(strip) ? undefined : strips.indexOf(strip) === 0 ? 'primary' : 'secondary'
+      const side = strips.length < 2 || !strips.includes(strip) ? undefined : strips.indexOf(strip)
       void movePaneToTab(drag.sessionId, drag.pane, side).then((result) => {
         if (!result.ok) toast.error('탭으로 옮기지 못했습니다', result.error)
       }).catch(() => toast.error('탭으로 옮기지 못했습니다', '잠시 후 다시 시도해 주세요.'))

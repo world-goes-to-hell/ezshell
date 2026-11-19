@@ -128,6 +128,20 @@ interface RemoteFileLoadedBase {
   /** The real path behind links */
   path: string
   mode: RemoteFileMode
+  /** A file on this PC (the workspace panel), not on a server */
+  local?: true
+  /** A line to go to once (opened from a placeholder's definitions) */
+  revealLine?: number
+  /** Opened from the uncommitted changes: start comparing with Git HEAD */
+  compareHead?: true
+}
+
+/** Where a placeholder's name (`${NAME}`) is set; opened by `key` only */
+export interface ConfigDefinition {
+  key: string
+  path: string
+  line: number
+  text: string
 }
 
 export type RemoteFileLoaded = RemoteFileLoadedBase & (
@@ -142,7 +156,7 @@ export type RemoteFileReview =
   | { unchanged: false; token: string; change: { added: number; removed: number; isWholeFile: boolean; hunks: McpDiffHunk[]; truncated: boolean } }
 
 export type RemoteFileSaveResult =
-  | { ok: true; backupName: string }
+  | { ok: true; backupName: string | null }
   | { ok: false; conflict: true; message: string }
 
 export interface RemoteFileBackup {
@@ -157,7 +171,7 @@ export interface RemoteServerBackup {
   size: number
   /** From the date in the name ('name'), otherwise the file's modification time ('modified') */
   time: number
-  timeFrom: 'name' | 'modified'
+  timeFrom: 'name' | 'modified' | 'git'
 }
 
 /** Question from main about an SSH host key that is not saved yet ('unknown') or differs from the saved one ('changed') */
@@ -328,6 +342,60 @@ export type McpSetupResult =
 // Extend Window interface for electronAPI
 export type LocalAgent = 'codex' | 'claude'
 
+/** A past Claude Code or Codex session of this PC (src/agentHistory). `key` is all the main process takes back. */
+export interface AgentHistorySession {
+  key: string
+  agent: LocalAgent
+  id: string
+  cwd: string | null
+  branch: string | null
+  model: string | null
+  version: string | null
+  title: string
+  preview: string
+  hasPrompt: boolean
+  created: number | null
+  updated: number
+}
+
+export interface AgentHistoryTurn {
+  role: 'user' | 'assistant'
+  text: string
+  time: number | null
+}
+
+export interface AgentHistoryDetail {
+  firstPrompt: string | null
+  turns: AgentHistoryTurn[]
+  /** The end of a very large compressed transcript was not read */
+  turnsUnavailable: boolean
+}
+
+/** One subscription window: percent used and when it resets (ms), from src/ipc/agentUsage.js */
+export interface AgentUsageWindow {
+  percent: number
+  resetsAt: number | null
+}
+
+export interface AgentUsage {
+  agent: LocalAgent
+  model: string | null
+  /** Reasoning effort of the session (low, medium, high, xhigh, max, ...), when the model has it */
+  effort: string | null
+  /** The CLI's session id: a restart opens the same conversation again (claude --resume, codex resume) */
+  sessionId: string | null
+  context: { percent: number; size: number | null } | null
+  fiveHour: AgentUsageWindow | null
+  sevenDay: AgentUsageWindow | null
+}
+
+/** usage null: the agent ended */
+export interface AgentUsageReport {
+  agentId: string
+  shellId: string | null
+  usage: AgentUsage | null
+}
+
 export type LocalAgentStatus = 'unknown' | 'starting' | 'idle' | 'working' | 'blocked' | 'error' | 'ended'
 
 export interface AgentMessageSession {
@@ -350,6 +418,8 @@ export interface AgentMessage {
   replyTo?: string
   sentAt: number
   read: boolean
+  /** A quick confirmation (send_receipt) of `replyTo`; the result follows as a normal reply */
+  receipt?: boolean
 }
 
 export interface AgentMessagesSnapshot {
@@ -373,6 +443,56 @@ export interface LocalWorktree {
 export interface LocalProjectInfo {
   repo: { root: string; branch: string | null; worktrees: LocalWorktree[] } | null
   gitMissing: boolean
+}
+
+export interface WorkspaceDirectoryEntry {
+  name: string
+  kind: 'directory' | 'file' | 'link'
+}
+
+export interface WorkspaceGitCommit {
+  hash: string
+  shortHash: string
+  parents: string[]
+  author: string
+  time: string
+  subject: string
+  refs: string[]
+}
+
+export interface WorkspaceGitRepository {
+  root: string
+  head: string | null
+  branch: string | null
+  commits: WorkspaceGitCommit[]
+  hasMore: boolean
+}
+
+export type WorkspaceGitFileKind = 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'conflict' | 'untracked'
+
+/** A changed file, its path relative to the repository top (forward slashes) */
+export interface WorkspaceGitFile {
+  path: string
+  kind: WorkspaceGitFileKind
+  from?: string
+}
+
+export interface WorkspaceGitStatus {
+  top: string
+  staged: WorkspaceGitFile[]
+  changed: WorkspaceGitFile[]
+  untracked: WorkspaceGitFile[]
+  truncated: boolean
+  /** Lines [added, removed] per path against HEAD (null: binary or not counted) */
+  stats?: Record<string, [number | null, number | null]>
+  branch?: string | null
+  upstream?: string | null
+}
+
+export interface WorkspaceGitDiff {
+  text: string
+  truncated: boolean
+  binary?: boolean
 }
 
 export interface OracleClientProgress {
@@ -433,6 +553,7 @@ export interface RemoteAccessStatus {
 declare global {
   interface Window {
     electronAPI: {
+      startupReady?: () => void
       // Window controls
       minimizeWindow: () => void
       /** See-through window, 0.5 to 1 (main clamps). Missing in an app built before it existed */
@@ -528,10 +649,26 @@ declare global {
 
       // Local file system
       localList: (dirPath: string) => Promise<any>
-      localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: LocalAgent }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
+      /** `resume`: a key from the agent history list; main then picks the folder, agent and session */
+      localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: LocalAgent; resume?: string; replacementFor?: string }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
       localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
+      workspaceDirectoryList: (folder: string, relative?: string) => Promise<{ success: true; entries: WorkspaceDirectoryEntry[]; total: number } | { success: false; error: string }>
+      workspaceGitStatus?: (root: string) => Promise<{ success: true; repo: WorkspaceGitStatus | null } | { success: false; error: string }>
+      workspaceGitCommitFiles?: (root: string, hash: string) => Promise<{ success: true; files: WorkspaceGitFile[] } | { success: false; error: string }>
+      workspaceGitDiff?: (root: string, file: string, hash?: string) => Promise<({ success: true } & WorkspaceGitDiff) | { success: false; error: string }>
+      /** A file on this PC in the file window; `relative` is relative to `root` */
+      localFileOpen?: (root: string, relative: string, mode: 'edit' | 'preview', label?: string, options?: { compareHead?: boolean }) => Promise<{ success: true } | { success: false; error: string }>
+      onRemoteFileCompareHead?: (callback: () => void) => () => void
+      workspaceGitLog: (folder: string) => Promise<{ success: true; repo: WorkspaceGitRepository } | { success: true; repo: null; reason: 'git-missing' | 'not-repo' } | { success: false; error: string }>
+      agentHistorySearch?: (query: string) => Promise<{ success: true; matches: { key: string; snippet: string }[] } | { success: false; cancelled?: boolean; error: string }>
+      agentHistoryList?: () => Promise<{ success: true; sessions: AgentHistorySession[]; total: number; truncated: boolean } | { success: false; error: string }>
+      agentHistoryDetail?: (key: string) => Promise<({ success: true } & AgentHistoryDetail) | { success: false; error: string }>
+      agentHistoryOpenFolder?: (key: string) => Promise<{ success: true } | { success: false; error: string }>
       localWorktreeCreate: (options: { folder: string; branch: string; base: string }) => Promise<({ success: true } & LocalWorktree) | { success: false; error: string }>
       localShellAttach?: (id: string) => Promise<{ backlog: string; exited: boolean; exitCode: number | null } | null>
+      /** Shells main still runs, for a reloaded window to take back as tabs */
+      localShellList?: () => Promise<Array<{ id: string; name: string; exited: boolean; cwd: string | null; agent: LocalAgent | null }>>
+      localShellCurrentDirectory: (id: string) => Promise<string | null>
       localShellClipboard?: (id: string) => Promise<{ success: true; text: string } | { success: false; error: string }>
       localShellHasWorkingAgent?: (ids: string[]) => Promise<boolean>
       agentMessagesSnapshot: () => Promise<AgentMessagesSnapshot | null>
@@ -541,6 +678,8 @@ declare global {
       agentMessageSend: (message: { to: string; text: string; replyTo?: string }) => Promise<{ success: true; id: string } | { success: false; error: string }>
       agentMessageAck: (id: string) => Promise<{ success: true; id: string } | { success: false; error: string }>
       onAgentMessagesState: (callback: (snapshot: AgentMessagesSnapshot) => void) => () => void
+      agentUsageState?: () => Promise<AgentUsageReport[]>
+      onAgentUsage?: (callback: (report: AgentUsageReport) => void) => () => void
       onAgentMessageDelivered: (callback: (delivery: AgentMessageDelivery) => void) => () => void
       localShellWrite?: (id: string, data: string) => void
       localShellComposing?: (id: string, value: boolean) => void
@@ -578,6 +717,9 @@ declare global {
       // Server file window (edit / preview); absent until the app restarts after an update
       openRemoteFile?: (sessionId: string, sessionName: string, remotePath: string, mode: RemoteFileMode) => Promise<RemoteFileResult<{ existing: boolean }>>
       remoteFileLoad?: (docId: string) => Promise<RemoteFileResult<RemoteFileLoaded>>
+      remoteFileFindDefinitions?: (docId: string, name: string) => Promise<RemoteFileResult<{ results: ConfigDefinition[]; scanned: number; truncated: boolean }>>
+      remoteFileOpenDefinition?: (docId: string, key: string) => Promise<RemoteFileResult<object>>
+      onRemoteFileRevealLine?: (callback: (line: number) => void) => () => void
       remoteFileTail?: (docId: string, generation: number, cursor: number) => Promise<RemoteFileResult<RemoteFileTailResult>>
       remoteFileAttention?: (docId: string) => void
       remoteFileReview?: (docId: string, content: string) => Promise<RemoteFileResult<RemoteFileReview>>

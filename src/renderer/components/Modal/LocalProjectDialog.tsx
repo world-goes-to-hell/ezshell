@@ -2,21 +2,12 @@ import { useEffect, useState, type FormEvent } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiFolderOpenLine } from 'react-icons/ri'
 import type { LocalAgent, LocalProjectInfo } from '../../types'
+import { readLocalProjects, writeLocalProjects } from '../../lib/localProjectList'
 import './LocalProjectDialog.css'
 
-const STORAGE_KEY = 'ezshell.localProjects'
 const CURRENT = 'current'
 const NEW = 'new'
 const folderName = (folder: string) => folder.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || folder
-
-function readFolders(): string[] {
-  try {
-    const data: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')
-    return Array.isArray(data) ? [...new Set(data.filter((folder): folder is string => typeof folder === 'string' && folder.length > 0))] : []
-  } catch {
-    return []
-  }
-}
 
 export interface LocalProjectTerminal {
   cwd: string
@@ -30,7 +21,7 @@ interface LocalProjectDialogProps {
 }
 
 export function LocalProjectDialog({ onClose, onOpenTerminal }: LocalProjectDialogProps) {
-  const [folders, setFolders] = useState(readFolders)
+  const [folders, setFolders] = useState(readLocalProjects)
   const [folder, setFolder] = useState(() => folders[0] ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -38,11 +29,8 @@ export function LocalProjectDialog({ onClose, onOpenTerminal }: LocalProjectDial
   const updateFolders = (next: string[], selected: string) => {
     setFolders(next)
     setFolder(selected)
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-    } catch {
-      setError('작업 폴더 목록을 저장하지 못했습니다.')
-    }
+    // The sidebar's local tree shows the same list and hears the change
+    if (!writeLocalProjects(next)) setError('작업 폴더 목록을 저장하지 못했습니다.')
   }
 
   const pickFolder = async () => {

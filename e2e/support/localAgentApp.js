@@ -3,7 +3,7 @@ const { app, clipboard, ipcMain, nativeImage } = require('electron')
 const fs = require('fs')
 const path = require('path')
 const pty = require('node-pty')
-const { PROMPT } = require('../../src/ipc/agentInboxWake.js')
+const { PROMPT, BUSY_PROMPT, REMIND_PROMPT } = require('../../src/ipc/agentInboxWake.js')
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
 const bin = path.join(profile, 'fake-agents')
@@ -19,7 +19,8 @@ process.env.EZSHELL_TEST_AGENT_SCRIPT = path.join(__dirname, 'localAgentFixture.
 fs.writeFileSync(path.join(profile, 'agent-message-connection'), '')
 for (const name of ['codex', 'claude']) {
   if (process.platform === 'win32') {
-    fs.writeFileSync(path.join(bin, name + '.cmd'), '@echo off\r\nsetlocal\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%EZSHELL_TEST_AGENT_EXE%" "%EZSHELL_TEST_AGENT_SCRIPT%" ' + name + ' %*\r\n')
+    const help = name === 'codex' ? 'if "%~1"=="--help" (echo   --no-daemon& exit /b 0)\r\n' : ''
+    fs.writeFileSync(path.join(bin, name + '.cmd'), '@echo off\r\nsetlocal\r\n' + help + 'set ELECTRON_RUN_AS_NODE=1\r\n"%EZSHELL_TEST_AGENT_EXE%" "%EZSHELL_TEST_AGENT_SCRIPT%" ' + name + ' %*\r\n')
   } else {
     fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "$EZSHELL_TEST_AGENT_EXE" "$EZSHELL_TEST_AGENT_SCRIPT" ' + name + ' "$@"\n', { mode: 0o700 })
   }
@@ -34,16 +35,21 @@ pty.spawn = (file, args, options) => {
   let id = options.env.EZSHELL_AGENT_ID
   // Give the fake agent a composer without relying on Electron's run-as-node console input modes.
   const write = child.write.bind(child)
-  let pending = false
-  let turns = 0
+  // The idle and reminder lines start a turn (-wakes); the busy notice goes into the running task (-busy-wakes)
+  const counters = { [PROMPT]: 'wakes', [REMIND_PROMPT]: 'wakes', [BUSY_PROMPT]: 'busy-wakes' }
+  const counts = {}
+  let pending = null
   child.write = data => {
     if (!id && data === 'claude\r') id = 'manual-claude'
-    if (id && data === '\x1b[200~' + PROMPT + '\x1b[201~') {
-      pending = true
-      fs.writeFileSync(path.join(profile, id + '-draft'), PROMPT)
+    if (!id && data === 'codex --yolo\r') id = 'manual-codex'
+    const pasted = data.startsWith('\x1b[200~') && data.endsWith('\x1b[201~') ? data.slice(6, -6) : null
+    if (id && pasted !== null && counters[pasted]) {
+      pending = counters[pasted]
+      fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
     } else if (pending && data === '\r') {
-      pending = false
-      fs.writeFileSync(path.join(profile, id + '-wakes'), String(++turns))
+      counts[pending] = (counts[pending] ?? 0) + 1
+      fs.writeFileSync(path.join(profile, id + '-' + pending), String(counts[pending]))
+      pending = null
       fs.writeFileSync(path.join(profile, id + '-draft'), '')
     } else {
       write(data)

@@ -38,6 +38,7 @@
 [data-surface="glass"] .title-bar,
 [data-surface="glass"] .sidebar-panel,
 [data-surface="glass"] .terminal-tabs,
+[data-surface="glass"] .workspace-header,
 [data-surface="glass"] .split-pane-header,
 [data-surface="glass"] .app-footer,
 [data-surface="glass"] .sftp-header,
@@ -105,11 +106,17 @@
   backdrop-filter: var(--glass-blur);
 }
 
+/* Tab menus can sit over a terminal with a different palette from the app. */
+[data-surface="glass"] .tab-context-menu {
+  background: var(--glass-content);
+}
+
 /* The OS asks for less transparency: solid surfaces again */
 @media (prefers-reduced-transparency: reduce) {
   [data-surface="glass"] .title-bar,
   [data-surface="glass"] .sidebar-panel,
   [data-surface="glass"] .terminal-tabs,
+  [data-surface="glass"] .workspace-header,
   [data-surface="glass"] .split-pane-header,
   [data-surface="glass"] .app-footer,
   [data-surface="glass"] .sftp-header,

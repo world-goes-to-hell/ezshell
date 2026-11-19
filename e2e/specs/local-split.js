@@ -2,12 +2,13 @@
 // and the vacated place merges back. Run by e2e/run.js (fresh profile, no server needed).
 const fs = require('fs'), path = require('path')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const { findPage, isMainPage } = require('../support/driver')
 let failures = 0
 const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? '  -- ' + d : ''}`) }
 ;(async () => {
-  let list = []
-  for (let i = 0; i < 60 && !list.some((t) => t.type === 'page'); i++) { try { list = await (await fetch(process.env.E2E_CDP + '/json')).json() } catch {} await sleep(500) }
-  const ws = new WebSocket(list.find((t) => t.type === 'page').webSocketDebuggerUrl)
+  const mainPage = await findPage(isMainPage)
+  if (!mainPage) throw new Error('the app has no main page')
+  const ws = new WebSocket(mainPage.webSocketDebuggerUrl)
   await new Promise((res) => { ws.onopen = res })
   let id = 0; const pending = new Map()
   ws.onmessage = (e) => { const m = JSON.parse(e.data); if (pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) } }
@@ -61,29 +62,29 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   await sleep(800)
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
   await js(`(() => {
-    const button = document.querySelector('.welcome-local-terminal')
-    const label = button.querySelector('span')
-    const origin = label.getBoundingClientRect()
+    const welcome = document.querySelector('.welcome-screen')
+    const button = document.querySelector('.local-terms-btn[aria-label="새 로컬 터미널"]')
+    const origin = button.getBoundingClientRect()
     const observer = new MutationObserver(() => {
       const chip = document.querySelector('.session-tab-flight')
       if (!chip) return
       window.__localTabFlight = {
         tabId: chip.dataset.destinationId,
-        fromButton: chip.textContent === label.textContent &&
+        fromButton: chip.textContent === button.getAttribute('aria-label') &&
           Math.abs(chip.offsetLeft + 7 - origin.left) < 2 &&
           Math.abs(chip.offsetTop + chip.offsetHeight / 2 - origin.top - origin.height / 2) < 2,
-        welcomeGone: !button.isConnected
+        welcomeGone: !welcome.isConnected
       }
       observer.disconnect()
     })
     observer.observe(document.body, { childList: true })
     button.click()
   })()`)
-  check('the welcome button flies into the new local tab after the welcome screen leaves', await until(`
+  check('the sidebar button flies into the new local tab after the welcome screen leaves', await until(`
     window.__localTabFlight?.fromButton && window.__localTabFlight.welcomeGone &&
     window.__localTabFlight.tabId === document.querySelector('.terminal-tab.active')?.dataset.tabId &&
     !document.querySelector('.session-tab-flight, .session-tab-receiver')
-  `, 5000), JSON.stringify(await js('window.__localTabFlight')))
+  `, 5000), JSON.stringify(await js(`({ flight: window.__localTabFlight, hidden: document.hidden, visibility: document.visibilityState, reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, focus: document.hasFocus() })`)))
   check('a local terminal tab opens with a PowerShell prompt', await ready(1), String((await texts())[0] || '').slice(-80))
 
   await menuAt(0)
@@ -178,6 +179,19 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   await typeIn(0, 'echo LOCAL-PROMOTED')
   check('the promoted local shell still answers', /LOCAL-PROMOTED/.test((await texts())[0]))
   check('a tab of one pane draws no outline', JSON.stringify(await outlines()) === '[false]', JSON.stringify(await outlines()))
+
+  // ---- 이 칸 닫기 on the tab's first terminal: the other shell becomes the main one ----
+  await menuAt(0); await pick('좌우 분할')
+  check('the tab splits again', await ready(2))
+  await typeIn(1, 'echo NEW-SECOND')
+  const oldMainShell = await js(`${PANES}[0].dataset.localShellId`)
+  await menuAt(0)
+  check('이 칸 닫기 is enabled on the first terminal of a split tab', (await subItems()).includes('이 칸 닫기') && !(await subItems()).includes('이 칸 닫기(x)'), await subItems())
+  await pick('이 칸 닫기')
+  check('closing the first terminal leaves the other shell as the only pane', await until(`${PANES}.length === 1 && ${PANES}[0].textContent.includes('NEW-SECOND')`, 12000), JSON.stringify((await texts()).map(x => x.slice(-80))))
+  check('the shell of the first terminal is closed in the main process', await until(`window.electronAPI.localShellAttach(${JSON.stringify(oldMainShell)}).then(state => state === null)`, 8000))
+  await typeIn(0, 'echo AFTER-MAIN-CLOSE')
+  check('the remaining shell still answers in the same tab', (await tabCount()) === 1 && /AFTER-MAIN-CLOSE/.test((await texts())[0]))
   await js(`document.querySelectorAll('.terminal-tab')[0].querySelector('.tab-close')?.click()`); await sleep(800)
   check('the last tab closes', (await tabCount()) === 0, String(await tabCount()))
 

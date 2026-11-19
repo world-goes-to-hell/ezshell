@@ -7,6 +7,7 @@ import { SessionTooltip } from './SessionTooltip'
 import { SessionTabBadge } from './SessionTabBadge'
 import type { DropPosition } from '../../lib/sessionOrder'
 import type { SessionTabGroup } from '../../lib/sessionTabs'
+import type { NamePart } from '../../lib/containerSearch'
 import './SessionMcpMark.css'
 
 const MCP_MARK_LABEL = 'Claude Code(MCP) 접근 허용됨'
@@ -38,6 +39,12 @@ interface SessionItemProps {
   isDragging: boolean
   /** Tabs currently open from this session; absent when there are none */
   tabs?: SessionTabGroup
+  /** The sidebar search found this session */
+  isMatch?: boolean
+  /** The match Enter in the search box connects to */
+  isCurrentMatch?: boolean
+  /** The name with the searched words marked; null when the words are elsewhere (host, folder) */
+  nameParts?: NamePart[] | null
 }
 
 const DEFAULT_ICON: SessionIcon = 'server'
@@ -54,7 +61,7 @@ function getItemStyle(color: string | undefined): ColorStyle | undefined {
 
 export function SessionItem({
   session, onConnect, onContextMenu, onDragStart, onDragEnd, onItemDragOver, onItemDragLeave, onItemDrop,
-  dropIndicator, isDragging, tabs
+  dropIndicator, isDragging, tabs, isMatch = false, isCurrentMatch = false, nameParts = null
 }: SessionItemProps) {
   const isConnecting = useTerminalStore(state => state.pendingSessionConnections.has(session.id))
   const isActive = (tabs?.connected.length ?? 0) > 0
@@ -83,7 +90,9 @@ export function SessionItem({
     // Only lost tabs: the state dot turns red
     !isActive && (tabs?.disconnected.length ?? 0) > 0 && 'has-lost',
     session.backgroundColor && 'has-own-color',
-    dropIndicator && `drop-${dropIndicator}`
+    dropIndicator && `drop-${dropIndicator}`,
+    isMatch && 'is-search-match',
+    isCurrentMatch && 'is-search-current'
   ].filter(Boolean).join(' ')
 
   return (
@@ -114,7 +123,11 @@ export function SessionItem({
             ? <span className="session-dot" aria-hidden="true" />
             : <IconComponent size={14} />}
         </div>
-        <span className="session-name">{displayName}</span>
+        <span className="session-name">
+          {nameParts
+            ? nameParts.map((part, i) => (part.isMatch ? <mark key={i} className="sidebar-search-mark">{part.text}</mark> : <span key={i}>{part.text}</span>))
+            : displayName}
+        </span>
         {mcpMark}
         {tabBadges}
       </motion.div>

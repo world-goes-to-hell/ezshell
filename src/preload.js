@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  startupReady: () => ipcRenderer.send('app-startup-ready'),
   // 창 컨트롤
   minimizeWindow: () => ipcRenderer.send('window-minimize'),
   maximizeWindow: () => ipcRenderer.send('window-maximize'),
@@ -149,8 +150,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Local terminal tabs (shells of this PC)
   localShellOpen: (options) => ipcRenderer.invoke('local-shell-open', options),
   localProjectInspect: (folder) => ipcRenderer.invoke('local-project-inspect', folder),
+  workspaceDirectoryList: (folder, relative = '') => ipcRenderer.invoke('workspace-directory-list', { root: folder, path: relative }),
+  workspaceGitStatus: (root) => ipcRenderer.invoke('workspace-git-status', root),
+  workspaceGitCommitFiles: (root, hash) => ipcRenderer.invoke('workspace-git-commit-files', { root, hash }),
+  workspaceGitDiff: (root, file, hash) => ipcRenderer.invoke('workspace-git-diff', { root, file, hash }),
+  localFileOpen: (root, relative, mode, label, options) => ipcRenderer.invoke('local-file-open', { root, path: relative, mode, label, compareHead: options?.compareHead === true }),
+  onRemoteFileCompareHead: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('remote-file-compare-head', handler);
+    return () => ipcRenderer.removeListener('remote-file-compare-head', handler);
+  },
+  workspaceGitLog: (folder) => ipcRenderer.invoke('workspace-git-log', folder),
   localWorktreeCreate: (options) => ipcRenderer.invoke('local-worktree-create', options),
+  // Past Claude Code and Codex sessions (right panel); only keys from the list go back
+  agentHistoryList: () => ipcRenderer.invoke('agent-history-list'),
+  agentHistoryDetail: (key) => ipcRenderer.invoke('agent-history-detail', key),
+  agentHistorySearch: (query) => ipcRenderer.invoke('agent-history-search', query),
+  agentHistoryOpenFolder: (key) => ipcRenderer.invoke('agent-history-open-folder', key),
   localShellAttach: (id) => ipcRenderer.invoke('local-shell-attach', id),
+  localShellList: () => ipcRenderer.invoke('local-shell-list'),
+  localShellCurrentDirectory: (id) => ipcRenderer.invoke('local-shell-current-directory', id),
   localShellClipboard: (id) => ipcRenderer.invoke('local-shell-clipboard', id),
   localShellHasWorkingAgent: (ids) => ipcRenderer.invoke('local-shell-working-agent', ids),
   agentMessagesSnapshot: () => ipcRenderer.invoke('agent-messages-state'),
@@ -161,6 +180,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event, snapshot) => callback(snapshot);
     ipcRenderer.on('agent-messages-state', handler);
     return () => ipcRenderer.removeListener('agent-messages-state', handler);
+  },
+  // Usage of launched agents for the status bar (numbers and the model name only)
+  agentUsageState: () => ipcRenderer.invoke('agent-usage-state'),
+  onAgentUsage: (callback) => {
+    const handler = (_event, report) => callback(report);
+    ipcRenderer.on('agent-usage', handler);
+    return () => ipcRenderer.removeListener('agent-usage', handler);
   },
   onAgentMessageDelivered: (callback) => {
     const handler = (_event, delivery) => callback(delivery);
@@ -277,6 +303,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('remote-file-open', { sessionId, sessionName, remotePath, mode }),
   remoteFileLoad: (docId) => ipcRenderer.invoke('remote-file-load', { docId }),
   remoteFileTail: (docId, generation, cursor) => ipcRenderer.invoke('remote-file-tail', { docId, generation, cursor }),
+  remoteFileFindDefinitions: (docId, name) => ipcRenderer.invoke('remote-file-find-definitions', { docId, name }),
+  remoteFileOpenDefinition: (docId, key) => ipcRenderer.invoke('remote-file-open-definition', { docId, key }),
+  onRemoteFileRevealLine: (callback) => {
+    const handler = (_event, line) => { if (Number.isSafeInteger(line) && line > 0) callback(line) };
+    ipcRenderer.on('remote-file-reveal-line', handler);
+    return () => ipcRenderer.removeListener('remote-file-reveal-line', handler);
+  },
   remoteFileAttention: (docId) => ipcRenderer.send('remote-file-attention', { docId }),
   // DB client (src/dbClient): discovery and opening from the main window, the rest from a DB window
   dbDiscover: (sessionId) => ipcRenderer.invoke('db-discover', { sessionId }),

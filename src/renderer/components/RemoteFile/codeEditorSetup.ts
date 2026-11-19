@@ -44,7 +44,7 @@ const KOREAN_PHRASES: Record<string, string> = {
   'Selection deleted': '선택 영역 삭제됨'
 }
 
-const highlightStyle = HighlightStyle.define([
+export const highlightStyle = HighlightStyle.define([
   { tag: [tags.keyword, tags.controlKeyword, tags.operatorKeyword, tags.modifier], color: 'var(--code-keyword, #c678dd)' },
   { tag: [tags.string, tags.special(tags.string), tags.regexp], color: 'var(--code-string, #98c379)' },
   { tag: [tags.number, tags.bool, tags.null, tags.atom], color: 'var(--code-number, #d19a66)' },
@@ -55,7 +55,19 @@ const highlightStyle = HighlightStyle.define([
   { tag: [tags.typeName, tags.className, tags.namespace], color: 'var(--code-type, #56b6c2)' },
   { tag: [tags.tagName, tags.heading], color: 'var(--code-tag, #e06c75)', fontWeight: '600' },
   { tag: [tags.meta, tags.processingInstruction], color: 'var(--text-secondary)' },
-  { tag: tags.invalid, color: 'var(--error-text)' }
+  { tag: tags.invalid, color: 'var(--error-text)' },
+  // Keys of .properties/.ini (legacy modes give a definition) and their values (quote)
+  { tag: tags.definition(tags.variableName), color: 'var(--code-property, #e5c07b)' },
+  { tag: tags.quote, color: 'var(--code-string, #98c379)' },
+  // A YAML plain value (8080, on, a word) apart from its key
+  { tag: tags.content, color: 'var(--code-value, var(--text-primary))' },
+  { tag: tags.separator, color: 'var(--text-secondary)' },
+  // Markdown
+  { tag: tags.strong, fontWeight: '700' },
+  { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: tags.strikethrough, textDecoration: 'line-through' },
+  { tag: tags.monospace, color: 'var(--code-string, #98c379)' },
+  { tag: [tags.link, tags.url], color: 'var(--text-link, var(--accent))', textDecoration: 'underline' }
 ])
 
 const appTheme = EditorView.theme({

@@ -33,6 +33,9 @@ const { macMenuTemplate } = require('./src/macMenu.js');
 const { registerContainerIpc } = require('./src/containers/ipc.js');
 const { createContainerLogs } = require('./src/containers/logs.js');
 const { createRemoteDocuments } = require('./src/remoteFiles/documents.js');
+const localRead = require('./src/localFiles/localRead.js');
+const localGit = require('./src/localFiles/git.js');
+const { createLocalRoots } = require('./src/localFiles/roots.js');
 const { createBackupStore } = require('./src/remoteFiles/backups.js');
 const { registerRemoteFileIpc } = require('./src/remoteFiles/ipc.js');
 const { registerDbIpc } = require('./src/dbClient/ipc.js');
@@ -196,6 +199,35 @@ function saveToFile(filePath, data) {
   }
 }
 
+function createStartupSplash(placement, workArea, rendererUrl) {
+  const width = Math.min(680, workArea.width);
+  const height = Math.min(230, workArea.height);
+  const x = Math.max(workArea.x, Math.min(workArea.x + workArea.width - width,
+    Math.round(placement.x + (placement.width - width) / 2)));
+  const y = Math.max(workArea.y, Math.min(workArea.y + workArea.height - height,
+    Math.round(placement.y + (placement.height - height) / 2)));
+  const splash = new BrowserWindow({
+    x, y, width, height,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    webPreferences: { sandbox: true, contextIsolation: true, devTools: false }
+  });
+  const dismiss = () => { if (!splash.isDestroyed()) splash.destroy(); };
+  splash.setIgnoreMouseEvents(true);
+  splash.once('ready-to-show', () => splash.showInactive());
+  const loading = rendererUrl
+    ? splash.loadURL(new URL('startup.html?startupMode=true', rendererUrl).href)
+    : splash.loadFile(path.join(__dirname, '../renderer/startup.html'), { query: { startupMode: 'true' } });
+  void loading.catch(dismiss);
+  return dismiss;
+}
+
 function createWindow() {
   // Opens where it was closed (also after an update restarts the app), if that place is still on a screen
   const windowStatePath = path.join(app.getPath('userData'), 'window-state.json');
@@ -212,6 +244,7 @@ function createWindow() {
   if (mainWindowHasBackdrop) require('electron').nativeTheme.themeSource = appearance.scheme;
   mainWindow = new BrowserWindow({
     icon: WINDOW_ICON,
+    show: false,
     width: lastPlace ? lastPlace.width : 1200,
     height: lastPlace ? lastPlace.height : 800,
     ...(lastPlace ? { x: lastPlace.x, y: lastPlace.y } : {}),
@@ -231,25 +264,49 @@ function createWindow() {
   // With acrylic the window must never be maximized natively (the material is lost for good): it fills
   // the work area of its screen instead (nativeBackdrop.createFillToggle)
   mainWindowFill = registerGlassWindow(mainWindow, backdrop);
-  if (lastPlace && lastPlace.isMaximized) {
-    if (mainWindowFill) mainWindowFill.fill(mainWindow.getBounds());
-    else mainWindow.maximize();
-  }
+  if (lastPlace?.isMaximized && mainWindowFill) mainWindowFill.fill(mainWindow.getBounds());
   windowState.trackWindow(mainWindow, windowStatePath, mainWindowFill
     ? { normalBounds: mainWindowFill.normalBounds, isMaximized: mainWindowFill.isFilled }
     : undefined);
   restoreTabsIpc.trackClose(mainWindow);
 
-  // Load from Vite dev server in development, built files in production
-  if (process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-    mainWindow.webContents.openDevTools()
-  } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
-    mainWindow.loadURL(DEV_RENDERER_URL)
-    mainWindow.webContents.openDevTools()
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
-  }
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL ||
+    ((process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) ? DEV_RENDERER_URL : null);
+  const win = mainWindow;
+  const bounds = win.getBounds();
+  const { workArea } = require('electron').screen.getDisplayMatching(bounds);
+  const dismissSplash = createStartupSplash(lastPlace?.isMaximized ? workArea : bounds, workArea, rendererUrl);
+  // The renderer signals after committing the lock screen or the loaded session list.
+  // Bound the wait so a stuck renderer can never leave an overlay on the desktop indefinitely.
+  let starting = true;
+  const reveal = () => {
+    if (!starting || win.isDestroyed()) return;
+    starting = false;
+    clearTimeout(startupTimeout);
+    if (lastPlace?.isMaximized && !mainWindowFill) win.maximize();
+    win.show();
+    dismissSplash();
+    if (rendererUrl) win.webContents.openDevTools();
+  };
+  const startupTimeout = setTimeout(reveal, 20000);
+  win.once('closed', () => {
+    starting = false;
+    clearTimeout(startupTimeout);
+    dismissSplash();
+  });
+  win.webContents.ipc.on('app-startup-ready', (event) => {
+    if (event.senderFrame === win.webContents.mainFrame) reveal();
+  });
+  const failStartup = (error) => {
+    if (!starting || win.isDestroyed()) return;
+    console.error('[Startup] The main window could not load:', error);
+    dismissSplash();
+    dialog.showErrorBox('ezShell 시작 오류', '앱 화면을 열지 못했습니다. ezShell을 다시 실행해 주세요.');
+    win.destroy();
+  };
+  win.webContents.once('render-process-gone', (_event, details) => failStartup(details.reason));
+  const loading = rendererUrl ? win.loadURL(rendererUrl) : win.loadFile(path.join(__dirname, '../renderer/index.html'));
+  void loading.catch(failStartup);
 
   // Disable Electron's built-in zoom, use IPC for terminal-only font size control
   mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -335,7 +392,20 @@ const REMOTE_FILE_BACKUP_FOLDER = 'ezShell Backups';
 
 const remoteBackupRoot = () => path.join(app.getPath('documents'), REMOTE_FILE_BACKUP_FOLDER);
 
+// Folders the workspace panel may read files from: the open local shells' start folders and their
+// repositories (src/localFiles/roots.js). localShells is set later; this is only called on a request.
+const localRoots = createLocalRoots({
+  knownFolders: async () => {
+    const live = localShells ? localShells.list().filter(shellEntry => !shellEntry.exited) : [];
+    const current = await Promise.all(live.map(shellEntry => localShells.currentDirectory(shellEntry.id).catch(() => null)));
+    return [...live.map(shellEntry => shellEntry.cwd), ...current.filter(Boolean)];
+  },
+  repoFolders: localGit.repoFolders
+});
+
 const remoteDocuments = createRemoteDocuments({
+  // Files on this PC (the workspace panel) open in the same windows
+  localFiles: { read: localRead, headOf: (root, file) => localGit.fileAt(root, file) },
   // A container's log is shown in the same window as a followed file (src/containers/logs.js)
   containerLogs: createContainerLogs({ connectionOf: (sessionId) => sshConnections.get(sessionId)?.conn || null }),
   openSftp: (sessionId) => new Promise((resolve, reject) => {
@@ -374,6 +444,7 @@ const remoteFileIpc = registerRemoteFileIpc({
   // The container log window opens from the main window's panel, for a container it listed
   fromMainWindow: (event) => fromMainWindow(event),
   isKnownContainer: (sessionId, name) => containers.isKnown(sessionId, name),
+  resolveLocal: (root, relative) => localRoots.resolveInside(root, relative),
   openFolder: async (dir) => {
     await fs.promises.mkdir(dir, { recursive: true });
     const failure = await shell.openPath(dir);
@@ -457,16 +528,40 @@ ipcMain.handle('local-shell-open', async (event, size) => {
   if (!fromMainWindow(event)) return { success: false, error: '본창에서만 열 수 있습니다.' };
   if (isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
   try {
-    if (size?.agent === 'codex' || size?.agent === 'claude') {
+    // Resuming takes a key from the agent history list: the folder, agent and session id are the
+    // ones main read from the transcript, never what the window sends
+    const { resume, ...options } = size || {};
+    if (resume !== undefined) {
+      let target = typeof resume === 'string' ? agentHistory.target(resume) : null;
+      // Tabs opened again right after a restart: nothing has listed the transcripts yet
+      if (!target && typeof resume === 'string') {
+        await agentHistory.list().catch(() => {});
+        if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
+        target = agentHistory.target(resume);
+      }
+      if (!target) return { success: false, error: '에이전트 기록을 새로 고친 뒤 다시 시도해 주세요.' };
+      Object.assign(options, { cwd: target.cwd, agent: target.agent, resume: target.id });
+    }
+    if (options.agent === 'codex' || options.agent === 'claude') {
       await agentMessages.ready();
       if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
+    } else {
+      // A plain shell gets a shell token for the usage of a Claude typed into it; without the pipe it
+      // opens all the same
+      await agentMessages.ready().catch(() => {});
+      if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
     }
-    return { success: true, ...getLocalShells().open(size || {}) };
+    return { success: true, ...getLocalShells().open(options) };
   } catch (err) {
     return { success: false, error: err.message };
   }
 });
 ipcMain.handle('local-shell-attach', (event, id) => (fromMainWindow(event) && localShells ? localShells.attach(id) : null));
+// A reloaded window has no tabs but the shells kept running: it takes them back (lib/localShellAdopt.ts)
+ipcMain.handle('local-shell-list', (event) => (fromMainWindow(event) && !isAppLocked && localShells ? localShells.list() : []));
+ipcMain.handle('local-shell-current-directory', (event, id) =>
+  fromMainWindow(event) && !isAppLocked ? localShells?.currentDirectory(id) ?? null : null
+);
 ipcMain.handle('local-shell-working-agent', (event, ids) =>
   Boolean(fromMainWindow(event) && !isAppLocked && Array.isArray(ids) && ids.length <= 20 && localShells?.hasWorkingAgent(ids))
 );
@@ -493,6 +588,14 @@ app.on('will-quit', () => {
 ipcMain.handle('agent-messages-state', event =>
   fromMainWindow(event) && !isAppLocked ? agentMessages.snapshot() : null
 );
+// Usage of the agents ezShell launched (status bar): Claude reports it from its status line over the
+// agent pipe, Codex's comes from its session file. Numbers and the model name only.
+const codexUsageWatcher = require('./src/ipc/codexUsageWatcher.js').createCodexUsageWatcher({
+  agents: () => agentMessages.snapshot().agents,
+  setUsage: (agentId, usage) => agentMessages.setUsage(agentId, usage)
+});
+codexUsageWatcher.start();
+ipcMain.handle('agent-usage-state', event => (fromMainWindow(event) && !isAppLocked ? agentMessages.usageSnapshot() : []));
 ipcMain.handle('agent-message-send', (event, request) => {
   if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
   try { return { success: true, ...agentMessages.sendAsUser(request ?? {}) }; }
@@ -503,7 +606,12 @@ ipcMain.handle('agent-message-ack', (event, id) => {
   try { return { success: true, ...agentMessages.acknowledge(id) }; }
   catch (error) { return { success: false, error: error.message }; }
 });
-require('./src/ipc/localProjects.js').registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked: () => isAppLocked });
+require('./src/ipc/localProjects.js').registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit });
+// Past Claude Code and Codex sessions of this PC, for the right panel (src/agentHistory)
+const agentHistory = require('./src/agentHistory/history.js').createAgentHistory();
+require('./src/agentHistory/ipc.js').registerAgentHistoryIpc({
+  ipcMain, fromMainWindow, isLocked: () => isAppLocked, history: agentHistory, openPath: folder => shell.openPath(folder)
+});
 
 // A query result the user chose to export ("추출" in a DB tab or DB window), saved where they pick.
 // The only way a result reaches the disk; text or the bytes of a spreadsheet file.
@@ -738,6 +846,7 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   isAppLocked = true;
   mcpSessionsCache = null;
   mcpController?.onLocked();
+  agentHistory.clear();
   hostKeyPrompter.dismissAll();
   closeMcpActivityWindow();
   // File previews and followed logs must not stay on screen behind the lock (edit windows keep unsaved text)
@@ -820,6 +929,7 @@ ipcMain.handle('reset-master-password', async () => {
   isAppLocked = true;
   mcpSessionsCache = null;
   mcpController?.onLocked();
+  agentHistory.clear();
   remoteFileIpc.closeViewWindows();
   // Query results must not stay on screen behind the lock
   dbIpc.closeAll();

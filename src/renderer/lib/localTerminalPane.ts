@@ -1,6 +1,6 @@
 /**
- * The sidebar's local-terminal pane (below the session list). Left alone it is as tall as its rows, up to
- * half of the list area (CSS). Once the user drags the divider, the chosen height is kept instead.
+ * The sidebar's local work pane (below the session list). Left alone it is as tall as its rows while the
+ * session list keeps about three rows (CSS). Once the user drags the divider, the chosen height is kept.
  */
 
 export const LOCAL_PANE_STORAGE_KEY = 'sidebarLocalPane'
@@ -41,11 +41,15 @@ interface PaneLayout {
   activePaneType: 'primary' | 'secondary' | null
   primary: { activeTerminalId: string | null }
   secondary: { activeTerminalId: string | null } | null
+  /** Every screen of a split (up to four) and the focused one; older callers give the first two only */
+  panes?: ReadonlyArray<{ activeTerminalId: string | null }>
+  activePane?: number | null
 }
 
 /** The tab the user is looking at: the focused pane's active tab when the screen is split */
 export function visibleTerminalId(layout: PaneLayout, activeTerminalId: string | null): string | null {
   if (layout.mode !== 'split') return activeTerminalId
+  if (layout.panes && layout.activePane !== undefined && layout.activePane !== null) return layout.panes[layout.activePane]?.activeTerminalId ?? null
   const pane = layout.activePaneType === 'secondary' ? layout.secondary : layout.primary
   return pane?.activeTerminalId ?? null
 }

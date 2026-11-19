@@ -6,6 +6,7 @@ import { useTerminalStore } from '../stores/terminalStore'
 import { toast } from '../stores/toastStore'
 
 const TRAIL_MS = 380
+export const PANE_GESTURE_CANCEL_RADIUS = 22
 
 interface Drag {
   pointer: number
@@ -16,13 +17,24 @@ interface Drag {
   y: number
   start: { x: number; y: number }
   leftPane: boolean
+  canReturnToCancel: boolean
+}
+
+interface GesturePreview {
+  from: PaneId
+  action: PaneGestureAction | null
+  cancelTarget: { x: number; y: number; labelX: number; above: boolean; active: boolean } | null
+}
+
+function isNearStart({ x, y, start }: Drag): boolean {
+  return Math.hypot(x - start.x, y - start.y) <= PANE_GESTURE_CANCEL_RADIUS
 }
 
 /** Alt+drag is captured before xterm starts a text selection or sends a mouse event to the shell. */
 export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElement | null>) {
   const canvas = useRef<HTMLCanvasElement>(null)
   const [trail, setTrail] = useState<'active' | 'fading' | null>(null)
-  const [preview, setPreview] = useState<{ from: PaneId; action: PaneGestureAction | null } | null>(null)
+  const [preview, setPreview] = useState<GesturePreview | null>(null)
 
   useEffect(() => {
     const root = container.current
@@ -70,7 +82,24 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       if (!drag || event.pointerId !== drag.pointer) return
       consume(event)
       drawTo(drag, event.clientX, event.clientY)
-      setPreview({ from: drag.from, action: actionAt(drag) })
+      const nearStart = isNearStart(drag)
+      const cancelling = drag.canReturnToCancel && nearStart
+      // Returning to the start also lets the user redraw in the source pane.
+      if (cancelling) drag.leftPane = false
+      const action = cancelling ? null : actionAt(drag)
+      if (action && !nearStart) drag.canReturnToCancel = true
+      const { start, rect } = drag
+      const labelInset = Math.min(64, rect.width / 2)
+      setPreview({
+        from: drag.from,
+        action,
+        cancelTarget: drag.canReturnToCancel ? {
+          ...start,
+          labelX: Math.min(rect.width - labelInset, Math.max(labelInset, start.x)),
+          above: rect.height - start.y < PANE_GESTURE_CANCEL_RADIUS + 32,
+          active: cancelling
+        } : null
+      })
     }
 
     const stop = (fade: boolean) => {
@@ -96,6 +125,10 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       if (!drag || event.pointerId !== drag.pointer) return
       consume(event)
       drawTo(drag, event.clientX, event.clientY)
+      if (drag.canReturnToCancel && isNearStart(drag)) {
+        stop(false)
+        return
+      }
       const { from } = drag
       const action = actionAt(drag)
       stop(true)
@@ -130,9 +163,9 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       context.lineWidth = 2.5
       context.lineCap = 'round'
       const start = { x: event.clientX - rect.left, y: event.clientY - rect.top }
-      drag = { pointer: event.pointerId, from, rect, context, ...start, start, leftPane: false }
+      drag = { pointer: event.pointerId, from, rect, context, ...start, start, leftPane: false, canReturnToCancel: false }
       setTrail('active')
-      setPreview({ from, action: null })
+      setPreview({ from, action: null, cancelTarget: null })
       window.addEventListener('pointermove', onMove, true)
       window.addEventListener('pointerup', onUp, true)
       window.addEventListener('pointercancel', cancel)

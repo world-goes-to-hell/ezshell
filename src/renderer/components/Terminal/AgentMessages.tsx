@@ -24,7 +24,8 @@ export const useAgentMessagesStore = create<AgentMessagesState>(() => ({
 }))
 const useMessages = useAgentMessagesStore
 
-function openPanel(agentId?: string) {
+/** Opens the message panel (all agents, or one agent's inbox) */
+export function openAgentMessages(agentId?: string) {
   useMessages.setState({ panel: { agentId } })
 }
 
@@ -52,8 +53,7 @@ function deliveryAnchor(shellId?: string): HTMLElement | undefined {
       if (tab) return tab
     }
   }
-  const inbox = document.querySelector<HTMLElement>('.agent-messages-button')
-  return inbox && isVisible(inbox) ? inbox : undefined
+  return undefined
 }
 
 function AgentDeliveryNotice({ delivery }: { delivery: AgentMessageDelivery | null }) {
@@ -143,18 +143,11 @@ export function AgentMessagesHost() {
   )
 }
 
-function unreadCount(messages: AgentMessage[], ids: Set<string>) {
-  return messages.reduce((count, message) => count + Number(!message.read && ids.has(message.to)), 0)
-}
+// A receipt between agents is read when its recipient next looks; until then it is not mail to count
+const counts = (message: AgentMessage) => !message.read && (!message.receipt || message.to === USER)
 
-export function AgentMessagesButton() {
-  const count = useMessages(state => state.snapshot.messages.filter(message => !message.read).length)
-  return (
-    <button type="button" className="sidebar-footer-btn agent-messages-button" onClick={() => openPanel()} title="에이전트 메시지" aria-label={count ? `에이전트 메시지, 읽지 않음 ${count}개` : '에이전트 메시지'}>
-      <RiMailLine size={18} />
-      {count > 0 && <span className="agent-mail-count">{count}</span>}
-    </button>
-  )
+function unreadCount(messages: AgentMessage[], ids: Set<string>) {
+  return messages.reduce((count, message) => count + Number(counts(message) && ids.has(message.to)), 0)
 }
 
 export function AgentTabMessages({ tabId }: { tabId: string }) {
@@ -181,7 +174,7 @@ export function AgentPaneMessages({ shellId, tabId }: { shellId: string; tabId: 
   }, [shellId, tabId])
   if (!agent) return null
   return (
-    <button type="button" className="agent-pane-mail" data-unread={count > 0} onClick={() => openPanel(agent.id)} title={`${agent.id} 메시지함`} aria-label={`${agent.id} 메시지함`}>
+    <button type="button" className="agent-pane-mail" data-unread={count > 0} onClick={() => openAgentMessages(agent.id)} title={`${agent.id} 메시지함`} aria-label={`${agent.id} 메시지함`}>
       <RiMailLine size={15} />
       {count > 0 && <span className="agent-mail-count">{count}</span>}
     </button>
@@ -252,16 +245,17 @@ function AgentMessagesDialog({ initialAgent, onClose }: { initialAgent?: string;
               <div className="agent-message-thread" role="log" aria-label={`${selected.id} 메시지`}>
                 {thread.length === 0 && <p className="form-hint">아직 메시지가 없습니다.</p>}
                 {thread.map(message => (
-                  <article key={message.id} className="agent-thread-message">
+                  <article key={message.id} className={`agent-thread-message${message.receipt ? ' is-receipt' : ''}`}>
                     <header>
                       <strong>{label(message.from)} → {label(message.to)}</strong>
+                      {message.receipt && <span className="agent-receipt-tag" title="요청을 받았다는 확인입니다. 결과는 따로 답장으로 옵니다.">수신 확인</span>}
                       <span>{message.read ? '읽음' : '전달됨'}</span>
                     </header>
                     <p>{message.text}</p>
                     {message.to === USER && (
                       <div className="agent-thread-actions">
                         {!message.read && <button type="button" onClick={() => void acknowledge(message.id)}>읽음 표시</button>}
-                        {selected.mcpConnected && <button type="button" onClick={() => setReply(message)}>답장</button>}
+                        {selected.mcpConnected && !message.receipt && <button type="button" onClick={() => setReply(message)}>답장</button>}
                       </div>
                     )}
                   </article>

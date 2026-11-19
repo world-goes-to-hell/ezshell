@@ -29,20 +29,29 @@ const { check, finish } = createChecks()
   await sleep(1200)
   await unlock(driver)
 
-  check('saved sessions are searchable from the welcome screen', await until(`!!${selector('.welcome-pick-session')}`))
-  await clickElement('.welcome-pick-session')
-  await until(`!!${selector('.session-picker-search input')}`)
-  await setInput('.session-picker-search input', 'Staging')
-  check('folder search distinguishes two sessions with the same connection information', await until(
-    `document.querySelectorAll('.session-picker-item').length === 1 && ${selector('.session-picker-item')}?.textContent.includes('Staging')`
-  ))
-  await key('Escape', 'Escape', 27)
-  await until(`!${selector('.session-picker-modal')}`)
+  check('with saved sessions the welcome screen shows only the app mark and name', await until(`
+    !!${selector('.sidebar-search')} && !!${selector('.welcome-icon svg')} &&
+    ${selector('.welcome-screen')}?.textContent.trim() === 'ezShell' &&
+    !${selector('.welcome-screen button')}
+  `))
 
-  await clickElement('.sidebar-session-search')
-  check('the sidebar also opens the same picker', await until(`!!${selector('.session-picker-modal')}`))
+  // The sidebar's search box marks the matches in the tree and hides nothing
+  const search = '.sidebar-search input'
+  const folderOpen = (id) => `${selector(`[data-folder-id="${id}"]`)}?.getAttribute('aria-expanded') === 'true'`
+  const marked = `[...document.querySelectorAll('.session-item.is-search-match')].map(row => row.dataset.sessionId).join()`
+  const current = `${selector('.session-item.is-search-current')}?.dataset.sessionId`
+  check('the sidebar has a search box instead of the picker button', await js(`!!${selector(search)} && !${selector('.sidebar-session-search')}`))
+  await js(`${selector(search)}.focus()`)
+  await setInput(search, 'staging')
+  check('a match is marked and its closed folder is shown open', await until(`${marked} === 'server-staging' && ${folderOpen('staging')} && ${current} === 'server-staging'`), await js(marked))
+  check('the folder that does not match stays in the list', await js(`!!${selector('[data-folder-id="production"]')} && !(${folderOpen('production')})`))
+  check('the count says which match is current', (await js(`${selector('.sidebar-search-count')}?.textContent`)) === '1/1')
+  await setInput(search, 'shared')
+  check('both sessions match and the first one is current', await until(`${marked} === 'server-production,server-staging' && ${current} === 'server-production'`), await js(marked))
+  await key('ArrowDown', 'ArrowDown', 40)
+  check('down arrow makes the next match current, typing stays in the box', await until(`${current} === 'server-staging'`) && await js(`document.activeElement === ${selector(search)}`))
   await key('Escape', 'Escape', 27)
-  await until(`!${selector('.session-picker-modal')}`)
+  check('Esc clears the search and the folders close again', await until(`${selector(search)}.value === '' && ${marked} === '' && !(${folderOpen('staging')}) && !(${folderOpen('production')})`))
   await js('document.activeElement.blur()')
   await key('p', 'KeyP', 80, process.platform === 'darwin' ? 4 : 2)
   check('the command palette names both folders', await until(`
@@ -52,6 +61,18 @@ const { check, finish } = createChecks()
   await key('Escape', 'Escape', 27)
   await until(`!${selector('.command-palette')}`)
   check('connected once to trust the fixture server', await connectSsh(driver))
+
+  await click(...await center(selector('.terminal-tabs .new-tab-btn')))
+  const pickSession = `[...document.querySelectorAll('.new-tab-menu-item')].find(item => item.textContent.includes('기존 세션 선택'))`
+  check('the tab strip still opens the saved session picker', await until(`!!${pickSession}`, 4000))
+  await click(...await center(pickSession))
+  await until(`!!${selector('.session-picker-search input')}`)
+  await setInput('.session-picker-search input', 'Staging')
+  check('folder search distinguishes two sessions with the same connection information', await until(
+    `document.querySelectorAll('.session-picker-item').length === 1 && ${selector('.session-picker-item')}?.textContent.includes('Staging')`
+  ))
+  await key('Escape', 'Escape', 27)
+  await until(`!${selector('.session-picker-modal')}`)
 
   const prod = selector('[data-folder-id="production"]')
   const sessionRow = selector('[data-session-id="server-production"]')
@@ -111,6 +132,15 @@ const { check, finish } = createChecks()
   check('confirmed retry completes the same transfer', await until(`window.electronAPI.sftpGetQueue(${JSON.stringify(sessionId)})
     .then(({ queue }) => queue.some(transfer => transfer.id === ${JSON.stringify(failed.transferId)} && transfer.status === 'completed'))`))
   check('the retried download contains the source data', fs.readFileSync(target, 'utf8') === 'old\n')
+
+  // Enter in the sidebar search connects to the current match
+  const tabCount = await js(`document.querySelectorAll('.terminal-tab').length`)
+  await js(`${selector(search)}.focus()`)
+  await setInput(search, 'staging')
+  await until(`${current} === 'server-staging'`)
+  await enter()
+  check('Enter in the search box opens the current match', await until(
+    `document.querySelectorAll('.terminal-tab').length === ${tabCount + 1} && ${selector('[data-session-id="server-staging"]')}?.classList.contains('active')`, 15000))
 
   const savedFile = path.join(process.env.E2E_PROFILE, 'restore-tabs.json')
   void clickElement('.title-bar-close').catch(() => {})

@@ -156,5 +156,15 @@ const { check, finish } = createChecks()
   await mark('main', 'AFTER-CLOSE')
   check('the moved tab still answers after the original tab closed', /AFTER-CLOSE/.test(await textOf('main')), (await textOf('main')).slice(-120))
 
+  // ---- 이 칸 닫기 on the tab's first terminal: the other shell becomes the main one ----
+  const other = (await ids()).find(id => id !== 'main')
+  await mark(other, 'KEEP-ME')
+  await splitMenu('main'); await pick('이 칸 닫기')
+  check('closing the first terminal leaves the other shell as the only pane', await until(`${PANES}.length === 1`, 10000), JSON.stringify(await ids()))
+  await sleep(800)
+  check('the remaining pane shows the other shell', /KEEP-ME/.test(await textOf('main')) && !/AFTER-CLOSE/.test(await textOf('main')), (await textOf('main')).slice(-120))
+  await mark('main', 'MAIN-TAKEN-OVER')
+  check('it still answers as the main terminal of the tab, still connected', /MAIN-TAKEN-OVER/.test(await textOf('main')) && await js(`!document.querySelector('.connection-lost')`) && (await tabCount()) === 1)
+
   finish()
 })().catch((error) => { console.error(error); process.exit(1) })

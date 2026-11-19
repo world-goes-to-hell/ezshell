@@ -1,8 +1,7 @@
 /* Sidebar session tree.
    Open: colour is one thin line (a folder's down its left side, a session's own next to its row),
    folders and sessions differ by type, and a state dot stands where every row had the same icon.
-   Folded (.rail): a narrow strip of dots; the whole sidebar opens over the terminal while the
-   pointer is on it (.peek-open, useSidebarPeek). */
+   Folded (.rail): each half of the strip opens its own list over the terminal (useSidebarPeek). */
 
 .sidebar-panel {
   position: absolute;
@@ -27,6 +26,39 @@
 
 .sidebar.rail:not(.peek-open) .sidebar-content {
   opacity: 0;
+}
+
+.sidebar[data-peek-section="sessions"] .sidebar-lists > .local-terms,
+.sidebar[data-peek-section="local"] .sidebar-lists > :is(.session-list, .session-list-empty),
+.sidebar[data-peek-section="local"] .sidebar-content > :is(.sidebar-actions, .sidebar-search, .folder-input-wrapper) {
+  display: none;
+}
+
+.sidebar-peek-switch {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin: 0 12px 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: start;
+  cursor: pointer;
+}
+
+.sidebar-peek-switch:hover {
+  background: var(--bg-modifier-hover);
+  color: var(--accent);
+}
+
+.sidebar-peek-switch svg:last-child {
+  margin-inline-start: auto;
 }
 
 .sidebar .session-list {
@@ -195,6 +227,27 @@
   white-space: nowrap;
 }
 
+/* ---- Search: matches are marked, nothing is hidden ---- */
+
+.sidebar .session-item.is-search-match {
+  background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-primary);
+}
+
+/* The match Enter in the search box connects to */
+.sidebar .session-item.is-search-current {
+  background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.sidebar-search-mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: inherit;
+  font-weight: 600;
+}
+
 /* ---- Marks without boxes ---- */
 
 .sidebar .session-mcp-mark {
@@ -250,22 +303,16 @@
   transform: translateX(-10px);
 }
 
-/* The strip itself shows state, not buttons: pointing at it opens the whole sidebar before a button
-   could be pressed (the buttons are on the open sidebar). No tree either: unlabelled arrows and
-   dots said nothing. */
+/* Two equally sized targets keep both lists reachable when one of them is empty. */
 .rail-summary {
   position: absolute;
   inset: 0 auto 0 0;
   width: calc(var(--rail-width) - 1px);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center; /* sit in the vertical middle instead of crammed at the top */
-  gap: 22px;
+  display: grid;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
   min-height: 0;
-  padding: 16px 0;
   color: var(--text-secondary);
-  cursor: default;
+  pointer-events: none;
   visibility: hidden;
   opacity: 0;
   transition: opacity var(--sidebar-motion-duration) var(--sidebar-motion-ease);
@@ -274,17 +321,46 @@
 .sidebar.rail:not(.peek-open) .rail-summary {
   visibility: visible;
   opacity: 1;
+  pointer-events: auto;
 }
 
 .rail-group {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 7px;
+  min-height: 0;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.rail-group + .rail-group {
+  border-block-start: 1px solid var(--border);
+}
+
+.rail-group:is(:hover, :focus-visible) {
+  background: var(--bg-modifier-hover);
+  color: var(--accent);
+}
+
+.rail-group:focus-visible {
+  outline-offset: -2px;
 }
 
 .rail-group svg {
   opacity: 0.85;
+}
+
+.rail-mcp-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
 }
 
 /* Green: connected tabs, red: tabs whose connection was lost, amber: MCP requests in progress.
@@ -311,6 +387,56 @@
 .rail-count.is-lost { color: var(--error-text, var(--error)); }
 .rail-count.is-busy { color: var(--warning); }
 
+.rail-local-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  margin-inline-end: 4px;
+}
+
+.rail-local-shell-count {
+  position: absolute;
+  inset-block-start: -3px;
+  inset-inline-start: 16px;
+  min-width: 13px;
+  padding: 0 2px;
+  border: 1px solid var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 11px;
+  text-align: center;
+}
+
+.rail-local-server-states {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  max-width: 100%;
+}
+
+.rail-local-server-states .rail-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 10px;
+  line-height: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-local-server-states .is-connected {
+  color: color-mix(in srgb, var(--success) 60%, var(--text-primary));
+}
+
 .rail-connection-dot,
 .sidebar-connection-flight {
   flex: none;
@@ -319,6 +445,17 @@
   border-radius: 50%;
   background: var(--success);
 }
+
+.rail-local-connection-dot,
+.rail-local-lost-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  clip-path: circle(50%);
+  background: var(--success);
+}
+
+.rail-local-lost-dot { background: var(--error); }
 
 .sidebar-connection-flight {
   --sidebar-flight-accent: var(--motion-accent, var(--accent));

@@ -1,0 +1,130 @@
+/* Below a local terminal: the agent in that shell — model, 5-hour and 7-day windows, context.
+   A row of its own under the terminal (the pane is a column), so the terminal fits above it. */
+.agent-pane-usage {
+  container: agent-usage / inline-size;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-secondary) 70%, var(--terminal-bg, var(--bg-primary)));
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.agent-usage-identity {
+  --agent-usage-tone: var(--text-link);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.agent-usage-identity.is-claude {
+  --agent-usage-tone: var(--warning);
+}
+
+.agent-usage-model {
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--agent-usage-tone) 58%, var(--text-primary));
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.agent-usage-effort {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--agent-usage-tone) 17%, transparent);
+  color: color-mix(in srgb, var(--agent-usage-tone) 35%, var(--text-primary));
+  font-weight: 650;
+  line-height: 1;
+}
+
+.agent-usage-meters {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 9px;
+  padding-inline-start: 8px;
+  border-inline-start: 1px solid var(--border);
+}
+
+.agent-usage-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.agent-usage-label {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.agent-usage-bar {
+  position: relative;
+  width: 44px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-muted) 30%, transparent);
+}
+
+.agent-usage-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--success);
+  transition: width 0.3s ease;
+}
+
+.agent-usage-meter.is-warn .agent-usage-bar > span {
+  background: var(--warning);
+}
+
+.agent-usage-meter.is-high .agent-usage-bar > span {
+  background: var(--error);
+}
+
+.agent-usage-meter.is-high .agent-usage-percent {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.agent-usage-percent,
+.agent-usage-left {
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-usage-left {
+  color: var(--text-muted);
+}
+
+@container agent-usage (max-width: 410px) {
+  .agent-usage-bar { width: 22px; }
+  .agent-usage-meters:has(> :nth-child(3)) .agent-usage-left { display: none; }
+}
+
+@container agent-usage (max-width: 270px) {
+  .agent-usage-bar,
+  .agent-usage-left { display: none; }
+}
+
+@container agent-usage (max-width: 220px) {
+  /* The full percentages and reset times are still available in the row's tooltip. */
+  .agent-usage-meter:nth-child(2):nth-last-child(2) { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-usage-bar > span { transition: none; }
+}

@@ -181,9 +181,8 @@ export function DbConnectDialog({ target, onClose }: DbConnectDialogProps) {
       db: { dbId, sshSessionId: target.sessionId, label: accountLabel, savedAccountId }
     })
     const { layout } = useTerminalStore.getState()
-    if (layout.mode === 'split' && layout.activePaneType === 'secondary') {
-      store.moveTerminalBetweenPanes(id, 'primary', 'secondary')
-    }
+    // A new tab opens in the focused screen (the store adds it to the first one)
+    if (layout.mode === 'split' && layout.activePane) store.moveTerminalBetweenPanes(id, 0, layout.activePane)
   }
 
   const isBusy = busy !== null

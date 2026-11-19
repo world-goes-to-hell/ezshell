@@ -1,6 +1,6 @@
-/* Local terminals below the session list (LocalTerminalList.tsx).
-   .sidebar-lists is the area the two lists share. Left alone, the pane is as tall as its rows and stops
-   at half of that area; .is-sized carries the height the user dragged. */
+/* Local work below the session list (LocalTerminalList.tsx, LocalProjectsTree.tsx).
+   .sidebar-lists is the area the two lists share. Left alone, the pane is as tall as its rows; the
+   session list above keeps about three rows. .is-sized carries the height the user dragged. */
 
 .sidebar-lists {
   display: flex;
@@ -21,15 +21,24 @@
   flex: none;
   flex-direction: column;
   min-height: 0;
-  max-height: 50%;
+  /* The session list keeps about three rows (SESSION_LIST_MIN_HEIGHT in lib/localTerminalPane.ts) */
+  max-height: calc(100% - 96px);
   border-top: 1px solid var(--border);
 }
 
-/* A dragged height may pass half, but the session list keeps about three rows
-   (SESSION_LIST_MIN_HEIGHT in lib/localTerminalPane.ts) */
 .local-terms.is-sized {
   min-height: 64px;
-  max-height: calc(100% - 96px);
+}
+
+.local-terms.is-full {
+  flex: 1;
+  max-height: none;
+  border-top: none;
+}
+
+.local-terms.is-full .local-terms-header {
+  justify-content: flex-end;
+  padding: 6px 12px;
 }
 
 .local-terms-divider {
@@ -77,6 +86,7 @@
   padding: 2px 8px 2px 6px;
 }
 
+.local-terms-title,
 .local-terms-toggle {
   display: flex;
   flex: 1;
@@ -92,8 +102,9 @@
   font-size: 12px;
   font-weight: 600;
   text-align: left;
-  cursor: pointer;
 }
+
+.local-terms-toggle { cursor: pointer; }
 
 .local-terms-toggle:hover {
   color: var(--text-primary);
@@ -136,6 +147,222 @@
   margin: 0;
   padding: 0 6px 6px;
   list-style: none;
+}
+
+.local-terms-group {
+  margin: 4px 8px 0;
+  padding: 6px 4px 4px;
+  border-block-start: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* ---- Registered work folders → worktrees (LocalProjectsTree.tsx) ---- */
+
+.local-projects,
+.local-worktrees {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.local-projects {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 0 8px 4px;
+}
+
+.local-project-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.local-project-row:hover {
+  background: var(--bg-modifier-hover);
+}
+
+.local-project-chevron,
+.local-project-icon {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.local-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-project-note {
+  flex: 0 1 auto;
+  max-width: 40%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-worktrees {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+  margin-inline-start: 10px;
+  padding-inline-start: 7px;
+  border-inline-start: 1px solid var(--border);
+}
+
+.local-worktree {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--glass-content, var(--bg-primary));
+}
+
+.local-worktree.has-tabs {
+  border-color: color-mix(in srgb, var(--success) 30%, var(--border));
+}
+
+.local-worktree-row {
+  display: flex;
+  align-items: center;
+  padding: 2px;
+}
+
+.local-worktree-open {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+  min-height: 29px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+.local-worktree-open:hover,
+.local-worktree-open:focus-visible {
+  background: var(--bg-modifier-hover);
+}
+
+.local-worktree-dot {
+  justify-self: center;
+  width: 6px;
+  height: 6px;
+  clip-path: circle(50%);
+  background: var(--text-muted);
+}
+
+.local-worktree-dot.is-on {
+  background: var(--success);
+}
+
+.local-worktree-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.local-worktree-name {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-worktree-tag {
+  flex: none;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-modifier-selected);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.local-worktree-branch {
+  display: flex;
+  grid-column: 2;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.local-worktree-branch svg {
+  flex: none;
+}
+
+.local-worktree-branch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-worktree-fold {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  margin-inline: 2px;
+  padding: 0 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.local-worktree-fold:hover,
+.local-worktree-fold:focus-visible {
+  background: var(--bg-modifier-hover);
+  color: var(--text-primary);
+}
+
+.local-worktree-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.local-worktree-content {
+  padding: 3px 4px 4px;
+  border-block-start: 1px solid var(--border);
+}
+
+.local-worktree-content > .local-terms-list.is-nested {
+  padding: 0;
 }
 
 .local-agent-strip {
@@ -333,4 +560,126 @@
   border-color: var(--glass-edge);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
+}
+
+/* Saved SSH sessions linked to a project ("서버"): above its worktrees. A session row or a tab
+   dragged over the project card outlines it (lib/localProjectServers.ts). */
+.local-project.is-drop-target {
+  border-radius: var(--radius-md);
+  outline: 1px dashed var(--accent);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.local-servers {
+  margin: 0 0 5px 10px;
+  padding-inline-start: 7px;
+  border-inline-start: 1px solid var(--border);
+}
+
+.local-servers-title {
+  padding: 2px 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.local-servers-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.local-server {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--glass-content, var(--bg-primary));
+}
+
+.local-server-open {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 26px;
+  padding: 3px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.local-server-open:hover,
+.local-server-open:focus-visible {
+  background: var(--bg-modifier-hover);
+}
+
+.local-server-icon {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.local-server-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-server-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-inline-start: auto;
+  clip-path: circle(50%);
+  background: var(--text-muted);
+}
+
+.local-server-dot.is-on {
+  background: var(--success);
+}
+
+.local-server-dot.is-off {
+  background: var(--error);
+}
+
+.local-server-count {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.local-server-unlink {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-inline-end: 2px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.local-server:hover .local-server-unlink,
+.local-server-unlink:focus-visible {
+  opacity: 1;
+}
+
+.local-server-unlink:hover {
+  background: var(--bg-modifier-hover);
+  color: var(--text-primary);
 }

@@ -4,6 +4,8 @@ import { VersionInfo } from '../Update/UpdateNotification'
 import { ZoomStatus } from '../Zoom/ZoomStatus'
 import { ZoomHud } from '../Zoom/ZoomHud'
 import { McpActivityIndicator } from '../Mcp/McpActivityIndicator'
+import { WorkspaceIndicator } from '../Workspace/WorkspaceIndicator'
+import { AgentUsageFeed } from '../AgentUsage/AgentUsageMeters'
 import { OpacityStatus } from './OpacityStatus'
 import { DbIndicator } from '../DbClient/DbIndicator'
 
@@ -29,8 +31,11 @@ export function Footer() {
           )}
         </div>
         <DbIndicator />
+        {/* Usage reports of the agents; each local terminal shows its own below it (AgentPaneUsage) */}
+        <AgentUsageFeed />
       </div>
       <div className="footer-right">
+        <WorkspaceIndicator />
         <McpActivityIndicator />
         <OpacityStatus />
         <ZoomStatus />

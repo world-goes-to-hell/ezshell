@@ -90,86 +90,104 @@ export function McpSettings() {
 
   return (
     <div className="mcp-settings">
-      <div className="mcp-row">
-        <label className="mcp-toggle">
-          <input
-            type="checkbox"
-            checked={config.enabled}
-            disabled={isBusy}
-            onChange={(e) => run(() => api.mcpUpdateConfig!({ enabled: e.target.checked }))}
-          />
-          <span>MCP 서버 켜기</span>
-        </label>
-        <span aria-live="polite" className={`mcp-state ${status.running ? 'running' : ''}`}>
-          {status.running ? `실행 중 · 127.0.0.1:${config.port}` : '꺼짐'}
-        </span>
-      </div>
-      {status.error && <p className="mcp-error" role="alert">{status.error}</p>}
-
-      <div className="mcp-field">
-        <label className="mcp-field-label" htmlFor="mcp-port">포트</label>
-        <input
-          id="mcp-port"
-          className="mcp-port-input"
-          inputMode="numeric"
-          value={portDraft}
-          disabled={isBusy}
-          onChange={(e) => setPortDraft(e.target.value)}
-          onBlur={commitPort}
-          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
-        />
-      </div>
-
-      <fieldset className="mcp-field">
-        <legend className="mcp-field-label">확인 창을 띄울 명령</legend>
-        {ALERT_LEVEL_OPTIONS.map(option => (
-          <label key={option.value} className="mcp-radio">
+      <section className="settings-section mcp-settings-group">
+        <div className="mcp-group-heading">
+          <h3 className="settings-section-title">SSH MCP 서버 · ezshell-ssh-mcp</h3>
+          <span aria-live="polite" className={`mcp-state mcp-state-badge ${status.running ? 'running' : ''}`}>
+            {status.running ? `실행 중 · 127.0.0.1:${config.port}` : '꺼짐'}
+          </span>
+        </div>
+        <p className="settings-section-desc">
+          Claude Code 가 허용한 세션으로 서버를 조회할 수 있게 합니다. 비밀번호는 Claude 에게 전달되지 않습니다.
+        </p>
+        <div className="mcp-row mcp-server-controls">
+          <label className="mcp-toggle">
             <input
-              type="radio"
-              name="mcp-alert-level"
-              checked={config.alertLevel === option.value}
+              type="checkbox"
+              checked={config.enabled}
               disabled={isBusy}
-              onChange={() => run(() => api.mcpUpdateConfig!({ alertLevel: option.value }))}
+              onChange={(e) => run(() => api.mcpUpdateConfig!({ enabled: e.target.checked }))}
             />
-            <span className="mcp-radio-label">{option.label}</span>
-            <span className="mcp-radio-desc">{option.description}</span>
+            <span>MCP 서버 켜기</span>
           </label>
-        ))}
-        <p className="form-hint">위험한 명령은 어떤 설정에서도 확인 창을 띄우고, 시스템 종료·루트 삭제 같은 명령은 항상 차단합니다.</p>
-      </fieldset>
-
-      <div className="mcp-field">
-        <span className="mcp-field-label">접속 토큰</span>
-        <div className="mcp-token">
-          <code>{shownToken}</code>
-          <button type="button" className="mcp-icon-btn" onClick={() => setIsTokenVisible(visible => !visible)} disabled={!hasToken} aria-label={isTokenVisible ? '토큰 숨기기' : '토큰 보기'} title={isTokenVisible ? '숨기기' : '보기'}>
-            {isTokenVisible ? <RiEyeOffLine size={16} /> : <RiEyeLine size={16} />}
-          </button>
-          <button type="button" className="mcp-icon-btn" onClick={() => copyText(config.token, '토큰')} disabled={!hasToken} aria-label="토큰 복사" title="복사">
-            <RiFileCopyLine size={16} />
-          </button>
-          <button type="button" className="mcp-icon-btn" onClick={regenerate} disabled={isBusy} aria-label="토큰 재발급" title="재발급">
-            <RiRefreshLine size={16} />
-          </button>
+          <div className="mcp-row">
+            <label className="mcp-field-label" htmlFor="mcp-port">포트</label>
+            <input
+              id="mcp-port"
+              className="mcp-port-input"
+              inputMode="numeric"
+              value={portDraft}
+              disabled={isBusy}
+              onChange={(e) => setPortDraft(e.target.value)}
+              onBlur={commitPort}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+            />
+          </div>
         </div>
-      </div>
+        {status.error && <p className="mcp-error" role="alert">{status.error}</p>}
+      </section>
 
-      <div className="mcp-field">
-        <span className="mcp-field-label">Claude Code 등록 명령</span>
-        <div className="mcp-command">
-          <pre>{maskRegisterCommand(status.registerCommand, config.token, shownToken)}</pre>
-          <button type="button" className="mcp-icon-btn" onClick={() => copyText(status.registerCommand, '등록 명령')} disabled={!hasToken || !status.registerCommand} aria-label="등록 명령 복사" title="복사">
-            <RiFileCopyLine size={16} />
-          </button>
+      <section className="settings-section mcp-settings-group">
+        <fieldset className="mcp-field">
+          <legend className="settings-section-title mcp-field-label">확인 창을 띄울 명령</legend>
+          <p className="settings-section-desc">명령을 실행하기 전에 확인을 받을 범위를 선택하세요.</p>
+          {ALERT_LEVEL_OPTIONS.map(option => (
+            <label key={option.value} className="mcp-radio">
+              <input
+                type="radio"
+                name="mcp-alert-level"
+                checked={config.alertLevel === option.value}
+                disabled={isBusy}
+                onChange={() => run(() => api.mcpUpdateConfig!({ alertLevel: option.value }))}
+              />
+              <span className="mcp-radio-label">{option.label}</span>
+              <span className="mcp-radio-desc">{option.description}</span>
+            </label>
+          ))}
+          <p className="form-hint">위험한 명령은 어떤 설정에서도 확인 창을 띄우고, 시스템 종료·루트 삭제 같은 명령은 항상 차단합니다.</p>
+        </fieldset>
+      </section>
+
+      <section className="settings-section mcp-settings-group">
+        <h3 className="settings-section-title">인증 및 수동 등록</h3>
+        <p className="settings-section-desc">접속 토큰을 관리하고 Claude Code 등록 명령을 복사합니다.</p>
+        <div className="mcp-field">
+          <span className="mcp-field-label">접속 토큰</span>
+          <div className="mcp-token">
+            <code>{shownToken}</code>
+            <button type="button" className="mcp-icon-btn" onClick={() => setIsTokenVisible(visible => !visible)} disabled={!hasToken} aria-label={isTokenVisible ? '토큰 숨기기' : '토큰 보기'} title={isTokenVisible ? '숨기기' : '보기'}>
+              {isTokenVisible ? <RiEyeOffLine size={16} /> : <RiEyeLine size={16} />}
+            </button>
+            <button type="button" className="mcp-icon-btn" onClick={() => copyText(config.token, '토큰')} disabled={!hasToken} aria-label="토큰 복사" title="복사">
+              <RiFileCopyLine size={16} />
+            </button>
+            <button type="button" className="mcp-icon-btn" onClick={regenerate} disabled={isBusy} aria-label="토큰 재발급" title="재발급">
+              <RiRefreshLine size={16} />
+            </button>
+          </div>
         </div>
-        <p className="form-hint">터미널에서 실행하면 Claude Code 에 등록됩니다. 세션 편집 &gt; 고급 설정에서 "MCP 접근 허용"을 켠 세션만 Claude 에게 보입니다.</p>
-      </div>
 
-      <McpTransferFolders folders={config.transferRoots ?? []} disabled={isBusy || !hasToken} onChange={run} />
+        <div className="mcp-field">
+          <span className="mcp-field-label">Claude Code 등록 명령</span>
+          <div className="mcp-command">
+            <pre>{maskRegisterCommand(status.registerCommand, config.token, shownToken)}</pre>
+            <button type="button" className="mcp-icon-btn" onClick={() => copyText(status.registerCommand, '등록 명령')} disabled={!hasToken || !status.registerCommand} aria-label="등록 명령 복사" title="복사">
+              <RiFileCopyLine size={16} />
+            </button>
+          </div>
+          <p className="form-hint">터미널에서 실행하면 Claude Code 에 등록됩니다. 세션 편집 &gt; 고급 설정에서 "MCP 접근 허용"을 켠 세션만 Claude 에게 보입니다.</p>
+        </div>
+      </section>
+
+      <section className="settings-section mcp-settings-group mcp-transfer-group">
+        <McpTransferFolders folders={config.transferRoots ?? []} disabled={isBusy || !hasToken} onChange={run} />
+      </section>
 
       <McpClientSetup disabled={!hasToken} />
 
-      <McpAuditList />
+      <div className="settings-section mcp-settings-group mcp-audit-group">
+        <McpAuditList />
+      </div>
     </div>
   )
 }

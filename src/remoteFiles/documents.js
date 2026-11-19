@@ -4,10 +4,12 @@
 // The server file is backed up on this PC first, and only overwritten when it is still what was opened.
 // Loaded by main.js at runtime (copied to out/main/src), so keep it CommonJS and free of Electron imports.
 const crypto = require('crypto')
+const nodePath = require('path')
 const remoteFile = require('../mcp/remoteFile.js')
 const { describeChange } = require('../mcp/fileEdit.js')
 const { previewKind } = require('./fileKind.js')
 const read = require('./remoteRead.js')
+const configRefs = require('./configRefs.js')
 const { backupTarget } = require('./backups.js')
 const { pollTail, startTail } = require('./logTail.js')
 const { listServerBackups: findServerBackups } = require('./serverBackups.js')
@@ -16,6 +18,8 @@ const MAX_DIFF_LINES = 3000
 // A look at a followed log that gets no answer this long is given up (a half-dead connection)
 const TAIL_TIMEOUT_MS = 30000
 const MAX_OPEN_DOCUMENTS = 20
+/** How long after a window was asked for, its loads still say how it opens (line, comparison) */
+const OPEN_HINT_MS = 5000
 // 'tail' is a text preview that follows the end of the file ("실시간 보기")
 const MODES = new Set(['edit', 'preview', 'tail'])
 
@@ -33,7 +37,8 @@ const MESSAGES = {
   noBackup: '백업을 읽지 못했습니다.',
   backupTooLarge: `백업은 ${read.EDIT_MAX_BYTES / 1024 / 1024}MB 까지 열 수 있습니다.`,
   notFollowable: '텍스트 미리보기에서만 실시간으로 볼 수 있습니다.',
-  tooMany: `파일 창은 ${MAX_OPEN_DOCUMENTS}개까지 열 수 있습니다. 다른 창을 닫아 주세요.`
+  tooMany: `파일 창은 ${MAX_OPEN_DOCUMENTS}개까지 열 수 있습니다. 다른 창을 닫아 주세요.`,
+  localConflict: '연 뒤에 파일이 바뀌어 저장하지 않았습니다. 다시 불러온 뒤 고쳐 주세요.'
 }
 
 const sha256 = (text) => crypto.createHash('sha256').update(text, 'utf8').digest('hex')
@@ -65,7 +70,11 @@ class DocumentError extends Error {
  * `openSftp(sessionId)` resolves with a new SFTP channel on the tab's connection (rejects without one).
  * `serverOf(sessionId)` gives { username, host } for the backup folder. `backups` is a backup store.
  */
-function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = null, newId = () => crypto.randomUUID(), tailTimeoutMs = TAIL_TIMEOUT_MS }) {
+/**
+ * `localFiles` (optional) opens files on this PC in the same windows: { read: src/localFiles/localRead.js,
+ * headOf(folder, path) → the file's text at Git HEAD or null }. The caller has checked the path (roots.js).
+ */
+function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = null, localFiles = null, newId = () => crypto.randomUUID(), tailTimeoutMs = TAIL_TIMEOUT_MS }) {
   const docs = new Map()
   // One SFTP channel per tab connection, shared by its file windows: a server allows only a few
   // channels per connection (OpenSSH MaxSessions, 10 by default) and the tab's shells need them too.
@@ -116,6 +125,42 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
       tail: null, isTailing: false
     })
     return { docId, existing: false }
+  }
+
+  /**
+   * A file on this PC (the workspace panel). No SFTP channel, no backup on save (Git and the review
+   * before saving are the safety net); the backup list offers the file at Git HEAD instead.
+   */
+  function registerLocal({ root, path: filePath, label, mode, compareHead = false }) {
+    if (!localFiles || typeof filePath !== 'string' || !filePath) throw new DocumentError(MESSAGES.gone)
+    if (mode !== 'edit' && mode !== 'preview') throw new DocumentError(MESSAGES.gone)
+    // Text opens in the editor (looking and changing in one place); the preview is for images and PDFs
+    if (previewKind(nodePath.basename(filePath)).kind === 'text') mode = 'edit'
+    const existing = [...docs.values()].find(doc => doc.local && doc.local.path === filePath && doc.mode === mode)
+    if (existing) return { docId: existing.docId, existing: true }
+    if (docs.size >= MAX_OPEN_DOCUMENTS) throw new DocumentError(MESSAGES.tooMany)
+    const docId = newId()
+    docs.set(docId, {
+      // Opened from the uncommitted changes: the window's first load starts the comparison with Git HEAD
+      ...(compareHead && mode === 'edit' ? { compareHead: true, hintsUntil: Date.now() + OPEN_HINT_MS } : {}),
+      docId, sessionId: null, mode, requestedPath: filePath, local: { root, path: filePath },
+      sessionName: typeof label === 'string' && label ? label.slice(0, 200) : '이 PC',
+      server: {}, ownerId: null, seen: null, canWrite: false, review: null, isSaving: false,
+      tail: null, isTailing: false
+    })
+    return { docId, existing: false }
+  }
+
+  async function loadLocal(doc) {
+    const read = localFiles.read
+    if (doc.mode === 'edit') {
+      const { seen, canWrite } = await read.readForEdit(doc.local.path)
+      patch(doc.docId, { seen, canWrite, review: null })
+      return { kind: 'text', editable: true, path: seen.path, content: seen.content, canWrite }
+    }
+    const { kind, mime } = previewKind(nodePath.basename(doc.local.path))
+    const media = await read.readMedia(doc.local.path)
+    return { kind, mime, path: media.path, size: media.size, data: media.data }
   }
 
   function attach(docId, ownerId) {
@@ -213,10 +258,64 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
     return { kind, mime, path: media.path, size: media.size, data: media.data }
   }
 
+  /**
+   * Where a placeholder's name is set (`${UPLOAD_DIR}` in a config file): definitions in the file's
+   * work folder (a file of this PC) or in the server file's folder and the folders above it (read over
+   * SFTP). The window gets keys; opening one goes through `openDefinition`, so a window cannot open a
+   * path of its choosing.
+   */
+  async function findDefinitions(ownerId, docId, name) {
+    const doc = own(ownerId, docId)
+    if (!configRefs.isValidName(name)) throw new DocumentError('찾을 수 없는 이름입니다.')
+    if (doc.container) throw new DocumentError(MESSAGES.gone)
+    let found
+    if (doc.local) {
+      found = await configRefs.searchLocal(doc.local.root, name)
+    } else {
+      const sftp = await sftpOf(doc)
+      found = await configRefs.searchRemote(doc.seen?.path ?? doc.requestedPath, name, {
+        readdir: (dir) => new Promise((resolve, reject) => sftp.readdir(dir, (err, list) => (err ? reject(err) : resolve(list)))),
+        readText: async (file) => {
+          const text = await read.readTextPreview(sftp, file, { wholeMaxBytes: 256 * 1024, tailBytes: 0 })
+          if (text.truncated) throw new DocumentError(MESSAGES.gone)
+          return text.text
+        }
+      })
+    }
+    if (!docs.has(docId)) throw new DocumentError(MESSAGES.gone)
+    const targets = new Map(found.results.map((result, index) => [String(index), { path: result.path, line: result.line }]))
+    patch(docId, { definitions: targets })
+    return {
+      results: found.results.map((result, index) => ({ key: String(index), path: result.shown, line: result.line, text: result.text })),
+      scanned: found.scanned,
+      truncated: found.truncated
+    }
+  }
+
+  /** Opens one definition from the window's latest search, in the editor at its line */
+  function openDefinition(ownerId, docId, key) {
+    const doc = own(ownerId, docId)
+    const target = typeof key === 'string' ? doc.definitions?.get(key) : undefined
+    if (!target) throw new DocumentError('목록을 다시 연 뒤 골라 주세요.')
+    const registered = doc.local
+      ? registerLocal({ root: doc.local.root, path: target.path, label: doc.sessionName, mode: 'edit' })
+      : register({ sessionId: doc.sessionId, sessionName: doc.sessionName, remotePath: target.path, mode: 'edit' })
+    // A new window reads it with its first load; an open one is told by the IPC (remote-file-reveal-line)
+    if (!registered.existing) patch(registered.docId, { revealLine: target.line, hintsUntil: Date.now() + OPEN_HINT_MS })
+    return { registered, line: target.line }
+  }
+
   /** What the window shows: the text to edit, or the preview. Read again on every call ("새로고침"). */
   async function load(ownerId, docId) {
     const doc = own(ownerId, docId)
-    const info = { sessionName: doc.sessionName, requestedPath: doc.requestedPath, mode: doc.mode }
+    // How the window opens (a line to go to, comparing with Git HEAD): told to every load in the first
+    // seconds, not only the first one. A page in development (React StrictMode) loads twice at start
+    // and may draw the second answer; the window reads these only when it first shows the file.
+    const isOpening = Date.now() < (doc.hintsUntil ?? 0)
+    const revealLine = isOpening ? doc.revealLine ?? null : null
+    const compareHead = isOpening && doc.compareHead === true
+    const info = { sessionName: doc.sessionName, requestedPath: doc.requestedPath, mode: doc.mode, ...(revealLine ? { revealLine } : {}), ...(compareHead ? { compareHead } : {}) }
+    if (doc.local) return { ...info, local: true, ...(await loadLocal(doc)) }
     return { ...info, ...(doc.mode === 'edit' ? await loadEdit(doc) : await loadPreview(doc)) }
   }
 
@@ -231,7 +330,7 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
    */
   async function tail(ownerId, docId, { generation, cursor } = {}) {
     const doc = own(ownerId, docId)
-    if (doc.mode === 'edit' || !doc.tail) throw new DocumentError(MESSAGES.notFollowable)
+    if (doc.mode === 'edit' || !doc.tail || doc.local) throw new DocumentError(MESSAGES.notFollowable)
     if (generation !== doc.tail.generation) return { status: 'stale' }
     if (doc.isTailing) return { status: 'busy' }
     const { committed, pending } = doc.tail
@@ -304,6 +403,12 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
 
   async function writeReviewed(doc, content) {
     const docId = doc.docId
+    if (doc.local) {
+      const written = await localFiles.read.writeIfUnchanged(doc.seen, content)
+      if (!written.ok) return { ok: false, conflict: true, message: MESSAGES.localConflict }
+      patch(docId, { seen: { ...doc.seen, content }, review: null })
+      return { ok: true, backupName: null }
+    }
     const sftp = await sftpOf(doc)
     const target = targetOf(doc)
     let backupName
@@ -332,12 +437,14 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
 
   async function listBackups(ownerId, docId) {
     const doc = editable(ownerId, docId)
+    if (doc.local) return { folder: '', backups: [] }
     const target = targetOf(doc)
     return { folder: target.dir, backups: await backups.store.list(target) }
   }
 
   async function readBackup(ownerId, docId, name) {
     const doc = editable(ownerId, docId)
+    if (doc.local) throw new DocumentError(MESSAGES.noBackup)
     const target = targetOf(doc)
     try {
       return { content: await backups.store.read(target, name) }
@@ -353,6 +460,11 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
    */
   async function listServerBackups(ownerId, docId) {
     const doc = editable(ownerId, docId)
+    // A file on this PC: the version at Git HEAD, when the file is in a repository and in that commit
+    if (doc.local) {
+      const head = await localFiles.headOf(doc.local.root, doc.local.path).catch(() => null)
+      return { backups: head ? [{ name: 'HEAD', size: head.size, time: head.time, timeFrom: 'git' }] : [] }
+    }
     const sftp = await sftpOf(doc)
     let found = []
     try {
@@ -367,6 +479,11 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
   /** Text of a listed server backup, whole and up to the editor's limit. */
   async function readServerBackup(ownerId, docId, name) {
     const doc = editable(ownerId, docId)
+    if (doc.local) {
+      const head = name === 'HEAD' ? await localFiles.headOf(doc.local.root, doc.local.path).catch(() => null) : null
+      if (!head) throw new DocumentError(MESSAGES.noBackup)
+      return { content: head.content }
+    }
     const listed = typeof name === 'string' && doc.serverBackups ? doc.serverBackups.get(name) : undefined
     if (!listed) throw new DocumentError(MESSAGES.noBackup)
     const sftp = await sftpOf(doc)
@@ -385,6 +502,7 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
 
   function backupFolder(ownerId, docId) {
     const doc = editable(ownerId, docId)
+    if (doc.local) throw new DocumentError(MESSAGES.gone)
     return targetOf(doc).dir
   }
 
@@ -404,7 +522,7 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
 
   const find = (docId) => docs.get(docId) || null
 
-  return { register, registerContainerLog, attach, load, tail, review, save, listBackups, readBackup, listServerBackups, readServerBackup, backupFolder, close, find }
+  return { register, registerContainerLog, registerLocal, attach, load, findDefinitions, openDefinition, tail, review, save, listBackups, readBackup, listServerBackups, readServerBackup, backupFolder, close, find }
 }
 
 /** `promise`, or a DocumentError once `ms` passed without an answer. */
@@ -419,6 +537,8 @@ function withTimeout(promise, ms) {
 /** The message for the window: ours, the read and write modules' own, or a plain one. */
 function userMessage(err) {
   if (err instanceof DocumentError) return err.userMessage
+  // The local file modules' errors (src/localFiles) carry a message meant for the window too
+  if (err && (err.name === 'LocalFileError' || err.name === 'LocalPathError' || err.constructor?.name === 'LocalFileError' || err.constructor?.name === 'LocalPathError') && typeof err.userMessage === 'string') return err.userMessage
   return read.messageFor(err)
 }
 

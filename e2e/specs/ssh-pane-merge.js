@@ -57,8 +57,14 @@ const { check, finish } = createChecks()
     type: kind, x, y, modifiers: 1, button: kind === 'mouseMoved' ? 'none' : 'left',
     buttons: kind === 'mouseReleased' ? 0 : 1, clickCount: kind === 'mouseMoved' ? 0 : 1
   })
+  const cancellation = `${PANEL}.querySelector('.pane-gesture-cancel-target.is-active') &&
+    ${PANEL}.querySelector('.pane-gesture-cancel-label')?.textContent === '놓으면 취소' &&
+    !${PANEL}.querySelector('.pane-merge-preview, .pane-gesture-divider')`
+  const gestureCleared = `!${PANEL}.querySelector('.pane-gesture-cancel-target, .pane-merge-trail.is-active, .pane-merge-trail.is-fading')`
 
   await altMouse('mousePressed', x, y)
+  check('the cancellation target stays hidden until a gesture has a preview',
+    await js(`!${PANEL}.querySelector('.pane-gesture-cancel-target')`))
   await altMouse('mouseMoved', left, top)
   check('a gesture paints a visible trail and previews only the selected divider', await until(`(() => {
     const canvas = ${PANEL}.querySelector('.pane-merge-trail.is-active');
@@ -68,6 +74,19 @@ const { check, finish } = createChecks()
     const py = Math.round((${(y + top) / 2} - r.top) * canvas.height / r.height);
     return canvas.getContext('2d').getImageData(px, py, 1, 1).data[3] > 0;
   })()`, 4000))
+  check('a valid merge shows a cancellation circle at its starting point', await until(`(() => {
+    const r = ${PANEL}.querySelector('.pane-gesture-cancel-target')?.getBoundingClientRect()
+    return r && Math.abs(r.left + r.width / 2 - ${x}) < 2 && Math.abs(r.top + r.height / 2 - ${y}) < 2
+  })()`, 4000))
+  await altMouse('mouseMoved', x + 7, y - 6)
+  check('returning inside the circle clears the merge preview', await until(cancellation, 4000))
+  await altMouse('mouseReleased', x + 7, y - 6)
+  check('releasing inside the circle keeps every SSH shell and the tab', await until(gestureCleared, 4000)
+    && await js(`${tabs}.length === 1 && ${panes}.length === 4`)
+    && await command('main', 'shell-count', 'OPEN-SHELLS 4'))
+  await altMouse('mousePressed', x, y)
+  await altMouse('mouseMoved', left, top)
+  await until(`!!${PANEL}.querySelector('.pane-merge-preview.is-area')`, 4000)
   await shot('ssh-pane-merge-preview')
   await altMouse('mouseReleased', left, top)
   check('the gesture trail remains briefly after release', await js(`!!${PANEL}.querySelector('.pane-merge-trail.is-fading')`))
@@ -107,6 +126,20 @@ const { check, finish } = createChecks()
     await altMouse('mousePressed', ...start)
     await altMouse('mouseMoved', ...end)
     check(`the drawn line previews a ${axis === 'row' ? 'side-by-side' : 'stacked'} division`, await until(`!!${PANEL}.querySelector('.pane-gesture-divider.is-${axis}')`, 4000))
+    if (axis === 'row') {
+      const nearStart = [start[0] + 5, start[1] + 6]
+      await altMouse('mouseMoved', ...nearStart)
+      check('returning to the start also clears a split preview', await until(cancellation, 4000))
+      await altMouse('mouseReleased', ...nearStart)
+      check('releasing there leaves the original split layout in place', await until(gestureCleared, 4000)
+        && await js(`${panes}.length === ${count}`))
+      await altMouse('mousePressed', ...start)
+      await altMouse('mouseMoved', ...end)
+      await altMouse('mouseMoved', ...nearStart)
+      await altMouse('mouseMoved', ...end)
+      check('moving out of the circle restores the preview without a new press',
+        await until(`!!${PANEL}.querySelector('.pane-gesture-divider.is-row') && !${PANEL}.querySelector('.pane-gesture-cancel-target.is-active')`, 4000))
+    }
     await altMouse('mouseReleased', ...end)
     if (!(await until(`${panes}.length === ${count + 1} && ${panes}.every(p => p.textContent.includes('fake shell'))`, 30000))) throw new Error('drawn split did not open')
     const after = await rect('main')

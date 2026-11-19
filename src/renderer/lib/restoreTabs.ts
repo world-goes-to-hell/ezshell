@@ -5,6 +5,7 @@
 
 import type { TerminalInfo, LayoutState } from '../stores/terminalStore'
 import { MAIN_PANE, MAX_PANES, leafCount, type SplitNode } from './splitTree'
+import { MAX_SCREENS } from './screenPanes'
 
 export const RESTORE_VERSION = 1
 const MAX_TABS = 50
@@ -14,9 +15,19 @@ export type RestoreTab =
   | { kind: 'ssh'; savedSessionId: string; title?: string; color?: string; splitTree?: SplitNode; paneSeq?: number; currentPath?: string; sftpPath?: string }
   /** Not saved as a session: shown so the user can connect again (no password is kept) */
   | { kind: 'quick'; title?: string; host: string; port: number; username: string; authType?: 'password' | 'privateKey'; privateKeyPath?: string }
-  | { kind: 'local'; title?: string; splitTree?: SplitNode; paneSeq?: number; cwd?: string; workspaceLabel?: string }
+  | { kind: 'local'; title?: string; splitTree?: SplitNode; paneSeq?: number; cwd?: string; workspaceLabel?: string; agents?: RestoreAgent[] }
   /** A DB tab opened with a saved account, on the SSH tab at index `parent` */
   | { kind: 'db'; parent: number; savedAccountId: string; title?: string }
+
+/**
+ * A Claude Code or Codex that ran in a pane of a local tab: its conversation is resumed (--resume), or,
+ * without one to resume (never talked to, or its transcript is gone), the same agent starts fresh
+ */
+export interface RestoreAgent {
+  pane: string
+  agent: 'claude' | 'codex'
+  sessionId?: string
+}
 
 export interface RestoreRecord {
   version: number
@@ -24,7 +35,12 @@ export interface RestoreRecord {
   /** Index of the tab in front */
   active?: number
   /** The screen divided into two sides: indexes of the tabs on each side */
-  split?: { direction: 'horizontal' | 'vertical'; primary: number[]; secondary: number[]; primaryActive?: number; secondaryActive?: number; focus?: 'primary' | 'secondary' }
+  split?: {
+    direction: 'horizontal' | 'vertical'; primary: number[]; secondary: number[]; primaryActive?: number; secondaryActive?: number; focus?: 'primary' | 'secondary'
+    /** Every screen (up to four, lib/screenPanes.ts): tab indexes, each screen's front tab, shares, the focused screen.
+     *  primary / secondary above are the first two, as records made before kept them */
+    panes?: number[][]; actives?: Array<number | null>; sizes?: number[]; focusPane?: number
+  }
 }
 
 /** A tab popped out to its own window (App keeps how it was opened) */
@@ -41,6 +57,8 @@ export interface RecordSource {
   /** The SFTP panel of a tab: its folder when open */
   sftpPathOf: (tabId: string) => string | null
   detached: DetachedTabSource[]
+  /** The agent sessions running in a local tab's panes (from their usage reports) */
+  agentsOf?: (tabId: string) => RestoreAgent[]
 }
 
 const text = (value: unknown, max = MAX_TEXT): string | undefined =>
@@ -64,11 +82,14 @@ export function withoutVacants(tree: SplitNode | undefined): SplitNode | undefin
   return kept && kept.kind === 'split' ? kept : undefined
 }
 
-function tabOf(info: TerminalInfo, sftpPath: string | null): RestoreTab | null {
+function tabOf(info: TerminalInfo, sftpPath: string | null, agents: RestoreAgent[] = []): RestoreTab | null {
   const title = text(info.title)
   const splitTree = withoutVacants(info.splitTree)
   const paneSeq = splitTree ? info.paneSeq : undefined
-  if (info.local) return { kind: 'local', title, splitTree, paneSeq, cwd: path(info.local.cwd), workspaceLabel: text(info.local.workspaceLabel) }
+  if (info.local) {
+    const kept = agents.filter(isRestoreAgent).slice(0, MAX_PANES)
+    return { kind: 'local', title, splitTree, paneSeq, cwd: path(info.local.cwd), workspaceLabel: text(info.local.workspaceLabel), ...(kept.length ? { agents: kept } : {}) }
+  }
   const config = info.connectConfig
   if (!config) return null
   if (config.savedSessionId) {
@@ -90,7 +111,7 @@ export function buildRestoreRecord(source: RecordSource): RestoreRecord {
   const dbTabs: Array<[string, TerminalInfo]> = []
   for (const [id, info] of source.terminals) {
     if (info.db) { dbTabs.push([id, info]); continue }
-    const tab = tabOf(info, source.sftpPathOf(id))
+    const tab = tabOf(info, source.sftpPathOf(id), info.local ? source.agentsOf?.(id) : undefined)
     if (!tab) continue
     indexOf.set(id, tabs.length)
     tabs.push(tab)
@@ -110,16 +131,17 @@ export function buildRestoreRecord(source: RecordSource): RestoreRecord {
   const active = source.activeId ? indexOf.get(source.activeId) : undefined
   if (active !== undefined) record.active = active
   const { layout } = source
-  if (layout.mode === 'split' && layout.secondary && (layout.direction === 'horizontal' || layout.direction === 'vertical')) {
+  if (layout.mode === 'split' && layout.panes.length > 1) {
     const indexes = (ids: string[]) => ids.map(id => indexOf.get(id)).filter((index): index is number => index !== undefined)
-    const primary = indexes(layout.primary.terminalIds)
-    const secondary = indexes(layout.secondary.terminalIds)
-    if (primary.length > 0 && secondary.length > 0) {
+    const screens = layout.panes.map(pane => ({ tabs: indexes(pane.terminalIds), active: pane.activeTerminalId ? indexOf.get(pane.activeTerminalId) ?? null : null }))
+    const kept = screens.filter(screen => screen.tabs.length > 0)
+    if (kept.length > 1) {
+      const focusPane = Math.max(0, kept.indexOf(screens[layout.activePane ?? 0]))
       record.split = {
-        direction: layout.direction, primary, secondary,
-        primaryActive: layout.primary.activeTerminalId ? indexOf.get(layout.primary.activeTerminalId) : undefined,
-        secondaryActive: layout.secondary.activeTerminalId ? indexOf.get(layout.secondary.activeTerminalId) : undefined,
-        focus: layout.activePaneType ?? undefined
+        direction: layout.direction, primary: kept[0].tabs, secondary: kept[1].tabs,
+        primaryActive: kept[0].active ?? undefined, secondaryActive: kept[1].active ?? undefined,
+        focus: focusPane === 0 ? 'primary' : 'secondary',
+        panes: kept.map(screen => screen.tabs), actives: kept.map(screen => screen.active), sizes: kept.map(screen => layout.sizes[screens.indexOf(screen)] ?? 1), focusPane
       }
     }
   }
@@ -127,6 +149,12 @@ export function buildRestoreRecord(source: RecordSource): RestoreRecord {
 }
 
 const PANE_ID = /^(main|split-\d{1,4})$/
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const isRestoreAgent = (value: unknown): value is RestoreAgent => {
+  const a = value as Record<string, unknown> | null
+  return !!a && typeof a.pane === 'string' && PANE_ID.test(a.pane) && (a.agent === 'claude' || a.agent === 'codex')
+    && (a.sessionId === undefined || (typeof a.sessionId === 'string' && SESSION_ID.test(a.sessionId)))
+}
 
 function readTree(value: unknown): SplitNode | undefined {
   const read = (node: unknown, depth: number): SplitNode | null => {
@@ -174,8 +202,17 @@ function readTab(value: unknown, index: number): RestoreTab | null {
       const authType = t.authType === 'privateKey' ? 'privateKey' : 'password'
       return { kind: 'quick', title, host, port, username, authType, privateKeyPath: authType === 'privateKey' ? path(t.privateKeyPath) : undefined }
     }
-    case 'local':
-      return { kind: 'local', title, splitTree: tree, paneSeq, cwd: path(t.cwd), workspaceLabel: text(t.workspaceLabel) }
+    case 'local': {
+      // Only panes the tab has (the main pane, or a pane of its tree), each once
+      const panes = new Set(['main'])
+      const collect = (node: SplitNode | undefined) => { if (!node) return; if (node.kind === 'split') { collect(node.first); collect(node.second) } else if (node.kind === 'pane') panes.add(node.pane) }
+      collect(tree)
+      const seen = new Set<string>()
+      const agents = (Array.isArray(t.agents) ? t.agents : []).slice(0, MAX_PANES * 2)
+        .filter(isRestoreAgent).filter(a => panes.has(a.pane) && !seen.has(a.pane) && seen.add(a.pane))
+        .map(({ pane, agent, sessionId }) => (sessionId ? { pane, agent, sessionId } : { pane, agent }))
+      return { kind: 'local', title, splitTree: tree, paneSeq, cwd: path(t.cwd), workspaceLabel: text(t.workspaceLabel), ...(agents.length ? { agents } : {}) }
+    }
     case 'db': {
       const savedAccountId = text(t.savedAccountId, 100)
       const parent = typeof t.parent === 'number' && Number.isInteger(t.parent) && t.parent >= 0 && t.parent < index ? t.parent : -1
@@ -221,6 +258,17 @@ export function readRestoreRecord(value: unknown): RestoreRecord | null {
         direction: split.direction, primary, secondary,
         primaryActive: at(split.primaryActive), secondaryActive: at(split.secondaryActive),
         focus: split.focus === 'secondary' ? 'secondary' : split.focus === 'primary' ? 'primary' : undefined
+      }
+      // Three or four screens (records made since screens went past two)
+      if (Array.isArray(split.panes) && split.panes.length >= 2 && split.panes.length <= MAX_SCREENS && split.panes.every(Array.isArray)) {
+        const used = new Set<number>()
+        const panes = (split.panes as unknown[][]).map(list => list.map(at).filter((index): index is number => index !== undefined && !used.has(index) && (used.add(index), true)))
+        if (panes.every(pane => pane.length > 0)) {
+          const actives = Array.isArray(split.actives) ? split.actives : []
+          const sizes = Array.isArray(split.sizes) && split.sizes.length === panes.length && split.sizes.every(size => typeof size === 'number' && size > 0 && size <= 1) ? split.sizes as number[] : undefined
+          const focusPane = typeof split.focusPane === 'number' && Number.isInteger(split.focusPane) && split.focusPane >= 0 && split.focusPane < panes.length ? split.focusPane : 0
+          Object.assign(record.split, { panes, actives: panes.map((pane, index) => { const active = at(actives[index]); return active !== undefined && pane.includes(active) ? active : null }), sizes, focusPane })
+        }
       }
     }
   }

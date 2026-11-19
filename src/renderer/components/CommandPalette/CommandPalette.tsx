@@ -9,11 +9,13 @@ import { useThemeStore } from '../../stores/themeStore'
 import { useSnippetStore } from '../../stores/snippetStore'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useSessionLogStore } from '../../stores/sessionLogStore'
+import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
 import { openSessionLogFolder, toggleSessionLog } from '../../lib/sessionLogActions'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { modalOverlayVariants } from '../../lib/animation/variants'
 import { formatRelativeTime } from '../../utils/timeFormat'
 import { getFolderPath } from '../../lib/sessionPicker'
+import { openAgentMessages } from '../Terminal/AgentMessages'
 import './CommandPalette.css'
 
 interface CommandPaletteProps {
@@ -22,6 +24,9 @@ interface CommandPaletteProps {
   onOpenSettings: () => void
   onOpenSnippetManager?: () => void
   onOpenWhatsNew?: () => void
+  onOpenBatch?: () => void
+  onOpenStats?: () => void
+  onOpenLocalProject?: () => void
 }
 
 const categoryIcons = {
@@ -33,7 +38,7 @@ const categoryIcons = {
   snippet: RiFileTextLine,
 }
 
-export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, onOpenWhatsNew }: CommandPaletteProps) {
+export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, onOpenWhatsNew, onOpenBatch, onOpenStats, onOpenLocalProject }: CommandPaletteProps) {
   const { isOpen, query, selectedIndex, recentCommands, close, setQuery, setSelectedIndex, addRecentCommand } = useCommandPaletteStore()
   const { sessions, folders, activeSessionId } = useSessionStore()
   const { recentConnections, clearHistory } = useHistoryStore()
@@ -100,6 +105,57 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
       action: onOpenSettings,
       keywords: ['settings', 'preferences', '설정'],
     })
+
+    // Opened from here only (the sidebar's bottom buttons were taken out)
+    items.push({
+      id: 'agent-messages',
+      title: '에이전트 메시지 열기',
+      subtitle: '로컬 터미널의 Claude Code·Codex 가 주고받은 메시지함',
+      category: 'command',
+      action: () => openAgentMessages(),
+      keywords: ['agent', 'message', 'inbox', 'mail', 'claude', 'codex', '에이전트', '메시지', '메시지함', '편지'],
+    })
+    if (onOpenLocalProject) {
+      items.push({
+        id: 'local-project',
+        title: '로컬 작업 열기',
+        subtitle: '작업 폴더·워크트리를 골라 로컬 터미널이나 에이전트로 열기',
+        category: 'command',
+        action: onOpenLocalProject,
+        keywords: ['local', 'project', 'worktree', 'folder', '로컬', '작업', '폴더', '워크트리'],
+      })
+    }
+    if (onOpenBatch) {
+      items.push({
+        id: 'batch-command',
+        title: '배치 명령 실행',
+        subtitle: '여러 SSH 탭에 같은 명령을 한 번에 보내기',
+        category: 'command',
+        action: onOpenBatch,
+        keywords: ['batch', 'broadcast', 'command', 'multi', '배치', '일괄', '명령', '여러'],
+      })
+    }
+    if (onOpenStats) {
+      items.push({
+        id: 'session-stats',
+        title: '세션 통계',
+        subtitle: '세션별 접속 횟수와 사용 시간',
+        category: 'command',
+        action: onOpenStats,
+        keywords: ['stats', 'statistics', 'usage', 'dashboard', '통계', '사용량', '접속'],
+      })
+    }
+
+    if (typeof window.electronAPI?.agentHistoryList === 'function') {
+      items.push({
+        id: 'workspace-panel',
+        title: '작업 공간 열기',
+        subtitle: '로컬 셸 작업용 패널: 이 PC 에서 실행한 Claude Code·Codex 대화를 찾고 이어서 실행',
+        category: 'command',
+        action: () => useWorkspacePanelStore.getState().open('history'),
+        keywords: ['workspace', 'agent', 'history', 'session', 'resume', 'claude', 'codex', '작업 공간', '에이전트', '대화', '기록', '이어서'],
+      })
+    }
 
     if (onOpenWhatsNew) {
       items.push({
@@ -200,7 +256,7 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
     })
 
     return items
-  }, [sessions, folders, recentConnections, themes, currentThemeId, snippets, activeSessionId, activeTerminalId, sessionLogFiles, onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, onOpenWhatsNew, setTheme, clearHistory, close, expandVariables, getTerminal])
+  }, [sessions, folders, recentConnections, themes, currentThemeId, snippets, activeSessionId, activeTerminalId, sessionLogFiles, onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, onOpenWhatsNew, onOpenBatch, onOpenStats, onOpenLocalProject, setTheme, clearHistory, close, expandVariables, getTerminal])
 
   // Fuse.js search
   const fuse = useMemo(() => {

@@ -9,6 +9,7 @@ const MAX_MESSAGES = 500
 const MAX_TEXT = 8000
 const INBOX_WAIT_MS = 30000
 const USER = 'user'
+const { sanitizeUsage, sameUsage } = require('./agentUsage.js')
 
 function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bindLocalAgent, bridgeFile, platform = process.platform }) {
   const agents = new Map()
@@ -17,6 +18,10 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   const bridgeToken = randomUUID()
   const leases = new Map()
   const receivedByAgent = new Set()
+  // agent id → latest usage (agentUsage.js shape)
+  const usages = new Map()
+  // Every local shell's token → its id, for the status line of a Claude typed into it (registerShell)
+  const shellTokens = new Map()
   const messages = []
   const sockets = new Set()
   const inboxWaits = new Map()
@@ -31,7 +36,15 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   const inbox = (id, unread) => messages.filter(message => message.to === id && (!unread || !message.read)).map(publicMessage)
   function readInbox(id, unread) {
     const result = inbox(id, unread)
-    for (const message of result) if (!message.read) receivedByAgent.add(message.id)
+    let receiptsSeen = false
+    for (const message of result) {
+      if (message.read) continue
+      receivedByAgent.add(message.id)
+      // A receipt needs no answer: seen is done (or wait_for_message would return it again and again)
+      const stored = message.receipt && messages.find(item => item.id === message.id)
+      if (stored) { stored.read = true; receiptsSeen = true }
+    }
+    if (receiptsSeen) changed()
     return result
   }
   function snapshot() {
@@ -54,21 +67,26 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
 
   function deliver(from, request) {
     const { text, replyTo, requestId } = request
+    // A receipt confirms a request at once ("작업 할당 받았습니다"); the request stays open until the result
+    const receipt = request.receipt === true
     if (typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('메시지를 1~8000자로 입력해 주세요.')
     if (requestId !== undefined && (typeof requestId !== 'string' || !requestId || requestId.length > 100)) throw new Error('요청 ID가 올바르지 않습니다.')
+    if (receipt && replyTo === undefined) throw new Error('수신 확인할 메시지를 지정해 주세요.')
     const original = replyTo === undefined ? null : messages.find(item => item.id === replyTo && item.to === from)
     if (replyTo !== undefined && !original) throw new Error('답장할 메시지를 찾을 수 없습니다.')
+    // Answering a receipt would start an endless exchange of confirmations
+    if (original?.receipt) throw new Error('수신 확인에는 답장하지 않습니다.')
     const to = original ? original.from : request.to
     const existing = requestId && messages.find(item => item.from === from && item.requestId === requestId)
     if (existing) {
-      if (existing.to !== to || existing.text !== text || existing.replyTo !== replyTo) throw new Error('같은 요청 ID에 다른 내용이 있습니다.')
+      if (existing.to !== to || existing.text !== text || existing.replyTo !== replyTo || Boolean(existing.receipt) !== receipt) throw new Error('같은 요청 ID에 다른 내용이 있습니다.')
       return { id: existing.id }
     }
     if (from === to || (to !== USER && !isConnected(to))) throw new Error('메시지를 받을 실행 중인 에이전트를 찾을 수 없습니다.')
     if (messages.length >= MAX_MESSAGES) throw new Error('이번 실행의 메시지 한도에 도달했습니다.')
-    const message = { id: randomUUID(), from, to, text, replyTo, requestId, sentAt: Date.now(), read: false }
+    const message = { id: randomUUID(), from, to, text, replyTo, requestId, sentAt: Date.now(), read: false, ...(receipt ? { receipt: true } : {}) }
     messages.push(message)
-    if (original) original.read = true
+    if (original && !receipt) original.read = true
     let deliveredToWaiter = false
     for (const [socket, wait] of inboxWaits) {
       if (wait.agentId !== to || socket.destroyed) continue
@@ -77,7 +95,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     }
     changed({ id: message.id, from, to, toShell: agents.get(to)?.shellId })
     const recipient = agents.get(to)?.shellId
-    if (recipient && !deliveredToWaiter) onInboxChanged(recipient)
+    // A receipt does not wake its recipient: it is a note, and a woken agent would confirm it back
+    if (recipient && !deliveredToWaiter && !receipt) onInboxChanged(recipient)
     return { id: message.id }
   }
 
@@ -92,6 +111,14 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   }
 
   function respond(request, socket) {
+    // The status line of a Claude typed into a local shell has no agent token, only its shell's
+    if (request?.method === 'usage' && typeof request.shellToken === 'string') {
+      const shellId = shellTokens.get(request.shellToken)
+      if (!shellId) throw new Error('ezShell 로컬 터미널에서 실행해 주세요.')
+      if (isLocked()) throw new Error('먼저 앱 잠금을 해제해 주세요.')
+      const agent = [...agents.values()].find(candidate => candidate.shellId === shellId && candidate.active && candidate.kind === 'claude')
+      return { stored: agent ? setUsage(agent.id, request.usage) : false }
+    }
     const from = tokens.get(request?.token)
     if (!from) throw new Error('활성 ezShell 에이전트 세션에서 실행해 주세요.')
     if (isLocked()) throw new Error('먼저 앱 잠금을 해제해 주세요.')
@@ -105,6 +132,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
         return null
       }
       case 'ack': return acknowledge(request.id, from)
+      // From the status line command of a Claude ezShell launched: saved as this agent's usage only
+      case 'usage': return { stored: setUsage(from, request.usage) }
       case 'send': return deliver(from, request)
       default: throw new Error('지원하지 않는 명령입니다.')
     }
@@ -161,7 +190,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       }
       token = randomUUID()
       tokens.set(token, id)
-      agents.set(id, { id, shellId: binding?.shellId ?? '', kind: request.kind, cwd: request.cwd, active: true, status: binding?.status ?? 'unknown' })
+      // startedAt: its MCP connects a little after the CLI started (and wrote its Codex session file)
+      agents.set(id, { id, shellId: binding?.shellId ?? '', kind: request.kind, cwd: request.cwd, active: true, status: binding?.status ?? 'unknown', startedAt: Date.now() - 30_000 })
     }
     const previous = mcpReady.get(id)
     mcpReady.set(id, socket)
@@ -248,6 +278,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     if (directory) {
       try { fs.unlinkSync(path.join(directory, platform === 'win32' ? 'ezshell.cmd' : 'ezshell')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'agent-mcp.json')) } catch {}
+      try { fs.unlinkSync(path.join(directory, 'agent-settings.json')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'messages.sock')) } catch {}
       try { fs.rmdirSync(directory) } catch {}
       directory = undefined
@@ -269,6 +300,11 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
           env: { ELECTRON_RUN_AS_NODE: '1', EZSHELL_AGENT_PIPE: '${EZSHELL_AGENT_PIPE}', EZSHELL_AGENT_TOKEN: '${EZSHELL_AGENT_TOKEN}' }
         }
       }
+    }), { mode: 0o600 })
+    // Added with --settings to the Claude ezShell launches, for that run only (the user's own status
+    // line stays in their settings). Claude runs it in Git Bash on Windows and sh elsewhere.
+    fs.writeFileSync(path.join(directory, 'agent-settings.json'), JSON.stringify({
+      statusLine: { type: 'command', command: 'ELECTRON_RUN_AS_NODE=1 "$EZSHELL_CLI_EXE" "$EZSHELL_AGENT_USAGE_SCRIPT"', padding: 0 }
     }), { mode: 0o600 })
     server = net.createServer(connect)
     await new Promise((resolve, reject) => {
@@ -300,10 +336,12 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     }
   }
 
-  function register(kind, shellId, cwd, shellEnv) {
+  function register(kind, shellId, cwd, shellEnv, resumeId = null) {
     const id = `${kind}-${++serial}`
     const token = randomUUID()
-    agents.set(id, { id, shellId, kind, cwd, active: true, status: 'unknown' })
+    // startedAt: Codex usage is read from the session file it starts after this (codexUsageWatcher);
+    // resumeId: a resumed session writes on in its old file, found by this id instead
+    agents.set(id, { id, shellId, kind, cwd, active: true, status: 'unknown', startedAt: Date.now(), ...(resumeId ? { resumeId } : {}) })
     tokens.set(token, id)
     changed()
     const key = Object.keys(shellEnv).find(name => platform === 'win32' ? name.toUpperCase() === 'PATH' : name === 'PATH') ?? 'PATH'
@@ -316,7 +354,10 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       EZSHELL_CLI_EXE: process.execPath,
       EZSHELL_CLI_SCRIPT: path.join(__dirname, 'agentMessageCli.js'),
       EZSHELL_AGENT_MCP_SCRIPT: path.join(__dirname, 'agentMessageMcp.js'),
-      EZSHELL_AGENT_MCP_CONFIG: path.join(directory, 'agent-mcp.json')
+      EZSHELL_AGENT_MCP_CONFIG: path.join(directory, 'agent-mcp.json'),
+      // Claude only: its status line reports usage to the app instead of drawing rows (agentUsageReport.js)
+      EZSHELL_AGENT_SETTINGS: path.join(directory, 'agent-settings.json'),
+      EZSHELL_AGENT_USAGE_SCRIPT: path.join(__dirname, 'agentUsageReport.js')
     }
     const stopReceiving = () => {
       tokens.delete(token)
@@ -334,6 +375,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
         const agent = agents.get(id)
         if (!agent?.active) return
         stopReceiving()
+        clearUsage(id)
         const status = agent.status === 'error' || (exitCode && exitCode !== 130) ? 'error' : 'ended'
         agents.set(id, { ...agent, active: false, status, exitCode })
         changed()
@@ -342,6 +384,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
         const agent = agents.get(id)
         if (!agent) return
         stopReceiving()
+        clearUsage(id)
         if (messages.some(message => message.from === id || message.to === id)) {
           if (!agent.active) return
           agents.set(id, { ...agent, active: false, status: 'ended' })
@@ -351,15 +394,79 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     }
   }
 
+  const connectedAgentOf = shellId => [...agents.values()].find(candidate => candidate.shellId === shellId && isConnected(candidate.id))
+
+  /** Messages for the agent in this shell that it has not read yet: the terminal wakes it for these */
   function unreadFor(shellId) {
     if (isLocked()) return []
-    const agent = [...agents.values()].find(candidate => candidate.shellId === shellId && isConnected(candidate.id))
+    const agent = connectedAgentOf(shellId)
     return agent ? messages.filter(message =>
-      message.to === agent.id && !message.read && !receivedByAgent.has(message.id)
+      message.to === agent.id && !message.read && !message.receipt && !receivedByAgent.has(message.id)
     ).map(message => message.id) : []
   }
 
-  return { ready, enableExternalBridge, register, stop, snapshot, sendAsUser: request => deliver(USER, request), acknowledge, unreadFor }
+  /** Messages it has not answered or acknowledged yet, read or not: a request put off while busy stays here */
+  function unhandledFor(shellId) {
+    if (isLocked()) return []
+    const agent = connectedAgentOf(shellId)
+    return agent ? messages.filter(message => message.to === agent.id && !message.read && !message.receipt).map(message => message.id) : []
+  }
+
+  /**
+   * The latest usage of an agent (Claude's status line through the pipe, Codex's session file through
+   * codexUsageWatcher). Only the window hears of it, and only when it changed.
+   */
+  function setUsage(agentId, value) {
+    const agent = agents.get(agentId)
+    if (!agent?.active) return false
+    const clean = sanitizeUsage(value, agent.kind)
+    if (!clean) return false
+    if (sameUsage(usages.get(agentId), clean)) return true
+    usages.set(agentId, clean)
+    notify('agent-usage', { agentId, shellId: agent.shellId ?? null, usage: clean })
+    return true
+  }
+
+  function clearUsage(agentId) {
+    if (!usages.delete(agentId)) return
+    notify('agent-usage', { agentId, shellId: agents.get(agentId)?.shellId ?? null, usage: null })
+  }
+
+  /**
+   * What every local shell gets in its environment (needs `ready()`): its own token, so the usage
+   * status line of a Claude typed into it can report for that shell's agent, and the status line's
+   * settings for the shell's `claude` wrapper (localShell.js).
+   */
+  function registerShell(shellId) {
+    if (!directory || !pipe) return {}
+    forgetShell(shellId)
+    const token = randomUUID()
+    shellTokens.set(token, shellId)
+    return {
+      EZSHELL_SHELL_TOKEN: token,
+      EZSHELL_AGENT_PIPE: pipe,
+      EZSHELL_CLI_EXE: process.execPath,
+      EZSHELL_AGENT_SETTINGS: path.join(directory, 'agent-settings.json'),
+      EZSHELL_AGENT_USAGE_SCRIPT: path.join(__dirname, 'agentUsageReport.js')
+    }
+  }
+
+  function forgetShell(shellId) {
+    for (const [token, id] of shellTokens) if (id === shellId) shellTokens.delete(token)
+  }
+
+  /** For a window that starts (or reloads) after the reports came in */
+  function usageSnapshot() {
+    return [...usages].flatMap(([agentId, usage]) => {
+      const agent = agents.get(agentId)
+      return agent?.active ? [{ agentId, shellId: agent.shellId ?? null, usage }] : []
+    })
+  }
+
+  return {
+    ready, enableExternalBridge, register, stop, snapshot, sendAsUser: request => deliver(USER, request), acknowledge, unreadFor, unhandledFor,
+    setUsage, usageSnapshot, registerShell, forgetShell
+  }
 }
 
 module.exports = { createAgentMessages }

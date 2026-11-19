@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RiCloseLine, RiComputerLine, RiFolderOpenLine, RiHistoryLine, RiServerLine, RiSplitCellsHorizontal } from 'react-icons/ri'
+import { RiCloseLine, RiComputerLine, RiFolderOpenLine, RiGitCommitLine, RiHistoryLine, RiServerLine, RiSplitCellsHorizontal } from 'react-icons/ri'
 import { formatBytes } from '../../lib/mcpLabels'
 import { formatClock } from '../../lib/remoteFileText'
 import { entryKey, readBackupEntry, type BackupEntry } from '../../lib/backupCompare'
@@ -22,10 +22,13 @@ interface RemoteBackupPanelProps {
   /** Open the side-by-side comparison with this backup */
   onCompare: (key: string) => void
   onClose: () => void
+  /** A file on this PC: the list holds its version at Git HEAD instead of backups */
+  isLocal?: boolean
 }
 
 /** Short label of where a backup lives, for the list and the comparison */
 export function BackupSourceIcon({ entry, size = 14 }: { entry: BackupEntry; size?: number }) {
+  if (entry.timeFrom === 'git') return <RiGitCommitLine size={size} className="backup-source-icon is-git" aria-label="Git 에 커밋된 내용" />
   return entry.source === 'app'
     ? <RiComputerLine size={size} className="backup-source-icon is-app" aria-label="앱 백업 (이 PC)" />
     : <RiServerLine size={size} className="backup-source-icon is-server" aria-label="서버의 백업 파일" />
@@ -36,7 +39,7 @@ export function BackupSourceIcon({ entry, size = 14 }: { entry: BackupEntry; siz
  * and backup files left beside it on the server. Opening one shows its text; it can be compared
  * side by side or replace the editor's text.
  */
-export function RemoteBackupPanel({ docId, entries, error, selectedKey, onSelect, onRestore, onCompare, onClose }: RemoteBackupPanelProps) {
+export function RemoteBackupPanel({ docId, entries, error, selectedKey, onSelect, onRestore, onCompare, onClose, isLocal = false }: RemoteBackupPanelProps) {
   const [preview, setPreview] = useState<{ key: string; content: string } | null>(null)
   const selected = entries?.find(e => entryKey(e) === selectedKey) ?? null
 
@@ -61,15 +64,28 @@ export function RemoteBackupPanel({ docId, entries, error, selectedKey, onSelect
   return (
     <aside className="remote-backup-panel" aria-label="백업">
       <div className="remote-backup-header">
-        <RiHistoryLine size={15} aria-hidden="true" />
-        <span className="remote-backup-title">백업</span>
-        <button type="button" className="remote-file-icon-btn" onClick={() => void openFolder()} title="앱 백업 폴더 열기 (이 PC)" aria-label="앱 백업 폴더 열기">
-          <RiFolderOpenLine size={15} />
-        </button>
+        {isLocal
+          ? <RiGitCommitLine size={15} className="backup-source-icon is-git" aria-hidden="true" />
+          : <RiHistoryLine size={15} aria-hidden="true" />}
+        <span className="remote-backup-title">{isLocal ? 'Git 비교' : '백업'}</span>
+        {!isLocal && (
+          <button type="button" className="remote-file-icon-btn" onClick={() => void openFolder()} title="앱 백업 폴더 열기 (이 PC)" aria-label="앱 백업 폴더 열기">
+            <RiFolderOpenLine size={15} />
+          </button>
+        )}
         <button type="button" className="remote-file-icon-btn" onClick={onClose} title="닫기" aria-label="백업 닫기">
           <RiCloseLine size={16} />
         </button>
       </div>
+      {isLocal ? (
+        <dl className="backup-legend">
+          <div className="backup-legend-row">
+            <RiGitCommitLine size={15} className="backup-source-icon is-git" aria-hidden="true" />
+            <dt><span className="backup-head-label">HEAD</span></dt>
+            <dd>마지막 커밋에 들어 있는 이 파일의 내용입니다.</dd>
+          </div>
+        </dl>
+      ) : (
       <dl className="backup-legend">
         <div className="backup-legend-row">
           <RiComputerLine size={15} className="backup-source-icon is-app" aria-hidden="true" />
@@ -82,27 +98,30 @@ export function RemoteBackupPanel({ docId, entries, error, selectedKey, onSelect
           <dd>같은 폴더에 있는 <code>이름.bak_날짜</code> 같은 파일입니다.</dd>
         </div>
       </dl>
+      )}
       {error && <p className="remote-backup-empty">{error}</p>}
-      {entries && entries.length === 0 && <p className="remote-backup-empty">아직 백업이 없습니다. 저장하면 생깁니다.</p>}
+      {entries && entries.length === 0 && <p className="remote-backup-empty">{isLocal ? '이 파일은 Git 의 마지막 커밋에 없습니다 (새 파일이거나 저장소 밖).' : '아직 백업이 없습니다. 저장하면 생깁니다.'}</p>}
       <ul className="remote-backup-list">
         {entries?.map(entry => {
           const key = entryKey(entry)
+          const isGit = entry.timeFrom === 'git'
           return (
             <li key={key}>
               <button
                 type="button"
-                className={`remote-backup-item backup-entry is-${entry.source}${key === selectedKey ? ' is-selected' : ''}`}
+                className={`remote-backup-item backup-entry is-${entry.source}${isGit ? ' is-git' : ''}${key === selectedKey ? ' is-selected' : ''}`}
                 onClick={() => onSelect(key)}
                 onDoubleClick={() => onCompare(key)}
-                title={entry.source === 'server' ? `서버: ${entry.name}` : '앱 백업 (이 PC)'}
+                title={isGit ? 'Git 의 마지막 커밋 (HEAD)' : entry.source === 'server' ? `서버: ${entry.name}` : '앱 백업 (이 PC)'}
               >
                 <BackupSourceIcon entry={entry} />
                 <span className="backup-entry-main">
+                  {isGit && <span className="backup-head-label">{entry.name}</span>}
                   <span className="remote-backup-time">
                     {formatClock(entry.time)}
                     {entry.timeFrom === 'modified' && <span className="backup-entry-note">수정 시각</span>}
                   </span>
-                  {entry.source === 'server' && <span className="backup-entry-name">{entry.name}</span>}
+                  {!isGit && entry.source === 'server' && <span className="backup-entry-name">{entry.name}</span>}
                 </span>
                 <span className="remote-backup-size">{formatBytes(entry.size)}</span>
               </button>

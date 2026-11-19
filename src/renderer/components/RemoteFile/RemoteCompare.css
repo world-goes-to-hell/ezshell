@@ -1,4 +1,4 @@
-/* Backup list entries (app / server) and the side-by-side comparison of the server file window.
+/* Backup and Git HEAD list entries and the side-by-side comparison of the file window.
    Kept apart from RemoteFile.css. */
 
 /* ---------- Where a backup lives ---------- */
@@ -13,6 +13,19 @@
 
 .backup-source-icon.is-server {
   color: var(--warning);
+}
+
+.backup-source-icon.is-git {
+  color: var(--text-link);
+}
+
+.backup-head-label {
+  align-self: flex-start;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text-link) 14%, transparent);
+  color: color-mix(in srgb, var(--text-link) 70%, var(--text-primary));
+  font: 600 11px / 1.5 var(--font-mono);
 }
 
 /* What the two icons in the list mean: icon, name and explanation line up in columns */
@@ -95,6 +108,15 @@
 /* Server files get a warm stripe when selected so the two kinds stay apart at a glance */
 .remote-backup-item.backup-entry.is-server.is-selected {
   border-left-color: var(--warning);
+}
+
+.remote-backup-item.backup-entry.is-git .remote-backup-time {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.remote-backup-item.backup-entry.is-git.is-selected {
+  border-left-color: var(--text-link);
 }
 
 .backup-preview-actions {

@@ -590,6 +590,14 @@ body.resizing .split-pane-content * {
 .drop-zone-bottom.active { height: 50%; }
 
 /* A tab dragged over a pane of another tab: dropping it here merges it into that tab as a pane */
+/* An agent session dragged out of the agent history panel (lib/agentSessionDrop.ts): the panel lies
+   over the terminal area, so it fades and lets the pointer reach the panes under it */
+[data-agent-drag] .mcp-activity-panel {
+  opacity: 0.3;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+}
+
 .tab-merge-marker {
   position: fixed;
   transition: left var(--transition-fast), top var(--transition-fast), width var(--transition-fast), height var(--transition-fast);
@@ -617,6 +625,11 @@ body.resizing .split-pane-content * {
 .tab-merge-marker.is-blocked {
   background: color-mix(in srgb, var(--error) 14%, transparent);
   border-color: var(--error);
+}
+
+.agent-drop-marker.is-replacing {
+  background: color-mix(in srgb, var(--warning) 13%, transparent);
+  border: 2px solid var(--warning);
 }
 
 /* Over a tab: the tab is outlined and the words hang below it (a tab is too small to hold them) */
@@ -736,6 +749,43 @@ body.resizing .split-pane-content * {
   inset: 50% 0 auto;
   border-top: 2px dashed var(--accent);
 }
+
+.pane-gesture-cancel-target,
+.pane-gesture-cancel-label {
+  position: absolute;
+  z-index: 16;
+  pointer-events: none;
+}
+
+.pane-gesture-cancel-target {
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border: 2px dashed var(--accent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--bg-secondary) 85%, transparent);
+  color: var(--text-primary);
+}
+
+.pane-gesture-cancel-target.is-active {
+  border-style: solid;
+  border-color: var(--error);
+  background: var(--bg-secondary);
+  color: var(--error-text, var(--error));
+}
+
+.pane-gesture-cancel-label {
+  transform: translateX(-50%);
+  padding: 3px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pane-gesture-cancel-label.is-above { transform: translate(-50%, -100%); }
 
 @media (prefers-reduced-motion: reduce) {
   .pane-merge-trail.is-fading { animation: none; }

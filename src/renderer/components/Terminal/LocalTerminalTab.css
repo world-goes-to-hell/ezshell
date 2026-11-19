@@ -13,8 +13,14 @@
 .local-terminal-host {
   flex: 1;
   min-height: 0;
+  /* FitAddon reads the host's computed size when choosing the number of rows. */
+  box-sizing: content-box;
   padding: 6px 0 0 8px;
   overflow: hidden;
+}
+
+.local-terminal-host:has(+ .agent-pane-usage) {
+  margin-bottom: 4px;
 }
 
 .local-terminal-exit {
@@ -41,13 +47,79 @@
 /* Split: mark the pane that receives keyboard input, the same way as SSH split panes
    (styles/app/update-notification.css): an inset overlay, so edges along an overflow:hidden
    ancestor are not clipped at fractional zoom, xterm keeps its size and clicks pass through */
-.local-terminal-tab.is-split .local-terminal-pane:focus-within::before {
+.local-terminal-tab.is-split .local-terminal-pane:focus-within::before,
+.local-terminal-pane[data-agent-work='working']::before {
   content: '';
   position: absolute;
   inset: 0;
   z-index: 10; /* above xterm's viewport and helper layers */
-  border: 2px solid var(--accent);
   pointer-events: none;
+}
+
+.local-terminal-pane[data-agent-work='working']::before {
+  border: 1px solid var(--border);
+}
+
+.local-terminal-tab.is-split .local-terminal-pane:focus-within::before,
+.local-terminal-pane[data-agent-work='working']:focus-within::before {
+  border: 2px solid var(--accent);
+}
+
+@property --local-agent-trace-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0turn;
+}
+
+/* The light follows an inner track so it stays visible beside the solid focus outline. */
+.local-terminal-pane[data-agent-work]::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  z-index: 11;
+  padding: 2px;
+  pointer-events: none;
+  color: color-mix(in srgb, var(--motion-accent, var(--accent)) 55%, var(--border));
+  background: conic-gradient(
+    from var(--local-agent-trace-angle),
+    transparent,
+    color-mix(in srgb, currentColor 40%, transparent) 18deg,
+    currentColor 27deg,
+    transparent 32deg
+  );
+  mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 180ms ease-out, color 180ms ease-out;
+  animation: local-agent-trace 3.6s linear infinite paused;
+}
+
+.local-terminal-pane[data-agent-work]:focus-within::after {
+  color: color-mix(in srgb, var(--motion-accent, var(--accent)) 72%, var(--terminal-foreground, var(--text-primary)));
+}
+
+.local-terminal-pane[data-agent-work='working']::after {
+  opacity: 1;
+  animation-play-state: running;
+}
+
+.terminal-wrapper.hidden .local-terminal-pane[data-agent-work='working']::after {
+  animation-play-state: paused;
+}
+
+@keyframes local-agent-trace {
+  to { --local-agent-trace-angle: 1turn; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .local-terminal-pane[data-agent-work]::after {
+    padding: 0;
+    border: 1px solid currentColor;
+    background: none;
+    mask: none;
+    animation: none;
+    transition: none;
+  }
 }
 
 .local-terminal-pane-status {

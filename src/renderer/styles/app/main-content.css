@@ -28,11 +28,6 @@
   color: var(--text-primary);
 }
 
-.welcome-screen p {
-  font-size: 15px;
-  color: var(--text-muted);
-}
-
 .btn-primary {
   display: flex;
   align-items: center;

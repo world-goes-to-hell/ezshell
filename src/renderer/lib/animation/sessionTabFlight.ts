@@ -31,11 +31,13 @@ function titlePosition(tab: HTMLElement, label: DOMRect) {
   }
 }
 
-/** Capture before opening a tab when its button leaves the DOM with the welcome screen. */
+/** Capture the launch control before opening its tab changes the layout. */
 export function captureTabFlightSource(source: Element | null, frame: Element | null = null): TabFlightSource | null {
-  if (!source?.textContent || document.hidden || matchMedia(REDUCED_MOTION_QUERY).matches) return null
+  if (!source || document.hidden || matchMedia(REDUCED_MOTION_QUERY).matches) return null
+  const label = source.textContent?.trim() || source.getAttribute('aria-label')
+  if (!label) return null
   const bounds = source.getBoundingClientRect()
-  return canSee(bounds, frame) ? { bounds, text: source.textContent } : null
+  return canSee(bounds, frame) ? { bounds, text: label } : null
 }
 
 export async function flyToTab(source: TabFlightSource, sessionId: string): Promise<void> {

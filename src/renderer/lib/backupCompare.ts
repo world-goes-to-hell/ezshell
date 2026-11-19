@@ -11,7 +11,7 @@ export interface BackupEntry {
   time: number
   size: number
   /** Server files only: whether the time came from the name or the modification time */
-  timeFrom?: 'name' | 'modified'
+  timeFrom?: 'name' | 'modified' | 'git'
 }
 
 export const entryKey = (entry: Pick<BackupEntry, 'source' | 'name'>): string => `${entry.source}:${entry.name}`

@@ -8,12 +8,11 @@ import { BackupSourceIcon } from './RemoteBackupPanel'
 import { entryKey, neighborOf, readBackupEntry, type BackupEntry } from '../../lib/backupCompare'
 import { formatClock, toEditorText } from '../../lib/remoteFileText'
 import { toast } from '../../stores/toastStore'
+import { COMPARE_DIFF_CONFIG } from '../../lib/compareDiff'
 import './RemoteCompare.css'
 
 /** Same limit as the editor: above it no syntax colours (the parser stutters on huge files) */
 const LANGUAGE_MAX_CHARS = 1_000_000
-/** Exact diffing gives up after this and falls back to a rougher one (same budget as the save review) */
-const DIFF_TIMEOUT_MS = 300
 const SYNC_SCROLL_KEY = 'remoteCompareSyncScroll'
 
 function readSyncScroll(): boolean {
@@ -96,7 +95,7 @@ const MERGE_PHRASES = EditorState.phrases.of({
 })
 
 const optionLabel = (entry: BackupEntry): string =>
-  entry.source === 'app' ? `앱 · ${formatClock(entry.time)}` : `서버 · ${entry.name}`
+  entry.timeFrom === 'git' ? `Git · ${entry.name}` : entry.source === 'app' ? `앱 · ${formatClock(entry.time)}` : `서버 · ${entry.name}`
 
 /**
  * IntelliJ-style comparison: the backup on the left (read-only), the editor's text on the right.
@@ -182,7 +181,8 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
       highlightChanges: true,
       gutter: true,
       collapseUnchanged: collapse ? { margin: 3, minSize: 4 } : undefined,
-      diffConfig: { scanLimit: 500, timeout: DIFF_TIMEOUT_MS }
+      // No scan limit: with one, a long file changed in many places showed everything as changed (lib/compareDiff.ts)
+      diffConfig: COMPARE_DIFF_CONFIG
     })
     mergeRef.current = merge
     setChunkCount(merge.chunks.length)

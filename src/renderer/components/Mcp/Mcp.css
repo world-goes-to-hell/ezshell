@@ -2,7 +2,74 @@
 .mcp-settings {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 12px;
+}
+
+.settings-section.mcp-settings-group {
+  min-width: 0;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--glass-content, var(--bg-secondary));
+}
+
+.mcp-settings-group .settings-section-title,
+.mcp-transfer-group > .mcp-field > .mcp-field-label:first-child,
+.mcp-audit-group .mcp-audit-header > .mcp-field-label {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.mcp-settings-group .settings-section-desc {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.mcp-group-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.mcp-group-heading > :last-child { margin-inline-start: auto; }
+.mcp-server-controls { justify-content: space-between; }
+
+.mcp-settings-group fieldset > legend {
+  margin-block-end: 8px;
+  padding: 0;
+}
+
+.mcp-state.mcp-state-badge {
+  --mcp-state-tone: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--mcp-state-tone) 30%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--mcp-state-tone) 12%, transparent);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mcp-state-badge.running { --mcp-state-tone: var(--success); }
+
+.mcp-state-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  clip-path: circle(50%);
+  background: var(--mcp-state-tone);
 }
 
 .mcp-row {
@@ -70,7 +137,28 @@
 }
 
 .mcp-radio {
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 9px;
+  row-gap: 2px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+}
+
+.mcp-radio:has(input:checked) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-primary));
+}
+
+.mcp-radio:has(input:checked) .mcp-radio-label {
+  font-weight: 600;
+}
+
+.mcp-radio:focus-within {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .mcp-radio-label {
@@ -79,10 +167,9 @@
 }
 
 .mcp-radio-desc {
-  flex-basis: 100%;
-  padding-left: 24px;
+  grid-column: 2;
   font-size: 13px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .mcp-token,

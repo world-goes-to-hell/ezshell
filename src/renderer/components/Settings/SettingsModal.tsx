@@ -159,22 +159,19 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
 
                       <Tabs.Content value="ssh" className="settings-tab-content">
                         <div className="settings-content">
-                          <section className="settings-section">
-                            <h3 className="settings-section-title">SSH MCP 서버 · ezshell-ssh-mcp</h3>
-                            <p className="settings-section-desc">
-                              Claude Code 가 허용한 세션으로 서버를 조회할 수 있게 합니다. 비밀번호는 Claude 에게 전달되지 않습니다.
-                            </p>
-                            <McpSettings />
-                          </section>
+                          <McpSettings />
                         </div>
                       </Tabs.Content>
 
                       <Tabs.Content value="agent-messages" className="settings-tab-content">
                         <div className="settings-content">
-                          <section className="settings-section">
+                          <section className="settings-section mcp-settings-group">
                             <h3 className="settings-section-title">에이전트 메시지 MCP · ezshell-cli-mcp</h3>
                             <p className="settings-section-desc">
                               사용자 설정에 등록하면 일반 터미널에서 연 Codex와 Claude Code도 실행 중인 ezShell과 메시지를 주고받을 수 있습니다.
+                            </p>
+                            <p className="settings-section-desc">
+                              새 로컬 PowerShell에서 Codex를 실행하면 <code>--no-daemon</code>을 자동으로 붙여 메시지를 해당 터미널 칸에 연결합니다.
                             </p>
                             <AgentMessageMcpSetup />
                           </section>
@@ -185,16 +182,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
 
                   <Tabs.Content value="remote" className="settings-tab-content">
                     <div className="settings-content">
-                      <section className="settings-section">
-                        <h3 className="settings-section-title">
-                          <RiSmartphoneLine size={18} />
-                          원격 접속 (휴대폰 브라우저)
-                        </h3>
-                        <p className="settings-section-desc">
-                          밖에서 휴대폰 브라우저로 이 PC 의 ezShell 에 들어와 저장된 세션의 터미널을 씁니다. Tailscale 로만 연결됩니다.
-                        </p>
-                        <RemoteAccessSettings />
-                      </section>
+                      <RemoteAccessSettings />
                     </div>
                   </Tabs.Content>
                 </Tabs.Root>

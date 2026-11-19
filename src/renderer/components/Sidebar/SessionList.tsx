@@ -16,6 +16,9 @@ import { SESSION_COLORS } from '../../lib/sessionColors'
 import { buildShareText, buildFolderShareText, ShareTooLargeError } from '../../lib/sessionShare'
 import { toast } from '../../stores/toastStore'
 import { SharePassphraseDialog } from './SharePassphraseDialog'
+import { LinkToProjectSubmenu } from './LinkToProjectSubmenu'
+import { matchName, type NamePart } from '../../lib/containerSearch'
+import type { SessionSearchResult } from '../../lib/sessionSearch'
 
 const TREE_ROW = '[role="treeitem"]'
 
@@ -45,7 +48,24 @@ interface DragState {
   id: string | null
 }
 
+/** The sidebar search: marks matches without hiding anything */
+export interface SessionListSearch {
+  terms: string[]
+  result: SessionSearchResult
+  /** The match Enter connects to; scrolled into view */
+  currentId?: string
+}
+
+const NO_SEARCH: SessionListSearch = { terms: [], result: { matchIds: [], openFolderIds: new Set() } }
+
+/** Name with the searched words marked */
+function MarkedName({ text, parts }: { text: string; parts: NamePart[] | null }) {
+  if (!parts) return <>{text}</>
+  return <>{parts.map((part, i) => (part.isMatch ? <mark key={i} className="sidebar-search-mark">{part.text}</mark> : <span key={i}>{part.text}</span>))}</>
+}
+
 interface SessionListProps {
+  search?: SessionListSearch
   onQuickConnect: (session: Session, source?: HTMLElement) => void
   onEditSession?: (session: Session) => void
   onDuplicateSession?: (session: Session) => void
@@ -54,13 +74,49 @@ interface SessionListProps {
   onImportSession?: (folderId?: string) => void
 }
 
-export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession, onAddSession, onImportSession }: SessionListProps) {
+export function SessionList({ search = NO_SEARCH, onQuickConnect, onEditSession, onDuplicateSession, onAddSession, onImportSession }: SessionListProps) {
   const { sessions, folders, expandedFolders, toggleFolder, addFolder, updateFolder, removeFolder, removeSession, moveSessionToFolder, reorderSession, updateSession, saveToBackend } = useSessionStore()
   const reducedMotion = useReducedMotion()
   const terminals = useTerminalStore(state => state.terminals)
   const sessionTabs = useMemo(() => groupTabsBySession(terminals), [terminals])
   const [colorPickerFolderId, setColorPickerFolderId] = useState<string | null>(null)
   const [colorPickerSessionId, setColorPickerSessionId] = useState<string | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  // While searching, the folders holding a match are shown open without touching the stored state.
+  // A folder the user closes during the search stays closed until the words change.
+  const matchIds = useMemo(() => new Set(search.result.matchIds), [search.result])
+  const [closedWhileSearching, setClosedWhileSearching] = useState<ReadonlySet<string>>(new Set())
+  const searchKey = search.terms.join(' ')
+  useEffect(() => { setClosedWhileSearching(new Set()) }, [searchKey])
+  const isFolderOpen = (folderId: string) => expandedFolders.has(folderId)
+    || (search.result.openFolderIds.has(folderId) && !closedWhileSearching.has(folderId))
+  const toggleFolderView = (folderId: string) => {
+    if (!search.result.openFolderIds.has(folderId)) {
+      toggleFolder(folderId)
+      return
+    }
+    const shown = isFolderOpen(folderId)
+    if (expandedFolders.has(folderId)) toggleFolder(folderId)
+    setClosedWhileSearching(prev => {
+      const next = new Set(prev)
+      if (shown) next.add(folderId)
+      else next.delete(folderId)
+      return next
+    })
+  }
+
+  // Bring the current match into view (after a folder that just opened has room for it)
+  useEffect(() => {
+    const id = search.currentId
+    if (!id) return
+    const reveal = () => listRef.current
+      ?.querySelector<HTMLElement>(`.session-item[data-session-id="${CSS.escape(id)}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+    reveal()
+    const later = window.setTimeout(reveal, 260)
+    return () => window.clearTimeout(later)
+  }, [search.currentId, searchKey])
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
@@ -564,18 +620,18 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
       case 'Enter':
       case ' ':
         if (folderId) {
-          if (!event.repeat) toggleFolder(folderId)
+          if (!event.repeat) toggleFolderView(folderId)
         } else if (event.key === 'Enter') {
           const session = sessions.find(item => item.id === row.dataset.sessionId)
           if (session && !event.repeat) onQuickConnect(session, row)
         } else return
         break
       case 'ArrowRight':
-        if (folderId && !expanded) toggleFolder(folderId)
+        if (folderId && !expanded) toggleFolderView(folderId)
         else if (folderId) next = row.nextElementSibling?.querySelector<HTMLElement>(TREE_ROW)
         break
       case 'ArrowLeft':
-        if (folderId && expanded) toggleFolder(folderId)
+        if (folderId && expanded) toggleFolderView(folderId)
         else next = parentFolderRow(row)
         break
       case 'ArrowDown':
@@ -597,9 +653,18 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
     next?.focus()
   }
 
+  const searchProps = (session: Session) => {
+    const isMatch = matchIds.has(session.id)
+    return {
+      isMatch,
+      isCurrentMatch: isMatch && search.currentId === session.id,
+      nameParts: isMatch ? matchName(session.name || session.host, search.terms) : null
+    }
+  }
+
   // Recursive folder renderer
   const renderFolder = (folder: Folder, depth: number = 0) => {
-    const isExpanded = expandedFolders.has(folder.id)
+    const isExpanded = isFolderOpen(folder.id)
     const childFolders = getChildFolders(folder.id)
     const folderSessions = getSessionsInFolder(folder.id)
     const isEditing = editingId === folder.id
@@ -618,6 +683,7 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
         isDragging={dragState.type === 'session' && dragState.id === session.id}
         tabs={sessionTabs.get(session.id)}
         {...sessionItemDropProps(session.id)}
+        {...searchProps(session)}
       />
     ))
 
@@ -636,7 +702,7 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
           aria-label={`폴더: ${folder.name}`}
           aria-owns={isExpanded ? `session-folder-contents-${folder.id}` : undefined}
           tabIndex={0}
-          onClick={() => toggleFolder(folder.id)}
+          onClick={() => toggleFolderView(folder.id)}
           onContextMenu={(e) => handleFolderContextMenu(e, folder.id)}
           draggable={!isEditing}
           onDragStart={(e) => handleDragStart(e, 'folder', folder.id)}
@@ -658,7 +724,7 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
-            <span className="folder-name">{folder.name}</span>
+            <span className="folder-name"><MarkedName text={folder.name} parts={matchName(folder.name, search.terms)} /></span>
           )}
           {/* What a closed folder holds */}
           {!isExpanded && !isEditing && (folderSessions.length + childFolders.length) > 0 && (
@@ -707,6 +773,7 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
 
   return (
     <div
+      ref={listRef}
       className="session-list"
       role="tree"
       aria-label="SSH 세션 목록"
@@ -739,7 +806,8 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
             onDragEnd={handleDragEnd}
             isDragging={dragState.type === 'session' && dragState.id === session.id}
             tabs={sessionTabs.get(session.id)}
-                {...sessionItemDropProps(session.id)}
+            {...sessionItemDropProps(session.id)}
+            {...searchProps(session)}
           />
         ))}
       </div>
@@ -916,6 +984,7 @@ export function SessionList({ onQuickConnect, onEditSession, onDuplicateSession,
                 currentFolderId={getCurrentSessionFolder()}
                 onMove={handleMoveToFolder}
               />
+              {contextMenu.targetId && <LinkToProjectSubmenu sessionId={contextMenu.targetId} />}
               <div className="context-menu-divider" />
               <div
                 className="context-menu-item"

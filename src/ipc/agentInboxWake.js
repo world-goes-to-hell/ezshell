@@ -1,19 +1,39 @@
 const { Terminal } = require('@xterm/headless')
 
-const PROMPT = 'Handle unread ezShell messages using the ezshell-cli-mcp tools.'
-const PASTE = '\x1b[200~' + PROMPT + '\x1b[201~'
+// The line pasted into the agent's composer. Each asks for an immediate receipt (send_receipt), so the
+// sender hears back at once; the result follows with reply_to_message.
+const PROMPT = 'New ezShell message: read it with read_inbox, confirm it now with send_receipt, then handle it.'
+// While it works: Claude Code hands a line entered during a task to that task, so it can confirm
+// without stopping and say what it finishes first
+const BUSY_PROMPT = 'New ezShell message while you are busy: read it with read_inbox and confirm it now with send_receipt, saying what you will finish first; handle it after your current task.'
+// After that task, when the request it put off is still unanswered
+const REMIND_PROMPT = 'Your task is done: handle the ezShell request you put off, then send the result with reply_to_message.'
+const PROMPTS = { idle: PROMPT, busy: BUSY_PROMPT, remind: REMIND_PROMPT }
+const LONGEST_PROMPT = Math.max(...Object.values(PROMPTS).map(text => text.length))
+const pasteOf = text => '\x1b[200~' + text + '\x1b[201~'
 const DRAW_SETTLE = 35
 const INPUT_TIMEOUT = 1500
+// A CLI that has not reported its state yet (just started, before its first turn) is taken to wait for
+// input once its empty composer has stayed unchanged this long (three fresh agents never woke)
+const QUIET_MS = 1500
 const submitKey = data => /^(?:\r|\n|\x1b\[13(?:;1)?u)$/.test(data)
 const compact = text => text.replace(/\s/g, '')
 const claudeRule = /^\s*─{8,}\s*$/u
 
-function createAgentInboxWake({ kind, cols, rows, pendingMessages, isWorking, write }) {
+/**
+ * isWorking: not waiting for input (also while starting up, unknown or asking for approval).
+ * isRunningTask: in the middle of a task, the only busy state that gets the busy notice.
+ */
+function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMessages = () => [], isWorking, isRunningTask = () => false, isUnknown = () => false, quietMs = QUIET_MS, write }) {
   const screen = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true })
   const dispatched = new Set()
+  // Announced while the agent was busy: reminded once after the task if still unanswered
+  const deferred = new Set()
   let stopped = false
   let timer = null
   let stage = null
+  // When the agent last drew anything (a fresh agent counts as waiting once this has been a while)
+  let lastOutputAt = Date.now()
   let userDraft = false
   let composing = false
   let holdUntil = 0
@@ -60,7 +80,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, isWorking, wr
     const cursor = buffer.baseY + buffer.cursorY
     const line = index => buffer.getLine(index)?.translateToString(false) ?? ''
     // A pasted line can wrap. Look above the cursor only as far as the app-written prompt.
-    const maxInputRows = Math.ceil(PROMPT.length / Math.max(1, screen.cols - 2)) + 1
+    const maxInputRows = Math.ceil(LONGEST_PROMPT / Math.max(1, screen.cols - 2)) + 1
     const first = Math.max(buffer.baseY, cursor - maxInputRows)
     for (let index = cursor; index >= first; index--) {
       const row = line(index)
@@ -88,19 +108,49 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, isWorking, wr
   function advance() {
     if (stopped || composing) return
     const now = Date.now()
+    // State never reported: waiting for input when the screen has been still (the composer check follows)
+    const quietFor = now - lastOutputAt
+    const freshIdle = isUnknown() && quietFor >= quietMs
+    const working = isWorking() && !freshIdle
+    const running = working && isRunningTask()
     const waiting = pendingMessages().filter(id => !dispatched.has(id))
-    const input = waiting.length ? composer() : null
+    const open = new Set(unhandledMessages())
+    for (const id of deferred) if (!open.has(id)) deferred.delete(id)
+    const remind = working ? [] : [...deferred]
+    const due = waiting.length > 0 || remind.length > 0
+    const input = due || stage ? composer() : null
     if (stage) {
-      const { expires } = stage
-      if (now >= expires) {
+      const { expires, mode, prompt, ids } = stage
+      const isOurs = Boolean(input?.endsAtCursor) && input?.text === compact(prompt)
+      // A busy notice is entered while the task runs; the others only once the agent waits for input
+      const canSubmit = mode === 'busy' ? running || !working : !working
+      if (isOurs && !canSubmit) {
+        // Our line is in the composer and the agent is busy: keep it and press Enter when it is ready.
+        // Giving up here left the line in the composer for good (seen with two agents talking).
+        stage.expires = now + INPUT_TIMEOUT
+        // A never-reported agent counts as ready once its screen is still again: look then
+        schedule(isUnknown() ? Math.min(INPUT_TIMEOUT, quietMs - quietFor + DRAW_SETTLE) : INPUT_TIMEOUT)
+        return
+      }
+      if (!isOurs && now >= expires) {
         stage = null
         userDraft = true
         return
       }
-      if (waiting.length && !isWorking() && input?.endsAtCursor && input.text === compact(PROMPT)) {
+      // Enter even when the message was read meanwhile (an agent reads its inbox inside a running
+      // turn): our exact line is in the composer, and leaving it there stalls the conversation
+      if (isOurs && canSubmit) {
         // Send Enter only after the supported composer has rendered the exact draft we pasted.
         stage = null
-        if (write('\r')) waiting.forEach(id => dispatched.add(id))
+        if (write('\r')) {
+          // The messages announced when pasting, and any that came since
+          const announced = new Set([...ids, ...(mode === 'remind' ? remind : waiting)])
+          if (mode === 'remind') announced.forEach(id => deferred.delete(id))
+          else announced.forEach(id => {
+            dispatched.add(id)
+            if (mode === 'busy') deferred.add(id)
+          })
+        }
         holdUntil = now + INPUT_TIMEOUT
         schedule(INPUT_TIMEOUT)
       } else {
@@ -108,20 +158,25 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, isWorking, wr
       }
       return
     }
-    if (!waiting.length || isWorking() || !input?.atStart || (userDraft && input.text)) return
+    // State not reported yet: look again once the screen has been still long enough
+    if (due && working && isUnknown() && input?.atStart) { schedule(quietMs - quietFor + DRAW_SETTLE); return }
+    // Busy but not in a task (starting up, approval prompt, unknown): wait as before
+    if (!due || (working && !running) || !input?.atStart || (userDraft && input.text)) return
     if (now < holdUntil) { schedule(holdUntil - now); return }
     userDraft = false
-    stage = { expires: now + INPUT_TIMEOUT }
-    if (!write(PASTE)) { stage = null; return }
+    const mode = waiting.length ? (working ? 'busy' : 'idle') : 'remind'
+    stage = { expires: now + INPUT_TIMEOUT, mode, prompt: PROMPTS[mode], ids: mode === 'remind' ? remind : waiting }
+    if (!write(pasteOf(stage.prompt))) { stage = null; return }
     schedule(INPUT_TIMEOUT)
   }
 
   return {
     writeOutput(data) {
       if (stopped) return
+      lastOutputAt = Date.now()
       const wasWriting = stage !== null
       screen.write(data, () => {
-        if (wasWriting || stage || pendingMessages().some(id => !dispatched.has(id))) schedule()
+        if (wasWriting || stage || deferred.size || pendingMessages().some(id => !dispatched.has(id))) schedule()
       })
     },
     userInput(data) {
@@ -156,4 +211,4 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, isWorking, wr
   }
 }
 
-module.exports = { createAgentInboxWake, PROMPT }
+module.exports = { createAgentInboxWake, PROMPT, BUSY_PROMPT, REMIND_PROMPT }

@@ -1,10 +1,11 @@
-import { lazy, Suspense, useCallback, useEffect, useState, useRef } from 'react'
+import { Fragment, lazy, Suspense, useCallback, useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { RiDatabase2Line, RiComputerLine } from 'react-icons/ri'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { Footer } from './components/Footer/Footer'
 import { McpApprovalDialog } from './components/Mcp/McpApprovalDialog'
 import { useAppZoom } from './hooks/useAppZoom'
+import { WindowZoom } from './components/Zoom/WindowZoom'
 import { TitleBar } from './components/TitleBar/TitleBar'
 import { TerminalPanel } from './components/Terminal/TerminalPanel'
 import { SplitPaneTabBar } from './components/Terminal/SplitPaneTabBar'
@@ -25,7 +26,7 @@ import { getDuplicateConfig } from './lib/duplicateConnection'
 import { tabHost, dropTabHostsExcept } from './lib/tabHosts'
 import { perFrame } from './lib/throttle'
 import { TabSlot } from './components/Terminal/TabSlot'
-import { isSshTab } from './lib/sessionTabs'
+import { findTabPane, isSshTab } from './lib/sessionTabs'
 import { detachTab, restoreMergedTab, type DetachedTab } from './lib/detachedTab'
 import { captureTerminalSnapshot, setPendingSnapshot } from './lib/terminalSnapshots'
 import { SettingsModal } from './components/Settings/SettingsModal'
@@ -35,6 +36,7 @@ import { ToastContainer } from './components/Toast'
 import { toast } from './stores/toastStore'
 import { usePaneDropOnTabs } from './hooks/usePaneDropOnTabs'
 import { useTabDropOnPane, SCREEN_SPLIT_BAND_PX } from './hooks/useTabDropOnPane'
+import { useAgentSessionDrop } from './hooks/useAgentSessionDrop'
 import { sideWord } from './lib/paneDropZones'
 import { MERGE_BLOCKED_TITLE, mergeChoices, type MergeChoice } from './lib/tabMerge'
 import { mergeTabIntoPane } from './lib/tabToPane'
@@ -43,11 +45,20 @@ import { buildRestoreRecord, readRestoreRecord, type RecordSource, type RestoreT
 import { restoreTabs } from './lib/restoreTabsRun'
 import { RestoreTabsBanner, type RestoreBannerState } from './components/Restore/RestoreTabsBanner'
 import { closeLocalPaneShells } from './lib/localPaneShells'
+import { useTabGroups } from './hooks/useTabGroups'
+import { addScreenRefusal, dragDivider, evenSizes } from './lib/screenPanes'
+import { TabGroupChips } from './components/Terminal/TabGroupChips'
+import { agentKindsByShell, agentsOfLocalTab, openLocalWithAgents } from './lib/restoreAgents'
+import { useAgentUsageStore } from './stores/agentUsageStore'
 import { UpdateNotification } from './components/Update/UpdateNotification'
 import { CommandPalette } from './components/CommandPalette'
 import { TabContextMenu } from './components/Terminal/TabContextMenu'
 import { TabRenameDialog } from './components/Terminal/TabRenameDialog'
 import { DUPLICATE_TAB_EVENT, OPEN_SNIPPET_MANAGER_EVENT } from './components/Terminal/useTerminalContextMenu'
+import { RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './lib/agentHistory'
+import { adoptOrphanLocalShells } from './lib/localShellAdopt'
+import { TAB_DROP_TAKEN_EVENT } from './lib/localProjectServers'
+import { WorkspacePanel } from './components/Workspace/WorkspacePanel'
 import { SnippetManager } from './components/Snippets/SnippetManager'
 import { StatsDashboard } from './components/Modal/StatsDashboard'
 import { BatchCommandModal } from './components/Modal/BatchCommandModal'
@@ -135,6 +146,7 @@ function App() {
           initialRemotePath={windowParams.remotePath}
           sessionTitle={windowParams.title}
         />
+        <WindowZoom kind="sftp" />
         <ToastContainer />
         <ConfirmDialogHost />
       </>
@@ -147,6 +159,7 @@ function App() {
         <Suspense fallback={null}>
           <RemoteFileWindow docId={windowParams.docId} />
         </Suspense>
+        <WindowZoom kind="remoteFile" />
         <ToastContainer />
         <ConfirmDialogHost />
       </>
@@ -159,6 +172,7 @@ function App() {
         <Suspense fallback={null}>
           <DbClientWindow dbId={windowParams.dbId} />
         </Suspense>
+        <WindowZoom kind="db" />
         <ToastContainer />
       </>
     )
@@ -168,6 +182,7 @@ function App() {
     return (
       <>
         <McpActivityWindow />
+        <WindowZoom kind="mcpActivity" />
         <ToastContainer />
       </>
     )
@@ -180,6 +195,7 @@ function App() {
           sessionId={windowParams.sessionId}
           title={windowParams.title}
         />
+        <WindowZoom kind="terminal" />
         <ToastContainer />
         <ConfirmDialogHost />
       </>
@@ -204,6 +220,8 @@ function App() {
   const [isLocked, setIsLocked] = useState(true)
   const [hasMasterPassword, setHasMasterPassword] = useState(false)
   const [isCheckingLock, setIsCheckingLock] = useState(true)
+  const [isLockScreenReady, setIsLockScreenReady] = useState(false)
+  const markLockScreenReady = useCallback(() => setIsLockScreenReady(true), [])
 
   // Initialize theme on mount
   const initializeTheme = useThemeStore(state => state.initializeTheme)
@@ -229,14 +247,35 @@ function App() {
     return {
       terminals, layout, activeId: activeTerminalId,
       sftpPathOf: tabId => sftp.isOpen(tabId) ? sftp.remotePath(tabId) : null,
-      detached: Array.from(detachedTabsRef.current.values())
+      detached: Array.from(detachedTabsRef.current.values()),
+      // The agent sessions in a local tab's panes, so a restart can resume them (lib/restoreAgents.ts)
+      agentsOf: tabId => agentsOfLocalTab(tabId, terminals.get(tabId), useAgentUsageStore.getState().byShell, agentKindsByShell())
     }
   }, [])
   const [splitPaneDraggingTabId, setSplitPaneDraggingTabId] = useState<string | null>(null)
   // A tab dragged onto a pane of another tab of the same session becomes a pane of that tab.
   // From the single tab strip the edges of the terminal area mean "split the screen" (drop zones below).
   const mergeDropTaken = useRef(false)
-  const mergeHover = useTabDropOnPane(draggingTabId ?? splitPaneDraggingTabId, draggingTabId !== null, mergeDropTaken)
+  // The edge bands belong to the screen split, never to merging into a pane: at four screens (or the other
+  // direction) a drop there is refused with the reason instead of merging (that merge was the complaint)
+  const mergeHover = useTabDropOnPane(draggingTabId ?? splitPaneDraggingTabId, draggingTabId !== null || splitPaneDraggingTabId !== null, mergeDropTaken)
+  // A tab dropped in an edge band where no screen can be added: why (shown when the drag ends)
+  const screenRefusal = useRef<string | null>(null)
+  // A past session dragged from the agent history panel onto a tab strip or a local terminal pane
+  const agentDropHover = useAgentSessionDrop()
+  // A tab dropped on a local project in the sidebar (linked as its server) stays where it is
+  useEffect(() => {
+    const onTaken = () => { mergeDropTaken.current = true }
+    // The tab's own dragend (handleTabDragEnd) has read the mark by now; a drag from the split view's
+    // tab strip does not clear it, and a leftover mark would swallow the next drag
+    const onDragEnd = () => { setTimeout(() => { mergeDropTaken.current = false }) }
+    window.addEventListener(TAB_DROP_TAKEN_EVENT, onTaken)
+    window.addEventListener('dragend', onDragEnd)
+    return () => {
+      window.removeEventListener(TAB_DROP_TAKEN_EVENT, onTaken)
+      window.removeEventListener('dragend', onDragEnd)
+    }
+  }, [])
 
   // Context menu state
   const [contextMenuOpen, setContextMenuOpen] = useState(false)
@@ -246,8 +285,8 @@ function App() {
   const [isSettingsLoaded, setIsSettingsLoaded] = useState(false)
 
   // Split pane resize state
-  const [splitRatio, setSplitRatio] = useState(0.5)
-  const [isSplitResizing, setIsSplitResizing] = useState(false)
+  // The divider being dragged (between screen i and i + 1); the shares live in the layout
+  const [resizingDivider, setResizingDivider] = useState<number | null>(null)
   const splitContainerRef = useRef<HTMLDivElement>(null)
 
   // Split pane session selector dropdown
@@ -255,6 +294,17 @@ function App() {
   const splitDropdownRef = useRef<HTMLDivElement>(null)
 
   const { sessions, isLoading: areSessionsLoading, loadFromBackend, addSession, updateSession } = useSessionStore()
+  const startupScreenReady = !isCheckingLock && (isLocked
+    ? isLockScreenReady
+    : isSettingsLoaded && !areSessionsLoading)
+  useEffect(() => {
+    if (!startupScreenReady) return
+    // Leave one frame for the committed screen to paint while the main window is still hidden.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => window.electronAPI?.startupReady?.())
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [startupScreenReady])
   const {
     terminals,
     activeTerminalId,
@@ -267,8 +317,12 @@ function App() {
     setActivePaneTerminal,
     setActivePaneType,
     closeSplit,
-    moveTerminalBetweenPanes
+    moveTerminalBetweenPanes,
+    setPaneSizes
   } = useTerminalStore()
+  // The tab strip shows one work at a time (hooks/useTabGroups.ts)
+  const groupView = useTabGroups()
+  const shownTabs = new Set(groupView.shownIds)
   const { isOpen, setOpen } = useSftpStore()
   const { connect, disconnect } = useSSH()
   const { zenMode, toggleZenMode } = useUIStore()
@@ -306,11 +360,10 @@ function App() {
     const added = Array.from(terminals.keys()).filter(id => !knownTabIds.current.has(id))
     knownTabIds.current = new Set(terminals.keys())
     const current = useTerminalStore.getState().layout
-    if (current.mode !== 'split' || current.activePaneType !== 'secondary' || !current.secondary) return
+    const focused = current.activePane
+    if (current.mode !== 'split' || !focused) return
     for (const id of added) {
-      if (current.primary.terminalIds.includes(id) && !current.secondary.terminalIds.includes(id)) {
-        moveTerminalBetweenPanes(id, 'primary', 'secondary')
-      }
+      if (current.panes[0]?.terminalIds.includes(id)) moveTerminalBetweenPanes(id, 0, focused)
     }
   }, [terminals, moveTerminalBetweenPanes])
 
@@ -415,33 +468,26 @@ function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [splitDropdownOpen])
 
-  // Split pane resize via divider drag
+  // Dragging a divider: only its two neighbouring screens change (lib/screenPanes.ts dragDivider)
   useEffect(() => {
-    if (!isSplitResizing) return
-
-    // One ratio update (one render of the whole layout) per frame, however many mouse moves arrive
-    const applyRatio = perFrame((ratio: number) => setSplitRatio(ratio))
+    if (resizingDivider === null) return
+    // One update (one render of the whole layout) per frame, however many mouse moves arrive
+    const apply = perFrame((ratio: number) => {
+      const { layout: current, setPaneSizes: setSizes } = useTerminalStore.getState()
+      setSizes(dragDivider(current.sizes, resizingDivider, ratio))
+    })
     const handleMouseMove = (e: MouseEvent) => {
       const container = splitContainerRef.current
       if (!container) return
       const rect = container.getBoundingClientRect()
-      let ratio: number
-      if (layout.direction === 'horizontal') {
-        ratio = (e.clientX - rect.left) / rect.width
-      } else {
-        ratio = (e.clientY - rect.top) / rect.height
-      }
-      ratio = Math.min(0.8, Math.max(0.2, ratio))
-      applyRatio(ratio)
+      apply(layout.direction === 'horizontal' ? (e.clientX - rect.left) / rect.width : (e.clientY - rect.top) / rect.height)
     }
-
     const handleMouseUp = () => {
-      applyRatio.cancel()
-      setIsSplitResizing(false)
+      apply.cancel()
+      setResizingDivider(null)
       document.body.classList.remove('resizing')
       window.dispatchEvent(new Event('resize'))
     }
-
     document.body.classList.add('resizing')
     window.addEventListener('mousemove', handleMouseMove, true)
     window.addEventListener('mouseup', handleMouseUp, true)
@@ -449,7 +495,7 @@ function App() {
       window.removeEventListener('mousemove', handleMouseMove, true)
       window.removeEventListener('mouseup', handleMouseUp, true)
     }
-  }, [isSplitResizing, layout.direction])
+  }, [resizingDivider, layout.direction])
 
   // Handle terminal zoom from main process (Ctrl+/-/0 intercepted at Electron level)
   useEffect(() => {
@@ -523,53 +569,53 @@ function App() {
       toggleZenMode()
     },
     nextTab: () => {
-      const terminalIds = Array.from(terminals.keys())
+      const terminalIds = groupView.shownIds
       if (terminalIds.length === 0) return
       const currentIdx = activeTerminalId ? terminalIds.indexOf(activeTerminalId) : -1
       const nextIdx = (currentIdx + 1) % terminalIds.length
       setActiveTerminal(terminalIds[nextIdx])
     },
     prevTab: () => {
-      const terminalIds = Array.from(terminals.keys())
+      const terminalIds = groupView.shownIds
       if (terminalIds.length === 0) return
       const currentIdx = activeTerminalId ? terminalIds.indexOf(activeTerminalId) : 0
       const prevIdx = (currentIdx - 1 + terminalIds.length) % terminalIds.length
       setActiveTerminal(terminalIds[prevIdx])
     },
     jumpToTab1: () => {
-      const terminalIds = Array.from(terminals.keys())
+      const terminalIds = groupView.shownIds
       if (terminalIds.length > 0) setActiveTerminal(terminalIds[0])
     },
     jumpToTab2: () => {
-      const terminalIds = Array.from(terminals.keys())
+      const terminalIds = groupView.shownIds
       if (terminalIds.length > 1) setActiveTerminal(terminalIds[1])
     },
     jumpToTab3: () => {
-      const terminalIds = Array.from(terminals.keys())
+      const terminalIds = groupView.shownIds
       if (terminalIds.length > 2) setActiveTerminal(terminalIds[2])
     },
     jumpToTab4: () => {
-      const terminalIds = Array.from(terminals.keys())
+      const terminalIds = groupView.shownIds
       if (terminalIds.length > 3) setActiveTerminal(terminalIds[3])
     },
     jumpToTab5: () => {
-      const terminalIds = Array.from(terminals.keys())
+      const terminalIds = groupView.shownIds
       if (terminalIds.length > 4) setActiveTerminal(terminalIds[4])
     },
     jumpToTab6: () => {
-      const terminalIds = Array.from(terminals.keys())
+      const terminalIds = groupView.shownIds
       if (terminalIds.length > 5) setActiveTerminal(terminalIds[5])
     },
     jumpToTab7: () => {
-      const terminalIds = Array.from(terminals.keys())
+      const terminalIds = groupView.shownIds
       if (terminalIds.length > 6) setActiveTerminal(terminalIds[6])
     },
     jumpToTab8: () => {
-      const terminalIds = Array.from(terminals.keys())
+      const terminalIds = groupView.shownIds
       if (terminalIds.length > 7) setActiveTerminal(terminalIds[7])
     },
     jumpToTab9: () => {
-      const terminalIds = Array.from(terminals.keys())
+      const terminalIds = groupView.shownIds
       if (terminalIds.length > 8) setActiveTerminal(terminalIds[8])
     }
   }, !isLocked)
@@ -776,8 +822,8 @@ function App() {
   }
 
   // A terminal of this PC as a new tab (the shell runs in the main process)
-  const handleOpenLocalTerminal = async ({ cwd, agent, workspaceLabel }: Partial<LocalProjectTerminal> = {}): Promise<string | null> => {
-    const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd, agent })
+  const handleOpenLocalTerminal = async ({ cwd, agent, workspaceLabel, resume }: Partial<LocalProjectTerminal> & { resume?: string } = {}): Promise<string | null> => {
+    const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd, agent, resume })
     if (!result || !result.success) {
       toast.error('로컬 터미널을 열지 못했습니다', result ? result.error : '앱을 다시 시작해 주세요.')
       return null
@@ -786,20 +832,29 @@ function App() {
     const count = Array.from(store.terminals.values()).filter(info => info.local).length
     store.addTerminal(result.id, {
       id: result.id, host: '이 PC', username: '', connected: true,
+      // Never the agent's name: the panes of the tab may run other agents or plain shells
       title: workspaceLabel
-        ? (agent ? `${workspaceLabel} · ${agent === 'codex' ? 'Codex' : 'Claude Code'}` : workspaceLabel)
+        ? workspaceLabel
         : (count === 0 ? result.name : `${result.name} (${count + 1})`),
       local: { shell: result.name, cwd: result.cwd, workspaceLabel }
     })
     const { layout: current } = useTerminalStore.getState()
-    if (current.mode === 'split' && current.activePaneType === 'secondary') {
-      store.moveTerminalBetweenPanes(result.id, 'primary', 'secondary')
-    }
+    if (current.mode === 'split' && current.activePane) store.moveTerminalBetweenPanes(result.id, 0, current.activePane)
     return result.id
   }
 
-  const handleOpenWelcomeLocalTerminal = async (button: HTMLButtonElement) => {
-    const origin = captureTabFlightSource(button.querySelector('span'))
+  // "이어서 실행" in the work panel's conversations: main resolves the key to the session's folder and agent
+  useEffect(() => {
+    const onResume = (event: Event) => {
+      const { key, agent, label } = (event as CustomEvent<ResumeAgentSessionRequest>).detail
+      void handleOpenLocalTerminal({ resume: key, agent, workspaceLabel: label || undefined })
+    }
+    window.addEventListener(RESUME_AGENT_SESSION_EVENT, onResume)
+    return () => window.removeEventListener(RESUME_AGENT_SESSION_EVENT, onResume)
+  })
+
+  const handleOpenSidebarLocalTerminal = async (button: HTMLButtonElement) => {
+    const origin = useTerminalStore.getState().terminals.size === 0 ? captureTabFlightSource(button) : null
     const tabId = await handleOpenLocalTerminal()
     if (origin && tabId) void flyToTab(origin, tabId)
   }
@@ -812,6 +867,16 @@ function App() {
       offClose?.()
     }
   }, [readRestoreSource])
+
+  // Once, after the first unlock: local shells still running from before a window reload come back as tabs
+  const orphanShellsCheckedRef = useRef(false)
+  useEffect(() => {
+    if (isLocked || isCheckingLock || orphanShellsCheckedRef.current) return
+    orphanShellsCheckedRef.current = true
+    void adoptOrphanLocalShells().then(count => {
+      if (count > 0) toast.info('로컬 터미널을 다시 열었습니다', `화면을 다시 불러오기 전에 실행 중이던 셸 ${count}개`)
+    })
+  }, [isLocked, isCheckingLock])
 
   const [restoreBanner, setRestoreBanner] = useState<RestoreBannerState | null>(null)
   const restoreCheckedRef = useRef(false)
@@ -840,7 +905,7 @@ function App() {
         const result = await handleQuickConnect(session)
         return result.success && result.sessionId ? { id: result.sessionId } : { error: result.error || '연결하지 못했습니다.' }
       },
-      openLocal: ({ cwd, workspaceLabel }) => handleOpenLocalTerminal({ cwd, workspaceLabel }),
+      openLocal: (tab) => openLocalWithAgents(tab, handleOpenLocalTerminal),
       onProgress: (done) => setRestoreBanner({ phase: 'running', done, total })
     })
     setRestoreBanner(outcome.failed.length === 0 && outcome.quick.length === 0 ? null : { phase: 'done', outcome })
@@ -931,15 +996,13 @@ function App() {
     : null
 
   // Which pane shows the tab on a split screen (null on a single screen)
-  const paneOfTab = (tabId: string): 'primary' | 'secondary' | null => {
-    if (layout.mode !== 'split' || !layout.secondary) return null
-    return layout.secondary.terminalIds.includes(tabId) ? 'secondary' : 'primary'
-  }
+  /** The screen (index) of a tab while the screen is split */
+  const paneOfTab = (tabId: string): number | null => findTabPane(layout, tabId)
 
   // The + menu of a split pane: the same menu as the single tab bar, about that pane's active tab.
   // Pressing it focuses the pane, and a new tab goes to the focused pane (effect below).
-  const renderPaneNewTabMenu = (pane: 'primary' | 'secondary') => {
-    const paneActiveId = (pane === 'primary' ? layout.primary : layout.secondary)?.activeTerminalId ?? null
+  const renderPaneNewTabMenu = (pane: number) => {
+    const paneActiveId = layout.panes[pane]?.activeTerminalId ?? null
     const paneTerminal = paneActiveId ? terminals.get(paneActiveId) : undefined
     const label = getDuplicateConfig(paneTerminal) ? paneTerminal?.title || `${paneTerminal?.username}@${paneTerminal?.host}` : null
     return (
@@ -1017,7 +1080,8 @@ function App() {
   }
 
   const handleTerminalAreaDragOver = (e: React.DragEvent) => {
-    if (!draggingTabId) return
+    const fromScreenStrip = !draggingTabId && splitPaneDraggingTabId !== null
+    if (!draggingTabId && !fromScreenStrip) return
     // Need at least 2 terminals to split
     if (terminalArray.length < 2) {
       setDropZone(null)
@@ -1038,17 +1102,43 @@ function App() {
     const horizontalThreshold = Math.min(SCREEN_SPLIT_BAND_PX, width * 0.3)
     const verticalThreshold = Math.min(SCREEN_SPLIT_BAND_PX, height * 0.3)
 
-    if (x < horizontalThreshold) {
-      setDropZone('left')
-    } else if (x > width - horizontalThreshold) {
-      setDropZone('right')
-    } else if (y < verticalThreshold) {
-      setDropZone('top')
-    } else if (y > height - verticalThreshold) {
-      setDropZone('bottom')
-    } else {
-      setDropZone(null)
+    const zone = x < horizontalThreshold ? 'left' : x > width - horizontalThreshold ? 'right'
+      : y < verticalThreshold ? 'top' : y > height - verticalThreshold ? 'bottom' : null
+    screenRefusal.current = null
+    if (zone && layout.mode === 'split') {
+      // A split screen grows only at the two ends of its direction, up to four screens
+      const refusal = addScreenRefusal(layout, zone === 'left' || zone === 'right' ? 'horizontal' : 'vertical')
+      if (refusal) {
+        screenRefusal.current = refusal
+        setDropZone(null)
+        return
+      }
     }
+    if (fromScreenStrip && !zone) {
+      setDropZone(null)
+      return
+    }
+    setDropZone(zone)
+  }
+
+  // A tab dragged from a screen's strip: dropped in an edge band, it gets a new screen at that end
+  const handleScreenTabDragEnd = () => {
+    const sessionId = splitPaneDraggingTabId
+    const zone = dropZone
+    const refusal = screenRefusal.current
+    screenRefusal.current = null
+    setSplitPaneDraggingTabId(null)
+    setDropZone(null)
+    if (mergeDropTaken.current) {
+      mergeDropTaken.current = false
+      return
+    }
+    if (refusal) {
+      toast.info('화면을 더 나눌 수 없습니다', refusal)
+      return
+    }
+    if (!sessionId || !zone || zone === 'popout') return
+    splitWithSession(sessionId, zone === 'left' || zone === 'right' ? 'horizontal' : 'vertical', zone === 'left' || zone === 'top' ? 'primary' : 'secondary')
   }
 
   const handleTerminalAreaDragLeave = (e: React.DragEvent) => {
@@ -1199,7 +1289,7 @@ function App() {
     return (
       <div className="app-container">
         <TitleBar onSettingsClick={handleOpenSettings} />
-        <LockScreen hasMasterPassword={hasMasterPassword} onUnlock={handleUnlock} />
+        <LockScreen hasMasterPassword={hasMasterPassword} onUnlock={handleUnlock} onReady={markLockScreenReady} />
         <SettingsModal open={settingsModalOpen} onOpenChange={setSettingsModalOpen} />
       </div>
     )
@@ -1221,13 +1311,10 @@ function App() {
           onEditSession={handleEditSession}
           onDuplicateSession={handleDuplicateSession}
           onOpenQuickConnect={handleOpenQuickConnect}
-          onPickSession={() => setSessionPickerOpen(true)}
           onAddSession={handleAddSession}
           onImportSession={(folderId) => setImportTarget({ folderId })}
-          onStatsClick={() => setStatsDashboardOpen(true)}
-          onBatchClick={() => setBatchModalOpen(true)}
-          onLocalTerminal={() => void handleOpenLocalTerminal()}
-          onLocalProject={() => setLocalProjectOpen(true)}
+          onLocalTerminal={button => void handleOpenSidebarLocalTerminal(button)}
+          onLocalFolder={(cwd, workspaceLabel) => void handleOpenLocalTerminal({ cwd, workspaceLabel })}
           onCloseTerminal={handleCloseTerminal}
         />
         <main className="main-area" id="main-content">
@@ -1247,8 +1334,9 @@ function App() {
             <>
               {layout.mode !== 'split' && (
                 <div className="terminal-tabs">
+                  <TabGroupChips view={groupView} />
                   <AnimatePresence initial={false} mode="popLayout">
-                    {terminalArray.map(([sessionId, terminal]) => (
+                    {terminalArray.filter(([sessionId]) => shownTabs.has(sessionId)).map(([sessionId, terminal]) => (
                       <motion.div
                         key={sessionId}
                         data-tab-id={sessionId}
@@ -1311,8 +1399,8 @@ function App() {
                 onDragLeave={handleTerminalAreaDragLeave}
                 onDrop={handleTerminalAreaDrop}
               >
-                {/* Drop zone indicators */}
-                {draggingTabId && (
+                {/* Drop zone indicators (also while dragging from a screen's strip: that adds a screen) */}
+                {(draggingTabId || splitPaneDraggingTabId) && (
                   <>
                     <div className={`drop-zone drop-zone-left ${dropZone === 'left' ? 'active' : ''}`} />
                     <div className={`drop-zone drop-zone-right ${dropZone === 'right' ? 'active' : ''}`} />
@@ -1320,119 +1408,71 @@ function App() {
                     <div className={`drop-zone drop-zone-bottom ${dropZone === 'bottom' ? 'active' : ''}`} />
                   </>
                 )}
-                {layout.mode === 'split' && layout.secondary ? (
-                  <div ref={splitContainerRef} className={`split-view-container ${layout.direction} ${isSplitResizing ? 'resizing' : ''}`}>
-                    {/* Primary Pane */}
-                    <div
-                      className={`split-pane primary ${layout.activePaneType === 'primary' ? 'active-pane' : ''}`}
-                      onMouseDown={() => setActivePaneType('primary')}
-                      style={{
-                        flex: splitRatio,
-                        ...(layout.activePaneType === 'primary' && layout.primary.activeTerminalId && terminals.get(layout.primary.activeTerminalId)?.color
-                          ? { outlineColor: terminals.get(layout.primary.activeTerminalId)!.color }
-                          : {})
-                      }}
-                    >
-                      <SplitPaneTabBar
-                        paneType="primary"
-                        terminalIds={layout.primary.terminalIds}
-                        activeTerminalId={layout.primary.activeTerminalId}
-                        isActivePane={layout.activePaneType === 'primary'}
-                        onTabSelect={(terminalId) => {
-                          setActivePaneTerminal('primary', terminalId)
-                          setActivePaneType('primary')
-                        }}
-                        onTabClose={(terminalId) => {
-                          removeTerminalFromPane('primary', terminalId)
-                          handleCloseTerminal(terminalId)
-                        }}
-                        newTabMenu={renderPaneNewTabMenu('primary')}
-                        onUnsplit={closeSplit}
-                        onSftpToggle={layout.primary.activeTerminalId && isSshTab(terminals.get(layout.primary.activeTerminalId)) ? () => {
-                          const activeId = layout.primary.activeTerminalId!
-                          setOpen(activeId, !isOpen(activeId))
-                        } : undefined}
-                        sftpOpen={layout.primary.activeTerminalId ? isOpen(layout.primary.activeTerminalId) : false}
-                        onPaneFocus={() => setActivePaneType('primary')}
-                        onTabDragStart={(id) => setSplitPaneDraggingTabId(id)}
-                        onTabDragEnd={() => setSplitPaneDraggingTabId(null)}
-                        onTabDrop={(terminalId) => {
-                          moveTerminalBetweenPanes(terminalId, 'secondary', 'primary')
-                          setSplitPaneDraggingTabId(null)
-                        }}
-                        draggingTabId={splitPaneDraggingTabId}
-                      />
-                      <div className="split-pane-content">
-                        {layout.primary.terminalIds.map(terminalId => (
-                          <TabSlot
-                            key={terminalId}
-                            tabId={terminalId}
-                            className={`terminal-wrapper ${terminalId === layout.primary.activeTerminalId ? 'visible' : 'hidden'}`}
-                          />
-                        ))}
-                        {layout.primary.activeTerminalId && isOpen(layout.primary.activeTerminalId) && (
-                          <SftpPanel sessionId={layout.primary.activeTerminalId} />
-                        )}
-                      </div>
-                    </div>
-                    <div
-                      className={`split-divider ${layout.direction}`}
-                      onMouseDown={(e) => { e.preventDefault(); setIsSplitResizing(true) }}
-                      onDoubleClick={() => closeSplit()}
-                      title="드래그로 크기 조절 · 더블클릭으로 분할 해제"
-                    />
-                    {/* Secondary Pane */}
-                    <div
-                      className={`split-pane secondary ${layout.activePaneType === 'secondary' ? 'active-pane' : ''}`}
-                      onMouseDown={() => setActivePaneType('secondary')}
-                      style={{
-                        flex: 1 - splitRatio,
-                        ...(layout.activePaneType === 'secondary' && layout.secondary?.activeTerminalId && terminals.get(layout.secondary.activeTerminalId)?.color
-                          ? { outlineColor: terminals.get(layout.secondary.activeTerminalId)!.color }
-                          : {})
-                      }}
-                    >
-                      <SplitPaneTabBar
-                        paneType="secondary"
-                        terminalIds={layout.secondary.terminalIds}
-                        activeTerminalId={layout.secondary.activeTerminalId}
-                        isActivePane={layout.activePaneType === 'secondary'}
-                        onTabSelect={(terminalId) => {
-                          setActivePaneTerminal('secondary', terminalId)
-                          setActivePaneType('secondary')
-                        }}
-                        onTabClose={(terminalId) => {
-                          removeTerminalFromPane('secondary', terminalId)
-                          handleCloseTerminal(terminalId)
-                        }}
-                        newTabMenu={renderPaneNewTabMenu('secondary')}
-                        onSftpToggle={layout.secondary.activeTerminalId && isSshTab(terminals.get(layout.secondary.activeTerminalId)) ? () => {
-                          const activeId = layout.secondary!.activeTerminalId!
-                          setOpen(activeId, !isOpen(activeId))
-                        } : undefined}
-                        sftpOpen={layout.secondary.activeTerminalId ? isOpen(layout.secondary.activeTerminalId) : false}
-                        onPaneFocus={() => setActivePaneType('secondary')}
-                        onTabDragStart={(id) => setSplitPaneDraggingTabId(id)}
-                        onTabDragEnd={() => setSplitPaneDraggingTabId(null)}
-                        onTabDrop={(terminalId) => {
-                          moveTerminalBetweenPanes(terminalId, 'primary', 'secondary')
-                          setSplitPaneDraggingTabId(null)
-                        }}
-                        draggingTabId={splitPaneDraggingTabId}
-                      />
-                      <div className="split-pane-content">
-                        {layout.secondary.terminalIds.map(terminalId => (
-                          <TabSlot
-                            key={terminalId}
-                            tabId={terminalId}
-                            className={`terminal-wrapper ${terminalId === layout.secondary!.activeTerminalId ? 'visible' : 'hidden'}`}
-                          />
-                        ))}
-                        {layout.secondary.activeTerminalId && isOpen(layout.secondary.activeTerminalId) && (
-                          <SftpPanel sessionId={layout.secondary.activeTerminalId} />
-                        )}
-                      </div>
-                    </div>
+                {layout.mode === 'split' && layout.panes.length > 1 ? (
+                  <div ref={splitContainerRef} className={`split-view-container ${layout.direction} ${resizingDivider !== null ? 'resizing' : ''}`}>
+                    {/* Up to four screens, each with its tab strip; a divider between each two (lib/screenPanes.ts).
+                        primary / secondary stay as classes of the first two for styles and tests written for two. */}
+                    {layout.panes.map((pane, index) => {
+                      const activeId = pane.activeTerminalId
+                      const isFocused = layout.activePane === index
+                      const color = isFocused && activeId ? terminals.get(activeId)?.color : undefined
+                      return (
+                        <Fragment key={`screen-${index}`}>
+                          {index > 0 && (
+                            <div
+                              className={`split-divider ${layout.direction}`}
+                              data-divider={index - 1}
+                              onMouseDown={(e) => { e.preventDefault(); setResizingDivider(index - 1) }}
+                              onDoubleClick={() => setPaneSizes(evenSizes(layout.panes.length))}
+                              title="드래그로 크기 조절 · 더블클릭으로 모든 화면을 같은 크기로"
+                            />
+                          )}
+                          <div
+                            className={`split-pane ${index === 0 ? 'primary' : index === 1 ? 'secondary' : 'extra'} ${isFocused ? 'active-pane' : ''}`}
+                            data-screen={index}
+                            onMouseDown={() => setActivePaneType(index)}
+                            style={{ flex: layout.sizes[index] ?? 1 / layout.panes.length, ...(color ? { outlineColor: color } : {}) }}
+                          >
+                            <SplitPaneTabBar
+                              paneType={index === 0 ? 'primary' : 'secondary'}
+                              terminalIds={pane.terminalIds.filter(id => shownTabs.has(id))}
+                              activeTerminalId={activeId}
+                              isActivePane={isFocused}
+                              onTabSelect={(terminalId) => {
+                                setActivePaneTerminal(index, terminalId)
+                                setActivePaneType(index)
+                              }}
+                              onTabClose={(terminalId) => {
+                                removeTerminalFromPane(index, terminalId)
+                                handleCloseTerminal(terminalId)
+                              }}
+                              newTabMenu={renderPaneNewTabMenu(index)}
+                              onUnsplit={index === 0 ? closeSplit : undefined}
+                              onSftpToggle={activeId && isSshTab(terminals.get(activeId)) ? () => setOpen(activeId, !isOpen(activeId)) : undefined}
+                              sftpOpen={activeId ? isOpen(activeId) : false}
+                              onPaneFocus={() => setActivePaneType(index)}
+                              onTabDragStart={(id) => setSplitPaneDraggingTabId(id)}
+                              onTabDragEnd={handleScreenTabDragEnd}
+                              onTabDrop={(terminalId) => {
+                                moveTerminalBetweenPanes(terminalId, 0, index)
+                                setSplitPaneDraggingTabId(null)
+                              }}
+                              draggingTabId={splitPaneDraggingTabId}
+                            />
+                            <div className="split-pane-content">
+                              {pane.terminalIds.map(terminalId => (
+                                <TabSlot
+                                  key={terminalId}
+                                  tabId={terminalId}
+                                  className={`terminal-wrapper ${terminalId === activeId ? 'visible' : 'hidden'}`}
+                                />
+                              ))}
+                              {activeId && isOpen(activeId) && <SftpPanel sessionId={activeId} />}
+                            </div>
+                          </div>
+                        </Fragment>
+                      )
+                    })}
                   </div>
                 ) : (
                   terminalArray.map(([sessionId]) => (
@@ -1449,10 +1489,10 @@ function App() {
                     tree, not the DOM, and the tab drag-and-drop handlers are on .terminal-area. */}
                 {terminalArray.map(([sessionId, terminal]) => {
                   const pane = paneOfTab(sessionId)
-                  const paneState = pane === 'secondary' ? layout.secondary : layout.primary
+                  const paneState = pane === null ? null : layout.panes[pane]
                   return createPortal(
-                    <div className="tab-host-content" onMouseDown={pane ? () => setActivePaneType(pane) : undefined}>
-                    {pane
+                    <div className="tab-host-content" onMouseDown={pane !== null ? () => setActivePaneType(pane) : undefined}>
+                    {pane !== null
                       ? renderTabContent(
                           sessionId,
                           sessionId === paneState?.activeTerminalId,
@@ -1486,12 +1526,12 @@ function App() {
             </>
           ) : (
             <WelcomeScreen
+              showNewConnection={!areSessionsLoading && sessions.length === 0}
               onNewConnection={handleNewConnection}
-              onLocalTerminal={handleOpenWelcomeLocalTerminal}
-              onPickSession={sessions.length > 0 ? () => setSessionPickerOpen(true) : undefined}
             />
           )}
         </main>
+        {!zenMode && <WorkspacePanel />}
       </div>
       <Footer />
       <McpApprovalDialog />
@@ -1547,6 +1587,9 @@ function App() {
         onOpenSettings={handleOpenSettings}
         onOpenSnippetManager={handleOpenSnippetManager}
         onOpenWhatsNew={() => void handleOpenWhatsNew()}
+        onOpenBatch={() => setBatchModalOpen(true)}
+        onOpenStats={() => setStatsDashboardOpen(true)}
+        onOpenLocalProject={() => setLocalProjectOpen(true)}
       />
 
       {whatsNew && <WhatsNewDialog entries={whatsNew.entries} onClose={closeWhatsNew} />}
@@ -1588,6 +1631,14 @@ function App() {
             setRenamingTab(null)
           }}
         />
+      )}
+      {agentDropHover && (
+        <div className={`tab-merge-marker agent-drop-marker${agentDropHover.blocked ? ' is-blocked' : ''}${agentDropHover.onTab ? ' on-tab' : ''}${agentDropHover.replacement ? ' is-replacing' : ''}`} style={agentDropHover.box} role="status">
+          <span>{agentDropHover.blocked ?? (!agentDropHover.targetId ? '여기에 놓으면 새 탭에서 이어서 실행'
+            : agentDropHover.replacement ? '여기에 놓으면 기존 셸을 바꾸고 이어서 실행'
+            : agentDropHover.place?.isVacant ? '여기에 놓으면 이 빈 자리에서 이어서 실행'
+            : agentDropHover.place?.side ? `여기에 놓으면 이 칸의 ${sideWord(agentDropHover.place.side)}에서 이어서 실행` : '여기에 놓으면 이 탭의 새 칸에서 이어서 실행')}</span>
+        </div>
       )}
       {mergeHover && (
         <div className={`tab-merge-marker${mergeHover.blocked ? ' is-blocked' : ''}${mergeHover.onTab ? ' on-tab' : ''}`} style={mergeHover.box} role="status">

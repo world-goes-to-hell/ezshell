@@ -1,0 +1,92 @@
+/* The work selector at the start of the tab strip and its list (TabGroupChips.tsx) */
+.tab-group-select {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  max-width: 200px;
+  height: 26px;
+  margin-right: 6px;
+  padding: 0 6px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab-group-select:hover,
+.tab-group-select[data-state="open"] { border-color: var(--accent); }
+.tab-group-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tab-group-select > svg:first-child { color: var(--accent); flex: none; }
+
+.tab-group-select-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* How many works have tabs (there is more to pick) */
+.tab-group-select-more {
+  flex: none;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--bg-tertiary, var(--bg-secondary));
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 400;
+  text-align: center;
+}
+
+.tab-group-select-chevron { flex: none; color: var(--text-secondary); }
+
+.tab-group-menu {
+  min-width: 220px;
+  max-width: 320px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-elevated, var(--bg-secondary));
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.25));
+  z-index: 1000;
+}
+
+.tab-group-menu-label {
+  padding: 4px 8px 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.tab-group-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  outline: none;
+  cursor: pointer;
+}
+
+.tab-group-option[data-highlighted] { background: var(--bg-modifier-hover, var(--bg-hover)); }
+.tab-group-option > svg:first-child { flex: none; color: var(--text-secondary); }
+.tab-group-option.is-active > svg:first-child { color: var(--accent); }
+
+.tab-group-option-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-group-option.is-active .tab-group-option-name { font-weight: 600; }
+.tab-group-option-count { flex: none; color: var(--text-secondary); font-size: 11px; }
+.tab-group-option-check { flex: none; color: var(--accent); }

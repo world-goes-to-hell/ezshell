@@ -218,29 +218,44 @@
   margin-bottom: 0;
 }
 
-.password-input-wrapper,
+.password-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.password-input-wrapper input {
+  flex: 1;
+  min-width: 0;
+  padding-inline-end: 44px;
+}
+
 .file-input-wrapper {
   display: flex;
   gap: 8px;
 }
 
-.password-input-wrapper input,
 .file-input-wrapper input {
   flex: 1;
 }
 
 .password-toggle {
-  width: 42px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-primary);
+  position: absolute;
+  inset-inline-end: 8px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--transition-fast);
 }
 
 .password-toggle:hover {
-  border-color: var(--accent);
   color: var(--accent);
 }
 

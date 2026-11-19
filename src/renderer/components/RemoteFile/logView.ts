@@ -189,15 +189,15 @@ interface ProblemSelection {
 type ProblemChoice = () => ProblemSelection
 
 /**
- * Ctrl or Alt + wheel: one problem a notch; with Shift too: one marker a notch. Stops at the ends.
- * Both keys, because a lone Alt does not always reach the window: on the PC this was written for, some
- * program held the key back until its release, and the wheel events came without altKey.
+ * Alt + wheel: one problem a notch; with Shift too: one marker a notch. Stops at the ends.
+ * Ctrl + wheel used to do the same (a lone Alt does not reach the window on every PC), but it is the
+ * window's UI zoom now, as in every detached window (user's choice, 2026-11-19). F8 / F9 still move.
  */
 const wheelNavigation = (report: NavReport, selection: ProblemChoice) => ViewPlugin.define((view) => {
   const stepOf = createWheelStepper()
   const onWheel = (event: WheelEvent) => {
-    if (!(event.altKey || event.ctrlKey) || event.metaKey) return
-    // The text must not scroll while the key is held (and Ctrl + wheel must not zoom the window)
+    if (!event.altKey || event.ctrlKey || event.metaKey) return
+    // The text must not scroll while the key is held
     event.preventDefault()
     event.stopPropagation()
     const step = stepOf(event)

@@ -34,6 +34,9 @@ async function connectMcp() {
   const args = process.argv.slice(3)
   let entry
   if (!managedId) {
+    if (!claude && (!args.includes('--no-daemon') || !args.includes('--yolo'))) {
+      throw new Error('Manual Codex launch did not preserve its argument and use the per-terminal server')
+    }
     const { createEntry } = require('../../src/ipc/agentMessageSetup.js')
     entry = createEntry(kind, path.join(profile, 'agent-message-connection'))
   } else if (claude) {
@@ -42,6 +45,7 @@ async function connectMcp() {
     const spec = JSON.parse(fs.readFileSync(args[configIndex + 1], 'utf8')).mcpServers['ezshell-cli-mcp']
     if (spec.command !== '${EZSHELL_CLI_EXE}' || spec.args[0] !== '${EZSHELL_AGENT_MCP_SCRIPT}') throw new Error('Wrong Claude MCP config')
   } else {
+    if (!args.includes('--no-daemon')) throw new Error('Managed Codex is using the shared background server')
     for (const field of ['command=', 'args=', 'env_vars=']) {
       if (!args.some(value => value.startsWith('mcp_servers.ezshell-cli-mcp.' + field))) throw new Error('Missing Codex MCP argument ' + field)
     }

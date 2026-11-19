@@ -3,12 +3,13 @@
 // Run by e2e/run.js (fresh profile, no server needed).
 const fs = require('fs'), path = require('path')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const { findPage, isMainPage } = require('../support/driver')
 let failures = 0
 const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? '  -- ' + d : ''}`) }
 ;(async () => {
-  let list = []
-  for (let i = 0; i < 60 && !list.some((t) => t.type === 'page'); i++) { try { list = await (await fetch(process.env.E2E_CDP + '/json')).json() } catch {} await sleep(500) }
-  const ws = new WebSocket(list.find((t) => t.type === 'page').webSocketDebuggerUrl)
+  const mainPage = await findPage(isMainPage)
+  if (!mainPage) throw new Error('the app has no main page')
+  const ws = new WebSocket(mainPage.webSocketDebuggerUrl)
   await new Promise((res) => { ws.onopen = res })
   let id = 0; const pending = new Map()
   ws.onmessage = (e) => { const m = JSON.parse(e.data); if (pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) } }
@@ -63,7 +64,9 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   if (await js(`document.querySelectorAll('input[type=password]').length > 0`)) await js(`(() => { const set = ${SET}; [...document.querySelectorAll('input[type=password]')].forEach(i => set(i, 'test-pass-1234')); document.querySelector('button[type=submit]').click() })()`)
   await until(`!!document.querySelector('.btn-quick-connect')`)
   await sleep(800)
-  await js(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('로컬 터미널'))?.click()`)
+  // The sidebar's button, as local-split does (looking for any button with 로컬 터미널 in its text hit another one first)
+  await until(`!!document.querySelector('.local-terms-btn[aria-label="새 로컬 터미널"]')`)
+  await js(`document.querySelector('.local-terms-btn[aria-label="새 로컬 터미널"]').click()`)
   check('a local terminal tab opens with a PowerShell prompt', await ready(1), String((await texts())[0] || '').slice(-80))
 
 

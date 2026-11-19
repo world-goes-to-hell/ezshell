@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { singlePane, splitPane, nextPaneSeq, paneId, panePath, isSplitTree, type SplitNode, type SplitAxis, type PaneId } from '../lib/splitTree'
 import { takePendingSnapshot } from '../lib/terminalSnapshots'
 import { findTabPane } from '../lib/sessionTabs'
+import { addScreen, buildScreens, paneIndex, screenOfTab, screensOf, withoutTab, type PaneRef, type ScreenDirection, type ScreenLayout, type ScreenPane } from '../lib/screenPanes'
 import { linkConnected, linkDisconnected, linkReconnecting } from '../lib/connectionLost'
 import type { SSHConnectConfig } from '../hooks/useSSH'
 
@@ -47,13 +48,11 @@ export interface PaneState {
   activeTerminalId: string | null // 이 pane에서 활성화된 터미널
 }
 
-export interface LayoutState {
-  mode: 'single' | 'split'
-  direction: SplitDirection
-  primary: PaneState
-  secondary: PaneState | null
-  activePaneType: 'primary' | 'secondary' | null  // 현재 포커스된 pane
-}
+/**
+ * The screen split: up to four screens side by side (or one above the other), each with its own tab
+ * strip (lib/screenPanes.ts). `primary` / `secondary` / `activePaneType` are views of the first two.
+ */
+export type LayoutState = ScreenLayout
 
 type SshDataHandler = (data: string) => void
 
@@ -98,15 +97,18 @@ interface TerminalState {
 
   // Layout management
   setLayout: (layout: Partial<LayoutState>) => void
+  /** A new screen with this tab at the start ('primary') or end ('secondary'); nothing past four or the other way */
   splitWithSession: (sessionId: string, direction: SplitDirection, position: 'primary' | 'secondary') => void
   closeSplit: () => void
 
-  // Pane-level terminal management
-  addTerminalToPane: (paneType: 'primary' | 'secondary', terminalId: string) => void
-  removeTerminalFromPane: (paneType: 'primary' | 'secondary', terminalId: string) => void
-  setActivePaneTerminal: (paneType: 'primary' | 'secondary', terminalId: string) => void
-  moveTerminalBetweenPanes: (terminalId: string, fromPane: 'primary' | 'secondary', toPane: 'primary' | 'secondary') => void
-  setActivePaneType: (paneType: 'primary' | 'secondary' | null) => void
+  // Screen-level terminal management: a screen by index, or 'primary' / 'secondary' for the first two
+  addTerminalToPane: (pane: PaneRef, terminalId: string) => void
+  removeTerminalFromPane: (pane: PaneRef, terminalId: string) => void
+  setActivePaneTerminal: (pane: PaneRef, terminalId: string) => void
+  moveTerminalBetweenPanes: (terminalId: string, fromPane: PaneRef, toPane: PaneRef) => void
+  setActivePaneType: (pane: PaneRef | null) => void
+  /** The screens' shares (dragging a divider) */
+  setPaneSizes: (sizes: number[]) => void
 
   // Font management
   setFontSize: (size: number) => void
@@ -126,13 +128,15 @@ const sshDataHandlers = new Map<string, SshDataHandler>()
 // Buffer SSH data when no handler is registered (e.g. during pane split transitions)
 const sshDataBuffers = new Map<string, string[]>()
 
-const defaultLayout: LayoutState = {
-  mode: 'single',
-  direction: 'horizontal',
-  primary: { terminalIds: [], activeTerminalId: null },
-  secondary: null,
-  activePaneType: null
-}
+const defaultLayout: LayoutState = buildScreens({ panes: [] })
+
+/** The layout for these screens, keeping every open tab in some screen (lib/screenPanes.ts) */
+const screens = (state: { layout: LayoutState; terminals: Map<string, TerminalInfo> }, input: {
+  panes: ScreenPane[]; sizes?: number[]; activePane?: number | null; direction?: ScreenDirection; allIds?: string[]
+}): LayoutState => buildScreens({
+  sizes: state.layout.sizes, activePane: state.layout.activePane, direction: state.layout.direction,
+  allIds: [...state.terminals.keys()], ...input
+})
 
 const DEFAULT_FONT_SIZE = 14
 const MIN_FONT_SIZE = 10
@@ -165,14 +169,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const newTerminals = new Map(state.terminals)
     newTerminals.set(sessionId, info)
 
-    // Also add to layout's primary pane (if not in split mode, or if in single mode)
-    const newLayout = { ...state.layout }
-    if (!newLayout.primary.terminalIds.includes(sessionId)) {
-      newLayout.primary = {
-        terminalIds: [...newLayout.primary.terminalIds, sessionId],
-        activeTerminalId: sessionId
-      }
-    }
+    // A new tab joins the first screen (App moves it to the focused screen when the screen is split)
+    const [first, ...rest] = state.layout.panes
+    const panes = first && !first.terminalIds.includes(sessionId)
+      ? [{ terminalIds: [...first.terminalIds, sessionId], activeTerminalId: sessionId }, ...rest]
+      : state.layout.panes
+    const newLayout = screens(state, { panes, allIds: [...newTerminals.keys()] })
 
     return {
       terminals: newTerminals,
@@ -190,56 +192,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     // terminal output can contain secrets
     takePendingSnapshot(sessionId)
 
-    // If active terminal was removed, switch to another
+    const newLayout = screens(state, { panes: withoutTab(state.layout.panes, sessionId), allIds: [...newTerminals.keys()] })
+    // The closed tab was in front: the front tab of the focused screen, else the last tab
     let newActiveId = state.activeTerminalId
     if (state.activeTerminalId === sessionId) {
+      const focused = newLayout.panes[newLayout.activePane ?? 0]?.activeTerminalId
       const remaining = Array.from(newTerminals.keys())
-      newActiveId = remaining.length > 0 ? remaining[remaining.length - 1] : null
-    }
-
-    // Remove from panes as well
-    let newLayout = { ...state.layout }
-    const newPrimary = { ...newLayout.primary }
-    newPrimary.terminalIds = newPrimary.terminalIds.filter(id => id !== sessionId)
-    if (newPrimary.activeTerminalId === sessionId) {
-      newPrimary.activeTerminalId = newPrimary.terminalIds[0] || null
-    }
-    newLayout.primary = newPrimary
-
-    if (newLayout.secondary) {
-      const newSecondary = { ...newLayout.secondary }
-      newSecondary.terminalIds = newSecondary.terminalIds.filter(id => id !== sessionId)
-      if (newSecondary.activeTerminalId === sessionId) {
-        newSecondary.activeTerminalId = newSecondary.terminalIds[0] || null
-      }
-
-      // If secondary pane is now empty, close split
-      if (newSecondary.terminalIds.length === 0) {
-        newLayout = {
-          mode: 'single',
-          direction: 'horizontal',
-          primary: newPrimary,
-          secondary: null,
-          activePaneType: null
-        }
-        if (newPrimary.activeTerminalId) {
-          newActiveId = newPrimary.activeTerminalId
-        }
-      } else {
-        newLayout.secondary = newSecondary
-      }
-    }
-
-    // If primary is empty but secondary has terminals, move them to primary
-    if (newLayout.primary.terminalIds.length === 0 && newLayout.secondary && newLayout.secondary.terminalIds.length > 0) {
-      newLayout = {
-        mode: 'single',
-        direction: 'horizontal',
-        primary: newLayout.secondary,
-        secondary: null,
-        activePaneType: null
-      }
-      newActiveId = newLayout.primary.activeTerminalId
+      newActiveId = focused ?? (remaining.length > 0 ? remaining[remaining.length - 1] : null)
     }
 
     return {
@@ -260,27 +219,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       }
     }
 
-    // If in split mode and clicking on a tab not in split view, close split
+    // A tab outside every screen of a split: the split closes, all tabs in one screen
     let newLayout = state.layout
-    if (state.layout.mode === 'split' && sessionId) {
-      const isInPrimary = state.layout.primary.terminalIds.includes(sessionId)
-      const isInSecondary = state.layout.secondary?.terminalIds.includes(sessionId) || false
-      if (!isInPrimary && !isInSecondary) {
-        // Close split view when switching to a terminal outside the split
-        // Merge all terminals to primary
-        const allTerminalIds = [
-          ...state.layout.primary.terminalIds,
-          ...(state.layout.secondary?.terminalIds || []),
-          sessionId
-        ].filter((id, index, self) => self.indexOf(id) === index) // dedupe
-        newLayout = {
-          mode: 'single',
-          direction: 'horizontal',
-          primary: { terminalIds: allTerminalIds, activeTerminalId: sessionId },
-          secondary: null,
-          activePaneType: null
-        }
-      }
+    if (state.layout.mode === 'split' && sessionId && screenOfTab(state.layout.panes, sessionId) < 0) {
+      const allIds = [...state.layout.panes.flatMap(pane => pane.terminalIds), sessionId]
+      newLayout = screens(state, { panes: [{ terminalIds: allIds, activeTerminalId: sessionId }], activePane: null })
     }
 
     return {
@@ -295,7 +238,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     if (!terminals.has(sessionId)) return
 
     const pane = findTabPane(layout, sessionId)
-    if (pane) {
+    // A screen index: 0 is the first screen, null means not in a split
+    if (pane !== null) {
       // Same as clicking the tab in its pane; setActiveTerminal would not move the pane's own active tab
       setActivePaneTerminal(pane, sessionId)
       setActivePaneType(pane)
@@ -418,273 +362,73 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     return { terminals: newTerminals }
   }),
 
-  setLayout: (layoutUpdate) => set((state) => ({
-    layout: { ...state.layout, ...layoutUpdate }
-  })),
+  setLayout: (update) => set((state) => {
+    // Written the old way (primary / secondary): the screens are read from those
+    const merged = { ...state.layout, ...update }
+    const panes = update.panes ?? (update.primary || update.secondary !== undefined || update.mode
+      ? screensOf({ mode: merged.mode, primary: merged.primary, secondary: merged.secondary })
+      : state.layout.panes)
+    const activePane = update.activePane !== undefined ? update.activePane
+      : update.activePaneType !== undefined ? (update.activePaneType === null ? null : paneIndex(update.activePaneType))
+      : merged.activePane
+    return { layout: screens(state, { panes, sizes: merged.sizes, activePane, direction: merged.direction as ScreenDirection }) }
+  }),
 
   splitWithSession: (sessionId, direction, position) => set((state) => {
-    const currentActive = state.activeTerminalId
-    // Get ALL terminal IDs from the terminals Map (not just from layout)
-    const allTerminalIds = Array.from(state.terminals.keys())
-    // Other terminals = all terminals except the one being split off
-    const otherTerminalIds = allTerminalIds.filter(id => id !== sessionId)
-
-    if (position === 'secondary') {
-      // Dropped session goes to secondary, others stay in primary
-      const newLayout = {
-        mode: 'split' as const,
-        direction,
-        primary: {
-          terminalIds: otherTerminalIds.length > 0 ? otherTerminalIds : (currentActive && currentActive !== sessionId ? [currentActive] : []),
-          activeTerminalId: currentActive !== sessionId ? currentActive : (otherTerminalIds[0] || null)
-        },
-        secondary: {
-          terminalIds: [sessionId],
-          activeTerminalId: sessionId
-        },
-        activePaneType: 'secondary' as const
-      }
-      return { layout: newLayout }
-    } else {
-      // Dropped session goes to primary, others go to secondary
-      const newLayout = {
-        mode: 'split' as const,
-        direction,
-        primary: {
-          terminalIds: [sessionId],
-          activeTerminalId: sessionId
-        },
-        secondary: {
-          terminalIds: otherTerminalIds.length > 0 ? otherTerminalIds : (currentActive && currentActive !== sessionId ? [currentActive] : []),
-          activeTerminalId: currentActive !== sessionId ? currentActive : (otherTerminalIds[0] || null)
-        },
-        activePaneType: 'primary' as const
-      }
-      return { layout: newLayout }
-    }
+    // A new screen at the start ('primary') or end ('secondary'), up to four, all one way
+    const way: ScreenDirection = direction === 'vertical' ? 'vertical' : 'horizontal'
+    const added = addScreen(state.layout, sessionId, position === 'primary' ? 'start' : 'end', way)
+    if (!added) return state
+    return { layout: screens(state, { ...added, direction: way }), activeTerminalId: sessionId }
   }),
 
   closeSplit: () => set((state) => {
-    // Merge all terminals from both panes to primary
-    const primaryIds = state.layout.primary.terminalIds
-    const secondaryIds = state.layout.secondary?.terminalIds || []
-    const allIds = [...primaryIds, ...secondaryIds]
-
-    // Determine active terminal: prefer secondary's active, then primary's, then first available
-    const activeId = state.layout.secondary?.activeTerminalId ||
-                     state.layout.primary.activeTerminalId ||
-                     allIds[0] || null
-
+    const { panes, activePane } = state.layout
+    const allIds = panes.flatMap(pane => pane.terminalIds)
+    const activeId = panes[activePane ?? 0]?.activeTerminalId || panes[0]?.activeTerminalId || allIds[0] || null
     return {
-      layout: {
-        mode: 'single',
-        direction: 'horizontal',
-        primary: { terminalIds: allIds, activeTerminalId: activeId },
-        secondary: null,
-        activePaneType: null
-      },
+      layout: screens(state, { panes: [{ terminalIds: allIds, activeTerminalId: activeId }], activePane: null }),
       activeTerminalId: activeId
     }
   }),
 
-  // Pane-level terminal management
-  addTerminalToPane: (paneType, terminalId) => set((state) => {
-    const newLayout = { ...state.layout }
-
-    // Check if terminal exists in another pane - if so, remove it first (auto-move)
-    if (paneType === 'secondary' && newLayout.primary.terminalIds.includes(terminalId)) {
-      newLayout.primary = {
-        ...newLayout.primary,
-        terminalIds: newLayout.primary.terminalIds.filter(id => id !== terminalId),
-        activeTerminalId: newLayout.primary.activeTerminalId === terminalId
-          ? (newLayout.primary.terminalIds.filter(id => id !== terminalId)[0] || null)
-          : newLayout.primary.activeTerminalId
-      }
-    } else if (paneType === 'primary' && newLayout.secondary?.terminalIds.includes(terminalId)) {
-      newLayout.secondary = {
-        ...newLayout.secondary,
-        terminalIds: newLayout.secondary.terminalIds.filter(id => id !== terminalId),
-        activeTerminalId: newLayout.secondary.activeTerminalId === terminalId
-          ? (newLayout.secondary.terminalIds.filter(id => id !== terminalId)[0] || null)
-          : newLayout.secondary.activeTerminalId
-      }
-    }
-
-    // Add to target pane
-    if (paneType === 'primary') {
-      if (!newLayout.primary.terminalIds.includes(terminalId)) {
-        newLayout.primary = {
-          terminalIds: [...newLayout.primary.terminalIds, terminalId],
-          activeTerminalId: terminalId
-        }
-      }
-    } else if (paneType === 'secondary' && newLayout.secondary) {
-      if (!newLayout.secondary.terminalIds.includes(terminalId)) {
-        newLayout.secondary = {
-          terminalIds: [...newLayout.secondary.terminalIds, terminalId],
-          activeTerminalId: terminalId
-        }
-      }
-    }
-
-    // Check if source pane became empty - if so, close split
-    if (newLayout.secondary && newLayout.secondary.terminalIds.length === 0) {
-      return {
-        layout: {
-          mode: 'single',
-          direction: 'horizontal',
-          primary: newLayout.primary,
-          secondary: null,
-          activePaneType: null
-        }
-      }
-    }
-    if (newLayout.primary.terminalIds.length === 0 && newLayout.secondary) {
-      return {
-        layout: {
-          mode: 'single',
-          direction: 'horizontal',
-          primary: newLayout.secondary,
-          secondary: null,
-          activePaneType: null
-        }
-      }
-    }
-
-    return { layout: newLayout }
+  // Pane-level terminal management (a screen by index, or 'primary' / 'secondary' for the first two)
+  addTerminalToPane: (paneRef, terminalId) => set((state) => {
+    const index = paneIndex(paneRef)
+    if (index >= state.layout.panes.length) return state
+    const panes = withoutTab(state.layout.panes, terminalId)
+      .map((pane, at) => (at === index ? { terminalIds: [...pane.terminalIds, terminalId], activeTerminalId: terminalId } : pane))
+    return { layout: screens(state, { panes }) }
   }),
 
-  removeTerminalFromPane: (paneType, terminalId) => set((state) => {
-    const newLayout = { ...state.layout }
-
-    if (paneType === 'primary') {
-      const newTerminalIds = newLayout.primary.terminalIds.filter(id => id !== terminalId)
-      const newActiveId = newLayout.primary.activeTerminalId === terminalId
-        ? (newTerminalIds[0] || null)
-        : newLayout.primary.activeTerminalId
-      newLayout.primary = { terminalIds: newTerminalIds, activeTerminalId: newActiveId }
-
-      // If primary became empty, close split and move secondary to primary
-      if (newTerminalIds.length === 0 && newLayout.secondary) {
-        return {
-          layout: {
-            mode: 'single',
-            direction: 'horizontal',
-            primary: newLayout.secondary,
-            secondary: null,
-            activePaneType: null
-          },
-          activeTerminalId: newLayout.secondary.activeTerminalId
-        }
-      }
-    } else if (paneType === 'secondary' && newLayout.secondary) {
-      const newTerminalIds = newLayout.secondary.terminalIds.filter(id => id !== terminalId)
-      const newActiveId = newLayout.secondary.activeTerminalId === terminalId
-        ? (newTerminalIds[0] || null)
-        : newLayout.secondary.activeTerminalId
-
-      // If secondary became empty, close split
-      if (newTerminalIds.length === 0) {
-        return {
-          layout: {
-            mode: 'single',
-            direction: 'horizontal',
-            primary: newLayout.primary,
-            secondary: null,
-            activePaneType: null
-          },
-          activeTerminalId: newLayout.primary.activeTerminalId
-        }
-      }
-
-      newLayout.secondary = { terminalIds: newTerminalIds, activeTerminalId: newActiveId }
-    }
-
-    return { layout: newLayout }
+  removeTerminalFromPane: (paneRef, terminalId) => set((state) => {
+    const index = paneIndex(paneRef)
+    const panes = state.layout.panes.map((pane, at) => (at === index ? { ...pane, terminalIds: pane.terminalIds.filter(id => id !== terminalId) } : pane))
+    // Taken out of the screens on purpose (closing it): not put back into the first screen
+    const layout = buildScreens({ panes, sizes: state.layout.sizes, activePane: state.layout.activePane, direction: state.layout.direction })
+    const focused = layout.panes[layout.activePane ?? 0]
+    return { layout, activeTerminalId: focused?.activeTerminalId ?? state.activeTerminalId }
   }),
 
-  setActivePaneTerminal: (paneType, terminalId) => set((state) => {
-    const newLayout = { ...state.layout }
-
-    if (paneType === 'primary' && newLayout.primary.terminalIds.includes(terminalId)) {
-      newLayout.primary = { ...newLayout.primary, activeTerminalId: terminalId }
-    } else if (paneType === 'secondary' && newLayout.secondary?.terminalIds.includes(terminalId)) {
-      newLayout.secondary = { ...newLayout.secondary, activeTerminalId: terminalId }
-    }
-
-    return {
-      layout: newLayout,
-      activeTerminalId: terminalId
-    }
+  setActivePaneTerminal: (paneRef, terminalId) => set((state) => {
+    const index = paneIndex(paneRef)
+    const panes = state.layout.panes.map((pane, at) => (at === index && pane.terminalIds.includes(terminalId) ? { ...pane, activeTerminalId: terminalId } : pane))
+    return { layout: screens(state, { panes }), activeTerminalId: terminalId }
   }),
 
-  moveTerminalBetweenPanes: (terminalId, fromPane, toPane) => set((state) => {
-    if (fromPane === toPane) return state
-
-    const newLayout = { ...state.layout }
-
-    // Remove from source pane
-    if (fromPane === 'primary') {
-      newLayout.primary = {
-        ...newLayout.primary,
-        terminalIds: newLayout.primary.terminalIds.filter(id => id !== terminalId),
-        activeTerminalId: newLayout.primary.activeTerminalId === terminalId
-          ? (newLayout.primary.terminalIds.filter(id => id !== terminalId)[0] || null)
-          : newLayout.primary.activeTerminalId
-      }
-    } else if (newLayout.secondary) {
-      newLayout.secondary = {
-        ...newLayout.secondary,
-        terminalIds: newLayout.secondary.terminalIds.filter(id => id !== terminalId),
-        activeTerminalId: newLayout.secondary.activeTerminalId === terminalId
-          ? (newLayout.secondary.terminalIds.filter(id => id !== terminalId)[0] || null)
-          : newLayout.secondary.activeTerminalId
-      }
-    }
-
-    // Add to target pane
-    if (toPane === 'primary') {
-      newLayout.primary = {
-        terminalIds: [...newLayout.primary.terminalIds, terminalId],
-        activeTerminalId: terminalId
-      }
-    } else if (newLayout.secondary) {
-      newLayout.secondary = {
-        terminalIds: [...newLayout.secondary.terminalIds, terminalId],
-        activeTerminalId: terminalId
-      }
-    }
-
-    // Check if source pane became empty
-    if (newLayout.secondary && newLayout.secondary.terminalIds.length === 0) {
-      return {
-        layout: {
-          mode: 'single',
-          direction: 'horizontal',
-          primary: newLayout.primary,
-          secondary: null,
-          activePaneType: null
-        }
-      }
-    }
-    if (newLayout.primary.terminalIds.length === 0 && newLayout.secondary) {
-      return {
-        layout: {
-          mode: 'single',
-          direction: 'horizontal',
-          primary: newLayout.secondary,
-          secondary: null,
-          activePaneType: null
-        }
-      }
-    }
-
-    return { layout: newLayout, activePaneType: toPane }
+  moveTerminalBetweenPanes: (terminalId, _fromPane, toPaneRef) => set((state) => {
+    const to = paneIndex(toPaneRef)
+    if (to >= state.layout.panes.length || state.layout.panes[to].terminalIds.includes(terminalId)) return state
+    const panes = withoutTab(state.layout.panes, terminalId)
+      .map((pane, at) => (at === to ? { terminalIds: [...pane.terminalIds, terminalId], activeTerminalId: terminalId } : pane))
+    return { layout: screens(state, { panes, activePane: to }) }
   }),
 
-  setActivePaneType: (paneType) => set((state) => ({
-    layout: { ...state.layout, activePaneType: paneType }
+  setActivePaneType: (paneRef) => set((state) => ({
+    layout: screens(state, { panes: state.layout.panes, activePane: paneRef === null ? null : paneIndex(paneRef) })
   })),
+
+  setPaneSizes: (sizes) => set((state) => ({ layout: screens(state, { panes: state.layout.panes, sizes }) })),
 
   registerSshDataHandler: (sessionId, handler) => {
     sshDataHandlers.set(sessionId, handler)

@@ -13,7 +13,8 @@ import { captureDrawnSnapshot, setPendingSnapshot } from './terminalSnapshots'
 import { focusTabPane } from './paneFocus'
 
 export type MoveResult = { ok: true; sessionId: string } | { ok: false; error: string }
-type Side = 'primary' | 'secondary'
+/** A screen of the split view by index (up to four, lib/screenPanes.ts) */
+type Side = number
 const moves = new Set<string>()
 
 /** The pane's place becomes empty and the new tab appears, on the side it was dropped on */
@@ -26,12 +27,13 @@ function placeTab(ownerId: string, pane: PaneId, info: TerminalInfo, targetPane:
   }
   // In the split view the tab goes to the side it was dropped on (without one: beside the tab it
   // came from). That side gets the focus first, so App's "new tab follows the focused side" agrees.
-  const isSplitView = store.layout.mode === 'split' && !!store.layout.secondary
-  const side = !isSplitView ? null : targetPane ?? (store.layout.secondary?.terminalIds.includes(ownerId) ? 'secondary' : 'primary')
-  if (side) store.setActivePaneType(side)
+  const isSplitView = store.layout.mode === 'split' && store.layout.panes.length > 1
+  const owner = store.layout.panes.findIndex(item => item.terminalIds.includes(ownerId))
+  const side = !isSplitView ? null : targetPane ?? Math.max(0, owner)
+  if (side !== null) store.setActivePaneType(side)
   store.addTerminal(info.id, { ...info, paneArrival: { pane: MAIN_PANE, seq: 1 } })
-  // New tabs land in the first pane
-  if (side === 'secondary') useTerminalStore.getState().moveTerminalBetweenPanes(info.id, 'primary', 'secondary')
+  // New tabs land in the first screen
+  if (side) useTerminalStore.getState().moveTerminalBetweenPanes(info.id, 0, side)
 }
 
 /** `targetPane`: in the split view, the side whose tab strip the pane was dropped on */
@@ -100,6 +102,43 @@ export async function mergePanes(ownerId: string, stay: PaneId, close: PaneId): 
     }
     focusTabPane(store.focusTerminal, ownerId, stay === replacement ? MAIN_PANE : stay)
     requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
+    return { ok: true, sessionId: ownerId }
+  } finally {
+    moves.delete(ownerId)
+  }
+}
+
+/**
+ * Closes one pane of a split tab (`이 칸 닫기`). The tab's first terminal closes too: another live
+ * shell of the tab takes over the main role first (as when the main shell moves to a tab of its own),
+ * so the tab keeps its SFTP, port forwards and name.
+ */
+export async function closeTabPane(ownerId: string, pane: PaneId): Promise<MoveResult> {
+  const store = useTerminalStore.getState()
+  const owner = store.terminals.get(ownerId)
+  if (!owner?.splitTree || !paneIds(owner.splitTree).includes(pane)) return { ok: false, error: '닫을 칸을 찾지 못했습니다.' }
+  if (pane !== MAIN_PANE) {
+    store.setSplitTree(ownerId, closePane(owner.splitTree, pane))
+    return { ok: true, sessionId: ownerId }
+  }
+  const replacement = readyPane(owner, paneIds(owner.splitTree).filter(id => id !== MAIN_PANE))
+  if (!replacement) return { ok: false, error: '이 탭에 남을 셸의 연결이 끝난 뒤 다시 시도해 주세요.' }
+  if (moves.has(ownerId)) return { ok: false, error: '이 탭의 셸을 옮기는 중입니다.' }
+  moves.add(ownerId)
+  try {
+    if (owner.local) {
+      const oldShellId = promoteLocal(owner, replacement)
+      if (!oldShellId) return { ok: false, error: '남길 셸을 찾지 못했습니다.' }
+      window.electronAPI.localShellClose?.(oldShellId)
+    } else {
+      const promoted = await promoteSsh(ownerId, replacement, true)
+      if ('error' in promoted) return { ok: false, error: promoted.error }
+    }
+    const current = useTerminalStore.getState().terminals.get(ownerId)
+    if (!current?.splitTree) return { ok: false, error: '원래 탭이 닫혔습니다.' }
+    // The replacement's place becomes the main terminal; the old main's place closes
+    store.setSplitTree(ownerId, closePane(swapPanes(current.splitTree, MAIN_PANE, replacement), replacement))
+    focusTabPane(store.focusTerminal, ownerId, MAIN_PANE)
     return { ok: true, sessionId: ownerId }
   } finally {
     moves.delete(ownerId)

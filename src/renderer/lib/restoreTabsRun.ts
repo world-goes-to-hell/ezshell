@@ -77,6 +77,21 @@ function layOut(record: RestoreRecord, ids: Array<string | null>): void {
   const store = useTerminalStore.getState()
   const at = (index: number | undefined) => (index === undefined ? null : ids[index] ?? null)
   const split = record.split
+  // Every screen at once (records with the screen list: up to four screens and their shares)
+  if (split?.panes && store.layout.mode !== 'split') {
+    const panes = split.panes.map((pane, index) => {
+      const terminalIds = pane.map(at).filter((id): id is string => !!id)
+      const active = at(split.actives?.[index] ?? undefined)
+      return { terminalIds, activeTerminalId: active && terminalIds.includes(active) ? active : terminalIds[0] ?? null }
+    })
+    if (panes.filter(pane => pane.terminalIds.length > 0).length > 1) {
+      store.setLayout({ mode: 'split', direction: split.direction, panes, sizes: split.sizes, activePane: split.focusPane ?? 0 })
+      const after = useTerminalStore.getState().layout
+      const front = after.panes[after.activePane ?? 0]?.activeTerminalId
+      if (front) useTerminalStore.getState().setActiveTerminal(front)
+      return
+    }
+  }
   if (split && store.layout.mode !== 'split') {
     const secondary = split.secondary.map(at).filter((id): id is string => !!id)
     const primary = split.primary.map(at).filter((id): id is string => !!id)

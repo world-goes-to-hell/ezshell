@@ -92,9 +92,14 @@ const KEYS = { F8: 119, F9: 120, m: 77, Enter: 13 }
   await wheel(100, ALT)
   check('at the last one the text does not scroll either', (await page.js(`document.querySelector('.cm-scroller').scrollTop`)) === scrollBefore && (await position()) === '3/3')
 
+  // Ctrl + wheel is the window's own UI zoom (as in every detached window), not a move
+  const zoomOf = () => page.js(`window.electronAPI.getAppZoomFactor()`)
   await wheel(-100, CTRL)
-  check('Ctrl + wheel does the same (a lone Alt does not reach the window on every PC)', (await position()) === '2/3', await position())
+  check('Ctrl + wheel zooms this window instead of moving', Math.abs((await zoomOf()) - 1.1) < 0.01 && (await position()) === '3/3', `${await zoomOf()} ${await position()}`)
+  check('and shows the zoom bubble', await page.until(`document.querySelector('.zoom-hud-value')?.textContent === '110%'`, 3000))
+  check('the zoom is kept for the next window of this kind', (await page.js(`localStorage.getItem('windowZoom:remoteFile')`)) === '1.1')
   await wheel(100, CTRL)
+  check('Ctrl + wheel down zooms back', Math.abs((await zoomOf()) - 1) < 0.01, String(await zoomOf()))
 
   // ---- A list row ----
   await page.js(`[...document.querySelectorAll('.remote-log-problem-row')].find(r => r.textContent.includes('request failed')).click()`)
@@ -167,7 +172,7 @@ const KEYS = { F8: 119, F9: 120, m: 77, Enter: 13 }
   await key('F8', CTRL | SHIFT)
   await key('F8')
   check('with 오류 chosen, F8 skips the warning', (await cursorLine()) === 130 && (await position()) === '오류 2/3', `line ${await cursorLine()}, ${await position()}`)
-  await wheel(-100, CTRL)
+  await wheel(-100, ALT)
   check('and so does the wheel', (await cursorLine()) === 2, `line ${await cursorLine()}`)
   await pickLevel('경고')
   await focusLog()

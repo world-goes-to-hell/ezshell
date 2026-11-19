@@ -1,3 +1,4 @@
+import { buildScreens } from './screenPanes'
 import { describe, it, expect } from 'vitest'
 import { buildRestoreRecord, readRestoreRecord, cdCommand, withoutVacants, reopenable, type RecordSource } from './restoreTabs'
 import type { TerminalInfo, LayoutState } from '../stores/terminalStore'
@@ -7,10 +8,47 @@ const pane = (id: string): SplitNode => ({ kind: 'pane', pane: id })
 const row = (first: SplitNode, second: SplitNode): SplitNode => ({ kind: 'split', axis: 'row', ratio: 0.5, first, second })
 const config = (extra: Record<string, unknown>) => ({ host: '10.0.0.5', port: 22, username: 'deploy', authType: 'password', password: 'secret-pw', ...extra }) as unknown as TerminalInfo['connectConfig']
 const ssh = (id: string, saved: string | null, extra: Partial<TerminalInfo> = {}): TerminalInfo => ({ id, host: '10.0.0.5', username: 'deploy', connected: true, connectConfig: config({ savedSessionId: saved }), ...extra })
-const single = (ids: string[]): LayoutState => ({ mode: 'single', direction: 'horizontal', primary: { terminalIds: ids, activeTerminalId: ids[0] ?? null }, secondary: null, activePaneType: null })
+const single = (ids: string[]): LayoutState => buildScreens({ panes: [{ terminalIds: ids, activeTerminalId: ids[0] ?? null }] })
 const source = (tabs: TerminalInfo[], extra: Partial<RecordSource> = {}): RecordSource => ({
   terminals: new Map(tabs.map(tab => [tab.id, tab])), layout: single(tabs.map(tab => tab.id)), activeId: tabs[0]?.id ?? null,
   sftpPathOf: () => null, detached: [], ...extra
+})
+
+describe('agents in local tabs', () => {
+  const CLAUDE = 'abcdef12-1111-4222-8333-444455556666'
+  const CODEX = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
+  const local = (id: string, extra: Partial<TerminalInfo> = {}): TerminalInfo => ({ id, host: '이 PC', username: '', connected: true, local: { shell: 'PowerShell', cwd: 'D:\work\gsd' }, ...extra })
+
+  it('keeps which agent session ran in each pane of a local tab', () => {
+    const record = buildRestoreRecord(source([local('local:1', { splitTree: row(pane('main'), pane('split-1')), paneSeq: 1 })], {
+      agentsOf: () => [{ pane: 'main', agent: 'codex', sessionId: CODEX }, { pane: 'split-1', agent: 'claude', sessionId: CLAUDE }]
+    }))
+    expect(record.tabs[0]).toMatchObject({ kind: 'local', agents: [{ pane: 'main', agent: 'codex', sessionId: CODEX }, { pane: 'split-1', agent: 'claude', sessionId: CLAUDE }] })
+  })
+
+  it('reads back only well-formed agents of panes the tab has', () => {
+    const back = readRestoreRecord({ version: 1, tabs: [{
+      kind: 'local', cwd: 'D:\work', splitTree: row(pane('main'), pane('split-1')), paneSeq: 1,
+      agents: [
+        { pane: 'main', agent: 'codex', sessionId: CODEX },
+        { pane: 'split-1', agent: 'claude', sessionId: 'x; rm -rf /' },
+        { pane: 'split-9', agent: 'claude', sessionId: CLAUDE },
+        { pane: 'split-1', agent: 'bash', sessionId: CLAUDE }
+      ]
+    }] })
+    expect(back?.tabs[0]).toMatchObject({ agents: [{ pane: 'main', agent: 'codex', sessionId: CODEX }] })
+  })
+
+  it('keeps an agent that never had a conversation (no session id), so it starts again fresh', () => {
+    const record = buildRestoreRecord(source([local('local:1')], { agentsOf: () => [{ pane: 'main', agent: 'codex' }] }))
+    expect(record.tabs[0]).toMatchObject({ agents: [{ pane: 'main', agent: 'codex' }] })
+    const back = readRestoreRecord({ version: 1, tabs: [{ kind: 'local', cwd: 'D:\work', agents: [{ pane: 'main', agent: 'claude' }, { pane: 'main', agent: 'codex', sessionId: 'bad id' }] }] })
+    expect(back?.tabs[0]).toMatchObject({ agents: [{ pane: 'main', agent: 'claude' }] })
+  })
+
+  it('leaves agents out when none ran', () => {
+    expect(buildRestoreRecord(source([local('local:1')])).tabs[0]).not.toHaveProperty('agents')
+  })
 })
 
 describe('buildRestoreRecord', () => {
@@ -43,9 +81,22 @@ describe('buildRestoreRecord', () => {
   })
 
   it('keeps the two sides of a divided screen', () => {
-    const layout: LayoutState = { mode: 'split', direction: 'vertical', primary: { terminalIds: ['1'], activeTerminalId: '1' }, secondary: { terminalIds: ['2', '3'], activeTerminalId: '3' }, activePaneType: 'secondary' }
+    const layout: LayoutState = buildScreens({ panes: [{ terminalIds: ['1'], activeTerminalId: '1' }, { terminalIds: ['2', '3'], activeTerminalId: '3' }], activePane: 1, direction: 'vertical' })
     const record = buildRestoreRecord(source([ssh('1', 's1'), ssh('2', 's2'), ssh('3', 's3')], { layout }))
-    expect(record.split).toEqual({ direction: 'vertical', primary: [0], secondary: [1, 2], primaryActive: 0, secondaryActive: 2, focus: 'secondary' })
+    expect(record.split).toEqual({
+      direction: 'vertical', primary: [0], secondary: [1, 2], primaryActive: 0, secondaryActive: 2, focus: 'secondary',
+      panes: [[0], [1, 2]], actives: [0, 2], sizes: [0.5, 0.5], focusPane: 1
+    })
+  })
+
+  it('keeps three screens with their shares and reads them back', () => {
+    const layout: LayoutState = buildScreens({
+      panes: [{ terminalIds: ['1'], activeTerminalId: '1' }, { terminalIds: ['2'], activeTerminalId: '2' }, { terminalIds: ['3'], activeTerminalId: '3' }],
+      sizes: [0.5, 0.25, 0.25], activePane: 2, direction: 'horizontal'
+    })
+    const record = buildRestoreRecord(source([ssh('1', 's1'), ssh('2', 's2'), ssh('3', 's3')], { layout }))
+    expect(record.split).toMatchObject({ panes: [[0], [1], [2]], sizes: [0.5, 0.25, 0.25], focusPane: 2 })
+    expect(readRestoreRecord(JSON.parse(JSON.stringify(record)))?.split).toMatchObject({ panes: [[0], [1], [2]], actives: [0, 1, 2], sizes: [0.5, 0.25, 0.25], focusPane: 2 })
   })
 })
 

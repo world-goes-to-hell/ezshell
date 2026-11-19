@@ -1,3 +1,4 @@
+import { buildScreens } from '../lib/screenPanes'
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useTerminalStore, type TerminalInfo } from './terminalStore'
 
@@ -13,13 +14,7 @@ const reset = () => useTerminalStore.setState({
   terminals: new Map(),
   activeTerminalId: null,
   focusRequest: null,
-  layout: {
-    mode: 'single',
-    direction: 'horizontal',
-    primary: { terminalIds: [], activeTerminalId: null },
-    secondary: null,
-    activePaneType: null
-  }
+  layout: buildScreens({ panes: [] })
 })
 
 describe('focusTerminal', () => {

@@ -1,6 +1,6 @@
 const fs = require('fs')
 const path = require('path')
-const { connect, createChecks, sleep, unlock } = require('../support/driver')
+const { connect, createChecks, sleep, unlock, openLocalProject } = require('../support/driver')
 
 const { check, finish } = createChecks()
 const profile = process.env.E2E_PROFILE
@@ -51,7 +51,7 @@ async function run() {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
     await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([profile]))})`)
     async function openAgent(kind, id) {
-      await js(`document.querySelector('button[aria-label="로컬 작업"]').click()`)
+      await openLocalProject(driver)
       await until(`!!document.querySelector('#local-project-agent')`)
       await js(`(() => {
         const select = document.querySelector('#local-project-agent')
@@ -118,7 +118,7 @@ async function run() {
     check('the arrival is shown beside the receiver with the sender and recipient', await noticeAt(claudeMail, 'codex-1 → claude-2'))
     check('the receiver has an unread mailbox and tab badge', await until(`
       ${claudeMail}?.dataset.unread === 'true' &&
-      [...document.querySelectorAll('.terminal-tab')].some(tab => tab.textContent.includes('Claude') && tab.querySelector('.agent-tab-mail')?.textContent === '1')
+      document.querySelector('.terminal-tab[data-tab-id="' + ${claudeMail}?.closest('[data-local-tab-id]')?.dataset.localTabId + '"] .agent-tab-mail')?.textContent === '1'
     `))
     await driver.shot('local-agent-delivery')
     const duplicate = await cli('codex-1', 'message send --to claude-2 --text review-please --request-id review-1')
@@ -144,12 +144,28 @@ async function run() {
 
     const shellId = await js(`document.querySelector('[aria-label="claude-2 메시지함"]').closest('[data-local-shell-id]').dataset.localShellId`)
     const isWorking = () => js(`window.electronAPI.localShellHasWorkingAgent([${JSON.stringify(shellId)}])`)
+    const claudePane = `${claudeMail}.closest('.local-terminal-pane')`
+    const trace = `getComputedStyle(${claudePane}, '::after')`
     fs.writeFileSync(file('claude-2-title'), '⠋ Claude')
     check('a busy OSC title is reported from the running agent PTY', await waitFor(isWorking))
     check('working appears as an icon in the agent list', await until(`${row('claude-2')}?.dataset.status === 'working'`))
+    check('the working shell shows a running border without intercepting input', await until(`
+      ${trace}.opacity === '1' && ${trace}.animationPlayState === 'running' && ${trace}.pointerEvents === 'none'
+    `))
+    const angle = `${trace}.getPropertyValue('--local-agent-trace-angle')`
+    const firstAngle = await js(angle)
+    check('the light travels along the border', await until(`${angle} !== ${JSON.stringify(firstAngle)}`))
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+    check('reduced motion shows a static working border', await until(`
+      ${trace}.animationName === 'none' && ${trace}.borderTopWidth === '1px' && ${trace}.opacity === '1'
+    `))
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
     fs.writeFileSync(file('claude-2-title'), '✳ Claude')
     check('the idle OSC title clears the busy state', await waitFor(async () => !(await isWorking())))
     check('an idle agent is distinguishable in the sidebar', await until(`${row('claude-2')}?.dataset.status === 'idle'`))
+    check('the working border fades when the agent is idle', await until(`
+      ${trace}.opacity === '0' && ${trace}.animationPlayState === 'paused'
+    `))
 
     await js(`document.querySelector('[aria-label="claude-2 메시지함"]').closest('.local-terminal-pane').querySelector('.xterm-helper-textarea').focus()`)
     const paste = async () => {
@@ -192,6 +208,19 @@ async function run() {
       ${panes}.every(pane => pane.hasAttribute('data-local-shell-id'))
     `))
 
+    const otherPane = `${panes}.find(pane => pane !== ${claudePane})`
+    const focusPane = pane => js(`${pane}.querySelector('.xterm-helper-textarea').focus()`)
+    const focusBorder = `getComputedStyle(${claudePane}, '::before')`
+    await focusPane(claudePane)
+    check('a focused working pane keeps its focus outline', await until(`${focusBorder}.borderTopWidth === '2px'`))
+    await sleep(220)
+    const focusedColor = await js(`${trace}.color`)
+    await focusPane(otherPane)
+    check('moving focus dims the light on the working pane while the other pane stays clear', await until(`
+      ${focusBorder}.borderTopWidth === '1px' && ${trace}.color !== ${JSON.stringify(focusedColor)} &&
+      ${trace}.animationPlayState === 'running' && getComputedStyle(${otherPane}, '::after').content === 'none'
+    `))
+
     const [first, second] = await rects()
     await drag(second.x + second.width / 2, second.y + second.height / 2, first.x + first.width / 2, first.y + first.height / 2)
     check('Alt+drag requests merge confirmation when the destination is the working agent', await until(`document.querySelector('.confirm-dialog-message')?.textContent === '작업 중인 터미널이 있습니다. 정말 병합하시겠습니까?'`))
@@ -199,13 +228,18 @@ async function run() {
     check('canceling the merge keeps both panes and the agent', await until(`${panes}.length === 2 && !!document.querySelector('[aria-label="claude-2 메시지함"]')`))
 
     const beforeWake = Number(read('claude-2-wakes')) || 0
+    const beforeBusy = Number(read('claude-2-busy-wakes')) || 0
     const task = await mcp('codex-1', 'send_message', { to: 'claude-2', text: 'review-next' })
-    await sleep(250)
-    check('a busy agent retains the new task without submitting a prompt', (Number(read('claude-2-wakes')) || 0) === beforeWake)
-    fs.writeFileSync(file('claude-2-title'), '✳ Claude')
-    check('the queued message starts a turn when Claude is idle again', await waitFor(() => Number(read('claude-2-wakes')) === beforeWake + 1))
+    check('a busy agent is told at once, into its running task', await waitFor(() => Number(read('claude-2-busy-wakes')) === beforeBusy + 1))
+    check('the busy notice does not start a new turn', (Number(read('claude-2-wakes')) || 0) === beforeWake)
     const pending = await mcp('claude-2', 'read_inbox')
-    check('the woken agent can read the original message by MCP', pending.messages.some(message => message.id === task.id && message.text === 'review-next'))
+    check('the busy agent can read the new task by MCP', pending.messages.some(message => message.id === task.id && message.text === 'review-next'))
+    await mcp('claude-2', 'send_receipt', { message_id: task.id, text: '지금 작업을 마치고 이어서 하겠습니다' })
+    const receipt = (await mcp('codex-1', 'read_inbox')).messages.find(message => message.replyTo === task.id)
+    check('the sender gets the receipt marked as one', receipt?.receipt === true && receipt.text === '지금 작업을 마치고 이어서 하겠습니다')
+    fs.writeFileSync(file('claude-2-title'), '✳ Claude')
+    check('the put-off task is reminded once Claude is idle again', await waitFor(() => Number(read('claude-2-wakes')) === beforeWake + 1))
+    // Done without a reply message, so the Codex wake count below is not raced by one
     await mcp('claude-2', 'acknowledge_message', { message_id: task.id })
 
     const beforeCodexWake = Number(read('codex-1-wakes')) || 0
@@ -292,6 +326,19 @@ async function run() {
     const manualReply = await mcp('manual-claude', 'reply_to_message', { message_id: manualTask.id, text: 'hello-codex' })
     check('Codex receives the reply from manually launched Claude',
       (await mcp('codex-1', 'read_inbox')).messages.some(message => message.id === manualReply.id && message.replyTo === manualTask.id))
+
+    const manualCodex = await js(`window.electronAPI.localShellOpen({ cols: 80, rows: 24 })`)
+    check('a plain local terminal opens for the manual Codex command', manualCodex.success)
+    await js(`window.electronAPI.localShellWrite(${JSON.stringify(manualCodex.id)}, 'codex --yolo\\r')`)
+    check('typing codex --yolo binds its MCP to the correct terminal without an explicit flag', await until(`
+      window.electronAPI.agentMessagesSnapshot().then(state => state.agents.some(agent =>
+        agent.id === 'codex-5' && agent.shellId === ${JSON.stringify(manualCodex.id)} && agent.mcpConnected))
+    `), read('manual-codex-mcp-error'))
+    const firstFromClaude = await mcp('manual-claude', 'send_message', { to: 'codex-5', text: 'hello-manual-codex' })
+    check('a new Claude message wakes manually launched Codex', await waitFor(() => read('manual-codex-wakes') === '1'))
+    check('manually launched Codex receives the original message',
+      (await mcp('manual-codex', 'read_inbox')).messages.some(message => message.id === firstFromClaude.id && message.text === 'hello-manual-codex'))
+
     fs.writeFileSync(file('manual-claude-mcp-disconnect'), '')
     check('the disconnected global MCP releases the pane and retains message history', await until(`
       window.electronAPI.agentMessagesSnapshot().then(state =>

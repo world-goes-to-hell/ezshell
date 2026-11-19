@@ -21,10 +21,13 @@ const presentation = {
   ended: { label: '종료', Icon: RiStopCircleLine }
 } satisfies Record<LocalAgentStatus | 'reply', { label: string; Icon: typeof RiCircleLine }>
 
+/** The icon of each agent program, shared by the sidebar and the agent history panel */
+export const AGENT_PROVIDER_ICONS = { codex: RiOpenaiLine, claude: SiClaude } as const
+
 export function localAgentAppearance(agent: AgentMessageSession) {
   const status = agent.waitingForReply && ['working', 'idle', 'unknown'].includes(agent.status) ? 'reply' : agent.status
   const { label, Icon } = presentation[status]
-  const ProviderIcon = agent.kind === 'codex' ? RiOpenaiLine : SiClaude
+  const ProviderIcon = AGENT_PROVIDER_ICONS[agent.kind === 'codex' ? 'codex' : 'claude']
   const name = `${agent.kind === 'codex' ? 'Codex' : 'Claude Code'} ${agent.id.slice(agent.kind.length + 1)}`
   const description = `${name} · ${label}${status === 'error' && agent.exitCode ? ` (종료 코드 ${agent.exitCode})` : ''}`
   const icons = (

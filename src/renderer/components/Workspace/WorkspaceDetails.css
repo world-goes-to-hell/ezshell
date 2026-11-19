@@ -1,0 +1,472 @@
+/* Folder tree, commit details, and inline Git diffs. */
+
+.workspace-tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-panel .workspace-tree[role="tree"] {
+  flex: 1;
+  min-height: 0;
+  padding-block: 4px 8px;
+  overflow-y: auto;
+}
+
+.workspace-tree[role="group"] {
+  position: relative;
+}
+
+.workspace-tree[role="group"]::before {
+  position: absolute;
+  z-index: 1;
+  inset-block: 0;
+  inset-inline-start: calc(min(var(--workspace-tree-indent), 40%) + 1px);
+  width: 1px;
+  background: var(--border);
+  pointer-events: none;
+  content: "";
+}
+
+.workspace-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 29px;
+  padding: 4px 10px 4px calc(8px + min(var(--workspace-tree-indent), 40%));
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.workspace-tree-row:hover { background: var(--bg-modifier-hover, var(--bg-hover)); }
+.workspace-tree-row[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-weight: 600;
+}
+
+.workspace-tree-row:focus-visible,
+.workspace-git-detail:focus-visible,
+.workspace-uncommitted-head:focus-visible,
+.workspace-git-file-toggle:focus-visible,
+.workspace-git-file-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.workspace-tree-icon,
+.workspace-tree-chevron {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.workspace-tree-chevron { width: 14px; }
+.workspace-tree-item[data-kind="directory"] > .workspace-tree-row .workspace-tree-icon { color: var(--accent); }
+.workspace-tree-item[data-kind="link"] > .workspace-tree-row .workspace-tree-icon { color: var(--text-link); }
+
+.workspace-tree-name,
+.workspace-uncommitted-label,
+.workspace-git-file-name,
+.workspace-git-file-folder {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-tree-note,
+.workspace-diff-note {
+  margin: 0;
+  padding: 4px 10px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  list-style: none;
+}
+
+.workspace-tree-note {
+  padding-inline-start: calc(28px + min(var(--workspace-tree-indent, 0px), 40%));
+}
+
+.workspace-tree-note.is-error,
+.workspace-diff-note.is-error { color: var(--error-text, var(--error)); }
+
+/* Commits: the row, and the files below when opened */
+.workspace-git-list .workspace-git-commit {
+  display: block;
+  height: auto;
+  padding: 0;
+}
+
+.workspace-git-list .workspace-git-commit:hover { background: transparent; }
+
+.workspace-git-commit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding-inline: 6px 10px;
+}
+
+.workspace-git-commit-row:hover,
+.workspace-git-commit[data-open="true"] > .workspace-git-commit-row {
+  background: var(--bg-modifier-hover, var(--bg-hover));
+}
+
+.workspace-git-list .workspace-git-detail {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: center;
+  column-gap: 5px;
+  align-self: stretch;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.workspace-commit-chevron {
+  grid-row: span 2;
+  margin-block-start: 2px;
+  color: var(--text-secondary);
+}
+
+.workspace-git-detail[aria-expanded="true"] .workspace-commit-chevron { color: var(--accent); }
+.workspace-git-detail .workspace-commit-meta { min-width: 0; white-space: nowrap; }
+
+.workspace-git-commit-files {
+  margin: 0 8px 5px 12px;
+  padding: 2px 0;
+  border-inline-start: 2px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
+/* Uncommitted changes: with changes it may take up to 70% of the panel (the log keeps the rest) */
+.workspace-uncommitted {
+  flex: none;
+  max-height: 45%;
+  overflow: auto;
+  margin: 8px 8px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.workspace-uncommitted-head {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 0;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: start;
+  cursor: pointer;
+}
+
+.workspace-uncommitted-head:hover { background: var(--bg-hover); }
+.workspace-uncommitted-head > svg { flex: none; color: var(--text-secondary); }
+.workspace-uncommitted-head[aria-expanded="true"] > svg { color: var(--accent); }
+
+.workspace-uncommitted-count,
+.workspace-git-group-title span {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-uncommitted-count { margin-inline-start: auto; }
+
+.workspace-uncommitted:not([data-empty]) .workspace-uncommitted-count {
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-primary));
+  color: var(--text-primary);
+}
+
+.workspace-git-group {
+  border-block-start: 1px solid var(--border);
+}
+
+.workspace-git-group[data-group="staged"] { --workspace-group-tone: var(--success); }
+.workspace-git-group[data-group="changed"] { --workspace-group-tone: var(--warning); }
+.workspace-git-group[data-group="untracked"] { --workspace-group-tone: var(--text-link); }
+
+.workspace-git-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 5px 9px 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.workspace-git-group-title::before {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--workspace-group-tone, var(--text-muted));
+  content: "";
+}
+
+.workspace-git-group-title span {
+  margin-inline-start: auto;
+  font-weight: 400;
+}
+
+.workspace-git-files {
+  margin: 0;
+  padding: 0 0 4px;
+  list-style: none;
+}
+
+.workspace-git-files.is-commit { padding-block-end: 0; }
+
+.workspace-git-file-row {
+  display: flex;
+  min-width: 0;
+}
+
+.workspace-git-file-row:hover {
+  background: var(--bg-modifier-hover, var(--bg-hover));
+}
+
+.workspace-git-file-row:has(.workspace-git-file-toggle[aria-expanded="true"]) {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.workspace-git-file-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.workspace-git-mark {
+  --workspace-mark-tone: var(--text-secondary);
+  flex: none;
+  width: 17px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--workspace-mark-tone) 14%, transparent);
+  color: color-mix(in srgb, var(--workspace-mark-tone) 65%, var(--text-primary));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+}
+
+.workspace-git-mark[data-kind="added"] { --workspace-mark-tone: var(--success); }
+.workspace-git-mark[data-kind="untracked"] { --workspace-mark-tone: var(--text-link); }
+.workspace-git-mark[data-kind="deleted"],
+.workspace-git-mark[data-kind="conflict"] { --workspace-mark-tone: var(--error-text, var(--error)); }
+.workspace-git-mark[data-kind="modified"] { --workspace-mark-tone: var(--warning); }
+.workspace-git-mark[data-kind="renamed"],
+.workspace-git-mark[data-kind="copied"] { --workspace-mark-tone: var(--text-link); }
+
+.workspace-git-file-name { font-weight: 600; }
+.workspace-git-file-name:has(+ .workspace-git-file-folder) { flex: none; max-width: 60%; }
+
+.workspace-git-file-folder {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.workspace-git-file-open {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  border: 0;
+  border-inline-start: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.workspace-git-file-open:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+/* The diff of one file */
+.workspace-diff {
+  margin: 3px 7px 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  overflow: auto;
+  max-height: min(360px, 42vh);
+}
+
+.workspace-diff-text {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  padding: 4px 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  user-select: text;
+  white-space: pre;
+}
+
+.workspace-diff-line {
+  display: block;
+  padding-inline: 8px;
+  border-inline-start: 2px solid transparent;
+}
+
+.workspace-diff-line:is(.is-hunk, .is-add, .is-remove) {
+  border-inline-start-color: var(--workspace-diff-tone);
+  background: color-mix(in srgb, var(--workspace-diff-tone) 13%, transparent);
+}
+
+.workspace-diff-line.is-hunk {
+  --workspace-diff-tone: var(--info, var(--accent));
+  color: color-mix(in srgb, var(--workspace-diff-tone) 65%, var(--text-primary));
+}
+
+.workspace-diff-line.is-add { --workspace-diff-tone: var(--success); }
+.workspace-diff-line.is-remove { --workspace-diff-tone: var(--error); }
+.workspace-diff-line.is-note { color: var(--text-secondary); }
+
+.workspace-uncommitted:not([data-empty])[data-open] {
+  max-height: 70%;
+}
+
+/* ---- The changes as a folder tree (WorkspaceGitChanges.tsx ChangeTree) ---- */
+.workspace-uncommitted-lines,
+.workspace-git-lines {
+  display: inline-flex;
+  flex: none;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-uncommitted-lines { margin-inline-start: auto; font-weight: 600; }
+.workspace-uncommitted-lines + .workspace-uncommitted-count { margin-inline-start: 6px; }
+.workspace-git-lines { margin-inline-start: auto; }
+.workspace-git-lines .is-add,
+.workspace-uncommitted-lines .is-add { color: var(--success); }
+.workspace-git-lines .is-remove,
+.workspace-uncommitted-lines .is-remove { color: var(--error-text, var(--error)); }
+.workspace-git-lines.is-binary { color: var(--text-muted); }
+
+.workspace-uncommitted-branch {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 4px 10px;
+  border-block-start: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.workspace-uncommitted-branch-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-uncommitted-upstream {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.workspace-git-files.is-tree {
+  padding: 0;
+}
+
+.workspace-uncommitted-body > .workspace-git-files.is-tree {
+  padding-block: 2px 4px;
+  border-block-start: 1px solid var(--border);
+}
+
+.workspace-git-folder {
+  list-style: none;
+}
+
+.workspace-git-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  min-height: 26px;
+  padding: 3px 8px 3px calc(6px + var(--workspace-tree-depth, 0) * 14px);
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.workspace-git-folder-row:hover {
+  background: var(--bg-modifier-hover, var(--bg-hover));
+  color: var(--text-primary);
+}
+
+.workspace-git-folder-icon { flex: none; color: var(--text-muted); }
+
+.workspace-git-folder-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-git-folder-count {
+  margin-inline-start: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.is-tree .workspace-git-file-row .workspace-git-file-toggle {
+  padding-inline-start: calc(6px + var(--workspace-tree-depth, 0) * 14px);
+}
+
+.is-tree .workspace-git-file-name { flex: 0 1 auto; min-width: 0; font-weight: 500; }
+.is-tree .workspace-git-mark { margin-inline-start: 4px; }
+.is-tree .workspace-git-mark[data-staged] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 60%, transparent); }

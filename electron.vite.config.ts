@@ -7,7 +7,7 @@ import fs from 'fs'
 const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js', 'navigationGuard.js', 'updateChecker.js', 'sshAlgorithms.js', 'rootSwitch.js', 'localShell.js', 'windowState.js', 'sftpListing.js', 'lastVersion.js', 'localPlaces.js', 'localKeyPath.js', 'manualUpdate.js', 'sharedConn.js', 'macMenu.js', 'nativeBackdrop.js', 'sftpDownloadDir.js', 'detachedPlaces.js', 'restoreTabs.js', 'sessionSecrets.js']
 
 // Directories under src/ that main.js loads at runtime; copied whole, without their tests
-const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient', 'remoteAccess', 'sessionImport', 'containers', 'ipc']
+const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient', 'remoteAccess', 'sessionImport', 'containers', 'ipc', 'agentHistory', 'localFiles']
 
 // The terminal library of the remote access page (a phone's browser), served by the main process.
 // xterm is a devDependency (the renderer bundles it), so the packaged app has no copy to serve:
@@ -71,12 +71,20 @@ export default defineConfig({
     // Not Vite's default 5173: other Vite projects on this machine use it, and on Windows
     // both servers can listen on it at once (keep in sync with DEV_RENDERER_URL in main.js)
     server: {
-      port: 15173
+      port: 15173,
+      // A changed .html anywhere it watches reloads the whole window, and a reload drops every tab
+      // while their local shells (and the agents in them) keep running in main. Design mockups,
+      // build output (another session's `npm run build` rewrites out/renderer/*.html) and test
+      // output are not part of the renderer.
+      watch: {
+        ignored: ['**/mockups/**', '**/out/**', '**/release/**', '**/dist/**', '**/e2e/**', '**/docs/**']
+      }
     },
     build: {
       rollupOptions: {
         input: {
-          index: path.resolve(__dirname, 'src/renderer/index.html')
+          index: path.resolve(__dirname, 'src/renderer/index.html'),
+          startup: path.resolve(__dirname, 'src/renderer/startup.html')
         }
       }
     },

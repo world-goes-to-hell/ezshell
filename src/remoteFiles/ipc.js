@@ -10,7 +10,7 @@ const LOCKED_MESSAGE = '앱이 잠겨 있습니다.'
  * on this PC (made first when missing). `isLocked()` is true while the app is locked: logs are not
  * followed then. Returns `closeViewWindows()`, which main calls when the app locks.
  */
-function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLocked = () => false, fromMainWindow = () => false, isKnownContainer = () => false }) {
+function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLocked = () => false, fromMainWindow = () => false, isKnownContainer = () => false, resolveLocal = null }) {
   const windows = new Map()
   // Documents whose window has unsaved changes, and those the user chose to close anyway
   const dirty = new Set()
@@ -84,9 +84,46 @@ function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLock
     }
   })
 
+  // A file on this PC from the workspace panel. Only the main window may ask; main checks the folder
+  // (an open local shell's folder or its repository) and that the path stays inside it (localFiles/roots.js).
+  ipcMain.handle('local-file-open', async (event, request) => {
+    try {
+      const { root, path: relative, mode, label, compareHead } = request || {}
+      if (!fromMainWindow(event) || !resolveLocal) throw new DocumentError('본창에서만 열 수 있습니다.')
+      refuseWhileLocked()
+      const found = await resolveLocal(root, relative)
+      refuseWhileLocked()
+      const registered = docs.registerLocal({ root: found.root, path: found.path, label, mode, compareHead: compareHead === true })
+      const opened = openWindowFor(registered)
+      // Already open: that window starts the comparison itself
+      if (opened.existing && compareHead === true) {
+        const win = windows.get(registered.docId)
+        if (win && !win.isDestroyed()) win.webContents.send('remote-file-compare-head')
+      }
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: userMessage(err) }
+    }
+  })
+
   ipcMain.handle('remote-file-load', answer((senderId, { docId }) => {
     refuseWhileLocked()
     return docs.load(senderId, docId)
+  }))
+  // A placeholder's definitions (`${NAME}`): the window sends the name, then opens a result by its key
+  ipcMain.handle('remote-file-find-definitions', answer((senderId, { docId, name }) => {
+    refuseWhileLocked()
+    return docs.findDefinitions(senderId, docId, name)
+  }))
+  ipcMain.handle('remote-file-open-definition', answer((senderId, { docId, key }) => {
+    refuseWhileLocked()
+    const { registered, line } = docs.openDefinition(senderId, docId, key)
+    const opened = openWindowFor(registered)
+    if (opened.existing) {
+      const win = windows.get(registered.docId)
+      if (win && !win.isDestroyed()) win.webContents.send('remote-file-reveal-line', line)
+    }
+    return {}
   }))
   ipcMain.handle('remote-file-tail', answer((senderId, { docId, generation, cursor }) => {
     refuseWhileLocked()

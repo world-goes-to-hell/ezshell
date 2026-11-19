@@ -1,3 +1,4 @@
+import { buildScreens } from './screenPanes'
 import { describe, it, expect } from 'vitest'
 import { groupTabsBySession, findTabPane, badgeLabel, badgeHint } from './sessionTabs'
 import type { TerminalInfo, LayoutState } from '../stores/terminalStore'
@@ -72,30 +73,23 @@ describe('groupTabsBySession', () => {
 })
 
 describe('findTabPane', () => {
-  const split: LayoutState = {
-    mode: 'split',
-    direction: 'horizontal',
-    primary: { terminalIds: ['1', '2'], activeTerminalId: '1' },
-    secondary: { terminalIds: ['3'], activeTerminalId: '3' },
-    activePaneType: 'primary'
-  }
-
-  it('finds a tab in the primary pane', () => {
-    expect(findTabPane(split, '2')).toBe('primary')
+  const split: LayoutState = buildScreens({
+    panes: [{ terminalIds: ['1', '2'], activeTerminalId: '1' }, { terminalIds: ['3'], activeTerminalId: '3' }, { terminalIds: ['4'], activeTerminalId: '4' }],
+    direction: 'horizontal'
   })
 
-  it('finds a tab in the secondary pane', () => {
-    expect(findTabPane(split, '3')).toBe('secondary')
+  it('finds the screen of a tab by its index', () => {
+    expect(findTabPane(split, '2')).toBe(0)
+    expect(findTabPane(split, '3')).toBe(1)
+    expect(findTabPane(split, '4')).toBe(2)
   })
 
-  it('returns null for a tab in neither pane', () => {
+  it('returns null for a tab in no screen', () => {
     expect(findTabPane(split, '9')).toBeNull()
   })
 
   it('returns null when the layout is not split', () => {
-    const single: LayoutState = { ...split, mode: 'single', secondary: null, activePaneType: null }
-
-    expect(findTabPane(single, '1')).toBeNull()
+    expect(findTabPane(buildScreens({ panes: [{ terminalIds: ['1'], activeTerminalId: '1' }] }), '1')).toBeNull()
   })
 })
 

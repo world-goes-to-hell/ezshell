@@ -1,0 +1,95 @@
+// The tab strip shows one work at a time (docs/plan/2026-11-19-tab-groups-by-project.md). The group in
+// front is the group of the tab in front, so opening a tab or going to one from the sidebar switches it.
+// When the group changes, its screen split is put away for later and the new group's is brought back.
+import { useEffect, useMemo, useRef } from 'react'
+import { useTerminalStore, type LayoutState } from '../stores/terminalStore'
+import { useTabGroupStore, type SavedSplit } from '../stores/tabGroupStore'
+import { useLocalProjects } from './useLocalProjects'
+import { useProjectServers } from './useProjectServers'
+import { buildProjectNodes } from '../components/Sidebar/LocalProjectsTree'
+import { projectKeyOf } from '../lib/localProjectServers'
+import { groupOfTab, groupTabs, type GroupProject, type TabGroup } from '../lib/tabGroups'
+
+export interface TabGroupView {
+  groups: TabGroup[]
+  activeGroup: string | null
+  /** The tabs of the group in front, in strip order */
+  shownIds: string[]
+  /** The group's last front tab, or its first */
+  openGroup: (key: string) => void
+}
+
+const splitOf = (layout: LayoutState): SavedSplit | null =>
+  layout.mode === 'split' && layout.panes.length > 1
+    ? { direction: layout.direction, panes: layout.panes.map(pane => ({ ...pane })), sizes: [...layout.sizes], focus: layout.activePane ?? 0 }
+    : null
+
+export function useTabGroups(): TabGroupView {
+  const { projects } = useLocalProjects()
+  const servers = useProjectServers()
+  const terminals = useTerminalStore(state => state.terminals)
+  const activeId = useTerminalStore(state => state.activeTerminalId)
+  const current = useTabGroupStore(state => state.current)
+
+  const groupProjects: GroupProject[] = useMemo(() => buildProjectNodes(projects).map(node => ({
+    key: projectKeyOf(node), name: node.name, worktrees: node.worktrees.map(tree => tree.path)
+  })), [projects])
+  const groups = useMemo(() => groupTabs([...terminals.keys()], terminals, groupProjects, servers, current), [terminals, groupProjects, servers, current])
+  const activeGroup = activeId && terminals.has(activeId) ? groupOfTab(activeId, terminals, groupProjects, servers, current) : groups[0]?.key ?? null
+  const shownIds = useMemo(() => groups.find(group => group.key === activeGroup)?.tabIds ?? [...terminals.keys()], [groups, activeGroup, terminals])
+
+  // The tab in front before this render, to tell a closed tab from a switch
+  const previousFront = useRef<string | null>(null)
+  useEffect(() => {
+    if (!activeGroup) return
+    const store = useTabGroupStore.getState()
+    const terminalState = useTerminalStore.getState()
+    const before = store.current
+    const front = terminalState.activeTerminalId
+
+    // Closing a tab handed the front to another work: stay in the closed tab's work while it has tabs
+    const closed = previousFront.current && !terminalState.terminals.has(previousFront.current)
+    previousFront.current = front
+    if (closed && before && before !== activeGroup) {
+      const stay = groups.find(group => group.key === before)
+      if (stay && stay.tabIds.length > 0) {
+        const last = store.lastTab[before]
+        terminalState.setActiveTerminal(last && stay.tabIds.includes(last) ? last : stay.tabIds[stay.tabIds.length - 1])
+        return
+      }
+    }
+    if (front) store.remember(activeGroup, front)
+    if (before === activeGroup) return
+
+    // Switching: the old group's split is put away (with the tabs it had), the new group's comes back
+    const leaving = before ? splitOf(terminalState.layout) : null
+    if (before && leaving) {
+      store.saveSplit(before, leaving)
+      terminalState.closeSplit()
+      if (front) useTerminalStore.getState().setActiveTerminal(front)
+    }
+    store.setCurrent(activeGroup)
+    const saved = store.takeSplit(activeGroup)
+    const mine = new Set(groups.find(group => group.key === activeGroup)?.tabIds ?? [])
+    // Only this work's tabs, in the screens they had; every other tab goes into the first screen
+    const panes = saved?.panes.map(pane => ({ ...pane, terminalIds: pane.terminalIds.filter(id => mine.has(id)) })) ?? []
+    if (saved && panes.filter(pane => pane.terminalIds.length > 0).length > 1) {
+      const placed = new Set(panes.flatMap(pane => pane.terminalIds))
+      const others = [...useTerminalStore.getState().terminals.keys()].filter(id => !placed.has(id))
+      const all = [{ ...panes[0], terminalIds: [...panes[0].terminalIds, ...others] }, ...panes.slice(1)]
+      useTerminalStore.getState().setLayout({ mode: 'split', direction: saved.direction, panes: all, sizes: saved.sizes, activePane: saved.focus })
+      const focused = useTerminalStore.getState().layout
+      const front = focused.panes[focused.activePane ?? 0]?.activeTerminalId
+      if (front) useTerminalStore.getState().setActiveTerminal(front)
+    }
+  }, [activeGroup, activeId, groups])
+
+  const openGroup = (key: string) => {
+    const group = groups.find(item => item.key === key)
+    if (!group || group.tabIds.length === 0) return
+    const last = useTabGroupStore.getState().lastTab[key]
+    useTerminalStore.getState().focusTerminal(last && group.tabIds.includes(last) ? last : group.tabIds[0])
+  }
+
+  return { groups, activeGroup, shownIds, openGroup }
+}

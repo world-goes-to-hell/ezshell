@@ -15,6 +15,11 @@ const MAX_ZOOM = ZOOM_STEPS[ZOOM_STEPS.length - 1]
  */
 export function ZoomHud() {
   const appZoom = useUIStore(state => state.appZoom)
+  return <ZoomBubble zoom={appZoom} onZoom={zoomBy} onReset={resetZoom} />
+}
+
+/** The bubble itself; also used by detached windows, which keep a zoom of their own (WindowZoom.tsx) */
+export function ZoomBubble({ zoom: appZoom, onZoom, onReset }: { zoom: number; onZoom: (direction: 1 | -1) => void; onReset: () => void }) {
   const [isVisible, setIsVisible] = useState(false)
   const [isHovered, setIsHovered] = useState(false)
   const previousZoom = useRef(appZoom)
@@ -47,13 +52,13 @@ export function ZoomHud() {
       <span className="zoom-hud-label">UI 배율</span>
       <span className="zoom-hud-value">{percent}%</span>
       <div className="zoom-hud-actions">
-        <button type="button" onClick={() => zoomBy(-1)} disabled={appZoom <= MIN_ZOOM} aria-label="축소" title="축소 (Ctrl+휠 아래)">
+        <button type="button" onClick={() => onZoom(-1)} disabled={appZoom <= MIN_ZOOM} aria-label="축소" title="축소 (Ctrl+휠 아래)">
           <RiSubtractLine size={14} />
         </button>
-        <button type="button" onClick={() => zoomBy(1)} disabled={appZoom >= MAX_ZOOM} aria-label="확대" title="확대 (Ctrl+휠 위)">
+        <button type="button" onClick={() => onZoom(1)} disabled={appZoom >= MAX_ZOOM} aria-label="확대" title="확대 (Ctrl+휠 위)">
           <RiAddLine size={14} />
         </button>
-        <button type="button" className="zoom-hud-reset" onClick={resetZoom} disabled={isDefaultZoom(appZoom)}>
+        <button type="button" className="zoom-hud-reset" onClick={onReset} disabled={isDefaultZoom(appZoom)}>
           100%
         </button>
       </div>

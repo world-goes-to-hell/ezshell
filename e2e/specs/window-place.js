@@ -2,6 +2,7 @@
 // maximized, and the default when the saved place is on no screen. Run by e2e/run.js.
 const fs = require('fs'), path = require('path')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const { isMainPage } = require('../support/driver')
 let failures = 0
 const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? '  -- ' + d : ''}`) }
 const PROFILE = process.env.E2E_PROFILE
@@ -27,7 +28,7 @@ const isAt = (b, place) => b.left === place.x - b.frame[0] / 2 && b.top === plac
 const saved = () => { try { return JSON.parse(fs.readFileSync(path.join(PROFILE, 'detached-window-state.json'), 'utf-8')) } catch { return null } }
 
 ;(async () => {
-  const mainTarget = await until(async () => { try { return (await pages()).find((p) => !p.url.includes('Mode=')) } catch { return null } }, 40000)
+  const mainTarget = await until(async () => { try { return (await pages()).find(isMainPage) } catch { return null } }, 40000)
   const main = await connect(mainTarget)
   await until(() => main.js(`document.querySelectorAll('input[type=password]').length > 0 || !!document.querySelector('.btn-quick-connect')`))
   if (await main.js(`document.querySelectorAll('input[type=password]').length > 0`)) await main.js(`(() => { const set = ${SET}; [...document.querySelectorAll('input[type=password]')].forEach(i => set(i, 'test-pass-1234')); document.querySelector('button[type=submit]').click() })()`)

@@ -1,18 +1,32 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiComputerLine } from 'react-icons/ri'
+import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiComputerLine, RiFolderAddLine, RiRefreshLine, RiServerLine } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
+import { useSessionStore, type Session } from '../../stores/sessionStore'
+import { groupTabsBySession } from '../../lib/sessionTabs'
+import { useProjectServers } from '../../hooks/useProjectServers'
+import { TAB_DROP_TAKEN_EVENT, linkServer, projectKeyOf, readProjectServers, sessionFromDrop, unlinkServer, writeProjectServers } from '../../lib/localProjectServers'
 import { LOCAL_PANE_STORAGE_KEY, clampPaneHeight, parseLocalPanePrefs, visibleTerminalId, type LocalPanePrefs } from '../../lib/localTerminalPane'
 import { isSplitTree, paneIds } from '../../lib/splitTree'
 import { PaneLayoutBadge } from './PaneLayoutBadge'
 import { LocalSessionAgents } from './LocalSessionAgents'
 import { focusTabPane, focusedPaneOf } from '../../lib/paneFocus'
+import { useLocalProjects } from '../../hooks/useLocalProjects'
+import { assignTabs, folderLabel } from '../../lib/localWorkspaceTree'
+import { readFoldedNodes, readLocalProjects, writeFoldedNodes, writeLocalProjects } from '../../lib/localProjectList'
+import { toast } from '../../stores/toastStore'
+import { LocalProjectsTree, buildProjectNodes, type ProjectNode, type WorktreeNode } from './LocalProjectsTree'
 import './LocalTerminalList.css'
 
 const KEY_STEP = 30
 
 interface LocalTerminalListProps {
-  onOpen?: () => void
+  fillAvailableSpace?: boolean
+  onOpen?: (button: HTMLButtonElement) => void
   onClose: (terminalId: string) => void
+  /** Opens a local terminal in a worktree of the tree */
+  onOpenFolder?: (cwd: string, workspaceLabel: string) => void
+  /** Connects a saved session linked to a project when it has no tab open (as a press in the session list) */
+  onConnectSession?: (session: Session) => void
 }
 
 function readPrefs(): LocalPanePrefs {
@@ -32,10 +46,11 @@ function writePrefs(prefs: LocalPanePrefs) {
 }
 
 /**
- * The open local terminals, below the session list. Rendered only while at least one is open.
- * Height: as tall as its rows up to half of the list area, until the user drags the divider.
+ * Local work below the session list: the registered work folders with their worktrees and the local
+ * terminals open in each (with their agents), then the other local terminals. When empty, the docked
+ * sidebar shows the actions in its header. The list grows to its rows or a manually set height.
  */
-export function LocalTerminalList({ onOpen, onClose }: LocalTerminalListProps) {
+export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose, onOpenFolder, onConnectSession }: LocalTerminalListProps) {
   const terminals = useTerminalStore(state => state.terminals)
   const visibleId = useTerminalStore(state => visibleTerminalId(state.layout, state.activeTerminalId))
   const focusTerminal = useTerminalStore(state => state.focusTerminal)
@@ -48,6 +63,116 @@ export function LocalTerminalList({ onOpen, onClose }: LocalTerminalListProps) {
     () => Array.from(terminals.entries()).filter(([, terminal]) => terminal.local),
     [terminals]
   )
+  const { projects, refresh } = useLocalProjects()
+  const nodes = useMemo(() => buildProjectNodes(projects), [projects])
+  const worktreePaths = useMemo(() => nodes.flatMap(node => node.worktrees.map(tree => tree.path)), [nodes])
+  const assignment = useMemo(() => assignTabs(
+    locals.map(([id, terminal]) => ({ id, cwd: terminal.local?.cwd })),
+    worktreePaths
+  ), [locals, worktreePaths])
+
+  const [folded, setFolded] = useState<ReadonlySet<string>>(readFoldedNodes)
+  const toggleFold = (key: string) => {
+    const next = new Set(folded)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    setFolded(next)
+    writeFoldedNodes(next)
+  }
+
+  // Saved SSH sessions linked to each project ("서버"), kept across restarts (lib/localProjectServers)
+  const servers = useProjectServers()
+  const sessions = useSessionStore(state => state.sessions)
+  const sessionTabs = useMemo(() => groupTabsBySession(terminals), [terminals])
+
+  const linkDropped = (project: ProjectNode, text: string) => {
+    const isTab = !text.startsWith('session:') && terminals.has(text)
+    // The tab was dropped here: App must not pop it out into a window when the drag ends
+    if (isTab) window.dispatchEvent(new Event(TAB_DROP_TAKEN_EVENT))
+    const found = sessionFromDrop(text, terminals, new Set(sessions.map(session => session.id)))
+    if (!found) return
+    if ('error' in found) {
+      toast.error('서버로 묶지 못했습니다', found.error)
+      return
+    }
+    const key = projectKeyOf(project)
+    const current = readProjectServers()
+    const name = sessions.find(session => session.id === found.sessionId)?.name || '세션'
+    if (current[key]?.includes(found.sessionId)) {
+      toast.info('이미 묶여 있습니다', `${name} · ${project.name}`)
+      return
+    }
+    if (!writeProjectServers(linkServer(current, key, found.sessionId))) toast.error('서버로 묶지 못했습니다', '목록을 저장하지 못했습니다.')
+  }
+
+  const unlink = (project: ProjectNode, sessionId: string) => {
+    writeProjectServers(unlinkServer(readProjectServers(), projectKeyOf(project), sessionId))
+  }
+
+  const openServer = (session: Session) => {
+    const group = sessionTabs.get(session.id)
+    const tab = group?.connected[0] ?? group?.disconnected[0]
+    if (tab) focusTerminal(tab.id)
+    else onConnectSession?.(session)
+  }
+
+  const renderServers = (project: ProjectNode) => {
+    const linked = (servers[projectKeyOf(project)] ?? [])
+      .map(id => sessions.find(session => session.id === id))
+      .filter((session): session is Session => Boolean(session))
+    if (linked.length === 0) return null
+    return (
+      <div className="local-servers">
+        <div className="local-servers-title">서버</div>
+        <ul className="local-servers-list" aria-label={`${project.name} 의 서버`}>
+          {linked.map(session => {
+            const group = sessionTabs.get(session.id)
+            const connected = group?.connected.length ?? 0
+            const disconnected = group?.disconnected.length ?? 0
+            const state = connected > 0 ? 'is-on' : disconnected > 0 ? 'is-off' : ''
+            const name = session.name || session.host
+            return (
+              <li key={session.id} className="local-server" data-session-id={session.id}>
+                <button type="button" className="local-server-open" onClick={() => openServer(session)}
+                  title={connected + disconnected > 0 ? `${name} 탭으로 이동` : `${name} 에 접속`}>
+                  <RiServerLine size={14} className="local-server-icon" aria-hidden="true" />
+                  <span className="local-server-name">{name}</span>
+                  <span className={`local-server-dot ${state}`} aria-hidden="true" />
+                  {connected + disconnected > 1 && <span className="local-server-count">{connected + disconnected}</span>}
+                </button>
+                <button type="button" className="local-server-unlink" onClick={() => unlink(project, session.id)}
+                  title="이 프로젝트에서 빼기" aria-label={`${name} 을 ${project.name} 에서 빼기`}>
+                  <RiCloseLine size={14} />
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      </div>
+    )
+  }
+
+  const openWorktree = (project: ProjectNode, worktree: WorktreeNode) => {
+    const open = assignment.byWorktree.get(worktree.path)
+    if (open?.length) {
+      focusTerminal(open[0])
+      return
+    }
+    onOpenFolder?.(worktree.path, worktree.branch ? `${project.name} · ${worktree.branch}` : folderLabel(worktree.path))
+  }
+
+  const addFolder = async () => {
+    try {
+      const result = await window.electronAPI.selectLocalFolder()
+      if (!result.success) return
+      const current = readLocalProjects()
+      if (!writeLocalProjects([result.path, ...current.filter(item => item !== result.path)])) {
+        toast.error('작업 폴더를 더하지 못했습니다', '목록을 저장하지 못했습니다.')
+      }
+    } catch {
+      toast.error('작업 폴더를 더하지 못했습니다', '폴더 선택 창을 열지 못했습니다.')
+    }
+  }
 
   const update = useCallback((next: LocalPanePrefs, persist: boolean) => {
     setPrefs(next)
@@ -81,7 +206,7 @@ export function LocalTerminalList({ onOpen, onClose }: LocalTerminalListProps) {
     if (height !== undefined) writePrefs({ collapsed: false, height })
   }
 
-  // Back to "as tall as the rows, up to half"
+  // Back to "as tall as the rows"
   const resetHeight = () => update({ collapsed: prefs.collapsed }, true)
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -92,78 +217,115 @@ export function LocalTerminalList({ onOpen, onClose }: LocalTerminalListProps) {
     update({ collapsed: false, height }, true)
   }
 
-  if (locals.length === 0) return null
+  const isEmpty = locals.length === 0 && projects.length === 0
 
-  const isSized = prefs.height !== undefined && !prefs.collapsed
-  const CollapseIcon = prefs.collapsed ? RiArrowRightSLine : RiArrowDownSLine
+  const renderTab = (id: string) => {
+    const terminal = terminals.get(id)
+    if (!terminal) return null
+    const { title, local } = terminal
+    const workspace = local?.workspaceLabel
+    const isAgentTitle = workspace && (title === `${workspace} · Codex` || title === `${workspace} · Claude Code`)
+    const name = isAgentTitle ? workspace : title || '로컬 터미널'
+    const panes = isSplitTree(terminal.splitTree) && terminal.splitTree ? paneIds(terminal.splitTree) : []
+    return (
+      <li key={id} className="local-terms-item" data-local-session-id={id}>
+        <div className={`local-terms-row ${id === visibleId ? 'is-current' : ''}`}>
+          <button type="button" className="local-terms-open" onClick={() => focusTerminal(id)} title={`${name} 탭으로 이동`}>
+            <RiComputerLine size={15} className="local-terms-icon" />
+            <span className="local-terms-name">{name}</span>
+            <span className={`local-terms-dot ${terminal.connected ? 'is-on' : ''}`} aria-hidden="true" />
+          </button>
+          {panes.length > 1 && terminal.splitTree && (
+            <PaneLayoutBadge tabId={id} tabName={name} tree={terminal.splitTree} currentPane={() => focusedPaneOf(id)} onPick={pane => focusTabPane(focusTerminal, id, pane)} />
+          )}
+          <button type="button" className="local-terms-close" onClick={() => onClose(id)} title="닫기" aria-label={`${name} 닫기`}>
+            <RiCloseLine size={15} />
+          </button>
+        </div>
+        <LocalSessionAgents tabId={id} />
+      </li>
+    )
+  }
+
+  const isCollapsed = !fillAvailableSpace && (isEmpty || prefs.collapsed)
+  const isSized = !fillAvailableSpace && prefs.height !== undefined && !isCollapsed
+  const CollapseIcon = isCollapsed ? RiArrowRightSLine : RiArrowDownSLine
 
   return (
     <div
       ref={paneRef}
-      className={`local-terms ${isSized ? 'is-sized' : ''} ${prefs.collapsed ? 'is-collapsed' : ''}`}
+      className={`local-terms ${isSized ? 'is-sized' : ''} ${isCollapsed ? 'is-collapsed' : ''} ${fillAvailableSpace ? 'is-full' : ''}`}
       style={isSized ? { height: prefs.height } : undefined}
     >
-      <div
-        className="local-terms-divider"
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="로컬 터미널 목록 높이"
-        tabIndex={0}
-        title="끌어서 높이 조절 · 두 번 누르면 자동 높이"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        onDoubleClick={resetHeight}
-        onKeyDown={handleKeyDown}
-      />
+      {!fillAvailableSpace && !isEmpty && (
+        <div
+          className="local-terms-divider"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="로컬 터미널 목록 높이"
+          tabIndex={0}
+          title="끌어서 높이 조절 · 두 번 누르면 자동 높이"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          onDoubleClick={resetHeight}
+          onKeyDown={handleKeyDown}
+        />
+      )}
       <div className="local-terms-header">
-        <button
-          type="button"
-          className="local-terms-toggle"
-          onClick={() => update({ ...prefs, collapsed: !prefs.collapsed }, true)}
-          aria-expanded={!prefs.collapsed}
-          title={prefs.collapsed ? '로컬 터미널 목록 펼치기' : '로컬 터미널 목록 접기'}
-        >
-          <CollapseIcon size={16} />
-          <span>로컬 터미널</span>
-          <span className="local-terms-count">{locals.length}</span>
+        {!fillAvailableSpace && (isEmpty ? (
+          <span className="local-terms-title"><RiComputerLine size={16} aria-hidden="true" />로컬 작업</span>
+        ) : (
+          <button
+            type="button"
+            className="local-terms-toggle"
+            onClick={() => update({ ...prefs, collapsed: !prefs.collapsed }, true)}
+            aria-expanded={!isCollapsed}
+            title={isCollapsed ? '로컬 작업 펼치기' : '로컬 작업 접기'}
+          >
+            <CollapseIcon size={16} />
+            <span>로컬 작업</span>
+            {locals.length > 0 && <span className="local-terms-count" title={`열린 로컬 터미널 ${locals.length}개`}>{locals.length}</span>}
+          </button>
+        ))}
+        {projects.length > 0 && (
+          <button type="button" className="local-terms-btn" onClick={refresh} title="워크트리 다시 읽기" aria-label="워크트리 다시 읽기">
+            <RiRefreshLine size={15} />
+          </button>
+        )}
+        <button type="button" className="local-terms-btn" onClick={() => void addFolder()} title="작업 폴더 추가" aria-label="작업 폴더 추가">
+          <RiFolderAddLine size={15} />
         </button>
         {onOpen && (
-          <button type="button" className="local-terms-btn" onClick={onOpen} title="새 로컬 터미널" aria-label="새 로컬 터미널">
+          <button type="button" className="local-terms-btn" onClick={event => onOpen(event.currentTarget)} title="새 로컬 터미널" aria-label="새 로컬 터미널">
             <RiAddLine size={16} />
           </button>
         )}
       </div>
-      {!prefs.collapsed && (
+      {!isCollapsed && (
         <div className="local-terms-scroll">
-          <ul className="local-terms-list">
-            {locals.map(([id, terminal]) => {
-              const { title, local } = terminal
-              const workspace = local?.workspaceLabel
-              const isAgentTitle = workspace && (title === `${workspace} · Codex` || title === `${workspace} · Claude Code`)
-              const name = isAgentTitle ? workspace : title || '로컬 터미널'
-              const panes = isSplitTree(terminal.splitTree) && terminal.splitTree ? paneIds(terminal.splitTree) : []
-              return (
-                <li key={id} className="local-terms-item" data-local-session-id={id}>
-                  <div className={`local-terms-row ${id === visibleId ? 'is-current' : ''}`}>
-                    <button type="button" className="local-terms-open" onClick={() => focusTerminal(id)} title={`${name} 탭으로 이동`}>
-                      <RiComputerLine size={15} className="local-terms-icon" />
-                      <span className="local-terms-name">{name}</span>
-                      <span className={`local-terms-dot ${terminal.connected ? 'is-on' : ''}`} aria-hidden="true" />
-                    </button>
-                    {panes.length > 1 && terminal.splitTree && (
-                      <PaneLayoutBadge tabId={id} tabName={name} tree={terminal.splitTree} currentPane={() => focusedPaneOf(id)} onPick={pane => focusTabPane(focusTerminal, id, pane)} />
-                    )}
-                    <button type="button" className="local-terms-close" onClick={() => onClose(id)} title="닫기" aria-label={`${name} 닫기`}>
-                      <RiCloseLine size={15} />
-                    </button>
-                  </div>
-                  <LocalSessionAgents tabId={id} />
-                </li>
-              )
-            })}
-          </ul>
+          {isEmpty && <div className="session-list-empty"><p>등록된 작업 폴더와 열린 터미널이 없습니다</p></div>}
+          {nodes.length > 0 && (
+            <LocalProjectsTree
+              nodes={nodes}
+              folded={folded}
+              onToggleFold={toggleFold}
+              tabsOf={path => assignment.byWorktree.get(path) ?? []}
+              renderTab={renderTab}
+              onOpenWorktree={openWorktree}
+              renderServers={renderServers}
+              onDropOnProject={linkDropped}
+            />
+          )}
+          {assignment.others.length > 0 && (
+            <>
+              {nodes.length > 0 && <div className="local-terms-group">다른 로컬 터미널</div>}
+              <ul className="local-terms-list">
+                {assignment.others.map(renderTab)}
+              </ul>
+            </>
+          )}
         </div>
       )}
     </div>

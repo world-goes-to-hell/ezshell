@@ -8,13 +8,16 @@ import { useThemeStore } from '../../stores/themeStore'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { toast } from '../../stores/toastStore'
 import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
-import { MAIN_PANE, MAX_PANES, singlePane, layoutOf, leafCount, paneIds, closePane, equalize, paneBox, type PaneId } from '../../lib/splitTree'
-import { ensureLocalPaneShell, closeLocalPaneShells } from '../../lib/localPaneShells'
+import { MAIN_PANE, MAX_PANES, singlePane, layoutOf, leafCount, paneIds, equalize, paneBox, type PaneId } from '../../lib/splitTree'
+import { closeTabPane } from '../../lib/paneToTab'
+import { ensureLocalPaneShell, getLocalPaneShellId, closeLocalPaneShells } from '../../lib/localPaneShells'
 import { TerminalContextMenu, MENU_SEPARATOR, type TerminalMenuGroup } from './TerminalContextMenu'
 import { commonTerminalItems } from './terminalMenuCommon'
 import { attachLogHighlight } from './terminalLogHighlight'
 import { PaneArrival, SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
-import { AgentPaneMessages } from './AgentMessages'
+import { AgentPaneMessages, useAgentMessagesStore } from './AgentMessages'
+import { agentNewlineFor } from '../../lib/agentNewline'
+import { AgentPaneUsage } from '../AgentUsage/AgentUsageMeters'
 import './LocalTerminalTab.css'
 
 interface LocalTerminalTabProps {
@@ -51,6 +54,11 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const pasteRef = useRef<(() => void) | undefined>(undefined)
   const [exit, setExit] = useState<{ code: number | null } | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const agentWork = useAgentMessagesStore(state => {
+    const agent = state.snapshot.agents.find(item => item.shellId === shellId)
+    if (!agent) return undefined
+    return !exit && agent.status === 'working' && !agent.waitingForReply ? 'working' : 'idle'
+  })
   const fontSize = useTerminalStore(state => state.fontSize)
   const fontFamily = useTerminalStore(state => state.fontFamily)
   const tab = useTerminalStore(state => state.terminals.get(tabId))
@@ -130,6 +138,17 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     }
     host.addEventListener('paste', onNativePaste, true)
     terminal.attachCustomKeyEventHandler((event) => {
+      // Shift+Enter adds a line in Claude Code / Codex (xterm would send the same Enter key as plain Enter)
+      const newline = agentNewlineFor(event, () => useAgentMessagesStore.getState().snapshot.agents
+        .some(agent => agent.active && agent.shellId === shellId && (agent.kind === 'claude' || agent.kind === 'codex')))
+      if (newline) {
+        if (event.type === 'keydown') {
+          event.preventDefault()
+          if (deferredInput) deferredInput.push(newline)
+          else write(newline)
+        }
+        return false
+      }
       // Ctrl+C with a selection copies instead of interrupting
       if (event.ctrlKey && event.key === 'c' && event.type === 'keydown') {
         const selection = terminal.getSelection()
@@ -256,11 +275,17 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
           },
           MENU_SEPARATOR,
           { label: '칸 크기 균등화', icon: RiLayoutGridLine, disabled: !isSplit, onSelect: then(() => { setSplitTree(tabId, equalize(tree)); refit() }) },
+          // The tab's first terminal closes too: another shell of the tab becomes the main one
           {
-            label: pane === MAIN_PANE && isSplit ? '이 칸 닫기 (탭의 첫 터미널)' : '이 칸 닫기',
+            label: '이 칸 닫기',
             icon: RiCloseLine,
-            disabled: !isSplit || pane === MAIN_PANE,
-            onSelect: () => { setSplitTree(tabId, closePane(tree, pane)); refit() }
+            disabled: !isSplit,
+            onSelect: () => {
+              void closeTabPane(tabId, pane).then((result) => {
+                if (result.ok) refit()
+                else toast.error('칸을 닫지 못했습니다', result.error)
+              })
+            }
           }
         ]
       },
@@ -269,13 +294,21 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   }
 
   return (
-    <div className="local-terminal-pane" data-pane={pane} data-local-shell-id={shellId} data-local-tab-id={tabId} style={style}>
+    <div
+      className="local-terminal-pane"
+      data-pane={pane}
+      data-local-shell-id={shellId}
+      data-local-tab-id={tabId}
+      data-agent-work={agentWork}
+      style={style}
+    >
       <div ref={hostRef} className="local-terminal-host" onContextMenu={onContextMenu} />
+      <AgentPaneUsage shellId={shellId} />
       <AgentPaneMessages shellId={shellId} tabId={tabId} />
       {exit && (
         <div className="local-terminal-exit" role="status">
           셸이 종료되었습니다{exit.code !== null && exit.code !== 0 ? ` (종료 코드 ${exit.code})` : ''}.
-          {pane === MAIN_PANE ? ' 탭을 닫아 주세요.' : ' 우클릭 메뉴의 `분할` > `이 칸 닫기` 로 닫아 주세요.'}
+          {pane === MAIN_PANE && !tab?.isSplit ? ' 탭을 닫아 주세요.' : ' 우클릭 메뉴의 `분할` > `이 칸 닫기` 로 닫아 주세요.'}
         </div>
       )}
       {menu && groups && top && (
@@ -293,6 +326,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
 
 /** A split pane of a local terminal tab: opens a shell of its own, then shows it */
 function LocalSplitPane({ tabId, pane, style }: { tabId: string; pane: PaneId; style: CSSProperties }) {
+  const currentShellId = useTerminalStore(() => getLocalPaneShellId(tabId, pane))
   const [shell, setShell] = useState<{ id: string } | { error: string } | null>(null)
   const [attempt, setAttempt] = useState(0)
 
@@ -305,10 +339,11 @@ function LocalSplitPane({ tabId, pane, style }: { tabId: string; pane: PaneId; s
     return () => { isCurrent = false }
   }, [tabId, pane, attempt])
 
-  if (shell && 'id' in shell) return <LocalShellView tabId={tabId} pane={pane} shellId={shell.id} takesFocus={false} style={style} />
+  const shellId = currentShellId ?? (shell && 'id' in shell ? shell.id : null)
+  if (shellId) return <LocalShellView key={shellId} tabId={tabId} pane={pane} shellId={shellId} takesFocus={false} style={style} />
   return (
     <div className="local-terminal-pane local-terminal-pane-status" data-pane={pane} style={style} role="status">
-      {shell ? (
+      {shell && 'error' in shell ? (
         <>
           <span>{shell.error}</span>
           <button type="button" className="split-terminal-retry-btn" onClick={() => setAttempt(count => count + 1)}>다시 시도</button>
@@ -342,6 +377,7 @@ export function LocalTerminalTab({ terminalId, isActive, onActivate }: LocalTerm
   return (
     <div ref={containerRef} className={`local-terminal-tab${isSplit ? ' is-split' : ''}`} onMouseDown={onActivate}>
       <LocalShellView
+        key={mainShellId}
         tabId={terminalId}
         pane={MAIN_PANE}
         shellId={mainShellId}

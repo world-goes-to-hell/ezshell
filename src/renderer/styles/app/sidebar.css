@@ -17,10 +17,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  /* As tall as the tab strip beside it (.terminal-tabs: 8px + a 38px tab + the line), so the two
-     bottom lines meet as one. It was 53px and the line stepped down 6px at the sidebar's edge. */
   box-sizing: border-box;
-  height: 47px;
+  height: var(--terminal-tab-strip-height);
   flex-shrink: 0;
   padding: 0 12px;
   border-bottom: 1px solid var(--border);
@@ -37,8 +35,7 @@
   gap: 6px;
 }
 
-.sidebar-toggle,
-.sidebar-session-search {
+.sidebar-toggle {
   width: 32px;
   height: 32px;
   border: none;
@@ -52,10 +49,74 @@
   transition: all var(--transition-fast);
 }
 
-.sidebar-toggle:hover,
-.sidebar-session-search:hover {
+.sidebar-toggle:hover {
   background: var(--accent);
   color: var(--on-accent);
+}
+
+/* Session search under the buttons (Sidebar/SessionSearchBox.tsx) */
+.sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 12px 8px;
+  padding: 0 4px 0 8px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+}
+
+.sidebar-search:focus-within {
+  border-color: var(--accent);
+}
+
+.sidebar-search-icon {
+  flex-shrink: 0;
+}
+
+.sidebar-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 2px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.sidebar-search-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.sidebar-search-count.is-none {
+  color: var(--text-muted);
+}
+
+.sidebar-search-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.sidebar-search-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .sidebar-actions {
@@ -122,13 +183,6 @@
 .btn-new-folder:hover {
   border-color: var(--accent);
   color: var(--accent);
-}
-
-/* Sidebar Footer */
-.sidebar-footer {
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
-  margin-top: auto;
 }
 
 .btn-stats {

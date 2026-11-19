@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type DragEvent, type RefObject } from 'react'
-import { RiMoreFill } from 'react-icons/ri'
+import { RiCloseLine, RiMoreFill } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import {
   layoutOf, leafAt, swapPanes, setRatio, equalizeAt, mergeVacant, paneBox, dividerBox,
@@ -7,7 +7,7 @@ import {
 } from '../../lib/splitTree'
 import { PANE_DRAG_TYPE, currentPaneDrag, startPaneDrag, endPaneDrag, isPaneDrag } from '../../lib/paneDrag'
 import { zoneAt, canHalve, movePaneBeside, sideWord, TOO_NARROW, type DropZone } from '../../lib/paneDropZones'
-import { usePaneGesture } from '../../hooks/usePaneGesture'
+import { PANE_GESTURE_CANCEL_RADIUS, usePaneGesture } from '../../hooks/usePaneGesture'
 
 /** Where a dragged pane would go on the pane under the pointer, and whether it can */
 interface PaneDropTarget { pane: PaneId; zone: DropZone; blocked: string | null }
@@ -170,7 +170,8 @@ export function SplitChrome({ tabId, tree, containerRef }: SplitChromeProps) {
     refit()
   }
 
-  const from = preview && layout.panes.find(entry => entry.pane === preview.from)?.rect
+  const cancelTarget = preview?.cancelTarget
+  const from = preview && !cancelTarget?.active && layout.panes.find(entry => entry.pane === preview.from)?.rect
   const action = preview?.action
   const merge = action?.kind === 'merge' ? action : null
   const to = merge && layout.panes.find(entry => entry.pane === merge.to)?.rect
@@ -182,6 +183,24 @@ export function SplitChrome({ tabId, tree, containerRef }: SplitChromeProps) {
       {merge && <div className="pane-merge-preview is-area" style={paneBox(merge.expanded, PANE_DIVIDER_PX)} aria-hidden="true" />}
       {to && <div className="pane-merge-preview is-destination" style={paneBox(to, PANE_DIVIDER_PX)} aria-hidden="true"><span>놓으면 이 셸을 닫습니다</span></div>}
       {from && split && <div className={`pane-gesture-divider is-${split.axis}`} style={dividerBox({ ...split, path: '', region: from }, PANE_DIVIDER_PX)} aria-hidden="true" />}
+      {cancelTarget && (
+        <>
+          <div
+            className={`pane-gesture-cancel-target${cancelTarget.active ? ' is-active' : ''}`}
+            style={{ left: cancelTarget.x, top: cancelTarget.y, width: PANE_GESTURE_CANCEL_RADIUS * 2, height: PANE_GESTURE_CANCEL_RADIUS * 2 }}
+            aria-hidden="true"
+          >
+            <RiCloseLine size={18} />
+          </div>
+          <span
+            className={`pane-gesture-cancel-label${cancelTarget.above ? ' is-above' : ''}`}
+            style={{ left: cancelTarget.labelX, top: cancelTarget.y + (cancelTarget.above ? -1 : 1) * (PANE_GESTURE_CANCEL_RADIUS + 6) }}
+            role="status"
+          >
+            {cancelTarget.active ? '놓으면 취소' : '시작점에서 취소'}
+          </span>
+        </>
+      )}
     </>
   )
 

@@ -2,7 +2,7 @@
 const { execFileSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
-const { connect, createChecks, SET, unlock } = require('../support/driver')
+const { connect, createChecks, SET, unlock, openLocalProject } = require('../support/driver')
 
 const { check, finish } = createChecks()
 
@@ -27,7 +27,7 @@ async function run() {
     await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([repo, plain]))})`)
 
     const openDialog = async () => {
-      await js(`document.querySelector('button[aria-label="로컬 작업"]').click()`)
+      await openLocalProject(driver)
       if (!(await until(`!!document.querySelector('.local-project-dialog')`))) throw new Error('local project dialog did not open')
     }
     const select = (id, value) => js(`(() => {

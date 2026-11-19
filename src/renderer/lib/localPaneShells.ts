@@ -5,6 +5,7 @@
 // tab closes.
 
 import { MAIN_PANE, type PaneId } from './splitTree'
+import type { LocalAgent } from '../types'
 import { useTerminalStore } from '../stores/terminalStore'
 
 export type LocalPaneShell = { ok: true; id: string } | { ok: false; error: string }
@@ -23,6 +24,19 @@ export function getLocalPaneShellId(tabId: string, pane: PaneId): string | undef
 }
 
 /** The pane's shell, opened on first ask (asked twice at once, it is still opened once) */
+// A pane of a tab opened again after a restart, whose agent starts again: its conversation (the key of
+// that session in the agent history, which main checks against the transcripts) or the same agent fresh
+export interface PaneStart {
+  agent: LocalAgent
+  resume?: string
+}
+const pendingStart = new Map<string, PaneStart>()
+
+/** The next shell of this pane starts that agent (resuming its conversation when given) instead of a plain shell */
+export function queuePaneStart(tabId: string, pane: PaneId, start: PaneStart): void {
+  pendingStart.set(keyOf(tabId, pane), start)
+}
+
 export function ensureLocalPaneShell(tabId: string, pane: PaneId): Promise<LocalPaneShell> {
   const key = keyOf(tabId, pane)
   const pending = opening.get(key)
@@ -33,7 +47,13 @@ export function ensureLocalPaneShell(tabId: string, pane: PaneId): Promise<Local
   holder.promise = (async (): Promise<LocalPaneShell> => {
     try {
       const cwd = useTerminalStore.getState().terminals.get(tabId)?.local?.cwd
-      const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd })
+      const start = pendingStart.get(key)
+      pendingStart.delete(key)
+      const openWith = (extra: object) => window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd, ...extra })
+      let result = await openWith(start ? { agent: start.agent, ...(start.resume ? { resume: start.resume } : {}) } : {})
+      // The conversation could not be resumed (its transcript is gone): the same agent fresh, then a plain shell
+      if (start?.resume && result && !result.success) result = await openWith({ agent: start.agent })
+      if (start && result && !result.success) result = await openWith({})
       if (!result) return { ok: false, error: '앱을 다시 시작해 주세요.' }
       if (!result.success) return { ok: false, error: result.error }
       // The pane was closed while the shell was opening: nobody will use it

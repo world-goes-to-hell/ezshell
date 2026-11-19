@@ -42,12 +42,11 @@ export function groupTabsBySession(terminals: ReadonlyMap<string, TerminalInfo>)
   return groups
 }
 
-/** Pane holding the tab while the view is split; null in single mode or when the tab is in neither pane */
-export function findTabPane(layout: LayoutState, terminalId: string): 'primary' | 'secondary' | null {
+/** The screen (index) holding the tab while the view is split; null in single mode or when no screen has it */
+export function findTabPane(layout: LayoutState, terminalId: string): number | null {
   if (layout.mode !== 'split') return null
-  if (layout.primary.terminalIds.includes(terminalId)) return 'primary'
-  if (layout.secondary?.terminalIds.includes(terminalId)) return 'secondary'
-  return null
+  const index = layout.panes.findIndex(pane => pane.terminalIds.includes(terminalId))
+  return index < 0 ? null : index
 }
 
 export function badgeLabel(status: TabStatus, count: number): string {

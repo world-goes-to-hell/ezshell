@@ -77,25 +77,3 @@
   flex-shrink: 0;
   color: var(--text-muted);
 }
-
-.welcome-local-terminal,
-.welcome-pick-session {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 12px;
-  padding: 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: border-color var(--transition-fast), color var(--transition-fast);
-}
-
-.welcome-local-terminal:hover,
-.welcome-pick-session:hover {
-  border-color: var(--accent);
-  color: var(--text-primary);
-}

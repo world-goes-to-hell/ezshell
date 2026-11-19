@@ -486,3 +486,133 @@ button.remote-log-count:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* ---- Placeholders (`${NAME}`) and where they are set (placeholderLinks.ts, DefinitionList.tsx) ---- */
+.cm-placeholder-ref {
+  text-decoration: underline dotted;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+}
+
+.cm-revealed-line {
+  background-color: color-mix(in srgb, var(--accent) 22%, transparent) !important;
+  transition: background-color 400ms ease;
+}
+
+.definition-list {
+  position: fixed;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: min(520px, calc(100vw - 16px));
+  max-height: min(420px, calc(100vh - 16px));
+  padding: 8px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.definition-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.definition-list-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.definition-list-close {
+  display: flex;
+  padding: 2px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.definition-list-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.definition-list-fallback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.definition-list-fallback code,
+.definition-list-text {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.definition-list-note {
+  margin: 0;
+  padding: 4px 2px;
+  color: var(--text-muted);
+}
+
+.definition-list-note.is-error {
+  color: var(--error);
+}
+
+.definition-list-items {
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.definition-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.definition-list-item:hover,
+.definition-list-item:focus-visible {
+  background: var(--bg-modifier-hover, var(--bg-hover));
+}
+
+.definition-list-file {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.definition-list-line {
+  color: var(--text-muted);
+}
+
+.definition-list-text {
+  color: var(--text-primary);
+}

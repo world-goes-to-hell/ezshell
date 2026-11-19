@@ -1,12 +1,13 @@
 // Changing an app shortcut in the settings: refused combinations, saving, the old key stops working,
 // reset. Run by e2e/run.js (fresh profile, no server needed).
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const { findPage, isMainPage } = require('../support/driver')
 let failures = 0
 const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? '  -- ' + d : ''}`) }
 ;(async () => {
-  let list = []
-  for (let i = 0; i < 60 && !list.some((t) => t.type === 'page'); i++) { try { list = await (await fetch(process.env.E2E_CDP + '/json')).json() } catch {} await sleep(500) }
-  const ws = new WebSocket(list.find((t) => t.type === 'page').webSocketDebuggerUrl)
+  const mainPage = await findPage(isMainPage)
+  if (!mainPage) throw new Error('the app has no main page')
+  const ws = new WebSocket(mainPage.webSocketDebuggerUrl)
   await new Promise((res) => { ws.onopen = res })
   let id = 0; const pending = new Map()
   ws.onmessage = (e) => { const m = JSON.parse(e.data); if (pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) } }
@@ -50,8 +51,24 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
 
   await combo('p', { ctrl: true })
   check('the default Ctrl+P opens the command palette', await palette())
+  // The sidebar's bottom buttons were taken out: what they opened is found here
+  const finds = async (query, title) => {
+    await js(`(() => { const set = ${SET}; set(document.querySelector('.command-palette input'), ${JSON.stringify(query)}) })()`)
+    return until(`document.querySelector('.command-palette')?.textContent.includes(${JSON.stringify(title)})`, 3000)
+  }
+  check('the palette finds the agent messages, local project, batch command and stats',
+    await finds('메시지', '에이전트 메시지 열기') && await finds('로컬 작업', '로컬 작업 열기') && await finds('배치', '배치 명령 실행') && await finds('통계', '세션 통계'))
+  check('the empty start screen offers only New Connection and local work is in the sidebar',
+    await js(`document.querySelectorAll('.welcome-screen button').length === 1 &&
+      document.querySelector('.welcome-screen button')?.textContent.trim() === '새 연결' &&
+      !!document.querySelector('.sidebar .local-terms-btn[aria-label="새 로컬 터미널"]')`))
   await esc()
   check('Esc closes it', !(await palette()))
+
+  await js("document.querySelector('.welcome-screen button').click()")
+  check('New Connection on the empty start screen opens the connection form',
+    await until('!!document.querySelector(\'input[placeholder="192.168.1.1"]\')', 5000))
+  await esc()
 
   check('the shortcuts tab lists the shortcuts in Korean', await openShortcuts(), String(await js(`[...document.querySelectorAll('.shortcut-description')].slice(0, 4).map(d => d.textContent).join(', ')`)))
   check('with the default keys', (await keysOf('명령 팔레트 열기')) === 'Ctrl+P', await keysOf('명령 팔레트 열기'))
