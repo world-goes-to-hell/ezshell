@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RiRefreshLine, RiSearchLine } from 'react-icons/ri'
 import type { AgentHistorySession } from '../../types'
 import { useTerminalStore } from '../../stores/terminalStore'
-import { AGENT_LABELS, CONTENT_SEARCH_MIN_LENGTH, RESUME_AGENT_SESSION_EVENT, folderName, relativeTime, withContentMatches, type AgentHistoryScope, type ResumeAgentSessionRequest } from '../../lib/agentHistory'
+import { AGENT_LABELS, CONTENT_SEARCH_MIN_LENGTH, RESUME_AGENT_SESSION_EVENT, folderName, relativeTime, withContentMatches, type ResumeAgentSessionRequest } from '../../lib/agentHistory'
 import { matchName } from '../../lib/containerSearch'
+import { visibleTerminalId } from '../../lib/localTerminalPane'
+import { pathKey } from '../../lib/localWorkspaceTree'
 import { AgentHistoryDetail, type DetailState } from './AgentHistoryDetail'
 import { endAgentSessionDrag, startAgentSessionDrag } from '../../lib/agentSessionDrop'
 import { AGENT_PROVIDER_ICONS } from '../Sidebar/LocalSessionAgents'
@@ -14,38 +16,24 @@ const MINUTE = 60_000
 const CONTENT_SEARCH_DELAY_MS = 400
 const NO_HITS: ReadonlyMap<string, string> = new Map()
 
-interface Project {
-  label: string
-  roots: string[]
+export function AgentHistoryPanel() {
+  const terminal = useTerminalStore(state => {
+    const id = visibleTerminalId(state.layout, state.activeTerminalId)
+    return id ? state.terminals.get(id) : undefined
+  })
+  const local = terminal?.local
+  if (!terminal || !local?.cwd) {
+    return <p className="agent-history-note">프로젝트의 로컬 터미널을 선택하면 대화 기록을 볼 수 있습니다.</p>
+  }
+  return <ProjectHistory key={pathKey(local.cwd)} shellId={local.shellId ?? terminal.id} />
 }
 
-/** The folder of the local terminal tab in front, or null (SSH tabs are on another machine) */
-function activeLocalFolder(): string | null {
-  const { terminals, activeTerminalId } = useTerminalStore.getState()
-  const info = activeTerminalId ? terminals.get(activeTerminalId) : undefined
-  if (!info?.local) return null
-  return info.local.cwd ?? info.currentPath ?? null
-}
-
-/** The Git repository (with its worktrees) the folder belongs to, or the folder itself */
-async function projectOf(folder: string): Promise<Project> {
-  try {
-    const result = await window.electronAPI.localProjectInspect(folder)
-    if (result.success && result.repo) {
-      return { label: folderName(result.repo.root), roots: [result.repo.root, ...result.repo.worktrees.map(tree => tree.path)] }
-    }
-  } catch { /* fall back to the folder */ }
-  return { label: folderName(folder), roots: [folder] }
-}
-
-/** Past Claude Code and Codex sessions of this PC. Lists again each time the tab is shown. */
-export function AgentHistoryPanel({ isActive }: { isActive: boolean }) {
+function ProjectHistory({ shellId }: { shellId: string }) {
   const [sessions, setSessions] = useState<AgentHistorySession[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [query, setQuery] = useState('')
-  const [scope, setScope] = useState<AgentHistoryScope>('project')
-  const [project, setProject] = useState<Project | null>(null)
+  const [project, setProject] = useState('')
   const [showEmpty, setShowEmpty] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [details, setDetails] = useState<Record<string, DetailState>>({})
@@ -58,38 +46,33 @@ export function AgentHistoryPanel({ isActive }: { isActive: boolean }) {
   const load = useCallback(async () => {
     const id = ++request.current
     setIsLoading(true)
-    const folder = activeLocalFolder()
-    const [result, nextProject] = await Promise.all([
-      window.electronAPI.agentHistoryList?.() ?? Promise.resolve({ success: false as const, error: '앱을 다시 시작해 주세요.' }),
-      folder ? projectOf(folder) : Promise.resolve(null)
-    ]).catch(() => [{ success: false as const, error: '에이전트 기록을 읽지 못했습니다.' }, null] as const)
+    const result = await window.electronAPI.agentHistoryList?.(shellId).catch(() => null)
     if (id !== request.current) return
     setIsLoading(false)
-    setProject(nextProject)
     setNow(Date.now())
-    if (!result.success) {
-      setError(result.error)
+    if (!result?.success) {
+      setSessions(null)
+      setError(result?.error ?? '에이전트 기록을 읽지 못했습니다.')
       return
     }
     setError(null)
+    setProject(result.project)
     setSessions(result.sessions)
     // A row whose transcript changed reads its detail again when it is opened
     setDetails({})
-  }, [])
+  }, [shellId])
 
   // The work panel stays open beside the terminals: the scope follows the tab in front. Listing again
   // is cheap (main reads only the transcripts that changed).
-  const activeTerminalId = useTerminalStore(state => state.activeTerminalId)
-  const activeFolder = useTerminalStore(activeLocalFolder)
   useEffect(() => {
-    if (isActive) void load()
-  }, [isActive, activeTerminalId, activeFolder, load])
+    void load()
+    return () => { request.current++ }
+  }, [load])
 
   useEffect(() => {
-    if (!isActive) return
     const timer = setInterval(() => setNow(Date.now()), MINUTE)
     return () => clearInterval(timer)
-  }, [isActive])
+  }, [])
 
   const openDetail = async (key: string) => {
     if (expanded === key) {
@@ -99,7 +82,7 @@ export function AgentHistoryPanel({ isActive }: { isActive: boolean }) {
     setExpanded(key)
     if (details[key]?.status === 'ready') return
     setDetails(current => ({ ...current, [key]: { status: 'loading' } }))
-    const result = await window.electronAPI.agentHistoryDetail?.(key).catch(() => null)
+    const result = await window.electronAPI.agentHistoryDetail?.(shellId, key).catch(() => null)
     setDetails(current => ({
       ...current,
       [key]: result?.success
@@ -117,7 +100,7 @@ export function AgentHistoryPanel({ isActive }: { isActive: boolean }) {
   // list was read again (a newer search stops the older one there)
   useEffect(() => {
     const trimmed = query.trim()
-    if (!isActive || !sessions || trimmed.length < CONTENT_SEARCH_MIN_LENGTH || !window.electronAPI.agentHistorySearch) {
+    if (!sessions || trimmed.length < CONTENT_SEARCH_MIN_LENGTH || !window.electronAPI.agentHistorySearch) {
       setContentHits(null)
       setIsSearchingContent(false)
       return
@@ -125,7 +108,7 @@ export function AgentHistoryPanel({ isActive }: { isActive: boolean }) {
     let isCurrent = true
     setIsSearchingContent(true)
     const timer = window.setTimeout(() => {
-      void window.electronAPI.agentHistorySearch?.(trimmed).then(result => {
+      void window.electronAPI.agentHistorySearch?.(shellId, trimmed).then(result => {
         if (!isCurrent) return
         setIsSearchingContent(false)
         if (result.success) setContentHits({ query: trimmed, hits: new Map(result.matches.map(match => [match.key, match.snippet])) })
@@ -135,15 +118,12 @@ export function AgentHistoryPanel({ isActive }: { isActive: boolean }) {
       isCurrent = false
       window.clearTimeout(timer)
     }
-  }, [query, sessions, isActive])
+  }, [query, sessions, shellId])
 
   // Excerpts belong to the query they were found for
   const hits = contentHits && contentHits.query === query.trim() ? contentHits.hits : NO_HITS
   const words = useMemo(() => [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))], [query])
-  const effectiveScope: AgentHistoryScope = project ? scope : 'all'
-  const shown = useMemo(() => withContentMatches(sessions ?? [], {
-    query, roots: effectiveScope === 'project' && project ? project.roots : null, showEmpty
-  }, hits), [sessions, query, effectiveScope, project, showEmpty, hits])
+  const shown = useMemo(() => withContentMatches(sessions ?? [], { query, showEmpty }, hits), [sessions, query, showEmpty, hits])
   const hiddenEmpty = useMemo(() => (sessions ?? []).filter(session => !session.hasPrompt).length, [sessions])
 
   return (
@@ -167,19 +147,9 @@ export function AgentHistoryPanel({ isActive }: { isActive: boolean }) {
           />
         </div>
         <div className="agent-history-bar">
-          <div className="agent-history-scope" role="group" aria-label="범위">
-            <button type="button" className={`mcp-activity-view-btn${effectiveScope === 'project' ? ' is-active' : ''}`}
-              aria-pressed={effectiveScope === 'project'} disabled={!project} onClick={() => setScope('project')}
-              title={project ? `${project.label} 의 세션 (워크트리 포함)` : '로컬 터미널 탭이 앞에 있을 때 그 프로젝트의 세션만 볼 수 있습니다'}>
-              {project ? project.label : '이 프로젝트'}
-            </button>
-            <button type="button" className={`mcp-activity-view-btn${effectiveScope === 'all' ? ' is-active' : ''}`}
-              aria-pressed={effectiveScope === 'all'} onClick={() => setScope('all')}>
-              전체
-            </button>
-          </div>
+          <span className="agent-history-project" title={project}>{project}</span>
           <span className="agent-history-count">
-            {sessions ? `${shown.length}개 표시 · 전체 ${sessions.length}개` : ''}
+            {sessions ? `${shown.length}개 표시 · 프로젝트 ${sessions.length}개` : ''}
           </span>
           <button type="button" className="mcp-icon-btn" onClick={() => void load()} disabled={isLoading} aria-label="에이전트 기록 새로 고침" title="새로 고침">
             <RiRefreshLine size={16} className={isLoading ? 'agent-history-spin' : undefined} />
@@ -192,7 +162,7 @@ export function AgentHistoryPanel({ isActive }: { isActive: boolean }) {
       {!sessions && !error && <p className="agent-history-note">기록을 찾는 중…</p>}
       {sessions && shown.length === 0 && !isSearchingContent && (
         <p className="agent-history-note">
-          {sessions.length === 0 ? '이 PC 에서 실행한 Claude Code·Codex 세션이 없습니다.' : '조건에 맞는 세션이 없습니다.'}
+          {sessions.length === 0 ? '이 프로젝트에 대화 기록이 없습니다.' : '조건에 맞는 세션이 없습니다.'}
         </p>
       )}
 
@@ -236,7 +206,7 @@ export function AgentHistoryPanel({ isActive }: { isActive: boolean }) {
                   </span>
                 )}
               </button>
-              {isOpen && <AgentHistoryDetail session={session} state={details[session.key]} onResume={resume} />}
+              {isOpen && <AgentHistoryDetail session={session} state={details[session.key]} shellId={shellId} onResume={resume} />}
             </li>
           )
         })}

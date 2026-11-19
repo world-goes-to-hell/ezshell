@@ -2,6 +2,7 @@ import { useState, type DragEvent, type ReactNode } from 'react'
 import { RiArrowDownSLine, RiArrowRightSLine, RiFolder3Line, RiGitBranchLine } from 'react-icons/ri'
 import type { LocalProjectState } from '../../hooks/useLocalProjects'
 import { folderLabel, pathKey } from '../../lib/localWorkspaceTree'
+import { LocalSessionAgents } from './LocalSessionAgents'
 
 export interface WorktreeNode {
   path: string
@@ -52,9 +53,10 @@ interface LocalProjectsTreeProps {
   nodes: ProjectNode[]
   folded: ReadonlySet<string>
   onToggleFold: (key: string) => void
-  /** Tab ids per worktree path */
-  tabsOf: (path: string) => string[]
-  renderTab: (tabId: string) => ReactNode
+  tabsOf: (path: string) => { id: string; name: string; connected: boolean }[]
+  currentTabId: string | null
+  renderTab: (tabId: string, label?: string) => ReactNode
+  renderTabActions: (tabId: string, name: string) => ReactNode
   onOpenWorktree: (project: ProjectNode, worktree: WorktreeNode) => void
   /** The saved SSH sessions linked to the project ("서버"), drawn above its worktrees */
   renderServers?: (project: ProjectNode) => ReactNode
@@ -67,7 +69,9 @@ export const worktreeFoldKey = (path: string) => `w:${pathKey(path)}`
 
 /** Registered folders → worktrees → the local terminals open in each (with their agents) */
 // Past agent sessions are not listed here: the agent history of the right panel shows them (user's choice)
-export function LocalProjectsTree({ nodes, folded, onToggleFold, tabsOf, renderTab, onOpenWorktree, renderServers, onDropOnProject }: LocalProjectsTreeProps) {
+export function LocalProjectsTree({
+  nodes, folded, onToggleFold, tabsOf, currentTabId, renderTab, renderTabActions, onOpenWorktree, renderServers, onDropOnProject
+}: LocalProjectsTreeProps) {
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   // Sessions and tabs are dragged as text/plain (`session:<id>` / the tab id)
   const dropProps = (project: ProjectNode, key: string) => onDropOnProject ? {
@@ -114,19 +118,25 @@ export function LocalProjectsTree({ nodes, folded, onToggleFold, tabsOf, renderT
                   const tabs = tabsOf(worktree.path)
                   const treeKey = worktreeFoldKey(worktree.path)
                   const isTreeOpen = !folded.has(treeKey)
-                  const hasChildren = tabs.length > 0
+                  const singleTab = tabs.length === 1 ? tabs[0] : undefined
+                  const hasChildren = tabs.length > 1
+                  const isCurrent = singleTab?.id === currentTabId
+                  const name = folderLabel(worktree.path)
+                  const shownNames = [name, project.name, worktree.branch && `${project.name} · ${worktree.branch}`]
                   return (
-                    <li key={treeKey} className={`local-worktree${tabs.length > 0 ? ' has-tabs' : ''}`} data-worktree-path={worktree.path}>
+                    <li key={treeKey} className={`local-worktree${tabs.length > 0 ? ' has-tabs' : ''}${isCurrent ? ' is-current' : ''}`}
+                      data-worktree-path={worktree.path} data-local-session-id={singleTab?.id}>
                       <div className="local-worktree-row">
                         <button
                           type="button"
                           className="local-worktree-open"
+                          aria-current={isCurrent || undefined}
                           onClick={() => onOpenWorktree(project, worktree)}
-                          title={tabs.length > 0 ? `${worktree.path}\n열린 터미널로 이동` : `${worktree.path}\n이 폴더에서 로컬 터미널 열기`}
+                          title={`${worktree.path}\n${singleTab ? `${singleTab.name} 탭으로 이동` : hasChildren ? '열린 터미널로 이동' : '이 폴더에서 로컬 터미널 열기'}`}
                         >
-                          <span className={`local-worktree-dot${tabs.length > 0 ? ' is-on' : ''}`} aria-hidden="true" />
+                          <span className={`local-worktree-dot${tabs.some(tab => tab.connected) ? ' is-on' : ''}`} aria-hidden="true" />
                           <span className="local-worktree-label">
-                            <span className="local-worktree-name">{folderLabel(worktree.path)}</span>
+                            <span className="local-worktree-name">{name}</span>
                             {worktree.isMain && project.worktrees.length > 1 && <span className="local-worktree-tag">기본</span>}
                           </span>
                           {worktree.branch && (
@@ -136,6 +146,7 @@ export function LocalProjectsTree({ nodes, folded, onToggleFold, tabsOf, renderT
                             </span>
                           )}
                         </button>
+                        {singleTab && renderTabActions(singleTab.id, singleTab.name)}
                         {hasChildren && (
                           <button
                             type="button"
@@ -148,9 +159,15 @@ export function LocalProjectsTree({ nodes, folded, onToggleFold, tabsOf, renderT
                           </button>
                         )}
                       </div>
+                      {singleTab && <LocalSessionAgents tabId={singleTab.id} />}
                       {hasChildren && isTreeOpen && (
                         <div className="local-worktree-content">
-                          <ul className="local-terms-list is-nested">{tabs.map(renderTab)}</ul>
+                          <ul className="local-terms-list is-nested">
+                            {tabs.map((tab, index) => {
+                              const repeated = shownNames.includes(tab.name) || shownNames.includes(tab.name.replace(/ \(\d+\)$/, ''))
+                              return renderTab(tab.id, repeated ? `터미널 ${index + 1}` : tab.name)
+                            })}
+                          </ul>
                         </div>
                       )}
                     </li>

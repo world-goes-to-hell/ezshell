@@ -240,6 +240,10 @@
   border-color: color-mix(in srgb, var(--success) 30%, var(--border));
 }
 
+.local-worktree.is-current {
+  background: var(--bg-modifier-selected);
+}
+
 .local-worktree-row {
   display: flex;
   align-items: center;
@@ -375,6 +379,11 @@
   scrollbar-width: thin;
 }
 
+.local-worktree > .local-agent-strip {
+  margin-block-end: 2px;
+  margin-inline-start: 28px;
+}
+
 .local-agent-chip {
   display: inline-flex;
   flex: none;
@@ -501,7 +510,10 @@
 
 .local-terms-row:hover .local-terms-close,
 .local-terms-row:focus-within .local-terms-close,
-.local-terms-row.is-current .local-terms-close {
+.local-terms-row.is-current .local-terms-close,
+.local-worktree:hover > .local-worktree-row > .local-terms-close,
+.local-worktree:focus-within > .local-worktree-row > .local-terms-close,
+.local-worktree.is-current > .local-worktree-row > .local-terms-close {
   opacity: 1;
 }
 

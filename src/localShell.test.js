@@ -34,6 +34,47 @@ describe('defaultShell', () => {
 })
 
 describe('createLocalShells', () => {
+  it('tracks the CLI across MCP disconnection and reconnection until the CLI exits', async () => {
+    vi.useFakeTimers()
+    const processes = new Map([
+      [15, { parent: 14, name: 'electron.exe' }],
+      [14, { parent: 13, name: 'powershell.exe' }],
+      [13, { parent: 12, name: 'node.exe' }],
+      [12, { parent: 10, name: 'claude.exe' }]
+    ])
+    const alive = new Set([12, 13, 14, 15])
+    const { shells, ptys } = setup({ agents: {}, processTree: async () => processes, processAlive: pid => alive.has(pid) })
+    const { id } = shells.open()
+    ptys[0].pid = 10
+    const onExit = vi.fn()
+    try {
+      const attach = await shells.bindAgentProcess({ pid: 15, kind: 'claude' })
+      const binding = attach({ agentId: 'claude-1', setStatus: vi.fn(), onExit })
+      expect(binding.shellId).toBe(id)
+      alive.delete(15)
+      expect(binding.detach()).toBe(true)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(shells.agentOf(id).kind).toBe('claude')
+      expect(onExit).not.toHaveBeenCalled()
+
+      processes.set(16, { parent: 13, name: 'electron.exe' })
+      alive.add(16)
+      const reconnect = await shells.bindAgentProcess({ pid: 16, kind: 'claude' })
+      const reconnected = reconnect({ agentId: 'claude-2', setStatus: vi.fn(), onExit })
+      expect(reconnected.agentId).toBe('claude-1')
+      expect(binding.detach()).toBe(false)
+      alive.delete(12)
+      expect(await shells.chatSend(id, 'check')).toEqual({ ok: false, reason: 'not-agent' })
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(shells.isRunning(id)).toBe(true)
+      expect(shells.agentOf(id)).toBeNull()
+      expect(onExit).toHaveBeenCalledExactlyOnceWith('claude-1')
+    } finally {
+      shells.closeAll()
+      vi.useRealTimers()
+    }
+  })
+
   it('sets the PTY color capabilities without changing the parent environment', () => {
     const env = { Term: 'dumb', No_Color: '1', ColorTerm: '24bit', Path: 'shell-path' }
     const { shells, ptys } = setup({ env, platform: 'win32' })
@@ -154,6 +195,25 @@ describe('createLocalShells', () => {
     shells.resize(id, 80, 24)
     expect(ptys[0].write).toHaveBeenCalledTimes(1)
     expect(ptys[0].resize).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes a Windows screenshot to the running agent and counts it as a Codex draft', () => {
+    const { shells, ptys } = setup({ platform: 'win32' })
+    const codex = shells.open({ agent: 'codex' })
+    const claude = shells.open({ agent: 'claude' })
+    const ordinary = shells.open()
+    ptys[0].emit('\x1b]0;⠋ Codex\x07')
+    expect(shells.pasteClipboardImage(codex.id)).toBe(true)
+    expect(shells.pasteClipboardImage(claude.id)).toBe(true)
+    expect(shells.pasteClipboardImage(ordinary.id)).toBe(false)
+    expect(ptys[0].write.mock.calls).toEqual([['\x16']])
+    expect(ptys[1].write.mock.calls).toEqual([['\x1bv']])
+    expect(ptys[2].write).not.toHaveBeenCalled()
+    expect(shells.hasWorkingAgent([codex.id])).toBe(false)
+    shells.write(codex.id, '\r')
+    expect(shells.hasWorkingAgent([codex.id])).toBe(true)
+    ptys[1].exit({ exitCode: 0 })
+    expect(shells.pasteClipboardImage(claude.id)).toBe(false)
   })
 
   it('kills a running shell on close, and every shell on closeAll', () => {

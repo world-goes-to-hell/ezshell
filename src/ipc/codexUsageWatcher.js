@@ -156,6 +156,8 @@ function createCodexUsageWatcher({ agents, setUsage, codexHome, now = () => Date
 
   return {
     tick,
+    /** The session file found for an agent (the chat view follows it), or null */
+    fileOf: agentId => bound.get(agentId)?.file ?? null,
     start() {
       if (timer) return
       timer = setInterval(() => { void tick().catch(() => {}) }, INTERVAL_MS)

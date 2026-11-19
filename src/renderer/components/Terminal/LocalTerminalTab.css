@@ -10,6 +10,15 @@
   background: var(--terminal-bg, var(--bg-primary));
 }
 
+/* The terminal and, over it, the chat view of its agent (AgentChat/AgentChatCover.tsx) */
+.local-terminal-stage {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .local-terminal-host {
   flex: 1;
   min-height: 0;
@@ -19,7 +28,8 @@
   overflow: hidden;
 }
 
-.local-terminal-host:has(+ .agent-pane-usage) {
+/* The usage row follows the stage (terminal + chat), not the terminal itself */
+.local-terminal-stage:has(+ .agent-pane-usage) {
   margin-bottom: 4px;
 }
 

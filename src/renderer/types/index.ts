@@ -390,6 +390,53 @@ export interface AgentUsage {
 }
 
 /** usage null: the agent ended */
+/** One thing in a chat view, made by main from the agent's transcript (src/agentChat/items.js) */
+export interface AgentChatItem {
+  id: string
+  kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'notice'
+  time: number | null
+  text?: string
+  tool?: {
+    name: string
+    summary: string
+    input: string
+    result?: string
+    isError?: boolean
+    diff?: string[]
+    todos?: { text: string; status: 'completed' | 'in_progress' | 'pending' }[]
+  }
+}
+
+/** The agent's prompt with numbered choices, as its terminal shows it (src/ipc/agentInboxWake.js) */
+export interface AgentChatApproval {
+  question: string | null
+  detail: string[]
+  options: { key: string; label: string }[]
+  selected: string | null
+  /** Sent back with the answer: main answers only if the screen still shows this prompt */
+  signature: string
+}
+
+/** waiting: the agent has written no transcript yet; ended: no agent runs in the shell any more */
+export type AgentChatState = 'waiting' | 'live' | 'ended'
+
+export interface AgentChatFrame {
+  shellId: string
+  /** The view starts over with these items (a new conversation or the first read) */
+  reset?: boolean
+  /** Items from before what the view has */
+  older?: boolean
+  items?: AgentChatItem[]
+  kind?: 'claude' | 'codex'
+  state?: AgentChatState
+  title?: string | null
+  hasOlder?: boolean
+  /** The shell was closed: the view is dropped */
+  gone?: boolean
+  /** The prompt on screen now, or null when it went away */
+  approval?: AgentChatApproval | null
+}
+
 export interface AgentUsageReport {
   agentId: string
   shellId: string | null
@@ -427,6 +474,35 @@ export interface AgentMessagesSnapshot {
   agents: AgentMessageSession[]
   messages: AgentMessage[]
 }
+
+export interface BrowserReviewSelection {
+  id: string
+  url: string
+  selector: string
+  tag: string
+  label: string
+  text: string
+  classes: string[]
+  component?: string
+  componentFile?: string
+}
+
+export interface BrowserReviewState {
+  url: string
+  loading: boolean
+  error: string
+  picking: boolean
+  selection: BrowserReviewSelection | null
+  canGoBack: boolean
+  canGoForward: boolean
+  agents: Pick<AgentMessageSession, 'id' | 'kind' | 'cwd' | 'status'>[]
+}
+
+export type BrowserReviewAction =
+  | { type: 'navigate'; address: string }
+  | { type: 'back' | 'forward' | 'reload' | 'pick' | 'cancel' }
+  | { type: 'send'; agentId: string; text: string; selectionId: string }
+export type BrowserReviewResult = { success: true } | { success: false; error: string }
 
 export interface AgentMessageDelivery {
   id: string
@@ -660,10 +736,10 @@ declare global {
       localFileOpen?: (root: string, relative: string, mode: 'edit' | 'preview', label?: string, options?: { compareHead?: boolean }) => Promise<{ success: true } | { success: false; error: string }>
       onRemoteFileCompareHead?: (callback: () => void) => () => void
       workspaceGitLog: (folder: string) => Promise<{ success: true; repo: WorkspaceGitRepository } | { success: true; repo: null; reason: 'git-missing' | 'not-repo' } | { success: false; error: string }>
-      agentHistorySearch?: (query: string) => Promise<{ success: true; matches: { key: string; snippet: string }[] } | { success: false; cancelled?: boolean; error: string }>
-      agentHistoryList?: () => Promise<{ success: true; sessions: AgentHistorySession[]; total: number; truncated: boolean } | { success: false; error: string }>
-      agentHistoryDetail?: (key: string) => Promise<({ success: true } & AgentHistoryDetail) | { success: false; error: string }>
-      agentHistoryOpenFolder?: (key: string) => Promise<{ success: true } | { success: false; error: string }>
+      agentHistorySearch?: (shellId: string, query: string) => Promise<{ success: true; matches: { key: string; snippet: string }[] } | { success: false; cancelled?: boolean; error: string }>
+      agentHistoryList?: (shellId: string) => Promise<{ success: true; project: string; sessions: AgentHistorySession[] } | { success: false; error: string }>
+      agentHistoryDetail?: (shellId: string, key: string) => Promise<({ success: true } & AgentHistoryDetail) | { success: false; error: string }>
+      agentHistoryOpenFolder?: (shellId: string, key: string) => Promise<{ success: true } | { success: false; error: string }>
       localWorktreeCreate: (options: { folder: string; branch: string; base: string }) => Promise<({ success: true } & LocalWorktree) | { success: false; error: string }>
       localShellAttach?: (id: string) => Promise<{ backlog: string; exited: boolean; exitCode: number | null } | null>
       /** Shells main still runs, for a reloaded window to take back as tabs */
@@ -672,11 +748,16 @@ declare global {
       localShellClipboard?: (id: string) => Promise<{ success: true; text: string } | { success: false; error: string }>
       localShellHasWorkingAgent?: (ids: string[]) => Promise<boolean>
       agentMessagesSnapshot: () => Promise<AgentMessagesSnapshot | null>
+      browserReviewOpen: () => Promise<{ success: true; id: string } | { success: false; error: string }>
+      browserReviewState: (id: string) => Promise<BrowserReviewState | null>
+      browserReviewAction: (id: string, request: BrowserReviewAction) => Promise<BrowserReviewResult>
+      browserReviewBounds: (id: string, bounds: { x: number; y: number; width: number; height: number } | null) => void
+      browserReviewClose: (id: string) => void
+      onBrowserReviewState: (callback: (id: string, state: BrowserReviewState) => void) => () => void
+      onBrowserReviewFocus: (callback: (id: string) => void) => () => void
       agentMessageMcpSetup: (kind: LocalAgent) => Promise<
         { success: true; result: 'added' | 'unchanged' | 'conflict' } | { success: false; error: string }
       >
-      agentMessageSend: (message: { to: string; text: string; replyTo?: string }) => Promise<{ success: true; id: string } | { success: false; error: string }>
-      agentMessageAck: (id: string) => Promise<{ success: true; id: string } | { success: false; error: string }>
       onAgentMessagesState: (callback: (snapshot: AgentMessagesSnapshot) => void) => () => void
       agentUsageState?: () => Promise<AgentUsageReport[]>
       onAgentUsage?: (callback: (report: AgentUsageReport) => void) => () => void
@@ -687,6 +768,20 @@ declare global {
       localShellClose?: (id: string) => void
       onLocalShellData?: (callback: (data: { id: string; data: string }) => void) => () => void
       onLocalShellExit?: (callback: (data: { id: string; exitCode: number | null }) => void) => () => void
+      agentChatOpen?: (shellId: string) => Promise<{ ok: true } | { ok: false; error: string }>
+      agentChatOlder?: (shellId: string) => Promise<void>
+      agentChatClose?: (shellId: string) => void
+      agentChatReadClipboard?: (shellId: string) => Promise<
+        { ok: true; kind: 'text'; text: string } |
+        { ok: true; kind: 'image'; id: string; preview: Uint8Array<ArrayBuffer> } |
+        { ok: false; error: string }
+      >
+      agentChatRemoveImage?: (shellId: string, imageId: string) => void
+      agentChatSend?: (shellId: string, text: string, imageId?: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
+      agentChatInterrupt?: (shellId: string) => Promise<boolean>
+      agentChatAnswer?: (shellId: string, key: string, signature: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
+      agentChatOpenLink?: (shellId: string, href: string, how: 'app' | 'explorer' | 'browser') => Promise<{ ok: true } | { ok: false; error: string }>
+      onAgentChatFrame?: (callback: (frame: AgentChatFrame) => void) => () => void
       oracleClientStatus?: () => Promise<OracleClientStatus | { success: false; error: string }>
       oracleClientInstall?: () => Promise<OracleClientStatus | { success: false; error: string }>
       oracleClientRemove?: () => Promise<OracleClientStatus | { success: false; error: string }>

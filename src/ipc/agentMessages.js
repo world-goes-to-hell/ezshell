@@ -40,7 +40,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     for (const message of result) {
       if (message.read) continue
       receivedByAgent.add(message.id)
-      // A receipt needs no answer: seen is done (or wait_for_message would return it again and again)
+      // Seeing a receipt is enough to remove it from the unread inbox.
       const stored = message.receipt && messages.find(item => item.id === message.id)
       if (stored) { stored.read = true; receiptsSeen = true }
     }
@@ -101,7 +101,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   }
 
   function acknowledge(id, recipient) {
-    const message = messages.find(item => item.id === id && (recipient === undefined || item.to === recipient))
+    const message = messages.find(item => item.id === id && item.to === recipient)
     if (!message) throw new Error('메시지를 찾을 수 없습니다.')
     if (!message.read) {
       message.read = true
@@ -144,17 +144,34 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     return agents.get(id)?.active === true && lease != null && !lease.destroyed
   }
 
-  function archiveExternal(id, token) {
-    tokens.delete(token)
+  function stopWaiting(id) {
+    for (const [socket, wait] of inboxWaits) {
+      if (wait.agentId === id) finishWait(socket, inactiveError())
+    }
+  }
+
+  function archiveExternal(id) {
     const agent = agents.get(id)
+    if (!agent) return
+    clearUsage(id)
     if (messages.some(message => message.from === id || message.to === id)) {
       agents.set(id, { ...agent, shellId: '', active: false, status: 'ended' })
     } else {
       agents.delete(id)
     }
-    for (const [socket, wait] of inboxWaits) {
-      if (wait.agentId === id) finishWait(socket, inactiveError())
+    stopWaiting(id)
+  }
+
+  function endExternal(id) {
+    const socket = mcpReady.get(id)
+    const lease = leases.get(socket)
+    if (lease?.external) {
+      tokens.delete(lease.token)
+      mcpReady.delete(id)
+      socket.destroy()
     }
+    archiveExternal(id)
+    changed()
   }
 
   function setStatus(id, status) {
@@ -175,29 +192,26 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
         throw new Error('ezShell에 등록된 에이전트가 아닙니다.')
       }
       if (mcpReady.size >= 40) throw new Error('실행 중인 메시지 MCP 연결이 너무 많습니다.')
+      const attach = Number.isSafeInteger(request.pid) && request.pid > 0
+        ? await bindLocalAgent?.({ pid: request.pid, kind: request.kind })
+        : undefined
+      if (socket.destroyed) return
+      if (mcpReady.size >= 40) throw new Error('실행 중인 메시지 MCP 연결이 너무 많습니다.')
       id = `${request.kind}-${++serial}`
-      if (Number.isSafeInteger(request.pid) && request.pid > 0) {
-        binding = await bindLocalAgent?.({
-          pid: request.pid, kind: request.kind,
-          setStatus: status => setStatus(id, status),
-          disconnect: () => socket.destroy()
-        })
-      }
-      if (socket.destroyed || mcpReady.size >= 40) {
-        binding?.close()
-        if (socket.destroyed) return
-        throw new Error('실행 중인 메시지 MCP 연결이 너무 많습니다.')
-      }
+      binding = attach?.({ agentId: id, setStatus: status => setStatus(id, status), onExit: endExternal })
+      id = binding?.agentId ?? id
       token = randomUUID()
       tokens.set(token, id)
       // startedAt: its MCP connects a little after the CLI started (and wrote its Codex session file)
-      agents.set(id, { id, shellId: binding?.shellId ?? '', kind: request.kind, cwd: request.cwd, active: true, status: binding?.status ?? 'unknown', startedAt: Date.now() - 30_000 })
+      const startedAt = agents.get(id)?.startedAt ?? Date.now() - 30_000
+      agents.set(id, { id, shellId: binding?.shellId ?? '', kind: request.kind, cwd: request.cwd, active: true, status: binding?.status ?? 'unknown', startedAt })
     }
     const previous = mcpReady.get(id)
     mcpReady.set(id, socket)
     leases.set(socket, { id, token, external, binding })
     socket.setTimeout(0)
     socket.write(JSON.stringify({ success: true, token }) + '\n')
+    if (external && previous) tokens.delete(leases.get(previous)?.token)
     previous?.destroy()
     changed()
     const shellId = agents.get(id)?.shellId
@@ -237,10 +251,13 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       const lease = leases.get(socket)
       if (lease) {
         leases.delete(socket)
+        if (lease.external) tokens.delete(lease.token)
         if (mcpReady.get(lease.id) === socket) {
           mcpReady.delete(lease.id)
-          lease.binding?.close()
-          if (lease.external) archiveExternal(lease.id, lease.token)
+          if (lease.external) {
+            if (lease.binding?.detach()) stopWaiting(lease.id)
+            else archiveExternal(lease.id)
+          }
           changed()
         }
       }
@@ -464,7 +481,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   }
 
   return {
-    ready, enableExternalBridge, register, stop, snapshot, sendAsUser: request => deliver(USER, request), acknowledge, unreadFor, unhandledFor,
+    ready, enableExternalBridge, register, stop, snapshot, unreadFor, unhandledFor,
+    sendAsUser: request => deliver(USER, request),
     setUsage, usageSnapshot, registerShell, forgetShell
   }
 }

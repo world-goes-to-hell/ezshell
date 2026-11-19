@@ -3,7 +3,7 @@ import { throttle, REFIT_INTERVAL_MS } from '../../lib/throttle'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
-import { RiToolsLine, RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine, RiCloseLine } from 'react-icons/ri'
+import { RiToolsLine, RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine, RiCloseLine, RiChat3Line } from 'react-icons/ri'
 import { useThemeStore } from '../../stores/themeStore'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { toast } from '../../stores/toastStore'
@@ -18,7 +18,28 @@ import { PaneArrival, SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
 import { AgentPaneMessages, useAgentMessagesStore } from './AgentMessages'
 import { agentNewlineFor } from '../../lib/agentNewline'
 import { AgentPaneUsage } from '../AgentUsage/AgentUsageMeters'
+import { AgentChatCover } from '../AgentChat/AgentChatCover'
+import { useAgentChatStore } from '../../stores/agentChatStore'
+import { useShortcutsStore } from '../../stores/shortcutsStore'
+import { matchesBinding } from '../../lib/shortcutMatch'
+import { shortcutLabel } from '../../lib/shortcutModifiers'
+import { shellAgentOf } from '../../lib/agentChatItems'
 import './LocalTerminalTab.css'
+
+/** Shows a shell as a chat when an agent runs in it; says why not otherwise */
+function showChat(shellId: string): void {
+  if (!chatAgentOf(shellId)) {
+    toast.info('채팅으로 볼 수 없습니다', '이 셸에서 Claude Code 나 Codex 가 돌고 있지 않습니다.')
+    return
+  }
+  void useAgentChatStore.getState().show(shellId)
+}
+
+/** The agent CLI running in a local shell that the chat view can show, or null */
+const chatAgentOf = (shellId: string): 'claude' | 'codex' | null => {
+  const agent = shellAgentOf(useAgentMessagesStore.getState().snapshot.agents, shellId)
+  return agent?.kind === 'claude' || agent?.kind === 'codex' ? agent.kind : null
+}
 
 interface LocalTerminalTabProps {
   /** The tab's stable id, including when a split shell takes over the main pane */
@@ -59,6 +80,8 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     if (!agent) return undefined
     return !exit && agent.status === 'working' && !agent.waitingForReply ? 'working' : 'idle'
   })
+  const chatAgent = useAgentMessagesStore(() => chatAgentOf(shellId))
+  const isChat = useAgentChatStore(state => state.chats.has(shellId))
   const fontSize = useTerminalStore(state => state.fontSize)
   const fontFamily = useTerminalStore(state => state.fontFamily)
   const tab = useTerminalStore(state => state.terminals.get(tabId))
@@ -138,6 +161,14 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     }
     host.addEventListener('paste', onNativePaste, true)
     terminal.attachCustomKeyEventHandler((event) => {
+      // The chat view's key, pressed in the terminal (the app-wide handler skips the terminal's text box)
+      if (matchesBinding(event, useShortcutsStore.getState().getEffectiveKeys('toggle-agent-chat'))) {
+        if (event.type === 'keydown') {
+          event.preventDefault()
+          if (!event.repeat) showChat(shellId)
+        }
+        return false
+      }
       // Shift+Enter adds a line in Claude Code / Codex (xterm would send the same Enter key as plain Enter)
       const newline = agentNewlineFor(event, () => useAgentMessagesStore.getState().snapshot.agents
         .some(agent => agent.active && agent.shellId === shellId && (agent.kind === 'claude' || agent.kind === 'codex')))
@@ -249,7 +280,16 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       window.setTimeout(() => terminal.focus(), 0)
     }
     const items = commonTerminalItems(terminal, tabName, then, pasteRef.current)
-    top = items.top
+    const chatKey = shortcutLabel(useShortcutsStore.getState().getEffectiveKeys('toggle-agent-chat'))
+    top = [
+      ...items.top,
+      {
+        label: chatAgent ? `채팅으로 보기 (${chatKey})` : '채팅으로 보기 (에이전트가 돌고 있지 않음)',
+        icon: RiChat3Line,
+        disabled: !chatAgent,
+        onSelect: () => showChat(shellId)
+      }
+    ]
     const tree = tab?.splitTree ?? singlePane()
     const isSplit = tab?.isSplit === true
     const isFull = leafCount(tree) >= MAX_PANES
@@ -302,7 +342,18 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       data-agent-work={agentWork}
       style={style}
     >
-      <div ref={hostRef} className="local-terminal-host" onContextMenu={onContextMenu} />
+      <div className="local-terminal-stage">
+        <div ref={hostRef} className="local-terminal-host" onContextMenu={onContextMenu} />
+        {isChat && (
+          <AgentChatCover
+            shellId={shellId}
+            onShowTerminal={() => {
+              useAgentChatStore.getState().hide(shellId)
+              window.setTimeout(() => terminalRef.current?.focus(), 0)
+            }}
+          />
+        )}
+      </div>
       <AgentPaneUsage shellId={shellId} />
       <AgentPaneMessages shellId={shellId} tabId={tabId} />
       {exit && (

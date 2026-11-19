@@ -1,4 +1,4 @@
-.agent-messages-dialog { width: 560px; max-width: min(92vw, 560px); }
+.modal-content.agent-messages-dialog { width: 560px; max-width: 92vw; }
 .agent-mail-count {
   border-radius: 10px;
   padding: 0 4px;
@@ -48,8 +48,23 @@
 .agent-delivery-notice svg { flex: none; color: var(--accent); }
 .agent-delivery-text { display: grid; gap: 2px; overflow-wrap: anywhere; }
 .agent-delivery-text span { color: var(--text-secondary); font-size: 11px; }
+.agent-message-filter {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.agent-message-filter label { flex: none; }
+.agent-message-workspace {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .agent-message-thread {
-  max-height: 36vh;
+  max-height: 52vh;
   overflow: auto;
   display: grid;
   gap: 8px;
@@ -76,24 +91,3 @@
   color: var(--accent);
   font-size: 11px;
 }
-.agent-thread-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
-.agent-thread-actions button, .agent-message-compose > button[type='button'] {
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  cursor: pointer;
-  font-size: 12px;
-}
-.agent-message-compose textarea {
-  width: 100%;
-  min-height: 64px;
-  resize: vertical;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 8px 10px;
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-}
-.agent-message-compose .btn-primary { margin-left: auto; }
-.agent-message-compose .btn-primary:disabled { opacity: .55; cursor: default; }
-.agent-message-error { color: var(--error); font-size: 13px; }

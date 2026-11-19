@@ -1,6 +1,6 @@
 const fs = require('fs')
 const path = require('path')
-const { connect, createChecks, sleep, unlock, openLocalProject } = require('../support/driver')
+const { connect, createChecks, sleep, unlock, openLocalProject, pickTabGroup } = require('../support/driver')
 
 const { check, finish } = createChecks()
 const profile = process.env.E2E_PROFILE
@@ -49,10 +49,19 @@ async function run() {
     await unlock(driver)
     await send('Page.bringToFront')
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
-    await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([profile]))})`)
-    async function openAgent(kind, id) {
+    const workspace = path.join(profile, 'workspace (2)')
+    fs.mkdirSync(workspace)
+    await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([workspace]))});
+      window.dispatchEvent(new Event('ezshell:local-projects-changed'))`)
+    async function openAgent(kind, id, folder = workspace) {
       await openLocalProject(driver)
       await until(`!!document.querySelector('#local-project-agent')`)
+      await js(`(() => {
+        const select = document.querySelector('#local-project-folder')
+        if (select.value === ${JSON.stringify(folder)}) return
+        select.value = ${JSON.stringify(folder)}
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+      })()`)
       await js(`(() => {
         const select = document.querySelector('#local-project-agent')
         select.value = ${JSON.stringify(kind)}
@@ -68,19 +77,25 @@ async function run() {
         throw new Error(`${kind} fixture did not open (${JSON.stringify(details)})`)
       }
     }
-    await openAgent('codex', 'codex-1')
-    await openAgent('claude', 'claude-2')
     const row = id => `document.querySelector('.local-agent-chip[data-agent-id="${id}"]')`
-    const owner = id => `${row(id)}?.closest('.local-terms-item')?.dataset.localSessionId`
+    const session = id => `${row(id)}?.closest('[data-local-session-id]')`
+    const owner = id => `${session(id)}?.dataset.localSessionId`
     const paneTab = id => `document.querySelector('[aria-label="${id} 메시지함"]')?.closest('[data-local-tab-id]')?.dataset.localTabId`
-    for (const agent of ['codex-1', 'claude-2']) {
+    await openAgent('codex', 'codex-1')
+    check('the single terminal shows its agent under the worktree heading', await until(`
+      ${owner('codex-1')} === ${paneTab('codex-1')} && ${session('codex-1')}?.matches('.local-worktree') &&
+      ${row('codex-1')}.parentElement.previousElementSibling?.matches('.local-worktree-row') &&
+      !${session('codex-1')}?.querySelector('.local-terms-item')
+    `))
+    await openAgent('claude', 'claude-2')
+    for (const [index, agent] of ['codex-1', 'claude-2'].entries()) {
       check(agent + ' has only icons directly underneath its own session information', await until(`
         ${owner(agent)} && ${owner(agent)} === ${paneTab(agent)} &&
         ${row(agent)}.parentElement.previousElementSibling?.matches('.local-terms-row') &&
         ${row(agent)}.textContent.trim() === '' && ${row(agent)}.querySelectorAll('svg').length === 2
       `))
-      check(agent + ' shows the workspace name as its sidebar session title', await until(`
-        ${row(agent)}?.closest('.local-terms-item')?.querySelector('.local-terms-name')?.textContent === ${JSON.stringify(path.basename(profile))}
+      check(agent + ' has its own label in the worktree without repeating its name', await until(`
+        ${session(agent)}?.querySelector('.local-terms-name')?.textContent === '터미널 ${index + 1}'
       `))
     }
     const focusAgent = async id => {
@@ -96,7 +111,7 @@ async function run() {
         state.agents.some(agent => agent.id === ${JSON.stringify(agent)} && agent.mcpConnected))`))
     }
     const list = await cli('codex-1', 'agent list')
-    check('the bundled CLI can see both agents with independent ids on the same folder', list.self === 'codex-1' && list.agents.length === 2 && list.agents.every(agent => agent.cwd === profile))
+    check('the bundled CLI can see both agents with independent ids on the same folder', list.self === 'codex-1' && list.agents.length === 2 && list.agents.every(agent => agent.cwd === workspace))
 
     await js(`window.deliveriesSeen = 0
       new MutationObserver(records => {
@@ -173,17 +188,22 @@ async function run() {
       await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
       await send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
     }
-    await paste()
     const inputFile = shellId.replace(':', '-') + '-input'
-    const pastedPath = await waitFor(() => read(inputFile).match(/[A-Z]:\\[^\x1b\r\n]+\.png/i)?.[0])
-    check('Ctrl+V sends a PNG path for an image clipboard', Boolean(pastedPath))
-    check('the pasted path points to the decoded screenshot', Boolean(pastedPath && fs.readFileSync(pastedPath).subarray(0, 8).toString('hex') === '89504e470d0a1a0a'))
-    check('the screenshot paste does not press Enter', !read(inputFile).includes('\r'))
+    const inputOffset = read(inputFile).length
+    await paste()
+    check('Ctrl+V invokes the Claude Code image attachment shortcut once', await waitFor(() => read('claude-2-image-paste') === '\x1bv'))
+    check('the screenshot paste does not type a path or press Enter in Claude Code', !/\.png|\r/.test(read(inputFile).slice(inputOffset)))
+    await focusAgent('codex-1')
+    await paste()
+    check('Ctrl+V invokes the Codex image attachment shortcut once', await waitFor(() => read('codex-1-image-paste') === '\x16'))
+    await focusAgent('claude-2')
     fs.writeFileSync(file('clipboard-text'), 'plain-text-paste')
     await paste()
     check('ordinary Ctrl+V still inserts exactly one text paste', await waitFor(() => read(inputFile).split('plain-text-paste').length === 2))
     await sleep(250)
     check('text paste was not duplicated by a native paste event', read(inputFile).split('plain-text-paste').length === 2)
+    check('image paste was not duplicated by browser paste events',
+      read('claude-2-image-paste') === '\x1bv' && read('codex-1-image-paste') === '\x16')
 
     const panes = `[...document.querySelectorAll('.local-terminal-pane')].filter(el => getComputedStyle(el).visibility === 'visible')`
     const rects = () => js(`${panes}.map(el => {
@@ -220,6 +240,16 @@ async function run() {
       ${focusBorder}.borderTopWidth === '1px' && ${trace}.color !== ${JSON.stringify(focusedColor)} &&
       ${trace}.animationPlayState === 'running' && getComputedStyle(${otherPane}, '::after').content === 'none'
     `))
+
+    fs.unlinkSync(file('clipboard-text'))
+    const otherShellId = await js(`${otherPane}.dataset.localShellId`)
+    const otherInput = otherShellId.replace(':', '-') + '-input'
+    await paste()
+    const pastedPath = await waitFor(() => read(otherInput).match(/[A-Z]:\\[^\x1b\r\n]+\.png/i)?.[0])
+    check('Ctrl+V into an ordinary shell types the saved screenshot path', Boolean(pastedPath))
+    check('the pasted path points to a PNG and does not press Enter', Boolean(pastedPath &&
+      fs.readFileSync(pastedPath).subarray(0, 8).toString('hex') === '89504e470d0a1a0a' &&
+      !read(otherInput).includes('\r')))
 
     const [first, second] = await rects()
     await drag(second.x + second.width / 2, second.y + second.height / 2, first.x + first.width / 2, first.y + first.height / 2)
@@ -340,10 +370,93 @@ async function run() {
       (await mcp('manual-codex', 'read_inbox')).messages.some(message => message.id === firstFromClaude.id && message.text === 'hello-manual-codex'))
 
     fs.writeFileSync(file('manual-claude-mcp-disconnect'), '')
-    check('the disconnected global MCP releases the pane and retains message history', await until(`
+    check('the disconnected global MCP keeps the running agent associated with its pane', await until(`
+      window.electronAPI.agentMessagesSnapshot().then(state => state.agents.some(agent =>
+        agent.id === 'claude-4' && agent.shellId === ${JSON.stringify(plainShell)} && agent.active && !agent.mcpConnected))
+    `))
+    fs.writeFileSync(file('manual-claude-exit-code'), '0')
+    check('the agent’s exit releases the pane and retains message history', await until(`
       window.electronAPI.agentMessagesSnapshot().then(state =>
         state.agents.some(agent => agent.id === 'claude-4' && !agent.shellId && !agent.mcpConnected) &&
         state.messages.some(message => message.id === ${JSON.stringify(manualTask.id)}))
+    `))
+
+    await js(`${session('claude-2')}.querySelector('.local-terms-close').click()`)
+    const compactBadge = `${session('codex-3')}?.querySelector('.local-worktree-row > .local-terms-panes')`
+    check('closing the second tab moves the split badge and agents into the worktree card', await until(`
+      ${session('codex-3')}?.matches('.local-worktree') && ${compactBadge}?.textContent === '3세션' &&
+      !${session('codex-3')}?.querySelector('.local-terms-item, .local-worktree-fold') &&
+      ${row('codex-1')}?.parentElement === ${row('codex-3')}?.parentElement
+    `))
+    await driver.shot('local-agent-worktree')
+    await js(`${compactBadge}.click()`)
+    check('the worktree badge opens the session layout with live agent states', await until(`
+      ${mapCell('codex-1')}?.dataset.status === 'working' && ${mapCell('codex-3')}?.dataset.status === 'blocked'
+    `))
+    await js(`${compactBadge}.click()`)
+
+    const dialog = `document.querySelector('.agent-messages-dialog')`
+    const filter = `document.querySelector('#agent-messages-session')`
+    const messageTexts = `[...document.querySelectorAll('.agent-thread-message p')].map(row => row.textContent)`
+    const chooseAgent = id => js(`(() => {
+      const select = ${filter}
+      select.value = ${JSON.stringify(id)}
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })()`)
+    const closeMessages = () => js(`${dialog}.querySelector('.modal-actions button').click()`)
+    await mcp('codex-1', 'send_message', { to: 'user', text: 'note-for-user' })
+    await js(`document.querySelector('[aria-label="codex-1 메시지함"]').click()`)
+    check('the pane inbox opens the selected agent’s read-only messages', await until(`
+      ${filter}?.value === 'codex-1' && ${messageTexts}.includes('note-for-user') &&
+      ${dialog}.getBoundingClientRect().width >= 500 &&
+      !${dialog}.querySelector('textarea, form') &&
+      [...${dialog}.querySelectorAll('button')].every(button => button.textContent.trim() === '닫기') &&
+      typeof window.electronAPI.agentMessageSend === 'undefined'
+    `))
+    await chooseAgent('all')
+    check('all combines the local work’s conversations and keeps closed agents’ messages', await until(`
+      ${filter}.selectedOptions[0].textContent === '전체' &&
+      ${filter}.querySelector('option[value="claude-2"]').textContent.includes('종료') &&
+      ['review-please', 'looks-good', 'hello-manual-claude', 'hello-codex'].every(text => ${messageTexts}.includes(text)) &&
+      !${messageTexts}.includes('note-for-user') && !${messageTexts}.includes('hello-manual-codex')
+    `))
+    await chooseAgent('claude-2')
+    check('choosing an agent filters the log to its conversation', await until(`
+      ${messageTexts}.includes('review-please') && !${messageTexts}.includes('hello-manual-claude')
+    `))
+    await closeMessages()
+
+    const otherWorkspace = path.join(profile, 'other workspace')
+    fs.mkdirSync(otherWorkspace)
+    await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([workspace, otherWorkspace]))});
+      window.dispatchEvent(new Event('ezshell:local-projects-changed'))`)
+    await openAgent('codex', 'codex-6', otherWorkspace)
+    await openAgent('claude', 'claude-7', otherWorkspace)
+    if (!(await until(`window.electronAPI.agentMessagesSnapshot().then(state =>
+      ['codex-6', 'claude-7'].every(id => state.agents.some(agent => agent.id === id && agent.mcpConnected)))`))) {
+      throw new Error(`The second workspace agents did not connect: ${read('codex-6-mcp-error')} ${read('claude-7-mcp-error')}`)
+    }
+    await js(`document.querySelector('[aria-label="claude-7 메시지함"]').click()`)
+    await until(`!!${filter}`)
+    await chooseAgent('all')
+    await mcp('codex-6', 'send_message', { to: 'claude-7', text: 'other-workspace-message' })
+    check('the second project’s open log receives its own messages only', await until(`
+      ${dialog}.querySelector('.agent-message-workspace').textContent === 'other workspace' &&
+      [...${filter}.options].map(option => option.value).join(',') === 'all,codex-6,claude-7' &&
+      ${messageTexts}.join(',') === 'other-workspace-message'
+    `))
+    await driver.shot('local-agent-messages-workspace')
+    await closeMessages()
+    await pickTabGroup(driver, 'workspace (2)')
+    const paletteKey = { key: 'p', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: 2 }
+    await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...paletteKey })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', ...paletteKey })
+    const messagesCommand = `[...document.querySelectorAll('.command-item')].find(item => item.textContent.includes('에이전트 메시지 열기'))`
+    if (!(await until(`!!${messagesCommand}`))) throw new Error('missing agent messages command')
+    await js(`${messagesCommand}.click()`)
+    check('the command palette opens all messages for the current project', await until(`
+      ${filter}?.value === 'all' && ${dialog}.querySelector('.agent-message-workspace').textContent === 'workspace (2)' &&
+      ${messageTexts}.includes('review-please') && !${messageTexts}.includes('other-workspace-message')
     `))
   } finally {
     driver.close()

@@ -15,15 +15,24 @@ const exitPath = path.join(profile, id + '-exit-code')
 const requestPath = path.join(profile, id + '-mcp-request')
 const responsePath = path.join(profile, id + '-mcp-response')
 const disconnectPath = path.join(profile, id + '-mcp-disconnect')
+const reconnectPath = path.join(profile, id + '-mcp-reconnect')
 const draftPath = path.join(profile, id + '-draft')
 const claude = kind === 'claude'
 const indicator = claude ? '> ' : '› '
 let draft = ''
 let client = null
 
+// A prompt with choices drawn instead of the composer, as the CLIs do (local-agent-chat)
+const approvalPath = path.join(profile, id + '-approval')
+let approval = ''
+
 function draw() {
+  if (approval) {
+    process.stdout.write('\x1b[2J\x1b[Hfixture ready: ' + id + '\r\n' + approval)
+    return
+  }
   const border = claude ? '─'.repeat(Math.max(8, Math.min(process.stdout.columns || 80, 80) - 4)) + '\r\n' : ''
-  process.stdout.write('\x1b[2J\x1b[Hfixture ready: ' + id + '\r\n' + border + indicator + draft)
+  process.stdout.write('\x1b[2J\x1b[Hfixture ready: ' + id + '\r\n' + border + indicator + draft.replace(/\r?\n/g, '\r\n'))
 }
 
 process.stdout.write('\x1b[?2004h\x1b]0;✳ ' + id + '\x07')
@@ -67,6 +76,15 @@ setInterval(() => {
     fs.unlinkSync(disconnectPath)
     void client.close()
     client = null
+  }
+  if (!client && fs.existsSync(reconnectPath)) {
+    fs.unlinkSync(reconnectPath)
+    connectMcp().catch(error => fs.writeFileSync(path.join(profile, id + '-mcp-error'), error.message))
+  }
+  if (fs.existsSync(approvalPath)) {
+    approval = fs.readFileSync(approvalPath, 'utf8')
+    fs.unlinkSync(approvalPath)
+    draw()
   }
   if (fs.existsSync(draftPath)) {
     draft = fs.readFileSync(draftPath, 'utf8')

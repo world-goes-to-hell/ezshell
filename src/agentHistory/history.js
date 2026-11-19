@@ -125,19 +125,19 @@ function createAgentHistory({ env = process.env, homeDir = os.homedir() } = {}) 
      * Sessions of the latest list whose questions and answers hold every word, newest first, each with
      * a one-line excerpt (src/agentHistory/search.js). Null when a newer search or clear() stopped it.
      */
-    async search(query) {
+    async search(query, includesFolder = () => true) {
       const words = searchWords(query)
       const run = ++searchRun
       const started = generation
       if (words.length === 0) return { matches: [] }
       const stopped = () => run !== searchRun || started !== generation
-      const items = [...entries.entries()].map(([key, entry]) => ({ key, agent: entry.agent, file: entry.file }))
+      const items = [...entries].filter(([, entry]) => includesFolder(entry.cwd))
       const hits = new Array(items.length).fill(null)
-      await eachLimited(items, PARALLEL, async (item, index) => {
+      await eachLimited(items, PARALLEL, async ([key, entry], index) => {
         if (stopped()) return
         try {
-          const hit = await searchFile(item.agent, item.file, words, stopped)
-          if (hit) hits[index] = { key: item.key, snippet: hit.snippet }
+          const hit = await searchFile(entry.agent, entry.file, words, stopped)
+          if (hit) hits[index] = { key, snippet: hit.snippet }
         } catch {
           // An unreadable transcript is simply not a match
         }

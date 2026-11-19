@@ -9,6 +9,11 @@ declare module '*.svg?no-inline' {
   export default src
 }
 
+declare module '*.svg?raw' {
+  const markup: string
+  export default markup
+}
+
 // Vite's import.meta.glob, only the eager form used for release-notes/*.md (vite/client is not
 // referenced as a whole: its own '*.svg' declaration would clash with the ones above)
 interface ImportMeta {

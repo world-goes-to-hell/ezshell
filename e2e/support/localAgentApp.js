@@ -1,5 +1,5 @@
 // Launch the real Electron app with local fixtures for the clipboard and the two agent executables.
-const { app, clipboard, ipcMain, nativeImage } = require('electron')
+const { app, clipboard, ClipboardItem, ipcMain, nativeImage } = require('electron')
 const fs = require('fs')
 const path = require('path')
 const pty = require('node-pty')
@@ -25,10 +25,13 @@ for (const name of ['codex', 'claude']) {
     fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "$EZSHELL_TEST_AGENT_EXE" "$EZSHELL_TEST_AGENT_SCRIPT" ' + name + ' "$@"\n', { mode: 0o700 })
   }
 }
-clipboard.readText = () => {
+clipboard.readText = async () => {
   try { return fs.readFileSync(path.join(profile, 'clipboard-text'), 'utf8') } catch { return '' }
 }
-clipboard.readImage = () => nativeImage.createFromBitmap(Buffer.from([0, 0, 255, 255]), { width: 1, height: 1 })
+const screenshot = nativeImage.createFromBitmap(Buffer.from([0, 0, 255, 255]), { width: 1, height: 1 }).toPNG()
+clipboard.read = async () => [new ClipboardItem({
+  'image/png': new Blob([screenshot], { type: 'image/png' })
+})]
 const spawn = pty.spawn
 pty.spawn = (file, args, options) => {
   const child = spawn(file, args, options)
@@ -43,9 +46,22 @@ pty.spawn = (file, args, options) => {
     if (!id && data === 'claude\r') id = 'manual-claude'
     if (!id && data === 'codex --yolo\r') id = 'manual-codex'
     const pasted = data.startsWith('\x1b[200~') && data.endsWith('\x1b[201~') ? data.slice(6, -6) : null
-    if (id && pasted !== null && counters[pasted]) {
+    if (id && (data === '\x16' || data === '\x1bv')) {
+      fs.appendFileSync(path.join(profile, id + '-image-paste'), data)
+    } else if (id && pasted !== null && counters[pasted]) {
       pending = counters[pasted]
       fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
+    } else if (id && pasted !== null && process.env.EZSHELL_TEST_AGENT_CHAT) {
+      // A line from the chat view (e2e/specs/local-agent-chat.js): the fake composer draws it, Enter counts
+      pending = 'chat-sent'
+      fs.writeFileSync(path.join(profile, id + '-chat-text'), pasted)
+      fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
+    } else if (id && data === '\x1b' && process.env.EZSHELL_TEST_AGENT_CHAT) {
+      fs.appendFileSync(path.join(profile, id + '-chat-interrupt'), 'esc')
+    } else if (id && /^[1-9]$/.test(data) && process.env.EZSHELL_TEST_AGENT_CHAT) {
+      // A choice of the fake prompt: answered at once, the composer comes back
+      fs.appendFileSync(path.join(profile, id + '-approval-answer'), data)
+      fs.writeFileSync(path.join(profile, id + '-approval'), '')
     } else if (pending && data === '\r') {
       counts[pending] = (counts[pending] ?? 0) + 1
       fs.writeFileSync(path.join(profile, id + '-' + pending), String(counts[pending]))

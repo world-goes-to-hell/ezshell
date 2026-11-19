@@ -1,6 +1,6 @@
 import { Fragment, lazy, Suspense, useCallback, useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { RiDatabase2Line, RiComputerLine } from 'react-icons/ri'
+import { RiDatabase2Line, RiComputerLine, RiGlobalLine } from 'react-icons/ri'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { Footer } from './components/Footer/Footer'
 import { McpApprovalDialog } from './components/Mcp/McpApprovalDialog'
@@ -79,6 +79,7 @@ import { captureTabFlightSource, flyToTab } from './lib/animation/sessionTabFlig
 import { ConfirmDialogHost } from './components/Modal/ConfirmDialogHost'
 import { HostKeyDialog } from './components/Modal/HostKeyDialog'
 import { useSessionLogStore } from './stores/sessionLogStore'
+import { useAgentChatStore } from './stores/agentChatStore'
 import { useSessionLogFeed } from './hooks/useSessionLogFeed'
 import { openSessionLogFolder, toggleSessionLog } from './lib/sessionLogActions'
 import './styles/sessionLog.css'
@@ -90,6 +91,7 @@ const RemoteFileWindow = lazy(() => import('./components/RemoteFile/RemoteFileWi
 const DbClientWindow = lazy(() => import('./components/DbClient/DbClientWindow').then(module => ({ default: module.DbClientWindow })))
 const LocalTerminalTab = lazy(() => import('./components/Terminal/LocalTerminalTab'))
 const DbTab = lazy(() => import('./components/DbClient/DbTab'))
+const BrowserReview = lazy(() => import('./components/Browser/BrowserReview'))
 
 // Check if we're in a special window mode
 function getWindowModeParams() {
@@ -803,6 +805,11 @@ function App() {
 
   const handleCloseTerminal = (sessionId: string) => {
     detachedTabsRef.current.delete(sessionId)
+    if (terminals.get(sessionId)?.browser) {
+      window.electronAPI.browserReviewClose(sessionId)
+      removeTerminal(sessionId)
+      return
+    }
     const db = terminals.get(sessionId)?.db
     if (db) {
       // A DB tab: only its database connection closes, the SSH tab stays
@@ -841,6 +848,28 @@ function App() {
     const { layout: current } = useTerminalStore.getState()
     if (current.mode === 'split' && current.activePane) store.moveTerminalBetweenPanes(result.id, 0, current.activePane)
     return result.id
+  }
+
+  const handleOpenBrowser = async (pane?: number) => {
+    try {
+      const result = await window.electronAPI.browserReviewOpen()
+      if (!result.success) {
+        toast.error('브라우저 열기', result.error)
+        return
+      }
+      const store = useTerminalStore.getState()
+      const targetPane = pane ?? store.layout.activePane ?? 0
+      store.addTerminal(result.id, {
+        id: result.id, host: '', username: '', connected: true, title: '브라우저',
+        browser: { group: groupView.activeGroup }
+      })
+      if (targetPane > 0 && store.layout.panes[targetPane]) {
+        store.moveTerminalBetweenPanes(result.id, 0, targetPane)
+        store.focusTerminal(result.id)
+      }
+    } catch {
+      toast.error('브라우저 열기', '브라우저 탭을 열 수 없습니다.')
+    }
   }
 
   // "이어서 실행" in the work panel's conversations: main resolves the key to the session's folder and agent
@@ -925,8 +954,19 @@ function App() {
     setConnectModalOpen(true)
   }
 
-  /** The tab's content: a terminal, or a DB tab (its code loads only when one exists) */
+  /** The content of a terminal, browser, or DB tab. */
   const renderTabContent = (sessionId: string, isActive: boolean, onActivate: () => void, onClose: () => void, borderColor?: string) => {
+    if (terminals.get(sessionId)?.browser) {
+      return (
+        <Suspense fallback={null}>
+          <BrowserReview
+            tabId={sessionId}
+            isVisible={isActive && shownTabs.has(sessionId) && !draggingTabId && !splitPaneDraggingTabId}
+            onActivate={onActivate}
+          />
+        </Suspense>
+      )
+    }
     const db = terminals.get(sessionId)?.db
     if (db) {
       return (
@@ -977,12 +1017,14 @@ function App() {
     if (!isLocked) return
     const { terminals: current, removeTerminal: remove } = useTerminalStore.getState()
     for (const [id, info] of current) {
-      if (info.db) remove(id)
+      if (info.db || info.browser) remove(id)
     }
+    // Agent conversations too (main stops following the transcripts): the panes show their terminals
+    useAgentChatStore.getState().clearAll()
   }, [isLocked])
 
   const handleToggleSftp = () => {
-    if (activeTerminalId) {
+    if (activeTerminalId && isSshTab(terminals.get(activeTerminalId))) {
       setOpen(activeTerminalId, !sftpOpen)
     }
   }
@@ -1014,6 +1056,7 @@ function App() {
         onNewSession={handleNewConnection}
         onLocalTerminal={() => void handleOpenLocalTerminal()}
         onLocalProject={() => setLocalProjectOpen(true)}
+        onOpenBrowser={() => void handleOpenBrowser(pane)}
       />
     )
   }
@@ -1040,8 +1083,8 @@ function App() {
     const terminal = sessionId ? terminals.get(sessionId) : null
 
     // A DB tab dropped outside moves to its own DB window (the connection stays)
-    if (dropZone === 'popout' && sessionId && terminal?.local) {
-      // A local terminal has no window of its own: it stays a tab
+    if (dropZone === 'popout' && sessionId && (terminal?.local || terminal?.browser)) {
+      // These tabs live in the workspace.
     } else if (dropZone === 'popout' && sessionId && terminal?.db) {
       const result = await window.electronAPI.dbDetach?.(terminal.db.dbId)
       if (result?.success) removeTerminal(sessionId)
@@ -1369,6 +1412,7 @@ function App() {
                         )}
                         {terminal.db && <RiDatabase2Line size={13} className="tab-db-icon" aria-label="DB" />}
                         {terminal.local && <RiComputerLine size={13} className="tab-local-icon" aria-label="로컬" />}
+                        {terminal.browser && <RiGlobalLine size={13} className="tab-local-icon" aria-hidden />}
                         <span data-tab-label>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
                         {terminal.local && <AgentTabMessages tabId={sessionId} />}
                         {sessionId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[sessionId]}`} />}
@@ -1389,6 +1433,7 @@ function App() {
                     onNewSession={handleNewConnection}
                     onLocalTerminal={() => void handleOpenLocalTerminal()}
                     onLocalProject={() => setLocalProjectOpen(true)}
+                    onOpenBrowser={() => void handleOpenBrowser()}
                   />
                 </div>
               )}
@@ -1525,10 +1570,23 @@ function App() {
               )}
             </>
           ) : (
-            <WelcomeScreen
-              showNewConnection={!areSessionsLoading && sessions.length === 0}
-              onNewConnection={handleNewConnection}
-            />
+            <>
+              <div className="terminal-tabs">
+                <NewTabMenu
+                  duplicateLabel={null}
+                  onDuplicate={() => {}}
+                  onPickSession={() => setSessionPickerOpen(true)}
+                  onNewSession={handleNewConnection}
+                  onLocalTerminal={() => void handleOpenLocalTerminal()}
+                  onLocalProject={() => setLocalProjectOpen(true)}
+                  onOpenBrowser={() => void handleOpenBrowser()}
+                />
+              </div>
+              <WelcomeScreen
+                showNewConnection={!areSessionsLoading && sessions.length === 0}
+                onNewConnection={handleNewConnection}
+              />
+            </>
           )}
         </main>
         {!zenMode && <WorkspacePanel />}
@@ -1574,7 +1632,7 @@ function App() {
           onOpenTerminal={async options => Boolean(await handleOpenLocalTerminal(options))}
         />
       )}
-      <AgentMessagesHost />
+      <AgentMessagesHost currentGroup={groupView.activeGroup} projects={groupView.projects} />
 
       <SettingsModal
         open={settingsModalOpen}
@@ -1619,7 +1677,7 @@ function App() {
         isTerminal={!contextMenuTabId || isSshTab(terminals.get(contextMenuTabId))}
         onToggleLog={handleContextToggleLog}
         onOpenLogFolder={openSessionLogFolder}
-        mergeChoices={contextMenuTabId && !terminals.get(contextMenuTabId)?.db ? mergeChoices(terminals, contextMenuTabId) : undefined}
+        mergeChoices={contextMenuTabId ? mergeChoices(terminals, contextMenuTabId) : undefined}
         onMergeInto={handleContextMergeInto}
       />
       {renamingTab && (

@@ -12,6 +12,7 @@ import { groupOfTab, groupTabs, type GroupProject, type TabGroup } from '../lib/
 
 export interface TabGroupView {
   groups: TabGroup[]
+  projects: readonly GroupProject[]
   activeGroup: string | null
   /** The tabs of the group in front, in strip order */
   shownIds: string[]
@@ -91,5 +92,5 @@ export function useTabGroups(): TabGroupView {
     useTerminalStore.getState().focusTerminal(last && group.tabIds.includes(last) ? last : group.tabIds[0])
   }
 
-  return { groups, activeGroup, shownIds, openGroup }
+  return { groups, projects: groupProjects, activeGroup, shownIds, openGroup }
 }

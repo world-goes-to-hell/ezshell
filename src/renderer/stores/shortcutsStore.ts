@@ -126,6 +126,14 @@ const defaultShortcuts: Shortcut[] = [
     category: 'terminal',
     action: 'searchTerminal'
   },
+  // Taken by the pane itself (the key is pressed in a terminal or the chat's text box): AgentChat
+  {
+    id: 'toggle-agent-chat',
+    keys: ['Ctrl', 'Shift', 'F11'],
+    description: '에이전트 칸을 채팅 보기 ↔ 터미널로 바꾸기',
+    category: 'terminal',
+    action: 'toggleAgentChat'
+  },
 
   // SFTP
   {

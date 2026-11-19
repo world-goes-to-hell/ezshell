@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { RiTerminalBoxFill, RiCloseFill, RiPlayFill, RiCheckboxCircleFill, RiCloseCircleFill, RiLoader4Fill, RiTimeLine, RiDeleteBinLine } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useBatchStore, BatchResult } from '../../stores/batchStore'
+import { isSshTab } from '../../lib/sessionTabs'
 
 interface BatchCommandModalProps {
   open: boolean
@@ -18,8 +19,7 @@ export function BatchCommandModal({ open, onClose }: BatchCommandModalProps) {
 
   // Get list of connected terminals
   const connectedTerminals = Array.from(terminals.entries())
-    // DB tabs have no shell to send a command to
-    .filter(([_, info]) => info.connected && !info.db && !info.local)
+    .filter(([_, info]) => info.connected && isSshTab(info))
     .map(([id, info]) => ({ id, name: info.title || `${info.username}@${info.host}`, host: info.host, username: info.username }))
 
   useEffect(() => {

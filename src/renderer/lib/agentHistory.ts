@@ -1,7 +1,5 @@
 import type { AgentHistorySession, LocalAgent } from '../types'
 
-export type AgentHistoryScope = 'project' | 'all'
-
 /** Window event asking App to resume a listed session in a new local terminal tab (detail: ResumeAgentSessionRequest) */
 export const RESUME_AGENT_SESSION_EVENT = 'ezshell:resume-agent-session'
 
@@ -14,25 +12,6 @@ export interface ResumeAgentSessionRequest {
 
 export const AGENT_LABELS: Record<LocalAgent, string> = { claude: 'Claude', codex: 'Codex' }
 
-// Windows paths compare without case and with either slash; others as they are
-const isWindowsPath = (value: string) => /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith('\\\\')
-
-function comparable(value: string): string {
-  let text = value.replace(/\\/g, '/').replace(/\/+$/, '')
-  if (isWindowsPath(value)) text = text.toLowerCase()
-  return text || '/'
-}
-
-/** Whether `cwd` is one of `roots` or inside one */
-export function isInside(cwd: string | null, roots: readonly string[]): boolean {
-  if (!cwd) return false
-  const path = comparable(cwd)
-  return roots.some(root => {
-    const base = comparable(root)
-    return path === base || path.startsWith(base === '/' ? '/' : base + '/')
-  })
-}
-
 function matchesQuery(session: AgentHistorySession, words: readonly string[]): boolean {
   if (!words.length) return true
   const text = [session.title, session.preview, session.cwd, session.branch, session.model, AGENT_LABELS[session.agent]]
@@ -42,17 +21,14 @@ function matchesQuery(session: AgentHistorySession, words: readonly string[]): b
 
 export interface AgentHistoryFilter {
   query: string
-  /** Folders of the project in view; null shows every session */
-  roots: readonly string[] | null
   showEmpty: boolean
 }
 
 /** Sessions to list, newest first as they came. Every word of the query must appear somewhere. */
-export function filterSessions(sessions: readonly AgentHistorySession[], { query, roots, showEmpty }: AgentHistoryFilter): AgentHistorySession[] {
+export function filterSessions(sessions: readonly AgentHistorySession[], { query, showEmpty }: AgentHistoryFilter): AgentHistorySession[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   return sessions.filter(session =>
     (showEmpty || session.hasPrompt) &&
-    (roots === null || isInside(session.cwd, roots)) &&
     matchesQuery(session, words))
 }
 
@@ -62,7 +38,7 @@ export const CONTENT_SEARCH_MIN_LENGTH = 2
 /**
  * The sessions to list when some matched by what was said in them (`hits`: key → excerpt, from the
  * main process): those matching by title, folder, branch or model, and those whose conversation
- * matched, in the list's order. Folder scope and the empty-session switch apply to both.
+ * matched, in the list's order. The empty-session switch applies to both.
  */
 export function withContentMatches(sessions: readonly AgentHistorySession[], filter: AgentHistoryFilter, hits: ReadonlyMap<string, string>): AgentHistorySession[] {
   const byFields = filterSessions(sessions, filter)

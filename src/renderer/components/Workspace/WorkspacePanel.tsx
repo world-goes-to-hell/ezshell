@@ -101,7 +101,7 @@ export function WorkspacePanel() {
         </button>
       </header>
       <div className="workspace-content" id="workspace-content" role="tabpanel" aria-labelledby={`workspace-tab-${section}`}>
-        {section === 'history' ? <AgentHistoryPanel isActive={isOpen} />
+        {section === 'history' ? <AgentHistoryPanel />
           : folder ? (section === 'files' ? <WorkspaceFiles folder={folder} /> : <WorkspaceGit folder={folder} />)
           : <WorkspaceNote>{isLoading ? '작업 폴더를 확인하는 중…' : shellId
             ? '현재 작업 폴더를 읽지 못했습니다.'

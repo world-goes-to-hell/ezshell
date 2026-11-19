@@ -42,10 +42,16 @@ const { check, finish } = createChecks()
 
   check('no past agent sessions are listed in the tree', await js(`!document.querySelector('.local-history, .local-history-row')`))
 
-  // A worktree opens a local terminal there; it is listed under that worktree
+  // A single tab shares the worktree's own row.
   await js(`${worktreeRow(feature)}.querySelector('.local-worktree-open').click()`)
   check('clicking a worktree opens a local terminal tab', await until(`document.querySelectorAll('.terminal-tab').length === 1`, 20000))
-  check('the tab is listed under that worktree, which is marked open', await until(`${worktreeRow(feature)}.querySelectorAll('.local-terms-item').length === 1 && !!${worktreeRow(feature)}.querySelector('.local-worktree-dot.is-on')`, 10000))
+  check('the worktree row shows the tab status and close button without a repeated row', await until(`
+    ${worktreeRow(feature)}.dataset.localSessionId === document.querySelector('.terminal-tab.active')?.dataset.tabId &&
+    ${worktreeRow(feature)}.classList.contains('is-current') &&
+    !!${worktreeRow(feature)}.querySelector('.local-worktree-dot.is-on') &&
+    !!${worktreeRow(feature)}.querySelector('.local-worktree-row > .local-terms-close') &&
+    !${worktreeRow(feature)}.querySelector('.local-terms-item, .local-worktree-fold')
+  `, 10000))
   check('the tab is named after the project and branch', await js(`document.querySelector('.terminal-tab.active')?.textContent.includes('work app · feature')`), await js(`document.querySelector('.terminal-tab.active')?.textContent`))
   await js(`${worktreeRow(feature)}.querySelector('.local-worktree-open').click()`)
   await sleep(800)

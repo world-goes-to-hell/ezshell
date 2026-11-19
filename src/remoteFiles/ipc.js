@@ -179,7 +179,22 @@ function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLock
   /** Edit windows with unsaved changes (they hold an update's restart until the user decides) */
   const unsavedEditCount = () => [...dirty].filter(docId => windows.has(docId)).length
 
-  return { closeViewWindows, unsavedEditCount }
+  /**
+   * A file of this PC the user picked from a link in an agent's answer (src/agentChat/ipc.js checks it
+   * was in the conversation and resolves it). Text opens in the editor, images and PDFs in the preview.
+   */
+  function openLocalFile(realPath, label) {
+    try {
+      refuseWhileLocked()
+      const registered = docs.registerLocal({ root: require('path').dirname(realPath), path: realPath, label, mode: 'preview' })
+      openWindowFor(registered)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: userMessage(err) }
+    }
+  }
+
+  return { closeViewWindows, unsavedEditCount, openLocalFile }
 }
 
 module.exports = { registerRemoteFileIpc }

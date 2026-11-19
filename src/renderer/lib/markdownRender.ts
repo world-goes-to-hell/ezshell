@@ -6,11 +6,19 @@
 import MarkdownIt from 'markdown-it'
 
 const SAFE_LINK = /^(https?:|mailto:|#)/i
+/** A file or folder of this PC: "C:\…", "C:/…", "/…" or "file:///…" (never "\\host\share") */
+export const LOCAL_PATH_LINK = /^(?:[a-z]:[\\/]|\/(?![\\/])|file:\/\/\/)/i
 
-function create(): MarkdownIt {
+/** `localLinks`: links to this PC's files stay links (the agent chat opens them through main) */
+function create(localLinks = false): MarkdownIt {
   const md = new MarkdownIt({ html: false, linkify: true, typographer: false })
   const defaultValidate = md.validateLink.bind(md)
-  md.validateLink = (url: string) => defaultValidate(url) && SAFE_LINK.test(url.trim())
+  md.validateLink = (url: string) => (localLinks && LOCAL_PATH_LINK.test(url.trim())) || (defaultValidate(url) && SAFE_LINK.test(url.trim()))
+  if (localLinks) {
+    // Kept as written: the usual encoding turns a Windows path's backslashes into %5C
+    const defaultNormalize = md.normalizeLink.bind(md)
+    md.normalizeLink = (url: string) => (LOCAL_PATH_LINK.test(url.trim()) ? url.trim() : defaultNormalize(url))
+  }
   md.renderer.rules.image = (tokens, index) => {
     const alt = md.utils.escapeHtml(tokens[index].content || '이미지')
     return `<span class="md-image" title="이미지는 표시하지 않습니다">[${alt}]</span>`
@@ -19,10 +27,17 @@ function create(): MarkdownIt {
 }
 
 let instance: MarkdownIt | null = null
+let chatInstance: MarkdownIt | null = null
 
 export function renderMarkdown(text: string): string {
   instance ??= create()
   return instance.render(text)
+}
+
+/** An agent's answer in the chat view: like renderMarkdown, and links to this PC's files stay links */
+export function renderChatMarkdown(text: string): string {
+  chatInstance ??= create(true)
+  return chatInstance.render(text)
 }
 
 /** Whether a file name is a Markdown file (the window offers the Markdown view) */

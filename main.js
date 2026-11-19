@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification, Menu, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification, Menu, clipboard, nativeImage, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const userDataDir = require('./src/userDataDir.js');
@@ -199,15 +199,9 @@ function saveToFile(filePath, data) {
   }
 }
 
-function createStartupSplash(placement, workArea, rendererUrl) {
-  const width = Math.min(680, workArea.width);
-  const height = Math.min(230, workArea.height);
-  const x = Math.max(workArea.x, Math.min(workArea.x + workArea.width - width,
-    Math.round(placement.x + (placement.width - width) / 2)));
-  const y = Math.max(workArea.y, Math.min(workArea.y + workArea.height - height,
-    Math.round(placement.y + (placement.height - height) / 2)));
+function createStartupSplash(placement, rendererUrl) {
   const splash = new BrowserWindow({
-    x, y, width, height,
+    ...placement,
     show: false,
     frame: false,
     transparent: true,
@@ -218,14 +212,74 @@ function createStartupSplash(placement, workArea, rendererUrl) {
     hasShadow: false,
     webPreferences: { sandbox: true, contextIsolation: true, devTools: false }
   });
+  const { prefersReducedMotion } = systemPreferences.getAnimationSettings();
+  let revealTimer;
+  let onReveal;
+  const showApp = () => {
+    const callback = onReveal;
+    onReveal = undefined;
+    callback?.();
+  };
   const dismiss = () => { if (!splash.isDestroyed()) splash.destroy(); };
+  const release = () => {
+    clearTimeout(revealTimer);
+    showApp();
+    dismiss();
+  };
   splash.setIgnoreMouseEvents(true);
-  splash.once('ready-to-show', () => splash.showInactive());
+  splash.once('closed', () => {
+    clearTimeout(revealTimer);
+    showApp();
+  });
+  splash.webContents.once('render-process-gone', dismiss);
+  const shown = new Promise(resolve => {
+    splash.once('ready-to-show', () => {
+      splash.showInactive();
+      resolve();
+    });
+  });
   const loading = rendererUrl
     ? splash.loadURL(new URL('startup.html?startupMode=true', rendererUrl).href)
     : splash.loadFile(path.join(__dirname, '../renderer/startup.html'), { query: { startupMode: 'true' } });
   void loading.catch(dismiss);
-  return dismiss;
+  return {
+    dismiss,
+    revealWhenReady(callback, getBackdropColor) {
+      if (prefersReducedMotion || splash.isDestroyed()) {
+        callback();
+        dismiss();
+        return;
+      }
+      if (onReveal) return;
+      onReveal = callback;
+      revealTimer = setTimeout(release, 4500);
+      void Promise.all([shown, loading, getBackdropColor().catch(() => '')])
+        .then(([, , color]) => {
+          if (splash.isDestroyed()) return;
+          return splash.webContents.executeJavaScript(`
+            new Promise(resolve => {
+              window.addEventListener('ezshell-startup-covered', () => resolve(true), { once: true });
+              window.addEventListener('ezshell-startup-finished', () => resolve(false), { once: true });
+              window.dispatchEvent(new CustomEvent('ezshell-startup-reveal', { detail: ${JSON.stringify(color)} }));
+            })
+          `);
+        })
+        .then(covered => {
+          if (!covered || splash.isDestroyed()) return;
+          // Show the ready window under the opaque splash, then let the backdrop fade out.
+          showApp();
+          return splash.webContents.executeJavaScript(`
+            new Promise(resolve => {
+              window.addEventListener('ezshell-startup-finished', () => resolve(), { once: true });
+              requestAnimationFrame(() => requestAnimationFrame(() => {
+                window.dispatchEvent(new Event('ezshell-startup-app-shown'));
+              }));
+            })
+          `);
+        })
+        .then(release, release);
+    }
+  };
 }
 
 function createWindow() {
@@ -275,7 +329,7 @@ function createWindow() {
   const win = mainWindow;
   const bounds = win.getBounds();
   const { workArea } = require('electron').screen.getDisplayMatching(bounds);
-  const dismissSplash = createStartupSplash(lastPlace?.isMaximized ? workArea : bounds, workArea, rendererUrl);
+  const startupSplash = createStartupSplash(lastPlace?.isMaximized ? workArea : bounds, rendererUrl);
   // The renderer signals after committing the lock screen or the loaded session list.
   // Bound the wait so a stuck renderer can never leave an overlay on the desktop indefinitely.
   let starting = true;
@@ -285,26 +339,38 @@ function createWindow() {
     clearTimeout(startupTimeout);
     if (lastPlace?.isMaximized && !mainWindowFill) win.maximize();
     win.show();
-    dismissSplash();
     if (rendererUrl) win.webContents.openDevTools();
   };
-  const startupTimeout = setTimeout(reveal, 20000);
+  const startupTimeout = setTimeout(() => {
+    reveal();
+    startupSplash.dismiss();
+  }, 20000);
   win.once('closed', () => {
     starting = false;
     clearTimeout(startupTimeout);
-    dismissSplash();
+    startupSplash.dismiss();
+    browserReview.close();
   });
   win.webContents.ipc.on('app-startup-ready', (event) => {
-    if (event.senderFrame === win.webContents.mainFrame) reveal();
+    if (!starting || event.senderFrame !== win.webContents.mainFrame) return;
+    startupSplash.revealWhenReady(reveal, () => win.webContents.executeJavaScript(
+      "getComputedStyle(document.documentElement).getPropertyValue('--bg-primary').trim()"
+    ));
   });
   const failStartup = (error) => {
     if (!starting || win.isDestroyed()) return;
+    starting = false;
+    clearTimeout(startupTimeout);
     console.error('[Startup] The main window could not load:', error);
-    dismissSplash();
+    startupSplash.dismiss();
     dialog.showErrorBox('ezShell 시작 오류', '앱 화면을 열지 못했습니다. ezShell을 다시 실행해 주세요.');
     win.destroy();
   };
   win.webContents.once('render-process-gone', (_event, details) => failStartup(details.reason));
+  win.webContents.on('render-process-gone', () => browserReview.close());
+  win.webContents.on('did-start-navigation', details => {
+    if (details.isMainFrame && !details.isSameDocument) browserReview.close();
+  });
   const loading = rendererUrl ? win.loadURL(rendererUrl) : win.loadFile(path.join(__dirname, '../renderer/index.html'));
   void loading.catch(failStartup);
 
@@ -348,8 +414,9 @@ const { setupAutoUpdater } = require('./src/ipc/updates.js').registerUpdateIpc({
   get mainWindow() { return mainWindow; }
 });
 
-// Windows show only the app's own page: no navigation elsewhere, no new windows, no webviews.
+// App windows show only the app's own page. The browser view has a separate session and policy.
 app.on('web-contents-created', (event, contents) => {
+  if (browserReview.ownsPage(contents)) return;
   const devUrls = [
     process.env.ELECTRON_RENDERER_URL,
     process.argv.includes('--dev') ? DEV_RENDERER_URL : null
@@ -491,10 +558,22 @@ const sendToLocalWindow = (channel, payload) => {
 let localShells = null;
 const agentBridgeFile = path.join(userDataPath, 'agent-message-connection');
 const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages({
-  notify: sendToLocalWindow, isLocked: () => isAppLocked,
+  notify: (channel, payload) => {
+    sendToLocalWindow(channel, payload);
+    if (channel === 'agent-messages-state') browserReview?.updateAgents();
+  },
+  isLocked: () => isAppLocked,
   onInboxChanged: id => localShells?.wakeInbox(id),
   bindLocalAgent: request => localShells?.bindAgentProcess(request),
   bridgeFile: agentBridgeFile
+});
+const browserReview = require('./src/ipc/browserReview.js').registerBrowserReview({
+  fromMainWindow: event => !isAppLocked && fromMainWindow(event),
+  getWindow: () => mainWindow,
+  listAgents: () => agentMessages.snapshot().agents
+    .filter(agent => agent.active && agent.mcpConnected && localShells?.isRunning(agent.shellId))
+    .map(({ id, kind, cwd, status }) => ({ id, kind, cwd, status })),
+  sendMessage: agentMessages.sendAsUser
 });
 const { installAgentMessageMcp } = require('./src/ipc/agentMessageSetup.js');
 const agentSetupInProgress = new Set();
@@ -571,11 +650,18 @@ ipcMain.on('local-shell-composing', (event, { id, value }) => {
 });
 ipcMain.on('local-shell-resize', (event, { id, cols, rows }) => { if (fromMainWindow(event)) localShells?.resize(id, cols, rows); });
 ipcMain.on('local-shell-close', (event, id) => { if (fromMainWindow(event)) localShells?.close(id); });
-const localTerminalClipboard = require('./src/ipc/localTerminalClipboard.js').createLocalTerminalClipboard(clipboard);
-ipcMain.handle('local-shell-clipboard', (event, id) => {
-  if (!fromMainWindow(event) || isAppLocked || !localShells?.isRunning(id)) return { success: true, text: '' };
+const localTerminalClipboard = require('./src/ipc/localTerminalClipboard.js').createLocalTerminalClipboard(clipboard, nativeImage);
+ipcMain.handle('local-shell-clipboard', async (event, id) => {
+  const canPaste = () => fromMainWindow(event) && !isAppLocked && localShells?.isRunning(id);
+  const empty = { success: true, text: '' };
+  if (!canPaste()) return empty;
   try {
-    return { success: true, text: localTerminalClipboard.read() };
+    const { text, image } = await localTerminalClipboard.read();
+    if (!canPaste()) return empty;
+    if (!image) return { success: true, text };
+    if (localShells.pasteClipboardImage(id)) return empty;
+    const decoded = await localTerminalClipboard.decodeImage(image);
+    return canPaste() ? { success: true, text: localTerminalClipboard.saveImage(decoded) } : empty;
   } catch (error) {
     return { success: false, error: error.code ? '클립보드 이미지를 저장하지 못했습니다.' : error.message };
   }
@@ -596,21 +682,45 @@ const codexUsageWatcher = require('./src/ipc/codexUsageWatcher.js').createCodexU
 });
 codexUsageWatcher.start();
 ipcMain.handle('agent-usage-state', event => (fromMainWindow(event) && !isAppLocked ? agentMessages.usageSnapshot() : []));
-ipcMain.handle('agent-message-send', (event, request) => {
-  if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
-  try { return { success: true, ...agentMessages.sendAsUser(request ?? {}) }; }
-  catch (error) { return { success: false, error: error.message }; }
-});
-ipcMain.handle('agent-message-ack', (event, id) => {
-  if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
-  try { return { success: true, ...agentMessages.acknowledge(id) }; }
-  catch (error) { return { success: false, error: error.message }; }
-});
 require('./src/ipc/localProjects.js').registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit });
 // Past Claude Code and Codex sessions of this PC, for the right panel (src/agentHistory)
 const agentHistory = require('./src/agentHistory/history.js').createAgentHistory();
 require('./src/agentHistory/ipc.js').registerAgentHistoryIpc({
-  ipcMain, fromMainWindow, isLocked: () => isAppLocked, history: agentHistory, openPath: folder => shell.openPath(folder)
+  ipcMain, fromMainWindow, isLocked: () => isAppLocked, history: agentHistory,
+  folderForShell: id => localShells?.list().find(entry => entry.id === id)?.cwd,
+  openPath: folder => shell.openPath(folder)
+});
+// A local shell's Claude Code / Codex drawn as a chat over its pane (src/agentChat). The transcript is
+// the agent's own file: main finds it from the agent's session id (usage report) or Codex's watcher.
+const agentChats = require('./src/agentChat/chats.js').createAgentChats({
+  send: sendToLocalWindow,
+  claudeRoot: require('./src/agentHistory/history.js').agentRoots(process.env, require('os').homedir()).claude,
+  isGone: shellId => !localShells?.list().some(entry => entry.id === shellId),
+  resolve: async (shellId) => {
+    const running = localShells?.agentOf(shellId);
+    if (!running) return null;
+    const approval = localShells.approvalOf(shellId);
+    const agent = agentMessages.snapshot().agents.filter(item => item.active && item.shellId === shellId && item.kind === running.kind).at(-1);
+    if (!agent) return { kind: running.kind, approval };
+    const usage = agentMessages.usageSnapshot().find(item => item.agentId === agent.id)?.usage;
+    return {
+      kind: running.kind,
+      approval,
+      cwd: agent.cwd ?? null,
+      sessionId: usage?.sessionId ?? agent.resumeId ?? null,
+      file: running.kind === 'codex' ? codexUsageWatcher.fileOf(agent.id) : null
+    };
+  }
+});
+const agentChatIpc = require('./src/agentChat/ipc.js').registerAgentChatIpc({
+  ipcMain, fromMainWindow, isLocked: () => isAppLocked, chats: agentChats, shells: () => localShells,
+  clipboard: localTerminalClipboard,
+  // Links in answers: the file manager shows a file (never runs it), the file window reads it
+  links: {
+    openExternal: url => shell.openExternal(url),
+    showItemInFolder: target => shell.showItemInFolder(target),
+    openLocalFile: target => remoteFileIpc.openLocalFile(target, '에이전트 대화')
+  }
 });
 
 // A query result the user chose to export ("추출" in a DB tab or DB window), saved where they pick.
@@ -844,9 +954,12 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   forgetCommandHistory();
   currentMasterPassword = null;
   isAppLocked = true;
+  browserReview.close();
   mcpSessionsCache = null;
   mcpController?.onLocked();
   agentHistory.clear();
+  agentChats.closeAll();
+  agentChatIpc.clearClipboard();
   hostKeyPrompter.dismissAll();
   closeMcpActivityWindow();
   // File previews and followed logs must not stay on screen behind the lock (edit windows keep unsaved text)
@@ -927,9 +1040,12 @@ ipcMain.handle('reset-master-password', async () => {
 
   currentMasterPassword = null;
   isAppLocked = true;
+  browserReview.close();
   mcpSessionsCache = null;
   mcpController?.onLocked();
   agentHistory.clear();
+  agentChats.closeAll();
+  agentChatIpc.clearClipboard();
   remoteFileIpc.closeViewWindows();
   // Query results must not stay on screen behind the lock
   dbIpc.closeAll();

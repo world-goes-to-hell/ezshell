@@ -1,14 +1,13 @@
-// A past agent session dragged from the work panel's agent history: onto the start screen or a tab strip it
+// A past agent session dragged from a project's history: onto the tab strip it
 // resumes in a new local terminal tab, on a pane edge in a new split, and in the center by replacing
 // the shell after confirmation. An SSH tab refuses it. Run by e2e/run.js with e2e/support/agentHistoryApp.js
 // (fake transcripts, local shells that record how they were asked to start) and the test SSH server.
 const fs = require('fs')
 const path = require('path')
-const { connect, createChecks, unlock, connectSsh, sleep } = require('../support/driver')
+const { connect, createChecks, unlock, connectSsh, pickTabGroup, sleep } = require('../support/driver')
 const { check, finish } = createChecks()
 
 const CLAUDE_ID = 'abcdef12-1111-4222-8333-444455556666'
-const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
 
 ;(async () => {
   const driver = await connect()
@@ -18,7 +17,6 @@ const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
   const launches = () => fs.existsSync(spawned) ? fs.readFileSync(spawned, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : []
   const resumedClaude = (launch) => !!launch && launch.args.join(' ').includes(`--resume ${CLAUDE_ID}`) && path.normalize(launch.cwd) === path.join(profile, 'work app')
   const ROW = `[...document.querySelectorAll('.agent-history-row')].find(row => row.textContent.includes('로그 화면 개선'))`
-  const CODEX_ROW = `[...document.querySelectorAll('.agent-history-row')].find(row => row.textContent.includes('사이드바 검색칸을 만들어 줘'))`
   const LOCAL_PANES = `[...document.querySelectorAll('.local-terminal-tab')].filter(t => getComputedStyle(t).visibility !== 'hidden' && t.offsetParent !== null).flatMap(t => [...t.querySelectorAll(':scope > .local-terminal-pane')])`
   const tabCount = () => js(`document.querySelectorAll('.terminal-tab').length`)
   const marker = () => js(`document.querySelector('.agent-drop-marker span')?.textContent ?? null`)
@@ -59,21 +57,29 @@ const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
   }
 
   await unlock(driver)
-  check('the agent history panel lists the session', await openPanel())
+  check('an SSH tab connects', await connectSsh(driver))
+  const work = path.join(profile, 'work app')
+  await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([work]))});
+    window.dispatchEvent(new Event('ezshell:local-projects-changed'))`)
+  await until(`!!document.querySelector('.local-worktree-open')`)
+  await js(`document.querySelector('.local-worktree-open').click()`)
+  await until(`${LOCAL_PANES}.length === 1`)
+  const initialTab = await js(`document.querySelector('.terminal-tab.active')?.dataset.tabId`)
+  check('the agent history panel lists the project session', await openPanel())
   check('its rows can be dragged', await js(`(${ROW}).draggable === true`))
 
-  // ---- Onto the start screen: a new local terminal tab ----
-  const welcome = await centerOf(`document.querySelector('.welcome-screen')`)
-  check('the start screen is there', !!welcome)
+  // ---- Onto the tab strip: a new local terminal tab ----
+  const strip = await centerOf(`document.querySelector('.terminal-tabs .new-tab-btn')`)
   await startDrag()
-  check('over the start screen the drop is taken', await dragOver(welcome[0] - 200, welcome[1]))
+  check('over the tab strip the drop is taken', await dragOver(strip[0], strip[1]))
   check('and the marker says a new tab', await until(`document.querySelector('.agent-drop-marker span')?.textContent === '여기에 놓으면 새 탭에서 이어서 실행'`, 3000), String(await marker()))
-  await dropAt(welcome[0] - 200, welcome[1])
-  check('dropping there opens a local terminal tab', await until(`document.querySelectorAll('.terminal-tab').length === 1`, 15000))
+  await dropAt(strip[0], strip[1])
+  check('dropping there opens a local terminal tab', await until(`document.querySelectorAll('.terminal-tab').length === 2`, 15000))
   await sleep(500)
   check('which resumes the Claude session in its folder', resumedClaude(launches().at(-1)), JSON.stringify(launches().at(-1)))
   check('the marker goes away', await until(`!document.querySelector('.agent-drop-marker')`, 3000))
-  await until(`${LOCAL_PANES}.length === 1`, 15000)
+  await js(`document.querySelector('.terminal-tab[data-tab-id=' + CSS.escape(${JSON.stringify(initialTab)}) + '] .tab-close').click()`)
+  await until(`document.querySelectorAll('.terminal-tab').length === 1 && ${LOCAL_PANES}.length === 1`, 15000)
 
   const singlePane = await centerOf(`${LOCAL_PANES}[0]`)
   const [oldMain] = await shellsInView()
@@ -90,21 +96,16 @@ const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
   await until("!document.querySelector('.confirm-dialog')")
   check('cancelling leaves the shell and tab in place', (await shellsInView())[0] === oldMain && launches().length === beforeCancel && (await tabCount()) === 1)
 
-  await until("!document.querySelector('.agent-history-scope button').disabled")
-  await js("document.querySelector('.agent-history-scope button:last-child').click()")
-  await until(`!!(${CODEX_ROW})`)
-  check('the center can be dropped on again with a Codex conversation from another project', await replaceAt(singlePane, CODEX_ROW))
+  check('the center can be dropped on again with the project’s Claude conversation', await replaceAt(singlePane))
   await js("document.querySelector('.confirm-dialog .btn-danger').click()")
   check('confirming replaces the main shell in the same pane', await until(`(() => {
     const panes = ${LOCAL_PANES}
     return panes.length === 1 && panes[0].dataset.localShellId && panes[0].dataset.localShellId !== ${JSON.stringify(oldMain)}
   })()`) && (await tabCount()) === 1 && JSON.stringify(await centerOf(`${LOCAL_PANES}[0]`)) === JSON.stringify(singlePane))
   const mainReplacement = launches().at(-1)
-  check('the original main shell closes and the Codex conversation resumes in its project',
+  check('the original main shell closes and the conversation resumes in its project',
     await until(`window.electronAPI.localShellAttach(${JSON.stringify(oldMain)}).then(state => state === null)`) &&
-    mainReplacement?.args.join(' ').includes(`resume ${CODEX_ID}`) && mainReplacement?.cwd === path.join(profile, 'other folder'))
-  check('the project filter follows the new main shell without switching tabs', await until(
-    "document.querySelector('.agent-history-scope button')?.textContent === 'other folder'"))
+    resumedClaude(mainReplacement))
 
   // ---- Onto the right side of that tab's pane: a new pane there ----
   check('the panel opens again', await openPanel())
@@ -139,16 +140,21 @@ const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
   check('the original split shell closes', await until(`window.electronAPI.localShellAttach(${JSON.stringify(oldSplit)}).then(state => state === null)`))
 
   // ---- An SSH tab does not take it ----
-  check('an SSH tab connects', await connectSsh(driver))
-  check('the panel opens again', await openPanel())
+  check('a session can be picked from the local project before switching to SSH', await openPanel())
+  await startDrag()
+  await pickTabGroup(driver, '일반')
+  check('the SSH tab has no local project history to browse', await until(`
+    !(${ROW}) && document.querySelector('.agent-history-note')?.textContent.includes('프로젝트의 로컬 터미널') &&
+    document.querySelectorAll('.terminal-tab').length === 1
+  `))
   const sshPane = await centerOf(`document.querySelector('.terminal-container[data-pane="main"]:not([style*="hidden"])')`)
   const sshTabs = await tabCount()
-  await startDrag()
   await dragOver(sshPane[2] + 60, sshPane[1])
   check('over an SSH pane the marker refuses', await until(`document.querySelector('.agent-drop-marker.is-blocked span')?.textContent === '에이전트 대화는 로컬 터미널 탭에서만 이어서 열 수 있습니다.'`, 3000), String(await marker()))
   await dropAt(sshPane[2] + 60, sshPane[1])
-  await sleep(800)
-  check('and dropping does nothing but tell why', (await tabCount()) === sshTabs && await js(`[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('로컬 터미널 탭에서만'))`))
+  const refused = await until(`[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('로컬 터미널 탭에서만'))`, 3000)
+  const afterDrop = await tabCount()
+  check('and dropping does nothing but tell why', refused && afterDrop === sshTabs, JSON.stringify({ refused, sshTabs, afterDrop }))
 
   finish()
 })().catch((error) => { console.error(error); process.exit(1) })

@@ -2,21 +2,21 @@ const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
 
 const runFile = promisify(execFile)
-const windowsProcessList = 'Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId | ForEach-Object { "{0} {1}" -f $_.ProcessId,$_.ParentProcessId }'
+const windowsProcessList = 'Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name | ForEach-Object { "{0} {1} {2}" -f $_.ProcessId,$_.ParentProcessId,$_.Name }'
 
 // The installed MCP server is a child of the CLI, which is a child of the terminal shell.
-async function getProcessParents(platform = process.platform) {
+async function getProcessTree(platform = process.platform) {
   const command = platform === 'win32' ? 'powershell.exe' : '/bin/ps'
   const args = platform === 'win32'
     ? ['-NoProfile', '-NonInteractive', '-Command', windowsProcessList]
-    : ['-axo', 'pid=,ppid=']
+    : ['-axo', 'pid=,ppid=,comm=']
   const { stdout } = await runFile(command, args, { timeout: 3000, windowsHide: true })
-  const parents = new Map()
+  const processes = new Map()
   for (const line of stdout.split('\n')) {
-    const pair = /^\s*(\d+)\s+(\d+)\s*$/.exec(line)
-    if (pair) parents.set(Number(pair[1]), Number(pair[2]))
+    const process = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line)
+    if (process) processes.set(Number(process[1]), { parent: Number(process[2]), name: process[3] })
   }
-  return parents
+  return processes
 }
 
-module.exports = { getProcessParents }
+module.exports = { getProcessTree }

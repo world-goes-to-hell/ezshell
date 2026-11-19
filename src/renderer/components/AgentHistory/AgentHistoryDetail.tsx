@@ -27,14 +27,15 @@ function formatDate(time: number | null): string | null {
 interface Props {
   session: AgentHistorySession
   state: DetailState | undefined
+  shellId: string
   onResume: (session: AgentHistorySession) => void
 }
 
 /** The expanded part of a row: where and what, the first prompt, the latest turns and the actions */
-export function AgentHistoryDetail({ session, state, onResume }: Props) {
+export function AgentHistoryDetail({ session, state, shellId, onResume }: Props) {
   const command = resumeCommand(session, isWindowsHost())
   const openFolder = async () => {
-    const result = await window.electronAPI.agentHistoryOpenFolder?.(session.key)
+    const result = await window.electronAPI.agentHistoryOpenFolder?.(shellId, session.key)
     if (result && !result.success) toast.error('폴더를 열지 못했습니다', result.error)
   }
   const facts: Array<[string, string | null]> = [

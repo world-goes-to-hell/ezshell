@@ -1,26 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentHistorySession } from '../types'
-import { filterSessions, folderName, isInside, relativeTime, resumeCommand, withContentMatches } from './agentHistory'
+import { filterSessions, folderName, relativeTime, resumeCommand, withContentMatches } from './agentHistory'
 
 const ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
 
 const session = (over: Partial<AgentHistorySession>): AgentHistorySession => ({
   key: `claude:${ID}`, agent: 'claude', id: ID, cwd: 'D:\\work\\app', branch: 'main', model: 'claude-opus-5-5',
   version: null, title: '로그 화면', preview: '실시간 보기 개선', hasPrompt: true, created: null, updated: 0, ...over
-})
-
-describe('isInside', () => {
-  it('compares Windows paths without case and with either slash', () => {
-    expect(isInside('d:/WORK/app/sub', ['D:\\work\\app'])).toBe(true)
-    expect(isInside('D:\\work\\application', ['D:\\work\\app'])).toBe(false)
-    expect(isInside('D:\\work\\app', ['D:\\work\\app\\'])).toBe(true)
-  })
-
-  it('keeps case on other systems', () => {
-    expect(isInside('/home/me/App', ['/home/me/app'])).toBe(false)
-    expect(isInside('/home/me/app/x', ['/home/me/app'])).toBe(true)
-    expect(isInside(null, ['/'])).toBe(false)
-  })
 })
 
 describe('filterSessions', () => {
@@ -32,19 +18,14 @@ describe('filterSessions', () => {
   const keys = (filter: Parameters<typeof filterSessions>[1]) => filterSessions(list, filter).map(s => s.key)
 
   it('hides sessions without a prompt unless asked', () => {
-    expect(keys({ query: '', roots: null, showEmpty: false })).toEqual(['a', 'b'])
-    expect(keys({ query: '', roots: null, showEmpty: true })).toEqual(['a', 'b', 'c'])
-  })
-
-  it('limits to the project folders', () => {
-    expect(keys({ query: '', roots: ['D:\\work\\app'], showEmpty: false })).toEqual(['a'])
-    expect(keys({ query: '', roots: ['D:\\work\\app', 'D:\\work\\app-feature'], showEmpty: false })).toEqual(['a', 'b'])
+    expect(keys({ query: '', showEmpty: false })).toEqual(['a', 'b'])
+    expect(keys({ query: '', showEmpty: true })).toEqual(['a', 'b', 'c'])
   })
 
   it('needs every word, in any field', () => {
-    expect(keys({ query: 'codex side', roots: null, showEmpty: false })).toEqual(['b'])
-    expect(keys({ query: 'APP 로그', roots: null, showEmpty: false })).toEqual(['a'])
-    expect(keys({ query: '없는말', roots: null, showEmpty: false })).toEqual([])
+    expect(keys({ query: 'codex side', showEmpty: false })).toEqual(['b'])
+    expect(keys({ query: 'APP 로그', showEmpty: false })).toEqual(['a'])
+    expect(keys({ query: '없는말', showEmpty: false })).toEqual([])
   })
 })
 
@@ -58,16 +39,16 @@ describe('withContentMatches', () => {
   const keys = (filter: Parameters<typeof filterSessions>[1], hits: [string, string][]) => withContentMatches(list, filter, new Map(hits)).map(s => s.key)
 
   it('adds sessions whose conversation matched to those matching by fields, in list order', () => {
-    expect(keys({ query: '로그', roots: null, showEmpty: false }, [['d', '…로그…']])).toEqual(['a', 'd'])
+    expect(keys({ query: '로그', showEmpty: false }, [['d', '…로그…']])).toEqual(['a', 'd'])
   })
 
-  it('keeps the folder scope and the empty-session switch for content matches too', () => {
-    expect(keys({ query: '없는말', roots: ['D:\\work\\app'], showEmpty: false }, [['b', 'x'], ['c', 'x'], ['d', 'x']])).toEqual(['d'])
-    expect(keys({ query: '없는말', roots: null, showEmpty: true }, [['c', 'x']])).toEqual(['c'])
+  it('keeps the empty-session switch for content matches too', () => {
+    expect(keys({ query: '없는말', showEmpty: false }, [['c', 'x'], ['d', 'x']])).toEqual(['d'])
+    expect(keys({ query: '없는말', showEmpty: true }, [['c', 'x']])).toEqual(['c'])
   })
 
   it('is the field search alone without content matches', () => {
-    expect(keys({ query: '사이드', roots: null, showEmpty: false }, [])).toEqual(['b'])
+    expect(keys({ query: '사이드', showEmpty: false }, [])).toEqual(['b'])
   })
 })
 

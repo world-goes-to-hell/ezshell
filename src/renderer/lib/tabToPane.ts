@@ -72,7 +72,7 @@ export async function mergeTabIntoPane(sourceId: string, targetId: string, place
   const source = before.get(sourceId)
   const isLocal = Boolean(source?.local)
   let hasPortForwards = false
-  if (source && !isLocal && !source.db) {
+  if (source && !isLocal && !source.db && !source.browser) {
     try {
       hasPortForwards = (await window.electronAPI.portForwardList(sourceId)).length > 0
     } catch {

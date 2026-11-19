@@ -110,6 +110,7 @@ export function buildRestoreRecord(source: RecordSource): RestoreRecord {
   const indexOf = new Map<string, number>()
   const dbTabs: Array<[string, TerminalInfo]> = []
   for (const [id, info] of source.terminals) {
+    if (info.browser) continue
     if (info.db) { dbTabs.push([id, info]); continue }
     const tab = tabOf(info, source.sftpPathOf(id), info.local ? source.agentsOf?.(id) : undefined)
     if (!tab) continue

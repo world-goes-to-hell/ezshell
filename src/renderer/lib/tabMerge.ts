@@ -13,7 +13,7 @@ const label = (tab: TerminalInfo) => tab.title || `${tab.username}@${tab.host}`
 
 /** Both tabs come from the same session */
 export function isSameSession(a: TerminalInfo, b: TerminalInfo): boolean {
-  if (a.db || b.db) return false
+  if (a.db || b.db || a.browser || b.browser) return false
   if (a.local || b.local) return Boolean(a.local && b.local && a.local.cwd === b.local.cwd)
   const savedA = a.connectConfig?.savedSessionId
   const savedB = b.connectConfig?.savedSessionId
@@ -37,6 +37,7 @@ export function mergeBlock(tabs: Tabs, sourceId: string, targetId: string, hasPo
   if (!source || !target) return '병합할 탭을 찾지 못했습니다.'
   if (sourceId === targetId) return '같은 탭에는 병합할 수 없습니다.'
   if (source.db || target.db) return 'DB 탭은 병합할 수 없습니다. 터미널 탭끼리만 한 탭의 칸으로 합칠 수 있습니다.'
+  if (source.browser || target.browser) return '브라우저 탭은 화면 분할에서 나란히 열 수 있습니다.'
   if (source.local && target.local && source.local.cwd !== target.local.cwd) return '같은 작업 폴더에서 연 로컬 탭만 병합할 수 있습니다.'
   if (!isSameSession(source, target)) return '다른 세션의 탭은 병합할 수 없습니다. 같은 세션에서 연 탭만 한 탭의 칸으로 합칠 수 있습니다.'
   if (!source.connected || !target.connected) return '연결된 탭끼리만 병합할 수 있습니다.'
@@ -67,7 +68,7 @@ export interface MergeChoice {
 /** The other tabs of the same session, as the targets offered in the tab's menu */
 export function mergeChoices(tabs: Tabs, sourceId: string): MergeChoice[] {
   const source = tabs.get(sourceId)
-  if (!source || source.db) return []
+  if (!source || source.db || source.browser) return []
   const order = Array.from(tabs.keys())
   return order
     .filter(id => id !== sourceId)

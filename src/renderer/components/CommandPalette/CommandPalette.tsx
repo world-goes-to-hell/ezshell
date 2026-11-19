@@ -15,6 +15,7 @@ import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { modalOverlayVariants } from '../../lib/animation/variants'
 import { formatRelativeTime } from '../../utils/timeFormat'
 import { getFolderPath } from '../../lib/sessionPicker'
+import { isSshTab } from '../../lib/sessionTabs'
 import { openAgentMessages } from '../Terminal/AgentMessages'
 import './CommandPalette.css'
 
@@ -206,7 +207,7 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
 
     // Session log of the active tab (the only way to reach it in split layout, where tabs have no context menu)
     const activeTab = activeTerminalId ? getTerminal(activeTerminalId) : undefined
-    if (activeTerminalId && activeTab && !activeTab.db && !activeTab.local) {
+    if (activeTerminalId && activeTab && isSshTab(activeTab)) {
       const isLogging = activeTerminalId in sessionLogFiles
       const tabName = activeTab.title || `${activeTab.username}@${activeTab.host}`
       items.push({

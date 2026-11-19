@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiComputerLine, RiFolderAddLine, RiRefreshLine, RiServerLine } from 'react-icons/ri'
-import { useTerminalStore } from '../../stores/terminalStore'
+import { useTerminalStore, type TerminalInfo } from '../../stores/terminalStore'
 import { useSessionStore, type Session } from '../../stores/sessionStore'
 import { groupTabsBySession } from '../../lib/sessionTabs'
 import { useProjectServers } from '../../hooks/useProjectServers'
@@ -43,6 +43,12 @@ function writePrefs(prefs: LocalPanePrefs) {
   } catch {
     // Not remembered this time; the pane still works
   }
+}
+
+function localTabName({ title, local }: TerminalInfo) {
+  const workspace = local?.workspaceLabel
+  if (workspace && (title === `${workspace} · Codex` || title === `${workspace} · Claude Code`)) return workspace
+  return title || '로컬 터미널'
 }
 
 /**
@@ -219,28 +225,38 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
 
   const isEmpty = locals.length === 0 && projects.length === 0
 
-  const renderTab = (id: string) => {
+  const tabsOf = (path: string) => (assignment.byWorktree.get(path) ?? []).flatMap(id => {
+    const terminal = terminals.get(id)
+    return terminal ? [{ id, name: localTabName(terminal), connected: terminal.connected }] : []
+  })
+
+  const renderTabActions = (id: string, name: string) => {
+    const tree = terminals.get(id)?.splitTree
+    return (
+      <>
+        {tree && isSplitTree(tree) && paneIds(tree).length > 1 && (
+          <PaneLayoutBadge tabId={id} tabName={name} tree={tree} currentPane={() => focusedPaneOf(id)} onPick={pane => focusTabPane(focusTerminal, id, pane)} />
+        )}
+        <button type="button" className="local-terms-close" onClick={() => onClose(id)} title="닫기" aria-label={`${name} 닫기`}>
+          <RiCloseLine size={15} />
+        </button>
+      </>
+    )
+  }
+
+  const renderTab = (id: string, label?: string) => {
     const terminal = terminals.get(id)
     if (!terminal) return null
-    const { title, local } = terminal
-    const workspace = local?.workspaceLabel
-    const isAgentTitle = workspace && (title === `${workspace} · Codex` || title === `${workspace} · Claude Code`)
-    const name = isAgentTitle ? workspace : title || '로컬 터미널'
-    const panes = isSplitTree(terminal.splitTree) && terminal.splitTree ? paneIds(terminal.splitTree) : []
+    const name = localTabName(terminal)
     return (
       <li key={id} className="local-terms-item" data-local-session-id={id}>
         <div className={`local-terms-row ${id === visibleId ? 'is-current' : ''}`}>
           <button type="button" className="local-terms-open" onClick={() => focusTerminal(id)} title={`${name} 탭으로 이동`}>
             <RiComputerLine size={15} className="local-terms-icon" />
-            <span className="local-terms-name">{name}</span>
+            <span className="local-terms-name">{label ?? name}</span>
             <span className={`local-terms-dot ${terminal.connected ? 'is-on' : ''}`} aria-hidden="true" />
           </button>
-          {panes.length > 1 && terminal.splitTree && (
-            <PaneLayoutBadge tabId={id} tabName={name} tree={terminal.splitTree} currentPane={() => focusedPaneOf(id)} onPick={pane => focusTabPane(focusTerminal, id, pane)} />
-          )}
-          <button type="button" className="local-terms-close" onClick={() => onClose(id)} title="닫기" aria-label={`${name} 닫기`}>
-            <RiCloseLine size={15} />
-          </button>
+          {renderTabActions(id, label ?? name)}
         </div>
         <LocalSessionAgents tabId={id} />
       </li>
@@ -311,8 +327,10 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
               nodes={nodes}
               folded={folded}
               onToggleFold={toggleFold}
-              tabsOf={path => assignment.byWorktree.get(path) ?? []}
+              tabsOf={tabsOf}
+              currentTabId={visibleId}
               renderTab={renderTab}
+              renderTabActions={renderTabActions}
               onOpenWorktree={openWorktree}
               renderServers={renderServers}
               onDropOnProject={linkDropped}
@@ -322,7 +340,7 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
             <>
               {nodes.length > 0 && <div className="local-terms-group">다른 로컬 터미널</div>}
               <ul className="local-terms-list">
-                {assignment.others.map(renderTab)}
+                {assignment.others.map(id => renderTab(id))}
               </ul>
             </>
           )}

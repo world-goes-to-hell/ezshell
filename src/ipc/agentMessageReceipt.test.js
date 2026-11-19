@@ -40,7 +40,7 @@ async function agent(kind, shellId) {
   }
   // Ready once its MCP connection is counted
   await vi.waitFor(async () => expect((await call('list_agents')).self).toBe(env.EZSHELL_AGENT_ID))
-  return { id: env.EZSHELL_AGENT_ID, call }
+  return { id: env.EZSHELL_AGENT_ID, call, listTools: () => client.listTools() }
 }
 
 async function pair() {
@@ -48,6 +48,7 @@ async function pair() {
   await messages.ready()
   const lead = await agent('claude', 'local:1')
   const worker = await agent('codex', 'local:2')
+  woken.length = 0
   const { id } = await lead.call('send_message', { to: worker.id, text: '로그인 화면 고쳐 줘' })
   return { lead, worker, id }
 }
@@ -55,6 +56,7 @@ async function pair() {
 describe('receipts', () => {
   it('reach the sender marked as a receipt and leave the request open until the result', async () => {
     const { lead, worker, id } = await pair()
+    expect(woken).toEqual(['local:2'])
     expect((await worker.call('read_inbox')).messages.map(m => m.text)).toEqual(['로그인 화면 고쳐 줘'])
     expect((await worker.call('send_receipt', { message_id: id, text: '작업 할당 받았습니다' })).error).toBeNull()
 
@@ -63,14 +65,16 @@ describe('receipts', () => {
     expect(messages.unhandledFor('local:2')).toEqual([id])
 
     await worker.call('reply_to_message', { message_id: id, text: '고쳤습니다' })
+    expect(woken).toEqual(['local:2', 'local:1'])
     expect(messages.unhandledFor('local:2')).toEqual([])
     expect((await lead.call('read_inbox')).messages.map(m => m.text)).toEqual(['고쳤습니다'])
   }, 15000)
 
-  it('are read once the sender has seen them, so waiting does not return them again', async () => {
+  it('are read once the sender has seen them in the inbox', async () => {
     const { lead, worker, id } = await pair()
+    expect((await lead.listTools()).tools.map(tool => tool.name)).not.toContain('wait_for_message')
     await worker.call('send_receipt', { message_id: id, text: '작업 중인 일을 마치고 하겠습니다' })
-    expect((await lead.call('wait_for_message')).messages).toHaveLength(1)
+    expect((await lead.call('read_inbox')).messages).toHaveLength(1)
     expect((await lead.call('read_inbox')).messages).toEqual([])
     expect(messages.snapshot().messages.find(m => m.receipt)).toMatchObject({ read: true })
   }, 15000)

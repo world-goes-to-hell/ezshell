@@ -1,20 +1,23 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiMailLine } from 'react-icons/ri'
 import { create } from 'zustand'
 import type { AgentMessage, AgentMessageDelivery, AgentMessagesSnapshot } from '../../types'
-import { toast } from '../../stores/toastStore'
+import { folderLabel, isInsidePath, pathKey } from '../../lib/localWorkspaceTree'
+import { visibleTerminalId } from '../../lib/localTerminalPane'
+import { projectOfFolder, type GroupProject } from '../../lib/tabGroups'
+import { useTerminalStore } from '../../stores/terminalStore'
 import './AgentMessages.css'
 
 const USER = 'user'
+const ALL = 'all'
 const label = (id: string) => id === USER ? '나' : id
-const instructions = 'ezShell의 다른 에이전트와 협업할 때 ezshell agent list --json 으로 대상을 찾고, ezshell message send --to <ID> --text "요청" 으로 보내세요. ezshell message inbox --unread --json 으로 받은 메시지를 보고, ezshell message reply --reply-to <메시지-ID> --text "답변" 으로 답장하세요. 답장이 필요 없는 메시지는 ezshell message ack --id <메시지-ID> 로 확인하세요.'
 
 interface AgentMessagesState {
   snapshot: AgentMessagesSnapshot
   panes: Record<string, string>
-  panel: { agentId?: string } | null
+  panel: { agentId?: string; tabId?: string } | null
 }
 
 export const useAgentMessagesStore = create<AgentMessagesState>(() => ({
@@ -25,8 +28,8 @@ export const useAgentMessagesStore = create<AgentMessagesState>(() => ({
 const useMessages = useAgentMessagesStore
 
 /** Opens the message panel (all agents, or one agent's inbox) */
-export function openAgentMessages(agentId?: string) {
-  useMessages.setState({ panel: { agentId } })
+export function openAgentMessages(agentId?: string, tabId?: string) {
+  useMessages.setState({ panel: { agentId, tabId } })
 }
 
 function receive(snapshot: AgentMessagesSnapshot | null) {
@@ -107,7 +110,12 @@ function AgentDeliveryNotice({ delivery }: { delivery: AgentMessageDelivery | nu
   )
 }
 
-export function AgentMessagesHost() {
+interface WorkspaceSelection {
+  currentGroup: string | null
+  projects: readonly GroupProject[]
+}
+
+export function AgentMessagesHost({ currentGroup, projects }: WorkspaceSelection) {
   const panel = useMessages(state => state.panel)
   const [delivery, setDelivery] = useState<AgentMessageDelivery | null>(null)
   useEffect(() => {
@@ -138,7 +146,8 @@ export function AgentMessagesHost() {
   return (
     <>
       <AgentDeliveryNotice delivery={delivery} />
-      {panel && <AgentMessagesDialog key={panel.agentId ?? 'all'} initialAgent={panel.agentId} onClose={() => useMessages.setState({ panel: null })} />}
+      {panel && <AgentMessagesDialog key={panel.agentId ?? ALL} initialAgent={panel.agentId} sourceTabId={panel.tabId}
+        currentGroup={currentGroup} projects={projects} onClose={() => useMessages.setState({ panel: null })} />}
     </>
   )
 }
@@ -174,75 +183,65 @@ export function AgentPaneMessages({ shellId, tabId }: { shellId: string; tabId: 
   }, [shellId, tabId])
   if (!agent) return null
   return (
-    <button type="button" className="agent-pane-mail" data-unread={count > 0} onClick={() => openAgentMessages(agent.id)} title={`${agent.id} 메시지함`} aria-label={`${agent.id} 메시지함`}>
+    <button type="button" className="agent-pane-mail" data-unread={count > 0} onClick={() => openAgentMessages(agent.id, tabId)} title={`${agent.id} 메시지함`} aria-label={`${agent.id} 메시지함`}>
       <RiMailLine size={15} />
       {count > 0 && <span className="agent-mail-count">{count}</span>}
     </button>
   )
 }
 
-function AgentMessagesDialog({ initialAgent, onClose }: { initialAgent?: string; onClose: () => void }) {
+interface DialogProps extends WorkspaceSelection {
+  initialAgent?: string
+  sourceTabId?: string
+  onClose: () => void
+}
+
+function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects, onClose }: DialogProps) {
   const { agents, messages } = useMessages(state => state.snapshot)
-  const [selection, setSelection] = useState(initialAgent)
-  const [text, setText] = useState('')
-  const [reply, setReply] = useState<AgentMessage>()
-  const [error, setError] = useState('')
-  const [sending, setSending] = useState(false)
-  const selected = agents.find(agent => agent.id === selection) ?? agents.find(agent => agent.mcpConnected) ?? agents[0]
-  const thread = messages.filter(message => message.from === selected?.id || message.to === selected?.id)
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!selected?.mcpConnected || !text.trim() || sending) return
-    setSending(true)
-    setError('')
-    try {
-      const result = await window.electronAPI.agentMessageSend({ to: selected.id, text, replyTo: reply?.id })
-      if (!result.success) setError(result.error)
-      else { setText(''); setReply(undefined) }
-    } catch {
-      setError('메시지를 보내지 못했습니다.')
-    } finally {
-      setSending(false)
-    }
-  }
-  const acknowledge = async (id: string) => {
-    try {
-      const result = await window.electronAPI.agentMessageAck(id)
-      if (!result.success) setError(result.error)
-    } catch {
-      setError('메시지를 읽음으로 표시하지 못했습니다.')
-    }
-  }
-  const copyHelp = async () => {
-    try {
-      await navigator.clipboard.writeText(instructions)
-      toast.success('에이전트에게 전달할 사용법을 복사했습니다.')
-    } catch {
-      setError('사용법을 복사하지 못했습니다.')
-    }
-  }
+  const panes = useMessages(state => state.panes)
+  const [selection, setSelection] = useState(initialAgent ?? ALL)
+  const tab = useTerminalStore(state => {
+    const id = sourceTabId ?? visibleTerminalId(state.layout, state.activeTerminalId)
+    return id ? state.terminals.get(id) : undefined
+  })
+  const tabFolder = tab?.local?.cwd
+  const paneAgent = tab?.local && agents.find(agent => panes[agent.shellId] === tab.id && (initialAgent ? agent.id === initialAgent : agent.active))
+  const folder = tabFolder ?? (paneAgent ? paneAgent.cwd : undefined)
+  const project = projects.find(item => item.key === currentGroup) ?? projectOfFolder(folder, projects)
+  const workspaceName = project?.name ?? (folder ? folderLabel(folder) : null)
+  // Match archived agents by working directory as well, so closing a pane does not hide its messages.
+  const localAgents = agents.filter(agent => {
+    const owner = projectOfFolder(agent.cwd, projects)
+    if (project) return owner?.key === project.key
+    if (!folder || owner) return false
+    return tabFolder ? isInsidePath(agent.cwd, tabFolder) : pathKey(agent.cwd) === pathKey(folder)
+  })
+  const ids = new Set(localAgents.map(agent => agent.id))
+  const selected = ids.has(selection) ? selection : ALL
+  const thread = messages.filter(({ from, to }) => {
+    if (selected === ALL) return ids.has(from) && ids.has(to)
+    return (from === selected && (ids.has(to) || to === USER))
+      || (to === selected && (ids.has(from) || from === USER))
+  })
   return (
     <Dialog.Root open onOpenChange={open => { if (!open) onClose() }}>
       <Dialog.Portal>
         <Dialog.Overlay className="modal-overlay" />
         <Dialog.Content className="modal-content agent-messages-dialog" aria-describedby={undefined}>
           <Dialog.Title className="modal-title"><RiMailLine size={20} />에이전트 메시지</Dialog.Title>
-          {selected ? (
-            <div className="form-group">
-              <label htmlFor="agent-messages-session">에이전트</label>
-              <select id="agent-messages-session" value={selected.id} onChange={event => { setSelection(event.target.value); setReply(undefined); setError('') }} disabled={sending}>
-                {agents.map(agent => <option key={agent.id} value={agent.id}>{agent.id}{agent.active ? '' : ' (종료)'} · {agent.cwd}</option>)}
-              </select>
-              {selected.active && (
-                <p className="form-hint" role="status">
-                  {selected.mcpConnected ? '메시지 MCP 연결됨 (ezshell-cli-mcp)' : '메시지 MCP 연결을 기다리는 중 (ezshell-cli-mcp)'}
-                </p>
-              )}
-            </div>
-          ) : <p className="form-hint">로컬 작업에서 Codex 또는 Claude Code를 열면 메시지를 보낼 수 있습니다.</p>}
-          {selected && (
+          {workspaceName ? (
             <>
-              <div className="agent-message-thread" role="log" aria-label={`${selected.id} 메시지`}>
+              <div className="form-group">
+                <div className="agent-message-filter">
+                  <label htmlFor="agent-messages-session">에이전트</label>
+                  <span className="agent-message-workspace" title={workspaceName}>{workspaceName}</span>
+                </div>
+                <select id="agent-messages-session" value={selected} onChange={event => setSelection(event.target.value)}>
+                  <option value={ALL}>전체</option>
+                  {localAgents.map(agent => <option key={agent.id} value={agent.id}>{agent.id}{agent.active ? '' : ' (종료)'}</option>)}
+                </select>
+              </div>
+              <div className="agent-message-thread" role="log" tabIndex={0} aria-label={selected === ALL ? `${workspaceName} 에이전트 간 메시지` : `${selected} 메시지`}>
                 {thread.length === 0 && <p className="form-hint">아직 메시지가 없습니다.</p>}
                 {thread.map(message => (
                   <article key={message.id} className={`agent-thread-message${message.receipt ? ' is-receipt' : ''}`}>
@@ -252,27 +251,12 @@ function AgentMessagesDialog({ initialAgent, onClose }: { initialAgent?: string;
                       <span>{message.read ? '읽음' : '전달됨'}</span>
                     </header>
                     <p>{message.text}</p>
-                    {message.to === USER && (
-                      <div className="agent-thread-actions">
-                        {!message.read && <button type="button" onClick={() => void acknowledge(message.id)}>읽음 표시</button>}
-                        {selected.mcpConnected && !message.receipt && <button type="button" onClick={() => setReply(message)}>답장</button>}
-                      </div>
-                    )}
                   </article>
                 ))}
               </div>
-              {selected.mcpConnected && (
-                <form className="agent-message-compose" onSubmit={submit}>
-                  {reply && <button type="button" onClick={() => setReply(undefined)}>답장 취소</button>}
-                  <textarea aria-label="메시지 내용" placeholder={reply ? '답장 쓰기' : '메시지 쓰기'} rows={3} maxLength={8000} value={text} onChange={event => setText(event.target.value)} />
-                  <button type="submit" className="btn-primary" disabled={sending || !text.trim()}>보내기</button>
-                </form>
-              )}
             </>
-          )}
-          {error && <p className="agent-message-error" role="alert">{error}</p>}
+          ) : <p className="form-hint">로컬 작업을 선택하면 에이전트 메시지를 볼 수 있습니다.</p>}
           <div className="modal-actions">
-            <button type="button" className="btn-secondary" onClick={() => void copyHelp()}>CLI 사용법 복사</button>
             <Dialog.Close className="btn-secondary">닫기</Dialog.Close>
           </div>
         </Dialog.Content>

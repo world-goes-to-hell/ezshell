@@ -23,6 +23,15 @@ export interface TabGroup {
   tabIds: string[]
 }
 
+export function projectOfFolder(cwd: string | undefined, projects: readonly GroupProject[]): GroupProject | undefined {
+  let best: { project: GroupProject; length: number } | undefined
+  for (const project of projects) {
+    const tree = worktreeOf(cwd, project.worktrees)
+    if (tree && (!best || tree.length > best.length)) best = { project, length: tree.length }
+  }
+  return best?.project
+}
+
 /** The group of one tab. `preferred`: the group in front, chosen when a session is linked to several projects */
 export function groupOfTab(
   id: string,
@@ -33,16 +42,9 @@ export function groupOfTab(
 ): string {
   const info = terminals.get(id)
   if (!info) return GENERAL_GROUP
+  if (info.browser) return projects.find(project => project.key === info.browser?.group)?.key ?? GENERAL_GROUP
   if (info.db) return info.db.sshSessionId && info.db.sshSessionId !== id ? groupOfTab(info.db.sshSessionId, terminals, projects, servers, preferred) : GENERAL_GROUP
-  if (info.local) {
-    const cwd = info.local.cwd
-    let best: { key: string; length: number } | null = null
-    for (const project of projects) {
-      const tree = worktreeOf(cwd, project.worktrees)
-      if (tree && (!best || tree.length > best.length)) best = { key: project.key, length: tree.length }
-    }
-    return best?.key ?? GENERAL_GROUP
-  }
+  if (info.local) return projectOfFolder(info.local.cwd, projects)?.key ?? GENERAL_GROUP
   const saved = info.connectConfig?.savedSessionId
   if (!saved) return GENERAL_GROUP
   const known = new Set(projects.map(project => project.key))

@@ -7,7 +7,7 @@ const fs = require('fs');
 const { fileURLToPath } = require('url');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { getProcessParents } = require('./ipc/agentProcessParents.js');
+const { getProcessTree } = require('./ipc/agentProcessParents.js');
 
 const MAX_SHELLS = 10;
 /** Output kept per shell so a tab that is drawn again (pane split, tab moved) continues from it */
@@ -16,6 +16,7 @@ const MIN_SIZE = 2;
 const MAX_SIZE = 500;
 const MAX_WRITE_CHARS = 1024 * 1024;
 const TERMINAL_TYPE = 'xterm-256color';
+const AGENT_PROCESS_CHECK_MS = 1000;
 const exec = promisify(execFile);
 
 // Let the user's existing PowerShell prompt render as usual, then report the FileSystem location.
@@ -284,6 +285,17 @@ function trackCodexInput(input, data) {
   if (/[^\s\x00-\x1f\x7f]/u.test(text)) input.hasDraft = true;
 }
 
+// CLI-native image paste reads from the same Windows clipboard as ezShell.
+const WINDOWS_IMAGE_PASTE = { codex: '\x16', claude: '\x1bv' };
+
+function isProcessAlive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch { return false; }
+}
+
+const processName = name => name.split(/[\\/]/).at(-1).toLowerCase().replace(/\.exe$/, '');
+const appRuntime = processName(process.execPath);
+
 /**
  * @param {object} deps
  * @param {(file: string, args: string[], options: object) => object} deps.spawn node-pty's spawn
@@ -291,10 +303,12 @@ function trackCodexInput(input, data) {
  */
 function createLocalShells({
   spawn, send, agents, shell = defaultShell(), cwd = os.homedir(), env = process.env,
-  platform = process.platform, processParents = () => getProcessParents(platform)
+  platform = process.platform, processTree = () => getProcessTree(platform), processAlive = isProcessAlive
 }) {
   const shells = new Map();
   let nextId = 1;
+
+  const hasAgent = entry => Boolean(entry?.agent && !entry.exited && (!entry.externalAgent || processAlive(entry.externalAgent.pid)));
 
   function observeInbox(id, entry) {
     const { createAgentInboxWake } = require('./ipc/agentInboxWake.js');
@@ -307,16 +321,25 @@ function createLocalShells({
       unhandledMessages,
       isWorking: () => {
         const status = agentStatus(entry);
-        return status !== 'idle' && !(entry.disconnectAgent && status === 'unknown');
+        return status !== 'idle' && !(entry.externalAgent && status === 'unknown');
       },
       isRunningTask: () => agentStatus(entry) === 'working',
       // Nothing reported yet (a CLI just started): the wake waits for a still, empty composer instead
       isUnknown: () => agentStatus(entry) === 'unknown',
       write(data) {
-        if (entry.exited) return false;
+        if (!hasAgent(entry)) return false;
         // Pasting needs mail to announce; the Enter that submits a line already pasted does not (the
         // agent may have read and answered it meanwhile, and the line would stay in the composer)
         if (data !== '\r' && !pendingMessages().length && !unhandledMessages().length) return false;
+        try {
+          entry.pty.write(data);
+          if (entry.codexInput) trackCodexInput(entry.codexInput, data);
+          return true;
+        } catch { return false; }
+      },
+      // A line the user sent from the chat view (no mail needed)
+      rawWrite(data) {
+        if (!hasAgent(entry)) return false;
         try {
           entry.pty.write(data);
           if (entry.codexInput) trackCodexInput(entry.codexInput, data);
@@ -327,43 +350,89 @@ function createLocalShells({
     entry.inbox.setComposing(entry.composing);
   }
 
-  // Global MCP registrations work outside ezShell too. Only a connection launched
-  // from this shell's process tree may use its already-guarded composer wake.
-  async function bindAgentProcess({ pid, kind, setStatus, disconnect }) {
+  function releaseExternalAgent(entry) {
+    const binding = entry.externalAgent;
+    if (!binding) return;
+    clearInterval(binding.timer);
+    entry.inbox?.close();
+    Object.assign(entry, {
+      agent: undefined, reportStatus: undefined, externalAgent: undefined, inbox: undefined,
+      codexInput: null, titleStatus: 'unknown', reportedStatus: null, oscTail: ''
+    });
+    return binding;
+  }
+
+  function finishExternalAgent(entry) {
+    const binding = releaseExternalAgent(entry);
+    binding?.onExit(binding.id);
+  }
+
+  // Bind to the CLI ancestor, whose lifetime can be longer than any one MCP connection.
+  async function bindAgentProcess({ pid, kind }) {
     const candidates = new Map();
     for (const [id, entry] of shells) {
-      if (!entry.exited && !entry.agent && entry.pty.pid > 0) candidates.set(entry.pty.pid, { id, entry });
+      if (!entry.exited && (!entry.agent || entry.externalAgent) && entry.pty.pid > 0) candidates.set(entry.pty.pid, { id, entry });
     }
     if (!candidates.size) return;
-    let parents;
-    try { parents = await processParents(); }
+    let processes;
+    try { processes = await processTree(); }
     catch { return; }
     const visited = new Set();
-    for (let parent = parents.get(pid); parent > 0 && !visited.has(parent); parent = parents.get(parent)) {
+    let cliPid;
+    let runtimePid;
+    for (let parent = processes.get(pid)?.parent; parent > 0 && !visited.has(parent); parent = processes.get(parent)?.parent) {
       visited.add(parent);
       const candidate = candidates.get(parent);
-      if (!candidate) continue;
+      if (!candidate) {
+        const ancestor = processes.get(parent);
+        if (!ancestor) return;
+        const name = processName(ancestor.name);
+        if (name === kind) cliPid ??= parent;
+        if (name === 'node' || name === appRuntime) runtimePid ??= parent;
+        continue;
+      }
       const { id, entry } = candidate;
-      if (shells.get(id) !== entry || entry.exited || entry.agent || entry.pty.pid !== parent) return;
-      entry.agent = kind;
-      entry.reportStatus = setStatus;
-      entry.disconnectAgent = disconnect;
-      entry.codexInput = kind === 'codex' ? { hasDraft: false, submitted: false } : null;
-      entry.oscTail = '';
-      trackTerminalOsc(entry, entry.backlog, platform, false);
-      observeInbox(id, entry);
-      entry.inbox.writeOutput(entry.backlog);
-      return {
-        shellId: id,
-        status: agentStatus(entry),
-        close() {
-          if (entry.disconnectAgent !== disconnect) return;
-          entry.inbox?.close();
-          Object.assign(entry, {
-            agent: undefined, reportStatus: undefined, disconnectAgent: undefined, inbox: undefined,
-            codexInput: null, titleStatus: 'unknown', reportedStatus: null, oscTail: ''
-          });
+      const agentPid = cliPid ?? runtimePid;
+      if (!agentPid) return;
+      return ({ agentId, setStatus, onExit }) => {
+        if (shells.get(id) !== entry || entry.exited || entry.pty.pid !== parent || !processAlive(agentPid)) return;
+        let binding = entry.externalAgent;
+        if (binding && !processAlive(binding.pid)) {
+          finishExternalAgent(entry);
+          binding = undefined;
         }
+        if (entry.agent && (binding?.pid !== agentPid || entry.agent !== kind)) return;
+        if (!binding) {
+          binding = { id: agentId, pid: agentPid, onExit };
+          entry.externalAgent = binding;
+          entry.agent = kind;
+          entry.codexInput = kind === 'codex' ? { hasDraft: false, submitted: false } : null;
+          entry.oscTail = '';
+          trackTerminalOsc(entry, entry.backlog, platform, false);
+          observeInbox(id, entry);
+          entry.inbox.writeOutput(entry.backlog);
+          binding.timer = setInterval(() => {
+            if (!processAlive(agentPid)) finishExternalAgent(entry);
+          }, AGENT_PROCESS_CHECK_MS);
+          binding.timer.unref?.();
+        }
+        entry.reportStatus = setStatus;
+        const connection = {};
+        binding.connection = connection;
+        return {
+          shellId: id,
+          agentId: binding.id,
+          status: agentStatus(entry),
+          detach() {
+            if (entry.externalAgent !== binding || binding.connection !== connection) return false;
+            binding.connection = undefined;
+            if (!processAlive(binding.pid)) {
+              releaseExternalAgent(entry);
+              return false;
+            }
+            return true;
+          }
+        };
       };
     }
   }
@@ -428,7 +497,7 @@ function createLocalShells({
       entry.exited = true;
       entry.exitCode = exitCode;
       entry.inbox?.close();
-      entry.disconnectAgent?.();
+      finishExternalAgent(entry);
       if (registration?.finish) registration.finish(exitCode);
       else registration?.close();
       send('local-shell-exit', { id, exitCode });
@@ -454,6 +523,14 @@ function createLocalShells({
     }
   }
 
+  function pasteClipboardImage(id) {
+    const entry = shells.get(id);
+    if (platform !== 'win32' || !hasAgent(entry) || !Object.hasOwn(WINDOWS_IMAGE_PASTE, entry.agent)) return false;
+    write(id, WINDOWS_IMAGE_PASTE[entry.agent]);
+    if (entry.codexInput && !entry.codexInput.submitted) entry.codexInput.hasDraft = true;
+    return true;
+  }
+
   function resize(id, cols, rows) {
     const entry = shells.get(id);
     if (!entry || entry.exited) return;
@@ -474,7 +551,7 @@ function createLocalShells({
     if (!entry) return;
     shells.delete(id);
     entry.inbox?.close();
-    entry.disconnectAgent?.();
+    finishExternalAgent(entry);
     entry.registration?.close();
     agents?.forgetShell?.(id);
     if (entry.exited) return;
@@ -510,7 +587,7 @@ function createLocalShells({
   }
 
   return {
-    open, attach, write, resize, close, closeAll, bindAgentProcess, currentDirectory,
+    open, attach, write, pasteClipboardImage, resize, close, closeAll, bindAgentProcess, currentDirectory,
     /**
      * Every shell, oldest first. The shells outlive their tabs, so a window that reloaded (and lost
      * all its tabs) takes these back; otherwise they kept running unseen, agents included.
@@ -524,12 +601,47 @@ function createLocalShells({
       entry.composing = value;
       entry.inbox?.setComposing(value);
     },
+    /** The agent running in the shell ('claude' / 'codex') and its state, or null */
+    agentOf(id) {
+      const entry = shells.get(id);
+      return hasAgent(entry) ? { kind: entry.agent, status: agentStatus(entry) } : null;
+    },
+    /**
+     * A line from the chat view (src/agentChat): into the agent's composer only, never the shell. Not
+     * while it asks for approval (the text would answer the question).
+     */
+    async chatSend(id, text) {
+      const entry = shells.get(id);
+      if (!hasAgent(entry) || !entry.inbox) return { ok: false, reason: 'not-agent' };
+      if (agentStatus(entry) === 'blocked') return { ok: false, reason: 'approval' };
+      const result = await entry.inbox.submitText(text);
+      if (result.ok && entry.codexInput && entry.codexInput.submitted) entry.reportStatus?.(agentStatus(entry));
+      return result;
+    },
+    /** The agent's numbered prompt on screen (permission, question), for the chat view; or null */
+    approvalOf(id) {
+      const entry = shells.get(id);
+      return hasAgent(entry) && entry.inbox ? entry.inbox.approvalPrompt() : null;
+    },
+    /** Answers that prompt with a choice, only if the screen still shows the same prompt */
+    async answerApproval(id, key, signature) {
+      const entry = shells.get(id);
+      if (!hasAgent(entry) || !entry.inbox) return { ok: false, reason: 'not-agent' };
+      return entry.inbox.answerApproval(key, signature);
+    },
+    /** Esc: stops the agent's current turn */
+    interruptAgent(id) {
+      const entry = shells.get(id);
+      if (!hasAgent(entry)) return false;
+      entry.inbox?.userInput('\x1b');
+      try { entry.pty.write('\x1b'); return true; } catch { return false; }
+    },
     wakeInbox: id => shells.get(id)?.inbox?.kick(),
     wakeInboxes: () => { for (const entry of shells.values()) entry.inbox?.kick(); },
     isRunning: id => shells.get(id)?.exited === false,
     hasWorkingAgent: ids => ids.some(id => {
       const entry = shells.get(id);
-      return entry?.agent && !entry.exited && agentStatus(entry) === 'working';
+      return hasAgent(entry) && agentStatus(entry) === 'working';
     }),
     count: () => shells.size
   };

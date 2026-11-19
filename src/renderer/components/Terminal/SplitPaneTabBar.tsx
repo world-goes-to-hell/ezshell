@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { RiCloseLine, RiDatabase2Line, RiFolderLine, RiSplitCellsHorizontal, RiComputerLine } from 'react-icons/ri'
+import { RiCloseLine, RiDatabase2Line, RiFolderLine, RiSplitCellsHorizontal, RiComputerLine, RiGlobalLine } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { AgentTabMessages } from './AgentMessages'
 import { useSessionLogStore } from '../../stores/sessionLogStore'
@@ -113,6 +113,7 @@ export function SplitPaneTabBar({
             >
               {terminal.db && <RiDatabase2Line size={12} className="tab-db-icon" aria-label="DB" />}
               {terminal.local && <RiComputerLine size={12} className="tab-local-icon" aria-label="로컬" />}
+              {terminal.browser && <RiGlobalLine size={12} className="tab-local-icon" aria-hidden />}
               <span className="split-pane-tab-name" data-tab-label>{displayName}</span>
               {terminal.local && <AgentTabMessages tabId={terminalId} />}
               {terminalId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[terminalId]}`} />}

@@ -163,19 +163,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
   workspaceGitLog: (folder) => ipcRenderer.invoke('workspace-git-log', folder),
   localWorktreeCreate: (options) => ipcRenderer.invoke('local-worktree-create', options),
   // Past Claude Code and Codex sessions (right panel); only keys from the list go back
-  agentHistoryList: () => ipcRenderer.invoke('agent-history-list'),
-  agentHistoryDetail: (key) => ipcRenderer.invoke('agent-history-detail', key),
-  agentHistorySearch: (query) => ipcRenderer.invoke('agent-history-search', query),
-  agentHistoryOpenFolder: (key) => ipcRenderer.invoke('agent-history-open-folder', key),
+  agentHistoryList: (shellId) => ipcRenderer.invoke('agent-history-list', shellId),
+  agentHistoryDetail: (shellId, key) => ipcRenderer.invoke('agent-history-detail', shellId, key),
+  agentHistorySearch: (shellId, query) => ipcRenderer.invoke('agent-history-search', shellId, query),
+  agentHistoryOpenFolder: (shellId, key) => ipcRenderer.invoke('agent-history-open-folder', shellId, key),
   localShellAttach: (id) => ipcRenderer.invoke('local-shell-attach', id),
   localShellList: () => ipcRenderer.invoke('local-shell-list'),
   localShellCurrentDirectory: (id) => ipcRenderer.invoke('local-shell-current-directory', id),
   localShellClipboard: (id) => ipcRenderer.invoke('local-shell-clipboard', id),
   localShellHasWorkingAgent: (ids) => ipcRenderer.invoke('local-shell-working-agent', ids),
   agentMessagesSnapshot: () => ipcRenderer.invoke('agent-messages-state'),
+  browserReviewOpen: () => ipcRenderer.invoke('browser-review-open'),
+  browserReviewState: (id) => ipcRenderer.invoke('browser-review-state', id),
+  browserReviewAction: (id, request) => ipcRenderer.invoke('browser-review-action', id, request),
+  browserReviewBounds: (id, bounds) => ipcRenderer.send('browser-review-bounds', id, bounds),
+  browserReviewClose: (id) => ipcRenderer.send('browser-review-close', id),
+  onBrowserReviewState: (callback) => {
+    const listener = (_event, id, state) => callback(id, state);
+    ipcRenderer.on('browser-review-state', listener);
+    return () => ipcRenderer.removeListener('browser-review-state', listener);
+  },
+  onBrowserReviewFocus: (callback) => {
+    const listener = (_event, id) => callback(id);
+    ipcRenderer.on('browser-review-focus', listener);
+    return () => ipcRenderer.removeListener('browser-review-focus', listener);
+  },
   agentMessageMcpSetup: (kind) => ipcRenderer.invoke('agent-message-mcp-setup', kind),
-  agentMessageSend: (message) => ipcRenderer.invoke('agent-message-send', message),
-  agentMessageAck: (id) => ipcRenderer.invoke('agent-message-ack', id),
   onAgentMessagesState: (callback) => {
     const handler = (_event, snapshot) => callback(snapshot);
     ipcRenderer.on('agent-messages-state', handler);
@@ -206,6 +219,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('local-shell-exit', handler);
     return () => ipcRenderer.removeListener('local-shell-exit', handler);
+  },
+  // A local shell's agent as a chat (src/agentChat): the window names the shell, main picks the file
+  agentChatOpen: (shellId) => ipcRenderer.invoke('agent-chat-open', shellId),
+  agentChatOlder: (shellId) => ipcRenderer.invoke('agent-chat-older', shellId),
+  agentChatClose: (shellId) => ipcRenderer.send('agent-chat-close', shellId),
+  agentChatReadClipboard: (shellId) => ipcRenderer.invoke('agent-chat-read-clipboard', shellId),
+  agentChatRemoveImage: (shellId, imageId) => ipcRenderer.send('agent-chat-remove-image', { shellId, imageId }),
+  agentChatSend: (shellId, text, imageId) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageId }),
+  agentChatInterrupt: (shellId) => ipcRenderer.invoke('agent-chat-interrupt', shellId),
+  agentChatAnswer: (shellId, key, signature) => ipcRenderer.invoke('agent-chat-answer', { shellId, key, signature }),
+  agentChatOpenLink: (shellId, href, how) => ipcRenderer.invoke('agent-chat-open-link', { shellId, href, how }),
+  onAgentChatFrame: (callback) => {
+    const handler = (event, frame) => callback(frame);
+    ipcRenderer.on('agent-chat-frame', handler);
+    return () => ipcRenderer.removeListener('agent-chat-frame', handler);
   },
   dbDdl: (dbId, database, schema, table) => ipcRenderer.invoke('db-ddl', { dbId, database, schema, table }),
   dbRelations: (dbId, sources) => ipcRenderer.invoke('db-relations', { dbId, sources }),

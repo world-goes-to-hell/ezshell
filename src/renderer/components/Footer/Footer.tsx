@@ -8,11 +8,12 @@ import { WorkspaceIndicator } from '../Workspace/WorkspaceIndicator'
 import { AgentUsageFeed } from '../AgentUsage/AgentUsageMeters'
 import { OpacityStatus } from './OpacityStatus'
 import { DbIndicator } from '../DbClient/DbIndicator'
+import { isSshTab } from '../../lib/sessionTabs'
 
 export function Footer() {
   const { terminals } = useTerminalStore()
   // SSH connections only: a DB tab rides on one of them
-  const activeConnections = Array.from(terminals.values()).filter(t => !t.db && !t.local).length
+  const activeConnections = Array.from(terminals.values()).filter(isSshTab).length
 
   return (
     <footer className="app-footer">

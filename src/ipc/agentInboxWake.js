@@ -19,12 +19,19 @@ const QUIET_MS = 1500
 const submitKey = data => /^(?:\r|\n|\x1b\[13(?:;1)?u)$/.test(data)
 const compact = text => text.replace(/\s/g, '')
 const claudeRule = /^\s*─{8,}\s*$/u
+// A numbered choice of a prompt: "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"
+const APPROVAL_OPTION = /^\s*([❯›>▶])?\s*([1-9])[.)]\s+(\S.*?)\s*$/u
+// After the number key, the CLI either answers at once or only moves its selection there
+const APPROVAL_SETTLE = 600
 
 /**
  * isWorking: not waiting for input (also while starting up, unknown or asking for approval).
  * isRunningTask: in the middle of a task, the only busy state that gets the busy notice.
  */
-function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMessages = () => [], isWorking, isRunningTask = () => false, isUnknown = () => false, quietMs = QUIET_MS, write }) {
+/**
+ * write: our wake lines (gated on mail by the caller); rawWrite: a chat line the user sent (submitText)
+ */
+function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMessages = () => [], isWorking, isRunningTask = () => false, isUnknown = () => false, quietMs = QUIET_MS, write, rawWrite = write }) {
   const screen = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true })
   const dispatched = new Set()
   // Announced while the agent was busy: reminded once after the task if still unanswered
@@ -74,13 +81,14 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     return null
   }
 
-  function composer() {
+  /** `textLength`: the longest draft to look for (default: our own prompts) */
+  function composer(textLength = LONGEST_PROMPT, textLines = 1) {
     if (!screen.modes.bracketedPasteMode) return null
     const { active: buffer } = screen.buffer
     const cursor = buffer.baseY + buffer.cursorY
     const line = index => buffer.getLine(index)?.translateToString(false) ?? ''
     // A pasted line can wrap. Look above the cursor only as far as the app-written prompt.
-    const maxInputRows = Math.ceil(LONGEST_PROMPT / Math.max(1, screen.cols - 2)) + 1
+    const maxInputRows = Math.min(screen.rows, Math.ceil(textLength / Math.max(1, screen.cols - 2)) + textLines)
     const first = Math.max(buffer.baseY, cursor - maxInputRows)
     for (let index = cursor; index >= first; index--) {
       const row = line(index)
@@ -105,8 +113,106 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     timer.unref?.()
   }
 
+  /**
+   * The agent's question with numbered choices on screen (a permission prompt, a question to the user),
+   * or null. Read only when no composer shows: the CLIs replace their input box with the prompt. The
+   * question, the lines that describe it (the command, the file) and the choices, as on screen.
+   */
+  function approvalPrompt() {
+    if (stopped || chat || stage || composer()) return null
+    const { active: buffer } = screen.buffer
+    // The screen as lines: a row the terminal wrapped (a long choice in a narrow pane) joins the one before
+    const raws = []
+    for (let row = buffer.baseY; row < buffer.baseY + screen.rows; row++) {
+      const cells = buffer.getLine(row)
+      const text = cells?.translateToString(true) ?? ''
+      if (cells?.isWrapped && raws.length) raws[raws.length - 1] += text
+      else raws.push(text)
+    }
+    const bare = index => (raws[index] ?? '').replace(/^\s*[│┃|]\s?/u, '').replace(/\s*[│┃|]\s*$/u, '')
+    const top = 0
+    let last = raws.length - 1
+    while (last > top && !bare(last).trim()) last--
+    // The choices end at most a few lines above the bottom (a hint like "Esc to cancel" may follow)
+    let end = last
+    while (end >= Math.max(top, last - 4) && !APPROVAL_OPTION.test(bare(end))) end--
+    if (end < Math.max(top, last - 4)) return null
+    let start = end
+    for (let row = end - 1; row >= Math.max(top, end - 20); row--) {
+      const text = bare(row)
+      if (APPROVAL_OPTION.test(text)) start = row
+      else if (!text.trim() || !/^\s{2,}\S/.test(text)) break
+    }
+    const options = []
+    let selected = null
+    for (let row = start; row <= end; row++) {
+      const match = APPROVAL_OPTION.exec(bare(row))
+      if (!match) {
+        // A choice the CLI wrapped itself, indented under it
+        if (options.length) options[options.length - 1].label += ' ' + bare(row).trim()
+        continue
+      }
+      const [, marker, number, label] = match
+      if (Number(number) !== options.length + 1) return null
+      options.push({ key: number, label: label.trim() })
+      if (marker) selected = number
+    }
+    if (options.length < 2 || options.length > 9) return null
+    // What the question is about: up to the dialog's top rule (Claude) or the question itself (Codex)
+    const lines = []
+    let question = null
+    for (let row = start - 1; row >= Math.max(top, start - 16); row--) {
+      const raw = raws[row]
+      if (/^\s*─{8,}\s*$/u.test(raw) || /^\s*[╭┌]/u.test(raw)) break
+      const text = bare(row).trim()
+      if (!text) continue
+      if (!question && /\?$/.test(text)) {
+        question = text
+        if (kind === 'codex') break
+        continue
+      }
+      lines.unshift(text.length > 300 ? text.slice(0, 300) + '…' : text)
+      if (lines.length >= 12) break
+    }
+    return { question, detail: lines, options, selected, signature: JSON.stringify([question, options]) }
+  }
+
+  // A line sent from the chat view (src/agentChat): pasted into the empty composer, then Enter once the
+  // composer shows it. Pasting a long text, the CLIs show a placeholder instead of the text.
+  let chat = null
+  let approvalWatch = null
+  const PASTED_PLACEHOLDER = /^\[Pasted(?:text|Content)[^\]]*\]$/i
+
+  function checkChat() {
+    if (!chat || stopped) return
+    clearTimeout(chat.timer)
+    const now = Date.now()
+    const input = composer(chat.length, chat.lines)
+    const drawn = Boolean(input?.endsAtCursor) && (input.text === chat.text || PASTED_PLACEHOLDER.test(input.text))
+    if (drawn) {
+      const { resolve } = chat
+      chat = null
+      const ok = rawWrite('\r')
+      userDraft = false
+      holdUntil = now + INPUT_TIMEOUT
+      resolve(ok ? { ok: true } : { ok: false, reason: 'write-failed' })
+      schedule(INPUT_TIMEOUT)
+      return
+    }
+    if (now >= chat.expires) {
+      // Not drawn as sent: leave it for the user (an Enter now could submit something else)
+      const { resolve } = chat
+      chat = null
+      userDraft = true
+      resolve({ ok: false, reason: 'not-drawn' })
+      return
+    }
+    chat.timer = setTimeout(checkChat, Math.min(DRAW_SETTLE * 3, chat.expires - now))
+    chat.timer.unref?.()
+  }
+
   function advance() {
-    if (stopped || composing) return
+    if (stopped || composing || chat) return
     const now = Date.now()
     // State never reported: waiting for input when the screen has been still (the composer check follows)
     const quietFor = now - lastOutputAt
@@ -176,7 +282,57 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       lastOutputAt = Date.now()
       const wasWriting = stage !== null
       screen.write(data, () => {
-        if (wasWriting || stage || deferred.size || pendingMessages().some(id => !dispatched.has(id))) schedule()
+        if (approvalWatch && approvalPrompt()?.signature !== approvalWatch.signature) approvalWatch.gone = true
+        if (chat) checkChat()
+        else if (wasWriting || stage || deferred.size || pendingMessages().some(id => !dispatched.has(id))) schedule()
+      })
+    },
+    approvalPrompt,
+    /**
+     * Answers the prompt on screen with one of its numbered choices, only if it is still the prompt the
+     * user saw (same question and choices). The number key; then Enter only when the CLI just moved
+     * its selection to that choice and the same prompt still shows.
+     */
+    answerApproval(key, signature) {
+      return new Promise(resolve => {
+        const prompt = approvalPrompt()
+        if (!prompt || prompt.signature !== signature || !prompt.options.some(option => option.key === key)) {
+          return resolve({ ok: false, reason: 'changed' })
+        }
+        // Gone even once while waiting means it was answered: the same question shown again is a new
+        // prompt, and an Enter would answer that one too
+        const watch = { signature, gone: false }
+        approvalWatch = watch
+        if (!rawWrite(key)) { approvalWatch = null; return resolve({ ok: false, reason: 'write-failed' }) }
+        const settle = setTimeout(() => {
+          if (approvalWatch === watch) approvalWatch = null
+          const after = approvalPrompt()
+          if (!watch.gone && after && after.signature === signature && after.selected === key) rawWrite('\r')
+          resolve({ ok: true })
+        }, APPROVAL_SETTLE)
+        settle.unref?.()
+      })
+    },
+    /**
+     * Enters a line the user wrote in the chat view: only into the agent's own, empty composer (never a
+     * shell prompt), and Enter only once the composer shows that text. Resolves { ok } or { ok, reason }.
+     */
+    submitText(text) {
+      return new Promise(resolve => {
+        if (stopped) return resolve({ ok: false, reason: 'not-agent' })
+        if (chat || stage || composing) return resolve({ ok: false, reason: 'busy' })
+        const length = text.length
+        const lines = text.split('\n').length
+        const input = composer(length, lines)
+        if (!input) return resolve({ ok: false, reason: 'no-composer' })
+        // Empty is the cursor at the prompt's start, as for our wake lines: an empty composer shows
+        // placeholder text to the right of the cursor ("Try …"), so its text is not empty
+        if (!input.atStart) return resolve({ ok: false, reason: 'composer-not-empty' })
+        if (!rawWrite(pasteOf(text))) return resolve({ ok: false, reason: 'write-failed' })
+        clearTimeout(timer)
+        chat = { text: compact(text), length, lines, expires: Date.now() + INPUT_TIMEOUT, resolve, timer: null }
+        chat.timer = setTimeout(checkChat, DRAW_SETTLE)
+        chat.timer.unref?.()
       })
     },
     userInput(data) {
@@ -206,6 +362,11 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       if (stopped) return
       stopped = true
       clearTimeout(timer)
+      if (chat) {
+        clearTimeout(chat.timer)
+        chat.resolve({ ok: false, reason: 'not-agent' })
+        chat = null
+      }
       screen.dispose()
     }
   }

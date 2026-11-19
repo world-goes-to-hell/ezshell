@@ -63,7 +63,7 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
       document.querySelector('.welcome-screen button')?.textContent.trim() === '새 연결' &&
       !!document.querySelector('.sidebar .local-terms-btn[aria-label="새 로컬 터미널"]')`))
   await esc()
-  check('Esc closes it', !(await palette()))
+  check('Esc closes it', await until(`!document.querySelector('.command-palette')`, 3000))
 
   await js("document.querySelector('.welcome-screen button').click()")
   check('New Connection on the empty start screen opens the connection form',

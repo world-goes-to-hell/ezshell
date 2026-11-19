@@ -28,7 +28,7 @@ function hoverAt(draggingId: string, x: number, y: number, hasEdgeZones: boolean
   const tabs = useTerminalStore.getState().terminals
   const source = tabs.get(draggingId)
   // A DB tab is never a pane: no marker at all rather than a refusal on every terminal it passes
-  if (!source || source.db) return null
+  if (!source || source.db || source.browser) return null
   // Over another tab in a tab strip: merged into that tab (an empty place first, else its largest pane)
   const tabElement = document.elementsFromPoint(x, y).find(candidate => candidate.matches(TABS))
   if (tabElement instanceof HTMLElement) {
@@ -54,7 +54,7 @@ function hoverAt(draggingId: string, x: number, y: number, hasEdgeZones: boolean
   const element = document.elementsFromPoint(x, y).find(candidate => candidate.matches(PANES))
   if (!(element instanceof HTMLElement)) return null
   const targetId = Array.from(tabs.keys()).find(id => tabHost(id).contains(element))
-  if (!targetId || targetId === draggingId || tabs.get(targetId)?.db) return null
+  if (!targetId || targetId === draggingId || tabs.get(targetId)?.db || tabs.get(targetId)?.browser) return null
   const vacant = element.dataset.vacant
   const rect = element.getBoundingClientRect()
   const paneBox = { x: rect.left, y: rect.top, w: rect.width, h: rect.height }
