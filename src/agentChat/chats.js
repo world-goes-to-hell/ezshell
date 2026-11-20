@@ -16,6 +16,8 @@ const STEP_BYTES = 4 * 1024 * 1024
 const TICK_MS = 500
 /** How often a Claude transcript not found yet is looked for again */
 const FIND_RETRY_MS = 3000
+// How long a compaction notice waits for the /compact line written after it (claudeTranscript.js)
+const NOTICE_WAIT_MS = 1500
 const MAX_CHATS = 24
 /** Links remembered per view (the latest) */
 const MAX_LINKS = 2000
@@ -102,7 +104,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tic
     if (fields.reset) chat.links.clear()
     for (const item of fields.items ?? []) {
       if (item.kind !== 'assistant') continue
-      for (const key of linkKeysIn(item.text)) {
+      for (const key of linkKeysIn(item.text, process.platform, chat.cwd)) {
         chat.links.delete(key)
         chat.links.add(key)
         if (chat.links.size > MAX_LINKS) chat.links.delete(chat.links.values().next().value)
@@ -151,6 +153,8 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tic
       items.push(...result.items)
       title = result.title ?? title
     }
+    // A compaction notice the part read ends with (claudeTranscript.js holds it for the command after it)
+    items.push(...(parser.flush?.(0) ?? []))
     if (!live(chat)) return
     Object.assign(chat, { file, kind, parser, oldest, tail: oldest + used, skipping: false, title: title ?? null, state: 'live' })
     frame(chat, { reset: true, kind, state: 'live', items: latestById(items), title: title ?? null, hasOlder: oldest > 0 })
@@ -159,7 +163,12 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tic
   async function follow(chat) {
     const { size } = await fs.promises.stat(chat.file)
     if (size < chat.tail) return load(chat, chat.file, chat.kind)
-    if (size === chat.tail) return
+    if (size === chat.tail) {
+      // Nothing new: a compaction notice held for its /compact line comes out after a while anyway
+      const late = chat.parser.flush?.(NOTICE_WAIT_MS) ?? []
+      if (late.length) frame(chat, { items: late })
+      return
+    }
     let buffer = await readRange(chat.file, chat.tail, Math.min(size, chat.tail + STEP_BYTES))
     if (!live(chat)) return
     if (chat.skipping) {
@@ -184,6 +193,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tic
       items.push(...result.items)
       title = result.title ?? title
     }
+    items.push(...(chat.parser.flush?.(NOTICE_WAIT_MS) ?? []))
     const renamed = title !== chat.title
     chat.title = title
     if (items.length || renamed) frame(chat, { items: latestById(items), ...(renamed ? { title } : {}) })
@@ -199,6 +209,8 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tic
     }
     const target = await resolve(chat.shellId)
     if (!live(chat)) return
+    // The agent's folder: relative links in its answers ("docs/x.md") are read against it
+    if (target?.cwd) chat.cwd = target.cwd
     // The agent's prompt with choices (or its end), sent when it changes
     const approval = target?.approval ?? null
     if ((approval?.signature ?? null) !== chat.approval) {
@@ -295,6 +307,8 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tic
     },
     /** Whether a link (linkTarget's key) was in an answer this shell's view was sent */
     knowsLink: (shellId, key) => chats.get(shellId)?.links.has(key) === true,
+    /** The folder of the shell's agent (relative links are read against it), or null */
+    cwdOf: shellId => chats.get(shellId)?.cwd ?? null,
     count: () => chats.size,
     tick
   }

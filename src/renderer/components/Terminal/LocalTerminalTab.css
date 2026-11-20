@@ -19,6 +19,10 @@
   min-height: 0;
 }
 
+.local-terminal-stage .command-history-panel {
+  max-width: 100%;
+}
+
 .local-terminal-host {
   flex: 1;
   min-height: 0;

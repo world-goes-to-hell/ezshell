@@ -13,8 +13,10 @@ import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/
 import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory'
 import 'xterm/css/xterm.css'
 import { attachLogHighlight } from './terminalLogHighlight'
+import { attachTerminalWebLinks } from './terminalWebLinks'
 import { registerTerminalPane } from '../../lib/terminalPanes'
 import { createEarlyStreamBuffer } from '../../lib/earlyStreamBuffer'
+import { createRightClickFilter } from '../../lib/rightClickReports'
 
 interface SplitTerminalProps {
   sessionId: string
@@ -211,6 +213,7 @@ export function SplitTerminal({ sessionId, pane, delay = 0 }: SplitTerminalProps
         serializeScreen = () => serializeAddon.serialize({ scrollback: SNAPSHOT_SCROLLBACK_ROWS })
 
         term.open(terminalRef.current)
+        attachTerminalWebLinks(term)
         // The tab's right-click menu acts on the shell that was clicked
         const unregister = registerTerminalPane(terminalRef.current, term)
         const logHighlight = attachLogHighlight(term)
@@ -273,8 +276,12 @@ export function SplitTerminal({ sessionId, pane, delay = 0 }: SplitTerminalProps
           }
         }, 100)
 
-        // Handle terminal input - send to split stream
-        term.onData((data) => {
+        // Handle terminal input - send to split stream. The right button opens the app's menu: not
+        // reported to the program too
+        const withoutRightClick = createRightClickFilter()
+        term.onData((raw) => {
+          const data = withoutRightClick(raw)
+          if (!data) return
           commandHistory.handleData(data)
           if (streamIdRef.current) {
             window.electronAPI.sshSplitSend(streamIdRef.current, data)

@@ -183,11 +183,17 @@ function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLock
    * A file of this PC the user picked from a link in an agent's answer (src/agentChat/ipc.js checks it
    * was in the conversation and resolves it). Text opens in the editor, images and PDFs in the preview.
    */
-  function openLocalFile(realPath, label) {
+  /** `line`: open at that line (a new window reads it; an open one is told, as for a definition) */
+  function openLocalFile(realPath, label, line = null) {
     try {
       refuseWhileLocked()
-      const registered = docs.registerLocal({ root: require('path').dirname(realPath), path: realPath, label, mode: 'preview' })
-      openWindowFor(registered)
+      const revealLine = Number.isInteger(line) && line > 0 ? line : null
+      const registered = docs.registerLocal({ root: require('path').dirname(realPath), path: realPath, label, mode: 'preview', revealLine })
+      const opened = openWindowFor(registered)
+      if (revealLine && opened?.existing) {
+        const win = windows.get(registered.docId)
+        if (win && !win.isDestroyed()) win.webContents.send('remote-file-reveal-line', revealLine)
+      }
       return { ok: true }
     } catch (err) {
       return { ok: false, error: userMessage(err) }

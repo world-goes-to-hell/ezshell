@@ -2,17 +2,18 @@
 // The shell and the agent keep running under it and the terminal stays mounted: this is only a view of
 // the agent's transcript (src/agentChat) with a box that types into the agent's own composer.
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent } from 'react'
-import { RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCloseLine, RiExternalLinkLine, RiFileCopyLine, RiFileTextLine, RiFolderOpenLine, RiLoader4Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine } from 'react-icons/ri'
+import { RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFolderOpenLine, RiLoader4Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine } from 'react-icons/ri'
 import type { AgentChatApproval, AgentChatItem } from '../../types'
 import { useAgentChatStore } from '../../stores/agentChatStore'
-import { useAgentMessagesStore } from '../Terminal/AgentMessages'
-import { AGENT_PROVIDER_ICONS } from '../Sidebar/LocalSessionAgents'
+import { AgentChatMailButton, useAgentMessagesStore } from '../Terminal/AgentMessages'
+import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
 import { shortcutLabel } from '../../lib/shortcutModifiers'
 import { matchesBinding } from '../../lib/shortcutMatch'
 import { LOCAL_PATH_LINK, renderChatMarkdown } from '../../lib/markdownRender'
 import { copyToClipboard } from '../../lib/terminalClipboard'
 import { TerminalContextMenu } from '../Terminal/TerminalContextMenu'
+import { webLinkItems } from '../Terminal/TerminalWebLinkMenu'
 import { diffLineKind, shellAgentOf } from '../../lib/agentChatItems'
 import { toast } from '../../stores/toastStore'
 import './AgentChat.css'
@@ -29,6 +30,7 @@ const STATUS_LABELS: Record<string, string> = {
 }
 /** Rows the text box grows to before it scrolls */
 const MAX_COMPOSER_ROWS = 8
+const REPLY_START_GRACE_MS = 6000
 
 // Links are handled by the cover (a menu to open them), so the answer itself only draws them
 function Markdown({ text }: { text: string }) {
@@ -181,11 +183,13 @@ const ChatItem = memo(function ChatItem({ item, live }: { item: AgentChatItem; l
 
 interface AgentChatCoverProps {
   shellId: string
+  /** The tab of the pane (the inbox opens from it) */
+  tabId: string
   /** Back to the terminal (the pane focuses its xterm) */
   onShowTerminal: () => void
 }
 
-export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps) {
+export function AgentChatCover({ shellId, tabId, onShowTerminal }: AgentChatCoverProps) {
   const chat = useAgentChatStore(state => state.chats.get(shellId))
   const loadOlder = useAgentChatStore(state => state.loadOlder)
   const agent = useAgentMessagesStore(state => shellAgentOf(state.snapshot.agents, shellId))
@@ -194,7 +198,9 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
   const [attachment, setAttachment] = useState<{ id: string; url: string } | null>(null)
   const [pasting, setPasting] = useState(false)
   const [sending, setSending] = useState(false)
+  const sendPending = useRef(false)
   const pastePending = useRef(false)
+  const workingReply = useRef<string | null>(null)
   const [linkMenu, setLinkMenu] = useState<LinkMenu | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
   const boxRef = useRef<HTMLTextAreaElement>(null)
@@ -207,6 +213,9 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
   const ProviderIcon = kind ? AGENT_PROVIDER_ICONS[kind] : null
   const status = chat?.state === 'ended' ? 'ended' : agent?.status ?? 'unknown'
   const isOver = chat?.state === 'ended' || !agent
+  const replyId = chat?.reply?.sendId
+  const canReply = !isOver && !chat?.approval && status !== 'blocked' && status !== 'error'
+  const replyLabel = replyId && canReply ? (sending ? '보내는 중…' : '답변 생성 중…') : null
   const title = chat?.title ?? items.find(item => item.kind === 'user')?.text?.split('\n')[0] ?? '대화'
   const lastToolId = useMemo(() => [...items].reverse().find(item => item.kind === 'tool')?.id, [items])
 
@@ -223,6 +232,21 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
     setAttachment(null)
   }, [isOver, attachment, shellId])
 
+  useEffect(() => {
+    if (!replyId) return
+    const done = () => useAgentChatStore.getState().stopWaiting(shellId, replyId)
+    if (!canReply) return done()
+    if (status === 'working') {
+      workingReply.current = replyId
+      return
+    }
+    if (sending || status === 'starting') return
+    if (status === 'idle' && workingReply.current === replyId) return done()
+    // Allow the CLI's status to catch up after the PTY acknowledges the input.
+    const timer = window.setTimeout(done, REPLY_START_GRACE_MS)
+    return () => window.clearTimeout(timer)
+  }, [canReply, replyId, sending, shellId, status])
+
   // New items keep the view at the bottom when it was there; older items keep the reader's place
   useLayoutEffect(() => {
     const log = logRef.current
@@ -235,7 +259,7 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
     }
     firstIdRef.current = firstId
     heightRef.current = log.scrollHeight
-  }, [items])
+  }, [items, replyLabel])
 
   // A link in an answer opens a menu (it never navigates the app window): a file or folder of this PC
   // in ezShell or the file manager, a web page in the browser. Main opens only links of this conversation.
@@ -248,9 +272,13 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
     setLinkMenu({ x: event.clientX, y: event.clientY, href, isFile: LOCAL_PATH_LINK.test(href) })
   }
 
-  const openLink = async (href: string, how: 'app' | 'explorer' | 'browser') => {
-    const result = await window.electronAPI.agentChatOpenLink?.(shellId, href, how)
-    if (!result?.ok) toast.error('열지 못했습니다', result && !result.ok ? result.error : '이 앱 버전에서는 쓸 수 없습니다.')
+  const openLink = async (href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab') => {
+    try {
+      const result = await window.electronAPI.agentChatOpenLink?.(shellId, href, how)
+      if (!result?.ok) toast.error('열지 못했습니다', result && !result.ok ? result.error : '이 앱 버전에서는 쓸 수 없습니다.')
+    } catch {
+      toast.error('열지 못했습니다', '링크를 열 수 없습니다.')
+    }
   }
 
   const linkMenuItems = (menu: LinkMenu) => menu.isFile
@@ -259,10 +287,7 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
         { label: '파일 탐색기에서 열기', icon: RiFolderOpenLine, onSelect: () => void openLink(menu.href, 'explorer') },
         { label: '경로 복사', icon: RiFileCopyLine, onSelect: () => void copyToClipboard(menu.href) }
       ]
-    : [
-        { label: '브라우저에서 열기', icon: RiExternalLinkLine, onSelect: () => void openLink(menu.href, 'browser') },
-        { label: '주소 복사', icon: RiFileCopyLine, onSelect: () => void copyToClipboard(menu.href) }
-      ]
+    : webLinkItems(menu.href, destination => void openLink(menu.href, destination === 'internal' ? 'browser-tab' : 'browser'))
 
   const onScroll = () => {
     const log = logRef.current
@@ -315,22 +340,36 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
 
   const send = async () => {
     const text = draft.trim()
-    if ((!text && !attachment) || sending || pastePending.current || isOver) return
+    if (!chat || (!text && !attachment) || sendPending.current || pastePending.current || isOver) return
+    sendPending.current = true
+    stickRef.current = true
     setSending(true)
+    setDraft('')
+    const { echoSend, discardSend } = useAgentChatStore.getState()
+    const sendId = echoSend(shellId, text, !!attachment)
     try {
       const result = await window.electronAPI.agentChatSend?.(shellId, text, attachment?.id)
       if (result?.ok) {
-        setDraft('')
         setAttachment(null)
-        stickRef.current = true
       } else {
+        discardSend(shellId, sendId)
+        setDraft(draft)
         toast.error('보내지 못했습니다', result && !result.ok ? result.error : '이 앱 버전에서는 쓸 수 없습니다.')
       }
     } catch {
+      discardSend(shellId, sendId)
+      setDraft(draft)
       toast.error('보내지 못했습니다', '에이전트에 연결할 수 없습니다.')
     } finally {
+      sendPending.current = false
       setSending(false)
       boxRef.current?.focus()
+    }
+  }
+
+  const stop = async () => {
+    if (await window.electronAPI.agentChatInterrupt?.(shellId) && replyId) {
+      useAgentChatStore.getState().stopWaiting(shellId, replyId)
     }
   }
 
@@ -346,7 +385,7 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
       void send()
     } else if (event.key === 'Escape' && status === 'working') {
       event.preventDefault()
-      void window.electronAPI.agentChatInterrupt?.(shellId)
+      void stop()
     }
   }
 
@@ -381,6 +420,8 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
         <button type="button" className="agent-chat-head-btn" onClick={onShowTerminal} title={`터미널 보기 (${toggleLabel})`}>
           <RiTerminalBoxLine aria-hidden /> 터미널
         </button>
+        {/* Where the pane's own mail button was (top right): the chat covers that one */}
+        <AgentChatMailButton shellId={shellId} tabId={tabId} />
       </header>
       <div className="agent-chat-log" ref={logRef} onScroll={onScroll} onClick={onLogClick}>
         {chat?.hasOlder && (
@@ -389,7 +430,10 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
           </button>
         )}
         {items.map(item => <ChatItem key={item.id} item={item} live={!isOver && item.id === lastToolId} />)}
-        {chat?.state === 'opening' && <p className="agent-chat-empty">대화를 불러오는 중…</p>}
+        {replyLabel && <p className="agent-chat-reply-progress" role="status">
+          <RiLoader4Line className="agent-chat-spin" aria-hidden />{replyLabel}
+        </p>}
+        {chat?.state === 'opening' && !items.length && <p className="agent-chat-empty">대화를 불러오는 중…</p>}
         {chat?.state === 'waiting' && !items.length && <p className="agent-chat-empty">대화가 시작되면 여기에 보입니다.</p>}
         {chat?.state === 'live' && !items.length && <p className="agent-chat-empty">아직 주고받은 말이 없습니다.</p>}
       </div>
@@ -410,7 +454,7 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
       {/* While a prompt waits the composer is hidden: the agent takes no line then (the draft is kept) */}
       {!isOver && !chat?.approval && (
         <div className="agent-chat-composer">
-          {attachment && (
+          {attachment && !sending && (
             <div className="agent-chat-attachments">
               <div className="agent-chat-attachment">
                 <img src={attachment.url} alt="첨부한 스크린샷" />
@@ -431,6 +475,7 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
             className="agent-chat-input"
             value={draft}
             rows={rows}
+            readOnly={sending}
             placeholder={`${kind ? AGENT_NAMES[kind] : '에이전트'}에게 보내기 (Enter 보내기, Shift+Enter 줄바꿈)`}
             onChange={event => setDraft(event.target.value)}
             onPaste={onPaste}
@@ -438,7 +483,7 @@ export function AgentChatCover({ shellId, onShowTerminal }: AgentChatCoverProps)
             aria-label="에이전트에게 보낼 글"
           />
           {status === 'working' && (
-            <button type="button" className="agent-chat-stop" onClick={() => void window.electronAPI.agentChatInterrupt?.(shellId)} title="지금 작업 중지 (Esc)">
+            <button type="button" className="agent-chat-stop" onClick={() => void stop()} title="지금 작업 중지 (Esc)">
               <RiStopCircleLine aria-hidden /> 중지
             </button>
           )}

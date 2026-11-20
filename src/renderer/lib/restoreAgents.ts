@@ -8,6 +8,7 @@ import type { TerminalInfo } from '../stores/terminalStore'
 import type { AgentUsage, LocalAgent } from '../types'
 import { MAIN_PANE, isSplitTree, paneIds, type PaneId } from './splitTree'
 import { getLocalPaneShellId, queuePaneStart, type PaneStart } from './localPaneShells'
+import { queueChatView } from './pendingChatViews'
 import type { RestoreAgent, RestoreTab } from './restoreTabs'
 import { useAgentMessagesStore } from '../components/Terminal/AgentMessages'
 
@@ -22,23 +23,29 @@ export function agentsOfPanes(
   panes: readonly PaneId[],
   shellOf: (pane: PaneId) => string | undefined,
   byShell: ReadonlyMap<string, AgentUsage>,
-  kinds: ReadonlyMap<string, LocalAgent> = new Map()
+  kinds: ReadonlyMap<string, LocalAgent> = new Map(),
+  /** The shell's pane shows its agent as a chat now */
+  isChat: (shell: string) => boolean = () => false
 ): RestoreAgent[] {
   return panes.flatMap((pane): RestoreAgent[] => {
     const shell = shellOf(pane)
     if (!shell) return []
     const usage = byShell.get(shell)
-    if (usage?.sessionId) return [{ pane, agent: usage.agent, sessionId: usage.sessionId }]
+    const chat = isChat(shell) ? { chat: true as const } : {}
+    if (usage?.sessionId) return [{ pane, agent: usage.agent, sessionId: usage.sessionId, ...chat }]
     const agent = usage?.agent ?? kinds.get(shell)
-    return agent ? [{ pane, agent }] : []
+    return agent ? [{ pane, agent, ...chat }] : []
   })
 }
 
-export function agentsOfLocalTab(tabId: string, info: TerminalInfo | undefined, byShell: ReadonlyMap<string, AgentUsage>, kinds?: ReadonlyMap<string, LocalAgent>): RestoreAgent[] {
+export function agentsOfLocalTab(
+  tabId: string, info: TerminalInfo | undefined, byShell: ReadonlyMap<string, AgentUsage>,
+  kinds?: ReadonlyMap<string, LocalAgent>, isChat?: (shell: string) => boolean
+): RestoreAgent[] {
   const local = info?.local
   if (!local) return []
   const panes = isSplitTree(info.splitTree) && info.splitTree ? paneIds(info.splitTree) : [MAIN_PANE]
-  return agentsOfPanes(panes, pane => (pane === MAIN_PANE ? local.shellId ?? tabId : getLocalPaneShellId(tabId, pane)), byShell, kinds)
+  return agentsOfPanes(panes, pane => (pane === MAIN_PANE ? local.shellId ?? tabId : getLocalPaneShellId(tabId, pane)), byShell, kinds, isChat)
 }
 
 /** The agents running in local shells (shell id → kind), as the message list knows them */
@@ -60,7 +67,8 @@ const startOf = (agent: RestoreAgent): PaneStart => (agent.sessionId
 export async function openLocalWithAgents(
   tab: Extract<RestoreTab, { kind: 'local' }>,
   open: OpenLocal,
-  queue: (tabId: string, pane: PaneId, start: PaneStart) => void = queuePaneStart
+  queue: (tabId: string, pane: PaneId, start: PaneStart) => void = queuePaneStart,
+  queueChat: (tabId: string, pane: PaneId) => void = queueChatView
 ): Promise<string | null> {
   const main = tab.agents?.find(agent => agent.pane === MAIN_PANE)
   const base = { cwd: tab.cwd, workspaceLabel: tab.workspaceLabel }
@@ -68,6 +76,10 @@ export async function openLocalWithAgents(
   if (main?.sessionId) id = await open({ ...base, ...startOf(main) })
   if (!id && main) id = await open({ ...base, agent: main.agent })
   if (!id) id = await open(base)
-  if (id) for (const agent of tab.agents ?? []) if (agent.pane !== MAIN_PANE) queue(id, agent.pane as PaneId, startOf(agent))
+  if (id) {
+    for (const agent of tab.agents ?? []) if (agent.pane !== MAIN_PANE) queue(id, agent.pane as PaneId, startOf(agent))
+    // Panes that were chats: shown as chats again once their agent is back in the shell
+    for (const agent of tab.agents ?? []) if (agent.chat) queueChat(id, agent.pane as PaneId)
+  }
   return id
 }

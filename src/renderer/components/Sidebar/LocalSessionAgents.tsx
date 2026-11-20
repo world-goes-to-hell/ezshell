@@ -1,14 +1,14 @@
 import {
-  RiChat1Line, RiCircleLine, RiOpenaiLine,
+  RiChat1Line, RiCircleLine,
   RiErrorWarningLine, RiHourglassLine, RiPlayCircleLine, RiRecordCircleLine, RiStopCircleLine, RiTimeLine
 } from 'react-icons/ri'
-import { SiClaude } from 'react-icons/si'
 import { focusTabPane } from '../../lib/paneFocus'
 import { MAIN_PANE } from '../../lib/splitTree'
 import { tabHost } from '../../lib/tabHosts'
 import { useTerminalStore } from '../../stores/terminalStore'
 import type { AgentMessageSession, LocalAgentStatus } from '../../types'
 import { useAgentMessagesStore } from '../Terminal/AgentMessages'
+import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
 
 const presentation = {
   unknown: { label: '상태 미확인', Icon: RiCircleLine },
@@ -20,9 +20,6 @@ const presentation = {
   error: { label: '오류', Icon: RiErrorWarningLine },
   ended: { label: '종료', Icon: RiStopCircleLine }
 } satisfies Record<LocalAgentStatus | 'reply', { label: string; Icon: typeof RiCircleLine }>
-
-/** The icon of each agent program, shared by the sidebar and the agent history panel */
-export const AGENT_PROVIDER_ICONS = { codex: RiOpenaiLine, claude: SiClaude } as const
 
 export function localAgentAppearance(agent: AgentMessageSession) {
   const status = agent.waitingForReply && ['working', 'idle', 'unknown'].includes(agent.status) ? 'reply' : agent.status

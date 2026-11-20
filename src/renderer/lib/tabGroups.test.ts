@@ -28,7 +28,23 @@ describe('tab groups', () => {
     expect(groupOfTab('local:1', terminals, projects, servers)).toBe('d:/work/gsd')
     expect(groupOfTab('local:2', terminals, projects, servers)).toBe('d:/work/gsd')
     expect(groupOfTab('local:3', terminals, projects, servers)).toBe('d:/work/app')
-    expect(groupOfTab('local:4', terminals, projects, servers)).toBe(GENERAL_GROUP)
+    // A folder no project covers: a group of its own, not with the SSH tabs in general (reported 2026-11-20)
+    expect(groupOfTab('local:4', terminals, projects, servers)).toBe('folder:c:/users/me')
+  })
+
+  it('groups local tabs of an unregistered folder by that folder, named after it', () => {
+    const tabs = new Map<string, TerminalInfo>([
+      ['browser:0', { id: 'browser:0', host: '', username: '', connected: true, browser: { group: 'folder:d:/dev/ai-mokup-mcp' } }],
+      ['local:1', local('local:1', 'D:\\DEV\\Ai-Mokup-MCP')],
+      ['s1', ssh('s1', null)],
+      ['local:2', local('local:2', 'D:\\DEV\\ai-mokup-mcp\\')],
+      ['local:3', { id: 'local:3', host: '이 PC', username: '', connected: true, local: { shell: 'PowerShell' } }],
+      ['browser:1', { id: 'browser:1', host: '', username: '', connected: true, browser: { group: 'folder:d:/dev/ai-mokup-mcp' } }]
+    ])
+    expect(groupTabs([...tabs.keys()], tabs, projects, servers)).toEqual([
+      { key: 'folder:d:/dev/ai-mokup-mcp', label: 'Ai-Mokup-MCP', tabIds: ['browser:0', 'local:1', 'local:2', 'browser:1'] },
+      { key: GENERAL_GROUP, label: '일반', tabIds: ['s1', 'local:3'] }
+    ])
   })
 
   it('puts a linked session with its project, others and quick connects in general, a DB tab with its SSH tab', () => {

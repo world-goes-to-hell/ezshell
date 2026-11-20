@@ -1,6 +1,7 @@
 // Detached windows of an SSH tab: the terminal moved to its own window and merged back (the same
 // shell, the screen carried over both ways), and the SFTP panel popped out to a window and returned.
 // Run by e2e/run.js, which starts e2e/support/sshd.js for specs named ssh-*.
+const http = require('node:http')
 const { sleep, createChecks, connect, pages, findPage, unlock, connectSsh, PANEL } = require('../support/driver')
 const { check, finish } = createChecks()
 
@@ -61,6 +62,41 @@ const { check, finish } = createChecks()
   check('it is the same shell and it answers in the window', await term.until(`(document.querySelector('.terminal-window-container .xterm-rows')?.textContent || '').includes('IN-OWN-WINDOW')`, 8000), (await windowText()).trim().slice(-120))
   check('no new login happened (one greeting of the test shell)', ((await windowText()).match(/fake shell/g) || []).length === 1, (await windowText()).trim().slice(0, 120))
   await term.shot('ssh-detach-1-window')
+
+  const web = http.createServer((_request, response) => response.end('SSH web link'))
+  await new Promise(resolve => web.listen(0, '127.0.0.1', resolve))
+  try {
+    const { port } = web.address()
+    const address = `http://127.0.0.1:${port}/ssh-link`
+    const label = 'SSH-LINK'
+    await term.type(`web-link ${port}`)
+    await term.enter()
+    const row = `([...document.querySelectorAll('.terminal-window-content .xterm-rows > div')]
+      .find(line => line.textContent.includes(${JSON.stringify(label)})))`
+    if (!(await term.until(`!!${row}`, 8000))) throw new Error(`the detached terminal did not draw the OSC 8 link: ${(await windowText()).trim()}`)
+    const point = await term.js(`(() => {
+      const row = ${row}
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT)
+      let index = row.textContent.indexOf(${JSON.stringify(label)}) + 2
+      for (let node; (node = walker.nextNode()); index -= node.length) {
+        if (index >= node.length) continue
+        const range = document.createRange()
+        range.setStart(node, index)
+        range.setEnd(node, index + 1)
+        const r = range.getBoundingClientRect()
+        return [r.left + r.width / 2, r.top + r.height / 2]
+      }
+    })()`)
+    await term.click(...point)
+    await term.pick('ezShell 브라우저에서 열기')
+    check('a named SSH hyperlink opens an ezShell tab from the detached window', await main.until(`(() => {
+      const id = document.querySelector('.terminal-tab.active[data-tab-id^="browser:"]')?.dataset.tabId
+      return id && window.electronAPI.browserReviewState(id).then(state => state.url === ${JSON.stringify(address)} && !state.loading)
+    })()`))
+    await js(`document.querySelector('.terminal-tab.active[data-tab-id^="browser:"] .tab-close').click()`)
+  } finally {
+    web.close()
+  }
 
   // ---- Merge back ----
   await term.js(`document.querySelector('[aria-label="메인 창으로 병합"]').click()`)

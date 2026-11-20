@@ -28,6 +28,9 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
     await sleep(350)
   }
   const SET = `(el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })) }`
+  // Without OS focus (another window in front) a dialog's closing animation did not finish and it stayed
+  await send('Page.bringToFront')
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true })
   const palette = () => js(`!!document.querySelector('.command-palette')`)
   const row = (name) => `[...document.querySelectorAll('.shortcut-item')].find(r => r.querySelector('.shortcut-description')?.textContent === ${JSON.stringify(name)})`
   const keysOf = (name) => js(`[...${row(name)}.querySelectorAll('.shortcut-key')].map(k => k.textContent).join('+')`)
@@ -69,6 +72,8 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   check('New Connection on the empty start screen opens the connection form',
     await until('!!document.querySelector(\'input[placeholder="192.168.1.1"]\')', 5000))
   await esc()
+  // The form leaves after its closing animation; checked below, so wait for it to be gone
+  check('Esc closes the connection form', await until('!document.querySelector(\'input[placeholder="192.168.1.1"]\')', 5000))
 
   check('the shortcuts tab lists the shortcuts in Korean', await openShortcuts(), String(await js(`[...document.querySelectorAll('.shortcut-description')].slice(0, 4).map(d => d.textContent).join(', ')`)))
   check('with the default keys', (await keysOf('명령 팔레트 열기')) === 'Ctrl+P', await keysOf('명령 팔레트 열기'))

@@ -131,7 +131,8 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
    * A file on this PC (the workspace panel). No SFTP channel, no backup on save (Git and the review
    * before saving are the safety net); the backup list offers the file at Git HEAD instead.
    */
-  function registerLocal({ root, path: filePath, label, mode, compareHead = false }) {
+  /** `revealLine`: a new window opens at that line (a link "README.md:187" in the agent chat) */
+  function registerLocal({ root, path: filePath, label, mode, compareHead = false, revealLine = null }) {
     if (!localFiles || typeof filePath !== 'string' || !filePath) throw new DocumentError(MESSAGES.gone)
     if (mode !== 'edit' && mode !== 'preview') throw new DocumentError(MESSAGES.gone)
     // Text opens in the editor (looking and changing in one place); the preview is for images and PDFs
@@ -143,6 +144,8 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
     docs.set(docId, {
       // Opened from the uncommitted changes: the window's first load starts the comparison with Git HEAD
       ...(compareHead && mode === 'edit' ? { compareHead: true, hintsUntil: Date.now() + OPEN_HINT_MS } : {}),
+      // Told to every load for a while, like a definition's line (StrictMode loads twice in development)
+      ...(Number.isInteger(revealLine) && revealLine > 0 ? { revealLine, hintsUntil: Date.now() + OPEN_HINT_MS } : {}),
       docId, sessionId: null, mode, requestedPath: filePath, local: { root, path: filePath },
       sessionName: typeof label === 'string' && label ? label.slice(0, 200) : '이 PC',
       server: {}, ownerId: null, seen: null, canWrite: false, review: null, isSaving: false,

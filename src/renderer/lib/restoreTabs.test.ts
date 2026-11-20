@@ -39,6 +39,14 @@ describe('agents in local tabs', () => {
     expect(back?.tabs[0]).toMatchObject({ agents: [{ pane: 'main', agent: 'codex', sessionId: CODEX }] })
   })
 
+  it('keeps whether a pane was a chat, and only as true', () => {
+    const back = readRestoreRecord({ version: 1, tabs: [{
+      kind: 'local', cwd: 'D:\\work', splitTree: row(pane('main'), pane('split-1')), paneSeq: 1,
+      agents: [{ pane: 'main', agent: 'codex', chat: true }, { pane: 'split-1', agent: 'claude', chat: 'yes' }]
+    }] })
+    expect(back?.tabs[0]).toMatchObject({ agents: [{ pane: 'main', agent: 'codex', chat: true }] })
+  })
+
   it('keeps an agent that never had a conversation (no session id), so it starts again fresh', () => {
     const record = buildRestoreRecord(source([local('local:1')], { agentsOf: () => [{ pane: 'main', agent: 'codex' }] }))
     expect(record.tabs[0]).toMatchObject({ agents: [{ pane: 'main', agent: 'codex' }] })

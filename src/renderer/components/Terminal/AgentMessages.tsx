@@ -1,18 +1,26 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import * as Dialog from '@radix-ui/react-dialog'
-import { RiMailLine } from 'react-icons/ri'
+import { RiMailLine, RiTeamLine, RiUser3Line } from 'react-icons/ri'
 import { create } from 'zustand'
-import type { AgentMessage, AgentMessageDelivery, AgentMessagesSnapshot } from '../../types'
+import type { AgentMessage, AgentMessageDelivery, AgentMessagesSnapshot, LocalAgent } from '../../types'
 import { folderLabel, isInsidePath, pathKey } from '../../lib/localWorkspaceTree'
 import { visibleTerminalId } from '../../lib/localTerminalPane'
 import { projectOfFolder, type GroupProject } from '../../lib/tabGroups'
 import { useTerminalStore } from '../../stores/terminalStore'
+import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
+import { SelectMenu } from '../ui/SelectMenu'
 import './AgentMessages.css'
 
 const USER = 'user'
 const ALL = 'all'
 const label = (id: string) => id === USER ? '나' : id
+
+function MessageProviderIcon({ kind }: { kind?: LocalAgent | typeof USER | typeof ALL }) {
+  if (!kind) return null
+  const Icon = kind === USER ? RiUser3Line : kind === ALL ? RiTeamLine : AGENT_PROVIDER_ICONS[kind]
+  return <Icon className="agent-message-provider" data-kind={kind} size={14} aria-hidden="true" />
+}
 
 interface AgentMessagesState {
   snapshot: AgentMessagesSnapshot
@@ -45,8 +53,9 @@ function isVisible(element: HTMLElement | null): boolean {
 function deliveryAnchor(shellId?: string): HTMLElement | undefined {
   if (shellId) {
     const pane = document.querySelector<HTMLElement>(`[data-local-shell-id="${CSS.escape(shellId)}"]`)
-    const mail = pane?.querySelector<HTMLElement>('.agent-pane-mail')
-    if (mail && isVisible(mail)) return mail
+    // The chat view's button comes first in the pane: the pane's own is under the chat while it shows
+    const mail = [...(pane?.querySelectorAll<HTMLElement>('.agent-chat-mail, .agent-pane-mail') ?? [])].find(isVisible)
+    if (mail) return mail
     const tabId = pane?.dataset.localTabId ?? useMessages.getState().panes[shellId]
     if (tabId) {
       const tabs = document.querySelectorAll<HTMLElement>(`:is(.terminal-tab, .split-pane-tab-item)[data-tab-id="${CSS.escape(tabId)}"]`)
@@ -59,7 +68,91 @@ function deliveryAnchor(shellId?: string): HTMLElement | undefined {
   return undefined
 }
 
-function AgentDeliveryNotice({ delivery }: { delivery: AgentMessageDelivery | null }) {
+type DeliveryKind = LocalAgent | typeof USER
+
+/** An arrival as shown: who sent it to whom, and what each is (for their icons) */
+interface ShownDelivery extends AgentMessageDelivery {
+  fromKind?: DeliveryKind
+  toKind?: DeliveryKind
+}
+
+/** A message flying from the sender's pane to the receiver's before the arrival card shows */
+interface DeliveryFlightState {
+  shown: ShownDelivery
+  from: { x: number; y: number }
+  to: { x: number; y: number }
+}
+
+const FLIGHT_MS = 430
+const CARD_MS = 2400
+
+/** The latest agent with this id in the message list (the sender's shell and kind are not in the event) */
+function agentOf(id: string) {
+  const agents = useMessages.getState().snapshot.agents
+  for (let index = agents.length - 1; index >= 0; index--) if (agents[index].id === id) return agents[index]
+  return undefined
+}
+
+function kindOf(id: string): DeliveryKind | undefined {
+  if (id === USER) return USER
+  const kind = agentOf(id)?.kind
+  return kind === 'claude' || kind === 'codex' ? kind : undefined
+}
+
+const centerOf = (element: HTMLElement) => {
+  const box = element.getBoundingClientRect()
+  return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+}
+
+/** Where the flight goes, when both ends are on screen and motion is welcome; otherwise only the card shows */
+function flightFor(shown: ShownDelivery): DeliveryFlightState | null {
+  if (document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) return null
+  const fromShell = shown.from === USER ? undefined : agentOf(shown.from)?.shellId || undefined
+  const source = deliveryAnchor(fromShell)
+  const destination = deliveryAnchor(shown.toShell)
+  if (!source || !destination || source === destination) return null
+  return { shown, from: centerOf(source), to: centerOf(destination) }
+}
+
+function DeliveryFlight({ flight, onLanded }: { flight: DeliveryFlightState; onLanded: () => void }) {
+  const chipRef = useRef<HTMLSpanElement>(null)
+  const landedRef = useRef(onLanded)
+  landedRef.current = onLanded
+  useLayoutEffect(() => {
+    const chip = chipRef.current
+    if (!chip) return
+    const dx = flight.to.x - flight.from.x
+    const dy = flight.to.y - flight.from.y
+    // A small arc upward on the way, fading a little as it lands
+    const frames = [0, 0.25, 0.5, 0.75, 1].map(progress => ({
+      transform: `translate3d(${dx * progress}px, ${dy * progress - 92 * progress * (1 - progress)}px, 0) translate(-50%, -50%)`,
+      opacity: progress === 1 ? 0.35 : 1
+    }))
+    const animation = chip.animate(frames, { duration: FLIGHT_MS, easing: 'ease-out' })
+    let stopped = false
+    const land = () => { if (!stopped) landedRef.current() }
+    void animation.finished.then(land, land)
+    // The panes moved: the path is wrong, so land at once (the card finds the receiver again)
+    const cancel = () => animation.cancel()
+    window.addEventListener('resize', cancel, { once: true })
+    return () => {
+      stopped = true
+      window.removeEventListener('resize', cancel)
+      animation.cancel()
+    }
+  }, [flight])
+  return createPortal(
+    <span ref={chipRef} className="agent-message-flight" aria-hidden="true"
+      style={{ left: flight.from.x, top: flight.from.y, transform: 'translate(-50%, -50%)' }}>
+      <MessageProviderIcon kind={flight.shown.fromKind} />
+      <RiMailLine size={13} />
+      메시지
+    </span>,
+    document.body
+  )
+}
+
+function AgentDeliveryNotice({ delivery }: { delivery: ShownDelivery | null }) {
   const noticeRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const notice = noticeRef.current
@@ -101,7 +194,9 @@ function AgentDeliveryNotice({ delivery }: { delivery: AgentMessageDelivery | nu
           <RiMailLine size={16} aria-hidden="true" />
           <div className="agent-delivery-text">
             <span>메시지 도착</span>
-            <strong>{label(delivery.from)} → {label(delivery.to)}</strong>
+            <strong>
+              <MessageProviderIcon kind={delivery.fromKind} />{label(delivery.from)} → <MessageProviderIcon kind={delivery.toKind} />{label(delivery.to)}
+            </strong>
           </div>
         </div>
       )}
@@ -117,20 +212,33 @@ interface WorkspaceSelection {
 
 export function AgentMessagesHost({ currentGroup, projects }: WorkspaceSelection) {
   const panel = useMessages(state => state.panel)
-  const [delivery, setDelivery] = useState<AgentMessageDelivery | null>(null)
+  const [delivery, setDelivery] = useState<ShownDelivery | null>(null)
+  const [flight, setFlight] = useState<DeliveryFlightState | null>(null)
+  const cardTimer = useRef<number | undefined>(undefined)
+  // The arrival card, for a while (after the flight, or at once when nothing flies)
+  const showCard = (shown: ShownDelivery) => {
+    window.clearTimeout(cardTimer.current)
+    setDelivery(shown)
+    cardTimer.current = window.setTimeout(() => setDelivery(null), CARD_MS)
+  }
   useEffect(() => {
     let active = true
-    let timer: number | undefined
     const stopState = window.electronAPI.onAgentMessagesState(receive)
     const hideDelivery = () => {
-      window.clearTimeout(timer)
+      window.clearTimeout(cardTimer.current)
       setDelivery(null)
+      setFlight(null)
     }
     const stopDelivery = window.electronAPI.onAgentMessageDelivered(event => {
       if (document.hidden) return
-      window.clearTimeout(timer)
-      setDelivery(event)
-      timer = window.setTimeout(hideDelivery, 2400)
+      const shown: ShownDelivery = { ...event, fromKind: kindOf(event.from), toKind: kindOf(event.to) }
+      const next = flightFor(shown)
+      if (next) {
+        setFlight(next)
+      } else {
+        setFlight(null)
+        showCard(shown)
+      }
     })
     document.addEventListener('visibilitychange', hideDelivery)
     void window.electronAPI.agentMessagesSnapshot().then(snapshot => { if (active) receive(snapshot) })
@@ -138,13 +246,14 @@ export function AgentMessagesHost({ currentGroup, projects }: WorkspaceSelection
       active = false
       stopState()
       stopDelivery()
-      window.clearTimeout(timer)
+      window.clearTimeout(cardTimer.current)
       document.removeEventListener('visibilitychange', hideDelivery)
       useMessages.setState({ panel: null })
     }
   }, [])
   return (
     <>
+      {flight && <DeliveryFlight key={flight.shown.id} flight={flight} onLanded={() => { setFlight(null); showCard(flight.shown) }} />}
       <AgentDeliveryNotice delivery={delivery} />
       {panel && <AgentMessagesDialog key={panel.agentId ?? ALL} initialAgent={panel.agentId} sourceTabId={panel.tabId}
         currentGroup={currentGroup} projects={projects} onClose={() => useMessages.setState({ panel: null })} />}
@@ -152,8 +261,11 @@ export function AgentMessagesHost({ currentGroup, projects }: WorkspaceSelection
   )
 }
 
-// A receipt between agents is read when its recipient next looks; until then it is not mail to count
-const counts = (message: AgentMessage) => !message.read && (!message.receipt || message.to === USER)
+// Read: the recipient agent took it from its inbox (seenAt), or it was answered. A message to the user is
+// read once the user handles it.
+const isRead = (message: AgentMessage) => message.read || Boolean(message.seenAt)
+const counts = (message: AgentMessage) => !isRead(message)
+const readTitle = (message: AgentMessage) => (message.seenAt ? `${new Date(message.seenAt).toLocaleString()} 에 읽음` : undefined)
 
 function unreadCount(messages: AgentMessage[], ids: Set<string>) {
   return messages.reduce((count, message) => count + Number(counts(message) && ids.has(message.to)), 0)
@@ -167,9 +279,29 @@ export function AgentTabMessages({ tabId }: { tabId: string }) {
   return count > 0 ? <span className="agent-tab-mail agent-mail-count" aria-label={`읽지 않은 에이전트 메시지 ${count}개`} title={`읽지 않은 메시지 ${count}개`}>{count}</span> : null
 }
 
-export function AgentPaneMessages({ shellId, tabId }: { shellId: string; tabId: string }) {
+/** The agent of a pane's shell and its unread messages (the pane's mail button and the chat view's) */
+function usePaneAgentMail(shellId: string) {
   const agent = useMessages(state => state.snapshot.agents.find(item => item.shellId === shellId))
   const count = useMessages(state => agent ? unreadCount(state.snapshot.messages, new Set([agent.id])) : 0)
+  return { agent, count }
+}
+
+/** The chat view's header button to the agent's inbox; the pane's own button is under the chat */
+export function AgentChatMailButton({ shellId, tabId }: { shellId: string; tabId: string }) {
+  const { agent, count } = usePaneAgentMail(shellId)
+  if (!agent) return null
+  const label = count > 0 ? `${agent.id} 메시지함 (읽지 않은 메시지 ${count}개)` : `${agent.id} 메시지함`
+  return (
+    <button type="button" className="agent-chat-head-btn agent-chat-mail" data-unread={count > 0}
+      onClick={() => openAgentMessages(agent.id, tabId)} title={label} aria-label={label}>
+      <RiMailLine aria-hidden /> 메시지
+      {count > 0 && <span className="agent-mail-count">{count}</span>}
+    </button>
+  )
+}
+
+export function AgentPaneMessages({ shellId, tabId }: { shellId: string; tabId: string }) {
+  const { agent, count } = usePaneAgentMail(shellId)
   useEffect(() => {
     useMessages.setState(state => ({ panes: { ...state.panes, [shellId]: tabId } }))
     return () => {
@@ -216,13 +348,19 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
     if (!folder || owner) return false
     return tabFolder ? isInsidePath(agent.cwd, tabFolder) : pathKey(agent.cwd) === pathKey(folder)
   })
-  const ids = new Set(localAgents.map(agent => agent.id))
-  const selected = ids.has(selection) ? selection : ALL
+  const agentsById = new Map(localAgents.map(agent => [agent.id, agent]))
+  const selected = agentsById.has(selection) ? selection : ALL
   const thread = messages.filter(({ from, to }) => {
-    if (selected === ALL) return ids.has(from) && ids.has(to)
-    return (from === selected && (ids.has(to) || to === USER))
-      || (to === selected && (ids.has(from) || from === USER))
+    if (selected === ALL) return agentsById.has(from) && agentsById.has(to)
+    return (from === selected && (agentsById.has(to) || to === USER))
+      || (to === selected && (agentsById.has(from) || from === USER))
   })
+  const actor = (id: string) => (
+    <span className="agent-message-actor">
+      <MessageProviderIcon kind={id === USER ? USER : agentsById.get(id)?.kind} />
+      <span className="agent-message-actor-name">{label(id)}</span>
+    </span>
+  )
   return (
     <Dialog.Root open onOpenChange={open => { if (!open) onClose() }}>
       <Dialog.Portal>
@@ -236,19 +374,30 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
                   <label htmlFor="agent-messages-session">에이전트</label>
                   <span className="agent-message-workspace" title={workspaceName}>{workspaceName}</span>
                 </div>
-                <select id="agent-messages-session" value={selected} onChange={event => setSelection(event.target.value)}>
-                  <option value={ALL}>전체</option>
-                  {localAgents.map(agent => <option key={agent.id} value={agent.id}>{agent.id}{agent.active ? '' : ' (종료)'}</option>)}
-                </select>
+                <SelectMenu
+                  id="agent-messages-session"
+                  ariaLabel="에이전트"
+                  value={selected}
+                  onChange={setSelection}
+                  options={[
+                    { value: ALL, label: '전체', icon: <MessageProviderIcon kind={ALL} /> },
+                    ...localAgents.map(agent => ({
+                      value: agent.id,
+                      label: `${agent.id}${agent.active ? '' : ' (종료)'}`,
+                      icon: <MessageProviderIcon kind={agent.kind} />
+                    }))
+                  ]}
+                />
               </div>
               <div className="agent-message-thread" role="log" tabIndex={0} aria-label={selected === ALL ? `${workspaceName} 에이전트 간 메시지` : `${selected} 메시지`}>
                 {thread.length === 0 && <p className="form-hint">아직 메시지가 없습니다.</p>}
                 {thread.map(message => (
-                  <article key={message.id} className={`agent-thread-message${message.receipt ? ' is-receipt' : ''}`}>
+                  <article key={message.id} className="agent-thread-message">
                     <header>
-                      <strong>{label(message.from)} → {label(message.to)}</strong>
-                      {message.receipt && <span className="agent-receipt-tag" title="요청을 받았다는 확인입니다. 결과는 따로 답장으로 옵니다.">수신 확인</span>}
-                      <span>{message.read ? '읽음' : '전달됨'}</span>
+                      <strong className="agent-message-route">{actor(message.from)} → {actor(message.to)}</strong>
+                      <span className="agent-read-state" data-read={isRead(message)} title={readTitle(message)}>
+                        {isRead(message) ? '읽음' : '안 읽음'}
+                      </span>
                     </header>
                     <p>{message.text}</p>
                   </article>

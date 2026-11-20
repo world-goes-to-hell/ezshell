@@ -1,4 +1,4 @@
-const { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, diffFromText, addedLines, clipLines } = require('./items.js')
+const { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, diffFromText, addedLines, clipLines, readableOutput, readableValue } = require('./items.js')
 
 // Codex's `rollout-*.jsonl`. Since `item_completed` events (Codex 0.1xx), each finished thing is one
 // item there: UserMessage, AgentMessage, CommandExecution, FileChange, McpToolCall, Plan... The
@@ -94,8 +94,9 @@ function createCodexParser() {
           tool: {
             name,
             summary: oneLine(Object.values(item.arguments ?? {}).find(value => typeof value === 'string') ?? ''),
-            input: inputText(item.arguments),
-            result: clip(blocksText(item.result?.content), LIMITS.result),
+            // MCP arguments and answers are JSON: shown as an outline with the texts' own lines
+            input: clip(readableValue(item.arguments ?? {}), LIMITS.input),
+            result: clip(readableOutput(blocksText(item.result?.content)), LIMITS.result),
             ...(item.status && item.status !== 'completed' ? { isError: true } : {})
           }
         })

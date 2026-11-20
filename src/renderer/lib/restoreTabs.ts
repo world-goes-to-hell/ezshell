@@ -27,6 +27,8 @@ export interface RestoreAgent {
   pane: string
   agent: 'claude' | 'codex'
   sessionId?: string
+  /** The pane showed its agent as a chat: it opens as a chat again once the agent is back */
+  chat?: true
 }
 
 export interface RestoreRecord {
@@ -155,9 +157,11 @@ const isRestoreAgent = (value: unknown): value is RestoreAgent => {
   const a = value as Record<string, unknown> | null
   return !!a && typeof a.pane === 'string' && PANE_ID.test(a.pane) && (a.agent === 'claude' || a.agent === 'codex')
     && (a.sessionId === undefined || (typeof a.sessionId === 'string' && SESSION_ID.test(a.sessionId)))
+    && (a.chat === undefined || a.chat === true)
 }
 
-function readTree(value: unknown): SplitNode | undefined {
+/** A split tree read back from storage: valid pane ids, each once, the main pane among them; undefined otherwise */
+export function readTree(value: unknown): SplitNode | undefined {
   const read = (node: unknown, depth: number): SplitNode | null => {
     if (!node || typeof node !== 'object' || depth > MAX_PANES) return null
     const n = node as Record<string, unknown>
@@ -211,7 +215,7 @@ function readTab(value: unknown, index: number): RestoreTab | null {
       const seen = new Set<string>()
       const agents = (Array.isArray(t.agents) ? t.agents : []).slice(0, MAX_PANES * 2)
         .filter(isRestoreAgent).filter(a => panes.has(a.pane) && !seen.has(a.pane) && seen.add(a.pane))
-        .map(({ pane, agent, sessionId }) => (sessionId ? { pane, agent, sessionId } : { pane, agent }))
+        .map(({ pane, agent, sessionId, chat }) => ({ pane, agent, ...(sessionId ? { sessionId } : {}), ...(chat ? { chat } : {}) }))
       return { kind: 'local', title, splitTree: tree, paneSeq, cwd: path(t.cwd), workspaceLabel: text(t.workspaceLabel), ...(agents.length ? { agents } : {}) }
     }
     case 'db': {

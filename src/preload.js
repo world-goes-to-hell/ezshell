@@ -174,6 +174,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localShellHasWorkingAgent: (ids) => ipcRenderer.invoke('local-shell-working-agent', ids),
   agentMessagesSnapshot: () => ipcRenderer.invoke('agent-messages-state'),
   browserReviewOpen: () => ipcRenderer.invoke('browser-review-open'),
+  browserReviewOpenLink: (address, destination) => ipcRenderer.invoke('browser-review-open-link', address, destination),
+  onBrowserReviewLinkOpened: (callback) => {
+    const listener = (_event, id) => callback(id);
+    ipcRenderer.on('browser-review-link-opened', listener);
+    return () => ipcRenderer.removeListener('browser-review-link-opened', listener);
+  },
   browserReviewState: (id) => ipcRenderer.invoke('browser-review-state', id),
   browserReviewAction: (id, request) => ipcRenderer.invoke('browser-review-action', id, request),
   browserReviewBounds: (id, bounds) => ipcRenderer.send('browser-review-bounds', id, bounds),
@@ -229,6 +235,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentChatSend: (shellId, text, imageId) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageId }),
   agentChatInterrupt: (shellId) => ipcRenderer.invoke('agent-chat-interrupt', shellId),
   agentChatAnswer: (shellId, key, signature) => ipcRenderer.invoke('agent-chat-answer', { shellId, key, signature }),
+  // The model / effort under a local terminal (src/ipc/agentPicker.js): the CLI's own picker, driven by main
+  agentPickerList: (shellId, what) => ipcRenderer.invoke('agent-picker-list', { shellId, what }),
+  agentPickerApply: (shellId, what, label) => ipcRenderer.invoke('agent-picker-apply', { shellId, what, label }),
   agentChatOpenLink: (shellId, href, how) => ipcRenderer.invoke('agent-chat-open-link', { shellId, href, how }),
   onAgentChatFrame: (callback) => {
     const handler = (event, frame) => callback(frame);

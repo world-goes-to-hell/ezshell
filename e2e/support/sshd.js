@@ -164,6 +164,8 @@ const server = new Server({ hostKeys: [fs.readFileSync(keyFile)] }, (client) => 
               if (cmd === 'etc') where = '/etc'
               if (cmd === 'shell-count') stream.write(`OPEN-SHELLS ${openShells}\r\n`)
               if (cmd === 'sftp-count') stream.write(`OPEN-SFTP ${openSftp}\r\n`)
+              const webLink = /^web-link (\d+)$/.exec(cmd)
+              if (webLink) stream.write(`\x1b]8;;http://127.0.0.1:${webLink[1]}/ssh-link\x07SSH-LINK\x1b]8;;\x07\r\n`)
               if (cmd === 'ls') stream.write('log  newdir  old.txt  wide.conf  nothere.txt\r\n')
               if (cmd === 'll') stream.write('drwxr-xr-x 2 root root 4096 Nov 10 09:00 log\r\n-rw-r--r-- 1 root root    4 Nov 10 09:00 old.txt\r\n-rw-r--r-- 1 root root  110 Nov 10 09:00 /etc/hosts\r\n')
               if (cmd === 'll /var/log') stream.write('total 1\r\n-rw-r--r-- 1 root root 67 Nov 10 09:00 app.log\r\n')

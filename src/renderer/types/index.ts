@@ -457,6 +457,13 @@ export interface AgentMessageSession {
   exitCode?: number | null
 }
 
+/** A model or effort level the agent CLI's picker offers (src/ipc/agentPicker.js) */
+export interface AgentPickerOption {
+  label: string
+  description: string
+  current: boolean
+}
+
 export interface AgentMessage {
   id: string
   from: string
@@ -464,9 +471,10 @@ export interface AgentMessage {
   text: string
   replyTo?: string
   sentAt: number
+  /** Handled: answered or acknowledged */
   read: boolean
-  /** A quick confirmation (send_receipt) of `replyTo`; the result follows as a normal reply */
-  receipt?: boolean
+  /** When the recipient agent took it from its inbox (the "읽음" its sender sees with check_sent) */
+  seenAt?: number | null
 }
 
 export interface AgentMessagesSnapshot {
@@ -489,6 +497,10 @@ export interface BrowserReviewSelection {
 
 export interface BrowserReviewState {
   url: string
+  /** The page's title (empty until it arrives); the tab name follows it */
+  title: string
+  /** The page's developer tools window is open */
+  devToolsOpen: boolean
   loading: boolean
   error: string
   picking: boolean
@@ -500,7 +512,7 @@ export interface BrowserReviewState {
 
 export type BrowserReviewAction =
   | { type: 'navigate'; address: string }
-  | { type: 'back' | 'forward' | 'reload' | 'pick' | 'cancel' }
+  | { type: 'back' | 'forward' | 'reload' | 'pick' | 'cancel' | 'devtools' }
   | { type: 'send'; agentId: string; text: string; selectionId: string }
 export type BrowserReviewResult = { success: true } | { success: false; error: string }
 
@@ -749,6 +761,8 @@ declare global {
       localShellHasWorkingAgent?: (ids: string[]) => Promise<boolean>
       agentMessagesSnapshot: () => Promise<AgentMessagesSnapshot | null>
       browserReviewOpen: () => Promise<{ success: true; id: string } | { success: false; error: string }>
+      browserReviewOpenLink: (address: string, destination: 'internal' | 'external') => Promise<BrowserReviewResult>
+      onBrowserReviewLinkOpened: (callback: (id: string) => void) => () => void
       browserReviewState: (id: string) => Promise<BrowserReviewState | null>
       browserReviewAction: (id: string, request: BrowserReviewAction) => Promise<BrowserReviewResult>
       browserReviewBounds: (id: string, bounds: { x: number; y: number; width: number; height: number } | null) => void
@@ -780,7 +794,15 @@ declare global {
       agentChatSend?: (shellId: string, text: string, imageId?: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatInterrupt?: (shellId: string) => Promise<boolean>
       agentChatAnswer?: (shellId: string, key: string, signature: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
-      agentChatOpenLink?: (shellId: string, href: string, how: 'app' | 'explorer' | 'browser') => Promise<{ ok: true } | { ok: false; error: string }>
+      agentPickerList?: (shellId: string, what: 'model' | 'effort') => Promise<
+        | { ok: true; options: AgentPickerOption[] }
+        | { ok: false; reason?: string; error: string }
+      >
+      agentPickerApply?: (shellId: string, what: 'model' | 'effort', label: string) => Promise<
+        | { ok: true; options?: AgentPickerOption[] }
+        | { ok: false; reason?: string; error: string; options?: AgentPickerOption[] }
+      >
+      agentChatOpenLink?: (shellId: string, href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab') => Promise<{ ok: true } | { ok: false; error: string }>
       onAgentChatFrame?: (callback: (frame: AgentChatFrame) => void) => () => void
       oracleClientStatus?: () => Promise<OracleClientStatus | { success: false; error: string }>
       oracleClientInstall?: () => Promise<OracleClientStatus | { success: false; error: string }>

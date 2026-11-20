@@ -5,10 +5,17 @@
  */
 
 /** The parts of xterm's IBuffer this module reads, so it can be tested without a terminal. */
+export interface InputLineLike {
+  isWrapped: boolean
+  translateToString: (trimRight?: boolean, startColumn?: number, endColumn?: number) => string
+  getCell?: (column: number) => { getChars: () => string; isDim: () => number; isItalic: () => number } | undefined
+}
+
 export interface BufferLike {
   baseY: number
   cursorY: number
-  getLine: (y: number) => { isWrapped: boolean; translateToString: (trimRight?: boolean) => string } | undefined
+  cursorX?: number
+  getLine: (y: number) => InputLineLike | undefined
 }
 
 export interface HistoryKeySource {
@@ -48,11 +55,23 @@ export function extractCommand(line: string): string | null {
   return command
 }
 
+/** PSReadLine's inline prediction is drawn in dim italic cells after the cursor. */
+export function hasInlinePrediction(line: InputLineLike, cursorX: number): boolean {
+  let seen = false
+  for (let column = cursorX; ; column++) {
+    const cell = line.getCell?.(column)
+    if (!cell) return seen
+    if (!cell.getChars().trim()) continue
+    if (!cell.isDim() || !cell.isItalic()) return false
+    seen = true
+  }
+}
+
 /**
  * The logical line at `row` (default: under the cursor), joining rows that the terminal soft-wrapped.
  * Recording passes the row Enter was pressed on and reads it once the shell's echo has arrived.
  */
-export function readInputLine(buffer: BufferLike, row = buffer.baseY + buffer.cursorY): string {
+export function readInputLine(buffer: BufferLike, row = buffer.baseY + buffer.cursorY, keepCursorSpaces = false): string {
   let first = row
   while (first > 0 && buffer.getLine(first)?.isWrapped) first--
   let last = row
@@ -61,7 +80,14 @@ export function readInputLine(buffer: BufferLike, row = buffer.baseY + buffer.cu
   const rows: string[] = []
   for (let y = first; y <= last; y++) {
     // Keep trailing spaces on wrapped rows: they are part of the command at the wrap point
-    rows.push(buffer.getLine(y)?.translateToString(y === last) ?? '')
+    const line = buffer.getLine(y)
+    const text = line?.translateToString(y === last) ?? ''
+    if (line && keepCursorSpaces && y === last && y === row && buffer.cursorX !== undefined) {
+      const throughCursor = line.translateToString(false, 0, buffer.cursorX)
+      rows.push(throughCursor.length > text.length || hasInlinePrediction(line, buffer.cursorX) ? throughCursor : text)
+    } else {
+      rows.push(text)
+    }
   }
   return rows.join('')
 }
@@ -69,6 +95,16 @@ export function readInputLine(buffer: BufferLike, row = buffer.baseY + buffer.cu
 /** Keystrokes that replace the current input with the command, leaving it for the user to run. */
 export function buildInsertSequence(command: string): string {
   return `${CLEAR_INPUT_LINE}${command}`
+}
+
+/** PowerShell's Windows editing mode has no Readline Ctrl+E/Ctrl+U bindings. */
+export function buildLocalInsertSequence(command: string, buffer: BufferLike, windows: boolean): string | null {
+  const current = textAfterPrompt(readInputLine(buffer, undefined, true))
+  if (current === null) return null
+  if (!windows) return buildInsertSequence(command)
+  // Home followed by Delete erases from the start of the draft. Blank cells left after
+  // the cursor cannot make a visible prefix survive the replacement.
+  return current.length ? `\x1b[H${'\x1b[3~'.repeat(current.length)}${command}` : command
 }
 
 /**

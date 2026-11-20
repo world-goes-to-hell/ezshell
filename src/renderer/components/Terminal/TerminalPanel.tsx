@@ -30,10 +30,12 @@ import { PaneArrival, SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
 import { attachFileLinks } from './terminalFileLinks'
 import { attachFileZone } from './terminalFileZone'
 import { attachLogHighlight } from './terminalLogHighlight'
+import { attachTerminalWebLinks } from './terminalWebLinks'
 import 'xterm/css/xterm.css'
 import { SerializeAddon } from 'xterm-addon-serialize'
 import { registerTerminalSerializer, setPendingSnapshot, takePendingSnapshot, SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
 import { registerMainScreen } from '../../lib/splitShells'
+import { createRightClickFilter } from '../../lib/rightClickReports'
 
 interface TerminalPanelProps {
   sessionId: string
@@ -251,6 +253,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
       unregisterSerializer = registerTerminalSerializer(sessionId, serializeScreen, () => new Promise<void>(resolve => drawn.write('', () => resolve())))
 
       term.open(terminalRef.current)
+      attachTerminalWebLinks(term)
       const unregister = registerTerminalPane(terminalRef.current, term)
       // The output since the last folder change is bordered; relative names count only inside it
       const fileZone = attachFileZone(term, sessionId)
@@ -348,8 +351,11 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
         }
       }, 50)
 
-      // Handle terminal input
-      term.onData((data) => {
+      // Handle terminal input. The right button opens the app's menu: not reported to the program too
+      const withoutRightClick = createRightClickFilter()
+      term.onData((raw) => {
+        const data = withoutRightClick(raw)
+        if (!data) return
         commandHistory.handleData(data)
         window.electronAPI.sshSend(sessionId, data)
       })

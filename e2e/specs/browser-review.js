@@ -58,9 +58,19 @@ async function run() {
     const state = `window.electronAPI.browserReviewState(${JSON.stringify(id)})`
     const browser = main
     const root = `document.querySelector('[data-browser-tab-id="${id}"]')`
+    const tools = `${root}.querySelector('.browser-review-tools-toggle')`
+    const tool = `${root}.querySelector('.browser-review-tool-toggle')`
+    const compose = `${root}.querySelector('.browser-review-compose')`
+    const recipient = `${compose}.querySelector('select')`
+    const editor = `${compose}.querySelector('textarea')`
+    const fullViewport = `Math.abs(${root}.querySelector('.browser-review-viewport').clientWidth - ${root}.clientWidth) <= 1`
     check('browser controls open in the main tab strip beside the local terminal',
       await browser.until(`!!${root} && !!document.querySelector('.terminal-tab[data-tab-id^="local:"]')`)
       && !(await pages()).some(target => target.url.includes('browserReviewMode=')))
+    check('a new browser fills the available width and offers only an icon for tools', await browser.until(`
+      ${fullViewport} && !${compose} && !${tool} &&
+      ${tools}.textContent.trim() === '' && ${tools}.hasAttribute('aria-label') && ${tools}.getAttribute('aria-expanded') === 'false'
+    `))
     check('the address bar rejects privileged schemes', await browser.js(`window.electronAPI.browserReviewAction(${JSON.stringify(id)}, {
       type: 'navigate', address: 'file:///C:/Windows/'
     }).then(result => !result.success)`))
@@ -69,9 +79,15 @@ async function run() {
     await browser.js(`document.querySelector('.browser-review-address button').click()`)
     page = await connect(target => target.url.startsWith(origin))
     check('web content has no ezShell API', await page.js(`typeof window.electronAPI === 'undefined' && typeof require === 'undefined'`))
-    const pick = `document.querySelector('.browser-review-pick')`
-    await browser.until(`!${pick}.disabled`)
-    await browser.js(`${pick}.click()`)
+    await browser.until(`${state}.then(state => state.url && !state.loading)`)
+    const pageWidth = await page.js('window.innerWidth')
+    await browser.js(`${tools}.click()`)
+    check('the tools icon opens a list with the picker accordion folded', await browser.until(`
+      ${tools}.getAttribute('aria-expanded') === 'true' &&
+      ${tool}?.getAttribute('aria-expanded') === 'false' && !${compose}
+    `) && await page.until(`window.innerWidth < ${pageWidth}`))
+    await browser.js(`${tool}.click()`)
+    const pick = `${root}.querySelector('.browser-review-pick')`
     await browser.until(`${pick}.getAttribute('aria-pressed') === 'true'`)
     await page.click(...await page.center(`document.querySelector('#save-button')`))
     if (!(await browser.until(`document.querySelector('.browser-review-selection code')?.textContent === '#save-button'`))) {
@@ -92,16 +108,27 @@ async function run() {
       window.electronAPI.localShellWrite(shellId, '\\r')
     })()`)
     fs.writeFileSync(path.join(profile, 'codex-1-program-status'), 'state=working:app=codex')
-    check('a working agent remains selectable', await browser.until(`[...document.querySelectorAll('#browser-review-agent option')].some(
+    check('a working agent remains selectable', await browser.until(`[...${recipient}.options].some(
       option => option.value === 'codex-1' && option.textContent.includes('작업 중'))`))
     await browser.js(`(() => {
-      const select = document.querySelector('#browser-review-agent')
+      const select = ${recipient}
       select.value = 'codex-1'
       select.dispatchEvent(new Event('change', { bubbles: true }))
-      const draft = document.querySelector('#browser-review-draft')
+      const draft = ${editor}
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(draft, '버튼 문구를 변경해 주세요.')
       draft.dispatchEvent(new Event('input', { bubbles: true }))
     })()`)
+    await browser.js(`${tools}.click()`)
+    check('closing tools gives the full width back to the live page', await browser.until(`${fullViewport} && !${compose}`)
+      && await page.until(`window.innerWidth === ${pageWidth}`))
+    await browser.js(`${tools}.click()`)
+    await browser.until(`!!${tool} && ${tool}.getAttribute('aria-expanded') === 'false'`)
+    await browser.js(`${tool}.click()`)
+    check('reopening the picker keeps the selected element and draft', await browser.until(`
+      ${root}.querySelector('.browser-review-selection code')?.textContent === '#save-button' &&
+      ${editor}.value === '버튼 문구를 변경해 주세요.' && ${recipient}.value === 'codex-1' &&
+      ${pick}.getAttribute('aria-pressed') === 'false'
+    `))
     await browser.js(`document.querySelector('.browser-review-send').click()`)
     check('the request is sent from the UI', await browser.until(`document.querySelector('.browser-review-feedback')?.textContent.includes('codex-1')`))
     const requestPath = path.join(profile, 'codex-1-mcp-request')
@@ -131,6 +158,14 @@ async function run() {
     check('pages without Vue metadata still return the text and classes', await browser.until(`${state}.then(state =>
       state.selection?.text.startsWith('1990년생') && state.selection?.classes.includes('age-row') && !state.selection.component
     )`))
+    await browser.js(`${pick}.click()`)
+    await browser.until(`${pick}.getAttribute('aria-pressed') === 'true'`)
+    await browser.js(`${tool}.click()`)
+    check('folding the picker stops intercepting page clicks', await browser.until(`
+      !${compose} && ${state}.then(state => !state.picking)
+    `))
+    await page.click(...await page.center(`document.querySelector('#save-button')`))
+    check('the original button works again after the picker is folded', await page.until(`document.body.dataset.clicked === '1'`))
     const back = `document.querySelector('[aria-label="뒤로"]')`
     await browser.until(`!${back}.disabled`)
     await browser.js(`${back}.click()`)
@@ -139,6 +174,7 @@ async function run() {
     const otherRoot = `document.querySelector('[data-browser-tab-id="${otherId}"]')`
     check('a second browser tab starts with its own address', otherId !== id && await browser.until(`
       ${otherRoot}?.querySelector('[aria-label="웹 주소"]').value === ''
+      && ${otherRoot}?.querySelector('.browser-review-tools-toggle').getAttribute('aria-expanded') === 'false'
       && getComputedStyle(${root}).visibility === 'hidden'
     `))
     await browser.js(`document.querySelector('[data-tab-id="${otherId}"] .tab-close').click()`)
@@ -150,6 +186,25 @@ async function run() {
     `))
     await browser.js(`document.querySelector('[data-tab-id="${id}"] .tab-close').click()`)
     check('closing the tab releases its browser session', await browser.until(`${state}.then(state => state === null)`))
+
+    const address = origin + '/plain/' + 'wrapped'.repeat(22)
+    await main.js(`document.querySelector('.terminal-tab[data-tab-id^="local:"]').click()`)
+    fs.writeFileSync(path.join(profile, 'codex-1-draft'), address)
+    const row = `[...document.querySelectorAll('.local-terminal-host .xterm-rows > div')]
+      .find(line => line.textContent.includes(${JSON.stringify(origin)}))`
+    if (!(await main.until(`!!${row}`, 8000))) throw new Error('the terminal did not draw the test URL')
+    const point = await main.js(`(() => {
+      const r = ${row}.getBoundingClientRect()
+      return [r.left + 56, r.top + r.height / 2]
+    })()`)
+    await main.click(...point)
+    const linkMenu = `[...document.querySelectorAll('.terminal-menu-item')].find(item => item.textContent.trim() === 'ezShell 브라우저에서 열기')`
+    check('a wrapped text URL opens the web link menu', await main.until(`!!${linkMenu}`, 5000))
+    await main.pick('ezShell 브라우저에서 열기')
+    check('the native browser navigates to the full terminal URL', await main.until(`(() => {
+      const tab = document.querySelector('.terminal-tab.active[data-tab-id^="browser:"]')
+      return tab && window.electronAPI.browserReviewState(tab.dataset.tabId).then(state => state.url === ${JSON.stringify(address)} && !state.loading)
+    })()`))
   } finally {
     main.close()
     page?.close()

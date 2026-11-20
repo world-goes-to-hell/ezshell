@@ -11,13 +11,13 @@ const paintedClaudeDraft = text => '\x1b[?2004h\x1b[?25l\x1b[2J\x1b[20;1H' +
   '─'.repeat(70) + '\r\n  ⏵⏵ auto mode on'
 
 let wake
-function setup(kind = 'claude') {
+function setup(kind = 'claude', cols = 100) {
   const write = vi.fn(() => true)
   // ids: unread (wake for these); open: not answered yet, read or not
   // busy: not waiting for input; running: busy with a task (not starting up or asking for approval)
   const state = { busy: false, running: true, unknown: false, ids: [], open: [] }
   wake = createAgentInboxWake({
-    kind, cols: 100, rows: 24, quietMs: 60,
+    kind, cols, rows: 24, quietMs: 60,
     isUnknown: () => state.unknown,
     pendingMessages: () => state.ids,
     unhandledMessages: () => state.open,
@@ -42,6 +42,29 @@ describe('wake an idle agent with unread messages', () => {
     wake.writeOutput(claudeDraft(''))
     await new Promise(resolve => setTimeout(resolve, 80))
     expect(write).toHaveBeenCalledTimes(2)
+  })
+
+  it('enters a line that fills the row exactly, with the cursor ConPTY leaves on the last cell', async () => {
+    // "> " and the line take the whole row; ConPTY repaints with the cursor on the last column
+    const cols = PROMPT.length + 2
+    const { write, state } = setup('claude', cols)
+    const screen = text => '\x1b[?2004h\x1b[2J\x1b[H' + '─'.repeat(cols - 4) + '\r\n> ' + text
+    state.ids.push('first')
+    wake.writeOutput(screen(''))
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste]]))
+    wake.writeOutput(screen(PROMPT) + `\x1b[2;${cols}H`)
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r']]))
+  })
+
+  it('does not take a cursor before the last character of a shorter line for the end', async () => {
+    const { write, state } = setup('claude', 100)
+    state.ids.push('first')
+    wake.writeOutput(claudeDraft(''))
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste]]))
+    // The cursor one cell back, inside the line: not ours to enter
+    wake.writeOutput(claudeDraft(PROMPT) + `\x1b[2;${PROMPT.length + 2}H`)
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(write.mock.calls).toEqual([[paste]])
   })
 
   it('wakes Claude when it paints its composer cursor and leaves the terminal cursor in the footer', async () => {
@@ -173,7 +196,7 @@ describe('wake an idle agent with unread messages', () => {
     await vi.waitFor(() => expect(write).toHaveBeenCalledWith(busyPaste))
     wake.writeOutput(claudeDraft(BUSY_PROMPT))
     await vi.waitFor(() => expect(write).toHaveBeenCalledWith('\r'))
-    // It read the message (no longer unread) and sent a receipt, but has not answered yet
+    // It read the message (no longer unread), but has not answered yet
     state.ids = []
     await new Promise(resolve => setTimeout(resolve, 1600))
     state.busy = false
@@ -303,6 +326,38 @@ describe('a line sent from the chat view (submitText)', () => {
   it('leaves a draft the user is writing alone', async () => {
     const { rawWrite } = chatSetup()
     wake.writeOutput(claudeDraft('쓰던 글'))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await expect(wake.submitText('새 글')).resolves.toEqual({ ok: false, reason: 'composer-not-empty' })
+    expect(rawWrite).not.toHaveBeenCalled()
+  })
+
+  it('takes no chat line while a model / effort picker is open, and shows its screen as lines', async () => {
+    const { rawWrite } = chatSetup()
+    wake.writeOutput(claudeDraft(''))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    wake.setHeld(true)
+    await expect(wake.submitText('보낼 글')).resolves.toEqual({ ok: false, reason: 'busy' })
+    expect(rawWrite).not.toHaveBeenCalled()
+    expect(wake.screenLines().some(line => line.startsWith('> '))).toBe(true)
+    wake.setHeld(false)
+  })
+
+  it('finds Claude\'s composer out of focus (no cursor drawn, terminal cursor in the footer)', async () => {
+    const { rawWrite } = chatSetup()
+    // Rules around a one-row composer, the terminal cursor parked on the footer, nothing in inverse
+    const unfocused = text => '\x1b[?2004h\x1b[2J\x1b[20;1H' + '─'.repeat(70) + '\r\n❯ ' + text + '\r\n' + '─'.repeat(70) + '\r\n  ⏵⏵ auto mode on'
+    wake.writeOutput(unfocused('Try "fix lint errors"'))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const sent = wake.submitText('보낼 글')
+    await vi.waitFor(() => expect(rawWrite).toHaveBeenCalledWith('\x1b[200~보낼 글\x1b[201~'))
+    wake.writeOutput(unfocused('보낼 글'))
+    await expect(sent).resolves.toEqual({ ok: true })
+    expect(rawWrite).toHaveBeenLastCalledWith('\r')
+  })
+
+  it('takes a draft in an out-of-focus Claude composer for a draft', async () => {
+    const { rawWrite } = chatSetup()
+    wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[20;1H' + '─'.repeat(70) + '\r\n❯ 쓰던 글\r\n' + '─'.repeat(70) + '\r\n  ⏵⏵ auto mode on')
     await new Promise(resolve => setTimeout(resolve, 20))
     await expect(wake.submitText('새 글')).resolves.toEqual({ ok: false, reason: 'composer-not-empty' })
     expect(rawWrite).not.toHaveBeenCalled()

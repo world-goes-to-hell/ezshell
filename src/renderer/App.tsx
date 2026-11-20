@@ -10,6 +10,7 @@ import { TitleBar } from './components/TitleBar/TitleBar'
 import { TerminalPanel } from './components/Terminal/TerminalPanel'
 import { SplitPaneTabBar } from './components/Terminal/SplitPaneTabBar'
 import { TerminalWindow } from './components/Terminal/TerminalWindow'
+import { TerminalWebLinkMenu } from './components/Terminal/TerminalWebLinkMenu'
 import { SftpPanel } from './components/Sftp/SftpPanel'
 import { SftpWindow } from './components/Sftp/SftpWindow'
 import { ConnectModal, ConnectionConfig, DEFAULT_CONFIG } from './components/Modal/ConnectModal'
@@ -56,7 +57,7 @@ import { TabContextMenu } from './components/Terminal/TabContextMenu'
 import { TabRenameDialog } from './components/Terminal/TabRenameDialog'
 import { DUPLICATE_TAB_EVENT, OPEN_SNIPPET_MANAGER_EVENT } from './components/Terminal/useTerminalContextMenu'
 import { RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './lib/agentHistory'
-import { adoptOrphanLocalShells } from './lib/localShellAdopt'
+import { adoptOrphanLocalShells, rememberLocalLayout } from './lib/localShellAdopt'
 import { TAB_DROP_TAKEN_EVENT } from './lib/localProjectServers'
 import { WorkspacePanel } from './components/Workspace/WorkspacePanel'
 import { SnippetManager } from './components/Snippets/SnippetManager'
@@ -79,8 +80,9 @@ import { captureTabFlightSource, flyToTab } from './lib/animation/sessionTabFlig
 import { ConfirmDialogHost } from './components/Modal/ConfirmDialogHost'
 import { HostKeyDialog } from './components/Modal/HostKeyDialog'
 import { useSessionLogStore } from './stores/sessionLogStore'
-import { useAgentChatStore } from './stores/agentChatStore'
+import { isChatShown, useAgentChatStore } from './stores/agentChatStore'
 import { useSessionLogFeed } from './hooks/useSessionLogFeed'
+import { useBrowserTabTitles } from './hooks/useBrowserTabTitles'
 import { openSessionLogFolder, toggleSessionLog } from './lib/sessionLogActions'
 import './styles/sessionLog.css'
 import { McpActivityWindow } from './components/Mcp/McpActivityWindow'
@@ -198,6 +200,7 @@ function App() {
           title={windowParams.title}
         />
         <WindowZoom kind="terminal" />
+        <TerminalWebLinkMenu />
         <ToastContainer />
         <ConfirmDialogHost />
       </>
@@ -235,6 +238,8 @@ function App() {
 
   // Tabs whose terminal output is being written to a log file
   useSessionLogFeed()
+  // Browser tabs take the name of the page they show
+  useBrowserTabTitles()
   const sessionLogFiles = useSessionLogStore(state => state.files)
 
   // Tab drag state
@@ -251,26 +256,33 @@ function App() {
       sftpPathOf: tabId => sftp.isOpen(tabId) ? sftp.remotePath(tabId) : null,
       detached: Array.from(detachedTabsRef.current.values()),
       // The agent sessions in a local tab's panes, so a restart can resume them (lib/restoreAgents.ts)
-      agentsOf: tabId => agentsOfLocalTab(tabId, terminals.get(tabId), useAgentUsageStore.getState().byShell, agentKindsByShell())
+      agentsOf: tabId => agentsOfLocalTab(tabId, terminals.get(tabId), useAgentUsageStore.getState().byShell, agentKindsByShell(), isChatShown)
     }
   }, [])
   const [splitPaneDraggingTabId, setSplitPaneDraggingTabId] = useState<string | null>(null)
   // A tab dragged onto a pane of another tab of the same session becomes a pane of that tab.
   // From the single tab strip the edges of the terminal area mean "split the screen" (drop zones below).
-  const mergeDropTaken = useRef(false)
+  const tabDropTaken = useRef(false)
   // The edge bands belong to the screen split, never to merging into a pane: at four screens (or the other
   // direction) a drop there is refused with the reason instead of merging (that merge was the complaint)
-  const mergeHover = useTabDropOnPane(draggingTabId ?? splitPaneDraggingTabId, draggingTabId !== null || splitPaneDraggingTabId !== null, mergeDropTaken)
+  const tabDropHover = useTabDropOnPane(draggingTabId ?? splitPaneDraggingTabId, draggingTabId !== null || splitPaneDraggingTabId !== null, tabDropTaken)
+  const mergeHover = tabDropHover?.kind === 'merge' ? tabDropHover : null
   // A tab dropped in an edge band where no screen can be added: why (shown when the drag ends)
   const screenRefusal = useRef<string | null>(null)
+  const overTabStrip = tabDropHover?.kind === 'order' || mergeHover?.onTab === true
+  useEffect(() => {
+    if (!overTabStrip) return
+    setDropZone(null)
+    screenRefusal.current = null
+  }, [overTabStrip])
   // A past session dragged from the agent history panel onto a tab strip or a local terminal pane
   const agentDropHover = useAgentSessionDrop()
   // A tab dropped on a local project in the sidebar (linked as its server) stays where it is
   useEffect(() => {
-    const onTaken = () => { mergeDropTaken.current = true }
+    const onTaken = () => { tabDropTaken.current = true }
     // The tab's own dragend (handleTabDragEnd) has read the mark by now; a drag from the split view's
     // tab strip does not clear it, and a leftover mark would swallow the next drag
-    const onDragEnd = () => { setTimeout(() => { mergeDropTaken.current = false }) }
+    const onDragEnd = () => { setTimeout(() => { tabDropTaken.current = false }) }
     window.addEventListener(TAB_DROP_TAKEN_EVENT, onTaken)
     window.addEventListener('dragend', onDragEnd)
     return () => {
@@ -850,6 +862,21 @@ function App() {
     return result.id
   }
 
+  const addBrowserTab = useCallback((id: string, pane?: number) => {
+    const store = useTerminalStore.getState()
+    const targetPane = pane ?? store.layout.activePane ?? 0
+    store.addTerminal(id, {
+      id, host: '', username: '', connected: true, title: '브라우저',
+      browser: { group: groupView.activeGroup }
+    })
+    if (targetPane > 0 && store.layout.panes[targetPane]) {
+      store.moveTerminalBetweenPanes(id, 0, targetPane)
+      store.focusTerminal(id)
+    }
+  }, [groupView.activeGroup])
+
+  useEffect(() => window.electronAPI.onBrowserReviewLinkOpened(id => addBrowserTab(id)), [addBrowserTab])
+
   const handleOpenBrowser = async (pane?: number) => {
     try {
       const result = await window.electronAPI.browserReviewOpen()
@@ -857,16 +884,7 @@ function App() {
         toast.error('브라우저 열기', result.error)
         return
       }
-      const store = useTerminalStore.getState()
-      const targetPane = pane ?? store.layout.activePane ?? 0
-      store.addTerminal(result.id, {
-        id: result.id, host: '', username: '', connected: true, title: '브라우저',
-        browser: { group: groupView.activeGroup }
-      })
-      if (targetPane > 0 && store.layout.panes[targetPane]) {
-        store.moveTerminalBetweenPanes(result.id, 0, targetPane)
-        store.focusTerminal(result.id)
-      }
+      addBrowserTab(result.id, pane)
     } catch {
       toast.error('브라우저 열기', '브라우저 탭을 열 수 없습니다.')
     }
@@ -896,6 +914,12 @@ function App() {
       offClose?.()
     }
   }, [readRestoreSource])
+
+  // The page going away (a reload included): which shell sits in which pane, for the page that comes next
+  useEffect(() => {
+    window.addEventListener('pagehide', rememberLocalLayout)
+    return () => window.removeEventListener('pagehide', rememberLocalLayout)
+  }, [])
 
   // Once, after the first unlock: local shells still running from before a window reload come back as tabs
   const orphanShellsCheckedRef = useRef(false)
@@ -1072,9 +1096,9 @@ function App() {
   }
 
   const handleTabDragEnd = async () => {
-    // Dropped on a pane or a tab to merge (or refused there): neither popped out nor split
-    if (mergeDropTaken.current) {
-      mergeDropTaken.current = false
+    // Another target handled this drop before dragend (strip, pane or sidebar project).
+    if (tabDropTaken.current) {
+      tabDropTaken.current = false
       setDraggingTabId(null)
       setDropZone(null)
       return
@@ -1172,8 +1196,8 @@ function App() {
     screenRefusal.current = null
     setSplitPaneDraggingTabId(null)
     setDropZone(null)
-    if (mergeDropTaken.current) {
-      mergeDropTaken.current = false
+    if (tabDropTaken.current) {
+      tabDropTaken.current = false
       return
     }
     if (refusal) {
@@ -1498,10 +1522,6 @@ function App() {
                               onPaneFocus={() => setActivePaneType(index)}
                               onTabDragStart={(id) => setSplitPaneDraggingTabId(id)}
                               onTabDragEnd={handleScreenTabDragEnd}
-                              onTabDrop={(terminalId) => {
-                                moveTerminalBetweenPanes(terminalId, 0, index)
-                                setSplitPaneDraggingTabId(null)
-                              }}
                               draggingTabId={splitPaneDraggingTabId}
                             />
                             <div className="split-pane-content">
@@ -1594,6 +1614,7 @@ function App() {
       <Footer />
       <McpApprovalDialog />
       <ConfirmDialogHost />
+      <TerminalWebLinkMenu />
       <HostKeyDialog />
 
       <ConnectModal
@@ -1698,7 +1719,8 @@ function App() {
             : agentDropHover.place?.side ? `여기에 놓으면 이 칸의 ${sideWord(agentDropHover.place.side)}에서 이어서 실행` : '여기에 놓으면 이 탭의 새 칸에서 이어서 실행')}</span>
         </div>
       )}
-      {mergeHover && (
+        {tabDropHover?.kind === 'order' && <div className="tab-order-marker" style={tabDropHover.box} aria-hidden="true" />}
+        {mergeHover && (
         <div className={`tab-merge-marker${mergeHover.blocked ? ' is-blocked' : ''}${mergeHover.onTab ? ' on-tab' : ''}`} style={mergeHover.box} role="status">
           <span>{mergeHover.blocked ?? (mergeHover.place?.isVacant ? '여기에 놓으면 이 빈 자리로 병합'
             : mergeHover.place?.side ? `여기에 놓으면 이 칸의 ${sideWord(mergeHover.place.side)}에 병합` : '여기에 놓으면 이 탭의 칸으로 병합')}</span>

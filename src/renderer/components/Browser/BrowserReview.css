@@ -69,11 +69,29 @@
   font: inherit;
 }
 
-.browser-review .browser-review-pick { border-color: var(--border-color); }
+.browser-review .browser-review-tools-toggle,
+.browser-review .browser-review-devtools,
+.browser-review .browser-review-pick {
+  flex: none;
+  width: 32px;
+  padding: 0;
+  border-color: var(--border-color);
+}
+
+.browser-review .browser-review-tools-toggle[aria-expanded="true"],
+.browser-review .browser-review-devtools[aria-pressed="true"],
 .browser-review .browser-review-pick[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--text-link);
   background: var(--accent-muted);
+}
+
+.browser-review .browser-review-tools-toggle:focus-visible,
+.browser-review .browser-review-devtools:focus-visible,
+.browser-review .browser-review-tool-toggle:focus-visible,
+.browser-review .browser-review-pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .browser-review-error {
@@ -86,9 +104,14 @@
 
 .browser-review-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(210px, 31%, 340px);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
+}
+
+.browser-review-workspace.has-tools {
+  grid-template-columns: minmax(0, 1fr) clamp(230px, 31%, 340px);
 }
 
 .browser-review-viewport {
@@ -110,18 +133,57 @@
 .browser-review-placeholder svg { font-size: 34px; }
 .browser-review-placeholder p { margin: 0; }
 
+.browser-review-tools {
+  min-width: 0;
+  min-height: 0;
+  padding: 10px;
+  overflow-y: auto;
+  border-inline-start: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.browser-review-tool {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.browser-review-tool + .browser-review-tool { margin-top: 6px; }
+
+.browser-review .browser-review-tool-toggle {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 0;
+  color: var(--text-primary);
+  text-align: start;
+  font-weight: 600;
+}
+
+.browser-review-tool-toggle[aria-expanded="true"] > svg:first-child { color: var(--accent); }
+
+.browser-review-tool-chevron {
+  margin-inline-start: auto;
+  color: var(--text-secondary);
+  transform: rotate(-90deg);
+}
+
+.browser-review-tool-toggle[aria-expanded="true"] .browser-review-tool-chevron { transform: rotate(0); }
+
 .browser-review-compose {
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  padding: 18px 16px;
-  overflow-y: auto;
-  border-left: 1px solid var(--border-color);
-  background: var(--bg-secondary);
+  padding: 10px;
+  border-top: 1px solid var(--border-color);
 }
 
-.browser-review-compose h1 { margin: 0 0 7px; font-size: 15px; font-weight: 650; }
+.browser-review-compose-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.browser-review-compose h1 { margin: 0; font-size: 13px; font-weight: 650; }
 .browser-review-compose label { margin-top: 8px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
 
 .browser-review-selection {
@@ -170,17 +232,20 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .browser-review-spinning { animation: browser-review-spin 1s linear infinite; }
+  .browser-review-tool-chevron { transition: transform var(--transition-fast); }
+  .browser-review-compose { animation: browser-review-tool-in 140ms ease-out both; }
 }
 
 @keyframes browser-review-spin { to { transform: rotate(360deg); } }
+@keyframes browser-review-tool-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
 
 @container (max-width: 520px) {
-  .browser-review-workspace {
+  .browser-review-workspace.has-tools {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) minmax(0, 42%);
+    grid-template-rows: minmax(0, 1fr) fit-content(42%);
   }
 
-  .browser-review-compose { border-left: 0; border-top: 1px solid var(--border-color); }
+  .browser-review-tools { border-inline-start: 0; border-top: 1px solid var(--border-color); }
   .browser-review-toolbar { gap: 4px; padding: 0 6px; }
   .browser-review-toolbar button { padding: 0 5px; }
 }

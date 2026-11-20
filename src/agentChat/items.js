@@ -38,6 +38,54 @@ function inputText(input) {
   try { return clip(JSON.stringify(input ?? {}, null, 2), LIMITS.input) } catch { return '' }
 }
 
+// MCP tools answer with JSON in one line: its texts' line breaks showed as \n and the card was a wall
+// of text (2026-11-20 user report). Shown instead as an indented outline, each text with its own lines.
+const MAX_OUTLINE_DEPTH = 16
+const isFilled = value => value !== null && typeof value === 'object' && Object.keys(value).length > 0
+const indent = lines => lines.map(line => (line ? '  ' + line : ''))
+
+function scalarText(value) {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value) && !value.length) return '[]'
+  if (value !== null && typeof value === 'object' && !Object.keys(value).length) return '{}'
+  try { return JSON.stringify(value) ?? String(value) } catch { return String(value) }
+}
+
+/** One entry: `key:` or `-` (a list item), then its value on the same line or indented below */
+function entryLines(label, value, depth) {
+  if (typeof value === 'string' && /[\r\n]/.test(value)) {
+    return [`${label} |`, ...indent(value.replace(/\r\n?/g, '\n').split('\n'))]
+  }
+  if (isFilled(value) && depth < MAX_OUTLINE_DEPTH) {
+    const inner = outlineLines(value, depth + 1)
+    return label === '-' ? [`- ${inner[0]}`, ...indent(inner.slice(1))] : [label, ...indent(inner)]
+  }
+  return [`${label} ${scalarText(value)}`]
+}
+
+function outlineLines(value, depth) {
+  return Array.isArray(value)
+    ? value.flatMap(entry => entryLines('-', entry, depth))
+    : Object.entries(value).flatMap(([key, entry]) => entryLines(`${key}:`, entry, depth))
+}
+
+/** A JSON value as indented lines (a filled object or list), or as one line */
+function readableValue(value) {
+  return isFilled(value) ? outlineLines(value, 0).join('\n') : scalarText(value)
+}
+
+/** An MCP answer: a whole JSON object or list becomes an outline, anything else stays as it is */
+function readableOutput(raw) {
+  const trimmed = typeof raw === 'string' ? raw.trim() : ''
+  if (!/^[[{]/.test(trimmed)) return raw
+  try {
+    const value = JSON.parse(trimmed)
+    return isFilled(value) ? readableValue(value) : raw
+  } catch {
+    return raw
+  }
+}
+
 /** Output blocks as text: a string, or [{ type: 'text' | 'input_text', text }] */
 function blocksText(content) {
   if (typeof content === 'string') return content
@@ -67,4 +115,4 @@ function todosOf(list, textKey, statusKey = 'status') {
   })
 }
 
-module.exports = { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, diffFromText, addedLines, clipLines, todosOf }
+module.exports = { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, diffFromText, addedLines, clipLines, todosOf, readableOutput, readableValue }

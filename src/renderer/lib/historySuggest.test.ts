@@ -39,6 +39,22 @@ describe('readTypedInput', () => {
     expect(readTypedInput(buffer(['$ systemctl restart'], 0, 6))).toBeNull()
   })
 
+  it('can ignore the dim italic tail of an inline PowerShell prediction', () => {
+    const row = '$ echo History'
+    const screen = buffer([row], 0, 8)
+    const line = screen.getLine(0)!
+    line.getCell = column => column < row.length ? {
+      getChars: () => row[column],
+      isItalic: () => Number(column >= 8),
+      isDim: () => Number(column >= 8)
+    } : undefined
+    screen.getLine = () => line
+    expect(readTypedInput(screen)).toBeNull()
+    expect(readTypedInput(screen, true)).toBe('echo H')
+    screen.cursorX = 7
+    expect(readTypedInput(screen, true)).toBeNull()
+  })
+
   it('is null for lines that are not commands: password prompts, continuation lines, no prompt', () => {
     expect(readTypedInput(buffer(['Password: abc'], 0, 13))).toBeNull()
     expect(readTypedInput(buffer(['> secret=1'], 0, 10))).toBeNull()

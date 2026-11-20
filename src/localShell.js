@@ -348,6 +348,44 @@ function createLocalShells({
       }
     });
     entry.inbox.setComposing(entry.composing);
+    // The model / effort picker of the usage line (agentPicker.js): keys only while the CLI's picker shows
+    const { createAgentPicker } = require('./ipc/agentPicker.js');
+    const inbox = entry.inbox;
+    entry.picker = createAgentPicker({
+      kind: entry.agent,
+      lines: () => (entry.inbox === inbox ? inbox.screenLines() : []),
+      appCursor: () => entry.inbox === inbox && inbox.applicationCursorKeys(),
+      submit: text => (entry.inbox === inbox ? inbox.submitText(text) : Promise.resolve({ ok: false, reason: 'not-agent' })),
+      hold: value => inbox.setHeld(value),
+      write(data) {
+        if (!hasAgent(entry) || entry.inbox !== inbox) return false;
+        try { entry.pty.write(data); return true; } catch { return false; }
+      }
+    });
+  }
+
+  /**
+   * Why the usage line's picker may not run now, or null. Only while the agent waits for input: a slash
+   * command mid-task or at a prompt would land in that task or answer the question.
+   */
+  function pickerRefusal(entry) {
+    if (!hasAgent(entry) || !entry.picker) return { ok: false, reason: 'not-agent' };
+    const status = agentStatus(entry);
+    if (status === 'blocked') return { ok: false, reason: 'approval' };
+    if (status === 'working' || status === 'starting') return { ok: false, reason: 'working' };
+    return null;
+  }
+
+  /**
+   * Development runs only (`electron .`): when the picker was not found on the screen main keeps of the
+   * agent, the console gets that screen and its size, to compare with what the pane shows (2026-11-20: a
+   * Codex picker on the pane but "no picker" in the app). Never in an installed app: the screen holds the conversation.
+   */
+  function tracePickerMiss(entry, result) {
+    if (!process.defaultApp || result?.ok || !['no-picker', 'changed'].includes(result?.reason)) return;
+    const screen = entry.inbox?.screenLines() ?? [];
+    console.warn(`[agentPicker] ${result.reason}: pty ${entry.cols}x${entry.rows}, screen ${screen.length} rows`);
+    console.warn(screen.map((row, index) => `${String(index).padStart(2)}|${row}`).join('\n'));
   }
 
   function releaseExternalAgent(entry) {
@@ -356,7 +394,7 @@ function createLocalShells({
     clearInterval(binding.timer);
     entry.inbox?.close();
     Object.assign(entry, {
-      agent: undefined, reportStatus: undefined, externalAgent: undefined, inbox: undefined,
+      agent: undefined, reportStatus: undefined, externalAgent: undefined, inbox: undefined, picker: undefined,
       codexInput: null, titleStatus: 'unknown', reportedStatus: null, oscTail: ''
     });
     return binding;
@@ -628,6 +666,27 @@ function createLocalShells({
       const entry = shells.get(id);
       if (!hasAgent(entry) || !entry.inbox) return { ok: false, reason: 'not-agent' };
       return entry.inbox.answerApproval(key, signature);
+    },
+    /** The usage line's picker (agentPicker.js): the whole list the CLI offers (first read, refresh) */
+    async pickerList(id, what) {
+      const entry = shells.get(id);
+      const refused = pickerRefusal(entry);
+      if (refused) return refused;
+      const result = await entry.picker.list(what);
+      tracePickerMiss(entry, result);
+      return result;
+    },
+    /** Applies the choice of that name; `options` back when the whole fresh list was read */
+    async pickerApply(id, what, label) {
+      const entry = shells.get(id);
+      const refused = pickerRefusal(entry);
+      if (refused) return refused;
+      const result = await entry.picker.apply(what, label);
+      tracePickerMiss(entry, result);
+      // The usage line shows the new model / effort at once (Codex reports it only with its next turn)
+      if (result.ok && result.applied) agents?.applyPicked?.(id, result.applied);
+      const { applied, ...answer } = result;
+      return answer;
     },
     /** Esc: stops the agent's current turn */
     interruptAgent(id) {

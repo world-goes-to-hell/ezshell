@@ -1,11 +1,11 @@
 const { Terminal } = require('@xterm/headless')
 
-// The line pasted into the agent's composer. Each asks for an immediate receipt (send_receipt), so the
-// sender hears back at once; the result follows with reply_to_message.
-const PROMPT = 'New ezShell message: read it with read_inbox, confirm it now with send_receipt, then handle it.'
-// While it works: Claude Code hands a line entered during a task to that task, so it can confirm
-// without stopping and say what it finishes first
-const BUSY_PROMPT = 'New ezShell message while you are busy: read it with read_inbox and confirm it now with send_receipt, saying what you will finish first; handle it after your current task.'
+// The line pasted into the agent's composer. Reading the message is what the sender sees (check_sent:
+// "read"); the result follows with reply_to_message. Receipts (send_receipt) were removed on 2026-11-20.
+const PROMPT = 'New ezShell message: read it with read_inbox, then handle it.'
+// While it works: Claude Code hands a line entered during a task to that task, so it reads the message
+// without stopping (the sender sees it read) and handles it afterwards
+const BUSY_PROMPT = 'New ezShell message while you are busy: read it now with read_inbox; handle it after your current task.'
 // After that task, when the request it put off is still unanswered
 const REMIND_PROMPT = 'Your task is done: handle the ezShell request you put off, then send the result with reply_to_message.'
 const PROMPTS = { idle: PROMPT, busy: BUSY_PROMPT, remind: REMIND_PROMPT }
@@ -19,6 +19,8 @@ const QUIET_MS = 1500
 const submitKey = data => /^(?:\r|\n|\x1b\[13(?:;1)?u)$/.test(data)
 const compact = text => text.replace(/\s/g, '')
 const claudeRule = /^\s*─{8,}\s*$/u
+// The hint an empty Claude composer shows: Try "fix lint errors"
+const CLAUDE_PLACEHOLDER = /^Try ".*"$/
 // A numbered choice of a prompt: "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"
 const APPROVAL_OPTION = /^\s*([❯›>▶])?\s*([1-9])[.)]\s+(\S.*?)\s*$/u
 // After the number key, the CLI either answers at once or only moves its selection there
@@ -43,6 +45,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   let lastOutputAt = Date.now()
   let userDraft = false
   let composing = false
+  // A model / effort picker is open (agentPicker.js): no wake line and no chat line meanwhile
+  let held = false
   let holdUntil = 0
   const prompt = kind === 'codex' ? /^\s*›[ \u00a0]/u : /^\s*[>❯][ \u00a0]/u
 
@@ -69,7 +73,15 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
           painted = { row, x }
         }
       }
-      if (!painted) return null
+      if (!painted) {
+        // No cursor painted either: Claude out of focus (the chat view or the usage menu has the keyboard)
+        // draws its composer without one. A one-row composer between its rules that holds nothing but the
+        // placeholder ("Try …") is empty; one with text is a draft, never taken for empty.
+        if (bottom - first !== 1) return null
+        const typed = input[0].trim()
+        const empty = !typed || CLAUDE_PLACEHOLDER.test(typed)
+        return { atStart: empty, endsAtCursor: true, text: empty ? '' : compact(typed) }
+      }
       const text = compact(input.join(''))
       const afterCursor = line(painted.row).slice(painted.x) + input.slice(painted.row - first + 1).join('')
       return {
@@ -100,7 +112,12 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       if (kind === 'claude' && lines.some(line => claudeRule.test(line))) continue
       // The empty prompt can have placeholder text to the right of the cursor.
       const atStart = index === cursor && buffer.cursorX === prefix[0].length
-      const endsAtCursor = line(cursor).slice(buffer.cursorX).trim() === ''
+      const afterCursor = line(cursor).slice(buffer.cursorX)
+      // Text that fills the row to its last column: Windows ConPTY cannot leave the cursor past the
+      // last column, so when it repaints it puts the cursor on the last cell, as if before the last
+      // character (a busy line of exactly the pane's width was never entered)
+      const fillsRow = buffer.cursorX === screen.cols - 1 && afterCursor.length === 1 && afterCursor !== ' '
+      const endsAtCursor = afterCursor.trim() === '' || fillsRow
       return { atStart, endsAtCursor, text: compact([tail, ...lines].join('')) }
     }
     return kind === 'claude' ? paintedClaudeComposer(buffer, line, maxInputRows) : null
@@ -119,7 +136,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
    * question, the lines that describe it (the command, the file) and the choices, as on screen.
    */
   function approvalPrompt() {
-    if (stopped || chat || stage || composer()) return null
+    // Not while a model / effort picker is open: main is answering that one itself (agentPicker.js)
+    if (stopped || chat || stage || held || composer()) return null
     const { active: buffer } = screen.buffer
     // The screen as lines: a row the terminal wrapped (a long choice in a narrow pane) joins the one before
     const raws = []
@@ -212,7 +230,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   function advance() {
-    if (stopped || composing || chat) return
+    if (stopped || composing || held || chat) return
     const now = Date.now()
     // State never reported: waiting for input when the screen has been still (the composer check follows)
     const quietFor = now - lastOutputAt
@@ -320,7 +338,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     submitText(text) {
       return new Promise(resolve => {
         if (stopped) return resolve({ ok: false, reason: 'not-agent' })
-        if (chat || stage || composing) return resolve({ ok: false, reason: 'busy' })
+        if (chat || stage || composing || held) return resolve({ ok: false, reason: 'busy' })
         const length = text.length
         const lines = text.split('\n').length
         const input = composer(length, lines)
@@ -356,6 +374,19 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       }
       if (!value) schedule()
     },
+    /** While a model / effort picker is open: no wake line, no chat line */
+    setHeld(value) {
+      held = value
+      if (!value) schedule()
+    },
+    /** The visible screen, one string per row (agentPicker.js reads the CLI's pickers from it) */
+    screenLines() {
+      if (stopped) return []
+      const { active: buffer } = screen.buffer
+      return Array.from({ length: screen.rows }, (_, row) => buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? '')
+    },
+    /** The CLI asked for application cursor keys (arrows as ESC O A) */
+    applicationCursorKeys: () => !stopped && screen.modes.applicationCursorKeysMode,
     resize(cols, rows) { screen.resize(cols, rows); schedule() },
     kick: schedule,
     close() {

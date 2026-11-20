@@ -118,7 +118,16 @@ async function run() {
         for (const record of records) for (const node of record.addedNodes) {
           if (node instanceof HTMLElement && node.matches('.agent-delivery-notice')) window.deliveriesSeen++
         }
-      }).observe(document.querySelector('.agent-delivery-status'), { childList: true })`)
+      }).observe(document.querySelector('.agent-delivery-status'), { childList: true })
+      // The message flying from the sender to the receiver before the card shows
+      window.flights = []
+      new MutationObserver(records => {
+        for (const record of records) for (const node of record.addedNodes) {
+          if (node instanceof HTMLElement && node.matches('.agent-message-flight')) {
+            window.flights.push({ icon: node.querySelector('.agent-message-provider')?.dataset.kind ?? null, cardShown: !!document.querySelector('.agent-delivery-notice') })
+          }
+        }
+      }).observe(document.body, { childList: true })`)
     const noticeAt = (target, route) => until(`(() => {
       const notice = document.querySelector('.agent-delivery-notice')
       const anchor = ${target}
@@ -131,6 +140,9 @@ async function run() {
     const request = await cli('codex-1', 'message send --to claude-2 --text review-please --request-id review-1')
     const claudeMail = 'document.querySelector(\'[aria-label="claude-2 메시지함"]\')'
     check('the arrival is shown beside the receiver with the sender and recipient', await noticeAt(claudeMail, 'codex-1 → claude-2'))
+    check('first the message flies from the sender, with the sender\'s icon, before the card', await js(`window.flights.length === 1 && window.flights[0].icon === 'codex' && !window.flights[0].cardShown`), JSON.stringify(await js('window.flights')))
+    check('the card shows each agent\'s icon beside its name', await js(`[...document.querySelectorAll('.agent-delivery-notice strong .agent-message-provider')].map(icon => icon.dataset.kind).join(',') === 'codex,claude'`))
+    check('the flying message is gone once it landed', await until(`!document.querySelector('.agent-message-flight')`, 2000))
     check('the receiver has an unread mailbox and tab badge', await until(`
       ${claudeMail}?.dataset.unread === 'true' &&
       document.querySelector('.terminal-tab[data-tab-id="' + ${claudeMail}?.closest('[data-local-tab-id]')?.dataset.localTabId + '"] .agent-tab-mail')?.textContent === '1'
@@ -144,6 +156,7 @@ async function run() {
     const reply = await cli('claude-2', `message reply --reply-to ${request.id} --text looks-good`)
     const codexBadge = `[...document.querySelectorAll('.terminal-tab')].find(tab => tab.dataset.tabId === ${paneTab('codex-1')})?.querySelector('.agent-tab-mail')`
     check('the reply appears alongside the inactive Codex tab with reduced motion enabled', await noticeAt(codexBadge, 'claude-2 → codex-1'))
+    check('with reduced motion nothing flies', await js('window.flights.length === 1'), JSON.stringify(await js('window.flights')))
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
     const result = await cli('codex-1', 'message inbox --unread')
     check('Codex receives a reply linked to the original message', result.messages.some(message => message.id === reply.id && message.replyTo === request.id && message.text === 'looks-good'))
@@ -264,9 +277,13 @@ async function run() {
     check('the busy notice does not start a new turn', (Number(read('claude-2-wakes')) || 0) === beforeWake)
     const pending = await mcp('claude-2', 'read_inbox')
     check('the busy agent can read the new task by MCP', pending.messages.some(message => message.id === task.id && message.text === 'review-next'))
-    await mcp('claude-2', 'send_receipt', { message_id: task.id, text: '지금 작업을 마치고 이어서 하겠습니다' })
-    const receipt = (await mcp('codex-1', 'read_inbox')).messages.find(message => message.replyTo === task.id)
-    check('the sender gets the receipt marked as one', receipt?.receipt === true && receipt.text === '지금 작업을 마치고 이어서 하겠습니다')
+    // No receipt (removed 2026-11-20): the sender sees the task read, not yet answered
+    const sent = (await mcp('codex-1', 'check_sent', { message_ids: [task.id] })).messages?.[0]
+    check('the sender sees its task read but not answered', sent?.status === 'read' && typeof sent.readAt === 'number', JSON.stringify(sent))
+    await js(`document.querySelector('[aria-label="claude-2 메시지함"]').click()`)
+    check('the messages panel marks the task 읽음 (read, not answered yet)', await until(`[...document.querySelectorAll('.agent-thread-message')].some(m => m.textContent.includes('review-next') && m.querySelector('.agent-read-state')?.textContent === '읽음')`))
+    await js(`document.querySelector('.agent-messages-dialog .modal-actions button').click()`)
+    await until(`!document.querySelector('.agent-messages-dialog')`)
     fs.writeFileSync(file('claude-2-title'), '✳ Claude')
     check('the put-off task is reminded once Claude is idle again', await waitFor(() => Number(read('claude-2-wakes')) === beforeWake + 1))
     // Done without a reply message, so the Codex wake count below is not raced by one
@@ -397,30 +414,47 @@ async function run() {
 
     const dialog = `document.querySelector('.agent-messages-dialog')`
     const filter = `document.querySelector('#agent-messages-session')`
+    const filterValue = `${filter}?.querySelector('.select-menu-value').textContent`
+    const filterOptions = `[...document.querySelectorAll('.select-menu-content [role="menuitemradio"]')]`
     const messageTexts = `[...document.querySelectorAll('.agent-thread-message p')].map(row => row.textContent)`
-    const chooseAgent = id => js(`(() => {
-      const select = ${filter}
-      select.value = ${JSON.stringify(id)}
-      select.dispatchEvent(new Event('change', { bubbles: true }))
-    })()`)
+    const openFilter = async () => {
+      if (!(await js(`${filter}?.getAttribute('aria-expanded') === 'true'`))) await driver.click(...await driver.center(filter))
+      if (!(await until(`${filterOptions}.length > 0`))) throw new Error('the agent filter did not open')
+    }
+    const chooseAgent = async label => {
+      await openFilter()
+      const option = await driver.center(`${filterOptions}.find(item => item.querySelector('.select-menu-item-label').textContent === ${JSON.stringify(label)})`)
+      if (!option) throw new Error(`missing agent filter option ${label}`)
+      await driver.click(...option)
+      await until(`${filterValue} === ${JSON.stringify(label)}`)
+    }
     const closeMessages = () => js(`${dialog}.querySelector('.modal-actions button').click()`)
     await mcp('codex-1', 'send_message', { to: 'user', text: 'note-for-user' })
     await js(`document.querySelector('[aria-label="codex-1 메시지함"]').click()`)
     check('the pane inbox opens the selected agent’s read-only messages', await until(`
-      ${filter}?.value === 'codex-1' && ${messageTexts}.includes('note-for-user') &&
+      ${filterValue} === 'codex-1' && ${filter}.querySelector('.agent-message-provider')?.dataset.kind === 'codex' &&
+      ${messageTexts}.includes('note-for-user') &&
       ${dialog}.getBoundingClientRect().width >= 500 &&
       !${dialog}.querySelector('textarea, form') &&
-      [...${dialog}.querySelectorAll('button')].every(button => button.textContent.trim() === '닫기') &&
+      [...${dialog}.querySelectorAll('button')].every(button => button === ${filter} || button.textContent.trim() === '닫기') &&
       typeof window.electronAPI.agentMessageSend === 'undefined'
     `))
-    await chooseAgent('all')
+    await openFilter()
+    check('the agent filter has icons beside active and ended agents', await js(`
+      ${filterOptions}.some(item => item.textContent.trim() === 'codex-1' && item.querySelector('.agent-message-provider')?.dataset.kind === 'codex') &&
+      ${filterOptions}.some(item => item.textContent.trim() === 'claude-2 (종료)' && item.querySelector('.agent-message-provider')?.dataset.kind === 'claude')
+    `))
+    await chooseAgent('전체')
     check('all combines the local work’s conversations and keeps closed agents’ messages', await until(`
-      ${filter}.selectedOptions[0].textContent === '전체' &&
-      ${filter}.querySelector('option[value="claude-2"]').textContent.includes('종료') &&
+      ${filterValue} === '전체' &&
       ['review-please', 'looks-good', 'hello-manual-claude', 'hello-codex'].every(text => ${messageTexts}.includes(text)) &&
       !${messageTexts}.includes('note-for-user') && !${messageTexts}.includes('hello-manual-codex')
     `))
-    await chooseAgent('claude-2')
+    check('the conversation identifies the sender and recipient by their respective icons', await js(`(() => {
+      const message = [...${dialog}.querySelectorAll('.agent-thread-message')].find(row => row.querySelector('p').textContent === 'review-please')
+      return [...(message?.querySelectorAll('.agent-message-route .agent-message-provider') ?? [])].map(icon => icon.dataset.kind).join(',') === 'codex,claude'
+    })()`))
+    await chooseAgent('claude-2 (종료)')
     check('choosing an agent filters the log to its conversation', await until(`
       ${messageTexts}.includes('review-please') && !${messageTexts}.includes('hello-manual-claude')
     `))
@@ -438,11 +472,14 @@ async function run() {
     }
     await js(`document.querySelector('[aria-label="claude-7 메시지함"]').click()`)
     await until(`!!${filter}`)
-    await chooseAgent('all')
+    await openFilter()
+    check('the second project only offers its agents in the filter', await js(`
+      ${filterOptions}.map(option => option.querySelector('.select-menu-item-label').textContent).join(',') === '전체,codex-6,claude-7'
+    `))
+    await chooseAgent('전체')
     await mcp('codex-6', 'send_message', { to: 'claude-7', text: 'other-workspace-message' })
     check('the second project’s open log receives its own messages only', await until(`
       ${dialog}.querySelector('.agent-message-workspace').textContent === 'other workspace' &&
-      [...${filter}.options].map(option => option.value).join(',') === 'all,codex-6,claude-7' &&
       ${messageTexts}.join(',') === 'other-workspace-message'
     `))
     await driver.shot('local-agent-messages-workspace')
@@ -455,7 +492,7 @@ async function run() {
     if (!(await until(`!!${messagesCommand}`))) throw new Error('missing agent messages command')
     await js(`${messagesCommand}.click()`)
     check('the command palette opens all messages for the current project', await until(`
-      ${filter}?.value === 'all' && ${dialog}.querySelector('.agent-message-workspace').textContent === 'workspace (2)' &&
+      ${filterValue} === '전체' && ${dialog}.querySelector('.agent-message-workspace').textContent === 'workspace (2)' &&
       ${messageTexts}.includes('review-please') && !${messageTexts}.includes('other-workspace-message')
     `))
   } finally {

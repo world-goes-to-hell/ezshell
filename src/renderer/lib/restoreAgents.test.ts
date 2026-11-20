@@ -17,6 +17,15 @@ describe('agentsOfPanes', () => {
     ])
   })
 
+  it('marks the panes that show their agent as a chat', () => {
+    const shells: Record<string, string> = { main: 'local:1', 'split-1': 'local:2' }
+    const byShell = new Map([['local:1', usage('codex', CODEX)], ['local:2', usage('claude', null)]])
+    expect(agentsOfPanes(['main', 'split-1'], pane => shells[pane], byShell, new Map(), shell => shell === 'local:2')).toEqual([
+      { pane: 'main', agent: 'codex', sessionId: CODEX },
+      { pane: 'split-1', agent: 'claude', chat: true }
+    ])
+  })
+
   it('takes the agent of a pane from the message list when it has not reported usage', () => {
     expect(agentsOfPanes(['main', 'split-1'], pane => (pane === 'main' ? 'local:1' : 'local:2'), new Map(), new Map([['local:1', 'claude' as const]])))
       .toEqual([{ pane: 'main', agent: 'claude' }])
@@ -28,6 +37,13 @@ describe('openLocalWithAgents', () => {
     { pane: 'main', agent: 'codex' as const, sessionId: CODEX },
     { pane: 'split-1', agent: 'claude' as const, sessionId: CLAUDE }
   ] }
+
+  it('queues the panes that were chats to open as chats again', async () => {
+    const queueChat = vi.fn()
+    const chats = { ...tab, agents: [{ ...tab.agents[0], chat: true as const }, tab.agents[1]] }
+    expect(await openLocalWithAgents(chats, vi.fn(async () => 'local:7'), vi.fn(), queueChat)).toBe('local:7')
+    expect(queueChat.mock.calls).toEqual([['local:7', 'main']])
+  })
 
   it('resumes the main pane and queues the other panes', async () => {
     const open = vi.fn(async () => 'local:7')

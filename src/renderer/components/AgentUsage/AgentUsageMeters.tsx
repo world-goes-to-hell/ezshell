@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
+import * as Tooltip from '@radix-ui/react-tooltip'
 import { RiBrainLine } from 'react-icons/ri'
 import { useAgentUsageStore } from '../../stores/agentUsageStore'
 import { timeLeft, usageLevel, usageSummary } from '../../lib/agentUsageView'
 import type { AgentUsage, AgentUsageWindow } from '../../types'
+import { AgentPickerMenu } from './AgentPickerMenu'
 import './AgentUsage.css'
 
 const TICK_MS = 30_000
+const DETAILS_DELAY_MS = 400
 
 /** Hears the main process's usage reports; mounted once (the status bar), draws nothing */
 export function AgentUsageFeed() {
@@ -45,26 +48,80 @@ function Meter({ label, value, now }: { label: string; value: AgentUsageWindow |
   )
 }
 
-/** Model · 5H · 7D · CTX, each a small bar with its percent (and the time left of a window) */
-export function AgentUsageMeters({ usage, now }: { usage: AgentUsage; now: number }) {
+function UsageDetails({ usage, model, now }: { usage: AgentUsage; model: string; now: number }) {
+  const metrics = [
+    { label: '5시간 사용량', value: usage.fiveHour },
+    { label: '7일 사용량', value: usage.sevenDay },
+    { label: '컨텍스트', value: usage.context }
+  ]
+  return (
+    <Tooltip.Portal>
+      <Tooltip.Content
+        className={`agent-usage-tooltip is-${usage.agent}`}
+        side="top"
+        align="start"
+        sideOffset={6}
+        collisionPadding={8}
+        aria-label={usageSummary(usage, now)}
+      >
+        <div className="agent-usage-tooltip-header">
+          <strong>{model}</strong>
+          {usage.effort && <span className="agent-usage-tooltip-effort">Effort <b>{usage.effort}</b></span>}
+        </div>
+        <dl className="agent-usage-tooltip-metrics">
+          {metrics.map(({ label, value }) => {
+            if (!value) return null
+            const left = 'resetsAt' in value ? timeLeft(value.resetsAt, now) : null
+            return (
+              <div key={label} className="agent-usage-tooltip-metric">
+                <dt>{label}</dt>
+                <dd className={`agent-usage-tooltip-value is-${usageLevel(value.percent)}`}>{value.percent}%</dd>
+                {left && <dd className="agent-usage-tooltip-reset">{left} 뒤 초기화</dd>}
+              </div>
+            )
+          })}
+        </dl>
+      </Tooltip.Content>
+    </Tooltip.Portal>
+  )
+}
+
+/**
+ * Model · 5H · 7D · CTX, each a small bar with its percent (and the time left of a window). With a shell,
+ * the model and the effort are buttons that change them (AgentPickerMenu).
+ */
+export function AgentUsageMeters({ usage, now, shellId }: { usage: AgentUsage; now: number; shellId?: string }) {
   const hasMeters = usage.fiveHour || usage.sevenDay || usage.context
+  const model = usage.model ?? (usage.agent === 'claude' ? 'Claude' : 'Codex')
+  const effort = usage.effort && (
+    <>
+      <RiBrainLine size={11} aria-hidden="true" />
+      <span>{usage.effort}</span>
+    </>
+  )
   return (
     <>
       <span className={`agent-usage-identity is-${usage.agent}`}>
-        <span className="agent-usage-model">{usage.model ?? (usage.agent === 'claude' ? 'Claude' : 'Codex')}</span>
-        {usage.effort && (
-          <span className="agent-usage-effort">
-            <RiBrainLine size={11} aria-hidden="true" />
-            <span>{usage.effort}</span>
-          </span>
-        )}
+        {shellId
+          ? <AgentPickerMenu shellId={shellId} what="model" kind={usage.agent} current={usage.model} model={usage.model} className="agent-usage-model">{model}</AgentPickerMenu>
+          : <span className="agent-usage-model">{model}</span>}
+        {effort && (shellId
+          ? <AgentPickerMenu shellId={shellId} what="effort" kind={usage.agent} current={usage.effort} model={usage.model} className="agent-usage-effort">{effort}</AgentPickerMenu>
+          : <span className="agent-usage-effort">{effort}</span>)}
       </span>
       {hasMeters && (
-        <span className="agent-usage-meters">
-          {usage.fiveHour && <Meter label="5H" value={usage.fiveHour} now={now} />}
-          {usage.sevenDay && <Meter label="7D" value={usage.sevenDay} now={now} />}
-          {usage.context && <Meter label="CTX" value={{ percent: usage.context.percent }} now={now} />}
-        </span>
+        <Tooltip.Provider delayDuration={DETAILS_DELAY_MS}>
+          <Tooltip.Root>
+            <Tooltip.Trigger asChild>
+              <span className="agent-usage-meters" tabIndex={0} role="group" aria-label="사용량 상세">
+                {usage.fiveHour && <Meter label="5H" value={usage.fiveHour} now={now} />}
+                {usage.sevenDay && <Meter label="7D" value={usage.sevenDay} now={now} />}
+                {usage.context && <Meter label="CTX" value={{ percent: usage.context.percent }} now={now} />}
+              </span>
+            </Tooltip.Trigger>
+            <UsageDetails usage={usage} model={model} now={now} />
+          </Tooltip.Root>
+        </Tooltip.Provider>
       )}
     </>
   )
@@ -77,8 +134,8 @@ export function AgentPaneUsage({ shellId }: { shellId: string | undefined }) {
   if (!usage) return null
   const summary = usageSummary(usage, now)
   return (
-    <div className="agent-pane-usage" title={summary} aria-label={summary} role="status">
-      <AgentUsageMeters usage={usage} now={now} />
+    <div className="agent-pane-usage" aria-label={summary} role="status">
+      <AgentUsageMeters usage={usage} now={now} shellId={shellId} />
     </div>
   )
 }

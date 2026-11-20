@@ -51,4 +51,14 @@ describe('Codex transcript lines to chat items', () => {
     })).items
     expect(item.tool).toMatchObject({ name: 'ezshell.read_inbox', summary: 'me', result: '없음' })
   })
+
+  it('shows an MCP call\'s JSON arguments and answer as outlines with the texts\' own lines', () => {
+    const answer = JSON.stringify({ messages: [{ id: 'c9f0', text: '수정 요청입니다.\n\n이거 뭔지 알아봐', read: false }] })
+    const [item] = createCodexParser().feed(completed({
+      type: 'McpToolCall', id: 'm2', server: 'ezshell', tool: 'send_message', arguments: { to: 'claude-1', text: '안녕\n반가워' },
+      status: 'completed', result: { content: [{ type: 'text', text: answer }] }
+    })).items
+    expect(item.tool.input).toBe('to: claude-1\ntext: |\n  안녕\n  반가워')
+    expect(item.tool.result).toBe('messages:\n  - id: c9f0\n    text: |\n      수정 요청입니다.\n\n      이거 뭔지 알아봐\n    read: false')
+  })
 })

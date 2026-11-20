@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { AgentChatApproval, AgentChatFrame, AgentChatItem, AgentChatState } from '../types'
-import { mergeChatItems } from '../lib/agentChatItems'
+import { MAX_CHAT_ITEMS, reconcileChatEchoes, type ChatEcho } from '../lib/agentChatItems'
 import { toast } from './toastStore'
 
 // Which local shells are shown as a chat (components/AgentChat) and what each chat shows. Keyed by the
@@ -12,6 +12,8 @@ export interface AgentChat {
   kind: 'claude' | 'codex' | null
   title: string | null
   items: AgentChatItem[]
+  echoes: ChatEcho[]
+  reply: { sendId: string; itemId: string } | null
   hasOlder: boolean
   loadingOlder: boolean
   error: string | null
@@ -25,21 +27,54 @@ interface AgentChatStoreState {
   hide: (shellId: string) => void
   toggle: (shellId: string) => void
   loadOlder: (shellId: string) => void
+  echoSend: (shellId: string, text: string, hasImage: boolean) => string
+  discardSend: (shellId: string, sendId: string) => void
+  stopWaiting: (shellId: string, sendId: string) => void
   applyFrame: (frame: AgentChatFrame) => void
   /** App locked: every view goes back to the terminal and its conversation is dropped */
   clearAll: () => void
 }
 
-const empty = (): AgentChat => ({ state: 'opening', kind: null, title: null, items: [], hasOlder: false, loadingOlder: false, error: null, approval: null })
+const empty = (): AgentChat => ({ state: 'opening', kind: null, title: null, items: [], echoes: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null })
 
 let stopFrames: (() => void) | null = null
+
+/**
+ * Lines sent from the chat that the transcript has not recorded yet, kept while the shell is shown as its
+ * terminal: Claude records a slash command only once it has finished (a /compact takes minutes), so a
+ * look at the terminal and back dropped the line the user had just sent (2026-11-20 user report).
+ */
+const KEPT_ECHO_MS = 30 * 60_000
+const keptEchoes = new Map<string, { echoes: ChatEcho[]; items: AgentChatItem[]; reply: AgentChat['reply']; at: number }>()
+
+function keepEchoes(shellId: string, chat: AgentChat) {
+  const ids = new Set(chat.echoes.map(echo => echo.id))
+  const items = chat.items.filter(item => ids.has(item.id))
+  if (!items.length) {
+    keptEchoes.delete(shellId)
+    return
+  }
+  // "답변 생성 중" goes with the line it waits on (the view clears it when the agent is idle again)
+  const reply = chat.reply && ids.has(chat.reply.sendId) ? chat.reply : null
+  keptEchoes.set(shellId, { echoes: chat.echoes.filter(echo => items.some(item => item.id === echo.id)), items, reply, at: Date.now() })
+}
+
+function takeEchoes(shellId: string): Pick<AgentChat, 'echoes' | 'items' | 'reply'> {
+  const kept = keptEchoes.get(shellId)
+  keptEchoes.delete(shellId)
+  return kept && Date.now() - kept.at < KEPT_ECHO_MS
+    ? { echoes: kept.echoes, items: kept.items, reply: kept.reply }
+    : { echoes: [], items: [], reply: null }
+}
 
 export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
   const update = (shellId: string, change: (chat: AgentChat) => AgentChat) => set((state) => {
     const chat = state.chats.get(shellId)
     if (!chat) return state
+    const changed = change(chat)
+    if (changed === chat) return state
     const next = new Map(state.chats)
-    next.set(shellId, change(chat))
+    next.set(shellId, changed)
     return { chats: next }
   })
 
@@ -49,7 +84,8 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
       if (get().chats.has(shellId)) return true
       stopFrames ??= window.electronAPI.onAgentChatFrame?.(frame => get().applyFrame(frame)) ?? null
       const next = new Map(get().chats)
-      next.set(shellId, empty())
+      // Lines sent before a look at the terminal come back until the transcript records them
+      next.set(shellId, { ...empty(), ...takeEchoes(shellId) })
       set({ chats: next })
       const result = await window.electronAPI.agentChatOpen?.(shellId)
       if (result?.ok) return true
@@ -59,7 +95,9 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
       return false
     },
     hide(shellId) {
-      if (!get().chats.has(shellId)) return
+      const chat = get().chats.get(shellId)
+      if (!chat) return
+      keepEchoes(shellId, chat)
       window.electronAPI.agentChatClose?.(shellId)
       const next = new Map(get().chats)
       next.delete(shellId)
@@ -77,8 +115,35 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
         update(shellId, current => ({ ...current, loadingOlder: false }))
       })
     },
+    echoSend(shellId, text, hasImage) {
+      const id = `outgoing:${crypto.randomUUID()}`
+      const time = Date.now()
+      const item: AgentChatItem = { id, kind: 'user', time, text: text || '스크린샷 첨부' }
+      update(shellId, chat => {
+        const items = [...chat.items, item].slice(-MAX_CHAT_ITEMS)
+        const droppedId = chat.items.length >= MAX_CHAT_ITEMS ? chat.items[0].id : null
+        return {
+          ...chat, items,
+          echoes: [...chat.echoes.filter(echo => echo.id !== droppedId), { id, text, hasImage, time }],
+          reply: { sendId: id, itemId: id }
+        }
+      })
+      return id
+    },
+    discardSend(shellId, sendId) {
+      update(shellId, chat => ({
+        ...chat,
+        items: chat.items.filter(item => item.id !== sendId),
+        echoes: chat.echoes.filter(echo => echo.id !== sendId),
+        reply: chat.reply?.sendId === sendId ? null : chat.reply
+      }))
+    },
+    stopWaiting(shellId, sendId) {
+      update(shellId, chat => chat.reply?.sendId === sendId ? { ...chat, reply: null } : chat)
+    },
     applyFrame(frame) {
       if (frame.gone) {
+        keptEchoes.delete(frame.shellId)
         if (!get().chats.has(frame.shellId)) return
         const next = new Map(get().chats)
         next.delete(frame.shellId)
@@ -87,18 +152,30 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
       }
       update(frame.shellId, (chat) => {
         const mode = frame.reset ? 'reset' : frame.older ? 'older' : 'append'
+        const messages = frame.items || frame.reset ? reconcileChatEchoes(chat.items, frame.items ?? [], mode, chat.echoes) : null
+        let reply = frame.state === 'ended' ? null : chat.reply
+        if (messages && reply) {
+          const itemId = messages.recorded.get(reply.itemId)?.id ?? reply.itemId
+          const at = messages.items.findIndex(item => item.id === itemId)
+          if (at === -1 || messages.items.slice(at + 1).some(item => item.kind === 'assistant')) reply = null
+          else if (itemId !== reply.itemId) reply = { ...reply, itemId }
+        }
         return {
           ...chat,
           state: frame.state ?? chat.state,
           kind: frame.kind ?? chat.kind,
           title: frame.title !== undefined ? frame.title : chat.title,
-          items: frame.items || frame.reset ? mergeChatItems(chat.items, frame.items ?? [], mode) : chat.items,
+          items: messages?.items ?? chat.items,
+          echoes: messages?.echoes ?? chat.echoes,
+          reply,
           hasOlder: frame.hasOlder ?? chat.hasOlder,
           approval: frame.approval !== undefined ? frame.approval : chat.approval
         }
       })
     },
     clearAll() {
+      // Locked: what the user sent goes with the conversation
+      keptEchoes.clear()
       for (const shellId of get().chats.keys()) window.electronAPI.agentChatClose?.(shellId)
       set({ chats: new Map() })
     }

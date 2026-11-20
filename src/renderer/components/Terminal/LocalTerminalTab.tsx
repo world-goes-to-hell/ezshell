@@ -3,17 +3,19 @@ import { throttle, REFIT_INTERVAL_MS } from '../../lib/throttle'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
-import { RiToolsLine, RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine, RiCloseLine, RiChat3Line } from 'react-icons/ri'
+import { RiToolsLine, RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine, RiCloseLine, RiChat3Line, RiHistoryLine } from 'react-icons/ri'
 import { useThemeStore } from '../../stores/themeStore'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { toast } from '../../stores/toastStore'
 import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
+import { createRightClickFilter } from '../../lib/rightClickReports'
 import { MAIN_PANE, MAX_PANES, singlePane, layoutOf, leafCount, paneIds, equalize, paneBox, type PaneId } from '../../lib/splitTree'
 import { closeTabPane } from '../../lib/paneToTab'
 import { ensureLocalPaneShell, getLocalPaneShellId, closeLocalPaneShells } from '../../lib/localPaneShells'
 import { TerminalContextMenu, MENU_SEPARATOR, type TerminalMenuGroup } from './TerminalContextMenu'
 import { commonTerminalItems } from './terminalMenuCommon'
 import { attachLogHighlight } from './terminalLogHighlight'
+import { attachTerminalWebLinks } from './terminalWebLinks'
 import { PaneArrival, SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
 import { AgentPaneMessages, useAgentMessagesStore } from './AgentMessages'
 import { agentNewlineFor } from '../../lib/agentNewline'
@@ -24,6 +26,9 @@ import { useShortcutsStore } from '../../stores/shortcutsStore'
 import { matchesBinding } from '../../lib/shortcutMatch'
 import { shortcutLabel } from '../../lib/shortcutModifiers'
 import { shellAgentOf } from '../../lib/agentChatItems'
+import { buildLocalInsertSequence } from '../../lib/commandCapture'
+import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory'
+import { CommandHistoryPanel } from './CommandHistoryPanel'
 import './LocalTerminalTab.css'
 
 /** Shows a shell as a chat when an agent runs in it; says why not otherwise */
@@ -75,6 +80,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const pasteRef = useRef<(() => void) | undefined>(undefined)
   const [exit, setExit] = useState<{ code: number | null } | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [showHistory, setShowHistory] = useState(false)
   const agentWork = useAgentMessagesStore(state => {
     const agent = state.snapshot.agents.find(item => item.shellId === shellId)
     if (!agent) return undefined
@@ -88,6 +94,16 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const splitTerminalPane = useTerminalStore(state => state.splitTerminalPane)
   const setSplitTree = useTerminalStore(state => state.setSplitTree)
   const tabName = tab?.title ?? '로컬 터미널'
+  const isPowerShell = /^win/i.test(navigator.platform)
+  const commandHistory = useTerminalCommandHistory(shellId, 'main', (data) => {
+    window.electronAPI.localShellWrite?.(shellId, data)
+  }, {
+    canUse: () => !exit && !isChat && !chatAgentOf(shellId),
+    allowInlinePrediction: isPowerShell,
+    insertSequence: (command, terminal) => terminal.buffer.active.type === 'normal'
+      ? buildLocalInsertSequence(command, terminal.buffer.active, isPowerShell)
+      : null
+  })
 
   const fit = (): void => {
     const terminal = terminalRef.current
@@ -119,14 +135,20 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     const addon = new FitAddon()
     terminal.loadAddon(addon)
     terminal.open(host)
+    attachTerminalWebLinks(terminal)
     terminalRef.current = terminal
     fitRef.current = addon
+    const detachCommandHistory = commandHistory.attach(terminal)
     const disableCopyOnSelect = enableCopyOnSelect(terminal)
     const logHighlight = attachLogHighlight(terminal)
 
     let isDisposed = false
     let deferredInput: string[] | null = null
     const write = (data: string) => window.electronAPI.localShellWrite?.(shellId, data)
+    const sendInput = (data: string) => {
+      commandHistory.handleData(data)
+      write(data)
+    }
     const startComposing = () => window.electronAPI.localShellComposing?.(shellId, true)
     const endComposing = () => window.electronAPI.localShellComposing?.(shellId, false)
     host.addEventListener('compositionstart', startComposing, true)
@@ -148,7 +170,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
         deferredInput = null
         if (!isDisposed) {
           if (text) terminal.paste(text)
-          queued.forEach(write)
+          queued.forEach(sendInput)
         }
       }
     }
@@ -195,9 +217,17 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
         }
         return false
       }
+      if (commandHistory.handleKeyEvent(event)) return false
       return true
     })
-    terminal.onData(data => { if (deferredInput) deferredInput.push(data); else write(data) })
+    // The right button opens the app's menu: not reported to the agent too (Codex pastes on it)
+    const withoutRightClick = createRightClickFilter()
+    terminal.onData((raw) => {
+      const data = withoutRightClick(raw)
+      if (!data) return
+      if (deferredInput) deferredInput.push(data)
+      else sendInput(data)
+    })
 
     // Output sent before the answer to `attach` is already part of that answer, so it is not drawn twice
     let isAttached = false
@@ -239,6 +269,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       refit.cancel()
       disableCopyOnSelect()
       logHighlight.dispose()
+      detachCommandHistory()
       terminal.dispose()
       terminalRef.current = null
       fitRef.current = null
@@ -283,6 +314,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     const chatKey = shortcutLabel(useShortcutsStore.getState().getEffectiveKeys('toggle-agent-chat'))
     top = [
       ...items.top,
+      { label: '명령어 기록', icon: RiHistoryLine, disabled: !!exit || !!chatAgent, onSelect: () => setShowHistory(true) },
       {
         label: chatAgent ? `채팅으로 보기 (${chatKey})` : '채팅으로 보기 (에이전트가 돌고 있지 않음)',
         icon: RiChat3Line,
@@ -344,9 +376,25 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     >
       <div className="local-terminal-stage">
         <div ref={hostRef} className="local-terminal-host" onContextMenu={onContextMenu} />
+        {showHistory && !exit && !isChat && !chatAgent && (
+          <CommandHistoryPanel
+            sessionId={shellId}
+            scopeLabel="로컬 셸"
+            onInsert={(command) => {
+              commandHistory.insert(command)
+              setShowHistory(false)
+            }}
+            onClose={() => {
+              setShowHistory(false)
+              terminalRef.current?.focus()
+            }}
+          />
+        )}
+        {!exit && !isChat && !chatAgent && commandHistory.popup}
         {isChat && (
           <AgentChatCover
             shellId={shellId}
+            tabId={tabId}
             onShowTerminal={() => {
               useAgentChatStore.getState().hide(shellId)
               window.setTimeout(() => terminalRef.current?.focus(), 0)

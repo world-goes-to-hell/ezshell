@@ -8,7 +8,7 @@ import { visibleTerminalId } from '../../lib/localTerminalPane'
 import { pathKey } from '../../lib/localWorkspaceTree'
 import { AgentHistoryDetail, type DetailState } from './AgentHistoryDetail'
 import { endAgentSessionDrag, startAgentSessionDrag } from '../../lib/agentSessionDrop'
-import { AGENT_PROVIDER_ICONS } from '../Sidebar/LocalSessionAgents'
+import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
 import './AgentHistory.css'
 
 const MINUTE = 60_000

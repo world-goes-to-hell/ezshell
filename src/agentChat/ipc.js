@@ -28,9 +28,18 @@ const REASONS = {
   changed: '화면의 질문이 바뀌었습니다. 새 질문을 보고 다시 골라 주세요.',
   'write-failed': '셸에 쓰지 못했습니다.'
 }
+// The usage line's model / effort picker (src/ipc/agentPicker.js)
+const PICKER_REASONS = {
+  ...REASONS,
+  working: '에이전트가 작업 중입니다. 작업이 끝난 뒤 다시 해 주세요.',
+  'no-picker': '에이전트의 선택 화면이 뜨지 않았습니다. 터미널 보기에서 확인해 주세요.',
+  changed: '선택 화면이 바뀌어 고르지 않았습니다. 다시 열어 주세요.',
+  stuck: '그 값으로 옮기지 못했습니다. 이 모델에서는 고를 수 없는 값일 수 있습니다.',
+  missing: '에이전트가 더 이상 그 항목을 보여 주지 않습니다. 목록을 새로 불러왔습니다.'
+}
 
 /**
- * links: { openExternal(url), showItemInFolder(path), openLocalFile(path) → { ok } | { ok, error } }
+ * links: { openExternal(url), openBrowserTab(url), showItemInFolder(path), openLocalFile(path) }
  */
 function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells, clipboard, links }) {
   const allowed = event => fromMainWindow(event) && !isLocked()
@@ -131,6 +140,30 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const result = await local.answerApproval(id, key, signature)
     return result.ok ? { ok: true } : { ok: false, reason: result.reason, error: REASONS[result.reason] ?? '답하지 못했습니다.' }
   })
+  // The model / effort under a local terminal: the window shows a remembered list and names a choice by its
+  // label; main opens the CLI's own picker, finds that label and presses the keys (each only while that
+  // picker shows). The list itself is read again on the menu's refresh.
+  const pickerResult = result => (result.ok ? result : { ok: false, reason: result.reason, error: PICKER_REASONS[result.reason] ?? '바꾸지 못했습니다.', ...(result.options ? { options: result.options } : {}) })
+  const pickerWhat = value => (value === 'model' || value === 'effort' ? value : null)
+  ipcMain.handle('agent-picker-list', async (event, request) => {
+    if (!allowed(event)) return locked
+    const id = shellIdOf(request?.shellId)
+    const what = pickerWhat(request?.what)
+    if (!id || !what) return { ok: false, error: '바꿀 수 없는 항목입니다.' }
+    const local = shells()
+    if (!local) return { ok: false, error: REASONS['not-agent'] }
+    return pickerResult(await local.pickerList(id, what))
+  })
+  ipcMain.handle('agent-picker-apply', async (event, request) => {
+    if (!allowed(event)) return locked
+    const id = shellIdOf(request?.shellId)
+    const what = pickerWhat(request?.what)
+    const label = typeof request?.label === 'string' && request.label.trim() && request.label.length <= 100 ? request.label : null
+    if (!id || !what || !label) return { ok: false, error: '고를 수 없는 항목입니다.' }
+    const local = shells()
+    if (!local) return { ok: false, error: REASONS['not-agent'] }
+    return pickerResult(await local.pickerApply(id, what, label))
+  })
   ipcMain.handle('agent-chat-interrupt', (event, shellId) => {
     const id = shellIdOf(shellId)
     return Boolean(allowed(event) && id && shells()?.interruptAgent(id))
@@ -142,9 +175,14 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (!allowed(event)) return locked
     const id = shellIdOf(request?.shellId)
     const how = request?.how
-    const target = linkTarget(request?.href)
+    // A relative link is read against the agent's folder, as when the answer was read (chats.js)
+    const target = id ? linkTarget(request?.href, process.platform, chats.cwdOf?.(id) ?? null) : null
     if (!id || !target || !chats.knowsLink(id, target.key)) return { ok: false, error: '대화에 나온 링크만 열 수 있습니다.' }
     if (target.kind === 'url') {
+      if (how === 'browser-tab' && links?.openBrowserTab) {
+        const result = links.openBrowserTab(target.url)
+        return result.success ? { ok: true } : { ok: false, error: result.error }
+      }
       if (how !== 'browser' || !links?.openExternal) return { ok: false, error: '열 수 없는 링크입니다.' }
       await links.openExternal(target.url)
       return { ok: true }
@@ -164,7 +202,8 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     }
     if (how === 'app' && links?.openLocalFile) {
       if (!stat.isFile()) return { ok: false, error: '폴더는 파일 탐색기에서 열어 주세요.' }
-      return links.openLocalFile(real)
+      // "README.md:187": the file opens at that line
+      return links.openLocalFile(real, target.line ?? null)
     }
     return { ok: false, error: '열 수 없는 링크입니다.' }
   })

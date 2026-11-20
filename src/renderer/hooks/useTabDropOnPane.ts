@@ -1,12 +1,13 @@
 import { useEffect, useState, type MutableRefObject } from 'react'
-import { useTerminalStore } from '../stores/terminalStore'
+import { useTerminalStore, type TabStripPosition } from '../stores/terminalStore'
 import { tabHost } from '../lib/tabHosts'
 import { MERGE_BLOCKED_TITLE, mergeBlock } from '../lib/tabMerge'
 import { mergeTabIntoPane, treeWithArrival, type MergePlace } from '../lib/tabToPane'
 import { toast } from '../stores/toastStore'
 import { halfOf, zoneAt, type DropSide } from '../lib/paneDropZones'
 
-export interface MergeHover {
+interface MergeHover {
+  kind: 'merge'
   targetId: string
   /** The pane or empty place under the pointer; absent over a tab (the tab picks its own place) */
   place?: MergePlace
@@ -18,20 +19,63 @@ export interface MergeHover {
   blocked: string | null
 }
 
+interface TabOrderHover {
+  kind: 'order'
+  position: TabStripPosition
+  box: { left: number; top: number; height: number }
+}
+
+type TabDropHover = MergeHover | TabOrderHover
+
 const PANES = '[data-pane], [data-vacant]'
 /** Tabs of the single tab strip and of the split view's strips (they carry their tab id) */
 const TABS = '.terminal-tab[data-tab-id], .split-pane-tab-item[data-tab-id]'
+const TAB_STRIPS = '.terminal-tabs, .split-pane-tabs'
 /** Band along the terminal area's edges that means "split the screen" while a tab of the single strip is dragged */
 export const SCREEN_SPLIT_BAND_PX = 48
 
-function hoverAt(draggingId: string, x: number, y: number, hasEdgeZones: boolean): MergeHover | null {
+function tabOrderAt(strip: HTMLElement, draggingId: string, x: number): TabOrderHover {
+  const all = [...document.querySelectorAll<HTMLElement>(TABS)]
+  const inStrip = all.filter(tab => tab.parentElement === strip)
+  const bounds = strip.getBoundingClientRect()
+  const choices = inStrip.flatMap(tab => {
+    if (tab.dataset.tabId === draggingId) return []
+    const rect = tab.getBoundingClientRect()
+    return rect.width > 0 && rect.right > bounds.left && rect.left < bounds.right ? [{ tab, rect }] : []
+  })
+  const before = choices.find(({ rect }) => x < rect.left + rect.width / 2)
+  const target = before ?? choices[choices.length - 1]
+  const rect = target?.rect ?? bounds
+  return {
+    kind: 'order',
+    position: {
+      screen: Number(strip.closest<HTMLElement>('.split-pane[data-screen]')?.dataset.screen ?? 0),
+      targetId: target?.tab.dataset.tabId ?? (inStrip.some(tab => tab.dataset.tabId === draggingId) ? draggingId : null),
+      after: !before,
+      visibleIds: all.map(tab => tab.dataset.tabId!)
+    },
+    box: {
+      left: Math.max(bounds.left + 2, Math.min(bounds.right - 2, !target ? bounds.left + 4 : before ? rect.left : rect.right)),
+      top: Math.max(rect.top, bounds.top) + 3,
+      height: Math.max(4, Math.min(rect.bottom, bounds.bottom) - Math.max(rect.top, bounds.top) - 6)
+    }
+  }
+}
+
+function hoverAt(draggingId: string, { clientX: x, clientY: y, altKey }: DragEvent, hasEdgeZones: boolean): TabDropHover | null {
   const tabs = useTerminalStore.getState().terminals
   const source = tabs.get(draggingId)
+  if (!source) return null
+  const underPointer = document.elementsFromPoint(x, y)
+  const strip = underPointer.find(candidate => candidate.matches(TAB_STRIPS))
+  const tabElement = underPointer.find(candidate => candidate.matches(TABS))
+  // A normal drop on a strip changes order for any kind of tab. Alt over another tab requests a merge.
+  const mergeOnTab = altKey && !source.db && !source.browser && tabElement instanceof HTMLElement && tabElement.dataset.tabId !== draggingId
+  if (strip instanceof HTMLElement && !mergeOnTab) return tabOrderAt(strip, draggingId, x)
   // A DB tab is never a pane: no marker at all rather than a refusal on every terminal it passes
-  if (!source || source.db || source.browser) return null
-  // Over another tab in a tab strip: merged into that tab (an empty place first, else its largest pane)
-  const tabElement = document.elementsFromPoint(x, y).find(candidate => candidate.matches(TABS))
-  if (tabElement instanceof HTMLElement) {
+  if (source.db || source.browser) return null
+  // With Alt: use the target tab's first empty place or its largest pane.
+  if (mergeOnTab) {
     const targetId = tabElement.dataset.tabId ?? ''
     if (!tabs.has(targetId) || targetId === draggingId) return null
     let blocked = mergeBlock(tabs, draggingId, targetId)
@@ -40,7 +84,7 @@ function hoverAt(draggingId: string, x: number, y: number, hasEdgeZones: boolean
       if ('error' in arrival) blocked = arrival.error
     }
     const rect = tabElement.getBoundingClientRect()
-    return { targetId, onTab: true, box: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }, blocked }
+    return { kind: 'merge', targetId, onTab: true, box: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }, blocked }
   }
   // The edge zones exist only when there are two tabs to put side by side
   if (hasEdgeZones && tabs.size >= 2) {
@@ -51,7 +95,7 @@ function hoverAt(draggingId: string, x: number, y: number, hasEdgeZones: boolean
     if (isAtEdge) return null
   }
   // Tabs that are not in front are hidden with visibility and are not found here
-  const element = document.elementsFromPoint(x, y).find(candidate => candidate.matches(PANES))
+  const element = underPointer.find(candidate => candidate.matches(PANES))
   if (!(element instanceof HTMLElement)) return null
   const targetId = Array.from(tabs.keys()).find(id => tabHost(id).contains(element))
   if (!targetId || targetId === draggingId || tabs.get(targetId)?.db || tabs.get(targetId)?.browser) return null
@@ -67,53 +111,59 @@ function hoverAt(draggingId: string, x: number, y: number, hasEdgeZones: boolean
     const arrival = treeWithArrival(targetId, place)
     if ('error' in arrival) blocked = arrival.error
   }
-  return { targetId, place, onTab: false, box: { left: shown.x, top: shown.y, width: shown.w, height: shown.h }, blocked }
+  return { kind: 'merge', targetId, place, onTab: false, box: { left: shown.x, top: shown.y, width: shown.w, height: shown.h }, blocked }
 }
 
-const sameHover = (a: MergeHover | null, b: MergeHover | null): boolean =>
-  a === b || (!!a && !!b && a.targetId === b.targetId && a.onTab === b.onTab && a.place?.pane === b.place?.pane && a.place?.side === b.place?.side && a.blocked === b.blocked
-    && a.box.left === b.box.left && a.box.top === b.box.top && a.box.width === b.box.width && a.box.height === b.box.height)
+function sameHover(a: TabDropHover | null, b: TabDropHover | null): boolean {
+  if (a === b) return true
+  if (!a || !b || a.kind !== b.kind || a.box.left !== b.box.left || a.box.top !== b.box.top || a.box.height !== b.box.height) return false
+  if (a.kind === 'order' && b.kind === 'order') return a.position.screen === b.position.screen && a.position.targetId === b.position.targetId && a.position.after === b.position.after
+  return a.kind === 'merge' && b.kind === 'merge' && a.targetId === b.targetId && a.onTab === b.onTab &&
+    a.place?.pane === b.place?.pane && a.place?.side === b.place?.side && a.blocked === b.blocked && a.box.width === b.box.width
+}
 
 /**
- * A tab dragged onto a pane of another tab is merged into that tab as a pane (lib/tabToPane.ts).
- * Listens on the document in the capture phase: the terminals swallow drag events, and the tab
- * strips and the terminal area have drop handling of their own.
- * Dropping it on another tab in a tab strip does the same (into that tab's empty place or largest pane).
+ * A tab dragged onto a strip changes order. A drop onto a pane, or Alt-drop onto a tab, merges it.
+ * Listens on the document in the capture phase because the terminals swallow drag events.
  * `hasEdgeZones`: the edges of the terminal area are taken by "split the screen" (single tab strip).
- * `dropTaken`: set when a drop was handled here (merged or refused), so the drag's own end
+ * `dropTaken`: set when a drop was handled here, so the drag's own end
  * handling (pop out to a window when it left the terminal area) does nothing.
  */
-export function useTabDropOnPane(draggingId: string | null, hasEdgeZones: boolean, dropTaken?: MutableRefObject<boolean>): MergeHover | null {
-  const [hover, setHover] = useState<MergeHover | null>(null)
+export function useTabDropOnPane(draggingId: string | null, hasEdgeZones: boolean, dropTaken?: MutableRefObject<boolean>): TabDropHover | null {
+  const [hover, setHover] = useState<TabDropHover | null>(null)
 
   useEffect(() => {
     if (!draggingId) {
       setHover(null)
       return
     }
-    let current: MergeHover | null = null
-    const show = (next: MergeHover | null) => {
+    let current: TabDropHover | null = null
+    const show = (next: TabDropHover | null) => {
       if (sameHover(current, next)) return
       current = next
       setHover(next)
     }
     const onDragOver = (event: DragEvent) => {
-      const next = hoverAt(draggingId, event.clientX, event.clientY, hasEdgeZones)
+      const next = hoverAt(draggingId, event, hasEdgeZones)
       show(next)
       if (!next) return
       // Without this the drop event never comes
       event.preventDefault()
-      // Over a tab: the strip's own handling (move the tab to that side of the split view) stays out
-      if (next.onTab) event.stopPropagation()
-      if (event.dataTransfer) event.dataTransfer.dropEffect = next.blocked ? 'none' : 'move'
+      if (next.kind === 'order' || next.onTab) event.stopPropagation()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = next.kind === 'merge' && next.blocked ? 'none' : 'move'
     }
     const onDrop = (event: DragEvent) => {
-      const target = current
+      const target = hoverAt(draggingId, event, hasEdgeZones)
       show(null)
       if (!target) return
       event.preventDefault()
       event.stopPropagation()
       if (dropTaken) dropTaken.current = true
+      if (target.kind === 'order') {
+        // Moving across screens may remove the source element. Let it receive dragend first.
+        window.setTimeout(() => useTerminalStore.getState().moveTabInStrip(draggingId, target.position), 0)
+        return
+      }
       if (target.blocked) {
         toast.warning(MERGE_BLOCKED_TITLE, target.blocked)
         return

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { RiCloseLine, RiDatabase2Line, RiFolderLine, RiSplitCellsHorizontal, RiComputerLine, RiGlobalLine } from 'react-icons/ri'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { AgentTabMessages } from './AgentMessages'
@@ -20,7 +20,6 @@ interface SplitPaneTabBarProps {
   onPaneFocus: () => void
   onTabDragStart?: (terminalId: string) => void
   onTabDragEnd?: () => void
-  onTabDrop?: (terminalId: string) => void
   draggingTabId?: string | null
 }
 
@@ -37,11 +36,8 @@ export function SplitPaneTabBar({
   onPaneFocus,
   onTabDragStart,
   onTabDragEnd,
-  onTabDrop,
   draggingTabId
 }: SplitPaneTabBarProps) {
-  const [isDragOver, setIsDragOver] = useState(false)
-
   const terminals = useTerminalStore(state => state.terminals)
   const sessionLogFiles = useSessionLogStore(state => state.files)
 
@@ -55,25 +51,7 @@ export function SplitPaneTabBar({
       onMouseDown={onPaneFocus}
       style={headerBorderColor ? { borderBottomColor: headerBorderColor } : undefined}
     >
-      <div
-        className={`split-pane-tabs ${isDragOver ? 'drag-over' : ''}`}
-        onDragOver={(e) => {
-          if (draggingTabId && !terminalIds.includes(draggingTabId)) {
-            e.preventDefault()
-            e.dataTransfer.dropEffect = 'move'
-            setIsDragOver(true)
-          }
-        }}
-        onDragLeave={() => setIsDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault()
-          setIsDragOver(false)
-          const droppedId = e.dataTransfer.getData('text/plain')
-          if (droppedId && !terminalIds.includes(droppedId)) {
-            onTabDrop?.(droppedId)
-          }
-        }}
-      >
+      <div className="split-pane-tabs">
         {terminalIds.map(terminalId => {
           const terminal = terminals.get(terminalId)
           if (!terminal) return null

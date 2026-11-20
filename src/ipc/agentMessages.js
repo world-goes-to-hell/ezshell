@@ -17,7 +17,6 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   const mcpReady = new Map()
   const bridgeToken = randomUUID()
   const leases = new Map()
-  const receivedByAgent = new Set()
   // agent id → latest usage (agentUsage.js shape)
   const usages = new Map()
   // Every local shell's token → its id, for the status line of a Claude typed into it (registerShell)
@@ -33,19 +32,39 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   let pipe
 
   const publicMessage = ({ requestId, ...message }) => message
-  const inbox = (id, unread) => messages.filter(message => message.to === id && (!unread || !message.read)).map(publicMessage)
+  // `read`: handled (answered or acknowledged). `seenAt`: when the recipient took it from its inbox, the
+  // "읽음" the sender and the messages panel see (check_sent). Receipts were removed on 2026-11-20.
   function readInbox(id, unread) {
-    const result = inbox(id, unread)
-    let receiptsSeen = false
-    for (const message of result) {
-      if (message.read) continue
-      receivedByAgent.add(message.id)
-      // Seeing a receipt is enough to remove it from the unread inbox.
-      const stored = message.receipt && messages.find(item => item.id === message.id)
-      if (stored) { stored.read = true; receiptsSeen = true }
+    const taken = messages.filter(message => message.to === id && (!unread || !message.read))
+    const now = Date.now()
+    let seen = false
+    for (const message of taken) {
+      if (message.seenAt) continue
+      message.seenAt = now
+      seen = true
     }
-    if (receiptsSeen) changed()
-    return result
+    if (seen) changed()
+    return taken.map(publicMessage)
+  }
+
+  const PREVIEW_CHARS = 200
+  const SENT_LIMIT = 20
+  /** The sender's view of what it sent: unread / read (taken, no answer yet) / answered */
+  function sentStatus(from, ids) {
+    const mine = messages.filter(message => message.from === from && (!ids || ids.includes(message.id)))
+    return mine.slice(ids ? 0 : -SENT_LIMIT).map(message => {
+      const reply = messages.find(item => item.replyTo === message.id && item.from === message.to)
+      const status = message.read || reply ? 'answered' : message.seenAt ? 'read' : 'unread'
+      return {
+        id: message.id,
+        to: message.to,
+        text: message.text.length > PREVIEW_CHARS ? message.text.slice(0, PREVIEW_CHARS) + '…' : message.text,
+        sentAt: message.sentAt,
+        status,
+        readAt: message.seenAt ?? null,
+        ...(status === 'answered' ? { answer: reply ? { kind: 'reply', id: reply.id } : { kind: 'acknowledged' } } : {})
+      }
+    })
   }
   function snapshot() {
     const waiting = new Set(Array.from(inboxWaits.values(), wait => wait.agentId))
@@ -67,26 +86,24 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
 
   function deliver(from, request) {
     const { text, replyTo, requestId } = request
-    // A receipt confirms a request at once ("작업 할당 받았습니다"); the request stays open until the result
-    const receipt = request.receipt === true
+    // An agent started before the update still has send_receipt: taken as a reply it would close the
+    // request without its result, so it is refused with what to do instead
+    if (request.receipt === true) throw new Error('수신 확인은 없어졌습니다. 상대는 읽음 여부를 check_sent 로 봅니다. 결과는 reply_to_message 로 보내 주세요.')
     if (typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('메시지를 1~8000자로 입력해 주세요.')
     if (requestId !== undefined && (typeof requestId !== 'string' || !requestId || requestId.length > 100)) throw new Error('요청 ID가 올바르지 않습니다.')
-    if (receipt && replyTo === undefined) throw new Error('수신 확인할 메시지를 지정해 주세요.')
     const original = replyTo === undefined ? null : messages.find(item => item.id === replyTo && item.to === from)
     if (replyTo !== undefined && !original) throw new Error('답장할 메시지를 찾을 수 없습니다.')
-    // Answering a receipt would start an endless exchange of confirmations
-    if (original?.receipt) throw new Error('수신 확인에는 답장하지 않습니다.')
     const to = original ? original.from : request.to
     const existing = requestId && messages.find(item => item.from === from && item.requestId === requestId)
     if (existing) {
-      if (existing.to !== to || existing.text !== text || existing.replyTo !== replyTo || Boolean(existing.receipt) !== receipt) throw new Error('같은 요청 ID에 다른 내용이 있습니다.')
+      if (existing.to !== to || existing.text !== text || existing.replyTo !== replyTo) throw new Error('같은 요청 ID에 다른 내용이 있습니다.')
       return { id: existing.id }
     }
     if (from === to || (to !== USER && !isConnected(to))) throw new Error('메시지를 받을 실행 중인 에이전트를 찾을 수 없습니다.')
     if (messages.length >= MAX_MESSAGES) throw new Error('이번 실행의 메시지 한도에 도달했습니다.')
-    const message = { id: randomUUID(), from, to, text, replyTo, requestId, sentAt: Date.now(), read: false, ...(receipt ? { receipt: true } : {}) }
+    const message = { id: randomUUID(), from, to, text, replyTo, requestId, sentAt: Date.now(), read: false, seenAt: null }
     messages.push(message)
-    if (original && !receipt) original.read = true
+    if (original) original.read = true
     let deliveredToWaiter = false
     for (const [socket, wait] of inboxWaits) {
       if (wait.agentId !== to || socket.destroyed) continue
@@ -95,8 +112,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     }
     changed({ id: message.id, from, to, toShell: agents.get(to)?.shellId })
     const recipient = agents.get(to)?.shellId
-    // A receipt does not wake its recipient: it is a note, and a woken agent would confirm it back
-    if (recipient && !deliveredToWaiter && !receipt) onInboxChanged(recipient)
+    if (recipient && !deliveredToWaiter) onInboxChanged(recipient)
     return { id: message.id }
   }
 
@@ -132,6 +148,13 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
         return null
       }
       case 'ack': return acknowledge(request.id, from)
+      case 'sent': {
+        const ids = request.ids
+        if (ids !== undefined && (!Array.isArray(ids) || ids.length > SENT_LIMIT || ids.some(value => typeof value !== 'string' || value.length > 100))) {
+          throw new Error('메시지 ID 목록이 올바르지 않습니다.')
+        }
+        return { messages: sentStatus(from, ids) }
+      }
       // From the status line command of a Claude ezShell launched: saved as this agent's usage only
       case 'usage': return { stored: setUsage(from, request.usage) }
       case 'send': return deliver(from, request)
@@ -418,7 +441,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     if (isLocked()) return []
     const agent = connectedAgentOf(shellId)
     return agent ? messages.filter(message =>
-      message.to === agent.id && !message.read && !message.receipt && !receivedByAgent.has(message.id)
+      message.to === agent.id && !message.read && !message.seenAt
     ).map(message => message.id) : []
   }
 
@@ -426,7 +449,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   function unhandledFor(shellId) {
     if (isLocked()) return []
     const agent = connectedAgentOf(shellId)
-    return agent ? messages.filter(message => message.to === agent.id && !message.read && !message.receipt).map(message => message.id) : []
+    return agent ? messages.filter(message => message.to === agent.id && !message.read).map(message => message.id) : []
   }
 
   /**
@@ -442,6 +465,17 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     usages.set(agentId, clean)
     notify('agent-usage', { agentId, shellId: agent.shellId ?? null, usage: clean })
     return true
+  }
+
+  /**
+   * A model / effort the shell's agent just switched to (agentPicker.js read the CLI's confirmation): the
+   * usage line shows it now, before the agent's own next report
+   */
+  function applyPicked(shellId, applied) {
+    const agent = [...agents.values()].find(candidate => candidate.shellId === shellId && candidate.active)
+    const usage = agent && usages.get(agent.id)
+    if (!usage) return false
+    return setUsage(agent.id, { ...usage, ...applied })
   }
 
   function clearUsage(agentId) {
@@ -483,7 +517,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   return {
     ready, enableExternalBridge, register, stop, snapshot, unreadFor, unhandledFor,
     sendAsUser: request => deliver(USER, request),
-    setUsage, usageSnapshot, registerShell, forgetShell
+    setUsage, applyPicked, usageSnapshot, registerShell, forgetShell
   }
 }
 

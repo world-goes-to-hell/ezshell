@@ -6,8 +6,14 @@
 import MarkdownIt from 'markdown-it'
 
 const SAFE_LINK = /^(https?:|mailto:|#)/i
-/** A file or folder of this PC: "C:\…", "C:/…", "/…" or "file:///…" (never "\\host\share") */
-export const LOCAL_PATH_LINK = /^(?:[a-z]:[\\/]|\/(?![\\/])|file:\/\/\/)/i
+/**
+ * A file or folder of this PC: "C:\…", "C:/…", "/…", "file:///…" (never "\\host\share"), or a relative path
+ * an agent writes ("docs/x.md", "../plan/a.md"; main reads it against the agent's folder and opens it only
+ * when it is in the conversation and exists: src/agentChat/links.js)
+ */
+// The relative form never starts with a slash, or its encoding: markdown-it checks a link after encoding
+// it, so "\\host\share" arrives as "%5Chost%5Cshare"
+export const LOCAL_PATH_LINK = /^(?:[a-z]:[\\/]|\/(?![\\/])|file:\/\/\/|(?![a-z][a-z0-9+.-]*:|#|[\\/]|%5c|%2f)[^\s<>"|?*{}$]+$)/i
 
 /** `localLinks`: links to this PC's files stay links (the agent chat opens them through main) */
 function create(localLinks = false): MarkdownIt {
@@ -38,6 +44,12 @@ export function renderMarkdown(text: string): string {
 export function renderChatMarkdown(text: string): string {
   chatInstance ??= create(true)
   return chatInstance.render(text)
+}
+
+/** Explicit HTTP(S) links in terminal output, including their text offsets. */
+export function webLinksIn(text: string) {
+  instance ??= create()
+  return (instance.linkify.match(text) ?? []).filter(link => /^https?:\/\//i.test(link.raw))
 }
 
 /** Whether a file name is a Markdown file (the window offers the Markdown view) */

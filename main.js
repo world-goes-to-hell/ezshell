@@ -252,7 +252,9 @@ function createStartupSplash(placement, rendererUrl) {
       }
       if (onReveal) return;
       onReveal = callback;
-      revealTimer = setTimeout(release, 4500);
+      // The terminal motion types its command and prints its lines (about 3.5 seconds) before it covers;
+      // the app can be ready before the typing ends, so this bound is generous
+      revealTimer = setTimeout(release, 8000);
       void Promise.all([shown, loading, getBackdropColor().catch(() => '')])
         .then(([, , color]) => {
           if (splash.isDestroyed()) return;
@@ -569,11 +571,13 @@ const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages(
 });
 const browserReview = require('./src/ipc/browserReview.js').registerBrowserReview({
   fromMainWindow: event => !isAppLocked && fromMainWindow(event),
+  fromTerminalWindow: event => !isAppLocked && Array.from(terminalWindows.values()).some(win => !win.isDestroyed() && win.webContents === event.sender),
   getWindow: () => mainWindow,
   listAgents: () => agentMessages.snapshot().agents
     .filter(agent => agent.active && agent.mcpConnected && localShells?.isRunning(agent.shellId))
     .map(({ id, kind, cwd, status }) => ({ id, kind, cwd, status })),
-  sendMessage: agentMessages.sendAsUser
+  sendMessage: agentMessages.sendAsUser,
+  openExternal: url => shell.openExternal(url)
 });
 const { installAgentMessageMcp } = require('./src/ipc/agentMessageSetup.js');
 const agentSetupInProgress = new Set();
@@ -718,8 +722,9 @@ const agentChatIpc = require('./src/agentChat/ipc.js').registerAgentChatIpc({
   // Links in answers: the file manager shows a file (never runs it), the file window reads it
   links: {
     openExternal: url => shell.openExternal(url),
+    openBrowserTab: browserReview.openLink,
     showItemInFolder: target => shell.showItemInFolder(target),
-    openLocalFile: target => remoteFileIpc.openLocalFile(target, '에이전트 대화')
+    openLocalFile: (target, line) => remoteFileIpc.openLocalFile(target, '에이전트 대화', line)
   }
 });
 

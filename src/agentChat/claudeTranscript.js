@@ -1,5 +1,8 @@
 const { promptText } = require('../agentHistory/claude.js')
-const { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, clipLines, addedLines, todosOf } = require('./items.js')
+const { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, clipLines, addedLines, todosOf, readableOutput, readableValue } = require('./items.js')
+
+// An MCP tool (`mcp__<server>__<tool>`): its arguments and answer are JSON, shown as an outline
+const isMcpTool = name => name.startsWith('mcp__')
 
 // Claude Code's `<session id>.jsonl`, line by line (checked on this PC's transcripts, 2026-11-19):
 // an `assistant` line holds one content block (text, thinking or tool_use); blocks of one answer share
@@ -8,6 +11,20 @@ const { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, clipLines, a
 // view: only the kinds below are read, so a new kind in a later CLI is skipped, not misdrawn.
 
 const INTERRUPTED = /^\[Request interrupted by user/
+// A slash command the user ran, as Claude records it once the command has finished:
+// "<command-name>/compact</command-name> <command-message>compact</command-message> <command-args></command-args>"
+const COMMAND_NAME = /^\s*<command-name>(\/[^<\s]{1,60})<\/command-name>/
+const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/
+
+/** The slash command of a user line as the user typed it ("/compact focus on X"), or null */
+function commandText(line) {
+  const content = line.message?.content
+  if (line.isMeta || typeof content !== 'string') return null
+  const name = COMMAND_NAME.exec(content)
+  if (!name) return null
+  const args = COMMAND_ARGS.exec(content)?.[1]?.trim()
+  return args ? `${name[1]} ${args}` : name[1]
+}
 
 function toolSummary(name, input) {
   const value = input && typeof input === 'object' ? input : {}
@@ -56,9 +73,14 @@ function createClaudeParser() {
   const orphans = new Map()
   let name = null
   let aiTitle = null
+  // A compaction's notice, held until the next shown item: Claude writes the boundary first and the
+  // `/compact` that asked for it last, so the notice follows that command (it came first: user report,
+  // 2026-11-20); after an automatic compaction it goes before whatever comes next
+  let pendingNotice = null
+  let heldAt = 0
 
   function attach(item, result) {
-    item.tool.result = result.result
+    item.tool.result = isMcpTool(item.tool.name) ? clip(readableOutput(result.result), LIMITS.result) : result.result
     if (result.isError) item.tool.isError = true
     if (result.diff) item.tool.diff = result.diff
   }
@@ -74,7 +96,10 @@ function createClaudeParser() {
     if (!older && line.type === 'agent-name' && text(line.agentName).trim()) name = oneLine(line.agentName)
     if (!older && line.type === 'ai-title' && text(line.aiTitle).trim()) aiTitle = oneLine(line.aiTitle)
     if (line.type === 'system' && line.subtype === 'compact_boundary') {
-      out.push({ id: `notice:${line.uuid ?? time}`, kind: 'notice', time, text: '이전 대화를 요약했습니다' })
+      if (pendingNotice) out.push(pendingNotice)
+      pendingNotice = { id: `notice:${line.uuid ?? time}`, kind: 'notice', time, text: '이전 대화를 요약했습니다' }
+      heldAt = Date.now()
+      return finish(out)
     }
     if (line.type === 'assistant' && Array.isArray(line.message?.content)) {
       line.message.content.forEach((block, index) => {
@@ -92,7 +117,9 @@ function createClaudeParser() {
             tool: {
               name: toolName,
               summary: toolSummary(toolName, block.input),
-              input: toolName === 'TodoWrite' ? '' : inputText(toolName === 'Bash' ? text(block.input?.command) : block.input),
+              input: toolName === 'TodoWrite' ? ''
+                : isMcpTool(toolName) ? clip(readableValue(block.input ?? {}), LIMITS.input)
+                  : inputText(toolName === 'Bash' ? text(block.input?.command) : block.input),
               ...(toolName === 'TodoWrite' ? { todos: todosOf(block.input?.todos, 'content') } : {})
             }
           }
@@ -104,8 +131,11 @@ function createClaudeParser() {
       })
     }
     if (line.type === 'user') {
+      const command = commandText(line)
       if (line.isCompactSummary) {
-        out.push({ id: `notice:${line.uuid ?? time}`, kind: 'notice', time, text: '이전 대화를 요약했습니다' })
+        // The summary that follows a compact boundary: the boundary's notice already says it (once, not twice)
+      } else if (command) {
+        out.push({ id: `user:${line.uuid ?? time}`, kind: 'user', time, text: clip(command, LIMITS.text) })
       } else {
         const prompt = promptText(line)
         if (prompt !== null) {
@@ -128,11 +158,32 @@ function createClaudeParser() {
         }
       }
     }
-    const title = name ?? aiTitle
-    return title ? { items: out, title } : { items: out }
+    return finish(out, commandText(line))
   }
 
-  return { feed }
+  /** The line's items with a held compaction notice put in place, and the title */
+  function finish(out, command = null) {
+    let items = out
+    if (pendingNotice && out.length) {
+      items = command && /^\/compact\b/.test(command) ? [...out, pendingNotice] : [pendingNotice, ...out]
+      pendingNotice = null
+    }
+    const title = name ?? aiTitle
+    return title ? { items, title } : { items }
+  }
+
+  /**
+   * The held compaction notice once nothing came after it for `waitMs` (the file ends at the boundary, or
+   * the command line is late): [] or [notice]. A first read of the file passes 0.
+   */
+  function flush(waitMs = 0) {
+    if (!pendingNotice || Date.now() - heldAt < waitMs) return []
+    const notice = pendingNotice
+    pendingNotice = null
+    return [notice]
+  }
+
+  return { feed, flush }
 }
 
 module.exports = { createClaudeParser, toolSummary, remember }

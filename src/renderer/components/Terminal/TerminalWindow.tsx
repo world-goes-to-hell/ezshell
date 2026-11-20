@@ -13,6 +13,7 @@ import { linkConnected, linkDisconnected, linkReconnecting, reconnectFailureText
 import type { ConnectionLink } from '../../lib/connectionLost'
 import { ConnectionLostOverlay } from './ConnectionLostOverlay'
 import { attachLogHighlight } from './terminalLogHighlight'
+import { attachTerminalWebLinks } from './terminalWebLinks'
 import 'xterm/css/xterm.css'
 
 interface TerminalWindowProps {
@@ -145,6 +146,7 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
       term.loadAddon(serializeAddon.current)
 
       term.open(terminalRef.current)
+      attachTerminalWebLinks(term)
       disableCopyOnSelect = enableCopyOnSelect(term)
       logHighlight = attachLogHighlight(term)
       terminalInstance.current = term

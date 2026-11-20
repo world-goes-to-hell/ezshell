@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
-  RiArrowLeftLine, RiArrowRightLine, RiArrowRightUpLine, RiCursorLine, RiGlobalLine,
-  RiRefreshLine, RiSendPlane2Line
+  RiArrowDownSLine, RiArrowLeftLine, RiArrowRightLine, RiArrowRightUpLine, RiCodeSSlashLine, RiCursorLine,
+  RiGlobalLine, RiRefreshLine, RiSendPlane2Line, RiToolsLine
 } from 'react-icons/ri'
 import type { BrowserReviewAction, BrowserReviewState, LocalAgentStatus } from '../../types'
 import './BrowserReview.css'
@@ -13,6 +13,8 @@ const statusLabels: Record<LocalAgentStatus, string> = {
 }
 
 const appOverlays = '[role="menu"], [role="dialog"], [role="alertdialog"], .context-menu, .tab-context-menu, .command-palette-overlay, .modal-overlay, .batch-overlay'
+
+type BrowserTool = 'element-picker'
 
 export default function BrowserReview({ tabId, isVisible, onActivate }: {
   tabId: string
@@ -28,10 +30,18 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const [browserError, setBrowserError] = useState('')
   const [feedback, setFeedback] = useState<{ text: string; error?: boolean } | null>(null)
   const [sending, setSending] = useState(false)
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const [openTool, setOpenTool] = useState<BrowserTool | null>(null)
+  const toolsId = useId()
+  const elementPickerId = `${toolsId}-element-picker`
+  const agentFieldId = `${elementPickerId}-agent`
+  const draftFieldId = `${elementPickerId}-draft`
   const url = state?.url ?? ''
   const selection = state?.selection
   const agents = state?.agents ?? []
   const recipient = agents.find(agent => agent.id === agentId)
+  const elementPickerOpen = toolsOpen && openTool === 'element-picker'
+  const canPick = Boolean(url && !state?.loading && !state?.error)
 
   useEffect(() => {
     let mounted = true
@@ -93,6 +103,27 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
     }
   }
 
+  function toggleTools() {
+    if (toolsOpen) {
+      if (elementPickerOpen) void act({ type: 'cancel' })
+      setOpenTool(null)
+    }
+    setToolsOpen(!toolsOpen)
+  }
+
+  function toggleElementPicker() {
+    if (elementPickerOpen) {
+      setOpenTool(null)
+      void act({ type: 'cancel' })
+      return
+    }
+    setOpenTool('element-picker')
+    if (canPick && !selection) {
+      setFeedback(null)
+      void act({ type: 'pick' })
+    }
+  }
+
   async function send(event: FormEvent) {
     event.preventDefault()
     const text = draft.trim()
@@ -140,57 +171,86 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
             <RiArrowRightUpLine />
           </button>
         </form>
-        <button type="button" className="browser-review-pick" aria-pressed={Boolean(state?.picking)}
-          disabled={!url || state?.loading || Boolean(state?.error)}
-          onClick={() => { setFeedback(null); void act({ type: state?.picking ? 'cancel' : 'pick' }) }}>
-          <RiCursorLine /> {state?.picking ? '선택 취소' : '요소 선택'}
+        {/* The page's own developer tools, in a window of their own (F12 / Ctrl+Shift+I in the page too) */}
+        <button type="button" className="browser-review-devtools" disabled={!url}
+          title={state?.devToolsOpen ? '개발자 도구 닫기 (F12)' : '개발자 도구 열기 (F12)'} aria-label="개발자 도구"
+          aria-pressed={!!state?.devToolsOpen} onClick={() => void act({ type: 'devtools' })}>
+          <RiCodeSSlashLine aria-hidden="true" />
+        </button>
+        <button type="button" className="browser-review-tools-toggle" title="브라우저 부가기능" aria-label="브라우저 부가기능"
+          aria-expanded={toolsOpen} aria-controls={toolsId} onClick={toggleTools}>
+          <RiToolsLine aria-hidden="true" />
         </button>
       </header>
       {browserError && <p className="browser-review-error" role="alert">{browserError}</p>}
-      <div className="browser-review-workspace">
+      <div className={`browser-review-workspace${toolsOpen ? ' has-tools' : ''}`}>
         <div className="browser-review-viewport" ref={viewport}>
           {(!url || state?.error) && <div className="browser-review-placeholder">
             <RiGlobalLine aria-hidden="true" />
             <p role={state?.error ? 'alert' : undefined}>{state?.error || '주소를 입력해 웹페이지를 열어 주세요.'}</p>
           </div>}
         </div>
-        <form className="browser-review-compose" onSubmit={send}>
-          <h1>요소 수정 요청</h1>
-          {selection ? (
-            <div className="browser-review-selection" aria-label="선택된 요소">
-              <span className="browser-review-selection-tag">{selection.tag}</span>
-              <code title={selection.selector}>{selection.selector}</code>
-              {(selection.text || selection.label) && <span className="browser-review-selection-label">{selection.text || selection.label}</span>}
-              {selection.classes.length > 0 && <span className="browser-review-selection-label" title={selection.classes.join(' ')}>{selection.classes.join(' ')}</span>}
-              {(selection.component || selection.componentFile) && (
-                <span className="browser-review-component" title={selection.componentFile}>{selection.component ?? selection.componentFile}</span>
+        {toolsOpen && (
+          <aside className="browser-review-tools" id={toolsId} aria-label="브라우저 부가기능">
+            <div className="browser-review-tool">
+              <button type="button" className="browser-review-tool-toggle" aria-expanded={elementPickerOpen}
+                aria-controls={elementPickerId} onClick={toggleElementPicker}>
+                <RiCursorLine aria-hidden="true" />
+                <span>요소 선택</span>
+                <RiArrowDownSLine className="browser-review-tool-chevron" aria-hidden="true" />
+              </button>
+              {elementPickerOpen && (
+                <form className="browser-review-compose" id={elementPickerId} onSubmit={send}>
+                  <div className="browser-review-compose-head">
+                    <h1>요소 수정 요청</h1>
+                    <button type="button" className="browser-review-pick" aria-pressed={Boolean(state?.picking)}
+                      aria-label={state?.picking ? '선택 취소' : '페이지에서 요소 선택'}
+                      title={state?.picking ? '선택 취소' : '페이지에서 요소 선택'}
+                      disabled={!canPick}
+                      onClick={() => { setFeedback(null); void act({ type: state?.picking ? 'cancel' : 'pick' }) }}>
+                      <RiCursorLine aria-hidden="true" />
+                    </button>
+                  </div>
+                  {selection ? (
+                    <div className="browser-review-selection" aria-label="선택된 요소">
+                      <span className="browser-review-selection-tag">{selection.tag}</span>
+                      <code title={selection.selector}>{selection.selector}</code>
+                      {(selection.text || selection.label) && <span className="browser-review-selection-label">{selection.text || selection.label}</span>}
+                      {selection.classes.length > 0 && <span className="browser-review-selection-label" title={selection.classes.join(' ')}>{selection.classes.join(' ')}</span>}
+                      {(selection.component || selection.componentFile) && (
+                        <span className="browser-review-component" title={selection.componentFile}>{selection.component ?? selection.componentFile}</span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="browser-review-selection browser-review-selection-empty">
+                      {state?.picking ? '페이지에서 수정할 요소를 클릭하세요. Esc로 취소할 수 있습니다.'
+                        : canPick ? '요소 선택 버튼을 눌러 수정할 곳을 고르세요.' : '페이지를 열면 요소를 선택할 수 있습니다.'}
+                    </div>
+                  )}
+                  <label htmlFor={agentFieldId}>받는 에이전트</label>
+                  <select id={agentFieldId} value={recipient?.id ?? ''} disabled={!agents.length || sending}
+                    onChange={event => { setAgentId(event.target.value); setFeedback(null) }}>
+                    <option value="">{agents.length ? '에이전트 선택' : '연결된 에이전트 없음'}</option>
+                    {agents.map(agent => (
+                      <option key={agent.id} value={agent.id}>{agent.id} · {statusLabels[agent.status]} · {agent.cwd}</option>
+                    ))}
+                  </select>
+                  {!agents.length && <p className="browser-review-hint">ezShell 터미널에서 Codex 또는 Claude Code를 실행하면 여기에 표시됩니다.</p>}
+                  <label htmlFor={draftFieldId}>수정 요청</label>
+                  <textarea id={draftFieldId} value={draft} maxLength={4000} disabled={sending}
+                    placeholder="예: 이 버튼의 문구를 ‘저장’으로 바꿔줘."
+                    onChange={event => { setDraft(event.target.value); setFeedback(null) }} />
+                  <button type="submit" className="browser-review-send" disabled={!selection || !recipient || !draft.trim() || sending}>
+                    <RiSendPlane2Line /> {sending ? '보내는 중…' : '에이전트에게 보내기'}
+                  </button>
+                  {feedback && <p role={feedback.error ? 'alert' : 'status'} className={feedback.error ? 'browser-review-compose-error' : 'browser-review-feedback'}>
+                    {feedback.text}
+                  </p>}
+                </form>
               )}
             </div>
-          ) : (
-            <div className="browser-review-selection browser-review-selection-empty">
-              {state?.picking ? '페이지에서 수정할 요소를 클릭하세요. Esc로 취소할 수 있습니다.' : '요소 선택을 눌러 페이지에서 수정할 곳을 고르세요.'}
-            </div>
-          )}
-          <label htmlFor="browser-review-agent">받는 에이전트</label>
-          <select id="browser-review-agent" value={recipient?.id ?? ''} disabled={!agents.length || sending}
-            onChange={event => { setAgentId(event.target.value); setFeedback(null) }}>
-            <option value="">{agents.length ? '에이전트 선택' : '연결된 에이전트 없음'}</option>
-            {agents.map(agent => (
-              <option key={agent.id} value={agent.id}>{agent.id} · {statusLabels[agent.status]} · {agent.cwd}</option>
-            ))}
-          </select>
-          {!agents.length && <p className="browser-review-hint">ezShell 터미널에서 Codex 또는 Claude Code를 실행하면 여기에 표시됩니다.</p>}
-          <label htmlFor="browser-review-draft">수정 요청</label>
-          <textarea id="browser-review-draft" value={draft} maxLength={4000} disabled={sending}
-            placeholder="예: 이 버튼의 문구를 ‘저장’으로 바꿔줘."
-            onChange={event => { setDraft(event.target.value); setFeedback(null) }} />
-          <button type="submit" className="browser-review-send" disabled={!selection || !recipient || !draft.trim() || sending}>
-            <RiSendPlane2Line /> {sending ? '보내는 중…' : '에이전트에게 보내기'}
-          </button>
-          {feedback && <p role={feedback.error ? 'alert' : 'status'} className={feedback.error ? 'browser-review-compose-error' : 'browser-review-feedback'}>
-            {feedback.text}
-          </p>}
-        </form>
+          </aside>
+        )}
       </div>
     </section>
   )

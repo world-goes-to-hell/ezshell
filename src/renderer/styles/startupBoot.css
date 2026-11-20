@@ -1,0 +1,96 @@
+/* The terminal startup motion (startupMotions/bootPrompt.ts, design: mockups/startup-boot-prompt.html).
+   A terminal window over the desktop in the user's theme: --t-bg, --t-fg, --t-green, --t-blue, --t-cursor
+   come from the theme's terminal colors (set on .startup by the motion). */
+.boot-term {
+  --term-bg: color-mix(in srgb, var(--t-bg, #16181c) 92%, transparent);
+  --term-bar: color-mix(in srgb, color-mix(in srgb, var(--t-bg, #16181c) 90%, var(--t-fg, #d9dee5)) 96%, transparent);
+  --term-line: color-mix(in srgb, var(--t-fg, #d9dee5) 10%, transparent);
+  --term-dim: color-mix(in srgb, var(--t-fg, #d9dee5) 55%, var(--t-bg, #16181c));
+  --size: clamp(12px, 1.45vw, 18px);
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  width: min(640px, 100% - 48px);
+  height: min(300px, 100% - 48px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--t-fg, #d9dee5) 14%, transparent);
+  border-radius: 10px;
+  background: var(--term-bg);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 45%), 0 2px 8px rgb(0 0 0 / 35%), inset 0 1px 0 rgb(255 255 255 / 6%);
+  color: var(--t-fg, #d9dee5);
+  font: 400 var(--size)/1.55 "JetBrains Mono", "Cascadia Mono", Consolas, "D2Coding", ui-monospace, monospace;
+  transform: translate(-50%, -50%);
+  transition:
+    width 380ms cubic-bezier(.2, .8, .2, 1),
+    height 380ms cubic-bezier(.2, .8, .2, 1),
+    border-radius 380ms ease-out,
+    background-color 380ms ease-out,
+    border-color 380ms ease-out,
+    box-shadow 380ms ease-out,
+    opacity 280ms ease-out;
+}
+
+.boot-bar {
+  display: flex;
+  align-items: center;
+  gap: .6em;
+  height: 2.1em;
+  padding: 0 .9em;
+  border-bottom: 1px solid var(--term-line);
+  background: var(--term-bar);
+  color: var(--term-dim);
+  font: 500 calc(var(--size) * .72)/1 "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
+}
+
+.boot-buttons { display: flex; gap: .55em; }
+.boot-buttons i { width: .95em; height: .95em; border-radius: 50%; }
+.boot-buttons i:nth-child(1) { background: #ff5f57; }
+.boot-buttons i:nth-child(2) { background: #febc2e; }
+.boot-buttons i:nth-child(3) { background: #28c840; }
+.boot-title { flex: 1; margin-right: 3.2em; text-align: center; letter-spacing: .02em; }
+
+.boot-body { padding: .8em 1em; overflow: hidden; white-space: pre-wrap; word-break: break-all; }
+.boot-line { min-height: 1.55em; }
+.boot-user { color: var(--t-green, #7ee2a8); font-weight: 600; }
+.boot-path { color: var(--t-blue, #7fb0ff); font-weight: 600; }
+.boot-dim { color: var(--term-dim); }
+.boot-ok { color: var(--t-green, #7ee2a8); font-weight: 600; }
+
+/* A block cursor: solid while keys come in, blinking when the line waits */
+.boot-cursor {
+  display: inline-block;
+  width: .6em;
+  height: 1.15em;
+  margin-left: 1px;
+  vertical-align: -.2em;
+  background: var(--t-cursor, #e6edf5);
+}
+
+.boot-term:is([data-phase="prompt"], [data-phase="waiting"]) .boot-cursor { animation: boot-blink 1060ms step-end infinite; }
+
+@keyframes boot-blink { 50% { opacity: 0; } }
+
+/* The app is ready: the window grows over the whole screen in the app's backdrop (the cover), then fades */
+.boot-term:is([data-phase="covering"], [data-phase="leaving"]) {
+  width: 100%;
+  height: 100%;
+  border-color: transparent;
+  border-radius: 0;
+  background: var(--cover, var(--t-bg, #16181c));
+  box-shadow: none;
+}
+
+.boot-term:is([data-phase="covering"], [data-phase="leaving"]) > * {
+  opacity: 0;
+  transition: opacity 160ms ease-out;
+}
+
+.boot-term[data-phase="leaving"] { opacity: 0; }
+
+.boot-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+@media (prefers-reduced-motion: reduce) {
+  .startup *, .startup *::before, .startup *::after { animation: none !important; transition: none !important; }
+}

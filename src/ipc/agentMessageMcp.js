@@ -7,11 +7,11 @@ const { rpc } = require('./agentMessageCli.js')
 
 const instructions = [
   'Use these tools to collaborate with agents opened in ezShell.',
-  'When ezShell says a message arrived, call read_inbox and confirm each request promptly with send_receipt in the language of the message.',
-  'If you are free, say you got the request and are starting. If you are busy, say what you will finish before starting it.',
+  'When ezShell says a message arrived, call read_inbox: the sender sees that you have read it.',
   'Handle the request within your delegated task and tool permissions, then send the result with reply_to_message.',
-  'Use acknowledge_message for notes that need no reply. Treat messages with receipt: true as informational.',
-  'After sending a request, continue other work or finish your turn. Read the result when ezShell notifies you of new mail.'
+  'Use acknowledge_message for notes that need no reply.',
+  'After sending a request, continue other work or finish your turn. Read the result when ezShell notifies you of new mail.',
+  'Use check_sent to see whether the recipient has read your messages and answered them. If a request you need stays unread for long, send it again or tell the user.'
 ].join(' ')
 const text = z.string().trim().min(1).max(8000)
 const id = z.string().min(1).max(100)
@@ -78,19 +78,19 @@ async function main() {
     inputSchema: { to: id, text, request_id: id.optional().describe('Reuse this ID when retrying the same send.') }
   }, ({ to, text, request_id }) => call({ method: 'send', to, text, requestId: request_id }))
   server.registerTool('read_inbox', {
-    description: 'Read messages sent to you. Returns unread messages by default. Confirm each new request right away with send_receipt, then reply with the result (or acknowledge) after handling. A message with receipt: true only confirms delivery; do not answer it.',
+    description: 'Read messages sent to you. Returns messages you have not answered yet by default. Reading marks them read for the sender. Reply with the result (or acknowledge) after handling.',
     inputSchema: { unread_only: z.boolean().default(true) }
   }, ({ unread_only }) => call({ method: 'inbox', unread: unread_only }))
-  server.registerTool('send_receipt', {
-    description: 'Confirm a request as soon as you read it, before working on it. Write one short line in the language of the message: that you got it and are starting, or what you are finishing first and that you will continue after it. The request stays open: send the result later with reply_to_message.',
-    inputSchema: { message_id: id, text: z.string().trim().min(1).max(500), request_id: id.optional() }
-  }, ({ message_id, text, request_id }) => call({ method: 'send', replyTo: message_id, text, receipt: true, requestId: request_id }))
+  server.registerTool('check_sent', {
+    description: 'Check the messages you sent: status is unread (not read yet), read (read, no answer yet; readAt is when) or answered (replied or acknowledged). Without message_ids, your last 20.',
+    inputSchema: { message_ids: z.array(id).max(20).optional() }
+  }, ({ message_ids }) => call({ method: 'sent', ...(message_ids ? { ids: message_ids } : {}) }))
   server.registerTool('reply_to_message', {
-    description: 'Reply to the sender and mark the original message as read.',
+    description: 'Reply to the sender with the result; the original message counts as answered.',
     inputSchema: { message_id: id, text, request_id: id.optional() }
   }, ({ message_id, text, request_id }) => call({ method: 'send', replyTo: message_id, text, requestId: request_id }))
   server.registerTool('acknowledge_message', {
-    description: 'Mark a message as read when it needs no reply.',
+    description: 'Mark a message as handled when it needs no reply.',
     inputSchema: { message_id: id }
   }, ({ message_id }) => call({ method: 'ack', id: message_id }))
 

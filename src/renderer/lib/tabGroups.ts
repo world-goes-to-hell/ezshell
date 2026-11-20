@@ -2,7 +2,7 @@
 // (docs/plan/2026-11-19-tab-groups-by-project.md). Pure: the projects come from the sidebar's list
 // (registered folders with their worktrees), the links from lib/localProjectServers.ts.
 import type { TerminalInfo } from '../stores/terminalStore'
-import { worktreeOf } from './localWorkspaceTree'
+import { folderLabel, pathKey, worktreeOf } from './localWorkspaceTree'
 import type { ProjectServers } from './localProjectServers'
 
 /** Tabs that belong to no project */
@@ -23,6 +23,15 @@ export interface TabGroup {
   tabIds: string[]
 }
 
+/**
+ * A local tab in a folder no registered project covers is a work of its own (its folder), not one of
+ * the general tabs with the SSH sessions: they showed in one strip (reported 2026-11-20). A shell
+ * opened without a folder stays in general.
+ */
+export const FOLDER_GROUP_PREFIX = 'folder:'
+const folderGroupOf = (cwd: string | undefined): string => (cwd ? FOLDER_GROUP_PREFIX + pathKey(cwd) : GENERAL_GROUP)
+const folderGroupLabel = (key: string): string => folderLabel(key.slice(FOLDER_GROUP_PREFIX.length))
+
 export function projectOfFolder(cwd: string | undefined, projects: readonly GroupProject[]): GroupProject | undefined {
   let best: { project: GroupProject; length: number } | undefined
   for (const project of projects) {
@@ -42,9 +51,12 @@ export function groupOfTab(
 ): string {
   const info = terminals.get(id)
   if (!info) return GENERAL_GROUP
-  if (info.browser) return projects.find(project => project.key === info.browser?.group)?.key ?? GENERAL_GROUP
+  if (info.browser) {
+    const group = info.browser.group
+    return group && (group.startsWith(FOLDER_GROUP_PREFIX) || projects.some(project => project.key === group)) ? group : GENERAL_GROUP
+  }
   if (info.db) return info.db.sshSessionId && info.db.sshSessionId !== id ? groupOfTab(info.db.sshSessionId, terminals, projects, servers, preferred) : GENERAL_GROUP
-  if (info.local) return projectOfFolder(info.local.cwd, projects)?.key ?? GENERAL_GROUP
+  if (info.local) return projectOfFolder(info.local.cwd, projects)?.key ?? folderGroupOf(info.local.cwd)
   const saved = info.connectConfig?.savedSessionId
   if (!saved) return GENERAL_GROUP
   const known = new Set(projects.map(project => project.key))
@@ -65,10 +77,16 @@ export function groupTabs(
   const names = new Map(projects.map(project => [project.key, project.name]))
   for (const id of tabIds) {
     const key = groupOfTab(id, terminals, projects, servers, preferred)
-    const group = groups.get(key) ?? { key, label: names.get(key) ?? GENERAL_LABEL, tabIds: [] }
+    const label = names.get(key) ?? (key.startsWith(FOLDER_GROUP_PREFIX) ? folderGroupLabel(key) : GENERAL_LABEL)
+    const group = groups.get(key) ?? { key, label, tabIds: [] }
     groups.set(key, { ...group, tabIds: [...group.tabIds, id] })
   }
-  return [...groups.values()]
+  // A folder group is named after its folder as a local tab has it (the key is lowercased on Windows)
+  return [...groups.values()].map(group => {
+    if (!group.key.startsWith(FOLDER_GROUP_PREFIX)) return group
+    const cwd = group.tabIds.map(id => terminals.get(id)?.local?.cwd).find(Boolean)
+    return cwd ? { ...group, label: folderLabel(cwd) } : group
+  })
 }
 
 /** The next or previous tab within the tabs shown (Ctrl+Tab), wrapping around */

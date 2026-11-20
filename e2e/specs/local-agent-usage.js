@@ -79,17 +79,44 @@ async function inAgent(agent, command) {
       identity.querySelector('.agent-usage-effort')?.textContent === 'high' &&
       identity.nextElementSibling?.matches('.agent-usage-meters')
   })()`))
-  check('effort stays visible at narrow split sizes and the tooltip keeps every metric', await js(`(() => {
+  check('effort stays visible at narrow split sizes', await js(`(() => {
     const row = ${status}
     const effort = row.querySelector('.agent-usage-effort')
     row.style.width = '180px'
     const chip = effort.getBoundingClientRect()
     const bounds = row.getBoundingClientRect()
-    const fits = chip.left >= bounds.left && chip.right <= bounds.right &&
-      row.scrollWidth <= row.clientWidth + 1 && row.title.includes('7일 41%')
-    row.style.removeProperty('width')
-    return fits
+    return chip.left >= bounds.left && chip.right <= bounds.right && row.scrollWidth <= row.clientWidth + 1
   })()`))
+  const hoverPoint = await js(`(() => {
+    const row = ${status}
+    const bounds = row.getBoundingClientRect()
+    const meters = row.querySelector('.agent-usage-meters').getBoundingClientRect()
+    return [(meters.left + Math.min(meters.right, bounds.right)) / 2, (bounds.top + bounds.bottom) / 2]
+  })()`)
+  await driver.move(...hoverPoint)
+  const tool = `document.querySelector('.agent-usage-tooltip')`
+  check('hovering shows the model, effort, and every full metric in a split pane', await until(`(() => {
+    const tip = ${tool}
+    if (!tip) return false
+    const metrics = [...tip.querySelectorAll('.agent-usage-tooltip-metric')].map(row => [
+      row.querySelector('dt').textContent, row.querySelector('dd').textContent,
+      !!row.querySelector('.agent-usage-tooltip-reset')
+    ])
+    const bounds = tip.getBoundingClientRect()
+    return tip.querySelector('strong').textContent === 'Opus 5.5' &&
+      tip.querySelector('.agent-usage-tooltip-effort b').textContent === 'high' &&
+      JSON.stringify(metrics) === JSON.stringify([['5시간 사용량', '92%', true], ['7일 사용량', '41%', true], ['컨텍스트', '38%', false]]) &&
+      bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth
+  })()`, 5000))
+  await shot('local-agent-usage-tooltip')
+  await driver.move(20, 45)
+  await until(`!${tool}`)
+  await js(`${status}.style.removeProperty('width')`)
+  await js(`${status}.querySelector('.agent-usage-meters').focus()`)
+  check('keyboard focus opens the usage details', await until(`!!${tool}`, 3000))
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  check('Escape closes the usage details', await until(`!${tool}`, 3000))
   await shot('local-agent-usage-effort')
   check('above 90% the window turns red', await js(`!!${status}.querySelector('.agent-usage-meter.is-high')`))
   check('no path reached the window', await js(`!document.body.innerHTML.includes('sent.jsonl')`))

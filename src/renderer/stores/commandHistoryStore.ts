@@ -3,8 +3,11 @@ import type { CommandHistoryEntry, CommandHistoryResult } from '../types'
 import { getHistoryKey } from '../lib/commandCapture'
 import { toast } from './toastStore'
 
+const LOCAL_HISTORY_KEY = 'local:shell'
+const LOCAL_SHELL_ID = /^local:\d+$/
+
 /**
- * Terminal command history, kept per connection in the main process (encrypted).
+ * Encrypted command history per SSH connection and one shared list for local shells.
  * One store per window so a tab, its split panes, the history panel and the popup share one list.
  */
 interface CommandHistoryState {
@@ -22,8 +25,7 @@ function isHistoryApiAvailable(): boolean {
   const api = window.electronAPI
   return typeof api?.commandHistoryGet === 'function' &&
     typeof api?.commandHistoryAdd === 'function' &&
-    typeof api?.onCommandHistoryChanged === 'function' &&
-    typeof api?.sshGetSessionInfo === 'function'
+    typeof api?.onCommandHistoryChanged === 'function'
 }
 
 const pendingKeys = new Map<string, Promise<string | null>>()
@@ -49,18 +51,18 @@ export const useCommandHistoryStore = create<CommandHistoryState>((set, get) => 
 
   const loadKey = async (sessionId: string): Promise<string | null> => {
     try {
-      const key = getHistoryKey(await window.electronAPI.sshGetSessionInfo(sessionId))
+      const key = LOCAL_SHELL_ID.test(sessionId) ? LOCAL_HISTORY_KEY :
+        getHistoryKey(await window.electronAPI.sshGetSessionInfo?.(sessionId) ?? null)
       set(state => ({ keyBySession: { ...state.keyBySession, [sessionId]: key } }))
       if (key && !(key in get().entriesByKey)) {
         const result = await window.electronAPI.commandHistoryGet(key)
-        setEntries(key, result.success && result.entries ? result.entries : [])
+        // Another pane can update this shared list while the initial read is in flight.
+        if (!(key in get().entriesByKey)) setEntries(key, result.success && result.entries ? result.entries : [])
       }
       return key
     } catch (error) {
       console.error('Failed to load command history:', error)
       return null
-    } finally {
-      pendingKeys.delete(sessionId)
     }
   }
 
@@ -75,7 +77,7 @@ export const useCommandHistoryStore = create<CommandHistoryState>((set, get) => 
       if (known) return Promise.resolve(known)
       const pending = pendingKeys.get(sessionId)
       if (pending) return pending
-      const request = loadKey(sessionId)
+      const request = loadKey(sessionId).finally(() => pendingKeys.delete(sessionId))
       pendingKeys.set(sessionId, request)
       return request
     },

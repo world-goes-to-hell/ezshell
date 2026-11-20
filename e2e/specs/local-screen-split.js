@@ -22,7 +22,7 @@ const { check, finish } = createChecks()
     check('five local terminal tabs are open', await js(`${stripTabs}.length === 5`))
 
     // CDP pointer input does not start an HTML5 drag: the events are sent directly
-    const dragToRightEdge = async (tabSelector) => {
+    const startDrag = async (tabSelector) => {
       await js(`(() => {
         const tab = ${tabSelector}
         window.__dt = new DataTransfer()
@@ -30,6 +30,17 @@ const { check, finish } = createChecks()
         tab.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: window.__dt }))
       })()`)
       await sleep(200)
+    }
+    const finishDrag = async ([x, y]) => {
+      await js(`(() => {
+        const target = document.elementFromPoint(${x}, ${y}) || document.body
+        target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt, clientX: ${x}, clientY: ${y} }))
+        window.__dragged.dispatchEvent(new DragEvent('dragend', { bubbles: true }))
+      })()`)
+      await sleep(500)
+    }
+    const dragToRightEdge = async (tabSelector) => {
+      await startDrag(tabSelector)
       const at = await js(`(() => { const r = document.querySelector('.terminal-area').getBoundingClientRect(); return [r.right - 15, r.top + r.height / 2] })()`)
       for (const x of [at[0] - 200, at[0]]) {
         await js(`(() => {
@@ -39,19 +50,37 @@ const { check, finish } = createChecks()
         await sleep(250)
       }
       const zoneShown = await js(`!!document.querySelector('.drop-zone-right.active')`)
-      await js(`(() => {
-        const target = document.elementFromPoint(${at[0]}, ${at[1]}) || document.body
-        target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt, clientX: ${at[0]}, clientY: ${at[1]} }))
-        window.__dragged.dispatchEvent(new DragEvent('dragend', { bubbles: true }))
-      })()`)
-      await sleep(500)
+      await finishDrag(at)
       return zoneShown
     }
     const screenTab = (screen) => `document.querySelector('.split-pane[data-screen="${screen}"] .split-pane-tab-item:last-of-type')`
+    const screenTabs = screen => `[...document.querySelectorAll('.split-pane[data-screen="${screen}"] .split-pane-tab-item')]`
+    const tabIds = screen => js(`${screenTabs(screen)}.map(tab => tab.dataset.tabId)`)
+    const dropBefore = async (from, target) => {
+      await startDrag(from)
+      const point = await js(`(() => { const r = ${target}.getBoundingClientRect(); return [r.left + r.width * .2, r.top + r.height / 2] })()`)
+      await js(`(() => {
+        const [x, y] = ${JSON.stringify(point)}
+        document.elementFromPoint(x, y).dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: window.__dt, clientX: x, clientY: y }))
+      })()`)
+      const marked = await until(`!!document.querySelector('.tab-order-marker') && !document.querySelector('.tab-merge-marker')`, 3000)
+      await finishDrag(point)
+      return marked
+    }
     const widths = () => js(`${screens}.map(s => Math.round(s.getBoundingClientRect().width))`)
 
     check('dragging a tab to the right edge shows the drop zone', await dragToRightEdge(`${stripTabs}[4]`))
     check('it makes two screens', await until(`${screens}.length === 2`, 5000))
+    const primaryOrder = await tabIds(0)
+    const secondaryOrder = await tabIds(1)
+    const moving = primaryOrder.at(-1)
+    check('dragging within a split strip changes its order', await dropBefore(screenTab(0), `${screenTabs(0)}[0]`) &&
+      (await tabIds(0)).join(',') === [moving, ...primaryOrder.slice(0, -1)].join(','))
+    check('dragging to another split strip inserts the tab at the indicated edge',
+      await dropBefore(`${screenTabs(0)}[0]`, `${screenTabs(1)}[0]`) &&
+      (await tabIds(0)).join(',') === primaryOrder.slice(0, -1).join(',') &&
+      (await tabIds(1)).join(',') === [moving, ...secondaryOrder].join(','))
+    await dropBefore(`${screenTabs(1)}[0]`, `${screenTabs(0)}[0]`)
     check('from a screen\'s tab strip the right edge makes a third screen', await dragToRightEdge(screenTab(0)) && await until(`${screens}.length === 3`, 5000))
     const three = await widths()
     check('three screens share the width evenly', Math.max(...three) - Math.min(...three) <= 3, JSON.stringify(three))

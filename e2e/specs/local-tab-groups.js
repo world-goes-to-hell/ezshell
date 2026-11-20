@@ -54,6 +54,40 @@ const { check, finish } = createChecks()
     await sleep(400)
     check('Ctrl+Tab stays within the group in front', await js(`${tabs}.length === 1 && ${tabs}[0].dataset.tabId === ${JSON.stringify(alphaId)}`))
 
+    const plus = `document.querySelector('.terminal-tabs .new-tab-btn')`
+    await driver.click(...await driver.center(plus))
+    const browserItem = `[...document.querySelectorAll('.new-tab-menu-item')].find(item => item.textContent.trim() === '브라우저 열기')`
+    await until(`!!${browserItem}`)
+    await driver.click(...await driver.center(browserItem))
+    const browser = `document.querySelector('.terminal-tab[data-tab-id^="browser:"]')`
+    check('a browser tab opens alongside the local terminal in the same project', await until(`!!${browser} && ${tabs}.length === 2`))
+    const browserId = await js(`${browser}.dataset.tabId`)
+    await js(`${tabs}[0].click()`)
+    await js(`(() => {
+      window.__reorderSource = ${browser}
+      window.__reorderData = new DataTransfer()
+      window.__reorderSource.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: window.__reorderData }))
+    })()`)
+    await sleep(200)
+    const [leftX, tabY] = await js(`(() => { const r = ${tabs}[0].getBoundingClientRect(); return [r.left + 8, r.top + r.height / 2] })()`)
+    await js(`(() => {
+      const target = document.elementFromPoint(${leftX}, ${tabY})
+      const options = { bubbles: true, cancelable: true, dataTransfer: window.__reorderData, clientX: ${leftX}, clientY: ${tabY} }
+      target.dispatchEvent(new DragEvent('dragover', options))
+    })()`)
+    check('dragging a browser tab over the local tab shows an insertion line', await until(`!!document.querySelector('.tab-order-marker') && !document.querySelector('.tab-merge-marker')`, 3000))
+    await js(`(() => {
+      const target = document.elementFromPoint(${leftX}, ${tabY})
+      target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__reorderData, clientX: ${leftX}, clientY: ${tabY} }))
+      window.__reorderSource.dispatchEvent(new DragEvent('dragend', { bubbles: true }))
+    })()`)
+    const browserFirst = `${tabs}.length === 2 && ${tabs}[0].dataset.tabId === ${JSON.stringify(browserId)} && ${tabs}[1].dataset.tabId === ${JSON.stringify(alphaId)}`
+    check('reordering keeps both tabs and leaves the local shell selected', await until(`${browserFirst} && ${tabs}[1].classList.contains('active')`))
+    await pickTabGroup(driver, 'beta')
+    await pickTabGroup(driver, 'alpha')
+    check('coming back to the project keeps the chosen tab order', await until(browserFirst))
+    await js(`${browser}.querySelector('.tab-close').click()`)
+
     // Going to a tab from the sidebar switches the group
     await js(`${open('beta')}.click()`)
     check('opening the other project\'s worktree goes to its tab and group', await until(`${tabs}.length === 1 && ${tabs}[0].dataset.tabId === ${JSON.stringify(betaId)}`, 5000))

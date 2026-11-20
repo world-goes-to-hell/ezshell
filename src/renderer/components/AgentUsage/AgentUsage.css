@@ -17,15 +17,20 @@
   white-space: nowrap;
 }
 
-.agent-usage-identity {
+.agent-usage-identity,
+.agent-usage-tooltip {
   --agent-usage-tone: var(--text-link);
+}
+
+.agent-usage-identity {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
 }
 
-.agent-usage-identity.is-claude {
+.agent-usage-identity.is-claude,
+.agent-usage-tooltip.is-claude {
   --agent-usage-tone: var(--warning);
 }
 
@@ -53,11 +58,17 @@
 
 .agent-usage-meters {
   display: inline-flex;
-  flex: none;
+  flex: 1 0 auto;
+  align-self: stretch;
   align-items: center;
   gap: 9px;
   padding-inline-start: 8px;
   border-inline-start: 1px solid var(--border);
+}
+
+.agent-usage-meters:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .agent-usage-meter {
@@ -127,4 +138,247 @@
 
 @media (prefers-reduced-motion: reduce) {
   .agent-usage-bar > span { transition: none; }
+}
+
+.agent-usage-tooltip {
+  z-index: 1000;
+  width: min(246px, var(--radix-tooltip-content-available-width));
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.agent-usage-tooltip-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px 10px;
+}
+
+.agent-usage-tooltip-header > strong {
+  font-size: 14px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.agent-usage-tooltip-effort {
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--agent-usage-tone) 16%, var(--bg-secondary));
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.agent-usage-tooltip-effort b {
+  margin-inline-start: 2px;
+  color: var(--text-primary);
+}
+
+.agent-usage-tooltip-metrics {
+  margin: 8px 0 0;
+}
+
+.agent-usage-tooltip-metric {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 1px 10px;
+  padding: 5px 0;
+  border-top: 1px solid var(--border);
+}
+
+.agent-usage-tooltip-metric:last-child { padding-bottom: 0; }
+.agent-usage-tooltip-metric dd { margin: 0; }
+
+.agent-usage-tooltip-value {
+  font-size: 14px;
+  font-weight: 650;
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-usage-tooltip-value.is-warn { color: color-mix(in srgb, var(--warning) 60%, var(--text-primary)); }
+.agent-usage-tooltip-value.is-high { color: color-mix(in srgb, var(--error-text) 80%, var(--text-primary)); }
+
+.agent-usage-tooltip-reset {
+  grid-column: 1 / -1;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The model and the effort as buttons that open AgentPickerMenu: they keep their look, with a hover */
+.agent-picker-trigger {
+  margin: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.agent-usage-model.agent-picker-trigger {
+  padding: 0 3px;
+  border-radius: var(--radius-sm);
+}
+
+.agent-usage-effort.agent-picker-trigger {
+  background: color-mix(in srgb, var(--agent-usage-tone) 17%, transparent);
+}
+
+.agent-usage-model.agent-picker-trigger:hover,
+.agent-usage-model.agent-picker-trigger[data-state='open'] {
+  background: color-mix(in srgb, var(--agent-usage-tone) 14%, transparent);
+}
+
+.agent-usage-effort.agent-picker-trigger:hover,
+.agent-usage-effort.agent-picker-trigger[data-state='open'] {
+  background: color-mix(in srgb, var(--agent-usage-tone) 30%, transparent);
+}
+
+.agent-picker-trigger:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.agent-picker-menu {
+  z-index: 1000;
+  min-width: 220px;
+  max-width: 380px;
+  max-height: min(420px, var(--radix-dropdown-menu-content-available-height));
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+/* The title and, at its right, the refresh button (reads the list from the CLI again) */
+.agent-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 2px 6px 4px;
+}
+
+.agent-picker-refresh {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  outline: none;
+  cursor: pointer;
+}
+
+.agent-picker-refresh[data-highlighted] {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.agent-picker-refresh[data-disabled] {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.agent-picker-status.is-inline {
+  padding: 4px 8px 6px;
+  font-size: 11.5px;
+}
+
+.agent-picker-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--accent);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-picker-hint {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.agent-picker-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  color: var(--text-muted);
+}
+
+.agent-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  outline: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-picker-item[data-highlighted] {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.agent-picker-item[data-disabled] {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.agent-picker-check {
+  display: inline-flex;
+  flex: none;
+  justify-content: center;
+  width: 14px;
+  color: var(--accent);
+}
+
+.agent-picker-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.agent-picker-name {
+  color: var(--text-primary);
+}
+
+.agent-picker-detail {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-picker-spin {
+  animation: agent-picker-spin 0.9s linear infinite;
+}
+
+@keyframes agent-picker-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-picker-spin { animation: none; }
 }

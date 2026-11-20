@@ -6,6 +6,8 @@ import './SelectMenu.css'
 export interface SelectMenuOption {
   value: string
   label: string
+  /** Shown in the list and in the trigger when this option is selected */
+  icon?: ReactNode
   /** Applied to the option row (e.g. a font preview); the trigger shows it too when the option is chosen */
   style?: CSSProperties
 }
@@ -42,7 +44,7 @@ export function SelectMenu({ value, options, onChange, ariaLabel, icon, id, clas
           className={`select-menu-trigger is-${size} ${className}`}
           aria-label={`${ariaLabel}: ${chosen?.label ?? '선택 안 됨'}`}
         >
-          {icon}
+          {chosen?.icon ?? icon}
           <span className="select-menu-value" style={chosen?.style}>{chosen?.label ?? '선택'}</span>
           <RiArrowDownSLine size={16} className="select-menu-chevron" aria-hidden />
         </button>
@@ -51,7 +53,8 @@ export function SelectMenu({ value, options, onChange, ariaLabel, icon, id, clas
         <DropdownMenu.Content className={`select-menu-content is-${size}`} align="start" sideOffset={4} collisionPadding={8}>
           <DropdownMenu.RadioGroup value={value} onValueChange={onChange}>
             {options.map(option => (
-              <DropdownMenu.RadioItem key={option.value} value={option.value} className="select-menu-item" style={option.style}>
+              <DropdownMenu.RadioItem key={option.value} value={option.value} textValue={option.label} className="select-menu-item" style={option.style}>
+                {option.icon}
                 <span className="select-menu-item-label">{option.label}</span>
                 <DropdownMenu.ItemIndicator className="select-menu-check">
                   <RiCheckLine size={16} />

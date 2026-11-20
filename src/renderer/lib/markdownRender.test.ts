@@ -49,6 +49,14 @@ describe('renderChatMarkdown (an agent\'s answer)', () => {
     }
   })
 
+  it('keeps relative file links of an answer ("docs/x.md", "../a.md:3") as written', async () => {
+    const { renderChatMarkdown, LOCAL_PATH_LINK } = await import('./markdownRender')
+    expect(renderChatMarkdown('[계획](docs/plan/a.md)')).toContain('href="docs/plan/a.md"')
+    expect(renderChatMarkdown('[a](../plan/한글.md:3)')).toContain('href="../plan/한글.md:3"')
+    expect(LOCAL_PATH_LINK.test('docs/plan/a.md')).toBe(true)
+    for (const bad of ['#anchor', 'mailto:a@b.c', '%5Chost%5Cshare', 'app://x', '${bad}']) expect(LOCAL_PATH_LINK.test(bad)).toBe(false)
+  })
+
   it('leaves the file window\'s Markdown view as it was', () => {
     expect(renderMarkdown('[x](C:/Users/me/a.txt)')).not.toContain('href=')
   })

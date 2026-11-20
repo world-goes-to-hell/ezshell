@@ -7,8 +7,7 @@ import {
   findSuggestions,
   isTypingInput,
   readTypedInput,
-  resolveSuggestKey,
-  type CursorBufferLike
+  resolveSuggestKey
 } from '../lib/historySuggest'
 
 interface SuggestState {
@@ -52,7 +51,7 @@ function anchorFor(term: Terminal, typed: string): SuggestAnchor | null {
  * The terminal's key/data handlers are attached once when it is created, so the state they read
  * lives in refs.
  */
-export function useHistorySuggestions(sessionId: string, insert: (command: string) => void) {
+export function useHistorySuggestions(sessionId: string, insert: (command: string) => void, allowInlinePrediction = false) {
   const termRef = useRef<Terminal | null>(null)
   const insertRef = useRef(insert)
   insertRef.current = insert
@@ -94,7 +93,7 @@ export function useHistorySuggestions(sessionId: string, insert: (command: strin
     const buffer = term.buffer.active
     // vim, less, top and other full-screen programs draw on the alternate buffer
     if (buffer.type !== 'normal') return update(null)
-    const typed = readTypedInput(buffer as unknown as CursorBufferLike)
+    const typed = readTypedInput(buffer, allowInlinePrediction)
     if (!typed) return update(null)
 
     const { keyBySession, entriesByKey } = useCommandHistoryStore.getState()
@@ -105,7 +104,7 @@ export function useHistorySuggestions(sessionId: string, insert: (command: strin
 
     const prev = stateRef.current
     update({ items, typed, anchor, selected: prev && sameItems(prev.items, items) ? prev.selected : null })
-  }, [sessionId, update])
+  }, [sessionId, allowInlinePrediction, update])
 
   const refresh = useCallback(() => {
     if (!typingRef.current) return

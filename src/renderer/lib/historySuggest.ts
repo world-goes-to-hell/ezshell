@@ -3,21 +3,17 @@
  * commands match it, and what a key does while the suggestion list is open.
  */
 import type { CommandHistoryEntry } from '../types'
-import { textAfterPrompt, type BufferLike } from './commandCapture'
+import { hasInlinePrediction, textAfterPrompt, type InputLineLike } from './commandCapture'
 
 export const MIN_TYPED_LENGTH = 2
 export const MAX_SUGGESTIONS = 8
-
-type LineLike = NonNullable<ReturnType<BufferLike['getLine']>> & {
-  translateToString: (trimRight?: boolean, startColumn?: number, endColumn?: number) => string
-}
 
 /** The parts of xterm's IBuffer read here (cursor column included) */
 export interface CursorBufferLike {
   baseY: number
   cursorY: number
   cursorX: number
-  getLine: (y: number) => LineLike | undefined
+  getLine: (y: number) => InputLineLike | undefined
 }
 
 /**
@@ -26,13 +22,14 @@ export interface CursorBufferLike {
  * bodies, output), the cursor is not at the end of the input, the input starts with a space
  * (kept out of history) or is shorter than MIN_TYPED_LENGTH.
  */
-export function readTypedInput(buffer: CursorBufferLike): string | null {
+export function readTypedInput(buffer: CursorBufferLike, allowInlinePrediction = false): string | null {
   const cursorRow = buffer.baseY + buffer.cursorY
   const cursorLine = buffer.getLine(cursorRow)
   if (!cursorLine) return null
 
   // Anything after the cursor (on this row or a wrapped continuation) means the user is editing mid-line
-  if (cursorLine.translateToString(true, buffer.cursorX).length > 0) return null
+  if (cursorLine.translateToString(true, buffer.cursorX).length > 0 &&
+      !(allowInlinePrediction && hasInlinePrediction(cursorLine, buffer.cursorX))) return null
   if (buffer.getLine(cursorRow + 1)?.isWrapped) return null
 
   let first = cursorRow

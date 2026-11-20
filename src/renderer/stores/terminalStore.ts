@@ -57,6 +57,13 @@ export type LayoutState = ScreenLayout
 
 type SshDataHandler = (data: string) => void
 
+export interface TabStripPosition {
+  screen: number
+  targetId: string | null
+  after: boolean
+  visibleIds: readonly string[]
+}
+
 interface TerminalState {
   terminals: Map<string, TerminalInfo>
   activeTerminalId: string | null
@@ -72,6 +79,7 @@ interface TerminalState {
 
   addTerminal: (sessionId: string, info: TerminalInfo) => void
   removeTerminal: (sessionId: string) => void
+  moveTabInStrip: (sessionId: string, position: TabStripPosition) => void
   /** Drop output buffered for a session whose screen now lives in another window */
   discardSshDataBuffer: (sessionId: string) => void
   setActiveTerminal: (sessionId: string | null) => void
@@ -138,6 +146,13 @@ const screens = (state: { layout: LayoutState; terminals: Map<string, TerminalIn
   sizes: state.layout.sizes, activePane: state.layout.activePane, direction: state.layout.direction,
   allIds: [...state.terminals.keys()], ...input
 })
+
+function insertTab(ids: readonly string[], id: string, target: string | null, after: boolean): string[] {
+  const next = ids.filter(item => item !== id)
+  const index = target === null ? next.length : next.indexOf(target) + Number(after)
+  next.splice(index, 0, id)
+  return next
+}
 
 const DEFAULT_FONT_SIZE = 14
 const MIN_FONT_SIZE = 10
@@ -206,6 +221,39 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       terminals: newTerminals,
       activeTerminalId: newActiveId,
       layout: newLayout
+    }
+  }),
+
+  moveTabInStrip: (sessionId, { screen, targetId, after, visibleIds }) => set((state) => {
+    const { terminals, layout } = state
+    const source = screenOfTab(layout.panes, sessionId)
+    const destination = layout.panes[screen]
+    if (source < 0 || !destination || !terminals.has(sessionId) || targetId === sessionId ||
+      (targetId !== null && (!terminals.has(targetId) || !destination.terminalIds.includes(targetId)))) return state
+
+    // Keep other projects' tab slots: changing this strip must not move their groups.
+    const visible = new Set(visibleIds)
+    if (!visible.has(sessionId) || (targetId !== null && !visible.has(targetId))) return state
+    const allIds = [...terminals.keys()]
+    const visibleOrder = insertTab(allIds.filter(id => visible.has(id)), sessionId, targetId, after)
+    let next = 0
+    const orderedIds = allIds.map(id => visible.has(id) ? visibleOrder[next++] : id)
+    const ordered = orderedIds.every((id, index) => id === allIds[index])
+      ? terminals : new Map(orderedIds.map(id => [id, terminals.get(id)!]))
+
+    const movingScreen = source !== screen
+    const panes = layout.panes.map((pane, index) => {
+      if (index === screen) return {
+        terminalIds: layout.mode === 'single' ? orderedIds : insertTab(pane.terminalIds, sessionId, targetId, after),
+        activeTerminalId: movingScreen ? sessionId : pane.activeTerminalId
+      }
+      if (index === source && movingScreen) return { ...pane, terminalIds: pane.terminalIds.filter(id => id !== sessionId) }
+      return pane
+    })
+    return {
+      terminals: ordered,
+      layout: screens(state, { panes, activePane: movingScreen ? screen : layout.activePane }),
+      activeTerminalId: movingScreen ? sessionId : state.activeTerminalId
     }
   }),
 

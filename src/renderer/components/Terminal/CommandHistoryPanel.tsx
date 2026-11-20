@@ -10,12 +10,13 @@ import { CommandHistoryEmpty } from './CommandHistoryEmpty'
 
 interface CommandHistoryPanelProps {
   sessionId: string
+  scopeLabel?: string
   /** Types the command into the pane that had focus last; running it is left to the user */
   onInsert: (command: string) => void
   onClose: () => void
 }
 
-export function CommandHistoryPanel({ sessionId, onInsert, onClose }: CommandHistoryPanelProps) {
+export function CommandHistoryPanel({ sessionId, scopeLabel = '이 연결', onInsert, onClose }: CommandHistoryPanelProps) {
   const { isAvailable, entries, remove, clear } = useCommandHistory(sessionId)
   const [query, setQuery] = useState('')
   const results = useFilteredHistory(entries, query)
@@ -32,7 +33,7 @@ export function CommandHistoryPanel({ sessionId, onInsert, onClose }: CommandHis
   const handleClear = async () => {
     const confirmed = await confirmDialog({
       title: '명령어 기록 삭제',
-      message: `이 연결의 명령어 기록 ${entries.length}개를 모두 삭제합니다.\n삭제한 기록은 되돌릴 수 없습니다.`,
+      message: `${scopeLabel}의 명령어 기록 ${entries.length}개를 모두 삭제합니다.\n삭제한 기록은 되돌릴 수 없습니다.`,
       confirmLabel: '모두 삭제',
       danger: true
     })
@@ -58,8 +59,8 @@ export function CommandHistoryPanel({ sessionId, onInsert, onClose }: CommandHis
             className="monitor-action-btn"
             onClick={handleClear}
             disabled={entries.length === 0}
-            title="이 연결의 기록 모두 삭제"
-            aria-label="이 연결의 기록 모두 삭제"
+            title={`${scopeLabel}의 기록 모두 삭제`}
+            aria-label={`${scopeLabel}의 기록 모두 삭제`}
           >
             <RiDeleteBin2Line size={14} />
           </button>

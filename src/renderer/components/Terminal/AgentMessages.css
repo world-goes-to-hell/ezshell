@@ -48,6 +48,27 @@
 .agent-delivery-notice svg { flex: none; color: var(--accent); }
 .agent-delivery-text { display: grid; gap: 2px; overflow-wrap: anywhere; }
 .agent-delivery-text span { color: var(--text-secondary); font-size: 11px; }
+/* Sender and receiver with their agent icons */
+.agent-delivery-text strong { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 3px; }
+/* The message flying from the sender's pane to the receiver's (then the card above shows) */
+.agent-message-flight {
+  position: fixed;
+  z-index: 120;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow-lg);
+}
+/* On the accent the icon takes the chip's text color instead of its agent color */
+.agent-message-flight .agent-message-provider[data-kind] { color: inherit; }
 .agent-message-filter {
   display: flex;
   align-items: baseline;
@@ -78,16 +99,14 @@
   min-width: 0;
 }
 .agent-thread-message header { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
-.agent-thread-message header span { color: var(--text-muted); }
+.agent-message-route,
+.agent-message-actor { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.agent-message-route { flex-wrap: wrap; }
+.agent-message-actor-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-message-provider { flex: none; color: var(--text-secondary); }
+.agent-message-provider[data-kind='codex'] { color: var(--text-link); }
+.agent-message-provider[data-kind='claude'] { color: var(--warning); }
+.agent-thread-message .agent-read-state { flex: none; color: var(--text-muted); }
 .agent-thread-message p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
-/* A quick confirmation (send_receipt): lighter than the messages that carry the request and the result */
-.agent-thread-message.is-receipt { background: transparent; border: 1px dashed var(--border); }
-.agent-thread-message.is-receipt p { color: var(--text-secondary); }
-.agent-thread-message header .agent-receipt-tag {
-  margin-left: auto;
-  padding: 0 6px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm, 0);
-  color: var(--accent);
-  font-size: 11px;
-}
+/* 안 읽음 stands out until the recipient reads it; 읽음 stays quiet */
+.agent-thread-message header .agent-read-state[data-read='false'] { color: var(--accent); font-weight: 600; }

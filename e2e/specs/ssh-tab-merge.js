@@ -16,6 +16,7 @@ const { check, finish } = createChecks()
   const textOf = (pane) => js(`(() => { const el = ${PANES}.find(p => p.dataset.pane === ${JSON.stringify(pane)}); return el ? [...el.querySelectorAll('.xterm-rows > div')].map(r => r.textContent).join('\\n') : '' })()`)
   const tabCount = () => js(`document.querySelectorAll('.terminal-tab').length`)
   const TAB = (index) => `document.querySelectorAll('.terminal-tab')[${index}]`
+  const orderedIds = () => js(`[...document.querySelectorAll('.terminal-tab')].map(tab => tab.dataset.tabId)`)
   const mark = async (pane, word) => {
     await js(`${PANES}.find(p => p.dataset.pane === ${JSON.stringify(pane)}).querySelector('.xterm-helper-textarea').focus()`)
     await type(word)
@@ -36,25 +37,26 @@ const { check, finish } = createChecks()
     return 'ok'
   })()`)
   /** Pointer over (x, y) while dragging: returns the marker's state */
-  const dragOver = async (x, y) => {
+  const dragOver = async (x, y, altKey = false) => {
     await js(`(() => {
       const target = document.elementFromPoint(${x}, ${y}) || document.body
-      const over = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: window.__dt, clientX: ${x}, clientY: ${y} })
+      const over = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: window.__dt, clientX: ${x}, clientY: ${y}, altKey: ${altKey} })
       target.dispatchEvent(over)
       window.__overAccepted = over.defaultPrevented
     })()`)
     await sleep(300)
     return js(`(() => { const m = document.querySelector('.tab-merge-marker'); return m ? { blocked: m.classList.contains('is-blocked'), text: m.textContent, accepted: window.__overAccepted } : null })()`)
   }
-  const drop = async (x, y) => {
+  const drop = async (x, y, altKey = false) => {
     await js(`(() => {
       const target = document.elementFromPoint(${x}, ${y}) || document.body
-      target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt, clientX: ${x}, clientY: ${y} }))
+      target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt, clientX: ${x}, clientY: ${y}, altKey: ${altKey} }))
       window.__dragged.dispatchEvent(new DragEvent('dragend', { bubbles: true }))
     })()`)
     await sleep(400)
   }
   const middleOf = async (pane) => { const r = await rectOf(pane); return [r[0] + r[2] / 2, r[1] + r[3] / 2] }
+  const tabPoint = (index, fraction) => js(`(() => { const r = ${TAB(index)}.getBoundingClientRect(); return [r.left + r.width * ${fraction}, r.top + r.height / 2] })()`)
 
   await unlock(driver)
   check('the first tab connects to the test server', await connectSsh(driver))
@@ -62,6 +64,23 @@ const { check, finish } = createChecks()
   check('a second tab connects to the same server and account', await connectSsh(driver))
   check('two tabs', (await tabCount()) === 2, String(await tabCount()))
   check('the second tab answers', await mark('main', 'TAB-TWO'))
+
+  const originalOrder = await orderedIds()
+  await startTabDrag(1)
+  await sleep(160)
+  const beforeTab = await tabPoint(0, 0.2)
+  check('a normal drag over a matching SSH tab shows an insertion marker instead of a merge',
+    await dragOver(...beforeTab) === null && await js(`!!document.querySelector('.tab-order-marker')`))
+  await drop(...beforeTab)
+  check('dropping on the left of a tab moves it before that tab and preserves both shells',
+    (await orderedIds()).join(',') === [...originalOrder].reverse().join(',') && (await ids()).length === 1)
+
+  await startTabDrag(0)
+  await sleep(160)
+  const afterTab = await tabPoint(1, 0.8)
+  await dragOver(...afterTab)
+  await drop(...afterTab)
+  check('dropping on the right moves the tab after the other tab', (await orderedIds()).join(',') === originalOrder.join(','))
 
   // ---- Drag the second tab onto the first tab's terminal ----
   await js(`${TAB(0)}.click()`); await sleep(800)
@@ -130,7 +149,7 @@ const { check, finish } = createChecks()
   const back = await rectOf(refilled)
   check('in the place the pane had', Math.abs(back[0] - b[0]) < 4 && Math.abs(back[2] - b[2]) < 4, JSON.stringify([b, back]))
 
-  // ---- Drop a tab on another tab in the tab strip ----
+  // ---- Alt-drop a tab on another tab in the tab strip ----
   check('a third tab connects to the same server', await connectSsh(driver))
   check('it answers', await mark('main', 'TAB-THREE'))
   await js(`${TAB(0)}.click()`); await sleep(800)
@@ -138,10 +157,10 @@ const { check, finish } = createChecks()
   // Through the terminal area and out of it again (that alone used to mean "pop out to a window")
   await js(`(() => { const area = document.querySelector('.terminal-area'); const t = ${TAB(0)}.getBoundingClientRect(); area.dispatchEvent(new DragEvent('dragleave', { bubbles: true, dataTransfer: window.__dt, clientX: t.left + 10, clientY: t.top + 5 })) })()`)
   const onTab = await center(TAB(0))
-  marker = await dragOver(onTab[0], onTab[1])
-  check('over the other tab, that tab is marked as the place to merge', !!marker && !marker.blocked && marker.accepted === true && /칸으로 병합/.test(marker.text), JSON.stringify(marker))
+  marker = await dragOver(onTab[0], onTab[1], true)
+  check('holding Alt over the other tab marks it as the place to merge', !!marker && !marker.blocked && marker.accepted === true && /칸으로 병합/.test(marker.text), JSON.stringify(marker))
   await shot('ssh-tab-merge-4-on-tab')
-  await drop(onTab[0], onTab[1])
+  await drop(onTab[0], onTab[1], true)
   check('the dropped tab leaves the strip', await until(`document.querySelectorAll('.terminal-tab').length === 1`, 10000), String(await tabCount()))
   check('and becomes a third pane of the tab (not a window of its own)', await until(`${PANES}.length === 3`, 8000), JSON.stringify(await ids()))
   await sleep(1500)

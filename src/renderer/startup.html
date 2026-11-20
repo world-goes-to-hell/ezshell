@@ -6,12 +6,11 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src blob:; script-src 'self'; style-src 'self';">
   <title>ezShell 시작 중</title>
   <link rel="stylesheet" href="./styles/startup.css">
+  <link rel="stylesheet" href="./styles/startupBoot.css">
 </head>
 <body>
-  <main class="startup" role="status" aria-label="ezShell 시작 준비 중">
-    <canvas class="startup-backdrop" aria-hidden="true"></canvas>
-    <canvas class="startup-logo" aria-hidden="true"></canvas>
-  </main>
+  <!-- The motion (startup.ts) builds its own content here -->
+  <main class="startup" aria-label="ezShell 시작 화면"></main>
   <script type="module" src="./startup.ts"></script>
 </body>
 </html>
