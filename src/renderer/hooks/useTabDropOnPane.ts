@@ -26,11 +26,14 @@ interface TabOrderHover {
 }
 
 type TabDropHover = MergeHover | TabOrderHover
+type DragPoint = Pick<DragEvent, 'clientX' | 'clientY' | 'altKey'>
 
 const PANES = '[data-pane], [data-vacant]'
 /** Tabs of the single tab strip and of the split view's strips (they carry their tab id) */
 const TABS = '.terminal-tab[data-tab-id], .split-pane-tab-item[data-tab-id]'
 const TAB_STRIPS = '.terminal-tabs, .split-pane-tabs'
+const TAB_MERGE_HOLD_MS = 700
+const TAB_MERGE_SLOP_PX = 8
 /** Band along the terminal area's edges that means "split the screen" while a tab of the single strip is dragged */
 export const SCREEN_SPLIT_BAND_PX = 48
 
@@ -62,19 +65,20 @@ function tabOrderAt(strip: HTMLElement, draggingId: string, x: number): TabOrder
   }
 }
 
-function hoverAt(draggingId: string, { clientX: x, clientY: y, altKey }: DragEvent, hasEdgeZones: boolean): TabDropHover | null {
+const tabAt = (elements: Element[]) => elements.find((element): element is HTMLElement => element instanceof HTMLElement && element.matches(TABS))
+
+function hoverAt(draggingId: string, point: DragPoint, hasEdgeZones: boolean, heldTab: HTMLElement | null, underPointer = document.elementsFromPoint(point.clientX, point.clientY)): TabDropHover | null {
+  const { clientX: x, clientY: y, altKey } = point
   const tabs = useTerminalStore.getState().terminals
   const source = tabs.get(draggingId)
   if (!source) return null
-  const underPointer = document.elementsFromPoint(x, y)
   const strip = underPointer.find(candidate => candidate.matches(TAB_STRIPS))
-  const tabElement = underPointer.find(candidate => candidate.matches(TABS))
-  // A normal drop on a strip changes order for any kind of tab. Alt over another tab requests a merge.
-  const mergeOnTab = altKey && !source.db && !source.browser && tabElement instanceof HTMLElement && tabElement.dataset.tabId !== draggingId
+  const tabElement = tabAt(underPointer)
+  const mergeOnTab = (altKey || heldTab === tabElement) && !source.db && !source.browser && tabElement && tabElement.dataset.tabId !== draggingId
   if (strip instanceof HTMLElement && !mergeOnTab) return tabOrderAt(strip, draggingId, x)
   // A DB tab is never a pane: no marker at all rather than a refusal on every terminal it passes
   if (source.db || source.browser) return null
-  // With Alt: use the target tab's first empty place or its largest pane.
+  // A held-over tab or an Alt-drop uses its first empty place or its largest pane.
   if (mergeOnTab) {
     const targetId = tabElement.dataset.tabId ?? ''
     if (!tabs.has(targetId) || targetId === draggingId) return null
@@ -123,7 +127,8 @@ function sameHover(a: TabDropHover | null, b: TabDropHover | null): boolean {
 }
 
 /**
- * A tab dragged onto a strip changes order. A drop onto a pane, or Alt-drop onto a tab, merges it.
+ * A tab dragged onto a strip changes order until it is held over one tab. Holding changes the
+ * preview to merge, as does Alt. Dropping onto another tab's pane also merges it.
  * Listens on the document in the capture phase because the terminals swallow drag events.
  * `hasEdgeZones`: the edges of the terminal area are taken by "split the screen" (single tab strip).
  * `dropTaken`: set when a drop was handled here, so the drag's own end
@@ -138,22 +143,59 @@ export function useTabDropOnPane(draggingId: string | null, hasEdgeZones: boolea
       return
     }
     let current: TabDropHover | null = null
+    let waiting: { tab: HTMLElement; point: DragPoint } | null = null
+    let lastPoint: DragPoint | null = null
+    let heldTab: HTMLElement | null = null
+    let holdTimer: number | undefined
     const show = (next: TabDropHover | null) => {
       if (sameHover(current, next)) return
       current = next
       setHover(next)
     }
+    const clearHold = () => {
+      clearTimeout(holdTimer)
+      waiting = null
+      heldTab = null
+    }
+    const nearHoldPoint = (point: DragPoint) => waiting &&
+      Math.hypot(point.clientX - waiting.point.clientX, point.clientY - waiting.point.clientY) <= TAB_MERGE_SLOP_PX
+    const trackHold = (point: DragPoint, tab: HTMLElement | undefined) => {
+      lastPoint = point
+      if (tab && waiting?.tab === tab && nearHoldPoint(point)) return
+      clearHold()
+      const tabs = useTerminalStore.getState().terminals
+      const source = tabs.get(draggingId)
+      const target = tab?.dataset.tabId ? tabs.get(tab.dataset.tabId) : undefined
+      if (!tab || tab.dataset.tabId === draggingId || !source || source.db || source.browser || !target || target.db || target.browser) return
+      waiting = { tab, point }
+      holdTimer = window.setTimeout(() => {
+        if (!lastPoint || tabAt(document.elementsFromPoint(lastPoint.clientX, lastPoint.clientY)) !== tab) return
+        heldTab = tab
+        show(hoverAt(draggingId, lastPoint, hasEdgeZones, heldTab))
+      }, TAB_MERGE_HOLD_MS)
+    }
     const onDragOver = (event: DragEvent) => {
-      const next = hoverAt(draggingId, event, hasEdgeZones)
+      const { clientX, clientY, altKey } = event
+      const underPointer = document.elementsFromPoint(clientX, clientY)
+      trackHold({ clientX, clientY, altKey }, tabAt(underPointer))
+      const next = hoverAt(draggingId, event, hasEdgeZones, heldTab, underPointer)
       show(next)
       if (!next) return
       // Without this the drop event never comes
       event.preventDefault()
       if (next.kind === 'order' || next.onTab) event.stopPropagation()
-      if (event.dataTransfer) event.dataTransfer.dropEffect = next.kind === 'merge' && next.blocked ? 'none' : 'move'
+      if (event.dataTransfer) event.dataTransfer.dropEffect = next.kind === 'merge' && !next.onTab && next.blocked ? 'none' : 'move'
+    }
+    const onDragLeave = (event: DragEvent) => {
+      const tab = waiting?.tab
+      if (event.target !== tab && event.target !== document.documentElement && event.target !== document.body) return
+      if (tab && event.relatedTarget instanceof Node && tab.contains(event.relatedTarget)) return
+      clearHold()
+      show(null)
     }
     const onDrop = (event: DragEvent) => {
-      const target = hoverAt(draggingId, event, hasEdgeZones)
+      const target = hoverAt(draggingId, event, hasEdgeZones, nearHoldPoint(event) ? heldTab : null)
+      clearHold()
       show(null)
       if (!target) return
       event.preventDefault()
@@ -177,10 +219,13 @@ export function useTabDropOnPane(draggingId: string | null, hasEdgeZones: boolea
       }, 0)
     }
     document.addEventListener('dragover', onDragOver, true)
+    document.addEventListener('dragleave', onDragLeave, true)
     document.addEventListener('drop', onDrop, true)
     return () => {
       document.removeEventListener('dragover', onDragOver, true)
+      document.removeEventListener('dragleave', onDragLeave, true)
       document.removeEventListener('drop', onDrop, true)
+      clearHold()
       setHover(null)
     }
   }, [draggingId, hasEdgeZones, dropTaken])

@@ -6,9 +6,10 @@ import { useTerminalStore, type LayoutState } from '../stores/terminalStore'
 import { useTabGroupStore, type SavedSplit } from '../stores/tabGroupStore'
 import { useLocalProjects } from './useLocalProjects'
 import { useProjectServers } from './useProjectServers'
-import { buildProjectNodes } from '../components/Sidebar/LocalProjectsTree'
+import { buildProjectNodes, type WorktreeNode } from '../components/Sidebar/LocalProjectsTree'
 import { projectKeyOf } from '../lib/localProjectServers'
-import { groupOfTab, groupTabs, type GroupProject, type TabGroup } from '../lib/tabGroups'
+import { groupOfTab, groupTabs, localFolderForGroup, projectOfFolder, type GroupProject, type TabGroup } from '../lib/tabGroups'
+import { pathKey, worktreeOf } from '../lib/localWorkspaceTree'
 
 export interface TabGroupView {
   groups: TabGroup[]
@@ -16,6 +17,8 @@ export interface TabGroupView {
   activeGroup: string | null
   /** The tabs of the group in front, in strip order */
   shownIds: string[]
+  localFolder: (tabId: string | null) => string | undefined
+  worktreeForFolder: (cwd: string) => WorktreeNode | undefined
   /** The group's last front tab, or its first */
   openGroup: (key: string) => void
 }
@@ -32,9 +35,11 @@ export function useTabGroups(): TabGroupView {
   const activeId = useTerminalStore(state => state.activeTerminalId)
   const current = useTabGroupStore(state => state.current)
 
-  const groupProjects: GroupProject[] = useMemo(() => buildProjectNodes(projects).map(node => ({
+  const projectNodes = useMemo(() => buildProjectNodes(projects), [projects])
+  const groupProjects: GroupProject[] = useMemo(() => projectNodes.map(node => ({
     key: projectKeyOf(node), name: node.name, worktrees: node.worktrees.map(tree => tree.path)
-  })), [projects])
+  })), [projectNodes])
+  const worktrees = useMemo(() => new Map(projectNodes.flatMap(node => node.worktrees.map(tree => [pathKey(tree.path), tree] as const))), [projectNodes])
   const groups = useMemo(() => groupTabs([...terminals.keys()], terminals, groupProjects, servers, current), [terminals, groupProjects, servers, current])
   const activeGroup = activeId && terminals.has(activeId) ? groupOfTab(activeId, terminals, groupProjects, servers, current) : groups[0]?.key ?? null
   const shownIds = useMemo(() => groups.find(group => group.key === activeGroup)?.tabIds ?? [...terminals.keys()], [groups, activeGroup, terminals])
@@ -59,7 +64,7 @@ export function useTabGroups(): TabGroupView {
         return
       }
     }
-    if (front) store.remember(activeGroup, front)
+    if (front) store.remember(activeGroup, front, terminalState.terminals.get(front)?.local?.cwd)
     if (before === activeGroup) return
 
     // Switching: the old group's split is put away (with the tabs it had), the new group's comes back
@@ -92,5 +97,16 @@ export function useTabGroups(): TabGroupView {
     useTerminalStore.getState().focusTerminal(last && group.tabIds.includes(last) ? last : group.tabIds[0])
   }
 
-  return { groups, projects: groupProjects, activeGroup, shownIds, openGroup }
+  const localFolder = (tabId: string | null) => localFolderForGroup(
+    activeGroup, groupProjects, tabId ? terminals.get(tabId)?.local?.cwd : undefined,
+    activeGroup ? useTabGroupStore.getState().lastLocalFolder[activeGroup] : undefined,
+    [...shownIds].reverse().map(id => terminals.get(id)?.local?.cwd)
+  )
+  const worktreeForFolder = (cwd: string) => {
+    const project = projectOfFolder(cwd, groupProjects)
+    const tree = project && worktreeOf(cwd, project.worktrees)
+    return tree ? worktrees.get(pathKey(tree)) : undefined
+  }
+
+  return { groups, projects: groupProjects, activeGroup, shownIds, openGroup, localFolder, worktreeForFolder }
 }

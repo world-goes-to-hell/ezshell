@@ -648,11 +648,11 @@ function createLocalShells({
      * A line from the chat view (src/agentChat): into the agent's composer only, never the shell. Not
      * while it asks for approval (the text would answer the question).
      */
-    async chatSend(id, text) {
+    async chatSend(id, text, claudeImages) {
       const entry = shells.get(id);
       if (!hasAgent(entry) || !entry.inbox) return { ok: false, reason: 'not-agent' };
       if (agentStatus(entry) === 'blocked') return { ok: false, reason: 'approval' };
-      const result = await entry.inbox.submitText(text);
+      const result = await entry.inbox.submitText(text, claudeImages);
       if (result.ok && entry.codexInput && entry.codexInput.submitted) entry.reportStatus?.(agentStatus(entry));
       return result;
     },

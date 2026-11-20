@@ -44,6 +44,38 @@
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
+.terminal-tab:has(> .tab-worktree-badge),
+.split-pane-tab-item:has(> .tab-worktree-badge) {
+  position: relative;
+}
+
+.terminal-tabs:has(.tab-worktree-badge) .terminal-tab { padding-block: 11px 5px; }
+
+.tab-worktree-badge {
+  position: absolute;
+  z-index: 1;
+  inset: -4px auto auto 10px;
+  max-width: calc(100% - 20px);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 12px;
+  white-space: nowrap;
+}
+
+.tab-worktree-badge > svg { flex: none; }
+.tab-worktree-badge > span { overflow: hidden; text-overflow: ellipsis; }
+.active > .tab-worktree-badge {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--text-primary);
+}
+
 .tab-order-marker {
   position: fixed;
   z-index: 101;

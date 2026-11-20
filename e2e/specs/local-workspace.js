@@ -138,5 +138,15 @@ const { check, finish } = createChecks()
   await js(`${q('.local-project-row')}.click()`)
   check('and opens again', await until(`document.querySelectorAll('.local-worktree').length === 2`))
 
+  // Taking the project off the list: a second registered folder of the same repository goes with it
+  await js(`localStorage.setItem('ezshell.localProjects', JSON.stringify([${JSON.stringify(repo)}, ${JSON.stringify(feature)}])); window.dispatchEvent(new Event('ezshell:local-projects-changed'))`)
+  await sleep(1500)
+  check('a worktree registered as well adds no second project', await js(`document.querySelectorAll('.local-project').length === 1`))
+  const tabsBefore = await js(`document.querySelectorAll('.terminal-tab').length`)
+  await js(`${q('.local-project-remove')}.click()`)
+  check('the remove button takes the project and its worktrees off the tree', await until(`!document.querySelector('.local-project') && !document.querySelector('.local-worktree')`))
+  check('both registered folders are gone from the list', await js(`localStorage.getItem('ezshell.localProjects') === '[]'`), await js(`localStorage.getItem('ezshell.localProjects')`))
+  check('the open local terminals stay', await js(`document.querySelectorAll('.terminal-tab').length === ${tabsBefore}`), `${tabsBefore} → ${await js(`document.querySelectorAll('.terminal-tab').length`)}`)
+
   finish()
 })().catch((error) => { console.error(error); process.exit(1) })

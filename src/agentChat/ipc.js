@@ -5,6 +5,9 @@ const { linkTarget } = require('./links.js')
 
 const SHELL_ID = /^local:\d+$/
 const MAX_TEXT = 16_000
+const MAX_IMAGES = 8
+const IMAGE_LIMIT = '이미지는 한 메시지에 최대 8장까지 첨부할 수 있습니다.'
+const IMAGE_PROMPT = '첨부 이미지를 열어 확인해 주세요.'
 
 /**
  * The text as it may be pasted into the agent's composer, or null. Control characters are refused:
@@ -40,13 +43,66 @@ const PICKER_REASONS = {
 
 /**
  * links: { openExternal(url), openBrowserTab(url), showItemInFolder(path), openLocalFile(path) }
+ * pins: answers pinned into windows of their own (pins.js); showShell(shellId): the main window
+ * brings that shell's pane forward as a chat
  */
-function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells, clipboard, links }) {
+function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells, clipboard, selectImages, links, pins = null, showShell = null }) {
   const allowed = event => fromMainWindow(event) && !isLocked()
   const shellIdOf = value => (typeof value === 'string' && SHELL_ID.test(value) ? value : null)
   const locked = { ok: false, error: '먼저 잠금을 해제해 주세요.' }
   const images = new Map()
-  const clipboardReads = new Map()
+  const imageReads = new Map()
+
+  function removeImages(id, ids) {
+    const attachments = images.get(id)
+    if (!attachments) return
+    for (const key of ids ?? attachments.keys()) {
+      const image = attachments.get(key)
+      if (!image) continue
+      attachments.delete(key)
+      if (!image.sending) clipboard.discardImage(image.file)
+    }
+    if (!attachments.size) images.delete(id)
+  }
+
+  async function readAttachments(event, shellId, read) {
+    if (!allowed(event)) return locked
+    const id = shellIdOf(shellId)
+    const agent = id && shells()?.agentOf(id)
+    if (!agent) return { ok: false, error: REASONS['not-agent'] }
+    if (imageReads.has(id)) return { ok: false, error: '첨부할 이미지를 읽는 중입니다.' }
+    const token = {}
+    imageReads.set(id, token)
+    const staged = []
+    const canUse = () => allowed(event) && imageReads.get(id) === token && shells()?.agentOf(id)?.kind === agent.kind
+    const noChat = '열려 있는 채팅에서 다시 첨부해 주세요.'
+    const room = () => MAX_IMAGES - (images.get(id)?.size ?? 0) - staged.length
+    const addImage = bitmap => {
+      if (!canUse()) throw new Error(noChat)
+      if (room() === 0) throw new Error(IMAGE_LIMIT)
+      const { width, height } = bitmap.getSize()
+      const edge = Math.max(width, height)
+      const preview = edge > 280 ? bitmap.resize(width >= height ? { width: 280 } : { height: 280 }).toPNG() : bitmap.toPNG()
+      staged.push({ id: randomUUID(), file: clipboard.storeImage(bitmap), preview })
+    }
+    try {
+      const result = await read(addImage, room)
+      if (!canUse()) throw new Error(noChat)
+      if (result) return result
+      const attachments = images.get(id) ?? new Map()
+      const previews = staged.splice(0).map(({ id, file, preview }) => {
+        attachments.set(id, { file })
+        return { id, preview }
+      })
+      if (previews.length) images.set(id, attachments)
+      return { ok: true, kind: 'images', images: previews }
+    } catch (error) {
+      return { ok: false, error: error.code ? '첨부 이미지를 처리하지 못했습니다.' : error.message }
+    } finally {
+      for (const { file } of staged) clipboard.discardImage(file)
+      if (imageReads.get(id) === token) imageReads.delete(id)
+    }
+  }
 
   ipcMain.handle('agent-chat-open', (event, shellId) => {
     if (!allowed(event)) return locked
@@ -62,70 +118,75 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   ipcMain.on('agent-chat-close', (event, shellId) => {
     const id = shellIdOf(shellId)
     if (!fromMainWindow(event) || !id) return
-    images.delete(id)
-    clipboardReads.delete(id)
+    removeImages(id)
+    imageReads.delete(id)
     chats.close(id)
   })
-  ipcMain.handle('agent-chat-read-clipboard', async (event, shellId) => {
-    if (!allowed(event)) return locked
-    const id = shellIdOf(shellId)
-    const agent = id && shells()?.agentOf(id)
-    if (!agent) return { ok: false, error: REASONS['not-agent'] }
-    if (clipboardReads.has(id)) return { ok: false, error: '클립보드를 읽는 중입니다.' }
-    const read = {}
-    clipboardReads.set(id, read)
-    const canUseClipboard = () => allowed(event) && clipboardReads.get(id) === read && shells()?.agentOf(id)?.kind === agent.kind
-    try {
+  ipcMain.handle('agent-chat-read-clipboard', (event, shellId) =>
+    readAttachments(event, shellId, async (addImage, room) => {
       const { text, image } = await clipboard.read()
-      if (!canUseClipboard()) return { ok: false, error: '열려 있는 채팅에서 다시 붙여넣어 주세요.' }
       if (!image) return { ok: true, kind: 'text', text }
-      const bitmap = await clipboard.decodeImage(image)
-      if (!canUseClipboard()) return { ok: false, error: '열려 있는 채팅에서 다시 붙여넣어 주세요.' }
-      const { width, height } = bitmap.getSize()
-      const edge = Math.max(width, height)
-      const preview = edge > 280 ? bitmap.resize(width >= height ? { width: 280 } : { height: 280 }).toPNG() : bitmap.toPNG()
-      const attachmentId = randomUUID()
-      images.set(id, { id: attachmentId, bitmap })
-      return { ok: true, kind: 'image', id: attachmentId, preview }
-    } catch (error) {
-      return { ok: false, error: error.code ? '클립보드 이미지를 읽지 못했습니다.' : error.message }
-    } finally {
-      if (clipboardReads.get(id) === read) clipboardReads.delete(id)
-    }
-  })
+      if (!room()) throw new Error(IMAGE_LIMIT)
+      addImage(await clipboard.decodeImage(image))
+    })
+  )
+  ipcMain.handle('agent-chat-pick-images', (event, shellId) =>
+    readAttachments(event, shellId, async (addImage, room) => {
+      if (!room()) throw new Error(IMAGE_LIMIT)
+      const paths = await selectImages()
+      if (paths.length > room()) throw new Error(IMAGE_LIMIT)
+      for (const path of paths) addImage(await clipboard.decodeImageFile(path))
+    })
+  )
   ipcMain.on('agent-chat-remove-image', (event, request) => {
-    if (!allowed(event)) return
-    const id = shellIdOf(request?.shellId)
-    const image = images.get(id)
-    if (image && image.id === request.imageId) images.delete(id)
+    if (allowed(event) && typeof request?.imageId === 'string') removeImages(shellIdOf(request.shellId), [request.imageId])
   })
   ipcMain.handle('agent-chat-send', async (event, request) => {
     if (!allowed(event)) return locked
     const id = shellIdOf(request?.shellId)
     const text = cleanChatText(request?.text)
     if (!id) return { ok: false, error: '셸을 찾지 못했습니다.' }
-    const image = images.get(id)
-    const hasImage = Boolean(image && image.id === request.imageId)
-    if (request.imageId !== undefined && !hasImage) return { ok: false, error: '클립보드 이미지를 다시 붙여넣어 주세요.' }
-    if (!text && (!hasImage || typeof request.text !== 'string' || request.text.trim() || request.text.length > MAX_TEXT)) {
+    const keys = request.imageIds ?? (request.imageId === undefined ? [] : [request.imageId])
+    const attachments = images.get(id)
+    const missingImage = { ok: false, error: '이미지를 다시 첨부해 주세요.' }
+    if (!Array.isArray(keys) || keys.length > MAX_IMAGES || new Set(keys).size !== keys.length) return missingImage
+    const selected = keys.map(key => attachments?.get(key))
+    if (selected.some(image => !image)) return missingImage
+    if (selected.some(image => image.sending)) return { ok: false, error: REASONS.busy }
+    if (!text && (!selected.length || typeof request.text !== 'string' || request.text.trim() || request.text.length > MAX_TEXT)) {
       return { ok: false, error: '보낼 수 없는 글입니다 (비어 있거나, 제어 문자가 있거나, 너무 깁니다).' }
     }
     const local = shells()
-    if (!local?.agentOf(id)) return { ok: false, error: REASONS['not-agent'] }
+    const agent = local?.agentOf(id)
+    if (!agent) return { ok: false, error: REASONS['not-agent'] }
     let prompt = text
-    if (hasImage) {
-      try {
-        image.file ??= clipboard.storeImage(image.bitmap)
-      } catch {
-        return { ok: false, error: '첨부 이미지를 저장하지 못했습니다.' }
-      }
-      const attachment = '첨부 이미지를 열어 확인해 주세요.\n' + image.file
+    let claudeImages
+    if (selected.length) {
+      const attachment = IMAGE_PROMPT + '\n' + selected.map(image => image.file).join('\n')
       // Put the reference before the draft so a slash command in the draft stays ordinary text.
       prompt = text ? attachment + '\n\n' + text : attachment
+      if (agent.kind === 'claude') {
+        claudeImages = { count: selected.length, text: text ? IMAGE_PROMPT + '\n' + text : IMAGE_PROMPT }
+      }
     }
-    const result = await local.chatSend(id, prompt)
+    for (const image of selected) image.sending = true
+    let result
+    try {
+      result = await local.chatSend(id, prompt, claudeImages)
+    } finally {
+      selected.forEach((image, index) => {
+        image.sending = false
+        const key = keys[index]
+        if (result?.ok) {
+          // The agent can read a successfully sent image after this chat is closed.
+          attachments.delete(key)
+        } else if (attachments.get(key) !== image) {
+          clipboard.discardImage(image.file)
+        }
+      })
+      if (attachments && !attachments.size && images.get(id) === attachments) images.delete(id)
+    }
     if (!allowed(event)) return locked
-    if (result.ok && hasImage && images.get(id) === image) images.delete(id)
     return result.ok ? { ok: true } : { ok: false, reason: result.reason, error: REASONS[result.reason] ?? '보내지 못했습니다.' }
   })
   // A choice of the prompt the view showed: main checks the screen still shows that very prompt
@@ -174,10 +235,41 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   ipcMain.handle('agent-chat-open-link', async (event, request) => {
     if (!allowed(event)) return locked
     const id = shellIdOf(request?.shellId)
-    const how = request?.how
     // A relative link is read against the agent's folder, as when the answer was read (chats.js)
     const target = id ? linkTarget(request?.href, process.platform, chats.cwdOf?.(id) ?? null) : null
     if (!id || !target || !chats.knowsLink(id, target.key)) return { ok: false, error: '대화에 나온 링크만 열 수 있습니다.' }
+    return openTarget(target, request?.how, () => allowed(event))
+  })
+
+  // An answer pinned out into a window of its own (pins.js): the window asks only about itself
+  const pinOf = event => (!isLocked() && pins ? pins.ofSender(event.sender) : null)
+  ipcMain.handle('agent-chat-pin', (event, request) => {
+    if (!allowed(event)) return locked
+    if (!pins) return { ok: false, error: '이 앱 버전에서는 쓸 수 없습니다.' }
+    return pins.pin(request)
+  })
+  ipcMain.handle('pinned-reply-get', (event) => {
+    const pin = pinOf(event)
+    return pin ? { ok: true, pin: pins.view(pin) } : { ok: false, error: '띄운 답변을 찾지 못했습니다.' }
+  })
+  ipcMain.handle('pinned-reply-open-link', async (event, request) => {
+    const pin = pinOf(event)
+    if (!pin) return locked
+    const target = pins.linkFor(pin, request?.href)
+    if (!target) return { ok: false, error: '대화에 나온 링크만 열 수 있습니다.' }
+    return openTarget(target, request?.how, () => pinOf(event) === pin)
+  })
+  ipcMain.on('pinned-reply-fold', (event, folded) => {
+    const pin = pinOf(event)
+    if (pin && typeof folded === 'boolean') pins.fold(pin, folded)
+  })
+  // "원래 대화로 가기": the main window brings that shell's pane forward, as a chat
+  ipcMain.on('pinned-reply-go', (event) => {
+    const pin = pinOf(event)
+    if (pin) showShell?.(pin.shellId)
+  })
+
+  async function openTarget(target, how, stillAllowed) {
     if (target.kind === 'url') {
       if (how === 'browser-tab' && links?.openBrowserTab) {
         const result = links.openBrowserTab(target.url)
@@ -195,7 +287,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     } catch {
       return { ok: false, error: '파일이나 폴더를 찾지 못했습니다.' }
     }
-    if (!allowed(event)) return locked
+    if (!stillAllowed()) return locked
     if (how === 'explorer' && links?.showItemInFolder) {
       links.showItemInFolder(real)
       return { ok: true }
@@ -206,12 +298,12 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
       return links.openLocalFile(real, target.line ?? null)
     }
     return { ok: false, error: '열 수 없는 링크입니다.' }
-  })
+  }
 
   return {
     clearClipboard() {
-      clipboardReads.clear()
-      images.clear()
+      imageReads.clear()
+      for (const id of images.keys()) removeImages(id)
     }
   }
 }

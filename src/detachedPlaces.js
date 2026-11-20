@@ -4,7 +4,7 @@
 
 const windowState = require('./windowState.js');
 
-const KINDS = ['sftp', 'terminal', 'mcpActivity', 'remoteFile', 'db'];
+const KINDS = ['sftp', 'terminal', 'mcpActivity', 'remoteFile', 'db', 'pinnedReply'];
 /** A window opening where one of its kind already is moves down and right by this much */
 const CASCADE_STEP = 30;
 const CASCADE_LIMIT = 10;

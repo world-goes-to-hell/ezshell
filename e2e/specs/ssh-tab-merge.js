@@ -149,7 +149,7 @@ const { check, finish } = createChecks()
   const back = await rectOf(refilled)
   check('in the place the pane had', Math.abs(back[0] - b[0]) < 4 && Math.abs(back[2] - b[2]) < 4, JSON.stringify([b, back]))
 
-  // ---- Alt-drop a tab on another tab in the tab strip ----
+  // ---- Hold over another tab in the tab strip before dropping ----
   check('a third tab connects to the same server', await connectSsh(driver))
   check('it answers', await mark('main', 'TAB-THREE'))
   await js(`${TAB(0)}.click()`); await sleep(800)
@@ -157,10 +157,27 @@ const { check, finish } = createChecks()
   // Through the terminal area and out of it again (that alone used to mean "pop out to a window")
   await js(`(() => { const area = document.querySelector('.terminal-area'); const t = ${TAB(0)}.getBoundingClientRect(); area.dispatchEvent(new DragEvent('dragleave', { bubbles: true, dataTransfer: window.__dt, clientX: t.left + 10, clientY: t.top + 5 })) })()`)
   const onTab = await center(TAB(0))
+  marker = await dragOver(onTab[0], onTab[1])
+  check('the strip starts with an insertion marker', !marker && await js(`!!document.querySelector('.tab-order-marker')`))
+  check('holding still over the tab changes the preview to merge before any tab is removed', await until(`
+    document.querySelector('.tab-merge-marker.on-tab:not(.is-blocked)')?.textContent.includes('칸으로 병합') &&
+    !document.querySelector('.tab-order-marker') && document.querySelectorAll('.terminal-tab').length === 2
+  `, 4000))
+  marker = await dragOver(onTab[0] + 16, onTab[1])
+  check('moving again on the same tab brings back the insertion marker', !marker && await js(`!!document.querySelector('.tab-order-marker')`))
+  const gap = await center(`document.querySelector('.terminal-tabs .new-tab-btn')`)
+  await dragOver(...gap)
+  marker = await dragOver(onTab[0], onTab[1])
+  check('leaving the tab resets its merge dwell', !marker && await js(`!!document.querySelector('.tab-order-marker')`))
   marker = await dragOver(onTab[0], onTab[1], true)
-  check('holding Alt over the other tab marks it as the place to merge', !!marker && !marker.blocked && marker.accepted === true && /칸으로 병합/.test(marker.text), JSON.stringify(marker))
+  check('Alt still gives an immediate merge preview', !!marker && !marker.blocked && marker.accepted === true)
+  await until(`!!document.querySelector('.tab-merge-marker.on-tab:not(.is-blocked)')`)
+  // Wait with ordinary drag events again, then release without any modifier.
+  await dragOver(...gap)
+  await dragOver(onTab[0], onTab[1])
+  await until(`!!document.querySelector('.tab-merge-marker.on-tab:not(.is-blocked)')`, 4000)
   await shot('ssh-tab-merge-4-on-tab')
-  await drop(onTab[0], onTab[1], true)
+  await drop(onTab[0], onTab[1])
   check('the dropped tab leaves the strip', await until(`document.querySelectorAll('.terminal-tab').length === 1`, 10000), String(await tabCount()))
   check('and becomes a third pane of the tab (not a window of its own)', await until(`${PANES}.length === 3`, 8000), JSON.stringify(await ids()))
   await sleep(1500)

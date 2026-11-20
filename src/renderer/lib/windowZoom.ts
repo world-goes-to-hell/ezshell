@@ -4,9 +4,9 @@
 // the one window it is set in (checked: two windows of the same page keep their own factors).
 import { DEFAULT_ZOOM, snapZoom } from './appZoom'
 
-export type ZoomWindowKind = 'remoteFile' | 'sftp' | 'terminal' | 'db' | 'mcpActivity'
+export type ZoomWindowKind = 'remoteFile' | 'sftp' | 'terminal' | 'db' | 'mcpActivity' | 'pinnedReply'
 
-const KINDS: readonly ZoomWindowKind[] = ['remoteFile', 'sftp', 'terminal', 'db', 'mcpActivity']
+const KINDS: readonly ZoomWindowKind[] = ['remoteFile', 'sftp', 'terminal', 'db', 'mcpActivity', 'pinnedReply']
 const STORAGE_PREFIX = 'windowZoom:'
 
 export const windowZoomKey = (kind: ZoomWindowKind): string => `${STORAGE_PREFIX}${kind}`

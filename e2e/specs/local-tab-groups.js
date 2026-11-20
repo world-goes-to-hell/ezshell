@@ -21,6 +21,8 @@ const { check, finish } = createChecks()
   }
   const alpha = makeRepo('alpha')
   const beta = makeRepo('beta')
+  const feature = path.join(process.env.E2E_PROFILE, 'alpha-feature')
+  execFileSync('git', ['worktree', 'add', '-b', 'feature', feature], { cwd: alpha, stdio: 'pipe', windowsHide: true })
 
   const driver = await connect()
   const { js, until, send } = driver
@@ -55,10 +57,13 @@ const { check, finish } = createChecks()
     check('Ctrl+Tab stays within the group in front', await js(`${tabs}.length === 1 && ${tabs}[0].dataset.tabId === ${JSON.stringify(alphaId)}`))
 
     const plus = `document.querySelector('.terminal-tabs .new-tab-btn')`
-    await driver.click(...await driver.center(plus))
-    const browserItem = `[...document.querySelectorAll('.new-tab-menu-item')].find(item => item.textContent.trim() === '브라우저 열기')`
-    await until(`!!${browserItem}`)
-    await driver.click(...await driver.center(browserItem))
+    const fromNewTabMenu = async label => {
+      await driver.click(...await driver.center(plus))
+      const item = `[...document.querySelectorAll('.new-tab-menu-item')].find(item => item.textContent.trim() === ${JSON.stringify(label)})`
+      if (!(await until(`!!${item}`, 5000))) throw new Error(`the new tab menu has no ${label} option`)
+      await driver.click(...await driver.center(item))
+    }
+    await fromNewTabMenu('브라우저 열기')
     const browser = `document.querySelector('.terminal-tab[data-tab-id^="browser:"]')`
     check('a browser tab opens alongside the local terminal in the same project', await until(`!!${browser} && ${tabs}.length === 2`))
     const browserId = await js(`${browser}.dataset.tabId`)
@@ -96,6 +101,48 @@ const { check, finish } = createChecks()
     await js(`${tabs}[0].querySelector('.tab-close, [aria-label*="닫기"]')?.click()`)
     check('closing a work\'s last tab shows the other work, one work left', await until(`${tabs}.length === 1 && ${tabs}[0].dataset.tabId === ${JSON.stringify(alphaId)} && ${selectName} === 'alpha' && !document.querySelector('.tab-group-select-more')`, 8000), String(await js(`${tabs}.map(t => t.dataset.tabId).join(',')`)))
     await driver.shot('local-tab-groups')
+
+    const active = `document.querySelector('.terminal-tab.active')`
+    const cwdIs = folder => `window.electronAPI.localShellCurrentDirectory(${active}?.dataset.tabId).then(cwd => cwd === ${JSON.stringify(folder)})`
+    const badge = tab => `${tab}.querySelector('.tab-worktree-badge')`
+    check('the main checkout has a separate branch badge', await until(`${badge(active)}?.textContent === 'main'`))
+    await fromNewTabMenu('로컬 터미널')
+    check('the plus menu opens a shell in the active checkout without leaving its work', await until(`
+      ${tabs}.length === 2 && ${selectName} === 'alpha' && ${badge(active)}?.textContent === 'main' && ${cwdIs(alpha)}
+    `))
+    await js(`${active}.querySelector('.tab-close').click()`)
+
+    await js(`${open('alpha-feature')}.click()`)
+    check('the feature worktree has its own badge in the same project', await until(`${selectName} === 'alpha' && ${badge(active)}?.textContent === 'feature' && ${cwdIs(feature)}`))
+    await fromNewTabMenu('브라우저 열기')
+    await until(`${active}?.dataset.tabId.startsWith('browser:')`)
+    await fromNewTabMenu('로컬 터미널')
+    check('opening a shell from the project browser uses the last local worktree', await until(`
+      ${tabs}.length === 4 && ${selectName} === 'alpha' &&
+      ${badge(active)}?.textContent === 'feature' && !${active}.querySelector('[data-tab-label]').textContent.includes('feature') && ${cwdIs(feature)}
+    `))
+    await sleep(250)
+    await driver.shot('local-tab-worktree-badges')
+
+    const mainTab = `document.querySelector('.terminal-tab[data-tab-id="${alphaId}"]')`
+    const target = await driver.center(mainTab)
+    await js(`(() => {
+      window.__worktreeDrag = new DataTransfer()
+      window.__worktreeSource = ${active}
+      window.__worktreeSource.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: window.__worktreeDrag }))
+    })()`)
+    await sleep(200)
+    const overWorktree = kind => js(`(${mainTab}).dispatchEvent(new DragEvent(${JSON.stringify(kind)}, {
+      bubbles: true, cancelable: true, dataTransfer: window.__worktreeDrag, clientX: ${target[0]}, clientY: ${target[1]}
+    }))`)
+    await overWorktree('dragover')
+    check('holding over a different worktree shows both folders as the reason merging is blocked', await until(`(() => {
+      const marker = document.querySelector('.tab-merge-marker.on-tab.is-blocked')
+      return !!marker && marker.textContent.includes(${JSON.stringify(alpha)}) && marker.textContent.includes(${JSON.stringify(feature)})
+    })()`, 4000))
+    await overWorktree('drop')
+    await js(`window.__worktreeSource.dispatchEvent(new DragEvent('dragend', { bubbles: true }))`)
+    check('the rejected merge leaves all of the tabs open', await until(`${tabs}.length === 4 && [...document.querySelectorAll('.toast')].some(t => t.textContent.includes('같은 작업 폴더'))`))
   } finally {
     driver.close()
   }

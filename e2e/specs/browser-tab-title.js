@@ -46,6 +46,43 @@ async function run() {
     await main.js(`window.electronAPI.browserReviewAction(${JSON.stringify(id)}, { type: 'back' })`)
     check('going back shows the earlier page title again', await main.until(`${tabText}.includes('첫 페이지')`, 10000))
 
+    // The folded sidebar opened by hovering slides over the tab: the page (a native view above the
+    // app) narrows to give way instead of covering it (reported 2026-11-20)
+    const page = await connect(target => target.url.startsWith(origin))
+    try {
+      const pageWidth = () => page.js('window.innerWidth')
+      const fullWidth = await pageWidth()
+      await main.js(`document.querySelector('.sidebar-toggle').click()`)
+      await main.until(`!!document.querySelector('.sidebar.rail:not(.peek-open)')`)
+      await new Promise(r => setTimeout(r, 400))
+      const foldedWidth = await pageWidth()
+      await main.move(...await main.center(`document.querySelector('[data-peek-target="sessions"]')`))
+      await main.until(`!!document.querySelector('.sidebar.rail.peek-open') && document.querySelector('.sidebar-panel').offsetWidth >= 270`)
+      // The panel may still be sliding open: read its edge again with the page width
+      const panelEdge = () => main.js(`document.querySelector('.sidebar-panel').getBoundingClientRect().right`)
+      const viewLeft = await main.js(`document.querySelector('[data-browser-tab-id="${id}"] .browser-review-viewport').getBoundingClientRect().left`)
+      let panelRight = await panelEdge()
+      let peekWidth = await pageWidth()
+      for (let i = 0; i < 20 && Math.abs(peekWidth - (foldedWidth - (panelRight - viewLeft))) > 2; i++) {
+        await new Promise(r => setTimeout(r, 150))
+        panelRight = await panelEdge()
+        peekWidth = await pageWidth()
+      }
+      check('the opened sidebar narrows the page to the part it leaves uncovered',
+        Math.abs(peekWidth - (foldedWidth - (panelRight - viewLeft))) <= 2, JSON.stringify({ fullWidth, foldedWidth, peekWidth, panelRight, viewLeft }))
+      await main.move(900, 500)
+      await main.until(`!!document.querySelector('.sidebar.rail:not(.peek-open)')`)
+      let backWidth = await pageWidth()
+      for (let i = 0; i < 20 && backWidth !== foldedWidth; i++) {
+        await new Promise(r => setTimeout(r, 150))
+        backWidth = await pageWidth()
+      }
+      check('folding it again gives the page its width back', backWidth === foldedWidth, JSON.stringify({ foldedWidth, backWidth }))
+      await main.js(`document.querySelector('.sidebar-toggle')?.click()`)
+    } finally {
+      page.close()
+    }
+
     // The page's developer tools, in a window of their own
     const button = `document.querySelector('[data-browser-tab-id="${id}"] .browser-review-devtools')`
     const devToolsOpen = `window.electronAPI.browserReviewState(${JSON.stringify(id)}).then(state => state.devToolsOpen)`

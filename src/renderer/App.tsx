@@ -22,6 +22,7 @@ import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/Qui
 import { LocalProjectDialog, type LocalProjectTerminal } from './components/Modal/LocalProjectDialog'
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
 import { NewTabMenu } from './components/Terminal/NewTabMenu'
+import { TabWorktreeBadge } from './components/Terminal/TabWorktreeBadge'
 import { AgentMessagesHost, AgentTabMessages } from './components/Terminal/AgentMessages'
 import { getDuplicateConfig } from './lib/duplicateConnection'
 import { tabHost, dropTabHostsExcept } from './lib/tabHosts'
@@ -83,6 +84,7 @@ import { useSessionLogStore } from './stores/sessionLogStore'
 import { isChatShown, useAgentChatStore } from './stores/agentChatStore'
 import { useSessionLogFeed } from './hooks/useSessionLogFeed'
 import { useBrowserTabTitles } from './hooks/useBrowserTabTitles'
+import { usePinnedReplyGo } from './hooks/usePinnedReplyGo'
 import { openSessionLogFolder, toggleSessionLog } from './lib/sessionLogActions'
 import './styles/sessionLog.css'
 import { McpActivityWindow } from './components/Mcp/McpActivityWindow'
@@ -94,6 +96,7 @@ const DbClientWindow = lazy(() => import('./components/DbClient/DbClientWindow')
 const LocalTerminalTab = lazy(() => import('./components/Terminal/LocalTerminalTab'))
 const DbTab = lazy(() => import('./components/DbClient/DbTab'))
 const BrowserReview = lazy(() => import('./components/Browser/BrowserReview'))
+const PinnedReplyWindow = lazy(() => import('./components/AgentChat/PinnedReplyWindow').then(module => ({ default: module.PinnedReplyWindow })))
 
 // Check if we're in a special window mode
 function getWindowModeParams() {
@@ -125,6 +128,10 @@ function getWindowModeParams() {
 
   if (params.get('remoteFileMode') === 'true') {
     return { mode: 'remoteFile' as const, docId: params.get('docId') || '' }
+  }
+
+  if (params.get('pinnedReplyMode') === 'true') {
+    return { mode: 'pinnedReply' as const }
   }
 
   if (params.get('dbMode') === 'true') {
@@ -177,6 +184,19 @@ function App() {
           <DbClientWindow dbId={windowParams.dbId} />
         </Suspense>
         <WindowZoom kind="db" />
+        <ToastContainer />
+      </>
+    )
+  }
+
+  // An agent answer pinned out of the chat view (AgentChat/PinnedReplyWindow.tsx)
+  if (windowParams?.mode === 'pinnedReply') {
+    return (
+      <>
+        <Suspense fallback={null}>
+          <PinnedReplyWindow />
+        </Suspense>
+        <WindowZoom kind="pinnedReply" />
         <ToastContainer />
       </>
     )
@@ -240,6 +260,8 @@ function App() {
   useSessionLogFeed()
   // Browser tabs take the name of the page they show
   useBrowserTabTitles()
+  // "원래 대화로 가기" in a pinned answer window
+  usePinnedReplyGo()
   const sessionLogFiles = useSessionLogStore(state => state.files)
 
   // Tab drag state
@@ -841,7 +863,7 @@ function App() {
   }
 
   // A terminal of this PC as a new tab (the shell runs in the main process)
-  const handleOpenLocalTerminal = async ({ cwd, agent, workspaceLabel, resume }: Partial<LocalProjectTerminal> & { resume?: string } = {}): Promise<string | null> => {
+  const handleOpenLocalTerminal = async ({ cwd, agent, workspaceLabel, resume }: Partial<LocalProjectTerminal> & { resume?: string } = {}, pane?: number): Promise<string | null> => {
     const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd, agent, resume })
     if (!result || !result.success) {
       toast.error('로컬 터미널을 열지 못했습니다', result ? result.error : '앱을 다시 시작해 주세요.')
@@ -858,8 +880,18 @@ function App() {
       local: { shell: result.name, cwd: result.cwd, workspaceLabel }
     })
     const { layout: current } = useTerminalStore.getState()
-    if (current.mode === 'split' && current.activePane) store.moveTerminalBetweenPanes(result.id, 0, current.activePane)
+    const targetPane = pane ?? current.activePane
+    if (current.mode === 'split' && targetPane !== null && current.panes[targetPane]) {
+      if (targetPane > 0) store.moveTerminalBetweenPanes(result.id, 0, targetPane)
+      if (pane !== undefined) store.focusTerminal(result.id)
+    }
     return result.id
+  }
+
+  const handleOpenLocalFromTabStrip = (pane?: number) => {
+    const { activeTerminalId, layout } = useTerminalStore.getState()
+    const front = pane === undefined ? activeTerminalId : layout.panes[pane]?.activeTerminalId ?? null
+    void handleOpenLocalTerminal({ cwd: groupView.localFolder(front) }, pane)
   }
 
   const addBrowserTab = useCallback((id: string, pane?: number) => {
@@ -1078,7 +1110,7 @@ function App() {
         onDuplicate={() => void handleDuplicateTab(paneActiveId)}
         onPickSession={() => setSessionPickerOpen(true)}
         onNewSession={handleNewConnection}
-        onLocalTerminal={() => void handleOpenLocalTerminal()}
+        onLocalTerminal={() => handleOpenLocalFromTabStrip(pane)}
         onLocalProject={() => setLocalProjectOpen(true)}
         onOpenBrowser={() => void handleOpenBrowser(pane)}
       />
@@ -1438,6 +1470,7 @@ function App() {
                         {terminal.local && <RiComputerLine size={13} className="tab-local-icon" aria-label="로컬" />}
                         {terminal.browser && <RiGlobalLine size={13} className="tab-local-icon" aria-hidden />}
                         <span data-tab-label>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
+                        {terminal.local?.cwd && <TabWorktreeBadge cwd={terminal.local.cwd} worktree={groupView.worktreeForFolder(terminal.local.cwd)} />}
                         {terminal.local && <AgentTabMessages tabId={sessionId} />}
                         {sessionId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[sessionId]}`} />}
                         {terminal.hasActivity && <span className="activity-indicator" />}
@@ -1455,7 +1488,7 @@ function App() {
                     onDuplicate={() => void handleDuplicateTab(activeTerminalId)}
                     onPickSession={() => setSessionPickerOpen(true)}
                     onNewSession={handleNewConnection}
-                    onLocalTerminal={() => void handleOpenLocalTerminal()}
+                    onLocalTerminal={() => handleOpenLocalFromTabStrip()}
                     onLocalProject={() => setLocalProjectOpen(true)}
                     onOpenBrowser={() => void handleOpenBrowser()}
                   />
@@ -1516,6 +1549,7 @@ function App() {
                                 handleCloseTerminal(terminalId)
                               }}
                               newTabMenu={renderPaneNewTabMenu(index)}
+                              worktreeForFolder={groupView.worktreeForFolder}
                               onUnsplit={index === 0 ? closeSplit : undefined}
                               onSftpToggle={activeId && isSshTab(terminals.get(activeId)) ? () => setOpen(activeId, !isOpen(activeId)) : undefined}
                               sftpOpen={activeId ? isOpen(activeId) : false}
@@ -1722,7 +1756,8 @@ function App() {
         {tabDropHover?.kind === 'order' && <div className="tab-order-marker" style={tabDropHover.box} aria-hidden="true" />}
         {mergeHover && (
         <div className={`tab-merge-marker${mergeHover.blocked ? ' is-blocked' : ''}${mergeHover.onTab ? ' on-tab' : ''}`} style={mergeHover.box} role="status">
-          <span>{mergeHover.blocked ?? (mergeHover.place?.isVacant ? '여기에 놓으면 이 빈 자리로 병합'
+            <span style={mergeHover.onTab ? { left: Math.min(0, Math.max(8 - mergeHover.box.left, innerWidth - mergeHover.box.left - 368)) } : undefined}>
+              {mergeHover.blocked ?? (mergeHover.place?.isVacant ? '여기에 놓으면 이 빈 자리로 병합'
             : mergeHover.place?.side ? `여기에 놓으면 이 칸의 ${sideWord(mergeHover.place.side)}에 병합` : '여기에 놓으면 이 탭의 칸으로 병합')}</span>
         </div>
       )}

@@ -77,6 +77,16 @@ describe('reconciling messages sent in the chat', () => {
     expect(ids(result.items)).toEqual(['image'])
     expect(result.echoes).toEqual([])
   })
+
+  it('reconciles native image messages with and without a text body', () => {
+    for (const body of ['', '이미지전송 테스트\n\n두 이미지를 비교해 줘.']) {
+      const echo = { id: 'outgoing:image', text: body, time: 10000, hasImage: true }
+      const transcript = user('image', 10001, ['[Image #1] [Image #2]첨부 이미지를 열어 확인해 주세요.', body].filter(Boolean).join('\n'))
+      const result = reconcileChatEchoes([user(echo.id, echo.time, body || '스크린샷 첨부')], [transcript], 'append', [echo])
+      expect(ids(result.items)).toEqual(['image'])
+      expect(result.echoes).toEqual([])
+    }
+  })
 })
 
 describe('chat helpers', () => {

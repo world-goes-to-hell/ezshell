@@ -5,6 +5,7 @@ import {
   RiGlobalLine, RiRefreshLine, RiSendPlane2Line, RiToolsLine
 } from 'react-icons/ri'
 import type { BrowserReviewAction, BrowserReviewState, LocalAgentStatus } from '../../types'
+import { uncoveredBox } from '../../lib/browserViewClip'
 import './BrowserReview.css'
 
 const statusLabels: Record<LocalAgentStatus, string> = {
@@ -13,6 +14,8 @@ const statusLabels: Record<LocalAgentStatus, string> = {
 }
 
 const appOverlays = '[role="menu"], [role="dialog"], [role="alertdialog"], .context-menu, .tab-context-menu, .command-palette-overlay, .modal-overlay, .batch-overlay'
+/** Panels that slide over the tab from a side: the page narrows to give way instead of hiding */
+const sidePanels = '.sidebar.rail.peek-open .sidebar-panel, .sidebar-popover, .mcp-activity-panel:not(.is-window), .mcp-activity-tab'
 
 type BrowserTool = 'element-picker'
 
@@ -69,11 +72,15 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
       // The page has a native view above this renderer. Hide it while the app draws a popup over it.
       const blocked = !element.isConnected || !element.checkVisibility({ visibilityProperty: true })
         || Array.from(document.querySelectorAll(appOverlays)).some(overlay => overlay.checkVisibility({ visibilityProperty: true }))
+      const panels = Array.from(document.querySelectorAll(sidePanels)).filter(panel => panel.checkVisibility({ visibilityProperty: true }))
+      // A panel still sliding in has no final edge yet: hide the page until it settles (transitionend)
+      const sliding = panels.some(panel => panel.getAnimations().some(animation => animation.playState === 'running'))
       const { x, y, width, height } = element.getBoundingClientRect()
-      const key = blocked ? '' : [x, y, width, height].join(',')
+      const bounds = blocked || sliding ? null : uncoveredBox({ x, y, width, height }, panels.map(panel => panel.getBoundingClientRect()))
+      const key = bounds ? [bounds.x, bounds.y, bounds.width, bounds.height].join(',') : ''
       if (lastBounds === key) return
       lastBounds = key
-      api.browserReviewBounds(tabId, blocked ? null : { x, y, width, height })
+      api.browserReviewBounds(tabId, bounds)
     }
     const schedule = () => {
       if (!frame) frame = window.requestAnimationFrame(report)
@@ -83,11 +90,15 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
     const layout = new MutationObserver(schedule)
     layout.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'data-state', 'hidden'] })
     window.addEventListener('resize', schedule)
+    document.addEventListener('transitionend', schedule, true)
+    document.addEventListener('transitioncancel', schedule, true)
     schedule()
     return () => {
       resize.disconnect()
       layout.disconnect()
       window.removeEventListener('resize', schedule)
+      document.removeEventListener('transitionend', schedule, true)
+      document.removeEventListener('transitioncancel', schedule, true)
       window.cancelAnimationFrame(frame)
       api.browserReviewBounds(tabId, null)
     }

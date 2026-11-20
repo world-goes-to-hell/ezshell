@@ -1,5 +1,5 @@
 import { useState, type DragEvent, type ReactNode } from 'react'
-import { RiArrowDownSLine, RiArrowRightSLine, RiFolder3Line, RiGitBranchLine } from 'react-icons/ri'
+import { RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolder3Line, RiGitBranchLine } from 'react-icons/ri'
 import type { LocalProjectState } from '../../hooks/useLocalProjects'
 import { folderLabel, pathKey } from '../../lib/localWorkspaceTree'
 import { LocalSessionAgents } from './LocalSessionAgents'
@@ -13,6 +13,8 @@ export interface WorktreeNode {
 
 export interface ProjectNode {
   folder: string
+  /** Every registered folder this node stands for (other folders of the same repository add none of their own) */
+  folders: string[]
   name: string
   worktrees: WorktreeNode[]
   /** Shown under the name when Git could not be read */
@@ -24,23 +26,33 @@ export interface ProjectNode {
  * already shown adds nothing. A folder that is not a Git checkout is its own single "worktree".
  */
 export function buildProjectNodes(projects: readonly LocalProjectState[]): ProjectNode[] {
-  const seenRoots = new Set<string>()
+  const byRoot = new Map<string, ProjectNode>()
   const nodes: ProjectNode[] = []
   for (const { folder, info, error } of projects) {
     const repo = info?.repo
     if (repo) {
-      const root = pathKey(repo.root)
-      if (seenRoots.has(root)) continue
-      seenRoots.add(root)
-      nodes.push({
+      // The main checkout (git lists it first): a registered linked worktree's own top level is not the
+      // repository's, so keying by `repo.root` showed one repository twice, with that worktree as "기본"
+      const mainPath = repo.worktrees[0]?.path ?? repo.root
+      const root = pathKey(mainPath)
+      const shown = byRoot.get(root)
+      if (shown) {
+        shown.folders.push(folder)
+        continue
+      }
+      const node: ProjectNode = {
         folder,
-        name: folderLabel(repo.root),
+        folders: [folder],
+        name: folderLabel(mainPath),
         worktrees: repo.worktrees.map(tree => ({ path: tree.path, branch: tree.branch, isMain: pathKey(tree.path) === root }))
-      })
+      }
+      byRoot.set(root, node)
+      nodes.push(node)
       continue
     }
     nodes.push({
       folder,
+      folders: [folder],
       name: folderLabel(folder),
       worktrees: [{ path: folder, branch: null, isMain: true }],
       note: error ?? (info ? undefined : '읽는 중…')
@@ -62,6 +74,8 @@ interface LocalProjectsTreeProps {
   renderServers?: (project: ProjectNode) => ReactNode
   /** A sidebar session or a tab dropped on the project (the drag's text/plain) */
   onDropOnProject?: (project: ProjectNode, text: string) => void
+  /** Takes the project off the list (its folders, terminals and linked servers stay) */
+  onRemoveProject?: (project: ProjectNode) => void
 }
 
 export const projectFoldKey = (folder: string) => `p:${pathKey(folder)}`
@@ -70,7 +84,7 @@ export const worktreeFoldKey = (path: string) => `w:${pathKey(path)}`
 /** Registered folders → worktrees → the local terminals open in each (with their agents) */
 // Past agent sessions are not listed here: the agent history of the right panel shows them (user's choice)
 export function LocalProjectsTree({
-  nodes, folded, onToggleFold, tabsOf, currentTabId, renderTab, renderTabActions, onOpenWorktree, renderServers, onDropOnProject
+  nodes, folded, onToggleFold, tabsOf, currentTabId, renderTab, renderTabActions, onOpenWorktree, renderServers, onDropOnProject, onRemoveProject
 }: LocalProjectsTreeProps) {
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   // Sessions and tabs are dragged as text/plain (`session:<id>` / the tab id)
@@ -99,18 +113,26 @@ export function LocalProjectsTree({
         const Chevron = isProjectOpen ? RiArrowDownSLine : RiArrowRightSLine
         return (
           <li key={projectKey} className={`local-project${dropTarget === projectKey ? ' is-drop-target' : ''}`} data-project-folder={project.folder} {...dropProps(project, projectKey)}>
-            <button
-              type="button"
-              className="local-project-row"
-              aria-expanded={isProjectOpen}
-              onClick={() => onToggleFold(projectKey)}
-              title={project.folder}
-            >
-              <Chevron size={14} className="local-project-chevron" />
-              <RiFolder3Line size={14} className="local-project-icon" />
-              <span className="local-project-name">{project.name}</span>
-              {project.note && <span className="local-project-note">{project.note}</span>}
-            </button>
+            <div className="local-project-head">
+              <button
+                type="button"
+                className="local-project-row"
+                aria-expanded={isProjectOpen}
+                onClick={() => onToggleFold(projectKey)}
+                title={project.folder}
+              >
+                <Chevron size={14} className="local-project-chevron" />
+                <RiFolder3Line size={14} className="local-project-icon" />
+                <span className="local-project-name">{project.name}</span>
+                {project.note && <span className="local-project-note">{project.note}</span>}
+              </button>
+              {onRemoveProject && (
+                <button type="button" className="local-project-remove" onClick={() => onRemoveProject(project)}
+                  title="목록에서 빼기 (폴더와 열린 터미널은 그대로)" aria-label={`${project.name} 을 목록에서 빼기`}>
+                  <RiCloseLine size={14} />
+                </button>
+              )}
+            </div>
             {isProjectOpen && renderServers?.(project)}
             {isProjectOpen && (
               <ul className="local-worktrees">

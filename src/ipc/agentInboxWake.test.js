@@ -363,6 +363,65 @@ describe('a line sent from the chat view (submitText)', () => {
     expect(rawWrite).not.toHaveBeenCalled()
   })
 
+  it('verifies the whole multiline attachment draft when Claude has no visible caret', async () => {
+    const { rawWrite } = chatSetup()
+    const rule = '─'.repeat(70)
+    const unfocused = text => '\x1b[?2004h\x1b[2J\x1b[16;1H' + rule + '\r\n❯ ' + text + '\r\n' + rule + '\r\n\r\n  ⏵⏵ auto mode on'
+    wake.writeOutput(unfocused(''))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const text = '첨부 이미지를 열어 확인해 주세요.\nC:\\Temp\\one.png\nC:\\Temp\\two.png\n\n이미지를 비교해 줘.'
+    const sent = wake.submitText(text)
+    expect(rawWrite).toHaveBeenCalledWith('\x1b[200~' + text + '\x1b[201~')
+    wake.writeOutput(unfocused('첨부 이미지를 열어 확인해 주세요.\r\n  C:\\Temp\\one.png'))
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(rawWrite).toHaveBeenCalledTimes(1)
+    wake.writeOutput(unfocused(text.replace(/\n/g, '\r\n  ')))
+    await expect(sent).resolves.toEqual({ ok: true })
+    expect(rawWrite).toHaveBeenLastCalledWith('\r')
+  })
+
+  it('reads the ruled Claude editor even when ConPTY parks the cursor on the prompt row', async () => {
+    const { rawWrite } = chatSetup()
+    const rule = '─'.repeat(70)
+    const unfocused = (text, column) => '\x1b[?2004h\x1b[2J\x1b[H' + rule + '\r\n❯ ' + text
+      + '\r\n' + rule + '\r\n\r\n  ⏵⏵ auto mode on' + '\x1b[2;' + column + 'H'
+    const text = '첨부 이미지를 열어 확인해 주세요.\nC:\\Temp\\one.png\nC:\\Temp\\two.png\n\n이거 뭔지 알아?'
+    // Claude erases the visual caret on blur, leaving the physical cursor on the last cell.
+    wake.writeOutput(unfocused('', 100))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const sent = wake.submitText(text)
+    expect(rawWrite).toHaveBeenCalledTimes(1)
+    // This repaint leaves the physical cursor ahead of the summary instead of at its end.
+    wake.writeOutput(unfocused('[Pasted text #1 +4 lines]', 3))
+    await expect(sent).resolves.toEqual({ ok: true })
+    expect(rawWrite).toHaveBeenLastCalledWith('\r')
+  })
+
+  it('submits only when Claude draws all attached images and the matching text', async () => {
+    const { rawWrite } = chatSetup()
+    const heading = '첨부 이미지를 열어 확인해 주세요.'
+    const body = '이미지전송 테스트'
+    const paste = heading + '\nC:\\Temp\\one.png\nC:\\Temp\\two.png\n\n' + body
+    const rule = '─'.repeat(70)
+    const rendered = (tokens, text) => claudeDraft(tokens + heading + '\r\n  ' + text)
+      + '\r\n' + rule + '\r\n  ⏵⏵ auto mode on'
+    wake.writeOutput(claudeDraft(''))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const sent = wake.submitText(paste, { count: 2, text: heading + '\n' + body })
+    for (const [tokens, text] of [
+      ['[Image #3]', body],
+      ['[Image #3] [Image #3]', body],
+      ['[Image #3] [Image #4]', '다른 메시지']
+    ]) {
+      wake.writeOutput(rendered(tokens, text))
+      await new Promise(resolve => setTimeout(resolve, 45))
+      expect(rawWrite).toHaveBeenCalledTimes(1)
+    }
+    wake.writeOutput(rendered('[Image #3] [Image #4]', body))
+    await expect(sent).resolves.toEqual({ ok: true })
+    expect(rawWrite).toHaveBeenLastCalledWith('\r')
+  })
+
   it('does not press Enter when the composer never shows the text', async () => {
     const { rawWrite } = chatSetup()
     wake.writeOutput(claudeDraft(''))

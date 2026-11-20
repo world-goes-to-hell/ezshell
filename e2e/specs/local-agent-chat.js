@@ -158,6 +158,48 @@ async function reportSession(agent, sessionId) {
   const relativeOpen = await js(`window.electronAPI.agentChatOpenLink(${JSON.stringify(shellOfChat)}, 'linked-note.txt', 'app')`)
   check('a relative link opens against the agent\'s folder', relativeOpen?.ok === true, JSON.stringify(relativeOpen))
   check('the terminal stays mounted under the chat', await js(`!!${pane(0)}.querySelector('.xterm-screen') && ${pane(0)}.querySelector('.xterm-screen').offsetWidth > 0`))
+
+  // An answer pinned out into a small window of its own, read while working in another tab
+  const pinnedAnswer = `[...${cover(0)}.querySelectorAll('.agent-chat-assistant')].find(item => item.textContent.includes('셋째 줄은'))`
+  await driver.move(...await center(pinnedAnswer))
+  const pinButton = `${pinnedAnswer}.querySelector('.agent-chat-pin')`
+  check('an answer offers 띄워 두기 on hover', await until(`!!${pinButton} && getComputedStyle(${pinButton}).opacity === '1'`, 3000))
+  await click(...await center(pinButton))
+  let pinPage = null
+  for (let tries = 0; tries < 60 && !pinPage; tries++) {
+    pinPage = (await pages()).find(page => /pinnedReplyMode=true/.test(page.url))
+    if (!pinPage) await sleep(150)
+  }
+  check('it opens the answer in a window of its own', !!pinPage, JSON.stringify((await pages()).map(page => page.url)))
+  const pin = await connect(page => /pinnedReplyMode=true/.test(page.url))
+  try {
+    check('the window shows the answer as it was', await pin.until(`(document.querySelector('.pinned-reply-body')?.textContent ?? '').includes('셋째 줄은') && !!document.querySelector('.pinned-reply-body a[href="linked-note.txt"]')`, 5000))
+    const pinLine = await pin.js(`window.electronAPI.pinnedReplyOpenLink(${JSON.stringify(lines.replace(/\\/g, '/') + ':3')}, 'app')`)
+    check('a link of the pinned answer opens', pinLine?.ok === true, JSON.stringify(pinLine))
+    // Not in this answer (its "메모" link names linked-note.txt, so that one opens)
+    const pinRefused = await pin.js(`window.electronAPI.pinnedReplyOpenLink('C:/Windows/win.ini', 'app')`)
+    check('a path not in the pinned answer does not open from it', pinRefused?.ok === false && pinRefused.error.includes('대화에 나온'), JSON.stringify(pinRefused))
+    await click(...await center(pinButton))
+    await sleep(400)
+    check('pinning the same answer again keeps one window', (await pages()).filter(page => /pinnedReplyMode=true/.test(page.url)).length === 1)
+    await pin.js(`document.querySelector('.pinned-reply-btn[data-action="fold"]').click()`)
+    check('folding leaves only its header', await pin.until(`window.innerHeight <= 48 && !document.querySelector('.pinned-reply-body')`, 3000), await pin.js('window.innerHeight'))
+    await pin.js(`document.querySelector('.pinned-reply-btn[data-action="fold"]').click()`)
+    check('unfolding gives its height back', await pin.until(`window.innerHeight >= 120 && !!document.querySelector('.pinned-reply-body')`, 3000), await pin.js('window.innerHeight'))
+    await js(`${cover(0)}.querySelector('.agent-chat-head-btn').click()`)
+    await until(`!${cover(0)}`, 3000)
+    await pin.js(`document.querySelector('.pinned-reply-btn[data-action="source"]').click()`)
+    check('원래 대화로 가기 shows that pane as a chat again', await until(`!!${cover(0)}`, 5000))
+    await pin.js(`document.querySelector('.pinned-reply-btn[data-action="close"]').click()`)
+  } finally {
+    pin.close()
+  }
+  let pinGone = false
+  for (let tries = 0; tries < 30 && !pinGone; tries++) {
+    pinGone = !(await pages()).some(page => /pinnedReplyMode=true/.test(page.url))
+    if (!pinGone) await sleep(150)
+  }
+  check('closing it closes the window', pinGone)
   const firstShell = await js(`${pane(0)}.dataset.localShellId`)
 
   const web = http.createServer((_request, response) => response.end('Chat web link'))
@@ -249,7 +291,7 @@ async function reportSession(agent, sessionId) {
   check('Ctrl+V shows a decoded screenshot preview in the focused chat', await until(`${preview}?.naturalWidth === 1`))
   check('pasting leaves the screenshot in the draft', read('claude-1-chat-sent') === '2')
   check('the other chat has no attachment', await js(`!${cover(1)}.querySelector('.agent-chat-attachment')`))
-  await js(`${cover(0)}.querySelector('[aria-label="이미지 첨부 제거"]').click()`)
+  await js(`${cover(0)}.querySelector('.agent-chat-attachment button').click()`)
   check('removing the image disables send for an empty draft', await until(`!${preview} && ${cover(0)}.querySelector('.agent-chat-send').disabled`))
   await pasteIntoChat(0)
   await until(`${preview}?.naturalWidth === 1`)
@@ -271,6 +313,28 @@ async function reportSession(agent, sessionId) {
   await js(`${sendButton}.click()`)
   check('a screenshot can be sent without any text', await waitFor(() => read('claude-1-chat-sent') === '4'
     && read('claude-1-chat-text').split('\n').length === 2 && read('claude-1-chat-text').endsWith('.png')), await chatFeedback())
+
+  const previewWidths = `[...${cover(0)}.querySelectorAll('.agent-chat-attachment img')].map(img => img.naturalWidth).join(',')`
+  await pasteIntoChat(0)
+  await until(`${previewWidths} === '1'`)
+  await pasteIntoChat(0)
+  check('pasting again appends a second image', await until(`${previewWidths} === '1,1'`))
+  await js(`${cover(0)}.querySelector('[aria-label="이미지 첨부"]').click()`)
+  check('the image picker adds both selected files to the existing previews', await until(`${previewWidths} === '1,1,2,3'`))
+  await js(`${cover(0)}.querySelectorAll('.agent-chat-attachment button')[1].click()`)
+  check('removing one preview leaves the other images in order', await until(`${previewWidths} === '1,2,3'`))
+  await send('Input.insertText', { text: '세 이미지 비교해 줘.\n목록과 상세를 확인해 줘.' })
+  await js(`${sendButton}.click()`)
+  check('all remaining images and the full text reach the unfocused composer', await waitFor(() => {
+    if (read('claude-1-chat-sent') !== '5') return false
+    const [, ...lines] = read('claude-1-chat-text').split('\n')
+    const separator = lines.indexOf('')
+    const attachments = lines.slice(0, separator)
+    return separator === 3 && new Set(attachments).size === 3
+      && attachments.every((file, index) => fs.existsSync(file) && fs.readFileSync(file).readUInt32BE(16) === index + 1)
+      && lines.slice(separator + 1).join('\n') === '세 이미지 비교해 줘.\n목록과 상세를 확인해 줘.'
+  }), await chatFeedback())
+  check('sending several images clears the entire attachment tray', await until(`${previewWidths} === ''`))
 
   // A permission prompt in the terminal shows as choices in the chat, and a choice answers it
   fs.writeFileSync(file('claude-1-approval'), '─'.repeat(60) + '\r\n Bash command\r\n\r\n   npm run build\r\n\r\n Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. Yes, and don\'t ask again for npm run build commands\r\n   3. No, and tell Claude what to do differently (esc)')

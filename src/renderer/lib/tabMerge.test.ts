@@ -43,6 +43,18 @@ describe('mergeBlock', () => {
     expect(mergeBlock(tabsOf(ssh('a', 's1'), ssh('b', 's2')), 'a', 'b')).toMatch('다른 세션의 탭은 병합할 수 없습니다')
   })
 
+  it('identifies the two launch folders when two worktrees cannot merge', () => {
+    const backend = local('local:1')
+    const frontend = local('local:2')
+    backend.local!.cwd = 'D:\\repo\\backend'
+    frontend.local!.cwd = 'D:\\repo\\frontend'
+    const failure = mergeBlock(tabsOf(backend, frontend), backend.id, frontend.id)
+    expect(failure).toContain(backend.local!.cwd)
+    expect(failure).toContain(frontend.local!.cwd)
+    frontend.local!.cwd = 'd:/Repo/Backend/'
+    expect(mergeBlock(tabsOf(backend, frontend), backend.id, frontend.id)).toBeNull()
+  })
+
   it('refuses a tab onto itself, a missing tab and a DB tab', () => {
     const tabs = tabsOf(ssh('a', 's1'), { ...ssh('db:1', 's1'), db: { dbId: '1', sshSessionId: 'x' } as TerminalInfo['db'] })
     expect(mergeBlock(tabs, 'a', 'a')).toMatch('같은 탭')

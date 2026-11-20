@@ -15,9 +15,10 @@ interface TabGroupState {
   /** The group in front the last time it was looked at */
   current: string | null
   lastTab: Record<string, string>
+  lastLocalFolder: Record<string, string>
   splits: Record<string, SavedSplit>
   setCurrent: (group: string) => void
-  remember: (group: string, tabId: string) => void
+  remember: (group: string, tabId: string, localFolder?: string) => void
   saveSplit: (group: string, split: SavedSplit) => void
   takeSplit: (group: string) => SavedSplit | null
 }
@@ -25,10 +26,17 @@ interface TabGroupState {
 export const useTabGroupStore = create<TabGroupState>((set, get) => ({
   current: null,
   lastTab: {},
+  lastLocalFolder: {},
   splits: {},
   setCurrent: (group) => set({ current: group }),
-  remember: (group, tabId) => {
-    if (get().lastTab[group] !== tabId) set(state => ({ lastTab: { ...state.lastTab, [group]: tabId } }))
+  remember: (group, tabId, localFolder) => {
+    set(state => {
+      if (state.lastTab[group] === tabId && (!localFolder || localFolder === state.lastLocalFolder[group])) return state
+      return {
+        lastTab: { ...state.lastTab, [group]: tabId },
+        lastLocalFolder: localFolder ? { ...state.lastLocalFolder, [group]: localFolder } : state.lastLocalFolder
+      }
+    })
   },
   saveSplit: (group, split) => set(state => ({ splits: { ...state.splits, [group]: split } })),
   takeSplit: (group) => {

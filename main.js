@@ -447,7 +447,7 @@ app.whenReady().then(() => {
 });
 
 // Detached windows (SFTP, terminal, MCP activity, server file, DB): src/ipc/detachedWindows.js
-const { sftpWindows, createRemoteFileWindow, createDbWindow, closeMcpActivityWindow, getMcpActivityWindow } = require('./src/ipc/detachedWindows.js').registerDetachedWindows({
+const { sftpWindows, createRemoteFileWindow, createDbWindow, createPinnedReplyWindow, closeMcpActivityWindow, getMcpActivityWindow } = require('./src/ipc/detachedWindows.js').registerDetachedWindows({
   __dirname, ipcMain, app, BrowserWindow, WINDOW_ICON, DEV_RENDERER_URL, terminalWindows, glassWindows,
   glassWindowOptions, registerGlassWindow,
   get mainWindow() { return mainWindow; },
@@ -716,9 +716,26 @@ const agentChats = require('./src/agentChat/chats.js').createAgentChats({
     };
   }
 });
+// Answers pinned out of the chat view into small windows (memory only, closed when the app locks)
+const agentChatPins = require('./src/agentChat/pins.js').createPins({ createWindow: createPinnedReplyWindow, chats: agentChats });
 const agentChatIpc = require('./src/agentChat/ipc.js').registerAgentChatIpc({
   ipcMain, fromMainWindow, isLocked: () => isAppLocked, chats: agentChats, shells: () => localShells,
   clipboard: localTerminalClipboard,
+  selectImages: async () => {
+    const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+      title: '채팅에 이미지 첨부',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '이미지', extensions: ['png', 'jpg', 'jpeg'] }]
+    });
+    return canceled ? [] : filePaths;
+  },
+  pins: agentChatPins,
+  showShell: (shellId) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    mainWindow.webContents.send('pinned-reply-go', shellId);
+  },
   // Links in answers: the file manager shows a file (never runs it), the file window reads it
   links: {
     openExternal: url => shell.openExternal(url),
@@ -964,6 +981,7 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   mcpController?.onLocked();
   agentHistory.clear();
   agentChats.closeAll();
+  agentChatPins.closeAll();
   agentChatIpc.clearClipboard();
   hostKeyPrompter.dismissAll();
   closeMcpActivityWindow();
@@ -1050,6 +1068,7 @@ ipcMain.handle('reset-master-password', async () => {
   mcpController?.onLocked();
   agentHistory.clear();
   agentChats.closeAll();
+  agentChatPins.closeAll();
   agentChatIpc.clearClipboard();
   remoteFileIpc.closeViewWindows();
   // Query results must not stay on screen behind the lock

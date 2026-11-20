@@ -13,6 +13,7 @@ const LONGEST_PROMPT = Math.max(...Object.values(PROMPTS).map(text => text.lengt
 const pasteOf = text => '\x1b[200~' + text + '\x1b[201~'
 const DRAW_SETTLE = 35
 const INPUT_TIMEOUT = 1500
+const IMAGE_INPUT_TIMEOUT = 10_000
 // A CLI that has not reported its state yet (just started, before its first turn) is taken to wait for
 // input once its empty composer has stayed unchanged this long (three fresh agents never woke)
 const QUIET_MS = 1500
@@ -75,15 +76,15 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       }
       if (!painted) {
         // No cursor painted either: Claude out of focus (the chat view or the usage menu has the keyboard)
-        // draws its composer without one. A one-row composer between its rules that holds nothing but the
-        // placeholder ("Try …") is empty; one with text is a draft, never taken for empty.
-        if (bottom - first !== 1) return null
-        const typed = input[0].trim()
-        const empty = !typed || CLAUDE_PLACEHOLDER.test(typed)
+        // draws its composer without one. Read the entire draft between the rules, including wrapped
+        // paths and hard line breaks. Only a single blank or placeholder row counts as empty.
+        const typed = input.join('\n').trim()
+        const empty = input.length === 1 && (!typed || CLAUDE_PLACEHOLDER.test(typed))
         return { atStart: empty, endsAtCursor: true, text: empty ? '' : compact(typed) }
       }
       const text = compact(input.join(''))
-      const afterCursor = line(painted.row).slice(painted.x) + input.slice(painted.row - first + 1).join('')
+      const afterCursor = (buffer.getLine(painted.row)?.translateToString(false, painted.x) ?? '')
+        + input.slice(painted.row - first + 1).join('')
       return {
         atStart: !text && painted.row === first && painted.x === prefix[0].length,
         endsAtCursor: !compact(afterCursor),
@@ -101,6 +102,12 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     const line = index => buffer.getLine(index)?.translateToString(false) ?? ''
     // A pasted line can wrap. Look above the cursor only as far as the app-written prompt.
     const maxInputRows = Math.min(screen.rows, Math.ceil(textLength / Math.max(1, screen.cols - 2)) + textLines)
+    // Claude's terminal cursor can be on the first row of the composer with the caret hidden.
+    // Read the complete ruled composer before relying on that cursor to find the end of the draft.
+    if (kind === 'claude') {
+      const ruled = paintedClaudeComposer(buffer, line, maxInputRows)
+      if (ruled) return ruled
+    }
     const first = Math.max(buffer.baseY, cursor - maxInputRows)
     for (let index = cursor; index >= first; index--) {
       const row = line(index)
@@ -112,7 +119,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       if (kind === 'claude' && lines.some(line => claudeRule.test(line))) continue
       // The empty prompt can have placeholder text to the right of the cursor.
       const atStart = index === cursor && buffer.cursorX === prefix[0].length
-      const afterCursor = line(cursor).slice(buffer.cursorX)
+      const afterCursor = buffer.getLine(cursor)?.translateToString(false, buffer.cursorX) ?? ''
       // Text that fills the row to its last column: Windows ConPTY cannot leave the cursor past the
       // last column, so when it repaints it puts the cursor on the last cell, as if before the last
       // character (a busy line of exactly the pane's width was never entered)
@@ -120,7 +127,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       const endsAtCursor = afterCursor.trim() === '' || fillsRow
       return { atStart, endsAtCursor, text: compact([tail, ...lines].join('')) }
     }
-    return kind === 'claude' ? paintedClaudeComposer(buffer, line, maxInputRows) : null
+    return null
   }
 
   function schedule(delay = DRAW_SETTLE) {
@@ -200,13 +207,26 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   let chat = null
   let approvalWatch = null
   const PASTED_PLACEHOLDER = /^\[Pasted(?:text|Content)[^\]]*\]$/i
+  const CLAUDE_IMAGE_PREFIX = /^(?:\[Image#[1-9]\d*\])+/
+
+  function matchesClaudeImages(text, expected) {
+    if (!expected) return false
+    // Claude recognizes actual PNG paths on paste. It removes them from the draft and prepends
+    // its own image tokens. Verify the count of distinct tokens and all the surviving text.
+    const prefix = CLAUDE_IMAGE_PREFIX.exec(text)?.[0]
+    if (!prefix || text.slice(prefix.length) !== expected.text) return false
+    const ids = prefix.match(/\d+/g)
+    return ids.length === expected.count && new Set(ids).size === expected.count
+  }
 
   function checkChat() {
     if (!chat || stopped) return
     clearTimeout(chat.timer)
     const now = Date.now()
     const input = composer(chat.length, chat.lines)
-    const drawn = Boolean(input?.endsAtCursor) && (input.text === chat.text || PASTED_PLACEHOLDER.test(input.text))
+    const drawn = input?.endsAtCursor && (
+      input.text === chat.text || matchesClaudeImages(input.text, chat.claudeImages) || PASTED_PLACEHOLDER.test(input.text)
+    )
     if (drawn) {
       const { resolve } = chat
       chat = null
@@ -335,11 +355,12 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
      * Enters a line the user wrote in the chat view: only into the agent's own, empty composer (never a
      * shell prompt), and Enter only once the composer shows that text. Resolves { ok } or { ok, reason }.
      */
-    submitText(text) {
+    submitText(text, claudeImages) {
       return new Promise(resolve => {
         if (stopped) return resolve({ ok: false, reason: 'not-agent' })
         if (chat || stage || composing || held) return resolve({ ok: false, reason: 'busy' })
-        const length = text.length
+        // Hangul and other wide characters can take two terminal cells per character.
+        const length = text.length + (text.match(/[^\x00-\x7f]/g)?.length ?? 0)
         const lines = text.split('\n').length
         const input = composer(length, lines)
         if (!input) return resolve({ ok: false, reason: 'no-composer' })
@@ -348,7 +369,13 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         if (!input.atStart) return resolve({ ok: false, reason: 'composer-not-empty' })
         if (!rawWrite(pasteOf(text))) return resolve({ ok: false, reason: 'write-failed' })
         clearTimeout(timer)
-        chat = { text: compact(text), length, lines, expires: Date.now() + INPUT_TIMEOUT, resolve, timer: null }
+        const images = kind === 'claude' && claudeImages ? { count: claudeImages.count, text: compact(claudeImages.text) } : null
+        chat = {
+          text: compact(text), length, lines,
+          claudeImages: images,
+          // Claude reads and converts every file before its native image tokens appear.
+          expires: Date.now() + (images ? IMAGE_INPUT_TIMEOUT : INPUT_TIMEOUT), resolve, timer: null
+        }
         chat.timer = setTimeout(checkChat, DRAW_SETTLE)
         chat.timer.unref?.()
       })

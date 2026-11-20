@@ -10,16 +10,22 @@ export interface ChatEcho {
   hasImage: boolean
 }
 
-const IMAGE_PROMPT = '첨부 이미지를 열어 확인해 주세요.\n'
+const IMAGE_PROMPT = '첨부 이미지를 열어 확인해 주세요.'
+const NATIVE_IMAGE_PREFIX = /^(?:\[Image #[1-9]\d*\]\s*)+/
 
 function isEchoOf(item: AgentChatItem, echo: ChatEcho, reset: boolean): boolean {
   // A first read can include an older, identical message. Providers may round to whole seconds.
   if (item.time === null ? reset : item.time < echo.time - 1000) return false
   let text = item.text?.replace(/\r\n?/g, '\n').trim() ?? ''
   if (echo.hasImage) {
-    if (!text.startsWith(IMAGE_PROMPT)) return false
-    const body = text.indexOf('\n\n', IMAGE_PROMPT.length)
-    text = body === -1 ? '' : text.slice(body + 2).trim()
+    text = text.replace(NATIVE_IMAGE_PREFIX, '')
+    if (text === IMAGE_PROMPT) return echo.text === ''
+    if (!text.startsWith(IMAGE_PROMPT + '\n')) return false
+    const attached = text.slice(IMAGE_PROMPT.length).trim()
+    // An agent can record the images as native blocks and omit their paths from its text.
+    if (attached === echo.text) return true
+    const body = attached.indexOf('\n\n')
+    text = body === -1 ? '' : attached.slice(body + 2).trim()
   }
   return text === echo.text
 }

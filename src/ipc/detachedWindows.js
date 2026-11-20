@@ -279,6 +279,53 @@ function registerDetachedWindows(ctx) {
     return win;
   }
 
+  // An agent answer pinned out of the chat view (src/agentChat/pins.js). A child of the main window:
+  // above ezShell, not above other programs, not on the taskbar. Frameless: its header drags it.
+  function createPinnedReplyWindow(pinId) {
+    const place = detachedWindowPlace.open('pinnedReply', { width: 420, height: 520 }, { width: 260, height: 120 });
+    const parent = ctx.mainWindow && !ctx.mainWindow.isDestroyed() ? ctx.mainWindow : undefined;
+    const win = new BrowserWindow({
+      icon: WINDOW_ICON,
+      ...detachedWindowPlace.options(place),
+      minWidth: 260,
+      minHeight: 120,
+      frame: false,
+      parent,
+      skipTaskbar: true,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      backgroundColor: '#1e1e2e',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        preload: path.join(__dirname, '../preload/index.js')
+      }
+    });
+    const query = { pinnedReplyMode: 'true', pinId };
+    // A folded window (its header only, src/agentChat/pins.js) is remembered at its unfolded height
+    detachedWindowPlace.track(win, 'pinnedReply', place, {
+      fill: () => {},
+      isFilled: () => false,
+      normalBounds: () => {
+        const bounds = win.getNormalBounds();
+        return win.pinnedUnfoldedHeight ? { ...bounds, height: win.pinnedUnfoldedHeight } : bounds;
+      }
+    });
+    // The page never navigates away (links go through main)
+    win.webContents.on('will-navigate', (event) => event.preventDefault());
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    if (process.env.ELECTRON_RENDERER_URL) {
+      win.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${new URLSearchParams(query).toString()}`);
+    } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
+      win.loadURL(`${DEV_RENDERER_URL}?${new URLSearchParams(query).toString()}`);
+    } else {
+      win.loadFile(path.join(__dirname, '../renderer/index.html'), { query });
+    }
+    return win;
+  }
+
   // Screen contents of a terminal tab being popped out, kept until its new window picks them up.
   // Memory only: terminal output can contain secrets.
   const terminalSnapshots = new Map();
@@ -343,7 +390,7 @@ function registerDetachedWindows(ctx) {
     return { success: true };
   });
 
-  return { sftpWindows, createRemoteFileWindow, createDbWindow, closeMcpActivityWindow, getMcpActivityWindow };
+  return { sftpWindows, createRemoteFileWindow, createDbWindow, createPinnedReplyWindow, closeMcpActivityWindow, getMcpActivityWindow };
 }
 
 module.exports = { registerDetachedWindows };

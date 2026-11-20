@@ -41,6 +41,25 @@ export function projectOfFolder(cwd: string | undefined, projects: readonly Grou
   return best?.project
 }
 
+const localGroupOf = (cwd: string | undefined, projects: readonly GroupProject[]) =>
+  projectOfFolder(cwd, projects)?.key ?? folderGroupOf(cwd)
+
+/** Launch the + menu's shell in the front tab's folder, or the work's last local folder. */
+export function localFolderForGroup(
+  group: string | null,
+  projects: readonly GroupProject[],
+  activeFolder: string | undefined,
+  rememberedFolder: string | undefined,
+  otherFolders: readonly (string | undefined)[]
+): string | undefined {
+  if (!group || group === GENERAL_GROUP) return undefined
+  const folder = [activeFolder, rememberedFolder, ...otherFolders].find(cwd => cwd && localGroupOf(cwd, projects) === group)
+  if (folder) return folder
+  const project = projects.find(item => item.key === group)
+  if (project) return project.worktrees.find(tree => pathKey(tree) === group) ?? project.worktrees[0]
+  return group.startsWith(FOLDER_GROUP_PREFIX) ? group.slice(FOLDER_GROUP_PREFIX.length) : undefined
+}
+
 /** The group of one tab. `preferred`: the group in front, chosen when a session is linked to several projects */
 export function groupOfTab(
   id: string,
@@ -56,7 +75,7 @@ export function groupOfTab(
     return group && (group.startsWith(FOLDER_GROUP_PREFIX) || projects.some(project => project.key === group)) ? group : GENERAL_GROUP
   }
   if (info.db) return info.db.sshSessionId && info.db.sshSessionId !== id ? groupOfTab(info.db.sshSessionId, terminals, projects, servers, preferred) : GENERAL_GROUP
-  if (info.local) return projectOfFolder(info.local.cwd, projects)?.key ?? folderGroupOf(info.local.cwd)
+  if (info.local) return localGroupOf(info.local.cwd, projects)
   const saved = info.connectConfig?.savedSessionId
   if (!saved) return GENERAL_GROUP
   const known = new Set(projects.map(project => project.key))

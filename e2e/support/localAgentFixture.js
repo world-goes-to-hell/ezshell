@@ -31,8 +31,23 @@ function draw() {
     process.stdout.write('\x1b[2J\x1b[Hfixture ready: ' + id + '\r\n' + approval)
     return
   }
-  const border = claude ? '─'.repeat(Math.max(8, Math.min(process.stdout.columns || 80, 80) - 4)) + '\r\n' : ''
-  process.stdout.write('\x1b[2J\x1b[Hfixture ready: ' + id + '\r\n' + border + indicator + draft.replace(/\r?\n/g, '\r\n'))
+  const unfocusedAttachment = claude && process.env.EZSHELL_TEST_AGENT_CHAT && draft.startsWith('첨부 이미지를 열어 확인해 주세요.')
+  // The fixture's stdout is not a TTY on Windows. Keep both rules on one row even in a split pane.
+  const ruleWidth = unfocusedAttachment ? 16 : Math.max(8, Math.min(process.stdout.columns || 80, 80) - 4)
+  const border = claude ? '─'.repeat(ruleWidth) + '\r\n' : ''
+  const footer = unfocusedAttachment ? '\r\n' + border + '\r\n  ⏵⏵ auto mode on\x1b[3;3H' : ''
+  let display = draft
+  if (unfocusedAttachment) {
+    const [header, ...lines] = draft.split('\n')
+    const separator = lines.indexOf('')
+    const paths = separator === -1 ? lines : lines.slice(0, separator)
+    if (paths.every(file => file.endsWith('.png') && fs.existsSync(file))) {
+      // Actual Claude converts the paths of existing PNGs to image tokens before drawing the draft.
+      const tokens = paths.map((_, index) => '[Image #' + (index + 1) + ']').join(' ')
+      display = tokens + header + (separator === -1 ? '' : '\n' + lines.slice(separator + 1).join('\n'))
+    }
+  }
+  process.stdout.write('\x1b[2J\x1b[Hfixture ready: ' + id + '\r\n' + border + indicator + display.replace(/\r?\n/g, '\r\n') + footer)
 }
 
 process.stdout.write('\x1b[?2004h\x1b]0;✳ ' + id + '\x07')

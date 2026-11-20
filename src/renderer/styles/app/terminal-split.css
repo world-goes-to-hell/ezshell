@@ -620,6 +620,8 @@ body.resizing .split-pane-content * {
   color: var(--text-primary);
   font-size: 13px;
   text-align: center;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .tab-merge-marker.is-blocked {
@@ -644,13 +646,14 @@ body.resizing .split-pane-content * {
   top: calc(100% + 6px);
   left: 0;
   width: max-content;
-  max-width: 360px;
+  max-width: min(360px, calc(100vw - 16px));
   box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.3));
   border: 1px solid var(--accent);
 }
 
 .tab-merge-marker.on-tab.is-blocked span {
   border-color: var(--error);
+  text-align: start;
 }
 
 /* ===== Terminal Window (Pop-out) ===== */

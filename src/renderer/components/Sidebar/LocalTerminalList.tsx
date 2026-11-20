@@ -11,7 +11,7 @@ import { PaneLayoutBadge } from './PaneLayoutBadge'
 import { LocalSessionAgents } from './LocalSessionAgents'
 import { focusTabPane, focusedPaneOf } from '../../lib/paneFocus'
 import { useLocalProjects } from '../../hooks/useLocalProjects'
-import { assignTabs, folderLabel } from '../../lib/localWorkspaceTree'
+import { assignTabs, folderLabel, pathKey } from '../../lib/localWorkspaceTree'
 import { readFoldedNodes, readLocalProjects, writeFoldedNodes, writeLocalProjects } from '../../lib/localProjectList'
 import { toast } from '../../stores/toastStore'
 import { LocalProjectsTree, buildProjectNodes, type ProjectNode, type WorktreeNode } from './LocalProjectsTree'
@@ -165,6 +165,17 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
       return
     }
     onOpenFolder?.(worktree.path, worktree.branch ? `${project.name} · ${worktree.branch}` : folderLabel(worktree.path))
+  }
+
+  // Only the registration goes: the folders, their open terminals and the linked servers stay (adding the
+  // folder again brings the servers back, they are kept by the project key)
+  const removeProject = (project: ProjectNode) => {
+    const gone = new Set(project.folders.map(pathKey))
+    if (!writeLocalProjects(readLocalProjects().filter(folder => !gone.has(pathKey(folder))))) {
+      toast.error('목록에서 빼지 못했습니다', '작업 폴더 목록을 저장하지 못했습니다.')
+      return
+    }
+    toast.info('목록에서 뺐습니다', `${project.name} · 폴더와 열린 터미널은 그대로입니다. + 로 다시 더할 수 있습니다.`)
   }
 
   const addFolder = async () => {
@@ -334,6 +345,7 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
               onOpenWorktree={openWorktree}
               renderServers={renderServers}
               onDropOnProject={linkDropped}
+              onRemoveProject={removeProject}
             />
           )}
           {assignment.others.length > 0 && (

@@ -305,6 +305,9 @@
   display: none;
 }
 
+.split-pane-tabs:has(.tab-worktree-badge) { padding-block-start: 4px; }
+.split-pane-tabs:has(.tab-worktree-badge) .split-pane-tab-item { padding-block-start: 10px; }
+
 .split-pane-tab-item {
   display: flex;
   align-items: center;

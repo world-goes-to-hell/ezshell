@@ -4,6 +4,8 @@ import { useTerminalStore } from '../../stores/terminalStore'
 import { AgentTabMessages } from './AgentMessages'
 import { useSessionLogStore } from '../../stores/sessionLogStore'
 import { readableTextColor } from '../../lib/colorContrast'
+import type { WorktreeNode } from '../Sidebar/LocalProjectsTree'
+import { TabWorktreeBadge } from './TabWorktreeBadge'
 
 interface SplitPaneTabBarProps {
   paneType: 'primary' | 'secondary'
@@ -14,6 +16,7 @@ interface SplitPaneTabBarProps {
   onTabClose: (terminalId: string) => void
   /** The + menu shown right after the tabs (same menu as the single tab bar) */
   newTabMenu?: ReactNode
+  worktreeForFolder: (cwd: string) => WorktreeNode | undefined
   onUnsplit?: () => void
   onSftpToggle?: () => void
   sftpOpen?: boolean
@@ -30,6 +33,7 @@ export function SplitPaneTabBar({
   onTabSelect,
   onTabClose,
   newTabMenu,
+  worktreeForFolder,
   onUnsplit,
   onSftpToggle,
   sftpOpen,
@@ -93,6 +97,7 @@ export function SplitPaneTabBar({
               {terminal.local && <RiComputerLine size={12} className="tab-local-icon" aria-label="로컬" />}
               {terminal.browser && <RiGlobalLine size={12} className="tab-local-icon" aria-hidden />}
               <span className="split-pane-tab-name" data-tab-label>{displayName}</span>
+              {terminal.local?.cwd && <TabWorktreeBadge cwd={terminal.local.cwd} worktree={worktreeForFolder(terminal.local.cwd)} />}
               {terminal.local && <AgentTabMessages tabId={terminalId} />}
               {terminalId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[terminalId]}`} />}
               {/* Shown on a pane's only tab too: closing it ends the split (removeTerminalFromPane) */}

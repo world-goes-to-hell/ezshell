@@ -231,14 +231,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentChatOlder: (shellId) => ipcRenderer.invoke('agent-chat-older', shellId),
   agentChatClose: (shellId) => ipcRenderer.send('agent-chat-close', shellId),
   agentChatReadClipboard: (shellId) => ipcRenderer.invoke('agent-chat-read-clipboard', shellId),
+  agentChatPickImages: (shellId) => ipcRenderer.invoke('agent-chat-pick-images', shellId),
   agentChatRemoveImage: (shellId, imageId) => ipcRenderer.send('agent-chat-remove-image', { shellId, imageId }),
-  agentChatSend: (shellId, text, imageId) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageId }),
+  agentChatSend: (shellId, text, imageIds) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageIds }),
   agentChatInterrupt: (shellId) => ipcRenderer.invoke('agent-chat-interrupt', shellId),
   agentChatAnswer: (shellId, key, signature) => ipcRenderer.invoke('agent-chat-answer', { shellId, key, signature }),
   // The model / effort under a local terminal (src/ipc/agentPicker.js): the CLI's own picker, driven by main
   agentPickerList: (shellId, what) => ipcRenderer.invoke('agent-picker-list', { shellId, what }),
   agentPickerApply: (shellId, what, label) => ipcRenderer.invoke('agent-picker-apply', { shellId, what, label }),
   agentChatOpenLink: (shellId, href, how) => ipcRenderer.invoke('agent-chat-open-link', { shellId, href, how }),
+  // An answer pinned into a window of its own (the chat view pins, the pinned window asks about itself)
+  agentChatPin: (request) => ipcRenderer.invoke('agent-chat-pin', request),
+  pinnedReplyGet: () => ipcRenderer.invoke('pinned-reply-get'),
+  pinnedReplyOpenLink: (href, how) => ipcRenderer.invoke('pinned-reply-open-link', { href, how }),
+  pinnedReplyFold: (folded) => ipcRenderer.send('pinned-reply-fold', folded),
+  pinnedReplyGo: () => ipcRenderer.send('pinned-reply-go'),
+  onPinnedReplyGo: (callback) => {
+    const handler = (event, shellId) => callback(shellId);
+    ipcRenderer.on('pinned-reply-go', handler);
+    return () => ipcRenderer.removeListener('pinned-reply-go', handler);
+  },
   onAgentChatFrame: (callback) => {
     const handler = (event, frame) => callback(frame);
     ipcRenderer.on('agent-chat-frame', handler);

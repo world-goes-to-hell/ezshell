@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalInfo } from '../stores/terminalStore'
-import { GENERAL_GROUP, groupOfTab, groupTabs, stepTab, type GroupProject } from './tabGroups'
+import { GENERAL_GROUP, groupOfTab, groupTabs, localFolderForGroup, stepTab, type GroupProject } from './tabGroups'
 
 const local = (id: string, cwd: string): TerminalInfo => ({ id, host: '이 PC', username: '', connected: true, local: { shell: 'PowerShell', cwd } })
 const ssh = (id: string, saved: string | null): TerminalInfo => ({ id, host: 'h', username: 'u', connected: true, connectConfig: { host: 'h', port: 22, username: 'u', savedSessionId: saved } as TerminalInfo['connectConfig'] })
@@ -74,5 +74,26 @@ describe('tab groups', () => {
     expect(stepTab(['a', 'b', 'c'], 'a', -1)).toBe('c')
     expect(stepTab(['a', 'b'], 'x', 1)).toBe('a')
     expect(stepTab([], 'a', 1)).toBeNull()
+  })
+})
+
+describe('the tab strip’s local shell folder', () => {
+  const root = 'D:\\work\\gsd'
+  const feature = 'D:\\work\\gsd-feature'
+  const work = 'd:/work/gsd'
+
+  it('uses the front local tab’s launch folder before other folders of the group', () => {
+    expect(localFolderForGroup(work, projects, `${feature}\\src`, root, [root])).toBe(`${feature}\\src`)
+  })
+
+  it('keeps using the last local folder while a browser or linked server is in front', () => {
+    expect(localFolderForGroup(work, projects, undefined, feature, [root])).toBe(feature)
+    expect(localFolderForGroup(work, projects, undefined, 'D:\\work\\app', [feature])).toBe(feature)
+    expect(localFolderForGroup(work, projects, undefined, undefined, [])).toBe(root)
+  })
+
+  it('uses the original folder spelling for unregistered work when available', () => {
+    expect(localFolderForGroup('folder:d:/work/other', projects, undefined, 'D:\\Work\\Other', [])).toBe('D:\\Work\\Other')
+    expect(localFolderForGroup(GENERAL_GROUP, projects, undefined, undefined, [])).toBeUndefined()
   })
 })

@@ -391,6 +391,16 @@ export interface AgentUsage {
 
 /** usage null: the agent ended */
 /** One thing in a chat view, made by main from the agent's transcript (src/agentChat/items.js) */
+/** An agent answer pinned into a window of its own (src/agentChat/pins.js) */
+export interface PinnedReply {
+  text: string
+  kind: 'claude' | 'codex' | null
+  title: string
+  time: number | null
+  pinnedAt: number
+  folded: boolean
+}
+
 export interface AgentChatItem {
   id: string
   kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'notice'
@@ -419,6 +429,10 @@ export interface AgentChatApproval {
 
 /** waiting: the agent has written no transcript yet; ended: no agent runs in the shell any more */
 export type AgentChatState = 'waiting' | 'live' | 'ended'
+
+export type AgentChatImagesResult =
+  | { ok: true; kind: 'images'; images: { id: string; preview: Uint8Array<ArrayBuffer> }[] }
+  | { ok: false; error: string }
 
 export interface AgentChatFrame {
   shellId: string
@@ -786,12 +800,11 @@ declare global {
       agentChatOlder?: (shellId: string) => Promise<void>
       agentChatClose?: (shellId: string) => void
       agentChatReadClipboard?: (shellId: string) => Promise<
-        { ok: true; kind: 'text'; text: string } |
-        { ok: true; kind: 'image'; id: string; preview: Uint8Array<ArrayBuffer> } |
-        { ok: false; error: string }
+        { ok: true; kind: 'text'; text: string } | AgentChatImagesResult
       >
+      agentChatPickImages?: (shellId: string) => Promise<AgentChatImagesResult>
       agentChatRemoveImage?: (shellId: string, imageId: string) => void
-      agentChatSend?: (shellId: string, text: string, imageId?: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
+      agentChatSend?: (shellId: string, text: string, imageIds?: string[]) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatInterrupt?: (shellId: string) => Promise<boolean>
       agentChatAnswer?: (shellId: string, key: string, signature: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentPickerList?: (shellId: string, what: 'model' | 'effort') => Promise<
@@ -804,6 +817,12 @@ declare global {
       >
       agentChatOpenLink?: (shellId: string, href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab') => Promise<{ ok: true } | { ok: false; error: string }>
       onAgentChatFrame?: (callback: (frame: AgentChatFrame) => void) => () => void
+      agentChatPin?: (request: { shellId: string; itemId: string; text: string; kind: 'claude' | 'codex' | null; title: string; time: number | null }) => Promise<{ ok: true; id: string; existing?: boolean } | { ok: false; error: string }>
+      pinnedReplyGet?: () => Promise<{ ok: true; pin: PinnedReply } | { ok: false; error: string }>
+      pinnedReplyOpenLink?: (href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab') => Promise<{ ok: true } | { ok: false; error: string }>
+      pinnedReplyFold?: (folded: boolean) => void
+      pinnedReplyGo?: () => void
+      onPinnedReplyGo?: (callback: (shellId: string) => void) => () => void
       oracleClientStatus?: () => Promise<OracleClientStatus | { success: false; error: string }>
       oracleClientInstall?: () => Promise<OracleClientStatus | { success: false; error: string }>
       oracleClientRemove?: () => Promise<OracleClientStatus | { success: false; error: string }>

@@ -1,8 +1,8 @@
 // A local shell's Claude Code / Codex as a chat, drawn over its pane (docs/plan/2026-11-19-agent-chat-view.md).
 // The shell and the agent keep running under it and the terminal stays mounted: this is only a view of
 // the agent's transcript (src/agentChat) with a box that types into the agent's own composer.
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent } from 'react'
-import { RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFolderOpenLine, RiLoader4Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine } from 'react-icons/ri'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent } from 'react'
+import { RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFolderOpenLine, RiImageAddLine, RiLoader4Line, RiPushpinLine, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine } from 'react-icons/ri'
 import type { AgentChatApproval, AgentChatItem } from '../../types'
 import { useAgentChatStore } from '../../stores/agentChatStore'
 import { AgentChatMailButton, useAgentMessagesStore } from '../Terminal/AgentMessages'
@@ -158,13 +158,23 @@ function ApprovalCard({ shellId, approval }: { shellId: string; approval: AgentC
   )
 }
 
-const ChatItem = memo(function ChatItem({ item, live }: { item: AgentChatItem; live: boolean }) {
+const ChatItem = memo(function ChatItem({ item, live, onPin }: { item: AgentChatItem; live: boolean; onPin?: (item: AgentChatItem) => void }) {
   const time = item.time ? new Date(item.time).toLocaleTimeString() : undefined
   switch (item.kind) {
     case 'user':
       return <div className="agent-chat-user" title={time}><div className="agent-chat-bubble">{item.text}</div></div>
     case 'assistant':
-      return <div className="agent-chat-assistant" title={time}><Markdown text={item.text ?? ''} /></div>
+      return (
+        <div className="agent-chat-assistant" title={time}>
+          <Markdown text={item.text ?? ''} />
+          {/* Pinned out into a small window, read while working in another tab */}
+          {onPin && (
+            <button type="button" className="agent-chat-pin" aria-label="이 답변 띄워 두기" onClick={() => onPin(item)}>
+              <RiPushpinLine aria-hidden /> 띄워 두기
+            </button>
+          )}
+        </div>
+      )
     case 'thinking':
       return (
         <details className="agent-chat-thinking">
@@ -195,7 +205,8 @@ export function AgentChatCover({ shellId, tabId, onShowTerminal }: AgentChatCove
   const agent = useAgentMessagesStore(state => shellAgentOf(state.snapshot.agents, shellId))
   const toggleKeys = useShortcutsStore(state => state.getEffectiveKeys('toggle-agent-chat'))
   const [draft, setDraft] = useState('')
-  const [attachment, setAttachment] = useState<{ id: string; url: string } | null>(null)
+  const [attachments, setAttachments] = useState<{ id: string; url: string }[]>([])
+  const previewUrls = useRef(new Map<string, string>())
   const [pasting, setPasting] = useState(false)
   const [sending, setSending] = useState(false)
   const sendPending = useRef(false)
@@ -223,14 +234,23 @@ export function AgentChatCover({ shellId, tabId, onShowTerminal }: AgentChatCove
     const timer = window.setTimeout(() => boxRef.current?.focus(), 30)
     return () => window.clearTimeout(timer)
   }, [])
+  const releaseAttachment = useCallback((id: string) => {
+    const url = previewUrls.current.get(id)
+    if (url) URL.revokeObjectURL(url)
+    previewUrls.current.delete(id)
+    window.electronAPI.agentChatRemoveImage?.(shellId, id)
+  }, [shellId])
   useEffect(() => {
-    if (attachment) return () => URL.revokeObjectURL(attachment.url)
-  }, [attachment])
+    const urls = previewUrls.current
+    return () => {
+      for (const id of urls.keys()) releaseAttachment(id)
+    }
+  }, [releaseAttachment])
   useEffect(() => {
-    if (!isOver || !attachment) return
-    window.electronAPI.agentChatRemoveImage?.(shellId, attachment.id)
-    setAttachment(null)
-  }, [isOver, attachment, shellId])
+    if (!isOver || !attachments.length) return
+    for (const { id } of attachments) releaseAttachment(id)
+    setAttachments([])
+  }, [isOver, attachments, releaseAttachment])
 
   useEffect(() => {
     if (!replyId) return
@@ -289,6 +309,17 @@ export function AgentChatCover({ shellId, tabId, onShowTerminal }: AgentChatCove
       ]
     : webLinkItems(menu.href, destination => void openLink(menu.href, destination === 'internal' ? 'browser-tab' : 'browser'))
 
+  const pinReply = useCallback(async (item: AgentChatItem) => {
+    const pin = window.electronAPI.agentChatPin
+    if (!pin) return
+    try {
+      const result = await pin({ shellId, itemId: item.id, text: item.text ?? '', kind, title, time: item.time })
+      if (!result.ok) toast.error('띄우지 못했습니다', result.error)
+    } catch {
+      toast.error('띄우지 못했습니다', '답변 창을 열 수 없습니다.')
+    }
+  }, [kind, shellId, title])
+
   const onScroll = () => {
     const log = logRef.current
     if (!log) return
@@ -297,24 +328,31 @@ export function AgentChatCover({ shellId, tabId, onShowTerminal }: AgentChatCove
     if (log.scrollTop < 80 && chat?.hasOlder) loadOlder(shellId)
   }
 
-  const paste = async (box: HTMLTextAreaElement) => {
-    const readClipboard = window.electronAPI.agentChatReadClipboard
-    if (!readClipboard || pastePending.current || sending) return
+  const readIntoDraft = async (box: HTMLTextAreaElement, source: 'clipboard' | 'files') => {
+    const read = source === 'clipboard'
+      ? window.electronAPI.agentChatReadClipboard
+      : window.electronAPI.agentChatPickImages
+    if (!read || pastePending.current || sendPending.current) return
+    const errorTitle = source === 'clipboard' ? '붙여넣기 실패' : '이미지 첨부 실패'
     pastePending.current = true
     setPasting(true)
     try {
-      const result = await readClipboard(shellId)
+      const result = await read(shellId)
       if (boxRef.current !== box) {
-        if (result.ok && result.kind === 'image') window.electronAPI.agentChatRemoveImage?.(shellId, result.id)
+        if (result.ok && result.kind === 'images') {
+          for (const { id } of result.images) releaseAttachment(id)
+        }
         return
       }
       if (!result.ok) {
-        toast.error('붙여넣기 실패', result.error)
-      } else if (result.kind === 'image') {
-        setAttachment({
-          id: result.id,
-          url: URL.createObjectURL(new Blob([result.preview], { type: 'image/png' }))
+        toast.error(errorTitle, result.error)
+      } else if (result.kind === 'images') {
+        const added = result.images.map(({ id, preview }) => {
+          const url = URL.createObjectURL(new Blob([preview], { type: 'image/png' }))
+          previewUrls.current.set(id, url)
+          return { id, url }
         })
+        if (added.length) setAttachments(current => [...current, ...added])
       } else if (result.text) {
         const text = result.text.replace(/\r\n?/g, '\n')
         const start = box.selectionStart
@@ -324,10 +362,11 @@ export function AgentChatCover({ shellId, tabId, onShowTerminal }: AgentChatCove
         setDraft(next)
       }
     } catch {
-      if (boxRef.current === box) toast.error('붙여넣기 실패', '클립보드에 접근할 수 없습니다.')
+      if (boxRef.current === box) toast.error(errorTitle, '첨부할 내용을 읽을 수 없습니다.')
     } finally {
       pastePending.current = false
       setPasting(false)
+      if (source === 'files' && boxRef.current === box) box.focus()
     }
   }
 
@@ -335,22 +374,23 @@ export function AgentChatCover({ shellId, tabId, onShowTerminal }: AgentChatCove
     if (!window.electronAPI.agentChatReadClipboard || event.clipboardData.getData('text/plain')
       || !Array.from(event.clipboardData.items).some(item => item.type.startsWith('image/'))) return
     event.preventDefault()
-    void paste(event.currentTarget)
+    void readIntoDraft(event.currentTarget, 'clipboard')
   }
 
   const send = async () => {
     const text = draft.trim()
-    if (!chat || (!text && !attachment) || sendPending.current || pastePending.current || isOver) return
+    if (!chat || (!text && !attachments.length) || sendPending.current || pastePending.current || isOver) return
     sendPending.current = true
     stickRef.current = true
     setSending(true)
     setDraft('')
     const { echoSend, discardSend } = useAgentChatStore.getState()
-    const sendId = echoSend(shellId, text, !!attachment)
+    const sendId = echoSend(shellId, text, !!attachments.length)
     try {
-      const result = await window.electronAPI.agentChatSend?.(shellId, text, attachment?.id)
+      const result = await window.electronAPI.agentChatSend?.(shellId, text, attachments.map(image => image.id))
       if (result?.ok) {
-        setAttachment(null)
+        for (const { id } of attachments) releaseAttachment(id)
+        setAttachments([])
       } else {
         discardSend(shellId, sendId)
         setDraft(draft)
@@ -379,7 +419,7 @@ export function AgentChatCover({ shellId, tabId, onShowTerminal }: AgentChatCove
     if (window.electronAPI.agentChatReadClipboard && matchesBinding(event, ['Ctrl', 'V'])) {
       event.preventDefault()
       event.stopPropagation()
-      if (!event.repeat) void paste(event.currentTarget)
+      if (!event.repeat) void readIntoDraft(event.currentTarget, 'clipboard')
     } else if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault()
       void send()
@@ -429,7 +469,7 @@ export function AgentChatCover({ shellId, tabId, onShowTerminal }: AgentChatCove
             {chat.loadingOlder ? '이전 대화 불러오는 중…' : '이전 대화 더 보기'}
           </button>
         )}
-        {items.map(item => <ChatItem key={item.id} item={item} live={!isOver && item.id === lastToolId} />)}
+        {items.map(item => <ChatItem key={item.id} item={item} live={!isOver && item.id === lastToolId} onPin={window.electronAPI.agentChatPin ? pinReply : undefined} />)}
         {replyLabel && <p className="agent-chat-reply-progress" role="status">
           <RiLoader4Line className="agent-chat-spin" aria-hidden />{replyLabel}
         </p>}
@@ -454,20 +494,28 @@ export function AgentChatCover({ shellId, tabId, onShowTerminal }: AgentChatCove
       {/* While a prompt waits the composer is hidden: the agent takes no line then (the draft is kept) */}
       {!isOver && !chat?.approval && (
         <div className="agent-chat-composer">
-          {attachment && !sending && (
-            <div className="agent-chat-attachments">
-              <div className="agent-chat-attachment">
-                <img src={attachment.url} alt="첨부한 스크린샷" />
-                <button type="button" aria-label="이미지 첨부 제거" title="이미지 첨부 제거" disabled={sending || pasting}
-                  onClick={() => {
-                    window.electronAPI.agentChatRemoveImage?.(shellId, attachment.id)
-                    setAttachment(null)
-                    boxRef.current?.focus()
-                  }}>
-                  <RiCloseLine aria-hidden />
-                </button>
-              </div>
+          {!!attachments.length && (
+            <div className="agent-chat-attachments" role="group" aria-label="첨부 이미지">
+              {attachments.map(({ id, url }, index) => (
+                <div key={id} className="agent-chat-attachment">
+                  <img src={url} alt={'첨부 이미지 ' + (index + 1)} />
+                  <button type="button" aria-label={'이미지 ' + (index + 1) + ' 첨부 제거'} title="이미지 첨부 제거" disabled={sending || pasting}
+                    onClick={() => {
+                      releaseAttachment(id)
+                      setAttachments(current => current.filter(image => image.id !== id))
+                      boxRef.current?.focus()
+                    }}>
+                    <RiCloseLine aria-hidden />
+                  </button>
+                </div>
+              ))}
             </div>
+          )}
+          {window.electronAPI.agentChatPickImages && (
+            <button type="button" className="agent-chat-add-image" aria-label="이미지 첨부" title="이미지 첨부" disabled={sending || pasting}
+              onClick={() => { if (boxRef.current) void readIntoDraft(boxRef.current, 'files') }}>
+              <RiImageAddLine aria-hidden />
+            </button>
           )}
           <textarea
             ref={boxRef}
@@ -487,7 +535,7 @@ export function AgentChatCover({ shellId, tabId, onShowTerminal }: AgentChatCove
               <RiStopCircleLine aria-hidden /> 중지
             </button>
           )}
-          <button type="button" className="agent-chat-send" onClick={() => void send()} disabled={(!draft.trim() && !attachment) || sending || pasting} title="보내기 (Enter)">
+          <button type="button" className="agent-chat-send" onClick={() => void send()} disabled={(!draft.trim() && !attachments.length) || sending || pasting} title="보내기 (Enter)">
             {sending || pasting ? <RiLoader4Line className="agent-chat-spin" aria-hidden /> : <RiSendPlane2Line aria-hidden />}
           </button>
         </div>

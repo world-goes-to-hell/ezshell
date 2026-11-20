@@ -141,7 +141,37 @@
   line-height: 1.5;
 }
 
-.agent-chat-assistant { min-width: 0; }
+.agent-chat-assistant { position: relative; min-width: 0; }
+
+/* "띄워 두기": the answer into a small window of its own (PinnedReplyWindow), shown on hover */
+.agent-chat-pin {
+  position: absolute;
+  top: -6px;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-sm, 0);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.agent-chat-assistant:hover .agent-chat-pin,
+.agent-chat-pin:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.agent-chat-pin:hover { background: var(--bg-hover); color: var(--text-primary); }
+.agent-chat-pin:focus-visible { outline: 2px solid var(--text-link, var(--accent)); outline-offset: -2px; }
 
 .agent-chat-thinking summary,
 .agent-chat-tool-head {
@@ -287,10 +317,18 @@
   line-height: 1.45;
 }
 .agent-chat-input:focus { outline: none; border-color: var(--accent); }
-.agent-chat-attachments { flex: 0 0 100%; }
+.agent-chat-attachments {
+  display: flex;
+  flex: 0 0 100%;
+  min-width: 0;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
 .agent-chat-attachment {
   position: relative;
   display: inline-flex;
+  flex: none;
   border: 1px solid var(--border);
   border-radius: var(--radius-md, 6px);
   background: var(--bg-primary);
@@ -312,6 +350,7 @@
 }
 .agent-chat-attachment button:disabled { cursor: default; opacity: 0.55; }
 .agent-chat-stop { display: inline-flex; align-items: center; gap: 4px; }
+.agent-chat-add-image,
 .agent-chat-send {
   flex: none;
   display: inline-grid;
@@ -324,6 +363,13 @@
   color: var(--on-accent, #fff);
   cursor: pointer;
 }
+.agent-chat-add-image {
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+}
+.agent-chat-add-image:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.agent-chat-add-image:disabled,
 .agent-chat-send:disabled { opacity: 0.45; cursor: default; }
 
 .agent-chat-spin { animation: agent-chat-spin 1s linear infinite; }

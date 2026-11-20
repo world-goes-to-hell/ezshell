@@ -1,0 +1,123 @@
+/* The pinned answer window (PinnedReplyWindow.tsx, mockups/pinned-reply-window.html). The answer body
+   uses the chat view's `.agent-chat-md` rules (AgentChat.css). */
+
+html:has(.pinned-reply),
+body:has(.pinned-reply) {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.pinned-reply {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  border: 1px solid var(--border-strong, var(--border));
+}
+
+/* The frameless window is moved by its header (src/agentChat/pins.js folds it to this height: 40px) */
+.pinned-reply-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 38px;
+  min-width: 0;
+  padding: 0 5px 0 9px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.pinned-reply[data-folded] .pinned-reply-head { border-bottom: 0; }
+
+.pinned-reply-drag {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: -2px;
+}
+
+.pinned-reply-kind {
+  flex: none;
+  display: inline-flex;
+  color: var(--text-secondary);
+}
+
+.pinned-reply-kind[data-kind='claude'] { color: var(--warning, #d9a23a); }
+.pinned-reply-kind[data-kind='codex'] { color: var(--text-link, var(--accent)); }
+
+.pinned-reply-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.pinned-reply-time {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pinned-reply-actions {
+  flex: none;
+  display: flex;
+  gap: 1px;
+  -webkit-app-region: no-drag;
+}
+
+.pinned-reply-btn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 27px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm, 0);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.pinned-reply-btn:hover:not(:disabled) {
+  background: var(--bg-modifier-selected, var(--bg-hover));
+  color: var(--text-primary);
+}
+
+.pinned-reply-btn[data-action='close']:hover { color: var(--error-text, var(--error)); }
+.pinned-reply-btn:disabled { opacity: 0.4; cursor: default; }
+
+.pinned-reply-btn:focus-visible,
+.pinned-reply-body:focus-visible {
+  outline: 2px solid var(--text-link, var(--accent));
+  outline-offset: -2px;
+}
+
+.pinned-reply-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 17px 19px 21px;
+  scrollbar-gutter: stable;
+  user-select: text;
+}
+
+.pinned-reply-body .agent-chat-md a { cursor: pointer; }
+
+.pinned-reply-empty {
+  margin: 0;
+  color: var(--text-muted);
+}
