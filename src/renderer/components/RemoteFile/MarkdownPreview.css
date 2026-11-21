@@ -80,7 +80,7 @@
 }
 
 .remote-view-option:hover { color: var(--text-primary); }
-.remote-view-option.is-active { background: var(--accent); color: var(--text-on-accent, #fff); }
+.remote-view-option.is-active { background: var(--accent); color: var(--on-accent); }
 .remote-view-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* 나란히: the editor (its share set inline), the divider, then the document */

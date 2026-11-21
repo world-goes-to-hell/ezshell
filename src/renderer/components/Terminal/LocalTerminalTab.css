@@ -79,61 +79,18 @@
   border: 2px solid var(--accent);
 }
 
-@property --local-agent-trace-angle {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0turn;
-}
-
 /* The light follows an inner track so it stays visible beside the solid focus outline. */
 .local-terminal-pane[data-agent-work]::after {
-  content: '';
-  position: absolute;
-  inset: 3px;
-  z-index: 11;
-  padding: 2px;
-  pointer-events: none;
-  color: color-mix(in srgb, var(--motion-accent, var(--accent)) 55%, var(--border));
-  background: conic-gradient(
-    from var(--local-agent-trace-angle),
-    transparent,
-    color-mix(in srgb, currentColor 40%, transparent) 18deg,
-    currentColor 27deg,
-    transparent 32deg
-  );
-  mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
-  mask-composite: exclude;
-  opacity: 0;
-  transition: opacity 180ms ease-out, color 180ms ease-out;
-  animation: local-agent-trace 3.6s linear infinite paused;
+  --agent-trace-inset: 3px;
+  --agent-trace-z-index: 11;
 }
 
 .local-terminal-pane[data-agent-work]:focus-within::after {
-  color: color-mix(in srgb, var(--motion-accent, var(--accent)) 72%, var(--terminal-foreground, var(--text-primary)));
-}
-
-.local-terminal-pane[data-agent-work='working']::after {
-  opacity: 1;
-  animation-play-state: running;
+  --agent-trace-color: color-mix(in srgb, var(--motion-accent, var(--accent)) 72%, var(--terminal-foreground, var(--text-primary)));
 }
 
 .terminal-wrapper.hidden .local-terminal-pane[data-agent-work='working']::after {
   animation-play-state: paused;
-}
-
-@keyframes local-agent-trace {
-  to { --local-agent-trace-angle: 1turn; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .local-terminal-pane[data-agent-work]::after {
-    padding: 0;
-    border: 1px solid currentColor;
-    background: none;
-    mask: none;
-    animation: none;
-    transition: none;
-  }
 }
 
 .local-terminal-pane-status {

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
-import { RiDownloadCloud2Line, RiFileSearchLine, RiFolderAddLine, RiLoader4Line, RiRefreshLine } from 'react-icons/ri'
+import { RiDownloadCloud2Line, RiFileSearchLine, RiFolderAddLine, RiLoader4Line, RiQuestionLine, RiRefreshLine } from 'react-icons/ri'
 import { useSessionStore } from '../../stores/sessionStore'
 import { toast } from '../../stores/toastStore'
 import {
@@ -19,6 +19,33 @@ const newId = () => crypto.randomUUID()
 const RESTART_NOTE = '가져오기 기능이 아직 앱에 올라오지 않았습니다. 앱을 완전히 닫았다가 다시 실행해 주세요.'
 const isMissingHandler = (error: unknown) => /No handler registered/i.test(String((error as Error)?.message ?? error))
 
+const FILE_GUIDE = [
+  {
+    app: 'Xshell', files: '.xts, .xsh',
+    hint: <>파일 메뉴에서 내보낸 <code>.xts</code>나 문서 폴더의 <code>NetSarang Computer\버전\Xshell\Sessions</code>에 있는 <code>.xsh</code>를 고르세요.</>
+  },
+  {
+    app: 'Xftp', files: '.xfp',
+    hint: <>문서 폴더의 <code>NetSarang Computer\버전\Xftp\Sessions</code>에 있는 SFTP 세션 파일을 고르세요.</>
+  },
+  {
+    app: 'PuTTY', files: '.reg',
+    hint: <>Windows 레지스트리 편집기에서 <code>HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions</code> 키를 내보낸 파일을 고르세요.</>
+  },
+  {
+    app: 'MobaXterm', files: '.mxtsessions, MobaXterm.ini',
+    hint: <>세션 폴더를 우클릭해 내보낸 파일이나 MobaXterm 설정 파일을 고르세요.</>
+  },
+  {
+    app: 'Tabby', files: '.yaml, .yml',
+    hint: <>Tabby 설정의 <strong>Config file</strong>에서 위치를 확인하세요. Windows 기본 경로는 <code>%APPDATA%\tabby\config.yaml</code>입니다.</>
+  },
+  {
+    app: 'OpenSSH', files: 'config, .conf, .txt',
+    hint: <>보통 <code>~/.ssh/config</code>를 고릅니다. Termius의 접속 정보도 <code>Host</code> 항목이 있는 OpenSSH 설정 파일로 정리해 가져올 수 있습니다.</>
+  }
+]
+
 /**
  * "다른 프로그램에서 가져오기": the user's sessions on the left, another program's on the right.
  * Folders and sessions are dragged across (or the checked ones are put into the selected folder),
@@ -35,6 +62,8 @@ export function ExternalImportDialog({ onClose }: { onClose: () => void }) {
   const [stage, setStage] = useState<Stage>(EMPTY_STAGE)
   const [target, setTarget] = useState<string | null>(null)
   const [needsRestart, setNeedsRestart] = useState(false)
+  const [showFileGuide, setShowFileGuide] = useState(false)
+  const fileGuideId = useId()
   // "새 폴더": the name being typed (null = no input shown)
   const [newFolderName, setNewFolderName] = useState<string | null>(null)
 
@@ -102,8 +131,13 @@ export function ExternalImportDialog({ onClose }: { onClose: () => void }) {
       setNeedsRestart(true)
       return
     }
-    if (!answer.ok) setError(answer.error)
-    else if (!answer.canceled) show(answer.result)
+    if (!answer.ok) {
+      setError(answer.error)
+      setShowFileGuide(true)
+    } else if (!answer.canceled) {
+      show(answer.result)
+      setShowFileGuide(answer.result.sessions.length === 0)
+    }
   }
 
   const toggle = (ids: string[], on: boolean) => setSelected(prev => {
@@ -181,7 +215,7 @@ export function ExternalImportDialog({ onClose }: { onClose: () => void }) {
           onEscapeKeyDown={(e) => { if (newFolderName !== null) { e.preventDefault(); setNewFolderName(null) } }}>
           <Dialog.Title className="modal-title"><RiDownloadCloud2Line size={18} aria-hidden="true" /> 다른 프로그램에서 가져오기</Dialog.Title>
           <p id="xi-note" className="xi-note">
-            Xshell·Xftp·PuTTY·MobaXterm·Tabby·OpenSSH config 의 세션을 옮겨 옵니다. 호스트·포트·계정·폴더·점프 호스트·키 파일 경로만 가져오고, <strong>저장된 비밀번호는 가져오지 않습니다</strong> (접속할 때 입력). Termius 는 OpenSSH config 로 내보낸 파일을 고르세요.
+            SSH 세션의 접속 정보를 가져옵니다. <strong>비밀번호는 접속할 때 입력하세요.</strong>
           </p>
 
           <div className="xi-sources">
@@ -191,9 +225,13 @@ export function ExternalImportDialog({ onClose }: { onClose: () => void }) {
                 {busy === source.id ? <RiLoader4Line className="spinning" size={14} /> : null}{source.label}
               </button>
             ))}
-            {sources?.length === 0 && !needsRestart && <span className="xi-muted">이 PC 에서 찾은 프로그램이 없습니다 (Xshell·PuTTY·MobaXterm·Tabby 가 세션을 저장하는 기본 위치를 봤습니다). 받은 파일은 '파일 고르기' 로 여세요.</span>}
+            {sources?.length === 0 && !needsRestart && <span className="xi-muted">이 PC에서 자동으로 찾은 프로그램이 없습니다.</span>}
             <button type="button" className="xi-source is-file" onClick={() => void pickFile()} disabled={busy !== null}>
-              {busy === 'file' ? <RiLoader4Line className="spinning" size={14} /> : <RiFileSearchLine size={14} />} 파일 고르기…
+              {busy === 'file' ? <RiLoader4Line className="spinning" size={14} aria-hidden="true" /> : <RiFileSearchLine size={14} aria-hidden="true" />} 파일 고르기…
+            </button>
+            <button type="button" className="xi-file-guide-toggle" aria-expanded={showFileGuide} aria-controls={fileGuideId}
+              onClick={() => setShowFileGuide(shown => !shown)}>
+              <RiQuestionLine size={15} aria-hidden="true" /> 지원 파일 형식
             </button>
             <button type="button" className="xi-icon-btn" onClick={() => void loadSources()} disabled={busy !== null} aria-label="다시 찾기" title="다시 찾기">
               <RiRefreshLine size={15} />
@@ -201,6 +239,17 @@ export function ExternalImportDialog({ onClose }: { onClose: () => void }) {
           </div>
           {needsRestart && <p className="xi-error" role="alert">{RESTART_NOTE}</p>}
           {error && <p className="xi-error" role="alert">{error}</p>}
+          <section className="xi-file-guide" id={fileGuideId} aria-label="프로그램별 파일 안내" hidden={!showFileGuide}>
+            <dl className="xi-file-formats">
+              {FILE_GUIDE.map(({ app, files, hint }) => (
+                <div key={app}>
+                  <dt>{app}</dt>
+                  <dd><code>{files}</code><p>{hint}</p></dd>
+                </div>
+              ))}
+            </dl>
+            <p className="xi-file-guide-note">확장자가 없는 <code>config</code> 파일이 안 보이면 파일 선택창에서 <strong>모든 파일</strong>을 고르세요.</p>
+          </section>
 
           <div className="xi-panels">
             <section className="xi-panel">

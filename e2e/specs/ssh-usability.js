@@ -18,11 +18,15 @@ const { check, finish } = createChecks()
   }
 
   await unlock(driver)
-  const folders = [{ id: 'production', name: 'Production' }, { id: 'staging', name: 'Staging' }]
-  const sessions = folders.map(({ id }) => ({
+  const folders = [
+    { id: 'production', name: 'Production' }, { id: 'staging', name: 'Staging' },
+    { id: 'tools', name: 'Tools' }, { id: 'backups', name: 'Backups', parentId: 'tools' }
+  ]
+  const sessions = folders.slice(0, 2).map(({ id }) => ({
     id: `server-${id}`, folderId: id, name: 'Shared endpoint', host: '127.0.0.1',
     port: Number(process.env.E2E_SSH_PORT), username: 'tester', authType: 'password', password: 'x'
   }))
+  sessions.push({ ...sessions[0], id: 'backup-agent', folderId: 'backups', name: 'Archive worker' })
   await js(`window.electronAPI.saveFolders(${JSON.stringify({ folders, expandedFolders: [] })})`)
   await js(`window.electronAPI.saveSessions(${JSON.stringify(sessions)})`)
   await send('Page.reload')
@@ -66,11 +70,31 @@ const { check, finish } = createChecks()
   const pickSession = `[...document.querySelectorAll('.new-tab-menu-item')].find(item => item.textContent.includes('기존 세션 선택'))`
   check('the tab strip still opens the saved session picker', await until(`!!${pickSession}`, 4000))
   await click(...await center(pickSession))
-  await until(`!!${selector('.session-picker-search input')}`)
+  const pickerInput = selector('.session-picker-search input')
+  const selectedOption = `document.getElementById(${pickerInput}?.getAttribute('aria-activedescendant') ?? '')?.dataset.sessionId`
+  const pickerFolders = `[...document.querySelectorAll('.session-picker-folder-heading')].map(row => row.textContent.trim()).join(',')`
+  const backup = selector('.session-picker-item[data-session-id="backup-agent"]')
+  check('the picker starts with all folders expanded, including nested sessions', await until(`
+    ${pickerFolders} === 'Production,Staging,Tools,Backups' &&
+    ${backup}?.closest('.session-picker-folder')?.parentElement.closest('.session-picker-folder')?.firstElementChild.textContent === 'Tools' &&
+    document.activeElement === ${pickerInput}
+  `))
+  await until(`getComputedStyle(${selector('.session-picker-modal')}).opacity === '1'`)
+  await driver.shot('session-picker-tree')
+  await key('ArrowDown', 'ArrowDown', 40)
+  check('the picker arrows step between sessions across folder boundaries', await until(`${selectedOption} === 'server-staging' && document.activeElement === ${pickerInput}`))
+  await key('ArrowDown', 'ArrowDown', 40)
+  check('the next option reaches the session in a nested folder', await until(`${selectedOption} === 'backup-agent'`))
   await setInput('.session-picker-search input', 'Staging')
   check('folder search distinguishes two sessions with the same connection information', await until(
-    `document.querySelectorAll('.session-picker-item').length === 1 && ${selector('.session-picker-item')}?.textContent.includes('Staging')`
+    `document.querySelectorAll('.session-picker-item').length === 1 && ${pickerFolders} === 'Staging' && ${selectedOption} === 'server-staging'`
   ))
+  await setInput('.session-picker-search input', 'Archive')
+  check('a filtered nested session keeps its enclosing folders', await until(`
+    document.querySelectorAll('.session-picker-item').length === 1 && ${pickerFolders} === 'Tools,Backups' && ${selectedOption} === 'backup-agent'
+  `))
+  await setInput('.session-picker-search input', '')
+  check('clearing the picker search restores the full open tree', await until(`${pickerFolders} === 'Production,Staging,Tools,Backups'`))
   await key('Escape', 'Escape', 27)
   await until(`!${selector('.session-picker-modal')}`)
 

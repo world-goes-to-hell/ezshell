@@ -1,6 +1,7 @@
 import { droppedFilePaths, dropUploadStatus } from '../../lib/droppedFiles'
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { throttle, REFIT_INTERVAL_MS, type Throttled } from '../../lib/throttle'
+import { readTerminalScrollback } from '../../lib/terminalScrollback'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import { SearchAddon } from 'xterm-addon-search'
@@ -235,7 +236,7 @@ export function TerminalPanel({ sessionId, isActive, onActivate, onClose }: Term
         // xterm's default 'outline' draws a box around the cursor cell in unfocused panes,
         // which looks like a double bar ('||') next to the prompt in split layouts
         cursorInactiveStyle: 'bar',
-        scrollback: 10000,
+        scrollback: readTerminalScrollback(),
         allowProposedApi: true
       })
 

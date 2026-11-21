@@ -448,11 +448,14 @@ describe('files on this PC', () => {
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-localdoc-')) })
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
 
-  const setup = (head = null) => {
+  const setup = (head = null, history = async () => []) => {
     let n = 0
     const docs = createRemoteDocuments({
       openSftp: async () => { throw new Error('no SFTP for local files') }, serverOf: () => ({}), backups: null,
-      localFiles: { read: localRead, headOf: async () => head }, newId: () => `doc-${++n}`
+      localFiles: {
+        read: localRead, fileHistory: history,
+        fileAt: async (_root, file, hash) => hash ? { content: `${path.basename(file)} at ${hash}` } : head
+      }, newId: () => `doc-${++n}`
     })
     return docs
   }
@@ -494,6 +497,42 @@ describe('files on this PC', () => {
     expect(await docs.listServerBackups(7, docId)).toEqual({ backups: [{ name: 'HEAD', size: 10, time: 1795000000000, timeFrom: 'git' }] })
     expect(await docs.readServerBackup(7, docId, 'HEAD')).toEqual({ content: 'committed\n' })
     await expect(docs.readServerBackup(7, docId, 'other')).rejects.toThrow(MESSAGES.noBackup)
+  })
+
+  it('reads older versions by their listed commit and historical path', async () => {
+    const file = path.join(dir, 'a.txt')
+    const old = 'a'.repeat(40)
+    const removed = 'b'.repeat(40)
+    fs.writeFileSync(file, 'now\n')
+    const docs = setup(null, async () => [
+      { hash: removed, time: 2000, subject: 'delete', deleted: true, path: file },
+      { hash: old, time: 1000, subject: 'add', deleted: false, path: path.join(dir, 'old.txt') }
+    ])
+    const { docId } = docs.registerLocal({ root: dir, path: file, mode: 'edit' })
+    docs.attach(docId, 7)
+    await docs.load(7, docId)
+    await expect(docs.readServerBackup(7, docId, old)).rejects.toThrow(MESSAGES.noBackup)
+    expect(await docs.listServerBackups(7, docId)).toEqual({ backups: [
+      { name: removed, time: 2000, subject: 'delete', deleted: true, timeFrom: 'git' },
+      { name: old, time: 1000, subject: 'add', deleted: false, timeFrom: 'git' }
+    ] })
+    expect(await docs.readServerBackup(7, docId, old)).toEqual({ content: `old.txt at ${old}` })
+    expect(await docs.readServerBackup(7, docId, removed)).toEqual({ content: '' })
+    await expect(docs.readServerBackup(7, docId, 'c'.repeat(40))).rejects.toThrow(MESSAGES.noBackup)
+  })
+
+  it('keeps HEAD available and reports a Git history error', async () => {
+    const file = path.join(dir, 'a.txt')
+    fs.writeFileSync(file, 'now\n')
+    const docs = setup({ content: 'head\n', size: 5, time: 1 }, async () => { throw new Error('timed out') })
+    const { docId } = docs.registerLocal({ root: dir, path: file, mode: 'edit' })
+    docs.attach(docId, 7)
+    await docs.load(7, docId)
+    expect(await docs.listServerBackups(7, docId)).toEqual({
+      backups: [{ name: 'HEAD', size: 5, time: 1, timeFrom: 'git' }],
+      historyError: 'Git 파일 이력을 읽지 못했습니다.'
+    })
+    expect(await docs.readServerBackup(7, docId, 'HEAD')).toEqual({ content: 'head\n' })
   })
 
   it('tells every load in the first seconds to compare with HEAD (a page in development loads twice)', async () => {

@@ -16,13 +16,14 @@ export interface SaveReview {
 interface SaveReviewDialogProps {
   review: SaveReview | null
   path: string
+  isLocal: boolean
   isSaving: boolean
   onConfirm: () => void
   onCancel: () => void
 }
 
-/** Ctrl+S: what the save changes on the server, before anything is written. Focus starts on 취소. */
-export function SaveReviewDialog({ review, path, isSaving, onConfirm, onCancel }: SaveReviewDialogProps) {
+/** Ctrl+S: review the file changes before writing. Focus starts on 취소. */
+export function SaveReviewDialog({ review, path, isLocal, isSaving, onConfirm, onCancel }: SaveReviewDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null)
   // A change too long to show in full is saved only after saying so
   const [acceptsUnseen, setAcceptsUnseen] = useState(false)
@@ -39,13 +40,15 @@ export function SaveReviewDialog({ review, path, isSaving, onConfirm, onCancel }
           >
             <Dialog.Title className="modal-title">
               <RiSave3Line size={20} className="remote-file-dialog-icon" aria-hidden="true" />
-              서버 파일에 저장
+              {isLocal ? '로컬 파일에 저장' : '서버 파일에 저장'}
             </Dialog.Title>
             <Dialog.Description className="remote-file-dialog-text">
               <span className="remote-file-dialog-path">{path}</span>
               <span>
                 <span className="remote-file-added">+{review.added}</span> <span className="remote-file-removed">-{review.removed}</span> 줄.
-                저장하기 전에 지금 서버의 내용을 PC 의 문서\ezShell Backups 폴더에 백업합니다 (평문 파일).
+                {isLocal
+                  ? ' 아래 변경 내용을 로컬 파일에 저장합니다.'
+                  : ' 저장하기 전에 지금 서버의 내용을 PC 의 문서\\ezShell Backups 폴더에 백업합니다 (평문 파일).'}
               </span>
               {review.isWholeFile && <span className="remote-file-dialog-note">변경 범위를 계산하지 못해 전체 교체로 표시합니다.</span>}
             </Dialog.Description>
@@ -59,7 +62,7 @@ export function SaveReviewDialog({ review, path, isSaving, onConfirm, onCancel }
             <div className="modal-actions">
               <button ref={cancelRef} type="button" className="btn-secondary modal-btn" onClick={onCancel} disabled={isSaving}>취소</button>
               <button type="button" className="btn-primary modal-btn" onClick={onConfirm} disabled={!canConfirm}>
-                {isSaving ? '저장하는 중…' : '백업 후 저장'}
+                {isSaving ? '저장하는 중…' : isLocal ? '저장' : '백업 후 저장'}
               </button>
             </div>
           </Dialog.Content>
@@ -73,11 +76,12 @@ export type ConflictChoice = 'reload' | 'compare' | 'cancel'
 
 interface ConflictDialogProps {
   isOpen: boolean
+  isLocal: boolean
   onChoose: (choice: ConflictChoice) => void
 }
 
-/** The server file changed after it was opened: nothing was written. */
-export function ConflictDialog({ isOpen, onChoose }: ConflictDialogProps) {
+/** The file changed outside the editor since it was opened. */
+export function ConflictDialog({ isOpen, isLocal, onChoose }: ConflictDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null)
   return (
     <Dialog.Root open={isOpen} onOpenChange={(open) => { if (!open) onChoose('cancel') }}>
@@ -90,16 +94,22 @@ export function ConflictDialog({ isOpen, onChoose }: ConflictDialogProps) {
           >
             <Dialog.Title className="modal-title">
               <RiErrorWarningLine size={20} className="remote-file-dialog-icon is-warning" aria-hidden="true" />
-              서버의 파일이 바뀌었습니다
+              {isLocal ? '로컬 파일이 바뀌었습니다' : '서버의 파일이 바뀌었습니다'}
             </Dialog.Title>
             <Dialog.Description className="remote-file-dialog-text">
               <span>이 창에서 연 뒤에 다른 사람이나 프로그램이 파일을 바꿔서 저장하지 않았습니다.</span>
-              <span>서버의 새 내용과 다시 비교하면, 바뀐 부분을 확인한 뒤 내 내용으로 저장할 수 있습니다.</span>
+              <span>{isLocal
+                ? '디스크의 최신 내용과 다시 비교하면, 바뀐 부분을 확인한 뒤 내 내용으로 저장할 수 있습니다.'
+                : '서버의 새 내용과 다시 비교하면, 바뀐 부분을 확인한 뒤 내 내용으로 저장할 수 있습니다.'}</span>
             </Dialog.Description>
             <div className="modal-actions remote-file-dialog-actions">
               <button ref={cancelRef} type="button" className="btn-secondary modal-btn" onClick={() => onChoose('cancel')}>취소</button>
-              <button type="button" className="btn-secondary modal-btn" onClick={() => onChoose('reload')}>서버 내용 다시 불러오기 (내 변경 버림)</button>
-              <button type="button" className="btn-primary modal-btn" onClick={() => onChoose('compare')}>서버 내용과 다시 비교</button>
+              <button type="button" className="btn-secondary modal-btn" onClick={() => onChoose('reload')}>
+                {isLocal ? '파일 다시 불러오기 (내 변경 버림)' : '서버 내용 다시 불러오기 (내 변경 버림)'}
+              </button>
+              <button type="button" className="btn-primary modal-btn" onClick={() => onChoose('compare')}>
+                {isLocal ? '현재 파일과 다시 비교' : '서버 내용과 다시 비교'}
+              </button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

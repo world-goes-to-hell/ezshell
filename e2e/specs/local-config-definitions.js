@@ -4,7 +4,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
-const { connect, createChecks, unlock, findPage, pageProblems } = require('../support/driver')
+const { connect, createChecks, unlock, findPage, pages, pageProblems } = require('../support/driver')
 
 const { check, finish } = createChecks()
 const CTRL = 2
@@ -21,19 +21,12 @@ const CTRL = 2
 
   const driver = await connect()
   const { js, until } = driver
-  const opened = []
-  const openNewWindow = async (action) => {
-    const before = new Set((await (await fetch(`${process.env.E2E_CDP}/json`)).json()).map(t => t.id))
-    await action()
-    const found = await findPage(t => t.url.includes('remoteFileMode') && !before.has(t.id), 15000)
-    if (!found) return null
-    const page = await connect(t => t.id === found.id)
-    opened.push({ found, page })
-    return page
-  }
+  let editor
+  const visiblePane = '.remote-file-pane:not([hidden])'
+  const selectedTab = `document.querySelector('.remote-file-tab-select[aria-selected="true"] .remote-file-tab-name')`
   const ctrlClickOn = async (page, text) => {
     const at = await page.js(`(() => {
-      const el = [...document.querySelectorAll('.cm-placeholder-ref')].find(e => e.textContent.includes(${JSON.stringify(text)}))
+      const el = [...document.querySelectorAll('${visiblePane} .cm-placeholder-ref')].find(e => e.textContent.includes(${JSON.stringify(text)}))
       if (!el) return null
       const r = el.getBoundingClientRect()
       return [r.left + r.width / 2, r.top + r.height / 2]
@@ -44,7 +37,8 @@ const CTRL = 2
     await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at[0], y: at[1], button: 'left', buttons: 0, clickCount: 1, modifiers: CTRL })
     return true
   }
-  const revealed = (page) => page.js(`document.querySelector('.cm-revealed-line')?.textContent ?? null`)
+  const highlighted = `document.querySelector('${visiblePane} .cm-revealed-line')?.textContent`
+  const revealed = (page) => page.js(highlighted)
 
   try {
     await unlock(driver)
@@ -58,9 +52,12 @@ const CTRL = 2
     const row = name => `[...document.querySelectorAll('.workspace-tree-row')].find(r => r.textContent.trim() === ${JSON.stringify(name)})`
     await until(`!!${row('application.yml')}`, 15000)
 
-    const yml = await openNewWindow(() => js(`${row('application.yml')}.click()`))
-    check('the config file opens in the file window', !!yml)
-    if (!yml) throw new Error('no file window')
+    await js(`${row('application.yml')}.click()`)
+    const target = await findPage(t => t.url.includes('remoteFileMode'), 15000)
+    check('the config file opens in the file window', !!target)
+    if (!target) throw new Error('no file window')
+    const yml = editor = await connect(t => t.id === target.id)
+    const selectYml = () => yml.js(`[...document.querySelectorAll('.remote-file-tab-select')].find(tab => tab.textContent.trim() === 'application.yml').click()`)
     check('placeholders are underlined', await yml.until(`document.querySelectorAll('.cm-placeholder-ref').length === 2`, 15000))
 
     // ---- Set in two places: a list ----
@@ -75,32 +72,31 @@ const CTRL = 2
     check('the default written in the placeholder is shown first', (await yml.js(`document.querySelector('.definition-list-fallback code')?.textContent`)) === './uploads')
     await yml.send('Page.captureScreenshot', { format: 'png' }).then(r => r?.result?.data && fs.writeFileSync(path.join(process.env.E2E_OUT, 'local-config-definitions-list.png'), Buffer.from(r.result.data, 'base64')))
 
-    const compose = await openNewWindow(() => yml.js(`${items}.find(i => i.textContent.includes('docker-compose.yml')).click()`))
-    check('picking one opens that file', !!compose && await compose.until(`(document.querySelector('.cm-content')?.textContent || '').includes('/srv/uploads')`, 15000))
-    if (compose) {
-      check('at its line, highlighted', await compose.until(`(document.querySelector('.cm-revealed-line')?.textContent || '').includes('UPLOAD_DIR: /srv/uploads')`, 5000), String(await revealed(compose)))
-    }
+    await yml.js(`${items}.find(i => i.textContent.includes('docker-compose.yml')).click()`)
+    check('picking one opens that file in a tab', await yml.until(`${selectedTab}?.textContent === 'docker-compose.yml'`))
+    check('at its line, highlighted', await yml.until(`(${highlighted} || '').includes('UPLOAD_DIR: /srv/uploads')`, 5000), String(await revealed(yml)))
     check('the list closes after picking', await yml.until(`!document.querySelector('.definition-list')`, 3000))
 
     // ---- Set in one place: opened at once ----
-    const env = await openNewWindow(() => ctrlClickOn(yml, 'DB_URL'))
-    check('a name set in one place opens that file at once', !!env && await env.until(`(document.querySelector('.cm-revealed-line')?.textContent || '').includes('DB_URL=jdbc')`, 15000), env ? String(await revealed(env)) : 'no window')
+    await selectYml()
+    await yml.until(`${selectedTab}?.textContent === 'application.yml'`)
+    await ctrlClickOn(yml, 'DB_URL')
+    check('a name set in one place opens that file at once', await yml.until(`(${highlighted} || '').includes('DB_URL=jdbc')`, 15000), String(await revealed(yml)))
 
     // ---- Opening an already open file only moves to the line ----
+    await selectYml()
+    await yml.until(`${selectedTab}?.textContent === 'application.yml'`)
     await ctrlClickOn(yml, 'UPLOAD_DIR')
     await yml.until(`${items}.length === 2`, 15000)
-    const pagesBefore = (await (await fetch(`${process.env.E2E_CDP}/json`)).json()).filter(t => t.url.includes('remoteFileMode')).length
     await yml.js(`${items}.find(i => i.textContent.includes('.env')).click()`)
-    check('an open file is brought forward at the line instead of opening again', !!env && await env.until(`(document.querySelector('.cm-revealed-line')?.textContent || '').includes('UPLOAD_DIR=/data/uploads')`, 8000) &&
-      (await (await fetch(`${process.env.E2E_CDP}/json`)).json()).filter(t => t.url.includes('remoteFileMode')).length === pagesBefore, env ? String(await revealed(env)) : 'no window')
+    check('an open file is brought forward at the line instead of opening again', await yml.until(`(${highlighted} || '').includes('UPLOAD_DIR=/data/uploads')`, 8000) &&
+      await yml.js(`document.querySelectorAll('.remote-file-tab-select').length === 3`) &&
+      (await pages()).filter(t => t.url.includes('remoteFileMode')).length === 1, String(await revealed(yml)))
 
     const problems = await pageProblems(yml)
     check('the file window has no console errors or CSP refusals', problems.length === 0, problems.join(' || '))
   } finally {
-    for (const { found, page } of opened) {
-      page.close()
-      try { await fetch(`${process.env.E2E_CDP}/json/close/${found.id}`) } catch { /* gone */ }
-    }
+    editor?.close()
     driver.close()
   }
   finish()

@@ -84,6 +84,9 @@ function show(element: Element, text: string) {
   if (!element.isConnected || !text.trim()) return
   const tip = ensureBox()
   tip.textContent = text
+  const tabLabel = element.matches('[data-browser-tab] > [data-tab-label]') ? element
+    : element.matches('[data-browser-tab]') ? element.querySelector('[data-tab-label]') : null
+  tip.classList.toggle('browser-tab-title-tooltip', Boolean(tabLabel && tabLabel.scrollWidth > tabLabel.clientWidth))
   tip.classList.add('is-visible')
   const anchor = element.getBoundingClientRect()
   const at = placeTooltip(anchor, { width: tip.offsetWidth, height: tip.offsetHeight }, { width: window.innerWidth, height: window.innerHeight })

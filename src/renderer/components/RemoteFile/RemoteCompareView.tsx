@@ -5,7 +5,7 @@ import { MergeView, getChunks, goToNextChunk, goToPreviousChunk } from '@codemir
 import { RiArrowDownSLine, RiArrowUpSLine, RiCloseLine, RiSkipDownLine, RiSkipUpLine } from 'react-icons/ri'
 import { editorExtensions, languageFor, languageSlot } from './codeEditorSetup'
 import { BackupSourceIcon } from './RemoteBackupPanel'
-import { entryKey, neighborOf, readBackupEntry, type BackupEntry } from '../../lib/backupCompare'
+import { entryKey, gitRevisionLabel, neighborOf, readBackupEntry, type BackupEntry } from '../../lib/backupCompare'
 import { formatClock, toEditorText } from '../../lib/remoteFileText'
 import { toast } from '../../stores/toastStore'
 import { COMPARE_DIFF_CONFIG } from '../../lib/compareDiff'
@@ -95,7 +95,8 @@ const MERGE_PHRASES = EditorState.phrases.of({
 })
 
 const optionLabel = (entry: BackupEntry): string =>
-  entry.timeFrom === 'git' ? `Git · ${entry.name}` : entry.source === 'app' ? `앱 · ${formatClock(entry.time)}` : `서버 · ${entry.name}`
+  entry.timeFrom === 'git' ? [`Git · ${gitRevisionLabel(entry)}`, entry.subject].filter(Boolean).join(' · ')
+    : entry.source === 'app' ? `앱 · ${formatClock(entry.time)}` : `서버 · ${entry.name}`
 
 /**
  * IntelliJ-style comparison: the backup on the left (read-only), the editor's text on the right.
@@ -119,6 +120,8 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
   onCloseRef.current = onClose
 
   const entry = entries.find(e => entryKey(e) === backupKey) ?? null
+  const sourceLabel = entries[0]?.timeFrom === 'git' ? 'Git 버전' : '백업'
+  const revertLabel = `이 부분을 ${sourceLabel} 내용으로 바꾸기`
   const older = neighborOf(entries, backupKey, 'older')
   const newer = neighborOf(entries, backupKey, 'newer')
 
@@ -172,8 +175,8 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
       renderRevertControl: () => {
         const button = document.createElement('button')
         button.textContent = '»'
-        button.title = '이 부분을 백업 내용으로 바꾸기'
-        button.setAttribute('aria-label', '이 부분을 백업 내용으로 바꾸기')
+        button.title = revertLabel
+        button.setAttribute('aria-label', revertLabel)
         return button
       },
       // Taking a block from the backup only; the backup itself never changes
@@ -203,7 +206,7 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
       merge.destroy()
       mergeRef.current = null
     }
-  }, [loaded, collapse, getEditor, readOnly, fileName])
+  }, [loaded, collapse, getEditor, readOnly, fileName, revertLabel])
 
   const changeSyncScroll = (isOn: boolean) => {
     setSyncScroll(isOn)
@@ -230,18 +233,18 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
   const summary = chunkCount === null ? '' : chunkCount === 0 ? '현재 내용과 같습니다' : `바뀐 곳 ${chunkCount}개`
 
   return (
-    <section className="remote-compare" aria-label="백업과 비교">
+    <section className="remote-compare" aria-label={`${sourceLabel}과 비교`}>
       <div className="remote-compare-toolbar">
         <label className="remote-compare-pick">
-          <span className="remote-compare-label">백업</span>
+          <span className="remote-compare-label">{sourceLabel}</span>
           <select value={backupKey} onChange={(e) => onBackupKey(e.target.value)}>
             {entries.map(e => <option key={entryKey(e)} value={entryKey(e)}>{optionLabel(e)}</option>)}
           </select>
         </label>
-        <button type="button" className="remote-file-icon-btn" disabled={!newer} onClick={() => newer && onBackupKey(newer)} title="더 최근 백업" aria-label="더 최근 백업">
+        <button type="button" className="remote-file-icon-btn" disabled={!newer} onClick={() => newer && onBackupKey(newer)} title={`더 최근 ${sourceLabel}`} aria-label={`더 최근 ${sourceLabel}`}>
           <RiArrowUpSLine size={17} />
         </button>
-        <button type="button" className="remote-file-icon-btn" disabled={!older} onClick={() => older && onBackupKey(older)} title="더 오래된 백업" aria-label="더 오래된 백업">
+        <button type="button" className="remote-file-icon-btn" disabled={!older} onClick={() => older && onBackupKey(older)} title={`더 오래된 ${sourceLabel}`} aria-label={`더 오래된 ${sourceLabel}`}>
           <RiArrowDownSLine size={17} />
         </button>
         <span className="remote-compare-divider" aria-hidden="true" />
@@ -261,14 +264,14 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
           <input type="checkbox" checked={collapse} onChange={(e) => setCollapse(e.target.checked)} />
           <span>같은 줄 접기</span>
         </label>
-        <button type="button" className="btn-secondary remote-compare-close" onClick={onClose}>
-          <RiCloseLine size={14} aria-hidden="true" /> 비교 닫기
+        <button type="button" className="btn-primary remote-compare-close" onClick={onClose}>
+          <RiCloseLine size={16} aria-hidden="true" /> 비교 닫기
         </button>
       </div>
       <div className="remote-compare-heads" aria-hidden="true">
         <div className="remote-compare-head">
           {entry && <BackupSourceIcon entry={entry} size={13} />}
-          <span>{entry ? optionLabel(entry) : '백업'}</span>
+          <span>{entry ? optionLabel(entry) : sourceLabel}</span>
           <span className="remote-compare-tag">읽기 전용</span>
         </div>
         <div className="remote-compare-head">
@@ -277,7 +280,7 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
         </div>
       </div>
       {loaded && 'error' in loaded && <p className="remote-compare-message" role="alert">{loaded.error}</p>}
-      {!loaded && <p className="remote-compare-message">백업을 읽는 중…</p>}
+      {!loaded && <p className="remote-compare-message">{sourceLabel}을 읽는 중…</p>}
       <div className="remote-compare-host" ref={hostRef} />
       {/* One horizontal scroll bar for both sides, always in view (only while they move together) */}
       <div className="remote-compare-hscroll" ref={barRef} hidden={!syncScroll} aria-hidden="true"><div /></div>

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { RiWifiFill, RiWifiOffFill } from 'react-icons/ri'
 import { VersionInfo } from '../Update/UpdateNotification'
@@ -12,6 +13,7 @@ import { isSshTab } from '../../lib/sessionTabs'
 
 export function Footer() {
   const { terminals } = useTerminalStore()
+  const [zoomOpen, setZoomOpen] = useState(false)
   // SSH connections only: a DB tab rides on one of them
   const activeConnections = Array.from(terminals.values()).filter(isSshTab).length
 
@@ -39,10 +41,10 @@ export function Footer() {
         <WorkspaceIndicator />
         <McpActivityIndicator />
         <OpacityStatus />
-        <ZoomStatus />
+        <ZoomStatus open={zoomOpen} onOpenChange={setZoomOpen} />
         <VersionInfo />
       </div>
-      <ZoomHud />
+      <ZoomHud suppressed={zoomOpen} />
     </footer>
   )
 }

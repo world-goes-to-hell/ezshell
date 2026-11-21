@@ -15,7 +15,7 @@ describe('railCounts', () => {
       ['local:1', tab('local:1', { local: { shell: 'PowerShell' } })],
       ['db:1', tab('db:1', { db: { dbId: '1', sshSessionId: '2' } } as Partial<TerminalInfo>)]
     ])
-    expect(railCounts(terminals, new Set(['home']))).toEqual({
+    expect(railCounts(terminals, new Set(['1', '3']))).toEqual({
       sessions: { connected: 1, lost: 0 },
       local: { terminals: 1, connected: 1, lost: 1 }
     })

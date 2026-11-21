@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { resolveInitialZoom, snapZoom } from '../lib/appZoom'
+import { DEFAULT_BROWSER_TAB_WIDTH, normalizeBrowserTabWidth } from '../lib/browserTabWidth'
 
 /**
  * Chromium's current zoom, read before React mounts so a zoom kept from the old
@@ -17,7 +18,9 @@ interface UIState {
   zenMode: boolean
   /** Whole-app zoom factor (Ctrl + mouse wheel) */
   appZoom: number
+  browserTabMaxWidth: number
   setAppZoom: (factor: number) => void
+  setBrowserTabMaxWidth: (width: number) => void
   setSidebarMode: (mode: 'compact' | 'expanded') => void
   toggleSidebarMode: () => void
   setZenMode: (enabled: boolean) => void
@@ -30,7 +33,9 @@ export const useUIStore = create<UIState>()(
       sidebarMode: 'expanded',
       zenMode: false,
       appZoom: resolveInitialZoom(undefined, readActualZoom()),
+      browserTabMaxWidth: DEFAULT_BROWSER_TAB_WIDTH,
       setAppZoom: (factor) => set({ appZoom: snapZoom(factor) }),
+      setBrowserTabMaxWidth: (width) => set({ browserTabMaxWidth: normalizeBrowserTabWidth(width) }),
       setSidebarMode: (mode) => set({ sidebarMode: mode }),
       toggleSidebarMode: () => set((state) => ({
         sidebarMode: state.sidebarMode === 'compact' ? 'expanded' : 'compact'
@@ -42,7 +47,11 @@ export const useUIStore = create<UIState>()(
       name: 'ui-store',
       merge: (persisted, current) => {
         const stored = (persisted ?? {}) as Partial<UIState>
-        return { ...current, ...stored, appZoom: resolveInitialZoom(stored.appZoom, readActualZoom()) }
+        return {
+          ...current, ...stored,
+          appZoom: resolveInitialZoom(stored.appZoom, readActualZoom()),
+          browserTabMaxWidth: normalizeBrowserTabWidth(stored.browserTabMaxWidth)
+        }
       }
     }
   )

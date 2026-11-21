@@ -2,7 +2,10 @@ const fs = require('fs')
 const path = require('path')
 const { createClaudeParser } = require('./claudeTranscript.js')
 const { createCodexParser } = require('./codexTranscript.js')
+const { createSubagentTracker } = require('./subagents.js')
+const { createSubagentPreview } = require('./subagentPreview.js')
 const { linkKeysIn } = require('./links.js')
+const { readLinesFromStart, readLinesFromEnd } = require('../agentHistory/boundedRead.js')
 
 // The chat views that are open (one per shell), each following its agent's transcript file: on
 // opening the last part of the file, then what is appended, and earlier parts when the view scrolls
@@ -11,6 +14,12 @@ const { linkKeysIn } = require('./links.js')
 
 const FIRST_BYTES = 2 * 1024 * 1024
 const OLDER_BYTES = 2 * 1024 * 1024
+// A delegation can precede several MB of tool output. Recover its state independently of the chat page.
+const SUBAGENT_HISTORY_BYTES = 32 * 1024 * 1024
+const SUBAGENT_LINES = {
+  claude: /"(?:Agent|Task|tool_result)"|<task-notification>/,
+  codex: /"(?:spawn_agent|wait_agent|function_call_output|sub_agent_activity|SubAgentActivity|CollabAgentToolCall|inter_agent_communication)"|<subagent_notification>/
+}
 /** Read per look when the file grew a lot (the rest comes on the next looks) */
 const STEP_BYTES = 4 * 1024 * 1024
 const TICK_MS = 500
@@ -19,8 +28,15 @@ const FIND_RETRY_MS = 3000
 // How long a compaction notice waits for the /compact line written after it (claudeTranscript.js)
 const NOTICE_WAIT_MS = 1500
 const MAX_CHATS = 24
+// A Claude question's limits use the status line reading this long after its last answer (the report
+// comes after the answer is written), and are looked at again on the ticks for this long
+const LIMIT_SETTLE_MS = 10 * 1000
+const LIMIT_FOLLOW_MS = 2 * 60 * 1000
 /** Links remembered per view (the latest) */
 const MAX_LINKS = 2000
+const MAX_COPY_SOURCE_BYTES = 128 * 1024 * 1024
+const MAX_COPY_TEXT_CHARS = 8 * 1024 * 1024
+const COPY_KINDS = new Set(['user', 'assistant', 'notice'])
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** Claude Code's folder name for a working directory: every character but ASCII letters and digits is '-' */
@@ -84,22 +100,72 @@ function latestById(items) {
   return [...byId.values()]
 }
 
+async function readClaudeChildResults(file, tracker, isLive) {
+  const parent = file.slice(0, -'.jsonl'.length)
+  for (const [id, child] of tracker.takeChildResults()) {
+    if (!isLive()) return
+    const lines = await readLinesFromEnd(path.join(parent, 'subagents', `agent-${child}.jsonl`)).catch(() => null)
+    const answers = (lines ?? []).filter(line => line.type === 'assistant' && Array.isArray(line.message?.content))
+    let lastMessageId = null
+    const parts = []
+    for (const line of answers.reverse()) {
+      const blocks = line.message.content.filter(block => block?.type === 'text' && typeof block.text === 'string')
+      if (!blocks.length) continue
+      if (lastMessageId !== null && line.message.id !== lastMessageId) break
+      parts.unshift(...blocks.map(block => block.text))
+      lastMessageId = line.message.id ?? line.uuid
+      if (!lastMessageId) break
+    }
+    if (parts.length) tracker.setChildResult(id, parts.join('\n'))
+  }
+}
+
 /**
  * @param {object} deps
- * @param {(shellId: string) => Promise<{ kind: 'claude' | 'codex', sessionId?: string | null, cwd?: string | null, file?: string | null, approval?: object | null } | null>} deps.resolve
+ * @param {(shellId: string) => Promise<{ kind: 'claude' | 'codex', sessionId?: string | null, cwd?: string | null, file?: string | null, approval?: object | null, codexSpeed?: { speed: string | null, ultrafastAvailable: boolean } | null } | null>} deps.resolve
  *   the agent running in a shell now (null when there is none), with the prompt it shows if any
  * @param {(channel: string, payload: object) => void} deps.send to the main window
  * @param {string} deps.claudeRoot `$CLAUDE_CONFIG_DIR` or `~/.claude`
  * @param {(shellId: string) => boolean} deps.isGone the shell is closed (not just its agent ended)
+ * @param {(from: number, to: number) => object | undefined} [deps.claudeLimits] the percent of Claude's
+ *   windows used between two times (limitHistory.js): a Claude transcript has no limits
  */
-function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tickMs = TICK_MS, now = () => Date.now() }) {
+function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, claudeLimits = null, tickMs = TICK_MS, now = () => Date.now() }) {
   const chats = new Map()
   let timer = null
 
   const live = chat => chats.get(chat.shellId) === chat
 
+  /** A question's usage as the view gets it: Claude's limits added, the time it was worked out from left out */
+  function viewUsage(chat, item) {
+    const { lastAt, ...usage } = item.usage
+    if (chat.kind !== 'claude' || !claudeLimits || item.time === null || lastAt === undefined) return usage
+    const limits = claudeLimits(item.time, lastAt + LIMIT_SETTLE_MS)
+    return limits ? { ...usage, limits } : usage
+  }
+
+  function withUsage(chat, items, older) {
+    return items.map(item => {
+      if (!item.usage) return item
+      // The latest question: its limits are looked at again while the status line catches up
+      if (!older && (!chat.lastTurn || (item.time ?? 0) >= (chat.lastTurn.time ?? 0))) chat.lastTurn = item
+      const usage = viewUsage(chat, item)
+      if (item === chat.lastTurn) chat.lastTurnLimits = JSON.stringify(usage.limits ?? null)
+      return { ...item, usage }
+    })
+  }
+
+  /** The latest Claude question again when a later status line report changed what it took */
+  function refreshLimits(chat) {
+    const turn = chat.lastTurn
+    if (chat.kind !== 'claude' || !claudeLimits || !turn?.usage?.lastAt || now() - turn.usage.lastAt > LIMIT_FOLLOW_MS) return
+    if (JSON.stringify(viewUsage(chat, turn).limits ?? null) !== chat.lastTurnLimits) frame(chat, { items: [turn] })
+  }
+
   function frame(chat, fields) {
     if (!live(chat)) return
+    if (fields.reset) chat.lastTurn = null
+    if (fields.items) fields = { ...fields, items: withUsage(chat, fields.items, fields.older) }
     // The links of what is sent: the only ones the view may ask main to open
     if (fields.reset) chat.links.clear()
     for (const item of fields.items ?? []) {
@@ -145,19 +211,29 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tic
       oldest = first === -1 ? size : start + first + 1
     }
     const parser = kind === 'codex' ? createCodexParser() : createClaudeParser()
+    const subagents = createSubagentTracker(kind)
+    if (oldest > 0) {
+      const start = Math.max(0, size - SUBAGENT_HISTORY_BYTES)
+      await readLinesFromStart(file, line => {
+        if (!live(chat)) return true
+        subagents.feed(line)
+      }, { start, end: oldest - 1, maxBytes: oldest - start, maxLine: STEP_BYTES, matchLine: line => SUBAGENT_LINES[kind].test(line) }).catch(() => {})
+    }
     const { lines, used } = completeLines(buffer)
     const items = []
     let title
     for (const line of lines) {
+      subagents.feed(line)
       const result = parser.feed(line)
       items.push(...result.items)
       title = result.title ?? title
     }
     // A compaction notice the part read ends with (claudeTranscript.js holds it for the command after it)
     items.push(...(parser.flush?.(0) ?? []))
+    if (kind === 'claude') await readClaudeChildResults(file, subagents, () => live(chat))
     if (!live(chat)) return
-    Object.assign(chat, { file, kind, parser, oldest, tail: oldest + used, skipping: false, title: title ?? null, state: 'live' })
-    frame(chat, { reset: true, kind, state: 'live', items: latestById(items), title: title ?? null, hasOlder: oldest > 0 })
+    Object.assign(chat, { file, kind, parser, subagents, previewChild: createSubagentPreview(file, kind, now), oldest, tail: oldest + used, skipping: false, title: title ?? null, state: 'live' })
+    frame(chat, { reset: true, kind, state: 'live', items: latestById(items), subagents: subagents.snapshot(true), title: title ?? null, hasOlder: oldest > 0 })
   }
 
   async function follow(chat) {
@@ -167,6 +243,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tic
       // Nothing new: a compaction notice held for its /compact line comes out after a while anyway
       const late = chat.parser.flush?.(NOTICE_WAIT_MS) ?? []
       if (late.length) frame(chat, { items: late })
+      refreshLimits(chat)
       return
     }
     let buffer = await readRange(chat.file, chat.tail, Math.min(size, chat.tail + STEP_BYTES))
@@ -189,14 +266,21 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tic
     const items = []
     let title = chat.title
     for (const line of lines) {
+      chat.subagents.feed(line)
       const result = chat.parser.feed(line)
       items.push(...result.items)
       title = result.title ?? title
     }
     items.push(...(chat.parser.flush?.(NOTICE_WAIT_MS) ?? []))
+    if (chat.kind === 'claude') await readClaudeChildResults(chat.file, chat.subagents, () => live(chat))
+    const subagents = chat.subagents.snapshot()
     const renamed = title !== chat.title
     chat.title = title
-    if (items.length || renamed) frame(chat, { items: latestById(items), ...(renamed ? { title } : {}) })
+    if (items.length || renamed || subagents) frame(chat, {
+      ...(items.length ? { items: latestById(items) } : {}),
+      ...(renamed ? { title } : {}),
+      ...(subagents ? { subagents } : {})
+    })
   }
 
   async function sync(chat) {
@@ -217,7 +301,13 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tic
       chat.approval = approval?.signature ?? null
       frame(chat, { approval })
     }
+    const codexSpeed = target?.codexSpeed ?? null
+    if (codexSpeed?.speed !== chat.codexSpeed?.speed || codexSpeed?.ultrafastAvailable !== chat.codexSpeed?.ultrafastAvailable) {
+      chat.codexSpeed = codexSpeed
+      frame(chat, { codexSpeed })
+    }
     if (!target) {
+      if (chat.state === 'live' && chat.file) await follow(chat).catch(() => {})
       setState(chat, 'ended')
       return
     }
@@ -266,7 +356,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tic
     /** Starts following; what is read comes as frames. Opening a shell's view again starts it over. */
     open(shellId) {
       if (!chats.has(shellId) && chats.size >= MAX_CHATS) return { ok: false, error: `채팅 보기는 ${MAX_CHATS}개까지 열 수 있습니다.` }
-      const chat = { shellId, chain: Promise.resolve(), pending: false, file: null, kind: null, parser: null, state: null, title: null, lookup: null, approval: null, links: new Set() }
+      const chat = { shellId, chain: Promise.resolve(), pending: false, file: null, kind: null, parser: null, state: null, title: null, lookup: null, approval: null, codexSpeed: null, links: new Set() }
       chats.set(shellId, chat)
       startTimer()
       chat.pending = true
@@ -290,11 +380,56 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, tic
         // The part ends where the view's first line starts: every line in it is complete
         const lines = completeLines(Buffer.concat([buffer, Buffer.from('\n')])).lines
         const items = []
+        // The part's last question gets the usage lines that open the part after it (turnUsage.js)
+        chat.parser.beginOlder?.()
         for (const line of lines) items.push(...chat.parser.feed(line, { older: true }).items)
+        items.push(...(chat.parser.endOlder?.() ?? []))
         if (!live(chat)) return
         chat.oldest = oldest
         frame(chat, { older: true, items: latestById(items), hasOlder: oldest > 0 })
       })
+    },
+    async subagentPreview(shellId, agentId) {
+      const chat = chats.get(shellId)
+      const tracker = chat?.subagents
+      const child = tracker?.childOf(agentId)
+      if (!chat?.file || !child) return []
+      const activity = await chat.previewChild(child)
+      return live(chat) && chat.subagents === tracker && tracker.childOf(agentId) ? activity : []
+    },
+    /** Read a snapshot of the conversation without widening or moving the window's current view. */
+    async transcriptForCopy(shellId) {
+      const chat = chats.get(shellId)
+      if (!chat) return { ok: false, error: '열려 있는 채팅을 찾을 수 없습니다.' }
+      const { file, kind } = chat
+      if (!file) return { ok: true, items: [] }
+      const tooLarge = { ok: false, error: '한 번에 복사하기에는 대화 기록이 너무 큽니다.' }
+      const parser = kind === 'codex' ? createCodexParser() : createClaudeParser()
+      const items = new Map()
+      let chars = 0
+      const add = entries => {
+        for (const item of entries) {
+          if (!COPY_KINDS.has(item.kind) || (!item.text && !item.hasImage)) continue
+          const previous = items.get(item.id)
+          chars += (item.text?.length ?? 0) - (previous?.text?.length ?? 0) + (previous ? 0 : 16)
+          if (chars > MAX_COPY_TEXT_CHARS) return true
+          items.set(item.id, item)
+        }
+        return false
+      }
+      try {
+        const { size } = await fs.promises.stat(file)
+        if (!size) return { ok: true, items: [] }
+        if (size > MAX_COPY_SOURCE_BYTES) return tooLarge
+        await readLinesFromStart(file, line => (
+          !live(chat) || chat.file !== file || add(parser.feed(line).items)
+        ), { end: size - 1, maxBytes: size, maxLine: size })
+        if (!live(chat) || chat.file !== file) return { ok: false, error: '채팅이 바뀌었습니다. 다시 복사해 주세요.' }
+        if (chars > MAX_COPY_TEXT_CHARS || add(parser.flush?.() ?? [])) return tooLarge
+        return { ok: true, items: [...items.values()] }
+      } catch {
+        return { ok: false, error: '대화 기록을 읽을 수 없습니다.' }
+      }
     },
     close(shellId) {
       chats.delete(shellId)

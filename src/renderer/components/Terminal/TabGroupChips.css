@@ -1,49 +1,80 @@
-/* The work selector at the start of the tab strip and its list (TabGroupChips.tsx) */
+/* The work selector and its list (TabGroupChips.tsx) */
+.tab-group-control {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-inline-size: 0;
+  max-inline-size: min(232px, 43%);
+  padding-inline: 8px;
+  border-inline-end: 1px solid var(--border-strong, var(--border));
+  background: var(--bg-tertiary);
+}
+
 .tab-group-select {
   display: flex;
-  flex: none;
+  flex: 1;
   align-items: center;
-  gap: 5px;
-  max-width: 200px;
-  height: 26px;
-  margin-right: 6px;
-  padding: 0 6px 0 9px;
-  border: 1px solid var(--border);
+  gap: 7px;
+  min-inline-size: min(132px, 100%);
+  height: 36px;
+  padding: 3px 7px 3px 5px;
+  border: 1px solid var(--border-strong, var(--border));
   border-radius: var(--radius-sm, 4px);
-  background: transparent;
+  background: var(--bg-secondary);
   color: var(--text-primary);
   font: inherit;
-  font-size: 12px;
-  font-weight: 600;
+  text-align: start;
   cursor: pointer;
 }
 
 .tab-group-select:hover,
-.tab-group-select[data-state="open"] { border-color: var(--accent); }
+.tab-group-select[data-state="open"] { background: var(--bg-hover); border-color: var(--text-muted); }
 .tab-group-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.tab-group-select > svg:first-child { color: var(--accent); flex: none; }
 
-.tab-group-select-name {
+.tab-group-select-icon {
+  display: grid;
+  place-items: center;
+  width: 23px;
+  height: 23px;
+  flex: none;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.tab-group-select-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   min-width: 0;
+}
+
+.tab-group-select-label,
+.tab-group-select-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* How many works have tabs (there is more to pick) */
-.tab-group-select-more {
-  flex: none;
-  min-width: 16px;
-  padding: 0 4px;
-  border-radius: 999px;
-  background: var(--bg-tertiary, var(--bg-secondary));
+.tab-group-select-label {
   color: var(--text-secondary);
-  font-size: 10.5px;
-  font-weight: 400;
-  text-align: center;
+  font-size: 11px;
+  line-height: 13px;
+}
+
+.tab-group-select-name {
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 15px;
 }
 
 .tab-group-select-chevron { flex: none; color: var(--text-secondary); }
+.tab-group-select[data-state="open"] .tab-group-select-chevron { transform: rotate(180deg); }
+
+[data-surface="glass"] .tab-group-control {
+  background: color-mix(in srgb, var(--bg-tertiary) 70%, transparent);
+  border-inline-end-color: var(--glass-edge, var(--border));
+}
 
 .tab-group-menu {
   min-width: 220px;
@@ -56,11 +87,33 @@
   z-index: 1000;
 }
 
+.tab-group-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .tab-group-menu-label {
   padding: 4px 8px 6px;
   color: var(--text-secondary);
   font-size: 11px;
 }
+
+.tab-group-menu-add {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  margin-right: 2px;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--text-secondary);
+  outline: none;
+  cursor: pointer;
+}
+
+.tab-group-menu-add[data-highlighted] { background: var(--bg-hover); color: var(--text-primary); }
 
 .tab-group-option {
   display: flex;
@@ -75,7 +128,8 @@
   cursor: pointer;
 }
 
-.tab-group-option[data-highlighted] { background: var(--bg-modifier-hover, var(--bg-hover)); }
+.tab-group-option.is-active { background: var(--bg-modifier-selected, var(--bg-hover)); }
+.tab-group-option[data-highlighted] { background: var(--bg-hover); }
 .tab-group-option > svg:first-child { flex: none; color: var(--text-secondary); }
 .tab-group-option.is-active > svg:first-child { color: var(--accent); }
 

@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useCallback, useEffect, useState, useRef } from 'react'
+import { Fragment, lazy, Suspense, useCallback, useEffect, useState, useRef, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { RiDatabase2Line, RiComputerLine, RiGlobalLine } from 'react-icons/ri'
 import { Sidebar } from './components/Sidebar/Sidebar'
@@ -20,13 +20,15 @@ import { notesToShow, recentNotes, type VersionNotes } from './lib/releaseNotes'
 import type { SharedSession } from './lib/sessionShare'
 import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/QuickConnectModal'
 import { LocalProjectDialog, type LocalProjectTerminal } from './components/Modal/LocalProjectDialog'
+import { OPEN_LOCAL_TERMINAL_EVENT } from './lib/localProjectList'
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
 import { NewTabMenu } from './components/Terminal/NewTabMenu'
 import { TabWorktreeBadge } from './components/Terminal/TabWorktreeBadge'
 import { AgentMessagesHost, AgentTabMessages } from './components/Terminal/AgentMessages'
 import { getDuplicateConfig } from './lib/duplicateConnection'
-import { tabHost, dropTabHostsExcept } from './lib/tabHosts'
+import { tabHost, dropTabHostsExcept, isTabHostPreviewed } from './lib/tabHosts'
 import { perFrame } from './lib/throttle'
+import { WorkOverview } from './components/Sidebar/WorkOverview'
 import { TabSlot } from './components/Terminal/TabSlot'
 import { findTabPane, isSshTab } from './lib/sessionTabs'
 import { detachTab, restoreMergedTab, type DetachedTab } from './lib/detachedTab'
@@ -59,7 +61,8 @@ import { TabRenameDialog } from './components/Terminal/TabRenameDialog'
 import { DUPLICATE_TAB_EVENT, OPEN_SNIPPET_MANAGER_EVENT } from './components/Terminal/useTerminalContextMenu'
 import { RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './lib/agentHistory'
 import { adoptOrphanLocalShells, rememberLocalLayout } from './lib/localShellAdopt'
-import { TAB_DROP_TAKEN_EVENT } from './lib/localProjectServers'
+import { startAgentSleep } from './stores/agentSleepStore'
+import { TAB_DROP_TAKEN_EVENT, linkServer, readProjectServers, writeProjectServers } from './lib/localProjectServers'
 import { WorkspacePanel } from './components/Workspace/WorkspacePanel'
 import { SnippetManager } from './components/Snippets/SnippetManager'
 import { StatsDashboard } from './components/Modal/StatsDashboard'
@@ -98,6 +101,12 @@ const DbTab = lazy(() => import('./components/DbClient/DbTab'))
 const BrowserReview = lazy(() => import('./components/Browser/BrowserReview'))
 const PinnedReplyWindow = lazy(() => import('./components/AgentChat/PinnedReplyWindow').then(module => ({ default: module.PinnedReplyWindow })))
 
+interface SessionConnectionTarget {
+  workGroup?: string
+  /** A saved session opened from the tab strip is also added to that project's server list. */
+  assignProject?: boolean
+}
+
 // Check if we're in a special window mode
 function getWindowModeParams() {
   const params = new URLSearchParams(window.location.search)
@@ -127,7 +136,7 @@ function getWindowModeParams() {
   }
 
   if (params.get('remoteFileMode') === 'true') {
-    return { mode: 'remoteFile' as const, docId: params.get('docId') || '' }
+    return { mode: 'remoteFile' as const }
   }
 
   if (params.get('pinnedReplyMode') === 'true') {
@@ -168,7 +177,7 @@ function App() {
     return (
       <>
         <Suspense fallback={null}>
-          <RemoteFileWindow docId={windowParams.docId} />
+          <RemoteFileWindow />
         </Suspense>
         <WindowZoom kind="remoteFile" />
         <ToastContainer />
@@ -226,10 +235,10 @@ function App() {
       </>
     )
   }
-  const [connectModalOpen, setConnectModalOpen] = useState(false)
+  const [connectTarget, setConnectTarget] = useState<SessionConnectionTarget | null>(null)
   const [quickConnectModalOpen, setQuickConnectModalOpen] = useState(false)
-  const [localProjectOpen, setLocalProjectOpen] = useState(false)
-  const [sessionPickerOpen, setSessionPickerOpen] = useState(false)
+  const [localProjectMode, setLocalProjectMode] = useState<'add' | 'open' | null>(null)
+  const [sessionPickerTarget, setSessionPickerTarget] = useState<SessionConnectionTarget | null>(null)
   const [settingsModalOpen, setSettingsModalOpen] = useState(false)
   const [snippetManagerOpen, setSnippetManagerOpen] = useState(false)
   const [statsDashboardOpen, setStatsDashboardOpen] = useState(false)
@@ -361,7 +370,7 @@ function App() {
   const shownTabs = new Set(groupView.shownIds)
   const { isOpen, setOpen } = useSftpStore()
   const { connect, disconnect } = useSSH()
-  const { zenMode, toggleZenMode } = useUIStore()
+  const { zenMode, toggleZenMode, browserTabMaxWidth } = useUIStore()
 
   // SFTP state for active terminal
   const sftpOpen = activeTerminalId ? isOpen(activeTerminalId) : false
@@ -656,7 +665,7 @@ function App() {
     }
   }, !isLocked)
 
-  const handleConnect = async (config: ConnectionConfig) => {
+  const handleConnect = async (config: ConnectionConfig, { workGroup, assignProject }: SessionConnectionTarget = {}) => {
     // Get effective color (session color or folder color chain)
     const getFolderEffectiveColor = (folderId: string): string | undefined => {
       const { folders } = useSessionStore.getState()
@@ -676,7 +685,15 @@ function App() {
     const savedSessionId = config.saveSession ? persistSession(config) : config.id
 
     // Then attempt connection
-    return connect(toSSHConnectConfig({ ...config, id: savedSessionId }, effectiveColor))
+    const result = await connect({ ...toSSHConnectConfig({ ...config, id: savedSessionId }, effectiveColor), workGroup })
+    if (result.success && assignProject && savedSessionId && workGroup && groupView.projects.some(project => project.key === workGroup)) {
+      const current = readProjectServers()
+      const linked = linkServer(current, workGroup, savedSessionId)
+      if (linked !== current && (!linked[workGroup]?.includes(savedSessionId) || !writeProjectServers(linked))) {
+        toast.error('서버 목록을 저장하지 못했습니다', '로컬 작업에 세션을 묶지 못했습니다.')
+      }
+    }
+    return result
   }
 
   /**
@@ -733,7 +750,7 @@ function App() {
     toast.success('저장됨', config.id ? `${name} 세션을 수정했습니다` : `${name} 세션을 등록했습니다`)
   }
 
-  const handleQuickConnect = async (session: Session, source?: HTMLElement) => {
+  const handleQuickConnect = async (session: Session, source?: HTMLElement, target?: SessionConnectionTarget) => {
     // Get effective color (session color or folder color chain)
     const getFolderEffectiveColor = (folderId: string): string | undefined => {
       const { folders } = useSessionStore.getState()
@@ -754,7 +771,7 @@ function App() {
       ...connection,
       backgroundColor: effectiveColor,
       saveSession: false
-    })
+    }, target)
     if (source && result.success && result.sessionId) {
       const origin = captureTabFlightSource(source.querySelector('.session-name'), source.closest('.session-list'))
       if (origin) void flyToTab(origin, result.sessionId)
@@ -762,24 +779,20 @@ function App() {
     return result
   }
 
-  const handleNewConnection = () => {
-    setEditSession(null)
-    setDuplicateSource(null)
-    setDefaultFolderId(undefined)
-    setConnectModalOpen(true)
-  }
-
-  const handleAddSession = (folderId?: string) => {
+  const openNewConnection = (target: SessionConnectionTarget, folderId?: string) => {
     setEditSession(null)
     setDuplicateSource(null)
     setDefaultFolderId(folderId)
-    setConnectModalOpen(true)
+    setConnectTarget(target)
   }
+
+  const handleNewConnection = () => openNewConnection({})
+  const handleAddSession = (folderId?: string) => openNewConnection({}, folderId)
 
   const handleEditSession = (session: any) => {
     setDuplicateSource(null)
     setEditSession(session)
-    setConnectModalOpen(true)
+    setConnectTarget({})
   }
 
   // Open the new-connection form prefilled from an existing session; saving creates a new session
@@ -789,7 +802,7 @@ function App() {
     setDefaultFolderId(undefined)
     setDuplicateSource({ ...session, id: undefined, name: `${baseName} - 복제됨`, saveSession: true, mcpEnabled: false })
     setDuplicateTitle(undefined)
-    setConnectModalOpen(true)
+    setConnectTarget({})
   }
 
   // A session from shared text opens the new-connection form, where passwords and keys are entered
@@ -798,7 +811,7 @@ function App() {
     setDefaultFolderId(undefined)
     setDuplicateSource({ ...DEFAULT_CONFIG, ...shared, id: undefined, folderId: folderId ?? '', saveSession: true, mcpEnabled: false })
     setDuplicateTitle('공유받은 세션 추가')
-    setConnectModalOpen(true)
+    setConnectTarget({})
   }
 
   // "탭 복제" in a terminal's right-click menu
@@ -899,7 +912,7 @@ function App() {
     const targetPane = pane ?? store.layout.activePane ?? 0
     store.addTerminal(id, {
       id, host: '', username: '', connected: true, title: '브라우저',
-      browser: { group: groupView.activeGroup }
+      browser: { group: groupView.activeGroup, cwd: groupView.localFolder(store.activeTerminalId) }
     })
     if (targetPane > 0 && store.layout.panes[targetPane]) {
       store.moveTerminalBetweenPanes(id, 0, targetPane)
@@ -930,6 +943,14 @@ function App() {
     }
     window.addEventListener(RESUME_AGENT_SESSION_EVENT, onResume)
     return () => window.removeEventListener(RESUME_AGENT_SESSION_EVENT, onResume)
+  })
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      const { cwd, agent, workspaceLabel } = (event as CustomEvent<Partial<LocalProjectTerminal> | null>).detail ?? {}
+      void handleOpenLocalTerminal({ cwd, agent, workspaceLabel })
+    }
+    window.addEventListener(OPEN_LOCAL_TERMINAL_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_LOCAL_TERMINAL_EVENT, onOpen)
   })
 
   const handleOpenSidebarLocalTerminal = async (button: HTMLButtonElement) => {
@@ -963,6 +984,10 @@ function App() {
     })
   }, [isLocked, isCheckingLock])
 
+  // Idle agents of local shells: main gets the settings, panes show the ones asleep (src/agentIdle.js)
+  const unlockedOnce = !isLocked && !isCheckingLock
+  useEffect(() => (unlockedOnce ? startAgentSleep() : undefined), [unlockedOnce])
+
   const [restoreBanner, setRestoreBanner] = useState<RestoreBannerState | null>(null)
   const restoreCheckedRef = useRef(false)
   // Once, after the first unlock: the main process gives the record only once and removes it
@@ -984,10 +1009,10 @@ function App() {
     const total = record.tabs.filter(tab => tab.kind !== 'quick').length
     setRestoreBanner({ phase: 'running', done: 0, total })
     const outcome = await restoreTabs(record, {
-      openSaved: async (savedSessionId) => {
+      openSaved: async (savedSessionId, workGroup) => {
         const session = useSessionStore.getState().sessions.find(s => s.id === savedSessionId)
         if (!session) return { error: '세션 목록에 없는 세션입니다 (지워졌을 수 있습니다).' }
-        const result = await handleQuickConnect(session)
+        const result = await handleQuickConnect(session, undefined, { workGroup })
         return result.success && result.sessionId ? { id: result.sessionId } : { error: result.error || '연결하지 못했습니다.' }
       },
       openLocal: (tab) => openLocalWithAgents(tab, handleOpenLocalTerminal),
@@ -1007,7 +1032,7 @@ function App() {
       saveSession: false, mcpEnabled: false
     })
     setDuplicateTitle('업데이트 전에 열려 있던 연결')
-    setConnectModalOpen(true)
+    setConnectTarget({ workGroup: tab.workGroup })
   }
 
   /** The content of a terminal, browser, or DB tab. */
@@ -1097,6 +1122,11 @@ function App() {
   /** The screen (index) of a tab while the screen is split */
   const paneOfTab = (tabId: string): number | null => findTabPane(layout, tabId)
 
+  const tabConnectionActions = {
+    onPickSession: () => setSessionPickerTarget({ workGroup: groupView.activeGroup ?? undefined, assignProject: true }),
+    onNewSession: () => openNewConnection({ workGroup: groupView.activeGroup ?? undefined, assignProject: true })
+  }
+
   // The + menu of a split pane: the same menu as the single tab bar, about that pane's active tab.
   // Pressing it focuses the pane, and a new tab goes to the focused pane (effect below).
   const renderPaneNewTabMenu = (pane: number) => {
@@ -1108,10 +1138,8 @@ function App() {
         triggerClassName="split-pane-btn"
         duplicateLabel={label}
         onDuplicate={() => void handleDuplicateTab(paneActiveId)}
-        onPickSession={() => setSessionPickerOpen(true)}
-        onNewSession={handleNewConnection}
+        {...tabConnectionActions}
         onLocalTerminal={() => handleOpenLocalFromTabStrip(pane)}
-        onLocalProject={() => setLocalProjectOpen(true)}
         onOpenBrowser={() => void handleOpenBrowser(pane)}
       />
     )
@@ -1405,8 +1433,10 @@ function App() {
           </div>
         )}
         <Sidebar
+          tabGroupView={groupView}
           onNewConnection={handleNewConnection}
           onQuickConnect={handleQuickConnect}
+          onConnectProjectSession={(session, workGroup) => void handleQuickConnect(session, undefined, { workGroup })}
           onEditSession={handleEditSession}
           onDuplicateSession={handleDuplicateSession}
           onOpenQuickConnect={handleOpenQuickConnect}
@@ -1416,7 +1446,7 @@ function App() {
           onLocalFolder={(cwd, workspaceLabel) => void handleOpenLocalTerminal({ cwd, workspaceLabel })}
           onCloseTerminal={handleCloseTerminal}
         />
-        <main className="main-area" id="main-content">
+        <main className="main-area" id="main-content" style={{ '--browser-tab-max-width': `${browserTabMaxWidth}px` } as CSSProperties}>
           {restoreBanner && (
             <RestoreTabsBanner
               state={restoreBanner}
@@ -1432,66 +1462,67 @@ function App() {
           ) : hasTerminals ? (
             <>
               {layout.mode !== 'split' && (
-                <div className="terminal-tabs">
-                  <TabGroupChips view={groupView} />
-                  <AnimatePresence initial={false} mode="popLayout">
-                    {terminalArray.filter(([sessionId]) => shownTabs.has(sessionId)).map(([sessionId, terminal]) => (
-                      <motion.div
-                        key={sessionId}
-                        data-tab-id={sessionId}
-                        className={`terminal-tab ${sessionId === activeTerminalId ? 'active' : ''} ${terminal.hasActivity ? 'has-activity' : ''} ${draggingTabId === sessionId ? 'dragging' : ''}`}
-                        onClick={() => setActiveTerminal(sessionId)}
-                        onContextMenu={(e) => handleTabContextMenu(e, sessionId)}
-                        draggable
-                        // motion.div treats onDragStart/onDragEnd as its own gesture props
-                        // and never forwards them to the DOM, so use the capture variants
-                        onDragStartCapture={(e) => handleTabDragStart(e, sessionId)}
-                        onDragEndCapture={handleTabDragEnd}
-                        variants={reducedMotion ? undefined : tabVariants}
-                        initial="hidden"
-                        animate="visible"
-                        exit="exit"
-                        layout={!reducedMotion}
-                        transition={SPRINGS.snappy}
-                        style={sessionId === activeTerminalId && terminal.color ? {
-                          borderColor: terminal.color,
-                          backgroundColor: `${terminal.color}20`,
-                          color: terminal.color,
-                          boxShadow: `inset 0 -2px 0 ${terminal.color}`
-                        } : undefined}
-                      >
-                        {terminal.color && (
-                          <span
-                            className="tab-color-dot"
-                            style={{ backgroundColor: terminal.color }}
-                          />
-                        )}
-                        {terminal.db && <RiDatabase2Line size={13} className="tab-db-icon" aria-label="DB" />}
-                        {terminal.local && <RiComputerLine size={13} className="tab-local-icon" aria-label="로컬" />}
-                        {terminal.browser && <RiGlobalLine size={13} className="tab-local-icon" aria-hidden />}
-                        <span data-tab-label>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
-                        {terminal.local?.cwd && <TabWorktreeBadge cwd={terminal.local.cwd} worktree={groupView.worktreeForFolder(terminal.local.cwd)} />}
-                        {terminal.local && <AgentTabMessages tabId={sessionId} />}
-                        {sessionId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[sessionId]}`} />}
-                        {terminal.hasActivity && <span className="activity-indicator" />}
-                        <motion.button
-                          className="tab-close"
-                          onClick={(e) => { e.stopPropagation(); handleCloseTerminal(sessionId); }}
-                          whileHover={reducedMotion ? undefined : { scale: 1.1 }}
-                          whileTap={reducedMotion ? undefined : { scale: 0.9 }}
-                        >×</motion.button>
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
-                  <NewTabMenu
-                    duplicateLabel={activeDuplicateLabel}
-                    onDuplicate={() => void handleDuplicateTab(activeTerminalId)}
-                    onPickSession={() => setSessionPickerOpen(true)}
-                    onNewSession={handleNewConnection}
-                    onLocalTerminal={() => handleOpenLocalFromTabStrip()}
-                    onLocalProject={() => setLocalProjectOpen(true)}
-                    onOpenBrowser={() => void handleOpenBrowser()}
-                  />
+                <div className="terminal-tabs terminal-tab-header">
+                  <TabGroupChips view={groupView} onAddWork={() => setLocalProjectMode('add')} />
+                  <div className="terminal-tab-items" role="group" aria-label="열린 탭">
+                    <AnimatePresence initial={false} mode="popLayout">
+                      {terminalArray.filter(([sessionId]) => shownTabs.has(sessionId)).map(([sessionId, terminal]) => (
+                        <motion.div
+                          key={sessionId}
+                          data-tab-id={sessionId}
+                          data-browser-tab={terminal.browser ? '' : undefined}
+                          className={`terminal-tab ${sessionId === activeTerminalId ? 'active' : ''} ${terminal.hasActivity ? 'has-activity' : ''} ${draggingTabId === sessionId ? 'dragging' : ''}`}
+                          onClick={() => setActiveTerminal(sessionId)}
+                          onContextMenu={(e) => handleTabContextMenu(e, sessionId)}
+                          draggable
+                          // motion.div treats onDragStart/onDragEnd as its own gesture props
+                          // and never forwards them to the DOM, so use the capture variants
+                          onDragStartCapture={(e) => handleTabDragStart(e, sessionId)}
+                          onDragEndCapture={handleTabDragEnd}
+                          variants={reducedMotion ? undefined : tabVariants}
+                          initial="hidden"
+                          animate="visible"
+                          exit="exit"
+                          layout={!reducedMotion}
+                          transition={SPRINGS.snappy}
+                          style={sessionId === activeTerminalId && terminal.color ? {
+                            borderColor: terminal.color,
+                            backgroundColor: `${terminal.color}20`,
+                            color: terminal.color,
+                            boxShadow: `inset 0 -2px 0 ${terminal.color}`
+                          } : undefined}
+                        >
+                          {terminal.color && (
+                            <span
+                              className="tab-color-dot"
+                              style={{ backgroundColor: terminal.color }}
+                            />
+                          )}
+                          {terminal.db && <RiDatabase2Line size={13} className="tab-db-icon" aria-label="DB" />}
+                          {terminal.local && <RiComputerLine size={13} className="tab-local-icon" aria-label="로컬" />}
+                          {terminal.browser && <RiGlobalLine size={13} className="tab-local-icon" aria-hidden />}
+                          <span data-tab-label title={terminal.browser ? terminal.title : undefined}>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
+                          {terminal.local?.cwd && <TabWorktreeBadge cwd={terminal.local.cwd} worktree={groupView.worktreeForFolder(terminal.local.cwd)} />}
+                          {terminal.local && <AgentTabMessages tabId={sessionId} />}
+                          {sessionId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[sessionId]}`} />}
+                          {terminal.hasActivity && <span className="activity-indicator" />}
+                          <motion.button
+                            className="tab-close"
+                            onClick={(e) => { e.stopPropagation(); handleCloseTerminal(sessionId); }}
+                            whileHover={reducedMotion ? undefined : { scale: 1.1 }}
+                            whileTap={reducedMotion ? undefined : { scale: 0.9 }}
+                          >×</motion.button>
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
+                    <NewTabMenu
+                      duplicateLabel={activeDuplicateLabel}
+                      onDuplicate={() => void handleDuplicateTab(activeTerminalId)}
+                      {...tabConnectionActions}
+                      onLocalTerminal={() => handleOpenLocalFromTabStrip()}
+                      onOpenBrowser={() => void handleOpenBrowser()}
+                    />
+                  </div>
                 </div>
               )}
               <div
@@ -1590,7 +1621,9 @@ function App() {
                   const pane = paneOfTab(sessionId)
                   const paneState = pane === null ? null : layout.panes[pane]
                   return createPortal(
-                    <div className="tab-host-content" onMouseDown={pane !== null ? () => setActivePaneType(pane) : undefined}>
+                    <div className="tab-host-content" onMouseDown={pane !== null ? () => {
+                      if (!isTabHostPreviewed(sessionId)) setActivePaneType(pane)
+                    } : undefined}>
                     {pane !== null
                       ? renderTabContent(
                           sessionId,
@@ -1629,10 +1662,8 @@ function App() {
                 <NewTabMenu
                   duplicateLabel={null}
                   onDuplicate={() => {}}
-                  onPickSession={() => setSessionPickerOpen(true)}
-                  onNewSession={handleNewConnection}
+                  {...tabConnectionActions}
                   onLocalTerminal={() => void handleOpenLocalTerminal()}
-                  onLocalProject={() => setLocalProjectOpen(true)}
                   onOpenBrowser={() => void handleOpenBrowser()}
                 />
               </div>
@@ -1646,15 +1677,16 @@ function App() {
         {!zenMode && <WorkspacePanel />}
       </div>
       <Footer />
+      <WorkOverview groupView={groupView} />
       <McpApprovalDialog />
       <ConfirmDialogHost />
       <TerminalWebLinkMenu />
       <HostKeyDialog />
 
       <ConnectModal
-        open={connectModalOpen}
-        onOpenChange={setConnectModalOpen}
-        onConnect={handleConnect}
+        open={connectTarget !== null}
+        onOpenChange={open => { if (!open) setConnectTarget(null) }}
+        onConnect={config => void handleConnect(config, connectTarget ?? undefined)}
         onSave={handleSaveSession}
         editSession={editSession}
         duplicateFrom={duplicateSource}
@@ -1671,9 +1703,9 @@ function App() {
       )}
 
       <SessionPickerModal
-        open={sessionPickerOpen}
-        onOpenChange={setSessionPickerOpen}
-        onSelect={handleQuickConnect}
+        open={sessionPickerTarget !== null}
+        onOpenChange={open => { if (!open) setSessionPickerTarget(null) }}
+        onSelect={session => void handleQuickConnect(session, undefined, sessionPickerTarget ?? undefined)}
       />
 
       <QuickConnectModal
@@ -1681,9 +1713,10 @@ function App() {
         onOpenChange={setQuickConnectModalOpen}
         onConnect={handleQuickConnectSubmit}
       />
-      {localProjectOpen && (
+      {localProjectMode && (
         <LocalProjectDialog
-          onClose={() => setLocalProjectOpen(false)}
+          mode={localProjectMode}
+          onClose={() => setLocalProjectMode(null)}
           onOpenTerminal={async options => Boolean(await handleOpenLocalTerminal(options))}
         />
       )}
@@ -1702,7 +1735,7 @@ function App() {
         onOpenWhatsNew={() => void handleOpenWhatsNew()}
         onOpenBatch={() => setBatchModalOpen(true)}
         onOpenStats={() => setStatsDashboardOpen(true)}
-        onOpenLocalProject={() => setLocalProjectOpen(true)}
+        onOpenLocalProject={() => setLocalProjectMode('open')}
       />
 
       {whatsNew && <WhatsNewDialog entries={whatsNew.entries} onClose={closeWhatsNew} />}

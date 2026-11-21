@@ -273,6 +273,10 @@
   border-color: color-mix(in srgb, var(--success) 30%, var(--border));
 }
 
+.local-worktree[data-agent-work]::after {
+  --agent-trace-inset: -1px;
+}
+
 .local-worktree.is-current {
   background: var(--bg-modifier-selected);
 }
@@ -536,6 +540,11 @@
   background: var(--success);
 }
 
+/* An SSH or DB tab of the work whose connection was lost (as the session rows show it) */
+.local-terms-dot.is-off {
+  background: var(--error);
+}
+
 /* Close shows on the row in use (pointer, keyboard, or the current tab) */
 .local-terms-close {
   opacity: 0;
@@ -666,6 +675,10 @@
 .local-server-open:hover,
 .local-server-open:focus-visible {
   background: var(--bg-modifier-hover);
+}
+
+.local-server.is-current .local-server-open {
+  background: var(--bg-modifier-selected);
 }
 
 .local-server-icon {

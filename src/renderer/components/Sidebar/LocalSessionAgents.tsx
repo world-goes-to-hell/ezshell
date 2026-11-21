@@ -1,6 +1,6 @@
 import {
   RiChat1Line, RiCircleLine,
-  RiErrorWarningLine, RiHourglassLine, RiPlayCircleLine, RiRecordCircleLine, RiStopCircleLine, RiTimeLine
+  RiErrorWarningLine, RiHourglassLine, RiPlayCircleLine, RiRecordCircleLine, RiStopCircleLine, RiMoonLine, RiTimeLine
 } from 'react-icons/ri'
 import { focusTabPane } from '../../lib/paneFocus'
 import { MAIN_PANE } from '../../lib/splitTree'
@@ -18,7 +18,8 @@ const presentation = {
   blocked: { label: '응답 필요', Icon: RiChat1Line },
   reply: { label: '답장 대기', Icon: RiTimeLine },
   error: { label: '오류', Icon: RiErrorWarningLine },
-  ended: { label: '종료', Icon: RiStopCircleLine }
+  ended: { label: '종료', Icon: RiStopCircleLine },
+  sleeping: { label: '잠듦', Icon: RiMoonLine }
 } satisfies Record<LocalAgentStatus | 'reply', { label: string; Icon: typeof RiCircleLine }>
 
 export function localAgentAppearance(agent: AgentMessageSession) {
@@ -33,7 +34,7 @@ export function localAgentAppearance(agent: AgentMessageSession) {
       <ProviderIcon className="local-agent-provider" size={14} />
     </span>
   )
-  return { status, label, description, icons }
+  return { status, name, label, description, icons }
 }
 
 export function LocalSessionAgents({ tabId }: { tabId: string }) {

@@ -4,6 +4,7 @@ import { layoutOf, leafAt, leafCount, MAX_PANES, mergePaneLayout, singlePane, ty
 import { splitGestureLine } from '../lib/paneDropZones'
 import { useTerminalStore } from '../stores/terminalStore'
 import { toast } from '../stores/toastStore'
+import { isTabHostPreviewed } from '../lib/tabHosts'
 
 const TRAIL_MS = 380
 export const PANE_GESTURE_CANCEL_RADIUS = 22
@@ -135,7 +136,7 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       if (!action) return
       moving = true
       const failure = action.kind === 'merge' ? '분할 칸을 병합하지 못했습니다' : '터미널을 분할하지 못했습니다'
-      const isVisible = () => !disposed && root.isConnected && getComputedStyle(root).visibility === 'visible'
+      const isVisible = () => !disposed && !isTabHostPreviewed(tabId) && root.isConnected && getComputedStyle(root).visibility === 'visible'
       void commitPaneGesture(tabId, from, action, isVisible).then(result => {
         if (result && !result.ok) toast.error(failure, result.error)
       }).catch(() => toast.error(failure, '잠시 후 다시 시도해 주세요.'))
@@ -143,7 +144,7 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
     }
 
     const onDown = (event: PointerEvent) => {
-      if (!event.altKey || event.button !== 0 || drag || moving) return
+      if (!event.altKey || event.button !== 0 || drag || moving || isTabHostPreviewed(tabId)) return
       const path = canvas.current
       const terminal = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-pane]') : null
       const from = terminal?.dataset.pane

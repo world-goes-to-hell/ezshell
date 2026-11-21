@@ -69,6 +69,15 @@
   font: inherit;
 }
 
+.browser-review .browser-review-bookmark {
+  flex: none;
+  width: 30px;
+  padding: 0;
+}
+
+.browser-review .browser-review-bookmark[aria-pressed="true"] { color: var(--accent); }
+
+.browser-review .browser-review-bookmarks-toggle,
 .browser-review .browser-review-tools-toggle,
 .browser-review .browser-review-devtools,
 .browser-review .browser-review-pick {
@@ -78,6 +87,7 @@
   border-color: var(--border-color);
 }
 
+.browser-review .browser-review-bookmarks-toggle[aria-expanded="true"],
 .browser-review .browser-review-tools-toggle[aria-expanded="true"],
 .browser-review .browser-review-devtools[aria-pressed="true"],
 .browser-review .browser-review-pick[aria-pressed="true"] {
@@ -86,6 +96,9 @@
   background: var(--accent-muted);
 }
 
+.browser-review .browser-review-bookmark:focus-visible,
+.browser-review .browser-review-bookmarks-toggle:focus-visible,
+.browser-review .browser-review-bookmarks button:focus-visible,
 .browser-review .browser-review-tools-toggle:focus-visible,
 .browser-review .browser-review-devtools:focus-visible,
 .browser-review .browser-review-tool-toggle:focus-visible,
@@ -93,6 +106,53 @@
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+
+.browser-review-bookmarks {
+  flex: none;
+  max-height: min(220px, 30vh);
+  padding: 8px 12px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.browser-review-bookmarks ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.browser-review-bookmarks li {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+
+.browser-review .browser-review-bookmark-open {
+  flex: 1;
+  min-width: 0;
+  align-items: stretch;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 9px;
+  text-align: start;
+  color: var(--text-primary);
+}
+
+.browser-review-bookmark-open :is(span, small) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-review-bookmark-open small, .browser-review-bookmarks p { color: var(--text-secondary); }
+.browser-review-bookmarks p { margin: 3px 0; }
+.browser-review .browser-review-bookmark-remove { flex: none; width: 30px; padding: 0; margin-inline-end: 3px; }
 
 .browser-review-error {
   margin: 0;

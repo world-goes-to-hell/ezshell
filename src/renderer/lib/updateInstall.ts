@@ -18,7 +18,7 @@ export async function installUpdateKeepingTabs(): Promise<void> {
   const busy = await api.updateBusyWork?.().catch(() => null)
   if (busy && busy.unsavedEdits > 0) {
     // An edit window with unsaved text does not close on its own, so the restart would stop half way
-    toast.warning('업데이트를 미뤘습니다', `저장하지 않은 서버 파일 편집 창이 ${busy.unsavedEdits}개 있습니다. 저장하거나 닫은 뒤에 다시 눌러 주세요.`)
+    toast.warning('업데이트를 미뤘습니다', `저장하지 않은 파일이 ${busy.unsavedEdits}개 있습니다. 저장하거나 닫은 뒤에 다시 눌러 주세요.`)
     return
   }
   if (busy && busy.transfers > 0) {

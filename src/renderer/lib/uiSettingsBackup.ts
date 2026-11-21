@@ -2,6 +2,7 @@ import { PRESET_THEMES } from '../themes/presets'
 import { sanitizeStoredThemes } from './themeValidation'
 import { parseSurface, clampWindowOpacity } from './appearance'
 import { snapZoom } from './appZoom'
+import { normalizeBrowserTabWidth } from './browserTabWidth'
 import { parseCustomBindings } from './shortcutCapture'
 import { clampTreeWidth } from './dbGrid'
 import { parseExportPrefs } from './dbExport'
@@ -12,6 +13,7 @@ import { parseActivityPrefs, ACTIVITY_PREFS_KEY } from './mcpActivity'
 import { THEME_STORAGE_KEY } from './themeSync'
 import { parseLogViewPrefs, LOG_VIEW_PREFS_KEY } from './logViewPrefs'
 import { MARKDOWN_SPLIT_KEY, readSplit } from './markdownSplit'
+import { AGENT_IDLE_KEY, parseAgentIdlePrefs } from './agentIdlePrefs'
 
 /**
  * 화면 설정 내보내기·가져오기 (설정 > 백업 > 화면 설정).
@@ -84,14 +86,17 @@ function normalizeThemeStore(raw: string): string | null {
   })
 }
 
-/** Sidebar mode and zoom. Zen mode is a state of the moment, not a setting: it does not travel. */
+/** The persisted layout preferences that travel with a backup. */
 function normalizeUiStore(raw: string): string | null {
   const state = parseObject(raw)?.state
   if (!state || typeof state !== 'object') return null
-  const { sidebarMode, appZoom } = state as Record<string, unknown>
+  const { sidebarMode, appZoom, browserTabMaxWidth } = state as Record<string, unknown>
   const result: Record<string, unknown> = {}
   if (sidebarMode === 'compact' || sidebarMode === 'expanded') result.sidebarMode = sidebarMode
   if (typeof appZoom === 'number' && Number.isFinite(appZoom)) result.appZoom = snapZoom(appZoom)
+  if (typeof browserTabMaxWidth === 'number' && Number.isFinite(browserTabMaxWidth)) {
+    result.browserTabMaxWidth = normalizeBrowserTabWidth(browserTabMaxWidth)
+  }
   return Object.keys(result).length > 0 ? JSON.stringify({ state: result, version: 0 }) : null
 }
 
@@ -115,10 +120,11 @@ export const UI_SETTING_ENTRIES: readonly UiSettingEntry[] = [
     label: '바꾼 단축키',
     normalize: (raw, { shortcutIds }) => (parseObject(raw) ? JSON.stringify(parseCustomBindings(raw, shortcutIds)) : null)
   },
-  { key: UI_STORE_KEY, group: 'layout', label: '사이드바 접힘, 화면 확대 비율', normalize: normalizeUiStore },
+  { key: UI_STORE_KEY, group: 'layout', label: '사이드바 접힘, 화면 확대 비율, 브라우저 탭 너비', normalize: normalizeUiStore },
   { key: LOCAL_PANE_STORAGE_KEY, group: 'layout', label: '사이드바 로컬 터미널 목록 높이', normalize: viaParser(parseLocalPanePrefs) },
   { key: FILE_EXPLORER_WIDTH_KEY, group: 'layout', label: '파일 탐색기 너비', normalize: number(parseExplorerWidth) },
   { key: QUEUE_HEIGHT_STORAGE_KEY, group: 'layout', label: 'SFTP 전송 큐 높이', normalize: number(parseQueueHeight) },
+  { key: AGENT_IDLE_KEY, group: 'view', label: '쉬는 에이전트의 메모리 비우기·잠재우기', normalize: raw => JSON.stringify(parseAgentIdlePrefs(raw)) },
   { key: 'dbTreeWidth', group: 'layout', label: 'DB 트리 너비', normalize: number(raw => clampTreeWidth(Number(raw))) },
   { key: ACTIVITY_PREFS_KEY, group: 'view', label: 'MCP 활동 패널 보기', normalize: viaParser(parseActivityPrefs) },
   { key: 'containerPanelPrefs', group: 'view', label: '컨테이너 패널 옵션', normalize: normalizeContainerPrefs },

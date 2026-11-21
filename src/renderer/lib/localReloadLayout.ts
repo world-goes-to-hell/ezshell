@@ -11,7 +11,6 @@ import { readTree } from './restoreTabs'
 import type { LiveLocalShell } from './localShellAdopt'
 
 const STORAGE_KEY = 'ezshell.localReloadLayout'
-const MAX_TABS = 10
 const SHELL_ID = /^local:\d{1,9}$/
 const PANE_ID = /^split-\d{1,4}$/
 
@@ -60,7 +59,7 @@ export function snapshotLocalTabs(
       ...(chats.length ? { chats } : {})
     })
   }
-  return tabs.slice(0, MAX_TABS)
+  return tabs
 }
 
 // eslint-disable-next-line no-control-regex
@@ -69,7 +68,7 @@ const line = (value: unknown, max: number): string | undefined => (typeof value 
 /** What was written, checked again: storage is not trusted to hold what this code wrote */
 export function readReloadLayout(value: unknown): ReloadTab[] {
   if (!Array.isArray(value)) return []
-  return value.slice(0, MAX_TABS).flatMap((entry): ReloadTab[] => {
+  return value.flatMap((entry): ReloadTab[] => {
     const e = entry as Record<string, unknown> | null
     if (!e || typeof e !== 'object') return []
     if (typeof e.tabId !== 'string' || !SHELL_ID.test(e.tabId) || typeof e.mainShellId !== 'string' || !SHELL_ID.test(e.mainShellId)) return []
@@ -105,10 +104,12 @@ export function readReloadLayout(value: unknown): ReloadTab[] {
 export function planReloadedTabs(shells: readonly LiveLocalShell[], saved: readonly ReloadTab[]): { tabs: ReloadTab[]; loose: LiveLocalShell[] } {
   const alive = new Set(shells.filter(s => !s.exited).map(s => s.id))
   const claimed = new Set<string>()
+  const claimedTabs = new Set<string>()
   const tabs: ReloadTab[] = []
   for (const tab of saved) {
-    if (!alive.has(tab.mainShellId) || claimed.has(tab.mainShellId) || tabs.some(t => t.tabId === tab.tabId)) continue
+    if (!alive.has(tab.mainShellId) || claimed.has(tab.mainShellId) || claimedTabs.has(tab.tabId)) continue
     claimed.add(tab.mainShellId)
+    claimedTabs.add(tab.tabId)
     let tree = tab.splitTree
     const panes: Record<string, string> = {}
     for (const pane of tree ? paneIds(tree) : []) {

@@ -45,6 +45,15 @@ const KEYS = { F8: 119, F9: 120, m: 77, Enter: 13 }
 
   check('the log is shown', await page.until(`(document.querySelector('.cm-content')?.textContent || '').includes('second failure') || document.querySelectorAll('.remote-log-problem-row').length > 0`, 20000))
   await sleep(500)
+  await page.send('Page.bringToFront')
+  const shortcutAt = await page.center(`document.querySelector('button[aria-label="단축키 설명 보기"]')`)
+  if (!shortcutAt) throw new Error('the log shortcuts button was not available')
+  await page.click(...shortcutAt)
+  check('the shortcut button shows the log keys', await page.until(`(() => {
+    const keys = [...document.querySelectorAll('.remote-file-shortcut-tooltip kbd')].map(key => key.textContent)
+    return keys.includes('F8') && keys.includes('F9') && keys.length === 5
+  })()`))
+  await focusLog()
 
   // ---- Counting: the stack trace is one error ----
   check('a stack trace counts as one error (오류 2, 경고 1)', (await counts()) === '오류 2 | 경고 1', await counts())

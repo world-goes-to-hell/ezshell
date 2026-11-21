@@ -60,6 +60,24 @@ describe('agents in local tabs', () => {
 })
 
 describe('buildRestoreRecord', () => {
+  it('round-trips local tabs beyond the restore limit for other tabs', () => {
+    const remote = Array.from({ length: 51 }, (_, index) => ssh(`ssh:${index}`, `session-${index}`))
+    const local = Array.from({ length: 55 }, (_, index): TerminalInfo => ({
+      id: `local:${index}`, host: '이 PC', username: '', connected: true, title: `셸 ${index}`, local: { shell: 'PowerShell' }
+    }))
+    const record = buildRestoreRecord(source([...remote, ...local], { activeId: local[54].id }))
+    expect(record.tabs).toHaveLength(105)
+    expect(record.active).toBe(104)
+
+    // The reader may receive a record that still contains the extra remote tab.
+    const raw = { ...record, tabs: [...record.tabs.slice(0, 50), { kind: 'ssh', savedSessionId: 'extra' }, ...record.tabs.slice(50)], active: 105 }
+    const restored = readRestoreRecord(raw)
+    expect(restored?.tabs.filter(tab => tab.kind === 'ssh')).toHaveLength(50)
+    expect(restored?.tabs.filter(tab => tab.kind === 'local')).toHaveLength(55)
+    expect(restored?.active).toBe(104)
+    expect(restored?.tabs[104]?.title).toBe('셸 54')
+  })
+
   it('keeps saved sessions, their layout and folders, never a password', () => {
     const record = buildRestoreRecord(source([
       ssh('1', 's1', { title: '운영 웹', color: '#ff0000', currentPath: '/var/log', splitTree: row(pane('main'), pane('split-1')), paneSeq: 1 }),
@@ -77,6 +95,18 @@ describe('buildRestoreRecord', () => {
     const record = buildRestoreRecord(source([ssh('1', null)]))
     expect(record.tabs[0]).toEqual({ kind: 'quick', title: undefined, host: '10.0.0.5', port: 22, username: 'deploy', authType: 'password', privateKeyPath: undefined })
     expect(JSON.stringify(record)).not.toContain('secret-pw')
+  })
+
+  it('round-trips the work of saved, unsaved, and detached connections', () => {
+    const record = buildRestoreRecord(source([
+      ssh('1', 's1', { connectConfig: config({ savedSessionId: 's1', workGroup: 'd:/work/app' }) }),
+      ssh('2', null, { connectConfig: config({ workGroup: 'folder:d:/work/other' }) })
+    ], { detached: [{ connectConfig: config({ savedSessionId: 's3', workGroup: 'general' }) }] }))
+    expect(readRestoreRecord(JSON.parse(JSON.stringify(record)))?.tabs).toMatchObject([
+      { kind: 'ssh', savedSessionId: 's1', workGroup: 'd:/work/app' },
+      { kind: 'quick', workGroup: 'folder:d:/work/other' },
+      { kind: 'ssh', savedSessionId: 's3', workGroup: 'general' }
+    ])
   })
 
   it('adds popped-out tabs, local terminals, and DB tabs after the tab they use', () => {

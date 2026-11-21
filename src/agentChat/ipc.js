@@ -7,7 +7,6 @@ const SHELL_ID = /^local:\d+$/
 const MAX_TEXT = 16_000
 const MAX_IMAGES = 8
 const IMAGE_LIMIT = '이미지는 한 메시지에 최대 8장까지 첨부할 수 있습니다.'
-const IMAGE_PROMPT = '첨부 이미지를 열어 확인해 주세요.'
 
 /**
  * The text as it may be pasted into the agent's composer, or null. Control characters are refused:
@@ -30,6 +29,12 @@ const REASONS = {
   busy: '다른 입력을 넣는 중입니다. 잠시 뒤 다시 시도해 주세요.',
   changed: '화면의 질문이 바뀌었습니다. 새 질문을 보고 다시 골라 주세요.',
   'write-failed': '셸에 쓰지 못했습니다.'
+}
+const SPEED_REASONS = {
+  ...REASONS,
+  working: 'Codex가 입력을 기다릴 때 전환할 수 있습니다.',
+  'speed-unavailable': '현재 모델이나 Codex 설정에서 이 속도 모드를 사용할 수 없습니다.',
+  'speed-unconfirmed': 'Codex의 속도 변경을 확인하지 못했습니다. 터미널에서 현재 설정을 확인해 주세요.'
 }
 // The usage line's model / effort picker (src/ipc/agentPicker.js)
 const PICKER_REASONS = {
@@ -115,6 +120,19 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const id = shellIdOf(shellId)
     if (allowed(event) && id) await chats.older(id)
   })
+  ipcMain.handle('agent-chat-subagent-preview', async (event, shellId, agentId) => {
+    const id = shellIdOf(shellId)
+    if (!allowed(event) || !id || typeof agentId !== 'string' || agentId.length > 500) return []
+    const activity = await chats.subagentPreview(id, agentId)
+    return allowed(event) ? activity : []
+  })
+  ipcMain.handle('agent-chat-copy', async (event, shellId) => {
+    if (!allowed(event)) return locked
+    const id = shellIdOf(shellId)
+    if (!id) return { ok: false, error: '셸을 찾지 못했습니다.' }
+    const result = await chats.transcriptForCopy(id)
+    return allowed(event) ? result : locked
+  })
   ipcMain.on('agent-chat-close', (event, shellId) => {
     const id = shellIdOf(shellId)
     if (!fromMainWindow(event) || !id) return
@@ -162,11 +180,11 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     let prompt = text
     let claudeImages
     if (selected.length) {
-      const attachment = IMAGE_PROMPT + '\n' + selected.map(image => image.file).join('\n')
-      // Put the reference before the draft so a slash command in the draft stays ordinary text.
-      prompt = text ? attachment + '\n\n' + text : attachment
+      const paths = selected.map(image => image.file).join('\n')
+      // Keep the references first so a slash command in the draft stays ordinary text.
+      prompt = text ? paths + '\n\n' + text : paths
       if (agent.kind === 'claude') {
-        claudeImages = { count: selected.length, text: text ? IMAGE_PROMPT + '\n' + text : IMAGE_PROMPT }
+        claudeImages = { count: selected.length, text: text ?? '' }
       }
     }
     for (const image of selected) image.sending = true
@@ -224,6 +242,16 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const local = shells()
     if (!local) return { ok: false, error: REASONS['not-agent'] }
     return pickerResult(await local.pickerApply(id, what, label))
+  })
+  ipcMain.handle('agent-chat-toggle-speed', async (event, request) => {
+    if (!allowed(event)) return locked
+    const id = shellIdOf(request?.shellId)
+    const speed = request?.speed
+    if (speed !== 'fast' && speed !== 'ultrafast') return { ok: false, error: '고를 수 없는 속도입니다.' }
+    const local = shells()
+    if (!id || !local) return { ok: false, error: REASONS['not-agent'] }
+    const result = await local.toggleCodexSpeed(id, speed)
+    return result.ok ? result : { ...result, error: SPEED_REASONS[result.reason] ?? '속도 모드를 전환하지 못했습니다.' }
   })
   ipcMain.handle('agent-chat-interrupt', (event, shellId) => {
     const id = shellIdOf(shellId)

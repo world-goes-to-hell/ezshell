@@ -5,8 +5,8 @@ const zlib = require('zlib')
 // each, never the whole file. Codex compresses older sessions (`.jsonl.zst`).
 const isCompressed = file => file.endsWith('.zst')
 
-function openStream(file) {
-  const raw = fs.createReadStream(file, { highWaterMark: 64 * 1024 })
+function openStream(file, start, end) {
+  const raw = fs.createReadStream(file, { highWaterMark: 64 * 1024, start, end })
   if (!isCompressed(file)) return { stream: raw, close: () => raw.destroy() }
   const inflate = zlib.createZstdDecompress()
   raw.on('error', error => inflate.destroy(error))
@@ -16,14 +16,16 @@ function openStream(file) {
 
 /**
  * Calls `onLine(object)` for each JSON line from the start of the file until it returns true or
- * `maxBytes` (after decompression) have been read. A line longer than `maxLine` is skipped.
+ * `maxBytes` (after decompression) have been read. `end` bounds the file read at an inclusive byte.
+ * A line longer than `maxLine` is skipped. `start` starts an uncompressed file midstream and drops
+ * the first partial line. `matchLine` can skip unrelated records before parsing their JSON.
  */
-function readLinesFromStart(file, onLine, { maxBytes = 2 * 1024 * 1024, maxLine = 1024 * 1024 } = {}) {
+function readLinesFromStart(file, onLine, { maxBytes = 2 * 1024 * 1024, maxLine = 1024 * 1024, start, end, matchLine } = {}) {
   return new Promise((resolve, reject) => {
-    const { stream, close } = openStream(file)
+    const { stream, close } = openStream(file, start, end)
     let pending = []
     let pendingBytes = 0
-    let skipping = false
+    let skipping = start > 0
     let total = 0
     let done = false
     const finish = (error) => {
@@ -35,9 +37,12 @@ function readLinesFromStart(file, onLine, { maxBytes = 2 * 1024 * 1024, maxLine 
     }
     const emit = (buffer) => {
       if (!buffer.length) return false
+      const line = buffer.toString('utf8')
+      if (matchLine && !matchLine(line)) return false
       let value
-      try { value = JSON.parse(buffer.toString('utf8')) } catch { return false }
-      return value !== null && typeof value === 'object' && onLine(value) === true
+      try { value = JSON.parse(line) } catch { return false }
+      if (value === null || typeof value !== 'object') return false
+      try { return onLine(value) === true } catch (error) { finish(error); return true }
     }
     stream.on('data', chunk => {
       if (done) return

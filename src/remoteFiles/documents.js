@@ -1,5 +1,4 @@
-// The server files open in file windows (one window per file). main.js creates the window and
-// passes every request here with the id of the window it came from: a window only reaches its own file.
+// File requests come with the id of their window. A window only reaches its own documents.
 // Saving: the window asks for a review (the diff it shows), then saves exactly the reviewed text.
 // The server file is backed up on this PC first, and only overwritten when it is still what was opened.
 // Loaded by main.js at runtime (copied to out/main/src), so keep it CommonJS and free of Electron imports.
@@ -37,7 +36,7 @@ const MESSAGES = {
   noBackup: '백업을 읽지 못했습니다.',
   backupTooLarge: `백업은 ${read.EDIT_MAX_BYTES / 1024 / 1024}MB 까지 열 수 있습니다.`,
   notFollowable: '텍스트 미리보기에서만 실시간으로 볼 수 있습니다.',
-  tooMany: `파일 창은 ${MAX_OPEN_DOCUMENTS}개까지 열 수 있습니다. 다른 창을 닫아 주세요.`,
+  tooMany: `파일은 ${MAX_OPEN_DOCUMENTS}개까지 열 수 있습니다. 다른 탭이나 창을 닫아 주세요.`,
   localConflict: '연 뒤에 파일이 바뀌어 저장하지 않았습니다. 다시 불러온 뒤 고쳐 주세요.'
 }
 
@@ -72,7 +71,8 @@ class DocumentError extends Error {
  */
 /**
  * `localFiles` (optional) opens files on this PC in the same windows: { read: src/localFiles/localRead.js,
- * headOf(folder, path) → the file's text at Git HEAD or null }. The caller has checked the path (roots.js).
+ * fileAt(folder, path, revision?) → the file's text or null, fileHistory(folder, path) → revisions }.
+ * The caller has checked the path (roots.js).
  */
 function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = null, localFiles = null, newId = () => crypto.randomUUID(), tailTimeoutMs = TAIL_TIMEOUT_MS }) {
   const docs = new Map()
@@ -129,7 +129,7 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
 
   /**
    * A file on this PC (the workspace panel). No SFTP channel, no backup on save (Git and the review
-   * before saving are the safety net); the backup list offers the file at Git HEAD instead.
+   * before saving are the safety net); the backup list offers the file's Git revisions instead.
    */
   /** `revealLine`: a new window opens at that line (a link "README.md:187" in the agent chat) */
   function registerLocal({ root, path: filePath, label, mode, compareHead = false, revealLine = null }) {
@@ -369,6 +369,21 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
     return doc
   }
 
+  function canMoveEdit(ownerId, docId) {
+    const doc = own(ownerId, docId)
+    return doc.mode === 'edit' && !!doc.seen && !doc.isSaving
+  }
+
+  /** Moving the editor keeps the version already read for conflict detection. */
+  function resumeEdit(ownerId, docId) {
+    const doc = editable(ownerId, docId)
+    return {
+      kind: 'text', editable: true, mode: doc.mode, local: doc.local ? true : undefined,
+      sessionName: doc.sessionName, requestedPath: doc.requestedPath,
+      path: doc.seen.path, content: doc.seen.content, canWrite: doc.canWrite
+    }
+  }
+
   /** The change a save would make, and the token that lets exactly this text be saved. */
   function review(ownerId, docId, content) {
     const doc = editable(ownerId, docId)
@@ -463,10 +478,22 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
    */
   async function listServerBackups(ownerId, docId) {
     const doc = editable(ownerId, docId)
-    // A file on this PC: the version at Git HEAD, when the file is in a repository and in that commit
     if (doc.local) {
-      const head = await localFiles.headOf(doc.local.root, doc.local.path).catch(() => null)
-      return { backups: head ? [{ name: 'HEAD', size: head.size, time: head.time, timeFrom: 'git' }] : [] }
+      const { root, path: filePath } = doc.local
+      const [head, history] = await Promise.all([
+        localFiles.fileAt(root, filePath).catch(() => null),
+        localFiles.fileHistory(root, filePath)
+          .then(revisions => ({ revisions }), () => ({ revisions: [], error: 'Git 파일 이력을 읽지 못했습니다.' }))
+      ])
+      editable(ownerId, docId)
+      patch(docId, { gitRevisions: new Map(history.revisions.map(revision => [revision.hash, revision])) })
+      return {
+        backups: [
+          ...(head ? [{ name: 'HEAD', size: head.size, time: head.time, timeFrom: 'git' }] : []),
+          ...history.revisions.map(({ hash, time, subject, deleted }) => ({ name: hash, time, subject, deleted, timeFrom: 'git' }))
+        ],
+        ...(history.error ? { historyError: history.error } : {})
+      }
     }
     const sftp = await sftpOf(doc)
     let found = []
@@ -483,9 +510,14 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
   async function readServerBackup(ownerId, docId, name) {
     const doc = editable(ownerId, docId)
     if (doc.local) {
-      const head = name === 'HEAD' ? await localFiles.headOf(doc.local.root, doc.local.path).catch(() => null) : null
-      if (!head) throw new DocumentError(MESSAGES.noBackup)
-      return { content: head.content }
+      // A renderer can read only revisions that main listed for this exact document.
+      const revision = name === 'HEAD' ? null : doc.gitRevisions?.get(name)
+      if (name !== 'HEAD' && !revision) throw new DocumentError(MESSAGES.noBackup)
+      if (revision?.deleted) return { content: '' }
+      const version = await localFiles.fileAt(doc.local.root, revision?.path ?? doc.local.path, revision?.hash).catch(() => null)
+      editable(ownerId, docId)
+      if (!version) throw new DocumentError(MESSAGES.noBackup)
+      return { content: version.content }
     }
     const listed = typeof name === 'string' && doc.serverBackups ? doc.serverBackups.get(name) : undefined
     if (!listed) throw new DocumentError(MESSAGES.noBackup)
@@ -525,7 +557,7 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
 
   const find = (docId) => docs.get(docId) || null
 
-  return { register, registerContainerLog, registerLocal, attach, load, findDefinitions, openDefinition, tail, review, save, listBackups, readBackup, listServerBackups, readServerBackup, backupFolder, close, find }
+  return { register, registerContainerLog, registerLocal, attach, load, canMoveEdit, resumeEdit, findDefinitions, openDefinition, tail, review, save, listBackups, readBackup, listServerBackups, readServerBackup, backupFolder, close, find }
 }
 
 /** `promise`, or a DocumentError once `ms` passed without an answer. */

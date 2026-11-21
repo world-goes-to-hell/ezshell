@@ -5,8 +5,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useTerminalStore, type LayoutState } from '../stores/terminalStore'
 import { useTabGroupStore, type SavedSplit } from '../stores/tabGroupStore'
 import { useLocalProjects } from './useLocalProjects'
-import { useProjectServers } from './useProjectServers'
-import { buildProjectNodes, type WorktreeNode } from '../components/Sidebar/LocalProjectsTree'
+import { buildProjectNodes, type ProjectNode, type WorktreeNode } from '../components/Sidebar/LocalProjectsTree'
 import { projectKeyOf } from '../lib/localProjectServers'
 import { groupOfTab, groupTabs, localFolderForGroup, projectOfFolder, type GroupProject, type TabGroup } from '../lib/tabGroups'
 import { pathKey, worktreeOf } from '../lib/localWorkspaceTree'
@@ -14,6 +13,7 @@ import { pathKey, worktreeOf } from '../lib/localWorkspaceTree'
 export interface TabGroupView {
   groups: TabGroup[]
   projects: readonly GroupProject[]
+  projectNodes: readonly ProjectNode[]
   activeGroup: string | null
   /** The tabs of the group in front, in strip order */
   shownIds: string[]
@@ -30,18 +30,16 @@ const splitOf = (layout: LayoutState): SavedSplit | null =>
 
 export function useTabGroups(): TabGroupView {
   const { projects } = useLocalProjects()
-  const servers = useProjectServers()
   const terminals = useTerminalStore(state => state.terminals)
   const activeId = useTerminalStore(state => state.activeTerminalId)
-  const current = useTabGroupStore(state => state.current)
 
   const projectNodes = useMemo(() => buildProjectNodes(projects), [projects])
   const groupProjects: GroupProject[] = useMemo(() => projectNodes.map(node => ({
     key: projectKeyOf(node), name: node.name, worktrees: node.worktrees.map(tree => tree.path)
   })), [projectNodes])
   const worktrees = useMemo(() => new Map(projectNodes.flatMap(node => node.worktrees.map(tree => [pathKey(tree.path), tree] as const))), [projectNodes])
-  const groups = useMemo(() => groupTabs([...terminals.keys()], terminals, groupProjects, servers, current), [terminals, groupProjects, servers, current])
-  const activeGroup = activeId && terminals.has(activeId) ? groupOfTab(activeId, terminals, groupProjects, servers, current) : groups[0]?.key ?? null
+  const groups = useMemo(() => groupTabs([...terminals.keys()], terminals, groupProjects), [terminals, groupProjects])
+  const activeGroup = activeId && terminals.has(activeId) ? groupOfTab(activeId, terminals, groupProjects) : groups[0]?.key ?? null
   const shownIds = useMemo(() => groups.find(group => group.key === activeGroup)?.tabIds ?? [...terminals.keys()], [groups, activeGroup, terminals])
 
   // The tab in front before this render, to tell a closed tab from a switch
@@ -84,9 +82,14 @@ export function useTabGroups(): TabGroupView {
       const others = [...useTerminalStore.getState().terminals.keys()].filter(id => !placed.has(id))
       const all = [{ ...panes[0], terminalIds: [...panes[0].terminalIds, ...others] }, ...panes.slice(1)]
       useTerminalStore.getState().setLayout({ mode: 'split', direction: saved.direction, panes: all, sizes: saved.sizes, activePane: saved.focus })
-      const focused = useTerminalStore.getState().layout
-      const front = focused.panes[focused.activePane ?? 0]?.activeTerminalId
-      if (front) useTerminalStore.getState().setActiveTerminal(front)
+      const restored = useTerminalStore.getState()
+      // A jump to a specific tab (for example from the work overview) takes precedence over the saved screen focus.
+      if (front && mine.has(front) && terminalState.focusRequest?.sessionId === front) {
+        restored.focusTerminal(front)
+      } else {
+        const savedFront = restored.layout.panes[restored.layout.activePane ?? 0]?.activeTerminalId
+        if (savedFront) restored.setActiveTerminal(savedFront)
+      }
     }
   }, [activeGroup, activeId, groups])
 
@@ -108,5 +111,5 @@ export function useTabGroups(): TabGroupView {
     return tree ? worktrees.get(pathKey(tree)) : undefined
   }
 
-  return { groups, projects: groupProjects, activeGroup, shownIds, openGroup, localFolder, worktreeForFolder }
+  return { groups, projects: groupProjects, projectNodes, activeGroup, shownIds, openGroup, localFolder, worktreeForFolder }
 }

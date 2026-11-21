@@ -29,6 +29,7 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tailwindcss/postcss": "^4.1.18",
+    "@tanstack/react-virtual": "3.14.26",
     "@types/markdown-it": "14.1.2",
     "@types/react": "^19.2.10",
     "@types/react-dom": "^19.2.3",

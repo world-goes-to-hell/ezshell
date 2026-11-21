@@ -30,6 +30,7 @@
 @import './app/terminal-header.css';
 @import './app/file-explorer.css';
 @import './app/terminal-split.css';
+@import './app/agent-work-trace.css';
 @import './app/folder-input.css';
 @import './app/split-view.css';
 @import './app/color-selector.css';

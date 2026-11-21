@@ -72,7 +72,7 @@ export function TerminalContextMenu({ position, target, top, groups, onClose }: 
             </>
           )}
           {top.map(item => <Item key={item.label} item={item} />)}
-          {top.length > 0 && <DropdownMenu.Separator className="terminal-menu-separator" />}
+          {top.length > 0 && groups.length > 0 && <DropdownMenu.Separator className="terminal-menu-separator" />}
           {groups.map(group => (
             <DropdownMenu.Sub key={group.label}>
               <DropdownMenu.SubTrigger className="terminal-menu-item">

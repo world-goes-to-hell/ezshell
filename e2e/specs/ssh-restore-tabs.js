@@ -5,6 +5,8 @@
 // The quick connect is offered with its login filled in. The record is given only once.
 // Run by e2e/run.js, which starts e2e/support/sshd.js for specs named ssh-*.
 const { sleep, createChecks, connect, unlock, connectSsh, PANEL } = require('../support/driver')
+const fs = require('node:fs')
+const path = require('node:path')
 const { check, finish } = createChecks()
 
 ;(async () => {
@@ -24,11 +26,14 @@ const { check, finish } = createChecks()
   check('a saved session is written', saved?.success === true, JSON.stringify(saved))
 
   // What the update notice writes down right before the update (lib/restoreTabs.ts)
+  const folder = path.join(process.env.E2E_PROFILE, 'restore work')
+  fs.mkdirSync(folder)
+  const workGroup = 'folder:' + (process.platform === 'win32' ? folder.replace(/\\/g, '/').toLowerCase() : folder)
   const record = {
     version: 1,
     tabs: [
-      { kind: 'ssh', savedSessionId: 'e2e-restore', title: '복원 시험', splitTree: { kind: 'split', axis: 'row', ratio: 0.5, first: { kind: 'pane', pane: 'main' }, second: { kind: 'pane', pane: 'split-1' } }, paneSeq: 1, currentPath: '/var/log', sftpPath: '/var' },
-      { kind: 'local', title: '로컬 복원' },
+      { kind: 'ssh', savedSessionId: 'e2e-restore', title: '복원 시험', workGroup, splitTree: { kind: 'split', axis: 'row', ratio: 0.5, first: { kind: 'pane', pane: 'main' }, second: { kind: 'pane', pane: 'split-1' } }, paneSeq: 1, currentPath: '/var/log', sftpPath: '/var' },
+      { kind: 'local', title: '로컬 복원', cwd: folder },
       { kind: 'quick', host: '127.0.0.1', port, username: 'quick-user' }
     ],
     active: 0
@@ -48,6 +53,7 @@ const { check, finish } = createChecks()
   await js(`[...document.querySelectorAll('.restore-tabs-btn')].find(b => b.textContent.includes('다시 열기')).click()`)
   check('the saved session\'s tab and the local terminal open', await until(`document.querySelectorAll('.terminal-tab').length === 2`, 30000), JSON.stringify(await tabTitles()))
   check('with the names they had', JSON.stringify(await tabTitles()).includes('복원 시험') && JSON.stringify(await tabTitles()).includes('로컬 복원'), JSON.stringify(await tabTitles()))
+  check('the SSH and local tabs are restored under the work they shared', await until(`document.querySelector('.tab-group-select-name')?.textContent === 'restore work' && document.querySelectorAll('.terminal-tab').length === 2`))
   await js(`[...document.querySelectorAll('.terminal-tab')].find(t => t.textContent.includes('복원 시험'))?.click()`)
   check('the SSH tab has its two panes again, each with a shell', await until(`${PANES}.length === 2 && ${PANES}.every(p => (p.querySelector('.xterm-rows')?.textContent || '').includes('fake shell'))`, 30000), String(await js(`${PANES}.length`)))
   check('the shell is taken back to its folder (cd typed once)', await until(`(${PANES}[0]?.querySelector('.xterm-rows')?.textContent || '').includes("cd -- '/var/log'")`, 10000), (await js(`${PANES}[0]?.querySelector('.xterm-rows')?.textContent || ''`)).slice(-200))

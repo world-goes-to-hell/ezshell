@@ -42,14 +42,22 @@ pty.spawn = (file, args, options) => {
   const counters = { [PROMPT]: 'wakes', [REMIND_PROMPT]: 'wakes', [BUSY_PROMPT]: 'busy-wakes' }
   const counts = {}
   let pending = null
+  let speed = 'default'
   child.write = data => {
-    if (!id && data === 'claude\r') id = 'manual-claude'
+    if (!id && /^claude(?: [^\r]*)?\r$/.test(data)) id = 'manual-claude'
     if (!id && data === 'codex --yolo\r') id = 'manual-codex'
     const pasted = data.startsWith('\x1b[200~') && data.endsWith('\x1b[201~') ? data.slice(6, -6) : null
     if (id && (data === '\x16' || data === '\x1bv')) {
       fs.appendFileSync(path.join(profile, id + '-image-paste'), data)
     } else if (id && pasted !== null && counters[pasted]) {
       pending = counters[pasted]
+      fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
+    } else if (id && (pasted === '/exit' || pasted === '/quit')) {
+      // Closing the CLI (agentIdle.js puts an idle agent to sleep): Enter ends the fake agent
+      pending = 'exit-command'
+      fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
+    } else if (id?.startsWith('codex-') && ['/fast', '/ultrafas', '/ultrafast'].includes(pasted) && process.env.EZSHELL_TEST_AGENT_CHAT) {
+      pending = pasted === '/ultrafas' ? 'speed-probe' : pasted.slice(1) + '-toggles'
       fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
     } else if (id && pasted !== null && process.env.EZSHELL_TEST_AGENT_CHAT) {
       // A line from the chat view (e2e/specs/local-agent-chat.js): the fake composer draws it, Enter counts
@@ -62,7 +70,20 @@ pty.spawn = (file, args, options) => {
       // A choice of the fake prompt: answered at once, the composer comes back
       fs.appendFileSync(path.join(profile, id + '-approval-answer'), data)
       fs.writeFileSync(path.join(profile, id + '-approval'), '')
+    } else if (pending === 'speed-probe' && data === '\x7f'.repeat('/ultrafas'.length)) {
+      fs.writeFileSync(path.join(profile, id + '-speed-checked'), 'yes')
+      pending = null
+      fs.writeFileSync(path.join(profile, id + '-draft'), '')
+    } else if (pending === 'exit-command' && data === '\r') {
+      pending = null
+      fs.appendFileSync(path.join(profile, id + '-exits'), 'x')
+      fs.writeFileSync(path.join(profile, id + '-exit-code'), '0')
     } else if (pending && data === '\r') {
+      if (pending === 'fast-toggles' || pending === 'ultrafast-toggles') {
+        const target = pending === 'fast-toggles' ? 'priority' : 'ultrafast'
+        speed = speed === target ? 'default' : target
+        fs.writeFileSync(path.join(profile, id + '-speed'), speed)
+      }
       counts[pending] = (counts[pending] ?? 0) + 1
       fs.writeFileSync(path.join(profile, id + '-' + pending), String(counts[pending]))
       pending = null

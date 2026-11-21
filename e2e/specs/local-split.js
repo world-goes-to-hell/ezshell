@@ -125,16 +125,19 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   await mouse('mouseMoved', r[1][0] + r[1][2] / 2, r[1][1] + 40)
   await mouse('mouseMoved', r[1][0] + r[1][2] / 2, r[1][1] + 8)
   await sleep(250)
-  const dropped = await js(`(() => {
+  const dropped = await js(`(async () => {
     const grip = document.querySelector('.pane-grip.is-shown')
     if (!grip) return 'no grip'
     const dt = new DataTransfer()
     grip.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }))
+    // A hand takes a while to reach the strip: the drag shows its drop zones in the meantime
+    await new Promise(resolve => setTimeout(resolve, 200))
     const strip = document.querySelector('.terminal-tabs')
     const over = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt })
     strip.dispatchEvent(over)
     strip.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
-    grip.dispatchEvent(new DragEvent('dragend', { bubbles: true }))
+    // As in the browser: dragend goes to the grip, which has left the page with its pane by then
+    setTimeout(() => grip.dispatchEvent(new DragEvent('dragend', { bubbles: true })), 500)
     return 'ok accepted=' + over.defaultPrevented
   })()`)
   check('the pane can be dropped on the tab strip', dropped === 'ok accepted=true', dropped)
@@ -146,6 +149,8 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   check('and the shell still answers', /STILL-ALIVE/.test((await texts())[0]))
   await js(`document.querySelectorAll('.terminal-tab')[0].click()`); await sleep(800)
   check('the old tab keeps an empty place with merge buttons', await js(`[...document.querySelectorAll('.pane-vacant')].some(v => v.offsetParent !== null)`))
+  // 2026-11-20 user report: the drop zones of that drag stayed over the panes and the shells could not be used
+  check('no drop zone of the finished drag is left over the panes', await until(`!document.querySelector('.pane-drop-zone')`, 3000))
   await shot('2-vacant')
 
   // ---- The moved tab merges back into the empty place (from the tab's menu) ----

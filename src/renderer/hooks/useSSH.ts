@@ -4,6 +4,7 @@ import { useHistoryStore } from '../stores/historyStore'
 import { useStatsStore } from '../stores/statsStore'
 import { toast } from '../stores/toastStore'
 import { rootSwitchNotice } from '../lib/rootSwitch'
+import { FOLDER_GROUP_PREFIX, GENERAL_GROUP } from '../lib/tabGroups'
 
 export interface SSHConnectConfig {
   host: string
@@ -15,6 +16,8 @@ export interface SSHConnectConfig {
   passphrase?: string
   sessionName?: string
   color?: string
+  /** The work this tab was opened in from the tab strip. Renderer-only. */
+  workGroup?: string
   postConnectScript?: string
   suRoot?: boolean
   suPassword?: string
@@ -40,13 +43,14 @@ export function useSSH() {
   const { addTerminal, removeTerminal, changePendingSessionConnections, setConnected, updateTerminalMeta } = useTerminalStore()
 
   const connect = useCallback(async (config: SSHConnectConfig) => {
-    const { savedSessionId } = config
-    if (savedSessionId) changePendingSessionConnections(savedSessionId, 1)
+    const { savedSessionId, workGroup } = config
+    const projectConnection = workGroup && workGroup !== GENERAL_GROUP && !workGroup.startsWith(FOLDER_GROUP_PREFIX)
+    if (savedSessionId && !projectConnection) changePendingSessionConnections(savedSessionId, 1)
 
     try {
       toast.info('연결 중...', `${config.username}@${config.host}에 연결을 시도합니다`)
       // UI-only fields stay in the renderer; everything else goes to the main process
-      const { sessionName, color, postConnectScript, ...connectionConfig } = config
+      const { sessionName, color, workGroup, postConnectScript, ...connectionConfig } = config
       const result = await window.electronAPI.sshConnect(connectionConfig)
 
       if (result.success) {
@@ -108,7 +112,7 @@ export function useSSH() {
       toast.error('연결 실패', error.message)
       return { success: false, error: error.message }
     } finally {
-      if (savedSessionId) changePendingSessionConnections(savedSessionId, -1)
+      if (savedSessionId && !projectConnection) changePendingSessionConnections(savedSessionId, -1)
     }
   }, [addTerminal, changePendingSessionConnections, setConnected, updateTerminalMeta])
 

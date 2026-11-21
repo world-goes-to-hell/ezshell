@@ -1,0 +1,17 @@
+.agent-idle-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 2px;
+  font-size: 13px;
+}
+.agent-idle-label { min-width: 96px; color: var(--text-primary); }
+.agent-idle-select {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 0);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.agent-idle-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

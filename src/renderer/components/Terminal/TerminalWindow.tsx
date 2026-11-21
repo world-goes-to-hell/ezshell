@@ -3,6 +3,7 @@ import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import { SerializeAddon } from 'xterm-addon-serialize'
 import { useThemeStore } from '../../stores/themeStore'
+import { readTerminalScrollback } from '../../lib/terminalScrollback'
 import { RiTerminalBoxFill, RiMergeCellsHorizontal } from 'react-icons/ri'
 import { enableCopyOnSelect } from '../../lib/terminalClipboard'
 import { SNAPSHOT_SCROLLBACK_ROWS } from '../../lib/terminalSnapshots'
@@ -136,7 +137,7 @@ export function TerminalWindow({ sessionId, title }: TerminalWindowProps) {
         // xterm's default 'outline' draws a box around the cursor cell in unfocused panes,
         // which looks like a double bar ('||') next to the prompt in split layouts
         cursorInactiveStyle: 'bar',
-        scrollback: 10000,
+        scrollback: readTerminalScrollback(),
         allowProposedApi: true
       })
 

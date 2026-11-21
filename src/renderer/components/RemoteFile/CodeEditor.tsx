@@ -1,6 +1,8 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { EditorState, Text, type Extension } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
+import { historyField } from '@codemirror/commands'
+import type { RemoteFileDraft } from '../../types'
 import { editorExtensions, languageFor, languageSlot, openReplacePanel } from './codeEditorSetup'
 
 export interface CodeEditorHandle {
@@ -15,7 +17,11 @@ export interface CodeEditorHandle {
   focus: () => void
   /** The CodeMirror view, for the log view's own changes (null before mount) */
   getView: () => EditorView | null
+  snapshot: () => EditorSnapshot | null
 }
+
+type EditorSnapshot = Pick<RemoteFileDraft, 'editor' | 'top' | 'left'>
+const editorStateFields = { history: historyField }
 
 export interface CursorInfo {
   line: number
@@ -30,6 +36,8 @@ interface CodeEditorProps {
   initialText: string
   fileName: string
   readOnly: boolean
+  initialSnapshot?: EditorSnapshot
+  autoFocus?: boolean
   onDirtyChange?: (isDirty: boolean) => void
   onSave?: () => void
   onCursor?: (cursor: CursorInfo) => void
@@ -47,7 +55,7 @@ function cursorOf(state: EditorState): CursorInfo {
  * CodeMirror in React. The view is made once; the text changes only through the handle, so React
  * re-renders never reset what the user typed. Callbacks are read through refs for the same reason.
  */
-export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor({ initialText, fileName, readOnly, onDirtyChange, onSave, onCursor, extensions = [] }, ref) {
+export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor({ initialText, fileName, readOnly, initialSnapshot, autoFocus = true, onDirtyChange, onSave, onCursor, extensions = [] }, ref) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const baselineRef = useRef<Text | null>(null)
@@ -64,7 +72,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
 
   useEffect(() => {
     if (!hostRef.current) return
-    const state = EditorState.create({
+    const config = {
       doc: initialText,
       extensions: [
         ...extensions,
@@ -74,8 +82,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
           (next) => callbacks.current.onCursor?.(cursorOf(next))
         )
       ]
-    })
-    baselineRef.current = state.doc
+    }
+    const state = initialSnapshot
+      ? EditorState.fromJSON(JSON.parse(initialSnapshot.editor), config, editorStateFields)
+      : EditorState.create(config)
+    baselineRef.current = initialSnapshot ? Text.of(initialText.split('\n')) : state.doc
     const view = new EditorView({ state, parent: hostRef.current })
     viewRef.current = view
     // The editor's keys only reach the text area; in the find box Ctrl+S and Ctrl+H must work too
@@ -92,7 +103,12 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     }
     view.dom.addEventListener('keydown', onPanelKey)
     callbacks.current.onCursor?.(cursorOf(state))
-    view.focus()
+    if (autoFocus) view.focus()
+    if (initialSnapshot) {
+      view.scrollDOM.scrollTop = initialSnapshot.top
+      view.scrollDOM.scrollLeft = initialSnapshot.left
+      reportDirty(state)
+    }
 
     let isCancelled = false
     // A large file gets no syntax colours: its parser works on the page's own thread in slices of up to
@@ -134,7 +150,15 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       reportDirty(view.state)
     },
     focus: () => viewRef.current?.focus(),
-    getView: () => viewRef.current
+    getView: () => viewRef.current,
+    snapshot: () => {
+      const view = viewRef.current
+      return view && {
+        editor: JSON.stringify(view.state.toJSON(editorStateFields)),
+        top: view.scrollDOM.scrollTop,
+        left: view.scrollDOM.scrollLeft
+      }
+    }
   }), [])
 
   return <div className="remote-file-editor" ref={hostRef} />

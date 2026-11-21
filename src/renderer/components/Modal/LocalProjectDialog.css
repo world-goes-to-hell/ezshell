@@ -13,6 +13,22 @@
   margin-top: 8px;
 }
 
+.local-project-pick {
+  display: flex;
+  gap: 8px;
+}
+
+.local-project-pick input {
+  flex: 1;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.local-project-pick button {
+  flex: none;
+  padding: 0 14px;
+}
+
 .local-project-dialog :is(.local-project-folders, .modal-actions) > button {
   display: inline-flex;
   flex: 0 1 120px;

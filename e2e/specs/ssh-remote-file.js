@@ -73,6 +73,13 @@ const { check, finish } = createChecks()
     await page.js(`document.querySelector('.cm-content').focus()`)
     await page.type('EDITED')
     check('typing changes the document', await page.until(`(document.querySelector('.cm-content')?.textContent || '').includes('EDITED')`, 5000))
+    await page.js(`document.querySelector('button[aria-label="저장"]').click()`)
+    const review = `document.querySelector('.remote-file-save-dialog')`
+    check('the server save review explains the backup', await page.until(`
+      ${review}?.querySelector('.modal-title').textContent.trim() === '서버 파일에 저장' &&
+      ${review}.querySelector('.remote-file-dialog-text').textContent.includes('ezShell Backups') &&
+      ${review}.querySelector('.btn-primary').textContent.trim() === '백업 후 저장'`, 8000))
+    await page.js(`${review}.querySelector('.btn-secondary').click()`)
     await noProblems(page, 'editor')
     await page.shot('ssh-remote-file-2-edit')
     page.close()

@@ -5,8 +5,7 @@ const MAX_TITLE_LENGTH = 80
 
 /** One line of plain text: no control or invisible format characters, spaces collapsed */
 function cleanTitle(title: string): string {
-  const line = title.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ').replace(/\s+/g, ' ').trim()
-  return line.length > MAX_TITLE_LENGTH ? `${line.slice(0, MAX_TITLE_LENGTH - 1)}…` : line
+  return title.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ').replace(/\s+/g, ' ').trim()
 }
 
 function hostOf(url: string): string {
@@ -18,8 +17,10 @@ function hostOf(url: string): string {
 }
 
 /** The page's title, else its host (a page without a title, or before the title arrives), else the default */
-export function pageTabTitle(state: { title?: string; url: string }): string {
-  return cleanTitle(state.title ?? '') || hostOf(state.url) || BROWSER_TAB_DEFAULT_TITLE
+export function pageTabTitle(state: { title?: string; url: string }, titleLimit = MAX_TITLE_LENGTH): string {
+  const title = cleanTitle(state.title ?? '')
+  if (title.length > titleLimit) return `${title.slice(0, titleLimit - 1)}…`
+  return title || hostOf(state.url) || BROWSER_TAB_DEFAULT_TITLE
 }
 
 /**

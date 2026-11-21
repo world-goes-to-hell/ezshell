@@ -13,23 +13,26 @@ const MAX_ZOOM = ZOOM_STEPS[ZOOM_STEPS.length - 1]
  * Short-lived "UI 배율 125%" panel shown whenever the zoom changes,
  * like a browser's zoom bubble. Stays open while hovered.
  */
-export function ZoomHud() {
+export function ZoomHud({ suppressed }: { suppressed: boolean }) {
   const appZoom = useUIStore(state => state.appZoom)
-  return <ZoomBubble zoom={appZoom} onZoom={zoomBy} onReset={resetZoom} />
+  return <ZoomBubble zoom={appZoom} onZoom={zoomBy} onReset={resetZoom} suppressed={suppressed} />
 }
 
 /** The bubble itself; also used by detached windows, which keep a zoom of their own (WindowZoom.tsx) */
-export function ZoomBubble({ zoom: appZoom, onZoom, onReset }: { zoom: number; onZoom: (direction: 1 | -1) => void; onReset: () => void }) {
+export function ZoomBubble({ zoom: appZoom, onZoom, onReset, suppressed = false }: {
+  zoom: number; onZoom: (direction: 1 | -1) => void; onReset: () => void; suppressed?: boolean
+}) {
   const [isVisible, setIsVisible] = useState(false)
   const [isHovered, setIsHovered] = useState(false)
   const previousZoom = useRef(appZoom)
 
   useEffect(() => {
     // Only react to changes, not to the value restored at startup
-    if (previousZoom.current === appZoom) return
+    if (previousZoom.current === appZoom && !suppressed) return
     previousZoom.current = appZoom
-    setIsVisible(true)
-  }, [appZoom])
+    setIsVisible(!suppressed)
+    if (suppressed) setIsHovered(false)
+  }, [appZoom, suppressed])
 
   useEffect(() => {
     if (!isVisible || isHovered) return
@@ -37,7 +40,7 @@ export function ZoomBubble({ zoom: appZoom, onZoom, onReset }: { zoom: number; o
     return () => clearTimeout(timer)
   }, [isVisible, isHovered, appZoom])
 
-  if (!isVisible) return null
+  if (!isVisible || suppressed) return null
 
   const percent = toZoomPercent(appZoom)
 

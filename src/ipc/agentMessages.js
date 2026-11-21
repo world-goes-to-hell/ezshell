@@ -162,9 +162,13 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     }
   }
 
+  // A sleeping agent (agentIdle.js: its CLI was closed to save memory, it comes back on its next message)
+  // still takes messages: they wait in its inbox and wake it
   function isConnected(id) {
+    const agent = agents.get(id)
+    if (agent?.active === true && agent.sleeping) return true
     const lease = mcpReady.get(id)
-    return agents.get(id)?.active === true && lease != null && !lease.destroyed
+    return agent?.active === true && lease != null && !lease.destroyed
   }
 
   function stopWaiting(id) {
@@ -176,6 +180,11 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   function archiveExternal(id) {
     const agent = agents.get(id)
     if (!agent) return
+    // Asleep: its CLI and MCP went away on purpose; it is kept (with its usage and session id) to be resumed
+    if (agent.sleeping) {
+      stopWaiting(id)
+      return
+    }
     clearUsage(id)
     if (messages.some(message => message.from === id || message.to === id)) {
       agents.set(id, { ...agent, shellId: '', active: false, status: 'ended' })
@@ -193,13 +202,33 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       mcpReady.delete(id)
       socket.destroy()
     }
+    // Put to sleep on purpose: kept, under the same id, for the CLI resumed in its shell (archiveExternal)
     archiveExternal(id)
+    changed()
+  }
+
+  /** The agent's CLI is being closed to save memory: it stays listed and takes messages (session id to resume) */
+  function sleep(id, sessionId) {
+    const agent = agents.get(id)
+    if (!agent?.active) return false
+    agents.set(id, { ...agent, sleeping: true, status: 'sleeping', ...(sessionId ? { resumeId: sessionId } : {}) })
+    changed()
+    return true
+  }
+
+  /** Not resuming after all (closing failed, the shell was closed, the user kept the terminal) */
+  function cancelSleep(id, { ended }) {
+    const agent = agents.get(id)
+    if (!agent?.sleeping) return
+    const { sleeping, ...rest } = agent
+    agents.set(id, { ...rest, status: 'idle' })
+    if (ended) archiveExternal(id)
     changed()
   }
 
   function setStatus(id, status) {
     const agent = agents.get(id)
-    if (!agent?.active || agent.status === status) return
+    if (!agent?.active || agent.sleeping || agent.status === status) return
     agents.set(id, { ...agent, status })
     changed()
   }
@@ -226,8 +255,11 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       token = randomUUID()
       tokens.set(token, id)
       // startedAt: its MCP connects a little after the CLI started (and wrote its Codex session file)
-      const startedAt = agents.get(id)?.startedAt ?? Date.now() - 30_000
-      agents.set(id, { id, shellId: binding?.shellId ?? '', kind: request.kind, cwd: request.cwd, active: true, status: binding?.status ?? 'unknown', startedAt })
+      const before = agents.get(id)
+      const startedAt = before?.startedAt ?? Date.now() - 30_000
+      // Woken from sleep (same id): the resumed session's file is found by its id
+      const resumed = before?.sleeping && before.resumeId ? { resumeId: before.resumeId } : {}
+      agents.set(id, { id, shellId: binding?.shellId ?? '', kind: request.kind, cwd: request.cwd, active: true, status: binding?.status ?? 'unknown', startedAt, ...resumed })
     }
     const previous = mcpReady.get(id)
     mcpReady.set(id, socket)
@@ -461,7 +493,13 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     if (!agent?.active) return false
     const clean = sanitizeUsage(value, agent.kind)
     if (!clean) return false
-    if (sameUsage(usages.get(agentId), clean)) return true
+    const previous = usages.get(agentId)
+    // A long Codex turn can push its settings out of the transcript tail while usage keeps arriving.
+    if (agent.kind === 'codex' && previous && previous.sessionId === clean.sessionId) {
+      clean.model ??= previous.model
+      if (clean.model === previous.model) clean.effort ??= previous.effort
+    }
+    if (sameUsage(previous, clean)) return true
     usages.set(agentId, clean)
     notify('agent-usage', { agentId, shellId: agent.shellId ?? null, usage: clean })
     return true
@@ -517,7 +555,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   return {
     ready, enableExternalBridge, register, stop, snapshot, unreadFor, unhandledFor,
     sendAsUser: request => deliver(USER, request),
-    setUsage, applyPicked, usageSnapshot, registerShell, forgetShell
+    setUsage, applyPicked, usageSnapshot, registerShell, forgetShell, sleep, cancelSleep
   }
 }
 

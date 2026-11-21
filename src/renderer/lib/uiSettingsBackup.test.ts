@@ -29,13 +29,13 @@ describe('collectUiSettings', () => {
       dbTreeWidth: 'wide',
       containerPanelPrefs: '{"showAll":true,"autoRefresh":"yes","extra":"/home/me"}',
       customShortcuts: '{"closeTab":["Ctrl","Q"],"unknownAction":["Ctrl","X"]}',
-      'ui-store': '{"state":{"sidebarMode":"compact","zenMode":true,"appZoom":1.25},"version":0}'
+      'ui-store': '{"state":{"sidebarMode":"compact","zenMode":true,"appZoom":1.25,"browserTabMaxWidth":437},"version":0}'
     }), context, now)
     expect(result.settings.fileExplorerWidth).toBe('800')
     expect(result.settings.dbTreeWidth).toBeUndefined()
     expect(JSON.parse(result.settings.containerPanelPrefs)).toEqual({ showAll: true, autoRefresh: false })
     expect(Object.keys(JSON.parse(result.settings.customShortcuts))).toEqual(['closeTab'])
-    expect(JSON.parse(result.settings['ui-store']).state).toEqual({ sidebarMode: 'compact', appZoom: 1.25 })
+    expect(JSON.parse(result.settings['ui-store']).state).toEqual({ sidebarMode: 'compact', appZoom: 1.25, browserTabMaxWidth: 440 })
   })
 
   it('keeps a known theme choice and drops broken custom themes', () => {

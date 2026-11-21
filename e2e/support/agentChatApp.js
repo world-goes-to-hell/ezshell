@@ -19,5 +19,9 @@ dialog.showOpenDialog = (window, options) => options?.title === '채팅에 이�
   && options.properties.includes('multiSelections')
   ? Promise.resolve({ canceled: false, filePaths: selectedImages })
   : showOpenDialog(window, options)
+const showSaveDialog = dialog.showSaveDialog.bind(dialog)
+dialog.showSaveDialog = (window, options) => options?.title === '채팅 저장'
+  ? Promise.resolve({ canceled: false, filePath: path.join(profile, 'saved-chat.txt') })
+  : showSaveDialog(window, options)
 process.env.EZSHELL_TEST_AGENT_CHAT = '1'
 require('./localAgentApp.js')

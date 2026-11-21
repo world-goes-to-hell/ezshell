@@ -1,6 +1,6 @@
 const fs = require('fs')
 const path = require('path')
-const { connect, createChecks, sleep, unlock, openLocalProject, pickTabGroup } = require('../support/driver')
+const { connect, createChecks, sleep, unlock, openLocalAgent, pickTabGroup } = require('../support/driver')
 
 const { check, finish } = createChecks()
 const profile = process.env.E2E_PROFILE
@@ -54,20 +54,7 @@ async function run() {
     await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([workspace]))});
       window.dispatchEvent(new Event('ezshell:local-projects-changed'))`)
     async function openAgent(kind, id, folder = workspace) {
-      await openLocalProject(driver)
-      await until(`!!document.querySelector('#local-project-agent')`)
-      await js(`(() => {
-        const select = document.querySelector('#local-project-folder')
-        if (select.value === ${JSON.stringify(folder)}) return
-        select.value = ${JSON.stringify(folder)}
-        select.dispatchEvent(new Event('change', { bubbles: true }))
-      })()`)
-      await js(`(() => {
-        const select = document.querySelector('#local-project-agent')
-        select.value = ${JSON.stringify(kind)}
-        select.dispatchEvent(new Event('change', { bubbles: true }))
-      })()`)
-      await js(`document.querySelector('.local-project-dialog button[type=submit]').click()`)
+      await openLocalAgent(driver, kind, folder)
       if (!(await until(`document.querySelector('[aria-label="${id} 메시지함"]') && document.body.textContent.includes('fixture ready: ${id}')`))) {
         const details = await js(`(async () => ({
           snapshot: await window.electronAPI.agentMessagesSnapshot(),
@@ -87,6 +74,23 @@ async function run() {
       ${row('codex-1')}.parentElement.previousElementSibling?.matches('.local-worktree-row') &&
       !${session('codex-1')}?.querySelector('.local-terms-item')
     `))
+    const border = element => `getComputedStyle(${element}, '::after')`
+    const runningTrace = element => `
+      ${element} &&
+      ${border(element)}.opacity === '1' &&
+      ${border(element)}.animationName === 'local-agent-trace' &&
+      ${border(element)}.animationPlayState === 'running'
+    `
+    // Codex reports startup until its composer has submitted a prompt.
+    await js(`(() => {
+      const shellId = document.querySelector('[aria-label="codex-1 메시지함"]').closest('[data-local-shell-id]').dataset.localShellId
+      window.electronAPI.localShellWrite(shellId, 'test sidebar activity')
+      window.electronAPI.localShellWrite(shellId, '\\r')
+    })()`)
+    fs.writeFileSync(file('codex-1-program-status'), 'state=working:app=codex')
+    check('a worktree with a single working tab animates its card border', await until(runningTrace(session('codex-1'))))
+    fs.writeFileSync(file('codex-1-program-status'), 'state=idle:app=codex')
+    await until(`${row('codex-1')}?.dataset.status === 'idle'`)
     await openAgent('claude', 'claude-2')
     for (const [index, agent] of ['codex-1', 'claude-2'].entries()) {
       check(agent + ' has only icons directly underneath its own session information', await until(`
@@ -163,12 +167,18 @@ async function run() {
     await cli('codex-1', `message ack --id ${reply.id}`)
     check('reading the reply clears both unread badges', await until(`!document.querySelector('.agent-tab-mail')`))
 
+    fs.writeFileSync(file('codex-1-program-status'), 'state=working:app=codex')
+    check('the Codex session border runs before waiting for a reply', await until(runningTrace(session('codex-1'))))
     const waiting = cli('codex-1', 'message inbox --wait')
-    check('an open CLI inbox wait is visible in the sidebar', await until(`${row('codex-1')}?.dataset.status === 'reply'`))
+    check('waiting for a reply shows the reply icon and clears the working border', await until(`
+      ${row('codex-1')}?.dataset.status === 'reply' && !${session('codex-1')}?.dataset.agentWork
+    `))
     const wake = await cli('claude-2', 'message send --to codex-1 --text follow-up')
     check('arriving mail completes the wait and clears the status', (await waiting).messages.some(message => message.id === wake.id) &&
       await until(`${row('codex-1')}?.dataset.status !== 'reply'`))
     await cli('codex-1', `message ack --id ${wake.id}`)
+    fs.writeFileSync(file('codex-1-program-status'), 'state=idle:app=codex')
+    await until(`${row('codex-1')}?.dataset.status === 'idle'`)
 
     const shellId = await js(`document.querySelector('[aria-label="claude-2 메시지함"]').closest('[data-local-shell-id]').dataset.localShellId`)
     const isWorking = () => js(`window.electronAPI.localShellHasWorkingAgent([${JSON.stringify(shellId)}])`)
@@ -183,16 +193,52 @@ async function run() {
     const angle = `${trace}.getPropertyValue('--local-agent-trace-angle')`
     const firstAngle = await js(angle)
     check('the light travels along the border', await until(`${angle} !== ${JSON.stringify(firstAngle)}`))
+    check('the background Claude tab keeps its sidebar border while Codex is selected',
+      await focusAgent('codex-1') && await until(`
+        ${runningTrace(session('claude-2'))} &&
+        ${border(session('claude-2'))}.pointerEvents === 'none' &&
+        !${session('codex-1')}?.dataset.agentWork &&
+        ${trace}.animationPlayState === 'paused'
+      `))
+    const q = selector => `document.querySelector(${JSON.stringify(selector)})`
+    const foldWorktree = q('.local-worktree-fold')
+    const worktree = q('.local-worktree')
+    const project = q('.local-project-row')
+    const localList = q('.local-terms-toggle')
+    const railLocal = q('[data-peek-target="local"]')
+    const switchList = q('.sidebar-peek-switch')
+    await js(`${foldWorktree}.click()`)
+    check('folded worktree shows activity on its own border', await until(runningTrace(worktree)))
+    await js(`${project}.click()`)
+    check('folded project shows activity on its header', await until(runningTrace(project)))
+    await js(`${localList}.click()`)
+    check('collapsed local work list shows activity on its toggle', await until(runningTrace(localList)))
+    await driver.move(430, 235)
+    await js(`${q('.sidebar-toggle')}.click()`)
+    check('the compact sidebar still shows local work activity', await until(runningTrace(railLocal)))
+    await driver.move(...await driver.center(q('[data-peek-target="sessions"]')))
+    check('the session preview shows activity on the switch to local work', await until(runningTrace(switchList)))
+    await js(`${q('.sidebar-toggle')}.click()`)
+    await until(`!${q('.sidebar.rail')}`)
+    await js(`${localList}.click()`)
+    await until(`!!${project}`)
+    await js(`${project}.click()`)
+    await until(`!!${foldWorktree}`)
+    await js(`${foldWorktree}.click()`)
+    await until(`!!${row('claude-2')}`)
+    await focusAgent('claude-2')
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
     check('reduced motion shows a static working border', await until(`
-      ${trace}.animationName === 'none' && ${trace}.borderTopWidth === '1px' && ${trace}.opacity === '1'
+      ${trace}.animationName === 'none' && ${trace}.borderTopWidth === '1px' && ${trace}.opacity === '1' &&
+      ${border(session('claude-2'))}.animationName === 'none' &&
+      ${border(session('claude-2'))}.borderTopWidth === '1px' && ${border(session('claude-2'))}.opacity === '1'
     `))
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
     fs.writeFileSync(file('claude-2-title'), '✳ Claude')
     check('the idle OSC title clears the busy state', await waitFor(async () => !(await isWorking())))
     check('an idle agent is distinguishable in the sidebar', await until(`${row('claude-2')}?.dataset.status === 'idle'`))
     check('the working border fades when the agent is idle', await until(`
-      ${trace}.opacity === '0' && ${trace}.animationPlayState === 'paused'
+      ${trace}.opacity === '0' && ${trace}.animationPlayState === 'paused' && !${session('claude-2')}?.dataset.agentWork
     `))
 
     await js(`document.querySelector('[aria-label="claude-2 메시지함"]').closest('.local-terminal-pane').querySelector('.xterm-helper-textarea').focus()`)
@@ -399,6 +445,8 @@ async function run() {
     `))
 
     await js(`${session('claude-2')}.querySelector('.local-terms-close').click()`)
+    await until(`document.querySelector('.confirm-dialog .btn-danger')?.textContent === '모두 종료'`)
+    await answer('모두 종료')
     const compactBadge = `${session('codex-3')}?.querySelector('.local-worktree-row > .local-terms-panes')`
     check('closing the second tab moves the split badge and agents into the worktree card', await until(`
       ${session('codex-3')}?.matches('.local-worktree') && ${compactBadge}?.textContent === '3세션' &&

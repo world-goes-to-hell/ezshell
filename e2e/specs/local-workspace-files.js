@@ -6,7 +6,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
-const { connect, createChecks, unlock, findPage, pageProblems, sleep } = require('../support/driver')
+const { connect, createChecks, unlock, findPage, pages, pageProblems, sleep } = require('../support/driver')
 
 const { check, finish } = createChecks()
 
@@ -51,13 +51,72 @@ const { check, finish } = createChecks()
       await page.js(`document.querySelector('.cm-content').focus()`)
       await page.type('EDITED ')
       await page.js(`[...document.querySelectorAll('button')].find(b => (b.getAttribute('aria-label') || '').startsWith('저장'))?.click()`)
+      const review = `document.querySelector('.remote-file-save-dialog')`
       const confirm = `document.querySelector('.remote-file-save-dialog .btn-primary')`
+      const appFile = path.join(repo, 'src', 'app.txt')
+      check('the save review describes a local write', await page.until(`
+        ${review}?.querySelector('.modal-title').textContent.trim() === '로컬 파일에 저장' &&
+        ${review}.querySelector('.remote-file-dialog-text').textContent.includes('로컬 파일에 저장합니다.') &&
+        ${confirm}.textContent.trim() === '저장'`, 8000))
+
+      fs.appendFileSync(appFile, 'changed outside the editor\n')
+      await page.js(`${confirm}.click()`)
+      const conflict = `document.querySelector('.remote-file-dialog:has(.remote-file-dialog-actions)')`
+      check('the save conflict describes the local file on disk', await page.until(`
+        ${conflict}?.querySelector('.modal-title').textContent.trim() === '로컬 파일이 바뀌었습니다' &&
+        ${conflict}.querySelector('.remote-file-dialog-text').textContent.includes('디스크의 최신 내용')`, 8000))
+      await page.js(`${conflict}.querySelector('.btn-primary').click()`)
       await page.until(`!!${confirm} && !${confirm}.disabled`, 8000)
       await page.js(`${confirm}.click()`)
-      const saved = await (async () => { for (let i = 0; i < 40; i++) { if (fs.readFileSync(path.join(repo, 'src', 'app.txt'), 'utf8').includes('EDITED')) return true; await sleep(200) } return false })()
-      check('saving writes the file on disk', saved, fs.readFileSync(path.join(repo, 'src', 'app.txt'), 'utf8'))
-      await page.js(`[...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'Git (HEAD) 와 비교')?.click()`)
+      const saved = await (async () => { for (let i = 0; i < 40; i++) { if (fs.readFileSync(appFile, 'utf8').includes('EDITED')) return true; await sleep(200) } return false })()
+      check('saving writes the file on disk', saved, fs.readFileSync(appFile, 'utf8'))
+      await page.js(`[...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'Git 이력 비교')?.click()`)
       check('the comparison list offers the file at Git HEAD', await page.until(`[...document.querySelectorAll('.remote-backup-item')].some(i => i.classList.contains('is-server') && !!i.querySelector('.is-git'))`, 8000))
+
+      const selected = `document.querySelector('.remote-file-tab-select[aria-selected="true"] .remote-file-tab-name')?.textContent`
+      const visibleEditor = `document.querySelector('.remote-file-pane:not([hidden]) .cm-content')`
+      const cursorLabel = `[...document.querySelectorAll('.remote-file-pane:not([hidden]) .remote-file-status span')].find(span => span.textContent.startsWith('줄 '))?.textContent`
+      const tab = name => `[...document.querySelectorAll('.remote-file-tab-select')].find(t => t.querySelector('.remote-file-tab-name').textContent === ${JSON.stringify(name)})`
+      await js(`${row('application.properties')}.click()`)
+      check('opening a second file adds a tab to the same window', await page.until(`${selected} === 'application.properties' && !!${tab('app.txt')}`) &&
+        (await pages()).filter(p => p.url.includes('remoteFileMode')).length === 1)
+      await js(`${row('app.txt')}.click()`)
+      check('reopening a file selects its existing tab', await page.until(`${selected} === 'app.txt' && document.querySelectorAll('.remote-file-tab-select').length === 2`))
+
+      await page.send('Page.bringToFront')
+      await page.js(`${visibleEditor}.focus()`)
+      await page.send('Input.insertText', { text: 'UNSAVED ' })
+      check('the edited tab shows an unsaved marker', await page.until(`!!${tab('app.txt')}.querySelector('.remote-file-tab-dirty')`))
+      const cursorBeforeDetach = await page.js(cursorLabel)
+
+      const dragTab = async (down) => {
+        const [x, y] = await page.center(tab('app.txt'))
+        const endX = down ? x : x + 22
+        const endY = down ? y + 85 : y
+        await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 })
+        await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: endX, y: endY, buttons: 1 })
+        await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: endX, y: endY, button: 'left', clickCount: 1 })
+      }
+      await dragTab(false)
+      check('dragging within the bar keeps the file in its tab', await page.js(`!!${tab('app.txt')}`) &&
+        (await pages()).filter(p => p.url.includes('remoteFileMode')).length === 1)
+      await dragTab(true)
+      const detached = await findPage(p => p.url.includes('remoteFileMode') && p.id !== target.id, 8000)
+      check('dropping a tab away from the bar opens a new window', !!detached && await page.until(`!${tab('app.txt')} && ${selected} === 'application.properties'`))
+      if (detached) {
+        const detachedPage = await connect(p => p.id === detached.id)
+        check('the detached editor preserves the unsaved text', await detachedPage.until(`(${visibleEditor}?.textContent ?? '').includes('UNSAVED')`) &&
+          !fs.readFileSync(path.join(repo, 'src', 'app.txt'), 'utf8').includes('UNSAVED'))
+        check('the caret stays at the same place', Boolean(cursorBeforeDetach) && await detachedPage.js(`${cursorLabel} === ${JSON.stringify(cursorBeforeDetach)}`))
+        await detachedPage.send('Page.bringToFront')
+        await detachedPage.js(`${visibleEditor}.focus()`)
+        const undo = { key: 'z', code: 'KeyZ', windowsVirtualKeyCode: 90, modifiers: process.platform === 'darwin' ? 4 : 2 }
+        await detachedPage.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...undo })
+        await detachedPage.send('Input.dispatchKeyEvent', { type: 'keyUp', ...undo })
+        check('undo still works on the transferred edit', await detachedPage.until(`(${visibleEditor}?.textContent ?? '').includes('EDITED') && !${visibleEditor}.textContent.includes('UNSAVED')`))
+        detachedPage.close()
+        try { await fetch(`${process.env.E2E_CDP}/json/close/${detached.id}`) } catch { /* gone */ }
+      }
       const problems = await pageProblems(page)
       check('the file window has no console errors or CSP refusals', problems.length === 0, problems.join(' || '))
       page.close()
@@ -84,6 +143,24 @@ const { check, finish } = createChecks()
       await readme.page.js(`document.querySelector('.remote-view-option[data-mode="split"]').click()`)
       check('side by side shows the editor and the document', await readme.page.until(`!document.querySelector('.remote-edit-pane').hidden && !!document.querySelector('.markdown-preview .markdown-body h1') && !!document.querySelector('.markdown-split-divider')`, 5000))
       await readme.page.send('Page.bringToFront')
+      const activeMode = `document.querySelector('.remote-view-option[aria-pressed="true"]')`
+      await readme.page.move(...await readme.page.center(activeMode))
+      const modeColors = await readme.page.js(`(() => {
+        const root = document.documentElement
+        const theme = root.getAttribute('data-theme')
+        const button = ${activeMode}
+        try {
+          return ['ayu-mirage', 'minimal-dark'].map(id => {
+            root.setAttribute('data-theme', id)
+            return [getComputedStyle(button).color, getComputedStyle(button.querySelector('svg')).color]
+          })
+        } finally {
+          if (theme === null) root.removeAttribute('data-theme')
+          else root.setAttribute('data-theme', theme)
+        }
+      })()`)
+      check('the selected Markdown label and icon use the theme foreground, including on hover',
+        modeColors[0].every(color => color === 'rgb(22, 24, 28)') && modeColors[1].every(color => color === 'rgb(255, 255, 255)'), JSON.stringify(modeColors))
       await readme.page.js(`(() => { const view = document.querySelector('.cm-content'); view.focus(); const s = getSelection(); s.selectAllChildren(view); s.collapseToEnd() })()`)
       await readme.page.enter()
       await readme.page.type('## Typed')
@@ -93,7 +170,9 @@ const { check, finish } = createChecks()
       await readme.page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: at.x, y: at.y, button: 'left', buttons: 1, clickCount: 1 })
       for (const step of [0.25, 0.5, 0.75, 1]) await readme.page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: at.x + (at.to - at.x) * step, y: at.y, buttons: 1 })
       await readme.page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: at.to, y: at.y, button: 'left', clickCount: 1 })
-      const after = await readme.page.js(`document.querySelector('.remote-edit-pane').getBoundingClientRect().width / document.querySelector('.remote-file-body').getBoundingClientRect().width`)
+      const splitRatio = `document.querySelector('.remote-edit-pane').getBoundingClientRect().width / document.querySelector('.remote-file-body').getBoundingClientRect().width`
+      await readme.page.until(`Math.abs((${splitRatio}) - 0.3) < 0.05`, 3000)
+      const after = await readme.page.js(splitRatio)
       const stored = await readme.page.js(`localStorage.getItem('remoteMarkdownSplit')`)
       check('dragging the divider narrows the editor and is remembered', Math.abs(before - 0.5) < 0.05 && Math.abs(after - 0.3) < 0.05 && Math.abs(Number(stored) - 0.3) < 0.05, JSON.stringify({ before, after, stored }))
 

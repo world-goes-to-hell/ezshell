@@ -28,6 +28,52 @@
   font: 600 11px / 1.5 var(--font-mono);
 }
 
+.backup-git-revision {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.backup-git-revision > :first-child {
+  flex: none;
+}
+
+.backup-git-subject {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-backup-header.is-git-compare {
+  flex: none;
+  height: auto;
+  min-height: 52px;
+  padding-block: 8px;
+}
+
+.backup-git-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.backup-git-description {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.backup-entry-chevron {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.backup-entry:is(:hover, :focus-visible, .is-selected) .backup-entry-chevron {
+  color: var(--text-link);
+}
+
 /* What the two icons in the list mean: icon, name and explanation line up in columns */
 .backup-legend {
   display: flex;
@@ -120,23 +166,20 @@
 }
 
 .backup-preview-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin: 8px 12px 12px;
 }
 
-.backup-compare-btn,
-.backup-restore-btn {
-  display: inline-flex;
+.backup-preview-actions > :is(.backup-compare-btn, .backup-restore-btn) {
+  display: flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
+  margin: 0;
   padding: 7px 10px;
   font-size: 13px;
-}
-
-.backup-compare-btn {
-  flex: 1;
 }
 
 /* ---------- The file window body while comparing ---------- */
@@ -162,6 +205,7 @@
 
 .remote-compare-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   min-height: 38px;
@@ -229,12 +273,18 @@
   cursor: pointer;
 }
 
-.remote-compare-close {
+.remote-compare-toolbar .remote-compare-close {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  font-size: 12.5px;
+  flex: none;
+  gap: 5px;
+  min-height: 29px;
+  margin: 0;
+  margin-inline-start: auto;
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* Titles above the two sides; the merge view puts its revert column between them */

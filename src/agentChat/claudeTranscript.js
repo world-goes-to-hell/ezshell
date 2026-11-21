@@ -1,4 +1,5 @@
 const { promptText } = require('../agentHistory/claude.js')
+const { createTurnUsage } = require('./turnUsage.js')
 const { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, clipLines, addedLines, todosOf, readableOutput, readableValue } = require('./items.js')
 
 // An MCP tool (`mcp__<server>__<tool>`): its arguments and answer are JSON, shown as an outline
@@ -78,6 +79,7 @@ function createClaudeParser() {
   // 2026-11-20); after an automatic compaction it goes before whatever comes next
   let pendingNotice = null
   let heldAt = 0
+  const turns = createTurnUsage()
 
   function attach(item, result) {
     item.tool.result = isMcpTool(item.tool.name) ? clip(readableOutput(result.result), LIMITS.result) : result.result
@@ -99,6 +101,11 @@ function createClaudeParser() {
       if (pendingNotice) out.push(pendingNotice)
       pendingNotice = { id: `notice:${line.uuid ?? time}`, kind: 'notice', time, text: '이전 대화를 요약했습니다' }
       heldAt = Date.now()
+      return finish(out)
+    }
+    if (line.type === 'system' && line.subtype === 'turn_duration') {
+      const owner = turns.duration(line.durationMs, { older })
+      if (owner) out.push(owner)
       return finish(out)
     }
     if (line.type === 'assistant' && Array.isArray(line.message?.content)) {
@@ -129,21 +136,41 @@ function createClaudeParser() {
           out.push(item)
         }
       })
+      // What the answer cost: one message's usage is repeated on each of its block lines
+      const usage = line.message.usage
+      if (usage && typeof line.message.id === 'string') {
+        const owner = turns.add(line.message.id, {
+          input: (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0),
+          cached: usage.cache_read_input_tokens ?? 0,
+          output: usage.output_tokens ?? 0
+        }, { older, at: time })
+        if (owner) out.push(owner)
+      }
     }
     if (line.type === 'user') {
       const command = commandText(line)
       if (line.isCompactSummary) {
         // The summary that follows a compact boundary: the boundary's notice already says it (once, not twice)
       } else if (command) {
-        out.push({ id: `user:${line.uuid ?? time}`, kind: 'user', time, text: clip(command, LIMITS.text) })
+        const item = { id: `user:${line.uuid ?? time}`, kind: 'user', time, text: clip(command, LIMITS.text) }
+        turns.start(item, { older })
+        out.push(item)
       } else {
         const prompt = promptText(line)
-        if (prompt !== null) {
-          out.push(INTERRUPTED.test(prompt)
-            ? { id: `notice:${line.uuid ?? time}`, kind: 'notice', time, text: '중지했습니다' }
-            : { id: `user:${line.uuid ?? time}`, kind: 'user', time, text: clip(prompt, LIMITS.text) })
-        }
         const content = line.message?.content
+        const hasImage = Array.isArray(content) && content.some(block => block?.type === 'image')
+        const imageOnly = !line.isMeta && hasImage && content.every(block => block?.type === 'image')
+        if (prompt !== null && INTERRUPTED.test(prompt)) {
+          out.push({ id: `notice:${line.uuid ?? time}`, kind: 'notice', time, text: '중지했습니다' })
+        } else if (prompt !== null || imageOnly) {
+          const item = {
+            id: `user:${line.uuid ?? time}`, kind: 'user', time,
+            ...(prompt !== null ? { text: clip(prompt, LIMITS.text) } : {}),
+            ...(hasImage ? { hasImage: true } : {})
+          }
+          turns.start(item, { older })
+          out.push(item)
+        }
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block?.type !== 'tool_result' || typeof block.tool_use_id !== 'string') continue
@@ -183,7 +210,7 @@ function createClaudeParser() {
     return [notice]
   }
 
-  return { feed, flush }
+  return { feed, flush, beginOlder: turns.beginOlder, endOlder: turns.endOlder }
 }
 
 module.exports = { createClaudeParser, toolSummary, remember }

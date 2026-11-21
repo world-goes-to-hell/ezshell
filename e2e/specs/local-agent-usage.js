@@ -3,7 +3,7 @@
 // line script with input shaped like Claude Code's.
 const fs = require('fs')
 const path = require('path')
-const { connect, createChecks, sleep, unlock, openLocalProject } = require('../support/driver')
+const { connect, createChecks, sleep, unlock, openLocalAgent } = require('../support/driver')
 
 const { check, finish } = createChecks()
 const profile = process.env.E2E_PROFILE
@@ -42,14 +42,7 @@ async function inAgent(agent, command) {
   await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([profile]))})`)
 
   const openAgent = async (kind, id) => {
-    await openLocalProject(driver)
-    await until(`!!document.querySelector('#local-project-agent')`)
-    await js(`(() => {
-      const select = document.querySelector('#local-project-agent')
-      select.value = ${JSON.stringify(kind)}
-      select.dispatchEvent(new Event('change', { bubbles: true }))
-    })()`)
-    await js(`document.querySelector('.local-project-dialog button[type=submit]').click()`)
+    await openLocalAgent(driver, kind, profile)
     return until(`document.body.textContent.includes('fixture ready: ${id}')`, 30000)
   }
 

@@ -1,5 +1,117 @@
 /* Server file window (edit / preview): title bar, editor or preview, status bar */
 
+.remote-file-stack {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.remote-file-header {
+  flex: none;
+}
+
+.remote-file-panels {
+  flex: 1;
+  min-height: 0;
+}
+
+.remote-file-pane,
+.remote-file-pane > .remote-file-window {
+  height: 100%;
+}
+
+.remote-file-pane[hidden] {
+  display: none;
+}
+
+.remote-file-tabs {
+  display: flex;
+  flex-shrink: 0;
+  overflow-x: auto;
+  padding-inline-start: 4px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  scrollbar-width: thin;
+}
+
+.remote-file-tab {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  max-width: 230px;
+  border-inline-end: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.remote-file-tab.is-active {
+  background: var(--bg-primary);
+  box-shadow: inset 0 2px var(--accent);
+  color: var(--text-primary);
+}
+
+.remote-file-tab.is-dragged {
+  background: var(--accent-muted);
+}
+
+.remote-file-tab-select,
+.remote-file-tab-close {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.remote-file-tab-select {
+  gap: 6px;
+  min-width: 0;
+  padding: 0 6px 0 10px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.remote-file-tabs.is-dragging .remote-file-tab-select {
+  cursor: grabbing;
+}
+
+.remote-file-tab-select svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.remote-file-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.remote-file-tab-dirty {
+  flex: 0 0 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.remote-file-tab-close {
+  justify-content: center;
+  width: 24px;
+  height: 23px;
+  margin-inline-end: 4px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.remote-file-tab-select:hover,
+.remote-file-tab-close:hover {
+  background: var(--bg-hover);
+}
+
 .remote-file-window {
   display: flex;
   flex-direction: column;
@@ -8,11 +120,11 @@
   color: var(--text-primary);
 }
 
-.remote-file-window .popout-title-action.is-active {
+.remote-file-stack .popout-title-action.is-active {
   background: var(--accent-muted);
 }
 
-.remote-file-window .popout-title-action:disabled {
+.remote-file-stack .popout-title-action:disabled {
   color: var(--text-muted);
   cursor: not-allowed;
   background: transparent;
@@ -56,12 +168,61 @@
   flex: 1;
 }
 
-.remote-file-status-keys {
-  color: var(--text-muted);
+.remote-file-status-details {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: inherit;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
-@media (max-width: 760px) {
-  .remote-file-status-keys {
+.remote-file-status > .remote-file-shortcut-help {
+  flex: none;
+  gap: 5px;
+  width: auto;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+
+.remote-file-shortcut-tooltip {
+  z-index: 1000;
+  max-width: var(--radix-tooltip-content-available-width);
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-md);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.remote-file-shortcut-tooltip dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 10px;
+  margin: 0;
+}
+
+.remote-file-shortcut-row {
+  display: contents;
+}
+
+.remote-file-shortcut-row kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .remote-file-shortcut-help > span {
     display: none;
   }
 }

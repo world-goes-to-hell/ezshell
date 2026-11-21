@@ -59,6 +59,40 @@ const { check, finish } = createChecks()
   await selectTab(mcpTabs, 'SSH MCP')
   check('selecting the SSH subtab returns to its settings', await until(`${activeMcpPanel}?.textContent.includes('ezshell-ssh-mcp')`))
 
+  await selectTab(topTabs, '터미널')
+  const scrollback = `document.querySelector('button[aria-label^="터미널 출력 보관 줄 수"]')`
+  check('terminal scrollback defaults to 10,000 lines', await until(`${scrollback}?.textContent.trim() === '10,000줄 (기본)'`))
+  await driver.click(...await driver.center(scrollback))
+  const twoThousand = `[...document.querySelectorAll('[role=menuitemradio]')].find(item => item.textContent.trim() === '2,000줄')`
+  await until(`!!${twoThousand}`)
+  await driver.click(...await driver.center(twoThousand))
+  check('choosing 2,000 lines persists the limit for new terminals', await until(`
+    ${scrollback}?.textContent.trim() === '2,000줄' && localStorage.getItem('ezshell.terminalScrollback') === '2000'
+  `))
+
+  await selectTab(topTabs, '백업')
+  await until(`!!document.querySelector('.backup-tabs')`, 5000)
+  await js(`[...document.querySelectorAll('.backup-tabs button')].find(b => b.textContent.includes('다른 프로그램에서 가져오기')).click()`)
+  await js(`document.querySelector('.session-backup .backup-section .backup-btn').click()`)
+  const fileGuideToggle = `document.querySelector('.xi-file-guide-toggle')`
+  const fileGuide = `document.querySelector('.xi-file-guide')`
+  check('the import file picker has a compact guide control', await until(`
+    ${fileGuideToggle}?.previousElementSibling?.matches('.xi-source.is-file') && ${fileGuide}.hidden
+  `))
+  await js(`${fileGuideToggle}.click()`)
+  check('the guide lists the programs, formats, and how to show an extensionless config', await js(`(() => {
+    const guide = ${fileGuide}
+    const programs = [...guide.querySelectorAll('dt')].map(item => item.textContent)
+    return ${fileGuideToggle}.getAttribute('aria-expanded') === 'true' && !guide.hidden
+      && programs.join(',') === 'Xshell,Xftp,PuTTY,MobaXterm,Tabby,OpenSSH'
+      && ['.xts', '.xsh', '.xfp', '.reg', '.mxtsessions', 'MobaXterm.ini', 'config.yaml', '.yml', '~/.ssh/config', '모든 파일']
+        .every(text => guide.textContent.includes(text))
+  })()`))
+  await js(`${fileGuideToggle}.click()`)
+  check('the guide can be collapsed before importing', await js(`${fileGuide}.hidden && ${fileGuideToggle}.getAttribute('aria-expanded') === 'false'`))
+  await js(`[...document.querySelectorAll('.xi-actions button')].find(button => button.textContent === '취소').click()`)
+  await until(`!document.querySelector('.xi-dialog')`)
+
   check('the 화면 설정 tab is in 설정 > 백업', await openBackupTab(), String(await js(`[...document.querySelectorAll('.backup-tabs button')].map(b => b.textContent).join(' | ')`)))
   check('it lists what travels', await js(`document.querySelectorAll('.ui-settings-list li').length === 4`))
 

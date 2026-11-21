@@ -31,25 +31,41 @@ function draw() {
     process.stdout.write('\x1b[2J\x1b[Hfixture ready: ' + id + '\r\n' + approval)
     return
   }
-  const unfocusedAttachment = claude && process.env.EZSHELL_TEST_AGENT_CHAT && draft.startsWith('첨부 이미지를 열어 확인해 주세요.')
+  if (!claude && process.env.EZSHELL_TEST_AGENT_CHAT && ['', '/fast', '/ultrafas', '/ultrafast'].includes(draft)) {
+    const setting = path.join(profile, id + '-speed')
+    const tier = fs.existsSync(setting) ? fs.readFileSync(setting, 'utf8') : ''
+    const speed = tier === 'priority' ? ' fast' : tier === 'ultrafast' ? ' ultrafast' : ''
+    const modelFile = path.join(profile, id + '-speed-model')
+    const model = fs.existsSync(modelFile) ? fs.readFileSync(modelFile, 'utf8') : 'gpt-6.2-sol'
+    const ultrafast = fs.existsSync(path.join(profile, id + '-ultrafast-eligible'))
+    const rows = ['fixture ready: ' + id]
+    if (tier) rows.push('• Service tier set to ' + tier, '')
+    if (draft === '/fast') rows.push('› /fast     toggle faster responses', '')
+    if (ultrafast && draft.startsWith('/ultrafas')) rows.push('› /ultrafast     toggle fastest responses', '')
+    const row = rows.length + 1
+    rows.push(indicator + draft, '', `  ${model} medium${speed} · /workspace`)
+    process.stdout.write('\x1b[2J\x1b[H' + rows.join('\r\n') + `\x1b[${row};${indicator.length + draft.length + 1}H`)
+    return
+  }
+  const lines = draft.split('\n')
+  const separator = lines.indexOf('')
+  const paths = separator === -1 ? lines : lines.slice(0, separator)
+  const unfocusedAttachment = claude && process.env.EZSHELL_TEST_AGENT_CHAT && paths.length > 0 &&
+    paths.every(file => file.endsWith('.png') && fs.existsSync(file))
   // The fixture's stdout is not a TTY on Windows. Keep both rules on one row even in a split pane.
   const ruleWidth = unfocusedAttachment ? 16 : Math.max(8, Math.min(process.stdout.columns || 80, 80) - 4)
   const border = claude ? '─'.repeat(ruleWidth) + '\r\n' : ''
   const footer = unfocusedAttachment ? '\r\n' + border + '\r\n  ⏵⏵ auto mode on\x1b[3;3H' : ''
   let display = draft
   if (unfocusedAttachment) {
-    const [header, ...lines] = draft.split('\n')
-    const separator = lines.indexOf('')
-    const paths = separator === -1 ? lines : lines.slice(0, separator)
-    if (paths.every(file => file.endsWith('.png') && fs.existsSync(file))) {
-      // Actual Claude converts the paths of existing PNGs to image tokens before drawing the draft.
-      const tokens = paths.map((_, index) => '[Image #' + (index + 1) + ']').join(' ')
-      display = tokens + header + (separator === -1 ? '' : '\n' + lines.slice(separator + 1).join('\n'))
-    }
+    const tokens = paths.map((_, index) => '[Image #' + (index + 1) + ']').join(' ')
+    display = tokens + (separator === -1 ? '' : '\n' + lines.slice(separator + 1).join('\n'))
   }
   process.stdout.write('\x1b[2J\x1b[Hfixture ready: ' + id + '\r\n' + border + indicator + display.replace(/\r?\n/g, '\r\n') + footer)
 }
 
+// How it was started (local-agent-sleep: the resumed agent gets the session id and the kept options)
+fs.writeFileSync(path.join(profile, id + '-argv'), JSON.stringify(process.argv.slice(3)))
 process.stdout.write('\x1b[?2004h\x1b]0;✳ ' + id + '\x07')
 draw()
 process.stdout.on('resize', draw)
@@ -115,7 +131,12 @@ setInterval(() => {
     process.stdout.write('\x1b]7501;' + fs.readFileSync(statusPath, 'utf8') + '\x1b\\')
     fs.unlinkSync(statusPath)
   }
-  if (fs.existsSync(exitPath)) process.exit(Number(fs.readFileSync(exitPath, 'utf8')))
+  if (fs.existsSync(exitPath)) {
+    const code = Number(fs.readFileSync(exitPath, 'utf8'))
+    // Removed so that the agent typed again in the same shell (resumed after a sleep) keeps running
+    fs.unlinkSync(exitPath)
+    process.exit(code)
+  }
   if (client && !callingTool && fs.existsSync(requestPath)) {
     const request = JSON.parse(fs.readFileSync(requestPath, 'utf8'))
     fs.unlinkSync(requestPath)

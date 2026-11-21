@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { SessionList } from './SessionList'
 import { LocalTerminalList } from './LocalTerminalList'
 import { SessionSearchBox } from './SessionSearchBox'
+import { useWorkingLocalTabs } from '../Terminal/AgentMessages'
 import { sessionSearchTerms, searchSessions, stepMatch } from '../../lib/sessionSearch'
 import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore, type Session } from '../../stores/sessionStore'
@@ -16,14 +17,18 @@ import { useShortcutsStore } from '../../stores/shortcutsStore'
 import { useSidebarPeek } from '../../hooks/useSidebarPeek'
 import { useSidebarConnectionMotion } from '../../hooks/useSidebarConnectionMotion'
 import { useProjectServers } from '../../hooks/useProjectServers'
-import { railCounts, linkedSessionIdsOf } from '../../lib/sidebarRail'
+import { railCounts } from '../../lib/sidebarRail'
+import { groupTabsBySession } from '../../lib/sessionTabs'
+import type { TabGroupView } from '../../hooks/useTabGroups'
 import './SidebarTree.css'
 
 const TOGGLE_SHORTCUT_ID = 'toggle-sidebar'
 
 interface SidebarProps {
+  tabGroupView: Pick<TabGroupView, 'groups' | 'projects'>
   onNewConnection: () => void
   onQuickConnect: (session: Session, source?: HTMLElement) => void
+  onConnectProjectSession: (session: Session, workGroup: string) => void
   onEditSession?: (session: any) => void
   onDuplicateSession?: (session: any) => void
   onOpenQuickConnect?: () => void
@@ -38,7 +43,7 @@ interface SidebarProps {
   onCloseTerminal?: (terminalId: string) => void
 }
 
-export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onImportSession, onLocalTerminal, onLocalFolder, onCloseTerminal }: SidebarProps) {
+export function Sidebar({ tabGroupView, onNewConnection, onQuickConnect, onConnectProjectSession, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onImportSession, onLocalTerminal, onLocalFolder, onCloseTerminal }: SidebarProps) {
   const { sidebarMode, toggleSidebarMode, setSidebarMode } = useUIStore()
   const zenMode = useUIStore(state => state.zenMode)
   const { addFolder, saveToBackend } = useSessionStore()
@@ -66,10 +71,31 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
   const isLocalPeek = peekSection === 'local'
   const PreviewDestinationIcon = isLocalPeek ? RiListUnordered : RiComputerLine
   const isCompact = isFolded && !isPeekOpen
+  const workingTabs = useWorkingLocalTabs()
+  const hasWorkingAgent = workingTabs.size > 0
   // Tabs of sessions tied to a local project count under local work (lib/sidebarRail.ts)
   const terminals = useTerminalStore(state => state.terminals)
   const projectServers = useProjectServers()
-  const rail = useMemo(() => railCounts(terminals, linkedSessionIdsOf(projectServers)), [terminals, projectServers])
+  const { connectionTabs, serverTabs, rail } = useMemo(() => {
+    const serverTabs = new Map<string, ReturnType<typeof groupTabsBySession>>()
+    const projectTabIds = new Set<string>()
+    const known = new Set(tabGroupView.projects.map(project => project.key))
+    for (const group of tabGroupView.groups) {
+      const linked = projectServers[group.key]
+      if (!known.has(group.key) || !linked?.length) continue
+      const ids = new Set(group.tabIds.filter(id => {
+        const saved = terminals.get(id)?.connectConfig?.savedSessionId
+        return saved && linked.includes(saved)
+      }))
+      serverTabs.set(group.key, groupTabsBySession(terminals, id => ids.has(id)))
+      for (const id of ids) projectTabIds.add(id)
+    }
+    return {
+      serverTabs,
+      connectionTabs: groupTabsBySession(terminals, id => !projectTabIds.has(id)),
+      rail: railCounts(terminals, projectTabIds)
+    }
+  }, [terminals, projectServers, tabGroupView.groups, tabGroupView.projects])
   const { connected: connectedTabs, lost: lostTabs } = rail.sessions
   const { terminals: localTabs, connected: localServerTabs, lost: localLostTabs } = rail.local
   const mcpBusy = useMcpActivityStore(state => state.items.filter(item => item.state === 'running' || item.state === 'waiting').length)
@@ -192,13 +218,34 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
           )}
           {/* The list area: sessions above, the open local terminals (when there are any) below */}
           <div className="sidebar-lists">
-            <SessionList search={{ terms: searchTerms, result: searchResult, currentId: currentMatchId }} onQuickConnect={onQuickConnect} onEditSession={onEditSession} onDuplicateSession={onDuplicateSession} onAddSession={onAddSession} onImportSession={onImportSession} />
-            {onCloseTerminal && <LocalTerminalList fillAvailableSpace={isLocalPeek} onOpen={onLocalTerminal} onClose={onCloseTerminal} onOpenFolder={onLocalFolder} onConnectSession={session => onQuickConnect(session)} />}
+            <SessionList
+              tabsBySession={connectionTabs}
+              search={{ terms: searchTerms, result: searchResult, currentId: currentMatchId }}
+              onQuickConnect={onQuickConnect}
+              onEditSession={onEditSession}
+              onDuplicateSession={onDuplicateSession}
+              onAddFolder={handleAddFolder}
+              onAddSession={onAddSession}
+              onImportSession={onImportSession}
+            />
+            {onCloseTerminal && (
+              <LocalTerminalList
+                fillAvailableSpace={isLocalPeek}
+                workingTabs={workingTabs}
+                serverTabs={serverTabs}
+                onOpen={onLocalTerminal}
+                onClose={onCloseTerminal}
+                onOpenFolder={onLocalFolder}
+                onConnectSession={onConnectProjectSession}
+              />
+            )}
           </div>
           {peekSection && (
             <button
               type="button"
               className="sidebar-peek-switch"
+              data-agent-work={!isLocalPeek && hasWorkingAgent ? 'working' : undefined}
+              aria-description={!isLocalPeek && hasWorkingAgent ? '작업 중인 에이전트 있음' : undefined}
               onClick={() => switchPreview(isLocalPeek ? 'sessions' : 'local')}
             >
               <PreviewDestinationIcon size={16} aria-hidden="true" />
@@ -234,7 +281,9 @@ export function Sidebar({ onNewConnection, onQuickConnect, onEditSession, onDupl
             type="button"
             className="rail-group"
             data-peek-target="local"
+            data-agent-work={isCompact && hasWorkingAgent ? 'working' : undefined}
             aria-label="로컬 작업 미리보기"
+            aria-description={hasWorkingAgent ? '작업 중인 에이전트 있음' : undefined}
             aria-controls="sidebar-content"
             aria-expanded={isPeekOpen && isLocalPeek}
             title={`로컬 작업 · 열린 터미널 ${localTabs}개${localServerTabs > 0 ? ` · 연결된 서버 탭 ${localServerTabs}개` : ''}${localLostTabs > 0 ? ` · 끊긴 서버 탭 ${localLostTabs}개` : ''}`}

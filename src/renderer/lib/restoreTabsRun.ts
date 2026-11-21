@@ -8,7 +8,7 @@ import { cdCommand, type RestoreRecord, type RestoreTab } from './restoreTabs'
 
 export interface RestoreDeps {
   /** Opens a tab of a saved session the way the sidebar does; the new tab's id, or why not */
-  openSaved: (savedSessionId: string) => Promise<{ id?: string; error?: string }>
+  openSaved: (savedSessionId: string, workGroup?: string) => Promise<{ id?: string; error?: string }>
   /** Opens a local terminal tab; its id, or null */
   openLocal: (tab: Extract<RestoreTab, { kind: 'local' }>) => Promise<string | null>
   /** Tells how far it got */
@@ -119,7 +119,7 @@ export async function restoreTabs(record: RestoreRecord, deps: RestoreDeps): Pro
     if (tab.kind === 'quick') { outcome.quick.push(tab); continue }
     try {
       if (tab.kind === 'ssh') {
-        const opened = await deps.openSaved(tab.savedSessionId)
+        const opened = await deps.openSaved(tab.savedSessionId, tab.workGroup)
         if (!opened.id) throw new Error(opened.error || '연결하지 못했습니다.')
         ids[index] = opened.id
         shapeTab(opened.id, tab)

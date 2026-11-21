@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createLocalShells, defaultShell, MAX_SHELLS, BACKLOG_CHARS } from './localShell.js'
+import { createLocalShells, defaultShell, BACKLOG_CHARS } from './localShell.js'
 
 function fakePty() {
   const pty = {
@@ -230,31 +230,30 @@ describe('createLocalShells', () => {
     expect(shells.count()).toBe(0)
   })
 
-  it('refuses more shells than the limit', () => {
+  it('keeps more than ten local shells open at once', () => {
     const { shells } = setup()
-    for (let i = 0; i < MAX_SHELLS; i++) shells.open()
-    expect(() => shells.open()).toThrow(/10개/)
+    const opened = Array.from({ length: 12 }, () => shells.open())
+    expect(shells.count()).toBe(12)
+    expect(shells.list().map(shell => shell.id)).toEqual(opened.map(shell => shell.id))
   })
 
-  it('prepares one replacement at the limit and keeps the original shell until adoption', () => {
+  it('prepares one replacement per shell and keeps the original until adoption', () => {
     const { shells, ptys, spawn } = setup()
     const previous = shells.open({ cols: 96, rows: 35 })
-    const others = Array.from({ length: MAX_SHELLS - 1 }, () => shells.open())
     const options = { agent: 'claude', resume: 'abcdef12-1111-4222-8333-444455556666', replacementFor: previous.id }
     spawn.mockImplementationOnce(() => { throw new Error('PTY failed') })
     expect(() => shells.open(options)).toThrow('PTY failed')
-    expect(shells.count()).toBe(MAX_SHELLS)
+    expect(shells.count()).toBe(1)
     expect(ptys[0].kill).not.toHaveBeenCalled()
 
     const replacement = shells.open(options)
     expect(replacement.id).not.toBe(previous.id)
-    expect(ptys[MAX_SHELLS].options).toMatchObject({ cols: 96, rows: 35 })
+    expect(ptys[1].options).toMatchObject({ cols: 96, rows: 35 })
     expect(() => shells.open(options)).toThrow(/바꾸는 중/)
-    expect(() => shells.open({ ...options, replacementFor: others[0].id })).toThrow(/10개/)
     expect(ptys[0].kill).not.toHaveBeenCalled()
     shells.close(previous.id)
     expect(ptys[0].kill).toHaveBeenCalledOnce()
-    expect(shells.count()).toBe(MAX_SHELLS)
+    expect(shells.count()).toBe(1)
     expect(shells.attach(replacement.id)?.exited).toBe(false)
   })
 

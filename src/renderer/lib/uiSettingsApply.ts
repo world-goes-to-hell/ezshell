@@ -56,10 +56,11 @@ function applyTheme(value: string): void {
 }
 
 function applyUiStore(value: string): void {
-  const state = JSON.parse(value).state as { sidebarMode?: 'compact' | 'expanded'; appZoom?: number }
+  const state = JSON.parse(value).state as { sidebarMode?: 'compact' | 'expanded'; appZoom?: number; browserTabMaxWidth?: number }
   const store = useUIStore.getState()
   if (state.sidebarMode) store.setSidebarMode(state.sidebarMode)
   if (typeof state.appZoom === 'number') store.setAppZoom(state.appZoom)
+  if (typeof state.browserTabMaxWidth === 'number') store.setBrowserTabMaxWidth(state.browserTabMaxWidth)
 }
 
 /** The file's bindings replace the ones here: shortcuts not in the file go back to their defaults */

@@ -1,9 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentChatItem } from '../types'
-import { MAX_CHAT_ITEMS, diffLineKind, mergeChatItems, reconcileChatEchoes, shellAgentOf } from './agentChatItems'
+import { MAX_CHAT_ITEMS, diffLineKind, mergeChatItems, readSubagentActivity, reconcileChatEchoes, shellAgentOf, subagentDisplayText } from './agentChatItems'
 
 const item = (id: string, text = id): AgentChatItem => ({ id, kind: 'assistant', time: null, text })
 const ids = (items: AgentChatItem[]) => items.map(entry => entry.id)
+
+describe('subagent previews after a renderer update', () => {
+  it('hides encrypted Codex text still sent by an older main process, including clipped tokens', () => {
+    const token = 'gAAAA' + 'b0_q-2R'.repeat(20)
+    expect(subagentDisplayText(`${token}==`, 'codex')).toBe('')
+    expect(subagentDisplayText(`${token}\n…`, 'codex')).toBe('')
+    expect(subagentDisplayText('검색 결과를 정리했습니다', 'codex')).toBe('검색 결과를 정리했습니다')
+    expect(subagentDisplayText(token, 'claude')).toBe(token)
+  })
+
+  it('distinguishes a missing IPC handler from an empty or failed activity read', async () => {
+    const read = (load?: typeof window.electronAPI.agentChatSubagentPreview) => readSubagentActivity(load, 'local:1', 'child')
+    expect(await read()).toBe('restart-required')
+    expect(await read(async () => { throw new Error("Error: No handler registered for 'agent-chat-subagent-preview'") })).toBe('restart-required')
+    expect(await read(async () => { throw new Error('Read failed') })).toBe('unavailable')
+    expect(await read(async () => [])).toEqual([])
+  })
+})
 
 describe('merging chat frames', () => {
   it('appends new items and replaces one that came again (a tool with its result)', () => {
@@ -70,22 +88,39 @@ describe('reconciling messages sent in the chat', () => {
     expect(done.echoes).toEqual([])
   })
 
-  it('reconciles the first transcript frame containing an image-only send', () => {
-    const echo = { id: 'outgoing:image', text: '', time: 10000, hasImage: true }
-    const prompt = user('image', 10001, '첨부 이미지를 열어 확인해 주세요.\nC:/sample.png')
-    const result = reconcileChatEchoes([user(echo.id, echo.time, '스크린샷 첨부')], [prompt], 'reset', [echo])
-    expect(ids(result.items)).toEqual(['image'])
-    expect(result.echoes).toEqual([])
+  it.each(['', '첫 줄\n\n둘째 줄'])('reconciles stored image references with body %j', body => {
+    const echo = { id: 'outgoing:image', text: body, time: 10000, hasImage: true }
+    const path = 'C:\\tmp\\ezshell-clipboard-AbC123\\d74b21e8-46bd-4259-8345-d9a8c43b88b2.png'
+    for (const prefix of ['', '첨부 이미지를 열어 확인해 주세요.\n']) {
+      const prompt = user('image', 10001, prefix + [path, body].filter(Boolean).join('\n\n'))
+      const result = reconcileChatEchoes([user(echo.id, echo.time, body || '스크린샷 첨부')], [prompt], 'reset', [echo])
+      expect(ids(result.items)).toEqual(['image'])
+      expect(result.echoes).toEqual([])
+    }
   })
 
   it('reconciles native image messages with and without a text body', () => {
     for (const body of ['', '이미지전송 테스트\n\n두 이미지를 비교해 줘.']) {
       const echo = { id: 'outgoing:image', text: body, time: 10000, hasImage: true }
-      const transcript = user('image', 10001, ['[Image #1] [Image #2]첨부 이미지를 열어 확인해 주세요.', body].filter(Boolean).join('\n'))
-      const result = reconcileChatEchoes([user(echo.id, echo.time, body || '스크린샷 첨부')], [transcript], 'append', [echo])
-      expect(ids(result.items)).toEqual(['image'])
-      expect(result.echoes).toEqual([])
+      const local = user(echo.id, echo.time, body || '스크린샷 첨부')
+      const transcripts = [
+        user('image', 10001, ['[Image #1] [Image #2]', body].filter(Boolean).join('\n')),
+        user('image', 10001, ['[Image #1] [Image #2]첨부 이미지를 열어 확인해 주세요.', body].filter(Boolean).join('\n')),
+        { ...user('image', 10001, body), hasImage: true }
+      ]
+      for (const transcript of transcripts) {
+        const result = reconcileChatEchoes([local], [transcript], 'append', [echo])
+        expect(ids(result.items)).toEqual(['image'])
+        expect(result.echoes).toEqual([])
+      }
     }
+  })
+
+  it('keeps a pending image send alongside identical text without an attachment', () => {
+    const echo = { id: 'outgoing:image', text: '같은 내용', time: 10000, hasImage: true }
+    const result = reconcileChatEchoes([user(echo.id, echo.time, echo.text)], [user('plain', 10001, echo.text)], 'append', [echo])
+    expect(ids(result.items)).toEqual([echo.id, 'plain'])
+    expect(result.echoes).toEqual([echo])
   })
 })
 

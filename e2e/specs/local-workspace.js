@@ -62,6 +62,30 @@ const { check, finish } = createChecks()
   check('a terminal outside the worktrees goes under "다른 로컬 터미널"', await until(`document.querySelectorAll('.terminal-tab').length === 2 && ${q('.local-terms-group')}?.textContent === '다른 로컬 터미널' && document.querySelectorAll('.local-terms-scroll > .local-terms-list > .local-terms-item').length === 1`, 20000))
   await shot('local-workspace-1')
 
+  const featureSession = `${worktreeRow(feature)}?.dataset.localSessionId`
+  const featureId = JSON.stringify(await js(featureSession))
+  const otherSession = `${q('.local-terms-scroll > .local-terms-list > .local-terms-item')}?.dataset.localSessionId`
+  const otherId = JSON.stringify(await js(otherSession))
+  const closeFeature = `${worktreeRow(feature)}.querySelector('.local-worktree-row > .local-terms-close')`
+  const question = q('.confirm-dialog')
+  const cancel = q('.confirm-dialog .btn-secondary')
+  const confirm = q('.confirm-dialog .btn-danger')
+  await js(`${closeFeature}.click()`)
+  check('the worktree tab close warns that every session in the tab will end', await until(`
+    ${q('.confirm-dialog-message')}?.textContent.includes('이 탭에 열려 있는 세션이 모두 종료됩니다.') &&
+    ${confirm}?.textContent === '모두 종료' && document.activeElement === ${cancel} && ${featureSession} === ${featureId}
+  `))
+  await driver.enter()
+  check('cancel keeps the worktree tab open', await until(`!${question} && ${featureSession} === ${featureId}`))
+  await js(`${closeFeature}.click()`)
+  await until(`!!${confirm}`)
+  await js(`${confirm}.click()`)
+  check('confirm closes the worktree tab and leaves the other tab open', await until(`
+    !${featureSession} && !${closeFeature} && ${otherSession} === ${otherId}
+  `))
+  await js(`${worktreeRow(feature)}.querySelector('.local-worktree-open').click()`)
+  check('the worktree can be opened again', await until(`${featureSession} && ${featureSession} !== ${featureId}`))
+
   // No half-height cap: the pane may grow until the session list keeps about three rows
   check('the pane is not capped at half of the list area', await js(`getComputedStyle(${q('.local-terms')}).maxHeight !== '50%'`), await js(`getComputedStyle(${q('.local-terms')}).maxHeight`))
 
@@ -143,9 +167,25 @@ const { check, finish } = createChecks()
   await sleep(1500)
   check('a worktree registered as well adds no second project', await js(`document.querySelectorAll('.local-project').length === 1`))
   const tabsBefore = await js(`document.querySelectorAll('.terminal-tab').length`)
+  const registrationBefore = await js(`localStorage.getItem('ezshell.localProjects')`)
   await js(`${q('.local-project-remove')}.click()`)
-  check('the remove button takes the project and its worktrees off the tree', await until(`!document.querySelector('.local-project') && !document.querySelector('.local-worktree')`))
+  check('removing a local work asks first and names the project', await until(`
+    ${question}?.textContent.includes('로컬 작업 목록에서 빼기') &&
+    ${q('.confirm-dialog-message')}?.textContent.includes('work app') &&
+    document.activeElement === ${cancel} &&
+    localStorage.getItem('ezshell.localProjects') === ${JSON.stringify(registrationBefore)}
+  `))
+  await js(`${cancel}.click()`)
+  check('cancel leaves the registration and both worktrees in place', await until(`
+    !${question} && document.querySelectorAll('.local-worktree').length === 2 &&
+    localStorage.getItem('ezshell.localProjects') === ${JSON.stringify(registrationBefore)}
+  `))
+  await js(`${q('.local-project-remove')}.click()`)
+  await until(`!!${confirm}`)
+  await js(`${confirm}.click()`)
+  check('confirming takes the project and its worktrees off the tree', await until(`!document.querySelector('.local-project') && !document.querySelector('.local-worktree')`))
   check('both registered folders are gone from the list', await js(`localStorage.getItem('ezshell.localProjects') === '[]'`), await js(`localStorage.getItem('ezshell.localProjects')`))
+  check('the project files are still on disk', fs.existsSync(path.join(repo, 'README.md')) && fs.existsSync(path.join(feature, 'README.md')))
   check('the open local terminals stay', await js(`document.querySelectorAll('.terminal-tab').length === ${tabsBefore}`), `${tabsBefore} → ${await js(`document.querySelectorAll('.terminal-tab').length`)}`)
 
   finish()

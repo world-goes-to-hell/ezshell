@@ -53,6 +53,25 @@ describe('usage reports', () => {
     expect(sent.filter(item => item.channel === 'agent-usage').at(-1).payload).toEqual({ agentId: 'claude-1', shellId: 'local:1', usage: null })
   })
 
+  it('keeps the Codex model and picked effort on usage-only reports from the same session', async () => {
+    const { sent } = await setup()
+    const id = messages.register('codex', 'local:2', root, {}).env.EZSHELL_AGENT_ID
+    const report = { ...usage, agent: 'codex', sessionId: '01a1ec18-9b8a-71c1-839d-2e31c010300f', model: 'gpt-6', effort: 'high' }
+    messages.setUsage(id, report)
+    messages.applyPicked('local:2', { effort: 'xhigh' })
+    messages.setUsage(id, { ...report, model: null, effort: null, context: { percent: 45, size: 1000000 } })
+
+    const latest = sent.filter(item => item.channel === 'agent-usage').at(-1).payload
+    expect(latest.usage).toMatchObject({ model: 'gpt-6', effort: 'xhigh', context: { percent: 45 } })
+    expect(messages.usageSnapshot()).toEqual([latest])
+
+    messages.setUsage(id, { ...report, model: 'gpt-6-codex', effort: null })
+    expect(messages.usageSnapshot()[0].usage).toMatchObject({ model: 'gpt-6-codex', effort: null })
+
+    messages.setUsage(id, { ...report, sessionId: '01a1ec18-9b8a-71c1-839d-2e31c0103010', model: null, effort: null })
+    expect(messages.usageSnapshot()[0].usage).toMatchObject({ model: null, effort: null })
+  })
+
   it('take a report by shell token for the Claude typed in that shell (no agent token there)', async () => {
     const { sent, claude } = await setup()
     const shell = messages.registerShell('local:1')

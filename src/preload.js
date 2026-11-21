@@ -25,6 +25,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   closeWindow: () => ipcRenderer.send('window-close'),
   toggleFullscreen: () => ipcRenderer.invoke('window-toggle-fullscreen'),
+  showWorkOverview: () => ipcRenderer.invoke('work-overview-show'),
+  hideWorkOverview: () => ipcRenderer.send('work-overview-hide'),
+  // Tab Tab while another program was in front (src/globalDoubleTab.js): ezShell came forward, open the overview
+  onWorkOverviewRequest: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('work-overview-request', listener);
+    return () => ipcRenderer.removeListener('work-overview-request', listener);
+  },
 
   // 앱 줌 (Ctrl+마우스 휠)
   appZoomIn: () => webFrame.setZoomLevel(webFrame.getZoomLevel() + 0.5),
@@ -155,11 +163,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   workspaceGitCommitFiles: (root, hash) => ipcRenderer.invoke('workspace-git-commit-files', { root, hash }),
   workspaceGitDiff: (root, file, hash) => ipcRenderer.invoke('workspace-git-diff', { root, file, hash }),
   localFileOpen: (root, relative, mode, label, options) => ipcRenderer.invoke('local-file-open', { root, path: relative, mode, label, compareHead: options?.compareHead === true }),
-  onRemoteFileCompareHead: (callback) => {
-    const handler = () => callback();
-    ipcRenderer.on('remote-file-compare-head', handler);
-    return () => ipcRenderer.removeListener('remote-file-compare-head', handler);
-  },
   workspaceGitLog: (folder) => ipcRenderer.invoke('workspace-git-log', folder),
   localWorktreeCreate: (options) => ipcRenderer.invoke('local-worktree-create', options),
   // Past Claude Code and Codex sessions (right panel); only keys from the list go back
@@ -172,6 +175,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localShellCurrentDirectory: (id) => ipcRenderer.invoke('local-shell-current-directory', id),
   localShellClipboard: (id) => ipcRenderer.invoke('local-shell-clipboard', id),
   localShellHasWorkingAgent: (ids) => ipcRenderer.invoke('local-shell-working-agent', ids),
+  // Idle agents: memory given back, then asleep until woken (src/agentIdle.js)
+  agentIdleConfigure: (config) => ipcRenderer.invoke('agent-idle-configure', config),
+  localShellSleeping: () => ipcRenderer.invoke('local-shell-sleeping'),
+  localShellWake: (id) => ipcRenderer.invoke('local-shell-wake', id),
+  localShellStayAwake: (id) => ipcRenderer.invoke('local-shell-stay-awake', id),
+  onLocalShellSleep: (callback) => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on('local-shell-sleep', listener);
+    return () => ipcRenderer.removeListener('local-shell-sleep', listener);
+  },
   agentMessagesSnapshot: () => ipcRenderer.invoke('agent-messages-state'),
   browserReviewOpen: () => ipcRenderer.invoke('browser-review-open'),
   browserReviewOpenLink: (address, destination) => ipcRenderer.invoke('browser-review-open-link', address, destination),
@@ -229,11 +242,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // A local shell's agent as a chat (src/agentChat): the window names the shell, main picks the file
   agentChatOpen: (shellId) => ipcRenderer.invoke('agent-chat-open', shellId),
   agentChatOlder: (shellId) => ipcRenderer.invoke('agent-chat-older', shellId),
+  agentChatCopy: (shellId) => ipcRenderer.invoke('agent-chat-copy', shellId),
+  agentChatSubagentPreview: (shellId, agentId) => ipcRenderer.invoke('agent-chat-subagent-preview', shellId, agentId),
   agentChatClose: (shellId) => ipcRenderer.send('agent-chat-close', shellId),
   agentChatReadClipboard: (shellId) => ipcRenderer.invoke('agent-chat-read-clipboard', shellId),
   agentChatPickImages: (shellId) => ipcRenderer.invoke('agent-chat-pick-images', shellId),
   agentChatRemoveImage: (shellId, imageId) => ipcRenderer.send('agent-chat-remove-image', { shellId, imageId }),
   agentChatSend: (shellId, text, imageIds) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageIds }),
+  agentChatToggleSpeed: (shellId, speed) => ipcRenderer.invoke('agent-chat-toggle-speed', { shellId, speed }),
   agentChatInterrupt: (shellId) => ipcRenderer.invoke('agent-chat-interrupt', shellId),
   agentChatAnswer: (shellId, key, signature) => ipcRenderer.invoke('agent-chat-answer', { shellId, key, signature }),
   // The model / effort under a local terminal (src/ipc/agentPicker.js): the CLI's own picker, driven by main
@@ -347,18 +363,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('open-sftp-window', { sessionId, localPath, remotePath, title }),
 
   // ==================== 서버 파일 편집 / 미리보기 창 ====================
-  // mode: 'edit' | 'preview'. The window's own calls name its docId (from the window URL).
+  // The window's own calls name a docId from its assigned tabs.
   openRemoteFile: (sessionId, sessionName, remotePath, mode) =>
     ipcRenderer.invoke('remote-file-open', { sessionId, sessionName, remotePath, mode }),
   remoteFileLoad: (docId) => ipcRenderer.invoke('remote-file-load', { docId }),
   remoteFileTail: (docId, generation, cursor) => ipcRenderer.invoke('remote-file-tail', { docId, generation, cursor }),
   remoteFileFindDefinitions: (docId, name) => ipcRenderer.invoke('remote-file-find-definitions', { docId, name }),
   remoteFileOpenDefinition: (docId, key) => ipcRenderer.invoke('remote-file-open-definition', { docId, key }),
-  onRemoteFileRevealLine: (callback) => {
-    const handler = (_event, line) => { if (Number.isSafeInteger(line) && line > 0) callback(line) };
-    ipcRenderer.on('remote-file-reveal-line', handler);
-    return () => ipcRenderer.removeListener('remote-file-reveal-line', handler);
+  remoteFileWindowState: () => ipcRenderer.invoke('remote-file-window-state'),
+  onRemoteFileWindowChanged: (callback) => {
+    const handler = (_event, state) => callback(state);
+    ipcRenderer.on('remote-file-window-changed', handler);
+    return () => ipcRenderer.removeListener('remote-file-window-changed', handler);
   },
+  remoteFileActivate: (docId) => ipcRenderer.invoke('remote-file-activate', { docId }),
+  remoteFileDetach: (docId, draft) => ipcRenderer.invoke('remote-file-detach', { docId, draft }),
+  remoteFileDraftRestored: (docId) => ipcRenderer.send('remote-file-draft-restored', { docId }),
   remoteFileAttention: (docId) => ipcRenderer.send('remote-file-attention', { docId }),
   // DB client (src/dbClient): discovery and opening from the main window, the rest from a DB window
   dbDiscover: (sessionId) => ipcRenderer.invoke('db-discover', { sessionId }),
@@ -383,9 +403,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   remoteFileReadServerBackup: (docId, name) => ipcRenderer.invoke('remote-file-read-server-backup', { docId, name }),
   remoteFileOpenBackupFolder: (docId) => ipcRenderer.invoke('remote-file-open-backup-folder', { docId }),
   remoteFileSetDirty: (docId, isDirty) => ipcRenderer.send('remote-file-dirty', { docId, isDirty }),
-  remoteFileClose: (docId) => ipcRenderer.invoke('remote-file-close', { docId }),
+  remoteFileClose: (docId, discard) => ipcRenderer.invoke('remote-file-close', { docId, discard }),
+  remoteFileCloseWindow: (discardIds) => ipcRenderer.invoke('remote-file-close-window', { discardIds }),
   onRemoteFileCloseRequested: (callback) => {
-    const handler = () => callback();
+    const handler = (_event, docIds) => callback(docIds);
     ipcRenderer.on('remote-file-close-requested', handler);
     return () => ipcRenderer.removeListener('remote-file-close-requested', handler);
   },

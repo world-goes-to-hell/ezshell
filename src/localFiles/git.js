@@ -239,4 +239,41 @@ async function fileAt(folder, target, rev = 'HEAD') {
   return { content, size, time }
 }
 
-module.exports = { repoTop, repoFolders, status, commitFiles, fileDiff, fileAt, parseStatus, parseNameStatus, parseNumstat, repoPath, requireRepoPath }
+/** A file's revisions reachable from HEAD, using its path at each commit across renames. */
+async function fileHistory(folder, target) {
+  const top = await repoTop(folder)
+  if (!top) return []
+  const file = repoPath(top, target)
+  if (!file || !(await hasHead(top))) return []
+  const output = await run(top, [
+    '--literal-pathspecs', 'log', '--follow', '--find-renames', '--encoding=UTF-8', '--no-color', '--no-show-signature',
+    '--name-status', '-z', '--format=%x00%H%x00%ct%x00%s', 'HEAD', '--', requireRepoPath(file)
+  ])
+
+  const fields = output.split('\0')
+  const revisions = []
+  const seen = new Set()
+  for (let index = 0; index < fields.length - 1;) {
+    if (fields[index++] !== '') throw new Error('Git 파일 이력을 읽지 못했습니다.')
+    const hash = requireHash(fields[index++])
+    const time = Number(fields[index++]) * 1000
+    const subject = fields[index++]
+    const changes = []
+    while (index < fields.length && fields[index] !== '') {
+      const status = fields[index++].trim()
+      const from = fields[index++]
+      const name = /^[RC]/.test(status) ? fields[index++] : from
+      changes.push({ name, deleted: status === 'D' })
+    }
+    // --follow emits the path selected for this commit, even when it differed from the current path.
+    const change = changes[0]
+    if (!change?.name || seen.has(hash)) continue
+    const historicalPath = path.resolve(top, requireRepoPath(change.name))
+    if (!repoPath(top, historicalPath)) continue
+    seen.add(hash)
+    revisions.push({ hash, time, subject, path: historicalPath, deleted: change.deleted })
+  }
+  return revisions
+}
+
+module.exports = { repoTop, repoFolders, status, commitFiles, fileDiff, fileAt, fileHistory, parseStatus, parseNameStatus, parseNumstat, repoPath, requireRepoPath }

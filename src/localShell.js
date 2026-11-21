@@ -8,8 +8,8 @@ const { fileURLToPath } = require('url');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { getProcessTree } = require('./ipc/agentProcessParents.js');
+const { resumeCommand } = require('./agentIdle.js');
 
-const MAX_SHELLS = 10;
 /** Output kept per shell so a tab that is drawn again (pane split, tab moved) continues from it */
 const BACKLOG_CHARS = 256 * 1024;
 const MIN_SIZE = 2;
@@ -17,6 +17,11 @@ const MAX_SIZE = 500;
 const MAX_WRITE_CHARS = 1024 * 1024;
 const TERMINAL_TYPE = 'xterm-256color';
 const AGENT_PROCESS_CHECK_MS = 1000;
+// Putting an idle agent to sleep (agentIdle.js): how long its CLI may take to close after `/exit`, and how
+// long the resumed one may take to come back (its messages MCP binds it to the shell again)
+const SLEEP_EXIT_MS = 15 * 1000;
+const WAKE_BIND_MS = 2 * 60 * 1000;
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const exec = promisify(execFile);
 
 // Let the user's existing PowerShell prompt render as usual, then report the FileSystem location.
@@ -333,16 +338,18 @@ function createLocalShells({
         if (data !== '\r' && !pendingMessages().length && !unhandledMessages().length) return false;
         try {
           entry.pty.write(data);
+          entry.activeAt = Date.now();
           if (entry.codexInput) trackCodexInput(entry.codexInput, data);
           return true;
         } catch { return false; }
       },
       // A line the user sent from the chat view (no mail needed)
-      rawWrite(data) {
+      rawWrite(data, trackInput = true) {
         if (!hasAgent(entry)) return false;
         try {
           entry.pty.write(data);
-          if (entry.codexInput) trackCodexInput(entry.codexInput, data);
+          entry.activeAt = Date.now();
+          if (trackInput && entry.codexInput) trackCodexInput(entry.codexInput, data);
           return true;
         } catch { return false; }
       }
@@ -362,6 +369,16 @@ function createLocalShells({
         try { entry.pty.write(data); return true; } catch { return false; }
       }
     });
+    if (entry.agent === 'codex') {
+      const { createCodexSpeed } = require('./ipc/codexSpeed.js');
+      entry.speedControl = createCodexSpeed({
+        lines: () => inbox.screenLines(),
+        submit: target => inbox.submitText(`/${target}`, undefined, { codexSpeed: target }),
+        probe: () => inbox.submitText('/ultrafas', undefined, { codexSpeed: 'ultrafast', probe: true }),
+        hold: value => inbox.setHeld(value),
+        isLive: () => hasAgent(entry) && entry.inbox === inbox && shells.get(id) === entry
+      });
+    }
   }
 
   /**
@@ -394,7 +411,7 @@ function createLocalShells({
     clearInterval(binding.timer);
     entry.inbox?.close();
     Object.assign(entry, {
-      agent: undefined, reportStatus: undefined, externalAgent: undefined, inbox: undefined, picker: undefined,
+      agent: undefined, reportStatus: undefined, externalAgent: undefined, inbox: undefined, picker: undefined, speedControl: undefined,
       codexInput: null, titleStatus: 'unknown', reportedStatus: null, oscTail: ''
     });
     return binding;
@@ -441,7 +458,15 @@ function createLocalShells({
         }
         if (entry.agent && (binding?.pid !== agentPid || entry.agent !== kind)) return;
         if (!binding) {
-          binding = { id: agentId, pid: agentPid, onExit };
+          // The CLI resumed after a sleep: the same agent again, under the id its messages went to
+          const woken = entry.sleeping?.phase === 'waking' && entry.sleeping.kind === kind ? entry.sleeping : null;
+          binding = { id: woken ? woken.agentId : agentId, pid: agentPid, onExit };
+          if (woken) {
+            clearTimeout(woken.timer);
+            entry.sleeping = null;
+            entry.activeAt = Date.now();
+            send('local-shell-sleep', { id, sleeping: null });
+          }
           entry.externalAgent = binding;
           entry.agent = kind;
           entry.codexInput = kind === 'codex' ? { hasDraft: false, submitted: false } : null;
@@ -481,10 +506,6 @@ function createLocalShells({
       if (!previous || !resume) throw new Error('바꿀 셸을 찾지 못했습니다.');
       if ([...shells.values()].some(entry => entry.replacementFor === replacementFor)) throw new Error('이 칸의 셸을 바꾸는 중입니다.');
     }
-    // A replacement may use one extra slot until the renderer adopts it and closes the old shell.
-    if (shells.size >= MAX_SHELLS + Number(Boolean(previous))) {
-      throw new Error(`로컬 터미널은 ${MAX_SHELLS}개까지 열 수 있습니다.`);
-    }
     const workingDirectory = directory === undefined ? cwd : requireLocalDirectory(directory);
     const id = `local:${nextId++}`;
     const args = shellArgs(shell, agent, platform, Boolean(agents), resume);
@@ -516,14 +537,18 @@ function createLocalShells({
       cwd: directory === undefined ? null : workingDirectory,
       launchDirectory: workingDirectory, reportedDirectory: null,
       reportStatus: status => registration?.setStatus?.(status),
-      backlog: '', exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, oscTail: ''
+      backlog: '', exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, oscTail: '',
+      // Last sign of work (status, typing, a line sent to the agent) and the sleep it may be in (agentIdle.js)
+      activeAt: Date.now(), sleeping: null
     };
     if (registration) observeInbox(id, entry);
     shells.set(id, entry);
     pty.onData((data) => {
       if (!entry.exited) {
         trackTerminalOsc(entry, data, platform);
-        entry.reportStatus?.(agentStatus(entry));
+        const status = agentStatus(entry);
+        entry.reportStatus?.(status);
+        if (entry.agent && status !== 'idle') entry.activeAt = Date.now();
       }
       entry.inbox?.writeOutput(data);
       entry.backlog += data;
@@ -534,6 +559,7 @@ function createLocalShells({
     pty.onExit(({ exitCode }) => {
       entry.exited = true;
       entry.exitCode = exitCode;
+      endSleep(id, entry);
       entry.inbox?.close();
       finishExternalAgent(entry);
       if (registration?.finish) registration.finish(exitCode);
@@ -553,6 +579,10 @@ function createLocalShells({
   function write(id, data) {
     const entry = shells.get(id);
     if (!entry || entry.exited || typeof data !== 'string' || data.length > MAX_WRITE_CHARS) return;
+    // Asleep: the pane is covered and the shell waits for the resume line; keys would go before it
+    if (entry.sleeping) return;
+    entry.activeAt = Date.now();
+    if (entry.inbox?.deferProbeInput(data)) return;
     entry.inbox?.userInput(data);
     entry.pty.write(data);
     if (entry.codexInput && !entry.codexInput.submitted) {
@@ -588,6 +618,7 @@ function createLocalShells({
     const entry = shells.get(id);
     if (!entry) return;
     shells.delete(id);
+    endSleep(id, entry);
     entry.inbox?.close();
     finishExternalAgent(entry);
     entry.registration?.close();
@@ -598,6 +629,94 @@ function createLocalShells({
     } catch {
       // Already gone
     }
+  }
+
+  /** The shell went away (closed, exited) while its agent slept: that agent has ended */
+  function endSleep(id, entry, { notify = false } = {}) {
+    const sleeping = entry.sleeping;
+    if (!sleeping) return;
+    clearTimeout(sleeping.timer);
+    entry.sleeping = null;
+    agents?.cancelSleep?.(sleeping.agentId, { ended: true });
+    if (notify) send('local-shell-sleep', { id, sleeping: null });
+  }
+
+  function killProcessTree(pid) {
+    try {
+      if (platform === 'win32') execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {});
+      else process.kill(pid, 'SIGTERM');
+    } catch { /* already gone */ }
+  }
+
+  /**
+   * Closes an idle agent typed into this shell and keeps the shell for resuming it (agentIdle.js). Only
+   * while it waits with an empty composer: `/exit` goes in like a chat line, which checks both.
+   */
+  async function sleep(id, { sessionId, flags = [] } = {}) {
+    const entry = shells.get(id);
+    const binding = entry?.externalAgent;
+    if (!binding || !hasAgent(entry) || entry.sleeping || !entry.inbox) return { ok: false, reason: 'not-agent' };
+    if (agentStatus(entry) !== 'idle') return { ok: false, reason: 'working' };
+    if (!SESSION_ID.test(sessionId ?? '')) return { ok: false, reason: 'no-session' };
+    const kind = entry.agent;
+    const sleeping = { kind, agentId: binding.id, sessionId: sessionId.toLowerCase(), flags, phase: 'closing', since: Date.now(), timer: null };
+    entry.sleeping = sleeping;
+    agents?.sleep?.(binding.id, sleeping.sessionId);
+    const result = await entry.inbox.submitText(kind === 'codex' ? '/quit' : '/exit');
+    if (!result.ok) {
+      if (entry.sleeping === sleeping) entry.sleeping = null;
+      agents?.cancelSleep?.(binding.id, { ended: false });
+      return result;
+    }
+    for (const until = Date.now() + SLEEP_EXIT_MS; processAlive(binding.pid) && Date.now() < until;) await delay(200);
+    if (processAlive(binding.pid)) {
+      killProcessTree(binding.pid);
+      for (const until = Date.now() + 3000; processAlive(binding.pid) && Date.now() < until;) await delay(200);
+    }
+    if (shells.get(id) !== entry || entry.sleeping !== sleeping || entry.exited) return { ok: false, reason: 'changed' };
+    if (entry.externalAgent === binding) finishExternalAgent(entry);
+    sleeping.phase = 'asleep';
+    send('local-shell-sleep', { id, sleeping: { kind, since: sleeping.since } });
+    return { ok: true };
+  }
+
+  /** Resumes the sleeping agent in its shell; it is awake again once its messages MCP binds it */
+  function wake(id) {
+    const entry = shells.get(id);
+    const sleeping = entry?.sleeping;
+    if (!sleeping || entry.exited) return { ok: false, reason: 'not-asleep' };
+    if (sleeping.phase === 'waking') return { ok: true };
+    if (sleeping.phase !== 'asleep') return { ok: false, reason: 'busy' };
+    let line;
+    try {
+      line = resumeCommand(sleeping.kind, sleeping.sessionId, sleeping.flags);
+    } catch {
+      endSleep(id, entry, { notify: true });
+      return { ok: false, reason: 'no-session' };
+    }
+    sleeping.phase = 'waking';
+    try {
+      entry.pty.write(line + '\r');
+    } catch {
+      endSleep(id, entry, { notify: true });
+      return { ok: false, reason: 'write-failed' };
+    }
+    sleeping.timer = setTimeout(() => {
+      if (entry.sleeping !== sleeping) return;
+      endSleep(id, entry);
+      send('local-shell-sleep', { id, sleeping: null, failed: true });
+    }, WAKE_BIND_MS);
+    sleeping.timer.unref?.();
+    send('local-shell-sleep', { id, sleeping: { kind: sleeping.kind, since: sleeping.since, waking: true } });
+    return { ok: true };
+  }
+
+  /** The user keeps the shell as a terminal: the sleeping agent has ended */
+  function stayAwake(id) {
+    const entry = shells.get(id);
+    if (entry?.sleeping?.phase !== 'asleep') return false;
+    endSleep(id, entry, { notify: true });
+    return true;
   }
 
   function closeAll() {
@@ -644,15 +763,39 @@ function createLocalShells({
       const entry = shells.get(id);
       return hasAgent(entry) ? { kind: entry.agent, status: agentStatus(entry) } : null;
     },
+    codexSpeedOf(id) {
+      const entry = shells.get(id);
+      if (!hasAgent(entry) || !entry.speedControl) return null;
+      const state = entry.speedControl.read();
+      if (!state.ultrafastAvailable && !pickerRefusal(entry) && !entry.picker.isOpen()) {
+        void entry.speedControl.detectUltrafast().catch(() => {});
+      }
+      return state;
+    },
+    async toggleCodexSpeed(id, target) {
+      const entry = shells.get(id);
+      const speed = entry?.speedControl;
+      if (!speed) return { ok: false, reason: 'not-agent' };
+      await speed.pendingProbe();
+      if (shells.get(id)?.speedControl !== speed) return { ok: false, reason: 'not-agent' };
+      const refused = pickerRefusal(entry);
+      if (refused) return refused;
+      if (entry.picker.isOpen()) return { ok: false, reason: 'busy' };
+      return speed.toggle(target);
+    },
     /**
      * A line from the chat view (src/agentChat): into the agent's composer only, never the shell. Not
      * while it asks for approval (the text would answer the question).
      */
     async chatSend(id, text, claudeImages) {
       const entry = shells.get(id);
-      if (!hasAgent(entry) || !entry.inbox) return { ok: false, reason: 'not-agent' };
+      const inbox = entry?.inbox;
+      if (!inbox) return { ok: false, reason: 'not-agent' };
+      const probe = entry.speedControl?.pendingProbe();
+      if (probe) await probe;
+      if (shells.get(id)?.inbox !== inbox || !hasAgent(entry)) return { ok: false, reason: 'not-agent' };
       if (agentStatus(entry) === 'blocked') return { ok: false, reason: 'approval' };
-      const result = await entry.inbox.submitText(text, claudeImages);
+      const result = await inbox.submitText(text, claudeImages);
       if (result.ok && entry.codexInput && entry.codexInput.submitted) entry.reportStatus?.(agentStatus(entry));
       return result;
     },
@@ -682,6 +825,7 @@ function createLocalShells({
       const refused = pickerRefusal(entry);
       if (refused) return refused;
       const result = await entry.picker.apply(what, label);
+      if (result.ok && what === 'model') entry.speedControl?.invalidate();
       tracePickerMiss(entry, result);
       // The usage line shows the new model / effort at once (Codex reports it only with its next turn)
       if (result.ok && result.applied) agents?.applyPicked?.(id, result.applied);
@@ -692,10 +836,28 @@ function createLocalShells({
     interruptAgent(id) {
       const entry = shells.get(id);
       if (!hasAgent(entry)) return false;
+      if (entry.inbox?.deferProbeInput('\x1b')) return true;
       entry.inbox?.userInput('\x1b');
       try { entry.pty.write('\x1b'); return true; } catch { return false; }
     },
-    wakeInbox: id => shells.get(id)?.inbox?.kick(),
+    sleep, wake, stayAwake,
+    /** The agents for agentIdle.js: idle or not, since when nothing happened */
+    idleAgents: () => [...shells].flatMap(([id, entry]) => (hasAgent(entry) && !entry.sleeping ? [{
+      id, kind: entry.agent, external: Boolean(entry.externalAgent), agentId: entry.externalAgent?.id ?? null,
+      // The CLI (typed into the shell) or the shell that runs it (launched by ezShell)
+      pid: entry.externalAgent?.pid ?? entry.pty.pid,
+      activeAt: entry.activeAt, idle: agentStatus(entry) === 'idle'
+    }] : [])),
+    /** The shells whose agents sleep, for a window that starts or reloads */
+    sleeping: () => [...shells].flatMap(([id, entry]) => (entry.sleeping && entry.sleeping.phase !== 'closing'
+      ? [{ id, sleeping: { kind: entry.sleeping.kind, since: entry.sleeping.since, ...(entry.sleeping.phase === 'waking' ? { waking: true } : {}) } }]
+      : [])),
+    // A message for a sleeping agent wakes it; its inbox then tells it of the message
+    wakeInbox: (id) => {
+      const entry = shells.get(id);
+      if (entry?.sleeping?.phase === 'asleep') wake(id);
+      else entry?.inbox?.kick();
+    },
     wakeInboxes: () => { for (const entry of shells.values()) entry.inbox?.kick(); },
     isRunning: id => shells.get(id)?.exited === false,
     hasWorkingAgent: ids => ids.some(id => {
@@ -706,4 +868,4 @@ function createLocalShells({
   };
 }
 
-module.exports = { createLocalShells, defaultShell, requireLocalDirectory, MAX_SHELLS, BACKLOG_CHARS };
+module.exports = { createLocalShells, defaultShell, requireLocalDirectory, BACKLOG_CHARS };

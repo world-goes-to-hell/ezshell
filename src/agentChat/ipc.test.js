@@ -1,5 +1,67 @@
 import { describe, expect, it } from 'vitest'
-import { cleanChatText } from './ipc.js'
+import { cleanChatText, registerAgentChatIpc } from './ipc.js'
+
+function harness(kind = 'claude') {
+  const handlers = new Map()
+  const ipcMain = { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => handlers.set(name, fn) }
+  const sent = []
+  const discarded = []
+  let stored = 0
+  const bitmap = { getSize: () => ({ width: 10, height: 10 }), toPNG: () => Buffer.from('png') }
+  registerAgentChatIpc({
+    ipcMain,
+    fromMainWindow: () => true,
+    isLocked: () => false,
+    chats: {},
+    shells: () => ({
+      agentOf: () => ({ kind }),
+      chatSend: async (_id, prompt, claudeImages) => { sent.push({ prompt, claudeImages }); return { ok: true } }
+    }),
+    clipboard: {
+      read: async () => ({ text: '', image: {} }),
+      decodeImage: async () => bitmap,
+      storeImage: () => `C:\\tmp\\shot-${++stored}.png`,
+      discardImage: file => discarded.push(file)
+    }
+  })
+  const call = (name, request) => handlers.get(name)({}, request)
+  const paste = async () => {
+    const result = await call('agent-chat-read-clipboard', 'local:1')
+    expect(result).toMatchObject({ ok: true, kind: 'images' })
+    expect(result.images).toHaveLength(1)
+    return result.images[0].id
+  }
+  return { call, paste, sent, discarded }
+}
+
+describe('screenshots pasted into a chat', () => {
+  it.each(['codex', 'claude'])('sends every pasted image and only the entered text to %s', async kind => {
+    const { call, paste, sent } = harness(kind)
+    const first = await paste()
+    const second = await paste()
+    expect(second).not.toBe(first)
+    expect(await call('agent-chat-send', { shellId: 'local:1', text: '봐 줘', imageIds: [first, second] })).toEqual({ ok: true })
+    expect(sent[0]).toEqual({
+      prompt: 'C:\\tmp\\shot-1.png\nC:\\tmp\\shot-2.png\n\n봐 줘',
+      claudeImages: kind === 'claude' ? { count: 2, text: '봐 줘' } : undefined
+    })
+    // Sent images are gone: sending them again is refused
+    expect((await call('agent-chat-send', { shellId: 'local:1', text: '', imageIds: [first] })).ok).toBe(false)
+  })
+
+  it('drops only the removed image, and refuses more than the limit', async () => {
+    const { call, paste, sent, discarded } = harness()
+    const ids = []
+    for (let i = 0; i < 8; i++) ids.push(await paste())
+    expect((await call('agent-chat-read-clipboard', 'local:1')).ok).toBe(false)
+    call('agent-chat-remove-image', { shellId: 'local:1', imageId: ids[0] })
+    expect(discarded).toEqual(['C:\\tmp\\shot-1.png'])
+    expect((await call('agent-chat-send', { shellId: 'local:1', text: '', imageIds: [ids[0]] })).ok).toBe(false)
+    expect(await call('agent-chat-send', { shellId: 'local:1', text: '', imageIds: [ids[1]] })).toEqual({ ok: true })
+    expect(sent[0]).toEqual({ prompt: 'C:\\tmp\\shot-2.png', claudeImages: { count: 1, text: '' } })
+    expect((await call('agent-chat-send', { shellId: 'local:1', text: '', imageIds: [ids[2], ids[2]] })).ok).toBe(false)
+  })
+})
 
 describe('text the chat view may send', () => {
   it('keeps lines and tabs, unifies line ends and trims the ends', () => {

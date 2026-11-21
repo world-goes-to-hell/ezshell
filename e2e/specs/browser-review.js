@@ -1,7 +1,7 @@
 const fs = require('node:fs')
 const http = require('node:http')
 const path = require('node:path')
-const { connect, createChecks, openLocalProject, pages, SET, sleep, unlock } = require('../support/driver')
+const { connect, createChecks, openLocalAgent, pages, SET, sleep, unlock } = require('../support/driver')
 
 const { check, finish } = createChecks()
 const profile = process.env.E2E_PROFILE
@@ -30,14 +30,7 @@ async function run() {
     check('the plus menu is available before starting an agent', await main.js(`!!document.querySelector('.new-tab-btn')`))
     await main.js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([profile]))});
       window.dispatchEvent(new Event('ezshell:local-projects-changed'))`)
-    await openLocalProject(main)
-    await main.until(`!!document.querySelector('#local-project-agent')`)
-    await main.js(`(() => {
-      const select = document.querySelector('#local-project-agent')
-      select.value = 'codex'
-      select.dispatchEvent(new Event('change', { bubbles: true }))
-      document.querySelector('.local-project-dialog button[type=submit]').click()
-    })()`)
+    await openLocalAgent(main, 'codex', profile)
     if (!(await main.until(`window.electronAPI.agentMessagesSnapshot().then(state => state.agents.some(agent => agent.mcpConnected))`))) {
       throw new Error('the Codex fixture did not connect')
     }

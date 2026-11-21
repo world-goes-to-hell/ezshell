@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiComputerLine, RiFolderAddLine, RiRefreshLine, RiServerLine } from 'react-icons/ri'
+import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiComputerLine, RiDatabase2Line, RiFolderAddLine, RiGlobalLine, RiRefreshLine, RiServerLine } from 'react-icons/ri'
 import { useTerminalStore, type TerminalInfo } from '../../stores/terminalStore'
 import { useSessionStore, type Session } from '../../stores/sessionStore'
-import { groupTabsBySession } from '../../lib/sessionTabs'
+import type { SessionTabGroup } from '../../lib/sessionTabs'
 import { useProjectServers } from '../../hooks/useProjectServers'
 import { TAB_DROP_TAKEN_EVENT, linkServer, projectKeyOf, readProjectServers, sessionFromDrop, unlinkServer, writeProjectServers } from '../../lib/localProjectServers'
 import { LOCAL_PANE_STORAGE_KEY, clampPaneHeight, parseLocalPanePrefs, visibleTerminalId, type LocalPanePrefs } from '../../lib/localTerminalPane'
@@ -13,20 +13,24 @@ import { focusTabPane, focusedPaneOf } from '../../lib/paneFocus'
 import { useLocalProjects } from '../../hooks/useLocalProjects'
 import { assignTabs, folderLabel, pathKey } from '../../lib/localWorkspaceTree'
 import { readFoldedNodes, readLocalProjects, writeFoldedNodes, writeLocalProjects } from '../../lib/localProjectList'
+import { confirmDialog } from '../../stores/confirmStore'
 import { toast } from '../../stores/toastStore'
-import { LocalProjectsTree, buildProjectNodes, type ProjectNode, type WorktreeNode } from './LocalProjectsTree'
+import { LocalProjectsTree, buildProjectNodes, type ProjectNode, type WorktreeNode, type WorktreeTab } from './LocalProjectsTree'
+import { workTabsByWorktree } from '../../lib/tabGroups'
 import './LocalTerminalList.css'
 
 const KEY_STEP = 30
 
 interface LocalTerminalListProps {
   fillAvailableSpace?: boolean
+  workingTabs: ReadonlySet<string>
+  serverTabs: ReadonlyMap<string, ReadonlyMap<string, SessionTabGroup>>
   onOpen?: (button: HTMLButtonElement) => void
   onClose: (terminalId: string) => void
   /** Opens a local terminal in a worktree of the tree */
   onOpenFolder?: (cwd: string, workspaceLabel: string) => void
   /** Connects a saved session linked to a project when it has no tab open (as a press in the session list) */
-  onConnectSession?: (session: Session) => void
+  onConnectSession?: (session: Session, workGroup: string) => void
 }
 
 function readPrefs(): LocalPanePrefs {
@@ -45,6 +49,13 @@ function writePrefs(prefs: LocalPanePrefs) {
   }
 }
 
+/** A browser, SSH or DB tab's name as its tab shows it */
+function otherTabName({ title, host, username, browser, db }: TerminalInfo) {
+  if (browser) return title || '브라우저'
+  if (db) return db.label || title || 'DB'
+  return title || (username && host ? `${username}@${host}` : host) || '세션'
+}
+
 function localTabName({ title, local }: TerminalInfo) {
   const workspace = local?.workspaceLabel
   if (workspace && (title === `${workspace} · Codex` || title === `${workspace} · Claude Code`)) return workspace
@@ -56,7 +67,7 @@ function localTabName({ title, local }: TerminalInfo) {
  * terminals open in each (with their agents), then the other local terminals. When empty, the docked
  * sidebar shows the actions in its header. The list grows to its rows or a manually set height.
  */
-export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose, onOpenFolder, onConnectSession }: LocalTerminalListProps) {
+export function LocalTerminalList({ fillAvailableSpace = false, workingTabs, serverTabs, onOpen, onClose, onOpenFolder, onConnectSession }: LocalTerminalListProps) {
   const terminals = useTerminalStore(state => state.terminals)
   const visibleId = useTerminalStore(state => visibleTerminalId(state.layout, state.activeTerminalId))
   const focusTerminal = useTerminalStore(state => state.focusTerminal)
@@ -76,6 +87,15 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
     locals.map(([id, terminal]) => ({ id, cwd: terminal.local?.cwd })),
     worktreePaths
   ), [locals, worktreePaths])
+  // Saved SSH sessions linked to each project ("서버"), kept across restarts (lib/localProjectServers)
+  const servers = useProjectServers()
+  // The browser, SSH and DB tabs of each project's work, under a worktree like its terminals
+  // (2026-11-20 user request: they were in the work's tab strip but not in its tree)
+  const workTabs = useMemo(() => workTabsByWorktree(
+    [...terminals.keys()], terminals,
+    nodes.map(node => ({ key: projectKeyOf(node), name: node.name, worktrees: node.worktrees.map(tree => tree.path) })),
+  ), [terminals, nodes])
+  const tabOrder = useMemo(() => new Map([...terminals.keys()].map((id, index) => [id, index])), [terminals])
 
   const [folded, setFolded] = useState<ReadonlySet<string>>(readFoldedNodes)
   const toggleFold = (key: string) => {
@@ -86,10 +106,7 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
     writeFoldedNodes(next)
   }
 
-  // Saved SSH sessions linked to each project ("서버"), kept across restarts (lib/localProjectServers)
-  const servers = useProjectServers()
   const sessions = useSessionStore(state => state.sessions)
-  const sessionTabs = useMemo(() => groupTabsBySession(terminals), [terminals])
 
   const linkDropped = (project: ProjectNode, text: string) => {
     const isTab = !text.startsWith('session:') && terminals.has(text)
@@ -115,31 +132,41 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
     writeProjectServers(unlinkServer(readProjectServers(), projectKeyOf(project), sessionId))
   }
 
-  const openServer = (session: Session) => {
-    const group = sessionTabs.get(session.id)
+  const openServer = (session: Session, workGroup: string, group: SessionTabGroup | undefined) => {
     const tab = group?.connected[0] ?? group?.disconnected[0]
     if (tab) focusTerminal(tab.id)
-    else onConnectSession?.(session)
+    else onConnectSession?.(session, workGroup)
   }
 
   const renderServers = (project: ProjectNode) => {
-    const linked = (servers[projectKeyOf(project)] ?? [])
+    const workGroup = projectKeyOf(project)
+    // A server whose tab is open is listed in its worktree with the other tabs; here only the ones to
+    // connect (2026-11-20 user report: the open SSH tab showed twice)
+    const listed = new Set(project.worktrees.flatMap(tree => workTabs.get(tree.path) ?? []))
+    const isListed = (session: Session) => {
+      const group = serverTabs.get(workGroup)?.get(session.id)
+      return [...(group?.connected ?? []), ...(group?.disconnected ?? [])].some(tab => listed.has(tab.id))
+    }
+    const linked = (servers[workGroup] ?? [])
       .map(id => sessions.find(session => session.id === id))
-      .filter((session): session is Session => Boolean(session))
+      .filter((session): session is Session => !!session && !isListed(session))
     if (linked.length === 0) return null
     return (
       <div className="local-servers">
         <div className="local-servers-title">서버</div>
         <ul className="local-servers-list" aria-label={`${project.name} 의 서버`}>
           {linked.map(session => {
-            const group = sessionTabs.get(session.id)
+            const group = serverTabs.get(workGroup)?.get(session.id)
             const connected = group?.connected.length ?? 0
             const disconnected = group?.disconnected.length ?? 0
             const state = connected > 0 ? 'is-on' : disconnected > 0 ? 'is-off' : ''
             const name = session.name || session.host
+            const current = group?.connected.some(tab => tab.id === visibleId)
+              || group?.disconnected.some(tab => tab.id === visibleId)
             return (
-              <li key={session.id} className="local-server" data-session-id={session.id}>
-                <button type="button" className="local-server-open" onClick={() => openServer(session)}
+              <li key={session.id} className={`local-server${current ? ' is-current' : ''}`} data-session-id={session.id}>
+                <button type="button" className="local-server-open" onClick={() => openServer(session, workGroup, group)}
+                  aria-current={current || undefined}
                   title={connected + disconnected > 0 ? `${name} 탭으로 이동` : `${name} 에 접속`}>
                   <RiServerLine size={14} className="local-server-icon" aria-hidden="true" />
                   <span className="local-server-name">{name}</span>
@@ -169,9 +196,20 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
 
   // Only the registration goes: the folders, their open terminals and the linked servers stay (adding the
   // folder again brings the servers back, they are kept by the project key)
-  const removeProject = (project: ProjectNode) => {
+  const removeProject = async (project: ProjectNode) => {
+    const confirmed = await confirmDialog({
+      title: '로컬 작업 목록에서 빼기',
+      message: `‘${project.name}’ 작업을 목록에서 뺄까요?\n필요하면 작업 폴더를 다시 등록할 수 있습니다.`,
+      confirmLabel: '목록에서 빼기',
+      danger: true
+    })
+    if (!confirmed) return
+
     const gone = new Set(project.folders.map(pathKey))
-    if (!writeLocalProjects(readLocalProjects().filter(folder => !gone.has(pathKey(folder))))) {
+    const current = readLocalProjects()
+    const remaining = current.filter(folder => !gone.has(pathKey(folder)))
+    if (remaining.length === current.length) return
+    if (!writeLocalProjects(remaining)) {
       toast.error('목록에서 빼지 못했습니다', '작업 폴더 목록을 저장하지 못했습니다.')
       return
     }
@@ -236,10 +274,35 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
 
   const isEmpty = locals.length === 0 && projects.length === 0
 
-  const tabsOf = (path: string) => (assignment.byWorktree.get(path) ?? []).flatMap(id => {
-    const terminal = terminals.get(id)
-    return terminal ? [{ id, name: localTabName(terminal), connected: terminal.connected }] : []
-  })
+  const tabsOf = (path: string): WorktreeTab[] => [...(assignment.byWorktree.get(path) ?? []), ...(workTabs.get(path) ?? [])]
+    .sort((a, b) => (tabOrder.get(a) ?? 0) - (tabOrder.get(b) ?? 0))
+    .flatMap(id => {
+      const terminal = terminals.get(id)
+      if (!terminal) return []
+      const kind: WorktreeTab['kind'] = terminal.local ? 'local' : terminal.browser ? 'browser' : terminal.db ? 'db' : 'ssh'
+      return [{ id, kind, name: kind === 'local' ? localTabName(terminal) : otherTabName(terminal), connected: terminal.connected, working: workingTabs.has(id) }]
+    })
+
+  const closeLocalTab = async (id: string, name: string) => {
+    const local = terminals.get(id)?.local
+    if (!local) return
+
+    const confirmed = await confirmDialog({
+      title: '로컬 터미널 탭 닫기',
+      message: `‘${name}’ 탭을 닫을까요?\n이 탭에 열려 있는 세션이 모두 종료됩니다.`,
+      confirmLabel: '모두 종료',
+      danger: true
+    })
+    if (!confirmed) return
+
+    const current = useTerminalStore.getState().terminals.get(id)?.local
+    if (!current) return
+    if ((current.shellId ?? id) !== (local.shellId ?? id)) {
+      toast.info('다시 확인해 주세요', '탭의 기본 세션이 바뀌었습니다.')
+      return
+    }
+    onClose(id)
+  }
 
   const renderTabActions = (id: string, name: string) => {
     const tree = terminals.get(id)?.splitTree
@@ -248,7 +311,7 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
         {tree && isSplitTree(tree) && paneIds(tree).length > 1 && (
           <PaneLayoutBadge tabId={id} tabName={name} tree={tree} currentPane={() => focusedPaneOf(id)} onPick={pane => focusTabPane(focusTerminal, id, pane)} />
         )}
-        <button type="button" className="local-terms-close" onClick={() => onClose(id)} title="닫기" aria-label={`${name} 닫기`}>
+        <button type="button" className="local-terms-close" onClick={() => void closeLocalTab(id, name)} title="탭과 열린 세션 모두 닫기" aria-label={`${name} 닫기`}>
           <RiCloseLine size={15} />
         </button>
       </>
@@ -258,9 +321,29 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
   const renderTab = (id: string, label?: string) => {
     const terminal = terminals.get(id)
     if (!terminal) return null
+    if (!terminal.local) {
+      // A browser, SSH or DB tab of the work: goes to the tab, closes as its tab does
+      const name = otherTabName(terminal)
+      const Icon = terminal.browser ? RiGlobalLine : terminal.db ? RiDatabase2Line : RiServerLine
+      return (
+        <li key={id} className="local-terms-item" data-work-tab-id={id}>
+          <div className={`local-terms-row ${id === visibleId ? 'is-current' : ''}`}>
+            <button type="button" className="local-terms-open" onClick={() => focusTerminal(id)} title={`${name} 탭으로 이동`}>
+              <Icon size={15} className="local-terms-icon" />
+              <span className="local-terms-name">{name}</span>
+              {!terminal.browser && <span className={`local-terms-dot ${terminal.connected ? 'is-on' : 'is-off'}`} aria-hidden="true" />}
+            </button>
+            <button type="button" className="local-terms-close" onClick={() => onClose(id)} title="탭 닫기" aria-label={`${name} 닫기`}>
+              <RiCloseLine size={15} />
+            </button>
+          </div>
+        </li>
+      )
+    }
     const name = localTabName(terminal)
     return (
-      <li key={id} className="local-terms-item" data-local-session-id={id}>
+      <li key={id} className="local-terms-item" data-local-session-id={id}
+        data-agent-work={workingTabs.has(id) ? 'working' : undefined}>
         <div className={`local-terms-row ${id === visibleId ? 'is-current' : ''}`}>
           <button type="button" className="local-terms-open" onClick={() => focusTerminal(id)} title={`${name} 탭으로 이동`}>
             <RiComputerLine size={15} className="local-terms-icon" />
@@ -275,6 +358,7 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
   }
 
   const isCollapsed = !fillAvailableSpace && (isEmpty || prefs.collapsed)
+  const collapsedWithWork = isCollapsed && workingTabs.size > 0
   const isSized = !fillAvailableSpace && prefs.height !== undefined && !isCollapsed
   const CollapseIcon = isCollapsed ? RiArrowRightSLine : RiArrowDownSLine
 
@@ -307,6 +391,8 @@ export function LocalTerminalList({ fillAvailableSpace = false, onOpen, onClose,
           <button
             type="button"
             className="local-terms-toggle"
+            data-agent-work={collapsedWithWork ? 'working' : undefined}
+            aria-description={collapsedWithWork ? '작업 중인 에이전트 있음' : undefined}
             onClick={() => update({ ...prefs, collapsed: !prefs.collapsed }, true)}
             aria-expanded={!isCollapsed}
             title={isCollapsed ? '로컬 작업 펼치기' : '로컬 작업 접기'}

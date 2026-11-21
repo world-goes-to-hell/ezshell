@@ -8,13 +8,13 @@ import { MAIN_PANE, MAX_PANES, leafCount, type SplitNode } from './splitTree'
 import { MAX_SCREENS } from './screenPanes'
 
 export const RESTORE_VERSION = 1
-const MAX_TABS = 50
+const MAX_OTHER_TABS = 50
 const MAX_TEXT = 500
 
 export type RestoreTab =
-  | { kind: 'ssh'; savedSessionId: string; title?: string; color?: string; splitTree?: SplitNode; paneSeq?: number; currentPath?: string; sftpPath?: string }
+  | { kind: 'ssh'; savedSessionId: string; title?: string; color?: string; splitTree?: SplitNode; paneSeq?: number; currentPath?: string; sftpPath?: string; workGroup?: string }
   /** Not saved as a session: shown so the user can connect again (no password is kept) */
-  | { kind: 'quick'; title?: string; host: string; port: number; username: string; authType?: 'password' | 'privateKey'; privateKeyPath?: string }
+  | { kind: 'quick'; title?: string; host: string; port: number; username: string; authType?: 'password' | 'privateKey'; privateKeyPath?: string; workGroup?: string }
   | { kind: 'local'; title?: string; splitTree?: SplitNode; paneSeq?: number; cwd?: string; workspaceLabel?: string; agents?: RestoreAgent[] }
   /** A DB tab opened with a saved account, on the SSH tab at index `parent` */
   | { kind: 'db'; parent: number; savedAccountId: string; title?: string }
@@ -94,15 +94,16 @@ function tabOf(info: TerminalInfo, sftpPath: string | null, agents: RestoreAgent
   }
   const config = info.connectConfig
   if (!config) return null
+  const workGroup = path(config.workGroup)
   if (config.savedSessionId) {
     return {
       kind: 'ssh', savedSessionId: config.savedSessionId, title, color: text(info.color, 50), splitTree, paneSeq,
-      currentPath: text(info.currentPath), sftpPath: sftpPath ? text(sftpPath) : undefined
+      currentPath: text(info.currentPath), sftpPath: sftpPath ? text(sftpPath) : undefined, workGroup
     }
   }
   return {
     kind: 'quick', title, host: config.host, port: Number(config.port) || 22, username: config.username,
-    authType: config.authType, privateKeyPath: text(config.privateKeyPath)
+    authType: config.authType, privateKeyPath: text(config.privateKeyPath), workGroup
   }
 }
 
@@ -111,26 +112,32 @@ export function buildRestoreRecord(source: RecordSource): RestoreRecord {
   const tabs: RestoreTab[] = []
   const indexOf = new Map<string, number>()
   const dbTabs: Array<[string, TerminalInfo]> = []
+  let otherTabs = 0
+  const append = (tab: RestoreTab, id?: string) => {
+    if (tab.kind !== 'local') {
+      if (otherTabs >= MAX_OTHER_TABS) return
+      otherTabs++
+    }
+    if (id !== undefined) indexOf.set(id, tabs.length)
+    tabs.push(tab)
+  }
   for (const [id, info] of source.terminals) {
     if (info.browser) continue
     if (info.db) { dbTabs.push([id, info]); continue }
     const tab = tabOf(info, source.sftpPathOf(id), info.local ? source.agentsOf?.(id) : undefined)
-    if (!tab) continue
-    indexOf.set(id, tabs.length)
-    tabs.push(tab)
+    if (tab) append(tab, id)
   }
   for (const detached of source.detached) {
     const tab = detached.connectConfig ? tabOf({ ...detached, id: '', host: '', username: '', connected: true }, null) : null
-    if (tab) tabs.push(tab)
+    if (tab) append(tab)
   }
   // DB tabs come after the tab whose connection they use, so it is open by then
   for (const [id, info] of dbTabs) {
     const parent = info.db ? indexOf.get(info.db.sshSessionId) : undefined
     if (parent === undefined || !info.db?.savedAccountId) continue
-    indexOf.set(id, tabs.length)
-    tabs.push({ kind: 'db', parent, savedAccountId: info.db.savedAccountId, title: text(info.title) })
+    append({ kind: 'db', parent, savedAccountId: info.db.savedAccountId, title: text(info.title) }, id)
   }
-  const record: RestoreRecord = { version: RESTORE_VERSION, tabs: tabs.slice(0, MAX_TABS) }
+  const record: RestoreRecord = { version: RESTORE_VERSION, tabs }
   const active = source.activeId ? indexOf.get(source.activeId) : undefined
   if (active !== undefined) record.active = active
   const { layout } = source
@@ -197,7 +204,7 @@ function readTab(value: unknown, index: number): RestoreTab | null {
       const savedSessionId = text(t.savedSessionId, 100)
       if (!savedSessionId) return null
       const color = text(t.color, 50)
-      return { kind: 'ssh', savedSessionId, title, color: color && /^#[0-9a-f]{3,8}$/i.test(color) ? color : undefined, splitTree: tree, paneSeq, currentPath: path(t.currentPath), sftpPath: path(t.sftpPath) }
+      return { kind: 'ssh', savedSessionId, title, color: color && /^#[0-9a-f]{3,8}$/i.test(color) ? color : undefined, splitTree: tree, paneSeq, currentPath: path(t.currentPath), sftpPath: path(t.sftpPath), workGroup: path(t.workGroup) }
     }
     case 'quick': {
       const host = text(t.host, 255)
@@ -205,7 +212,7 @@ function readTab(value: unknown, index: number): RestoreTab | null {
       const port = typeof t.port === 'number' && Number.isInteger(t.port) && t.port > 0 && t.port < 65536 ? t.port : 22
       if (!host || !username || hasControl(host) || hasControl(username)) return null
       const authType = t.authType === 'privateKey' ? 'privateKey' : 'password'
-      return { kind: 'quick', title, host, port, username, authType, privateKeyPath: authType === 'privateKey' ? path(t.privateKeyPath) : undefined }
+      return { kind: 'quick', title, host, port, username, authType, privateKeyPath: authType === 'privateKey' ? path(t.privateKeyPath) : undefined, workGroup: path(t.workGroup) }
     }
     case 'local': {
       // Only panes the tab has (the main pane, or a pane of its tree), each once
@@ -234,17 +241,18 @@ export function readRestoreRecord(value: unknown): RestoreRecord | null {
   const r = value as Record<string, unknown>
   if (r.version !== RESTORE_VERSION || !Array.isArray(r.tabs)) return null
   // A tab that cannot be read is left out; the indexes of the others must still point at the same tabs
-  const raw = r.tabs.slice(0, MAX_TABS)
   const tabs: RestoreTab[] = []
   const map = new Map<number, number>()
-  raw.forEach((value, index) => {
+  let otherTabs = 0
+  r.tabs.forEach((value, index) => {
     const tab = readTab(value, index)
-    if (!tab) return
+    if (!tab || (tab.kind !== 'local' && otherTabs >= MAX_OTHER_TABS)) return
     if (tab.kind === 'db') {
       const parent = map.get(tab.parent)
       if (parent === undefined || tabs[parent].kind !== 'ssh') return
       tab.parent = parent
     }
+    if (tab.kind !== 'local') otherTabs++
     map.set(index, tabs.length)
     tabs.push(tab)
   })

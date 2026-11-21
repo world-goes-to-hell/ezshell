@@ -1,17 +1,20 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
-  RiArrowDownSLine, RiArrowLeftLine, RiArrowRightLine, RiArrowRightUpLine, RiCodeSSlashLine, RiCursorLine,
-  RiGlobalLine, RiRefreshLine, RiSendPlane2Line, RiToolsLine
+  RiArrowDownSLine, RiArrowLeftLine, RiArrowRightLine, RiArrowRightUpLine, RiBookmark3Line, RiCloseLine,
+  RiCodeSSlashLine, RiCursorLine, RiGlobalLine, RiRefreshLine, RiSendPlane2Line, RiStarFill, RiStarLine, RiToolsLine
 } from 'react-icons/ri'
 import type { BrowserReviewAction, BrowserReviewState, LocalAgentStatus } from '../../types'
 import { uncoveredBox } from '../../lib/browserViewClip'
+import { useBrowserBookmarkStore } from '../../stores/browserBookmarkStore'
 import './BrowserReview.css'
 
 const statusLabels: Record<LocalAgentStatus, string> = {
   unknown: '연결됨', starting: '시작 중', idle: '대기 중', working: '작업 중',
-  blocked: '입력 대기', error: '오류', ended: '종료됨'
+  blocked: '입력 대기', error: '오류', ended: '종료됨', sleeping: '잠듦'
 }
+
+const MAX_ADDRESS_LENGTH = 4096
 
 const appOverlays = '[role="menu"], [role="dialog"], [role="alertdialog"], .context-menu, .tab-context-menu, .command-palette-overlay, .modal-overlay, .batch-overlay'
 /** Panels that slide over the tab from a side: the page narrows to give way instead of hiding */
@@ -26,6 +29,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
 }) {
   const api = window.electronAPI
   const viewport = useRef<HTMLDivElement>(null)
+  const bookmarksButton = useRef<HTMLButtonElement>(null)
   const [state, setState] = useState<BrowserReviewState | null>(null)
   const [address, setAddress] = useState('')
   const [agentId, setAgentId] = useState('')
@@ -33,8 +37,13 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const [browserError, setBrowserError] = useState('')
   const [feedback, setFeedback] = useState<{ text: string; error?: boolean } | null>(null)
   const [sending, setSending] = useState(false)
+  const [bookmarksOpen, setBookmarksOpen] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
   const [openTool, setOpenTool] = useState<BrowserTool | null>(null)
+  const bookmarks = useBrowserBookmarkStore(store => store.bookmarks)
+  const toggleBookmark = useBrowserBookmarkStore(store => store.toggleBookmark)
+  const removeBookmark = useBrowserBookmarkStore(store => store.removeBookmark)
+  const bookmarksId = useId()
   const toolsId = useId()
   const elementPickerId = `${toolsId}-element-picker`
   const agentFieldId = `${elementPickerId}-agent`
@@ -45,6 +54,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const recipient = agents.find(agent => agent.id === agentId)
   const elementPickerOpen = toolsOpen && openTool === 'element-picker'
   const canPick = Boolean(url && !state?.loading && !state?.error)
+  const bookmarked = bookmarks.some(bookmark => bookmark.url === url)
 
   useEffect(() => {
     let mounted = true
@@ -76,7 +86,9 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
       // A panel still sliding in has no final edge yet: hide the page until it settles (transitionend)
       const sliding = panels.some(panel => panel.getAnimations().some(animation => animation.playState === 'running'))
       const { x, y, width, height } = element.getBoundingClientRect()
-      const bounds = blocked || sliding ? null : uncoveredBox({ x, y, width, height }, panels.map(panel => panel.getBoundingClientRect()))
+      const titleTip = document.querySelector('.browser-tab-title-tooltip.is-visible')?.getBoundingClientRect()
+      const tipOverPage = titleTip && titleTip.left < x + width && titleTip.right > x && titleTip.top < y + height && titleTip.bottom > y
+      const bounds = blocked || sliding || tipOverPage ? null : uncoveredBox({ x, y, width, height }, panels.map(panel => panel.getBoundingClientRect()))
       const key = bounds ? [bounds.x, bounds.y, bounds.width, bounds.height].join(',') : ''
       if (lastBounds === key) return
       lastBounds = key
@@ -112,6 +124,11 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
     } catch {
       setBrowserError('브라우저 동작을 완료할 수 없습니다.')
     }
+  }
+
+  function closeBookmarks() {
+    setBookmarksOpen(false)
+    bookmarksButton.current?.focus({ preventScroll: true })
   }
 
   function toggleTools() {
@@ -181,7 +198,18 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
           <button type="submit" title="주소 열기" aria-label="주소 열기" disabled={!address.trim()}>
             <RiArrowRightUpLine />
           </button>
+          <button type="button" className="browser-review-bookmark" aria-label="현재 페이지 즐겨찾기"
+            aria-pressed={bookmarked} title={bookmarked ? '즐겨찾기에서 제거' : '즐겨찾기에 추가'}
+            disabled={!bookmarked && (!canPick || url.length > MAX_ADDRESS_LENGTH)}
+            onClick={() => state && toggleBookmark(state)}>
+            {bookmarked ? <RiStarFill aria-hidden="true" /> : <RiStarLine aria-hidden="true" />}
+          </button>
         </form>
+        <button ref={bookmarksButton} type="button" className="browser-review-bookmarks-toggle" title="즐겨찾기 목록"
+          aria-label="즐겨찾기 목록" aria-expanded={bookmarksOpen} aria-controls={bookmarksId}
+          onClick={() => setBookmarksOpen(open => !open)}>
+          <RiBookmark3Line aria-hidden="true" />
+        </button>
         {/* The page's own developer tools, in a window of their own (F12 / Ctrl+Shift+I in the page too) */}
         <button type="button" className="browser-review-devtools" disabled={!url}
           title={state?.devToolsOpen ? '개발자 도구 닫기 (F12)' : '개발자 도구 열기 (F12)'} aria-label="개발자 도구"
@@ -193,6 +221,35 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
           <RiToolsLine aria-hidden="true" />
         </button>
       </header>
+      {bookmarksOpen && (
+        <section className="browser-review-bookmarks" id={bookmarksId} aria-label="즐겨찾기"
+          onKeyDown={event => {
+            if (event.key !== 'Escape') return
+            event.stopPropagation()
+            closeBookmarks()
+          }}>
+          {bookmarks.length > 0 ? (
+            <ul>
+              {bookmarks.map(bookmark => (
+                <li key={bookmark.url}>
+                  <button type="button" className="browser-review-bookmark-open" title={bookmark.url}
+                    onClick={() => { closeBookmarks(); void act({ type: 'navigate', address: bookmark.url }) }}>
+                    <span>{bookmark.title}</span>
+                    <small>{bookmark.url}</small>
+                  </button>
+                  <button type="button" className="browser-review-bookmark-remove" title="즐겨찾기에서 제거"
+                    aria-label={`${bookmark.title} 즐겨찾기에서 제거`} onClick={() => {
+                      removeBookmark(bookmark.url)
+                      bookmarksButton.current?.focus({ preventScroll: true })
+                    }}>
+                    <RiCloseLine aria-hidden="true" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : <p>저장된 즐겨찾기가 없습니다.</p>}
+        </section>
+      )}
       {browserError && <p className="browser-review-error" role="alert">{browserError}</p>}
       <div className={`browser-review-workspace${toolsOpen ? ' has-tools' : ''}`}>
         <div className="browser-review-viewport" ref={viewport}>

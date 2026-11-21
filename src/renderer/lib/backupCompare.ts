@@ -9,9 +9,11 @@ export interface BackupEntry {
   source: BackupSource
   name: string
   time: number
-  size: number
+  size?: number
   /** Server files only: whether the time came from the name or the modification time */
   timeFrom?: 'name' | 'modified' | 'git'
+  subject?: string
+  deleted?: boolean
 }
 
 export const entryKey = (entry: Pick<BackupEntry, 'source' | 'name'>): string => `${entry.source}:${entry.name}`
@@ -19,9 +21,15 @@ export const entryKey = (entry: Pick<BackupEntry, 'source' | 'name'>): string =>
 /** Both kinds, newest first; an app backup comes first when two share a time. */
 export function mergeBackups(app: RemoteFileBackup[] | null, server: RemoteServerBackup[] | null): BackupEntry[] {
   const fromApp: BackupEntry[] = (app ?? []).map(b => ({ source: 'app', name: b.name, time: b.createdAt, size: b.size }))
-  const fromServer: BackupEntry[] = (server ?? []).map(b => ({ source: 'server', name: b.name, time: b.time, size: b.size, timeFrom: b.timeFrom }))
-  return [...fromApp, ...fromServer].sort((a, b) => b.time - a.time || (a.source === b.source ? 0 : a.source === 'app' ? -1 : 1))
+  const fromServer: BackupEntry[] = (server ?? []).map(backup => ({ ...backup, source: 'server' }))
+  const revisions = fromServer.filter(entry => entry.timeFrom === 'git')
+  const serverFiles = fromServer.filter(entry => entry.timeFrom !== 'git')
+  const byTime = [...fromApp, ...serverFiles].sort((a, b) => b.time - a.time || (a.source === b.source ? 0 : a.source === 'app' ? -1 : 1))
+  return [...revisions, ...byTime]
 }
+
+export const gitRevisionLabel = (entry: Pick<BackupEntry, 'name'>): string =>
+  entry.name === 'HEAD' ? 'HEAD' : entry.name.slice(0, 8)
 
 /** The key of the next older or newer backup, or null at the end of the list. */
 export function neighborOf(entries: BackupEntry[], key: string, direction: 'older' | 'newer'): string | null {

@@ -15,7 +15,9 @@ const RESUME_SEARCH_DAYS = 400
 const RESUME_RETRY_MS = 30000
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const TAIL_BYTES = 256 * 1024
+const TURN_CONTEXT_LOOKBACK_BYTES = 2 * 1024 * 1024
 const pad = n => String(n).padStart(2, '0')
+const modelFromContext = line => line.type === 'turn_context' && typeof line.payload?.model === 'string' ? line.payload.model.trim() : null
 
 /** Codex files sessions by local date: the start day (and the day before, near midnight) up to today */
 function dayFolders(startedAt, now) {
@@ -72,6 +74,8 @@ function createCodexUsageWatcher({ agents, setUsage, codexHome, now = () => Date
           if (stat.mtimeMs < agent.startedAt - EARLY_MS) continue
           const meta = await sessionMeta(file)
           const created = Date.parse(meta?.timestamp ?? '')
+          // A child can have the exact same cwd and a newer timestamp than a newly started CLI.
+          if (meta?.thread_source === 'subagent' || meta?.source?.subagent || meta?.source?.sub_agent) continue
           if (!meta || !sameFolder(meta.cwd, agent.cwd, platform) || !(created >= agent.startedAt - EARLY_MS)) continue
           candidates.push({ file, created, id: meta.id })
         } catch { /* gone or unreadable */ }
@@ -106,14 +110,31 @@ function createCodexUsageWatcher({ agents, setUsage, codexHome, now = () => Date
   }
 
   /** The last usage in the file; before the first answer just the session (its id lets a restart resume it) */
-  async function readUsage(file, sessionId) {
+  async function readUsage(file, sessionId, size, previousSize) {
     const lines = (await readLinesFromEnd(file, { maxBytes: TAIL_BYTES })) ?? []
     let model = null
     let effort = null
+    const readContext = line => {
+      if (line.type !== 'turn_context') return
+      const nextModel = modelFromContext(line)
+      if (nextModel && nextModel !== model) {
+        model = nextModel
+        effort = null
+      }
+      if (typeof line.payload?.effort === 'string' && line.payload.effort.trim()) effort = line.payload.effort
+    }
+    if (size - Math.max(previousSize, 0) > TAIL_BYTES && !lines.some(modelFromContext)) {
+      // A resumed session or a large append can have settings just before the usage window.
+      // Start at the previous newline when available, so the first newly appended record is read.
+      await readLinesFromStart(file, readContext, {
+        start: Math.max(0, previousSize - 1, size - TURN_CONTEXT_LOOKBACK_BYTES),
+        end: size - 1,
+        matchLine: line => line.includes('"turn_context"')
+      })
+    }
     let usage = null
     for (const line of lines) {
-      if (line.type === 'turn_context' && typeof line.payload?.model === 'string') model = line.payload.model
-      if (line.type === 'turn_context' && typeof line.payload?.effort === 'string') effort = line.payload.effort
+      readContext(line)
       if (line.type === 'event_msg' && line.payload?.type === 'token_count' && line.payload.rate_limits) usage = line.payload
     }
     return codexUsageFromTokenCount(usage ?? {}, model, effort, sessionId)
@@ -145,8 +166,8 @@ function createCodexUsageWatcher({ agents, setUsage, codexHome, now = () => Date
         let size
         try { size = (await fs.promises.stat(entry.file)).size } catch { bound.delete(agent.id); continue }
         if (size === entry.size) continue
+        const usage = await readUsage(entry.file, entry.id, size, entry.size)
         entry.size = size
-        const usage = await readUsage(entry.file, entry.id)
         if (usage) setUsage(agent.id, usage)
       }
     } finally {
@@ -171,4 +192,4 @@ function createCodexUsageWatcher({ agents, setUsage, codexHome, now = () => Date
   }
 }
 
-module.exports = { createCodexUsageWatcher, dayFolders }
+module.exports = { createCodexUsageWatcher, dayFolders, sessionMeta }

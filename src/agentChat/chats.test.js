@@ -95,10 +95,32 @@ describe('following a chat view\'s transcript', () => {
     const first = frames.find(frame => frame.reset)
     expect(texts(first)).toEqual(['마지막'])
     expect(first.hasOlder).toBe(true)
+    fs.appendFileSync(file, answer('a1', '방금 기록된 답변') + '{"type":')
+    const snapshot = await chats.transcriptForCopy('local:1')
+    expect(snapshot.ok).toBe(true)
+    expect(texts(snapshot)).toEqual(['맨 처음', '마지막', '방금 기록된 답변'])
+    expect(frames).toHaveLength(1)
     await chats.older('local:1')
     const older = frames.find(frame => frame.older)
     expect(texts(older)).toEqual(['맨 처음'])
     expect(older.hasOlder).toBe(false)
+  })
+
+  it('recovers a delegation that started before the visible chat page', async () => {
+    const call = JSON.stringify({ type: 'assistant', uuid: 'delegate', message: {
+      content: [{ type: 'tool_use', name: 'Agent', id: 'toolu_delegate', input: { subagent_type: 'Explore', description: 'Find the fixtures' } }]
+    } }) + '\n'
+    const filler = JSON.stringify({ type: 'attachment', attachment: { text: 'x'.repeat(1000) } }) + '\n'
+    fs.writeFileSync(file, call + filler.repeat(2200) + prompt('u1', '마지막'))
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.find(frame => frame.reset)).toMatchObject({
+      subagents: [{ id: 'toolu_delegate', name: 'Explore', status: 'running', task: 'Find the fixtures' }]
+    }))
+    expect(texts(frames.find(frame => frame.reset))).toEqual(['마지막'])
+    fs.appendFileSync(file, prompt('finished', '<task-notification><tool-use-id>toolu_delegate</tool-use-id><status>completed</status><result>Fixtures found</result></task-notification>'))
+    chats.tick()
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ subagents: [{ status: 'completed', result: 'Fixtures found' }] }))
+    expect(frames.at(-1)).not.toHaveProperty('items')
   })
 
   it('waits for a session that has written nothing yet, and says when the agent ended', async () => {
@@ -137,5 +159,44 @@ describe('following a chat view\'s transcript', () => {
     chats.closeAll()
     await new Promise(resolve => setTimeout(resolve, 50))
     expect(frames).toEqual([])
+  })
+})
+
+describe('the windows a Claude question took', () => {
+  it('adds them from the status line readings and sends the question again when a later reading changes them', async () => {
+    let used = { fiveHour: 1 }
+    const asked = []
+    frames = []
+    chats.closeAll()
+    chats = createAgentChats({
+      claudeRoot: root,
+      tickMs: 60_000,
+      send: (channel, frame) => frames.push({ channel, ...frame }),
+      resolve: async () => target,
+      claudeLimits: (from, to) => { asked.push([from, to]); return used },
+      now: () => Date.parse('2026-11-21T10:00:30.000Z')
+    })
+    const at = '2026-11-21T10:00:00.000Z'
+    fs.writeFileSync(file, JSON.stringify({ type: 'user', uuid: 'u1', timestamp: at, message: { role: 'user', content: '해 줘' } }) + '\n' +
+      JSON.stringify({ type: 'assistant', uuid: 'a1', timestamp: '2026-11-21T10:00:05.000Z', message: { id: 'm1', content: [{ type: 'text', text: '했습니다' }], usage: { input_tokens: 10, output_tokens: 5 } } }) + '\n')
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.some(frame => frame.reset)).toBe(true))
+    const question = frames.find(frame => frame.reset).items.find(item => item.id === 'user:u1')
+    // The time it was worked out from stays in main
+    expect(question.usage).toEqual({ input: 10, cached: 0, output: 5, limits: { fiveHour: 1 } })
+    expect(asked[0]).toEqual([Date.parse(at), Date.parse('2026-11-21T10:00:15.000Z')])
+
+    // The report of the last answer came after it was read: the question goes again, once
+    const sent = frames.length
+    chats.tick()
+    await new Promise(done => setTimeout(done, 100))
+    expect(frames.length).toBe(sent)
+    used = { fiveHour: 2 }
+    chats.tick()
+    await vi.waitFor(() => expect(frames.length).toBe(sent + 1))
+    expect(frames.at(-1).items).toEqual([expect.objectContaining({ id: 'user:u1', usage: { input: 10, cached: 0, output: 5, limits: { fiveHour: 2 } } })])
+    chats.tick()
+    await new Promise(done => setTimeout(done, 100))
+    expect(frames.length).toBe(sent + 1)
   })
 })

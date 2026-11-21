@@ -116,6 +116,29 @@ export function SplitChrome({ tabId, tree, containerRef }: SplitChromeProps) {
     setGripPane(null)
   }, [])
 
+  // The drag also ends when its grip is gone before dragend: a pane dropped on a tab strip leaves the
+  // tree at once, and a removed element never gets its dragend. The drop zones covered the panes then
+  // and the shells under them could not be used (2026-11-20 user report, after merging the tab back).
+  // A drop anywhere, a mouse move or press (none come during a drag), or the pane leaving ends it.
+  useEffect(() => {
+    if (!dragPane) return
+    if (!layout.panes.some(entry => entry.pane === dragPane)) {
+      handleGripDragEnd()
+      return
+    }
+    const endSoon = () => window.setTimeout(handleGripDragEnd, 0)
+    window.addEventListener('dragend', handleGripDragEnd, true)
+    window.addEventListener('drop', endSoon, true)
+    window.addEventListener('mousemove', handleGripDragEnd, true)
+    window.addEventListener('pointerdown', handleGripDragEnd, true)
+    return () => {
+      window.removeEventListener('dragend', handleGripDragEnd, true)
+      window.removeEventListener('drop', endSoon, true)
+      window.removeEventListener('mousemove', handleGripDragEnd, true)
+      window.removeEventListener('pointerdown', handleGripDragEnd, true)
+    }
+  }, [dragPane, layout, handleGripDragEnd])
+
   // The panes keep their shells; only their places change, so every terminal is fitted again.
   // In the middle of a pane the two trade places; near a side the dragged pane leaves its place and
   // takes that half of the pane.

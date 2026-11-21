@@ -14,12 +14,13 @@ const tokenCount = (used, total) => ({ type: 'event_msg', payload: {
   info: { last_token_usage: { total_tokens: total }, model_context_window: 200000 },
   rate_limits: { primary: { used_percent: used, window_minutes: 300, resets_at: 1795000000 }, secondary: null }
 } })
+const largeOutput = { type: 'response_item', payload: { type: 'function_call_output', output: 'x'.repeat(300 * 1024) } }
 
-function rollout(name, { cwd = work, at = START + 1000, lines = [] } = {}) {
+function rollout(name, { cwd = work, at = START + 1000, lines = [], meta = {} } = {}) {
   const dir = path.join(home, 'sessions', '2026', '11', '19')
   fs.mkdirSync(dir, { recursive: true })
   const file = path.join(dir, `rollout-${name}.jsonl`)
-  fs.writeFileSync(file, jsonl([{ type: 'session_meta', payload: { id: name, cwd, timestamp: new Date(at).toISOString() } }, { type: 'turn_context', payload: { model: 'gpt-6', effort: 'xhigh' } }, ...lines]))
+  fs.writeFileSync(file, jsonl([{ type: 'session_meta', payload: { id: name, cwd, timestamp: new Date(at).toISOString(), ...meta } }, { type: 'turn_context', payload: { model: 'gpt-6', effort: 'xhigh' } }, ...lines]))
   const seconds = (at + 500) / 1000
   fs.utimesSync(file, seconds, seconds)
   return file
@@ -66,6 +67,7 @@ describe('createCodexUsageWatcher', () => {
   it('ignores sessions of another folder, from before the start, or taken by another agent', async () => {
     rollout('other-folder', { cwd: os.tmpdir(), lines: [tokenCount(1, 1)] })
     rollout('older', { at: START - 3600_000, lines: [tokenCount(2, 1)] })
+    rollout('subagent', { at: START + 500, meta: { source: { subagent: { thread_spawn: { parent_thread_id: 'older' } } } }, lines: [tokenCount(5, 1)] })
     rollout('first', { at: START + 1000, lines: [tokenCount(3, 1)] })
     rollout('second', { at: START + 2000, lines: [tokenCount(4, 1)] })
     const { watcher, reports } = setup([
@@ -85,6 +87,29 @@ describe('createCodexUsageWatcher', () => {
     fs.appendFileSync(file, jsonl([tokenCount(20, 1)]))
     await watcher.tick()
     expect(reports.map(r => r.usage.fiveHour.percent)).toEqual([10, 20])
+  })
+
+  it('recovers the model and effort when the first read follows a large tool output', async () => {
+    rollout('mine', { lines: [largeOutput, tokenCount(20, 4000)] })
+    const { watcher, reports } = setup([{ ...agent, cwd: work }])
+    await watcher.tick()
+
+    expect(reports.at(-1).usage).toMatchObject({ model: 'gpt-6', effort: 'xhigh', fiveHour: { percent: 20 } })
+  })
+
+  it('finds a changed model and effort before a large tool output appended between polls', async () => {
+    const file = rollout('mine', { lines: [tokenCount(10, 1)] })
+    const { watcher, reports } = setup([{ ...agent, cwd: work }])
+    await watcher.tick()
+
+    fs.appendFileSync(file, jsonl([
+      { type: 'turn_context', payload: { model: 'gpt-6-codex', effort: 'medium' } },
+      largeOutput,
+      tokenCount(20, 4000)
+    ]))
+    await watcher.tick()
+
+    expect(reports.at(-1).usage).toMatchObject({ model: 'gpt-6-codex', effort: 'medium', fiveHour: { percent: 20 } })
   })
 
   it('reports the session id from the file, before the first answer too', async () => {

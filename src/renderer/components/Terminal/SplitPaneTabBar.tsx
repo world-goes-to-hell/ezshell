@@ -81,6 +81,7 @@ export function SplitPaneTabBar({
             <div
               key={terminalId}
               data-tab-id={terminalId}
+              data-browser-tab={terminal.browser ? '' : undefined}
               className={`split-pane-tab-item ${isActive ? 'active' : ''} ${draggingTabId === terminalId ? 'dragging' : ''}`}
               draggable
               onDragStart={(e) => {

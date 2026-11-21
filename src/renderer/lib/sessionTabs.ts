@@ -20,13 +20,15 @@ export type SessionTabGroup = Record<TabStatus, SessionTab[]>
  * by the main process, so the sidebar session is only reachable through connectConfig.savedSessionId.
  * Quick connects have no sidebar session and are left out.
  */
-export function groupTabsBySession(terminals: ReadonlyMap<string, TerminalInfo>): Map<string, SessionTabGroup> {
+export function groupTabsBySession(
+  terminals: ReadonlyMap<string, TerminalInfo>, includes: (id: string) => boolean = () => true
+): Map<string, SessionTabGroup> {
   const groups = new Map<string, SessionTabGroup>()
   let index = 0
   for (const terminal of terminals.values()) {
     index += 1
     const savedSessionId = terminal.connectConfig?.savedSessionId
-    if (!savedSessionId) continue
+    if (!savedSessionId || !includes(terminal.id)) continue
 
     const group = groups.get(savedSessionId) ?? { connected: [], disconnected: [] }
     const status: TabStatus = terminal.connected ? 'connected' : 'disconnected'

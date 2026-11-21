@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getFolderPath, buildPickerItems, filterPickerItems, moveSelection } from './sessionPicker'
+import { getFolderPath, buildPickerItems, buildPickerTree, filterPickerItems, moveSelection } from './sessionPicker'
 import type { Session, Folder } from '../stores/sessionStore'
 
 const session = (id: string, overrides: Partial<Session> = {}): Session => ({
@@ -90,6 +90,40 @@ describe('filterPickerItems', () => {
 
   it('returns nothing when no field matches', () => {
     expect(filterPickerItems(items, 'zzzzzz')).toEqual([])
+  })
+})
+
+describe('buildPickerTree', () => {
+  const items = buildPickerItems([
+    session('local'), session('web', { folderId: 'prod' }), session('sandbox', { folderId: 'dev' }),
+    session('mysql', { folderId: 'prod-db' }), session('unfiled', { folderId: 'removed' })
+  ], folders, new Set(['mysql']))
+
+  it('shows nested folders in sidebar order, then sessions without a folder', () => {
+    const tree = buildPickerTree(items, folders)
+    expect(tree.folders.map(node => node.folder.id)).toEqual(['prod', 'dev'])
+    expect(tree.folders[0].folders[0]).toMatchObject({ folder: { id: 'prod-db' }, items: [{ isOpen: true }] })
+    expect(names(tree.items)).toEqual(['local', 'unfiled'])
+    expect(names(tree.ordered)).toEqual(['mysql', 'web', 'sandbox', 'local', 'unfiled'])
+  })
+
+  it('keeps every ancestor of a matching session and hides branches with no matches', () => {
+    const tree = buildPickerTree(filterPickerItems(items, 'mysql'), folders)
+    expect(tree.folders.map(node => node.folder.id)).toEqual(['prod'])
+    expect(tree.folders[0].folders.map(node => node.folder.id)).toEqual(['prod-db'])
+    expect(names(tree.ordered)).toEqual(['mysql'])
+  })
+
+  it('shows sessions from orphaned or cyclic folder data once', () => {
+    const unusual: Folder[] = [
+      { id: 'orphan', name: 'Orphan', parentId: 'missing' },
+      { id: 'a', name: 'A', parentId: 'b' },
+      { id: 'b', name: 'B', parentId: 'a' }
+    ]
+    const sessions = unusual.map(folder => session(folder.name, { folderId: folder.id }))
+    const tree = buildPickerTree(buildPickerItems(sessions, unusual, new Set()), unusual)
+    expect(tree.folders.map(node => node.folder.id)).toEqual(['orphan', 'a'])
+    expect(names(tree.ordered)).toEqual(['Orphan', 'B', 'A'])
   })
 })
 

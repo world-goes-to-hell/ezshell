@@ -43,6 +43,15 @@ const { check, finish } = createChecks()
     await js(`${open('beta')}.click()`)
     check('a tab of the other project replaces the strip', await until(`${tabs}.length === 1 && ${tabs}[0].dataset.tabId !== ${JSON.stringify(alphaId)}`, 15000), String(await js(`${tabs}.map(t => t.textContent.trim()).join(' | ')`)))
     check('the selector names the new work and tells there are two', await until(`${selectName} === 'beta' && document.querySelector('.tab-group-select-more')?.textContent === '2' && !document.querySelector('.tab-group-chip')`, 5000))
+    check('the labeled work list has its own bordered area before the tabs', await js(`(() => {
+      const work = document.querySelector('.terminal-tab-header > .tab-group-control')
+      const strip = document.querySelector('.terminal-tab-header > .terminal-tab-items')
+      return work?.querySelector('.tab-group-select-label')?.textContent === '작업 목록 · 2개'
+        && getComputedStyle(work).borderInlineEndWidth === '1px'
+        && work.getBoundingClientRect().right <= strip.getBoundingClientRect().left
+        && !!strip.querySelector('.terminal-tab.active')
+    })()`))
+    await driver.shot('local-tab-group-header')
     const betaId = await js(`${tabs}[0].dataset.tabId`)
     check('the hidden tab keeps its shell', await js(`!!document.querySelector('[data-local-tab-id=${JSON.stringify(alphaId)}]')`))
 
@@ -63,10 +72,29 @@ const { check, finish } = createChecks()
       if (!(await until(`!!${item}`, 5000))) throw new Error(`the new tab menu has no ${label} option`)
       await driver.click(...await driver.center(item))
     }
+    // A local work is added from the work list's own +, not from the new tab menu (user decision, 2026-11-20)
+    await driver.click(...await driver.center(plus))
+    await until(`document.querySelectorAll('.new-tab-menu-item').length > 0`, 5000)
+    check('the new tab menu has no 로컬 작업 item', await js(`![...document.querySelectorAll('.new-tab-menu-item')].some(item => item.textContent.includes('로컬 작업'))`))
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    await until(`!document.querySelector('.new-tab-menu')`, 3000)
+    await driver.click(...await driver.center(`document.querySelector('.tab-group-select')`))
+    check('the work list has a + at the end of its title row', await until(`!!document.querySelector('.tab-group-menu-head .tab-group-menu-add')`, 4000))
+    await driver.click(...await driver.center(`document.querySelector('.tab-group-menu-add')`))
+    check('the + opens the 로컬 작업 dialog', await until(`!!document.querySelector('.local-project-dialog')`, 4000))
+    // Adding starts with no folder (user report: a registered folder was already picked) and picks no agent
+    check('adding starts with no folder picked', await js(`document.querySelector('#local-project-folder')?.value === '' && !document.querySelector('.local-project-dialog button[type=submit]')`))
+    check("the dialog has no agent choice (the user's shell opens)", await js(`!document.querySelector('#local-project-agent') && !document.querySelector('.local-project-dialog').textContent.includes('실행 도구')`))
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    await until(`!document.querySelector('.local-project-dialog')`, 3000)
     await fromNewTabMenu('브라우저 열기')
     const browser = `document.querySelector('.terminal-tab[data-tab-id^="browser:"]')`
     check('a browser tab opens alongside the local terminal in the same project', await until(`!!${browser} && ${tabs}.length === 2`))
     const browserId = await js(`${browser}.dataset.tabId`)
+    // 2026-11-20 user request: the work's browser (and SSH) tabs show in its worktree in the sidebar too
+    check('the browser tab is listed under the worktree in the sidebar', await until(`!!document.querySelector('.local-worktree [data-work-tab-id="${browserId}"]')`, 5000))
     await js(`${tabs}[0].click()`)
     await js(`(() => {
       window.__reorderSource = ${browser}

@@ -107,6 +107,26 @@ describe('git', () => {
     expect(git.parseNameStatus('R100\0old.txt\0new.txt\0M\0b.txt\0')).toEqual([{ path: 'new.txt', kind: 'renamed', from: 'old.txt' }, { path: 'b.txt', kind: 'modified' }])
     expect(git.parseStatus('R  new.txt\0old.txt\0').staged).toEqual([{ path: 'new.txt', kind: 'renamed', from: 'old.txt' }])
   })
+
+  it('lists all revisions of one literal path across a rename and a deletion', async () => {
+    const { top, g } = repo()
+    const relative = 'src/[renamed] file.txt'
+    const file = path.join(top, relative)
+    g('mv', 'src/a.txt', relative)
+    g('commit', '-q', '-m', 'rename')
+    g('--literal-pathspecs', 'rm', relative)
+    g('commit', '-q', '--allow-empty-message', '-m', '')
+    const revisions = await git.fileHistory(top, file)
+    expect(revisions.map(revision => [revision.subject, revision.deleted, path.basename(revision.path)])).toEqual([
+      ['', true, '[renamed] file.txt'],
+      ['rename', false, '[renamed] file.txt'],
+      ['second', false, 'a.txt'],
+      ['first', false, 'a.txt']
+    ])
+    const first = revisions[3]
+    expect((await git.fileAt(top, first.path, first.hash)).content).toBe('alpha\n')
+    expect(await git.fileHistory(top, path.join(top, 'untracked.txt'))).toEqual([])
+  })
 })
 
 describe('git status line counts', () => {

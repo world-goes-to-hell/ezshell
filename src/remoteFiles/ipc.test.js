@@ -29,7 +29,7 @@ function fakeWindow(id) {
   return win
 }
 
-function setup({ isLocked } = {}) {
+function setup({ isLocked, waitForDetachedPage } = {}) {
   const handlers = new Map()
   const listeners = new Map()
   const ipcMain = { handle: (channel, fn) => handlers.set(channel, fn), on: (channel, fn) => listeners.set(channel, fn) }
@@ -37,13 +37,23 @@ function setup({ isLocked } = {}) {
   const docs = createRemoteDocuments({ openSftp: async () => sftp, serverOf: () => null, backups: { root: 'unused', store: {} } })
   const windows = []
   let nextId = 100
-  const { closeViewWindows } = registerRemoteFileIpc({ ipcMain, docs, isLocked, createWindow: () => { const win = fakeWindow(nextId++); windows.push(win); return win }, openFolder: async () => {} })
+  const { closeViewWindows } = registerRemoteFileIpc({
+    ipcMain, docs, isLocked, openFolder: async () => {},
+    createWindow: atCursor => {
+      const win = fakeWindow(nextId++)
+      if (atCursor) win.filePageReady = waitForDetachedPage?.()
+      windows.push(win)
+      return win
+    }
+  })
   const invoke = (channel, senderId, request) => handlers.get(channel)({ sender: { id: senderId } }, request)
   const send = (channel, senderId, request) => listeners.get(channel)({ sender: { id: senderId } }, request)
   return { invoke, send, windows, docs, closeViewWindows }
 }
 
 const openRequest = { sessionId: 'tab-1', sessionName: 'dev', remotePath: '/etc/a.conf', mode: 'edit' }
+const secondEdit = { ...openRequest, remotePath: '/etc/b.log' }
+const draft = { editor: JSON.stringify({ doc: 'draft\n', selection: { ranges: [{ anchor: 2, head: 2 }], main: 0 } }), top: 0, left: 0, ending: 'lf' }
 
 describe('file window IPC', () => {
   it('follows a log only while the app is unlocked', async () => {
@@ -84,12 +94,48 @@ describe('file window IPC', () => {
     expect(win.flashing).toBe(false)
   })
 
-  it('opens one window per file and answers only that window', async () => {
-    const { invoke, windows } = setup()
+  it('opens editors in the same window and selects an existing tab when reopened', async () => {
+    const { invoke, windows, docs } = setup()
     expect(await invoke('remote-file-open', 1, openRequest)).toEqual({ success: true, existing: false })
+    expect(await invoke('remote-file-open', 1, secondEdit)).toEqual({ success: true, existing: false })
     expect(await invoke('remote-file-open', 1, openRequest)).toEqual({ success: true, existing: true })
     expect(windows).toHaveLength(1)
     expect(windows[0].focused).toBe(true)
+    expect(await invoke('remote-file-window-state', windows[0].webContents.id)).toMatchObject({
+      tabbed: true, activeId: docs.register(openRequest).docId,
+      tabs: [{ path: '/etc/a.conf' }, { path: '/etc/b.log' }]
+    })
+  })
+
+  it('moves the existing edit and draft to its new owner, keeping the other tab open', async () => {
+    const { invoke, send, windows, docs } = setup()
+    await invoke('remote-file-open', 1, openRequest)
+    await invoke('remote-file-open', 1, secondEdit)
+    const { docId } = docs.register(openRequest)
+    const owner = windows[0].webContents.id
+    await invoke('remote-file-load', owner, { docId })
+    send('remote-file-dirty', owner, { docId, isDirty: true })
+    expect(await invoke('remote-file-detach', 1, { docId, draft })).toMatchObject({ success: false })
+    expect(await invoke('remote-file-detach', owner, { docId, draft })).toMatchObject({ success: true })
+    const destination = windows[1].webContents.id
+    expect(await invoke('remote-file-load', owner, { docId })).toMatchObject({ success: false })
+    expect(await invoke('remote-file-load', destination, { docId })).toMatchObject({ success: true, content: 'a\n', draft })
+    expect(await invoke('remote-file-window-state', owner)).toMatchObject({ tabs: [{ path: '/etc/b.log' }] })
+    expect(await invoke('remote-file-window-state', destination)).toMatchObject({ tabs: [{ docId, dirty: true }] })
+    expect(await invoke('remote-file-open', 1, openRequest)).toMatchObject({ success: true, existing: true })
+    expect(windows).toHaveLength(2)
+    expect(windows[1].focused).toBe(true)
+  })
+
+  it('keeps the source tab when the new window fails to load', async () => {
+    const { invoke, windows, docs } = setup({ waitForDetachedPage: async () => { throw new Error('Window load failed') } })
+    await invoke('remote-file-open', 1, openRequest)
+    const { docId } = docs.register(openRequest)
+    const owner = windows[0].webContents.id
+    await invoke('remote-file-load', owner, { docId })
+    expect(await invoke('remote-file-detach', owner, { docId, draft })).toMatchObject({ success: false })
+    expect(windows[1].isDestroyed()).toBe(true)
+    expect(await invoke('remote-file-window-state', owner)).toMatchObject({ activeId: docId, tabs: [{ docId }] })
   })
 
   it('refuses another window asking for the document', async () => {
@@ -116,12 +162,31 @@ describe('file window IPC', () => {
     send('remote-file-dirty', second.webContents.id, { docId: secondId, isDirty: true })
     second.close()
     expect(second.isDestroyed()).toBe(false)
-    expect(second.sent).toEqual(['remote-file-close-requested'])
+    expect(second.sent.at(-1)).toBe('remote-file-close-requested')
     await invoke('remote-file-close', 1, { docId: secondId })
     expect(second.isDestroyed()).toBe(false)
-    await invoke('remote-file-close', second.webContents.id, { docId: secondId })
+    expect(await invoke('remote-file-close', second.webContents.id, { docId: secondId })).toMatchObject({ needsConfirmation: true })
+    expect(second.isDestroyed()).toBe(false)
+    await invoke('remote-file-close-window', second.webContents.id, { discardIds: [secondId] })
     expect(second.isDestroyed()).toBe(true)
     expect(docs.find(secondId)).toBeNull()
+  })
+
+  it('closes a single tab after confirmation and keeps the other file open', async () => {
+    const { invoke, send, windows, docs } = setup()
+    await invoke('remote-file-open', 1, openRequest)
+    await invoke('remote-file-open', 1, secondEdit)
+    const { docId } = docs.register(secondEdit)
+    const win = windows[0]
+    const owner = win.webContents.id
+    send('remote-file-dirty', owner, { docId, isDirty: true })
+    expect(await invoke('remote-file-close', owner, { docId })).toMatchObject({ needsConfirmation: true })
+    expect(await invoke('remote-file-close', owner, { docId, discard: true })).toMatchObject({ needsConfirmation: false })
+    expect(win.isDestroyed()).toBe(false)
+    expect(docs.find(docId)).toBeNull()
+    expect(await invoke('remote-file-window-state', owner)).toMatchObject({
+      activeId: docs.register(openRequest).docId, tabs: [{ path: '/etc/a.conf' }]
+    })
   })
 
   it('rejects requests that are not a server path or mode', async () => {

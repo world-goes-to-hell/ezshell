@@ -65,7 +65,8 @@ interface LocalProjectsTreeProps {
   nodes: ProjectNode[]
   folded: ReadonlySet<string>
   onToggleFold: (key: string) => void
-  tabsOf: (path: string) => { id: string; name: string; connected: boolean }[]
+  /** The tabs of a worktree: its local terminals, and the browser / SSH / DB tabs of its work (strip order) */
+  tabsOf: (path: string) => WorktreeTab[]
   currentTabId: string | null
   renderTab: (tabId: string, label?: string) => ReactNode
   renderTabActions: (tabId: string, name: string) => ReactNode
@@ -76,6 +77,14 @@ interface LocalProjectsTreeProps {
   onDropOnProject?: (project: ProjectNode, text: string) => void
   /** Takes the project off the list (its folders, terminals and linked servers stay) */
   onRemoveProject?: (project: ProjectNode) => void
+}
+
+export interface WorktreeTab {
+  id: string
+  name: string
+  kind: 'local' | 'browser' | 'ssh' | 'db'
+  connected: boolean
+  working: boolean
 }
 
 export const projectFoldKey = (folder: string) => `p:${pathKey(folder)}`
@@ -110,6 +119,7 @@ export function LocalProjectsTree({
       {nodes.map(project => {
         const projectKey = projectFoldKey(project.folder)
         const isProjectOpen = !folded.has(projectKey)
+        const projectWorking = !isProjectOpen && project.worktrees.some(tree => tabsOf(tree.path).some(tab => tab.working))
         const Chevron = isProjectOpen ? RiArrowDownSLine : RiArrowRightSLine
         return (
           <li key={projectKey} className={`local-project${dropTarget === projectKey ? ' is-drop-target' : ''}`} data-project-folder={project.folder} {...dropProps(project, projectKey)}>
@@ -117,7 +127,9 @@ export function LocalProjectsTree({
               <button
                 type="button"
                 className="local-project-row"
+                data-agent-work={projectWorking ? 'working' : undefined}
                 aria-expanded={isProjectOpen}
+                aria-description={projectWorking ? '작업 중인 에이전트 있음' : undefined}
                 onClick={() => onToggleFold(projectKey)}
                 title={project.folder}
               >
@@ -140,14 +152,17 @@ export function LocalProjectsTree({
                   const tabs = tabsOf(worktree.path)
                   const treeKey = worktreeFoldKey(worktree.path)
                   const isTreeOpen = !folded.has(treeKey)
-                  const singleTab = tabs.length === 1 ? tabs[0] : undefined
-                  const hasChildren = tabs.length > 1
+                  // A lone local terminal is the worktree's own row; any other tab is listed under it
+                  const singleTab = tabs.length === 1 && tabs[0].kind === 'local' ? tabs[0] : undefined
+                  const hasChildren = !singleTab && tabs.length > 0
+                  const worktreeWorking = singleTab?.working || (!isTreeOpen && tabs.some(tab => tab.working))
                   const isCurrent = singleTab?.id === currentTabId
                   const name = folderLabel(worktree.path)
                   const shownNames = [name, project.name, worktree.branch && `${project.name} · ${worktree.branch}`]
                   return (
                     <li key={treeKey} className={`local-worktree${tabs.length > 0 ? ' has-tabs' : ''}${isCurrent ? ' is-current' : ''}`}
-                      data-worktree-path={worktree.path} data-local-session-id={singleTab?.id}>
+                      data-worktree-path={worktree.path} data-local-session-id={singleTab?.id}
+                      data-agent-work={worktreeWorking ? 'working' : undefined}>
                       <div className="local-worktree-row">
                         <button
                           type="button"
@@ -156,7 +171,7 @@ export function LocalProjectsTree({
                           onClick={() => onOpenWorktree(project, worktree)}
                           title={`${worktree.path}\n${singleTab ? `${singleTab.name} 탭으로 이동` : hasChildren ? '열린 터미널로 이동' : '이 폴더에서 로컬 터미널 열기'}`}
                         >
-                          <span className={`local-worktree-dot${tabs.some(tab => tab.connected) ? ' is-on' : ''}`} aria-hidden="true" />
+                          <span className={`local-worktree-dot${tabs.some(tab => tab.kind === 'local' && tab.connected) ? ' is-on' : ''}`} aria-hidden="true" />
                           <span className="local-worktree-label">
                             <span className="local-worktree-name">{name}</span>
                             {worktree.isMain && project.worktrees.length > 1 && <span className="local-worktree-tag">기본</span>}
@@ -174,8 +189,9 @@ export function LocalProjectsTree({
                             type="button"
                             className="local-worktree-fold"
                             aria-expanded={isTreeOpen}
+                            aria-description={worktreeWorking ? '작업 중인 에이전트 있음' : undefined}
                             onClick={() => onToggleFold(treeKey)}
-                            title={isTreeOpen ? '터미널 목록 접기' : `터미널 ${tabs.length}개 펼치기`}
+                            title={isTreeOpen ? '탭 목록 접기' : `탭 ${tabs.length}개 펼치기`}
                           >
                             {isTreeOpen ? <RiArrowDownSLine size={14} /> : <span className="local-worktree-count">{tabs.length}</span>}
                           </button>
@@ -185,10 +201,11 @@ export function LocalProjectsTree({
                       {hasChildren && isTreeOpen && (
                         <div className="local-worktree-content">
                           <ul className="local-terms-list is-nested">
-                            {tabs.map((tab, index) => {
+                            {tabs.filter(tab => tab.kind === 'local').map((tab, index) => {
                               const repeated = shownNames.includes(tab.name) || shownNames.includes(tab.name.replace(/ \(\d+\)$/, ''))
                               return renderTab(tab.id, repeated ? `터미널 ${index + 1}` : tab.name)
                             })}
+                            {tabs.filter(tab => tab.kind !== 'local').map(tab => renderTab(tab.id))}
                           </ul>
                         </div>
                       )}

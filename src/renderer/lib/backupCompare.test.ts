@@ -34,6 +34,18 @@ describe('mergeBackups', () => {
     expect(mergeBackups(app, null)).toHaveLength(2)
     expect(mergeBackups(null, null)).toEqual([])
   })
+
+  it('keeps HEAD first and preserves the traversal order of the file history', () => {
+    const history: RemoteServerBackup[] = [
+      { name: 'HEAD', time: 2000, size: 20, timeFrom: 'git' },
+      { name: 'a'.repeat(40), time: 1000, subject: 'Rename', timeFrom: 'git' },
+      { name: 'b'.repeat(40), time: 3000, subject: 'Add', timeFrom: 'git' }
+    ]
+    const entries = mergeBackups(null, history)
+    expect(entries.map(({ name }) => name)).toEqual(history.map(({ name }) => name))
+    expect(entries[2].subject).toBe('Add')
+    expect(neighborOf(entries, 'server:HEAD', 'older')).toBe(`server:${'a'.repeat(40)}`)
+  })
 })
 
 describe('neighborOf', () => {

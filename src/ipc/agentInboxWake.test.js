@@ -283,6 +283,42 @@ describe('a line sent from the chat view (submitText)', () => {
     return { write, rawWrite }
   }
 
+  it('does not send Fast as a model prompt when the CLI does not offer the choice', async () => {
+    const { rawWrite } = chatSetup('codex')
+    wake.writeOutput(codexDraft(''))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const sent = wake.submitText('/fast', undefined, { codexSpeed: 'fast' })
+    wake.writeOutput(codexDraft('/fast'))
+    await vi.waitFor(() => expect(rawWrite).toHaveBeenLastCalledWith('\x7f'.repeat(5), false), { timeout: 2500 })
+    wake.writeOutput(codexDraft(''))
+    await expect(sent).resolves.toEqual({ ok: false, reason: 'speed-unavailable' })
+    expect(rawWrite.mock.calls).toEqual([['\x1b[200~/fast\x1b[201~', false], ['\x7f'.repeat(5), false]])
+  })
+
+  it('reads the native Ultrafast choice and clears the probe before forwarding typing', async () => {
+    const { rawWrite } = chatSetup('codex')
+    wake.writeOutput(codexDraft(''))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const probe = wake.submitText('/ultrafas', undefined, { codexSpeed: 'ultrafast', probe: true })
+    expect(wake.deferProbeInput('\r')).toBe(true)
+    wake.writeOutput(codexDraft('/ultrafast     toggle faster responses\r\n\r\n› /ultrafas'))
+    await vi.waitFor(() => expect(rawWrite).toHaveBeenLastCalledWith('\x7f'.repeat(9), false))
+    expect(rawWrite.mock.calls).toEqual([['\x1b[200~/ultrafas\x1b[201~', false], ['\x7f'.repeat(9), false]])
+    wake.writeOutput(codexDraft(''))
+    await expect(probe).resolves.toEqual({ ok: true, available: true })
+    expect(rawWrite).toHaveBeenLastCalledWith('\r')
+  })
+
+  it('leaves a terminal draft alone when its caret is at the beginning', async () => {
+    const { rawWrite } = chatSetup('codex')
+    wake.userInput('a draft')
+    wake.writeOutput(codexDraft('a draft\x1b[1;3H'))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await expect(wake.submitText('/ultrafas', undefined, { codexSpeed: 'ultrafast', probe: true }))
+      .resolves.toEqual({ ok: false, reason: 'composer-not-empty' })
+    expect(rawWrite).not.toHaveBeenCalled()
+  })
+
   it('pastes into the empty composer and presses Enter only once the text is drawn', async () => {
     const { write, rawWrite } = chatSetup()
     wake.writeOutput(claudeDraft(''))
@@ -399,15 +435,14 @@ describe('a line sent from the chat view (submitText)', () => {
 
   it('submits only when Claude draws all attached images and the matching text', async () => {
     const { rawWrite } = chatSetup()
-    const heading = '첨부 이미지를 열어 확인해 주세요.'
     const body = '이미지전송 테스트'
-    const paste = heading + '\nC:\\Temp\\one.png\nC:\\Temp\\two.png\n\n' + body
+    const paste = 'C:\\Temp\\one.png\nC:\\Temp\\two.png\n\n' + body
     const rule = '─'.repeat(70)
-    const rendered = (tokens, text) => claudeDraft(tokens + heading + '\r\n  ' + text)
+    const rendered = (tokens, text) => claudeDraft(tokens + '\r\n  ' + text)
       + '\r\n' + rule + '\r\n  ⏵⏵ auto mode on'
     wake.writeOutput(claudeDraft(''))
     await new Promise(resolve => setTimeout(resolve, 20))
-    const sent = wake.submitText(paste, { count: 2, text: heading + '\n' + body })
+    const sent = wake.submitText(paste, { count: 2, text: body })
     for (const [tokens, text] of [
       ['[Image #3]', body],
       ['[Image #3] [Image #3]', body],

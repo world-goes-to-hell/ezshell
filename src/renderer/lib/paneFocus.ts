@@ -11,8 +11,15 @@ const FOCUS_DELAY_MS = 60
 export function focusTabPane(focusTerminal: (tabId: string) => void, tabId: string, pane: PaneId): void {
   focusTerminal(tabId)
   window.setTimeout(() => {
-    tabHost(tabId).querySelector<HTMLElement>(`[data-pane="${CSS.escape(pane)}"] .xterm-helper-textarea`)?.focus()
+    const element = tabHost(tabId).querySelector<HTMLElement>(`[data-pane="${CSS.escape(pane)}"]`)
+    if (element) focusPaneInput(element)
   }, FOCUS_DELAY_MS)
+}
+
+export function focusPaneInput(pane: HTMLElement): void {
+  const input = pane.querySelector<HTMLElement>('.agent-chat-input, .agent-chat-approval-option:not(:disabled)')
+    ?? pane.querySelector<HTMLElement>('.xterm-helper-textarea')
+  input?.focus({ preventScroll: true })
 }
 
 /** The pane of the tab that holds the keyboard now (null when the focus is elsewhere) */

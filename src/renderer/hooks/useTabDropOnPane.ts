@@ -31,7 +31,7 @@ type DragPoint = Pick<DragEvent, 'clientX' | 'clientY' | 'altKey'>
 const PANES = '[data-pane], [data-vacant]'
 /** Tabs of the single tab strip and of the split view's strips (they carry their tab id) */
 const TABS = '.terminal-tab[data-tab-id], .split-pane-tab-item[data-tab-id]'
-const TAB_STRIPS = '.terminal-tabs, .split-pane-tabs'
+const TAB_STRIPS = '.terminal-tab-items, .terminal-tabs:not(.terminal-tab-header), .split-pane-tabs'
 const TAB_MERGE_HOLD_MS = 700
 const TAB_MERGE_SLOP_PX = 8
 /** Band along the terminal area's edges that means "split the screen" while a tab of the single strip is dragged */

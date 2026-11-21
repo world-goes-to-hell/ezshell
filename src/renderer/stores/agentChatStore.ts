@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AgentChatApproval, AgentChatFrame, AgentChatItem, AgentChatState } from '../types'
+import type { AgentChatApproval, AgentChatFrame, AgentChatItem, AgentChatState, AgentChatSubagent, CodexSpeedState } from '../types'
 import { MAX_CHAT_ITEMS, reconcileChatEchoes, type ChatEcho } from '../lib/agentChatItems'
 import { toast } from './toastStore'
 
@@ -12,6 +12,7 @@ export interface AgentChat {
   kind: 'claude' | 'codex' | null
   title: string | null
   items: AgentChatItem[]
+  subagents: AgentChatSubagent[]
   echoes: ChatEcho[]
   reply: { sendId: string; itemId: string } | null
   hasOlder: boolean
@@ -19,6 +20,7 @@ export interface AgentChat {
   error: string | null
   /** The agent's prompt with choices on screen now */
   approval: AgentChatApproval | null
+  codexSpeed: CodexSpeedState | null
 }
 
 interface AgentChatStoreState {
@@ -35,7 +37,7 @@ interface AgentChatStoreState {
   clearAll: () => void
 }
 
-const empty = (): AgentChat => ({ state: 'opening', kind: null, title: null, items: [], echoes: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null })
+const empty = (): AgentChat => ({ state: 'opening', kind: null, title: null, items: [], subagents: [], echoes: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null })
 
 let stopFrames: (() => void) | null = null
 
@@ -166,10 +168,12 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
           kind: frame.kind ?? chat.kind,
           title: frame.title !== undefined ? frame.title : chat.title,
           items: messages?.items ?? chat.items,
+          subagents: frame.subagents ?? (frame.reset ? [] : chat.subagents),
           echoes: messages?.echoes ?? chat.echoes,
           reply,
           hasOlder: frame.hasOlder ?? chat.hasOlder,
-          approval: frame.approval !== undefined ? frame.approval : chat.approval
+          approval: frame.approval !== undefined ? frame.approval : chat.approval,
+          codexSpeed: frame.codexSpeed !== undefined ? frame.codexSpeed : chat.codexSpeed
         }
       })
     },

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { throttle, REFIT_INTERVAL_MS, type Throttled } from '../../lib/throttle'
+import { readTerminalScrollback } from '../../lib/terminalScrollback'
 import { SerializeAddon } from 'xterm-addon-serialize'
 import { registerSplitShell } from '../../lib/splitShells'
 import { claimIncomingShell, forgetIncomingShell, isIncomingShell, markIncomingDrawn, releaseIncomingShell } from '../../lib/incomingShells'
@@ -202,7 +203,7 @@ export function SplitTerminal({ sessionId, pane, delay = 0 }: SplitTerminalProps
           // xterm's default 'outline' draws a box around the cursor cell in unfocused panes,
           // which looks like a double bar ('||') next to the prompt in split layouts
           cursorInactiveStyle: 'bar',
-          scrollback: 10000,
+          scrollback: readTerminalScrollback(),
           allowProposedApi: true
         })
 

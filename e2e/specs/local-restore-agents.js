@@ -19,7 +19,7 @@ const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
   await unlock(driver)
   const record = {
     version: 1,
-    tabs: [{
+    tabs: [...Array.from({ length: 10 }, (_, index) => ({ kind: 'local', title: `로컬 복원 ${index + 1}`, cwd: path.join(profile, 'work app') })), {
       kind: 'local', title: 'gsd · 작업', cwd: path.join(profile, 'work app'), workspaceLabel: 'work app',
       splitTree: { kind: 'split', axis: 'row', ratio: 0.5, first: { kind: 'pane', pane: 'main' }, second: { kind: 'split', axis: 'col', ratio: 0.5, first: { kind: 'pane', pane: 'split-1' }, second: { kind: 'pane', pane: 'split-2' } } }, paneSeq: 2,
       // split-2: an agent that was never talked to (no session to resume): it starts again fresh
@@ -35,18 +35,18 @@ const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
   check('after unlocking, the notice offers the tab again', await until(`!!document.querySelector('.restore-tabs-banner')`, 15000))
   const before = launches().length
   await js(`[...document.querySelectorAll('.restore-tabs-btn')].find(b => b.textContent.includes('다시 열기')).click()`)
-  check('the local tab opens with its three panes', await until(`document.querySelectorAll('.terminal-tab').length === 1 && document.querySelectorAll('.local-terminal-pane[data-local-shell-id]').length === 3`, 20000))
+  check('eleven local tabs reopen with all thirteen shells', await until(`
+    document.querySelectorAll('.terminal-tab').length === 11 && document.querySelectorAll('.local-terminal-pane[data-local-shell-id]').length === 13
+  `, 45000))
 
-  await until(`true`, 1500)
   const fresh = launches().slice(before)
-  const joined = fresh.map(launch => launch.args.join(' '))
   const claude = fresh.find(launch => launch.args.join(' ').includes(`--resume ${CLAUDE_ID}`))
   const codex = fresh.find(launch => launch.args.join(' ').includes(`resume ${CODEX_ID}`) && !launch.args.join(' ').includes('--resume'))
-  check('the main pane resumes its Claude conversation in its folder', !!claude && path.normalize(claude.cwd) === path.join(profile, 'work app'), JSON.stringify(joined))
-  check('the other pane resumes its Codex conversation in the folder of that session', !!codex && path.normalize(codex.cwd) === path.join(profile, 'other folder'), JSON.stringify(joined))
-  const freshCodex = fresh.filter(launch => launch.args.join(' ').includes('Get-Command codex') && !launch.args.join(' ').includes(' resume '))
-  check('the pane whose agent had no conversation starts the same agent fresh', freshCodex.length === 1, JSON.stringify(joined))
-  check('the tab keeps its recorded title', await js(`document.querySelector('.terminal-tab')?.textContent.includes('gsd · 작업')`))
+  check('the main pane resumes its Claude conversation in its folder', !!claude && path.normalize(claude.cwd) === path.join(profile, 'work app'), claude?.cwd)
+  check('the other pane resumes its Codex conversation in the folder of that session', !!codex && path.normalize(codex.cwd) === path.join(profile, 'other folder'), codex?.cwd)
+  const freshCodex = fresh.filter(({ args }) => args.some(arg => arg.includes('mcp_servers.ezshell-cli-mcp.command=')) && !args.join(' ').includes(' resume '))
+  check('the pane whose agent had no conversation starts the same agent fresh', freshCodex.length === 1, String(freshCodex.length))
+  check('the split tab keeps its recorded title', await js(`[...document.querySelectorAll('.terminal-tab')].some(tab => tab.textContent.includes('gsd · 작업'))`))
 
   finish()
 })().catch(error => { console.error(error); process.exit(1) })

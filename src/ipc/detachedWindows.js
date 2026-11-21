@@ -223,13 +223,27 @@ function registerDetachedWindows(ctx) {
     if (mcpActivityWindow && !mcpActivityWindow.isDestroyed()) mcpActivityWindow.close();
   }
 
-  function createRemoteFileWindow(docId) {
-    const place = detachedWindowPlace.open('remoteFile', { width: 1000, height: 720 }, { width: 520, height: 360 });
+  function createRemoteFileWindow(atCursor = false) {
+    const min = { width: 520, height: 360 };
+    let place = detachedWindowPlace.open('remoteFile', { width: 1000, height: 720 }, min);
+    if (atCursor) {
+      const { screen } = require('electron');
+      const pointer = screen.getCursorScreenPoint();
+      const workArea = screen.getDisplayNearestPoint(pointer).workArea;
+      const width = Math.max(min.width, Math.min(place.width, workArea.width));
+      const height = Math.max(min.height, Math.min(place.height, workArea.height));
+      place = {
+        width, height, isMaximized: false,
+        x: Math.max(workArea.x, Math.min(pointer.x - 40, workArea.x + workArea.width - width)),
+        y: Math.max(workArea.y, Math.min(pointer.y - 16, workArea.y + workArea.height - height))
+      };
+    }
     const win = new BrowserWindow({
       icon: WINDOW_ICON,
       ...detachedWindowPlace.options(place),
       minWidth: 520,
       minHeight: 360,
+      show: !atCursor,
       frame: false,
       backgroundColor: '#1e1e2e',
       webPreferences: {
@@ -239,15 +253,17 @@ function registerDetachedWindows(ctx) {
         preload: path.join(__dirname, '../preload/index.js')
       }
     });
-    const query = { remoteFileMode: 'true', docId };
+    const query = { remoteFileMode: 'true' };
     detachedWindowPlace.track(win, 'remoteFile', place, null);
     if (process.env.ELECTRON_RENDERER_URL) {
-      win.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${new URLSearchParams(query).toString()}`);
+      win.filePageReady = win.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${new URLSearchParams(query).toString()}`);
     } else if (process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) {
-      win.loadURL(`${DEV_RENDERER_URL}?${new URLSearchParams(query).toString()}`);
+      win.filePageReady = win.loadURL(`${DEV_RENDERER_URL}?${new URLSearchParams(query).toString()}`);
     } else {
-      win.loadFile(path.join(__dirname, '../renderer/index.html'), { query });
+      win.filePageReady = win.loadFile(path.join(__dirname, '../renderer/index.html'), { query });
     }
+    // The detach request awaits this promise before moving the document.
+    win.filePageReady.catch(() => { if (!atCursor && !win.isDestroyed()) win.close(); });
     return win;
   }
 

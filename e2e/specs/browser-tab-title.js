@@ -1,17 +1,19 @@
 // A browser tab takes the name of the page it shows (its <title>), the host when the page has none.
 const http = require('node:http')
-const { connect, createChecks, unlock } = require('../support/driver')
+const { connect, createChecks, SET, unlock } = require('../support/driver')
 
 const { check, finish } = createChecks()
 
 async function run() {
+  const longTitle = '길게 표시되는 브라우저 페이지 제목 '.repeat(8) + '제목 끝'
   const server = http.createServer((request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     if (request.url.startsWith('/untitled')) {
       response.end('<meta charset=utf-8><p>제목 없음</p>')
       return
     }
-    response.end('<meta charset=utf-8><title>검토 화면 — 첫 페이지</title><p>본문</p>')
+    const title = request.url === '/long' ? longTitle : '검토 화면 — 첫 페이지'
+    response.end(`<meta charset=utf-8><title>${title}</title><p>본문</p>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const origin = 'http://127.0.0.1:' + server.address().port
@@ -19,32 +21,67 @@ async function run() {
   const main = await connect()
   try {
     await unlock(main)
-    const plus = `[...document.querySelectorAll('.new-tab-btn')].find(button => button.offsetParent)`
-    if (!(await main.until(`!!${plus}`))) throw new Error('no plus button')
-    await main.click(...await main.center(plus))
-    const item = `[...document.querySelectorAll('.new-tab-menu-item')].find(item => item.textContent.trim() === '브라우저 열기')`
-    if (!(await main.until(`!!${item}`))) throw new Error('the plus menu has no browser item')
-    await main.click(...await main.center(item))
     const active = `document.querySelector('.terminal-tab.active[data-tab-id^="browser:"]')`
-    if (!(await main.until(`!!${active}`))) throw new Error('the browser tab did not open')
-    const id = await main.js(`${active}.dataset.tabId`)
+    async function openBrowserTab() {
+      const previous = await main.js(`${active}?.dataset.tabId ?? null`)
+      const plus = `[...document.querySelectorAll('.new-tab-btn')].find(button => button.offsetParent)`
+      if (!(await main.until(`!!${plus}`))) throw new Error('no plus button')
+      await main.click(...await main.center(plus))
+      const item = `[...document.querySelectorAll('.new-tab-menu-item')].find(item => item.textContent.trim() === '브라우저 열기')`
+      if (!(await main.until(`!!${item}`))) throw new Error('the plus menu has no browser item')
+      await main.click(...await main.center(item))
+      if (!(await main.until(`${active}?.dataset.tabId && ${active}.dataset.tabId !== ${JSON.stringify(previous)}`))) {
+        throw new Error('the browser tab did not open')
+      }
+      return main.js(`${active}.dataset.tabId`)
+    }
+    const stateOf = id => `window.electronAPI.browserReviewState(${JSON.stringify(id)})`
+    const control = (id, selector) => `document.querySelector('[data-browser-tab-id="${id}"]')?.querySelector(${JSON.stringify(selector)})`
+    const closeTab = id => main.js(`document.querySelector('.terminal-tab[data-tab-id="${id}"] .tab-close').click()`)
+    const navigate = (id, address) => main.js(`window.electronAPI.browserReviewAction(${JSON.stringify(id)}, { type: 'navigate', address: ${JSON.stringify(address)} })`)
+    const id = await openBrowserTab()
     const tabText = `(document.querySelector('.terminal-tab[data-tab-id="${id}"]')?.textContent ?? '')`
-    const navigate = address => main.js(`window.electronAPI.browserReviewAction(${JSON.stringify(id)}, { type: 'navigate', address: ${JSON.stringify(address)} })`)
 
     check('a new browser tab starts with the default name', await main.until(`${tabText}.includes('브라우저')`))
 
-    await navigate(origin + '/')
+    await navigate(id, origin + '/')
     check('the tab takes the page title', await main.until(`${tabText}.includes('검토 화면 — 첫 페이지')`, 10000))
 
     const titleState = `window.electronAPI.browserReviewState(${JSON.stringify(id)}).then(state => state.title)`
     check('main reports the title with the tab state',
       await main.until(`${titleState}.then(title => title === '검토 화면 — 첫 페이지')`), await main.js(titleState))
 
-    await navigate(origin + '/untitled')
+    await navigate(id, origin + '/untitled')
     check('a page without a title shows its host', await main.until(`${tabText}.includes(${JSON.stringify(host)}) && !${tabText}.includes('첫 페이지')`, 10000))
 
     await main.js(`window.electronAPI.browserReviewAction(${JSON.stringify(id)}, { type: 'back' })`)
     check('going back shows the earlier page title again', await main.until(`${tabText}.includes('첫 페이지')`, 10000))
+
+    const regularTab = id => `document.querySelector('.terminal-tab[data-tab-id="${id}"]')`
+    const tabLabel = `${regularTab(id)}?.querySelector('[data-tab-label]')`
+    const hasWidth = (tab, width) => `Math.abs((${tab}?.getBoundingClientRect().width ?? 0) - ${width}) < 2`
+    await navigate(id, origin + '/long')
+    check('a long page title is clipped within the default 240 px browser tab', await main.until(`
+      ${tabLabel}?.textContent === ${JSON.stringify(longTitle)} && ${hasWidth(regularTab(id), 240)} &&
+      ${tabLabel}.scrollWidth > ${tabLabel}.clientWidth && getComputedStyle(${tabLabel}).textOverflow === 'ellipsis'
+    `))
+    await main.move(...await main.center(tabLabel))
+    check('hover shows the full title', await main.until(`document.querySelector('.browser-tab-title-tooltip.is-visible')?.textContent === ${JSON.stringify(longTitle)}`))
+    await main.move(10, 10)
+
+    await main.js(`document.querySelector('.title-bar-btn[title="설정"]').click()`)
+    const widthSetting = `document.querySelector('#browser-tab-width')`
+    await main.until(`!!${widthSetting}`)
+    await main.js(`${widthSetting}.focus()`)
+    const home = { key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 }
+    await main.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...home })
+    await main.send('Input.dispatchKeyEvent', { type: 'keyUp', ...home })
+    check('changing the maximum width applies to the open tab and is saved', await main.until(`
+      ${widthSetting}?.value === '120' && ${hasWidth(regularTab(id), 120)} &&
+      JSON.parse(localStorage.getItem('ui-store')).state.browserTabMaxWidth === 120
+    `))
+    await main.js(`document.querySelector('.settings-modal .modal-close-btn').click()`)
+    await main.until(`!document.querySelector('.settings-modal')`)
 
     // The folded sidebar opened by hovering slides over the tab: the page (a native view above the
     // app) narrows to give way instead of covering it (reported 2026-11-20)
@@ -102,8 +139,70 @@ async function run() {
     // Closing the tab takes its developer tools window along
     await main.js(`${button}.click()`)
     await main.until(devToolsOpen, 10000)
-    await main.js(`document.querySelector('.terminal-tab[data-tab-id="${id}"] .tab-close').click()`)
+    await closeTab(id)
     check('closing the tab closes its developer tools window', await (async () => { for (let i = 0; i < 30; i++) { if (await devToolsTargets() === 0) return true; await new Promise(r => setTimeout(r, 300)) } return false })())
+
+    const savedUrl = origin + '/?view=demo#section'
+    const savedId = await openBrowserTab()
+    const star = id => control(id, '.browser-review-bookmark')
+    const listButton = id => control(id, '.browser-review-bookmarks-toggle')
+    const entry = id => control(id, '.browser-review-bookmark-open')
+    const toggleList = async id => main.click(...await main.center(listButton(id)))
+    const loaded = id => `${stateOf(id)}.then(state => state?.url === ${JSON.stringify(savedUrl)} && !state.loading && !!state.title)`
+    check('an empty tab cannot bookmark a page', await main.until(`${star(savedId)}?.disabled === true`))
+    await navigate(savedId, savedUrl)
+    await main.until(`${star(savedId)}?.disabled === false && ${loaded(savedId)}`)
+    await main.js(`(${SET})(${control(savedId, 'input[aria-label="웹 주소"]')}, 'https://unsaved.example')`)
+    await main.click(...await main.center(star(savedId)))
+    check('starring saves the loaded page while the address is being edited', await main.until(`${star(savedId)}?.getAttribute('aria-pressed') === 'true'`))
+
+    const otherId = await openBrowserTab()
+    await main.until(`!!${listButton(otherId)}`)
+    await toggleList(otherId)
+    check('a new browser tab shares the saved title and exact URL', await main.until(`
+      ${entry(otherId)}?.textContent.includes('검토 화면 — 첫 페이지') && ${entry(otherId)}?.title === ${JSON.stringify(savedUrl)}
+    `))
+    await main.click(...await main.center(entry(otherId)))
+    check('clicking a bookmark loads it in the current tab and marks the star', await main.until(`
+      ${star(otherId)}?.getAttribute('aria-pressed') === 'true' && !${entry(otherId)} && ${loaded(otherId)}
+    `))
+    await closeTab(otherId)
+    await closeTab(savedId)
+    await main.send('Page.reload')
+    await unlock(main)
+    const restoredId = await openBrowserTab()
+    await main.until(`!!${listButton(restoredId)}`)
+    await toggleList(restoredId)
+    check('bookmarks survive a renderer reload', await main.until(`${entry(restoredId)}?.title === ${JSON.stringify(savedUrl)}`))
+    const remove = control(restoredId, '.browser-review-bookmark-remove')
+    await main.click(...await main.center(remove))
+    check('the remove button deletes the bookmark without opening its page', await main.until(`
+      ${control(restoredId, '.browser-review-bookmarks p')}?.textContent.includes('저장된 즐겨찾기가 없습니다') &&
+      ${stateOf(restoredId)}.then(state => state?.url === '')
+    `))
+    await navigate(restoredId, origin + '/long')
+    check('the chosen maximum browser tab width survives a reload', await main.until(`
+      ${regularTab(restoredId)}?.querySelector('[data-tab-label]').textContent === ${JSON.stringify(longTitle)} && ${hasWidth(regularTab(restoredId), 120)}
+    `))
+    await openBrowserTab()
+    await main.js(`(() => {
+      const tab = ${regularTab(restoredId)}
+      const dt = new DataTransfer()
+      tab.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }))
+      window.browserWidthTestDrag = { tab, dt }
+    })()`)
+    await main.js(`(() => {
+      const area = document.querySelector('.terminal-area')
+      const rect = area.getBoundingClientRect()
+      area.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: window.browserWidthTestDrag.dt,
+        clientX: rect.right - 15, clientY: rect.top + rect.height / 2 }))
+    })()`)
+    await main.until(`!!document.querySelector('.drop-zone-right.active')`)
+    await main.js(`window.browserWidthTestDrag.tab.dispatchEvent(new DragEvent('dragend', { bubbles: true }))`)
+    const splitTab = `document.querySelector('.split-pane-tab-item[data-tab-id="${restoredId}"]')`
+    check('the browser tab honors the same width in a split', await main.until(`
+      ${hasWidth(splitTab, 120)} && ${splitTab}?.title === ${JSON.stringify(longTitle)}
+    `))
   } finally {
     server.close()
     main.close()

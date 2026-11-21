@@ -57,6 +57,10 @@
   color: var(--accent);
 }
 
+.sidebar-peek-switch[data-agent-work]::after {
+  --agent-trace-inset: -1px;
+}
+
 .sidebar-peek-switch svg:last-child {
   margin-inline-start: auto;
 }
@@ -345,6 +349,11 @@
 .rail-group:is(:hover, :focus-visible) {
   background: var(--bg-modifier-hover);
   color: var(--accent);
+}
+
+.rail-group[data-agent-work]::after {
+  --agent-trace-inset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .rail-group:focus-visible {

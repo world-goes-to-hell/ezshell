@@ -4,6 +4,7 @@ import { RiArrowDownLine, RiCloseLine, RiErrorWarningLine, RiEyeLine, RiFlagLine
 import type { EditorState } from '@codemirror/state'
 import { PopoutTitleBar } from '../TitleBar/PopoutTitleBar'
 import { CodeEditor, type CodeEditorHandle, type CursorInfo } from './CodeEditor'
+import { FileShortcutHelp } from './FileShortcutHelp'
 import {
   appendLog, goToMarker, goToProblem, isAtBottom, logExtensions, revealLine, scrollToEnd, setWrapped, PROBLEM_LEVELS,
   type JumpOutcome, type NavKind, type NavTarget
@@ -408,35 +409,37 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
         )}
       </div>
       <div className="remote-file-status">
-        <div className="remote-log-live-status">
-          <span className={`remote-log-follow is-${follow.kind}`} role="status">{followLabel(follow, isTailMode)}</span>
-          {isLive && follow.kind === 'live' && !follow.note && (
-            <span className="remote-log-burst-slot">
-              {burstLines > 0 && <span className="remote-log-burst" title="이번 로그 급증에서 들어온 줄 수">+{burstLines.toLocaleString()}줄</span>}
-            </span>
+        <div className="remote-file-status-details">
+          <div className="remote-log-live-status">
+            <span className={`remote-log-follow is-${follow.kind}`} role="status">{followLabel(follow, isTailMode)}</span>
+            {isLive && follow.kind === 'live' && !follow.note && (
+              <span className="remote-log-burst-slot">
+                {burstLines > 0 && <span className="remote-log-burst" title="이번 로그 급증에서 들어온 줄 수">+{burstLines.toLocaleString()}줄</span>}
+              </span>
+            )}
+          </div>
+          {isTrimmed && <span className="remote-log-note" title="창에는 최근 약 5MB 만 둡니다">오래된 줄 정리됨</span>}
+          <span className="remote-file-status-spacer" />
+          {scopeMarker ? (
+            <button type="button" className="remote-log-count remote-log-marker remote-log-scope" onClick={() => toggleMarkerScope(scopeMarker.id)} title="기준점 범위 해제">
+              <RiFlagLine size={12} aria-hidden="true" /> {scopeMarker.label ?? `기준점 ${scopeMarker.id}`} 이후 <RiCloseLine size={12} aria-hidden="true" />
+            </button>
+          ) : latestMarker && (
+            <button type="button" className="remote-log-count remote-log-marker" onClick={() => goTo(latestMarker.pos, 'marker')}
+              title={`가장 최근 기준점(${latestMarker.time})으로 이동 · 기준점 ${outline.markers.length}개 · F9 로 기준점 사이를 이동합니다`}>
+              <RiFlagLine size={12} aria-hidden="true" /> {latestMarker.label ?? `기준점 ${latestMarker.id}`} · 뒤 {latestMarker.linesAfter.toLocaleString()}줄
+              {latestMarker.after.error > 0 && <span className="remote-log-marker-errors"> · 오류 {latestMarker.after.error.toLocaleString()}</span>}
+            </button>
           )}
+          <button type="button" className={`remote-log-count${counts.error > 0 ? ' is-error' : ''}`} disabled={counts.error === 0}
+            onClick={() => stepProblem(1, 'error')} title="다음 오류로 이동 (스택 트레이스는 한 건으로 셉니다)">오류 {counts.error.toLocaleString()}</button>
+          <button type="button" className={`remote-log-count${counts.warn > 0 ? ' is-warn' : ''}`} disabled={counts.warn === 0}
+            onClick={() => stepProblem(1, 'warn')} title="다음 경고로 이동">경고 {counts.warn.toLocaleString()}</button>
+          <StepButtons name={FILTER_NAME[filter]} keyName="F8" disabled={outline.total === 0} onStep={target => stepProblem(target)}
+            position={outline.total > 0 ? `${filter === 'all' ? '' : `${FILTER_NAME[filter]} `}${outline.ordinal.toLocaleString()}/${outline.total.toLocaleString()}` : undefined} />
+          <span>줄 {cursor.line}, 열 {cursor.column}</span>
         </div>
-        {isTrimmed && <span className="remote-log-note" title="창에는 최근 약 5MB 만 둡니다">오래된 줄 정리됨</span>}
-        <span className="remote-file-status-spacer" />
-        {scopeMarker ? (
-          <button type="button" className="remote-log-count remote-log-marker remote-log-scope" onClick={() => toggleMarkerScope(scopeMarker.id)} title="기준점 범위 해제">
-            <RiFlagLine size={12} aria-hidden="true" /> {scopeMarker.label ?? `기준점 ${scopeMarker.id}`} 이후 <RiCloseLine size={12} aria-hidden="true" />
-          </button>
-        ) : latestMarker && (
-          <button type="button" className="remote-log-count remote-log-marker" onClick={() => goTo(latestMarker.pos, 'marker')}
-            title={`가장 최근 기준점(${latestMarker.time})으로 이동 · 기준점 ${outline.markers.length}개 · F9 로 기준점 사이를 이동합니다`}>
-            <RiFlagLine size={12} aria-hidden="true" /> {latestMarker.label ?? `기준점 ${latestMarker.id}`} · 뒤 {latestMarker.linesAfter.toLocaleString()}줄
-            {latestMarker.after.error > 0 && <span className="remote-log-marker-errors"> · 오류 {latestMarker.after.error.toLocaleString()}</span>}
-          </button>
-        )}
-        <button type="button" className={`remote-log-count${counts.error > 0 ? ' is-error' : ''}`} disabled={counts.error === 0}
-          onClick={() => stepProblem(1, 'error')} title="다음 오류로 이동 (스택 트레이스는 한 건으로 셉니다)">오류 {counts.error.toLocaleString()}</button>
-        <button type="button" className={`remote-log-count${counts.warn > 0 ? ' is-warn' : ''}`} disabled={counts.warn === 0}
-          onClick={() => stepProblem(1, 'warn')} title="다음 경고로 이동">경고 {counts.warn.toLocaleString()}</button>
-        <StepButtons name={FILTER_NAME[filter]} keyName="F8" disabled={outline.total === 0} onStep={target => stepProblem(target)}
-          position={outline.total > 0 ? `${filter === 'all' ? '' : `${FILTER_NAME[filter]} `}${outline.ordinal.toLocaleString()}/${outline.total.toLocaleString()}` : undefined} />
-        <span>줄 {cursor.line}, 열 {cursor.column}</span>
-        <span className="remote-file-status-keys">F8 오류·경고 · F9 기준점 · Alt+휠 이동 · Ctrl+휠 화면 배율 · Ctrl+M 기준점 찍기</span>
+        <FileShortcutHelp view="log" />
       </div>
     </div>
   )

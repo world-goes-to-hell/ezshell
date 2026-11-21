@@ -4,6 +4,12 @@
 
 export const LOCAL_PROJECTS_KEY = 'ezshell.localProjects'
 export const LOCAL_PROJECTS_EVENT = 'ezshell:local-projects-changed'
+/**
+ * Opens a local terminal tab with an agent ({ cwd?, agent?, workspaceLabel? }): the screen tests start
+ * their fake agents this way, since the 로컬 작업 dialog opens the user's shell only. It asks nothing of
+ * main that the page could not ask through `localShellOpen` already.
+ */
+export const OPEN_LOCAL_TERMINAL_EVENT = 'ezshell:open-local-terminal'
 /** Folded projects and worktrees of the sidebar tree */
 export const LOCAL_TREE_FOLDED_KEY = 'ezshell.localTreeFolded'
 

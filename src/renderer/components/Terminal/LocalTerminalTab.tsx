@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import { throttle, REFIT_INTERVAL_MS } from '../../lib/throttle'
+import { readTerminalScrollback } from '../../lib/terminalScrollback'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
@@ -17,10 +18,11 @@ import { commonTerminalItems } from './terminalMenuCommon'
 import { attachLogHighlight } from './terminalLogHighlight'
 import { attachTerminalWebLinks } from './terminalWebLinks'
 import { PaneArrival, SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
-import { AgentPaneMessages, useAgentMessagesStore } from './AgentMessages'
+import { AgentPaneMessages, isAgentWorking, useAgentMessagesStore } from './AgentMessages'
 import { agentNewlineFor } from '../../lib/agentNewline'
 import { AgentPaneUsage } from '../AgentUsage/AgentUsageMeters'
 import { AgentChatCover } from '../AgentChat/AgentChatCover'
+import { AgentSleepCover } from '../AgentChat/AgentSleepCover'
 import { useAgentChatStore } from '../../stores/agentChatStore'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
 import { matchesBinding } from '../../lib/shortcutMatch'
@@ -29,6 +31,7 @@ import { shellAgentOf } from '../../lib/agentChatItems'
 import { buildLocalInsertSequence } from '../../lib/commandCapture'
 import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory'
 import { CommandHistoryPanel } from './CommandHistoryPanel'
+import { isTabHostPreviewed } from '../../lib/tabHosts'
 import './LocalTerminalTab.css'
 
 /** Shows a shell as a chat when an agent runs in it; says why not otherwise */
@@ -84,7 +87,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const agentWork = useAgentMessagesStore(state => {
     const agent = state.snapshot.agents.find(item => item.shellId === shellId)
     if (!agent) return undefined
-    return !exit && agent.status === 'working' && !agent.waitingForReply ? 'working' : 'idle'
+    return !exit && isAgentWorking(agent) ? 'working' : 'idle'
   })
   const chatAgent = useAgentMessagesStore(() => chatAgentOf(shellId))
   const isChat = useAgentChatStore(state => state.chats.has(shellId))
@@ -129,7 +132,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       cursorBlink: true,
       cursorStyle: 'bar',
       cursorInactiveStyle: 'bar',
-      scrollback: 10000,
+      scrollback: readTerminalScrollback(),
       allowProposedApi: true
     })
     const addon = new FitAddon()
@@ -302,14 +305,57 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     setMenu({ x: event.clientX, y: event.clientY })
   }
 
+  const then = (action: () => void) => () => {
+    action()
+    if (!isChat) window.setTimeout(() => terminalRef.current?.focus(), 0)
+  }
+
+  const getSplitMenu = (): TerminalMenuGroup | null => {
+    const terminal = terminalRef.current
+    if (!terminal) return null
+    const tree = tab?.splitTree ?? singlePane()
+    const isSplit = tab?.isSplit === true
+    const isFull = leafCount(tree) >= MAX_PANES
+    const isTooNarrow = Math.floor(terminal.cols / 2) < MIN_PANE_COLS
+    const isTooShort = Math.floor(terminal.rows / 2) < MIN_PANE_ROWS
+    return {
+      label: '분할',
+      icon: RiLayoutColumnLine,
+      items: [
+        {
+          label: isFull ? `좌우 분할 (칸은 ${MAX_PANES}개까지)` : isTooNarrow ? '좌우 분할 (칸이 좁습니다)' : '좌우 분할',
+          icon: RiSplitCellsHorizontal,
+          disabled: isFull || isTooNarrow,
+          onSelect: then(() => splitTerminalPane(tabId, pane, 'row'))
+        },
+        {
+          label: isFull ? `상하 분할 (칸은 ${MAX_PANES}개까지)` : isTooShort ? '상하 분할 (칸이 낮습니다)' : '상하 분할',
+          icon: RiSplitCellsVertical,
+          disabled: isFull || isTooShort,
+          onSelect: then(() => splitTerminalPane(tabId, pane, 'col'))
+        },
+        MENU_SEPARATOR,
+        { label: '칸 크기 균등화', icon: RiLayoutGridLine, disabled: !isSplit, onSelect: then(() => { setSplitTree(tabId, equalize(tree)); refit() }) },
+        // Another shell becomes the main one when closing the tab's first pane.
+        {
+          label: '이 칸 닫기',
+          icon: RiCloseLine,
+          disabled: !isSplit,
+          onSelect: () => {
+            void closeTabPane(tabId, pane).then((result) => {
+              if (result.ok) refit()
+              else toast.error('칸을 닫지 못했습니다', result.error)
+            })
+          }
+        }
+      ]
+    }
+  }
+
   const terminal = terminalRef.current
   let groups: TerminalMenuGroup[] | null = null
   let top: ReturnType<typeof commonTerminalItems>['top'] | null = null
   if (menu && terminal) {
-    const then = (action: () => void) => () => {
-      action()
-      window.setTimeout(() => terminal.focus(), 0)
-    }
     const items = commonTerminalItems(terminal, tabName, then, pasteRef.current)
     const chatKey = shortcutLabel(useShortcutsStore.getState().getEffectiveKeys('toggle-agent-chat'))
     top = [
@@ -322,47 +368,8 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
         onSelect: () => showChat(shellId)
       }
     ]
-    const tree = tab?.splitTree ?? singlePane()
-    const isSplit = tab?.isSplit === true
-    const isFull = leafCount(tree) >= MAX_PANES
-    const isTooNarrow = Math.floor(terminal.cols / 2) < MIN_PANE_COLS
-    const isTooShort = Math.floor(terminal.rows / 2) < MIN_PANE_ROWS
-    groups = [
-      {
-        label: '분할',
-        icon: RiLayoutColumnLine,
-        items: [
-          // Divides the pane that was clicked only: a new shell of this PC opens to its right or below it
-          {
-            label: isFull ? `좌우 분할 (칸은 ${MAX_PANES}개까지)` : isTooNarrow ? '좌우 분할 (칸이 좁습니다)' : '좌우 분할',
-            icon: RiSplitCellsHorizontal,
-            disabled: isFull || isTooNarrow,
-            onSelect: then(() => splitTerminalPane(tabId, pane, 'row'))
-          },
-          {
-            label: isFull ? `상하 분할 (칸은 ${MAX_PANES}개까지)` : isTooShort ? '상하 분할 (칸이 낮습니다)' : '상하 분할',
-            icon: RiSplitCellsVertical,
-            disabled: isFull || isTooShort,
-            onSelect: then(() => splitTerminalPane(tabId, pane, 'col'))
-          },
-          MENU_SEPARATOR,
-          { label: '칸 크기 균등화', icon: RiLayoutGridLine, disabled: !isSplit, onSelect: then(() => { setSplitTree(tabId, equalize(tree)); refit() }) },
-          // The tab's first terminal closes too: another shell of the tab becomes the main one
-          {
-            label: '이 칸 닫기',
-            icon: RiCloseLine,
-            disabled: !isSplit,
-            onSelect: () => {
-              void closeTabPane(tabId, pane).then((result) => {
-                if (result.ok) refit()
-                else toast.error('칸을 닫지 못했습니다', result.error)
-              })
-            }
-          }
-        ]
-      },
-      { label: '편의', icon: RiToolsLine, items: items.output }
-    ]
+    const split = getSplitMenu()
+    groups = [...(split ? [split] : []), { label: '편의', icon: RiToolsLine, items: items.output }]
   }
 
   return (
@@ -395,12 +402,14 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
           <AgentChatCover
             shellId={shellId}
             tabId={tabId}
+            getSplitMenu={getSplitMenu}
             onShowTerminal={() => {
               useAgentChatStore.getState().hide(shellId)
               window.setTimeout(() => terminalRef.current?.focus(), 0)
             }}
           />
         )}
+        <AgentSleepCover shellId={shellId} onTerminal={() => window.setTimeout(() => terminalRef.current?.focus(), 0)} />
       </div>
       <AgentPaneUsage shellId={shellId} />
       <AgentPaneMessages shellId={shellId} tabId={tabId} />
@@ -474,7 +483,9 @@ export function LocalTerminalTab({ terminalId, isActive, onActivate }: LocalTerm
   }, [terminalId, splitTree])
 
   return (
-    <div ref={containerRef} className={`local-terminal-tab${isSplit ? ' is-split' : ''}`} onMouseDown={onActivate}>
+    <div ref={containerRef} className={`local-terminal-tab${isSplit ? ' is-split' : ''}`} onMouseDown={() => {
+      if (!isTabHostPreviewed(terminalId)) onActivate()
+    }}>
       <LocalShellView
         key={mainShellId}
         tabId={terminalId}

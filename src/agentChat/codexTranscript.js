@@ -1,3 +1,5 @@
+const { createTurnUsage } = require('./turnUsage.js')
+const { codexUsageFromTokenCount } = require('../ipc/agentUsage.js')
 const { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, diffFromText, addedLines, clipLines, readableOutput, readableValue } = require('./items.js')
 
 // Codex's `rollout-*.jsonl`. Since `item_completed` events (Codex 0.1xx), each finished thing is one
@@ -8,6 +10,12 @@ const { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, diffFromText
 const joinText = (content, types) => (Array.isArray(content)
   ? content.filter(block => types.includes(block?.type) && typeof block.text === 'string').map(block => block.text).join('\n').trim()
   : '')
+
+/** Some Codex delegation fields contain an opaque encrypted token instead of display text. */
+function visibleCodexText(value) {
+  const content = text(value).trim()
+  return /^gAAAA[A-Za-z0-9_-]{65,}={0,2}$/.test(content) ? '' : content
+}
 
 /** The command Codex ran: its argv is often [shell, -Command/-lc, script], so the script is what matters */
 function commandText(command) {
@@ -34,7 +42,9 @@ function fileChange(changes) {
 }
 
 function createCodexParser() {
-  function feed(line) {
+  const turns = createTurnUsage()
+
+  function feed(line, { older = false } = {}) {
     const out = []
     if (!line || typeof line !== 'object') return { items: out }
     const time = timeOf(line.timestamp)
@@ -42,13 +52,32 @@ function createCodexParser() {
     if (line.type === 'event_msg' && payload?.type === 'turn_aborted') {
       out.push({ id: `notice:${payload.turn_id ?? time}`, kind: 'notice', time, text: '중지했습니다' })
     }
+    // What a model call cost: `last_token_usage`, keyed by the running total (an event can come twice)
+    if (line.type === 'event_msg' && payload?.type === 'token_count' && payload.info?.last_token_usage) {
+      const last = payload.info.last_token_usage
+      const key = payload.info.total_token_usage?.total_tokens ?? `${time}:${last.total_tokens}`
+      // The account's windows after this call (its 5-hour and weekly percent)
+      turns.limits(codexUsageFromTokenCount(payload), { older })
+      const owner = turns.add(key, { input: last.input_tokens, cached: last.cached_input_tokens, output: last.output_tokens }, { older, at: time })
+      if (owner) out.push(owner)
+      return { items: out }
+    }
+    if (line.type === 'event_msg' && payload?.type === 'task_complete') {
+      const owner = turns.duration(payload.duration_ms, { older })
+      if (owner) out.push(owner)
+      return { items: out }
+    }
     if (line.type !== 'event_msg' || payload?.type !== 'item_completed' || !payload.item) return { items: out }
     const item = payload.item
     const id = `${item.type}:${text(item.id) || time}`
     switch (item.type) {
       case 'UserMessage': {
         const said = joinText(item.content, ['text'])
-        if (said) out.push({ id, kind: 'user', time, text: clip(said, LIMITS.text) })
+        if (said) {
+          const user = { id, kind: 'user', time, text: clip(said, LIMITS.text) }
+          turns.start(user, { older })
+          out.push(user)
+        }
         break
       }
       case 'AgentMessage': {
@@ -111,7 +140,7 @@ function createCodexParser() {
     return { items: out }
   }
 
-  return { feed }
+  return { feed, beginOlder: turns.beginOlder, endOlder: turns.endOlder }
 }
 
-module.exports = { createCodexParser, commandText, fileChange }
+module.exports = { createCodexParser, commandText, fileChange, visibleCodexText }

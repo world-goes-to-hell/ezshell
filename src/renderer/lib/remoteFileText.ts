@@ -29,8 +29,8 @@ export const LINE_ENDING_LABELS: Record<LineEnding, string> = {
   none: 'LF'
 }
 
-export function fileNameOf(remotePath: string): string {
-  const parts = remotePath.split('/').filter(Boolean)
+export function fileNameOf(remotePath: string, local = false): string {
+  const parts = remotePath.split(local && /^([A-Za-z]:|\\\\)/.test(remotePath) ? /[\\/]/ : '/').filter(Boolean)
   return parts[parts.length - 1] || remotePath
 }
 

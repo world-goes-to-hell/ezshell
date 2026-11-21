@@ -4,7 +4,7 @@
 const fs = require('fs')
 const http = require('node:http')
 const path = require('path')
-const { connect, createChecks, sleep, unlock, openLocalProject, pages } = require('../support/driver')
+const { connect, createChecks, sleep, unlock, openLocalAgent, pages } = require('../support/driver')
 
 const { check, finish } = createChecks()
 const profile = process.env.E2E_PROFILE
@@ -35,9 +35,9 @@ async function inAgent(agent, command) {
 }
 
 /** The fake Claude reports its session id the way Claude Code's status line does */
-async function reportSession(agent, sessionId) {
+async function reportSession(agent, sessionId, rateLimits = undefined) {
   const input = file(agent + '-status.json')
-  fs.writeFileSync(input, JSON.stringify({ session_id: sessionId, model: { id: 'claude-opus-5-5', display_name: 'Opus 5.5' }, context_window: { used_percentage: 10, context_window_size: 1000000 } }))
+  fs.writeFileSync(input, JSON.stringify({ session_id: sessionId, model: { id: 'claude-opus-5-5', display_name: 'Opus 5.5' }, context_window: { used_percentage: 10, context_window_size: 1000000 }, ...(rateLimits ? { rate_limits: rateLimits } : {}) }))
   return inAgent(agent, `"%EZSHELL_TEST_AGENT_EXE%" "%EZSHELL_AGENT_USAGE_SCRIPT%" < "${input}"`)
 }
 
@@ -64,15 +64,12 @@ async function reportSession(agent, sessionId) {
     await send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
   }
 
+  async function openAgent(kind) {
+    await openLocalAgent(driver, kind, profile)
+  }
+
   // A Claude in a local tab, with its transcript
-  await openLocalProject(driver)
-  await until(`!!document.querySelector('#local-project-agent')`)
-  await js(`(() => {
-    const select = document.querySelector('#local-project-agent')
-    select.value = 'claude'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-  })()`)
-  await js(`document.querySelector('.local-project-dialog button[type=submit]').click()`)
+  await openAgent('claude')
   check('a Claude opens in a local tab', await until(`document.body.textContent.includes('fixture ready: claude-1')`, 30000))
 
   // The chat key in the terminal turns the pane into a chat
@@ -229,12 +226,12 @@ async function reportSession(agent, sessionId) {
     web.close()
   }
 
-  // A second pane with its own Claude, typed into its shell
-  await js(`document.querySelector('.agent-chat-head-btn').click()`)
-  await until(`!${cover(0)}`, 3000)
-  const r = await js(`(() => { const b = ${pane(0)}.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2] })()`)
-  await driver.menuPick(r[0], r[1], '분할', '좌우 분할')
-  check('the tab splits into two panes', await until(`${PANES}.length === 2 && /PS [A-Z]:/.test(${pane(1)}.textContent)`, 60000))
+  // Split right from the chat and start a second Claude in the new shell.
+  const chatLog = index => `${cover(index)}.querySelector('.agent-chat-log')`
+  await driver.menuPick(...await center(chatLog(0)), '분할', '좌우 분할')
+  check('splitting from chat adds a shell and keeps the original chat open', await until(`
+    ${PANES}.length === 2 && /PS [A-Z]:/.test(${pane(1)}.textContent) && ${cover(0)}?.textContent.includes('첫 칸 질문')
+  `, 60000))
   const secondShell = await js(`${pane(1)}.dataset.localShellId`)
   await js(`window.electronAPI.localShellWrite(${JSON.stringify(secondShell)}, 'claude\\r')`)
   check('a Claude typed into the second pane binds to that shell', await until(`
@@ -243,15 +240,10 @@ async function reportSession(agent, sessionId) {
   fs.writeFileSync(path.join(projects, `${SESSIONS[1]}.jsonl`), prompt('u1', '둘째 칸 질문') + toolUse('a1', 'toolu_1'))
   await reportSession('manual-claude', SESSIONS[1])
 
-  // Both panes as chats at once (Orca allows one per tab)
-  for (const index of [0, 1]) {
-    const box = await js(`(() => { const b = ${pane(index)}.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2] })()`)
-    await click(box[0], box[1], 'right')
-    await until(`[...document.querySelectorAll('.terminal-menu-item')].some(i => i.textContent.startsWith('채팅으로 보기 ('))`, 4000)
-    const item = await center(`[...document.querySelectorAll('.terminal-menu-item')].find(i => i.textContent.startsWith('채팅으로 보기 ('))`)
-    await click(item[0], item[1])
-    await until(`!!${cover(index)}`, 5000)
-  }
+  await click(...await center(pane(1)), 'right')
+  const showChatItem = `[...document.querySelectorAll('.terminal-menu-item')].find(i => i.textContent.startsWith('채팅으로 보기 ('))`
+  await until(`!!${showChatItem}`, 4000)
+  await click(...await center(showChatItem))
   check('both panes of the tab show their chats at the same time', await until(`!!${cover(0)} && !!${cover(1)}`, 5000))
   check('each chat shows its own conversation', await until(`(${cover(0)}.textContent.includes('첫 칸 질문') && !${cover(0)}.textContent.includes('둘째 칸')) &&
     (${cover(1)}.textContent.includes('둘째 칸 질문') && !${cover(1)}.textContent.includes('첫 칸'))`, 8000), JSON.stringify([await coverText(0), await coverText(1)]))
@@ -261,6 +253,83 @@ async function reportSession(agent, sessionId) {
   // A result appended to the transcript shows up
   fs.appendFileSync(path.join(projects, `${SESSIONS[1]}.jsonl`), line({ type: 'user', uuid: 'u2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: '12 passed' }] } }) + answer('a2', '테스트가 통과했습니다'))
   check('what the agent writes next appears in its chat', await until(`${cover(1)}.textContent.includes('테스트가 통과했습니다') && !${cover(1)}.querySelector('.agent-chat-tool').textContent.includes('실행 중')`, 8000), await coverText(1))
+
+  const subagents = index => `${cover(index)}?.querySelector('.agent-chat-subagents')`
+  const subagentEntry = index => `${subagents(index)}?.querySelector('.agent-chat-subagents-entry')`
+  const subagentPreview = "document.querySelector('.agent-chat-subagent-preview')"
+  const delegation = 'toolu_delegate'
+  const childId = 'abc123'
+  const claudeChildFolder = path.join(projects, SESSIONS[1], 'subagents')
+  const claudeChild = path.join(claudeChildFolder, `agent-${childId}.jsonl`)
+  const claudeParent = path.join(projects, `${SESSIONS[1]}.jsonl`)
+  fs.appendFileSync(claudeParent, line({ type: 'assistant', uuid: 'delegate', timestamp: new Date().toISOString(), message: {
+    id: 'delegate', content: [{ type: 'tool_use', id: delegation, name: 'Agent', input: { subagent_type: 'Explore', description: '분할 테스트 검토' } }]
+  } }))
+  check('only the parent pane shows its running subagent in a collapsed summary', await until(`
+    ${subagents(1)}?.querySelector('summary')?.textContent.includes('작업 중 1') &&
+    !${subagents(1)}.open && !${subagents(0)}
+  `, 8000))
+  await js(`${subagents(1)}?.querySelector('summary')?.click()`)
+  check('expanding the summary shows the subagent name and task', await until(`
+    ${subagents(1)}?.open && ${subagents(1)}.querySelector('li strong').textContent === 'Explore' &&
+    ${subagents(1)}.querySelector('.agent-chat-subagents-task').textContent === '분할 테스트 검토'
+  `, 4000))
+  fs.mkdirSync(claudeChildFolder, { recursive: true })
+  fs.writeFileSync(path.join(claudeChildFolder, `agent-${childId}.meta.json`), JSON.stringify({ toolUseId: delegation }))
+  fs.writeFileSync(claudeChild, line({ type: 'assistant', message: { content: [
+    { type: 'thinking', thinking: 'Internal content' },
+    { type: 'tool_use', name: 'WebSearch', input: { query: '분할 테스트 사례' } }
+  ] } }))
+  await driver.move(...await center(subagentEntry(1)))
+  check('hovering Claude shows its running child tool from the metadata link', await until(`
+    ${subagentPreview}?.textContent.includes('분할 테스트 사례') && !${subagentPreview}.textContent.includes('Internal content')
+  `, 8000))
+  fs.appendFileSync(claudeChild, line({ type: 'assistant', message: { content: [
+    { type: 'tool_use', name: 'Read', input: { file_path: 'pane-layout.test.ts' } }
+  ] } }))
+  check('the subagent preview follows the child independently of parent chat output', await until(`
+    ${subagentPreview}?.textContent.includes('pane-layout.test.ts')
+  `, 8000))
+  fs.appendFileSync(claudeChild, answer('child-result', '분할 테스트 검토를 마쳤습니다'))
+  fs.appendFileSync(claudeParent, line({ type: 'user', uuid: 'delegate-started', toolUseResult: { agentId: childId, status: 'async_launched' }, message: {
+    content: [{ type: 'tool_result', tool_use_id: delegation, content: 'Background agent launched' }]
+  } }))
+  fs.appendFileSync(claudeParent, prompt('delegate-ended', `<task-notification><task-id>${childId}</task-id><tool-use-id>${delegation}</tool-use-id><status>completed</status><summary>Agent finished</summary></task-notification>`, new Date().toISOString()))
+  check('the Claude preview updates to the recorded child result', await until(`
+    ${subagents(1)}?.querySelector('summary')?.textContent.includes('완료 1') &&
+    ${subagentPreview}?.querySelector('.agent-chat-subagents-result')?.textContent === '분할 테스트 검토를 마쳤습니다'
+  `, 8000))
+  await shot('local-agent-chat-subagents')
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  check('Escape closes the preview and keeps the subagents expanded', await until(`!${subagentPreview} && ${subagents(1)}.open`, 4000))
+  await js(`${subagents(1)}?.querySelector('summary')?.click()`)
+
+  // The tokens the question used, at the end of its turn (2026-11-21 user request)
+  fs.appendFileSync(path.join(projects, `${SESSIONS[1]}.jsonl`), line({
+    type: 'assistant', uuid: 'a-usage', timestamp: '2026-11-19T10:00:05Z',
+    message: { id: 'm-usage', role: 'assistant', content: [{ type: 'text', text: '정리했습니다' }], usage: { input_tokens: 4, cache_creation_input_tokens: 2000, cache_read_input_tokens: 121000, output_tokens: 3412 } }
+  }) + line({ type: 'system', subtype: 'turn_duration', durationMs: 52000, timestamp: '2026-11-19T10:00:06Z' }))
+  const usageLine = `[...${cover(1)}.querySelectorAll('.agent-chat-usage')].map(line => line.textContent).join('|')`
+  check('the turn shows the tokens it used under its last answer', await until(`
+    ${usageLine} === '토큰 입력 12.3만 · 출력 3,412 · 캐시 98% · 52초' &&
+    ${cover(1)}.querySelector('.agent-chat-assistant + .agent-chat-usage')?.previousElementSibling?.textContent.includes('정리했습니다')
+  `, 8000), await js(usageLine))
+
+  // Claude's windows come from its status line, before the question and after its last answer
+  const windows = (fiveHour, sevenDay) => ({
+    five_hour: { used_percentage: fiveHour, resets_at: Math.floor(Date.now() / 1000) + 3600 },
+    seven_day: { used_percentage: sevenDay, resets_at: Math.floor(Date.now() / 1000) + 86400 }
+  })
+  await reportSession('manual-claude', SESSIONS[1], windows(20, 50))
+  await new Promise(done => setTimeout(done, 300))
+  fs.appendFileSync(path.join(projects, `${SESSIONS[1]}.jsonl`), prompt('u-limits', '한도 질문', new Date().toISOString()) + line({
+    type: 'assistant', uuid: 'a-limits', timestamp: new Date().toISOString(),
+    message: { id: 'm-limits', role: 'assistant', content: [{ type: 'text', text: '한도 답변' }], usage: { input_tokens: 100, output_tokens: 5 } }
+  }))
+  await new Promise(done => setTimeout(done, 300))
+  await reportSession('manual-claude', SESSIONS[1], windows(23, 51))
+  check('a Claude question shows how much of its windows it took', await until(`${usageLine}.endsWith('|토큰 입력 100 · 출력 5 · 5시간 +3% · 주간 +1%')`, 8000), await js(usageLine))
 
   // Sending from the first chat types into that agent's composer only
   await js(`${cover(0)}.querySelector('.agent-chat-input').focus()`)
@@ -295,31 +364,42 @@ async function reportSession(agent, sessionId) {
   check('removing the image disables send for an empty draft', await until(`!${preview} && ${cover(0)}.querySelector('.agent-chat-send').disabled`))
   await pasteIntoChat(0)
   await until(`${preview}?.naturalWidth === 1`)
+  // A second screenshot is added beside the first (2026-11-20 user report: it replaced the first)
+  await pasteIntoChat(0)
+  check('a second screenshot is kept beside the first', await until(`[...${cover(0)}.querySelectorAll('.agent-chat-attachment img')].filter(img => img.naturalWidth === 1).length === 2`))
   fs.writeFileSync(file('clipboard-text'), '클립보드 텍스트')
   await pasteIntoChat(0)
-  check('text paste still fills the draft and retains the screenshot', await until(`${preview}?.naturalWidth === 1 &&
+  check('text paste still fills the draft and retains the screenshots', await until(`${cover(0)}.querySelectorAll('.agent-chat-attachment').length === 2 &&
     ${cover(0)}.querySelector('.agent-chat-input').value === '클립보드 텍스트' && !${sendButton}.disabled`))
   await js(`${sendButton}.click()`)
-  check('sending delivers the screenshot reference and the message text to the selected agent', await waitFor(() => {
+  const isPng = path => path?.endsWith('.png') && fs.existsSync(path) && fs.readFileSync(path).subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+  check('Claude receives both screenshots and exactly the entered text', await waitFor(() => {
     if (read('claude-1-chat-sent') !== '3') return false
-    const [, attachment, , body] = read('claude-1-chat-text').split('\n')
-    return body === '클립보드 텍스트' && attachment?.endsWith('.png') && fs.existsSync(attachment)
-      && fs.readFileSync(attachment).subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+    const [first, second, separator, body, ...extra] = read('claude-1-chat-text').split('\n')
+    return !extra.length && separator === '' && body === '클립보드 텍스트' && first !== second && isPng(first) && isPng(second)
   }), `${read('claude-1-chat-text')} ${await chatFeedback()}`)
   check('the draft preview is cleared after sending', await until(`!${preview} && !${cover(0)}.querySelector('.agent-chat-input').value`))
   fs.unlinkSync(file('clipboard-text'))
   await pasteIntoChat(0)
   await until(`${preview}?.naturalWidth === 1 && !${sendButton}.disabled`)
   await js(`${sendButton}.click()`)
-  check('a screenshot can be sent without any text', await waitFor(() => read('claude-1-chat-sent') === '4'
-    && read('claude-1-chat-text').split('\n').length === 2 && read('claude-1-chat-text').endsWith('.png')), await chatFeedback())
+  check('a screenshot can be sent on its own', await waitFor(() => read('claude-1-chat-sent') === '4'
+    && isPng(read('claude-1-chat-text'))), await chatFeedback())
+  fs.appendFileSync(path.join(projects, `${SESSIONS[0]}.jsonl`), line({
+    type: 'user', uuid: 'attachment-only', timestamp: new Date().toISOString(),
+    message: { role: 'user', content: [{ type: 'image' }] }
+  }) + answer('attachment-only-seen', '첨부 파일을 받았습니다.', new Date().toISOString()))
+  check('the recorded image-only send keeps one screenshot entry in the conversation', await until(`
+    ${cover(0)}.textContent.includes('첨부 파일을 받았습니다.') &&
+    [...${cover(0)}.querySelectorAll('.agent-chat-user')].filter(bubble => bubble.textContent === '스크린샷 첨부').length === 1
+  `))
 
   const previewWidths = `[...${cover(0)}.querySelectorAll('.agent-chat-attachment img')].map(img => img.naturalWidth).join(',')`
   await pasteIntoChat(0)
   await until(`${previewWidths} === '1'`)
   await pasteIntoChat(0)
   check('pasting again appends a second image', await until(`${previewWidths} === '1,1'`))
-  await js(`${cover(0)}.querySelector('[aria-label="이미지 첨부"]').click()`)
+  await driver.menuPick(...await center(chatLog(0)), '편의', '이미지 첨부…')
   check('the image picker adds both selected files to the existing previews', await until(`${previewWidths} === '1,1,2,3'`))
   await js(`${cover(0)}.querySelectorAll('.agent-chat-attachment button')[1].click()`)
   check('removing one preview leaves the other images in order', await until(`${previewWidths} === '1,2,3'`))
@@ -327,7 +407,7 @@ async function reportSession(agent, sessionId) {
   await js(`${sendButton}.click()`)
   check('all remaining images and the full text reach the unfocused composer', await waitFor(() => {
     if (read('claude-1-chat-sent') !== '5') return false
-    const [, ...lines] = read('claude-1-chat-text').split('\n')
+    const lines = read('claude-1-chat-text').split('\n')
     const separator = lines.indexOf('')
     const attachments = lines.slice(0, separator)
     return separator === 3 && new Set(attachments).size === 3
@@ -344,11 +424,88 @@ async function reportSession(agent, sessionId) {
       card.querySelectorAll('.agent-chat-approval-option').length === 3 && !${cover(0)}.querySelector('.agent-chat-input')
   })()`, 8000), await js(`${cover(0)}?.querySelector('.agent-chat-approval')?.textContent ?? 'no card'`))
   check('the other pane\'s chat shows no prompt', await js(`!${cover(1)}.querySelector('.agent-chat-approval')`))
+  await click(...await center(chatLog(0)), 'right')
+  check('paste is disabled while the chat is waiting for an approval', await until(`
+    [...document.querySelectorAll('.terminal-menu-item')].find(item => item.textContent.trim() === '붙여넣기')?.hasAttribute('data-disabled')
+  `))
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await until(`!document.querySelector('.terminal-menu')`)
   await shot('local-agent-chat-approval')
   const second = await center(`${cover(0)}.querySelectorAll('.agent-chat-approval-option')[1]`)
   await click(second[0], second[1])
   check('choosing answers the prompt with that number', await waitFor(() => read('claude-1-approval-answer') === '2'), read('claude-1-approval-answer'))
   check('the composer comes back once the prompt is gone', await until(`!${cover(0)}.querySelector('.agent-chat-approval') && !!${cover(0)}.querySelector('.agent-chat-input')`, 8000))
+
+  const openChatMenu = async () => {
+    const log = await center(chatLog(0))
+    await click(log[0], log[1], 'right')
+    return until(`[...document.querySelectorAll('.terminal-menu-item')].some(item => item.textContent === '채팅 전체 복사')`)
+  }
+  await js(`navigator.clipboard.writeText = async text => { window.copiedConversation = text }`)
+  check('right-click in the chat offers conversation actions', await openChatMenu())
+  check('the chat menu has the basic actions and both pane and utility submenus', await js(`
+    ['복사', '붙여넣기', '모두 선택', '분할', '편의'].every(label =>
+      [...document.querySelectorAll('.terminal-menu-item')].some(item => item.textContent.trim() === label))
+  `))
+  await driver.pick('모두 선택')
+  check('select all from chat selects only the conversation in that pane', await until(`
+    window.getSelection().toString().includes('첫 칸 질문') && !window.getSelection().toString().includes('둘째 칸 질문')
+  `))
+  await js(`(() => {
+    const log = ${chatLog(0)}
+    const point = log.getBoundingClientRect()
+    log.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: point.left + 20, clientY: point.top + 40 }))
+  })()`)
+  await driver.pick('복사')
+  check('copy transfers the selected conversation text', await until(`
+    window.copiedConversation?.includes('첫 칸 질문') && !window.copiedConversation.includes('둘째 칸 질문')
+  `))
+  await js('window.getSelection().removeAllRanges()')
+
+  const box = `${cover(0)}.querySelector('.agent-chat-input')`
+  fs.writeFileSync(file('clipboard-text'), '우클릭 붙여넣기')
+  await openChatMenu()
+  await driver.pick('붙여넣기')
+  check('paste from the conversation puts the clipboard in its own composer and focuses it', await until(`
+    ${box}.value === '우클릭 붙여넣기' && document.activeElement === ${box} &&
+    !${cover(1)}.querySelector('.agent-chat-input').value
+  `))
+  fs.unlinkSync(file('clipboard-text'))
+  await click(...await center(box), 'right')
+  await driver.pick('모두 선택')
+  check('select all from the composer selects the whole draft', await until(`
+    ${box}.selectionStart === 0 && ${box}.selectionEnd === ${box}.value.length && ${box}.value.length > 0
+  `))
+  const backspace = { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 }
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...backspace })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', ...backspace })
+  await until(`!${box}.value`)
+
+  await openChatMenu()
+  await driver.pick('채팅 전체 복사')
+  check('copy all includes the recorded conversation and the latest unrecorded send from this pane', await until(`
+    (window.copiedConversation ?? '').includes('나\\n첫 칸 질문')
+    && window.copiedConversation.includes('Claude\\n첫 칸 **답변**')
+    && window.copiedConversation.includes('나\\n스크린샷 첨부')
+    && window.copiedConversation.includes('세 이미지 비교해 줘.')
+    && !window.copiedConversation.includes('둘째 칸 질문')
+  `), await js(`window.copiedConversation ?? ''`))
+  await driver.menuPick(...await center(chatLog(0)), '편의', '채팅을 파일로 저장…')
+  check('the utility menu saves the conversation of the pane as text', await waitFor(() => {
+    const saved = read('saved-chat.txt')
+    return saved.includes('나\n첫 칸 질문') && saved.includes('세 이미지 비교해 줘.') && !saved.includes('둘째 칸 질문')
+  }))
+  await openChatMenu()
+  await driver.pick('채팅 닫고 터미널로 전환')
+  check('the context menu closes only this chat and focuses its original live terminal', await until(`
+    !${cover(0)} && !!${cover(1)} && ${pane(0)}.dataset.localShellId === ${JSON.stringify(firstShell)}
+    && document.activeElement?.classList.contains('xterm-helper-textarea')
+    && (${pane(0)}.textContent ?? '').includes('fixture ready: claude-1')
+  `))
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
+  await until(`!!${cover(0)}`)
 
   // Back to the terminal with the key, from the chat box
   await js(`${cover(0)}.querySelector('.agent-chat-input').focus()`)
@@ -399,6 +556,142 @@ async function reportSession(agent, sessionId) {
     window.electronAPI.localShellAttach(${JSON.stringify(secondShell)}).then(state => state?.exited === false)
   `))
   check('no transcript path reached the window', await js(`!document.body.innerHTML.includes('claude-home')`))
+  check('Claude chat has no Codex speed buttons', await js(`!document.querySelector('.agent-chat-speed')`))
+
+  await openAgent('codex')
+  const codexAgent = () => js(`window.electronAPI.agentMessagesSnapshot().then(state =>
+    state.agents.find(agent => agent.kind === 'codex' && agent.active)?.id)`)
+  const codexId = await waitFor(codexAgent)
+  check('Codex opens a chat for attaching an image', Boolean(codexId) && await until(`${pane(0)}?.textContent.includes(${JSON.stringify('fixture ready: ' + codexId)})`))
+  await js(`${pane(0)}.querySelector('.xterm-helper-textarea').focus()`)
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
+  await until(`!!${cover(0)}?.querySelector('.agent-chat-input')`)
+  const date = new Date()
+  const day = [String(date.getFullYear()), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')]
+  const rollouts = path.join(profile, 'codex-home', 'sessions', ...day)
+  const codexCwd = await js(`window.electronAPI.agentMessagesSnapshot().then(state => state.agents.find(agent => agent.id === ${JSON.stringify(codexId)})?.cwd)`)
+  const codexTranscript = path.join(rollouts, 'rollout-subagent-test.jsonl')
+  const codexLine = (type, payload, ordinal) => line({ type, payload, ordinal, timestamp: new Date().toISOString() })
+  const codexParentId = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
+  const codexChildId = '01a1ec18-9b8a-71c1-839d-2e31c0103010'
+  const opaque = 'gAAAA' + '1aQz_9'.repeat(20) + '=='
+  const codexUsageLine = percent => codexLine('event_msg', {
+    type: 'token_count', rate_limits: { primary: { window_minutes: 10080, used_percent: percent } }
+  })
+  fs.mkdirSync(rollouts, { recursive: true })
+  fs.writeFileSync(codexTranscript, codexLine('session_meta', { id: codexParentId, cwd: codexCwd, timestamp: date.toISOString(), source: 'cli' }) +
+    codexLine('turn_context', { model: 'gpt-6', effort: 'xhigh' }) + codexUsageLine(22) +
+    codexLine('response_item', { type: 'function_call', name: 'spawn_agent', call_id: 'delegate', arguments: JSON.stringify({ task_name: 'review', message: opaque }) }) +
+    codexLine('response_item', { type: 'function_call_output', call_id: 'delegate', output: JSON.stringify({ task_name: '/root/review' }) }))
+  fs.writeFileSync(path.join(rollouts, `rollout-child-${codexChildId}.jsonl`),
+    codexLine('session_meta', { id: codexChildId, thread_source: 'subagent', parent_thread_id: codexParentId, agent_path: '/root/review', forked_from_id: codexParentId, subagent_history_start_ordinal: 2 }, 0) +
+    codexLine('event_msg', { type: 'item_completed', item: { type: 'AgentMessage', content: [{ type: 'Text', text: 'Inherited parent output' }] } }, 1) +
+    codexLine('event_msg', { type: 'item_completed', item: { type: 'Extension', kind: 'web.search', query: '채팅 저장 검토', action: { type: 'search' } } }, 2))
+  check('Codex shows its delegated task from persisted rollout records', await until(`
+    ${subagents(0)}?.querySelector('summary')?.textContent.includes('작업 중 1')
+  `, 12000))
+  const codexUsage = `${pane(0)}?.querySelector('.agent-pane-usage')`
+  const codexShowsSettings = percent => `
+    ${codexUsage}?.querySelector('.agent-usage-model')?.textContent === 'gpt-6' &&
+    ${codexUsage}?.querySelector('.agent-usage-effort')?.textContent === 'xhigh' &&
+    ${codexUsage}?.textContent.includes('${percent}%')
+  `
+  check('Codex chat shows its model, effort, and usage', await until(codexShowsSettings(22), 12000))
+  fs.appendFileSync(codexTranscript, codexLine('response_item', {
+    type: 'function_call_output', call_id: 'large-output', output: 'x'.repeat(300 * 1024)
+  }) + codexUsageLine(29))
+  check('Codex chat keeps its model and effort when long tool output pushes them out of the usage tail',
+    await until(codexShowsSettings(29), 12000))
+  await js(`${subagents(0)}?.querySelector('summary')?.click()`)
+  await driver.move(...await center(subagentEntry(0)))
+  check('the Codex hover preview uses the child rollout, with neither inherited history nor ciphertext', await until(`
+    ${subagentPreview}?.textContent.includes('채팅 저장 검토') &&
+    !${subagentPreview}.textContent.includes('Inherited parent output') &&
+    !${subagents(0)}.textContent.includes(${JSON.stringify(opaque)}) &&
+    !${subagentPreview}.textContent.includes(${JSON.stringify(opaque)})
+  `, 8000))
+  fs.appendFileSync(codexTranscript, codexLine('inter_agent_communication', {
+    author: '/root/review', recipient: '/root', content: '<subagent_notification>{"agent_path":"/root/review","status":{"completed":"채팅 저장을 검토했습니다"}}</subagent_notification>'
+  }))
+  check('the Codex preview updates with a delegated result', await until(`
+    ${subagents(0)}?.querySelector('summary')?.textContent.includes('완료 1') &&
+    ${subagentPreview}?.querySelector('.agent-chat-subagents-result')?.textContent === '채팅 저장을 검토했습니다'
+  `, 8000))
+  await js(`${subagents(0)}?.querySelector('summary')?.click()`)
+  const fastButton = `${cover(0)}?.querySelector('.agent-chat-fast')`
+  const ultraButton = `${cover(0)}?.querySelector('.agent-chat-ultrafast')`
+  const codexInput = `${cover(0)}.querySelector('.agent-chat-input')`
+  check('Codex chat reads the initial Fast setting', await until(`${fastButton}?.getAttribute('aria-pressed') === 'false'`))
+  check('Codex chat hides Ultrafast when the native command is unavailable', await waitFor(() => read(codexId + '-speed-checked')) && await js(`!${ultraButton}`))
+  fs.writeFileSync(file(codexId + '-ultrafast-eligible'), '')
+  fs.writeFileSync(file(codexId + '-speed-model'), 'gpt-6.2-astra')
+  fs.writeFileSync(file(codexId + '-draft'), '')
+  check('Codex chat shows Ultrafast once the selected model offers it', await until(`${ultraButton}?.getAttribute('aria-pressed') === 'false'`))
+  await js(`${codexInput}.focus()`)
+  await send('Input.insertText', { text: 'Codex 이미지 테스트' })
+  await js(`${fastButton}.click()`)
+  check('the Fast button turns on the CLI setting', await until(`${fastButton}?.getAttribute('aria-pressed') === 'true'`) && read(codexId + '-fast-toggles') === '1')
+  await js(`${fastButton}.click()`)
+  check('the Fast button turns it off and keeps the draft', await until(`
+    ${fastButton}?.getAttribute('aria-pressed') === 'false' && ${codexInput}.value === 'Codex 이미지 테스트'
+  `) && read(codexId + '-fast-toggles') === '2' && !read(codexId + '-chat-sent'))
+  await js(`${fastButton}.click()`)
+  await until(`${fastButton}?.getAttribute('aria-pressed') === 'true' && !${ultraButton}?.disabled`)
+  await js(`${ultraButton}.click()`)
+  check('Ultrafast replaces Fast in the CLI and in the chat header', await until(`
+    ${ultraButton}?.getAttribute('aria-pressed') === 'true' && ${fastButton}?.getAttribute('aria-pressed') === 'false'
+  `) && read(codexId + '-speed') === 'ultrafast')
+  await until(`!${ultraButton}?.disabled`)
+  await js(`${ultraButton}.click()`)
+  check('clicking Ultrafast again returns to Standard and leaves the draft intact', await until(`
+    ${ultraButton}?.getAttribute('aria-pressed') === 'false' && ${fastButton}?.getAttribute('aria-pressed') === 'false'
+    && ${codexInput}.value === 'Codex 이미지 테스트'
+  `) && read(codexId + '-ultrafast-toggles') === '2' && !read(codexId + '-chat-sent') && !read(codexId + '-speed-probe'))
+  await pasteIntoChat(0)
+  await until(`${preview}?.naturalWidth === 1 && !${sendButton}.disabled`)
+  await js(`${sendButton}.click()`)
+  check('Codex receives the screenshot path and exactly the entered text', await waitFor(() => {
+    if (read(codexId + '-chat-sent') !== '1') return false
+    const [attachment, separator, body, ...extra] = read(codexId + '-chat-text').split('\n')
+    return !extra.length && separator === '' && body === 'Codex 이미지 테스트' && isPng(attachment)
+  }), await chatFeedback())
+
+  // A long transcript keeps only its viewport mounted even as text continues to arrive.
+  const completed = item => codexLine('event_msg', { type: 'item_completed', item })
+  const longAnswer = (id, text) => completed({ id, type: 'AgentMessage', content: [{ type: 'text', text }] })
+  fs.appendFileSync(codexTranscript, completed({ id: 'scroll-tool', type: 'CommandExecution', command: 'inspect history', aggregated_output: '도구 상세 결과' }) +
+    Array.from({ length: 220 }, (_, index) => longAnswer('scroll-' + index, `긴 대화 ${index}번\n\n**표시 테스트**`)).join(''))
+  const longLog = chatLog(0)
+  const numberOfRows = `${longLog}.querySelectorAll('.agent-chat-row').length`
+  const atEnd = `${longLog}.scrollHeight - ${longLog}.scrollTop - ${longLog}.clientHeight < 40`
+  const scrollLongLog = toEnd => js(`(() => { const log = ${longLog}; log.scrollTop = ${toEnd ? 'log.scrollHeight' : '0'} })()`)
+  check('long chat follows new items and mounts only the nearby rows', await until(`
+    ${longLog}.textContent.includes('긴 대화 219번') && !${longLog}.textContent.includes('긴 대화 0번') &&
+    ${numberOfRows} < 70 && ${atEnd}
+  `), `${await js(numberOfRows)} rows mounted out of 221`)
+  await scrollLongLog(false)
+  check('scrolling back mounts older messages', await until(`
+    ${longLog}.textContent.includes('긴 대화 0번') && !${longLog}.textContent.includes('긴 대화 219번')
+  `))
+  await js(`${longLog}.querySelector('.agent-chat-tool summary').click()`)
+  await until(`${longLog}.querySelector('.agent-chat-tool')?.open`)
+  fs.appendFileSync(codexTranscript, longAnswer('scroll-update', '읽는 동안 도착한 답변'))
+  await sleep(800)
+  check('a reader stays at the old position when new output arrives', await js(`
+    ${longLog}.scrollTop < 80 && ${longLog}.textContent.includes('긴 대화 0번')
+  `))
+  await scrollLongLog(true)
+  check('the latest reply appears after going to the bottom', await until(`${longLog}.textContent.includes('읽는 동안 도착한 답변') && !${longLog}.querySelector('.agent-chat-tool')`))
+  await scrollLongLog(false)
+  check('a tool stays expanded when it returns to view', await until(`${longLog}.querySelector('.agent-chat-tool')?.open`))
+  await openChatMenu()
+  await driver.pick('모두 선택')
+  check('explicit select all includes every loaded message', await until(`
+    getSelection().toString().includes('긴 대화 0번') && getSelection().toString().includes('긴 대화 219번')
+  `))
+  await js('getSelection().removeAllRanges()')
+  check('clearing the selection releases rows outside of view', await until(`${numberOfRows} < 70`))
 
   // Locking drops every conversation
   await js(`document.activeElement?.blur(); document.body.focus()`)

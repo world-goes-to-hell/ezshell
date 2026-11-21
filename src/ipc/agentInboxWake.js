@@ -1,4 +1,5 @@
 const { Terminal } = require('@xterm/headless')
+const { hasCodexSpeedChoice } = require('./codexSpeed.js')
 
 // The line pasted into the agent's composer. Reading the message is what the sender sees (check_sent:
 // "read"); the result follows with reply_to_message. Receipts (send_receipt) were removed on 2026-11-20.
@@ -219,6 +220,18 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     return ids.length === expected.count && new Set(ids).size === expected.count
   }
 
+  function finishChat(result, replayInput = true) {
+    const { resolve, terminalInput } = chat
+    chat = null
+    if (replayInput) {
+      for (const data of terminalInput) {
+        userInput(data)
+        rawWrite(data)
+      }
+    }
+    resolve(result)
+  }
+
   function checkChat() {
     if (!chat || stopped) return
     clearTimeout(chat.timer)
@@ -227,22 +240,32 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     const drawn = input?.endsAtCursor && (
       input.text === chat.text || matchesClaudeImages(input.text, chat.claudeImages) || PASTED_PLACEHOLDER.test(input.text)
     )
-    if (drawn) {
-      const { resolve } = chat
-      chat = null
-      const ok = rawWrite('\r')
+    const command = chat.codexSpeed
+    const exact = input?.endsAtCursor && input.text === chat.text
+    const available = command && exact && hasCodexSpeedChoice(screenLines(), command)
+    if (chat.clearing && input?.atStart) {
+      finishChat(chat.clearing)
+      schedule()
+      return
+    }
+    if (!chat.clearing && command && exact && ((chat.probe && available) || (now >= chat.expires && !available))) {
+      // Capability checks never submit the borrowed draft. Wait for the empty composer before replaying typing.
+      chat.clearing = chat.probe ? { ok: true, available: Boolean(available) } : { ok: false, reason: 'speed-unavailable' }
+      chat.expires = now + INPUT_TIMEOUT
+      if (!rawWrite('\x7f'.repeat(chat.length), false)) finishChat({ ok: false, reason: 'write-failed' }, false)
+      if (!chat) return
+    } else if (!chat.clearing && !chat.probe && drawn && (!command || available)) {
+      const ok = command ? rawWrite('\r', false) : rawWrite('\r')
       userDraft = false
       holdUntil = now + INPUT_TIMEOUT
-      resolve(ok ? { ok: true } : { ok: false, reason: 'write-failed' })
+      finishChat(ok ? { ok: true } : { ok: false, reason: 'write-failed' })
       schedule(INPUT_TIMEOUT)
       return
     }
     if (now >= chat.expires) {
-      // Not drawn as sent: leave it for the user (an Enter now could submit something else)
-      const { resolve } = chat
-      chat = null
-      userDraft = true
-      resolve({ ok: false, reason: 'not-drawn' })
+      if (!chat.probe || !input?.atStart) userDraft = true
+      // When a CLI does not confirm that it cleared our draft, keep queued keys out of that draft.
+      finishChat({ ok: false, reason: 'not-drawn' }, input?.atStart)
       return
     }
     chat.timer = setTimeout(checkChat, Math.min(DRAW_SETTLE * 3, chat.expires - now))
@@ -314,6 +337,26 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     schedule(INPUT_TIMEOUT)
   }
 
+  function screenLines() {
+    if (stopped) return []
+    const { active: buffer } = screen.buffer
+    return Array.from({ length: screen.rows }, (_, row) => buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? '')
+  }
+
+  function userInput(data) {
+    if (stage) {
+      stage = null
+      userDraft = true
+    }
+    if (submitKey(data) || data === '\x03' || data === '\x15') {
+      userDraft = false
+      holdUntil = Date.now() + INPUT_TIMEOUT
+    } else if (!data.startsWith('\x1b') || data.startsWith('\x1b[200~')) {
+      if (/[^\x00-\x1f\x7f]/u.test(data)) userDraft = true
+    }
+    schedule()
+  }
+
   return {
     writeOutput(data) {
       if (stopped) return
@@ -355,7 +398,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
      * Enters a line the user wrote in the chat view: only into the agent's own, empty composer (never a
      * shell prompt), and Enter only once the composer shows that text. Resolves { ok } or { ok, reason }.
      */
-    submitText(text, claudeImages) {
+    submitText(text, claudeImages, { codexSpeed, probe = false } = {}) {
       return new Promise(resolve => {
         if (stopped) return resolve({ ok: false, reason: 'not-agent' })
         if (chat || stage || composing || held) return resolve({ ok: false, reason: 'busy' })
@@ -366,12 +409,15 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         if (!input) return resolve({ ok: false, reason: 'no-composer' })
         // Empty is the cursor at the prompt's start, as for our wake lines: an empty composer shows
         // placeholder text to the right of the cursor ("Try …"), so its text is not empty
-        if (!input.atStart) return resolve({ ok: false, reason: 'composer-not-empty' })
-        if (!rawWrite(pasteOf(text))) return resolve({ ok: false, reason: 'write-failed' })
+        if (!input.atStart || (codexSpeed && userDraft && input.text)) {
+          return resolve({ ok: false, reason: 'composer-not-empty' })
+        }
+        const pasted = pasteOf(text)
+        if (!(codexSpeed ? rawWrite(pasted, false) : rawWrite(pasted))) return resolve({ ok: false, reason: 'write-failed' })
         clearTimeout(timer)
         const images = kind === 'claude' && claudeImages ? { count: claudeImages.count, text: compact(claudeImages.text) } : null
         chat = {
-          text: compact(text), length, lines,
+          text: compact(text), length, lines, codexSpeed, probe, terminalInput: [],
           claudeImages: images,
           // Claude reads and converts every file before its native image tokens appear.
           expires: Date.now() + (images ? IMAGE_INPUT_TIMEOUT : INPUT_TIMEOUT), resolve, timer: null
@@ -380,18 +426,11 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         chat.timer.unref?.()
       })
     },
-    userInput(data) {
-      if (stage) {
-        stage = null
-        userDraft = true
-      }
-      if (submitKey(data) || data === '\x03' || data === '\x15') {
-        userDraft = false
-        holdUntil = Date.now() + INPUT_TIMEOUT
-      } else if (!data.startsWith('\x1b') || data.startsWith('\x1b[200~')) {
-        if (/[^\x00-\x1f\x7f]/u.test(data)) userDraft = true
-      }
-      schedule()
+    userInput,
+    deferProbeInput(data) {
+      if (!chat?.probe) return false
+      chat.terminalInput.push(data)
+      return true
     },
     setComposing(value) {
       composing = value
@@ -407,11 +446,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       if (!value) schedule()
     },
     /** The visible screen, one string per row (agentPicker.js reads the CLI's pickers from it) */
-    screenLines() {
-      if (stopped) return []
-      const { active: buffer } = screen.buffer
-      return Array.from({ length: screen.rows }, (_, row) => buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? '')
-    },
+    screenLines,
     /** The CLI asked for application cursor keys (arrows as ESC O A) */
     applicationCursorKeys: () => !stopped && screen.modes.applicationCursorKeysMode,
     resize(cols, rows) { screen.resize(cols, rows); schedule() },

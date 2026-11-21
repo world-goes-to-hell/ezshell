@@ -36,7 +36,8 @@ export interface TerminalInfo {
    * `sshSessionId` is the tab whose SSH connection carries the tunnel.
    */
   db?: { dbId: string; sshSessionId: string; label?: string; /** The saved account it was opened with (opened again after an update) */ savedAccountId?: string }
-  browser?: { group: string | null }
+  /** `cwd`: the local folder of the work it was opened in (the sidebar lists it under that worktree) */
+  browser?: { group: string | null; cwd?: string }
   /** A local terminal. A reassigned main shell can have a different id from its tab. */
   local?: { shell: string; shellId?: string; cwd?: string; workspaceLabel?: string }
 }

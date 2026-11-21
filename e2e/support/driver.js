@@ -166,24 +166,27 @@ async function unlock({ js, until }) {
 /** The SSH tab in front (a tab behind is hidden with visibility, not display) */
 const PANEL = `[...document.querySelectorAll('.terminal-panel')].find(p => p.offsetParent !== null && getComputedStyle(p).visibility !== 'hidden')`
 
-/** Opens the local project dialog from the + menu or, without a tab, from the command palette. */
-async function openLocalProject({ send, js, until, center, click }) {
-  const plus = await center(`[...document.querySelectorAll('.new-tab-btn')].find(b => b.offsetParent !== null)`)
-  if (plus) {
-    await click(plus[0], plus[1])
-    const item = `[...document.querySelectorAll('.new-tab-menu-item')].find(i => i.textContent.includes('로컬 작업'))`
-    if (!(await until(`!!${item}`, 4000))) throw new Error('the + menu did not open')
-    const at = await center(item)
-    await click(at[0], at[1])
-  } else {
-    const key = { key: 'p', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: process.platform === 'darwin' ? 4 : 2 }
-    await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
-    await send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
-    const item = `[...document.querySelectorAll('.command-item')].find(i => i.textContent.includes('로컬 작업 열기'))`
-    if (!(await until(`!!${item}`, 4000))) throw new Error('the command palette did not open')
-    await js(`${item}.click()`)
-  }
+/** Opens the local project dialog with the registered folders (command palette "로컬 작업 열기"). */
+async function openLocalProject({ send, js, until }) {
+  // Not from inside a terminal: the shell can take the key first
+  await js(`document.activeElement?.blur()`)
+  const key = { key: 'p', code: 'KeyP', windowsVirtualKeyCode: 80, modifiers: process.platform === 'darwin' ? 4 : 2 }
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+  const item = `[...document.querySelectorAll('.command-item')].find(i => i.textContent.includes('로컬 작업 열기'))`
+  if (!(await until(`!!${item}`, 4000))) throw new Error('the command palette did not open')
+  await js(`${item}.click()`)
   if (!(await until(`!!document.querySelector('.local-project-dialog')`))) throw new Error('local project dialog did not open')
+}
+
+/**
+ * Opens a local terminal tab running an agent ('claude' / 'codex') in a folder. The dialog opens the
+ * user's shell only, so this goes through the page's own event (OPEN_LOCAL_TERMINAL_EVENT in lib/localProjectList.ts).
+ */
+async function openLocalAgent({ js }, agent, cwd) {
+  // The tab is named after the folder, as the dialog names it
+  const workspaceLabel = cwd ? require('path').basename(cwd) : undefined
+  await js(`window.dispatchEvent(new CustomEvent('ezshell:open-local-terminal', { detail: ${JSON.stringify({ agent, cwd, workspaceLabel })} }))`)
 }
 
 /** Picks a work group from the selector at the start of the tab strip (the group's name as shown) */
@@ -234,4 +237,4 @@ async function pageProblems(page) {
     .map((e) => e.params.entry.text.slice(0, 240))
 }
 
-module.exports = { pageProblems, sleep, createChecks, connect, pages, findPage, isMainPage, unlock, connectSsh, openLocalProject, pickTabGroup, SET, PANEL }
+module.exports = { pageProblems, sleep, createChecks, connect, pages, findPage, isMainPage, unlock, connectSsh, openLocalProject, openLocalAgent, pickTabGroup, SET, PANEL }

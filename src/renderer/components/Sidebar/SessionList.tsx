@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSessionStore, Folder, Session } from '../../stores/sessionStore'
-import { useTerminalStore } from '../../stores/terminalStore'
-import { groupTabsBySession } from '../../lib/sessionTabs'
+import type { SessionTabGroup } from '../../lib/sessionTabs'
 import { RiArrowDownSFill, RiArrowRightSFill, RiDeleteBinLine, RiEditLine, RiFolderAddLine, RiCloseLine, RiPaletteLine, RiAddLine, RiFileCopyLine, RiPlugLine, RiCheckLine, RiShareLine, RiKey2Line, RiClipboardLine } from 'react-icons/ri'
 import { collapseVariants } from '../../lib/animation/variants'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
@@ -39,7 +38,7 @@ interface ContextMenuState {
   visible: boolean
   x: number
   y: number
-  type: 'folder' | 'session' | null
+  type: 'root' | 'folder' | 'session' | null
   targetId: string | null
 }
 
@@ -65,20 +64,20 @@ function MarkedName({ text, parts }: { text: string; parts: NamePart[] | null })
 }
 
 interface SessionListProps {
+  tabsBySession: ReadonlyMap<string, SessionTabGroup>
   search?: SessionListSearch
   onQuickConnect: (session: Session, source?: HTMLElement) => void
   onEditSession?: (session: Session) => void
   onDuplicateSession?: (session: Session) => void
+  onAddFolder: () => void
   onAddSession?: (folderId?: string) => void
   /** Opens the paste dialog for session text, adding into the given folder */
   onImportSession?: (folderId?: string) => void
 }
 
-export function SessionList({ search = NO_SEARCH, onQuickConnect, onEditSession, onDuplicateSession, onAddSession, onImportSession }: SessionListProps) {
+export function SessionList({ tabsBySession, search = NO_SEARCH, onQuickConnect, onEditSession, onDuplicateSession, onAddFolder, onAddSession, onImportSession }: SessionListProps) {
   const { sessions, folders, expandedFolders, toggleFolder, addFolder, updateFolder, removeFolder, removeSession, moveSessionToFolder, reorderSession, updateSession, saveToBackend } = useSessionStore()
   const reducedMotion = useReducedMotion()
-  const terminals = useTerminalStore(state => state.terminals)
-  const sessionTabs = useMemo(() => groupTabsBySession(terminals), [terminals])
   const [colorPickerFolderId, setColorPickerFolderId] = useState<string | null>(null)
   const [colorPickerSessionId, setColorPickerSessionId] = useState<string | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -164,12 +163,18 @@ export function SessionList({ search = NO_SEARCH, onQuickConnect, onEditSession,
     ))
   }, [contextMenu.visible, contextMenu.x, contextMenu.y, contextMenu.type])
 
-  // Close context menu on click outside
+  // Dismiss the menu on an outside click or Escape.
   useEffect(() => {
-    const handleClick = () => setContextMenu(prev => ({ ...prev, visible: false }))
-    if (contextMenu.visible) {
-      document.addEventListener('click', handleClick)
-      return () => document.removeEventListener('click', handleClick)
+    if (!contextMenu.visible) return
+    const closeMenu = () => setContextMenu(prev => ({ ...prev, visible: false }))
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeMenu()
+    }
+    document.addEventListener('click', closeMenu)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('click', closeMenu)
+      document.removeEventListener('keydown', handleKeyDown)
     }
   }, [contextMenu.visible])
 
@@ -329,6 +334,15 @@ export function SessionList({ search = NO_SEARCH, onQuickConnect, onEditSession,
     return false
   }
 
+  const handleBackgroundContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    const target = e.target
+    if (e.defaultPrevented || !(target instanceof Element)
+      || !e.currentTarget.contains(target) || target.closest('.context-menu')) return
+    e.preventDefault()
+    e.stopPropagation()
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, type: 'root', targetId: null })
+  }
+
   const handleFolderContextMenu = (e: React.MouseEvent, folderId: string) => {
     e.preventDefault()
     e.stopPropagation()
@@ -409,9 +423,13 @@ export function SessionList({ search = NO_SEARCH, onQuickConnect, onEditSession,
     setColorPickerFolderId(null)
   }
 
-  const handleAddSessionToFolder = () => {
-    if (!contextMenu.targetId || !onAddSession) return
-    onAddSession(contextMenu.targetId)
+  const handleAddSession = () => {
+    onAddSession?.(contextMenu.targetId ?? undefined)
+    setContextMenu(prev => ({ ...prev, visible: false }))
+  }
+
+  const handleAddRootFolder = () => {
+    onAddFolder()
     setContextMenu(prev => ({ ...prev, visible: false }))
   }
 
@@ -681,7 +699,7 @@ export function SessionList({ search = NO_SEARCH, onQuickConnect, onEditSession,
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         isDragging={dragState.type === 'session' && dragState.id === session.id}
-        tabs={sessionTabs.get(session.id)}
+        tabs={tabsBySession.get(session.id)}
         {...sessionItemDropProps(session.id)}
         {...searchProps(session)}
       />
@@ -758,15 +776,7 @@ export function SessionList({ search = NO_SEARCH, onQuickConnect, onEditSession,
     )
   }
 
-  if (sessions.length === 0 && folders.length === 0) {
-    return (
-      <div className="session-list-empty">
-        <p>저장된 연결이 없습니다</p>
-        <p className="text-muted">새 연결을 추가해주세요</p>
-      </div>
-    )
-  }
-
+  const isEmpty = sessions.length === 0 && folders.length === 0
   const rootFolders = getChildFolders(undefined)
   const rootSessions = getRootSessions()
   const isRootDropTarget = dropTargetId === 'root'
@@ -774,11 +784,13 @@ export function SessionList({ search = NO_SEARCH, onQuickConnect, onEditSession,
   return (
     <div
       ref={listRef}
-      className="session-list"
-      role="tree"
-      aria-label="SSH 세션 목록"
+      className={isEmpty ? 'session-list-empty' : 'session-list'}
+      role={isEmpty ? undefined : 'tree'}
+      aria-label={isEmpty ? undefined : 'SSH 세션 목록'}
       onKeyDown={handleTreeKeyDown}
+      onContextMenu={handleBackgroundContextMenu}
       onDragOver={(e) => {
+        if (isEmpty) return
         e.preventDefault()
         if (dragState.type) {
           setDropTargetId('root')
@@ -792,25 +804,34 @@ export function SessionList({ search = NO_SEARCH, onQuickConnect, onEditSession,
           setDropTargetId(null)
         }
       }}
-      onDrop={handleRootDrop}
+      onDrop={isEmpty ? undefined : handleRootDrop}
     >
-      {rootFolders.map(folder => renderFolder(folder))}
-      <div className={`root-sessions ${isRootDropTarget ? 'drop-target' : ''}`}>
-        {rootSessions.map(session => (
-          <SessionItem
-            key={session.id}
-            session={session}
-            onConnect={onQuickConnect}
-            onContextMenu={handleSessionContextMenu}
-            onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
-            isDragging={dragState.type === 'session' && dragState.id === session.id}
-            tabs={sessionTabs.get(session.id)}
-            {...sessionItemDropProps(session.id)}
-            {...searchProps(session)}
-          />
-        ))}
-      </div>
+      {isEmpty ? (
+        <>
+          <p>저장된 연결이 없습니다</p>
+          <p className="text-muted">새 연결을 추가해주세요</p>
+        </>
+      ) : (
+        <>
+          {rootFolders.map(folder => renderFolder(folder))}
+          <div className={`root-sessions ${isRootDropTarget ? 'drop-target' : ''}`}>
+            {rootSessions.map(session => (
+              <SessionItem
+                key={session.id}
+                session={session}
+                onConnect={onQuickConnect}
+                onContextMenu={handleSessionContextMenu}
+                onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
+                isDragging={dragState.type === 'session' && dragState.id === session.id}
+                tabs={tabsBySession.get(session.id)}
+                {...sessionItemDropProps(session.id)}
+                {...searchProps(session)}
+              />
+            ))}
+          </div>
+        </>
+      )}
 
       {/* Folder Color Picker Modal */}
       {colorPickerFolderId && (
@@ -914,14 +935,20 @@ export function SessionList({ search = NO_SEARCH, onQuickConnect, onEditSession,
             : { left: contextMenu.x, top: contextMenu.y, visibility: 'hidden' }}
           onClick={(e) => e.stopPropagation()}
         >
+          {contextMenu.type === 'root' && (
+            <div className="context-menu-item" onClick={handleAddRootFolder}>
+              <RiFolderAddLine size={16} />
+              <span>폴더 추가</span>
+            </div>
+          )}
+          {(contextMenu.type === 'root' || contextMenu.type === 'folder') && onAddSession && (
+            <div className="context-menu-item" onClick={handleAddSession}>
+              <RiAddLine size={16} />
+              <span>세션 추가</span>
+            </div>
+          )}
           {contextMenu.type === 'folder' && (
             <>
-              {onAddSession && (
-                <div className="context-menu-item" onClick={handleAddSessionToFolder}>
-                  <RiAddLine size={16} />
-                  <span>세션 추가</span>
-                </div>
-              )}
               {onImportSession && (
                 <div className="context-menu-item" onClick={handleImportToFolder}>
                   <RiClipboardLine size={16} />

@@ -5,11 +5,14 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { modalOverlayVariants, modalContentVariants } from '../../lib/animation/variants'
 import { RiCloseFill, RiSettings3Fill, RiPaletteFill, RiKeyboardLine, RiDatabaseLine, RiTerminalBoxLine, RiPlugLine, RiSmartphoneLine, RiMailLine } from 'react-icons/ri'
 import { ThemeSelector } from './ThemeSelector'
+import { BrowserTabWidthControl } from './BrowserTabWidthControl'
 import { ShortcutsPanel } from './ShortcutsPanel'
 import { SessionBackup } from './SessionBackup'
 import { FontSizeControl } from './FontSizeControl'
+import { TerminalScrollbackControl } from './TerminalScrollbackControl'
 import { McpSettings } from '../Mcp/McpSettings'
 import { AgentMessageMcpSetup } from '../Mcp/AgentMessageMcpSetup'
+import { AgentIdleSettings } from './AgentIdleSettings'
 import { RemoteAccessSettings } from '../RemoteAccess/RemoteAccessSettings'
 import '../../styles/settings.css'
 
@@ -96,6 +99,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                         </p>
                         <ThemeSelector />
                       </section>
+                      <BrowserTabWidthControl />
                     </div>
                   </Tabs.Content>
 
@@ -111,6 +115,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                         </p>
                         <FontSizeControl />
                       </section>
+                      <TerminalScrollbackControl />
                     </div>
                   </Tabs.Content>
 
@@ -175,6 +180,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                             </p>
                             <AgentMessageMcpSetup />
                           </section>
+                          <AgentIdleSettings />
                         </div>
                       </Tabs.Content>
                     </Tabs.Root>

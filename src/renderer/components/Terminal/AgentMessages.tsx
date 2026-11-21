@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiMailLine, RiTeamLine, RiUser3Line } from 'react-icons/ri'
 import { create } from 'zustand'
-import type { AgentMessage, AgentMessageDelivery, AgentMessagesSnapshot, LocalAgent } from '../../types'
+import { useShallow } from 'zustand/react/shallow'
+import type { AgentMessage, AgentMessageDelivery, AgentMessageSession, AgentMessagesSnapshot, LocalAgent } from '../../types'
 import { folderLabel, isInsidePath, pathKey } from '../../lib/localWorkspaceTree'
 import { visibleTerminalId } from '../../lib/localTerminalPane'
 import { projectOfFolder, type GroupProject } from '../../lib/tabGroups'
@@ -34,6 +35,22 @@ export const useAgentMessagesStore = create<AgentMessagesState>(() => ({
   panel: null
 }))
 const useMessages = useAgentMessagesStore
+
+export function isAgentWorking(agent: AgentMessageSession): boolean {
+  return agent.active && agent.status === 'working' && !agent.waitingForReply
+}
+
+/** Local tabs with at least one working agent, including tabs in the background. */
+export function useWorkingLocalTabs(): ReadonlySet<string> {
+  return useMessages(useShallow(({ snapshot, panes }) => {
+    const tabs = new Set<string>()
+    for (const agent of snapshot.agents) {
+      const tabId = panes[agent.shellId]
+      if (tabId && isAgentWorking(agent)) tabs.add(tabId)
+    }
+    return tabs
+  }))
+}
 
 /** Opens the message panel (all agents, or one agent's inbox) */
 export function openAgentMessages(agentId?: string, tabId?: string) {

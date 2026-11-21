@@ -47,7 +47,7 @@ async function run() {
 
     await openDialog()
     await select('local-project-folder', plain)
-    check('ordinary folders can open with no Git options', await until(`!document.querySelector('#local-project-target') && !!document.querySelector('#local-project-agent')`))
+    check('ordinary folders can open with no Git options', await until(`!document.querySelector('#local-project-target') && !!document.querySelector('.local-project-dialog button[type=submit]')`))
     await submit()
     check('the ordinary folder opens as a shell', await paneHas('plain folder'))
 

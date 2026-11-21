@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { motion, AnimatePresence } from 'framer-motion'
-import { RiCloseFill, RiSearchLine, RiServerLine, RiFolder3Line } from 'react-icons/ri'
+import { RiCloseFill, RiSearchLine, RiServerLine, RiFolderOpenLine } from 'react-icons/ri'
 import { modalOverlayVariants, modalContentVariants } from '../../lib/animation/variants'
-import { buildPickerItems, filterPickerItems, moveSelection } from '../../lib/sessionPicker'
+import { buildPickerItems, buildPickerTree, filterPickerItems, moveSelection, type SessionPickerFolder, type SessionPickerItem } from '../../lib/sessionPicker'
 import { useSessionStore, type Session } from '../../stores/sessionStore'
 import { useTerminalStore, type TerminalInfo } from '../../stores/terminalStore'
 import './SessionPickerModal.css'
@@ -24,6 +24,7 @@ export function SessionPickerModal({ open, onOpenChange, onSelect }: SessionPick
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const listRef = useRef<HTMLUListElement>(null)
+  const listId = useId()
 
   const openSessionIds = useMemo(() => new Set(
     Array.from(terminals.values())
@@ -31,10 +32,11 @@ export function SessionPickerModal({ open, onOpenChange, onSelect }: SessionPick
       .filter((id): id is string => Boolean(id))
   ), [terminals])
 
-  const items = useMemo(
-    () => filterPickerItems(buildPickerItems(sessions, folders, openSessionIds), query),
-    [sessions, folders, openSessionIds, query]
-  )
+  const items = useMemo(() => buildPickerItems(sessions, folders, openSessionIds), [sessions, folders, openSessionIds])
+  const tree = useMemo(() => buildPickerTree(filterPickerItems(items, query), folders), [items, folders, query])
+  const indexes = useMemo(() => new Map(tree.ordered.map((item, index) => [item.session.id, index])), [tree])
+  const activeIndex = Math.min(selectedIndex, Math.max(0, tree.ordered.length - 1))
+  const selected = tree.ordered[activeIndex]?.session
 
   // Start fresh every time the picker opens
   useEffect(() => {
@@ -46,9 +48,9 @@ export function SessionPickerModal({ open, onOpenChange, onSelect }: SessionPick
 
   useEffect(() => {
     listRef.current
-      ?.querySelector<HTMLElement>(`[data-index="${selectedIndex}"]`)
+      ?.querySelector<HTMLElement>(`[data-index="${activeIndex}"]`)
       ?.scrollIntoView({ block: 'nearest' })
-  }, [selectedIndex])
+  }, [open, activeIndex, selected?.id])
 
   const choose = (session: Session) => {
     onOpenChange(false)
@@ -59,12 +61,54 @@ export function SessionPickerModal({ open, onOpenChange, onSelect }: SessionPick
     if (e.nativeEvent.isComposing) return
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
-      setSelectedIndex(i => moveSelection(i, e.key === 'ArrowDown' ? 1 : -1, items.length))
+      setSelectedIndex(moveSelection(activeIndex, e.key === 'ArrowDown' ? 1 : -1, tree.ordered.length))
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      const item = items[selectedIndex]
-      if (item) choose(item.session)
+      if (selected) choose(selected)
     }
+  }
+
+  const renderSession = ({ session, isOpen }: SessionPickerItem) => {
+    const index = indexes.get(session.id)
+    const active = index === activeIndex
+    return (
+      <li
+        key={session.id}
+        id={`${listId}-option-${index}`}
+        data-index={index}
+        data-session-id={session.id}
+        role="option"
+        aria-selected={active}
+        className={`session-picker-item${active ? ' is-selected' : ''}`}
+        onMouseEnter={() => setSelectedIndex(index ?? 0)}
+        onClick={() => choose(session)}
+      >
+        <span className="session-picker-dot" style={session.backgroundColor ? { background: session.backgroundColor } : undefined} />
+        <div className="session-picker-text">
+          <div className="session-picker-name">
+            <span>{session.name || `${session.username}@${session.host}`}</span>
+            {isOpen && <span className="session-picker-badge">열림</span>}
+          </div>
+          <span className="session-picker-meta">{session.username}@{session.host}:{session.port || 22}</span>
+        </div>
+      </li>
+    )
+  }
+
+  const renderFolder = ({ folder, folders, items }: SessionPickerFolder) => {
+    const labelId = `${listId}-folder-${folder.id}`
+    return (
+      <li key={folder.id} className="session-picker-folder" role="group" aria-labelledby={labelId}>
+        <div id={labelId} className="session-picker-folder-heading" title={folder.name}>
+          <RiFolderOpenLine size={15} aria-hidden="true" />
+          <span>{folder.name}</span>
+        </div>
+        <ul className="session-picker-children" role="presentation">
+          {folders.map(renderFolder)}
+          {items.map(renderSession)}
+        </ul>
+      </li>
+    )
   }
 
   return (
@@ -83,9 +127,15 @@ export function SessionPickerModal({ open, onOpenChange, onSelect }: SessionPick
                 </Dialog.Title>
 
                 <div className="session-picker-search">
-                  <RiSearchLine size={16} />
+                  <RiSearchLine size={16} aria-hidden="true" />
                   <input
                     type="text"
+                    role="combobox"
+                    aria-label="세션 검색"
+                    aria-autocomplete="list"
+                    aria-expanded={Boolean(selected)}
+                    aria-controls={selected ? listId : undefined}
+                    aria-activedescendant={selected ? `${listId}-option-${activeIndex}` : undefined}
                     value={query}
                     onChange={(e) => { setQuery(e.target.value); setSelectedIndex(0) }}
                     onKeyDown={handleKeyDown}
@@ -94,40 +144,14 @@ export function SessionPickerModal({ open, onOpenChange, onSelect }: SessionPick
                   />
                 </div>
 
-                {items.length === 0 ? (
+                {tree.ordered.length === 0 ? (
                   <div className="session-picker-empty">
                     {sessions.length === 0 ? '저장된 세션이 없습니다' : '검색 결과가 없습니다'}
                   </div>
                 ) : (
-                  <ul className="session-picker-list" ref={listRef} role="listbox">
-                    {items.map(({ session, folderPath, isOpen }, index) => (
-                      <li
-                        key={session.id}
-                        data-index={index}
-                        role="option"
-                        aria-selected={index === selectedIndex}
-                        className={`session-picker-item ${index === selectedIndex ? 'is-selected' : ''}`}
-                        onMouseEnter={() => setSelectedIndex(index)}
-                        onClick={() => choose(session)}
-                      >
-                        <span className="session-picker-dot" style={session.backgroundColor ? { background: session.backgroundColor } : undefined} />
-                        <div className="session-picker-text">
-                          <div className="session-picker-name">
-                            <span>{session.name || `${session.username}@${session.host}`}</span>
-                            {isOpen && <span className="session-picker-badge">열림</span>}
-                          </div>
-                          <div className="session-picker-meta">
-                            <span>{session.username}@{session.host}:{session.port || 22}</span>
-                            {folderPath && (
-                              <span className="session-picker-folder">
-                                <RiFolder3Line size={12} />
-                                {folderPath}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </li>
-                    ))}
+                  <ul className="session-picker-list" ref={listRef} id={listId} role="listbox" aria-label="저장된 세션">
+                    {tree.folders.map(renderFolder)}
+                    {tree.items.map(renderSession)}
                   </ul>
                 )}
 

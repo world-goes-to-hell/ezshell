@@ -1,9 +1,8 @@
 // Which work a tab belongs to, so the tab strip shows one work at a time
 // (docs/plan/2026-11-19-tab-groups-by-project.md). Pure: the projects come from the sidebar's list
-// (registered folders with their worktrees), the links from lib/localProjectServers.ts.
+// (registered folders with their worktrees); an SSH tab keeps the work it was opened from.
 import type { TerminalInfo } from '../stores/terminalStore'
 import { folderLabel, pathKey, worktreeOf } from './localWorkspaceTree'
-import type { ProjectServers } from './localProjectServers'
 
 /** Tabs that belong to no project */
 export const GENERAL_GROUP = 'general'
@@ -31,6 +30,8 @@ export interface TabGroup {
 export const FOLDER_GROUP_PREFIX = 'folder:'
 const folderGroupOf = (cwd: string | undefined): string => (cwd ? FOLDER_GROUP_PREFIX + pathKey(cwd) : GENERAL_GROUP)
 const folderGroupLabel = (key: string): string => folderLabel(key.slice(FOLDER_GROUP_PREFIX.length))
+const isWorkGroup = (key: string | null | undefined, projects: readonly GroupProject[]): key is string =>
+  Boolean(key && (key === GENERAL_GROUP || key.startsWith(FOLDER_GROUP_PREFIX) || projects.some(project => project.key === key)))
 
 export function projectOfFolder(cwd: string | undefined, projects: readonly GroupProject[]): GroupProject | undefined {
   let best: { project: GroupProject; length: number } | undefined
@@ -60,28 +61,27 @@ export function localFolderForGroup(
   return group.startsWith(FOLDER_GROUP_PREFIX) ? group.slice(FOLDER_GROUP_PREFIX.length) : undefined
 }
 
-/** The group of one tab. `preferred`: the group in front, chosen when a session is linked to several projects */
+/**
+ * The group of one tab. An SSH tab belongs to a work only when it was opened from that work (its
+ * `workGroup`: the work's 서버 row or + menu, kept when tabs are restored). A session opened from the
+ * session list is a general tab even when it is linked to a project (2026-11-20 user decision: it went
+ * into the project's tabs because of the link).
+ */
 export function groupOfTab(
   id: string,
   terminals: ReadonlyMap<string, TerminalInfo>,
-  projects: readonly GroupProject[],
-  servers: ProjectServers,
-  preferred: string | null = null
+  projects: readonly GroupProject[]
 ): string {
   const info = terminals.get(id)
   if (!info) return GENERAL_GROUP
   if (info.browser) {
     const group = info.browser.group
-    return group && (group.startsWith(FOLDER_GROUP_PREFIX) || projects.some(project => project.key === group)) ? group : GENERAL_GROUP
+    return isWorkGroup(group, projects) ? group : GENERAL_GROUP
   }
-  if (info.db) return info.db.sshSessionId && info.db.sshSessionId !== id ? groupOfTab(info.db.sshSessionId, terminals, projects, servers, preferred) : GENERAL_GROUP
+  if (info.db) return info.db.sshSessionId && info.db.sshSessionId !== id ? groupOfTab(info.db.sshSessionId, terminals, projects) : GENERAL_GROUP
   if (info.local) return localGroupOf(info.local.cwd, projects)
-  const saved = info.connectConfig?.savedSessionId
-  if (!saved) return GENERAL_GROUP
-  const known = new Set(projects.map(project => project.key))
-  const linked = Object.keys(servers).filter(key => known.has(key) && servers[key].includes(saved))
-  if (linked.length === 0) return GENERAL_GROUP
-  return preferred && linked.includes(preferred) ? preferred : linked[0]
+  const workGroup = info.connectConfig?.workGroup
+  return isWorkGroup(workGroup, projects) ? workGroup : GENERAL_GROUP
 }
 
 /** The groups that have tabs, in the order their first tab came; each with its tabs in strip order */
@@ -89,13 +89,11 @@ export function groupTabs(
   tabIds: readonly string[],
   terminals: ReadonlyMap<string, TerminalInfo>,
   projects: readonly GroupProject[],
-  servers: ProjectServers,
-  preferred: string | null = null
 ): TabGroup[] {
   const groups = new Map<string, TabGroup>()
   const names = new Map(projects.map(project => [project.key, project.name]))
   for (const id of tabIds) {
-    const key = groupOfTab(id, terminals, projects, servers, preferred)
+    const key = groupOfTab(id, terminals, projects)
     const label = names.get(key) ?? (key.startsWith(FOLDER_GROUP_PREFIX) ? folderGroupLabel(key) : GENERAL_LABEL)
     const group = groups.get(key) ?? { key, label, tabIds: [] }
     groups.set(key, { ...group, tabIds: [...group.tabIds, id] })
@@ -106,6 +104,32 @@ export function groupTabs(
     const cwd = group.tabIds.map(id => terminals.get(id)?.local?.cwd).find(Boolean)
     return cwd ? { ...group, label: folderLabel(cwd) } : group
   })
+}
+
+/**
+ * The worktree each browser, SSH and DB tab of a project's work is listed under in the sidebar's local
+ * tree (the local terminals go by their own folder: localWorkspaceTree.assignTabs). A browser tab goes
+ * under the folder it was opened from; a tab without one under the project's main checkout.
+ * Tabs of no project (general, an unregistered folder) are not listed. Ids keep the order given.
+ */
+export function workTabsByWorktree(
+  tabIds: readonly string[],
+  terminals: ReadonlyMap<string, TerminalInfo>,
+  projects: readonly GroupProject[]
+): Map<string, string[]> {
+  const byWorktree = new Map<string, string[]>()
+  for (const id of tabIds) {
+    const info = terminals.get(id)
+    if (!info || info.local) continue
+    const group = groupOfTab(id, terminals, projects)
+    const project = projects.find(item => item.key === group)
+    if (!project) continue
+    const tree = worktreeOf(info.browser?.cwd, project.worktrees)
+      ?? project.worktrees.find(path => pathKey(path) === project.key) ?? project.worktrees[0]
+    if (!tree) continue
+    byWorktree.set(tree, [...(byWorktree.get(tree) ?? []), id])
+  }
+  return byWorktree
 }
 
 /** The next or previous tab within the tabs shown (Ctrl+Tab), wrapping around */

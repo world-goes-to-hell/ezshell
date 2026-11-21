@@ -316,6 +316,9 @@ function createWindow() {
       preload: path.join(__dirname, '../preload/index.js')
     }
   });
+  // Tab Tab while another program is in front opens the work overview (src/globalDoubleTab.js)
+  globalDoubleTab.stop();
+  globalDoubleTab.start(mainWindow.getNativeWindowHandle());
 
   // With acrylic the window must never be maximized natively (the material is lost for good): it fills
   // the work area of its screen instead (nativeBackdrop.createFillToggle)
@@ -455,8 +458,8 @@ const { sftpWindows, createRemoteFileWindow, createDbWindow, createPinnedReplyWi
 });
 
 // ==================== 서버 파일 편집 / 미리보기 창 ====================
-// One window per server file. Each window gets its own SFTP channel on the tab's connection and a
-// document id; main answers a window only about its own document (src/remoteFiles).
+// Editors share a tabbed window. File previews, logs and detached editors have their own windows.
+// Main answers each window only about the documents that belong to it (src/remoteFiles).
 const REMOTE_FILE_BACKUP_FOLDER = 'ezShell Backups';
 
 const remoteBackupRoot = () => path.join(app.getPath('documents'), REMOTE_FILE_BACKUP_FOLDER);
@@ -474,7 +477,7 @@ const localRoots = createLocalRoots({
 
 const remoteDocuments = createRemoteDocuments({
   // Files on this PC (the workspace panel) open in the same windows
-  localFiles: { read: localRead, headOf: (root, file) => localGit.fileAt(root, file) },
+  localFiles: { read: localRead, fileAt: localGit.fileAt, fileHistory: localGit.fileHistory },
   // A container's log is shown in the same window as a followed file (src/containers/logs.js)
   containerLogs: createContainerLogs({ connectionOf: (sessionId) => sshConnections.get(sessionId)?.conn || null }),
   openSftp: (sessionId) => new Promise((resolve, reject) => {
@@ -554,13 +557,36 @@ const dbIpc = registerDbIpc({
 // ==================== Local terminal tabs ====================
 // Shells of this PC (src/localShell.js). Only the main window opens and drives them.
 const fromMainWindow = (event) => Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+require('./src/ipc/workOverview.js').registerWorkOverviewIpc({
+  ipcMain,
+  desktopCapturer: require('electron').desktopCapturer,
+  getDisplay: bounds => require('electron').screen.getDisplayMatching(bounds),
+  getWindow: () => mainWindow,
+  isLocked: () => isAppLocked
+});
+// Tab Tab from any program: the helper brought ezShell forward, the window opens its work overview.
+// Off while locked (every key goes through untouched); looked at each second instead of at each lock site.
+const globalDoubleTab = require('./src/globalDoubleTab.js').createGlobalDoubleTab({
+  onDoubleTab: () => {
+    if (!mainWindow || mainWindow.isDestroyed() || isAppLocked) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.send('work-overview-request');
+  }
+});
+setInterval(() => globalDoubleTab.setEnabled(!isAppLocked && Boolean(mainWindow) && !mainWindow.isDestroyed()), 1000).unref();
+app.on('will-quit', () => globalDoubleTab.stop());
 const sendToLocalWindow = (channel, payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 };
 let localShells = null;
 const agentBridgeFile = path.join(userDataPath, 'agent-message-connection');
+// Claude's 5-hour and weekly windows over time: the chat view's percent per question (its transcript has none)
+const claudeLimitHistory = require('./src/agentChat/limitHistory.js').createLimitHistory();
 const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages({
   notify: (channel, payload) => {
+    if (channel === 'agent-usage' && payload?.usage?.agent === 'claude') claudeLimitHistory.record(payload.usage);
     sendToLocalWindow(channel, payload);
     if (channel === 'agent-messages-state') browserReview?.updateAgents();
   },
@@ -574,7 +600,7 @@ const browserReview = require('./src/ipc/browserReview.js').registerBrowserRevie
   fromTerminalWindow: event => !isAppLocked && Array.from(terminalWindows.values()).some(win => !win.isDestroyed() && win.webContents === event.sender),
   getWindow: () => mainWindow,
   listAgents: () => agentMessages.snapshot().agents
-    .filter(agent => agent.active && agent.mcpConnected && localShells?.isRunning(agent.shellId))
+    .filter(agent => agent.active && (agent.mcpConnected || agent.sleeping) && localShells?.isRunning(agent.shellId))
     .map(({ id, kind, cwd, status }) => ({ id, kind, cwd, status })),
   sendMessage: agentMessages.sendAsUser,
   openExternal: url => shell.openExternal(url)
@@ -685,6 +711,29 @@ const codexUsageWatcher = require('./src/ipc/codexUsageWatcher.js').createCodexU
   setUsage: (agentId, usage) => agentMessages.setUsage(agentId, usage)
 });
 codexUsageWatcher.start();
+// Idle agents give back their memory, then sleep until they are needed (src/agentIdle.js; the window
+// sends the settings). Resuming needs the CLI's session id: Claude's status line, Codex's session file.
+const SESSION_IN_FILE_NAME = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/i;
+const agentIdle = require('./src/agentIdle.js').createAgentIdle({
+  shells: {
+    idleAgents: () => localShells?.idleAgents() ?? [],
+    sleep: (id, options) => (localShells ? localShells.sleep(id, options) : Promise.resolve({ ok: false }))
+  },
+  // Screen tests only (a development run): a minute of idle time in milliseconds
+  ...(!app.isPackaged && Number(process.env.EZSHELL_TEST_IDLE_MINUTE_MS) > 0
+    ? { minuteMs: Number(process.env.EZSHELL_TEST_IDLE_MINUTE_MS), tickMs: 500 } : {}),
+  sessionOf: (agent) => {
+    if (!agent.agentId) return null;
+    if (agent.kind === 'codex') return SESSION_IN_FILE_NAME.exec(codexUsageWatcher.fileOf(agent.agentId) ?? '')?.[1] ?? null;
+    return agentMessages.usageSnapshot().find(item => item.agentId === agent.agentId)?.usage?.sessionId
+      ?? agentMessages.snapshot().agents.find(item => item.id === agent.agentId)?.resumeId ?? null;
+  }
+});
+ipcMain.handle('agent-idle-configure', (event, config) => (fromMainWindow(event) ? agentIdle.configure(config) : null));
+ipcMain.handle('local-shell-sleeping', event => (fromMainWindow(event) && !isAppLocked && localShells ? localShells.sleeping() : []));
+ipcMain.handle('local-shell-wake', (event, id) => (fromMainWindow(event) && !isAppLocked && localShells ? localShells.wake(id) : { ok: false }));
+ipcMain.handle('local-shell-stay-awake', (event, id) => Boolean(fromMainWindow(event) && !isAppLocked && localShells?.stayAwake(id)));
+app.on('will-quit', () => agentIdle.stop());
 ipcMain.handle('agent-usage-state', event => (fromMainWindow(event) && !isAppLocked ? agentMessages.usageSnapshot() : []));
 require('./src/ipc/localProjects.js').registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit });
 // Past Claude Code and Codex sessions of this PC, for the right panel (src/agentHistory)
@@ -700,16 +749,19 @@ const agentChats = require('./src/agentChat/chats.js').createAgentChats({
   send: sendToLocalWindow,
   claudeRoot: require('./src/agentHistory/history.js').agentRoots(process.env, require('os').homedir()).claude,
   isGone: shellId => !localShells?.list().some(entry => entry.id === shellId),
+  claudeLimits: (from, to) => claudeLimitHistory.between(from, to),
   resolve: async (shellId) => {
     const running = localShells?.agentOf(shellId);
     if (!running) return null;
     const approval = localShells.approvalOf(shellId);
+    const codexSpeed = running.kind === 'codex' ? localShells.codexSpeedOf(shellId) : null;
     const agent = agentMessages.snapshot().agents.filter(item => item.active && item.shellId === shellId && item.kind === running.kind).at(-1);
-    if (!agent) return { kind: running.kind, approval };
+    if (!agent) return { kind: running.kind, approval, codexSpeed };
     const usage = agentMessages.usageSnapshot().find(item => item.agentId === agent.id)?.usage;
     return {
       kind: running.kind,
       approval,
+      codexSpeed,
       cwd: agent.cwd ?? null,
       sessionId: usage?.sessionId ?? agent.resumeId ?? null,
       file: running.kind === 'codex' ? codexUsageWatcher.fileOf(agent.id) : null
@@ -745,14 +797,13 @@ const agentChatIpc = require('./src/agentChat/ipc.js').registerAgentChatIpc({
   }
 });
 
-// A query result the user chose to export ("추출" in a DB tab or DB window), saved where they pick.
-// The only way a result reaches the disk; text or the bytes of a spreadsheet file.
+// Content the user chose to export, saved where they pick.
 const EXPORT_MAX_BYTES = 128 * 1024 * 1024;
 const EXPORT_FILTERS = {
-  xlsx: 'Excel 파일', csv: 'CSV', tsv: 'TSV', sql: 'SQL', json: 'JSON', md: 'Markdown'
+  xlsx: 'Excel 파일', csv: 'CSV', tsv: 'TSV', sql: 'SQL', json: 'JSON', md: 'Markdown', txt: '텍스트'
 };
 // The save dialog's title: the window names a kind, never the words themselves
-const EXPORT_TITLES = { result: '결과 추출', 'ui-settings': '화면 설정 내보내기' };
+const EXPORT_TITLES = { result: '결과 추출', 'ui-settings': '화면 설정 내보내기', 'agent-chat': '채팅 저장' };
 ipcMain.handle('save-export-file', async (event, { defaultName, extension, data, kind }) => {
   const owner = BrowserWindow.fromWebContents(event.sender);
   if (!owner || isAppLocked) return { success: false, error: '저장할 수 없습니다.' };

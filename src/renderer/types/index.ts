@@ -122,6 +122,34 @@ export type RemoteFileTailResult =
 /** Every answer of the file window's IPC: the fields on success, a message to show otherwise */
 export type RemoteFileResult<T> = ({ success: true } & T) | { success: false; error: string }
 
+export interface RemoteFileDraft {
+  editor: string
+  top: number
+  left: number
+  ending: 'lf' | 'crlf' | 'mixed' | 'none'
+}
+
+export interface RemoteFileOpenHint {
+  sequence: number
+  line?: number
+  compareHead?: true
+}
+
+export interface RemoteFileTab {
+  docId: string
+  path: string
+  local: boolean
+  dirty: boolean
+  hint?: RemoteFileOpenHint
+}
+
+export interface RemoteFileWindowState {
+  revision: number
+  tabbed: boolean
+  activeId: string | null
+  tabs: RemoteFileTab[]
+}
+
 interface RemoteFileLoadedBase {
   sessionName: string
   requestedPath: string
@@ -145,7 +173,7 @@ export interface ConfigDefinition {
 }
 
 export type RemoteFileLoaded = RemoteFileLoadedBase & (
-  | { kind: 'text'; editable: true; content: string; canWrite: boolean }
+  | { kind: 'text'; editable: true; content: string; canWrite: boolean; draft?: RemoteFileDraft }
   /** `pace: 'command'`: each look runs a command on the server (a container's log), so looks are further apart */
   | { kind: 'text'; editable: false; content: string; truncated: boolean; size: number; follow: RemoteFileFollow; pace?: 'command' }
   | { kind: 'image' | 'pdf'; mime: string; size: number; data: Uint8Array<ArrayBuffer> }
@@ -165,14 +193,10 @@ export interface RemoteFileBackup {
   size: number
 }
 
-/** A backup someone left next to the file on the server ("compose.yaml.bak_20261020_1516") */
-export interface RemoteServerBackup {
-  name: string
-  size: number
-  /** From the date in the name ('name'), otherwise the file's modification time ('modified') */
-  time: number
-  timeFrom: 'name' | 'modified' | 'git'
-}
+/** A backup beside the server file, or a revision of a local file. */
+export type RemoteServerBackup =
+  | { name: string; size: number; time: number; timeFrom: 'name' | 'modified' }
+  | { name: string; size?: number; time: number; timeFrom: 'git'; subject?: string; deleted?: boolean }
 
 /** Question from main about an SSH host key that is not saved yet ('unknown') or differs from the saved one ('changed') */
 export interface HostKeyPrompt {
@@ -401,11 +425,31 @@ export interface PinnedReply {
   folded: boolean
 }
 
+/** An agent closed to save memory, resumed in its shell when woken (src/agentIdle.js) */
+export interface AgentSleep {
+  kind: 'claude' | 'codex'
+  since: number
+  waking?: boolean
+}
+
+/** Tokens one question used: input counts what came from the cache too; output counts thinking */
+export interface AgentTurnUsage {
+  input: number
+  cached: number
+  output: number
+  durationMs?: number
+  /** Percent of the account's 5-hour and weekly windows used while it ran */
+  limits?: { fiveHour?: number; sevenDay?: number }
+}
+
 export interface AgentChatItem {
   id: string
   kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'notice'
   time: number | null
   text?: string
+  hasImage?: boolean
+  /** On a user item: the tokens the turn it started used so far (src/agentChat/turnUsage.js) */
+  usage?: AgentTurnUsage
   tool?: {
     name: string
     summary: string
@@ -434,6 +478,28 @@ export type AgentChatImagesResult =
   | { ok: true; kind: 'images'; images: { id: string; preview: Uint8Array<ArrayBuffer> }[] }
   | { ok: false; error: string }
 
+export type CodexSpeedMode = 'fast' | 'ultrafast'
+
+export interface CodexSpeedState {
+  speed: 'standard' | CodexSpeedMode | 'flex' | null
+  ultrafastAvailable: boolean
+}
+
+export interface AgentChatSubagent {
+  id: string
+  name: string
+  task: string
+  status: 'starting' | 'running' | 'completed' | 'error' | 'stopped' | 'unknown'
+  startedAt: number | null
+  finishedAt: number | null
+  result: string
+}
+
+export interface AgentChatSubagentActivity {
+  label: string
+  detail: string
+}
+
 export interface AgentChatFrame {
   shellId: string
   /** The view starts over with these items (a new conversation or the first read) */
@@ -441,6 +507,7 @@ export interface AgentChatFrame {
   /** Items from before what the view has */
   older?: boolean
   items?: AgentChatItem[]
+  subagents?: AgentChatSubagent[]
   kind?: 'claude' | 'codex'
   state?: AgentChatState
   title?: string | null
@@ -449,6 +516,7 @@ export interface AgentChatFrame {
   gone?: boolean
   /** The prompt on screen now, or null when it went away */
   approval?: AgentChatApproval | null
+  codexSpeed?: CodexSpeedState | null
 }
 
 export interface AgentUsageReport {
@@ -457,7 +525,8 @@ export interface AgentUsageReport {
   usage: AgentUsage | null
 }
 
-export type LocalAgentStatus = 'unknown' | 'starting' | 'idle' | 'working' | 'blocked' | 'error' | 'ended'
+/** `sleeping`: closed to save memory, resumed in its shell when woken (src/agentIdle.js) */
+export type LocalAgentStatus = 'unknown' | 'starting' | 'idle' | 'working' | 'blocked' | 'error' | 'ended' | 'sleeping'
 
 export interface AgentMessageSession {
   id: string
@@ -673,6 +742,9 @@ declare global {
       maximizeWindow: () => void
       closeWindow: () => void
       toggleFullscreen: () => Promise<void>
+      showWorkOverview: () => Promise<{ backdrop: Uint8Array<ArrayBuffer> | null } | null>
+      hideWorkOverview: () => void
+      onWorkOverviewRequest?: (callback: () => void) => () => void
 
       // SSH
       sshConnect: (config: any) => Promise<any>
@@ -760,7 +832,6 @@ declare global {
       workspaceGitDiff?: (root: string, file: string, hash?: string) => Promise<({ success: true } & WorkspaceGitDiff) | { success: false; error: string }>
       /** A file on this PC in the file window; `relative` is relative to `root` */
       localFileOpen?: (root: string, relative: string, mode: 'edit' | 'preview', label?: string, options?: { compareHead?: boolean }) => Promise<{ success: true } | { success: false; error: string }>
-      onRemoteFileCompareHead?: (callback: () => void) => () => void
       workspaceGitLog: (folder: string) => Promise<{ success: true; repo: WorkspaceGitRepository } | { success: true; repo: null; reason: 'git-missing' | 'not-repo' } | { success: false; error: string }>
       agentHistorySearch?: (shellId: string, query: string) => Promise<{ success: true; matches: { key: string; snippet: string }[] } | { success: false; cancelled?: boolean; error: string }>
       agentHistoryList?: (shellId: string) => Promise<{ success: true; project: string; sessions: AgentHistorySession[] } | { success: false; error: string }>
@@ -796,7 +867,14 @@ declare global {
       localShellClose?: (id: string) => void
       onLocalShellData?: (callback: (data: { id: string; data: string }) => void) => () => void
       onLocalShellExit?: (callback: (data: { id: string; exitCode: number | null }) => void) => () => void
+      agentIdleConfigure?: (config: { trimMinutes: number; sleepMinutes: number }) => Promise<{ trimMinutes: number; sleepMinutes: number } | null>
+      localShellSleeping?: () => Promise<{ id: string; sleeping: AgentSleep }[]>
+      localShellWake?: (id: string) => Promise<{ ok: boolean; reason?: string }>
+      localShellStayAwake?: (id: string) => Promise<boolean>
+      onLocalShellSleep?: (callback: (data: { id: string; sleeping: AgentSleep | null; failed?: boolean }) => void) => () => void
       agentChatOpen?: (shellId: string) => Promise<{ ok: true } | { ok: false; error: string }>
+      agentChatCopy?: (shellId: string) => Promise<{ ok: true; items: AgentChatItem[] } | { ok: false; error: string }>
+      agentChatSubagentPreview?: (shellId: string, agentId: string) => Promise<AgentChatSubagentActivity[]>
       agentChatOlder?: (shellId: string) => Promise<void>
       agentChatClose?: (shellId: string) => void
       agentChatReadClipboard?: (shellId: string) => Promise<
@@ -805,6 +883,7 @@ declare global {
       agentChatPickImages?: (shellId: string) => Promise<AgentChatImagesResult>
       agentChatRemoveImage?: (shellId: string, imageId: string) => void
       agentChatSend?: (shellId: string, text: string, imageIds?: string[]) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
+      agentChatToggleSpeed?: (shellId: string, speed: CodexSpeedMode) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatInterrupt?: (shellId: string) => Promise<boolean>
       agentChatAnswer?: (shellId: string, key: string, signature: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentPickerList?: (shellId: string, what: 'model' | 'effort') => Promise<
@@ -838,7 +917,7 @@ declare global {
       /** Saves an exported query result where the user picks (text, or the bytes of a spreadsheet file) */
       /** Where a File dropped from the OS is on this PC (webUtils.getPathForFile); '' when it cannot be told */
       getPathForFile?: (file: File) => string
-      saveExportFile?: (defaultName: string, extension: string, data: string | Uint8Array, kind?: 'result' | 'ui-settings') => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
+      saveExportFile?: (defaultName: string, extension: string, data: string | Uint8Array, kind?: 'result' | 'ui-settings' | 'agent-chat') => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
       saveTerminalOutput?: (defaultName: string, text: string) => Promise<{ success: boolean; cancelled?: boolean; filePath?: string; error?: string }>
       localRename: (oldPath: string, newPath: string) => Promise<LocalFileOpResult>
       localMkdir: (dirPath: string) => Promise<LocalFileOpResult>
@@ -855,19 +934,24 @@ declare global {
       remoteFileLoad?: (docId: string) => Promise<RemoteFileResult<RemoteFileLoaded>>
       remoteFileFindDefinitions?: (docId: string, name: string) => Promise<RemoteFileResult<{ results: ConfigDefinition[]; scanned: number; truncated: boolean }>>
       remoteFileOpenDefinition?: (docId: string, key: string) => Promise<RemoteFileResult<object>>
-      onRemoteFileRevealLine?: (callback: (line: number) => void) => () => void
+      remoteFileWindowState?: () => Promise<RemoteFileResult<RemoteFileWindowState>>
+      onRemoteFileWindowChanged?: (callback: (state: RemoteFileWindowState) => void) => () => void
+      remoteFileActivate?: (docId: string) => Promise<RemoteFileResult<object>>
+      remoteFileDetach?: (docId: string, draft: RemoteFileDraft) => Promise<RemoteFileResult<object>>
+      remoteFileDraftRestored?: (docId: string) => void
       remoteFileTail?: (docId: string, generation: number, cursor: number) => Promise<RemoteFileResult<RemoteFileTailResult>>
       remoteFileAttention?: (docId: string) => void
       remoteFileReview?: (docId: string, content: string) => Promise<RemoteFileResult<RemoteFileReview>>
       remoteFileSave?: (docId: string, content: string, token: string) => Promise<RemoteFileResult<RemoteFileSaveResult>>
       remoteFileBackups?: (docId: string) => Promise<RemoteFileResult<{ folder: string; backups: RemoteFileBackup[] }>>
       remoteFileReadBackup?: (docId: string, name: string) => Promise<RemoteFileResult<{ content: string }>>
-      remoteFileServerBackups?: (docId: string) => Promise<RemoteFileResult<{ backups: RemoteServerBackup[] }>>
+      remoteFileServerBackups?: (docId: string) => Promise<RemoteFileResult<{ backups: RemoteServerBackup[]; historyError?: string }>>
       remoteFileReadServerBackup?: (docId: string, name: string) => Promise<RemoteFileResult<{ content: string }>>
       remoteFileOpenBackupFolder?: (docId: string) => Promise<RemoteFileResult<object>>
       remoteFileSetDirty?: (docId: string, isDirty: boolean) => void
-      remoteFileClose?: (docId: string) => Promise<RemoteFileResult<object>>
-      onRemoteFileCloseRequested?: (callback: () => void) => () => void
+      remoteFileClose?: (docId: string, discard?: boolean) => Promise<RemoteFileResult<{ needsConfirmation: boolean }>>
+      remoteFileCloseWindow?: (discardIds: string[]) => Promise<RemoteFileResult<object>>
+      onRemoteFileCloseRequested?: (callback: (docIds: string[]) => void) => () => void
 
       // DB client
       dbDiscover?: (sessionId: string) => Promise<DbResult<{ databases: DiscoveredDb[] }>>

@@ -26,10 +26,8 @@ export function useBackupEntries(docId: string, version: number, isActive: boole
     let app: RemoteFileBackup[] | null = null
     if (appResult?.success) {
       app = appResult.backups
-      setError(null)
-    } else if (appResult) {
-      setError(appResult.error)
     }
+    setError(appResult && !appResult.success ? appResult.error : serverResult?.success ? serverResult.historyError ?? null : null)
     const server: RemoteServerBackup[] | null = serverResult?.success ? serverResult.backups : null
     setEntries(mergeBackups(app, server))
   }, [docId])
