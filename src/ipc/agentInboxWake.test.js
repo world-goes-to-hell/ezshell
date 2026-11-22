@@ -79,6 +79,27 @@ describe('wake an idle agent with unread messages', () => {
     await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r']]))
   })
 
+  it('wakes Claude for a follow-up when its empty composer shows a dim prompt suggestion', async () => {
+    const { write, state } = setup()
+    state.ids = ['first']
+    wake.writeOutput(claudeDraft(''))
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste]]))
+    wake.writeOutput(claudeDraft(PROMPT))
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r']]))
+
+    const draft = '로고를 조금 더 크게 키워줘'
+    const composer = text => claudeDraft(text + '\r\n' + '─'.repeat(70) + '\r\n  ⏵⏵ bypass permissions on\x1b[2;3H')
+    state.ids = ['follow-up']
+    wake.writeOutput(composer(draft))
+    await vi.waitFor(() => expect(wake.composerState()).toBe('draft'))
+    expect(write).toHaveBeenCalledTimes(2)
+
+    wake.writeOutput(composer(`\x1b[2m${draft}\x1b[22m`))
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r'], [paste]]), { timeout: 3000 })
+    wake.writeOutput(claudeDraft(PROMPT))
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r'], [paste], ['\r']]))
+  })
+
   it('keeps queued messages while a user draft is open', async () => {
     const { write, state } = setup('codex')
     state.ids.push('first')
@@ -270,6 +291,21 @@ describe('wake an idle agent with unread messages', () => {
 })
 
 describe('a line sent from the chat view (submitText)', () => {
+  it('checks the subagent target before pasting and again before pressing Enter', async () => {
+    const { write } = setup('claude', 100)
+    const screen = (target, text = '') => '\x1b[?2004h\x1b[2J\x1b[H' + '─'.repeat(65) + ` ${target} ─\r\n> ${text}\r\n${'─'.repeat(70)}\x1b[2;${3 + text.length}H`
+    const verify = active => active === 'Inspect chat layout'
+    wake.writeOutput(screen('Another task'))
+    await vi.waitFor(() => expect(wake.inputTarget()).toBe('Another task'))
+    await expect(wake.submitText('Check the narrow pane', undefined, { verify })).resolves.toMatchObject({ ok: false, reason: 'target-changed' })
+    expect(write).not.toHaveBeenCalled()
+    wake.writeOutput(screen('Inspect chat layout'))
+    await vi.waitFor(() => expect(wake.inputTarget()).toBe('Inspect chat layout'))
+    const sent = wake.submitText('Check the narrow pane', undefined, { verify })
+    wake.writeOutput(screen('Another task', 'Check the narrow pane'))
+    await expect(sent).resolves.toMatchObject({ ok: false, reason: 'target-changed' })
+    expect(write.mock.calls).toEqual([['\x1b[200~Check the narrow pane\x1b[201~']])
+  })
   function chatSetup(kind = 'claude', state = { busy: false }) {
     const write = vi.fn(() => true)
     const rawWrite = vi.fn(() => true)

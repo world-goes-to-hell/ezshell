@@ -17,16 +17,27 @@ const responsePath = path.join(profile, id + '-mcp-response')
 const disconnectPath = path.join(profile, id + '-mcp-disconnect')
 const reconnectPath = path.join(profile, id + '-mcp-reconnect')
 const draftPath = path.join(profile, id + '-draft')
+const suggestionPath = path.join(profile, id + '-suggestion')
+const targetPath = path.join(profile, id + '-chat-target')
 const claude = kind === 'claude'
 const indicator = claude ? '> ' : '› '
 let draft = ''
+let suggestion = ''
+let target = ''
 let client = null
 
 // A prompt with choices drawn instead of the composer, as the CLIs do (local-agent-chat)
 const approvalPath = path.join(profile, id + '-approval')
 let approval = ''
+// A screen of the CLI's own, drawn instead of the composer (a chat slash command like /config)
+const screenPath = path.join(profile, id + '-screen')
+let screen = ''
 
 function draw() {
+  if (screen) {
+    process.stdout.write('\x1b[2J\x1b[H' + screen)
+    return
+  }
   if (approval) {
     process.stdout.write('\x1b[2J\x1b[Hfixture ready: ' + id + '\r\n' + approval)
     return
@@ -43,7 +54,7 @@ function draw() {
     if (draft === '/fast') rows.push('› /fast     toggle faster responses', '')
     if (ultrafast && draft.startsWith('/ultrafas')) rows.push('› /ultrafast     toggle fastest responses', '')
     const row = rows.length + 1
-    rows.push(indicator + draft, '', `  ${model} medium${speed} · /workspace`)
+    rows.push(indicator + draft, '', `  ${model} medium${speed} · /workspace${target ? ' · ' + target : ''}`)
     process.stdout.write('\x1b[2J\x1b[H' + rows.join('\r\n') + `\x1b[${row};${indicator.length + draft.length + 1}H`)
     return
   }
@@ -54,12 +65,21 @@ function draw() {
     paths.every(file => file.endsWith('.png') && fs.existsSync(file))
   // The fixture's stdout is not a TTY on Windows. Keep both rules on one row even in a split pane.
   const ruleWidth = unfocusedAttachment ? 16 : Math.max(8, Math.min(process.stdout.columns || 80, 80) - 4)
-  const border = claude ? '─'.repeat(ruleWidth) + '\r\n' : ''
-  const footer = unfocusedAttachment ? '\r\n' + border + '\r\n  ⏵⏵ auto mode on\x1b[3;3H' : ''
+  const rule = '─'.repeat(ruleWidth)
+  const border = claude ? (target ? '─'.repeat(12) + ' ' + target + ' ─' : rule) + '\r\n' : ''
+  let footer = unfocusedAttachment ? '\r\n' + rule + '\r\n  ⏵⏵ auto mode on\x1b[3;3H' : ''
   let display = draft
   if (unfocusedAttachment) {
     const tokens = paths.map((_, index) => '[Image #' + (index + 1) + ']').join(' ')
     display = tokens + (separator === -1 ? '' : '\n' + lines.slice(separator + 1).join('\n'))
+  }
+  if (claude && !draft && suggestion) {
+    display = '\x1b[2m' + suggestion + '\x1b[22m'
+    footer = '\r\n' + rule + '\r\n  ⏵⏵ bypass permissions on\x1b[3;3H'
+  }
+  if (!claude && target) {
+    if (draft.length > 100) display = `[Pasted Content ${draft.length} chars]`
+    footer = '\r\n\r\n  gpt-6 medium · ' + target + `\x1b[2;${display.length + 3}H`
   }
   process.stdout.write('\x1b[2J\x1b[Hfixture ready: ' + id + '\r\n' + border + indicator + display.replace(/\r?\n/g, '\r\n') + footer)
 }
@@ -117,9 +137,24 @@ setInterval(() => {
     fs.unlinkSync(approvalPath)
     draw()
   }
+  if (fs.existsSync(screenPath)) {
+    screen = fs.readFileSync(screenPath, 'utf8')
+    fs.unlinkSync(screenPath)
+    draw()
+  }
   if (fs.existsSync(draftPath)) {
     draft = fs.readFileSync(draftPath, 'utf8')
     fs.unlinkSync(draftPath)
+    draw()
+  }
+  if (fs.existsSync(suggestionPath)) {
+    suggestion = fs.readFileSync(suggestionPath, 'utf8')
+    fs.unlinkSync(suggestionPath)
+    draw()
+  }
+  if (fs.existsSync(targetPath)) {
+    target = fs.readFileSync(targetPath, 'utf8')
+    fs.unlinkSync(targetPath)
     draw()
   }
   if (fs.existsSync(titlePath)) {

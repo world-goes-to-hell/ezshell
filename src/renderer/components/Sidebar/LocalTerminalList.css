@@ -422,6 +422,7 @@
 }
 
 .local-agent-chip {
+  --agent-trace-inset: -1px;
   display: inline-flex;
   flex: none;
   align-items: center;

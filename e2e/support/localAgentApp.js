@@ -1,11 +1,35 @@
 // Launch the real Electron app with local fixtures for the clipboard and the two agent executables.
-const { app, clipboard, ClipboardItem, ipcMain, nativeImage } = require('electron')
+const { app, clipboard, ClipboardItem, dialog, ipcMain, nativeImage } = require('electron')
 const fs = require('fs')
 const path = require('path')
 const pty = require('node-pty')
 const { PROMPT, BUSY_PROMPT, REMIND_PROMPT } = require('../../src/ipc/agentInboxWake.js')
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
+const browserImportSources = require('../../out/main/src/ipc/browserImportSources.js')
+const createBrowserImportSources = browserImportSources.createBrowserImportSources
+browserImportSources.createBrowserImportSources = () => {
+  const local = path.join(profile, 'browser-import-local')
+  const chrome = path.join(local, 'Google', 'Chrome')
+  const userData = path.join(chrome, 'User Data')
+  for (const dir of [path.join(chrome, 'Application'), path.join(userData, 'Default'), path.join(userData, 'Profile 1')]) {
+    fs.mkdirSync(dir, { recursive: true })
+  }
+  fs.writeFileSync(path.join(chrome, 'Application', 'chrome.exe'), '')
+  fs.writeFileSync(path.join(userData, 'Local State'), JSON.stringify({
+    profile: { info_cache: { Default: { name: '개인' }, 'Profile 1': { name: '업무' } } },
+  }))
+  return createBrowserImportSources({
+    platform: 'win32', home: profile, env: { LOCALAPPDATA: local },
+    launch: (_executable, args) => fs.writeFileSync(path.join(profile, 'browser-source-launch.json'), JSON.stringify(args)),
+  })
+}
+const openFileDialog = dialog.showOpenDialog.bind(dialog)
+dialog.showOpenDialog = (window, options) => {
+  const loginCsv = path.join(profile, 'browser-login-import.csv')
+  return options?.title === '브라우저 비밀번호 CSV 가져오기' && fs.existsSync(loginCsv)
+    ? Promise.resolve({ canceled: false, filePaths: [loginCsv] }) : openFileDialog(window, options)
+}
 const bin = path.join(profile, 'fake-agents')
 fs.mkdirSync(bin)
 const envKey = Object.keys(process.env).find(key => key.toLowerCase() === 'path') ?? 'PATH'
@@ -43,6 +67,7 @@ pty.spawn = (file, args, options) => {
   const counts = {}
   let pending = null
   let speed = 'default'
+  let screenOpen = false
   child.write = data => {
     if (!id && /^claude(?: [^\r]*)?\r$/.test(data)) id = 'manual-claude'
     if (!id && data === 'codex --yolo\r') id = 'manual-codex'
@@ -59,6 +84,19 @@ pty.spawn = (file, args, options) => {
     } else if (id?.startsWith('codex-') && ['/fast', '/ultrafas', '/ultrafast'].includes(pasted) && process.env.EZSHELL_TEST_AGENT_CHAT) {
       pending = pasted === '/ultrafas' ? 'speed-probe' : pasted.slice(1) + '-toggles'
       fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
+    } else if (id && pasted === '/config' && process.env.EZSHELL_TEST_AGENT_CHAT) {
+      // A slash command that opens a screen of the CLI's own: Enter opens it, Esc closes it
+      pending = 'screen-command'
+      fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
+    } else if (pending === 'screen-command' && data === '\r') {
+      pending = null
+      screenOpen = true
+      fs.writeFileSync(path.join(profile, id + '-draft'), '')
+      fs.writeFileSync(path.join(profile, id + '-screen'), 'Settings\r\n  Theme      dark\r\n  Esc to close')
+    } else if (screenOpen && data === '\x1b') {
+      screenOpen = false
+      fs.appendFileSync(path.join(profile, id + '-screen-closed'), 'x')
+      fs.writeFileSync(path.join(profile, id + '-screen'), '')
     } else if (id && pasted !== null && process.env.EZSHELL_TEST_AGENT_CHAT) {
       // A line from the chat view (e2e/specs/local-agent-chat.js): the fake composer draws it, Enter counts
       pending = 'chat-sent'

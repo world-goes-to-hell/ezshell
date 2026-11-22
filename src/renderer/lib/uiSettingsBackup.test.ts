@@ -40,18 +40,21 @@ describe('collectUiSettings', () => {
 
   it('keeps a known theme choice and drops broken custom themes', () => {
     const result = collectUiSettings(storage({
-      'theme-store': JSON.stringify({ state: { currentThemeId: 'macos-dark', customThemes: ['junk', { id: 'x' }], surface: 'glass', windowOpacity: 0.1 } })
+      'theme-store': JSON.stringify({ state: { currentThemeId: 'macos-dark', chatThemeId: 'chat-kakao', customThemes: ['junk', { id: 'x' }], surface: 'glass', windowOpacity: 0.1 } })
     }), context, now)
     const state = JSON.parse(result.settings['theme-store']).state
     expect(state.currentThemeId).toBe('macos-dark')
+    expect(state.chatThemeId).toBe('chat-kakao')
     expect(state.customThemes).toEqual([])
     expect(state.surface).toBe('glass')
     expect(state.windowOpacity).toBe(0.5)
   })
 
   it('leaves out a theme id nobody knows', () => {
-    const result = collectUiSettings(storage({ 'theme-store': '{"state":{"currentThemeId":"custom-gone"}}' }), context, now)
-    expect(JSON.parse(result.settings['theme-store']).state.currentThemeId).toBeUndefined()
+    const result = collectUiSettings(storage({ 'theme-store': '{"state":{"currentThemeId":"custom-gone","chatThemeId":"unknown-chat"}}' }), context, now)
+    const state = JSON.parse(result.settings['theme-store']).state
+    expect(state.currentThemeId).toBeUndefined()
+    expect(state.chatThemeId).toBeUndefined()
   })
 })
 

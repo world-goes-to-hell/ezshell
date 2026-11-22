@@ -2,7 +2,8 @@
 // Only these fields reach the window, each clipped: tool output can be huge and may hold secrets
 // (the view shows what the terminal showed, nothing is written to disk).
 //
-// item: { id, kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'notice', time, text?, tool? }
+// item: { id, kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'notice' | 'output', time, text?, tool?, isError? }
+// (output: what a slash command printed, plain text)
 // tool: { name, summary, input, result?, isError?, diff?: string[], todos?: { text, status }[] }
 
 const LIMITS = {

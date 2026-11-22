@@ -88,15 +88,28 @@ function matchChatEchoes(known: Set<string>, incoming: AgentChatItem[], echoes: 
   return recorded
 }
 
+/**
+ * The output item that goes with a line sent from the chat which no transcript records (a Codex slash
+ * command: what it printed, read off the screen). It stays with that line, as the line itself does.
+ */
+export const echoOutputId = (echoId: string): string => `${echoId}:output`
+
+/** Ids of the lines sent from the chat and of their outputs */
+export function echoItemIds(echoes: readonly ChatEcho[]): Set<string> {
+  return new Set(echoes.flatMap(echo => [echo.id, echoOutputId(echo.id)]))
+}
+
 function insertChatEchoes(items: AgentChatItem[], current: AgentChatItem[], echoes: ChatEcho[]) {
   if (!echoes.length) return items
   const retained = new Map(current.map(item => [item.id, item]))
   for (const echo of echoes) {
     const item = retained.get(echo.id)
     if (!item) continue
+    const output = retained.get(echoOutputId(echo.id))
+    const group = output ? [item, output] : [item]
     const next = items.findIndex(entry => entry.time !== null && entry.time > echo.time)
-    if (next < 0) items.push(item)
-    else items.splice(next, 0, item)
+    if (next < 0) items.push(...group)
+    else items.splice(next, 0, ...group)
   }
   return items
 }
@@ -108,7 +121,7 @@ export function reconcileChatEchoes(current: AgentChatItem[], incoming: AgentCha
   }
   const recorded = matchChatEchoes(new Set(current.map(item => item.id)), incoming, echoes, mode === 'reset')
   const unmatched = echoes.filter(echo => !recorded.has(echo.id))
-  const localIds = new Set(echoes.map(echo => echo.id))
+  const localIds = echoItemIds(echoes)
   const items = insertChatEchoes(mergeChatItems(current.filter(item => !localIds.has(item.id)), incoming, mode), current, unmatched)
   const shown = items.slice(-MAX_CHAT_ITEMS)
   const shownIds = new Set(shown.map(item => item.id))
@@ -123,7 +136,7 @@ export function chatTextForClipboard(transcript: AgentChatItem[], visible: Agent
     if (!text?.trim()) return []
     if (kind === 'user') return ['나\n' + text]
     if (kind === 'assistant') return [agentName + '\n' + text]
-    return kind === 'notice' ? [text] : []
+    return kind === 'notice' || kind === 'output' ? [text] : []
   }).join('\n\n')
 }
 

@@ -1,0 +1,29 @@
+.select-menu-trigger.is-compact.agent-chat-theme-trigger {
+  flex: none;
+  justify-content: center;
+  width: 26px;
+  min-height: 24px;
+  padding: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.select-menu-trigger.agent-chat-theme-trigger:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.agent-chat-theme-swatch {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 23px;
+  height: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+
+.agent-chat-theme-swatch span {
+  width: 10px;
+  height: 6px;
+  border-radius: 3px 3px 1px 3px;
+  justify-self: end;
+  margin-inline-end: 3px;
+}

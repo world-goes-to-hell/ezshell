@@ -44,7 +44,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       seen = true
     }
     if (seen) changed()
-    return taken.map(publicMessage)
+    return taken.map(({ reviewRequest, ...message }) => publicMessage(message))
   }
 
   const PREVIEW_CHARS = 200
@@ -85,23 +85,30 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   }
 
   function deliver(from, request) {
-    const { text, replyTo, requestId } = request
+    const { text, replyTo, requestId, replyStatus } = request
     // An agent started before the update still has send_receipt: taken as a reply it would close the
     // request without its result, so it is refused with what to do instead
     if (request.receipt === true) throw new Error('수신 확인은 없어졌습니다. 상대는 읽음 여부를 check_sent 로 봅니다. 결과는 reply_to_message 로 보내 주세요.')
     if (typeof text !== 'string' || !text.trim() || text.length > MAX_TEXT) throw new Error('메시지를 1~8000자로 입력해 주세요.')
     if (requestId !== undefined && (typeof requestId !== 'string' || !requestId || requestId.length > 100)) throw new Error('요청 ID가 올바르지 않습니다.')
+    if (replyStatus !== undefined && (replyTo === undefined || !['completed', 'deferred'].includes(replyStatus))) {
+      throw new Error('답장 상태를 확인해 주세요.')
+    }
     const original = replyTo === undefined ? null : messages.find(item => item.id === replyTo && item.to === from)
     if (replyTo !== undefined && !original) throw new Error('답장할 메시지를 찾을 수 없습니다.')
     const to = original ? original.from : request.to
     const existing = requestId && messages.find(item => item.from === from && item.requestId === requestId)
     if (existing) {
-      if (existing.to !== to || existing.text !== text || existing.replyTo !== replyTo) throw new Error('같은 요청 ID에 다른 내용이 있습니다.')
+      if (existing.to !== to || existing.text !== text || existing.replyTo !== replyTo || existing.replyStatus !== replyStatus) {
+        throw new Error('같은 요청 ID에 다른 내용이 있습니다.')
+      }
       return { id: existing.id }
     }
     if (from === to || (to !== USER && !isConnected(to))) throw new Error('메시지를 받을 실행 중인 에이전트를 찾을 수 없습니다.')
     if (messages.length >= MAX_MESSAGES) throw new Error('이번 실행의 메시지 한도에 도달했습니다.')
     const message = { id: randomUUID(), from, to, text, replyTo, requestId, sentAt: Date.now(), read: false, seenAt: null }
+    if (replyStatus) message.replyStatus = replyStatus
+    if (from === USER && request.reviewRequest) message.reviewRequest = request.reviewRequest
     messages.push(message)
     if (original) original.read = true
     let deliveredToWaiter = false

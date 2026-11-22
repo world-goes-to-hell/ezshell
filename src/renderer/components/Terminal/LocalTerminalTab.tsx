@@ -6,6 +6,7 @@ import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
 import { RiToolsLine, RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine, RiCloseLine, RiChat3Line, RiHistoryLine } from 'react-icons/ri'
 import { useThemeStore } from '../../stores/themeStore'
+import { chatAppearance } from '../../themes/chatThemes'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { toast } from '../../stores/toastStore'
 import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
@@ -23,6 +24,7 @@ import { agentNewlineFor } from '../../lib/agentNewline'
 import { AgentPaneUsage } from '../AgentUsage/AgentUsageMeters'
 import { AgentChatCover } from '../AgentChat/AgentChatCover'
 import { AgentSleepCover } from '../AgentChat/AgentSleepCover'
+import { AgentScreenReturnBar } from '../AgentChat/AgentScreenReturnBar'
 import { useAgentChatStore } from '../../stores/agentChatStore'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
 import { matchesBinding } from '../../lib/shortcutMatch'
@@ -32,6 +34,7 @@ import { buildLocalInsertSequence } from '../../lib/commandCapture'
 import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory'
 import { CommandHistoryPanel } from './CommandHistoryPanel'
 import { isTabHostPreviewed } from '../../lib/tabHosts'
+import { focusPaneInput } from '../../lib/paneFocus'
 import './LocalTerminalTab.css'
 
 /** Shows a shell as a chat when an agent runs in it; says why not otherwise */
@@ -77,6 +80,7 @@ interface LocalShellViewProps {
  * again (tab moved, layout changed) it asks for the output so far and continues.
  */
 function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellViewProps) {
+  const paneRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -84,6 +88,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const [exit, setExit] = useState<{ code: number | null } | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [showHistory, setShowHistory] = useState(false)
+  const [usageActions, setUsageActions] = useState<HTMLSpanElement | null>(null)
   const agentWork = useAgentMessagesStore(state => {
     const agent = state.snapshot.agents.find(item => item.shellId === shellId)
     if (!agent) return undefined
@@ -91,6 +96,11 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   })
   const chatAgent = useAgentMessagesStore(() => chatAgentOf(shellId))
   const isChat = useAgentChatStore(state => state.chats.has(shellId))
+  const chatThemeId = useThemeStore(state => isChat ? state.chatThemeId : undefined)
+  const customThemes = useThemeStore(state => isChat ? state.customThemes : undefined)
+  const chatTheme = useMemo(() => chatThemeId ? chatAppearance(chatThemeId, customThemes ?? []) : undefined, [chatThemeId, customThemes])
+  const chatKind = useAgentChatStore(state => state.chats.get(shellId)?.kind)
+  const hasSpeedControls = isChat && (chatKind ?? chatAgent) === 'codex' && !!window.electronAPI.agentChatToggleSpeed
   const fontSize = useTerminalStore(state => state.fontSize)
   const fontFamily = useTerminalStore(state => state.fontFamily)
   const tab = useTerminalStore(state => state.terminals.get(tabId))
@@ -294,11 +304,20 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     if (!takesFocus) return
     const timer = window.setTimeout(() => {
       fit()
-      terminalRef.current?.focus()
+      const element = paneRef.current
+      // A click may already have focused a different shell in this tab.
+      if (element && !isTabHostPreviewed(tabId) && !element.parentElement?.contains(document.activeElement)) {
+        focusPaneInput(element)
+      }
     }, 30)
     return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [takesFocus])
+  }, [takesFocus, tabId])
+
+  const showTerminal = () => {
+    useAgentChatStore.getState().hide(shellId)
+    window.setTimeout(() => terminalRef.current?.focus(), 0)
+  }
 
   const onContextMenu = (event: MouseEvent): void => {
     event.preventDefault()
@@ -374,15 +393,17 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
 
   return (
     <div
+      ref={paneRef}
       className="local-terminal-pane"
       data-pane={pane}
       data-local-shell-id={shellId}
       data-local-tab-id={tabId}
       data-agent-work={agentWork}
-      style={style}
+      data-chat-mode={isChat || undefined}
+      style={chatTheme ? { ...style, '--chat-pane-accent': chatTheme.accent } as CSSProperties : style}
     >
       <div className="local-terminal-stage">
-        <div ref={hostRef} className="local-terminal-host" onContextMenu={onContextMenu} />
+        <div ref={hostRef} className="local-terminal-host" inert={isChat} onContextMenu={onContextMenu} />
         {showHistory && !exit && !isChat && !chatAgent && (
           <CommandHistoryPanel
             sessionId={shellId}
@@ -401,17 +422,18 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
         {isChat && (
           <AgentChatCover
             shellId={shellId}
+            themeId={chatThemeId}
+            appearance={chatTheme}
+            usageActions={usageActions}
             tabId={tabId}
             getSplitMenu={getSplitMenu}
-            onShowTerminal={() => {
-              useAgentChatStore.getState().hide(shellId)
-              window.setTimeout(() => terminalRef.current?.focus(), 0)
-            }}
+            onShowTerminal={showTerminal}
           />
         )}
-        <AgentSleepCover shellId={shellId} onTerminal={() => window.setTimeout(() => terminalRef.current?.focus(), 0)} />
+        {!isChat && <AgentScreenReturnBar shellId={shellId} />}
+        <AgentSleepCover shellId={shellId} onTerminal={showTerminal} />
       </div>
-      <AgentPaneUsage shellId={shellId} />
+      <AgentPaneUsage shellId={shellId} actionsRef={hasSpeedControls ? setUsageActions : undefined} style={chatTheme?.style} />
       <AgentPaneMessages shellId={shellId} tabId={tabId} />
       {exit && (
         <div className="local-terminal-exit" role="status">

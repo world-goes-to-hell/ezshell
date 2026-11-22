@@ -155,7 +155,7 @@ export function LocalProjectsTree({
                   // A lone local terminal is the worktree's own row; any other tab is listed under it
                   const singleTab = tabs.length === 1 && tabs[0].kind === 'local' ? tabs[0] : undefined
                   const hasChildren = !singleTab && tabs.length > 0
-                  const worktreeWorking = singleTab?.working || (!isTreeOpen && tabs.some(tab => tab.working))
+                  const worktreeWorking = hasChildren && !isTreeOpen && tabs.some(tab => tab.working)
                   const isCurrent = singleTab?.id === currentTabId
                   const name = folderLabel(worktree.path)
                   const shownNames = [name, project.name, worktree.branch && `${project.name} · ${worktree.branch}`]

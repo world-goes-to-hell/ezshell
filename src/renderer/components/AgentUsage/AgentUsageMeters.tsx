@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties, type Ref } from 'react'
 import * as Tooltip from '@radix-ui/react-tooltip'
 import { RiBrainLine } from 'react-icons/ri'
 import { useAgentUsageStore } from '../../stores/agentUsageStore'
@@ -127,15 +127,17 @@ export function AgentUsageMeters({ usage, now, shellId }: { usage: AgentUsage; n
   )
 }
 
-/** Below a local terminal: the usage of the agent running in that shell, or nothing */
-export function AgentPaneUsage({ shellId }: { shellId: string | undefined }) {
+/** Below a local terminal: the usage of the agent and any actions from its chat. */
+export function AgentPaneUsage({ shellId, actionsRef, style }: { shellId: string | undefined; actionsRef?: Ref<HTMLSpanElement>; style?: CSSProperties }) {
   const usage = useAgentUsageStore(state => (shellId ? state.byShell.get(shellId) : undefined))
   const now = useMinuteClock(Boolean(usage))
-  if (!usage) return null
-  const summary = usageSummary(usage, now)
+  if (!usage && !actionsRef) return null
   return (
-    <div className="agent-pane-usage" aria-label={summary} role="status">
-      <AgentUsageMeters usage={usage} now={now} shellId={shellId} />
+    <div className="agent-pane-usage" style={style}>
+      {usage && <div className="agent-usage-readout" aria-label={usageSummary(usage, now)} role="status">
+        <AgentUsageMeters usage={usage} now={now} shellId={shellId} />
+      </div>}
+      {actionsRef && <span className="agent-usage-actions" ref={actionsRef} />}
     </div>
   )
 }

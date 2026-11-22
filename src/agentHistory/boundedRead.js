@@ -15,7 +15,7 @@ function openStream(file, start, end) {
 }
 
 /**
- * Calls `onLine(object)` for each JSON line from the start of the file until it returns true or
+ * Calls `onLine(object, offset, bytes)` for each JSON line until it returns true or
  * `maxBytes` (after decompression) have been read. `end` bounds the file read at an inclusive byte.
  * A line longer than `maxLine` is skipped. `start` starts an uncompressed file midstream and drops
  * the first partial line. `matchLine` can skip unrelated records before parsing their JSON.
@@ -27,6 +27,8 @@ function readLinesFromStart(file, onLine, { maxBytes = 2 * 1024 * 1024, maxLine 
     let pendingBytes = 0
     let skipping = start > 0
     let total = 0
+    let offset = start ?? 0
+    let lineStart = offset
     let done = false
     const finish = (error) => {
       if (done) return
@@ -35,14 +37,14 @@ function readLinesFromStart(file, onLine, { maxBytes = 2 * 1024 * 1024, maxLine 
       if (error) reject(error)
       else resolve()
     }
-    const emit = (buffer) => {
+    const emit = (buffer, position) => {
       if (!buffer.length) return false
       const line = buffer.toString('utf8')
       if (matchLine && !matchLine(line)) return false
       let value
       try { value = JSON.parse(line) } catch { return false }
       if (value === null || typeof value !== 'object') return false
-      try { return onLine(value) === true } catch (error) { finish(error); return true }
+      try { return onLine(value, position, buffer.length) === true } catch (error) { finish(error); return true }
     }
     stream.on('data', chunk => {
       if (done) return
@@ -51,12 +53,15 @@ function readLinesFromStart(file, onLine, { maxBytes = 2 * 1024 * 1024, maxLine 
       for (let at = chunk.indexOf(10); at !== -1; at = chunk.indexOf(10, start)) {
         const part = chunk.subarray(start, at)
         start = at + 1
+        const position = lineStart
+        lineStart = offset + start
         if (skipping) { skipping = false; pending = []; pendingBytes = 0; continue }
         const line = pending.length ? Buffer.concat([...pending, part]) : part
         pending = []
         pendingBytes = 0
-        if (emit(line)) return finish()
+        if (emit(line, position)) return finish()
       }
+      offset += chunk.length
       if (start < chunk.length && !skipping) {
         pending.push(chunk.subarray(start))
         pendingBytes += chunk.length - start
@@ -65,7 +70,7 @@ function readLinesFromStart(file, onLine, { maxBytes = 2 * 1024 * 1024, maxLine 
       if (total >= maxBytes) finish()
     })
     stream.on('end', () => {
-      if (!skipping && pending.length) emit(Buffer.concat(pending))
+      if (!skipping && pending.length) emit(Buffer.concat(pending), lineStart)
       finish()
     })
     stream.on('error', finish)

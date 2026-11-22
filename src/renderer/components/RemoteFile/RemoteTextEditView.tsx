@@ -348,6 +348,7 @@ export function RemoteTextEditView({ docId, file, active, header, hint, ref }: R
             onBackupKey={setSelectedBackup}
             getEditor={getEditor}
             readOnly={!canWrite}
+            isDirty={isDirty}
             onSave={() => void startSave()}
             onClose={closeCompare}
           />

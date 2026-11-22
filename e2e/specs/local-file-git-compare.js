@@ -99,6 +99,24 @@ const { check, finish } = createChecks()
       ${picker}?.value === ${JSON.stringify('server:' + first)} &&
       ${sides}[0]?.includes('first snapshot') && ${sides}[1]?.includes('working version')
     `))
+    const previousHeader = `document.querySelector('.remote-compare-head.is-previous')`
+    const currentHeader = `document.querySelector('.remote-compare-head.is-current')`
+    check('the two sides have distinct headings, backgrounds, and editor labels', await file.js(`(() => {
+      const previous = ${previousHeader}.querySelector('h3')
+      const current = ${currentHeader}.querySelector('h3')
+      const [leftEditor, rightEditor] = document.querySelectorAll('.remote-compare-host .cm-content')
+      return previous.textContent.trim() === '이전 버전' && current.textContent.trim() === '현재 내용'
+        && ${previousHeader}.textContent.includes('Add original') && ${previousHeader}.textContent.includes('읽기 전용')
+        && ${currentHeader}.textContent.includes('저장됨')
+        && getComputedStyle(${previousHeader}).backgroundColor !== getComputedStyle(${currentHeader}).backgroundColor
+        && leftEditor.getAttribute('aria-labelledby') === previous.id && rightEditor.getAttribute('aria-labelledby') === current.id
+    })()`))
+    await file.js(`document.querySelectorAll('.remote-compare-host .cm-content')[1].focus()`)
+    await file.send('Input.insertText', { text: 'draft ' })
+    check('editing the current side marks its header as unsaved', await file.until(`
+      ${currentHeader}.querySelector('.remote-compare-head-state.is-dirty')?.textContent === '저장하지 않은 변경'
+      && ${sides}[0]?.includes('first snapshot') && ${sides}[1]?.includes('draft ')
+    `))
     await file.js(`(() => {
       const select = ${picker}
       select.value = ${JSON.stringify('server:' + latest)}

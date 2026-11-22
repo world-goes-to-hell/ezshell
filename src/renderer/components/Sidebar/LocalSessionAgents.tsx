@@ -7,7 +7,7 @@ import { MAIN_PANE } from '../../lib/splitTree'
 import { tabHost } from '../../lib/tabHosts'
 import { useTerminalStore } from '../../stores/terminalStore'
 import type { AgentMessageSession, LocalAgentStatus } from '../../types'
-import { useAgentMessagesStore } from '../Terminal/AgentMessages'
+import { isAgentWorking, useAgentMessagesStore } from '../Terminal/AgentMessages'
 import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
 
 const presentation = {
@@ -55,6 +55,7 @@ export function LocalSessionAgents({ tabId }: { tabId: string }) {
             className="local-agent-chip"
             data-agent-id={agent.id}
             data-agent-kind={agent.kind}
+            data-agent-work={isAgentWorking(agent) ? 'working' : 'idle'}
             data-status={status}
             title={description}
             aria-label={description}

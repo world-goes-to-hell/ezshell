@@ -1,14 +1,9 @@
 const { Terminal } = require('@xterm/headless')
 const { hasCodexSpeedChoice } = require('./codexSpeed.js')
+const { PROMPT, BUSY_PROMPT, REMIND_PROMPT } = require('./agentInboxPrompts.js')
 
 // The line pasted into the agent's composer. Reading the message is what the sender sees (check_sent:
 // "read"); the result follows with reply_to_message. Receipts (send_receipt) were removed on 2026-11-20.
-const PROMPT = 'New ezShell message: read it with read_inbox, then handle it.'
-// While it works: Claude Code hands a line entered during a task to that task, so it reads the message
-// without stopping (the sender sees it read) and handles it afterwards
-const BUSY_PROMPT = 'New ezShell message while you are busy: read it now with read_inbox; handle it after your current task.'
-// After that task, when the request it put off is still unanswered
-const REMIND_PROMPT = 'Your task is done: handle the ezShell request you put off, then send the result with reply_to_message.'
 const PROMPTS = { idle: PROMPT, busy: BUSY_PROMPT, remind: REMIND_PROMPT }
 const LONGEST_PROMPT = Math.max(...Object.values(PROMPTS).map(text => text.length))
 const pasteOf = text => '\x1b[200~' + text + '\x1b[201~'
@@ -21,6 +16,8 @@ const QUIET_MS = 1500
 const submitKey = data => /^(?:\r|\n|\x1b\[13(?:;1)?u)$/.test(data)
 const compact = text => text.replace(/\s/g, '')
 const claudeRule = /^\s*─{8,}\s*$/u
+const claudeTargetRule = /^\s*─{8,}\s+([^─]+?)\s+─\s*$/u
+const isClaudeRule = row => claudeRule.test(row) || claudeTargetRule.test(row)
 // The hint an empty Claude composer shows: Try "fix lint errors"
 const CLAUDE_PLACEHOLDER = /^Try ".*"$/
 // A numbered choice of a prompt: "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"
@@ -35,7 +32,7 @@ const APPROVAL_SETTLE = 600
 /**
  * write: our wake lines (gated on mail by the caller); rawWrite: a chat line the user sent (submitText)
  */
-function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMessages = () => [], isWorking, isRunningTask = () => false, isUnknown = () => false, quietMs = QUIET_MS, write, rawWrite = write }) {
+function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMessages = () => [], isWorking, isRunningTask = () => false, isUnknown = () => false, quietMs = QUIET_MS, write, rawWrite = write, parentInput = () => true }) {
   const screen = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true })
   const dispatched = new Set()
   // Announced while the agent was busy: reminded once after the task if still unanswered
@@ -55,25 +52,36 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   function paintedClaudeComposer(buffer, line, maxInputRows) {
     // Claude can leave the terminal cursor in the footer and paint its input cursor with inverse video.
     let bottom = buffer.baseY + screen.rows - 1
-    while (bottom > buffer.baseY && !claudeRule.test(line(bottom))) {
+    while (bottom > buffer.baseY && !isClaudeRule(line(bottom))) {
       if (prompt.test(line(bottom))) return null
       bottom--
     }
     for (let first = bottom - 1; first >= Math.max(buffer.baseY + 1, bottom - maxInputRows); first--) {
       const prefix = prompt.exec(line(first))
-      if (!prefix || !claudeRule.test(line(first - 1))) continue
+      if (!prefix || !isClaudeRule(line(first - 1))) continue
+      const target = claudeTargetRule.exec(line(first - 1))?.[1] ?? claudeTargetRule.exec(line(bottom))?.[1] ?? ''
+      const startColumn = prefix[0].length
+      // Claude's next-prompt suggestion is entirely dimmed and leaves the composer empty.
+      let dimmedSuggestion = !userDraft && bottom === first + 1
       let painted
       const input = []
       for (let row = first; row < bottom; row++) {
-        input.push(row === first ? line(row).slice(prefix[0].length) : line(row))
+        input.push(row === first ? line(row).slice(startColumn) : line(row))
         const cells = buffer.getLine(row)
-        const start = row === first ? prefix[0].length : 0
+        const start = row === first ? startColumn : 0
         for (let x = start; x < screen.cols; x++) {
           const cell = cells?.getCell(x)
+          const chars = cell?.getChars()
+          if (dimmedSuggestion && chars?.trim() && !cell.isDim()) dimmedSuggestion = false
           if (!cell?.isInverse()) continue
-          if (painted || cell.getChars() !== ' ') return null
-          painted = { row, x }
+          if (painted) return null
+          painted = { row, x, blank: chars === ' ' }
         }
+      }
+      if (dimmedSuggestion && input[0].trim()) {
+        const atStart = painted ? painted.x === startColumn
+          : buffer.baseY + buffer.cursorY !== first || buffer.cursorX === startColumn
+        if (atStart) return { atStart: true, endsAtCursor: true, text: '', target }
       }
       if (!painted) {
         // No cursor painted either: Claude out of focus (the chat view or the usage menu has the keyboard)
@@ -81,15 +89,17 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         // paths and hard line breaks. Only a single blank or placeholder row counts as empty.
         const typed = input.join('\n').trim()
         const empty = input.length === 1 && (!typed || CLAUDE_PLACEHOLDER.test(typed))
-        return { atStart: empty, endsAtCursor: true, text: empty ? '' : compact(typed) }
+        return { atStart: empty, endsAtCursor: true, text: empty ? '' : compact(typed), target }
       }
+      if (!painted.blank) return null
       const text = compact(input.join(''))
       const afterCursor = (buffer.getLine(painted.row)?.translateToString(false, painted.x) ?? '')
         + input.slice(painted.row - first + 1).join('')
       return {
-        atStart: !text && painted.row === first && painted.x === prefix[0].length,
+        atStart: !text && painted.row === first && painted.x === startColumn,
         endsAtCursor: !compact(afterCursor),
-        text
+        text,
+        target
       }
     }
     return null
@@ -114,10 +124,10 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       const row = line(index)
       const prefix = prompt.exec(row)
       if (!prefix) continue
-      if (kind === 'claude' && !claudeRule.test(line(index - 1))) continue
+      if (kind === 'claude' && !isClaudeRule(line(index - 1))) continue
       const tail = row.slice(prefix[0].length)
       const lines = Array.from({ length: cursor - index }, (_, offset) => line(index + offset + 1))
-      if (kind === 'claude' && lines.some(line => claudeRule.test(line))) continue
+      if (kind === 'claude' && lines.some(isClaudeRule)) continue
       // The empty prompt can have placeholder text to the right of the cursor.
       const atStart = index === cursor && buffer.cursorX === prefix[0].length
       const afterCursor = buffer.getLine(cursor)?.translateToString(false, buffer.cursorX) ?? ''
@@ -126,7 +136,23 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       // character (a busy line of exactly the pane's width was never entered)
       const fillsRow = buffer.cursorX === screen.cols - 1 && afterCursor.length === 1 && afterCursor !== ' '
       const endsAtCursor = afterCursor.trim() === '' || fillsRow
-      return { atStart, endsAtCursor, text: compact([tail, ...lines].join('')) }
+      const target = kind === 'claude' ? claudeTargetRule.exec(line(index - 1))?.[1] ?? '' : undefined
+      return { atStart, endsAtCursor, text: compact([tail, ...lines].join('')), lastRow: cursor - buffer.baseY, target }
+    }
+    return null
+  }
+
+  function targetOf(input) {
+    if (!input) return null
+    if (kind === 'claude') return input.target ?? null
+    const footer = screenLines().slice(input.lastRow + 1, input.lastRow + 7).filter(Boolean)
+    for (const line of footer) {
+      for (const part of line.trim().split(/\s+·\s+/)) {
+        if (part === 'Main [default]') return ''
+        const canonical = /^`(\/root\/[\w./-]+)`$/.exec(part)
+        if (canonical) return canonical[1]
+        if (/^[\w.-]+ \[[\w.-]+\]$/.test(part)) return part
+      }
     }
     return null
   }
@@ -255,6 +281,11 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       if (!rawWrite('\x7f'.repeat(chat.length), false)) finishChat({ ok: false, reason: 'write-failed' }, false)
       if (!chat) return
     } else if (!chat.clearing && !chat.probe && drawn && (!command || available)) {
+      if (chat.verify && !chat.verify(targetOf(input))) {
+        // Keep a draft if the CLI switched views. A key here could act on the new view.
+        finishChat({ ok: false, reason: 'target-changed' }, false)
+        return
+      }
       const ok = command ? rawWrite('\r', false) : rawWrite('\r')
       userDraft = false
       holdUntil = now + INPUT_TIMEOUT
@@ -286,6 +317,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     const remind = working ? [] : [...deferred]
     const due = waiting.length > 0 || remind.length > 0
     const input = due || stage ? composer() : null
+    if (!parentInput(targetOf(input))) return
     if (stage) {
       const { expires, mode, prompt, ids } = stage
       const isOurs = Boolean(input?.endsAtCursor) && input?.text === compact(prompt)
@@ -398,7 +430,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
      * Enters a line the user wrote in the chat view: only into the agent's own, empty composer (never a
      * shell prompt), and Enter only once the composer shows that text. Resolves { ok } or { ok, reason }.
      */
-    submitText(text, claudeImages, { codexSpeed, probe = false } = {}) {
+    submitText(text, claudeImages, { codexSpeed, probe = false, verify } = {}) {
       return new Promise(resolve => {
         if (stopped) return resolve({ ok: false, reason: 'not-agent' })
         if (chat || stage || composing || held) return resolve({ ok: false, reason: 'busy' })
@@ -407,6 +439,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         const lines = text.split('\n').length
         const input = composer(length, lines)
         if (!input) return resolve({ ok: false, reason: 'no-composer' })
+        if (verify && !verify(targetOf(input))) return resolve({ ok: false, reason: 'target-changed' })
         // Empty is the cursor at the prompt's start, as for our wake lines: an empty composer shows
         // placeholder text to the right of the cursor ("Try …"), so its text is not empty
         if (!input.atStart || (codexSpeed && userDraft && input.text)) {
@@ -417,7 +450,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         clearTimeout(timer)
         const images = kind === 'claude' && claudeImages ? { count: claudeImages.count, text: compact(claudeImages.text) } : null
         chat = {
-          text: compact(text), length, lines, codexSpeed, probe, terminalInput: [],
+          text: compact(text), length, lines, codexSpeed, probe, verify, terminalInput: [],
           claudeImages: images,
           // Claude reads and converts every file before its native image tokens appear.
           expires: Date.now() + (images ? IMAGE_INPUT_TIMEOUT : INPUT_TIMEOUT), resolve, timer: null
@@ -447,6 +480,13 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     },
     /** The visible screen, one string per row (agentPicker.js reads the CLI's pickers from it) */
     screenLines,
+    inputTarget: () => targetOf(composer()),
+    /** The agent's own composer: 'empty', 'draft' (text in it), or null (not on screen: a dialog of the CLI) */
+    composerState() {
+      if (stopped) return null
+      const input = composer()
+      return input ? (input.atStart ? 'empty' : 'draft') : null
+    },
     /** The CLI asked for application cursor keys (arrows as ESC O A) */
     applicationCursorKeys: () => !stopped && screen.modes.applicationCursorKeysMode,
     resize(cols, rows) { screen.resize(cols, rows); schedule() },

@@ -320,10 +320,13 @@ function createLocalShells({
     const pendingMessages = () => agents.unreadFor?.(id) ?? [];
     // Read but not answered yet: a request the agent confirmed while busy and put off
     const unhandledMessages = () => agents.unhandledFor?.(id) ?? [];
+    entry.subagentInputLabels = new Set();
+    entry.parentInput = target => !target || (!entry.subagentInputLabels.has(target) && !(entry.agent === 'codex' && target.startsWith('/root/')));
     entry.inbox = createAgentInboxWake({
       kind: entry.agent, cols: entry.cols, rows: entry.rows,
       pendingMessages,
       unhandledMessages,
+      parentInput: entry.parentInput,
       isWorking: () => {
         const status = agentStatus(entry);
         return status !== 'idle' && !(entry.externalAgent && status === 'unknown');
@@ -787,7 +790,17 @@ function createLocalShells({
      * A line from the chat view (src/agentChat): into the agent's composer only, never the shell. Not
      * while it asks for approval (the text would answer the question).
      */
-    async chatSend(id, text, claudeImages) {
+    chatInputTarget(id) {
+      const entry = shells.get(id);
+      return hasAgent(entry) ? entry.inbox?.inputTarget() ?? null : null;
+    },
+    rememberSubagentInput(id, label) {
+      const labels = shells.get(id)?.subagentInputLabels;
+      if (!labels) return;
+      labels.add(label);
+      if (labels.size > 64) labels.delete(labels.values().next().value);
+    },
+    async chatSend(id, text, claudeImages, target, sameConversation = () => true) {
       const entry = shells.get(id);
       const inbox = entry?.inbox;
       if (!inbox) return { ok: false, reason: 'not-agent' };
@@ -795,7 +808,8 @@ function createLocalShells({
       if (probe) await probe;
       if (shells.get(id)?.inbox !== inbox || !hasAgent(entry)) return { ok: false, reason: 'not-agent' };
       if (agentStatus(entry) === 'blocked') return { ok: false, reason: 'approval' };
-      const result = await inbox.submitText(text, claudeImages);
+      const verify = target === undefined ? entry.parentInput : active => active === target && sameConversation();
+      const result = await inbox.submitText(text, claudeImages, { verify });
       if (result.ok && entry.codexInput && entry.codexInput.submitted) entry.reportStatus?.(agentStatus(entry));
       return result;
     },
@@ -803,6 +817,15 @@ function createLocalShells({
     approvalOf(id) {
       const entry = shells.get(id);
       return hasAgent(entry) && entry.inbox ? entry.inbox.approvalPrompt() : null;
+    },
+    /**
+     * The agent's screen for a slash command sent from the chat view (agentChat/commandScreen.js): its rows,
+     * whether its composer shows, and whether a numbered prompt does; null without an agent
+     */
+    chatScreen(id) {
+      const entry = shells.get(id);
+      if (!hasAgent(entry) || !entry.inbox) return null;
+      return { lines: entry.inbox.screenLines(), composer: entry.inbox.composerState(), approval: Boolean(entry.inbox.approvalPrompt()) };
     },
     /** Answers that prompt with a choice, only if the screen still shows the same prompt */
     async answerApproval(id, key, signature) {

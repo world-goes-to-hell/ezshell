@@ -17,8 +17,15 @@ export function focusTabPane(focusTerminal: (tabId: string) => void, tabId: stri
 }
 
 export function focusPaneInput(pane: HTMLElement): void {
-  const input = pane.querySelector<HTMLElement>('.agent-chat-input, .agent-chat-approval-option:not(:disabled)')
-    ?? pane.querySelector<HTMLElement>('.xterm-helper-textarea')
+  const sleep = pane.querySelector<HTMLElement>('.agent-sleep-cover')
+  if (sleep) {
+    sleep.querySelector<HTMLElement>('button:not(:disabled)')?.focus({ preventScroll: true })
+    return
+  }
+  const chat = pane.querySelector<HTMLElement>('.agent-chat-cover')
+  const input = chat
+    ? chat.querySelector<HTMLElement>('.agent-chat-input, .agent-chat-approval-option:not(:disabled)') ?? chat
+    : pane.querySelector<HTMLElement>('.xterm-helper-textarea')
   input?.focus({ preventScroll: true })
 }
 

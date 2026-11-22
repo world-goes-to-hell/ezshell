@@ -3,6 +3,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAgentChats, claudeFolderName, findClaudeFile } from './chats.js'
+import { PROMPT, BUSY_PROMPT } from '../ipc/agentInboxPrompts.js'
 
 const SESSION = '0f3a8d40-5ff7-4d63-967c-90f524623f87'
 const CWD = process.platform === 'win32' ? 'C:\\work\\my-app' : '/work/my-app'
@@ -130,6 +131,81 @@ describe('following a chat view\'s transcript', () => {
     target = null
     chats.tick()
     await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ state: 'ended' }))
+  })
+
+  it('indexes earlier questions by identity and reads their context without replacing the live view', async () => {
+    const filler = JSON.stringify({ type: 'attachment', attachment: { text: '한글'.repeat(1600) } }) + '\n'
+    fs.writeFileSync(file, filler.repeat(33) + prompt('old', '같은 질문') + answer('old-a', '먼저 받은 답변')
+      + filler.repeat(260) + prompt('new', '같은 질문') + answer('new-a', '나중에 받은 답변'))
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.some(frame => frame.reset)).toBe(true))
+    expect(texts(frames.find(frame => frame.reset))).toEqual(['같은 질문', '나중에 받은 답변'])
+    const index = await chats.questions('local:1')
+    expect(index).toMatchObject({
+      ok: true,
+      questions: [{ id: 'user:new', text: '같은 질문' }, { id: 'user:old', text: '같은 질문' }]
+    })
+    expect((await chats.questionContext('local:1', 'another-session', 'user:old')).ok).toBe(false)
+    expect((await chats.questionContext('local:1', index.scope, 'user:missing')).ok).toBe(false)
+    const context = await chats.questionContext('local:1', index.scope, 'user:old')
+    expect(context.ok).toBe(true)
+    expect(texts(context)).toEqual(['같은 질문', '먼저 받은 답변'])
+    expect(frames).toHaveLength(1)
+  })
+
+  it('indexes Claude’s received tasks and replies once and recovers the tool card when its result is far away', async () => {
+    const line = value => JSON.stringify(value) + '\n'
+    const call = (id, server = 'ezshell-cli-mcp') => line({ type: 'assistant', uuid: id, message: {
+      content: [{ type: 'tool_use', id, name: `mcp__${server}__read_inbox`, input: {} }]
+    } })
+    const result = (id, messages) => line({ type: 'user', message: {
+      content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: JSON.stringify({ messages }) }] }]
+    } })
+    const task = { id: 'message-1', from: 'codex-1', text: '배포 로그를 확인해 줘.\n오류가 있으면 알려줘.' }
+    const reply = { id: 'message-2', from: 'codex-1', replyTo: 'sent', text: '잘 끝났습니다.' }
+    const filler = line({ type: 'attachment', attachment: { text: '한글'.repeat(1600) } })
+    fs.writeFileSync(file, prompt('notice', PROMPT) + call('first') + filler.repeat(40) + result('first', [task, reply,
+      { id: 'message-3', from: 'user', text: '브라우저에서 보낸 내용' },
+      { id: 'message-4', from: 'codex-1', replyTo: 'sent', receipt: true, text: '수신 확인' }
+    ]) + answer('old-answer', '로그를 확인했습니다.') + filler.repeat(300) + call('repeat', 'ezshell_agent') + result('repeat', [task, reply])
+      + call('other', 'another-tool') + result('other', [{ ...task, id: 'unrelated' }]) + prompt('new', '다음 질문'))
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.some(frame => frame.reset)).toBe(true))
+    const index = await chats.questions('local:1')
+    expect(index).toMatchObject({ ok: true, questions: [
+      { id: 'user:new', text: '다음 질문' },
+      { id: 'inbox:message-2', itemId: 'tool:first', sender: reply.from, text: reply.text, isReply: true },
+      { id: 'inbox:message-1', itemId: 'tool:first', sender: task.from, text: task.text }
+    ] })
+    const context = await chats.questionContext('local:1', index.scope, 'inbox:message-2')
+    expect(context).toMatchObject({ ok: true, items: [
+      { id: 'tool:first', kind: 'tool', tool: { isInbox: true, result: expect.stringContaining(reply.text) } },
+      { id: 'old-answer:0', text: '로그를 확인했습니다.' }
+    ] })
+    expect(frames).toHaveLength(1)
+  })
+
+  it('indexes Codex’s inbox results alongside human prompts and refreshes after an appended read', async () => {
+    target = { kind: 'codex', file, cwd: CWD }
+    const completed = item => JSON.stringify({ type: 'event_msg', payload: { type: 'item_completed', item } }) + '\n'
+    const request = (id, text) => completed({ type: 'UserMessage', id, content: [{ type: 'text', text }] })
+    const read = (id, message, status = 'completed') => completed({ type: 'McpToolCall', id, server: 'ezshell-cli-mcp',
+      tool: 'read_inbox', status, result: { content: [{ type: 'text', text: JSON.stringify({ messages: [message] }) }] }
+    })
+    const reply = { id: 'reply-1', from: 'claude-4', replyTo: 'sent', text: '검색 결과를 정리했습니다.' }
+    fs.writeFileSync(file, request('real', '내가 적은 질문') + request('wake', BUSY_PROMPT) + read('failed', reply, 'failed'))
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.some(frame => frame.reset)).toBe(true))
+    expect((await chats.questions('local:1')).questions).toMatchObject([{ id: 'UserMessage:real' }])
+    fs.appendFileSync(file, read('first', reply) + read('again', reply))
+    chats.tick()
+    await vi.waitFor(() => expect(frames.at(-1).items).toContainEqual(expect.objectContaining({ id: 'McpToolCall:again' })))
+    const index = await chats.questions('local:1')
+    expect(index.questions).toMatchObject([
+      { id: 'inbox:reply-1', itemId: 'McpToolCall:first', text: reply.text, sender: reply.from, isReply: true },
+      { id: 'UserMessage:real', text: '내가 적은 질문' }
+    ])
+    expect((await chats.questionContext('local:1', index.scope, 'inbox:reply-1')).ok).toBe(true)
   })
 
   it('drops the view when its shell was closed', async () => {

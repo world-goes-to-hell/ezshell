@@ -3,7 +3,9 @@ const path = require('path')
 const { readLinesFromEnd } = require('../agentHistory/boundedRead.js')
 const { dayFolders, sessionMeta } = require('../ipc/codexUsageWatcher.js')
 const { commandText, visibleCodexText } = require('./codexTranscript.js')
-const { blocksText, oneLine, text } = require('./items.js')
+const { blocksText, clip, oneLine, text, timeOf } = require('./items.js')
+const { promptText: claudePrompt } = require('../agentHistory/claude.js')
+const { promptText: codexPrompt, replyText: codexAnswer } = require('../agentHistory/codex.js')
 
 const MAX_ACTIVITY = 6
 const MAX_SOURCES = 64
@@ -16,7 +18,7 @@ const entries = dir => fs.readdir(dir, { withFileTypes: true }).catch(() => [])
 async function claudeSource(parent, child) {
   const dir = path.join(parent.slice(0, -'.jsonl'.length), 'subagents')
   const files = (await entries(dir)).filter(entry => entry.isFile()).map(entry => entry.name)
-  const fileOf = id => files.includes(`agent-${id}.jsonl`) ? { file: path.join(dir, `agent-${id}.jsonl`) } : null
+  const fileOf = id => files.includes(`agent-${id}.jsonl`) ? { file: path.join(dir, `agent-${id}.jsonl`), id } : null
   for (const key of child.keys) {
     if (CLAUDE_CHILD_ID.test(key) && fileOf(key)) return fileOf(key)
   }
@@ -26,7 +28,10 @@ async function claudeSource(parent, child) {
     try {
       if ((await fs.stat(file)).size > 32_768) continue
       const meta = JSON.parse(await fs.readFile(file, 'utf8'))
-      if (meta?.toolUseId === child.id) return fileOf(name.slice(6, -'.meta.json'.length))
+      if (meta?.toolUseId === child.id) {
+        const source = fileOf(name.slice(6, -'.meta.json'.length))
+        if (source) return { ...source, meta }
+      }
     } catch { /* file is still being written or was removed */ }
   }
   return null
@@ -116,41 +121,83 @@ function activityOf(kind, lines, meta) {
   return activity
 }
 
+function conversationOf(kind, lines, meta) {
+  const start = meta?.subagent_history_start_ordinal
+  if (kind === 'codex' && meta?.forked_from_id && !Number.isInteger(start)) return []
+  const messages = new Map()
+  let lastText
+  for (const [index, line] of lines.entries()) {
+    if (kind === 'codex' && Number.isInteger(start) && !(line.ordinal >= start)) continue
+    const payload = line.payload
+    const claudeContent = line.message?.content
+    const user = kind === 'claude' ? claudePrompt({ ...line, isSidechain: false }) : codexPrompt(line)
+    const answer = kind === 'claude'
+      ? line.type === 'assistant' && Array.isArray(claudeContent) && blocksText(claudeContent.filter(block => block?.type === 'text'))
+      : visibleCodexText(codexAnswer(line) || (line.type === 'response_item' && payload?.type === 'message' && payload.role === 'assistant' ? blocksText(payload.content) : ''))
+    const content = kind === 'codex' ? visibleCodexText(user || answer) : text(user || answer).trim()
+    if (!content || /^<(?:subagent_notification|teammate-message|agent-message)\b/.test(content)) continue
+    const role = user ? 'user' : 'assistant'
+    const time = timeOf(line.timestamp)
+    const id = `${role}:${line.uuid ?? payload?.item?.id ?? payload?.id ?? `${time}:${index}`}`
+    const previous = messages.get(id)
+    if (previous?.text === content) continue
+    // Codex often persists the same answer as both a response item and a display event.
+    if (kind === 'codex' && lastText === content) continue
+    lastText = content
+    messages.set(id, { id, role, text: clip(content, 12_000), time })
+    if (messages.size > 48) messages.delete(messages.keys().next().value)
+  }
+  return [...messages.values()]
+}
+
 /** Read bounded, displayable activity on demand from the identified child, never from renderer paths. */
 function createSubagentPreview(parent, kind, now = Date.now) {
   const sources = new Map()
   let parentMeta
-  return function preview(child) {
+  function read(child) {
     let entry = sources.get(child.id)
     if (!entry) {
-      entry = { source: null, retryAt: 0, stamp: '', activity: [], pending: null }
+      entry = { source: null, retryAt: 0, stamp: '', activity: [], messages: [], pending: null }
       sources.set(child.id, entry)
       if (sources.size > MAX_SOURCES) sources.delete(sources.keys().next().value)
     }
     entry.pending ??= (async () => {
       if (!entry.source) {
-        if (entry.retryAt > now()) return []
+        if (entry.retryAt > now()) return null
         const source = kind === 'claude' ? await claudeSource(parent, child)
           : await codexSource(parent, await (parentMeta ??= sessionMeta(parent)), child)
-        if (!source) { entry.retryAt = now() + 1200; return [] }
+        if (!source) { entry.retryAt = now() + 1200; return null }
         entry.source = source
       }
       const { file, meta } = entry.source
       const stat = await fs.stat(file)
       const stamp = `${stat.size}:${stat.mtimeMs}`
       if (entry.stamp !== stamp) {
-        entry.activity = activityOf(kind, await readLinesFromEnd(file, { maxBytes: TAIL_BYTES }) ?? [], meta)
+        const lines = await readLinesFromEnd(file, { maxBytes: TAIL_BYTES }) ?? []
+        entry.activity = activityOf(kind, lines, meta)
+        entry.messages = conversationOf(kind, lines, meta)
         entry.stamp = stamp
       }
-      return entry.activity
+      return { source: entry.source, activity: entry.activity, messages: entry.messages }
     })().catch(() => {
       entry.source = null
       entry.stamp = ''
       parentMeta = undefined
-      return []
+      return null
     }).finally(() => { entry.pending = null })
     return entry.pending
   }
+  const preview = async child => (await read(child))?.activity ?? []
+  preview.conversation = async child => (await read(child))?.messages ?? []
+  preview.identity = async child => {
+    const record = await read(child)
+    const { id, meta } = record?.source ?? {}
+    const spawn = (meta?.source?.subagent ?? meta?.source?.sub_agent)?.thread_spawn
+    return kind === 'claude' ? { id, description: text(meta?.description) }
+      : { id: meta?.id, path: meta?.agent_path ?? spawn?.agent_path, nickname: meta?.agent_nickname ?? spawn?.agent_nickname,
+        role: meta?.agent_role ?? spawn?.agent_role, parentOwned: /^(?:v2|2)$/i.test(String(meta?.multi_agent_version ?? '')) }
+  }
+  return preview
 }
 
 module.exports = { createSubagentPreview }

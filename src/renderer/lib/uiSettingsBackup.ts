@@ -1,4 +1,5 @@
 import { PRESET_THEMES } from '../themes/presets'
+import { isChatThemeId } from '../themes/chatThemes'
 import { sanitizeStoredThemes } from './themeValidation'
 import { parseSurface, clampWindowOpacity } from './appearance'
 import { snapZoom } from './appZoom'
@@ -78,6 +79,7 @@ function normalizeThemeStore(raw: string): string | null {
     state: {
       // An unknown theme id is left out: the importing side keeps its own theme
       ...(isKnown ? { currentThemeId: chosen } : {}),
+      ...(isChatThemeId(stored.chatThemeId, customThemes) ? { chatThemeId: stored.chatThemeId } : {}),
       customThemes,
       surface: parseSurface(stored.surface),
       windowOpacity: clampWindowOpacity(stored.windowOpacity)

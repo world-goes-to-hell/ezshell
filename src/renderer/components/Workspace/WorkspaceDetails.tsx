@@ -2,9 +2,9 @@
 // the folder tree that expands in place and opens files in the file window, and the diff of one file.
 import { useEffect, useState, type CSSProperties } from 'react'
 import { RiArrowDownSLine, RiArrowRightSLine, RiFileLine, RiFolderLine, RiFolderOpenLine, RiLinksLine } from 'react-icons/ri'
-import type { WorkspaceDirectoryEntry, WorkspaceGitDiff } from '../../types'
+import type { WorkspaceDirectoryEntry, WorkspaceDirectorySearchResult, WorkspaceGitDiff } from '../../types'
 import { toast } from '../../stores/toastStore'
-import { isMediaFile, joinRelative, diffLineKind } from '../../lib/workspaceDetails'
+import { isMediaFile, joinRelative, diffLineKind, splitPath } from '../../lib/workspaceDetails'
 import './WorkspaceDetails.css'
 
 const fileIcons = { directory: RiFolderLine, file: RiFileLine, link: RiLinksLine }
@@ -35,9 +35,9 @@ function useListing(root: string, relative: string): Listing {
   return listing
 }
 
-function TreeEntry({ root, parent, entry, depth, label }: { root: string; parent: string; entry: WorkspaceDirectoryEntry; depth: number; label: string }) {
+function TreeEntry({ root, relative, entry, depth, label, showPath = false }: { root: string; relative: string; entry: WorkspaceDirectoryEntry; depth: number; label: string; showPath?: boolean }) {
   const [isOpen, setIsOpen] = useState(false)
-  const relative = joinRelative(parent, entry.name)
+  const parent = showPath ? splitPath(relative).folder : ''
   const isFolder = entry.kind === 'directory'
   const Icon = isFolder && isOpen ? RiFolderOpenLine : fileIcons[entry.kind]
   const Chevron = isOpen ? RiArrowDownSLine : RiArrowRightSLine
@@ -46,13 +46,18 @@ function TreeEntry({ root, parent, entry, depth, label }: { root: string; parent
       <button
         type="button"
         className="workspace-tree-row"
-        title={isFolder ? entry.name : `${entry.name} 열기`}
+        title={showPath ? relative : isFolder ? entry.name : `${entry.name} 열기`}
         aria-expanded={isFolder ? isOpen : undefined}
         onClick={() => (isFolder ? setIsOpen(open => !open) : void openWorkspaceFile(root, relative, label))}
       >
         {isFolder ? <Chevron size={14} className="workspace-tree-chevron" aria-hidden="true" /> : <span className="workspace-tree-chevron" aria-hidden="true" />}
         <Icon size={15} className="workspace-tree-icon" aria-hidden="true" />
-        <span className="workspace-tree-name" dir="auto">{entry.name}</span>
+        {parent ? (
+          <span className="workspace-tree-result-label">
+            <span className="workspace-tree-name" dir="auto">{entry.name}</span>
+            <span className="workspace-tree-result-path" dir="auto">{parent}</span>
+          </span>
+        ) : <span className="workspace-tree-name" dir="auto">{entry.name}</span>}
       </button>
       {isFolder && isOpen && <TreeLevel root={root} relative={relative} depth={depth + 1} label={label} />}
     </li>
@@ -68,10 +73,18 @@ export function TreeLevel({ root, relative, depth, label }: { root: string; rela
   if (listing.entries.length === 0) return <p className="workspace-tree-note" style={indent}>비어 있는 폴더입니다.</p>
   return (
     <ul className="workspace-tree" style={indent} role={depth === 0 ? 'tree' : 'group'} aria-label={depth === 0 ? '폴더 항목' : undefined}>
-      {listing.entries.map(entry => <TreeEntry key={entry.name} root={root} parent={relative} entry={entry} depth={depth} label={label} />)}
+      {listing.entries.map(entry => <TreeEntry key={entry.name} root={root} relative={joinRelative(relative, entry.name)} entry={entry} depth={depth} label={label} />)}
       {listing.total > listing.entries.length && (
         <li className="workspace-tree-note">{listing.total.toLocaleString()}개 중 {listing.entries.length.toLocaleString()}개 표시</li>
       )}
+    </ul>
+  )
+}
+
+export function WorkspaceFileResults({ root, label, entries }: { root: string; label: string; entries: WorkspaceDirectorySearchResult['entries'] }) {
+  return (
+    <ul className="workspace-tree workspace-tree-results" role="tree" aria-label="파일·폴더 검색 결과">
+      {entries.map(entry => <TreeEntry key={entry.path} root={root} relative={entry.path} entry={entry} depth={0} label={label} showPath />)}
     </ul>
   )
 }

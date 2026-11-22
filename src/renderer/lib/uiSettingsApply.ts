@@ -43,6 +43,7 @@ export function applyUiSettings(values: UiSettingsImport['values']): number {
 function applyTheme(value: string): void {
   const state = JSON.parse(value).state as {
     currentThemeId?: string
+    chatThemeId?: string
     customThemes: ThemeDefinition[]
     surface: SurfaceStyle
     windowOpacity: number
@@ -53,6 +54,7 @@ function applyTheme(value: string): void {
   store.setSurface(state.surface)
   store.setWindowOpacity(state.windowOpacity)
   if (state.currentThemeId) store.setTheme(state.currentThemeId)
+  if (state.chatThemeId) store.setChatTheme(state.chatThemeId)
 }
 
 function applyUiStore(value: string): void {

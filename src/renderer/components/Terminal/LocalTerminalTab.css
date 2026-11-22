@@ -58,10 +58,11 @@
   background: var(--terminal-bg, var(--bg-primary));
 }
 
-/* Split: mark the pane that receives keyboard input, the same way as SSH split panes
+/* Mark the focused split pane or chat, the same way as SSH split panes
    (styles/app/update-notification.css): an inset overlay, so edges along an overflow:hidden
    ancestor are not clipped at fractional zoom, xterm keeps its size and clicks pass through */
 .local-terminal-tab.is-split .local-terminal-pane:focus-within::before,
+.local-terminal-pane[data-chat-mode]:focus-within::before,
 .local-terminal-pane[data-agent-work='working']::before {
   content: '';
   position: absolute;
@@ -75,8 +76,8 @@
 }
 
 .local-terminal-tab.is-split .local-terminal-pane:focus-within::before,
-.local-terminal-pane[data-agent-work='working']:focus-within::before {
-  border: 2px solid var(--accent);
+.local-terminal-pane:is([data-chat-mode], [data-agent-work='working']):focus-within::before {
+  border: 2px solid var(--chat-pane-accent, var(--accent));
 }
 
 /* The light follows an inner track so it stays visible beside the solid focus outline. */

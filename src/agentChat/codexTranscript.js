@@ -1,5 +1,7 @@
 const { createTurnUsage } = require('./turnUsage.js')
 const { codexUsageFromTokenCount } = require('../ipc/agentUsage.js')
+const { isInboxPrompt } = require('../ipc/agentInboxPrompts.js')
+const { isCodexInboxTool } = require('./inboxQuestions.js')
 const { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, diffFromText, addedLines, clipLines, readableOutput, readableValue } = require('./items.js')
 
 // Codex's `rollout-*.jsonl`. Since `item_completed` events (Codex 0.1xx), each finished thing is one
@@ -74,7 +76,7 @@ function createCodexParser() {
       case 'UserMessage': {
         const said = joinText(item.content, ['text'])
         if (said) {
-          const user = { id, kind: 'user', time, text: clip(said, LIMITS.text) }
+          const user = { id, kind: 'user', time, text: clip(said, LIMITS.text), ...(isInboxPrompt(said) ? { inboxNotice: true } : {}) }
           turns.start(user, { older })
           out.push(user)
         }
@@ -126,6 +128,7 @@ function createCodexParser() {
             // MCP arguments and answers are JSON: shown as an outline with the texts' own lines
             input: clip(readableValue(item.arguments ?? {}), LIMITS.input),
             result: clip(readableOutput(blocksText(item.result?.content)), LIMITS.result),
+            ...(isCodexInboxTool(item.server, item.tool) ? { isInbox: true } : {}),
             ...(item.status && item.status !== 'completed' ? { isError: true } : {})
           }
         })

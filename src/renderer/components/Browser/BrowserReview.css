@@ -78,6 +78,7 @@
 .browser-review .browser-review-bookmark[aria-pressed="true"] { color: var(--accent); }
 
 .browser-review .browser-review-bookmarks-toggle,
+.browser-review .browser-review-logins,
 .browser-review .browser-review-tools-toggle,
 .browser-review .browser-review-devtools,
 .browser-review .browser-review-pick {
@@ -88,6 +89,7 @@
 }
 
 .browser-review .browser-review-bookmarks-toggle[aria-expanded="true"],
+.browser-review .browser-review-logins[aria-expanded="true"],
 .browser-review .browser-review-tools-toggle[aria-expanded="true"],
 .browser-review .browser-review-devtools[aria-pressed="true"],
 .browser-review .browser-review-pick[aria-pressed="true"] {
@@ -98,6 +100,7 @@
 
 .browser-review .browser-review-bookmark:focus-visible,
 .browser-review .browser-review-bookmarks-toggle:focus-visible,
+.browser-review .browser-review-logins:focus-visible,
 .browser-review .browser-review-bookmarks button:focus-visible,
 .browser-review .browser-review-tools-toggle:focus-visible,
 .browser-review .browser-review-devtools:focus-visible,
@@ -289,6 +292,158 @@
 .browser-review-hint, .browser-review-feedback, .browser-review-compose-error { margin: 0; line-height: 1.5; font-size: 12px; }
 .browser-review-compose-error { color: var(--error-text); }
 .browser-review-feedback { color: var(--text-secondary); }
+
+.browser-review-history {
+  min-width: 0;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.browser-review-history h2 { margin: 0 0 8px; font-size: 12px; font-weight: 650; }
+
+.browser-review-history ol {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.browser-review-history li {
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.browser-review-history summary {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 6px;
+  padding: 7px 8px;
+  cursor: pointer;
+}
+
+.browser-review-history summary:focus-visible { outline: 1px solid var(--accent); }
+.browser-review-history-chevron { color: var(--text-muted); }
+.browser-review-history details[open] > summary .browser-review-history-chevron { transform: rotate(90deg); }
+.browser-review-history-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-review-history-meta { grid-column: 2 / -1; color: var(--text-muted); font-size: 11px; }
+
+.browser-review-history-status {
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.browser-review-history-status[data-status='completed'] { color: var(--success); }
+.browser-review-history-status[data-status='deferred'] { color: var(--warning); }
+.browser-review-history-status[data-status='replied'] { color: var(--text-link); }
+
+.browser-review-history-detail {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--border-color);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.browser-review-history-detail p { margin: 0; white-space: pre-wrap; }
+.browser-review-history-element { display: grid; gap: 2px; color: var(--text-muted); }
+.browser-review-history-element code { color: var(--text-link); }
+.browser-review-history-reply { padding-top: 6px; border-top: 1px solid var(--border-color); }
+.browser-review-history-reply strong { color: var(--text-secondary); font-size: 11px; }
+
+.modal-content.browser-login-dialog {
+  width: min(600px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+}
+
+.browser-login-session,
+.browser-login-heading,
+.browser-login-form-actions,
+.browser-login-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.browser-login-session,
+.browser-login-heading { flex-wrap: wrap; justify-content: space-between; }
+.browser-login-session { padding: 0 0 12px; border-bottom: 1px solid var(--border); }
+.browser-login-session label { display: flex; align-items: center; gap: 6px; }
+.browser-login-heading h2 { margin: 0 auto 0 0; font-size: 14px; }
+.browser-login-heading-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 100%;
+  gap: 8px;
+}
+.browser-login-heading-actions > button,
+.browser-login-import-actions > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  margin: 0;
+  padding: 8px 12px;
+  line-height: 1.4;
+  text-align: center;
+}
+.browser-login-accounts { display: grid; gap: 10px; margin-top: 14px; }
+.browser-login-import {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.browser-login-import p { margin: 0; color: var(--text-secondary); line-height: 1.5; }
+.browser-login-import label { font-weight: 600; }
+.browser-login-import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.browser-login-import select {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+.browser-login-import select:focus-visible { outline: 1px solid var(--accent); }
+.browser-login-form { padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); overflow-wrap: anywhere; }
+.browser-login-form > strong { display: block; margin-bottom: 10px; color: var(--text-link); }
+.browser-login-form-actions { justify-content: flex-end; }
+
+.browser-login-search {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.browser-login-list { max-height: min(36vh, 300px); margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.browser-login-list li { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.browser-login-list li > span { display: grid; flex: 1; min-width: 0; gap: 3px; overflow-wrap: anywhere; }
+.browser-login-list small, .browser-login-session p, .browser-login-empty, .browser-login-notice { color: var(--text-secondary); }
+.browser-login-session p { flex-basis: 100%; margin: 0; }
+.browser-login-error { color: var(--error-text); }
 
 @media (prefers-reduced-motion: no-preference) {
   .browser-review-spinning { animation: browser-review-spin 1s linear infinite; }

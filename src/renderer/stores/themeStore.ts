@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { PRESET_THEMES } from '../themes/presets'
+import { FOLLOW_APP_CHAT_THEME, isChatThemeId } from '../themes/chatThemes'
 import { ThemeDefinition, TerminalColors } from '../types/theme'
 import { colorSchemeFor } from '../lib/colorScheme'
 import { normalizeTheme, sanitizeStoredThemes } from '../lib/themeValidation'
@@ -9,6 +10,7 @@ import { clampWindowOpacity, effectiveSurface, parseSurface, type SurfaceStyle }
 
 interface ThemeState {
   currentThemeId: string
+  chatThemeId: string
   customThemes: ThemeDefinition[]
   /** Flat (solid panels) or glass (translucent, blurred); independent of the color theme */
   surface: SurfaceStyle
@@ -17,6 +19,7 @@ interface ThemeState {
   setSurface: (surface: SurfaceStyle) => void
   setWindowOpacity: (opacity: number) => void
   setTheme: (themeId: string) => void
+  setChatTheme: (themeId: string) => void
   getCurrentTheme: () => ThemeDefinition
   getTerminalTheme: () => TerminalColors
   initializeTheme: () => void
@@ -105,6 +108,7 @@ export const useThemeStore = create<ThemeState>()(
     (set, get) => ({
       // First run only: a saved choice replaces this in merge below
       currentThemeId: detectDefaultThemeId(),
+      chatThemeId: FOLLOW_APP_CHAT_THEME,
       customThemes: [],
       surface: 'flat',
       windowOpacity: 1,
@@ -139,6 +143,10 @@ export const useThemeStore = create<ThemeState>()(
         return allThemes.find(t => t.id === currentThemeId) || PRESET_THEMES[0]
       },
 
+      setChatTheme: (chatThemeId) => {
+        if (isChatThemeId(chatThemeId, get().customThemes)) set({ chatThemeId })
+      },
+
       getTerminalTheme: () => {
         const theme = get().getCurrentTheme()
         return theme.terminal
@@ -166,7 +174,8 @@ export const useThemeStore = create<ThemeState>()(
 
       deleteCustomTheme: (id: string) => {
         set((state) => ({
-          customThemes: state.customThemes.filter(t => t.id !== id)
+          customThemes: state.customThemes.filter(t => t.id !== id),
+          chatThemeId: state.chatThemeId === id ? FOLLOW_APP_CHAT_THEME : state.chatThemeId
         }))
 
         // If deleted theme was active, switch to default
@@ -205,6 +214,7 @@ export const useThemeStore = create<ThemeState>()(
       name: 'theme-store',
       partialize: (state) => ({
         currentThemeId: state.currentThemeId,
+        chatThemeId: state.chatThemeId,
         customThemes: state.customThemes,
         surface: state.surface,
         windowOpacity: state.windowOpacity
@@ -212,7 +222,7 @@ export const useThemeStore = create<ThemeState>()(
       // Stored custom themes may predate validation (or be edited by hand): repair or drop them before use,
       // and fall back to the default theme if the chosen one did not survive
       merge: (persisted, current) => {
-        const stored = (persisted ?? {}) as Partial<Pick<ThemeState, 'currentThemeId' | 'customThemes' | 'surface' | 'windowOpacity'>>
+        const stored = (persisted ?? {}) as Partial<Pick<ThemeState, 'currentThemeId' | 'chatThemeId' | 'customThemes' | 'surface' | 'windowOpacity'>>
         const customThemes = sanitizeStoredThemes(stored.customThemes)
         const chosen = stored.currentThemeId
         const isKnown = [...PRESET_THEMES, ...customThemes].some(theme => theme.id === chosen)
@@ -220,6 +230,7 @@ export const useThemeStore = create<ThemeState>()(
           ...current,
           customThemes,
           currentThemeId: isKnown && chosen ? chosen : current.currentThemeId,
+          chatThemeId: isChatThemeId(stored.chatThemeId, customThemes) ? stored.chatThemeId : FOLLOW_APP_CHAT_THEME,
           surface: parseSurface(stored.surface),
           windowOpacity: clampWindowOpacity(stored.windowOpacity)
         }

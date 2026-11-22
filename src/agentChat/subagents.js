@@ -209,7 +209,11 @@ function createSubagentTracker(kind) {
     childOf(id) {
       const agent = agents.get(id)
       if (!agent) return null
-      return { id, startedAt: agent.startedAt, keys: [id, ...[...aliases].filter(([, associated]) => associated === id).map(([key]) => key)] }
+      const siblings = [...agents.values()].filter(other => other.id !== id)
+      return { id, startedAt: agent.startedAt, name: agent.name, task: agent.task,
+        uniqueTask: !siblings.some(other => other.task === agent.task),
+        uniqueName: !siblings.some(other => other.name === agent.name),
+        keys: [id, ...[...aliases].filter(([, associated]) => associated === id).map(([key]) => key)] }
     },
     feed(line) {
       if (kind === 'claude') claude(line, timeOf(line.timestamp))

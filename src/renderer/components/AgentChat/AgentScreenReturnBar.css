@@ -1,0 +1,35 @@
+/* A thin bar at the top of the pane: it covers the terminal's first row only while it shows */
+.agent-screen-return {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 24px);
+  padding: 4px 6px 4px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.agent-screen-return span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-screen-return button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.agent-screen-return button:hover { border-color: var(--accent); }
+.agent-screen-return .agent-screen-return-close { padding: 3px 4px; border-color: transparent; background: transparent; }

@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { EditorView } from '@codemirror/view'
 import { EditorState, type Extension } from '@codemirror/state'
 import { MergeView, getChunks, goToNextChunk, goToPreviousChunk } from '@codemirror/merge'
-import { RiArrowDownSLine, RiArrowUpSLine, RiCloseLine, RiSkipDownLine, RiSkipUpLine } from 'react-icons/ri'
+import { RiArrowDownSLine, RiArrowUpSLine, RiCloseLine, RiFileEditLine, RiHistoryLine, RiSkipDownLine, RiSkipUpLine } from 'react-icons/ri'
 import { editorExtensions, languageFor, languageSlot } from './codeEditorSetup'
-import { BackupSourceIcon } from './RemoteBackupPanel'
 import { entryKey, gitRevisionLabel, neighborOf, readBackupEntry, type BackupEntry } from '../../lib/backupCompare'
 import { formatClock, toEditorText } from '../../lib/remoteFileText'
 import { toast } from '../../stores/toastStore'
@@ -82,6 +81,7 @@ interface RemoteCompareViewProps {
   /** The file window's editor: the right side starts from its text and sends every change back to it */
   getEditor: () => EditorView | null
   readOnly: boolean
+  isDirty: boolean
   onSave: () => void
   onClose: () => void
 }
@@ -104,7 +104,10 @@ const optionLabel = (entry: BackupEntry): string =>
  * text: every change made there (arrows, typing, undo) is sent to the file window's editor at once,
  * so saving, the unsaved-changes prompt and Ctrl+Z there keep working without a separate "apply".
  */
-export function RemoteCompareView({ docId, fileName, entries, backupKey, onBackupKey, getEditor, readOnly, onSave, onClose }: RemoteCompareViewProps) {
+export function RemoteCompareView({ docId, fileName, entries, backupKey, onBackupKey, getEditor, readOnly, isDirty, onSave, onClose }: RemoteCompareViewProps) {
+  const comparisonId = useId()
+  const previousTitleId = `${comparisonId}-previous`
+  const currentTitleId = `${comparisonId}-current`
   const hostRef = useRef<HTMLDivElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
   const mergeRef = useRef<MergeView | null>(null)
@@ -121,6 +124,9 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
 
   const entry = entries.find(e => entryKey(e) === backupKey) ?? null
   const sourceLabel = entries[0]?.timeFrom === 'git' ? 'Git 버전' : '백업'
+  const previousDetail = entry ? optionLabel(entry) : sourceLabel
+  const currentDetail = readOnly ? fileName : `${fileName} · » 이전 내용 가져오기`
+  const currentState = readOnly ? '읽기 전용' : isDirty ? '저장하지 않은 변경' : '저장됨'
   const revertLabel = `이 부분을 ${sourceLabel} 내용으로 바꾸기`
   const older = neighborOf(entries, backupKey, 'older')
   const newer = neighborOf(entries, backupKey, 'newer')
@@ -166,10 +172,22 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
       if (chunks) setChunkCount(chunks.chunks.length)
     })
     const merge = new MergeView({
-      a: { doc: backupText, extensions: [editorExtensions({ readOnly: true }, noop, noop), MERGE_PHRASES] },
+      a: {
+        doc: backupText,
+        extensions: [
+          editorExtensions({ readOnly: true }, noop, noop),
+          MERGE_PHRASES,
+          EditorView.contentAttributes.of({ 'aria-labelledby': previousTitleId })
+        ]
+      },
       b: {
         doc: editor.state.doc,
-        extensions: [editorExtensions({ readOnly, onSave: () => onSaveRef.current() }, noop, noop), MERGE_PHRASES, sendToEditor]
+        extensions: [
+          editorExtensions({ readOnly, onSave: () => onSaveRef.current() }, noop, noop),
+          MERGE_PHRASES,
+          EditorView.contentAttributes.of({ 'aria-labelledby': currentTitleId }),
+          sendToEditor
+        ]
       },
       parent: host,
       renderRevertControl: () => {
@@ -206,7 +224,7 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
       merge.destroy()
       mergeRef.current = null
     }
-  }, [loaded, collapse, getEditor, readOnly, fileName, revertLabel])
+  }, [loaded, collapse, getEditor, readOnly, fileName, revertLabel, previousTitleId, currentTitleId])
 
   const changeSyncScroll = (isOn: boolean) => {
     setSyncScroll(isOn)
@@ -268,15 +286,20 @@ export function RemoteCompareView({ docId, fileName, entries, backupKey, onBacku
           <RiCloseLine size={16} aria-hidden="true" /> 비교 닫기
         </button>
       </div>
-      <div className="remote-compare-heads" aria-hidden="true">
-        <div className="remote-compare-head">
-          {entry && <BackupSourceIcon entry={entry} size={13} />}
-          <span>{entry ? optionLabel(entry) : sourceLabel}</span>
-          <span className="remote-compare-tag">읽기 전용</span>
+      <div className="remote-compare-heads">
+        <div className="remote-compare-head is-previous">
+          <div className="remote-compare-head-row">
+            <h3 id={previousTitleId} className="remote-compare-head-title"><RiHistoryLine size={16} aria-hidden="true" /> 이전 버전</h3>
+            <span className="remote-compare-head-state">읽기 전용</span>
+          </div>
+          <div className="remote-compare-head-detail" title={previousDetail}>{previousDetail}</div>
         </div>
-        <div className="remote-compare-head">
-          <span>현재 편집기</span>
-          <span className="remote-compare-tag">{readOnly ? '읽기 전용' : '저장 안 한 변경 포함 · » 로 가져오기'}</span>
+        <div className="remote-compare-head is-current">
+          <div className="remote-compare-head-row">
+            <h3 id={currentTitleId} className="remote-compare-head-title"><RiFileEditLine size={16} aria-hidden="true" /> 현재 내용</h3>
+            <span className={`remote-compare-head-state${isDirty && !readOnly ? ' is-dirty' : ''}`}>{currentState}</span>
+          </div>
+          <div className="remote-compare-head-detail" title={currentDetail}>{currentDetail}</div>
         </div>
       </div>
       {loaded && 'error' in loaded && <p className="remote-compare-message" role="alert">{loaded.error}</p>}

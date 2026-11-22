@@ -2,6 +2,9 @@
 const { randomUUID } = require('node:crypto')
 const fs = require('fs')
 const { linkTarget } = require('./links.js')
+const { routeSubagent, subagentRelayText } = require('./subagentChat.js')
+const { watchCommand } = require('./commandScreen.js')
+const { customCommands } = require('./slashCommands.js')
 
 const SHELL_ID = /^local:\d+$/
 const MAX_TEXT = 16_000
@@ -28,6 +31,7 @@ const REASONS = {
   'not-drawn': '입력칸에 글이 그대로 들어가지 않아 보내지 않았습니다. 터미널 보기에서 확인해 주세요.',
   busy: '다른 입력을 넣는 중입니다. 잠시 뒤 다시 시도해 주세요.',
   changed: '화면의 질문이 바뀌었습니다. 새 질문을 보고 다시 골라 주세요.',
+  'target-changed': 'CLI의 입력 대상이 바뀌었습니다. 터미널에서 현재 대화를 확인해 주세요.',
   'write-failed': '셸에 쓰지 못했습니다.'
 }
 const SPEED_REASONS = {
@@ -57,6 +61,8 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   const locked = { ok: false, error: '먼저 잠금을 해제해 주세요.' }
   const images = new Map()
   const imageReads = new Map()
+  // A slash command just sent from the chat: the agent's screen before it, read by agent-chat-command-watch
+  const commandWatches = new Map()
 
   function removeImages(id, ids) {
     const attachments = images.get(id)
@@ -120,11 +126,82 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const id = shellIdOf(shellId)
     if (allowed(event) && id) await chats.older(id)
   })
+  ipcMain.handle('agent-chat-questions', async (event, shellId) => {
+    if (!allowed(event)) return locked
+    const id = shellIdOf(shellId)
+    if (!id) return { ok: false, error: '셸을 찾지 못했습니다.' }
+    const result = await chats.questions(id)
+    return allowed(event) ? result : locked
+  })
+  ipcMain.handle('agent-chat-question-context', async (event, request) => {
+    if (!allowed(event)) return locked
+    const id = shellIdOf(request?.shellId)
+    if (!id || typeof request.scope !== 'string' || typeof request.id !== 'string' || request.id.length > 160) {
+      return { ok: false, error: '질문을 찾지 못했습니다.' }
+    }
+    const result = await chats.questionContext(id, request.scope, request.id)
+    return allowed(event) ? result : locked
+  })
   ipcMain.handle('agent-chat-subagent-preview', async (event, shellId, agentId) => {
     const id = shellIdOf(shellId)
     if (!allowed(event) || !id || typeof agentId !== 'string' || agentId.length > 500) return []
     const activity = await chats.subagentPreview(id, agentId)
     return allowed(event) ? activity : []
+  })
+  async function subagentFor(event, shellId, agentId) {
+    if (!allowed(event) || !shellIdOf(shellId) || typeof agentId !== 'string' || agentId.length > 500) return null
+    const record = await chats.subagentConversation(shellId, agentId)
+    if (!record || !allowed(event)) return null
+    const local = shells()
+    const route = record.live && local?.agentOf(shellId)?.kind === record.kind
+      ? routeSubagent(record.kind, record.child, record.identity, local.chatInputTarget(shellId))
+      : { mode: 'read-only' }
+    if (route.mode === 'direct') local.rememberSubagentInput?.(shellId, route.target)
+    return { local, route, messages: record.messages, scope: record.scope }
+  }
+  ipcMain.handle('agent-chat-subagent-conversation', async (event, shellId, agentId) => {
+    const found = await subagentFor(event, shellId, agentId)
+    return found ? { mode: found.route.mode, messages: found.messages, scope: found.scope } : null
+  })
+  ipcMain.handle('agent-chat-subagent-send', async (event, request) => {
+    if (!allowed(event)) return locked
+    const { shellId, agentId, mode, scope } = request ?? {}
+    const text = cleanChatText(request?.text)
+    if (!text) return { ok: false, error: '보낼 수 없는 글입니다.' }
+    const found = await subagentFor(event, shellId, agentId)
+    const route = found?.route
+    if (!route || typeof scope !== 'string' || scope !== found.scope || route.mode !== mode || (mode !== 'direct' && mode !== 'relay')) {
+      return { ok: false, error: REASONS['target-changed'] }
+    }
+    if (mode === 'direct' && text.trimStart().startsWith('/')) return { ok: false, error: '서브에이전트에게 보낼 메시지를 입력해 주세요.' }
+    const result = await found.local.chatSend(shellId, mode === 'relay' ? subagentRelayText(route, text) : text,
+      undefined, route.target, () => allowed(event) && chats.hasSubagentScope(shellId, scope))
+    return result.ok ? { ok: true } : { ok: false, error: REASONS[result.reason] ?? '보내지 못했습니다.' }
+  })
+  // After a slash command was sent: did it run (and what Codex printed), ask a question, or open a screen
+  ipcMain.handle('agent-chat-command-watch', async (event, shellId) => {
+    if (!allowed(event)) return locked
+    const id = shellIdOf(shellId)
+    const pending = id && commandWatches.get(id)
+    if (!pending) return { ok: false, error: '확인할 명령이 없습니다.' }
+    commandWatches.delete(id)
+    const outcome = await watchCommand({ read: () => shells()?.chatScreen?.(id) ?? null, ...pending })
+    return allowed(event) ? { ok: true, ...outcome } : locked
+  })
+  // While the pane shows the terminal for a screen a command opened: is the composer back
+  ipcMain.handle('agent-chat-screen-state', (event, shellId) => {
+    const id = shellIdOf(shellId)
+    if (!allowed(event) || !id) return null
+    const screen = shells()?.chatScreen?.(id)
+    return screen ? { composer: screen.composer, approval: screen.approval } : null
+  })
+  // The slash commands of the agent's own folders (names and descriptions), for the composer's list
+  ipcMain.handle('agent-chat-slash-commands', async (event, shellId) => {
+    const id = shellIdOf(shellId)
+    const agent = allowed(event) && id ? shells()?.agentOf(id) : null
+    if (!agent || (agent.kind !== 'claude' && agent.kind !== 'codex')) return []
+    const commands = await customCommands({ kind: agent.kind, cwd: chats.cwdOf(id) }).catch(() => [])
+    return allowed(event) ? commands : []
   })
   ipcMain.handle('agent-chat-copy', async (event, shellId) => {
     if (!allowed(event)) return locked
@@ -187,10 +264,15 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
         claudeImages = { count: selected.length, text: text ?? '' }
       }
     }
+    // A slash command: what it does shows on the agent's screen (agentChat/commandScreen.js)
+    const isCommand = !selected.length && /^\/[^\s/]+(?:\s|$)/.test(prompt)
+    const before = isCommand ? local.chatScreen?.(id)?.lines ?? null : null
+    if (isCommand) commandWatches.delete(id)
     for (const image of selected) image.sending = true
     let result
     try {
       result = await local.chatSend(id, prompt, claudeImages)
+      if (result?.ok && isCommand) commandWatches.set(id, { before, kind: agent.kind, command: prompt })
     } finally {
       selected.forEach((image, index) => {
         image.sending = false

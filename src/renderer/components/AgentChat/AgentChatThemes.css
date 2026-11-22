@@ -1,0 +1,43 @@
+.agent-chat-cover[data-chat-bubbles] {
+  --radius-sm: 5px;
+  --radius-md: 9px;
+  --radius-lg: 14px;
+  --radius-full: 999px;
+}
+
+.agent-chat-cover[data-chat-bubbles] .agent-chat-log {
+  padding-inline: clamp(12px, 3%, 28px);
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.agent-chat-cover[data-chat-bubbles] .agent-chat-assistant {
+  align-self: flex-start;
+  max-width: min(95%, 88ch);
+  padding: 9px 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px 15px 15px 15px;
+  background: var(--bg-secondary);
+}
+
+.agent-chat-cover[data-chat-bubbles] :is(.agent-chat-user .agent-chat-bubble, .agent-chat-subagent-message[data-role='user']) {
+  border-radius: 15px 6px 15px 15px;
+  background: var(--chat-outgoing);
+  color: var(--text-primary);
+}
+
+.agent-chat-cover[data-chat-bubbles] .agent-chat-subagent-message[data-role='assistant'] {
+  border-radius: 6px 15px 15px 15px;
+}
+
+.agent-chat-cover[data-chat-theme='chat-kakao'] .agent-chat-log {
+  background-image: radial-gradient(circle at 15% 5%, #f8fbff 0%, transparent 64%);
+}
+
+.agent-chat-cover[data-chat-theme='chat-midnight'] .agent-chat-log {
+  background-image: radial-gradient(ellipse at 70% 0%, #27263f 0%, transparent 62%);
+}
+
+.agent-chat-cover[data-chat-theme='chat-paper'] .agent-chat-log {
+  background-image: linear-gradient(to bottom, rgb(91 82 57 / 0.08) 1px, transparent 1px);
+  background-size: 100% 26px;
+}

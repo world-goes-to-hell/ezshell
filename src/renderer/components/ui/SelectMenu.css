@@ -81,6 +81,11 @@
   font-size: 13px;
 }
 
+.select-menu-content.is-icon-only {
+  min-width: min(208px, var(--radix-dropdown-menu-content-available-width));
+  max-width: var(--radix-dropdown-menu-content-available-width);
+}
+
 .select-menu-item {
   display: flex;
   align-items: center;

@@ -290,32 +290,72 @@
 /* Titles above the two sides; the merge view puts its revert column between them */
 .remote-compare-heads {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
 }
 
 .remote-compare-head {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 12px;
+  border-top: 2px solid var(--border-strong);
+}
+
+.remote-compare-head.is-current {
+  border-inline-start: 1px solid var(--border);
+  border-top-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--bg-secondary));
+}
+
+.remote-compare-head-row {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px 8px;
+}
+
+.remote-compare-head-title {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
-  padding: 5px 12px;
-  overflow: hidden;
+  margin: 0;
   color: var(--text-primary);
-  font-size: 12.5px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.remote-compare-head-title > svg {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.remote-compare-head.is-current .remote-compare-head-title > svg {
+  color: var(--accent);
+}
+
+.remote-compare-head-state {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 11px;
   white-space: nowrap;
 }
 
-.remote-compare-head + .remote-compare-head {
-  border-left: 1px solid var(--border);
+.remote-compare-head-state.is-dirty {
+  color: var(--warning);
 }
 
-.remote-compare-tag {
+.remote-compare-head-detail {
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: 12px;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .remote-compare-message {

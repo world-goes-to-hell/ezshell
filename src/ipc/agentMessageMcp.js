@@ -86,9 +86,12 @@ async function main() {
     inputSchema: { message_ids: z.array(id).max(20).optional() }
   }, ({ message_ids }) => call({ method: 'sent', ...(message_ids ? { ids: message_ids } : {}) }))
   server.registerTool('reply_to_message', {
-    description: 'Reply to the sender with the result; the original message counts as answered.',
-    inputSchema: { message_id: id, text, request_id: id.optional() }
-  }, ({ message_id, text, request_id }) => call({ method: 'send', replyTo: message_id, text, requestId: request_id }))
+    description: 'Reply to the sender with the result. For a browser element request, include the task status. If a deferred task is finished later, reply to the original message again with completed.',
+    inputSchema: {
+      message_id: id, text, request_id: id.optional(),
+      status: z.enum(['completed', 'deferred']).optional().describe('Use completed when the requested change is finished. Use deferred when the change is postponed or blocked and explain why in the reply.')
+    }
+  }, ({ message_id, text, request_id, status }) => call({ method: 'send', replyTo: message_id, text, requestId: request_id, replyStatus: status }))
   server.registerTool('acknowledge_message', {
     description: 'Mark a message as handled when it needs no reply.',
     inputSchema: { message_id: id }

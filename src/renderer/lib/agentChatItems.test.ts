@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentChatItem } from '../types'
-import { MAX_CHAT_ITEMS, diffLineKind, mergeChatItems, readSubagentActivity, reconcileChatEchoes, shellAgentOf, subagentDisplayText } from './agentChatItems'
+import { MAX_CHAT_ITEMS, diffLineKind, echoOutputId, mergeChatItems, readSubagentActivity, reconcileChatEchoes, shellAgentOf, subagentDisplayText } from './agentChatItems'
 
 const item = (id: string, text = id): AgentChatItem => ({ id, kind: 'assistant', time: null, text })
 const ids = (items: AgentChatItem[]) => items.map(entry => entry.id)
@@ -86,6 +86,19 @@ describe('reconciling messages sent in the chat', () => {
     const done = reconcileChatEchoes(reopened.items, [item('notice'), user('cmd', 140000, '/compact')], 'append', reopened.echoes)
     expect(ids(done.items)).toEqual(['u1', 'a1', 'notice', 'cmd'])
     expect(done.echoes).toEqual([])
+  })
+
+  it('keeps a Codex slash command and what it printed together, through new frames and a reopened view', () => {
+    // Codex records no slash command: the line and its output (read off the screen) stay as sent
+    const echo = { id: 'outgoing:status', text: '/status', time: 20000, hasImage: false }
+    const line: AgentChatItem = { ...user(echo.id, echo.time, '/status'), commandState: 'done' }
+    const output: AgentChatItem = { id: echoOutputId(echo.id), kind: 'output', time: echo.time, text: 'Model: x' }
+    const shown = [user('u1', 1000, '찾아봐줘'), line, output]
+    const appended = reconcileChatEchoes(shown, [{ ...item('a2'), time: 30000 }], 'append', [echo])
+    expect(ids(appended.items)).toEqual(['u1', echo.id, output.id, 'a2'])
+    const reopened = reconcileChatEchoes([line, output], [user('u1', 1000, '찾아봐줘'), { ...item('a2'), time: 30000 }], 'reset', [echo])
+    expect(ids(reopened.items)).toEqual(['u1', echo.id, output.id, 'a2'])
+    expect(reopened.echoes).toEqual([echo])
   })
 
   it.each(['', '첫 줄\n\n둘째 줄'])('reconciles stored image references with body %j', body => {

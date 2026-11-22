@@ -599,6 +599,8 @@ const browserReview = require('./src/ipc/browserReview.js').registerBrowserRevie
   fromMainWindow: event => !isAppLocked && fromMainWindow(event),
   fromTerminalWindow: event => !isAppLocked && Array.from(terminalWindows.values()).some(win => !win.isDestroyed() && win.webContents === event.sender),
   getWindow: () => mainWindow,
+  userDataPath,
+  getMasterPassword: () => isAppLocked ? null : currentMasterPassword,
   listAgents: () => agentMessages.snapshot().agents
     .filter(agent => agent.active && (agent.mcpConnected || agent.sleeping) && localShells?.isRunning(agent.shellId))
     .map(({ id, kind, cwd, status }) => ({ id, kind, cwd, status })),
@@ -1127,6 +1129,7 @@ ipcMain.handle('reset-master-password', async () => {
   // Remote devices are dropped and the port is closed until the app is unlocked again
   remoteAccess.stop({ wasLocked: true });
   masterPasswordVerification = null;
+  await browserReview.resetLogins();
 
   return { success: true };
 });

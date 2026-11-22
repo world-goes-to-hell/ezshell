@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { modalOverlayVariants, modalContentVariants } from '../../lib/animation/variants'
 import { RiCloseFill, RiSettings3Fill, RiPaletteFill, RiKeyboardLine, RiDatabaseLine, RiTerminalBoxLine, RiPlugLine, RiSmartphoneLine, RiMailLine } from 'react-icons/ri'
 import { ThemeSelector } from './ThemeSelector'
+import { AgentChatThemePicker } from '../AgentChat/AgentChatThemePicker'
 import { BrowserTabWidthControl } from './BrowserTabWidthControl'
 import { ShortcutsPanel } from './ShortcutsPanel'
 import { SessionBackup } from './SessionBackup'
@@ -89,6 +90,13 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
 
                   <Tabs.Content value="theme" className="settings-tab-content">
                     <div className="settings-content">
+                      <section className="settings-section">
+                        <h3 className="settings-section-title">
+                          <RiMailLine size={18} />
+                          채팅 테마
+                        </h3>
+                        <AgentChatThemePicker />
+                      </section>
                       <section className="settings-section">
                         <h3 className="settings-section-title">
                           <RiPaletteFill size={18} />

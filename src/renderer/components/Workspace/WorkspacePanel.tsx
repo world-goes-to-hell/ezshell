@@ -102,7 +102,7 @@ export function WorkspacePanel() {
       </header>
       <div className="workspace-content" id="workspace-content" role="tabpanel" aria-labelledby={`workspace-tab-${section}`}>
         {section === 'history' ? <AgentHistoryPanel />
-          : folder ? (section === 'files' ? <WorkspaceFiles folder={folder} /> : <WorkspaceGit folder={folder} />)
+          : folder ? (section === 'files' ? <WorkspaceFiles key={folder} folder={folder} /> : <WorkspaceGit folder={folder} />)
           : <WorkspaceNote>{isLoading ? '작업 폴더를 확인하는 중…' : shellId
             ? '현재 작업 폴더를 읽지 못했습니다.'
             : '로컬 터미널을 선택하면 작업 폴더를 볼 수 있습니다.'}</WorkspaceNote>}

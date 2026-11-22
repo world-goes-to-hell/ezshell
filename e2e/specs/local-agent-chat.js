@@ -56,7 +56,23 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   const PANES = `[...document.querySelectorAll('.local-terminal-tab')].filter(t => getComputedStyle(t).visibility !== 'hidden').flatMap(t => [...t.querySelectorAll(':scope > .local-terminal-pane')])`
   const pane = index => `${PANES}[${index}]`
   const cover = index => `${pane(index)}?.querySelector('.agent-chat-cover')`
+  const composer = index => `${cover(index)}?.querySelector('.agent-chat-input')`
+  const focusedChat = index => `(() => {
+    const input = ${composer(index)}
+    if (!input || document.activeElement !== input) return false
+    const outline = getComputedStyle(${pane(index)}, '::before')
+    return outline.borderTopWidth === '2px' && outline.borderTopColor === getComputedStyle(input).borderTopColor
+  })()`
   const coverText = index => js(`${cover(index)}?.querySelector('.agent-chat-log')?.textContent ?? ''`)
+  const chatThemeButton = index => `${cover(index)}.querySelector('.agent-chat-theme-trigger')`
+  async function chooseChatTheme(index, label) {
+    await click(...await center(chatThemeButton(index)))
+    const option = `[...document.querySelectorAll('.select-menu-content [role="menuitemradio"]')]
+      .find(item => item.textContent.trim() === ${JSON.stringify(label)})`
+    if (!(await until(`!!${option}`, 3000))) throw new Error(`chat theme missing: ${label}`)
+    await js(`(${option}).scrollIntoView({ block: 'nearest' })`)
+    await click(...await center(`(${option})`))
+  }
   async function pasteIntoChat(index) {
     await js(`${cover(index)}.querySelector('.agent-chat-input').focus()`)
     const key = { key: 'v', code: 'KeyV', windowsVirtualKeyCode: 86, modifiers: 2 }
@@ -78,10 +94,14 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
   check('Ctrl+Shift+F11 in the terminal shows its agent as a chat', await until(`!!${cover(0)}`, 5000))
   check('a chat without a transcript starts empty', await until(`${cover(0)}.querySelector('.agent-chat-empty')?.textContent === '대화가 시작되면 여기에 보입니다.'`, 5000))
+  check('the focused composer gets a pane outline even in a single idle chat', await until(focusedChat(0), 2000))
+  await js(`${pane(0)}.querySelector('.xterm-helper-textarea').focus()`)
+  check('the terminal behind a chat cannot steal focus from the composer', await js(`document.activeElement === ${composer(0)}`))
   // The pane's own mail button is under the chat: the header has one to the agent's inbox
   check('the chat header has the agent\'s mail button after 터미널', await until(`(() => {
     const buttons = [...${cover(0)}.querySelectorAll('.agent-chat-head .agent-chat-head-btn')]
-    return buttons.length === 2 && buttons[0].textContent.includes('터미널') && buttons[1].matches('.agent-chat-mail') && buttons[1].textContent.includes('메시지')
+    return buttons.length === 3 && buttons[0].textContent.includes('터미널') && buttons[1].matches('.agent-chat-mail') &&
+      buttons[1].textContent.includes('메시지') && buttons[2].textContent.includes('질문 목록')
   })()`, 5000))
   await js(`${cover(0)}.querySelector('.agent-chat-mail').click()`)
   check('the mail button opens that agent\'s inbox', await until(`(document.querySelector('.agent-messages-dialog')?.textContent ?? '').includes('claude-1')`, 5000))
@@ -100,7 +120,17 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   `, 3000) && await waitFor(() => read('claude-1-chat-sent') === '1'))
 
   const firstTranscript = path.join(projects, `${SESSIONS[0]}.jsonl`)
-  fs.writeFileSync(firstTranscript, prompt('u1', '첫 칸 질문', firstSentAt) + answer('a1', '첫 칸 **답변**'))
+  const filler = line({ type: 'attachment', attachment: { text: '한글'.repeat(1700) } })
+  const receivedTask = { id: 'task-from-codex', from: 'codex-8', text: '릴리스 노트를 검토해 줘.\n누락 항목도 알려줘.' }
+  const inboxResult = task => [{ type: 'text', text: JSON.stringify({ messages: [task] }) }]
+  const claudeInbox = id => line({ type: 'assistant', uuid: id, message: {
+    content: [{ type: 'tool_use', id, name: 'mcp__ezshell-cli-mcp__read_inbox', input: {} }]
+  } }) + line({ type: 'user', uuid: `${id}-result`, message: {
+    content: [{ type: 'tool_result', tool_use_id: id, content: inboxResult(receivedTask) }]
+  } })
+  fs.writeFileSync(firstTranscript, prompt('older-question', '오래된 배포 질문') + answer('older-answer', '예전 배포 답변') +
+    prompt('wake', 'New ezShell message: read it with read_inbox, then handle it.') + claudeInbox('inbox-first') + claudeInbox('inbox-repeat') +
+    answer('task-answer', '릴리스 노트 검토를 마쳤습니다.') + filler.repeat(450) + prompt('u1', '첫 칸 질문', firstSentAt) + answer('a1', '첫 칸 **답변**'))
   const reported = await reportSession('claude-1', SESSIONS[0])
   check('the fake Claude reports its session', reported.exit === 0, JSON.stringify(reported))
   check('the chat shows that agent\'s conversation from its transcript', await until(`(${cover(0)}?.textContent ?? '').includes('첫 칸 질문') && !!${cover(0)}.querySelector('.agent-chat-md strong')`, 8000), await coverText(0))
@@ -108,6 +138,66 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     ${cover(0)}.querySelectorAll('.agent-chat-user').length === 1 &&
     !${cover(0)}.querySelector('.agent-chat-reply-progress')
   `, 3000))
+  const appTheme = `document.documentElement.dataset.theme`
+  const xtermColor = `getComputedStyle(${pane(0)}.querySelector('.local-terminal-host')).getPropertyValue('--terminal-background')`
+  const beforeChatTheme = await js(`[${appTheme}, ${xtermColor}]`)
+  await chooseChatTheme(0, '카톡 모드')
+  check('Kakao chat has a yellow sent bubble, a white received bubble, and its own canvas', await until(`
+    ${cover(0)}.dataset.chatTheme === 'chat-kakao' && getComputedStyle(${cover(0)}).backgroundColor === 'rgb(220, 232, 244)' &&
+    getComputedStyle(${cover(0)}.querySelector('.agent-chat-user .agent-chat-bubble')).backgroundColor === 'rgb(255, 223, 98)' &&
+    getComputedStyle(${cover(0)}.querySelector('.agent-chat-assistant')).backgroundColor === 'rgb(255, 255, 255)'
+  `))
+  check('changing the chat theme keeps the app and underlying xterm colors',
+    JSON.stringify(await js(`[${appTheme}, ${xtermColor}]`)) === JSON.stringify(beforeChatTheme))
+  await shot('local-agent-chat-kakao')
+  await chooseChatTheme(0, '미드나잇')
+  check('Midnight uses a dark canvas without touching the app theme', await until(`
+    ${cover(0)}.dataset.chatTheme === 'chat-midnight' && getComputedStyle(${cover(0)}).colorScheme === 'dark' &&
+    ${appTheme} === ${JSON.stringify(beforeChatTheme[0])}
+  `))
+  await chooseChatTheme(0, 'Nord')
+  check('an existing app theme can be selected solely for the chat', await until(`
+    ${cover(0)}.dataset.chatTheme === 'nord' && !${cover(0)}.hasAttribute('data-chat-bubbles') &&
+    ${appTheme} === ${JSON.stringify(beforeChatTheme[0])}
+  `))
+  await chooseChatTheme(0, '앱 테마 따르기')
+  check('following the app removes the local palette', await until(`!${cover(0)}.hasAttribute('data-chat-theme')`))
+  const questionPanel = index => `${cover(index)}.querySelector('.agent-chat-questions')`
+  const openQuestions = index => js(`${cover(index)}.querySelector('.agent-chat-questions-toggle').click()`)
+  const pickQuestion = (index, text) => js(`[...${questionPanel(index)}.querySelectorAll('li button')]
+    .find(button => button.textContent.includes(${JSON.stringify(text)}))?.click()`)
+  await openQuestions(0)
+  check('the question list includes an unloaded question from the same Claude transcript', await until(`
+    ${questionPanel(0)}?.textContent.includes('오래된 배포 질문') &&
+    !${cover(0)}.querySelector('.agent-chat-log').textContent.includes('오래된 배포 질문')
+  `))
+  await send('Input.insertText', { text: '배포' })
+  check('question search hides unrelated questions', await until(`
+    ${questionPanel(0)}.querySelectorAll('li').length === 1 && ${questionPanel(0)}.textContent.includes('오래된 배포 질문')
+  `))
+  await pickQuestion(0, '오래된 배포 질문')
+  check('choosing the old question shows its original answer and highlights the question', await until(`
+    ${cover(0)}.querySelector('[data-question-target]')?.textContent.includes('오래된 배포 질문') &&
+    ${cover(0)}.querySelector('.agent-chat-log').textContent.includes('예전 배포 답변')
+  `))
+  await js(`${cover(0)}.querySelector('.agent-chat-question-location button').click()`)
+  check('latest conversation returns from the old context to the active chat', await until(`
+    !${cover(0)}.querySelector('.agent-chat-question-location') && ${cover(0)}.querySelector('.agent-chat-log').textContent.includes('첫 칸 질문')
+  `))
+  await openQuestions(0)
+  await send('Input.insertText', { text: 'codex-8' })
+  check('the archived task is searchable by sender and repeated reads yield one result', await until(`
+    ${questionPanel(0)}.querySelectorAll('li').length === 1 && ${questionPanel(0)}.textContent.includes('받은 작업 · Codex 8')
+    && !${questionPanel(0)}.textContent.includes('New ezShell message')
+  `))
+  await pickQuestion(0, '릴리스 노트를 검토해 줘.')
+  check('choosing a received task shows its original body at the first inbox read', await until(`
+    ${cover(0)}.querySelector('[data-question-target]')?.dataset.chatRow === 'item:tool:inbox-first'
+    && ${cover(0)}.querySelector('[data-question-target] .agent-chat-received-message div')?.textContent === ${JSON.stringify(receivedTask.text)}
+    && ${cover(0)}.querySelector('.agent-chat-log').textContent.includes('릴리스 노트 검토를 마쳤습니다.')
+  `))
+  await js(`${cover(0)}.querySelector('.agent-chat-question-location button').click()`)
+  await until(`!${cover(0)}.querySelector('.agent-chat-question-location')`)
   const setChatDraft = text => js(`(() => {
     const input = ${cover(0)}.querySelector('.agent-chat-input')
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, ${JSON.stringify(text)})
@@ -198,6 +288,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   }
   check('closing it closes the window', pinGone)
   const firstShell = await js(`${pane(0)}.dataset.localShellId`)
+  const firstTab = `.terminal-tab[data-tab-id=${JSON.stringify(await js(`${pane(0)}.dataset.localTabId`))}]`
 
   const web = http.createServer((_request, response) => response.end('Chat web link'))
   await new Promise(resolve => web.listen(0, '127.0.0.1', resolve))
@@ -220,7 +311,9 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     const unlisted = await js(`window.electronAPI.agentChatOpenLink(
       ${JSON.stringify(firstShell)}, ${JSON.stringify(address + 'unknown')}, 'browser-tab')`)
     check('the internal opener still requires a link from the conversation', unlisted?.ok === false)
-    await js(`document.querySelector('.terminal-tab.active[data-tab-id^="browser:"] .tab-close').click()`)
+    await js(`document.querySelector(${JSON.stringify(firstTab)}).click()`)
+    check('returning to the chat tab focuses its composer and shows the pane outline', await until(focusedChat(0), 2500))
+    await js(`document.querySelector('.terminal-tab[data-tab-id^="browser:"] .tab-close').click()`)
     await until(`!!${cover(0)}`)
   } finally {
     web.close()
@@ -247,6 +340,8 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('both panes of the tab show their chats at the same time', await until(`!!${cover(0)} && !!${cover(1)}`, 5000))
   check('each chat shows its own conversation', await until(`(${cover(0)}.textContent.includes('첫 칸 질문') && !${cover(0)}.textContent.includes('둘째 칸')) &&
     (${cover(1)}.textContent.includes('둘째 칸 질문') && !${cover(1)}.textContent.includes('첫 칸'))`, 8000), JSON.stringify([await coverText(0), await coverText(1)]))
+  await click(...await center(composer(0)))
+  check('the pane outline follows the clicked composer in a split chat', await until(`${focusedChat(0)} && !${pane(1)}.matches(':focus-within')`, 2500))
   check('a tool call without its result shows as running', await js(`${cover(1)}.querySelector('.agent-chat-tool')?.textContent.includes('실행 중')`))
   await shot('local-agent-chat-two-panes')
 
@@ -330,6 +425,32 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await new Promise(done => setTimeout(done, 300))
   await reportSession('manual-claude', SESSIONS[1], windows(23, 51))
   check('a Claude question shows how much of its windows it took', await until(`${usageLine}.endsWith('|토큰 입력 100 · 출력 5 · 5시간 +3% · 주간 +1%')`, 8000), await js(usageLine))
+
+  // A draft starting with "/" lists the slash commands; Esc closes the list and keeps the draft
+  await js(`${cover(0)}.querySelector('.agent-chat-input').focus()`)
+  await send('Input.insertText', { text: '/co' })
+  const slashNames = `[...${cover(0)}.querySelectorAll('.agent-chat-slash-name')].map(name => name.textContent).join(',')`
+  check('typing "/co" lists the commands that start with it', await until(`${slashNames}.startsWith('/compact,/config,/context,/cost')`, 3000), await js(slashNames))
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  check('Esc closes the list and keeps the draft', await until(`!${cover(0)}.querySelector('.agent-chat-slash') && ${cover(0)}.querySelector('.agent-chat-input').value === '/co'`, 3000))
+  for (let index = 0; index < 3; index++) {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
+  }
+  await until(`${cover(0)}.querySelector('.agent-chat-input').value === ''`, 3000)
+
+  // A slash command that opens a screen of the CLI's own (/config): the pane shows the terminal while it is
+  // open, and goes back to the chat once the composer is back
+  await send('Input.insertText', { text: '/config' })
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+  check('a command that opens a screen hands the pane to the terminal', await until(`!${cover(0)} && !!document.querySelector('.agent-screen-return')`, 8000))
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  check('the terminal\'s keys reach that screen', await waitFor(() => read('claude-1-screen-closed') === 'x'))
+  check('once the screen closes the pane is a chat again', await until(`!!${cover(0)} && !document.querySelector('.agent-screen-return')`, 8000))
+  await until(`document.activeElement === ${cover(0)}?.querySelector('.agent-chat-input')`, 3000)
 
   // Sending from the first chat types into that agent's composer only
   await js(`${cover(0)}.querySelector('.agent-chat-input').focus()`)
@@ -514,6 +635,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('the key in the chat goes back to the terminal and focuses it', await until(`!${cover(0)} && !!${cover(1)} && document.activeElement?.classList.contains('xterm-helper-textarea') && !!document.activeElement.closest('[data-local-shell-id="${firstShell}"]')`, 3000))
 
   // A window reload brings the tab back as it was: the pane that was a chat is a chat again, the other a terminal
+  await chooseChatTheme(1, '종이 노트')
   await send('Page.reload')
   await sleep(1500)
   await unlock(driver)
@@ -521,6 +643,11 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     ${pane(0)}.dataset.localShellId === ${JSON.stringify(firstShell)} && ${pane(1)}.dataset.localShellId === ${JSON.stringify(secondShell)}`, 15000))
   check('the pane that was a chat shows its chat again, the other stays a terminal', await until(`!!${cover(1)} && !${cover(0)}`, 10000))
   check('the restored chat shows its conversation', await until(`(${cover(1)}?.textContent ?? '').includes('둘째 칸 질문')`, 8000), await coverText(1))
+  check('the Paper chat theme survives reload while the terminal keeps its original colors', await until(`
+    ${cover(1)}?.dataset.chatTheme === 'chat-paper' && ${appTheme} === ${JSON.stringify(beforeChatTheme[0])} &&
+    ${xtermColor} === ${JSON.stringify(beforeChatTheme[1])}
+  `))
+  await chooseChatTheme(1, '앱 테마 따르기')
 
   // Dropping the MCP child leaves the manually started CLI and its transcript running.
   const manualAgent = await js(`window.electronAPI.agentMessagesSnapshot().then(state =>
@@ -549,6 +676,31 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   fs.writeFileSync(file('manual-claude-mcp-reconnect'), '')
   check('reconnecting MCP restores the same agent ID', await until(manualState(true)), read('manual-claude-mcp-error'))
 
+  const childChat = index => `${cover(index)}?.querySelector('.agent-chat-subagent-conversation')`
+  const childDraft = index => `${childChat(index)}?.querySelector('.agent-chat-subagent-input')`
+  const childSend = index => `${childChat(index)}?.querySelector('button[type=submit]')`
+  const openChild = async index => {
+    await js(`if (!${subagents(index)}.open) ${subagents(index)}.querySelector('summary').click()`)
+    await js(`${subagentEntry(index)}.click()`)
+  }
+  await js(`${cover(1)}.querySelector('.agent-chat-input').focus()`)
+  await send('Input.insertText', { text: '부모 대화 초안' })
+  fs.writeFileSync(file('manual-claude-chat-target'), '분할 테스트 검토')
+  await openChild(1)
+  check('clicking a Claude subagent opens its own prior conversation and direct input', await until(`
+    ${childChat(1)}?.textContent.includes('직접 연결') &&
+    ${childChat(1)}?.textContent.includes('분할 테스트 검토를 마쳤습니다')
+  `, 8000), await js(`${childChat(1)}?.textContent ?? 'Subagent conversation closed'`))
+  await js(`${childDraft(1)}.focus()`)
+  await send('Input.insertText', { text: '한 가지 더 확인해줘' })
+  await js(`${childSend(1)}.click()`)
+  check('the selected Claude subagent gets the exact follow-up text', await waitFor(() =>
+    read('manual-claude-chat-sent') === '2' && read('manual-claude-chat-text') === '한 가지 더 확인해줘'))
+  await js(`${childChat(1)}.querySelector('.agent-chat-head-btn').click()`)
+  check('returning from a subagent keeps the parent draft',
+    await until(`!${childChat(1)} && ${cover(1)}.querySelector('.agent-chat-input').value === '부모 대화 초안'`))
+  fs.writeFileSync(file('manual-claude-chat-target'), '')
+
   // The second agent ends: its chat says so and stops taking input
   fs.writeFileSync(file('manual-claude-exit-code'), '0')
   check('when the agent ends its chat says so and has no text box', await until(`${cover(1)}.textContent.includes('종료되었습니다') && !${cover(1)}.querySelector('.agent-chat-input')`, 15000), await js(`${cover(1)}?.textContent.slice(-120)`))
@@ -556,17 +708,26 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     window.electronAPI.localShellAttach(${JSON.stringify(secondShell)}).then(state => state?.exited === false)
   `))
   check('no transcript path reached the window', await js(`!document.body.innerHTML.includes('claude-home')`))
-  check('Claude chat has no Codex speed buttons', await js(`!document.querySelector('.agent-chat-speed')`))
+  check('Claude chat has no Codex speed buttons', await js(`!document.querySelector('.agent-usage-speed')`))
 
   await openAgent('codex')
   const codexAgent = () => js(`window.electronAPI.agentMessagesSnapshot().then(state =>
     state.agents.find(agent => agent.kind === 'codex' && agent.active)?.id)`)
   const codexId = await waitFor(codexAgent)
   check('Codex opens a chat for attaching an image', Boolean(codexId) && await until(`${pane(0)}?.textContent.includes(${JSON.stringify('fixture ready: ' + codexId)})`))
+  const codexUsage = `${pane(0)}?.querySelector('.agent-pane-usage')`
+  const fastButton = `${codexUsage}?.querySelector('[data-speed="fast"]')`
+  const ultraButton = `${codexUsage}?.querySelector('[data-speed="ultrafast"]')`
+  check('the Codex terminal does not show the chat speed controls', await js(`!${fastButton}`))
   await js(`${pane(0)}.querySelector('.xterm-helper-textarea').focus()`)
   await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
   await until(`!!${cover(0)}?.querySelector('.agent-chat-input')`)
+  check('Fast is in the usage row before the first usage report and the chat header has no idle label', await until(`
+    !!${fastButton} && !${codexUsage}.querySelector('.agent-usage-readout') &&
+    !${cover(0)}.querySelector('.agent-chat-head').textContent.includes('입력 대기') &&
+    !${cover(0)}.querySelector('.agent-usage-speed')
+  `))
   const date = new Date()
   const day = [String(date.getFullYear()), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')]
   const rollouts = path.join(profile, 'codex-home', 'sessions', ...day)
@@ -591,7 +752,6 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('Codex shows its delegated task from persisted rollout records', await until(`
     ${subagents(0)}?.querySelector('summary')?.textContent.includes('작업 중 1')
   `, 12000))
-  const codexUsage = `${pane(0)}?.querySelector('.agent-pane-usage')`
   const codexShowsSettings = percent => `
     ${codexUsage}?.querySelector('.agent-usage-model')?.textContent === 'gpt-6' &&
     ${codexUsage}?.querySelector('.agent-usage-effort')?.textContent === 'xhigh' &&
@@ -619,8 +779,6 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     ${subagentPreview}?.querySelector('.agent-chat-subagents-result')?.textContent === '채팅 저장을 검토했습니다'
   `, 8000))
   await js(`${subagents(0)}?.querySelector('summary')?.click()`)
-  const fastButton = `${cover(0)}?.querySelector('.agent-chat-fast')`
-  const ultraButton = `${cover(0)}?.querySelector('.agent-chat-ultrafast')`
   const codexInput = `${cover(0)}.querySelector('.agent-chat-input')`
   check('Codex chat reads the initial Fast setting', await until(`${fastButton}?.getAttribute('aria-pressed') === 'false'`))
   check('Codex chat hides Ultrafast when the native command is unavailable', await waitFor(() => read(codexId + '-speed-checked')) && await js(`!${ultraButton}`))
@@ -628,9 +786,20 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   fs.writeFileSync(file(codexId + '-speed-model'), 'gpt-6.2-astra')
   fs.writeFileSync(file(codexId + '-draft'), '')
   check('Codex chat shows Ultrafast once the selected model offers it', await until(`${ultraButton}?.getAttribute('aria-pressed') === 'false'`))
+  check('both buttons fit without being clipped in a narrow usage row', await js(`(() => {
+    const row = ${codexUsage}
+    row.style.width = '200px'
+    const bounds = row.getBoundingClientRect()
+    const fits = [...row.querySelectorAll('.agent-usage-speed')].every(button => {
+      const rect = button.getBoundingClientRect()
+      return rect.width > 0 && rect.left >= bounds.left && rect.right <= bounds.right
+    })
+    row.style.removeProperty('width')
+    return fits
+  })()`))
   await js(`${codexInput}.focus()`)
   await send('Input.insertText', { text: 'Codex 이미지 테스트' })
-  await js(`${fastButton}.click()`)
+  await click(...await center(fastButton))
   check('the Fast button turns on the CLI setting', await until(`${fastButton}?.getAttribute('aria-pressed') === 'true'`) && read(codexId + '-fast-toggles') === '1')
   await js(`${fastButton}.click()`)
   check('the Fast button turns it off and keeps the draft', await until(`
@@ -639,7 +808,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await js(`${fastButton}.click()`)
   await until(`${fastButton}?.getAttribute('aria-pressed') === 'true' && !${ultraButton}?.disabled`)
   await js(`${ultraButton}.click()`)
-  check('Ultrafast replaces Fast in the CLI and in the chat header', await until(`
+  check('Ultrafast replaces Fast in the CLI and in the usage row', await until(`
     ${ultraButton}?.getAttribute('aria-pressed') === 'true' && ${fastButton}?.getAttribute('aria-pressed') === 'false'
   `) && read(codexId + '-speed') === 'ultrafast')
   await until(`!${ultraButton}?.disabled`)
@@ -657,10 +826,28 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     return !extra.length && separator === '' && body === 'Codex 이미지 테스트' && isPng(attachment)
   }), await chatFeedback())
 
+  fs.writeFileSync(file(codexId + '-chat-target'), 'Main [default]')
+  await openChild(0)
+  check('a Codex subagent that uses a path offers a relay through its confirmed parent', await until(`
+    ${childChat(0)}?.textContent.includes('부모를 통해 전달') &&
+    ${childChat(0)}?.textContent.includes('채팅 저장을 검토했습니다') &&
+    !${childChat(0)}?.textContent.includes('Inherited parent output')
+  `, 8000))
+  await js(`${childDraft(0)}.focus()`)
+  await send('Input.insertText', { text: '저장 처리만 다시 확인해줘' })
+  await js(`${childSend(0)}.click()`)
+  check('Codex sends a follow-up request targeting the existing child path', await waitFor(() =>
+    read(codexId + '-chat-sent') === '2' && /"\/root\/review".*followup_task/.test(read(codexId + '-chat-text')) &&
+    read(codexId + '-chat-text').endsWith('"저장 처리만 다시 확인해줘"')))
+  check('the Codex child shows the parent relay as a request', await until(`${childChat(0)}.textContent.includes('부모에게 전달 요청')`))
+  await shot('local-agent-subagent-conversation')
+  await js(`${childChat(0)}.querySelector('.agent-chat-head-btn').click()`)
+
   // A long transcript keeps only its viewport mounted even as text continues to arrive.
   const completed = item => codexLine('event_msg', { type: 'item_completed', item })
   const longAnswer = (id, text) => completed({ id, type: 'AgentMessage', content: [{ type: 'text', text }] })
-  fs.appendFileSync(codexTranscript, completed({ id: 'scroll-tool', type: 'CommandExecution', command: 'inspect history', aggregated_output: '도구 상세 결과' }) +
+  fs.appendFileSync(codexTranscript, completed({ id: 'scroll-question', type: 'UserMessage', content: [{ type: 'text', text: '로그 기록을 검토해 줘' }] }) +
+    completed({ id: 'scroll-tool', type: 'CommandExecution', command: 'inspect history', aggregated_output: '도구 상세 결과' }) +
     Array.from({ length: 220 }, (_, index) => longAnswer('scroll-' + index, `긴 대화 ${index}번\n\n**표시 테스트**`)).join(''))
   const longLog = chatLog(0)
   const numberOfRows = `${longLog}.querySelectorAll('.agent-chat-row').length`
@@ -669,7 +856,18 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('long chat follows new items and mounts only the nearby rows', await until(`
     ${longLog}.textContent.includes('긴 대화 219번') && !${longLog}.textContent.includes('긴 대화 0번') &&
     ${numberOfRows} < 70 && ${atEnd}
-  `), `${await js(numberOfRows)} rows mounted out of 221`)
+  `), `${await js(numberOfRows)} rows mounted out of 222`)
+  await openQuestions(0)
+  check('Codex lists its question outside the virtual viewport', await until(`
+    ${questionPanel(0)}?.textContent.includes('로그 기록을 검토해 줘') && !${longLog}.textContent.includes('로그 기록을 검토해 줘')
+  `))
+  await pickQuestion(0, '로그 기록을 검토해 줘')
+  check('choosing a loaded question scrolls the virtual list to the question row', await until(`
+    ${longLog}.querySelector('[data-question-target]')?.textContent.includes('로그 기록을 검토해 줘') &&
+    ${longLog}.textContent.includes('긴 대화 0번') && !${longLog}.textContent.includes('긴 대화 219번')
+  `))
+  await js(`${cover(0)}.querySelector('.agent-chat-question-location button').click()`)
+  check('latest conversation scrolls back to the live end', await until(`${atEnd} && ${longLog}.textContent.includes('긴 대화 219번')`))
   await scrollLongLog(false)
   check('scrolling back mounts older messages', await until(`
     ${longLog}.textContent.includes('긴 대화 0번') && !${longLog}.textContent.includes('긴 대화 219번')
@@ -692,6 +890,25 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   `))
   await js('getSelection().removeAllRanges()')
   check('clearing the selection releases rows outside of view', await until(`${numberOfRows} < 70`))
+
+  await openQuestions(0)
+  const codexReply = { id: 'reply-from-claude', from: 'claude-7', replyTo: 'sent-task', text: '새 작업의 상태를 확인했습니다.' }
+  fs.appendFileSync(codexTranscript, completed({ id: 'wake-codex', type: 'UserMessage',
+    content: [{ type: 'text', text: 'New ezShell message: read it with read_inbox, then handle it.' }] }) +
+    completed({ id: 'inbox-codex', type: 'McpToolCall', server: 'ezshell-cli-mcp', tool: 'read_inbox', status: 'completed',
+      result: { content: inboxResult(codexReply) } }))
+  check('an open question list refreshes when Codex reads an incoming reply', await until(`
+    ${questionPanel(0)}.textContent.includes('받은 답장 · Claude 7') && !${questionPanel(0)}.textContent.includes('New ezShell message')
+  `))
+  await send('Input.insertText', { text: '받은 답장' })
+  check('received replies can be searched by their label', await until(`
+    ${questionPanel(0)}.querySelectorAll('li').length === 1 && ${questionPanel(0)}.textContent.includes(${JSON.stringify(codexReply.text)})
+  `))
+  await pickQuestion(0, codexReply.text)
+  check('the received reply highlights the right Codex tool row', await until(`
+    ${longLog}.querySelector('[data-question-target]')?.dataset.chatRow === 'item:McpToolCall:inbox-codex'
+    && ${longLog}.querySelector('[data-question-target] .agent-chat-received-message div')?.textContent === ${JSON.stringify(codexReply.text)}
+  `))
 
   // Locking drops every conversation
   await js(`document.activeElement?.blur(); document.body.focus()`)

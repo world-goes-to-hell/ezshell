@@ -36,8 +36,7 @@ describe('Claude transcript lines to chat items', () => {
   it('leaves out injected input, sub-agent lines and kinds it does not know', () => {
     const { items } = feedAll(createClaudeParser(), [
       user('u1', 'context', { isMeta: true }),
-      // A slash command's output (the command itself shows: the next test)
-      user('u2', '<local-command-stdout>done</local-command-stdout>'),
+      user('u2', '<local-command-stdout>injected</local-command-stdout>', { isMeta: true }),
       { ...assistant('a1', 'm1', { type: 'text', text: 'inside a sub-agent' }), isSidechain: true },
       { type: 'attachment', attachment: { type: 'x' } },
       { type: 'api-request', id: 'r1' },
@@ -82,13 +81,23 @@ describe('Claude transcript lines to chat items', () => {
     expect(items.map(item => [item.kind, item.text])).toEqual([['notice', '이전 대화를 요약했습니다'], ['assistant', '이어서 하겠습니다']])
   })
 
-  it('shows a slash command the user ran as the user typed it, and not its output', () => {
+  it('shows a slash command the user ran as the user typed it, then what it printed (not /compact\'s report)', () => {
     const { items } = feedAll(createClaudeParser(), [
       user('u1', '<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>'),
       user('u2', '<local-command-stdout>\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m</local-command-stdout>'),
-      user('u3', '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>')
+      user('u3', '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>sonnet</command-args>'),
+      user('u4', '<local-command-stdout>Set model to `Sonnet 5.5`\r\n\u001b[1mdone\u001b[22m</local-command-stdout>'),
+      user('u5', '<command-name>/mcp</command-name>\n<command-message>mcp</command-message>\n<command-args></command-args>'),
+      user('u6', '<local-command-stderr>Failed to reconnect to x</local-command-stderr>'),
+      user('u7', '<local-command-stdout>  </local-command-stdout>')
     ])
-    expect(items.map(item => [item.kind, item.text])).toEqual([['user', '/compact'], ['user', '/model sonnet']])
+    expect(items.map(item => [item.kind, item.text, item.isError])).toEqual([
+      ['user', '/compact', undefined],
+      ['user', '/model sonnet', undefined],
+      ['output', 'Set model to `Sonnet 5.5`\ndone', undefined],
+      ['user', '/mcp', undefined],
+      ['output', 'Failed to reconnect to x', true]
+    ])
   })
 
   it('shows an MCP tool\'s JSON arguments and answer as outlines, and leaves other tools\' output alone', () => {

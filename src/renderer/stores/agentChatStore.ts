@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { AgentChatApproval, AgentChatFrame, AgentChatItem, AgentChatState, AgentChatSubagent, CodexSpeedState } from '../types'
-import { MAX_CHAT_ITEMS, reconcileChatEchoes, type ChatEcho } from '../lib/agentChatItems'
+import { MAX_CHAT_ITEMS, echoItemIds, echoOutputId, reconcileChatEchoes, type ChatEcho } from '../lib/agentChatItems'
 import { toast } from './toastStore'
 
 // Which local shells are shown as a chat (components/AgentChat) and what each chat shows. Keyed by the
@@ -8,6 +8,7 @@ import { toast } from './toastStore'
 // reloaded) keeps its view. Any number of shells can be chats at once.
 
 export interface AgentChat {
+  scope: string | null
   state: AgentChatState | 'opening'
   kind: 'claude' | 'codex' | null
   title: string | null
@@ -32,12 +33,17 @@ interface AgentChatStoreState {
   echoSend: (shellId: string, text: string, hasImage: boolean) => string
   discardSend: (shellId: string, sendId: string) => void
   stopWaiting: (shellId: string, sendId: string) => void
+  /**
+   * A slash command sent from the chat that no transcript records (Codex): marks the line with what came
+   * of it and puts what it printed (read off the screen) under it
+   */
+  settleCommand: (shellId: string, sendId: string, result: { state: 'done' | 'screen'; output?: string }) => void
   applyFrame: (frame: AgentChatFrame) => void
   /** App locked: every view goes back to the terminal and its conversation is dropped */
   clearAll: () => void
 }
 
-const empty = (): AgentChat => ({ state: 'opening', kind: null, title: null, items: [], subagents: [], echoes: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null })
+const empty = (): AgentChat => ({ scope: null, state: 'opening', kind: null, title: null, items: [], subagents: [], echoes: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null })
 
 let stopFrames: (() => void) | null = null
 
@@ -50,7 +56,7 @@ const KEPT_ECHO_MS = 30 * 60_000
 const keptEchoes = new Map<string, { echoes: ChatEcho[]; items: AgentChatItem[]; reply: AgentChat['reply']; at: number }>()
 
 function keepEchoes(shellId: string, chat: AgentChat) {
-  const ids = new Set(chat.echoes.map(echo => echo.id))
+  const ids = echoItemIds(chat.echoes)
   const items = chat.items.filter(item => ids.has(item.id))
   if (!items.length) {
     keptEchoes.delete(shellId)
@@ -143,6 +149,18 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
     stopWaiting(shellId, sendId) {
       update(shellId, chat => chat.reply?.sendId === sendId ? { ...chat, reply: null } : chat)
     },
+    settleCommand(shellId, sendId, { state, output }) {
+      update(shellId, chat => {
+        const at = chat.items.findIndex(item => item.id === sendId)
+        if (at === -1 || !chat.echoes.some(echo => echo.id === sendId)) return chat
+        const line = { ...chat.items[at], commandState: state }
+        const outputId = echoOutputId(sendId)
+        const rest = chat.items.filter(item => item.id !== outputId)
+        const items = rest.flatMap(item => item.id !== sendId ? [item]
+          : output ? [line, { id: outputId, kind: 'output' as const, time: line.time, text: output }] : [line])
+        return { ...chat, items, reply: chat.reply?.sendId === sendId ? null : chat.reply }
+      })
+    },
     applyFrame(frame) {
       if (frame.gone) {
         keptEchoes.delete(frame.shellId)
@@ -159,11 +177,13 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
         if (messages && reply) {
           const itemId = messages.recorded.get(reply.itemId)?.id ?? reply.itemId
           const at = messages.items.findIndex(item => item.id === itemId)
-          if (at === -1 || messages.items.slice(at + 1).some(item => item.kind === 'assistant')) reply = null
+          // An answer, or what a slash command printed, ends the wait
+          if (at === -1 || messages.items.slice(at + 1).some(item => item.kind === 'assistant' || item.kind === 'output')) reply = null
           else if (itemId !== reply.itemId) reply = { ...reply, itemId }
         }
         return {
           ...chat,
+          scope: frame.reset ? frame.scope ?? null : chat.scope,
           state: frame.state ?? chat.state,
           kind: frame.kind ?? chat.kind,
           title: frame.title !== undefined ? frame.title : chat.title,

@@ -342,8 +342,7 @@ export function LocalTerminalList({ fillAvailableSpace = false, workingTabs, ser
     }
     const name = localTabName(terminal)
     return (
-      <li key={id} className="local-terms-item" data-local-session-id={id}
-        data-agent-work={workingTabs.has(id) ? 'working' : undefined}>
+      <li key={id} className="local-terms-item" data-local-session-id={id}>
         <div className={`local-terms-row ${id === visibleId ? 'is-current' : ''}`}>
           <button type="button" className="local-terms-open" onClick={() => focusTerminal(id)} title={`${name} 탭으로 이동`}>
             <RiComputerLine size={15} className="local-terms-icon" />

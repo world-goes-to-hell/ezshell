@@ -6,7 +6,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
-const { connect, createChecks, unlock, findPage, pages, pageProblems, sleep } = require('../support/driver')
+const { connect, createChecks, unlock, findPage, pages, pageProblems, sleep, SET } = require('../support/driver')
 
 const { check, finish } = createChecks()
 
@@ -21,10 +21,21 @@ const { check, finish } = createChecks()
   git('add', '.')
   git('commit', '-m', 'Create files')
   fs.writeFileSync(path.join(repo, 'src', 'app.txt'), 'one\ntwo\n')
-  git('commit', '-am', 'Add a second line')
+  git('commit', '-am', 'Add a second line', '-m', 'Historical detail [second]')
+  const oldCommit = git('rev-parse', 'HEAD').trim()
+  // Keep both original commits outside the initial 100 rows, without changing their file tree.
+  const timestamp = Math.floor(Date.now() / 1000) + 1
+  const history = Array.from({ length: 101 }, (_, index) => {
+    const subject = `Recent commit ${index + 1}`
+    return ['commit refs/heads/main', `committer Recent Fixture <recent@example.invalid> ${timestamp + index} +0000`,
+      `data ${subject.length}`, subject, ...(index === 0 ? [`from ${oldCommit}`] : []), ''].join('\n')
+  }).join('\n')
+  execFileSync('git', ['fast-import', '--quiet'], { cwd: repo, input: `${history}\n`, windowsHide: true })
 
   const driver = await connect()
   const { js, until } = driver
+  const setSearch = (label, query) => js(`(${SET})(document.querySelector('input[aria-label="${label}"]'), ${JSON.stringify(query)})`)
+  const clearSearch = () => js(`document.querySelector('.workspace-search button').click()`)
   try {
     await unlock(driver)
     await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([repo]))});
@@ -39,11 +50,20 @@ const { check, finish } = createChecks()
     check('the tree lists the folder and the file at the top', await until(`!!${row('src')} && !!${row('README.md')}`, 15000))
     await js(`${row('src')}.click()`)
     check('a folder expands in place', await until(`!!${row('app.txt')} && ${row('src')}.getAttribute('aria-expanded') === 'true'`, 8000))
+    await js(`${row('src')}.click()`)
+    await setSearch('파일·폴더 검색', 'SRC\\APP.TXT')
+    const fileMatch = `document.querySelector('.workspace-tree-results button[title="src/app.txt"]')`
+    check('file search finds a file in a collapsed folder by its case-insensitive path', await until(`
+      ${fileMatch}?.querySelector('.workspace-tree-result-path')?.textContent === 'src'
+    `))
 
     // ---- The file window: edit and save ----
-    await js(`${row('app.txt')}.click()`)
+    await js(`${fileMatch}.click()`)
+    await clearSearch()
+    check('clearing file search returns to the same tree', await until(`!${fileMatch} && ${row('src')}?.getAttribute('aria-expanded') === 'false'`))
+    await js(`${row('src')}.click()`)
     const target = await findPage(t => t.url.includes('remoteFileMode'), 15000)
-    check('a file opens in the file window', !!target)
+    check('a file search result opens in the file window', !!target)
     if (target) {
       const page = await connect(t => t.id === target.id)
       check('the editor shows the file', await page.until(`(document.querySelector('.cm-content')?.textContent || '').includes('two')`, 15000))
@@ -225,21 +245,31 @@ const { check, finish } = createChecks()
     }
 
     const commit = `[...document.querySelectorAll('.workspace-git-detail')].find(b => b.textContent.includes('Add a second line'))`
-    await until(`!!${commit}`, 8000)
+    check('an older commit is outside the initial log', await until(`document.querySelectorAll('.workspace-git-list .workspace-git-detail').length === 100 && !${commit}`))
+    await setSearch('Git 이력 검색', '[second]')
+    check('Git search finds older commits by literal text in the message body', await until(`!!${commit} && document.querySelectorAll('.workspace-git-list .workspace-git-detail').length === 1`))
+    await setSearch('Git 이력 검색', 'FILES TEST')
+    check('Git search finds commits by author', await until(`!!${commit} && document.querySelectorAll('.workspace-git-list .workspace-git-detail').length === 2`))
+    await setSearch('Git 이력 검색', oldCommit.slice(0, 9).toUpperCase())
+    check('Git search finds a commit by abbreviated hash', await until(`!!${commit} && document.querySelectorAll('.workspace-git-list .workspace-git-detail').length === 1`))
     await js(`${commit}.click()`)
     const commitFile = `[...document.querySelectorAll('.workspace-git-files.is-commit .workspace-git-file-toggle')].find(b => b.textContent.includes('app.txt'))`
     check('opening a commit lists the files it changed', await until(`!!${commitFile}`, 8000))
     await js(`${commitFile}.click()`)
     check('a commit file shows its diff', await until(`[...document.querySelectorAll('.workspace-git-files.is-commit .workspace-diff-line.is-add')].some(l => l.textContent.trim() === '+two')`, 8000))
+    await clearSearch()
+    check('clearing Git search restores the commit graph', await until(`!!document.querySelector('.workspace-git-graph') && !${commit}`))
 
     // ---- Folders main does not know are refused ----
     const outside = JSON.stringify(os.tmpdir())
     const refused = await js(`Promise.all([
       window.electronAPI.workspaceDirectoryList(${outside}),
+      window.electronAPI.workspaceDirectorySearch(${outside}, 'app'),
+      window.electronAPI.workspaceGitSearch(${outside}, 'app'),
       window.electronAPI.localFileOpen(${JSON.stringify(repo)}, '../outside.txt', 'edit'),
       window.electronAPI.workspaceGitDiff(${JSON.stringify(repo)}, 'src/app.txt', 'HEAD; whoami')
     ]).then(results => results.map(r => r.success))`)
-    check('a folder outside the shell\'s, a climbing path and a bad commit are refused', JSON.stringify(refused) === '[false,false,false]', JSON.stringify(refused))
+    check('a folder outside the shell\'s, a climbing path and a bad commit are refused', JSON.stringify(refused) === '[false,false,false,false,false]', JSON.stringify(refused))
     await driver.shot('local-workspace-files')
   } finally {
     driver.close()

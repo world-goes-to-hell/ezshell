@@ -680,6 +680,14 @@ export function SessionList({ tabsBySession, search = NO_SEARCH, onQuickConnect,
     }
   }
 
+  // Sessions in a folder and every folder under it (a closed folder's count)
+  const countSessionsDeep = (folderId: string, seen: Set<string> = new Set()): number => {
+    if (seen.has(folderId)) return 0
+    seen.add(folderId)
+    return getSessionsInFolder(folderId).length +
+      getChildFolders(folderId).reduce((sum, child) => sum + countSessionsDeep(child.id, seen), 0)
+  }
+
   // Recursive folder renderer
   const renderFolder = (folder: Folder, depth: number = 0) => {
     const isExpanded = isFolderOpen(folder.id)
@@ -744,12 +752,17 @@ export function SessionList({ tabsBySession, search = NO_SEARCH, onQuickConnect,
           ) : (
             <span className="folder-name"><MarkedName text={folder.name} parts={matchName(folder.name, search.terms)} /></span>
           )}
-          {/* What a closed folder holds */}
-          {!isExpanded && !isEditing && (folderSessions.length + childFolders.length) > 0 && (
-            <span className="folder-count" title={`세션 ${folderSessions.length}개${childFolders.length ? ` · 하위 폴더 ${childFolders.length}개` : ''}`}>
-              {folderSessions.length + childFolders.length}
-            </span>
-          )}
+          {/* How many sessions a closed folder holds, those in its sub-folders included */}
+          {!isExpanded && !isEditing && (() => {
+            const total = countSessionsDeep(folder.id)
+            if (total === 0) return null
+            const nested = total - folderSessions.length
+            return (
+              <span className="folder-count" title={`세션 ${total}개${nested > 0 ? ` (하위 폴더 안 ${nested}개 포함)` : ''}`}>
+                {total}
+              </span>
+            )
+          })()}
         </div>
         <AnimatePresence initial={false}>
           {isExpanded && (

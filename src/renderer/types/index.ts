@@ -444,10 +444,16 @@ export interface AgentTurnUsage {
 
 export interface AgentChatItem {
   id: string
-  kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'notice'
+  /** output: what a slash command printed (Claude's transcript, or read off Codex's screen) */
+  kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'notice' | 'output'
   time: number | null
   text?: string
   hasImage?: boolean
+  inboxNotice?: boolean
+  /** On an output item: the command failed (Claude's stderr) */
+  isError?: boolean
+  /** On a slash command sent from the chat that no transcript records (Codex): what came of it */
+  commandState?: 'done' | 'screen'
   /** On a user item: the tokens the turn it started used so far (src/agentChat/turnUsage.js) */
   usage?: AgentTurnUsage
   tool?: {
@@ -455,6 +461,7 @@ export interface AgentChatItem {
     summary: string
     input: string
     result?: string
+    isInbox?: boolean
     isError?: boolean
     diff?: string[]
     todos?: { text: string; status: 'completed' | 'in_progress' | 'pending' }[]
@@ -500,10 +507,38 @@ export interface AgentChatSubagentActivity {
   detail: string
 }
 
+export interface AgentChatSubagentConversation {
+  mode: 'direct' | 'relay' | 'select-parent' | 'read-only'
+  scope: string
+  messages: { id: string; role: 'user' | 'assistant'; text: string; time: number | null }[]
+}
+
+export interface AgentChatQuestion {
+  id: string
+  text: string
+  time: number | null
+  /** Received messages have a message ID of their own and point to the tool that read them. */
+  itemId?: string
+  sender?: string
+  isReply?: boolean
+}
+
+export interface AgentChatQuestions {
+  scope: string | null
+  questions: AgentChatQuestion[]
+  limited: boolean
+}
+
+export interface AgentChatQuestionContext {
+  scope: string
+  items: AgentChatItem[]
+}
+
 export interface AgentChatFrame {
   shellId: string
   /** The view starts over with these items (a new conversation or the first read) */
   reset?: boolean
+  scope?: string
   /** Items from before what the view has */
   older?: boolean
   items?: AgentChatItem[]
@@ -553,6 +588,9 @@ export interface AgentMessage {
   to: string
   text: string
   replyTo?: string
+  replyStatus?: 'completed' | 'deferred'
+  /** Browser request as entered in the app, apart from the element context sent to the agent. */
+  reviewRequest?: { text: string; url: string; selector: string }
   sentAt: number
   /** Handled: answered or acknowledged */
   read: boolean
@@ -580,6 +618,7 @@ export interface BrowserReviewSelection {
 
 export interface BrowserReviewState {
   url: string
+  loginOrigin: string | null
   /** The page's title (empty until it arrives); the tab name follows it */
   title: string
   /** The page's developer tools window is open */
@@ -598,6 +637,36 @@ export type BrowserReviewAction =
   | { type: 'back' | 'forward' | 'reload' | 'pick' | 'cancel' | 'devtools' }
   | { type: 'send'; agentId: string; text: string; selectionId: string }
 export type BrowserReviewResult = { success: true } | { success: false; error: string }
+
+export interface BrowserLoginAccount {
+  id: string
+  origin: string
+  username: string
+}
+
+export interface BrowserLoginSource {
+  id: 'chrome' | 'edge' | 'firefox'
+  name: string
+  profiles: { id: string; name: string }[]
+}
+
+export type BrowserLoginAction =
+  | { type: 'list' | 'sources' | 'import' | 'clear-session' }
+  | { type: 'open-source'; id: string }
+  | { type: 'save'; origin: string; username: string; password: string }
+  | { type: 'fill'; id: string; origin: string }
+  | { type: 'remove'; id: string }
+  | { type: 'remember'; enabled: boolean }
+
+export type BrowserLoginResult = {
+  success: true
+  accounts?: BrowserLoginAccount[]
+  sources?: BrowserLoginSource[]
+  rememberSession?: boolean
+  sessionPersistent?: boolean
+  imported?: number
+  skipped?: number
+} | { success: false; error: string }
 
 export interface AgentMessageDelivery {
   id: string
@@ -621,6 +690,11 @@ export interface WorkspaceDirectoryEntry {
   kind: 'directory' | 'file' | 'link'
 }
 
+export interface WorkspaceDirectorySearchResult {
+  entries: (WorkspaceDirectoryEntry & { path: string })[]
+  truncated: boolean
+}
+
 export interface WorkspaceGitCommit {
   hash: string
   shortHash: string
@@ -638,6 +712,8 @@ export interface WorkspaceGitRepository {
   commits: WorkspaceGitCommit[]
   hasMore: boolean
 }
+
+export type WorkspaceGitSearchResult = Pick<WorkspaceGitRepository, 'commits' | 'hasMore'>
 
 export type WorkspaceGitFileKind = 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'conflict' | 'untracked'
 
@@ -827,12 +903,14 @@ declare global {
       localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: LocalAgent; resume?: string; replacementFor?: string }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
       localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
       workspaceDirectoryList: (folder: string, relative?: string) => Promise<{ success: true; entries: WorkspaceDirectoryEntry[]; total: number } | { success: false; error: string }>
+      workspaceDirectorySearch?: (root: string, query: string) => Promise<({ success: true } & WorkspaceDirectorySearchResult) | { success: false; error: string }>
       workspaceGitStatus?: (root: string) => Promise<{ success: true; repo: WorkspaceGitStatus | null } | { success: false; error: string }>
       workspaceGitCommitFiles?: (root: string, hash: string) => Promise<{ success: true; files: WorkspaceGitFile[] } | { success: false; error: string }>
       workspaceGitDiff?: (root: string, file: string, hash?: string) => Promise<({ success: true } & WorkspaceGitDiff) | { success: false; error: string }>
       /** A file on this PC in the file window; `relative` is relative to `root` */
       localFileOpen?: (root: string, relative: string, mode: 'edit' | 'preview', label?: string, options?: { compareHead?: boolean }) => Promise<{ success: true } | { success: false; error: string }>
       workspaceGitLog: (folder: string) => Promise<{ success: true; repo: WorkspaceGitRepository } | { success: true; repo: null; reason: 'git-missing' | 'not-repo' } | { success: false; error: string }>
+      workspaceGitSearch?: (root: string, query: string) => Promise<({ success: true } & WorkspaceGitSearchResult) | { success: false; error: string }>
       agentHistorySearch?: (shellId: string, query: string) => Promise<{ success: true; matches: { key: string; snippet: string }[] } | { success: false; cancelled?: boolean; error: string }>
       agentHistoryList?: (shellId: string) => Promise<{ success: true; project: string; sessions: AgentHistorySession[] } | { success: false; error: string }>
       agentHistoryDetail?: (shellId: string, key: string) => Promise<({ success: true } & AgentHistoryDetail) | { success: false; error: string }>
@@ -850,6 +928,7 @@ declare global {
       onBrowserReviewLinkOpened: (callback: (id: string) => void) => () => void
       browserReviewState: (id: string) => Promise<BrowserReviewState | null>
       browserReviewAction: (id: string, request: BrowserReviewAction) => Promise<BrowserReviewResult>
+      browserReviewLogins: (id: string, request: BrowserLoginAction) => Promise<BrowserLoginResult>
       browserReviewBounds: (id: string, bounds: { x: number; y: number; width: number; height: number } | null) => void
       browserReviewClose: (id: string) => void
       onBrowserReviewState: (callback: (id: string, state: BrowserReviewState) => void) => () => void
@@ -875,7 +954,11 @@ declare global {
       agentChatOpen?: (shellId: string) => Promise<{ ok: true } | { ok: false; error: string }>
       agentChatCopy?: (shellId: string) => Promise<{ ok: true; items: AgentChatItem[] } | { ok: false; error: string }>
       agentChatSubagentPreview?: (shellId: string, agentId: string) => Promise<AgentChatSubagentActivity[]>
+      agentChatSubagentConversation?: (shellId: string, agentId: string) => Promise<AgentChatSubagentConversation | null>
+      agentChatSubagentSend?: (request: { shellId: string; agentId: string; scope: string; text: string; mode: 'direct' | 'relay' }) => Promise<{ ok: true } | { ok: false; error: string }>
       agentChatOlder?: (shellId: string) => Promise<void>
+      agentChatQuestions?: (shellId: string) => Promise<({ ok: true } & AgentChatQuestions) | { ok: false; error: string }>
+      agentChatQuestionContext?: (request: { shellId: string; scope: string; id: string }) => Promise<({ ok: true } & AgentChatQuestionContext) | { ok: false; error: string }>
       agentChatClose?: (shellId: string) => void
       agentChatReadClipboard?: (shellId: string) => Promise<
         { ok: true; kind: 'text'; text: string } | AgentChatImagesResult
@@ -886,6 +969,11 @@ declare global {
       agentChatToggleSpeed?: (shellId: string, speed: CodexSpeedMode) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatInterrupt?: (shellId: string) => Promise<boolean>
       agentChatAnswer?: (shellId: string, key: string, signature: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
+      /** After a slash command was sent: it ran (output: what Codex printed), asks a question, or opened a screen */
+      agentChatCommandWatch?: (shellId: string) => Promise<{ ok: true; state: 'done' | 'approval' | 'screen' | 'gone'; output?: string } | { ok: false; error: string }>
+      agentChatScreenState?: (shellId: string) => Promise<{ composer: 'empty' | 'draft' | null; approval: boolean } | null>
+      /** The slash commands the user made for the agent (its folders' commands, skills, prompts) */
+      agentChatSlashCommands?: (shellId: string) => Promise<{ name: string; description: string; source: 'user' | 'project' }[]>
       agentPickerList?: (shellId: string, what: 'model' | 'effort') => Promise<
         | { ok: true; options: AgentPickerOption[] }
         | { ok: false; reason?: string; error: string }

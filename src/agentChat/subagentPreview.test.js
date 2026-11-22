@@ -32,6 +32,7 @@ describe('subagent preview', () => {
       { label: '응답', detail: 'The layout handles splits.' },
       { label: 'Read', detail: 'src/layout.ts' }
     ])
+    expect(await preview.conversation(child)).toMatchObject([{ role: 'assistant', text: 'The layout handles splits.' }])
     expect(await preview({ id: 'toolu_other', keys: ['toolu_other'] })).toEqual([])
   })
 
@@ -51,9 +52,11 @@ describe('subagent preview', () => {
       reply('Reviewed the release notes', 5)
     ))
     const preview = createSubagentPreview(parent, 'codex')
-    expect(await preview({ id: '/root/review', keys: ['/root/review'], startedAt: day.getTime() })).toEqual([
+    const child = { id: '/root/review', keys: ['/root/review'], startedAt: day.getTime() }
+    expect(await preview(child)).toEqual([
       { label: '응답', detail: 'Reviewed the release notes' },
       { label: '웹 검색', detail: 'release notes' }
     ])
+    expect(await preview.conversation(child)).toMatchObject([{ role: 'assistant', text: 'Reviewed the release notes' }])
   })
 })

@@ -40,6 +40,15 @@ const { check, finish } = createChecks()
   await unlock(driver)
   const startTheme = await theme()
   check('Ctrl+, opens settings', await openSettings())
+  const chatTheme = `document.querySelector('.settings-modal button[aria-label^="채팅 테마"]')`
+  await until(`!!${chatTheme}`)
+  await driver.click(...await driver.center(chatTheme))
+  const kakao = `[...document.querySelectorAll('[role=menuitemradio]')].find(item => item.textContent.trim() === '카톡 모드')`
+  await until(`!!${kakao}`)
+  await driver.click(...await driver.center(kakao))
+  check('settings can select Kakao for chat without changing the app theme', await until(`
+    ${chatTheme}?.textContent.trim() === '카톡 모드' && document.documentElement.dataset.theme === ${JSON.stringify(startTheme)}
+  `))
   const topTabs = '.settings-tabs-list'
   const mcpTabs = '.settings-mcp-tabs-list'
   const labels = list => js(`[...document.querySelectorAll('${list} > [role=tab]')].map(tab => tab.textContent.trim())`)
@@ -107,7 +116,7 @@ const { check, finish } = createChecks()
     format: 'ezshell-ui-settings',
     version: 1,
     settings: {
-      'theme-store': JSON.stringify({ state: { currentThemeId: target, customThemes: [], surface: 'flat', windowOpacity: 1 } }),
+      'theme-store': JSON.stringify({ state: { currentThemeId: target, chatThemeId: 'chat-midnight', customThemes: [], surface: 'flat', windowOpacity: 1 } }),
       'ui-store': JSON.stringify({ state: { sidebarMode: 'compact' } }),
       customShortcuts: JSON.stringify({ 'command-palette': ['Ctrl', 'J'], 'no-such-shortcut': ['Ctrl', 'X'] }),
       sftpTransferQueueHeight: '222',
@@ -134,6 +143,7 @@ const { check, finish } = createChecks()
   await until(`!!document.querySelector('.ui-settings-pending')`, 4000)
   await js(`[...document.querySelectorAll('.ui-settings-pending .backup-btn')].find(b => b.textContent.includes('적용')).click()`)
   check('적용 changes the theme at once', await until(`document.documentElement.dataset.theme === ${JSON.stringify(target)}`, 4000), String(await theme()))
+  check('the backup restores the independent chat theme', await until(`JSON.parse(localStorage.getItem('theme-store')).state.chatThemeId === 'chat-midnight'`))
   check('and folds the sidebar', await until(`!!document.querySelector('.sidebar.rail')`, 4000))
   check('the shortcut is replaced, the unknown one dropped', (await js(`localStorage.getItem('customShortcuts')`)) === '{"command-palette":["Ctrl","J"]}', String(await js(`localStorage.getItem('customShortcuts')`)))
   check('a plain value is stored for its panel', (await js(`localStorage.getItem('sftpTransferQueueHeight')`)) === '222')

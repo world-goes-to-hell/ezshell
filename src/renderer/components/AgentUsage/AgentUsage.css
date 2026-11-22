@@ -1,7 +1,6 @@
 /* Below a local terminal: the agent in that shell — model, 5-hour and 7-day windows, context.
    A row of its own under the terminal (the pane is a column), so the terminal fits above it. */
 .agent-pane-usage {
-  container: agent-usage / inline-size;
   display: flex;
   flex: none;
   align-items: center;
@@ -15,6 +14,52 @@
   color: var(--text-secondary);
   font-size: 11px;
   white-space: nowrap;
+}
+
+.agent-usage-readout {
+  container: agent-usage / inline-size;
+  display: flex;
+  flex: 1;
+  align-self: stretch;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.agent-usage-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  margin-inline-start: auto;
+}
+
+.agent-usage-actions:empty { display: none; }
+
+.agent-usage-speed {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 17px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.agent-usage-speed:where(:not(:disabled)):hover { background: var(--bg-hover); color: var(--text-primary); }
+.agent-usage-speed:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+.agent-usage-speed:disabled { opacity: 0.6; cursor: default; }
+
+.agent-usage-speed[aria-pressed='true'] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .agent-usage-identity,

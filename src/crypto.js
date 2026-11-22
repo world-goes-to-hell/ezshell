@@ -63,9 +63,17 @@ function encryptWithKey(text, key, salt) {
  */
 function decrypt(encryptedData, masterPassword) {
   const salt = Buffer.from(encryptedData.salt, 'hex');
+  return decryptWithKey(encryptedData, deriveKey(masterPassword, salt));
+}
+
+async function decryptAsync(encryptedData, masterPassword) {
+  const salt = Buffer.from(encryptedData.salt, 'hex');
+  return decryptWithKey(encryptedData, await deriveKeyAsync(masterPassword, salt));
+}
+
+function decryptWithKey(encryptedData, key) {
   const iv = Buffer.from(encryptedData.iv, 'hex');
   const tag = Buffer.from(encryptedData.tag, 'hex');
-  const key = deriveKey(masterPassword, salt);
 
   const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(tag);
@@ -100,6 +108,7 @@ module.exports = {
   encrypt,
   encryptAsync,
   decrypt,
+  decryptAsync,
   hashPassword,
   verifyPassword
 };

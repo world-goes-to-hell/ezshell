@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { RiArrowDownSLine, RiArrowRightSLine, RiFolderLine, RiGitBranchLine, RiRefreshLine } from 'react-icons/ri'
-import type { WorkspaceGitRepository } from '../../types'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolderLine, RiGitBranchLine, RiGitCommitLine, RiRefreshLine, RiSearchLine } from 'react-icons/ri'
+import type { WorkspaceDirectorySearchResult, WorkspaceGitRepository, WorkspaceGitSearchResult } from '../../types'
 import { workspaceGitGraph, type GitGraphRow } from '../../lib/workspaceGitGraph'
 import { folderName } from '../../lib/agentHistory'
-import { TreeLevel } from './WorkspaceDetails'
+import { TreeLevel, WorkspaceFileResults } from './WorkspaceDetails'
 import { CommitFiles, UncommittedChanges } from './WorkspaceGitChanges'
 import { isInsidePath } from '../../lib/localWorkspaceTree'
 
 const readGit = (folder: string) => window.electronAPI.workspaceGitLog(folder)
+const searchFiles = (folder: string, query: string) => window.electronAPI.workspaceDirectorySearch?.(folder, query)
+const searchGit = (folder: string, query: string) => window.electronAPI.workspaceGitSearch?.(folder, query)
 const date = new Intl.DateTimeFormat('ko-KR', { month: 'short', day: 'numeric' })
 
 function useFolderData<T>(folder: string, load: (folder: string) => Promise<T>) {
@@ -26,6 +28,47 @@ function useFolderData<T>(folder: string, load: (folder: string) => Promise<T>) 
     refresh: () => setRevision(value => value + 1),
     revision
   }
+}
+
+type SearchAnswer<T> = ({ success: true } & T) | { success: false; error: string }
+
+function useWorkspaceSearch<T>(folder: string, query: string, revision: number, read: (folder: string, query: string) => Promise<SearchAnswer<T>> | undefined) {
+  const [sample, setSample] = useState<{ folder: string; query: string; revision: number; result: SearchAnswer<T> } | null>(null)
+  useEffect(() => {
+    if (!folder || !query) return
+    let active = true
+    const load = async () => {
+      try {
+        const result = await read(folder, query) ?? { success: false as const, error: '앱을 다시 시작한 뒤에 검색할 수 있습니다.' }
+        if (active) setSample({ folder, query, revision, result })
+      } catch {
+        if (active) setSample({ folder, query, revision, result: { success: false, error: '검색을 완료하지 못했습니다.' } })
+      }
+    }
+    const timer = window.setTimeout(() => void load(), 220)
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [folder, query, revision, read])
+
+  return sample?.folder === folder && sample.query === query && sample.revision === revision ? sample.result : null
+}
+
+function WorkspaceSearchBox({ label, placeholder, query, onChange }: { label: string; placeholder: string; query: string; onChange: (value: string) => void }) {
+  const input = useRef<HTMLInputElement>(null)
+  return (
+    <div className="workspace-search" role="search" aria-label={label}>
+      <RiSearchLine size={15} aria-hidden="true" />
+      <input ref={input} type="search" maxLength={200} value={query} aria-label={label} placeholder={placeholder}
+        spellCheck={false} onChange={event => onChange(event.target.value)} onKeyDown={event => {
+          if (event.key !== 'Escape' || !query || event.nativeEvent.isComposing) return
+          event.preventDefault()
+          event.stopPropagation()
+          onChange('')
+        }} />
+      {query && <button type="button" onClick={() => { onChange(''); input.current?.focus() }} aria-label="검색 지우기" title="검색 지우기">
+        <RiCloseLine size={15} aria-hidden="true" />
+      </button>}
+    </div>
+  )
 }
 
 function BrowserHeader({ folder, branch, onRefresh }: { folder: string; branch?: string; onRefresh: () => void }) {
@@ -49,10 +92,23 @@ export function WorkspaceNote({ children, error = false }: { children: ReactNode
 export function WorkspaceFiles({ folder }: { folder: string }) {
   // Refresh reads the tree again from the top (open folders close again)
   const [revision, setRevision] = useState(0)
+  const [query, setQuery] = useState('')
+  const term = query.trim()
+  const found = useWorkspaceSearch<WorkspaceDirectorySearchResult>(folder, term, revision, searchFiles)
+  const label = folderName(folder)
   return (
     <>
       <BrowserHeader folder={folder} onRefresh={() => setRevision(value => value + 1)} />
-      <TreeLevel key={`${folder}:${revision}`} root={folder} relative="" depth={0} label={folderName(folder)} />
+      <WorkspaceSearchBox label="파일·폴더 검색" placeholder="파일 이름 또는 경로" query={query} onChange={setQuery} />
+      <div className="workspace-file-browse" hidden={Boolean(term)}>
+        <TreeLevel key={`${folder}:${revision}`} root={folder} relative="" depth={0} label={label} />
+      </div>
+      {term && (!found ? <WorkspaceNote>작업 폴더를 검색하는 중…</WorkspaceNote>
+        : !found.success ? <WorkspaceNote error>{found.error}</WorkspaceNote>
+        : <>
+          <WorkspaceNote>{found.entries.length || found.truncated ? `검색 결과 ${found.entries.length}개` : '일치하는 파일·폴더가 없습니다.'}{found.truncated && ' · 일부 범위만 검색됨'}</WorkspaceNote>
+          {found.entries.length > 0 && <WorkspaceFileResults root={folder} label={label} entries={found.entries} />}
+        </>)}
     </>
   )
 }
@@ -75,8 +131,8 @@ function GraphRow({ row, lanes, isHead }: { row: GitGraphRow; lanes: number; isH
   )
 }
 
-function GitLog({ repo }: { repo: WorkspaceGitRepository }) {
-  const graph = useMemo(() => workspaceGitGraph(repo.commits), [repo.commits])
+function GitLog({ repo, searching, found }: { repo: WorkspaceGitRepository; searching: boolean; found: SearchAnswer<WorkspaceGitSearchResult> | null }) {
+  const graph = useMemo(() => searching ? null : workspaceGitGraph(repo.commits), [repo.commits, searching])
   // The commits opened to show the files they changed
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
   const toggle = (hash: string) => setOpened(previous => {
@@ -86,19 +142,23 @@ function GitLog({ repo }: { repo: WorkspaceGitRepository }) {
     return next
   })
   const label = folderName(repo.root)
-  if (!graph.rows.length) return <WorkspaceNote>아직 커밋이 없습니다.</WorkspaceNote>
+  if (searching && !found) return <WorkspaceNote>Git 기록을 검색하는 중…</WorkspaceNote>
+  if (searching && found && !found.success) return <WorkspaceNote error>{found.error}</WorkspaceNote>
+  const commits = searching && found?.success ? found.commits : repo.commits
+  if (!commits.length) return <WorkspaceNote>{searching ? '일치하는 커밋이 없습니다.' : '아직 커밋이 없습니다.'}</WorkspaceNote>
   return (
     <>
-      <ol className="workspace-git-list" aria-label="Git 커밋 기록">
-        {graph.rows.map(row => {
-          const { commit } = row
+      {searching && <WorkspaceNote>{found?.success && found.hasMore ? `최근 검색 결과 ${commits.length}개 표시` : `검색 결과 ${commits.length}개`}</WorkspaceNote>}
+      <ol className="workspace-git-list" aria-label={searching ? 'Git 커밋 검색 결과' : 'Git 커밋 기록'}>
+        {commits.map((commit, index) => {
           const isHead = commit.hash === repo.head
           const isOpen = opened.has(commit.hash)
           const Chevron = isOpen ? RiArrowDownSLine : RiArrowRightSLine
           return (
             <li key={commit.hash} className="workspace-git-commit" data-merge={commit.parents.length > 1 || undefined} data-open={isOpen || undefined}>
               <div className="workspace-git-commit-row">
-                <GraphRow row={row} lanes={graph.laneCount} isHead={isHead} />
+                {graph ? <GraphRow row={graph.rows[index]} lanes={graph.laneCount} isHead={isHead} />
+                  : <RiGitCommitLine size={16} className="workspace-git-search-marker" aria-hidden="true" />}
                 <button
                   type="button"
                   className="workspace-git-detail"
@@ -121,7 +181,7 @@ function GitLog({ repo }: { repo: WorkspaceGitRepository }) {
           )
         })}
       </ol>
-      {repo.hasMore && <WorkspaceNote>최근 {repo.commits.length}개 커밋 표시</WorkspaceNote>}
+      {!searching && repo.hasMore && <WorkspaceNote>최근 {repo.commits.length}개 커밋 표시</WorkspaceNote>}
     </>
   )
 }
@@ -134,6 +194,10 @@ export function WorkspaceGit({ folder }: { folder: string }) {
   const data = result?.data
   const repo = data?.success ? data.repo : null
   const repoRoot = repo?.root
+  const [search, setSearch] = useState<{ root: string; query: string } | null>(null)
+  const query = search && search.root === repoRoot ? search.query : ''
+  const term = query.trim()
+  const found = useWorkspaceSearch<WorkspaceGitSearchResult>(repoRoot ?? '', term, revision, searchGit)
   useEffect(() => {
     if (folder === anchor) return
     if (repoRoot && isInsidePath(folder, repoRoot)) return
@@ -146,8 +210,10 @@ export function WorkspaceGit({ folder }: { folder: string }) {
         : !data?.success ? <WorkspaceNote error>{data?.error ?? 'Git 기록을 읽지 못했습니다.'}</WorkspaceNote>
         : data.repo ? (
           <>
+            <WorkspaceSearchBox label="Git 이력 검색" placeholder="커밋 메시지, 작성자, 해시" query={query}
+              onChange={value => setSearch({ root: data.repo.root, query: value })} />
             <UncommittedChanges folder={data.repo.root} revision={revision} label={folderName(data.repo.root)} />
-            <GitLog repo={data.repo} />
+            <GitLog key={data.repo.root} repo={data.repo} searching={Boolean(term)} found={found} />
           </>
         )
         : <WorkspaceNote>{data.reason === 'git-missing' ? 'Git을 설치하면 커밋 기록을 볼 수 있습니다.' : '현재 폴더는 Git 저장소에 속해 있지 않습니다.'}</WorkspaceNote>}

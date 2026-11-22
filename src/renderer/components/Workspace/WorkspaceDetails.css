@@ -1,5 +1,73 @@
 /* Folder tree, commit details, and inline Git diffs. */
 
+.workspace-search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  margin: 7px 8px 2px;
+  padding-inline: 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+}
+
+.workspace-search:focus-within { border-color: var(--accent); }
+.workspace-search > svg { flex: none; }
+
+.workspace-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.workspace-search input::-webkit-search-cancel-button { display: none; }
+
+.workspace-search button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.workspace-search button:hover { background: var(--bg-hover); }
+
+.workspace-file-browse {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.workspace-file-browse[hidden] { display: none; }
+.workspace-tree-results { --workspace-tree-indent: 0px; }
+
+.workspace-tree-result-label { min-width: 0; }
+.workspace-tree-result-label .workspace-tree-name { display: block; }
+
+.workspace-tree-result-path {
+  display: block;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workspace-tree {
   margin: 0;
   padding: 0;
@@ -110,6 +178,11 @@
   gap: 8px;
   height: 44px;
   padding-inline: 6px 10px;
+}
+
+.workspace-git-search-marker {
+  flex: none;
+  color: var(--text-secondary);
 }
 
 .workspace-git-commit-row:hover,

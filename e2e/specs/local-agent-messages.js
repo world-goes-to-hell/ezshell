@@ -88,7 +88,9 @@ async function run() {
       window.electronAPI.localShellWrite(shellId, '\\r')
     })()`)
     fs.writeFileSync(file('codex-1-program-status'), 'state=working:app=codex')
-    check('a worktree with a single working tab animates its card border', await until(runningTrace(session('codex-1'))))
+    check('a single working terminal animates the agent chip under its worktree heading', await until(`
+      ${runningTrace(row('codex-1'))} && !${session('codex-1')}?.dataset.agentWork
+    `))
     fs.writeFileSync(file('codex-1-program-status'), 'state=idle:app=codex')
     await until(`${row('codex-1')}?.dataset.status === 'idle'`)
     await openAgent('claude', 'claude-2')
@@ -167,11 +169,22 @@ async function run() {
     await cli('codex-1', `message ack --id ${reply.id}`)
     check('reading the reply clears both unread badges', await until(`!document.querySelector('.agent-tab-mail')`))
 
+    fs.writeFileSync(file('claude-2-suggestion'), 'Try the next change')
+    await until(`${claudeMail}.closest('.local-terminal-pane').textContent.includes('Try the next change')`)
+    const firstWakes = Number(read('claude-2-wakes'))
+    const nextRequest = await mcp('codex-1', 'send_message', { to: 'claude-2', text: 'Please check the next change' })
+    check('Claude starts a new turn for a follow-up even when its empty composer shows a suggestion',
+      await waitFor(() => Number(read('claude-2-wakes')) === firstWakes + 1))
+    const nextInbox = await mcp('claude-2', 'read_inbox')
+    check('the follow-up reaches the same agent inbox', nextInbox.messages.some(message => message.id === nextRequest.id))
+    await mcp('claude-2', 'acknowledge_message', { message_id: nextRequest.id })
+    fs.writeFileSync(file('claude-2-suggestion'), '')
+
     fs.writeFileSync(file('codex-1-program-status'), 'state=working:app=codex')
-    check('the Codex session border runs before waiting for a reply', await until(runningTrace(session('codex-1'))))
+    check('the Codex chip border runs before waiting for a reply', await until(runningTrace(row('codex-1'))))
     const waiting = cli('codex-1', 'message inbox --wait')
     check('waiting for a reply shows the reply icon and clears the working border', await until(`
-      ${row('codex-1')}?.dataset.status === 'reply' && !${session('codex-1')}?.dataset.agentWork
+      ${row('codex-1')}?.dataset.status === 'reply' && ${border(row('codex-1'))}.animationPlayState === 'paused'
     `))
     const wake = await cli('claude-2', 'message send --to codex-1 --text follow-up')
     check('arriving mail completes the wait and clears the status', (await waiting).messages.some(message => message.id === wake.id) &&
@@ -193,11 +206,12 @@ async function run() {
     const angle = `${trace}.getPropertyValue('--local-agent-trace-angle')`
     const firstAngle = await js(angle)
     check('the light travels along the border', await until(`${angle} !== ${JSON.stringify(firstAngle)}`))
-    check('the background Claude tab keeps its sidebar border while Codex is selected',
+    check('the background Claude agent keeps its chip border while Codex is selected',
       await focusAgent('codex-1') && await until(`
-        ${runningTrace(session('claude-2'))} &&
-        ${border(session('claude-2'))}.pointerEvents === 'none' &&
-        !${session('codex-1')}?.dataset.agentWork &&
+        ${runningTrace(row('claude-2'))} &&
+        ${border(row('claude-2'))}.pointerEvents === 'none' &&
+        !${session('claude-2')}?.dataset.agentWork &&
+        ${border(row('codex-1'))}.opacity === '0' &&
         ${trace}.animationPlayState === 'paused'
       `))
     const q = selector => `document.querySelector(${JSON.stringify(selector)})`
@@ -230,15 +244,15 @@ async function run() {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
     check('reduced motion shows a static working border', await until(`
       ${trace}.animationName === 'none' && ${trace}.borderTopWidth === '1px' && ${trace}.opacity === '1' &&
-      ${border(session('claude-2'))}.animationName === 'none' &&
-      ${border(session('claude-2'))}.borderTopWidth === '1px' && ${border(session('claude-2'))}.opacity === '1'
+      ${border(row('claude-2'))}.animationName === 'none' &&
+      ${border(row('claude-2'))}.borderTopWidth === '1px' && ${border(row('claude-2'))}.opacity === '1'
     `))
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
     fs.writeFileSync(file('claude-2-title'), '✳ Claude')
     check('the idle OSC title clears the busy state', await waitFor(async () => !(await isWorking())))
     check('an idle agent is distinguishable in the sidebar', await until(`${row('claude-2')}?.dataset.status === 'idle'`))
     check('the working border fades when the agent is idle', await until(`
-      ${trace}.opacity === '0' && ${trace}.animationPlayState === 'paused' && !${session('claude-2')}?.dataset.agentWork
+      ${trace}.opacity === '0' && ${trace}.animationPlayState === 'paused' && ${border(row('claude-2'))}.opacity === '0'
     `))
 
     await js(`document.querySelector('[aria-label="claude-2 메시지함"]').closest('.local-terminal-pane').querySelector('.xterm-helper-textarea').focus()`)
@@ -388,6 +402,9 @@ async function run() {
       ${mapCell('codex-1')}?.dataset.status === 'working' && ${row('codex-1')}?.dataset.status === 'working' &&
       ${mapCell('codex-3')}?.dataset.status === 'blocked' && ${row('codex-3')}?.dataset.status === 'blocked' &&
       ${mapCell('codex-3')}.querySelector('.pane-map-agent-label')?.textContent === '응답 필요'
+    `))
+    check('only the working chip animates when two agents share a session', await until(`
+      ${runningTrace(row('codex-1'))} && ${border(row('codex-3'))}.opacity === '0' && !${session('codex-1')}?.dataset.agentWork
     `))
     await driver.shot('local-agent-pane-map')
     await js(`${mapCell('codex-1')}.click()`)

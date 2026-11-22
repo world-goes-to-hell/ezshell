@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { RiArrowRightSLine, RiGitBranchLine } from 'react-icons/ri'
 import { readSubagentActivity, subagentDisplayText, type SubagentActivityResult } from '../../lib/agentChatItems'
@@ -32,7 +32,7 @@ interface PreviewTarget {
   anchor: HTMLButtonElement
 }
 
-function SubagentPreview({ shellId, agent, status, anchor, id, stay, closeSoon }: {
+function SubagentPreview({ shellId, agent, status, anchor, id, stay, closeSoon, themeStyle }: {
   shellId: string
   agent: AgentChatSubagent
   status: Status
@@ -40,6 +40,7 @@ function SubagentPreview({ shellId, agent, status, anchor, id, stay, closeSoon }
   id: string
   stay: () => void
   closeSoon: () => void
+  themeStyle?: CSSProperties
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [activity, setActivity] = useState<SubagentActivityResult | null>(null)
@@ -95,7 +96,7 @@ function SubagentPreview({ shellId, agent, status, anchor, id, stay, closeSoon }
   return createPortal(
     <div ref={ref} id={id} className="agent-chat-subagent-preview" role="region"
       aria-label={`${agent.name || '서브에이전트'} 최근 작업`} tabIndex={0}
-      style={position ?? { visibility: 'hidden' }}
+      style={{ ...themeStyle, ...(position ?? { visibility: 'hidden' }) }}
       onPointerEnter={stay} onPointerLeave={closeSoon} onFocus={stay} onBlur={closeSoon}
       onContextMenu={event => event.stopPropagation()}>
       <div className="agent-chat-subagent-preview-head">
@@ -121,8 +122,9 @@ function SubagentPreview({ shellId, agent, status, anchor, id, stay, closeSoon }
   )
 }
 
-export function AgentChatSubagents({ shellId, kind, agents, live }: {
-  shellId: string; kind: 'claude' | 'codex' | null; agents: AgentChatSubagent[]; live: boolean
+export function AgentChatSubagents({ shellId, kind, agents, live, onOpen, themeStyle }: {
+  shellId: string; kind: 'claude' | 'codex' | null; agents: AgentChatSubagent[]; live: boolean; onOpen: (id: string) => void
+  themeStyle?: CSSProperties
 }) {
   const [expanded, setExpanded] = useState(false)
   const [now, setNow] = useState(Date.now)
@@ -133,10 +135,9 @@ export function AgentChatSubagents({ shellId, kind, agents, live }: {
   const stay = () => window.clearTimeout(timer.current)
   const close = () => { stay(); setTarget(null) }
   const closeSoon = () => { stay(); timer.current = window.setTimeout(close, 220) }
-  const open = (id: string, anchor: HTMLButtonElement, delay = 0) => {
+  const openSoon = (id: string, anchor: HTMLButtonElement) => {
     stay()
-    if (!delay) setTarget({ id, anchor })
-    else timer.current = window.setTimeout(() => setTarget({ id, anchor }), delay)
+    timer.current = window.setTimeout(() => setTarget({ id, anchor }), 180)
   }
   const counts = { starting: 0, running: 0, completed: 0, error: 0, stopped: 0, unknown: 0 }
   const visibleStatus = (status: Status) => !live && active(status) ? 'unknown' : status
@@ -188,9 +189,10 @@ export function AgentChatSubagents({ shellId, kind, agents, live }: {
             <li key={agent.id}>
               <button type="button" className="agent-chat-subagents-entry"
                 aria-expanded={showing} aria-controls={showing ? previewId : undefined}
-                onPointerEnter={event => open(agent.id, event.currentTarget, 180)}
+                title="서브에이전트 대화 열기"
+                onPointerEnter={event => openSoon(agent.id, event.currentTarget)}
                 onPointerLeave={closeSoon} onBlur={closeSoon}
-                onClick={event => open(agent.id, event.currentTarget)}>
+                onClick={() => { close(); onOpen(agent.id) }}>
                 <span className="agent-chat-subagents-row">
                   <strong>{agent.name || '서브에이전트'}</strong>
                   <span className="agent-chat-subagents-state" data-status={status}>{LABELS[status]}</span>
@@ -202,7 +204,7 @@ export function AgentChatSubagents({ shellId, kind, agents, live }: {
           )
         })}
       </ul>
-      {selected && target && <SubagentPreview key={selected.id} id={previewId} shellId={shellId}
+      {selected && target && <SubagentPreview key={selected.id} id={previewId} shellId={shellId} themeStyle={themeStyle}
         agent={{ ...selected, task: subagentDisplayText(selected.task, kind), result: subagentDisplayText(selected.result, kind) }}
         status={visibleStatus(selected.status)} anchor={target.anchor} stay={stay} closeSoon={closeSoon} />}
     </details>

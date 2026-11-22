@@ -25,6 +25,9 @@ interface SelectMenuProps {
   className?: string
   /** 'compact' fits toolbars (SFTP path bar); 'field' matches form inputs */
   size?: 'compact' | 'field'
+  /** Keep just the icon in a tight toolbar, with the selection in the accessible name and tooltip. */
+  iconOnly?: boolean
+  menuStyle?: CSSProperties
 }
 
 /**
@@ -32,8 +35,9 @@ interface SelectMenuProps {
  * (a native select's list is drawn by the OS). Radix DropdownMenu radio items give keyboard navigation
  * (↑↓, Home/End, type-ahead, Enter, Esc) and screen reader roles.
  */
-export function SelectMenu({ value, options, onChange, ariaLabel, icon, id, className = '', size = 'field' }: SelectMenuProps) {
+export function SelectMenu({ value, options, onChange, ariaLabel, icon, id, className = '', size = 'field', iconOnly = false, menuStyle }: SelectMenuProps) {
   const chosen = options.find(option => option.value === value)
+  const label = `${ariaLabel}: ${chosen?.label ?? '선택 안 됨'}`
 
   return (
     <DropdownMenu.Root modal={false}>
@@ -42,15 +46,19 @@ export function SelectMenu({ value, options, onChange, ariaLabel, icon, id, clas
           id={id}
           type="button"
           className={`select-menu-trigger is-${size} ${className}`}
-          aria-label={`${ariaLabel}: ${chosen?.label ?? '선택 안 됨'}`}
+          aria-label={label}
+          title={iconOnly ? label : undefined}
         >
-          {chosen?.icon ?? icon}
-          <span className="select-menu-value" style={chosen?.style}>{chosen?.label ?? '선택'}</span>
-          <RiArrowDownSLine size={16} className="select-menu-chevron" aria-hidden />
+          {iconOnly ? icon : <>
+            {chosen?.icon ?? icon}
+            <span className="select-menu-value" style={chosen?.style}>{chosen?.label ?? '선택'}</span>
+            <RiArrowDownSLine size={16} className="select-menu-chevron" aria-hidden />
+          </>}
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content className={`select-menu-content is-${size}`} align="start" sideOffset={4} collisionPadding={8}>
+        <DropdownMenu.Content className={`select-menu-content is-${size}${iconOnly ? ' is-icon-only' : ''}`}
+          align={iconOnly ? 'end' : 'start'} sideOffset={4} collisionPadding={8} style={menuStyle}>
           <DropdownMenu.RadioGroup value={value} onValueChange={onChange}>
             {options.map(option => (
               <DropdownMenu.RadioItem key={option.value} value={option.value} textValue={option.label} className="select-menu-item" style={option.style}>

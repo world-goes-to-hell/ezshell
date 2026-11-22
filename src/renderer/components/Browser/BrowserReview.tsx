@@ -2,11 +2,13 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   RiArrowDownSLine, RiArrowLeftLine, RiArrowRightLine, RiArrowRightUpLine, RiBookmark3Line, RiCloseLine,
-  RiCodeSSlashLine, RiCursorLine, RiGlobalLine, RiRefreshLine, RiSendPlane2Line, RiStarFill, RiStarLine, RiToolsLine
+  RiCodeSSlashLine, RiCursorLine, RiGlobalLine, RiKey2Line, RiRefreshLine, RiSendPlane2Line, RiStarFill, RiStarLine, RiToolsLine
 } from 'react-icons/ri'
 import type { BrowserReviewAction, BrowserReviewState, LocalAgentStatus } from '../../types'
 import { uncoveredBox } from '../../lib/browserViewClip'
 import { useBrowserBookmarkStore } from '../../stores/browserBookmarkStore'
+import { BrowserReviewHistory } from './BrowserReviewHistory'
+import { BrowserLoginsDialog } from './BrowserLoginsDialog'
 import './BrowserReview.css'
 
 const statusLabels: Record<LocalAgentStatus, string> = {
@@ -30,6 +32,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const api = window.electronAPI
   const viewport = useRef<HTMLDivElement>(null)
   const bookmarksButton = useRef<HTMLButtonElement>(null)
+  const loginsButton = useRef<HTMLButtonElement>(null)
   const [state, setState] = useState<BrowserReviewState | null>(null)
   const [address, setAddress] = useState('')
   const [agentId, setAgentId] = useState('')
@@ -38,6 +41,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const [feedback, setFeedback] = useState<{ text: string; error?: boolean } | null>(null)
   const [sending, setSending] = useState(false)
   const [bookmarksOpen, setBookmarksOpen] = useState(false)
+  const [loginsOpen, setLoginsOpen] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
   const [openTool, setOpenTool] = useState<BrowserTool | null>(null)
   const bookmarks = useBrowserBookmarkStore(store => store.bookmarks)
@@ -66,6 +70,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   }, [api, tabId])
 
   useEffect(() => { setAddress(url) }, [url])
+  useEffect(() => { if (!isVisible) setLoginsOpen(false) }, [isVisible])
 
   useEffect(() => api.onBrowserReviewFocus(id => { if (id === tabId && isVisible) onActivate() }), [api, isVisible, onActivate, tabId])
 
@@ -210,6 +215,10 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
           onClick={() => setBookmarksOpen(open => !open)}>
           <RiBookmark3Line aria-hidden="true" />
         </button>
+        <button ref={loginsButton} type="button" className="browser-review-logins" title="로그인 정보" aria-label="로그인 정보"
+          aria-haspopup="dialog" aria-expanded={loginsOpen} onClick={() => setLoginsOpen(true)}>
+          <RiKey2Line aria-hidden="true" />
+        </button>
         {/* The page's own developer tools, in a window of their own (F12 / Ctrl+Shift+I in the page too) */}
         <button type="button" className="browser-review-devtools" disabled={!url}
           title={state?.devToolsOpen ? '개발자 도구 닫기 (F12)' : '개발자 도구 열기 (F12)'} aria-label="개발자 도구"
@@ -221,6 +230,8 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
           <RiToolsLine aria-hidden="true" />
         </button>
       </header>
+      {isVisible && loginsOpen && <BrowserLoginsDialog tabId={tabId} origin={state?.loginOrigin ?? null}
+        trigger={loginsButton.current} onClose={() => setLoginsOpen(false)} />}
       {bookmarksOpen && (
         <section className="browser-review-bookmarks" id={bookmarksId} aria-label="즐겨찾기"
           onKeyDown={event => {
@@ -314,6 +325,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
                   {feedback && <p role={feedback.error ? 'alert' : 'status'} className={feedback.error ? 'browser-review-compose-error' : 'browser-review-feedback'}>
                     {feedback.text}
                   </p>}
+                  <BrowserReviewHistory />
                 </form>
               )}
             </div>

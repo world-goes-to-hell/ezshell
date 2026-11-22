@@ -1,5 +1,7 @@
 const { promptText } = require('../agentHistory/claude.js')
+const { isInboxPrompt } = require('../ipc/agentInboxPrompts.js')
 const { createTurnUsage } = require('./turnUsage.js')
+const { isClaudeInboxTool } = require('./inboxQuestions.js')
 const { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, clipLines, addedLines, todosOf, readableOutput, readableValue } = require('./items.js')
 
 // An MCP tool (`mcp__<server>__<tool>`): its arguments and answer are JSON, shown as an outline
@@ -16,6 +18,21 @@ const INTERRUPTED = /^\[Request interrupted by user/
 // "<command-name>/compact</command-name> <command-message>compact</command-message> <command-args></command-args>"
 const COMMAND_NAME = /^\s*<command-name>(\/[^<\s]{1,60})<\/command-name>/
 const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/
+// What a slash command printed, on the user line after the command (checked on this PC's transcripts,
+// 2026-11-21): "<local-command-stdout>Set model to `Opus 5.5` …</local-command-stdout>", stderr on failure
+const COMMAND_OUTPUT = /^\s*<local-command-(stdout|stderr)>([\s\S]*?)<\/local-command-\1>\s*$/
+// The terminal colours Claude keeps in it ("\u001b[2mCompacted …\u001b[22m")
+const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-_]/g
+
+/** A slash command's printed output as plain text, or null */
+function commandOutput(line) {
+  const content = line.message?.content
+  if (line.isMeta || typeof content !== 'string') return null
+  const match = COMMAND_OUTPUT.exec(content)
+  if (!match) return null
+  const output = match[2].replace(ANSI, '').replace(/\r\n?/g, '\n').trim()
+  return output ? { text: output, isError: match[1] === 'stderr' } : null
+}
 
 /** The slash command of a user line as the user typed it ("/compact focus on X"), or null */
 function commandText(line) {
@@ -79,6 +96,8 @@ function createClaudeParser() {
   // 2026-11-20); after an automatic compaction it goes before whatever comes next
   let pendingNotice = null
   let heldAt = 0
+  // The last slash command read: its output follows on the next user line
+  let lastCommand = null
   const turns = createTurnUsage()
 
   function attach(item, result) {
@@ -127,7 +146,8 @@ function createClaudeParser() {
               input: toolName === 'TodoWrite' ? ''
                 : isMcpTool(toolName) ? clip(readableValue(block.input ?? {}), LIMITS.input)
                   : inputText(toolName === 'Bash' ? text(block.input?.command) : block.input),
-              ...(toolName === 'TodoWrite' ? { todos: todosOf(block.input?.todos, 'content') } : {})
+              ...(toolName === 'TodoWrite' ? { todos: todosOf(block.input?.todos, 'content') } : {}),
+              ...(isClaudeInboxTool(toolName) ? { isInbox: true } : {})
             }
           }
           const early = orphans.get(block.id)
@@ -149,9 +169,21 @@ function createClaudeParser() {
     }
     if (line.type === 'user') {
       const command = commandText(line)
+      const output = commandOutput(line)
       if (line.isCompactSummary) {
         // The summary that follows a compact boundary: the boundary's notice already says it (once, not twice)
+      } else if (output) {
+        // /compact's own report ("Compacted …"): the boundary's notice says it
+        const compacted = lastCommand ? /^\/compact\b/.test(lastCommand) : /^Compacted\b/.test(output.text)
+        if (!compacted) {
+          out.push({
+            id: `output:${line.uuid ?? time}`, kind: 'output', time, text: clip(output.text, LIMITS.result),
+            ...(output.isError ? { isError: true } : {})
+          })
+        }
+        lastCommand = null
       } else if (command) {
+        lastCommand = command
         const item = { id: `user:${line.uuid ?? time}`, kind: 'user', time, text: clip(command, LIMITS.text) }
         turns.start(item, { older })
         out.push(item)
@@ -166,7 +198,8 @@ function createClaudeParser() {
           const item = {
             id: `user:${line.uuid ?? time}`, kind: 'user', time,
             ...(prompt !== null ? { text: clip(prompt, LIMITS.text) } : {}),
-            ...(hasImage ? { hasImage: true } : {})
+            ...(hasImage ? { hasImage: true } : {}),
+            ...(prompt !== null && !hasImage && isInboxPrompt(prompt) ? { inboxNotice: true } : {})
           }
           turns.start(item, { older })
           out.push(item)

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { cleanChatText, registerAgentChatIpc } from './ipc.js'
 
-function harness(kind = 'claude') {
+function harness(kind = 'claude', { chats = {}, active = () => null } = {}) {
   const handlers = new Map()
   const ipcMain = { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => handlers.set(name, fn) }
   const sent = []
@@ -12,10 +12,14 @@ function harness(kind = 'claude') {
     ipcMain,
     fromMainWindow: () => true,
     isLocked: () => false,
-    chats: {},
+    chats,
     shells: () => ({
       agentOf: () => ({ kind }),
-      chatSend: async (_id, prompt, claudeImages) => { sent.push({ prompt, claudeImages }); return { ok: true } }
+      chatInputTarget: active,
+      chatSend: async (_id, prompt, claudeImages, target) => {
+        sent.push({ prompt, claudeImages, ...(target === undefined ? {} : { target }) })
+        return { ok: true }
+      }
     }),
     clipboard: {
       read: async () => ({ text: '', image: {} }),
@@ -24,7 +28,7 @@ function harness(kind = 'claude') {
       discardImage: file => discarded.push(file)
     }
   })
-  const call = (name, request) => handlers.get(name)({}, request)
+  const call = (name, ...args) => handlers.get(name)({}, ...args)
   const paste = async () => {
     const result = await call('agent-chat-read-clipboard', 'local:1')
     expect(result).toMatchObject({ ok: true, kind: 'images' })
@@ -33,6 +37,39 @@ function harness(kind = 'claude') {
   }
   return { call, paste, sent, discarded }
 }
+
+describe('subagent conversation', () => {
+  it('requires the active provider target to stay consistent with the selected child', async () => {
+    let target = 'Review layout'
+    const record = { kind: 'claude', live: true, scope: 'parent-conversation', messages: [], identity: { id: 'a1b2' },
+      child: { task: 'Review layout', uniqueTask: true, keys: ['toolu_1'] } }
+    const { call, sent } = harness('claude', { active: () => target,
+      chats: { subagentConversation: async (id, child) => id === 'local:1' && child === 'toolu_1' ? record : null } })
+    const request = { shellId: 'local:1', agentId: 'toolu_1', scope: record.scope, text: 'Check the narrow pane', mode: 'direct' }
+    expect(await call('agent-chat-subagent-conversation', 'local:1', 'toolu_1')).toEqual({ mode: 'direct', messages: [], scope: record.scope })
+    target = 'Another task'
+    expect((await call('agent-chat-subagent-send', request)).ok).toBe(false)
+    expect((await call('agent-chat-subagent-send', { ...request, shellId: 'local:2' })).ok).toBe(false)
+    expect(sent).toEqual([])
+    target = 'Review layout'
+    expect((await call('agent-chat-subagent-send', { ...request, scope: 'previous-conversation' })).ok).toBe(false)
+    expect(await call('agent-chat-subagent-send', request)).toEqual({ ok: true })
+    expect(sent).toEqual([{ prompt: request.text, claudeImages: undefined, target }])
+  })
+
+  it('relays a Codex V2 follow-up only from the verified parent', async () => {
+    let target = '/root/review'
+    const record = { kind: 'codex', live: true, scope: 'parent-conversation', messages: [], identity: {}, child: { keys: ['/root/review'] } }
+    const { call, sent } = harness('codex', { active: () => target, chats: { subagentConversation: async () => record } })
+    const request = { shellId: 'local:1', agentId: '/root/review', scope: record.scope, text: 'Review\nthe final commit', mode: 'relay' }
+    expect(await call('agent-chat-subagent-conversation', 'local:1', '/root/review')).toEqual({ mode: 'select-parent', messages: [], scope: record.scope })
+    expect((await call('agent-chat-subagent-send', request)).ok).toBe(false)
+    target = ''
+    expect(await call('agent-chat-subagent-send', request)).toEqual({ ok: true })
+    expect(sent).toEqual([{ prompt: expect.stringContaining('"/root/review" using followup_task'), claudeImages: undefined, target: '' }])
+    expect(sent[0].prompt.endsWith(JSON.stringify(request.text))).toBe(true)
+  })
+})
 
 describe('screenshots pasted into a chat', () => {
   it.each(['codex', 'claude'])('sends every pasted image and only the entered text to %s', async kind => {

@@ -3,14 +3,16 @@ const { promisify } = require('util')
 const fs = require('fs')
 const path = require('path')
 const { requireLocalDirectory } = require('../localShell.js')
+const { searchDirectory } = require('../localFiles/search.js')
 
 const exec = promisify(execFile)
 const DIRECTORY_LIMIT = 1000
 const COMMIT_LIMIT = 100
+const LOG_OPTIONS = ['log', '-z', '--no-color', '--no-show-signature', '--decorate=short', '--encoding=UTF-8', '--format=%H%x00%P%x00%h%x00%an%x00%aI%x00%s%x00%D']
 
-async function git(cwd, args, { timeout = 15000 } = {}) {
+async function git(cwd, args, { timeout = 15000, signal } = {}) {
   const { stdout } = await exec('git', args, {
-    cwd, timeout, windowsHide: true, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024
+    cwd, timeout, signal, windowsHide: true, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024
   })
   return stdout
 }
@@ -74,17 +76,46 @@ async function readWorkspaceGit(folder) {
     throw error
   })
   const log = await git(root, [
-    'log', '-z', '--all', '--topo-order', '--no-color', '--no-show-signature', '--decorate=short',
-    '--encoding=UTF-8', `--max-count=${COMMIT_LIMIT + 1}`, '--format=%H%x00%P%x00%h%x00%an%x00%aI%x00%s%x00%D',
+    ...LOG_OPTIONS, '--all', '--topo-order', `--max-count=${COMMIT_LIMIT + 1}`,
     ...(head ? ['HEAD'] : []), '--'
   ])
+  const commits = parseCommits(log)
+  return { repo: { root, head, branch, commits: commits.slice(0, COMMIT_LIMIT), hasMore: commits.length > COMMIT_LIMIT } }
+}
+
+function parseCommits(log) {
   const fields = log.split('\0')
   const commits = []
   for (let offset = 0; offset + 7 < fields.length; offset += 7) {
     const [hash, parents, shortHash, author, time, subject, refs] = fields.slice(offset, offset + 7)
     commits.push({ hash, parents: parents ? parents.split(' ') : [], shortHash, author, time, subject, refs: refs ? refs.split(', ') : [] })
   }
-  return { repo: { root, head, branch, commits: commits.slice(0, COMMIT_LIMIT), hasMore: commits.length > COMMIT_LIMIT } }
+  return commits
+}
+
+async function searchWorkspaceGit(root, query, signal) {
+  const head = await git(root, ['rev-parse', '--verify', '--quiet', 'HEAD'], { signal }).then(text => text.trim(), error => {
+    if (error.code === 1) return ''
+    throw error
+  })
+  const filters = ['--all', '--date-order', '--fixed-strings', '--regexp-ignore-case', `--max-count=${COMMIT_LIMIT + 1}`]
+  const search = option => git(root, ['--no-pager', ...LOG_OPTIONS, ...filters, option, ...(head ? [head] : []), '--'], { signal }).then(parseCommits)
+
+  const prefix = query.toLowerCase()
+  const findHash = async () => {
+    if (!/^[a-f0-9]{4,64}$/.test(prefix)) return []
+    const resolved = await git(root, ['rev-parse', '--verify', '--quiet', '--end-of-options', `${prefix}^{commit}`], { signal }).then(text => text.trim(), error => {
+      if (error.code === 1 || error.code === 128) return ''
+      throw error
+    })
+    if (!resolved.startsWith(prefix)) return []
+    return parseCommits(await git(root, ['--no-pager', ...LOG_OPTIONS, '--max-count=1', resolved, '--'], { signal }))
+  }
+
+  const groups = await Promise.all([search(`--grep=${query}`), search(`--author=${query}`), findHash()])
+  const matches = new Map(groups.flat().map(commit => [commit.hash, commit]))
+  const commits = [...matches.values()].sort((a, b) => Date.parse(b.time) - Date.parse(a.time))
+  return { commits: commits.slice(0, COMMIT_LIMIT), hasMore: commits.length > COMMIT_LIMIT }
 }
 
 async function createLocalWorktree({ folder, branch, base } = {}) {
@@ -113,6 +144,13 @@ async function createLocalWorktree({ folder, branch, base } = {}) {
   return { path: location, branch }
 }
 
+function requireSearchQuery(value) {
+  if (typeof value !== 'string' || value.length > 200 || !value.trim() || /[\r\n\0]/.test(value)) {
+    throw new Error('검색어를 확인해 주세요.')
+  }
+  return value.trim()
+}
+
 /**
  * `roots` (src/localFiles/roots.js) checks the folders the workspace panel reads, `git` is
  * src/localFiles/git.js. Requests name a root and a path relative to it.
@@ -126,6 +164,24 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
       } catch (error) {
         const detail = error.stderr?.trim() || (error.code ? '' : error.message)
         return { success: false, error: detail ? detail.slice(0, 500) : fallback }
+      }
+    })
+  }
+  const handleSearch = (channel, fallback, run) => {
+    let pending
+    handle(channel, fallback, async ({ root, query } = {}) => {
+      const term = requireSearchQuery(query)
+      pending?.abort()
+      const controller = new AbortController()
+      pending = controller
+      try {
+        const folder = await roots.resolveRoot(root)
+        controller.signal.throwIfAborted()
+        const result = await run(folder, term, controller.signal)
+        if (isLocked()) throw new Error('잠금 해제 후 이용할 수 있습니다.')
+        return result
+      } finally {
+        if (pending === controller) pending = null
       }
     })
   }
@@ -146,6 +202,10 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
       localGit.fileDiff(await roots.resolveRoot(root), { hash: hash || undefined, file }))
   }
   handle('workspace-git-log', 'Git 기록을 읽지 못했습니다.', readWorkspaceGit)
+  if (roots) {
+    handleSearch('workspace-directory-search', '폴더를 검색하지 못했습니다.', searchDirectory)
+    handleSearch('workspace-git-search', 'Git 기록을 검색하지 못했습니다.', searchWorkspaceGit)
+  }
 }
 
 module.exports = { registerLocalProjectIpc, inspectLocalProject, createLocalWorktree, listWorkspaceDirectory, readWorkspaceGit }

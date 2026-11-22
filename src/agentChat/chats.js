@@ -1,10 +1,13 @@
 const fs = require('fs')
 const path = require('path')
+const { randomUUID } = require('node:crypto')
 const { createClaudeParser } = require('./claudeTranscript.js')
 const { createCodexParser } = require('./codexTranscript.js')
+const { createInboxQuestionReader } = require('./inboxQuestions.js')
 const { createSubagentTracker } = require('./subagents.js')
 const { createSubagentPreview } = require('./subagentPreview.js')
 const { linkKeysIn } = require('./links.js')
+const { oneLine } = require('./items.js')
 const { readLinesFromStart, readLinesFromEnd } = require('../agentHistory/boundedRead.js')
 
 // The chat views that are open (one per shell), each following its agent's transcript file: on
@@ -36,8 +39,13 @@ const LIMIT_FOLLOW_MS = 2 * 60 * 1000
 const MAX_LINKS = 2000
 const MAX_COPY_SOURCE_BYTES = 128 * 1024 * 1024
 const MAX_COPY_TEXT_CHARS = 8 * 1024 * 1024
-const COPY_KINDS = new Set(['user', 'assistant', 'notice'])
+const MAX_QUESTIONS = 10_000
+const QUESTION_LINES = { claude: /"user"|__read_inbox"/, codex: /"UserMessage"|"read_inbox"/ }
+const QUESTION_CONTEXT_BEFORE = 256 * 1024
+const QUESTION_CONTEXT_AFTER = 2 * 1024 * 1024
+const COPY_KINDS = new Set(['user', 'assistant', 'notice', 'output'])
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const parserFor = kind => kind === 'codex' ? createCodexParser() : createClaudeParser()
 
 /** Claude Code's folder name for a working directory: every character but ASCII letters and digits is '-' */
 const claudeFolderName = cwd => String(cwd).replace(/[^a-zA-Z0-9]/g, '-')
@@ -162,19 +170,27 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     if (JSON.stringify(viewUsage(chat, turn).limits ?? null) !== chat.lastTurnLimits) frame(chat, { items: [turn] })
   }
 
-  function frame(chat, fields) {
-    if (!live(chat)) return
-    if (fields.reset) chat.lastTurn = null
-    if (fields.items) fields = { ...fields, items: withUsage(chat, fields.items, fields.older) }
-    // The links of what is sent: the only ones the view may ask main to open
-    if (fields.reset) chat.links.clear()
-    for (const item of fields.items ?? []) {
+  /** Only links in messages shown by this chat may be opened from it. */
+  function rememberLinks(chat, items) {
+    for (const item of items) {
       if (item.kind !== 'assistant') continue
       for (const key of linkKeysIn(item.text, process.platform, chat.cwd)) {
         chat.links.delete(key)
         chat.links.add(key)
         if (chat.links.size > MAX_LINKS) chat.links.delete(chat.links.values().next().value)
       }
+    }
+  }
+
+  function frame(chat, fields) {
+    if (!live(chat)) return
+    if (fields.reset) {
+      chat.lastTurn = null
+      chat.links.clear()
+    }
+    if (fields.items) {
+      fields = { ...fields, items: withUsage(chat, fields.items, fields.older) }
+      rememberLinks(chat, fields.items)
     }
     send('agent-chat-frame', { shellId: chat.shellId, ...fields })
   }
@@ -210,7 +226,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
       buffer = first === -1 ? Buffer.alloc(0) : buffer.subarray(first + 1)
       oldest = first === -1 ? size : start + first + 1
     }
-    const parser = kind === 'codex' ? createCodexParser() : createClaudeParser()
+    const parser = parserFor(kind)
     const subagents = createSubagentTracker(kind)
     if (oldest > 0) {
       const start = Math.max(0, size - SUBAGENT_HISTORY_BYTES)
@@ -232,8 +248,51 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     items.push(...(parser.flush?.(0) ?? []))
     if (kind === 'claude') await readClaudeChildResults(file, subagents, () => live(chat))
     if (!live(chat)) return
-    Object.assign(chat, { file, kind, parser, subagents, previewChild: createSubagentPreview(file, kind, now), oldest, tail: oldest + used, skipping: false, title: title ?? null, state: 'live' })
-    frame(chat, { reset: true, kind, state: 'live', items: latestById(items), subagents: subagents.snapshot(true), title: title ?? null, hasOlder: oldest > 0 })
+    Object.assign(chat, { file, kind, parser, subagents, previewChild: createSubagentPreview(file, kind, now), subagentScope: randomUUID(), oldest, tail: oldest + used, skipping: false, title: title ?? null, state: 'live' })
+    chat.questionIndex = null
+    frame(chat, { reset: true, scope: chat.subagentScope, kind, state: 'live', items: latestById(items), subagents: subagents.snapshot(true), title: title ?? null, hasOlder: oldest > 0 })
+  }
+
+  async function indexQuestions(chat, file, scope, tail) {
+    const kind = chat.kind
+    const parser = parserFor(kind)
+    const readInboxQuestions = createInboxQuestionReader(kind)
+    const anchors = new Map()
+    let limited = false
+    const add = (question, offset, bytes, call) => {
+      anchors.set(question.id, { question, offset, bytes, call })
+      if (anchors.size > MAX_QUESTIONS) {
+        anchors.delete(anchors.keys().next().value)
+        limited = true
+      }
+    }
+    if (tail > 0) await readLinesFromStart(file, (line, offset, bytes) => {
+      if (!live(chat) || chat.file !== file || chat.subagentScope !== scope) return true
+      const userLine = kind === 'claude' ? line.type === 'user'
+        : line.type === 'event_msg' && line.payload?.type === 'item_completed' && line.payload.item?.type === 'UserMessage'
+      if (userLine) {
+        for (const item of parser.feed(line).items) {
+          if (item.kind !== 'user' || item.inboxNotice) continue
+          add({ id: item.id, time: item.time, text: oneLine(item.text || '스크린샷 첨부', 280) }, offset, bytes)
+        }
+      }
+      for (const { call, ...message } of readInboxQuestions(line, offset, bytes)) {
+        if (!anchors.has(message.id)) add(message, offset, bytes, call)
+      }
+    }, { end: tail - 1, maxBytes: tail, maxLine: STEP_BYTES, matchLine: line => QUESTION_LINES[kind].test(line) })
+    return { anchors, limited }
+  }
+
+  function questionIndex(chat, refresh = true) {
+    const { file, subagentScope: scope, tail } = chat
+    const index = chat.questionIndex
+    if (index?.scope === scope && (!refresh || index.tail === tail)) return index.pending
+    const pending = indexQuestions(chat, file, scope, tail).catch(error => {
+      if (chat.questionIndex?.pending === pending) chat.questionIndex = null
+      throw error
+    })
+    chat.questionIndex = { scope, tail, pending }
+    return pending
   }
 
   async function follow(chat) {
@@ -389,6 +448,52 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
         frame(chat, { older: true, items: latestById(items), hasOlder: oldest > 0 })
       })
     },
+    async questions(shellId) {
+      const chat = chats.get(shellId)
+      if (!chat?.file) return { ok: true, scope: null, questions: [], limited: false }
+      const { file, subagentScope: scope } = chat
+      try {
+        const { anchors, limited } = await questionIndex(chat)
+        if (live(chat) && chat.file === file && chat.subagentScope === scope) {
+          const questions = [...anchors.values()].reverse().map(({ question }) => question)
+          return { ok: true, scope, questions, limited }
+        }
+      } catch { /* transcript unavailable */ }
+      return { ok: false, error: '질문 목록을 읽을 수 없습니다.' }
+    },
+    async questionContext(shellId, scope, id) {
+      const chat = chats.get(shellId)
+      if (!chat?.file || scope !== chat.subagentScope) return { ok: false, error: '대화가 바뀌었습니다. 질문 목록을 다시 열어 주세요.' }
+      const { file, kind } = chat
+      try {
+        const { anchors } = await questionIndex(chat, false)
+        const anchor = anchors.get(id)
+        if (anchor && live(chat) && chat.file === file && scope === chat.subagentScope) {
+          const start = Math.max(0, anchor.offset - QUESTION_CONTEXT_BEFORE)
+          let buffer = await readRange(file, start, Math.min(chat.tail, anchor.offset + anchor.bytes + QUESTION_CONTEXT_AFTER))
+          if (start > 0) buffer = buffer.subarray(buffer.indexOf(10) + 1)
+          const parser = parserFor(kind)
+          // A Claude tool call can be outside this window. Prime the parser so it emits the
+          // original tool card where the result was read.
+          const call = anchor.call
+          if (call && start > 0 && call.offset <= start) {
+            const line = await readRange(file, call.offset, call.offset + call.bytes)
+            parser.feed(JSON.parse(line.toString('utf8')))
+          }
+          const items = []
+          for (const line of completeLines(buffer).lines) items.push(...parser.feed(line).items)
+          items.push(...(parser.flush?.(0) ?? []))
+          const parsed = latestById(items)
+          const at = parsed.findIndex(item => item.id === (anchor.question.itemId ?? id))
+          if (at >= 0 && live(chat) && chat.file === file && scope === chat.subagentScope) {
+            const context = withUsage(chat, parsed.slice(Math.max(0, at - 20), at + 101), true)
+            rememberLinks(chat, context)
+            return { ok: true, scope, items: context }
+          }
+        }
+      } catch { /* transcript unavailable */ }
+      return { ok: false, error: '선택한 질문 위치를 불러올 수 없습니다.' }
+    },
     async subagentPreview(shellId, agentId) {
       const chat = chats.get(shellId)
       const tracker = chat?.subagents
@@ -396,6 +501,19 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
       if (!chat?.file || !child) return []
       const activity = await chat.previewChild(child)
       return live(chat) && chat.subagents === tracker && tracker.childOf(agentId) ? activity : []
+    },
+    async subagentConversation(shellId, agentId) {
+      const chat = chats.get(shellId)
+      const tracker = chat?.subagents
+      const child = tracker?.childOf(agentId)
+      if (!chat?.file || !child) return null
+      const [identity, messages] = await Promise.all([chat.previewChild.identity(child), chat.previewChild.conversation(child)])
+      if (!live(chat) || chat.subagents !== tracker || !tracker.childOf(agentId)) return null
+      return { kind: chat.kind, child, identity, messages, live: chat.state === 'live', scope: chat.subagentScope }
+    },
+    hasSubagentScope(shellId, scope) {
+      const chat = chats.get(shellId)
+      return Boolean(chat?.file && chat.state === 'live' && chat.subagentScope === scope)
     },
     /** Read a snapshot of the conversation without widening or moving the window's current view. */
     async transcriptForCopy(shellId) {

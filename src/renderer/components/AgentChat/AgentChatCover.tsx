@@ -1,9 +1,10 @@
 // A local shell's Claude Code / Codex as a chat, drawn over its pane (docs/plan/2026-11-19-agent-chat-view.md).
 // The shell and the agent keep running under it and the terminal stays mounted: this is only a view of
 // the agent's transcript (src/agentChat) with a box that types into the agent's own composer.
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type ToggleEvent } from 'react'
-import { RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolderOpenLine, RiImageAddLine, RiLoader4Line, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiToolsLine } from 'react-icons/ri'
-import type { AgentChatApproval, AgentChatItem, CodexSpeedMode } from '../../types'
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type ToggleEvent } from 'react'
+import { createPortal } from 'react-dom'
+import { RiArrowDownLine, RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolderOpenLine, RiImageAddLine, RiListUnordered, RiLoader4Line, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiToolsLine } from 'react-icons/ri'
+import type { AgentChatApproval, AgentChatItem, AgentChatQuestion, AgentChatQuestionContext, CodexSpeedMode } from '../../types'
 import { useAgentChatStore } from '../../stores/agentChatStore'
 import { AgentChatMailButton, useAgentMessagesStore } from '../Terminal/AgentMessages'
 import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
@@ -19,8 +20,16 @@ import { chatTextForClipboard, diffLineKind, shellAgentOf } from '../../lib/agen
 import { turnUsageSpots, turnUsageText } from '../../lib/agentTurnUsage'
 import { toast } from '../../stores/toastStore'
 import { AgentChatSubagents } from './AgentChatSubagents'
+import { AgentChatQuestions, receivedMessageLabel } from './AgentChatQuestions'
+import { AgentChatThemePicker } from './AgentChatThemePicker'
+import { SubagentConversation } from './SubagentConversation'
 import { useChatWindow } from './useChatWindow'
+import { SlashCommandMenu } from './SlashCommandMenu'
+import { allSlashCommands, draftFor, isSlashCommand, matchSlashCommands, type SlashCommand } from '../../lib/slashCommands'
+import { useAgentScreenReturnStore } from '../../stores/agentScreenReturnStore'
+import type { ChatAppearance } from '../../themes/chatThemes'
 import './AgentChat.css'
+import './AgentChatThemes.css'
 
 const AGENT_NAMES = { claude: 'Claude', codex: 'Codex' } as const
 const CODEX_SPEEDS = [
@@ -32,7 +41,6 @@ const STATUS_LABELS: Record<string, string> = {
   starting: '시작 중',
   blocked: '확인 대기',
   sleeping: '잠듦',
-  idle: '입력 대기',
   unknown: '',
   error: '오류',
   ended: '종료됨'
@@ -48,6 +56,7 @@ type TimelineRow = { key: string; estimate: number } & (
 )
 
 function estimateItem(item: AgentChatItem): number {
+  if (item.kind === 'output') return Math.min(380, 24 + (item.text?.split('\n').length ?? 1) * 17)
   if (item.kind !== 'assistant') return item.kind === 'user' ? 44 : 32
   return Math.min(1000, 48 + Math.ceil((item.text?.length ?? 0) / 90) * 20)
 }
@@ -204,7 +213,17 @@ const ChatItem = memo(function ChatItem({ item, live, onPin, expanded, rememberD
   const onToggle = (event: ToggleEvent<HTMLDetailsElement>) => rememberDisclosure(item.id, event.currentTarget.open)
   switch (item.kind) {
     case 'user':
-      return <div className="agent-chat-user" title={time}><div className="agent-chat-bubble">{item.text ?? (item.hasImage ? '스크린샷 첨부' : '')}</div></div>
+      return (
+        <div className={`agent-chat-user${item.commandState ? ' has-state' : ''}`} title={time}>
+          <div className="agent-chat-bubble">{item.text ?? (item.hasImage ? '스크린샷 첨부' : '')}</div>
+          {/* A Codex slash command: no transcript records it, so what came of it shows here */}
+          {item.commandState && (
+            <div className="agent-chat-command-state">{item.commandState === 'screen' ? '터미널에 화면을 열었습니다' : '실행함'}</div>
+          )}
+        </div>
+      )
+    case 'output':
+      return <pre className={`agent-chat-output${item.isError ? ' is-error' : ''}`} title={time} aria-label="명령 출력">{item.text}</pre>
     case 'assistant':
       return (
         <div className="agent-chat-assistant" title={time}>
@@ -236,6 +255,10 @@ const ChatItem = memo(function ChatItem({ item, live, onPin, expanded, rememberD
 
 interface AgentChatCoverProps {
   shellId: string
+  themeId: string | undefined
+  appearance: ChatAppearance | undefined
+  /** The speed controls share the usage row below the terminal stage. */
+  usageActions: HTMLSpanElement | null
   /** The tab of the pane (the inbox opens from it) */
   tabId: string
   /** The same pane actions as in terminal mode, sized to the pane when the menu opens. */
@@ -244,12 +267,20 @@ interface AgentChatCoverProps {
   onShowTerminal: () => void
 }
 
-export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }: AgentChatCoverProps) {
+export function AgentChatCover({ shellId, themeId, appearance, usageActions, tabId, getSplitMenu, onShowTerminal }: AgentChatCoverProps) {
   const chat = useAgentChatStore(state => state.chats.get(shellId))
   const loadOlder = useAgentChatStore(state => state.loadOlder)
   const agent = useAgentMessagesStore(state => shellAgentOf(state.snapshot.agents, shellId))
   const toggleKeys = useShortcutsStore(state => state.getEffectiveKeys('toggle-agent-chat'))
   const [draft, setDraft] = useState('')
+  const [subagentId, setSubagentId] = useState<string | null>(null)
+  const [questionsOpen, setQuestionsOpen] = useState(false)
+  const [questionContext, setQuestionContext] = useState<AgentChatQuestionContext | null>(null)
+  const [selectedQuestion, setSelectedQuestion] = useState<{ question: AgentChatQuestion; scope: string | null } | null>(null)
+  const [jump, setJump] = useState<{ id: string | null; scope: string | null } | null>(null)
+  const questionRequest = useRef(0)
+  const questionButton = useRef<HTMLButtonElement>(null)
+  const questionPanelId = useId()
   const [attachments, setAttachments] = useState<{ id: string; url: string }[]>([])
   const previewUrls = useRef(new Map<string, string>())
   const [pasting, setPasting] = useState(false)
@@ -270,22 +301,47 @@ export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }:
     else disclosures.current.delete(id)
   }, [])
 
-  const items = chat?.items ?? EMPTY_ITEMS
+  const scope = chat?.scope ?? null
+  const liveItems = chat?.items ?? EMPTY_ITEMS
+  const history = questionContext?.scope === scope ? questionContext : null
+  const items = history?.items ?? liveItems
+  const chosenQuestion = selectedQuestion?.scope === scope ? selectedQuestion.question : null
+  const highlighted = chosenQuestion && (chosenQuestion.itemId ?? chosenQuestion.id)
   const kind = chat?.kind ?? (agent?.kind === 'claude' || agent?.kind === 'codex' ? agent.kind : null)
+  const subagent = chat?.subagents.find(child => child.id === subagentId)
   const ProviderIcon = kind ? AGENT_PROVIDER_ICONS[kind] : null
   const status = chat?.state === 'ended' ? 'ended' : agent?.status ?? 'unknown'
+  // The slash command list over the composer: the CLI's own commands, and the user's (read once, when first needed)
+  const [customCommands, setCustomCommands] = useState<SlashCommand[] | null>(null)
+  const [slashIndex, setSlashIndex] = useState(0)
+  const [slashClosedFor, setSlashClosedFor] = useState<string | null>(null)
+  const slashTyping = draft.startsWith('/')
+  useEffect(() => {
+    if (!slashTyping || customCommands || !window.electronAPI.agentChatSlashCommands) return
+    let live = true
+    window.electronAPI.agentChatSlashCommands(shellId)
+      .then(list => { if (live) setCustomCommands(list) })
+      .catch(() => { if (live) setCustomCommands([]) })
+    return () => { live = false }
+  }, [customCommands, shellId, slashTyping])
+  const slashMatches = useMemo(() => {
+    if (!kind || !slashTyping || slashClosedFor === draft) return null
+    const matches = matchSlashCommands(draft, allSlashCommands(kind, customCommands ?? []))
+    return matches?.length ? matches : null
+  }, [customCommands, draft, kind, slashClosedFor, slashTyping])
+  useEffect(() => { setSlashIndex(0) }, [draft])
   const isOver = chat?.state === 'ended' || !agent
   const replyId = chat?.reply?.sendId
   const canReply = !isOver && !chat?.approval && status !== 'blocked' && status !== 'error'
   const canToggleSpeed = canReply && !replyId && status !== 'working' && status !== 'starting'
   const speed = chat?.codexSpeed?.speed ?? null
   const replyLabel = replyId && canReply ? (sending ? '보내는 중…' : '답변 생성 중…') : null
-  const title = chat?.title ?? items.find(item => item.kind === 'user')?.text?.split('\n')[0] ?? '대화'
+  const title = chat?.title ?? liveItems.find(item => item.kind === 'user')?.text?.split('\n')[0] ?? '대화'
   const lastToolId = useMemo(() => [...items].reverse().find(item => item.kind === 'tool')?.id, [items])
   // The tokens each question used, at the end of its turn
   const usageSpots = useMemo(() => turnUsageSpots(items), [items])
-  const showOlder = Boolean(chat?.hasOlder)
-  const showProgress = Boolean(replyLabel)
+  const showOlder = !history && Boolean(chat?.hasOlder)
+  const showProgress = !history && Boolean(replyLabel)
   const timeline = useMemo(() => {
     const rows: TimelineRow[] = []
     if (showOlder) rows.push({ kind: 'older', key: 'older', estimate: 26 })
@@ -297,11 +353,57 @@ export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }:
   }, [items, showOlder, showProgress, usageSpots])
   const { virtualizer, followAfterSend, rememberFocus, selectAll: selectChatLog } = useChatWindow(timeline, logRef, items.length > 0)
 
+  useLayoutEffect(() => {
+    if (!jump || jump.scope !== scope) return
+    if (jump.id === null) virtualizer.scrollToEnd()
+    else {
+      const index = timeline.findIndex(row => row.key === `item:${jump.id}`)
+      if (index >= 0) virtualizer.scrollToIndex(index, { align: 'start' })
+    }
+    setJump(null)
+  }, [jump, scope, timeline, virtualizer])
+
+  const dismissQuestions = () => {
+    questionRequest.current++
+    setQuestionsOpen(false)
+    questionButton.current?.focus({ preventScroll: true })
+  }
+
+  const resetQuestionPosition = () => {
+    questionRequest.current++
+    setQuestionsOpen(false)
+    setQuestionContext(null)
+    setSelectedQuestion(null)
+    setJump(null)
+  }
+
+  const jumpToQuestion = async (question: AgentChatQuestion) => {
+    const { id, itemId } = question
+    const target = itemId ?? id
+    const request = ++questionRequest.current
+    if (liveItems.some(item => item.id === target && (!itemId || item.tool?.result !== undefined))) {
+      setQuestionContext(null)
+    } else if (!history?.items.some(item => item.id === target)) {
+      const read = window.electronAPI.agentChatQuestionContext
+      if (!scope || !read) return
+      const result = await read({ shellId, scope, id }).catch(() => null)
+      if (!coverRef.current || request !== questionRequest.current || useAgentChatStore.getState().chats.get(shellId)?.scope !== scope) return
+      if (!result?.ok) {
+        toast.error('질문으로 이동하지 못했습니다', result?.error ?? '대화 기록을 읽을 수 없습니다.')
+        return
+      }
+      setQuestionContext(result)
+    }
+    dismissQuestions()
+    setSelectedQuestion({ question, scope })
+    setJump({ id: target, scope })
+  }
+
   useEffect(() => {
-    if (!disclosures.current.size) return
+    if (history || !disclosures.current.size) return
     const ids = new Set(items.map(item => item.id))
     for (const id of disclosures.current) if (!ids.has(id)) disclosures.current.delete(id)
-  }, [items])
+  }, [history, items])
 
   useEffect(() => {
     const timer = window.setTimeout(() => boxRef.current?.focus(), 30)
@@ -427,7 +529,7 @@ export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }:
   const onScroll = () => {
     const log = logRef.current
     if (!log) return
-    if (log.scrollTop < 80 && chat?.hasOlder) loadOlder(shellId)
+    if (log.scrollTop < 80 && showOlder) loadOlder(shellId)
   }
 
   const readIntoDraft = async (box: HTMLTextAreaElement, source: 'clipboard' | 'files') => {
@@ -479,10 +581,24 @@ export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }:
     void readIntoDraft(event.currentTarget, 'clipboard')
   }
 
-  const send = async () => {
-    const text = draft.trim()
+  /** After a slash command went: Codex's line gets what came of it; a screen hands the pane to the terminal */
+  const watchCommand = async (sendId: string) => {
+    const result = await window.electronAPI.agentChatCommandWatch?.(shellId).catch(() => null)
+    if (!result?.ok) return
+    if (kind === 'codex' && (result.state === 'done' || result.state === 'screen')) {
+      useAgentChatStore.getState().settleCommand(shellId, sendId, { state: result.state, output: result.output })
+    }
+    if (result.state === 'screen' && useAgentChatStore.getState().chats.has(shellId)) {
+      useAgentScreenReturnStore.getState().begin(shellId)
+      onShowTerminal()
+    }
+  }
+
+  const send = async (override?: string) => {
+    const text = (override ?? draft).trim()
     if (!chat || (!text && !attachments.length) || sendPending.current || speedPending.current || pastePending.current || isOver) return
     sendPending.current = true
+    resetQuestionPosition()
     followAfterSend()
     setSending(true)
     setDraft('')
@@ -491,6 +607,7 @@ export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }:
     try {
       const result = await window.electronAPI.agentChatSend?.(shellId, text, attachments.map(image => image.id))
       if (result?.ok) {
+        if (!attachments.length && isSlashCommand(text)) void watchCommand(sendId)
         for (const { id } of attachments) releaseAttachment(id)
         setAttachments([])
       } else {
@@ -531,9 +648,42 @@ export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }:
     }
   }
 
+  /** A command picked from the list: one that takes a value waits for it, the others go at once */
+  const pickCommand = (command: SlashCommand) => {
+    if (command.args) setDraft(draftFor(command))
+    else void send(command.name)
+    boxRef.current?.focus()
+  }
+
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     // Korean input: Enter that ends a composition is not a send
     if (event.nativeEvent.isComposing) return
+    if (slashMatches && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      const plain = !event.shiftKey
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        const step = event.key === 'ArrowDown' ? 1 : -1
+        setSlashIndex(index => (index + step + slashMatches.length) % slashMatches.length)
+        return
+      }
+      const picked = slashMatches[Math.min(slashIndex, slashMatches.length - 1)]
+      if (event.key === 'Tab' && plain) {
+        event.preventDefault()
+        setDraft(draftFor(picked))
+        return
+      }
+      if (event.key === 'Enter' && plain) {
+        event.preventDefault()
+        pickCommand(picked)
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        setSlashClosedFor(draft)
+        return
+      }
+    }
     if (window.electronAPI.agentChatReadClipboard && matchesBinding(event, ['Ctrl', 'V'])) {
       event.preventDefault()
       event.stopPropagation()
@@ -611,7 +761,10 @@ export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }:
   }
 
   return (
-    <div className="agent-chat-cover" ref={coverRef} role="region" aria-label="에이전트 채팅" onKeyDown={onCoverKeyDown} onContextMenu={onContextMenu}>
+    <div className="agent-chat-cover" ref={coverRef} tabIndex={-1} role="region" aria-label="에이전트 채팅"
+      data-chat-theme={appearance ? themeId : undefined} data-chat-bubbles={appearance?.bubbles || undefined} style={appearance?.style}
+      onKeyDown={onCoverKeyDown} onContextMenu={onContextMenu}>
+      <div className="agent-chat-parent" inert={Boolean(subagent)}>
       <header className="agent-chat-head">
         {kind && ProviderIcon && (
           <span className="agent-chat-kind" data-kind={kind}>
@@ -626,24 +779,43 @@ export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }:
             {STATUS_LABELS[status]}
           </span>
         )}
-        {kind === 'codex' && window.electronAPI.agentChatToggleSpeed && CODEX_SPEEDS.filter(({ id }) => id === 'fast' || chat?.codexSpeed?.ultrafastAvailable).map(({ id, name }) => {
-          const active = speed === null ? undefined : speed === id
-          return (
-            <button key={id} type="button" className={`agent-chat-head-btn agent-chat-speed agent-chat-${id}`}
-              aria-label={`Codex ${name} 모드`} aria-pressed={active}
-              title={`Codex ${name} 모드 · ${active === undefined ? '상태 미확인' : active ? '켜짐' : '꺼짐'}`}
-              disabled={!canToggleSpeed || Boolean(changingSpeed) || sending || pasting} onClick={() => void toggleSpeed(id)}>
-              {changingSpeed === id ? <RiLoader4Line className="agent-chat-spin" aria-hidden /> : <RiFlashlightLine aria-hidden />} {name.toUpperCase()}
-            </button>
-          )
-        })}
         <button type="button" className="agent-chat-head-btn" onClick={onShowTerminal} title={`터미널 보기 (${toggleLabel})`}>
           <RiTerminalBoxLine aria-hidden /> 터미널
         </button>
         {/* Where the pane's own mail button was (top right): the chat covers that one */}
         <AgentChatMailButton shellId={shellId} tabId={tabId} />
+        <button ref={questionButton} type="button" className="agent-chat-head-btn agent-chat-questions-toggle"
+          aria-expanded={questionsOpen} aria-controls={questionsOpen ? questionPanelId : undefined}
+          onClick={() => questionsOpen ? dismissQuestions() : setQuestionsOpen(true)}>
+          <RiListUnordered aria-hidden /> 질문 목록
+        </button>
+        <AgentChatThemePicker toolbar menuStyle={appearance?.style} />
       </header>
-      {chat && chat.subagents.length > 0 && <AgentChatSubagents key={shellId} shellId={shellId} kind={kind} agents={chat.subagents} live={chat.state === 'live'} />}
+      {usageActions && !subagent && kind === 'codex' && createPortal(
+        CODEX_SPEEDS.filter(({ id }) => id === 'fast' || chat?.codexSpeed?.ultrafastAvailable).map(({ id, name }) => {
+          const active = speed === null ? undefined : speed === id
+          return (
+            <button key={id} type="button" className="agent-usage-speed" data-speed={id}
+              aria-label={`Codex ${name} 모드`} aria-pressed={active}
+              title={`Codex ${name} 모드 · ${active === undefined ? '상태 미확인' : active ? '켜짐' : '꺼짐'}`}
+              disabled={!canToggleSpeed || Boolean(changingSpeed) || sending || pasting} onClick={() => void toggleSpeed(id)}>
+              {changingSpeed === id ? <RiLoader4Line size={11} className="agent-chat-spin" aria-hidden /> : <RiFlashlightLine size={11} aria-hidden />}
+              {name.toUpperCase()}
+            </button>
+          )
+        }), usageActions
+      )}
+      {questionsOpen && <AgentChatQuestions key={scope ?? 'waiting'} id={questionPanelId} shellId={shellId} scope={scope}
+        items={liveItems} onPick={question => void jumpToQuestion(question)} onDismiss={dismissQuestions} />}
+      {highlighted && <div className="agent-chat-question-location">
+        {history && <span>{chosenQuestion?.sender ? '받은 메시지 주변 대화' : '선택한 질문 주변 대화'}</span>}
+        <button type="button" className="agent-chat-head-btn" onClick={() => {
+          resetQuestionPosition()
+          setJump({ id: null, scope })
+        }}><RiArrowDownLine aria-hidden /> 최신 대화</button>
+      </div>}
+      {chat && chat.subagents.length > 0 && <AgentChatSubagents key={shellId} shellId={shellId} kind={kind} agents={chat.subagents}
+        live={chat.state === 'live'} onOpen={setSubagentId} themeStyle={appearance?.style} />}
       <div className="agent-chat-log" ref={logRef} onScroll={onScroll} onClick={onLogClick}
         onFocus={event => rememberFocus(event.target)} onBlur={event => rememberFocus(event.relatedTarget)}
         onWheel={() => virtualizer.cancelScroll()} onTouchStart={() => virtualizer.cancelScroll()}>
@@ -656,13 +828,20 @@ export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }:
               const line = usage ? turnUsageText(usage) : null
               return (
                 <div className="agent-chat-row" key={entry.key} data-chat-row={entry.key} data-index={row.index}
+                  data-question-target={highlighted !== null && item?.id === highlighted ? '' : undefined}
                   ref={virtualizer.measureElement} style={{ top: row.start }}>
                   {entry.kind === 'older' && (
                     <button type="button" className="agent-chat-older" onClick={() => loadOlder(shellId)} disabled={chat?.loadingOlder}>
                       {chat?.loadingOlder ? '이전 대화 불러오는 중…' : '이전 대화 더 보기'}
                     </button>
                   )}
-                  {item && <ChatItem item={item} live={!isOver && item.id === lastToolId}
+                  {item && item.id === highlighted && chosenQuestion?.sender && (
+                    <div className="agent-chat-bubble agent-chat-received-message">
+                      <span className="agent-chat-question-sender">{receivedMessageLabel(chosenQuestion.sender, chosenQuestion.isReply)}</span>
+                      <div>{chosenQuestion.text}</div>
+                    </div>
+                  )}
+                  {item && <ChatItem item={item} live={!history && !isOver && item.id === lastToolId}
                     expanded={disclosures.current.has(item.id)} rememberDisclosure={rememberDisclosure}
                     onPin={window.electronAPI.agentChatPin ? pinReply : undefined} />}
                   {line && <p className="agent-chat-usage" title={line.title}>{line.text}</p>}
@@ -718,6 +897,10 @@ export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }:
               <RiImageAddLine aria-hidden />
             </button>
           )}
+          {slashMatches && (
+            <SlashCommandMenu id={`agent-chat-slash-${shellId}`} commands={slashMatches} active={Math.min(slashIndex, slashMatches.length - 1)}
+              onPick={pickCommand} onHover={setSlashIndex} />
+          )}
           <textarea
             ref={boxRef}
             id={`agent-chat-input-${shellId}`}
@@ -730,6 +913,9 @@ export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }:
             onPaste={onPaste}
             onKeyDown={onKeyDown}
             aria-label="에이전트에게 보낼 글"
+            aria-autocomplete="list"
+            aria-controls={slashMatches ? `agent-chat-slash-${shellId}` : undefined}
+            aria-activedescendant={slashMatches ? `agent-chat-slash-${shellId}-${Math.min(slashIndex, slashMatches.length - 1)}` : undefined}
           />
           {status === 'working' && (
             <button type="button" className="agent-chat-stop" onClick={() => void stop()} title="지금 작업 중지 (Esc)">
@@ -754,6 +940,9 @@ export function AgentChatCover({ shellId, tabId, getSplitMenu, onShowTerminal }:
           }}
         />
       )}
+      </div>
+      {subagent && kind && <SubagentConversation key={subagent.id} shellId={shellId} agent={subagent} kind={kind} menuStyle={appearance?.style}
+        onBack={() => setSubagentId(null)} onShowTerminal={onShowTerminal} />}
     </div>
   )
 }
