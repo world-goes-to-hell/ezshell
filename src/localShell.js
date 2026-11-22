@@ -312,6 +312,12 @@ function createLocalShells({
 }) {
   const shells = new Map();
   let nextId = 1;
+  let pendingProcessTree;
+
+  function readAgentProcesses() {
+    pendingProcessTree ??= Promise.resolve().then(processTree).finally(() => { pendingProcessTree = undefined; });
+    return pendingProcessTree;
+  }
 
   const hasAgent = entry => Boolean(entry?.agent && !entry.exited && (!entry.externalAgent || processAlive(entry.externalAgent.pid)));
 
@@ -433,8 +439,11 @@ function createLocalShells({
     }
     if (!candidates.size) return;
     let processes;
-    try { processes = await processTree(); }
-    catch { return; }
+    try {
+      processes = await readAgentProcesses();
+      // A shared snapshot may have begun before this agent's MCP process was started.
+      if (!processes.has(pid)) processes = await readAgentProcesses();
+    } catch { return; }
     const visited = new Set();
     let cliPid;
     let runtimePid;

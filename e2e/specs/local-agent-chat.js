@@ -176,6 +176,58 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     (!${pane(0)}.matches(':focus-within') || ${paneBorder} === 'rgb(47, 104, 176)')
   `), JSON.stringify(await js(`[${paneVar('--chat-focus')}, ${paneVar('--motion-accent')}, ${paneBorder}]`)))
   await shot('local-agent-chat-kakao')
+
+  // The same PTY stays interactive beneath the conversation until the checklist closes.
+  const checklist = `${cover(0)}?.querySelector('.agent-chat-inline-question')`
+  const questionScreen = `${pane(0)}?.querySelector('[data-chat-question] > .local-terminal-host')`
+  const questionInputFile = (await js(`${pane(0)}.dataset.localShellId`)).replace(':', '-') + '-input'
+  fs.writeFileSync(file('claude-1-program-status'), 'state=working:app=claude')
+  await until(`${cover(0)}.querySelector('.agent-chat-status')?.dataset.status === 'working'`, 5000)
+  fs.writeFileSync(file('claude-1-approval'), [
+    '─'.repeat(60), '←  □ 확인 범위  ✓ Submit  →', '', '│ 어떤 내용을 확인할까요?', '',
+    '❯ 1. [ ] 첫 번째 항목', '  2. [ ] 두 번째 항목', '  3. [ ] Type something',
+    '   Submit', '─'.repeat(60), '  4. Chat about this', '', 'Enter to select · ↑/↓ to navigate · Esc to cancel'
+  ].join('\r\n'))
+  check('a Claude checklist shows the live question under the conversation', await until(`
+    ${checklist}?.textContent.includes('답변 대기 중') && ${checklist}.textContent.includes('어떤 내용을 확인할까요?') &&
+    ${questionScreen}?.textContent.includes('첫 번째 항목') && !${questionScreen}.inert &&
+    ${questionScreen}.getBoundingClientRect().top >= ${cover(0)}.getBoundingClientRect().bottom - 1 &&
+    ${cover(0)}.querySelector('.agent-chat-status')?.dataset.status === 'blocked' &&
+    !${cover(0)}.querySelector('.agent-chat-input') && !${cover(0)}.querySelector('.agent-chat-approval-option')
+  `, 8000))
+  await shot('local-agent-chat-inline-question')
+  await click(...await center(`${checklist}.querySelector('button')`))
+  check('the answer button focuses the checklist inside chat without sending a choice', await until(`
+    !!${cover(0)} && !${pane(0)}.querySelector('.agent-screen-return') &&
+    ${questionScreen}?.querySelector('.xterm-helper-textarea') === document.activeElement
+  `, 8000) && !read('claude-1-approval-answer'))
+  const beforeQuestionKeys = read(questionInputFile).length
+  const pressQuestionKey = async (key, windowsVirtualKeyCode) => {
+    const params = { key, code: key, windowsVirtualKeyCode }
+    await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...params })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', ...params })
+  }
+  await pressQuestionKey('ArrowDown', 40)
+  await pressQuestionKey('Enter', 13)
+  check('navigation and selection reach the same PTY', !!await waitFor(() =>
+    /^\x1b(?:\[|O)B\r$/.test(read(questionInputFile).slice(beforeQuestionKeys))))
+  fs.writeFileSync(file('claude-1-approval'), [
+    'Review your answers', '  선택: 두 번째 항목', '',
+    '❯ 1. Submit answers', '  2. Go back', 'Tab/Arrow keys to navigate · Esc to cancel'
+  ].join('\r\n'))
+  check('reviewing the answers keeps the checklist and keyboard focus in chat', await until(`
+    !!${checklist} && ${questionScreen}?.textContent.includes('Review your answers') &&
+    ${questionScreen}.querySelector('.xterm-helper-textarea') === document.activeElement
+  `, 8000))
+  await pressQuestionKey('Enter', 13)
+  check('submitting the review sends only the user’s Enter', !!await waitFor(() =>
+    /^\x1b(?:\[|O)B\r\r$/.test(read(questionInputFile).slice(beforeQuestionKeys))))
+  fs.writeFileSync(file('claude-1-approval'), '')
+  fs.writeFileSync(file('claude-1-program-status'), 'state=idle:app=claude')
+  check('closing the checklist restores the regular chat composer', await until(`
+    ${composer(0)} === document.activeElement && !${checklist} && !${questionScreen} && ${pane(0)}.querySelector('.local-terminal-host').inert
+  `, 8000))
+
   await chooseChatTheme(0, '미드나잇')
   check('Midnight uses a dark canvas without touching the app theme', await until(`
     ${cover(0)}.dataset.chatTheme === 'chat-midnight' && getComputedStyle(${cover(0)}).colorScheme === 'dark' &&

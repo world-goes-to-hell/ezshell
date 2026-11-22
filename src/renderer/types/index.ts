@@ -340,8 +340,10 @@ export interface McpAuditEntry {
 }
 
 export type McpSetupScope = 'project' | 'global'
+export type McpSetupClient = 'claude' | 'codex' | 'gemini' | 'opencode' | 'cursor'
 
 export interface McpSetupOutcome {
+  client: McpSetupClient
   scope: McpSetupScope
   filePath: string
   result: 'added' | 'replaced' | 'unchanged' | 'conflict'
@@ -477,6 +479,8 @@ export interface AgentChatApproval {
   detail: string[]
   options: { key: string; label: string }[]
   selected: string | null
+  /** Input goes to the CLI's own question screen embedded in chat. */
+  usesTerminalInput?: boolean
   /** Sent back with the answer: main answers only if the screen still shows this prompt */
   signature: string
 }
@@ -1167,7 +1171,7 @@ declare global {
       mcpReadAudit?: (limit: number) => Promise<{ success: boolean; entries: McpAuditEntry[]; error?: string }>
       mcpListActivity?: () => Promise<{ success: boolean; items: McpActivityItem[] }>
       mcpCancelActivity?: (id: string) => Promise<{ success: boolean }>
-      mcpSetupClient?: (request: { scope: McpSetupScope; overwrite?: boolean; reuseDir?: boolean; setTokenEnv?: boolean }) => Promise<McpSetupResult>
+      mcpSetupClient?: (request: { client?: McpSetupClient; scope: McpSetupScope; overwrite?: boolean; reuseDir?: boolean; setTokenEnv?: boolean }) => Promise<McpSetupResult>
       mcpAddTransferFolder?: () => Promise<McpTransferFolderResult>
       mcpRemoveTransferFolder?: (path: string) => Promise<McpStatusResult>
       sessionLogStart?: (sessionId: string, name: string) => Promise<SessionLogResult>

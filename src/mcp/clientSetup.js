@@ -1,6 +1,7 @@
 // Writes the ezShell MCP server entry into a Claude Code config file (.mcp.json or ~/.claude.json).
 // Everything else in the file is kept; a broken file is refused instead of repaired.
 const fs = require('fs')
+const { randomUUID } = require('node:crypto')
 
 const TOKEN_ENV_VAR = 'EZSHELL_MCP_TOKEN'
 const BACKUP_SUFFIX = '.ezshell-backup'
@@ -101,20 +102,31 @@ function findLocalRegistrations({ filePath, projectDir, name, platform = process
 }
 
 /** Write through a temp file; give up if someone else wrote the original meanwhile (Claude Code rewrites ~/.claude.json often). */
-function writeSafely(fileSystem, filePath, originalText, nextText) {
-  const tempPath = `${filePath}${TEMP_SUFFIX}`
+function writeSafely(fileSystem, filePath, contents, beforeRename = () => {}) {
+  const tempPath = `${filePath}.${randomUUID()}${TEMP_SUFFIX}`
   try {
-    fileSystem.writeFileSync(tempPath, nextText, 'utf8')
-    const current = readFile(fileSystem, filePath)
-    if ((current ? current.text : null) !== originalText) {
-      throw new SetupError(`${filePath} 을(를) 다른 프로그램이 방금 바꿨습니다. 다시 시도하세요.`)
-    }
+    fileSystem.writeFileSync(tempPath, contents, { flag: 'wx', mode: 0o600 })
+    beforeRename()
     fileSystem.renameSync(tempPath, filePath)
   } catch (err) {
     try { fileSystem.unlinkSync(tempPath) } catch { /* never created or already moved */ }
     if (err instanceof SetupError) throw err
     throw new SetupError(`${filePath} 에 쓰지 못했습니다: ${err.message}`)
   }
+}
+
+function saveClientConfig(fileSystem, filePath, original, nextText) {
+  const backupPath = original ? `${filePath}${BACKUP_SUFFIX}` : null
+  const checkOriginal = () => {
+    if ((readFile(fileSystem, filePath)?.text ?? null) !== (original?.text ?? null)) {
+      throw new SetupError(`${filePath} 을(를) 다른 프로그램이 방금 바꿨습니다. 다시 시도하세요.`)
+    }
+  }
+  writeSafely(fileSystem, filePath, nextText, () => {
+    checkOriginal()
+    if (backupPath) writeSafely(fileSystem, backupPath, original.bytes, checkOriginal)
+  })
+  return backupPath
 }
 
 /**
@@ -147,17 +159,11 @@ function applyServerEntry({ filePath, name, entry, overwrite = false, createIfMi
 
   const kept = Object.fromEntries(Object.entries(servers).filter(([key]) => !renamedFrom.includes(key)))
   const nextText = formatLike(originalText, { ...doc, mcpServers: { ...kept, [name]: entry } })
-  let backupPath = null
-  if (original) {
-    backupPath = `${filePath}${BACKUP_SUFFIX}`
-    try {
-      fileSystem.writeFileSync(backupPath, original.bytes)
-    } catch (err) {
-      throw new SetupError(`백업 파일을 만들지 못해 수정하지 않았습니다: ${err.message}`)
-    }
-  }
-  writeSafely(fileSystem, filePath, originalText, nextText)
+  const backupPath = saveClientConfig(fileSystem, filePath, original, nextText)
   return { result: existing === undefined ? 'added' : 'replaced', backupPath, shadowedProjects, renamedFrom }
 }
 
-module.exports = { buildServerEntry, applyServerEntry, findLocalRegistrations, findShadowedProjects, SetupError, TOKEN_ENV_VAR }
+module.exports = {
+  buildServerEntry, applyServerEntry, findLocalRegistrations, findShadowedProjects, SetupError, TOKEN_ENV_VAR,
+  readFile, stripBom, detectIndent, saveClientConfig, isPlainObject
+}

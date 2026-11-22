@@ -12,7 +12,8 @@ const { createActivityLog } = require('./activityLog.js')
 const { createJobStore } = require('./jobStore.js')
 const { isAllowedSession } = require('./toolShared.js')
 const { createMcpHttpServer, MCP_PATH } = require('./server.js')
-const { buildServerEntry, applyServerEntry, findLocalRegistrations, findShadowedProjects, SetupError } = require('./clientSetup.js')
+const { buildServerEntry, applyServerEntry, findLocalRegistrations, findShadowedProjects } = require('./clientSetup.js')
+const { resolveSetupTarget, clientEntry, applyClientRegistration } = require('./clientTargets.js')
 const { setTokenEnv: setTokenEnvDefault } = require('./tokenEnv.js')
 
 const SERVER_NAME = 'ezshell-ssh-mcp'
@@ -39,20 +40,6 @@ function findLegacyProjects(filePath, name) {
   } catch {
     return []
   }
-}
-
-const isDirectory = (dir) => {
-  try { return fs.statSync(dir).isDirectory() } catch { return false }
-}
-
-/** Where the entry goes: a project's .mcp.json (token by variable) or Claude Code's user scope (token inline). */
-function resolveSetupTarget({ scope, projectDir }, homeDir) {
-  if (scope === 'global') return { filePath: path.join(homeDir, '.claude.json'), useEnvToken: false, createIfMissing: false }
-  if (scope !== 'project') throw new Error('설정 범위는 project 또는 global 이어야 합니다.')
-  if (typeof projectDir !== 'string' || !path.isAbsolute(projectDir) || !isDirectory(projectDir)) {
-    throw new Error('프로젝트 폴더를 찾을 수 없습니다.')
-  }
-  return { filePath: path.join(projectDir, '.mcp.json'), useEnvToken: true, createIfMissing: true }
 }
 
 function describeStartError(err, port) {
@@ -108,16 +95,22 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
   }
 
   async function setupClient(request = {}) {
-    const { scope } = request
-    const target = resolveSetupTarget(request, homeDir)
+    const { scope, client = 'claude' } = request
+    const target = resolveSetupTarget({ ...request, client }, homeDir, deps.env ?? process.env)
     const { port, token } = configStore.get()
-    const entry = buildServerEntry({ url: serverUrl(port), token, useEnvToken: target.useEnvToken })
-    let outcome
-    try {
-      outcome = applyServerEntry({ ...target, name: SERVER_NAME, entry, overwrite: request.overwrite === true, legacyNames: LEGACY_SERVER_NAMES })
-    } catch (err) {
-      throw err instanceof SetupError ? new Error(err.message) : err
+    const connection = { url: serverUrl(port), token, useEnvToken: target.useEnvToken }
+    const overwrite = request.overwrite === true
+    const outcome = client === 'claude'
+      ? applyServerEntry({ ...target, name: SERVER_NAME, entry: buildServerEntry(connection), overwrite, legacyNames: LEGACY_SERVER_NAMES })
+      : applyClientRegistration({ client, filePath: target.filePath, name: SERVER_NAME, entry: clientEntry(client, connection), overwrite })
+    const wantsEnv = target.useEnvToken && request.setTokenEnv === true && outcome.result !== 'conflict'
+    const env = wantsEnv ? await setTokenEnv(token) : null
+    const result = {
+      client, scope, filePath: target.filePath, shadowedProjects: [], ...outcome,
+      tokenEnv: env ? env.status : null,
+      tokenEnvError: env?.error ?? null
     }
+    if (client !== 'claude') return result
     // A local-scope entry left by the copied `claude mcp add` command wins over the project's .mcp.json
     const userConfigPath = path.join(homeDir, '.claude.json')
     const shadowedProjects = scope === 'project'
@@ -132,18 +125,12 @@ function createMcpController({ userDataPath, version, isUnlocked, loadSessions, 
         : findLegacyProjects(userConfigPath, name)
     })).filter(item => item.projects.length > 0)
     const legacyProjects = [...new Set(legacyRegistrations.flatMap(item => item.projects))]
-    const wantsEnv = target.useEnvToken && request.setTokenEnv === true && outcome.result !== 'conflict'
-    const env = wantsEnv ? await setTokenEnv(token) : null
     return {
-      scope,
-      filePath: target.filePath,
-      ...outcome,
+      ...result,
       shadowedProjects,
       legacyName: legacyRegistrations[0]?.name ?? LEGACY_SERVER_NAMES[0],
       legacyProjects,
-      legacyRegistrations,
-      tokenEnv: env ? env.status : null,
-      tokenEnvError: env && env.error ? env.error : null
+      legacyRegistrations
     }
   }
 

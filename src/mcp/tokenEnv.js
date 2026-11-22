@@ -1,5 +1,5 @@
-// Stores the MCP token in the user's environment (Windows) so a project's .mcp.json can refer to it.
-// Only terminals and Claude Code instances started afterwards see the new value.
+// Stores the MCP token in the user's environment (Windows) for project-scoped client configs.
+// Also update this process so future local terminals in ezShell inherit the new value.
 const childProcess = require('child_process')
 const path = require('path')
 const { TOKEN_ENV_VAR } = require('./clientSetup.js')
@@ -36,7 +36,12 @@ function setTokenEnv(token, { platform = process.platform, execFile = childProce
     const options = { windowsHide: true, shell: false, timeout: TIMEOUT_MS }
     try {
       const child = execFile(powershellPath(env), args, options, (err) => {
-        resolve(err ? { status: 'failed', error: describeFailure(err) } : { status: 'set' })
+        if (err) {
+          resolve({ status: 'failed', error: describeFailure(err) })
+          return
+        }
+        env[TOKEN_ENV_VAR] = token
+        resolve({ status: 'set' })
       })
       child.stdin.on('error', () => { /* the callback reports the failure */ })
       child.stdin.end(`${token}\n`)

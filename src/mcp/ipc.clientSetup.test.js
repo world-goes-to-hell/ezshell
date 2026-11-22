@@ -37,6 +37,18 @@ describe('mcp-setup-client', () => {
     expect(controller.setupClient).not.toHaveBeenCalled()
   })
 
+  it('routes registration to the selected client and never reuses a folder for another client', async () => {
+    const { call, pickDirectory, controller } = setup()
+    await call({ client: 'codex', scope: 'project' })
+    expect(controller.setupClient).toHaveBeenCalledWith({
+      client: 'codex', scope: 'project', projectDir: 'D:\\work\\app', overwrite: false, setTokenEnv: false
+    })
+    expect(await call({ client: 'gemini', scope: 'project', overwrite: true, reuseDir: true })).toMatchObject({ success: false })
+    expect(await call({ client: 'bad-client', scope: 'project' })).toMatchObject({ success: false })
+    expect(pickDirectory).toHaveBeenCalledTimes(1)
+    expect(controller.setupClient).toHaveBeenCalledTimes(1)
+  })
+
   it('reports a cancelled folder dialog without an error', async () => {
     const { call, controller } = setup({ picked: [] })
     expect(await call({ scope: 'project' })).toEqual({ success: false, cancelled: true })

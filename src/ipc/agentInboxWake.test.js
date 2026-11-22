@@ -555,6 +555,49 @@ describe('the agent\'s prompt with choices, answered from the chat view', () => 
     expect(prompt.options.map(option => option.key)).toEqual(['1', '2', '3'])
   })
 
+  it('recognizes Claude’s tabbed checklist without sending any approval keys', async () => {
+    const { rawWrite } = promptSetup('claude')
+    wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + [
+      '이전 작업 내용', '─'.repeat(70), '←  □ 반영 범위  ✓ Submit  →', '',
+      '│ 어떤 변경을 반영할까요? (선택한 항목만', '│ 반영합니다.)', '',
+      '❯ 1. [ ] 첫 번째 변경', '       첫 번째 변경의 설명',
+      '  2. [ ] 두 번째 변경', '  3. [ ] Type something', '   Submit', '─'.repeat(70),
+      '  4. Chat about this', '', 'Enter to select · ↑/↓ to navigate · Esc to cancel'
+    ].join('\r\n'))
+    await settle()
+    const prompt = wake.approvalPrompt()
+    expect(prompt).toMatchObject({ question: '어떤 변경을 반영할까요? (선택한 항목만 반영합니다.)', options: [], usesTerminalInput: true })
+    await expect(wake.answerApproval('1', prompt.signature)).resolves.toEqual({ ok: false, reason: 'changed' })
+    expect(rawWrite).not.toHaveBeenCalled()
+    wake.writeOutput('\x1b[2J\x1b[H' + [
+      '←  □ 반영 범위  ✓ Submit  →', '', 'Review your answers', '',
+      '❯ 1. Submit answers', '  2. Go back', 'Tab/Arrow keys to navigate · Esc to cancel'
+    ].join('\r\n'))
+    await settle()
+    expect(wake.approvalPrompt()).toEqual(prompt)
+    wake.writeOutput('\x1b[2J\x1b[H' + [
+      'Review your answers', '', '❯ 1. Submit answers', '  2. Go back', 'Tab/Arrow keys to navigate · Esc to cancel'
+    ].join('\r\n'))
+    await settle()
+    expect(wake.approvalPrompt()).toEqual(prompt)
+    wake.writeOutput(claudePrompt())
+    await settle()
+    expect(wake.approvalPrompt()).toMatchObject({ question: 'Do you want to proceed?', selected: '1' })
+    wake.writeOutput(claudeDraft(''))
+    await settle()
+    expect(wake.approvalPrompt()).toBeNull()
+  })
+
+  it('recognizes the interactive choices when the question has scrolled above them', async () => {
+    promptSetup('claude')
+    wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + [
+      '       Previous option description', '❯ 2. [ ] Another option', '  3. [ ] Type something',
+      '   Submit', '─'.repeat(70), '  4. Chat about this', '', 'Enter to select · ↑/↓ to navigate · Esc to cancel'
+    ].join('\r\n'))
+    await settle()
+    expect(wake.approvalPrompt()).toMatchObject({ question: null, options: [], usesTerminalInput: true })
+  })
+
   it('sees no prompt while the composer shows (a numbered list in the output is not one)', async () => {
     promptSetup('claude')
     wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H1. first\r\n2. second\r\n' + '─'.repeat(70) + '\r\n> ')

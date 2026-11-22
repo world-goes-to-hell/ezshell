@@ -21,13 +21,15 @@ const realisticFailure = (extra) => Object.assign(new Error(`Command failed: set
 describe('setTokenEnv', () => {
   it('sets the user variable through PowerShell by full path, with the token on stdin only', async () => {
     const { execFile, written } = fakeExecFile()
-    await expect(setTokenEnv(TOKEN, { platform: 'win32', execFile, env: ENV })).resolves.toEqual({ status: 'set' })
+    const env = { ...ENV }
+    await expect(setTokenEnv(TOKEN, { platform: 'win32', execFile, env })).resolves.toEqual({ status: 'set' })
     const [file, args, options] = execFile.mock.calls[0]
     expect(file).toBe(POWERSHELL)
     expect(args.join(' ')).toContain("SetEnvironmentVariable('EZSHELL_MCP_TOKEN'")
     expect(args.join(' ')).not.toContain(TOKEN)
     expect(options).toMatchObject({ windowsHide: true, shell: false })
     expect(written).toEqual([`${TOKEN}\n`])
+    expect(env.EZSHELL_MCP_TOKEN).toBe(TOKEN)
   })
 
   it.each([

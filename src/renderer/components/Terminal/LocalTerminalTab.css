@@ -32,6 +32,19 @@
   overflow: hidden;
 }
 
+.local-terminal-stage[data-chat-question] > .agent-chat-cover {
+  position: relative;
+  inset: auto;
+  order: -1;
+  flex: 1;
+}
+
+.local-terminal-stage[data-chat-question] > .local-terminal-host {
+  flex: 0 0 min(58%, 400px);
+  padding: 8px 10px 0;
+  background: var(--terminal-bg, var(--bg-primary));
+}
+
 /* Leave room below the last terminal line. */
 .local-terminal-pane:not([data-chat-mode]) > .local-terminal-stage:has(+ .agent-pane-usage) {
   margin-bottom: 4px;

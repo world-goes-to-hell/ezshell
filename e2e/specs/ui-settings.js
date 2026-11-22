@@ -68,6 +68,26 @@ const { check, finish } = createChecks()
   await selectTab(mcpTabs, 'SSH MCP')
   check('selecting the SSH subtab returns to its settings', await until(`${activeMcpPanel}?.textContent.includes('ezshell-ssh-mcp')`))
 
+  const clientPicker = 'document.querySelector("#mcp-setup-client")'
+  const scopeButtons = `${activeMcpPanel}?.querySelector('.mcp-setup-actions')`
+  check('SSH auto-setup starts with Claude Code and its project config', await until(`
+    ${clientPicker}?.textContent.trim() === 'Claude Code' && ${scopeButtons}?.textContent.includes('(.mcp.json)')
+  `))
+  await js(`${clientPicker}.scrollIntoView({ block: 'center' })`)
+  await driver.click(...await driver.center(clientPicker))
+  check('SSH auto-setup offers Codex, Gemini CLI, OpenCode and Cursor', await until(`
+    ['Claude Code', 'Codex', 'Gemini CLI', 'OpenCode', 'Cursor'].every(label =>
+      [...document.querySelectorAll('[role=menuitemradio]')].some(item => item.textContent.trim() === label))
+  `))
+  const codex = `[...document.querySelectorAll('[role=menuitemradio]')].find(item => item.textContent.trim() === 'Codex')`
+  await driver.click(...await driver.center(codex))
+  check('choosing Codex switches both registration scopes to TOML', await until(`
+    ${clientPicker}?.textContent.trim() === 'Codex' &&
+    ${scopeButtons}?.textContent.includes('프로젝트에 설정 (.codex/config.toml)') &&
+    ${scopeButtons}?.textContent.includes('모든 프로젝트에 설정 (~/.codex/config.toml)')
+  `))
+  await shot('ssh-mcp-client-setup')
+
   await selectTab(topTabs, '터미널')
   const scrollback = `document.querySelector('button[aria-label^="터미널 출력 보관 줄 수"]')`
   check('terminal scrollback defaults to 10,000 lines', await until(`${scrollback}?.textContent.trim() === '10,000줄 (기본)'`))

@@ -22,8 +22,42 @@ const isClaudeRule = row => claudeRule.test(row) || claudeTargetRule.test(row)
 const CLAUDE_PLACEHOLDER = /^Try ".*"$/
 // A numbered choice of a prompt: "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"
 const APPROVAL_OPTION = /^\s*([❯›>▶])?\s*([1-9])[.)]\s+(\S.*?)\s*$/u
+const CLAUDE_QUESTION_HINT = /^(?:Enter to (?:select|submit|chat)|Space to toggle)\b.*\bEsc to cancel$/i
+const CLAUDE_QUESTION_TABS = /(?:^\s*←.*\bSubmit\b|\bSubmit\b.*→\s*$)/u
+const CLAUDE_QUESTION_CHOICE = /^(?:\[[ xX✓]\]\s+|(?:Type something|Chat about this)$)/i
 // After the number key, the CLI either answers at once or only moves its selection there
 const APPROVAL_SETTLE = 600
+
+/** Claude's tabbed question and checklist need their own navigation and Submit action. */
+function claudeQuestionPrompt(rows, bare, last, previous) {
+  const hint = CLAUDE_QUESTION_HINT.test(bare(last).trim())
+  if (!hint && !previous) return null
+  const tabs = rows.slice(0, last).findLastIndex(row => CLAUDE_QUESTION_TABS.test(row))
+  // Editing a free-text answer or reviewing the checklist changes its keyboard hint.
+  if (previous && rows.some((_, index) => /^Review your answers$/i.test(bare(index).trim())) &&
+      rows.some((_, index) => /^Submit answers$/i.test(APPROVAL_OPTION.exec(bare(index))?.[3] ?? ''))) return previous
+  if (!hint) return tabs >= 0 ? previous : null
+  const firstChoice = rows.findIndex((_, index) => {
+    if (index <= tabs || index >= last) return false
+    const choice = APPROVAL_OPTION.exec(bare(index))
+    return choice && (tabs >= 0 || CLAUDE_QUESTION_CHOICE.test(choice[3]))
+  })
+  // Without the tab strip (it can scroll off screen), require one of the question menu's own choices.
+  if (tabs < 0 && firstChoice < 0) return null
+
+  const lines = []
+  for (let row = firstChoice - 1; row > tabs; row--) {
+    const text = bare(row).trim()
+    if (isClaudeRule(rows[row]) || (lines.length && !text)) break
+    if (!text) continue
+    // If the heading is cropped, only use the visibly marked question, never preceding log output.
+    if (tabs < 0 && !/^\s*[│┃|]/u.test(rows[row])) break
+    lines.unshift(text)
+  }
+  const question = lines.join(' ').slice(0, 1000)
+  if (!question && previous) return previous
+  return { question: question || null, detail: [], options: [], selected: null, signature: JSON.stringify(['claude-question', question]), usesTerminalInput: true }
+}
 
 /**
  * isWorking: not waiting for input (also while starting up, unknown or asking for approval).
@@ -47,6 +81,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   // A model / effort picker is open (agentPicker.js): no wake line and no chat line meanwhile
   let held = false
   let holdUntil = 0
+  let claudeQuestion = null
   const prompt = kind === 'codex' ? /^\s*›[ \u00a0]/u : /^\s*[>❯][ \u00a0]/u
 
   function paintedClaudeComposer(buffer, line, maxInputRows) {
@@ -165,13 +200,15 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   /**
-   * The agent's question with numbered choices on screen (a permission prompt, a question to the user),
-   * or null. Read only when no composer shows: the CLIs replace their input box with the prompt. The
-   * question, the lines that describe it (the command, the file) and the choices, as on screen.
+   * The agent's question on screen (a permission prompt or a question to the user), or null.
+   * Claude's tabbed questions relay input through the live terminal shown in chat.
    */
   function approvalPrompt() {
     // Not while a model / effort picker is open: main is answering that one itself (agentPicker.js)
-    if (stopped || chat || stage || held || composer()) return null
+    if (stopped || chat || stage || held || composer()) {
+      claudeQuestion = null
+      return null
+    }
     const { active: buffer } = screen.buffer
     // The screen as lines: a row the terminal wrapped (a long choice in a narrow pane) joins the one before
     const raws = []
@@ -185,6 +222,10 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     const top = 0
     let last = raws.length - 1
     while (last > top && !bare(last).trim()) last--
+    if (kind === 'claude') {
+      claudeQuestion = claudeQuestionPrompt(raws, bare, last, claudeQuestion)
+      if (claudeQuestion) return claudeQuestion
+    }
     // The choices end at most a few lines above the bottom (a hint like "Esc to cancel" may follow)
     let end = last
     while (end >= Math.max(top, last - 4) && !APPROVAL_OPTION.test(bare(end))) end--
@@ -409,7 +450,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     answerApproval(key, signature) {
       return new Promise(resolve => {
         const prompt = approvalPrompt()
-        if (!prompt || prompt.signature !== signature || !prompt.options.some(option => option.key === key)) {
+        if (!prompt || prompt.usesTerminalInput || prompt.signature !== signature || !prompt.options.some(option => option.key === key)) {
           return resolve({ ok: false, reason: 'changed' })
         }
         // Gone even once while waiting means it was answered: the same question shown again is a new

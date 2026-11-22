@@ -84,7 +84,7 @@ export function McpSettings() {
   }
 
   const regenerate = async () => {
-    if (!window.confirm('토큰을 재발급하면 Claude Code 에 다시 등록해야 합니다. 계속할까요?')) return
+    if (!window.confirm('토큰을 재발급하면 사용 중인 에이전트에 다시 등록해야 합니다. 계속할까요?')) return
     if (await run(() => api.mcpRegenerateToken!())) setIsTokenVisible(false)
   }
 
@@ -98,7 +98,7 @@ export function McpSettings() {
           </span>
         </div>
         <p className="settings-section-desc">
-          Claude Code 가 허용한 세션으로 서버를 조회할 수 있게 합니다. 비밀번호는 Claude 에게 전달되지 않습니다.
+          에이전트가 MCP 접근을 허용한 SSH 세션을 조회할 수 있습니다. 비밀번호는 에이전트에 전달되지 않습니다.
         </p>
         <div className="mcp-row mcp-server-controls">
           <label className="mcp-toggle">

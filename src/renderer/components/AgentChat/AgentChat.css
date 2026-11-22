@@ -765,6 +765,14 @@
   background: var(--bg-secondary);
 }
 .agent-chat-approval-question { font-weight: 600; }
+.agent-chat-inline-question {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+.agent-chat-inline-question .agent-chat-head-btn { flex: none; }
+.agent-chat-approval-state { color: var(--warning); font-weight: 600; }
+.agent-chat-approval-state + .agent-chat-approval-question { margin-top: 3px; overflow-wrap: anywhere; }
 .agent-chat-approval-detail {
   margin: 0;
   max-height: 160px;

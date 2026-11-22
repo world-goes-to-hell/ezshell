@@ -24,7 +24,7 @@ export function focusPaneInput(pane: HTMLElement): void {
   }
   const chat = pane.querySelector<HTMLElement>('.agent-chat-cover')
   const input = chat
-    ? chat.querySelector<HTMLElement>('.agent-chat-input, .agent-chat-approval-option:not(:disabled)') ?? chat
+    ? chat.querySelector<HTMLElement>('.agent-chat-input, .agent-chat-approval-option:not(:disabled), .agent-chat-inline-question button') ?? chat
     : pane.querySelector<HTMLElement>('.xterm-helper-textarea')
   input?.focus({ preventScroll: true })
 }

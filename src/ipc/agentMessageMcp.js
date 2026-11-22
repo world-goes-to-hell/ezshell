@@ -3,7 +3,9 @@ const { McpServer, z } = require('../mcp/sdk.js')
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js')
 const fs = require('node:fs')
 const net = require('node:net')
+const path = require('node:path')
 const { rpc } = require('./agentMessageCli.js')
+const { getProcessTree } = require('./agentProcessParents.js')
 
 const instructions = [
   'Use these tools to collaborate with agents opened in ezShell.',
@@ -16,15 +18,56 @@ const instructions = [
 const text = z.string().trim().min(1).max(8000)
 const id = z.string().min(1).max(100)
 
-function connectionOptions() {
+function readBridge(file) {
+  try {
+    const [executable, , pipe, token] = fs.readFileSync(file, 'utf8').split(/\r?\n/)
+    return executable && pipe && token ? { executable, pipe, token } : null
+  } catch { return null }
+}
+
+function runningBridges(file) {
+  const directory = path.dirname(file)
+  const prefix = `${path.basename(file)}.`
+  const instances = new Map()
+  try {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.startsWith(prefix)) continue
+      const suffix = entry.name.slice(prefix.length)
+      const pid = Number(suffix)
+      if (!/^[1-9]\d*$/.test(suffix) || !Number.isSafeInteger(pid)) continue
+      try { process.kill(pid, 0) } catch { continue }
+      const bridge = readBridge(path.join(directory, entry.name))
+      if (bridge) instances.set(pid, bridge)
+    }
+  } catch { /* The shared bridge can still be read directly. */ }
+  return instances
+}
+
+async function connectionOptions(env = process.env, processTree = getProcessTree, pid = process.pid) {
   const { EZSHELL_AGENT_PIPE: pipe, EZSHELL_AGENT_TOKEN: token, EZSHELL_AGENT_BRIDGE_FILE: bridgeFile,
-    EZSHELL_AGENT_BRIDGE_KIND: kind } = process.env
+    EZSHELL_AGENT_BRIDGE_KIND: kind } = env
   if (pipe && token) return { pipe, token }
   if (!bridgeFile || !['codex', 'claude'].includes(kind)) throw new Error('ezShell 메시지 MCP 설정을 확인해 주세요.')
-  let fields
-  try { fields = fs.readFileSync(bridgeFile, 'utf8').split(/\r?\n/) }
-  catch { throw new Error('ezShell 앱을 실행한 뒤 다시 연결해 주세요.') }
-  return { pipe: fields[2], token: fields[3], kind }
+  const shared = readBridge(bridgeFile)
+  const instances = runningBridges(bridgeFile)
+  const available = [...instances.values()]
+  const inherited = pipe && available.find(bridge => bridge.pipe === pipe)
+  let selected = inherited || shared
+  if (!inherited && available.some(bridge => bridge.pipe !== shared?.pipe)) {
+    const processes = await processTree().catch(() => null)
+    const visited = new Set()
+    for (let parent = processes?.get(pid)?.parent; parent > 0 && !visited.has(parent); parent = processes.get(parent)?.parent) {
+      visited.add(parent)
+      const instance = instances.get(parent)
+      const name = processes.get(parent)?.name
+      if (instance && name && path.basename(name).toLowerCase() === path.basename(instance.executable).toLowerCase()) {
+        selected = instance
+        break
+      }
+    }
+  }
+  if (!selected) throw new Error('ezShell 앱을 실행한 뒤 다시 연결해 주세요.')
+  return { pipe: selected.pipe, token: selected.token, kind }
 }
 
 function openLease({ pipe, token, kind }) {
@@ -57,7 +100,7 @@ function openLease({ pipe, token, kind }) {
 }
 
 async function main() {
-  const options = connectionOptions()
+  const options = await connectionOptions()
   let registration
   let closed = false
   const server = new McpServer({ name: 'ezshell-cli-mcp', version: '1.0.0' }, { instructions })
@@ -126,4 +169,4 @@ function run() {
 }
 
 if (require.main === module) run()
-module.exports = { run }
+module.exports = { run, connectionOptions }

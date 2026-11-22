@@ -1,21 +1,23 @@
 import { useRef, useState } from 'react'
 import { RiFolderOpenLine, RiGlobalLine } from 'react-icons/ri'
 import { toast } from '../../stores/toastStore'
-import type { McpSetupResult, McpSetupScope } from '../../types'
-import { conflictQuestion, describeSetupOutcome, type SetupView } from '../../lib/mcpSetupLabels'
+import type { McpSetupClient, McpSetupResult, McpSetupScope } from '../../types'
+import { conflictQuestion, describeSetupOutcome, MCP_SETUP_CLIENTS, type SetupView } from '../../lib/mcpSetupLabels'
+import { SelectMenu } from '../ui/SelectMenu'
 
 const TITLE = 'MCP 자동 설정'
+const CLIENT_OPTIONS = Object.entries(MCP_SETUP_CLIENTS).map(([value, { label }]) => ({ value, label }))
 
 interface McpClientSetupProps {
   /** True while the app is locked: the main process refuses to write the token then */
   disabled: boolean
 }
 
-/** Writes the Claude Code registration into .mcp.json (one project) or ~/.claude.json (every project) */
 export function McpClientSetup({ disabled }: McpClientSetupProps) {
   const api = window.electronAPI
   const isWindows = navigator.userAgent.includes('Windows')
   const [setTokenEnv, setSetTokenEnv] = useState(isWindows)
+  const [client, setClient] = useState<McpSetupClient>('claude')
   const [isBusy, setIsBusy] = useState(false)
   const [view, setView] = useState<SetupView | null>(null)
   const busyRef = useRef(false)
@@ -24,7 +26,7 @@ export function McpClientSetup({ disabled }: McpClientSetupProps) {
   const setupClient = api.mcpSetupClient
 
   const askAndSetup = async (scope: McpSetupScope): Promise<McpSetupResult | null> => {
-    const request = { scope, setTokenEnv: scope === 'project' && setTokenEnv }
+    const request = { client, scope, setTokenEnv: scope === 'project' && setTokenEnv }
     const first = await setupClient(request)
     if (!first.success || first.outcome.result !== 'conflict') return first
     if (!window.confirm(conflictQuestion(first.outcome))) return null
@@ -55,19 +57,31 @@ export function McpClientSetup({ disabled }: McpClientSetupProps) {
   }
 
   const isDisabled = disabled || isBusy
+  const locations = MCP_SETUP_CLIENTS[client]
 
   return (
     <section className="mcp-field settings-section mcp-settings-group">
-      <h3 className="settings-section-title mcp-field-label">Claude Code 자동 설정</h3>
-      <p className="settings-section-desc">현재 프로젝트 또는 모든 프로젝트에 SSH MCP를 등록합니다.</p>
+      <h3 className="settings-section-title mcp-field-label">{TITLE}</h3>
+      <p className="settings-section-desc">에이전트를 선택하고 SSH MCP를 등록할 범위를 고르세요.</p>
+      <div className="mcp-row">
+        <label className="mcp-field-label" htmlFor="mcp-setup-client">에이전트</label>
+        <SelectMenu
+          id="mcp-setup-client" ariaLabel="에이전트" value={client} options={CLIENT_OPTIONS}
+          onChange={value => {
+            if (busyRef.current) return
+            setClient(value as McpSetupClient)
+            setView(null)
+          }}
+        />
+      </div>
       <div className="mcp-setup-actions">
         <button type="button" className="mcp-setup-btn" onClick={() => void runSetup('project')} disabled={isDisabled}>
           <RiFolderOpenLine size={16} />
-          <span>프로젝트에 설정 (.mcp.json)</span>
+          <span>프로젝트에 설정 ({locations.project})</span>
         </button>
         <button type="button" className="mcp-setup-btn" onClick={() => void runSetup('global')} disabled={isDisabled}>
           <RiGlobalLine size={16} />
-          <span>모든 프로젝트에 설정 (~/.claude.json)</span>
+          <span>모든 프로젝트에 설정 ({locations.global})</span>
         </button>
       </div>
       {isWindows && (
@@ -77,9 +91,8 @@ export function McpClientSetup({ disabled }: McpClientSetupProps) {
         </label>
       )}
       <p className="form-hint">
-        프로젝트 설정은 토큰 대신 환경 변수 이름만 파일에 써서, 파일을 커밋해도 토큰이 드러나지 않습니다.
-        전체 설정은 ~/.claude.json 에 토큰을 직접 씁니다. 기존 항목은 그대로 두고, 바꾸기 전에 원래 파일을 백업합니다.
-        토큰을 재발급하면 자동 설정을 다시 실행하세요.
+        프로젝트 파일은 환경 변수 EZSHELL_MCP_TOKEN을 참조합니다. 전체 설정은 사용자 설정 파일에 토큰을 저장합니다.
+        설정 파일을 바꾸기 전에 원본을 백업합니다. 토큰을 재발급하면 자동 설정을 다시 실행하세요.
       </p>
       {view && (
         <div className={`mcp-setup-result ${view.tone}`} role="status">

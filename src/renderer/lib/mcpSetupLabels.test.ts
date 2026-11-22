@@ -3,6 +3,7 @@ import type { McpSetupOutcome } from '../types'
 import { conflictQuestion, describeSetupOutcome } from './mcpSetupLabels'
 
 const base: McpSetupOutcome = {
+  client: 'claude',
   scope: 'project',
   filePath: 'D:\\work\\app\\.mcp.json',
   result: 'added',
@@ -38,8 +39,8 @@ describe('describeSetupOutcome', () => {
       tone: 'success',
       lines: [
         '파일: D:\\work\\app\\.mcp.json',
-        '환경 변수 EZSHELL_MCP_TOKEN 을 설정했습니다. 새로 연 터미널에서 실행한 Claude Code 부터 적용됩니다.',
-        'Claude Code 가 이 프로젝트에서 처음 쓸 때 서버 사용을 승인할지 묻습니다.'
+        '환경 변수 EZSHELL_MCP_TOKEN을 설정했습니다. 새 터미널에서 시작한 Claude Code에 적용됩니다.',
+        'Claude Code에서 이 프로젝트의 MCP 서버 사용 여부를 처음에 확인합니다.'
       ]
     })
   })
@@ -48,7 +49,7 @@ describe('describeSetupOutcome', () => {
     const view = describeSetupOutcome({ ...base, result: 'replaced', backupPath: 'D:\\work\\app\\.mcp.json.ezshell-backup', tokenEnv: null })
     expect(view.title).toBe('설정을 바꿨습니다')
     expect(view.lines).toContain('백업: D:\\work\\app\\.mcp.json.ezshell-backup')
-    expect(view.lines).toContain('Claude Code 를 실행하기 전에 EZSHELL_MCP_TOKEN 환경 변수에 접속 토큰을 넣어 두세요.')
+    expect(view.lines).toContain('Claude Code 시작 전에 EZSHELL_MCP_TOKEN 환경 변수에 접속 토큰을 넣어 두세요.')
   })
 
   it('warns when the variable could not be set', () => {

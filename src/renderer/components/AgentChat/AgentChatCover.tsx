@@ -295,9 +295,10 @@ interface AgentChatCoverProps {
   getSplitMenu: () => TerminalMenuGroup | null
   /** Back to the terminal (the pane focuses its xterm) */
   onShowTerminal: () => void
+  onFocusQuestion: () => void
 }
 
-export function AgentChatCover({ shellId, themeId, appearance, usageActions, tabId, getSplitMenu, onShowTerminal }: AgentChatCoverProps) {
+export function AgentChatCover({ shellId, themeId, appearance, usageActions, tabId, getSplitMenu, onShowTerminal, onFocusQuestion }: AgentChatCoverProps) {
   const chat = useAgentChatStore(state => state.chats.get(shellId))
   const loadOlder = useAgentChatStore(state => state.loadOlder)
   const agent = useAgentMessagesStore(state => shellAgentOf(state.snapshot.agents, shellId))
@@ -339,9 +340,9 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   const chosenQuestion = selectedQuestion?.scope === scope ? selectedQuestion.question : null
   const highlighted = chosenQuestion && (chosenQuestion.itemId ?? chosenQuestion.id)
   const kind = chat?.kind ?? (agent?.kind === 'claude' || agent?.kind === 'codex' ? agent.kind : null)
-  const subagent = chat?.subagents.find(child => child.id === subagentId)
+  const subagent = chat?.approval?.usesTerminalInput ? undefined : chat?.subagents.find(child => child.id === subagentId)
   const ProviderIcon = kind ? AGENT_PROVIDER_ICONS[kind] : null
-  const status = chat?.state === 'ended' ? 'ended' : agent?.status ?? 'unknown'
+  const status = chat?.state === 'ended' ? 'ended' : chat?.approval ? 'blocked' : agent?.status ?? 'unknown'
   // The slash command list over the composer: the CLI's own commands, and the user's (read once, when first needed)
   const [customCommands, setCustomCommands] = useState<SlashCommand[] | null>(null)
   const [slashIndex, setSlashIndex] = useState(0)
@@ -363,7 +364,7 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   useEffect(() => { setSlashIndex(0) }, [draft])
   const isOver = chat?.state === 'ended' || !agent
   const replyId = chat?.reply?.sendId
-  const canReply = !isOver && !chat?.approval && status !== 'blocked' && status !== 'error'
+  const canReply = !isOver && status !== 'blocked' && status !== 'error'
   const canToggleSpeed = canReply && !replyId && status !== 'working' && status !== 'starting'
   const speed = chat?.codexSpeed?.speed ?? null
   // Sent while the agent was busy and not read yet: the CLI holds it (Claude reads it at its next step,
@@ -952,7 +953,15 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
         </button>
       )}
       </div>
-      {chat?.approval && !isOver && <ApprovalCard shellId={shellId} approval={chat.approval} />}
+      {chat?.approval && !isOver && (chat.approval.usesTerminalInput ? (
+        <div className="agent-chat-approval agent-chat-inline-question">
+          <div role="status">
+            <div className="agent-chat-approval-state">답변 대기 중</div>
+            {chat.approval.question && <div className="agent-chat-approval-question">{chat.approval.question}</div>}
+          </div>
+          <button type="button" className="agent-chat-head-btn" onClick={onFocusQuestion}>질문에 답하기</button>
+        </div>
+      ) : <ApprovalCard shellId={shellId} approval={chat.approval} />)}
       {status === 'blocked' && !isOver && !chat?.approval && (
         // A prompt the view cannot read as choices: answered in the terminal
         <div className="agent-chat-banner" role="status">

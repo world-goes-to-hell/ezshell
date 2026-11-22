@@ -1,8 +1,22 @@
-import type { McpSetupOutcome } from '../types'
+import type { McpSetupClient, McpSetupOutcome } from '../types'
 
 const SERVER_NAME = 'ezshell-ssh-mcp'
 const TOKEN_ENV_VAR = 'EZSHELL_MCP_TOKEN'
 const SHOWN_PROJECTS = 3
+
+export const MCP_SETUP_CLIENTS: Record<McpSetupClient, { label: string; project: string; global: string; projectNote?: string }> = {
+  claude: {
+    label: 'Claude Code', project: '.mcp.json', global: '~/.claude.json',
+    projectNote: 'Claude Code에서 이 프로젝트의 MCP 서버 사용 여부를 처음에 확인합니다.'
+  },
+  codex: {
+    label: 'Codex', project: '.codex/config.toml', global: '~/.codex/config.toml',
+    projectNote: 'Codex는 신뢰하는 프로젝트의 설정을 읽습니다.'
+  },
+  gemini: { label: 'Gemini CLI', project: '.gemini/settings.json', global: '~/.gemini/settings.json' },
+  opencode: { label: 'OpenCode', project: 'opencode.jsonc', global: '~/.config/opencode/opencode.jsonc' },
+  cursor: { label: 'Cursor', project: '.cursor/mcp.json', global: '~/.cursor/mcp.json' }
+}
 
 const RESULT_TITLES: Record<McpSetupOutcome['result'], string> = {
   added: '설정을 추가했습니다',
@@ -18,15 +32,16 @@ export interface SetupView {
 }
 
 function tokenEnvLine(outcome: McpSetupOutcome): string {
+  const client = MCP_SETUP_CLIENTS[outcome.client].label
   switch (outcome.tokenEnv) {
     case 'set':
-      return `환경 변수 ${TOKEN_ENV_VAR} 을 설정했습니다. 새로 연 터미널에서 실행한 Claude Code 부터 적용됩니다.`
+      return `환경 변수 ${TOKEN_ENV_VAR}을 설정했습니다. 새 터미널에서 시작한 ${client}에 적용됩니다.`
     case 'failed':
       return `환경 변수를 설정하지 못했습니다 (${outcome.tokenEnvError ?? '알 수 없는 오류'}). ${TOKEN_ENV_VAR} 에 접속 토큰을 직접 넣어 두세요.`
     case 'unsupported':
       return `이 운영체제에서는 ${TOKEN_ENV_VAR} 환경 변수를 직접 설정하세요.`
     default:
-      return `Claude Code 를 실행하기 전에 ${TOKEN_ENV_VAR} 환경 변수에 접속 토큰을 넣어 두세요.`
+      return `${client} 시작 전에 ${TOKEN_ENV_VAR} 환경 변수에 접속 토큰을 넣어 두세요.`
   }
 }
 
@@ -42,13 +57,14 @@ function legacyLine(projects: string[], legacyName: string): string {
   return `프로젝트 ${projects.length}곳에 예전 이름(${legacyName})의 등록이 남아 있어 그 프로젝트에서는 도구가 두 이름으로 보입니다: ${shown}${rest}`
 }
 
-/** What the settings screen shows after "Claude Code 자동 설정" ran */
+/** What the settings screen shows after MCP registration. */
 export function describeSetupOutcome(outcome: McpSetupOutcome): SetupView {
   const lines = [`파일: ${outcome.filePath}`]
   if (outcome.backupPath) lines.push(`백업: ${outcome.backupPath}`)
   if (outcome.scope === 'project') {
     lines.push(tokenEnvLine(outcome))
-    lines.push('Claude Code 가 이 프로젝트에서 처음 쓸 때 서버 사용을 승인할지 묻습니다.')
+    const note = MCP_SETUP_CLIENTS[outcome.client].projectNote
+    if (note) lines.push(note)
   }
   if (outcome.shadowedProjects.length > 0) {
     lines.push(shadowedLine(outcome.shadowedProjects))

@@ -1,4 +1,5 @@
 // IPC between the renderer's MCP screens and the controller in the main process.
+const { CLIENTS } = require('./clientTargets.js')
 const DEFAULT_AUDIT_LIMIT = 200
 const MAX_AUDIT_LIMIT = 500
 const NOT_READY_MESSAGE = 'MCP 기능이 아직 준비되지 않았습니다.'
@@ -49,28 +50,34 @@ function registerMcpIpc(ipcMain, getController, isUnlocked, { pickDirectory, pic
 
   // The project folder comes from a dialog in the main process, never from the renderer; the overwrite
   // answer that follows a conflict reuses the folder picked for it.
-  let lastProjectDir = null
+  let lastProject = null
   ipcMain.handle('mcp-setup-client', async (event, payload) => {
     const controller = getController()
     if (!controller) return { success: false, error: NOT_READY_MESSAGE }
     if (!unlocked()) return { success: false, error: LOCKED_MESSAGE }
     const request = payload && typeof payload === 'object' ? payload : {}
+    const { client = 'claude' } = request
+    if (!CLIENTS.includes(client)) return { success: false, error: '지원하지 않는 MCP 클라이언트입니다.' }
+    const sender = event.sender
     try {
       let projectDir
       if (request.scope === 'project') {
         if (request.reuseDir === true) {
-          if (!lastProjectDir) return { success: false, error: '프로젝트 폴더를 다시 고르세요.' }
-          projectDir = lastProjectDir
+          if (lastProject?.client !== client || lastProject.sender !== sender) {
+            return { success: false, error: '프로젝트 폴더를 다시 고르세요.' }
+          }
+          projectDir = lastProject.dir
         } else {
           if (typeof pickDirectory !== 'function') return { success: false, error: NOT_READY_MESSAGE }
           projectDir = await pickDirectory()
           if (!projectDir) return { success: false, cancelled: true }
           // The app may have been locked while the dialog was open
           if (!unlocked()) return { success: false, error: LOCKED_MESSAGE }
-          lastProjectDir = projectDir
+          lastProject = { dir: projectDir, client, sender }
         }
       }
       const outcome = await controller.setupClient({
+        ...(request.client === undefined ? {} : { client }),
         scope: request.scope,
         projectDir,
         overwrite: request.overwrite === true,

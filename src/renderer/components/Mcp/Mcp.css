@@ -434,7 +434,7 @@
   outline-offset: 2px;
 }
 
-/* Claude Code 자동 설정 */
+/* 에이전트 MCP 자동 설정 */
 .mcp-setup-actions {
   display: flex;
   flex-wrap: wrap;

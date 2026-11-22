@@ -34,6 +34,39 @@ describe('defaultShell', () => {
 })
 
 describe('createLocalShells', () => {
+  it('binds five agents to their own shells when two MCP processes start after a shared snapshot', async () => {
+    const processes = new Map()
+    const processTree = vi.fn(async () => processes)
+    const { shells, ptys } = setup({ agents: {}, processTree, processAlive: () => true })
+    const agents = Array.from({ length: 5 }, (_, index) => {
+      const { id } = shells.open()
+      const ptyPid = 200 + index
+      const cliPid = 300 + index
+      const pid = 400 + index
+      const kind = index % 2 === 0 ? 'claude' : 'codex'
+      ptys[index].pid = ptyPid
+      processes.set(cliPid, { parent: ptyPid, name: `${kind}.exe` })
+      return { id, cliPid, pid, kind }
+    })
+    const addHelpers = (set, entries) => {
+      for (const { pid, cliPid } of entries) set.set(pid, { parent: cliPid, name: 'electron.exe' })
+      return set
+    }
+    processTree.mockResolvedValueOnce(addHelpers(new Map(processes), agents.slice(0, 3)))
+    addHelpers(processes, agents.slice(3))
+
+    try {
+      const connections = await Promise.all(agents.map(({ pid, kind }) => shells.bindAgentProcess({ pid, kind })))
+      expect(processTree).toHaveBeenCalledTimes(2)
+      const attached = connections.map((connect, index) => connect({
+        agentId: `${agents[index].kind}-${index}`, setStatus: () => {}, onExit: () => {}
+      }))
+      expect(attached.map(agent => agent.shellId)).toEqual(agents.map(agent => agent.id))
+    } finally {
+      shells.closeAll()
+    }
+  })
+
   it('tracks the CLI across MCP disconnection and reconnection until the CLI exits', async () => {
     vi.useFakeTimers()
     const processes = new Map([

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import { throttle, REFIT_INTERVAL_MS } from '../../lib/throttle'
 import { readTerminalScrollback } from '../../lib/terminalScrollback'
 import { Terminal } from 'xterm'
@@ -100,6 +100,11 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const customThemes = useThemeStore(state => isChat ? state.customThemes : undefined)
   const chatTheme = useMemo(() => chatThemeId ? chatAppearance(chatThemeId, customThemes ?? []) : undefined, [chatThemeId, customThemes])
   const chatKind = useAgentChatStore(state => state.chats.get(shellId)?.kind)
+  const hasInteractiveQuestion = useAgentChatStore(state => {
+    const chat = state.chats.get(shellId)
+    return chat?.state !== 'ended' && chat?.approval?.usesTerminalInput === true
+  })
+  const inlineQuestion = !exit && hasInteractiveQuestion
   const hasSpeedControls = isChat && (chatKind ?? chatAgent) === 'codex' && !!window.electronAPI.agentChatToggleSpeed
   const fontSize = useTerminalStore(state => state.fontSize)
   const fontFamily = useTerminalStore(state => state.fontFamily)
@@ -200,7 +205,10 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       if (matchesBinding(event, useShortcutsStore.getState().getEffectiveKeys('toggle-agent-chat'))) {
         if (event.type === 'keydown') {
           event.preventDefault()
-          if (!event.repeat) showChat(shellId)
+          if (!event.repeat) {
+            if (useAgentChatStore.getState().chats.has(shellId)) showTerminal()
+            else showChat(shellId)
+          }
         }
         return false
       }
@@ -319,6 +327,11 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     window.setTimeout(() => terminalRef.current?.focus(), 0)
   }
 
+  useLayoutEffect(() => {
+    const pane = paneRef.current
+    if (pane && isChat && !inlineQuestion && hostRef.current?.contains(document.activeElement)) focusPaneInput(pane)
+  }, [inlineQuestion, isChat])
+
   const onContextMenu = (event: MouseEvent): void => {
     event.preventDefault()
     setMenu({ x: event.clientX, y: event.clientY })
@@ -404,8 +417,15 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       // the sleep cover and the return bar are drawn here and must follow the same palette
       style={chatTheme ? { ...chatTheme.style, ...style, '--chat-pane-accent': chatTheme.accent } as CSSProperties : style}
     >
-      <div className="local-terminal-stage">
-        <div ref={hostRef} className="local-terminal-host" inert={isChat} onContextMenu={onContextMenu} />
+      <div className="local-terminal-stage" data-chat-question={inlineQuestion || undefined}>
+        <div
+          ref={hostRef}
+          className="local-terminal-host"
+          inert={isChat && !inlineQuestion}
+          role={inlineQuestion ? 'region' : undefined}
+          aria-label={inlineQuestion ? 'Claude 질문 응답' : undefined}
+          onContextMenu={onContextMenu}
+        />
         {showHistory && !exit && !isChat && !chatAgent && (
           <CommandHistoryPanel
             sessionId={shellId}
@@ -430,6 +450,10 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
             tabId={tabId}
             getSplitMenu={getSplitMenu}
             onShowTerminal={showTerminal}
+            onFocusQuestion={() => {
+              terminalRef.current?.scrollToBottom()
+              terminalRef.current?.focus()
+            }}
           />
         )}
         {!isChat && <AgentScreenReturnBar shellId={shellId} />}

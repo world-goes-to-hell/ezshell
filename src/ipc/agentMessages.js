@@ -12,6 +12,7 @@ const USER = 'user'
 const { sanitizeUsage, sameUsage } = require('./agentUsage.js')
 
 function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bindLocalAgent, bridgeFile, platform = process.platform }) {
+  const instanceBridgeFile = bridgeFile ? `${bridgeFile}.${process.pid}` : null
   const agents = new Map()
   const tokens = new Map()
   const mcpReady = new Map()
@@ -354,6 +355,9 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     for (const socket of sockets) socket.destroy()
     server?.close()
     server = undefined
+    if (instanceBridgeFile) {
+      try { fs.unlinkSync(instanceBridgeFile) } catch {}
+    }
     if (directory) {
       try { fs.unlinkSync(path.join(directory, platform === 'win32' ? 'ezshell.cmd' : 'ezshell')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'agent-mcp.json')) } catch {}
@@ -406,12 +410,16 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     await ready()
     const fields = [process.execPath, path.join(__dirname, 'agentMessageMcp.js'), pipe, bridgeToken]
     if (fields.some(field => /[\r\n]/.test(field))) throw new Error('메시지 MCP 파일 경로에 줄바꿈이 있습니다.')
-    const temporary = bridgeFile + '.' + randomUUID()
-    try {
-      fs.writeFileSync(temporary, fields.join('\n') + '\n', { mode: 0o600, flag: 'wx' })
-      fs.renameSync(temporary, bridgeFile)
-    } finally {
-      try { fs.unlinkSync(temporary) } catch {}
+    const record = fields.join('\n') + '\n'
+    // A CLI launched inside ezShell uses its own app's bridge, even if another window starts later.
+    for (const file of [instanceBridgeFile, bridgeFile]) {
+      const temporary = file + '.' + randomUUID()
+      try {
+        fs.writeFileSync(temporary, record, { mode: 0o600, flag: 'wx' })
+        fs.renameSync(temporary, file)
+      } finally {
+        try { fs.unlinkSync(temporary) } catch {}
+      }
     }
   }
 
