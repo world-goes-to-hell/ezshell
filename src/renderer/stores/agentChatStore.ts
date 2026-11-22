@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { AgentChatApproval, AgentChatFrame, AgentChatItem, AgentChatState, AgentChatSubagent, CodexSpeedState } from '../types'
-import { MAX_CHAT_ITEMS, echoItemIds, echoOutputId, reconcileChatEchoes, type ChatEcho } from '../lib/agentChatItems'
+import { MAX_CHAT_ITEMS, echoItemIds, echoOutputId, nextHeld, reconcileChatEchoes, sentImageKey, type ChatEcho, type SentChatImages } from '../lib/agentChatItems'
 import { toast } from './toastStore'
 
 // Which local shells are shown as a chat (components/AgentChat) and what each chat shows. Keyed by the
@@ -15,6 +15,9 @@ export interface AgentChat {
   items: AgentChatItem[]
   subagents: AgentChatSubagent[]
   echoes: ChatEcho[]
+  sentImages: ReadonlyMap<string, SentChatImages>
+  /** Transcript ids of messages sent while the agent was busy, recorded but not yet read by the model */
+  held: string[]
   reply: { sendId: string; itemId: string } | null
   hasOlder: boolean
   loadingOlder: boolean
@@ -30,7 +33,8 @@ interface AgentChatStoreState {
   hide: (shellId: string) => void
   toggle: (shellId: string) => void
   loadOlder: (shellId: string) => void
-  echoSend: (shellId: string, text: string, hasImage: boolean) => string
+  /** `queued`: the agent is busy, so the CLI holds the message until it can read it */
+  echoSend: (shellId: string, text: string, previews: readonly Blob[], queued?: boolean) => string
   discardSend: (shellId: string, sendId: string) => void
   stopWaiting: (shellId: string, sendId: string) => void
   /**
@@ -43,7 +47,8 @@ interface AgentChatStoreState {
   clearAll: () => void
 }
 
-const empty = (): AgentChat => ({ scope: null, state: 'opening', kind: null, title: null, items: [], subagents: [], echoes: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null })
+const EMPTY_IMAGES: AgentChat['sentImages'] = new Map()
+const empty = (): AgentChat => ({ scope: null, state: 'opening', kind: null, title: null, items: [], subagents: [], echoes: [], sentImages: EMPTY_IMAGES, held: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null })
 
 let stopFrames: (() => void) | null = null
 
@@ -53,26 +58,85 @@ let stopFrames: (() => void) | null = null
  * look at the terminal and back dropped the line the user had just sent (2026-11-20 user report).
  */
 const KEPT_ECHO_MS = 30 * 60_000
-const keptEchoes = new Map<string, { echoes: ChatEcho[]; items: AgentChatItem[]; reply: AgentChat['reply']; at: number }>()
+const CHAT_IMAGE_BYTES = 4 * 1024 * 1024
+const HIDDEN_CHAT_IMAGE_BYTES = 16 * 1024 * 1024
+type RetainedChat = Pick<AgentChat, 'echoes' | 'sentImages' | 'held' | 'items' | 'reply'>
+const keptEchoes = new Map<string, RetainedChat & { at: number }>()
+
+function imageBytes(images: AgentChat['sentImages']): number {
+  return Array.from(images.values()).reduce((total, entry) => total + entry.bytes, 0)
+}
+
+function addSentImages(images: AgentChat['sentImages'], item: AgentChatItem, text: string, previews: readonly Blob[]) {
+  if (!previews.length) return images
+  const next = new Map(images)
+  next.set(sentImageKey(item), { text, previews, bytes: previews.reduce((total, preview) => total + preview.size, 0) })
+  let bytes = imageBytes(next)
+  for (const [key, entry] of next) {
+    if (bytes <= CHAT_IMAGE_BYTES) break
+    next.delete(key)
+    bytes -= entry.bytes
+  }
+  return next
+}
+
+function reconcileSentImages(chat: AgentChat, recorded: ReadonlyMap<string, AgentChatItem>) {
+  let next: Map<string, SentChatImages> | undefined
+  for (const echo of chat.echoes) {
+    const item = recorded.get(echo.id)
+    if (!item) continue
+    const key = sentImageKey(echo)
+    const images = chat.sentImages.get(key)
+    if (!images) continue
+    next ??= new Map(chat.sentImages)
+    next.delete(key)
+    next.set(sentImageKey(item), images)
+  }
+  return next ?? chat.sentImages
+}
 
 function keepEchoes(shellId: string, chat: AgentChat) {
   const ids = echoItemIds(chat.echoes)
   const items = chat.items.filter(item => ids.has(item.id))
-  if (!items.length) {
-    keptEchoes.delete(shellId)
+  keptEchoes.delete(shellId)
+  if (!items.length && !chat.held.length && !chat.sentImages.size) {
     return
   }
   // "답변 생성 중" goes with the line it waits on (the view clears it when the agent is idle again)
   const reply = chat.reply && ids.has(chat.reply.sendId) ? chat.reply : null
-  keptEchoes.set(shellId, { echoes: chat.echoes.filter(echo => items.some(item => item.id === echo.id)), items, reply, at: Date.now() })
+  // A recorded message still unread keeps its mark: the transcript is read again on return, ids and all
+  const at = Date.now()
+  keptEchoes.set(shellId, { echoes: chat.echoes.filter(echo => items.some(item => item.id === echo.id)), sentImages: chat.sentImages, held: chat.held, items, reply, at })
+  let bytes = 0
+  for (const [id, kept] of [...keptEchoes].reverse()) {
+    if (at - kept.at >= KEPT_ECHO_MS) {
+      keptEchoes.delete(id)
+      continue
+    }
+    const size = imageBytes(kept.sentImages)
+    if (bytes + size > HIDDEN_CHAT_IMAGE_BYTES) kept.sentImages = EMPTY_IMAGES
+    else bytes += size
+  }
 }
 
-function takeEchoes(shellId: string): Pick<AgentChat, 'echoes' | 'items' | 'reply'> {
+function takeEchoes(shellId: string): RetainedChat {
   const kept = keptEchoes.get(shellId)
   keptEchoes.delete(shellId)
   return kept && Date.now() - kept.at < KEPT_ECHO_MS
-    ? { echoes: kept.echoes, items: kept.items, reply: kept.reply }
-    : { echoes: [], items: [], reply: null }
+    ? { echoes: kept.echoes, sentImages: kept.sentImages, held: kept.held, items: kept.items, reply: kept.reply }
+    : { echoes: [], sentImages: EMPTY_IMAGES, held: [], items: [], reply: null }
+}
+
+function discardEcho(chat: RetainedChat, sendId: string) {
+  const echo = chat.echoes.find(echo => echo.id === sendId)
+  const sentImages = new Map(chat.sentImages)
+  if (echo) sentImages.delete(sentImageKey(echo))
+  return {
+    items: chat.items.filter(item => item.id !== sendId),
+    echoes: chat.echoes.filter(echo => echo.id !== sendId),
+    sentImages,
+    reply: chat.reply?.sendId === sendId ? null : chat.reply
+  }
 }
 
 export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
@@ -123,7 +187,7 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
         update(shellId, current => ({ ...current, loadingOlder: false }))
       })
     },
-    echoSend(shellId, text, hasImage) {
+    echoSend(shellId, text, previews, queued = false) {
       const id = `outgoing:${crypto.randomUUID()}`
       const time = Date.now()
       const item: AgentChatItem = { id, kind: 'user', time, text: text || '스크린샷 첨부' }
@@ -132,19 +196,17 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
         const droppedId = chat.items.length >= MAX_CHAT_ITEMS ? chat.items[0].id : null
         return {
           ...chat, items,
-          echoes: [...chat.echoes.filter(echo => echo.id !== droppedId), { id, text, hasImage, time }],
+          sentImages: addSentImages(chat.sentImages, item, text, previews),
+          echoes: [...chat.echoes.filter(echo => echo.id !== droppedId), { id, text, hasImage: previews.length > 0, time, ...(queued ? { queued } : {}) }],
           reply: { sendId: id, itemId: id }
         }
       })
       return id
     },
     discardSend(shellId, sendId) {
-      update(shellId, chat => ({
-        ...chat,
-        items: chat.items.filter(item => item.id !== sendId),
-        echoes: chat.echoes.filter(echo => echo.id !== sendId),
-        reply: chat.reply?.sendId === sendId ? null : chat.reply
-      }))
+      const kept = keptEchoes.get(shellId)
+      if (kept) keptEchoes.set(shellId, { ...kept, ...discardEcho(kept, sendId) })
+      update(shellId, chat => ({ ...chat, ...discardEcho(chat, sendId) }))
     },
     stopWaiting(shellId, sendId) {
       update(shellId, chat => chat.reply?.sendId === sendId ? { ...chat, reply: null } : chat)
@@ -188,8 +250,11 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
           kind: frame.kind ?? chat.kind,
           title: frame.title !== undefined ? frame.title : chat.title,
           items: messages?.items ?? chat.items,
+          sentImages: messages ? reconcileSentImages(chat, messages.recorded) : chat.sentImages,
           subagents: frame.subagents ?? (frame.reset ? [] : chat.subagents),
           echoes: messages?.echoes ?? chat.echoes,
+          // Only Codex records a message before reading it; Claude writes it as it reads it
+          held: messages ? nextHeld(chat.held, (frame.kind ?? chat.kind) === 'codex' ? messages.recorded : new Map(), chat.echoes, messages.items) : chat.held,
           reply,
           hasOlder: frame.hasOlder ?? chat.hasOlder,
           approval: frame.approval !== undefined ? frame.approval : chat.approval,

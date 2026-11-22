@@ -10,18 +10,33 @@ type ChatColors = Pick<ThemeColors, 'bgPrimary' | 'bgSecondary' | 'bgTertiary' |
   | 'textPrimary' | 'textSecondary' | 'textMuted' | 'textLink'
   | 'accent' | 'success' | 'warning' | 'error' | 'border' | 'borderStrong' | 'shadowColor'>
 
+/**
+ * Colors for what moves or marks state over the chat pane, picked per theme against its canvas:
+ * focus (pane border, input, focus-visible) and trace (the light circling a working pane) need 3:1,
+ * working (spinner, "작업 중" label) sits beside text so it needs 4.5:1. The trace runs just inside the
+ * focus border, so it takes a different hue.
+ */
+interface ChatMotion {
+  focus: string
+  trace: string
+  working: string
+}
+
 interface ChatPreset {
   id: string
   name: string
   canvas: string
   outgoing: string
   send: string
+  motion: ChatMotion
   colors: ChatColors
 }
 
 export const CHAT_PRESETS: readonly ChatPreset[] = [
   {
     id: 'chat-kakao', name: '카톡 모드', canvas: '#dce8f4', outgoing: '#ffdf62', send: '#f4cf43',
+    // Kakao yellow is 1.2:1 on the sky canvas, so the trace takes a deep gold and focus a blue
+    motion: { focus: '#2f68b0', trace: '#a86f00', working: '#2f68b0' },
     colors: {
       bgPrimary: '#f5f8fc', bgSecondary: '#ffffff', bgTertiary: '#eaf0f7', bgHover: '#e8eff9',
       textPrimary: '#232d3e', textSecondary: '#46536a', textMuted: '#516179', textLink: '#245b9e',
@@ -31,6 +46,7 @@ export const CHAT_PRESETS: readonly ChatPreset[] = [
   },
   {
     id: 'chat-midnight', name: '미드나잇', canvas: '#131625', outgoing: '#34335b', send: '#c0b3ff',
+    motion: { focus: '#c0b3ff', trace: '#8fd3ff', working: '#c0b3ff' },
     colors: {
       bgPrimary: '#171a2b', bgSecondary: '#202339', bgTertiary: '#282d47', bgHover: '#2b304c',
       textPrimary: '#f0edff', textSecondary: '#c1bfd9', textMuted: '#aaa9c5', textLink: '#a6ccff',
@@ -40,6 +56,7 @@ export const CHAT_PRESETS: readonly ChatPreset[] = [
   },
   {
     id: 'chat-paper', name: '종이 노트', canvas: '#f3ecdb', outgoing: '#dce9d7', send: '#365c47',
+    motion: { focus: '#365c47', trace: '#b0662a', working: '#365c47' },
     colors: {
       bgPrimary: '#fffcf3', bgSecondary: '#fffaf0', bgTertiary: '#ece5d2', bgHover: '#eee7d7',
       textPrimary: '#28392e', textSecondary: '#47564b', textMuted: '#526155', textLink: '#2b5b60',
@@ -69,6 +86,7 @@ export function chatAppearance(id: string, customThemes: readonly ThemeDefinitio
   if (!colors) return undefined
   const canvas = preset?.canvas ?? colors.bgPrimary
   const send = preset?.send ?? colors.accent
+  const motion = preset?.motion ?? { focus: colors.accent, trace: colors.accent, working: colors.accent }
   return {
     accent: colors.accent,
     bubbles: Boolean(preset),
@@ -85,6 +103,14 @@ export function chatAppearance(id: string, customThemes: readonly ThemeDefinitio
       '--text-link': colors.textLink,
       '--accent': colors.accent,
       '--accent-muted': 'color-mix(in srgb, var(--accent) 15%, transparent)',
+      '--on-accent': readableTextColor(colors.accent),
+      // The pane's border and trace (LocalTerminalTab.css, agent-work-trace.css) read these, so they
+      // follow the chat theme instead of the window theme set on the root
+      '--chat-focus': motion.focus,
+      '--chat-working': motion.working,
+      '--motion-accent': motion.trace,
+      '--chat-trace': preset ? motion.trace : undefined,
+      '--terminal-foreground': preset ? colors.textPrimary : theme?.terminal.foreground,
       '--success': colors.success,
       '--warning': colors.warning,
       '--error': colors.error,

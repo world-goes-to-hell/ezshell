@@ -1,6 +1,7 @@
 // IPC of the server file windows (edit / preview). Every request names its document and is answered
 // only for the window that document was opened in (documents.js checks the sender's id).
 // Loaded by main.js at runtime (copied to out/main/src), so keep it CommonJS and free of Electron imports.
+const { stat } = require('node:fs/promises')
 const { userMessage, DocumentError } = require('./documents.js')
 
 const LOCKED_MESSAGE = '앱이 잠겨 있습니다.'
@@ -10,7 +11,7 @@ const LOCKED_MESSAGE = '앱이 잠겨 있습니다.'
  * on this PC (made first when missing). `isLocked()` is true while the app is locked: logs are not
  * followed then. Returns `closeViewWindows()`, which main calls when the app locks.
  */
-function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLocked = () => false, fromMainWindow = () => false, isKnownContainer = () => false, resolveLocal = null }) {
+function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLocked = () => false, fromMainWindow = () => false, isKnownContainer = () => false, resolveLocal = null, revealLocal = null }) {
   const fileWindows = new Map()
   const dirty = new Set()
   const moving = new Set()
@@ -193,15 +194,33 @@ function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLock
 
   // A file on this PC from the workspace panel. Only the main window may ask; main checks the folder
   // (an open local shell's folder or its repository) and that the path stays inside it (localFiles/roots.js).
+  async function resolveWorkspaceFile(event, root, relative) {
+    if (!fromMainWindow(event) || !resolveLocal) throw new DocumentError('본창에서만 열 수 있습니다.')
+    refuseWhileLocked()
+    const found = await resolveLocal(root, relative)
+    refuseWhileLocked()
+    return found
+  }
+
   ipcMain.handle('local-file-open', async (event, request) => {
     try {
       const { root, path: relative, mode, label, compareHead } = request || {}
-      if (!fromMainWindow(event) || !resolveLocal) throw new DocumentError('본창에서만 열 수 있습니다.')
-      refuseWhileLocked()
-      const found = await resolveLocal(root, relative)
-      refuseWhileLocked()
+      const found = await resolveWorkspaceFile(event, root, relative)
       const registered = docs.registerLocal({ root: found.root, path: found.path, label, mode, compareHead: compareHead === true })
       openWindowFor(registered, compareHead === true ? { compareHead: true } : undefined)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: userMessage(err) }
+    }
+  })
+
+  ipcMain.handle('local-file-reveal', async (event, request) => {
+    try {
+      const { root, path: relative } = request || {}
+      const found = await resolveWorkspaceFile(event, root, relative)
+      if (!revealLocal || !(await stat(found.path)).isFile()) throw new DocumentError('파일을 찾을 수 없습니다.')
+      refuseWhileLocked()
+      revealLocal(found.path)
       return { success: true }
     } catch (err) {
       return { success: false, error: userMessage(err) }

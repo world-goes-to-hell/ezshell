@@ -1,10 +1,11 @@
 // The parts of the workspace panel that open things (docs/plan/2026-11-19-workspace-files-and-git-details.md):
 // the folder tree that expands in place and opens files in the file window, and the diff of one file.
-import { useEffect, useState, type CSSProperties } from 'react'
-import { RiArrowDownSLine, RiArrowRightSLine, RiFileLine, RiFolderLine, RiFolderOpenLine, RiLinksLine } from 'react-icons/ri'
+import { useEffect, useState, type CSSProperties, type MouseEvent } from 'react'
+import { RiArrowDownSLine, RiArrowRightSLine, RiFileLine, RiFileTextLine, RiFolderLine, RiFolderOpenLine, RiLinksLine } from 'react-icons/ri'
 import type { WorkspaceDirectoryEntry, WorkspaceDirectorySearchResult, WorkspaceGitDiff } from '../../types'
 import { toast } from '../../stores/toastStore'
 import { isMediaFile, joinRelative, diffLineKind, splitPath } from '../../lib/workspaceDetails'
+import { TerminalContextMenu } from '../Terminal/TerminalContextMenu'
 import './WorkspaceDetails.css'
 
 const fileIcons = { directory: RiFolderLine, file: RiFileLine, link: RiLinksLine }
@@ -16,8 +17,39 @@ export async function openWorkspaceFile(root: string, relative: string, label: s
     toast.error('파일을 열지 못했습니다', '앱을 다시 시작한 뒤에 사용할 수 있습니다.')
     return
   }
-  const result = await open(root, relative, isMediaFile(relative) ? 'preview' : 'edit', label, options)
-  if (!result.success) toast.error('파일을 열지 못했습니다', result.error)
+  try {
+    const result = await open(root, relative, isMediaFile(relative) ? 'preview' : 'edit', label, options)
+    if (!result.success) toast.error('파일을 열지 못했습니다', result.error)
+  } catch {
+    toast.error('파일을 열지 못했습니다')
+  }
+}
+
+export function useWorkspaceFileMenu(root: string, relative: string, openFile: () => void) {
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(null)
+  const reveal = window.electronAPI.localFileReveal
+  const revealFile = async () => {
+    if (!reveal) return
+    try {
+      const result = await reveal(root, relative)
+      if (!result.success) toast.error('파일 탐색기로 열지 못했습니다', result.error)
+    } catch {
+      toast.error('파일 탐색기로 열지 못했습니다')
+    }
+  }
+  const openMenu = (event: MouseEvent<HTMLElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const bounds = event.clientX === 0 && event.clientY === 0 ? event.currentTarget.getBoundingClientRect() : null
+    setPosition({ x: bounds?.left ?? event.clientX, y: bounds?.bottom ?? event.clientY })
+  }
+  const menu = position && (
+    <TerminalContextMenu key={`${position.x}:${position.y}`} position={position} groups={[]} onClose={() => setPosition(null)} top={[
+      { label: '파일 탐색기로 열기', icon: RiFolderOpenLine, disabled: !reveal, onSelect: () => void revealFile() },
+      { label: 'ezShell로 열기', icon: RiFileTextLine, onSelect: openFile }
+    ]} />
+  )
+  return { openMenu, menu }
 }
 
 type Listing = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; entries: WorkspaceDirectoryEntry[]; total: number }
@@ -39,6 +71,8 @@ function TreeEntry({ root, relative, entry, depth, label, showPath = false }: { 
   const [isOpen, setIsOpen] = useState(false)
   const parent = showPath ? splitPath(relative).folder : ''
   const isFolder = entry.kind === 'directory'
+  const openFile = () => void openWorkspaceFile(root, relative, label)
+  const { openMenu, menu } = useWorkspaceFileMenu(root, relative, openFile)
   const Icon = isFolder && isOpen ? RiFolderOpenLine : fileIcons[entry.kind]
   const Chevron = isOpen ? RiArrowDownSLine : RiArrowRightSLine
   return (
@@ -48,7 +82,8 @@ function TreeEntry({ root, relative, entry, depth, label, showPath = false }: { 
         className="workspace-tree-row"
         title={showPath ? relative : isFolder ? entry.name : `${entry.name} 열기`}
         aria-expanded={isFolder ? isOpen : undefined}
-        onClick={() => (isFolder ? setIsOpen(open => !open) : void openWorkspaceFile(root, relative, label))}
+        onClick={() => (isFolder ? setIsOpen(open => !open) : openFile())}
+        onContextMenu={isFolder ? undefined : openMenu}
       >
         {isFolder ? <Chevron size={14} className="workspace-tree-chevron" aria-hidden="true" /> : <span className="workspace-tree-chevron" aria-hidden="true" />}
         <Icon size={15} className="workspace-tree-icon" aria-hidden="true" />
@@ -59,6 +94,7 @@ function TreeEntry({ root, relative, entry, depth, label, showPath = false }: { 
           </span>
         ) : <span className="workspace-tree-name" dir="auto">{entry.name}</span>}
       </button>
+      {menu}
       {isFolder && isOpen && <TreeLevel root={root} relative={relative} depth={depth + 1} label={label} />}
     </li>
   )

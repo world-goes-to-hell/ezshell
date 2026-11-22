@@ -150,6 +150,14 @@ const SESSION = 'e2e-project-server'
     ${sourceSession}?.getAttribute('aria-selected') === 'false' &&
     !${sourceSession}.querySelector('.session-tab-badge--connected')
   `))
+  // 2026-11-22 user report: opening the work's server moved its lone terminal under the worktree as "터미널 1"
+  check('the lone local terminal stays the worktree row beside the work\'s SSH tab', await until(`
+    ${otherRow}?.dataset.localSessionId === ${JSON.stringify(localTab)} &&
+    !${otherRow}.querySelector(${JSON.stringify(`.local-terms-list [data-local-session-id="${localTab}"]`)}) &&
+    !${otherRow}.textContent.includes('터미널 1') &&
+    !!${otherRow}.querySelector(${JSON.stringify(`.local-terms-list [data-work-tab-id="${pickedTab}"]`)})
+  `), await js(`${otherRow}?.outerHTML.slice(0, 600) ?? 'no row'`))
+  await shot('ssh-project-servers-2-terminal-and-server')
   check('the local server assignment is saved under the work that opened it', await js(`
     Object.values(JSON.parse(localStorage.getItem('ezshell.localProjectServers') ?? '{}')).filter(ids => ids.includes(${JSON.stringify(SESSION)})).length === 2
   `))

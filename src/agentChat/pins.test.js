@@ -13,14 +13,16 @@ function fakeWindow() {
   win.destroyed = false
   win.isDestroyed = () => win.destroyed
   win.isMinimized = () => false
+  win.isMaximized = () => false
   win.restore = () => {}
   win.show = () => {}
   win.focus = () => { win.focused = (win.focused ?? 0) + 1 }
   win.close = () => { win.destroyed = true; win.emit('closed') }
-  win.getSize = () => win.size
+  win.getNormalBounds = () => ({ width: win.size[0], height: win.size[1] })
   win.setSize = (width, height) => { win.size = [width, height] }
   win.setMinimumSize = () => {}
   win.setResizable = value => { win.resizable = value }
+  win.setMaximizable = () => {}
   return win
 }
 
@@ -41,7 +43,7 @@ describe('pinned replies', () => {
     const { pins, windows } = setup()
     expect(pins.pin(answer)).toEqual({ ok: true, id: 'pin-1' })
     const pin = pins.ofSender(windows[0].webContents)
-    expect(pins.view(pin)).toEqual({ text: answer.text, kind: 'claude', title: '정렬 순서', time: 5, pinnedAt: 1000, folded: false })
+    expect(pins.view(pin)).toEqual({ text: answer.text, kind: 'claude', title: '정렬 순서', time: 5, pinnedAt: 1000, folded: false, maximized: false })
     expect(pins.ofSender({})).toBeNull()
   })
 

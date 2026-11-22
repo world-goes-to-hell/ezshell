@@ -459,6 +459,35 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         chat.timer.unref?.()
       })
     },
+    /**
+     * Esc while a chat line waited: the CLI puts the queued line(s) back into its composer. Clears the
+     * composer only when it holds exactly those lines (whitespace aside: the CLI joins several its own
+     * way), so a draft the user typed in the terminal is never touched. Resolves { ok } or { ok, reason }.
+     */
+    takeBack(texts) {
+      return new Promise(resolve => {
+        if (stopped || chat || stage || held || composing) return resolve({ ok: false, reason: 'busy' })
+        const joined = texts.join('\n')
+        const length = joined.length + (joined.match(/[^\x00-\x7f]/g)?.length ?? 0)
+        const input = composer(length, texts.reduce((count, text) => count + text.split('\n').length, 0))
+        if (!input || input.atStart) return resolve({ ok: false, reason: 'empty' })
+        if (!input.endsAtCursor || input.text !== compact(joined)) return resolve({ ok: false, reason: 'different' })
+        // One key per character from the end; extra keys on an empty composer do nothing
+        if (!rawWrite('\x7f'.repeat(Array.from(joined).length + texts.length), false)) return resolve({ ok: false, reason: 'write-failed' })
+        const expires = Date.now() + INPUT_TIMEOUT
+        const check = () => {
+          if (stopped) return resolve({ ok: false, reason: 'not-agent' })
+          if (composer()?.atStart) {
+            userDraft = false
+            schedule()
+            return resolve({ ok: true })
+          }
+          if (Date.now() >= expires) return resolve({ ok: false, reason: 'not-cleared' })
+          setTimeout(check, DRAW_SETTLE * 3).unref?.()
+        }
+        setTimeout(check, DRAW_SETTLE).unref?.()
+      })
+    },
     userInput,
     deferProbeInput(data) {
       if (!chat?.probe) return false

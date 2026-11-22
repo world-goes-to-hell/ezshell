@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentChatItem } from '../types'
-import { MAX_CHAT_ITEMS, diffLineKind, echoOutputId, mergeChatItems, readSubagentActivity, reconcileChatEchoes, shellAgentOf, subagentDisplayText } from './agentChatItems'
+import { MAX_CHAT_ITEMS, diffLineKind, echoOutputId, mergeChatItems, readSubagentActivity, reconcileChatEchoes, shellAgentOf, subagentDisplayText, nextHeld, visibleSendTime, waitingItemIds } from './agentChatItems'
 
 const item = (id: string, text = id): AgentChatItem => ({ id, kind: 'assistant', time: null, text })
 const ids = (items: AgentChatItem[]) => items.map(entry => entry.id)
@@ -62,8 +62,16 @@ describe('reconciling messages sent in the chat', () => {
     const logged = user('latest', 10100)
     const confirmed = reconcileChatEchoes(initial.items, [logged], 'append', initial.echoes)
     expect(ids(confirmed.items)).toEqual(['old', logged.id])
-    expect(confirmed.recorded.get(echo.id)).toBe(logged)
+    expect(confirmed.recorded.get(echo.id)).toEqual({ ...logged, sentAt: echo.time })
     expect(confirmed.echoes).toEqual([])
+  })
+
+  it('keeps the original send time when a queued message is recorded in a later minute and its usage is updated', () => {
+    const echo = { id: 'outgoing:queued', text: '안녕', time: 59_000, hasImage: false, queued: true }
+    const logged = user('queued', 61_000)
+    const result = reconcileChatEchoes([user(echo.id, echo.time)], [logged], 'append', [echo])
+    expect(result.items).toEqual([{ ...logged, sentAt: echo.time }])
+    expect(mergeChatItems(result.items, [logged], 'append')).toEqual(result.items)
   })
 
   it('matches repeated messages separately and preserves the transcript turn order', () => {
@@ -138,6 +146,16 @@ describe('reconciling messages sent in the chat', () => {
 })
 
 describe('chat helpers', () => {
+  it('shows a timestamp on the last consecutive outgoing message sent in the same minute', () => {
+    const sent: AgentChatItem = { id: 'u1', kind: 'user', time: 120_000, sentAt: 65_000 }
+    const next = { ...sent, id: 'u2', sentAt: 75_000 }
+    expect(visibleSendTime(sent, next)).toBeNull()
+    expect(visibleSendTime(next)).toBe(75_000)
+    expect(visibleSendTime(sent, { ...next, sentAt: 125_000 })).toBe(65_000)
+    expect(visibleSendTime(sent, { ...item('a'), time: 75_000 })).toBe(65_000)
+    expect(visibleSendTime({ ...sent, sentAt: undefined, time: null })).toBeNull()
+  })
+
   it('tells diff lines apart', () => {
     expect(['@@ -1 +1 @@', '*** 수정: a', '+x', '-y', ' z'].map(diffLineKind)).toEqual(['hunk', 'hunk', 'add', 'remove', 'context'])
   })
@@ -151,5 +169,40 @@ describe('chat helpers', () => {
     ]
     expect(shellAgentOf(agents, 'local:1')?.id).toBe('c')
     expect(shellAgentOf(agents, 'local:3')).toBeUndefined()
+  })
+})
+
+describe('messages waiting for a busy agent', () => {
+  const user = (id: string, text = id): AgentChatItem => ({ id, kind: 'user', time: 1, text })
+  const echoes = [
+    { id: 'outgoing:a', text: '먼저 보낸 말', time: 1, hasImage: false },
+    { id: 'outgoing:b', text: '작업 중에 보낸 말', time: 2, hasImage: false, queued: true }
+  ]
+
+  it('marks only what was sent while the agent was busy, while it is still busy', () => {
+    expect([...waitingItemIds([], echoes, [], 'working')]).toEqual(['outgoing:b'])
+    expect([...waitingItemIds([], echoes, [], 'blocked')]).toEqual(['outgoing:b'])
+  })
+
+  it('drops the mark once the agent is idle or gone, even if the transcript never matched', () => {
+    expect(waitingItemIds([], echoes, [], 'idle').size).toBe(0)
+    expect(waitingItemIds([], echoes, [], 'ended').size).toBe(0)
+  })
+
+  // Codex writes the message as soon as it takes it, with its command still running
+  it('keeps a recorded message waiting until the model makes something after it', () => {
+    const recorded = user('UserMessage:1', '작업 중에 보낸 말')
+    const before = [user('UserMessage:0'), item('a0'), recorded]
+    expect([...waitingItemIds(before, [], ['UserMessage:1'], 'working')]).toEqual(['UserMessage:1'])
+    expect(waitingItemIds([...before, item('a1')], [], ['UserMessage:1'], 'working').size).toBe(0)
+  })
+
+  it('holds the transcript id of a queued echo it matched and lets read ones go', () => {
+    const recorded = user('UserMessage:1', '작업 중에 보낸 말')
+    const matched = new Map([['outgoing:b', recorded], ['outgoing:a', user('UserMessage:0')]])
+    const items = [user('UserMessage:0'), recorded]
+    expect(nextHeld([], matched, echoes, items)).toEqual(['UserMessage:1'])
+    expect(nextHeld(['UserMessage:1'], new Map(), [], [...items, item('a1')])).toEqual([])
+    expect(nextHeld(['gone'], new Map(), [], items)).toEqual([])
   })
 })

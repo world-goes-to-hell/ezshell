@@ -16,6 +16,15 @@ describe('links in an agent\'s answer', () => {
     }
   })
 
+  it('reads a slash-prefixed Windows drive path and authorizes the same file under either spelling', () => {
+    const href = '/D:/proj/my%20file.sql:42:5'
+    const native = 'D:/proj/my%20file.sql:42:5'
+    expect(linkTarget(href, 'win32')).toEqual({ kind: 'path', path: 'D:\\proj\\my file.sql', key: 'd:\\proj\\my file.sql', line: 42 })
+    expect(linkKeysIn(`[SQL](${href}) [SQL](${native})`, 'win32')).toEqual(['d:\\proj\\my file.sql'])
+    expect(linkTarget('//D:/proj/my.sql', 'win32')).toBeNull()
+    expect(linkTarget('/D:/proj/my.sql', 'linux')?.path).toBe('/D:/proj/my.sql')
+  })
+
   it('takes the line off a link to a place in a file (Codex: path:187, GitHub style: #L12)', () => {
     expect(linkTarget('D:/proj/README.md:187', 'win32')).toEqual({ kind: 'path', path: 'D:\\proj\\README.md', key: 'd:\\proj\\readme.md', line: 187 })
     expect(linkTarget('D:/proj/app.ts:12:5', 'win32')).toMatchObject({ path: 'D:\\proj\\app.ts', line: 12 })

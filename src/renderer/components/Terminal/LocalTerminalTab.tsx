@@ -400,7 +400,9 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       data-local-tab-id={tabId}
       data-agent-work={agentWork}
       data-chat-mode={isChat || undefined}
-      style={chatTheme ? { ...style, '--chat-pane-accent': chatTheme.accent } as CSSProperties : style}
+      // The chat theme goes on the pane, not just the cover: its focus border, the working trace,
+      // the sleep cover and the return bar are drawn here and must follow the same palette
+      style={chatTheme ? { ...chatTheme.style, ...style, '--chat-pane-accent': chatTheme.accent } as CSSProperties : style}
     >
       <div className="local-terminal-stage">
         <div ref={hostRef} className="local-terminal-host" inert={isChat} onContextMenu={onContextMenu} />

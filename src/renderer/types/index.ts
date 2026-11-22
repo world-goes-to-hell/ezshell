@@ -423,6 +423,7 @@ export interface PinnedReply {
   time: number | null
   pinnedAt: number
   folded: boolean
+  maximized: boolean
 }
 
 /** An agent closed to save memory, resumed in its shell when woken (src/agentIdle.js) */
@@ -447,6 +448,8 @@ export interface AgentChatItem {
   /** output: what a slash command printed (Claude's transcript, or read off Codex's screen) */
   kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'notice' | 'output'
   time: number | null
+  /** When the user sent it from the chat, if the transcript recorded it later */
+  sentAt?: number
   text?: string
   hasImage?: boolean
   inboxNotice?: boolean
@@ -903,12 +906,14 @@ declare global {
       localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: LocalAgent; resume?: string; replacementFor?: string }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
       localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
       workspaceDirectoryList: (folder: string, relative?: string) => Promise<{ success: true; entries: WorkspaceDirectoryEntry[]; total: number } | { success: false; error: string }>
+      workspaceDirectoryPrepare?: (root: string, refresh?: boolean) => Promise<{ success: true } | { success: false; error: string }>
       workspaceDirectorySearch?: (root: string, query: string) => Promise<({ success: true } & WorkspaceDirectorySearchResult) | { success: false; error: string }>
       workspaceGitStatus?: (root: string) => Promise<{ success: true; repo: WorkspaceGitStatus | null } | { success: false; error: string }>
       workspaceGitCommitFiles?: (root: string, hash: string) => Promise<{ success: true; files: WorkspaceGitFile[] } | { success: false; error: string }>
       workspaceGitDiff?: (root: string, file: string, hash?: string) => Promise<({ success: true } & WorkspaceGitDiff) | { success: false; error: string }>
       /** A file on this PC in the file window; `relative` is relative to `root` */
       localFileOpen?: (root: string, relative: string, mode: 'edit' | 'preview', label?: string, options?: { compareHead?: boolean }) => Promise<{ success: true } | { success: false; error: string }>
+      localFileReveal?: (root: string, relative: string) => Promise<{ success: true } | { success: false; error: string }>
       workspaceGitLog: (folder: string) => Promise<{ success: true; repo: WorkspaceGitRepository } | { success: true; repo: null; reason: 'git-missing' | 'not-repo' } | { success: false; error: string }>
       workspaceGitSearch?: (root: string, query: string) => Promise<({ success: true } & WorkspaceGitSearchResult) | { success: false; error: string }>
       agentHistorySearch?: (shellId: string, query: string) => Promise<{ success: true; matches: { key: string; snippet: string }[] } | { success: false; cancelled?: boolean; error: string }>
@@ -968,6 +973,8 @@ declare global {
       agentChatSend?: (shellId: string, text: string, imageIds?: string[]) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatToggleSpeed?: (shellId: string, speed: CodexSpeedMode) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatInterrupt?: (shellId: string) => Promise<boolean>
+      /** After Esc: clears the CLI composer if it holds exactly these queued chat lines */
+      agentChatTakeBack?: (shellId: string, texts: string[]) => Promise<{ ok: boolean; reason?: string }>
       agentChatAnswer?: (shellId: string, key: string, signature: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       /** After a slash command was sent: it ran (output: what Codex printed), asks a question, or opened a screen */
       agentChatCommandWatch?: (shellId: string) => Promise<{ ok: true; state: 'done' | 'approval' | 'screen' | 'gone'; output?: string } | { ok: false; error: string }>
@@ -988,6 +995,7 @@ declare global {
       pinnedReplyGet?: () => Promise<{ ok: true; pin: PinnedReply } | { ok: false; error: string }>
       pinnedReplyOpenLink?: (href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab') => Promise<{ ok: true } | { ok: false; error: string }>
       pinnedReplyFold?: (folded: boolean) => void
+      onPinnedReplyMaximized?: (callback: (maximized: boolean) => void) => () => void
       pinnedReplyGo?: () => void
       onPinnedReplyGo?: (callback: (shellId: string) => void) => () => void
       oracleClientStatus?: () => Promise<OracleClientStatus | { success: false; error: string }>

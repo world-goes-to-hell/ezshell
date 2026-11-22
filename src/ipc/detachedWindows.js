@@ -42,7 +42,7 @@ function registerDetachedWindows(ctx) {
     options(place) {
       return { width: place.width, height: place.height, ...(place.x === undefined ? {} : { x: place.x, y: place.y }) };
     },
-    track(win, kind, place, fill) {
+    track(win, kind, place, fill, normalBounds = fill?.normalBounds) {
       if (!detachedWindows.has(kind)) detachedWindows.set(kind, new Set());
       detachedWindows.get(kind).add(win);
       win.on('closed', () => detachedWindows.get(kind).delete(win));
@@ -51,8 +51,8 @@ function registerDetachedWindows(ctx) {
         if (fill) fill.fill(win.getBounds());
         else win.maximize();
       }
-      detachedPlaces.trackWindow(win, detachedPlacesFile(), kind, fill
-        ? { normalBounds: fill.normalBounds, isMaximized: fill.isFilled }
+      detachedPlaces.trackWindow(win, detachedPlacesFile(), kind, normalBounds
+        ? { normalBounds, isMaximized: fill?.isFilled ?? (() => win.isMaximized()) }
         : undefined);
     }
   };
@@ -309,7 +309,6 @@ function registerDetachedWindows(ctx) {
       parent,
       skipTaskbar: true,
       minimizable: false,
-      maximizable: false,
       fullscreenable: false,
       backgroundColor: '#1e1e2e',
       webPreferences: {
@@ -320,14 +319,12 @@ function registerDetachedWindows(ctx) {
       }
     });
     const query = { pinnedReplyMode: 'true', pinId };
-    // A folded window (its header only, src/agentChat/pins.js) is remembered at its unfolded height
-    detachedWindowPlace.track(win, 'pinnedReply', place, {
-      fill: () => {},
-      isFilled: () => false,
-      normalBounds: () => {
-        const bounds = win.getNormalBounds();
-        return win.pinnedUnfoldedHeight ? { ...bounds, height: win.pinnedUnfoldedHeight } : bounds;
-      }
+    win.on('maximize', () => win.webContents.send('pinned-reply-maximized', true));
+    win.on('unmaximize', () => win.webContents.send('pinned-reply-maximized', false));
+    // A folded window (its header only, src/agentChat/pins.js) is remembered at its unfolded height.
+    detachedWindowPlace.track(win, 'pinnedReply', place, null, () => {
+      const bounds = win.getNormalBounds();
+      return win.pinnedUnfoldedHeight ? { ...bounds, height: win.pinnedUnfoldedHeight } : bounds;
     });
     // The page never navigates away (links go through main)
     win.webContents.on('will-navigate', (event) => event.preventDefault());

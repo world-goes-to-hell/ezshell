@@ -152,10 +152,14 @@ export function LocalProjectsTree({
                   const tabs = tabsOf(worktree.path)
                   const treeKey = worktreeFoldKey(worktree.path)
                   const isTreeOpen = !folded.has(treeKey)
-                  // A lone local terminal is the worktree's own row; any other tab is listed under it
-                  const singleTab = tabs.length === 1 && tabs[0].kind === 'local' ? tabs[0] : undefined
-                  const hasChildren = !singleTab && tabs.length > 0
-                  const worktreeWorking = hasChildren && !isTreeOpen && tabs.some(tab => tab.working)
+                  // A lone local terminal is the worktree's own row even beside the work's SSH, browser or DB
+                  // tabs, which are listed under it: opening a server of the work used to move the terminal
+                  // down and rename it "터미널 1" (2026-11-22 user report). Two or more terminals all go under it.
+                  const localTabs = tabs.filter(tab => tab.kind === 'local')
+                  const singleTab = localTabs.length === 1 ? localTabs[0] : undefined
+                  const childTabs = singleTab ? tabs.filter(tab => tab.kind !== 'local') : tabs
+                  const hasChildren = childTabs.length > 0
+                  const worktreeWorking = hasChildren && !isTreeOpen && childTabs.some(tab => tab.working)
                   const isCurrent = singleTab?.id === currentTabId
                   const name = folderLabel(worktree.path)
                   const shownNames = [name, project.name, worktree.branch && `${project.name} · ${worktree.branch}`]
@@ -191,9 +195,9 @@ export function LocalProjectsTree({
                             aria-expanded={isTreeOpen}
                             aria-description={worktreeWorking ? '작업 중인 에이전트 있음' : undefined}
                             onClick={() => onToggleFold(treeKey)}
-                            title={isTreeOpen ? '탭 목록 접기' : `탭 ${tabs.length}개 펼치기`}
+                            title={isTreeOpen ? '탭 목록 접기' : `탭 ${childTabs.length}개 펼치기`}
                           >
-                            {isTreeOpen ? <RiArrowDownSLine size={14} /> : <span className="local-worktree-count">{tabs.length}</span>}
+                            {isTreeOpen ? <RiArrowDownSLine size={14} /> : <span className="local-worktree-count">{childTabs.length}</span>}
                           </button>
                         )}
                       </div>
@@ -201,11 +205,11 @@ export function LocalProjectsTree({
                       {hasChildren && isTreeOpen && (
                         <div className="local-worktree-content">
                           <ul className="local-terms-list is-nested">
-                            {tabs.filter(tab => tab.kind === 'local').map((tab, index) => {
+                            {childTabs.filter(tab => tab.kind === 'local').map((tab, index) => {
                               const repeated = shownNames.includes(tab.name) || shownNames.includes(tab.name.replace(/ \(\d+\)$/, ''))
                               return renderTab(tab.id, repeated ? `터미널 ${index + 1}` : tab.name)
                             })}
-                            {tabs.filter(tab => tab.kind !== 'local').map(tab => renderTab(tab.id))}
+                            {childTabs.filter(tab => tab.kind !== 'local').map(tab => renderTab(tab.id))}
                           </ul>
                         </div>
                       )}

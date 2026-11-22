@@ -8,6 +8,9 @@
 // - otherwise the second Tab is kept from the program in front (the first one reached it already) and
 //   ezShell's window is brought forward (restored if minimized). Windows lets a process take the
 //   foreground only right after input of its own, hence the Alt tap before SetForegroundWindow.
+// It also tells where the program in front was: "double <x> <y>", the middle of that window in screen
+// pixels (read before ezShell comes forward), so the overview opens on the monitor the user is working on
+// (2026-11-22 user report: it opened on ezShell's monitor). Nothing else about that window.
 // Off while the app is locked (`off` on its input), and it ends when main goes (its input closes).
 // Windows only: elsewhere a global key watch needs a permission the user grants by hand.
 
@@ -15,6 +18,8 @@ const { spawn: spawnProcess } = require('child_process')
 
 const DOUBLE_TAB_MS = 320
 const MAX_RESTARTS = 3
+// "double", or "double <x> <y>": where the window in front was (screen pixels)
+const DOUBLE_LINE = /^double(?: (-?\d{1,6}) (-?\d{1,6}))?$/
 
 const HOOK_SOURCE = String.raw`
 using System;
@@ -24,6 +29,7 @@ using System.Threading;
 public static class EzShellDoubleTab {
   delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
   [StructLayout(LayoutKind.Sequential)] struct KeyInfo { public uint vk; public uint scan; public uint flags; public uint time; public IntPtr extra; }
+  [StructLayout(LayoutKind.Sequential)] struct Rect { public int left; public int top; public int right; public int bottom; }
   [StructLayout(LayoutKind.Sequential)] struct Msg { public IntPtr hwnd; public uint message; public IntPtr wParam; public IntPtr lParam; public uint time; public int x; public int y; }
   [DllImport("user32.dll", SetLastError = true)] static extern IntPtr SetWindowsHookEx(int id, HookProc proc, IntPtr module, uint thread);
   [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
@@ -35,6 +41,8 @@ public static class EzShellDoubleTab {
   [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hwnd);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
   [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd, int command);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
 
   static HookProc keep;
@@ -106,20 +114,30 @@ public static class EzShellDoubleTab {
     if (lastTab >= 0 && now - lastTab <= doubleMs) {
       lastTab = -1;
       swallowUp = true;
-      ThreadPool.QueueUserWorkItem(_ => BringForward());
+      IntPtr front = GetForegroundWindow();
+      ThreadPool.QueueUserWorkItem(_ => BringForward(front));
       return new IntPtr(1);
     }
     lastTab = now;
     return CallNextHookEx(hook, code, wParam, lParam);
   }
 
-  static void BringForward() {
-    if (dryRun) { Console.Out.WriteLine("double"); Console.Out.Flush(); return; }
+  // The middle of the window that was in front, in physical screen pixels (main turns them into its own)
+  static string Where(IntPtr front) {
+    try { SetThreadDpiAwarenessContext(new IntPtr(-4)); } catch (Exception) { }
+    Rect rect;
+    if (front == IntPtr.Zero || !GetWindowRect(front, out rect) || rect.right <= rect.left || rect.bottom <= rect.top) return "";
+    return " " + ((rect.left + rect.right) / 2) + " " + ((rect.top + rect.bottom) / 2);
+  }
+
+  static void BringForward(IntPtr front) {
+    string where = Where(front);
+    if (dryRun) { Console.Out.WriteLine("double" + where); Console.Out.Flush(); return; }
     if (IsIconic(appWindow)) ShowWindow(appWindow, 9);
     keybd_event(0x12, 0, 0, UIntPtr.Zero);
     keybd_event(0x12, 0, 2, UIntPtr.Zero);
     SetForegroundWindow(appWindow);
-    Console.Out.WriteLine("double");
+    Console.Out.WriteLine("double" + where);
     Console.Out.Flush();
   }
 }
@@ -143,7 +161,8 @@ function handleNumber(buffer) {
 
 /**
  * @param {object} deps
- * @param {() => void} deps.onDoubleTab two Tabs while another program was in front (ezShell is in front now)
+ * @param {(point: { x: number, y: number } | null) => void} deps.onDoubleTab two Tabs while another program
+ *   was in front (ezShell is in front now), with the middle of that program's window in screen pixels
  */
 function createGlobalDoubleTab({ onDoubleTab, platform = process.platform, spawn = spawnProcess, env = process.env }) {
   let child = null
@@ -171,8 +190,9 @@ function createGlobalDoubleTab({ onDoubleTab, platform = process.platform, spawn
         if (line === 'ready') {
           restarts = 0
           send(enabled ? 'on' : 'off')
-        } else if (line === 'double' && enabled) {
-          onDoubleTab()
+        } else if (enabled) {
+          const double = DOUBLE_LINE.exec(line)
+          if (double) onDoubleTab(double[1] === undefined ? null : { x: Number(double[1]), y: Number(double[2]) })
         }
       }
       if (pending.length > 1024) pending = ''

@@ -32,9 +32,21 @@
   overflow: hidden;
 }
 
-/* The usage row follows the stage (terminal + chat), not the terminal itself */
-.local-terminal-stage:has(+ .agent-pane-usage) {
+/* Leave room below the last terminal line. */
+.local-terminal-pane:not([data-chat-mode]) > .local-terminal-stage:has(+ .agent-pane-usage) {
   margin-bottom: 4px;
+}
+
+/* The composer and usage row share the chat footer's surface. */
+.local-terminal-pane[data-chat-mode] > .agent-pane-usage {
+  height: 26px;
+  padding: 0 10px 4px;
+  border-top: 0;
+  background: var(--bg-secondary);
+}
+
+.local-terminal-pane[data-chat-mode] > .local-terminal-stage:has(+ .agent-pane-usage) .agent-chat-composer {
+  padding-bottom: 4px;
 }
 
 .local-terminal-exit {
@@ -75,9 +87,15 @@
   border: 1px solid var(--border);
 }
 
+/* Chat themes set their colors on the pane (themes/chatThemes.ts), so a working chat pane's
+   resting border leans toward the theme's trace color instead of a border the canvas hides */
+.local-terminal-pane[data-chat-mode][data-agent-work='working']::before {
+  border-color: color-mix(in srgb, var(--chat-trace, var(--border-strong)) 45%, var(--border-strong));
+}
+
 .local-terminal-tab.is-split .local-terminal-pane:focus-within::before,
 .local-terminal-pane:is([data-chat-mode], [data-agent-work='working']):focus-within::before {
-  border: 2px solid var(--chat-pane-accent, var(--accent));
+  border: 2px solid var(--chat-focus, var(--chat-pane-accent, var(--accent)));
 }
 
 /* The light follows an inner track so it stays visible beside the solid focus outline. */
@@ -86,8 +104,12 @@
   --agent-trace-z-index: 11;
 }
 
+.local-terminal-pane[data-chat-mode][data-agent-work]::after {
+  --agent-trace-color: var(--chat-trace, color-mix(in srgb, var(--motion-accent, var(--accent)) 55%, var(--border)));
+}
+
 .local-terminal-pane[data-agent-work]:focus-within::after {
-  --agent-trace-color: color-mix(in srgb, var(--motion-accent, var(--accent)) 72%, var(--terminal-foreground, var(--text-primary)));
+  --agent-trace-color: var(--chat-trace, color-mix(in srgb, var(--motion-accent, var(--accent)) 72%, var(--terminal-foreground, var(--text-primary))));
 }
 
 .terminal-wrapper.hidden .local-terminal-pane[data-agent-work='working']::after {

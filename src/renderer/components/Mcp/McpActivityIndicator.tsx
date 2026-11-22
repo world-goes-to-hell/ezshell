@@ -9,6 +9,7 @@ export function McpActivityIndicator() {
   useMcpActivityFeed()
   const items = useMcpActivityStore(state => state.items)
   const isOpen = useMcpActivityStore(state => state.isPanelOpen)
+  const isCollapsed = useMcpActivityStore(state => state.isPanelCollapsed)
   const togglePanel = useMcpActivityStore(state => state.togglePanel)
 
   if (items.length === 0) return null
@@ -16,6 +17,7 @@ export function McpActivityIndicator() {
   const { waiting, running } = countActive(items)
   const parts = [waiting > 0 && `확인 대기 ${waiting}`, running > 0 && `실행 중 ${running}`].filter(Boolean)
   const isBusy = parts.length > 0
+  const isExpanded = isOpen && !isCollapsed
 
   return (
     <>
@@ -23,9 +25,9 @@ export function McpActivityIndicator() {
         type="button"
         className={`mcp-activity-indicator${isBusy ? ' busy' : ''}`}
         onClick={togglePanel}
-        aria-expanded={isOpen}
-        aria-controls="mcp-activity-panel"
-        title="MCP 활동 보기"
+        aria-expanded={isExpanded}
+        aria-controls={isOpen ? 'mcp-activity-panel' : undefined}
+        title={isExpanded ? 'MCP 활동 닫기' : 'MCP 활동 보기'}
       >
         {isBusy && <span className="mcp-activity-dot" aria-hidden="true" />}
         <span>{isBusy ? `MCP · ${parts.join(' · ')}` : 'MCP 활동'}</span>

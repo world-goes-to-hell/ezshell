@@ -82,7 +82,10 @@ function createPins({ createWindow, chats, platform = process.platform, now = ()
     },
     /** What the window draws */
     view(pin) {
-      return { text: pin.text, kind: pin.kind, title: pin.title, time: pin.time, pinnedAt: pin.pinnedAt, folded: pin.folded }
+      return {
+        text: pin.text, kind: pin.kind, title: pin.title, time: pin.time, pinnedAt: pin.pinnedAt,
+        folded: pin.folded, maximized: pin.win.isMaximized()
+      }
     },
     /** The target of a link the window asks to open, or null when the answer had no such link */
     linkFor(pin, href) {
@@ -92,20 +95,26 @@ function createPins({ createWindow, chats, platform = process.platform, now = ()
     /** Folds the window to its header, or gives it its height back */
     fold(pin, folded) {
       if (!alive(pin) || pin.folded === Boolean(folded)) return
-      const [width, height] = pin.win.getSize()
+      const win = pin.win
+      const { width, height } = win.getNormalBounds()
       pin.folded = Boolean(folded)
       if (pin.folded) {
-        pin.unfoldedHeight = height
+        pin.unfoldMaximized = win.isMaximized()
+        if (pin.unfoldMaximized) win.unmaximize()
         // Where the window's place is saved (src/ipc/detachedWindows.js): the height it unfolds to
-        pin.win.pinnedUnfoldedHeight = height
-        pin.win.setMinimumSize(MIN_WIDTH, FOLDED_HEIGHT)
-        pin.win.setSize(width, FOLDED_HEIGHT)
-        pin.win.setResizable(false)
+        win.pinnedUnfoldedHeight = height
+        win.setMinimumSize(MIN_WIDTH, FOLDED_HEIGHT)
+        win.setSize(width, FOLDED_HEIGHT)
+        win.setResizable(false)
+        win.setMaximizable(false)
       } else {
-        pin.win.pinnedUnfoldedHeight = null
-        pin.win.setResizable(true)
-        pin.win.setMinimumSize(MIN_WIDTH, MIN_HEIGHT)
-        pin.win.setSize(width, Math.max(MIN_HEIGHT, pin.unfoldedHeight ?? MIN_HEIGHT * 3))
+        const unfoldedHeight = win.pinnedUnfoldedHeight
+        win.pinnedUnfoldedHeight = null
+        win.setResizable(true)
+        win.setMaximizable(true)
+        win.setMinimumSize(MIN_WIDTH, MIN_HEIGHT)
+        win.setSize(width, Math.max(MIN_HEIGHT, unfoldedHeight))
+        if (pin.unfoldMaximized) win.maximize()
       }
     },
     /** All windows close (the app locks) */

@@ -45,6 +45,34 @@ describe('Claude transcript lines to chat items', () => {
     expect(items).toEqual([])
   })
 
+  // A message typed while Claude works: enqueued first, then absorbed into the running turn as an
+  // attachment line (this PC's transcripts, 2026-11-22). Only the absorbed line means Claude read it.
+  it('shows a message Claude read in the middle of a turn, once, when it read it', () => {
+    const queued = (uuid, prompt, origin, extra = {}) => ({
+      type: 'attachment', uuid, timestamp: '2026-11-19T10:00:05Z',
+      attachment: { type: 'queued_command', prompt, commandMode: 'prompt', origin, humanTurn: true, ...extra }
+    })
+    const { items } = feedAll(createClaudeParser(), [
+      user('u1', '배포해 줘'),
+      { type: 'queue-operation', operation: 'enqueue', timestamp: '2026-11-19T10:00:02Z', content: 'IP 도 열어 줘' },
+      { type: 'queue-operation', operation: 'remove', timestamp: '2026-11-19T10:00:05Z', content: 'IP 도 열어 줘', reason: 'absorbed_mid_turn' },
+      queued('q1', 'IP 도 열어 줘', { kind: 'human' }),
+      queued('q2', '<task-notification>done</task-notification>', { kind: 'task-notification' }, { commandMode: 'task-notification' }),
+      queued('q3', 'peer report', { kind: 'peer', name: 'code-reviewer' })
+    ])
+    expect(items.map(item => [item.kind, item.text])).toEqual([['user', '배포해 줘'], ['user', 'IP 도 열어 줘']])
+    expect(items[1]).toMatchObject({ id: 'user:q1', time: Date.parse('2026-11-19T10:00:05Z') })
+  })
+
+  it('marks an absorbed ezShell inbox note like a typed one', () => {
+    const { items } = feedAll(createClaudeParser(), [{
+      type: 'attachment', uuid: 'q1', timestamp: '2026-11-19T10:00:05Z',
+      attachment: { type: 'queued_command', prompt: 'New ezShell message while you are busy: read it now with read_inbox; handle it after your current task.', commandMode: 'prompt', origin: { kind: 'human' } }
+    }])
+    expect(items).toHaveLength(1)
+    expect(items[0].inboxNotice).toBe(true)
+  })
+
   it('shows an interruption and a compaction as notices', () => {
     const { items } = feedAll(createClaudeParser(), [
       user('u1', '[Request interrupted by user]'),

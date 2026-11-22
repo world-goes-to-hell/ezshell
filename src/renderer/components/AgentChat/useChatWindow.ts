@@ -1,5 +1,6 @@
 import { defaultRangeExtractor, useVirtualizer, type Range } from '@tanstack/react-virtual'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { QUESTION_BAR_PX } from '../../lib/chatScrollNav'
 
 type Row = { key: string; estimate: number }
 type Selection = { anchor: string | null; focus: string | null }
@@ -49,6 +50,8 @@ export function useChatWindow(rows: readonly Row[], logRef: RefObject<HTMLDivEle
     anchorTo: 'end',
     followOnAppend: true,
     scrollEndThreshold: 40,
+    // A question jumped to lands below the bar over the top of the log (chatScrollNav)
+    scrollPaddingStart: QUESTION_BAR_PX,
     overscan: 8,
     paddingStart: 12,
     paddingEnd: 16,

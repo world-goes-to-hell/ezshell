@@ -20,7 +20,7 @@ const MAX_ADDRESS_LENGTH = 4096
 
 const appOverlays = '[role="menu"], [role="dialog"], [role="alertdialog"], .context-menu, .tab-context-menu, .command-palette-overlay, .modal-overlay, .batch-overlay'
 /** Panels that slide over the tab from a side: the page narrows to give way instead of hiding */
-const sidePanels = '.sidebar.rail.peek-open .sidebar-panel, .sidebar-popover, .mcp-activity-panel:not(.is-window), .mcp-activity-tab'
+const sidePanels = '.sidebar.rail.peek-open .sidebar-panel, .sidebar-popover, .mcp-activity-panel:not(.is-window)'
 
 type BrowserTool = 'element-picker'
 

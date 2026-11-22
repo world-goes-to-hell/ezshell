@@ -608,3 +608,66 @@ describe('a prompt in a narrow pane', () => {
     expect(wake.approvalPrompt()?.options.map(option => option.label)).toEqual(['Yes', 'Yes, and don\'t ask again for npm run build commands', 'No'])
   })
 })
+
+// Esc while a chat line waited: the CLI puts the queued line back into its composer (2026-11-22 user
+// report). The chat takes it back so its own box gets the text and the composer is empty for the next send.
+describe('taking a queued chat line back from the composer (takeBack)', () => {
+  function backSetup(kind = 'claude') {
+    const rawWrite = vi.fn(() => true)
+    wake = createAgentInboxWake({
+      kind, cols: 100, rows: 24, quietMs: 60,
+      pendingMessages: () => [],
+      isWorking: () => false,
+      write: vi.fn(() => true), rawWrite
+    })
+    return { rawWrite }
+  }
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+
+  it.each([['claude', claudeDraft], ['codex', codexDraft]])('%s: clears the composer when it holds exactly the queued lines', async (kind, draft) => {
+    const { rawWrite } = backSetup(kind)
+    wake.writeOutput(draft('라이브러리 메뉴에 연구논문 추가'))
+    await settle()
+    const taken = wake.takeBack(['라이브러리 메뉴에 연구논문 추가'])
+    await vi.waitFor(() => expect(rawWrite).toHaveBeenCalledTimes(1))
+    const [keys, track] = rawWrite.mock.calls[0]
+    expect(keys).toMatch(/^\x7f+$/)
+    expect(keys.length).toBeGreaterThanOrEqual('라이브러리 메뉴에 연구논문 추가'.length)
+    expect(track).toBe(false)
+    wake.writeOutput(draft(''))
+    await expect(taken).resolves.toEqual({ ok: true })
+  })
+
+  it('takes several queued lines back together, however the CLI joined them', async () => {
+    const { rawWrite } = backSetup()
+    wake.writeOutput(claudeDraft('첫 질문 둘째 질문'))
+    await settle()
+    const taken = wake.takeBack(['첫 질문', '둘째 질문'])
+    await vi.waitFor(() => expect(rawWrite).toHaveBeenCalledTimes(1))
+    wake.writeOutput(claudeDraft(''))
+    await expect(taken).resolves.toEqual({ ok: true })
+  })
+
+  it('never touches a draft that is not what the chat sent', async () => {
+    const { rawWrite } = backSetup()
+    wake.writeOutput(claudeDraft('터미널에서 내가 쓰던 글'))
+    await settle()
+    await expect(wake.takeBack(['채팅에서 보낸 글'])).resolves.toEqual({ ok: false, reason: 'different' })
+    expect(rawWrite).not.toHaveBeenCalled()
+  })
+
+  it('reports an empty composer without writing (the CLI did not put the line back)', async () => {
+    const { rawWrite } = backSetup()
+    wake.writeOutput(claudeDraft(''))
+    await settle()
+    await expect(wake.takeBack(['채팅에서 보낸 글'])).resolves.toEqual({ ok: false, reason: 'empty' })
+    expect(rawWrite).not.toHaveBeenCalled()
+  })
+
+  it('reports when the composer does not empty', async () => {
+    backSetup()
+    wake.writeOutput(claudeDraft('채팅에서 보낸 글'))
+    await settle()
+    await expect(wake.takeBack(['채팅에서 보낸 글'])).resolves.toEqual({ ok: false, reason: 'not-cleared' })
+  })
+})

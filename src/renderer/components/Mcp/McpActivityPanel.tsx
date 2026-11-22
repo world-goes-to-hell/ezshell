@@ -3,7 +3,7 @@ import { RiCloseLine, RiExternalLinkLine, RiStopCircleLine } from 'react-icons/r
 import type { McpActivityItem } from '../../types'
 import { useMcpActivityStore } from '../../stores/mcpActivityStore'
 import type { McpActivityView } from '../../stores/mcpActivityStore'
-import { ACTIVITY_STATE_LABELS, collapsesMcpPanel, countActive, formatClock, formatElapsed, isActiveState } from '../../lib/mcpActivity'
+import { ACTIVITY_STATE_LABELS, collapsesMcpPanel, formatClock, formatElapsed, isActiveState } from '../../lib/mcpActivity'
 import { RISK_LABELS, revealHiddenChars } from '../../lib/mcpLabels'
 import { McpActivityLanes } from './McpActivityLanes'
 import { McpActivityTerminal } from './McpActivityTerminal'
@@ -91,7 +91,6 @@ export function McpActivityPanel({ variant = 'overlay' }: { variant?: 'overlay' 
   const canPopOut = !isWindow && typeof window.electronAPI?.openMcpActivityWindow === 'function'
   const [now, setNow] = useState(() => Date.now())
   const hasActive = items.some(item => isActiveState(item.state))
-  const { waiting, running } = countActive(items)
 
   useEffect(() => {
     if (!hasActive) return
@@ -135,23 +134,10 @@ export function McpActivityPanel({ variant = 'overlay' }: { variant?: 'overlay' 
   }
 
   return (
-    <>
-      {/* Collapsed: the panel is fully off screen, only this tab floats at the right edge so the
-          content behind stays whole (a full-height strip looked like the content was sliced off) */}
-      {isCollapsed && (
-        <button type="button" className="mcp-activity-tab" onClick={() => setCollapsed(false)} aria-label="MCP 활동 펼치기" title="MCP 활동 펼치기">
-          {(waiting > 0 || running > 0) && (
-            <span className="mcp-activity-tab-counts">
-              {waiting > 0 && <span className="mcp-activity-strip-count is-waiting" title={`확인 대기 ${waiting}`}>{waiting}</span>}
-              {running > 0 && <span className="mcp-activity-strip-count is-running" title={`실행 중 ${running}`}>{running}</span>}
-            </span>
-          )}
-          <span className="mcp-activity-strip-label">MCP 활동</span>
-        </button>
-      )}
-      <aside className={`mcp-activity-panel view-${view}${isCollapsed ? ' is-collapsed' : ''}${isWindow ? ' is-window' : ''}`} id="mcp-activity-panel" role="complementary" aria-label="MCP 활동">
+    <aside className={`mcp-activity-panel view-${view}${isCollapsed ? ' is-collapsed' : ''}${isWindow ? ' is-window' : ''}`}
+      id="mcp-activity-panel" role="complementary" aria-label="MCP 활동" inert={isCollapsed}>
       {/* Off screen while collapsed: kept mounted so scroll positions survive, but out of reach of Tab */}
-      <div className="mcp-activity-body" inert={isCollapsed}>
+      <div className="mcp-activity-body">
       <header className="mcp-activity-header">
         <div>
           <h2>MCP 활동</h2>
@@ -210,6 +196,5 @@ export function McpActivityPanel({ variant = 'overlay' }: { variant?: 'overlay' 
       )}
       </div>
     </aside>
-    </>
   )
 }

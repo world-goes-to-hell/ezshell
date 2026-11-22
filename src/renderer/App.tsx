@@ -24,7 +24,7 @@ import { OPEN_LOCAL_TERMINAL_EVENT } from './lib/localProjectList'
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
 import { NewTabMenu } from './components/Terminal/NewTabMenu'
 import { TabWorktreeBadge } from './components/Terminal/TabWorktreeBadge'
-import { AgentMessagesHost, AgentTabMessages } from './components/Terminal/AgentMessages'
+import { AgentMessagesHost, AgentTabMessages, isAgentWorking, useAgentMessagesStore } from './components/Terminal/AgentMessages'
 import { getDuplicateConfig } from './lib/duplicateConnection'
 import { tabHost, dropTabHostsExcept, isTabHostPreviewed } from './lib/tabHosts'
 import { perFrame } from './lib/throttle'
@@ -48,7 +48,8 @@ import { setRestoreSource } from './lib/updateInstall'
 import { buildRestoreRecord, readRestoreRecord, type RecordSource, type RestoreTab } from './lib/restoreTabs'
 import { restoreTabs } from './lib/restoreTabsRun'
 import { RestoreTabsBanner, type RestoreBannerState } from './components/Restore/RestoreTabsBanner'
-import { closeLocalPaneShells } from './lib/localPaneShells'
+import { closeLocalPaneShells, getLocalPaneShellId } from './lib/localPaneShells'
+import { MAIN_PANE, paneIds } from './lib/splitTree'
 import { useTabGroups } from './hooks/useTabGroups'
 import { addScreenRefusal, dragDivider, evenSizes } from './lib/screenPanes'
 import { TabGroupChips } from './components/Terminal/TabGroupChips'
@@ -72,6 +73,7 @@ import { useTerminalStore } from './stores/terminalStore'
 import { useSftpStore } from './stores/sftpStore'
 import { useThemeStore } from './stores/themeStore'
 import { useCommandPaletteStore } from './stores/commandPaletteStore'
+import { confirmDialog } from './stores/confirmStore'
 import { useUIStore } from './stores/uiStore'
 import { useSSH } from './hooks/useSSH'
 import { toSSHConnectConfig } from './lib/sshConnectConfig'
@@ -105,6 +107,13 @@ interface SessionConnectionTarget {
   workGroup?: string
   /** A saved session opened from the tab strip is also added to that project's server list. */
   assignProject?: boolean
+}
+
+function localTabShellIds(tabId: string): string[] {
+  const tab = useTerminalStore.getState().getTerminal(tabId)
+  if (!tab?.local) return []
+  const panes = tab.splitTree ? paneIds(tab.splitTree) : [MAIN_PANE]
+  return panes.map(pane => getLocalPaneShellId(tabId, pane)).filter((id): id is string => id !== undefined)
 }
 
 // Check if we're in a special window mode
@@ -279,6 +288,7 @@ function App() {
   const terminalAreaRef = useRef<HTMLDivElement>(null)
   // Color and connect config of tabs popped out to their own window, restored when they merge back
   const detachedTabsRef = useRef(new Map<string, DetachedTab>())
+  const tabClosePending = useRef(false)
   const readRestoreSource = useCallback((): RecordSource => {
     const { terminals, layout, activeTerminalId } = useTerminalStore.getState()
     const sftp = useSftpStore.getState()
@@ -358,7 +368,6 @@ function App() {
     setFontSize,
     setFontFamily,
     layout,
-    removeTerminalFromPane,
     setActivePaneTerminal,
     setActivePaneType,
     closeSplit,
@@ -592,7 +601,7 @@ function App() {
     },
     closeCurrentTerminal: () => {
       if (activeTerminalId) {
-        handleCloseTerminal(activeTerminalId)
+        void requestCloseTabs([activeTerminalId])
       }
     },
     zoomIn: () => {
@@ -850,21 +859,23 @@ function App() {
     await handleConnect(fullConfig)
   }
 
-  const handleCloseTerminal = (sessionId: string) => {
+  const closeTerminal = (sessionId: string) => {
+    const terminal = useTerminalStore.getState().getTerminal(sessionId)
+    if (!terminal) return
     detachedTabsRef.current.delete(sessionId)
-    if (terminals.get(sessionId)?.browser) {
+    if (terminal.browser) {
       window.electronAPI.browserReviewClose(sessionId)
       removeTerminal(sessionId)
       return
     }
-    const db = terminals.get(sessionId)?.db
+    const db = terminal.db
     if (db) {
       // A DB tab: only its database connection closes, the SSH tab stays
       void window.electronAPI.dbClose?.(db.dbId)
       removeTerminal(sessionId)
       return
     }
-    const local = terminals.get(sessionId)?.local
+    const local = terminal.local
     if (local) {
       // The shells of its split panes go with the tab
       closeLocalPaneShells(sessionId)
@@ -873,6 +884,48 @@ function App() {
       return
     }
     disconnect(sessionId)
+  }
+
+  const requestCloseTabs = async (sessionIds: readonly string[]) => {
+    if (tabClosePending.current) return
+    const targets = sessionIds.map(id => ({ id, shells: localTabShellIds(id) }))
+    const localTargets = targets.filter(target => target.shells.length > 0)
+    if (localTargets.length === 0) {
+      sessionIds.forEach(closeTerminal)
+      return
+    }
+
+    tabClosePending.current = true
+    try {
+      const hasWorkingAgent = window.electronAPI.localShellHasWorkingAgent
+      const working = hasWorkingAgent && (await Promise.all(localTargets.map(({ shells }) =>
+        hasWorkingAgent(shells).catch(() => false)
+      ))).some(Boolean)
+      const shellIds = new Set(localTargets.flatMap(target => target.shells))
+      const agents = useAgentMessagesStore.getState().snapshot.agents.filter(agent => agent.active && shellIds.has(agent.shellId))
+      if (working || agents.length > 0) {
+        const activity = working || agents.some(isAgentWorking) ? '작업 중인' : '실행 중인'
+        const title = sessionIds.length === 1 ? '탭 닫기' : '여러 탭 닫기'
+        const confirmed = await confirmDialog({
+          title,
+          message: `${activity} 에이전트 세션이 있습니다. 탭을 닫으면 해당 세션이 종료됩니다. 닫을까요?`,
+          confirmLabel: title,
+          danger: true
+        })
+        if (!confirmed) return
+      }
+
+      if (targets.some(({ id, shells }) => {
+        const current = localTabShellIds(id)
+        return current.length !== shells.length || current.some(shell => !shells.includes(shell))
+      })) {
+        toast.info('다시 확인해 주세요', '닫으려는 탭에 열려 있는 세션이 바뀌었습니다.')
+        return
+      }
+      sessionIds.forEach(closeTerminal)
+    } finally {
+      tabClosePending.current = false
+    }
   }
 
   // A terminal of this PC as a new tab (the shell runs in the main process)
@@ -1308,7 +1361,7 @@ function App() {
 
   const handleContextCloseTab = () => {
     if (contextMenuTabId) {
-      handleCloseTerminal(contextMenuTabId)
+      void requestCloseTabs([contextMenuTabId])
     }
   }
 
@@ -1327,11 +1380,7 @@ function App() {
 
   const handleContextCloseOthers = () => {
     if (contextMenuTabId) {
-      terminalArray.forEach(([sessionId]) => {
-        if (sessionId !== contextMenuTabId) {
-          handleCloseTerminal(sessionId)
-        }
-      })
+      void requestCloseTabs([...terminals.keys()].filter(id => id !== contextMenuTabId))
     }
   }
 
@@ -1340,9 +1389,7 @@ function App() {
       const terminalIds = Array.from(terminals.keys())
       const currentIndex = terminalIds.indexOf(contextMenuTabId)
       if (currentIndex > 0) {
-        terminalIds.slice(0, currentIndex).forEach(sessionId => {
-          handleCloseTerminal(sessionId)
-        })
+        void requestCloseTabs(terminalIds.slice(0, currentIndex))
       }
     }
   }
@@ -1352,9 +1399,7 @@ function App() {
       const terminalIds = Array.from(terminals.keys())
       const currentIndex = terminalIds.indexOf(contextMenuTabId)
       if (currentIndex !== -1) {
-        terminalIds.slice(currentIndex + 1).forEach(sessionId => {
-          handleCloseTerminal(sessionId)
-        })
+        void requestCloseTabs(terminalIds.slice(currentIndex + 1))
       }
     }
   }
@@ -1444,7 +1489,7 @@ function App() {
           onImportSession={(folderId) => setImportTarget({ folderId })}
           onLocalTerminal={button => void handleOpenSidebarLocalTerminal(button)}
           onLocalFolder={(cwd, workspaceLabel) => void handleOpenLocalTerminal({ cwd, workspaceLabel })}
-          onCloseTerminal={handleCloseTerminal}
+          onCloseTerminal={closeTerminal}
         />
         <main className="main-area" id="main-content" style={{ '--browser-tab-max-width': `${browserTabMaxWidth}px` } as CSSProperties}>
           {restoreBanner && (
@@ -1508,7 +1553,8 @@ function App() {
                           {terminal.hasActivity && <span className="activity-indicator" />}
                           <motion.button
                             className="tab-close"
-                            onClick={(e) => { e.stopPropagation(); handleCloseTerminal(sessionId); }}
+                            aria-label="탭 닫기"
+                            onClick={(e) => { e.stopPropagation(); void requestCloseTabs([sessionId]) }}
                             whileHover={reducedMotion ? undefined : { scale: 1.1 }}
                             whileTap={reducedMotion ? undefined : { scale: 0.9 }}
                           >×</motion.button>
@@ -1575,10 +1621,7 @@ function App() {
                                 setActivePaneTerminal(index, terminalId)
                                 setActivePaneType(index)
                               }}
-                              onTabClose={(terminalId) => {
-                                removeTerminalFromPane(index, terminalId)
-                                handleCloseTerminal(terminalId)
-                              }}
+                              onTabClose={terminalId => void requestCloseTabs([terminalId])}
                               newTabMenu={renderPaneNewTabMenu(index)}
                               worktreeForFolder={groupView.worktreeForFolder}
                               onUnsplit={index === 0 ? closeSplit : undefined}
@@ -1632,17 +1675,14 @@ function App() {
                             setActivePaneTerminal(pane, sessionId)
                             setActivePaneType(pane)
                           },
-                          () => {
-                            removeTerminalFromPane(pane, sessionId)
-                            handleCloseTerminal(sessionId)
-                          },
+                          () => void requestCloseTabs([sessionId]),
                           terminal.color
                         )
                       : renderTabContent(
                           sessionId,
                           sessionId === activeTerminalId,
                           () => setActiveTerminal(sessionId),
-                          () => handleCloseTerminal(sessionId),
+                          () => void requestCloseTabs([sessionId]),
                           terminal.color
                         )}
                     </div>,

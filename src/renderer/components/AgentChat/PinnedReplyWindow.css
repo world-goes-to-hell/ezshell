@@ -15,7 +15,7 @@ body:has(.pinned-reply) {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--bg-primary);
+  background: var(--terminal-bg, var(--bg-primary));
   color: var(--text-primary);
   font-size: 13px;
   border: 1px solid var(--border-strong, var(--border));
@@ -92,7 +92,7 @@ body:has(.pinned-reply) {
 }
 
 .pinned-reply-btn:hover:not(:disabled) {
-  background: var(--bg-modifier-selected, var(--bg-hover));
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 
@@ -101,7 +101,7 @@ body:has(.pinned-reply) {
 
 .pinned-reply-btn:focus-visible,
 .pinned-reply-body:focus-visible {
-  outline: 2px solid var(--text-link, var(--accent));
+  outline: 2px solid var(--chat-focus, var(--text-link, var(--accent)));
   outline-offset: -2px;
 }
 
@@ -116,6 +116,13 @@ body:has(.pinned-reply) {
 }
 
 .pinned-reply-body .agent-chat-md a { cursor: pointer; }
+
+.pinned-reply[data-chat-bubbles] .pinned-reply-message {
+  padding: 9px 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px 15px 15px 15px;
+  background: var(--bg-secondary);
+}
 
 .pinned-reply-empty {
   margin: 0;

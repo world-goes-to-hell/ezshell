@@ -10,8 +10,8 @@ const isMcpTool = name => name.startsWith('mcp__')
 // Claude Code's `<session id>.jsonl`, line by line (checked on this PC's transcripts, 2026-11-19):
 // an `assistant` line holds one content block (text, thinking or tool_use); blocks of one answer share
 // `message.id`. A `user` line is the typed prompt or tool results (`tool_use_id`, the edit in
-// `toolUseResult`). Many other kinds (attachment, api-request, file-history, mode...) are not for the
-// view: only the kinds below are read, so a new kind in a later CLI is skipped, not misdrawn.
+// `toolUseResult`). A message typed while Claude works is an `attachment` line (queuedPrompt). Many
+// other kinds (other attachments, api-request, file-history, mode...) are not for the view: only the kinds below are read, so a new kind in a later CLI is skipped, not misdrawn.
 
 const INTERRUPTED = /^\[Request interrupted by user/
 // A slash command the user ran, as Claude records it once the command has finished:
@@ -23,6 +23,22 @@ const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/
 const COMMAND_OUTPUT = /^\s*<local-command-(stdout|stderr)>([\s\S]*?)<\/local-command-\1>\s*$/
 // The terminal colours Claude keeps in it ("\u001b[2mCompacted …\u001b[22m")
 const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[@-_]/g
+
+/**
+ * What the user typed while Claude was working, from the line that marks Claude reading it mid-turn
+ * (`attachment.type: queued_command`, checked on this PC's transcripts, 2026-11-22), or null. The queue's
+ * own `queue-operation` lines are only the waiting list. Task notifications and other agents' messages
+ * arrive the same way with their own `origin`: those are not the user's words.
+ */
+function queuedPrompt(line) {
+  const queued = line.attachment
+  if (line.type !== 'attachment' || queued?.type !== 'queued_command' || typeof queued.prompt !== 'string') return null
+  if (queued.commandMode !== 'prompt') return null
+  const origin = queued.origin?.kind
+  // Before `origin` existed, a notification still started with its tag
+  if (origin === undefined ? queued.prompt.trimStart().startsWith('<') : origin !== 'human') return null
+  return queued.prompt.replace(/\r\n?/g, '\n').trim() || null
+}
 
 /** A slash command's printed output as plain text, or null */
 function commandOutput(line) {
@@ -166,6 +182,15 @@ function createClaudeParser() {
         }, { older, at: time })
         if (owner) out.push(owner)
       }
+    }
+    const absorbed = queuedPrompt(line)
+    if (absorbed !== null) {
+      const item = {
+        id: `user:${line.uuid ?? time}`, kind: 'user', time, text: clip(absorbed, LIMITS.text),
+        ...(isInboxPrompt(absorbed) ? { inboxNotice: true } : {})
+      }
+      turns.start(item, { older })
+      out.push(item)
     }
     if (line.type === 'user') {
       const command = commandText(line)

@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'events'
 import { createRequire } from 'module'
+import { basename, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
 const { registerRemoteFileIpc } = require('./ipc.js')
 const { createRemoteDocuments, MESSAGES } = require('./documents.js')
 const { createFakeSftp } = require('../mcp/fakeSftp.testhelper.js')
+const { createLocalRoots } = require('../localFiles/roots.js')
 
 function fakeWindow(id) {
   const win = new EventEmitter()
@@ -29,7 +32,7 @@ function fakeWindow(id) {
   return win
 }
 
-function setup({ isLocked, waitForDetachedPage } = {}) {
+function setup({ isLocked, waitForDetachedPage, fromMainWindow, resolveLocal, revealLocal } = {}) {
   const handlers = new Map()
   const listeners = new Map()
   const ipcMain = { handle: (channel, fn) => handlers.set(channel, fn), on: (channel, fn) => listeners.set(channel, fn) }
@@ -38,7 +41,7 @@ function setup({ isLocked, waitForDetachedPage } = {}) {
   const windows = []
   let nextId = 100
   const { closeViewWindows } = registerRemoteFileIpc({
-    ipcMain, docs, isLocked, openFolder: async () => {},
+    ipcMain, docs, isLocked, fromMainWindow, resolveLocal, revealLocal, openFolder: async () => {},
     createWindow: atCursor => {
       const win = fakeWindow(nextId++)
       if (atCursor) win.filePageReady = waitForDetachedPage?.()
@@ -56,6 +59,29 @@ const secondEdit = { ...openRequest, remotePath: '/etc/b.log' }
 const draft = { editor: JSON.stringify({ doc: 'draft\n', selection: { ranges: [{ anchor: 2, head: 2 }], main: 0 } }), top: 0, left: 0, ending: 'lf' }
 
 describe('file window IPC', () => {
+  it('reveals only an existing workspace file from the unlocked main window', async () => {
+    const localFile = fileURLToPath(import.meta.url)
+    const root = dirname(localFile)
+    const request = { root, path: basename(localFile) }
+    const roots = createLocalRoots({ knownFolders: () => [root], repoFolders: async () => [] })
+    const revealed = []
+    let locked = false
+    const { invoke, windows } = setup({
+      isLocked: () => locked,
+      fromMainWindow: event => event.sender.id === 1,
+      resolveLocal: roots.resolveInside,
+      revealLocal: file => revealed.push(file)
+    })
+    expect(await invoke('local-file-reveal', 1, request)).toEqual({ success: true })
+    expect(await invoke('local-file-reveal', 2, request)).toMatchObject({ success: false })
+    expect(await invoke('local-file-reveal', 1, { root, path: '../localFiles/roots.js' })).toMatchObject({ success: false })
+    expect(await invoke('local-file-reveal', 1, { root, path: '.' })).toMatchObject({ success: false })
+    locked = true
+    expect(await invoke('local-file-reveal', 1, request)).toMatchObject({ success: false })
+    expect(revealed).toEqual([(await roots.resolveInside(root, request.path)).path])
+    expect(windows).toHaveLength(0)
+  })
+
   it('follows a log only while the app is unlocked', async () => {
     let locked = false
     const { invoke, windows, docs } = setup({ isLocked: () => locked })

@@ -15,6 +15,9 @@ const IMAGE_LIMIT = '이미지는 한 메시지에 최대 8장까지 첨부할 �
  * The text as it may be pasted into the agent's composer, or null. Control characters are refused:
  * an ESC could end the bracketed paste early and the rest would reach the terminal as keys.
  */
+// Chat lines one Esc can bring back at once
+const MAX_TAKE_BACK = 10
+
 function cleanChatText(value) {
   if (typeof value !== 'string' || value.length > MAX_TEXT) return null
   const text = value.replace(/\r\n?/g, '\n')
@@ -339,6 +342,19 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const id = shellIdOf(shellId)
     return Boolean(allowed(event) && id && shells()?.interruptAgent(id))
   })
+  // After Esc: the chat lines that were waiting, back from the CLI's composer (cleared only when it holds
+  // exactly them). The window already has the text; nothing is read off the screen for it.
+  ipcMain.handle('agent-chat-take-back', async (event, request) => {
+    if (!allowed(event)) return { ok: false, reason: 'locked' }
+    const id = shellIdOf(request?.shellId)
+    const raw = request?.texts
+    if (!id || !Array.isArray(raw) || !raw.length || raw.length > MAX_TAKE_BACK) return { ok: false, reason: 'invalid' }
+    const texts = raw.map(cleanChatText)
+    if (texts.some(text => !text) || texts.join('\n').length > MAX_TEXT) return { ok: false, reason: 'invalid' }
+    const local = shells()
+    if (!local?.chatTakeBack) return { ok: false, reason: 'not-agent' }
+    return local.chatTakeBack(id, texts)
+  })
 
   // A link in an answer: a file or folder of this PC (ezShell's file window or the file manager), or a
   // web page (the browser). Only a link of that shell's conversation; a file is never run.
@@ -376,7 +392,10 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   // "원래 대화로 가기": the main window brings that shell's pane forward, as a chat
   ipcMain.on('pinned-reply-go', (event) => {
     const pin = pinOf(event)
-    if (pin) showShell?.(pin.shellId)
+    if (!pin) return
+    // The owned window stays above the main window, even after the chat takes focus.
+    if (pin.win.isMaximized()) pin.win.unmaximize()
+    showShell?.(pin.shellId)
   })
 
   async function openTarget(target, how, stillAllowed) {

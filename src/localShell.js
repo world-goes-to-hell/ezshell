@@ -813,6 +813,12 @@ function createLocalShells({
       if (result.ok && entry.codexInput && entry.codexInput.submitted) entry.reportStatus?.(agentStatus(entry));
       return result;
     },
+    /** Esc in the chat view: the queued chat lines the CLI put back into its composer, cleared there */
+    async chatTakeBack(id, texts) {
+      const entry = shells.get(id);
+      if (!hasAgent(entry) || !entry.inbox) return { ok: false, reason: 'not-agent' };
+      return entry.inbox.takeBack(texts);
+    },
     /** The agent's numbered prompt on screen (permission, question), for the chat view; or null */
     approvalOf(id) {
       const entry = shells.get(id);

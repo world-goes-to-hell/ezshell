@@ -3,9 +3,10 @@
 // the agent's transcript (src/agentChat) with a box that types into the agent's own composer.
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type ToggleEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { RiArrowDownLine, RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolderOpenLine, RiImageAddLine, RiListUnordered, RiLoader4Line, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiToolsLine } from 'react-icons/ri'
+import { RiArrowDownLine, RiArrowUpLine, RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolderOpenLine, RiImageAddLine, RiListUnordered, RiLoader4Line, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiTimeLine, RiToolsLine } from 'react-icons/ri'
 import type { AgentChatApproval, AgentChatItem, AgentChatQuestion, AgentChatQuestionContext, CodexSpeedMode } from '../../types'
 import { useAgentChatStore } from '../../stores/agentChatStore'
+import { draftWithTakenBack, takeBackQueued } from '../../lib/chatTakeBack'
 import { AgentChatMailButton, useAgentMessagesStore } from '../Terminal/AgentMessages'
 import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
@@ -16,7 +17,7 @@ import { copyToClipboard } from '../../lib/terminalClipboard'
 import { outputFileName } from '../../lib/terminalText'
 import { TerminalContextMenu, type TerminalMenuGroup, type TerminalMenuItem } from '../Terminal/TerminalContextMenu'
 import { webLinkItems } from '../Terminal/TerminalWebLinkMenu'
-import { chatTextForClipboard, diffLineKind, shellAgentOf } from '../../lib/agentChatItems'
+import { chatTextForClipboard, diffLineKind, sentImageKey, shellAgentOf, visibleSendTime, waitingItemIds, type SentChatImages } from '../../lib/agentChatItems'
 import { turnUsageSpots, turnUsageText } from '../../lib/agentTurnUsage'
 import { toast } from '../../stores/toastStore'
 import { AgentChatSubagents } from './AgentChatSubagents'
@@ -24,6 +25,7 @@ import { AgentChatQuestions, receivedMessageLabel } from './AgentChatQuestions'
 import { AgentChatThemePicker } from './AgentChatThemePicker'
 import { SubagentConversation } from './SubagentConversation'
 import { useChatWindow } from './useChatWindow'
+import { isAwayFromBottom, isChatQuestion, previousQuestionIndex, questionLine } from '../../lib/chatScrollNav'
 import { SlashCommandMenu } from './SlashCommandMenu'
 import { allSlashCommands, draftFor, isSlashCommand, matchSlashCommands, type SlashCommand } from '../../lib/slashCommands'
 import { useAgentScreenReturnStore } from '../../stores/agentScreenReturnStore'
@@ -49,10 +51,11 @@ const STATUS_LABELS: Record<string, string> = {
 const MAX_COMPOSER_ROWS = 8
 const REPLY_START_GRACE_MS = 6000
 const EMPTY_ITEMS: AgentChatItem[] = []
+const sendClock = new Intl.DateTimeFormat('ko-KR', { hour: 'numeric', minute: '2-digit', hour12: true })
 
 type TimelineRow = { key: string; estimate: number } & (
-  | { kind: 'older' | 'progress' }
-  | { kind: 'item'; item: AgentChatItem }
+  | { kind: 'older' }
+  | { kind: 'item'; item: AgentChatItem; sendTime: number | null; sentImages?: SentChatImages }
 )
 
 function estimateItem(item: AgentChatItem): number {
@@ -205,17 +208,44 @@ function ApprovalCard({ shellId, approval }: { shellId: string; approval: AgentC
   )
 }
 
-const ChatItem = memo(function ChatItem({ item, live, onPin, expanded, rememberDisclosure }: {
-  item: AgentChatItem; live: boolean; onPin?: (item: AgentChatItem) => void
-  expanded: boolean; rememberDisclosure: (id: string, open: boolean) => void
+function SentImageThumbnail({ preview, index }: { preview: Blob; index: number }) {
+  const [url, setUrl] = useState<string>()
+  useEffect(() => {
+    const next = URL.createObjectURL(preview)
+    setUrl(next)
+    return () => URL.revokeObjectURL(next)
+  }, [preview])
+  return <img src={url} alt={`보낸 이미지 ${index + 1}`} />
+}
+
+const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, waiting = false, onPin, expanded, rememberDisclosure }: {
+  item: AgentChatItem; live: boolean; waiting?: boolean; onPin?: (item: AgentChatItem) => void
+  sentImages?: SentChatImages; sendTime: number | null; expanded: boolean; rememberDisclosure: (id: string, open: boolean) => void
 }) {
-  const time = item.time ? new Date(item.time).toLocaleTimeString() : undefined
+  const itemTime = item.sentAt ?? item.time
+  const time = itemTime === null ? undefined : new Date(itemTime).toLocaleTimeString()
   const onToggle = (event: ToggleEvent<HTMLDetailsElement>) => rememberDisclosure(item.id, event.currentTarget.open)
   switch (item.kind) {
     case 'user':
       return (
-        <div className={`agent-chat-user${item.commandState ? ' has-state' : ''}`} title={time}>
-          <div className="agent-chat-bubble">{item.text ?? (item.hasImage ? '스크린샷 첨부' : '')}</div>
+        <div className="agent-chat-user" title={time}>
+          {sentImages && (
+            <div className="agent-chat-sent-images" role="group" aria-label="보낸 이미지">
+              {sentImages.previews.map((preview, index) => <SentImageThumbnail key={index} preview={preview} index={index} />)}
+            </div>
+          )}
+          <div className="agent-chat-user-message">
+            {sendTime !== null && <time className="agent-chat-sent-time" dateTime={new Date(sendTime).toISOString()}>{sendClock.format(sendTime)}</time>}
+            <div className="agent-chat-bubble" data-waiting={waiting || undefined}>
+              {sentImages ? sentImages.text || '스크린샷 첨부' : item.text ?? (item.hasImage ? '스크린샷 첨부' : '')}
+            </div>
+          </div>
+          {/* Sent while the agent worked: it reads the message when it can, and the mark goes then */}
+          {waiting && !item.commandState && (
+            <div className="agent-chat-command-state agent-chat-waiting" role="status" title="에이전트가 지금 작업을 처리하는 중입니다. 읽을 수 있을 때 읽습니다.">
+              <RiTimeLine aria-hidden /> 대기 중…
+            </div>
+          )}
           {/* A Codex slash command: no transcript records it, so what came of it shows here */}
           {item.commandState && (
             <div className="agent-chat-command-state">{item.commandState === 'screen' ? '터미널에 화면을 열었습니다' : '실행함'}</div>
@@ -281,7 +311,7 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   const questionRequest = useRef(0)
   const questionButton = useRef<HTMLButtonElement>(null)
   const questionPanelId = useId()
-  const [attachments, setAttachments] = useState<{ id: string; url: string }[]>([])
+  const [attachments, setAttachments] = useState<{ id: string; url: string; preview: Blob }[]>([])
   const previewUrls = useRef(new Map<string, string>())
   const [pasting, setPasting] = useState(false)
   const [sending, setSending] = useState(false)
@@ -305,6 +335,7 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   const liveItems = chat?.items ?? EMPTY_ITEMS
   const history = questionContext?.scope === scope ? questionContext : null
   const items = history?.items ?? liveItems
+  const sentImages = chat?.sentImages
   const chosenQuestion = selectedQuestion?.scope === scope ? selectedQuestion.question : null
   const highlighted = chosenQuestion && (chosenQuestion.itemId ?? chosenQuestion.id)
   const kind = chat?.kind ?? (agent?.kind === 'claude' || agent?.kind === 'codex' ? agent.kind : null)
@@ -335,23 +366,52 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   const canReply = !isOver && !chat?.approval && status !== 'blocked' && status !== 'error'
   const canToggleSpeed = canReply && !replyId && status !== 'working' && status !== 'starting'
   const speed = chat?.codexSpeed?.speed ?? null
-  const replyLabel = replyId && canReply ? (sending ? '보내는 중…' : '답변 생성 중…') : null
+  // Sent while the agent was busy and not read yet: the CLI holds it (Claude reads it at its next step,
+  // Codex when its turn ends), so the bubble says it waits and the progress line is about the work before it
+  const waiting = useMemo(() => waitingItemIds(liveItems, chat?.echoes ?? [], chat?.held ?? [], status),
+    [liveItems, chat?.echoes, chat?.held, status])
+  // The reply waits on the echo first, then on the transcript item that replaced it
+  const replyWaiting = Boolean(replyId && (waiting.has(replyId) || (chat?.reply && waiting.has(chat.reply.itemId))))
+  let progressLabel: string | null = null
+  if (canReply) {
+    if (sending) progressLabel = '보내는 중…'
+    else if (replyId) progressLabel = replyWaiting ? '앞 작업 진행 중…' : '답변 생성 중…'
+    else if (status === 'working') progressLabel = '작업 중…'
+  }
   const title = chat?.title ?? liveItems.find(item => item.kind === 'user')?.text?.split('\n')[0] ?? '대화'
   const lastToolId = useMemo(() => [...items].reverse().find(item => item.kind === 'tool')?.id, [items])
   // The tokens each question used, at the end of its turn
   const usageSpots = useMemo(() => turnUsageSpots(items), [items])
   const showOlder = !history && Boolean(chat?.hasOlder)
-  const showProgress = !history && Boolean(replyLabel)
+  const showSendTime = Boolean(appearance && themeId === 'chat-kakao')
   const timeline = useMemo(() => {
     const rows: TimelineRow[] = []
     if (showOlder) rows.push({ kind: 'older', key: 'older', estimate: 26 })
-    for (const item of items) {
-      rows.push({ kind: 'item', key: `item:${item.id}`, estimate: estimateItem(item) + (usageSpots.has(item.id) ? 28 : 0), item })
-    }
-    if (showProgress) rows.push({ kind: 'progress', key: 'progress', estimate: 20 })
+    items.forEach((item, index) => {
+      const sendTime = showSendTime ? visibleSendTime(item, items[index + 1]) : null
+      const images = item.kind === 'user' ? sentImages?.get(sentImageKey(item)) : undefined
+      const estimate = estimateItem(item) + (images ? 84 : 0) + (usageSpots.has(item.id) ? 28 : 0)
+      rows.push({ kind: 'item', key: `item:${item.id}`, estimate, item, sendTime, sentImages: images })
+    })
     return rows
-  }, [items, showOlder, showProgress, usageSpots])
+  }, [items, sentImages, showOlder, showSendTime, usageSpots])
   const { virtualizer, followAfterSend, rememberFocus, selectAll: selectChatLog } = useChatWindow(timeline, logRef, items.length > 0)
+  // The bar over the top goes to the question before what is on screen; the button over the bottom goes back down
+  const questionRows = useMemo(() => timeline.flatMap((row, index) => row.kind === 'item' && isChatQuestion(row.item) ? [index] : []), [timeline])
+  const [scrollNav, setScrollNav] = useState<{ previous: number | null; away: boolean; fresh: boolean }>({ previous: null, away: false, fresh: false })
+  const seenItems = useRef(0)
+  const updateScrollNav = useCallback(() => {
+    const log = logRef.current
+    if (!log) return
+    const rows = virtualizer.measurementsCache
+    const previous = previousQuestionIndex(questionRows.map(index => ({ index, start: rows[index]?.start ?? Infinity })), log.scrollTop)
+    const away = isAwayFromBottom(log.scrollTop, log.clientHeight, log.scrollHeight)
+    if (!away) seenItems.current = items.length
+    const fresh = away && items.length > seenItems.current
+    setScrollNav(current => current.previous === previous && current.away === away && current.fresh === fresh ? current : { previous, away, fresh })
+  }, [items.length, questionRows, virtualizer])
+  useEffect(() => { updateScrollNav() }, [timeline, updateScrollNav])
+  const previousQuestion = scrollNav.previous === null ? null : timeline[scrollNav.previous]
 
   useLayoutEffect(() => {
     if (!jump || jump.scope !== scope) return
@@ -530,6 +590,14 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
     const log = logRef.current
     if (!log) return
     if (log.scrollTop < 80 && showOlder) loadOlder(shellId)
+    updateScrollNav()
+  }
+
+  const goToBottom = () => {
+    if (history) {
+      resetQuestionPosition()
+      setJump({ id: null, scope })
+    } else virtualizer.scrollToEnd()
   }
 
   const readIntoDraft = async (box: HTMLTextAreaElement, source: 'clipboard' | 'files') => {
@@ -552,9 +620,10 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
         toast.error(errorTitle, result.error)
       } else if (result.kind === 'images') {
         const added = result.images.map(({ id, preview }) => {
-          const url = URL.createObjectURL(new Blob([preview], { type: 'image/png' }))
+          const image = new Blob([preview], { type: 'image/png' })
+          const url = URL.createObjectURL(image)
           previewUrls.current.set(id, url)
-          return { id, url }
+          return { id, url, preview: image }
         })
         if (added.length) setAttachments(current => [...current, ...added])
       } else if (result.text) {
@@ -603,7 +672,7 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
     setSending(true)
     setDraft('')
     const { echoSend, discardSend } = useAgentChatStore.getState()
-    const sendId = echoSend(shellId, text, !!attachments.length)
+    const sendId = echoSend(shellId, text, attachments.map(image => image.preview), status === 'working')
     try {
       const result = await window.electronAPI.agentChatSend?.(shellId, text, attachments.map(image => image.id))
       if (result?.ok) {
@@ -627,8 +696,20 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   }
 
   const stop = async () => {
-    if (await window.electronAPI.agentChatInterrupt?.(shellId) && replyId) {
-      useAgentChatStore.getState().stopWaiting(shellId, replyId)
+    // Lines sent while the agent worked and not read yet: Esc makes the CLI put them back in its composer
+    const queued = (useAgentChatStore.getState().chats.get(shellId)?.echoes ?? [])
+      .filter(echo => echo.queued && !echo.hasImage && echo.text)
+    if (!await window.electronAPI.agentChatInterrupt?.(shellId)) return
+    if (replyId) useAgentChatStore.getState().stopWaiting(shellId, replyId)
+    const takeBack = window.electronAPI.agentChatTakeBack
+    if (!queued.length || !takeBack) return
+    const texts = queued.map(echo => echo.text)
+    // As in the terminal, the lines come back to the box to edit or send again, and leave the conversation
+    if (await takeBackQueued(list => takeBack(shellId, list), texts)) {
+      const { discardSend } = useAgentChatStore.getState()
+      for (const echo of queued) discardSend(shellId, echo.id)
+      setDraft(current => draftWithTakenBack(texts, current))
+      boxRef.current?.focus()
     }
   }
 
@@ -816,6 +897,15 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
       </div>}
       {chat && chat.subagents.length > 0 && <AgentChatSubagents key={shellId} shellId={shellId} kind={kind} agents={chat.subagents}
         live={chat.state === 'live'} onOpen={setSubagentId} themeStyle={appearance?.style} />}
+      <div className="agent-chat-log-area">
+      {previousQuestion?.kind === 'item' && (
+        <button type="button" className="agent-chat-jump-question" title="이 질문으로 이동"
+          onClick={() => virtualizer.scrollToIndex(scrollNav.previous ?? 0, { align: 'start' })}>
+          <RiArrowUpLine aria-hidden />
+          <span className="agent-chat-jump-question-label">이전 질문</span>
+          <span className="agent-chat-jump-question-text">{questionLine(previousQuestion.item)}</span>
+        </button>
+      )}
       <div className="agent-chat-log" ref={logRef} onScroll={onScroll} onClick={onLogClick}
         onFocus={event => rememberFocus(event.target)} onBlur={event => rememberFocus(event.relatedTarget)}
         onWheel={() => virtualizer.cancelScroll()} onTouchStart={() => virtualizer.cancelScroll()}>
@@ -841,13 +931,10 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
                       <div>{chosenQuestion.text}</div>
                     </div>
                   )}
-                  {item && <ChatItem item={item} live={!history && !isOver && item.id === lastToolId}
-                    expanded={disclosures.current.has(item.id)} rememberDisclosure={rememberDisclosure}
+                  {entry.kind === 'item' && <ChatItem item={entry.item} sentImages={entry.sentImages} sendTime={entry.sendTime} live={!history && !isOver && entry.item.id === lastToolId}
+                    waiting={!history && waiting.has(entry.item.id)} expanded={disclosures.current.has(entry.item.id)} rememberDisclosure={rememberDisclosure}
                     onPin={window.electronAPI.agentChatPin ? pinReply : undefined} />}
                   {line && <p className="agent-chat-usage" title={line.title}>{line.text}</p>}
-                  {entry.kind === 'progress' && <p className="agent-chat-reply-progress" role="status">
-                    <RiLoader4Line className="agent-chat-spin" aria-hidden />{replyLabel}
-                  </p>}
                 </div>
               )
             })}
@@ -856,6 +943,14 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
         {chat?.state === 'opening' && !items.length && <p className="agent-chat-empty">대화를 불러오는 중…</p>}
         {chat?.state === 'waiting' && !items.length && <p className="agent-chat-empty">대화가 시작되면 여기에 보입니다.</p>}
         {chat?.state === 'live' && !items.length && <p className="agent-chat-empty">아직 주고받은 말이 없습니다.</p>}
+      </div>
+      {scrollNav.away && (
+        <button type="button" className="agent-chat-jump-bottom" data-fresh={scrollNav.fresh || undefined}
+          title={history ? '최신 대화로 이동' : '대화 맨 아래로 이동'} onClick={goToBottom}>
+          {scrollNav.fresh && <span className="agent-chat-jump-dot" aria-hidden />}
+          <RiArrowDownLine aria-hidden /> {scrollNav.fresh ? '새 내용 · 맨 아래로' : '맨 아래로'}
+        </button>
+      )}
       </div>
       {chat?.approval && !isOver && <ApprovalCard shellId={shellId} approval={chat.approval} />}
       {status === 'blocked' && !isOver && !chat?.approval && (
@@ -874,6 +969,9 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
       {/* While a prompt waits the composer is hidden: the agent takes no line then (the draft is kept) */}
       {!isOver && !chat?.approval && (
         <div className="agent-chat-composer">
+          {progressLabel && <p className="agent-chat-reply-progress" role="status">
+            <RiLoader4Line className="agent-chat-spin" aria-hidden />{progressLabel}
+          </p>}
           {!!attachments.length && (
             <div className="agent-chat-attachments" role="group" aria-label="첨부 이미지">
               {attachments.map(({ id, url }, index) => (

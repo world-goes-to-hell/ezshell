@@ -30,6 +30,9 @@ describe('Tab Tab from any program', () => {
     const script = helperScript(4321, 987654, 320)
     expect(script).toContain('[EzShellDoubleTab]::Run(4321, 987654, 320)')
     expect(script).toContain('SetWindowsHookEx(13')
+    // The window in front is read before ezShell comes forward, in screen pixels
+    expect(script).toContain('SetThreadDpiAwarenessContext')
+    expect(script).not.toContain('${')
     expect(() => helperScript(4321, Number.NaN)).toThrow()
     expect(handleNumber(handle(987654))).toBe(987654)
     expect(handleNumber(Buffer.from([1, 0, 0, 0]))).toBe(1)
@@ -62,6 +65,13 @@ describe('Tab Tab from any program', () => {
     child.stdout.emit('data', 'dou')
     child.stdout.emit('data', 'ble\r\n')
     expect(onDoubleTab).toHaveBeenCalledTimes(1)
+    expect(onDoubleTab).toHaveBeenLastCalledWith(null)
+    // Where the program in front was (the middle of its window, screen pixels): the overview opens on that monitor
+    child.stdout.emit('data', 'double -1280 540\r\n')
+    expect(onDoubleTab).toHaveBeenLastCalledWith({ x: -1280, y: 540 })
+    // Anything else is not a point
+    child.stdout.emit('data', 'double 1 2 3\r\ndouble x 5\r\n')
+    expect(onDoubleTab).toHaveBeenCalledTimes(2)
 
     watch.stop()
     expect(child.kill).toHaveBeenCalled()

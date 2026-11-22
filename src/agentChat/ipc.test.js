@@ -133,7 +133,7 @@ describe('pinned answer windows', async () => {
     const chats = { cwdOf: () => null, knowsLink: (id, key) => shown.includes(key) }
     const pins = createPins({
       createWindow: () => {
-        const win = Object.assign(new EventEmitter(), { webContents: {}, isDestroyed: () => false, close() {} })
+        const win = Object.assign(new EventEmitter(), { webContents: {}, isDestroyed: () => false, isMaximized: () => false, close() {} })
         windows.push(win)
         return win
       },

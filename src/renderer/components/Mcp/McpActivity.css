@@ -62,58 +62,10 @@
   transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Slid fully off screen after a press on the app behind it; the floating tab stands in for it.
-   Leaving a full-height strip on screen made the content behind look sliced off at that edge. */
+/* The status bar button reopens the panel after it slides off screen. */
 .mcp-activity-panel.is-collapsed {
   transform: translateX(100%);
   box-shadow: none;
-}
-
-/* The handle that stays when the panel is collapsed: a compact tab on the right edge, not a
-   full-height strip, so the terminal or grid behind it reads as whole */
-.mcp-activity-tab {
-  position: fixed;
-  right: 0;
-  top: calc(50% + 1px);
-  transform: translateY(-50%);
-  z-index: 94; /* just under the panel (95); above terminals and SFTP */
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  padding: 16px 8px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-strong);
-  border-right: none;
-  border-radius: 10px 0 0 10px;
-  box-shadow: -6px 0 18px rgba(0, 0, 0, 0.35);
-  color: var(--text-secondary);
-  font: inherit;
-  cursor: pointer;
-  transition: background 0.14s ease, color 0.14s ease, padding-right 0.14s ease;
-}
-
-.mcp-activity-tab:hover {
-  background: var(--bg-hover, var(--bg-secondary));
-  color: var(--text-primary);
-  padding-right: 11px;
-}
-
-.mcp-activity-tab:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.mcp-activity-tab-counts {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .mcp-activity-tab { transition: none; }
 }
 
 .mcp-activity-body {
@@ -121,31 +73,6 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
-}
-
-.mcp-activity-strip-label {
-  writing-mode: vertical-rl;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
-.mcp-activity-strip-count {
-  min-width: 20px;
-  padding: 1px 5px;
-  border-radius: 10px;
-  font-size: 11px;
-  font-weight: 700;
-  text-align: center;
-  color: var(--bg-primary);
-}
-
-.mcp-activity-strip-count.is-waiting {
-  background: var(--warning);
-}
-
-.mcp-activity-strip-count.is-running {
-  background: var(--text-link);
 }
 
 .mcp-activity-header {

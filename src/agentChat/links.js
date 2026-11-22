@@ -37,6 +37,8 @@ function linkTarget(href, platform = process.platform, base = null) {
     // A link target may be percent-encoded (markdown-it writes spaces as %20)
     try { value = decodeURIComponent(value) } catch { return null }
   }
+  // Codex can prefix a Windows drive path with a slash: /D:/project/file.sql
+  if (platform === 'win32' && /^\/[a-z]:[\\/]/i.test(value)) value = value.slice(1)
   // The line is where to open the file, not part of its name
   let line
   const place = LINE_SUFFIX.exec(value)

@@ -3,7 +3,7 @@ const { promisify } = require('util')
 const fs = require('fs')
 const path = require('path')
 const { requireLocalDirectory } = require('../localShell.js')
-const { searchDirectory } = require('../localFiles/search.js')
+const { createDirectorySearch } = require('../localFiles/search.js')
 
 const exec = promisify(execFile)
 const DIRECTORY_LIMIT = 1000
@@ -156,6 +156,12 @@ function requireSearchQuery(value) {
  * src/localFiles/git.js. Requests name a root and a path relative to it.
  */
 function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = null, git: localGit = null }) {
+  const directorySearch = createDirectorySearch()
+  let searchGeneration = 0
+  let preparation = 0
+  const checkSearch = (generation) => {
+    if (isLocked() || generation !== searchGeneration) throw new Error('잠금 해제 후 이용할 수 있습니다.')
+  }
   const handle = (channel, fallback, run) => {
     ipcMain.handle(channel, async (event, input) => {
       if (!fromMainWindow(event) || isLocked()) return { success: false, error: '잠금 해제 후 본창에서 이용할 수 있습니다.' }
@@ -171,14 +177,16 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
     let pending
     handle(channel, fallback, async ({ root, query } = {}) => {
       const term = requireSearchQuery(query)
+      const generation = searchGeneration
       pending?.abort()
       const controller = new AbortController()
       pending = controller
       try {
         const folder = await roots.resolveRoot(root)
         controller.signal.throwIfAborted()
+        checkSearch(generation)
         const result = await run(folder, term, controller.signal)
-        if (isLocked()) throw new Error('잠금 해제 후 이용할 수 있습니다.')
+        checkSearch(generation)
         return result
       } finally {
         if (pending === controller) pending = null
@@ -203,8 +211,22 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
   }
   handle('workspace-git-log', 'Git 기록을 읽지 못했습니다.', readWorkspaceGit)
   if (roots) {
-    handleSearch('workspace-directory-search', '폴더를 검색하지 못했습니다.', searchDirectory)
+    handle('workspace-directory-prepare', '폴더를 검색하지 못했습니다.', async ({ root, refresh } = {}) => {
+      const generation = searchGeneration
+      const request = ++preparation
+      const folder = await roots.resolveRoot(root)
+      checkSearch(generation)
+      if (request === preparation) directorySearch.prepare(folder, refresh === true)
+      return {}
+    })
+    handleSearch('workspace-directory-search', '폴더를 검색하지 못했습니다.', directorySearch.search)
     handleSearch('workspace-git-search', 'Git 기록을 검색하지 못했습니다.', searchWorkspaceGit)
+  }
+  return {
+    clearSearches() {
+      searchGeneration++
+      directorySearch.clear()
+    }
   }
 }
 

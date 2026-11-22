@@ -8,6 +8,59 @@ export interface ChatEcho {
   text: string
   time: number
   hasImage: boolean
+  /** Sent while the agent was busy: the CLI holds it until it can read it */
+  queued?: boolean
+}
+
+export interface SentChatImages {
+  text: string
+  previews: readonly Blob[]
+  bytes: number
+}
+
+// Transcript IDs can repeat when a shell starts a new conversation.
+export const sentImageKey = (item: Pick<AgentChatItem, 'id' | 'time'>): string => JSON.stringify([item.id, item.time])
+
+/** Show the time on the last outgoing message in a consecutive run within the same minute. */
+export function visibleSendTime(item: AgentChatItem, next?: AgentChatItem): number | null {
+  if (item.kind !== 'user') return null
+  const time = item.sentAt ?? item.time
+  if (time === null) return null
+  const nextTime = next?.kind === 'user' ? next.sentAt ?? next.time : null
+  return nextTime !== null && Math.floor(nextTime / 60_000) === Math.floor(time / 60_000) ? null : time
+}
+
+// Agent states in which a held message is still waiting (idle means it was taken or it never matched)
+const WAITING_STATUSES = new Set(['working', 'starting', 'blocked', 'unknown'])
+// What the model makes: one of these after a message means the model has read it
+const MODEL_KINDS = new Set<AgentChatItem['kind']>(['assistant', 'thinking', 'tool', 'output'])
+
+/** Whether the model made something after the item: it has read that message */
+export function isReadByModel(items: readonly AgentChatItem[], id: string): boolean {
+  const at = items.findIndex(item => item.id === id)
+  return at !== -1 && items.slice(at + 1).some(item => MODEL_KINDS.has(item.kind))
+}
+
+/**
+ * Sent messages the agent has not read yet. Sent while it was busy, they wait first as an echo (not in the
+ * transcript), then, once recorded (`held`: the transcript ids of those messages), until the model makes
+ * something after them. Codex records the message the moment it takes it, even with a command still
+ * running (this PC's rollouts, 2026-11-22), so being recorded is not being read. Once the agent is idle
+ * the wait is over even if nothing matched, so the mark does not stay forever.
+ */
+export function waitingItemIds(items: readonly AgentChatItem[], echoes: readonly ChatEcho[], held: readonly string[], status: string): ReadonlySet<string> {
+  if (!WAITING_STATUSES.has(status)) return new Set()
+  return new Set([
+    ...echoes.filter(echo => echo.queued).map(echo => echo.id),
+    ...held.filter(id => items.some(item => item.id === id) && !isReadByModel(items, id))
+  ])
+}
+
+/** `held` after a frame: messages sent while busy that the transcript just recorded join, read ones leave */
+export function nextHeld(held: readonly string[], recorded: ReadonlyMap<string, AgentChatItem>, echoes: readonly ChatEcho[], items: readonly AgentChatItem[]): string[] {
+  const queued = new Set(echoes.filter(echo => echo.queued).map(echo => echo.id))
+  const joined = [...recorded].filter(([echoId]) => queued.has(echoId)).map(([, item]) => item.id)
+  return [...new Set([...held, ...joined])].filter(id => items.some(item => item.id === id) && !isReadByModel(items, id))
 }
 
 const LEGACY_IMAGE_PROMPT = '첨부 이미지를 열어 확인해 주세요.'
@@ -61,8 +114,10 @@ export function mergeChatItems(current: readonly AgentChatItem[], incoming: read
   const fresh: AgentChatItem[] = []
   for (const item of incoming) {
     const index = at.get(item.id)
-    if (index !== undefined) next[index] = item
-    else {
+    if (index !== undefined) {
+      const sentAt = current[index]?.sentAt
+      next[index] = sentAt === undefined ? item : { ...item, sentAt }
+    } else {
       at.set(item.id, -1)
       fresh.push(item)
     }
@@ -83,7 +138,7 @@ function matchChatEchoes(known: Set<string>, incoming: AgentChatItem[], echoes: 
     if (item.kind !== 'user' || known.has(item.id)) continue
     known.add(item.id)
     const echo = echoes.find(entry => !recorded.has(entry.id) && isEchoOf(item, entry, reset))
-    if (echo) recorded.set(echo.id, item)
+    if (echo) recorded.set(echo.id, { ...item, sentAt: echo.time })
   }
   return recorded
 }
@@ -122,7 +177,10 @@ export function reconcileChatEchoes(current: AgentChatItem[], incoming: AgentCha
   const recorded = matchChatEchoes(new Set(current.map(item => item.id)), incoming, echoes, mode === 'reset')
   const unmatched = echoes.filter(echo => !recorded.has(echo.id))
   const localIds = echoItemIds(echoes)
-  const items = insertChatEchoes(mergeChatItems(current.filter(item => !localIds.has(item.id)), incoming, mode), current, unmatched)
+  const recordedById = new Map(Array.from(recorded.values(), item => [item.id, item]))
+  const confirmed = recordedById.size ? incoming.map(item => recordedById.get(item.id) ?? item) : incoming
+  const merged = mergeChatItems(current.filter(item => !localIds.has(item.id)), confirmed, mode)
+  const items = insertChatEchoes(merged, current, unmatched)
   const shown = items.slice(-MAX_CHAT_ITEMS)
   const shownIds = new Set(shown.map(item => item.id))
   return { items: shown, echoes: unmatched.filter(echo => shownIds.has(echo.id)), recorded }

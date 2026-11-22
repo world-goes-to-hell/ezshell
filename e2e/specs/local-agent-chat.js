@@ -115,9 +115,12 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     ${cover(0)}.querySelector('.agent-chat-user')?.textContent === '첫 칸 질문' &&
     !${cover(0)}.querySelector('.agent-chat-empty')
   `, 1500))
-  check('the log shows that a reply is being generated', await until(`
-    ${cover(0)}.querySelector('.agent-chat-reply-progress')?.textContent.trim() === '답변 생성 중…'
+  const composerProgress = `${cover(0)}.querySelector('.agent-chat-composer .agent-chat-reply-progress')`
+  check('the composer shows that a reply is being generated', await until(`
+    ${composerProgress}?.textContent.trim() === '답변 생성 중…'
   `, 3000) && await waitFor(() => read('claude-1-chat-sent') === '1'))
+  fs.writeFileSync(file('claude-1-program-status'), 'state=working:app=claude')
+  await until(`${cover(0)}.querySelector('.agent-chat-status')?.dataset.status === 'working'`, 5000)
 
   const firstTranscript = path.join(projects, `${SESSIONS[0]}.jsonl`)
   const filler = line({ type: 'attachment', attachment: { text: '한글'.repeat(1700) } })
@@ -134,9 +137,15 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   const reported = await reportSession('claude-1', SESSIONS[0])
   check('the fake Claude reports its session', reported.exit === 0, JSON.stringify(reported))
   check('the chat shows that agent\'s conversation from its transcript', await until(`(${cover(0)}?.textContent ?? '').includes('첫 칸 질문') && !!${cover(0)}.querySelector('.agent-chat-md strong')`, 8000), await coverText(0))
-  check('the first transcript replaces the echo without duplicating it and clears reply progress', await until(`
+  check('a reply from the transcript replaces the echo and leaves the working status above the input', await until(`
     ${cover(0)}.querySelectorAll('.agent-chat-user').length === 1 &&
-    !${cover(0)}.querySelector('.agent-chat-reply-progress')
+    ${composerProgress}?.textContent.trim() === '작업 중…' &&
+    ${composerProgress}.getBoundingClientRect().bottom <= ${composer(0)}.getBoundingClientRect().top
+  `, 3000))
+  await shot('local-agent-chat-working-footer')
+  fs.writeFileSync(file('claude-1-program-status'), 'state=idle:app=claude')
+  check('the composer clears its progress label when the agent becomes idle', await until(`
+    !${composerProgress}
   `, 3000))
   const appTheme = `document.documentElement.dataset.theme`
   const xtermColor = `getComputedStyle(${pane(0)}.querySelector('.local-terminal-host')).getPropertyValue('--terminal-background')`
@@ -147,21 +156,40 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     getComputedStyle(${cover(0)}.querySelector('.agent-chat-user .agent-chat-bubble')).backgroundColor === 'rgb(255, 223, 98)' &&
     getComputedStyle(${cover(0)}.querySelector('.agent-chat-assistant')).backgroundColor === 'rgb(255, 255, 255)'
   `))
+  check('Kakao shows the local send time to the bottom left of the sent bubble', await until(`(() => {
+    const message = ${cover(0)}.querySelector('.agent-chat-user-message')
+    const time = message?.querySelector('time')
+    const bubble = message?.querySelector('.agent-chat-bubble')?.getBoundingClientRect()
+    if (!time || !bubble) return false
+    const label = time.getBoundingClientRect()
+    return /^(오전|오후) \\d{1,2}:\\d{2}$/.test(time.textContent) &&
+      Math.abs(Date.parse(time.dateTime) - Date.parse(${JSON.stringify(firstSentAt)})) < 5000 &&
+      label.right < bubble.left && label.bottom <= bubble.bottom && label.bottom >= bubble.bottom - 4
+  })()`))
   check('changing the chat theme keeps the app and underlying xterm colors',
     JSON.stringify(await js(`[${appTheme}, ${xtermColor}]`)) === JSON.stringify(beforeChatTheme))
+  // The pane draws the focus border and the working trace itself, so the theme's colors must reach it
+  const paneVar = name => `getComputedStyle(${pane(0)}).getPropertyValue(${JSON.stringify(name)}).trim()`
+  const paneBorder = `getComputedStyle(${pane(0)}, '::before').borderTopColor`
+  check('the Kakao theme gives the pane its own focus and trace colors', await until(`
+    ${paneVar('--chat-focus')} === '#2f68b0' && ${paneVar('--motion-accent')} === '#a86f00' &&
+    (!${pane(0)}.matches(':focus-within') || ${paneBorder} === 'rgb(47, 104, 176)')
+  `), JSON.stringify(await js(`[${paneVar('--chat-focus')}, ${paneVar('--motion-accent')}, ${paneBorder}]`)))
   await shot('local-agent-chat-kakao')
   await chooseChatTheme(0, '미드나잇')
   check('Midnight uses a dark canvas without touching the app theme', await until(`
     ${cover(0)}.dataset.chatTheme === 'chat-midnight' && getComputedStyle(${cover(0)}).colorScheme === 'dark' &&
-    ${appTheme} === ${JSON.stringify(beforeChatTheme[0])}
+    ${appTheme} === ${JSON.stringify(beforeChatTheme[0])} && !${cover(0)}.querySelector('.agent-chat-sent-time')
   `))
+  check('Midnight swaps the pane trace to its own color', await until(`${paneVar('--motion-accent')} === '#8fd3ff'`))
+  await shot('local-agent-chat-midnight')
   await chooseChatTheme(0, 'Nord')
   check('an existing app theme can be selected solely for the chat', await until(`
     ${cover(0)}.dataset.chatTheme === 'nord' && !${cover(0)}.hasAttribute('data-chat-bubbles') &&
     ${appTheme} === ${JSON.stringify(beforeChatTheme[0])}
   `))
   await chooseChatTheme(0, '앱 테마 따르기')
-  check('following the app removes the local palette', await until(`!${cover(0)}.hasAttribute('data-chat-theme')`))
+  check('following the app removes the local palette', await until(`!${cover(0)}.hasAttribute('data-chat-theme') && ${paneVar('--chat-focus')} === ''`))
   const questionPanel = index => `${cover(index)}.querySelector('.agent-chat-questions')`
   const openQuestions = index => js(`${cover(index)}.querySelector('.agent-chat-questions-toggle').click()`)
   const pickQuestion = (index, text) => js(`[...${questionPanel(index)}.querySelectorAll('li button')]
@@ -214,12 +242,13 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await setChatDraft('')
   check('the conversation can be selected by dragging (the app turns selection off elsewhere)', await js(`getComputedStyle(${cover(0)}.querySelector('.agent-chat-log')).userSelect === 'text'`))
 
-  // A file of this PC named in an answer opens from a menu on its link
+  // A Windows drive path with Codex's leading slash opens from the answer's link menu
   const note = file('linked-note.txt')
   fs.writeFileSync(note, '링크로 연 파일')
-  fs.appendFileSync(path.join(projects, `${SESSIONS[0]}.jsonl`), answer('a-link', `메모는 [linked-note.txt](${note.replace(/\\/g, '/')}) 에 있습니다`))
-  check('a link to a file of this PC shows as a link', await until(`!!${cover(0)}.querySelector('.agent-chat-md a[href$="linked-note.txt"]')`, 8000), await coverText(0))
-  const link = await center(`${cover(0)}.querySelector('.agent-chat-md a[href$="linked-note.txt"]')`)
+  fs.appendFileSync(path.join(projects, `${SESSIONS[0]}.jsonl`), answer('a-link', `메모는 [linked-note.txt](/${note.replace(/\\/g, '/')}) 에 있습니다`))
+  const driveLink = `${cover(0)}.querySelector('.agent-chat-md a[href^="/"][href$="linked-note.txt"]')`
+  check('a slash-prefixed Windows drive path shows as a file link', await until(`!!${driveLink}`, 8000), await coverText(0))
+  const link = await center(driveLink)
   await click(link[0], link[1])
   check('clicking it offers to open it in ezShell or the file manager', await until(`(() => {
     const labels = [...document.querySelectorAll('.terminal-menu-item')].map(item => item.textContent.trim())
@@ -247,6 +276,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('the terminal stays mounted under the chat', await js(`!!${pane(0)}.querySelector('.xterm-screen') && ${pane(0)}.querySelector('.xterm-screen').offsetWidth > 0`))
 
   // An answer pinned out into a small window of its own, read while working in another tab
+  await chooseChatTheme(0, '카톡 모드')
   const pinnedAnswer = `[...${cover(0)}.querySelectorAll('.agent-chat-assistant')].find(item => item.textContent.includes('셋째 줄은'))`
   await driver.move(...await center(pinnedAnswer))
   const pinButton = `${pinnedAnswer}.querySelector('.agent-chat-pin')`
@@ -261,6 +291,15 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   const pin = await connect(page => /pinnedReplyMode=true/.test(page.url))
   try {
     check('the window shows the answer as it was', await pin.until(`(document.querySelector('.pinned-reply-body')?.textContent ?? '').includes('셋째 줄은') && !!document.querySelector('.pinned-reply-body a[href="linked-note.txt"]')`, 5000))
+    const pinCanvas = `getComputedStyle(document.querySelector('.pinned-reply')).backgroundColor`
+    check('the pinned reply opens with the chat palette and the reply bubble', await pin.js(`
+      ${pinCanvas} === 'rgb(220, 232, 244)' &&
+      getComputedStyle(document.querySelector('.pinned-reply-message')).backgroundColor === 'rgb(255, 255, 255)'
+    `))
+    await pin.shot('local-agent-chat-pinned-theme')
+    await chooseChatTheme(0, '미드나잇')
+    check('an open pin follows changes to the chat theme', await pin.until(`${pinCanvas} === 'rgb(19, 22, 37)'`))
+    await chooseChatTheme(0, '앱 테마 따르기')
     const pinLine = await pin.js(`window.electronAPI.pinnedReplyOpenLink(${JSON.stringify(lines.replace(/\\/g, '/') + ':3')}, 'app')`)
     check('a link of the pinned answer opens', pinLine?.ok === true, JSON.stringify(pinLine))
     // Not in this answer (its "메모" link names linked-note.txt, so that one opens)
@@ -273,10 +312,29 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     check('folding leaves only its header', await pin.until(`window.innerHeight <= 48 && !document.querySelector('.pinned-reply-body')`, 3000), await pin.js('window.innerHeight'))
     await pin.js(`document.querySelector('.pinned-reply-btn[data-action="fold"]').click()`)
     check('unfolding gives its height back', await pin.until(`window.innerHeight >= 120 && !!document.querySelector('.pinned-reply-body')`, 3000), await pin.js('window.innerHeight'))
+    const [normalWidth, normalHeight] = await pin.js('[innerWidth, innerHeight]')
+    const maximize = `document.querySelector('.pinned-reply-btn[data-action="maximize"]')`
+    const fold = `document.querySelector('.pinned-reply-btn[data-action="fold"]')`
+    const maximized = `${maximize}.getAttribute('aria-label') === '이전 크기로 복원' && innerWidth > ${normalWidth} && innerHeight > ${normalHeight}`
+    await pin.js(`${maximize}.click()`)
+    check('the pinned answer maximizes', await pin.until(maximized, 3000), await pin.js('[innerWidth, innerHeight]'))
+    await pin.js(`${fold}.click()`)
+    check('a maximized reply still folds to its header', await pin.until(`innerHeight <= 48 && ${maximize}.disabled`, 3000))
+    await pin.js(`${fold}.click()`)
+    check('unfolding returns the reply to its maximized size', await pin.until(maximized, 3000))
+    await pin.js(`${maximize}.click()`)
+    check('restore returns to the original size', await pin.until(`
+      ${maximize}.getAttribute('aria-label') === '최대화' && innerWidth === ${normalWidth} && innerHeight === ${normalHeight}
+    `, 3000), await pin.js('[innerWidth, innerHeight]'))
     await js(`${cover(0)}.querySelector('.agent-chat-head-btn').click()`)
     await until(`!${cover(0)}`, 3000)
+    await pin.js(`${maximize}.click()`)
+    await pin.until(maximized, 3000)
     await pin.js(`document.querySelector('.pinned-reply-btn[data-action="source"]').click()`)
     check('원래 대화로 가기 shows that pane as a chat again', await until(`!!${cover(0)}`, 5000))
+    check('returning to the chat restores the pin so the chat is visible', await pin.until(`
+      ${maximize}.getAttribute('aria-label') === '최대화' && innerWidth === ${normalWidth}
+    `, 3000))
     await pin.js(`document.querySelector('.pinned-reply-btn[data-action="close"]').click()`)
   } finally {
     pin.close()
@@ -476,6 +534,10 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   // The fixture provides an actual PNG from the main-process clipboard, like Windows Snipping Tool.
   const preview = `${cover(0)}.querySelector('.agent-chat-attachment img')`
   const sendButton = `${cover(0)}.querySelector('.agent-chat-send')`
+  const sentImageMessage = text => `[...${cover(0)}.querySelectorAll('.agent-chat-user')]
+    .find(row => row.querySelector('.agent-chat-bubble')?.textContent.trim() === ${JSON.stringify(text)})`
+  const sentImageWidths = text => `[...(${sentImageMessage(text)})?.querySelectorAll('.agent-chat-sent-images img') ?? []]
+    .map(img => img.naturalWidth).join(',')`
   const chatFeedback = () => js(`[...document.querySelectorAll('.toast')].map(toast => toast.textContent).join(' ')`)
   await pasteIntoChat(0)
   check('Ctrl+V shows a decoded screenshot preview in the focused chat', await until(`${preview}?.naturalWidth === 1`))
@@ -500,6 +562,20 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     return !extra.length && separator === '' && body === '클립보드 텍스트' && first !== second && isPng(first) && isPng(second)
   }), `${read('claude-1-chat-text')} ${await chatFeedback()}`)
   check('the draft preview is cleared after sending', await until(`!${preview} && !${cover(0)}.querySelector('.agent-chat-input').value`))
+  check('both sent images appear above the text bubble', await until(`(() => {
+    const row = ${sentImageMessage('클립보드 텍스트')}
+    const images = row?.querySelector('.agent-chat-sent-images')
+    return ${sentImageWidths('클립보드 텍스트')} === '1,1' &&
+      images.getBoundingClientRect().bottom <= row.querySelector('.agent-chat-bubble').getBoundingClientRect().top
+  })()`))
+  fs.appendFileSync(firstTranscript, line({
+    type: 'user', uuid: 'two-images', timestamp: new Date().toISOString(),
+    message: { role: 'user', content: '[Image #1] [Image #2]\n클립보드 텍스트' }
+  }))
+  check('the transcript keeps the thumbnails and shows the original text without image markers', await until(`
+    !!${cover(0)}.querySelector('[data-chat-row="item:user:two-images"]') &&
+    ${sentImageWidths('클립보드 텍스트')} === '1,1'
+  `))
   fs.unlinkSync(file('clipboard-text'))
   await pasteIntoChat(0)
   await until(`${preview}?.naturalWidth === 1 && !${sendButton}.disabled`)
@@ -512,7 +588,16 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   }) + answer('attachment-only-seen', '첨부 파일을 받았습니다.', new Date().toISOString()))
   check('the recorded image-only send keeps one screenshot entry in the conversation', await until(`
     ${cover(0)}.textContent.includes('첨부 파일을 받았습니다.') &&
-    [...${cover(0)}.querySelectorAll('.agent-chat-user')].filter(bubble => bubble.textContent === '스크린샷 첨부').length === 1
+    [...${cover(0)}.querySelectorAll('.agent-chat-user')].filter(bubble => bubble.textContent === '스크린샷 첨부').length === 1 &&
+    ${sentImageWidths('스크린샷 첨부')} === '1'
+  `))
+  await js(`${cover(0)}.querySelector('.agent-chat-head-btn').click()`)
+  await until(`!${cover(0)}`)
+  await js(`${pane(0)}.querySelector('.xterm-helper-textarea').focus()`)
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
+  check('the sent thumbnail is still present after switching away from the chat and returning', await until(`
+    !!${cover(0)} && (() => ${sentImageWidths('스크린샷 첨부')} === '1')()
   `))
 
   const previewWidths = `[...${cover(0)}.querySelectorAll('.agent-chat-attachment img')].map(img => img.naturalWidth).join(',')`
@@ -536,6 +621,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
       && lines.slice(separator + 1).join('\n') === '세 이미지 비교해 줘.\n목록과 상세를 확인해 줘.'
   }), await chatFeedback())
   check('sending several images clears the entire attachment tray', await until(`${previewWidths} === ''`))
+  check('sent thumbnails keep the order of the remaining images', await until(`${sentImageWidths('세 이미지 비교해 줘.\n목록과 상세를 확인해 줘.')} === '1,2,3'`))
 
   // A permission prompt in the terminal shows as choices in the chat, and a choice answers it
   fs.writeFileSync(file('claude-1-approval'), '─'.repeat(60) + '\r\n Bash command\r\n\r\n   npm run build\r\n\r\n Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. Yes, and don\'t ask again for npm run build commands\r\n   3. No, and tell Claude what to do differently (esc)')
@@ -701,6 +787,56 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     await until(`!${childChat(1)} && ${cover(1)}.querySelector('.agent-chat-input').value === '부모 대화 초안'`))
   fs.writeFileSync(file('manual-claude-chat-target'), '')
 
+  // Sent while the agent works: the CLI holds it, so the bubble says it waits until Claude reads it
+  // (2026-11-22 user request). Claude records the read as a queued_command attachment line.
+  fs.writeFileSync(file('manual-claude-program-status'), 'state=working:app=claude')
+  check('the second agent reports that it is working', await until(`${cover(1)}.querySelector('.agent-chat-status')?.dataset.status === 'working'`, 5000))
+  await js(`${cover(1)}.querySelector('.agent-chat-input').focus()`)
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
+  await send('Input.insertText', { text: '작업 중에 보낸 질문' })
+  await js(`${cover(1)}.querySelector('.agent-chat-send').click()`)
+  check('a message sent while the agent works reaches it', await waitFor(() =>
+    read('manual-claude-chat-sent') === '3' && read('manual-claude-chat-text') === '작업 중에 보낸 질문'))
+  const waitingBubble = `[...${cover(1)}.querySelectorAll('.agent-chat-user')].find(row => row.textContent.includes('작업 중에 보낸 질문'))`
+  check('that bubble says it waits, and the progress line is about the work before it', await until(`
+    ${waitingBubble}?.querySelector('.agent-chat-waiting')?.textContent.includes('대기 중') &&
+    ${cover(1)}.querySelector('.agent-chat-reply-progress')?.textContent === '앞 작업 진행 중…'
+  `, 5000), await js(`${waitingBubble}?.outerHTML ?? 'no bubble'`))
+  await shot('local-agent-chat-waiting')
+  fs.appendFileSync(path.join(projects, `${SESSIONS[1]}.jsonl`), line({
+    type: 'attachment', uuid: 'q-busy', timestamp: new Date().toISOString(),
+    attachment: { type: 'queued_command', prompt: '작업 중에 보낸 질문', commandMode: 'prompt', origin: { kind: 'human' } }
+  }))
+  check('once Claude reads it mid-turn the wait mark goes and the bubble is not doubled', await until(`
+    !${cover(1)}.querySelector('.agent-chat-waiting') &&
+    [...${cover(1)}.querySelectorAll('.agent-chat-user')].filter(row => row.textContent.includes('작업 중에 보낸 질문')).length === 1 &&
+    ${cover(1)}.querySelector('.agent-chat-reply-progress')?.textContent === '답변 생성 중…'
+  `, 8000), await coverText(1))
+  // Esc while it still waits: Claude puts the line back into its composer. The chat takes it back into its
+  // own box (as the terminal shows it) so it can be sent again (2026-11-22 user report: the composer kept
+  // it and the next send was refused because the composer was not empty)
+  await js(`${cover(1)}.querySelector('.agent-chat-input').focus()`)
+  await send('Input.insertText', { text: '멈출 때 돌아올 질문' })
+  await js(`${cover(1)}.querySelector('.agent-chat-send').click()`)
+  check('a second line sent while working reaches the agent', await waitFor(() => read('manual-claude-chat-sent') === '4'))
+  const returning = `[...${cover(1)}.querySelectorAll('.agent-chat-user')].filter(row => row.textContent.includes('멈출 때 돌아올 질문'))`
+  await until(`${returning}.length === 1 && !!${returning}[0].querySelector('.agent-chat-waiting')`, 5000)
+  fs.writeFileSync(file('manual-claude-restore-on-esc'), '멈출 때 돌아올 질문')
+  await js(`${cover(1)}.querySelector('.agent-chat-input').focus()`)
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  check('Esc stops the agent and the line comes back to the chat box, out of the conversation', await until(`
+    ${cover(1)}.querySelector('.agent-chat-input').value === '멈출 때 돌아올 질문' && ${returning}.length === 0
+  `, 8000) && read('manual-claude-taken-back') === 'x' && read('manual-claude-chat-interrupt').includes('esc'),
+  JSON.stringify([await js(`${cover(1)}.querySelector('.agent-chat-input').value`), read('manual-claude-taken-back'), read('manual-claude-draft')]))
+  fs.writeFileSync(file('manual-claude-program-status'), 'state=idle:app=claude')
+  await until(`${cover(1)}.querySelector('.agent-chat-status')?.dataset.status !== 'working'`, 5000)
+  await js(`${cover(1)}.querySelector('.agent-chat-send').click()`)
+  check('the line taken back can be sent again', await waitFor(() =>
+    read('manual-claude-chat-sent') === '5' && read('manual-claude-chat-text') === '멈출 때 돌아올 질문'),
+    JSON.stringify([read('manual-claude-chat-sent'), read('manual-claude-chat-text'), await js(`document.querySelector('.toast')?.textContent ?? ''`)]))
+
   // The second agent ends: its chat says so and stops taking input
   fs.writeFileSync(file('manual-claude-exit-code'), '0')
   check('when the agent ends its chat says so and has no text box', await until(`${cover(1)}.textContent.includes('종료되었습니다') && !${cover(1)}.querySelector('.agent-chat-input')`, 15000), await js(`${cover(1)}?.textContent.slice(-120)`))
@@ -758,6 +894,16 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     ${codexUsage}?.textContent.includes('${percent}%')
   `
   check('Codex chat shows its model, effort, and usage', await until(codexShowsSettings(22), 12000))
+  await chooseChatTheme(0, '카톡 모드')
+  check('the usage row joins the composer without a gap or divider in the chat theme', await js(`(() => {
+    const composer = ${cover(0)}.querySelector('.agent-chat-composer')
+    const usage = ${codexUsage}
+    const usageStyle = getComputedStyle(usage)
+    return Math.abs(composer.getBoundingClientRect().bottom - usage.getBoundingClientRect().top) < 0.5 &&
+      usageStyle.borderTopWidth === '0px' && usageStyle.backgroundColor === getComputedStyle(composer).backgroundColor
+  })()`))
+  await shot('local-agent-chat-usage-footer')
+  await chooseChatTheme(0, '앱 테마 따르기')
   fs.appendFileSync(codexTranscript, codexLine('response_item', {
     type: 'function_call_output', call_id: 'large-output', output: 'x'.repeat(300 * 1024)
   }) + codexUsageLine(29))
@@ -843,6 +989,33 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await shot('local-agent-subagent-conversation')
   await js(`${childChat(0)}.querySelector('.agent-chat-head-btn').click()`)
 
+  // Sent while Codex works: Codex writes the message the moment it takes it (a command may still run),
+  // so the bubble keeps waiting until the model makes something after it (2026-11-22)
+  const codexItem = item => codexLine('event_msg', { type: 'item_completed', item })
+  fs.writeFileSync(file(codexId + '-chat-target'), '')
+  fs.writeFileSync(file(codexId + '-program-status'), 'state=working:app=codex')
+  check('Codex reports that it is working', await until(`${cover(0)}.querySelector('.agent-chat-status')?.dataset.status === 'working'`, 5000))
+  await js(`${codexInput}.focus()`)
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
+  await send('Input.insertText', { text: '코덱스 작업 중 질문' })
+  await js(`${sendButton}.click()`)
+  check('a message sent while Codex works reaches it', await waitFor(() =>
+    read(codexId + '-chat-sent') === '3' && read(codexId + '-chat-text') === '코덱스 작업 중 질문'),
+    JSON.stringify([read(codexId + '-chat-sent'), read(codexId + '-chat-text'), await js(`[${codexInput}.value, ${sendButton}.disabled, document.querySelector('.toast')?.textContent ?? '']`)]))
+  const codexBubbles = `[...${cover(0)}.querySelectorAll('.agent-chat-user')].filter(row => row.textContent.includes('코덱스 작업 중 질문'))`
+  check('the Codex bubble says it waits', await until(`${codexBubbles}.length === 1 && !!${codexBubbles}[0].querySelector('.agent-chat-waiting')`, 5000))
+  fs.appendFileSync(codexTranscript, codexItem({ id: 'busy-question', type: 'UserMessage', content: [{ type: 'text', text: '코덱스 작업 중 질문' }] }))
+  check('recorded is not read: the bubble still waits, once', await until(`
+    ${codexBubbles}.length === 1 && ${codexBubbles}[0].closest('[data-chat-row]')?.dataset.chatRow === 'item:UserMessage:busy-question'
+  `, 8000) && await js(`!!${codexBubbles}[0].querySelector('.agent-chat-waiting') &&
+    ${cover(0)}.querySelector('.agent-chat-reply-progress')?.textContent === '앞 작업 진행 중…'`), await js(`${codexBubbles}.map(row => row.outerHTML).join('|')`))
+  fs.appendFileSync(codexTranscript, codexItem({ id: 'busy-answer', type: 'AgentMessage', content: [{ type: 'text', text: '작업 중 질문을 확인했습니다' }] }))
+  check('once the model answers after it, the wait mark goes', await until(`
+    ${cover(0)}.textContent.includes('작업 중 질문을 확인했습니다') && !${cover(0)}.querySelector('.agent-chat-waiting')
+  `, 8000))
+  fs.writeFileSync(file(codexId + '-program-status'), 'state=idle:app=codex')
+
   // A long transcript keeps only its viewport mounted even as text continues to arrive.
   const completed = item => codexLine('event_msg', { type: 'item_completed', item })
   const longAnswer = (id, text) => completed({ id, type: 'AgentMessage', content: [{ type: 'text', text }] })
@@ -868,10 +1041,30 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   `))
   await js(`${cover(0)}.querySelector('.agent-chat-question-location button').click()`)
   check('latest conversation scrolls back to the live end', await until(`${atEnd} && ${longLog}.textContent.includes('긴 대화 219번')`))
+  const jumpQuestion = `${cover(0)}.querySelector('.agent-chat-jump-question')`
+  const jumpBottom = `${cover(0)}.querySelector('.agent-chat-jump-bottom')`
+  check('at the end, the top bar offers the question the replies belong to and no way down', await until(`
+    ${jumpQuestion}?.textContent.includes('로그 기록을 검토해 줘') && !${jumpBottom}
+  `), await js(`${jumpQuestion}?.textContent ?? 'no bar'`))
+  await js(`${jumpQuestion}.click()`)
+  check('the top bar goes to that question, which shows below the bar', await until(`(() => {
+    const row = [...${longLog}.querySelectorAll('.agent-chat-row')].find(row => row.textContent.includes('로그 기록을 검토해 줘'))
+    const bar = ${jumpQuestion}
+    return !!row && (!bar || (row.getBoundingClientRect().top >= bar.getBoundingClientRect().bottom - 1 && !bar.textContent.includes('로그 기록을 검토해 줘')))
+  })()`), await js(`${jumpQuestion}?.textContent ?? 'no bar'`))
+  check('away from the end, the way down shows', await until(`!!${jumpBottom} && !${jumpBottom}.dataset.fresh`))
+  await shot('local-agent-chat-jump-controls')
   await scrollLongLog(false)
   check('scrolling back mounts older messages', await until(`
     ${longLog}.textContent.includes('긴 대화 0번') && !${longLog}.textContent.includes('긴 대화 219번')
   `))
+  fs.writeFileSync(file(codexId + '-program-status'), 'state=working:app=codex')
+  check('working stays visible above the composer while reading earlier messages', await until(`
+    ${composerProgress}?.textContent.trim() === '작업 중…' &&
+    ${longLog}.scrollTop < 80 && !${longLog}.textContent.includes('긴 대화 219번')
+  `, 5000))
+  fs.writeFileSync(file(codexId + '-program-status'), 'state=idle:app=codex')
+  await until(`!${composerProgress}`, 5000)
   await js(`${longLog}.querySelector('.agent-chat-tool summary').click()`)
   await until(`${longLog}.querySelector('.agent-chat-tool')?.open`)
   fs.appendFileSync(codexTranscript, longAnswer('scroll-update', '읽는 동안 도착한 답변'))
@@ -879,8 +1072,9 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('a reader stays at the old position when new output arrives', await js(`
     ${longLog}.scrollTop < 80 && ${longLog}.textContent.includes('긴 대화 0번')
   `))
-  await scrollLongLog(true)
-  check('the latest reply appears after going to the bottom', await until(`${longLog}.textContent.includes('읽는 동안 도착한 답변') && !${longLog}.querySelector('.agent-chat-tool')`))
+  check('new output while reading marks the way down', await until(`${jumpBottom}?.dataset.fresh === 'true'`))
+  await js(`${jumpBottom}.click()`)
+  check('the latest reply appears after going to the bottom', await until(`${atEnd} && !${jumpBottom}`) && await until(`${longLog}.textContent.includes('읽는 동안 도착한 답변') && !${longLog}.querySelector('.agent-chat-tool')`))
   await scrollLongLog(false)
   check('a tool stays expanded when it returns to view', await until(`${longLog}.querySelector('.agent-chat-tool')?.open`))
   await openChatMenu()

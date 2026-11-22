@@ -104,6 +104,12 @@ pty.spawn = (file, args, options) => {
       fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
     } else if (id && data === '\x1b' && process.env.EZSHELL_TEST_AGENT_CHAT) {
       fs.appendFileSync(path.join(profile, id + '-chat-interrupt'), 'esc')
+      // As Claude does when its turn is stopped: a queued chat line comes back into the composer
+      const restore = path.join(profile, id + '-restore-on-esc')
+      if (fs.existsSync(restore)) {
+        fs.writeFileSync(path.join(profile, id + '-draft'), fs.readFileSync(restore, 'utf8'))
+        fs.unlinkSync(restore)
+      }
     } else if (id && /^[1-9]$/.test(data) && process.env.EZSHELL_TEST_AGENT_CHAT) {
       // A choice of the fake prompt: answered at once, the composer comes back
       fs.appendFileSync(path.join(profile, id + '-approval-answer'), data)
@@ -111,6 +117,10 @@ pty.spawn = (file, args, options) => {
     } else if (pending === 'speed-probe' && data === '\x7f'.repeat('/ultrafas'.length)) {
       fs.writeFileSync(path.join(profile, id + '-speed-checked'), 'yes')
       pending = null
+      fs.writeFileSync(path.join(profile, id + '-draft'), '')
+    } else if (id && pending !== 'speed-probe' && /^\x7f+$/.test(data) && process.env.EZSHELL_TEST_AGENT_CHAT) {
+      // The chat taking that line back (agentInboxWake.takeBack): the composer empties
+      fs.appendFileSync(path.join(profile, id + '-taken-back'), 'x')
       fs.writeFileSync(path.join(profile, id + '-draft'), '')
     } else if (pending === 'exit-command' && data === '\r') {
       pending = null

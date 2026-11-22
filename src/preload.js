@@ -159,11 +159,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localShellOpen: (options) => ipcRenderer.invoke('local-shell-open', options),
   localProjectInspect: (folder) => ipcRenderer.invoke('local-project-inspect', folder),
   workspaceDirectoryList: (folder, relative = '') => ipcRenderer.invoke('workspace-directory-list', { root: folder, path: relative }),
+  workspaceDirectoryPrepare: (root, refresh) => ipcRenderer.invoke('workspace-directory-prepare', { root, refresh }),
   workspaceDirectorySearch: (root, query) => ipcRenderer.invoke('workspace-directory-search', { root, query }),
   workspaceGitStatus: (root) => ipcRenderer.invoke('workspace-git-status', root),
   workspaceGitCommitFiles: (root, hash) => ipcRenderer.invoke('workspace-git-commit-files', { root, hash }),
   workspaceGitDiff: (root, file, hash) => ipcRenderer.invoke('workspace-git-diff', { root, file, hash }),
   localFileOpen: (root, relative, mode, label, options) => ipcRenderer.invoke('local-file-open', { root, path: relative, mode, label, compareHead: options?.compareHead === true }),
+  localFileReveal: (root, relative) => ipcRenderer.invoke('local-file-reveal', { root, path: relative }),
   workspaceGitLog: (folder) => ipcRenderer.invoke('workspace-git-log', folder),
   workspaceGitSearch: (root, query) => ipcRenderer.invoke('workspace-git-search', { root, query }),
   localWorktreeCreate: (options) => ipcRenderer.invoke('local-worktree-create', options),
@@ -258,6 +260,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentChatSend: (shellId, text, imageIds) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageIds }),
   agentChatToggleSpeed: (shellId, speed) => ipcRenderer.invoke('agent-chat-toggle-speed', { shellId, speed }),
   agentChatInterrupt: (shellId) => ipcRenderer.invoke('agent-chat-interrupt', shellId),
+  agentChatTakeBack: (shellId, texts) => ipcRenderer.invoke('agent-chat-take-back', { shellId, texts }),
   agentChatAnswer: (shellId, key, signature) => ipcRenderer.invoke('agent-chat-answer', { shellId, key, signature }),
   agentChatCommandWatch: (shellId) => ipcRenderer.invoke('agent-chat-command-watch', shellId),
   agentChatScreenState: (shellId) => ipcRenderer.invoke('agent-chat-screen-state', shellId),
@@ -271,6 +274,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pinnedReplyGet: () => ipcRenderer.invoke('pinned-reply-get'),
   pinnedReplyOpenLink: (href, how) => ipcRenderer.invoke('pinned-reply-open-link', { href, how }),
   pinnedReplyFold: (folded) => ipcRenderer.send('pinned-reply-fold', folded),
+  onPinnedReplyMaximized: (callback) => {
+    const listener = (_event, maximized) => callback(maximized);
+    ipcRenderer.on('pinned-reply-maximized', listener);
+    return () => ipcRenderer.removeListener('pinned-reply-maximized', listener);
+  },
   pinnedReplyGo: () => ipcRenderer.send('pinned-reply-go'),
   onPinnedReplyGo: (callback) => {
     const handler = (event, shellId) => callback(shellId);

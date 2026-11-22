@@ -9,6 +9,7 @@ import { isInsidePath } from '../../lib/localWorkspaceTree'
 
 const readGit = (folder: string) => window.electronAPI.workspaceGitLog(folder)
 const searchFiles = (folder: string, query: string) => window.electronAPI.workspaceDirectorySearch?.(folder, query)
+const prepareFiles = (folder: string, refresh = false) => window.electronAPI.workspaceDirectoryPrepare?.(folder, refresh).catch(() => undefined)
 const searchGit = (folder: string, query: string) => window.electronAPI.workspaceGitSearch?.(folder, query)
 const date = new Intl.DateTimeFormat('ko-KR', { month: 'short', day: 'numeric' })
 
@@ -32,7 +33,7 @@ function useFolderData<T>(folder: string, load: (folder: string) => Promise<T>) 
 
 type SearchAnswer<T> = ({ success: true } & T) | { success: false; error: string }
 
-function useWorkspaceSearch<T>(folder: string, query: string, revision: number, read: (folder: string, query: string) => Promise<SearchAnswer<T>> | undefined) {
+function useWorkspaceSearch<T>(folder: string, query: string, revision: number, read: (folder: string, query: string) => Promise<SearchAnswer<T>> | undefined, delay = 220) {
   const [sample, setSample] = useState<{ folder: string; query: string; revision: number; result: SearchAnswer<T> } | null>(null)
   useEffect(() => {
     if (!folder || !query) return
@@ -45,9 +46,9 @@ function useWorkspaceSearch<T>(folder: string, query: string, revision: number, 
         if (active) setSample({ folder, query, revision, result: { success: false, error: '검색을 완료하지 못했습니다.' } })
       }
     }
-    const timer = window.setTimeout(() => void load(), 220)
+    const timer = window.setTimeout(() => void load(), delay)
     return () => { active = false; window.clearTimeout(timer) }
-  }, [folder, query, revision, read])
+  }, [folder, query, revision, read, delay])
 
   return sample?.folder === folder && sample.query === query && sample.revision === revision ? sample.result : null
 }
@@ -94,11 +95,16 @@ export function WorkspaceFiles({ folder }: { folder: string }) {
   const [revision, setRevision] = useState(0)
   const [query, setQuery] = useState('')
   const term = query.trim()
-  const found = useWorkspaceSearch<WorkspaceDirectorySearchResult>(folder, term, revision, searchFiles)
+  const found = useWorkspaceSearch<WorkspaceDirectorySearchResult>(folder, term, revision, searchFiles, 90)
+  useEffect(() => { void prepareFiles(folder) }, [folder])
+  const refresh = async () => {
+    await prepareFiles(folder, true)
+    setRevision(value => value + 1)
+  }
   const label = folderName(folder)
   return (
     <>
-      <BrowserHeader folder={folder} onRefresh={() => setRevision(value => value + 1)} />
+      <BrowserHeader folder={folder} onRefresh={() => void refresh()} />
       <WorkspaceSearchBox label="파일·폴더 검색" placeholder="파일 이름 또는 경로" query={query} onChange={setQuery} />
       <div className="workspace-file-browse" hidden={Boolean(term)}>
         <TreeLevel key={`${folder}:${revision}`} root={folder} relative="" depth={0} label={label} />

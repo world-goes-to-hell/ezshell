@@ -36,6 +36,12 @@ const { check, finish } = createChecks()
   const { js, until } = driver
   const setSearch = (label, query) => js(`(${SET})(document.querySelector('input[aria-label="${label}"]'), ${JSON.stringify(query)})`)
   const clearSearch = () => js(`document.querySelector('.workspace-search button').click()`)
+  const fileMenu = `Array.from(document.querySelectorAll('.terminal-menu-item'), item => item.textContent.trim()).join(',')`
+  const rightClickFile = async (selector) => {
+    await js(`(${selector}).scrollIntoView({ block: 'nearest' })`)
+    await driver.click(...await driver.center(selector), 'right')
+    return until(`${fileMenu} === '파일 탐색기로 열기,ezShell로 열기'`, 5000)
+  }
   try {
     await unlock(driver)
     await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([repo]))});
@@ -50,15 +56,30 @@ const { check, finish } = createChecks()
     check('the tree lists the folder and the file at the top', await until(`!!${row('src')} && !!${row('README.md')}`, 15000))
     await js(`${row('src')}.click()`)
     check('a folder expands in place', await until(`!!${row('app.txt')} && ${row('src')}.getAttribute('aria-expanded') === 'true'`, 8000))
-    await js(`${row('src')}.click()`)
+    check('a file in the tree offers the explorer and ezShell actions', await rightClickFile(row('app.txt')))
+    await driver.click(...await driver.center(row('src')))
+    await until(`!document.querySelector('.terminal-menu')`)
     await setSearch('파일·폴더 검색', 'SRC\\APP.TXT')
     const fileMatch = `document.querySelector('.workspace-tree-results button[title="src/app.txt"]')`
     check('file search finds a file in a collapsed folder by its case-insensitive path', await until(`
       ${fileMatch}?.querySelector('.workspace-tree-result-path')?.textContent === 'src'
     `))
 
+    await setSearch('파일·폴더 검색', 'fresh-search.txt')
+    await until(`document.querySelector('.workspace-note')?.textContent.includes('일치하는 파일·폴더가 없습니다.')`)
+    const freshFile = path.join(repo, 'src', 'fresh-search.txt')
+    fs.writeFileSync(freshFile, 'new')
+    await js(`document.querySelector('.workspace-browser-header [aria-label="새로 고침"]').click()`)
+    check('refresh indexes newly created files for the current search', await until(`
+      !!document.querySelector('.workspace-tree-results button[title="src/fresh-search.txt"]')
+    `))
+    fs.unlinkSync(freshFile)
+    await setSearch('파일·폴더 검색', 'SRC\\APP.TXT')
+    await until(`!!${fileMatch}`)
+
     // ---- The file window: edit and save ----
-    await js(`${fileMatch}.click()`)
+    check('a file search result offers the same actions', await rightClickFile(fileMatch))
+    await driver.pick('ezShell로 열기')
     await clearSearch()
     check('clearing file search returns to the same tree', await until(`!${fileMatch} && ${row('src')}?.getAttribute('aria-expanded') === 'false'`))
     await js(`${row('src')}.click()`)
@@ -232,9 +253,10 @@ const { check, finish } = createChecks()
 
     // Opening a changed file from the list starts the comparison with the last commit at once
     const idsBefore = new Set((await (await fetch(`${process.env.E2E_CDP}/json`)).json()).map(t => t.id))
-    await js(`document.querySelector('.workspace-uncommitted .workspace-git-file[data-path="src/app.txt"] .workspace-git-file-open').click()`)
+    check('an uncommitted file offers the same actions', await rightClickFile(gitFile))
+    await driver.pick('ezShell로 열기')
     const compareTarget = await findPage(t => t.url.includes('remoteFileMode') && !idsBefore.has(t.id), 15000)
-    check('the open button of a changed file opens the file window', !!compareTarget)
+    check('ezShell opens a changed file from its menu', !!compareTarget)
     if (compareTarget) {
       const comparePage = await connect(t => t.id === compareTarget.id)
       check('which starts out comparing with the last commit', await comparePage.until(`!!document.querySelector('.remote-compare') &&

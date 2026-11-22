@@ -5,7 +5,7 @@ import { RiArrowDownSLine, RiArrowRightSLine, RiExternalLinkLine, RiFolderLine, 
 import type { WorkspaceGitFile, WorkspaceGitStatus } from '../../types'
 import { FILE_KIND_LABELS, FILE_KIND_MARKS, splitPath } from '../../lib/workspaceDetails'
 import { buildChangeTree, formatCount, mergeChanges, totalLines, type ChangeNode, type ChangedFile } from '../../lib/gitChangeTree'
-import { GitDiffBlock, openWorkspaceFile } from './WorkspaceDetails'
+import { GitDiffBlock, openWorkspaceFile, useWorkspaceFileMenu } from './WorkspaceDetails'
 
 interface FileRowProps {
   root: string
@@ -39,9 +39,12 @@ function GitFileRow({ root, file, hash, label, tree }: FileRowProps) {
   const canOpen = !hash && file.kind !== 'deleted'
   // A file the last commit has: the window opens comparing with it (new files have nothing to compare)
   const hasHead = file.kind !== 'untracked' && file.kind !== 'added'
+  const openCurrentFile = () => void openWorkspaceFile(root, file.path, label, { compareHead: hasHead })
+  const { openMenu, menu } = useWorkspaceFileMenu(root, file.path, openCurrentFile)
   return (
     <li className="workspace-git-file" data-kind={file.kind} data-path={file.path}>
-      <div className="workspace-git-file-row" style={tree ? { '--workspace-tree-depth': tree.depth } as CSSProperties : undefined}>
+      <div className="workspace-git-file-row" style={tree ? { '--workspace-tree-depth': tree.depth } as CSSProperties : undefined}
+        onContextMenu={canOpen ? openMenu : undefined}>
         <button
           type="button"
           className="workspace-git-file-toggle"
@@ -63,11 +66,12 @@ function GitFileRow({ root, file, hash, label, tree }: FileRowProps) {
           )}
         </button>
         {canOpen && (
-          <button type="button" className="workspace-git-file-open" title={hasHead ? '파일 창에서 열기 (마지막 커밋과 비교)' : '파일 창에서 열기'} aria-label={`${name} 열기`} onClick={() => void openWorkspaceFile(root, file.path, label, { compareHead: hasHead })}>
+          <button type="button" className="workspace-git-file-open" title={hasHead ? '파일 창에서 열기 (마지막 커밋과 비교)' : '파일 창에서 열기'} aria-label={`${name} 열기`} onClick={openCurrentFile}>
             <RiExternalLinkLine size={14} />
           </button>
         )}
       </div>
+      {menu}
       {isOpen && <GitDiffBlock root={root} file={file.path} hash={hash} />}
     </li>
   )

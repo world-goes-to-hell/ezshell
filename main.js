@@ -517,6 +517,7 @@ const remoteFileIpc = registerRemoteFileIpc({
   fromMainWindow: (event) => fromMainWindow(event),
   isKnownContainer: (sessionId, name) => containers.isKnown(sessionId, name),
   resolveLocal: (root, relative) => localRoots.resolveInside(root, relative),
+  revealLocal: (file) => shell.showItemInFolder(file),
   openFolder: async (dir) => {
     await fs.promises.mkdir(dir, { recursive: true });
     const failure = await shell.openPath(dir);
@@ -557,7 +558,7 @@ const dbIpc = registerDbIpc({
 // ==================== Local terminal tabs ====================
 // Shells of this PC (src/localShell.js). Only the main window opens and drives them.
 const fromMainWindow = (event) => Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
-require('./src/ipc/workOverview.js').registerWorkOverviewIpc({
+const workOverview = require('./src/ipc/workOverview.js').registerWorkOverviewIpc({
   ipcMain,
   desktopCapturer: require('electron').desktopCapturer,
   getDisplay: bounds => require('electron').screen.getDisplayMatching(bounds),
@@ -566,9 +567,13 @@ require('./src/ipc/workOverview.js').registerWorkOverviewIpc({
 });
 // Tab Tab from any program: the helper brought ezShell forward, the window opens its work overview.
 // Off while locked (every key goes through untouched); looked at each second instead of at each lock site.
+// The overview opens on the monitor of the program that was in front (the helper gives the middle of
+// its window in screen pixels), not on ezShell's.
 const globalDoubleTab = require('./src/globalDoubleTab.js').createGlobalDoubleTab({
-  onDoubleTab: () => {
+  onDoubleTab: point => {
     if (!mainWindow || mainWindow.isDestroyed() || isAppLocked) return;
+    const { screen } = require('electron');
+    workOverview.aimAt(point ? screen.getDisplayNearestPoint(screen.screenToDipPoint ? screen.screenToDipPoint(point) : point) : null);
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
@@ -737,7 +742,7 @@ ipcMain.handle('local-shell-wake', (event, id) => (fromMainWindow(event) && !isA
 ipcMain.handle('local-shell-stay-awake', (event, id) => Boolean(fromMainWindow(event) && !isAppLocked && localShells?.stayAwake(id)));
 app.on('will-quit', () => agentIdle.stop());
 ipcMain.handle('agent-usage-state', event => (fromMainWindow(event) && !isAppLocked ? agentMessages.usageSnapshot() : []));
-require('./src/ipc/localProjects.js').registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit });
+const localProjectIpc = require('./src/ipc/localProjects.js').registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit });
 // Past Claude Code and Codex sessions of this PC, for the right panel (src/agentHistory)
 const agentHistory = require('./src/agentHistory/history.js').createAgentHistory();
 require('./src/agentHistory/ipc.js').registerAgentHistoryIpc({
@@ -1032,6 +1037,7 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   browserReview.close();
   mcpSessionsCache = null;
   mcpController?.onLocked();
+  localProjectIpc.clearSearches();
   agentHistory.clear();
   agentChats.closeAll();
   agentChatPins.closeAll();
@@ -1119,6 +1125,7 @@ ipcMain.handle('reset-master-password', async () => {
   browserReview.close();
   mcpSessionsCache = null;
   mcpController?.onLocked();
+  localProjectIpc.clearSearches();
   agentHistory.clear();
   agentChats.closeAll();
   agentChatPins.closeAll();

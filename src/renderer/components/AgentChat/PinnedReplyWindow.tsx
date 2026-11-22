@@ -2,14 +2,17 @@
 // design mockups/pinned-reply-window.html). Read while working in another tab: the text is the answer as
 // it was pinned, kept by main in memory. Links open through main, only the ones this answer had.
 import { useEffect, useMemo, useState, type MouseEvent } from 'react'
-import { RiArrowGoBackLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFolderOpenLine, RiSubtractLine, RiAddLine } from 'react-icons/ri'
+import { RiAddLine, RiArrowGoBackLine, RiCheckboxBlankLine, RiCheckboxMultipleBlankLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFolderOpenLine, RiSubtractLine } from 'react-icons/ri'
 import type { PinnedReply } from '../../types'
+import { usePopoutTheme } from '../../hooks/usePopoutTheme'
 import { LOCAL_PATH_LINK, renderChatMarkdown } from '../../lib/markdownRender'
 import { copyToClipboard } from '../../lib/terminalClipboard'
 import { TerminalContextMenu } from '../Terminal/TerminalContextMenu'
 import { webLinkItems } from '../Terminal/TerminalWebLinkMenu'
 import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
+import { useThemeStore } from '../../stores/themeStore'
 import { toast } from '../../stores/toastStore'
+import { chatAppearance } from '../../themes/chatThemes'
 import './AgentChat.css'
 import './PinnedReplyWindow.css'
 
@@ -25,24 +28,35 @@ interface LinkMenu {
 const clock = (time: number) => new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
 export function PinnedReplyWindow() {
+  usePopoutTheme()
+  const chatThemeId = useThemeStore(state => state.chatThemeId)
+  const customThemes = useThemeStore(state => state.customThemes)
+  const appearance = useMemo(() => chatAppearance(chatThemeId, customThemes), [chatThemeId, customThemes])
   const [pin, setPin] = useState<PinnedReply | null>(null)
   const [error, setError] = useState('')
   const [folded, setFolded] = useState(false)
+  const [maximized, setMaximized] = useState(false)
   const [linkMenu, setLinkMenu] = useState<LinkMenu | null>(null)
   const api = window.electronAPI
 
   useEffect(() => {
     let alive = true
+    let receivedMaximizedState = false
+    const off = api.onPinnedReplyMaximized?.(value => {
+      receivedMaximizedState = true
+      setMaximized(value)
+    })
     void api.pinnedReplyGet?.().then(result => {
       if (!alive) return
       if (result.ok) {
         setPin(result.pin)
         setFolded(result.pin.folded)
+        if (!receivedMaximizedState) setMaximized(result.pin.maximized)
       } else {
         setError(result.error)
       }
     }).catch(() => { if (alive) setError('띄운 답변을 불러오지 못했습니다.') })
-    return () => { alive = false }
+    return () => { alive = false; off?.() }
   }, [api])
 
   useEffect(() => {
@@ -88,6 +102,7 @@ export function PinnedReplyWindow() {
   const kind = pin?.kind ?? null
   const ProviderIcon = kind ? AGENT_PROVIDER_ICONS[kind] : null
   const time = pin ? clock(pin.time ?? pin.pinnedAt) : ''
+  const maximizeLabel = maximized ? '이전 크기로 복원' : '최대화'
   const linkName = (menu: LinkMenu) => {
     if (!menu.isFile) return menu.href
     const plain = menu.href.replace(/^file:\/\/\//i, '').replace(/[\\/]+$/, '')
@@ -95,7 +110,8 @@ export function PinnedReplyWindow() {
   }
 
   return (
-    <div className="pinned-reply" data-folded={folded ? 'true' : undefined}>
+    <div className="pinned-reply" data-folded={folded ? 'true' : undefined}
+      data-chat-bubbles={appearance?.bubbles || undefined} style={appearance?.style}>
       <header className="pinned-reply-head">
         <span className="pinned-reply-drag" aria-hidden="true">⋮⋮</span>
         {ProviderIcon && kind && (
@@ -114,6 +130,10 @@ export function PinnedReplyWindow() {
             aria-expanded={!folded} onClick={toggleFold}>
             {folded ? <RiAddLine aria-hidden /> : <RiSubtractLine aria-hidden />}
           </button>
+          <button type="button" className="pinned-reply-btn" data-action="maximize" title={maximizeLabel} aria-label={maximizeLabel}
+            onClick={() => api.maximizeWindow()} disabled={!pin || folded}>
+            {maximized ? <RiCheckboxMultipleBlankLine aria-hidden /> : <RiCheckboxBlankLine aria-hidden />}
+          </button>
           <button type="button" className="pinned-reply-btn" data-action="close" title="닫기" aria-label="닫기" onClick={() => api.closeWindow()}>
             <RiCloseLine aria-hidden />
           </button>
@@ -124,7 +144,7 @@ export function PinnedReplyWindow() {
           {error
             ? <p className="pinned-reply-empty">{error}</p>
             : pin
-              ? <div className="agent-chat-md" dangerouslySetInnerHTML={{ __html: html }} />
+              ? <div className="pinned-reply-message agent-chat-md" dangerouslySetInnerHTML={{ __html: html }} />
               : <p className="pinned-reply-empty">불러오는 중…</p>}
         </div>
       )}
