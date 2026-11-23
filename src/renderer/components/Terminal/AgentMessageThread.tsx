@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { RiArrowRightSLine, RiCheckDoubleLine, RiCheckLine, RiMailUnreadLine, RiReplyLine } from 'react-icons/ri'
+import { RiCheckDoubleLine, RiCheckLine, RiMailUnreadLine, RiReplyLine } from 'react-icons/ri'
 import { agentIdentityColor, agentSearchTerm } from '../../lib/agentIdentity'
 import type { MessageState } from '../../lib/agentMessageMap'
 import { matchName } from '../../lib/containerSearch'
@@ -118,7 +118,7 @@ export function AgentMessageThread({ messages, originals, name, actor, identityO
                 style={{ '--agent-bubble-color': group.from === 'user' ? 'var(--text-secondary)' : agentIdentityColor(group.from) } as CSSProperties}>
                 <div className="agent-message-group-label">
                   {(pair || allAgents || !outgoing) && actor(group.from)}
-                  {!pair && (outgoing || allAgents) && <><RiArrowRightSLine aria-hidden="true" />{actor(group.to)}</>}
+                  {!pair && (outgoing || allAgents) && <><span className="agent-message-send-arrow" aria-hidden="true">{'→ '}</span>{actor(group.to)}</>}
                 </div>
                 {group.messages.map(message => {
                   const original = message.replyTo ? originals.get(message.replyTo) : undefined

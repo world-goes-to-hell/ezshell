@@ -1,9 +1,33 @@
-import type { AgentMessage, AgentMessageSession } from '../types'
+import type { AgentMessage, AgentMessageSession, LocalAgentStatus } from '../types'
 import type { TerminalInfo } from '../stores/terminalStore'
 import { folderLabel } from './localWorkspaceTree'
 import { MAIN_PANE, paneIds, type PaneId } from './splitTree'
 
 const COLOR_COUNT = 8
+
+export const AGENT_PROVIDER_NAMES = { codex: 'Codex', claude: 'Claude Code', antigravity: 'Antigravity' } as const
+
+const statusLabels: Record<LocalAgentStatus | 'reply', string> = {
+  unknown: '상태 확인 중', starting: '시작 중', idle: '쉼', working: '작업 중',
+  blocked: '응답 필요', error: '오류', ended: '종료', sleeping: '잠듦', reply: '답장 대기'
+}
+
+export function agentIdentityStatus(agent: AgentMessageSession, archived = false): { status: LocalAgentStatus | 'reply'; label: string } {
+  const waiting = agent.waitingForReply && ['working', 'idle', 'unknown'].includes(agent.status)
+  const status = archived ? 'ended' : waiting ? 'reply' : agent.status
+  const label = archived && agent.active ? '연결 끊김' : statusLabels[status]
+  return { status, label }
+}
+
+export function agentIdentityTooltip(agent: AgentMessageSession, location?: AgentPaneLocation, archived = false) {
+  const { id, role, kind, cwd, exitCode } = agent
+  const { status, label } = agentIdentityStatus(agent, archived)
+  const detail = role && role !== id ? id : undefined
+  const state = status === 'error' && exitCode ? label + ' (종료 코드 ' + exitCode + ')' : label
+  const identity = detail ? role + ' · ' + detail : id
+  const title = [identity, AGENT_PROVIDER_NAMES[kind] + ' · ' + state, location?.label || cwd].filter(Boolean).join('\n')
+  return { title, 'data-tooltip-detail': detail }
+}
 
 export function agentIdentityLabel({ id, role }: Pick<AgentMessageSession, 'id' | 'role'>) {
   return role ? `${id} · ${role}` : id

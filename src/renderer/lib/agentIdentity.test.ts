@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalInfo } from '../stores/terminalStore'
-import { agentDisplayName, agentIdentityColor, agentMessageMatches, agentPaneLocation, agentSearchTerm } from './agentIdentity'
+import type { AgentMessageSession } from '../types'
+import { agentDisplayName, agentIdentityColor, agentIdentityTooltip, agentMessageMatches, agentPaneLocation, agentSearchTerm } from './agentIdentity'
 import { MAIN_PANE, singlePane, splitPane, swapPanes } from './splitTree'
 import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../components/ui/agentProviderIcons'
 
@@ -40,5 +41,22 @@ describe('agent identity', () => {
       expect(agentMessageMatches(message, agentSearchTerm(query), roles)).toBe(true)
     }
     expect(agentMessageMatches(message, agentSearchTerm('다른 에이전트'), roles)).toBe(false)
+  })
+
+  it('puts identity, provider and state, and location on separate tooltip lines', () => {
+    const agent: AgentMessageSession = {
+      id: 'claude-1', shellId: 'local:1', kind: 'claude', cwd: 'C:\\work',
+      active: true, status: 'idle', waitingForReply: false, mcpConnected: true
+    }
+    const location = { tabId: 'tab', pane: MAIN_PANE, tabLabel: 'ezshell · main', number: 1, label: 'ezshell · main · 칸 1' }
+    expect(agentIdentityTooltip(agent, location)).toEqual({
+      title: 'claude-1\nClaude Code · 쉼\nezshell · main · 칸 1', 'data-tooltip-detail': undefined
+    })
+    expect(agentIdentityTooltip({ ...agent, role: '리뷰어' }, location)).toEqual({
+      title: '리뷰어 · claude-1\nClaude Code · 쉼\nezshell · main · 칸 1', 'data-tooltip-detail': 'claude-1'
+    })
+    expect(agentIdentityTooltip({ ...agent, role: agent.id, status: 'error', exitCode: 7 }).title)
+      .toBe('claude-1\nClaude Code · 오류 (종료 코드 7)\nC:\\work')
+    expect(agentIdentityTooltip(agent, undefined, true).title).toBe('claude-1\nClaude Code · 연결 끊김\nC:\\work')
   })
 })

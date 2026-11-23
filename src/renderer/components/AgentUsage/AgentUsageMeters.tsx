@@ -6,7 +6,7 @@ import { timeLeft, usageLevel, usageSummary } from '../../lib/agentUsageView'
 import { shellAgentOf } from '../../lib/agentChatItems'
 import type { AgentUsage, AgentUsageWindow } from '../../types'
 import { AgentPickerMenu } from './AgentPickerMenu'
-import { useAgentMessagesStore } from '../Terminal/AgentMessages'
+import { useAgentMessagesStore, useAgentPaneLocation } from '../Terminal/AgentMessages'
 import { AgentIdentityBadge } from '../ui/AgentIdentity'
 import './AgentUsage.css'
 
@@ -134,11 +134,12 @@ export function AgentUsageMeters({ usage, now, shellId }: { usage: AgentUsage; n
 export function AgentPaneUsage({ shellId, actionsRef, showIdentity, style }: { shellId: string | undefined; actionsRef?: Ref<HTMLSpanElement>; showIdentity: boolean; style?: CSSProperties }) {
   const usage = useAgentUsageStore(state => (shellId ? state.byShell.get(shellId) : undefined))
   const agent = useAgentMessagesStore(state => showIdentity && shellId ? shellAgentOf(state.snapshot.agents, shellId) : undefined)
+  const location = useAgentPaneLocation(agent)
   const now = useMinuteClock(Boolean(usage))
   if (!usage && !actionsRef && !agent) return null
   return (
     <div className="agent-pane-usage" style={style}>
-      {agent && <AgentIdentityBadge agent={agent} showProvider />}
+      {agent && <AgentIdentityBadge agent={agent} location={location} showProvider />}
       {usage && <div className="agent-usage-readout" aria-label={usageSummary(usage, now)} role="status">
         <AgentUsageMeters usage={usage} now={now} shellId={shellId} />
       </div>}

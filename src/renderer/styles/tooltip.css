@@ -29,6 +29,12 @@
   opacity: 1;
 }
 
+.app-tooltip > small {
+  color: var(--text-secondary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .app-tooltip {
     transition: none;

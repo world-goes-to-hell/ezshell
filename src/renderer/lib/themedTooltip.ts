@@ -84,6 +84,17 @@ function show(element: Element, text: string) {
   if (!element.isConnected || !text.trim()) return
   const tip = ensureBox()
   tip.textContent = text
+  const detail = element.getAttribute('data-tooltip-detail')
+  const firstLineEnd = text.indexOf('\n')
+  if (detail && firstLineEnd > 0) {
+    const suffix = ' · ' + detail
+    const firstLine = text.slice(0, firstLineEnd)
+    if (firstLine.endsWith(suffix)) {
+      const small = document.createElement('small')
+      small.textContent = suffix
+      tip.replaceChildren(firstLine.slice(0, -suffix.length), small, text.slice(firstLineEnd))
+    }
+  }
   const tabLabel = element.matches('[data-browser-tab] > [data-tab-label]') ? element
     : element.matches('[data-browser-tab]') ? element.querySelector('[data-tab-label]') : null
   tip.classList.toggle('browser-tab-title-tooltip', Boolean(tabLabel && tabLabel.scrollWidth > tabLabel.clientWidth))
@@ -104,6 +115,10 @@ function close() {
   if (current) release(current)
   releaseAncestors()
   current = null
+}
+
+export function dismissThemedTooltipWithin(root: Element) {
+  if (current && root.contains(current)) close()
 }
 
 function open(element: Element) {

@@ -5,8 +5,9 @@
 // tab closes.
 
 import { MAIN_PANE, type PaneId } from './splitTree'
-import type { LocalAgent } from '../types'
-import { useTerminalStore } from '../stores/terminalStore'
+import { agentPaneLocation } from './agentIdentity'
+import type { AgentMessageSession, LocalAgent } from '../types'
+import { useTerminalStore, type TerminalInfo } from '../stores/terminalStore'
 
 export type LocalPaneShell = { ok: true; id: string } | { ok: false; error: string }
 
@@ -21,6 +22,11 @@ export function getLocalPaneShellId(tabId: string, pane: PaneId): string | undef
   const local = useTerminalStore.getState().terminals.get(tabId)?.local
   if (!local) return undefined
   return pane === MAIN_PANE ? local.shellId ?? tabId : opened.get(keyOf(tabId, pane))
+}
+
+export function localAgentPaneLocation(tab: TerminalInfo | undefined, agent: AgentMessageSession) {
+  if (!tab || !agent.active) return undefined
+  return agentPaneLocation(tab, agent.shellId, pane => getLocalPaneShellId(tab.id, pane))
 }
 
 /** The pane's shell, opened on first ask (asked twice at once, it is still opened once) */

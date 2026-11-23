@@ -124,9 +124,18 @@ async function run() {
     check('MCP roles appear on the terminal strip and in the agent list',
       (await mcp('codex-1', 'list_agents', {})).agents.find(agent => agent.id === 'claude-2')?.role === '리뷰어' &&
       await until(`document.querySelector('.agent-pane-usage .agent-identity-badge[data-agent-id="codex-1"]')?.textContent === 'codex-1 · 보내기 구현'`))
+    const tooltip = "document.querySelector('.app-tooltip.is-visible')"
+    const identityTooltip = (identity, provider, detail) => `(() => {
+      const tip = ${tooltip}
+      const lines = tip?.textContent.split('\\n')
+      return lines?.length === 3 && lines[0] === ${JSON.stringify(identity)} &&
+        lines[1].startsWith(${JSON.stringify(provider + ' · ')}) && lines[2].includes(' · 칸 ') &&
+        getComputedStyle(tip).whiteSpace === 'pre-line' &&
+        (tip.querySelector('small')?.textContent.trim() ?? '') === ${JSON.stringify(detail ? '· ' + detail : '')}
+    })()`
     await driver.move(...await driver.center(row('codex-1')))
     check('the sidebar chip tooltip shows the agent ID and role, with the same color as its pane', await until(`
-      document.querySelector('.app-tooltip.is-visible')?.textContent.includes('codex-1 · 보내기 구현') &&
+      ${identityTooltip('보내기 구현 · codex-1', 'Codex', 'codex-1')} &&
       getComputedStyle(${row('codex-1')}.querySelector('.agent-identity-dot')).backgroundColor ===
         getComputedStyle(document.querySelector('.agent-pane-usage .agent-identity-badge[data-agent-id="codex-1"] .agent-identity-dot')).backgroundColor
     `))
@@ -173,6 +182,11 @@ async function run() {
       document.querySelector('.terminal-tab[data-tab-id="' + ${claudeMail}?.closest('[data-local-tab-id]')?.dataset.localTabId + '"] .agent-tab-mail')?.textContent === '1'
     `))
     await driver.shot('local-agent-delivery')
+    const arrivalBadge = "document.querySelector('.agent-delivery-notice [data-agent-id=\"claude-2\"]')"
+    const arrivalPoint = await driver.center(arrivalBadge)
+    // The notice lets clicks through to the pane below (its badge has nothing to click).
+    check('the arrival notice does not take clicks', !!arrivalPoint && await js(`!document.elementFromPoint(${arrivalPoint[0]}, ${arrivalPoint[1]})?.closest('.agent-delivery-notice')`))
+    check('the arrival notice expires', await until(`!${arrivalBadge}`, 3000))
     const duplicate = await cli('codex-1', 'message send --to claude-2 --text review-please --request-id review-1')
     check('retry returns the original id without showing another arrival', request.id === duplicate.id && await js('window.deliveriesSeen') === 1)
     const inbox = await cli('claude-2', 'message inbox --unread')
@@ -379,7 +393,7 @@ async function run() {
     const sent = (await mcp('codex-1', 'check_sent', { message_ids: [task.id] })).messages?.[0]
     check('the sender sees its task read but not answered', sent?.status === 'read' && typeof sent.readAt === 'number', JSON.stringify(sent))
     const dialog = `document.querySelector('.agent-messages-dialog')`
-    const viewTab = label => `[...${dialog}.querySelectorAll('[role=tab]')].find(tab => tab.textContent.trim() === ${JSON.stringify(label)})`
+    const viewTab = label => `[...document.querySelectorAll('.agent-messages-dialog [role=tab]')].find(tab => tab.textContent.trim() === ${JSON.stringify(label)})`
     const showView = async label => {
       if (!(await until(`!!${dialog}`))) throw new Error('agent messages dialog did not open')
       await driver.click(...await driver.center(viewTab(label)))
@@ -572,16 +586,29 @@ async function run() {
       ${messageTexts}.includes('note-for-user') &&
       ${dialog}.getBoundingClientRect().width >= 500 &&
       !${dialog}.querySelector('textarea, form') &&
-      [...${dialog}.querySelectorAll('button')].every(button => button === ${filter} || button.matches('[role=tab], .agent-identity-action, .agent-message-expand') || button.textContent.trim() === '닫기') &&
+      [...${dialog}.querySelectorAll('button')].every(button => button === ${filter} || button.matches('[role=tab], .agent-identity-action, .agent-message-expand, .agent-messages-large, .agent-message-map-controls button') || button.textContent.trim() === '닫기') &&
       typeof window.electronAPI.agentMessageSend === 'undefined'
     `))
     const messageRow = body => `[...document.querySelectorAll('.agent-thread-message')].find(row => row.querySelector('p')?.textContent === ${JSON.stringify(body)})`
+    const bubbleLabel = body => `(${messageRow(body)})?.parentElement.querySelector('.agent-message-group-label')`
+    const subject = `document.querySelector('.agent-message-thread-heading .agent-message-subject')`
+    const subjectLocation = `document.querySelector('.agent-message-subject + .agent-message-actor-location')`
+    check('the list heading names the selected agent and puts the pane and its action below', await until(`
+      ${subject}?.textContent === '보내기 구현 · codex-1 의 메시지' &&
+      !!${subject}.querySelector('.agent-identity-dot') && ${subject}.querySelector('.agent-message-provider')?.dataset.kind === 'codex' &&
+      ${subjectLocation}?.firstElementChild.textContent.includes(' · 칸 ') &&
+      ${subjectLocation}.querySelector('[data-action=go]')?.textContent === '그 칸으로 가기' &&
+      ${subjectLocation}.getBoundingClientRect().top >= ${subject}.getBoundingClientRect().bottom
+    `))
     const longRow = '(' + messageRow(longText) + ')'
     const expand = longRow + "?.querySelector('.agent-message-expand')"
     check('the agent’s outgoing messages align right and its incoming messages align left', await until(`
       ${longRow}?.closest('.agent-message-group')?.dataset.side === 'right' &&
       (${messageRow('looks-good')})?.closest('.agent-message-group')?.dataset.side === 'left' &&
-      !!(${messageRow('looks-good')})?.parentElement.querySelector('.agent-message-group-label [data-agent-id="claude-2"]')
+      ${bubbleLabel('looks-good')}?.textContent === '리뷰어 · claude-2' &&
+      ${bubbleLabel('review-please')}?.textContent === '→ 리뷰어 · claude-2' &&
+      ${bubbleLabel('note-for-user')}?.textContent === '→ 나' &&
+      parseFloat(getComputedStyle(${bubbleLabel('review-please')}.querySelector('.agent-message-send-arrow')).fontSize) >= 14
     `))
     check('consecutive messages to the same recipient share their single label', await js(`
       ${longRow}?.parentElement === (${messageRow('note-for-user')})?.parentElement &&
@@ -673,14 +700,21 @@ async function run() {
       return getComputedStyle(note.parentElement.querySelector('.agent-identity-dot')).backgroundColor === cardColor &&
         getComputedStyle(document.querySelector('.agent-pane-usage .agent-identity-badge[data-agent-id="codex-1"] .agent-identity-dot')).backgroundColor === cardColor &&
         [...document.querySelectorAll('.agent-message-map-line')].some(line => getComputedStyle(line).stroke === cardColor) &&
-        document.querySelector('.agent-message-participants [data-agent-id="codex-1"] .agent-message-actor-location')?.textContent.includes('칸 ')
+        document.querySelector('.agent-message-pair-locations [data-agent-id="codex-1"]')?.textContent.includes('칸 ')
     })()`))
     check('the edge shows the two participants once in the header and alternates colored bubble sides', await js(`(() => {
       const outgoing = ${messageRow('review-please')}
       const incoming = ${messageRow('looks-good')}
       const header = document.querySelector('.agent-message-participants')
+      const pane = document.querySelector('.agent-message-pair-locations [data-agent-id="codex-1"]')
+      const tabName = pane?.querySelector('.agent-message-pane-tab')
       return header?.querySelectorAll('.agent-message-actor').length === 2 &&
-        header.querySelector('[data-agent-id="codex-1"] [data-action=go]') &&
+        header.textContent === '리뷰어 · claude-2 ⇄ 보내기 담당 · codex-1' &&
+        pane?.querySelector('[data-action=go]')?.textContent === '그 칸으로 가기' &&
+        tabName?.scrollWidth === tabName?.clientWidth &&
+        pane.querySelector('.agent-message-pane-number').getBoundingClientRect().right <=
+          pane.querySelector('.agent-message-pane-label').getBoundingClientRect().right &&
+        pane.getBoundingClientRect().top >= header.getBoundingClientRect().bottom &&
         outgoing?.parentElement.dataset.side === 'right' && incoming?.parentElement.dataset.side === 'left' &&
         outgoing.getBoundingClientRect().right > incoming.getBoundingClientRect().right &&
         getComputedStyle(outgoing.querySelector('.agent-message-bubble')).backgroundColor !==
@@ -696,6 +730,13 @@ async function run() {
     await searchFor('')
     await until(`!document.querySelector('.agent-delivery-notice')`, 3500)
     await driver.shot('local-agent-message-map')
+    await driver.shot('local-agent-messages-selected-edge')
+    await driver.move(...await driver.center(`${card('codex-1')}.querySelector('.agent-message-map-card-name strong')`))
+    check('the role card tooltip shows the smaller ID beside its name and one location', await until(identityTooltip('보내기 담당 · codex-1', 'Codex', 'codex-1')))
+    await driver.shot('local-agent-message-map-tooltip-role')
+    await driver.move(...await driver.center("document.querySelector('.agent-message-participants > [data-agent-id=\"codex-1\"] .agent-message-actor-name')"))
+    check('the message header shares the card tooltip format', await until(identityTooltip('보내기 담당 · codex-1', 'Codex', 'codex-1')))
+    await driver.move(20, 45)
     const [cardX, cardY] = await driver.center(card('codex-1'))
     const linePath = `document.querySelector('.agent-message-map-line')?.getAttribute('d')`
     const originalPath = await js(linePath)
@@ -706,20 +747,103 @@ async function run() {
       ${card('codex-1')}.getBoundingClientRect().x + ${card('codex-1')}.offsetWidth / 2 > ${cardX + 20} &&
       ${linePath} !== ${JSON.stringify(originalPath)} && ${archivedEdge}?.getAttribute('aria-pressed') === 'true'
     `))
+
+    // The relationship map: a dragged card is remembered, 크게 보기, zoom, fit, pan, the folding panel, reset
+    const mapViewport = `document.querySelector('.agent-message-map-viewport')`
+    const mapCanvas = `document.querySelector('.agent-message-map-canvas')`
+    const zoomLabel = `document.querySelector('.agent-message-map-zoom')?.textContent.trim()`
+    const mapControl = label => `document.querySelector('.agent-message-map-controls [aria-label="${label}"]')`
+    const cardPlace = id => `(${card(id)}?.style.left ?? '') + ',' + (${card(id)}?.style.top ?? '')`
+    const movedPlace = await js(cardPlace('codex-1'))
+    check('a dragged card is kept as placed', await js(`${card('codex-1')}.dataset.placed === 'true' && ${card('claude-2')}.dataset.placed === 'false'`))
+    await closeMessages()
+    await until(`!${dialog}`)
+    await js(`document.querySelector('[aria-label="codex-1 메시지함"]').click()`)
+    check('closing and opening the messages keeps the card where it was put', await until(`${cardPlace('codex-1')} === ${JSON.stringify(movedPlace)}`),
+      `${movedPlace} → ${await js(cardPlace('codex-1'))}`)
+    const smallWidth = await js(`${dialog}.getBoundingClientRect().width`)
+    await driver.click(...await driver.center(`document.querySelector('.agent-messages-large')`))
+    check('크게 보기 fills the app window and is remembered', await until(`(() => {
+      const box = ${dialog}.getBoundingClientRect()
+      return box.width > ${smallWidth} && box.width >= innerWidth - 40 && box.height >= innerHeight - 40 &&
+        document.querySelector('.agent-messages-large').getAttribute('aria-pressed') === 'true' &&
+        localStorage.getItem('ezshell.agentMessageMapLarge') === '1'
+    })()`))
+    const zoomBefore = await js(zoomLabel)
+    await driver.click(...await driver.center(mapControl('확대')))
+    check('확대 steps the map zoom up', await until(`parseInt(${zoomLabel}) > ${parseInt(zoomBefore)}`), `${zoomBefore} → ${await js(zoomLabel)}`)
+    const appScale = await js(`window.devicePixelRatio`)
+    const zoomedLabel = await js(zoomLabel)
+    const [viewX, viewY] = await driver.center(mapViewport)
+    for (let i = 0; i < 3; i++) {
+      await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: viewX, y: viewY, deltaX: 0, deltaY: -120, modifiers: 2 })
+      await sleep(60)
+    }
+    check('Ctrl+wheel over the map zooms the map, not the app', await until(`parseInt(${zoomLabel}) > ${parseInt(zoomedLabel)} && window.devicePixelRatio === ${appScale}`),
+      `${zoomedLabel} → ${await js(zoomLabel)}`)
+    await js(`${mapViewport}.focus()`)
+    await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: '0', code: 'Digit0', windowsVirtualKeyCode: 48, modifiers: 2 })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: '0', code: 'Digit0', windowsVirtualKeyCode: 48, modifiers: 2 })
+    const allCardsInside = `(() => {
+      const view = ${mapViewport}.getBoundingClientRect()
+      return [...document.querySelectorAll('.agent-message-map-card')].every(card => {
+        const box = card.getBoundingClientRect()
+        return box.left >= view.left - 1 && box.right <= view.right + 1 && box.top >= view.top - 1 && box.bottom <= view.bottom + 1
+      })
+    })()`
+    check('Ctrl+0 fits every card inside the map and leaves the app zoom alone', await until(`${allCardsInside} && window.devicePixelRatio === ${appScale}`))
+    const fittedTransform = await js(`${mapCanvas}.style.transform`)
+    const panFrom = await js(`(() => { const view = ${mapViewport}.getBoundingClientRect(); return [view.left + 8, view.top + 8] })()`)
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: panFrom[0], y: panFrom[1], button: 'left', buttons: 1, clickCount: 1 })
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: panFrom[0] + 70, y: panFrom[1] + 40, button: 'left', buttons: 1 })
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: panFrom[0] + 70, y: panFrom[1] + 40, button: 'left', clickCount: 1 })
+    check('dragging empty space moves the whole map, not a card', await until(`${mapCanvas}.style.transform !== ${JSON.stringify(fittedTransform)} && ${cardPlace('codex-1')} === ${JSON.stringify(movedPlace)}`))
+    const mapWidth = await js(`${mapViewport}.getBoundingClientRect().width`)
+    await driver.click(...await driver.center(mapControl('메시지 패널 접기')))
+    check('folding the message panel gives the map the full width', await until(`
+      document.querySelector('.agent-message-map-detail').hidden && ${mapViewport}.getBoundingClientRect().width > ${mapWidth} + 150 &&
+      !!${mapControl('메시지 패널 펼치기')}
+    `))
+    await driver.shot('local-agent-message-map-large')
+    await driver.click(...await driver.center(`${cardPick('claude-2')}.querySelector('strong')`))
+    check('choosing a card opens the folded panel with its messages', await until(`
+      !document.querySelector('.agent-message-map-detail').hidden && ${cardPick('claude-2')}.getAttribute('aria-pressed') === 'true'
+    `))
+    await driver.click(...await driver.center(mapControl('배치 초기화')))
+    check('배치 초기화 returns moved cards to the automatic places', await until(`${card('codex-1')}.dataset.placed === 'false' && ${allCardsInside}`))
+    const keptZoom = await js(zoomLabel)
+    await closeMessages()
+    await until(`!${dialog}`)
+    await js(`document.querySelector('[aria-label="codex-1 메시지함"]').click()`)
+    check('the map opens again large, at the zoom it was left at, with the automatic places', await until(`
+      ${zoomLabel} === ${JSON.stringify(keptZoom)} && ${dialog}?.dataset.large === 'true' && ${card('codex-1')}?.dataset.placed === 'false'
+    `), `${keptZoom} → ${await js(zoomLabel)}`)
+    await driver.click(...await driver.center(`document.querySelector('.agent-messages-large')`))
+    await until(`${dialog}.dataset.large === 'false' && localStorage.getItem('ezshell.agentMessageMapLarge') === '0'`)
+    await driver.click(...await driver.center(card('claude-2')))
+    await driver.click(...await driver.center(archivedEdge))
+    await until(`${archivedEdge}?.getAttribute('aria-pressed') === 'true'`)
     await driver.click(...await driver.center(card('codex-1')))
     check('selecting an agent card restores the agent’s full thread', await until(`
       ${cardPick('codex-1')}.getAttribute('aria-pressed') === 'true' &&
-      ['note-for-user', 'review-please', 'hello-manual-claude'].every(text => ${messageTexts}.includes(text))
+      ['note-for-user', 'review-please', 'hello-manual-claude'].every(text => ${messageTexts}.includes(text)) &&
+      ${subject}?.textContent === '보내기 담당 · codex-1 의 메시지' &&
+      ${subjectLocation}?.firstElementChild.textContent.includes(' · 칸 ') &&
+      ${bubbleLabel('review-please')}?.textContent === '→ 리뷰어 · claude-2'
     `))
-    await js(`${card('codex-1')}.querySelector('[data-action=go]').click()`)
-    check('the map opens the exact live terminal pane by shell ID', await until(`
+    await driver.move(20, 45)
+    await driver.shot('local-agent-messages-selected-agent')
+    await js(`${subjectLocation}.querySelector('[data-action=go]').click()`)
+    check('the heading action opens the exact live terminal pane by shell ID', await until(`
       !${dialog} && !!document.activeElement?.closest('[data-local-shell-id]')?.querySelector('[aria-label="codex-1 메시지함"]')
     `))
     await js(`document.querySelector('[aria-label="codex-1 메시지함"]').click()`)
     await showView('목록')
-    check('the list keeps Close visible with the search and role controls', await until(`
-      ${dialog}.querySelector('.modal-actions button').getBoundingClientRect().bottom <= ${dialog}.getBoundingClientRect().bottom
-    `))
+    check('the list keeps Close visible and scrolls the thread when it fills the dialog', await until(`(() => {
+      const thread = ${dialog}.querySelector('.agent-message-thread')
+      return thread.scrollHeight > thread.clientHeight &&
+        ${dialog}.querySelector('.modal-actions button').getBoundingClientRect().bottom <= ${dialog}.getBoundingClientRect().bottom
+    })()`))
     await driver.shot('local-agent-messages-roles-list')
     await closeMessages()
 
@@ -735,6 +859,10 @@ async function run() {
     }
     await js(`document.querySelector('[aria-label="claude-7 메시지함"]').click()`)
     await until(`!!${filter}`)
+    check('a roleless agent heading uses its ID and puts location below', await until(`
+      ${subject}?.textContent === 'claude-7 의 메시지' &&
+      ${subjectLocation}?.firstElementChild.textContent === 'other workspace · 칸 1'
+    `))
     await openFilter()
     check('the second project only offers its agents in the filter', await js(`
       ${filterOptions}.map(${optionId}).join(',') === '전체,codex-6,claude-7'
@@ -742,15 +870,28 @@ async function run() {
     await chooseAgent('전체')
     await showView('관계도')
     check('connected agents without messages appear as isolated cards in the current project', await until(`
-      ${card('codex-6')}?.querySelector('.agent-message-map-card-name small')?.textContent === '칸 1' &&
-      ${card('claude-7')}?.querySelector('.agent-message-map-card-name small')?.textContent === '칸 1' &&
+      ${card('codex-6')}?.querySelector('.agent-message-map-card-name strong')?.textContent === 'codex-6' &&
+      ${card('claude-7')}?.querySelector('.agent-message-map-card-name strong')?.textContent === 'claude-7' &&
+      ${card('claude-7')}?.querySelector('.agent-message-map-card-folder > span')?.textContent === 'other workspace' &&
+      ${card('claude-7')}?.querySelector('.agent-message-map-card-folder > small')?.textContent === '칸 1' &&
+      !${card('claude-7')}?.querySelector('.agent-message-map-card-meta > small') &&
       !${card('codex-1')} && ${edges}.length === 0
     `))
+    fs.writeFileSync(file('claude-7-program-status'), 'state=idle:app=claude')
+    await until(`${cardStatus('claude-7')}?.dataset.status === 'idle'`)
+    await driver.move(...await driver.center(`${card('claude-7')}.querySelector('.agent-message-map-card-name strong')`))
+    check('the roleless card tooltip contains the ID and the location once', await until(identityTooltip('claude-7', 'Claude Code'), 3000) &&
+      await js(`${tooltip}?.textContent === 'claude-7\\nClaude Code · 쉼\\nother workspace · 칸 1'`))
+    await driver.shot('local-agent-message-map-tooltip-id')
+    await driver.move(20, 45)
     const otherMessage = await mcp('codex-6', 'send_message', { to: 'claude-7', text: 'other-workspace-message' })
     check('an unread arrival adds a highlighted directional edge to the open map', await until(`
       ${edges}.length === 1 && ${edges}[0].dataset.unread === 'true' && ${edges}[0].getAttribute('aria-label').includes('codex-6 → claude-7, 1개, 안 읽음 1개')
     `))
     await js(`${edges}[0].click()`)
+    check('the roleless edge heading shows the two IDs around its double arrow', await until(`
+      document.querySelector('.agent-message-participants')?.textContent === 'claude-7 ⇄ codex-6'
+    `))
     await mcp('claude-7', 'read_inbox', {})
     check('the map drops the highlight immediately when the agent reads the message', await until(`
       ${edges}[0].dataset.unread === 'false' && ${edges}[0].getAttribute('aria-label').includes('읽음·답 없음 1개') &&

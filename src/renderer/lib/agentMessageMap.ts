@@ -184,3 +184,53 @@ export function layoutMessageMapLabels(edges: readonly MessageRelationship[], po
   }
   return labels
 }
+
+/** A card can go anywhere right of and below the map's edge; the map grows to hold it */
+export function keepInMap(point: MapPoint): MapPoint {
+  return { x: Math.max(MAP_CARD_WIDTH / 2 + 6, point.x), y: Math.max(MAP_CARD_HEIGHT / 2 + 6, point.y) }
+}
+
+/**
+ * Cards the user placed stay where they were put; the others take the automatic grid's places in
+ * order, skipping any place a placed card covers (extra rows open below when the grid runs out).
+ */
+export function placeAgentMessageMap(ids: readonly string[], saved: ReadonlyMap<string, MapPoint>, viewportWidth: number, viewportHeight: number) {
+  const base = layoutAgentMessageMap(ids, viewportWidth, viewportHeight)
+  const positions = new Map<string, MapPoint>()
+  const taken: MapPoint[] = []
+  for (const id of ids) {
+    const point = saved.get(id)
+    if (!point) continue
+    const kept = keepInMap(point)
+    positions.set(id, kept)
+    taken.push(kept)
+  }
+  const slots = [...base.positions.values()]
+  const xs = [...new Set(slots.map(slot => slot.x))].sort((a, b) => a - b)
+  const ys = [...new Set(slots.map(slot => slot.y))].sort((a, b) => a - b)
+  const rowStep = ys.length > 1 ? ys[1] - ys[0] : 174
+  const columns = slots.length ? Math.max(...ys.map(y => slots.filter(slot => slot.y === y).length)) : 1
+  const fullRow = slots.slice(0, columns).map(slot => slot.x)
+  const rowXs = fullRow.length ? fullRow : xs
+  for (let row = 1; row <= ids.length; row++) {
+    for (const x of rowXs) slots.push({ x, y: (ys[ys.length - 1] ?? rowStep / 2) + row * rowStep })
+  }
+  const clear = (slot: MapPoint) => taken.every(point =>
+    Math.abs(point.x - slot.x) >= MAP_CARD_WIDTH + 16 || Math.abs(point.y - slot.y) >= MAP_CARD_HEIGHT + 16)
+  let next = 0
+  for (const id of ids) {
+    if (positions.has(id)) continue
+    while (next < slots.length && !clear(slots[next])) next++
+    const slot = slots[next] ?? { x: base.width / 2, y: base.height + rowStep / 2 }
+    next++
+    positions.set(id, slot)
+    taken.push(slot)
+  }
+  let width = base.width
+  let height = base.height
+  for (const { x, y } of positions.values()) {
+    width = Math.max(width, x + MAP_CARD_WIDTH / 2 + padding)
+    height = Math.max(height, y + MAP_CARD_HEIGHT / 2 + padding)
+  }
+  return { positions, width, height }
+}

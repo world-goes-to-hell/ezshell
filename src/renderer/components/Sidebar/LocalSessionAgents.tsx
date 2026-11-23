@@ -2,7 +2,8 @@ import {
   RiChat1Line, RiCircleLine,
   RiErrorWarningLine, RiHourglassLine, RiPlayCircleLine, RiRecordCircleLine, RiStopCircleLine, RiMoonLine, RiTimeLine
 } from 'react-icons/ri'
-import { agentIdentityLabel } from '../../lib/agentIdentity'
+import { agentIdentityStatus, agentIdentityTooltip } from '../../lib/agentIdentity'
+import { localAgentPaneLocation } from '../../lib/localPaneShells'
 import { focusTabPane } from '../../lib/paneFocus'
 import { MAIN_PANE } from '../../lib/splitTree'
 import { tabHost } from '../../lib/tabHosts'
@@ -25,7 +26,7 @@ const presentation = {
 } satisfies Record<LocalAgentStatus | 'reply', { label: string; Icon: typeof RiCircleLine }>
 
 export function localAgentAppearance(agent: AgentMessageSession) {
-  const status = agent.waitingForReply && ['working', 'idle', 'unknown'].includes(agent.status) ? 'reply' : agent.status
+  const { status } = agentIdentityStatus(agent)
   const { label, Icon } = presentation[status]
   const ProviderIcon = AGENT_PROVIDER_ICONS[agent.kind]
   const name = `${AGENT_PROVIDER_NAMES[agent.kind]} ${agent.id.slice(agent.kind.length + 1)}`
@@ -37,12 +38,13 @@ export function localAgentAppearance(agent: AgentMessageSession) {
       <ProviderIcon className="local-agent-provider" size={14} />
     </span>
   )
-  return { status, name, label, description, statusDescription, icons }
+  return { status, name, label, description, icons }
 }
 
 export function LocalSessionAgents({ tabId }: { tabId: string }) {
   const agents = useAgentMessagesStore(state => state.snapshot.agents)
   const paneTabs = useAgentMessagesStore(state => state.panes)
+  const tab = useTerminalStore(state => state.terminals.get(tabId))
   const focusTerminal = useTerminalStore(state => state.focusTerminal)
   const sessionAgents = agents.filter(agent => paneTabs[agent.shellId] === tabId)
   if (sessionAgents.length === 0) return null
@@ -50,8 +52,8 @@ export function LocalSessionAgents({ tabId }: { tabId: string }) {
   return (
     <div className="local-agent-strip" role="group" aria-label="이 세션의 에이전트">
       {sessionAgents.map(agent => {
-        const { status, statusDescription, icons } = localAgentAppearance(agent)
-        const description = `${agentIdentityLabel(agent)} · ${statusDescription}`
+        const { status, icons } = localAgentAppearance(agent)
+        const tooltip = agentIdentityTooltip(agent, localAgentPaneLocation(tab, agent))
         return (
           <button
             key={agent.id}
@@ -61,8 +63,8 @@ export function LocalSessionAgents({ tabId }: { tabId: string }) {
             data-agent-kind={agent.kind}
             data-agent-work={isAgentWorking(agent) ? 'working' : 'idle'}
             data-status={status}
-            title={description}
-            aria-label={description}
+            {...tooltip}
+            aria-label={tooltip.title.replace(/\n/g, ', ')}
             onClick={() => {
               const pane = tabHost(tabId).querySelector<HTMLElement>(`[data-local-shell-id="${CSS.escape(agent.shellId)}"]`)
               focusTabPane(focusTerminal, tabId, pane?.dataset.pane ?? MAIN_PANE)
