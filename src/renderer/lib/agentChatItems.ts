@@ -1,3 +1,4 @@
+import { matchesEchoText } from '../../agentChat/echoText.mjs'
 import type { AgentChatItem, AgentChatSubagentActivity } from '../types'
 
 /** Items a chat view keeps; past this the oldest go (scrolling up reads them again only after reopening) */
@@ -10,6 +11,13 @@ export interface ChatEcho {
   hasImage: boolean
   /** Sent while the agent was busy: the CLI holds it until it can read it */
   queued?: boolean
+  delivery?: {
+    transcriptId: string | null
+    imageIds: readonly string[]
+    acceptedAt?: number
+    deadline?: number
+    unconfirmed?: true
+  }
 }
 
 export interface SentChatImages {
@@ -63,10 +71,6 @@ export function nextHeld(held: readonly string[], recorded: ReadonlyMap<string, 
   return [...new Set([...held, ...joined])].filter(id => items.some(item => item.id === id) && !isReadByModel(items, id))
 }
 
-const LEGACY_IMAGE_PROMPT = '첨부 이미지를 열어 확인해 주세요.'
-const NATIVE_IMAGE_PREFIX = /^(?:\[Image #[1-9]\d*\]\s*)+/
-const STORED_IMAGE_PATH = /(?:^|[/\\])ezshell-clipboard-[\w-]+[/\\][a-f0-9-]{36}\.png$/i
-
 /** An older main process can send the token or the prefix clipped by the transcript reader. */
 export function subagentDisplayText(value: string, kind: 'claude' | 'codex' | null): string {
   if (kind !== 'codex') return value
@@ -85,23 +89,10 @@ export async function readSubagentActivity(read: ReadSubagentActivity | undefine
   }
 }
 
-function isEchoOf(item: AgentChatItem, echo: ChatEcho, reset: boolean): boolean {
+function isEchoOf(item: AgentChatItem, echo: ChatEcho, reset: boolean, relaxed: boolean): boolean {
   // A first read can include an older, identical message. Providers may round to whole seconds.
   if (item.time === null ? reset : item.time < echo.time - 1000) return false
-  const message = item.text?.replace(/\r\n?/g, '\n').trim() ?? ''
-  if (!echo.hasImage) return !item.hasImage && message === echo.text
-  if (item.hasImage && message === echo.text) return true
-
-  const tokens = NATIVE_IMAGE_PREFIX.exec(message)?.[0]
-  const text = tokens ? message.slice(tokens.length) : message
-  const native = Boolean(tokens || item.hasImage)
-  if (native && text === echo.text) return true
-  const attached = text === LEGACY_IMAGE_PROMPT || text.startsWith(LEGACY_IMAGE_PROMPT + '\n')
-    ? text.slice(LEGACY_IMAGE_PROMPT.length).trim() : text
-  if (native && attached === echo.text) return true
-
-  const [paths, ...body] = attached.split('\n\n')
-  return paths.split('\n').every(path => STORED_IMAGE_PATH.test(path)) && body.join('\n\n').trim() === echo.text
+  return matchesEchoText(item, echo, relaxed)
 }
 
 /**
@@ -138,7 +129,8 @@ function matchChatEchoes(known: Set<string>, incoming: AgentChatItem[], echoes: 
   for (const item of incoming) {
     if (item.kind !== 'user' || known.has(item.id)) continue
     known.add(item.id)
-    const echo = echoes.find(entry => !recorded.has(entry.id) && isEchoOf(item, entry, reset))
+    const find = (relaxed: boolean) => echoes.find(entry => !recorded.has(entry.id) && isEchoOf(item, entry, reset, relaxed))
+    const echo = find(false) ?? find(true)
     if (echo) recorded.set(echo.id, { ...item, sentAt: echo.time })
   }
   return recorded

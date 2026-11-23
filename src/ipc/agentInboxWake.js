@@ -10,6 +10,11 @@ const pasteOf = text => '\x1b[200~' + text + '\x1b[201~'
 const DRAW_SETTLE = 35
 const INPUT_TIMEOUT = 1500
 const IMAGE_INPUT_TIMEOUT = 10_000
+const CHAT_MIN_PASTE_AGE = 500
+const CHAT_EXACT_POLL = 100
+const CHAT_EDITOR_QUIET = 300
+const CHAT_INPUT_TIMEOUT = 5000
+const CHAT_DRAFT_TIMEOUT = 2000
 // A CLI that has not reported its state yet (just started, before its first turn) is taken to wait for
 // input once its empty composer has stayed unchanged this long (three fresh agents never woke)
 const QUIET_MS = 1500
@@ -17,11 +22,12 @@ const submitKey = data => /^(?:\r|\n|\x1b\[13(?:;1)?u)$/.test(data)
 const compact = text => text.replace(/\s/g, '')
 const claudeRule = /^\s*─{8,}\s*$/u
 const claudeTargetRule = /^\s*─{8,}\s+([^─]+?)\s+─\s*$/u
+const claudeScrollRule = /^\s*─{3,}\s+([↑↓])\s+[1-9]\d*\s+more\s+─{3,}\s*$/u
 const isClaudeRule = row => claudeRule.test(row) || claudeTargetRule.test(row)
-// The hint an empty Claude composer shows: Try "fix lint errors"
-const CLAUDE_PLACEHOLDER = /^Try ".*"$/
 const CLAUDE_SHELL_COUNT = /^(\d+) shells?$/i
 const CLAUDE_FOOTER_HINT = /(?:mode on|permissions on|accept edits on|\? for shortcuts|↓ to manage)/iu
+const SHELL_PROMPT = /^\s*(?:PS\s+[^>]+>|[A-Z]:[\\/][^>]*>|(?:\S+[@:]\S+|~\S*|\/\S*)\s*[$%#])(?:\s|$)/i
+const POWERSHELL_CONTINUATION = /^\s*>>(?:\s|$)/u
 // A numbered choice of a prompt: "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"
 const APPROVAL_OPTION = /^\s*([❯›>▶])?\s*([1-9])[.)]\s+(\S.*?)\s*$/u
 const CODEX_APPROVAL_HINT = /\b(?:enter (?:to )?(?:confirm|submit|select)|esc (?:to )?cancel)\b/i
@@ -73,7 +79,7 @@ function claudeQuestionPrompt(rows, bare, bottom, previous) {
 /**
  * write: our wake lines (gated on mail by the caller); rawWrite: a chat line the user sent (submitText)
  */
-function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMessages = () => [], isWorking, isRunningTask = () => false, isUnknown = () => false, quietMs = QUIET_MS, write, rawWrite = write, parentInput = () => true, onApprovalChange }) {
+function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMessages = () => [], isWorking, isRunningTask = () => false, isUnknown = () => false, isLive = () => true, isBlocked = () => false, quietMs = QUIET_MS, write, rawWrite = write, parentInput = () => true, onApprovalChange }) {
   const screen = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true })
   const dispatched = new Set()
   // Announced while the agent was busy: reminded once after the task if still unanswered
@@ -83,6 +89,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   let stage = null
   // When the agent last drew anything (a fresh agent counts as waiting once this has been a while)
   let lastOutputAt = Date.now()
+  let outputVersion = 0
+  let parsedOutputVersion = 0
   let userDraft = false
   let composing = false
   // A model / effort picker is open (agentPicker.js): no wake line and no chat line meanwhile
@@ -92,6 +100,14 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   let approvalTimer = null
   let approvalVisible = false
   const prompt = kind === 'codex' ? /^\s*›[ \u00a0]/u : /^\s*[>❯][ \u00a0]/u
+
+  function isDimmedDraft(line, start) {
+    for (let x = start; x < screen.cols; x++) {
+      const cell = line?.getCell(x)
+      if (cell?.getChars().trim() && !cell.isDim()) return false
+    }
+    return true
+  }
 
   function paintedClaudeComposer(buffer, line, maxInputRows) {
     // Claude can leave the terminal cursor in the footer and paint its input cursor with inverse video.
@@ -107,7 +123,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       const footerRow = bottom - buffer.baseY + 1
       const startColumn = prefix[0].length
       // Claude's next-prompt suggestion is entirely dimmed and leaves the composer empty.
-      let dimmedSuggestion = !userDraft && bottom === first + 1
+      let dimmedSuggestion = bottom === first + 1
       let painted
       const input = []
       for (let row = first; row < bottom; row++) {
@@ -124,17 +140,16 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         }
       }
       if (dimmedSuggestion && input[0].trim()) {
-        const atStart = painted ? painted.x === startColumn
-          : buffer.baseY + buffer.cursorY !== first || buffer.cursorX === startColumn
-        if (atStart) return { atStart: true, endsAtCursor: true, text: '', target, footerRow }
+        return { atStart: true, endsAtCursor: true, text: '', target, footerRow, display: '' }
       }
+      const display = input.map(row => row.trimEnd()).join('\n')
       if (!painted) {
         // No cursor painted either: Claude out of focus (the chat view or the usage menu has the keyboard)
         // draws its composer without one. Read the entire draft between the rules, including wrapped
         // paths and hard line breaks. Only a single blank or placeholder row counts as empty.
         const typed = input.join('\n').trim()
-        const empty = input.length === 1 && (!typed || CLAUDE_PLACEHOLDER.test(typed))
-        return { atStart: empty, endsAtCursor: true, text: empty ? '' : compact(typed), target, footerRow }
+        const empty = input.length === 1 && !typed
+        return { atStart: empty, endsAtCursor: true, text: empty ? '' : compact(typed), target, footerRow, display }
       }
       if (!painted.blank) return null
       const text = compact(input.join(''))
@@ -144,6 +159,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         atStart: !text && painted.row === first && painted.x === startColumn,
         endsAtCursor: !compact(afterCursor),
         text,
+        display,
         target,
         footerRow
       }
@@ -158,9 +174,9 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     const cursor = buffer.baseY + buffer.cursorY
     const line = index => buffer.getLine(index)?.translateToString(false) ?? ''
     const endsAtCursorColumn = index => {
-      const tail = buffer.getLine(index)?.translateToString(false, buffer.cursorX) ?? ''
       // Windows ConPTY can leave the cursor on the last cell when the text fills the row exactly.
-      return !tail.trim() || (buffer.cursorX === screen.cols - 1 && tail.length === 1 && tail !== ' ')
+      if (buffer.cursorX === screen.cols - 1) return true
+      return !(buffer.getLine(index)?.translateToString(false, buffer.cursorX) ?? '').trim()
     }
     // A pasted line can wrap. Look above the cursor only as far as the app-written prompt.
     const maxInputRows = Math.min(screen.rows, Math.ceil(textLength / Math.max(1, screen.cols - 2)) + textLines)
@@ -198,9 +214,61 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       const atStart = index === cursor && buffer.cursorX === prefix[0].length
       const endsAtCursor = endsAtCursorColumn(cursor)
       const target = kind === 'claude' ? claudeTargetRule.exec(line(index - 1))?.[1] ?? '' : undefined
-      return { atStart, endsAtCursor, text: compact([tail, ...lines].join('')), lastRow: cursor - buffer.baseY, target }
+      const suggestion = Boolean(tail.trim()) && lines.every(row => !row.trim()) && isDimmedDraft(buffer.getLine(index), prefix[0].length)
+      const display = [tail, ...lines].map(row => row.trimEnd()).join('\n')
+      return { atStart, endsAtCursor, suggestion, text: compact(display), display, lastRow: cursor - buffer.baseY, target }
     }
     return null
+  }
+
+  // The cursor can be parked above the editor on redraw. This fallback identifies the visible
+  // draft and its target, and cannot prove emptiness for a new paste.
+  function visibleComposer() {
+    if (!screen.modes.bracketedPasteMode) return null
+    const rows = screenLines()
+    if (rows.some(row => SHELL_PROMPT.test(row))) return null
+    if (kind === 'claude') {
+      const upper = rows.findLastIndex(row => claudeScrollRule.exec(row)?.[1] === '↑')
+      const lower = rows.findIndex((row, index) => index > upper && claudeScrollRule.exec(row)?.[1] === '↓')
+      if (upper >= 0 || lower >= 0) {
+        // Claude replaces a clipped edge with a scroll count. Use only the rows on the editor side
+        // of that edge, even when there is no prompt, plain bottom rule, or footer left on screen.
+        const start = upper >= 0 ? upper + 1 : rows.slice(0, lower).findLastIndex(isClaudeRule) + 1
+        const nextRule = rows.findIndex((row, index) => index >= start && isClaudeRule(row))
+        const end = Math.min(lower < 0 ? rows.length : lower, nextRule < 0 ? rows.length : nextRule)
+        const draft = rows.slice(start, end)
+        if (draft.some(row => /\$\s*$/.test(row))) return null
+        const display = draft.join('\n')
+        const text = compact(display)
+        const target = claudeTargetRule.exec(rows[start - 1] ?? '')?.[1] ?? claudeTargetRule.exec(rows[end] ?? '')?.[1] ?? ''
+        return text ? { text, display, target } : null
+      }
+    }
+    const { active: buffer } = screen.buffer
+    const first = rows.findLastIndex((row, index) => prompt.test(row + ' ') &&
+      (kind !== 'claude' || isClaudeRule(rows[index - 1] ?? '')))
+    if (first >= 0) {
+      const width = prompt.exec(rows[first] + ' ')[0].length
+      if (isDimmedDraft(buffer.getLine(buffer.baseY + first), width)) return null
+      const end = rows.findIndex((row, index) => index > first && (kind === 'codex' ? !row.trim() : isClaudeRule(row)))
+      const display = [rows[first].slice(width), ...rows.slice(first + 1, end < 0 ? undefined : end)].join('\n')
+      const lastRow = end < 0 ? rows.length - 1 : end - 1
+      const target = kind === 'claude' ? claudeTargetRule.exec(rows[first - 1])?.[1] ?? '' : undefined
+      return { text: compact(display), display, lastRow, target }
+    }
+    if (kind === 'codex') return null
+    // With a tall draft, Claude can scroll the prompt and top rule out of a short viewport.
+    const bottom = rows.findLastIndex(isClaudeRule)
+    const footer = rows.slice(bottom + 1).filter(row => row.trim())
+    if (bottom <= 0 || rows.length - bottom > 5 || !rows[bottom - 1].trim() || !footer.some(row => CLAUDE_FOOTER_HINT.test(row))) return null
+    const display = rows.slice(0, bottom).join('\n')
+    return { target: claudeTargetRule.exec(rows[bottom])?.[1] ?? '', text: compact(display), display }
+  }
+
+  function shellAtCursor() {
+    const { active: buffer } = screen.buffer
+    const line = buffer.getLine(buffer.baseY + buffer.cursorY)?.translateToString(true) ?? ''
+    return SHELL_PROMPT.test(line) || POWERSHELL_CONTINUATION.test(line)
   }
 
   function targetOf(input) {
@@ -235,8 +303,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     return readApprovalScreen()
   }
 
-  function readApprovalScreen() {
-    if (composer()) {
+  function readApprovalScreen(checkBehindComposer = false) {
+    if (!checkBehindComposer && composer()) {
       claudeQuestion = null
       return null
     }
@@ -313,6 +381,16 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     return { question, detail: lines, options, selected, signature: JSON.stringify([question, options]) }
   }
 
+  function chatBlocked() {
+    if (isBlocked()) return true
+    const approval = readApprovalScreen(true)
+    return Boolean(approval?.usesTerminalInput || approval?.selected)
+  }
+
+  function chatComposerIsEmpty(input) {
+    return input?.atStart && (!input.text || input.suggestion)
+  }
+
   function scheduleApprovalCheck() {
     if (!onApprovalChange || stopped || held || approvalTimer) return
     approvalTimer = setTimeout(() => {
@@ -328,9 +406,12 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     approvalTimer.unref?.()
   }
 
-  // A line sent from the chat view (src/agentChat): pasted into the empty composer, then Enter once the
-  // composer shows it. Pasting a long text, the CLIs show a placeholder instead of the text.
+  // The prior chat paste can need time to leave the composer or need clearing on the next send.
   let chat = null
+  let lastChatDraft = null
+  // Per-PTY sequencing follows Orca (MIT), native-chat-pty-send-queue.ts. A paste and its delayed
+  // Enter own the editor until both writes finish, so the next send cannot merge into that draft.
+  const chatQueue = []
   let approvalWatch = null
   const PASTED_PLACEHOLDER = /^\[Pasted(?:text|Content)[^\]]*\]$/i
   const IMAGE_PREFIX = /^(?:\[Image#[1-9]\d*\])+/
@@ -363,7 +444,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   function finishChat(result, replayInput = true) {
-    const { resolve, terminalInput } = chat
+    const { resolve, terminalInput, timer } = chat
+    clearTimeout(timer)
     chat = null
     if (replayInput) {
       for (const data of terminalInput) {
@@ -372,19 +454,134 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       }
     }
     resolve(result)
+    if (chatQueue.length) queueMicrotask(drainChatQueue)
+  }
+
+  function drainChatQueue() {
+    while (!chat && chatQueue.length && parsedOutputVersion === outputVersion) chatQueue.shift().start()
+  }
+
+  function cancelQueuedChats(reason) {
+    for (const { resolve } of chatQueue.splice(0)) resolve({ ok: false, reason })
+  }
+
+  function scheduleChatCheck(now = Date.now(), when = now + DRAW_SETTLE * 3) {
+    chat.timer = setTimeout(checkChat, Math.max(1, Math.min(when, chat.expires) - now))
+    chat.timer.unref?.()
+  }
+
+  function pasteChatDraft(now, input) {
+    const { draft, paste, codexSpeed, timeout } = chat
+    chat.waitForEmpty = false
+    chat.pastedAt = now
+    chat.pasteOutputVersion = outputVersion
+    if (draft) {
+      chat.editorDisplay = input.display
+      chat.editorHasDraft = false
+    }
+    chat.expires = now + timeout
+    if (!(codexSpeed ? rawWrite(paste, false) : rawWrite(paste))) {
+      finishChat({ ok: false, reason: 'write-failed' }, false)
+      return
+    }
+    if (draft) lastChatDraft = draft
+    scheduleChatCheck(now, now + DRAW_SETTLE)
+  }
+
+  function chatTargetMatches(input) {
+    const target = targetOf(input)
+    return target === chat.draft.target && (!chat.verify || chat.verify(target))
+  }
+
+  function enterChat(now, input) {
+    // Orca (MIT), native-chat-runtime-send.ts, issues one separate Enter after the paste window.
+    // Keep the attempt marked even if the PTY write fails, since delivery may be uncertain.
+    lastChatDraft = { ...chat.draft, sent: true, displayed: input.text, enterOutputVersion: outputVersion }
+    const ok = rawWrite('\r')
+    userDraft = false
+    holdUntil = now + INPUT_TIMEOUT
+    finishChat(ok ? { ok: true } : { ok: false, reason: 'write-failed' }, false)
+    schedule(INPUT_TIMEOUT)
+  }
+
+  function checkOrdinaryChat(now, input, drawn) {
+    // Based on Orca (MIT), native-chat-paste-landed.ts. Matching and stability select the
+    // timing. At the deadline the active editor and other safety checks still apply.
+    const hasDraft = Boolean(input?.text && !input.suggestion && !chatComposerIsEmpty(input))
+    if ((input?.display !== chat.editorDisplay || hasDraft !== chat.editorHasDraft)
+      && parsedOutputVersion > chat.pasteOutputVersion) {
+      chat.editorDisplay = input?.display
+      chat.editorHasDraft = hasDraft
+      chat.editorChangedAt = now
+      chat.exactReadAt = undefined
+    }
+    const firstCheck = chat.pastedAt + CHAT_MIN_PASTE_AGE
+    const fallbackAt = (chat.editorChangedAt ?? Infinity) + CHAT_EDITOR_QUIET
+    if (drawn && now >= firstCheck) chat.exactReadAt ??= now
+    else chat.exactReadAt = undefined
+    const exactAt = (chat.exactReadAt ?? Infinity) + CHAT_EXACT_POLL
+    const ready = drawn ? now >= exactAt : now >= fallbackAt
+    const expired = now >= chat.expires
+    const pasteIsVisible = hasDraft && chat.editorChangedAt !== undefined
+    if (expired || (now >= firstCheck && pasteIsVisible && ready)) {
+      if (!pasteIsVisible) return finishChat({ ok: false, reason: 'not-drawn' }, false)
+      if (!chatTargetMatches(input)) return finishChat({ ok: false, reason: 'target-changed' }, false)
+      enterChat(now, input)
+      return
+    }
+    const stabilityAt = drawn ? exactAt : fallbackAt
+    const nextPoll = now < firstCheck ? firstCheck : Math.min(now + CHAT_EXACT_POLL, stabilityAt > now ? stabilityAt : Infinity)
+    scheduleChatCheck(now, nextPoll)
   }
 
   function checkChat() {
     if (!chat || stopped) return
     clearTimeout(chat.timer)
     const now = Date.now()
+    const finish = reason => finishChat({ ok: false, reason }, false)
+    if (!isLive()) return finish('not-agent')
+    if (chat.draft && (composing || held)) return finish('interrupted')
+    if (chat.draft && parsedOutputVersion !== outputVersion) {
+      if (now < chat.expires) {
+        scheduleChatCheck(now)
+        return
+      }
+      if (chat.waitForEmpty) return finish('composer-not-empty')
+      // A frame received by the deadline can still be waiting on xterm. Give the parser one
+      // bounded drain window, and never send from an older frame while more bytes are queued.
+      chat.drainUntil ??= now + DRAW_SETTLE * 3
+      if (now >= chat.drainUntil) return finish('not-drawn')
+      chat.timer = setTimeout(checkChat, chat.drainUntil - now)
+      chat.timer.unref?.()
+      return
+    }
+    const blocked = chat.draft && chatBlocked()
+    if (chat.waitForEmpty) {
+      if (blocked) return finish('approval')
+      const input = composer(Infinity)
+      if (input && !chatTargetMatches(input)) {
+        return finish('target-changed')
+      }
+      if (now >= chat.expires) return finish('composer-not-empty')
+      if (chatComposerIsEmpty(input) && parsedOutputVersion > chat.emptyAfterOutput) {
+        lastChatDraft = null
+        userDraft = false
+        pasteChatDraft(now, input)
+      } else {
+        scheduleChatCheck(now)
+      }
+      return
+    }
     const codexImages = chat.codexImages
     const matchesAttachments = codexImages ? text => matchesCodexImages(text, codexImages) : undefined
-    const input = composer(chat.length, chat.lines, matchesAttachments)
+    const parsed = composer(chat.draft ? Infinity : chat.length, chat.lines, matchesAttachments)
+    const input = chat.draft ? (!shellAtCursor() && (parsed ?? visibleComposer())) : parsed
+    if (blocked) return finish('approval')
     const drawn = input?.endsAtCursor && (matchesAttachments ? matchesAttachments(input.text) : (
       input.text === chat.text || (chat.claudeImages && matchesImageCount(input.text, chat.claudeImages.count, chat.claudeImages.text))
       || PASTED_PLACEHOLDER.test(input.text)
     ))
+    if (chat.draft) return checkOrdinaryChat(now, input, drawn)
     const command = chat.codexSpeed
     const exact = input?.endsAtCursor && input.text === chat.text
     const available = command && exact && hasCodexSpeedChoice(screenLines(), command)
@@ -421,8 +618,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       finishChat({ ok: false, reason: 'not-drawn' }, input?.atStart)
       return
     }
-    chat.timer = setTimeout(checkChat, Math.min(DRAW_SETTLE * 3, chat.expires - now))
-    chat.timer.unref?.()
+    scheduleChatCheck(now)
   }
 
   function advance() {
@@ -482,7 +678,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     // State not reported yet: look again once the screen has been still long enough
     if (due && working && isUnknown() && input?.atStart) { schedule(quietMs - quietFor + DRAW_SETTLE); return }
     // Busy but not in a task (starting up, approval prompt, unknown): wait as before
-    if (!due || (working && !running) || !input?.atStart || (userDraft && input.text)) return
+    if (!due || (working && !running) || !input?.atStart || (userDraft && input.text && !input.suggestion)) return
     if (now < holdUntil) { schedule(holdUntil - now); return }
     userDraft = false
     const mode = waiting.length ? (working ? 'busy' : 'idle') : 'remind'
@@ -498,9 +694,11 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   function userInput(data) {
-    if (chat && (chat.codexImages || (data === '\x1b' && !chat.probe))) {
-      clearTimeout(chat.timer)
-      finishChat({ ok: false, reason: data === '\x1b' ? 'interrupted' : 'target-changed' }, false)
+    lastChatDraft = null
+    cancelQueuedChats('interrupted')
+    if (chat && (chat.draft || chat.codexImages || (data === '\x1b' && !chat.probe))) {
+      const reason = chat.draft || data === '\x1b' ? 'interrupted' : 'target-changed'
+      finishChat({ ok: false, reason }, false)
     }
     if (stage) {
       stage = null
@@ -519,11 +717,16 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     writeOutput(data) {
       if (stopped) return
       lastOutputAt = Date.now()
+      const version = ++outputVersion
       const wasWriting = stage !== null
       screen.write(data, () => {
+        parsedOutputVersion = version
         if (approvalWatch && approvalPrompt()?.signature !== approvalWatch.signature) approvalWatch.gone = true
         if (chat) checkChat()
-        else if (wasWriting || stage || deferred.size || pendingMessages().some(id => !dispatched.has(id))) schedule()
+        else {
+          drainChatQueue()
+          if (wasWriting || stage || deferred.size || pendingMessages().some(id => !dispatched.has(id))) schedule()
+        }
         scheduleApprovalCheck()
       })
     },
@@ -555,43 +758,80 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     },
     /**
      * Enters a line the user wrote in the chat view: only into the agent's own, empty composer (never a
-     * shell prompt), and Enter only once the composer shows that text. Resolves { ok } or { ok, reason }.
+     * shell prompt). Normal chat can also submit after the active editor has redrawn and settled.
      */
-    submitText(text, images, { codexSpeed, probe = false, verify } = {}) {
+    submitText(text, images, { codexSpeed, probe = false, strict = false, verify, canSend } = {}) {
+      // A per-attempt restriction can expire while its draft is still on screen. Only the
+      // target check is saved with the draft for a later send to verify before clearing it.
+      const verifySend = canSend ? target => (!verify || verify(target)) && canSend() : verify
       return new Promise(resolve => {
-        if (stopped) return resolve({ ok: false, reason: 'not-agent' })
-        if (chat || stage || composing || held) return resolve({ ok: false, reason: 'busy' })
-        // Hangul and other wide characters can take two terminal cells per character.
-        const files = kind === 'codex' ? images?.files : null
-        const length = text.length + (text.match(/[^\x00-\x7f]/g)?.length ?? 0) + (files?.length ?? 0) * 20
-        const lines = text.split('\n').length
-        const input = composer(length, lines)
-        if (!input) return resolve({ ok: false, reason: 'no-composer' })
-        if (verify && !verify(targetOf(input))) return resolve({ ok: false, reason: 'target-changed' })
-        // Empty is the cursor at the prompt's start, as for our wake lines: an empty composer shows
-        // placeholder text to the right of the cursor ("Try …"), so its text is not empty
-        if (!input.atStart || ((codexSpeed || files?.length) && userDraft && input.text)
-          || (files?.length && IMAGE_PREFIX.test(input.text))) {
-          return resolve({ ok: false, reason: 'composer-not-empty' })
+        const queueable = !strict && !codexSpeed && !probe
+        const relaxed = queueable && !images
+        const start = () => {
+          if (stopped || !isLive()) return resolve({ ok: false, reason: 'not-agent' })
+          if (chat || stage || composing || held) return resolve({ ok: false, reason: 'busy' })
+          if (relaxed && chatBlocked()) return resolve({ ok: false, reason: 'approval' })
+          // Hangul and other wide characters can take two terminal cells per character.
+          const files = kind === 'codex' ? images?.files : null
+          const length = text.length + (text.match(/[^\x00-\x7f]/g)?.length ?? 0) + (files?.length ?? 0) * 20
+          const lines = text.split('\n').length
+          const input = composer(relaxed ? Infinity : length, lines)
+          if (!input || (relaxed && shellAtCursor())) return resolve({ ok: false, reason: 'no-composer' })
+          const target = targetOf(input)
+          if (verifySend && !verifySend(target)) return resolve({ ok: false, reason: 'target-changed' })
+          // An empty editor can show a dim placeholder to the right of the caret.
+          const empty = relaxed ? chatComposerIsEmpty(input) : input.atStart
+            && !((codexSpeed || files?.length) && userDraft && input.text) && !(files?.length && IMAGE_PREFIX.test(input.text))
+          const previous = relaxed ? lastChatDraft : null
+          const waitingForPrior = empty && previous?.sent && previous.target === target
+            && parsedOutputVersion <= previous.enterOutputVersion
+          const ours = !empty && previous && previous.target === target && input.text
+            && (previous.sent || (input.endsAtCursor && (kind !== 'codex' || !input.text.includes('↑'))))
+            && (input.text.normalize() === previous.text.normalize() || (previous.sent && input.text === previous.displayed))
+            && (!previous.verify || previous.verify(target))
+          if (!empty && !ours) return resolve({ ok: false, reason: 'composer-not-empty' })
+
+          clearTimeout(timer)
+          const claudeImages = kind === 'claude' && images ? { count: images.count, text: compact(images.text) } : null
+          const compactText = compact(text)
+          // Codex recognizes each local image when its path is pasted on its own.
+          const codexImages = files?.length ? {
+            files, body: text, compactBody: compactText, nextFile: 1, labels: '', pastingBody: false,
+            placeholder: `[PastedContent${Array.from(text).length}chars]`
+          } : null
+          const now = Date.now()
+          const draft = relaxed ? { text: compactText, target, verify, eraseCount: Array.from(text).length + lines } : null
+          chat = {
+            text: compactText, length, lines, codexSpeed, probe, verify: verifySend, terminalInput: [],
+            claudeImages, codexImages, draft, paste: pasteOf(files?.[0] ?? text),
+            // The CLI reads and decodes image files before its native image tokens appear.
+            timeout: relaxed ? CHAT_INPUT_TIMEOUT : images ? IMAGE_INPUT_TIMEOUT : INPUT_TIMEOUT,
+            resolve, timer: null
+          }
+          if (empty && !waitingForPrior) {
+            if (relaxed) lastChatDraft = null
+            pasteChatDraft(now, input)
+            return
+          }
+          chat.waitForEmpty = true
+          chat.emptyAfterOutput = outputVersion
+          chat.expires = now + CHAT_DRAFT_TIMEOUT
+          // Like Orca (MIT), native-chat-input-clear.ts, send the clear on its own. Wait for the
+          // reader to see an empty editor before writing another paste into the same PTY.
+          if (!previous.sent) {
+            lastChatDraft = null
+            if (!rawWrite('\x7f'.repeat(previous.eraseCount), false)) {
+              finishChat({ ok: false, reason: 'write-failed' }, false)
+              return
+            }
+          }
+          scheduleChatCheck(now, now + DRAW_SETTLE)
         }
-        const pasted = pasteOf(files?.[0] ?? text)
-        if (!(codexSpeed ? rawWrite(pasted, false) : rawWrite(pasted))) return resolve({ ok: false, reason: 'write-failed' })
-        clearTimeout(timer)
-        const claudeImages = kind === 'claude' && images ? { count: images.count, text: compact(images.text) } : null
-        // Codex recognizes each local image when its path is pasted on its own.
-        const compactText = compact(text)
-        const codexImages = files?.length ? {
-          files, body: text, compactBody: compactText, nextFile: 1, labels: '', pastingBody: false,
-          placeholder: `[PastedContent${Array.from(text).length}chars]`
-        } : null
-        chat = {
-          text: compactText, length, lines, codexSpeed, probe, verify, terminalInput: [],
-          claudeImages, codexImages,
-          // The CLI reads and decodes image files before its native image tokens appear.
-          expires: Date.now() + (images ? IMAGE_INPUT_TIMEOUT : INPUT_TIMEOUT), resolve, timer: null
+        if (queueable && !stopped && (chat || chatQueue.length || parsedOutputVersion !== outputVersion)) {
+          chatQueue.push({ start, resolve })
+        } else {
+          start()
         }
-        chat.timer = setTimeout(checkChat, DRAW_SETTLE)
-        chat.timer.unref?.()
       })
     },
     /**
@@ -632,6 +872,11 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     },
     setComposing(value) {
       composing = value
+      if (value) {
+        lastChatDraft = null
+        cancelQueuedChats('interrupted')
+        if (chat?.draft) finishChat({ ok: false, reason: 'interrupted' }, false)
+      }
       if (value && stage) {
         stage = null
         userDraft = true
@@ -641,6 +886,11 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     /** While a model / effort picker is open: no wake line, no chat line */
     setHeld(value) {
       held = value
+      if (value) {
+        lastChatDraft = null
+        cancelQueuedChats('interrupted')
+        if (chat?.draft) finishChat({ ok: false, reason: 'interrupted' }, false)
+      }
       if (!value) {
         scheduleApprovalCheck()
         schedule()
@@ -648,6 +898,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     },
     /** The visible screen, one string per row (agentPicker.js reads the CLI's pickers from it) */
     screenLines,
+    /** First row below Claude's ruled composer, including when the draft wraps. */
+    composerFooterRow: () => !stopped && kind === 'claude' ? composer(Infinity)?.footerRow ?? null : null,
     /** Background shells in Claude's own composer footer. Null while the footer cannot be read. */
     backgroundShellCount() {
       if (stopped || kind !== 'claude') return null
@@ -675,11 +927,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       stopped = true
       clearTimeout(timer)
       clearTimeout(approvalTimer)
-      if (chat) {
-        clearTimeout(chat.timer)
-        chat.resolve({ ok: false, reason: 'not-agent' })
-        chat = null
-      }
+      cancelQueuedChats('not-agent')
+      if (chat) finishChat({ ok: false, reason: 'not-agent' }, false)
       screen.dispose()
     }
   }

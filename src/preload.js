@@ -261,7 +261,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentChatReadClipboard: (shellId) => ipcRenderer.invoke('agent-chat-read-clipboard', shellId),
   agentChatPickImages: (shellId) => ipcRenderer.invoke('agent-chat-pick-images', shellId),
   agentChatRemoveImage: (shellId, imageId) => ipcRenderer.send('agent-chat-remove-image', { shellId, imageId }),
-  agentChatSend: (shellId, text, imageIds) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageIds }),
+  agentChatSend: (shellId, text, imageIds, retry) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageIds, retry }),
   agentChatToggleSpeed: (shellId, speed) => ipcRenderer.invoke('agent-chat-toggle-speed', { shellId, speed }),
   agentChatInterrupt: (shellId) => ipcRenderer.invoke('agent-chat-interrupt', shellId),
   agentChatTakeBack: (shellId, texts) => ipcRenderer.invoke('agent-chat-take-back', { shellId, texts }),

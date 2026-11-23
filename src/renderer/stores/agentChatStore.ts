@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatCapture, AgentChatFrame, AgentChatItem, AgentChatState, AgentChatSubagent, CodexSpeedState } from '../types'
 import { MAX_CHAT_ITEMS, echoItemIds, echoOutputId, nextHeld, reconcileChatEchoes, sentImageKey, type ChatEcho, type SentChatImages } from '../lib/agentChatItems'
+import { isSlashCommand } from '../lib/slashCommands'
 import { toast } from './toastStore'
 
 // Which local shells are shown as a chat (components/AgentChat) and what each chat shows. Keyed by the
@@ -9,6 +10,7 @@ import { toast } from './toastStore'
 
 export interface AgentChat {
   scope: string | null
+  transcriptId: string | null
   state: AgentChatState | 'opening'
   kind: 'claude' | 'codex' | null
   title: string | null
@@ -35,7 +37,10 @@ interface AgentChatStoreState {
   toggle: (shellId: string) => void
   loadOlder: (shellId: string) => void
   /** `queued`: the agent is busy, so the CLI holds the message until it can read it */
-  echoSend: (shellId: string, text: string, previews: readonly Blob[], queued?: boolean) => string
+  echoSend: (shellId: string, text: string, previews: readonly Blob[], queued?: boolean, imageIds?: readonly string[]) => string
+  acceptSend: (shellId: string, sendId: string, retryQueued?: boolean) => void
+  confirmSend: (shellId: string, sendId: string, item: AgentChatItem) => void
+  checkSendConfirmations: (shellId: string, idle: boolean) => number | undefined
   applyCapture: (capture: AgentChatCapture) => void
   discardSend: (shellId: string, sendId: string) => void
   stopWaiting: (shellId: string, sendId: string) => void
@@ -50,7 +55,7 @@ interface AgentChatStoreState {
 }
 
 const EMPTY_IMAGES: AgentChat['sentImages'] = new Map()
-const empty = (): AgentChat => ({ scope: null, state: 'opening', kind: null, title: null, items: [], subagents: [], echoes: [], sentImages: EMPTY_IMAGES, held: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null, backgroundShells: null })
+const empty = (): AgentChat => ({ scope: null, transcriptId: null, state: 'opening', kind: null, title: null, items: [], subagents: [], echoes: [], sentImages: EMPTY_IMAGES, held: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null, backgroundShells: null })
 
 let stopFrames: (() => void) | null = null
 
@@ -60,6 +65,7 @@ let stopFrames: (() => void) | null = null
  * look at the terminal and back dropped the line the user had just sent (2026-11-20 user report).
  */
 const KEPT_ECHO_MS = 30 * 60_000
+const SEND_CONFIRMATION_MS = 15_000
 const CHAT_IMAGE_BYTES = 4 * 1024 * 1024
 const HIDDEN_CHAT_IMAGE_BYTES = 16 * 1024 * 1024
 type RetainedChat = Pick<AgentChat, 'echoes' | 'sentImages' | 'held' | 'items' | 'reply'>
@@ -108,7 +114,8 @@ function keepEchoes(shellId: string, chat: RetainedChat) {
   const reply = chat.reply && ids.has(chat.reply.sendId) ? chat.reply : null
   // A recorded message still unread keeps its mark: the transcript is read again on return, ids and all
   const at = Date.now()
-  keptEchoes.set(shellId, { echoes: chat.echoes.filter(echo => items.some(item => item.id === echo.id)), sentImages: chat.sentImages, held: chat.held, items, reply, at })
+  const echoes = chat.echoes.filter(echo => items.some(item => item.id === echo.id)).map(pauseSendConfirmation)
+  keptEchoes.set(shellId, { echoes, sentImages: chat.sentImages, held: chat.held, items, reply, at })
   let bytes = 0
   for (const [id, kept] of [...keptEchoes].reverse()) {
     if (at - kept.at >= KEPT_ECHO_MS) {
@@ -141,16 +148,37 @@ function discardEcho(chat: RetainedChat, sendId: string) {
   }
 }
 
-function appendEcho(chat: RetainedChat, { id, time, text, queued }: ChatEcho, previews: readonly Blob[]): RetainedChat {
+function appendEcho(chat: RetainedChat, echo: ChatEcho, previews: readonly Blob[]): RetainedChat {
+  const { id, time, text } = echo
   const item: AgentChatItem = { id, kind: 'user', time, text: text || '스크린샷 첨부' }
   const items = [...chat.items, item].slice(-MAX_CHAT_ITEMS)
   const droppedId = chat.items.length >= MAX_CHAT_ITEMS ? chat.items[0].id : null
   return {
     ...chat, items,
     sentImages: addSentImages(chat.sentImages, item, text, previews),
-    echoes: [...chat.echoes.filter(echo => echo.id !== droppedId), { id, text, time, hasImage: previews.length > 0, ...(queued ? { queued } : {}) }],
+    echoes: [...chat.echoes.filter(echo => echo.id !== droppedId), echo],
     reply: { sendId: id, itemId: id }
   }
+}
+
+export function isUnconfirmedSend(chat: AgentChat, echo: ChatEcho): boolean {
+  return chat.state === 'live' && Boolean(chat.transcriptId && echo.delivery?.transcriptId === chat.transcriptId && echo.delivery.unconfirmed)
+}
+
+function acceptEcho(chat: RetainedChat, sendId: string, retryQueued?: boolean) {
+  const at = chat.echoes.findIndex(echo => echo.id === sendId)
+  const echo = chat.echoes[at]
+  if (!echo?.delivery) return chat
+  const echoes = chat.echoes.slice()
+  echoes[at] = { ...echo, queued: retryQueued ?? echo.queued,
+    delivery: { ...echo.delivery, acceptedAt: Date.now(), deadline: undefined, unconfirmed: undefined } }
+  return { ...chat, echoes, reply: retryQueued === undefined ? chat.reply : { sendId, itemId: sendId } }
+}
+
+function pauseSendConfirmation(echo: ChatEcho): ChatEcho {
+  const delivery = echo.delivery
+  return delivery && (delivery.deadline !== undefined || delivery.unconfirmed)
+    ? { ...echo, delivery: { ...delivery, deadline: undefined, unconfirmed: undefined } } : echo
 }
 
 export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
@@ -201,11 +229,64 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
         update(shellId, current => ({ ...current, loadingOlder: false }))
       })
     },
-    echoSend(shellId, text, previews, queued = false) {
+    echoSend(shellId, text, previews, queued = false, imageIds = []) {
       const id = `outgoing:${crypto.randomUUID()}`
-      const echo = { id, text, queued, time: Date.now(), hasImage: previews.length > 0 }
-      update(shellId, chat => ({ ...chat, ...appendEcho(chat, echo, previews) }))
+      update(shellId, chat => {
+        const hasImage = previews.length > 0
+        const delivery = text.trim() && (hasImage || !isSlashCommand(text)) ? { transcriptId: chat.transcriptId, imageIds } : undefined
+        const echo = { id, text, queued, time: Date.now(), hasImage, delivery }
+        return { ...chat, ...appendEcho(chat, echo, previews) }
+      })
       return id
+    },
+    acceptSend(shellId, sendId, retryQueued) {
+      const kept = keptEchoes.get(shellId)
+      if (kept) keptEchoes.set(shellId, { ...kept, ...acceptEcho(kept, sendId, retryQueued) })
+      update(shellId, chat => {
+        const accepted = acceptEcho(chat, sendId, retryQueued)
+        return accepted === chat ? chat : { ...chat, ...accepted }
+      })
+    },
+    confirmSend(shellId, sendId, item) {
+      update(shellId, chat => {
+        const echo = chat.echoes.find(echo => echo.id === sendId)
+        if (!echo || echo.delivery?.transcriptId !== chat.transcriptId) return chat
+        const messages = reconcileChatEchoes(chat.items, [item], 'append', [echo])
+        if (!messages.recorded.has(sendId)) return chat
+        return {
+          ...chat, items: messages.items, echoes: chat.echoes.filter(other => other.id !== sendId),
+          sentImages: reconcileSentImages(chat, messages.recorded),
+          reply: chat.reply?.sendId === sendId ? null : chat.reply
+        }
+      })
+    },
+    checkSendConfirmations(shellId, idle) {
+      let next: number | undefined
+      update(shellId, chat => {
+        if (!idle || chat.state !== 'live' || !chat.transcriptId) {
+          const echoes = chat.echoes.map(pauseSendConfirmation)
+          return echoes.some((echo, index) => echo !== chat.echoes[index]) ? { ...chat, echoes } : chat
+        }
+        const transcriptId = chat.transcriptId
+        const now = Date.now()
+        let changed = false
+        let reply = chat.reply
+        const echoes = chat.echoes.map(echo => {
+          const delivery = echo.delivery
+          if (delivery?.acceptedAt === undefined || delivery.unconfirmed || (delivery.transcriptId && delivery.transcriptId !== transcriptId)) return echo
+          // A send can enter the queue before the CLI reports working. Require a full idle
+          // window for every send so the transcript has time to catch up after the turn.
+          const deadline = delivery.deadline ?? now + SEND_CONFIRMATION_MS
+          const unconfirmed = deadline <= now
+          if (unconfirmed && reply?.sendId === echo.id) reply = null
+          if (!unconfirmed) next = Math.min(next ?? deadline, deadline)
+          if (delivery.transcriptId === transcriptId && deadline === delivery.deadline && !unconfirmed) return echo
+          changed = true
+          return { ...echo, delivery: { ...delivery, transcriptId, deadline, unconfirmed: unconfirmed ? true as const : undefined } }
+        })
+        return changed ? { ...chat, echoes, reply } : chat
+      })
+      return next
     },
     applyCapture(capture) {
       const { shellId, id } = capture
@@ -250,7 +331,9 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
       }
       update(frame.shellId, (chat) => {
         const mode = frame.reset ? 'reset' : frame.older ? 'older' : 'append'
-        const messages = frame.items || frame.reset ? reconcileChatEchoes(chat.items, frame.items ?? [], mode, chat.echoes) : null
+        const echoes = frame.reset && frame.transcriptId ? chat.echoes.filter(echo =>
+          !echo.delivery?.transcriptId || echo.delivery.transcriptId === frame.transcriptId) : chat.echoes
+        const messages = frame.items || frame.reset ? reconcileChatEchoes(chat.items, frame.items ?? [], mode, echoes) : null
         let reply = frame.state === 'ended' ? null : chat.reply
         if (messages && reply) {
           const itemId = messages.recorded.get(reply.itemId)?.id ?? reply.itemId
@@ -262,6 +345,7 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
         return {
           ...chat,
           scope: frame.reset ? frame.scope ?? null : chat.scope,
+          transcriptId: frame.reset ? frame.transcriptId ?? null : chat.transcriptId,
           state: frame.state ?? chat.state,
           kind: frame.kind ?? chat.kind,
           title: frame.title !== undefined ? frame.title : chat.title,

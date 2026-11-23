@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAgentInboxWake, PROMPT, BUSY_PROMPT, REMIND_PROMPT } from './agentInboxWake.js'
 
 const paste = '\x1b[200~' + PROMPT + '\x1b[201~'
@@ -98,6 +98,19 @@ describe('wake an idle agent with unread messages', () => {
     await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r'], [paste]]), { timeout: 3000 })
     wake.writeOutput(claudeDraft(PROMPT))
     await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r'], [paste], ['\r']]))
+  })
+
+  it('wakes unfocused Claude after the user deletes their draft and a dim hint returns', async () => {
+    const { write, state } = setup()
+    const unfocused = text => claudeDraft(text) + '\r\n' + '─'.repeat(70) + '\r\n  ⏵⏵ auto mode on'
+    wake.userInput('x')
+    wake.userInput('\x7f')
+    state.ids.push('first')
+    wake.writeOutput(unfocused('\x1b[2mTry "fix lint errors"\x1b[22m'))
+    await vi.waitFor(() => expect(wake.composerState()).toBe('empty'))
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste]]))
+    wake.writeOutput(unfocused(PROMPT))
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r']]))
   })
 
   it('keeps queued messages while a user draft is open', async () => {
@@ -306,7 +319,7 @@ describe('a line sent from the chat view (submitText)', () => {
     await expect(sent).resolves.toMatchObject({ ok: false, reason: 'target-changed' })
     expect(write.mock.calls).toEqual([['\x1b[200~Check the narrow pane\x1b[201~']])
   })
-  function chatSetup(kind = 'claude', state = { busy: false }) {
+  function chatSetup(kind = 'claude', state = { busy: false }, { isLive, isBlocked } = {}) {
     const write = vi.fn(() => true)
     const rawWrite = vi.fn(() => true)
     wake = createAgentInboxWake({
@@ -314,7 +327,7 @@ describe('a line sent from the chat view (submitText)', () => {
       pendingMessages: () => [],
       isWorking: () => state.busy,
       isRunningTask: () => state.busy,
-      write, rawWrite
+      write, rawWrite, isLive, isBlocked
     })
     return { write, rawWrite }
   }
@@ -418,7 +431,7 @@ describe('a line sent from the chat view (submitText)', () => {
     const { rawWrite } = chatSetup()
     // Rules around a one-row composer, the terminal cursor parked on the footer, nothing in inverse
     const unfocused = text => '\x1b[?2004h\x1b[2J\x1b[20;1H' + '─'.repeat(70) + '\r\n❯ ' + text + '\r\n' + '─'.repeat(70) + '\r\n  ⏵⏵ auto mode on'
-    wake.writeOutput(unfocused('Try "fix lint errors"'))
+    wake.writeOutput(unfocused('\x1b[2mTry "fix lint errors"\x1b[22m'))
     await new Promise(resolve => setTimeout(resolve, 20))
     const sent = wake.submitText('보낼 글')
     await vi.waitFor(() => expect(rawWrite).toHaveBeenCalledWith('\x1b[200~보낼 글\x1b[201~'))
@@ -546,14 +559,643 @@ describe('a line sent from the chat view (submitText)', () => {
     expect(rawWrite).toHaveBeenCalledTimes(1)
   })
 
-  it('does not press Enter when the composer never shows the text', async () => {
-    const { rawWrite } = chatSetup()
-    wake.writeOutput(claudeDraft(''))
-    await new Promise(resolve => setTimeout(resolve, 20))
-    const sent = wake.submitText('보낼 글')
-    wake.writeOutput(claudeDraft('다른 글'))
-    await expect(sent).resolves.toEqual({ ok: false, reason: 'not-drawn' })
-    expect(rawWrite.mock.calls).toEqual([['\x1b[200~보낼 글\x1b[201~']])
+  describe('sending a paste when the terminal settles', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    const bracketedPaste = text => '\x1b[200~' + text + '\x1b[201~'
+    const ruledClaude = (cols, lines, focused = true) => {
+      const rule = '─'.repeat(cols - 1)
+      const input = lines.map((line, index) => (index === 0 ? '❯\u00a0' : '  ') + line)
+      if (focused) input[input.length - 1] += '\x1b[7m \x1b[0m'
+      return '\x1b[?2004h\x1b[2J\x1b[H' + [rule, ...input, rule, '  idle'].join('\r\n')
+    }
+
+    async function paint(frame) {
+      wake.writeOutput(frame)
+      await vi.advanceTimersByTimeAsync(1)
+    }
+
+    it('waits for 300 ms of composer stability when the paste and screen differ', async () => {
+      const { rawWrite } = chatSetup()
+      await paint(claudeDraft(''))
+      const text = 'Question for Claude'
+      const sent = wake.submitText(text)
+      await vi.advanceTimersByTimeAsync(550)
+      await paint(claudeDraft('Question for'))
+      await vi.advanceTimersByTimeAsync(270)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+      await vi.advanceTimersByTimeAsync(150)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+      await expect(sent).resolves.toEqual({ ok: true })
+    })
+
+    it('sends a stable Claude draft while a spinner above the composer keeps changing', async () => {
+      const { rawWrite } = chatSetup('claude', { busy: true })
+      const frame = text => '\x1b[?2004h\x1b[2J\x1b[H' +
+        ['⠋ Working', '', '─'.repeat(70), '> ' + text].join('\r\n')
+      const text = 'before 👋🏽 after'
+      await paint(frame(''))
+      const sent = wake.submitText(text)
+      await paint(frame('before 👋 after'))
+      for (const spinner of ['⠙', '⠹', '⠸', '⠼']) {
+        await vi.advanceTimersByTimeAsync(100)
+        await paint(`\x1b7\x1b[1;1H${spinner}\x1b8`)
+        expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+      }
+      for (const spinner of ['⠴', '⠦', '⠧']) {
+        await vi.advanceTimersByTimeAsync(100)
+        await paint(`\x1b7\x1b[1;1H${spinner}\x1b8`)
+      }
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+      await expect(sent).resolves.toEqual({ ok: true })
+    })
+
+    it('waits through 600 ms with no output and sends after the late Claude draft settles', async () => {
+      const { rawWrite } = chatSetup('claude', { busy: true })
+      const text = 'before 👋🏽 after'
+      await paint(claudeDraft(''))
+      const sent = wake.submitText(text)
+      await vi.advanceTimersByTimeAsync(600)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+      await paint(claudeDraft('before 👋 after'))
+      await vi.advanceTimersByTimeAsync(270)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+      await vi.advanceTimersByTimeAsync(150)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+      await expect(sent).resolves.toEqual({ ok: true })
+    })
+
+    it.each([
+      { layout: 'word boundaries', cols: 15, rows: ['explain', 'compare', 'rewrite', 'improve', 'confirm'], separator: ' ' },
+      { layout: 'wide characters', cols: 9, rows: Array(14).fill('한글로'), separator: '' }
+    ])('hypothesis a: sends a Claude draft wrapped past the row estimate at $layout', async ({ cols, rows, separator }) => {
+      const { rawWrite } = chatSetup()
+      wake.resize(cols, 24)
+      await paint(ruledClaude(cols, ['']))
+      const text = rows.join(separator)
+      const sent = wake.submitText(text)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+      // A seven-column slot holds only three Hangul syllables. With words, each seven-letter word occupies its own row.
+      await paint(ruledClaude(cols, rows))
+      expect(wake.screenLines().slice(1, rows.length + 1).map(row => row.slice(2).trimEnd())).toEqual(rows)
+      expect(wake.composerState()).toBe('draft')
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite).toHaveBeenLastCalledWith('\r')
+    })
+
+    it('hypothesis b: waits at least 500 ms before sending a settled scrolled draft', async () => {
+      const { rawWrite } = chatSetup()
+      await paint(ruledClaude(100, ['']))
+      const lines = ['Hidden first line', 'Hidden second line', 'Visible third line', 'Visible fourth line']
+      const text = lines.join('\n')
+      const sent = wake.submitText(text)
+      await paint(ruledClaude(100, lines.slice(2)))
+      await vi.advanceTimersByTimeAsync(450)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+      await vi.advanceTimersByTimeAsync(300)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+    })
+
+    it('hypothesis c: waits for the full paste while a busy Claude progressively redraws it', async () => {
+      const { rawWrite } = chatSetup('claude', { busy: true })
+      await paint(claudeDraft(''))
+      const text = 'Compare what the old layout shows with the current layout.'
+      const sent = wake.submitText(text)
+      for (let end = 4; end < text.length; end += 4) {
+        await vi.advanceTimersByTimeAsync(150)
+        await paint(claudeDraft(text.slice(0, end)))
+        expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+      }
+      // The complete draft arrives after the former 1.5-second deadline.
+      await paint(claudeDraft(text))
+      await vi.advanceTimersByTimeAsync(300)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite).toHaveBeenLastCalledWith('\r')
+    })
+
+    it('hypothesis d: queues a second send while the first one is still waiting to press Enter', async () => {
+      const { rawWrite } = chatSetup()
+      const first = 'First question'
+      const second = 'Follow-up question'
+      rawWrite.mockImplementation(data => {
+        if (data === bracketedPaste(second)) wake.writeOutput(claudeDraft(second))
+        return true
+      })
+      await paint(claudeDraft(''))
+      const sent = wake.submitText(first)
+      const followUp = wake.submitText(second)
+      await paint(claudeDraft(first))
+      await vi.advanceTimersByTimeAsync(450)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(first)]])
+      await vi.advanceTimersByTimeAsync(250)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(first)], ['\r']])
+      await paint(claudeDraft(''))
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(followUp).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(first)], ['\r'], [bracketedPaste(second)], ['\r']])
+    })
+
+    it.each([
+      { action: 'closing the inbox', cancel: () => wake.close(), reason: 'not-agent' },
+      { action: 'holding the inbox', cancel: () => wake.setHeld(true), reason: 'interrupted' }
+    ])('cancels pending sends without writing to the terminal when $action', async ({ cancel, reason }) => {
+      const { rawWrite } = chatSetup()
+      await paint(claudeDraft(''))
+      // While the next frame is unparsed, both sends wait in the queue before any paste.
+      wake.writeOutput(claudeDraft(''))
+      const pending = [wake.submitText('First question'), wake.submitText('Second question')]
+      cancel()
+      await vi.advanceTimersByTimeAsync(5100)
+      await expect(Promise.all(pending)).resolves.toEqual([
+        { ok: false, reason }, { ok: false, reason }
+      ])
+      expect(rawWrite).not.toHaveBeenCalled()
+    })
+
+    it('hypothesis e: verifies emoji, a variation selector, and a combining mark in a regular draft', async () => {
+      const { rawWrite } = chatSetup('codex')
+      await paint(codexDraft(''))
+      const text = '👩‍💻 ✈️ Cafe\u0301'
+      const sent = wake.submitText(text)
+      await paint(codexDraft(text))
+      expect(wake.screenLines()[0]).toBe('› ' + text)
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+    })
+
+    it.each([['a combining mark', 'e\u0301'], ['a variation selector', '✈️']])(
+      'hypothesis e: verifies an exact-fit draft ending in a cell with %s', async (_description, lastCell) => {
+        const { rawWrite } = chatSetup('codex')
+        wake.resize(10, 24)
+        await paint(codexDraft(''))
+        const text = '1234567' + lastCell
+        const sent = wake.submitText(text)
+        // ConPTY can park the caret in the last column when the draft exactly fills the row.
+        await paint(codexDraft(text) + '\x1b[1;10H')
+        expect(wake.screenLines()[0]).toBe('› ' + text)
+        await vi.advanceTimersByTimeAsync(750)
+        await expect(sent).resolves.toEqual({ ok: true })
+        expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+      }
+    )
+
+    it.each([['with focus', true], ['without focus', false]])(
+      'hypothesis f: sends literal text that looks like a placeholder in Claude %s', async (_focus, focused) => {
+        const { rawWrite } = chatSetup()
+        await paint(ruledClaude(100, [''], focused))
+        const text = 'Try "fix lint errors"'
+        const sent = wake.submitText(text)
+        await paint(ruledClaude(100, [text], focused))
+        expect(wake.composerState()).toBe('draft')
+        await vi.advanceTimersByTimeAsync(750)
+        await expect(sent).resolves.toEqual({ ok: true })
+        expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+      }
+    )
+
+    it.each([
+      { state: 'before the user types', keys: [] },
+      { state: 'after the user deletes their draft', keys: ['x', '\x7f'] }
+    ])('hypothesis f: treats the dimmed hint in unfocused Claude as empty $state', async ({ keys }) => {
+      const { rawWrite } = chatSetup()
+      for (const key of keys) wake.userInput(key)
+      await paint(ruledClaude(100, ['\x1b[2mTry "fix lint errors"\x1b[22m'], false))
+      expect(wake.composerState()).toBe('empty')
+      const text = 'Review the changes'
+      const sent = wake.submitText(text)
+      await paint(ruledClaude(100, [text], false))
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+    })
+
+    it.each([['alive', true], ['exited', false]])('does not send Enter at a shell prompt when the process is %s', async (_state, alive) => {
+      const isLive = vi.fn(() => true)
+      const { rawWrite } = chatSetup('codex', { busy: false }, { isLive })
+      await paint(codexDraft(''))
+      const text = 'Review the changes'
+      const sent = wake.submitText(text)
+      isLive.mockReturnValue(alive)
+      await paint('\x1b[2J\x1b[HPS C:\\work> ')
+      await vi.advanceTimersByTimeAsync(5100)
+      await expect(sent).resolves.toMatchObject({ ok: false })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+    })
+
+    it('does not send Enter for a matching draft left on screen by an exited agent', async () => {
+      const isLive = vi.fn(() => true)
+      const { rawWrite } = chatSetup('codex', { busy: false }, { isLive })
+      await paint(codexDraft(''))
+      const text = 'Review the changes'
+      const sent = wake.submitText(text)
+      isLive.mockReturnValue(false)
+      await paint(codexDraft(text))
+      await vi.advanceTimersByTimeAsync(5100)
+      await expect(sent).resolves.toMatchObject({ ok: false })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+    })
+
+    it('does not send Enter when an approval question replaces the composer after pasting', async () => {
+      const { rawWrite } = chatSetup()
+      await paint(ruledClaude(100, ['']))
+      const text = 'Review the changes'
+      const sent = wake.submitText(text)
+      await paint('\x1b[2J\x1b[H' + [
+        '─'.repeat(70), 'Do you want to proceed?', '❯ 1. Yes', '  2. No', 'Esc to cancel'
+      ].join('\r\n'))
+      await vi.advanceTimersByTimeAsync(5100)
+      await expect(sent).resolves.toEqual({ ok: false, reason: 'approval' })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+    })
+
+    it('does not send Enter after a user types, even if the pasted draft then matches', async () => {
+      const { rawWrite } = chatSetup()
+      await paint(claudeDraft(''))
+      const text = 'Review the changes'
+      const sent = wake.submitText(text)
+      wake.userInput('x')
+      await paint(claudeDraft(text))
+      await vi.advanceTimersByTimeAsync(5100)
+      await expect(sent).resolves.toEqual({ ok: false, reason: 'interrupted' })
+      expect(rawWrite).not.toHaveBeenCalledWith('\r')
+    })
+
+    it('sends at five seconds even while the composer keeps changing', async () => {
+      const { rawWrite } = chatSetup('claude', { busy: true })
+      const text = 'Question for Claude'
+      await paint(claudeDraft(''))
+      const sent = wake.submitText(text)
+      const redraw = elapsed => paint(claudeDraft(text.slice(0, elapsed % 200 === 0 ? -1 : -2)))
+      for (let elapsed = 100; elapsed <= 4800; elapsed += 100) {
+        await vi.advanceTimersByTimeAsync(100)
+        await redraw(elapsed)
+      }
+      await vi.advanceTimersByTimeAsync(100)
+      await redraw(4900)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+      await vi.advanceTimersByTimeAsync(100)
+      await redraw(5000)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+      await expect(sent).resolves.toEqual({ ok: true })
+    })
+
+    async function leaveUnsubmittedDraft(text, isBlocked) {
+      await paint(claudeDraft(''))
+      const sent = wake.submitText(text)
+      await paint(claudeDraft(text))
+      isBlocked.mockReturnValue(true)
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: false, reason: 'approval' })
+      isBlocked.mockReturnValue(false)
+    }
+
+    it('clears its surviving draft before the next send if a guard stopped Enter', async () => {
+      const isBlocked = vi.fn(() => false)
+      const { rawWrite } = chatSetup('claude', { busy: true }, { isBlocked })
+      const first = 'Unsubmitted question'
+      const next = 'Next question'
+      await leaveUnsubmittedDraft(first, isBlocked)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(first)]])
+
+      const sent = wake.submitText(next)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(first)], [expect.stringMatching(/^\x7f+$/), false]])
+      await paint(claudeDraft(''))
+      await vi.advanceTimersByTimeAsync(150)
+      expect(rawWrite).toHaveBeenLastCalledWith(bracketedPaste(next))
+      await paint(claudeDraft(next))
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite).toHaveBeenLastCalledWith('\r')
+    })
+
+    it('leaves the resend gate behind when a normal send recovers its aborted draft', async () => {
+      const { rawWrite } = chatSetup('claude', { busy: true })
+      const verify = vi.fn(() => true)
+      const canSend = vi.fn(() => true)
+      const first = 'Resent question'
+      const next = 'Ordinary follow-up'
+      await paint(claudeDraft(''))
+      const resend = wake.submitText(first, undefined, { verify, canSend })
+      await paint(claudeDraft(first))
+      canSend.mockReturnValue(false)
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(resend).resolves.toEqual({ ok: false, reason: 'target-changed' })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(first)]])
+      const resendChecks = canSend.mock.calls.length
+
+      verify.mockReturnValue(false)
+      await expect(wake.submitText(next)).resolves.toEqual({ ok: false, reason: 'composer-not-empty' })
+      verify.mockReturnValue(true)
+      const sent = wake.submitText(next)
+      expect(rawWrite).toHaveBeenLastCalledWith(expect.stringMatching(/^\x7f+$/), false)
+      await paint(claudeDraft(''))
+      expect(rawWrite).toHaveBeenLastCalledWith(bracketedPaste(next))
+      await paint(claudeDraft(next))
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite).toHaveBeenLastCalledWith('\r')
+      expect(canSend).toHaveBeenCalledTimes(resendChecks)
+    })
+
+    it('finds the Claude footer below a tall visible composer', async () => {
+      chatSetup('claude')
+      await paint(ruledClaude(100, Array(14).fill('Draft text')))
+      expect(wake.composerFooterRow()).toBe(16)
+    })
+
+    it('keeps the user’s draft after they edit a paste blocked by a guard', async () => {
+      const isBlocked = vi.fn(() => false)
+      const { rawWrite } = chatSetup('claude', { busy: true }, { isBlocked })
+      const text = 'Unsubmitted question'
+      await leaveUnsubmittedDraft(text, isBlocked)
+      wake.userInput('x')
+      await paint(claudeDraft(text + 'x'))
+      await expect(wake.submitText('Next question')).resolves.toEqual({ ok: false, reason: 'composer-not-empty' })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+    })
+
+    it.each([
+      { kind: 'claude', text: 'before 👋🏽 after', rendered: 'before 👋 after' },
+      { kind: 'claude', text: 'cafe\u0301', rendered: 'café' },
+      { kind: 'codex', text: 'before ✅ after', rendered: 'before  after' },
+      { kind: 'codex', text: 'al' + 'x'.repeat(1498), rendered: 'al[Pasted Content 1498 chars]' }
+    ])('sends a $kind paste after the CLI renders it as $rendered', async ({ kind, text, rendered }) => {
+      const { rawWrite } = chatSetup(kind)
+      const frame = kind === 'claude' ? claudeDraft : codexDraft
+      await paint(frame(''))
+      const sent = wake.submitText(text)
+      await paint(frame(rendered))
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+    })
+
+    it.each([['Claude’s footer', true], ['a shell prompt', false]])(
+      'uses %s to decide whether to send a clipped Claude draft without its top prompt', async (_name, hasFooter) => {
+        const { rawWrite } = chatSetup()
+        wake.resize(40, 10)
+        await paint(ruledClaude(40, ['']))
+        const text = 'These separate words make the composer wrap naturally across the terminal. '.repeat(8)
+        const sent = wake.submitText(text)
+        // Claude Code’s 40×10 screen after pasting 600 characters, with the top rule off screen.
+        const bottom = hasFooter ? ['  ⏵⏵ auto mode on (shift+tab to cycle)', '                    ◐ medium · /effort'] : ['PS C:\\work> ']
+        await paint('\x1b[2J\x1b[H' + [
+          '  composer wrap naturally across the', '  terminal. These separate words make',
+          '  the composer wrap naturally across', '  the terminal. These separate words',
+          '  make the composer wrap naturally', '  across the terminal.', '─'.repeat(40), ...bottom
+        ].join('\r\n') + '\x1b[6;24H')
+        await vi.advanceTimersByTimeAsync(hasFooter ? 750 : 5100)
+        await expect(sent).resolves.toMatchObject({ ok: hasFooter })
+        expect(rawWrite.mock.calls).toEqual(hasFooter ? [[bracketedPaste(text)], ['\r']] : [[bracketedPaste(text)]])
+      }
+    )
+
+    // Claude Code 2.1.330, current-e2e-40-height{12,10,8}.jsonl, words600-height-*-fresh.
+    const claudeOutput = [
+      '▎ Claude checks each tool call for risky',
+      '▎ actions and prompt injection before   ',
+      '▎ executing, runs the ones it assesses  ',
+      '▎ as lower-risk, and blocks the rest.   ',
+      '▎ https://code.claude.com/docs/en/permis',
+      '▎ sion-modes                            ',
+      '                    ◐ medium · /effort'
+    ]
+    const claudeScrollRule = '─── \x1b[2m↑ 15 more\x1b[22m ──────────────────────────'
+    const claudeDraftTail = '  across the terminal. \x1b[7m \x1b[27m'
+    const shortClaudeScreens = [
+      { height: 12, rows: [...claudeOutput, claudeScrollRule,
+        '  the terminal. These separate words    ', '  make the composer wrap naturally',
+        claudeDraftTail + ' '.repeat(16), '─'.repeat(40)] },
+      { height: 10, rows: [...claudeOutput.slice(1), claudeScrollRule,
+        '  the terminal. These separate words', '  make the composer wrap naturally      ', claudeDraftTail] },
+      { height: 8, rows: [...claudeOutput.slice(2), claudeScrollRule,
+        '  the terminal. These separate words', '  make the composer wrap naturally      '] }
+    ]
+
+    describe.each(shortClaudeScreens)('Claude’s captured 40×$height scrolled composer', ({ height, rows }) => {
+      const text = 'These separate words make the composer wrap naturally across the terminal. '.repeat(8)
+      const lastColumn = `\x1b[${height};40H`
+      const screenFrame = lines => '\x1b[2J\x1b[H' + lines.join('\r\n') + lastColumn
+
+      it('sends once when a scroll rule marks the visible draft', async () => {
+        const { rawWrite } = chatSetup()
+        wake.resize(40, height)
+        await paint(ruledClaude(40, ['']))
+        const sent = wake.submitText(text)
+        await paint(screenFrame(rows))
+        expect(wake.screenLines()).toContain('─── ↑ 15 more ──────────────────────────')
+        await vi.advanceTimersByTimeAsync(750)
+        expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+        await expect(sent).resolves.toEqual({ ok: true })
+      })
+
+      it('does not send if a shell prompt appears among the draft rows off the cursor', async () => {
+        const { rawWrite } = chatSetup()
+        wake.resize(40, height)
+        await paint(ruledClaude(40, ['']))
+        const sent = wake.submitText(text)
+        const mixed = [...rows]
+        mixed[rows.indexOf(claudeScrollRule) + 1] = 'PS C:\\work> '
+        await paint(screenFrame(mixed))
+        await vi.advanceTimersByTimeAsync(5100)
+        expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+        await expect(sent).resolves.toMatchObject({ ok: false })
+      })
+    })
+
+    it.each([
+      { row: '  composer wrap naturally across the', label: 'sends the visible draft', blocked: false },
+      { row: 'bash-5.2$ ', label: 'blocks a Bash prompt off the cursor', blocked: true }
+    ])('a Claude composer with only a downward scroll rule $label', async ({ row, blocked }) => {
+      const { rawWrite } = chatSetup()
+      wake.resize(40, 8)
+      await paint(ruledClaude(40, ['']))
+      const text = 'These separate words make the composer wrap naturally across the terminal. '.repeat(8)
+      const sent = wake.submitText(text)
+      await paint('\x1b[2J\x1b[H' + [
+        '  These separate words make the', row, '  terminal. These separate words make',
+        claudeScrollRule.replace('↑', '↓'), '  ⏵⏵ auto mode on'
+      ].join('\r\n'))
+      await vi.advanceTimersByTimeAsync(blocked ? 5100 : 750)
+      expect(rawWrite.mock.calls).toEqual(blocked ? [[bracketedPaste(text)]] : [[bracketedPaste(text)], ['\r']])
+      await expect(sent).resolves.toEqual(blocked ? { ok: false, reason: 'not-drawn' } : { ok: true })
+    })
+
+    it('does not send Enter at a PowerShell continuation prompt below a stale Claude composer', async () => {
+      const { rawWrite } = chatSetup('claude', undefined, { isLive: () => true })
+      await paint(ruledClaude(100, ['']))
+      const text = 'Review the changes'
+      const sent = wake.submitText(text)
+      await paint('\x1b[2J\x1b[H' + [
+        '─── ↑ 3 more ───',
+        '  Previous draft, first visible line',
+        '  Previous draft, second visible line',
+        '─'.repeat(70),
+        '  ? for shortcuts',
+        'PS C:\\work> line one',
+        '>> line two'
+      ].join('\r\n'))
+      await vi.advanceTimersByTimeAsync(5100)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+      await expect(sent).resolves.toMatchObject({ ok: false })
+    })
+
+    it('sends a Codex draft with a scroll marker after the terminal settles', async () => {
+      const { rawWrite } = chatSetup('codex')
+      wake.resize(40, 9)
+      await paint(codexDraft(''))
+      const text = 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega '.repeat(3).slice(0, 300)
+      const sent = wake.submitText(text)
+      // Codex’s 40×9 screen shows only the end of the paste and indicates hidden rows with ↑.
+      await paint('\x1b[2J\x1b[H' + [
+        '', '', '› chi psi omega alpha beta gamma delta ↑', '  epsilon zeta eta theta iota kappa',
+        '  lambda mu nu xi omicron pi rho sigma', '  tau upsilon phi chi psi omega alpha',
+        '  beta gamma delta epsilon zeta eta', '  theta iota k', ''
+      ].join('\r\n') + '\x1b[8;15H')
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+    })
+
+    it('waits for a late Codex paste token while the composer still looks empty', async () => {
+      const { rawWrite } = chatSetup('codex')
+      await paint(codexDraft(''))
+      const text = 'x'.repeat(1498)
+      const sent = wake.submitText(text)
+      await paint(codexDraft(''))
+      await vi.advanceTimersByTimeAsync(500)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+      await paint(codexDraft('[Pasted Content 1498 chars]'))
+      await vi.advanceTimersByTimeAsync(300)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+    })
+
+    it('expires without Enter at the five-second deadline when the Codex composer stays empty', async () => {
+      const { rawWrite } = chatSetup('codex')
+      await paint(codexDraft(''))
+      const text = 'x'.repeat(1498)
+      const sent = wake.submitText(text)
+      await vi.advanceTimersByTimeAsync(4900)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+      await vi.advanceTimersByTimeAsync(200)
+      await expect(sent).resolves.toEqual({ ok: false, reason: 'not-drawn' })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+    })
+
+    it.each([
+      { kind: 'claude', empty: ruledClaude(100, [''], false),
+        hint: ruledClaude(100, ['\x1b[2mReview the previous answer\x1b[22m'], false) },
+      { kind: 'codex', empty: codexDraft(''), hint: codexDraft('\x1b[2mAsk Codex…\x1b[22m\x1b[1;3H') }
+    ])('expires without Enter when $kind only draws a dim suggestion after the paste', async ({ kind, empty, hint }) => {
+      const { rawWrite } = chatSetup(kind)
+      await paint(empty)
+      const text = 'Question for the agent'
+      const sent = wake.submitText(text)
+      await paint(hint)
+      await vi.advanceTimersByTimeAsync(5100)
+      await expect(sent).resolves.toEqual({ ok: false, reason: 'not-drawn' })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)]])
+    })
+
+    it('rechecks approval at the deadline before sending into an empty composer', async () => {
+      const isBlocked = vi.fn(() => false)
+      const { rawWrite } = chatSetup('codex', undefined, { isBlocked })
+      await paint(codexDraft(''))
+      const sent = wake.submitText('Question for Codex')
+      await vi.advanceTimersByTimeAsync(4900)
+      isBlocked.mockReturnValue(true)
+      await vi.advanceTimersByTimeAsync(200)
+      await expect(sent).resolves.toEqual({ ok: false, reason: 'approval' })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste('Question for Codex')]])
+    })
+
+    it('blocks a 999-character Codex paste while a 998-character draft is still in the composer', async () => {
+      const { rawWrite } = chatSetup('codex')
+      await paint(codexDraft('x'.repeat(998)))
+      await expect(wake.submitText('y'.repeat(999))).resolves.toEqual({ ok: false, reason: 'composer-not-empty' })
+      expect(rawWrite).not.toHaveBeenCalled()
+    })
+
+    describe('sending Enter once', () => {
+      const text = 'Review the changes'
+      const paste = bracketedPaste(text)
+
+      async function startSend() {
+        const { rawWrite } = chatSetup('codex')
+        await paint(codexDraft(''))
+        const sent = wake.submitText(text)
+        return { rawWrite, sent }
+      }
+
+      async function sendFirstEnter(rawWrite) {
+        await paint(codexDraft(text))
+        await vi.advanceTimersByTimeAsync(750)
+        expect(rawWrite.mock.calls).toEqual([[paste], ['\r']])
+      }
+
+      it.each([
+        { kind: 'claude', frame: claudeDraft, input: text, rendered: text },
+        { kind: 'claude', frame: claudeDraft, input: (text + '\n').repeat(40), rendered: '[Pasted text #1 +40 lines]' },
+        { kind: 'codex', frame: codexDraft, input: text, rendered: text },
+        { kind: 'codex', frame: codexDraft, input: 'x'.repeat(1498), rendered: '[Pasted Content 1498 chars]' }
+      ])('waits 500 ms and verifies a stable reread in $kind for $rendered', async ({ kind, frame, input, rendered }) => {
+        const { rawWrite } = chatSetup(kind)
+        await paint(frame(''))
+        const sent = wake.submitText(input)
+        const pasted = bracketedPaste(input)
+        await paint(frame(rendered))
+        await vi.advanceTimersByTimeAsync(480)
+        expect(rawWrite.mock.calls).toEqual([[pasted]])
+        await vi.advanceTimersByTimeAsync(100)
+        expect(rawWrite.mock.calls).toEqual([[pasted]])
+        await vi.advanceTimersByTimeAsync(170)
+        expect(rawWrite.mock.calls).toEqual([[pasted], ['\r']])
+        await expect(sent).resolves.toEqual({ ok: true })
+      })
+
+      it('restarts the 300 ms stability interval when a partial draft grows', async () => {
+        const { rawWrite, sent } = await startSend()
+        await vi.advanceTimersByTimeAsync(550)
+        await paint(codexDraft('Review'))
+        await vi.advanceTimersByTimeAsync(220)
+        expect(rawWrite.mock.calls).toEqual([[paste]])
+        await paint(codexDraft('Review the'))
+        await vi.advanceTimersByTimeAsync(270)
+        expect(rawWrite.mock.calls).toEqual([[paste]])
+        await vi.advanceTimersByTimeAsync(150)
+        expect(rawWrite.mock.calls).toEqual([[paste], ['\r']])
+        await expect(sent).resolves.toEqual({ ok: true })
+      })
+
+      it('presses Enter exactly once even if the draft remains with a trailing newline', async () => {
+        const { rawWrite, sent } = await startSend()
+        await sendFirstEnter(rawWrite)
+        await expect(sent).resolves.toEqual({ ok: true })
+        await paint(codexDraft(text + '\r\n  '))
+        await vi.advanceTimersByTimeAsync(5000)
+        expect(rawWrite.mock.calls).toEqual([[paste], ['\r']])
+      })
+
+      it('presses Enter exactly once when Codex takes a second to clear the composer', async () => {
+        const { rawWrite, sent } = await startSend()
+        await sendFirstEnter(rawWrite)
+        await expect(sent).resolves.toEqual({ ok: true })
+        for (let elapsed = 100; elapsed <= 1000; elapsed += 100) {
+          await vi.advanceTimersByTimeAsync(100)
+          await paint(`\x1b7\x1b[5;1HWorking ${elapsed}\x1b8`)
+        }
+        expect(rawWrite.mock.calls).toEqual([[paste], ['\r']])
+        await paint(codexDraft(''))
+        expect(rawWrite.mock.calls).toEqual([[paste], ['\r']])
+      })
+    })
   })
 })
 

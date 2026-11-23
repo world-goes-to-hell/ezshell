@@ -1425,6 +1425,67 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     && ${longLog}.querySelector('[data-question-target] .agent-chat-received-message div')?.textContent === ${JSON.stringify(codexReply.text)}
   `))
 
+  const quoteSource = ['인용할 답변의 첫째 문장입니다.', '두 번째 문단', '세 번째 문단', '네 번째 문단'].join('\n\n')
+  const quoteSelection = '답변의 첫째'
+  const quoteAnswer = `${longLog}.querySelector('[data-chat-row="item:AgentMessage:quote-source"] .agent-chat-assistant')`
+  const quotePopup = `${cover(0)}.querySelector('.agent-chat-quote-selection')`
+  const quoteCards = `${cover(0)}.querySelectorAll('.agent-chat-quote-card')`
+  const quoteSend = `${cover(0)}.querySelector('.agent-chat-send')`
+  await js(`${cover(0)}.querySelector('.agent-chat-question-location button')?.click()`)
+  fs.appendFileSync(codexTranscript, longAnswer('quote-source', quoteSource))
+  if (!await until(`!!${quoteAnswer}`)) await scrollLongLog(true)
+  if (!await until(`!!${quoteAnswer}`)) throw new Error('the answer for quoting did not appear')
+  await js(`(() => {
+    const paragraph = ${quoteAnswer}.querySelector('p')
+    const node = paragraph.firstChild
+    const selected = ${JSON.stringify(quoteSelection)}
+    const start = node.textContent.indexOf(selected)
+    const range = document.createRange()
+    range.setStart(node, start)
+    range.setEnd(node, start + selected.length)
+    getSelection().removeAllRanges()
+    getSelection().addRange(range)
+  })()`)
+  if (!await until(`!!${quotePopup}`)) throw new Error('the selection quote button did not appear')
+  await click(...await center(quotePopup))
+  check('quoting selected answer text adds a card and focuses the composer', await until(`
+    ${quoteCards}.length === 1 && ${quoteCards}[0].querySelector('.agent-chat-quote-preview').textContent === ${JSON.stringify(quoteSelection)} &&
+    document.activeElement === ${composer(0)} && ${quoteSend}.disabled
+  `))
+  await js(`${quoteAnswer}.querySelector('.agent-chat-quote-reply').click()`)
+  check('replying to the whole answer adds an expandable second card', await until(`
+    ${quoteCards}.length === 2 && !!${quoteCards}[1].querySelector('.agent-chat-quote-toggle')
+  `))
+  await js(`${quoteCards}[1].querySelector('.agent-chat-quote-toggle').click()`)
+  check('a long quote can be expanded', await until(`${quoteCards}[1].querySelector('.agent-chat-quote-preview').dataset.expanded === 'true'`))
+  await js(`${quoteCards}[1].querySelector('.agent-chat-quote-toggle').click()`)
+  const quoteAttachments = `${cover(0)}.querySelectorAll('.agent-chat-attachment')`
+  await js(`${cover(0)}.querySelector('.agent-chat-add-image').click()`)
+  check('quotes with only attached images ask for a reply body', await until(`
+    ${quoteAttachments}.length === 2 && ${quoteSend}.disabled &&
+    ${cover(0)}.querySelector('.agent-chat-quote-notice')?.textContent === '인용과 함께 보낼 내용을 입력해 주세요.'
+  `))
+  await js(`[...${quoteAttachments}].forEach(attachment => attachment.querySelector('button').click())`)
+  await until(`${quoteAttachments}.length === 0`)
+  await setChatDraft('/model')
+  check('quotes block a slash command with an explanation', await until(`
+    ${quoteSend}.disabled && ${cover(0)}.querySelector('.agent-chat-quote-notice')?.textContent.includes('슬래시 명령')
+  `))
+  const quoteBody = '인용한 부분을 더 설명해 줘.'
+  const quotedMessage = `> ${quoteSelection}\n\n\n${quoteSource.split('\n').map(row => '> ' + row).join('\n')}\n\n${quoteBody}`
+  await setChatDraft(quoteBody)
+  await shot('local-agent-chat-quote-draft')
+  await js(`${quoteSend}.click()`)
+  check('the agent receives both Markdown quotes before the reply', await waitFor(() => read(codexId + '-chat-text') === quotedMessage))
+  fs.appendFileSync(codexTranscript, completed({ id: 'quoted-message', type: 'UserMessage', content: [{ type: 'text', text: quotedMessage }] }))
+  check('the recorded sent bubble renders two visibly separate quote blocks', await until(`(() => {
+    const quotes = ${longLog}.querySelector('[data-chat-row="item:UserMessage:quoted-message"] .agent-chat-bubble')?.querySelectorAll('.agent-chat-sent-quote')
+    return ${quoteCards}.length === 0 && quotes?.length === 2 &&
+      [...quotes].every(quote => !!quote.querySelector('blockquote')) &&
+      quotes[1].getBoundingClientRect().top - quotes[0].getBoundingClientRect().bottom >= 8
+  })()`))
+  await shot('local-agent-chat-quoted-reply')
+
   // Locking drops every conversation
   await js(`document.activeElement?.blur(); document.body.focus()`)
   await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'l', code: 'KeyL', windowsVirtualKeyCode: 76, modifiers: 2 })

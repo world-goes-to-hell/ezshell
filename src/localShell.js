@@ -354,7 +354,7 @@ function createLocalShells({
     const unhandledMessages = () => agents.unhandledFor?.(id) ?? [];
     entry.subagentInputLabels = new Set();
     entry.parentInput = target => !target || (!entry.subagentInputLabels.has(target) && !(entry.agent === 'codex' && target.startsWith('/root/')));
-    entry.inbox = createAgentInboxWake({
+    const inbox = createAgentInboxWake({
       kind: entry.agent, cols: entry.cols, rows: entry.rows,
       pendingMessages,
       unhandledMessages,
@@ -371,6 +371,8 @@ function createLocalShells({
       isRunningTask: () => agentStatus(entry) === 'working',
       // Nothing reported yet (a CLI just started): the wake waits for a still, empty composer instead
       isUnknown: () => agentStatus(entry) === 'unknown',
+      isLive: () => shells.get(id)?.inbox === inbox && hasAgent(entry),
+      isBlocked: () => entry.reportedStatus === 'blocked',
       write(data) {
         if (!hasAgent(entry)) return false;
         // Pasting needs mail to announce; the Enter that submits a line already pasted does not (the
@@ -394,10 +396,10 @@ function createLocalShells({
         } catch { return false; }
       }
     });
-    entry.inbox.setComposing(entry.composing);
+    entry.inbox = inbox;
+    inbox.setComposing(entry.composing);
     // The model / effort picker of the usage line (agentPicker.js): keys only while the CLI's picker shows
     const { createAgentPicker } = require('./ipc/agentPicker.js');
-    const inbox = entry.inbox;
     const writeAgentKeys = data => {
       if (!hasAgent(entry) || entry.inbox !== inbox) return false;
       try { entry.pty.write(data); return true; } catch { return false; }
@@ -417,7 +419,7 @@ function createLocalShells({
       kind: entry.agent,
       lines: () => (entry.inbox === inbox ? inbox.screenLines() : []),
       appCursor: () => entry.inbox === inbox && inbox.applicationCursorKeys(),
-      submit: text => (entry.inbox === inbox ? inbox.submitText(text) : Promise.resolve({ ok: false, reason: 'not-agent' })),
+      submit: text => (entry.inbox === inbox ? inbox.submitText(text, undefined, { strict: true }) : Promise.resolve({ ok: false, reason: 'not-agent' })),
       hold: value => inbox.setHeld(value),
       write: writeAgentKeys
     });
@@ -798,7 +800,7 @@ function createLocalShells({
     const sleeping = { kind, agentId: binding.id, sessionId: sessionId.toLowerCase(), flags, phase: 'closing', since: Date.now(), timer: null };
     entry.sleeping = sleeping;
     agents?.sleep?.(binding.id, sleeping.sessionId);
-    const result = await entry.inbox.submitText(kind === 'codex' ? '/quit' : '/exit');
+    const result = await entry.inbox.submitText(kind === 'codex' ? '/quit' : '/exit', undefined, { strict: true });
     if (!result.ok) {
       if (entry.sleeping === sleeping) entry.sleeping = null;
       agents?.cancelSleep?.(binding.id, { ended: false });
@@ -939,7 +941,7 @@ function createLocalShells({
       labels.add(label);
       if (labels.size > 64) labels.delete(labels.values().next().value);
     },
-    async chatSend(id, text, images, target, sameConversation = () => true) {
+    async chatSend(id, text, images, target, sameConversation = () => true, { canSend } = {}) {
       const entry = shells.get(id);
       const inbox = entry?.inbox;
       if (!inbox) return { ok: false, reason: 'not-agent' };
@@ -950,7 +952,7 @@ function createLocalShells({
       if (entry.chatInterrupts !== interrupts) return { ok: false, reason: 'interrupted' };
       if (agentStatus(entry) === 'blocked') return { ok: false, reason: 'approval' };
       const verify = active => sameConversation() && (target === undefined ? entry.parentInput(active) : active === target);
-      const result = await inbox.submitText(text, images, { verify });
+      const result = await inbox.submitText(text, images, { verify, canSend });
       if (result.ok && entry.codexInput && entry.codexInput.submitted) entry.reportStatus?.(agentStatus(entry));
       return result;
     },
@@ -976,7 +978,7 @@ function createLocalShells({
     chatScreen(id) {
       const entry = shells.get(id);
       if (!hasAgent(entry) || !entry.inbox) return null;
-      return { lines: entry.inbox.screenLines(), composer: entry.inbox.composerState(), approval: Boolean(entry.inbox.approvalPrompt()) };
+      return { lines: entry.inbox.screenLines(), composer: entry.inbox.composerState(), footerRow: entry.inbox.composerFooterRow(), approval: Boolean(entry.inbox.approvalPrompt()) };
     },
     /** Answers that prompt with a choice, only if the screen still shows the same prompt */
     async answerApproval(id, key, signature) {

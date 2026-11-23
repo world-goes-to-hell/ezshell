@@ -85,6 +85,43 @@ describe('reconciling messages sent in the chat', () => {
     expect([...result.recorded.keys()]).toEqual(echoes.map(echo => echo.id))
   })
 
+  it.each([
+    ['One.\nTwo.\nThree.', 'One.Two.Three.'],
+    ['Cafe\u0301', 'Café'],
+    ['✅ ❤️ 🇰🇷 👩‍💻 e\u0301', '🇰🇷 👩💻 e'],
+    ['👍🏽 1️⃣', '👍 1'],
+    ['앞에 본문\n붙인 글', '앞에 본문\n<pasted_content id="1">붙인 글</pasted_content id="1">'],
+    ['붙인 글', '<pasted_content>붙인 글</pasted_content>']
+  ])('reconciles %j as recorded by the CLI in %j', (text, recorded) => {
+    const echo = { id: 'outgoing:1', text, time: 10_000, hasImage: false }
+    const logged = user('logged', 10_005, recorded)
+    const result = reconcileChatEchoes([user(echo.id, echo.time, text)], [logged], 'append', [echo])
+    expect(result.items).toEqual([{ ...logged, sentAt: echo.time }])
+    expect(result.echoes).toEqual([])
+  })
+
+  it('prefers an exact message to an older echo with similar text', () => {
+    const echoes = [
+      { id: 'outgoing:1', text: '확인 ✅', time: 10_000, hasImage: false },
+      { id: 'outgoing:2', text: '확인', time: 10_100, hasImage: false }
+    ]
+    const result = reconcileChatEchoes(echoes.map(echo => user(echo.id, echo.time, echo.text)),
+      [user('confirmed', 10_200, '확인')], 'append', echoes)
+    expect(result.echoes).toEqual([echoes[0]])
+    expect(result.recorded.get(echoes[1].id)?.id).toBe('confirmed')
+  })
+
+  it('keeps different emoji and messages with no surviving characters separate', () => {
+    const echoes = [
+      { id: 'outgoing:1', text: '확인 🐈', time: 10_000, hasImage: false },
+      { id: 'outgoing:2', text: '✅ ❤️', time: 10_100, hasImage: false }
+    ]
+    const result = reconcileChatEchoes(echoes.map(echo => user(echo.id, echo.time, echo.text)),
+      [user('different', 10_200, '확인 🐕'), user('empty', 10_201, '')], 'append', echoes)
+    expect(result.echoes).toEqual(echoes)
+    expect(result.recorded.size).toBe(0)
+  })
+
   it('keeps a slash command sent before a look at the terminal until Claude records it when done', () => {
     // Back from the terminal: the chat reopens with the kept echo; the transcript has the conversation only
     const echo = { id: 'outgoing:compact', text: '/compact', time: 20000, hasImage: false }
@@ -142,6 +179,20 @@ describe('reconciling messages sent in the chat', () => {
     const result = reconcileChatEchoes([user(echo.id, echo.time, echo.text)], [user('plain', 10001, echo.text)], 'append', [echo])
     expect(ids(result.items)).toEqual([echo.id, 'plain'])
     expect(result.echoes).toEqual([echo])
+  })
+
+  it('reconciles normalized text after a recognized attachment prefix', () => {
+    const echo = { id: 'outgoing:image', text: '확인 ✅\n둘째 줄', time: 10000, hasImage: true }
+    const path = 'C:\\tmp\\ezshell-clipboard-AbC123\\d74b21e8-46bd-4259-8345-d9a8c43b88b2.png'
+    for (const text of [
+      `${path}\n\n확인 둘째 줄`, '[Image #1] 확인 둘째 줄',
+      `<pasted_content id="1">\n${path}\n\n확인 둘째 줄\n</pasted_content id="1">`
+    ]) {
+      const logged = user('image', 10001, text)
+      const result = reconcileChatEchoes([user(echo.id, echo.time, echo.text)], [logged], 'append', [echo])
+      expect(result.items).toEqual([{ ...logged, sentAt: echo.time }])
+      expect(result.echoes).toEqual([])
+    }
   })
 })
 

@@ -1,6 +1,6 @@
 const fs = require('fs')
 const path = require('path')
-const { randomUUID } = require('node:crypto')
+const { createHash, randomUUID } = require('node:crypto')
 const { createClaudeParser } = require('./claudeTranscript.js')
 const { createClaudeShellTracker } = require('./claudeShells.js')
 const { createCodexParser } = require('./codexTranscript.js')
@@ -252,9 +252,10 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     items.push(...(parser.flush?.(0) ?? []))
     if (kind === 'claude') await readClaudeChildResults(file, subagents, () => live(chat))
     if (!live(chat)) return
-    Object.assign(chat, { file, kind, parser, subagents, shellTracker, previewChild: createSubagentPreview(file, kind, now), subagentScope: randomUUID(), oldest, tail: oldest + used, skipping: false, title: title ?? null, state: 'live' })
+    const transcriptId = createHash('sha256').update(file).digest('hex')
+    Object.assign(chat, { file, kind, parser, subagents, shellTracker, previewChild: createSubagentPreview(file, kind, now), subagentScope: randomUUID(), transcriptId, oldest, tail: oldest + used, skipping: false, title: title ?? null, state: 'live' })
     chat.questionIndex = null
-    frame(chat, { reset: true, scope: chat.subagentScope, kind, state: 'live', items: latestById(items), subagents: subagents.snapshot(true), title: title ?? null, hasOlder: oldest > 0 })
+    frame(chat, { reset: true, scope: chat.subagentScope, transcriptId, kind, state: 'live', items: latestById(items), subagents: subagents.snapshot(true), title: title ?? null, hasOlder: oldest > 0 })
   }
 
   async function indexQuestions(chat, file, scope, tail) {
@@ -406,7 +407,10 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
   function run(chat, work) {
     chat.chain = chat.chain.then(() => (live(chat) ? work() : undefined)).catch(() => {
       // A file that went away or cannot be read: looked for again on the next tick
-      if (live(chat)) chat.file = null
+      if (live(chat)) {
+        chat.file = null
+        if (chat.state === 'live') setState(chat, 'waiting')
+      }
     })
     return chat.chain
   }
@@ -535,6 +539,36 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     hasSubagentScope(shellId, scope) {
       const chat = chats.get(shellId)
       return Boolean(chat?.file && chat.state === 'live' && chat.subagentScope === scope)
+    },
+    hasTranscript(shellId, transcriptId) {
+      const chat = chats.get(shellId)
+      return Boolean(chat?.file && chat.state === 'live' && chat.transcriptId === transcriptId)
+    },
+    /** Recheck the tail without moving the reader. Undefined means the transcript could not be checked. */
+    async findRecordedSend(shellId, { transcriptId, acceptedAt, ignoreIds, text, hasImage }) {
+      const chat = chats.get(shellId)
+      if (!chat?.file || chat.state !== 'live' || chat.transcriptId !== transcriptId) return undefined
+      const { file, kind } = chat
+      try {
+        const { matchesEchoText } = await import('./echoText.mjs')
+        const lines = await readLinesFromEnd(file, { maxBytes: FIRST_BYTES })
+        if (!lines || !live(chat) || chat.file !== file || chat.state !== 'live') return undefined
+        const parser = parserFor(kind)
+        const ignored = new Set(ignoreIds)
+        const expected = { text, hasImage }
+        let approximate = null
+        for (const line of lines) {
+          for (const item of parser.feed(line).items) {
+            // The CLI can record just before the renderer receives acknowledgement or round timestamps.
+            if (item.kind !== 'user' || item.time === null || item.time < acceptedAt - 1000 || ignored.has(item.id)) continue
+            if (matchesEchoText(item, expected, false)) return item
+            if (!approximate && matchesEchoText(item, expected, true)) approximate = item
+          }
+        }
+        return approximate
+      } catch {
+        return undefined
+      }
     },
     /** Read a snapshot of the conversation without widening or moving the window's current view. */
     async transcriptForCopy(shellId) {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { cleanChatText, registerAgentChatIpc } from './ipc.js'
 
-function harness(kind = 'claude', { chats = {}, active = () => null, agentId = () => 'agent-1', result = { ok: true } } = {}) {
+function harness(kind = 'claude', { chats = {}, active = () => null, agentId = () => 'agent-1', status = () => 'idle', screen = () => null,
+  duringSend = () => {}, result = { ok: true } } = {}) {
   const handlers = new Map()
   const ipcMain = { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => handlers.set(name, fn) }
   const sent = []
@@ -16,10 +17,13 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
     chats,
     notifyCapture: capture => captures.push(capture),
     shells: () => ({
-      agentOf: () => ({ kind }),
+      agentOf: () => ({ kind, status: status() }),
       chatAgentId: agentId,
       chatInputTarget: active,
-      chatSend: async (_id, prompt, images, target) => {
+      chatScreen: screen,
+      chatSend: async (_id, prompt, images, target, verify = () => true, { canSend = () => true } = {}) => {
+        duringSend()
+        if (!verify() || !canSend()) return { ok: false, reason: 'target-changed' }
         sent.push({ prompt, images, ...(target === undefined ? {} : { target }) })
         return result
       }
@@ -41,13 +45,19 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
   return { call, paste, sent, discarded, sendCapture, captures }
 }
 
+const retryRequest = () => ({ acceptedAt: Date.now() - 15_000, transcriptId: 'a'.repeat(64), ignoreIds: [] })
+const emptyTranscriptCheck = { hasTranscript: () => true, findRecordedSend: async () => null }
+
 describe('subagent conversation', () => {
   it('requires the active provider target to stay consistent with the selected child', async () => {
     let target = 'Review layout'
     const record = { kind: 'claude', live: true, scope: 'parent-conversation', messages: [], identity: { id: 'a1b2' },
       child: { task: 'Review layout', uniqueTask: true, keys: ['toolu_1'] } }
     const { call, sent } = harness('claude', { active: () => target,
-      chats: { subagentConversation: async (id, child) => id === 'local:1' && child === 'toolu_1' ? record : null } })
+      chats: {
+        subagentConversation: async (id, child) => id === 'local:1' && child === 'toolu_1' ? record : null,
+        hasSubagentScope: (id, scope) => id === 'local:1' && scope === record.scope
+      } })
     const request = { shellId: 'local:1', agentId: 'toolu_1', scope: record.scope, text: 'Check the narrow pane', mode: 'direct' }
     expect(await call('agent-chat-subagent-conversation', 'local:1', 'toolu_1')).toEqual({ mode: 'direct', messages: [], scope: record.scope })
     target = 'Another task'
@@ -63,7 +73,9 @@ describe('subagent conversation', () => {
   it('relays a Codex V2 follow-up only from the verified parent', async () => {
     let target = '/root/review'
     const record = { kind: 'codex', live: true, scope: 'parent-conversation', messages: [], identity: {}, child: { keys: ['/root/review'] } }
-    const { call, sent } = harness('codex', { active: () => target, chats: { subagentConversation: async () => record } })
+    const { call, sent } = harness('codex', { active: () => target, chats: {
+      subagentConversation: async () => record, hasSubagentScope: (id, scope) => id === 'local:1' && scope === record.scope
+    } })
     const request = { shellId: 'local:1', agentId: '/root/review', scope: record.scope, text: 'Review\nthe final commit', mode: 'relay' }
     expect(await call('agent-chat-subagent-conversation', 'local:1', '/root/review')).toEqual({ mode: 'select-parent', messages: [], scope: record.scope })
     expect((await call('agent-chat-subagent-send', request)).ok).toBe(false)
@@ -100,6 +112,101 @@ describe('screenshots pasted into a chat', () => {
     expect(await call('agent-chat-send', { shellId: 'local:1', text: '', imageIds: [ids[1]] })).toEqual({ ok: true })
     expect(sent[0]).toEqual({ prompt: 'C:\\tmp\\shot-2.png', images: { count: 1, text: '' } })
     expect((await call('agent-chat-send', { shellId: 'local:1', text: '', imageIds: [ids[2], ids[2]] })).ok).toBe(false)
+  })
+
+  it('reuses the original attachment through an explicit retry in the same shell', async () => {
+    const { call, paste, sent } = harness('codex', { chats: { ...emptyTranscriptCheck, close: () => {} } })
+    const imageId = await paste()
+    const request = { shellId: 'local:1', text: '봐 줘', imageIds: [imageId] }
+    expect(await call('agent-chat-send', request)).toEqual({ ok: true })
+    call('agent-chat-close', request.shellId)
+    expect((await call('agent-chat-send', request)).ok).toBe(false)
+    expect((await call('agent-chat-send', { ...request, shellId: 'local:2', retry: retryRequest() })).ok).toBe(false)
+    expect(await call('agent-chat-send', { ...request, retry: retryRequest() })).toEqual({ ok: true })
+    expect(sent).toEqual(Array(2).fill({ prompt: '봐 줘', images: { files: ['C:\\tmp\\shot-1.png'] } }))
+  })
+})
+
+describe('manual chat resend', () => {
+  const request = () => ({ shellId: 'local:1', text: '확인해 줘', retry: retryRequest() })
+
+  it.each(['working', 'starting', 'unknown', 'blocked'])('refuses a resend when the agent status is %s', async status => {
+    const { call, sent } = harness('codex', { status: () => status })
+    expect(await call('agent-chat-send', request())).toMatchObject({ ok: false, reason: 'retry-not-idle' })
+    expect(sent).toEqual([])
+  })
+
+  it('refuses an idle Claude with a queue hint wrapped across two lines', async () => {
+    const { call, sent } = harness('claude', { screen: () => ({ lines: ['› ', '  Press up to edit', '  queued messages'] }) })
+    expect(await call('agent-chat-send', request())).toMatchObject({ ok: false, reason: 'retry-queued' })
+    expect(sent).toEqual([])
+  })
+
+  it.each([
+    'Press up to edit queued messages',
+    'Press up to edit your queued message',
+    'Press up to select a queued message to edit, or Enter to send them now',
+    'Press up to select a queued message, then Enter to edit it'
+  ])('recognizes the Claude queue hint %s', async hint => {
+    const { call, sent } = harness('claude', { screen: () => ({ lines: ['❯ ', '  ' + hint] }) })
+    expect(await call('agent-chat-send', request())).toMatchObject({ ok: false, reason: 'retry-queued' })
+    expect(sent).toEqual([])
+  })
+
+  it('checks the Claude footer past the last eight rows', async () => {
+    const lines = [...Array(18).fill('Draft'), 'Press up to select a', 'queued message, then Enter to edit it', ...Array(12).fill('')]
+    const { call, sent } = harness('claude', { screen: () => ({ lines, footerRow: 18 }) })
+    expect(await call('agent-chat-send', request())).toMatchObject({ ok: false, reason: 'retry-queued' })
+    expect(sent).toEqual([])
+  })
+
+  it('ignores the same wording in conversation history above a visible Claude composer', async () => {
+    const lines = ['Press up to select a queued message, then Enter to edit it', ...Array(18).fill(''), 'Idle']
+    const { call, sent } = harness('claude', { chats: emptyTranscriptCheck, screen: () => ({ lines, footerRow: 19 }) })
+    expect(await call('agent-chat-send', request())).toEqual({ ok: true })
+    expect(sent).toHaveLength(1)
+  })
+
+  it('returns the transcript record instead of sending another copy', async () => {
+    const recorded = { id: 'user:late', kind: 'user', text: '확인해 줘', time: Date.now() }
+    const chats = { ...emptyTranscriptCheck, findRecordedSend: async (shellId, retry) => {
+      expect(shellId).toBe('local:1')
+      expect(retry).toMatchObject({ text: recorded.text, hasImage: false, transcriptId: 'a'.repeat(64), ignoreIds: [] })
+      return recorded
+    } }
+    const { call, sent } = harness('codex', { chats })
+    expect(await call('agent-chat-send', request())).toMatchObject({ ok: false, reason: 'already-recorded', recorded })
+    expect(sent).toEqual([])
+  })
+
+  it('refuses a resend when its transcript can no longer be read', async () => {
+    const { call, sent } = harness('codex', {
+      chats: { ...emptyTranscriptCheck, findRecordedSend: async () => undefined }
+    })
+    expect(await call('agent-chat-send', request())).toMatchObject({ ok: false, reason: 'retry-transcript' })
+    expect(sent).toEqual([])
+  })
+
+  it('rechecks the agent and queue when the terminal is about to send', async () => {
+    let queue = false
+    const { call, sent } = harness('claude', {
+      chats: emptyTranscriptCheck, duringSend: () => { queue = true },
+      screen: () => ({ lines: queue ? ['↑ to edit queued messages'] : [] })
+    })
+    expect(await call('agent-chat-send', request())).toMatchObject({ ok: false, reason: 'retry-queued' })
+    expect(sent).toEqual([])
+  })
+
+  it('allows only one retry in flight per shell', async () => {
+    let finishReading
+    const { call, sent } = harness('codex', {
+      chats: { ...emptyTranscriptCheck, findRecordedSend: () => new Promise(resolve => { finishReading = resolve }) }
+    })
+    const first = call('agent-chat-send', request())
+    expect(await call('agent-chat-send', request())).toMatchObject({ ok: false, reason: 'busy' })
+    finishReading(null)
+    expect(await first).toEqual({ ok: true })
+    expect(sent).toHaveLength(1)
   })
 })
 

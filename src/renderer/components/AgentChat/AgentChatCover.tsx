@@ -4,10 +4,11 @@
 import { memo, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type ToggleEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { RiArrowDownLine, RiArrowUpLine, RiChat1Line, RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolderOpenLine, RiImageAddLine, RiListUnordered, RiLoader4Line, RiMailLine, RiNotification3Line, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiTimeLine, RiToolsLine } from 'react-icons/ri'
-import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatItem, AgentChatQuestion, AgentChatQuestionContext, CodexSpeedMode } from '../../types'
-import { useAgentChatStore } from '../../stores/agentChatStore'
+import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatItem, AgentChatQuestion, AgentChatQuestionContext, AgentMessageSession, CodexSpeedMode } from '../../types'
+import { isUnconfirmedSend, useAgentChatStore } from '../../stores/agentChatStore'
 import { chatLinesToTakeBack, draftWithTakenBack, takeBackQueued } from '../../lib/chatTakeBack'
 import { chatImageReference, insertChatImages, resolveChatImages } from '../../lib/chatImageReferences'
+import { CHAT_QUOTE_LIMIT, composeQuotedReply, prepareChatQuote } from '../../lib/chatQuote'
 import { openAgentMessages, useAgentMessagesStore, usePaneAgentMail } from '../Terminal/AgentMessages'
 import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
@@ -23,6 +24,7 @@ import { toast } from '../../stores/toastStore'
 import { AgentChatSubagents } from './AgentChatSubagents'
 import { AgentChatQuestions, receivedMessageLabel } from './AgentChatQuestions'
 import { AgentChatThemePicker } from './AgentChatThemePicker'
+import { ChatQuoteCards, ChatQuoteReply, ChatQuoteSelection, QuotedChatMessage, type ChatQuote } from './ChatQuote'
 import { SubagentConversation } from './SubagentConversation'
 import { useChatWindow } from './useChatWindow'
 import { isAwayFromBottom, isChatQuestion, previousQuestionIndex, questionLine } from '../../lib/chatScrollNav'
@@ -52,6 +54,7 @@ const STATUS_LABELS: Record<string, string> = {
 }
 const REPLY_START_GRACE_MS = 6000
 const EMPTY_ITEMS: AgentChatItem[] = []
+const EMPTY_QUOTES: ChatQuote[] = []
 const sendClock = new Intl.DateTimeFormat('ko-KR', { hour: 'numeric', minute: '2-digit', hour12: true })
 
 type TimelineRow = { key: string; estimate: number } & (
@@ -252,12 +255,15 @@ function SentImageThumbnail({ preview, index }: { preview: Blob; index: number }
   )
 }
 
-const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, waiting, onPin, expanded, rememberDisclosure }: {
+const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, waiting, onRetry, retryDisabled, onPin, onQuote, expanded, rememberDisclosure }: {
   item: AgentChatItem; live: boolean; waiting?: 'queued' | 'input'; onPin?: (item: AgentChatItem) => void
+  onQuote?: (text: string) => void
+  onRetry?: (id: string) => void; retryDisabled?: boolean
   sentImages?: SentChatImages; sendTime: number | null; expanded: boolean; rememberDisclosure: (id: string, open: boolean) => void
 }) {
   const itemTime = item.sentAt ?? item.time
   const time = itemTime === null ? undefined : new Date(itemTime).toLocaleTimeString()
+  const answer = item.text ?? ''
   const onToggle = (event: ToggleEvent<HTMLDetailsElement>) => rememberDisclosure(item.id, event.currentTarget.open)
   switch (item.kind) {
     case 'user':
@@ -271,14 +277,20 @@ const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, wait
           <div className="agent-chat-user-message">
             {sendTime !== null && <time className="agent-chat-sent-time" dateTime={new Date(sendTime).toISOString()}>{sendClock.format(sendTime)}</time>}
             <div className="agent-chat-bubble" data-waiting={waiting}>
-              {sentImages ? sentImages.text || '스크린샷 첨부' : item.text ?? (item.hasImage ? '스크린샷 첨부' : '')}
+              <QuotedChatMessage text={sentImages ? sentImages.text || '스크린샷 첨부' : item.text ?? (item.hasImage ? '스크린샷 첨부' : '')} />
             </div>
           </div>
           {/* Sent while the agent worked: it reads the message when it can, and the mark goes then */}
-          {waiting && !item.commandState && (
+          {waiting && !onRetry && !item.commandState && (
             <div className="agent-chat-command-state agent-chat-waiting" role="status" data-input-needed={waiting === 'input' || undefined}
               title={waiting === 'input' ? '에이전트의 질문이나 승인 요청에 응답하면 메시지를 처리할 수 있습니다.' : '에이전트가 작업을 마치면 메시지를 읽습니다.'}>
               {waiting === 'input' ? <><RiChat1Line aria-hidden /> 응답 후 처리</> : <><RiTimeLine aria-hidden /> 대기 중…</>}
+            </div>
+          )}
+          {onRetry && (
+            <div className="agent-chat-command-state agent-chat-delivery">
+              <span role="status">전송 확인 안 됨</span>
+              <button type="button" disabled={retryDisabled} onClick={() => onRetry(item.id)}>다시 보내기</button>
             </div>
           )}
           {/* A Codex slash command: no transcript records it, so what came of it shows here */}
@@ -292,12 +304,14 @@ const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, wait
     case 'assistant':
       return (
         <div className="agent-chat-assistant" title={time}>
-          <Markdown text={item.text ?? ''} />
-          {/* Pinned out into a small window, read while working in another tab */}
-          {onPin && (
-            <button type="button" className="agent-chat-pin" aria-label="이 답변 띄워 두기" onClick={() => onPin(item)}>
-              <RiPushpinLine aria-hidden /> 띄워 두기
-            </button>
+          <Markdown text={answer} />
+          {(onPin || onQuote) && (
+            <div className="agent-chat-answer-actions">
+              {onQuote && answer.trim() && <ChatQuoteReply onClick={() => onQuote(answer)} />}
+              {onPin && <button type="button" className="agent-chat-pin" aria-label="이 답변 띄워 두기" onClick={() => onPin(item)}>
+                <RiPushpinLine aria-hidden /> 띄워 두기
+              </button>}
+            </div>
           )}
         </div>
       )
@@ -376,6 +390,25 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   }, [])
 
   const scope = chat?.scope ?? null
+  const quoteKey = `${shellId}:${scope ?? ''}`
+  const [quoteDraft, setQuoteDraft] = useState<{ key: string; quotes: ChatQuote[] } | null>(null)
+  const nextQuoteId = useRef(0)
+  const quotes = quoteDraft?.key === quoteKey ? quoteDraft.quotes : EMPTY_QUOTES
+  const quotedDraft = useMemo(() => quotes.length ? composeQuotedReply(quotes.map(quote => quote.text), draftImages.text) : null,
+    [quotes, draftImages.text])
+  const quoteProblem = quotedDraft && 'reason' in quotedDraft ? quotedDraft.reason : null
+  const addQuote = useCallback((text: string) => {
+    const prepared = prepareChatQuote(text)
+    if (!prepared || sendPending.current) return
+    const quote = { id: ++nextQuoteId.current, text: prepared }
+    setQuoteDraft(current => {
+      const items = current?.key === quoteKey ? current.quotes : EMPTY_QUOTES
+      return items.length < CHAT_QUOTE_LIMIT ? { key: quoteKey, quotes: [...items, quote] } : current
+    })
+    boxRef.current?.focus({ preventScroll: true })
+  }, [quoteKey])
+  const removeQuote = (id: number) => setQuoteDraft(current => current?.key === quoteKey
+    ? { ...current, quotes: current.quotes.filter(quote => quote.id !== id) } : current)
   const liveItems = chat?.items ?? EMPTY_ITEMS
   const history = questionContext?.scope === scope ? questionContext : null
   const items = history?.items ?? liveItems
@@ -412,7 +445,7 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   const [customCommands, setCustomCommands] = useState<SlashCommand[] | null>(null)
   const [slashIndex, setSlashIndex] = useState(0)
   const [slashClosedFor, setSlashClosedFor] = useState<string | null>(null)
-  const slashTyping = draft.startsWith('/') && !draftImages.images.length
+  const slashTyping = draft.startsWith('/') && !draftImages.images.length && !quotes.length
   useEffect(() => {
     if (!slashTyping || customCommands || !window.electronAPI.agentChatSlashCommands) return
     let live = true
@@ -430,6 +463,7 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   const isOver = chat?.state === 'ended' || !agent
   const replyId = chat?.reply?.sendId
   const canReply = !isOver && status !== 'blocked' && status !== 'error'
+  const canAddQuote = canReply && !subagent && !askCard && !sending && !pasting && !stopping && !changingSpeed && quotes.length < CHAT_QUOTE_LIMIT
   const canStop = canReply && (status === 'working' || Boolean(replyId))
   const canToggleSpeed = canReply && !stopping && !replyId && status !== 'working' && status !== 'starting'
   const speed = chat?.codexSpeed?.speed ?? null
@@ -437,6 +471,25 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   // Codex when its turn ends), so the bubble says it waits and the progress line is about the work before it
   const waiting = useMemo(() => waitingItemIds(liveItems, chat?.echoes ?? [], chat?.held ?? [], status),
     [liveItems, chat?.echoes, chat?.held, status])
+  const unconfirmed = useMemo(() => new Set(chat?.echoes.filter(echo => isUnconfirmedSend(chat, echo)).map(echo => echo.id)), [chat])
+  const idle = status === 'idle'
+  useEffect(() => {
+    let timer: number | undefined
+    const isIdle = (agents: readonly AgentMessageSession[]) => shellAgentOf(agents, shellId)?.status === 'idle'
+    const check = () => {
+      window.clearTimeout(timer)
+      const store = useAgentChatStore.getState()
+      const confirmedIdle = !store.chats.get(shellId)?.approval && isIdle(useAgentMessagesStore.getState().snapshot.agents)
+      const next = store.checkSendConfirmations(shellId, confirmedIdle)
+      if (next !== undefined) timer = window.setTimeout(check, Math.max(0, next - Date.now()))
+    }
+    const unsubscribe = useAgentMessagesStore.subscribe((state, before) => {
+      if (isIdle(state.snapshot.agents) !== isIdle(before.snapshot.agents)) check()
+    })
+    check()
+    return () => { unsubscribe(); window.clearTimeout(timer) }
+  }, [shellId, chat?.state, chat?.transcriptId, chat?.echoes, chat?.approval])
+  useEffect(() => () => { useAgentChatStore.getState().checkSendConfirmations(shellId, false) }, [shellId])
   // The reply waits on the echo first, then on the transcript item that replaced it
   const replyWaiting = Boolean(replyId && (waiting.has(replyId) || (chat?.reply && waiting.has(chat.reply.itemId))))
   let progressLabel: string | null = null
@@ -800,33 +853,58 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
     }
   }
 
-  const send = async (override?: string) => {
-    const { text, images } = override === undefined ? draftImages : resolveChatImages(override, attachments)
-    if (!chat || (!text && !images.length) || sendPending.current || stopPending.current || speedPending.current || pastePending.current || isOver) return
+  const send = async (override?: string, retryId?: string) => {
+    if (!chat || sendPending.current || stopPending.current || speedPending.current || pastePending.current || isOver) return
+    const current = useAgentChatStore.getState().chats.get(shellId)
+    const retry = retryId && current ? current.echoes.find(echo => echo.id === retryId && isUnconfirmedSend(current, echo)) : null
+    const delivery = retry?.delivery
+    const retryContext = current && delivery?.transcriptId && delivery.acceptedAt !== undefined ? {
+      acceptedAt: delivery.acceptedAt,
+      transcriptId: delivery.transcriptId,
+      ignoreIds: current.items.filter(item => item.kind === 'user' && !item.id.startsWith('outgoing:')).slice(-256).map(item => item.id)
+    } : undefined
+    if (retryId && (!retryContext || !idle || !canReply)) return
+    const outgoing = override === undefined ? draftImages : resolveChatImages(override, attachments)
+    const withQuotes = !retry && quotes.length ? (override === undefined ? quotedDraft :
+      composeQuotedReply(quotes.map(quote => quote.text), outgoing.text)) : null
+    if (withQuotes && 'reason' in withQuotes) return
+    const text = retry?.text ?? withQuotes?.text ?? outgoing.text
+    const imageIds = retry ? Array.from(retry.delivery?.imageIds ?? []) : outgoing.images.map(image => image.id)
+    if (!text && !imageIds.length) return
     sendPending.current = true
     resetQuestionPosition()
     followAfterSend()
     setSending(true)
-    setDraft('')
-    const { echoSend, discardSend } = useAgentChatStore.getState()
-    const sendId = echoSend(shellId, text, images.map(image => image.preview), status === 'working')
+    if (!retry) setDraft('')
+    const { echoSend, acceptSend, confirmSend, discardSend } = useAgentChatStore.getState()
+    const queued = status === 'working'
+    const sendId = retry?.id ?? echoSend(shellId, text, outgoing.images.map(image => image.preview), queued, imageIds)
+    const restoreDraft = () => {
+      if (retry) return
+      discardSend(shellId, sendId)
+      setDraft(draft)
+    }
     try {
-      const result = await window.electronAPI.agentChatSend?.(shellId, text, images.map(image => image.id))
+      const result = await window.electronAPI.agentChatSend?.(shellId, text, imageIds, retryContext)
       if (result?.ok) {
-        if (!images.length && isSlashCommand(text)) void watchCommand(sendId)
-        for (const { id } of attachments) releaseAttachment(id)
-        setAttachments([])
-        nextAttachmentNumber.current = 0
+        acceptSend(shellId, sendId, retry ? queued : undefined)
+        if (!retry) {
+          setQuoteDraft(current => current?.key === quoteKey ? null : current)
+          if (!imageIds.length && isSlashCommand(text)) void watchCommand(sendId)
+          for (const { id } of attachments) releaseAttachment(id)
+          setAttachments([])
+          nextAttachmentNumber.current = 0
+        }
+      } else if (retry && result?.reason === 'already-recorded' && result.recorded) {
+        confirmSend(shellId, sendId, result.recorded)
       } else {
-        discardSend(shellId, sendId)
-        setDraft(draft)
+        restoreDraft()
         if (result?.reason !== 'interrupted') {
           toast.error('보내지 못했습니다', result && !result.ok ? result.error : '이 앱 버전에서는 쓸 수 없습니다.')
         }
       }
     } catch {
-      discardSend(shellId, sendId)
-      setDraft(draft)
+      restoreDraft()
       toast.error('보내지 못했습니다', '에이전트에 연결할 수 없습니다.')
     } finally {
       sendPending.current = false
@@ -1123,7 +1201,10 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
                   )}
                   {entry.kind === 'item' && <ChatItem item={entry.item} sentImages={entry.sentImages} sendTime={entry.sendTime} live={!history && !isOver && entry.item.id === lastToolId}
                     waiting={!history && waiting.has(entry.item.id) ? (status === 'blocked' ? 'input' : 'queued') : undefined}
+                    onRetry={!history && unconfirmed.has(entry.item.id) ? id => void send(undefined, id) : undefined}
+                    retryDisabled={!idle || !canReply || sending || stopping || Boolean(changingSpeed) || pasting}
                     expanded={disclosures.current.has(entry.item.id)} rememberDisclosure={rememberDisclosure}
+                    onQuote={canAddQuote ? addQuote : undefined}
                     onPin={window.electronAPI.agentChatPin ? pinReply : undefined} />}
                   {line && <p className="agent-chat-usage" title={line.title}>{line.text}</p>}
                 </div>
@@ -1180,6 +1261,11 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
           {progressLabel && <p className="agent-chat-reply-progress" role="status">
             <RiLoader4Line className="agent-chat-spin" aria-hidden />{progressLabel}
           </p>}
+          <ChatQuoteCards quotes={quotes} disabled={sending} onRemove={removeQuote}
+            notice={quoteProblem === 'command' ? '슬래시 명령을 보내려면 인용을 제거하세요.'
+              : quoteProblem === 'too-long' ? '본문을 줄이거나 인용을 제거하세요.'
+                : quoteProblem === 'empty' && draftImages.images.length ? '인용과 함께 보낼 내용을 입력해 주세요.'
+                  : quotes.length === CHAT_QUOTE_LIMIT ? `인용은 최대 ${CHAT_QUOTE_LIMIT}개까지 추가할 수 있습니다.` : undefined} />
           {!!draftImages.images.length && (
             <div className="agent-chat-attachments" role="group" aria-label="첨부 이미지">
               {draftImages.images.map(image => (
@@ -1226,12 +1312,13 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
                 <RiStopCircleLine aria-hidden /> 중지
               </button>
             )}
-            <button type="button" className="agent-chat-send" onClick={() => void send()} disabled={(!draftImages.text && !draftImages.images.length) || sending || stopping || Boolean(changingSpeed) || pasting} title="보내기 (Enter)">
+            <button type="button" className="agent-chat-send" onClick={() => void send()} disabled={Boolean(quoteProblem) || (!draftImages.text && !draftImages.images.length) || sending || stopping || Boolean(changingSpeed) || pasting} title="보내기 (Enter)">
               {sending || pasting ? <RiLoader4Line className="agent-chat-spin" aria-hidden /> : <RiSendPlane2Line aria-hidden />}
             </button>
           </div>
         </div>
       )}
+      <ChatQuoteSelection coverRef={coverRef} logRef={logRef} enabled={canAddQuote} onQuote={addQuote} />
       {menu && (
         <TerminalContextMenu
           key={`${menu.x}:${menu.y}`}

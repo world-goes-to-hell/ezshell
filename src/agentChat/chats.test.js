@@ -88,6 +88,46 @@ describe('following a chat view\'s transcript', () => {
     expect(texts(frames.filter(frame => frame.reset)[1])).toEqual(['셋'])
   })
 
+  it('keeps the transcript identity through reopening, and reports a file that stops being readable', async () => {
+    target = { ...target, file }
+    fs.writeFileSync(file, prompt('u1', '첫 글'))
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.some(frame => frame.reset)).toBe(true))
+    const first = frames.find(frame => frame.reset)
+    expect(first.transcriptId).toMatch(/^[a-f0-9]{64}$/)
+    chats.close('local:1')
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.filter(frame => frame.reset)).toHaveLength(2))
+    const reopened = frames.filter(frame => frame.reset).at(-1)
+    expect(reopened.transcriptId).toBe(first.transcriptId)
+    expect(reopened.scope).not.toBe(first.scope)
+    fs.rmSync(file)
+    chats.tick()
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ state: 'waiting' }))
+  })
+
+  it('rechecks unpolled transcript records before resend and ignores known or older identical sends', async () => {
+    const acceptedAt = Date.parse('2026-11-23T12:00:00Z')
+    const line = (uuid, text, time) => JSON.stringify({ type: 'user', uuid, timestamp: new Date(time).toISOString(), message: { role: 'user', content: text } }) + '\n'
+    fs.writeFileSync(file, line('older', '다음 글', acceptedAt - 5000) + line('known', '다음 글', acceptedAt - 80))
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.some(frame => frame.reset)).toBe(true))
+    const { transcriptId } = frames.find(frame => frame.reset)
+    const request = { transcriptId, acceptedAt, text: '다음 ✅ 글', hasImage: false, ignoreIds: ['user:known'] }
+    expect(chats.hasTranscript('local:1', transcriptId)).toBe(true)
+    expect(await chats.findRecordedSend('local:1', request)).toBeNull()
+    expect(await chats.findRecordedSend('local:1', { ...request, transcriptId: 'another-file' })).toBeUndefined()
+
+    fs.appendFileSync(file, line('unpolled', '다음 글', acceptedAt + 3))
+    expect(await chats.findRecordedSend('local:1', request)).toMatchObject({ id: 'user:unpolled', text: '다음 글' })
+    expect(frames.filter(frame => frame.items && !frame.reset)).toEqual([])
+    chats.tick()
+    await vi.waitFor(() => expect(frames.at(-1)?.items?.map(item => item.id)).toEqual(['user:unpolled']))
+
+    fs.rmSync(file)
+    expect(await chats.findRecordedSend('local:1', request)).toBeUndefined()
+  })
+
   it('reads a large file from its end and the part before it on request', async () => {
     const filler = JSON.stringify({ type: 'attachment', attachment: { text: 'x'.repeat(1000) } }) + '\n'
     fs.writeFileSync(file, prompt('u0', '맨 처음') + filler.repeat(2200) + prompt('u1', '마지막'))

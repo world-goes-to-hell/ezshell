@@ -1,6 +1,7 @@
 const { randomUUID } = require('node:crypto')
 
 const MAX_IMAGES = 8
+const MAX_SENT_IMAGES = 256
 const IMAGE_LIMIT = '이미지는 한 메시지에 최대 8장까지 첨부할 수 있습니다.'
 const fail = error => ({ ok: false, error })
 
@@ -14,6 +15,8 @@ function imagePreview(bitmap) {
 function createImageDrafts(clipboard) {
   const drafts = new Map()
   const reads = new Map()
+  // Sent files already stay on disk until exit. Keep opaque ids for explicit chat retries.
+  let sent = new Map()
 
   function remove(scope, ids) {
     const draft = drafts.get(scope)
@@ -63,12 +66,14 @@ function createImageDrafts(clipboard) {
     }
   }
 
-  function select(scope, ids) {
+  function select(scope, ids, { retry = false, remember = false } = {}) {
     const missing = fail('이미지를 다시 첨부해 주세요.')
     if (!Array.isArray(ids) || ids.length > MAX_IMAGES || new Set(ids).size !== ids.length) return missing
     const draft = drafts.get(scope)
-    const images = ids.map(id => draft?.get(id))
+    const retained = sent
+    const images = ids.map(id => retry ? retained.get(id) : draft?.get(id))
     if (images.some(image => !image)) return missing
+    if (retry && images.some(image => image.scope !== scope)) return missing
     if (images.some(image => image.sending)) return fail('다른 입력을 넣는 중입니다. 잠시 뒤 다시 시도해 주세요.')
     const files = images.map(image => image.file)
     return {
@@ -84,8 +89,14 @@ function createImageDrafts(clipboard) {
             image.sending = false
             const id = ids[index]
             // Keep the file until app exit so the recipient can still open it after the draft closes.
-            if (result?.ok) draft.delete(id)
-            else if (draft.get(id) !== image) clipboard.discardImage(image.file)
+            if (result?.ok) {
+              if (!retry) draft.delete(id)
+              if (remember) {
+                retained.delete(id)
+                retained.set(id, { ...image, scope })
+                if (retained.size > MAX_SENT_IMAGES) retained.delete(retained.keys().next().value)
+              }
+            } else if (!retry && draft.get(id) !== image) clipboard.discardImage(image.file)
           })
           if (draft && !draft.size && drafts.get(scope) === draft) drafts.delete(scope)
         }
@@ -98,6 +109,7 @@ function createImageDrafts(clipboard) {
     clearAll() {
       reads.clear()
       for (const scope of drafts.keys()) remove(scope)
+      sent = new Map()
     },
     paste: (scope, canUse, unavailable, { includeImageWithText = false } = {}) => read(scope, canUse, unavailable, async (add, room) => {
       const { text, image } = await clipboard.read({ includeImageWithText })

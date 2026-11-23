@@ -573,6 +573,8 @@ export interface AgentChatFrame {
   /** The view starts over with these items (a new conversation or the first read) */
   reset?: boolean
   scope?: string
+  /** Opaque identity of the transcript, stable across reopening the same file. */
+  transcriptId?: string
   /** Items from before what the view has */
   older?: boolean
   items?: AgentChatItem[]
@@ -1050,7 +1052,8 @@ declare global {
       >
       agentChatPickImages?: (shellId: string) => Promise<AgentChatImagesResult>
       agentChatRemoveImage?: (shellId: string, imageId: string) => void
-      agentChatSend?: (shellId: string, text: string, imageIds?: string[]) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
+      agentChatSend?: (shellId: string, text: string, imageIds?: string[], retry?: { acceptedAt: number; transcriptId: string; ignoreIds: string[] }) => Promise<
+        { ok: true } | { ok: false; reason?: string; error: string; recorded?: AgentChatItem }>
       agentChatToggleSpeed?: (shellId: string, speed: CodexSpeedMode) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatInterrupt?: (shellId: string) => Promise<boolean>
       /** After Esc: clears the CLI composer if it holds exactly these chat lines */

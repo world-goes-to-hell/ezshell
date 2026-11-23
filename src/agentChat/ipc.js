@@ -35,6 +35,9 @@ const REASONS = {
   busy: '다른 입력을 넣는 중입니다. 잠시 뒤 다시 시도해 주세요.',
   changed: '화면의 질문이 바뀌었습니다. 새 질문을 보고 다시 골라 주세요.',
   'target-changed': 'CLI의 입력 대상이 바뀌었습니다. 터미널에서 현재 대화를 확인해 주세요.',
+  'retry-not-idle': '에이전트가 입력을 기다릴 때 다시 보내 주세요.',
+  'retry-queued': 'Claude에 대기 중인 메시지가 있습니다. 처리된 뒤 다시 시도해 주세요.',
+  'retry-transcript': '대화 기록을 확인할 수 없어 다시 보내지 못했습니다.',
   'write-failed': '셸에 쓰지 못했습니다.'
 }
 
@@ -48,6 +51,22 @@ function chatPrompt(kind, text, files) {
 
 function chatSendResult(result) {
   return result.ok ? { ok: true } : { ok: false, reason: result.reason, error: REASONS[result.reason] ?? '보내지 못했습니다.' }
+}
+
+function retryRequest(value) {
+  if (!value || !Number.isFinite(value.acceptedAt) || value.acceptedAt <= 0 || value.acceptedAt > Date.now() + 1000
+    || typeof value.transcriptId !== 'string' || !/^[a-f0-9]{64}$/.test(value.transcriptId)
+    || !Array.isArray(value.ignoreIds) || value.ignoreIds.length > 256
+    || value.ignoreIds.some(id => typeof id !== 'string' || id.length > 512)) return null
+  return { acceptedAt: value.acceptedAt, transcriptId: value.transcriptId, ignoreIds: value.ignoreIds }
+}
+
+function claudeQueueVisible(screen) {
+  const lines = screen?.lines ?? []
+  // The hint can replace the prompt or appear below the composer and wrap in a narrow pane.
+  const start = Math.min(screen?.footerRow ?? 0, Math.max(0, lines.length - 8))
+  const footer = lines.slice(start).join(' ').replace(/\s+/g, ' ')
+  return /(?:\bpress (?:up(?: arrow)?|↑)|↑(?= to\b)) .{0,72}?\bqueued messages?\b/i.test(footer)
 }
 const SPEED_REASONS = {
   ...REASONS,
@@ -86,6 +105,40 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   const imageDrafts = createImageDrafts(clipboard)
   // A slash command just sent from the chat: the agent's screen before it, read by agent-chat-command-watch
   const commandWatches = new Map()
+  const retrying = new Set()
+
+  async function retrySend(event, id, local, agent, retry, text, hasImage, send) {
+    if (retrying.has(id)) return chatSendResult({ ok: false, reason: 'busy' })
+    const agentId = local.chatAgentId?.(id)
+    let reason
+    const canRetry = () => {
+      const active = local.agentOf(id)
+      if (!allowed(event)) reason = 'locked'
+      else if (!active || active.kind !== agent.kind || local.chatAgentId?.(id) !== agentId) reason = 'target-changed'
+      else if (active.status !== 'idle') reason = 'retry-not-idle'
+      else if (active.kind === 'claude' && claudeQueueVisible(local.chatScreen?.(id))) reason = 'retry-queued'
+      else if (!chats.hasTranscript?.(id, retry.transcriptId)) reason = 'retry-transcript'
+      else reason = undefined
+      return !reason
+    }
+    const refused = () => reason === 'locked' ? locked : chatSendResult({ ok: false, reason })
+    if (!canRetry()) return refused()
+    retrying.add(id)
+    try {
+      const recorded = await chats.findRecordedSend?.(id, { ...retry, text, hasImage })
+      if (!allowed(event)) return locked
+      if (recorded && chats.hasTranscript?.(id, retry.transcriptId)) {
+        return { ok: false, reason: 'already-recorded', error: '이 메시지는 이미 대화 기록에 있습니다.', recorded }
+      }
+      if (!canRetry()) return refused()
+      if (recorded === undefined) return chatSendResult({ ok: false, reason: 'retry-transcript' })
+      const result = await send(canRetry)
+      if (!allowed(event)) return locked
+      return !result.ok && reason ? refused() : chatSendResult(result)
+    } finally {
+      retrying.delete(id)
+    }
+  }
 
   function readAttachments(event, shellId, source) {
     if (!allowed(event)) return locked
@@ -211,7 +264,9 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const text = cleanChatText(request?.text)
     if (!id) return { ok: false, error: '셸을 찾지 못했습니다.' }
     const keys = request.imageIds ?? (request.imageId === undefined ? [] : [request.imageId])
-    const selected = imageDrafts.select(id, keys)
+    const retry = retryRequest(request.retry)
+    if (request.retry && (!retry || !text)) return { ok: false, error: '다시 보낼 메시지의 정보를 확인할 수 없습니다.' }
+    const selected = imageDrafts.select(id, keys, { retry: Boolean(retry), remember: Boolean(text) })
     if (!selected.ok) return selected
     const { files } = selected
     if (!text && (!files.length || typeof request.text !== 'string' || request.text.trim() || request.text.length > MAX_TEXT)) {
@@ -223,6 +278,11 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const { prompt, images } = chatPrompt(agent.kind, text ?? '', files)
     // A slash command: what it does shows on the agent's screen (agentChat/commandScreen.js)
     const isCommand = !files.length && /^\/[^\s/]+(?:\s|$)/.test(prompt)
+    if (retry) {
+      if (isCommand) return { ok: false, error: '슬래시 명령은 다시 보내기에서 사용할 수 없습니다.' }
+      return retrySend(event, id, local, agent, retry, text, Boolean(files.length), canSend =>
+        selected.send(() => local.chatSend(id, prompt, images, undefined, undefined, { canSend })))
+    }
     const before = isCommand ? local.chatScreen?.(id)?.lines ?? null : null
     if (isCommand) commandWatches.delete(id)
     const result = await selected.send(() => local.chatSend(id, prompt, images))
