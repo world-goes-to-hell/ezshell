@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { contrastRatio, type Rgb } from '../lib/colorContrast'
-import { CHAT_PRESETS, FOLLOW_APP_CHAT_THEME, chatAppearance } from './chatThemes'
+import { CHAT_PRESETS, FOLLOW_APP_CHAT_THEME, appPaneIndicatorColors, chatAppearance } from './chatThemes'
 import { PRESET_THEMES } from './presets'
 
 function rgb(hex: string): Rgb {
@@ -18,10 +18,26 @@ function vars(id: string) {
 }
 
 describe('chat preset motion colors', () => {
-  it.each(CHAT_PRESETS.map(preset => [preset.name, preset] as const))('%s: focus and trace stand out from the canvas', (_name, preset) => {
-    // WCAG 1.4.11: borders that carry state need 3:1 against what they sit on
-    expect(ratio(preset.motion.focus, preset.canvas)).toBeGreaterThanOrEqual(3)
-    expect(ratio(preset.motion.trace, preset.canvas)).toBeGreaterThanOrEqual(3)
+  it.each(CHAT_PRESETS.map(preset => [preset.name, preset] as const))('%s: inner focus and trace contrast with the chat and its chrome', (_name, preset) => {
+    const style = vars(preset.id)
+    for (const backdrop of [preset.canvas, preset.colors.bgSecondary]) {
+      expect(ratio(style['--pane-focus-color'], backdrop)).toBeGreaterThanOrEqual(3)
+      // The trace is inset into the pane, so its two edges run over these same surfaces.
+      expect(ratio(style['--pane-trace-color'], backdrop)).toBeGreaterThanOrEqual(3)
+    }
+    expect(style['--pane-focus-keyline']).toBeUndefined() // inherited from the outside app palette
+  })
+
+  it.each(PRESET_THEMES)('$name: the keyline contrasts with the app frame and terminal ink contrasts with pane backgrounds', theme => {
+    const { colors, terminal } = theme
+    const style = appPaneIndicatorColors(theme)
+    for (const outside of [colors.bgPrimary, colors.bgSecondary, colors.bgTertiary, colors.border]) {
+      expect(ratio(style['--pane-focus-keyline'], outside)).toBeGreaterThanOrEqual(3)
+    }
+    for (const inside of [terminal.background, colors.bgPrimary, colors.bgSecondary]) {
+      expect(ratio(style['--pane-focus-color'], inside)).toBeGreaterThanOrEqual(3)
+      expect(ratio(style['--pane-trace-color'], inside)).toBeGreaterThanOrEqual(3)
+    }
   })
 
   it.each(CHAT_PRESETS.map(preset => [preset.name, preset] as const))('%s: working color is readable as text', (_name, preset) => {
@@ -63,17 +79,35 @@ describe('app theme used as the chat theme', () => {
     expect(style['--radius-lg']).toBe('var(--mac-radius-lg)')
   })
 
-  it('keeps the old trace formula with that theme, not the window theme', () => {
+  it('uses the selected theme inside the chat pane and inherits the app keyline', () => {
     const theme = PRESET_THEMES.find(item => item.id === 'minimal-light') ?? PRESET_THEMES[0]
     const style = vars(theme.id)
     expect(style['--motion-accent']).toBe(theme.colors.accent)
     expect(style['--chat-focus']).toBe(theme.colors.accent)
     expect(style['--terminal-foreground']).toBe(theme.terminal.foreground)
     expect(style['--chat-trace']).toBeUndefined()
+    expect(ratio(style['--pane-trace-color'], theme.colors.bgPrimary)).toBeGreaterThanOrEqual(3)
+    expect(style['--pane-focus-keyline']).toBeUndefined()
     expect(style['--radius-md']).toBeUndefined()
   })
 
-  it('following the app theme sets nothing', () => {
+  it('following an unpaired app theme inherits its palette', () => {
+    const ordinary = PRESET_THEMES.find(theme => theme.id === 'minimal-dark')!
     expect(chatAppearance(FOLLOW_APP_CHAT_THEME, [])).toBeUndefined()
+    expect(chatAppearance(FOLLOW_APP_CHAT_THEME, [], ordinary)).toBeUndefined()
+    expect(chatAppearance(FOLLOW_APP_CHAT_THEME, [], { ...ordinary, chatThemeId: 'missing' })).toBeUndefined()
+  })
+
+  it.each(PRESET_THEMES.filter(theme => theme.chatThemeId))('$name follows its full companion palette', theme => {
+    const paired = chatAppearance(theme.chatThemeId!, [])
+    expect(paired?.id).toBe(theme.chatThemeId)
+    expect(paired?.bubbles).toBe(true)
+    expect(chatAppearance(FOLLOW_APP_CHAT_THEME, [], theme)).toEqual(paired)
+  })
+
+  it('keeps an explicit chat palette or app palette when the app theme has a companion', () => {
+    const kakao = PRESET_THEMES.find(theme => theme.chatThemeId === 'chat-kakao')!
+    expect(chatAppearance('chat-paper', [], kakao)).toEqual(chatAppearance('chat-paper', []))
+    expect(chatAppearance(kakao.id, [], kakao)).toMatchObject({ id: kakao.id, bubbles: false })
   })
 })

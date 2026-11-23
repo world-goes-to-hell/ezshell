@@ -1,6 +1,7 @@
 import { ThemeDefinition } from '../types/theme'
 import { LIGHT_PRESETS } from './lightPresets'
 import { MACOS_PRESETS } from './macosPresets'
+import { CHAT_COMPANION_PRESETS } from './chatCompanionPresets'
 
 export const PRESET_THEMES: ThemeDefinition[] = [
   // 1. Minimal Dark (graphite + blue) - Default
@@ -1195,6 +1196,8 @@ export const PRESET_THEMES: ThemeDefinition[] = [
 
   // macOS-style pair (colors plus rounded shape and traffic-light window buttons)
   ...MACOS_PRESETS,
+
+  ...CHAT_COMPANION_PRESETS,
 ]
 
 export const getThemeById = (id: string): ThemeDefinition | undefined => {

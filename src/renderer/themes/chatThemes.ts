@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react'
-import { readableTextColor } from '../lib/colorContrast'
+import { readableTextColor, visibleIndicatorColor } from '../lib/colorContrast'
 import { colorSchemeFor } from '../lib/colorScheme'
 import type { ThemeColors, ThemeDefinition } from '../types/theme'
 import { PRESET_THEMES } from './presets'
@@ -131,24 +131,42 @@ export function isChatThemeId(id: unknown, customThemes: readonly ThemeDefinitio
     || PRESET_THEMES.some(theme => theme.id === id) || customThemes.some(theme => theme.id === id)
 }
 
+export function chatPresetForAppTheme(theme: ThemeDefinition | undefined) {
+  return CHAT_PRESETS.find(preset => preset.id === theme?.chatThemeId)
+}
+
 export interface ChatAppearance {
-  accent: string
+  id: string
   bubbles: boolean
   style: CSSProperties
 }
 
+function paneMotionColors(focus: string, trace: string, surfaces: readonly string[]) {
+  return {
+    '--pane-focus-color': visibleIndicatorColor(focus, surfaces),
+    '--pane-trace-color': visibleIndicatorColor(trace, surfaces)
+  }
+}
+
+export function appPaneIndicatorColors({ colors, terminal }: ThemeDefinition) {
+  return {
+    ...paneMotionColors(colors.accent, colors.textLink, [terminal.background, colors.bgPrimary, colors.bgSecondary]),
+    '--pane-focus-keyline': visibleIndicatorColor(colors.textPrimary, [colors.bgPrimary, colors.bgSecondary, colors.bgTertiary, colors.border])
+  }
+}
+
 /** Apply the palette and theme's shape to chat surfaces. */
-export function chatAppearance(id: string, customThemes: readonly ThemeDefinition[]): ChatAppearance | undefined {
-  if (id === FOLLOW_APP_CHAT_THEME) return undefined
-  const preset = CHAT_PRESETS.find(theme => theme.id === id)
-  const theme = PRESET_THEMES.find(theme => theme.id === id) ?? customThemes.find(theme => theme.id === id)
+export function chatAppearance(id: string, customThemes: readonly ThemeDefinition[], appTheme?: ThemeDefinition): ChatAppearance | undefined {
+  const followsApp = id === FOLLOW_APP_CHAT_THEME
+  const preset = followsApp ? chatPresetForAppTheme(appTheme) : CHAT_PRESETS.find(theme => theme.id === id)
+  const theme = followsApp || preset ? undefined : PRESET_THEMES.find(theme => theme.id === id) ?? customThemes.find(theme => theme.id === id)
   const colors = preset?.colors ?? theme?.colors
   if (!colors) return undefined
   const canvas = preset?.canvas ?? colors.bgPrimary
   const send = preset?.send ?? colors.accent
   const motion = preset?.motion ?? { focus: colors.accent, trace: colors.accent, working: colors.accent }
   return {
-    accent: colors.accent,
+    id: preset?.id ?? id,
     bubbles: Boolean(preset),
     style: {
       colorScheme: colorSchemeFor(canvas) ?? (theme?.category === 'light' ? 'light' : 'dark'),
@@ -171,8 +189,9 @@ export function chatAppearance(id: string, customThemes: readonly ThemeDefinitio
       '--accent': colors.accent,
       '--accent-muted': 'color-mix(in srgb, var(--accent) 15%, transparent)',
       '--on-accent': readableTextColor(colors.accent),
-      // The pane's border and trace (LocalTerminalTab.css, agent-work-trace.css) read these, so they
-      // follow the chat theme instead of the window theme set on the root
+      // The inner outline and trace run over the chat canvas, header and footer. The outer
+      // focus edge stays on the app palette to contrast with the surrounding pane frame.
+      ...paneMotionColors(motion.focus, motion.trace, [canvas, colors.bgSecondary]),
       '--chat-focus': motion.focus,
       '--chat-working': motion.working,
       '--motion-accent': motion.trace,

@@ -28,7 +28,8 @@
   min-height: 0;
   /* FitAddon reads the host's computed size when choosing the number of rows. */
   box-sizing: content-box;
-  padding: 6px 0 0 8px;
+  padding: var(--pane-indicator-space);
+  padding-left: 8px;
   overflow: hidden;
 }
 
@@ -41,7 +42,7 @@
 
 .local-terminal-stage[data-chat-question] > .local-terminal-host {
   flex: 0 0 min(58%, 400px);
-  padding: 8px 10px 0;
+  padding: 8px 10px var(--pane-indicator-space);
   background: var(--terminal-bg, var(--bg-primary));
 }
 
@@ -73,6 +74,10 @@
 
 /* One shell in a pane: the whole tab when it is not split, a placed box (lib/splitTree.ts) when it is */
 .local-terminal-pane {
+  --agent-trace-inset: 4px;
+  --agent-trace-width: 3px;
+  /* Reserve room even when the pane is idle so the overlays never cover terminal cells. */
+  --pane-indicator-space: calc(var(--agent-trace-inset) + var(--agent-trace-width));
   position: relative;
   display: flex;
   flex: 1;
@@ -83,11 +88,9 @@
   background: var(--terminal-bg, var(--bg-primary));
 }
 
-/* Mark the focused split pane or chat, the same way as SSH split panes
-   (styles/app/update-notification.css): an inset overlay, so edges along an overflow:hidden
-   ancestor are not clipped at fractional zoom, xterm keeps its size and clicks pass through */
+/* Keep the overlay inside the pane so fractional zoom and xterm sizing cannot clip it. */
 .local-terminal-tab.is-split .local-terminal-pane:focus-within::before,
-.local-terminal-pane[data-chat-mode]:focus-within::before,
+.local-terminal-pane:is([data-chat-mode], [data-agent-work]):focus-within::before,
 .local-terminal-pane[data-agent-work='working']::before {
   content: '';
   position: absolute;
@@ -96,33 +99,35 @@
   pointer-events: none;
 }
 
-.local-terminal-pane[data-agent-work='working']::before {
+.local-terminal-pane[data-agent-work='working']:not(:focus-within)::before {
   border: 1px solid var(--border);
 }
 
 /* Chat themes set their colors on the pane (themes/chatThemes.ts), so a working chat pane's
    resting border leans toward the theme's trace color instead of a border the canvas hides */
-.local-terminal-pane[data-chat-mode][data-agent-work='working']::before {
+.local-terminal-pane[data-chat-mode][data-agent-work='working']:not(:focus-within)::before {
   border-color: color-mix(in srgb, var(--chat-trace, var(--border-strong)) 45%, var(--border-strong));
 }
 
 .local-terminal-tab.is-split .local-terminal-pane:focus-within::before,
-.local-terminal-pane:is([data-chat-mode], [data-agent-work='working']):focus-within::before {
-  border: 2px solid var(--chat-focus, var(--chat-pane-accent, var(--accent)));
+.local-terminal-pane:is([data-chat-mode], [data-agent-work]):focus-within::before {
+  inset: 1px;
+  border: 2px solid var(--pane-focus-color, var(--accent));
+  box-shadow: 0 0 0 1px var(--pane-focus-keyline, var(--text-primary));
 }
 
 /* The light follows an inner track so it stays visible beside the solid focus outline. */
 .local-terminal-pane[data-agent-work]::after {
-  --agent-trace-inset: 3px;
   --agent-trace-z-index: 11;
-}
-
-.local-terminal-pane[data-chat-mode][data-agent-work]::after {
-  --agent-trace-color: var(--chat-trace, color-mix(in srgb, var(--motion-accent, var(--accent)) 55%, var(--border)));
-}
-
-.local-terminal-pane[data-agent-work]:focus-within::after {
-  --agent-trace-color: var(--chat-trace, color-mix(in srgb, var(--motion-accent, var(--accent)) 72%, var(--terminal-foreground, var(--text-primary))));
+  --agent-trace-reduced-width: var(--agent-trace-width);
+  --agent-trace-color: var(--pane-trace-color, var(--accent));
+  --agent-trace-gradient: conic-gradient(
+    from var(--local-agent-trace-angle),
+    transparent,
+    color-mix(in srgb, currentColor 55%, transparent) 15deg,
+    currentColor 25deg 56deg,
+    transparent 66deg
+  );
 }
 
 .terminal-wrapper.hidden .local-terminal-pane[data-agent-work='working']::after {

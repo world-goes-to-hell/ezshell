@@ -6,9 +6,9 @@ const base = PRESET_THEMES[0]
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value))
 
 describe('normalizeTheme', () => {
-  it('accepts every preset as is', () => {
+  it('accepts all preset palettes and strips preset-only metadata', () => {
     for (const preset of PRESET_THEMES) {
-      const { chrome: _chrome, ...colorsOnly } = preset
+      const { chrome: _chrome, chatThemeId: _chatThemeId, ...colorsOnly } = preset
       expect(normalizeTheme(clone(preset))).toEqual(colorsOnly)
     }
   })
@@ -18,6 +18,10 @@ describe('normalizeTheme', () => {
   it('drops chrome: a theme copied or imported from a macOS preset is colors only', () => {
     const mac = PRESET_THEMES.find(theme => theme.chrome === 'mac')!
     expect(normalizeTheme(clone(mac))).not.toHaveProperty('chrome')
+  })
+
+  it('reserves chat palette pairing for built-in app themes', () => {
+    expect(normalizeTheme({ ...clone(base), chatThemeId: 'chat-kakao' })).not.toHaveProperty('chatThemeId')
   })
 
   it('fills a missing preview from the theme colors (the file that blanked the app)', () => {

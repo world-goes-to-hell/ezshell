@@ -14,17 +14,17 @@
   position: absolute;
   inset: var(--agent-trace-inset, 0);
   z-index: var(--agent-trace-z-index, 1);
-  padding: 2px;
+  padding: var(--agent-trace-width, 2px);
   border-radius: inherit;
   pointer-events: none;
   color: var(--agent-trace-color, color-mix(in srgb, var(--motion-accent, var(--accent)) 55%, var(--border)));
-  background: conic-gradient(
+  background: var(--agent-trace-gradient, conic-gradient(
     from var(--local-agent-trace-angle),
     transparent,
     color-mix(in srgb, currentColor 40%, transparent) 18deg,
     currentColor 27deg,
     transparent 32deg
-  );
+  ));
   mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
   mask-composite: exclude;
   opacity: 0;
@@ -44,7 +44,7 @@
 @media (prefers-reduced-motion: reduce) {
   [data-agent-work]::after {
     padding: 0;
-    border: 1px solid currentColor;
+    border: var(--agent-trace-reduced-width, 1px) solid currentColor;
     background: none;
     mask: none;
     animation: none;

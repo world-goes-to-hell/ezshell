@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { PRESET_THEMES } from '../themes/presets'
-import { FOLLOW_APP_CHAT_THEME, isChatThemeId } from '../themes/chatThemes'
+import { FOLLOW_APP_CHAT_THEME, appPaneIndicatorColors, isChatThemeId } from '../themes/chatThemes'
 import { ThemeDefinition, TerminalColors } from '../types/theme'
 import { colorSchemeFor } from '../lib/colorScheme'
 import { normalizeTheme, sanitizeStoredThemes } from '../lib/themeValidation'
@@ -41,6 +41,9 @@ function applyThemeToDocument(theme: ThemeDefinition, surface: SurfaceStyle) {
   root.style.setProperty('--motion-accent', theme.colors.accent)
   root.style.setProperty('--terminal-background', theme.terminal.background)
   root.style.setProperty('--terminal-foreground', theme.terminal.foreground)
+  for (const [name, value] of Object.entries(appPaneIndicatorColors(theme))) {
+    root.style.setProperty(name, value)
+  }
   // Surface style (styles/glass.css) and the scheme it needs to pick its edge color
   const drawn = effectiveSurface(theme.id, surface)
   const scheme = colorSchemeFor(theme.colors.bgPrimary) ?? 'dark'

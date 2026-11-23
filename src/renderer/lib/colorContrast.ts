@@ -11,6 +11,12 @@ function parseHex(color: string): Rgb | null {
   return [0, 2, 4].map(i => parseInt(full.slice(i, i + 2), 16)) as Rgb
 }
 
+function parseOpaqueHex(color: string): Rgb | null {
+  const hex = color.trim().replace(/^#/, '')
+  if (!/^(?:[0-9a-f]{3}f?|[0-9a-f]{6}(?:ff)?)$/i.test(hex)) return null
+  return parseHex(hex.length === 4 ? hex.slice(0, 3) : hex)
+}
+
 /** WCAG relative luminance of an sRGB color */
 function luminance([r, g, b]: Rgb): number {
   const channel = (value: number) => {
@@ -25,6 +31,17 @@ export function contrastRatio(first: Rgb, second: Rgb): number {
   const b = luminance(second)
   const [lighter, darker] = a > b ? [a, b] : [b, a]
   return (lighter + 0.05) / (darker + 0.05)
+}
+
+/** Keep custom colors when their contrast depends on how the browser paints them. */
+export function visibleIndicatorColor(preferred: string, backgrounds: readonly string[]): string {
+  const preferredRgb = parseOpaqueHex(preferred)
+  if (!preferredRgb) return preferred
+  const surfaces = backgrounds.map(parseOpaqueHex).filter(color => color !== null)
+  if (surfaces.length === 0) return preferred
+  const minimumContrast = (color: Rgb) => Math.min(...surfaces.map(surface => contrastRatio(color, surface)))
+  if (minimumContrast(preferredRgb) >= 3) return preferred
+  return minimumContrast([0, 0, 0]) > minimumContrast([255, 255, 255]) ? '#000000' : '#ffffff'
 }
 
 // White text needs at least this much contrast to be used (WCAG's floor for UI components and bold text)

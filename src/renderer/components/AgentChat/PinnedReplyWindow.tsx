@@ -12,7 +12,7 @@ import { webLinkItems } from '../Terminal/TerminalWebLinkMenu'
 import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../ui/agentProviderIcons'
 import { useThemeStore } from '../../stores/themeStore'
 import { toast } from '../../stores/toastStore'
-import { chatAppearance } from '../../themes/chatThemes'
+import { FOLLOW_APP_CHAT_THEME, chatAppearance } from '../../themes/chatThemes'
 import './AgentChat.css'
 import './PinnedReplyWindow.css'
 
@@ -30,7 +30,8 @@ export function PinnedReplyWindow() {
   usePopoutTheme()
   const chatThemeId = useThemeStore(state => state.chatThemeId)
   const customThemes = useThemeStore(state => state.customThemes)
-  const appearance = useMemo(() => chatAppearance(chatThemeId, customThemes), [chatThemeId, customThemes])
+  const followedTheme = useThemeStore(state => state.chatThemeId === FOLLOW_APP_CHAT_THEME ? state.getCurrentTheme() : undefined)
+  const appearance = useMemo(() => chatAppearance(chatThemeId, customThemes, followedTheme), [chatThemeId, customThemes, followedTheme])
   const [pin, setPin] = useState<PinnedReply | null>(null)
   const [error, setError] = useState('')
   const [folded, setFolded] = useState(false)

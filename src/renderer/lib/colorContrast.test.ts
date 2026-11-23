@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readableTextColor } from './colorContrast'
+import { readableTextColor, visibleIndicatorColor } from './colorContrast'
 
 const WHITE = '#ffffff'
 const DARK = '#16181c'
@@ -21,5 +21,21 @@ describe('readableTextColor', () => {
     expect(readableTextColor('#000000')).toBe(WHITE)
     expect(readableTextColor('#123')).toBe(WHITE)
     expect(readableTextColor('rgb(1, 2, 3)')).toBe(WHITE)
+  })
+})
+
+describe('visibleIndicatorColor', () => {
+  it.each(['rgb(47, 104, 176)', 'hsl(214 58% 44%)', '#2f68b080', '#2398'])('keeps the user color %s', color => {
+    expect(visibleIndicatorColor(color, ['#ffffff'])).toBe(color)
+  })
+
+  it('ignores surfaces whose displayed color depends on their backdrop', () => {
+    expect(visibleIndicatorColor('#303030', ['#ffffff', '#00000080', '#0008', 'rgba(0, 0, 0, 0.5)'])).toBe('#303030')
+    expect(visibleIndicatorColor('#303030', ['#00000080'])).toBe('#303030')
+  })
+
+  it('measures opaque short and long hex colors with an alpha channel', () => {
+    expect(visibleIndicatorColor('#dddf', ['#ffffffff'])).toBe('#000000')
+    expect(visibleIndicatorColor('#ddddddff', ['#ffff'])).toBe('#000000')
   })
 })

@@ -77,8 +77,11 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   const chatThemeButton = index => `${cover(index)}.querySelector('.agent-chat-theme-trigger')`
   async function chooseChatTheme(index, label) {
     await click(...await center(chatThemeButton(index)))
+    const match = label === '앱 테마 따르기'
+      ? `item.textContent.trim().startsWith('앱 테마 따르기 · ')`
+      : `item.textContent.trim() === ${JSON.stringify(label)}`
     const option = `[...document.querySelectorAll('.select-menu-content [role="menuitemradio"]')]
-      .find(item => item.textContent.trim() === ${JSON.stringify(label)})`
+      .find(item => ${match})`
     if (!(await until(`!!${option}`, 3000))) throw new Error(`chat theme missing: ${label}`)
     await js(`(${option}).scrollIntoView({ block: 'nearest' })`)
     await click(...await center(`(${option})`))

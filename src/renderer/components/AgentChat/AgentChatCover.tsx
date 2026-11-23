@@ -346,7 +346,6 @@ const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, wait
 
 interface AgentChatCoverProps {
   shellId: string
-  themeId: string | undefined
   appearance: ChatAppearance | undefined
   /** The speed controls share the usage row below the terminal stage. */
   usageActions: HTMLSpanElement | null
@@ -359,7 +358,7 @@ interface AgentChatCoverProps {
   onFocusQuestion: () => void
 }
 
-export function AgentChatCover({ shellId, themeId, appearance, usageActions, tabId, getSplitMenu, onShowTerminal, onFocusQuestion }: AgentChatCoverProps) {
+export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSplitMenu, onShowTerminal, onFocusQuestion }: AgentChatCoverProps) {
   const chat = useAgentChatStore(state => state.chats.get(shellId))
   const loadOlder = useAgentChatStore(state => state.loadOlder)
   const agent = useAgentMessagesStore(state => shellAgentOf(state.snapshot.agents, shellId))
@@ -524,7 +523,7 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   // The tokens each question used, at the end of its turn
   const usageSpots = useMemo(() => turnUsageSpots(items), [items])
   const showOlder = !history && Boolean(chat?.hasOlder)
-  const showSendTime = Boolean(appearance && themeId === 'chat-kakao')
+  const showSendTime = appearance?.id === 'chat-kakao'
   const timeline = useMemo(() => {
     const rows: TimelineRow[] = []
     if (showOlder) rows.push({ kind: 'older', key: 'older', estimate: 26 })
@@ -1144,7 +1143,7 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
 
   return (
     <div className="agent-chat-cover" ref={coverRef} tabIndex={-1} role="region" aria-label="에이전트 채팅"
-      data-chat-theme={appearance ? themeId : undefined} data-chat-bubbles={appearance?.bubbles || undefined} style={appearance?.style}
+      data-chat-theme={appearance?.id} data-chat-bubbles={appearance?.bubbles || undefined} style={appearance?.style}
       onKeyDown={onCoverKeyDown} onContextMenu={onContextMenu}>
       <div className="agent-chat-parent" inert={Boolean(subagent)}>
       <header className="agent-chat-head">

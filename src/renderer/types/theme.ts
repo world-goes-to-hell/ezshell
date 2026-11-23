@@ -75,6 +75,8 @@ export interface ThemeDefinition {
   colors: ThemeColors
   terminal: TerminalColors
   preview: ThemePreview
+  /** Built-in chat palette paired with this preset. Theme selection reads its own setting. */
+  chatThemeId?: string
   /** Window-chrome style beyond colors. 'mac': rounded corners, traffic-light buttons on the left (presets only) */
   chrome?: 'mac'
   // Special effects

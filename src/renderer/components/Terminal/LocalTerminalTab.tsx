@@ -6,7 +6,7 @@ import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
 import { RiToolsLine, RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine, RiCloseLine, RiChat3Line, RiHistoryLine } from 'react-icons/ri'
 import { useThemeStore } from '../../stores/themeStore'
-import { chatAppearance } from '../../themes/chatThemes'
+import { FOLLOW_APP_CHAT_THEME, chatAppearance } from '../../themes/chatThemes'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { toast } from '../../stores/toastStore'
 import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
@@ -100,7 +100,9 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const isChat = useAgentChatStore(state => state.chats.has(shellId))
   const chatThemeId = useThemeStore(state => isChat ? state.chatThemeId : undefined)
   const customThemes = useThemeStore(state => isChat ? state.customThemes : undefined)
-  const chatTheme = useMemo(() => chatThemeId ? chatAppearance(chatThemeId, customThemes ?? []) : undefined, [chatThemeId, customThemes])
+  const followedTheme = useThemeStore(state => isChat && state.chatThemeId === FOLLOW_APP_CHAT_THEME ? state.getCurrentTheme() : undefined)
+  const chatTheme = useMemo(() => chatThemeId ? chatAppearance(chatThemeId, customThemes ?? [], followedTheme) : undefined,
+    [chatThemeId, customThemes, followedTheme])
   const chatKind = useAgentChatStore(state => state.chats.get(shellId)?.kind)
   const antigravity = (chatKind ?? chatAgent) === 'antigravity'
   const hasInteractiveQuestion = useAgentChatStore(state => {
@@ -424,7 +426,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       data-chat-mode={isChat || undefined}
       // The chat theme goes on the pane, not just the cover: its focus border, the working trace,
       // the sleep cover and the return bar are drawn here and must follow the same palette
-      style={chatTheme ? { ...chatTheme.style, ...style, '--chat-pane-accent': chatTheme.accent } as CSSProperties : style}
+      style={chatTheme ? { ...chatTheme.style, ...style } : style}
     >
       <div className="local-terminal-stage" data-chat-question={inlineQuestion || undefined}>
         <div
@@ -453,7 +455,6 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
         {isChat && (
           <AgentChatCover
             shellId={shellId}
-            themeId={chatThemeId}
             appearance={chatTheme}
             usageActions={usageActions}
             tabId={tabId}
