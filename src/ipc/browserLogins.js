@@ -105,11 +105,12 @@ function createBrowserLogins(directory, getPassword) {
     return next
   }
 
-  function withVault(work, expected = scope()) {
+  function withVault(work, expected = scope(), current = () => true) {
     return enqueue(async () => {
       const password = getPassword()
       const check = () => {
         if (!password || expected !== scope() || getPassword() !== password) throw new Error('앱 잠금을 해제한 뒤 다시 시도해 주세요.')
+        if (!current()) throw new Error('비밀번호 가져오기가 취소되었습니다.')
       }
       check()
       let raw
@@ -163,7 +164,7 @@ function createBrowserLogins(directory, getPassword) {
       accounts.splice(at, 1)
       await save()
     }),
-    import: (fileName, expected) => withVault(async (accounts, save, check) => {
+    import: (fileName, expected, current) => withVault(async (accounts, save, check) => {
       const { entries, skipped } = await readImport(fileName)
       check()
       const existing = new Set(accounts.map(accountKey))
@@ -177,7 +178,7 @@ function createBrowserLogins(directory, getPassword) {
       }
       if (imported) await save()
       return { imported, skipped: skipped + entries.length - imported }
-    }, expected),
+    }, expected, current),
     reset() {
       invalidate()
       return enqueue(() => fs.promises.rm(file, { force: true }))

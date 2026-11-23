@@ -2,6 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const { randomUUID } = require('node:crypto')
 const { createClaudeParser } = require('./claudeTranscript.js')
+const { createClaudeShellTracker } = require('./claudeShells.js')
 const { createCodexParser } = require('./codexTranscript.js')
 const { createInboxQuestionReader } = require('./inboxQuestions.js')
 const { createSubagentTracker } = require('./subagents.js')
@@ -17,10 +18,10 @@ const { readLinesFromStart, readLinesFromEnd } = require('../agentHistory/bounde
 
 const FIRST_BYTES = 2 * 1024 * 1024
 const OLDER_BYTES = 2 * 1024 * 1024
-// A delegation can precede several MB of tool output. Recover its state independently of the chat page.
-const SUBAGENT_HISTORY_BYTES = 32 * 1024 * 1024
-const SUBAGENT_LINES = {
-  claude: /"(?:Agent|Task|tool_result)"|<task-notification>/,
+// A running task can precede several MB of tool output. Recover its state independently of the chat page.
+const ACTIVITY_HISTORY_BYTES = 32 * 1024 * 1024
+const ACTIVITY_LINES = {
+  claude: /"(?:Agent|Task|Bash|PowerShell|Shell|tool_result)"|<task-notification>/,
   codex: /"(?:spawn_agent|wait_agent|function_call_output|sub_agent_activity|SubAgentActivity|CollabAgentToolCall|inter_agent_communication)"|<subagent_notification>/
 }
 /** Read per look when the file grew a lot (the rest comes on the next looks) */
@@ -130,7 +131,7 @@ async function readClaudeChildResults(file, tracker, isLive) {
 
 /**
  * @param {object} deps
- * @param {(shellId: string) => Promise<{ kind: 'claude' | 'codex', sessionId?: string | null, cwd?: string | null, file?: string | null, approval?: object | null, codexSpeed?: { speed: string | null, ultrafastAvailable: boolean } | null } | null>} deps.resolve
+ * @param {(shellId: string) => Promise<{ kind: 'claude' | 'codex', sessionId?: string | null, cwd?: string | null, file?: string | null, approval?: object | null, backgroundShellCount?: number | null, codexSpeed?: { speed: string | null, ultrafastAvailable: boolean } | null } | null>} deps.resolve
  *   the agent running in a shell now (null when there is none), with the prompt it shows if any
  * @param {(channel: string, payload: object) => void} deps.send to the main window
  * @param {string} deps.claudeRoot `$CLAUDE_CONFIG_DIR` or `~/.claude`
@@ -228,18 +229,21 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     }
     const parser = parserFor(kind)
     const subagents = createSubagentTracker(kind)
+    const shellTracker = kind === 'claude' ? createClaudeShellTracker() : null
     if (oldest > 0) {
-      const start = Math.max(0, size - SUBAGENT_HISTORY_BYTES)
+      const start = Math.max(0, size - ACTIVITY_HISTORY_BYTES)
       await readLinesFromStart(file, line => {
         if (!live(chat)) return true
         subagents.feed(line)
-      }, { start, end: oldest - 1, maxBytes: oldest - start, maxLine: STEP_BYTES, matchLine: line => SUBAGENT_LINES[kind].test(line) }).catch(() => {})
+        shellTracker?.feed(line)
+      }, { start, end: oldest - 1, maxBytes: oldest - start, maxLine: STEP_BYTES, matchLine: line => ACTIVITY_LINES[kind].test(line) }).catch(() => {})
     }
     const { lines, used } = completeLines(buffer)
     const items = []
     let title
     for (const line of lines) {
       subagents.feed(line)
+      shellTracker?.feed(line)
       const result = parser.feed(line)
       items.push(...result.items)
       title = result.title ?? title
@@ -248,7 +252,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     items.push(...(parser.flush?.(0) ?? []))
     if (kind === 'claude') await readClaudeChildResults(file, subagents, () => live(chat))
     if (!live(chat)) return
-    Object.assign(chat, { file, kind, parser, subagents, previewChild: createSubagentPreview(file, kind, now), subagentScope: randomUUID(), oldest, tail: oldest + used, skipping: false, title: title ?? null, state: 'live' })
+    Object.assign(chat, { file, kind, parser, subagents, shellTracker, previewChild: createSubagentPreview(file, kind, now), subagentScope: randomUUID(), oldest, tail: oldest + used, skipping: false, title: title ?? null, state: 'live' })
     chat.questionIndex = null
     frame(chat, { reset: true, scope: chat.subagentScope, kind, state: 'live', items: latestById(items), subagents: subagents.snapshot(true), title: title ?? null, hasOlder: oldest > 0 })
   }
@@ -326,6 +330,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     let title = chat.title
     for (const line of lines) {
       chat.subagents.feed(line)
+      chat.shellTracker?.feed(line)
       const result = chat.parser.feed(line)
       items.push(...result.items)
       title = result.title ?? title
@@ -340,6 +345,16 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
       ...(renamed ? { title } : {}),
       ...(subagents ? { subagents } : {})
     })
+  }
+
+  function syncShells(chat, observed = null, jobs = []) {
+    const count = observed ?? jobs.length
+    // The CLI can remove a shell from its footer before writing its completion to the transcript.
+    const backgroundShells = count > 0 ? { count, jobs: count >= jobs.length ? jobs : [] } : null
+    const signature = backgroundShells && JSON.stringify(backgroundShells)
+    if (chat.backgroundShells === signature) return
+    chat.backgroundShells = signature
+    frame(chat, { backgroundShells })
   }
 
   async function sync(chat) {
@@ -367,18 +382,24 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     }
     if (!target) {
       if (chat.state === 'live' && chat.file) await follow(chat).catch(() => {})
+      if (!live(chat)) return
+      syncShells(chat)
       setState(chat, 'ended')
       return
     }
     const file = await fileFor(chat, target)
     if (!live(chat)) return
     if (!file) {
+      syncShells(chat, target.backgroundShellCount)
       setState(chat, 'waiting')
       return
     }
-    if (file !== chat.file || target.kind !== chat.kind) return load(chat, file, target.kind)
-    if (chat.state !== 'live') setState(chat, 'live')
-    return follow(chat)
+    if (file !== chat.file || target.kind !== chat.kind) await load(chat, file, target.kind)
+    else {
+      if (chat.state !== 'live') setState(chat, 'live')
+      await follow(chat)
+    }
+    if (live(chat)) syncShells(chat, target.backgroundShellCount, chat.shellTracker?.running())
   }
 
   /** One read at a time per chat, in order */
@@ -415,7 +436,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     /** Starts following; what is read comes as frames. Opening a shell's view again starts it over. */
     open(shellId) {
       if (!chats.has(shellId) && chats.size >= MAX_CHATS) return { ok: false, error: `채팅 보기는 ${MAX_CHATS}개까지 열 수 있습니다.` }
-      const chat = { shellId, chain: Promise.resolve(), pending: false, file: null, kind: null, parser: null, state: null, title: null, lookup: null, approval: null, codexSpeed: null, links: new Set() }
+      const chat = { shellId, chain: Promise.resolve(), pending: false, file: null, kind: null, parser: null, state: null, title: null, lookup: null, approval: null, codexSpeed: null, backgroundShells: null, links: new Set() }
       chats.set(shellId, chat)
       startTimer()
       chat.pending = true
@@ -562,6 +583,11 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     knowsLink: (shellId, key) => chats.get(shellId)?.links.has(key) === true,
     /** The folder of the shell's agent (relative links are read against it), or null */
     cwdOf: shellId => chats.get(shellId)?.cwd ?? null,
+    /** A Claude AskUserQuestion of the shell's conversation not answered yet (`tool:<id>`): its questions, or null */
+    pendingQuestion: (shellId, itemId) => {
+      const chat = chats.get(shellId)
+      return chat?.kind === 'claude' ? chat.parser?.question?.(itemId) ?? null : null
+    },
     count: () => chats.size,
     tick
   }

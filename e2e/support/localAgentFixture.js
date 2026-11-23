@@ -45,16 +45,15 @@ function draw() {
   if (!claude && process.env.EZSHELL_TEST_AGENT_CHAT && ['', '/fast', '/ultrafas', '/ultrafast'].includes(draft)) {
     const setting = path.join(profile, id + '-speed')
     const tier = fs.existsSync(setting) ? fs.readFileSync(setting, 'utf8') : ''
-    const speed = tier === 'priority' ? ' fast' : tier === 'ultrafast' ? ' ultrafast' : ''
+    const speed = tier === 'priority' ? 'Fast' : tier === 'ultrafast' ? 'Ultrafast' : 'Standard'
     const modelFile = path.join(profile, id + '-speed-model')
     const model = fs.existsSync(modelFile) ? fs.readFileSync(modelFile, 'utf8') : 'gpt-6.2-sol'
     const ultrafast = fs.existsSync(path.join(profile, id + '-ultrafast-eligible'))
     const rows = ['fixture ready: ' + id]
-    if (tier) rows.push('• Service tier set to ' + tier, '')
     if (draft === '/fast') rows.push('› /fast     toggle faster responses', '')
     if (ultrafast && draft.startsWith('/ultrafas')) rows.push('› /ultrafast     toggle fastest responses', '')
     const row = rows.length + 1
-    rows.push(indicator + draft, '', `  ${model} medium${speed} · /workspace${target ? ' · ' + target : ''}`)
+    rows.push(indicator + draft, '', `  ${model} default · ${speed} · /workspace${target ? ' · ' + target : ''}`)
     process.stdout.write('\x1b[2J\x1b[H' + rows.join('\r\n') + `\x1b[${row};${indicator.length + draft.length + 1}H`)
     return
   }

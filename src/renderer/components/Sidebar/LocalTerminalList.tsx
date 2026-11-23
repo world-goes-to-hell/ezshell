@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiComputerLine, RiDatabase2Line, RiFolderAddLine, RiGlobalLine, RiRefreshLine, RiServerLine } from 'react-icons/ri'
 import { useTerminalStore, type TerminalInfo } from '../../stores/terminalStore'
 import { useSessionStore, type Session } from '../../stores/sessionStore'
@@ -17,6 +17,7 @@ import { confirmDialog } from '../../stores/confirmStore'
 import { toast } from '../../stores/toastStore'
 import { LocalProjectsTree, buildProjectNodes, type ProjectNode, type WorktreeNode, type WorktreeTab } from './LocalProjectsTree'
 import { workTabsByWorktree } from '../../lib/tabGroups'
+import { effectiveSessionColor } from '../../lib/sessionEffectiveColor'
 import './LocalTerminalList.css'
 
 const KEY_STEP = 30
@@ -107,6 +108,9 @@ export function LocalTerminalList({ fillAvailableSpace = false, workingTabs, ser
   }
 
   const sessions = useSessionStore(state => state.sessions)
+  const folders = useSessionStore(state => state.folders)
+  // The color the user gave a session (or its folder), as in the session list: a bar and the icon
+  const colorStyle = (color: string | undefined) => (color ? { '--server-color': color } as CSSProperties : undefined)
 
   const linkDropped = (project: ProjectNode, text: string) => {
     const isTab = !text.startsWith('session:') && terminals.has(text)
@@ -164,7 +168,8 @@ export function LocalTerminalList({ fillAvailableSpace = false, workingTabs, ser
             const current = group?.connected.some(tab => tab.id === visibleId)
               || group?.disconnected.some(tab => tab.id === visibleId)
             return (
-              <li key={session.id} className={`local-server${current ? ' is-current' : ''}`} data-session-id={session.id}>
+              <li key={session.id} className={`local-server${current ? ' is-current' : ''}`} data-session-id={session.id}
+                style={colorStyle(effectiveSessionColor(session, folders))}>
                 <button type="button" className="local-server-open" onClick={() => openServer(session, workGroup, group)}
                   aria-current={current || undefined}
                   title={connected + disconnected > 0 ? `${name} 탭으로 이동` : `${name} 에 접속`}>
@@ -325,8 +330,12 @@ export function LocalTerminalList({ fillAvailableSpace = false, workingTabs, ser
       // A browser, SSH or DB tab of the work: goes to the tab, closes as its tab does
       const name = otherTabName(terminal)
       const Icon = terminal.browser ? RiGlobalLine : terminal.db ? RiDatabase2Line : RiServerLine
+      // An SSH or DB tab keeps its session's color (the saved session now, else the color it opened with)
+      const savedId = terminal.connectConfig?.savedSessionId
+      const color = terminal.browser ? undefined
+        : effectiveSessionColor(savedId ? sessions.find(session => session.id === savedId) : undefined, folders) ?? terminal.color
       return (
-        <li key={id} className="local-terms-item" data-work-tab-id={id}>
+        <li key={id} className="local-terms-item" data-work-tab-id={id} style={colorStyle(color)}>
           <div className={`local-terms-row ${id === visibleId ? 'is-current' : ''}`}>
             <button type="button" className="local-terms-open" onClick={() => focusTerminal(id)} title={`${name} 탭으로 이동`}>
               <Icon size={15} className="local-terms-icon" />

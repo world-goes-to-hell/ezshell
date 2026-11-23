@@ -30,6 +30,17 @@ describe('Codex transcript lines to chat items', () => {
     expect(aborted).toMatchObject({ kind: 'notice', text: '중지했습니다' })
   })
 
+  it('keeps native Codex attachments and removes only their leading labels from the question', () => {
+    const parser = createCodexParser()
+    const attached = { type: 'local_image', path: 'C:\\Temp\\example.png' }
+    const [question] = parser.feed(completed({ type: 'UserMessage', id: 'with-images', content: [attached, attached,
+      { type: 'text', text: '[Image #1] [Image #2] [Image #9] 이미지를 확인해 줘' }] })).items
+    const [onlyImage] = parser.feed(completed({ type: 'UserMessage', id: 'only-image', content: [attached,
+      { type: 'text', text: '[Image #1]' }] })).items
+    expect(question).toMatchObject({ kind: 'user', hasImage: true, text: '[Image #9] 이미지를 확인해 줘' })
+    expect(onlyImage).toMatchObject({ kind: 'user', hasImage: true, text: '' })
+  })
+
   it('shows file changes as diff lines', () => {
     const { paths, diff } = fileChange({
       'C:\\p\\new.txt': { type: 'add', content: 'one\ntwo' },

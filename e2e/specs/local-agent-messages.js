@@ -362,10 +362,17 @@ async function run() {
     await drag(starting.x + starting.width * .3, centerY, starting.x + starting.width * .7, centerY)
     check('a Codex startup spinner without a submitted prompt splits without confirmation', await until(`${panes}.length === 2 && !document.querySelector('.confirm-dialog')`, 5000))
 
-    fs.writeFileSync(file('claude-2-program-status'), 'state=blocked:app=claude-code:kind=question:msg=VGVzdA==')
+    fs.writeFileSync(file('claude-2-program-status'), 'state=idle:app=claude-code')
+    await until(`${row('claude-2')}?.dataset.status === 'idle'`)
+    fs.writeFileSync(file('claude-2-approval'), [
+      'Do you want to proceed?', '', '❯ 1. Yes', '  2. No (esc)'
+    ].join('\r\n'))
     check('a provider question gets a response-needed icon without showing the question', await until(`
-      ${row('claude-2')}?.dataset.status === 'blocked' && ${row('claude-2')}?.textContent.trim() === ''
+      ${row('claude-2')}?.dataset.status === 'blocked' && ${row('claude-2')}?.title.includes('응답 필요') &&
+      ${row('claude-2')}?.textContent.trim() === ''
     `))
+    fs.writeFileSync(file('claude-2-approval'), '')
+    check('clearing the prompt restores the idle chip', await until(`${row('claude-2')}?.dataset.status === 'idle'`))
     fs.writeFileSync(file('claude-2-exit-code'), '7')
     check('a crashed agent stays in the list with its error and exit code', await until(`
       ${row('claude-2')}?.dataset.status === 'error' && ${row('claude-2')}?.title.includes('7')

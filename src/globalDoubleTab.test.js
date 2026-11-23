@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
 import { createGlobalDoubleTab, handleNumber, helperScript } from './globalDoubleTab.js'
 
@@ -93,4 +94,43 @@ describe('Tab Tab from any program', () => {
       vi.useRealTimers()
     }
   })
+
+  it('forwards capture only while enabled and leaves Tab Tab as a separate notification', () => {
+    const { spawn, children } = fakeSpawn()
+    const onCapture = vi.fn()
+    const onDoubleTab = vi.fn()
+    const watch = createGlobalDoubleTab({ onCapture, onDoubleTab, platform: 'win32', spawn })
+    watch.start(handle(9))
+    const [child] = children
+    child.stdout.emit('data', 'capture\r\n')
+    expect(onCapture).not.toHaveBeenCalled()
+    watch.setEnabled(true)
+    child.stdout.emit('data', 'cap')
+    child.stdout.emit('data', 'ture\r\ndouble 10 20\r\n')
+    expect(onCapture).toHaveBeenCalledTimes(1)
+    expect(onDoubleTab).toHaveBeenCalledWith({ x: 10, y: 20 })
+    watch.stop()
+  })
+
+  it.skipIf(process.platform !== 'win32')('compiles the native helper and recognizes a modifier-only capture gesture', () => {
+    const source = "$ProgressPreference = 'SilentlyContinue'\n" + helperScript(123, 456).split('\n[EzShellDoubleTab]::Run')[0]
+    const script = source + String.raw`
+$gesture = [EzShellDoubleTab].GetMethod('CaptureGesture', [Reflection.BindingFlags]'NonPublic,Static')
+function G([int]$held, [bool]$modifier, [bool]$down) { [bool]$gesture.Invoke($null, @($held, $modifier, $down)) }
+if ((G 1 $true $true) -or (G 3 $true $true) -or (G 7 $true $true) -or (G 5 $true $false)) { exit 1 }
+if (!(G 0 $true $false) -or (G 0 $true $false)) { exit 2 }
+G 2 $true $true
+G 6 $true $true
+G 7 $true $true
+G 7 $false $true
+if (G 0 $true $false) { exit 3 }
+G 7 $true $true
+G 15 $true $true
+if (G 0 $true $false) { exit 4 }
+`
+    const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+    execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+      windowsHide: true, timeout: 10000, stdio: ['ignore', 'pipe', 'pipe']
+    })
+  }, 12000)
 })

@@ -11,7 +11,7 @@ import {
 
 /** The part of this window the settings backup needs from the stores */
 export function uiSettingsContext(): NormalizeContext {
-  return { shortcutIds: useShortcutsStore.getState().shortcuts.map(shortcut => shortcut.id) }
+  return { shortcutIds: useShortcutsStore.getState().shortcuts.filter(shortcut => !shortcut.fixed).map(shortcut => shortcut.id) }
 }
 
 export function exportUiSettings(): UiSettingsFile {

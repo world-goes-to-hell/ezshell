@@ -1,8 +1,8 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import type { ClipboardEvent, FormEvent } from 'react'
 import {
   RiArrowDownSLine, RiArrowLeftLine, RiArrowRightLine, RiArrowRightUpLine, RiBookmark3Line, RiCloseLine,
-  RiCodeSSlashLine, RiCursorLine, RiGlobalLine, RiKey2Line, RiRefreshLine, RiSendPlane2Line, RiStarFill, RiStarLine, RiToolsLine
+  RiCodeSSlashLine, RiCursorLine, RiGlobalLine, RiImageAddLine, RiKey2Line, RiRefreshLine, RiSendPlane2Line, RiStarFill, RiStarLine, RiToolsLine
 } from 'react-icons/ri'
 import type { BrowserReviewAction, BrowserReviewState, LocalAgentStatus } from '../../types'
 import { uncoveredBox } from '../../lib/browserViewClip'
@@ -13,7 +13,7 @@ import './BrowserReview.css'
 
 const statusLabels: Record<LocalAgentStatus, string> = {
   unknown: '연결됨', starting: '시작 중', idle: '대기 중', working: '작업 중',
-  blocked: '입력 대기', error: '오류', ended: '종료됨', sleeping: '잠듦'
+  blocked: '응답 필요', error: '오류', ended: '종료됨', sleeping: '잠듦'
 }
 
 const MAX_ADDRESS_LENGTH = 4096
@@ -37,6 +37,10 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const [address, setAddress] = useState('')
   const [agentId, setAgentId] = useState('')
   const [draft, setDraft] = useState('')
+  const [attachments, setAttachments] = useState<{ id: string; url: string }[]>([])
+  const previewUrls = useRef(new Map<string, string>())
+  const draftBusy = useRef(false)
+  const [readingImages, setReadingImages] = useState(false)
   const [browserError, setBrowserError] = useState('')
   const [feedback, setFeedback] = useState<{ text: string; error?: boolean } | null>(null)
   const [sending, setSending] = useState(false)
@@ -71,6 +75,18 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
 
   useEffect(() => { setAddress(url) }, [url])
   useEffect(() => { if (!isVisible) setLoginsOpen(false) }, [isVisible])
+
+  const releaseAttachment = useCallback((id: string) => {
+    const url = previewUrls.current.get(id)
+    if (url) URL.revokeObjectURL(url)
+    previewUrls.current.delete(id)
+    api.browserReviewRemoveImage(tabId, id)
+  }, [api, tabId])
+
+  useEffect(() => {
+    const urls = previewUrls.current
+    return () => { for (const id of urls.keys()) releaseAttachment(id) }
+  }, [releaseAttachment])
 
   useEffect(() => api.onBrowserReviewFocus(id => { if (id === tabId && isVisible) onActivate() }), [api, isVisible, onActivate, tabId])
 
@@ -157,15 +173,61 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
     }
   }
 
+  async function addImages(source: 'files' | 'clipboard') {
+    if (draftBusy.current) return
+    const mountedViewport = viewport.current
+    draftBusy.current = true
+    setReadingImages(true)
+    setFeedback(null)
+    try {
+      const result = await api.browserReviewAddImages(tabId, source)
+      if (viewport.current !== mountedViewport) {
+        if (result.ok && result.kind === 'images') {
+          for (const { id } of result.images) releaseAttachment(id)
+        }
+        return
+      }
+      if (!result.ok) {
+        setFeedback({ text: result.error, error: true })
+      } else if (result.kind === 'images') {
+        const added = result.images.map(({ id, preview }) => {
+          const url = URL.createObjectURL(new Blob([preview], { type: 'image/png' }))
+          previewUrls.current.set(id, url)
+          return { id, url }
+        })
+        if (added.length) setAttachments(current => [...current, ...added])
+      } else {
+        setFeedback({ text: '붙여넣을 이미지를 읽을 수 없습니다.', error: true })
+      }
+    } catch {
+      setFeedback({ text: '첨부할 이미지를 읽을 수 없습니다.', error: true })
+    } finally {
+      draftBusy.current = false
+      setReadingImages(false)
+    }
+  }
+
+  function pasteImage(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const { clipboardData } = event
+    if (clipboardData.getData('text/plain') || !Array.from(clipboardData.items).some(item => item.type.startsWith('image/'))) return
+    event.preventDefault()
+    void addImages('clipboard')
+  }
+
   async function send(event: FormEvent) {
     event.preventDefault()
     const text = draft.trim()
-    if (!selection || !recipient || !text || sending) return
+    if (!selection || !recipient || (!text && !attachments.length) || draftBusy.current) return
+    draftBusy.current = true
     setSending(true)
     setFeedback(null)
     try {
-      const result = await api.browserReviewAction(tabId, { type: 'send', selectionId: selection.id, agentId, text })
+      const result = await api.browserReviewAction(tabId, {
+        type: 'send', selectionId: selection.id, agentId, text, imageIds: attachments.map(image => image.id)
+      })
       if (result.success) {
+        for (const { id } of attachments) releaseAttachment(id)
+        setAttachments([])
         setDraft('')
         setFeedback({ text: `${recipient.id}에게 수정 요청을 보냈습니다.` })
       } else {
@@ -174,6 +236,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
     } catch {
       setFeedback({ text: '수정 요청을 보내지 못했습니다.', error: true })
     } finally {
+      draftBusy.current = false
       setSending(false)
     }
   }
@@ -318,8 +381,29 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
                   <label htmlFor={draftFieldId}>수정 요청</label>
                   <textarea id={draftFieldId} value={draft} maxLength={4000} disabled={sending}
                     placeholder="예: 이 버튼의 문구를 ‘저장’으로 바꿔줘."
+                    onPaste={pasteImage}
                     onChange={event => { setDraft(event.target.value); setFeedback(null) }} />
-                  <button type="submit" className="browser-review-send" disabled={!selection || !recipient || !draft.trim() || sending}>
+                  {attachments.length > 0 && (
+                    <ul className="browser-review-attachments" aria-label="첨부 이미지">
+                      {attachments.map(({ id, url }, index) => (
+                        <li key={id}>
+                          <img src={url} alt={`첨부 이미지 ${index + 1}`} />
+                          <button type="button" aria-label={`이미지 ${index + 1} 첨부 제거`} title="이미지 첨부 제거"
+                            disabled={sending || readingImages} onClick={() => {
+                              releaseAttachment(id)
+                              setAttachments(current => current.filter(image => image.id !== id))
+                              setFeedback(null)
+                            }}><RiCloseLine aria-hidden="true" /></button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <button type="button" className="browser-review-add-image" disabled={sending || readingImages}
+                    title="이미지 파일을 선택하거나 수정 요청란에 스크린샷을 붙여넣으세요." onClick={() => void addImages('files')}>
+                    <RiImageAddLine aria-hidden="true" />{readingImages ? '이미지 읽는 중…' : '이미지 첨부'}
+                  </button>
+                  <button type="submit" className="browser-review-send"
+                    disabled={!selection || !recipient || (!draft.trim() && !attachments.length) || sending || readingImages}>
                     <RiSendPlane2Line /> {sending ? '보내는 중…' : '에이전트에게 보내기'}
                   </button>
                   {feedback && <p role={feedback.error ? 'alert' : 'status'} className={feedback.error ? 'browser-review-compose-error' : 'browser-review-feedback'}>

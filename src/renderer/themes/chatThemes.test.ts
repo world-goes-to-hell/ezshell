@@ -37,6 +37,13 @@ describe('chat preset motion colors', () => {
     expect(ratio(vars(preset.id)['--on-accent'], preset.colors.accent)).toBeGreaterThanOrEqual(3)
   })
 
+  it.each(CHAT_PRESETS.map(preset => [preset.name, preset] as const))('%s: messages and answer links are readable', (_name, preset) => {
+    const { textPrimary, textLink, bgSecondary } = preset.colors
+    expect(ratio(textPrimary, bgSecondary)).toBeGreaterThanOrEqual(4.5)
+    expect(ratio(textPrimary, preset.outgoing)).toBeGreaterThanOrEqual(4.5)
+    expect(ratio(textLink, bgSecondary)).toBeGreaterThanOrEqual(4.5)
+  })
+
   it('exposes the motion colors as variables for the pane effects', () => {
     const preset = CHAT_PRESETS[0]
     const style = vars(preset.id)
@@ -49,6 +56,13 @@ describe('chat preset motion colors', () => {
 })
 
 describe('app theme used as the chat theme', () => {
+  it.each(['macos-light', 'macos-dark'])('%s uses the window theme’s rounded corners in the chat', id => {
+    const style = vars(id)
+    expect(style['--radius-sm']).toBe('var(--mac-radius-sm)')
+    expect(style['--radius-md']).toBe('var(--mac-radius-md)')
+    expect(style['--radius-lg']).toBe('var(--mac-radius-lg)')
+  })
+
   it('keeps the old trace formula with that theme, not the window theme', () => {
     const theme = PRESET_THEMES.find(item => item.id === 'minimal-light') ?? PRESET_THEMES[0]
     const style = vars(theme.id)
@@ -56,6 +70,7 @@ describe('app theme used as the chat theme', () => {
     expect(style['--chat-focus']).toBe(theme.colors.accent)
     expect(style['--terminal-foreground']).toBe(theme.terminal.foreground)
     expect(style['--chat-trace']).toBeUndefined()
+    expect(style['--radius-md']).toBeUndefined()
   })
 
   it('following the app theme sets nothing', () => {

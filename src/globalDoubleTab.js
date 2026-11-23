@@ -11,6 +11,7 @@
 // It also tells where the program in front was: "double <x> <y>", the middle of that window in screen
 // pixels (read before ezShell comes forward), so the overview opens on the monitor the user is working on
 // (2026-11-22 user report: it opened on ezShell's monitor). Nothing else about that window.
+// The same hook reports "capture" when Ctrl, Win and Alt were held together and then released.
 // Off while the app is locked (`off` on its input), and it ends when main goes (its input closes).
 // Windows only: elsewhere a global key watch needs a permission the user grants by hand.
 
@@ -53,6 +54,9 @@ public static class EzShellDoubleTab {
   static long lastTab = -1;
   static bool tabDown;
   static bool swallowUp;
+  static int modifiers;
+  static bool captureArmed;
+  static bool captureBlocked;
   // Tests only (set by reflection): report without touching the desktop
   static bool dryRun = false;
   static readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
@@ -81,6 +85,28 @@ public static class EzShellDoubleTab {
 
   static bool Pressed(int vk) { return GetAsyncKeyState(vk) < 0; }
 
+  // In WH_KEYBOARD_LL, GetAsyncKeyState still reflects the state before the current event.
+  static bool PressedAfter(int vk, uint changed, bool down) { return vk == changed ? down : Pressed(vk); }
+  static int ModifierMask(uint changed, bool down) {
+    return (PressedAfter(0xA2, changed, down) || PressedAfter(0xA3, changed, down) ? 1 : 0)
+      | (PressedAfter(0x5B, changed, down) || PressedAfter(0x5C, changed, down) ? 2 : 0)
+      | (PressedAfter(0xA4, changed, down) || PressedAfter(0xA5, changed, down) ? 4 : 0)
+      | (PressedAfter(0xA0, changed, down) || PressedAfter(0xA1, changed, down) ? 8 : 0);
+  }
+
+  static bool CaptureGesture(int held, bool modifier, bool down) {
+    if (!enabled || held == 0) {
+      bool fire = enabled && modifier && !down && captureArmed && !captureBlocked;
+      captureArmed = false;
+      captureBlocked = false;
+      return fire;
+    }
+    // A fourth key makes this an ordinary Windows shortcut. Wait for all modifiers before rearming.
+    if ((held & 8) != 0 || (!modifier && down)) captureBlocked = true;
+    if (held == 7 && modifier && down && !captureBlocked) captureArmed = true;
+    return false;
+  }
+
   static bool AppInFront() {
     uint pid;
     GetWindowThreadProcessId(GetForegroundWindow(), out pid);
@@ -95,6 +121,11 @@ public static class EzShellDoubleTab {
     bool up = message == 0x101 || message == 0x105;
     // Injected keys (automation, our own Alt tap) never count
     if ((key.flags & 0x10) != 0) return CallNextHookEx(hook, code, wParam, lParam);
+    if (down || up) {
+      bool modifierKey = key.vk == 0x5B || key.vk == 0x5C || (key.vk >= 0xA0 && key.vk <= 0xA5);
+      if (modifierKey) modifiers = ModifierMask(key.vk, down);
+      if (CaptureGesture(modifiers, modifierKey, down)) ThreadPool.QueueUserWorkItem(_ => ReportCapture());
+    }
     if (key.vk != 9) {
       if (down) lastTab = -1;
       return CallNextHookEx(hook, code, wParam, lParam);
@@ -120,6 +151,11 @@ public static class EzShellDoubleTab {
     }
     lastTab = now;
     return CallNextHookEx(hook, code, wParam, lParam);
+  }
+
+  static void ReportCapture() {
+    Console.Out.WriteLine("capture");
+    Console.Out.Flush();
   }
 
   // The middle of the window that was in front, in physical screen pixels (main turns them into its own)
@@ -164,7 +200,7 @@ function handleNumber(buffer) {
  * @param {(point: { x: number, y: number } | null) => void} deps.onDoubleTab two Tabs while another program
  *   was in front (ezShell is in front now), with the middle of that program's window in screen pixels
  */
-function createGlobalDoubleTab({ onDoubleTab, platform = process.platform, spawn = spawnProcess, env = process.env }) {
+function createGlobalDoubleTab({ onDoubleTab, onCapture = () => {}, platform = process.platform, spawn = spawnProcess, env = process.env }) {
   let child = null
   let enabled = false
   let restarts = 0
@@ -191,6 +227,10 @@ function createGlobalDoubleTab({ onDoubleTab, platform = process.platform, spawn
           restarts = 0
           send(enabled ? 'on' : 'off')
         } else if (enabled) {
+          if (line === 'capture') {
+            onCapture()
+            continue
+          }
           const double = DOUBLE_LINE.exec(line)
           if (double) onDoubleTab(double[1] === undefined ? null : { x: Number(double[1]), y: Number(double[2]) })
         }

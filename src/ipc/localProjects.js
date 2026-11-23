@@ -8,6 +8,8 @@ const { createDirectorySearch } = require('../localFiles/search.js')
 const exec = promisify(execFile)
 const DIRECTORY_LIMIT = 1000
 const COMMIT_LIMIT = 100
+const REPOSITORY_SCAN_LIMIT = 512
+const REPOSITORY_SCAN_SKIP = new Set(['.git', 'node_modules'])
 const LOG_OPTIONS = ['log', '-z', '--no-color', '--no-show-signature', '--decorate=short', '--encoding=UTF-8', '--format=%H%x00%P%x00%h%x00%an%x00%aI%x00%s%x00%D']
 
 async function git(cwd, args, { timeout = 15000, signal } = {}) {
@@ -27,6 +29,27 @@ function parseWorktrees(output) {
   })
 }
 
+const listWorktrees = root => git(root, ['worktree', 'list', '--porcelain', '-z']).then(parseWorktrees)
+
+async function findNestedRepositories(root) {
+  const directories = [root]
+  const repositories = []
+  // Read nearby folders first. Symlinks and dependency trees are excluded from discovery.
+  for (const directory of directories) {
+    const real = await fs.promises.realpath(directory).catch(() => null)
+    if (!real || path.relative(directory, real) !== '') continue
+    const entries = await fs.promises.readdir(real, { withFileTypes: true }).catch(() => [])
+    if (directory !== root && entries.some(entry => entry.name === '.git' && (entry.isDirectory() || entry.isFile()))) {
+      repositories.push(real)
+    }
+    for (const entry of entries) {
+      if (directories.length >= REPOSITORY_SCAN_LIMIT) break
+      if (entry.isDirectory() && !REPOSITORY_SCAN_SKIP.has(entry.name.toLowerCase())) directories.push(path.join(real, entry.name))
+    }
+  }
+  return repositories
+}
+
 async function inspectLocalProject(folder) {
   const cwd = requireLocalDirectory(folder)
   let root
@@ -37,7 +60,7 @@ async function inspectLocalProject(folder) {
     if (error.code === 128) return { repo: null, gitMissing: false }
     throw error
   }
-  const worktrees = parseWorktrees(await git(root, ['worktree', 'list', '--porcelain', '-z']))
+  const worktrees = await listWorktrees(root)
   const branch = worktrees.find(tree => path.relative(root, tree.path) === '')?.branch ?? null
   return { repo: { root, branch, worktrees }, gitMissing: false }
 }
@@ -56,7 +79,7 @@ async function listWorkspaceDirectory(folder) {
   }
 }
 
-async function readWorkspaceGit(folder) {
+async function readWorkspaceGit(folder, includeAllBranches = false) {
   const cwd = requireLocalDirectory(folder)
   let root
   try {
@@ -67,20 +90,29 @@ async function readWorkspaceGit(folder) {
     throw error
   }
 
-  const head = await git(root, ['rev-parse', '--verify', '--quiet', 'HEAD']).then(text => text.trim(), error => {
-    if (error.code === 1) return null
-    throw error
-  })
-  const branch = await git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']).then(text => text.trim(), error => {
-    if (error.code === 1) return null
-    throw error
-  })
-  const log = await git(root, [
-    ...LOG_OPTIONS, '--all', '--topo-order', `--max-count=${COMMIT_LIMIT + 1}`,
-    ...(head ? ['HEAD'] : []), '--'
+  const [head, branch, worktrees, nested] = await Promise.all([
+    git(root, ['rev-parse', '--verify', '--quiet', 'HEAD']).then(text => text.trim(), missingHead),
+    git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']).then(text => text.trim(), missingHead),
+    listWorktrees(root).catch(() => []),
+    findNestedRepositories(root)
   ])
+  const current = worktrees.findIndex(tree => path.relative(root, tree.path) === '')
+  const active = { path: root, branch }
+  if (current < 0) worktrees.unshift(active)
+  else worktrees[current] = active
+  const nestedRepositories = nested.filter(folder => !worktrees.some(tree => path.relative(folder, tree.path) === ''))
+  const allBranches = includeAllBranches || worktrees.length < 2
+  const refs = [...(allBranches ? ['--all'] : []), ...(head ? ['HEAD'] : [])]
+  const log = refs.length ? await git(root, [
+    ...LOG_OPTIONS, '--topo-order', `--max-count=${COMMIT_LIMIT + 1}`, ...refs, '--'
+  ]) : ''
   const commits = parseCommits(log)
-  return { repo: { root, head, branch, commits: commits.slice(0, COMMIT_LIMIT), hasMore: commits.length > COMMIT_LIMIT } }
+  return { repo: { root, head, branch, worktrees, nestedRepositories, allBranches, commits: commits.slice(0, COMMIT_LIMIT), hasMore: commits.length > COMMIT_LIMIT } }
+}
+
+function missingHead(error) {
+  if (error.code === 1) return null
+  throw error
 }
 
 function parseCommits(log) {
@@ -93,12 +125,10 @@ function parseCommits(log) {
   return commits
 }
 
-async function searchWorkspaceGit(root, query, signal) {
-  const head = await git(root, ['rev-parse', '--verify', '--quiet', 'HEAD'], { signal }).then(text => text.trim(), error => {
-    if (error.code === 1) return ''
-    throw error
-  })
-  const filters = ['--all', '--date-order', '--fixed-strings', '--regexp-ignore-case', `--max-count=${COMMIT_LIMIT + 1}`]
+async function searchWorkspaceGit(root, query, signal, worktreeOnly) {
+  const head = await git(root, ['rev-parse', '--verify', '--quiet', 'HEAD'], { signal }).then(text => text.trim(), missingHead)
+  if (worktreeOnly && !head) return { commits: [], hasMore: false }
+  const filters = [...(worktreeOnly ? [] : ['--all']), '--date-order', '--fixed-strings', '--regexp-ignore-case', `--max-count=${COMMIT_LIMIT + 1}`]
   const search = option => git(root, ['--no-pager', ...LOG_OPTIONS, ...filters, option, ...(head ? [head] : []), '--'], { signal }).then(parseCommits)
 
   const prefix = query.toLowerCase()
@@ -109,6 +139,13 @@ async function searchWorkspaceGit(root, query, signal) {
       throw error
     })
     if (!resolved.startsWith(prefix)) return []
+    if (worktreeOnly) {
+      const reachable = await git(root, ['merge-base', '--is-ancestor', resolved, head], { signal }).then(() => true, error => {
+        if (error.code === 1) return false
+        throw error
+      })
+      if (!reachable) return []
+    }
     return parseCommits(await git(root, ['--no-pager', ...LOG_OPTIONS, '--max-count=1', resolved, '--'], { signal }))
   }
 
@@ -175,7 +212,7 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
   }
   const handleSearch = (channel, fallback, run) => {
     let pending
-    handle(channel, fallback, async ({ root, query } = {}) => {
+    handle(channel, fallback, async ({ root, query, worktreeOnly } = {}) => {
       const term = requireSearchQuery(query)
       const generation = searchGeneration
       pending?.abort()
@@ -185,7 +222,7 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
         const folder = await roots.resolveRoot(root)
         controller.signal.throwIfAborted()
         checkSearch(generation)
-        const result = await run(folder, term, controller.signal)
+        const result = await run(folder, term, controller.signal, worktreeOnly === true)
         checkSearch(generation)
         return result
       } finally {
@@ -209,7 +246,11 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
     handle('workspace-git-diff', '변경 내용을 읽지 못했습니다.', async ({ root, hash, file } = {}) =>
       localGit.fileDiff(await roots.resolveRoot(root), { hash: hash || undefined, file }))
   }
-  handle('workspace-git-log', 'Git 기록을 읽지 못했습니다.', readWorkspaceGit)
+  handle('workspace-git-log', 'Git 기록을 읽지 못했습니다.', async input => {
+    const { folder, allBranches } = typeof input === 'string' ? { folder: input } : input ?? {}
+    const cwd = roots ? await roots.resolveRoot(folder, { refreshWorktreesOnMiss: true }) : folder
+    return readWorkspaceGit(cwd, allBranches === true)
+  })
   if (roots) {
     handle('workspace-directory-prepare', '폴더를 검색하지 못했습니다.', async ({ root, refresh } = {}) => {
       const generation = searchGeneration

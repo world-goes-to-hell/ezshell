@@ -43,6 +43,7 @@ export function BrowserReviewHistory() {
                     <span className="browser-review-history-status" data-status={status}>{statusLabels[status]}</span>
                     <small className="browser-review-history-meta">
                       {message.to} · <time dateTime={new Date(message.sentAt).toISOString()}>{dateTime.format(message.sentAt)}</time>
+                      {!!request.imageCount && ` · 이미지 ${request.imageCount}장`}
                     </small>
                   </summary>
                   <div className="browser-review-history-detail">

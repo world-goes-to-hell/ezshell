@@ -114,6 +114,10 @@
 
 .workspace-browser-header > svg { flex: none; }
 
+.workspace-git-picker { flex: 1; min-width: 0; }
+.workspace-git-picker .select-menu-trigger { width: 100%; font: 11px var(--font-mono); }
+.workspace-git-picker .select-menu-trigger > svg { flex: none; }
+
 .workspace-browser-path,
 .workspace-branch,
 .workspace-file > span,

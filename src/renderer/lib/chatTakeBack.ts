@@ -1,7 +1,22 @@
-// Esc in the chat view while a sent line waited: the CLI cancels its turn and puts the queued line(s) back
-// into its composer a moment later (2026-11-22 user report: the line stayed there, the chat box stayed
-// empty, and the next send was refused because the composer was not empty). Asks main to clear the
-// composer until the CLI has put the lines back; main clears only an exact match.
+import type { AgentChatItem } from '../types'
+import { waitingItemIds, type ChatEcho } from './agentChatItems'
+import { isSlashCommand } from './slashCommands'
+
+/** Use the current chat's own text. Queued lines get priority over the turn being interrupted. */
+export function chatLinesToTakeBack(items: readonly AgentChatItem[], echoes: readonly ChatEcho[], held: readonly string[]) {
+  const waiting = waitingItemIds(items, echoes, held, 'working')
+  const eligible = (item: AgentChatItem) => {
+    const echo = echoes.find(echo => echo.id === item.id)
+    const text = echo?.text ?? item.text
+    const sentAt = echo?.time ?? item.sentAt
+    if (sentAt === undefined || !text?.trim() || item.inboxNotice || item.hasImage || echo?.hasImage) return []
+    if (!waiting.has(item.id) && isSlashCommand(text)) return []
+    return [{ id: item.id, text, sentAt, optimistic: Boolean(echo) }]
+  }
+  if (waiting.size) return { queued: true, lines: items.filter(item => waiting.has(item.id)).flatMap(eligible) }
+  const latest = [...items].reverse().find(item => item.kind === 'user' || item.interrupted)
+  return { queued: false, lines: latest?.kind === 'user' ? eligible(latest) : [] }
+}
 
 type TakeBack = (texts: string[]) => Promise<{ ok: boolean; reason?: string }>
 
@@ -16,7 +31,7 @@ export interface TakeBackOptions {
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
-/** True once main cleared the composer of exactly these lines */
+/** The CLI may redraw the recovered lines a moment after Esc. Main clears only an exact match. */
 export async function takeBackQueued(take: TakeBack, texts: string[], { tries = 12, delayMs = 200, wait = sleep }: TakeBackOptions = {}): Promise<boolean> {
   if (!texts.length) return false
   for (let attempt = 0; attempt < tries; attempt++) {

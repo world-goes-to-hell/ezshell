@@ -28,7 +28,7 @@ const SESSION = 'e2e-project-server'
   await unlock(driver)
   // The test server's host key is trusted once (this also leaves a quick connect tab open)
   check('a quick connect tab to the test server opens', await connectSsh(driver))
-  const saved = await js(`window.electronAPI.saveSessions([{ id: '${SESSION}', name: '프로젝트 서버', host: '127.0.0.1', port: ${port}, username: 'tester', authType: 'password', password: 'x', icon: 'server' }])`)
+  const saved = await js(`window.electronAPI.saveSessions([{ id: '${SESSION}', name: '프로젝트 서버', host: '127.0.0.1', port: ${port}, username: 'tester', authType: 'password', password: 'x', icon: 'server', backgroundColor: '#22c55e' }])`)
   check('a saved session is written', saved?.success === true, JSON.stringify(saved))
   await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([folder]))})`)
   await send('Page.reload')
@@ -40,6 +40,13 @@ const SESSION = 'e2e-project-server'
 
   await dropOnProject(`session:${SESSION}`)
   check('a session dropped on the project shows under it as a server', await until(`${serverRows}.length === 1 && ${serverRows}[0].textContent.includes('프로젝트 서버')`, 5000))
+  // 2026-11-22 user request: the color given to the session shows in the local work tree too
+  check('the server row shows the session color (bar and icon)', await until(`(() => {
+    const row = ${serverRows}[0]
+    const icon = row?.querySelector('.local-server-icon')
+    return row?.style.getPropertyValue('--server-color') === '#22c55e' && getComputedStyle(icon).color === 'rgb(34, 197, 94)'
+      && getComputedStyle(row, '::before').backgroundColor === 'rgb(34, 197, 94)'
+  })()`, 3000))
   check('with no tab open it is grey', await js(`!${serverRows}[0].querySelector('.local-server-dot').matches('.is-on, .is-off')`))
 
   await js(`${serverRows}[0].querySelector('.local-server-open').click()`)
@@ -157,6 +164,8 @@ const SESSION = 'e2e-project-server'
     !${otherRow}.textContent.includes('터미널 1') &&
     !!${otherRow}.querySelector(${JSON.stringify(`.local-terms-list [data-work-tab-id="${pickedTab}"]`)})
   `), await js(`${otherRow}?.outerHTML.slice(0, 600) ?? 'no row'`))
+  check('an SSH tab of the work keeps its session color in the tree', await until(`[...document.querySelectorAll('.local-terms-item[data-work-tab-id]')]
+    .some(item => item.style.getPropertyValue('--server-color') === '#22c55e')`, 3000))
   await shot('ssh-project-servers-2-terminal-and-server')
   check('the local server assignment is saved under the work that opened it', await js(`
     Object.values(JSON.parse(localStorage.getItem('ezshell.localProjectServers') ?? '{}')).filter(ids => ids.includes(${JSON.stringify(SESSION)})).length === 2

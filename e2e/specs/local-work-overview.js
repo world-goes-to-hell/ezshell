@@ -84,6 +84,12 @@ const { check, finish } = createChecks()
   `))
   await driver.shot('local-work-overview')
   const screen = `${pane('codex-1')}?.querySelector('.xterm-screen')`
+  await move(...await center(q('.work-overview-preview .work-overview-header')))
+  await move(...await center(screen))
+  await sleep(2700)
+  const stillPreviewing = await js(`${preview}?.contains(${pane('codex-1')}) === true`)
+  check('moving from the preview header into the terminal keeps it open without a click', stillPreviewing)
+  if (!stillPreviewing) throw new Error('The preview closed while the pointer was inside the terminal')
   await click(...await center(screen))
   const inputPath = path.join(profile, codexShell.replace(':', '-') + '-input')
   const readInput = () => fs.existsSync(inputPath) ? fs.readFileSync(inputPath, 'utf8') : ''
@@ -93,12 +99,23 @@ const { check, finish } = createChecks()
   for (let attempt = 0; attempt < 20 && !readInput().slice(offset).includes('preview answer\r'); attempt++) await sleep(100)
   check('typing and Enter in the temporary view reach the selected shell', readInput().slice(offset).includes('preview answer\r'))
   check('interacting with the preview keeps the other workspace active', await js(`${activeTab} === ${JSON.stringify(claudeTab)}`))
+  const background = await js('[innerWidth / 2, innerHeight - 24]')
+  await move(...background)
+  await sleep(650)
+  check('leaving the preview keeps it open while its input has focus', await js(`
+    ${preview}?.contains(document.activeElement) && ${preview}.contains(${pane('codex-1')})
+  `))
 
   await esc()
   check('Escape returns the same terminal node to its regular tab and back to the list', await until(`
     ${dialog} && !${preview} && window.overviewTestPane === ${pane('codex-1')} && ${pane('codex-1')}?.closest('.terminal-wrapper') &&
     document.activeElement === ${row('codex-1')} && ${activeTab} === ${JSON.stringify(claudeTab)}
   `))
+  await move(...await center(row('codex-1')))
+  await until(`${preview}?.contains(${pane('codex-1')})`)
+  await move(...await center(screen))
+  await move(...background)
+  check('leaving an unfocused terminal preview returns to the list', await until(`${dialog} && !${preview}`))
   await click(...await center(row('codex-1')))
   check('click switches workspaces and focuses the selected agent', await until(`
     !${dialog} && ${activeTab} === ${JSON.stringify(codexTab)} && ${pane('codex-1')}?.contains(document.activeElement)

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification, Menu, clipboard, nativeImage, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification, Menu, clipboard, ClipboardItem, nativeImage, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const userDataDir = require('./src/userDataDir.js');
@@ -351,6 +351,7 @@ function createWindow() {
     startupSplash.dismiss();
   }, 20000);
   win.once('closed', () => {
+    quickCapture.cancel();
     starting = false;
     clearTimeout(startupTimeout);
     startupSplash.dismiss();
@@ -565,11 +566,31 @@ const workOverview = require('./src/ipc/workOverview.js').registerWorkOverviewIp
   getWindow: () => mainWindow,
   isLocked: () => isAppLocked
 });
+let shortcutRecorder = null;
+ipcMain.on('shortcut-recording', (event, recording) => {
+  if (fromMainWindow(event)) shortcutRecorder = recording === true ? event.sender : null;
+});
+const quickCapture = require('./src/quickCapture.js').createQuickCapture({
+  BrowserWindow,
+  clipboard,
+  ClipboardItem,
+  desktopCapturer: require('electron').desktopCapturer,
+  getDisplay: () => {
+    const { screen } = require('electron');
+    return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  },
+  isAvailable: () => process.platform === 'win32' && !isAppLocked && mainWindow && !mainWindow.isDestroyed()
+    && !(mainWindow.isFocused() && shortcutRecorder === mainWindow.webContents),
+  onError: () => {
+    if (Notification.isSupported()) new Notification({ title: 'ezShell 영역 캡처', body: '화면을 캡처하지 못했습니다.' }).show();
+  }
+});
 // Tab Tab from any program: the helper brought ezShell forward, the window opens its work overview.
 // Off while locked (every key goes through untouched); looked at each second instead of at each lock site.
 // The overview opens on the monitor of the program that was in front (the helper gives the middle of
 // its window in screen pixels), not on ezShell's.
 const globalDoubleTab = require('./src/globalDoubleTab.js').createGlobalDoubleTab({
+  onCapture: () => { void quickCapture.start(); },
   onDoubleTab: point => {
     if (!mainWindow || mainWindow.isDestroyed() || isAppLocked) return;
     const { screen } = require('electron');
@@ -581,7 +602,10 @@ const globalDoubleTab = require('./src/globalDoubleTab.js').createGlobalDoubleTa
   }
 });
 setInterval(() => globalDoubleTab.setEnabled(!isAppLocked && Boolean(mainWindow) && !mainWindow.isDestroyed()), 1000).unref();
-app.on('will-quit', () => globalDoubleTab.stop());
+app.on('will-quit', () => {
+  globalDoubleTab.stop();
+  quickCapture.cancel();
+});
 const sendToLocalWindow = (channel, payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 };
@@ -600,6 +624,15 @@ const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages(
   bindLocalAgent: request => localShells?.bindAgentProcess(request),
   bridgeFile: agentBridgeFile
 });
+const localTerminalClipboard = require('./src/ipc/localTerminalClipboard.js').createLocalTerminalClipboard(clipboard, nativeImage);
+async function selectAgentImages(title) {
+  const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
+    title,
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: '이미지', extensions: ['png', 'jpg', 'jpeg'] }]
+  });
+  return canceled ? [] : filePaths;
+}
 const browserReview = require('./src/ipc/browserReview.js').registerBrowserReview({
   fromMainWindow: event => !isAppLocked && fromMainWindow(event),
   fromTerminalWindow: event => !isAppLocked && Array.from(terminalWindows.values()).some(win => !win.isDestroyed() && win.webContents === event.sender),
@@ -610,6 +643,8 @@ const browserReview = require('./src/ipc/browserReview.js').registerBrowserRevie
     .filter(agent => agent.active && (agent.mcpConnected || agent.sleeping) && localShells?.isRunning(agent.shellId))
     .map(({ id, kind, cwd, status }) => ({ id, kind, cwd, status })),
   sendMessage: agentMessages.sendAsUser,
+  clipboard: localTerminalClipboard,
+  selectImages: () => selectAgentImages('수정 요청에 이미지 첨부'),
   openExternal: url => shell.openExternal(url)
 });
 const { installAgentMessageMcp } = require('./src/ipc/agentMessageSetup.js');
@@ -687,7 +722,6 @@ ipcMain.on('local-shell-composing', (event, { id, value }) => {
 });
 ipcMain.on('local-shell-resize', (event, { id, cols, rows }) => { if (fromMainWindow(event)) localShells?.resize(id, cols, rows); });
 ipcMain.on('local-shell-close', (event, id) => { if (fromMainWindow(event)) localShells?.close(id); });
-const localTerminalClipboard = require('./src/ipc/localTerminalClipboard.js').createLocalTerminalClipboard(clipboard, nativeImage);
 ipcMain.handle('local-shell-clipboard', async (event, id) => {
   const canPaste = () => fromMainWindow(event) && !isAppLocked && localShells?.isRunning(id);
   const empty = { success: true, text: '' };
@@ -762,13 +796,15 @@ const agentChats = require('./src/agentChat/chats.js').createAgentChats({
     if (!running) return null;
     const approval = localShells.approvalOf(shellId);
     const codexSpeed = running.kind === 'codex' ? localShells.codexSpeedOf(shellId) : null;
+    const backgroundShellCount = running.kind === 'claude' ? localShells.backgroundShellCountOf(shellId) : null;
     const agent = agentMessages.snapshot().agents.filter(item => item.active && item.shellId === shellId && item.kind === running.kind).at(-1);
-    if (!agent) return { kind: running.kind, approval, codexSpeed };
+    if (!agent) return { kind: running.kind, approval, codexSpeed, backgroundShellCount };
     const usage = agentMessages.usageSnapshot().find(item => item.agentId === agent.id)?.usage;
     return {
       kind: running.kind,
       approval,
       codexSpeed,
+      backgroundShellCount,
       cwd: agent.cwd ?? null,
       sessionId: usage?.sessionId ?? agent.resumeId ?? null,
       file: running.kind === 'codex' ? codexUsageWatcher.fileOf(agent.id) : null
@@ -780,14 +816,7 @@ const agentChatPins = require('./src/agentChat/pins.js').createPins({ createWind
 const agentChatIpc = require('./src/agentChat/ipc.js').registerAgentChatIpc({
   ipcMain, fromMainWindow, isLocked: () => isAppLocked, chats: agentChats, shells: () => localShells,
   clipboard: localTerminalClipboard,
-  selectImages: async () => {
-    const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
-      title: '채팅에 이미지 첨부',
-      properties: ['openFile', 'multiSelections'],
-      filters: [{ name: '이미지', extensions: ['png', 'jpg', 'jpeg'] }]
-    });
-    return canceled ? [] : filePaths;
-  },
+  selectImages: () => selectAgentImages('채팅에 이미지 첨부'),
   pins: agentChatPins,
   showShell: (shellId) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -1034,6 +1063,7 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   forgetCommandHistory();
   currentMasterPassword = null;
   isAppLocked = true;
+  quickCapture.cancel();
   browserReview.close();
   mcpSessionsCache = null;
   mcpController?.onLocked();
@@ -1122,6 +1152,7 @@ ipcMain.handle('reset-master-password', async () => {
 
   currentMasterPassword = null;
   isAppLocked = true;
+  quickCapture.cancel();
   browserReview.close();
   mcpSessionsCache = null;
   mcpController?.onLocked();

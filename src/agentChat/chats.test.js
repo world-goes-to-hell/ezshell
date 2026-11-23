@@ -133,6 +133,44 @@ describe('following a chat view\'s transcript', () => {
     await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ state: 'ended' }))
   })
 
+  it('shows a Shell count from the footer before a transcript can be opened', async () => {
+    target = { kind: 'claude', backgroundShellCount: 1 }
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.find(frame => frame.backgroundShells)).toMatchObject({
+      backgroundShells: { count: 1, jobs: [] }
+    }))
+    target.backgroundShellCount = 0
+    chats.tick()
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ backgroundShells: null }))
+  })
+
+  it('follows a running shell from the transcript without treating its launch result as completion', async () => {
+    const record = value => JSON.stringify(value) + '\n'
+    const call = record({ type: 'assistant', uuid: 'launch', message: { content: [{
+      type: 'tool_use', name: 'Bash', id: 'toolu_server',
+      input: { command: 'npm run dev', description: '로컬 서버 시작', run_in_background: true }
+    }] } })
+    const result = record({ type: 'user', uuid: 'background', toolUseResult: { backgroundTaskId: 'task-server' }, message: {
+      content: [{ type: 'tool_result', tool_use_id: 'toolu_server', content: 'Command running in background' }]
+    } })
+    const filler = record({ type: 'attachment', attachment: { text: 'x'.repeat(1000) } })
+    fs.writeFileSync(file, call + result + filler.repeat(2200) + answer('a1', '서버를 시작했습니다'))
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({
+      backgroundShells: { count: 1, jobs: [{ id: 'task-server', command: 'npm run dev', description: '로컬 서버 시작' }] }
+    }))
+    expect(texts(frames.find(frame => frame.reset))).toEqual(['서버를 시작했습니다'])
+    fs.appendFileSync(file, record({
+      type: 'attachment', attachment: { type: 'queued_command', origin: { kind: 'task-notification' },
+        prompt: '<task-notification><task-id>task-server</task-id><status>completed</status></task-notification>' }
+    }))
+    chats.tick()
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ backgroundShells: null }))
+    await chats.older('local:1')
+    expect(frames.at(-1)).toMatchObject({ older: true })
+    expect(frames.at(-1)).not.toHaveProperty('backgroundShells')
+  })
+
   it('indexes earlier questions by identity and reads their context without replacing the live view', async () => {
     const filler = JSON.stringify({ type: 'attachment', attachment: { text: '한글'.repeat(1600) } }) + '\n'
     fs.writeFileSync(file, filler.repeat(33) + prompt('old', '같은 질문') + answer('old-a', '먼저 받은 답변')

@@ -90,6 +90,7 @@ function isEchoOf(item: AgentChatItem, echo: ChatEcho, reset: boolean): boolean 
   if (item.time === null ? reset : item.time < echo.time - 1000) return false
   const message = item.text?.replace(/\r\n?/g, '\n').trim() ?? ''
   if (!echo.hasImage) return !item.hasImage && message === echo.text
+  if (item.hasImage && message === echo.text) return true
 
   const tokens = NATIVE_IMAGE_PREFIX.exec(message)?.[0]
   const text = tokens ? message.slice(tokens.length) : message

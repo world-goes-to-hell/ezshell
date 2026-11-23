@@ -23,7 +23,7 @@ const categoryLabels: Record<ShortcutCategory, string> = {
 }
 
 /**
- * The app's shortcuts, each of which can be changed: press 바꾸기 (or the keys shown), then the new
+ * The app's shortcuts: press the keys shown for an editable shortcut, then the new
  * combination. Esc cancels. A combination another shortcut uses, or one the system needs, is refused
  * with the reason (lib/shortcutCapture.ts).
  */
@@ -55,6 +55,7 @@ export function ShortcutsPanel() {
   // the search box or close the settings. Capture phase, before the app's own shortcut handler.
   useEffect(() => {
     if (!recordingId) return
+    window.electronAPI.setShortcutRecording?.(true)
     const onKeyDown = (event: KeyboardEvent) => {
       event.preventDefault()
       event.stopImmediatePropagation()
@@ -83,7 +84,10 @@ export function ShortcutsPanel() {
       setProblem(null)
     }
     window.addEventListener('keydown', onKeyDown, true)
-    return () => window.removeEventListener('keydown', onKeyDown, true)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      window.electronAPI.setShortcutRecording?.(false)
+    }
   }, [recordingId, onMac, setCustomBinding, resetCustomBinding])
 
   const hasCustomBindings = Object.keys(customBindings).length > 0
@@ -142,7 +146,7 @@ export function ShortcutsPanel() {
 
       <p className="shortcuts-hint">
         단축키를 누르면 바꿀 수 있습니다. 새 키 조합을 누르면 저장되고, <kbd>Esc</kbd> 로 취소합니다.
-        {onMac ? ' Mac 에서는 Command(⌘) 키와 함께 씁니다.' : ''} 터미널에 입력 중일 때는 명령 팔레트 단축키만 동작합니다.
+        {onMac ? ' Mac 에서는 Command(⌘) 키와 함께 씁니다.' : ''}
       </p>
 
       <div className="shortcuts-list">
@@ -174,12 +178,13 @@ export function ShortcutsPanel() {
                     >
                       <div className="shortcut-info">
                         <div className="shortcut-description">{shortcut.description}</div>
+                        {shortcut.fixed && <div className="shortcut-action">Windows 전역 · 세 키를 뗄 때 실행</div>}
                         {isCustom && <div className="shortcut-action">직접 바꿈 · 기본값 {shortcutKeyLabels(shortcut.keys, onMac).join('+')}</div>}
                         {isRecording && problem && <div className="shortcut-problem" role="alert">{problem}</div>}
                       </div>
 
                       <div className="shortcut-binding">
-                        <button
+                        {shortcut.fixed ? renderKeys(effectiveKeys) : <button
                           type="button"
                           className={`shortcut-change-btn${isRecording ? ' is-recording' : ''}`}
                           onClick={() => startRecording(shortcut.id)}
@@ -187,7 +192,7 @@ export function ShortcutsPanel() {
                           title={isRecording ? '취소하려면 다시 누르거나 Esc' : '눌러서 단축키 바꾸기'}
                         >
                           {isRecording ? <span className="shortcut-recording">새 키를 누르세요…</span> : <>{renderKeys(effectiveKeys)}<RiEditLine size={14} className="shortcut-edit-icon" /></>}
-                        </button>
+                        </button>}
                         {isCustom && !isRecording && (
                           <button className="shortcut-reset-btn" onClick={() => resetCustomBinding(shortcut.id)} title="기본값으로 되돌리기" aria-label="기본값으로 되돌리기">
                             <RiRestartLine size={16} />

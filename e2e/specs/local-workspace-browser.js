@@ -2,19 +2,23 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
-const { connect, createChecks, unlock } = require('../support/driver')
+const { connect, createChecks, unlock, SET } = require('../support/driver')
 
 const { check, finish } = createChecks()
 
 ;(async () => {
   const repo = path.join(process.env.E2E_PROFILE, 'workspace repo')
   const nested = path.join(repo, 'nested folder')
+  const backend = path.join(repo, 'checkouts', 'backend')
+  const frontend = path.join(process.env.E2E_PROFILE, 'frontend')
+  const frontendRepo = path.join(repo, 'frontend')
   fs.mkdirSync(nested, { recursive: true })
   fs.writeFileSync(path.join(repo, 'README.md'), 'main folder')
   fs.writeFileSync(path.join(nested, 'nested.txt'), 'nested folder')
-  const git = (...args) => execFileSync('git', ['-c', 'user.name=Workspace Test', '-c', 'user.email=workspace@example.invalid', ...args], {
-    cwd: repo, stdio: 'pipe', windowsHide: true
+  const gitIn = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=Workspace Test', '-c', 'user.email=workspace@example.invalid', ...args], {
+    cwd, stdio: 'pipe', windowsHide: true, encoding: 'utf8'
   })
+  const git = (...args) => gitIn(repo, ...args)
   git('init', '-b', 'main')
   git('add', '.')
   git('commit', '-m', 'Create workspace')
@@ -23,6 +27,13 @@ const { check, finish } = createChecks()
   git('switch', 'main')
   git('commit', '--allow-empty', '-m', 'Update main')
   git('merge', '--no-ff', 'feature', '-m', 'Merge feature')
+  fs.appendFileSync(path.join(repo, '.git', 'info', 'exclude'), '\n/checkouts/\n/frontend/\n')
+  git('worktree', 'add', '-b', 'backend', '--', backend)
+  gitIn(backend, 'commit', '--allow-empty', '-m', 'Backend checkout commit')
+  fs.writeFileSync(path.join(backend, 'backend-draft.txt'), 'backend changes')
+  fs.mkdirSync(frontendRepo)
+  gitIn(frontendRepo, 'init', '-b', 'frontend-main')
+  gitIn(frontendRepo, 'commit', '--allow-empty', '-m', 'Independent frontend repository')
 
   const driver = await connect()
   const { js, until, send } = driver
@@ -57,9 +68,10 @@ const { check, finish } = createChecks()
     `))
 
     await js(`document.querySelector('.local-terminal-host .xterm-helper-textarea').focus()`)
-    const cd = process.platform === 'win32'
-      ? `Set-Location -LiteralPath '${nested.replace(/'/g, "''")}'`
-      : `cd -- '${nested.replace(/'/g, "'\\''")}'`
+    const cdTo = folder => process.platform === 'win32'
+      ? `Set-Location -LiteralPath '${folder.replace(/'/g, "''")}'`
+      : `cd -- '${folder.replace(/'/g, "'\\''")}'`
+    const cd = cdTo(nested)
     await send('Input.insertText', { text: cd })
     await driver.enter()
     check('cd updates the directory and replaces the files shown', await until(`
@@ -75,9 +87,49 @@ const { check, finish } = createChecks()
         rows[0].querySelectorAll('path[data-segment=parent]').length === 2
     })()`))
     git('commit', '--allow-empty', '-m', 'Refresh this commit')
-    await js(`document.querySelector('.workspace-browser-header button').click()`)
+    const mainOnlyHash = git('rev-parse', '--short', 'HEAD').trim()
+    git('worktree', 'add', '-b', 'frontend', '--', frontend)
+    gitIn(frontend, 'commit', '--allow-empty', '-m', 'Frontend checkout commit')
+    await js(`document.querySelector('.workspace-browser-header [aria-label="새로 고침"]').click()`)
     check('refresh reads commits added while the panel was open', await until(`
       document.querySelector('.workspace-commit-subject')?.textContent === 'Refresh this commit'
+    `))
+    const picker = `document.querySelector('.workspace-git-picker button')`
+    const branch = `document.querySelector('.workspace-branch')?.title`
+    const subjects = `[...document.querySelectorAll('.workspace-commit-subject')].map(node => node.textContent)`
+    const selectWorktree = async label => {
+      await until(`!!${picker}`)
+      await driver.click(...await driver.center(picker))
+      const option = `[...document.querySelectorAll('[role=menuitemradio]')].find(node => node.textContent.trim() === ${JSON.stringify(label)})`
+      if (!(await until(`!!${option}`))) throw new Error(`Git picker is missing ${label}`)
+      await driver.click(...await driver.center(`(${option})`))
+    }
+    await selectWorktree('frontend · 워크트리')
+    check('refresh adds the new external worktree without opening a terminal', await until(`
+      ${branch} === 'frontend' && ${subjects}[0] === 'Frontend checkout commit' &&
+      !${subjects}.includes('Backend checkout commit') && document.querySelectorAll('.local-terminal-pane').length === 1
+    `))
+    await selectWorktree('frontend · 하위 저장소')
+    check('a nested repository with the same folder name has its own picker entry and history', await until(`
+      ${branch} === 'frontend-main' && ${subjects}.join() === 'Independent frontend repository'
+    `))
+    await selectWorktree('checkouts/backend')
+    check('the nested worktree shows its own HEAD, history and uncommitted changes', await until(`
+      ${branch} === 'backend' && ${subjects}[0] === 'Backend checkout commit' &&
+      !${subjects}.includes('Refresh this commit') && !!document.querySelector('[data-path="backend-draft.txt"]')
+    `))
+    const search = value => js(`(${SET})(document.querySelector('input[aria-label="Git 이력 검색"]'), ${JSON.stringify(value)})`)
+    await search(mainOnlyHash)
+    check('a hash outside the worktree history is not returned by search', await until(`
+      document.querySelector('.workspace-note')?.textContent === '일치하는 커밋이 없습니다.'
+    `))
+    await search('Backend checkout')
+    check('commit search reads the selected worktree', await until(`
+      document.querySelector('.workspace-git-list[aria-label="Git 커밋 검색 결과"]') && ${subjects}.join() === 'Backend checkout commit'
+    `))
+    await selectWorktree('전체 브랜치')
+    check('all branches restores the shared history', await until(`
+      ${subjects}.includes('Refresh this commit') && ${subjects}.includes('Backend checkout commit') && ${subjects}.includes('Frontend checkout commit')
     `))
 
     await section('files')
@@ -119,6 +171,19 @@ const { check, finish } = createChecks()
     await new Promise(resolve => setTimeout(resolve, 2500))
     check('the Git log is not read again for another shell or folder of the same repository',
       await js(`document.querySelector('.workspace-git-commit')?.dataset.keep === 'yes' && document.querySelectorAll('.workspace-git-commit').length === 5`))
+    await selectWorktree('frontend · 워크트리')
+    await until(`${branch} === 'frontend' && ${subjects}[0] === 'Frontend checkout commit'`)
+    await js(`${splits}[0].querySelector('.xterm-helper-textarea').focus()`)
+    await send('Input.insertText', { text: cdTo(backend) })
+    await driver.enter()
+    check('cd into a nested worktree follows the terminal into its history', await until(`
+      ${branch} === 'backend' && ${subjects}[0] === 'Backend checkout commit'
+    `))
+    await send('Input.insertText', { text: cdTo(frontendRepo) })
+    await driver.enter()
+    check('cd into an independent repository also follows it without dropping the project picker', await until(`
+      ${branch} === 'frontend-main' && ${subjects}.join() === 'Independent frontend repository' && !!${picker}
+    `))
   } finally {
     driver.close()
   }

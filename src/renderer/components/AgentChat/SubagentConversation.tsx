@@ -115,17 +115,19 @@ export function SubagentConversation({ shellId, agent, kind, menuStyle, onBack, 
       {mode === 'select-parent' && <div className="agent-chat-banner" role="status">터미널에서 부모 대화 또는 이 서브에이전트의 대화를 선택해 주세요.</div>}
       {error && <div className="agent-chat-banner" role="status">{error}</div>}
       <form className="agent-chat-composer" onSubmit={event => { event.preventDefault(); void send() }}>
-        <textarea className="agent-chat-input agent-chat-subagent-input" value={draft} maxLength={16_000}
-          readOnly={sending} rows={Math.min(6, draft.split('\n').length)}
-          placeholder={`${name}에게 보낼 메시지`} aria-label={`${name}에게 보낼 메시지`}
-          onChange={event => setDraft(event.target.value)}
-          onKeyDown={event => {
-            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
-            event.preventDefault()
-            void send()
-          }} />
-        <button className="agent-chat-send" type="submit" aria-label="서브에이전트에게 보내기"
-          disabled={!canSend || !draft.trim() || sending}><RiSendPlane2Line aria-hidden /></button>
+        <div className="agent-chat-composer-row">
+          <textarea className="agent-chat-input agent-chat-subagent-input" value={draft} maxLength={16_000}
+            readOnly={sending} rows={1}
+            placeholder={`${name}에게 보낼 메시지`} aria-label={`${name}에게 보낼 메시지`}
+            onChange={event => setDraft(event.target.value)}
+            onKeyDown={event => {
+              if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+              event.preventDefault()
+              void send()
+            }} />
+          <button className="agent-chat-send" type="submit" aria-label="서브에이전트에게 보내기"
+            disabled={!canSend || !draft.trim() || sending}><RiSendPlane2Line aria-hidden /></button>
+        </div>
       </form>
     </section>
   )

@@ -48,23 +48,23 @@ async function realDirectory(value) {
 function createLocalRoots({ knownFolders, repoFolders, now = Date.now }) {
   // A folder's repository and worktrees, asked of Git at most every 10 seconds (each request checks)
   const repoCache = new Map()
-  async function repoFoldersOf(folder) {
+  async function repoFoldersOf(folder, refresh) {
     const cached = repoCache.get(folder)
-    if (cached && now() - cached.at < REPO_CACHE_MS) return cached.list
+    if (!refresh && cached && now() - cached.at < REPO_CACHE_MS) return cached.list
     const list = await repoFolders(folder).catch(() => [])
     repoCache.set(folder, { at: now(), list })
     if (repoCache.size > 50) repoCache.delete(repoCache.keys().next().value)
     return list
   }
 
-  async function allowed() {
+  async function allowed(refresh = false) {
     const folders = new Set()
     for (const folder of await knownFolders()) {
       if (typeof folder !== 'string' || !isLocalFilePath(folder)) continue
       const real = await fs.promises.realpath(folder).catch(() => null)
       if (!real) continue
       folders.add(real)
-      for (const extra of await repoFoldersOf(real)) {
+      for (const extra of await repoFoldersOf(real, refresh)) {
         const resolved = await fs.promises.realpath(extra).catch(() => null)
         if (resolved) folders.add(resolved)
       }
@@ -73,11 +73,13 @@ function createLocalRoots({ knownFolders, repoFolders, now = Date.now }) {
   }
 
   /** The real path of an accepted root; a LocalPathError otherwise */
-  async function resolveRoot(root) {
+  async function resolveRoot(root, { refreshWorktreesOnMiss = false } = {}) {
     const real = await realDirectory(root)
-    const known = await allowed()
-    if (!known.some(folder => sameOrInside(key(folder), key(real)))) throw new LocalPathError(MESSAGES.root)
-    return real
+    const within = folder => sameOrInside(key(folder), key(real))
+    if ((await allowed()).some(within)) return real
+    // A just-created worktree can appear in Git's picker before this cache expires.
+    if (refreshWorktreesOnMiss && (await allowed(true)).some(within)) return real
+    throw new LocalPathError(MESSAGES.root)
   }
 
   /**

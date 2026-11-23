@@ -13,6 +13,10 @@ const exportInstructions: Record<BrowserLoginSource['id'], string> = {
   firefox: 'Firefox 비밀번호 관리자에서 더보기(⋯)를 열고 비밀번호 내보내기를 선택하세요.',
 }
 
+function importNotice(imported: number, skipped = 0) {
+  return `${imported}개를 가져왔습니다.${skipped ? ` 중복되거나 가져올 수 없는 ${skipped}개 항목은 건너뛰었습니다.` : ''}`
+}
+
 export function BrowserLoginsDialog({ tabId, origin, onClose, trigger }: {
   tabId: string
   origin: string | null
@@ -29,11 +33,15 @@ export function BrowserLoginsDialog({ tabId, origin, onClose, trigger }: {
   const [sources, setSources] = useState<BrowserLoginSource[] | null>(null)
   const [sourceId, setSourceId] = useState('')
   const [exportBrowser, setExportBrowser] = useState<BrowserLoginSource['id'] | null>(null)
+  const [autoImport, setAutoImport] = useState(false)
+  const [transfer, setTransfer] = useState<{ profileId: string; browser: BrowserLoginSource['id'] } | null>(null)
+  const [importId, setImportId] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const fieldId = useId()
   const selectedSource = sources?.find(source => source.profiles.some(profile => profile.id === sourceId))
+  const exportSource = transfer?.browser ?? exportBrowser
 
   useEffect(() => {
     let mounted = true
@@ -51,6 +59,38 @@ export function BrowserLoginsDialog({ tabId, origin, onClose, trigger }: {
     setPassword('')
   }, [origin])
 
+  useEffect(() => {
+    if (!transfer) return
+    let active = true
+    let id = ''
+    const call = (request: BrowserLoginAction) => window.electronAPI.browserReviewLogins(tabId, request)
+    const cancel = () => { if (id) void call({ type: 'cancel-import', importId: id }).catch(() => {}) }
+    void (async () => {
+      try {
+        const started = await call({ type: 'start-import', id: transfer.profileId })
+        if (started.success) id = started.importId ?? ''
+        if (!active) { cancel(); return }
+        if (!started.success) { setError(started.error); return }
+        setImportId(id)
+        const result = await call({ type: 'finish-import', importId: id })
+        if (!active) return
+        if (!result.success) { setError(result.error); return }
+        setNotice(importNotice(result.imported ?? 0, result.skipped))
+        if (result.imported) setShowImport(false)
+        const next = await call({ type: 'list' })
+        if (active && next.success) setState(next)
+      } catch {
+        if (active) setError('비밀번호 가져오기를 완료할 수 없습니다. 다시 시도해 주세요.')
+      } finally {
+        if (active) {
+          setTransfer(null)
+          setImportId('')
+        }
+      }
+    })()
+    return () => { active = false; cancel() }
+  }, [tabId, transfer])
+
   async function perform(action: BrowserLoginAction) {
     if (busy) return
     setBusy(true)
@@ -63,6 +103,7 @@ export function BrowserLoginsDialog({ tabId, origin, onClose, trigger }: {
       if (action.type === 'sources') {
         const next = result.sources ?? []
         setSources(next)
+        setAutoImport(result.autoImport === true)
         setSourceId(current => next.some(source => source.profiles.some(profile => profile.id === current))
           ? current : next[0]?.profiles[0]?.id ?? '')
         return
@@ -71,6 +112,7 @@ export function BrowserLoginsDialog({ tabId, origin, onClose, trigger }: {
         if (selectedSource) setExportBrowser(selectedSource.id)
         return
       }
+      if (action.type === 'copy-import-path') { setNotice('저장 경로를 복사했습니다.'); return }
       if (action.type === 'fill') {
         toast.success('로그인 입력란을 채웠습니다.')
         onClose()
@@ -85,7 +127,7 @@ export function BrowserLoginsDialog({ tabId, origin, onClose, trigger }: {
       if (action.type === 'import') {
         if (result.imported === undefined) return
         if (result.imported > 0) setShowImport(false)
-        setNotice(`${result.imported}개를 가져왔습니다.${result.skipped ? ` 중복되거나 가져올 수 없는 ${result.skipped}개 항목은 건너뛰었습니다.` : ''} 내보낸 CSV 파일은 가져오기가 끝난 뒤 삭제해 주세요.`)
+        setNotice(`${importNotice(result.imported, result.skipped)} 내보낸 CSV 파일은 가져오기가 끝난 뒤 삭제해 주세요.`)
       }
       if (action.type === 'clear-session') setNotice('저장된 사이트 데이터를 지웠습니다.')
       const next = await call({ type: 'list' })
@@ -105,11 +147,21 @@ export function BrowserLoginsDialog({ tabId, origin, onClose, trigger }: {
 
   function toggleImport() {
     setShowImport(!showImport)
+    setTransfer(null)
+    setImportId('')
     if (!showImport) {
       setExportBrowser(null)
       setSources(null)
       void perform({ type: 'sources' })
     }
+  }
+
+  function startImport() {
+    if (!selectedSource || transfer) return
+    if (!autoImport) { void perform({ type: 'open-source', id: sourceId }); return }
+    setError('')
+    setNotice('')
+    setTransfer({ profileId: sourceId, browser: selectedSource.id })
   }
 
   async function remove(id: string) {
@@ -153,10 +205,12 @@ export function BrowserLoginsDialog({ tabId, origin, onClose, trigger }: {
             </div>
             {showImport && (
               <div className="browser-login-import" id={`${fieldId}-import`}>
-                {exportBrowser ? (
+                {exportSource ? (
                   <>
-                    <strong>내보낸 비밀번호 가져오기</strong>
-                    <p role="status">{exportInstructions[exportBrowser]} 저장한 CSV 파일을 여기서 선택하세요.</p>
+                    <strong>{transfer ? '브라우저에서 내보내기 대기 중' : '내보낸 비밀번호 가져오기'}</strong>
+                    <p role="status">{exportInstructions[exportSource]} {transfer
+                      ? '내보내기를 승인한 뒤 저장 창의 파일 이름에 복사된 경로를 붙여넣고 저장하세요. 저장하면 자동으로 가져옵니다.'
+                      : '저장한 CSV 파일을 여기서 선택하세요.'}</p>
                   </>
                 ) : sources?.length ? (
                   <>
@@ -166,19 +220,28 @@ export function BrowserLoginsDialog({ tabId, origin, onClose, trigger }: {
                         <option key={profile.id} value={profile.id}>{source.name} · {profile.name}</option>
                       )))}
                     </select>
-                    <p>선택한 브라우저에서 비밀번호를 내보낸 뒤, 저장한 파일을 가져옵니다.</p>
+                    <p>{autoImport
+                      ? '가져오기를 누르면 저장 경로가 복사됩니다. 브라우저에서 내보내기를 승인하고 그 경로로 저장하세요.'
+                      : '선택한 브라우저에서 비밀번호를 내보낸 뒤, 저장한 파일을 가져옵니다.'}</p>
                   </>
                 ) : (sources || busy) && (
                   <p role="status">{sources ? '감지된 브라우저가 없습니다. 브라우저에서 비밀번호를 내보낸 뒤 CSV 파일을 선택하세요.' : '설치된 브라우저를 찾는 중…'}</p>
                 )}
                 <div className="browser-login-import-actions">
-                  {exportBrowser && <button type="button" className="btn-secondary" disabled={busy} onClick={() => setExportBrowser(null)}>프로필 다시 선택</button>}
-                  <button type="button" className={selectedSource && !exportBrowser ? 'btn-secondary' : 'btn-primary'}
-                    disabled={busy} onClick={() => void perform({ type: 'import' })}>CSV 파일 선택…</button>
-                  {selectedSource && !exportBrowser && (
-                    <button type="button" className="btn-primary" disabled={busy}
-                      onClick={() => void perform({ type: 'open-source', id: sourceId })}>내보내기 화면 열기</button>
-                  )}
+                  {transfer ? <>
+                    <button type="button" className="btn-secondary" onClick={() => { setTransfer(null); setImportId(''); setNotice('') }}>취소</button>
+                    <button type="button" className="btn-secondary" disabled={!importId || busy}
+                      onClick={() => void perform({ type: 'copy-import-path', importId })}>저장 경로 다시 복사</button>
+                  </> : <>
+                    {exportBrowser && <button type="button" className="btn-secondary" disabled={busy} onClick={() => setExportBrowser(null)}>프로필 다시 선택</button>}
+                    <button type="button" className={selectedSource && !exportBrowser ? 'btn-secondary' : 'btn-primary'}
+                      disabled={busy} onClick={() => void perform({ type: 'import' })}>CSV 파일 선택…</button>
+                    {selectedSource && !exportBrowser && (
+                      <button type="button" className="btn-primary" disabled={busy} onClick={startImport}>
+                        {autoImport ? '가져오기' : '내보내기 화면 열기'}
+                      </button>
+                    )}
+                  </>}
                 </div>
               </div>
             )}

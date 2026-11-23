@@ -35,6 +35,8 @@ import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory
 import { CommandHistoryPanel } from './CommandHistoryPanel'
 import { isTabHostPreviewed } from '../../lib/tabHosts'
 import { focusPaneInput } from '../../lib/paneFocus'
+import { answerableAskItem } from '../../lib/askQuestion'
+import { useAskQuestionStore } from '../../stores/askQuestionStore'
 import './LocalTerminalTab.css'
 
 /** Shows a shell as a chat when an agent runs in it; says why not otherwise */
@@ -104,7 +106,13 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     const chat = state.chats.get(shellId)
     return chat?.state !== 'ended' && chat?.approval?.usesTerminalInput === true
   })
-  const inlineQuestion = !exit && hasInteractiveQuestion
+  // Claude's AskUserQuestion goes on the chat's own card (AskQuestionCard) unless the user took it to the terminal
+  const answerableAskId = useAgentChatStore(state => {
+    const chat = state.chats.get(shellId)
+    return chat && chat.state !== 'ended' ? answerableAskItem(chat.items, chat.approval)?.id ?? null : null
+  })
+  const askInTerminal = useAskQuestionStore(state => state.inTerminal.get(shellId))
+  const inlineQuestion = !exit && hasInteractiveQuestion && (!answerableAskId || askInTerminal === answerableAskId)
   const hasSpeedControls = isChat && (chatKind ?? chatAgent) === 'codex' && !!window.electronAPI.agentChatToggleSpeed
   const fontSize = useTerminalStore(state => state.fontSize)
   const fontFamily = useTerminalStore(state => state.fontFamily)

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AgentChatApproval, AgentChatFrame, AgentChatItem, AgentChatState, AgentChatSubagent, CodexSpeedState } from '../types'
+import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatFrame, AgentChatItem, AgentChatState, AgentChatSubagent, CodexSpeedState } from '../types'
 import { MAX_CHAT_ITEMS, echoItemIds, echoOutputId, nextHeld, reconcileChatEchoes, sentImageKey, type ChatEcho, type SentChatImages } from '../lib/agentChatItems'
 import { toast } from './toastStore'
 
@@ -25,6 +25,7 @@ export interface AgentChat {
   /** The agent's prompt with choices on screen now */
   approval: AgentChatApproval | null
   codexSpeed: CodexSpeedState | null
+  backgroundShells: AgentChatBackgroundShells | null
 }
 
 interface AgentChatStoreState {
@@ -48,7 +49,7 @@ interface AgentChatStoreState {
 }
 
 const EMPTY_IMAGES: AgentChat['sentImages'] = new Map()
-const empty = (): AgentChat => ({ scope: null, state: 'opening', kind: null, title: null, items: [], subagents: [], echoes: [], sentImages: EMPTY_IMAGES, held: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null })
+const empty = (): AgentChat => ({ scope: null, state: 'opening', kind: null, title: null, items: [], subagents: [], echoes: [], sentImages: EMPTY_IMAGES, held: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null, backgroundShells: null })
 
 let stopFrames: (() => void) | null = null
 
@@ -258,7 +259,8 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
           reply,
           hasOlder: frame.hasOlder ?? chat.hasOlder,
           approval: frame.approval !== undefined ? frame.approval : chat.approval,
-          codexSpeed: frame.codexSpeed !== undefined ? frame.codexSpeed : chat.codexSpeed
+          codexSpeed: frame.codexSpeed !== undefined ? frame.codexSpeed : chat.codexSpeed,
+          backgroundShells: frame.backgroundShells !== undefined ? frame.backgroundShells : chat.backgroundShells
         }
       })
     },

@@ -65,6 +65,13 @@ async function run() {
     const compose = `${root}.querySelector('.browser-review-compose')`
     const recipient = `${compose}.querySelector('select')`
     const editor = `${compose}.querySelector('textarea')`
+    const sendRequest = `${compose}.querySelector('.browser-review-send')`
+    const previews = `[...${compose}.querySelectorAll('.browser-review-attachments img')].map(img => img.naturalWidth).join(',')`
+    const pasteScreenshot = () => browser.js(`(() => {
+      const data = new DataTransfer()
+      data.items.add(new File([], 'screenshot.png', { type: 'image/png' }))
+      ${editor}.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }))
+    })()`)
     const history = root => `${root}.querySelector('.browser-review-history')`
     const rows = `${history(root)}.querySelectorAll('[data-request-id]')`
     const requestStatus = row => `${row}.querySelector('.browser-review-history-status').dataset.status`
@@ -126,22 +133,38 @@ async function run() {
       select.dispatchEvent(new Event('change', { bubbles: true }))
     })()`)
     await fillRequest('버튼 문구를 변경해 주세요.')
+    await browser.js(`${compose}.querySelector('.browser-review-add-image').click()`)
+    check('the file picker adds multiple image previews', await browser.until(`${previews} === '36,52'`))
+    await browser.js(`${compose}.querySelector('.browser-review-attachments button').click()`)
+    check('removing a file leaves the other preview', await browser.until(`${previews} === '52'`))
+    await pasteScreenshot()
+    check('pasting a screenshot adds it beside the file and keeps the request text', await browser.until(`
+      ${previews} === '52,1' && ${editor}.value === '버튼 문구를 변경해 주세요.'
+    `))
     await browser.js(`${tools}.click()`)
     check('closing tools gives the full width back to the live page', await browser.until(`${fullViewport} && !${compose}`)
       && await page.until(`window.innerWidth === ${pageWidth}`))
     await browser.js(`${tools}.click()`)
     await browser.until(`!!${tool} && ${tool}.getAttribute('aria-expanded') === 'false'`)
     await browser.js(`${tool}.click()`)
-    check('reopening the picker keeps the selected element and draft', await browser.until(`
+    check('reopening the picker keeps the selected element, draft text and images', await browser.until(`
       ${root}.querySelector('.browser-review-selection code')?.textContent === '#save-button' &&
       ${editor}.value === '버튼 문구를 변경해 주세요.' && ${recipient}.value === 'codex-1' &&
-      ${pick}.getAttribute('aria-pressed') === 'false'
+      ${previews} === '52,1' && ${pick}.getAttribute('aria-pressed') === 'false'
     `))
-    await browser.js(`document.querySelector('.browser-review-send').click()`)
+    await browser.until(`${compose}.getAnimations().every(animation => animation.playState !== 'running')`)
+    await browser.shot('browser-review-attachments')
+    check('the browser rejects unattached image references', await browser.js(`window.electronAPI.browserReviewAction(${JSON.stringify(id)}, {
+      type: 'send', agentId: 'codex-1', text: '잘못된 첨부', selectionId: ${JSON.stringify(selectionId)},
+      imageIds: ${JSON.stringify(['C:\\not-attached.png'])}
+    }).then(result => !result.success)`))
+    await browser.js(`${sendRequest}.click()`)
     check('the request is sent from the UI', await browser.until(`document.querySelector('.browser-review-feedback')?.textContent.includes('codex-1')`))
-    check('the sent request appears under the composer with its recipient and waiting status', await browser.until(`
+    check('the sent request clears the draft and shows the attachment count and status in history', await browser.until(`
+      ${previews} === '' && ${editor}.value === '' &&
       ${rows}.length === 1 && ${rows}[0].textContent.includes('codex-1') &&
       ${rows}[0].querySelector('summary').textContent.includes('버튼 문구를 변경해 주세요.') &&
+      ${rows}[0].querySelector('summary').textContent.includes('이미지 2장') &&
       ${requestStatus(`${rows}[0]`)} === 'waiting'
     `))
     const requestPath = path.join(profile, 'codex-1-mcp-request')
@@ -160,6 +183,10 @@ async function run() {
       && messages[0].text.includes('#save-button') && messages[0].text.includes('버튼 문구를 변경해 주세요.')
       && messages[0].text.includes('reply_to_message') && messages[0].text.includes('completed')
       && !messages[0].text.includes('private=token'))
+    const imageFiles = messages[0].text.split('\n').filter(line => path.isAbsolute(line) && line.endsWith('.png'))
+    check('the MCP request references only the two attached and readable images', imageFiles.length === 2
+      && imageFiles.every(file => fs.existsSync(file))
+      && imageFiles.map(file => fs.readFileSync(file).readUInt32BE(16)).join(',') === '52,1')
     const data = JSON.parse(messages[0].text.slice(messages[0].text.indexOf('\n{') + 1))
     check('the request carries Vue component and file, first 30 characters and exact class tokens',
       data.component === 'AgeTable' && data.componentFile === 'src/components/AgeTable.vue'
@@ -201,6 +228,15 @@ async function run() {
     check('pages without Vue metadata still return the text and classes', await browser.until(`${state}.then(state =>
       state.selection?.text.startsWith('1990년생') && state.selection?.classes.includes('age-row') && !state.selection.component
     )`))
+    await pasteScreenshot()
+    check('a screenshot can be sent with the selection and an empty text field', await browser.until(`
+      ${previews} === '1' && ${editor}.value === '' && !${sendRequest}.disabled
+    `))
+    await browser.js(`${sendRequest}.click()`)
+    check('an image-only request gets a readable description in history', await browser.until(`
+      ${rows}.length === 3 && ${rows}[0].textContent.includes('첨부 이미지를 참고해 선택한 요소를 확인해 주세요.') &&
+      ${rows}[0].textContent.includes('이미지 1장')
+    `))
     await browser.js(`${pick}.click()`)
     await browser.until(`${pick}.getAttribute('aria-pressed') === 'true'`)
     await browser.js(`${tool}.click()`)
@@ -224,7 +260,7 @@ async function run() {
     await browser.js(`${otherRoot}.querySelector('.browser-review-tool-toggle').click()`)
     check('another browser tab can see the same request history', await browser.until(`
       ${history(otherRoot)}?.querySelector('[data-status="completed"]') &&
-      ${history(otherRoot)}.querySelectorAll('[data-request-id]').length === 2
+      ${history(otherRoot)}.querySelectorAll('[data-request-id]').length === 3
     `))
     await browser.js(`document.querySelector('[data-tab-id="${otherId}"] .tab-close').click()`)
     await browser.until(`!document.querySelector('[data-tab-id="${otherId}"]')`)
@@ -298,18 +334,37 @@ async function run() {
         select.value = [...select.options].find(option => option.textContent === 'Google Chrome · 업무').value
         select.dispatchEvent(new Event('change', { bubbles: true }))
       })()`)
-      await main.js(`${modalButton('내보내기 화면 열기')}.click()`)
+      const startImport = () => main.js(`${modalButton('가져오기')}.click()`)
+      const exportReady = `!${source} && ${loginModal}.querySelector('.browser-login-import').textContent.includes('파일 다운로드') &&
+        ${modalButton('저장 경로 다시 복사')}?.disabled === false`
+      const exportDestination = path.join(profile, 'browser-export-destination')
+      await startImport()
+      check('starting the import copies a destination for the browser export', await main.until(exportReady) && fs.existsSync(exportDestination))
+      const canceledDestination = fs.readFileSync(exportDestination, 'utf8')
+      const cancelImport = `${loginModal}.querySelector('.browser-login-import-actions').querySelector('button')`
+      await main.js(`${cancelImport}.click()`)
+      for (let attempt = 0; attempt < 20 && fs.existsSync(path.dirname(canceledDestination)); attempt++) await sleep(50)
+      check('canceling removes the temporary destination and returns to profile selection',
+        await main.until(`!!${source}`) && !fs.existsSync(path.dirname(canceledDestination)))
+      await startImport()
       const launchFile = path.join(profile, 'browser-source-launch.json')
-      check('the import guides the user to the browser-specific export control before file selection', await main.until(`
-        !${source} && ${loginModal}.querySelector('.browser-login-import').textContent.includes('파일 다운로드')
-        && !${modalButton('CSV 파일 선택…')}?.disabled
-      `))
+      if (!await main.until(exportReady)) throw new Error('the browser import did not start')
       const args = fs.existsSync(launchFile) ? JSON.parse(fs.readFileSync(launchFile, 'utf8')) : []
       check('opening the password manager uses the selected profile', args.includes('--profile-directory=Profile 1') &&
         args.includes('chrome://password-manager/settings'))
-      await main.js(`${modalButton('CSV 파일 선택…')}.click()`)
-      check('CSV import adds the new account alongside the existing one', await main.until(`
+      const sourceCsv = path.join(profile, 'browser-login-import.csv')
+      const destination = fs.readFileSync(exportDestination, 'utf8')
+      check('each import waits for its own export file', destination !== canceledDestination && !fs.existsSync(destination))
+      fs.copyFileSync(sourceCsv, destination, fs.constants.COPYFILE_EXCL)
+      check('saving the export imports it without opening a file picker', await main.until(`
         ${loginModal}.textContent.includes('imported@example.test') && ${loginModal}.textContent.includes('1개를 가져왔습니다.')
+      `))
+      check('the automatic import removes its temporary copy and preserves the existing CSV', !fs.existsSync(destination) && fs.existsSync(sourceCsv))
+      await main.js(`${modalButton('다른 브라우저에서 가져오기')}.click()`)
+      await main.until(`!!${source} && !${modalButton('CSV 파일 선택…')}?.disabled`)
+      await main.js(`${modalButton('CSV 파일 선택…')}.click()`)
+      check('a manually selected CSV can still be imported, skipping duplicates', await main.until(`
+        ${loginModal}.textContent.includes('0개를 가져왔습니다.') && ${loginModal}.textContent.includes('2개 항목은 건너뛰었습니다.')
       `))
       const vault = fs.readFileSync(path.join(profile, 'browser-logins.json'), 'utf8')
       check('saved and imported passwords are encrypted on disk', !vault.includes('only-a-test-password') && !vault.includes('comma,quote') && !vault.includes('imported@example.test'))

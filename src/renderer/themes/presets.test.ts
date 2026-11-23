@@ -8,8 +8,8 @@ const css = ['../styles/variables.css', '../styles/themes-light.css', '../styles
   .map(file => fs.readFileSync(new URL(file, import.meta.url), 'utf8'))
   .join('\n')
 
-function cssBlock(id: string): Record<string, string> | null {
-  const match = new RegExp(`\\[data-theme="${id}"\\]\\s*\\{([^}]*)\\}`).exec(css)
+function cssBlock(id: string, attribute = 'data-theme'): Record<string, string> | null {
+  const match = new RegExp(`\\[${attribute}="${id}"\\]\\s*\\{([^}]*)\\}`).exec(css)
   if (!match) return null
   return Object.fromEntries(
     [...match[1].matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(([, name, value]) => [name, value.trim().toLowerCase()])
@@ -34,13 +34,11 @@ describe('preset themes', () => {
 
   // The shape rules ([data-chrome="mac"]) assume curves: a mac-chrome theme left square would show round
   // traffic lights on a square UI
-  it('give mac-chrome themes rounded corners, and only those', () => {
+  it('uses the shared macOS radius tokens for the mac window chrome', () => {
     const mac = PRESET_THEMES.filter(t => t.chrome === 'mac')
     expect(mac.map(t => t.id)).toEqual(['macos-light', 'macos-dark'])
-    for (const theme of mac) expect(cssBlock(theme.id)!['--radius-md']).toMatch(/^[1-9]\d*px$/)
-    for (const theme of PRESET_THEMES.filter(t => t.chrome !== 'mac')) {
-      expect(cssBlock(theme.id)!['--radius-md']).toBeUndefined()
-    }
+    expect(cssBlock('mac', 'data-chrome')?.['--radius-md']).toBe('var(--mac-radius-md)')
+    for (const theme of PRESET_THEMES) expect(cssBlock(theme.id)!['--radius-md']).toBeUndefined()
   })
 
   it('put light-category themes on light backgrounds', () => {

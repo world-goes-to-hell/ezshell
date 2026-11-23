@@ -455,6 +455,8 @@ export interface AgentChatItem {
   text?: string
   hasImage?: boolean
   inboxNotice?: boolean
+  /** On a notice: the CLI reported an interrupted turn. */
+  interrupted?: true
   /** On an output item: the command failed (Claude's stderr) */
   isError?: boolean
   /** On a slash command sent from the chat that no transcript records (Codex): what came of it */
@@ -470,7 +472,24 @@ export interface AgentChatItem {
     isError?: boolean
     diff?: string[]
     todos?: { text: string; status: 'completed' | 'in_progress' | 'pending' }[]
+    /** Claude's AskUserQuestion: its questions (src/agentChat/askQuestions.js) */
+    question?: { questions: AgentAskQuestion[] }
+    /** Its answers once given, one per question (null: left unanswered) */
+    answers?: (string | null)[]
   }
+}
+
+export interface AgentAskQuestion {
+  question: string
+  header: string
+  multiSelect: boolean
+  options: { label: string; description: string }[]
+}
+
+/** One answer from the chat's question card: choices by index, and a typed answer */
+export interface AgentAskAnswer {
+  picks: number[]
+  other: string | null
 }
 
 /** The agent's prompt with numbered choices, as its terminal shows it (src/ipc/agentInboxWake.js) */
@@ -489,7 +508,7 @@ export interface AgentChatApproval {
 export type AgentChatState = 'waiting' | 'live' | 'ended'
 
 export type AgentChatImagesResult =
-  | { ok: true; kind: 'images'; images: { id: string; preview: Uint8Array<ArrayBuffer> }[] }
+  | { ok: true; kind: 'images'; images: { id: string; preview: Uint8Array<ArrayBuffer> }[]; text?: string }
   | { ok: false; error: string }
 
 export type CodexSpeedMode = 'fast' | 'ultrafast'
@@ -541,6 +560,11 @@ export interface AgentChatQuestionContext {
   items: AgentChatItem[]
 }
 
+export interface AgentChatBackgroundShells {
+  count: number
+  jobs: { id: string; command: string; description: string }[]
+}
+
 export interface AgentChatFrame {
   shellId: string
   /** The view starts over with these items (a new conversation or the first read) */
@@ -559,6 +583,7 @@ export interface AgentChatFrame {
   /** The prompt on screen now, or null when it went away */
   approval?: AgentChatApproval | null
   codexSpeed?: CodexSpeedState | null
+  backgroundShells?: AgentChatBackgroundShells | null
 }
 
 export interface AgentUsageReport {
@@ -597,7 +622,7 @@ export interface AgentMessage {
   replyTo?: string
   replyStatus?: 'completed' | 'deferred'
   /** Browser request as entered in the app, apart from the element context sent to the agent. */
-  reviewRequest?: { text: string; url: string; selector: string }
+  reviewRequest?: { text: string; url: string; selector: string; imageCount?: number }
   sentAt: number
   /** Handled: answered or acknowledged */
   read: boolean
@@ -642,7 +667,7 @@ export interface BrowserReviewState {
 export type BrowserReviewAction =
   | { type: 'navigate'; address: string }
   | { type: 'back' | 'forward' | 'reload' | 'pick' | 'cancel' | 'devtools' }
-  | { type: 'send'; agentId: string; text: string; selectionId: string }
+  | { type: 'send'; agentId: string; text: string; selectionId: string; imageIds?: string[] }
 export type BrowserReviewResult = { success: true } | { success: false; error: string }
 
 export interface BrowserLoginAccount {
@@ -659,7 +684,8 @@ export interface BrowserLoginSource {
 
 export type BrowserLoginAction =
   | { type: 'list' | 'sources' | 'import' | 'clear-session' }
-  | { type: 'open-source'; id: string }
+  | { type: 'open-source' | 'start-import'; id: string }
+  | { type: 'finish-import' | 'copy-import-path' | 'cancel-import'; importId: string }
   | { type: 'save'; origin: string; username: string; password: string }
   | { type: 'fill'; id: string; origin: string }
   | { type: 'remove'; id: string }
@@ -669,6 +695,8 @@ export type BrowserLoginResult = {
   success: true
   accounts?: BrowserLoginAccount[]
   sources?: BrowserLoginSource[]
+  autoImport?: boolean
+  importId?: string
   rememberSession?: boolean
   sessionPersistent?: boolean
   imported?: number
@@ -716,6 +744,9 @@ export interface WorkspaceGitRepository {
   root: string
   head: string | null
   branch: string | null
+  worktrees: LocalWorktree[]
+  nestedRepositories: string[]
+  allBranches: boolean
   commits: WorkspaceGitCommit[]
   hasMore: boolean
 }
@@ -828,6 +859,7 @@ declare global {
       showWorkOverview: () => Promise<{ backdrop: Uint8Array<ArrayBuffer> | null } | null>
       hideWorkOverview: () => void
       onWorkOverviewRequest?: (callback: () => void) => () => void
+      setShortcutRecording?: (recording: boolean) => void
 
       // SSH
       sshConnect: (config: any) => Promise<any>
@@ -918,8 +950,8 @@ declare global {
       /** A file on this PC in the file window; `relative` is relative to `root` */
       localFileOpen?: (root: string, relative: string, mode: 'edit' | 'preview', label?: string, options?: { compareHead?: boolean }) => Promise<{ success: true } | { success: false; error: string }>
       localFileReveal?: (root: string, relative: string) => Promise<{ success: true } | { success: false; error: string }>
-      workspaceGitLog: (folder: string) => Promise<{ success: true; repo: WorkspaceGitRepository } | { success: true; repo: null; reason: 'git-missing' | 'not-repo' } | { success: false; error: string }>
-      workspaceGitSearch?: (root: string, query: string) => Promise<({ success: true } & WorkspaceGitSearchResult) | { success: false; error: string }>
+      workspaceGitLog: (folder: string, allBranches?: boolean) => Promise<{ success: true; repo: WorkspaceGitRepository } | { success: true; repo: null; reason: 'git-missing' | 'not-repo' } | { success: false; error: string }>
+      workspaceGitSearch?: (root: string, query: string, worktreeOnly?: boolean) => Promise<({ success: true } & WorkspaceGitSearchResult) | { success: false; error: string }>
       agentHistorySearch?: (shellId: string, query: string) => Promise<{ success: true; matches: { key: string; snippet: string }[] } | { success: false; cancelled?: boolean; error: string }>
       agentHistoryList?: (shellId: string) => Promise<{ success: true; project: string; sessions: AgentHistorySession[] } | { success: false; error: string }>
       agentHistoryDetail?: (shellId: string, key: string) => Promise<({ success: true } & AgentHistoryDetail) | { success: false; error: string }>
@@ -937,6 +969,8 @@ declare global {
       onBrowserReviewLinkOpened: (callback: (id: string) => void) => () => void
       browserReviewState: (id: string) => Promise<BrowserReviewState | null>
       browserReviewAction: (id: string, request: BrowserReviewAction) => Promise<BrowserReviewResult>
+      browserReviewAddImages: (id: string, source: 'clipboard' | 'files') => Promise<AgentChatImagesResult | { ok: true; kind: 'text'; text: string }>
+      browserReviewRemoveImage: (id: string, imageId: string) => void
       browserReviewLogins: (id: string, request: BrowserLoginAction) => Promise<BrowserLoginResult>
       browserReviewBounds: (id: string, bounds: { x: number; y: number; width: number; height: number } | null) => void
       browserReviewClose: (id: string) => void
@@ -977,9 +1011,10 @@ declare global {
       agentChatSend?: (shellId: string, text: string, imageIds?: string[]) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatToggleSpeed?: (shellId: string, speed: CodexSpeedMode) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatInterrupt?: (shellId: string) => Promise<boolean>
-      /** After Esc: clears the CLI composer if it holds exactly these queued chat lines */
+      /** After Esc: clears the CLI composer if it holds exactly these chat lines */
       agentChatTakeBack?: (shellId: string, texts: string[]) => Promise<{ ok: boolean; reason?: string }>
       agentChatAnswer?: (shellId: string, key: string, signature: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
+      agentChatAnswerQuestions?: (shellId: string, itemId: string, answers: AgentAskAnswer[]) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       /** After a slash command was sent: it ran (output: what Codex printed), asks a question, or opened a screen */
       agentChatCommandWatch?: (shellId: string) => Promise<{ ok: true; state: 'done' | 'approval' | 'screen' | 'gone'; output?: string } | { ok: false; error: string }>
       agentChatScreenState?: (shellId: string) => Promise<{ composer: 'empty' | 'draft' | null; approval: boolean } | null>

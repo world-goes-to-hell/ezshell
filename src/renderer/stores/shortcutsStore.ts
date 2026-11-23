@@ -10,6 +10,7 @@ export interface Shortcut {
   description: string
   category: ShortcutCategory
   action: string // action identifier
+  fixed?: boolean
 }
 
 interface ShortcutsState {
@@ -25,6 +26,14 @@ interface ShortcutsState {
 // Default shortcuts configuration
 const defaultShortcuts: Shortcut[] = [
   // General
+  ...(typeof navigator !== 'undefined' && /^Win/i.test(navigator.platform) ? [{
+    id: 'quick-capture',
+    keys: ['Ctrl', 'Win', 'Alt'],
+    description: '영역 캡처',
+    category: 'general' as const,
+    action: 'quickCapture',
+    fixed: true
+  }] : []),
   {
     id: 'command-palette',
     keys: ['Ctrl', 'P'],
@@ -235,7 +244,7 @@ function readSavedBindings(): string | null {
 export const useShortcutsStore = create<ShortcutsState>((set, get) => ({
   shortcuts: defaultShortcuts,
   // Saved bindings are checked before use: a damaged value must not stop the app from starting
-  customBindings: parseCustomBindings(readSavedBindings(), defaultShortcuts.map(shortcut => shortcut.id)),
+  customBindings: parseCustomBindings(readSavedBindings(), defaultShortcuts.filter(shortcut => !shortcut.fixed).map(shortcut => shortcut.id)),
 
   getShortcut: (id: string) => {
     return get().shortcuts.find(s => s.id === id)
@@ -256,6 +265,7 @@ export const useShortcutsStore = create<ShortcutsState>((set, get) => ({
   },
 
   setCustomBinding: (id: string, keys: string[]) => {
+    if (get().getShortcut(id)?.fixed) return
     const customBindings = { ...get().customBindings, [id]: keys }
     localStorage.setItem('customShortcuts', JSON.stringify(customBindings))
     set({ customBindings })

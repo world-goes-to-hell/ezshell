@@ -87,6 +87,7 @@ import { ConfirmDialogHost } from './components/Modal/ConfirmDialogHost'
 import { HostKeyDialog } from './components/Modal/HostKeyDialog'
 import { useSessionLogStore } from './stores/sessionLogStore'
 import { isChatShown, useAgentChatStore } from './stores/agentChatStore'
+import { useAskQuestionStore } from './stores/askQuestionStore'
 import { useSessionLogFeed } from './hooks/useSessionLogFeed'
 import { useBrowserTabTitles } from './hooks/useBrowserTabTitles'
 import { usePinnedReplyGo } from './hooks/usePinnedReplyGo'
@@ -1155,6 +1156,7 @@ function App() {
     }
     // Agent conversations too (main stops following the transcripts): the panes show their terminals
     useAgentChatStore.getState().clearAll()
+    useAskQuestionStore.getState().clearAll()
   }, [isLocked])
 
   const handleToggleSftp = () => {

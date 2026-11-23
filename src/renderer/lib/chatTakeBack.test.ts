@@ -1,7 +1,41 @@
 import { describe, expect, it, vi } from 'vitest'
-import { draftWithTakenBack, takeBackQueued } from './chatTakeBack'
+import type { AgentChatItem } from '../types'
+import { chatLinesToTakeBack, draftWithTakenBack, takeBackQueued } from './chatTakeBack'
 
 const wait = () => Promise.resolve()
+
+describe('which chat lines are eligible for recovery', () => {
+  const accepted: AgentChatItem = { id: 'user:1', kind: 'user', text: '작업을 확인해 줘', time: 10, sentAt: 9 }
+  const partial: AgentChatItem = { id: 'partial', kind: 'assistant', text: '확인하고 있습니다', time: 11 }
+  const queued = { id: 'outgoing:1', text: '이어지는 질문', time: 12, hasImage: false, queued: true }
+  const queuedItem: AgentChatItem = { id: queued.id, kind: 'user', text: queued.text, time: queued.time }
+
+  it('finds the active question after the transcript replaced its echo and an answer started', () => {
+    expect(chatLinesToTakeBack([accepted, partial], [], [])).toEqual({ queued: false, lines: [
+      { id: accepted.id, text: accepted.text, sentAt: accepted.sentAt, optimistic: false }
+    ] })
+  })
+
+  it('uses only waiting chat lines when there is a queue', () => {
+    expect(chatLinesToTakeBack([accepted, partial, queuedItem], [queued], [])).toEqual({ queued: true, lines: [
+      { id: queued.id, text: queued.text, sentAt: queued.time, optimistic: true }
+    ] })
+  })
+
+  it('recognizes a queued Codex question already recorded by the CLI', () => {
+    const recorded = { ...queuedItem, id: 'UserMessage:2', sentAt: queued.time }
+    expect(chatLinesToTakeBack([accepted, partial, recorded], [], [recorded.id])).toEqual({ queued: true, lines: [
+      { id: recorded.id, text: queued.text, sentAt: queued.time, optimistic: false }
+    ] })
+  })
+
+  it('does not copy an old interrupted turn, a terminal message, a command or an attachment', () => {
+    const ended: AgentChatItem = { id: 'notice:1', kind: 'notice', interrupted: true, time: 13 }
+    for (const latest of [ended, { ...accepted, sentAt: undefined }, { ...accepted, text: '/compact' }, { ...accepted, hasImage: true }]) {
+      expect(chatLinesToTakeBack([accepted, partial, latest], [], []).lines).toEqual([])
+    }
+  })
+})
 
 describe('taking queued chat lines back after Esc', () => {
   it('asks again until the CLI has put the lines back in its composer', async () => {

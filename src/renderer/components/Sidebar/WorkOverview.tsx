@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiArrowLeftLine, RiArrowRightUpLine, RiCloseLine, RiFolder3Line, RiGitBranchLine } from 'react-icons/ri'
 import type { TabGroupView } from '../../hooks/useTabGroups'
@@ -158,8 +158,8 @@ function WorkOverviewDialog({ groupView, backdropUrl, returnFocus, close }: {
   const pressedTarget = useRef<EventTarget | null>(null)
   const timer = useRef<number | undefined>(undefined)
   const jumping = useRef(false)
-  const clearTimer = () => window.clearTimeout(timer.current)
-  useEffect(() => () => window.clearTimeout(timer.current), [])
+  const clearTimer = useCallback(() => window.clearTimeout(timer.current), [])
+  useEffect(() => clearTimer, [clearTimer])
   useLayoutEffect(() => {
     if (!request) return
     const reposition = () => setPosition(positionPreview(request.anchor))
@@ -207,13 +207,31 @@ function WorkOverviewDialog({ groupView, backdropUrl, returnFocus, close }: {
     setRequest(null)
     if (restoreFocus && preview) document.querySelector<HTMLElement>(`.work-overview-agent[data-agent-id="${CSS.escape(preview.agent.id)}"]`)?.focus({ preventScroll: true })
   }
-  const leavePreview = () => {
+  const leavePreview = useCallback(() => {
     clearTimer()
     timer.current = window.setTimeout(() => {
-      if (previewPanel.current?.contains(document.activeElement)) return
+      const panel = previewPanel.current
+      if (panel && (panel.matches(':hover') || panel.contains(document.activeElement))) return
       setRequest(null)
     }, PREVIEW_CLOSE_MS)
-  }
+  }, [clearTimer])
+
+  const previewOpen = Boolean(preview)
+  useLayoutEffect(() => {
+    const panel = previewPanel.current
+    if (!previewOpen || !panel) return
+    // The tab is physically inside the preview and belongs to another React portal.
+    // Native pointer events follow the DOM boundary shared by the header and the tab.
+    const onEnter = (event: PointerEvent) => { if (event.pointerType !== 'touch') clearTimer() }
+    const onLeave = (event: PointerEvent) => { if (event.pointerType !== 'touch') leavePreview() }
+    panel.addEventListener('pointerenter', onEnter)
+    panel.addEventListener('pointerleave', onLeave)
+    return () => {
+      panel.removeEventListener('pointerenter', onEnter)
+      panel.removeEventListener('pointerleave', onLeave)
+    }
+  }, [previewOpen, clearTimer, leavePreview])
+
   const jump = ({ agent, tabId }: AgentEntry) => {
     const pane = tabHost(tabId).querySelector<HTMLElement>(`[data-local-shell-id="${CSS.escape(agent.shellId)}"]`)
     jumping.current = true
@@ -303,8 +321,7 @@ function WorkOverviewDialog({ groupView, backdropUrl, returnFocus, close }: {
           </div>
         </div>
         {preview && (
-          <section className="work-overview-card work-overview-preview" ref={previewPanel} style={position} aria-label="에이전트 미리보기"
-            onPointerEnter={clearTimer} onPointerLeave={event => { if (event.pointerType !== 'touch') leavePreview() }}>
+          <section className="work-overview-card work-overview-preview" ref={previewPanel} style={position} aria-label="에이전트 미리보기">
             <header className="work-overview-header">
               <button type="button" className="work-overview-icon" aria-label="작업 목록으로 돌아가기" title="작업 목록으로 돌아가기 (Esc)" onClick={() => dismissPreview(true)}>
                 <RiArrowLeftLine size={18} />

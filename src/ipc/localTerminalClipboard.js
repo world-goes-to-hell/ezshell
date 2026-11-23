@@ -8,21 +8,28 @@ const MAX_TEXT = 1024 * 1024 - 16
 const MAX_PIXELS = 24 * 1024 * 1024
 const MAX_IMAGE_BYTES = MAX_PIXELS * 4
 
+function checkedText(text) {
+  if (text.length > MAX_TEXT) throw new Error('붙여넣을 텍스트가 너무 깁니다.')
+  return text
+}
+
 function createLocalTerminalClipboard(clipboard, nativeImage, platform = process.platform) {
   let directory
   const files = new Set()
 
-  async function read() {
-    const text = await clipboard.readText()
-    if (text.length > MAX_TEXT) throw new Error('붙여넣을 텍스트가 너무 깁니다.')
-    if (text) return { text }
-
+  async function read({ includeImageWithText = false } = {}) {
+    if (!includeImageWithText) {
+      const text = checkedText(await clipboard.readText())
+      if (text) return { text }
+    }
     const items = await clipboard.read()
+    const plain = includeImageWithText && items.find(item => item.types.includes('text/plain'))
+    const text = plain ? checkedText(await (await plain.getType('text/plain')).text()) : ''
     for (const type of ['image/png', 'image/jpeg']) {
       const item = items.find(candidate => candidate.types.includes(type))
-      if (item) return { image: { item, type } }
+      if (item) return { text, image: { item, type } }
     }
-    return { text: '' }
+    return { text }
   }
 
   async function decodeImage({ item, type }) {

@@ -5,52 +5,56 @@ import { workspaceGitGraph, type GitGraphRow } from '../../lib/workspaceGitGraph
 import { folderName } from '../../lib/agentHistory'
 import { TreeLevel, WorkspaceFileResults } from './WorkspaceDetails'
 import { CommitFiles, UncommittedChanges } from './WorkspaceGitChanges'
-import { isInsidePath } from '../../lib/localWorkspaceTree'
+import { isInsidePath, pathKey, worktreeOf } from '../../lib/localWorkspaceTree'
+import { SelectMenu } from '../ui/SelectMenu'
 
 const readGit = (folder: string) => window.electronAPI.workspaceGitLog(folder)
+const readAllGit = (folder: string) => window.electronAPI.workspaceGitLog(folder, true)
 const searchFiles = (folder: string, query: string) => window.electronAPI.workspaceDirectorySearch?.(folder, query)
 const prepareFiles = (folder: string, refresh = false) => window.electronAPI.workspaceDirectoryPrepare?.(folder, refresh).catch(() => undefined)
 const searchGit = (folder: string, query: string) => window.electronAPI.workspaceGitSearch?.(folder, query)
+const searchCheckoutGit = (folder: string, query: string) => window.electronAPI.workspaceGitSearch?.(folder, query, true)
 const date = new Intl.DateTimeFormat('ko-KR', { month: 'short', day: 'numeric' })
+const ALL_BRANCHES = 'all-branches'
 
-function useFolderData<T>(folder: string, load: (folder: string) => Promise<T>) {
-  const [revision, setRevision] = useState(0)
-  const [sample, setSample] = useState<{ folder: string; revision: number; data: T | null } | null>(null)
+function useFolderData<T>(folder: string | null, load: (folder: string) => Promise<T>, revision: number) {
+  const [sample, setSample] = useState<{ folder: string; revision: number; load: typeof load; data: T | null } | null>(null)
   useEffect(() => {
+    if (folder === null) return
     let active = true
     void Promise.resolve().then(() => load(folder)).then(
-      data => { if (active) setSample({ folder, revision, data }) },
-      () => { if (active) setSample({ folder, revision, data: null }) }
+      data => { if (active) setSample({ folder, revision, load, data }) },
+      () => { if (active) setSample({ folder, revision, load, data: null }) }
     )
     return () => { active = false }
   }, [folder, load, revision])
+  const latest = sample?.folder === folder && sample.load === load ? sample : null
   return {
-    result: sample?.folder === folder && sample.revision === revision ? sample : null,
-    refresh: () => setRevision(value => value + 1),
-    revision
+    result: latest?.revision === revision ? latest : null,
+    latest: latest?.data
   }
 }
 
 type SearchAnswer<T> = ({ success: true } & T) | { success: false; error: string }
 
 function useWorkspaceSearch<T>(folder: string, query: string, revision: number, read: (folder: string, query: string) => Promise<SearchAnswer<T>> | undefined, delay = 220) {
-  const [sample, setSample] = useState<{ folder: string; query: string; revision: number; result: SearchAnswer<T> } | null>(null)
+  const [sample, setSample] = useState<{ folder: string; query: string; revision: number; read: typeof read; result: SearchAnswer<T> } | null>(null)
   useEffect(() => {
     if (!folder || !query) return
     let active = true
     const load = async () => {
       try {
         const result = await read(folder, query) ?? { success: false as const, error: '앱을 다시 시작한 뒤에 검색할 수 있습니다.' }
-        if (active) setSample({ folder, query, revision, result })
+        if (active) setSample({ folder, query, revision, read, result })
       } catch {
-        if (active) setSample({ folder, query, revision, result: { success: false, error: '검색을 완료하지 못했습니다.' } })
+        if (active) setSample({ folder, query, revision, read, result: { success: false, error: '검색을 완료하지 못했습니다.' } })
       }
     }
     const timer = window.setTimeout(() => void load(), delay)
     return () => { active = false; window.clearTimeout(timer) }
   }, [folder, query, revision, read, delay])
 
-  return sample?.folder === folder && sample.query === query && sample.revision === revision ? sample.result : null
+  return sample?.folder === folder && sample.query === query && sample.revision === revision && sample.read === read ? sample.result : null
 }
 
 function WorkspaceSearchBox({ label, placeholder, query, onChange }: { label: string; placeholder: string; query: string; onChange: (value: string) => void }) {
@@ -72,11 +76,13 @@ function WorkspaceSearchBox({ label, placeholder, query, onChange }: { label: st
   )
 }
 
-function BrowserHeader({ folder, branch, onRefresh }: { folder: string; branch?: string; onRefresh: () => void }) {
+function BrowserHeader({ folder, branch, onRefresh, picker }: { folder: string; branch?: string; onRefresh: () => void; picker?: ReactNode }) {
   return (
     <div className="workspace-browser-header">
-      <RiFolderLine size={15} aria-hidden="true" />
-      <span className="workspace-browser-path" title={folder} dir="auto">{folder}</span>
+      {picker ?? <>
+        <RiFolderLine size={15} aria-hidden="true" />
+        <span className="workspace-browser-path" title={folder} dir="auto">{folder}</span>
+      </>}
       {branch && <span className="workspace-branch" title={branch}><RiGitBranchLine size={13} />{branch}</span>}
       <button type="button" className="workspace-close" onClick={onRefresh} aria-label="새로 고침" title="새로 고침">
         <RiRefreshLine size={16} />
@@ -193,33 +199,68 @@ function GitLog({ repo, searching, found }: { repo: WorkspaceGitRepository; sear
 }
 
 export function WorkspaceGit({ folder }: { folder: string }) {
-  // The folder the log was read for. Another shell or a `cd` inside the same repository keeps it, so
-  // the log is not read again; leaving the repository reads the new folder.
+  // Keep the repository list when moving among its checkouts and nested repositories. A manual
+  // choice belongs to the checkout where it was made and clears when the terminal changes checkout.
   const [anchor, setAnchor] = useState(folder)
-  const { result, refresh, revision } = useFolderData(anchor, readGit)
+  const [revision, setRevision] = useState(0)
+  const [selection, setSelection] = useState<{ origin: string; value: string } | null>(null)
+  const terminal = useFolderData(anchor, readGit, revision)
+  const current = terminal.latest?.success ? terminal.latest.repo : null
+  const worktrees = current?.worktrees ?? []
+  const base = worktrees[0]?.path ?? anchor
+  const named = (path: string) => pathKey(path) !== pathKey(base) && isInsidePath(path, base)
+    ? path.slice(base.length).replace(/^[\\/]+/, '').replace(/\\/g, '/') : folderName(path)
+  const choices = [
+    ...worktrees.map(tree => ({ ...tree, label: named(tree.path), kind: '워크트리' })),
+    ...(current?.nestedRepositories ?? []).map(path => ({ path, branch: undefined, label: named(path), kind: '하위 저장소' }))
+  ]
+  const closest = worktreeOf(folder, choices.map(tree => tree.path))
+  const defaultPath = closest ?? current?.root ?? anchor
+  useEffect(() => {
+    if (!closest && pathKey(folder) !== pathKey(anchor)) setAnchor(folder)
+    setSelection(previous => previous?.origin === defaultPath ? previous : null)
+  }, [folder, anchor, closest, defaultPath])
+
+  const choice = selection?.origin === defaultPath ? selection.value : null
+  const offerAllBranches = worktrees.length > 1 && worktrees.some(tree => tree.path === defaultPath)
+  const allBranches = offerAllBranches && choice === ALL_BRANCHES
+  const chosen = choices.find(tree => tree.path === choice)
+  const displayPath = chosen?.path ?? defaultPath
+  const otherFolder = allBranches || pathKey(displayPath) !== pathKey(current?.root ?? anchor) ? displayPath : null
+  const alternate = useFolderData(otherFolder, allBranches ? readAllGit : readGit, revision)
+  const result = otherFolder ? alternate.result : terminal.result
   const data = result?.data
   const repo = data?.success ? data.repo : null
   const repoRoot = repo?.root
-  const [search, setSearch] = useState<{ root: string; query: string } | null>(null)
-  const query = search && search.root === repoRoot ? search.query : ''
+  const scope = repo ? `${repo.allBranches ? 'all' : 'checkout'}:${repo.root}` : ''
+  const [search, setSearch] = useState<{ scope: string; query: string } | null>(null)
+  const query = search && search.scope === scope ? search.query : ''
   const term = query.trim()
-  const found = useWorkspaceSearch<WorkspaceGitSearchResult>(repoRoot ?? '', term, revision, searchGit)
-  useEffect(() => {
-    if (folder === anchor) return
-    if (repoRoot && isInsidePath(folder, repoRoot)) return
-    setAnchor(folder)
-  }, [folder, anchor, repoRoot])
+  const found = useWorkspaceSearch<WorkspaceGitSearchResult>(repoRoot ?? '', term, revision, repo?.allBranches === false ? searchCheckoutGit : searchGit)
+  const targetBranch = choices.find(tree => tree.path === displayPath)?.branch
+  const displayBranch = repo ? repo.branch ?? (repo.head ? '분리된 HEAD' : undefined)
+    : targetBranch === null ? '분리된 HEAD' : targetBranch
+  const picker = choices.length > 1 ? (
+    <div className="workspace-git-picker" title={displayPath}>
+      <SelectMenu size="compact" ariaLabel="Git 기록 대상" icon={<RiFolderLine size={15} aria-hidden="true" />}
+        value={allBranches ? ALL_BRANCHES : displayPath} onChange={value => setSelection({ origin: defaultPath, value })}
+        options={[...choices.map(tree => {
+          const duplicate = choices.some(other => tree !== other && tree.label === other.label)
+          return { value: tree.path, label: duplicate ? `${tree.label} · ${tree.kind}` : tree.label }
+        }), ...(offerAllBranches ? [{ value: ALL_BRANCHES, label: '전체 브랜치' }] : [])]} />
+    </div>
+  ) : undefined
   return (
     <>
-      <BrowserHeader folder={repo?.root ?? anchor} branch={repo?.branch ?? (repo?.head ? '분리된 HEAD' : undefined)} onRefresh={refresh} />
+      <BrowserHeader folder={displayPath} branch={displayBranch} picker={picker} onRefresh={() => setRevision(value => value + 1)} />
       {!result ? <WorkspaceNote>Git 기록을 읽는 중…</WorkspaceNote>
         : !data?.success ? <WorkspaceNote error>{data?.error ?? 'Git 기록을 읽지 못했습니다.'}</WorkspaceNote>
         : data.repo ? (
           <>
             <WorkspaceSearchBox label="Git 이력 검색" placeholder="커밋 메시지, 작성자, 해시" query={query}
-              onChange={value => setSearch({ root: data.repo.root, query: value })} />
-            <UncommittedChanges folder={data.repo.root} revision={revision} label={folderName(data.repo.root)} />
-            <GitLog key={data.repo.root} repo={data.repo} searching={Boolean(term)} found={found} />
+              onChange={value => setSearch({ scope, query: value })} />
+            <UncommittedChanges key={data.repo.root} folder={data.repo.root} revision={revision} label={folderName(data.repo.root)} />
+            <GitLog key={scope} repo={data.repo} searching={Boolean(term)} found={found} />
           </>
         )
         : <WorkspaceNote>{data.reason === 'git-missing' ? 'Git을 설치하면 커밋 기록을 볼 수 있습니다.' : '현재 폴더는 Git 저장소에 속해 있지 않습니다.'}</WorkspaceNote>}

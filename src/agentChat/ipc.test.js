@@ -16,8 +16,8 @@ function harness(kind = 'claude', { chats = {}, active = () => null } = {}) {
     shells: () => ({
       agentOf: () => ({ kind }),
       chatInputTarget: active,
-      chatSend: async (_id, prompt, claudeImages, target) => {
-        sent.push({ prompt, claudeImages, ...(target === undefined ? {} : { target }) })
+      chatSend: async (_id, prompt, images, target) => {
+        sent.push({ prompt, images, ...(target === undefined ? {} : { target }) })
         return { ok: true }
       }
     }),
@@ -54,7 +54,7 @@ describe('subagent conversation', () => {
     target = 'Review layout'
     expect((await call('agent-chat-subagent-send', { ...request, scope: 'previous-conversation' })).ok).toBe(false)
     expect(await call('agent-chat-subagent-send', request)).toEqual({ ok: true })
-    expect(sent).toEqual([{ prompt: request.text, claudeImages: undefined, target }])
+    expect(sent).toEqual([{ prompt: request.text, images: undefined, target }])
   })
 
   it('relays a Codex V2 follow-up only from the verified parent', async () => {
@@ -78,10 +78,10 @@ describe('screenshots pasted into a chat', () => {
     const second = await paste()
     expect(second).not.toBe(first)
     expect(await call('agent-chat-send', { shellId: 'local:1', text: '봐 줘', imageIds: [first, second] })).toEqual({ ok: true })
-    expect(sent[0]).toEqual({
-      prompt: 'C:\\tmp\\shot-1.png\nC:\\tmp\\shot-2.png\n\n봐 줘',
-      claudeImages: kind === 'claude' ? { count: 2, text: '봐 줘' } : undefined
-    })
+    const files = ['C:\\tmp\\shot-1.png', 'C:\\tmp\\shot-2.png']
+    expect(sent[0]).toEqual(kind === 'codex'
+      ? { prompt: '봐 줘', images: { files } }
+      : { prompt: files.join('\n') + '\n\n봐 줘', images: { count: 2, text: '봐 줘' } })
     // Sent images are gone: sending them again is refused
     expect((await call('agent-chat-send', { shellId: 'local:1', text: '', imageIds: [first] })).ok).toBe(false)
   })
@@ -95,7 +95,7 @@ describe('screenshots pasted into a chat', () => {
     expect(discarded).toEqual(['C:\\tmp\\shot-1.png'])
     expect((await call('agent-chat-send', { shellId: 'local:1', text: '', imageIds: [ids[0]] })).ok).toBe(false)
     expect(await call('agent-chat-send', { shellId: 'local:1', text: '', imageIds: [ids[1]] })).toEqual({ ok: true })
-    expect(sent[0]).toEqual({ prompt: 'C:\\tmp\\shot-2.png', claudeImages: { count: 1, text: '' } })
+    expect(sent[0]).toEqual({ prompt: 'C:\\tmp\\shot-2.png', images: { count: 1, text: '' } })
     expect((await call('agent-chat-send', { shellId: 'local:1', text: '', imageIds: [ids[2], ids[2]] })).ok).toBe(false)
   })
 })
@@ -175,5 +175,44 @@ describe('pinned answer windows', async () => {
     await call('agent-chat-pin', main, request)
     lock()
     expect((await call('pinned-reply-get', windows[0].webContents)).ok).toBe(false)
+  })
+})
+
+describe('answering a Claude question from the chat card', () => {
+  const color = { question: 'Which color?', header: 'Color', multiSelect: false, options: [{ label: 'Red', description: '' }, { label: 'Green', description: '' }] }
+  function setup({ pending = { questions: [color] }, result = { ok: true } } = {}) {
+    const handlers = new Map()
+    const calls = []
+    registerAgentChatIpc({
+      ipcMain: { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => handlers.set(name, fn) },
+      fromMainWindow: () => true,
+      isLocked: () => false,
+      chats: { pendingQuestion: (id, itemId) => (id === 'local:1' && itemId === 'tool:toolu_q' ? pending : null) },
+      shells: () => ({ answerQuestions: async (...args) => { calls.push(args); return result } }),
+      clipboard: {}
+    })
+    const answer = request => handlers.get('agent-chat-answer-questions')({}, request)
+    return { answer, calls }
+  }
+
+  it('answers with main’s own questions and the checked choices', async () => {
+    const { answer, calls } = setup()
+    expect(await answer({ shellId: 'local:1', itemId: 'tool:toolu_q', answers: [{ picks: [1] }] })).toEqual({ ok: true })
+    expect(calls).toEqual([['local:1', [color], [{ picks: [1], other: null }]]])
+  })
+
+  it('refuses an answer that does not fit, a question already answered and a bad id, pressing nothing', async () => {
+    const { answer, calls } = setup()
+    for (const answers of [[{ picks: [0, 1] }], [{ picks: [5] }], [{ picks: [], other: 'a\rb' }], [], [{ picks: [0] }, { picks: [0] }]]) {
+      expect((await answer({ shellId: 'local:1', itemId: 'tool:toolu_q', answers })).ok).toBe(false)
+    }
+    expect(await answer({ shellId: 'local:1', itemId: 'tool:other', answers: [{ picks: [0] }] })).toMatchObject({ ok: false, reason: 'answered' })
+    expect((await answer({ shellId: 'local:1', itemId: 'tool:../x', answers: [{ picks: [0] }] })).ok).toBe(false)
+    expect(calls).toEqual([])
+  })
+
+  it('names why the keys stopped', async () => {
+    const { answer } = setup({ result: { ok: false, reason: 'mismatch' } })
+    expect(await answer({ shellId: 'local:1', itemId: 'tool:toolu_q', answers: [{ picks: [0] }] })).toMatchObject({ ok: false, reason: 'mismatch', error: expect.stringContaining('제출하지 않았습니다') })
   })
 })

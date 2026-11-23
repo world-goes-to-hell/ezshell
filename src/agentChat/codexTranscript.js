@@ -52,7 +52,7 @@ function createCodexParser() {
     const time = timeOf(line.timestamp)
     const payload = line.payload
     if (line.type === 'event_msg' && payload?.type === 'turn_aborted') {
-      out.push({ id: `notice:${payload.turn_id ?? time}`, kind: 'notice', time, text: '중지했습니다' })
+      out.push({ id: `notice:${payload.turn_id ?? time}`, kind: 'notice', time, text: '중지했습니다', interrupted: true })
     }
     // What a model call cost: `last_token_usage`, keyed by the running total (an event can come twice)
     if (line.type === 'event_msg' && payload?.type === 'token_count' && payload.info?.last_token_usage) {
@@ -74,9 +74,14 @@ function createCodexParser() {
     const id = `${item.type}:${text(item.id) || time}`
     switch (item.type) {
       case 'UserMessage': {
-        const said = joinText(item.content, ['text'])
-        if (said) {
-          const user = { id, kind: 'user', time, text: clip(said, LIMITS.text), ...(isInboxPrompt(said) ? { inboxNotice: true } : {}) }
+        const imageCount = Array.isArray(item.content)
+          ? item.content.filter(block => block?.type === 'local_image' || block?.type === 'image').length : 0
+        let said = joinText(item.content, ['text'])
+        // Codex repeats the image labels in the text portion of its own transcript.
+        for (let index = 0; index < imageCount; index++) said = said.replace(/^\[Image #[1-9]\d*\]\s*/, '')
+        if (said || imageCount) {
+          const user = { id, kind: 'user', time, text: clip(said, LIMITS.text), ...(imageCount ? { hasImage: true } : {}),
+            ...(!imageCount && isInboxPrompt(said) ? { inboxNotice: true } : {}) }
           turns.start(user, { older })
           out.push(user)
         }

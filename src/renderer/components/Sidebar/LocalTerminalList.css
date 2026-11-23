@@ -687,6 +687,30 @@
   color: var(--text-secondary);
 }
 
+/* A session's own color (or its folder's): a short bar at the left and the icon, as in the session list */
+.local-server[style*='--server-color'] {
+  position: relative;
+}
+.local-server[style*='--server-color']::before,
+.local-terms-item[style*='--server-color'] > .local-terms-row::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--server-color);
+  pointer-events: none;
+}
+.local-terms-item[style*='--server-color'] > .local-terms-row {
+  position: relative;
+}
+.local-server[style*='--server-color'] .local-server-icon,
+.local-terms-item[style*='--server-color'] .local-terms-icon {
+  color: var(--server-color);
+}
+
 .local-server-name {
   min-width: 0;
   overflow: hidden;

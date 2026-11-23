@@ -354,4 +354,31 @@ describe('createLocalShells', () => {
     ptys[0].emit('\x1b]7501;state=done:app=claude-code\x07')
     expect(shells.hasWorkingAgent([id])).toBe(false)
   })
+
+  it.each([
+    ['claude', ['← □ Scope ✓ Submit →', '', 'How should I proceed?', '', '❯ 1. [ ] Use the first option',
+      '  2. [ ] Type something', '', 'Enter to select · ↑/↓ to navigate · Esc to cancel']],
+    ['codex', ['Would you like to run the following command?', '', '› 1. Yes, proceed (y)',
+      '  2. No, go back (esc)', '', 'Press enter to confirm or esc to cancel']]
+  ])('publishes response needed for a visible %s prompt even if the CLI reports idle', async (kind, prompt) => {
+    const setStatus = vi.fn()
+    const { shells, ptys } = setup({ agents: { register: () => ({ env: {}, setStatus, close() {} }) } })
+    const { id } = shells.open({ agent: kind, cols: 100 })
+    const clear = '\x1b[?2004h\x1b[2J\x1b[H'
+    const idle = `\x1b]7501;state=idle:app=${kind}\x07`
+    try {
+      ptys[0].emit(idle + clear + prompt.join('\r\n'))
+      await vi.waitFor(() => expect(setStatus).toHaveBeenLastCalledWith('blocked'))
+      expect(shells.agentOf(id).status).toBe('blocked')
+      ptys[0].emit(idle)
+      expect(setStatus).toHaveBeenLastCalledWith('blocked')
+
+      // The next normal output may contain numbered text of its own.
+      ptys[0].emit(clear + ['Here is the plan:', '  1. Read the file', '  2. Run the tests'].join('\r\n'))
+      await vi.waitFor(() => expect(setStatus).toHaveBeenLastCalledWith('idle'))
+      expect(shells.agentOf(id).status).toBe('idle')
+    } finally {
+      shells.close(id)
+    }
+  })
 })

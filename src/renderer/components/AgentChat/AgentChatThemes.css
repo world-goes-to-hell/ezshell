@@ -41,3 +41,55 @@
   background-image: linear-gradient(to bottom, rgb(91 82 57 / 0.08) 1px, transparent 1px);
   background-size: 100% 26px;
 }
+
+.agent-chat-cover[data-chat-theme='chat-discord'] .agent-chat-log {
+  background-image: radial-gradient(ellipse at 0% 0%, #323548 0%, transparent 60%);
+}
+
+.agent-chat-cover[data-chat-theme='chat-discord'] :is(.agent-chat-assistant, .agent-chat-user .agent-chat-bubble) {
+  border-radius: 9px;
+}
+
+.agent-chat-cover[data-chat-theme='chat-discord'] .agent-chat-assistant {
+  border-inline-start: 2px solid var(--chat-focus);
+}
+
+.agent-chat-cover[data-chat-theme='chat-arcade'] .agent-chat-log {
+  background-image:
+    linear-gradient(to right, rgb(157 236 186 / 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(157 236 186 / 0.08) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.agent-chat-cover[data-chat-theme='chat-peach'] .agent-chat-log {
+  background-image: radial-gradient(ellipse at 92% 0%, #ffe0d7 0%, transparent 72%);
+}
+
+.agent-chat-cover[data-chat-theme='chat-neon'] .agent-chat-log {
+  background-image:
+    radial-gradient(ellipse at 96% 0%, rgb(171 56 148 / 0.3), transparent 56%),
+    radial-gradient(ellipse at 0% 100%, rgb(27 127 147 / 0.21), transparent 58%);
+}
+
+.agent-chat-cover[data-chat-theme='chat-neon'] .agent-chat-user .agent-chat-bubble {
+  box-shadow: inset 0 0 0 1px rgb(246 161 223 / 0.3);
+}
+
+.agent-chat-cover[data-chat-theme='chat-amber'] .agent-chat-log {
+  background-image: repeating-linear-gradient(to bottom, rgb(255 198 107 / 0.055) 0 1px, transparent 1px 5px);
+}
+
+.agent-chat-cover[data-chat-theme='chat-amber'] :is(.agent-chat-assistant, .agent-chat-user .agent-chat-bubble) {
+  border-radius: 4px;
+}
+
+.agent-chat-cover[data-chat-theme='chat-comic'] .agent-chat-log {
+  background-image: radial-gradient(rgb(59 50 46 / 0.23) 0.65px, transparent 0.8px);
+  background-size: 8px 8px;
+}
+
+.agent-chat-cover[data-chat-theme='chat-comic'] :is(.agent-chat-assistant, .agent-chat-user .agent-chat-bubble) {
+  border: 2px solid var(--text-primary);
+  border-radius: 10px 7px 9px 8px;
+  box-shadow: 3px 3px var(--text-primary);
+}

@@ -2,6 +2,7 @@ const { promptText } = require('../agentHistory/claude.js')
 const { isInboxPrompt } = require('../ipc/agentInboxPrompts.js')
 const { createTurnUsage } = require('./turnUsage.js')
 const { isClaudeInboxTool } = require('./inboxQuestions.js')
+const { ASK_TOOL, askQuestionsOf, askAnswersOf } = require('./askQuestions.js')
 const { LIMITS, clip, oneLine, timeOf, text, inputText, blocksText, clipLines, addedLines, todosOf, readableOutput, readableValue } = require('./items.js')
 
 // An MCP tool (`mcp__<server>__<tool>`): its arguments and answer are JSON, shown as an outline
@@ -120,6 +121,7 @@ function createClaudeParser() {
     item.tool.result = isMcpTool(item.tool.name) ? clip(readableOutput(result.result), LIMITS.result) : result.result
     if (result.isError) item.tool.isError = true
     if (result.diff) item.tool.diff = result.diff
+    if (item.tool.question) item.tool.answers = askAnswersOf(result.toolResult, item.tool.question.questions)
   }
 
   /**
@@ -152,6 +154,8 @@ function createClaudeParser() {
           out.push({ id, kind: 'thinking', time, text: clip(block.thinking, LIMITS.thinking) })
         } else if (block?.type === 'tool_use' && typeof block.id === 'string') {
           const toolName = text(block.name) || '도구'
+          // A question to the user: drawn as a card of its choices (the JSON input is not shown)
+          const question = toolName === ASK_TOOL ? askQuestionsOf(block.input) : null
           const item = {
             id: `tool:${block.id}`,
             kind: 'tool',
@@ -159,11 +163,12 @@ function createClaudeParser() {
             tool: {
               name: toolName,
               summary: toolSummary(toolName, block.input),
-              input: toolName === 'TodoWrite' ? ''
+              input: toolName === 'TodoWrite' || question ? ''
                 : isMcpTool(toolName) ? clip(readableValue(block.input ?? {}), LIMITS.input)
                   : inputText(toolName === 'Bash' ? text(block.input?.command) : block.input),
               ...(toolName === 'TodoWrite' ? { todos: todosOf(block.input?.todos, 'content') } : {}),
-              ...(isClaudeInboxTool(toolName) ? { isInbox: true } : {})
+              ...(isClaudeInboxTool(toolName) ? { isInbox: true } : {}),
+              ...(question ? { question } : {})
             }
           }
           const early = orphans.get(block.id)
@@ -218,7 +223,7 @@ function createClaudeParser() {
         const hasImage = Array.isArray(content) && content.some(block => block?.type === 'image')
         const imageOnly = !line.isMeta && hasImage && content.every(block => block?.type === 'image')
         if (prompt !== null && INTERRUPTED.test(prompt)) {
-          out.push({ id: `notice:${line.uuid ?? time}`, kind: 'notice', time, text: '중지했습니다' })
+          out.push({ id: `notice:${line.uuid ?? time}`, kind: 'notice', time, text: '중지했습니다', interrupted: true })
         } else if (prompt !== null || imageOnly) {
           const item = {
             id: `user:${line.uuid ?? time}`, kind: 'user', time,
@@ -235,7 +240,9 @@ function createClaudeParser() {
             const result = {
               result: clip(blocksText(block.content), LIMITS.result),
               isError: block.is_error === true,
-              diff: diffOf(line.toolUseResult)
+              diff: diffOf(line.toolUseResult),
+              // Only an AskUserQuestion's answers are kept (an orphan result waits in memory)
+              toolResult: line.toolUseResult?.answers ? { answers: line.toolUseResult.answers } : undefined
             }
             const item = tools.get(block.tool_use_id)
             if (item) { attach(item, result); out.push(item) } else remember(orphans, block.tool_use_id, result, 500)
@@ -268,7 +275,13 @@ function createClaudeParser() {
     return [notice]
   }
 
-  return { feed, flush, beginOlder: turns.beginOlder, endOlder: turns.endOlder }
+  /** The questions of an AskUserQuestion not answered yet (`tool:<id>`), or null */
+  function question(itemId) {
+    const item = typeof itemId === 'string' && itemId.startsWith('tool:') ? tools.get(itemId.slice(5)) : null
+    return item?.tool.question && item.tool.result === undefined && !item.tool.isError ? item.tool.question : null
+  }
+
+  return { feed, flush, question, beginOlder: turns.beginOlder, endOlder: turns.endOlder }
 }
 
 module.exports = { createClaudeParser, toolSummary, remember }

@@ -16,6 +16,9 @@ describe('Codex speed modes', () => {
       expect(codexSpeedFooter(['› ', `  gpt-6.2-sol medium${label} · ~`])).toEqual({ model: 'gpt-6.2-sol', speed })
     }
     expect(codexSpeedFooter(['  gpt-6.2-sol medium fast', '› ', '  ~'])).toBeNull()
+    expect(codexSpeedFooter(['› Ask Codex to do anything', '  GPT-6.2-Sol default fast · Fast · ~'])).toEqual({ model: 'gpt-6.2-sol', speed: 'fast' })
+    expect(codexSpeedFooter(['› ', '  GPT-6.2-Sol default · Standard · ~'])).toEqual({ model: 'gpt-6.2-sol', speed: 'standard' })
+    expect(codexSpeedFooter(['› ', '  Ultrafast · GPT-6.2 Astra high · ~'])).toEqual({ model: 'gpt-6.2-astra', speed: 'ultrafast' })
   })
 
   it('toggles using the CLI confirmation and follows manual changes', async () => {
@@ -51,6 +54,40 @@ describe('Codex speed modes', () => {
     await mode.detectUltrafast()
     expect(mode.read().ultrafastAvailable).toBe(true)
     expect(probe).toHaveBeenCalledTimes(2)
+  })
+
+  it('confirms each click from the changed footer even without a new notice', async () => {
+    let active = 'Standard'
+    const submit = vi.fn(async target => {
+      active = active.toLowerCase() === target ? 'Standard' : target === 'fast' ? 'Fast' : 'Ultrafast'
+      return { ok: true }
+    })
+    const mode = createCodexSpeed({
+      lines: () => ['• Service tier set to default', '› ', `  GPT-6.2-Astra default · ${active} · ~`],
+      submit, hold: vi.fn(), isLive: () => true
+    })
+    expect(mode.read().speed).toBe('standard')
+    expect(await mode.toggle('fast')).toEqual({ ok: true })
+    expect(mode.read().speed).toBe('fast')
+    expect(await mode.toggle('fast')).toEqual({ ok: true })
+    expect(mode.read().speed).toBe('standard')
+    expect(await mode.toggle('ultrafast')).toEqual({ ok: true })
+    expect(mode.read()).toEqual({ speed: 'ultrafast', ultrafastAvailable: true })
+    expect(submit.mock.calls).toEqual([['fast'], ['fast'], ['ultrafast']])
+  })
+
+  it('requires a change in the footer speed when it was already on', async () => {
+    vi.useFakeTimers()
+    try {
+      const mode = createCodexSpeed({
+        lines: () => ['› ', '  GPT-6.2-Sol default · Fast · ~'],
+        submit: async () => ({ ok: true }), hold: vi.fn(), isLive: () => true, timeout: 70
+      })
+      const pending = mode.toggle('fast')
+      await vi.advanceTimersByTimeAsync(100)
+      expect(await pending).toEqual({ ok: false, reason: 'speed-unconfirmed' })
+      expect(mode.read().speed).toBe('fast')
+    } finally { vi.useRealTimers() }
   })
 
   it('does not accept a previous CLI confirmation as an answer to a new command', async () => {

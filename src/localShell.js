@@ -219,6 +219,7 @@ const PROGRESS_STATES = ['idle', 'working', 'error', 'working', 'working'];
 const WORKING_TITLE = /(?:^|\s)[⠁-⣿◐-◓◴-◷](?:\s|$)/u;
 
 function agentStatus(entry) {
+  if (entry.screenApproval) return 'blocked';
   const status = entry.reportedStatus ?? entry.titleStatus;
   return status === 'working' && entry.codexInput && !entry.codexInput.submitted ? 'starting' : status;
 }
@@ -333,6 +334,11 @@ function createLocalShells({
       pendingMessages,
       unhandledMessages,
       parentInput: entry.parentInput,
+      onApprovalChange(visible) {
+        if (!hasAgent(entry)) return;
+        entry.screenApproval = visible;
+        entry.reportStatus?.(agentStatus(entry));
+      },
       isWorking: () => {
         const status = agentStatus(entry);
         return status !== 'idle' && !(entry.externalAgent && status === 'unknown');
@@ -367,16 +373,28 @@ function createLocalShells({
     // The model / effort picker of the usage line (agentPicker.js): keys only while the CLI's picker shows
     const { createAgentPicker } = require('./ipc/agentPicker.js');
     const inbox = entry.inbox;
+    const writeAgentKeys = data => {
+      if (!hasAgent(entry) || entry.inbox !== inbox) return false;
+      try { entry.pty.write(data); return true; } catch { return false; }
+    };
+    // Claude's AskUserQuestion answered from the chat view's card (claudeQuestions.js): keys only while it shows
+    entry.questions = null;
+    if (entry.agent === 'claude') {
+      const { createClaudeQuestionAnswerer } = require('./ipc/claudeQuestions.js');
+      entry.questions = createClaudeQuestionAnswerer({
+        lines: () => (entry.inbox === inbox ? inbox.screenLines() : []),
+        appCursor: () => entry.inbox === inbox && inbox.applicationCursorKeys(),
+        hold: value => inbox.setHeld(value),
+        write: writeAgentKeys
+      });
+    }
     entry.picker = createAgentPicker({
       kind: entry.agent,
       lines: () => (entry.inbox === inbox ? inbox.screenLines() : []),
       appCursor: () => entry.inbox === inbox && inbox.applicationCursorKeys(),
       submit: text => (entry.inbox === inbox ? inbox.submitText(text) : Promise.resolve({ ok: false, reason: 'not-agent' })),
       hold: value => inbox.setHeld(value),
-      write(data) {
-        if (!hasAgent(entry) || entry.inbox !== inbox) return false;
-        try { entry.pty.write(data); return true; } catch { return false; }
-      }
+      write: writeAgentKeys
     });
     if (entry.agent === 'codex') {
       const { createCodexSpeed } = require('./ipc/codexSpeed.js');
@@ -421,7 +439,7 @@ function createLocalShells({
     entry.inbox?.close();
     Object.assign(entry, {
       agent: undefined, reportStatus: undefined, externalAgent: undefined, inbox: undefined, picker: undefined, speedControl: undefined,
-      codexInput: null, titleStatus: 'unknown', reportedStatus: null, oscTail: ''
+      codexInput: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: ''
     });
     return binding;
   }
@@ -549,7 +567,7 @@ function createLocalShells({
       cwd: directory === undefined ? null : workingDirectory,
       launchDirectory: workingDirectory, reportedDirectory: null,
       reportStatus: status => registration?.setStatus?.(status),
-      backlog: '', exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, oscTail: '',
+      backlog: '', exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: '',
       // Last sign of work (status, typing, a line sent to the agent) and the sleep it may be in (agentIdle.js)
       activeAt: Date.now(), sleeping: null
     };
@@ -809,20 +827,22 @@ function createLocalShells({
       labels.add(label);
       if (labels.size > 64) labels.delete(labels.values().next().value);
     },
-    async chatSend(id, text, claudeImages, target, sameConversation = () => true) {
+    async chatSend(id, text, images, target, sameConversation = () => true) {
       const entry = shells.get(id);
       const inbox = entry?.inbox;
       if (!inbox) return { ok: false, reason: 'not-agent' };
+      const interrupts = entry.chatInterrupts;
       const probe = entry.speedControl?.pendingProbe();
       if (probe) await probe;
       if (shells.get(id)?.inbox !== inbox || !hasAgent(entry)) return { ok: false, reason: 'not-agent' };
+      if (entry.chatInterrupts !== interrupts) return { ok: false, reason: 'interrupted' };
       if (agentStatus(entry) === 'blocked') return { ok: false, reason: 'approval' };
       const verify = target === undefined ? entry.parentInput : active => active === target && sameConversation();
-      const result = await inbox.submitText(text, claudeImages, { verify });
+      const result = await inbox.submitText(text, images, { verify });
       if (result.ok && entry.codexInput && entry.codexInput.submitted) entry.reportStatus?.(agentStatus(entry));
       return result;
     },
-    /** Esc in the chat view: the queued chat lines the CLI put back into its composer, cleared there */
+    /** Esc in the chat view: clear only the expected text if the CLI put it back into its composer */
     async chatTakeBack(id, texts) {
       const entry = shells.get(id);
       if (!hasAgent(entry) || !entry.inbox) return { ok: false, reason: 'not-agent' };
@@ -832,6 +852,10 @@ function createLocalShells({
     approvalOf(id) {
       const entry = shells.get(id);
       return hasAgent(entry) && entry.inbox ? entry.inbox.approvalPrompt() : null;
+    },
+    backgroundShellCountOf(id) {
+      const entry = shells.get(id);
+      return hasAgent(entry) ? entry.inbox?.backgroundShellCount() ?? null : null;
     },
     /**
      * The agent's screen for a slash command sent from the chat view (agentChat/commandScreen.js): its rows,
@@ -847,6 +871,13 @@ function createLocalShells({
       const entry = shells.get(id);
       if (!hasAgent(entry) || !entry.inbox) return { ok: false, reason: 'not-agent' };
       return entry.inbox.answerApproval(key, signature);
+    },
+    /** Answers Claude's AskUserQuestion screen (questions from main's own transcript, answers checked) */
+    async answerQuestions(id, questions, answers) {
+      const entry = shells.get(id);
+      if (!hasAgent(entry) || !entry.questions) return { ok: false, reason: 'not-agent' };
+      if (!entry.inbox?.approvalPrompt()?.usesTerminalInput) return { ok: false, reason: 'changed' };
+      return entry.questions.answer(questions, answers);
     },
     /** The usage line's picker (agentPicker.js): the whole list the CLI offers (first read, refresh) */
     async pickerList(id, what) {
@@ -874,6 +905,7 @@ function createLocalShells({
     interruptAgent(id) {
       const entry = shells.get(id);
       if (!hasAgent(entry)) return false;
+      entry.chatInterrupts++;
       if (entry.inbox?.deferProbeInput('\x1b')) return true;
       entry.inbox?.userInput('\x1b');
       try { entry.pty.write('\x1b'); return true; } catch { return false; }

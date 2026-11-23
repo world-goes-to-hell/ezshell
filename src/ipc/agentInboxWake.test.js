@@ -493,6 +493,59 @@ describe('a line sent from the chat view (submitText)', () => {
     expect(rawWrite).toHaveBeenLastCalledWith('\r')
   })
 
+  it('attaches three Codex images one at a time and verifies the wrapped question', async () => {
+    const { rawWrite } = chatSetup('codex')
+    wake.resize(36, 11)
+    const files = ['C:\\Temp\\one.png', 'C:\\Temp\\two.png', 'C:\\Temp\\three.png']
+    const body = '이미지 첨부 테스트'
+    const part = index => '\x1b[200~' + files[index] + '\x1b[201~'
+    const labels = '[Image #7] [Image #8] [Image #9]'
+    wake.writeOutput(codexDraft(''))
+    await vi.waitFor(() => expect(wake.composerState()).toBe('empty'))
+    const sent = wake.submitText(body, { files })
+    expect(rawWrite.mock.calls).toEqual([[part(0)]])
+
+    wake.writeOutput(codexDraft('[Image #7]'))
+    await vi.waitFor(() => expect(rawWrite).toHaveBeenLastCalledWith(part(1)))
+    wake.writeOutput(codexDraft('[Image #7] [Image #7]'))
+    await new Promise(resolve => setTimeout(resolve, 45))
+    expect(rawWrite).toHaveBeenCalledTimes(2)
+    wake.writeOutput(codexDraft('[Image #7] [Image #8]'))
+    await vi.waitFor(() => expect(rawWrite).toHaveBeenLastCalledWith(part(2)))
+    wake.writeOutput(codexDraft(labels))
+    await vi.waitFor(() => expect(rawWrite).toHaveBeenLastCalledWith('\x1b[200~' + body + '\x1b[201~'))
+
+    // The cursor column follows the question, but ConPTY reports the prompt row.
+    const wrapped = text => codexDraft(labels + '\r\n  ' + text + '\r\n\r\n  gpt-5.2 default · /work\x1b[1;21H')
+    wake.writeOutput(wrapped('다른 글'))
+    await new Promise(resolve => setTimeout(resolve, 45))
+    expect(rawWrite).toHaveBeenCalledTimes(4)
+    wake.writeOutput(wrapped(body))
+    await expect(sent).resolves.toEqual({ ok: true })
+    expect(rawWrite.mock.calls).toEqual([[part(0)], [part(1)], [part(2)], ['\x1b[200~' + body + '\x1b[201~'], ['\r']])
+  })
+
+  it('sends a Codex image by itself after the native image label appears', async () => {
+    const { rawWrite } = chatSetup('codex')
+    wake.writeOutput(codexDraft(''))
+    await vi.waitFor(() => expect(wake.composerState()).toBe('empty'))
+    const sent = wake.submitText('', { files: ['C:\\Temp\\one.png'] })
+    wake.writeOutput(codexDraft('[Image #1]'))
+    await expect(sent).resolves.toEqual({ ok: true })
+    expect(rawWrite.mock.calls).toEqual([['\x1b[200~C:\\Temp\\one.png\x1b[201~'], ['\r']])
+  })
+
+  it('stops staging Codex images if the user types in the terminal', async () => {
+    const { rawWrite } = chatSetup('codex')
+    wake.writeOutput(codexDraft(''))
+    await vi.waitFor(() => expect(wake.composerState()).toBe('empty'))
+    const sent = wake.submitText('봐 줘', { files: ['C:\\Temp\\one.png'] })
+    wake.userInput('a')
+    wake.writeOutput(codexDraft('[Image #1]'))
+    await expect(sent).resolves.toEqual({ ok: false, reason: 'target-changed' })
+    expect(rawWrite).toHaveBeenCalledTimes(1)
+  })
+
   it('does not press Enter when the composer never shows the text', async () => {
     const { rawWrite } = chatSetup()
     wake.writeOutput(claudeDraft(''))
@@ -588,6 +641,29 @@ describe('the agent\'s prompt with choices, answered from the chat view', () => 
     expect(wake.approvalPrompt()).toBeNull()
   })
 
+  it('recognizes Claude’s question when a narrow pane folds its keyboard hint over two rows', async () => {
+    promptSetup('claude')
+    wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + [
+      '─'.repeat(40), '←  ☐ 과일  ☐ 색  ✔ Submit  →', '', '어떤 과일을 넣을까요?', '',
+      '❯ 1. [ ] Apple', '  2. [ ] Banana', '  3. [ ] Type something', '     Next', '─'.repeat(40),
+      '  4. Chat about this', '', 'Enter to select · Tab/Arrow keys to navigate · ', 'Esc to cancel'
+    ].join('\r\n'))
+    await settle()
+    expect(wake.approvalPrompt()).toMatchObject({ question: '어떤 과일을 넣을까요?', options: [], usesTerminalInput: true })
+  })
+
+  it('reads the heading of a single Claude question with no Submit tab', async () => {
+    promptSetup('claude')
+    wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + [
+      'Earlier output', '  1. Earlier list item', '  2. Another item', '─'.repeat(70), ' ☐ 배포 범위 ', '',
+      '어느 환경에 적용할까요?', '', '❯ 1. 개발', '     개발 환경', '  2. 운영', '     운영 환경',
+      '  3. Type something.', '─'.repeat(70), '  4. Chat about this', '',
+      'Enter to select · Tab/Arrow keys to navigate · Esc to cancel'
+    ].join('\r\n'))
+    await settle()
+    expect(wake.approvalPrompt()).toMatchObject({ question: '어느 환경에 적용할까요?', options: [], usesTerminalInput: true })
+  })
+
   it('recognizes the interactive choices when the question has scrolled above them', async () => {
     promptSetup('claude')
     wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + [
@@ -643,6 +719,24 @@ describe('the agent\'s prompt with choices, answered from the chat view', () => 
   })
 })
 
+describe('Claude background shell count', () => {
+  it('reads only the live footer and distinguishes zero from a missing composer', async () => {
+    wake = createAgentInboxWake({
+      kind: 'claude', cols: 100, rows: 24, pendingMessages: () => [], isWorking: () => false, write: vi.fn()
+    })
+    const border = '─'.repeat(70)
+    const footer = text => claudeDraft('') + '\r\n' + border + '\r\n' + text
+    wake.writeOutput(footer('  ⏵⏵ auto mode on · 1 shell · ← 1 agent · ↓ to manage'))
+    await vi.waitFor(() => expect(wake.backgroundShellCount()).toBe(1))
+    wake.writeOutput(footer('  3 shells ·\r\n  ← 1 agent · ↓ to manage'))
+    await vi.waitFor(() => expect(wake.backgroundShellCount()).toBe(3))
+    wake.writeOutput(footer('  ⏵⏵ auto mode on · ← 1 agent · ↓ to manage'))
+    await vi.waitFor(() => expect(wake.backgroundShellCount()).toBe(0))
+    wake.writeOutput('\x1b[2J\x1b[HCommand output: 42 shells · ↓ to manage')
+    await vi.waitFor(() => expect(wake.backgroundShellCount()).toBeNull())
+  })
+})
+
 describe('a prompt in a narrow pane', () => {
   it('joins choices the terminal wrapped', async () => {
     wake = createAgentInboxWake({ kind: 'claude', cols: 30, rows: 24, pendingMessages: () => [], isWorking: () => true, write: vi.fn(() => true) })
@@ -666,6 +760,18 @@ describe('taking a queued chat line back from the composer (takeBack)', () => {
     return { rawWrite }
   }
   const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+
+  it('cancels a chat send before the PTY confirms the pasted text, so it never sends Enter', async () => {
+    const { rawWrite } = backSetup()
+    wake.writeOutput(claudeDraft(''))
+    await settle()
+    const sent = wake.submitText('아직 보낼 필요가 없는 질문')
+    wake.userInput('\x1b')
+    wake.writeOutput(claudeDraft('아직 보낼 필요가 없는 질문'))
+    await expect(sent).resolves.toEqual({ ok: false, reason: 'interrupted' })
+    await settle()
+    expect(rawWrite.mock.calls).toEqual([['\x1b[200~아직 보낼 필요가 없는 질문\x1b[201~']])
+  })
 
   it.each([['claude', claudeDraft], ['codex', codexDraft]])('%s: clears the composer when it holds exactly the queued lines', async (kind, draft) => {
     const { rawWrite } = backSetup(kind)

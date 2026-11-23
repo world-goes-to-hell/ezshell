@@ -1,7 +1,15 @@
 /* macOS-style themes (themes/macosPresets.ts holds the same colors).
-   Besides colors, these blocks override the shape tokens: every other theme is square-cornered.
    --on-accent and --error-text are picked for 4.5:1 contrast, as in variables.css
    (system blue #007aff gives white text only 4.0:1, so the accent is the darker #0071e3). */
+
+/* Also used by the chat palette when the rest of the window uses a different theme. */
+:root {
+  --mac-radius-sm: 5px;
+  --mac-radius-md: 7px;
+  --mac-radius-lg: 10px;
+  --mac-radius-xl: 12px;
+  --mac-radius-full: 999px;
+}
 
 /* ===== macOS Light ===== */
 [data-theme="macos-light"] {
@@ -34,11 +42,6 @@
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.14);
   --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.22);
   --shadow-glow: 0 0 0 3px rgba(0, 113, 227, 0.3);
-  --radius-sm: 5px;
-  --radius-md: 7px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
-  --radius-full: 999px;
   --mac-field: #ffffff;
   --mac-field-border: #c4c4c7;
 }
@@ -74,11 +77,6 @@
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.55);
   --shadow-glow: 0 0 0 3px rgba(10, 132, 255, 0.4);
-  --radius-sm: 5px;
-  --radius-md: 7px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
-  --radius-full: 999px;
   --mac-field: #3a3a3c;
   --mac-field-border: #505053;
 }
@@ -86,6 +84,14 @@
 /* ===== Shape rules shared by the macOS themes =====
    Keyed on data-chrome (set from the theme's `chrome` field), not on theme ids, and prefixed so they
    outrank the component rules that follow this file. */
+
+[data-chrome="mac"] {
+  --radius-sm: var(--mac-radius-sm);
+  --radius-md: var(--mac-radius-md);
+  --radius-lg: var(--mac-radius-lg);
+  --radius-xl: var(--mac-radius-xl);
+  --radius-full: var(--mac-radius-full);
+}
 
 /* Text fields: a lighter well with a hairline border, and a soft accent ring on focus */
 [data-chrome="mac"] .form-group input,
