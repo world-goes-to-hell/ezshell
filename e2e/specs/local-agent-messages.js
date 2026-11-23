@@ -355,7 +355,21 @@ async function run() {
     // No receipt (removed 2026-11-20): the sender sees the task read, not yet answered
     const sent = (await mcp('codex-1', 'check_sent', { message_ids: [task.id] })).messages?.[0]
     check('the sender sees its task read but not answered', sent?.status === 'read' && typeof sent.readAt === 'number', JSON.stringify(sent))
+    const dialog = `document.querySelector('.agent-messages-dialog')`
+    const viewTab = label => `[...${dialog}.querySelectorAll('[role=tab]')].find(tab => tab.textContent.trim() === ${JSON.stringify(label)})`
+    const showView = async label => {
+      if (!(await until(`!!${dialog}`))) throw new Error('agent messages dialog did not open')
+      await driver.click(...await driver.center(viewTab(label)))
+      if (!(await until(`${viewTab(label)}?.getAttribute('aria-selected') === 'true'`))) throw new Error(`could not activate ${label}`)
+    }
+    const card = id => `document.querySelector('.agent-message-map-card[data-agent-id="${id}"]')`
+    const edges = `[...document.querySelectorAll('.agent-message-map-edge')]`
     await js(`document.querySelector('[aria-label="claude-2 메시지함"]').click()`)
+    check('the relationship view is the default and the pane opens its agent’s history', await until(`
+      ${dialog}?.dataset.view === 'map' && ${card('claude-2')}?.getAttribute('aria-pressed') === 'true' &&
+      [...document.querySelectorAll('.agent-thread-message')].some(m => m.textContent.includes('review-next') && m.querySelector('.agent-read-state')?.textContent === '읽음·답 없음')
+    `))
+    await showView('목록')
     check('the messages panel marks the task 읽음 (read, not answered yet)', await until(`[...document.querySelectorAll('.agent-thread-message')].some(m => m.textContent.includes('review-next') && m.querySelector('.agent-read-state')?.textContent === '읽음')`))
     await js(`document.querySelector('.agent-messages-dialog .modal-actions button').click()`)
     await until(`!document.querySelector('.agent-messages-dialog')`)
@@ -476,6 +490,14 @@ async function run() {
       window.electronAPI.agentMessagesSnapshot().then(state => state.agents.some(agent =>
         agent.id === 'claude-4' && agent.shellId === ${JSON.stringify(plainShell)} && agent.active && !agent.mcpConnected))
     `))
+    const cardStatus = id => `${card(id)}?.querySelector('.agent-message-map-card-status')`
+    await js(`document.querySelector('[aria-label="codex-1 메시지함"]').click()`)
+    await showView('관계도')
+    check('a disconnected agent with history uses the archived status dot', await until(`
+      ${cardStatus('claude-4')}?.textContent === '연결 끊김' && ${cardStatus('claude-4')}?.dataset.status === 'ended'
+    `))
+    await showView('목록')
+    await js(`${dialog}.querySelector('.modal-actions button').click()`)
     fs.writeFileSync(file('manual-claude-exit-code'), '0')
     check('the agent’s exit releases the pane and retains message history', await until(`
       window.electronAPI.agentMessagesSnapshot().then(state =>
@@ -499,7 +521,6 @@ async function run() {
     `))
     await js(`${compactBadge}.click()`)
 
-    const dialog = `document.querySelector('.agent-messages-dialog')`
     const filter = `document.querySelector('#agent-messages-session')`
     const filterValue = `${filter}?.querySelector('.select-menu-value').textContent`
     const filterOptions = `[...document.querySelectorAll('.select-menu-content [role="menuitemradio"]')]`
@@ -523,7 +544,7 @@ async function run() {
       ${messageTexts}.includes('note-for-user') &&
       ${dialog}.getBoundingClientRect().width >= 500 &&
       !${dialog}.querySelector('textarea, form') &&
-      [...${dialog}.querySelectorAll('button')].every(button => button === ${filter} || button.textContent.trim() === '닫기') &&
+      [...${dialog}.querySelectorAll('button')].every(button => button === ${filter} || button.matches('[role=tab]') || button.textContent.trim() === '닫기') &&
       typeof window.electronAPI.agentMessageSend === 'undefined'
     `))
     await openFilter()
@@ -545,6 +566,42 @@ async function run() {
     check('choosing an agent filters the log to its conversation', await until(`
       ${messageTexts}.includes('review-please') && !${messageTexts}.includes('hello-manual-claude')
     `))
+    await showView('관계도')
+    check('historical agents remain on the map and disconnected agents without messages stay out', await until(`
+      ${card('claude-2')}?.dataset.archived === 'true' && Number(getComputedStyle(${card('claude-2')}).opacity) < 1 &&
+      ${card('codex-1')}?.dataset.archived === 'false' && !${card('codex-3')} &&
+      ${cardStatus('claude-2')}?.textContent === '종료' && ${cardStatus('claude-2')}?.dataset.status === 'ended'
+    `))
+    const archivedEdge = `${edges}.find(edge => edge.getAttribute('aria-label').includes('claude-2') && edge.getAttribute('aria-label').includes('codex-1'))`
+    const linePoint = await js(`(() => {
+      const path = document.querySelector('.agent-message-map-hit')
+      const point = path.getPointAtLength(path.getTotalLength() * 0.18).matrixTransform(path.getScreenCTM())
+      return [point.x, point.y]
+    })()`)
+    await driver.click(...linePoint)
+    check('selecting an edge opens only the two agents’ messages, oldest first', await until(`
+      ${archivedEdge}?.getAttribute('aria-pressed') === 'true' &&
+      ${messageTexts}.slice(0, 2).join(',') === 'review-please,looks-good' &&
+      !${messageTexts}.includes('note-for-user') && !${messageTexts}.includes('hello-manual-claude')
+    `))
+    await until(`!document.querySelector('.agent-delivery-notice')`, 3500)
+    await driver.shot('local-agent-message-map')
+    const [cardX, cardY] = await driver.center(card('codex-1'))
+    const linePath = `document.querySelector('.agent-message-map-line')?.getAttribute('d')`
+    const originalPath = await js(linePath)
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: cardX, y: cardY, button: 'left', buttons: 1, clickCount: 1 })
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: cardX + 30, y: cardY - 24, button: 'left', buttons: 1 })
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: cardX + 30, y: cardY - 24, button: 'left', clickCount: 1 })
+    check('dragging an agent moves its card and the attached edge without changing the selected conversation', await until(`
+      ${card('codex-1')}.getBoundingClientRect().x + ${card('codex-1')}.offsetWidth / 2 > ${cardX + 20} &&
+      ${linePath} !== ${JSON.stringify(originalPath)} && ${archivedEdge}?.getAttribute('aria-pressed') === 'true'
+    `))
+    await driver.click(...await driver.center(card('codex-1')))
+    check('selecting an agent card restores the agent’s full thread', await until(`
+      ${card('codex-1')}.getAttribute('aria-pressed') === 'true' &&
+      ['note-for-user', 'review-please', 'hello-manual-claude'].every(text => ${messageTexts}.includes(text))
+    `))
+    await showView('목록')
     await closeMessages()
 
     const otherWorkspace = path.join(profile, 'other workspace')
@@ -564,7 +621,34 @@ async function run() {
       ${filterOptions}.map(option => option.querySelector('.select-menu-item-label').textContent).join(',') === '전체,codex-6,claude-7'
     `))
     await chooseAgent('전체')
-    await mcp('codex-6', 'send_message', { to: 'claude-7', text: 'other-workspace-message' })
+    await showView('관계도')
+    check('connected agents without messages appear as isolated cards in the current project', await until(`
+      ${card('codex-6')} && ${card('claude-7')} && !${card('codex-1')} && ${edges}.length === 0
+    `))
+    const otherMessage = await mcp('codex-6', 'send_message', { to: 'claude-7', text: 'other-workspace-message' })
+    check('an unread arrival adds a highlighted directional edge to the open map', await until(`
+      ${edges}.length === 1 && ${edges}[0].dataset.unread === 'true' && ${edges}[0].getAttribute('aria-label').includes('codex-6 → claude-7, 1개, 안 읽음 1개')
+    `))
+    await js(`${edges}[0].click()`)
+    await mcp('claude-7', 'read_inbox', {})
+    check('the map drops the highlight immediately when the agent reads the message', await until(`
+      ${edges}[0].dataset.unread === 'false' && ${edges}[0].getAttribute('aria-label').includes('읽음·답 없음 1개') &&
+      ${messageTexts}.join(',') === 'other-workspace-message'
+    `))
+    await mcp('claude-7', 'acknowledge_message', { message_id: otherMessage.id })
+    check('the open map updates the direction to answered', await until(`
+      ${edges}[0].getAttribute('aria-label').includes('답함 1개')
+    `))
+    await send('Emulation.setDeviceMetricsOverride', { width: 740, height: 720, deviceScaleFactor: 1, mobile: false })
+    check('a narrower window places the message thread below the map and keeps Close visible', await until(`
+      document.querySelector('.agent-message-map-detail').getBoundingClientRect().top >=
+      document.querySelector('.agent-message-map-viewport').getBoundingClientRect().bottom &&
+      ${dialog}.querySelector('.modal-actions button').getBoundingClientRect().bottom <= ${dialog}.getBoundingClientRect().bottom
+    `))
+    await until(`!document.querySelector('.agent-delivery-notice')`, 3500)
+    await driver.shot('local-agent-message-map-narrow')
+    await send('Emulation.clearDeviceMetricsOverride')
+    await showView('목록')
     check('the second project’s open log receives its own messages only', await until(`
       ${dialog}.querySelector('.agent-message-workspace').textContent === 'other workspace' &&
       ${messageTexts}.join(',') === 'other-workspace-message'

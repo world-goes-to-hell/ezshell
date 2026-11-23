@@ -1,16 +1,19 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import * as Dialog from '@radix-ui/react-dialog'
-import { RiMailLine, RiTeamLine, RiUser3Line } from 'react-icons/ri'
+import * as Tabs from '@radix-ui/react-tabs'
+import { RiListUnordered, RiMailLine, RiNodeTree, RiTeamLine, RiUser3Line } from 'react-icons/ri'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
 import type { AgentMessage, AgentMessageDelivery, AgentMessageSession, AgentMessagesSnapshot, LocalAgent } from '../../types'
 import { folderLabel, isInsidePath, pathKey } from '../../lib/localWorkspaceTree'
 import { visibleTerminalId } from '../../lib/localTerminalPane'
 import { projectOfFolder, type GroupProject } from '../../lib/tabGroups'
+import { AGENT_MESSAGE_VIEW_KEY, agentMessageMap, parseAgentMessageView, type MessageState } from '../../lib/agentMessageMap'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
 import { SelectMenu } from '../ui/SelectMenu'
+import { AgentMessageMap, MESSAGE_STATE_LABELS } from './AgentMessageMap'
 import './AgentMessages.css'
 
 const USER = 'user'
@@ -332,10 +335,43 @@ interface DialogProps extends WorkspaceSelection {
   onClose: () => void
 }
 
+const mapMessageTime = new Intl.DateTimeFormat('ko-KR', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+
+function MessageThread({ messages, name, actor, states }: {
+  messages: readonly AgentMessage[]
+  name: string
+  actor: (id: string) => ReactNode
+  states?: ReadonlyMap<string, MessageState>
+}) {
+  return (
+    <div className="agent-message-thread" role="log" tabIndex={0} aria-label={name}>
+      {messages.length === 0 && <p className="form-hint">아직 메시지가 없습니다.</p>}
+      {messages.map(message => {
+        const state = states?.get(message.id)
+        const read = state ? state !== 'unread' : isRead(message)
+        return (
+          <article key={message.id} className="agent-thread-message">
+            <header>
+              <strong className="agent-message-route">{actor(message.from)} → {actor(message.to)}</strong>
+              <span className="agent-read-state" data-read={read} title={readTitle(message)}>
+                {state ? MESSAGE_STATE_LABELS[state] : read ? '읽음' : '안 읽음'}
+              </span>
+            </header>
+            <p>{message.text}</p>
+            {states && <time className="agent-message-map-time" dateTime={new Date(message.sentAt).toISOString()}>{mapMessageTime.format(message.sentAt)}</time>}
+          </article>
+        )
+      })}
+    </div>
+  )
+}
+
 function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects, onClose }: DialogProps) {
   const { agents, messages } = useMessages(state => state.snapshot)
   const panes = useMessages(state => state.panes)
   const [selection, setSelection] = useState(initialAgent ?? ALL)
+  const [edgeSelection, setEdgeSelection] = useState<string>()
+  const [view, setView] = useState(() => parseAgentMessageView(localStorage.getItem(AGENT_MESSAGE_VIEW_KEY)) ?? 'map')
   const tab = useTerminalStore(state => {
     const id = sourceTabId ?? visibleTerminalId(state.layout, state.activeTerminalId)
     return id ? state.terminals.get(id) : undefined
@@ -346,14 +382,17 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
   const project = projects.find(item => item.key === currentGroup) ?? projectOfFolder(folder, projects)
   const workspaceName = project?.name ?? (folder ? folderLabel(folder) : null)
   // Match archived agents by working directory as well, so closing a pane does not hide its messages.
-  const localAgents = agents.filter(agent => {
+  const localAgents = useMemo(() => agents.filter(agent => {
     const owner = projectOfFolder(agent.cwd, projects)
     if (project) return owner?.key === project.key
     if (!folder || owner) return false
     return tabFolder ? isInsidePath(agent.cwd, tabFolder) : pathKey(agent.cwd) === pathKey(folder)
-  })
+  }), [agents, folder, project, projects, tabFolder])
   const agentsById = new Map(localAgents.map(agent => [agent.id, agent]))
+  const map = useMemo(() => agentMessageMap(localAgents, messages), [localAgents, messages])
+  const selectedEdge = map.edges.find(edge => edge.id === edgeSelection)
   const selected = agentsById.has(selection) ? selection : ALL
+  const mapAgent = !selectedEdge && map.nodes.some(({ agent }) => agent.id === selected) ? selected : undefined
   const thread = messages.filter(({ from, to }) => {
     if (selected === ALL) return agentsById.has(from) && agentsById.has(to)
     return (from === selected && (agentsById.has(to) || to === USER))
@@ -365,49 +404,60 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
       <span className="agent-message-actor-name">{label(id)}</span>
     </span>
   )
+  const mapThreadName = selectedEdge ? `${selectedEdge.first} ↔ ${selectedEdge.second}` : mapAgent
+  const changeView = (value: string) => {
+    const next = parseAgentMessageView(value)
+    if (!next) return
+    setView(next)
+    localStorage.setItem(AGENT_MESSAGE_VIEW_KEY, next)
+  }
   return (
     <Dialog.Root open onOpenChange={open => { if (!open) onClose() }}>
       <Dialog.Portal>
         <Dialog.Overlay className="modal-overlay" />
-        <Dialog.Content className="modal-content agent-messages-dialog" aria-describedby={undefined}>
+        <Dialog.Content className="modal-content agent-messages-dialog" data-view={workspaceName ? view : undefined} aria-describedby={undefined}>
           <Dialog.Title className="modal-title"><RiMailLine size={20} />에이전트 메시지</Dialog.Title>
           {workspaceName ? (
-            <>
-              <div className="form-group">
-                <div className="agent-message-filter">
-                  <label htmlFor="agent-messages-session">에이전트</label>
-                  <span className="agent-message-workspace" title={workspaceName}>{workspaceName}</span>
+            <Tabs.Root value={view} onValueChange={changeView}>
+              <div className="agent-message-map-toolbar">
+                <span className="agent-message-workspace" title={workspaceName}>{workspaceName}</span>
+                <Tabs.List className="agent-message-map-switch" aria-label="에이전트 메시지 보기">
+                  <Tabs.Trigger value="map"><RiNodeTree size={15} aria-hidden="true" />관계도</Tabs.Trigger>
+                  <Tabs.Trigger value="list"><RiListUnordered size={15} aria-hidden="true" />목록</Tabs.Trigger>
+                </Tabs.List>
+              </div>
+              <Tabs.Content value="map" className="agent-message-map-body">
+                <AgentMessageMap key={project?.key ?? folder} model={map} selectedAgent={mapAgent} selectedEdge={selectedEdge?.id}
+                  onSelectAgent={id => { setSelection(id); setEdgeSelection(undefined) }} onSelectEdge={setEdgeSelection} />
+                <aside className="agent-message-map-detail" aria-label="선택한 메시지">
+                  <h3>{selectedEdge ? <>{actor(selectedEdge.first)} ↔ {actor(selectedEdge.second)}</> : mapAgent ? actor(mapAgent) : '메시지'}</h3>
+                  {mapThreadName ? (
+                    <MessageThread key={mapThreadName} name={`${mapThreadName} 메시지`} actor={actor} states={map.messageStates}
+                      messages={selectedEdge?.messages ?? [...thread].sort((a, b) => a.sentAt - b.sentAt)} />
+                  ) : <p className="agent-message-map-empty">에이전트나 연결선을 선택하면 메시지를 볼 수 있습니다.</p>}
+                </aside>
+              </Tabs.Content>
+              <Tabs.Content value="list">
+                <div className="form-group">
+                  <div className="agent-message-filter"><label htmlFor="agent-messages-session">에이전트</label></div>
+                  <SelectMenu
+                    id="agent-messages-session"
+                    ariaLabel="에이전트"
+                    value={selected}
+                    onChange={id => { setSelection(id); setEdgeSelection(undefined) }}
+                    options={[
+                      { value: ALL, label: '전체', icon: <MessageProviderIcon kind={ALL} /> },
+                      ...localAgents.map(agent => ({
+                        value: agent.id,
+                        label: `${agent.id}${agent.active ? '' : ' (종료)'}`,
+                        icon: <MessageProviderIcon kind={agent.kind} />
+                      }))
+                    ]}
+                  />
                 </div>
-                <SelectMenu
-                  id="agent-messages-session"
-                  ariaLabel="에이전트"
-                  value={selected}
-                  onChange={setSelection}
-                  options={[
-                    { value: ALL, label: '전체', icon: <MessageProviderIcon kind={ALL} /> },
-                    ...localAgents.map(agent => ({
-                      value: agent.id,
-                      label: `${agent.id}${agent.active ? '' : ' (종료)'}`,
-                      icon: <MessageProviderIcon kind={agent.kind} />
-                    }))
-                  ]}
-                />
-              </div>
-              <div className="agent-message-thread" role="log" tabIndex={0} aria-label={selected === ALL ? `${workspaceName} 에이전트 간 메시지` : `${selected} 메시지`}>
-                {thread.length === 0 && <p className="form-hint">아직 메시지가 없습니다.</p>}
-                {thread.map(message => (
-                  <article key={message.id} className="agent-thread-message">
-                    <header>
-                      <strong className="agent-message-route">{actor(message.from)} → {actor(message.to)}</strong>
-                      <span className="agent-read-state" data-read={isRead(message)} title={readTitle(message)}>
-                        {isRead(message) ? '읽음' : '안 읽음'}
-                      </span>
-                    </header>
-                    <p>{message.text}</p>
-                  </article>
-                ))}
-              </div>
-            </>
+                <MessageThread messages={thread} name={selected === ALL ? `${workspaceName} 에이전트 간 메시지` : `${selected} 메시지`} actor={actor} />
+              </Tabs.Content>
+            </Tabs.Root>
           ) : <p className="form-hint">로컬 작업을 선택하면 에이전트 메시지를 볼 수 있습니다.</p>}
           <div className="modal-actions">
             <Dialog.Close className="btn-secondary">닫기</Dialog.Close>
