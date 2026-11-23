@@ -3,10 +3,11 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
 import { motion, AnimatePresence } from 'framer-motion'
 import { modalOverlayVariants, modalContentVariants } from '../../lib/animation/variants'
-import { RiCloseFill, RiSettings3Fill, RiPaletteFill, RiKeyboardLine, RiDatabaseLine, RiTerminalBoxLine, RiPlugLine, RiSmartphoneLine, RiMailLine } from 'react-icons/ri'
+import { RiCloseFill, RiSettings3Fill, RiPaletteFill, RiKeyboardLine, RiDatabaseLine, RiTerminalBoxLine, RiPlugLine, RiSmartphoneLine, RiMailLine, RiCursorLine } from 'react-icons/ri'
 import { ThemeSelector } from './ThemeSelector'
 import { AgentChatThemePicker } from '../AgentChat/AgentChatThemePicker'
 import { BrowserTabWidthControl } from './BrowserTabWidthControl'
+import { PointerSettings } from './PointerSettings'
 import { ShortcutsPanel } from './ShortcutsPanel'
 import { SessionBackup } from './SessionBackup'
 import { FontSizeControl } from './FontSizeControl'
@@ -106,6 +107,16 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                           앱의 색상 테마를 선택하세요. 터미널 색상도 함께 변경됩니다.
                         </p>
                         <ThemeSelector />
+                      </section>
+                      <section className="settings-section pointer-settings-section">
+                        <h3 className="settings-section-title">
+                          <RiCursorLine size={18} />
+                          마우스 포인터
+                        </h3>
+                        <p className="settings-section-desc">
+                          앱 안에서만 바뀝니다. 다른 프로그램과 바탕 화면의 포인터는 그대로입니다.
+                        </p>
+                        <PointerSettings />
                       </section>
                       <BrowserTabWidthControl />
                     </div>

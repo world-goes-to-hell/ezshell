@@ -77,13 +77,13 @@ const markerTheme = EditorView.baseTheme({
     border: 'none',
     background: 'none',
     color: 'inherit',
-    cursor: 'pointer',
+    cursor: 'var(--ez-cursor-pointer, pointer)',
     fontSize: '11px',
     opacity: '0.7',
     padding: '0 2px'
   },
   '.cm-log-marker-remove:hover': { opacity: '1' },
-  '.cm-lineNumbers .cm-gutterElement': { cursor: 'pointer' }
+  '.cm-lineNumbers .cm-gutterElement': { cursor: 'var(--ez-cursor-pointer, pointer)' }
 })
 
 /** Adds a marker at the end of the log, unless the limit is reached or one is already there */

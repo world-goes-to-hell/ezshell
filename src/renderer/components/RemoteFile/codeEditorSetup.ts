@@ -102,7 +102,7 @@ const appTheme = EditorView.theme({
   // left the × at text size; this one is as specific plus the element name, so it wins
   '.cm-panel.cm-search button[name=close]': {
     top: '6px', right: '8px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-    borderRadius: '4px', color: 'var(--text-secondary)', fontSize: '18px', lineHeight: '1', cursor: 'pointer'
+    borderRadius: '4px', color: 'var(--text-secondary)', fontSize: '18px', lineHeight: '1', cursor: 'var(--ez-cursor-pointer, pointer)'
   },
   '.cm-panel.cm-search button[name=close]:hover': { backgroundColor: 'var(--bg-hover)', color: 'var(--text-primary)' },
   '.cm-panel.cm-search button[name=close]:focus-visible': { outline: '2px solid var(--accent)', outlineOffset: '1px' },

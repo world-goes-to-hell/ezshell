@@ -4,6 +4,7 @@ import { useShortcutsStore } from '../stores/shortcutsStore'
 import { THEME_STORAGE_KEY } from './themeSync'
 import type { ThemeDefinition } from '../types/theme'
 import type { SurfaceStyle } from './appearance'
+import { POINTER_PREFS_KEY, parsePointerPrefs, setPointerPrefs } from './pointerPrefs'
 import {
   collectUiSettings, SHORTCUTS_KEY, UI_STORE_KEY,
   type NormalizeContext, type UiSettingsFile, type UiSettingsImport
@@ -21,7 +22,7 @@ export function exportUiSettings(): UiSettingsFile {
 /**
  * Puts checked values (parseUiSettingsFile) to use without reloading the window: a reload would
  * close every open tab. Theme, shortcuts, sidebar and zoom go through their stores and show at once;
- * the rest is read from localStorage the next time its panel opens.
+ * pointer prefs also apply at once; the rest is read from localStorage the next time its panel opens.
  * @returns how many values were applied
  */
 export function applyUiSettings(values: UiSettingsImport['values']): number {
@@ -31,6 +32,8 @@ export function applyUiSettings(values: UiSettingsImport['values']): number {
       if (entry.key === THEME_STORAGE_KEY) applyTheme(value)
       else if (entry.key === UI_STORE_KEY) applyUiStore(value)
       else if (entry.key === SHORTCUTS_KEY) applyShortcuts(value)
+      // Through the prefs so this window's pointer and effects change at once (setItem alone tells only other windows)
+      else if (entry.key === POINTER_PREFS_KEY) setPointerPrefs(parsePointerPrefs(value))
       else localStorage.setItem(entry.key, value)
       applied += 1
     } catch (error) {

@@ -16,6 +16,7 @@ import { parseLogViewPrefs, LOG_VIEW_PREFS_KEY } from './logViewPrefs'
 import { MARKDOWN_SPLIT_KEY, readSplit } from './markdownSplit'
 import { AGENT_IDLE_KEY, parseAgentIdlePrefs } from './agentIdlePrefs'
 import { AGENT_MESSAGE_VIEW_KEY, parseAgentMessageView } from './agentMessageMap'
+import { POINTER_PREFS_KEY, parsePointerPrefs } from './pointerPrefs'
 
 /**
  * 화면 설정 내보내기·가져오기 (설정 > 백업 > 화면 설정).
@@ -117,6 +118,7 @@ export const SHORTCUTS_KEY = 'customShortcuts'
 
 export const UI_SETTING_ENTRIES: readonly UiSettingEntry[] = [
   { key: THEME_STORAGE_KEY, group: 'theme', label: '테마, 사용자 지정 테마, 표면 스타일, 창 투명도', normalize: normalizeThemeStore },
+  { key: POINTER_PREFS_KEY, group: 'theme', label: '마우스 포인터 모양·크기·효과', normalize: viaParser(parsePointerPrefs) },
   {
     key: SHORTCUTS_KEY,
     group: 'shortcuts',

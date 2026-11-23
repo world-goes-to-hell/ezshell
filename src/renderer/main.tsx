@@ -5,6 +5,7 @@ import './styles/globals.css'
 import { installThemedTooltips } from './lib/themedTooltip'
 import { installCaptionDoubleClick } from './lib/captionDoubleClick'
 import { installSftpWindowReturn } from './lib/sftpDetach'
+import { installPointerAppearance } from './lib/pointerAppearance'
 
 // Suppress ResizeObserver loop warning (harmless)
 const resizeObserverErr = window.onerror
@@ -28,6 +29,7 @@ if (document.fonts?.load) {
 installThemedTooltips()
 installCaptionDoubleClick()
 installSftpWindowReturn()
+installPointerAppearance()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

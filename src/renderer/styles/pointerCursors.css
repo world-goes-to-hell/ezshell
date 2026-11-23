@@ -1,0 +1,54 @@
+/* 설정 > 테마 > 마우스 포인터 (lib/pointerAppearance.ts). The images are blob: URLs in :root custom
+   properties; every `cursor: <keyword>` of the app's CSS already reads them (scripts/postcss-cursor-vars.cjs).
+   These rules cover what no app rule sets, only while a set is chosen. They have no specificity
+   (:where), so any app rule with its own cursor still wins. */
+
+/* The arrow everything inherits */
+:where(:root[data-cursor-set]) {
+  cursor: var(--ez-cursor-default, default);
+}
+
+/* Text fields, links (the browser's own stylesheet gives them their pointer) and text meant to be
+   selected: with the system pointer these show the I-beam through `cursor: auto`, which the inherited
+   arrow above would otherwise replace */
+:where(:root[data-cursor-set]) :where(
+  input:not([type]), input[type='text'], input[type='search'], input[type='password'], input[type='email'],
+  input[type='url'], input[type='number'], input[type='tel'], textarea, [contenteditable]:not([contenteditable='false']),
+  .agent-chat-log, .agent-chat-subagent-preview, .agent-chat-approval-detail, .agent-chat-quote-preview,
+  .chat-link-preview-path, .agent-ask-question, .agent-ask-preview, .agent-ask-review dd, .agent-ask-summary dd,
+  .pinned-reply-body, .markdown-body, .connection-test-detail, .remote-access-address code,
+  .workspace-commit-meta code, .workspace-diff-text, .transfer-error-message,
+  .cm-editor .cm-content
+) {
+  cursor: var(--ez-cursor-text, text);
+}
+
+:where(:root[data-cursor-set]) :where(a[href]) {
+  cursor: var(--ez-cursor-pointer, pointer);
+}
+
+/* CodeMirror packages set `cursor: pointer` from JavaScript (the build does not see it); these must
+   outrank their injected rules, so they keep a specificity */
+:root[data-cursor-set] .cm-editor :is(
+  .cm-foldGutter span, .cm-foldPlaceholder, .cm-diagnosticAction, .cm-merge-revert button,
+  .cm-chunkButtons button, .cm-collapsedLines
+),
+:root[data-cursor-set] .cm-tooltip-autocomplete > ul > li,
+:root[data-cursor-set] :is(.cm-completionListIncompleteTop, .cm-completionListIncompleteBottom)::before,
+:root[data-cursor-set] :is(.cm-completionListIncompleteTop, .cm-completionListIncompleteBottom)::after {
+  cursor: var(--ez-cursor-pointer, pointer);
+}
+
+/* The effects (one per window, only while an effect is chosen). It never takes the pointer, so it does
+   not block what is under it. Above dialogs (100), menus (1000) and tooltips (10000). Intentionally
+   below the dialogs that ask for a decision, which draw above everything: the server file window's
+   confirmations (14000), ConfirmDialog (15000), SelectMenu lists (15002), the host key dialog (16000),
+   the MCP approval (20000). */
+.pointer-effects-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 10050;
+}

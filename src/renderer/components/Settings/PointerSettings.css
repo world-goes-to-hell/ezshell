@@ -1,0 +1,209 @@
+/* 설정 > 테마 > 마우스 포인터 (design: mockups/cursor-themes.html) */
+.pointer-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pointer-group-title,
+.pointer-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pointer-group-title > span,
+.pointer-subtitle > span:last-child {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+.pointer-effects-title {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.pointer-tag {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary) !important;
+  font-size: 10.5px !important;
+  font-weight: 700 !important;
+}
+
+.pointer-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+}
+
+.pointer-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 10px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+
+.pointer-card:hover {
+  border-color: var(--text-muted);
+}
+
+.pointer-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pointer-card[aria-checked='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.pointer-card[aria-checked='true']::after {
+  content: '사용 중';
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pointer-card-name {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.pointer-card-desc {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pointer-card-tag {
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  /* The text keeps the theme's readable secondary color (4.5:1); the border carries the tag's color */
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+
+.pointer-card-tag[data-tag='cute'] {
+  border-color: #e0679a;
+}
+
+/* Three pointers of the set on a checkerboard, so light and dark parts both show */
+.pointer-set-preview {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 42px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: repeating-conic-gradient(color-mix(in srgb, var(--border) 55%, transparent) 0 25%, transparent 0 50%) 0 0 / 12px 12px;
+}
+
+.pointer-set-preview-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pointer-set-preview-item img {
+  display: block;
+  flex: none;
+}
+
+.pointer-set-preview-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+}
+
+.pointer-effect-preview {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 54px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+}
+
+.pointer-effect-icon {
+  display: flex;
+  transition: opacity 0.15s ease;
+}
+
+.pointer-effect-preview.is-playing .pointer-effect-icon {
+  opacity: 0.18;
+}
+
+.pointer-effect-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.pointer-row .theme-filter-tab {
+  white-space: nowrap;
+}
+
+.pointer-row {
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.pointer-note {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.pointer-note-warn {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.pointer-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pointer-card,
+  .pointer-effect-icon {
+    transition: none;
+  }
+}
