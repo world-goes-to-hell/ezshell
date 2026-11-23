@@ -20,7 +20,8 @@ const usage = { agent: 'claude', model: 'Opus 5.5', effort: 'high', sessionId: n
 async function setup() {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-agent-usage-test-'))
   const sent = []
-  messages = createAgentMessages({ notify: (channel, payload) => sent.push({ channel, payload }), isLocked: () => false })
+  messages = createAgentMessages({ roleFile: path.join(root, 'agent-roles.json'),
+    notify: (channel, payload) => sent.push({ channel, payload }), isLocked: () => false })
   await messages.ready()
   const claude = messages.register('claude', 'local:1', root, {})
   return { sent, claude }
@@ -82,6 +83,32 @@ describe('usage reports', () => {
     expect(sent.filter(item => item.channel === 'agent-usage').at(-1).payload).toMatchObject({ agentId: 'claude-1', shellId: 'local:1' })
     messages.forgetShell('local:1')
     expect(await rpc({ method: 'usage', shellToken: shell.EZSHELL_SHELL_TOKEN, usage }, { pipe, token: 'none' })).toMatchObject({ success: false })
+  })
+
+  it('keeps role identity separate from usage reported by an agent or its shell', async () => {
+    const { claude } = await setup()
+    const id = claude.env.EZSHELL_AGENT_ID
+    const ownSession = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
+    const otherSession = '01a1ec18-9b8a-71c1-839d-2e31c0103010'
+    const other = messages.register('claude', 'local:2', root, {}, otherSession)
+    messages.setUserRole(other.env.EZSHELL_AGENT_ID, '다른 대화')
+    other.close()
+    messages.setUserRole(id, '내 대화')
+    const pipe = claude.env.EZSHELL_AGENT_PIPE
+    const claimedUsage = { ...usage, sessionId: otherSession }
+    const lease = { pipe, token: claude.env.EZSHELL_AGENT_TOKEN }
+    expect(await rpc({ method: 'usage', usage: claimedUsage }, lease)).toMatchObject({ stored: true })
+    expect(messages.snapshot().agents.find(agent => agent.id === id)?.role).toBe('내 대화')
+    messages.setVerifiedSession(id, ownSession)
+    const { EZSHELL_SHELL_TOKEN: shellToken } = messages.registerShell('local:1')
+    expect(await rpc({ method: 'usage', shellToken, usage: claimedUsage }, { pipe, token: 'none' })).toMatchObject({ stored: true })
+    expect(messages.usageSnapshot()[0].usage.sessionId).toBe(otherSession)
+    messages.setUserRole(id, '')
+    expect(await rpc({ method: 'set-role', role: '내 역할' }, lease)).toMatchObject({ role: '내 역할' })
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'agent-roles.json'), 'utf8'))).toEqual({
+      [`claude:${ownSession}`]: { agent: '내 역할', usedAt: expect.any(Number) },
+      [`claude:${otherSession}`]: { user: '다른 대화', usedAt: expect.any(Number) }
+    })
   })
 
   it('give a launched Claude a status line of this run that prints nothing visible', async () => {

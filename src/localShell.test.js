@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, promises, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { createAgentMessages } from './ipc/agentMessages.js'
 import { rpc } from './ipc/agentMessageCli.js'
@@ -24,7 +26,11 @@ function setup(options = {}) {
     ptys.push(pty)
     return pty
   })
-  const shells = createLocalShells({ spawn, send: (channel, payload) => sent.push({ channel, payload }), shell: { file: 'sh', args: [], name: 'sh' }, cwd: '/home', env: {}, ...options })
+  const shells = createLocalShells({
+    spawn, send: (channel, payload) => sent.push({ channel, payload }),
+    shell: { file: 'sh', args: [], name: 'sh' }, cwd: '/home', env: {},
+    commandLine: async () => '', timedProcessTree: options.processTree, ...options
+  })
   return { shells, ptys, sent, spawn }
 }
 
@@ -43,9 +49,10 @@ describe('createLocalShells', () => {
     const agents = createAgentMessages({ notify: vi.fn(), isLocked: () => locked, reportLocalAntigravity: report => shells.reportAntigravityStatus(report) })
     await agents.ready()
     const runtime = { name: basename(process.execPath), executable: process.execPath }
+    const antigravityRoot = realpathSync(mkdtempSync(join(tmpdir(), 'ezshell-agy-status-')))
     const statusShell = { name: process.platform === 'win32' ? 'cmd.exe' : 'sh' }
     const processes = new Map([
-      [12, { parent: 10, name: 'agy.exe' }], [13, { parent: 11, name: 'agy.exe' }],
+      [12, { parent: 10, name: 'agy.exe', startedAt: 1 }], [13, { parent: 11, name: 'agy.exe', startedAt: 1 }],
       [14, { ...runtime, parent: 19 }], [19, { ...statusShell, parent: 12 }],
       [15, { ...runtime, parent: 11 }],
       [16, { ...runtime, parent: 20 }], [20, { ...statusShell, parent: 13 }],
@@ -53,7 +60,7 @@ describe('createLocalShells', () => {
       [22, { ...runtime, parent: 19, executable: join(dirname(process.execPath), 'other', runtime.name) }],
       [23, { ...runtime, parent: 24 }], [24, { parent: 12, name: 'powershell.exe' }]
     ])
-    const fixture = setup({ agents, processTree: async () => processes, processAlive: pid => processes.has(pid) })
+    const fixture = setup({ agents, processTree: async () => processes, processAlive: pid => processes.has(pid), antigravityRoot })
     shells = fixture.shells
     const first = shells.open({ agent: 'antigravity' }).id
     const second = shells.open().id
@@ -63,6 +70,8 @@ describe('createLocalShells', () => {
     const cwd = process.platform === 'win32' ? 'C:\\work' : '/work'
     const sessionId = '183a2d7a-c5d8-4d40-acd1-11c08bce7cde'
     const otherId = 'd13ee880-0dde-49af-a4c9-7a3620649d7b'
+    mkdirSync(join(antigravityRoot, sessionId))
+    mkdirSync(join(antigravityRoot, otherId))
     const report = (pty, pid, conversation_id = '', fields = {}, token = pty.options.env.EZSHELL_SHELL_TOKEN) => rpc({
       method: 'antigravity-status', pid,
       value: { product: 'antigravity', cwd, conversation_id, agent_state: 'idle', ...fields }
@@ -109,6 +118,86 @@ describe('createLocalShells', () => {
     } finally {
       shells.closeAll()
       agents.stop()
+      rmSync(antigravityRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('requires a brain directory created after agy started before changing its role conversation', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'ezshell-agy-role-')))
+    const session = '183a2d7a-c5d8-4d40-acd1-11c08bce7cde'
+    const earlier = 'd13ee880-0dde-49af-a4c9-7a3620649d7b'
+    const later = 'd13ee880-0dde-49af-a4c9-7a3620649d7c'
+    const earlierDirectory = join(root, earlier)
+    mkdirSync(earlierDirectory)
+    const stat = statSync(earlierDirectory)
+    const startedAt = (stat.birthtimeMs || stat.mtimeMs) + 1
+    const processes = new Map([
+      [12, { parent: 10, name: 'agy.exe', startedAt }],
+      [13, { parent: 12, name: process.platform === 'win32' ? 'cmd.exe' : 'sh' }],
+      [14, { parent: 13, name: basename(process.execPath), executable: process.execPath }]
+    ])
+    const registerLocalAntigravity = vi.fn((_, attach) => Boolean(attach({ agentId: 'antigravity-1', setStatus: vi.fn(), onExit: vi.fn() })))
+    const setVerifiedSession = vi.fn()
+    const { shells, ptys } = setup({
+      processTree: async () => processes, processAlive: pid => processes.has(pid), antigravityRoot: root,
+      agents: { registerLocalAntigravity, setVerifiedSession }
+    })
+    const { id } = shells.open()
+    ptys[0].pid = 10
+    let sequence = 0
+    const report = sessionId => shells.reportAntigravityStatus({
+      shellId: id, pid: 14, isCurrent: () => true, sequence: ++sequence,
+      status: { sessionId, cwd: root, status: 'idle' }
+    })
+    try {
+      expect(await report(earlier)).toBe(true)
+      expect(registerLocalAntigravity).toHaveBeenCalledWith(root, expect.any(Function), null)
+      expect(shells.agentOf(id).sessionId).toBeNull()
+      await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(startedAt))
+      mkdirSync(join(root, session))
+      expect(await report(session)).toBe(true)
+      expect(shells.agentOf(id).sessionId).toBe(session)
+      expect(await report(null)).toBe(true)
+      expect(await report(earlier)).toBe(true)
+      expect(await report(later)).toBe(true)
+      expect(shells.agentOf(id).sessionId).toBe(session)
+      expect(setVerifiedSession.mock.calls).toEqual([
+        ['antigravity-1', session], ['antigravity-1', session], ['antigravity-1', session], ['antigravity-1', session]
+      ])
+
+      await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(startedAt))
+      mkdirSync(join(root, later))
+      const readStat = promises.lstat
+      const olderCheck = Promise.withResolvers()
+      const releaseOlderCheck = Promise.withResolvers()
+      const lstat = vi.spyOn(promises, 'lstat').mockImplementation(async (file, ...options) => {
+        if (file === earlierDirectory) {
+          olderCheck.resolve()
+          await releaseOlderCheck.promise
+        }
+        return readStat(file, ...options)
+      })
+      try {
+        const accepted = report(later)
+        const unverified = report(earlier)
+        await olderCheck.promise
+        expect(await accepted).toBe(true)
+        releaseOlderCheck.resolve()
+        expect(await unverified).toBe(true)
+        expect(setVerifiedSession).toHaveBeenLastCalledWith('antigravity-1', later)
+        expect(shells.agentOf(id).sessionId).toBe(later)
+      } finally {
+        releaseOlderCheck.resolve()
+        lstat.mockRestore()
+      }
+      const logs = join(earlierDirectory, '.system_generated', 'logs')
+      mkdirSync(logs, { recursive: true })
+      writeFileSync(join(logs, 'transcript.jsonl'), '')
+      expect(await report(earlier)).toBe(true)
+      expect(shells.agentOf(id).sessionId).toBe(earlier)
+    } finally {
+      shells.closeAll()
+      rmSync(root, { recursive: true, force: true })
     }
   })
 
@@ -119,10 +208,10 @@ describe('createLocalShells', () => {
     const nested = { ...session, pid: 13 }
     const outside = { ...session, pid: 22 }
     const processes = new Map([
-      [12, { parent: 10, name: 'claude.exe' }],
-      [13, { parent: 12, name: 'claude.exe' }],
+      [12, { parent: 10, name: 'claude.exe', startedAt }],
+      [13, { parent: 12, name: 'claude.exe', startedAt }],
       [14, { parent: 12, name: 'electron.exe' }],
-      [22, { parent: 20, name: 'claude.exe' }]
+      [22, { parent: 20, name: 'claude.exe', startedAt }]
     ])
     const readClaudeSessions = vi.fn(async () => [session, nested, outside])
     const processTree = vi.fn(async () => processes)
@@ -147,16 +236,120 @@ describe('createLocalShells', () => {
       expect(registerLocalClaude).toHaveBeenCalledTimes(1)
 
       const connectMcp = await shells.bindAgentProcess({ pid: 14, kind: 'claude' })
-      expect(connectMcp({ agentId: 'claude-2', setStatus: vi.fn(), onExit }).agentId).toBe('claude-1')
+      expect(connectMcp({ agentId: 'claude-2', setStatus: vi.fn(), onExit }).agentId).toBe('claude-2')
       processes.delete(12)
       readClaudeSessions.mockResolvedValue([outside])
       await vi.advanceTimersByTimeAsync(1000)
       expect(shells.agentOf(first)).toBeNull()
       expect(shells.isRunning(first)).toBe(true)
-      expect(onExit).toHaveBeenCalledExactlyOnceWith('claude-1')
+      expect(onExit.mock.calls).toEqual([['claude-1'], ['claude-2']])
     } finally {
       shells.closeAll()
       vi.useRealTimers()
+    }
+  })
+
+  it.each([10, 12])('verifies a managed Claude session from its own process (PID %s)', async pid => {
+    vi.useFakeTimers()
+    const startedAt = Date.now()
+    const ownSession = { pid, cwd: '/work', startedAt, sessionId: '183a2d7a-c5d8-4d40-acd1-11c08bce7cde' }
+    const nextSession = { ...ownSession, sessionId: 'd13ee880-0dde-49af-a4c9-7a3620649d7b' }
+    const unrelatedSession = { ...nextSession, pid: 22 }
+    const processTree = vi.fn(async () => new Map([
+      [pid, { parent: pid === 10 ? 1 : 10, name: 'claude.exe', startedAt }],
+      [22, { parent: 20, name: 'claude.exe', startedAt }],
+      [23, { parent: pid, name: 'node.exe', startedAt }]
+    ]))
+    const readClaudeSessions = vi.fn(async () => [unrelatedSession, { ...nextSession, pid: 23 }, ownSession])
+    const setVerifiedSession = vi.fn()
+    const registerLocalClaude = vi.fn()
+    const { shells, ptys } = setup({ readClaudeSessions, processTree, processAlive: () => true, agents: {
+      register: () => ({ env: { EZSHELL_AGENT_ID: 'claude-managed' }, close: vi.fn() }),
+      registerLocalClaude,
+      setVerifiedSession
+    } })
+    try {
+      shells.open({ agent: 'claude' })
+      ptys[0].pid = 10
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(setVerifiedSession.mock.calls).toEqual([['claude-managed', ownSession.sessionId]])
+      readClaudeSessions.mockResolvedValue([nextSession])
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(setVerifiedSession.mock.calls).toEqual([
+        ['claude-managed', ownSession.sessionId], ['claude-managed', nextSession.sessionId]
+      ])
+      expect(registerLocalClaude).not.toHaveBeenCalled()
+      expect(processTree).toHaveBeenCalledTimes(1)
+    } finally {
+      shells.closeAll()
+      vi.useRealTimers()
+    }
+  })
+
+  it('ignores a stale Claude session file after PID reuse when reading the sleep target', async () => {
+    vi.useFakeTimers()
+    const startedAt = Date.now() + 1000
+    const sessionId = '183a2d7a-c5d8-4d40-acd1-11c08bce7cde'
+    const session = { pid: 12, cwd: '/work', sessionId, startedAt: startedAt + 7770, processStartedAt: startedAt }
+    const claude = { parent: 10, name: 'claude.exe', startedAt: startedAt + 1500 }
+    const processes = new Map([[12, claude], [14, { parent: 12, name: 'electron.exe' }]])
+    const readClaudeSessions = async () => [session]
+    const processTree = vi.fn(async () => processes)
+    const registerLocalClaude = vi.fn((_, attach) => attach({ agentId: 'claude-1', setStatus: vi.fn(), onExit: vi.fn() }))
+    const setVerifiedSession = vi.fn()
+    const { shells, ptys } = setup({
+      readClaudeSessions, processTree, processAlive: pid => processes.has(pid),
+      agents: { registerLocalClaude, setVerifiedSession }
+    })
+    const { id } = shells.open()
+    ptys[0].pid = 10
+    try {
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(shells.agentOf(id)).toBeNull()
+      expect(registerLocalClaude).not.toHaveBeenCalled()
+      expect(processTree).toHaveBeenCalledTimes(1)
+
+      session.processStartedAt = claude.startedAt
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(registerLocalClaude).toHaveBeenCalledTimes(1)
+      const attach = await shells.bindAgentProcess({ pid: 14, kind: 'claude' })
+      attach({ agentId: 'claude-1', setStatus: vi.fn(), onExit: vi.fn() })
+      expect(shells.idleAgents()).toMatchObject([{ kind: 'claude', external: true, sessionId }])
+
+      claude.startedAt += 5000
+      session.startedAt += 1
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(setVerifiedSession).not.toHaveBeenCalled()
+      expect(shells.idleAgents()).toEqual([])
+    } finally {
+      shells.closeAll()
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([null, 'codex.exe', 'node.exe'])('uses a Codex resume UUID only for the CLI directly below the shell (parent %s)', async parent => {
+    const sessionId = '183a2d7a-c5d8-4d40-acd1-11c08bce7cde'
+    const processes = new Map([
+      [12, { parent: 10, name: parent }],
+      [13, { parent: parent ? 12 : 10, name: 'codex.exe' }],
+      [14, { parent: 13, name: 'electron.exe' }]
+    ])
+    const commandLine = vi.fn(async () => `"C:\\Program Files\\codex.exe" --no-daemon resume ${sessionId}`)
+    const { shells, ptys } = setup({ processTree: async () => processes, processAlive: pid => processes.has(pid), commandLine, agents: {} })
+    shells.open()
+    ptys[0].pid = 10
+    try {
+      const attach = await shells.bindAgentProcess({ pid: 14, kind: 'codex' })
+      const binding = attach({ agentId: 'codex-1', setStatus: vi.fn(), onExit: vi.fn() })
+      if (parent) {
+        expect(commandLine).not.toHaveBeenCalled()
+        expect(binding).not.toHaveProperty('resumeId')
+      } else {
+        expect(commandLine).toHaveBeenCalledExactlyOnceWith(13)
+        expect(binding).toMatchObject({ resumeId: sessionId })
+      }
+    } finally {
+      shells.closeAll()
     }
   })
 
@@ -193,6 +386,20 @@ describe('createLocalShells', () => {
     }
   })
 
+  it('distinguishes unavailable process ancestry from a known process outside the app shells', async () => {
+    const processTree = vi.fn(async () => new Map([[12, { parent: 1, name: 'electron.exe' }]]))
+      .mockRejectedValueOnce(new Error('snapshot unavailable'))
+    const { shells, ptys } = setup({ processTree, agents: {} })
+    shells.open()
+    ptys[0].pid = 10
+    try {
+      await expect(shells.bindAgentProcess({ pid: 12, kind: 'claude' })).rejects.toThrow(/계보/)
+      await expect(shells.bindAgentProcess({ pid: 12, kind: 'claude' })).resolves.toBeUndefined()
+    } finally {
+      shells.closeAll()
+    }
+  })
+
   it('reads the composer of a CLI whose start scrolled out of the backlog before its MCP connected (2026-11-23 user report)', async () => {
     const processes = new Map([[15, { parent: 12, name: 'electron.exe' }], [12, { parent: 10, name: 'claude.exe' }]])
     const { shells, ptys } = setup({ agents: {}, processTree: async () => processes, processAlive: () => true })
@@ -220,7 +427,7 @@ describe('createLocalShells', () => {
       [15, { parent: 14, name: 'electron.exe' }],
       [14, { parent: 13, name: 'powershell.exe' }],
       [13, { parent: 12, name: 'node.exe' }],
-      [12, { parent: 10, name: 'claude.exe' }]
+      [12, { parent: 10, name: 'claude.exe', startedAt: 10_000 }]
     ])
     const alive = new Set([12, 13, 14, 15])
     const { shells, ptys } = setup({ agents: {}, processTree: async () => processes, processAlive: pid => alive.has(pid) })
@@ -231,6 +438,9 @@ describe('createLocalShells', () => {
       const attach = await shells.bindAgentProcess({ pid: 15, kind: 'claude' })
       const binding = attach({ agentId: 'claude-1', setStatus: vi.fn(), onExit })
       expect(binding.shellId).toBe(id)
+      const authorizeBinding = vi.fn(() => { throw new Error('Reconnect credential required') })
+      expect(() => attach({ agentId: 'claude-2', setStatus: vi.fn(), onExit, authorizeBinding })).toThrow('Reconnect credential required')
+      expect(authorizeBinding).toHaveBeenCalledExactlyOnceWith('claude-1', false, true)
       alive.delete(15)
       expect(binding.detach()).toBe(true)
       await vi.advanceTimersByTimeAsync(1000)
@@ -240,9 +450,15 @@ describe('createLocalShells', () => {
       processes.set(16, { parent: 13, name: 'electron.exe' })
       alive.add(16)
       const reconnect = await shells.bindAgentProcess({ pid: 16, kind: 'claude' })
-      const reconnected = reconnect({ agentId: 'claude-2', setStatus: vi.fn(), onExit })
+      authorizeBinding.mockImplementation(() => {})
+      const reconnected = reconnect({ agentId: 'claude-2', setStatus: vi.fn(), onExit, authorizeBinding })
       expect(reconnected.agentId).toBe('claude-1')
       expect(binding.detach()).toBe(false)
+      processes.get(12).startedAt += 1000
+      const reusedPid = await shells.bindAgentProcess({ pid: 16, kind: 'claude' })
+      authorizeBinding.mockImplementation(() => { throw new Error('Process start changed') })
+      expect(() => reusedPid({ agentId: 'claude-3', setStatus: vi.fn(), onExit, authorizeBinding })).toThrow('Process start changed')
+      expect(authorizeBinding).toHaveBeenLastCalledWith('claude-1', false, false)
       alive.delete(12)
       expect(await shells.chatSend(id, 'check')).toEqual({ ok: false, reason: 'not-agent' })
       await vi.advanceTimersByTimeAsync(1000)

@@ -11,6 +11,7 @@ const profile = process.env.E2E_PROFILE
 const file = name => path.join(profile, name)
 const read = name => fs.existsSync(file(name)) ? fs.readFileSync(file(name), 'utf8') : ''
 const SESSION = '7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f'
+const USAGE_SESSION = 'f0e09eeb-24b0-43b0-b4e9-f7a266a0cda9'
 
 async function waitFor(test, tries = 200) {
   for (let index = 0; index < tries; index++) {
@@ -58,11 +59,12 @@ const resumedWith = () => {
     const PANE = `[...document.querySelectorAll('.local-terminal-tab')].filter(t => getComputedStyle(t).visibility !== 'hidden').flatMap(t => [...t.querySelectorAll(':scope > .local-terminal-pane')])[0]`
     check('a plain shell opens', await until(`/PS [A-Z]:/.test(${PANE}?.textContent ?? '')`, 60000))
     const shellId = await js(`${PANE}.dataset.localShellId`)
+    fs.writeFileSync(file('manual-claude-session'), SESSION)
     await js(`window.electronAPI.localShellWrite(${JSON.stringify(shellId)}, 'claude --dangerously-skip-permissions\\r')`)
     const agentOfShell = `window.electronAPI.agentMessagesSnapshot().then(state => state.agents.filter(agent => agent.shellId === ${JSON.stringify(shellId)}).at(-1) ?? null)`
-    check('a Claude typed into the shell binds to it', await until(`${agentOfShell}.then(agent => agent?.active && agent.kind === 'claude')`, 30000), read('manual-claude-mcp-error'))
+    check('a Claude typed into the shell binds to it', await until(`${agentOfShell}.then(agent => agent?.active && agent.mcpConnected && agent.kind === 'claude')`, 30000), read('manual-claude-mcp-error'))
     const agentId = (await js(agentOfShell)).id
-    await reportSession('manual-claude', SESSION)
+    await reportSession('manual-claude', USAGE_SESSION)
 
     // Asleep after its idle time (two "minutes")
     const cover = `${PANE}?.querySelector('.agent-sleep-cover')`

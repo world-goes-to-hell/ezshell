@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Glass surface style: the choice kept for the next start, and whether this window has acrylic now
   setAppearance: (value) => ipcRenderer.send('appearance-set', value),
   getBackdrop: () => ipcRenderer.invoke('appearance-backdrop'),
+  setQuickCaptureTheme: (theme) => ipcRenderer.send('quick-capture-theme', theme),
   // Popped-out SFTP window: it reports the folders it shows, and the main window hears when it closes
   sftpWindowPaths: (sessionId, localPath, remotePath) => ipcRenderer.send('sftp-window-paths', { sessionId, localPath, remotePath }),
   onSftpWindowClosed: (callback) => {
@@ -263,6 +264,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentChatPickImages: (shellId) => ipcRenderer.invoke('agent-chat-pick-images', shellId),
   agentChatRemoveImage: (shellId, imageId) => ipcRenderer.send('agent-chat-remove-image', { shellId, imageId }),
   agentChatSend: (shellId, text, imageIds, retry) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageIds, retry }),
+  agentChatMcpLogin: (shellId, summaryId, server) => ipcRenderer.invoke('agent-chat-mcp-login', { shellId, summaryId, server }),
+  agentChatMcpVerbose: (shellId, summaryId) => ipcRenderer.invoke('agent-chat-mcp-verbose', { shellId, summaryId }),
   agentChatToggleSpeed: (shellId, speed) => ipcRenderer.invoke('agent-chat-toggle-speed', { shellId, speed }),
   agentChatInterrupt: (shellId) => ipcRenderer.invoke('agent-chat-interrupt', shellId),
   agentChatTakeBack: (shellId, texts) => ipcRenderer.invoke('agent-chat-take-back', { shellId, texts }),

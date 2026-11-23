@@ -50,11 +50,11 @@ async function sessionMeta(file) {
   return meta
 }
 
-function createCodexUsageWatcher({ agents, setUsage, codexHome, now = () => Date.now(), platform = process.platform, env = process.env }) {
+function createCodexUsageWatcher({ agents, setUsage, setVerifiedSession = () => {}, codexHome, now = () => Date.now(), platform = process.platform, env = process.env }) {
   const home = codexHome ?? (env.CODEX_HOME && path.isAbsolute(env.CODEX_HOME) ? env.CODEX_HOME : path.join(os.homedir(), '.codex'))
   // agent id → { file, size }
   const bound = new Map()
-  // Agents whose resumed session file was not found yet: when it was last looked for
+  // Agents whose resumed session file was not found yet: which ID was checked and when
   const missed = new Map()
   let timer = null
   let running = false
@@ -101,7 +101,7 @@ function createCodexUsageWatcher({ agents, setUsage, codexHome, now = () => Date
           if (++days > RESUME_SEARCH_DAYS) return null
           const dir = path.join(sessions, year, month, day)
           const names = await fs.promises.readdir(dir).catch(() => [])
-          const name = names.find(item => item.startsWith('rollout-') && item.toLowerCase().endsWith(`${id.toLowerCase()}.jsonl`))
+          const name = names.find(item => item.startsWith('rollout-') && item.toLowerCase().endsWith(`-${id.toLowerCase()}.jsonl`))
           if (name) return { file: path.join(dir, name), id }
         }
       }
@@ -150,21 +150,33 @@ function createCodexUsageWatcher({ agents, setUsage, codexHome, now = () => Date
       for (const id of missed.keys()) if (!liveIds.has(id)) missed.delete(id)
       // Earlier agents pick first, so two Codex started in one folder get their own files in order
       for (const agent of [...live].sort((a, b) => a.startedAt - b.startedAt)) {
+        const resumeId = agent.resumeId ?? null
         let entry = bound.get(agent.id)
+        if (entry && entry.resumeId !== resumeId) {
+          bound.delete(agent.id)
+          entry = undefined
+        }
         if (!entry) {
           // A resumed session not found: look again only now and then (the search walks the day folders)
-          if (agent.resumeId && now() - (missed.get(agent.id) ?? -Infinity) < RESUME_RETRY_MS) continue
+          const previous = missed.get(agent.id)
+          if (resumeId && previous?.resumeId === resumeId && now() - previous.at < RESUME_RETRY_MS) continue
           const taken = new Set([...bound.values()].map(item => item.file))
-          const found = agent.resumeId ? await findResumed(agent.resumeId) : await findFile(agent, taken)
+          const found = resumeId ? await findResumed(resumeId) : await findFile(agent, taken)
           if (!found) {
-            if (agent.resumeId) missed.set(agent.id, now())
+            if (resumeId) missed.set(agent.id, { resumeId, at: now() })
             continue
           }
-          entry = { file: found.file, id: found.id, size: -1 }
+          missed.delete(agent.id)
+          entry = { file: found.file, id: found.id, size: -1, resumeId }
           bound.set(agent.id, entry)
         }
-        let size
-        try { size = (await fs.promises.stat(entry.file)).size } catch { bound.delete(agent.id); continue }
+        const stat = await fs.promises.stat(entry.file).catch(() => null)
+        if (!stat?.isFile()) {
+          bound.delete(agent.id)
+          continue
+        }
+        const { size } = stat
+        if (entry.resumeId) setVerifiedSession(agent.id, entry.resumeId)
         if (size === entry.size) continue
         const usage = await readUsage(entry.file, entry.id, size, entry.size)
         entry.size = size
@@ -179,6 +191,8 @@ function createCodexUsageWatcher({ agents, setUsage, codexHome, now = () => Date
     tick,
     /** The session file found for an agent (the chat view follows it), or null */
     fileOf: agentId => bound.get(agentId)?.file ?? null,
+    /** A time-based match is insufficient for resuming a conversation. */
+    verifiedSessionOf: agentId => bound.get(agentId)?.resumeId ?? null,
     start() {
       if (timer) return
       timer = setInterval(() => { void tick().catch(() => {}) }, INTERVAL_MS)

@@ -1,30 +1,36 @@
 const net = require('net')
-const { randomUUID } = require('crypto')
+const { createHash, randomBytes, randomUUID, timingSafeEqual } = require('crypto')
 const fs = require('fs')
 const { homedir, tmpdir } = require('os')
 const path = require('path')
-const { isReservedAgentRole } = require('./agentRole.js')
+const { validateRole } = require('./agentRole.js')
+const { createAgentRoleStore, roleSessionKey } = require('./agentRoleStore.js')
 
 const MAX_REQUEST = 64 * 1024
 const MAX_MESSAGES = 500
 const MAX_TEXT = 8000
-const MAX_ROLE_LENGTH = 20
-const ROLE_CONTROL = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}]/u
 const INBOX_WAIT_MS = 30000
+const RECONNECT_LIFETIME_MS = 24 * 60 * 60 * 1000
+const RECONNECT_AFTER_CLOSE_MS = 5 * 60 * 1000
+const RECONNECT_TOKEN = /^[a-z0-9_-]{43}$/i
+const reconnectDigest = token => createHash('sha256').update(token).digest()
 const USER = 'user'
 const { sanitizeUsage, sameUsage } = require('./agentUsage.js')
 const { antigravityStatusFromInput, antigravityStatusSettings } = require('./antigravityStatusReport.js')
 
 function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bindLocalAgent, reportLocalAntigravity,
-  bridgeFile, platform = process.platform, home = homedir() }) {
+  bridgeFile, roleFile, platform = process.platform, home = homedir(), now = Date.now }) {
   const instanceBridgeFile = bridgeFile ? `${bridgeFile}.${process.pid}` : null
   const agents = new Map()
-  // Agent and user choices share the session ID. Resuming that agent keeps both choices.
-  const roles = new Map()
+  const roleStore = createAgentRoleStore(roleFile)
+  const roleSessions = new Map()
+  const roleConflicts = new Map()
+  const pendingRoles = new Map()
   const tokens = new Map()
   const mcpReady = new Map()
   const bridgeToken = randomUUID()
   const leases = new Map()
+  const reconnects = new Map()
   // agent id → latest usage (agentUsage.js shape)
   const usages = new Map()
   // Every local shell's token → its id, for the status line of a Claude typed into it (registerShell)
@@ -42,36 +48,93 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   let antigravityReportSequence = 0
 
   const publicMessage = ({ requestId, ...message }) => message
+  const roleNames = id => {
+    const binding = roleSessions.get(id)
+    const saved = binding && (roleStore.get(binding.key) ?? binding.inherit)
+    return { ...saved, ...pendingRoles.get(id) }
+  }
   const activeRole = id => {
-    const names = roles.get(id)
-    if (names?.user) return { role: names.user, roleSource: 'user' }
-    if (names?.agent) return { role: names.agent, roleSource: 'agent' }
+    const { user, agent } = roleNames(id)
+    if (user) return { role: user, roleSource: 'user' }
+    if (agent) return { role: agent, roleSource: 'agent' }
     return { role: null, roleSource: null }
+  }
+
+  function saveRoles(id, binding, patch) {
+    roleStore.update(binding.key, { ...pendingRoles.get(id), ...patch }, binding.inherit)
+    binding.saved = true
+    binding.inherit = undefined
+    pendingRoles.delete(id)
   }
 
   function setRole(id, input, source) {
     if (isLocked()) throw new Error('먼저 앱 잠금을 해제해 주세요.')
     const agent = agents.get(id)
     if (!agent || (source === 'agent' && !agent.active)) throw new Error('에이전트를 찾을 수 없습니다.')
-    if (typeof input !== 'string' || ROLE_CONTROL.test(input)) throw new Error('역할은 줄바꿈이나 제어 문자 없이 입력해 주세요.')
-    const role = input.trim()
-    if (Array.from(role).length > MAX_ROLE_LENGTH) throw new Error('역할은 20자까지 입력할 수 있습니다.')
-    if (source === 'agent' && isReservedAgentRole(role)) {
-      throw new Error('에이전트 ID나 예약 이름은 역할로 사용할 수 없습니다.')
+    const role = validateRole(input, source)
+    const binding = roleSessions.get(id)
+    const previous = roleNames(id)[source]
+    if (binding) {
+      try {
+        saveRoles(id, binding, { [source]: role })
+      } catch {
+        throw new Error('에이전트 역할을 저장할 수 없습니다.')
+      }
+    } else {
+      if (previous === role) return { id, ...activeRole(id) }
+      // An explicit clear must still apply if a saved role appears when the session resolves.
+      pendingRoles.set(id, { ...pendingRoles.get(id), [source]: role })
     }
-    const previous = roles.get(id)
-    if ((previous?.[source] ?? '') !== role) {
-      const names = { ...previous, [source]: role }
-      if (names.user || names.agent) roles.set(id, names)
-      else roles.delete(id)
-      changed()
-    }
+    if (binding || (previous ?? '') !== role) changed()
     return { id, ...activeRole(id) }
+  }
+
+  function bindRoleSession(id, sessionId, explicitResume = false) {
+    const agent = agents.get(id)
+    if (!agent?.active) return false
+    const key = roleSessionKey(agent.kind, sessionId)
+    if (!key) return false
+    let binding = roleSessions.get(id)
+    if (binding?.key === key && binding.saved) return false
+    for (const [otherId, other] of roleSessions) {
+      if (otherId === id || other.key !== key || !agents.get(otherId)?.active) continue
+      const takesPriority = explicitResume && !other.explicitResume
+      const conflict = `${otherId}:${key}`
+      if (roleConflicts.get(id) !== conflict) {
+        console.warn(`[agent roles] ${id} and ${otherId} reported the same ${agent.kind} conversation. Keeping ${takesPriority ? id : otherId}.`)
+      }
+      if (!takesPriority) {
+        roleConflicts.set(id, conflict)
+        return false
+      }
+      roleSessions.delete(otherId)
+      roleConflicts.set(otherId, `${id}:${key}`)
+    }
+    roleConflicts.delete(id)
+    const before = activeRole(id)
+    if (binding?.key !== key) {
+      const inherit = binding ? roleNames(id) : undefined
+      if (binding) pendingRoles.delete(id)
+      binding = { key, inherit, saved: false, explicitResume }
+      roleSessions.set(id, binding)
+    }
+    // Keep the pending edits and retry on the next verified observation if the file cannot be written.
+    try { saveRoles(id, binding) } catch {}
+    const after = activeRole(id)
+    return before.role !== after.role || before.roleSource !== after.roleSource
+  }
+
+  /** Identity from main's verified process or transcript discovery. Usage reports carry no authority. */
+  function setVerifiedSession(id, sessionId) {
+    if (bindRoleSession(id, sessionId)) changed()
   }
 
   function forgetAgent(id) {
     agents.delete(id)
-    roles.delete(id)
+    reconnects.delete(id)
+    roleSessions.delete(id)
+    roleConflicts.delete(id)
+    pendingRoles.delete(id)
   }
   // `read`: handled (answered or acknowledged). `seenAt`: when the recipient took it from its inbox, the
   // "읽음" the sender and the messages panel see (check_sent). Receipts were removed on 2026-11-20.
@@ -107,6 +170,11 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       }
     })
   }
+  // The relationship map keeps card positions by conversation: an opaque key, never the conversation id
+  const layoutKeyOf = id => {
+    const key = roleSessions.get(id)?.key
+    return key ? createHash('sha256').update('agent-map-layout:' + key).digest('hex').slice(0, 16) : null
+  }
   function snapshot() {
     const waiting = new Set(Array.from(inboxWaits.values(), wait => wait.agentId))
     return {
@@ -114,6 +182,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       agents: Array.from(agents.values(), agent => ({
         ...agent,
         ...activeRole(agent.id),
+        layoutKey: layoutKeyOf(agent.id),
         waitingForReply: waiting.has(agent.id),
         mcpConnected: mcpReady.has(agent.id)
       })),
@@ -230,6 +299,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   function archiveExternal(id) {
     const agent = agents.get(id)
     if (!agent) return
+    reconnects.delete(id)
     // Asleep: its CLI and MCP went away on purpose; it is kept (with its usage and session id) to be resumed
     if (agent.sleeping) {
       stopWaiting(id)
@@ -290,21 +360,27 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     id = binding?.agentId ?? id
     const before = agents.get(id)
     // Woken from sleep under the same id, with the session it was asked to resume
-    const resumed = before?.sleeping && before.resumeId ? { resumeId: before.resumeId } : {}
+    const resumeId = before?.sleeping ? before.resumeId : binding?.resumeId
     agents.set(id, {
       id, shellId: binding?.shellId ?? '', kind, cwd, active: true, status: binding?.status ?? 'unknown',
-      startedAt: before?.startedAt ?? startedAt, ...resumed
+      startedAt: before?.startedAt ?? startedAt, ...(resumeId ? { resumeId } : {})
     })
     return { id, binding }
   }
 
   /** A CLI discovered in a local shell can use chat before it has any message MCP connection. */
-  function registerLocalClaude({ cwd, startedAt }, attach) {
-    if (attachExternal('claude', cwd, attach, startedAt, true)) changed()
+  function registerLocalClaude({ cwd, startedAt, sessionId }, attach) {
+    const attached = attachExternal('claude', cwd, attach, startedAt, true)
+    if (attached) {
+      bindRoleSession(attached.id, sessionId)
+      changed()
+    }
   }
 
-  function registerLocalAntigravity(cwd, attach) {
-    if (!attachExternal('antigravity', cwd, attach, Date.now(), true)) return false
+  function registerLocalAntigravity(cwd, attach, sessionId) {
+    const attached = attachExternal('antigravity', cwd, attach, Date.now(), true)
+    if (!attached) return false
+    bindRoleSession(attached.id, sessionId)
     changed()
     return true
   }
@@ -318,34 +394,74 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     return { stored: Boolean(await reportLocalAntigravity?.({ shellId, pid: request.pid, status, sequence, isCurrent })) }
   }
 
+  function authenticReconnect(id, token) {
+    const credential = reconnects.get(id)
+    return credential && credential.expiresAt > now() && typeof token === 'string' &&
+      RECONNECT_TOKEN.test(token) && timingSafeEqual(credential.digest, reconnectDigest(token))
+  }
+
   async function watchMcp(request, socket) {
     let token = request.token
     let id = tokens.get(token)
     const external = id === undefined
     let binding
+    let authorized = false
     if (external) {
-      if (!bridgeFile || token !== bridgeToken || !['codex', 'claude'].includes(request.kind)
+      const wakeShellId = shellTokens.get(request.wakeToken)
+      if ((request.wakeToken !== undefined ? !wakeShellId : !bridgeFile || token !== bridgeToken) ||
+          !['codex', 'claude'].includes(request.kind)
         || typeof request.cwd !== 'string' || !path.isAbsolute(request.cwd) || request.cwd.length > 4096) {
         throw new Error('ezShell에 등록된 에이전트가 아닙니다.')
       }
-      if (mcpReady.size >= 40) throw new Error('실행 중인 메시지 MCP 연결이 너무 많습니다.')
       const attach = Number.isSafeInteger(request.pid) && request.pid > 0
-        ? await bindLocalAgent?.({ pid: request.pid, kind: request.kind })
+        ? await bindLocalAgent?.({ pid: request.pid, kind: request.kind, shellId: wakeShellId })
         : undefined
       if (socket.destroyed) return
-      if (mcpReady.size >= 40) throw new Error('실행 중인 메시지 MCP 연결이 너무 많습니다.')
+      if (wakeShellId && shellTokens.get(request.wakeToken) !== wakeShellId) throw new Error('깨우기 연결이 만료되었습니다.')
+      let authorizedId
+      const authorizeBinding = (existingId, waking = false, sameLiveCli = false) => {
+        if (existingId) {
+          const agent = agents.get(existingId)
+          const authenticatedWake = waking && wakeShellId && agent?.sleeping && agent.shellId === wakeShellId
+          const replacedMcpProcess = request.reconnectToken === undefined && sameLiveCli && !mcpReady.has(existingId)
+          if (!authenticatedWake && !replacedMcpProcess && !authenticReconnect(existingId, request.reconnectToken)) {
+            throw new Error('기존 에이전트에 다시 연결하려면 재연결 자격 증명이 필요합니다.')
+          }
+          authorizedId = existingId
+        } else if (wakeShellId) {
+          throw new Error('깨우기 연결이 만료되었습니다.')
+        }
+        if (mcpReady.size >= 40 && !mcpReady.has(existingId)) throw new Error('실행 중인 메시지 MCP 연결이 너무 많습니다.')
+      }
       // MCP connects a little after the CLI started (and wrote its session file).
-      const attached = attachExternal(request.kind, request.cwd, attach, Date.now() - 30_000)
+      if (!attach) authorizeBinding()
+      const checkedAttach = attach && (registration => {
+        const result = attach({ ...registration, authorizeBinding })
+        if ((authorizedId && result?.agentId !== authorizedId) ||
+            (result?.agentId && result.agentId !== registration.agentId && result.agentId !== authorizedId)) {
+          throw new Error('기존 에이전트에 다시 연결하려면 재연결 자격 증명이 필요합니다.')
+        }
+        if (!authorizedId) authorizeBinding()
+        return result
+      })
+      const attached = attachExternal(request.kind, request.cwd, checkedAttach, Date.now() - 30_000)
       id = attached.id
       binding = attached.binding
+      authorized = id === authorizedId
       token = randomUUID()
-      tokens.set(token, id)
     }
     const previous = mcpReady.get(id)
+    // A bridge-issued tool token expires with its lease. A reconnect uses the bridge again.
+    if (!external && leases.get(previous)?.external) throw new Error('ezShell에 등록된 에이전트가 아닙니다.')
+    if (!external) authorized = authenticReconnect(id, request.reconnectToken)
+    if (previous && !previous.destroyed && !authorized) throw new Error('이 에이전트의 메시지 MCP가 이미 연결되어 있습니다.')
+    const reconnectToken = randomBytes(32).toString('base64url')
+    reconnects.set(id, { digest: reconnectDigest(reconnectToken), expiresAt: now() + RECONNECT_LIFETIME_MS })
+    if (external) tokens.set(token, id)
     mcpReady.set(id, socket)
     leases.set(socket, { id, token, external, binding })
     socket.setTimeout(0)
-    socket.write(JSON.stringify({ success: true, token }) + '\n')
+    socket.write(JSON.stringify({ success: true, token, reconnectToken }) + '\n')
     if (external && previous) tokens.delete(leases.get(previous)?.token)
     previous?.destroy()
     changed()
@@ -389,6 +505,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
         if (lease.external) tokens.delete(lease.token)
         if (mcpReady.get(lease.id) === socket) {
           mcpReady.delete(lease.id)
+          const credential = reconnects.get(lease.id)
+          if (credential) credential.expiresAt = Math.min(credential.expiresAt, now() + RECONNECT_AFTER_CLOSE_MS)
           if (lease.external) {
             if (lease.binding?.detach()) stopWaiting(lease.id)
             else archiveExternal(lease.id)
@@ -428,6 +546,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   }
 
   function stop() {
+    reconnects.clear()
     for (const socket of inboxWaits.keys()) removeWait(socket)
     for (const socket of sockets) socket.destroy()
     server?.close()
@@ -438,6 +557,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     if (directory) {
       try { fs.unlinkSync(path.join(directory, platform === 'win32' ? 'ezshell.cmd' : 'ezshell')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'agent-mcp.json')) } catch {}
+      try { fs.unlinkSync(path.join(directory, 'agent-wake-mcp.json')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'agent-settings.json')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'antigravity-settings.json')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'antigravity-status.cmd')) } catch {}
@@ -460,6 +580,16 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
           command: '${EZSHELL_CLI_EXE}',
           args: ['${EZSHELL_AGENT_MCP_SCRIPT}'],
           env: { ELECTRON_RUN_AS_NODE: '1', EZSHELL_AGENT_PIPE: '${EZSHELL_AGENT_PIPE}', EZSHELL_AGENT_TOKEN: '${EZSHELL_AGENT_TOKEN}' }
+        }
+      }
+    }), { mode: 0o600 })
+    fs.writeFileSync(path.join(directory, 'agent-wake-mcp.json'), JSON.stringify({
+      mcpServers: {
+        'ezshell-cli-mcp': {
+          command: '${EZSHELL_CLI_EXE}',
+          args: ['${EZSHELL_AGENT_MCP_SCRIPT}'],
+          env: { ELECTRON_RUN_AS_NODE: '1', EZSHELL_AGENT_PIPE: '${EZSHELL_AGENT_PIPE}',
+            EZSHELL_SHELL_TOKEN: '${EZSHELL_SHELL_TOKEN}', EZSHELL_AGENT_WAKE_KIND: 'claude' }
         }
       }
     }), { mode: 0o600 })
@@ -516,6 +646,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     // resumeId: a resumed session writes on in its old file, found by this id instead
     agents.set(id, { id, shellId, kind, cwd, active: true, status: 'unknown', startedAt: Date.now(), ...(resumeId ? { resumeId } : {}) })
     tokens.set(token, id)
+    bindRoleSession(id, resumeId, true)
     changed()
     const key = Object.keys(shellEnv).find(name => platform === 'win32' ? name.toUpperCase() === 'PATH' : name === 'PATH') ?? 'PATH'
     const env = {
@@ -534,6 +665,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     }
     const stopReceiving = () => {
       tokens.delete(token)
+      reconnects.delete(id)
       const lease = mcpReady.get(id)
       mcpReady.delete(id)
       lease?.destroy()
@@ -636,6 +768,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       EZSHELL_SHELL_TOKEN: token,
       EZSHELL_AGENT_PIPE: pipe,
       EZSHELL_CLI_EXE: process.execPath,
+      EZSHELL_AGENT_MCP_SCRIPT: path.join(__dirname, 'agentMessageMcp.js'),
+      EZSHELL_AGENT_WAKE_MCP_CONFIG: path.join(directory, 'agent-wake-mcp.json'),
       EZSHELL_AGENT_SETTINGS: path.join(directory, 'agent-settings.json'),
       EZSHELL_AGENT_USAGE_SCRIPT: path.join(__dirname, 'agentUsageReport.js'),
       EZSHELL_ANTIGRAVITY_SETTINGS: path.join(directory, 'antigravity-settings.json'),
@@ -661,7 +795,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     ready, enableExternalBridge, register, stop, snapshot, unreadFor, unhandledFor,
     sendAsUser: request => deliver(USER, request),
     setUserRole: (id, role) => setRole(id, role, 'user'),
-    setUsage, applyPicked, usageSnapshot, registerShell, registerLocalClaude, registerLocalAntigravity, forgetShell, sleep, cancelSleep
+    setUsage, setVerifiedSession, applyPicked, usageSnapshot, registerShell, registerLocalClaude, registerLocalAntigravity, forgetShell, sleep, cancelSleep
   }
 }
 

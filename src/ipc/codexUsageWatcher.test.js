@@ -28,13 +28,15 @@ function rollout(name, { cwd = work, at = START + 1000, lines = [], meta = {} } 
 
 function setup(agentList) {
   const reports = []
+  const verifiedSessions = []
   const watcher = createCodexUsageWatcher({
     agents: () => agentList,
     setUsage: (agentId, usage) => { reports.push({ agentId, usage }); return true },
+    setVerifiedSession: (agentId, sessionId) => verifiedSessions.push({ agentId, sessionId }),
     codexHome: home,
     now: () => START + 60_000
   })
-  return { watcher, reports }
+  return { watcher, reports, verifiedSessions }
 }
 
 beforeEach(() => {
@@ -129,7 +131,7 @@ describe('createCodexUsageWatcher', () => {
     fs.mkdirSync(dir, { recursive: true })
     fs.renameSync(oldFile, path.join(dir, `rollout-2026-11-16T09-00-00-${old}.jsonl`))
     rollout(fresh, { at: START + 2000, lines: [tokenCount(7, 700)] })
-    const { watcher, reports } = setup([
+    const { watcher, reports, verifiedSessions } = setup([
       { ...agent, id: 'codex-1', cwd: work, resumeId: old },
       { ...agent, id: 'codex-2', shellId: 'local:2', cwd: work, startedAt: START + 1000 }
     ])
@@ -137,6 +139,30 @@ describe('createCodexUsageWatcher', () => {
     const byAgent = Object.fromEntries(reports.map(report => [report.agentId, report.usage]))
     expect(byAgent['codex-1']).toMatchObject({ sessionId: old, fiveHour: { percent: 40 } })
     expect(byAgent['codex-2']).toMatchObject({ sessionId: fresh, fiveHour: { percent: 7 } })
+    expect(verifiedSessions).toEqual([{ agentId: 'codex-1', sessionId: old }])
+    expect(watcher.verifiedSessionOf('codex-1')).toBe(old)
+    expect(watcher.verifiedSessionOf('codex-2')).toBeNull()
+  })
+
+  it('replaces an earlier usage estimate when the same agent resumes a known session', async () => {
+    const estimated = '01a1ec18-0000-7000-8000-000000000001'
+    const resumed = '01a1ec18-0000-7000-8000-000000000002'
+    rollout(estimated)
+    rollout(resumed, { at: START - 3600_000 })
+    const running = { ...agent, cwd: work }
+    const { watcher, reports, verifiedSessions } = setup([running])
+    await watcher.tick()
+    expect(reports[0].usage.sessionId).toBe(estimated)
+    expect(verifiedSessions).toEqual([])
+
+    running.resumeId = resumed
+    await watcher.tick()
+    await watcher.tick()
+    expect(reports.map(report => report.usage.sessionId)).toEqual([estimated, resumed])
+    expect(verifiedSessions).toEqual([
+      { agentId: agent.id, sessionId: resumed },
+      { agentId: agent.id, sessionId: resumed }
+    ])
   })
 
   it('does nothing for Claude or ended agents', async () => {

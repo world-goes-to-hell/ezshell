@@ -93,4 +93,4 @@ function sanitizeUsage(value, kind) {
 
 const sameUsage = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
 
-module.exports = { claudeUsageFromStatus, codexUsageFromTokenCount, sanitizeUsage, sameUsage }
+module.exports = { claudeUsageFromStatus, codexUsageFromTokenCount, sanitizeUsage, sameUsage, sessionIdOf }

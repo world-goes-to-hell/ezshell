@@ -186,6 +186,35 @@ pty.spawn = (file, args, options) => {
         fs.writeFileSync(path.join(profile, id + '-chat-images'), JSON.stringify(codexImages))
         codexImages.length = 0
       }
+      if (pending === 'chat-sent' && id?.startsWith('codex-') && process.env.EZSHELL_TEST_AGENT_CHAT) {
+        const command = fs.readFileSync(path.join(profile, id + '-chat-text'), 'utf8')
+        const output = {
+          '/mcp': [
+            '🔌  MCP Tools',
+            '  • codex_apps: connected (108 tools)',
+            '  • ezshell-cli-mcp: failed (7 tools)',
+            '  • msw-mcp: authentication required (0 tools)',
+            '  Use /mcp verbose for tools and resources.',
+            '  Unknown MCP diagnostic.'
+          ],
+          '/mcp verbose': ['🔌  MCP Tools', '  • Tools: test_tool'],
+          '/mcp login msw-mcp': ['Login requested for msw-mcp.']
+        }
+        if (Object.hasOwn(output, command)) {
+          const withoutEcho = command === '/mcp' && fs.existsSync(path.join(profile, id + '-mcp-without-echo'))
+          const history = withoutEcho ? [] : [
+            'local bridge after the MCP transport closed.',
+            'Worked for 8m 0s • 11:51 PM',
+            '• Context compacted · 36s',
+            'Worked for 36s',
+            '',
+            '› ' + command,
+            ''
+          ]
+          const rows = [...history, ...output[command], '', '']
+          fs.writeFileSync(path.join(profile, id + '-command-history'), rows.join('\r\n'))
+        }
+      }
       if (pending === 'fast-toggles' || pending === 'ultrafast-toggles') {
         const target = pending === 'fast-toggles' ? 'priority' : 'ultrafast'
         speed = speed === target ? 'default' : target

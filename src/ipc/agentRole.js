@@ -73,9 +73,11 @@ for (const [ascii, group] of Object.entries(confusableGroups)) {
 
 const ROLE_SEPARATORS = /[_\p{Dash}\p{White_Space}\p{Default_Ignorable_Code_Point}]/gu
 const RESERVED_NAMES = /^(?:나|사용자)|^(?:user|ezshell)$/
-const AGENT_ID = /^(?:claude|codex|antigravity)\p{Nd}+$/u
+// Anywhere in the role: "PL · claude-1" would read as another agent's name in front of the real ID.
+const AGENT_ID = /(?:claude|codex|antigravity)\p{Nd}+/u
 // The same vertical-stroke lookalike can resemble lowercase L or uppercase I.
-const CONFUSABLE_AGENT_ID = /^(?:c[il]aude|codex|ant[il]grav[il]ty)\p{Nd}+$/u
+const CONFUSABLE_AGENT_ID = /(?:c[il]aude|codex|ant[il]grav[il]ty)\p{Nd}+/u
+const ROLE_CONTROL = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}]/u
 
 function foldRole(role) {
   return role.normalize('NFKC').replace(ROLE_SEPARATORS, '').normalize('NFKC').toLowerCase()
@@ -91,4 +93,12 @@ function isReservedAgentRole(role) {
   return lookalike !== folded && (RESERVED_NAMES.test(lookalike) || CONFUSABLE_AGENT_ID.test(lookalike))
 }
 
-module.exports = { isReservedAgentRole }
+function validateRole(input, source) {
+  if (typeof input !== 'string' || ROLE_CONTROL.test(input)) throw new Error('역할은 줄바꿈이나 제어 문자 없이 입력해 주세요.')
+  const role = input.trim()
+  if (Array.from(role).length > 20) throw new Error('역할은 20자까지 입력할 수 있습니다.')
+  if (source === 'agent' && isReservedAgentRole(role)) throw new Error('에이전트 ID나 예약 이름은 역할로 사용할 수 없습니다.')
+  return role
+}
+
+module.exports = { isReservedAgentRole, validateRole }

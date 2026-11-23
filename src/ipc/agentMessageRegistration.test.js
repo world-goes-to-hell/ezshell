@@ -97,7 +97,9 @@ describe('register local agent message MCP', () => {
       const entry = createEntry(kind, bridgeFile)
       const client = new Client({ name: 'ezshell-test', version: '1' })
       clients.push(client)
-      await client.connect(new StdioClientTransport({ ...entry, env: { ...process.env, ...entry.env }, stderr: 'pipe' }))
+      const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^EZSHELL_/i.test(name)))
+      await client.connect(new StdioClientTransport({ ...entry, env: { ...env, ...entry.env }, stderr: 'pipe' }))
+      await vi.waitFor(() => expect(messages.snapshot().agents.some(agent => agent.kind === kind && agent.mcpConnected)).toBe(true))
       return async (name, args = {}) => {
         const result = await client.callTool({ name, arguments: args })
         expect(result.isError).not.toBe(true)

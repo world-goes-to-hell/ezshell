@@ -8,7 +8,8 @@ const { fileURLToPath } = require('url');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { getProcessTree } = require('./ipc/agentProcessParents.js');
-const { resumeCommand } = require('./agentIdle.js');
+const { processCommandLine, processList, resumeCommand, words } = require('./agentIdle.js');
+const { antigravityBrainRoot, openAntigravityTranscript } = require('./agentChat/antigravitySessions.js');
 
 /** Output kept per shell so a tab that is drawn again (pane split, tab moved) continues from it */
 const BACKLOG_CHARS = 256 * 1024;
@@ -17,6 +18,8 @@ const MAX_SIZE = 500;
 const MAX_WRITE_CHARS = 1024 * 1024;
 const TERMINAL_TYPE = 'xterm-256color';
 const AGENT_PROCESS_CHECK_MS = 1000;
+const CLAUDE_START_TOLERANCE_MS = 1000;
+const CLAUDE_SESSION_DELAY_MS = 60_000;
 // Putting an idle agent to sleep (agentIdle.js): how long its CLI may take to close after `/exit`, and how
 // long the resumed one may take to come back (its messages MCP binds it to the shell again)
 const SLEEP_EXIT_MS = 15 * 1000;
@@ -90,6 +93,7 @@ const AGENT_SESSION_MARKERS = new Set([
   'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH',
   'EZSHELL_AGENT_ID', 'EZSHELL_AGENT_TOKEN', 'EZSHELL_SHELL_TOKEN', 'EZSHELL_AGENT_PIPE',
   'EZSHELL_AGENT_MCP_CONFIG', 'EZSHELL_AGENT_MCP_SCRIPT', 'EZSHELL_AGENT_SETTINGS', 'EZSHELL_AGENT_USAGE_SCRIPT',
+  'EZSHELL_AGENT_WAKE_KIND', 'EZSHELL_AGENT_WAKE_MCP_CONFIG',
   'EZSHELL_ANTIGRAVITY_SETTINGS', 'EZSHELL_ANTIGRAVITY_STATUS_SCRIPT', 'EZSHELL_ANTIGRAVITY_STATUS_FORWARD',
   'EZSHELL_ANTIGRAVITY_STATUS_COMMAND',
   'EZSHELL_CLI_EXE', 'EZSHELL_CLI_SCRIPT'
@@ -385,6 +389,22 @@ function isProcessAlive(pid) {
 const processName = name => name.split(/[\\/]/).at(-1).toLowerCase().replace(/\.exe$/, '');
 const appRuntime = processName(process.execPath);
 
+async function antigravityConversationIsCurrent(root, sessionId, startedAt, platform) {
+  if (!root || !SESSION_ID.test(sessionId) || !(startedAt > 0)) return false;
+  const directory = path.join(root, sessionId);
+  const pathKey = value => platform === 'win32' ? value.toLowerCase() : value;
+  try {
+    const [stat, resolved] = await Promise.all([fs.promises.lstat(directory), fs.promises.realpath(directory)]);
+    if (!stat.isDirectory() || pathKey(resolved) !== pathKey(directory)) return false;
+    if ((stat.birthtimeMs || stat.mtimeMs) > startedAt) return true;
+    // Resuming can append to an older transcript without updating the parent directory.
+    const transcript = await openAntigravityTranscript(root, sessionId);
+    if (!transcript) return false;
+    await transcript.handle.close();
+    return transcript.stat.mtimeMs > startedAt;
+  } catch { return false; }
+}
+
 /**
  * @param {object} deps
  * @param {(file: string, args: string[], options: object) => object} deps.spawn node-pty's spawn
@@ -393,17 +413,24 @@ const appRuntime = processName(process.execPath);
 function createLocalShells({
   spawn, send, agents, shell = defaultShell(), cwd = os.homedir(), env = process.env,
   platform = process.platform, processTree = () => getProcessTree(platform), processAlive = isProcessAlive,
-  readClaudeSessions
+  timedProcessTree = () => processList({ platform }), commandLine = pid => processCommandLine(pid, { platform }),
+  readClaudeSessions, antigravityRoot = antigravityBrainRoot()
 }) {
   const shells = new Map();
   let nextId = 1;
   let pendingProcessTree;
+  let pendingTimedTree;
   let claudeScan;
-  let outsideSessions = new Set();
+  const claudeChecks = new Map();
 
   function readAgentProcesses() {
     pendingProcessTree ??= Promise.resolve().then(processTree).finally(() => { pendingProcessTree = undefined; });
     return pendingProcessTree;
+  }
+
+  function readTimedProcesses() {
+    pendingTimedTree ??= Promise.resolve().then(timedProcessTree).finally(() => { pendingTimedTree = undefined; });
+    return pendingTimedTree;
   }
 
   const hasAgent = entry => Boolean(entry?.agent && !entry.exited && (!entry.externalAgent || processAlive(entry.externalAgent.pid)));
@@ -541,7 +568,7 @@ function createLocalShells({
     binding?.onExit(binding.id);
   }
 
-  function attachExternalAgent(id, entry, kind, pid, { agentId, setStatus, onExit, antigravity }) {
+  function attachExternalAgent(id, entry, kind, pid, { agentId, setStatus, onExit, antigravity, allowWake }) {
     if (shells.get(id) !== entry || entry.exited || !processAlive(pid)) return;
     let binding = entry.externalAgent;
     if (binding && !processAlive(binding.pid)) {
@@ -550,7 +577,7 @@ function createLocalShells({
     }
     if (entry.agent && (binding?.pid !== pid || entry.agent !== kind)) return;
     if (!binding) {
-      const woken = entry.sleeping?.phase === 'waking' && entry.sleeping.kind === kind ? entry.sleeping : null;
+      const woken = allowWake ? entry.sleeping : null;
       binding = { id: woken ? woken.agentId : agentId, pid, onExit };
       if (woken) {
         clearTimeout(woken.timer);
@@ -560,9 +587,10 @@ function createLocalShells({
       }
       entry.externalAgent = binding;
       entry.agent = kind;
-      if (antigravity) binding.antigravity = antigravity;
       entry.codexInput = kind === 'codex' ? { hasDraft: false, submitted: false } : null;
       if (antigravity) {
+        binding.antigravity = antigravity;
+        binding.roleSessionId = antigravity.roleSessionId;
         entry.reportedStatus = entry.pendingAntigravityStatus ?? null;
         entry.pendingAntigravityStatus = null;
       } else {
@@ -591,7 +619,10 @@ function createLocalShells({
       processes = await readAgentProcesses();
       // A shared snapshot may have begun before this agent's MCP process was started.
       if (!processes.has(pid)) processes = await readAgentProcesses();
-    } catch { return; }
+      if (!processes.has(pid)) throw new Error('프로세스가 아직 검색되지 않았습니다.');
+    } catch {
+      throw new Error('에이전트 프로세스 계보를 확인할 수 없습니다. 다시 시도해 주세요.');
+    }
     const antigravity = kind === 'antigravity';
     if (antigravity) {
       const helper = processes.get(pid);
@@ -604,6 +635,8 @@ function createLocalShells({
     }
     const visited = new Set();
     let cliPid;
+    let codexLaunchPid;
+    let runtimeAboveCli = false;
     let runtimePid;
     let statusShellSeen = false;
     for (let parent = processes.get(pid)?.parent; parent > 0 && !visited.has(parent); parent = processes.get(parent)?.parent) {
@@ -616,6 +649,7 @@ function createLocalShells({
         if (name === (antigravity ? 'agy' : kind)) {
           if (antigravity && cliPid) return;
           cliPid ??= parent;
+          if (kind === 'codex') codexLaunchPid = parent;
         }
         // agy invokes the reporter through its status-line shell. A tool's extra process is a
         // different branch even when it inherited the PTY's token.
@@ -623,13 +657,19 @@ function createLocalShells({
           if (name !== (platform === 'win32' ? 'cmd' : 'sh')) return;
           statusShellSeen = true;
         }
-        if (name === 'node' || name === appRuntime) runtimePid ??= parent;
+        if (name === 'node' || name === appRuntime) {
+          runtimePid ??= parent;
+          if (cliPid) runtimeAboveCli = true;
+        }
         continue;
       }
       const { id, entry } = candidate;
       if (antigravity && platform === 'win32' && !statusShellSeen) return;
       const agentPid = antigravity ? cliPid : cliPid ?? runtimePid;
-      if (agentPid && (shellId === undefined || id === shellId)) return { id, entry, agentPid, ptyPid: parent };
+      if (agentPid && (shellId === undefined || id === shellId)) {
+        return { id, entry, agentPid, ptyPid: parent, codexLaunchPid: runtimeAboveCli ? undefined : codexLaunchPid,
+          agentStartedAt: processes.get(agentPid)?.startedAt };
+      }
       return;
     }
   }
@@ -638,17 +678,42 @@ function createLocalShells({
   async function bindAgentProcess(request) {
     const match = await findAgentProcess(request);
     if (!match) return;
-    const { id, entry, agentPid, ptyPid } = match;
+    const { id, entry, agentPid, ptyPid, codexLaunchPid, agentStartedAt } = match;
+    // A UUID explicitly passed to the CLI can be looked up by filename. The picker and a
+    // time-based transcript match do not identify the session of this process.
+    let resumeId;
+    if (codexLaunchPid === agentPid && !entry.sleeping) {
+      const [exe, ...args] = words(await commandLine(codexLaunchPid));
+      const [subcommand, sessionId] = args[0] === '--no-daemon' ? args.slice(1) : args;
+      if (exe && processName(exe) === 'codex' && subcommand === 'resume' && SESSION_ID.test(sessionId ?? '')) {
+        resumeId = sessionId.toLowerCase();
+      }
+    }
     return registration => {
-      if (entry.pty.pid !== ptyPid) return;
-      const attached = attachExternalAgent(id, entry, request.kind, agentPid, registration);
+      if (shells.get(id) !== entry || entry.exited || entry.pty.pid !== ptyPid || !processAlive(agentPid)) return;
+      const existing = entry.externalAgent;
+      const sameAgent = existing?.pid === agentPid && entry.agent === request.kind;
+      const waking = !existing && entry.sleeping?.phase === 'waking' && entry.sleeping.kind === request.kind;
+      if (entry.sleeping && !waking && !sameAgent) throw new Error('셸의 에이전트가 아직 깨어나지 않았습니다.');
+      const existingId = waking ? entry.sleeping.agentId : sameAgent && existing.hadMcp ? existing.id : null;
+      const sameLiveCli = Boolean(sameAgent && agentStartedAt > 0 && existing.mcpProcessStartedAt === agentStartedAt);
+      if (existingId) registration.authorizeBinding(existingId, waking, sameLiveCli);
+      else registration.authorizeBinding?.(null, false, false);
+      // A CLI discovered through its own file has a provisional UI identity and no message lease.
+      // The first MCP registration gets a new ID instead of authenticating that provisional ID by PID.
+      const claudeSession = sameAgent ? existing.claudeSession : undefined;
+      if (sameAgent && !existing.hadMcp) finishExternalAgent(entry);
+      const attached = attachExternalAgent(id, entry, request.kind, agentPid, { ...registration, allowWake: waking });
       if (!attached) return;
       const binding = entry.externalAgent;
+      if (claudeSession) Object.assign(binding, { claudeSession, claudeProcessStartedAt: existing.claudeProcessStartedAt });
       binding.hadMcp = true;
+      binding.mcpProcessStartedAt ??= agentStartedAt || undefined;
       const connection = {};
       binding.connection = connection;
       return {
         ...attached,
+        ...(resumeId ? { resumeId } : {}),
         detach() {
           if (entry.externalAgent !== binding || binding.connection !== connection) return false;
           binding.connection = undefined;
@@ -663,83 +728,119 @@ function createLocalShells({
   }
 
   async function reportAntigravityStatus({ shellId, pid, status, sequence, isCurrent }) {
-    const match = await findAgentProcess({ pid, kind: 'antigravity', shellId });
+    const match = await findAgentProcess({ pid, kind: 'antigravity', shellId }).catch(() => null);
     if (!match || !isCurrent() || !processAlive(pid)) return false;
     const { id, entry, agentPid, ptyPid } = match;
-    if (shells.get(id) !== entry || entry.pty.pid !== ptyPid || entry.exited || !processAlive(agentPid)) return false;
-    const antigravity = { ...status, sequence };
+    const previous = entry.externalAgent?.pid === agentPid ? entry.externalAgent : null;
+    if (sequence <= (previous?.antigravity?.sequence ?? 0)) return false;
+    let processStartedAt = previous?.antigravity?.processStartedAt;
+    let roleSessionId = null;
+    if (status.sessionId && status.sessionId !== previous?.roleSessionId) {
+      processStartedAt ??= (await readTimedProcesses().catch(() => null))?.get(agentPid)?.startedAt || undefined;
+      if (await antigravityConversationIsCurrent(antigravityRoot, status.sessionId, processStartedAt, platform)) {
+        roleSessionId = status.sessionId;
+      }
+    }
+    if (!isCurrent() || shells.get(id) !== entry || entry.pty.pid !== ptyPid ||
+        entry.exited || !processAlive(pid) || !processAlive(agentPid)) return false;
     const binding = entry.externalAgent;
     if (entry.agent === 'antigravity' && binding?.pid === agentPid) {
       if (sequence <= binding.antigravity.sequence) return false;
-      binding.antigravity = antigravity;
+      binding.antigravity = { cwd: status.cwd, status: status.status, sequence,
+        processStartedAt: processStartedAt ?? binding.antigravity.processStartedAt };
+      if (roleSessionId) binding.roleSessionId = roleSessionId;
+      if (binding.roleSessionId) agents?.setVerifiedSession?.(binding.id, binding.roleSessionId);
       entry.reportStatus?.(agentStatus(entry));
       return true;
     }
+    const antigravity = { cwd: status.cwd, status: status.status, sequence, processStartedAt, roleSessionId };
     return agents?.registerLocalAntigravity?.(status.cwd, registration =>
-      attachExternalAgent(id, entry, 'antigravity', agentPid, { ...registration, antigravity })) ?? false;
+      attachExternalAgent(id, entry, 'antigravity', agentPid, { ...registration, antigravity }), roleSessionId) ?? false;
   }
 
   async function discoverLocalClaude() {
     const candidates = new Map();
-    const known = new Map();
     for (const [id, entry] of shells) {
       const pid = entry.pty.pid;
-      if (entry.exited || !Number.isSafeInteger(pid) || pid <= 0 || (entry.agent && (entry.agent !== 'claude' || !entry.externalAgent))) continue;
-      candidates.set(pid, { id, entry });
-      if (entry.externalAgent) known.set(entry.externalAgent.pid, entry.externalAgent);
+      if (entry.exited || entry.sleeping || !Number.isSafeInteger(pid) || pid <= 0 || (entry.agent && entry.agent !== 'claude')) continue;
+      candidates.set(pid, { id, entry, ptyPid: pid });
     }
-    if (!candidates.size) return;
-    const sessions = await readClaudeSessions();
-    // An already identified process keeps the same parent. Recheck only when its session starts again.
-    const skipped = new Set();
-    const fresh = [];
-    for (const session of sessions) {
-      const { pid, startedAt } = session;
-      const binding = known.get(pid);
-      if (binding) {
-        binding.claudeSession = session;
-      } else if (processAlive(pid)) {
-        const key = `${pid}:${startedAt}`;
-        if (outsideSessions.has(key)) skipped.add(key);
-        else fresh.push({ key, session });
+    if (!candidates.size) {
+      claudeChecks.clear();
+      return;
+    }
+    const sessions = new Map((await readClaudeSessions()).filter(session => processAlive(session.pid))
+      .map(session => [`${session.pid}:${session.startedAt}:${session.processStartedAt ?? ''}`, session]));
+    for (const [key, check] of claudeChecks) {
+      if (!sessions.has(key) || (check && candidates.get(check.ptyPid)?.entry !== check.entry)) claudeChecks.delete(key);
+    }
+    const fresh = [...sessions].filter(([key]) => !claudeChecks.has(key));
+    if (fresh.length) {
+      const processes = await readTimedProcesses();
+      const matchesProcessStart = session => {
+        const startedAt = processes.get(session.pid)?.startedAt;
+        if (!(startedAt > 0)) return false;
+        return session.processStartedAt !== undefined
+          ? Math.abs(startedAt - session.processStartedAt) <= CLAUDE_START_TOLERANCE_MS
+          : session.startedAt >= startedAt - CLAUDE_START_TOLERANCE_MS && session.startedAt <= startedAt + CLAUDE_SESSION_DELAY_MS;
+      };
+      const sessionPids = new Set([...sessions.values()].filter(matchesProcessStart).map(session => session.pid));
+      for (const { entry } of candidates.values()) {
+        const binding = entry.externalAgent;
+        const startedAt = processes.get(binding?.pid)?.startedAt;
+        if (binding?.claudeProcessStartedAt && startedAt > 0 &&
+            Math.abs(startedAt - binding.claudeProcessStartedAt) > CLAUDE_START_TOLERANCE_MS) {
+          // The old PID belongs to a new process whose session must get a new logical agent.
+          finishExternalAgent(entry);
+        }
+      }
+      for (const [key, session] of fresh) {
+        const process = processes.get(session.pid);
+        if (!process) continue;
+        claudeChecks.set(key, null);
+        if (!sessionPids.has(session.pid) || !['claude', 'node', 'bun', appRuntime].includes(processName(process.name))) continue;
+        let parent = process.parent;
+        const visited = new Set([session.pid]);
+        while (parent > 0 && !candidates.has(parent) && !sessionPids.has(parent) && !visited.has(parent)) {
+          visited.add(parent);
+          parent = processes.get(parent)?.parent;
+        }
+        // POSIX managed launches may exec Claude under the PTY's PID. Nested Claude sessions
+        // belong to the parent CLI, even when that parent is also the PTY process.
+        const direct = candidates.get(session.pid);
+        const candidate = direct?.entry.registration ? direct : !sessionPids.has(parent) && candidates.get(parent);
+        if (candidate && session.startedAt >= candidate.entry.openedAt) {
+          claudeChecks.set(key, { ...candidate, startedAt: process.startedAt });
+        }
       }
     }
-    outsideSessions = skipped;
-    if (!fresh.length) return;
-    const processes = await readAgentProcesses();
-    const sessionPids = new Set(sessions.map(session => session.pid));
     const matches = new Map();
-    for (const { key, session } of fresh) {
-      const process = processes.get(session.pid);
-      if (!process) continue;
-      const name = processName(process.name);
-      if (!['claude', 'node', 'bun', appRuntime].includes(name)) {
-        outsideSessions.add(key);
-        continue;
-      }
-      let parent = process.parent;
-      const visited = new Set([session.pid]);
-      while (parent > 0 && !candidates.has(parent) && !sessionPids.has(parent) && !visited.has(parent)) {
-        visited.add(parent);
-        parent = processes.get(parent)?.parent;
-      }
-      const candidate = candidates.get(parent);
-      if (!candidate || session.startedAt < candidate.entry.openedAt) {
-        outsideSessions.add(key);
-        continue;
-      }
-      matches.set(candidate, matches.has(candidate) ? null : session);
+    for (const [key, session] of sessions) {
+      const check = claudeChecks.get(key);
+      if (check) matches.set(check.id, matches.has(check.id) ? null : { ...check, session });
     }
-    for (const [{ id, entry }, session] of matches) {
-      if (!session || (hasAgent(entry) && entry.externalAgent?.pid !== session.pid)) continue;
+    for (const match of matches.values()) {
+      if (!match) continue;
+      const { id, entry, ptyPid, startedAt, session } = match;
+      if (shells.get(id) !== entry || entry.exited || entry.sleeping || entry.pty.pid !== ptyPid || !processAlive(session.pid)) continue;
+      const managedId = entry.registration?.env.EZSHELL_AGENT_ID;
+      if (managedId && entry.agent === 'claude') {
+        if (entry.managedClaudePid && entry.managedClaudePid !== session.pid) continue;
+        entry.managedClaudePid = session.pid;
+        agents?.setVerifiedSession?.(managedId, session.sessionId);
+        continue;
+      }
+      if (hasAgent(entry) && entry.externalAgent?.pid !== session.pid) continue;
       // MCP may have connected while the process tree was being read.
       if (entry.externalAgent?.pid === session.pid) {
         entry.externalAgent.claudeSession = session;
+        entry.externalAgent.claudeProcessStartedAt = startedAt;
+        agents?.setVerifiedSession?.(entry.externalAgent.id, session.sessionId);
         continue;
       }
       agents.registerLocalClaude(session, registration => {
         const attached = attachExternalAgent(id, entry, 'claude', session.pid, registration);
-        if (attached) entry.externalAgent.claudeSession = session;
+        if (attached) Object.assign(entry.externalAgent, { claudeSession: session, claudeProcessStartedAt: startedAt });
         return attached;
       });
     }
@@ -789,6 +890,7 @@ function createLocalShells({
     const codexInput = agent === 'codex' ? { hasDraft: false, submitted: false } : null;
     const entry = {
       pty, agent: registeredAgent, registration, codexInput, cols: columns, rows: lines, composing: false, replacementFor,
+      wakeMcp: Boolean(shellUsageEnv.EZSHELL_AGENT_WAKE_MCP_CONFIG),
       // For a window that reloads and takes the shell back as a tab (`list`)
       cwd: directory === undefined ? null : workingDirectory,
       launchDirectory: workingDirectory, reportedDirectory: null,
@@ -948,6 +1050,20 @@ function createLocalShells({
     let line;
     try {
       line = resumeCommand(sleeping.kind, sleeping.sessionId, sleeping.flags);
+      if (entry.wakeMcp) {
+        const shellVar = platform === 'win32' ? '$env:' : '$';
+        if (sleeping.kind === 'claude') {
+          line += ` --mcp-config "${shellVar}EZSHELL_AGENT_WAKE_MCP_CONFIG"`;
+        } else {
+          line += [
+            ` -c "mcp_servers.ezshell-cli-mcp.command=${shellVar}EZSHELL_CLI_EXE"`,
+            ` -c "mcp_servers.ezshell-cli-mcp.args=['-e','require(process.env.EZSHELL_AGENT_MCP_SCRIPT).run()']"`,
+            ` -c "mcp_servers.ezshell-cli-mcp.env.ELECTRON_RUN_AS_NODE='1'"`,
+            ` -c "mcp_servers.ezshell-cli-mcp.env.EZSHELL_AGENT_WAKE_KIND='codex'"`,
+            ` -c "mcp_servers.ezshell-cli-mcp.env_vars=['EZSHELL_AGENT_PIPE','EZSHELL_SHELL_TOKEN','EZSHELL_AGENT_MCP_SCRIPT']"`
+          ].join('');
+        }
+      }
     } catch {
       endSleep(id, entry, { notify: true });
       return { ok: false, reason: 'no-session' };
@@ -1020,7 +1136,10 @@ function createLocalShells({
     agentOf(id) {
       const entry = shells.get(id);
       if (!hasAgent(entry)) return null;
-      const session = entry.externalAgent?.antigravity ?? entry.externalAgent?.claudeSession;
+      const binding = entry.externalAgent;
+      const session = binding?.antigravity
+        ? { sessionId: binding.roleSessionId, cwd: binding.antigravity.cwd }
+        : binding?.claudeSession;
       return { kind: entry.agent, status: agentStatus(entry), ...(session ? { sessionId: session.sessionId, cwd: session.cwd } : {}) };
     },
     chatAgentId(id) {
@@ -1075,9 +1194,9 @@ function createLocalShells({
         if (agentStatus(entry) !== 'idle') return { ok: false, reason: 'working' };
         if (images?.length || target !== undefined) return { ok: false, reason: 'not-agent' };
         const binding = entry.externalAgent;
-        const sessionId = binding.antigravity.sessionId;
+        const sessionId = binding.roleSessionId;
         const confirm = canSend;
-        canSend = () => entry.externalAgent === binding && binding.antigravity.sessionId === sessionId &&
+        canSend = () => entry.externalAgent === binding && binding.roleSessionId === sessionId &&
           agentStatus(entry) === 'idle' && (!confirm || confirm());
       }
       const verify = active => sameConversation() && (target === undefined ? entry.parentInput(active) : active === target);
@@ -1114,7 +1233,7 @@ function createLocalShells({
       const entry = shells.get(id);
       if (!hasAgent(entry) || !entry.inbox) return null;
       const approval = entry.agent === 'antigravity' ? agentStatus(entry) === 'blocked' : Boolean(entry.inbox.approvalPrompt());
-      return { lines: entry.inbox.screenLines(), composer: entry.inbox.composerState(), footerRow: entry.inbox.composerFooterRow(), approval };
+      return { ...entry.inbox.commandRows(), composer: entry.inbox.composerState(), footerRow: entry.inbox.composerFooterRow(), approval };
     },
     /** Answers that prompt with a choice, only if the screen still shows the same prompt */
     async answerApproval(id, key, signature) {
@@ -1166,6 +1285,7 @@ function createLocalShells({
       id, kind: entry.agent, external: Boolean(entry.externalAgent?.hadMcp), agentId: entry.externalAgent?.id ?? null,
       // The CLI (typed into the shell) or the shell that runs it (launched by ezShell)
       pid: entry.externalAgent?.pid ?? entry.pty.pid,
+      sessionId: entry.externalAgent?.claudeSession?.sessionId ?? null,
       activeAt: entry.activeAt, idle: agentStatus(entry) === 'idle'
     }] : [])),
     /** The shells whose agents sleep, for a window that starts or reloads */

@@ -599,6 +599,9 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
     if (Notification.isSupported()) new Notification({ title: 'ezShell 영역 캡처', body: '화면을 캡처하지 못했습니다.' }).show();
   }
 });
+ipcMain.on('quick-capture-theme', (event, theme) => {
+  if (fromMainWindow(event) && event.senderFrame === event.sender.mainFrame) quickCapture.setTheme(theme);
+});
 // Tab Tab from any program: the helper brought ezShell forward, the window opens its work overview.
 // Off while locked (every key goes through untouched); looked at each second instead of at each lock site.
 // The overview opens on the monitor of the program that was in front (the helper gives the middle of
@@ -639,7 +642,8 @@ const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages(
   onInboxChanged: id => localShells?.wakeInbox(id),
   bindLocalAgent: request => localShells?.bindAgentProcess(request),
   reportLocalAntigravity: request => localShells?.reportAntigravityStatus(request),
-  bridgeFile: agentBridgeFile
+  bridgeFile: agentBridgeFile,
+  roleFile: path.join(userDataPath, 'agent-roles.json')
 });
 const localTerminalClipboard = require('./src/ipc/localTerminalClipboard.js').createLocalTerminalClipboard(clipboard, nativeImage);
 async function selectAgentImages(title) {
@@ -777,12 +781,12 @@ ipcMain.handle('agent-message-set-role', (event, id, role) => {
 // agent pipe, Codex's comes from its session file. Numbers and the model name only.
 const codexUsageWatcher = require('./src/ipc/codexUsageWatcher.js').createCodexUsageWatcher({
   agents: () => agentMessages.snapshot().agents,
-  setUsage: (agentId, usage) => agentMessages.setUsage(agentId, usage)
+  setUsage: agentMessages.setUsage,
+  setVerifiedSession: agentMessages.setVerifiedSession
 });
 codexUsageWatcher.start();
 // Idle agents give back their memory, then sleep until they are needed (src/agentIdle.js; the window
-// sends the settings). Resuming needs the CLI's session id: Claude's status line, Codex's session file.
-const SESSION_IN_FILE_NAME = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/i;
+// sends the settings). Prefer the running Claude's session file and require a verified Codex ID.
 const agentIdle = require('./src/agentIdle.js').createAgentIdle({
   shells: {
     idleAgents: () => localShells?.idleAgents() ?? [],
@@ -793,9 +797,8 @@ const agentIdle = require('./src/agentIdle.js').createAgentIdle({
     ? { minuteMs: Number(process.env.EZSHELL_TEST_IDLE_MINUTE_MS), tickMs: 500 } : {}),
   sessionOf: (agent) => {
     if (!agent.agentId) return null;
-    if (agent.kind === 'codex') return SESSION_IN_FILE_NAME.exec(codexUsageWatcher.fileOf(agent.agentId) ?? '')?.[1] ?? null;
-    return agentMessages.usageSnapshot().find(item => item.agentId === agent.agentId)?.usage?.sessionId
-      ?? agentMessages.snapshot().agents.find(item => item.id === agent.agentId)?.resumeId ?? null;
+    if (agent.kind === 'codex') return codexUsageWatcher.verifiedSessionOf(agent.agentId);
+    return agent.sessionId ?? agentMessages.snapshot().agents.find(item => item.id === agent.agentId)?.resumeId ?? null;
   }
 });
 ipcMain.handle('agent-idle-configure', (event, config) => (fromMainWindow(event) ? agentIdle.configure(config) : null));

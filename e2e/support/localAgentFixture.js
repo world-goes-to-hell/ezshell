@@ -32,6 +32,8 @@ let approval = ''
 // A screen of the CLI's own, drawn instead of the composer (a chat slash command like /config)
 const screenPath = path.join(profile, id + '-screen')
 let screen = ''
+const commandHistoryPath = path.join(profile, id + '-command-history')
+let commandHistory = ''
 
 function draw() {
   if (screen) {
@@ -49,7 +51,7 @@ function draw() {
     const modelFile = path.join(profile, id + '-speed-model')
     const model = fs.existsSync(modelFile) ? fs.readFileSync(modelFile, 'utf8') : 'gpt-6.2-sol'
     const ultrafast = fs.existsSync(path.join(profile, id + '-ultrafast-eligible'))
-    const rows = ['fixture ready: ' + id]
+    const rows = commandHistory ? commandHistory.trimEnd().split('\r\n') : ['fixture ready: ' + id]
     if (draft === '/fast') rows.push('› /fast     toggle faster responses', '')
     if (ultrafast && draft.startsWith('/ultrafas')) rows.push('› /ultrafast     toggle fastest responses', '')
     const row = rows.length + 1
@@ -80,7 +82,7 @@ function draw() {
     if (draft.length > 100) display = `[Pasted Content ${draft.length} chars]`
     footer = '\r\n\r\n  gpt-6 medium · ' + target + `\x1b[2;${display.length + 3}H`
   }
-  process.stdout.write('\x1b[2J\x1b[Hfixture ready: ' + id + '\r\n' + border + indicator + display.replace(/\r?\n/g, '\r\n') + footer)
+  process.stdout.write('\x1b[2J\x1b[H' + (commandHistory || 'fixture ready: ' + id + '\r\n') + border + indicator + display.replace(/\r?\n/g, '\r\n') + footer)
 }
 
 // How it was started (local-agent-sleep: the resumed agent gets the session id and the kept options)
@@ -96,8 +98,14 @@ async function connectMcp() {
     if (!claude && (!args.includes('--no-daemon') || !args.includes('--yolo'))) {
       throw new Error('Manual Codex launch did not preserve its argument and use the per-terminal server')
     }
-    const { createEntry } = require('../../src/ipc/agentMessageSetup.js')
-    entry = createEntry(kind, path.join(profile, 'agent-message-connection'))
+    const mcpConfig = args.indexOf('--mcp-config')
+    if (claude && mcpConfig >= 0 && args[mcpConfig + 1] === process.env.EZSHELL_AGENT_WAKE_MCP_CONFIG) {
+      entry = { command: process.execPath, args: [process.env.EZSHELL_AGENT_MCP_SCRIPT],
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', EZSHELL_AGENT_WAKE_KIND: kind } }
+    } else {
+      const { createEntry } = require('../../src/ipc/agentMessageSetup.js')
+      entry = createEntry(kind, path.join(profile, 'agent-message-connection'))
+    }
   } else if (claude) {
     const configIndex = args.indexOf('--mcp-config')
     if (configIndex < 0) throw new Error('No Claude MCP config argument')
@@ -117,16 +125,19 @@ async function connectMcp() {
   fs.writeFileSync(path.join(profile, id + '-tools'), JSON.stringify(tools.map(tool => tool.name)))
 }
 
-if (claude && !managedId && process.env.EZSHELL_TEST_MANUAL_CLAUDE_CHAT) {
+const manualChatOnly = claude && !managedId && process.env.EZSHELL_TEST_MANUAL_CLAUDE_CHAT
+if (manualChatOnly || (claude && !managedId && process.env.EZSHELL_TEST_IDLE_MINUTE_MS)) {
   const dir = path.join(process.env.CLAUDE_CONFIG_DIR, 'sessions')
   fs.mkdirSync(dir, { recursive: true })
   const session = path.join(dir, process.pid + '.json')
   const sessionId = fs.readFileSync(path.join(profile, 'manual-claude-session'), 'utf8')
+  const procStart = 116444736000000000 + Math.round((Date.now() - process.uptime() * 1000) * 10000)
   fs.writeFileSync(session, JSON.stringify({
-    pid: process.pid, sessionId, cwd: process.cwd(), startedAt: Date.now(), kind: 'interactive', entrypoint: 'cli'
+    pid: process.pid, sessionId, cwd: process.cwd(), startedAt: Date.now(), procStart, kind: 'interactive', entrypoint: 'cli'
   }))
   process.on('exit', () => fs.rmSync(session, { force: true }))
-} else {
+}
+if (!manualChatOnly) {
   connectMcp().catch(error => fs.writeFileSync(path.join(profile, id + '-mcp-error'), error.message))
 }
 
@@ -150,6 +161,11 @@ setInterval(() => {
   if (fs.existsSync(screenPath)) {
     screen = fs.readFileSync(screenPath, 'utf8')
     fs.unlinkSync(screenPath)
+    draw()
+  }
+  if (fs.existsSync(commandHistoryPath)) {
+    commandHistory = fs.readFileSync(commandHistoryPath, 'utf8')
+    fs.unlinkSync(commandHistoryPath)
     draw()
   }
   if (fs.existsSync(draftPath)) {

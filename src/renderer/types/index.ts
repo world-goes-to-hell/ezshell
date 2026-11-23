@@ -447,6 +447,9 @@ export interface AgentTurnUsage {
   limits?: { fiveHour?: number; sevenDay?: number }
 }
 
+type AgentChatSendResult = { ok: true } | { ok: false; reason?: string; error: string; recorded?: AgentChatItem }
+export type AgentChatMcpSummary = { id: string; canLogin: boolean }
+
 export interface AgentChatItem {
   id: string
   /** output: what a slash command printed (Claude's transcript, or read off Codex's screen) */
@@ -463,6 +466,9 @@ export interface AgentChatItem {
   isError?: boolean
   /** On a slash command sent from the chat that no transcript records (Codex): what came of it */
   commandState?: 'done' | 'screen'
+  /** On output read off Codex's screen: the command that produced it. */
+  outputCommand?: string
+  mcpSummary?: AgentChatMcpSummary
   /** On a user item: the tokens the turn it started used so far (src/agentChat/turnUsage.js) */
   usage?: AgentTurnUsage
   tool?: {
@@ -620,6 +626,8 @@ export interface AgentMessageSession {
   role?: string | null
   roleSource?: 'agent' | 'user' | null
   exitCode?: number | null
+  /** Opaque key of the agent's conversation (main hashes it): where its card sits on the relationship map */
+  layoutKey?: string | null
 }
 
 /** A model or effort level the agent CLI's picker offers (src/ipc/agentPicker.js) */
@@ -893,6 +901,7 @@ declare global {
       setWindowOpacity?: (opacity: number) => void
       /** Glass: what settings chose, kept by main for the next start */
       setAppearance?: (value: { surface: 'flat' | 'glass'; scheme: 'light' | 'dark' }) => void
+      setQuickCaptureTheme?: (theme: import('./theme').QuickCaptureTheme) => void
       /** Glass: whether acrylic is behind this window now, and whether this system can draw it */
       getBackdrop?: () => Promise<{ active: boolean; supported: boolean }>
       /** Popped-out SFTP window: reports the folders it shows now */
@@ -1058,8 +1067,9 @@ declare global {
       >
       agentChatPickImages?: (shellId: string) => Promise<AgentChatImagesResult>
       agentChatRemoveImage?: (shellId: string, imageId: string) => void
-      agentChatSend?: (shellId: string, text: string, imageIds?: string[], retry?: { acceptedAt: number; transcriptId: string; ignoreIds: string[] }) => Promise<
-        { ok: true } | { ok: false; reason?: string; error: string; recorded?: AgentChatItem }>
+      agentChatSend?: (shellId: string, text: string, imageIds?: string[], retry?: { acceptedAt: number; transcriptId: string; ignoreIds: string[] }) => Promise<AgentChatSendResult>
+      agentChatMcpLogin?: (shellId: string, summaryId: string, server: string) => Promise<AgentChatSendResult>
+      agentChatMcpVerbose?: (shellId: string, summaryId: string) => Promise<AgentChatSendResult>
       agentChatToggleSpeed?: (shellId: string, speed: CodexSpeedMode) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatInterrupt?: (shellId: string) => Promise<boolean>
       /** After Esc: clears the CLI composer if it holds exactly these chat lines */
@@ -1067,7 +1077,7 @@ declare global {
       agentChatAnswer?: (shellId: string, key: string, signature: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatAnswerQuestions?: (shellId: string, itemId: string, answers: AgentAskAnswer[]) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       /** After a slash command was sent: it ran (output: what Codex printed), asks a question, or opened a screen */
-      agentChatCommandWatch?: (shellId: string) => Promise<{ ok: true; state: 'done' | 'approval' | 'screen' | 'gone'; output?: string } | { ok: false; error: string }>
+      agentChatCommandWatch?: (shellId: string) => Promise<{ ok: true; state: 'done' | 'approval' | 'screen' | 'gone'; output?: string; mcpSummary?: AgentChatMcpSummary } | { ok: false; error: string }>
       agentChatScreenState?: (shellId: string) => Promise<{ composer: 'empty' | 'draft' | null; approval: boolean } | null>
       /** The slash commands the user made for the agent (its folders' commands, skills, prompts) */
       agentChatSlashCommands?: (shellId: string) => Promise<{ name: string; description: string; source: 'user' | 'project' }[]>

@@ -17,6 +17,8 @@ const instructions = [
 ].join(' ')
 const text = z.string().trim().min(1).max(8000)
 const id = z.string().min(1).max(100)
+const RETRY_DELAYS = [1000, 2000, 5000, 10000, 30000]
+const RECONNECTING = 'ezShell과 다시 연결하는 중입니다.'
 
 function readBridge(file) {
   try {
@@ -45,8 +47,17 @@ function runningBridges(file) {
 
 async function connectionOptions(env = process.env, processTree = getProcessTree, pid = process.pid) {
   const { EZSHELL_AGENT_PIPE: pipe, EZSHELL_AGENT_TOKEN: token, EZSHELL_AGENT_BRIDGE_FILE: bridgeFile,
-    EZSHELL_AGENT_BRIDGE_KIND: kind } = env
-  if (pipe && token) return { pipe, token }
+    EZSHELL_AGENT_BRIDGE_KIND: kind, EZSHELL_AGENT_WAKE_KIND: wakeKind, EZSHELL_SHELL_TOKEN: wakeToken } = env
+  // A managed agent's token identifies that shell in its owning app. The shared bridge
+  // cannot prove its identity in a new app, so retries keep using its scoped credentials.
+  if (Object.hasOwn(env, 'EZSHELL_AGENT_TOKEN')) {
+    if (!pipe || !token) throw new Error('ezShell 전용 메시지 MCP 설정을 확인해 주세요.')
+    return { pipe, token }
+  }
+  if (Object.hasOwn(env, 'EZSHELL_AGENT_WAKE_KIND')) {
+    if (!pipe || !wakeToken || !['codex', 'claude'].includes(wakeKind)) throw new Error('ezShell 깨우기 연결 설정을 확인해 주세요.')
+    return { pipe, wakeToken, kind: wakeKind }
+  }
   if (!bridgeFile || !['codex', 'claude'].includes(kind)) throw new Error('ezShell 메시지 MCP 설정을 확인해 주세요.')
   const shared = readBridge(bridgeFile)
   const instances = runningBridges(bridgeFile)
@@ -70,15 +81,17 @@ async function connectionOptions(env = process.env, processTree = getProcessTree
   return { pipe: selected.pipe, token: selected.token, kind }
 }
 
-function openLease({ pipe, token, kind }) {
+function openLease({ pipe, token, kind, wakeToken }, reconnectToken, signal) {
   return new Promise((resolve, reject) => {
     const offline = () => new Error('ezShell 앱을 실행한 뒤 메시지 MCP를 다시 연결해 주세요.')
-    const socket = net.createConnection(pipe)
+    const socket = net.createConnection({ path: pipe, signal })
     socket.setEncoding('utf8')
     socket.setTimeout(5000, () => socket.destroy(offline()))
     socket.on('error', () => reject(offline()))
-    socket.on('end', () => reject(offline()))
-    socket.on('connect', () => socket.write(JSON.stringify({ method: 'watch-mcp', token, kind, cwd: process.cwd(), pid: process.pid }) + '\n'))
+    socket.once('close', () => reject(offline()))
+    socket.on('connect', () => socket.write(JSON.stringify({
+      method: 'watch-mcp', token, kind, wakeToken, reconnectToken, cwd: process.cwd(), pid: process.pid
+    }) + '\n'))
     let response = ''
     const receive = chunk => {
       response += chunk
@@ -89,7 +102,7 @@ function openLease({ pipe, token, kind }) {
         const reply = JSON.parse(response.slice(0, end))
         if (!reply.success || typeof reply.token !== 'string') throw Error(reply.error)
         socket.setTimeout(0)
-        resolve({ pipe, token: reply.token, socket })
+        resolve({ pipe, token: reply.token, reconnectToken: reply.reconnectToken, socket })
       } catch (error) {
         socket.destroy()
         reject(error)
@@ -100,18 +113,52 @@ function openLease({ pipe, token, kind }) {
 }
 
 async function main() {
-  const options = await connectionOptions()
-  let registration
-  let closed = false
+  const lifetime = new AbortController()
+  let lease = null
+  let reconnect = null
+  let retryTimer = null
+  let retryStep = 0
+  let initialized = false
   const server = new McpServer({ name: 'ezshell-cli-mcp', version: '1.0.0' }, { instructions })
-  const call = async request => {
+  const retry = () => {
+    if (lifetime.signal.aborted) return
+    const delay = RETRY_DELAYS[retryStep]
+    retryStep = Math.min(retryStep + 1, RETRY_DELAYS.length - 1)
+    retryTimer = setTimeout(() => {
+      retryTimer = null
+      void register()
+    }, delay)
+  }
+  async function register() {
     try {
-      if (!registration) throw new Error('메시지 MCP 초기화가 끝나지 않았습니다.')
-      const lease = await registration
-      const { success, ...result } = await rpc(request, lease)
+      const options = await connectionOptions()
+      if (lifetime.signal.aborted) return
+      const reconnectToken = reconnect?.pipe === options.pipe ? reconnect.token : undefined
+      const connection = await openLease(options, reconnectToken, lifetime.signal)
+      if (typeof connection.reconnectToken === 'string') reconnect = { pipe: options.pipe, token: connection.reconnectToken }
+      if (connection.socket.destroyed || connection.socket.readableEnded || lifetime.signal.aborted) {
+        connection.socket.destroy()
+        retry()
+        return
+      }
+      lease = connection
+      retryStep = 0
+      connection.socket.once('close', () => {
+        lease = null
+        retry()
+      })
+    } catch {
+      retry()
+    }
+  }
+  const call = async request => {
+    const current = lease
+    try {
+      if (!current || current.socket.destroyed || current.socket.readableEnded) throw new Error(RECONNECTING)
+      const { success, ...result } = await rpc(request, current)
       return { content: [{ type: 'text', text: JSON.stringify(result) }], ...(success ? {} : { isError: true }) }
     } catch (error) {
-      return { content: [{ type: 'text', text: error.message }], isError: true }
+      return { content: [{ type: 'text', text: current === lease ? error.message : RECONNECTING }], isError: true }
     }
   }
   server.registerTool('list_agents', { description: 'List connected ezShell agents and their roles, along with your own agent ID.' },
@@ -145,22 +192,16 @@ async function main() {
   }, ({ message_id }) => call({ method: 'ack', id: message_id }))
 
   server.server.oninitialized = () => {
-    if (registration || closed) return
-    registration = openLease(options)
-    void registration.then(({ socket }) => {
-      if (closed) socket.destroy()
-      else socket.once('close', () => { void server.close().catch(() => {}) })
-    }, error => {
-      console.error(error.message)
-      void server.close().catch(() => {})
-    })
+    if (initialized || lifetime.signal.aborted) return
+    initialized = true
+    void register()
   }
   const onInputEnd = () => { void server.close().catch(() => {}) }
   process.stdin.once('end', onInputEnd)
   server.server.onclose = () => {
-    closed = true
     process.stdin.off('end', onInputEnd)
-    if (registration) void registration.then(({ socket }) => socket.destroy(), () => {})
+    clearTimeout(retryTimer)
+    lifetime.abort()
   }
   await server.connect(new StdioServerTransport())
 }
