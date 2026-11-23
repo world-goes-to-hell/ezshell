@@ -242,12 +242,24 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     }
     const { active: buffer } = screen.buffer
     // The screen as lines: a row the terminal wrapped (a long choice in a narrow pane) joins the one before
+    // Only text that runs up to the right edge continues: Claude pads its rule and the rows of a choice's
+    // preview box to the full width, and the cursor wrapping after them marks the next row as wrapped too
+    // (the question with previews was never recognized: its rows were glued into one)
+    const reachesEdge = cells => {
+      for (let x = screen.cols - 1; x >= screen.cols - 2; x--) {
+        if (cells?.getCell(x)?.getChars().trim()) return true
+      }
+      return false
+    }
     const raws = []
+    let previous = null
     for (let row = buffer.baseY; row < buffer.baseY + screen.rows; row++) {
       const cells = buffer.getLine(row)
       const text = cells?.translateToString(true) ?? ''
-      if (cells?.isWrapped && raws.length) raws[raws.length - 1] += text
+      const before = raws[raws.length - 1]
+      if (cells?.isWrapped && raws.length && reachesEdge(previous) && !isClaudeRule(before)) raws[raws.length - 1] += text
       else raws.push(text)
+      previous = cells
     }
     const bare = index => (raws[index] ?? '').replace(/^\s*[│┃|]\s?/u, '').replace(/\s*[│┃|]\s*$/u, '')
     const top = 0

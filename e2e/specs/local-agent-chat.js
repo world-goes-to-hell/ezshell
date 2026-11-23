@@ -57,6 +57,11 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   const pane = index => `${PANES}[${index}]`
   const cover = index => `${pane(index)}?.querySelector('.agent-chat-cover')`
   const composer = index => `${cover(index)}?.querySelector('.agent-chat-input')`
+  const openChatActions = async index => driver.click(...await driver.center(`${cover(index)}.querySelector('.agent-chat-head')`), 'right')
+  const chooseChatAction = async (index, label) => {
+    await openChatActions(index)
+    await driver.pick(label)
+  }
   const setChatDraft = (text, index = 0) => js(`(() => {
     const input = ${composer(index)}
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, ${JSON.stringify(text)})
@@ -108,22 +113,45 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await js(`${composer(0)}.setSelectionRange(1, 1)`)
   await pasteIntoChat(0)
   check('pasting a capture inserts the comment at the caret and attaches the image', await until(`
-    ${composer(0)}.value === ${JSON.stringify('앞' + screenshotComment + '뒤')} &&
+    ${composer(0)}.value === ${JSON.stringify('앞 [첨부이미지 1]\n' + screenshotComment + ' 뒤')} &&
     ${cover(0)}.querySelector('.agent-chat-attachment img')?.naturalWidth === 1
   `))
   await js(`${cover(0)}.querySelector('.agent-chat-attachment button').click()`)
   await setChatDraft('')
   fs.unlinkSync(file('clipboard-comment'))
-  // The pane's own mail button is under the chat: the header has one to the agent's inbox
-  check('the chat header has the agent\'s mail button after 터미널', await until(`(() => {
-    const buttons = [...${cover(0)}.querySelectorAll('.agent-chat-head .agent-chat-head-btn')]
-    return buttons.length === 3 && buttons[0].textContent.includes('터미널') && buttons[1].matches('.agent-chat-mail') &&
-      buttons[1].textContent.includes('메시지') && buttons[2].textContent.includes('질문 목록')
-  })()`, 5000))
-  await js(`${cover(0)}.querySelector('.agent-chat-mail').click()`)
-  check('the mail button opens that agent\'s inbox', await until(`(document.querySelector('.agent-messages-dialog')?.textContent ?? '').includes('claude-1')`, 5000))
+  check('the chat header replaces the action buttons with a message notification icon', await until(`
+    !${cover(0)}.querySelector('.agent-chat-head .agent-chat-head-btn') &&
+    !!${cover(0)}.querySelector('.agent-chat-notification')
+  `, 5000))
+  await openChatActions(0)
+  check('the three chat actions are directly available in the right-click menu', await until(`
+    ['채팅 닫고 터미널로 전환', '메시지', '질문 목록'].every(label =>
+      [...document.querySelectorAll('.terminal-menu > .terminal-menu-item')].some(item => item.textContent.trim() === label)
+    )
+  `))
+  await driver.pick('메시지')
+  check('the message action opens that agent\'s inbox', await until(`(document.querySelector('.agent-messages-dialog')?.textContent ?? '').includes('claude-1')`, 5000))
   await js(`document.querySelector('.agent-messages-dialog .modal-actions button').click()`)
   await until(`!document.querySelector('.agent-messages-dialog')`)
+  await js(`${composer(0)}.focus()`)
+  const contextKey = { key: 'F10', code: 'F10', windowsVirtualKeyCode: 121, modifiers: 8 }
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...contextKey })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', ...contextKey })
+  await driver.pick('질문 목록')
+  check('opening the question list from the keyboard menu focuses its search', await until(`
+    document.activeElement === ${cover(0)}.querySelector('.agent-chat-questions-search input')
+  `))
+  await js(`${cover(0)}.querySelector('[aria-label="질문 목록 닫기"]').click()`)
+  check('closing the question list returns focus to the composer', await until(`
+    !${cover(0)}.querySelector('.agent-chat-questions') && document.activeElement === ${composer(0)}
+  `))
+  await chooseChatAction(0, '채팅 닫고 터미널로 전환')
+  check('choosing the terminal action returns focus to the same pane terminal', await until(`
+    !${cover(0)} && document.activeElement === ${pane(0)}.querySelector('.xterm-helper-textarea')
+  `))
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
+  await until(`!!${composer(0)}`)
   await js(`${cover(0)}.querySelector('.agent-chat-input').focus()`)
   await send('Input.insertText', { text: '첫 칸 질문' })
   await driver.enter()
@@ -373,7 +401,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await chooseChatTheme(0, '앱 테마 따르기')
   check('following the app removes the local palette', await until(`!${cover(0)}.hasAttribute('data-chat-theme') && ${paneVar('--chat-focus')} === ''`))
   const questionPanel = index => `${cover(index)}.querySelector('.agent-chat-questions')`
-  const openQuestions = index => js(`${cover(index)}.querySelector('.agent-chat-questions-toggle').click()`)
+  const openQuestions = index => chooseChatAction(index, '질문 목록')
   const pickQuestion = (index, text) => js(`[...${questionPanel(index)}.querySelectorAll('li button')]
     .find(button => button.textContent.includes(${JSON.stringify(text)}))?.click()`)
   await openQuestions(0)
@@ -486,6 +514,35 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   }))
   fs.writeFileSync(file('claude-1-program-status'), 'state=idle:app=claude')
   await until(`!!${composer(0)} && !${questionScreen}`, 8000)
+
+  // Choices with previews (2026-11-23 user report: that dialog was not recognized, the chat had neither the
+  // card nor a waiting sign): the card shows the pointed-at choice's preview, no typed answer, and sends
+  // only with its button; main moves the selection with the number and picks it with Enter
+  fs.unlinkSync(file('claude-1-ask-submitted'))
+  const photo = [{ question: '카드에 넣을 사진의 출처를 정해 주세요.', header: '유형별 사진', multiSelect: false, options: [
+    { label: '기존 아이콘으로 유형 카드 (Recommended)', description: '아이콘', preview: '+----------+\n| [아이콘] |\n+----------+' },
+    { label: '이미지 파일을 받아서 적용', description: '파일', preview: '+--------+\n| upload |\n+--------+' }
+  ] }]
+  fs.appendFileSync(firstTranscript, askTool('a-ask-3', 'toolu_ask_3', photo))
+  fs.writeFileSync(file('claude-1-program-status'), 'state=working:app=claude')
+  fs.writeFileSync(file('claude-1-ask-dialog'), JSON.stringify(photo))
+  check('a question with previews shows as a card with the first choice’s preview and no typed answer', await until(`
+    ${askCard}?.textContent.includes('카드에 넣을 사진') && ${askCard}.querySelector('.agent-ask-preview')?.textContent.includes('[아이콘]') &&
+    ![...${askCard}.querySelectorAll('.agent-ask-option')].some(button => button.textContent.includes('직접 입력'))
+  `, 8000))
+  await clickAskOption('이미지 파일을 받아서 적용')
+  check('picking a choice shows its preview and does not send yet', await until(`
+    ${askCard}?.querySelector('.agent-ask-preview')?.textContent.includes('upload') && !${askCard}.querySelector('.agent-ask-sending')
+  `, 3000) && !read('claude-1-ask-submitted'))
+  await shot('local-agent-chat-ask-preview')
+  await clickAsk('.agent-ask-send')
+  check('its send button answers the dialog with the picked choice', (await waitFor(() => read('claude-1-ask-submitted'))) === JSON.stringify(['이미지 파일을 받아서 적용']))
+  fs.appendFileSync(firstTranscript, line({
+    type: 'user', uuid: 'u-ask-3', timestamp: '2026-11-19T10:06:30Z', toolUseResult: { answers: { '카드에 넣을 사진의 출처를 정해 주세요.': '이미지 파일을 받아서 적용' } },
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_ask_3', content: 'answered' }] }
+  }))
+  fs.writeFileSync(file('claude-1-program-status'), 'state=idle:app=claude')
+  await until(`!!${composer(0)} && !${askCard}`, 8000)
   check('the conversation can be selected by dragging (the app turns selection off elsewhere)', await js(`getComputedStyle(${cover(0)}.querySelector('.agent-chat-log')).userSelect === 'text'`))
 
   // A Windows drive path with Codex's leading slash opens from the answer's link menu
@@ -494,6 +551,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   fs.appendFileSync(path.join(projects, `${SESSIONS[0]}.jsonl`), answer('a-link', `메모는 [linked-note.txt](/${note.replace(/\\/g, '/')}) 에 있습니다`))
   const driveLink = `${cover(0)}.querySelector('.agent-chat-md a[href^="/"][href$="linked-note.txt"]')`
   check('a slash-prefixed Windows drive path shows as a file link', await until(`!!${driveLink}`, 8000), await coverText(0))
+  await js(`${driveLink}.scrollIntoView({ block: 'nearest' })`)
   const link = await center(driveLink)
   await click(link[0], link[1])
   check('clicking it offers to open it in ezShell or the file manager', await until(`(() => {
@@ -519,6 +577,14 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('a link with a line opens the file (the line is not part of its name)', lineOpen?.ok === true, JSON.stringify(lineOpen))
   const relativeOpen = await js(`window.electronAPI.agentChatOpenLink(${JSON.stringify(shellOfChat)}, 'linked-note.txt', 'app')`)
   check('a relative link opens against the agent\'s folder', relativeOpen?.ok === true, JSON.stringify(relativeOpen))
+  // Claude often writes a path as inline code, not as a link (2026-11-23 user report: it could not be opened)
+  const coded = file('coded-path.sql')
+  fs.writeFileSync(coded, 'select 1;')
+  fs.appendFileSync(path.join(projects, `${SESSIONS[0]}.jsonl`), answer('a-code-path', `파일 위치: \`${coded}\``))
+  const codeLink = `${cover(0)}.querySelector('.agent-chat-md a.md-code-link[href$="coded-path.sql"]')`
+  check('a path written as inline code shows as a file link', await until(`!!${codeLink} && !!${codeLink}.querySelector('code')`, 8000), await coverText(0))
+  const codeOpen = await js(`window.electronAPI.agentChatOpenLink(${JSON.stringify(shellOfChat)}, ${codeLink}.getAttribute('href'), 'app')`)
+  check('that link opens (main counts the inline code as a link of the conversation)', codeOpen?.ok === true, JSON.stringify(codeOpen))
   check('the terminal stays mounted under the chat', await js(`!!${pane(0)}.querySelector('.xterm-screen') && ${pane(0)}.querySelector('.xterm-screen').offsetWidth > 0`))
 
   // An answer pinned out into a small window of its own, read while working in another tab
@@ -572,7 +638,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     check('restore returns to the original size', await pin.until(`
       ${maximize}.getAttribute('aria-label') === '최대화' && innerWidth === ${normalWidth} && innerHeight === ${normalHeight}
     `, 3000), await pin.js('[innerWidth, innerHeight]'))
-    await js(`${cover(0)}.querySelector('.agent-chat-head-btn').click()`)
+    await chooseChatAction(0, '채팅 닫고 터미널로 전환')
     await until(`!${cover(0)}`, 3000)
     await pin.js(`${maximize}.click()`)
     await pin.until(maximized, 3000)
@@ -770,7 +836,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   // Not in the transcript yet (Claude writes a slash command only when it is done): a look at the
   // terminal and back keeps it shown (2026-11-20 user report: a /compact sent from the chat vanished)
   check('the sent line shows in the chat at once', await until(`[...${cover(0)}.querySelectorAll('.agent-chat-user')].some(bubble => bubble.textContent.includes('다음 할 일은?'))`, 3000), await coverText(0))
-  await js(`${cover(0)}.querySelector('.agent-chat-head-btn').click()`)
+  await chooseChatAction(0, '채팅 닫고 터미널로 전환')
   await until(`!${cover(0)}`, 3000)
   await js(`${pane(0)}.querySelector('.xterm-helper-textarea').focus()`)
   await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
@@ -798,29 +864,30 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('a second screenshot is kept beside the first', await until(`[...${cover(0)}.querySelectorAll('.agent-chat-attachment img')].filter(img => img.naturalWidth === 1).length === 2`))
   fs.writeFileSync(file('clipboard-text'), '클립보드 텍스트')
   await pasteIntoChat(0)
+  const clipboardBody = '[첨부이미지 1] [첨부이미지 2] 클립보드 텍스트'
   check('text paste still fills the draft and retains the screenshots', await until(`${cover(0)}.querySelectorAll('.agent-chat-attachment').length === 2 &&
-    ${cover(0)}.querySelector('.agent-chat-input').value === '클립보드 텍스트' && !${sendButton}.disabled`))
+    ${composer(0)}.value === ${JSON.stringify(clipboardBody)} && !${sendButton}.disabled`))
   await js(`${sendButton}.click()`)
   const isPng = path => path?.endsWith('.png') && fs.existsSync(path) && fs.readFileSync(path).subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
   check('Claude receives both screenshots and exactly the entered text', await waitFor(() => {
     if (read('claude-1-chat-sent') !== '3') return false
     const [first, second, separator, body, ...extra] = read('claude-1-chat-text').split('\n')
-    return !extra.length && separator === '' && body === '클립보드 텍스트' && first !== second && isPng(first) && isPng(second)
+    return !extra.length && separator === '' && body === clipboardBody && first !== second && isPng(first) && isPng(second)
   }), `${read('claude-1-chat-text')} ${await chatFeedback()}`)
   check('the draft preview is cleared after sending', await until(`!${preview} && !${cover(0)}.querySelector('.agent-chat-input').value`))
   check('both sent images appear above the text bubble', await until(`(() => {
-    const row = ${sentImageMessage('클립보드 텍스트')}
+    const row = ${sentImageMessage(clipboardBody)}
     const images = row?.querySelector('.agent-chat-sent-images')
-    return ${sentImageWidths('클립보드 텍스트')} === '1,1' &&
+    return ${sentImageWidths(clipboardBody)} === '1,1' &&
       images.getBoundingClientRect().bottom <= row.querySelector('.agent-chat-bubble').getBoundingClientRect().top
   })()`))
   fs.appendFileSync(firstTranscript, line({
     type: 'user', uuid: 'two-images', timestamp: new Date().toISOString(),
-    message: { role: 'user', content: '[Image #1] [Image #2]\n클립보드 텍스트' }
+    message: { role: 'user', content: '[Image #1] [Image #2]\n' + clipboardBody }
   }))
-  check('the transcript keeps the thumbnails and shows the original text without image markers', await until(`
+  check('the transcript keeps the thumbnails and the references placed in the draft', await until(`
     !!${cover(0)}.querySelector('[data-chat-row="item:user:two-images"]') &&
-    ${sentImageWidths('클립보드 텍스트')} === '1,1'
+    ${sentImageWidths(clipboardBody)} === '1,1'
   `))
   fs.unlinkSync(file('clipboard-text'))
   await pasteIntoChat(0)
@@ -837,7 +904,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     [...${cover(0)}.querySelectorAll('.agent-chat-user')].filter(bubble => bubble.textContent === '스크린샷 첨부').length === 1 &&
     ${sentImageWidths('스크린샷 첨부')} === '1'
   `))
-  await js(`${cover(0)}.querySelector('.agent-chat-head-btn').click()`)
+  await chooseChatAction(0, '채팅 닫고 터미널로 전환')
   await until(`!${cover(0)}`)
   await js(`${pane(0)}.querySelector('.xterm-helper-textarea').focus()`)
   await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
@@ -855,7 +922,9 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('the image picker adds both selected files to the existing previews', await until(`${previewWidths} === '1,1,2,3'`))
   await js(`${cover(0)}.querySelectorAll('.agent-chat-attachment button')[1].click()`)
   check('removing one preview leaves the other images in order', await until(`${previewWidths} === '1,2,3'`))
-  await send('Input.insertText', { text: '세 이미지 비교해 줘.\n목록과 상세를 확인해 줘.' })
+  const comparison = '세 이미지 비교해 줘.\n목록과 상세를 확인해 줘.'
+  const comparisonBody = '[첨부이미지 1] [첨부이미지 2] [첨부이미지 3] ' + comparison
+  await send('Input.insertText', { text: comparison })
   await js(`${sendButton}.click()`)
   check('all remaining images and the full text reach the unfocused composer', await waitFor(() => {
     if (read('claude-1-chat-sent') !== '5') return false
@@ -864,10 +933,10 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     const attachments = lines.slice(0, separator)
     return separator === 3 && new Set(attachments).size === 3
       && attachments.every((file, index) => fs.existsSync(file) && fs.readFileSync(file).readUInt32BE(16) === index + 1)
-      && lines.slice(separator + 1).join('\n') === '세 이미지 비교해 줘.\n목록과 상세를 확인해 줘.'
+      && lines.slice(separator + 1).join('\n') === comparisonBody
   }), await chatFeedback())
   check('sending several images clears the entire attachment tray', await until(`${previewWidths} === ''`))
-  check('sent thumbnails keep the order of the remaining images', await until(`${sentImageWidths('세 이미지 비교해 줘.\n목록과 상세를 확인해 줘.')} === '1,2,3'`))
+  check('sent thumbnails keep the order of the remaining images', await until(`${sentImageWidths(comparisonBody)} === '1,2,3'`))
 
   // A permission prompt in the terminal shows as choices in the chat, and a choice answers it
   fs.writeFileSync(file('claude-1-approval'), '─'.repeat(60) + '\r\n Bash command\r\n\r\n   npm run build\r\n\r\n Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. Yes, and don\'t ask again for npm run build commands\r\n   3. No, and tell Claude what to do differently (esc)')
@@ -992,7 +1061,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('the chat still follows the transcript and offers an input box', await until(`
     ${cover(1)}?.textContent.includes('연결이 끊겨도 새 답변을 표시합니다.') && !!${cover(1)}.querySelector('.agent-chat-input')
   `))
-  await js(`${cover(1)}.querySelector('.agent-chat-head-btn').click()`)
+  await chooseChatAction(1, '채팅 닫고 터미널로 전환')
   await until(`!${cover(1)}`)
   const [rightX, rightY] = await center(pane(1))
   await click(rightX, rightY, 'right')
@@ -1217,10 +1286,11 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     await until(`${cover(0)}.querySelectorAll('.agent-chat-attachment img').length === ${count} && !${sendButton}.disabled`)
   }
   await js(`${sendButton}.click()`)
-  check('Codex receives three screenshots as native images and exactly the entered text', await waitFor(() => {
+  check('Codex receives three native images and the entered text with its references', await waitFor(() => {
     if (read(codexId + '-chat-sent') !== '1') return false
     const images = JSON.parse(read(codexId + '-chat-images') || '[]')
-    return new Set(images).size === 3 && images.every(isPng) && read(codexId + '-chat-text') === 'Codex 이미지 테스트'
+    return new Set(images).size === 3 && images.every(isPng)
+      && read(codexId + '-chat-text') === 'Codex 이미지 테스트 [첨부이미지 1] [첨부이미지 2] [첨부이미지 3]'
   }), await chatFeedback())
 
   fs.writeFileSync(file(codexId + '-chat-target'), 'Main [default]')

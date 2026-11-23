@@ -483,7 +483,10 @@ export interface AgentAskQuestion {
   question: string
   header: string
   multiSelect: boolean
-  options: { label: string; description: string }[]
+  /** A choice's sketch (ASCII art, a snippet) shown while it is chosen */
+  options: { label: string; description: string; preview?: string }[]
+  /** Some choice has a preview (single choice only): no typed answer then */
+  preview?: boolean
 }
 
 /** One answer from the chat's question card: choices by index, and a typed answer */
@@ -681,6 +684,28 @@ export interface BrowserLoginSource {
   name: string
   profiles: { id: string; name: string }[]
 }
+
+export interface BrowserSavedPage {
+  url: string
+  title: string
+}
+
+export interface BrowserVisit extends BrowserSavedPage {
+  visitedAt: number
+}
+
+export type BrowserDataImportAction =
+  | { type: 'sources' }
+  | { type: 'read'; id: string; bookmarks: boolean; history: boolean }
+
+export type BrowserImportCategory<T> = { entries: T[]; limited?: boolean } | { error: string }
+
+export type BrowserDataImportResult = {
+  success: true
+  sources?: BrowserLoginSource[]
+  bookmarks?: BrowserImportCategory<BrowserSavedPage>
+  history?: BrowserImportCategory<BrowserVisit>
+} | { success: false; error: string }
 
 export type BrowserLoginAction =
   | { type: 'list' | 'sources' | 'import' | 'clear-session' }
@@ -972,6 +997,7 @@ declare global {
       browserReviewAddImages: (id: string, source: 'clipboard' | 'files') => Promise<AgentChatImagesResult | { ok: true; kind: 'text'; text: string }>
       browserReviewRemoveImage: (id: string, imageId: string) => void
       browserReviewLogins: (id: string, request: BrowserLoginAction) => Promise<BrowserLoginResult>
+      browserReviewImportData: (id: string, request: BrowserDataImportAction) => Promise<BrowserDataImportResult>
       browserReviewBounds: (id: string, bounds: { x: number; y: number; width: number; height: number } | null) => void
       browserReviewClose: (id: string) => void
       onBrowserReviewState: (callback: (id: string, state: BrowserReviewState) => void) => () => void

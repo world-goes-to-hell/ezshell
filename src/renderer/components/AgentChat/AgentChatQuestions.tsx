@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { RiArrowRightSLine, RiSearchLine } from 'react-icons/ri'
+import { RiArrowRightSLine, RiCloseLine, RiSearchLine } from 'react-icons/ri'
 import type { AgentChatItem, AgentChatQuestion, AgentChatQuestions as QuestionIndex } from '../../types'
 
 const PAGE_SIZE = 80
 const dates = new Intl.DateTimeFormat('ko-KR', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 
-export function AgentChatQuestions({ id, shellId, scope, items, onPick, onDismiss }: {
-  id: string
+export function AgentChatQuestions({ shellId, scope, items, onPick, onDismiss }: {
   shellId: string
   scope: string | null
   items: AgentChatItem[]
@@ -49,7 +48,7 @@ export function AgentChatQuestions({ id, shellId, scope, items, onPick, onDismis
 
   const loading = !archive && !error && !!window.electronAPI.agentChatQuestions
   return (
-    <section id={id} className="agent-chat-questions" aria-label="질문 목록"
+    <section className="agent-chat-questions" aria-label="질문 목록"
       onContextMenu={event => event.stopPropagation()}
       onKeyDown={event => {
         if (event.key === 'Escape') {
@@ -57,11 +56,16 @@ export function AgentChatQuestions({ id, shellId, scope, items, onPick, onDismis
           onDismiss()
         }
       }}>
-      <label className="agent-chat-questions-search">
-        <RiSearchLine aria-hidden />
-        <input ref={inputRef} type="search" value={query} aria-label="질문 검색" placeholder="질문 검색"
-          onChange={event => { setQuery(event.target.value); setLimit(PAGE_SIZE) }} />
-      </label>
+      <div className="agent-chat-questions-toolbar">
+        <label className="agent-chat-questions-search">
+          <RiSearchLine aria-hidden />
+          <input ref={inputRef} type="search" value={query} aria-label="질문 검색" placeholder="질문 검색"
+            onChange={event => { setQuery(event.target.value); setLimit(PAGE_SIZE) }} />
+        </label>
+        <button type="button" className="agent-chat-head-btn" aria-label="질문 목록 닫기" title="질문 목록 닫기" onClick={onDismiss}>
+          <RiCloseLine size={15} aria-hidden="true" />
+        </button>
+      </div>
       <div className="agent-chat-questions-results">
         {matches.length > 0 && (
           <ul>

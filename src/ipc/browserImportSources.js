@@ -119,10 +119,16 @@ function createBrowserImportSources({ platform = process.platform, home = os.hom
           name,
           executable,
           args: [...args, firefox ? '-new-window' : '--new-window', browser.url],
+          directory: !firefox && key ? path.join(paths.root, key) : null,
         })),
       }
     }))
     return installed.filter(Boolean)
+  }
+
+  async function findProfile(id) {
+    if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) return null
+    return (await discover()).flatMap(browser => browser.profiles).find(profile => profile.id === id)
   }
 
   return {
@@ -131,9 +137,18 @@ function createBrowserImportSources({ platform = process.platform, home = os.hom
         id, name, profiles: profiles.map(({ id, name }) => ({ id, name })),
       }))
     },
+    async listDataSources() {
+      return (await discover()).filter(({ id }) => id !== 'firefox').map(({ id, name, profiles }) => ({
+        id, name, profiles: profiles.filter(profile => profile.directory).map(({ id, name }) => ({ id, name })),
+      })).filter(browser => browser.profiles.length)
+    },
+    async dataDirectory(id) {
+      const profile = await findProfile(id)
+      if (!profile?.directory || !(await fs.lstat(profile.directory).catch(() => null))?.isDirectory()) return null
+      return profile.directory
+    },
     async open(id) {
-      if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) return false
-      const profile = (await discover()).flatMap(browser => browser.profiles).find(profile => profile.id === id)
+      const profile = await findProfile(id)
       if (!profile) return false
       await launch(profile.executable, profile.args)
       return true

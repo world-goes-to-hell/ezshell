@@ -28,6 +28,13 @@ const defaultShortcuts: Shortcut[] = [
   // General
   ...(typeof navigator !== 'undefined' && /^Win/i.test(navigator.platform) ? [{
     id: 'quick-capture',
+    keys: ['Ctrl', 'Alt', 'Shift'],
+    description: '영역 캡처',
+    category: 'general' as const,
+    action: 'quickCapture',
+    fixed: true
+  }, {
+    id: 'quick-capture-win',
     keys: ['Ctrl', 'Win', 'Alt'],
     description: '영역 캡처',
     category: 'general' as const,

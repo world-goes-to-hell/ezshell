@@ -15,10 +15,10 @@ export function TabGroupChips({ view, onAddWork }: { view: TabGroupView; onAddWo
   if (!current || (view.groups.length < 2 && current.key === GENERAL_GROUP)) return null
   const CurrentIcon = iconOf(current.key)
   return (
-    <div className="tab-group-control">
+    <div className="tab-group-control" onMouseDown={event => event.stopPropagation()}>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
-          <button type="button" className="tab-group-select" aria-label={`작업 목록, 현재 작업 ${current.label}, 작업 ${view.groups.length}개`} title={`${current.label} · 탭 ${current.tabIds.length}개`}>
+          <button type="button" className="tab-group-select" aria-label={`작업 목록, 현재 작업 ${current.label}, 작업 ${view.groups.length}개`} title={`작업 목록 · ${current.label} · 탭 ${current.tabIds.length}개`}>
             <span className="tab-group-select-icon"><CurrentIcon size={15} aria-hidden="true" /></span>
             <span className="tab-group-select-copy">
               <span className="tab-group-select-label">

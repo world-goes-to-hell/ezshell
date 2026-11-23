@@ -54,6 +54,26 @@
 .agent-ask-hint { margin-top: -6px; color: var(--text-secondary); font-size: 12px; }
 
 .agent-ask-options { display: flex; flex-direction: column; gap: 5px; }
+/* Choices with previews: the pointed-at / chosen choice's preview beside them (below in a narrow pane) */
+.agent-ask-body[data-preview] { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; }
+.agent-ask-body[data-preview] .agent-ask-options { flex: 1 1 220px; min-width: 0; }
+.agent-ask-preview {
+  flex: 1.4 1 260px;
+  min-width: 0;
+  max-height: 320px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  color: var(--text-primary);
+  font-family: var(--font-mono, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+  user-select: text;
+}
 .agent-ask-option {
   display: flex;
   align-items: flex-start;

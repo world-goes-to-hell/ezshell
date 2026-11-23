@@ -15,6 +15,11 @@ const LINE_SUFFIX = /^(.+?)(?::(\d{1,7})(?::\d{1,7})?|#L(\d{1,7})(?:-L?\d{1,7})?
 // A relative file link (Claude writes "docs/x.md", "../plan/a.md"): no scheme, no anchor, nothing a path cannot hold
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i
 const NOT_IN_PATH = /[<>"|?*{}$\\]{2}|[<>"|?*{}$]/
+// A path written as inline code (Claude: `D:\proj\db\a.sql`, `src/ipc/a.js:12`, `docs/plan/`). The chat draws the
+// same spans as links (renderer lib/markdownRender.ts CODE_PATH: keep the two in step). Relative ones need a folder
+// and a file name with an extension (or a closing slash), so `feat/branch`, `/compact` and `role_sn` stay text.
+const INLINE_CODE = /`([^`\n]+)`/g
+const CODE_PATH = /^(?:[a-z]:[\\/][^<>"|?*\u0000-\u001f]*|\/[^\s<>"|?*{}$\\/]+\/[^\s<>"|?*{}$\\]*|(?:[^\s<>"|?*{}$\\/:]+[\\/])+(?:[^\s<>"|?*{}$\\/:]+\.[a-z0-9]{1,10}(?::\d{1,7}(?::\d{1,7})?|#L\d{1,7}(?:-L?\d{1,7})?)?)?)$/i
 
 /**
  * A link as main opens it, or null: { kind: 'path', path, key, line? } | { kind: 'url', url, key }.
@@ -70,6 +75,10 @@ function linkKeysIn(text, platform = process.platform, base = null) {
   for (const match of text.matchAll(MARKDOWN_TARGET)) add(match[1] ?? match[2])
   for (const match of text.matchAll(AUTOLINK)) add(match[1])
   for (const match of text.matchAll(BARE_URL)) add(match[0].replace(/[.,;:!?]+$/, ''))
+  for (const match of text.matchAll(INLINE_CODE)) {
+    const code = match[1].trim()
+    if (CODE_PATH.test(code)) add(code)
+  }
   return [...new Set(keys)]
 }
 

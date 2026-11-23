@@ -1,6 +1,7 @@
 const fs = require('node:fs')
 const http = require('node:http')
 const path = require('node:path')
+const { DatabaseSync } = require('node:sqlite')
 const { connect, createChecks, openLocalAgent, pages, SET, sleep, unlock } = require('../support/driver')
 
 const { check, finish } = createChecks()
@@ -28,7 +29,7 @@ async function run() {
     </script>`
     response.end(`<meta charset=utf-8><section id="age-table">
       <button id="save-button" class="age-row highlight" onclick="document.body.dataset.clicked = 1">${label}</button>
-    </section><a id="next" href="/next">다음</a>${metadata}`)
+    </section><a id="next" href="/next">다음</a> <a id="blank" href="/opened" target="_blank">새 창으로</a>${metadata}`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const origin = 'http://127.0.0.1:' + server.address().port
@@ -91,6 +92,71 @@ async function run() {
     check('the address bar rejects privileged schemes', await browser.js(`window.electronAPI.browserReviewAction(${JSON.stringify(id)}, {
       type: 'navigate', address: 'file:///C:/Windows/'
     }).then(result => !result.success)`))
+
+    const chromeRoot = path.join(profile, 'browser-import-local', 'Google', 'Chrome', 'User Data')
+    const bookmarkUrl = origin + '/imported-bookmark'
+    const historyUrl = origin + '/imported-history'
+    const workProfile = path.join(chromeRoot, 'Profile 1')
+    const bookmark = { type: 'url', name: '업무 링크', url: bookmarkUrl }
+    fs.writeFileSync(path.join(workProfile, 'Bookmarks'), JSON.stringify({ roots: {
+      bookmark_bar: { type: 'folder', children: [
+        { type: 'folder', name: '업무 묶음', children: [bookmark] },
+        bookmark,
+        { type: 'url', name: '차단된 링크', url: 'javascript:alert(1)' },
+      ] },
+    } }))
+    const historyFile = path.join(workProfile, 'History')
+    const historyDb = new DatabaseSync(historyFile)
+    const visitedAt = BigInt(Date.now() + 11_644_473_600_000) * 1000n
+    historyDb.exec('PRAGMA journal_mode = TRUNCATE; CREATE TABLE urls (url TEXT, title TEXT, last_visit_time INTEGER, hidden INTEGER, visit_count INTEGER)')
+    const addVisit = historyDb.prepare('INSERT INTO urls VALUES (?, ?, ?, ?, 1)')
+    addVisit.run(historyUrl, '업무 방문 기록', visitedAt, 0)
+    addVisit.run(origin + '/hidden', '숨겨진 방문 기록', visitedAt, 1)
+    historyDb.exec('BEGIN EXCLUSIVE')
+    try {
+      const savedPages = `${root}.querySelector('.browser-review-bookmarks')`
+      const savedButton = label => `[...${savedPages}.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})`
+      const importer = "document.querySelector('.browser-data-import')"
+      const importButton = label => `[...${importer}.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})`
+      const openImport = async () => {
+        await main.js(`${savedButton('가져오기')}.click()`)
+        if (!await main.until(`!!${importer}?.querySelector('.browser-data-profile select')`)) throw new Error('the browser importer did not detect fixture profiles')
+        await main.js(`(() => {
+          const select = ${importer}.querySelector('.browser-data-profile select')
+          select.value = [...select.options].find(option => option.textContent === '업무').value
+          select.dispatchEvent(new Event('change', { bubbles: true }))
+        })()`)
+      }
+      await main.js(`${root}.querySelector('.browser-review-bookmarks-toggle').click()`)
+      await openImport()
+      await main.js(`${importButton('가져오기')}.click()`)
+      check('selecting a profile imports bookmarks and committed history while the source holds a SQLite lock', await main.until(`
+        ${importer}.querySelector('.browser-data-result')?.textContent === '즐겨찾기 1개 추가 · 방문 기록 1개 추가'
+      `))
+      await main.js(`${importButton('완료')}.click()`)
+      check('the imported bookmark is available in the regular list', await main.until(`
+        ${savedPages}.querySelectorAll('li').length === 1 && ${savedPages}.querySelector('li').textContent.includes('업무 링크')
+      `))
+      await main.js(`${savedButton('방문 기록')}.click()`)
+      check('hidden visits are excluded from the imported history view', await main.until(`
+        ${savedPages}.querySelectorAll('li').length === 1 && ${savedPages}.querySelector('li').textContent.includes('업무 방문 기록') &&
+        ${savedPages}.querySelector('time')?.dateTime === ${JSON.stringify(new Date(Number(visitedAt / 1000n) - 11_644_473_600_000).toISOString())}
+      `))
+      await openImport()
+      await main.js(`${importButton('가져오기')}.click()`)
+      check('a second import does not add duplicates', await main.until(`
+        ${importer}.querySelector('.browser-data-result')?.textContent === '즐겨찾기 0개 추가 · 방문 기록 0개 추가'
+      `))
+      await main.js(`${importButton('비밀번호 가져오기')}.click()`)
+      const passwordPanel = "document.querySelector('.browser-login-dialog:not(.browser-data-import)')"
+      check('password export opens with the same source profile selected', await main.until(`
+        !${importer} && ${passwordPanel}?.querySelector('.browser-login-import select')?.selectedOptions[0]?.textContent === 'Google Chrome · 업무'
+      `))
+      await main.js(`[...${passwordPanel}.querySelectorAll('button')].find(button => button.textContent.trim() === '닫기').click()`)
+      await main.js(`${savedPages}.querySelector('.browser-review-bookmark-open').click()`)
+      check('an imported visit opens normally in the browser tab', await main.until(`${state}.then(state => state.url === ${JSON.stringify(historyUrl)} && !state.loading)`))
+    } finally { historyDb.close() }
+
     await browser.until(`!!document.querySelector('[aria-label="웹 주소"]')`)
     await browser.js(`(${SET})(document.querySelector('[aria-label="웹 주소"]'), ${JSON.stringify(origin + '/?private=token')})`)
     await browser.js(`document.querySelector('.browser-review-address button').click()`)
@@ -393,6 +459,23 @@ async function run() {
         })()`) && await persistentPage.js("!document.querySelector('#password').value"))
       } finally { persistentPage.close() }
     } finally { loginPage.close() }
+
+    // 2026-11-23 user report: a link opening a new window (target="_blank") did nothing. It opens in a new
+    // browser tab of the app, as in a web browser
+    const linkTab = await openBrowserTab()
+    await main.js(`window.electronAPI.browserReviewAction(${JSON.stringify(linkTab)}, {type: 'navigate', address: ${JSON.stringify(origin + '/?blank=1')}})`)
+    const linkPage = await connect(target => target.url === origin + '/?blank=1')
+    try {
+      await main.until(`window.electronAPI.browserReviewState(${JSON.stringify(linkTab)}).then(state => state.url && !state.loading)`)
+      await linkPage.click(...await linkPage.center(`document.querySelector('#blank')`))
+      check('a link opening a new window opens in a new browser tab of the app', await main.until(`(async () => {
+        const tab = document.querySelector('.terminal-tab.active[data-tab-id^="browser:"]')?.dataset.tabId
+        if (!tab || tab === ${JSON.stringify(linkTab)}) return false
+        const state = await window.electronAPI.browserReviewState(tab)
+        return state?.url === ${JSON.stringify(origin + '/opened')}
+      })()`, 8000))
+      check('the page it came from stays as it was', await main.js(`window.electronAPI.browserReviewState(${JSON.stringify(linkTab)}).then(state => state.url === ${JSON.stringify(origin + '/?blank=1')})`))
+    } finally { linkPage.close() }
   } finally {
     main.close()
     page?.close()

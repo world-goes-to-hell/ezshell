@@ -1,4 +1,4 @@
-import { defaultRangeExtractor, useVirtualizer, type Range } from '@tanstack/react-virtual'
+import { defaultRangeExtractor, observeElementRect, useVirtualizer, type Range } from '@tanstack/react-virtual'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { QUESTION_BAR_PX } from '../../lib/chatScrollNav'
 
@@ -11,10 +11,11 @@ const rowKeyOf = (node: Node | null) => {
 }
 
 function selectContents(log: HTMLElement | null) {
+  const messages = log?.querySelector('.agent-chat-window')
   const selection = window.getSelection()
-  if (!log || !selection) return
+  if (!messages || !selection) return
   const range = document.createRange()
-  range.selectNodeContents(log)
+  range.selectNodeContents(messages)
   selection.removeAllRanges()
   selection.addRange(range)
 }
@@ -44,6 +45,15 @@ export function useChatWindow(rows: readonly Row[], logRef: RefObject<HTMLDivEle
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => logRef.current,
+    observeElementRect: (instance, onRect) => observeElementRect(instance, rect => {
+      const log = instance.scrollElement
+      const previousHeight = instance.scrollRect?.height ?? 0
+      // When the composer or a question panel takes space, keep following only if we were at the end.
+      const wasAtEnd = log && rect.height > 0 && rect.height < previousHeight
+        && log.scrollHeight - log.scrollTop - previousHeight <= 2
+      onRect(rect)
+      if (wasAtEnd) instance.scrollToEnd()
+    }),
     getItemKey: useCallback((index: number) => rows[index].key, [rows]),
     estimateSize: useCallback((index: number) => rows[index].estimate, [rows]),
     rangeExtractor,

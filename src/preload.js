@@ -203,6 +203,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   browserReviewAddImages: (id, source) => ipcRenderer.invoke('browser-review-add-images', id, source),
   browserReviewRemoveImage: (id, imageId) => ipcRenderer.send('browser-review-remove-image', id, imageId),
   browserReviewLogins: (id, request) => ipcRenderer.invoke('browser-review-logins', id, request),
+  browserReviewImportData: (id, request) => ipcRenderer.invoke('browser-review-import-data', id, request),
   browserReviewBounds: (id, bounds) => ipcRenderer.send('browser-review-bounds', id, bounds),
   browserReviewClose: (id) => ipcRenderer.send('browser-review-close', id),
   onBrowserReviewState: (callback) => {

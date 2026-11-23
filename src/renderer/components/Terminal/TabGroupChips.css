@@ -71,6 +71,23 @@
 .tab-group-select-chevron { flex: none; color: var(--text-secondary); }
 .tab-group-select[data-state="open"] .tab-group-select-chevron { transform: rotate(180deg); }
 
+.split-pane-header:has(> .tab-group-control) {
+  container: split-tab-header / inline-size;
+}
+
+.split-pane-header > .tab-group-control {
+  align-self: stretch;
+  padding-inline: 0 6px;
+}
+
+.split-pane-header .tab-group-select { height: 34px; }
+
+@container split-tab-header (max-width: 220px) {
+  .tab-group-control { flex: none; }
+  .tab-group-select { gap: 2px; padding-inline: 3px; }
+  .tab-group-select-copy { display: none; }
+}
+
 [data-surface="glass"] .tab-group-control {
   background: color-mix(in srgb, var(--bg-tertiary) 70%, transparent);
   border-inline-end-color: var(--glass-edge, var(--border));

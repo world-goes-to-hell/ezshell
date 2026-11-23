@@ -20,14 +20,20 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
   const answerInTerminal = useAskQuestionStore(state => state.answerInTerminal)
   const cardRef = useRef<HTMLDivElement>(null)
   const busy = sending?.itemId === item.id
-  const direct = questions.length === 1 && !questions[0].multiSelect
+  // With previews a choice is looked at before it is sent (in the CLI the number only shows its preview too)
+  const direct = questions.length === 1 && !questions[0].multiSelect && !questions[0].preview
   const reviewing = !direct && questions.length > 1 && step === questions.length
   const question = questions[Math.min(step, questions.length - 1)]
   const draft = drafts[Math.min(step, questions.length - 1)] ?? emptyDraft()
+  // The choice whose preview shows: the one pointed at or focused, else the chosen one, else the first
+  const [looked, setLooked] = useState<number | null>(null)
+  const shownPreview = question?.preview ? question.options[looked ?? draft.picks[0] ?? 0]?.preview : undefined
+  useEffect(() => setLooked(null), [step])
 
   useEffect(() => {
     setDrafts(questions.map(emptyDraft))
     setStep(0)
+    setLooked(null)
     // A new question: the keyboard goes to its first choice
     requestAnimationFrame(() => cardRef.current?.querySelector<HTMLElement>('.agent-ask-option')?.focus())
   }, [item.id])
@@ -61,8 +67,8 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
     const next = pick(question, draft, index)
     update(next)
     if (direct) void send([next])
-    // A single choice moves on, as the CLI does
-    else if (!question.multiSelect) setStep(step + 1)
+    // A single choice moves on, as the CLI does (not with previews: the picked one's preview is looked at)
+    else if (!question.multiSelect && !question.preview) setStep(step + 1)
   }
   const complete = answerOf(question, draft) !== null
   const next = () => {
@@ -141,12 +147,16 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
         <>
           <div className="agent-ask-question">{question.question}</div>
           {question.multiSelect && <div className="agent-ask-hint">여러 개를 고를 수 있습니다</div>}
-          <div className="agent-ask-options" role={question.multiSelect ? 'group' : 'radiogroup'} aria-label={question.header || question.question}>
+          <div className="agent-ask-body" data-preview={question.preview ? 'true' : undefined}>
+          <div className="agent-ask-options" role={question.multiSelect ? 'group' : 'radiogroup'} aria-label={question.header || question.question}
+            onMouseLeave={question.preview ? () => setLooked(null) : undefined}>
             {question.options.map((option, index) => {
               const on = draft.picks.includes(index)
               return (
                 <button key={index} type="button" className="agent-ask-option" data-on={on ? 'true' : undefined}
-                  role={question.multiSelect ? 'checkbox' : 'radio'} aria-checked={on} onClick={() => choose(index)}>
+                  role={question.multiSelect ? 'checkbox' : 'radio'} aria-checked={on} onClick={() => choose(index)}
+                  onMouseEnter={question.preview ? () => setLooked(index) : undefined}
+                  onFocus={question.preview ? () => setLooked(index) : undefined}>
                   <span className="agent-ask-mark" aria-hidden>{question.multiSelect ? (on ? <RiCheckLine /> : null) : index + 1}</span>
                   <span className="agent-ask-text">
                     <span className="agent-ask-label">{option.label}</span>
@@ -155,7 +165,12 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
                 </button>
               )
             })}
-            <OtherAnswer question={question} draft={draft} onChange={update} problem={problem} onSubmit={next} />
+            {/* The CLI has no "Type something" row beside previews */}
+            {!question.preview && <OtherAnswer question={question} draft={draft} onChange={update} problem={problem} onSubmit={next} />}
+          </div>
+          {question.preview && (
+            <pre className="agent-ask-preview" aria-label="미리보기">{shownPreview || '미리보기가 없는 선택지입니다.'}</pre>
+          )}
           </div>
           {!direct && (
             <div className="agent-ask-footer">

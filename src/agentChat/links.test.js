@@ -51,4 +51,13 @@ describe('links in an agent\'s answer', () => {
     // A relative link counts with the agent's folder; a line does not change the key
     expect(linkKeysIn('[plan](docs/plan.md) [r](D:/proj/README.md:9)', 'win32', 'D:\\proj')).toEqual(['d:\\proj\\docs\\plan.md', 'd:\\proj\\readme.md'])
   })
+
+  it('finds a path written as inline code, as the chat draws it (2026-11-23 user report)', () => {
+    const text = '파일 위치: `D:\\DEV\\work\\db\\rsrc-mng-role-existing-emp.sql`\n- `src/ipc/a.js:12` · `docs/plan/` · `../b.md`'
+    expect(linkKeysIn(text, 'win32', 'D:\\proj')).toEqual([
+      'd:\\dev\\work\\db\\rsrc-mng-role-existing-emp.sql', 'd:\\proj\\src\\ipc\\a.js', 'd:\\proj\\docs\\plan', 'd:\\b.md'
+    ])
+    // Names, slash commands, branches and bare file names are not paths
+    expect(linkKeysIn('`role_sn` `/compact` `feat/log-view` `rsrc-mng-role.sql` `a b/c.md` `\\\\host\\x\\a.sql`', 'win32', 'D:\\proj')).toEqual([])
+  })
 })

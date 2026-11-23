@@ -104,7 +104,6 @@
   cursor: pointer;
 }
 .agent-chat-head-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.agent-chat-questions-toggle[aria-expanded='true'] { color: var(--accent); border-color: var(--accent); }
 .agent-chat-questions {
   flex: none;
   min-width: 0;
@@ -113,7 +112,10 @@
   background: var(--bg-secondary);
   font-size: 12px;
 }
+.agent-chat-questions-toolbar { display: flex; align-items: stretch; gap: 6px; }
 .agent-chat-questions-search {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -182,10 +184,22 @@
   font-size: 12px;
 }
 .agent-chat-question-location button { margin-left: auto; }
-/* The agent's inbox: the accent while it has unread messages, like the pane's own mail button */
-.agent-chat-mail[data-unread="true"] {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+/* Anchor for the delivery animation and notice, with a stable position when the count changes. */
+.agent-chat-notification {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+.agent-chat-notification[data-unread="true"] { color: var(--accent); }
+.agent-chat-notification .agent-mail-count {
+  position: absolute;
+  inset-block-start: -4px;
+  inset-inline-end: -5px;
 }
 
 .agent-chat-subagents {
@@ -336,19 +350,19 @@
 .agent-chat-log button,
 .agent-chat-log summary { cursor: pointer; }
 
-/* Moving through a long chat: the question before what is on screen (top), back down (bottom).
-   Both float over the log so showing them does not move the conversation. */
-.agent-chat-log-area {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
+/* Zero-height anchors overlay the messages but stay inside the scroll container for wheel input. */
+.agent-chat-scroll-control {
+  position: sticky;
+  flex: none;
+  height: 0;
+  z-index: 2;
+  user-select: none;
 }
+.agent-chat-scroll-control.is-top { top: 0; }
+.agent-chat-scroll-control.is-bottom { bottom: 0; }
 .agent-chat-jump-question,
 .agent-chat-jump-bottom {
   position: absolute;
-  z-index: 2;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -362,8 +376,7 @@
 }
 .agent-chat-jump-question {
   top: 4px;
-  left: 14px;
-  right: 14px;
+  inset-inline: 0;
   height: 28px;
   padding: 0 10px;
   border-radius: var(--radius-md, 6px);
@@ -475,6 +488,7 @@
   scrollbar-width: thin;
 }
 .agent-chat-sent-images img {
+  display: block;
   flex: none;
   width: 104px;
   max-width: 100%;
@@ -561,6 +575,20 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md, 6px);
   background: var(--bg-secondary);
+}
+.agent-chat-sent-image { position: relative; flex: none; }
+.agent-chat-image-number {
+  position: absolute;
+  inset-inline-start: 4px;
+  inset-block-end: 4px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 3px);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 .agent-chat-tool[data-error='true'] { border-color: color-mix(in srgb, var(--error-text) 50%, var(--border)); }
 .agent-chat-tool-head {
@@ -798,6 +826,10 @@
 .agent-chat-md table { border-collapse: collapse; display: block; overflow-x: auto; }
 .agent-chat-md th, .agent-chat-md td { padding: 3px 8px; border: 1px solid var(--border); }
 .agent-chat-md a { color: var(--text-link, var(--accent)); }
+/* A path written as inline code (markdownRender CODE_PATH): still code, and clearly something to click */
+.agent-chat-md a.md-code-link { text-decoration: none; cursor: pointer; }
+.agent-chat-md a.md-code-link code { color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
+.agent-chat-md a.md-code-link:hover code { text-decoration-style: solid; }
 
 /* The agent's prompt with choices (a permission, a question), answered from the chat */
 .agent-chat-approval {

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSessionStore, Folder, Session } from '../../stores/sessionStore'
 import type { SessionTabGroup } from '../../lib/sessionTabs'
@@ -847,7 +848,7 @@ export function SessionList({ tabsBySession, search = NO_SEARCH, onQuickConnect,
       )}
 
       {/* Folder Color Picker Modal */}
-      {colorPickerFolderId && (
+      {colorPickerFolderId && createPortal(
         <div
           className="context-menu"
           style={{
@@ -889,11 +890,12 @@ export function SessionList({ tabsBySession, search = NO_SEARCH, onQuickConnect,
             <RiCloseLine size={16} />
             <span>취소</span>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Session Color Picker Modal */}
-      {colorPickerSessionId && (
+      {colorPickerSessionId && createPortal(
         <div
           className="context-menu"
           style={{
@@ -935,14 +937,15 @@ export function SessionList({ tabsBySession, search = NO_SEARCH, onQuickConnect,
             <RiCloseLine size={16} />
             <span>취소</span>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* Context Menu */}
-      {contextMenu.visible && (
+      {/* The Glass sidebar's backdrop filter contains fixed descendants and clips them to the panel. */}
+      {contextMenu.visible && createPortal(
         <div
           ref={contextMenuRef}
-          className="context-menu"
+          className="context-menu session-context-menu"
           style={contextMenuPosition
             ? { left: contextMenuPosition.x, top: contextMenuPosition.y }
             : { left: contextMenu.x, top: contextMenu.y, visibility: 'hidden' }}
@@ -1043,7 +1046,8 @@ export function SessionList({ tabsBySession, search = NO_SEARCH, onQuickConnect,
               </div>
             </>
           )}
-        </div>
+        </div>,
+        document.body
       )}
       {shareTarget && (
         <SharePassphraseDialog

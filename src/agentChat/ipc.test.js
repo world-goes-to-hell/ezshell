@@ -1,20 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { cleanChatText, registerAgentChatIpc } from './ipc.js'
 
-function harness(kind = 'claude', { chats = {}, active = () => null } = {}) {
+function harness(kind = 'claude', { chats = {}, active = () => null, agentId = () => 'agent-1' } = {}) {
   const handlers = new Map()
   const ipcMain = { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => handlers.set(name, fn) }
   const sent = []
   const discarded = []
   let stored = 0
   const bitmap = { getSize: () => ({ width: 10, height: 10 }), toPNG: () => Buffer.from('png') }
-  registerAgentChatIpc({
+  const { sendCapture } = registerAgentChatIpc({
     ipcMain,
     fromMainWindow: () => true,
     isLocked: () => false,
     chats,
     shells: () => ({
       agentOf: () => ({ kind }),
+      chatAgentId: agentId,
       chatInputTarget: active,
       chatSend: async (_id, prompt, images, target) => {
         sent.push({ prompt, images, ...(target === undefined ? {} : { target }) })
@@ -35,7 +36,7 @@ function harness(kind = 'claude', { chats = {}, active = () => null } = {}) {
     expect(result.images).toHaveLength(1)
     return result.images[0].id
   }
-  return { call, paste, sent, discarded }
+  return { call, paste, sent, discarded, sendCapture }
 }
 
 describe('subagent conversation', () => {
@@ -97,6 +98,28 @@ describe('screenshots pasted into a chat', () => {
     expect(await call('agent-chat-send', { shellId: 'local:1', text: '', imageIds: [ids[1]] })).toEqual({ ok: true })
     expect(sent[0]).toEqual({ prompt: 'C:\\tmp\\shot-2.png', images: { count: 1, text: '' } })
     expect((await call('agent-chat-send', { shellId: 'local:1', text: '', imageIds: [ids[2], ids[2]] })).ok).toBe(false)
+  })
+})
+
+describe('screenshots sent from quick capture', () => {
+  it.each(['codex', 'claude'])('delivers the saved region and comment via %s chat input', async kind => {
+    const { sendCapture, sent } = harness(kind)
+    const files = ['C:\\tmp\\capture.png']
+    const target = { id: 'agent-1', shellId: 'local:1', kind }
+    expect(await sendCapture(target, '화면 확인', () => files[0], () => true)).toEqual({ ok: true })
+    expect(sent[0]).toEqual(kind === 'codex'
+      ? { prompt: '화면 확인', images: { files } }
+      : { prompt: files[0] + '\n\n화면 확인', images: { count: 1, text: '화면 확인' } })
+  })
+
+  it('refuses a stale target, a closed overlay or control characters before storing the image', async () => {
+    const { sendCapture, sent } = harness()
+    const target = { id: 'agent-1', shellId: 'local:1', kind: 'claude' }
+    const file = () => { throw new Error('the capture was stored') }
+    expect((await sendCapture({ ...target, id: 'previous-agent' }, '봐 줘', file, () => true)).ok).toBe(false)
+    expect((await sendCapture(target, '봐 줘', file, () => false)).ok).toBe(false)
+    expect((await sendCapture(target, '봐 줘\x1b', file, () => true)).ok).toBe(false)
+    expect(sent).toEqual([])
   })
 })
 

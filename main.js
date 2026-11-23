@@ -575,12 +575,24 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
   clipboard,
   ClipboardItem,
   desktopCapturer: require('electron').desktopCapturer,
+  nativeImage: require('electron').nativeImage,
   getDisplay: () => {
     const { screen } = require('electron');
     return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   },
   isAvailable: () => process.platform === 'win32' && !isAppLocked && mainWindow && !mainWindow.isDestroyed()
     && !(mainWindow.isFocused() && shortcutRecorder === mainWindow.webContents),
+  listAgents: () => agentMessages.snapshot().agents
+    .filter(agent => agent.active && localShells?.chatAgentId(agent.shellId) === agent.id)
+    .map(({ id, shellId, kind, cwd, status }) => ({ id, shellId, kind, cwd, status })),
+  repoFolders: localGit.repoFolders,
+  storeImage: image => localTerminalClipboard.storeImage(image),
+  sendCapture: (...args) => agentChatIpc.sendCapture(...args),
+  onSent: ({ id }) => {
+    try {
+      if (Notification.isSupported()) new Notification({ title: 'ezShell 바로작업', body: `${id}에 캡처를 보냈습니다.` }).show();
+    } catch { /* The chat submission has already succeeded. */ }
+  },
   onError: () => {
     if (Notification.isSupported()) new Notification({ title: 'ezShell 영역 캡처', body: '화면을 캡처하지 못했습니다.' }).show();
   }

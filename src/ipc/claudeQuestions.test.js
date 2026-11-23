@@ -42,6 +42,22 @@ describe('answering the AskUserQuestion screen', () => {
     expect(held).toEqual([true, false])
   })
 
+  it('picks a choice beside previews with its number, then Enter (the number only moves the selection there)', async () => {
+    const photo = { question: '어떤 사진을 쓸까요?', header: '사진', multiSelect: false, preview: true, options: [
+      { label: '기존 아이콘으로 유형 카드 (Recommended)', description: '', preview: '+------+\n| icon |\n+------+' },
+      { label: '이미지 파일 받기', description: '', preview: 'upload' }, { label: '종 사진 우선', description: '', preview: 'photo' }
+    ] }
+    const screen = readQuestionScreen(fakeDialog([photo]).lines())
+    expect(screen).toMatchObject({ question: '어떤사진을쓸까요?', pointer: 1, preview: true })
+    expect(screen.options.map(option => option.text + (option.more ?? ''))).toEqual(['기존 아이콘으로 유형 카드(Recommended)', '이미지 파일 받기', '종 사진 우선'])
+
+    const dialog = fakeDialog([photo])
+    const { answerer } = answererFor(dialog)
+    expect(await answerer.answer([photo], [{ picks: [2], other: null }])).toEqual({ ok: true })
+    expect(dialog.state.keys).toEqual(['3', '\r'])
+    expect(dialog.state.submitted).toEqual(['종 사진 우선'])
+  })
+
   it('toggles a checklist, types its own answer, moves on and submits once the review matches', async () => {
     const dialog = fakeDialog([fruits, color])
     const { answerer } = answererFor(dialog)

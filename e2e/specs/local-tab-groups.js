@@ -119,6 +119,40 @@ const { check, finish } = createChecks()
     await pickTabGroup(driver, 'beta')
     await pickTabGroup(driver, 'alpha')
     check('coming back to the project keeps the chosen tab order', await until(browserFirst))
+
+    const splitTab = (screen, id) => `document.querySelector('.split-pane[data-screen="${screen}"] .split-pane-tab-item[data-tab-id="${id}"]')`
+    await js(`(() => {
+      window.__splitSource = ${browser}
+      window.__splitData = new DataTransfer()
+      window.__splitSource.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: window.__splitData }))
+    })()`)
+    await js(`(() => {
+      const area = document.querySelector('.terminal-area')
+      const bounds = area.getBoundingClientRect()
+      const options = { bubbles: true, cancelable: true, dataTransfer: window.__splitData, clientX: bounds.right - 12, clientY: bounds.top + bounds.height / 2 }
+      area.dispatchEvent(new DragEvent('dragover', options))
+    })()`)
+    await until(`!!document.querySelector('.drop-zone-right.active')`, 3000)
+    await js(`window.__splitSource.dispatchEvent(new DragEvent('dragend', { bubbles: true }))`)
+    const splitRestored = `${splitTab(0, alphaId)}?.classList.contains('active') && ${splitTab(1, browserId)}?.classList.contains('active') && !!document.querySelector('.split-pane[data-screen="1"].active-pane')`
+    const visibleLeftTab = `document.querySelector('.split-pane[data-screen="0"] .terminal-wrapper.visible [data-local-tab-id]')?.dataset.localTabId`
+    check('dragging opens the tab in the right screen', await until(splitRestored, 5000))
+    check('the left screen shows the local terminal of the selected work', await until(`${visibleLeftTab} === ${JSON.stringify(alphaId)}`, 5000))
+    const splitSelector = `document.querySelector('.split-pane[data-screen="0"] .tab-group-select')`
+    const selectorPresent = await until(`!!${splitSelector} && ${selectName} === 'alpha' && document.querySelectorAll('.tab-group-select').length === 1`, 3000)
+    check('the work selector remains at the left of the split tab strip', selectorPresent)
+    if (selectorPresent) {
+      await driver.shot('local-tab-groups-split')
+      await driver.click(...await driver.center(splitSelector))
+      check('opening the work list keeps focus on the right screen', await until(`!!document.querySelector('.tab-group-menu') && ${splitRestored}`, 3000))
+      const betaOption = `[...document.querySelectorAll('.tab-group-option')].find(item => item.querySelector('.tab-group-option-name')?.textContent === 'beta')`
+      await driver.click(...await driver.center(betaOption))
+      check('selecting another work from the split shows its tabs', await until(`!document.querySelector('.split-pane') && ${selectName} === 'beta' && ${tabs}[0]?.dataset.tabId === ${JSON.stringify(betaId)}`, 5000))
+      await pickTabGroup(driver, 'alpha')
+      check('returning restores the split and its focused tab', await until(`${splitRestored} && ${visibleLeftTab} === ${JSON.stringify(alphaId)}`, 5000))
+    }
+    await js(`document.querySelector('.split-pane-btn[title="분할 해제"]')?.click()`)
+    await until(browserFirst, 5000)
     await js(`${browser}.querySelector('.tab-close').click()`)
 
     // Going to a tab from the sidebar switches the group

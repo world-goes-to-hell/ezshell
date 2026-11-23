@@ -1,16 +1,26 @@
 // Claude's AskUserQuestion in the chat view: the questions from its tool_use input and the answers from
 // its result (checked with Claude Code 2.1.3xx on this PC, 2026-11-23):
-//   input:  { questions: [{ question, header, multiSelect, options: [{ label, description }] }] }
+//   input:  { questions: [{ question, header, multiSelect, options: [{ label, description, preview? }] }] }
 //   result: toolUseResult.answers = { "<question>": "<label>, <label>" } (a typed answer is its text)
 // Only these fields reach the window, each clipped.
 
 const ASK_TOOL = 'AskUserQuestion'
-const LIMITS = { questions: 6, options: 10, question: 1000, header: 60, label: 200, description: 500, answer: 2000 }
+const LIMITS = { questions: 6, options: 10, question: 1000, header: 60, label: 200, description: 500, preview: 4000, previewLines: 60, answer: 2000 }
 
 const str = value => (typeof value === 'string' ? value : '')
 const clip = (value, max) => {
   const text = str(value).replace(/\r\n?/g, '\n').trim()
   return text.length > max ? text.slice(0, max) + '…' : text
+}
+
+// A choice's preview (an ASCII sketch, a snippet): its lines and their indentation are kept, the blank lines
+// around it and the spaces ending its lines are not
+function clipPreview(value) {
+  const lines = str(value).replace(/\r\n?/g, '\n').split('\n').map(line => line.replace(/\s+$/u, ''))
+  while (lines.length && !lines[0]) lines.shift()
+  while (lines.length && !lines[lines.length - 1]) lines.pop()
+  const text = lines.slice(0, LIMITS.previewLines).join('\n')
+  return text.length > LIMITS.preview ? text.slice(0, LIMITS.preview) + '…' : text
 }
 
 /** The questions of an AskUserQuestion input, cleaned, or null when they cannot be shown as a card */
@@ -22,9 +32,15 @@ function askQuestionsOf(input) {
     const question = clip(entry?.question, LIMITS.question)
     const options = Array.isArray(entry?.options) ? entry.options : []
     if (!question || options.length < 1 || options.length > LIMITS.options) return null
-    const cleaned = options.map(option => ({ label: clip(option?.label, LIMITS.label), description: clip(option?.description, LIMITS.description) }))
+    const cleaned = options.map(option => {
+      const preview = clipPreview(option?.preview)
+      return { label: clip(option?.label, LIMITS.label), description: clip(option?.description, LIMITS.description), ...(preview ? { preview } : {}) }
+    })
     if (cleaned.some(option => !option.label)) return null
-    questions.push({ question, header: clip(entry?.header, LIMITS.header), multiSelect: entry?.multiSelect === true, options: cleaned })
+    const multiSelect = entry?.multiSelect === true
+    // Previews come with single choice questions (the CLI then has no "Type something" row)
+    const hasPreview = !multiSelect && cleaned.some(option => option.preview)
+    questions.push({ question, header: clip(entry?.header, LIMITS.header), multiSelect, options: cleaned, ...(hasPreview ? { preview: true } : {}) })
   }
   return { questions }
 }
@@ -53,7 +69,7 @@ function cleanAnswer(question, answer) {
   if (new Set(picks).size !== picks.length) return null
   let other = null
   if (answer.other !== undefined && answer.other !== null) {
-    if (typeof answer.other !== 'string') return null
+    if (typeof answer.other !== 'string' || question.preview) return null
     // Control characters would be keys to the CLI (Enter, Esc); Unicode line separators would break the line
     if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(answer.other)) return null
     other = answer.other.trim()

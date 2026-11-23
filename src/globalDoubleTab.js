@@ -11,7 +11,7 @@
 // It also tells where the program in front was: "double <x> <y>", the middle of that window in screen
 // pixels (read before ezShell comes forward), so the overview opens on the monitor the user is working on
 // (2026-11-22 user report: it opened on ezShell's monitor). Nothing else about that window.
-// The same hook reports "capture" when Ctrl, Win and Alt were held together and then released.
+// The same hook reports "capture" when Ctrl+Alt+Shift or Ctrl+Win+Alt is pressed and released.
 // Off while the app is locked (`off` on its input), and it ends when main goes (its input closes).
 // Windows only: elsewhere a global key watch needs a permission the user grants by hand.
 
@@ -102,8 +102,8 @@ public static class EzShellDoubleTab {
       return fire;
     }
     // A fourth key makes this an ordinary Windows shortcut. Wait for all modifiers before rearming.
-    if ((held & 8) != 0 || (!modifier && down)) captureBlocked = true;
-    if (held == 7 && modifier && down && !captureBlocked) captureArmed = true;
+    if ((held & 10) == 10 || (!modifier && down)) captureBlocked = true;
+    if ((held == 7 || held == 13) && modifier && down && !captureBlocked) captureArmed = true;
     return false;
   }
 

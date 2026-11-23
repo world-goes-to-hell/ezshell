@@ -44,6 +44,20 @@ describe('AskUserQuestion input and answers', () => {
     expect(cleanAnswer(fruits, { picks: [1.5] })).toBeNull()
   })
 
+  it('keeps a choice’s preview with its indentation, and takes no typed answer beside previews', () => {
+    const [photo] = askQuestionsOf({ questions: [{ question: 'Which photo?', header: 'Photo', options: [
+      { label: 'Icon', description: '', preview: '\r\n  +----+  \r\n  |icon|\n  +----+\n\n' }, { label: 'Upload', description: '' }
+    ] }] }).questions
+    expect(photo.preview).toBe(true)
+    expect(photo.options[0].preview).toBe('  +----+\n  |icon|\n  +----+')
+    expect(photo.options[1]).not.toHaveProperty('preview')
+    expect(cleanAnswer(photo, { picks: [1] })).toEqual({ picks: [1], other: null })
+    expect(cleanAnswer(photo, { picks: [], other: '직접' })).toBeNull()
+    // Previews are only for a single choice; a checklist keeps its typed answer
+    const [list] = askQuestionsOf({ questions: [{ ...input.questions[0], options: [{ label: 'A', preview: 'x' }] }] }).questions
+    expect(list).not.toHaveProperty('preview')
+  })
+
   it('refuses a typed answer with keys or line breaks in it', () => {
     const [, color] = askQuestionsOf(input).questions
     for (const other of ['a\rb', 'a\nb', 'a\x1b[B', 'a\u2028b', 'x'.repeat(501), 3]) {

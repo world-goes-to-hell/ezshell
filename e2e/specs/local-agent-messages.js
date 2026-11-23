@@ -171,13 +171,28 @@ async function run() {
 
     fs.writeFileSync(file('claude-2-suggestion'), 'Try the next change')
     await until(`${claudeMail}.closest('.local-terminal-pane').textContent.includes('Try the next change')`)
+    await js(`${claudeMail}.closest('.local-terminal-pane').querySelector('.xterm-helper-textarea').focus()`)
+    const chatKey = { key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 }
+    const toggleChat = async () => {
+      await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...chatKey })
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', ...chatKey })
+    }
+    await toggleChat()
+    const chatBell = `${claudeMail}?.closest('.local-terminal-pane')?.querySelector('.agent-chat-notification')`
+    check('chat mode shows the notification bell for the receiver', await until(`!!${chatBell}`))
     const firstWakes = Number(read('claude-2-wakes'))
     const nextRequest = await mcp('codex-1', 'send_message', { to: 'claude-2', text: 'Please check the next change' })
+    check('in chat mode the arrival card opens below the bell and shows the unread count', await noticeAt(chatBell, 'codex-1 → claude-2') &&
+      await until(`${chatBell}?.getAttribute('aria-label') === '읽지 않은 메시지 1개'`))
     check('Claude starts a new turn for a follow-up even when its empty composer shows a suggestion',
       await waitFor(() => Number(read('claude-2-wakes')) === firstWakes + 1))
     const nextInbox = await mcp('claude-2', 'read_inbox')
     check('the follow-up reaches the same agent inbox', nextInbox.messages.some(message => message.id === nextRequest.id))
+    check('the notification count clears when the agent reads the message', await until(`${chatBell}?.dataset.unread === 'false'`))
     await mcp('claude-2', 'acknowledge_message', { message_id: nextRequest.id })
+    await js(`${chatBell}.closest('.agent-chat-cover').focus()`)
+    await toggleChat()
+    await until(`!${chatBell}`)
     fs.writeFileSync(file('claude-2-suggestion'), '')
 
     fs.writeFileSync(file('codex-1-program-status'), 'state=working:app=codex')

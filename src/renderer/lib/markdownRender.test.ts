@@ -57,7 +57,20 @@ describe('renderChatMarkdown (an agent\'s answer)', () => {
     for (const bad of ['#anchor', 'mailto:a@b.c', '%5Chost%5Cshare', 'app://x', '${bad}']) expect(LOCAL_PATH_LINK.test(bad)).toBe(false)
   })
 
+  it('makes a path written as inline code a link (2026-11-23 user report: the path could not be opened)', async () => {
+    const { renderChatMarkdown } = await import('./markdownRender')
+    expect(renderChatMarkdown('파일 위치: `D:\\DEV\\db\\a.sql`')).toContain('<a href="D:\\DEV\\db\\a.sql" class="md-code-link"><code>D:\\DEV\\db\\a.sql</code></a>')
+    expect(renderChatMarkdown('`src/ipc/a.js:12`')).toContain('href="src/ipc/a.js:12"')
+    expect(renderChatMarkdown('`docs/plan/`')).toContain('href="docs/plan/"')
+    for (const plain of ['`role_sn`', '`/compact`', '`feat/log-view`', '`rsrc-mng-role.sql`', '`\\\\host\\x\\a.sql`', '`a"b/c.md`']) {
+      expect(renderChatMarkdown(plain)).not.toContain('href=')
+    }
+    // Not a link inside a link
+    expect(renderChatMarkdown('[`docs/a.md`](docs/b.md)').match(/<a /g)).toHaveLength(1)
+  })
+
   it('leaves the file window\'s Markdown view as it was', () => {
+    expect(renderMarkdown('`docs/a.md`')).not.toContain('href=')
     expect(renderMarkdown('[x](C:/Users/me/a.txt)')).not.toContain('href=')
   })
 })

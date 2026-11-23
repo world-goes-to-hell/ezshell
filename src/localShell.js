@@ -793,6 +793,10 @@ function createLocalShells({
       const entry = shells.get(id);
       return hasAgent(entry) ? { kind: entry.agent, status: agentStatus(entry) } : null;
     },
+    chatAgentId(id) {
+      const entry = shells.get(id);
+      return hasAgent(entry) ? entry.externalAgent?.id ?? entry.registration?.env.EZSHELL_AGENT_ID : null;
+    },
     codexSpeedOf(id) {
       const entry = shells.get(id);
       if (!hasAgent(entry) || !entry.speedControl) return null;
@@ -837,7 +841,7 @@ function createLocalShells({
       if (shells.get(id)?.inbox !== inbox || !hasAgent(entry)) return { ok: false, reason: 'not-agent' };
       if (entry.chatInterrupts !== interrupts) return { ok: false, reason: 'interrupted' };
       if (agentStatus(entry) === 'blocked') return { ok: false, reason: 'approval' };
-      const verify = target === undefined ? entry.parentInput : active => active === target && sameConversation();
+      const verify = active => sameConversation() && (target === undefined ? entry.parentInput(active) : active === target);
       const result = await inbox.submitText(text, images, { verify });
       if (result.ok && entry.codexInput && entry.codexInput.submitted) entry.reportStatus?.(agentStatus(entry));
       return result;

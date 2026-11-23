@@ -127,6 +127,11 @@ if (G 0 $true $false) { exit 3 }
 G 7 $true $true
 G 15 $true $true
 if (G 0 $true $false) { exit 4 }
+if ((G 1 $true $true) -or (G 5 $true $true) -or (G 13 $true $true) -or (G 12 $true $false)) { exit 5 }
+if (!(G 0 $true $false) -or (G 0 $true $false)) { exit 6 }
+G 13 $true $true
+G 13 $false $true
+if (G 0 $true $false) { exit 7 }
 `
     const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
     execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {

@@ -1,16 +1,16 @@
 // A local shell's Claude Code / Codex as a chat, drawn over its pane (docs/plan/2026-11-19-agent-chat-view.md).
 // The shell and the agent keep running under it and the terminal stays mounted: this is only a view of
 // the agent's transcript (src/agentChat) with a box that types into the agent's own composer.
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type ToggleEvent } from 'react'
+import { memo, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type ToggleEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { RiArrowDownLine, RiArrowUpLine, RiChat1Line, RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolderOpenLine, RiImageAddLine, RiListUnordered, RiLoader4Line, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiTimeLine, RiToolsLine } from 'react-icons/ri'
+import { RiArrowDownLine, RiArrowUpLine, RiChat1Line, RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolderOpenLine, RiImageAddLine, RiListUnordered, RiLoader4Line, RiMailLine, RiNotification3Line, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiTimeLine, RiToolsLine } from 'react-icons/ri'
 import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatItem, AgentChatQuestion, AgentChatQuestionContext, CodexSpeedMode } from '../../types'
 import { useAgentChatStore } from '../../stores/agentChatStore'
 import { chatLinesToTakeBack, draftWithTakenBack, takeBackQueued } from '../../lib/chatTakeBack'
-import { AgentChatMailButton, useAgentMessagesStore } from '../Terminal/AgentMessages'
+import { chatImageReference, insertChatImages, resolveChatImages } from '../../lib/chatImageReferences'
+import { openAgentMessages, useAgentMessagesStore, usePaneAgentMail } from '../Terminal/AgentMessages'
 import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
-import { shortcutLabel } from '../../lib/shortcutModifiers'
 import { matchesBinding } from '../../lib/shortcutMatch'
 import { LOCAL_PATH_LINK, renderChatMarkdown } from '../../lib/markdownRender'
 import { copyToClipboard } from '../../lib/terminalClipboard'
@@ -58,6 +58,8 @@ type TimelineRow = { key: string; estimate: number } & (
   | { kind: 'older' }
   | { kind: 'item'; item: AgentChatItem; sendTime: number | null; sentImages?: SentChatImages }
 )
+
+type DraftImage = { id: string; number: number; url: string; preview: Blob }
 
 function estimateItem(item: AgentChatItem): number {
   if (item.kind === 'output') return Math.min(380, 24 + (item.text?.split('\n').length ?? 1) * 17)
@@ -242,7 +244,12 @@ function SentImageThumbnail({ preview, index }: { preview: Blob; index: number }
     setUrl(next)
     return () => URL.revokeObjectURL(next)
   }, [preview])
-  return <img src={url} alt={`보낸 이미지 ${index + 1}`} />
+  return (
+    <span className="agent-chat-sent-image">
+      <img src={url} alt={chatImageReference(index + 1)} />
+      <span className="agent-chat-image-number" aria-hidden="true">{index + 1}</span>
+    </span>
+  )
 }
 
 const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, waiting, onPin, expanded, rememberDisclosure }: {
@@ -331,6 +338,8 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   const chat = useAgentChatStore(state => state.chats.get(shellId))
   const loadOlder = useAgentChatStore(state => state.loadOlder)
   const agent = useAgentMessagesStore(state => shellAgentOf(state.snapshot.agents, shellId))
+  const { agent: mailAgent, count: unreadMail } = usePaneAgentMail(shellId)
+  const notificationLabel = unreadMail ? `읽지 않은 메시지 ${unreadMail}개` : '메시지 알림'
   const toggleKeys = useShortcutsStore(state => state.getEffectiveKeys('toggle-agent-chat'))
   const [draft, setDraft] = useState('')
   const [subagentId, setSubagentId] = useState<string | null>(null)
@@ -339,9 +348,9 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   const [selectedQuestion, setSelectedQuestion] = useState<{ question: AgentChatQuestion; scope: string | null } | null>(null)
   const [jump, setJump] = useState<{ id: string | null; scope: string | null } | null>(null)
   const questionRequest = useRef(0)
-  const questionButton = useRef<HTMLButtonElement>(null)
-  const questionPanelId = useId()
-  const [attachments, setAttachments] = useState<{ id: string; url: string; preview: Blob }[]>([])
+  const [attachments, setAttachments] = useState<DraftImage[]>([])
+  const nextAttachmentNumber = useRef(0)
+  const draftImages = useMemo(() => resolveChatImages(draft, attachments), [draft, attachments])
   const previewUrls = useRef(new Map<string, string>())
   const [pasting, setPasting] = useState(false)
   const [sending, setSending] = useState(false)
@@ -354,9 +363,11 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   const pastePending = useRef(false)
   const workingReply = useRef<string | null>(null)
   const [menu, setMenu] = useState<ChatMenu | null>(null)
+  const menuFocusOrigin = useRef<HTMLElement | null>(null)
   const [conversationAction, setConversationAction] = useState<'copy' | 'save' | null>(null)
   const coverRef = useRef<HTMLDivElement>(null)
   const logRef = useRef<HTMLDivElement>(null)
+  const logContentRef = useRef<HTMLDivElement>(null)
   const boxRef = useRef<HTMLTextAreaElement>(null)
   const disclosures = useRef(new Set<string>())
   const rememberDisclosure = useCallback((id: string, open: boolean) => {
@@ -384,6 +395,15 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   const answerableAsk = useMemo(() => (chat?.state === 'ended' ? null : answerableAskItem(liveItems, chat?.approval ?? null)), [liveItems, chat?.approval, chat?.state])
   const askCard = answerableAsk && askInTerminal !== answerableAsk.id ? answerableAsk
     : askSending && pendingAsk?.id === askSending.itemId ? pendingAsk : null
+  // Claude's question still waits but its dialog was not read off the screen (a layout not known): said
+  // after a moment (the dialog closes a little before the answer is recorded), with the way to answer it
+  const askUnread = pendingAsk && !askCard && !chat?.approval && chat?.state !== 'ended' ? pendingAsk.id : null
+  const [unreadAskId, setUnreadAskId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!askUnread) return
+    const timer = setTimeout(() => setUnreadAskId(askUnread), 2000)
+    return () => clearTimeout(timer)
+  }, [askUnread])
   useEffect(() => {
     // Answered (the result came), or gone: the card's sending state ends with it
     if (askSending && pendingAsk?.id !== askSending.itemId) setAskSending(shellId, null)
@@ -392,7 +412,7 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   const [customCommands, setCustomCommands] = useState<SlashCommand[] | null>(null)
   const [slashIndex, setSlashIndex] = useState(0)
   const [slashClosedFor, setSlashClosedFor] = useState<string | null>(null)
-  const slashTyping = draft.startsWith('/')
+  const slashTyping = draft.startsWith('/') && !draftImages.images.length
   useEffect(() => {
     if (!slashTyping || customCommands || !window.electronAPI.agentChatSlashCommands) return
     let live = true
@@ -459,6 +479,17 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
     setScrollNav(current => current.previous === previous && current.away === away && current.fresh === fresh ? current : { previous, away, fresh })
   }, [items.length, questionRows, virtualizer])
   useEffect(() => { updateScrollNav() }, [timeline, updateScrollNav])
+  const updateNavAfterLayout = useEffectEvent(updateScrollNav)
+  const hasRows = timeline.length > 0
+  useLayoutEffect(() => {
+    const log = logRef.current
+    if (!log) return
+    // A new viewport or a measured row can change the distance to the end without a scroll event.
+    const observer = new ResizeObserver(() => updateNavAfterLayout())
+    observer.observe(log)
+    if (logContentRef.current) observer.observe(logContentRef.current)
+    return () => observer.disconnect()
+  }, [hasRows])
   const previousQuestion = scrollNav.previous === null ? null : timeline[scrollNav.previous]
 
   useLayoutEffect(() => {
@@ -474,7 +505,8 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   const dismissQuestions = () => {
     questionRequest.current++
     setQuestionsOpen(false)
-    questionButton.current?.focus({ preventScroll: true })
+    const target = boxRef.current ?? coverRef.current
+    target?.focus({ preventScroll: true })
   }
 
   const resetQuestionPosition = () => {
@@ -557,23 +589,31 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
     if (!link) return
     event.preventDefault()
     const target = linkMenuTarget(link)
-    if (target) setMenu({ x: event.clientX, y: event.clientY, link: target })
+    if (target) {
+      menuFocusOrigin.current = null
+      setMenu({ x: event.clientX, y: event.clientY, link: target })
+    }
+  }
+
+  const showContextMenu = (target: EventTarget, x: number, y: number, keyboardFocus?: HTMLElement) => {
+    const box = boxRef.current
+    const inComposer = box !== null && target === box
+    const range = window.getSelection()
+    const insideChat = coverRef.current?.contains(range?.anchorNode ?? null) && coverRef.current.contains(range?.focusNode ?? null)
+    const selection = inComposer ? box.value.slice(box.selectionStart, box.selectionEnd) : insideChat ? range?.toString() ?? '' : ''
+    menuFocusOrigin.current = keyboardFocus ?? (inComposer ? box : null)
+    setMenu({
+      x, y,
+      link: linkMenuTarget(answerLink(target)),
+      context: { selection, inComposer }
+    })
   }
 
   const onContextMenu = (event: MouseEvent<HTMLDivElement>) => {
     if (event.defaultPrevented) return
     event.preventDefault()
     event.stopPropagation()
-    const box = boxRef.current
-    const inComposer = box !== null && event.target === box
-    const range = window.getSelection()
-    const insideChat = event.currentTarget.contains(range?.anchorNode ?? null) && event.currentTarget.contains(range?.focusNode ?? null)
-    const selection = inComposer ? box.value.slice(box.selectionStart, box.selectionEnd) : insideChat ? range?.toString() ?? '' : ''
-    setMenu({
-      x: event.clientX, y: event.clientY,
-      link: linkMenuTarget(answerLink(event.target)),
-      context: { selection, inComposer }
-    })
+    showContextMenu(event.target, event.clientX, event.clientY)
   }
 
   const exportConversation = async (action: 'copy' | 'save') => {
@@ -648,16 +688,49 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
     } else virtualizer.scrollToEnd()
   }
 
+  const placeDraft = (box: HTMLTextAreaElement, text: string, caret: number) => {
+    box.value = text
+    box.setSelectionRange(caret, caret)
+    setDraft(text)
+  }
+
+  const removeDraftImage = (image: DraftImage) => {
+    const reference = chatImageReference(image.number)
+    releaseAttachment(image.id)
+    setAttachments(current => current.filter(attachment => attachment.id !== image.id))
+    const box = boxRef.current
+    if (!box) return
+    const withoutReference = (value: string) => value.split(reference + ' ').join('').split(reference).join('')
+    const text = withoutReference(box.value)
+    const caret = withoutReference(box.value.slice(0, box.selectionStart)).length
+    placeDraft(box, text.trim() ? text : '', caret)
+    box.focus()
+  }
+
   const readIntoDraft = async (box: HTMLTextAreaElement, source: 'clipboard' | 'files') => {
     const read = source === 'clipboard'
       ? window.electronAPI.agentChatReadClipboard
       : window.electronAPI.agentChatPickImages
     if (!read || pastePending.current || sendPending.current) return
     const errorTitle = source === 'clipboard' ? '붙여넣기 실패' : '이미지 첨부 실패'
+    const { value: original, selectionStart, selectionEnd } = box
+    // Keep cut references available for text paste. Reclaim unused files when adding more images.
+    const reclaimUnused = () => {
+      const used = new Set(resolveChatImages(box.value, attachments).images)
+      if (used.size === attachments.length) return false
+      for (const image of attachments) if (!used.has(image)) releaseAttachment(image.id)
+      setAttachments(current => current.filter(image => used.has(image)))
+      return true
+    }
+    if (source === 'files') reclaimUnused()
+    if (!attachments.length) nextAttachmentNumber.current = 0
     pastePending.current = true
     setPasting(true)
     try {
-      const result = await read(shellId)
+      let result = await read(shellId)
+      if (!result.ok && source === 'clipboard' && boxRef.current === box && attachments.length && reclaimUnused()) {
+        result = await read(shellId)
+      }
       if (boxRef.current !== box) {
         if (result.ok && result.kind === 'images') {
           for (const { id } of result.images) releaseAttachment(id)
@@ -668,22 +741,29 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
         toast.error(errorTitle, result.error)
         return
       }
-      if (result.kind === 'images') {
-        const added = result.images.map(({ id, preview }) => {
-          const image = new Blob([preview], { type: 'image/png' })
-          const url = URL.createObjectURL(image)
-          previewUrls.current.set(id, url)
-          return { id, url, preview: image }
-        })
-        if (added.length) setAttachments(current => [...current, ...added])
-      }
-      if (result.text) {
-        const text = result.text.replace(/\r\n?/g, '\n')
+      const added = result.kind === 'images' ? result.images.map(({ id, preview }) => {
+        const image = new Blob([preview], { type: 'image/png' })
+        const url = URL.createObjectURL(image)
+        previewUrls.current.set(id, url)
+        return { id, number: ++nextAttachmentNumber.current, url, preview: image }
+      }) : []
+      const text = result.text?.replace(/\r\n?/g, '\n') ?? ''
+      const value = box.value
+      if (added.length) {
+        const before = original.slice(0, selectionStart)
+        const after = original.slice(selectionEnd)
+        // If text was entered while reading the clipboard, the image still precedes those keystrokes.
+        const typedAtCaret = value.startsWith(before) && value.endsWith(after) && value.length >= before.length + after.length
+        const start = value === original || typedAtCaret ? selectionStart : box.selectionStart
+        const end = value === original ? selectionEnd : typedAtCaret ? start : box.selectionEnd
+        const inserted = insertChatImages(value, start, end, added, text)
+        const caret = typedAtCaret && value !== original && box.selectionStart >= start
+          ? box.selectionStart + inserted.caret - start : inserted.caret
+        setAttachments(current => [...current, ...added])
+        placeDraft(box, inserted.text, caret)
+      } else if (text) {
         const start = box.selectionStart
-        const next = box.value.slice(0, start) + text + box.value.slice(box.selectionEnd)
-        box.value = next
-        box.setSelectionRange(start + text.length, start + text.length)
-        setDraft(next)
+        placeDraft(box, value.slice(0, start) + text + value.slice(box.selectionEnd), start + text.length)
       }
     } catch {
       if (boxRef.current === box) toast.error(errorTitle, '첨부할 내용을 읽을 수 없습니다.')
@@ -715,21 +795,22 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
   }
 
   const send = async (override?: string) => {
-    const text = (override ?? draft).trim()
-    if (!chat || (!text && !attachments.length) || sendPending.current || stopPending.current || speedPending.current || pastePending.current || isOver) return
+    const { text, images } = override === undefined ? draftImages : resolveChatImages(override, attachments)
+    if (!chat || (!text && !images.length) || sendPending.current || stopPending.current || speedPending.current || pastePending.current || isOver) return
     sendPending.current = true
     resetQuestionPosition()
     followAfterSend()
     setSending(true)
     setDraft('')
     const { echoSend, discardSend } = useAgentChatStore.getState()
-    const sendId = echoSend(shellId, text, attachments.map(image => image.preview), status === 'working')
+    const sendId = echoSend(shellId, text, images.map(image => image.preview), status === 'working')
     try {
-      const result = await window.electronAPI.agentChatSend?.(shellId, text, attachments.map(image => image.id))
+      const result = await window.electronAPI.agentChatSend?.(shellId, text, images.map(image => image.id))
       if (result?.ok) {
-        if (!attachments.length && isSlashCommand(text)) void watchCommand(sendId)
+        if (!images.length && isSlashCommand(text)) void watchCommand(sendId)
         for (const { id } of attachments) releaseAttachment(id)
         setAttachments([])
+        nextAttachmentNumber.current = 0
       } else {
         discardSend(shellId, sendId)
         setDraft(draft)
@@ -857,7 +938,16 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
 
   // The toggle key works anywhere in the cover (the app-wide handler skips text boxes)
   const onCoverKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (matchesBinding(event, toggleKeys)) {
+    const target = event.target
+    if (!event.defaultPrevented && !event.nativeEvent.isComposing && !subagent && !menu
+      && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))
+      && !event.ctrlKey && !event.altKey && !event.metaKey && target instanceof HTMLElement
+      && !target.closest('.agent-chat-questions')) {
+      event.preventDefault()
+      event.stopPropagation()
+      const rect = target.getBoundingClientRect()
+      showContextMenu(target, rect.left + Math.min(rect.width / 2, 16), rect.bottom, target)
+    } else if (matchesBinding(event, toggleKeys)) {
       event.preventDefault()
       event.stopPropagation()
       onShowTerminal()
@@ -869,7 +959,6 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
     }
   }
 
-  const toggleLabel = shortcutLabel(toggleKeys)
   const contextItems: TerminalMenuItem[] = []
   const contextGroups: TerminalMenuGroup[] = []
   if (menu?.context) {
@@ -901,7 +990,24 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
         icon: RiFileCopyLine, disabled: !canExport,
         onSelect: () => void exportConversation('copy')
       },
-      { label: '채팅 닫고 터미널로 전환', icon: RiTerminalBoxLine, onSelect: onShowTerminal }
+      { label: '채팅 닫고 터미널로 전환', icon: RiTerminalBoxLine, onSelect: onShowTerminal },
+      {
+        label: unreadMail > 0 ? `메시지 (${unreadMail})` : '메시지',
+        icon: RiMailLine, disabled: !mailAgent,
+        onSelect: () => {
+          if (!mailAgent) return
+          menuFocusOrigin.current = null
+          openAgentMessages(mailAgent.id, tabId)
+        }
+      },
+      {
+        label: questionsOpen ? '질문 목록 닫기' : '질문 목록', icon: RiListUnordered,
+        onSelect: () => {
+          menuFocusOrigin.current = null
+          if (questionsOpen) dismissQuestions()
+          else setQuestionsOpen(true)
+        }
+      }
     )
     const split = getSplitMenu()
     if (split) contextGroups.push(split)
@@ -941,16 +1047,12 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
             {STATUS_LABELS[status]}
           </span>
         )}
-        <button type="button" className="agent-chat-head-btn" onClick={onShowTerminal} title={`터미널 보기 (${toggleLabel})`}>
-          <RiTerminalBoxLine aria-hidden /> 터미널
-        </button>
-        {/* Where the pane's own mail button was (top right): the chat covers that one */}
-        <AgentChatMailButton shellId={shellId} tabId={tabId} />
-        <button ref={questionButton} type="button" className="agent-chat-head-btn agent-chat-questions-toggle"
-          aria-expanded={questionsOpen} aria-controls={questionsOpen ? questionPanelId : undefined}
-          onClick={() => questionsOpen ? dismissQuestions() : setQuestionsOpen(true)}>
-          <RiListUnordered aria-hidden /> 질문 목록
-        </button>
+        {mailAgent && (
+          <span className="agent-chat-notification" role="img" title={notificationLabel} aria-label={notificationLabel} data-unread={unreadMail > 0}>
+            <RiNotification3Line size={15} aria-hidden="true" />
+            {unreadMail > 0 && <span className="agent-mail-count" aria-hidden="true">{unreadMail > 99 ? '99+' : unreadMail}</span>}
+          </span>
+        )}
         <AgentChatThemePicker toolbar menuStyle={appearance?.style} />
       </header>
       {usageActions && !subagent && kind === 'codex' && createPortal(
@@ -967,7 +1069,7 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
           )
         }), usageActions
       )}
-      {questionsOpen && <AgentChatQuestions key={scope ?? 'waiting'} id={questionPanelId} shellId={shellId} scope={scope}
+      {questionsOpen && <AgentChatQuestions key={scope ?? 'waiting'} shellId={shellId} scope={scope}
         items={liveItems} onPick={question => void jumpToQuestion(question)} onDismiss={dismissQuestions} />}
       {highlighted && <div className="agent-chat-question-location">
         {history && <span>{chosenQuestion?.sender ? '받은 메시지 주변 대화' : '선택한 질문 주변 대화'}</span>}
@@ -978,20 +1080,21 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
       </div>}
       {chat && chat.subagents.length > 0 && <AgentChatSubagents key={shellId} shellId={shellId} kind={kind} agents={chat.subagents}
         live={chat.state === 'live'} onOpen={setSubagentId} themeStyle={appearance?.style} />}
-      <div className="agent-chat-log-area">
-      {previousQuestion?.kind === 'item' && (
-        <button type="button" className="agent-chat-jump-question" title="이 질문으로 이동"
-          onClick={() => virtualizer.scrollToIndex(scrollNav.previous ?? 0, { align: 'start' })}>
-          <RiArrowUpLine aria-hidden />
-          <span className="agent-chat-jump-question-label">이전 질문</span>
-          <span className="agent-chat-jump-question-text">{questionLine(previousQuestion.item)}</span>
-        </button>
-      )}
       <div className="agent-chat-log" ref={logRef} onScroll={onScroll} onClick={onLogClick}
         onFocus={event => rememberFocus(event.target)} onBlur={event => rememberFocus(event.relatedTarget)}
-        onWheel={() => virtualizer.cancelScroll()} onTouchStart={() => virtualizer.cancelScroll()}>
-        {timeline.length > 0 && (
-          <div className="agent-chat-window" style={{ height: virtualizer.getTotalSize() }}>
+        onTouchStart={() => virtualizer.cancelScroll()}>
+        {previousQuestion?.kind === 'item' && (
+          <div className="agent-chat-scroll-control is-top">
+            <button type="button" className="agent-chat-jump-question" title="이 질문으로 이동"
+              onClick={() => virtualizer.scrollToIndex(scrollNav.previous ?? 0, { align: 'start' })}>
+              <RiArrowUpLine aria-hidden />
+              <span className="agent-chat-jump-question-label">이전 질문</span>
+              <span className="agent-chat-jump-question-text">{questionLine(previousQuestion.item)}</span>
+            </button>
+          </div>
+        )}
+        {hasRows && (
+          <div ref={logContentRef} className="agent-chat-window" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map(row => {
               const entry = timeline[row.index]
               const item = entry.kind === 'item' ? entry.item : null
@@ -1025,14 +1128,15 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
         {chat?.state === 'opening' && !items.length && <p className="agent-chat-empty">대화를 불러오는 중…</p>}
         {chat?.state === 'waiting' && !items.length && <p className="agent-chat-empty">대화가 시작되면 여기에 보입니다.</p>}
         {chat?.state === 'live' && !items.length && <p className="agent-chat-empty">아직 주고받은 말이 없습니다.</p>}
-      </div>
-      {scrollNav.away && (
-        <button type="button" className="agent-chat-jump-bottom" data-fresh={scrollNav.fresh || undefined}
-          title={history ? '최신 대화로 이동' : '대화 맨 아래로 이동'} onClick={goToBottom}>
-          {scrollNav.fresh && <span className="agent-chat-jump-dot" aria-hidden />}
-          <RiArrowDownLine aria-hidden /> {scrollNav.fresh ? '새 내용 · 맨 아래로' : '맨 아래로'}
-        </button>
-      )}
+        {scrollNav.away && (
+          <div className="agent-chat-scroll-control is-bottom">
+            <button type="button" className="agent-chat-jump-bottom" data-fresh={scrollNav.fresh || undefined}
+              title={history ? '최신 대화로 이동' : '대화 맨 아래로 이동'} onClick={goToBottom}>
+              {scrollNav.fresh && <span className="agent-chat-jump-dot" aria-hidden />}
+              <RiArrowDownLine aria-hidden /> {scrollNav.fresh ? '새 내용 · 맨 아래로' : '맨 아래로'}
+            </button>
+          </div>
+        )}
       </div>
       {!isOver && chat?.backgroundShells && <BackgroundShells {...chat.backgroundShells} />}
       {askCard && !isOver && <AskQuestionCard shellId={shellId} item={askCard} onTerminal={() => requestAnimationFrame(onFocusQuestion)} />}
@@ -1045,6 +1149,12 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
           <button type="button" className="agent-chat-head-btn" onClick={onFocusQuestion}>질문에 답하기</button>
         </div>
       ) : <ApprovalCard shellId={shellId} approval={chat.approval} />)}
+      {askUnread && unreadAskId === askUnread && status !== 'blocked' && !isOver && (
+        <div className="agent-chat-banner" role="status">
+          Claude 가 질문의 답을 기다리고 있습니다. 이 질문 화면은 채팅에서 읽지 못해 터미널에서 답해 주세요.
+          <button type="button" onClick={onShowTerminal}>터미널에서 답하기</button>
+        </div>
+      )}
       {status === 'blocked' && !isOver && !chat?.approval && !askCard && (
         // A prompt the view cannot read as choices: answered in the terminal
         <div className="agent-chat-banner" role="status">
@@ -1064,17 +1174,14 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
           {progressLabel && <p className="agent-chat-reply-progress" role="status">
             <RiLoader4Line className="agent-chat-spin" aria-hidden />{progressLabel}
           </p>}
-          {!!attachments.length && (
+          {!!draftImages.images.length && (
             <div className="agent-chat-attachments" role="group" aria-label="첨부 이미지">
-              {attachments.map(({ id, url }, index) => (
-                <div key={id} className="agent-chat-attachment">
-                  <img src={url} alt={'첨부 이미지 ' + (index + 1)} />
-                  <button type="button" aria-label={'이미지 ' + (index + 1) + ' 첨부 제거'} title="이미지 첨부 제거" disabled={sending || pasting}
-                    onClick={() => {
-                      releaseAttachment(id)
-                      setAttachments(current => current.filter(image => image.id !== id))
-                      boxRef.current?.focus()
-                    }}>
+              {draftImages.images.map(image => (
+                <div key={image.id} className="agent-chat-attachment">
+                  <img src={image.url} alt={chatImageReference(image.number)} />
+                  <span className="agent-chat-image-number" aria-hidden="true">{image.number}</span>
+                  <button type="button" aria-label={`이미지 ${image.number} 첨부 제거`} title="이미지 첨부 제거" disabled={sending || pasting}
+                    onClick={() => removeDraftImage(image)}>
                     <RiCloseLine aria-hidden />
                   </button>
                 </div>
@@ -1113,7 +1220,7 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
                 <RiStopCircleLine aria-hidden /> 중지
               </button>
             )}
-            <button type="button" className="agent-chat-send" onClick={() => void send()} disabled={(!draft.trim() && !attachments.length) || sending || stopping || Boolean(changingSpeed) || pasting} title="보내기 (Enter)">
+            <button type="button" className="agent-chat-send" onClick={() => void send()} disabled={(!draftImages.text && !draftImages.images.length) || sending || stopping || Boolean(changingSpeed) || pasting} title="보내기 (Enter)">
               {sending || pasting ? <RiLoader4Line className="agent-chat-spin" aria-hidden /> : <RiSendPlane2Line aria-hidden />}
             </button>
           </div>
@@ -1128,7 +1235,9 @@ export function AgentChatCover({ shellId, themeId, appearance, usageActions, tab
           groups={contextGroups}
           onClose={() => {
             setMenu(null)
-            if (menu.context?.inComposer) window.setTimeout(() => boxRef.current?.focus(), 0)
+            const origin = menuFocusOrigin.current
+            menuFocusOrigin.current = null
+            if (origin) window.setTimeout(() => origin.focus({ preventScroll: true }), 0)
           }}
         />
       )}

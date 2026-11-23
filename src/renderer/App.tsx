@@ -378,6 +378,13 @@ function App() {
   // The tab strip shows one work at a time (hooks/useTabGroups.ts)
   const groupView = useTabGroups()
   const shownTabs = new Set(groupView.shownIds)
+  const shownSplitPanes = layout.mode === 'split' ? layout.panes.map(pane => {
+    const terminalIds = pane.terminalIds.filter(id => shownTabs.has(id))
+    // A screen can still hold tabs of another work. Use the same visible tab for its strip and content.
+    const activeTerminalId = pane.activeTerminalId && shownTabs.has(pane.activeTerminalId)
+      ? pane.activeTerminalId : terminalIds[0] ?? null
+    return { terminalIds, activeTerminalId }
+  }) : []
   const { isOpen, setOpen } = useSftpStore()
   const { connect, disconnect } = useSSH()
   const { zenMode, toggleZenMode, browserTabMaxWidth } = useUIStore()
@@ -956,8 +963,7 @@ function App() {
   }
 
   const handleOpenLocalFromTabStrip = (pane?: number) => {
-    const { activeTerminalId, layout } = useTerminalStore.getState()
-    const front = pane === undefined ? activeTerminalId : layout.panes[pane]?.activeTerminalId ?? null
+    const front = pane === undefined ? useTerminalStore.getState().activeTerminalId : shownSplitPanes[pane]?.activeTerminalId ?? null
     void handleOpenLocalTerminal({ cwd: groupView.localFolder(front) }, pane)
   }
 
@@ -1177,6 +1183,7 @@ function App() {
   /** The screen (index) of a tab while the screen is split */
   const paneOfTab = (tabId: string): number | null => findTabPane(layout, tabId)
 
+  const workSelector = <TabGroupChips view={groupView} onAddWork={() => setLocalProjectMode('add')} />
   const tabConnectionActions = {
     onPickSession: () => setSessionPickerTarget({ workGroup: groupView.activeGroup ?? undefined, assignProject: true }),
     onNewSession: () => openNewConnection({ workGroup: groupView.activeGroup ?? undefined, assignProject: true })
@@ -1185,7 +1192,7 @@ function App() {
   // The + menu of a split pane: the same menu as the single tab bar, about that pane's active tab.
   // Pressing it focuses the pane, and a new tab goes to the focused pane (effect below).
   const renderPaneNewTabMenu = (pane: number) => {
-    const paneActiveId = layout.panes[pane]?.activeTerminalId ?? null
+    const paneActiveId = shownSplitPanes[pane]?.activeTerminalId ?? null
     const paneTerminal = paneActiveId ? terminals.get(paneActiveId) : undefined
     const label = getDuplicateConfig(paneTerminal) ? paneTerminal?.title || `${paneTerminal?.username}@${paneTerminal?.host}` : null
     return (
@@ -1510,7 +1517,7 @@ function App() {
             <>
               {layout.mode !== 'split' && (
                 <div className="terminal-tabs terminal-tab-header">
-                  <TabGroupChips view={groupView} onAddWork={() => setLocalProjectMode('add')} />
+                  {workSelector}
                   <div className="terminal-tab-items" role="group" aria-label="열린 탭">
                     <AnimatePresence initial={false} mode="popLayout">
                       {terminalArray.filter(([sessionId]) => shownTabs.has(sessionId)).map(([sessionId, terminal]) => (
@@ -1594,7 +1601,7 @@ function App() {
                     {/* Up to four screens, each with its tab strip; a divider between each two (lib/screenPanes.ts).
                         primary / secondary stay as classes of the first two for styles and tests written for two. */}
                     {layout.panes.map((pane, index) => {
-                      const activeId = pane.activeTerminalId
+                      const { terminalIds, activeTerminalId: activeId } = shownSplitPanes[index]
                       const isFocused = layout.activePane === index
                       const color = isFocused && activeId ? terminals.get(activeId)?.color : undefined
                       return (
@@ -1616,7 +1623,8 @@ function App() {
                           >
                             <SplitPaneTabBar
                               paneType={index === 0 ? 'primary' : 'secondary'}
-                              terminalIds={pane.terminalIds.filter(id => shownTabs.has(id))}
+                              workSelector={index === 0 ? workSelector : undefined}
+                              terminalIds={terminalIds}
                               activeTerminalId={activeId}
                               isActivePane={isFocused}
                               onTabSelect={(terminalId) => {
@@ -1664,7 +1672,7 @@ function App() {
                     tree, not the DOM, and the tab drag-and-drop handlers are on .terminal-area. */}
                 {terminalArray.map(([sessionId, terminal]) => {
                   const pane = paneOfTab(sessionId)
-                  const paneState = pane === null ? null : layout.panes[pane]
+                  const paneState = pane === null ? null : shownSplitPanes[pane]
                   return createPortal(
                     <div className="tab-host-content" onMouseDown={pane !== null ? () => {
                       if (!isTabHostPreviewed(sessionId)) setActivePaneType(pane)

@@ -652,6 +652,28 @@ describe('the agent\'s prompt with choices, answered from the chat view', () => 
     expect(wake.approvalPrompt()).toMatchObject({ question: '어떤 과일을 넣을까요?', options: [], usesTerminalInput: true })
   })
 
+  it('recognizes Claude’s question with previews though its full-width rows wrap into the next ones', async () => {
+    promptSetup('claude')
+    // The CLI pads its rule and the preview rows to the pane's width and goes on without a line break,
+    // so the terminal marks each following row as wrapped (seen with Claude Code 2.1.3xx, 2026-11-23)
+    const cells = text => [...text].reduce((sum, ch) => sum + (/[가-힣]/u.test(ch) ? 2 : 1), 0)
+    const full = text => text + ' '.repeat(100 - cells(text))
+    wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + [
+      '─'.repeat(100), full(' ☐ 유형별 사진 '), full(''),
+      full('│ 신규입고 카드에 넣을 사진의 출처를 정해 주세요.'), full(''),
+      full('❯ 1. 기존 아이콘으로 유형 카드    ┌──────────────┐'),
+      full('    (Recommended)                 │ +--------+   │'),
+      full('  2. 이미지 파일을 받아서 적용    │ | 아이콘 |   │'),
+      full('  3. 종 사진 우선                 │ +--------+   │'),
+      full('                                  └──────────────┘'), full(''),
+      full('                                  Notes: press n to add notes'), full(''),
+      '─'.repeat(100), full('  Chat about this'), full(''),
+      'Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel'
+    ].join(''))
+    await settle()
+    expect(wake.approvalPrompt()).toMatchObject({ question: '신규입고 카드에 넣을 사진의 출처를 정해 주세요.', options: [], usesTerminalInput: true })
+  })
+
   it('reads the heading of a single Claude question with no Submit tab', async () => {
     promptSetup('claude')
     wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + [

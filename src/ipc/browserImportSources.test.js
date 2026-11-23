@@ -40,8 +40,11 @@ describe('browser import sources', () => {
       { id: expect.any(String), name: '개인' },
       { id: expect.any(String), name: '업무' },
     ] }])
+    expect(await sources.listDataSources()).toEqual(result)
     expect(launch).not.toHaveBeenCalled()
     const { id } = result[0].profiles[1]
+    expect(await sources.dataDirectory(id)).toBe(path.join(root, 'Profile 1'))
+    expect(await sources.dataDirectory(chrome)).toBeNull()
     expect(await sources.open(id)).toBe(true)
     expect(launch).toHaveBeenCalledWith(chrome, ['--profile-directory=Profile 1', '--ignore-profile-directory-if-not-exists', '--new-window', 'chrome://password-manager/settings'])
     fs.renameSync(path.join(root, 'Profile 1'), path.join(root, 'removed'))
@@ -59,6 +62,7 @@ describe('browser import sources', () => {
     expect(browser.name).toBe('Microsoft Edge')
     expect(browser.profiles.map(profile => profile.name)).toEqual(['Default', 'Profile 3'])
     expect(await sources.open(browser.profiles[0].id)).toBe(true)
+    expect(await sources.listDataSources()).toEqual([browser])
     expect(launch).toHaveBeenCalledWith(edge, ['--profile-directory=Default', '--ignore-profile-directory-if-not-exists', '--new-window', 'edge://settings/autofill/passwords'])
   })
 
@@ -78,6 +82,7 @@ describe('browser import sources', () => {
     const [browser] = await sources.list()
     expect(browser.name).toBe('Mozilla Firefox')
     expect(browser.profiles.map(profile => profile.name)).toEqual(['Default Release', '개인'])
+    expect(await sources.listDataSources()).toEqual([])
     expect(await sources.open(browser.profiles[1].id)).toBe(true)
     expect(launch).toHaveBeenCalledWith(firefox, ['-profile', externalProfile, '-new-window', 'about:logins'])
   })
@@ -87,6 +92,7 @@ describe('browser import sources', () => {
     const chrome = file(path.join(env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe'))
     const [browser] = await sources.list()
     expect(browser.profiles).toEqual([{ id: expect.any(String), name: '기본 프로필' }])
+    expect(await sources.listDataSources()).toEqual([])
     expect(await sources.open(browser.profiles[0].id)).toBe(true)
     expect(launch).toHaveBeenCalledWith(chrome, ['--new-window', 'chrome://password-manager/settings'])
   })

@@ -9,6 +9,8 @@ import { uncoveredBox } from '../../lib/browserViewClip'
 import { useBrowserBookmarkStore } from '../../stores/browserBookmarkStore'
 import { BrowserReviewHistory } from './BrowserReviewHistory'
 import { BrowserLoginsDialog } from './BrowserLoginsDialog'
+import { BrowserDataImportDialog } from './BrowserDataImportDialog'
+import { BrowserSavedPages } from './BrowserSavedPages'
 import './BrowserReview.css'
 
 const statusLabels: Record<LocalAgentStatus, string> = {
@@ -32,6 +34,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const api = window.electronAPI
   const viewport = useRef<HTMLDivElement>(null)
   const bookmarksButton = useRef<HTMLButtonElement>(null)
+  const importButton = useRef<HTMLButtonElement>(null)
   const loginsButton = useRef<HTMLButtonElement>(null)
   const [state, setState] = useState<BrowserReviewState | null>(null)
   const [address, setAddress] = useState('')
@@ -45,12 +48,12 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const [feedback, setFeedback] = useState<{ text: string; error?: boolean } | null>(null)
   const [sending, setSending] = useState(false)
   const [bookmarksOpen, setBookmarksOpen] = useState(false)
-  const [loginsOpen, setLoginsOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [loginsOpen, setLoginsOpen] = useState<boolean | { profileId?: string }>(false)
   const [toolsOpen, setToolsOpen] = useState(false)
   const [openTool, setOpenTool] = useState<BrowserTool | null>(null)
   const bookmarks = useBrowserBookmarkStore(store => store.bookmarks)
   const toggleBookmark = useBrowserBookmarkStore(store => store.toggleBookmark)
-  const removeBookmark = useBrowserBookmarkStore(store => store.removeBookmark)
   const bookmarksId = useId()
   const toolsId = useId()
   const elementPickerId = `${toolsId}-element-picker`
@@ -273,13 +276,13 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
             {bookmarked ? <RiStarFill aria-hidden="true" /> : <RiStarLine aria-hidden="true" />}
           </button>
         </form>
-        <button ref={bookmarksButton} type="button" className="browser-review-bookmarks-toggle" title="즐겨찾기 목록"
-          aria-label="즐겨찾기 목록" aria-expanded={bookmarksOpen} aria-controls={bookmarksId}
+        <button ref={bookmarksButton} type="button" className="browser-review-bookmarks-toggle" title="즐겨찾기 및 방문 기록"
+          aria-label="즐겨찾기 및 방문 기록" aria-expanded={bookmarksOpen} aria-controls={bookmarksId}
           onClick={() => setBookmarksOpen(open => !open)}>
           <RiBookmark3Line aria-hidden="true" />
         </button>
         <button ref={loginsButton} type="button" className="browser-review-logins" title="로그인 정보" aria-label="로그인 정보"
-          aria-haspopup="dialog" aria-expanded={loginsOpen} onClick={() => setLoginsOpen(true)}>
+          aria-haspopup="dialog" aria-expanded={!!loginsOpen} onClick={() => setLoginsOpen(true)}>
           <RiKey2Line aria-hidden="true" />
         </button>
         {/* The page's own developer tools, in a window of their own (F12 / Ctrl+Shift+I in the page too) */}
@@ -294,35 +297,13 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
         </button>
       </header>
       {isVisible && loginsOpen && <BrowserLoginsDialog tabId={tabId} origin={state?.loginOrigin ?? null}
-        trigger={loginsButton.current} onClose={() => setLoginsOpen(false)} />}
+        trigger={loginsButton.current} importOptions={typeof loginsOpen === 'object' ? loginsOpen : undefined}
+        onClose={() => setLoginsOpen(false)} />}
+      {isVisible && importOpen && <BrowserDataImportDialog tabId={tabId} trigger={importButton.current} onClose={() => setImportOpen(false)}
+        onShowPasswords={profileId => { setImportOpen(false); setLoginsOpen({ profileId }) }} />}
       {bookmarksOpen && (
-        <section className="browser-review-bookmarks" id={bookmarksId} aria-label="즐겨찾기"
-          onKeyDown={event => {
-            if (event.key !== 'Escape') return
-            event.stopPropagation()
-            closeBookmarks()
-          }}>
-          {bookmarks.length > 0 ? (
-            <ul>
-              {bookmarks.map(bookmark => (
-                <li key={bookmark.url}>
-                  <button type="button" className="browser-review-bookmark-open" title={bookmark.url}
-                    onClick={() => { closeBookmarks(); void act({ type: 'navigate', address: bookmark.url }) }}>
-                    <span>{bookmark.title}</span>
-                    <small>{bookmark.url}</small>
-                  </button>
-                  <button type="button" className="browser-review-bookmark-remove" title="즐겨찾기에서 제거"
-                    aria-label={`${bookmark.title} 즐겨찾기에서 제거`} onClick={() => {
-                      removeBookmark(bookmark.url)
-                      bookmarksButton.current?.focus({ preventScroll: true })
-                    }}>
-                    <RiCloseLine aria-hidden="true" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : <p>저장된 즐겨찾기가 없습니다.</p>}
-        </section>
+        <BrowserSavedPages id={bookmarksId} importTrigger={importButton} onImport={() => setImportOpen(true)} onClose={closeBookmarks}
+          onNavigate={address => { closeBookmarks(); void act({ type: 'navigate', address }) }} />
       )}
       {browserError && <p className="browser-review-error" role="alert">{browserError}</p>}
       <div className={`browser-review-workspace${toolsOpen ? ' has-tools' : ''}`}>

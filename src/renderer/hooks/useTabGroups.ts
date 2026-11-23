@@ -96,8 +96,18 @@ export function useTabGroups(): TabGroupView {
   const openGroup = (key: string) => {
     const group = groups.find(item => item.key === key)
     if (!group || group.tabIds.length === 0) return
-    const last = useTabGroupStore.getState().lastTab[key]
-    useTerminalStore.getState().focusTerminal(last && group.tabIds.includes(last) ? last : group.tabIds[0])
+    const store = useTabGroupStore.getState()
+    const terminalState = useTerminalStore.getState()
+    const last = store.lastTab[key]
+    if (activeGroup && key !== activeGroup) {
+      // Focusing another work's tab first would change the active tab and focus of the split we save.
+      const leaving = splitOf(terminalState.layout)
+      if (leaving) {
+        store.saveSplit(activeGroup, leaving)
+        terminalState.closeSplit()
+      }
+    }
+    terminalState.focusTerminal(last && group.tabIds.includes(last) ? last : group.tabIds[0])
   }
 
   const localFolder = (tabId: string | null) => localFolderForGroup(

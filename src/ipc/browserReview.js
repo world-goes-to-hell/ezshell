@@ -5,8 +5,10 @@ const { pickBrowserElement, readVueComponent } = require('./browserReviewPicker.
 const { createBrowserLogins, loginOrigin } = require('./browserLogins.js')
 const { fillLoginForm } = require('./browserLoginForm.js')
 const { createBrowserImportSources } = require('./browserImportSources.js')
+const { importBrowserProfile } = require('./browserProfileImport.js')
 const { createBrowserPasswordImport } = require('./browserPasswordImport.js')
 const { createImageDrafts } = require('../agentChat/imageDrafts.js')
+const { browserContextMenu } = require('./browserContextMenu.js')
 
 const WORLD = 1001
 const LOGIN_WORLD = 1002
@@ -44,12 +46,13 @@ function reviewMessage(request, selection, files = []) {
 }
 
 function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, listAgents, sendMessage, clipboard, selectImages, openExternal, userDataPath, getMasterPassword }) {
-  const { WebContentsView, session, ipcMain, dialog, clipboard: systemClipboard } = require('electron')
+  const { WebContentsView, session, ipcMain, dialog, Menu, clipboard: systemClipboard } = require('electron')
   const tabs = new Map()
   const sessions = new Map()
   const imageDrafts = createImageDrafts(clipboard)
   const logins = createBrowserLogins(userDataPath, getMasterPassword)
   const importSources = createBrowserImportSources()
+  const readingProfiles = new Set()
   const autoImport = process.platform === 'win32'
   const passwordImport = createBrowserPasswordImport({ openSource: importSources.open, logins,
     copyPath: file => systemClipboard.writeText(file) })
@@ -82,7 +85,13 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
     const contents = page.webContents
     page.setVisible(false)
     win.contentView.addChildView(page)
-    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    // A link opening a window (target="_blank", window.open, Ctrl / middle click) opens in a new browser tab
+    // of the app instead, as in a web browser; never a window of its own (2026-11-23 user report: such links
+    // did nothing)
+    contents.setWindowOpenHandler(({ url }) => {
+      if (linkUrl(url)) setImmediate(() => { if (!win.isDestroyed()) openLink(url) })
+      return { action: 'deny' }
+    })
     const guardNavigation = (event, url) => {
       if (!webUrl(event.url ?? url)) event.preventDefault()
     }
@@ -109,6 +118,30 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
       if (contents.isDevToolsOpened()) contents.closeDevTools()
       else contents.openDevTools({ mode: 'detach', activate: true, title: '개발자 도구' })
     }
+    // The element under the pointer in the page's developer tools (opened in their own window first)
+    function inspect(x, y) {
+      if (contents.isDestroyed() || !Number.isFinite(x) || !Number.isFinite(y)) return
+      if (!contents.isDevToolsOpened()) contents.openDevTools({ mode: 'detach', activate: true, title: '개발자 도구' })
+      contents.inspectElement(Math.round(x), Math.round(y))
+    }
+    contents.on('context-menu', (_event, params) => {
+      if (contents.isDestroyed() || win.isDestroyed()) return
+      const template = browserContextMenu(params, {
+        canGoBack: contents.navigationHistory.canGoBack(),
+        canGoForward: contents.navigationHistory.canGoForward(),
+        isWebUrl: url => Boolean(linkUrl(url)),
+        openTab: url => { if (linkUrl(url)) openLink(url) },
+        openExternal: url => { const link = linkUrl(url); if (link) void Promise.resolve(openExternal(link.href)).catch(() => {}) },
+        copy: text => systemClipboard.writeText(String(text)),
+        back: () => void action({ type: 'back' }),
+        forward: () => void action({ type: 'forward' }),
+        reload: () => void action({ type: 'reload' }),
+        copyImage: (x, y) => { if (!contents.isDestroyed()) contents.copyImageAt(Math.round(x), Math.round(y)) },
+        edit: role => { if (!contents.isDestroyed() && typeof contents[role] === 'function') contents[role]() },
+        inspect
+      })
+      Menu.buildFromTemplate(template).popup({ window: win })
+    })
     contents.on('devtools-opened', () => publish())
     contents.on('devtools-closed', () => publish())
     // F12 and Ctrl+Shift+I in the page, as in a web browser (the app window's own keys do not reach the page)
@@ -118,6 +151,13 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
       if (key === 'F12' || ((input.control || input.meta) && input.shift && key === 'I')) {
         event.preventDefault()
         toggleDevTools()
+      } else if (input.alt && !input.control && !input.meta && (key === 'ARROWLEFT' || key === 'ARROWRIGHT')) {
+        // Back and forward, as the menu shows them
+        event.preventDefault()
+        void action({ type: key === 'ARROWLEFT' ? 'back' : 'forward' })
+      } else if (key === 'F5' || ((input.control || input.meta) && !input.shift && !input.alt && key === 'R')) {
+        event.preventDefault()
+        void action({ type: 'reload' })
       }
     })
     function publish() {
@@ -400,6 +440,37 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
   })
   ipcMain.on('browser-review-bounds', (event, id, rect) => tabFor(event, id)?.bounds(rect))
   ipcMain.on('browser-review-close', (event, id) => { if (allowed(event)) close(id) })
+
+  ipcMain.handle('browser-review-import-data', async (event, id, request) => {
+    const tab = tabFor(event, id)
+    const unavailable = '앱 잠금을 해제한 뒤 브라우저 탭에서 다시 시도해 주세요.'
+    if (!tab || !getMasterPassword()) return fail(unavailable)
+    if (request?.type === 'sources') {
+      try {
+        const sources = await importSources.listDataSources()
+        return tabFor(event, id) === tab && getMasterPassword() ? { success: true, sources } : fail(unavailable)
+      } catch {
+        return fail('설치된 브라우저 프로필을 확인할 수 없습니다.')
+      }
+    }
+    if (request?.type !== 'read') return fail('지원하지 않는 가져오기 동작입니다.')
+    const bookmarks = request.bookmarks === true
+    const history = request.history === true
+    if (!bookmarks && !history) return fail('가져올 항목을 선택해 주세요.')
+    if (readingProfiles.has(id)) return fail('이미 브라우저 프로필을 읽고 있습니다.')
+    readingProfiles.add(id)
+    try {
+      const directory = await importSources.dataDirectory(request.id)
+      if (!directory) return fail('브라우저 프로필을 찾을 수 없습니다. 가져오기 메뉴를 다시 열어 주세요.')
+      if (tabFor(event, id) !== tab || !getMasterPassword()) return fail(unavailable)
+      const data = await importBrowserProfile(directory, { bookmarks, history })
+      return tabFor(event, id) === tab && getMasterPassword() ? { success: true, ...data } : fail(unavailable)
+    } catch {
+      return fail('브라우저 프로필을 읽을 수 없습니다. 원본 브라우저를 닫고 다시 시도해 주세요.')
+    } finally {
+      readingProfiles.delete(id)
+    }
+  })
 
   ipcMain.handle('browser-review-logins', async (event, id, request) => {
     const tab = tabFor(event, id)

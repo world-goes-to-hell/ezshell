@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from 'react'
+import { useEffect, useEffectEvent, useId, useState, type FormEvent } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiKey2Line } from 'react-icons/ri'
 import type { BrowserLoginAction, BrowserLoginResult, BrowserLoginSource } from '../../types'
@@ -17,11 +17,12 @@ function importNotice(imported: number, skipped = 0) {
   return `${imported}개를 가져왔습니다.${skipped ? ` 중복되거나 가져올 수 없는 ${skipped}개 항목은 건너뛰었습니다.` : ''}`
 }
 
-export function BrowserLoginsDialog({ tabId, origin, onClose, trigger }: {
+export function BrowserLoginsDialog({ tabId, origin, onClose, trigger, importOptions }: {
   tabId: string
   origin: string | null
   onClose: () => void
   trigger: HTMLButtonElement | null
+  importOptions?: { profileId?: string }
 }) {
   const [state, setState] = useState<LoginResult | null>(null)
   const [adding, setAdding] = useState(false)
@@ -29,9 +30,9 @@ export function BrowserLoginsDialog({ tabId, origin, onClose, trigger }: {
   const [password, setPassword] = useState('')
   const [query, setQuery] = useState('')
   const [limit, setLimit] = useState(100)
-  const [showImport, setShowImport] = useState(false)
+  const [showImport, setShowImport] = useState(!!importOptions)
   const [sources, setSources] = useState<BrowserLoginSource[] | null>(null)
-  const [sourceId, setSourceId] = useState('')
+  const [sourceId, setSourceId] = useState(importOptions?.profileId ?? '')
   const [exportBrowser, setExportBrowser] = useState<BrowserLoginSource['id'] | null>(null)
   const [autoImport, setAutoImport] = useState(false)
   const [transfer, setTransfer] = useState<{ profileId: string; browser: BrowserLoginSource['id'] } | null>(null)
@@ -42,6 +43,9 @@ export function BrowserLoginsDialog({ tabId, origin, onClose, trigger }: {
   const fieldId = useId()
   const selectedSource = sources?.find(source => source.profiles.some(profile => profile.id === sourceId))
   const exportSource = transfer?.browser ?? exportBrowser
+  const loadInitialSources = useEffectEvent(() => { if (importOptions) void perform({ type: 'sources' }) })
+
+  useEffect(() => { loadInitialSources() }, [tabId])
 
   useEffect(() => {
     let mounted = true

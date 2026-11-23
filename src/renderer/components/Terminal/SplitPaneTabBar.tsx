@@ -14,6 +14,7 @@ interface SplitPaneTabBarProps {
   isActivePane: boolean  // 이 pane이 현재 포커스 상태인지
   onTabSelect: (terminalId: string) => void
   onTabClose: (terminalId: string) => void
+  workSelector?: ReactNode
   /** The + menu shown right after the tabs (same menu as the single tab bar) */
   newTabMenu?: ReactNode
   worktreeForFolder: (cwd: string) => WorktreeNode | undefined
@@ -32,6 +33,7 @@ export function SplitPaneTabBar({
   isActivePane,
   onTabSelect,
   onTabClose,
+  workSelector,
   newTabMenu,
   worktreeForFolder,
   onUnsplit,
@@ -55,6 +57,7 @@ export function SplitPaneTabBar({
       onMouseDown={onPaneFocus}
       style={headerBorderColor ? { borderBottomColor: headerBorderColor } : undefined}
     >
+      {workSelector}
       <div className="split-pane-tabs">
         {terminalIds.map(terminalId => {
           const terminal = terminals.get(terminalId)

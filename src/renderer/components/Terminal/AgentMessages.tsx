@@ -70,9 +70,10 @@ function isVisible(element: HTMLElement | null): boolean {
 function deliveryAnchor(shellId?: string): HTMLElement | undefined {
   if (shellId) {
     const pane = document.querySelector<HTMLElement>(`[data-local-shell-id="${CSS.escape(shellId)}"]`)
-    // The chat view's button comes first in the pane: the pane's own is under the chat while it shows
-    const mail = [...(pane?.querySelectorAll<HTMLElement>('.agent-chat-mail, .agent-pane-mail') ?? [])].find(isVisible)
-    if (mail) return mail
+    // The chat covers the terminal's mail button. In chat, deliveries land on its bell.
+    const mail = pane?.querySelector<HTMLElement>(pane.querySelector('.agent-chat-cover')
+      ? '.agent-chat-parent:not([inert]) .agent-chat-notification' : '.agent-pane-mail')
+    if (mail && isVisible(mail)) return mail
     const tabId = pane?.dataset.localTabId ?? useMessages.getState().panes[shellId]
     if (tabId) {
       const tabs = document.querySelectorAll<HTMLElement>(`:is(.terminal-tab, .split-pane-tab-item)[data-tab-id="${CSS.escape(tabId)}"]`)
@@ -296,25 +297,11 @@ export function AgentTabMessages({ tabId }: { tabId: string }) {
   return count > 0 ? <span className="agent-tab-mail agent-mail-count" aria-label={`읽지 않은 에이전트 메시지 ${count}개`} title={`읽지 않은 메시지 ${count}개`}>{count}</span> : null
 }
 
-/** The agent of a pane's shell and its unread messages (the pane's mail button and the chat view's) */
-function usePaneAgentMail(shellId: string) {
+/** The agent of a pane's shell and its unread messages. */
+export function usePaneAgentMail(shellId: string) {
   const agent = useMessages(state => state.snapshot.agents.find(item => item.shellId === shellId))
   const count = useMessages(state => agent ? unreadCount(state.snapshot.messages, new Set([agent.id])) : 0)
   return { agent, count }
-}
-
-/** The chat view's header button to the agent's inbox; the pane's own button is under the chat */
-export function AgentChatMailButton({ shellId, tabId }: { shellId: string; tabId: string }) {
-  const { agent, count } = usePaneAgentMail(shellId)
-  if (!agent) return null
-  const label = count > 0 ? `${agent.id} 메시지함 (읽지 않은 메시지 ${count}개)` : `${agent.id} 메시지함`
-  return (
-    <button type="button" className="agent-chat-head-btn agent-chat-mail" data-unread={count > 0}
-      onClick={() => openAgentMessages(agent.id, tabId)} title={label} aria-label={label}>
-      <RiMailLine aria-hidden /> 메시지
-      {count > 0 && <span className="agent-mail-count">{count}</span>}
-    </button>
-  )
 }
 
 export function AgentPaneMessages({ shellId, tabId }: { shellId: string; tabId: string }) {

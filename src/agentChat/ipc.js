@@ -36,6 +36,18 @@ const REASONS = {
   'target-changed': 'CLI의 입력 대상이 바뀌었습니다. 터미널에서 현재 대화를 확인해 주세요.',
   'write-failed': '셸에 쓰지 못했습니다.'
 }
+
+function chatPrompt(kind, text, files) {
+  if (!files.length) return { prompt: text, images: undefined }
+  if (kind === 'codex') return { prompt: text, images: { files } }
+  const paths = files.join('\n')
+  // Keep the references first so a slash command in the draft stays ordinary text.
+  return { prompt: text ? paths + '\n\n' + text : paths, images: { count: files.length, text } }
+}
+
+function chatSendResult(result) {
+  return result.ok ? { ok: true } : { ok: false, reason: result.reason, error: REASONS[result.reason] ?? '보내지 못했습니다.' }
+}
 const SPEED_REASONS = {
   ...REASONS,
   working: 'Codex가 입력을 기다릴 때 전환할 수 있습니다.',
@@ -207,16 +219,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const local = shells()
     const agent = local?.agentOf(id)
     if (!agent) return { ok: false, error: REASONS['not-agent'] }
-    let prompt = text ?? ''
-    let images
-    if (files.length && agent.kind === 'codex') {
-      images = { files }
-    } else if (files.length) {
-      const paths = files.join('\n')
-      // Keep the references first so a slash command in the draft stays ordinary text.
-      prompt = text ? paths + '\n\n' + text : paths
-      images = { count: files.length, text: text ?? '' }
-    }
+    const { prompt, images } = chatPrompt(agent.kind, text ?? '', files)
     // A slash command: what it does shows on the agent's screen (agentChat/commandScreen.js)
     const isCommand = !files.length && /^\/[^\s/]+(?:\s|$)/.test(prompt)
     const before = isCommand ? local.chatScreen?.(id)?.lines ?? null : null
@@ -224,7 +227,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const result = await selected.send(() => local.chatSend(id, prompt, images))
     if (result?.ok && isCommand) commandWatches.set(id, { before, kind: agent.kind, command: prompt })
     if (!allowed(event)) return locked
-    return result.ok ? { ok: true } : { ok: false, reason: result.reason, error: REASONS[result.reason] ?? '보내지 못했습니다.' }
+    return chatSendResult(result)
   })
   // A choice of the prompt the view showed: main checks the screen still shows that very prompt
   ipcMain.handle('agent-chat-answer', async (event, request) => {
@@ -382,7 +385,19 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     return { ok: false, error: '열 수 없는 링크입니다.' }
   }
 
-  return { clearClipboard: imageDrafts.clearAll }
+  return {
+    clearClipboard: imageDrafts.clearAll,
+    async sendCapture(target, comment, getFile, stillOpen) {
+      const local = shells()
+      const sameConversation = () => !isLocked() && stillOpen() && local?.chatAgentId(target.shellId) === target.id
+      if (!sameConversation()) return { ok: false, error: '선택한 에이전트가 종료되었거나 바뀌었습니다.' }
+      const trimmed = comment.trim()
+      const text = trimmed ? cleanChatText(comment) : '첨부한 화면을 확인해 주세요.'
+      if (!text) return { ok: false, error: '코멘트에 사용할 수 없는 문자가 있거나 너무 깁니다.' }
+      const { prompt, images } = chatPrompt(target.kind, text, [getFile()])
+      return chatSendResult(await local.chatSend(target.shellId, prompt, images, undefined, sameConversation))
+    }
+  }
 }
 
 module.exports = { registerAgentChatIpc, cleanChatText }

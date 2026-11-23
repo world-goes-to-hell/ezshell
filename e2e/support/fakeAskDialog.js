@@ -3,6 +3,9 @@
 // test of src/ipc/claudeQuestions.js and by the fake agent of local-agent-chat (localAgentApp.js).
 //   lines(): the screen rows; write(keys): one key as the pty gets it; state.submitted: the answers once sent
 // reviewAs: answers the review shows instead of the real ones (a CLI that differs)
+// A single choice question whose options have `preview` is drawn as the CLI draws it: the selected choice's
+// preview in a box right of the choices, a long label going on in the next row, no "Type something"; a
+// number only moves the selection and Enter picks it.
 
 function createFakeAskDialog(questions, { reviewAs = null } = {}) {
   const state = { tab: 0, submitted: null, keys: [] }
@@ -17,6 +20,19 @@ function createFakeAskDialog(questions, { reviewAs = null } = {}) {
     if (tabs[i].checks.has(q.options.length + 1) && tabs[i].typed) labels.push(tabs[i].typed)
     return labels.length ? labels.join(', ') : null
   }
+  const hasPreview = q => !q.multiSelect && q.options.some(o => o.preview)
+  function previewRows(q, t, p) {
+    const width = 30
+    const left = q.options.flatMap((o, k) => {
+      const label = `${p(k + 1)}${k + 1}. ${o.label}`
+      const cut = label.length > 26 ? label.lastIndexOf(' ', 26) : -1
+      return cut > 0 ? [label.slice(0, cut), '    ' + label.slice(cut + 1)] : [label]
+    })
+    const box = (q.options[t.pointer - 1]?.preview ?? '').split('\n')
+    const right = ['┌' + '─'.repeat(width) + '┐', ...box.map(line => '│ ' + line.padEnd(width - 1) + '│'), '└' + '─'.repeat(width) + '┘']
+    const rows = Array.from({ length: Math.max(left.length, right.length) }, (_, i) => ((left[i] ?? '').padEnd(34) + (right[i] ?? '')).trimEnd())
+    return [...rows, '', ' '.repeat(34) + 'Notes: press n to add notes', '', rule, '  Chat about this', '', 'Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel']
+  }
   function lines() {
     const head = ['● 아래에서 고르세요', '  1. 대화 속 번호 목록', '  2. 이것도 선택지가 아님', rule, strip()]
     if (state.tab === 'done') return []
@@ -30,6 +46,7 @@ function createFakeAskDialog(questions, { reviewAs = null } = {}) {
     const t = tabs[state.tab]
     const p = n => (t.pointer === n ? '❯ ' : '  ')
     const n = q.options.length
+    if (hasPreview(q)) return [...head, '', q.question, '', ...previewRows(q, t, p)]
     const rows = q.options.flatMap((o, k) => q.multiSelect
       ? [`${p(k + 1)}${k + 1}. [${t.checks.has(k + 1) ? '✔' : ' '}] ${o.label}`, `         ${o.description}`]
       : [`${p(k + 1)}${k + 1}. ${o.label}`, `     ${o.description}`])
@@ -52,6 +69,12 @@ function createFakeAskDialog(questions, { reviewAs = null } = {}) {
     const t = tabs[state.tab]
     const n = q.options.length
     const typing = t.pointer === n + 1 && (q.multiSelect || t.typing)
+    if (hasPreview(q)) {
+      if (data === '\x1b[B' || data === '\x1bOB') t.pointer = Math.min(n, t.pointer + 1)
+      else if (/^[1-9]$/.test(data) && Number(data) <= n) t.pointer = Number(data)
+      else if (data === '\r') { t.answer = q.options[t.pointer - 1].label; advance() }
+      return true
+    }
     if (data === '\x1b[B' || data === '\x1bOB') {
       t.pointer = t.pointer === 'move' ? 'move' : t.pointer < n + 1 ? t.pointer + 1 : q.multiSelect ? 'move' : n + 1
     } else if (data === '\r') {

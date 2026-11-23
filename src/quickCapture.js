@@ -1,19 +1,32 @@
+const path = require('node:path')
 const { OVERLAY_URL } = require('./quickCaptureOverlay.js')
+// The overlay computes the same rectangle to draw its marks in (quickCaptureEditor.js)
+const { pixelRegion, markedImage } = require('./quickCaptureEditor.js')
 
-/** Convert the overlay's normalized rectangle to image pixels, independent of monitor DPI. */
-function pixelRegion(region, imageSize) {
-  if (!region) return null
-  const { left, top, width, height } = region
-  if (![left, top, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null
-  const clamp = (value, limit) => Math.max(0, Math.min(value, limit))
-  const x = clamp(Math.floor(left * imageSize.width), imageSize.width)
-  const y = clamp(Math.floor(top * imageSize.height), imageSize.height)
-  const right = clamp(Math.ceil((left + width) * imageSize.width), imageSize.width)
-  const bottom = clamp(Math.ceil((top + height) * imageSize.height), imageSize.height)
-  return right > x && bottom > y ? { x, y, width: right - x, height: bottom - y } : null
+async function captureProjects(agents, repoFolders) {
+  const folders = new Map()
+  const projects = new Map()
+  const keyOf = folder => path.normalize(folder).toLowerCase()
+  const locations = await Promise.all(agents.map(async agent => {
+    const key = keyOf(agent.cwd)
+    if (!folders.has(key)) folders.set(key, repoFolders(agent.cwd))
+    // Git lists the main checkout first, even when the agent is in a linked worktree.
+    const [top, main] = await folders.get(key)
+    return main ?? top ?? agent.cwd
+  }))
+  agents.forEach((agent, index) => {
+    const folder = locations[index]
+    const key = keyOf(folder)
+    if (!projects.has(key)) projects.set(key, { folder, name: path.basename(folder) || folder, agents: [] })
+    projects.get(key).agents.push(agent)
+  })
+  return [...projects.values()].sort((a, b) => a.name.localeCompare(b.name, 'ko') || a.folder.localeCompare(b.folder, 'ko'))
 }
 
-function createQuickCapture({ desktopCapturer, clipboard, ClipboardItem, BrowserWindow, getDisplay, isAvailable, onError = () => {} }) {
+function createQuickCapture({
+  desktopCapturer, clipboard, ClipboardItem, BrowserWindow, getDisplay, isAvailable, nativeImage = null,
+  listAgents = () => [], repoFolders = async () => [], storeImage, sendCapture, onSent = () => {}, onError = () => {}
+}) {
   let active = null
 
   function cancel() {
@@ -56,19 +69,63 @@ function createQuickCapture({ desktopCapturer, clipboard, ClipboardItem, Browser
       win.webContents.setZoomFactor(1)
       await win.webContents.executeJavaScript(`window.setCaptureImage(${JSON.stringify(image.toDataURL())})`)
       if (active !== task || win.isDestroyed() || !isAvailable()) return false
-      const confirming = win.webContents.executeJavaScript('window.pickCaptureRegion()')
+      const available = () => active === task && !win.isDestroyed() && isAvailable()
+      const action = code => Promise.race([win.webContents.executeJavaScript(code), closed])
+      let next = action('window.pickCaptureRegion()')
       // A normal Windows window stops at the taskbar; the selection must cover the whole display.
       win.setFullScreen(true)
       win.show()
       win.moveTop()
       win.focus()
-      const capture = await Promise.race([confirming, closed])
-      const region = pixelRegion(capture?.region, image.getSize())
-      if (active !== task || !region || !isAvailable()) return false
-      const contents = { 'image/png': new Blob([image.crop(region).toPNG()], { type: 'image/png' }) }
-      if (typeof capture.comment === 'string' && capture.comment.trim()) contents['text/plain'] = capture.comment
-      await clipboard.write([new ClipboardItem(contents)])
-      return true
+      let projects = []
+      let targets = new Map()
+      // The stored file of the image last sent: a retry reuses it unless the marks changed meanwhile
+      let stored = null
+      while (available()) {
+        const capture = await next
+        if (!capture || !available()) return false
+        if (capture.action === 'targets') {
+          projects = await captureProjects(listAgents(), repoFolders)
+          if (!available()) return false
+          targets = new Map(projects.flatMap(project => project.agents.map(agent => [agent.id, agent])))
+          next = action(`window.chooseCaptureTarget(${JSON.stringify(projects)})`)
+          continue
+        }
+        const region = pixelRegion(capture.region, image.getSize())
+        if (!region || typeof capture.comment !== 'string') return false
+        // The region with the user's marks when the overlay drew any (checked), else the plain crop
+        const picture = () => markedImage(capture.image, region, nativeImage) ?? image.crop(region)
+        if (capture.action === 'copy') {
+          const contents = { 'image/png': new Blob([picture().toPNG()], { type: 'image/png' }) }
+          if (capture.comment.trim()) contents['text/plain'] = capture.comment
+          await clipboard.write([new ClipboardItem(contents)])
+          return true
+        }
+        if (capture.action !== 'send') return false
+        const agent = targets.get(capture.agentId)
+        let error = '선택한 에이전트를 찾을 수 없습니다.'
+        if (agent) {
+          try {
+            // Reuse the same file if the user retries. Keep it available to the CLI as long as
+            // other chat attachments, including if the input was left in its composer.
+            const key = JSON.stringify(capture.region) + (typeof capture.image === 'string' ? capture.image : '')
+            const result = await sendCapture(agent, capture.comment, () => {
+              if (stored?.key !== key) stored = { key, file: storeImage(picture()) }
+              return stored.file
+            }, available)
+            if (result.ok) {
+              if (available()) onSent(agent)
+              return true
+            }
+            error = result.error
+          } catch {
+            error = '캡처와 코멘트를 보내지 못했습니다. 다시 시도해 주세요.'
+          }
+        }
+        if (!available()) return false
+        next = action(`window.chooseCaptureTarget(${JSON.stringify(projects)}, ${JSON.stringify(error)}, ${JSON.stringify(capture.agentId)})`)
+      }
+      return false
     } catch (error) {
       if (active === task && !task.window?.isDestroyed()) onError(error)
       return false
@@ -81,4 +138,4 @@ function createQuickCapture({ desktopCapturer, clipboard, ClipboardItem, Browser
   return { start, cancel }
 }
 
-module.exports = { createQuickCapture, pixelRegion }
+module.exports = { createQuickCapture, pixelRegion, captureProjects }

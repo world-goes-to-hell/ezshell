@@ -8,6 +8,8 @@
 //   - checklist: a number toggles its box ("[✔]") without moving the selection; a typed answer is typed on the
 //     "Type something" row (reached with ↓); the row below it ("Next", last "Submit") with Enter moves on
 //   - several questions end on "Review your answers": "● <question>" / "→ <answers>", "❯ 1. Submit answers"
+//   - choices with previews (single choice only): the chosen one's preview in a box to the right, no "Type
+//     something"; a number only moves the selection, Enter picks it
 // Before the last key the answers on that review are compared with the ones chosen; anything unexpected
 // stops the run where it is (the window then hands the pane to the terminal).
 
@@ -24,13 +26,18 @@ const UNANSWERED = /Some questions are unanswered/i
 const EDIT_HINT = /\bctrl\+g to edit\b/i
 const SUBMIT_ANSWERS = new RegExp(`^\\s*(${POINTER})?\\s*1\\.\\s+Submit answers\\s*$`, 'u')
 const bare = line => String(line ?? '').replace(/^\s*[│┃|]\s?/u, '').replace(/\s*[│┃|]\s*$/u, '')
+// A question whose choices have previews draws the chosen one's preview in a box right of the choices:
+// "❯ 1. Icon card      ┌────┐" / "    (Recommended)   │ … │". Its rows are cut where the box starts.
+const PREVIEW_TOP = /\S\s{2,}┌─+┐\s*$/u
+const PREVIEW_PART = /\s{2,}[┌│└].*$/u
 
 /**
  * The question screen: { question (its text, spaces removed; null when a low pane scrolled it off),
  * options: [{ number, checked, text }], pointer (number, 'move' on Next / Submit, or null) }, or null
  */
 function readQuestionScreen(lines) {
-  const rows = lines.map(bare)
+  const preview = lines.some(line => PREVIEW_TOP.test(String(line ?? '')))
+  const rows = lines.map(line => bare(preview ? String(line ?? '').replace(PREVIEW_PART, '') : line))
   // A narrow pane folds the hint over two rows ("… navigate ·" / "Esc to cancel")
   const hint = rows.findLastIndex((row, index) => HINT.test(row) || HINT.test(row.trimEnd() + ' ' + (rows[index + 1] ?? '').trim()))
   if (hint < 0) return null
@@ -64,7 +71,7 @@ function readQuestionScreen(lines) {
       last.more = (last.more ?? '') + row.trim()
     }
   }
-  return { question: question === null ? null : compact(question), options, pointer }
+  return { question: question === null ? null : compact(question), options, pointer, preview }
 }
 
 /** The review before submitting: { entries: [{ question, answer }] (spaces removed), unanswered, ready }, or null */
@@ -127,8 +134,11 @@ function createClaudeQuestionAnswerer({ lines, write, hold = () => {}, appCursor
     }
   }
   const arrow = direction => (appCursor() ? '\x1bO' : '\x1b[') + direction
-  const labelsMatch = (screen, question) => question.options.every((option, index) =>
-    compact(screen.options.find(row => row.number === index + 1)?.text) === compact(option.label))
+  // Beside a preview box a long label goes on in the next row (there are no descriptions there)
+  const labelsMatch = (screen, question) => question.options.every((option, index) => {
+    const row = screen.options.find(entry => entry.number === index + 1)
+    return compact(row?.text) === compact(option.label) || (screen.preview && compact((row?.text ?? '') + (row?.more ?? '')) === compact(option.label))
+  })
   // The question on screen: by its text (a notice drawn over the dialog's right side may follow it on
   // the row), or, once a low pane scrolled the text off, by every label of its choices
   const on = question => {
@@ -172,6 +182,15 @@ function createClaudeQuestionAnswerer({ lines, write, hold = () => {}, appCursor
   const leaves = question => until(() => !on(question))
 
   async function single(question, answer) {
+    // With previews the number only moves the selection (its preview shows) and Enter picks it; there is
+    // no "Type something" row
+    if (on(question)?.preview) {
+      const number = answer.picks[0] + 1
+      if (answer.other || !number) return 'changed'
+      if (!(await press(question, String(number), screen => screen.pointer === number))) return 'stuck'
+      if (!write('\r')) return 'changed'
+      return (await leaves(question)) ? null : 'stuck'
+    }
     if (!answer.other) {
       if (!on(question) || !write(String(answer.picks[0] + 1))) return 'changed'
       return (await leaves(question)) ? null : 'stuck'
