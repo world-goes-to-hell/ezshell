@@ -5,20 +5,28 @@ const path = require('node:path')
 const profile = app.commandLine.getSwitchValue('user-data-dir')
 
 const hotkey = require('../../out/main/src/globalDoubleTab.js')
-hotkey.createGlobalDoubleTab = ({ onCapture }) => {
+hotkey.createGlobalDoubleTab = ({ onCapture, onCaptureCancel }) => {
   const request = path.join(profile, 'capture-request')
+  const cancel = path.join(profile, 'capture-cancel')
   let timer
   return {
     start() {
       timer = setInterval(() => {
-        if (!fs.existsSync(request)) return
-        fs.unlinkSync(request)
-        onCapture()
+        if (fs.existsSync(request)) {
+          fs.unlinkSync(request)
+          onCapture()
+        }
+        if (fs.existsSync(cancel)) {
+          fs.unlinkSync(cancel)
+          onCaptureCancel()
+        }
       }, 50)
       timer.unref()
     },
     stop() { clearInterval(timer) },
-    setEnabled() {}
+    setEnabled() {},
+    focusCapture() {},
+    endCapture() {}
   }
 }
 
@@ -28,6 +36,13 @@ capture.createQuickCapture = options => createQuickCapture({
   ...options,
   desktopCapturer: {
     async getSources() {
+      const hold = path.join(profile, 'capture-hold')
+      if (fs.existsSync(hold)) {
+        fs.writeFileSync(path.join(profile, 'capture-opening'), '')
+        for (let attempt = 0; attempt < 160 && fs.existsSync(hold); attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 20))
+        }
+      }
       const { id } = options.getDisplay()
       const thumbnail = nativeImage.createFromBitmap(Buffer.alloc(800 * 600 * 4, 255), { width: 800, height: 600 })
       return [{ display_id: String(id), thumbnail }]

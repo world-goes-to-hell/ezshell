@@ -53,12 +53,14 @@ describe('the quick screen capture', () => {
 
   it('crops only the chosen part of a high-DPI monitor and copies it with the entered comment', async () => {
     const comment = '이 부분을 확인해 주세요.\n두 번째 줄'
-    const { capture, desktopCapturer, clipboard, image, png, windows, display } = setup({ region: selection, comment })
+    const focusWindow = vi.fn()
+    const { capture, desktopCapturer, clipboard, image, png, windows, display } = setup({ region: selection, comment }, { focusWindow })
     expect(await capture.start()).toBe(true)
     expect(desktopCapturer.getSources).toHaveBeenCalledWith({ types: ['screen'], thumbnailSize: { width: 1920, height: 1440 } })
     expect(windows[0].options).toMatchObject({ ...display.bounds, frame: false, show: false })
     expect(windows[0].loadURL).toHaveBeenCalledWith(expect.stringMatching(/^data:text\/html/))
     expect(windows[0].show).toHaveBeenCalledTimes(1)
+    expect(focusWindow).toHaveBeenCalledExactlyOnceWith(windows[0])
     expect(windows[0].setFullScreen).toHaveBeenCalledWith(true)
     expect(image.crop).toHaveBeenCalledWith({ x: 480, y: 720, width: 960, height: 360 })
     expect(clipboard.write).toHaveBeenCalledOnce()
@@ -80,6 +82,20 @@ describe('the quick screen capture', () => {
     expect(await capture.start()).toBe(false)
     expect(clipboard.write).not.toHaveBeenCalled()
     expect(windows[0].destroy).toHaveBeenCalled()
+  })
+
+  it('cancels before the display thumbnail arrives so the overlay cannot appear later', async () => {
+    const { capture, desktopCapturer, clipboard, windows, onError } = setup()
+    let resolveSources
+    desktopCapturer.getSources.mockImplementationOnce(() => new Promise(resolve => { resolveSources = resolve }))
+    const pending = capture.start()
+    capture.cancel()
+    expect(await pending).toBe(false)
+    resolveSources([])
+    expect(windows).toHaveLength(0)
+    expect(clipboard.write).not.toHaveBeenCalled()
+    expect(onError).not.toHaveBeenCalled()
+    expect(await capture.start()).toBe(true)
   })
 
   it('never captures while locked or opens multiple overlays', async () => {

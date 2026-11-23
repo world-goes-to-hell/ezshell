@@ -22,22 +22,33 @@ const { check, finish } = createChecks()
     }
     return false
   }
-  const openCapture = async comment => {
+  const openOverlay = async () => {
     fs.writeFileSync(file('capture-request'), '')
     const overlay = await connect(isOverlay)
-    const { send, js, until, type } = overlay
-    if (!(await until('document.hasFocus() && typeof window.chooseCaptureTarget === "function"'))) throw new Error('capture was not ready')
-    const end = await js('[Math.floor(innerWidth / 2), Math.floor(innerHeight / 2)]')
-    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 100, y: 100, button: 'left', buttons: 1, clickCount: 1 })
-    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: end[0], y: end[1], button: 'left', buttons: 1 })
-    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: end[0], y: end[1], button: 'left', buttons: 0, clickCount: 1 })
-    if (!(await until('document.activeElement.id === "comment"', 3000))) {
-      throw new Error('region was not selected: ' + await js(`JSON.stringify({
+    if (!(await overlay.until('document.hasFocus() && typeof window.chooseCaptureTarget === "function"'))) throw new Error('capture was not ready')
+    return overlay
+  }
+  const setViewport = async (overlay, width, height, deviceScaleFactor) => {
+    const result = await overlay.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor, mobile: false })
+    if (result.error || !await overlay.until(`innerWidth === ${width} && innerHeight === ${height} && devicePixelRatio === ${deviceScaleFactor}`, 3000)) {
+      throw new Error(`capture viewport did not become ${width}x${height} at ${deviceScaleFactor}`)
+    }
+  }
+  const selectRegion = async (overlay, from, to) => {
+    await drag(overlay, from, to)
+    if (!(await overlay.until('document.activeElement.id === "comment"', 3000))) {
+      throw new Error('region was not selected: ' + await overlay.js(`JSON.stringify({
         focus: document.activeElement.id, screen: [innerWidth, innerHeight], state: { ...document.body.dataset },
         selection: document.querySelector('#selection').style.cssText
       })`))
     }
-    await type(comment)
+  }
+  const openCapture = async comment => {
+    const overlay = await openOverlay()
+    // The fixture bitmap is fixed. Draw marks at the same scale on every test monitor.
+    await setViewport(overlay, 1280, 880, 1.25)
+    await selectRegion(overlay, [100, 100], [640, 440])
+    await overlay.type(comment)
     return overlay
   }
   // A drag on the overlay (the marks are drawn with the pointer)
@@ -116,6 +127,59 @@ const { check, finish } = createChecks()
   fs.mkdirSync(service)
   fs.mkdirSync(tools)
   await unlock(main)
+  fs.writeFileSync(file('capture-hold'), '')
+  fs.writeFileSync(file('capture-request'), '')
+  if (!(await waitFor(() => fs.existsSync(file('capture-opening'))))) throw new Error('Capture did not begin loading')
+  fs.writeFileSync(file('capture-cancel'), '')
+  if (!(await waitFor(() => !fs.existsSync(file('capture-cancel'))))) throw new Error('Cancel signal was not read')
+  fs.unlinkSync(file('capture-hold'))
+  await sleep(300)
+  check('Esc reported while the display is loading prevents the overlay from appearing', !(await pages()).some(isOverlay))
+
+  fs.writeFileSync(file('capture-request'), '')
+  const beforeSelection = await connect(isOverlay)
+  if (!(await beforeSelection.until('document.hasFocus() && !document.body.hasAttribute("data-review")'))) {
+    throw new Error('New capture overlay did not receive focus')
+  }
+  // The window can close before CDP acknowledges the Escape key.
+  void beforeSelection.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {})
+  check('Escape closes a new capture before any click or selection', await waitFor(async () => !(await pages()).some(isOverlay)))
+  beforeSelection.close()
+  check('cancelling a new capture leaves the clipboard alone', !fs.existsSync(file('capture-copied')))
+
+  const placement = await openOverlay()
+  const cases = [
+    { name: 'below at 125%', viewport: [1280, 880, 1.25], from: [140, 100], to: [800, 260], side: 'below' },
+    { name: 'above at 150%', viewport: [1100, 820, 1.5], from: [180, 490], to: [950, 760], side: 'above' },
+    { name: 'on the right at 150%', viewport: [1100, 720, 1.5], from: [40, 160], to: [390, 580], side: 'right', shot: 'quick-capture-toolbar-side-150' },
+    { name: 'on the left at 125%', viewport: [1100, 720, 1.25], from: [710, 160], to: [1040, 580], side: 'left' },
+    { name: 'below on a narrow display at 150%', viewport: [400, 820, 1.5], from: [24, 50], to: [360, 140], side: 'below', wrapped: true },
+    { name: 'in a scrollable strip at 150%', viewport: [720, 530, 1.5], from: [124, 195], to: [596, 345], side: 'above', clipped: true, shot: 'quick-capture-toolbar-narrow-150' }
+  ]
+  for (const scenario of cases) {
+    await setViewport(placement, ...scenario.viewport)
+    await selectRegion(placement, scenario.from, scenario.to)
+    const position = await placement.js(`(() => {
+      const selection = document.querySelector('#selection').getBoundingClientRect()
+      const review = document.querySelector('#review')
+      const panel = review.getBoundingClientRect()
+      const side = panel.top >= selection.bottom + 11 ? 'below' : panel.bottom <= selection.top - 11 ? 'above'
+        : panel.left >= selection.right + 11 ? 'right' : panel.right <= selection.left - 11 ? 'left' : 'overlap'
+      return { side, inView: panel.left >= 11 && panel.top >= 11 && panel.right <= innerWidth - 11 && panel.bottom <= innerHeight - 11,
+        width: panel.width, height: panel.height, clipped: review.scrollHeight > review.clientHeight,
+        wrapped: new Set([...document.querySelectorAll('[data-tool]')].map(button => button.getBoundingClientRect().top)).size > 1 }
+    })()`)
+    check(`the toolbar fits outside the selection ${scenario.name}`, position.side === scenario.side && position.inView
+      && position.clipped === Boolean(scenario.clipped) && (!scenario.wrapped || position.wrapped), JSON.stringify(position))
+    if (scenario.shot) await placement.shot(scenario.shot)
+    await placement.js('document.querySelector("#reselect").scrollIntoView({ block: "nearest" })')
+    await clickButton(placement, '#reselect')
+    if (!await placement.until('document.querySelector("#review").hidden')) throw new Error('the selection did not reset')
+  }
+  void placement.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {})
+  if (!(await waitFor(async () => !(await pages()).some(isOverlay)))) throw new Error('placement fixture did not close')
+  placement.close()
+
   await openLocalAgent(main, 'codex', service)
   await openLocalAgent(main, 'claude', tools)
   if (!(await waitFor(() => read('codex-1-tools') && read('claude-2-tools')))) throw new Error('fake agents did not start')
@@ -127,6 +191,26 @@ const { check, finish } = createChecks()
     !document.querySelector('#ink').hidden && document.querySelector('[data-tool="arrow"]').getAttribute('aria-pressed') === 'true'
     && document.querySelector('#undo').disabled
   `), await overlay.js(`JSON.stringify({ ink: document.querySelector('#ink').hidden, arrow: document.querySelector('[data-tool="arrow"]').getAttribute('aria-pressed'), undo: document.querySelector('#undo').disabled })`))
+  check('the toolbar shows the names and shortcuts of all six tools', await overlay.js(`(() => {
+    const tools = [...document.querySelectorAll('[data-tool]')]
+    return tools.map(button => button.querySelector('kbd').textContent).join('') === 'ARPTNM' && tools.every(button => {
+      const label = button.getAttribute('aria-label')
+      const key = button.getAttribute('aria-keyshortcuts')
+      return button.innerText.includes(label) && button.title.includes(label + ' (' + key + ')')
+    }) && document.querySelector('#work').getAttribute('aria-describedby') === 'work-description'
+  })()`))
+  await overlay.js('document.querySelector("#comment").blur()')
+  await overlay.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'm', code: 'KeyM', windowsVirtualKeyCode: 77 })
+  await overlay.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'm', code: 'KeyM', windowsVirtualKeyCode: 77 })
+  check('the mosaic shortcut changes the pressed tool', await overlay.js(`document.querySelector('[data-tool="mosaic"]').getAttribute('aria-pressed') === 'true'`))
+  await clickButton(overlay, '[data-color="#0a84ff"]')
+  check('the selected color is checked and used in all three stroke previews', await overlay.js(`
+    document.querySelector('[data-color="#0a84ff"]').getAttribute('aria-pressed') === 'true' &&
+    getComputedStyle(document.querySelector('[data-color="#0a84ff"] .swatch-dot .icon')).visibility === 'visible' &&
+    [...document.querySelectorAll('.stroke')].every(stroke => getComputedStyle(stroke).backgroundColor === 'rgb(10, 132, 255)')
+  `))
+  await clickButton(overlay, '[data-color="#ff3b30"]')
+  await clickButton(overlay, '[data-tool="arrow"]')
   await drag(overlay, [140, 140], [320, 260])
   await clickButton(overlay, '[data-tool="box"]')
   await drag(overlay, [160, 280], [300, 340])
@@ -134,6 +218,7 @@ const { check, finish } = createChecks()
   await clickButton(overlay, '#undo')
   check('undo takes back the last mark', await overlay.js('!document.querySelector("#redo").disabled'))
   await clickButton(overlay, '#redo')
+  await overlay.shot('quick-capture-toolbar')
   await overlay.shot('quick-capture-marks')
   await clickButton(overlay, '#work')
   check('quick work lists two projects without submitting a capture', await overlay.until(`
@@ -186,9 +271,46 @@ const { check, finish } = createChecks()
     document.querySelector('#comment').value === ${JSON.stringify('Claude에게 보낼 코멘트' + String.fromCharCode(10) + '1. ')}
   `))
   await second.js(`document.querySelector('#comment').value = ${JSON.stringify(claudeComment)}`)
+  await second.js(`(() => {
+    const comment = document.querySelector('#comment')
+    comment.focus()
+    comment.setSelectionRange(comment.value.length, comment.value.length)
+  })()`)
+  const composing = await second.send('Input.imeSetComposition', { text: 'ㅎ', selectionStart: 1, selectionEnd: 1 })
+  if (composing.error) throw new Error('Could not start the test IME composition')
+  const composingEscape = await Promise.race([
+    second.js(`(() => {
+      const comment = document.querySelector('#comment')
+      if (!comment.value.endsWith('ㅎ')) return false
+      comment.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true }))
+      return document.activeElement === comment
+    })()`),
+    sleep(3000).then(() => false)
+  ])
+  const keptComposing = composingEscape && (await pages()).some(isOverlay)
+  check('an Escape during Korean IME composition keeps the capture open', keptComposing)
+  if (!keptComposing) throw new Error('Capture closed during IME composition')
+  await second.send('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 })
+  await second.js(`document.querySelector('#comment').value = ${JSON.stringify(claudeComment)}`)
+
+  const existingMarks = await second.js("document.querySelector('#ink').toDataURL()")
   await clickButton(second, 'button[data-tool="text"]')
   await second.click(240, 150)
   check('the text tool opens a field where it was clicked', await second.until('document.activeElement?.classList.contains("ink-text")', 3000))
+  await second.type('버릴 글자')
+  void second.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {})
+  const keptCapture = await Promise.race([
+    second.until(`
+      !document.querySelector('.ink-text') && document.querySelector('#ink').toDataURL() === ${JSON.stringify(existingMarks)} &&
+      document.querySelector('#comment').value === ${JSON.stringify(claudeComment)}
+    `, 3000),
+    sleep(3500).then(() => false)
+  ])
+  check('Escape in the text tool drops only the draft text and preserves the capture', keptCapture)
+  if (!keptCapture) throw new Error('Text Escape did not preserve the capture')
+  await second.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await second.click(240, 150)
+  await second.until('document.activeElement?.classList.contains("ink-text")')
   await second.type('여기 확인')
   await second.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
   await second.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })

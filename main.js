@@ -589,6 +589,7 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
   repoFolders: localGit.repoFolders,
   storeAttachment: image => ({ preview: imagePreview(image), file: localTerminalClipboard.storeImage(image) }),
   sendCapture: (...args) => agentChatIpc.sendCapture(...args),
+  focusWindow: win => globalDoubleTab.focusCapture(win.getNativeWindowHandle()),
   onSent: ({ id }) => {
     try {
       if (Notification.isSupported()) new Notification({ title: 'ezShell 바로작업', body: `${id}에 캡처를 보냈습니다.` }).show();
@@ -603,7 +604,8 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
 // The overview opens on the monitor of the program that was in front (the helper gives the middle of
 // its window in screen pixels), not on ezShell's.
 const globalDoubleTab = require('./src/globalDoubleTab.js').createGlobalDoubleTab({
-  onCapture: () => { void quickCapture.start(); },
+  onCapture: () => { void quickCapture.start().finally(() => globalDoubleTab.endCapture()); },
+  onCaptureCancel: () => quickCapture.cancel(),
   onDoubleTab: point => {
     if (!mainWindow || mainWindow.isDestroyed() || isAppLocked) return;
     const { screen } = require('electron');

@@ -221,7 +221,8 @@ function installCaptureEditor() {
     input.addEventListener('keydown', key => {
       // The overlay closes on Esc: here it only drops the text being typed
       key.stopPropagation()
-      if (key.key === 'Enter' && !key.isComposing) { key.preventDefault(); finishTyping(true) }
+      if (key.isComposing) return
+      if (key.key === 'Enter') { key.preventDefault(); finishTyping(true) }
       if (key.key === 'Escape') { key.preventDefault(); finishTyping(false) }
     })
     input.addEventListener('blur', () => finishTyping(true))
@@ -238,6 +239,7 @@ function installCaptureEditor() {
   }
   function selectColor(next) {
     color = next
+    tools.style.setProperty('--ink', next)
     for (const button of tools.querySelectorAll('[data-color]')) button.setAttribute('aria-pressed', String(button.dataset.color === next))
   }
   function selectWidth(next) {

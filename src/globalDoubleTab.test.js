@@ -98,17 +98,25 @@ describe('Tab Tab from any program', () => {
   it('forwards capture only while enabled and leaves Tab Tab as a separate notification', () => {
     const { spawn, children } = fakeSpawn()
     const onCapture = vi.fn()
+    const onCaptureCancel = vi.fn()
     const onDoubleTab = vi.fn()
-    const watch = createGlobalDoubleTab({ onCapture, onDoubleTab, platform: 'win32', spawn })
+    const watch = createGlobalDoubleTab({ onCapture, onCaptureCancel, onDoubleTab, platform: 'win32', spawn })
     watch.start(handle(9))
     const [child] = children
-    child.stdout.emit('data', 'capture\r\n')
+    child.stdout.emit('data', 'capture\r\ncapture-cancel\r\n')
     expect(onCapture).not.toHaveBeenCalled()
+    expect(onCaptureCancel).not.toHaveBeenCalled()
     watch.setEnabled(true)
     child.stdout.emit('data', 'cap')
-    child.stdout.emit('data', 'ture\r\ndouble 10 20\r\n')
+    child.stdout.emit('data', 'ture\r\ncapture-cancel 27\r\ncapture-cancel\r\ndouble 10 20\r\n')
     expect(onCapture).toHaveBeenCalledTimes(1)
+    expect(onCaptureCancel).toHaveBeenCalledTimes(1)
+    expect(onCapture.mock.invocationCallOrder[0]).toBeLessThan(onCaptureCancel.mock.invocationCallOrder[0])
     expect(onDoubleTab).toHaveBeenCalledWith({ x: 10, y: 20 })
+    watch.focusCapture(Buffer.alloc(0))
+    watch.focusCapture(handle(42))
+    watch.endCapture()
+    expect(child.written).toEqual(['on\n', 'capture-focus 42\n', 'capture-end\n'])
     watch.stop()
   })
 
@@ -132,6 +140,29 @@ if (!(G 0 $true $false) -or (G 0 $true $false)) { exit 6 }
 G 13 $true $true
 G 13 $false $true
 if (G 0 $true $false) { exit 7 }
+$flags = [Reflection.BindingFlags]'NonPublic,Static'
+$escape = [EzShellDoubleTab].GetMethod('CaptureEscape', $flags)
+$state = [EzShellDoubleTab].GetField('captureState', $flags)
+$captureWindow = [EzShellDoubleTab].GetField('captureWindow', $flags)
+$modifiers = [EzShellDoubleTab].GetField('modifiers', $flags)
+$messages = [EzShellDoubleTab].GetField('captureMessages', $flags).GetValue($null)
+function E([bool]$down, [bool]$up, [long]$front = 0) {
+  [bool]$escape.Invoke($null, @($down, $up, [IntPtr]::new($front)))
+}
+if ((E $true $false) -or $messages.Count -ne 0) { exit 8 }
+$state.SetValue($null, 1)
+$modifiers.SetValue($null, 7)
+if ((E $true $false) -or $messages.Count -ne 0) { exit 9 }
+$modifiers.SetValue($null, 0)
+$captureWindow.SetValue($null, [long]42)
+if ((E $true $false 42) -or (E $false $true 42) -or $messages.Count -ne 0) { exit 13 }
+if (!(E $true $false) -or !(E $true $false) -or $messages.Count -ne 1) { exit 10 }
+if ($messages.Take() -ne 'capture-cancel') { exit 11 }
+$state.SetValue($null, 0)
+if (!(E $false $true) -or (E $true $false)) { exit 12 }
+$captureWindow.SetValue($null, [long]0)
+$state.SetValue($null, 1)
+if (!(E $true $false) -or !(E $false $true) -or $messages.Take() -ne 'capture-cancel') { exit 14 }
 `
     const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
     execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {

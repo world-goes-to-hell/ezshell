@@ -25,19 +25,23 @@ async function captureProjects(agents, repoFolders) {
 
 function createQuickCapture({
   desktopCapturer, clipboard, ClipboardItem, BrowserWindow, getDisplay, isAvailable, nativeImage = null,
-  listAgents = () => [], repoFolders = async () => [], storeAttachment, sendCapture, onSent = () => {}, onError = () => {}
+  listAgents = () => [], repoFolders = async () => [], storeAttachment, sendCapture, focusWindow = () => {},
+  onSent = () => {}, onError = () => {}
 }) {
   let active = null
 
   function cancel() {
     const task = active
     active = null
+    task?.abort()
     if (task?.window && !task.window.isDestroyed()) task.window.destroy()
   }
 
   async function start() {
     if (active || !isAvailable()) return false
-    const task = { window: null }
+    let abort
+    const cancelled = new Promise(resolve => { abort = () => resolve([]) })
+    const task = { window: null, abort }
     active = task
     let timer
     try {
@@ -48,7 +52,8 @@ function createQuickCapture({
           types: ['screen'],
           thumbnailSize: { width: Math.round(bounds.width * scaleFactor), height: Math.round(bounds.height * scaleFactor) }
         }),
-        new Promise(resolve => { timer = setTimeout(resolve, 4000, []); timer.unref?.() })
+        new Promise(resolve => { timer = setTimeout(resolve, 4000, []); timer.unref?.() }),
+        cancelled
       ])
       if (active !== task || !isAvailable()) return false
       const image = sources.find(source => source.display_id === String(display.id))?.thumbnail
@@ -77,6 +82,7 @@ function createQuickCapture({
       win.show()
       win.moveTop()
       win.focus()
+      focusWindow(win)
       let projects = []
       let targets = new Map()
       // The stored file of the image last sent: a retry reuses it unless the marks changed meanwhile

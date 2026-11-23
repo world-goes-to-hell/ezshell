@@ -18,18 +18,34 @@ const page = `<!doctype html>
   #hint { position: absolute; z-index: 1; top: 20px; left: 50%; transform: translateX(-50%); white-space: nowrap;
     padding: 8px 12px; border: 1px solid #ffffff30; border-radius: 7px; background: #1c2330; pointer-events: none; }
   body[data-selecting] #hint { display: none; }
-  #review { position: absolute; z-index: 2; width: min(440px, calc(100% - 24px)); padding: 12px;
+  #review { position: absolute; z-index: 2; width: min(532px, calc(100% - 24px)); padding: 16px;
     max-height: calc(100% - 24px); overflow: auto;
-    border: 1px solid #414d5f; border-radius: 10px; background: #1c2330; box-shadow: 0 8px 28px #0006; }
+    border: 1px solid #627289; border-radius: 12px; background: #19212e;
+    box-shadow: 0 0 0 1px #1219268c, 0 10px 25px #0c111c66, 0 2px 6px #0004; }
+  #review:has(#review-comment[hidden]) { width: min(440px, calc(100% - 24px)); padding: 12px; }
   #review label { display: block; margin-bottom: 7px; font-weight: 600; }
-  #comment { display: block; width: 100%; height: 66px; resize: none; padding: 7px 9px; font: inherit;
-    line-height: 1.4; color: inherit; background: #131820; border: 1px solid #475466; border-radius: 6px; }
+  #review-comment { container-type: inline-size; line-height: 1.45; }
+  .comment-field { display: grid; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid #343f52; }
+  #review .comment-field label { margin: 0; }
+  .optional { color: #a6b4c8; font-weight: 400; }
+  #comment { display: block; width: 100%; height: 56px; resize: none; padding: 9px 10px; font: inherit;
+    color: inherit; background: #111823; border: 1px solid #45546d; border-radius: 6px; }
+  #comment::placeholder { color: #97a7be; }
   .actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 9px; }
   button { min-width: 60px; padding: 5px 12px; font: inherit; color: inherit; cursor: pointer;
     background: #293444; border: 1px solid #475466; border-radius: 6px; }
   button:hover { background: #354355; }
-  #work { background: #356ad0; border-color: #5687e6; }
-  #work:hover { background: #4074dc; }
+  #review-comment button { min-width: 0; height: 40px; padding: 0 9px; border-color: #39475e; background: #222e40; }
+  #review-comment button:hover:not(:disabled) { border-color: #637695; background: #2c3a50; }
+  #review-comment button:disabled { opacity: 1; color: #7b899d; background: #1e2736; border-color: #354155; }
+  #review-comment button[aria-pressed="true"] { border-color: #9dc6ff; background: #253e62; box-shadow: inset 0 0 0 1px #81b4fa18; }
+  #review-comment button[aria-pressed="true"]:hover { border-color: #bed9ff; background: #2c4c77; }
+  .review-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  #review-comment .review-actions button { padding: 0 12px; }
+  #review-comment #cancel { margin-right: auto; border-color: transparent; background: transparent; }
+  #review-comment #work { border-color: #80acff; background: #3267ce; font-weight: 600; }
+  #review-comment #work:hover { border-color: #b0ceff; background: #3b76e2; }
+  #work-description { margin: 7px 0 0; color: #a6b4c8; text-align: right; font-size: 12px; }
   :is(button, textarea, select):focus-visible { outline: 2px solid #83acff; outline-offset: 1px; }
   :is(button, select):disabled { opacity: .55; cursor: default; }
   #project { width: 100%; padding: 6px 8px; color: inherit; color-scheme: dark; font: inherit;
@@ -48,19 +64,59 @@ const page = `<!doctype html>
   #ink { position: absolute; z-index: 1; cursor: crosshair; touch-action: none; }
   #ink[data-ink-tool="text"] { cursor: text; }
   #ink[data-ink-tool="badge"] { cursor: copy; }
-  #tools { display: grid; gap: 6px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #333f50; }
-  .tool-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-  #tools button { min-width: 30px; height: 30px; padding: 0 7px; line-height: 1; }
-  #tools button[aria-pressed="true"] { background: #356ad0; border-color: #83acff; }
-  #tools .tool { font-size: 15px; }
-  #tools .text-button { font-size: 12px; }
-  #tools .swatch { min-width: 22px; width: 22px; height: 22px; padding: 0; border-radius: 50%; }
-  #tools .swatch[aria-pressed="true"] { outline: 2px solid #fff; outline-offset: 1px; }
-  #tools .weight span { display: block; width: 14px; background: currentColor; border-radius: 2px; }
-  .tool-gap { flex: 1; }
+  #tools { --ink: #ff3b30; }
+  .icon { display: block; flex: none; width: 17px; height: 17px; fill: none; stroke: currentColor;
+    stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .tool-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+  #tools .tool-tile { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px;
+    padding: 2px; font-size: 11px; line-height: 13px; white-space: nowrap; }
+  .tile-top { display: flex; align-items: center; gap: 6px; }
+  .tool-tile[aria-pressed="true"] .icon { color: #b0d0ff; }
+  kbd { display: inline-flex; min-width: 17px; height: 15px; justify-content: center; align-items: center; padding: 0 3px;
+    border: 1px solid #506078; border-radius: 3px; background: #17202f; color: #c2d1e6; font: 10px/1 Consolas, monospace; }
+  .styles { display: flex; flex-wrap: wrap; gap: 12px 16px; margin-top: 16px; }
+  .style-group { display: grid; gap: 6px; align-content: start; }
+  .style-group + .style-group { padding-left: 16px; border-left: 1px solid #343f52; }
+  .group-label { color: #c2cddd; font-size: 12px; font-weight: 600; }
+  .style-buttons { display: flex; flex-wrap: wrap; gap: 4px; }
+  #tools .style-button { display: grid; place-items: center; width: 40px; padding: 0; }
+  .swatch-dot { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid #ffffff30;
+    border-radius: 50%; background: var(--swatch); }
+  .swatch-dot .icon { width: 12px; height: 12px; color: #111722; stroke-width: 2.4; visibility: hidden; }
+  [aria-pressed="true"] .swatch-dot { box-shadow: 0 0 0 2px #121a29, 0 0 0 3px #f6f8fd; }
+  [aria-pressed="true"] .swatch-dot .icon { visibility: visible; }
+  .stroke { width: 22px; height: var(--weight); border-radius: 12px; background: var(--ink); }
+  .editing { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding-top: 8px; border-top: 1px solid #343f52; }
+  .editing button, .review-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
+  #tools #reselect { margin-left: auto; border-color: transparent; background: transparent; color: #bac7d8; }
+  @container (max-width: 405px) {
+    .tool-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .style-group + .style-group { padding-left: 0; border-left: none; }
+    #tools #reselect { margin-left: 0; }
+  }
   .ink-text { position: absolute; z-index: 3; min-width: 120px; padding: 1px 4px; background: #000a;
     border: 1px dashed #ffffffaa; border-radius: 3px; outline: none; }
 </style>
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="capture-arrow" viewBox="0 0 20 20"><path d="M4 16 16 4M9 4h7v7"/></symbol>
+  <symbol id="capture-box" viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="1.5"/></symbol>
+  <symbol id="capture-pen" viewBox="0 0 20 20"><path d="m4 13-.7 3.7L7 16l9-9a1.8 1.8 0 0 0-2.5-2.5L4 13Zm8.4-7.1 2.5 2.5"/></symbol>
+  <symbol id="capture-text" viewBox="0 0 20 20"><path d="M4 6V4h12v2M10 4v12m-3 0h6"/></symbol>
+  <symbol id="capture-badge" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.3"/><path d="m8.4 8 1.6-1.7v7.2"/></symbol>
+  <symbol id="capture-mosaic" viewBox="0 0 20 20">
+    <g fill="currentColor" stroke="none"><rect x="2" y="3" width="5" height="5" rx=".6"/><rect x="2" y="9" width="5" height="5" rx=".6" opacity=".74"/>
+      <rect x="8.5" y="5" width="4" height="4" rx=".5" opacity=".83"/><rect x="8.5" y="10.5" width="4" height="4" rx=".5" opacity=".58"/>
+      <rect x="14" y="3" width="2.5" height="2.5" rx=".4" opacity=".59"/><rect x="14.5" y="8" width="3" height="3" rx=".4" opacity=".72"/>
+      <rect x="15.7" y="13" width="2" height="2" rx=".4" opacity=".43"/><rect x="5.7" y="15.4" width="2.4" height="2.4" rx=".4" opacity=".46"/></g>
+  </symbol>
+  <symbol id="capture-undo" viewBox="0 0 20 20"><path d="M7 4 3 8l4 4M3 8h9a4 4 0 0 1 0 8H9"/></symbol>
+  <symbol id="capture-redo" viewBox="0 0 20 20"><path d="m13 4 4 4-4 4m4-4H8a4 4 0 0 0 0 8h3"/></symbol>
+  <symbol id="capture-clear" viewBox="0 0 20 20"><path d="M4 6h12m-8 0V4h4v2M6 6l.6 10h6.8L14 6M9 9v4m2-4v4"/></symbol>
+  <symbol id="capture-region" viewBox="0 0 20 20"><path d="M3 7V3h4m6 0h4v4m0 6v4h-4m-6 0H3v-4"/></symbol>
+  <symbol id="capture-copy" viewBox="0 0 20 20"><rect x="7" y="7" width="9" height="10" rx="1.2"/><path d="M13 7V4H4v10h3"/></symbol>
+  <symbol id="capture-send" viewBox="0 0 20 20"><path d="m3 9 14-5-4 13-3-5-7-3Zm7 3 7-8"/></symbol>
+  <symbol id="capture-check" viewBox="0 0 20 20"><path d="m4 10 4 4 8-8"/></symbol>
+</svg>
 <img id="snapshot" alt="" draggable="false">
 <div id="hint">드래그해서 영역 선택 · Esc 취소</div>
 <div id="selection" hidden></div>
@@ -68,38 +124,63 @@ const page = `<!doctype html>
 <form id="review" aria-label="캡처 확인" hidden>
   <div id="review-comment">
     <div id="tools" role="toolbar" aria-label="표시 도구">
-      <div class="tool-row">
-        <button type="button" class="tool" data-tool="arrow" title="화살표 (A)" aria-label="화살표">↗</button>
-        <button type="button" class="tool" data-tool="box" title="사각형 (R)" aria-label="사각형">▭</button>
-        <button type="button" class="tool" data-tool="pen" title="펜 (P)" aria-label="펜">✎</button>
-        <button type="button" class="tool" data-tool="text" title="글자 (T)" aria-label="글자">T</button>
-        <button type="button" class="tool" data-tool="badge" title="번호 (N): 코멘트에 같은 번호 줄이 생깁니다" aria-label="번호">①</button>
-        <button type="button" class="tool" data-tool="mosaic" title="모자이크 (M): 비밀번호·개인 정보 가리기" aria-label="모자이크">▦</button>
-        <span class="tool-gap"></span>
-        <button type="button" id="undo" class="tool" title="되돌리기 (Ctrl+Z)" aria-label="되돌리기">↶</button>
-        <button type="button" id="redo" class="tool" title="다시 실행 (Ctrl+Y)" aria-label="다시 실행">↷</button>
+      <div class="tool-grid">
+        <button type="button" class="tool-tile" data-tool="arrow" title="화살표 (A)" aria-label="화살표" aria-keyshortcuts="A">
+          <span class="tile-top"><svg class="icon" aria-hidden="true"><use href="#capture-arrow"/></svg><kbd aria-hidden="true">A</kbd></span>화살표
+        </button>
+        <button type="button" class="tool-tile" data-tool="box" title="사각형 (R)" aria-label="사각형" aria-keyshortcuts="R">
+          <span class="tile-top"><svg class="icon" aria-hidden="true"><use href="#capture-box"/></svg><kbd aria-hidden="true">R</kbd></span>사각형
+        </button>
+        <button type="button" class="tool-tile" data-tool="pen" title="펜 (P)" aria-label="펜" aria-keyshortcuts="P">
+          <span class="tile-top"><svg class="icon" aria-hidden="true"><use href="#capture-pen"/></svg><kbd aria-hidden="true">P</kbd></span>펜
+        </button>
+        <button type="button" class="tool-tile" data-tool="text" title="글자 (T)" aria-label="글자" aria-keyshortcuts="T">
+          <span class="tile-top"><svg class="icon" aria-hidden="true"><use href="#capture-text"/></svg><kbd aria-hidden="true">T</kbd></span>글자
+        </button>
+        <button type="button" class="tool-tile" data-tool="badge" title="번호 (N): 코멘트에 같은 번호 줄이 생깁니다" aria-label="번호" aria-keyshortcuts="N">
+          <span class="tile-top"><svg class="icon" aria-hidden="true"><use href="#capture-badge"/></svg><kbd aria-hidden="true">N</kbd></span>번호
+        </button>
+        <button type="button" class="tool-tile" data-tool="mosaic" title="모자이크 (M): 비밀번호·개인 정보 가리기" aria-label="모자이크" aria-keyshortcuts="M">
+          <span class="tile-top"><svg class="icon" aria-hidden="true"><use href="#capture-mosaic"/></svg><kbd aria-hidden="true">M</kbd></span>모자이크
+        </button>
       </div>
-      <div class="tool-row">
-        <button type="button" class="swatch" data-color="#ff3b30" style="background:#ff3b30" title="빨강" aria-label="빨강"></button>
-        <button type="button" class="swatch" data-color="#ffcc00" style="background:#ffcc00" title="노랑" aria-label="노랑"></button>
-        <button type="button" class="swatch" data-color="#34c759" style="background:#34c759" title="초록" aria-label="초록"></button>
-        <button type="button" class="swatch" data-color="#0a84ff" style="background:#0a84ff" title="파랑" aria-label="파랑"></button>
-        <button type="button" class="swatch" data-color="#ffffff" style="background:#ffffff" title="흰색" aria-label="흰색"></button>
-        <button type="button" class="weight" data-width="2" title="가늘게" aria-label="가늘게"><span style="height:2px"></span></button>
-        <button type="button" class="weight" data-width="4" title="보통" aria-label="보통"><span style="height:4px"></span></button>
-        <button type="button" class="weight" data-width="7" title="굵게" aria-label="굵게"><span style="height:7px"></span></button>
-        <span class="tool-gap"></span>
-        <button type="button" id="clear-marks" class="text-button" title="표시를 모두 지웁니다">모두 지우기</button>
-        <button type="button" id="reselect" class="text-button" title="표시를 버리고 영역을 다시 고릅니다">영역 다시</button>
+      <div class="styles">
+        <div class="style-group" role="group" aria-labelledby="capture-colors">
+          <span class="group-label" id="capture-colors">색</span>
+          <div class="style-buttons">
+            <button type="button" class="style-button" data-color="#ff3b30" style="--swatch:#ff3b30" title="빨강" aria-label="빨강"><span class="swatch-dot"><svg class="icon" aria-hidden="true"><use href="#capture-check"/></svg></span></button>
+            <button type="button" class="style-button" data-color="#ffcc00" style="--swatch:#ffcc00" title="노랑" aria-label="노랑"><span class="swatch-dot"><svg class="icon" aria-hidden="true"><use href="#capture-check"/></svg></span></button>
+            <button type="button" class="style-button" data-color="#34c759" style="--swatch:#34c759" title="초록" aria-label="초록"><span class="swatch-dot"><svg class="icon" aria-hidden="true"><use href="#capture-check"/></svg></span></button>
+            <button type="button" class="style-button" data-color="#0a84ff" style="--swatch:#0a84ff" title="파랑" aria-label="파랑"><span class="swatch-dot"><svg class="icon" aria-hidden="true"><use href="#capture-check"/></svg></span></button>
+            <button type="button" class="style-button" data-color="#ffffff" style="--swatch:#ffffff" title="흰색" aria-label="흰색"><span class="swatch-dot"><svg class="icon" aria-hidden="true"><use href="#capture-check"/></svg></span></button>
+          </div>
+        </div>
+        <div class="style-group" role="group" aria-labelledby="capture-weights">
+          <span class="group-label" id="capture-weights">굵기</span>
+          <div class="style-buttons">
+            <button type="button" class="style-button" data-width="2" title="가늘게" aria-label="가늘게"><span class="stroke" style="--weight:2px"></span></button>
+            <button type="button" class="style-button" data-width="4" title="보통" aria-label="보통"><span class="stroke" style="--weight:4px"></span></button>
+            <button type="button" class="style-button" data-width="7" title="굵게" aria-label="굵게"><span class="stroke" style="--weight:7px"></span></button>
+          </div>
+        </div>
+      </div>
+      <div class="editing" role="group" aria-label="표시 편집">
+        <button type="button" id="undo" title="되돌리기 (Ctrl+Z)" aria-label="되돌리기" aria-keyshortcuts="Control+Z"><svg class="icon" aria-hidden="true"><use href="#capture-undo"/></svg>되돌리기</button>
+        <button type="button" id="redo" title="다시 실행 (Ctrl+Y / Ctrl+Shift+Z)" aria-label="다시 실행" aria-keyshortcuts="Control+Y Control+Shift+Z"><svg class="icon" aria-hidden="true"><use href="#capture-redo"/></svg>다시 실행</button>
+        <button type="button" id="clear-marks" title="표시를 모두 지웁니다" aria-label="모두 지우기"><svg class="icon" aria-hidden="true"><use href="#capture-clear"/></svg>모두 지우기</button>
+        <button type="button" id="reselect" title="표시를 버리고 영역을 다시 고릅니다" aria-label="영역 다시"><svg class="icon" aria-hidden="true"><use href="#capture-region"/></svg>영역 다시</button>
       </div>
     </div>
-    <label for="comment">코멘트 (선택)</label>
-    <textarea id="comment" rows="2" placeholder="무엇이 문제이고 어떻게 바꿀지 적어 주세요"></textarea>
-    <div class="actions">
-      <button id="cancel" type="button">취소</button>
-      <button id="copy" type="submit">복사</button>
-      <button id="work" type="button">바로작업</button>
+    <div class="comment-field">
+      <label for="comment">코멘트 <span class="optional">(선택)</span></label>
+      <textarea id="comment" rows="2" placeholder="무엇이 문제이고 어떻게 바꿀지 적어 주세요"></textarea>
     </div>
+    <div class="review-actions">
+      <button id="cancel" type="button" aria-keyshortcuts="Escape">취소 <kbd aria-hidden="true">Esc</kbd></button>
+      <button id="copy" type="submit"><svg class="icon" aria-hidden="true"><use href="#capture-copy"/></svg>복사</button>
+      <button id="work" type="button" aria-describedby="work-description"><svg class="icon" aria-hidden="true"><use href="#capture-send"/></svg>바로작업</button>
+    </div>
+    <p id="work-description">프로젝트와 에이전트를 선택해 캡처와 코멘트를 보냅니다.</p>
   </div>
   <div id="picker" hidden>
     <label for="project">프로젝트 선택</label>
@@ -224,24 +305,44 @@ const page = `<!doctype html>
       delete document.body.dataset.selecting
     }
     function placeReview() {
-      if (!selection) return
+      if (!selection || review.hidden) return
+      // The selection, viewport, and panel all use CSS pixels at every display scale.
       const bounds = box.getBoundingClientRect()
-      const { offsetWidth: width, offsetHeight: height } = review
+      const scrollTop = review.scrollTop
+      review.style.width = ''
+      review.style.maxHeight = ''
+      const { width, height } = review.getBoundingClientRect()
       const gap = 12
-      const clamp = (value, limit) => Math.max(gap, Math.min(value, limit - gap))
-      let left = clamp(bounds.left, innerWidth - width)
+      const viewport = { width: innerWidth - gap * 2, height: innerHeight - gap * 2 }
+      const slots = [
+        { side: 'below', left: gap, top: bounds.bottom + gap, width: viewport.width, height: innerHeight - bounds.bottom - gap * 2 },
+        { side: 'above', left: gap, top: gap, width: viewport.width, height: bounds.top - gap * 2 },
+        { side: 'right', left: bounds.right + gap, top: gap, width: innerWidth - bounds.right - gap * 2, height: viewport.height },
+        { side: 'left', left: gap, top: gap, width: bounds.left - gap * 2, height: viewport.height }
+      ]
+      const clamp = (value, min, max) => Math.max(min, Math.min(value, max))
+      let slot = slots.find(space => space.width >= width && space.height >= height)
+      if (!slot) {
+        // Keep a scrollable panel outside the selection even if the full panel cannot fit there.
+        const area = space => Math.min(width, space.width) * Math.min(height, space.height)
+        slot = slots.filter(space => space.width >= Math.min(272, width) && space.height >= Math.min(80, height))
+          .reduce((best, space) => !best || area(space) > area(best) ? space : best, null)
+      }
+      let left = clamp(bounds.left, gap, innerWidth - width - gap)
       let top = innerHeight - height - gap
-      if (bounds.bottom + height + gap * 2 <= innerHeight) top = bounds.bottom + gap
-      else if (bounds.top >= height + gap * 2) top = bounds.top - height - gap
-      else if (bounds.right + width + gap * 2 <= innerWidth) {
-        left = bounds.right + gap
-        top = bounds.top
-      } else if (bounds.left >= width + gap * 2) {
-        left = bounds.left - width - gap
-        top = bounds.top
+      if (slot) {
+        const panelWidth = Math.min(width, slot.width)
+        review.style.width = panelWidth + 'px'
+        review.style.maxHeight = slot.height + 'px'
+        const panelHeight = review.getBoundingClientRect().height
+        left = clamp(bounds.left, slot.left, slot.left + slot.width - panelWidth)
+        top = clamp(bounds.top, slot.top, slot.top + slot.height - panelHeight)
+        if (slot.side === 'above') top = slot.top + slot.height - panelHeight
+        else if (slot.side === 'below') top = slot.top
       }
       review.style.left = left + 'px'
-      review.style.top = clamp(top, innerHeight - height) + 'px'
+      review.style.top = top + 'px'
+      review.scrollTop = scrollTop
     }
     document.body.addEventListener('pointerdown', event => {
       if (event.button !== 0 || start || selection) return

@@ -12,6 +12,7 @@
 // pixels (read before ezShell comes forward), so the overview opens on the monitor the user is working on
 // (2026-11-22 user report: it opened on ezShell's monitor). Nothing else about that window.
 // The same hook reports "capture" when Ctrl+Alt+Shift or Ctrl+Win+Alt is pressed and released.
+// An unmodified Escape cancels an active capture whose overlay is outside the foreground.
 // Off while the app is locked (`off` on its input), and it ends when main goes (its input closes).
 // Windows only: elsewhere a global key watch needs a permission the user grants by hand.
 
@@ -24,6 +25,7 @@ const DOUBLE_LINE = /^double(?: (-?\d{1,6}) (-?\d{1,6}))?$/
 
 const HOOK_SOURCE = String.raw`
 using System;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -42,6 +44,7 @@ public static class EzShellDoubleTab {
   [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hwnd);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
   [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd, int command);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
   [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
@@ -57,6 +60,10 @@ public static class EzShellDoubleTab {
   static int modifiers;
   static bool captureArmed;
   static bool captureBlocked;
+  static int captureState; // idle, started, cancelling
+  static long captureWindow;
+  static bool swallowEscapeUp;
+  static readonly BlockingCollection<string> captureMessages = new BlockingCollection<string>();
   // Tests only (set by reflection): report without touching the desktop
   static bool dryRun = false;
   static readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
@@ -71,12 +78,25 @@ public static class EzShellDoubleTab {
       string line;
       while ((line = Console.In.ReadLine()) != null) {
         if (line == "on") enabled = true;
-        else if (line == "off") { enabled = false; lastTab = -1; }
+        else if (line == "off") { enabled = false; lastTab = -1; EndCapture(); }
+        else if (line == "capture-end") EndCapture();
+        else if (line.StartsWith("capture-focus ", StringComparison.Ordinal)) {
+          long handle;
+          if (long.TryParse(line.Substring(14), out handle) && handle > 0) FocusCapture(new IntPtr(handle));
+        }
       }
       Environment.Exit(0);
     });
     input.IsBackground = true;
     input.Start();
+    var captureOutput = new Thread(() => {
+      foreach (string message in captureMessages.GetConsumingEnumerable()) {
+        Console.Out.WriteLine(message);
+        Console.Out.Flush();
+      }
+    });
+    captureOutput.IsBackground = true;
+    captureOutput.Start();
     Console.Out.WriteLine("ready");
     Console.Out.Flush();
     Msg msg;
@@ -113,6 +133,19 @@ public static class EzShellDoubleTab {
     return pid == appPid;
   }
 
+  static bool CaptureEscape(bool down, bool up, IntPtr foreground) {
+    long window = Interlocked.Read(ref captureWindow);
+    if (down && enabled && modifiers == 0 && (window == 0 || foreground.ToInt64() != window)
+        && Interlocked.CompareExchange(ref captureState, 2, 1) == 1) {
+      lastTab = -1;
+      swallowEscapeUp = true;
+      captureMessages.Add("capture-cancel");
+    }
+    if (!swallowEscapeUp) return false;
+    if (up) swallowEscapeUp = false;
+    return true;
+  }
+
   static IntPtr OnKey(int code, IntPtr wParam, IntPtr lParam, int doubleMs) {
     if (code < 0) return CallNextHookEx(hook, code, wParam, lParam);
     var key = (KeyInfo)Marshal.PtrToStructure(lParam, typeof(KeyInfo));
@@ -124,8 +157,10 @@ public static class EzShellDoubleTab {
     if (down || up) {
       bool modifierKey = key.vk == 0x5B || key.vk == 0x5C || (key.vk >= 0xA0 && key.vk <= 0xA5);
       if (modifierKey) modifiers = ModifierMask(key.vk, down);
-      if (CaptureGesture(modifiers, modifierKey, down)) ThreadPool.QueueUserWorkItem(_ => ReportCapture());
+      if (CaptureGesture(modifiers, modifierKey, down) && Interlocked.CompareExchange(ref captureState, 1, 0) == 0)
+        captureMessages.Add("capture");
     }
+    if (key.vk == 0x1B && CaptureEscape(down, up, GetForegroundWindow())) return new IntPtr(1);
     if (key.vk != 9) {
       if (down) lastTab = -1;
       return CallNextHookEx(hook, code, wParam, lParam);
@@ -153,9 +188,27 @@ public static class EzShellDoubleTab {
     return CallNextHookEx(hook, code, wParam, lParam);
   }
 
-  static void ReportCapture() {
-    Console.Out.WriteLine("capture");
-    Console.Out.Flush();
+  static void EndCapture() {
+    Interlocked.Exchange(ref captureState, 0);
+    Interlocked.Exchange(ref captureWindow, 0);
+  }
+
+  static void FocusCapture(IntPtr window) {
+    if (!enabled || Volatile.Read(ref captureState) != 1) return;
+    uint pid;
+    GetWindowThreadProcessId(window, out pid);
+    if (pid != appPid) return;
+    Interlocked.Exchange(ref captureWindow, window.ToInt64());
+    if (GetForegroundWindow() == window || !IsWindowVisible(window) || SetForegroundWindow(window)) return;
+    if (!Pressed(0x10) && !Pressed(0x11) && !Pressed(0x12) && !Pressed(0x5B) && !Pressed(0x5C)) {
+      TapAlt();
+      if (Volatile.Read(ref captureState) == 1) SetForegroundWindow(window);
+    }
+  }
+
+  static void TapAlt() {
+    keybd_event(0x12, 0, 0, UIntPtr.Zero);
+    keybd_event(0x12, 0, 2, UIntPtr.Zero);
   }
 
   // The middle of the window that was in front, in physical screen pixels (main turns them into its own)
@@ -170,8 +223,7 @@ public static class EzShellDoubleTab {
     string where = Where(front);
     if (dryRun) { Console.Out.WriteLine("double" + where); Console.Out.Flush(); return; }
     if (IsIconic(appWindow)) ShowWindow(appWindow, 9);
-    keybd_event(0x12, 0, 0, UIntPtr.Zero);
-    keybd_event(0x12, 0, 2, UIntPtr.Zero);
+    TapAlt();
     SetForegroundWindow(appWindow);
     Console.Out.WriteLine("double" + where);
     Console.Out.Flush();
@@ -200,7 +252,7 @@ function handleNumber(buffer) {
  * @param {(point: { x: number, y: number } | null) => void} deps.onDoubleTab two Tabs while another program
  *   was in front (ezShell is in front now), with the middle of that program's window in screen pixels
  */
-function createGlobalDoubleTab({ onDoubleTab, onCapture = () => {}, platform = process.platform, spawn = spawnProcess, env = process.env }) {
+function createGlobalDoubleTab({ onDoubleTab, onCapture = () => {}, onCaptureCancel = () => {}, platform = process.platform, spawn = spawnProcess, env = process.env }) {
   let child = null
   let enabled = false
   let restarts = 0
@@ -229,6 +281,10 @@ function createGlobalDoubleTab({ onDoubleTab, onCapture = () => {}, platform = p
         } else if (enabled) {
           if (line === 'capture') {
             onCapture()
+            continue
+          }
+          if (line === 'capture-cancel') {
+            onCaptureCancel()
             continue
           }
           const double = DOUBLE_LINE.exec(line)
@@ -270,6 +326,13 @@ function createGlobalDoubleTab({ onDoubleTab, onCapture = () => {}, platform = p
       if (enabled === Boolean(value)) return
       enabled = Boolean(value)
       send(enabled ? 'on' : 'off')
+    },
+    focusCapture(windowHandleBuffer) {
+      const windowHandle = handleNumber(windowHandleBuffer)
+      if (enabled && windowHandle) send(`capture-focus ${windowHandle}`)
+    },
+    endCapture() {
+      send('capture-end')
     },
     stop() {
       stopped = true
