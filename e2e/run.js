@@ -76,10 +76,11 @@ async function runSpec(name) {
   const packaged = process.env.E2E_APP
   const appEntry = { 'quick-capture': 'e2e/support/quickCaptureApp.js', 'browser-review': 'e2e/support/localAgentApp.js', 'local-agent-messages': 'e2e/support/localAgentApp.js', 'local-agent-pane-map': 'e2e/support/localAgentApp.js', 'local-agent-tab-close': 'e2e/support/localAgentApp.js', 'local-agent-usage': 'e2e/support/localAgentApp.js', 'local-work-overview': 'e2e/support/localAgentApp.js', 'local-agent-history': 'e2e/support/agentHistoryApp.js', 'ssh-agent-drop': 'e2e/support/agentHistoryApp.js', 'local-restore-agents': 'e2e/support/agentHistoryApp.js', 'local-agent-chat': 'e2e/support/agentChatApp.js', 'local-agent-pane-contrast': 'e2e/support/agentChatApp.js', 'local-agent-chat-scroll': 'e2e/support/agentChatApp.js', 'local-agent-chat-images': 'e2e/support/agentChatApp.js', 'local-agent-sleep': 'e2e/support/agentSleepApp.js' }[name] ?? 'out/main/index.js'
   const manualClaude = name === 'local-agent-chat-manual'
-  const chatFixture = manualClaude || name === 'app-chat-follow-theme'
+  const chatFixture = manualClaude || name === 'app-chat-follow-theme' || name === 'local-agent-chat-timestamps'
   const entry = name === 'local-agent-chat-antigravity' && process.platform === 'win32'
     ? 'e2e/support/antigravityChatApp.js' : chatFixture ? 'e2e/support/agentChatApp.js' : appEntry
-  const app = spawn(packaged || require('electron'), [
+  // The startup spec seeds a profile and launches Electron separately for each palette.
+  const app = name === 'startup-theme' ? null : spawn(packaged || require('electron'), [
     ...(packaged ? [] : [path.join(ROOT, entry)]),
     `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, ...APP_FLAGS
   ], {
@@ -87,7 +88,7 @@ async function runSpec(name) {
     env: manualClaude ? { ...process.env, EZSHELL_TEST_MANUAL_CLAUDE_CHAT: '1' } : process.env
   })
   try {
-    if (!(await waitUntil(portAnswers, 60000))) throw new Error('the app did not open its debugging port')
+    if (app && !(await waitUntil(portAnswers, 60000))) throw new Error('the app did not open its debugging port')
     const code = await new Promise((resolve, reject) => {
       const spec = spawn(process.execPath, [path.join(SPECS_DIR, `${name}.js`)], {
         stdio: 'inherit',
@@ -105,7 +106,7 @@ async function runSpec(name) {
     })
     return code === 0
   } finally {
-    await stop(app)
+    if (app) await stop(app)
     if (sshd) await stop(sshd)
     // The port must be free before the next app starts, or the next spec talks to this one
     await waitUntil(async () => !(await portAnswers()), 10000)

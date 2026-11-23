@@ -1,5 +1,5 @@
 const path = require('node:path')
-const { OVERLAY_URL } = require('./quickCaptureOverlay.js')
+const { OVERLAY_URL, captureOverlayUrl } = require('./quickCaptureOverlay.js')
 // The overlay computes the same rectangle to draw its marks in (quickCaptureEditor.js)
 const { pixelRegion, markedImage } = require('./quickCaptureEditor.js')
 
@@ -29,6 +29,11 @@ function createQuickCapture({
   onSent = () => {}, onError = () => {}
 }) {
   let active = null
+  let overlayUrl = OVERLAY_URL
+
+  function setTheme(theme) {
+    overlayUrl = captureOverlayUrl(theme)
+  }
 
   function cancel() {
     const task = active
@@ -70,7 +75,8 @@ function createQuickCapture({
       win.webContents.on('will-navigate', event => event.preventDefault())
       win.webContents.once('render-process-gone', () => { if (!win.isDestroyed()) win.destroy() })
       win.setAlwaysOnTop(true, 'screen-saver')
-      await win.loadURL(OVERLAY_URL)
+      await win.loadURL(overlayUrl)
+      if (active !== task || win.isDestroyed() || !isAvailable()) return false
       win.webContents.setZoomFactor(1)
       await win.webContents.executeJavaScript(`window.setCaptureImage(${JSON.stringify(image.toDataURL())})`)
       if (active !== task || win.isDestroyed() || !isAvailable()) return false
@@ -141,7 +147,7 @@ function createQuickCapture({
     }
   }
 
-  return { start, cancel }
+  return { start, cancel, setTheme }
 }
 
 module.exports = { createQuickCapture, pixelRegion, captureProjects }

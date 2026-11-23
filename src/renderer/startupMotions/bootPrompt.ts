@@ -38,6 +38,8 @@ function promptLine(): HTMLDivElement {
 
 /** The theme's terminal colors as the window's: background, text, green user, blue path, cursor */
 function applyTheme(root: HTMLElement, theme: ThemeDefinition) {
+  root.dataset.theme = theme.id
+  if (theme.chrome === 'mac') root.dataset.chrome = 'mac'
   const colors = theme.terminal
   const set = (name: string, value: string | undefined, fallback: string) => root.style.setProperty(name, value || fallback)
   set('--t-bg', colors?.background, theme.colors.bgPrimary || '#16181c')

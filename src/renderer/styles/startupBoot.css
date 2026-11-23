@@ -2,7 +2,6 @@
    A terminal window over the desktop in the user's theme: --t-bg, --t-fg, --t-green, --t-blue, --t-cursor
    come from the theme's terminal colors (set on .startup by the motion). */
 .boot-term {
-  --term-bg: color-mix(in srgb, var(--t-bg, #16181c) 92%, transparent);
   --term-bar: color-mix(in srgb, color-mix(in srgb, var(--t-bg, #16181c) 90%, var(--t-fg, #d9dee5)) 96%, transparent);
   --term-line: color-mix(in srgb, var(--t-fg, #d9dee5) 10%, transparent);
   --term-dim: color-mix(in srgb, var(--t-fg, #d9dee5) 55%, var(--t-bg, #16181c));
@@ -16,8 +15,8 @@
   height: min(300px, 100% - 48px);
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--t-fg, #d9dee5) 14%, transparent);
-  border-radius: 10px;
-  background: var(--term-bg);
+  border-radius: var(--boot-radius, 4px);
+  background: var(--t-bg, #16181c);
   box-shadow: 0 24px 60px rgb(0 0 0 / 45%), 0 2px 8px rgb(0 0 0 / 35%), inset 0 1px 0 rgb(255 255 255 / 6%);
   color: var(--t-fg, #d9dee5);
   font: 400 var(--size)/1.55 "JetBrains Mono", "Cascadia Mono", Consolas, "D2Coding", ui-monospace, monospace;
@@ -32,6 +31,8 @@
     opacity 280ms ease-out;
 }
 
+.startup[data-chrome="mac"] { --boot-radius: 10px; }
+
 .boot-bar {
   display: flex;
   align-items: center;
@@ -44,12 +45,22 @@
   font: 500 calc(var(--size) * .72)/1 "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
 }
 
-.boot-buttons { display: flex; gap: .55em; }
-.boot-buttons i { width: .95em; height: .95em; border-radius: 50%; }
-.boot-buttons i:nth-child(1) { background: #ff5f57; }
-.boot-buttons i:nth-child(2) { background: #febc2e; }
-.boot-buttons i:nth-child(3) { background: #28c840; }
-.boot-title { flex: 1; margin-right: 3.2em; text-align: center; letter-spacing: .02em; }
+.boot-buttons { order: 1; display: flex; align-items: center; gap: 1em; }
+.boot-buttons i { position: relative; display: grid; place-items: center; width: .95em; height: .95em; }
+.boot-buttons i::before, .boot-buttons i:last-child::after { content: ''; grid-area: 1 / 1; }
+.boot-buttons i:first-child::before { width: .7em; border-bottom: 1px solid; }
+.boot-buttons i:nth-child(2)::before { width: .56em; height: .56em; border: 1px solid; }
+.boot-buttons i:last-child::before, .boot-buttons i:last-child::after { width: .85em; border-bottom: 1px solid; transform: rotate(45deg); }
+.boot-buttons i:last-child::after { transform: rotate(-45deg); }
+.boot-title { flex: 1; letter-spacing: .02em; }
+
+.startup[data-chrome="mac"] .boot-buttons { order: 0; gap: .55em; }
+.startup[data-chrome="mac"] .boot-buttons i { border-radius: 50%; }
+.startup[data-chrome="mac"] .boot-buttons i::before, .startup[data-chrome="mac"] .boot-buttons i::after { content: none; }
+.startup[data-chrome="mac"] .boot-buttons i:nth-child(1) { background: #ff5f57; }
+.startup[data-chrome="mac"] .boot-buttons i:nth-child(2) { background: #febc2e; }
+.startup[data-chrome="mac"] .boot-buttons i:nth-child(3) { background: #28c840; }
+.startup[data-chrome="mac"] .boot-title { margin-inline-end: 3.2em; text-align: center; }
 
 .boot-body { padding: .8em 1em; overflow: hidden; white-space: pre-wrap; word-break: break-all; }
 .boot-line { min-height: 1.55em; }

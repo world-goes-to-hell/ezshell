@@ -2,6 +2,22 @@
 
 export type ThemeCategory = 'dark' | 'light' | 'special'
 
+export interface QuickCaptureTheme {
+  background: string
+  surface: string
+  border: string
+  text: string
+  muted: string
+  accent: string
+  onAccent: string
+  focus: string
+  danger: string
+  radius: string
+  panelRadius: string
+  font: string
+  scheme: 'light' | 'dark'
+}
+
 export interface ThemeColors {
   // Background colors
   bgPrimary: string

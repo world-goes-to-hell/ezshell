@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { captureProjects, createQuickCapture, pixelRegion } from './quickCapture.js'
+import { captureThemeCss } from './quickCaptureOverlay.js'
 
 const selection = { left: 0.25, top: 0.5, width: 0.5, height: 0.25 }
 
@@ -44,6 +45,18 @@ function setup(result = { action: 'copy', region: selection, comment: '' }, opti
 }
 
 describe('the quick screen capture', () => {
+  it('applies the validated palette before showing each newly opened overlay', async () => {
+    const copy = { action: 'copy', region: selection, comment: '' }
+    const { capture, windows } = setup([copy, copy])
+    capture.setTheme({ surface: '#f8fbff', scheme: 'light', text: 'invalid' })
+    expect(await capture.start()).toBe(true)
+    expect(decodeURIComponent(windows[0].loadURL.mock.calls[0][0])).toContain(':root{--capture-surface:#f8fbff;--capture-scheme:light;}')
+    expect(windows[0].loadURL.mock.invocationCallOrder[0]).toBeLessThan(windows[0].show.mock.invocationCallOrder[0])
+
+    capture.setTheme({ surface: '#17181b', scheme: 'dark' })
+    expect(await capture.start()).toBe(true)
+    expect(decodeURIComponent(windows[1].loadURL.mock.calls[0][0])).toContain(':root{--capture-surface:#17181b;--capture-scheme:dark;}')
+  })
   it('clamps the selection to the image and rejects empty or invalid rectangles', () => {
     const size = { width: 100, height: 50 }
     expect(pixelRegion({ left: -0.05, top: 0.5, width: 0.15, height: 0.6 }, size)).toEqual({ x: 0, y: 25, width: 10, height: 25 })
@@ -196,5 +209,35 @@ describe('the quick screen capture', () => {
     )
     expect(await capture.start()).toBe(true)
     expect(files).toEqual(['capture-1.png', 'capture-1.png', 'capture-2.png'])
+  })
+})
+
+describe('capture theme CSS', () => {
+  it('emits only recognized variables with valid colors, sizes, and fonts', () => {
+    expect(captureThemeCss({
+      background: '#123', surface: '#1c1d21', border: '#112233ff', text: 'rgb(125, 136, 147)',
+      muted: 'rgba(12, 34, 56, .5)', accent: 'rgb(100% 50% 0% / 75%)',
+      radius: '0', panelRadius: '12px', font: "'Segoe UI', sans-serif", scheme: 'light', unknown: 'rejected'
+    })).toBe(":root{--capture-background:#123;--capture-surface:#1c1d21;--capture-border:#112233ff;" +
+      '--capture-text:rgb(125, 136, 147);--capture-muted:rgba(12, 34, 56, .5);--capture-accent:rgb(100% 50% 0% / 75%);' +
+      "--capture-radius:0;--capture-panel-radius:12px;--capture-font:'Segoe UI', sans-serif;--capture-scheme:light;}")
+  })
+
+  it.each([
+    null, [], 'blue', 'var(--other)', '#12', '#1234', 'rgb(256, 10, 0)', 'rgb(10%, 20, 0)',
+    'rgba(0, 1, 2, 1.1)', 'rgb(1 2 3 / 101%)', 'rgb(1 2 3 /)', '#fff; x:y', '<invalid>', ' '.repeat(65) + '#fff',
+    'rgb(1\u00a0,2,3)', 'rgb(1\u20282 3)', 'rgb(1 2 3 /\u300050%)', '\u00a0#fff', 'rgb(1\t2 3)'
+  ])('drops invalid color values and keeps valid fields (%j)', value => {
+    expect(captureThemeCss({ surface: value, text: '#fff' })).toBe(':root{--capture-text:#fff;}')
+  })
+
+  it('keeps the page defaults when no token passes validation', () => {
+    expect(captureThemeCss(undefined)).toBe('')
+    expect(captureThemeCss({ radius: '999px', panelRadius: '1em', font: 'serif; x:y', scheme: 'invalid' })).toBe('')
+  })
+
+  it('accepts ASCII spaces and drops non-printable characters in other theme tokens', () => {
+    expect(captureThemeCss({ surface: ' rgb(1  2 3 / 50%) ', radius: '8px\n', font: "'Segoe UI',\u00a0sans-serif" }))
+      .toBe(':root{--capture-surface:rgb(1  2 3 / 50%);}')
   })
 })

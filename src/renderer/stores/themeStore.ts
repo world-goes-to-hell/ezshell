@@ -7,6 +7,7 @@ import { colorSchemeFor } from '../lib/colorScheme'
 import { normalizeTheme, sanitizeStoredThemes } from '../lib/themeValidation'
 import { detectDefaultThemeId } from '../lib/defaultTheme'
 import { clampWindowOpacity, effectiveSurface, parseSurface, type SurfaceStyle } from '../lib/appearance'
+import { quickCaptureTheme } from '../lib/quickCaptureTheme'
 
 interface ThemeState {
   currentThemeId: string
@@ -54,6 +55,10 @@ function applyThemeToDocument(theme: ThemeDefinition, surface: SurfaceStyle) {
   if (theme.chrome) root.setAttribute('data-chrome', theme.chrome)
   else root.removeAttribute('data-chrome')
   root.style.colorScheme = colorSchemeFor(theme.colors.bgPrimary) ?? ''
+  if (window.electronAPI?.setQuickCaptureTheme) {
+    const capture = quickCaptureTheme(theme.colors, getComputedStyle(root), scheme)
+    if (capture) window.electronAPI.setQuickCaptureTheme(capture)
+  }
 }
 
 type BackdropApi = {

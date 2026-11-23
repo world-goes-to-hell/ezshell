@@ -2,64 +2,148 @@
 // Marks on the chosen region (arrow, box, pen, text, badge, mosaic) come from quickCaptureEditor.js as source text.
 const { EDITOR_SCRIPT } = require('./quickCaptureEditor.js')
 
+const colorFields = {
+  background: 'background', surface: 'surface', border: 'border', text: 'text', muted: 'muted',
+  accent: 'accent', onAccent: 'on-accent', focus: 'focus', danger: 'danger'
+}
+
+function isPrintableAscii(value, limit) {
+  return typeof value === 'string' && value.length <= limit && !/[^\x20-\x7e]/.test(value)
+}
+
+const trimCssSpace = value => value.replace(/^[ \t]+|[ \t]+$/g, '')
+
+function channelInRange(channel, maximum) {
+  if (!/^(?:\d+(?:\.\d+)?|\.\d+)%?$/.test(channel)) return false
+  return channel.endsWith('%') ? Number(channel.slice(0, -1)) <= 100 : Number(channel) <= maximum
+}
+
+function captureColor(value) {
+  if (!isPrintableAscii(value, 64)) return undefined
+  const color = trimCssSpace(value)
+  if (/^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(color)) return color
+  const rgb = /^rgba?\(([^()]*)\)$/i.exec(color)
+  if (!rgb) return undefined
+  const components = trimCssSpace(rgb[1])
+  let channels, alpha
+  if (components.includes(',')) {
+    const parts = components.split(',').map(trimCssSpace)
+    if (parts.length !== 3 && parts.length !== 4) return undefined
+    channels = parts.slice(0, 3)
+    if (channels.some(part => part.endsWith('%') !== channels[0].endsWith('%'))) return undefined
+    alpha = parts[3]
+  } else {
+    const parts = components.split('/')
+    if (parts.length > 2) return undefined
+    channels = trimCssSpace(parts[0]).split(/[ \t]+/)
+    alpha = parts.length === 2 ? trimCssSpace(parts[1]) : undefined
+  }
+  if (channels.length !== 3 || !channels.every(channel => channelInRange(channel, 255))) return undefined
+  if (alpha !== undefined && !channelInRange(alpha, 1)) return undefined
+  return color
+}
+
+function captureRadius(value) {
+  return isPrintableAscii(value, 12) && /^(?:0|\d+(?:\.\d+)?px)$/.test(value)
+    && parseFloat(value) <= 32 ? value : undefined
+}
+
+function captureFont(value) {
+  if (!isPrintableAscii(value, 160)) return undefined
+  const names = value.split(',').map(trimCssSpace)
+  const fontName = /^(?:[a-z0-9 -]+|'[a-z0-9 -]+'|"[a-z0-9 -]+")$/i
+  return names.length <= 8 && names.every(name => fontName.test(name)) ? names.join(', ') : undefined
+}
+
+/** The renderer supplies values only. CSS names and syntax are owned here in main. */
+function captureThemeCss(theme) {
+  if (!theme || typeof theme !== 'object' || Array.isArray(theme)) return ''
+  const tokens = Object.entries(colorFields).map(([key, name]) => [name, captureColor(theme[key])])
+  tokens.push(
+    ['radius', captureRadius(theme.radius)],
+    ['panel-radius', captureRadius(theme.panelRadius)],
+    ['font', captureFont(theme.font)],
+    ['scheme', theme.scheme === 'light' || theme.scheme === 'dark' ? theme.scheme : undefined]
+  )
+  const declarations = tokens.flatMap(([name, value]) => value ? ['--capture-' + name + ':' + value + ';'] : [])
+  return declarations.length ? ':root{' + declarations.join('') + '}' : ''
+}
+
 const page = `<!doctype html>
 <html lang="ko">
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
 <title>ezShell 영역 캡처</title>
 <style>
+  :root {
+    --capture-background: #131820;
+    --capture-surface: #19212e;
+    --capture-border: #627289;
+    --capture-text: #ffffff;
+    --capture-muted: #a6b4c8;
+    --capture-accent: #3267ce;
+    --capture-on-accent: #ffffff;
+    --capture-focus: #83acff;
+    --capture-danger: #ffb5ae;
+    --capture-font: 'Segoe UI', 'Malgun Gothic', sans-serif;
+    --capture-radius: 6px;
+    --capture-panel-radius: 12px;
+    --capture-scheme: dark;
+    color-scheme: var(--capture-scheme);
+  }
   * { box-sizing: border-box; }
   html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
-  body { background: #131820; font: 13px 'Segoe UI', sans-serif; color: #fff; }
+  body { background: var(--capture-background); font: 13px var(--capture-font); color: var(--capture-text); }
   body:not([data-review]) { cursor: crosshair; user-select: none; touch-action: none; }
   img { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   body:not([data-selecting])::after { content: ''; position: absolute; inset: 0; background: #10151c59; pointer-events: none; }
   #selection { position: absolute; outline: 1px solid #fff; box-shadow: 0 0 0 9999px #10151c73; pointer-events: none; }
   #hint { position: absolute; z-index: 1; top: 20px; left: 50%; transform: translateX(-50%); white-space: nowrap;
-    padding: 8px 12px; border: 1px solid #ffffff30; border-radius: 7px; background: #1c2330; pointer-events: none; }
+    padding: 8px 12px; border: 1px solid var(--capture-border); border-radius: var(--capture-radius); background: var(--capture-surface); pointer-events: none; }
   body[data-selecting] #hint { display: none; }
   #review { position: absolute; z-index: 2; width: min(532px, calc(100% - 24px)); padding: 16px;
     max-height: calc(100% - 24px); overflow: auto;
-    border: 1px solid #627289; border-radius: 12px; background: #19212e;
-    box-shadow: 0 0 0 1px #1219268c, 0 10px 25px #0c111c66, 0 2px 6px #0004; }
+    border: 1px solid var(--capture-border); border-radius: var(--capture-panel-radius); background: var(--capture-surface);
+    box-shadow: 0 10px 25px #0005, 0 2px 6px #0004; }
   #review:has(#review-comment[hidden]) { width: min(440px, calc(100% - 24px)); padding: 12px; }
   #review label { display: block; margin-bottom: 7px; font-weight: 600; }
   #review-comment { container-type: inline-size; line-height: 1.45; }
-  .comment-field { display: grid; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid #343f52; }
+  .comment-field { display: grid; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--capture-border) 60%, var(--capture-surface)); }
   #review .comment-field label { margin: 0; }
-  .optional { color: #a6b4c8; font-weight: 400; }
+  .optional { color: var(--capture-muted); font-weight: 400; }
   #comment { display: block; width: 100%; height: 56px; resize: none; padding: 9px 10px; font: inherit;
-    color: inherit; background: #111823; border: 1px solid #45546d; border-radius: 6px; }
-  #comment::placeholder { color: #97a7be; }
+    color: inherit; background: var(--capture-background); border: 1px solid var(--capture-border); border-radius: var(--capture-radius); }
+  #comment::placeholder { color: var(--capture-muted); }
   .actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 9px; }
   button { min-width: 60px; padding: 5px 12px; font: inherit; color: inherit; cursor: pointer;
-    background: #293444; border: 1px solid #475466; border-radius: 6px; }
-  button:hover { background: #354355; }
-  #review-comment button { min-width: 0; height: 40px; padding: 0 9px; border-color: #39475e; background: #222e40; }
-  #review-comment button:hover:not(:disabled) { border-color: #637695; background: #2c3a50; }
-  #review-comment button:disabled { opacity: 1; color: #7b899d; background: #1e2736; border-color: #354155; }
-  #review-comment button[aria-pressed="true"] { border-color: #9dc6ff; background: #253e62; box-shadow: inset 0 0 0 1px #81b4fa18; }
-  #review-comment button[aria-pressed="true"]:hover { border-color: #bed9ff; background: #2c4c77; }
+    background: var(--capture-background); border: 1px solid var(--capture-border); border-radius: var(--capture-radius); }
+  button:hover:not(:disabled) { background: color-mix(in srgb, var(--capture-background) 92%, var(--capture-text)); }
+  #review-comment button { min-width: 0; height: 40px; padding: 0 9px; }
+  #review-comment button[aria-pressed="true"], #review-comment #work {
+    border-color: var(--capture-accent); background: var(--capture-accent); color: var(--capture-on-accent);
+  }
+  #review-comment :is(button[aria-pressed="true"], #work):hover {
+    box-shadow: inset 0 0 0 1px var(--capture-on-accent);
+  }
   .review-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   #review-comment .review-actions button { padding: 0 12px; }
-  #review-comment #cancel { margin-right: auto; border-color: transparent; background: transparent; }
-  #review-comment #work { border-color: #80acff; background: #3267ce; font-weight: 600; }
-  #review-comment #work:hover { border-color: #b0ceff; background: #3b76e2; }
-  #work-description { margin: 7px 0 0; color: #a6b4c8; text-align: right; font-size: 12px; }
-  :is(button, textarea, select):focus-visible { outline: 2px solid #83acff; outline-offset: 1px; }
+  #review-comment #cancel { margin-right: auto; }
+  #review-comment #work { font-weight: 600; }
+  #work-description { margin: 7px 0 0; color: var(--capture-muted); text-align: right; font-size: 12px; }
+  :is(button, textarea, select):focus-visible { outline: 2px solid var(--capture-focus); outline-offset: 1px; }
   :is(button, select):disabled { opacity: .55; cursor: default; }
-  #project { width: 100%; padding: 6px 8px; color: inherit; color-scheme: dark; font: inherit;
-    background: #131820; border: 1px solid #475466; border-radius: 6px; }
-  #project-path, .agent-path { display: block; color: #b2c1d6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #project { width: 100%; padding: 6px 8px; color: inherit; font: inherit;
+    background: var(--capture-background); border: 1px solid var(--capture-border); border-radius: var(--capture-radius); }
+  #project-path, .agent-path { display: block; color: var(--capture-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #project-path { margin-top: 4px; }
   #agents { display: grid; gap: 5px; max-height: 202px; overflow: auto; }
   #agents:not(:empty) { margin-top: 8px; padding: 2px; }
   .agent { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; padding: 7px 9px; }
   .agent-info { min-width: 0; }
   .agent-title { display: block; font-weight: 600; }
-  .agent-send { color: #a9caff; white-space: nowrap; }
-  #status { margin: 8px 0 0; color: #b2c1d6; }
-  #status[data-error] { color: #ffb5ae; }
+  .agent-send { font-weight: 600; white-space: nowrap; }
+  #status { margin: 8px 0 0; color: var(--capture-muted); }
+  #status[data-error] { color: var(--capture-danger); }
   #status:empty { display: none; }
   #ink { position: absolute; z-index: 1; cursor: crosshair; touch-action: none; }
   #ink[data-ink-tool="text"] { cursor: text; }
@@ -71,24 +155,23 @@ const page = `<!doctype html>
   #tools .tool-tile { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px;
     padding: 2px; font-size: 11px; line-height: 13px; white-space: nowrap; }
   .tile-top { display: flex; align-items: center; gap: 6px; }
-  .tool-tile[aria-pressed="true"] .icon { color: #b0d0ff; }
   kbd { display: inline-flex; min-width: 17px; height: 15px; justify-content: center; align-items: center; padding: 0 3px;
-    border: 1px solid #506078; border-radius: 3px; background: #17202f; color: #c2d1e6; font: 10px/1 Consolas, monospace; }
+    border: 1px solid currentColor; border-radius: var(--capture-radius); font: 10px/1 Consolas, monospace; }
   .styles { display: flex; flex-wrap: wrap; gap: 12px 16px; margin-top: 16px; }
   .style-group { display: grid; gap: 6px; align-content: start; }
-  .style-group + .style-group { padding-left: 16px; border-left: 1px solid #343f52; }
-  .group-label { color: #c2cddd; font-size: 12px; font-weight: 600; }
+  .style-group + .style-group { padding-left: 16px; border-left: 1px solid color-mix(in srgb, var(--capture-border) 60%, var(--capture-surface)); }
+  .group-label { color: var(--capture-muted); font-size: 12px; font-weight: 600; }
   .style-buttons { display: flex; flex-wrap: wrap; gap: 4px; }
   #tools .style-button { display: grid; place-items: center; width: 40px; padding: 0; }
-  .swatch-dot { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid #ffffff30;
+  .swatch-dot { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--capture-border);
     border-radius: 50%; background: var(--swatch); }
   .swatch-dot .icon { width: 12px; height: 12px; color: #111722; stroke-width: 2.4; visibility: hidden; }
-  [aria-pressed="true"] .swatch-dot { box-shadow: 0 0 0 2px #121a29, 0 0 0 3px #f6f8fd; }
+  [aria-pressed="true"] .swatch-dot { box-shadow: 0 0 0 1px var(--capture-on-accent); }
   [aria-pressed="true"] .swatch-dot .icon { visibility: visible; }
-  .stroke { width: 22px; height: var(--weight); border-radius: 12px; background: var(--ink); }
-  .editing { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding-top: 8px; border-top: 1px solid #343f52; }
+  .stroke { width: 22px; height: var(--weight); border-radius: 12px; background: var(--ink); box-shadow: 0 0 0 1px currentColor; }
+  .editing { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding-top: 8px; border-top: 1px solid color-mix(in srgb, var(--capture-border) 60%, var(--capture-surface)); }
   .editing button, .review-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
-  #tools #reselect { margin-left: auto; border-color: transparent; background: transparent; color: #bac7d8; }
+  #tools #reselect { margin-left: auto; }
   @container (max-width: 405px) {
     .tool-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .style-group + .style-group { padding-left: 0; border-left: none; }
@@ -411,5 +494,11 @@ const page = `<!doctype html>
 </script>
 </html>`
 
-const OVERLAY_URL = 'data:text/html;charset=utf-8,' + encodeURIComponent(page)
-module.exports = { OVERLAY_URL }
+function captureOverlayUrl(theme) {
+  const css = captureThemeCss(theme)
+  const html = css ? page.replace('</style>', () => css + '\n</style>') : page
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(html)
+}
+
+const OVERLAY_URL = captureOverlayUrl()
+module.exports = { OVERLAY_URL, captureOverlayUrl, captureThemeCss }

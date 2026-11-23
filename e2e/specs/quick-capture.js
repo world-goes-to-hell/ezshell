@@ -98,6 +98,47 @@ const { check, finish } = createChecks()
     return count
   }
   const clickButton = async (overlay, selector) => overlay.click(...await overlay.center(`document.querySelector(${JSON.stringify(selector)})`))
+  const chooseTheme = async (name, id) => {
+    await main.send('Page.bringToFront')
+    await main.js(`document.querySelector('.title-bar-btn[title="설정"]').click()`)
+    if (!await main.until('!!document.querySelector(".theme-grid")')) throw new Error('theme settings did not open')
+    await main.js(`[...document.querySelectorAll('.theme-card-main')].find(card =>
+      card.querySelector('.theme-name').textContent === ${JSON.stringify(name)}).click()`)
+    if (!await main.until(`document.documentElement.dataset.theme === ${JSON.stringify(id)}`)) throw new Error('app theme did not change')
+    const escape = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }
+    await main.send('Input.dispatchKeyEvent', { type: 'keyDown', ...escape })
+    await main.send('Input.dispatchKeyEvent', { type: 'keyUp', ...escape })
+    if (!await main.until('!document.querySelector(".settings-modal")')) throw new Error('theme settings did not close')
+  }
+  const reviewContrast = `(() => {
+    const context = new OffscreenCanvas(1, 1).getContext('2d', { willReadFrequently: true })
+    const luminance = color => {
+      context.clearRect(0, 0, 1, 1)
+      context.fillStyle = color
+      context.fillRect(0, 0, 1, 1)
+      return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3).reduce((sum, channel, index) => {
+        const srgb = channel / 255
+        const linear = srgb <= .04045 ? srgb / 12.92 : ((srgb + .055) / 1.055) ** 2.4
+        return sum + linear * [.2126, .7152, .0722][index]
+      }, 0)
+    }
+    const contrast = (a, b) => {
+      const [dark, light] = [luminance(a), luminance(b)].sort((x, y) => x - y)
+      return (light + .05) / (dark + .05)
+    }
+    const style = selector => getComputedStyle(document.querySelector(selector))
+    const panel = style('#review'), input = style('#comment'), work = style('#work'), active = style('[data-tool="arrow"]')
+    const placeholder = getComputedStyle(document.querySelector('#comment'), '::placeholder')
+    return {
+      surface: panel.backgroundColor, accent: work.backgroundColor, scheme: panel.colorScheme,
+      text: Math.min(contrast(panel.color, panel.backgroundColor), contrast(input.color, input.backgroundColor),
+        contrast(placeholder.color, input.backgroundColor), contrast(style('#work-description').color, panel.backgroundColor),
+        contrast(work.color, work.backgroundColor), contrast(active.color, active.backgroundColor)),
+      outline: input.outlineStyle,
+      edge: Math.min(contrast(input.borderColor, input.backgroundColor), contrast(input.borderColor, panel.backgroundColor),
+        contrast(input.outlineColor, panel.backgroundColor), contrast(work.backgroundColor, panel.backgroundColor))
+    }
+  })()`
   const chooseProject = (overlay, folder) => overlay.js(`(() => {
     const select = document.querySelector('#project')
     select.value = ${JSON.stringify(folder)}
@@ -136,11 +177,16 @@ const { check, finish } = createChecks()
   await sleep(300)
   check('Esc reported while the display is loading prevents the overlay from appearing', !(await pages()).some(isOverlay))
 
+  const initialSurface = await main.js("getComputedStyle(document.documentElement).getPropertyValue('--bg-secondary').trim()")
   fs.writeFileSync(file('capture-request'), '')
   const beforeSelection = await connect(isOverlay)
   if (!(await beforeSelection.until('document.hasFocus() && !document.body.hasAttribute("data-review")'))) {
     throw new Error('New capture overlay did not receive focus')
   }
+  check('the capture takes its initial palette from the main window', await beforeSelection.js(`
+    typeof window.electronAPI === 'undefined' &&
+      getComputedStyle(document.documentElement).getPropertyValue('--capture-surface').trim() === ${JSON.stringify(initialSurface)}
+  `))
   // The window can close before CDP acknowledges the Escape key.
   void beforeSelection.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {})
   check('Escape closes a new capture before any click or selection', await waitFor(async () => !(await pages()).some(isOverlay)))
@@ -179,6 +225,23 @@ const { check, finish } = createChecks()
   void placement.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {})
   if (!(await waitFor(async () => !(await pages()).some(isOverlay)))) throw new Error('placement fixture did not close')
   placement.close()
+
+  for (const theme of [
+    { name: 'Minimal Dark', id: 'minimal-dark', scheme: 'dark', surface: 'rgb(23, 24, 27)', accent: 'rgb(47, 111, 237)' },
+    { name: '카톡 모드', id: 'kakao-mode', scheme: 'light', surface: 'rgb(248, 251, 255)', accent: 'rgb(128, 88, 0)' }
+  ]) {
+    await chooseTheme(theme.name, theme.id)
+    const themed = await openCapture('이 영역을 확인해 주세요.')
+    const colors = await themed.js(reviewContrast)
+    check(`${theme.name} colors reach the capture toolbar after a theme change`,
+      colors.surface === theme.surface && colors.accent === theme.accent && colors.scheme === theme.scheme, JSON.stringify(colors))
+    check(`${theme.name} capture text, button, input border and focus meet contrast targets`,
+      colors.text >= 4.5 && colors.edge >= 3 && colors.outline === 'solid', JSON.stringify(colors))
+    await themed.shot('quick-capture-theme-' + theme.id)
+    void themed.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {})
+    if (!await waitFor(async () => !(await pages()).some(isOverlay))) throw new Error('the themed capture did not close')
+    themed.close()
+  }
 
   await openLocalAgent(main, 'codex', service)
   await openLocalAgent(main, 'claude', tools)
