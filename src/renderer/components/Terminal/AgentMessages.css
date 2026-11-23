@@ -89,34 +89,95 @@
 .agent-message-thread {
   max-height: 52vh;
   overflow: auto;
-  display: grid;
-  gap: 8px;
   margin-bottom: 12px;
 }
-.agent-thread-message {
-  padding: 9px 12px;
-  border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
+.agent-message-day { display: flex; flex-direction: column; gap: 12px; }
+.agent-message-day + .agent-message-day { margin-top: 14px; }
+.agent-message-date {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.agent-message-date::before,
+.agent-message-date::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.agent-message-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: fit-content;
+  max-width: min(87%, 44em);
   min-width: 0;
 }
-.agent-thread-message header { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
-.agent-message-route,
-.agent-message-actor { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
-.agent-message-route { flex-wrap: wrap; }
-.agent-message-actor { flex-wrap: wrap; }
+.agent-message-group[data-side='right'] { align-self: flex-end; align-items: flex-end; }
+.agent-message-group-label,
+.agent-message-actor { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; }
+.agent-message-group-label { color: var(--text-secondary); font-size: 11px; }
+.agent-message-group-label > svg { flex: none; }
 .agent-message-actor-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.agent-message-actor-id { flex: none; color: var(--text-muted); font-size: 10px; font-weight: 400; white-space: nowrap; }
+.agent-message-actor-id { flex: none; color: var(--text-secondary); font-size: 10px; font-weight: 400; white-space: nowrap; }
 .agent-message-actor-location, .agent-message-list-actions { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--text-secondary); font-size: 11px; font-weight: 400; }
 .agent-message-actor-location > span, .agent-message-list-actions > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-message-provider { flex: none; color: var(--text-secondary); }
 .agent-message-provider[data-kind='codex'] { color: var(--text-link); }
 .agent-message-provider[data-kind='claude'] { color: var(--warning); }
 .agent-message-provider[data-kind='antigravity'] { color: var(--success); }
-.agent-thread-message .agent-read-state { flex: none; color: var(--text-muted); }
-.agent-thread-message p { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
-/* 안 읽음 stands out until the recipient reads it; 읽음 stays quiet */
-.agent-thread-message header .agent-read-state[data-read='false'] { color: var(--accent); font-weight: 600; }
+.agent-thread-message { min-width: 0; max-width: 100%; }
+.agent-message-bubble {
+  padding: 7px 11px;
+  border: 1px solid color-mix(in srgb, var(--agent-bubble-color) 28%, var(--border));
+  border-radius: var(--radius-lg, 10px);
+  border-start-start-radius: 4px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--agent-bubble-color) 13%, var(--bg-secondary));
+}
+.agent-message-group[data-side='right'] .agent-message-bubble {
+  border-start-start-radius: var(--radius-lg, 10px);
+  border-start-end-radius: 4px;
+}
+.agent-message-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.5; }
+.agent-message-body[data-collapsed='true'] {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--message-preview-lines);
+  overflow: hidden;
+}
+.agent-message-reply {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 0 5px;
+  padding: 3px 6px;
+  border-inline-start: 2px solid var(--agent-bubble-color);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.agent-message-reply > svg { flex: none; }
+.agent-message-reply > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-message-expand {
+  margin-top: 4px;
+  padding: 1px 2px;
+  border: 0;
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--text-link);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.agent-message-expand:hover { text-decoration: underline; }
+.agent-message-meta, .agent-read-state { display: flex; align-items: center; gap: 4px; }
+.agent-message-meta { margin: 3px 2px 0; gap: 8px; color: var(--text-secondary); font-size: 10px; }
+.agent-message-group[data-side='right'] .agent-message-meta { justify-content: flex-end; }
+.agent-read-state[data-state='unread'] { color: var(--text-link); font-weight: 600; }
+.agent-message-thread mark, .agent-message-map-detail h3 mark { background: var(--accent); color: var(--on-accent); }
+.agent-message-thread:focus-visible { outline: 2px solid var(--text-link); outline-offset: -2px; }
+.agent-message-expand:focus-visible { outline: 2px solid var(--text-link); outline-offset: 1px; }
 
 .agent-message-map-toolbar {
   display: flex;
@@ -318,11 +379,12 @@
   font-size: 13px;
   font-weight: 600;
 }
-.agent-message-map-detail .agent-message-thread { max-height: none; min-height: 0; margin: 0; padding: 1px; }
-.agent-message-map-detail .agent-read-state[data-read='false'] { color: var(--text-link); }
+.agent-message-map-detail h3.agent-message-participants { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+.agent-message-participants > svg { color: var(--text-secondary); }
+.agent-message-participants > .agent-message-actor:last-child { justify-content: flex-end; }
+.agent-message-map-detail .agent-message-thread { max-height: none; min-height: 0; margin: 0; padding: 1px 4px; }
 .agent-message-map-empty { margin: 0; padding: 12px; color: var(--text-secondary); font-size: 12px; }
 .agent-message-map-detail > .agent-message-map-empty { padding: 3px 0; }
-.agent-message-map-time { display: block; margin-top: 5px; color: var(--text-muted); font-size: 11px; }
 .agent-message-map-switch button:focus-visible,
 .agent-message-map-viewport:focus-visible,
 .agent-message-map-card-pick:focus-visible,

@@ -1,15 +1,15 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
-import { RiListUnordered, RiMailLine, RiNodeTree, RiSearchLine, RiTeamLine, RiUser3Line } from 'react-icons/ri'
+import { RiArrowLeftRightLine, RiListUnordered, RiMailLine, RiNodeTree, RiSearchLine, RiTeamLine, RiUser3Line } from 'react-icons/ri'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
 import type { AgentChatProvider, AgentMessage, AgentMessageDelivery, AgentMessageSession, AgentMessagesSnapshot } from '../../types'
 import { folderLabel, isInsidePath, pathKey } from '../../lib/localWorkspaceTree'
 import { visibleTerminalId } from '../../lib/localTerminalPane'
 import { projectOfFolder, type GroupProject } from '../../lib/tabGroups'
-import { AGENT_MESSAGE_VIEW_KEY, agentMessageMap, parseAgentMessageView, type MessageState } from '../../lib/agentMessageMap'
+import { AGENT_MESSAGE_VIEW_KEY, agentMessageMap, parseAgentMessageView } from '../../lib/agentMessageMap'
 import { agentDisplayName, agentMessageMatches, agentPaneLocation, agentSearchTerm, type AgentPaneLocation } from '../../lib/agentIdentity'
 import { focusTabPane } from '../../lib/paneFocus'
 import { getLocalPaneShellId } from '../../lib/localPaneShells'
@@ -18,7 +18,8 @@ import { useTerminalStore, type TerminalInfo } from '../../stores/terminalStore'
 import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
 import { AgentIdentityAction, AgentIdentityBadge, AgentIdentityDot } from '../ui/AgentIdentity'
 import { SelectMenu } from '../ui/SelectMenu'
-import { AgentMessageMap, MESSAGE_STATE_LABELS } from './AgentMessageMap'
+import { AgentMessageMap } from './AgentMessageMap'
+import { AgentMessageThread, MessageSearchText } from './AgentMessageThread'
 import './AgentMessages.css'
 
 const USER = 'user'
@@ -292,7 +293,6 @@ export function AgentMessagesHost({ currentGroup, projects }: WorkspaceSelection
 // read once the user handles it.
 const isRead = (message: AgentMessage) => message.read || Boolean(message.seenAt)
 const counts = (message: AgentMessage) => !isRead(message)
-const readTitle = (message: AgentMessage) => (message.seenAt ? `${new Date(message.seenAt).toLocaleString()} 에 읽음` : undefined)
 
 function unreadCount(messages: AgentMessage[], ids: Set<string>) {
   return messages.reduce((count, message) => count + Number(counts(message) && ids.has(message.to)), 0)
@@ -339,38 +339,6 @@ interface DialogProps extends WorkspaceSelection {
   initialAgent?: string
   sourceTabId?: string
   onClose: () => void
-}
-
-const mapMessageTime = new Intl.DateTimeFormat('ko-KR', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-
-function MessageThread({ messages, name, actor, states, searching }: {
-  messages: readonly AgentMessage[]
-  name: string
-  actor: (id: string) => ReactNode
-  states?: ReadonlyMap<string, MessageState>
-  searching: boolean
-}) {
-  return (
-    <div className="agent-message-thread" role="log" tabIndex={0} aria-label={name}>
-      {messages.length === 0 && <p className="form-hint">{searching ? '검색에 맞는 메시지가 없습니다.' : '아직 메시지가 없습니다.'}</p>}
-      {messages.map(message => {
-        const state = states?.get(message.id)
-        const read = state ? state !== 'unread' : isRead(message)
-        return (
-          <article key={message.id} className="agent-thread-message">
-            <header>
-              <div className="agent-message-route">{actor(message.from)} → {actor(message.to)}</div>
-              <span className="agent-read-state" data-read={read} title={readTitle(message)}>
-                {state ? MESSAGE_STATE_LABELS[state] : read ? '읽음' : '안 읽음'}
-              </span>
-            </header>
-            <p>{message.text}</p>
-            {states && <time className="agent-message-map-time" dateTime={new Date(message.sentAt).toISOString()}>{mapMessageTime.format(message.sentAt)}</time>}
-          </article>
-        )
-      })}
-    </div>
-  )
 }
 
 function locationOf(agent: AgentMessageSession, terminals: ReadonlyMap<string, TerminalInfo>, paneTabs: Record<string, string>) {
@@ -453,10 +421,10 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
       ((from === USER && agentsById.has(to)) || (to === USER && agentsById.has(from))))
     return (from === selected && (agentsById.has(to) || to === USER))
       || (to === selected && (agentsById.has(from) || from === USER))
-  })
+  }).sort((a, b) => a.sentAt - b.sentAt)
   const visibleThread = thread.filter(message => agentMessageMatches(message, term, roles))
-  const mapThread = (selectedEdge?.messages ?? [...thread].sort((a, b) => a.sentAt - b.sentAt))
-    .filter(message => agentMessageMatches(message, term, roles))
+  const mapThread = selectedEdge ? selectedEdge.messages.filter(message => agentMessageMatches(message, term, roles)) : visibleThread
+  const originals = useMemo(() => new Map(messages.map(message => [message.id, message])), [messages])
 
   const goToPane = (id: string) => {
     const latest = useMessages.getState()
@@ -473,21 +441,23 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
   }
   const identityOf = (id: string) => {
     const name = nameOf(id)
-    return agentsById.has(id) && name !== id ? `${name} · ${id}` : name
+    return agentsById.has(id) && (name !== id || agentsById.get(id)?.role) ? `${name} · ${id}` : name
   }
   const actor = (id: string, showLocation = false) => {
     const agent = agentsById.get(id)
-    const name = nameOf(id)
+    const name = showLocation ? nameOf(id) : agent?.role || label(id)
     const location = showLocation ? locations.get(id) : undefined
+    const locationLabel = location?.label ?? (showLocation && agent ? folderLabel(agent.cwd) : undefined)
+    const secondaryLabel = name === locationLabel ? undefined : locationLabel
     return (
-      <span className="agent-message-actor">
+      <span className="agent-message-actor" data-agent-id={id}>
         {agent && <AgentIdentityDot id={id} />}
         <MessageProviderIcon kind={id === USER ? USER : agent?.kind} />
-        <span className="agent-message-actor-name" title={identityOf(id)}>{name}</span>
-        {agent && (agent.role || name !== id) && <small className="agent-message-actor-id">{id}</small>}
-        {location && <span className="agent-message-actor-location">
-          {name !== location.label && <span title={location.label}>{location.label}</span>}
-          <AgentIdentityAction id={id} action="go" onClick={() => goToPane(id)} />
+        <span className="agent-message-actor-name" title={identityOf(id)}><MessageSearchText text={name} term={term} /></span>
+        {agent && (agent.role || name !== id) && <small className="agent-message-actor-id"><MessageSearchText text={id} term={term} /></small>}
+        {(secondaryLabel || location) && <span className="agent-message-actor-location">
+          {secondaryLabel && <span title={location?.label ?? agent?.cwd}>{secondaryLabel}</span>}
+          {location && <AgentIdentityAction id={id} action="go" onClick={() => goToPane(id)} />}
         </span>}
       </span>
     )
@@ -524,10 +494,14 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
                   locations={locations} onEditRole={setEditingRole} onGoToPane={goToPane}
                   onSelectAgent={id => { setSelection(id); setEdgeSelection(undefined) }} onSelectEdge={setEdgeSelection} />
                 <aside className="agent-message-map-detail" aria-label="선택한 메시지">
-                  <h3>{selectedEdge ? <>{actor(selectedEdge.first)} ↔ {actor(selectedEdge.second)}</> : mapAgent ? actor(mapAgent) : term ? '검색 결과' : '메시지'}</h3>
+                  <h3 className={selectedEdge ? 'agent-message-participants' : undefined}>
+                    {selectedEdge ? <>{actor(selectedEdge.first, true)}<RiArrowLeftRightLine aria-hidden="true" />{actor(selectedEdge.second, true)}</>
+                      : mapAgent ? actor(mapAgent, true) : term ? '검색 결과' : '메시지'}
+                  </h3>
                   {mapThreadName ? (
-                    <MessageThread key={selectedEdge?.id ?? mapAgent ?? ALL} name={`${mapThreadName} 메시지`} actor={id => actor(id, true)} states={map.messageStates}
-                      messages={mapThread} searching={Boolean(term)} />
+                    <AgentMessageThread key={selectedEdge?.id ?? mapAgent ?? ALL} name={`${mapThreadName} 메시지`} actor={actor} identityOf={identityOf}
+                      messages={mapThread} states={map.messageStates} originals={originals} term={term} rightAgent={selectedEdge?.second ?? mapAgent}
+                      pair={Boolean(selectedEdge)} />
                   ) : <p className="agent-message-map-empty">에이전트나 연결선을 선택하면 메시지를 볼 수 있습니다.</p>}
                 </aside>
               </Tabs.Content>
@@ -557,8 +531,8 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
                     ]}
                   />
                 </div>
-                <MessageThread messages={visibleThread} name={selected === ALL ? `${workspaceName} 에이전트 간 메시지` : `${identityOf(selected)} 메시지`}
-                  actor={id => actor(id, true)} searching={Boolean(term)} />
+                <AgentMessageThread key={selected} messages={visibleThread} name={selected === ALL ? `${workspaceName} 에이전트 간 메시지` : `${identityOf(selected)} 메시지`}
+                  actor={actor} identityOf={identityOf} states={map.messageStates} originals={originals} term={term} rightAgent={selected === ALL ? undefined : selected} />
               </Tabs.Content>
             </Tabs.Root>
           ) : <p className="form-hint">로컬 작업을 선택하면 에이전트 메시지를 볼 수 있습니다.</p>}

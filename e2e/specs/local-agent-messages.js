@@ -281,7 +281,7 @@ async function run() {
     await focusAgent('claude-2')
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
     check('reduced motion shows a static working border', await until(`
-      ${trace}.animationName === 'none' && ${trace}.borderTopWidth === '1px' && ${trace}.opacity === '1' &&
+      ${trace}.animationName === 'none' && ${trace}.borderTopWidth === '3px' && ${trace}.opacity === '1' &&
       ${border(row('claude-2'))}.animationName === 'none' &&
       ${border(row('claude-2'))}.borderTopWidth === '1px' && ${border(row('claude-2'))}.opacity === '1'
     `))
@@ -347,8 +347,8 @@ async function run() {
     await sleep(220)
     const focusedColor = await js(`${trace}.color`)
     await focusPane(otherPane)
-    check('moving focus dims the light on the working pane while the other pane stays clear', await until(`
-      ${focusBorder}.borderTopWidth === '1px' && ${trace}.color !== ${JSON.stringify(focusedColor)} &&
+    check('moving focus keeps the working light visible while the other pane stays clear', await until(`
+      ${focusBorder}.borderTopWidth === '1px' && ${trace}.color === ${JSON.stringify(focusedColor)} &&
       ${trace}.animationPlayState === 'running' && getComputedStyle(${otherPane}, '::after').content === 'none'
     `))
 
@@ -391,7 +391,7 @@ async function run() {
     await js(`document.querySelector('[aria-label="claude-2 메시지함"]').click()`)
     check('the relationship view is the default and the pane opens its agent’s history', await until(`
       ${dialog}?.dataset.view === 'map' && ${cardPick('claude-2')}?.getAttribute('aria-pressed') === 'true' &&
-      [...document.querySelectorAll('.agent-thread-message')].some(m => m.textContent.includes('review-next') && m.querySelector('.agent-read-state')?.textContent === '읽음·답 없음')
+      [...document.querySelectorAll('.agent-thread-message')].some(m => m.textContent.includes('review-next') && m.querySelector('.agent-read-state')?.dataset.state === 'seen')
     `))
     await showView('목록')
     check('the messages panel marks the task 읽음 (read, not answered yet)', await until(`[...document.querySelectorAll('.agent-thread-message')].some(m => m.textContent.includes('review-next') && m.querySelector('.agent-read-state')?.textContent === '읽음')`))
@@ -563,15 +563,43 @@ async function run() {
     }
     const closeMessages = () => js(`${dialog}.querySelector('.modal-actions button').click()`)
     await mcp('codex-1', 'send_message', { to: 'user', text: 'note-for-user' })
+    const longText = ['설계 검토를 시작합니다.', '**머리글** <b>문자 그대로</b>', '세 번째 줄',
+      '네 번째 줄', '다섯 번째 줄', '끝 줄 찾기'].join('\n')
+    await mcp('codex-1', 'send_message', { to: 'user', text: longText })
     await js(`document.querySelector('[aria-label="codex-1 메시지함"]').click()`)
     check('the pane inbox opens the selected agent’s read-only messages', await until(`
       ${filterValue} === 'codex-1' && ${filter}.querySelector('.agent-message-provider')?.dataset.kind === 'codex' &&
       ${messageTexts}.includes('note-for-user') &&
       ${dialog}.getBoundingClientRect().width >= 500 &&
       !${dialog}.querySelector('textarea, form') &&
-      [...${dialog}.querySelectorAll('button')].every(button => button === ${filter} || button.matches('[role=tab], .agent-identity-action') || button.textContent.trim() === '닫기') &&
+      [...${dialog}.querySelectorAll('button')].every(button => button === ${filter} || button.matches('[role=tab], .agent-identity-action, .agent-message-expand') || button.textContent.trim() === '닫기') &&
       typeof window.electronAPI.agentMessageSend === 'undefined'
     `))
+    const messageRow = body => `[...document.querySelectorAll('.agent-thread-message')].find(row => row.querySelector('p')?.textContent === ${JSON.stringify(body)})`
+    const longRow = '(' + messageRow(longText) + ')'
+    const expand = longRow + "?.querySelector('.agent-message-expand')"
+    check('the agent’s outgoing messages align right and its incoming messages align left', await until(`
+      ${longRow}?.closest('.agent-message-group')?.dataset.side === 'right' &&
+      (${messageRow('looks-good')})?.closest('.agent-message-group')?.dataset.side === 'left' &&
+      !!(${messageRow('looks-good')})?.parentElement.querySelector('.agent-message-group-label [data-agent-id="claude-2"]')
+    `))
+    check('consecutive messages to the same recipient share their single label', await js(`
+      ${longRow}?.parentElement === (${messageRow('note-for-user')})?.parentElement &&
+      ${longRow}.parentElement.querySelectorAll('.agent-message-group-label .agent-message-actor').length === 1
+    `))
+    check('a long message starts at four lines and retains literal Markdown and HTML text', await until(`
+      ${expand}?.getAttribute('aria-expanded') === 'false' &&
+      !${longRow}.querySelector('b, strong') && ${longRow}.querySelector('.agent-message-body').scrollHeight >
+        ${longRow}.querySelector('.agent-message-body').clientHeight
+    `))
+    await js(`${expand}.focus()`)
+    await driver.enter()
+    check('Enter expands the full message and keeps focus on the toggle', await until(`
+      ${expand}?.getAttribute('aria-expanded') === 'true' && document.activeElement === ${expand} &&
+      ${longRow}.querySelector('.agent-message-body').id === ${expand}.getAttribute('aria-controls')
+    `))
+    await driver.enter()
+    check('Enter collapses the message again', await until(`${expand}.getAttribute('aria-expanded') === 'false'`))
     await js(`${dialog}.querySelector('.agent-message-list-actions [data-action=edit]').click()`)
     await until(`!!document.querySelector('#agent-role-name')`)
     await js(`(${SET})(document.querySelector('#agent-role-name'), '보내기 담당')`)
@@ -592,9 +620,9 @@ async function run() {
       ['review-please', 'looks-good', 'hello-manual-claude', 'hello-codex'].every(text => ${messageTexts}.includes(text)) &&
       !${messageTexts}.includes('note-for-user') && !${messageTexts}.includes('hello-manual-codex')
     `))
-    check('the conversation identifies the sender and recipient by their respective icons', await js(`(() => {
-      const message = [...${dialog}.querySelectorAll('.agent-thread-message')].find(row => row.querySelector('p').textContent === 'review-please')
-      return [...(message?.querySelectorAll('.agent-message-route .agent-message-provider') ?? [])].map(icon => icon.dataset.kind).join(',') === 'codex,claude'
+    check('the all-agents view identifies both participants once per message group', await js(`(() => {
+      const message = ${messageRow('review-please')}
+      return [...(message?.parentElement.querySelectorAll('.agent-message-group-label .agent-message-provider') ?? [])].map(icon => icon.dataset.kind).join(',') === 'codex,claude'
     })()`))
     const searchFor = value => js(`(${SET})(document.querySelector('.agent-message-search input'), ${JSON.stringify(value)})`)
     await searchFor('리뷰어')
@@ -607,6 +635,11 @@ async function run() {
     `))
     await searchFor('note-for-user')
     check('search includes a matching message to the user', await until(`${messageTexts}.join(',') === 'note-for-user'`))
+    await searchFor('끝 줄 찾기')
+    check('search opens a long matched message and marks the match beyond the preview', await until(`
+      ${longRow}?.querySelector('p mark')?.textContent === '끝 줄 찾기' &&
+      ${expand}?.getAttribute('aria-expanded') === 'true'
+    `))
     await searchFor('')
     await chooseAgent('claude-2 (종료)')
     check('choosing an agent filters the log to its conversation', await until(`
@@ -636,12 +669,31 @@ async function run() {
     `))
     check('the agent marker colors match across card, message, pane, and direction line', await js(`(() => {
       const cardColor = getComputedStyle(${card('codex-1')}.querySelector('.agent-identity-dot')).backgroundColor
-      const note = [...document.querySelectorAll('.agent-thread-message')].find(item => item.querySelector('p').textContent === 'review-please')
-      return getComputedStyle(note.querySelector('.agent-identity-dot')).backgroundColor === cardColor &&
+      const note = ${messageRow('review-please')}
+      return getComputedStyle(note.parentElement.querySelector('.agent-identity-dot')).backgroundColor === cardColor &&
         getComputedStyle(document.querySelector('.agent-pane-usage .agent-identity-badge[data-agent-id="codex-1"] .agent-identity-dot')).backgroundColor === cardColor &&
         [...document.querySelectorAll('.agent-message-map-line')].some(line => getComputedStyle(line).stroke === cardColor) &&
-        note.querySelector('.agent-message-actor-location').textContent.includes('칸 ')
+        document.querySelector('.agent-message-participants [data-agent-id="codex-1"] .agent-message-actor-location')?.textContent.includes('칸 ')
     })()`))
+    check('the edge shows the two participants once in the header and alternates colored bubble sides', await js(`(() => {
+      const outgoing = ${messageRow('review-please')}
+      const incoming = ${messageRow('looks-good')}
+      const header = document.querySelector('.agent-message-participants')
+      return header?.querySelectorAll('.agent-message-actor').length === 2 &&
+        header.querySelector('[data-agent-id="codex-1"] [data-action=go]') &&
+        outgoing?.parentElement.dataset.side === 'right' && incoming?.parentElement.dataset.side === 'left' &&
+        outgoing.getBoundingClientRect().right > incoming.getBoundingClientRect().right &&
+        getComputedStyle(outgoing.querySelector('.agent-message-bubble')).backgroundColor !==
+          getComputedStyle(incoming.querySelector('.agent-message-bubble')).backgroundColor &&
+        outgoing.querySelector('.agent-read-state')?.dataset.state === 'answered' &&
+        incoming.querySelector('time')?.dateTime && document.querySelector('.agent-message-date')?.textContent.includes('년')
+    })()`))
+    await searchFor('looks-good')
+    check('a reply quotes its original while the original is filtered out', await until(`
+      ${messageTexts}.join(',') === 'looks-good' &&
+      (${messageRow('looks-good')}).querySelector('blockquote span')?.textContent === 'review-please'
+    `))
+    await searchFor('')
     await until(`!document.querySelector('.agent-delivery-notice')`, 3500)
     await driver.shot('local-agent-message-map')
     const [cardX, cardY] = await driver.center(card('codex-1'))
