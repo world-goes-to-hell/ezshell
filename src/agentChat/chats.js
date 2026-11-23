@@ -729,6 +729,14 @@ function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigra
     },
     /** Whether a link (linkTarget's key) was in an answer this shell's view was sent */
     knowsLink: (shellId, key) => chats.get(shellId)?.links.has(key) === true,
+    /** Keep an in-flight read tied to the same chat, transcript scope and working folder. */
+    linkAuthority(shellId, key) {
+      const chat = chats.get(shellId)
+      const scope = chat?.subagentScope
+      const cwd = chat?.cwd
+      return () => Boolean(chat && chats.get(shellId) === chat && chat.subagentScope === scope
+        && chat.cwd === cwd && chat.links.has(key))
+    },
     /** The folder of the shell's agent (relative links are read against it), or null */
     cwdOf: shellId => chats.get(shellId)?.cwd ?? null,
     /** A Claude AskUserQuestion of the shell's conversation not answered yet (`tool:<id>`): its questions, or null */

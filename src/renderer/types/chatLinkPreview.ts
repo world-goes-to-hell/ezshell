@@ -1,6 +1,7 @@
 interface ChatLinkPreviewMetadata {
   path: string
   name: string
+  linked: boolean
   size: number | null
   modifiedAt: number
   line: number | null

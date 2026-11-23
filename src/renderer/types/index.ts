@@ -1,4 +1,5 @@
 import type { RootSwitchOutcome } from '../lib/rootSwitch'
+import type { ChatLinkPreviewResult } from './chatLinkPreview'
 import type { DbColumnSource, DbCredentials, DbDatabase, DbEndpoint, DbQueryResult, DbRelations, DbResult, DbSchema, DbServerInfo, DbTable, DbTableColumn, DbWindowInfo, DiscoveredDb } from './db'
 
 export interface SessionConfig {
@@ -1079,6 +1080,7 @@ declare global {
         | { ok: false; reason?: string; error: string; options?: AgentPickerOption[] }
       >
       agentChatOpenLink?: (shellId: string, href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab') => Promise<{ ok: true } | { ok: false; error: string }>
+      agentChatLinkPreview?: (shellId: string, link: string) => Promise<ChatLinkPreviewResult>
       onAgentChatFrame?: (callback: (frame: AgentChatFrame) => void) => () => void
       onAgentChatCapture?: (callback: (capture: AgentChatCapture) => void) => () => void
       agentChatPin?: (request: { shellId: string; itemId: string; text: string; kind: AgentChatProvider | null; title: string; time: number | null }) => Promise<{ ok: true; id: string; existing?: boolean } | { ok: false; error: string }>

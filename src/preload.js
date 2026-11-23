@@ -275,6 +275,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentPickerList: (shellId, what) => ipcRenderer.invoke('agent-picker-list', { shellId, what }),
   agentPickerApply: (shellId, what, label) => ipcRenderer.invoke('agent-picker-apply', { shellId, what, label }),
   agentChatOpenLink: (shellId, href, how) => ipcRenderer.invoke('agent-chat-open-link', { shellId, href, how }),
+  agentChatLinkPreview: (shellId, link) => ipcRenderer.invoke('agent-chat-preview-link', { shellId, link }),
   // An answer pinned into a window of its own (the chat view pins, the pinned window asks about itself)
   agentChatPin: (request) => ipcRenderer.invoke('agent-chat-pin', request),
   pinnedReplyGet: () => ipcRenderer.invoke('pinned-reply-get'),

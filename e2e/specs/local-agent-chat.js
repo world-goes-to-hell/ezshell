@@ -5,6 +5,7 @@ const fs = require('fs')
 const http = require('node:http')
 const path = require('path')
 const { connect, createChecks, sleep, unlock, openLocalAgent, pages } = require('../support/driver')
+const { checkChatLinkPreviews } = require('../support/chatLinkPreviews')
 
 const { check, finish } = createChecks()
 const profile = process.env.E2E_PROFILE
@@ -565,7 +566,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await until(`!!${composer(0)} && !${askCard}`, 8000)
   check('the conversation can be selected by dragging (the app turns selection off elsewhere)', await js(`getComputedStyle(${cover(0)}.querySelector('.agent-chat-log')).userSelect === 'text'`))
 
-  // A Windows drive path with Codex's leading slash opens from the answer's link menu
+  // A Windows drive path with Codex's leading slash opens its preview from the answer
   const note = file('linked-note.txt')
   fs.writeFileSync(note, '링크로 연 파일')
   fs.appendFileSync(path.join(projects, `${SESSIONS[0]}.jsonl`), answer('a-link', `메모는 [linked-note.txt](/${note.replace(/\\/g, '/')}) 에 있습니다`))
@@ -574,17 +575,23 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await js(`${driveLink}.scrollIntoView({ block: 'nearest' })`)
   const link = await center(driveLink)
   await click(link[0], link[1])
-  check('clicking it offers to open it in ezShell or the file manager', await until(`(() => {
-    const labels = [...document.querySelectorAll('.terminal-menu-item')].map(item => item.textContent.trim())
-    return labels.includes('ezShell 에서 열기') && labels.includes('파일 탐색기에서 열기') && labels.includes('경로 복사')
+  const previewActions = `${cover(0)}.querySelector('.chat-link-preview-actions')`
+  const previewAction = label => `[...${previewActions}.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})`
+  check('the file preview shows its data, metadata and three actions', await until(`(() => {
+    if (!${previewActions}) return false
+    const labels = [...${previewActions}.querySelectorAll('button')].map(item => item.textContent.trim())
+    return labels.join('|') === 'ezShell로 열기|파일 탐색기로 열기|경로 복사' &&
+      !!${cover(0)}.querySelector('.chat-link-preview-metadata time')?.dateTime &&
+      ${cover(0)}.querySelector('.chat-link-preview .cm-content')?.textContent.includes('링크로 연 파일')
   })()`, 4000))
-  await driver.pick('ezShell 에서 열기')
+  await js(`${previewAction('ezShell로 열기')}.click()`)
   let fileWindow = null
   for (let tries = 0; tries < 60 && !fileWindow; tries++) {
     fileWindow = (await pages()).find(page => /remoteFileMode=true/.test(page.url))
     if (!fileWindow) await sleep(150)
   }
   check('ezShell opens the file in its file window', !!fileWindow, JSON.stringify((await pages()).map(page => page.url)))
+  await js(`${cover(0)}.querySelector('[aria-label="미리보기 닫기"]').click()`)
   const refused = await js(`window.electronAPI.agentChatOpenLink(${JSON.stringify(await js(`${pane(0)}.dataset.localShellId`))}, 'C:/Windows/win.ini', 'app')`)
   check('a path that was not in the conversation is not opened', refused && refused.ok === false && refused.error.includes('대화에 나온'), JSON.stringify(refused))
   // As the agents write them: Codex adds the line ("…/lines.txt:3"), Claude writes a path relative to its folder
@@ -606,6 +613,8 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   const codeOpen = await js(`window.electronAPI.agentChatOpenLink(${JSON.stringify(shellOfChat)}, ${codeLink}.getAttribute('href'), 'app')`)
   check('that link opens (main counts the inline code as a link of the conversation)', codeOpen?.ok === true, JSON.stringify(codeOpen))
   check('the terminal stays mounted under the chat', await js(`!!${pane(0)}.querySelector('.xterm-screen') && ${pane(0)}.querySelector('.xterm-screen').offsetWidth > 0`))
+  await checkChatLinkPreviews({ driver, cover: cover(0), shellId: shellOfChat, profile, check,
+    addAnswer: text => fs.appendFileSync(firstTranscript, answer('a-previews', text)) })
 
   // An answer pinned out into a small window of its own, read while working in another tab
   await chooseChatTheme(0, '카톡 모드')

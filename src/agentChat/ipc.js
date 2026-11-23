@@ -1,7 +1,7 @@
 // The window names a shell and sends a draft. Main owns the transcript and clipboard image paths.
-const fs = require('fs')
 const { randomUUID } = require('node:crypto')
 const { linkTarget } = require('./links.js')
+const { readLinkPreview, resolveLocalPreviewPath } = require('./localPreview.js')
 const { routeSubagent, subagentRelayText } = require('./subagentChat.js')
 const { watchCommand } = require('./commandScreen.js')
 const { customCommands } = require('./slashCommands.js')
@@ -107,6 +107,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   const shellIdOf = value => (typeof value === 'string' && SHELL_ID.test(value) ? value : null)
   const locked = { ok: false, error: '먼저 잠금을 해제해 주세요.' }
   const imageDrafts = createImageDrafts(clipboard)
+  const pendingLinkPreviews = new Map()
   // A slash command just sent from the chat: the agent's screen before it, read by agent-chat-command-watch
   const commandWatches = new Map()
   const retrying = new Set()
@@ -413,6 +414,29 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
 
   // A link in an answer: a file or folder of this PC (ezShell's file window or the file manager), or a
   // web page (the browser). Only a link of that shell's conversation; a file is never run.
+  ipcMain.handle('agent-chat-preview-link', async (event, request) => {
+    const fromChatWindow = () => allowed(event) && Boolean(event.senderFrame && event.senderFrame === event.sender?.mainFrame)
+    if (!fromChatWindow()) return locked
+    const id = shellIdOf(request?.shellId)
+    const target = id ? linkTarget(request?.link, process.platform, chats.cwdOf?.(id) ?? null) : null
+    if (!id || target?.kind !== 'path' || !chats.knowsLink(id, target.key)) {
+      return { ok: false, error: '대화에 나온 로컬 파일이나 폴더만 미리 볼 수 있습니다.' }
+    }
+    const authorized = chats.linkAuthority(id, target.key)
+    const requestId = Symbol()
+    pendingLinkPreviews.set(id, requestId)
+    const current = () => fromChatWindow() && pendingLinkPreviews.get(id) === requestId && authorized()
+    const stale = () => fromChatWindow() ? { ok: false, error: '대화의 링크가 바뀌었습니다.' } : locked
+    try {
+      const preview = await readLinkPreview(target, current)
+      return current() ? { ok: true, preview } : stale()
+    } catch {
+      return current() ? { ok: false, error: '파일이나 폴더를 미리 볼 수 없습니다.' } : stale()
+    } finally {
+      if (pendingLinkPreviews.get(id) === requestId) pendingLinkPreviews.delete(id)
+    }
+  })
+
   ipcMain.handle('agent-chat-open-link', async (event, request) => {
     if (!allowed(event)) return locked
     const id = shellIdOf(request?.shellId)
@@ -463,15 +487,15 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
       await links.openExternal(target.url)
       return { ok: true }
     }
-    let real
-    let stat
+    let entry
     try {
-      real = await fs.promises.realpath(target.path)
-      stat = await fs.promises.stat(real)
+      entry = await resolveLocalPreviewPath(target.path)
     } catch {
       return { ok: false, error: '파일이나 폴더를 찾지 못했습니다.' }
     }
     if (!stillAllowed()) return locked
+    const { path: real, stat } = entry
+    if (!stat.isFile() && !stat.isDirectory()) return { ok: false, error: '파일이나 폴더만 열 수 있습니다.' }
     if (how === 'explorer' && links?.showItemInFolder) {
       links.showItemInFolder(real)
       return { ok: true }
@@ -487,7 +511,6 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
       return { ok: true }
     }
     if (how === 'app' && links?.openLocalFile) {
-      if (!stat.isFile()) return { ok: false, error: '파일이나 폴더만 열 수 있습니다.' }
       // "README.md:187": the file opens at that line
       return links.openLocalFile(real, target.line ?? null)
     }

@@ -25,6 +25,7 @@ import { toast } from '../../stores/toastStore'
 import { AgentChatSubagents } from './AgentChatSubagents'
 import { AgentChatQuestions, receivedMessageLabel } from './AgentChatQuestions'
 import { AgentChatThemePicker } from './AgentChatThemePicker'
+import { AgentChatLinkPreview } from './AgentChatLinkPreview'
 import { ChatQuoteCards, ChatQuoteReply, ChatQuoteSelection, QuotedChatMessage, type ChatQuote } from './ChatQuote'
 import { SubagentConversation } from './SubagentConversation'
 import { useChatWindow } from './useChatWindow'
@@ -387,6 +388,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   const pastePending = useRef(false)
   const workingReply = useRef<string | null>(null)
   const [menu, setMenu] = useState<ChatMenu | null>(null)
+  const [linkPreview, setLinkPreview] = useState<{ href: string; opener: HTMLAnchorElement; scope: string | null } | null>(null)
   const menuFocusOrigin = useRef<HTMLElement | null>(null)
   const [conversationAction, setConversationAction] = useState<'copy' | 'save' | null>(null)
   const coverRef = useRef<HTMLDivElement>(null)
@@ -429,6 +431,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   const antigravity = kind === 'antigravity'
   const interactiveKind = kind === 'claude' || kind === 'codex' ? kind : null
   const subagent = !interactiveKind || chat?.approval?.usesTerminalInput ? undefined : chat?.subagents.find(child => child.id === subagentId)
+  const preview = !subagent && linkPreview?.scope === scope ? linkPreview : null
   const ProviderIcon = kind ? AGENT_PROVIDER_ICONS[kind] : null
   const agentName = kind === 'claude' ? 'Claude' : kind ? AGENT_PROVIDER_NAMES[kind] : '에이전트'
   const status = chat?.state === 'ended' ? 'ended'
@@ -654,17 +657,27 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     return () => window.clearTimeout(timer)
   }, [canReply, replyId, sending, shellId, status])
 
-  // A link in an answer opens a menu (it never navigates the app window): a file or folder of this PC
-  // in ezShell or the file manager, a web page in the browser. Main opens only links of this conversation.
+  // The main process verifies the clicked file link against the conversation. Web links keep their menu.
   const onLogClick = (event: MouseEvent<HTMLDivElement>) => {
     const link = answerLink(event.target)
     if (!link) return
     event.preventDefault()
     const target = linkMenuTarget(link)
+    if (target?.isFile && window.electronAPI.agentChatLinkPreview) {
+      setMenu(null)
+      setLinkPreview({ href: target.href, opener: link, scope })
+      return
+    }
     if (target) {
       menuFocusOrigin.current = null
       setMenu({ x: event.clientX, y: event.clientY, link: target })
     }
+  }
+
+  const closeLinkPreview = () => {
+    setLinkPreview(null)
+    const opener = preview?.opener
+    requestAnimationFrame(() => (opener?.isConnected ? opener : coverRef.current)?.focus({ preventScroll: true }))
   }
 
   const showContextMenu = (target: EventTarget, x: number, y: number, keyboardFocus?: HTMLElement) => {
@@ -1050,6 +1063,13 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   // The toggle key works anywhere in the cover (the app-wide handler skips text boxes)
   const onCoverKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target
+    if (preview && !menu && !event.defaultPrevented && !event.nativeEvent.isComposing && event.key === 'Escape'
+      && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      event.preventDefault()
+      event.stopPropagation()
+      if (!event.repeat) closeLinkPreview()
+      return
+    }
     if (!event.defaultPrevented && !event.nativeEvent.isComposing && !subagent && !menu
       && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))
       && !event.ctrlKey && !event.altKey && !event.metaKey && target instanceof HTMLElement
@@ -1143,7 +1163,8 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
 
   return (
     <div className="agent-chat-cover" ref={coverRef} tabIndex={-1} role="region" aria-label="에이전트 채팅"
-      data-chat-theme={appearance?.id} data-chat-bubbles={appearance?.bubbles || undefined} style={appearance?.style}
+      data-chat-theme={appearance?.id} data-chat-bubbles={appearance?.bubbles || undefined}
+      data-link-preview={preview ? '' : undefined} style={appearance?.style}
       onKeyDown={onCoverKeyDown} onContextMenu={onContextMenu}>
       <div className="agent-chat-parent" inert={Boolean(subagent)}>
       <header className="agent-chat-head">
@@ -1371,6 +1392,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
         />
       )}
       </div>
+      {preview && <AgentChatLinkPreview shellId={shellId} href={preview.href} onClose={closeLinkPreview} onOpen={openLink} />}
       {subagent && interactiveKind && <SubagentConversation key={subagent.id} shellId={shellId} agent={subagent} kind={interactiveKind} menuStyle={appearance?.style}
         onBack={() => setSubagentId(null)} onShowTerminal={onShowTerminal} />}
     </div>
