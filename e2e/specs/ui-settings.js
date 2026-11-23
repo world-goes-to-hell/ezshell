@@ -113,8 +113,8 @@ const { check, finish } = createChecks()
     const guide = ${fileGuide}
     const programs = [...guide.querySelectorAll('dt')].map(item => item.textContent)
     return ${fileGuideToggle}.getAttribute('aria-expanded') === 'true' && !guide.hidden
-      && programs.join(',') === 'Xshell,Xftp,PuTTY,MobaXterm,Tabby,OpenSSH'
-      && ['.xts', '.xsh', '.xfp', '.reg', '.mxtsessions', 'MobaXterm.ini', 'config.yaml', '.yml', '~/.ssh/config', '모든 파일']
+      && programs.join(',') === 'Xshell,Xftp,PuTTY,MobaXterm,Tabby,FileZilla,OpenSSH'
+      && ['.xts', '.xsh', '.xfp', '.reg', '.mxtsessions', 'MobaXterm.ini', 'config.yaml', '.yml', 'sitemanager.xml', '~/.ssh/config', '모든 파일']
         .every(text => guide.textContent.includes(text))
   })()`))
   await js(`${fileGuideToggle}.click()`)
