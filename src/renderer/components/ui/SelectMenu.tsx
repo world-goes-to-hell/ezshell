@@ -6,6 +6,7 @@ import './SelectMenu.css'
 export interface SelectMenuOption {
   value: string
   label: string
+  detail?: string
   /** Shown in the list and in the trigger when this option is selected */
   icon?: ReactNode
   /** Applied to the option row (e.g. a font preview); the trigger shows it too when the option is chosen */
@@ -37,7 +38,7 @@ interface SelectMenuProps {
  */
 export function SelectMenu({ value, options, onChange, ariaLabel, icon, id, className = '', size = 'field', iconOnly = false, menuStyle }: SelectMenuProps) {
   const chosen = options.find(option => option.value === value)
-  const label = `${ariaLabel}: ${chosen?.label ?? '선택 안 됨'}`
+  const label = `${ariaLabel}: ${chosen?.label ?? '선택 안 됨'}${chosen?.detail ? ` (${chosen.detail})` : ''}`
 
   return (
     <DropdownMenu.Root modal={false}>
@@ -51,7 +52,9 @@ export function SelectMenu({ value, options, onChange, ariaLabel, icon, id, clas
         >
           {iconOnly ? icon : <>
             {chosen?.icon ?? icon}
-            <span className="select-menu-value" style={chosen?.style}>{chosen?.label ?? '선택'}</span>
+            <span className="select-menu-value" style={chosen?.style}>{chosen?.label ?? '선택'}
+              {chosen?.detail && <small className="select-menu-detail">{chosen.detail}</small>}
+            </span>
             <RiArrowDownSLine size={16} className="select-menu-chevron" aria-hidden />
           </>}
         </button>
@@ -61,9 +64,9 @@ export function SelectMenu({ value, options, onChange, ariaLabel, icon, id, clas
           align={iconOnly ? 'end' : 'start'} sideOffset={4} collisionPadding={8} style={menuStyle}>
           <DropdownMenu.RadioGroup value={value} onValueChange={onChange}>
             {options.map(option => (
-              <DropdownMenu.RadioItem key={option.value} value={option.value} textValue={option.label} className="select-menu-item" style={option.style}>
+              <DropdownMenu.RadioItem key={option.value} value={option.value} textValue={option.detail ? `${option.label} ${option.detail}` : option.label} className="select-menu-item" style={option.style}>
                 {option.icon}
-                <span className="select-menu-item-label">{option.label}</span>
+                <span className="select-menu-item-label">{option.label}{option.detail && <small className="select-menu-detail">{option.detail}</small>}</span>
                 <DropdownMenu.ItemIndicator className="select-menu-check">
                   <RiCheckLine size={16} />
                 </DropdownMenu.ItemIndicator>

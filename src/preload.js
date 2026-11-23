@@ -191,6 +191,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('local-shell-sleep', listener);
   },
   agentMessagesSnapshot: () => ipcRenderer.invoke('agent-messages-state'),
+  agentMessageSetRole: (id, role) => ipcRenderer.invoke('agent-message-set-role', id, role),
   browserReviewOpen: () => ipcRenderer.invoke('browser-review-open'),
   browserReviewOpenLink: (address, destination) => ipcRenderer.invoke('browser-review-open-link', address, destination),
   onBrowserReviewLinkOpened: (callback) => {

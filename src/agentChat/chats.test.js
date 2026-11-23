@@ -3,6 +3,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAgentChats, claudeFolderName, findClaudeFile } from './chats.js'
+import { openAntigravityTranscript } from './antigravitySessions.js'
 import { PROMPT, BUSY_PROMPT } from '../ipc/agentInboxPrompts.js'
 
 const SESSION = '0f3a8d40-5ff7-4d63-967c-90f524623f87'
@@ -21,6 +22,7 @@ function setup() {
   frames = []
   chats = createAgentChats({
     claudeRoot: root,
+    antigravityRoot: path.join(root, 'brain'),
     tickMs: 60_000,
     send: (channel, frame) => frames.push({ channel, ...frame }),
     resolve: async () => target,
@@ -44,6 +46,108 @@ afterEach(() => {
 })
 
 const texts = frame => frame.items.map(item => item.text)
+const agyStep = (step_index, source, type, content) => JSON.stringify({
+  step_index, source, type, content, created_at: new Date(1_700_000_000_000 + step_index).toISOString()
+}) + '\n'
+const agyUser = (step, text) => agyStep(step, 'USER_EXPLICIT', 'USER_INPUT', text)
+const agyAnswer = (step, text) => agyStep(step, 'MODEL', 'PLANNER_RESPONSE', text)
+
+function agyLogs(sessionId = SESSION) {
+  const logs = path.join(root, 'brain', sessionId, '.system_generated', 'logs')
+  fs.mkdirSync(logs, { recursive: true })
+  return { full: path.join(logs, 'transcript_full.jsonl'), compact: path.join(logs, 'transcript.jsonl') }
+}
+
+describe('following a local Antigravity transcript', () => {
+  it('waits for the bound UUID, ignores a reported file and switches from compact to full', async () => {
+    fs.writeFileSync(file, prompt('unrelated', 'Unrelated transcript'))
+    target = { kind: 'antigravity', status: 'idle', sessionId: null, file, cwd: CWD }
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ kind: 'antigravity', state: 'waiting', items: [] }))
+    expect(frames).toContainEqual(expect.objectContaining({ status: 'idle' }))
+    expect(await chats.transcriptForCopy('local:1')).toEqual({ ok: true, items: [] })
+
+    const { full, compact } = agyLogs()
+    fs.writeFileSync(compact, agyUser(0, 'Compact question'))
+    target.sessionId = SESSION
+    chats.tick()
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ kind: 'antigravity', state: 'live' }))
+    expect(texts(frames.at(-1))).toEqual(['Compact question'])
+    const { transcriptId } = frames.at(-1)
+
+    fs.writeFileSync(full, agyUser(0, 'Full question') + agyAnswer(1, 'Full answer'))
+    chats.tick()
+    await vi.waitFor(() => expect(texts(frames.at(-1))).toEqual(['Full question', 'Full answer']))
+    expect(frames.at(-1).transcriptId).toBe(transcriptId)
+    const next = agyUser(2, 'Live append')
+    fs.appendFileSync(full, next)
+    expect(await chats.findRecordedSend('local:1', { transcriptId, acceptedAt: 1_700_000_000_000, ignoreIds: [], text: 'Live append' }))
+      .toMatchObject({ kind: 'user', text: 'Live append' })
+    expect(texts(await chats.transcriptForCopy('local:1'))).toEqual(['Full question', 'Full answer', 'Live append'])
+    chats.tick()
+    await vi.waitFor(() => expect(texts(frames.at(-1))).toEqual(['Live append']))
+
+    target.sessionId = 'e52f8001-53d1-43ea-8a89-7598f8baaf6c'
+    chats.tick()
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ reset: true, state: 'waiting', items: [] }))
+    expect(frames.at(-1).transcriptId).not.toBe(transcriptId)
+    expect(await chats.transcriptForCopy('local:1')).toEqual({ ok: true, items: [] })
+  })
+
+  it('uses the same parser for older pages and resets after same-path rewrite and replacement', async () => {
+    const { full } = agyLogs()
+    const filler = Array.from({ length: 500 }, (_, i) => agyStep(i + 1, 'MODEL', 'GENERIC', 'x'.repeat(4200))).join('')
+    fs.writeFileSync(full, agyUser(0, 'Older question') + filler + agyUser(501, 'Tail question'))
+    target = { kind: 'antigravity', sessionId: SESSION }
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ reset: true, hasOlder: true }))
+    expect(texts(frames.at(-1))).toEqual(['Tail question'])
+    await chats.older('local:1')
+    expect(texts(frames.at(-1))).toEqual(['Older question'])
+
+    fs.writeFileSync(full, agyUser(0, 'Rewritten question') + filler + agyUser(501, 'Rewritten tail with more characters'))
+    chats.tick()
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ reset: true, items: [{ text: 'Rewritten tail with more characters' }] }))
+
+    const replacement = path.join(path.dirname(full), 'new-log')
+    fs.writeFileSync(replacement, agyUser(0, 'Replacement'))
+    fs.renameSync(replacement, full)
+    chats.tick()
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ reset: true, items: [{ text: 'Replacement' }] }))
+  })
+
+  it('refuses unsafe UUIDs, UNC roots, hard links and linked ancestors', async () => {
+    const brain = path.join(root, 'brain')
+    const { full, compact } = agyLogs()
+    const outside = path.join(root, 'outside')
+    fs.mkdirSync(outside)
+    const outsideFile = path.join(outside, 'transcript_full.jsonl')
+    fs.writeFileSync(outsideFile, agyUser(0, 'Outside'))
+    fs.linkSync(outsideFile, full)
+    expect(await openAntigravityTranscript(brain, SESSION)).toBeNull()
+    fs.writeFileSync(compact, agyUser(0, 'Local fallback'))
+    const source = await openAntigravityTranscript(brain, SESSION)
+    expect(source?.file).toBe(compact)
+    await source?.handle.close()
+    expect(await openAntigravityTranscript(brain, '../outside')).toBeNull()
+    expect(await openAntigravityTranscript('\\\\server\\share\\brain', SESSION)).toBeNull()
+
+    const second = 'e52f8001-53d1-43ea-8a89-7598f8baaf6c'
+    fs.symlinkSync(outside, path.join(brain, second), process.platform === 'win32' ? 'junction' : 'dir')
+    fs.mkdirSync(path.join(outside, '.system_generated', 'logs'), { recursive: true })
+    fs.writeFileSync(path.join(outside, '.system_generated', 'logs', 'transcript_full.jsonl'), agyUser(0, 'Linked outside'))
+    expect(await openAntigravityTranscript(brain, second)).toBeNull()
+  })
+
+  it('never dispatches an unknown provider to the Claude parser', async () => {
+    fs.writeFileSync(file, prompt('hidden', 'Claude-only record'))
+    target = { kind: 'unsupported', file }
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ state: 'ended' }))
+    expect(frames.some(frame => frame.items?.length)).toBe(false)
+    expect(await chats.transcriptForCopy('local:1')).toEqual({ ok: true, items: [] })
+  })
+})
 
 describe('following a chat view\'s transcript', () => {
   it('names Claude\'s project folder after the working directory', () => {

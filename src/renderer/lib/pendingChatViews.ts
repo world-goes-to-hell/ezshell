@@ -1,11 +1,11 @@
 // Panes to show as chats again after their tab came back (app restart record, or a window reload). A chat
 // can open only once the shell's agent is in the message list: after a restart the agent starts again
 // (--resume) a few seconds later, and a pane other than the main one gets its shell later still. So the
-// pane waits here, and is shown as a chat the moment its shell has a Claude Code / Codex.
+// pane waits here, and is shown as a chat when its shell has a supported agent.
 
 import type { PaneId } from './splitTree'
 import { getLocalPaneShellId } from './localPaneShells'
-import { shellAgentOf } from './agentChatItems'
+import { isAgentChatProvider, shellAgentOf } from './agentChatItems'
 import { useAgentMessagesStore } from '../components/Terminal/AgentMessages'
 import { useAgentChatStore } from '../stores/agentChatStore'
 
@@ -33,7 +33,7 @@ export function planChatViews(
     if (now > entry.until) continue
     const shell = shellOf(entry.tabId, entry.pane)
     const kind = shell ? shellAgentOf(agents, shell)?.kind : undefined
-    if (shell && (kind === 'claude' || kind === 'codex')) open.push(shell)
+    if (shell && isAgentChatProvider(kind)) open.push(shell)
     else wait.push(entry)
   }
   return { open, wait }

@@ -281,7 +281,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     ${questionScreen}?.textContent.includes('첫 번째 항목') && !${questionScreen}.inert &&
     ${questionScreen}.getBoundingClientRect().top >= ${cover(0)}.getBoundingClientRect().bottom - 1 &&
     ${cover(0)}.querySelector('.agent-chat-status')?.dataset.status === 'blocked' &&
-    !${cover(0)}.querySelector('.agent-chat-input') && !${cover(0)}.querySelector('.agent-chat-approval-option')
+    ${composer(0)}.readOnly && !${cover(0)}.querySelector('.agent-chat-approval-option')
   `, 8000))
   fs.writeFileSync(file('claude-1-program-status'), 'state=idle:app=claude')
   await waitFor(() => !fs.existsSync(file('claude-1-program-status')))
@@ -296,8 +296,8 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     ${questionScreen}?.querySelector('.xterm-helper-textarea') === document.activeElement
   `, 8000) && !read('claude-1-approval-answer'))
   const beforeQuestionKeys = read(questionInputFile).length
-  const pressQuestionKey = async (key, windowsVirtualKeyCode) => {
-    const params = { key, code: key, windowsVirtualKeyCode }
+  const pressQuestionKey = async (key, windowsVirtualKeyCode, code = key) => {
+    const params = { key, code, windowsVirtualKeyCode }
     await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...params })
     await send('Input.dispatchKeyEvent', { type: 'keyUp', ...params })
   }
@@ -440,8 +440,9 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await js(`${cover(0)}.querySelector('.agent-chat-send').click()`)
   check('a rejected send restores the draft and removes its optimistic bubble', await until(`
     [...document.querySelectorAll('.toast')].some(toast => toast.textContent.includes('보내지 못했습니다')) &&
-    ${cover(0)}.querySelector('.agent-chat-input').value.length === 16001 &&
-    ${cover(0)}.querySelectorAll('.agent-chat-user').length === 1 &&
+    ${composer(0)}.value === '가'.repeat(16001) &&
+    ${cover(0)}.querySelector('[data-chat-row="item:user:u1"]')?.textContent.includes('첫 칸 질문') &&
+    !${cover(0)}.querySelector('[data-chat-row^="item:outgoing:"]') &&
     !${cover(0)}.querySelector('.agent-chat-reply-progress')
   `, 3000))
   await setChatDraft('')
@@ -454,27 +455,42 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     { question: '어떤 색으로 할까요?', header: '색', multiSelect: false, options: [{ label: 'Red', description: '따뜻한 색' }, { label: 'Green', description: '차분한 색' }] }
   ]
   const askTool = (uuid, id, questions) => line({ type: 'assistant', uuid, timestamp: '2026-11-19T10:05:00Z', message: { id: uuid, role: 'assistant', content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input: { questions } }] } })
-  const clickAsk = async selector => click(...await center(`${askCard}.querySelector(${JSON.stringify(selector)})`))
-  const clickAskOption = async label => click(...await center(`[...${askCard}.querySelectorAll('.agent-ask-option')].find(button => button.textContent.includes(${JSON.stringify(label)}))`))
+  const clickAskControl = async target => {
+    if (!await until(`(${target})?.disabled === false`, 3000)) throw new Error(`question control stayed disabled: ${target}`)
+    await click(...await center(target))
+  }
+  const clickAsk = selector => clickAskControl(`${askCard}.querySelector(${JSON.stringify(selector)})`)
+  const clickAskOption = label => clickAskControl(`[...${askCard}.querySelectorAll('.agent-ask-option')].find(button => button.textContent.includes(${JSON.stringify(label)}))`)
   // A toast left by the checks above would cover the card's buttons
   await js(`document.querySelectorAll('.toast .toast-close').forEach(button => button.click())`)
   await until(`!document.querySelector('.toast')`, 5000)
+  await setChatDraft('질문 전 초안')
+  await js(`${composer(0)}.focus()`)
   fs.appendFileSync(firstTranscript, askTool('a-ask', 'toolu_ask', askQuestions))
   fs.writeFileSync(file('claude-1-program-status'), 'state=working:app=claude')
   fs.writeFileSync(file('claude-1-ask-dialog'), JSON.stringify(askQuestions))
-  check('Claude’s question shows as a chat card, not the terminal dialog', await until(`
+  check('Claude’s question card leaves the draft focused and read-only', await until(`
     ${askCard}?.textContent.includes('어떤 과일을 넣을까요?') && ${askCard}.textContent.includes('빨간 과일') &&
-    ${askCard}.querySelectorAll('.agent-ask-step').length === 3 && !${questionScreen} && !${composer(0)} &&
+    ${askCard}.querySelectorAll('.agent-ask-step').length === 3 && !${questionScreen} && ${composer(0)}.readOnly &&
+    document.activeElement === ${composer(0)} && ${composer(0)}.value === '질문 전 초안' &&
     ${cover(0)}.querySelector('.agent-ask-summary')?.textContent.includes('답변 대기 중')
   `, 8000))
+  await until(`${askCard}?.querySelector('.agent-ask-option')?.disabled === false`, 3000)
+  await pressQuestionKey('1', 49, 'Digit1')
+  await pressQuestionKey(' ', 32, 'Space')
+  await driver.enter()
+  check('keys in the blocked composer neither change the draft nor choose an answer', await js(`
+    ${composer(0)}.value === '질문 전 초안' && !${askCard}.querySelector('[aria-checked=true]') &&
+    ${cover(0)}.querySelector('.agent-chat-send').disabled
+  `) && !read('claude-1-ask-submitted'))
   await shot('local-agent-chat-ask-card')
   await clickAskOption('Apple')
   await clickAskOption('Cherry')
   await clickAskOption('직접 입력')
   await until(`document.activeElement === ${askCard}?.querySelector('.agent-ask-input')`, 3000)
   await send('Input.insertText', { text: '빨간사과' })
-  await clickAsk('.agent-ask-send')
-  check('a single choice question moves on to the review when picked', await until(`${askCard}?.textContent.includes('어떤 색으로 할까요?')`, 3000))
+  await driver.enter()
+  check('Enter in a focused free-text answer advances to the next question', await until(`${askCard}?.textContent.includes('어떤 색으로 할까요?')`, 3000))
   await clickAskOption('Green')
   check('the review lists every answer before sending', await until(`
     ${askCard}?.querySelector('.agent-ask-review')?.textContent.includes('Apple, Cherry, 빨간사과') && ${askCard}.textContent.includes('Green')
@@ -489,9 +505,10 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   }))
   fs.writeFileSync(file('claude-1-program-status'), 'state=idle:app=claude')
   check('the answered question stays in the conversation with its answers', await until(`
-    !${askCard} && !!${composer(0)} &&
+    !${askCard} && ${composer(0)}.readOnly === false && ${composer(0)}.value === '질문 전 초안' &&
     ${cover(0)}.querySelector('.agent-ask-summary')?.textContent.includes('Apple, Cherry, 빨간사과')
   `, 8000))
+  await setChatDraft('')
 
   // The card's own way out: the same dialog in the terminal under the chat, as before
   fs.unlinkSync(file('claude-1-ask-submitted'))
@@ -939,12 +956,25 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('sent thumbnails keep the order of the remaining images', await until(`${sentImageWidths(comparisonBody)} === '1,2,3'`))
 
   // A permission prompt in the terminal shows as choices in the chat, and a choice answers it
+  const approvalCard = `${cover(0)}?.querySelector('.agent-chat-approval')`
+  const firstApprovalOption = `${approvalCard}?.querySelector('.agent-chat-approval-option')`
+  fs.writeFileSync(file('claude-1-approval-answer'), '')
+  await setChatDraft('승인 전 초안')
+  await js(`${composer(0)}.focus()`)
   fs.writeFileSync(file('claude-1-approval'), '─'.repeat(60) + '\r\n Bash command\r\n\r\n   npm run build\r\n\r\n Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. Yes, and don\'t ask again for npm run build commands\r\n   3. No, and tell Claude what to do differently (esc)')
   check('the prompt shows in the chat with its question, command and choices', await until(`(() => {
-    const card = ${cover(0)}?.querySelector('.agent-chat-approval')
+    const card = ${approvalCard}
     return !!card && card.textContent.includes('Do you want to proceed?') && card.textContent.includes('npm run build') &&
-      card.querySelectorAll('.agent-chat-approval-option').length === 3 && !${cover(0)}.querySelector('.agent-chat-input')
+      card.querySelectorAll('.agent-chat-approval-option').length === 3 && ${composer(0)}.readOnly && document.activeElement === ${composer(0)}
   })()`, 8000), await js(`${cover(0)}?.querySelector('.agent-chat-approval')?.textContent ?? 'no card'`))
+  check('approval choices start disabled', await js(`${firstApprovalOption}?.disabled === true`))
+  await until(`${firstApprovalOption}?.disabled === false`, 3000)
+  await pressQuestionKey('1', 49, 'Digit1')
+  await pressQuestionKey(' ', 32, 'Space')
+  await driver.enter()
+  check('typing in the blocked composer does not approve the command', !read('claude-1-approval-answer') && await js(`
+    document.activeElement === ${composer(0)} && ${composer(0)}.value === '승인 전 초안' && ${cover(0)}.querySelector('.agent-chat-send').disabled
+  `))
   check('the other pane\'s chat shows no prompt', await js(`!${cover(1)}.querySelector('.agent-chat-approval')`))
   await click(...await center(chatLog(0)), 'right')
   check('paste is disabled while the chat is waiting for an approval', await until(`
@@ -954,10 +984,13 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
   await until(`!document.querySelector('.terminal-menu')`)
   await shot('local-agent-chat-approval')
-  const second = await center(`${cover(0)}.querySelectorAll('.agent-chat-approval-option')[1]`)
-  await click(second[0], second[1])
+  await js(`${approvalCard}.focus()`)
+  await pressQuestionKey('2', 50, 'Digit2')
   check('choosing answers the prompt with that number', await waitFor(() => read('claude-1-approval-answer') === '2'), read('claude-1-approval-answer'))
-  check('the composer comes back once the prompt is gone', await until(`!${cover(0)}.querySelector('.agent-chat-approval') && !!${cover(0)}.querySelector('.agent-chat-input')`, 8000))
+  check('the saved draft becomes editable once the prompt is gone', await until(`
+    !${approvalCard} && ${composer(0)}.readOnly === false && ${composer(0)}.value === '승인 전 초안'
+  `, 8000))
+  await setChatDraft('')
 
   const openChatMenu = async () => {
     const log = await center(chatLog(0))

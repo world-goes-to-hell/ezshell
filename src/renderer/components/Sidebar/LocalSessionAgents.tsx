@@ -2,13 +2,15 @@ import {
   RiChat1Line, RiCircleLine,
   RiErrorWarningLine, RiHourglassLine, RiPlayCircleLine, RiRecordCircleLine, RiStopCircleLine, RiMoonLine, RiTimeLine
 } from 'react-icons/ri'
+import { agentIdentityLabel } from '../../lib/agentIdentity'
 import { focusTabPane } from '../../lib/paneFocus'
 import { MAIN_PANE } from '../../lib/splitTree'
 import { tabHost } from '../../lib/tabHosts'
 import { useTerminalStore } from '../../stores/terminalStore'
 import type { AgentMessageSession, LocalAgentStatus } from '../../types'
 import { isAgentWorking, useAgentMessagesStore } from '../Terminal/AgentMessages'
-import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
+import { AgentIdentityDot } from '../ui/AgentIdentity'
+import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../ui/agentProviderIcons'
 
 const presentation = {
   unknown: { label: '상태 미확인', Icon: RiCircleLine },
@@ -25,16 +27,17 @@ const presentation = {
 export function localAgentAppearance(agent: AgentMessageSession) {
   const status = agent.waitingForReply && ['working', 'idle', 'unknown'].includes(agent.status) ? 'reply' : agent.status
   const { label, Icon } = presentation[status]
-  const ProviderIcon = AGENT_PROVIDER_ICONS[agent.kind === 'codex' ? 'codex' : 'claude']
-  const name = `${agent.kind === 'codex' ? 'Codex' : 'Claude Code'} ${agent.id.slice(agent.kind.length + 1)}`
-  const description = `${name} · ${label}${status === 'error' && agent.exitCode ? ` (종료 코드 ${agent.exitCode})` : ''}`
+  const ProviderIcon = AGENT_PROVIDER_ICONS[agent.kind]
+  const name = `${AGENT_PROVIDER_NAMES[agent.kind]} ${agent.id.slice(agent.kind.length + 1)}`
+  const statusDescription = `${label}${status === 'error' && agent.exitCode ? ` (종료 코드 ${agent.exitCode})` : ''}`
+  const description = `${name} · ${statusDescription}`
   const icons = (
     <span className="local-agent-icons" data-status={status} data-agent-kind={agent.kind} aria-hidden>
       <Icon className="local-agent-status" size={12} />
       <ProviderIcon className="local-agent-provider" size={14} />
     </span>
   )
-  return { status, name, label, description, icons }
+  return { status, name, label, description, statusDescription, icons }
 }
 
 export function LocalSessionAgents({ tabId }: { tabId: string }) {
@@ -47,7 +50,8 @@ export function LocalSessionAgents({ tabId }: { tabId: string }) {
   return (
     <div className="local-agent-strip" role="group" aria-label="이 세션의 에이전트">
       {sessionAgents.map(agent => {
-        const { status, description, icons } = localAgentAppearance(agent)
+        const { status, statusDescription, icons } = localAgentAppearance(agent)
+        const description = `${agentIdentityLabel(agent)} · ${statusDescription}`
         return (
           <button
             key={agent.id}
@@ -64,6 +68,7 @@ export function LocalSessionAgents({ tabId }: { tabId: string }) {
               focusTabPane(focusTerminal, tabId, pane?.dataset.pane ?? MAIN_PANE)
             }}
           >
+            <AgentIdentityDot id={agent.id} />
             {icons}
           </button>
         )

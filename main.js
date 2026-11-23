@@ -584,7 +584,7 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
   isAvailable: () => process.platform === 'win32' && !isAppLocked && mainWindow && !mainWindow.isDestroyed()
     && !(mainWindow.isFocused() && shortcutRecorder === mainWindow.webContents),
   listAgents: () => agentMessages.snapshot().agents
-    .filter(agent => agent.active && localShells?.chatAgentId(agent.shellId) === agent.id)
+    .filter(agent => agent.active && agent.kind !== 'antigravity' && localShells?.chatAgentId(agent.shellId) === agent.id)
     .map(({ id, shellId, kind, cwd, status }) => ({ id, shellId, kind, cwd, status })),
   repoFolders: localGit.repoFolders,
   storeAttachment: image => ({ preview: imagePreview(image), file: localTerminalClipboard.storeImage(image) }),
@@ -636,6 +636,7 @@ const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages(
   isLocked: () => isAppLocked,
   onInboxChanged: id => localShells?.wakeInbox(id),
   bindLocalAgent: request => localShells?.bindAgentProcess(request),
+  reportLocalAntigravity: request => localShells?.reportAntigravityStatus(request),
   bridgeFile: agentBridgeFile
 });
 const localTerminalClipboard = require('./src/ipc/localTerminalClipboard.js').createLocalTerminalClipboard(clipboard, nativeImage);
@@ -709,7 +710,7 @@ ipcMain.handle('local-shell-open', async (event, size) => {
       if (!target) return { success: false, error: '에이전트 기록을 새로 고친 뒤 다시 시도해 주세요.' };
       Object.assign(options, { cwd: target.cwd, agent: target.agent, resume: target.id });
     }
-    if (options.agent === 'codex' || options.agent === 'claude') {
+    if (['codex', 'claude', 'antigravity'].includes(options.agent)) {
       await agentMessages.ready();
       if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
     } else {
@@ -761,6 +762,15 @@ app.on('will-quit', () => {
 ipcMain.handle('agent-messages-state', event =>
   fromMainWindow(event) && !isAppLocked ? agentMessages.snapshot() : null
 );
+ipcMain.handle('agent-message-set-role', (event, id, role) => {
+  if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '에이전트 역할을 변경할 수 없습니다.' };
+  try {
+    agentMessages.setUserRole(id, role);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
 // Usage of the agents ezShell launched (status bar): Claude reports it from its status line over the
 // agent pipe, Codex's comes from its session file. Numbers and the model name only.
 const codexUsageWatcher = require('./src/ipc/codexUsageWatcher.js').createCodexUsageWatcher({
@@ -811,6 +821,7 @@ const agentChats = require('./src/agentChat/chats.js').createAgentChats({
     const running = localShells?.agentOf(shellId);
     if (!running) return null;
     const approval = localShells.approvalOf(shellId);
+    if (running.kind === 'antigravity') return { ...running, approval };
     const codexSpeed = running.kind === 'codex' ? localShells.codexSpeedOf(shellId) : null;
     const backgroundShellCount = running.kind === 'claude' ? localShells.backgroundShellCountOf(shellId) : null;
     const agent = agentMessages.snapshot().agents.filter(item => item.active && item.shellId === shellId && item.kind === running.kind).at(-1);

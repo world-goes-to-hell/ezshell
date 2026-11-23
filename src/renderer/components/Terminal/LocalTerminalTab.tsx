@@ -29,7 +29,7 @@ import { useAgentChatStore } from '../../stores/agentChatStore'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
 import { matchesBinding } from '../../lib/shortcutMatch'
 import { shortcutLabel } from '../../lib/shortcutModifiers'
-import { shellAgentOf } from '../../lib/agentChatItems'
+import { isAgentChatProvider, shellAgentOf } from '../../lib/agentChatItems'
 import { buildLocalInsertSequence } from '../../lib/commandCapture'
 import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory'
 import { CommandHistoryPanel } from './CommandHistoryPanel'
@@ -42,16 +42,16 @@ import './LocalTerminalTab.css'
 /** Shows a shell as a chat when an agent runs in it; says why not otherwise */
 function showChat(shellId: string): void {
   if (!chatAgentOf(shellId)) {
-    toast.info('채팅으로 볼 수 없습니다', '이 셸에서 Claude Code 나 Codex 가 돌고 있지 않습니다.')
+    toast.info('채팅으로 볼 수 없습니다', '이 셸에서 채팅을 지원하는 에이전트가 돌고 있지 않습니다.')
     return
   }
   void useAgentChatStore.getState().show(shellId)
 }
 
 /** The agent CLI running in a local shell that the chat view can show, or null */
-const chatAgentOf = (shellId: string): 'claude' | 'codex' | null => {
-  const agent = shellAgentOf(useAgentMessagesStore.getState().snapshot.agents, shellId)
-  return agent?.kind === 'claude' || agent?.kind === 'codex' ? agent.kind : null
+const chatAgentOf = (shellId: string) => {
+  const kind = shellAgentOf(useAgentMessagesStore.getState().snapshot.agents, shellId)?.kind
+  return isAgentChatProvider(kind) ? kind : null
 }
 
 interface LocalTerminalTabProps {
@@ -102,6 +102,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const customThemes = useThemeStore(state => isChat ? state.customThemes : undefined)
   const chatTheme = useMemo(() => chatThemeId ? chatAppearance(chatThemeId, customThemes ?? []) : undefined, [chatThemeId, customThemes])
   const chatKind = useAgentChatStore(state => state.chats.get(shellId)?.kind)
+  const antigravity = (chatKind ?? chatAgent) === 'antigravity'
   const hasInteractiveQuestion = useAgentChatStore(state => {
     const chat = state.chats.get(shellId)
     return chat?.state !== 'ended' && chat?.approval?.usesTerminalInput === true
@@ -109,7 +110,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   // Claude's AskUserQuestion goes on the chat's own card (AskQuestionCard) unless the user took it to the terminal
   const answerableAskId = useAgentChatStore(state => {
     const chat = state.chats.get(shellId)
-    return chat && chat.state !== 'ended' ? answerableAskItem(chat.items, chat.approval)?.id ?? null : null
+    return chat?.kind === 'claude' && chat.state !== 'ended' ? answerableAskItem(chat.items, chat.approval)?.id ?? null : null
   })
   const askInTerminal = useAskQuestionStore(state => state.inTerminal.get(shellId))
   const inlineQuestion = !exit && hasInteractiveQuestion && (!answerableAskId || askInTerminal === answerableAskId)
@@ -431,7 +432,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
           className="local-terminal-host"
           inert={isChat && !inlineQuestion}
           role={inlineQuestion ? 'region' : undefined}
-          aria-label={inlineQuestion ? 'Claude 질문 응답' : undefined}
+          aria-label={inlineQuestion ? (antigravity ? 'Antigravity 터미널 입력' : 'Claude 질문 응답') : undefined}
           onContextMenu={onContextMenu}
         />
         {showHistory && !exit && !isChat && !chatAgent && (
@@ -465,10 +466,10 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
           />
         )}
         {!isChat && <AgentScreenReturnBar shellId={shellId} />}
-        <AgentSleepCover shellId={shellId} onTerminal={showTerminal} />
+        {!antigravity && <AgentSleepCover shellId={shellId} onTerminal={showTerminal} />}
       </div>
-      <AgentPaneUsage shellId={shellId} actionsRef={hasSpeedControls ? setUsageActions : undefined} style={chatTheme?.style} />
-      <AgentPaneMessages shellId={shellId} tabId={tabId} />
+      {!antigravity && <AgentPaneUsage shellId={shellId} actionsRef={hasSpeedControls ? setUsageActions : undefined} showIdentity={!isChat} style={chatTheme?.style} />}
+      {!antigravity && <AgentPaneMessages shellId={shellId} tabId={tabId} />}
       {exit && (
         <div className="local-terminal-exit" role="status">
           셸이 종료되었습니다{exit.code !== null && exit.code !== 0 ? ` (종료 코드 ${exit.code})` : ''}.

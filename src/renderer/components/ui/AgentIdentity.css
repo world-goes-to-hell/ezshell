@@ -1,0 +1,46 @@
+:root {
+  --agent-identity-tone-1: var(--text-link);
+  --agent-identity-tone-2: var(--warning);
+  --agent-identity-tone-3: var(--success);
+  --agent-identity-tone-4: var(--error-text);
+  --agent-identity-tone-5: color-mix(in oklch, var(--text-link), var(--error-text));
+  --agent-identity-tone-6: color-mix(in oklch, var(--info), var(--success));
+  --agent-identity-tone-7: color-mix(in oklch, var(--warning), var(--error-text));
+  --agent-identity-tone-8: color-mix(in oklch, var(--success), var(--warning));
+}
+.agent-identity-dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.agent-identity-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  gap: 5px;
+  min-width: 0;
+  max-width: min(32%, 170px);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.agent-identity-badge > :last-child { overflow: hidden; text-overflow: ellipsis; }
+.agent-identity-badge svg { flex: none; color: var(--text-secondary); }
+.agent-identity-action {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.agent-identity-action:hover { color: var(--text-link); background: var(--bg-hover); }
+.agent-identity-action:focus-visible { outline: 2px solid var(--text-link); outline-offset: -1px; }

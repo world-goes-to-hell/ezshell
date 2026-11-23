@@ -1,5 +1,5 @@
 import { matchesEchoText } from '../../agentChat/echoText.mjs'
-import type { AgentChatItem, AgentChatSubagentActivity } from '../types'
+import type { AgentChatItem, AgentChatProvider, AgentChatSubagentActivity } from '../types'
 
 /** Items a chat view keeps; past this the oldest go (scrolling up reads them again only after reopening) */
 export const MAX_CHAT_ITEMS = 3000
@@ -192,6 +192,10 @@ export function chatTextForClipboard(transcript: AgentChatItem[], visible: Agent
 }
 
 /** The latest live agent of a local shell (a shell can have run several, one after another) */
+export function isAgentChatProvider(kind: string | undefined): kind is AgentChatProvider {
+  return kind === 'claude' || kind === 'codex' || kind === 'antigravity'
+}
+
 export function shellAgentOf<T extends { active: boolean; shellId: string }>(agents: readonly T[], shellId: string): T | undefined {
   for (let index = agents.length - 1; index >= 0; index--) {
     if (agents[index].active && agents[index].shellId === shellId) return agents[index]

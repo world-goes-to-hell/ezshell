@@ -1,4 +1,4 @@
-import type { LocalAgent } from '../types'
+import type { AgentChatProvider } from '../types'
 import { useTerminalStore } from '../stores/terminalStore'
 import { folderName } from './agentHistory'
 import { adoptLocalPaneShell, getLocalPaneShellId } from './localPaneShells'
@@ -16,7 +16,7 @@ export interface LiveLocalShell {
   name: string
   exited: boolean
   cwd: string | null
-  agent: LocalAgent | null
+  agent: AgentChatProvider | null
 }
 
 

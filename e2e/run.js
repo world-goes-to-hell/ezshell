@@ -76,8 +76,10 @@ async function runSpec(name) {
   const packaged = process.env.E2E_APP
   const appEntry = { 'quick-capture': 'e2e/support/quickCaptureApp.js', 'browser-review': 'e2e/support/localAgentApp.js', 'local-agent-messages': 'e2e/support/localAgentApp.js', 'local-agent-pane-map': 'e2e/support/localAgentApp.js', 'local-agent-tab-close': 'e2e/support/localAgentApp.js', 'local-agent-usage': 'e2e/support/localAgentApp.js', 'local-work-overview': 'e2e/support/localAgentApp.js', 'local-agent-history': 'e2e/support/agentHistoryApp.js', 'ssh-agent-drop': 'e2e/support/agentHistoryApp.js', 'local-restore-agents': 'e2e/support/agentHistoryApp.js', 'local-agent-chat': 'e2e/support/agentChatApp.js', 'local-agent-chat-scroll': 'e2e/support/agentChatApp.js', 'local-agent-chat-images': 'e2e/support/agentChatApp.js', 'local-agent-sleep': 'e2e/support/agentSleepApp.js' }[name] ?? 'out/main/index.js'
   const manualClaude = name === 'local-agent-chat-manual'
+  const entry = name === 'local-agent-chat-antigravity' && process.platform === 'win32'
+    ? 'e2e/support/antigravityChatApp.js' : manualClaude ? 'e2e/support/agentChatApp.js' : appEntry
   const app = spawn(packaged || require('electron'), [
-    ...(packaged ? [] : [path.join(ROOT, manualClaude ? 'e2e/support/agentChatApp.js' : appEntry)]),
+    ...(packaged ? [] : [path.join(ROOT, entry)]),
     `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, ...APP_FLAGS
   ], {
     cwd: ROOT, stdio: 'ignore',

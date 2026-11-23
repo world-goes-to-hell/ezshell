@@ -24,6 +24,12 @@ describe('planChatViews', () => {
     expect(planChatViews(waiting, 10, shellOf, [agent('local:1', 'codex', false), agent('local:2', 'other')]).open).toEqual([])
   })
 
+  it('opens Antigravity chat only after a live agent has been bound to that shell', () => {
+    const { open, wait } = planChatViews(waiting, 10, shellOf, [agent('local:1', 'antigravity', false), agent('local:2', 'antigravity')])
+    expect(open).toEqual(['local:2'])
+    expect(wait).toEqual([waiting[0]])
+  })
+
   it('gives up on a pane whose agent did not come back in time', () => {
     expect(planChatViews(waiting, 2000, shellOf, [agent('local:1')])).toEqual({ open: [], wait: [] })
   })

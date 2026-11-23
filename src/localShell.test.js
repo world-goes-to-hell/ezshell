@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
+import { basename, dirname, join } from 'node:path'
+import { createAgentMessages } from './ipc/agentMessages.js'
+import { rpc } from './ipc/agentMessageCli.js'
 import { createLocalShells, defaultShell, BACKLOG_CHARS } from './localShell.js'
 
 function fakePty() {
@@ -34,6 +37,81 @@ describe('defaultShell', () => {
 })
 
 describe('createLocalShells', () => {
+  it('binds the Antigravity status reporter, rejects tool descendants, keeps OSC blocking, and detaches on exit', async () => {
+    let shells
+    let locked = false
+    const agents = createAgentMessages({ notify: vi.fn(), isLocked: () => locked, reportLocalAntigravity: report => shells.reportAntigravityStatus(report) })
+    await agents.ready()
+    const runtime = { name: basename(process.execPath), executable: process.execPath }
+    const statusShell = { name: process.platform === 'win32' ? 'cmd.exe' : 'sh' }
+    const processes = new Map([
+      [12, { parent: 10, name: 'agy.exe' }], [13, { parent: 11, name: 'agy.exe' }],
+      [14, { ...runtime, parent: 19 }], [19, { ...statusShell, parent: 12 }],
+      [15, { ...runtime, parent: 11 }],
+      [16, { ...runtime, parent: 20 }], [20, { ...statusShell, parent: 13 }],
+      [17, { ...runtime, parent: 21 }], [21, { ...statusShell, parent: 18 }], [18, { parent: 12, name: 'agy.exe' }],
+      [22, { ...runtime, parent: 19, executable: join(dirname(process.execPath), 'other', runtime.name) }],
+      [23, { ...runtime, parent: 24 }], [24, { parent: 12, name: 'powershell.exe' }]
+    ])
+    const fixture = setup({ agents, processTree: async () => processes, processAlive: pid => processes.has(pid) })
+    shells = fixture.shells
+    const first = shells.open({ agent: 'antigravity' }).id
+    const second = shells.open().id
+    const [firstPty, secondPty] = fixture.ptys
+    firstPty.pid = 10
+    secondPty.pid = 11
+    const cwd = process.platform === 'win32' ? 'C:\\work' : '/work'
+    const sessionId = '183a2d7a-c5d8-4d40-acd1-11c08bce7cde'
+    const otherId = 'd13ee880-0dde-49af-a4c9-7a3620649d7b'
+    const report = (pty, pid, conversation_id = '', fields = {}, token = pty.options.env.EZSHELL_SHELL_TOKEN) => rpc({
+      method: 'antigravity-status', pid,
+      value: { product: 'antigravity', cwd, conversation_id, agent_state: 'idle', ...fields }
+    }, { pipe: pty.options.env.EZSHELL_AGENT_PIPE, token })
+    try {
+      expect(firstPty.options.env).not.toHaveProperty('EZSHELL_AGENT_TOKEN')
+      expect(fixture.spawn.mock.calls[0][1].join(' ')).toContain('--settings')
+      expect(shells.agentOf(first)).toBeNull()
+      expect(await report(firstPty, 16)).toMatchObject({ stored: false })
+      expect(await report(firstPty, 17)).toMatchObject({ stored: false })
+      expect(await report(firstPty, 22, otherId)).toMatchObject({ stored: false })
+      expect(await report(firstPty, 23, otherId)).toMatchObject({ stored: false })
+      expect(await report(secondPty, 15)).toMatchObject({ stored: false })
+      expect(await report(firstPty, 14, '', {}, 'unregistered')).toMatchObject({ stored: false })
+      locked = true
+      expect(await report(firstPty, 14)).toMatchObject({ stored: false })
+      locked = false
+      firstPty.emit('\x1b]7501;?\x07\x1b]7501;state=blocked:kind=question:app=antigravity\x07')
+      expect(await report(firstPty, 14)).toMatchObject({ stored: true })
+      expect(shells.agentOf(first)).toEqual({ kind: 'antigravity', cwd, sessionId: null, status: 'blocked' })
+      expect(await report(firstPty, 14, sessionId)).toMatchObject({ stored: true })
+      expect(await report(firstPty, 23, otherId)).toMatchObject({ stored: false })
+      expect(shells.agentOf(first)?.sessionId).toBe(sessionId)
+      expect(shells.approvalOf(first)).toEqual({ question: null, detail: [], options: [], signature: 'antigravity-terminal', usesTerminalInput: true })
+      firstPty.write.mockClear()
+      expect((await shells.answerApproval(first, '1', 'antigravity-terminal')).ok).toBe(false)
+      expect((await shells.chatSend(first, 'text')).ok).toBe(false)
+      expect(shells.interruptAgent(first)).toBe(false)
+      expect(firstPty.write).not.toHaveBeenCalled()
+      firstPty.emit('\x1b]7501;state=idle:app=antigravity\x07')
+      expect(shells.approvalOf(first)).toBeNull()
+      expect(await report(secondPty, 16, otherId)).toMatchObject({ stored: true })
+      expect(shells.agentOf(first)?.sessionId).toBe(sessionId)
+      expect(shells.agentOf(second)?.sessionId).toBe(otherId)
+      expect(agents.snapshot().agents).toMatchObject([
+        { kind: 'antigravity', shellId: first, active: true, mcpConnected: false, status: 'idle' },
+        { kind: 'antigravity', shellId: second, active: true, mcpConnected: false, status: 'idle' }
+      ])
+      processes.delete(12)
+      expect(shells.agentOf(first)).toBeNull()
+      expect(await report(firstPty, 14, sessionId)).toMatchObject({ stored: false })
+      await vi.waitFor(() => expect(agents.snapshot().agents.find(agent => agent.shellId === first)?.active).not.toBe(true), { timeout: 2000 })
+      expect(shells.isRunning(first)).toBe(true)
+    } finally {
+      shells.closeAll()
+      agents.stop()
+    }
+  })
+
   it('finds a manual Claude through its own process and updates the session without MCP', async () => {
     vi.useFakeTimers()
     const startedAt = Date.now()

@@ -90,6 +90,8 @@ const AGENT_SESSION_MARKERS = new Set([
   'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH',
   'EZSHELL_AGENT_ID', 'EZSHELL_AGENT_TOKEN', 'EZSHELL_SHELL_TOKEN', 'EZSHELL_AGENT_PIPE',
   'EZSHELL_AGENT_MCP_CONFIG', 'EZSHELL_AGENT_MCP_SCRIPT', 'EZSHELL_AGENT_SETTINGS', 'EZSHELL_AGENT_USAGE_SCRIPT',
+  'EZSHELL_ANTIGRAVITY_SETTINGS', 'EZSHELL_ANTIGRAVITY_STATUS_SCRIPT', 'EZSHELL_ANTIGRAVITY_STATUS_FORWARD',
+  'EZSHELL_ANTIGRAVITY_STATUS_COMMAND',
   'EZSHELL_CLI_EXE', 'EZSHELL_CLI_SCRIPT'
 ]);
 
@@ -152,7 +154,7 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  */
 function resumeArgs(agent, resume) {
   if (resume === undefined) return '';
-  if (agent === undefined || typeof resume !== 'string' || !SESSION_ID.test(resume)) {
+  if ((agent !== 'claude' && agent !== 'codex') || typeof resume !== 'string' || !SESSION_ID.test(resume)) {
     throw new Error('이어서 실행할 세션이 올바르지 않습니다.');
   }
   return agent === 'codex' ? ` resume ${resume}` : ` --resume ${resume}`;
@@ -175,12 +177,59 @@ if ($env:EZSHELL_AGENT_SETTINGS -and (Get-Command claude -ErrorAction SilentlyCo
 }
 `;
 
+const POWERSHELL_FIND_AGY = String.raw`
+$agyCommand = Get-Command agy.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (!$agyCommand -and $env:LOCALAPPDATA) {
+    $agyInstalled = Join-Path $env:LOCALAPPDATA 'agy\bin\agy.exe'
+    if (Test-Path -LiteralPath $agyInstalled -PathType Leaf) { $agyCommand = $agyInstalled }
+}
+`;
+
+const POWERSHELL_AGY_WITH_STATUS = String.raw`
+$savedAgyOsc = $env:AGY_CLI_OSC7501
+$savedAgyMessages = $env:AGY_CLI_OSC7501_MESSAGES
+try {
+    $env:AGY_CLI_OSC7501 = 'on'
+    $env:AGY_CLI_OSC7501_MESSAGES = 'brief'
+    & $agyCommand --settings $env:EZSHELL_ANTIGRAVITY_SETTINGS @args
+} finally {
+    $env:AGY_CLI_OSC7501 = $savedAgyOsc
+    $env:AGY_CLI_OSC7501_MESSAGES = $savedAgyMessages
+}
+`;
+
+const POWERSHELL_AGY_FUNCTION = String.raw`
+if ($env:EZSHELL_ANTIGRAVITY_SETTINGS -and !(Get-Command agy -CommandType Alias,Function,ExternalScript -ErrorAction SilentlyContinue)) {
+    ${POWERSHELL_FIND_AGY}
+    if ($agyCommand) {
+        function global:agy {
+            ${POWERSHELL_FIND_AGY}
+            if (!$agyCommand) { return }
+            $subcommands = 'acp','agent','agents','changelog','help','install','mcp','mic-serve','models','plugin','plugins','remote-control','update'
+            if (($args | Where-Object { [string]$_ -cmatch '^(?:--(?:settings|help|version|print|prompt|input-format|output-format|remote-agent|remote-control)(?:=|$)|-[phV]$)' -or [string]$_ -cin $subcommands }) -or !(Test-Path -LiteralPath $env:EZSHELL_ANTIGRAVITY_SETTINGS)) {
+                & $agyCommand @args
+            } else {
+                ${POWERSHELL_AGY_WITH_STATUS}
+            }
+        }
+    }
+}
+`;
+
 function shellArgs(shell, agent, platform, withMessaging, resume) {
   const resumed = resumeArgs(agent, resume);
   if (agent === undefined) {
     if (platform !== 'win32' || !/^(?:powershell|pwsh)(?:\.exe)?$/i.test(path.win32.basename(shell.file))) return shell.args;
-    const agentFunctions = withMessaging ? POWERSHELL_CODEX_FUNCTION + POWERSHELL_CLAUDE_FUNCTION : '';
+    const agentFunctions = withMessaging ? POWERSHELL_CODEX_FUNCTION + POWERSHELL_CLAUDE_FUNCTION + POWERSHELL_AGY_FUNCTION : '';
     return [...shell.args, '-NoExit', '-Command', agentFunctions + POWERSHELL_DIRECTORY_PROMPT];
+  }
+  if (agent === 'antigravity') {
+    // Keep the shell as the CLI's parent so the status reporter can prove which PTY it belongs to.
+    if (platform !== 'win32') return [...shell.args, '-i', '-c', 'AGY_CLI_OSC7501=on AGY_CLI_OSC7501_MESSAGES=brief agy --settings "$EZSHELL_ANTIGRAVITY_SETTINGS"; exit'];
+    return [...shell.args, '-NoExit', '-Command', POWERSHELL_DIRECTORY_PROMPT + POWERSHELL_FIND_AGY + String.raw`
+if ($agyCommand) { ${POWERSHELL_AGY_WITH_STATUS} }
+else { Write-Host 'Antigravity CLI를 찾을 수 없습니다.' }
+`];
   }
   if (agent !== 'codex' && agent !== 'claude') throw new Error('지원하지 않는 실행 도구입니다.');
   // Per-launch MCP settings preserve the user's project and global agent config.
@@ -224,6 +273,12 @@ const WORKING_TITLE = /(?:^|\s)[⠁-⣿◐-◓◴-◷](?:\s|$)/u;
 
 function agentStatus(entry) {
   if (entry.screenApproval) return 'blocked';
+  if (entry.agent === 'antigravity') {
+    const status = entry.externalAgent?.antigravity?.status;
+    if (entry.reportedStatus === 'blocked' || status === 'blocked') return 'blocked';
+    if (status === 'starting' || status === 'working' || status === 'error') return status;
+    return entry.reportedStatus ?? status ?? 'unknown';
+  }
   const status = entry.reportedStatus ?? entry.titleStatus;
   return status === 'working' && entry.codexInput && !entry.codexInput.submitted ? 'starting' : status;
 }
@@ -269,19 +324,25 @@ function trackTerminalOsc(entry, data, platform, replyToProbe = true) {
     }
     if (code === '7501' && value === '?') {
       // A CLI in a plain shell may ask before its MCP connection is ready.
+      if (!entry.agent) entry.pendingAntigravityStatus = null;
       if (replyToProbe) entry.pty.write(PROGRAM_STATUS_REPLY);
       continue;
     }
-    if (!entry.agent) continue;
     if (code === '7501') {
       const fields = value.split(':');
       const app = fields.find(field => field.startsWith('app='))?.slice(4);
-      if (app && app !== entry.agent && !(entry.agent === 'claude' && app === 'claude-code')) continue;
       // Nested reports describe background jobs, not the terminal's agent.
       if (fields.some(field => field.startsWith('id='))) continue;
       const state = fields.find(field => field.startsWith('state='))?.slice(6);
-      if (state && Object.hasOwn(PROGRAM_STATES, state)) entry.reportedStatus = PROGRAM_STATES[state];
-    } else if (code === '9') {
+      if (!state || !Object.hasOwn(PROGRAM_STATES, state)) continue;
+      if (!entry.agent && app === 'antigravity') entry.pendingAntigravityStatus = PROGRAM_STATES[state];
+      if (!entry.agent || (entry.agent === 'antigravity' && !app)) continue;
+      if (app && app !== entry.agent && !(entry.agent === 'claude' && app === 'claude-code')) continue;
+      entry.reportedStatus = PROGRAM_STATES[state];
+      continue;
+    }
+    if (!entry.agent) continue;
+    if (code === '9') {
       const state = /^4;([0-4])(?:;\d+)?$/.exec(value)?.[1];
       if (state) entry.titleStatus = PROGRESS_STATES[Number(state)];
     } else {
@@ -348,10 +409,12 @@ function createLocalShells({
   const hasAgent = entry => Boolean(entry?.agent && !entry.exited && (!entry.externalAgent || processAlive(entry.externalAgent.pid)));
 
   function observeInbox(id, entry) {
-    const { createAgentInboxWake } = require('./ipc/agentInboxWake.js');
-    const pendingMessages = () => agents.unreadFor?.(id) ?? [];
+    const { createAgentInboxWake, supportsAntigravityInput } = require('./ipc/agentInboxWake.js');
+    const antigravity = entry.agent === 'antigravity';
+    if (antigravity && !supportsAntigravityInput) return;
+    const pendingMessages = () => antigravity ? [] : agents.unreadFor?.(id) ?? [];
     // Read but not answered yet: a request the agent confirmed while busy and put off
-    const unhandledMessages = () => agents.unhandledFor?.(id) ?? [];
+    const unhandledMessages = () => antigravity ? [] : agents.unhandledFor?.(id) ?? [];
     entry.subagentInputLabels = new Set();
     entry.parentInput = target => !target || (!entry.subagentInputLabels.has(target) && !(entry.agent === 'codex' && target.startsWith('/root/')));
     const inbox = createAgentInboxWake({
@@ -372,7 +435,7 @@ function createLocalShells({
       // Nothing reported yet (a CLI just started): the wake waits for a still, empty composer instead
       isUnknown: () => agentStatus(entry) === 'unknown',
       isLive: () => shells.get(id)?.inbox === inbox && hasAgent(entry),
-      isBlocked: () => entry.reportedStatus === 'blocked',
+      isBlocked: () => antigravity ? agentStatus(entry) === 'blocked' : entry.reportedStatus === 'blocked',
       write(data) {
         if (!hasAgent(entry)) return false;
         // Pasting needs mail to announce; the Enter that submits a line already pasted does not (the
@@ -387,7 +450,7 @@ function createLocalShells({
       },
       // A line the user sent from the chat view (no mail needed)
       rawWrite(data, trackInput = true) {
-        if (!hasAgent(entry)) return false;
+        if (!hasAgent(entry) || (antigravity && agentStatus(entry) !== 'idle')) return false;
         try {
           entry.pty.write(data);
           entry.activeAt = Date.now();
@@ -398,6 +461,7 @@ function createLocalShells({
     });
     entry.inbox = inbox;
     inbox.setComposing(entry.composing);
+    if (antigravity) return;
     // The model / effort picker of the usage line (agentPicker.js): keys only while the CLI's picker shows
     const { createAgentPicker } = require('./ipc/agentPicker.js');
     const writeAgentKeys = data => {
@@ -466,7 +530,8 @@ function createLocalShells({
     entry.inbox?.close();
     Object.assign(entry, {
       agent: undefined, reportStatus: undefined, externalAgent: undefined, inbox: undefined, picker: undefined, speedControl: undefined,
-      codexInput: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: ''
+      codexInput: null, titleStatus: 'unknown', reportedStatus: null, pendingAntigravityStatus: null,
+      screenApproval: false, chatInterrupts: 0, oscTail: ''
     });
     return binding;
   }
@@ -476,7 +541,7 @@ function createLocalShells({
     binding?.onExit(binding.id);
   }
 
-  function attachExternalAgent(id, entry, kind, pid, { agentId, setStatus, onExit }) {
+  function attachExternalAgent(id, entry, kind, pid, { agentId, setStatus, onExit, antigravity }) {
     if (shells.get(id) !== entry || entry.exited || !processAlive(pid)) return;
     let binding = entry.externalAgent;
     if (binding && !processAlive(binding.pid)) {
@@ -495,11 +560,17 @@ function createLocalShells({
       }
       entry.externalAgent = binding;
       entry.agent = kind;
+      if (antigravity) binding.antigravity = antigravity;
       entry.codexInput = kind === 'codex' ? { hasDraft: false, submitted: false } : null;
-      entry.oscTail = '';
-      trackTerminalOsc(entry, entry.backlog, platform, false);
+      if (antigravity) {
+        entry.reportedStatus = entry.pendingAntigravityStatus ?? null;
+        entry.pendingAntigravityStatus = null;
+      } else {
+        entry.oscTail = '';
+        trackTerminalOsc(entry, entry.backlog, platform, false);
+      }
       observeInbox(id, entry);
-      entry.inbox.writeOutput(entry.backlog + modeSequences(entry));
+      entry.inbox?.writeOutput(entry.backlog + modeSequences(entry));
       binding.timer = setInterval(() => {
         if (!processAlive(pid)) finishExternalAgent(entry);
       }, AGENT_PROCESS_CHECK_MS);
@@ -509,8 +580,7 @@ function createLocalShells({
     return { shellId: id, agentId: binding.id, status: agentStatus(entry) };
   }
 
-  // Bind to the CLI ancestor, whose lifetime can be longer than any one MCP connection.
-  async function bindAgentProcess({ pid, kind }) {
+  async function findAgentProcess({ pid, kind, shellId }) {
     const candidates = new Map();
     for (const [id, entry] of shells) {
       if (!entry.exited && (!entry.agent || entry.externalAgent) && entry.pty.pid > 0) candidates.set(entry.pty.pid, { id, entry });
@@ -522,9 +592,20 @@ function createLocalShells({
       // A shared snapshot may have begun before this agent's MCP process was started.
       if (!processes.has(pid)) processes = await readAgentProcesses();
     } catch { return; }
+    const antigravity = kind === 'antigravity';
+    if (antigravity) {
+      const helper = processes.get(pid);
+      if (!helper) return;
+      let executable = helper.executable;
+      if (!executable && platform === 'linux') executable = await fs.promises.readlink(`/proc/${pid}/exe`).catch(() => null);
+      if (!executable && platform === 'darwin') executable = helper.name;
+      const imageKey = platform === 'win32' ? value => path.win32.normalize(value).toLowerCase() : value => value;
+      if (!executable || imageKey(executable) !== imageKey(process.execPath)) return;
+    }
     const visited = new Set();
     let cliPid;
     let runtimePid;
+    let statusShellSeen = false;
     for (let parent = processes.get(pid)?.parent; parent > 0 && !visited.has(parent); parent = processes.get(parent)?.parent) {
       visited.add(parent);
       const candidate = candidates.get(parent);
@@ -532,35 +613,70 @@ function createLocalShells({
         const ancestor = processes.get(parent);
         if (!ancestor) return;
         const name = processName(ancestor.name);
-        if (name === kind) cliPid ??= parent;
+        if (name === (antigravity ? 'agy' : kind)) {
+          if (antigravity && cliPid) return;
+          cliPid ??= parent;
+        }
+        // agy invokes the reporter through its status-line shell. A tool's extra process is a
+        // different branch even when it inherited the PTY's token.
+        if (antigravity && !cliPid) {
+          if (name !== (platform === 'win32' ? 'cmd' : 'sh')) return;
+          statusShellSeen = true;
+        }
         if (name === 'node' || name === appRuntime) runtimePid ??= parent;
         continue;
       }
       const { id, entry } = candidate;
-      const agentPid = cliPid ?? runtimePid;
-      if (!agentPid) return;
-      return registration => {
-        if (entry.pty.pid !== parent) return;
-        const attached = attachExternalAgent(id, entry, kind, agentPid, registration);
-        if (!attached) return;
-        const binding = entry.externalAgent;
-        binding.hadMcp = true;
-        const connection = {};
-        binding.connection = connection;
-        return {
-          ...attached,
-          detach() {
-            if (entry.externalAgent !== binding || binding.connection !== connection) return false;
-            binding.connection = undefined;
-            if (!processAlive(binding.pid)) {
-              releaseExternalAgent(entry);
-              return false;
-            }
-            return true;
-          }
-        };
-      };
+      if (antigravity && platform === 'win32' && !statusShellSeen) return;
+      const agentPid = antigravity ? cliPid : cliPid ?? runtimePid;
+      if (agentPid && (shellId === undefined || id === shellId)) return { id, entry, agentPid, ptyPid: parent };
+      return;
     }
+  }
+
+  // Bind to the CLI ancestor, whose lifetime can be longer than any one MCP connection.
+  async function bindAgentProcess(request) {
+    const match = await findAgentProcess(request);
+    if (!match) return;
+    const { id, entry, agentPid, ptyPid } = match;
+    return registration => {
+      if (entry.pty.pid !== ptyPid) return;
+      const attached = attachExternalAgent(id, entry, request.kind, agentPid, registration);
+      if (!attached) return;
+      const binding = entry.externalAgent;
+      binding.hadMcp = true;
+      const connection = {};
+      binding.connection = connection;
+      return {
+        ...attached,
+        detach() {
+          if (entry.externalAgent !== binding || binding.connection !== connection) return false;
+          binding.connection = undefined;
+          if (!processAlive(binding.pid)) {
+            releaseExternalAgent(entry);
+            return false;
+          }
+          return true;
+        }
+      };
+    };
+  }
+
+  async function reportAntigravityStatus({ shellId, pid, status, sequence, isCurrent }) {
+    const match = await findAgentProcess({ pid, kind: 'antigravity', shellId });
+    if (!match || !isCurrent() || !processAlive(pid)) return false;
+    const { id, entry, agentPid, ptyPid } = match;
+    if (shells.get(id) !== entry || entry.pty.pid !== ptyPid || entry.exited || !processAlive(agentPid)) return false;
+    const antigravity = { ...status, sequence };
+    const binding = entry.externalAgent;
+    if (entry.agent === 'antigravity' && binding?.pid === agentPid) {
+      if (sequence <= binding.antigravity.sequence) return false;
+      binding.antigravity = antigravity;
+      entry.reportStatus?.(agentStatus(entry));
+      return true;
+    }
+    return agents?.registerLocalAntigravity?.(status.cwd, registration =>
+      attachExternalAgent(id, entry, 'antigravity', agentPid, { ...registration, antigravity })) ?? false;
   }
 
   async function discoverLocalClaude() {
@@ -648,12 +764,16 @@ function createLocalShells({
     const lines = previous?.rows ?? size(rows, 24);
     const shellEnv = localTerminalEnvironment(env, platform);
     // A resumed Codex writes on in its old session file: the usage watcher finds it by this id
-    const registration = agent && agents?.register(agent, id, workingDirectory, shellEnv, resume && SESSION_ID.test(resume) ? resume.toLowerCase() : null);
-    // Every shell's own token: the usage status line of a Claude typed into it reports with it
+    const registeredAgent = agent === 'antigravity' ? undefined : agent;
+    const registration = registeredAgent && agents?.register(registeredAgent, id, workingDirectory, shellEnv, resume && SESSION_ID.test(resume) ? resume.toLowerCase() : null);
+    // The shell's own token authenticates status reports from a CLI started inside it.
     const shellUsageEnv = agents?.registerShell?.(id) ?? {};
     const openedAt = Date.now();
     let pty;
     try {
+      if (agent === 'antigravity' && !shellUsageEnv.EZSHELL_ANTIGRAVITY_SETTINGS) {
+        throw new Error('Antigravity 상태 연결을 시작할 수 없습니다.');
+      }
       pty = spawn(shell.file, args, {
         name: TERMINAL_TYPE,
         cols: columns,
@@ -668,7 +788,7 @@ function createLocalShells({
     }
     const codexInput = agent === 'codex' ? { hasDraft: false, submitted: false } : null;
     const entry = {
-      pty, agent, registration, codexInput, cols: columns, rows: lines, composing: false, replacementFor,
+      pty, agent: registeredAgent, registration, codexInput, cols: columns, rows: lines, composing: false, replacementFor,
       // For a window that reloads and takes the shell back as a tab (`list`)
       cwd: directory === undefined ? null : workingDirectory,
       launchDirectory: workingDirectory, reportedDirectory: null,
@@ -882,7 +1002,7 @@ function createLocalShells({
   }
 
   return {
-    open, attach, write, pasteClipboardImage, resize, close, closeAll, bindAgentProcess, currentDirectory,
+    open, attach, write, pasteClipboardImage, resize, close, closeAll, bindAgentProcess, reportAntigravityStatus, currentDirectory,
     /**
      * Every shell, oldest first. The shells outlive their tabs, so a window that reloaded (and lost
      * all its tabs) takes these back; otherwise they kept running unseen, agents included.
@@ -896,11 +1016,11 @@ function createLocalShells({
       entry.composing = value;
       entry.inbox?.setComposing(value);
     },
-    /** The agent running in the shell ('claude' / 'codex') and its state, or null */
+    /** The agent running in the shell and its state, or null */
     agentOf(id) {
       const entry = shells.get(id);
       if (!hasAgent(entry)) return null;
-      const session = entry.externalAgent?.claudeSession;
+      const session = entry.externalAgent?.antigravity ?? entry.externalAgent?.claudeSession;
       return { kind: entry.agent, status: agentStatus(entry), ...(session ? { sessionId: session.sessionId, cwd: session.cwd } : {}) };
     },
     chatAgentId(id) {
@@ -951,6 +1071,15 @@ function createLocalShells({
       if (shells.get(id)?.inbox !== inbox || !hasAgent(entry)) return { ok: false, reason: 'not-agent' };
       if (entry.chatInterrupts !== interrupts) return { ok: false, reason: 'interrupted' };
       if (agentStatus(entry) === 'blocked') return { ok: false, reason: 'approval' };
+      if (entry.agent === 'antigravity') {
+        if (agentStatus(entry) !== 'idle') return { ok: false, reason: 'working' };
+        if (images?.length || target !== undefined) return { ok: false, reason: 'not-agent' };
+        const binding = entry.externalAgent;
+        const sessionId = binding.antigravity.sessionId;
+        const confirm = canSend;
+        canSend = () => entry.externalAgent === binding && binding.antigravity.sessionId === sessionId &&
+          agentStatus(entry) === 'idle' && (!confirm || confirm());
+      }
       const verify = active => sameConversation() && (target === undefined ? entry.parentInput(active) : active === target);
       const result = await inbox.submitText(text, images, { verify, canSend });
       if (result.ok && entry.codexInput && entry.codexInput.submitted) entry.reportStatus?.(agentStatus(entry));
@@ -959,13 +1088,19 @@ function createLocalShells({
     /** Esc in the chat view: clear only the expected text if the CLI put it back into its composer */
     async chatTakeBack(id, texts) {
       const entry = shells.get(id);
-      if (!hasAgent(entry) || !entry.inbox) return { ok: false, reason: 'not-agent' };
+      if (!hasAgent(entry) || !entry.inbox || entry.agent === 'antigravity') return { ok: false, reason: 'not-agent' };
       return entry.inbox.takeBack(texts);
     },
     /** The agent's numbered prompt on screen (permission, question), for the chat view; or null */
     approvalOf(id) {
       const entry = shells.get(id);
-      return hasAgent(entry) && entry.inbox ? entry.inbox.approvalPrompt() : null;
+      if (!hasAgent(entry)) return null;
+      if (entry.agent === 'antigravity') {
+        return agentStatus(entry) === 'blocked'
+          ? { question: null, detail: [], options: [], signature: 'antigravity-terminal', usesTerminalInput: true }
+          : null;
+      }
+      return entry.inbox?.approvalPrompt() ?? null;
     },
     backgroundShellCountOf(id) {
       const entry = shells.get(id);
@@ -978,12 +1113,13 @@ function createLocalShells({
     chatScreen(id) {
       const entry = shells.get(id);
       if (!hasAgent(entry) || !entry.inbox) return null;
-      return { lines: entry.inbox.screenLines(), composer: entry.inbox.composerState(), footerRow: entry.inbox.composerFooterRow(), approval: Boolean(entry.inbox.approvalPrompt()) };
+      const approval = entry.agent === 'antigravity' ? agentStatus(entry) === 'blocked' : Boolean(entry.inbox.approvalPrompt());
+      return { lines: entry.inbox.screenLines(), composer: entry.inbox.composerState(), footerRow: entry.inbox.composerFooterRow(), approval };
     },
     /** Answers that prompt with a choice, only if the screen still shows the same prompt */
     async answerApproval(id, key, signature) {
       const entry = shells.get(id);
-      if (!hasAgent(entry) || !entry.inbox) return { ok: false, reason: 'not-agent' };
+      if (!hasAgent(entry) || !entry.inbox || entry.agent === 'antigravity') return { ok: false, reason: 'not-agent' };
       return entry.inbox.answerApproval(key, signature);
     },
     /** Answers Claude's AskUserQuestion screen (questions from main's own transcript, answers checked) */
@@ -1018,7 +1154,7 @@ function createLocalShells({
     /** Esc: stops the agent's current turn */
     interruptAgent(id) {
       const entry = shells.get(id);
-      if (!hasAgent(entry)) return false;
+      if (!hasAgent(entry) || (entry.agent === 'antigravity' && agentStatus(entry) === 'blocked')) return false;
       entry.chatInterrupts++;
       if (entry.inbox?.deferProbeInput('\x1b')) return true;
       entry.inbox?.userInput('\x1b');
@@ -1026,7 +1162,7 @@ function createLocalShells({
     },
     sleep, wake, stayAwake,
     /** The agents for agentIdle.js: idle or not, since when nothing happened */
-    idleAgents: () => [...shells].flatMap(([id, entry]) => (hasAgent(entry) && !entry.sleeping ? [{
+    idleAgents: () => [...shells].flatMap(([id, entry]) => (hasAgent(entry) && !entry.sleeping && entry.agent !== 'antigravity' ? [{
       id, kind: entry.agent, external: Boolean(entry.externalAgent?.hadMcp), agentId: entry.externalAgent?.id ?? null,
       // The CLI (typed into the shell) or the shell that runs it (launched by ezShell)
       pid: entry.externalAgent?.pid ?? entry.pty.pid,

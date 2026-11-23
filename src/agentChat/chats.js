@@ -4,6 +4,9 @@ const { createHash, randomUUID } = require('node:crypto')
 const { createClaudeParser } = require('./claudeTranscript.js')
 const { createClaudeShellTracker } = require('./claudeShells.js')
 const { createCodexParser } = require('./codexTranscript.js')
+const { createAntigravityParser } = require('./antigravityTranscript.js')
+const { antigravityBrainRoot, antigravitySessionId, openAntigravityTranscript } = require('./antigravitySessions.js')
+const { createInterface } = require('node:readline')
 const { createInboxQuestionReader } = require('./inboxQuestions.js')
 const { createSubagentTracker } = require('./subagents.js')
 const { createSubagentPreview } = require('./subagentPreview.js')
@@ -46,7 +49,11 @@ const QUESTION_CONTEXT_BEFORE = 256 * 1024
 const QUESTION_CONTEXT_AFTER = 2 * 1024 * 1024
 const COPY_KINDS = new Set(['user', 'assistant', 'notice', 'output'])
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const parserFor = kind => kind === 'codex' ? createCodexParser() : createClaudeParser()
+const PARSERS = new Map([
+  ['claude', createClaudeParser], ['codex', createCodexParser], ['antigravity', createAntigravityParser]
+])
+const parserFor = kind => PARSERS.get(kind)?.()
+const antigravityTranscriptId = sessionId => sessionId && createHash('sha256').update(`antigravity:${sessionId}`).digest('hex')
 
 /** Claude Code's folder name for a working directory: every character but ASCII letters and digits is '-' */
 const claudeFolderName = cwd => String(cwd).replace(/[^a-zA-Z0-9]/g, '-')
@@ -74,15 +81,33 @@ async function findClaudeFile(root, cwd, sessionId) {
   return null
 }
 
-async function readRange(file, start, end) {
-  const handle = await fs.promises.open(file, 'r')
+async function readRange(file, start, end, retainedHandle) {
+  const handle = retainedHandle ?? await fs.promises.open(file, 'r')
   try {
     const length = Math.max(0, end - start)
     const buffer = Buffer.alloc(length)
     const { bytesRead } = await handle.read(buffer, 0, length, start)
     return buffer.subarray(0, bytesRead)
   } finally {
-    await handle.close()
+    if (!retainedHandle) await handle.close()
+  }
+}
+
+// A truncate and refill can grow past tail without changing the file's identity.
+const anchorAt = (source, end) => readRange(source.file, Math.max(0, end - 128), end, source.handle)
+
+async function readOpenedLines(source, onLine) {
+  const input = source.handle.createReadStream({ start: 0, end: source.stat.size - 1, autoClose: false })
+  const lines = createInterface({ input, crlfDelay: Infinity })
+  try {
+    for await (const raw of lines) {
+      let value
+      try { value = JSON.parse(raw) } catch { continue }
+      if (value && typeof value === 'object' && onLine(value)) break
+    }
+  } finally {
+    lines.close()
+    input.destroy()
   }
 }
 
@@ -131,7 +156,7 @@ async function readClaudeChildResults(file, tracker, isLive) {
 
 /**
  * @param {object} deps
- * @param {(shellId: string) => Promise<{ kind: 'claude' | 'codex', sessionId?: string | null, cwd?: string | null, file?: string | null, approval?: object | null, backgroundShellCount?: number | null, codexSpeed?: { speed: string | null, ultrafastAvailable: boolean } | null } | null>} deps.resolve
+ * @param {(shellId: string) => Promise<{ kind: 'claude' | 'codex' | 'antigravity', status?: string, sessionId?: string | null, cwd?: string | null, file?: string | null, approval?: object | null, backgroundShellCount?: number | null, codexSpeed?: { speed: string | null, ultrafastAvailable: boolean } | null } | null>} deps.resolve
  *   the agent running in a shell now (null when there is none), with the prompt it shows if any
  * @param {(channel: string, payload: object) => void} deps.send to the main window
  * @param {string} deps.claudeRoot `$CLAUDE_CONFIG_DIR` or `~/.claude`
@@ -139,7 +164,7 @@ async function readClaudeChildResults(file, tracker, isLive) {
  * @param {(from: number, to: number) => object | undefined} [deps.claudeLimits] the percent of Claude's
  *   windows used between two times (limitHistory.js): a Claude transcript has no limits
  */
-function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, claudeLimits = null, tickMs = TICK_MS, now = () => Date.now() }) {
+function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigravityBrainRoot(), isGone = () => false, claudeLimits = null, tickMs = TICK_MS, now = () => Date.now() }) {
   const chats = new Map()
   let timer = null
 
@@ -215,11 +240,23 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     return file
   }
 
+  async function currentAntigravitySource(chat) {
+    const { sessionId, file, identity, subagentScope, tail, anchor } = chat
+    const source = await openAntigravityTranscript(antigravityRoot, sessionId, file)
+    if (!source) return null
+    try {
+      if (source.identity === identity && source.stat.size >= tail && anchor?.equals(await anchorAt(source, tail))
+        && live(chat) && chat.file === file && chat.subagentScope === subagentScope) return source
+    } catch { /* The reader will pick up the new file on the next tick. */ }
+    await source.handle.close()
+    return null
+  }
+
   /** Starts over on a (new) file: its last part */
-  async function load(chat, file, kind) {
-    const { size } = await fs.promises.stat(file)
+  async function load(chat, file, kind, source) {
+    const { size } = source?.stat ?? await fs.promises.stat(file)
     const start = Math.max(0, size - FIRST_BYTES)
-    let buffer = await readRange(file, start, size)
+    let buffer = await readRange(file, start, size, source?.handle)
     let oldest = start
     if (start > 0) {
       // The window starts inside a line: that line belongs to the part before
@@ -228,9 +265,9 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
       oldest = first === -1 ? size : start + first + 1
     }
     const parser = parserFor(kind)
-    const subagents = createSubagentTracker(kind)
+    const subagents = kind === 'antigravity' ? null : createSubagentTracker(kind)
     const shellTracker = kind === 'claude' ? createClaudeShellTracker() : null
-    if (oldest > 0) {
+    if (oldest > 0 && subagents) {
       const start = Math.max(0, size - ACTIVITY_HISTORY_BYTES)
       await readLinesFromStart(file, line => {
         if (!live(chat)) return true
@@ -242,7 +279,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     const items = []
     let title
     for (const line of lines) {
-      subagents.feed(line)
+      subagents?.feed(line)
       shellTracker?.feed(line)
       const result = parser.feed(line)
       items.push(...result.items)
@@ -251,11 +288,14 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     // A compaction notice the part read ends with (claudeTranscript.js holds it for the command after it)
     items.push(...(parser.flush?.(0) ?? []))
     if (kind === 'claude') await readClaudeChildResults(file, subagents, () => live(chat))
+    const tail = oldest + used
+    const anchor = source ? await anchorAt(source, tail) : null
     if (!live(chat)) return
-    const transcriptId = createHash('sha256').update(file).digest('hex')
-    Object.assign(chat, { file, kind, parser, subagents, shellTracker, previewChild: createSubagentPreview(file, kind, now), subagentScope: randomUUID(), transcriptId, oldest, tail: oldest + used, skipping: false, title: title ?? null, state: 'live' })
+    const transcriptId = source ? antigravityTranscriptId(chat.sessionId) : createHash('sha256').update(file).digest('hex')
+    Object.assign(chat, { file, kind, parser, subagents, shellTracker, previewChild: subagents ? createSubagentPreview(file, kind, now) : null,
+      subagentScope: randomUUID(), transcriptId, oldest, tail, anchor, identity: source?.identity, skipping: false, title: title ?? null, state: 'live' })
     chat.questionIndex = null
-    frame(chat, { reset: true, scope: chat.subagentScope, transcriptId, kind, state: 'live', items: latestById(items), subagents: subagents.snapshot(true), title: title ?? null, hasOlder: oldest > 0 })
+    frame(chat, { reset: true, scope: chat.subagentScope, transcriptId, kind, state: 'live', items: latestById(items), subagents: subagents?.snapshot(true) ?? [], title: title ?? null, hasOlder: oldest > 0 })
   }
 
   async function indexQuestions(chat, file, scope, tail) {
@@ -300,9 +340,11 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     return pending
   }
 
-  async function follow(chat) {
-    const { size } = await fs.promises.stat(chat.file)
-    if (size < chat.tail) return load(chat, chat.file, chat.kind)
+  async function follow(chat, source) {
+    const { size } = source?.stat ?? await fs.promises.stat(chat.file)
+    if (size < chat.tail || (source && !chat.anchor?.equals(await anchorAt(source, chat.tail)))) {
+      return load(chat, chat.file, chat.kind, source)
+    }
     if (size === chat.tail) {
       // Nothing new: a compaction notice held for its /compact line comes out after a while anyway
       const late = chat.parser.flush?.(NOTICE_WAIT_MS) ?? []
@@ -310,12 +352,16 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
       refreshLimits(chat)
       return
     }
-    let buffer = await readRange(chat.file, chat.tail, Math.min(size, chat.tail + STEP_BYTES))
+    let buffer = await readRange(chat.file, chat.tail, Math.min(size, chat.tail + STEP_BYTES), source?.handle)
     if (!live(chat)) return
     if (chat.skipping) {
       // Inside a line longer than a whole step: skip to its end
       const end = buffer.indexOf(10)
-      if (end === -1) { chat.tail += buffer.length; return }
+      if (end === -1) {
+        chat.tail += buffer.length
+        if (source) chat.anchor = await anchorAt(source, chat.tail)
+        return
+      }
       chat.tail += end + 1
       chat.skipping = false
       buffer = buffer.subarray(end + 1)
@@ -324,13 +370,15 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     if (!used && buffer.length >= STEP_BYTES) {
       chat.tail += buffer.length
       chat.skipping = true
+      if (source) chat.anchor = await anchorAt(source, chat.tail)
       return
     }
     chat.tail += used
+    if (source) chat.anchor = await anchorAt(source, chat.tail)
     const items = []
     let title = chat.title
     for (const line of lines) {
-      chat.subagents.feed(line)
+      chat.subagents?.feed(line)
       chat.shellTracker?.feed(line)
       const result = chat.parser.feed(line)
       items.push(...result.items)
@@ -338,7 +386,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     }
     items.push(...(chat.parser.flush?.(NOTICE_WAIT_MS) ?? []))
     if (chat.kind === 'claude') await readClaudeChildResults(chat.file, chat.subagents, () => live(chat))
-    const subagents = chat.subagents.snapshot()
+    const subagents = chat.subagents?.snapshot()
     const renamed = title !== chat.title
     chat.title = title
     if (items.length || renamed || subagents) frame(chat, {
@@ -356,6 +404,36 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     if (chat.backgroundShells === signature) return
     chat.backgroundShells = signature
     frame(chat, { backgroundShells })
+  }
+
+  function resetTranscript(chat, kind, sessionId, state) {
+    const transcriptId = kind === 'antigravity' ? antigravityTranscriptId(sessionId) : null
+    Object.assign(chat, { kind, sessionId, state, file: null, identity: null, anchor: null,
+      parser: null, subagents: null, previewChild: null, shellTracker: null, subagentScope: null,
+      transcriptId, title: null, oldest: 0, tail: 0, questionIndex: null, lookup: null })
+    frame(chat, { reset: true, ...(kind ? { kind } : {}), ...(transcriptId ? { transcriptId } : {}), state, items: [], subagents: [], title: null, hasOlder: false })
+  }
+
+  async function syncAntigravity(chat, target) {
+    const sessionId = antigravitySessionId(target.sessionId)
+    const source = await openAntigravityTranscript(antigravityRoot, sessionId)
+    try {
+      if (!live(chat)) return
+      const changed = chat.kind !== target.kind || chat.sessionId !== sessionId
+      if (!source) {
+        if (changed || chat.file) resetTranscript(chat, target.kind, sessionId, 'waiting')
+        else setState(chat, 'waiting')
+        return
+      }
+      chat.sessionId = sessionId
+      if (changed || source.file !== chat.file || source.identity !== chat.identity) await load(chat, source.file, target.kind, source)
+      else {
+        setState(chat, 'live')
+        await follow(chat, source)
+      }
+    } finally {
+      await source?.handle.close()
+    }
   }
 
   async function sync(chat) {
@@ -381,13 +459,29 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
       chat.codexSpeed = codexSpeed
       frame(chat, { codexSpeed })
     }
+    const status = target?.kind === 'antigravity' ? target.status ?? 'unknown' : null
+    if (status !== chat.status) {
+      chat.status = status
+      frame(chat, { status })
+    }
     if (!target) {
-      if (chat.state === 'live' && chat.file) await follow(chat).catch(() => {})
+      if (chat.state === 'live' && chat.file && chat.kind !== 'antigravity') await follow(chat).catch(() => {})
       if (!live(chat)) return
       syncShells(chat)
       setState(chat, 'ended')
       return
     }
+    if (!PARSERS.has(target.kind)) {
+      if (chat.kind || chat.file) resetTranscript(chat, null, null, 'ended')
+      else setState(chat, 'ended')
+      return
+    }
+    if (target.kind === 'antigravity') {
+      syncShells(chat)
+      await syncAntigravity(chat, target)
+      return
+    }
+    if (chat.kind === 'antigravity') resetTranscript(chat, target.kind, null, 'waiting')
     const file = await fileFor(chat, target)
     if (!live(chat)) return
     if (!file) {
@@ -440,7 +534,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     /** Starts following; what is read comes as frames. Opening a shell's view again starts it over. */
     open(shellId) {
       if (!chats.has(shellId) && chats.size >= MAX_CHATS) return { ok: false, error: `채팅 보기는 ${MAX_CHATS}개까지 열 수 있습니다.` }
-      const chat = { shellId, chain: Promise.resolve(), pending: false, file: null, kind: null, parser: null, state: null, title: null, lookup: null, approval: null, codexSpeed: null, backgroundShells: null, links: new Set() }
+      const chat = { shellId, chain: Promise.resolve(), pending: false, file: null, kind: null, parser: null, state: null, status: null, title: null, lookup: null, approval: null, codexSpeed: null, backgroundShells: null, links: new Set() }
       chats.set(shellId, chat)
       startTimer()
       chat.pending = true
@@ -454,7 +548,11 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
       return run(chat, async () => {
         if (!chat.file || !(chat.oldest > 0)) return
         const start = Math.max(0, chat.oldest - OLDER_BYTES)
-        let buffer = await readRange(chat.file, start, chat.oldest)
+        const source = chat.kind === 'antigravity' ? await currentAntigravitySource(chat) : null
+        if (chat.kind === 'antigravity' && !source) return
+        let buffer
+        try { buffer = await readRange(chat.file, start, chat.oldest, source?.handle) }
+        finally { await source?.handle.close() }
         let oldest = start
         if (start > 0) {
           const first = buffer.indexOf(10)
@@ -475,7 +573,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     },
     async questions(shellId) {
       const chat = chats.get(shellId)
-      if (!chat?.file) return { ok: true, scope: null, questions: [], limited: false }
+      if (!chat?.file || !QUESTION_LINES[chat.kind]) return { ok: true, scope: null, questions: [], limited: false }
       const { file, subagentScope: scope } = chat
       try {
         const { anchors, limited } = await questionIndex(chat)
@@ -488,7 +586,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     },
     async questionContext(shellId, scope, id) {
       const chat = chats.get(shellId)
-      if (!chat?.file || scope !== chat.subagentScope) return { ok: false, error: '대화가 바뀌었습니다. 질문 목록을 다시 열어 주세요.' }
+      if (!chat?.file || !QUESTION_LINES[chat.kind] || scope !== chat.subagentScope) return { ok: false, error: '대화가 바뀌었습니다. 질문 목록을 다시 열어 주세요.' }
       const { file, kind } = chat
       try {
         const { anchors } = await questionIndex(chat, false)
@@ -538,7 +636,7 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     },
     hasSubagentScope(shellId, scope) {
       const chat = chats.get(shellId)
-      return Boolean(chat?.file && chat.state === 'live' && chat.subagentScope === scope)
+      return Boolean(chat?.file && chat.subagents && chat.state === 'live' && chat.subagentScope === scope)
     },
     hasTranscript(shellId, transcriptId) {
       const chat = chats.get(shellId)
@@ -548,11 +646,23 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
     async findRecordedSend(shellId, { transcriptId, acceptedAt, ignoreIds, text, hasImage }) {
       const chat = chats.get(shellId)
       if (!chat?.file || chat.state !== 'live' || chat.transcriptId !== transcriptId) return undefined
-      const { file, kind } = chat
+      const { file, kind, subagentScope } = chat
+      let source
       try {
         const { matchesEchoText } = await import('./echoText.mjs')
-        const lines = await readLinesFromEnd(file, { maxBytes: FIRST_BYTES })
-        if (!lines || !live(chat) || chat.file !== file || chat.state !== 'live') return undefined
+        let lines
+        if (kind === 'antigravity') {
+          source = await currentAntigravitySource(chat)
+          if (!source) return undefined
+          const start = Math.max(0, source.stat.size - FIRST_BYTES)
+          let buffer = await readRange(file, start, source.stat.size, source.handle)
+          if (start) {
+            const first = buffer.indexOf(10)
+            buffer = first < 0 ? Buffer.alloc(0) : buffer.subarray(first + 1)
+          }
+          lines = completeLines(buffer).lines
+        } else lines = await readLinesFromEnd(file, { maxBytes: FIRST_BYTES })
+        if (!lines || !live(chat) || chat.file !== file || chat.subagentScope !== subagentScope || chat.state !== 'live') return undefined
         const parser = parserFor(kind)
         const ignored = new Set(ignoreIds)
         const expected = { text, hasImage }
@@ -566,18 +676,18 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
           }
         }
         return approximate
-      } catch {
-        return undefined
-      }
+      } catch { return undefined }
+      finally { await source?.handle.close() }
     },
     /** Read a snapshot of the conversation without widening or moving the window's current view. */
     async transcriptForCopy(shellId) {
       const chat = chats.get(shellId)
       if (!chat) return { ok: false, error: '열려 있는 채팅을 찾을 수 없습니다.' }
-      const { file, kind } = chat
+      const { file, kind, subagentScope } = chat
       if (!file) return { ok: true, items: [] }
       const tooLarge = { ok: false, error: '한 번에 복사하기에는 대화 기록이 너무 큽니다.' }
-      const parser = kind === 'codex' ? createCodexParser() : createClaudeParser()
+      const parser = parserFor(kind)
+      if (!parser) return { ok: false, error: '지원하지 않는 대화 기록입니다.' }
       const items = new Map()
       let chars = 0
       const add = entries => {
@@ -590,19 +700,23 @@ function createAgentChats({ resolve, send, claudeRoot, isGone = () => false, cla
         }
         return false
       }
+      let source
       try {
-        const { size } = await fs.promises.stat(file)
+        source = kind === 'antigravity' ? await currentAntigravitySource(chat) : null
+        if (kind === 'antigravity' && !source) return { ok: false, error: '대화 기록을 읽을 수 없습니다.' }
+        const { size } = source?.stat ?? await fs.promises.stat(file)
         if (!size) return { ok: true, items: [] }
         if (size > MAX_COPY_SOURCE_BYTES) return tooLarge
-        await readLinesFromStart(file, line => (
-          !live(chat) || chat.file !== file || add(parser.feed(line).items)
-        ), { end: size - 1, maxBytes: size, maxLine: size })
-        if (!live(chat) || chat.file !== file) return { ok: false, error: '채팅이 바뀌었습니다. 다시 복사해 주세요.' }
+        const current = () => live(chat) && chat.file === file && chat.subagentScope === subagentScope
+        const read = line => !current() || add(parser.feed(line).items)
+        if (source) await readOpenedLines(source, read)
+        else await readLinesFromStart(file, read, { end: size - 1, maxBytes: size, maxLine: size })
+        if (!current()) return { ok: false, error: '채팅이 바뀌었습니다. 다시 복사해 주세요.' }
         if (chars > MAX_COPY_TEXT_CHARS || add(parser.flush?.() ?? [])) return tooLarge
         return { ok: true, items: [...items.values()] }
       } catch {
         return { ok: false, error: '대화 기록을 읽을 수 없습니다.' }
-      }
+      } finally { await source?.handle.close() }
     },
     close(shellId) {
       chats.delete(shellId)

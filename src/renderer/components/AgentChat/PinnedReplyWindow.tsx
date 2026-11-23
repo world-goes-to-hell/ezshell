@@ -9,14 +9,13 @@ import { LOCAL_PATH_LINK, renderChatMarkdown } from '../../lib/markdownRender'
 import { copyToClipboard } from '../../lib/terminalClipboard'
 import { TerminalContextMenu } from '../Terminal/TerminalContextMenu'
 import { webLinkItems } from '../Terminal/TerminalWebLinkMenu'
-import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
+import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../ui/agentProviderIcons'
 import { useThemeStore } from '../../stores/themeStore'
 import { toast } from '../../stores/toastStore'
 import { chatAppearance } from '../../themes/chatThemes'
 import './AgentChat.css'
 import './PinnedReplyWindow.css'
 
-const AGENT_NAMES = { claude: 'Claude', codex: 'Codex' } as const
 
 interface LinkMenu {
   x: number
@@ -106,6 +105,7 @@ export function PinnedReplyWindow() {
     : webLinkItems(menu.href, destination => void openLink(menu.href, destination === 'internal' ? 'browser-tab' : 'browser'))
 
   const kind = pin?.kind ?? null
+  const agentName = kind === 'claude' ? 'Claude' : kind ? AGENT_PROVIDER_NAMES[kind] : undefined
   const ProviderIcon = kind ? AGENT_PROVIDER_ICONS[kind] : null
   const time = pin ? clock(pin.time ?? pin.pinnedAt) : ''
   const maximizeLabel = maximized ? '이전 크기로 복원' : '최대화'
@@ -121,8 +121,8 @@ export function PinnedReplyWindow() {
       <header className="pinned-reply-head">
         <span className="pinned-reply-drag" aria-hidden="true">⋮⋮</span>
         {ProviderIcon && kind && (
-          <span className="pinned-reply-kind" data-kind={kind} title={AGENT_NAMES[kind]}>
-            <ProviderIcon size={14} aria-label={AGENT_NAMES[kind]} />
+          <span className="pinned-reply-kind" data-kind={kind} title={agentName}>
+            <ProviderIcon size={14} aria-label={agentName} />
           </span>
         )}
         <span className="pinned-reply-title" title={pin?.title}>{pin?.title ?? '띄운 답변'}</span>

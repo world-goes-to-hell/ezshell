@@ -140,7 +140,7 @@
 }
 .agent-ask-send { border-color: var(--chat-focus, var(--accent)); background: var(--chat-focus, var(--accent)); color: var(--bg-primary); font-weight: 600; }
 .agent-ask-nav:focus-visible, .agent-ask-send:focus-visible { outline: 2px solid var(--chat-focus, var(--accent)); outline-offset: 1px; }
-.agent-ask-send:disabled { opacity: 0.5; cursor: default; }
+.agent-ask button:disabled { opacity: 0.5; cursor: default; }
 
 .agent-ask-review dl, .agent-ask-summary dl { display: flex; flex-direction: column; gap: 8px; margin: 0; }
 .agent-ask-review dt, .agent-ask-summary dt { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }

@@ -2,16 +2,21 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { createPortal } from 'react-dom'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
-import { RiListUnordered, RiMailLine, RiNodeTree, RiTeamLine, RiUser3Line } from 'react-icons/ri'
+import { RiListUnordered, RiMailLine, RiNodeTree, RiSearchLine, RiTeamLine, RiUser3Line } from 'react-icons/ri'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
-import type { AgentMessage, AgentMessageDelivery, AgentMessageSession, AgentMessagesSnapshot, LocalAgent } from '../../types'
+import type { AgentChatProvider, AgentMessage, AgentMessageDelivery, AgentMessageSession, AgentMessagesSnapshot } from '../../types'
 import { folderLabel, isInsidePath, pathKey } from '../../lib/localWorkspaceTree'
 import { visibleTerminalId } from '../../lib/localTerminalPane'
 import { projectOfFolder, type GroupProject } from '../../lib/tabGroups'
 import { AGENT_MESSAGE_VIEW_KEY, agentMessageMap, parseAgentMessageView, type MessageState } from '../../lib/agentMessageMap'
-import { useTerminalStore } from '../../stores/terminalStore'
+import { agentDisplayName, agentMessageMatches, agentPaneLocation, agentSearchTerm, type AgentPaneLocation } from '../../lib/agentIdentity'
+import { focusTabPane } from '../../lib/paneFocus'
+import { getLocalPaneShellId } from '../../lib/localPaneShells'
+import { shellAgentOf } from '../../lib/agentChatItems'
+import { useTerminalStore, type TerminalInfo } from '../../stores/terminalStore'
 import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
+import { AgentIdentityAction, AgentIdentityBadge, AgentIdentityDot } from '../ui/AgentIdentity'
 import { SelectMenu } from '../ui/SelectMenu'
 import { AgentMessageMap, MESSAGE_STATE_LABELS } from './AgentMessageMap'
 import './AgentMessages.css'
@@ -20,7 +25,7 @@ const USER = 'user'
 const ALL = 'all'
 const label = (id: string) => id === USER ? '나' : id
 
-function MessageProviderIcon({ kind }: { kind?: LocalAgent | typeof USER | typeof ALL }) {
+function MessageProviderIcon({ kind }: { kind?: AgentChatProvider | typeof USER | typeof ALL }) {
   if (!kind) return null
   const Icon = kind === USER ? RiUser3Line : kind === ALL ? RiTeamLine : AGENT_PROVIDER_ICONS[kind]
   return <Icon className="agent-message-provider" data-kind={kind} size={14} aria-hidden="true" />
@@ -89,12 +94,10 @@ function deliveryAnchor(shellId?: string): HTMLElement | undefined {
   return undefined
 }
 
-type DeliveryKind = LocalAgent | typeof USER
-
-/** An arrival as shown: who sent it to whom, and what each is (for their icons) */
+/** An arrival with the identities available when the message was delivered. */
 interface ShownDelivery extends AgentMessageDelivery {
-  fromKind?: DeliveryKind
-  toKind?: DeliveryKind
+  fromAgent?: AgentMessageSession
+  toAgent?: AgentMessageSession
 }
 
 /** A message flying from the sender's pane to the receiver's before the arrival card shows */
@@ -114,12 +117,6 @@ function agentOf(id: string) {
   return undefined
 }
 
-function kindOf(id: string): DeliveryKind | undefined {
-  if (id === USER) return USER
-  const kind = agentOf(id)?.kind
-  return kind === 'claude' || kind === 'codex' ? kind : undefined
-}
-
 const centerOf = (element: HTMLElement) => {
   const box = element.getBoundingClientRect()
   return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
@@ -128,7 +125,7 @@ const centerOf = (element: HTMLElement) => {
 /** Where the flight goes, when both ends are on screen and motion is welcome; otherwise only the card shows */
 function flightFor(shown: ShownDelivery): DeliveryFlightState | null {
   if (document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) return null
-  const fromShell = shown.from === USER ? undefined : agentOf(shown.from)?.shellId || undefined
+  const fromShell = shown.fromAgent?.shellId || undefined
   const source = deliveryAnchor(fromShell)
   const destination = deliveryAnchor(shown.toShell)
   if (!source || !destination || source === destination) return null
@@ -165,11 +162,20 @@ function DeliveryFlight({ flight, onLanded }: { flight: DeliveryFlightState; onL
   return createPortal(
     <span ref={chipRef} className="agent-message-flight" aria-hidden="true"
       style={{ left: flight.from.x, top: flight.from.y, transform: 'translate(-50%, -50%)' }}>
-      <MessageProviderIcon kind={flight.shown.fromKind} />
+      <MessageProviderIcon kind={flight.shown.fromAgent?.kind} />
       <RiMailLine size={13} />
       메시지
     </span>,
     document.body
+  )
+}
+
+function DeliveryParty({ id, agent }: { id: string; agent?: AgentMessageSession }) {
+  return (
+    <span className="agent-delivery-party">
+      <MessageProviderIcon kind={id === USER ? USER : agent?.kind} />
+      {agent ? <AgentIdentityBadge agent={agent} /> : label(id)}
+    </span>
   )
 }
 
@@ -216,7 +222,7 @@ function AgentDeliveryNotice({ delivery }: { delivery: ShownDelivery | null }) {
           <div className="agent-delivery-text">
             <span>메시지 도착</span>
             <strong>
-              <MessageProviderIcon kind={delivery.fromKind} />{label(delivery.from)} → <MessageProviderIcon kind={delivery.toKind} />{label(delivery.to)}
+              <DeliveryParty id={delivery.from} agent={delivery.fromAgent} /> → <DeliveryParty id={delivery.to} agent={delivery.toAgent} />
             </strong>
           </div>
         </div>
@@ -252,7 +258,7 @@ export function AgentMessagesHost({ currentGroup, projects }: WorkspaceSelection
     }
     const stopDelivery = window.electronAPI.onAgentMessageDelivered(event => {
       if (document.hidden) return
-      const shown: ShownDelivery = { ...event, fromKind: kindOf(event.from), toKind: kindOf(event.to) }
+      const shown: ShownDelivery = { ...event, fromAgent: agentOf(event.from), toAgent: agentOf(event.to) }
       const next = flightFor(shown)
       if (next) {
         setFlight(next)
@@ -302,7 +308,7 @@ export function AgentTabMessages({ tabId }: { tabId: string }) {
 
 /** The agent of a pane's shell and its unread messages. */
 export function usePaneAgentMail(shellId: string) {
-  const agent = useMessages(state => state.snapshot.agents.find(item => item.shellId === shellId))
+  const agent = useMessages(state => shellAgentOf(state.snapshot.agents, shellId) ?? state.snapshot.agents.find(item => item.shellId === shellId))
   const count = useMessages(state => agent ? unreadCount(state.snapshot.messages, new Set([agent.id])) : 0)
   return { agent, count }
 }
@@ -337,22 +343,23 @@ interface DialogProps extends WorkspaceSelection {
 
 const mapMessageTime = new Intl.DateTimeFormat('ko-KR', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 
-function MessageThread({ messages, name, actor, states }: {
+function MessageThread({ messages, name, actor, states, searching }: {
   messages: readonly AgentMessage[]
   name: string
   actor: (id: string) => ReactNode
   states?: ReadonlyMap<string, MessageState>
+  searching: boolean
 }) {
   return (
     <div className="agent-message-thread" role="log" tabIndex={0} aria-label={name}>
-      {messages.length === 0 && <p className="form-hint">아직 메시지가 없습니다.</p>}
+      {messages.length === 0 && <p className="form-hint">{searching ? '검색에 맞는 메시지가 없습니다.' : '아직 메시지가 없습니다.'}</p>}
       {messages.map(message => {
         const state = states?.get(message.id)
         const read = state ? state !== 'unread' : isRead(message)
         return (
           <article key={message.id} className="agent-thread-message">
             <header>
-              <strong className="agent-message-route">{actor(message.from)} → {actor(message.to)}</strong>
+              <div className="agent-message-route">{actor(message.from)} → {actor(message.to)}</div>
               <span className="agent-read-state" data-read={read} title={readTitle(message)}>
                 {state ? MESSAGE_STATE_LABELS[state] : read ? '읽음' : '안 읽음'}
               </span>
@@ -366,12 +373,52 @@ function MessageThread({ messages, name, actor, states }: {
   )
 }
 
+function locationOf(agent: AgentMessageSession, terminals: ReadonlyMap<string, TerminalInfo>, paneTabs: Record<string, string>) {
+  const tabId = paneTabs[agent.shellId]
+  return agent.active && tabId ? agentPaneLocation(terminals.get(tabId), agent.shellId, pane => getLocalPaneShellId(tabId, pane)) : undefined
+}
+
+function AgentRoleEditor({ agent, onClose }: { agent: AgentMessageSession; onClose: () => void }) {
+  const [value, setValue] = useState(agent.role ?? '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string>()
+
+  async function save(role: string) {
+    if (saving) return
+    setSaving(true)
+    setError(undefined)
+    try {
+      const result = await window.electronAPI.agentMessageSetRole?.(agent.id, role)
+      if (result?.success) onClose()
+      else setError(result?.error ?? '에이전트 역할을 저장할 수 없습니다.')
+    } catch {
+      setError('에이전트 역할을 저장할 수 없습니다.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form className="agent-role-editor" onSubmit={event => { event.preventDefault(); void save(value) }}>
+      <label htmlFor="agent-role-name">{agent.id} 역할</label>
+      <input id="agent-role-name" value={value} onChange={event => setValue(event.target.value)} autoFocus placeholder="예: 리뷰어" />
+      {agent.roleSource === 'user' && <button type="button" className="btn-secondary" disabled={saving} onClick={() => void save('')}>지우기</button>}
+      <button type="submit" className="btn-secondary" disabled={saving}>저장</button>
+      <button type="button" className="btn-secondary" onClick={onClose}>취소</button>
+      {error && <span role="alert">{error}</span>}
+    </form>
+  )
+}
+
 function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects, onClose }: DialogProps) {
   const { agents, messages } = useMessages(state => state.snapshot)
   const panes = useMessages(state => state.panes)
   const [selection, setSelection] = useState(initialAgent ?? ALL)
   const [edgeSelection, setEdgeSelection] = useState<string>()
+  const [query, setQuery] = useState('')
+  const [editingRole, setEditingRole] = useState<string>()
   const [view, setView] = useState(() => parseAgentMessageView(localStorage.getItem(AGENT_MESSAGE_VIEW_KEY)) ?? 'map')
+  const terminals = useTerminalStore(state => state.terminals)
   const tab = useTerminalStore(state => {
     const id = sourceTabId ?? visibleTerminalId(state.layout, state.activeTerminalId)
     return id ? state.terminals.get(id) : undefined
@@ -389,22 +436,63 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
     return tabFolder ? isInsidePath(agent.cwd, tabFolder) : pathKey(agent.cwd) === pathKey(folder)
   }), [agents, folder, project, projects, tabFolder])
   const agentsById = new Map(localAgents.map(agent => [agent.id, agent]))
+  const roles = new Map(localAgents.map(agent => [agent.id, agent.role]))
+  const locations = new Map<string, AgentPaneLocation>()
+  for (const agent of localAgents) {
+    const location = locationOf(agent, terminals, panes)
+    if (location) locations.set(agent.id, location)
+  }
   const map = useMemo(() => agentMessageMap(localAgents, messages), [localAgents, messages])
   const selectedEdge = map.edges.find(edge => edge.id === edgeSelection)
   const selected = agentsById.has(selection) ? selection : ALL
   const mapAgent = !selectedEdge && map.nodes.some(({ agent }) => agent.id === selected) ? selected : undefined
+  const editor = editingRole ? agentsById.get(editingRole) : undefined
+  const term = agentSearchTerm(query)
   const thread = messages.filter(({ from, to }) => {
-    if (selected === ALL) return agentsById.has(from) && agentsById.has(to)
+    if (selected === ALL) return (agentsById.has(from) && agentsById.has(to)) || Boolean(term &&
+      ((from === USER && agentsById.has(to)) || (to === USER && agentsById.has(from))))
     return (from === selected && (agentsById.has(to) || to === USER))
       || (to === selected && (agentsById.has(from) || from === USER))
   })
-  const actor = (id: string) => (
-    <span className="agent-message-actor">
-      <MessageProviderIcon kind={id === USER ? USER : agentsById.get(id)?.kind} />
-      <span className="agent-message-actor-name">{label(id)}</span>
-    </span>
-  )
-  const mapThreadName = selectedEdge ? `${selectedEdge.first} ↔ ${selectedEdge.second}` : mapAgent
+  const visibleThread = thread.filter(message => agentMessageMatches(message, term, roles))
+  const mapThread = (selectedEdge?.messages ?? [...thread].sort((a, b) => a.sentAt - b.sentAt))
+    .filter(message => agentMessageMatches(message, term, roles))
+
+  const goToPane = (id: string) => {
+    const latest = useMessages.getState()
+    const agent = latest.snapshot.agents.find(item => item.id === id)
+    const store = useTerminalStore.getState()
+    const location = agent && locationOf(agent, store.terminals, latest.panes)
+    if (!location) return
+    onClose()
+    focusTabPane(store.focusTerminal, location.tabId, location.pane)
+  }
+  const nameOf = (id: string) => {
+    const agent = agentsById.get(id)
+    return agent ? agentDisplayName(agent, locations.get(id)) : label(id)
+  }
+  const identityOf = (id: string) => {
+    const name = nameOf(id)
+    return agentsById.has(id) && name !== id ? `${name} · ${id}` : name
+  }
+  const actor = (id: string, showLocation = false) => {
+    const agent = agentsById.get(id)
+    const name = nameOf(id)
+    const location = showLocation ? locations.get(id) : undefined
+    return (
+      <span className="agent-message-actor">
+        {agent && <AgentIdentityDot id={id} />}
+        <MessageProviderIcon kind={id === USER ? USER : agent?.kind} />
+        <span className="agent-message-actor-name" title={identityOf(id)}>{name}</span>
+        {agent && (agent.role || name !== id) && <small className="agent-message-actor-id">{id}</small>}
+        {location && <span className="agent-message-actor-location">
+          {name !== location.label && <span title={location.label}>{location.label}</span>}
+          <AgentIdentityAction id={id} action="go" onClick={() => goToPane(id)} />
+        </span>}
+      </span>
+    )
+  }
+  const mapThreadName = selectedEdge ? `${identityOf(selectedEdge.first)} ↔ ${identityOf(selectedEdge.second)}` : mapAgent ? identityOf(mapAgent) : term ? '검색 결과' : undefined
   const changeView = (value: string) => {
     const next = parseAgentMessageView(value)
     if (!next) return
@@ -421,25 +509,38 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
             <Tabs.Root value={view} onValueChange={changeView}>
               <div className="agent-message-map-toolbar">
                 <span className="agent-message-workspace" title={workspaceName}>{workspaceName}</span>
+                <label className="agent-message-search" title="역할, ID, 메시지 검색">
+                  <RiSearchLine size={15} aria-hidden="true" />
+                  <input type="search" aria-label="메시지 검색" placeholder="역할, ID, 메시지 검색" value={query} onChange={event => setQuery(event.target.value)} />
+                </label>
                 <Tabs.List className="agent-message-map-switch" aria-label="에이전트 메시지 보기">
                   <Tabs.Trigger value="map"><RiNodeTree size={15} aria-hidden="true" />관계도</Tabs.Trigger>
                   <Tabs.Trigger value="list"><RiListUnordered size={15} aria-hidden="true" />목록</Tabs.Trigger>
                 </Tabs.List>
               </div>
+              {editor && <AgentRoleEditor key={editor.id} agent={editor} onClose={() => setEditingRole(undefined)} />}
               <Tabs.Content value="map" className="agent-message-map-body">
                 <AgentMessageMap key={project?.key ?? folder} model={map} selectedAgent={mapAgent} selectedEdge={selectedEdge?.id}
+                  locations={locations} onEditRole={setEditingRole} onGoToPane={goToPane}
                   onSelectAgent={id => { setSelection(id); setEdgeSelection(undefined) }} onSelectEdge={setEdgeSelection} />
                 <aside className="agent-message-map-detail" aria-label="선택한 메시지">
-                  <h3>{selectedEdge ? <>{actor(selectedEdge.first)} ↔ {actor(selectedEdge.second)}</> : mapAgent ? actor(mapAgent) : '메시지'}</h3>
+                  <h3>{selectedEdge ? <>{actor(selectedEdge.first)} ↔ {actor(selectedEdge.second)}</> : mapAgent ? actor(mapAgent) : term ? '검색 결과' : '메시지'}</h3>
                   {mapThreadName ? (
-                    <MessageThread key={mapThreadName} name={`${mapThreadName} 메시지`} actor={actor} states={map.messageStates}
-                      messages={selectedEdge?.messages ?? [...thread].sort((a, b) => a.sentAt - b.sentAt)} />
+                    <MessageThread key={selectedEdge?.id ?? mapAgent ?? ALL} name={`${mapThreadName} 메시지`} actor={id => actor(id, true)} states={map.messageStates}
+                      messages={mapThread} searching={Boolean(term)} />
                   ) : <p className="agent-message-map-empty">에이전트나 연결선을 선택하면 메시지를 볼 수 있습니다.</p>}
                 </aside>
               </Tabs.Content>
               <Tabs.Content value="list">
                 <div className="form-group">
-                  <div className="agent-message-filter"><label htmlFor="agent-messages-session">에이전트</label></div>
+                  <div className="agent-message-filter">
+                    <label htmlFor="agent-messages-session">에이전트</label>
+                    {selected !== ALL && <div className="agent-message-list-actions">
+                      {locations.get(selected) && <span title={locations.get(selected)?.label}>{locations.get(selected)?.label}</span>}
+                      <AgentIdentityAction id={selected} action="edit" onClick={() => setEditingRole(selected)} />
+                      {locations.has(selected) && <AgentIdentityAction id={selected} action="go" onClick={() => goToPane(selected)} />}
+                    </div>}
+                  </div>
                   <SelectMenu
                     id="agent-messages-session"
                     ariaLabel="에이전트"
@@ -449,13 +550,15 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
                       { value: ALL, label: '전체', icon: <MessageProviderIcon kind={ALL} /> },
                       ...localAgents.map(agent => ({
                         value: agent.id,
-                        label: `${agent.id}${agent.active ? '' : ' (종료)'}`,
-                        icon: <MessageProviderIcon kind={agent.kind} />
+                        label: nameOf(agent.id),
+                        detail: `${agent.id}${agent.active ? '' : ' (종료)'}`,
+                        icon: <><AgentIdentityDot id={agent.id} /><MessageProviderIcon kind={agent.kind} /></>
                       }))
                     ]}
                   />
                 </div>
-                <MessageThread messages={thread} name={selected === ALL ? `${workspaceName} 에이전트 간 메시지` : `${selected} 메시지`} actor={actor} />
+                <MessageThread messages={visibleThread} name={selected === ALL ? `${workspaceName} 에이전트 간 메시지` : `${identityOf(selected)} 메시지`}
+                  actor={id => actor(id, true)} searching={Boolean(term)} />
               </Tabs.Content>
             </Tabs.Root>
           ) : <p className="form-hint">로컬 작업을 선택하면 에이전트 메시지를 볼 수 있습니다.</p>}

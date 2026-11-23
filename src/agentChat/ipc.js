@@ -10,6 +10,9 @@ const { cleanAnswer } = require('./askQuestions.js')
 
 const SHELL_ID = /^local:\d+$/
 const MAX_TEXT = 16_000
+const CHAT_PROVIDERS = new Set(['claude', 'codex', 'antigravity'])
+const antigravityOnlyText = { ok: false, reason: 'unsupported', error: 'Antigravity 채팅에서는 일반 텍스트만 보낼 수 있습니다.' }
+const antigravityTerminal = { ok: false, reason: 'unsupported', error: 'Antigravity의 확인 요청은 터미널에서 처리해 주세요.' }
 
 /**
  * The text as it may be pasted into the agent's composer, or null. Control characters are refused:
@@ -34,6 +37,7 @@ const REASONS = {
   'not-drawn': '입력칸에 글이 그대로 들어가지 않아 보내지 않았습니다. 터미널 보기에서 확인해 주세요.',
   busy: '다른 입력을 넣는 중입니다. 잠시 뒤 다시 시도해 주세요.',
   changed: '화면의 질문이 바뀌었습니다. 새 질문을 보고 다시 골라 주세요.',
+  stuck: '선택이 반영되지 않았습니다. 다시 골라 주세요.',
   'target-changed': 'CLI의 입력 대상이 바뀌었습니다. 터미널에서 현재 대화를 확인해 주세요.',
   'retry-not-idle': '에이전트가 입력을 기다릴 때 다시 보내 주세요.',
   'retry-queued': 'Claude에 대기 중인 메시지가 있습니다. 처리된 뒤 다시 시도해 주세요.',
@@ -140,13 +144,22 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     }
   }
 
-  function readAttachments(event, shellId, source) {
+  async function readAttachments(event, shellId, source) {
     if (!allowed(event)) return locked
     const id = shellIdOf(shellId)
     const agent = id && shells()?.agentOf(id)
     if (!agent) return { ok: false, error: REASONS['not-agent'] }
     const canUse = () => allowed(event) && shells()?.agentOf(id)?.kind === agent.kind
     const noChat = '열려 있는 채팅에서 다시 첨부해 주세요.'
+    if (agent.kind === 'antigravity') {
+      if (source !== 'clipboard') return antigravityOnlyText
+      try {
+        const text = await clipboard.readText()
+        return canUse() ? { ok: true, kind: 'text', text } : locked
+      } catch (error) {
+        return { ok: false, error: error.message }
+      }
+    }
     return source === 'clipboard'
       ? imageDrafts.paste(id, canUse, noChat, { includeImageWithText: true })
       : imageDrafts.pick(id, canUse, noChat, selectImages)
@@ -156,7 +169,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (!allowed(event)) return locked
     const id = shellIdOf(shellId)
     if (!id) return { ok: false, error: '셸을 찾지 못했습니다.' }
-    if (!shells()?.agentOf(id)) return { ok: false, error: REASONS['not-agent'] }
+    if (!CHAT_PROVIDERS.has(shells()?.agentOf(id)?.kind)) return { ok: false, error: REASONS['not-agent'] }
     return chats.open(id)
   })
   ipcMain.handle('agent-chat-older', async (event, shellId) => {
@@ -167,6 +180,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (!allowed(event)) return locked
     const id = shellIdOf(shellId)
     if (!id) return { ok: false, error: '셸을 찾지 못했습니다.' }
+    if (shells()?.agentOf?.(id)?.kind === 'antigravity') return antigravityTerminal
     const result = await chats.questions(id)
     return allowed(event) ? result : locked
   })
@@ -176,17 +190,19 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (!id || typeof request.scope !== 'string' || typeof request.id !== 'string' || request.id.length > 160) {
       return { ok: false, error: '질문을 찾지 못했습니다.' }
     }
+    if (shells()?.agentOf?.(id)?.kind === 'antigravity') return antigravityTerminal
     const result = await chats.questionContext(id, request.scope, request.id)
     return allowed(event) ? result : locked
   })
   ipcMain.handle('agent-chat-subagent-preview', async (event, shellId, agentId) => {
     const id = shellIdOf(shellId)
-    if (!allowed(event) || !id || typeof agentId !== 'string' || agentId.length > 500) return []
+    if (!allowed(event) || !id || typeof agentId !== 'string' || agentId.length > 500 || shells()?.agentOf(id)?.kind === 'antigravity') return []
     const activity = await chats.subagentPreview(id, agentId)
     return allowed(event) ? activity : []
   })
   async function subagentFor(event, shellId, agentId) {
     if (!allowed(event) || !shellIdOf(shellId) || typeof agentId !== 'string' || agentId.length > 500) return null
+    if (shells()?.agentOf(shellId)?.kind === 'antigravity') return null
     const record = await chats.subagentConversation(shellId, agentId)
     if (!record || !allowed(event)) return null
     const local = shells()
@@ -219,6 +235,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   ipcMain.handle('agent-chat-command-watch', async (event, shellId) => {
     if (!allowed(event)) return locked
     const id = shellIdOf(shellId)
+    if (id && shells()?.agentOf(id)?.kind === 'antigravity') return antigravityOnlyText
     const pending = id && commandWatches.get(id)
     if (!pending) return { ok: false, error: '확인할 명령이 없습니다.' }
     commandWatches.delete(id)
@@ -264,6 +281,23 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const text = cleanChatText(request?.text)
     if (!id) return { ok: false, error: '셸을 찾지 못했습니다.' }
     const keys = request.imageIds ?? (request.imageId === undefined ? [] : [request.imageId])
+    const local = shells()
+    const agent = local?.agentOf(id)
+    if (!agent || !CHAT_PROVIDERS.has(agent.kind)) return { ok: false, error: REASONS['not-agent'] }
+    if (agent.kind === 'antigravity') {
+      if (!Array.isArray(keys) || keys.length || request.imageId !== undefined || request.retry || /^\/[^\s/]+(?:\s|$)/.test(text?.trimStart() ?? '')) return antigravityOnlyText
+      if (!text) return { ok: false, error: '보낼 수 없는 글입니다 (비어 있거나, 제어 문자가 있거나, 너무 깁니다).' }
+      if (agent.status === 'blocked' || local.approvalOf?.(id)) return antigravityTerminal
+      if (agent.status !== 'idle') return { ok: false, reason: 'busy', error: 'Antigravity가 입력을 기다릴 때 보내 주세요.' }
+      const agentId = local.chatAgentId?.(id)
+      const isSameIdleEditor = () => {
+        const active = local.agentOf(id)
+        return allowed(event) && active?.kind === 'antigravity' && active.status === 'idle'
+          && (active.sessionId ?? null) === (agent.sessionId ?? null) && local.chatAgentId?.(id) === agentId && !local.approvalOf?.(id)
+      }
+      const result = await local.chatSend(id, text, undefined, undefined, undefined, { canSend: isSameIdleEditor })
+      return allowed(event) ? chatSendResult(result) : locked
+    }
     const retry = retryRequest(request.retry)
     if (request.retry && (!retry || !text)) return { ok: false, error: '다시 보낼 메시지의 정보를 확인할 수 없습니다.' }
     const selected = imageDrafts.select(id, keys, { retry: Boolean(retry), remember: Boolean(text) })
@@ -272,9 +306,6 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (!text && (!files.length || typeof request.text !== 'string' || request.text.trim() || request.text.length > MAX_TEXT)) {
       return { ok: false, error: '보낼 수 없는 글입니다 (비어 있거나, 제어 문자가 있거나, 너무 깁니다).' }
     }
-    const local = shells()
-    const agent = local?.agentOf(id)
-    if (!agent) return { ok: false, error: REASONS['not-agent'] }
     const { prompt, images } = chatPrompt(agent.kind, text ?? '', files)
     // A slash command: what it does shows on the agent's screen (agentChat/commandScreen.js)
     const isCommand = !files.length && /^\/[^\s/]+(?:\s|$)/.test(prompt)
@@ -299,6 +330,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (!id || !key || !signature) return { ok: false, error: '답할 수 없는 선택입니다.' }
     const local = shells()
     if (!local) return { ok: false, error: REASONS['not-agent'] }
+    if (local.agentOf(id)?.kind === 'antigravity') return antigravityTerminal
     const result = await local.answerApproval(id, key, signature)
     return result.ok ? { ok: true } : { ok: false, reason: result.reason, error: REASONS[result.reason] ?? '답하지 못했습니다.' }
   })
@@ -309,6 +341,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const id = shellIdOf(request?.shellId)
     const itemId = typeof request?.itemId === 'string' && /^tool:[\w-]{1,200}$/.test(request.itemId) ? request.itemId : null
     if (!id || !itemId || !Array.isArray(request?.answers)) return { ok: false, error: '답할 수 없는 선택입니다.' }
+    if (shells()?.agentOf?.(id)?.kind === 'antigravity') return antigravityTerminal
     const pending = chats.pendingQuestion(id, itemId)
     if (!pending) return { ok: false, reason: 'answered', error: QUESTION_REASONS.answered }
     const { questions } = pending
@@ -333,6 +366,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (!id || !what) return { ok: false, error: '바꿀 수 없는 항목입니다.' }
     const local = shells()
     if (!local) return { ok: false, error: REASONS['not-agent'] }
+    if (local.agentOf(id)?.kind === 'antigravity') return antigravityOnlyText
     return pickerResult(await local.pickerList(id, what))
   })
   ipcMain.handle('agent-picker-apply', async (event, request) => {
@@ -343,6 +377,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (!id || !what || !label) return { ok: false, error: '고를 수 없는 항목입니다.' }
     const local = shells()
     if (!local) return { ok: false, error: REASONS['not-agent'] }
+    if (local.agentOf(id)?.kind === 'antigravity') return antigravityOnlyText
     return pickerResult(await local.pickerApply(id, what, label))
   })
   ipcMain.handle('agent-chat-toggle-speed', async (event, request) => {
@@ -352,12 +387,14 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (speed !== 'fast' && speed !== 'ultrafast') return { ok: false, error: '고를 수 없는 속도입니다.' }
     const local = shells()
     if (!id || !local) return { ok: false, error: REASONS['not-agent'] }
+    if (local.agentOf(id)?.kind === 'antigravity') return antigravityOnlyText
     const result = await local.toggleCodexSpeed(id, speed)
     return result.ok ? result : { ...result, error: SPEED_REASONS[result.reason] ?? '속도 모드를 전환하지 못했습니다.' }
   })
   ipcMain.handle('agent-chat-interrupt', (event, shellId) => {
     const id = shellIdOf(shellId)
-    return Boolean(allowed(event) && id && shells()?.interruptAgent(id))
+    const local = shells()
+    return Boolean(allowed(event) && id && local?.agentOf(id)?.kind !== 'antigravity' && local?.interruptAgent(id))
   })
   // After Esc: the chat lines returned to the CLI's composer (cleared only when it holds
   // exactly them). The window already has the text; nothing is read off the screen for it.
@@ -370,6 +407,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (texts.some(text => !text) || texts.join('\n').length > MAX_TEXT) return { ok: false, reason: 'invalid' }
     const local = shells()
     if (!local?.chatTakeBack) return { ok: false, reason: 'not-agent' }
+    if (local.agentOf(id)?.kind === 'antigravity') return antigravityOnlyText
     return local.chatTakeBack(id, texts)
   })
 
@@ -460,6 +498,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     clearClipboard: imageDrafts.clearAll,
     async sendCapture(target, comment, getAttachment, stillOpen) {
       const local = shells()
+      if (target.kind === 'antigravity' || local?.agentOf(target.shellId)?.kind === 'antigravity') return antigravityOnlyText
       const sameConversation = () => !isLocked() && stillOpen() && local?.chatAgentId(target.shellId) === target.id
       if (!sameConversation()) return { ok: false, error: '선택한 에이전트가 종료되었거나 바뀌었습니다.' }
       const trimmed = comment.trim()

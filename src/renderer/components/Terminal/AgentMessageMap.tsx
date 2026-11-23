@@ -3,11 +3,13 @@ import type { PointerEvent } from 'react'
 import { RiArrowRightLine, RiFolder3Line } from 'react-icons/ri'
 import type { LocalAgentStatus } from '../../types'
 import { folderLabel } from '../../lib/localWorkspaceTree'
+import { agentDisplayName, agentIdentityColor, type AgentPaneLocation } from '../../lib/agentIdentity'
 import {
   clampMessageMapPoint, layoutAgentMessageMap, layoutMessageMapLabels, MAP_CARD_HEIGHT, MAP_CARD_WIDTH, messageMapArrow,
   type agentMessageMap, type MapPoint, type MessageState
 } from '../../lib/agentMessageMap'
-import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
+import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../ui/agentProviderIcons'
+import { AgentIdentityAction, AgentIdentityDot } from '../ui/AgentIdentity'
 
 export const MESSAGE_STATE_LABELS: Record<MessageState, string> = {
   unread: '안 읽음', seen: '읽음·답 없음', answered: '답함'
@@ -23,8 +25,11 @@ interface Props {
   model: ReturnType<typeof agentMessageMap>
   selectedAgent?: string
   selectedEdge?: string
+  locations: ReadonlyMap<string, AgentPaneLocation>
   onSelectAgent: (id: string) => void
   onSelectEdge: (id: string) => void
+  onEditRole: (id: string) => void
+  onGoToPane: (id: string) => void
 }
 
 interface Drag {
@@ -35,7 +40,7 @@ interface Drag {
   moved: boolean
 }
 
-export function AgentMessageMap({ model, selectedAgent, selectedEdge, onSelectAgent, onSelectEdge }: Props) {
+export function AgentMessageMap({ model, selectedAgent, selectedEdge, locations, onSelectAgent, onSelectEdge, onEditRole, onGoToPane }: Props) {
   const arrowId = useId()
   const viewport = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLDivElement>(null)
@@ -95,10 +100,10 @@ export function AgentMessageMap({ model, selectedAgent, selectedEdge, onSelectAg
         <div ref={canvas} className="agent-message-map-canvas" style={{ width, height }}>
           <svg className="agent-message-map-lines" width={width} height={height} aria-hidden="true">
             <defs>
-              {[false, true].map(highlighted => (
-                <marker key={String(highlighted)} id={`${arrowId}-${highlighted}`} viewBox="0 0 10 10"
+              {model.nodes.map(({ agent }) => (
+                <marker key={agent.id} id={`${arrowId}-${agent.id}`} viewBox="0 0 10 10" style={{ color: agentIdentityColor(agent.id) }}
                   refX={9} refY={5} markerWidth={7} markerHeight={7} markerUnits="userSpaceOnUse" orient="auto">
-                  <path className="agent-message-map-arrowhead" data-highlighted={highlighted} d="M 0 0 L 10 5 L 0 10 Z" />
+                  <path fill="currentColor" d="M 0 0 L 10 5 L 0 10 Z" />
                 </marker>
               ))}
             </defs>
@@ -109,8 +114,8 @@ export function AgentMessageMap({ model, selectedAgent, selectedEdge, onSelectAg
               if (!arrow) return null
               const highlighted = selectedEdge === edge.id || direction.states.unread > 0
               return (
-                <g key={edge.id + direction.from} data-highlighted={highlighted} onClick={() => onSelectEdge(edge.id)}>
-                  <path className="agent-message-map-line" d={arrow.path} markerEnd={`url(#${arrowId}-${highlighted})`} />
+                <g key={edge.id + direction.from} data-highlighted={highlighted} style={{ color: agentIdentityColor(direction.from) }} onClick={() => onSelectEdge(edge.id)}>
+                  <path className="agent-message-map-line" d={arrow.path} markerEnd={`url(#${arrowId}-${direction.from})`} />
                   <path className="agent-message-map-hit" d={arrow.path} />
                 </g>
               )
@@ -129,7 +134,7 @@ export function AgentMessageMap({ model, selectedAgent, selectedEdge, onSelectAg
                   const arrow = messageMapArrow(positions.get(from)!, positions.get(to)!, edge.directions.length > 1)
                   return (
                     <span key={from} className="agent-message-map-direction">
-                      <RiArrowRightLine size={13} style={{ transform: `rotate(${arrow?.angle ?? 0}deg)` }} aria-hidden="true" />
+                      <RiArrowRightLine size={13} style={{ transform: `rotate(${arrow?.angle ?? 0}deg)`, color: agentIdentityColor(from) }} aria-hidden="true" />
                       <strong>{count}</strong>
                       {messageStates.filter(state => states[state]).map(state => (
                         <span key={state} data-state={state}>{state === 'seen' ? '읽음' : MESSAGE_STATE_LABELS[state]} {states[state]}</span>
@@ -146,20 +151,41 @@ export function AgentMessageMap({ model, selectedAgent, selectedEdge, onSelectAg
             const statusKind = archived ? 'ended' : agent.waitingForReply && agent.status === 'working' ? 'reply' : agent.status
             const status = archived && agent.active ? '연결 끊김' : agentStatuses[statusKind]
             const folder = folderLabel(agent.cwd)
+            const location = locations.get(agent.id)
+            const name = agentDisplayName(agent, location)
+            const autoLocation = agent.role ? undefined : location
+            const context = location && !autoLocation ? location.tabLabel : name === folder || autoLocation?.tabLabel === folder ? '' : folder
             return (
-              <button key={agent.id} type="button" className="agent-message-map-card" aria-pressed={selectedAgent === agent.id}
+              <div key={agent.id} className="agent-message-map-card" data-selected={selectedAgent === agent.id}
                 data-agent-id={agent.id} data-archived={archived} data-dragging={dragging === agent.id}
-                title={`${agent.id} · ${status}\n${agent.cwd}`} style={{ left: point.x, top: point.y, width: MAP_CARD_WIDTH, height: MAP_CARD_HEIGHT }}
-                onPointerDown={event => startDrag(event, agent.id, point)} onPointerMove={moveCard}
-                onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={endDrag}
-                onClick={event => {
-                  if (!event.detail || draggedClick.current !== agent.id) onSelectAgent(agent.id)
-                  draggedClick.current = null
-                }}>
-                <span className="agent-message-map-card-name"><Icon className="agent-message-provider" data-kind={agent.kind} size={16} aria-hidden="true" /><strong>{agent.id}</strong></span>
-                <span className="agent-message-map-card-status" data-status={statusKind}><i />{status}</span>
-                {folder && <span className="agent-message-map-card-folder"><RiFolder3Line size={13} aria-hidden="true" /><span>{folder}</span></span>}
-              </button>
+                style={{ left: point.x, top: point.y, width: MAP_CARD_WIDTH, height: MAP_CARD_HEIGHT }}>
+                <button type="button" className="agent-message-map-card-pick" aria-pressed={selectedAgent === agent.id}
+                  title={`${name} · ${agent.id} · ${AGENT_PROVIDER_NAMES[agent.kind]} · ${status}\n${location?.label ?? agent.cwd}`}
+                  onPointerDown={event => startDrag(event, agent.id, point)} onPointerMove={moveCard}
+                  onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={endDrag}
+                  onClick={event => {
+                    if (!event.detail || draggedClick.current !== agent.id) onSelectAgent(agent.id)
+                    draggedClick.current = null
+                  }}>
+                  <span className="agent-message-map-card-name">
+                    <Icon className="agent-message-provider" data-kind={agent.kind} size={16} aria-hidden="true" />
+                    <strong>{autoLocation?.tabLabel ?? name}</strong>
+                    {autoLocation && <small>칸 {autoLocation.number}</small>}
+                  </span>
+                  <span className="agent-message-map-card-meta">
+                    <AgentIdentityDot id={agent.id} /><small>{agent.id}</small>
+                    <span className="agent-message-map-card-status" data-status={statusKind}><i />{status}</span>
+                  </span>
+                  {context && <span className="agent-message-map-card-folder">
+                    <RiFolder3Line size={13} aria-hidden="true" /><span>{context}</span>
+                    {location && !autoLocation && <small>칸 {location.number}</small>}
+                  </span>}
+                </button>
+                <div className="agent-message-map-card-actions">
+                  <AgentIdentityAction id={agent.id} action="edit" onClick={() => onEditRole(agent.id)} />
+                  {agent.active && location && <AgentIdentityAction id={agent.id} action="go" onClick={() => onGoToPane(agent.id)} />}
+                </div>
+              </div>
             )
           })}
         </div>

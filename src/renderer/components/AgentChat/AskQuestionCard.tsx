@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import { RiArrowLeftLine, RiArrowRightLine, RiCheckLine, RiLoader4Line, RiQuestionLine, RiSendPlane2Line, RiTerminalBoxLine } from 'react-icons/ri'
 import type { AgentAskQuestion, AgentChatItem } from '../../types'
 import { answerOf, answersOf, answerText, emptyDraft, otherProblem, pick, toggleOther, type AskDraft } from '../../lib/askQuestion'
 import { useAskQuestionStore } from '../../stores/askQuestionStore'
 import { toast } from '../../stores/toastStore'
+import { isApprovalClick, isApprovalShortcut, useApprovalArming } from './useApprovalArming'
 import './AskQuestionCard.css'
 
 /**
@@ -18,7 +19,8 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
   const sending = useAskQuestionStore(state => state.sending.get(shellId))
   const setSending = useAskQuestionStore(state => state.setSending)
   const answerInTerminal = useAskQuestionStore(state => state.answerInTerminal)
-  const cardRef = useRef<HTMLDivElement>(null)
+  const { armed, canActivate } = useApprovalArming()
+  const canClick = (event: MouseEvent<HTMLButtonElement>) => canActivate() && isApprovalClick(event)
   const busy = sending?.itemId === item.id
   // With previews a choice is looked at before it is sent (in the CLI the number only shows its preview too)
   const direct = questions.length === 1 && !questions[0].multiSelect && !questions[0].preview
@@ -30,14 +32,6 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
   const shownPreview = question?.preview ? question.options[looked ?? draft.picks[0] ?? 0]?.preview : undefined
   useEffect(() => setLooked(null), [step])
 
-  useEffect(() => {
-    setDrafts(questions.map(emptyDraft))
-    setStep(0)
-    setLooked(null)
-    // A new question: the keyboard goes to its first choice
-    requestAnimationFrame(() => cardRef.current?.querySelector<HTMLElement>('.agent-ask-option')?.focus())
-  }, [item.id])
-
   const toTerminal = () => {
     answerInTerminal(shellId, item.id)
     onTerminal()
@@ -45,7 +39,7 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
 
   const send = async (all: AskDraft[]) => {
     const answers = answersOf(questions, all)
-    if (!answers || busy) return
+    if (!answers || useAskQuestionStore.getState().sending.get(shellId)?.itemId === item.id) return
     if (!window.electronAPI.agentChatAnswerQuestions) {
       toast.error('답하지 못했습니다', '이 앱 버전에서는 쓸 수 없습니다.')
       return
@@ -78,13 +72,18 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (busy || event.ctrlKey || event.altKey || event.metaKey) return
-    if ((event.target as HTMLElement).tagName === 'INPUT') {
-      if (event.key === 'Enter') { event.preventDefault(); next() }
+    if (!isApprovalShortcut(event) || !canActivate() || busy) return
+    if (event.target instanceof HTMLInputElement) {
+      if (event.key !== 'Enter') return
+      event.preventDefault()
+      next()
       return
     }
     if (reviewing) {
-      if (event.key === 'Enter') { event.preventDefault(); void send(drafts) }
+      if (event.target === event.currentTarget && event.key === 'Enter') {
+        event.preventDefault()
+        void send(drafts)
+      }
       return
     }
     // Number keys pick, as in the terminal
@@ -108,22 +107,24 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
 
   const problem = otherProblem(draft)
   return (
-    <div ref={cardRef} className="agent-chat-approval agent-ask" role="group" aria-label="Claude 의 질문" onKeyDown={onKeyDown}>
+    <div className="agent-chat-approval agent-ask" role="group" aria-label="Claude 의 질문" tabIndex={0} onKeyDown={onKeyDown}>
       <div className="agent-ask-head">
         <span className="agent-ask-state"><RiQuestionLine aria-hidden />답변 대기 중</span>
         {questions.length > 1 && (
           <div className="agent-ask-steps" role="tablist" aria-label="질문">
             {questions.map((entry, index) => (
               <button key={index} type="button" role="tab" aria-selected={index === step} className="agent-ask-step"
-                data-done={answerOf(entry, drafts[index] ?? emptyDraft()) ? 'true' : undefined} onClick={() => setStep(index)}>
+                data-done={answerOf(entry, drafts[index] ?? emptyDraft()) ? 'true' : undefined}
+                disabled={!armed} onClick={event => { if (canClick(event)) setStep(index) }}>
                 {answerOf(entry, drafts[index] ?? emptyDraft()) && <RiCheckLine aria-hidden />}{entry.header || `질문 ${index + 1}`}
               </button>
             ))}
             <button type="button" role="tab" aria-selected={reviewing} className="agent-ask-step"
-              disabled={!answersOf(questions, drafts)} onClick={() => setStep(questions.length)}>확인</button>
+              disabled={!armed || !answersOf(questions, drafts)} onClick={event => { if (canClick(event)) setStep(questions.length) }}>확인</button>
           </div>
         )}
-        <button type="button" className="agent-ask-terminal" onClick={toTerminal} title="Claude 의 원래 질문 화면에서 답합니다">
+        <button type="button" className="agent-ask-terminal" disabled={!armed}
+          onClick={event => { if (canClick(event)) toTerminal() }} title="Claude 의 원래 질문 화면에서 답합니다">
           <RiTerminalBoxLine aria-hidden />터미널에서 답하기
         </button>
       </div>
@@ -139,8 +140,10 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
             ))}
           </dl>
           <div className="agent-ask-footer">
-            <button type="button" className="agent-ask-nav" onClick={() => setStep(questions.length - 1)}><RiArrowLeftLine aria-hidden />이전</button>
-            <button type="button" className="agent-ask-send" autoFocus onClick={() => void send(drafts)}><RiSendPlane2Line aria-hidden />보내기</button>
+            <button type="button" className="agent-ask-nav" disabled={!armed}
+              onClick={event => { if (canClick(event)) setStep(questions.length - 1) }}><RiArrowLeftLine aria-hidden />이전</button>
+            <button type="button" className="agent-ask-send" disabled={!armed}
+              onClick={event => { if (canClick(event)) void send(drafts) }}><RiSendPlane2Line aria-hidden />보내기</button>
           </div>
         </div>
       ) : (
@@ -154,7 +157,8 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
               const on = draft.picks.includes(index)
               return (
                 <button key={index} type="button" className="agent-ask-option" data-on={on ? 'true' : undefined}
-                  role={question.multiSelect ? 'checkbox' : 'radio'} aria-checked={on} onClick={() => choose(index)}
+                  role={question.multiSelect ? 'checkbox' : 'radio'} aria-checked={on}
+                  disabled={!armed} onClick={event => { if (canClick(event)) choose(index) }}
                   onMouseEnter={question.preview ? () => setLooked(index) : undefined}
                   onFocus={question.preview ? () => setLooked(index) : undefined}>
                   <span className="agent-ask-mark" aria-hidden>{question.multiSelect ? (on ? <RiCheckLine /> : null) : index + 1}</span>
@@ -166,7 +170,7 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
               )
             })}
             {/* The CLI has no "Type something" row beside previews */}
-            {!question.preview && <OtherAnswer question={question} draft={draft} onChange={update} problem={problem} onSubmit={next} />}
+            {!question.preview && <OtherAnswer question={question} draft={draft} onChange={update} problem={problem} armed={armed} canClick={canClick} />}
           </div>
           {question.preview && (
             <pre className="agent-ask-preview" aria-label="미리보기">{shownPreview || '미리보기가 없는 선택지입니다.'}</pre>
@@ -174,8 +178,9 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
           </div>
           {!direct && (
             <div className="agent-ask-footer">
-              {step > 0 && <button type="button" className="agent-ask-nav" onClick={() => setStep(step - 1)}><RiArrowLeftLine aria-hidden />이전</button>}
-              <button type="button" className="agent-ask-send" disabled={!complete} onClick={next}>
+              {step > 0 && <button type="button" className="agent-ask-nav" disabled={!armed}
+                onClick={event => { if (canClick(event)) setStep(step - 1) }}><RiArrowLeftLine aria-hidden />이전</button>}
+              <button type="button" className="agent-ask-send" disabled={!armed || !complete} onClick={event => { if (canClick(event)) next() }}>
                 {questions.length === 1 ? <><RiSendPlane2Line aria-hidden />보내기</> : <>다음<RiArrowRightLine aria-hidden /></>}
               </button>
             </div>
@@ -186,17 +191,26 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
   )
 }
 
-function OtherAnswer({ question, draft, onChange, problem, onSubmit }: {
-  question: AgentAskQuestion; draft: AskDraft; onChange: (draft: AskDraft) => void; problem: string | null; onSubmit: () => void
+function OtherAnswer({ question, draft, onChange, problem, armed, canClick }: {
+  question: AgentAskQuestion; draft: AskDraft; onChange: (draft: AskDraft) => void; problem: string | null
+  armed: boolean; canClick: (event: MouseEvent<HTMLButtonElement>) => boolean
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const focusNext = useRef(false)
   useEffect(() => {
-    if (draft.otherOn) inputRef.current?.focus()
+    if (draft.otherOn && focusNext.current) {
+      focusNext.current = false
+      inputRef.current?.focus()
+    }
   }, [draft.otherOn])
   return (
     <div className="agent-ask-other" data-on={draft.otherOn ? 'true' : undefined}>
       <button type="button" className="agent-ask-option" role={question.multiSelect ? 'checkbox' : 'radio'} aria-checked={draft.otherOn}
-        data-on={draft.otherOn ? 'true' : undefined} onClick={() => onChange(toggleOther(question, draft, !draft.otherOn))}>
+        data-on={draft.otherOn ? 'true' : undefined} disabled={!armed} onClick={event => {
+          if (!canClick(event)) return
+          focusNext.current = !draft.otherOn
+          onChange(toggleOther(question, draft, !draft.otherOn))
+        }}>
         <span className="agent-ask-mark" aria-hidden>{draft.otherOn ? <RiCheckLine /> : '…'}</span>
         <span className="agent-ask-text"><span className="agent-ask-label">직접 입력</span></span>
       </button>
@@ -204,8 +218,7 @@ function OtherAnswer({ question, draft, onChange, problem, onSubmit }: {
         <>
           <input ref={inputRef} className="agent-ask-input" value={draft.other} maxLength={500} placeholder="답을 한 줄로 적어 주세요"
             aria-label="직접 입력한 답" aria-invalid={problem ? true : undefined}
-            onChange={event => onChange({ ...draft, other: event.target.value })}
-            onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); onSubmit() } }} />
+            onChange={event => onChange({ ...draft, other: event.target.value })} />
           {problem && draft.other && <div className="agent-ask-problem" role="alert">{problem}</div>}
         </>
       )}

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { cleanChatText, registerAgentChatIpc } from './ipc.js'
 
 function harness(kind = 'claude', { chats = {}, active = () => null, agentId = () => 'agent-1', status = () => 'idle', screen = () => null,
-  duringSend = () => {}, result = { ok: true } } = {}) {
+  sessionId = () => null, approval = () => null, duringSend = () => {}, result = { ok: true } } = {}) {
   const handlers = new Map()
   const ipcMain = { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => handlers.set(name, fn) }
   const sent = []
@@ -17,10 +17,12 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
     chats,
     notifyCapture: capture => captures.push(capture),
     shells: () => ({
-      agentOf: () => ({ kind, status: status() }),
+      agentOf: () => ({ kind, status: status(), sessionId: sessionId() }),
+      approvalOf: approval,
       chatAgentId: agentId,
       chatInputTarget: active,
       chatScreen: screen,
+      answerApproval: async () => result,
       chatSend: async (_id, prompt, images, target, verify = () => true, { canSend = () => true } = {}) => {
         duringSend()
         if (!verify() || !canSend()) return { ok: false, reason: 'target-changed' }
@@ -30,6 +32,7 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
     }),
     clipboard: {
       read: async () => ({ text: '', image: {} }),
+      readText: async () => 'plain text',
       decodeImage: async () => bitmap,
       storeImage: () => `C:\\tmp\\shot-${++stored}.png`,
       discardImage: file => discarded.push(file)
@@ -261,6 +264,56 @@ describe('text the chat view may send', () => {
   })
 })
 
+describe('Antigravity chat', () => {
+  const shellId = 'local:1'
+  const message = { shellId, text: '첫 줄\r\n둘째 줄' }
+
+  it('opens on a bound shell and sends ordinary text only while idle', async () => {
+    let state = 'starting'
+    const { call, sent } = harness('antigravity', {
+      status: () => state,
+      chats: { open: id => ({ ok: id === shellId }) }
+    })
+    expect(await call('agent-chat-open', shellId)).toEqual({ ok: true })
+    expect(await call('agent-chat-send', message)).toMatchObject({ ok: false, reason: 'busy' })
+    state = 'working'
+    expect(await call('agent-chat-send', message)).toMatchObject({ ok: false, reason: 'busy' })
+    state = 'blocked'
+    expect(await call('agent-chat-send', message)).toMatchObject({ ok: false, reason: 'unsupported' })
+    expect(sent).toEqual([])
+    state = 'idle'
+    expect(await call('agent-chat-send', message)).toEqual({ ok: true })
+    expect(sent).toEqual([{ prompt: '첫 줄\n둘째 줄', images: undefined }])
+  })
+
+  it('rechecks the session and confirmation state before submitting', async () => {
+    let session = 'first'
+    let pending = null
+    const { call, sent } = harness('antigravity', {
+      sessionId: () => session,
+      approval: () => pending,
+      duringSend: () => { session = 'second' }
+    })
+    expect(await call('agent-chat-send', message)).toMatchObject({ ok: false, reason: 'target-changed' })
+    pending = { usesTerminalInput: true }
+    expect(await call('agent-chat-send', message)).toMatchObject({ ok: false, reason: 'unsupported' })
+    expect(sent).toEqual([])
+  })
+
+  it('pastes text and rejects image, slash command, resend and confirmation IPC', async () => {
+    const { call, sent } = harness('antigravity')
+    expect(await call('agent-chat-read-clipboard', shellId)).toEqual({ ok: true, kind: 'text', text: 'plain text' })
+    expect(await call('agent-chat-pick-images', shellId)).toMatchObject({ ok: false, reason: 'unsupported' })
+    for (const change of [{ imageIds: ['image'] }, { imageIds: [], imageId: 'image' }, { text: ' /model' }, { retry: retryRequest() }]) {
+      expect(await call('agent-chat-send', { ...message, ...change })).toMatchObject({ ok: false, reason: 'unsupported' })
+    }
+    expect(await call('agent-chat-answer', { shellId, key: '1', signature: 'antigravity-terminal' }))
+      .toMatchObject({ ok: false, reason: 'unsupported' })
+    expect(await call('agent-chat-subagent-conversation', shellId, 'other')).toBeNull()
+    expect(sent).toEqual([])
+  })
+})
+
 describe('pinned answer windows', async () => {
   const { registerAgentChatIpc } = await import('./ipc.js')
   const { createPins } = await import('./pins.js')
@@ -318,6 +371,13 @@ describe('pinned answer windows', async () => {
     await call('agent-chat-pin', main, request)
     lock()
     expect((await call('pinned-reply-get', windows[0].webContents)).ok).toBe(false)
+  })
+})
+
+it('gives a retry message when the numbered approval choice is stuck', async () => {
+  const { call } = harness('claude', { result: { ok: false, reason: 'stuck' } })
+  await expect(call('agent-chat-answer', { shellId: 'local:1', key: '2', signature: 'question' })).resolves.toEqual({
+    ok: false, reason: 'stuck', error: '선택이 반영되지 않았습니다. 다시 골라 주세요.'
   })
 })
 

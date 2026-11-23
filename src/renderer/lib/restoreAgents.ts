@@ -50,8 +50,7 @@ export function agentsOfLocalTab(
 
 /** The agents running in local shells (shell id → kind), as the message list knows them */
 export const agentKindsByShell = (): Map<string, LocalAgent> => new Map(useAgentMessagesStore.getState().snapshot.agents
-  .filter(agent => agent.active && agent.shellId && (agent.kind === 'claude' || agent.kind === 'codex'))
-  .map(agent => [agent.shellId, agent.kind] as const))
+  .flatMap(({ active, shellId, kind }) => active && shellId && (kind === 'claude' || kind === 'codex') ? [[shellId, kind] as const] : []))
 
 type OpenLocal = (options: { cwd?: string; workspaceLabel?: string; agent?: LocalAgent; resume?: string }) => Promise<string | null>
 

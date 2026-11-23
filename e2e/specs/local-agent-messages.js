@@ -1,6 +1,6 @@
 const fs = require('fs')
 const path = require('path')
-const { connect, createChecks, sleep, unlock, openLocalAgent, pickTabGroup } = require('../support/driver')
+const { connect, createChecks, sleep, unlock, openLocalAgent, pickTabGroup, SET } = require('../support/driver')
 
 const { check, finish } = createChecks()
 const profile = process.env.E2E_PROFILE
@@ -95,10 +95,11 @@ async function run() {
     await until(`${row('codex-1')}?.dataset.status === 'idle'`)
     await openAgent('claude', 'claude-2')
     for (const [index, agent] of ['codex-1', 'claude-2'].entries()) {
-      check(agent + ' has only icons directly underneath its own session information', await until(`
+      check(agent + ' has a colored dot and icons directly underneath its own session information', await until(`
         ${owner(agent)} && ${owner(agent)} === ${paneTab(agent)} &&
         ${row(agent)}.parentElement.previousElementSibling?.matches('.local-terms-row') &&
-        ${row(agent)}.textContent.trim() === '' && ${row(agent)}.querySelectorAll('svg').length === 2
+        ${row(agent)}.textContent.trim() === '' && ${row(agent)}.querySelectorAll('svg').length === 2 &&
+        !!${row(agent)}.querySelector('.agent-identity-dot')
       `))
       check(agent + ' has its own label in the worktree without repeating its name', await until(`
         ${session(agent)}?.querySelector('.local-terms-name')?.textContent === '터미널 ${index + 1}'
@@ -118,6 +119,19 @@ async function run() {
     }
     const list = await cli('codex-1', 'agent list')
     check('the bundled CLI can see both agents with independent ids on the same folder', list.self === 'codex-1' && list.agents.length === 2 && list.agents.every(agent => agent.cwd === workspace))
+    await mcp('codex-1', 'set_role', { role: '보내기 구현' })
+    await mcp('claude-2', 'set_role', { role: '리뷰어' })
+    check('MCP roles appear on the terminal strip and in the agent list',
+      (await mcp('codex-1', 'list_agents', {})).agents.find(agent => agent.id === 'claude-2')?.role === '리뷰어' &&
+      await until(`document.querySelector('.agent-pane-usage .agent-identity-badge[data-agent-id="codex-1"]')?.textContent === 'codex-1 · 보내기 구현'`))
+    await driver.move(...await driver.center(row('codex-1')))
+    check('the sidebar chip tooltip shows the agent ID and role, with the same color as its pane', await until(`
+      document.querySelector('.app-tooltip.is-visible')?.textContent.includes('codex-1 · 보내기 구현') &&
+      getComputedStyle(${row('codex-1')}.querySelector('.agent-identity-dot')).backgroundColor ===
+        getComputedStyle(document.querySelector('.agent-pane-usage .agent-identity-badge[data-agent-id="codex-1"] .agent-identity-dot')).backgroundColor
+    `))
+    await driver.shot('local-agent-sidebar-role')
+    await driver.move(20, 45)
 
     await js(`window.deliveriesSeen = 0
       new MutationObserver(records => {
@@ -145,9 +159,14 @@ async function run() {
     })()`)
     const request = await cli('codex-1', 'message send --to claude-2 --text review-please --request-id review-1')
     const claudeMail = 'document.querySelector(\'[aria-label="claude-2 메시지함"]\')'
-    check('the arrival is shown beside the receiver with the sender and recipient', await noticeAt(claudeMail, 'codex-1 → claude-2'))
+    check('the arrival is shown beside the receiver with both agent roles', await noticeAt(claudeMail, 'codex-1 · 보내기 구현 → claude-2 · 리뷰어'))
     check('first the message flies from the sender, with the sender\'s icon, before the card', await js(`window.flights.length === 1 && window.flights[0].icon === 'codex' && !window.flights[0].cardShown`), JSON.stringify(await js('window.flights')))
     check('the card shows each agent\'s icon beside its name', await js(`[...document.querySelectorAll('.agent-delivery-notice strong .agent-message-provider')].map(icon => icon.dataset.kind).join(',') === 'codex,claude'`))
+    check('both arrival dots match the same agents in the sidebar', await js(`['codex-1', 'claude-2'].every(id => {
+      const arrival = document.querySelector('.agent-delivery-notice [data-agent-id="' + id + '"] .agent-identity-dot')
+      const sidebar = document.querySelector('.local-agent-chip[data-agent-id="' + id + '"] .agent-identity-dot')
+      return arrival && sidebar && getComputedStyle(arrival).backgroundColor === getComputedStyle(sidebar).backgroundColor
+    })`))
     check('the flying message is gone once it landed', await until(`!document.querySelector('.agent-message-flight')`, 2000))
     check('the receiver has an unread mailbox and tab badge', await until(`
       ${claudeMail}?.dataset.unread === 'true' &&
@@ -161,7 +180,7 @@ async function run() {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
     const reply = await cli('claude-2', `message reply --reply-to ${request.id} --text looks-good`)
     const codexBadge = `[...document.querySelectorAll('.terminal-tab')].find(tab => tab.dataset.tabId === ${paneTab('codex-1')})?.querySelector('.agent-tab-mail')`
-    check('the reply appears alongside the inactive Codex tab with reduced motion enabled', await noticeAt(codexBadge, 'claude-2 → codex-1'))
+    check('the reply appears alongside the inactive Codex tab with reduced motion enabled', await noticeAt(codexBadge, 'claude-2 · 리뷰어 → codex-1 · 보내기 구현'))
     check('with reduced motion nothing flies', await js('window.flights.length === 1'), JSON.stringify(await js('window.flights')))
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
     const result = await cli('codex-1', 'message inbox --unread')
@@ -180,9 +199,13 @@ async function run() {
     await toggleChat()
     const chatBell = `${claudeMail}?.closest('.local-terminal-pane')?.querySelector('.agent-chat-notification')`
     check('chat mode shows the notification bell for the receiver', await until(`!!${chatBell}`))
+    check('the chat header carries the same role as the terminal strip', await until(`
+      ${claudeMail}?.closest('.local-terminal-pane')?.querySelector('.agent-chat-head .agent-identity-badge')?.textContent === 'claude-2 · 리뷰어'
+    `))
+    await driver.shot('local-agent-chat-role')
     const firstWakes = Number(read('claude-2-wakes'))
     const nextRequest = await mcp('codex-1', 'send_message', { to: 'claude-2', text: 'Please check the next change' })
-    check('in chat mode the arrival card opens below the bell and shows the unread count', await noticeAt(chatBell, 'codex-1 → claude-2') &&
+    check('in chat mode the arrival card opens below the bell and shows the unread count', await noticeAt(chatBell, 'codex-1 · 보내기 구현 → claude-2 · 리뷰어') &&
       await until(`${chatBell}?.getAttribute('aria-label') === '읽지 않은 메시지 1개'`))
     check('Claude starts a new turn for a follow-up even when its empty composer shows a suggestion',
       await waitFor(() => Number(read('claude-2-wakes')) === firstWakes + 1))
@@ -363,10 +386,11 @@ async function run() {
       if (!(await until(`${viewTab(label)}?.getAttribute('aria-selected') === 'true'`))) throw new Error(`could not activate ${label}`)
     }
     const card = id => `document.querySelector('.agent-message-map-card[data-agent-id="${id}"]')`
+    const cardPick = id => `${card(id)}?.querySelector('.agent-message-map-card-pick')`
     const edges = `[...document.querySelectorAll('.agent-message-map-edge')]`
     await js(`document.querySelector('[aria-label="claude-2 메시지함"]').click()`)
     check('the relationship view is the default and the pane opens its agent’s history', await until(`
-      ${dialog}?.dataset.view === 'map' && ${card('claude-2')}?.getAttribute('aria-pressed') === 'true' &&
+      ${dialog}?.dataset.view === 'map' && ${cardPick('claude-2')}?.getAttribute('aria-pressed') === 'true' &&
       [...document.querySelectorAll('.agent-thread-message')].some(m => m.textContent.includes('review-next') && m.querySelector('.agent-read-state')?.textContent === '읽음·답 없음')
     `))
     await showView('목록')
@@ -522,8 +546,9 @@ async function run() {
     await js(`${compactBadge}.click()`)
 
     const filter = `document.querySelector('#agent-messages-session')`
-    const filterValue = `${filter}?.querySelector('.select-menu-value').textContent`
+    const filterValue = `(${filter}?.querySelector('.select-menu-detail')?.textContent ?? ${filter}?.querySelector('.select-menu-value')?.textContent)`
     const filterOptions = `[...document.querySelectorAll('.select-menu-content [role="menuitemradio"]')]`
+    const optionId = `(item => item.querySelector('.select-menu-detail')?.textContent ?? item.querySelector('.select-menu-item-label')?.textContent)`
     const messageTexts = `[...document.querySelectorAll('.agent-thread-message p')].map(row => row.textContent)`
     const openFilter = async () => {
       if (!(await js(`${filter}?.getAttribute('aria-expanded') === 'true'`))) await driver.click(...await driver.center(filter))
@@ -531,7 +556,7 @@ async function run() {
     }
     const chooseAgent = async label => {
       await openFilter()
-      const option = await driver.center(`${filterOptions}.find(item => item.querySelector('.select-menu-item-label').textContent === ${JSON.stringify(label)})`)
+      const option = await driver.center(`${filterOptions}.find(item => ${optionId}(item) === ${JSON.stringify(label)})`)
       if (!option) throw new Error(`missing agent filter option ${label}`)
       await driver.click(...option)
       await until(`${filterValue} === ${JSON.stringify(label)}`)
@@ -544,13 +569,22 @@ async function run() {
       ${messageTexts}.includes('note-for-user') &&
       ${dialog}.getBoundingClientRect().width >= 500 &&
       !${dialog}.querySelector('textarea, form') &&
-      [...${dialog}.querySelectorAll('button')].every(button => button === ${filter} || button.matches('[role=tab]') || button.textContent.trim() === '닫기') &&
+      [...${dialog}.querySelectorAll('button')].every(button => button === ${filter} || button.matches('[role=tab], .agent-identity-action') || button.textContent.trim() === '닫기') &&
       typeof window.electronAPI.agentMessageSend === 'undefined'
+    `))
+    await js(`${dialog}.querySelector('.agent-message-list-actions [data-action=edit]').click()`)
+    await until(`!!document.querySelector('#agent-role-name')`)
+    await js(`(${SET})(document.querySelector('#agent-role-name'), '보내기 담당')`)
+    await js(`document.querySelector('.agent-role-editor button[type=submit]').click()`)
+    await mcp('codex-1', 'set_role', { role: 'MCP 역할 갱신' })
+    check('the role edited in the list overrides an MCP update in the window and pane', await until(`
+      ${filter}?.textContent.includes('보내기 담당') &&
+      document.querySelector('.agent-pane-usage .agent-identity-badge[data-agent-id="codex-1"]')?.textContent === 'codex-1 · 보내기 담당'
     `))
     await openFilter()
     check('the agent filter has icons beside active and ended agents', await js(`
-      ${filterOptions}.some(item => item.textContent.trim() === 'codex-1' && item.querySelector('.agent-message-provider')?.dataset.kind === 'codex') &&
-      ${filterOptions}.some(item => item.textContent.trim() === 'claude-2 (종료)' && item.querySelector('.agent-message-provider')?.dataset.kind === 'claude')
+      ${filterOptions}.some(item => ${optionId}(item) === 'codex-1' && item.querySelector('.agent-message-provider')?.dataset.kind === 'codex') &&
+      ${filterOptions}.some(item => ${optionId}(item) === 'claude-2 (종료)' && item.querySelector('.agent-message-provider')?.dataset.kind === 'claude')
     `))
     await chooseAgent('전체')
     check('all combines the local work’s conversations and keeps closed agents’ messages', await until(`
@@ -562,6 +596,18 @@ async function run() {
       const message = [...${dialog}.querySelectorAll('.agent-thread-message')].find(row => row.querySelector('p').textContent === 'review-please')
       return [...(message?.querySelectorAll('.agent-message-route .agent-message-provider') ?? [])].map(icon => icon.dataset.kind).join(',') === 'codex,claude'
     })()`))
+    const searchFor = value => js(`(${SET})(document.querySelector('.agent-message-search input'), ${JSON.stringify(value)})`)
+    await searchFor('리뷰어')
+    check('search matches an agent’s role and filters out other conversations', await until(`
+      ${messageTexts}.includes('review-please') && !${messageTexts}.includes('hello-manual-claude')
+    `))
+    await searchFor('CLAUDE-4')
+    check('search by ID is case-insensitive', await until(`
+      ${messageTexts}.includes('hello-manual-claude') && !${messageTexts}.includes('review-please')
+    `))
+    await searchFor('note-for-user')
+    check('search includes a matching message to the user', await until(`${messageTexts}.join(',') === 'note-for-user'`))
+    await searchFor('')
     await chooseAgent('claude-2 (종료)')
     check('choosing an agent filters the log to its conversation', await until(`
       ${messageTexts}.includes('review-please') && !${messageTexts}.includes('hello-manual-claude')
@@ -570,8 +616,12 @@ async function run() {
     check('historical agents remain on the map and disconnected agents without messages stay out', await until(`
       ${card('claude-2')}?.dataset.archived === 'true' && Number(getComputedStyle(${card('claude-2')}).opacity) < 1 &&
       ${card('codex-1')}?.dataset.archived === 'false' && !${card('codex-3')} &&
-      ${cardStatus('claude-2')}?.textContent === '종료' && ${cardStatus('claude-2')}?.dataset.status === 'ended'
+      ${cardStatus('claude-2')}?.textContent === '종료' && ${cardStatus('claude-2')}?.dataset.status === 'ended' &&
+      !${card('claude-2')}?.querySelector('[data-action=go]')
     `))
+    await js(`${card('codex-1')}.querySelector('[data-action=edit]').click()`)
+    check('the map pencil opens the same stored role for editing', await until(`document.querySelector('#agent-role-name')?.value === '보내기 담당'`))
+    await js(`document.querySelector('.agent-role-editor button:last-of-type').click()`)
     const archivedEdge = `${edges}.find(edge => edge.getAttribute('aria-label').includes('claude-2') && edge.getAttribute('aria-label').includes('codex-1'))`
     const linePoint = await js(`(() => {
       const path = document.querySelector('.agent-message-map-hit')
@@ -584,6 +634,14 @@ async function run() {
       ${messageTexts}.slice(0, 2).join(',') === 'review-please,looks-good' &&
       !${messageTexts}.includes('note-for-user') && !${messageTexts}.includes('hello-manual-claude')
     `))
+    check('the agent marker colors match across card, message, pane, and direction line', await js(`(() => {
+      const cardColor = getComputedStyle(${card('codex-1')}.querySelector('.agent-identity-dot')).backgroundColor
+      const note = [...document.querySelectorAll('.agent-thread-message')].find(item => item.querySelector('p').textContent === 'review-please')
+      return getComputedStyle(note.querySelector('.agent-identity-dot')).backgroundColor === cardColor &&
+        getComputedStyle(document.querySelector('.agent-pane-usage .agent-identity-badge[data-agent-id="codex-1"] .agent-identity-dot')).backgroundColor === cardColor &&
+        [...document.querySelectorAll('.agent-message-map-line')].some(line => getComputedStyle(line).stroke === cardColor) &&
+        note.querySelector('.agent-message-actor-location').textContent.includes('칸 ')
+    })()`))
     await until(`!document.querySelector('.agent-delivery-notice')`, 3500)
     await driver.shot('local-agent-message-map')
     const [cardX, cardY] = await driver.center(card('codex-1'))
@@ -598,10 +656,19 @@ async function run() {
     `))
     await driver.click(...await driver.center(card('codex-1')))
     check('selecting an agent card restores the agent’s full thread', await until(`
-      ${card('codex-1')}.getAttribute('aria-pressed') === 'true' &&
+      ${cardPick('codex-1')}.getAttribute('aria-pressed') === 'true' &&
       ['note-for-user', 'review-please', 'hello-manual-claude'].every(text => ${messageTexts}.includes(text))
     `))
+    await js(`${card('codex-1')}.querySelector('[data-action=go]').click()`)
+    check('the map opens the exact live terminal pane by shell ID', await until(`
+      !${dialog} && !!document.activeElement?.closest('[data-local-shell-id]')?.querySelector('[aria-label="codex-1 메시지함"]')
+    `))
+    await js(`document.querySelector('[aria-label="codex-1 메시지함"]').click()`)
     await showView('목록')
+    check('the list keeps Close visible with the search and role controls', await until(`
+      ${dialog}.querySelector('.modal-actions button').getBoundingClientRect().bottom <= ${dialog}.getBoundingClientRect().bottom
+    `))
+    await driver.shot('local-agent-messages-roles-list')
     await closeMessages()
 
     const otherWorkspace = path.join(profile, 'other workspace')
@@ -618,12 +685,14 @@ async function run() {
     await until(`!!${filter}`)
     await openFilter()
     check('the second project only offers its agents in the filter', await js(`
-      ${filterOptions}.map(option => option.querySelector('.select-menu-item-label').textContent).join(',') === '전체,codex-6,claude-7'
+      ${filterOptions}.map(${optionId}).join(',') === '전체,codex-6,claude-7'
     `))
     await chooseAgent('전체')
     await showView('관계도')
     check('connected agents without messages appear as isolated cards in the current project', await until(`
-      ${card('codex-6')} && ${card('claude-7')} && !${card('codex-1')} && ${edges}.length === 0
+      ${card('codex-6')}?.querySelector('.agent-message-map-card-name small')?.textContent === '칸 1' &&
+      ${card('claude-7')}?.querySelector('.agent-message-map-card-name small')?.textContent === '칸 1' &&
+      !${card('codex-1')} && ${edges}.length === 0
     `))
     const otherMessage = await mcp('codex-6', 'send_message', { to: 'claude-7', text: 'other-workspace-message' })
     check('an unread arrival adds a highlighted directional edge to the open map', await until(`
@@ -666,6 +735,12 @@ async function run() {
       ${filterValue} === '전체' && ${dialog}.querySelector('.agent-message-workspace').textContent === 'workspace (2)' &&
       ${messageTexts}.includes('review-please') && !${messageTexts}.includes('other-workspace-message')
     `))
+    check('a user-chosen lookalike role still shows the real agent ID in the conversation',
+      await js(`window.electronAPI.agentMessageSetRole('codex-1', '나').then(result => result.success)`) && await until(`
+        [...${dialog}.querySelectorAll('.agent-message-actor')].some(actor =>
+          actor.querySelector('.agent-message-actor-name')?.textContent === '나' &&
+          actor.querySelector('.agent-message-actor-id')?.textContent === 'codex-1')
+      `))
   } finally {
     driver.close()
   }

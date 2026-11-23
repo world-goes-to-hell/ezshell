@@ -3,8 +3,11 @@ import * as Tooltip from '@radix-ui/react-tooltip'
 import { RiBrainLine } from 'react-icons/ri'
 import { useAgentUsageStore } from '../../stores/agentUsageStore'
 import { timeLeft, usageLevel, usageSummary } from '../../lib/agentUsageView'
+import { shellAgentOf } from '../../lib/agentChatItems'
 import type { AgentUsage, AgentUsageWindow } from '../../types'
 import { AgentPickerMenu } from './AgentPickerMenu'
+import { useAgentMessagesStore } from '../Terminal/AgentMessages'
+import { AgentIdentityBadge } from '../ui/AgentIdentity'
 import './AgentUsage.css'
 
 const TICK_MS = 30_000
@@ -128,12 +131,14 @@ export function AgentUsageMeters({ usage, now, shellId }: { usage: AgentUsage; n
 }
 
 /** Below a local terminal: the usage of the agent and any actions from its chat. */
-export function AgentPaneUsage({ shellId, actionsRef, style }: { shellId: string | undefined; actionsRef?: Ref<HTMLSpanElement>; style?: CSSProperties }) {
+export function AgentPaneUsage({ shellId, actionsRef, showIdentity, style }: { shellId: string | undefined; actionsRef?: Ref<HTMLSpanElement>; showIdentity: boolean; style?: CSSProperties }) {
   const usage = useAgentUsageStore(state => (shellId ? state.byShell.get(shellId) : undefined))
+  const agent = useAgentMessagesStore(state => showIdentity && shellId ? shellAgentOf(state.snapshot.agents, shellId) : undefined)
   const now = useMinuteClock(Boolean(usage))
-  if (!usage && !actionsRef) return null
+  if (!usage && !actionsRef && !agent) return null
   return (
     <div className="agent-pane-usage" style={style}>
+      {agent && <AgentIdentityBadge agent={agent} showProvider />}
       {usage && <div className="agent-usage-readout" aria-label={usageSummary(usage, now)} role="status">
         <AgentUsageMeters usage={usage} now={now} shellId={shellId} />
       </div>}

@@ -17,9 +17,13 @@ function createLocalTerminalClipboard(clipboard, nativeImage, platform = process
   let directory
   const files = new Set()
 
+  async function readText() {
+    return checkedText(await clipboard.readText())
+  }
+
   async function read({ includeImageWithText = false } = {}) {
     if (!includeImageWithText) {
-      const text = checkedText(await clipboard.readText())
+      const text = await readText()
       if (text) return { text }
     }
     const items = await clipboard.read()
@@ -91,7 +95,7 @@ function createLocalTerminalClipboard(clipboard, nativeImage, platform = process
     directory = undefined
   }
 
-  return { read, decodeImage, decodeImageFile, storeImage, discardImage, saveImage, dispose }
+  return { read, readText, decodeImage, decodeImageFile, storeImage, discardImage, saveImage, dispose }
 }
 
 module.exports = { createLocalTerminalClipboard }

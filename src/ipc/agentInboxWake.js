@@ -1,5 +1,7 @@
+const { createHash } = require('node:crypto')
 const { Terminal } = require('@xterm/headless')
 const { hasCodexSpeedChoice } = require('./codexSpeed.js')
+const { readAntigravityScreen } = require('./antigravityInboxScreen.js')
 const { PROMPT, BUSY_PROMPT, REMIND_PROMPT } = require('./agentInboxPrompts.js')
 
 // The line pasted into the agent's composer. Reading the message is what the sender sees (check_sent:
@@ -30,12 +32,15 @@ const SHELL_PROMPT = /^\s*(?:PS\s+[^>]+>|[A-Z]:[\\/][^>]*>|(?:\S+[@:]\S+|~\S*|\/
 const POWERSHELL_CONTINUATION = /^\s*>>(?:\s|$)/u
 // A numbered choice of a prompt: "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"
 const APPROVAL_OPTION = /^\s*([❯›>▶])?\s*([1-9])[.)]\s+(\S.*?)\s*$/u
+const APPROVAL_PROGRESS = /^\s*[✻✶✽✢✳✦•⠁-⣿◐-◓◴-◷]\s*\S.*\((?:\d+m\s+)?\d+(?:\.\d+)?s\b/iu
 const CODEX_APPROVAL_HINT = /\b(?:enter (?:to )?(?:confirm|submit|select)|esc (?:to )?cancel)\b/i
 const CLAUDE_QUESTION_HINT = /^(?:Enter to (?:select|submit|chat)|Space to toggle)\b.*\bEsc to cancel$/i
 const CLAUDE_QUESTION_TABS = /(?:^\s*←.*\bSubmit\b|\bSubmit\b.*→\s*$|^\s*[☐□☒]\s+\S)/u
 const CLAUDE_QUESTION_CHOICE = /^(?:\[[ xX✓✔]\]\s+|(?:Type something\.?|Chat about this)$)/i
-// After the number key, the CLI either answers at once or only moves its selection there
-const APPROVAL_SETTLE = 600
+const APPROVAL_ABSENCE_MS = 150
+const APPROVAL_QUIET_MS = 100
+const APPROVAL_NO_OUTPUT_MS = 600
+const APPROVAL_ANSWER_TIMEOUT = 1800
 
 /** Claude's tabbed question and checklist need their own navigation and Submit action. */
 function claudeQuestionPrompt(rows, bare, bottom, previous) {
@@ -81,6 +86,7 @@ function claudeQuestionPrompt(rows, bare, bottom, previous) {
  */
 function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMessages = () => [], isWorking, isRunningTask = () => false, isUnknown = () => false, isLive = () => true, isBlocked = () => false, quietMs = QUIET_MS, write, rawWrite = write, parentInput = () => true, onApprovalChange }) {
   const screen = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true })
+  const antigravity = kind === 'antigravity'
   const dispatched = new Set()
   // Announced while the agent was busy: reminded once after the task if still unanswered
   const deferred = new Set()
@@ -99,6 +105,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   let claudeQuestion = null
   let approvalTimer = null
   let approvalVisible = false
+  let approvalOccurrence = 0
   const prompt = kind === 'codex' ? /^\s*›[ \u00a0]/u : /^\s*[>❯][ \u00a0]/u
 
   function isDimmedDraft(line, start) {
@@ -169,6 +176,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
 
   /** `textLength`: the longest draft to look for (default: our own prompts) */
   function composer(textLength = LONGEST_PROMPT, textLines = 1, matchesCodexAttachment) {
+    if (antigravity) return readAntigravityScreen(screen).composer
     if (!screen.modes.bracketedPasteMode) return null
     const { active: buffer } = screen.buffer
     const cursor = buffer.baseY + buffer.cursorY
@@ -224,7 +232,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   // The cursor can be parked above the editor on redraw. This fallback identifies the visible
   // draft and its target, and cannot prove emptiness for a new paste.
   function visibleComposer() {
-    if (!screen.modes.bracketedPasteMode) return null
+    if (antigravity || !screen.modes.bracketedPasteMode) return null
     const rows = screenLines()
     if (rows.some(row => SHELL_PROMPT.test(row))) return null
     if (kind === 'claude') {
@@ -272,7 +280,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   function targetOf(input) {
-    if (!input) return null
+    if (!input || antigravity) return null
     if (kind === 'claude') return input.target ?? null
     const footer = screenLines().slice(input.lastRow + 1, input.lastRow + 7).filter(Boolean)
     for (const line of footer) {
@@ -300,10 +308,18 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   function approvalPrompt() {
     // Not while a model / effort picker is open: main is answering that one itself (agentPicker.js)
     if (stopped || chat || stage || held) return null
-    return readApprovalScreen()
+    const prompt = readApprovalScreen()
+    return prompt && !prompt.usesTerminalInput ? { ...prompt, signature: approvalIdentity(prompt.signature) } : prompt
   }
 
+  const approvalIdentity = signature => `${approvalOccurrence}:${signature}`
+
   function readApprovalScreen(checkBehindComposer = false) {
+    if (antigravity) {
+      return readAntigravityScreen(screen).blocked
+        ? { question: null, detail: [], options: [], selected: null, signature: 'antigravity-terminal', usesTerminalInput: true }
+        : null
+    }
     if (!checkBehindComposer && composer()) {
       claudeQuestion = null
       return null
@@ -364,21 +380,26 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     if (options.length < 2 || options.length > 9) return null
     // What the question is about: up to the dialog's top rule (Claude) or the question itself (Codex)
     const lines = []
+    const header = []
     let question = null
     for (let row = start - 1; row >= Math.max(top, start - 16); row--) {
       const raw = raws[row]
       if (/^\s*─{8,}\s*$/u.test(raw) || /^\s*[╭┌]/u.test(raw)) break
       const text = bare(row).trim()
+      if (APPROVAL_PROGRESS.test(text)) continue
+      header.unshift(raw)
       if (!text) continue
       if (!question && /\?$/.test(text)) {
         question = text
         if (kind === 'codex') break
         continue
       }
-      lines.unshift(text.length > 300 ? text.slice(0, 300) + '…' : text)
-      if (lines.length >= 12) break
+      if (lines.length < 12) lines.unshift(text.length > 300 ? text.slice(0, 300) + '…' : text)
     }
-    return { question, detail: lines, options, selected, signature: JSON.stringify([question, options]) }
+    // Separate permission requests can have identical labels. Use the unabridged visible header,
+    // including the command, for identity. Keep the display detail and IPC signature bounded.
+    const signature = createHash('sha256').update(JSON.stringify([header, options])).digest('hex')
+    return { question, detail: lines, options, selected, signature }
   }
 
   function chatBlocked() {
@@ -400,6 +421,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       // A numbered list in streamed output has no selected row. Claude's checklist has its own footer.
       const visible = Boolean(prompt?.usesTerminalInput || prompt?.selected)
       if (visible === approvalVisible) return
+      if (!visible) approvalOccurrence++
       approvalVisible = visible
       onApprovalChange(visible)
     }, DRAW_SETTLE)
@@ -415,6 +437,70 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   let approvalWatch = null
   const PASTED_PLACEHOLDER = /^\[Pasted(?:text|Content)[^\]]*\]$/i
   const IMAGE_PREFIX = /^(?:\[Image#[1-9]\d*\])+/
+
+  function finishApprovalAnswer(result) {
+    const watch = approvalWatch
+    if (!watch) return
+    clearTimeout(watch.timer)
+    approvalWatch = null
+    watch.resolve(result)
+  }
+
+  function finishDepartedApproval() {
+    if (approvalWatch.occurrence === approvalOccurrence) approvalOccurrence++
+    finishApprovalAnswer({ ok: true })
+  }
+
+  function checkApprovalAnswer(onOutput = false) {
+    const watch = approvalWatch
+    if (!watch) return
+    clearTimeout(watch.timer)
+    if (stopped || !isLive()) return finishApprovalAnswer({ ok: false, reason: 'not-agent' })
+    if (chat || stage || composing || held) return finishApprovalAnswer({ ok: false, reason: 'changed' })
+
+    const now = Date.now()
+    let nextCheck = watch.deadline
+    const caughtUp = parsedOutputVersion === outputVersion
+    if (onOutput || caughtUp) {
+      // Compare the content while the renderer observes its own visible card lifetimes.
+      const current = readApprovalScreen()
+      const same = current?.signature === watch.signature
+      // Ink can clear the choices and draw them again in separate writes. Once the question has
+      // really gone, a later prompt with the same choices must get its own answer.
+      if (!same) {
+        watch.sawAbsence = true
+        watch.absentSince ??= now
+      }
+      if (watch.absentSince !== null && now - watch.absentSince >= APPROVAL_ABSENCE_MS) {
+        return finishDepartedApproval()
+      }
+      if (same) {
+        watch.absentSince = null
+        if (caughtUp) {
+          // If the same selected choice returns, the number may have completed the earlier request.
+          // Give that prompt a fresh identity and never confirm it with this request's Enter.
+          const returnedUnchanged = watch.sawAbsence && current.selected === watch.initialSelection
+          if (current.selected === watch.key) {
+            const quietAt = outputVersion === watch.startVersion ? watch.startedAt + APPROVAL_NO_OUTPUT_MS : lastOutputAt + APPROVAL_QUIET_MS
+            if (now >= quietAt) {
+              if (returnedUnchanged) return finishDepartedApproval()
+              if (!watch.sawAbsence || outputVersion !== watch.startVersion) {
+                return finishApprovalAnswer(rawWrite('\r') ? { ok: true } : { ok: false, reason: 'write-failed' })
+              }
+            } else {
+              nextCheck = Math.min(nextCheck, quietAt)
+            }
+          }
+          if (watch.sawAbsence && now >= watch.deadline) return finishDepartedApproval()
+        }
+      } else {
+        nextCheck = Math.min(nextCheck, watch.absentSince + APPROVAL_ABSENCE_MS)
+      }
+    }
+    if (now >= watch.deadline) return finishApprovalAnswer({ ok: false, reason: 'stuck' })
+    watch.timer = setTimeout(checkApprovalAnswer, nextCheck - now)
+    watch.timer.unref?.()
+  }
 
   function matchesImageCount(text, count, body = '') {
     const prefix = IMAGE_PREFIX.exec(text)?.[0]
@@ -556,6 +642,10 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       return
     }
     const blocked = chat.draft && chatBlocked()
+    if (antigravity) {
+      if (blocked) return finish('approval')
+      if (isWorking() || isUnknown()) return finish('busy')
+    }
     if (chat.waitForEmpty) {
       if (blocked) return finish('approval')
       const input = composer(Infinity)
@@ -622,7 +712,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   function advance() {
-    if (stopped || composing || held || chat) return
+    if (antigravity || stopped || composing || held || chat) return
     const now = Date.now()
     // State never reported: waiting for input when the screen has been still (the composer check follows)
     const quietFor = now - lastOutputAt
@@ -694,6 +784,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   function userInput(data) {
+    finishApprovalAnswer({ ok: false, reason: 'changed' })
     lastChatDraft = null
     cancelQueuedChats('interrupted')
     if (chat && (chat.draft || chat.codexImages || (data === '\x1b' && !chat.probe))) {
@@ -721,7 +812,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       const wasWriting = stage !== null
       screen.write(data, () => {
         parsedOutputVersion = version
-        if (approvalWatch && approvalPrompt()?.signature !== approvalWatch.signature) approvalWatch.gone = true
+        checkApprovalAnswer(true)
         if (chat) checkChat()
         else {
           drainChatQueue()
@@ -738,22 +829,20 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
      */
     answerApproval(key, signature) {
       return new Promise(resolve => {
-        const prompt = approvalPrompt()
-        if (!prompt || prompt.usesTerminalInput || prompt.signature !== signature || !prompt.options.some(option => option.key === key)) {
+        if (stopped || !isLive()) return resolve({ ok: false, reason: 'not-agent' })
+        if (approvalWatch) return resolve({ ok: false, reason: 'busy' })
+        if (chat || stage || held || composing || parsedOutputVersion !== outputVersion) return resolve({ ok: false, reason: 'changed' })
+        const prompt = readApprovalScreen()
+        if (!prompt || prompt.usesTerminalInput || approvalIdentity(prompt.signature) !== signature || !prompt.options.some(option => option.key === key)) {
           return resolve({ ok: false, reason: 'changed' })
         }
-        // Gone even once while waiting means it was answered: the same question shown again is a new
-        // prompt, and an Enter would answer that one too
-        const watch = { signature, gone: false }
-        approvalWatch = watch
-        if (!rawWrite(key)) { approvalWatch = null; return resolve({ ok: false, reason: 'write-failed' }) }
-        const settle = setTimeout(() => {
-          if (approvalWatch === watch) approvalWatch = null
-          const after = approvalPrompt()
-          if (!watch.gone && after && after.signature === signature && after.selected === key) rawWrite('\r')
-          resolve({ ok: true })
-        }, APPROVAL_SETTLE)
-        settle.unref?.()
+        const startedAt = Date.now()
+        approvalWatch = {
+          key, signature: prompt.signature, occurrence: approvalOccurrence, resolve, startedAt, startVersion: outputVersion, initialSelection: prompt.selected,
+          absentSince: null, sawAbsence: false, deadline: startedAt + APPROVAL_ANSWER_TIMEOUT, timer: null
+        }
+        if (!rawWrite(key)) return finishApprovalAnswer({ ok: false, reason: 'write-failed' })
+        checkApprovalAnswer()
       })
     },
     /**
@@ -765,12 +854,14 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       // target check is saved with the draft for a later send to verify before clearing it.
       const verifySend = canSend ? target => (!verify || verify(target)) && canSend() : verify
       return new Promise(resolve => {
-        const queueable = !strict && !codexSpeed && !probe
-        const relaxed = queueable && !images
+        if (antigravity && (images || codexSpeed || probe || strict)) return resolve({ ok: false, reason: 'unsupported' })
+        const queueable = !antigravity && !strict && !codexSpeed && !probe
+        const relaxed = (queueable || antigravity) && !images
         const start = () => {
           if (stopped || !isLive()) return resolve({ ok: false, reason: 'not-agent' })
           if (chat || stage || composing || held) return resolve({ ok: false, reason: 'busy' })
           if (relaxed && chatBlocked()) return resolve({ ok: false, reason: 'approval' })
+          if (antigravity && (isWorking() || isUnknown() || parsedOutputVersion !== outputVersion)) return resolve({ ok: false, reason: 'busy' })
           // Hangul and other wide characters can take two terminal cells per character.
           const files = kind === 'codex' ? images?.files : null
           const length = text.length + (text.match(/[^\x00-\x7f]/g)?.length ?? 0) + (files?.length ?? 0) * 20
@@ -782,7 +873,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
           // An empty editor can show a dim placeholder to the right of the caret.
           const empty = relaxed ? chatComposerIsEmpty(input) : input.atStart
             && !((codexSpeed || files?.length) && userDraft && input.text) && !(files?.length && IMAGE_PREFIX.test(input.text))
-          const previous = relaxed ? lastChatDraft : null
+          // Antigravity text starts in a verified empty editor. A failed paste is left for the user.
+          const previous = relaxed && !antigravity ? lastChatDraft : null
           const waitingForPrior = empty && previous?.sent && previous.target === target
             && parsedOutputVersion <= previous.enterOutputVersion
           const ours = !empty && previous && previous.target === target && input.text
@@ -841,6 +933,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
      */
     takeBack(texts) {
       return new Promise(resolve => {
+        if (antigravity) return resolve({ ok: false, reason: 'unsupported' })
         if (stopped || chat || stage || held || composing) return resolve({ ok: false, reason: 'busy' })
         const joined = texts.join('\n')
         const length = joined.length + (joined.match(/[^\x00-\x7f]/g)?.length ?? 0)
@@ -873,6 +966,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     setComposing(value) {
       composing = value
       if (value) {
+        finishApprovalAnswer({ ok: false, reason: 'changed' })
         lastChatDraft = null
         cancelQueuedChats('interrupted')
         if (chat?.draft) finishChat({ ok: false, reason: 'interrupted' }, false)
@@ -887,6 +981,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     setHeld(value) {
       held = value
       if (value) {
+        finishApprovalAnswer({ ok: false, reason: 'changed' })
         lastChatDraft = null
         cancelQueuedChats('interrupted')
         if (chat?.draft) finishChat({ ok: false, reason: 'interrupted' }, false)
@@ -927,6 +1022,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       stopped = true
       clearTimeout(timer)
       clearTimeout(approvalTimer)
+      finishApprovalAnswer({ ok: false, reason: 'not-agent' })
       cancelQueuedChats('not-agent')
       if (chat) finishChat({ ok: false, reason: 'not-agent' }, false)
       screen.dispose()
@@ -934,4 +1030,4 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 }
 
-module.exports = { createAgentInboxWake, PROMPT, BUSY_PROMPT, REMIND_PROMPT }
+module.exports = { createAgentInboxWake, PROMPT, BUSY_PROMPT, REMIND_PROMPT, supportsAntigravityInput: true }

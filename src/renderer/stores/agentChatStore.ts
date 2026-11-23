@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatCapture, AgentChatFrame, AgentChatItem, AgentChatState, AgentChatSubagent, CodexSpeedState } from '../types'
+import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatCapture, AgentChatFrame, AgentChatItem, AgentChatProvider, AgentChatState, AgentChatSubagent, CodexSpeedState, LocalAgentStatus } from '../types'
 import { MAX_CHAT_ITEMS, echoItemIds, echoOutputId, nextHeld, reconcileChatEchoes, sentImageKey, type ChatEcho, type SentChatImages } from '../lib/agentChatItems'
 import { isSlashCommand } from '../lib/slashCommands'
 import { toast } from './toastStore'
@@ -12,7 +12,8 @@ export interface AgentChat {
   scope: string | null
   transcriptId: string | null
   state: AgentChatState | 'opening'
-  kind: 'claude' | 'codex' | null
+  kind: AgentChatProvider | null
+  status: LocalAgentStatus | null
   title: string | null
   items: AgentChatItem[]
   subagents: AgentChatSubagent[]
@@ -55,7 +56,7 @@ interface AgentChatStoreState {
 }
 
 const EMPTY_IMAGES: AgentChat['sentImages'] = new Map()
-const empty = (): AgentChat => ({ scope: null, transcriptId: null, state: 'opening', kind: null, title: null, items: [], subagents: [], echoes: [], sentImages: EMPTY_IMAGES, held: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null, backgroundShells: null })
+const empty = (): AgentChat => ({ scope: null, transcriptId: null, state: 'opening', kind: null, status: null, title: null, items: [], subagents: [], echoes: [], sentImages: EMPTY_IMAGES, held: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null, backgroundShells: null })
 
 let stopFrames: (() => void) | null = null
 
@@ -162,7 +163,8 @@ function appendEcho(chat: RetainedChat, echo: ChatEcho, previews: readonly Blob[
 }
 
 export function isUnconfirmedSend(chat: AgentChat, echo: ChatEcho): boolean {
-  return chat.state === 'live' && Boolean(chat.transcriptId && echo.delivery?.transcriptId === chat.transcriptId && echo.delivery.unconfirmed)
+  return chat.kind !== 'antigravity' && chat.state === 'live'
+    && Boolean(chat.transcriptId && echo.delivery?.transcriptId === chat.transcriptId && echo.delivery.unconfirmed)
 }
 
 function acceptEcho(chat: RetainedChat, sendId: string, retryQueued?: boolean) {
@@ -233,7 +235,8 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
       const id = `outgoing:${crypto.randomUUID()}`
       update(shellId, chat => {
         const hasImage = previews.length > 0
-        const delivery = text.trim() && (hasImage || !isSlashCommand(text)) ? { transcriptId: chat.transcriptId, imageIds } : undefined
+        const delivery = text.trim() && (hasImage || !isSlashCommand(text))
+          ? { transcriptId: chat.transcriptId, imageIds } : undefined
         const echo = { id, text, queued, time: Date.now(), hasImage, delivery }
         return { ...chat, ...appendEcho(chat, echo, previews) }
       })
@@ -263,7 +266,7 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
     checkSendConfirmations(shellId, idle) {
       let next: number | undefined
       update(shellId, chat => {
-        if (!idle || chat.state !== 'live' || !chat.transcriptId) {
+        if (!idle || chat.kind === 'antigravity' || chat.state !== 'live' || !chat.transcriptId) {
           const echoes = chat.echoes.map(pauseSendConfirmation)
           return echoes.some((echo, index) => echo !== chat.echoes[index]) ? { ...chat, echoes } : chat
         }
@@ -331,8 +334,14 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
       }
       update(frame.shellId, (chat) => {
         const mode = frame.reset ? 'reset' : frame.older ? 'older' : 'append'
-        const echoes = frame.reset && frame.transcriptId ? chat.echoes.filter(echo =>
-          !echo.delivery?.transcriptId || echo.delivery.transcriptId === frame.transcriptId) : chat.echoes
+        const kind = frame.kind ?? chat.kind
+        const transcriptId = frame.reset ? frame.transcriptId ?? null : chat.transcriptId
+        let echoes = chat.echoes
+        if (frame.reset && (transcriptId || kind === 'antigravity')) {
+          echoes = echoes.filter(echo => !echo.delivery?.transcriptId || echo.delivery.transcriptId === transcriptId)
+          if (kind === 'antigravity' && transcriptId) echoes = echoes.map(echo => echo.delivery && !echo.delivery.transcriptId
+            ? { ...echo, delivery: { ...echo.delivery, transcriptId } } : echo)
+        }
         const messages = frame.items || frame.reset ? reconcileChatEchoes(chat.items, frame.items ?? [], mode, echoes) : null
         let reply = frame.state === 'ended' ? null : chat.reply
         if (messages && reply) {
@@ -345,16 +354,17 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
         return {
           ...chat,
           scope: frame.reset ? frame.scope ?? null : chat.scope,
-          transcriptId: frame.reset ? frame.transcriptId ?? null : chat.transcriptId,
+          transcriptId,
           state: frame.state ?? chat.state,
-          kind: frame.kind ?? chat.kind,
+          kind,
+          status: frame.status === undefined ? chat.status : frame.status,
           title: frame.title !== undefined ? frame.title : chat.title,
           items: messages?.items ?? chat.items,
           sentImages: messages ? reconcileSentImages(chat, messages.recorded) : chat.sentImages,
           subagents: frame.subagents ?? (frame.reset ? [] : chat.subagents),
           echoes: messages?.echoes ?? chat.echoes,
           // Only Codex records a message before reading it; Claude writes it as it reads it
-          held: messages ? nextHeld(chat.held, (frame.kind ?? chat.kind) === 'codex' ? messages.recorded : new Map(), chat.echoes, messages.items) : chat.held,
+          held: messages ? nextHeld(chat.held, kind === 'codex' ? messages.recorded : new Map(), chat.echoes, messages.items) : chat.held,
           reply,
           hasOlder: frame.hasOlder ?? chat.hasOlder,
           approval: frame.approval !== undefined ? frame.approval : chat.approval,

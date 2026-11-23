@@ -193,3 +193,22 @@ describe('chat delivery confirmation', () => {
     expect(unconfirmed()).toEqual([])
   })
 })
+
+describe('Antigravity chat sessions', () => {
+  it('keeps the first echo with its eventual session and clears it when the bound session changes', () => {
+    store().applyFrame({ shellId, reset: true, kind: 'antigravity', state: 'waiting', status: 'idle' })
+    const id = send('첫 대화')
+    store().applyFrame({ shellId, reset: true, kind: 'antigravity', state: 'live', transcriptId: 'first' })
+    expect(chat().items.map(item => item.id)).toEqual([id])
+    expect(chat().status).toBe('idle')
+    check()
+    vi.advanceTimersByTime(30_000)
+    check()
+    expect(unconfirmed()).toEqual([])
+
+    store().applyFrame({ shellId, reset: true, kind: 'antigravity', state: 'waiting', transcriptId: 'second', status: 'starting' })
+    expect(chat().items).toEqual([])
+    expect(chat().echoes).toEqual([])
+    expect(chat().status).toBe('starting')
+  })
+})

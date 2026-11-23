@@ -63,6 +63,48 @@ async function pair() {
 const statusOf = async (agentClient, id) => (await agentClient.call('check_sent', { message_ids: [id] })).messages[0]
 
 describe('read marks', () => {
+  it('lists effective roles, keeps agent changes under the user override, and clears the override', async () => {
+    const { lead, worker } = await pair()
+    expect((await worker.listTools()).tools.map(tool => tool.name)).toContain('set_role')
+    expect(await worker.call('set_role', { role: '  리뷰어 ', agent_id: lead.id })).toMatchObject({ id: worker.id, role: '리뷰어', roleSource: 'agent' })
+    expect((await lead.call('list_agents')).agents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: lead.id, role: null }), expect.objectContaining({ id: worker.id, role: '리뷰어' })
+    ]))
+    expect(messages.setUserRole(worker.id, '보내기 구현')).toMatchObject({ role: '보내기 구현', roleSource: 'user' })
+    expect(await worker.call('set_role', { role: '검토' })).toMatchObject({ role: '보내기 구현', roleSource: 'user' })
+    expect(states.at(-1).agents.find(item => item.id === worker.id)).toMatchObject({ role: '보내기 구현', roleSource: 'user' })
+    expect(messages.setUserRole(worker.id, '')).toMatchObject({ role: '검토', roleSource: 'agent' })
+    expect(await worker.call('set_role', { role: '' })).toMatchObject({ role: null, roleSource: null })
+  }, 15000)
+
+  it('rejects invisible and invalid Unicode in both role setters and enforces the 20-code-point limit', async () => {
+    const { worker } = await pair()
+    const invalid = ['역할\n두 줄', '\t들여쓰기', '숨김\u202E', '제어\u0085문자', '역할\u2028이름',
+      '리뷰' + String.fromCodePoint(0xe0020), '리뷰\u200B', '리뷰\u2060', '\uFEFF리뷰',
+      '리뷰\u00AD', '리뷰\uE000', '리뷰\u0378', '리뷰\uD800']
+    for (const role of invalid) {
+      expect((await worker.call('set_role', { role })).error).toMatch(/제어 문자/)
+      expect(() => messages.setUserRole(worker.id, role)).toThrow(/제어 문자/)
+    }
+    expect((await worker.call('set_role', { role: '🙂'.repeat(21) })).error).toMatch(/20자/)
+    expect(await worker.call('set_role', { role: '🙂'.repeat(20) })).toMatchObject({ role: '🙂'.repeat(20) })
+  }, 15000)
+
+  it('rejects self-assigned ID lookalikes and reserved names', async () => {
+    const { worker } = await pair()
+    for (const role of ['나', '사 용 자', 'Ｕｓｅｒ', 'e z S H E L L', 'Claude-1', 'ＣＯＤＥＸ－２',
+      'Antigravity - ４', '\u1102 \u1161', 'claude–1', 'codex—2', 'antigravity_3', 'claude1', 'codex−2',
+      'сlaude-1', 'ϲlaude-1', 'ϹLAUDE２', 'cοdеx—２', 'Αntіgravity _ 3', 'ANTІGRAVITY-3',
+      'Ꮯlaude_١', 'claude\uFE0F-1', '사용자님', '사 용 자-님', '나예요', 'uѕer', 'ezѕhell']) {
+      expect((await worker.call('set_role', { role })).error).toMatch(/예약 이름/)
+    }
+    for (const role of ['코드 리뷰', 'Codex 검토 2', 'UI 설계', 'Ревью 2', 'Έλεγχος 3', '문서–검토']) {
+      expect(await worker.call('set_role', { role })).toMatchObject({ role, roleSource: 'agent' })
+    }
+    expect(messages.setUserRole(worker.id, 'сlaude–1')).toMatchObject({ role: 'сlaude–1', roleSource: 'user' })
+    expect(messages.setUserRole(worker.id, '나')).toMatchObject({ role: '나', roleSource: 'user' })
+  }, 15000)
+
   it('the sender sees unread, then read with its time, then answered with the reply', async () => {
     const { lead, worker, id } = await pair()
     expect(woken).toEqual(['local:2'])

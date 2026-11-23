@@ -1,19 +1,26 @@
 const net = require('net')
 const { randomUUID } = require('crypto')
 const fs = require('fs')
-const { tmpdir } = require('os')
+const { homedir, tmpdir } = require('os')
 const path = require('path')
+const { isReservedAgentRole } = require('./agentRole.js')
 
 const MAX_REQUEST = 64 * 1024
 const MAX_MESSAGES = 500
 const MAX_TEXT = 8000
+const MAX_ROLE_LENGTH = 20
+const ROLE_CONTROL = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}]/u
 const INBOX_WAIT_MS = 30000
 const USER = 'user'
 const { sanitizeUsage, sameUsage } = require('./agentUsage.js')
+const { antigravityStatusFromInput, antigravityStatusSettings } = require('./antigravityStatusReport.js')
 
-function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bindLocalAgent, bridgeFile, platform = process.platform }) {
+function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bindLocalAgent, reportLocalAntigravity,
+  bridgeFile, platform = process.platform, home = homedir() }) {
   const instanceBridgeFile = bridgeFile ? `${bridgeFile}.${process.pid}` : null
   const agents = new Map()
+  // Agent and user choices share the session ID. Resuming that agent keeps both choices.
+  const roles = new Map()
   const tokens = new Map()
   const mcpReady = new Map()
   const bridgeToken = randomUUID()
@@ -31,8 +38,41 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   let server
   let directory
   let pipe
+  let antigravityStatusForward
+  let antigravityReportSequence = 0
 
   const publicMessage = ({ requestId, ...message }) => message
+  const activeRole = id => {
+    const names = roles.get(id)
+    if (names?.user) return { role: names.user, roleSource: 'user' }
+    if (names?.agent) return { role: names.agent, roleSource: 'agent' }
+    return { role: null, roleSource: null }
+  }
+
+  function setRole(id, input, source) {
+    if (isLocked()) throw new Error('먼저 앱 잠금을 해제해 주세요.')
+    const agent = agents.get(id)
+    if (!agent || (source === 'agent' && !agent.active)) throw new Error('에이전트를 찾을 수 없습니다.')
+    if (typeof input !== 'string' || ROLE_CONTROL.test(input)) throw new Error('역할은 줄바꿈이나 제어 문자 없이 입력해 주세요.')
+    const role = input.trim()
+    if (Array.from(role).length > MAX_ROLE_LENGTH) throw new Error('역할은 20자까지 입력할 수 있습니다.')
+    if (source === 'agent' && isReservedAgentRole(role)) {
+      throw new Error('에이전트 ID나 예약 이름은 역할로 사용할 수 없습니다.')
+    }
+    const previous = roles.get(id)
+    if ((previous?.[source] ?? '') !== role) {
+      const names = { ...previous, [source]: role }
+      if (names.user || names.agent) roles.set(id, names)
+      else roles.delete(id)
+      changed()
+    }
+    return { id, ...activeRole(id) }
+  }
+
+  function forgetAgent(id) {
+    agents.delete(id)
+    roles.delete(id)
+  }
   // `read`: handled (answered or acknowledged). `seenAt`: when the recipient took it from its inbox, the
   // "읽음" the sender and the messages panel see (check_sent). Receipts were removed on 2026-11-20.
   function readInbox(id, unread) {
@@ -73,6 +113,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       revision,
       agents: Array.from(agents.values(), agent => ({
         ...agent,
+        ...activeRole(agent.id),
         waitingForReply: waiting.has(agent.id),
         mcpConnected: mcpReady.has(agent.id)
       })),
@@ -147,7 +188,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     if (!from) throw new Error('활성 ezShell 에이전트 세션에서 실행해 주세요.')
     if (isLocked()) throw new Error('먼저 앱 잠금을 해제해 주세요.')
     switch (request.method) {
-      case 'list': return { agents: [...agents.values()].filter(agent => isConnected(agent.id)).map(({ id, kind, cwd }) => ({ id, kind, cwd })), self: from }
+      case 'list': return { agents: [...agents.values()].filter(agent => isConnected(agent.id)).map(({ id, kind, cwd }) => ({ id, kind, cwd, role: activeRole(id).role })), self: from }
+      case 'set-role': return setRole(from, request.role, 'agent')
       case 'inbox': return { messages: readInbox(from, request.unread) }
       case 'wait-inbox': {
         const unread = readInbox(from, true)
@@ -197,7 +239,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     if (messages.some(message => message.from === id || message.to === id)) {
       agents.set(id, { ...agent, shellId: '', active: false, status: 'ended' })
     } else {
-      agents.delete(id)
+      forgetAgent(id)
     }
     stopWaiting(id)
   }
@@ -259,6 +301,21 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   /** A CLI discovered in a local shell can use chat before it has any message MCP connection. */
   function registerLocalClaude({ cwd, startedAt }, attach) {
     if (attachExternal('claude', cwd, attach, startedAt, true)) changed()
+  }
+
+  function registerLocalAntigravity(cwd, attach) {
+    if (!attachExternal('antigravity', cwd, attach, Date.now(), true)) return false
+    changed()
+    return true
+  }
+
+  async function reportAntigravity(request, socket) {
+    const shellId = shellTokens.get(request.token)
+    const isCurrent = () => Boolean(shellId && shellTokens.get(request.token) === shellId && !isLocked() && !socket.destroyed)
+    const status = antigravityStatusFromInput(request.value, platform)
+    if (!isCurrent() || !status || !Number.isSafeInteger(request.pid) || request.pid <= 0) return { stored: false }
+    const sequence = ++antigravityReportSequence
+    return { stored: Boolean(await reportLocalAntigravity?.({ shellId, pid: request.pid, status, sequence, isCurrent })) }
   }
 
   async function watchMcp(request, socket) {
@@ -357,6 +414,11 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
           await watchMcp(request, socket)
           return
         }
+        if (request?.method === 'antigravity-status') {
+          const result = await reportAntigravity(request, socket)
+          answer(socket, { success: true, ...result })
+          return
+        }
         const result = respond(request, socket)
         if (result) answer(socket, { success: true, ...result })
       } catch (error) {
@@ -377,6 +439,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       try { fs.unlinkSync(path.join(directory, platform === 'win32' ? 'ezshell.cmd' : 'ezshell')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'agent-mcp.json')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'agent-settings.json')) } catch {}
+      try { fs.unlinkSync(path.join(directory, 'antigravity-settings.json')) } catch {}
+      try { fs.unlinkSync(path.join(directory, 'antigravity-status.cmd')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'messages.sock')) } catch {}
       try { fs.rmdirSync(directory) } catch {}
       directory = undefined
@@ -404,6 +468,13 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     fs.writeFileSync(path.join(directory, 'agent-settings.json'), JSON.stringify({
       statusLine: { type: 'command', command: 'ELECTRON_RUN_AS_NODE=1 "$EZSHELL_CLI_EXE" "$EZSHELL_AGENT_USAGE_SCRIPT"', padding: 0 }
     }), { mode: 0o600 })
+    const antigravity = antigravityStatusSettings(home, platform)
+    antigravityStatusForward = antigravity.forward
+    fs.writeFileSync(path.join(directory, 'antigravity-settings.json'), JSON.stringify({ statusLine: antigravity.statusLine }), { mode: 0o600 })
+    if (platform === 'win32') {
+      fs.writeFileSync(path.join(directory, 'antigravity-status.cmd'),
+        '@echo off\r\nsetlocal DisableDelayedExpansion\r\nset "ELECTRON_RUN_AS_NODE=1"\r\n"%EZSHELL_CLI_EXE%" "%EZSHELL_ANTIGRAVITY_STATUS_SCRIPT%"\r\n', { mode: 0o700 })
+    }
     server = net.createServer(connect)
     await new Promise((resolve, reject) => {
       server.once('error', reject)
@@ -490,7 +561,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
         if (messages.some(message => message.from === id || message.to === id)) {
           if (!agent.active) return
           agents.set(id, { ...agent, active: false, status: 'ended' })
-        } else agents.delete(id)
+        } else forgetAgent(id)
         changed()
       }
     }
@@ -566,7 +637,11 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       EZSHELL_AGENT_PIPE: pipe,
       EZSHELL_CLI_EXE: process.execPath,
       EZSHELL_AGENT_SETTINGS: path.join(directory, 'agent-settings.json'),
-      EZSHELL_AGENT_USAGE_SCRIPT: path.join(__dirname, 'agentUsageReport.js')
+      EZSHELL_AGENT_USAGE_SCRIPT: path.join(__dirname, 'agentUsageReport.js'),
+      EZSHELL_ANTIGRAVITY_SETTINGS: path.join(directory, 'antigravity-settings.json'),
+      EZSHELL_ANTIGRAVITY_STATUS_SCRIPT: path.join(__dirname, 'antigravityStatusReport.js'),
+      ...(platform === 'win32' ? { EZSHELL_ANTIGRAVITY_STATUS_COMMAND: `"${path.join(directory, 'antigravity-status.cmd')}"` } : {}),
+      EZSHELL_ANTIGRAVITY_STATUS_FORWARD: antigravityStatusForward
     }
   }
 
@@ -585,7 +660,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   return {
     ready, enableExternalBridge, register, stop, snapshot, unreadFor, unhandledFor,
     sendAsUser: request => deliver(USER, request),
-    setUsage, applyPicked, usageSnapshot, registerShell, registerLocalClaude, forgetShell, sleep, cancelSleep
+    setUserRole: (id, role) => setRole(id, role, 'user'),
+    setUsage, applyPicked, usageSnapshot, registerShell, registerLocalClaude, registerLocalAntigravity, forgetShell, sleep, cancelSleep
   }
 }
 

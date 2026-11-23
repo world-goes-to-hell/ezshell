@@ -8,7 +8,7 @@ const MAX_TEXT = 100_000
 const MAX_LABEL = 160
 const SHELL_ID = /^local:\d+$/
 const ITEM_ID = /^[\w:.-]{1,200}$/
-const KINDS = new Set(['claude', 'codex'])
+const KINDS = new Set(['claude', 'codex', 'antigravity'])
 /** The window's header alone, when folded */
 const FOLDED_HEIGHT = 40
 const MIN_WIDTH = 260

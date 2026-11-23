@@ -114,8 +114,12 @@ async function main() {
       return { content: [{ type: 'text', text: error.message }], isError: true }
     }
   }
-  server.registerTool('list_agents', { description: 'List connected ezShell agents and your own agent ID.' },
+  server.registerTool('list_agents', { description: 'List connected ezShell agents and their roles, along with your own agent ID.' },
     () => call({ method: 'list' }))
+  server.registerTool('set_role', {
+    description: 'Set the short role shown for your own ezShell agent in this app session. A user-assigned role takes priority.',
+    inputSchema: { role: z.string().describe('A visible label of up to 20 characters. Agent ID and reserved-name lookalikes are rejected, as are labels beginning with 나 or 사용자. An empty string clears your role.') }
+  }, ({ role }) => call({ method: 'set-role', role }))
   server.registerTool('send_message', {
     description: 'Send a task or note to another ezShell agent. After sending a task, continue other work or finish your turn. ezShell notifies you when the result arrives.',
     inputSchema: { to: id, text, request_id: id.optional().describe('Reuse this ID when retrying the same send.') }

@@ -47,7 +47,10 @@ async function inAgent(agent, command) {
   }
 
   check('a Codex and a Claude open in local tabs', await openAgent('codex', 'codex-1') && await openAgent('claude', 'claude-2'))
-  check('nothing is shown before an agent reports', await js(`!${status}`))
+  check('the agent identity appears before any usage report', await until(`
+    ${status}?.querySelector('.agent-identity-badge')?.dataset.agentId === 'claude-2' &&
+    !${status}?.querySelector('.agent-usage-readout')
+  `))
 
   const resets = Math.floor(Date.now() / 1000) + 130 * 60
   fs.writeFileSync(file('status.json'), JSON.stringify({
@@ -114,10 +117,13 @@ async function inAgent(agent, command) {
   check('above 90% the window turns red', await js(`!!${status}.querySelector('.agent-usage-meter.is-high')`))
   check('no path reached the window', await js(`!document.body.innerHTML.includes('sent.jsonl')`))
 
-  // The Codex tab in front: it has not reported, so the bar is empty
+  // The Codex tab in front: it has an identity marker and no usage numbers yet.
   // Tabs are named after the folder only: the Codex tab was opened first, the Claude tab second
   await js(`document.querySelectorAll('.terminal-tab')[0]?.click()`)
-  check('below the Codex terminal (no report) there is nothing', await until(`!${status}`, 5000))
+  check('the Codex strip shows its own identity without borrowing the Claude usage report', await until(`
+    ${status}?.querySelector('.agent-identity-badge')?.dataset.agentId === 'codex-1' &&
+    !${status}?.querySelector('.agent-usage-readout')
+  `, 5000))
   await js(`document.querySelectorAll('.terminal-tab')[1]?.click()`)
   check('back on the Claude tab it shows again', await until(`!!${status}`, 5000))
   check('the row sits right below the Claude terminal, inside its pane', await js(`(() => {

@@ -367,6 +367,7 @@ export type McpSetupResult =
 
 // Extend Window interface for electronAPI
 export type LocalAgent = 'codex' | 'claude'
+export type AgentChatProvider = LocalAgent | 'antigravity'
 
 /** A past Claude Code or Codex session of this PC (src/agentHistory). `key` is all the main process takes back. */
 export interface AgentHistorySession {
@@ -420,7 +421,7 @@ export interface AgentUsage {
 /** An agent answer pinned into a window of its own (src/agentChat/pins.js) */
 export interface PinnedReply {
   text: string
-  kind: 'claude' | 'codex' | null
+  kind: AgentChatProvider | null
   title: string
   time: number | null
   pinnedAt: number
@@ -579,7 +580,8 @@ export interface AgentChatFrame {
   older?: boolean
   items?: AgentChatItem[]
   subagents?: AgentChatSubagent[]
-  kind?: 'claude' | 'codex'
+  kind?: AgentChatProvider
+  status?: LocalAgentStatus | null
   state?: AgentChatState
   title?: string | null
   hasOlder?: boolean
@@ -608,12 +610,14 @@ export type LocalAgentStatus = 'unknown' | 'starting' | 'idle' | 'working' | 'bl
 export interface AgentMessageSession {
   id: string
   shellId: string
-  kind: LocalAgent
+  kind: AgentChatProvider
   cwd: string
   active: boolean
   status: LocalAgentStatus
   waitingForReply: boolean
   mcpConnected: boolean
+  role?: string | null
+  roleSource?: 'agent' | 'user' | null
   exitCode?: number | null
 }
 
@@ -982,7 +986,7 @@ declare global {
       // Local file system
       localList: (dirPath: string) => Promise<any>
       /** `resume`: a key from the agent history list; main then picks the folder, agent and session */
-      localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: LocalAgent; resume?: string; replacementFor?: string }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
+      localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: AgentChatProvider; resume?: string; replacementFor?: string }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
       localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
       workspaceDirectoryList: (folder: string, relative?: string) => Promise<{ success: true; entries: WorkspaceDirectoryEntry[]; total: number } | { success: false; error: string }>
       workspaceDirectoryPrepare?: (root: string, refresh?: boolean) => Promise<{ success: true } | { success: false; error: string }>
@@ -1002,11 +1006,12 @@ declare global {
       localWorktreeCreate: (options: { folder: string; branch: string; base: string }) => Promise<({ success: true } & LocalWorktree) | { success: false; error: string }>
       localShellAttach?: (id: string) => Promise<{ backlog: string; exited: boolean; exitCode: number | null } | null>
       /** Shells main still runs, for a reloaded window to take back as tabs */
-      localShellList?: () => Promise<Array<{ id: string; name: string; exited: boolean; cwd: string | null; agent: LocalAgent | null }>>
+      localShellList?: () => Promise<Array<{ id: string; name: string; exited: boolean; cwd: string | null; agent: AgentChatProvider | null }>>
       localShellCurrentDirectory: (id: string) => Promise<string | null>
       localShellClipboard?: (id: string) => Promise<{ success: true; text: string } | { success: false; error: string }>
       localShellHasWorkingAgent?: (ids: string[]) => Promise<boolean>
       agentMessagesSnapshot: () => Promise<AgentMessagesSnapshot | null>
+      agentMessageSetRole: (id: string, role: string) => Promise<{ success: true } | { success: false; error: string }>
       browserReviewOpen: () => Promise<{ success: true; id: string } | { success: false; error: string }>
       browserReviewOpenLink: (address: string, destination: 'internal' | 'external') => Promise<BrowserReviewResult>
       onBrowserReviewLinkOpened: (callback: (id: string) => void) => () => void
@@ -1076,7 +1081,7 @@ declare global {
       agentChatOpenLink?: (shellId: string, href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab') => Promise<{ ok: true } | { ok: false; error: string }>
       onAgentChatFrame?: (callback: (frame: AgentChatFrame) => void) => () => void
       onAgentChatCapture?: (callback: (capture: AgentChatCapture) => void) => () => void
-      agentChatPin?: (request: { shellId: string; itemId: string; text: string; kind: 'claude' | 'codex' | null; title: string; time: number | null }) => Promise<{ ok: true; id: string; existing?: boolean } | { ok: false; error: string }>
+      agentChatPin?: (request: { shellId: string; itemId: string; text: string; kind: AgentChatProvider | null; title: string; time: number | null }) => Promise<{ ok: true; id: string; existing?: boolean } | { ok: false; error: string }>
       pinnedReplyGet?: () => Promise<{ ok: true; pin: PinnedReply } | { ok: false; error: string }>
       pinnedReplyOpenLink?: (href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab') => Promise<{ ok: true } | { ok: false; error: string }>
       pinnedReplyFold?: (folded: boolean) => void

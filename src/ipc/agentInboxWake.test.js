@@ -1215,16 +1215,17 @@ describe('the chat view and an empty composer with a placeholder', () => {
 
 describe('the agent\'s prompt with choices, answered from the chat view', () => {
   // Shaped like Claude Code's permission dialog and Codex's approval (the input box is replaced)
-  const claudePrompt = (selected = 1) => '\x1b[?2004h\x1b[2J\x1b[H' + 'output above\r\n' + '─'.repeat(70) + '\r\n' +
-    ' Bash command\r\n\r\n   npm test\r\n   Run the tests\r\n\r\n Do you want to proceed?\r\n' +
+  const claudeOptions = selected =>
     [' 1. Yes', ' 2. Yes, and don\'t ask again for npm test commands', ' 3. No, and tell Claude what to do differently (esc)']
       .map((label, index) => (index + 1 === selected ? ' ❯' : '  ') + label).join('\r\n')
+  const claudePrompt = (selected = 1, command = 'npm test') => '\x1b[?2004h\x1b[2J\x1b[H' + 'output above\r\n' + '─'.repeat(70) + '\r\n' +
+    ` Bash command\r\n\r\n   ${command}\r\n   Run the tests\r\n\r\n Do you want to proceed?\r\n` + claudeOptions(selected)
   const codexPrompt = '\x1b[?2004h\x1b[2J\x1b[H' + 'earlier answer\r\n\r\n  Would you like to run the following command?\r\n\r\n  $ npm test\r\n\r\n' +
     '› 1. Yes, proceed (y)\r\n  2. Yes, and don\'t ask again for this command (p)\r\n  3. No, and tell Codex what to do differently (esc)\r\n\r\n  Press enter to confirm or esc to cancel'
 
-  function promptSetup(kind) {
+  function promptSetup(kind, onApprovalChange) {
     const rawWrite = vi.fn(() => true)
-    wake = createAgentInboxWake({ kind, cols: 100, rows: 24, pendingMessages: () => [], isWorking: () => true, write: vi.fn(() => true), rawWrite })
+    wake = createAgentInboxWake({ kind, cols: 100, rows: 24, pendingMessages: () => [], isWorking: () => true, write: vi.fn(() => true), rawWrite, onApprovalChange })
     return { rawWrite }
   }
   const settle = () => new Promise(resolve => setTimeout(resolve, 30))
@@ -1358,6 +1359,27 @@ describe('the agent\'s prompt with choices, answered from the chat view', () => 
     expect(rawWrite.mock.calls).toEqual([['2'], ['\r']])
   })
 
+  it('waits past 600 ms for Ink to clear and redraw the choices in separate chunks', async () => {
+    const onApprovalChange = vi.fn()
+    const { rawWrite } = promptSetup('claude', onApprovalChange)
+    wake.writeOutput(claudePrompt())
+    await vi.waitFor(() => expect(onApprovalChange).toHaveBeenLastCalledWith(true))
+    const { signature } = wake.approvalPrompt()
+    const answered = wake.answerApproval('2', signature)
+    await new Promise(resolve => setTimeout(resolve, 650))
+    expect(rawWrite.mock.calls).toEqual([['2']])
+    wake.writeOutput('\x1b[9;1H\x1b[J')
+    await vi.waitFor(() => expect(onApprovalChange).toHaveBeenLastCalledWith(false), { interval: 5 })
+    expect(wake.approvalPrompt()).toBeNull()
+    wake.writeOutput(claudeOptions(2))
+    await settle()
+    expect(wake.approvalPrompt()).toMatchObject({ selected: '2' })
+    expect(wake.approvalPrompt().signature).not.toBe(signature)
+    expect(rawWrite.mock.calls).toEqual([['2']])
+    await expect(answered).resolves.toEqual({ ok: true })
+    expect(rawWrite.mock.calls).toEqual([['2'], ['\r']])
+  })
+
   it('does not press Enter when the prompt went away (answered) even if the same one shows again', async () => {
     const { rawWrite } = promptSetup('claude')
     wake.writeOutput(claudePrompt())
@@ -1365,10 +1387,118 @@ describe('the agent\'s prompt with choices, answered from the chat view', () => 
     const { signature } = wake.approvalPrompt()
     const answered = wake.answerApproval('1', signature)
     wake.writeOutput('\x1b[2J\x1b[Hrunning npm test…')
-    await settle()
-    wake.writeOutput(claudePrompt())
     await expect(answered).resolves.toEqual({ ok: true })
+    wake.writeOutput(claudePrompt())
+    await vi.waitFor(() => expect(wake.approvalPrompt()).toMatchObject({ selected: '1' }))
+    expect(wake.approvalPrompt().signature).not.toBe(signature)
+    await new Promise(resolve => setTimeout(resolve, 120))
     expect(rawWrite.mock.calls).toEqual([['1']])
+  })
+
+  it.each([20, 100, 200])('does not confirm a different command with the same choices after %i ms', async delay => {
+    const { rawWrite } = promptSetup('claude')
+    wake.writeOutput(claudePrompt(1, 'git log'))
+    await settle()
+    const first = wake.approvalPrompt()
+    const answered = wake.answerApproval('1', first.signature)
+    wake.writeOutput('\x1b[2J\x1b[H⏺ Bash(git log)')
+    await new Promise(resolve => setTimeout(resolve, delay))
+    wake.writeOutput(claudePrompt(1, 'git push --force'))
+    await expect(answered).resolves.toEqual({ ok: true })
+    await vi.waitFor(() => expect(wake.approvalPrompt()?.detail).toContain('git push --force'))
+    const second = wake.approvalPrompt()
+    expect(second.question).toBe(first.question)
+    expect(second.options).toEqual(first.options)
+    expect(second.signature).not.toBe(first.signature)
+    expect(rawWrite.mock.calls).toEqual([['1']])
+  })
+
+  it('distinguishes commands that differ outside the detail display limit', async () => {
+    promptSetup('claude')
+    const prefix = 'echo ' + 'a'.repeat(320)
+    wake.writeOutput(claudePrompt(1, prefix + 'x'))
+    await settle()
+    const first = wake.approvalPrompt()
+    wake.writeOutput(claudePrompt(1, prefix + 'y'))
+    await settle()
+    const second = wake.approvalPrompt()
+    expect(second.detail).toEqual(first.detail)
+    expect(second.signature).not.toBe(first.signature)
+  })
+
+  it.each([
+    ['an unruled header', 'claude', seconds => claudePrompt().replace('─'.repeat(70), `✻ Waiting… (${seconds}s) `)],
+    ['a varying Claude spinner word', 'claude', seconds => claudePrompt().replace('─'.repeat(70), `✶ ${seconds === 1 ? 'Cogitating' : 'Herding'}… (${seconds}s · esc to interrupt)`)],
+    ['a question without a question mark', 'codex', seconds => codexPrompt.replace('earlier answer', `• Working (${seconds}s …)`).replace('command?', 'command')]
+  ])('keeps the identity of %s stable while the progress timer updates', async (_name, kind, frame) => {
+    promptSetup(kind)
+    wake.writeOutput(frame(1))
+    await settle()
+    const first = wake.approvalPrompt()
+    wake.writeOutput(frame(2))
+    await settle()
+    expect(wake.approvalPrompt()).toMatchObject({ signature: first.signature, detail: first.detail })
+  })
+
+  it('starts a fresh card when the same question and selection return after an absent frame', async () => {
+    const { rawWrite } = promptSetup('claude')
+    wake.writeOutput(claudePrompt())
+    await settle()
+    const { signature } = wake.approvalPrompt()
+    const answered = wake.answerApproval('1', signature)
+    wake.writeOutput('\x1b[9;1H\x1b[J')
+    wake.writeOutput(claudeOptions(1))
+    await expect(answered).resolves.toEqual({ ok: true })
+    expect(wake.approvalPrompt().signature).not.toBe(signature)
+    await expect(wake.answerApproval('1', signature)).resolves.toEqual({ ok: false, reason: 'changed' })
+    expect(rawWrite.mock.calls).toEqual([['1']])
+  })
+
+  it('gives a returning question a fresh identity when it was answered in the terminal', async () => {
+    const onApprovalChange = vi.fn()
+    const { rawWrite } = promptSetup('claude', onApprovalChange)
+    wake.writeOutput(claudePrompt())
+    await vi.waitFor(() => expect(onApprovalChange).toHaveBeenLastCalledWith(true))
+    const { signature } = wake.approvalPrompt()
+    wake.userInput('1')
+    wake.writeOutput('\x1b[2J\x1b[H⏺ Bash(npm test)')
+    await vi.waitFor(() => expect(onApprovalChange).toHaveBeenLastCalledWith(false), { interval: 5 })
+    wake.writeOutput(claudePrompt())
+    await vi.waitFor(() => expect(onApprovalChange).toHaveBeenLastCalledWith(true))
+    expect(wake.approvalPrompt().signature).not.toBe(signature)
+    await expect(wake.answerApproval('1', signature)).resolves.toEqual({ ok: false, reason: 'changed' })
+    expect(rawWrite).not.toHaveBeenCalled()
+  })
+
+  it('presses Enter after 600 ms without a repaint when the chosen row was already selected', async () => {
+    const { rawWrite } = promptSetup('claude')
+    wake.writeOutput(claudePrompt())
+    await settle()
+    const startedAt = Date.now()
+    const answered = wake.answerApproval('1', wake.approvalPrompt().signature)
+    expect(rawWrite.mock.calls).toEqual([['1']])
+    await expect(answered).resolves.toEqual({ ok: true })
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(600)
+    expect(rawWrite.mock.calls).toEqual([['1'], ['\r']])
+  })
+
+  it('reports a stalled choice when the question stays and the CLI does not move the selection', async () => {
+    const { rawWrite } = promptSetup('claude')
+    wake.writeOutput(claudePrompt())
+    await settle()
+    await expect(wake.answerApproval('2', wake.approvalPrompt().signature)).resolves.toEqual({ ok: false, reason: 'stuck' })
+    expect(rawWrite.mock.calls).toEqual([['2']])
+  })
+
+  it('reports a failed Enter write', async () => {
+    const { rawWrite } = promptSetup('claude')
+    rawWrite.mockImplementation(key => key !== '\r')
+    wake.writeOutput(claudePrompt())
+    await settle()
+    const answered = wake.answerApproval('2', wake.approvalPrompt().signature)
+    wake.writeOutput(claudePrompt(2))
+    await expect(answered).resolves.toEqual({ ok: false, reason: 'write-failed' })
+    expect(rawWrite.mock.calls).toEqual([['2'], ['\r']])
   })
 
   it('refuses a choice for a prompt that is no longer on screen', async () => {
@@ -1380,6 +1510,119 @@ describe('the agent\'s prompt with choices, answered from the chat view', () => 
     await settle()
     await expect(wake.answerApproval('1', signature)).resolves.toEqual({ ok: false, reason: 'changed' })
     expect(rawWrite).not.toHaveBeenCalled()
+  })
+})
+
+describe('sending Antigravity chat text through the verified idle editor', () => {
+  const rule = '─'.repeat(40)
+  const model = 'Gemini 3.8 Flash · high'
+  const idleFooter = `? for shortcuts  ${model}`
+  const draw = (lines, row, column) => '\x1b[?2004h\x1b[2J\x1b[H' + lines.join('\r\n') + `\x1b[${row + 1};${column + 1}H`
+  const editor = (text = '') => draw([
+    'PS C:\\dev> agy', 'Agent output', rule, `> ${text}`, rule,
+    text ? model.padStart(40) : idleFooter, 'ezShell status probe'
+  ], 3, text.length + 2)
+  const settle = () => new Promise(resolve => setTimeout(resolve, 30))
+
+  function setupAntigravity() {
+    const state = { working: false, blocked: false, live: true, unknown: false, verified: true }
+    const write = vi.fn(() => true)
+    const rawWrite = vi.fn(() => true)
+    wake = createAgentInboxWake({
+      kind: 'antigravity', cols: 40, rows: 12, pendingMessages: () => ['unread'],
+      isWorking: () => state.working, isBlocked: () => state.blocked, isLive: () => state.live,
+      isUnknown: () => state.unknown, write, rawWrite
+    })
+    return { state, write, rawWrite }
+  }
+
+  it('pastes into an empty bordered editor with historical PowerShell output, then submits the drawn text once', async () => {
+    const { write, rawWrite } = setupAntigravity()
+    wake.writeOutput(editor())
+    await vi.waitFor(() => expect(wake.composerState()).toBe('empty'))
+    const answered = wake.submitText('Hello from chat')
+    const pasted = '\x1b[200~Hello from chat\x1b[201~'
+    expect(rawWrite.mock.calls).toEqual([[pasted]])
+    await expect(wake.submitText('Another line')).resolves.toEqual({ ok: false, reason: 'busy' })
+    wake.writeOutput(editor('Hello from chat'))
+    await expect(answered).resolves.toEqual({ ok: true })
+    expect(rawWrite.mock.calls).toEqual([[pasted], ['\r']])
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a long-text chip', editor('[Pasted text #1 1001 chars]')],
+    ['a long-lines chip', editor('[Pasted text #2 +16 lines]')],
+    ['a clipped draft', draw(['> ↑ 14 more lines', '  wrapped draft', '  visible end.', rule, model.padStart(40)], 2, 14)]
+  ])('uses %s as a visible draft only', async (_name, painted) => {
+    const { rawWrite } = setupAntigravity()
+    wake.writeOutput(painted)
+    await settle()
+    expect(wake.composerState()).toBe('draft')
+    await expect(wake.submitText('New line')).resolves.toEqual({ ok: false, reason: 'composer-not-empty' })
+    expect(rawWrite).not.toHaveBeenCalled()
+
+    wake.writeOutput(editor())
+    await vi.waitFor(() => expect(wake.composerState()).toBe('empty'))
+    const answered = wake.submitText('A long draft that the CLI represents differently')
+    wake.writeOutput(painted)
+    await expect(answered).resolves.toEqual({ ok: true })
+    expect(rawWrite.mock.calls.map(([data]) => data)).toEqual([
+      '\x1b[200~A long draft that the CLI represents differently\x1b[201~', '\r'
+    ])
+  })
+
+  it.each([
+    ['a plain greater-than prompt', draw(['> '], 0, 2)],
+    ['a missing footer', draw([rule, '> ', rule], 1, 2)],
+    ['a working footer', draw([rule, '> ', rule, `esc to cancel  ${model}`], 1, 2)],
+    ['a shell cursor outside a stale editor', draw([rule, '> ', rule, idleFooter, 'PS C:\\dev> '], 4, 11)],
+    ['an alternate buffer', '\x1b[?1049h' + editor()]
+  ])('refuses to paste at %s even with an idle report', async (_name, screen) => {
+    const { rawWrite } = setupAntigravity()
+    wake.writeOutput(screen)
+    await settle()
+    expect(wake.composerState()).toBeNull()
+    await expect(wake.submitText('Text')).resolves.toEqual({ ok: false, reason: 'no-composer' })
+    expect(rawWrite).not.toHaveBeenCalled()
+  })
+
+  it('blocks an actual selection screen even when a ruled empty editor and stale idle status coexist', async () => {
+    const { rawWrite } = setupAntigravity()
+    wake.writeOutput(draw(['Question 1/1: Which option?', '> 1. Continue', '  2. Cancel', '', rule, '> ', rule, idleFooter], 5, 2))
+    await settle()
+    const approval = wake.approvalPrompt()
+    expect(approval).toMatchObject({ usesTerminalInput: true })
+    await expect(wake.answerApproval('1', approval.signature)).resolves.toEqual({ ok: false, reason: 'changed' })
+    await expect(wake.submitText('Text')).resolves.toEqual({ ok: false, reason: 'approval' })
+    expect(rawWrite).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['working', true, 'busy'], ['unknown', true, 'busy'], ['blocked', true, 'approval'],
+    ['live', false, 'not-agent'], ['verified', false, 'target-changed']
+  ])('rechecks %s between paste and Enter', async (flag, value, reason) => {
+    const { rawWrite, state } = setupAntigravity()
+    wake.writeOutput(editor())
+    await vi.waitFor(() => expect(wake.composerState()).toBe('empty'))
+    const answered = wake.submitText('Text', undefined, { canSend: () => state.verified })
+    state[flag] = value
+    wake.writeOutput(editor('Text'))
+    await expect(answered).resolves.toEqual({ ok: false, reason })
+    expect(rawWrite.mock.calls).toEqual([['\x1b[200~Text\x1b[201~']])
+  })
+
+  it('leaves a pasted draft alone when the user takes over before Enter', async () => {
+    const { rawWrite } = setupAntigravity()
+    wake.writeOutput(editor())
+    await vi.waitFor(() => expect(wake.composerState()).toBe('empty'))
+    const answered = wake.submitText('Text')
+    wake.userInput('x')
+    wake.writeOutput(editor('Textx'))
+    await expect(answered).resolves.toEqual({ ok: false, reason: 'interrupted' })
+    await vi.waitFor(() => expect(wake.composerState()).toBe('draft'))
+    await expect(wake.submitText('Text')).resolves.toEqual({ ok: false, reason: 'composer-not-empty' })
+    expect(rawWrite.mock.calls).toEqual([['\x1b[200~Text\x1b[201~']])
   })
 })
 

@@ -737,6 +737,7 @@
 }
 .agent-chat-subagent-input { --agent-chat-input-lines: 6; }
 .agent-chat-input:focus { outline: none; border-color: var(--chat-focus, var(--accent)); }
+.agent-chat-input[aria-disabled='true'] { background: var(--bg-secondary); color: var(--text-secondary); }
 .agent-chat-attachments {
   display: flex;
   flex: 0 0 100%;
@@ -844,6 +845,7 @@
   background: var(--bg-secondary);
 }
 .agent-chat-approval-question { font-weight: 600; }
+.agent-chat-approval[tabindex]:focus-visible { outline: 2px solid var(--chat-focus, var(--accent)); outline-offset: -2px; }
 .agent-chat-inline-question {
   flex-direction: row;
   align-items: center;
