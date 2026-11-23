@@ -73,6 +73,26 @@ describe('Claude transcript lines to chat items', () => {
     expect(items[0].inboxNotice).toBe(true)
   })
 
+  it('reads the text and image presence from an absorbed multimodal prompt', () => {
+    const parser = createClaudeParser()
+    const timestamp = '2026-11-19T10:00:05Z'
+    const text = '[Image #7] [Image #8]이 버튼을 눌러 봤어\r\n두 번째 사진을 봐 줘'
+    const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aW1hZ2U=' } }
+    const attachment = { type: 'queued_command', commandMode: 'prompt', origin: { kind: 'human' }, humanTurn: true }
+    expect(parser.feed({ type: 'queue-operation', operation: 'enqueue', timestamp, content: text }).items).toEqual([])
+    expect(parser.feed({ type: 'queue-operation', operation: 'remove', timestamp }).items).toEqual([])
+    expect(parser.feed({
+      type: 'attachment', uuid: 'q-images', timestamp,
+      attachment: { ...attachment, prompt: [{ type: 'text', text }, image, image], imagePasteIds: [7, 8] }
+    }).items).toEqual([{
+      id: 'user:q-images', kind: 'user', time: Date.parse(timestamp), hasImage: true,
+      text: '[Image #7] [Image #8]이 버튼을 눌러 봤어\n두 번째 사진을 봐 줘'
+    }])
+    expect(parser.feed({
+      type: 'attachment', uuid: 'q-image-only', timestamp, attachment: { ...attachment, prompt: [image] }
+    }).items).toEqual([{ id: 'user:q-image-only', kind: 'user', time: Date.parse(timestamp), hasImage: true }])
+  })
+
   it('shows an interruption and a compaction as notices', () => {
     const { items } = feedAll(createClaudeParser(), [
       user('u1', '[Request interrupted by user]'),

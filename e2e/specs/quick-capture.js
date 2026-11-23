@@ -1,7 +1,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const zlib = require('node:zlib')
-const { connect, createChecks, openLocalAgent, pages, sleep, unlock } = require('../support/driver')
+const { connect, createChecks, openLocalAgent, pages, pickTabGroup, sleep, unlock } = require('../support/driver')
 const { check, finish } = createChecks()
 
 ;(async () => {
@@ -92,6 +92,24 @@ const { check, finish } = createChecks()
     select.value = ${JSON.stringify(folder)}
     select.dispatchEvent(new Event('change'))
   })()`)
+  const openChat = async (project, agent) => {
+    await main.send('Page.bringToFront')
+    await pickTabGroup(main, project)
+    const pane = `document.querySelector('[aria-label="${agent} 메시지함"]')?.closest('[data-local-shell-id]')`
+    await main.js(`${pane}?.querySelector('.xterm-helper-textarea')?.focus()`)
+    const key = { key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 }
+    await main.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...key })
+    await main.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+    const cover = `${pane}?.querySelector('.agent-chat-cover')`
+    if (!await main.until(`!!${cover}`)) throw new Error('The agent chat did not open: ' + agent)
+    return cover
+  }
+  const thumbnailIn = (cover, text) => `(() => {
+    const row = ${cover}.querySelector('.agent-chat-user')
+    const image = row?.querySelector('.agent-chat-sent-images img')
+    return row?.querySelector('.agent-chat-bubble')?.textContent === ${JSON.stringify(text)} &&
+      image?.naturalWidth > 0 && image.naturalWidth <= 280
+  })()`
 
   const service = file('service')
   const tools = file('tools')
@@ -148,13 +166,26 @@ const { check, finish } = createChecks()
   check('the capture closes after submission', await waitFor(async () => !(await pages()).some(isOverlay)))
   overlay.close()
 
-  const second = await openCapture('Claude에게 보낼 코멘트')
+  const codexCover = await openChat('service', 'codex-1')
+  check('opening the receiving chat later shows the annotated capture above the comment', await main.until(thumbnailIn(codexCover, comment)))
+
+  const claudeCover = await openChat('tools', 'claude-2')
+  const sessionId = '5a6f0d9e-1b2c-4d3e-8f90-0a1b2c3d4e5f'
+  const transcript = file(path.join('claude-home', 'projects', 'test', sessionId + '.jsonl'))
+  const append = (entry) => fs.appendFileSync(transcript, JSON.stringify({ timestamp: new Date().toISOString(), ...entry }) + '\n')
+  append({ type: 'assistant', uuid: 'before-capture', message: { id: 'before-capture', role: 'assistant', content: [{ type: 'text', text: '캡처 전 답변' }] } })
+  const report = file('claude-status.json')
+  fs.writeFileSync(report, JSON.stringify({ session_id: sessionId, model: { id: 'claude-opus-5-5' } }))
+  fs.writeFileSync(file('claude-2-command'), `"%EZSHELL_TEST_AGENT_EXE%" "%EZSHELL_AGENT_USAGE_SCRIPT%" < "${report}"`)
+  if (!await main.until(`${claudeCover}.textContent.includes('캡처 전 답변')`)) throw new Error('Claude did not attach to its test transcript')
+  const claudeComment = 'Claude에게 보낼 코멘트'
+  const second = await openCapture(claudeComment)
   await clickButton(second, '[data-tool="badge"]')
   await second.click(200, 200)
   check('a numbered badge adds its line to the comment', await second.until(`
     document.querySelector('#comment').value === ${JSON.stringify('Claude에게 보낼 코멘트' + String.fromCharCode(10) + '1. ')}
   `))
-  await second.js(`document.querySelector('#comment').value = 'Claude에게 보낼 코멘트'`)
+  await second.js(`document.querySelector('#comment').value = ${JSON.stringify(claudeComment)}`)
   await clickButton(second, 'button[data-tool="text"]')
   await second.click(240, 150)
   check('the text tool opens a field where it was clicked', await second.until('document.activeElement?.classList.contains("ink-text")', 3000))
@@ -174,9 +205,20 @@ const { check, finish } = createChecks()
   check('choosing Claude submits the capture through its composer', await waitFor(() => {
     if (read('claude-2-chat-sent') !== '1') return false
     const [image, , text] = read('claude-2-chat-text').split('\n')
-    return fs.existsSync(image) && text === 'Claude에게 보낼 코멘트' && read('codex-1-chat-sent') === '1'
+    return fs.existsSync(image) && text === claudeComment && read('codex-1-chat-sent') === '1'
   }))
   second.close()
+  const [image] = read('claude-2-chat-text').split('\n')
+  append({ type: 'user', uuid: 'capture-sent', message: { role: 'user', content: [
+    { type: 'text', text: '[Image #1]' + claudeComment },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: fs.readFileSync(image, 'base64') } }
+  ] } })
+  check('Claude recording the capture keeps the thumbnail and the exact comment on one bubble', await main.until(`
+    !!${claudeCover}.querySelector('[data-chat-row="item:user:capture-sent"]') &&
+    ${claudeCover}.querySelectorAll('.agent-chat-user').length === 1 &&
+    ${thumbnailIn(claudeCover, claudeComment)}
+  `))
+  await main.shot('quick-capture-chat-thumbnail')
   main.close()
   finish()
 })().catch(error => { console.error(error); process.exit(1) })

@@ -10,6 +10,7 @@ const putty = require('./putty.js');
 const moba = require('./mobaxterm.js');
 const tabby = require('./tabby.js');
 const sshConfig = require('./sshConfig.js');
+const filezilla = require('./filezilla.js');
 
 const XSHELL_VERSIONS = ['8', '7', '6', '5'];
 
@@ -64,6 +65,11 @@ function createSessionImport({ platform, getPath, env, home, execFile }) {
     for (const file of tabbyFiles) {
       if (await isFile(file)) list.push({ id: 'tabby', label: 'Tabby', detail: file, read: async () => tabby.readTabbyFile(await readLimited(file)) });
     }
+    // FileZilla keeps the Site Manager in its settings folder (Windows %APPDATA%, others ~/.config)
+    const filezillaFile = platform === 'win32'
+      ? path.join(appData, 'FileZilla', 'sitemanager.xml')
+      : path.join(home, '.config', 'filezilla', 'sitemanager.xml');
+    if (await isFile(filezillaFile)) list.push({ id: 'filezilla', label: 'FileZilla', detail: filezillaFile, read: async () => filezilla.readFileZillaFile(await readLimited(filezillaFile)) });
     const config = path.join(home, '.ssh', 'config');
     if (await isFile(config)) list.push({ id: 'ssh-config', label: 'OpenSSH config', detail: config, read: async () => sshConfig.readSshConfigFile(await readLimited(config), { home }) });
     return list;
@@ -94,6 +100,7 @@ function createSessionImport({ platform, getPath, env, home, execFile }) {
       if (name.endsWith('.mxtsessions')) return moba.readMobaFile(buffer);
       if (name.endsWith('.yaml') || name.endsWith('.yml')) return tabby.readTabbyFile(buffer);
       const head = buffer.subarray(0, 64 * 1024).toString('utf8');
+      if (name.endsWith('.xml') || /<FileZilla3[\s>]/.test(head)) return filezilla.readFileZillaFile(buffer);
       if (/^\s*\[Bookmarks/im.test(head)) return moba.readMobaFile(buffer);
       if (/^\s*Host\s+\S/im.test(head)) return sshConfig.readSshConfigFile(buffer, { home });
       throw new Error('어느 프로그램의 파일인지 알 수 없습니다.');
@@ -102,7 +109,7 @@ function createSessionImport({ platform, getPath, env, home, execFile }) {
 }
 
 const FILE_FILTERS = [
-  { name: '세션 파일', extensions: ['xsh', 'xts', 'xfp', 'reg', 'mxtsessions', 'ini', 'yaml', 'yml', 'config', 'conf', 'txt'] },
+  { name: '세션 파일', extensions: ['xsh', 'xts', 'xfp', 'reg', 'mxtsessions', 'ini', 'yaml', 'yml', 'xml', 'config', 'conf', 'txt'] },
   { name: '모든 파일', extensions: ['*'] }
 ];
 

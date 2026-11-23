@@ -34,6 +34,54 @@ describe('defaultShell', () => {
 })
 
 describe('createLocalShells', () => {
+  it('finds a manual Claude through its own process and updates the session without MCP', async () => {
+    vi.useFakeTimers()
+    const startedAt = Date.now()
+    const session = { pid: 12, cwd: '/work', startedAt, sessionId: '183a2d7a-c5d8-4d40-acd1-11c08bce7cde' }
+    const nested = { ...session, pid: 13 }
+    const outside = { ...session, pid: 22 }
+    const processes = new Map([
+      [12, { parent: 10, name: 'claude.exe' }],
+      [13, { parent: 12, name: 'claude.exe' }],
+      [14, { parent: 12, name: 'electron.exe' }],
+      [22, { parent: 20, name: 'claude.exe' }]
+    ])
+    const readClaudeSessions = vi.fn(async () => [session, nested, outside])
+    const processTree = vi.fn(async () => processes)
+    const onExit = vi.fn()
+    const registerLocalClaude = vi.fn((_, attach) => attach({ agentId: 'claude-1', setStatus: vi.fn(), onExit }))
+    const { shells, ptys } = setup({ readClaudeSessions, processTree, processAlive: pid => processes.has(pid), agents: { registerLocalClaude } })
+    const first = shells.open().id
+    const second = shells.open().id
+    ptys[0].pid = 10
+    ptys[1].pid = 11
+    try {
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(registerLocalClaude).toHaveBeenCalledTimes(1)
+      expect(shells.agentOf(first)).toMatchObject({ kind: 'claude', cwd: session.cwd, sessionId: session.sessionId })
+      expect(shells.agentOf(second)).toBeNull()
+
+      const next = { ...session, sessionId: 'd13ee880-0dde-49af-a4c9-7a3620649d7b' }
+      readClaudeSessions.mockResolvedValue([next, nested, outside])
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(shells.agentOf(first)?.sessionId).toBe(next.sessionId)
+      expect(processTree).toHaveBeenCalledTimes(1)
+      expect(registerLocalClaude).toHaveBeenCalledTimes(1)
+
+      const connectMcp = await shells.bindAgentProcess({ pid: 14, kind: 'claude' })
+      expect(connectMcp({ agentId: 'claude-2', setStatus: vi.fn(), onExit }).agentId).toBe('claude-1')
+      processes.delete(12)
+      readClaudeSessions.mockResolvedValue([outside])
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(shells.agentOf(first)).toBeNull()
+      expect(shells.isRunning(first)).toBe(true)
+      expect(onExit).toHaveBeenCalledExactlyOnceWith('claude-1')
+    } finally {
+      shells.closeAll()
+      vi.useRealTimers()
+    }
+  })
+
   it('binds five agents to their own shells when two MCP processes start after a shared snapshot', async () => {
     const processes = new Map()
     const processTree = vi.fn(async () => processes)
@@ -62,6 +110,27 @@ describe('createLocalShells', () => {
         agentId: `${agents[index].kind}-${index}`, setStatus: () => {}, onExit: () => {}
       }))
       expect(attached.map(agent => agent.shellId)).toEqual(agents.map(agent => agent.id))
+    } finally {
+      shells.closeAll()
+    }
+  })
+
+  it('reads the composer of a CLI whose start scrolled out of the backlog before its MCP connected (2026-11-23 user report)', async () => {
+    const processes = new Map([[15, { parent: 12, name: 'electron.exe' }], [12, { parent: 10, name: 'claude.exe' }]])
+    const { shells, ptys } = setup({ agents: {}, processTree: async () => processes, processAlive: () => true })
+    const { id } = shells.open()
+    ptys[0].pid = 10
+    const rule = '─'.repeat(79)
+    try {
+      // Claude turns bracketed paste on once, when it starts; a long session pushes that out of the backlog
+      ptys[0].emit('\x1b[?2004h')
+      for (let sent = 0; sent <= BACKLOG_CHARS * 2; sent += 64 * 1024) ptys[0].emit('x'.repeat(64 * 1024 - 2) + '\r\n')
+      ptys[0].emit(`\x1b[2J\x1b[10;1H${rule}\x1b[11;1H❯ \x1b[12;1H${rule}\x1b[11;3H`)
+      const attach = await shells.bindAgentProcess({ pid: 15, kind: 'claude' })
+      attach({ agentId: 'claude-1', setStatus: vi.fn(), onExit: vi.fn() })
+      // The headless screen parses what it is given asynchronously
+      await vi.waitFor(() => expect(shells.chatScreen(id).lines.join('')).toContain('❯'))
+      expect(shells.chatScreen(id).composer).toBe('empty')
     } finally {
       shells.closeAll()
     }
@@ -135,13 +204,14 @@ describe('createLocalShells', () => {
     expect(env.NO_COLOR).toBe('1')
   })
 
-  it('drops the markers of a Claude Code session the app was started from, keeping Claude settings', () => {
+  it('drops inherited session markers and credentials, keeping Claude settings', () => {
     // Started from inside Claude Code, every Claude in a local shell took itself for a sub-session of it
     // (transcript saving off, so its conversation could not be resumed)
     const { shells, ptys } = setup({ env: {
       TERM: 'xterm', CLAUDECODE: '1', CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SESSION_ID: 'abc', CLAUDE_CODE_ENTRYPOINT: 'cli',
       CLAUDE_CODE_MESSAGING_SOCKET: 'pipe', CLAUDE_CODE_MESSAGING_TOKEN: 'secret', CLAUDE_PID: '42',
-      CLAUDE_CONFIG_DIR: 'D:\\claude', CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Git\\bin\\bash.exe'
+      CLAUDE_CONFIG_DIR: 'D:\\claude', CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Git\\bin\\bash.exe',
+      EZSHELL_AGENT_ID: 'codex-1', EZSHELL_AGENT_TOKEN: 'parent-agent', EZSHELL_AGENT_PIPE: 'parent-pipe'
     } })
     shells.open()
     expect(ptys[0].options.env).toEqual({

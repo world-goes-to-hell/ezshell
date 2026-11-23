@@ -8,8 +8,8 @@ import { toast } from '../../stores/toastStore'
 type LoginResult = Extract<BrowserLoginResult, { success: true }>
 
 const exportInstructions: Record<BrowserLoginSource['id'], string> = {
-  chrome: 'Chrome 비밀번호 관리자에서 ‘비밀번호 내보내기’ 옆의 ‘파일 다운로드’를 누르세요.',
-  edge: 'Edge 암호 관리자에서 더보기(⋯)를 열고 ‘암호 내보내기’를 선택하세요.',
+  chrome: 'Chrome 주소창에 chrome://password-manager/settings를 입력하고, ‘비밀번호 내보내기’ 옆의 ‘파일 다운로드’를 누르세요.',
+  edge: 'Edge 주소창에 edge://settings/autofill/passwords를 입력하고, 더보기(⋯)에서 ‘암호 내보내기’를 선택하세요.',
   firefox: 'Firefox 비밀번호 관리자에서 더보기(⋯)를 열고 비밀번호 내보내기를 선택하세요.',
 }
 
@@ -242,7 +242,7 @@ export function BrowserLoginsDialog({ tabId, origin, onClose, trigger, importOpt
                       disabled={busy} onClick={() => void perform({ type: 'import' })}>CSV 파일 선택…</button>
                     {selectedSource && !exportBrowser && (
                       <button type="button" className="btn-primary" disabled={busy} onClick={startImport}>
-                        {autoImport ? '가져오기' : '내보내기 화면 열기'}
+                        {autoImport ? '가져오기' : '내보내기 안내 열기'}
                       </button>
                     )}
                   </>}

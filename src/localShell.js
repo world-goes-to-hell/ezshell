@@ -82,17 +82,21 @@ if ((Get-Command codex -ErrorAction SilentlyContinue).CommandType -in 'Applicati
 // What ties a process to a running Claude Code session. Started from inside Claude Code (a developer
 // running `npm run dev` there), the app passed these on and every Claude in a local shell took itself for
 // a sub-session of that one: transcript saving off (no resume), its messaging socket. User settings
-// (CLAUDE_CONFIG_DIR, CLAUDE_CODE_GIT_BASH_PATH and the like) stay.
-const CLAUDE_SESSION_MARKERS = new Set([
+// (CLAUDE_CONFIG_DIR, CLAUDE_CODE_GIT_BASH_PATH and the like) stay. A new local shell also gets
+// its own ezShell credentials, even when the app itself was launched from another agent's shell.
+const AGENT_SESSION_MARKERS = new Set([
   'CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT',
   'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_SPAWN_BACKEND',
-  'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH'
+  'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH',
+  'EZSHELL_AGENT_ID', 'EZSHELL_AGENT_TOKEN', 'EZSHELL_SHELL_TOKEN', 'EZSHELL_AGENT_PIPE',
+  'EZSHELL_AGENT_MCP_CONFIG', 'EZSHELL_AGENT_MCP_SCRIPT', 'EZSHELL_AGENT_SETTINGS', 'EZSHELL_AGENT_USAGE_SCRIPT',
+  'EZSHELL_CLI_EXE', 'EZSHELL_CLI_SCRIPT'
 ]);
 
 function localTerminalEnvironment(env, platform) {
   const shellEnv = { ...env };
   for (const key of Object.keys(shellEnv)) {
-    if (CLAUDE_SESSION_MARKERS.has(key.toUpperCase())) delete shellEnv[key];
+    if (AGENT_SESSION_MARKERS.has(key.toUpperCase())) delete shellEnv[key];
   }
   const keys = Object.keys(shellEnv);
   const envKey = name => platform === 'win32' ? keys.find(key => key.toUpperCase() === name) ?? name : name;
@@ -237,6 +241,24 @@ function directoryFromOsc(value, platform) {
 }
 
 // Keep partial OSC reports across chunks, including the shell's working directory and agent state.
+// Terminal modes a CLI turns on once, when it starts (bracketed paste, application cursor keys). They are
+// kept from the whole output, not only the backlog: an agent typed into the shell gets its screen when its
+// messages MCP connects, which can be long after the start scrolled out of the backlog, and without
+// bracketed paste that screen never finds the composer (2026-11-23 user report: a capture could not be sent).
+const TRACKED_MODES = new Set(['1', '2004']);
+
+function trackTerminalModes(entry, data) {
+  const output = entry.modeTail + data;
+  for (const [, params, set] of output.matchAll(/\x1b\[\?([\d;]+)([hl])/g)) {
+    for (const mode of params.split(';')) if (TRACKED_MODES.has(mode)) entry.modes[mode] = set === 'h';
+  }
+  // A sequence split between chunks is read with the next one (reading one twice changes nothing)
+  entry.modeTail = output.slice(-16);
+}
+
+/** The tracked modes as sequences that draw nothing, written after the backlog to a new screen */
+const modeSequences = entry => Object.entries(entry.modes).map(([mode, on]) => `\x1b[?${mode}${on ? 'h' : 'l'}`).join('');
+
 function trackTerminalOsc(entry, data, platform, replyToProbe = true) {
   const output = entry.oscTail + data;
   const sequences = /\x1b\](0|2|7|9|7501);([^\x07\x1b]{0,4096})(?:\x07|\x1b\\)/g;
@@ -309,11 +331,14 @@ const appRuntime = processName(process.execPath);
  */
 function createLocalShells({
   spawn, send, agents, shell = defaultShell(), cwd = os.homedir(), env = process.env,
-  platform = process.platform, processTree = () => getProcessTree(platform), processAlive = isProcessAlive
+  platform = process.platform, processTree = () => getProcessTree(platform), processAlive = isProcessAlive,
+  readClaudeSessions
 }) {
   const shells = new Map();
   let nextId = 1;
   let pendingProcessTree;
+  let claudeScan;
+  let outsideSessions = new Set();
 
   function readAgentProcesses() {
     pendingProcessTree ??= Promise.resolve().then(processTree).finally(() => { pendingProcessTree = undefined; });
@@ -449,6 +474,39 @@ function createLocalShells({
     binding?.onExit(binding.id);
   }
 
+  function attachExternalAgent(id, entry, kind, pid, { agentId, setStatus, onExit }) {
+    if (shells.get(id) !== entry || entry.exited || !processAlive(pid)) return;
+    let binding = entry.externalAgent;
+    if (binding && !processAlive(binding.pid)) {
+      finishExternalAgent(entry);
+      binding = undefined;
+    }
+    if (entry.agent && (binding?.pid !== pid || entry.agent !== kind)) return;
+    if (!binding) {
+      const woken = entry.sleeping?.phase === 'waking' && entry.sleeping.kind === kind ? entry.sleeping : null;
+      binding = { id: woken ? woken.agentId : agentId, pid, onExit };
+      if (woken) {
+        clearTimeout(woken.timer);
+        entry.sleeping = null;
+        entry.activeAt = Date.now();
+        send('local-shell-sleep', { id, sleeping: null });
+      }
+      entry.externalAgent = binding;
+      entry.agent = kind;
+      entry.codexInput = kind === 'codex' ? { hasDraft: false, submitted: false } : null;
+      entry.oscTail = '';
+      trackTerminalOsc(entry, entry.backlog, platform, false);
+      observeInbox(id, entry);
+      entry.inbox.writeOutput(entry.backlog + modeSequences(entry));
+      binding.timer = setInterval(() => {
+        if (!processAlive(pid)) finishExternalAgent(entry);
+      }, AGENT_PROCESS_CHECK_MS);
+      binding.timer.unref?.();
+    }
+    entry.reportStatus = setStatus;
+    return { shellId: id, agentId: binding.id, status: agentStatus(entry) };
+  }
+
   // Bind to the CLI ancestor, whose lifetime can be longer than any one MCP connection.
   async function bindAgentProcess({ pid, kind }) {
     const candidates = new Map();
@@ -479,43 +537,16 @@ function createLocalShells({
       const { id, entry } = candidate;
       const agentPid = cliPid ?? runtimePid;
       if (!agentPid) return;
-      return ({ agentId, setStatus, onExit }) => {
-        if (shells.get(id) !== entry || entry.exited || entry.pty.pid !== parent || !processAlive(agentPid)) return;
-        let binding = entry.externalAgent;
-        if (binding && !processAlive(binding.pid)) {
-          finishExternalAgent(entry);
-          binding = undefined;
-        }
-        if (entry.agent && (binding?.pid !== agentPid || entry.agent !== kind)) return;
-        if (!binding) {
-          // The CLI resumed after a sleep: the same agent again, under the id its messages went to
-          const woken = entry.sleeping?.phase === 'waking' && entry.sleeping.kind === kind ? entry.sleeping : null;
-          binding = { id: woken ? woken.agentId : agentId, pid: agentPid, onExit };
-          if (woken) {
-            clearTimeout(woken.timer);
-            entry.sleeping = null;
-            entry.activeAt = Date.now();
-            send('local-shell-sleep', { id, sleeping: null });
-          }
-          entry.externalAgent = binding;
-          entry.agent = kind;
-          entry.codexInput = kind === 'codex' ? { hasDraft: false, submitted: false } : null;
-          entry.oscTail = '';
-          trackTerminalOsc(entry, entry.backlog, platform, false);
-          observeInbox(id, entry);
-          entry.inbox.writeOutput(entry.backlog);
-          binding.timer = setInterval(() => {
-            if (!processAlive(agentPid)) finishExternalAgent(entry);
-          }, AGENT_PROCESS_CHECK_MS);
-          binding.timer.unref?.();
-        }
-        entry.reportStatus = setStatus;
+      return registration => {
+        if (entry.pty.pid !== parent) return;
+        const attached = attachExternalAgent(id, entry, kind, agentPid, registration);
+        if (!attached) return;
+        const binding = entry.externalAgent;
+        binding.hadMcp = true;
         const connection = {};
         binding.connection = connection;
         return {
-          shellId: id,
-          agentId: binding.id,
-          status: agentStatus(entry),
+          ...attached,
           detach() {
             if (entry.externalAgent !== binding || binding.connection !== connection) return false;
             binding.connection = undefined;
@@ -528,6 +559,78 @@ function createLocalShells({
         };
       };
     }
+  }
+
+  async function discoverLocalClaude() {
+    const candidates = new Map();
+    const known = new Map();
+    for (const [id, entry] of shells) {
+      const pid = entry.pty.pid;
+      if (entry.exited || !Number.isSafeInteger(pid) || pid <= 0 || (entry.agent && (entry.agent !== 'claude' || !entry.externalAgent))) continue;
+      candidates.set(pid, { id, entry });
+      if (entry.externalAgent) known.set(entry.externalAgent.pid, entry.externalAgent);
+    }
+    if (!candidates.size) return;
+    const sessions = await readClaudeSessions();
+    // An already identified process keeps the same parent. Recheck only when its session starts again.
+    const skipped = new Set();
+    const fresh = [];
+    for (const session of sessions) {
+      const { pid, startedAt } = session;
+      const binding = known.get(pid);
+      if (binding) {
+        binding.claudeSession = session;
+      } else if (processAlive(pid)) {
+        const key = `${pid}:${startedAt}`;
+        if (outsideSessions.has(key)) skipped.add(key);
+        else fresh.push({ key, session });
+      }
+    }
+    outsideSessions = skipped;
+    if (!fresh.length) return;
+    const processes = await readAgentProcesses();
+    const sessionPids = new Set(sessions.map(session => session.pid));
+    const matches = new Map();
+    for (const { key, session } of fresh) {
+      const process = processes.get(session.pid);
+      if (!process) continue;
+      const name = processName(process.name);
+      if (!['claude', 'node', 'bun', appRuntime].includes(name)) {
+        outsideSessions.add(key);
+        continue;
+      }
+      let parent = process.parent;
+      const visited = new Set([session.pid]);
+      while (parent > 0 && !candidates.has(parent) && !sessionPids.has(parent) && !visited.has(parent)) {
+        visited.add(parent);
+        parent = processes.get(parent)?.parent;
+      }
+      const candidate = candidates.get(parent);
+      if (!candidate || session.startedAt < candidate.entry.openedAt) {
+        outsideSessions.add(key);
+        continue;
+      }
+      matches.set(candidate, matches.has(candidate) ? null : session);
+    }
+    for (const [{ id, entry }, session] of matches) {
+      if (!session || (hasAgent(entry) && entry.externalAgent?.pid !== session.pid)) continue;
+      // MCP may have connected while the process tree was being read.
+      if (entry.externalAgent?.pid === session.pid) {
+        entry.externalAgent.claudeSession = session;
+        continue;
+      }
+      agents.registerLocalClaude(session, registration => {
+        const attached = attachExternalAgent(id, entry, 'claude', session.pid, registration);
+        if (attached) entry.externalAgent.claudeSession = session;
+        return attached;
+      });
+    }
+  }
+
+  if (readClaudeSessions && agents?.registerLocalClaude) {
+    setInterval(() => {
+      claudeScan ??= discoverLocalClaude().catch(() => {}).finally(() => { claudeScan = undefined; });
+    }, AGENT_PROCESS_CHECK_MS).unref?.();
   }
 
   function open({ cols, rows, cwd: directory, agent, resume, replacementFor } = {}) {
@@ -546,6 +649,7 @@ function createLocalShells({
     const registration = agent && agents?.register(agent, id, workingDirectory, shellEnv, resume && SESSION_ID.test(resume) ? resume.toLowerCase() : null);
     // Every shell's own token: the usage status line of a Claude typed into it reports with it
     const shellUsageEnv = agents?.registerShell?.(id) ?? {};
+    const openedAt = Date.now();
     let pty;
     try {
       pty = spawn(shell.file, args, {
@@ -567,9 +671,9 @@ function createLocalShells({
       cwd: directory === undefined ? null : workingDirectory,
       launchDirectory: workingDirectory, reportedDirectory: null,
       reportStatus: status => registration?.setStatus?.(status),
-      backlog: '', exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: '',
+      backlog: '', modes: {}, modeTail: '', exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: '',
       // Last sign of work (status, typing, a line sent to the agent) and the sleep it may be in (agentIdle.js)
-      activeAt: Date.now(), sleeping: null
+      activeAt: openedAt, openedAt, sleeping: null
     };
     if (registration) observeInbox(id, entry);
     shells.set(id, entry);
@@ -580,6 +684,7 @@ function createLocalShells({
         entry.reportStatus?.(status);
         if (entry.agent && status !== 'idle') entry.activeAt = Date.now();
       }
+      trackTerminalModes(entry, data);
       entry.inbox?.writeOutput(data);
       entry.backlog += data;
       // Trimmed only now and then: cutting on every chunk copies the whole backlog each time
@@ -685,7 +790,8 @@ function createLocalShells({
   async function sleep(id, { sessionId, flags = [] } = {}) {
     const entry = shells.get(id);
     const binding = entry?.externalAgent;
-    if (!binding || !hasAgent(entry) || entry.sleeping || !entry.inbox) return { ok: false, reason: 'not-agent' };
+    // Sleeping agents can be woken by their inbox, which needs a message MCP registration.
+    if (!binding?.hadMcp || !hasAgent(entry) || entry.sleeping || !entry.inbox) return { ok: false, reason: 'not-agent' };
     if (agentStatus(entry) !== 'idle') return { ok: false, reason: 'working' };
     if (!SESSION_ID.test(sessionId ?? '')) return { ok: false, reason: 'no-session' };
     const kind = entry.agent;
@@ -791,7 +897,9 @@ function createLocalShells({
     /** The agent running in the shell ('claude' / 'codex') and its state, or null */
     agentOf(id) {
       const entry = shells.get(id);
-      return hasAgent(entry) ? { kind: entry.agent, status: agentStatus(entry) } : null;
+      if (!hasAgent(entry)) return null;
+      const session = entry.externalAgent?.claudeSession;
+      return { kind: entry.agent, status: agentStatus(entry), ...(session ? { sessionId: session.sessionId, cwd: session.cwd } : {}) };
     },
     chatAgentId(id) {
       const entry = shells.get(id);
@@ -917,7 +1025,7 @@ function createLocalShells({
     sleep, wake, stayAwake,
     /** The agents for agentIdle.js: idle or not, since when nothing happened */
     idleAgents: () => [...shells].flatMap(([id, entry]) => (hasAgent(entry) && !entry.sleeping ? [{
-      id, kind: entry.agent, external: Boolean(entry.externalAgent), agentId: entry.externalAgent?.id ?? null,
+      id, kind: entry.agent, external: Boolean(entry.externalAgent?.hadMcp), agentId: entry.externalAgent?.id ?? null,
       // The CLI (typed into the shell) or the shell that runs it (launched by ezShell)
       pid: entry.externalAgent?.pid ?? entry.pty.pid,
       activeAt: entry.activeAt, idle: agentStatus(entry) === 'idle'

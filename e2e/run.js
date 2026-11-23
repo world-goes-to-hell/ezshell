@@ -75,7 +75,14 @@ async function runSpec(name) {
   // E2E_APP: a packaged ezShell.exe (release/<version>/win-unpacked) instead of the build in out/
   const packaged = process.env.E2E_APP
   const appEntry = { 'quick-capture': 'e2e/support/quickCaptureApp.js', 'browser-review': 'e2e/support/localAgentApp.js', 'local-agent-messages': 'e2e/support/localAgentApp.js', 'local-agent-pane-map': 'e2e/support/localAgentApp.js', 'local-agent-tab-close': 'e2e/support/localAgentApp.js', 'local-agent-usage': 'e2e/support/localAgentApp.js', 'local-work-overview': 'e2e/support/localAgentApp.js', 'local-agent-history': 'e2e/support/agentHistoryApp.js', 'ssh-agent-drop': 'e2e/support/agentHistoryApp.js', 'local-restore-agents': 'e2e/support/agentHistoryApp.js', 'local-agent-chat': 'e2e/support/agentChatApp.js', 'local-agent-chat-scroll': 'e2e/support/agentChatApp.js', 'local-agent-chat-images': 'e2e/support/agentChatApp.js', 'local-agent-sleep': 'e2e/support/agentSleepApp.js' }[name] ?? 'out/main/index.js'
-  const app = spawn(packaged || require('electron'), [...(packaged ? [] : [path.join(ROOT, appEntry)]), `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, ...APP_FLAGS], { cwd: ROOT, stdio: 'ignore' })
+  const manualClaude = name === 'local-agent-chat-manual'
+  const app = spawn(packaged || require('electron'), [
+    ...(packaged ? [] : [path.join(ROOT, manualClaude ? 'e2e/support/agentChatApp.js' : appEntry)]),
+    `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, ...APP_FLAGS
+  ], {
+    cwd: ROOT, stdio: 'ignore',
+    env: manualClaude ? { ...process.env, EZSHELL_TEST_MANUAL_CLAUDE_CHAT: '1' } : process.env
+  })
   try {
     if (!(await waitUntil(portAnswers, 60000))) throw new Error('the app did not open its debugging port')
     const code = await new Promise((resolve, reject) => {

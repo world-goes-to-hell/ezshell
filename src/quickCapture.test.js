@@ -127,25 +127,26 @@ describe('the quick screen capture', () => {
   it('sends the selected region to the chosen agent, retains it across retry, and never writes the clipboard', async () => {
     const agent = { id: 'codex-2', kind: 'codex', shellId: 'local:2', cwd: path.resolve('service') }
     const request = { action: 'send', agentId: agent.id, region: selection, comment: '이 부분 봐 줘' }
-    const storeImage = vi.fn(() => 'capture.png')
+    const attachment = { file: 'capture.png', preview: Buffer.from('preview') }
+    const storeAttachment = vi.fn(() => attachment)
     const onSent = vi.fn()
-    const sendCapture = vi.fn(async (target, comment, file, available) => {
+    const sendCapture = vi.fn(async (target, comment, getAttachment, available) => {
       expect(target).toEqual(agent)
       expect(comment).toBe(request.comment)
-      expect(file()).toBe('capture.png')
+      expect(getAttachment()).toBe(attachment)
       expect(available()).toBe(true)
       return sendCapture.mock.calls.length === 1 ? { ok: false, error: '다시 시도' } : { ok: true }
     })
     const { capture, clipboard, image, windows } = setup(
       [{ action: 'targets' }, { ...request, agentId: 'unknown' }, request, request],
-      { listAgents: () => [agent], storeImage, sendCapture, onSent }
+      { listAgents: () => [agent], storeAttachment, sendCapture, onSent }
     )
     expect(await capture.start()).toBe(true)
     expect(windows[0].webContents.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining('다시 시도'))
     expect(sendCapture).toHaveBeenCalledTimes(2)
     expect(onSent).toHaveBeenCalledExactlyOnceWith(agent)
     expect(image.crop).toHaveBeenCalledExactlyOnceWith({ x: 480, y: 720, width: 960, height: 360 })
-    expect(storeImage).toHaveBeenCalledOnce()
+    expect(storeAttachment).toHaveBeenCalledOnce()
     expect(clipboard.write).not.toHaveBeenCalled()
   })
   it('copies and sends the region with the marks drawn on it, and only a mark image of the chosen size', async () => {
@@ -167,15 +168,15 @@ describe('the quick screen capture', () => {
     const agent = { id: 'codex-2', kind: 'codex', shellId: 'local:2', cwd: path.resolve('service') }
     const nativeImage = { createFromDataURL: () => ({ isEmpty: () => false, getSize: () => ({ width: 960, height: 360 }) }) }
     const request = image => ({ action: 'send', agentId: agent.id, region: selection, comment: '', image })
-    const storeImage = vi.fn(() => 'capture-' + storeImage.mock.calls.length + '.png')
+    const storeAttachment = vi.fn(() => ({ file: 'capture-' + storeAttachment.mock.calls.length + '.png' }))
     const files = []
-    const sendCapture = vi.fn(async (target, comment, file) => {
-      files.push(file())
+    const sendCapture = vi.fn(async (target, comment, getAttachment) => {
+      files.push(getAttachment().file)
       return sendCapture.mock.calls.length < 3 ? { ok: false, error: '다시' } : { ok: true }
     })
     const { capture } = setup(
       [{ action: 'targets' }, request('data:image/png;base64,a'), request('data:image/png;base64,a'), request('data:image/png;base64,b')],
-      { listAgents: () => [agent], storeImage, sendCapture, nativeImage }
+      { listAgents: () => [agent], storeAttachment, sendCapture, nativeImage }
     )
     expect(await capture.start()).toBe(true)
     expect(files).toEqual(['capture-1.png', 'capture-1.png', 'capture-2.png'])

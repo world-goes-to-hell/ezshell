@@ -589,6 +589,11 @@ export interface AgentChatFrame {
   backgroundShells?: AgentChatBackgroundShells | null
 }
 
+export type AgentChatCapture = { shellId: string; id: string } & (
+  | { time: number; text: string; preview: Uint8Array<ArrayBuffer>; queued: boolean }
+  | { discard: true }
+)
+
 export interface AgentUsageReport {
   agentId: string
   shellId: string | null
@@ -690,6 +695,17 @@ export interface BrowserSavedPage {
   title: string
 }
 
+export type BrowserBookmarkPage = BrowserSavedPage & { kind?: 'page'; local?: true }
+
+export interface BrowserBookmarkFolder {
+  kind: 'folder'
+  id: string
+  title: string
+  children: BrowserBookmarkEntry[]
+}
+
+export type BrowserBookmarkEntry = BrowserBookmarkPage | BrowserBookmarkFolder
+
 export interface BrowserVisit extends BrowserSavedPage {
   visitedAt: number
 }
@@ -703,7 +719,7 @@ export type BrowserImportCategory<T> = { entries: T[]; limited?: boolean } | { e
 export type BrowserDataImportResult = {
   success: true
   sources?: BrowserLoginSource[]
-  bookmarks?: BrowserImportCategory<BrowserSavedPage>
+  bookmarks?: BrowserImportCategory<BrowserBookmarkEntry>
   history?: BrowserImportCategory<BrowserVisit>
 } | { success: false; error: string }
 
@@ -1056,6 +1072,7 @@ declare global {
       >
       agentChatOpenLink?: (shellId: string, href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab') => Promise<{ ok: true } | { ok: false; error: string }>
       onAgentChatFrame?: (callback: (frame: AgentChatFrame) => void) => () => void
+      onAgentChatCapture?: (callback: (capture: AgentChatCapture) => void) => () => void
       agentChatPin?: (request: { shellId: string; itemId: string; text: string; kind: 'claude' | 'codex' | null; title: string; time: number | null }) => Promise<{ ok: true; id: string; existing?: boolean } | { ok: false; error: string }>
       pinnedReplyGet?: () => Promise<{ ok: true; pin: PinnedReply } | { ok: false; error: string }>
       pinnedReplyOpenLink?: (href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab') => Promise<{ ok: true } | { ok: false; error: string }>

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatFrame, AgentChatItem, AgentChatState, AgentChatSubagent, CodexSpeedState } from '../types'
+import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatCapture, AgentChatFrame, AgentChatItem, AgentChatState, AgentChatSubagent, CodexSpeedState } from '../types'
 import { MAX_CHAT_ITEMS, echoItemIds, echoOutputId, nextHeld, reconcileChatEchoes, sentImageKey, type ChatEcho, type SentChatImages } from '../lib/agentChatItems'
 import { toast } from './toastStore'
 
@@ -36,6 +36,7 @@ interface AgentChatStoreState {
   loadOlder: (shellId: string) => void
   /** `queued`: the agent is busy, so the CLI holds the message until it can read it */
   echoSend: (shellId: string, text: string, previews: readonly Blob[], queued?: boolean) => string
+  applyCapture: (capture: AgentChatCapture) => void
   discardSend: (shellId: string, sendId: string) => void
   stopWaiting: (shellId: string, sendId: string) => void
   /**
@@ -96,7 +97,7 @@ function reconcileSentImages(chat: AgentChat, recorded: ReadonlyMap<string, Agen
   return next ?? chat.sentImages
 }
 
-function keepEchoes(shellId: string, chat: AgentChat) {
+function keepEchoes(shellId: string, chat: RetainedChat) {
   const ids = echoItemIds(chat.echoes)
   const items = chat.items.filter(item => ids.has(item.id))
   keptEchoes.delete(shellId)
@@ -137,6 +138,18 @@ function discardEcho(chat: RetainedChat, sendId: string) {
     echoes: chat.echoes.filter(echo => echo.id !== sendId),
     sentImages,
     reply: chat.reply?.sendId === sendId ? null : chat.reply
+  }
+}
+
+function appendEcho(chat: RetainedChat, { id, time, text, queued }: ChatEcho, previews: readonly Blob[]): RetainedChat {
+  const item: AgentChatItem = { id, kind: 'user', time, text: text || '스크린샷 첨부' }
+  const items = [...chat.items, item].slice(-MAX_CHAT_ITEMS)
+  const droppedId = chat.items.length >= MAX_CHAT_ITEMS ? chat.items[0].id : null
+  return {
+    ...chat, items,
+    sentImages: addSentImages(chat.sentImages, item, text, previews),
+    echoes: [...chat.echoes.filter(echo => echo.id !== droppedId), { id, text, time, hasImage: previews.length > 0, ...(queued ? { queued } : {}) }],
+    reply: { sendId: id, itemId: id }
   }
 }
 
@@ -190,19 +203,21 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
     },
     echoSend(shellId, text, previews, queued = false) {
       const id = `outgoing:${crypto.randomUUID()}`
-      const time = Date.now()
-      const item: AgentChatItem = { id, kind: 'user', time, text: text || '스크린샷 첨부' }
-      update(shellId, chat => {
-        const items = [...chat.items, item].slice(-MAX_CHAT_ITEMS)
-        const droppedId = chat.items.length >= MAX_CHAT_ITEMS ? chat.items[0].id : null
-        return {
-          ...chat, items,
-          sentImages: addSentImages(chat.sentImages, item, text, previews),
-          echoes: [...chat.echoes.filter(echo => echo.id !== droppedId), { id, text, hasImage: previews.length > 0, time, ...(queued ? { queued } : {}) }],
-          reply: { sendId: id, itemId: id }
-        }
-      })
+      const echo = { id, text, queued, time: Date.now(), hasImage: previews.length > 0 }
+      update(shellId, chat => ({ ...chat, ...appendEcho(chat, echo, previews) }))
       return id
+    },
+    applyCapture(capture) {
+      const { shellId, id } = capture
+      if ('discard' in capture) { get().discardSend(shellId, id); return }
+      const { time, text, queued, preview } = capture
+      const echo = { id, time, text, queued, hasImage: true }
+      const previews = [new Blob([preview], { type: 'image/png' })]
+      if (get().chats.has(shellId)) {
+        update(shellId, chat => ({ ...chat, ...appendEcho(chat, echo, previews) }))
+      } else {
+        keepEchoes(shellId, appendEcho(takeEchoes(shellId), echo, previews))
+      }
     },
     discardSend(shellId, sendId) {
       const kept = keptEchoes.get(shellId)

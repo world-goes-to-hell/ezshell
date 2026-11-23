@@ -134,6 +134,22 @@
 .browser-saved-pages-tools button[aria-haspopup] { margin-inline-start: auto; }
 .browser-saved-pages-tools input ~ button[aria-haspopup] { margin-inline-start: 0; }
 
+.browser-bookmark-path,
+.browser-bookmark-path > span {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.browser-bookmark-path { flex-wrap: wrap; margin-bottom: 8px; }
+.browser-review .browser-bookmark-path button {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.browser-bookmark-path [aria-current="location"] { color: var(--text-primary); font-weight: 600; }
+.browser-bookmark-path svg { flex: none; color: var(--text-secondary); }
+
 .browser-review-bookmarks ul {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
@@ -162,6 +178,15 @@
   text-align: start;
   color: var(--text-primary);
 }
+
+.browser-review .browser-bookmark-folder {
+  align-items: center;
+  flex-direction: row;
+  gap: 8px;
+}
+.browser-bookmark-folder > span { flex: 1; min-width: 0; }
+.browser-bookmark-folder > span > * { display: block; }
+.browser-bookmark-folder svg { flex: none; color: var(--text-secondary); }
 
 .browser-review-bookmark-open :is(span, small) {
   overflow: hidden;

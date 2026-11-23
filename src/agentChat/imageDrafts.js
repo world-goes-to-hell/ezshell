@@ -4,6 +4,13 @@ const MAX_IMAGES = 8
 const IMAGE_LIMIT = '이미지는 한 메시지에 최대 8장까지 첨부할 수 있습니다.'
 const fail = error => ({ ok: false, error })
 
+function imagePreview(bitmap) {
+  const { width, height } = bitmap.getSize()
+  const thumbnail = Math.max(width, height) <= 280 ? bitmap
+    : bitmap.resize(width >= height ? { width: 280 } : { height: 280 })
+  return thumbnail.toPNG()
+}
+
 function createImageDrafts(clipboard) {
   const drafts = new Map()
   const reads = new Map()
@@ -35,10 +42,7 @@ function createImageDrafts(clipboard) {
     function add(bitmap) {
       if (!current()) throw new Error(unavailable)
       if (!room()) throw new Error(IMAGE_LIMIT)
-      const { width, height } = bitmap.getSize()
-      const thumbnail = Math.max(width, height) <= 280 ? bitmap
-        : bitmap.resize(width >= height ? { width: 280 } : { height: 280 })
-      staged.push({ id: randomUUID(), preview: thumbnail.toPNG(), file: clipboard.storeImage(bitmap) })
+      staged.push({ id: randomUUID(), preview: imagePreview(bitmap), file: clipboard.storeImage(bitmap) })
     }
     try {
       const result = await load(add, room)
@@ -111,4 +115,4 @@ function createImageDrafts(clipboard) {
   }
 }
 
-module.exports = { createImageDrafts }
+module.exports = { createImageDrafts, imagePreview }

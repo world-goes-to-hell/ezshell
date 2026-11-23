@@ -33,12 +33,22 @@ const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b
  */
 function queuedPrompt(line) {
   const queued = line.attachment
-  if (line.type !== 'attachment' || queued?.type !== 'queued_command' || typeof queued.prompt !== 'string') return null
-  if (queued.commandMode !== 'prompt') return null
+  if (line.type !== 'attachment' || queued?.type !== 'queued_command' || queued.commandMode !== 'prompt') return null
   const origin = queued.origin?.kind
+  if (origin !== undefined && origin !== 'human') return null
+  const content = queued.prompt
+  let body
+  let hasImage = false
+  if (typeof content === 'string') {
+    body = content
+  } else if (Array.isArray(content) && content.every(block => block?.type === 'text' || block?.type === 'image')) {
+    body = content.filter(block => block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n')
+    hasImage = content.some(block => block.type === 'image')
+  } else return null
+  const prompt = body.replace(/\r\n?/g, '\n').trim()
   // Before `origin` existed, a notification still started with its tag
-  if (origin === undefined ? queued.prompt.trimStart().startsWith('<') : origin !== 'human') return null
-  return queued.prompt.replace(/\r\n?/g, '\n').trim() || null
+  if (origin === undefined && prompt.startsWith('<')) return null
+  return prompt || hasImage ? { prompt, hasImage } : null
 }
 
 /** A slash command's printed output as plain text, or null */
@@ -190,9 +200,12 @@ function createClaudeParser() {
     }
     const absorbed = queuedPrompt(line)
     if (absorbed !== null) {
+      const { prompt, hasImage } = absorbed
       const item = {
-        id: `user:${line.uuid ?? time}`, kind: 'user', time, text: clip(absorbed, LIMITS.text),
-        ...(isInboxPrompt(absorbed) ? { inboxNotice: true } : {})
+        id: `user:${line.uuid ?? time}`, kind: 'user', time,
+        ...(prompt ? { text: clip(prompt, LIMITS.text) } : {}),
+        ...(hasImage ? { hasImage: true } : {}),
+        ...(prompt && !hasImage && isInboxPrompt(prompt) ? { inboxNotice: true } : {})
       }
       turns.start(item, { older })
       out.push(item)

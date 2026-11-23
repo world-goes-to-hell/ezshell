@@ -41,6 +41,10 @@ const FILE_GUIDE = [
     hint: <>Tabby 설정의 <strong>Config file</strong>에서 위치를 확인하세요. Windows 기본 경로는 <code>%APPDATA%\tabby\config.yaml</code>입니다.</>
   },
   {
+    app: 'FileZilla', files: '.xml',
+    hint: <>사이트 관리자의 <strong>SFTP</strong> 사이트만 가져옵니다 (FTP 사이트는 뺍니다). <strong>파일 &gt; 내보내기</strong>로 만든 파일이나 <code>%APPDATA%\FileZilla\sitemanager.xml</code>을 고르세요.</>
+  },
+  {
     app: 'OpenSSH', files: 'config, .conf, .txt',
     hint: <>보통 <code>~/.ssh/config</code>를 고릅니다. Termius의 접속 정보도 <code>Host</code> 항목이 있는 OpenSSH 설정 파일로 정리해 가져올 수 있습니다.</>
   }

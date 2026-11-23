@@ -12,6 +12,17 @@ function file(name, contents = '') {
   return name
 }
 
+function expectGuide(executable, profileArgs, settingsUrl) {
+  const [command, args] = launch.mock.lastCall
+  expect(command).toBe(executable)
+  expect(args.slice(0, -1)).toEqual([...profileArgs, '--new-window'])
+  expect(args.at(-1)).toMatch(/^data:text\/html;charset=utf-8,/)
+  const guide = decodeURIComponent(args.at(-1))
+  expect(guide).toContain('ezShell 비밀번호 가져오기')
+  expect(guide).toContain(`<code>${settingsUrl}</code>`)
+  expect(guide).toContain('저장하면 자동으로 가져옵니다.')
+}
+
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-browser-import-'))
   env = { LOCALAPPDATA: path.join(home, 'Local'), APPDATA: path.join(home, 'Roaming'), 'ProgramFiles(x86)': path.join(home, 'Program Files (x86)') }
@@ -46,7 +57,7 @@ describe('browser import sources', () => {
     expect(await sources.dataDirectory(id)).toBe(path.join(root, 'Profile 1'))
     expect(await sources.dataDirectory(chrome)).toBeNull()
     expect(await sources.open(id)).toBe(true)
-    expect(launch).toHaveBeenCalledWith(chrome, ['--profile-directory=Profile 1', '--ignore-profile-directory-if-not-exists', '--new-window', 'chrome://password-manager/settings'])
+    expectGuide(chrome, ['--profile-directory=Profile 1', '--ignore-profile-directory-if-not-exists'], 'chrome://password-manager/settings')
     fs.renameSync(path.join(root, 'Profile 1'), path.join(root, 'removed'))
     expect(await sources.open(id)).toBe(false)
     expect(await sources.open(chrome)).toBe(false)
@@ -63,7 +74,7 @@ describe('browser import sources', () => {
     expect(browser.profiles.map(profile => profile.name)).toEqual(['Default', 'Profile 3'])
     expect(await sources.open(browser.profiles[0].id)).toBe(true)
     expect(await sources.listDataSources()).toEqual([browser])
-    expect(launch).toHaveBeenCalledWith(edge, ['--profile-directory=Default', '--ignore-profile-directory-if-not-exists', '--new-window', 'edge://settings/autofill/passwords'])
+    expectGuide(edge, ['--profile-directory=Default', '--ignore-profile-directory-if-not-exists'], 'edge://settings/autofill/passwords')
   })
 
   it('discovers and opens an existing Firefox profile by its absolute path', async () => {
@@ -94,6 +105,6 @@ describe('browser import sources', () => {
     expect(browser.profiles).toEqual([{ id: expect.any(String), name: '기본 프로필' }])
     expect(await sources.listDataSources()).toEqual([])
     expect(await sources.open(browser.profiles[0].id)).toBe(true)
-    expect(launch).toHaveBeenCalledWith(chrome, ['--new-window', 'chrome://password-manager/settings'])
+    expectGuide(chrome, [], 'chrome://password-manager/settings')
   })
 })

@@ -35,6 +35,10 @@ async function run() {
       input.setSelectionRange(${index}, ${index})
     })()`)
     const paste = () => press({ key: 'v', code: 'KeyV', windowsVirtualKeyCode: 86, modifiers: 2 })
+    const append = (transcript, entry) => fs.appendFileSync(transcript, JSON.stringify({
+      timestamp: new Date().toISOString(), ...entry
+    }) + '\n')
+    const working = `${cover}.querySelector('.agent-chat-status')?.dataset.status === 'working'`
 
     for (const kind of ['claude', 'codex']) {
       await openLocalAgent(driver, kind, profile)
@@ -48,6 +52,22 @@ async function run() {
       await js(`${activePane}.querySelector('.xterm-helper-textarea').focus()`)
       await press({ key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
       if (!await until(`!!${input}`)) throw new Error(`The ${kind} composer did not open`)
+      const sessionId = '5a6f0d9e-1b2c-4d3e-8f90-0a1b2c3d4e5f'
+      const transcript = file(path.join('claude-home', 'projects', 'test', sessionId + '.jsonl'))
+      const answer = (id, text) => append(transcript, {
+        type: 'assistant', uuid: id, message: { id, role: 'assistant', content: [{ type: 'text', text }] }
+      })
+      if (kind === 'claude') {
+        answer('prior-answer', '앞 작업을 진행합니다')
+        const report = file('claude-status.json')
+        fs.writeFileSync(report, JSON.stringify({ session_id: sessionId, model: { id: 'claude-opus-5-5' } }))
+        fs.writeFileSync(file(agent + '-command'), `"%EZSHELL_TEST_AGENT_EXE%" "%EZSHELL_AGENT_USAGE_SCRIPT%" < "${report}"`)
+        if (!await until(`${cover}.textContent.includes('앞 작업을 진행합니다')`, 8000)) {
+          throw new Error('The chat did not attach to the Claude transcript')
+        }
+        fs.writeFileSync(file(agent + '-program-status'), 'state=working:app=claude')
+        if (!await until(working)) throw new Error('The Claude fixture did not start working')
+      }
       await setDraft('앞뒤', 1)
       fs.writeFileSync(file('clipboard-comment'), '캡처 설명')
       await paste()
@@ -86,6 +106,30 @@ async function run() {
         ${cover}.querySelector('.agent-chat-user .agent-chat-bubble')?.textContent === ${JSON.stringify(expected)}
         && ${widths('.agent-chat-sent-images img')} === '2,1' && !${input}.value
       `))
+      if (kind === 'claude') {
+        const nativePrompt = '[Image #7] [Image #8]' + expected
+        const waiting = `${cover}.querySelector('.agent-chat-user .agent-chat-waiting')`
+        check('an image message sent to a working Claude shows as waiting', await until(`!!${waiting} && ${working}`))
+        append(transcript, { type: 'queue-operation', operation: 'enqueue', content: nativePrompt })
+        answer('prior-progress', '앞 작업을 계속 진행합니다')
+        check('Claude recording the queue entry leaves the image message waiting', await until(`
+          ${cover}.textContent.includes('앞 작업을 계속 진행합니다') && !!${waiting} && ${working}
+        `))
+        append(transcript, {
+          type: 'attachment', uuid: 'read-images', attachment: {
+            type: 'queued_command', commandMode: 'prompt', origin: { kind: 'human' }, humanTurn: true, imagePasteIds: [7, 8],
+            prompt: [{ type: 'text', text: nativePrompt }, ...paths.map(image => ({
+              type: 'image', source: { type: 'base64', media_type: 'image/png', data: fs.readFileSync(image, 'base64') }
+            }))]
+          }
+        })
+        check('Claude reading the image message clears the wait mark and keeps both previews on one bubble', await until(`
+          !!${cover}.querySelector('[data-chat-row="item:user:read-images"]')
+          && ${cover}.querySelectorAll('.agent-chat-user').length === 1
+          && ${cover}.querySelector('.agent-chat-user .agent-chat-bubble')?.textContent === ${JSON.stringify(expected)}
+          && ${widths('.agent-chat-sent-images img')} === '2,1' && !${waiting} && ${working}
+        `, 8000), await js(`${cover}.textContent`))
+      }
       await setDraft('')
       await paste()
       if (!await until(`${input}.value.trim() === '[첨부이미지 1]' && ${widths('.agent-chat-attachment img')} === '1'`)) {

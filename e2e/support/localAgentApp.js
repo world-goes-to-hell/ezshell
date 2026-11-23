@@ -58,7 +58,7 @@ process.env.EZSHELL_TEST_AGENT_PROFILE = profile
 process.env.EZSHELL_TEST_AGENT_EXE = process.execPath
 process.env.EZSHELL_TEST_AGENT_SCRIPT = path.join(__dirname, 'localAgentFixture.js')
 // Simulate an existing user-level MCP registration so the app starts its bridge.
-fs.writeFileSync(path.join(profile, 'agent-message-connection'), '')
+if (!process.env.EZSHELL_TEST_MANUAL_CLAUDE_CHAT) fs.writeFileSync(path.join(profile, 'agent-message-connection'), '')
 for (const name of ['codex', 'claude']) {
   if (process.platform === 'win32') {
     const help = name === 'codex' ? 'if "%~1"=="--help" (echo   --no-daemon& exit /b 0)\r\n' : ''

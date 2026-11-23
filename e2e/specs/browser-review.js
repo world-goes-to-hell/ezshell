@@ -99,11 +99,13 @@ async function run() {
     const workProfile = path.join(chromeRoot, 'Profile 1')
     const bookmark = { type: 'url', name: '업무 링크', url: bookmarkUrl }
     fs.writeFileSync(path.join(workProfile, 'Bookmarks'), JSON.stringify({ roots: {
-      bookmark_bar: { type: 'folder', children: [
-        { type: 'folder', name: '업무 묶음', children: [bookmark] },
+      bookmark_bar: { type: 'folder', name: '북마크바', children: [
+        { type: 'folder', name: '업무 묶음', children: [
+          { type: 'folder', name: '시스템', children: [bookmark, bookmark, { type: 'url', name: '차단된 링크', url: 'javascript:alert(1)' }] },
+        ] },
         bookmark,
-        { type: 'url', name: '차단된 링크', url: 'javascript:alert(1)' },
       ] },
+      other: { type: 'folder', name: '기타 북마크', children: [] },
     } }))
     const historyFile = path.join(workProfile, 'History')
     const historyDb = new DatabaseSync(historyFile)
@@ -116,6 +118,8 @@ async function run() {
     try {
       const savedPages = `${root}.querySelector('.browser-review-bookmarks')`
       const savedButton = label => `[...${savedPages}.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})`
+      const folderButton = title => `${savedPages}.querySelector('.browser-bookmark-folder[title="${title}"]')`
+      const openFolder = title => main.js(`${folderButton(title)}.click()`)
       const importer = "document.querySelector('.browser-data-import')"
       const importButton = label => `[...${importer}.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})`
       const openImport = async () => {
@@ -131,11 +135,30 @@ async function run() {
       await openImport()
       await main.js(`${importButton('가져오기')}.click()`)
       check('selecting a profile imports bookmarks and committed history while the source holds a SQLite lock', await main.until(`
-        ${importer}.querySelector('.browser-data-result')?.textContent === '즐겨찾기 1개 추가 · 방문 기록 1개 추가'
+        ${importer}.querySelector('.browser-data-result')?.textContent === '즐겨찾기 2개 추가 · 방문 기록 1개 추가'
       `))
       await main.js(`${importButton('완료')}.click()`)
-      check('the imported bookmark is available in the regular list', await main.until(`
-        ${savedPages}.querySelectorAll('li').length === 1 && ${savedPages}.querySelector('li').textContent.includes('업무 링크')
+      check('the source folders retain their order at the root', await main.until(`
+        [...${savedPages}.querySelectorAll('.browser-bookmark-folder')].map(button => button.title).join('/') === '북마크바/기타 북마크' &&
+        !${savedPages}.textContent.includes('업무 링크')
+      `))
+      await openFolder('기타 북마크')
+      check('empty folders can still be opened', await main.until(`${savedPages}.textContent.includes('이 폴더는 비어 있습니다.')`))
+      await main.js(`${savedButton('즐겨찾기 전체')}.click()`)
+      await openFolder('북마크바')
+      await openFolder('업무 묶음')
+      await openFolder('시스템')
+      check('the nested folder contains its bookmark and filters out unsafe URLs', await main.until(`
+        [...${savedPages}.querySelectorAll('nav button')].map(button => button.textContent).join('/') === '즐겨찾기 전체/북마크바/업무 묶음/시스템' &&
+        ${savedPages}.querySelectorAll('li').length === 1 &&
+        ${savedPages}.querySelector('.browser-review-bookmark-open').title === ${JSON.stringify(bookmarkUrl)}
+      `))
+      await main.shot('browser-review-bookmark-folders')
+      await main.js(`${savedButton('즐겨찾기 전체')}.click()`)
+      await main.js(`(${SET})(${savedPages}.querySelector('input[type=search]'), '업무 링크')`)
+      check('search finds the same bookmark in different folders and shows both locations', await main.until(`
+        ${savedPages}.querySelectorAll('li').length === 2 &&
+        ${savedPages}.textContent.includes('북마크바 › 업무 묶음 › 시스템')
       `))
       await main.js(`${savedButton('방문 기록')}.click()`)
       check('hidden visits are excluded from the imported history view', await main.until(`
@@ -401,7 +424,8 @@ async function run() {
         select.dispatchEvent(new Event('change', { bubbles: true }))
       })()`)
       const startImport = () => main.js(`${modalButton('가져오기')}.click()`)
-      const exportReady = `!${source} && ${loginModal}.querySelector('.browser-login-import').textContent.includes('파일 다운로드') &&
+      const exportReady = `!${source} && ${loginModal}.querySelector('.browser-login-import').textContent.includes('chrome://password-manager/settings') &&
+        ${loginModal}.querySelector('.browser-login-import').textContent.includes('파일 다운로드') &&
         ${modalButton('저장 경로 다시 복사')}?.disabled === false`
       const exportDestination = path.join(profile, 'browser-export-destination')
       await startImport()
@@ -416,8 +440,10 @@ async function run() {
       const launchFile = path.join(profile, 'browser-source-launch.json')
       if (!await main.until(exportReady)) throw new Error('the browser import did not start')
       const args = fs.existsSync(launchFile) ? JSON.parse(fs.readFileSync(launchFile, 'utf8')) : []
-      check('opening the password manager uses the selected profile', args.includes('--profile-directory=Profile 1') &&
-        args.includes('chrome://password-manager/settings'))
+      const launchPage = args.at(-1) ?? ''
+      check('the selected profile opens a local export guide Chrome can load at startup', args.includes('--profile-directory=Profile 1') &&
+        launchPage.startsWith('data:text/html;charset=utf-8,') &&
+        decodeURIComponent(launchPage).includes('<code>chrome://password-manager/settings</code>'))
       const sourceCsv = path.join(profile, 'browser-login-import.csv')
       const destination = fs.readFileSync(exportDestination, 'utf8')
       check('each import waits for its own export file', destination !== canceledDestination && !fs.existsSync(destination))

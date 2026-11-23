@@ -1,5 +1,6 @@
 // The window names a shell and sends a draft. Main owns the transcript and clipboard image paths.
 const fs = require('fs')
+const { randomUUID } = require('node:crypto')
 const { linkTarget } = require('./links.js')
 const { routeSubagent, subagentRelayText } = require('./subagentChat.js')
 const { watchCommand } = require('./commandScreen.js')
@@ -74,11 +75,11 @@ const PICKER_REASONS = {
 }
 
 /**
- * links: { openExternal(url), openBrowserTab(url), showItemInFolder(path), openLocalFile(path) }
+ * links: { openExternal(url), openBrowserTab(url), showItemInFolder(path), openFolder(path), openLocalFile(path) }
  * pins: answers pinned into windows of their own (pins.js); showShell(shellId): the main window
  * brings that shell's pane forward as a chat
  */
-function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells, clipboard, selectImages, links, pins = null, showShell = null }) {
+function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells, clipboard, selectImages, links, pins = null, showShell = null, notifyCapture = () => {} }) {
   const allowed = event => fromMainWindow(event) && !isLocked()
   const shellIdOf = value => (typeof value === 'string' && SHELL_ID.test(value) ? value : null)
   const locked = { ok: false, error: '먼저 잠금을 해제해 주세요.' }
@@ -377,8 +378,18 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
       links.showItemInFolder(real)
       return { ok: true }
     }
+    if (how === 'app' && stat.isDirectory()) {
+      // A folder (`docs/plan/`) opens in the file manager: ezShell has no window for a folder (2026-11-23 user report)
+      if (!links?.openFolder) return { ok: false, error: '폴더는 파일 탐색기에서 열어 주세요.' }
+      try {
+        await links.openFolder(real)
+      } catch {
+        return { ok: false, error: '폴더를 열지 못했습니다.' }
+      }
+      return { ok: true }
+    }
     if (how === 'app' && links?.openLocalFile) {
-      if (!stat.isFile()) return { ok: false, error: '폴더는 파일 탐색기에서 열어 주세요.' }
+      if (!stat.isFile()) return { ok: false, error: '파일이나 폴더만 열 수 있습니다.' }
       // "README.md:187": the file opens at that line
       return links.openLocalFile(real, target.line ?? null)
     }
@@ -387,15 +398,27 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
 
   return {
     clearClipboard: imageDrafts.clearAll,
-    async sendCapture(target, comment, getFile, stillOpen) {
+    async sendCapture(target, comment, getAttachment, stillOpen) {
       const local = shells()
       const sameConversation = () => !isLocked() && stillOpen() && local?.chatAgentId(target.shellId) === target.id
       if (!sameConversation()) return { ok: false, error: '선택한 에이전트가 종료되었거나 바뀌었습니다.' }
       const trimmed = comment.trim()
       const text = trimmed ? cleanChatText(comment) : '첨부한 화면을 확인해 주세요.'
       if (!text) return { ok: false, error: '코멘트에 사용할 수 없는 문자가 있거나 너무 깁니다.' }
-      const { prompt, images } = chatPrompt(target.kind, text, [getFile()])
-      return chatSendResult(await local.chatSend(target.shellId, prompt, images, undefined, sameConversation))
+      const { file, preview } = getAttachment()
+      const { prompt, images } = chatPrompt(target.kind, text, [file])
+      const shellId = target.shellId
+      const id = `outgoing:${randomUUID()}`
+      const queued = local.agentOf(shellId)?.status === 'working'
+      // Publish before Enter so even a transcript read on the next tick can match the preview.
+      notifyCapture({ shellId, id, text, preview, queued, time: Date.now() })
+      let result
+      try {
+        result = await local.chatSend(shellId, prompt, images, undefined, sameConversation)
+        return chatSendResult(result)
+      } finally {
+        if (!result?.ok && !isLocked()) notifyCapture({ shellId, id, discard: true })
+      }
     }
   }
 }

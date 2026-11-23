@@ -54,9 +54,10 @@ export function BrowserDataImportDialog({ tabId, trigger, onClose, onShowPasswor
       if (!active.current) return
       if (!result.success) { setError(result.error); return }
       const { bookmarks: saved, history: visits } = result
-      const counts = importPages(saved && 'entries' in saved ? saved.entries : [], visits && 'entries' in visits ? visits.entries : [])
+      const counts = importPages(profileId, saved && 'entries' in saved ? saved.entries : [], visits && 'entries' in visits ? visits.entries : [])
       const rows = []
       if (saved && 'entries' in saved) rows.push(`즐겨찾기 ${counts.bookmarks.added.toLocaleString()}개 추가`)
+      if (counts.bookmarks.moved) rows.push(`기존 즐겨찾기 ${counts.bookmarks.moved.toLocaleString()}개를 폴더에 정리`)
       if (visits && 'entries' in visits) rows.push(`방문 기록 ${counts.history.added.toLocaleString()}개 추가`)
       if (rows.length) {
         const limited = (saved && 'limited' in saved && saved.limited) || (visits && 'limited' in visits && visits.limited)

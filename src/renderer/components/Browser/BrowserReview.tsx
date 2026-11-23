@@ -6,7 +6,7 @@ import {
 } from 'react-icons/ri'
 import type { BrowserReviewAction, BrowserReviewState, LocalAgentStatus } from '../../types'
 import { uncoveredBox } from '../../lib/browserViewClip'
-import { useBrowserBookmarkStore } from '../../stores/browserBookmarkStore'
+import { hasBookmark, useBrowserBookmarkStore } from '../../stores/browserBookmarkStore'
 import { BrowserReviewHistory } from './BrowserReviewHistory'
 import { BrowserLoginsDialog } from './BrowserLoginsDialog'
 import { BrowserDataImportDialog } from './BrowserDataImportDialog'
@@ -65,7 +65,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const recipient = agents.find(agent => agent.id === agentId)
   const elementPickerOpen = toolsOpen && openTool === 'element-picker'
   const canPick = Boolean(url && !state?.loading && !state?.error)
-  const bookmarked = bookmarks.some(bookmark => bookmark.url === url)
+  const bookmarked = hasBookmark(bookmarks, url)
 
   useEffect(() => {
     let mounted = true

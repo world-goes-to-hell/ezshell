@@ -1,5 +1,5 @@
 /**
- * Importing other programs' sessions (Xshell, PuTTY, MobaXterm, Tabby, OpenSSH config): what main
+ * Importing other programs' sessions (Xshell, PuTTY, MobaXterm, Tabby, FileZilla, OpenSSH config): what main
  * read (src/sessionImport) is shown next to the user's own list, and folders or sessions dragged
  * across are "staged" as new folders and sessions until 적용. No password comes in (phase 1); MCP
  * access is always off for what comes in.

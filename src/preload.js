@@ -295,6 +295,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('agent-chat-frame', handler);
     return () => ipcRenderer.removeListener('agent-chat-frame', handler);
   },
+  onAgentChatCapture: (callback) => {
+    const handler = (_event, capture) => callback(capture);
+    ipcRenderer.on('agent-chat-capture', handler);
+    return () => ipcRenderer.removeListener('agent-chat-capture', handler);
+  },
   dbDdl: (dbId, database, schema, table) => ipcRenderer.invoke('db-ddl', { dbId, database, schema, table }),
   dbRelations: (dbId, sources) => ipcRenderer.invoke('db-relations', { dbId, sources }),
   // Oracle's client libraries, for Oracle servers older than 12.1 (the DB account dialog)

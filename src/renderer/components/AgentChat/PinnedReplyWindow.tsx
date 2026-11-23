@@ -91,7 +91,13 @@ export function PinnedReplyWindow() {
     }
   }
 
-  const linkMenuItems = (menu: LinkMenu) => menu.isFile
+  const linkMenuItems = (menu: LinkMenu) => menu.isFile && /[\\/]$/.test(menu.href)
+    // A folder (`docs/plan/`): main opens it in the file manager
+    ? [
+        { label: '폴더 열기', icon: RiFolderOpenLine, onSelect: () => void openLink(menu.href, 'app') },
+        { label: '경로 복사', icon: RiFileCopyLine, onSelect: () => void copyToClipboard(menu.href) }
+      ]
+    : menu.isFile
     ? [
         { label: 'ezShell 에서 열기', icon: RiFileTextLine, onSelect: () => void openLink(menu.href, 'app') },
         { label: '파일 탐색기에서 열기', icon: RiFolderOpenLine, onSelect: () => void openLink(menu.href, 'explorer') },

@@ -241,6 +241,26 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     changed()
   }
 
+  function attachExternal(kind, cwd, attach, startedAt, requireShell = false) {
+    let id = `${kind}-${++serial}`
+    const binding = attach?.({ agentId: id, setStatus: status => setStatus(id, status), onExit: endExternal })
+    if (!binding && requireShell) return null
+    id = binding?.agentId ?? id
+    const before = agents.get(id)
+    // Woken from sleep under the same id, with the session it was asked to resume
+    const resumed = before?.sleeping && before.resumeId ? { resumeId: before.resumeId } : {}
+    agents.set(id, {
+      id, shellId: binding?.shellId ?? '', kind, cwd, active: true, status: binding?.status ?? 'unknown',
+      startedAt: before?.startedAt ?? startedAt, ...resumed
+    })
+    return { id, binding }
+  }
+
+  /** A CLI discovered in a local shell can use chat before it has any message MCP connection. */
+  function registerLocalClaude({ cwd, startedAt }, attach) {
+    if (attachExternal('claude', cwd, attach, startedAt, true)) changed()
+  }
+
   async function watchMcp(request, socket) {
     let token = request.token
     let id = tokens.get(token)
@@ -257,17 +277,12 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
         : undefined
       if (socket.destroyed) return
       if (mcpReady.size >= 40) throw new Error('실행 중인 메시지 MCP 연결이 너무 많습니다.')
-      id = `${request.kind}-${++serial}`
-      binding = attach?.({ agentId: id, setStatus: status => setStatus(id, status), onExit: endExternal })
-      id = binding?.agentId ?? id
+      // MCP connects a little after the CLI started (and wrote its session file).
+      const attached = attachExternal(request.kind, request.cwd, attach, Date.now() - 30_000)
+      id = attached.id
+      binding = attached.binding
       token = randomUUID()
       tokens.set(token, id)
-      // startedAt: its MCP connects a little after the CLI started (and wrote its Codex session file)
-      const before = agents.get(id)
-      const startedAt = before?.startedAt ?? Date.now() - 30_000
-      // Woken from sleep (same id): the resumed session's file is found by its id
-      const resumed = before?.sleeping && before.resumeId ? { resumeId: before.resumeId } : {}
-      agents.set(id, { id, shellId: binding?.shellId ?? '', kind: request.kind, cwd: request.cwd, active: true, status: binding?.status ?? 'unknown', startedAt, ...resumed })
     }
     const previous = mcpReady.get(id)
     mcpReady.set(id, socket)
@@ -570,7 +585,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   return {
     ready, enableExternalBridge, register, stop, snapshot, unreadFor, unhandledFor,
     sendAsUser: request => deliver(USER, request),
-    setUsage, applyPicked, usageSnapshot, registerShell, forgetShell, sleep, cancelSleep
+    setUsage, applyPicked, usageSnapshot, registerShell, registerLocalClaude, forgetShell, sleep, cancelSleep
   }
 }
 

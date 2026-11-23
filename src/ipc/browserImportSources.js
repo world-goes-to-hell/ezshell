@@ -6,10 +6,38 @@ const path = require('node:path')
 
 const MAX_METADATA_BYTES = 4 * 1024 * 1024
 const browsers = [
-  { id: 'chrome', name: 'Google Chrome', data: ['Google', 'Chrome'], app: 'Google Chrome', exe: 'chrome.exe', url: 'chrome://password-manager/settings' },
-  { id: 'edge', name: 'Microsoft Edge', data: ['Microsoft', 'Edge'], app: 'Microsoft Edge', exe: 'msedge.exe', url: 'edge://settings/autofill/passwords' },
+  { id: 'chrome', name: 'Google Chrome', data: ['Google', 'Chrome'], app: 'Google Chrome', exe: 'chrome.exe',
+    url: 'chrome://password-manager/settings', menu: '더보기(⋯) → 비밀번호 및 자동 완성 → Google 비밀번호 관리자 → 설정',
+    download: '‘비밀번호 내보내기’ 옆의 ‘파일 다운로드’를 누르세요.' },
+  { id: 'edge', name: 'Microsoft Edge', data: ['Microsoft', 'Edge'], app: 'Microsoft Edge', exe: 'msedge.exe',
+    url: 'edge://settings/autofill/passwords', menu: '설정 및 기타(⋯) → 암호',
+    download: '암호 목록 위의 더보기(⋯)에서 ‘암호 내보내기’를 선택하세요.' },
   { id: 'firefox', name: 'Mozilla Firefox', data: ['Firefox'], app: 'Firefox', exe: 'firefox.exe', url: 'about:logins' },
 ]
+
+function passwordExportGuide(browser, autoImport) {
+  // Chromium filters privileged startup URLs. A local guide opens in the chosen profile while
+  // navigation to the manager happens through the browser's address bar or menu.
+  const save = autoImport
+    ? '내보내기를 승인하고, 저장 창의 파일 이름에 ezShell이 복사한 경로를 붙여넣으세요. 저장하면 자동으로 가져옵니다.'
+    : '내보내기를 승인하고, CSV 파일을 저장한 뒤 ezShell에서 그 파일을 선택하세요.'
+  const page = `<!doctype html><html lang="ko"><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>ezShell 비밀번호 가져오기</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 8vh auto; max-width: 640px; padding: 0 24px; font: 16px/1.65 system-ui, sans-serif; }
+  h1 { font-size: 26px; line-height: 1.35; }
+  li + li { margin-top: 12px; }
+  code { display: block; margin-top: 6px; overflow-wrap: anywhere; }
+</style>
+<main><h1>${browser.name}에서 비밀번호 가져오기</h1>
+<ol><li><b>${browser.menu}</b> 순서로 선택하세요. 주소창에 아래 주소를 입력해도 됩니다.<code>${browser.url}</code></li>
+<li>${browser.download}</li><li>${save}</li></ol>
+${autoImport ? '<p>주소를 복사해서 붙여넣었다면 ezShell에서 <b>저장 경로 다시 복사</b>를 누른 뒤 저장하세요.</p>' : ''}
+</main></html>`
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(page)
+}
 
 async function stat(file) {
   try { return await fs.stat(file) } catch { return null }
@@ -111,6 +139,7 @@ function createBrowserImportSources({ platform = process.platform, home = os.hom
       const firefox = browser.id === 'firefox'
       const discovered = await (firefox ? firefoxProfiles(paths.root) : chromiumProfiles(paths.root))
       const profiles = discovered.length ? discovered : [{ key: '', name: '기본 프로필', args: [] }]
+      const launchPage = firefox ? browser.url : passwordExportGuide(browser, platform === 'win32')
       return {
         id: browser.id,
         name: browser.name,
@@ -118,7 +147,7 @@ function createBrowserImportSources({ platform = process.platform, home = os.hom
           id: createHash('sha256').update(browser.id + '\0' + key).digest('hex'),
           name,
           executable,
-          args: [...args, firefox ? '-new-window' : '--new-window', browser.url],
+          args: [...args, firefox ? '-new-window' : '--new-window', launchPage],
           directory: !firefox && key ? path.join(paths.root, key) : null,
         })),
       }

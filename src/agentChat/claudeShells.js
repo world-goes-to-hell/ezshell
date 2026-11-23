@@ -2,6 +2,8 @@ const { remember } = require('./claudeTranscript.js')
 const { clip, oneLine, text } = require('./items.js')
 
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'Shell'])
+// The agent stopping a shell itself: no completion notice follows (TaskStop; older names KillShell / KillBash)
+const STOP_TOOLS = new Set(['TaskStop', 'KillShell', 'KillBash'])
 const FINISHED = new Set(['completed', 'failed', 'error', 'stopped', 'killed', 'cancelled', 'canceled'])
 const MAX_CALLS = 256
 const MAX_SHELLS = 64
@@ -11,12 +13,23 @@ function createClaudeShellTracker() {
   const calls = new Map()
   const running = new Map()
   const finished = new Map()
+  const stops = new Map()
+
+  function finish(id) {
+    remember(finished, id, true, MAX_CALLS)
+    running.delete(id)
+  }
 
   function feed(line) {
     if (!line || line.isSidechain) return
     const content = line.message?.content
     if (line.type === 'assistant' && Array.isArray(content)) {
       for (const block of content) {
+        if (block?.type === 'tool_use' && STOP_TOOLS.has(block.name) && text(block.id)) {
+          const target = text(block.input?.task_id) || text(block.input?.shell_id)
+          if (target) remember(stops, block.id, target, MAX_CALLS)
+          continue
+        }
         if (block?.type !== 'tool_use' || !SHELL_TOOLS.has(block.name) || !text(block.id)) continue
         const command = clip(text(block.input?.command).trim(), 1400)
         const description = oneLine(text(block.input?.description), 140)
@@ -25,6 +38,10 @@ function createClaudeShellTracker() {
       return
     }
     if (line.type === 'user' && Array.isArray(content)) {
+      for (const block of content) {
+        const target = block?.type === 'tool_result' && !block.is_error ? stops.get(block.tool_use_id) : undefined
+        if (target) finish(target)
+      }
       const id = text(line.toolUseResult?.backgroundTaskId)
       if (!id || finished.has(id)) return
       for (const block of content) {
@@ -43,10 +60,7 @@ function createClaudeShellTracker() {
     if (!body || !FINISHED.has(tag(body, 'status'))) return
     const id = tag(body, 'task-id')
     const toolUseId = tag(body, 'tool-use-id')
-    if (id) {
-      remember(finished, id, true, MAX_CALLS)
-      running.delete(id)
-    }
+    if (id) finish(id)
     if (toolUseId) {
       remember(finished, toolUseId, true, MAX_CALLS)
       for (const job of running.values()) {

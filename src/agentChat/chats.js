@@ -21,7 +21,7 @@ const OLDER_BYTES = 2 * 1024 * 1024
 // A running task can precede several MB of tool output. Recover its state independently of the chat page.
 const ACTIVITY_HISTORY_BYTES = 32 * 1024 * 1024
 const ACTIVITY_LINES = {
-  claude: /"(?:Agent|Task|Bash|PowerShell|Shell|tool_result)"|<task-notification>/,
+  claude: /"(?:Agent|Task|TaskStop|KillShell|KillBash|Bash|PowerShell|Shell|tool_result)"|<task-notification>/,
   codex: /"(?:spawn_agent|wait_agent|function_call_output|sub_agent_activity|SubAgentActivity|CollabAgentToolCall|inter_agent_communication)"|<subagent_notification>/
 }
 /** Read per look when the file grew a lot (the rest comes on the next looks) */

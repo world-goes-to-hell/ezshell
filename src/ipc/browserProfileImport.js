@@ -3,6 +3,7 @@ const path = require('node:path')
 const { isMainThread, parentPort, workerData, Worker } = require('node:worker_threads')
 
 const MAX_BOOKMARK_BYTES = 16 * 1024 * 1024
+const MAX_BOOKMARK_DEPTH = 64
 const MAX_HISTORY_SNAPSHOT_BYTES = 64 * 1024 * 1024
 const MAX_RESULT_CHARS = 1_000_000
 const MAX_HISTORY = 1000
@@ -29,23 +30,44 @@ function readBookmarks(directory) {
   if (source.size > MAX_BOOKMARK_BYTES) throw new Error('Bookmark file is too large')
   const { roots } = JSON.parse(fs.readFileSync(source.file, 'utf8').replace(/^\uFEFF/, ''))
   if (!roots || typeof roots !== 'object' || Array.isArray(roots)) throw new Error('Missing bookmark roots')
-  const pending = Object.values(roots).reverse()
-  const seen = new Set()
   const entries = []
-  let size = 0
-  while (pending.length) {
-    const node = pending.pop()
-    if (node?.type === 'folder' && Array.isArray(node.children)) {
-      for (let i = node.children.length - 1; i >= 0; i--) pending.push(node.children[i])
-    }
-    const page = node?.type === 'url' && webPage(node.url, node.name)
-    if (!page || seen.has(page.url)) continue
-    size += JSON.stringify(page).length + 1
-    if (size > MAX_RESULT_CHARS) return { entries, limited: true }
-    seen.add(page.url)
-    entries.push(page)
+  const rootNames = new Map([['bookmark_bar', '북마크바'], ['other', '기타 북마크'], ['synced', '모바일 북마크']])
+  let size = 2
+  let limited = false
+
+  function append(list, entry) {
+    const length = JSON.stringify(entry).length + Number(list.length > 0)
+    if (size + length > MAX_RESULT_CHARS) { limited = true; return false }
+    list.push(entry)
+    size += length
+    return true
   }
-  return { entries }
+
+  function readFolder(node, list, id, title, depth) {
+    if (depth > MAX_BOOKMARK_DEPTH) { limited = true; return }
+    const folder = { kind: 'folder', id, title, children: [] }
+    if (!append(list, folder)) return
+    const byName = new Map()
+    for (const child of node.children) {
+      if (child?.type === 'folder' && Array.isArray(child.children)) {
+        const name = typeof child.name === 'string' && child.name.slice(0, 300) || '이름 없는 폴더'
+        const index = (byName.get(name) ?? 0) + 1
+        byName.set(name, index)
+        const key = [child.guid, child.id].find(value => typeof value === 'string' && /^[a-z0-9-]{1,64}$/i.test(value))
+        readFolder(child, folder.children, key ? `id:${key}` : `name:${name}:${index}`, name, depth + 1)
+      } else if (child?.type === 'url') {
+        const page = webPage(child.url, child.name)
+        if (page) append(folder.children, page)
+      }
+    }
+  }
+
+  for (const [key, node] of Object.entries(roots)) {
+    if (node?.type !== 'folder' || !Array.isArray(node.children)) continue
+    const title = typeof node.name === 'string' && node.name.slice(0, 300) || rootNames.get(key) || key.slice(0, 300)
+    readFolder(node, entries, `root:${key.slice(0, 300)}`, title, 1)
+  }
+  return { entries, ...(limited && { limited }) }
 }
 
 function recentVisits(db) {

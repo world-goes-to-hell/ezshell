@@ -117,7 +117,18 @@ async function connectMcp() {
   fs.writeFileSync(path.join(profile, id + '-tools'), JSON.stringify(tools.map(tool => tool.name)))
 }
 
-connectMcp().catch(error => fs.writeFileSync(path.join(profile, id + '-mcp-error'), error.message))
+if (claude && !managedId && process.env.EZSHELL_TEST_MANUAL_CLAUDE_CHAT) {
+  const dir = path.join(process.env.CLAUDE_CONFIG_DIR, 'sessions')
+  fs.mkdirSync(dir, { recursive: true })
+  const session = path.join(dir, process.pid + '.json')
+  const sessionId = fs.readFileSync(path.join(profile, 'manual-claude-session'), 'utf8')
+  fs.writeFileSync(session, JSON.stringify({
+    pid: process.pid, sessionId, cwd: process.cwd(), startedAt: Date.now(), kind: 'interactive', entrypoint: 'cli'
+  }))
+  process.on('exit', () => fs.rmSync(session, { force: true }))
+} else {
+  connectMcp().catch(error => fs.writeFileSync(path.join(profile, id + '-mcp-error'), error.message))
+}
 
 let running = false
 let callingTool = false

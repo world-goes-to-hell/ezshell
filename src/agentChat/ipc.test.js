@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { cleanChatText, registerAgentChatIpc } from './ipc.js'
 
-function harness(kind = 'claude', { chats = {}, active = () => null, agentId = () => 'agent-1' } = {}) {
+function harness(kind = 'claude', { chats = {}, active = () => null, agentId = () => 'agent-1', result = { ok: true } } = {}) {
   const handlers = new Map()
   const ipcMain = { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => handlers.set(name, fn) }
   const sent = []
   const discarded = []
+  const captures = []
   let stored = 0
   const bitmap = { getSize: () => ({ width: 10, height: 10 }), toPNG: () => Buffer.from('png') }
   const { sendCapture } = registerAgentChatIpc({
@@ -13,13 +14,14 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
     fromMainWindow: () => true,
     isLocked: () => false,
     chats,
+    notifyCapture: capture => captures.push(capture),
     shells: () => ({
       agentOf: () => ({ kind }),
       chatAgentId: agentId,
       chatInputTarget: active,
       chatSend: async (_id, prompt, images, target) => {
         sent.push({ prompt, images, ...(target === undefined ? {} : { target }) })
-        return { ok: true }
+        return result
       }
     }),
     clipboard: {
@@ -36,7 +38,7 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
     expect(result.images).toHaveLength(1)
     return result.images[0].id
   }
-  return { call, paste, sent, discarded, sendCapture }
+  return { call, paste, sent, discarded, sendCapture, captures }
 }
 
 describe('subagent conversation', () => {
@@ -103,13 +105,24 @@ describe('screenshots pasted into a chat', () => {
 
 describe('screenshots sent from quick capture', () => {
   it.each(['codex', 'claude'])('delivers the saved region and comment via %s chat input', async kind => {
-    const { sendCapture, sent } = harness(kind)
+    const { sendCapture, sent, captures } = harness(kind)
     const files = ['C:\\tmp\\capture.png']
+    const preview = Buffer.from('preview png')
     const target = { id: 'agent-1', shellId: 'local:1', kind }
-    expect(await sendCapture(target, '화면 확인', () => files[0], () => true)).toEqual({ ok: true })
+    expect(await sendCapture(target, '화면 확인', () => ({ file: files[0], preview }), () => true)).toEqual({ ok: true })
     expect(sent[0]).toEqual(kind === 'codex'
       ? { prompt: '화면 확인', images: { files } }
       : { prompt: files[0] + '\n\n화면 확인', images: { count: 1, text: '화면 확인' } })
+    expect(captures).toEqual([{ shellId: target.shellId, id: expect.stringMatching(/^outgoing:/), time: expect.any(Number), text: '화면 확인', preview, queued: false }])
+  })
+
+  it('retracts the capture bubble when input is refused', async () => {
+    const { sendCapture, captures } = harness('claude', { result: { ok: false, reason: 'busy' } })
+    const target = { id: 'agent-1', shellId: 'local:1', kind: 'claude' }
+    const attachment = { file: 'capture.png', preview: Buffer.from('preview') }
+    expect(await sendCapture(target, '봐 줘', () => attachment, () => true)).toMatchObject({ ok: false, reason: 'busy' })
+    expect(captures).toHaveLength(2)
+    expect(captures[1]).toEqual({ shellId: target.shellId, id: captures[0].id, discard: true })
   })
 
   it('refuses a stale target, a closed overlay or control characters before storing the image', async () => {
@@ -237,5 +250,35 @@ describe('answering a Claude question from the chat card', () => {
   it('names why the keys stopped', async () => {
     const { answer } = setup({ result: { ok: false, reason: 'mismatch' } })
     expect(await answer({ shellId: 'local:1', itemId: 'tool:toolu_q', answers: [{ picks: [0] }] })).toMatchObject({ ok: false, reason: 'mismatch', error: expect.stringContaining('제출하지 않았습니다') })
+  })
+})
+
+describe('opening a link of an answer', () => {
+  it('opens a folder in the file manager instead of refusing it (2026-11-23 user report: `mockups/`)', async () => {
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-link-'))
+    fs.mkdirSync(path.join(root, 'mockups'))
+    fs.writeFileSync(path.join(root, 'a.md'), '#')
+    const handlers = new Map()
+    const folders = []
+    const files = []
+    registerAgentChatIpc({
+      ipcMain: { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => handlers.set(name, fn) },
+      fromMainWindow: () => true, isLocked: () => false, shells: () => null, clipboard: null,
+      chats: { cwdOf: () => root, knowsLink: () => true },
+      links: { openFolder: target => folders.push(target), openLocalFile: target => { files.push(target); return { ok: true } } }
+    })
+    const open = href => handlers.get('agent-chat-open-link')({ sender: {} }, { shellId: 'local:1', href, how: 'app' })
+    try {
+      expect(await open('mockups/')).toEqual({ ok: true })
+      expect(folders).toEqual([fs.realpathSync(path.join(root, 'mockups'))])
+      expect(await open('a.md')).toEqual({ ok: true })
+      expect(files).toEqual([fs.realpathSync(path.join(root, 'a.md'))])
+      expect(folders).toHaveLength(1)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 })

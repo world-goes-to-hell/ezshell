@@ -570,6 +570,7 @@ let shortcutRecorder = null;
 ipcMain.on('shortcut-recording', (event, recording) => {
   if (fromMainWindow(event)) shortcutRecorder = recording === true ? event.sender : null;
 });
+const { imagePreview } = require('./src/agentChat/imageDrafts.js');
 const quickCapture = require('./src/quickCapture.js').createQuickCapture({
   BrowserWindow,
   clipboard,
@@ -586,7 +587,7 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
     .filter(agent => agent.active && localShells?.chatAgentId(agent.shellId) === agent.id)
     .map(({ id, shellId, kind, cwd, status }) => ({ id, shellId, kind, cwd, status })),
   repoFolders: localGit.repoFolders,
-  storeImage: image => localTerminalClipboard.storeImage(image),
+  storeAttachment: image => ({ preview: imagePreview(image), file: localTerminalClipboard.storeImage(image) }),
   sendCapture: (...args) => agentChatIpc.sendCapture(...args),
   onSent: ({ id }) => {
     try {
@@ -623,6 +624,7 @@ const sendToLocalWindow = (channel, payload) => {
 };
 let localShells = null;
 const agentBridgeFile = path.join(userDataPath, 'agent-message-connection');
+const claudeRoot = require('./src/agentHistory/history.js').agentRoots(process.env, require('os').homedir()).claude;
 // Claude's 5-hour and weekly windows over time: the chat view's percent per question (its transcript has none)
 const claudeLimitHistory = require('./src/agentChat/limitHistory.js').createLimitHistory();
 const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages({
@@ -679,10 +681,12 @@ function getLocalShells() {
   if (!localShells) {
     // Loaded on first use: a native module, and most runs of the app never open a local terminal
     const pty = require('node-pty');
+    const { readClaudeSessions } = require('./src/agentChat/claudeSessions.js');
     localShells = createLocalShells({
       spawn: pty.spawn,
       send: sendToLocalWindow,
-      agents: agentMessages
+      agents: agentMessages,
+      readClaudeSessions: () => readClaudeSessions(claudeRoot)
     });
   }
   return localShells;
@@ -797,10 +801,10 @@ require('./src/agentHistory/ipc.js').registerAgentHistoryIpc({
   openPath: folder => shell.openPath(folder)
 });
 // A local shell's Claude Code / Codex drawn as a chat over its pane (src/agentChat). The transcript is
-// the agent's own file: main finds it from the agent's session id (usage report) or Codex's watcher.
+// the agent's own file: main finds it from Claude's running session or usage, or Codex's watcher.
 const agentChats = require('./src/agentChat/chats.js').createAgentChats({
   send: sendToLocalWindow,
-  claudeRoot: require('./src/agentHistory/history.js').agentRoots(process.env, require('os').homedir()).claude,
+  claudeRoot,
   isGone: shellId => !localShells?.list().some(entry => entry.id === shellId),
   claudeLimits: (from, to) => claudeLimitHistory.between(from, to),
   resolve: async (shellId) => {
@@ -817,8 +821,8 @@ const agentChats = require('./src/agentChat/chats.js').createAgentChats({
       approval,
       codexSpeed,
       backgroundShellCount,
-      cwd: agent.cwd ?? null,
-      sessionId: usage?.sessionId ?? agent.resumeId ?? null,
+      cwd: running.cwd ?? agent.cwd ?? null,
+      sessionId: running.sessionId ?? usage?.sessionId ?? agent.resumeId ?? null,
       file: running.kind === 'codex' ? codexUsageWatcher.fileOf(agent.id) : null
     };
   }
@@ -828,6 +832,7 @@ const agentChatPins = require('./src/agentChat/pins.js').createPins({ createWind
 const agentChatIpc = require('./src/agentChat/ipc.js').registerAgentChatIpc({
   ipcMain, fromMainWindow, isLocked: () => isAppLocked, chats: agentChats, shells: () => localShells,
   clipboard: localTerminalClipboard,
+  notifyCapture: capture => sendToLocalWindow('agent-chat-capture', capture),
   selectImages: () => selectAgentImages('채팅에 이미지 첨부'),
   pins: agentChatPins,
   showShell: (shellId) => {
@@ -841,6 +846,12 @@ const agentChatIpc = require('./src/agentChat/ipc.js').registerAgentChatIpc({
     openExternal: url => shell.openExternal(url),
     openBrowserTab: browserReview.openLink,
     showItemInFolder: target => shell.showItemInFolder(target),
+    // openPath runs a file, so only a folder (checked again right here) goes to it
+    openFolder: async target => {
+      if (!fs.statSync(target).isDirectory()) throw new Error('not a folder');
+      const failure = await shell.openPath(target);
+      if (failure) throw new Error(failure);
+    },
     openLocalFile: (target, line) => remoteFileIpc.openLocalFile(target, '에이전트 대화', line)
   }
 });

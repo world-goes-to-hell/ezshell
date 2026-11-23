@@ -54,4 +54,19 @@ describe('session import sources', () => {
     fs.writeFileSync(huge, Buffer.alloc(5 * 1024 * 1024 + 1))
     await expect(importer.readFile(huge)).rejects.toThrow('너무 큽니다')
   })
+
+  it('finds FileZilla\'s Site Manager and reads an exported FileZilla file', async () => {
+    const site = '<?xml version="1.0"?><FileZilla3><Servers><Server><Host>sftp.example.com</Host><Port>22</Port><Protocol>1</Protocol><User>u</User><Logontype>1</Logontype><Name>파일 서버</Name></Server></Servers></FileZilla3>'
+    fs.mkdirSync(path.join(root, 'AppData', 'FileZilla'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'AppData', 'FileZilla', 'sitemanager.xml'), site)
+    expect((await importer.listSources()).map(s => s.id)).toEqual(['xshell-8', 'filezilla', 'ssh-config'])
+    expect((await importer.readSource('filezilla')).sessions[0]).toMatchObject({ name: '파일 서버', host: 'sftp.example.com' })
+    const exported = path.join(root, 'FileZilla.xml')
+    fs.writeFileSync(exported, site)
+    expect((await importer.readFile(exported)).source).toBe('filezilla')
+    // Named otherwise, the content still tells it
+    const renamed = path.join(root, 'sites.txt')
+    fs.writeFileSync(renamed, site)
+    expect((await importer.readFile(renamed)).source).toBe('filezilla')
+  })
 })

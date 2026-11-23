@@ -25,7 +25,7 @@ async function captureProjects(agents, repoFolders) {
 
 function createQuickCapture({
   desktopCapturer, clipboard, ClipboardItem, BrowserWindow, getDisplay, isAvailable, nativeImage = null,
-  listAgents = () => [], repoFolders = async () => [], storeImage, sendCapture, onSent = () => {}, onError = () => {}
+  listAgents = () => [], repoFolders = async () => [], storeAttachment, sendCapture, onSent = () => {}, onError = () => {}
 }) {
   let active = null
 
@@ -110,8 +110,8 @@ function createQuickCapture({
             // other chat attachments, including if the input was left in its composer.
             const key = JSON.stringify(capture.region) + (typeof capture.image === 'string' ? capture.image : '')
             const result = await sendCapture(agent, capture.comment, () => {
-              if (stored?.key !== key) stored = { key, file: storeImage(picture()) }
-              return stored.file
+              if (stored?.key !== key) stored = { key, attachment: storeAttachment(picture()) }
+              return stored.attachment
             }, available)
             if (result.ok) {
               if (available()) onSent(agent)

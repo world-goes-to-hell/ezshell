@@ -1165,6 +1165,11 @@ function App() {
     useAskQuestionStore.getState().clearAll()
   }, [isLocked])
 
+  useEffect(() => {
+    if (isLocked) return
+    return window.electronAPI.onAgentChatCapture?.(useAgentChatStore.getState().applyCapture)
+  }, [isLocked])
+
   const handleToggleSftp = () => {
     if (activeTerminalId && isSshTab(terminals.get(activeTerminalId))) {
       setOpen(activeTerminalId, !sftpOpen)

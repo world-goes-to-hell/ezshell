@@ -493,7 +493,7 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
           try {
             return await importSources.open(request.id) ? success : fail('브라우저 프로필을 찾을 수 없습니다. 가져오기 메뉴를 다시 열어 주세요.')
           } catch {
-            return fail('비밀번호 관리자를 열 수 없습니다. 기존 브라우저에서 비밀번호를 내보낸 뒤 CSV 파일을 선택해 주세요.')
+            return fail('선택한 브라우저를 열 수 없습니다. 브라우저에서 비밀번호를 내보낸 뒤 CSV 파일을 선택해 주세요.')
           }
         case 'save': {
           const origin = tab.currentLoginOrigin()
