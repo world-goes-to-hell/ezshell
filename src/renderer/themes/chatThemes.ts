@@ -193,6 +193,7 @@ export function chatAppearance(id: string, customThemes: readonly ThemeDefinitio
       // focus edge stays on the app palette to contrast with the surrounding pane frame.
       ...paneMotionColors(motion.focus, motion.trace, [canvas, colors.bgSecondary]),
       '--chat-focus': motion.focus,
+      '--chat-timestamp': colors.textSecondary,
       '--chat-working': motion.working,
       '--motion-accent': motion.trace,
       '--chat-trace': preset ? motion.trace : undefined,

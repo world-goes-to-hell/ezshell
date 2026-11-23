@@ -499,12 +499,20 @@
   object-fit: contain;
 }
 .agent-chat-user-message { display: flex; justify-content: flex-end; align-items: flex-end; gap: 6px; }
-.agent-chat-sent-time {
-  flex: none;
-  margin-bottom: 2px;
-  color: var(--text-muted);
+.agent-chat-timestamp {
+  visibility: hidden;
+  color: var(--chat-timestamp, var(--text-secondary));
   font-size: 11px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  user-select: none;
+}
+.agent-chat-row:is(:hover, :focus-within) .agent-chat-timestamp,
+.agent-chat-timestamp[data-always-visible] { visibility: visible; }
+.agent-chat-user-message > .agent-chat-timestamp {
+  flex: none;
+  margin-block-end: 2px;
 }
 .agent-chat-bubble {
   max-width: 85%;
@@ -518,6 +526,8 @@
 .agent-chat-row[data-question-target] .agent-chat-bubble { outline: 1px solid var(--chat-focus, var(--accent)); outline-offset: -1px; }
 .agent-chat-received-message { margin-bottom: 6px; max-height: min(45vh, 320px); overflow: auto; }
 
+.agent-chat-incoming { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.agent-chat-incoming > .agent-chat-timestamp { align-self: flex-start; }
 .agent-chat-assistant { position: relative; min-width: 0; }
 
 /* "띄워 두기": the answer into a small window of its own (PinnedReplyWindow), shown on hover */
@@ -913,6 +923,64 @@
   white-space: pre;
 }
 .agent-chat-output.is-error { border-color: var(--error); color: var(--error-text, var(--error)); }
+
+.agent-chat-mcp {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.agent-chat-mcp h3 { margin: 0; font-size: 13px; }
+.agent-chat-mcp-servers { display: grid; margin: 0; padding: 0; list-style: none; }
+.agent-chat-mcp-servers li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.agent-chat-mcp-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.agent-chat-mcp-status {
+  --mcp-status-color: var(--text-secondary);
+  padding: 2px 6px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--mcp-status-color) 18%, var(--bg-tertiary));
+  color: color-mix(in srgb, var(--mcp-status-color) 40%, var(--text-primary));
+  overflow-wrap: anywhere;
+}
+.agent-chat-mcp-status[data-status='connected'] { --mcp-status-color: var(--success); }
+.agent-chat-mcp-status[data-status='failed'] { --mcp-status-color: var(--error); }
+.agent-chat-mcp-status[data-status='auth'] { --mcp-status-color: var(--warning); }
+.agent-chat-mcp-count, .agent-chat-mcp small, .agent-chat-mcp summary { color: var(--text-secondary); }
+.agent-chat-mcp small { flex-basis: 100%; font-size: 11px; }
+.agent-chat-mcp button {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.agent-chat-mcp button:hover:not(:disabled) { border-color: var(--chat-focus, var(--accent)); }
+.agent-chat-mcp button:disabled { opacity: 0.6; cursor: default; }
+.agent-chat-mcp button:focus-visible, .agent-chat-mcp summary:focus-visible {
+  outline: 2px solid var(--chat-focus, var(--accent));
+  outline-offset: 1px;
+}
+.agent-chat-mcp summary { cursor: pointer; }
+.agent-chat-mcp details[open] .agent-chat-output { margin-top: 6px; }
+
 /* Under a slash command sent from the chat that no transcript records (Codex) */
 .agent-chat-command-state {
   align-self: flex-end;

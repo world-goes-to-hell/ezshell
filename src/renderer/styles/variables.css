@@ -8,6 +8,8 @@
   --font-mono: 'JetBrains Mono', 'D2Coding', Consolas, monospace;
   --line-height-base: 1.5;
   --letter-spacing-base: -0.005em;
+  --title-bar-height: 32px;
+  --app-footer-height: 30px;
 
   /* Shape: the whole UI is square-cornered. Components use these tokens,
      so bringing curves back later only needs a change here. */

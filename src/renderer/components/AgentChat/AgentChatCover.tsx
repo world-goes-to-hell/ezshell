@@ -9,7 +9,7 @@ import { isUnconfirmedSend, useAgentChatStore } from '../../stores/agentChatStor
 import { chatLinesToTakeBack, draftWithTakenBack, takeBackQueued } from '../../lib/chatTakeBack'
 import { chatImageReference, insertChatImages, resolveChatImages } from '../../lib/chatImageReferences'
 import { CHAT_QUOTE_LIMIT, composeQuotedReply, prepareChatQuote } from '../../lib/chatQuote'
-import { openAgentMessages, useAgentMessagesStore, usePaneAgentMail } from '../Terminal/AgentMessages'
+import { openAgentMessages, useAgentMessagesStore, useAgentPaneLocation, usePaneAgentMail } from '../Terminal/AgentMessages'
 import { AgentIdentityBadge } from '../ui/AgentIdentity'
 import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../ui/agentProviderIcons'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
@@ -19,7 +19,7 @@ import { copyToClipboard } from '../../lib/terminalClipboard'
 import { outputFileName } from '../../lib/terminalText'
 import { TerminalContextMenu, type TerminalMenuGroup, type TerminalMenuItem } from '../Terminal/TerminalContextMenu'
 import { webLinkItems } from '../Terminal/TerminalWebLinkMenu'
-import { chatTextForClipboard, diffLineKind, isAgentChatProvider, sentImageKey, shellAgentOf, visibleSendTime, waitingItemIds, type SentChatImages } from '../../lib/agentChatItems'
+import { chatTextForClipboard, diffLineKind, echoOutputId, isAgentChatProvider, sentImageKey, shellAgentOf, visibleSendTime, waitingItemIds, type SentChatImages } from '../../lib/agentChatItems'
 import { turnUsageSpots, turnUsageText } from '../../lib/agentTurnUsage'
 import { toast } from '../../stores/toastStore'
 import { AgentChatSubagents } from './AgentChatSubagents'
@@ -33,6 +33,7 @@ import { isApprovalClick, isApprovalShortcut, useApprovalArming } from './useApp
 import { isAwayFromBottom, isChatQuestion, previousQuestionIndex, questionLine } from '../../lib/chatScrollNav'
 import { SlashCommandMenu } from './SlashCommandMenu'
 import { AskQuestionCard, AskQuestionSummary } from './AskQuestionCard'
+import { CommandOutput } from './CodexMcpOutput'
 import { answerableAskItem, pendingAskItem } from '../../lib/askQuestion'
 import { useAskQuestionStore } from '../../stores/askQuestionStore'
 import { allSlashCommands, draftFor, isSlashCommand, matchSlashCommands, type SlashCommand } from '../../lib/slashCommands'
@@ -58,6 +59,7 @@ const REPLY_START_GRACE_MS = 6000
 const EMPTY_ITEMS: AgentChatItem[] = []
 const EMPTY_QUOTES: ChatQuote[] = []
 const sendClock = new Intl.DateTimeFormat('ko-KR', { hour: 'numeric', minute: '2-digit', hour12: true })
+const fullChatDate = new Intl.DateTimeFormat('ko-KR', { dateStyle: 'full', timeStyle: 'medium' })
 
 type TimelineRow = { key: string; estimate: number } & (
   | { kind: 'older' }
@@ -67,9 +69,10 @@ type TimelineRow = { key: string; estimate: number } & (
 type DraftImage = { id: string; number: number; url: string; preview: Blob }
 
 function estimateItem(item: AgentChatItem): number {
-  if (item.kind === 'output') return Math.min(380, 24 + (item.text?.split('\n').length ?? 1) * 17)
+  const timeHeight = item.time === null ? 0 : 17
+  if (item.kind === 'output') return Math.min(380, 24 + (item.text?.split('\n').length ?? 1) * 17) + timeHeight
   if (item.kind !== 'assistant') return item.kind === 'user' ? 44 : 32
-  return Math.min(1000, 48 + Math.ceil((item.text?.length ?? 0) / 90) * 20)
+  return Math.min(1000, 48 + Math.ceil((item.text?.length ?? 0) / 90) * 20) + timeHeight
 }
 
 // Links are handled by the cover (a menu to open them), so the answer itself only draws them
@@ -267,27 +270,35 @@ function SentImageThumbnail({ preview, index }: { preview: Blob; index: number }
   )
 }
 
-const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, waiting, onRetry, retryDisabled, onPin, onQuote, expanded, rememberDisclosure }: {
+function ChatTimestamp({ value, alwaysVisible = false }: { value: number | null; alwaysVisible?: boolean }) {
+  if (value === null) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return <time className="agent-chat-timestamp" dateTime={date.toISOString()} title={fullChatDate.format(date)}
+    data-always-visible={alwaysVisible || undefined}>{sendClock.format(date)}</time>
+}
+
+const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, waiting, onRetry, retryDisabled, onPin, onQuote, onCommand, expanded, rememberDisclosure }: {
   item: AgentChatItem; live: boolean; waiting?: 'queued' | 'input'; onPin?: (item: AgentChatItem) => void
   onQuote?: (text: string) => void
   onRetry?: (id: string) => void; retryDisabled?: boolean
+  onCommand?: (command: string, loginServer?: string) => void
   sentImages?: SentChatImages; sendTime: number | null; expanded: boolean; rememberDisclosure: (id: string, open: boolean) => void
 }) {
   const itemTime = item.sentAt ?? item.time
-  const time = itemTime === null ? undefined : new Date(itemTime).toLocaleTimeString()
   const answer = item.text ?? ''
   const onToggle = (event: ToggleEvent<HTMLDetailsElement>) => rememberDisclosure(item.id, event.currentTarget.open)
   switch (item.kind) {
     case 'user':
       return (
-        <div className="agent-chat-user" title={time}>
+        <div className="agent-chat-user">
           {sentImages && (
             <div className="agent-chat-sent-images" role="group" aria-label="보낸 이미지">
               {sentImages.previews.map((preview, index) => <SentImageThumbnail key={index} preview={preview} index={index} />)}
             </div>
           )}
           <div className="agent-chat-user-message">
-            {sendTime !== null && <time className="agent-chat-sent-time" dateTime={new Date(sendTime).toISOString()}>{sendClock.format(sendTime)}</time>}
+            <ChatTimestamp value={itemTime} alwaysVisible={sendTime !== null} />
             <div className="agent-chat-bubble" data-waiting={waiting}>
               <QuotedChatMessage text={sentImages ? sentImages.text || '스크린샷 첨부' : item.text ?? (item.hasImage ? '스크린샷 첨부' : '')} />
             </div>
@@ -312,19 +323,28 @@ const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, wait
         </div>
       )
     case 'output':
-      return <pre className={`agent-chat-output${item.isError ? ' is-error' : ''}`} title={time} aria-label="명령 출력">{item.text}</pre>
+      return (
+        <div className="agent-chat-incoming">
+          <CommandOutput text={answer} command={item.outputCommand} isError={item.isError} canLogin={item.mcpSummary?.canLogin}
+            onCommand={onCommand} expanded={expanded} onToggle={onToggle} />
+          <ChatTimestamp value={itemTime} />
+        </div>
+      )
     case 'assistant':
       return (
-        <div className="agent-chat-assistant" title={time}>
-          <Markdown text={answer} />
-          {(onPin || onQuote) && (
-            <div className="agent-chat-answer-actions">
-              {onQuote && answer.trim() && <ChatQuoteReply onClick={() => onQuote(answer)} />}
-              {onPin && <button type="button" className="agent-chat-pin" aria-label="이 답변 띄워 두기" onClick={() => onPin(item)}>
-                <RiPushpinLine aria-hidden /> 띄워 두기
-              </button>}
-            </div>
-          )}
+        <div className="agent-chat-incoming">
+          <div className="agent-chat-assistant">
+            <Markdown text={answer} />
+            {(onPin || onQuote) && (
+              <div className="agent-chat-answer-actions">
+                {onQuote && answer.trim() && <ChatQuoteReply onClick={() => onQuote(answer)} />}
+                {onPin && <button type="button" className="agent-chat-pin" aria-label="이 답변 띄워 두기" onClick={() => onPin(item)}>
+                  <RiPushpinLine aria-hidden /> 띄워 두기
+                </button>}
+              </div>
+            )}
+          </div>
+          <ChatTimestamp value={itemTime} />
         </div>
       )
     case 'thinking':
@@ -364,6 +384,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   const loadOlder = useAgentChatStore(state => state.loadOlder)
   const agent = useAgentMessagesStore(state => shellAgentOf(state.snapshot.agents, shellId))
   const { agent: mailAgent, count: unreadMail } = usePaneAgentMail(shellId)
+  const location = useAgentPaneLocation(mailAgent)
   const notificationLabel = unreadMail ? `읽지 않은 메시지 ${unreadMail}개` : '메시지 알림'
   const toggleKeys = useShortcutsStore(state => state.getEffectiveKeys('toggle-agent-chat'))
   const [draft, setDraft] = useState('')
@@ -674,10 +695,14 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     }
   }
 
-  const closeLinkPreview = () => {
-    setLinkPreview(null)
+  const restoreLinkPreviewFocus = () => {
     const opener = preview?.opener
-    requestAnimationFrame(() => (opener?.isConnected ? opener : coverRef.current)?.focus({ preventScroll: true }))
+    if (opener?.isConnected && opener.checkVisibility({ visibilityProperty: true })) {
+      opener.focus({ preventScroll: true })
+      if (document.activeElement === opener) return
+    }
+    const fallback = boxRef.current ?? coverRef.current
+    if (fallback?.checkVisibility({ visibilityProperty: true })) fallback.focus({ preventScroll: true })
   }
 
   const showContextMenu = (target: EventTarget, x: number, y: number, keyboardFocus?: HTMLElement) => {
@@ -880,7 +905,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     const result = await window.electronAPI.agentChatCommandWatch?.(shellId).catch(() => null)
     if (!result?.ok) return
     if (kind === 'codex' && (result.state === 'done' || result.state === 'screen')) {
-      useAgentChatStore.getState().settleCommand(shellId, sendId, { state: result.state, output: result.output })
+      useAgentChatStore.getState().settleCommand(shellId, sendId, { state: result.state, output: result.output, mcpSummary: result.mcpSummary })
     }
     if (result.state === 'screen' && useAgentChatStore.getState().chats.has(shellId)) {
       useAgentScreenReturnStore.getState().begin(shellId)
@@ -888,9 +913,16 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     }
   }
 
-  const send = async (override?: string, retryId?: string) => {
+  const canRunOutputCommand = !history && interactiveKind === 'codex' && idle && canReply
+    && !replyId && !sending && !stopping && !changingSpeed && !pasting
+  const latestMcpOutputId = chat?.latestMcpSendId ? echoOutputId(chat.latestMcpSendId) : null
+  const send = async ({ override, retryId, mcpAction }: {
+    override?: string; retryId?: string; mcpAction?: { summaryId: string; server?: string }
+  } = {}) => {
     if (!chat || sendPending.current || stopPending.current || speedPending.current || pastePending.current || isOver || composerBlocked) return
     if (antigravity && (!canReply || retryId)) return
+    const keepDraft = Boolean(mcpAction)
+    if (keepDraft && !canRunOutputCommand) return
     const current = useAgentChatStore.getState().chats.get(shellId)
     const retry = retryId && current ? current.echoes.find(echo => echo.id === retryId && isUnconfirmedSend(current, echo)) : null
     const delivery = retry?.delivery
@@ -900,8 +932,10 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
       ignoreIds: current.items.filter(item => item.kind === 'user' && !item.id.startsWith('outgoing:')).slice(-256).map(item => item.id)
     } : undefined
     if (retryId && (!retryContext || !idle || !canReply)) return
-    const outgoing = override === undefined ? draftImages : resolveChatImages(override, attachments)
-    const withQuotes = !retry && quotes.length ? (override === undefined ? quotedDraft :
+    const consumesDraft = !retry && !keepDraft
+    const outgoing = keepDraft ? { text: override ?? '', images: [] }
+      : override === undefined ? draftImages : resolveChatImages(override, attachments)
+    const withQuotes = consumesDraft && quotes.length ? (override === undefined ? quotedDraft :
       composeQuotedReply(quotes.map(quote => quote.text), outgoing.text)) : null
     if (withQuotes && 'reason' in withQuotes) return
     const text = retry?.text ?? withQuotes?.text ?? outgoing.text
@@ -915,22 +949,27 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     resetQuestionPosition()
     followAfterSend()
     setSending(true)
-    if (!retry) setDraft('')
+    if (consumesDraft) setDraft('')
     const { echoSend, acceptSend, confirmSend, discardSend } = useAgentChatStore.getState()
     const queued = status === 'working'
     const sendId = retry?.id ?? echoSend(shellId, text, outgoing.images.map(image => image.preview), queued, imageIds)
     const restoreDraft = () => {
       if (retry) return
       discardSend(shellId, sendId)
-      setDraft(draft)
+      if (consumesDraft) setDraft(draft)
     }
     try {
-      const result = await window.electronAPI.agentChatSend?.(shellId, text, imageIds, retryContext)
+      const api = window.electronAPI
+      const result = mcpAction
+        ? mcpAction.server === undefined
+          ? await api.agentChatMcpVerbose?.(shellId, mcpAction.summaryId)
+          : await api.agentChatMcpLogin?.(shellId, mcpAction.summaryId, mcpAction.server)
+        : await api.agentChatSend?.(shellId, text, imageIds, retryContext)
       if (result?.ok) {
         acceptSend(shellId, sendId, retry ? queued : undefined)
-        if (!retry) {
+        if (!retry && interactiveKind && !imageIds.length && isSlashCommand(text)) void watchCommand(sendId)
+        if (consumesDraft) {
           setQuoteDraft(current => current?.key === quoteKey ? null : current)
-          if (interactiveKind && !imageIds.length && isSlashCommand(text)) void watchCommand(sendId)
           for (const { id } of attachments) releaseAttachment(id)
           setAttachments([])
           nextAttachmentNumber.current = 0
@@ -1017,7 +1056,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   /** A command picked from the list: one that takes a value waits for it, the others go at once */
   const pickCommand = (command: SlashCommand) => {
     if (command.args) setDraft(draftFor(command))
-    else void send(command.name)
+    else void send({ override: command.name })
     boxRef.current?.focus()
   }
 
@@ -1063,13 +1102,6 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   // The toggle key works anywhere in the cover (the app-wide handler skips text boxes)
   const onCoverKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target
-    if (preview && !menu && !event.defaultPrevented && !event.nativeEvent.isComposing && event.key === 'Escape'
-      && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-      event.preventDefault()
-      event.stopPropagation()
-      if (!event.repeat) closeLinkPreview()
-      return
-    }
     if (!event.defaultPrevented && !event.nativeEvent.isComposing && !subagent && !menu
       && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))
       && !event.ctrlKey && !event.altKey && !event.metaKey && target instanceof HTMLElement
@@ -1164,7 +1196,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   return (
     <div className="agent-chat-cover" ref={coverRef} tabIndex={-1} role="region" aria-label="에이전트 채팅"
       data-chat-theme={appearance?.id} data-chat-bubbles={appearance?.bubbles || undefined}
-      data-link-preview={preview ? '' : undefined} style={appearance?.style}
+      style={appearance?.style}
       onKeyDown={onCoverKeyDown} onContextMenu={onContextMenu}>
       <div className="agent-chat-parent" inert={Boolean(subagent)}>
       <header className="agent-chat-head">
@@ -1174,7 +1206,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
             {agentName}
           </span>
         )}
-        {mailAgent?.active && <AgentIdentityBadge agent={mailAgent} />}
+        {mailAgent?.active && <AgentIdentityBadge agent={mailAgent} location={location} />}
         <span className="agent-chat-title" title={title}>{title}</span>
         {(STATUS_LABELS[status] || (antigravity && idle)) && (
           <span className="agent-chat-status" data-status={status}>
@@ -1233,6 +1265,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
             {virtualizer.getVirtualItems().map(row => {
               const entry = timeline[row.index]
               const item = entry.kind === 'item' ? entry.item : null
+              const summaryId = item?.id === latestMcpOutputId ? item?.mcpSummary?.id : undefined
               const usage = item ? usageSpots.get(item.id) : undefined
               const line = !antigravity && usage ? turnUsageText(usage) : null
               return (
@@ -1252,8 +1285,10 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
                   )}
                   {entry.kind === 'item' && <ChatItem item={entry.item} sentImages={entry.sentImages} sendTime={entry.sendTime} live={!history && !isOver && entry.item.id === lastToolId}
                     waiting={!history && waiting.has(entry.item.id) ? (status === 'blocked' ? 'input' : 'queued') : undefined}
-                    onRetry={!history && unconfirmed.has(entry.item.id) ? id => void send(undefined, id) : undefined}
+                    onRetry={!history && unconfirmed.has(entry.item.id) ? id => void send({ retryId: id }) : undefined}
                     retryDisabled={!idle || !canReply || sending || stopping || Boolean(changingSpeed) || pasting}
+                    onCommand={summaryId && canRunOutputCommand
+                      ? (command, server) => void send({ override: command, mcpAction: { summaryId, server } }) : undefined}
                     expanded={disclosures.current.has(entry.item.id)} rememberDisclosure={rememberDisclosure}
                     onQuote={canAddQuote ? addQuote : undefined}
                     onPin={window.electronAPI.agentChatPin ? pinReply : undefined} />}
@@ -1392,7 +1427,8 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
         />
       )}
       </div>
-      {preview && <AgentChatLinkPreview shellId={shellId} href={preview.href} onClose={closeLinkPreview} onOpen={openLink} />}
+      {preview && <AgentChatLinkPreview shellId={shellId} href={preview.href} themeStyle={appearance?.style}
+        onClose={() => setLinkPreview(null)} onRestoreFocus={restoreLinkPreviewFocus} onOpen={openLink} />}
       {subagent && interactiveKind && <SubagentConversation key={subagent.id} shellId={shellId} agent={subagent} kind={interactiveKind} menuStyle={appearance?.style}
         onBack={() => setSubagentId(null)} onShowTerminal={onShowTerminal} />}
     </div>

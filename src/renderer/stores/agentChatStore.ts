@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatCapture, AgentChatFrame, AgentChatItem, AgentChatProvider, AgentChatState, AgentChatSubagent, CodexSpeedState, LocalAgentStatus } from '../types'
+import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatCapture, AgentChatFrame, AgentChatItem, AgentChatMcpSummary, AgentChatProvider, AgentChatState, AgentChatSubagent, CodexSpeedState, LocalAgentStatus } from '../types'
 import { MAX_CHAT_ITEMS, echoItemIds, echoOutputId, nextHeld, reconcileChatEchoes, sentImageKey, type ChatEcho, type SentChatImages } from '../lib/agentChatItems'
 import { isSlashCommand } from '../lib/slashCommands'
 import { toast } from './toastStore'
@@ -22,6 +22,7 @@ export interface AgentChat {
   /** Transcript ids of messages sent while the agent was busy, recorded but not yet read by the model */
   held: string[]
   reply: { sendId: string; itemId: string } | null
+  latestMcpSendId: string | null
   hasOlder: boolean
   loadingOlder: boolean
   error: string | null
@@ -49,14 +50,14 @@ interface AgentChatStoreState {
    * A slash command sent from the chat that no transcript records (Codex): marks the line with what came
    * of it and puts what it printed (read off the screen) under it
    */
-  settleCommand: (shellId: string, sendId: string, result: { state: 'done' | 'screen'; output?: string }) => void
+  settleCommand: (shellId: string, sendId: string, result: { state: 'done' | 'screen'; output?: string; mcpSummary?: AgentChatMcpSummary }) => void
   applyFrame: (frame: AgentChatFrame) => void
   /** App locked: every view goes back to the terminal and its conversation is dropped */
   clearAll: () => void
 }
 
 const EMPTY_IMAGES: AgentChat['sentImages'] = new Map()
-const empty = (): AgentChat => ({ scope: null, transcriptId: null, state: 'opening', kind: null, status: null, title: null, items: [], subagents: [], echoes: [], sentImages: EMPTY_IMAGES, held: [], reply: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null, backgroundShells: null })
+const empty = (): AgentChat => ({ scope: null, transcriptId: null, state: 'opening', kind: null, status: null, title: null, items: [], subagents: [], echoes: [], sentImages: EMPTY_IMAGES, held: [], reply: null, latestMcpSendId: null, hasOlder: false, loadingOlder: false, error: null, approval: null, codexSpeed: null, backgroundShells: null })
 
 let stopFrames: (() => void) | null = null
 
@@ -69,7 +70,7 @@ const KEPT_ECHO_MS = 30 * 60_000
 const SEND_CONFIRMATION_MS = 15_000
 const CHAT_IMAGE_BYTES = 4 * 1024 * 1024
 const HIDDEN_CHAT_IMAGE_BYTES = 16 * 1024 * 1024
-type RetainedChat = Pick<AgentChat, 'echoes' | 'sentImages' | 'held' | 'items' | 'reply'>
+type RetainedChat = Pick<AgentChat, 'echoes' | 'sentImages' | 'held' | 'items' | 'reply' | 'latestMcpSendId'>
 const keptEchoes = new Map<string, RetainedChat & { at: number }>()
 
 function imageBytes(images: AgentChat['sentImages']): number {
@@ -116,7 +117,7 @@ function keepEchoes(shellId: string, chat: RetainedChat) {
   // A recorded message still unread keeps its mark: the transcript is read again on return, ids and all
   const at = Date.now()
   const echoes = chat.echoes.filter(echo => items.some(item => item.id === echo.id)).map(pauseSendConfirmation)
-  keptEchoes.set(shellId, { echoes, sentImages: chat.sentImages, held: chat.held, items, reply, at })
+  keptEchoes.set(shellId, { echoes, sentImages: chat.sentImages, held: chat.held, items, reply, latestMcpSendId: chat.latestMcpSendId, at })
   let bytes = 0
   for (const [id, kept] of [...keptEchoes].reverse()) {
     if (at - kept.at >= KEPT_ECHO_MS) {
@@ -133,8 +134,8 @@ function takeEchoes(shellId: string): RetainedChat {
   const kept = keptEchoes.get(shellId)
   keptEchoes.delete(shellId)
   return kept && Date.now() - kept.at < KEPT_ECHO_MS
-    ? { echoes: kept.echoes, sentImages: kept.sentImages, held: kept.held, items: kept.items, reply: kept.reply }
-    : { echoes: [], sentImages: EMPTY_IMAGES, held: [], items: [], reply: null }
+    ? { echoes: kept.echoes, sentImages: kept.sentImages, held: kept.held, items: kept.items, reply: kept.reply, latestMcpSendId: kept.latestMcpSendId }
+    : { echoes: [], sentImages: EMPTY_IMAGES, held: [], items: [], reply: null, latestMcpSendId: null }
 }
 
 function discardEcho(chat: RetainedChat, sendId: string) {
@@ -238,7 +239,10 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
         const delivery = text.trim() && (hasImage || !isSlashCommand(text))
           ? { transcriptId: chat.transcriptId, imageIds } : undefined
         const echo = { id, text, queued, time: Date.now(), hasImage, delivery }
-        return { ...chat, ...appendEcho(chat, echo, previews) }
+        return {
+          ...chat, ...appendEcho(chat, echo, previews),
+          latestMcpSendId: !hasImage && text.trim() === '/mcp' ? id : chat.latestMcpSendId
+        }
       })
       return id
     },
@@ -311,15 +315,18 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
     stopWaiting(shellId, sendId) {
       update(shellId, chat => chat.reply?.sendId === sendId ? { ...chat, reply: null } : chat)
     },
-    settleCommand(shellId, sendId, { state, output }) {
+    settleCommand(shellId, sendId, { state, output, mcpSummary }) {
       update(shellId, chat => {
         const at = chat.items.findIndex(item => item.id === sendId)
         if (at === -1 || !chat.echoes.some(echo => echo.id === sendId)) return chat
         const line = { ...chat.items[at], commandState: state }
         const outputId = echoOutputId(sendId)
         const rest = chat.items.filter(item => item.id !== outputId)
-        const items = rest.flatMap(item => item.id !== sendId ? [item]
-          : output ? [line, { id: outputId, kind: 'output' as const, time: line.time, text: output }] : [line])
+        const result: AgentChatItem | null = output ? {
+          id: outputId, kind: 'output', time: line.time, text: output, outputCommand: line.text,
+          ...(mcpSummary && { mcpSummary })
+        } : null
+        const items = rest.flatMap(item => item.id !== sendId ? [item] : result ? [line, result] : [line])
         return { ...chat, items, reply: chat.reply?.sendId === sendId ? null : chat.reply }
       })
     },

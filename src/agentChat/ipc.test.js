@@ -38,18 +38,115 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
       discardImage: file => discarded.push(file)
     }
   })
-  const call = (name, ...args) => handlers.get(name)({}, ...args)
+  const mainFrame = {}
+  const call = (name, ...args) => handlers.get(name)({ senderFrame: mainFrame, sender: { mainFrame } }, ...args)
+  const callFromChild = (name, ...args) => handlers.get(name)({ senderFrame: {}, sender: { mainFrame } }, ...args)
   const paste = async () => {
     const result = await call('agent-chat-read-clipboard', 'local:1')
     expect(result).toMatchObject({ ok: true, kind: 'images' })
     expect(result.images).toHaveLength(1)
     return result.images[0].id
   }
-  return { call, paste, sent, discarded, sendCapture, captures }
+  return { call, callFromChild, paste, sent, discarded, sendCapture, captures }
 }
 
 const retryRequest = () => ({ acceptedAt: Date.now() - 15_000, transcriptId: 'a'.repeat(64), ignoreIds: [] })
 const emptyTranscriptCheck = { hasTranscript: () => true, findRecordedSend: async () => null }
+
+describe('MCP login from the latest Codex server card', () => {
+  it('sends only a validated auth server from the current shell and agent', async () => {
+    const shellId = 'local:1'
+    let activeAgent = 'codex-1'
+    let status = 'idle'
+    let lines = ['›']
+    const { call, callFromChild, sent } = harness('codex', {
+      agentId: () => activeAgent, status: () => status,
+      screen: () => ({ lines, composer: 'empty', approval: false })
+    })
+    let summaryId
+    const login = (server, shell = shellId) => call('agent-chat-mcp-login', { shellId: shell, summaryId, server })
+    const summary = { shellId, text: '/mcp' }
+    expect(await login('oauth-server')).toMatchObject({ ok: false })
+    expect(await call('agent-chat-send', summary)).toEqual({ ok: true })
+    lines = ['› /mcp', '🔌  MCP Tools',
+      '  • oauth-server: authentication required (0 tools)',
+      '  • other: connected (1 tool)',
+      '  • --help: authentication required (0 tools)',
+      '  • spoof --environment other: authentication required (0 tools)', '›']
+    const result = await call('agent-chat-command-watch', shellId)
+    expect(result).toMatchObject({
+      ok: true, state: 'done', output: expect.stringContaining('oauth-server'),
+      mcpSummary: { id: expect.any(String), canLogin: true }
+    })
+    summaryId = result.mcpSummary.id
+    for (const name of ['unknown', 'other', '--help', 'spoof --environment other', 'oauth-server\n/mcp', 'a'.repeat(129)]) {
+      expect(await login(name)).toMatchObject({ ok: false })
+    }
+    expect(await login('oauth-server', 'local:2')).toMatchObject({ ok: false })
+    expect(await callFromChild('agent-chat-mcp-login', { shellId, summaryId, server: 'oauth-server' })).toMatchObject({ ok: false })
+    status = 'working'
+    expect(await login('oauth-server')).toMatchObject({ ok: false, reason: 'busy' })
+    status = 'idle'
+    expect(await login('oauth-server')).toEqual({ ok: true })
+    activeAgent = 'codex-2'
+    expect(await login('oauth-server')).toMatchObject({ ok: false })
+    expect(sent.map(({ prompt }) => prompt)).toEqual(['/mcp', '/mcp login oauth-server'])
+  })
+
+  it('retires the prior generation even when the same server appears in the new result', async () => {
+    const shellId = 'local:1'
+    let lines = ['›']
+    const { call, sent } = harness('codex', { screen: () => ({ lines, composer: 'empty', approval: false }) })
+    const summary = { shellId, text: '/mcp' }
+    await call('agent-chat-send', summary)
+    const output = ['› /mcp', 'MCP Tools', '  • same-server: authentication required (0 tools)']
+    lines = [...output, '›']
+    const prior = (await call('agent-chat-command-watch', shellId)).mcpSummary.id
+    const login = summaryId => call('agent-chat-mcp-login', { shellId, summaryId, server: 'same-server' })
+    const verbose = summaryId => call('agent-chat-mcp-verbose', { shellId, summaryId })
+    await call('agent-chat-send', summary)
+    expect(await login(prior)).toMatchObject({ ok: false })
+    lines = [...output, '', ...output, '›']
+    const latest = (await call('agent-chat-command-watch', shellId)).mcpSummary.id
+    expect(latest).not.toBe(prior)
+    expect(await login(prior)).toMatchObject({ ok: false })
+    expect(await verbose(prior)).toMatchObject({ ok: false })
+    expect(await login(latest)).toEqual({ ok: true })
+    expect(sent.map(({ prompt }) => prompt)).toEqual(['/mcp', '/mcp', '/mcp login same-server'])
+  })
+
+  it('shows a summary without an echo and rechecks idle just before sending details', async () => {
+    const shellId = 'local:1'
+    let lines = ['›']
+    let status = 'idle'
+    let approval = null
+    let becomeBusy = false
+    const { call, callFromChild, sent } = harness('codex', {
+      screen: () => ({ lines, composer: 'empty', approval: false }),
+      status: () => status, approval: () => approval,
+      duringSend: () => { if (becomeBusy) status = 'working' }
+    })
+    await call('agent-chat-send', { shellId, text: '/mcp' })
+    lines = ['MCP Tools', '  • oauth-server: authentication required (0 tools)', '›']
+    const result = await call('agent-chat-command-watch', shellId)
+    expect(result).toMatchObject({
+      ok: true, output: 'MCP Tools\n  • oauth-server: authentication required (0 tools)',
+      mcpSummary: { id: expect.any(String), canLogin: false }
+    })
+    const request = { shellId, summaryId: result.mcpSummary.id }
+    expect(await call('agent-chat-mcp-login', { ...request, server: 'oauth-server' })).toMatchObject({ ok: false })
+    expect(await callFromChild('agent-chat-mcp-verbose', request)).toMatchObject({ ok: false })
+    approval = {}
+    expect(await call('agent-chat-mcp-verbose', request)).toMatchObject({ ok: false, reason: 'busy' })
+    approval = null
+    becomeBusy = true
+    expect(await call('agent-chat-mcp-verbose', request)).toMatchObject({ ok: false, reason: 'target-changed' })
+    status = 'idle'
+    becomeBusy = false
+    expect(await call('agent-chat-mcp-verbose', request)).toEqual({ ok: true })
+    expect(sent.map(({ prompt }) => prompt)).toEqual(['/mcp', '/mcp verbose'])
+  })
+})
 
 describe('subagent conversation', () => {
   it('requires the active provider target to stay consistent with the selected child', async () => {

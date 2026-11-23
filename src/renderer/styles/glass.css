@@ -122,6 +122,7 @@
   [data-surface="glass"] .sftp-header,
   [data-surface="glass"] .sftp-panel,
   [data-surface="glass"] .modal-content,
+  [data-surface="glass"] .chat-link-preview,
   [data-surface="glass"] .context-menu,
   [data-surface="glass"] .tab-context-menu,
   [data-surface="glass"] .new-tab-menu,
@@ -165,8 +166,9 @@
 /* Dialogs. A dialog sits on the dimming overlay, not on the app: at the menu's translucency the dark
    overlay showed through and a light theme's dialog turned a dull gray. So dialogs are nearly solid,
    and the glass is in the overlay instead: a lighter dim with a stronger blur of the app behind. */
-[data-surface="glass"] .modal-overlay {
-  background: color-mix(in srgb, var(--bg-tertiary) 30%, rgba(0, 0, 0, 0.32));
+[data-surface="glass"] .modal-overlay,
+[data-surface="glass"] .modal-overlay.chat-link-preview-overlay {
+  background: var(--chat-link-preview-dim, color-mix(in srgb, var(--bg-tertiary) 30%, rgba(0, 0, 0, 0.32)));
   -webkit-backdrop-filter: blur(14px) saturate(1.3);
   backdrop-filter: blur(14px) saturate(1.3);
 }
@@ -174,6 +176,16 @@
 [data-surface="glass"] .modal-content {
   background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
   border: 1px solid var(--glass-edge);
+}
+
+[data-surface="glass"] .chat-link-preview {
+  border-color: var(--glass-edge);
+}
+
+@media (prefers-reduced-transparency: no-preference) {
+  [data-surface="glass"] .chat-link-preview {
+    background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  }
 }
 
 /* Parts of a dialog with a fill of their own would show as a different shade on the dialog */

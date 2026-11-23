@@ -11,6 +11,8 @@ const { cleanAnswer } = require('./askQuestions.js')
 const SHELL_ID = /^local:\d+$/
 const MAX_TEXT = 16_000
 const CHAT_PROVIDERS = new Set(['claude', 'codex', 'antigravity'])
+const MCP_SERVER_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/
+const staleMcpSummary = { ok: false, error: '이 에이전트의 최신 /mcp 결과를 다시 확인해 주세요.' }
 const antigravityOnlyText = { ok: false, reason: 'unsupported', error: 'Antigravity 채팅에서는 일반 텍스트만 보낼 수 있습니다.' }
 const antigravityTerminal = { ok: false, reason: 'unsupported', error: 'Antigravity의 확인 요청은 터미널에서 처리해 주세요.' }
 
@@ -55,6 +57,21 @@ function chatPrompt(kind, text, files) {
 
 function chatSendResult(result) {
   return result.ok ? { ok: true } : { ok: false, reason: result.reason, error: REASONS[result.reason] ?? '보내지 못했습니다.' }
+}
+
+function mcpLoginCommands(output) {
+  const rows = (output ?? '').trim().split('\n')
+  const commands = new Map()
+  if (!/^(?:🔌\uFE0F?\s*)?MCP Tools$/u.test(rows[0])) return commands
+  for (const row of rows) {
+    const server = /^•\s+([^:]+):\s+([^()]+)\s+\(([0-9]+) tools?\)$/u.exec(row.trim())
+    if (!server) continue
+    const [, printedName, status, tools] = server
+    const name = printedName.trim()
+    if (MCP_SERVER_NAME.test(name) && status.trim().toLowerCase() === 'authentication required'
+      && Number.isSafeInteger(Number(tools))) commands.set(name, `/mcp login ${name}`)
+  }
+  return commands
 }
 
 function retryRequest(value) {
@@ -104,12 +121,14 @@ const PICKER_REASONS = {
  */
 function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells, clipboard, selectImages, links, pins = null, showShell = null, notifyCapture = () => {} }) {
   const allowed = event => fromMainWindow(event) && !isLocked()
+  const fromChatWindow = event => allowed(event) && Boolean(event.senderFrame && event.senderFrame === event.sender?.mainFrame)
   const shellIdOf = value => (typeof value === 'string' && SHELL_ID.test(value) ? value : null)
   const locked = { ok: false, error: '먼저 잠금을 해제해 주세요.' }
   const imageDrafts = createImageDrafts(clipboard)
   const pendingLinkPreviews = new Map()
   // A slash command just sent from the chat: the agent's screen before it, read by agent-chat-command-watch
   const commandWatches = new Map()
+  const mcpSummaries = new Map()
   const retrying = new Set()
 
   async function retrySend(event, id, local, agent, retry, text, hasImage, send) {
@@ -239,10 +258,44 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (id && shells()?.agentOf(id)?.kind === 'antigravity') return antigravityOnlyText
     const pending = id && commandWatches.get(id)
     if (!pending) return { ok: false, error: '확인할 명령이 없습니다.' }
+    if (pending.mcpSummary && !fromChatWindow(event)) return locked
     commandWatches.delete(id)
     const outcome = await watchCommand({ read: () => shells()?.chatScreen?.(id) ?? null, ...pending })
-    return allowed(event) ? { ok: true, ...outcome } : locked
+    if (!allowed(event)) return locked
+    const { echoVerified, ...result } = outcome
+    const summary = pending.mcpSummary
+    if (result.output && summary && fromChatWindow(event) && mcpSummaries.get(id) === summary
+      && shells()?.chatAgentId?.(id) === summary.agentId) {
+      summary.commands = mcpLoginCommands(echoVerified ? result.output : null)
+      return { ok: true, ...result, mcpSummary: { id: summary.id, canLogin: echoVerified } }
+    }
+    return { ok: true, ...result }
   })
+  async function sendMcpAction(event, request, verbose) {
+    if (!fromChatWindow(event)) return locked
+    const id = shellIdOf(request?.shellId)
+    const name = request?.server
+    if (!id || (!verbose && (typeof name !== 'string' || !MCP_SERVER_NAME.test(name)))) return staleMcpSummary
+    const local = shells()
+    const summary = mcpSummaries.get(id)
+    if (!local || !summary?.commands || summary.id !== request.summaryId) return staleMcpSummary
+    const command = verbose ? '/mcp verbose' : summary.commands.get(name)
+    if (!command) return staleMcpSummary
+    const sameAgent = () => mcpSummaries.get(id) === summary && local.chatAgentId?.(id) === summary.agentId
+      && local.agentOf(id)?.kind === 'codex'
+    if (!sameAgent()) return staleMcpSummary
+    const ready = () => local.agentOf(id)?.status === 'idle' && !local.approvalOf?.(id)
+    if (!ready()) return chatSendResult({ ok: false, reason: 'busy' })
+    const before = local.chatScreen?.(id) ?? null
+    commandWatches.delete(id)
+    const result = await local.chatSend(id, command, undefined, undefined, undefined,
+      { canSend: () => fromChatWindow(event) && sameAgent() && ready() })
+    if (!fromChatWindow(event)) return locked
+    if (result?.ok && sameAgent()) commandWatches.set(id, { before, kind: 'codex', command })
+    return chatSendResult(result)
+  }
+  ipcMain.handle('agent-chat-mcp-login', (event, request) => sendMcpAction(event, request, false))
+  ipcMain.handle('agent-chat-mcp-verbose', (event, request) => sendMcpAction(event, request, true))
   // While the pane shows the terminal for a screen a command opened: is the composer back
   ipcMain.handle('agent-chat-screen-state', (event, shellId) => {
     const id = shellIdOf(shellId)
@@ -315,10 +368,22 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
       return retrySend(event, id, local, agent, retry, text, Boolean(files.length), canSend =>
         selected.send(() => local.chatSend(id, prompt, images, undefined, undefined, { canSend })))
     }
-    const before = isCommand ? local.chatScreen?.(id)?.lines ?? null : null
+    const before = isCommand ? local.chatScreen?.(id) ?? null : null
+    let mcpSummary
+    if (agent.kind === 'codex' && isCommand && prompt === '/mcp') {
+      for (const [shell, previous] of mcpSummaries) {
+        if (local.chatAgentId?.(shell) !== previous.agentId) mcpSummaries.delete(shell)
+      }
+      mcpSummaries.delete(id)
+      const agentId = local.chatAgentId?.(id)
+      if (agentId && fromChatWindow(event)) {
+        mcpSummary = { agentId, id: randomUUID(), commands: null }
+        mcpSummaries.set(id, mcpSummary)
+      }
+    }
     if (isCommand) commandWatches.delete(id)
     const result = await selected.send(() => local.chatSend(id, prompt, images))
-    if (result?.ok && isCommand) commandWatches.set(id, { before, kind: agent.kind, command: prompt })
+    if (result?.ok && isCommand) commandWatches.set(id, { before, kind: agent.kind, command: prompt, mcpSummary })
     if (!allowed(event)) return locked
     return chatSendResult(result)
   })
@@ -415,8 +480,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   // A link in an answer: a file or folder of this PC (ezShell's file window or the file manager), or a
   // web page (the browser). Only a link of that shell's conversation; a file is never run.
   ipcMain.handle('agent-chat-preview-link', async (event, request) => {
-    const fromChatWindow = () => allowed(event) && Boolean(event.senderFrame && event.senderFrame === event.sender?.mainFrame)
-    if (!fromChatWindow()) return locked
+    if (!fromChatWindow(event)) return locked
     const id = shellIdOf(request?.shellId)
     const target = id ? linkTarget(request?.link, process.platform, chats.cwdOf?.(id) ?? null) : null
     if (!id || target?.kind !== 'path' || !chats.knowsLink(id, target.key)) {
@@ -425,8 +489,8 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const authorized = chats.linkAuthority(id, target.key)
     const requestId = Symbol()
     pendingLinkPreviews.set(id, requestId)
-    const current = () => fromChatWindow() && pendingLinkPreviews.get(id) === requestId && authorized()
-    const stale = () => fromChatWindow() ? { ok: false, error: '대화의 링크가 바뀌었습니다.' } : locked
+    const current = () => fromChatWindow(event) && pendingLinkPreviews.get(id) === requestId && authorized()
+    const stale = () => fromChatWindow(event) ? { ok: false, error: '대화의 링크가 바뀌었습니다.' } : locked
     try {
       const preview = await readLinkPreview(target, current)
       return current() ? { ok: true, preview } : stale()
@@ -518,7 +582,10 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   }
 
   return {
-    clearClipboard: imageDrafts.clearAll,
+    clearClipboard() {
+      imageDrafts.clearAll()
+      mcpSummaries.clear()
+    },
     async sendCapture(target, comment, getAttachment, stillOpen) {
       const local = shells()
       if (target.kind === 'antigravity' || local?.agentOf(target.shellId)?.kind === 'antigravity') return antigravityOnlyText

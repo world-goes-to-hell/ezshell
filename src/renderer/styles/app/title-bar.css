@@ -3,7 +3,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  height: 32px;
+  height: var(--title-bar-height);
   background: var(--bg-tertiary);
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;

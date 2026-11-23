@@ -3,7 +3,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  height: 30px;
+  height: var(--app-footer-height);
   padding: 0 12px;
   background: var(--bg-tertiary);
   border-top: 1px solid var(--border);

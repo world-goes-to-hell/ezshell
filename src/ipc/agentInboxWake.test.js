@@ -30,6 +30,16 @@ function setup(kind = 'claude', cols = 100) {
 
 afterEach(() => wake?.close())
 
+it('preserves the last cell and continuation flag of a wrapped command row', async () => {
+  setup('codex', 7)
+  wake.writeOutput(codexDraft('/mcp verbose'))
+  await vi.waitFor(() => {
+    const { lines, wraps } = wake.commandRows()
+    expect(lines.slice(0, 2)).toEqual(['› /mcp ', 'verbose'])
+    expect(wraps.slice(0, 2)).toEqual([false, true])
+  })
+})
+
 describe('wake an idle agent with unread messages', () => {
   it('waits for the exact rendered draft before submitting and batches all pending messages', async () => {
     const { write, state } = setup()

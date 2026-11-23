@@ -783,6 +783,15 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     return Array.from({ length: screen.rows }, (_, row) => buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? '')
   }
 
+  function commandRows() {
+    if (stopped) return { lines: [], wraps: [] }
+    const { active: buffer } = screen.buffer
+    const rows = Array.from({ length: screen.rows }, (_, row) => buffer.getLine(buffer.baseY + row))
+    const wraps = rows.map(row => Boolean(row?.isWrapped))
+    const lines = rows.map((row, index) => row?.translateToString(!wraps[index + 1]) ?? '')
+    return { lines, wraps }
+  }
+
   function userInput(data) {
     finishApprovalAnswer({ ok: false, reason: 'changed' })
     lastChatDraft = null
@@ -993,6 +1002,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     },
     /** The visible screen, one string per row (agentPicker.js reads the CLI's pickers from it) */
     screenLines,
+    commandRows,
     /** First row below Claude's ruled composer, including when the draft wraps. */
     composerFooterRow: () => !stopped && kind === 'claude' ? composer(Infinity)?.footerRow ?? null : null,
     /** Background shells in Claude's own composer footer. Null while the footer cannot be read. */

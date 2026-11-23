@@ -1,6 +1,6 @@
 // The fake agents of localAgentApp.js, with the agents' transcript folders inside the test profile (the
 // chat view reads `$CLAUDE_CONFIG_DIR/projects`, never this PC's own ~/.claude) and chat lines recorded.
-const { app, dialog, nativeImage } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, WebContentsView } = require('electron')
 const fs = require('fs')
 const path = require('path')
 
@@ -23,5 +23,14 @@ const showSaveDialog = dialog.showSaveDialog.bind(dialog)
 dialog.showSaveDialog = (window, options) => options?.title === '채팅 저장'
   ? Promise.resolve({ canceled: false, filePath: path.join(profile, 'saved-chat.txt') })
   : showSaveDialog(window, options)
+// Read the real native view after the app has handled the bounds update.
+ipcMain.on('browser-review-bounds', event => {
+  const window = BrowserWindow.fromWebContents(event.sender)
+  setImmediate(() => {
+    if (!window || window.isDestroyed()) return
+    const page = window.contentView.children.find(view => view instanceof WebContentsView && /^https?:/.test(view.webContents.getURL()))
+    if (page) fs.writeFileSync(path.join(profile, 'chat-preview-browser-visible'), String(page.getVisible()))
+  })
+})
 process.env.EZSHELL_TEST_AGENT_CHAT = '1'
 require('./localAgentApp.js')

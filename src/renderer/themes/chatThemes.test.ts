@@ -53,11 +53,12 @@ describe('chat preset motion colors', () => {
     expect(ratio(vars(preset.id)['--on-accent'], preset.colors.accent)).toBeGreaterThanOrEqual(3)
   })
 
-  it.each(CHAT_PRESETS.map(preset => [preset.name, preset] as const))('%s: messages and answer links are readable', (_name, preset) => {
+  it.each(CHAT_PRESETS.map(preset => [preset.name, preset] as const))('%s: messages, answer links and timestamps are readable', (_name, preset) => {
     const { textPrimary, textLink, bgSecondary } = preset.colors
     expect(ratio(textPrimary, bgSecondary)).toBeGreaterThanOrEqual(4.5)
     expect(ratio(textPrimary, preset.outgoing)).toBeGreaterThanOrEqual(4.5)
     expect(ratio(textLink, bgSecondary)).toBeGreaterThanOrEqual(4.5)
+    expect(ratio(vars(preset.id)['--chat-timestamp'], preset.canvas)).toBeGreaterThanOrEqual(4.5)
   })
 
   it('exposes the motion colors as variables for the pane effects', () => {

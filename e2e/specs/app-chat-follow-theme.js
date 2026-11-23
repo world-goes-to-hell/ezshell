@@ -78,7 +78,7 @@ async function run() {
 
     await setAppTheme('카톡 모드', 'kakao-mode')
     check('following Kakao applies the chat canvas, bubbles, time and pane motion', await until(`${applies('chat-kakao', '#dce8f4')} &&
-      !!${cover}.querySelector('.agent-chat-sent-time') && getComputedStyle(${pane}).getPropertyValue('--chat-trace').trim() === '#a86f00' &&
+      !!${cover}.querySelector('.agent-chat-timestamp[data-always-visible]') && getComputedStyle(${pane}).getPropertyValue('--chat-trace').trim() === '#a86f00' &&
       (${choice}) === 'app'`))
     await shot('app-chat-follow-kakao')
     const followingKakao = await chatOption('앱 테마 따르기 · 카톡 모드')

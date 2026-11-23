@@ -1,32 +1,41 @@
-.agent-chat-cover[data-link-preview] {
-  container: chat-preview / inline-size;
-  flex-direction: row;
+.modal-overlay.chat-link-preview-overlay {
+  --chat-link-preview-dim: light-dark(rgb(0 0 0 / 34%), rgb(0 0 0 / 54%));
+  background: var(--chat-link-preview-dim);
+  backdrop-filter: none;
+  -webkit-app-region: no-drag;
 }
 
-.agent-chat-cover[data-link-preview] > .agent-chat-parent {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
+@media (prefers-reduced-motion: no-preference) {
+  .modal-overlay.chat-link-preview-overlay { animation: chat-link-preview-dim-in 140ms ease-out; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay.chat-link-preview-overlay { transition: none; }
+}
+
+@keyframes chat-link-preview-dim-in {
+  from { opacity: 0; }
 }
 
 .chat-link-preview {
-  position: relative;
+  position: fixed;
+  z-index: 101;
+  inset: var(--title-bar-height) 0 var(--app-footer-height) auto;
   display: flex;
-  flex: none;
   flex-direction: column;
-  width: min(var(--chat-link-preview-width), calc(100% - 300px));
   min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--border-strong);
   background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  box-shadow: var(--shadow-lg);
 }
 
 .chat-link-preview-divider {
   position: absolute;
   z-index: 2;
-  left: -4px;
+  left: 0;
   top: 0;
   bottom: 0;
   width: 8px;
@@ -135,6 +144,7 @@
 
 .chat-link-preview-image {
   display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   flex: 1;
   min-height: 0;
   padding: 12px;
@@ -142,9 +152,8 @@
 }
 
 .chat-link-preview-image img {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
 }
 
@@ -211,23 +220,4 @@
 
 .chat-link-preview-empty p {
   margin: 4px 0 0;
-}
-
-@container chat-preview (max-width: 650px) {
-  .agent-chat-parent {
-    visibility: hidden;
-  }
-
-  .chat-link-preview {
-    position: absolute;
-    z-index: 3;
-    inset: 6px;
-    width: auto;
-    border: 1px solid var(--border-strong);
-    box-shadow: var(--shadow-md);
-  }
-
-  .chat-link-preview-divider {
-    display: none;
-  }
 }

@@ -5,7 +5,7 @@ const fs = require('fs')
 const http = require('node:http')
 const path = require('path')
 const { connect, createChecks, sleep, unlock, openLocalAgent, pages } = require('../support/driver')
-const { checkChatLinkPreviews } = require('../support/chatLinkPreviews')
+const { checkChatLinkPreviews, checkSplitChatLinkPreview } = require('../support/chatLinkPreviews')
 
 const { check, finish } = createChecks()
 const profile = process.env.E2E_PROFILE
@@ -161,7 +161,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await driver.enter()
   const firstSentAt = new Date().toISOString()
   check('the first prompt is shown before a transcript exists', await until(`
-    ${cover(0)}.querySelector('.agent-chat-user')?.textContent === '첫 칸 질문' &&
+    ${cover(0)}.querySelector('.agent-chat-user .agent-chat-bubble')?.textContent === '첫 칸 질문' &&
     !${cover(0)}.querySelector('.agent-chat-empty')
   `, 1500))
   const composerProgress = `${cover(0)}.querySelector('.agent-chat-composer .agent-chat-reply-progress')`
@@ -198,7 +198,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
   check('Esc restores an already recorded question above the draft and preserves its history', await until(`
     ${composer(0)}.value === '첫 칸 질문\\n쓰던 초안' &&
-    ${cover(0)}.querySelector('.agent-chat-user')?.textContent === '첫 칸 질문'
+    ${cover(0)}.querySelector('.agent-chat-user .agent-chat-bubble')?.textContent === '첫 칸 질문'
   `, 8000) && read('claude-1-chat-interrupt') === 'esc' && !read('claude-1-taken-back'))
   await setChatDraft('')
   fs.writeFileSync(file('claude-1-program-status'), 'state=idle:app=claude')
@@ -212,13 +212,13 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('Kakao chat has a yellow sent bubble, a white received bubble, and its own canvas', await until(`
     ${cover(0)}.dataset.chatTheme === 'chat-kakao' && getComputedStyle(${cover(0)}).backgroundColor === 'rgb(220, 232, 244)' &&
     getComputedStyle(${cover(0)}.querySelector('.agent-chat-user .agent-chat-bubble')).backgroundColor === 'rgb(255, 223, 98)' &&
-    getComputedStyle(${cover(0)}.querySelector('.agent-chat-assistant')).backgroundColor === 'rgb(255, 255, 255)'
+    getComputedStyle(${cover(0)}.querySelector('.agent-chat-assistant > .agent-chat-md')).backgroundColor === 'rgb(255, 255, 255)'
   `))
   check('Kakao shows the local send time to the bottom left of the sent bubble', await until(`(() => {
     const message = ${cover(0)}.querySelector('.agent-chat-user-message')
     const time = message?.querySelector('time')
     const bubble = message?.querySelector('.agent-chat-bubble')?.getBoundingClientRect()
-    if (!time || !bubble) return false
+    if (!time || !bubble || getComputedStyle(time).visibility !== 'visible') return false
     const label = time.getBoundingClientRect()
     return /^(오전|오후) \\d{1,2}:\\d{2}$/.test(time.textContent) &&
       Math.abs(Date.parse(time.dateTime) - Date.parse(${JSON.stringify(firstSentAt)})) < 5000 &&
@@ -234,7 +234,6 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     (!${pane(0)}.matches(':focus-within') || ${paneBorder} === 'rgb(47, 104, 176)')
   `), JSON.stringify(await js(`[${paneVar('--chat-focus')}, ${paneVar('--motion-accent')}, ${paneBorder}]`)))
   await shot('local-agent-chat-kakao')
-
   // A normal sentence can wrap to several visual lines before it contains a newline.
   const inputRow = `${composer(0)}.parentElement`
   const inputSize = `(() => {
@@ -355,7 +354,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await chooseChatTheme(0, '미드나잇')
   check('Midnight uses a dark canvas without touching the app theme', await until(`
     ${cover(0)}.dataset.chatTheme === 'chat-midnight' && getComputedStyle(${cover(0)}).colorScheme === 'dark' &&
-    ${appTheme} === ${JSON.stringify(beforeChatTheme[0])} && !${cover(0)}.querySelector('.agent-chat-sent-time')
+    ${appTheme} === ${JSON.stringify(beforeChatTheme[0])} && !${cover(0)}.querySelector('.agent-chat-timestamp[data-always-visible]')
   `))
   check('Midnight swaps the pane trace to its own color', await until(`${paneVar('--motion-accent')} === '#8fd3ff'`))
   await shot('local-agent-chat-midnight')
@@ -575,14 +574,14 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await js(`${driveLink}.scrollIntoView({ block: 'nearest' })`)
   const link = await center(driveLink)
   await click(link[0], link[1])
-  const previewActions = `${cover(0)}.querySelector('.chat-link-preview-actions')`
+  const previewActions = `document.querySelector('.chat-link-preview-actions')`
   const previewAction = label => `[...${previewActions}.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})`
   check('the file preview shows its data, metadata and three actions', await until(`(() => {
     if (!${previewActions}) return false
     const labels = [...${previewActions}.querySelectorAll('button')].map(item => item.textContent.trim())
     return labels.join('|') === 'ezShell로 열기|파일 탐색기로 열기|경로 복사' &&
-      !!${cover(0)}.querySelector('.chat-link-preview-metadata time')?.dateTime &&
-      ${cover(0)}.querySelector('.chat-link-preview .cm-content')?.textContent.includes('링크로 연 파일')
+      !!document.querySelector('.chat-link-preview-metadata time')?.dateTime &&
+      document.querySelector('.chat-link-preview .cm-content')?.textContent.includes('링크로 연 파일')
   })()`, 4000))
   await js(`${previewAction('ezShell로 열기')}.click()`)
   let fileWindow = null
@@ -591,7 +590,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     if (!fileWindow) await sleep(150)
   }
   check('ezShell opens the file in its file window', !!fileWindow, JSON.stringify((await pages()).map(page => page.url)))
-  await js(`${cover(0)}.querySelector('[aria-label="미리보기 닫기"]').click()`)
+  await js(`document.querySelector('.chat-link-preview [aria-label="미리보기 닫기"]').click()`)
   const refused = await js(`window.electronAPI.agentChatOpenLink(${JSON.stringify(await js(`${pane(0)}.dataset.localShellId`))}, 'C:/Windows/win.ini', 'app')`)
   check('a path that was not in the conversation is not opened', refused && refused.ok === false && refused.error.includes('대화에 나온'), JSON.stringify(refused))
   // As the agents write them: Codex adds the line ("…/lines.txt:3"), Claude writes a path relative to its folder
@@ -710,10 +709,11 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     const unlisted = await js(`window.electronAPI.agentChatOpenLink(
       ${JSON.stringify(firstShell)}, ${JSON.stringify(address + 'unknown')}, 'browser-tab')`)
     check('the internal opener still requires a link from the conversation', unlisted?.ok === false)
+    const browserTabId = await js(`document.querySelector('.terminal-tab.active[data-tab-id^="browser:"]').dataset.tabId`)
     await js(`document.querySelector(${JSON.stringify(firstTab)}).click()`)
     check('returning to the chat tab focuses its composer and shows the pane outline', await until(focusedChat(0), 2500))
-    await js(`document.querySelector('.terminal-tab[data-tab-id^="browser:"] .tab-close').click()`)
-    await until(`!!${cover(0)}`)
+    fs.appendFileSync(firstTranscript, answer('a-preview-narrow', '[이미지](preview/workspace.png)'))
+    await checkSplitChatLinkPreview({ driver, cover: cover(0), browserTabId, profile, check })
   } finally {
     web.close()
   }
@@ -807,7 +807,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   const usageLine = `[...${cover(1)}.querySelectorAll('.agent-chat-usage')].map(line => line.textContent).join('|')`
   check('the turn shows the tokens it used under its last answer', await until(`
     ${usageLine} === '토큰 입력 12.3만 · 출력 3,412 · 캐시 98% · 52초' &&
-    ${cover(1)}.querySelector('.agent-chat-assistant + .agent-chat-usage')?.previousElementSibling?.textContent.includes('정리했습니다')
+    ${cover(1)}.querySelector('.agent-chat-incoming + .agent-chat-usage')?.previousElementSibling?.querySelector('.agent-chat-md')?.textContent.includes('정리했습니다')
   `, 8000), await js(usageLine))
 
   // Claude's windows come from its status line, before the question and after its last answer
@@ -930,7 +930,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   }) + answer('attachment-only-seen', '첨부 파일을 받았습니다.', new Date().toISOString()))
   check('the recorded image-only send keeps one screenshot entry in the conversation', await until(`
     ${cover(0)}.textContent.includes('첨부 파일을 받았습니다.') &&
-    [...${cover(0)}.querySelectorAll('.agent-chat-user')].filter(bubble => bubble.textContent === '스크린샷 첨부').length === 1 &&
+    [...${cover(0)}.querySelectorAll('.agent-chat-user .agent-chat-bubble')].filter(bubble => bubble.textContent === '스크린샷 첨부').length === 1 &&
     ${sentImageWidths('스크린샷 첨부')} === '1'
   `))
   await chooseChatAction(0, '채팅 닫고 터미널로 전환')
@@ -1382,6 +1382,65 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   `, 8000))
   fs.writeFileSync(file(codexId + '-program-status'), 'state=idle:app=codex')
 
+  // Codex redraws older history before echoing /mcp. The chat card keeps just the result.
+  await until(`window.electronAPI.agentMessagesSnapshot().then(state =>
+    state.agents.some(agent => agent.id === ${JSON.stringify(codexId)} && agent.status === 'idle'))`)
+  await js(`${codexInput}.focus()`)
+  await send('Input.insertText', { text: '/mcp' })
+  await js(`${sendButton}.click()`)
+  const mcpCard = `${cover(0)}.querySelector('.agent-chat-mcp')`
+  check('Codex /mcp displays server names, three states, and tool counts', await until(`(() => {
+    const card = ${mcpCard}
+    const rows = [...card?.querySelectorAll('.agent-chat-mcp-servers li') ?? []]
+    return rows.length === 3 &&
+      rows[0].textContent.includes('codex_apps') && rows[0].textContent.includes('도구 108개') &&
+      rows[1].textContent.includes('ezshell-cli-mcp') && rows[1].textContent.includes('Codex를 다시 시작하면') &&
+      rows[2].textContent.includes('msw-mcp') && rows[2].textContent.includes('도구 0개') &&
+      rows.map(row => row.querySelector('[data-status]').dataset.status).join(',') === 'connected,failed,auth'
+  })()`, 8000), await js(`${cover(0)}.querySelector('.agent-chat-output')?.textContent`))
+  check('MCP starts with the raw output folded', await js(`${mcpCard}?.querySelector('details').open === false`))
+  await js(`${mcpCard}?.querySelector('summary').click()`)
+  check('the raw MCP output preserves diagnostics and starts after the command echo', await until(`(() => {
+    const details = ${mcpCard}?.querySelector('details')
+    const raw = details?.querySelector('pre').textContent
+    return details?.open && raw.startsWith('🔌  MCP Tools') && raw.includes('Unknown MCP diagnostic.') &&
+      !/local bridge|Context compacted|Worked for/.test(raw)
+  })()`, 3000))
+  await js(`${mcpCard}?.querySelector('summary').click()`)
+  await shot('local-agent-chat-mcp')
+
+  await js(`${codexInput}.focus()`)
+  await send('Input.insertText', { text: '작성하던 메시지' })
+  const loginButton = `${mcpCard}?.querySelector('button[aria-label="msw-mcp 로그인"]')`
+  const detailsButton = `${mcpCard}?.querySelector('.agent-chat-mcp-actions button')`
+  await until(`${loginButton}?.disabled === false`)
+  await js(`${loginButton}?.click()`)
+  check('MCP login sends the selected server command and keeps the draft', await waitFor(() =>
+    read(codexId + '-chat-sent') === '5' && read(codexId + '-chat-text') === '/mcp login msw-mcp') &&
+    await until(`${codexInput}.value === '작성하던 메시지' && ${detailsButton}?.disabled === false`))
+  await js(`${detailsButton}?.click()`)
+  check('MCP details sends /mcp verbose and displays plain verbose output', await waitFor(() =>
+    read(codexId + '-chat-sent') === '6' && read(codexId + '-chat-text') === '/mcp verbose') &&
+    await until(`[...${cover(0)}.querySelectorAll('.agent-chat-incoming > .agent-chat-output')].some(pre => pre.textContent.includes('test_tool'))`, 8000))
+  await js(`${codexInput}.focus()`)
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
+  fs.writeFileSync(file(codexId + '-mcp-without-echo'), '')
+  await send('Input.insertText', { text: '/mcp' })
+  await js(`${sendButton}.click()`)
+  check('MCP keeps an echo-less result visible and disables actions on the previous card', await until(`(() => {
+    const cards = [...${cover(0)}.querySelectorAll('.agent-chat-mcp')]
+    const latest = cards.at(-1)
+    return cards.length === 2 &&
+      [...cards[0].querySelectorAll('button')].every(button => button.disabled) &&
+      latest.querySelector('button[aria-label="msw-mcp 로그인"]')?.disabled &&
+      latest.textContent.includes('터미널에서 확인해 주세요.') &&
+      latest.querySelector('.agent-chat-mcp-actions button')?.disabled === false
+  })()`, 8000))
+  fs.writeFileSync(file(codexId + '-command-history'), '')
+
   // A long transcript keeps only its viewport mounted even as text continues to arrive.
   const completed = item => codexLine('event_msg', { type: 'item_completed', item })
   const longAnswer = (id, text) => completed({ id, type: 'AgentMessage', content: [{ type: 'text', text }] })
@@ -1422,7 +1481,8 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await shot('local-agent-chat-jump-controls')
   await scrollLongLog(false)
   check('scrolling back mounts older messages', await until(`
-    ${longLog}.textContent.includes('긴 대화 0번') && !${longLog}.textContent.includes('긴 대화 219번')
+    !!${longLog}.querySelector('[data-chat-row="item:AgentMessage:busy-answer"]') &&
+    !${longLog}.textContent.includes('긴 대화 219번')
   `))
   fs.writeFileSync(file(codexId + '-program-status'), 'state=working:app=codex')
   check('working stays visible above the composer while reading earlier messages', await until(`
@@ -1433,12 +1493,25 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await until(`!${composerProgress}`, 5000)
   await js(`${longLog}.querySelector('.agent-chat-tool summary').click()`)
   await until(`${longLog}.querySelector('.agent-chat-tool')?.open`)
+  const readingPosition = () => js(`(() => {
+    const log = ${longLog}
+    const viewport = log.getBoundingClientRect()
+    for (const row of log.querySelectorAll('[data-chat-row^="item:"]')) {
+      const bounds = row.getBoundingClientRect()
+      if (bounds.bottom > viewport.top && bounds.top < viewport.bottom) {
+        return { id: row.dataset.chatRow, offset: bounds.top - viewport.top }
+      }
+    }
+    return null
+  })()`)
+  const beforeAppend = await readingPosition()
   fs.appendFileSync(codexTranscript, longAnswer('scroll-update', '읽는 동안 도착한 답변'))
-  await sleep(800)
-  check('a reader stays at the old position when new output arrives', await js(`
-    ${longLog}.scrollTop < 80 && ${longLog}.textContent.includes('긴 대화 0번')
-  `))
-  check('new output while reading marks the way down', await until(`${jumpBottom}?.dataset.fresh === 'true'`))
+  const newOutput = await until(`${jumpBottom}?.dataset.fresh === 'true'`)
+  const afterAppend = await readingPosition()
+  check('a reader stays at the old position when new output arrives', newOutput && Boolean(
+    beforeAppend && afterAppend && beforeAppend.id === afterAppend.id && Math.abs(beforeAppend.offset - afterAppend.offset) <= 1
+  ), JSON.stringify({ beforeAppend, afterAppend }))
+  check('new output while reading marks the way down', newOutput)
   await js(`${jumpBottom}.click()`)
   check('the latest reply appears after going to the bottom', await until(`${atEnd} && !${jumpBottom}`) && await until(`${longLog}.textContent.includes('읽는 동안 도착한 답변') && !${longLog}.querySelector('.agent-chat-tool')`))
   await scrollLongLog(false)

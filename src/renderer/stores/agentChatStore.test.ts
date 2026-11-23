@@ -29,6 +29,21 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+it('tracks MCP generations before the transcript opens and through a failed refresh', async () => {
+  const first = send('/mcp')
+  const mcpSummary = { id: 'first-summary', canLogin: true }
+  store().settleCommand(shellId, first, { state: 'done', output: 'MCP Tools', mcpSummary })
+  expect(chat().latestMcpSendId).toBe(first)
+  expect(chat().items.find(item => item.kind === 'output')?.mcpSummary).toEqual(mcpSummary)
+
+  const refresh = store().echoSend(shellId, '/mcp', [])
+  store().discardSend(shellId, refresh)
+  store().hide(shellId)
+  await store().show(shellId)
+  expect(chat().latestMcpSendId).toBe(refresh)
+  expect(chat().items.find(item => item.kind === 'output')?.mcpSummary).toEqual(mcpSummary)
+})
+
 describe('chat delivery confirmation', () => {
   it('waits for send acknowledgement, then marks an unmatched idle message after 15 seconds', () => {
     load()
