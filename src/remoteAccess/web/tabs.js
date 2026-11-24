@@ -159,6 +159,8 @@
     }
 
     return {
+      get selectedId() { return ended ? null : tabId },
+      reopen: attach,
       enter() {
         if (!list.childElementCount) list.append(el('p', 'empty', 'PC 탭 목록을 불러오는 중…'))
         send({ type: 'tabs-list' })

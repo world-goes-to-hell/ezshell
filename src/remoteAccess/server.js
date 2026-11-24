@@ -14,6 +14,7 @@ const { readSubscription } = require('./webPush.js')
 
 /** Signed-in connections at once */
 const MAX_CLIENTS = 4
+const PARKED_SHELL_MS = 10 * 60 * 1000
 /** Connections that have not signed in: they do not take the places above */
 const MAX_WAITING = 12
 const MAX_WAITING_PER_ADDRESS = 3
@@ -293,14 +294,15 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
     // First of all: a socket without an error listener throws into the main process
     socket.on('error', () => socket.terminate())
     const send = (message) => sendTo(client, message)
-    const drop = (reason) => {
-      if (reason) send({ type: 'bye', message: reason })
+    const parkedShells = new Map()
+    const drop = (reason, code) => {
+      if (reason) send({ type: 'bye', message: reason, ...(code && { code }) })
       closeSocket(socket)
     }
     client.drop = drop
     const arm = (ms) => {
       clearTimeout(client.timer)
-      client.timer = setTimeout(() => drop(client.device ? '입력이 없어 연결을 끊었습니다.' : null), ms)
+      client.timer = setTimeout(() => drop(client.device ? '입력이 없어 연결을 끊었습니다.' : null, 'idle'), ms)
     }
     const waiting = [...clients].filter((c) => !c.device)
     if (waiting.length >= MAX_WAITING || waiting.filter((c) => c.remote === remote).length >= MAX_WAITING_PER_ADDRESS) {
@@ -313,6 +315,8 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
     socket.on('close', () => {
       clearTimeout(client.timer)
       clients.delete(client)
+      for (const timer of parkedShells.values()) clearTimeout(timer)
+      parkedShells.clear()
       for (const stop of [...client.outputs]) stop()
       shells.closeAll(client)
       for (const tab of [...client.tabs.values()]) tab.stop()
@@ -407,10 +411,15 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
         onClose: () => {
           output.flush()
           output.stop()
-          if (opened) send({ type: 'closed', shellId: opened })
+          if (opened) {
+            clearTimeout(parkedShells.get(opened))
+            parkedShells.delete(opened)
+            send({ type: 'closed', shellId: opened })
+          }
         }
       }).then(({ shellId, name }) => {
         opened = shellId
+        parkedShells.set(shellId, null)
         log('open', { device: client.device.name, session: name })
         send({ type: 'opened', requestId, shellId, name })
         if (early) output.push(early)
@@ -420,6 +429,19 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
         output.stop()
         send({ type: 'open-failed', requestId, message: err.message })
       })
+    }
+
+    function setShellVisible(shellId, visible) {
+      if (!parkedShells.has(shellId) || typeof visible !== 'boolean') return
+      const timer = parkedShells.get(shellId)
+      if (visible) {
+        clearTimeout(timer)
+        parkedShells.set(shellId, null)
+      } else if (!timer) {
+        const expiry = setTimeout(() => shells.close(shellId, client), PARKED_SHELL_MS)
+        expiry.unref?.()
+        parkedShells.set(shellId, expiry)
+      }
     }
 
     // ---- The PC's SSH tabs: following one's output, typing into it (never resizing it) ----
@@ -589,6 +611,7 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
       // ---- Signed in ----
       // The device may have been removed on the PC meanwhile
       if (!store.hasDevice(client.device.id)) return drop('이 기기는 PC 에서 등록이 해제되었습니다.')
+      if (message.type === 'probe') return send({ type: 'probe' })
       arm(IDLE_MS)
       switch (message.type) {
         case 'sessions':
@@ -641,6 +664,8 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
           return shells.write(String(message.shellId), client, message.data)
         case 'resize':
           return shells.resize(String(message.shellId), client, message.cols, message.rows)
+        case 'shell-visible':
+          return setShellVisible(String(message.shellId), message.visible)
         case 'close':
           return shells.close(String(message.shellId), client)
         case 'tabs-list':

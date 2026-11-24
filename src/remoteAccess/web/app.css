@@ -72,7 +72,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  height: 100dvh;
+  height: var(--visible-height, 100dvh);
   padding: 20px 16px calc(16px + env(safe-area-inset-bottom));
 }
 
@@ -230,11 +230,29 @@ button.ghost {
 /* ---- Terminal ---- */
 .terminal-view {
   gap: 0;
-  padding: 8px 0 env(safe-area-inset-bottom);
+  padding: 8px 0 calc(var(--tab-height) + env(safe-area-inset-bottom));
+}
+
+body:not([data-workspace]) > .terminal-view {
+  position: relative;
+  top: var(--visible-top, 0px);
 }
 
 .terminal-view .bar {
   padding: 0 10px 6px;
+}
+
+.terminal-close,
+.terminal-return {
+  flex: none;
+  white-space: nowrap;
+}
+
+.terminal-return {
+  align-self: stretch;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
 }
 
 #terminal-host {
@@ -300,7 +318,7 @@ button.icon {
 .tabs {
   position: fixed;
   right: 0;
-  bottom: 0;
+  top: calc(var(--visible-top, 0px) + var(--visible-height, 100dvh) - var(--tab-height) - env(safe-area-inset-bottom));
   left: 0;
   z-index: 20;
   display: flex;
@@ -840,7 +858,7 @@ body[data-workspace] {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   grid-template-rows: var(--title-bar-height) var(--terminal-tab-strip-height) minmax(0, 1fr) 26px;
-  height: 100dvh;
+  height: var(--visible-height, 100dvh);
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   overflow: hidden;
 }

@@ -510,6 +510,8 @@
 
     closeChat(false)
     return {
+      get selectedAgent() { return current?.closed ? null : current?.agent },
+      reopen: openChat,
       layout(workspace) {
         const parent = workspace ? meta : chatBar
         if (stop.parentElement !== parent) parent.append(stop)

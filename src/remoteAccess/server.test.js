@@ -271,6 +271,42 @@ describe('createAccessServer', () => {
     await client.closed
   })
 
+  it('keeps a parked shell for ten minutes, and cancels expiry if its owner returns', async () => {
+    context = setup()
+    await context.server.start('127.0.0.1', PORT)
+    const client = await signedIn(context)
+    client.send({ type: 'open', requestId: 'q1', sessionId: 's1' })
+    const { shellId } = await client.next()
+    await client.next() // Early shell output
+    const setTimer = vi.spyOn(globalThis, 'setTimeout')
+    const clearTimer = vi.spyOn(globalThis, 'clearTimeout')
+    const parkedTimers = () => setTimer.mock.calls.flatMap(([expire, delay], index) =>
+      delay === 600_000 ? [{ expire, timer: setTimer.mock.results[index].value }] : [])
+    const visibility = async visible => {
+      client.send({ type: 'shell-visible', shellId, visible })
+      client.send({ type: 'probe' })
+      expect(await client.next()).toEqual({ type: 'probe' })
+    }
+
+    try {
+      await visibility(false)
+      await visibility(false)
+      expect(parkedTimers()).toHaveLength(1)
+      expect(context.shells.close).not.toHaveBeenCalled()
+      await visibility(true)
+      expect(clearTimer).toHaveBeenCalledWith(parkedTimers()[0].timer)
+      await visibility(false)
+      expect(parkedTimers()).toHaveLength(2)
+      parkedTimers()[1].expire()
+      expect(context.shells.close).toHaveBeenCalledExactlyOnceWith(shellId, context.opened[0].owner)
+    } finally {
+      client.socket.close()
+      await client.closed
+      setTimer.mockRestore()
+      clearTimer.mockRestore()
+    }
+  })
+
   it('answers nothing while the app is locked', async () => {
     let locked = false
     context = setup({ isLocked: () => locked })

@@ -55,6 +55,7 @@
     </header>
     <p id="pc-tabs-status" class="note muted" role="status" hidden></p>
     <p id="push-status" class="muted" role="status" hidden></p>
+    <button id="terminal-return" type="button" class="ghost terminal-return" hidden></button>
     <label class="session-search"><span aria-hidden="true"></span><input id="session-filter" type="search" placeholder="세션 이름으로 찾기" aria-label="세션 찾기"></label>
     <div id="session-list" class="list tree"></div>
   </section>
@@ -98,9 +99,10 @@
   <!-- One terminal -->
   <main id="view-terminal" class="view terminal-view workspace-detail" hidden>
     <header class="bar">
-      <button id="terminal-back" type="button" class="ghost workspace-return" aria-label="세션 목록으로"><span>‹ 목록</span><span aria-hidden="true">×</span></button>
+      <button id="terminal-back" type="button" class="ghost workspace-return" aria-label="세션 목록으로"><span>‹ 목록</span><span aria-hidden="true">‹</span></button>
       <strong id="terminal-name"></strong>
-      <span id="terminal-state" class="muted"></span>
+      <span id="terminal-state" class="muted" role="status"></span>
+      <button id="terminal-close" type="button" class="ghost terminal-close" hidden>연결 종료</button>
     </header>
     <div id="terminal-host"></div>
     <div id="keys" class="keys" role="toolbar" aria-label="추가 키">

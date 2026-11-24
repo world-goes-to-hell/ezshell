@@ -12,7 +12,7 @@
   const TABBED = new Set(['sessions', 'tabs', 'activity', 'agents', 'chat'])
   const AGENT_VIEWS = new Set(['agents', 'chat'])
   const PC_TAB_VIEWS = new Set(['tabs', 'tab-terminal'])
-  const workspaceWidth = window.matchMedia('(min-width: 45rem)')
+  const workspaceSize = window.matchMedia('(min-width: 45rem) and (min-height: 40rem)')
   const workspaceLists = { terminal: 'sessions', 'tab-terminal': 'tabs', chat: 'agents' }
   const workspaceHints = {
     sessions: '목록에서 열 세션을 선택하세요.',
@@ -26,7 +26,9 @@
   let currentView = null
   let tabsEnabled = false
   let agentsEnabled = false
-  const inWorkspace = () => workspaceWidth.matches && (TABBED.has(currentView) || currentView === 'terminal' || currentView === 'tab-terminal')
+  const terminalView = view => view === 'terminal' || view === 'tab-terminal'
+  const showsNavigation = view => TABBED.has(view) || terminalView(view)
+  const inWorkspace = () => workspaceSize.matches && showsNavigation(currentView)
 
   function layout() {
     const workspace = inWorkspace()
@@ -50,7 +52,7 @@
     const hint = workspace && workspaceHints[currentView]
     $('workspace-empty').hidden = !hint
     if (hint) $('workspace-empty-title').textContent = hint
-    $('tabs').hidden = workspace || !TABBED.has(currentView)
+    $('tabs').hidden = workspace || !showsNavigation(currentView)
     const selected = workspaceLists[currentView] ?? currentView
     for (const tab of $('tabs').querySelectorAll('button')) {
       if (tab.dataset.view === selected) tab.setAttribute('aria-current', 'page')
@@ -66,20 +68,28 @@
   const show = (name) => {
     if (name === currentView) return
     const previous = currentView
+    if (previous === reselect?.view) reselect = null
     currentView = name
     if (previous === 'sessions') $('pc-tabs-status').hidden = true
     layout()
     if (previous === 'activity') activity.leave()
-    if (previous === 'terminal') closeTerminal()
+    if (previous === 'terminal') {
+      setShellVisible(false)
+      setCtrl(false)
+    }
     if (previous === 'tab-terminal') {
       pcTabs.detach()
       setCtrl(false)
     }
     if (previous === 'chat' && name !== 'chat') agents?.closeChat()
     syncAgentList()
-    if (name === 'terminal' || name === 'tab-terminal') {
+    if (terminalView(name)) {
       $(`view-${name}`).append($('keys'))
-      setKeysVisible(name === 'terminal')
+      setKeysVisible(name === 'terminal' && Boolean(shellId))
+    }
+    if (name === 'terminal') {
+      setShellVisible(true)
+      fitTerminal()
     }
     if (name === 'activity') activity.enter()
     if (name === 'tabs') pcTabs.enter()
@@ -90,10 +100,21 @@
   let fit = null
   let shellId = null
   let selectedSession = null
+  let terminalName = ''
   let pendingOpen = null
   let openSequence = 0
   let isCtrlArmed = false
   let wasReady = false
+  let reconnectAllowed = false
+  let waitForWake = false
+  let retryTimer = null
+  let wakeTimer = null
+  let retryCount = 0
+  let savedView = null
+  let reselect = null
+  let forgetTicketOnReady = false
+  const RETRY_DELAYS = [1000, 2000, 4000, 8000, 16000]
+  const RESUME_TIMEOUT_MS = 10000
   const CONNECT_FAILED = 'PC 의 ezShell 에 연결하지 못했습니다. ezShell 이 켜져 있고 잠금이 풀려 있는지, 원격 접속이 켜져 있는지, 이 휴대폰의 Tailscale 이 연결되어 있는지 확인하세요.'
 
   const readToken = () => {
@@ -134,6 +155,73 @@
 
   const send = (message) => {
     if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
+  }
+
+  function rememberView() {
+    if (currentView === 'tabs' && reselect?.view === 'tabs') {
+      savedView = { view: 'tab-terminal', tabId: reselect.id }
+    } else if (currentView === 'agents' && reselect?.view === 'agents') {
+      savedView = { view: 'chat', agent: reselect.agent }
+    } else {
+      savedView = { view: currentView, tabId: pcTabs.selectedId, agent: agents?.selectedAgent }
+    }
+    reselect = null
+  }
+
+  function restoreView() {
+    const saved = savedView
+    savedView = null
+    if (!saved) return
+    if (saved.view === 'terminal' && terminal) show('terminal')
+    else if (PC_TAB_VIEWS.has(saved.view) && tabsEnabled) {
+      if (saved.view === 'tab-terminal' && saved.tabId) reselect = { view: 'tabs', id: saved.tabId }
+      show('tabs')
+    } else if (AGENT_VIEWS.has(saved.view) && agentsEnabled) {
+      if (saved.view === 'chat' && saved.agent) reselect = { view: 'agents', agent: saved.agent }
+      show('agents')
+    } else if (saved.view === 'activity') show('activity')
+  }
+
+  function cancelRetry() {
+    clearTimeout(retryTimer)
+    retryTimer = null
+  }
+
+  function canReconnect() {
+    return reconnectAllowed && !waitForWake && !socket && !document.hidden
+      && navigator.onLine !== false && retryCount < RETRY_DELAYS.length
+  }
+
+  function scheduleReconnect() {
+    if (retryTimer !== null) return true
+    if (!canReconnect() || !readToken() || !readTrust()) return false
+    message('다시 접속하는 중…')
+    retryTimer = setTimeout(() => {
+      retryTimer = null
+      if (!canReconnect()) return
+      const token = readToken()
+      const trust = readTrust()
+      if (!token || !trust) return start()
+      retryCount++
+      connect(() => send({ type: 'resume', token, ticket: trust.ticket }), true)
+    }, RETRY_DELAYS[retryCount])
+    return true
+  }
+
+  function wake() {
+    if (document.hidden) return
+    waitForWake = false
+    if (!socket) scheduleReconnect()
+    else if (wasReady && socket.readyState === WebSocket.OPEN && wakeTimer === null) {
+      // A suspended browser can still report OPEN after its network disappeared.
+      const current = socket
+      wakeTimer = setTimeout(() => {
+        wakeTimer = null
+        if (socket === current) current.close()
+      }, RESUME_TIMEOUT_MS)
+      send({ type: 'probe' })
+    }
+    fitViewport()
   }
 
   const ez = window.ezRemote
@@ -219,36 +307,48 @@
   }
 
   // ---- Connection ----
-  function connect(onOpen) {
+  function connect(onOpen, resuming = false) {
     // HTTPS (a Tailscale certificate) needs the secure socket on the same name
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
     const next = new WebSocket(`${scheme}://${location.host}/ws`)
     let didOpen = false
     socket = next
+    const deadline = resuming ? setTimeout(() => next.close(), RESUME_TIMEOUT_MS) : null
     next.addEventListener('open', () => {
       if (socket !== next) return
       didOpen = true
       onOpen()
     })
     next.addEventListener('message', (event) => {
-      if (socket === next) handle(JSON.parse(event.data))
+      if (socket !== next) return
+      clearTimeout(wakeTimer)
+      wakeTimer = null
+      const incoming = JSON.parse(event.data)
+      if (incoming.type === 'ready' || incoming.type === 'error' || incoming.type === 'bye') clearTimeout(deadline)
+      handle(incoming)
     })
     next.addEventListener('close', () => {
+      clearTimeout(deadline)
       if (socket !== next) return
       socket = null
-      closeTerminal()
+      clearTimeout(wakeTimer)
+      wakeTimer = null
+      const wasSignedIn = wasReady
+      if (wasSignedIn) rememberView()
+      wasReady = false
+      endTerminal()
       approvals.reset()
       activity.reset()
       push.reset()
       pcTabs.reset()
       agents?.reset()
-      if (wasReady) message('연결이 끊겼습니다.', { canRetry: true })
+      if ((wasSignedIn || resuming) && scheduleReconnect()) return
+      if (wasSignedIn || (resuming && reconnectAllowed)) message('연결이 끊겼습니다.', { canRetry: true })
       else if (!didOpen) {
         // Never reached the PC: said where the person is looking
         if (!$('view-signin').hidden) signinError(CONNECT_FAILED)
         else message(CONNECT_FAILED, { canRetry: true })
       }
-      wasReady = false
     })
   }
 
@@ -267,6 +367,11 @@
         break
       case 'ready':
         wasReady = true
+        if (forgetTicketOnReady) clearTrust()
+        forgetTicketOnReady = false
+        reconnectAllowed = Boolean(readToken() && readTrust())
+        retryCount = 0
+        cancelRetry()
         $('device-name').textContent = msg.device
         $('workspace-device').textContent = msg.device
         applyTheme(msg.theme)
@@ -275,6 +380,7 @@
         agentsEnabled = false
         show('sessions')
         updateFeatures(msg.features)
+        restoreView()
         for (const request of Array.isArray(msg.approvals) ? msg.approvals : []) approvals.add(request)
         void push.setAvailability(msg.push)
         break
@@ -315,7 +421,14 @@
         if (typeof msg.error === 'string' && msg.error) {
           setPcTabsEnabled(false, msg.error)
           layout()
-        } else pcTabs.onMessage(msg)
+        } else {
+          pcTabs.onMessage(msg)
+          if (reselect?.view === 'tabs') {
+            const tab = Array.isArray(msg.tabs) && msg.tabs.find(item => item?.id === reselect.id)
+            reselect = null
+            if (tab && currentView === 'tabs') pcTabs.reopen(tab)
+          }
+        }
         break
       case 'tab-attached':
       case 'tab-data':
@@ -327,6 +440,8 @@
         push.result(msg)
         break
       case 'error':
+        reconnectAllowed = false
+        cancelRetry()
         // A stored ticket that no longer works (a day passed, or it did not match): forget it and ask for a code
         if (msg.code === 'trust-expired' || msg.code === 'bad-ticket') clearTrust()
         if (!readToken() || msg.code === 'unknown-device') message(msg.message)
@@ -342,13 +457,18 @@
           shellId = msg.shellId
           pendingOpen = null
           $('terminal-state').textContent = ''
-          fitTerminal()
-          terminal.focus()
+          updateShellActions()
+          if (currentView === 'terminal') {
+            setKeysVisible(true)
+            fitTerminal()
+            terminal.focus()
+          } else setShellVisible(false)
         } else if (msg.shellId !== shellId) send({ type: 'close', shellId: msg.shellId })
         break
       case 'open-failed':
         if (pendingOpen && msg.requestId === pendingOpen) {
           pendingOpen = null
+          updateShellActions()
           $('terminal-state').textContent = ''
           terminal.write(`\r\n\x1b[31m${msg.message}\x1b[0m\r\n`)
         }
@@ -358,24 +478,33 @@
         break
       case 'closed':
         if (msg.shellId === shellId) {
-          shellId = null
-          $('terminal-state').textContent = '종료됨'
-          terminal.write('\r\n\x1b[2m연결이 종료되었습니다.\x1b[0m\r\n')
+          endTerminal()
         }
         break
       case 'bye':
+        if (wasReady) rememberView()
         wasReady = false
+        reconnectAllowed = msg.code === 'idle'
+        waitForWake = reconnectAllowed
+        cancelRetry()
         message(msg.message, { canRetry: true })
         break
       default:
         if (msg.type === 'agents' || msg.type?.startsWith('chat-')) agents?.onMessage(msg)
+        if (msg.type === 'agents' && reselect?.view === 'agents') {
+          const { agent } = reselect
+          const match = !msg.error && Array.isArray(msg.agents) && msg.agents.find(item => item?.shellId === agent.shellId
+            && item.agentId === agent.agentId && item.kind === agent.kind)
+          reselect = null
+          if (match && currentView === 'agents') agents?.reopen(match)
+        }
     }
   }
 
   // ---- Screens ----
   $('tabs').addEventListener('click', (event) => {
     const tab = event.target.closest('button[data-view]')
-    if (!tab || tab.hidden || tab.getAttribute('aria-current') === 'page') return
+    if (!tab || tab.hidden || tab.dataset.view === currentView) return
     show(tab.dataset.view)
     if (tab.dataset.view === 'sessions') send({ type: 'sessions' })
   })
@@ -386,7 +515,7 @@
 
   // ---- Terminal ----
   function fitTerminal() {
-    if (!terminal || !fit) return
+    if (currentView !== 'terminal' || !terminal || !fit) return
     try {
       fit.fit()
     } catch {
@@ -396,14 +525,16 @@
   }
 
   function openTerminal(session) {
-    if (selectedSession === session.id && (shellId || pendingOpen)) {
-      terminal?.focus()
+    if (shellId || pendingOpen) {
+      show('terminal')
+      if (selectedSession === session.id) terminal?.focus()
+      else $('terminal-state').textContent = '열린 셸을 종료한 뒤 다른 세션을 열 수 있습니다.'
       return
     }
     closeTerminal()
     selectedSession = session.id
     tree.select(selectedSession)
-    $('terminal-name').textContent = session.name
+    terminalName = $('terminal-name').textContent = session.name
     $('terminal-state').textContent = '접속 중…'
     show('terminal')
     terminal = createTerminal()
@@ -417,6 +548,7 @@
     }
     terminal.onData((data) => { if (shellId) sendTerminalInput(data) })
     pendingOpen = `q${++openSequence}`
+    updateShellActions()
     send({ type: 'open', requestId: pendingOpen, sessionId: session.id, cols: terminal.cols, rows: terminal.rows })
   }
 
@@ -433,6 +565,7 @@
     if (shellId) send({ type: 'close', shellId })
     shellId = null
     selectedSession = null
+    terminalName = ''
     tree.select(null)
     pendingOpen = null
     setCtrl(false)
@@ -440,6 +573,30 @@
     terminal = null
     fit = null
     $('terminal-host').textContent = ''
+    updateShellActions()
+  }
+
+  function updateShellActions() {
+    const hasShell = Boolean(shellId || pendingOpen)
+    $('terminal-return').hidden = !hasShell
+    $('terminal-return').textContent = hasShell ? `열린 셸 · ${terminalName}` : ''
+    $('terminal-close').hidden = !hasShell
+  }
+
+  function setShellVisible(visible) {
+    if (shellId) send({ type: 'shell-visible', shellId, visible })
+  }
+
+  function endTerminal() {
+    if (!shellId && !pendingOpen) return
+    shellId = null
+    pendingOpen = null
+    selectedSession = null
+    tree.select(null)
+    updateShellActions()
+    if (currentView === 'terminal') setKeysVisible(false)
+    $('terminal-state').textContent = '연결 종료됨'
+    terminal?.write('\r\n\x1b[2m연결이 종료되었습니다.\x1b[0m\r\n')
   }
 
   function setCtrl(isOn) {
@@ -484,14 +641,43 @@
     show('sessions')
     send({ type: 'sessions' })
   })
-  window.addEventListener('resize', fitTerminal)
-  workspaceWidth.addEventListener('change', () => {
+  $('terminal-return').addEventListener('click', () => show('terminal'))
+  $('terminal-close').addEventListener('click', () => {
+    closeTerminal()
+    show('sessions')
+  })
+  function fitViewport() {
+    const viewport = window.visualViewport
+    const style = document.documentElement.style
+    if (viewport?.height > 0 && (viewport.scale ?? 1) === 1) {
+      style.setProperty('--visible-height', `${Math.floor(viewport.height)}px`)
+      style.setProperty('--visible-top', `${Math.floor(viewport.offsetTop || 0)}px`)
+    } else {
+      style.removeProperty('--visible-height')
+      style.removeProperty('--visible-top')
+    }
+    fitTerminal()
+  }
+  window.addEventListener('resize', fitViewport)
+  workspaceSize.addEventListener('change', () => {
     layout()
     syncAgentList()
     if (inWorkspace() && tabsEnabled) pcTabs.enter()
     fitTerminal()
   })
-  if (window.visualViewport) window.visualViewport.addEventListener('resize', fitTerminal)
+  window.visualViewport?.addEventListener('resize', fitViewport)
+  window.visualViewport?.addEventListener('scroll', fitViewport)
+  if (window.visualViewport) fitViewport()
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      cancelRetry()
+      clearTimeout(wakeTimer)
+      wakeTimer = null
+    }
+    else wake()
+  })
+  window.addEventListener('online', wake)
+  window.addEventListener('pageshow', event => { if (event.persisted) wake() })
 
   // ---- Start ----
   $('signin-form').addEventListener('submit', (event) => {
@@ -501,6 +687,7 @@
     signinError('')
     const token = readToken()
     const remember = $('signin-remember').checked
+    forgetTicketOnReady = !remember
     const payload = { type: 'signin', token, code, remember }
     if (socket && socket.readyState === WebSocket.OPEN) send(payload)
     else connect(() => send(payload))
@@ -508,6 +695,11 @@
   $('message-retry').addEventListener('click', start)
 
   function start() {
+    if (socket) return
+    cancelRetry()
+    retryCount = 0
+    waitForWake = false
+    reconnectAllowed = false
     const pairCode = new URLSearchParams(location.hash.slice(1)).get('pair')
     const token = readToken()
     signinError('')
@@ -519,8 +711,9 @@
       const trust = readTrust()
       // The PC checks expiry using the same clock that issued the ticket.
       if (trust) {
+        reconnectAllowed = true
         message('접속하는 중…')
-        connect(() => send({ type: 'resume', token, ticket: trust.ticket }))
+        connect(() => send({ type: 'resume', token, ticket: trust.ticket }), true)
       } else {
         $('signin-note').textContent = '인증 앱의 6자리 코드를 입력하세요.'
         show('signin')
