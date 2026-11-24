@@ -42,6 +42,42 @@
   color: var(--success);
 }
 
+.update-icon-error {
+  background: color-mix(in srgb, var(--error) 16%, transparent);
+  color: var(--error-text, var(--error));
+}
+
+.update-notification.is-error {
+  align-items: flex-start;
+  max-width: min(440px, calc(100vw - 32px));
+}
+
+.update-error-detail {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.update-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.update-page-btn {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.update-page-btn:hover {
+  background: var(--bg-hover);
+}
+
 .update-content {
   display: flex;
   flex-direction: column;
@@ -132,6 +168,9 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  border: 0;
+  background: transparent;
+  font: inherit;
   font-size: 13px;
   color: var(--text-muted);
   cursor: pointer;
@@ -139,6 +178,10 @@
   border-radius: var(--radius-sm);
   transition: all var(--transition-fast);
   user-select: none;
+}
+
+.version-update-error {
+  color: var(--error-text, var(--error));
 }
 
 .version-info:hover {

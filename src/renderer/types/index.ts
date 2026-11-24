@@ -49,6 +49,8 @@ export interface SshSessionInfo {
   port: number
   username: string
   savedSessionId: string | null
+  sessionName?: string
+  color?: string
 }
 
 export type SshConnectionTestResult =
@@ -153,6 +155,7 @@ export interface RemoteFileWindowState {
 
 interface RemoteFileLoadedBase {
   sessionName: string
+  sessionColor?: string
   requestedPath: string
   /** The real path behind links */
   path: string

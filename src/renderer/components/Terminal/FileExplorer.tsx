@@ -11,6 +11,7 @@ import { mergeRoot, parentOf, replaceChildren, toFileItem } from '../../lib/file
 import { openRemoteFileWindow } from '../../lib/remoteFileOpen'
 import { renameEntry, createFolder } from '../../lib/sftpFileOps'
 import { deleteRemoteSelection } from '../../lib/sftpRemoteDelete'
+import { sftpErrorDetail } from '../../lib/sftpErrors'
 import { FileListContextMenu, buildContextMenuItems, type ContextMenuAction } from '../Sftp/FileListContextMenu'
 import { FileExplorerIcon } from './FileExplorerIcon'
 import '../Sftp/FileList.css'
@@ -35,13 +36,15 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
   const [rootNodes, setRootNodes] = useState<FileNode[]>([])
   const [loading, setLoading] = useState(true)
   const [displayPath, setDisplayPath] = useState('/')
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ message: string; path: string } | null>(null)
   const [initialized, setInitialized] = useState(false)
   const [isEditingPath, setIsEditingPath] = useState(false)
   const [editingPathValue, setEditingPathValue] = useState('')
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(true)
   // Folders being read right now, and the entries that have arrived so far for one of them
   const [loadingDirs, setLoadingDirs] = useState<ReadonlySet<string>>(new Set())
+  const [directoryErrors, setDirectoryErrors] = useState<Record<string, string>>({})
+  const rootRequest = useRef(0)
   const [listProgress, setListProgress] = useState<{ path: string; count: number } | null>(null)
   // How many entries of a long folder are drawn (the rest wait behind "더 보기")
   const [shownCounts, setShownCounts] = useState<Record<string, number>>({})
@@ -56,9 +59,6 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
     try {
       const rawFiles = await window.electronAPI.sftpList(sessionId, path)
       return toFileNodes(rawFiles || [], path)
-    } catch (error) {
-      console.error('Failed to load directory:', error)
-      return []
     } finally {
       setLoadingDirs(current => {
         const next = new Set(current)
@@ -98,20 +98,26 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
     )
   }
 
-  const loadPath = useCallback(async (path: string) => {
+  const loadPath = useCallback(async (path: string, open = false) => {
+    const request = ++rootRequest.current
     setLoading(true)
     setError(null)
+    setDirectoryErrors({})
     try {
+      if (open) await window.electronAPI.sftpOpen(sessionId)
       const nodes = await loadDirectory(path)
+      if (request !== rootRequest.current) return
       setRootNodes(nodes)
       setDisplayPath(path)
-    } catch (err) {
-      console.error('Failed to load path:', err)
-      setError('디렉토리 로드 실패')
+      setInitialized(true)
+    } catch (reason) {
+      console.warn('[file-explorer]', path, reason)
+      if (request !== rootRequest.current) return
+      setError({ message: sftpErrorDetail(reason) ?? '폴더를 읽지 못했습니다.', path })
     } finally {
-      setLoading(false)
+      if (request === rootRequest.current) setLoading(false)
     }
-  }, [loadDirectory])
+  }, [sessionId, loadDirectory])
 
   const loadRoot = useCallback(async () => {
     await loadPath('/')
@@ -125,27 +131,10 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
 
 
   useEffect(() => {
-    // Try to open SFTP first, then load
-    const init = async () => {
-      setLoading(true)
-      setError(null)
-      try {
-        await window.electronAPI.sftpOpen(sessionId)
-        // Start with root or home directory
-        const initialPath = currentPath && currentPath !== '~' ? currentPath : '/'
-        const nodes = await loadDirectory(initialPath)
-        setRootNodes(nodes)
-        setDisplayPath(initialPath)
-        setInitialized(true)
-      } catch (err: any) {
-        console.error('Failed to initialize file explorer:', err)
-        setError(err?.message || 'SFTP 연결 실패')
-      } finally {
-        setLoading(false)
-      }
-    }
-    init()
-  }, [sessionId, loadDirectory])
+    setInitialized(false)
+    void loadPath(currentPath === '~' ? '/' : currentPath, true)
+    return () => { rootRequest.current++ }
+  }, [loadPath])
 
   // Reload when current path changes (from terminal cd commands) - only if auto-sync is enabled
   useEffect(() => {
@@ -191,9 +180,25 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
   }
 
   /** Reads one folder again; the rest of the tree keeps its open folders */
-  const reloadDir = async (dirPath: string) => {
-    const children = await loadDirectory(dirPath)
-    setRootNodes(prev => (dirPath === displayPath ? mergeRoot(prev, children) : replaceChildren(prev, dirPath, children)))
+  const reloadDir = async (dirPath: string, expand = true) => {
+    if (loadingDirs.has(dirPath)) return
+    const request = rootRequest.current
+    setDirectoryErrors(previous => {
+      const next = { ...previous }
+      delete next[dirPath]
+      return next
+    })
+    try {
+      const children = await loadDirectory(dirPath)
+      if (request !== rootRequest.current) return
+      setRootNodes(prev => (dirPath === displayPath ? mergeRoot(prev, children) : replaceChildren(prev, dirPath, children, expand)))
+    } catch (reason) {
+      console.warn('[file-explorer]', dirPath, reason)
+      if (request !== rootRequest.current) return
+      const message = sftpErrorDetail(reason) ?? '폴더를 읽지 못했습니다.'
+      if (dirPath === displayPath) setError({ message, path: dirPath })
+      else setDirectoryErrors(previous => ({ ...previous, [dirPath]: message }))
+    }
   }
 
   const download = async (node: FileNode) => {
@@ -273,7 +278,7 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
     }).map(({ shortcut: _shortcut, ...item }) => item)
     : []
 
-  const toggleNode = async (node: FileNode, path: number[]) => {
+  const toggleNode = (node: FileNode, path: number[]) => {
     if (node.type !== 'directory') {
       onFileSelect?.(node.path)
       return
@@ -283,28 +288,7 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
       return nodes.map((n, i) => {
         if (i === path[pathIndex]) {
           if (pathIndex === path.length - 1) {
-            // This is the target node
-            const newNode = { ...n, isExpanded: !n.isExpanded }
-            if (!n.isLoaded && !n.isExpanded) {
-              // Load children
-              loadDirectory(n.path).then(children => {
-                setRootNodes(prev => {
-                  const update = (nodes: FileNode[], idx: number): FileNode[] => {
-                    return nodes.map((node, j) => {
-                      if (j === path[idx]) {
-                        if (idx === path.length - 1) {
-                          return { ...node, children, isLoaded: true }
-                        }
-                        return { ...node, children: update(node.children || [], idx + 1) }
-                      }
-                      return node
-                    })
-                  }
-                  return update(prev, 0)
-                })
-              })
-            }
-            return newNode
+            return { ...n, isExpanded: !n.isExpanded }
           }
           return { ...n, children: updateNodes(n.children || [], pathIndex + 1) }
         }
@@ -313,12 +297,13 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
     }
 
     setRootNodes(prev => updateNodes(prev, 0))
+    if (!node.isLoaded && !node.isExpanded) void reloadDir(node.path, false)
   }
 
   const renderNode = (node: FileNode, path: number[], depth: number = 0) => {
     const isDir = node.type === 'directory'
     const paddingLeft = depth * 16 + 8
-
+    const directoryError = directoryErrors[node.path]
 
     return (
       <div key={node.path}>
@@ -369,10 +354,16 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
             </span>
           )}
         </div>
-        {isDir && node.isExpanded && !node.isLoaded && loadingDirs.has(node.path) && (
+        {isDir && node.isExpanded && loadingDirs.has(node.path) && (
           <div className="file-explorer-loading-row" style={{ paddingLeft: paddingLeft + 20 }} role="status">
             <span className="loading-spinner" aria-hidden="true" />
             {loadingLabel(node.path)}
+          </div>
+        )}
+        {isDir && node.isExpanded && directoryError && (
+          <div className="file-explorer-error file-explorer-error-row" style={{ paddingLeft: paddingLeft + 20 }}>
+            <span role="alert">{directoryError}</span>
+            <button type="button" className="file-explorer-retry-btn" onClick={() => void reloadDir(node.path, false)}>다시 시도</button>
           </div>
         )}
         {/* A long folder opens at once: animating the height of hundreds of rows stutters */}
@@ -481,22 +472,26 @@ export function FileExplorer({ sessionId, onFileSelect }: FileExplorerProps) {
           </div>
         ) : error ? (
           <div className="file-explorer-error">
-            <span>{error}</span>
+            <span role="alert" title={error.path}>{error.message}</span>
             <button
+              type="button"
               className="file-explorer-retry-btn"
-              onClick={() => {
-                setError(null)
-                setInitialized(false)
-                window.electronAPI.sftpOpen(sessionId).then(() => {
-                  loadPath('/')
-                  setInitialized(true)
-                }).catch((err: any) => {
-                  setError(err?.message || 'SFTP 연결 실패')
-                })
-              }}
+              onClick={() => void loadPath(error.path, true)}
             >
-              재시도
+              다시 시도
             </button>
+            {error.path !== '/' && (
+              <button
+                type="button"
+                className="file-explorer-retry-btn"
+                onClick={() => {
+                  setAutoSyncEnabled(false)
+                  void loadPath('/', true)
+                }}
+              >
+                루트로
+              </button>
+            )}
           </div>
         ) : rootNodes.length === 0 ? (
           <div className="file-explorer-empty">파일 없음</div>

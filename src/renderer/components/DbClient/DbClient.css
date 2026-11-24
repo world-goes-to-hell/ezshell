@@ -448,6 +448,7 @@
 .db-readonly-badge {
   display: inline-flex;
   align-items: center;
+  flex: none;
   gap: 4px;
   padding: 2px 8px;
   border: 1px solid color-mix(in srgb, var(--success) 45%, transparent);
@@ -457,22 +458,16 @@
   font-weight: 600;
 }
 
+.db-readonly-badge.is-warning {
+  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+  color: var(--warning);
+}
+
 .db-server-version {
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.db-guard-warning {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  overflow: hidden;
-  color: var(--warning);
-  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

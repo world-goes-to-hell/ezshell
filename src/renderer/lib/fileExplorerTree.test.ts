@@ -29,6 +29,12 @@ describe('fileExplorerTree', () => {
     expect(next[0].children?.[0]).toMatchObject({ isExpanded: true, isLoaded: true, children: [file('/var/log/b.log')] })
   })
 
+  it('keeps the folder closed if its read finishes after it was collapsed', () => {
+    const tree = [dir('/var', [dir('/var/log')], true)]
+    const next = replaceChildren(tree, '/var/log', [file('/var/log/a.log')], false)
+    expect(next[0].children?.[0]).toMatchObject({ isExpanded: false, isLoaded: true, children: [file('/var/log/a.log')] })
+  })
+
   it('keeps open folders when the top level is read again', () => {
     const old = [dir('/var', [file('/var/a')], true), file('/gone')]
     const merged = mergeRoot(old, [dir('/var'), file('/new')])

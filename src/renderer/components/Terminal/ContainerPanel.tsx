@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  RiRefreshLine, RiCloseFill, RiFileList3Line, RiTerminalBoxLine, RiFileCopyLine, RiRestartLine, RiStopCircleLine, RiPlayCircleLine, RiSearchLine
+  RiRefreshLine, RiCloseFill, RiFileList3Line, RiTerminalBoxLine, RiFileCopyLine, RiKeyboardLine, RiSearchLine
 } from 'react-icons/ri'
 import { toast } from '../../stores/toastStore'
 import { useTerminalStore } from '../../stores/terminalStore'
@@ -22,6 +22,7 @@ interface ContainerPanelProps {
 }
 
 const PREFS_KEY = 'containerPanelPrefs'
+const insertLabels = { restart: '재시작 명령 넣기', stop: '중지 명령 넣기', start: '시작 명령 넣기' }
 interface Prefs { showAll: boolean; autoRefresh: boolean }
 
 function loadPrefs(): Prefs {
@@ -107,7 +108,7 @@ export function ContainerPanel({ sessionId, onClose }: ContainerPanelProps) {
       toast.error('컨테이너', '명령을 입력줄에 넣지 못했습니다.')
       return
     }
-    toast.info('입력줄에 넣었습니다', '확인하고 Enter 를 눌러 실행하세요.')
+    toast.info('입력줄에 넣었습니다', '명령을 확인한 뒤 Enter를 눌러 실행하세요.')
   }
 
   const copyName = async (container: ContainerInfo) => {
@@ -233,18 +234,12 @@ export function ContainerPanel({ sessionId, onClose }: ContainerPanelProps) {
                 <button type="button" className="container-action" onClick={() => void copyName(container)} title="이름 복사">
                   <RiFileCopyLine size={14} /> 이름
                 </button>
-                <button type="button" className="container-action" onClick={() => typeCommand('restart', container)} title="docker restart 명령을 입력줄에 넣습니다 (실행은 Enter)">
-                  <RiRestartLine size={14} /> 재시작
-                </button>
-                {running ? (
-                  <button type="button" className="container-action" onClick={() => typeCommand('stop', container)} title="docker stop 명령을 입력줄에 넣습니다 (실행은 Enter)">
-                    <RiStopCircleLine size={14} /> 중지
+                {(['restart', running ? 'stop' : 'start'] as const).map(action => (
+                  <button key={action} type="button" className="container-action container-action-insert"
+                    onClick={() => typeCommand(action, container)} title="터미널 입력줄에 넣습니다. 확인한 뒤 Enter로 실행하세요.">
+                    <RiKeyboardLine size={14} aria-hidden="true" /> {insertLabels[action]}
                   </button>
-                ) : (
-                  <button type="button" className="container-action" onClick={() => typeCommand('start', container)} title="docker start 명령을 입력줄에 넣습니다 (실행은 Enter)">
-                    <RiPlayCircleLine size={14} /> 시작
-                  </button>
-                )}
+                ))}
               </div>
             </div>
           )
@@ -254,7 +249,7 @@ export function ContainerPanel({ sessionId, onClose }: ContainerPanelProps) {
 
       {loadedAt !== null && (
         <div className="container-foot">
-          {new Date(loadedAt).toLocaleTimeString('ko-KR', { hour12: false })} 기준 · 셸·재시작·중지는 입력줄에 넣기만 합니다
+          {new Date(loadedAt).toLocaleTimeString('ko-KR', { hour12: false })} 기준 · 입력줄의 명령은 Enter로 실행합니다
         </div>
       )}
     </motion.div>

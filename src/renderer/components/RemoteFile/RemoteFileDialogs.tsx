@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiErrorWarningLine, RiSave3Line } from 'react-icons/ri'
 import { McpDiffView } from '../Mcp/McpDiffView'
+import { ServerBadge } from '../Modal/ServerBadge'
 import type { McpDiffHunk } from '../../types'
 import '../Mcp/Mcp.css'
 
@@ -17,13 +18,15 @@ interface SaveReviewDialogProps {
   review: SaveReview | null
   path: string
   isLocal: boolean
+  sessionName: string
+  sessionColor?: string
   isSaving: boolean
   onConfirm: () => void
   onCancel: () => void
 }
 
 /** Ctrl+S: review the file changes before writing. Focus starts on 취소. */
-export function SaveReviewDialog({ review, path, isLocal, isSaving, onConfirm, onCancel }: SaveReviewDialogProps) {
+export function SaveReviewDialog({ review, path, isLocal, sessionName, sessionColor, isSaving, onConfirm, onCancel }: SaveReviewDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null)
   // A change too long to show in full is saved only after saying so
   const [acceptsUnseen, setAcceptsUnseen] = useState(false)
@@ -43,6 +46,7 @@ export function SaveReviewDialog({ review, path, isLocal, isSaving, onConfirm, o
               {isLocal ? '로컬 파일에 저장' : '서버 파일에 저장'}
             </Dialog.Title>
             <Dialog.Description className="remote-file-dialog-text">
+              {!isLocal && <ServerBadge name={sessionName || '원격 세션'} color={sessionColor} />}
               <span className="remote-file-dialog-path">{path}</span>
               <span>
                 <span className="remote-file-added">+{review.added}</span> <span className="remote-file-removed">-{review.removed}</span> 줄.
@@ -77,11 +81,13 @@ export type ConflictChoice = 'reload' | 'compare' | 'cancel'
 interface ConflictDialogProps {
   isOpen: boolean
   isLocal: boolean
+  sessionName: string
+  sessionColor?: string
   onChoose: (choice: ConflictChoice) => void
 }
 
 /** The file changed outside the editor since it was opened. */
-export function ConflictDialog({ isOpen, isLocal, onChoose }: ConflictDialogProps) {
+export function ConflictDialog({ isOpen, isLocal, sessionName, sessionColor, onChoose }: ConflictDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null)
   return (
     <Dialog.Root open={isOpen} onOpenChange={(open) => { if (!open) onChoose('cancel') }}>
@@ -97,6 +103,7 @@ export function ConflictDialog({ isOpen, isLocal, onChoose }: ConflictDialogProp
               {isLocal ? '로컬 파일이 바뀌었습니다' : '서버의 파일이 바뀌었습니다'}
             </Dialog.Title>
             <Dialog.Description className="remote-file-dialog-text">
+              {!isLocal && <ServerBadge name={sessionName || '원격 세션'} color={sessionColor} />}
               <span>이 창에서 연 뒤에 다른 사람이나 프로그램이 파일을 바꿔서 저장하지 않았습니다.</span>
               <span>{isLocal
                 ? '디스크의 최신 내용과 다시 비교하면, 바뀐 부분을 확인한 뒤 내 내용으로 저장할 수 있습니다.'
@@ -104,7 +111,7 @@ export function ConflictDialog({ isOpen, isLocal, onChoose }: ConflictDialogProp
             </Dialog.Description>
             <div className="modal-actions remote-file-dialog-actions">
               <button ref={cancelRef} type="button" className="btn-secondary modal-btn" onClick={() => onChoose('cancel')}>취소</button>
-              <button type="button" className="btn-secondary modal-btn" onClick={() => onChoose('reload')}>
+              <button type="button" className="btn-danger modal-btn" onClick={() => onChoose('reload')}>
                 {isLocal ? '파일 다시 불러오기 (내 변경 버림)' : '서버 내용 다시 불러오기 (내 변경 버림)'}
               </button>
               <button type="button" className="btn-primary modal-btn" onClick={() => onChoose('compare')}>

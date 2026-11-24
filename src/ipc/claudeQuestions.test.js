@@ -82,6 +82,23 @@ describe('answering the AskUserQuestion screen', () => {
     expect(dialog.state.keys).not.toContain('1')
   })
 
+  it('reports failure if the final review scrolls out of view before it can be verified', async () => {
+    const questions = [color, { ...fruits, multiSelect: false }]
+    const dialog = fakeDialog(questions)
+    const cropped = {
+      ...dialog,
+      lines: () => dialog.state.tab === 'review' ? dialog.lines().slice(-2) : dialog.lines()
+    }
+    const { answerer, held } = answererFor(cropped)
+    const result = await answerer.answer(questions, [{ picks: [1], other: null }, { picks: [2], other: null }])
+
+    expect(result).toEqual({ ok: false, reason: 'stuck' })
+    expect(dialog.state.tab).toBe('review')
+    expect(dialog.state.keys).toEqual(['2', '3'])
+    expect(dialog.state.submitted).toBeNull()
+    expect(held).toEqual([true, false])
+  })
+
   it('presses nothing when the screen shows another question', async () => {
     const dialog = fakeDialog([color])
     const { answerer } = answererFor(dialog)
@@ -138,6 +155,51 @@ describe('a low pane', () => {
     const screen = readQuestionScreen(['  1. 대화 속 목록', '❯ 1. [ ] Pear', '  2. [ ] Plum', 'Enter to select · Esc to cancel'])
     expect(screen.question).toBeNull()
     expect(screen.options.map(option => option.text)).toEqual(['Pear', 'Plum'])
+  })
+
+  it('presses nothing if the visible choice labels match multiple questions', async () => {
+    const questions = [color, { ...color, question: 'Which color for the border?', header: 'Border' }]
+    const dialog = fakeDialog(questions)
+    dialog.write('3')
+    const cropped = {
+      ...dialog,
+      lines: () => {
+        const rows = dialog.lines()
+        return dialog.state.tab === 1 ? rows.slice(rows.findIndex(row => row.startsWith('❯ 1. Red'))) : rows
+      }
+    }
+    expect(readQuestionScreen(cropped.lines())?.question).toBeNull()
+    const { answerer, held } = answererFor(cropped)
+    const result = await answerer.answer(questions, [{ picks: [0], other: null }, { picks: [1], other: null }])
+
+    expect(result).toEqual({ ok: false, reason: 'changed' })
+    expect(dialog.state.tab).toBe(1)
+    expect(dialog.state.keys).toEqual(['3'])
+    expect(dialog.state.submitted).toBeNull()
+    expect(held).toEqual([true, false])
+  })
+
+  it('withholds Enter if the question scrolls off after moving the preview selection', async () => {
+    const preview = { ...color, options: color.options.map(option => ({ ...option, preview: option.description })) }
+    const questions = [preview, { ...preview, question: 'Which color for the border?', header: 'Border' }]
+    const dialog = fakeDialog(questions)
+    let framesAfterMove = 0
+    const cropped = {
+      ...dialog,
+      lines: () => {
+        const rows = dialog.lines()
+        // Show the new selection in its original frame before the preview repaints in a low pane.
+        if (dialog.state.tab !== 0 || !dialog.state.keys.length || framesAfterMove++ === 0) return rows
+        return rows.slice(rows.findIndex(row => row.includes('1. Red')))
+      }
+    }
+    const { answerer } = answererFor(cropped)
+    const result = await answerer.answer(questions, [{ picks: [1], other: null }, { picks: [2], other: null }])
+
+    expect(result).toEqual({ ok: false, reason: 'changed' })
+    expect(dialog.state.tab).toBe(0)
+    expect(dialog.state.keys).toEqual(['2'])
+    expect(dialog.state.submitted).toBeNull()
   })
 })
 

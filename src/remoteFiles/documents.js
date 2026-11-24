@@ -317,9 +317,9 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
     const isOpening = Date.now() < (doc.hintsUntil ?? 0)
     const revealLine = isOpening ? doc.revealLine ?? null : null
     const compareHead = isOpening && doc.compareHead === true
-    const info = { sessionName: doc.sessionName, requestedPath: doc.requestedPath, mode: doc.mode, ...(revealLine ? { revealLine } : {}), ...(compareHead ? { compareHead } : {}) }
+    const info = { sessionName: doc.sessionName || doc.server?.sessionName || '', requestedPath: doc.requestedPath, mode: doc.mode, ...(revealLine ? { revealLine } : {}), ...(compareHead ? { compareHead } : {}) }
     if (doc.local) return { ...info, local: true, ...(await loadLocal(doc)) }
-    return { ...info, ...(doc.mode === 'edit' ? await loadEdit(doc) : await loadPreview(doc)) }
+    return { ...info, sessionColor: doc.server.color, ...(doc.mode === 'edit' ? await loadEdit(doc) : await loadPreview(doc)) }
   }
 
   /**
@@ -379,7 +379,7 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
     const doc = editable(ownerId, docId)
     return {
       kind: 'text', editable: true, mode: doc.mode, local: doc.local ? true : undefined,
-      sessionName: doc.sessionName, requestedPath: doc.requestedPath,
+      sessionName: doc.sessionName || doc.server?.sessionName || '', sessionColor: doc.server?.color, requestedPath: doc.requestedPath,
       path: doc.seen.path, content: doc.seen.content, canWrite: doc.canWrite
     }
   }

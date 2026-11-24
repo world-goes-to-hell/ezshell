@@ -493,7 +493,7 @@ const remoteDocuments = createRemoteDocuments({
   }),
   serverOf: (sessionId) => {
     const config = connectionStates.get(sessionId)?.config;
-    return config ? { username: config.username, host: config.host } : null;
+    return config ? { username: config.username, host: config.host, sessionName: config.sessionName, color: config.color } : null;
   },
   backups: {
     get root() { return remoteBackupRoot(); },

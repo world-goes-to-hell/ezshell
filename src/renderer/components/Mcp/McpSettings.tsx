@@ -32,8 +32,9 @@ export function McpSettings() {
   }, [])
 
   const applyResult = useCallback((result: McpStatusResult): boolean => {
-    if (!result.success) {
-      toast.error('MCP 설정', result.error)
+    if (!result?.success || !result.status?.config) {
+      // A success without the status would throw while rendering and blank the settings window
+      toast.error('MCP 설정', (result && !result.success && result.error) || '상태를 불러오지 못했습니다')
       resetPortDraft()
       return false
     }

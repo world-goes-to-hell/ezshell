@@ -10,6 +10,7 @@ import { toast } from '../../stores/toastStore'
 import { RiCloseFill, RiUploadFill, RiDownloadFill, RiRefreshLine, RiExternalLinkFill, RiLinkM, RiLinkUnlinkM, RiArrowUpDownLine } from 'react-icons/ri'
 import { RxDragHandleDots2 } from 'react-icons/rx'
 import { deleteRemoteSelection } from '../../lib/sftpRemoteDelete'
+import { sftpErrorDetail } from '../../lib/sftpErrors'
 import { useTransferQueue } from '../../hooks/useTransferQueue'
 import { useSftpPaneActions } from '../../hooks/useSftpPaneActions'
 import { useTerminalStore } from '../../stores/terminalStore'
@@ -127,7 +128,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
           ])
         } catch (error) {
           console.error('Failed to initialize SFTP:', error)
-          toast.error('SFTP initialization failed', error instanceof Error ? error.message : 'Unknown error')
+          toast.error('SFTP 연결을 열지 못했습니다', sftpErrorDetail(error))
         }
       }
     }
@@ -213,7 +214,7 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
       }
     } catch (error) {
       console.error('Failed to load remote files:', error)
-      toast.error('Failed to load remote files', error instanceof Error ? error.message : 'Unknown error')
+      toast.error('원격 폴더를 읽지 못했습니다', sftpErrorDetail(error))
       store.setRemotePath(sessionId, prevRemotePath)
     } finally {
       setIsRemoteLoading(false)
@@ -273,12 +274,13 @@ export function SftpPanel({ sessionId }: SftpPanelProps) {
           }
         }
       } else {
-        toast.error('Failed to load local files', result.error || 'Unknown error')
+        console.warn('[sftp-local-list]', path, result.error)
+        toast.error('로컬 폴더를 읽지 못했습니다', sftpErrorDetail(result.error))
         store.setLocalPath(sessionId, prevLocalPath)
       }
     } catch (error) {
       console.error('Failed to load local files:', error)
-      toast.error('Failed to load local files', error instanceof Error ? error.message : 'Unknown error')
+      toast.error('로컬 폴더를 읽지 못했습니다', sftpErrorDetail(error))
       store.setLocalPath(sessionId, prevLocalPath)
     } finally {
       setIsLocalLoading(false)

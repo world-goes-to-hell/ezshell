@@ -64,3 +64,13 @@ export function badgeHint(status: TabStatus, count: number): string {
 export function isSshTab(terminal: TerminalInfo | null | undefined): boolean {
   return Boolean(terminal) && !terminal?.db && !terminal?.local && !terminal?.browser
 }
+
+export function countSshTabs(terminals: ReadonlyMap<string, TerminalInfo>): Record<TabStatus | 'reconnecting', number> {
+  const counts = { connected: 0, reconnecting: 0, disconnected: 0 }
+  for (const terminal of terminals.values()) {
+    if (!isSshTab(terminal)) continue
+    const status = terminal.connected ? 'connected' : terminal.reconnect ? 'reconnecting' : 'disconnected'
+    counts[status]++
+  }
+  return counts
+}

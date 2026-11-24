@@ -42,12 +42,13 @@ export function useTerminalCommandHistory(sessionId: string, role: PaneRole, sen
     insert: (command) => {
       const term = termRef.current
       const options = optionsRef.current
-      if (options?.canUse && !options.canUse()) return
+      if (options?.canUse && !options.canUse()) return false
       const sequence = options?.insertSequence ? term && options.insertSequence(command, term) : buildInsertSequence(command)
-      if (sequence === null) return
+      if (sequence === null) return false
       noteLineReplacedRef.current()
       sendRef.current(sequence)
       term?.focus()
+      return true
     }
   }), [])
 

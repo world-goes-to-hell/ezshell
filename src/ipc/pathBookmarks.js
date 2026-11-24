@@ -34,8 +34,8 @@ function registerPathBookmarksIpc(ctx) {
   ipcMain.handle('ssh-get-session-info', (event, { sessionId }) => {
     const connState = connectionStates.get(sessionId);
     if (!connState || !connState.config) return null;
-    const { host, port, username, savedSessionId } = connState.config;
-    return { host, port, username, savedSessionId: savedSessionId || null };
+    const { host, port, username, savedSessionId, sessionName, color } = connState.config;
+    return { host, port, username, savedSessionId: savedSessionId || null, sessionName, color };
   });
 
   ipcMain.handle('path-bookmarks-get', (event, { key }) => {

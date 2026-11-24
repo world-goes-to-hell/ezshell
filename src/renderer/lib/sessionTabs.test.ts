@@ -1,6 +1,6 @@
 import { buildScreens } from './screenPanes'
 import { describe, it, expect } from 'vitest'
-import { groupTabsBySession, findTabPane, badgeLabel, badgeHint } from './sessionTabs'
+import { groupTabsBySession, findTabPane, badgeLabel, badgeHint, countSshTabs } from './sessionTabs'
 import type { TerminalInfo, LayoutState } from '../stores/terminalStore'
 import { singlePane, splitPane } from './splitTree'
 
@@ -16,6 +16,26 @@ const tab = (id: string, savedSessionId: string | undefined, overrides: Partial<
 const terminalsOf = (...tabs: TerminalInfo[]) => new Map(tabs.map(t => [t.id, t]))
 
 const ids = (tabs: Array<{ id: string }>) => tabs.map(t => t.id)
+
+describe('countSshTabs', () => {
+  it('counts SSH connections and disconnections including quick connections', () => {
+    const terminals = terminalsOf(
+      tab('saved', 'web'),
+      tab('quick', undefined),
+      tab('retrying', 'web', { connected: false, reconnect: { attempt: 1, maxAttempts: 3 } }),
+      tab('lost', 'web', { connected: false }),
+      tab('local', undefined, { local: { shell: 'pwsh' } }),
+      tab('db', undefined, { db: { dbId: 'db', sshSessionId: 'saved' } }),
+      tab('browser', undefined, { browser: { group: null }, connected: false })
+    )
+    expect(countSshTabs(terminals)).toEqual({ connected: 2, reconnecting: 1, disconnected: 1 })
+  })
+
+  it('reports zero connected when every SSH tab is disconnected', () => {
+    expect(countSshTabs(terminalsOf(tab('lost', undefined, { connected: false })))).toEqual({ connected: 0, reconnecting: 0, disconnected: 1 })
+    expect(countSshTabs(new Map())).toEqual({ connected: 0, reconnecting: 0, disconnected: 0 })
+  })
+})
 
 describe('groupTabsBySession', () => {
   it('returns an empty map when no tab is open', () => {

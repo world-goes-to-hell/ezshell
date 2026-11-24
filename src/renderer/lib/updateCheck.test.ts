@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isUpdateNoticeVisible, resolveManualCheck, updateNoticeKey } from './updateCheck'
+import { isUpdateNoticeVisible, resolveDownloadFailure, resolveManualCheck, updateNoticeKey } from './updateCheck'
 
 describe('resolveManualCheck', () => {
   it('ends the check when the updater sent no event (dev mode)', () => {
@@ -58,10 +58,32 @@ describe('update notice per version', () => {
     expect(isUpdateNoticeVisible({ status: 'downloaded', version: '2.9.0' }, closed)).toBe(true)
   })
 
-  it('shows a download in progress, and nothing for other states', () => {
+  it('shows a download in progress, and hides update check states', () => {
     expect(isUpdateNoticeVisible({ status: 'downloading', percent: 10 }, null)).toBe(true)
     for (const status of ['idle', 'checking', 'not-available', 'error'] as const) {
       expect(isUpdateNoticeVisible({ status }, null)).toBe(false)
     }
+  })
+
+  it('shows a download failure independently from the earlier available notice', () => {
+    const closed = updateNoticeKey({ status: 'available', version: '2.9.0' })
+    const failed = { status: 'download-error' as const, version: '2.9.0' }
+    expect(isUpdateNoticeVisible(failed, closed)).toBe(true)
+    expect(isUpdateNoticeVisible(failed, updateNoticeKey(failed))).toBe(false)
+  })
+})
+
+describe('resolveDownloadFailure', () => {
+  it('turns download IPC failures into a visible download error', () => {
+    expect(resolveDownloadFailure('downloading', { success: false, error: '연결이 끊겼습니다' }))
+      .toEqual({ status: 'download-error', errorMessage: '연결이 끊겼습니다' })
+    expect(resolveDownloadFailure('downloading', undefined)?.status).toBe('download-error')
+  })
+
+  it('keeps successful downloads and automatic check errors separate', () => {
+    expect(resolveDownloadFailure('downloading', { success: true })).toBeNull()
+    expect(resolveDownloadFailure('downloaded', { success: false })).toBeNull()
+    expect(resolveDownloadFailure('checking', { success: false })).toBeNull()
+    expect(resolveDownloadFailure('error', { success: false })).toBeNull()
   })
 })

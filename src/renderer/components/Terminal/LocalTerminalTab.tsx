@@ -35,7 +35,8 @@ import { useTerminalCommandHistory } from '../../hooks/useTerminalCommandHistory
 import { CommandHistoryPanel } from './CommandHistoryPanel'
 import { isTabHostPreviewed } from '../../lib/tabHosts'
 import { focusPaneInput } from '../../lib/paneFocus'
-import { answerableAskItem } from '../../lib/askQuestion'
+import { answerableAskItem, askTakenToTerminal } from '../../lib/askQuestion'
+import { hasTypedInput } from '../../lib/terminalReplies'
 import { useAskQuestionStore } from '../../stores/askQuestionStore'
 import './LocalTerminalTab.css'
 
@@ -174,7 +175,20 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     let isDisposed = false
     let deferredInput: string[] | null = null
     const write = (data: string) => window.electronAPI.localShellWrite?.(shellId, data)
+    // Typing into Claude's question dialog here keeps that question in the terminal until it is answered:
+    // the card would start over at its first question while the dialog has moved on. Only what the user
+    // typed or pasted: xterm's own focus reports (sent when the pane loses focus to the chat or another
+    // pane), mouse reports and query answers would take the card away without a key pressed.
+    const keepAskInTerminal = (data: string) => {
+      if (!hasTypedInput(data)) return
+      const chat = useAgentChatStore.getState().chats.get(shellId)
+      if (chat?.kind !== 'claude' || chat.state === 'ended') return
+      const asks = useAskQuestionStore.getState()
+      const itemId = askTakenToTerminal(chat.items, chat.approval, asks.inTerminal.get(shellId))
+      if (itemId) asks.answerInTerminal(shellId, itemId)
+    }
     const sendInput = (data: string) => {
+      keepAskInTerminal(data)
       commandHistory.handleData(data)
       write(data)
     }

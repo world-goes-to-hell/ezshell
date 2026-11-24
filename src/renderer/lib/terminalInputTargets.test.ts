@@ -7,7 +7,7 @@ import {
   resetInputTargets
 } from './terminalInputTargets'
 
-const makeTarget = () => ({ insert: vi.fn() })
+const makeTarget = (accepts = true) => ({ insert: vi.fn(() => accepts) })
 
 describe('terminal input targets', () => {
   beforeEach(() => resetInputTargets())
@@ -44,6 +44,14 @@ describe('terminal input targets', () => {
     registerMainInputTarget('a', a)
     expect(insertIntoSession('b', 'ls')).toBe(false)
     expect(a.insert).not.toHaveBeenCalled()
+  })
+
+  it('reports when the focused pane cannot insert without sending to another pane', () => {
+    const main = makeTarget()
+    registerMainInputTarget('s1', main)
+    setFocusedInputTarget('s1', makeTarget(false))
+    expect(insertIntoSession('s1', 'docker stop api')).toBe(false)
+    expect(main.insert).not.toHaveBeenCalled()
   })
 
   it('ignores unregistering a target that was already replaced', () => {

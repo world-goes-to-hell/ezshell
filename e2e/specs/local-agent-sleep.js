@@ -51,6 +51,8 @@ const resumedWith = () => {
   try {
     await unlock(driver)
     await send('Page.bringToFront')
+    // The sleep card's buttons arm only while the window has focus (document.hasFocus())
+    await send('Emulation.setFocusEmulationEnabled', { enabled: true })
 
     // A Claude ezShell launched (it writes to the sleeping one later) and a plain shell
     await openLocalAgent(driver, 'claude', profile)
@@ -76,6 +78,8 @@ const resumedWith = () => {
     // Woken from the pane (sleeping turned off first: it would fall asleep again at once)
     await js(`window.electronAPI.agentIdleConfigure({ trimMinutes: 0, sleepMinutes: 0 })`)
     fs.rmSync(file('manual-claude-argv'), { force: true })
+    // The buttons arm a moment after the card shows (a stray Enter must not wake it)
+    check('깨우기 arms after a moment', await until(`${cover}?.querySelector('.agent-sleep-wake')?.getAttribute('aria-disabled') === null`, 5000))
     await js(`${cover}.querySelector('.agent-sleep-wake').click()`)
     check('깨우기 resumes the same conversation in that shell, with the options it was started with', await waitFor(() => {
       const argv = resumedWith()
@@ -99,6 +103,8 @@ const resumedWith = () => {
     await js(`window.electronAPI.agentIdleConfigure({ trimMinutes: 0, sleepMinutes: 2 })`)
     check('asleep once more', await until(`(${cover}?.textContent ?? '').includes('잠들어 있습니다')`, 20000))
     await js(`window.electronAPI.agentIdleConfigure({ trimMinutes: 0, sleepMinutes: 0 })`)
+    // The card's buttons take a keyboard-style click (detail 0) only once armed, like 깨우기 above
+    check('터미널로 쓰기 arms after a moment', await until(`${cover}?.querySelector('.agent-sleep-terminal')?.getAttribute('aria-disabled') === null`, 5000))
     await js(`${cover}.querySelector('.agent-sleep-terminal').click()`)
     check('터미널로 쓰기 uncovers the shell and ends that agent', await until(`!${cover}`, 5000) && await until(`${agentOfShell}.then(agent => !agent || !agent.active)`, 5000), JSON.stringify(await js(agentOfShell)))
   } finally {

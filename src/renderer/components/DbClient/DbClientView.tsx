@@ -344,6 +344,18 @@ export function DbClientView({ dbId, onDetach, onTitle, renderMessage = (c) => c
   }
 
   const { info } = infoState
+  const hasGuardWarning = info.missingGuards.length > 0
+  const readOnlyLabel = !hasGuardWarning ? '읽기 전용'
+    : engine === 'oracle' ? '읽기 전용 (일부 앱 검사)'
+    : engine === 'mssql' ? '읽기 전용 (앱 검사)'
+    : '읽기 전용 · 일부 제한 없음'
+  const readOnlyDetail = [
+    engine === 'oracle' ? 'DB 서버가 읽기 전용 트랜잭션으로 쓰기(DML)를 거부합니다. DDL·PL/SQL 같은 나머지는 앱이 조회 문장만 보내 막습니다.'
+      : engine === 'mssql' ? '서버에 읽기 전용 모드가 없어, 앱이 조회 문장만 보내고 쿼리마다 되돌립니다(ROLLBACK).'
+      : 'DB 서버가 쓰기를 거부하도록 접속했습니다.',
+    ...info.missingGuards,
+    '쿼리는 30초, 결과는 1,000행까지입니다.'
+  ].join('\n')
   const databaseNames = databases.status === 'ready' ? databases.items.map(d => d.name) : []
 
   return (
@@ -391,15 +403,11 @@ export function DbClientView({ dbId, onDetach, onTitle, renderMessage = (c) => c
               </select>
             </label>
           )}
-          <span className="db-readonly-badge" title="DB 서버가 쓰기를 거부하도록 접속했습니다. 쿼리는 30초, 결과는 1,000행까지입니다.">
-            <RiShieldCheckLine size={13} aria-hidden="true" /> 읽기 전용
+          <span className={`db-readonly-badge${hasGuardWarning ? ' is-warning' : ''}`} title={readOnlyDetail}>
+            {hasGuardWarning ? <RiErrorWarningLine size={13} aria-hidden="true" /> : <RiShieldCheckLine size={13} aria-hidden="true" />}
+            {readOnlyLabel}
           </span>
           <span className="db-server-version">{info.version}</span>
-          {info.missingGuards.length > 0 && (
-            <span className="db-guard-warning" title={info.missingGuards.join('\n')}>
-              <RiErrorWarningLine size={13} aria-hidden="true" /> 일부 서버 측 제한 없음
-            </span>
-          )}
           {onDetach && (
             <button type="button" className="db-icon-button db-detach" onClick={onDetach} disabled={isBusy} title="이 DB 탭을 새 창으로 옮깁니다 (접속은 그대로)">
               <RiExternalLinkLine size={14} /> 창으로 분리

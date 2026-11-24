@@ -5,10 +5,21 @@ export function updateNoticeKey(info: UpdateInfo): string {
   return `${info.status}:${info.version ?? ''}`
 }
 
-/** The update card shows for an available, downloading or downloaded update, unless that notice was closed */
+/** Check errors stay quiet here. A failed download has its own card with retry actions. */
 export function isUpdateNoticeVisible(info: UpdateInfo, dismissedKey: string | null): boolean {
-  if (info.status !== 'available' && info.status !== 'downloading' && info.status !== 'downloaded') return false
+  if (!['available', 'downloading', 'downloaded', 'download-error'].includes(info.status)) return false
   return updateNoticeKey(info) !== dismissedKey
+}
+
+export interface UpdateDownloadResult {
+  success: boolean
+  error?: string
+}
+
+/** Completion and error events may settle the UI before the download's IPC reply arrives. */
+export function resolveDownloadFailure(status: UpdateStatus, result: UpdateDownloadResult | undefined): Partial<UpdateInfo> | null {
+  if (status !== 'downloading' || result?.success) return null
+  return { status: 'download-error', errorMessage: result?.error || '잠시 후 다시 시도해 주세요.' }
 }
 
 /** What the main process returns from 'check-for-updates' */

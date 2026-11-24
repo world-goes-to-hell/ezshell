@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { RiErrorWarningLine, RiQuestionLine } from 'react-icons/ri'
 import { modalOverlayVariants, modalContentVariants } from '../../lib/animation/variants'
 import { useConfirmStore } from '../../stores/confirmStore'
+import { ServerBadge } from './ServerBadge'
 import './ConfirmDialog.css'
 
 /**
@@ -44,7 +45,10 @@ export function ConfirmDialogHost() {
                     : <RiQuestionLine size={20} className="confirm-dialog-icon" />}
                   {request.title}
                 </Dialog.Title>
-                <Dialog.Description className="confirm-dialog-message">{request.message}</Dialog.Description>
+                <Dialog.Description className="confirm-dialog-message">
+                  {request.server && <ServerBadge {...request.server} />}
+                  {request.message}
+                </Dialog.Description>
                 <div className="modal-actions">
                   <button ref={cancelRef} type="button" className="btn-secondary modal-btn" onClick={() => answer(false)}>
                     {request.cancelLabel ?? '취소'}

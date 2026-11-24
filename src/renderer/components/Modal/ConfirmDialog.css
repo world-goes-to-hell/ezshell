@@ -29,6 +29,34 @@
   overflow-wrap: anywhere;
 }
 
+.confirm-server-badge {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.confirm-dialog-message > .confirm-server-badge {
+  margin-bottom: 6px;
+}
+
+.confirm-server-label {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.confirm-server-swatch {
+  flex: 0 0 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.confirm-server-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 /* Destructive confirm button: same shape as .btn-primary, error color */
 .btn-danger {
   display: flex;

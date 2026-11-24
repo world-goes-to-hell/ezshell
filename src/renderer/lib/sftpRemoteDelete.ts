@@ -1,6 +1,8 @@
 import type { FileItem } from '../stores/sftpStore'
 import { toast } from '../stores/toastStore'
 import { confirmDialog } from '../stores/confirmStore'
+import { formatHostLabel } from './popoutLabels'
+import { sftpErrorDetail } from './sftpErrors'
 
 const MAX_NAMES_IN_CONFIRM = 5
 
@@ -14,7 +16,7 @@ function describeError(error: unknown): string {
   if (/failure|not empty/i.test(message)) return '폴더가 비어 있지 않거나 삭제 권한이 없습니다'
   if (/permission/i.test(message)) return '삭제 권한이 없습니다'
   if (/no such file/i.test(message)) return '이미 없는 항목입니다'
-  return message
+  return sftpErrorDetail(error) ?? '서버에서 삭제 요청을 처리하지 못했습니다'
 }
 
 /**
@@ -44,7 +46,9 @@ export async function deleteRemoteSelection(
     ...more,
     ...(hasFolder ? ['', '폴더는 비어 있을 때만 삭제됩니다.'] : [])
   ].join('\n')
-  if (!(await confirmDialog({ title: '원격 파일 삭제', message, confirmLabel: '삭제', danger: true }))) return false
+  const session = await window.electronAPI.sshGetSessionInfo(sessionId).catch(() => null)
+  const server = { name: session?.sessionName || formatHostLabel(session) || '원격 세션', color: session?.color }
+  if (!(await confirmDialog({ title: '원격 파일 삭제', message, confirmLabel: '삭제', danger: true, server }))) return false
 
   const failures: string[] = []
   let deleted = 0
@@ -54,6 +58,7 @@ export async function deleteRemoteSelection(
       await window.electronAPI.sftpDelete(sessionId, joinRemotePath(remotePath, file.name), file.type === 'directory')
       deleted++
     } catch (error) {
+      console.warn('[sftp-remote-delete]', file.name, error)
       failures.push(`${file.name}: ${describeError(error)}`)
     }
   }

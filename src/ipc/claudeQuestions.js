@@ -112,7 +112,7 @@ function sameAnswer(shown, expected) {
  */
 function createClaudeQuestionAnswerer({ lines, write, hold = () => {}, appCursor = () => false, pollMs = 40, stepTimeout = 2000, quietMs = 90, releaseMs = 400 }) {
   const sleep = ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.() })
-  let busy = false
+  let activeQuestions = null
 
   async function until(check, timeout = stepTimeout) {
     const end = Date.now() + timeout
@@ -140,16 +140,18 @@ function createClaudeQuestionAnswerer({ lines, write, hold = () => {}, appCursor
     return compact(row?.text) === compact(option.label) || (screen.preview && compact((row?.text ?? '') + (row?.more ?? '')) === compact(option.label))
   })
   // The question on screen: by its text (a notice drawn over the dialog's right side may follow it on
-  // the row), or, once a low pane scrolled the text off, by every label of its choices
+  // the row), or, once a low pane scrolled the text off, by a list of choices unique in the dialog.
   const on = question => {
     const screen = readQuestionScreen(lines())
     if (!screen) return null
-    if (screen.question === null) return labelsMatch(screen, question) ? screen : null
-    return screen.question.startsWith(compact(question.question)) ? screen : null
+    if (screen.question !== null) return screen.question.startsWith(compact(question.question)) ? screen : null
+    const matches = activeQuestions.filter(candidate => labelsMatch(screen, candidate))
+    return matches.length === 1 && matches[0] === question ? screen : null
   }
+  const writeFor = (question, key) => on(question) && write(key)
   /** A key while `question` shows, then the screen it led to once `done(screen)` says so */
   async function press(question, key, done) {
-    if (!on(question) || !write(key)) return null
+    if (!writeFor(question, key)) return null
     const after = await until(() => { const screen = on(question); return screen && done(screen) ? screen : null })
     if (after) await settle()
     return after
@@ -188,17 +190,17 @@ function createClaudeQuestionAnswerer({ lines, write, hold = () => {}, appCursor
       const number = answer.picks[0] + 1
       if (answer.other || !number) return 'changed'
       if (!(await press(question, String(number), screen => screen.pointer === number))) return 'stuck'
-      if (!write('\r')) return 'changed'
+      if (!writeFor(question, '\r')) return 'changed'
       return (await leaves(question)) ? null : 'stuck'
     }
     if (!answer.other) {
-      if (!on(question) || !write(String(answer.picks[0] + 1))) return 'changed'
+      if (!writeFor(question, String(answer.picks[0] + 1))) return 'changed'
       return (await leaves(question)) ? null : 'stuck'
     }
     const typeNumber = question.options.length + 1
     if (!(await press(question, String(typeNumber), screen => screen.pointer === typeNumber))) return 'stuck'
     if (!(await typeOther(question, answer.other))) return 'stuck'
-    if (!write('\r')) return 'changed'
+    if (!writeFor(question, '\r')) return 'changed'
     return (await leaves(question)) ? null : 'stuck'
   }
 
@@ -218,13 +220,13 @@ function createClaudeQuestionAnswerer({ lines, write, hold = () => {}, appCursor
       if (!(await typeOther(question, answer.other))) return 'stuck'
     }
     if (!(await moveDownTo(question, 'move'))) return 'stuck'
-    if (!write('\r')) return 'changed'
+    if (!writeFor(question, '\r')) return 'changed'
     return (await leaves(question)) ? null : 'stuck'
   }
 
   async function submitReview(questions, answers) {
     const review = await until(() => readReview(lines()))
-    if (!review) return readQuestionScreen(lines()) ? 'stuck' : null
+    if (!review) return 'stuck'
     await settle()
     const now = readReview(lines())
     if (!now || now.unanswered || !now.ready) return 'mismatch'
@@ -242,8 +244,8 @@ function createClaudeQuestionAnswerer({ lines, write, hold = () => {}, appCursor
    * review differs from the answers chosen, nothing submitted)
    */
   async function answer(questions, answers) {
-    if (busy) return { ok: false, reason: 'busy' }
-    busy = true
+    if (activeQuestions) return { ok: false, reason: 'busy' }
+    activeQuestions = questions
     hold(true)
     try {
       for (const [index, question] of questions.entries()) {
@@ -258,7 +260,7 @@ function createClaudeQuestionAnswerer({ lines, write, hold = () => {}, appCursor
       return failed ? { ok: false, reason: failed } : { ok: true }
     } finally {
       await sleep(releaseMs)
-      busy = false
+      activeQuestions = null
       hold(false)
     }
   }

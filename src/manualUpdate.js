@@ -25,7 +25,8 @@ function isNewer(candidate, current) {
 
 /** The page the user is sent to. Built here from a checked version, never taken from the response. */
 function releasePageUrl(version) {
-  return `https://github.com/${REPO}/releases/tag/v${version}`
+  const releases = `https://github.com/${REPO}/releases`
+  return version ? `${releases}/tag/v${version}` : releases
 }
 
 /**

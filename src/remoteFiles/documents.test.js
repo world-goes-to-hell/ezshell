@@ -10,7 +10,7 @@ const { createBackupStore, backupTarget } = require('./backups.js')
 const { createFakeSftp } = require('../mcp/fakeSftp.testhelper.js')
 
 const OWNER = 7
-const SERVER = { username: 'deploy', host: '10.0.0.5' }
+const SERVER = { username: 'deploy', host: '10.0.0.5', color: '#ef4444' }
 
 let root
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-docs-')) })
@@ -43,6 +43,8 @@ describe('file window: edit and save', () => {
     const docId = open('/etc/app.conf')
     const loaded = await docs.load(OWNER, docId)
     expect(loaded).toMatchObject({ kind: 'text', editable: true, content: 'a=1\n', canWrite: true, path: '/etc/app.conf' })
+    expect(loaded).toMatchObject({ sessionName: 'dev', sessionColor: SERVER.color })
+    expect(docs.resumeEdit(OWNER, docId)).toMatchObject({ sessionName: 'dev', sessionColor: SERVER.color })
   })
 
   it('opens read-only when the file cannot be opened for writing', async () => {

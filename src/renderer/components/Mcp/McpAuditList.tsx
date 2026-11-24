@@ -14,8 +14,14 @@ export function McpAuditList() {
     if (typeof read !== 'function') return
     try {
       const result = await read(AUDIT_LIMIT)
-      setEntries(result.entries)
-      setError(result.success ? null : result.error ?? '실행 기록을 읽지 못했습니다')
+      // An answer without a list (a failed read) keeps what is shown: `entries` undefined used to blank
+      // the whole window (the table maps it)
+      if (result?.success && Array.isArray(result.entries)) {
+        setEntries(result.entries)
+        setError(null)
+      } else {
+        setError(result?.error || '실행 기록을 읽지 못했습니다')
+      }
     } catch {
       setError('실행 기록을 읽지 못했습니다')
     }
@@ -35,7 +41,7 @@ export function McpAuditList() {
       </div>
       {error && <p className="mcp-error" role="alert">{error}</p>}
       {entries.length === 0 ? (
-        <p className="form-hint">아직 기록이 없습니다.</p>
+        !error && <p className="form-hint">아직 기록이 없습니다.</p>
       ) : (
         <div className="mcp-audit-scroll">
           <table className="mcp-audit-table">

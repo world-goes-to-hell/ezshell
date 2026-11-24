@@ -32,5 +32,7 @@
 }
 .agent-sleep-actions .agent-sleep-wake { border-color: var(--accent); background: var(--accent); color: var(--on-accent, #fff); }
 .agent-sleep-actions button:disabled { opacity: 0.6; cursor: default; }
+/* Not armed yet (just fell asleep, or the window has no focus): focusable, but a press does nothing */
+.agent-sleep-actions button[aria-disabled='true'] { opacity: 0.6; cursor: default; }
 .agent-sleep-actions button:focus-visible { outline: 2px solid var(--chat-focus, var(--accent)); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .agent-sleep-spin { animation: none; } }

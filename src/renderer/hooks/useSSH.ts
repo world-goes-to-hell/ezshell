@@ -49,8 +49,8 @@ export function useSSH() {
 
     try {
       toast.info('연결 중...', `${config.username}@${config.host}에 연결을 시도합니다`)
-      // UI-only fields stay in the renderer; everything else goes to the main process
-      const { sessionName, color, workGroup, postConnectScript, ...connectionConfig } = config
+      // Detached windows use the connection's session name and effective color for confirmations.
+      const { workGroup, postConnectScript, ...connectionConfig } = config
       const result = await window.electronAPI.sshConnect(connectionConfig)
 
       if (result.success) {

@@ -28,6 +28,20 @@ export function answerableAskItem(items: readonly AgentChatItem[], approval: Age
   return questions.some(entry => compact(entry.question) === shown || compact(entry.question).endsWith(shown)) ? item : null
 }
 
+/**
+ * The question a key typed into the terminal starts to answer, to keep in the terminal (`askQuestionStore`'s
+ * `inTerminal`) until Claude records its answer; null when there is nothing new to keep. The card cannot
+ * take over in the middle: it starts at the first question with nothing picked, while Claude's dialog has
+ * moved on, so answering it would only be refused as "changed" and hand the pane back to the terminal
+ * (2026-11-24 user report: the card and the terminal took turns).
+ */
+export function askTakenToTerminal(items: readonly AgentChatItem[], approval: AgentChatApproval | null, kept: string | undefined): string | null {
+  if (!approval?.usesTerminalInput) return null
+  const item = pendingAskItem(items)
+  if (!item?.tool?.question || item.id === kept) return null
+  return item.id
+}
+
 /** One question's choices on the card */
 export interface AskDraft {
   picks: number[]

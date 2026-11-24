@@ -17,24 +17,12 @@ import { toast } from '../../stores/toastStore'
 import { placeholderLinks, revealEditorLine, revealedLine, type PlaceholderHit } from './placeholderLinks'
 import { DefinitionList, type DefinitionState } from './DefinitionList'
 import { entryKey } from '../../lib/backupCompare'
-import type { RemoteFileDraft, RemoteFileOpenHint } from '../../types'
+import type { RemoteFileDraft, RemoteFileLoaded, RemoteFileOpenHint } from '../../types'
 
 /** The comparison entry of a local file's version at Git HEAD (documents.js listServerBackups) */
 const HEAD_KEY = entryKey({ source: 'server', name: 'HEAD' })
 
-interface EditableFile {
-  sessionName: string
-  path: string
-  content: string
-  canWrite: boolean
-  /** A file on this PC: the comparison list comes from Git. */
-  local?: true
-  /** Opened from a placeholder's definitions: go to this line once */
-  revealLine?: number
-  /** Opened from the uncommitted changes: start comparing with Git HEAD */
-  compareHead?: true
-  draft?: RemoteFileDraft
-}
+type EditableFile = Extract<RemoteFileLoaded, { kind: 'text'; editable: true }>
 
 export interface RemoteTextEditHandle {
   snapshot: () => RemoteFileDraft | null
@@ -377,8 +365,23 @@ export function RemoteTextEditView({ docId, file, active, header, hint, ref }: R
         </div>
         {active && <FileShortcutHelp view="editor" />}
       </div>
-      <SaveReviewDialog review={active ? pending?.review ?? null : null} path={file.path} isLocal={isLocal} isSaving={isSaving} onConfirm={() => void confirmSave()} onCancel={() => setPending(null)} />
-      <ConflictDialog isOpen={active && hasConflict} isLocal={isLocal} onChoose={(choice) => void chooseOnConflict(choice)} />
+      <SaveReviewDialog
+        review={active ? pending?.review ?? null : null}
+        path={file.path}
+        isLocal={isLocal}
+        sessionName={file.sessionName}
+        sessionColor={file.sessionColor}
+        isSaving={isSaving}
+        onConfirm={() => void confirmSave()}
+        onCancel={() => setPending(null)}
+      />
+      <ConflictDialog
+        isOpen={active && hasConflict}
+        isLocal={isLocal}
+        sessionName={file.sessionName}
+        sessionColor={file.sessionColor}
+        onChoose={(choice) => void chooseOnConflict(choice)}
+      />
     </div>
   )
 }

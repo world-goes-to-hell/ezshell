@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { updateNoticeKey } from '../lib/updateCheck'
 
-export type UpdateStatus = 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+export type UpdateStatus = 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'download-error' | 'error'
 
 export interface UpdateInfo {
   status: UpdateStatus

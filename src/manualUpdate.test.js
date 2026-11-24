@@ -25,6 +25,10 @@ describe('readRelease (update notice for builds that cannot update themselves)',
     expect(readRelease(release(), here).url).toBe(releasePageUrl('2.19.0'))
   })
 
+  it('opens the project releases when no specific version is known', () => {
+    expect(releasePageUrl()).toBe('https://github.com/world-goes-to-hell/ezshell/releases')
+  })
+
   it('stays quiet until the macOS file for this architecture is attached', () => {
     expect(readRelease(release({ assets: [{ name: 'ezShell-Setup-2.19.0.exe' }] }), here).status).toBe('not-available')
     expect(readRelease(release({ assets: [{ name: 'ezShell-2.19.0-x64.dmg' }] }), here).status).toBe('not-available')

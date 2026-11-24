@@ -11,10 +11,10 @@ export function parentOf(path: string): string {
 }
 
 /**
- * The tree with the folder at `dirPath` holding `children` (and open), without changing the given
+ * The tree with the folder at `dirPath` holding `children`, without changing the given
  * tree. Folders inside it that were open stay open when they are still there.
  */
-export function replaceChildren(nodes: FileNode[], dirPath: string, children: FileNode[]): FileNode[] {
+export function replaceChildren(nodes: FileNode[], dirPath: string, children: FileNode[], expand = true): FileNode[] {
   return nodes.map(node => {
     if (node.type !== 'directory') return node
     if (node.path === dirPath) {
@@ -23,10 +23,10 @@ export function replaceChildren(nodes: FileNode[], dirPath: string, children: Fi
         const old = before.get(child.path)
         return old && old.type === child.type ? { ...child, isExpanded: old.isExpanded, isLoaded: old.isLoaded, children: old.children } : child
       })
-      return { ...node, children: kept, isLoaded: true, isExpanded: true }
+      return { ...node, children: kept, isLoaded: true, isExpanded: expand || node.isExpanded }
     }
     if (dirPath.startsWith(node.path === '/' ? '/' : `${node.path}/`) && node.children) {
-      return { ...node, children: replaceChildren(node.children, dirPath, children) }
+      return { ...node, children: replaceChildren(node.children, dirPath, children, expand) }
     }
     return node
   })

@@ -9,6 +9,8 @@ export interface ConfirmOptions {
   message: string
   confirmLabel: string
   cancelLabel?: string
+  /** SSH session affected by this action */
+  server?: { name: string; color?: string }
   /** Destructive action: red confirm button */
   danger?: boolean
 }

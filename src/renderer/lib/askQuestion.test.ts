@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentAskQuestion, AgentChatApproval, AgentChatItem } from '../types'
-import { answerableAskItem, answerOf, answersOf, answerText, emptyDraft, otherProblem, pendingAskItem, pick, toggleOther } from './askQuestion'
+import { answerableAskItem, askTakenToTerminal, answerOf, answersOf, answerText, emptyDraft, otherProblem, pendingAskItem, pick, toggleOther } from './askQuestion'
 
 const color: AgentAskQuestion = { question: 'Which color do you want for the new theme?', header: 'Color', multiSelect: false, options: [{ label: 'Red', description: 'warm' }, { label: 'Green', description: 'calm' }] }
 const fruits: AgentAskQuestion = { question: 'Which fruits?', header: 'Fruits', multiSelect: true, options: [{ label: 'Apple', description: '' }, { label: 'Banana', description: '' }, { label: 'Cherry', description: '' }] }
@@ -25,6 +25,25 @@ describe('which question the card answers', () => {
     expect(answerableAskItem(items, approval('Something else?'))).toBeNull()
     expect(answerableAskItem(items, { ...approval('Which fruits?'), usesTerminalInput: false })).toBeNull()
     expect(answerableAskItem(items, null)).toBeNull()
+  })
+
+  it('keeps a question typed into in the terminal until its answer is recorded', () => {
+    const items = [ask('q')]
+    // The dialog shows the second question: the card would match again, but the terminal has it
+    expect(askTakenToTerminal(items, approval('Which fruits?'), undefined)).toBe('q')
+    // Even while the screen is not read as one of its questions (the moment the card gave way)
+    expect(askTakenToTerminal(items, approval('Something else?'), undefined)).toBe('q')
+    expect(askTakenToTerminal(items, approval('Which fruits?'), 'q')).toBeNull()
+    // A newer question is kept on its own
+    expect(askTakenToTerminal([ask('q', { result: 'done' }), ask('r')], approval('Which fruits?'), 'q')).toBe('r')
+  })
+
+  it('keeps nothing without Claude’s dialog or a pending question', () => {
+    expect(askTakenToTerminal([ask('q')], { ...approval('Which fruits?'), usesTerminalInput: false }, undefined)).toBeNull()
+    expect(askTakenToTerminal([ask('q')], null, undefined)).toBeNull()
+    expect(askTakenToTerminal([ask('q', { result: 'answered' })], approval('Which fruits?'), undefined)).toBeNull()
+    const bash: AgentChatItem = { id: 'b', kind: 'tool', time: 1, tool: { name: 'Bash', summary: '', input: 'ls' } }
+    expect(askTakenToTerminal([bash], approval('Allow?'), undefined)).toBeNull()
   })
 })
 

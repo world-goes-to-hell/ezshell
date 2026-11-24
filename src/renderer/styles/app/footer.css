@@ -22,6 +22,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .footer-status .status-icon {
@@ -32,8 +33,12 @@
   color: var(--success);
 }
 
-.footer-status .status-icon.disconnected {
-  color: var(--text-muted);
+.footer-status .footer-connection-lost {
+  color: var(--error-text, var(--error));
+}
+
+.footer-status .footer-reconnecting {
+  color: var(--warning);
 }
 
 .footer-version {

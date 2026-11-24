@@ -152,10 +152,11 @@ function registerUpdateIpc(ctx) {
     autoUpdater.quitAndInstall(true, true);
   });
 
-  // Opens the release page of the version the last check found (macOS). Takes no address from the window.
+  // Open a known release page on macOS, or the project's downloads after an automatic download failed.
+  // The window does not supply an address.
   ipcMain.handle('open-update-page', async (event) => {
-    if (!fromMainWindow(event) || !manualUpdateUrl) return { success: false };
-    await shell.openExternal(manualUpdateUrl);
+    if (!fromMainWindow(event)) return { success: false };
+    await shell.openExternal(manualUpdateUrl || manualUpdate.releasePageUrl());
     return { success: true };
   });
 

@@ -21,6 +21,7 @@ export function toSSHConnectConfig(session: SessionConnectSource, color?: string
     password: session.password,
     privateKeyPath: session.privateKeyPath,
     passphrase: session.passphrase,
+    // 이름 없는 세션의 sessionName은 user@host로 채워지므로 connectionStates.config.sessionName을 MCP·원격 접속·알림에 노출하지 않는다.
     sessionName: session.name || `${session.username}@${session.host}`,
     color: color ?? session.backgroundColor,
     postConnectScript: session.postConnectScript,

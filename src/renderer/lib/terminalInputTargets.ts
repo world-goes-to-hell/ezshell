@@ -5,7 +5,7 @@
  */
 
 export interface InputTarget {
-  insert: (command: string) => void
+  insert: (command: string) => boolean
 }
 
 const mainTargets = new Map<string, InputTarget>()
@@ -27,9 +27,7 @@ export function unregisterInputTarget(sessionId: string, target: InputTarget): v
 
 export function insertIntoSession(sessionId: string, command: string): boolean {
   const target = focusedTargets.get(sessionId) ?? mainTargets.get(sessionId)
-  if (!target) return false
-  target.insert(command)
-  return true
+  return target?.insert(command) ?? false
 }
 
 /** Test helper */

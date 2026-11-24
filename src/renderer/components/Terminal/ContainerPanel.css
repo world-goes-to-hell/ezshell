@@ -177,6 +177,11 @@
   color: var(--text-primary);
 }
 
+.container-action-insert {
+  border-style: dashed;
+  background: transparent;
+}
+
 .container-action:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
