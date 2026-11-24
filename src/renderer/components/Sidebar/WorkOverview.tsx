@@ -7,12 +7,14 @@ import { focusTabPane, focusPaneInput } from '../../lib/paneFocus'
 import { MAIN_PANE } from '../../lib/splitTree'
 import { previewTabHost, tabHost } from '../../lib/tabHosts'
 import { useTerminalStore } from '../../stores/terminalStore'
+import { useShortcutsStore } from '../../stores/shortcutsStore'
+import { WORK_OVERVIEW_SHORTCUT } from '../../lib/shortcutCapture'
+import { matchesBinding } from '../../lib/shortcutMatch'
 import type { AgentMessageSession } from '../../types'
 import { useAgentMessagesStore } from '../Terminal/AgentMessages'
 import { localAgentAppearance } from './LocalSessionAgents'
 import './WorkOverview.css'
 
-const DOUBLE_TAB_MS = 320
 const PREVIEW_OPEN_MS = 300
 const PREVIEW_CLOSE_MS = 420
 const OPEN_DIALOG = '[role="dialog"]:not([data-state="closed"]), [role="alertdialog"]:not([data-state="closed"])'
@@ -23,6 +25,8 @@ type PreviewRequest = { id: string; focus: boolean; anchor: HTMLButtonElement }
 export function WorkOverview({ groupView }: { groupView: WorkView }) {
   const [overview, setOverview] = useState<{ backdropUrl: string | null } | null>(null)
   const pending = useRef<symbol | null>(null)
+  // Ctrl+Alt+Space unless changed in settings > 키보드 단축키 (Tab Tab until 2026-11-24)
+  const overviewKeys = useShortcutsStore(state => state.getEffectiveKeys(WORK_OVERVIEW_SHORTCUT))
   const returnFocus = useRef<HTMLElement | null>(null)
   const close = () => {
     window.electronAPI.hideWorkOverview()
@@ -38,10 +42,15 @@ export function WorkOverview({ groupView }: { groupView: WorkView }) {
     if (overview?.backdropUrl) URL.revokeObjectURL(overview.backdropUrl)
   }, [overview])
 
+  // The helper that hears the shortcut while another program is in front gets the same binding
+  useEffect(() => {
+    window.electronAPI.setWorkOverviewKey?.(overviewKeys)
+  }, [overviewKeys])
+
   useEffect(() => {
     if (overview) return
-    let first: { at: number; target: HTMLElement | null } | null = null
-    const reset = () => { first = null }
+    // Capture phase: the shortcut works while a terminal or a text box has the keyboard (the app-wide handler
+    // skips those), and the key does not reach the shell
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) return
       if (pending.current) {
@@ -53,25 +62,12 @@ export function WorkOverview({ groupView }: { groupView: WorkView }) {
         }
         return
       }
-      if (event.key !== 'Tab' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing || event.defaultPrevented) {
-        reset()
-        return
-      }
-      const target = event.target instanceof HTMLElement ? event.target : null
-      if (document.querySelector(OPEN_DIALOG) || target?.closest('.monaco-editor, [contenteditable="true"]')) {
-        reset()
-        return
-      }
-      const now = performance.now()
-      if (!first || now - first.at > DOUBLE_TAB_MS) {
-        first = { at: now, target }
-        return
-      }
+      if (event.isComposing || event.defaultPrevented || !matchesBinding(event, overviewKeys)) return
+      // A dialog has the keys (settings records new shortcuts there)
+      if (document.querySelector(OPEN_DIALOG)) return
       event.preventDefault()
       event.stopPropagation()
-      const from = first.target
-      reset()
-      open(from)
+      open(event.target instanceof HTMLElement ? event.target : null)
     }
     const open = (from: HTMLElement | null) => {
       returnFocus.current = from
@@ -90,22 +86,17 @@ export function WorkOverview({ groupView }: { groupView: WorkView }) {
         window.electronAPI.hideWorkOverview()
       })
     }
-    // Tab Tab pressed in another program: main brought this window forward (src/globalDoubleTab.js)
+    // The shortcut pressed in another program: main brought this window forward (src/globalDoubleTab.js)
     const stopRequests = window.electronAPI.onWorkOverviewRequest?.(() => {
       if (pending.current || document.querySelector(OPEN_DIALOG)) return
-      reset()
       open(document.activeElement instanceof HTMLElement ? document.activeElement : null)
     })
     window.addEventListener('keydown', onKeyDown, true)
-    window.addEventListener('pointerdown', reset, true)
-    window.addEventListener('blur', reset)
     return () => {
       stopRequests?.()
       window.removeEventListener('keydown', onKeyDown, true)
-      window.removeEventListener('pointerdown', reset, true)
-      window.removeEventListener('blur', reset)
     }
-  }, [overview])
+  }, [overview, overviewKeys])
 
   return (
     <Dialog.Root open={Boolean(overview)} onOpenChange={open => { if (!open) close() }}>

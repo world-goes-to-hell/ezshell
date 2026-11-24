@@ -11,6 +11,8 @@ export interface Shortcut {
   category: ShortcutCategory
   action: string // action identifier
   fixed?: boolean
+  /** A line under the name in settings: where or how the shortcut works */
+  note?: string
 }
 
 interface ShortcutsState {
@@ -32,14 +34,16 @@ const defaultShortcuts: Shortcut[] = [
     description: '영역 캡처',
     category: 'general' as const,
     action: 'quickCapture',
-    fixed: true
+    fixed: true,
+    note: 'Windows 전역 · 세 키를 뗄 때 실행'
   }, {
     id: 'quick-capture-win',
     keys: ['Ctrl', 'Win', 'Alt'],
     description: '영역 캡처',
     category: 'general' as const,
     action: 'quickCapture',
-    fixed: true
+    fixed: true,
+    note: 'Windows 전역 · 세 키를 뗄 때 실행'
   }] : []),
   {
     id: 'command-palette',
@@ -161,6 +165,16 @@ const defaultShortcuts: Shortcut[] = [
   },
 
   // Navigation
+  // The work overview (Sidebar/WorkOverview.tsx): also in a terminal and, on Windows, from any program
+  // (src/globalDoubleTab.js). Tab Tab until 2026-11-24: it fired on a shell's Tab Tab completion.
+  {
+    id: 'work-overview',
+    keys: ['Ctrl', 'Alt', 'Space'],
+    description: '로컬 작업 현황 열기',
+    category: 'navigation',
+    action: 'openWorkOverview',
+    note: typeof navigator !== 'undefined' && /^Win/i.test(navigator.platform) ? '다른 프로그램과 터미널에서도 동작 · 수정키 두 개 이상' : '터미널에서도 동작 · 수정키 두 개 이상'
+  },
   {
     id: 'next-tab',
     keys: ['Ctrl', 'Tab'],

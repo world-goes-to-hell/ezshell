@@ -16,6 +16,14 @@ const { check, finish } = createChecks()
     await send('Input.dispatchKeyEvent', { type: 'keyUp', ...options })
   }
   const tab = () => syncKey('Tab', 9)
+  // A shortcut as the window gets it: modifiers Alt 1, Ctrl 2, Shift 8 (CDP)
+  const chord = async (key, code, windowsVirtualKeyCode, modifiers) => {
+    const options = { key, code, windowsVirtualKeyCode, modifiers }
+    await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...options })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', ...options })
+  }
+  // The work overview's default shortcut, Ctrl+Alt+Space (Tab Tab until 2026-11-24)
+  const overview = () => chord(' ', 'Space', 32, 3)
   const esc = () => syncKey('Escape', 27)
   const q = selector => `document.querySelector(${JSON.stringify(selector)})`
   const dialog = q('.work-overview')
@@ -44,12 +52,14 @@ const { check, finish } = createChecks()
   fs.writeFileSync(path.join(profile, 'codex-1-program-status'), 'state=blocked:app=codex:kind=question:msg=VGVzdA==')
   fs.writeFileSync(path.join(profile, 'claude-2-program-status'), 'state=working:app=claude-code')
 
+  // Pressed while the Claude pane's terminal has the keyboard: a shell's Tab Tab completion opened it before
+  await js(`${pane('claude-2')}.querySelector('.xterm-helper-textarea')?.focus()`)
   await tab()
-  check('a single Tab does not open the work overview', await js(`!${dialog}`))
-  await sleep(380)
   await tab()
-  await tab()
-  check('double Tab shows both workspaces and the live agent states', await until(`
+  await sleep(200)
+  check('Tab Tab no longer opens the work overview', await js(`!${dialog}`))
+  await overview()
+  check('Ctrl+Alt+Space in a terminal shows both workspaces and the live agent states', await until(`
     ${row('codex-1')}?.closest('.work-overview-project').querySelector('h3').textContent === 'service' &&
     ${row('claude-2')}?.closest('.work-overview-project').querySelector('h3').textContent === 'tools' &&
     ${row('codex-1')}?.dataset.status === 'blocked' && ${row('claude-2')}?.dataset.status === 'working' &&
@@ -73,8 +83,7 @@ const { check, finish } = createChecks()
   check('clicking the empty space between cards closes the overview and restores the window', await until(`
     !${dialog} && [outerWidth, outerHeight, screenX, screenY].join() === ${JSON.stringify(originalSize)}
   `))
-  await tab()
-  await tab()
+  await overview()
   if (!(await until(`!!${row('codex-1')}`))) throw new Error('The overview did not reopen after clicking the background')
 
   await js(`window.overviewTestPane = ${pane('codex-1')}`)
@@ -136,8 +145,7 @@ const { check, finish } = createChecks()
   await driver.menuPick(x, y, '분할', '좌우 분할')
   const splitPanes = `[...${pane('codex-1')}.parentElement.querySelectorAll('.local-terminal-pane[data-local-shell-id]')]`
   check('the agent tab has two panes before previewing', await until(`${splitPanes}.length === 2`))
-  await tab()
-  await tab()
+  await overview()
   if (!(await until(`!!${row('codex-1')}`))) throw new Error('The overview did not reopen')
   await move(...await center(row('codex-1')))
   check('preview isolates the selected pane in a split tab', await until(`
@@ -176,18 +184,44 @@ const { check, finish } = createChecks()
   })()`)
   const activeScreenTab = `${q('.split-pane.active-pane .split-pane-tab-item.active')}?.dataset.tabId`
   check('the second terminal is focused in the work’s split-screen layout', await until(`${activeScreenTab} === ${JSON.stringify(secondTab)}`))
-  await tab()
-  await tab()
+  await overview()
   await until(`!!${row('claude-2')}`)
   await js(`${row('claude-2')}.click()`)
   await until(`${activeTab} === ${JSON.stringify(claudeTab)}`)
-  await tab()
-  await tab()
+  await overview()
   await until(`!!${row('codex-1')}`)
   await js(`${row('codex-1')}.click()`)
   check('jumping back restores the screens and focuses the chosen agent’s tab', await until(`
     !${dialog} && document.querySelectorAll('.split-pane[data-screen]').length === 2 &&
     ${activeScreenTab} === ${JSON.stringify(codexTab)} && ${pane('codex-1')}.contains(document.activeElement)
   `))
+
+  // Settings > 키보드 단축키 changes it (2026-11-24 user request)
+  await js(`document.querySelector('.title-bar-btn[title="설정"]').click()`)
+  if (!(await until(`!!document.querySelector('.settings-tab-trigger')`))) throw new Error('settings did not open')
+  await js(`[...document.querySelectorAll('.settings-tab-trigger')].find(t => t.textContent.includes('단축키')).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))`)
+  const change = q('[aria-label="로컬 작업 현황 열기 단축키 바꾸기"]')
+  if (!(await until(`!!${change}`))) throw new Error('the work overview shortcut is not in settings')
+  check('settings list the work overview shortcut as Ctrl+Alt+Space with where it works', await js(`
+    ${change}.textContent.replace(/\\s/g, '') === 'Ctrl+Alt+Space' &&
+    ${change}.closest('.shortcut-item').textContent.includes('다른 프로그램과 터미널에서도')
+  `), await js(`${change}?.closest('.shortcut-item').textContent`))
+  await js(`${change}.click()`)
+  await chord('o', 'KeyO', 79, 2)
+  check('one modifier is refused with the reason', await until(`${q('.shortcut-problem')}?.textContent.includes('두 개 이상')`))
+  await chord('O', 'KeyO', 79, 10)
+  check('Ctrl+Shift+O is saved for the work overview', await until(`
+    !document.querySelector('.shortcut-change-btn.is-recording') && ${change}.textContent.replace(/\\s/g, '') === 'Ctrl+Shift+O'
+  `))
+  await esc()
+  if (!(await until(`!document.querySelector('.settings-tab-trigger')`))) throw new Error('settings did not close')
+  await js(`${pane('codex-1')}.querySelector('.xterm-helper-textarea')?.focus()`)
+  await overview()
+  await sleep(300)
+  check('the old shortcut no longer opens the overview', await js(`!${dialog}`))
+  await chord('O', 'KeyO', 79, 10)
+  check('the new shortcut opens it from the terminal', await until(`!!${row('codex-1')}`))
+  await esc()
+  await until(`!${dialog}`)
   finish()
 })().catch(error => { console.error(error); process.exit(1) })

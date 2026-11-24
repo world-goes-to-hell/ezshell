@@ -1,6 +1,6 @@
 const fs = require('node:fs')
 const path = require('node:path')
-const { sleep } = require('./driver')
+const { connect, findPage, sleep } = require('./driver')
 
 const panel = `document.querySelector('.chat-link-preview')`
 const backdrop = `document.querySelector('.chat-link-preview-overlay')`
@@ -48,10 +48,15 @@ async function checkChatLinkPreviews({ driver, cover, shellId, profile, addAnswe
     '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj',
     'trailer<</Root 1 0 R>>', '%%EOF', ''
   ].join('\n'))
+  const webPath = 'mockups/byte-daemon.html'
+  fs.mkdirSync(path.join(profile, 'mockups'), { recursive: true })
+  fs.writeFileSync(path.join(profile, 'mockups', 'byte-daemon.html'), '<!doctype html><title>Byte Daemon</title>' +
+    '<link rel="stylesheet" href="../preview/site.css"><h1>Byte Daemon</h1>')
+  fs.writeFileSync(path.join(folder, 'site.css'), 'h1 { color: rgb(24, 106, 187); }')
 
   addAnswer('파일을 확인해 주세요.\n\n' +
     '[이미지](preview/workspace.png) · [코드 72행](preview/script.js:72) · [마크다운](preview/release/steps.md) · ' +
-    '[폴더](preview/release/) · [큰 로그](preview/large.log) · [PDF](preview/release.pdf)')
+    '[폴더](preview/release/) · [큰 로그](preview/large.log) · [PDF](preview/release.pdf) · ' + `\`${webPath}\``)
   const open = (href, name) => openPreview({ driver, cover, href, name })
   const close = async () => {
     await click(...await center(closeButton))
@@ -211,6 +216,31 @@ async function checkChatLinkPreviews({ driver, cover, shellId, profile, addAnswe
   check('clicking the backdrop closes the preview and restores focus', await until(`!${panel} && document.activeElement === ${backdropAnchor}`))
   const missing = await js(`window.electronAPI.agentChatLinkPreview(${JSON.stringify(shellId)}, 'preview/not-in-chat.txt')`)
   check('the preview IPC rejects a path the conversation did not show', missing?.ok === false)
+
+  const webAnchor = await open(webPath, 'byte-daemon.html')
+  const browserButton = `[...${panel}.querySelectorAll('.chat-link-preview-actions button')].find(b => b.textContent.trim() === '브라우저로 열기')`
+  const closeBrowserTab = async () => {
+    const target = await findPage(page => page.url.startsWith('ezshell-workspace://') && page.url.endsWith(`/${webPath}`), 8000)
+    if (!target) throw new Error('The chat document did not open in the workspace browser')
+    const page = await connect(p => p.id === target.id)
+    try {
+      check('the browser renders the HTML and its relative stylesheet in an isolated tab', await page.until(`
+        document.querySelector('h1')?.textContent === 'Byte Daemon' &&
+        getComputedStyle(document.querySelector('h1')).color === 'rgb(24, 106, 187)' &&
+        typeof window.electronAPI === 'undefined'
+      `))
+    } finally { page.close() }
+    const browserTab = `.terminal-tab[data-tab-id="browser:${new URL(target.url).host}"]`
+    check('the file drawer closes and the browser tab becomes active', await until(`!${panel} && document.querySelector(${JSON.stringify(browserTab)}).classList.contains('active')`))
+    await js(`document.querySelector(${JSON.stringify(`${browserTab} .tab-close`)}).click()`)
+    await until(`!!${webAnchor} && ${webAnchor}.checkVisibility({ visibilityProperty: true })`)
+  }
+  await click(...await center(browserButton))
+  await closeBrowserTab()
+  await js(`${webAnchor}.scrollIntoView({ block: 'center' })`)
+  await click(...await center(webAnchor), 'right')
+  await driver.pick('브라우저로 열기')
+  await closeBrowserTab()
 }
 
 async function checkSplitChatLinkPreview({ driver, cover, browserTabId, profile, check }) {

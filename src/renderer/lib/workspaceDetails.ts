@@ -10,6 +10,9 @@ export function isMediaFile(name: string): boolean {
   return dot > 0 && MEDIA.has(base.slice(dot + 1).toLowerCase())
 }
 
+/** Document types served by the workspace browser (src/ipc/browserWorkspace.js). */
+export const isWorkspaceWebDocument = (name: string): boolean => /[^/\\]+\.(?:html?|xhtml|svg)$/i.test(name)
+
 /** A path relative to the panel's root, with forward slashes */
 export const joinRelative = (parent: string, name: string): string => (parent ? `${parent}/${name}` : name)
 

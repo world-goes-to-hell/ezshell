@@ -29,6 +29,7 @@ hotkey.createGlobalDoubleTab = ({ onCapture, onCaptureCancel }) => {
     },
     stop() { clearInterval(timer) },
     setEnabled() {},
+    setOverviewKey() {},
     focusCapture() {},
     endCapture() { capturing = false }
   }
@@ -62,8 +63,16 @@ capture.createQuickCapture = options => createQuickCapture({
       return [{ display_id: String(id), thumbnail }]
     }
   },
-  clipboard: { write: async () => fs.writeFileSync(path.join(profile, 'capture-copied'), '') },
-  onSent: () => {}
+  // The copied picture is kept so the spec can read its size (several captures are stacked into one)
+  clipboard: {
+    async write([item]) {
+      const png = Buffer.from(await (await item.getType('image/png')).arrayBuffer())
+      fs.writeFileSync(path.join(profile, 'capture-copied'), png)
+    }
+  },
+  onSent: () => {},
+  // The app's output is not kept: a failed capture leaves its reason for the spec to show
+  onError: error => fs.appendFileSync(path.join(profile, 'capture-error'), String(error?.stack ?? error) + '\n')
 })
 
 require('./agentChatApp.js')

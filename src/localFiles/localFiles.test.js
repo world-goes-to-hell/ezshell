@@ -8,7 +8,8 @@ const localRead = require('./localRead.js')
 const git = require('./git.js')
 
 let temp
-afterEach(() => { if (temp) fs.rmSync(temp, { recursive: true, force: true }); temp = undefined })
+// A git process still closing can hold the folder on Windows for a moment: retry the removal
+afterEach(() => { if (temp) fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); temp = undefined })
 
 function repo() {
   temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-localfiles-')))
@@ -27,7 +28,7 @@ function repo() {
   return { top, g }
 }
 
-describe('roots', () => {
+describe('roots', { timeout: 30000 }, () => {
   it('accepts the folder of an open shell and folders inside its repository, nothing else', async () => {
     const { top } = repo()
     const outside = fs.mkdtempSync(path.join(temp, 'other-'))
@@ -98,7 +99,8 @@ describe('localRead', () => {
   })
 })
 
-describe('git', () => {
+// Real git processes: under a full parallel run they took more than vitest's default 5 seconds
+describe('git', { timeout: 30000 }, () => {
   it('lists staged, changed and untracked files', async () => {
     const { top, g } = repo()
     fs.writeFileSync(path.join(top, 'README.md'), 'changed\n')
@@ -164,7 +166,7 @@ describe('git', () => {
   })
 })
 
-describe('git status line counts', () => {
+describe('git status line counts', { timeout: 30000 }, () => {
   it('reads numstat with renames and binary files', () => {
     const out = ['3\t1\tsrc/a.txt', '-\t-\timg.png', '2\t0\t', 'old.txt', 'new.txt', ''].join('\0')
     expect(git.parseNumstat(out)).toEqual({ 'src/a.txt': [3, 1], 'img.png': [null, null], 'new.txt': [2, 0] })

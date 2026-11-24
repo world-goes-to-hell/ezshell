@@ -1,5 +1,5 @@
 const { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } = require('fs')
-const { open } = require('node:fs/promises')
+const { lstat, open } = require('node:fs/promises')
 const { randomUUID } = require('crypto')
 const { tmpdir } = require('os')
 const { join } = require('path')
@@ -7,6 +7,7 @@ const { join } = require('path')
 const MAX_TEXT = 1024 * 1024 - 16
 const MAX_PIXELS = 24 * 1024 * 1024
 const MAX_IMAGE_BYTES = MAX_PIXELS * 4
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
 function checkedText(text) {
   if (text.length > MAX_TEXT) throw new Error('붙여넣을 텍스트가 너무 깁니다.')
@@ -50,18 +51,32 @@ function createLocalTerminalClipboard(clipboard, nativeImage, platform = process
     return image
   }
 
-  async function decodeImageFile(path) {
+  async function readImageFile(path, expected) {
     const file = await open(path, 'r')
     try {
       const stat = await file.stat()
       if (!stat.isFile()) throw new Error('이미지 파일을 선택해 주세요.')
+      if (expected && (stat.dev !== expected.dev || stat.ino !== expected.ino)) throw new Error('이미지 파일이 바뀌었습니다.')
       if (stat.size > MAX_IMAGE_BYTES) throw new Error('이미지가 너무 큽니다.')
       const data = Buffer.alloc(stat.size)
       const { bytesRead } = await file.read(data, 0, data.length, 0)
-      return decodeBuffer(data.subarray(0, bytesRead))
+      return data.subarray(0, bytesRead)
     } finally {
       await file.close()
     }
+  }
+
+  async function decodeImageFile(path) {
+    return decodeBuffer(await readImageFile(path))
+  }
+
+  async function readStoredImage(path) {
+    if (!files.has(path)) throw new Error('저장한 이미지가 없습니다.')
+    const entry = await lstat(path)
+    if (!entry.isFile()) throw new Error('이미지 파일이 바뀌었습니다.')
+    const data = await readImageFile(path, entry)
+    if (!data.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) throw new Error('저장한 PNG를 읽지 못했습니다.')
+    return data
   }
 
   function storeImage(image) {
@@ -95,7 +110,7 @@ function createLocalTerminalClipboard(clipboard, nativeImage, platform = process
     directory = undefined
   }
 
-  return { read, readText, decodeImage, decodeImageFile, storeImage, discardImage, saveImage, dispose }
+  return { read, readText, decodeImage, decodeImageFile, readStoredImage, storeImage, discardImage, saveImage, dispose }
 }
 
 module.exports = { createLocalTerminalClipboard }

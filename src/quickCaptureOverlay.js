@@ -177,6 +177,16 @@ const page = `<!doctype html>
     .style-group + .style-group { padding-left: 0; border-left: none; }
     #tools #reselect { margin-left: 0; }
   }
+  #shots { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; padding: 4px 4px 12px;
+    border-bottom: 1px solid color-mix(in srgb, var(--capture-border) 60%, var(--capture-surface)); }
+  #shots[hidden] { display: none; }
+  .shot { position: relative; }
+  #review-comment .shot-pick { position: relative; display: block; height: auto; padding: 3px; }
+  .shot-thumb { display: block; height: 44px; width: auto; max-width: 132px; border-radius: 3px; }
+  .shot-number { position: absolute; left: 6px; top: 6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+    background: #000c; color: #fff; font: 600 11px/18px var(--capture-font); text-align: center; pointer-events: none; }
+  #review-comment .shot-remove { position: absolute; top: -8px; right: -8px; display: grid; place-items: center;
+    width: 22px; height: 22px; padding: 0; border-radius: 50%; font-size: 14px; line-height: 1; }
   .ink-text { position: absolute; z-index: 3; min-width: 120px; padding: 1px 4px; background: #000a;
     border: 1px dashed #ffffffaa; border-radius: 3px; outline: none; }
 </style>
@@ -199,6 +209,7 @@ const page = `<!doctype html>
   <symbol id="capture-copy" viewBox="0 0 20 20"><rect x="7" y="7" width="9" height="10" rx="1.2"/><path d="M13 7V4H4v10h3"/></symbol>
   <symbol id="capture-send" viewBox="0 0 20 20"><path d="m3 9 14-5-4 13-3-5-7-3Zm7 3 7-8"/></symbol>
   <symbol id="capture-check" viewBox="0 0 20 20"><path d="m4 10 4 4 8-8"/></symbol>
+  <symbol id="capture-more" viewBox="0 0 20 20"><path d="M3 7V3h4m6 0h4v4m0 6v4h-4m-6 0H3v-4m7-6v6m-3-3h6"/></symbol>
 </svg>
 <img id="snapshot" alt="" draggable="false">
 <div id="hint">드래그해서 영역 선택 · Esc 취소</div>
@@ -206,6 +217,7 @@ const page = `<!doctype html>
 <canvas id="ink" hidden></canvas>
 <form id="review" aria-label="캡처 확인" hidden>
   <div id="review-comment">
+    <div id="shots" role="group" aria-label="캡처 목록" hidden></div>
     <div id="tools" role="toolbar" aria-label="표시 도구">
       <div class="tool-grid">
         <button type="button" class="tool-tile" data-tool="arrow" title="화살표 (A)" aria-label="화살표" aria-keyshortcuts="A">
@@ -260,6 +272,7 @@ const page = `<!doctype html>
     </div>
     <div class="review-actions">
       <button id="cancel" type="button" aria-keyshortcuts="Escape">취소 <kbd aria-hidden="true">Esc</kbd></button>
+      <button id="more" type="button" title="화면을 한 장 더 캡처합니다 (최대 8장)"><svg class="icon" aria-hidden="true"><use href="#capture-more"/></svg>추가 캡처</button>
       <button id="copy" type="submit"><svg class="icon" aria-hidden="true"><use href="#capture-copy"/></svg>복사</button>
       <button id="work" type="button" aria-describedby="work-description"><svg class="icon" aria-hidden="true"><use href="#capture-send"/></svg>바로작업</button>
     </div>
@@ -296,12 +309,23 @@ const page = `<!doctype html>
     snapshot.src = image
     await snapshot.decode()
   }
-  window.pickCaptureRegion = () => {
+  window.pickCaptureRegion = async (state = null) => {
+    const editor = window.captureEditor
+    const hint = document.querySelector('#hint')
+    const strip = document.querySelector('#shots')
+    const more = document.querySelector('#more')
+    const reselect = document.querySelector('#reselect')
     let start
     let pointer
+    // Counts drags, so a late capture-loss check does not cancel a newer drag
+    let drags = 0
+    // The region cut from this screen, while that capture is in the run
     let selection
     let projects = []
     let accept
+    // When Esc was first pressed on several captures: a second press within 3 seconds throws them away
+    let leaving = 0
+    let stripKey = ''
     const nextAction = () => new Promise(resolve => { accept = resolve })
     function submit(action) {
       if (!accept) return
@@ -313,6 +337,94 @@ const page = `<!doctype html>
       status.textContent = text
       status.toggleAttribute('data-error', error)
       placeReview()
+    }
+    const count = () => editor.shots().length
+    function refreshShots() {
+      const list = editor.shots()
+      const current = editor.active()
+      const key = list.map(shot => shot.source).join(',') + '|' + current
+      const height = Math.round(44 * devicePixelRatio)
+      more.disabled = list.length >= MAX_SHOTS
+      more.title = more.disabled ? '한 번에 ' + MAX_SHOTS + '장까지 캡처할 수 있습니다' : '화면을 한 장 더 캡처합니다 (최대 ' + MAX_SHOTS + '장)'
+      reselect.disabled = list[current]?.source !== -1
+      reselect.title = reselect.disabled ? '이 캡처는 영역을 다시 고를 수 없습니다. 지우고 새로 캡처하세요.' : '표시를 버리고 영역을 다시 고릅니다'
+      if (key === stripKey) {
+        // Only the marks changed: redraw the thumbnail of the capture being edited
+        const thumb = strip.querySelector('[aria-pressed="true"] canvas')
+        if (thumb && current >= 0) editor.drawThumbnail(current, thumb, height)
+        return
+      }
+      stripKey = key
+      strip.hidden = list.length < 2
+      strip.replaceChildren(...(list.length < 2 ? [] : list.map((shot, index) => {
+        const item = document.createElement('div')
+        item.className = 'shot'
+        const pick = document.createElement('button')
+        pick.type = 'button'
+        pick.className = 'shot-pick'
+        pick.setAttribute('aria-pressed', String(index === current))
+        pick.setAttribute('aria-label', '캡처 ' + (index + 1) + ' 편집')
+        pick.title = '캡처 ' + (index + 1) + ' 편집'
+        const thumb = document.createElement('canvas')
+        thumb.className = 'shot-thumb'
+        editor.drawThumbnail(index, thumb, height)
+        const number = document.createElement('span')
+        number.className = 'shot-number'
+        number.textContent = String(index + 1)
+        pick.append(thumb, number)
+        pick.onclick = () => showShot(index)
+        const remove = document.createElement('button')
+        remove.type = 'button'
+        remove.className = 'shot-remove'
+        remove.textContent = '×'
+        remove.setAttribute('aria-label', '캡처 ' + (index + 1) + ' 지우기')
+        remove.title = '이 캡처를 지웁니다'
+        remove.onclick = () => removeShot(index)
+        item.append(pick, remove)
+        return item
+      })))
+      placeReview()
+    }
+    editor.configure({ onBadge: n => { comment.value = commentWithBadge(comment.value, n) }, onChange: refreshShots })
+    // Put the selection box where capture i is shown: in place when it was cut from this screen, else at the top
+    function positionBox(index) {
+      const shot = editor.shots()[index]
+      if (!shot) return
+      if (shot.source === -1) {
+        for (const [edge, value] of Object.entries(selection)) box.style[edge] = value * 100 + '%'
+      } else {
+        const reserved = review.hidden ? 420 : review.getBoundingClientRect().height
+        const fitted = fitBox(shot, { width: innerWidth, height: innerHeight }, devicePixelRatio, reserved)
+        for (const [edge, value] of Object.entries(fitted)) box.style[edge] = value + 'px'
+      }
+      box.hidden = false
+    }
+    function showShot(index) {
+      positionBox(index)
+      editor.select(index)
+      placeReview()
+    }
+    function enterSelect() {
+      selection = undefined
+      box.hidden = true
+      review.hidden = true
+      delete document.body.dataset.review
+      hint.textContent = count() ? '드래그해서 영역 선택 · Esc 캡처 목록으로' : '드래그해서 영역 선택 · Esc 취소'
+      message('')
+    }
+    function enterReview(index) {
+      document.body.dataset.review = ''
+      review.hidden = false
+      picker.hidden = true
+      reviewComment.hidden = false
+      showShot(index)
+    }
+    function removeShot(index) {
+      editor.removeShot(index)
+      const list = editor.shots()
+      if (!list.some(shot => shot.source === -1)) selection = undefined
+      if (!list.length) return enterSelect()
+      showShot(Math.min(index, list.length - 1))
     }
     function renderAgents(selectedAgent) {
       const chosen = projects.find(item => item.folder === project.value)
@@ -341,13 +453,17 @@ const page = `<!doctype html>
           if (!accept) return
           for (const control of [project, back, ...agents.children]) control.disabled = true
           message(who + '에 보내는 중…')
-          submit({ action: 'send', agentId: agent.id, region: selection, comment: comment.value, image: window.captureEditor.exportImage() })
+          submit({ action: 'send', agentId: agent.id, shots: editor.exportShots(true), comment: comment.value })
         }
         if (agent.id === selectedAgent) button.dataset.retry = ''
         return button
       })
       agents.replaceChildren(...buttons)
       placeReview()
+    }
+    window.captureNotice = text => {
+      message(text, true)
+      return nextAction()
     }
     window.chooseCaptureTarget = (options, error, selectedAgent) => {
       const previous = project.value
@@ -388,7 +504,7 @@ const page = `<!doctype html>
       delete document.body.dataset.selecting
     }
     function placeReview() {
-      if (!selection || review.hidden) return
+      if (review.hidden) return
       // The selection, viewport, and panel all use CSS pixels at every display scale.
       const bounds = box.getBoundingClientRect()
       const scrollTop = review.scrollTop
@@ -428,7 +544,8 @@ const page = `<!doctype html>
       review.scrollTop = scrollTop
     }
     document.body.addEventListener('pointerdown', event => {
-      if (event.button !== 0 || start || selection) return
+      if (event.button !== 0 || start || !review.hidden) return
+      drags += 1
       start = point(event)
       pointer = event.pointerId
       document.body.setPointerCapture(pointer)
@@ -443,24 +560,41 @@ const page = `<!doctype html>
       if (!start || event.pointerId !== pointer) return
       const region = update(event)
       if (!region.width || !region.height) return clear(event)
-      selection = region
       start = undefined
       pointer = undefined
-      document.body.dataset.review = ''
-      review.hidden = false
-      window.captureEditor.start(selection, { onBadge: n => { comment.value = commentWithBadge(comment.value, n) } })
-      placeReview()
+      delete document.body.dataset.selecting
+      selection = region
+      const index = editor.addShot(region)
+      if (index < 0) return enterSelect()
+      enterReview(index)
       comment.focus()
     })
     document.body.addEventListener('pointercancel', clear)
-    document.body.addEventListener('lostpointercapture', clear)
-    window.addEventListener('resize', placeReview)
+    // Chromium can report the capture lost just before the pointerup of the same drag (seen in the capture e2e):
+    // give that pointerup a moment before dropping the drag
+    document.body.addEventListener('lostpointercapture', event => {
+      const drag = drags
+      setTimeout(() => { if (drag === drags) clear(event) }, 100)
+    })
+    window.addEventListener('resize', () => {
+      const current = editor.active()
+      if (!review.hidden && current >= 0) positionBox(current)
+      placeReview()
+    })
     review.addEventListener('submit', event => {
       event.preventDefault()
-      if (selection && !reviewComment.hidden) submit({ action: 'copy', region: selection, comment: comment.value, image: window.captureEditor.exportImage() })
+      if (review.hidden || reviewComment.hidden || !count()) return
+      submit({
+        action: 'copy', shots: editor.exportShots(true), comment: comment.value,
+        combined: count() > 1 ? editor.exportCombined() : null
+      })
     })
+    more.onclick = () => {
+      if (!accept || count() >= MAX_SHOTS) return
+      submit({ action: 'more', shots: editor.exportShots(true), comment: comment.value })
+    }
     document.querySelector('#work').onclick = () => {
-      if (!selection || !accept) return
+      if (!count() || !accept) return
       reviewComment.hidden = true
       message('프로젝트를 불러오는 중…')
       submit({ action: 'targets' })
@@ -472,16 +606,28 @@ const page = `<!doctype html>
       message('')
       comment.focus()
     }
-    document.querySelector('#reselect').onclick = () => {
-      window.captureEditor.reset()
-      selection = undefined
-      box.hidden = true
-      review.hidden = true
-      delete document.body.dataset.review
-      message('')
+    reselect.onclick = () => {
+      const current = editor.active()
+      if (editor.shots()[current]?.source !== -1) return
+      editor.removeShot(current)
+      enterSelect()
     }
     // Closing the window works even while main is looking up projects or waiting for a send.
-    const cancel = () => window.close()
+    // Choosing a new region with earlier captures goes back to them instead, and several captures need a second press.
+    const cancel = () => {
+      const shots = count()
+      if (review.hidden && shots) return enterReview(shots - 1)
+      if (shots > 1 && Date.now() - leaving > 3000) {
+        leaving = Date.now()
+        const warning = 'Esc 를 한 번 더 누르면 캡처 ' + shots + '장을 모두 버립니다.'
+        message(warning, true)
+        setTimeout(() => { if (status.textContent === warning) message('') }, 3000)
+        return
+      }
+      // Main closes the window when it is waiting on us; otherwise (a lookup or send in progress) close it here
+      if (accept) submit({ action: 'close' })
+      else window.close()
+    }
     document.querySelector('#cancel').addEventListener('click', cancel)
     document.addEventListener('contextmenu', event => {
       if (review.contains(event.target)) return
@@ -493,16 +639,71 @@ const page = `<!doctype html>
       event.preventDefault()
       cancel()
     })
+    const earlier = Array.isArray(state?.captures) ? state.captures : []
+    if (typeof state?.comment === 'string') comment.value = state.comment
+    if (earlier.length) await editor.loadShots(earlier)
+    if (state?.review && count()) enterReview(count() - 1)
+    else enterSelect()
     return nextAction()
   }
 </script>
 </html>`
 
-function captureOverlayUrl(theme) {
+// The strip shown between captures of one run (docs/plan/2026-11-24-capture-multiple-shots.md). Like the overlay
+// it has no preload or Electron API: main waits on window.waitChip() for the name of the button pressed.
+const chipPage = `<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>ezShell 캡처 보관</title>
+<style>
+  :root {
+    --capture-background: #131820;
+    --capture-surface: #19212e;
+    --capture-border: #627289;
+    --capture-text: #ffffff;
+    --capture-accent: #3267ce;
+    --capture-on-accent: #ffffff;
+    --capture-focus: #83acff;
+    --capture-font: 'Segoe UI', 'Malgun Gothic', sans-serif;
+    --capture-radius: 6px;
+    --capture-panel-radius: 12px;
+    --capture-scheme: dark;
+    color-scheme: var(--capture-scheme);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  body { display: flex; align-items: center; gap: 6px; padding: 0 7px 0 14px; user-select: none;
+    font: 13px var(--capture-font); color: var(--capture-text); background: var(--capture-surface);
+    border: 1px solid var(--capture-border); border-radius: var(--capture-panel-radius); }
+  #count { margin-right: auto; font-weight: 600; white-space: nowrap; }
+  button { height: 32px; padding: 0 11px; font: inherit; color: inherit; white-space: nowrap; cursor: pointer;
+    background: var(--capture-background); border: 1px solid var(--capture-border); border-radius: var(--capture-radius); }
+  button:hover { background: color-mix(in srgb, var(--capture-background) 92%, var(--capture-text)); }
+  #capture { font-weight: 600; border-color: var(--capture-accent); background: var(--capture-accent); color: var(--capture-on-accent); }
+  #capture:hover { box-shadow: inset 0 0 0 1px var(--capture-on-accent); }
+  button:focus-visible { outline: 2px solid var(--capture-focus); outline-offset: 1px; }
+</style>
+<span id="count" role="status"></span>
+<button id="capture" type="button" title="지금 화면을 캡처합니다 (Ctrl+Win+Alt)">지금 캡처</button>
+<button id="open" type="button" title="캡처한 것을 다시 열어 고치거나 보냅니다">모아 보기</button>
+<button id="discard" type="button" title="보관한 캡처를 모두 버립니다">버리기</button>
+<script>
+  window.showCaptureCount = n => { document.querySelector('#count').textContent = '캡처 ' + n + '장 보관 중' }
+  window.waitChip = () => new Promise(resolve => {
+    for (const id of ['capture', 'open', 'discard']) document.getElementById(id).onclick = () => resolve(id)
+  })
+</script>
+</html>`
+
+function themedUrl(html, theme) {
   const css = captureThemeCss(theme)
-  const html = css ? page.replace('</style>', () => css + '\n</style>') : page
-  return 'data:text/html;charset=utf-8,' + encodeURIComponent(html)
+  const themed = css ? html.replace('</style>', () => css + '\n</style>') : html
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(themed)
 }
 
+const captureOverlayUrl = theme => themedUrl(page, theme)
+const captureChipUrl = theme => themedUrl(chipPage, theme)
+
 const OVERLAY_URL = captureOverlayUrl()
-module.exports = { OVERLAY_URL, captureOverlayUrl, captureThemeCss }
+module.exports = { OVERLAY_URL, captureOverlayUrl, captureChipUrl, captureThemeCss }

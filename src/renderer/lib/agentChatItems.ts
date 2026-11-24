@@ -23,6 +23,7 @@ export interface ChatEcho {
 export interface SentChatImages {
   text: string
   previews: readonly Blob[]
+  imageIds: readonly string[]
   bytes: number
 }
 

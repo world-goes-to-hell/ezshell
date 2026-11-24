@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sealSession, openSession, needsResealing, resealAll } from './sessionSecrets.js'
+import { sealSession, prepareSessionSaves, openSession, needsResealing, resealAll } from './sessionSecrets.js'
 import cryptoUtil from './crypto.js'
 
 const PASS = 'master-pass'
@@ -29,6 +29,34 @@ describe('sealSession', () => {
     const sealed = sealSession({ ...session, needsMigration: true, decryptionFailed: true }, PASS)
     expect(sealed).not.toHaveProperty('needsMigration')
     expect(sealed).not.toHaveProperty('decryptionFailed')
+  })
+})
+
+describe('preparing session saves', () => {
+  it('reuses the encrypted blob for appearance and connection metadata edits', () => {
+    const stored = sealSession(session, PASS)
+    const edited = { ...session, name: '새 이름', port: 2222, backgroundColor: '#ef4444', mcpEnabled: true }
+    const [record] = prepareSessionSaves([edited], PASS, [{ stored, opened: openSession(stored, PASS) }])
+
+    expect(record.stored.encrypted).toBe(stored.encrypted)
+    expect(record.opened).toEqual(edited)
+    expect(openSession(record.stored, PASS)).toEqual(edited)
+  })
+
+  it('reseals only changed secret data and preserves an unreadable blob on a rename', () => {
+    const [original, other] = prepareSessionSaves([session, { ...session, id: 's2' }], PASS)
+    const unreadable = { id: 's3', name: '읽을 수 없는 세션', ...sealSession({ id: 's3' }, 'other-pass') }
+    const openedUnreadable = openSession(unreadable, PASS)
+    const changed = { ...session, dbConnections: [{ ...session.dbConnections[0], password: 'new-secret' }] }
+    const [updated, unchanged, renamed] = prepareSessionSaves([changed, other.opened, { ...openedUnreadable, name: '변경' }], PASS, [
+      original, other, { stored: unreadable, opened: openedUnreadable }
+    ])
+
+    expect(updated.stored.encrypted).not.toEqual(original.stored.encrypted)
+    expect(openSession(updated.stored, PASS)).toEqual(changed)
+    expect(unchanged.stored.encrypted).toBe(other.stored.encrypted)
+    expect(renamed.stored.encrypted).toBe(unreadable.encrypted)
+    expect(renamed.opened.decryptionFailed).toBe(true)
   })
 })
 

@@ -56,9 +56,52 @@ function isMark(mark, minimum) {
 }
 
 /**
- * Installs window.captureEditor on the overlay: start(selection) over the chosen region, reset(), and
- * exportImage() (a PNG data URL of the region with its marks, or null when nothing was drawn).
- * onBadge(n) is called when badge n is placed (the overlay adds "n. " to the comment).
+ * Several captures copied as one picture (docs/plan/2026-11-24-capture-multiple-shots.md): top to bottom,
+ * each under a 32px band for its number, 16px apart. The overlay draws it and main checks its size against this.
+ */
+function stackLayout(sizes) {
+  let cursor = 0
+  const items = sizes.map((size, index) => {
+    const item = { labelY: cursor, y: cursor + 32, width: size.width, height: size.height }
+    cursor = item.y + size.height + (index < sizes.length - 1 ? 16 : 0)
+    return item
+  })
+  return { width: Math.max(0, ...sizes.map(size => size.width)), height: cursor, items }
+}
+
+/**
+ * Where an earlier capture is shown for editing (CSS pixels): at its own size, centered at the top, smaller
+ * when needed to leave `reserved` pixels of height for the panel (never below a quarter of the screen).
+ */
+function fitBox(size, viewport, dpr, reserved) {
+  const gap = 24
+  const natural = { width: size.width / dpr, height: size.height / dpr }
+  const maxWidth = viewport.width - gap * 2
+  const maxHeight = Math.max(viewport.height * 0.25, viewport.height - reserved - gap * 3)
+  const scale = Math.min(1, maxWidth / natural.width, maxHeight / natural.height)
+  const width = natural.width * scale
+  const height = natural.height * scale
+  return { left: (viewport.width - width) / 2, top: gap, width, height }
+}
+
+/** The next badge number: one more than the largest on any capture, so comment lines do not repeat */
+function nextBadge(markLists) {
+  const numbers = markLists.flat().filter(mark => mark && mark.type === 'badge' && Number.isFinite(mark.n)).map(mark => mark.n)
+  return 1 + Math.max(0, ...numbers)
+}
+
+/** The undo history for marks brought back after another capture: undo takes them off one at a time */
+function restoredHistory(marks) {
+  return marks.map((_, index) => marks.slice(0, index))
+}
+
+/**
+ * Installs window.captureEditor on the overlay. It keeps every capture of the run (shots), each with its own
+ * picture, marks and undo history, and edits one at a time: addShot(selection) crops the frozen screen,
+ * loadShots(list) brings back earlier captures (their pictures from main), select(i), removeShot(i).
+ * exportShots(withImages) gives each capture's source, region and marks, and with withImages a PNG data URL of
+ * the marked picture (null when it has no marks). exportCombined() stacks them all (stackLayout).
+ * onBadge(n) is called when badge n is placed (the overlay adds "n. " to the comment), onChange() on any edit.
  */
 function installCaptureEditor() {
   const COLORS = ['#ff3b30', '#ffcc00', '#34c759', '#0a84ff', '#ffffff']
@@ -68,6 +111,10 @@ function installCaptureEditor() {
   const canvas = document.querySelector('#ink')
   const tools = document.querySelector('#tools')
   const ctx = canvas.getContext('2d')
+  // source: the index of an earlier capture in main, or -1 for one cut from this screen (with its selection)
+  let shots = []
+  let active = -1
+  // The shot being edited; its marks and history live here until another one is selected (stash)
   let base = null
   let region = null
   let marks = []
@@ -79,6 +126,7 @@ function installCaptureEditor() {
   let width = WIDTHS[1]
   let typing = null
   let onBadge = () => {}
+  let onChange = () => {}
 
   const scale = () => canvas.width / Math.max(1, canvas.getBoundingClientRect().width)
   // Each axis on its own: the captured image need not have exactly the display's proportions
@@ -96,7 +144,7 @@ function installCaptureEditor() {
     Object.assign(canvas.style, { left: rect.left + 'px', top: rect.top + 'px', width: rect.width + 'px', height: rect.height + 'px' })
   }
 
-  function mosaic(target, mark) {
+  function mosaic(target, mark, from) {
     const area = cornerBox(mark.from, mark.to)
     const w = Math.round(area.width)
     const h = Math.round(area.height)
@@ -106,14 +154,15 @@ function installCaptureEditor() {
     small.width = Math.max(1, Math.ceil(w / block))
     small.height = Math.max(1, Math.ceil(h / block))
     const sctx = small.getContext('2d')
-    sctx.drawImage(base, Math.round(area.x), Math.round(area.y), w, h, 0, 0, small.width, small.height)
+    sctx.drawImage(from, Math.round(area.x), Math.round(area.y), w, h, 0, 0, small.width, small.height)
     target.save()
     target.imageSmoothingEnabled = false
     target.drawImage(small, 0, 0, small.width, small.height, Math.round(area.x), Math.round(area.y), w, h)
     target.restore()
   }
 
-  function draw(target, mark) {
+  // A mosaic samples the picture of the capture the mark belongs to
+  function draw(target, mark, from = base) {
     target.save()
     target.strokeStyle = mark.color
     target.fillStyle = mark.color
@@ -142,7 +191,7 @@ function installCaptureEditor() {
       mark.points.forEach((point, index) => (index ? target.lineTo(point.x, point.y) : target.moveTo(point.x, point.y)))
       target.stroke()
     } else if (mark.type === 'mosaic') {
-      mosaic(target, mark)
+      mosaic(target, mark, from)
     } else if (mark.type === 'text') {
       target.font = '600 ' + mark.size + 'px "Segoe UI", "Malgun Gothic", sans-serif'
       target.textBaseline = 'top'
@@ -166,8 +215,10 @@ function installCaptureEditor() {
     target.restore()
   }
 
+  // The picture is drawn too: an earlier capture is not the frozen screen behind the canvas
   function render() {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
+    if (base) ctx.drawImage(base, 0, 0)
     for (const mark of draft ? [...marks, draft] : marks) draw(ctx, mark)
     document.querySelector('#undo').disabled = !past.length
     document.querySelector('#redo').disabled = !future.length
@@ -179,6 +230,7 @@ function installCaptureEditor() {
     future = []
     marks = next
     render()
+    onChange()
   }
 
   function undo() {
@@ -187,6 +239,7 @@ function installCaptureEditor() {
     marks = past[past.length - 1]
     past = past.slice(0, -1)
     render()
+    onChange()
   }
 
   function redo() {
@@ -195,6 +248,59 @@ function installCaptureEditor() {
     marks = future[0]
     future = future.slice(1)
     render()
+    onChange()
+  }
+
+  // Keep the edited shot's marks and history with it before another one is shown or everything is exported
+  function stash() {
+    finishTyping(true)
+    if (shots[active]) shots = shots.map((shot, index) => index === active ? { ...shot, marks, past, future } : shot)
+  }
+
+  function show(index) {
+    const shot = shots[index]
+    active = index
+    base = shot.base
+    region = { width: base.width, height: base.height }
+    marks = shot.marks
+    past = shot.past
+    future = shot.future
+    draft = null
+    canvas.width = region.width
+    canvas.height = region.height
+    canvas.hidden = false
+    place()
+    render()
+  }
+
+  function hide() {
+    finishTyping(false)
+    active = -1
+    base = null
+    region = null
+    marks = []
+    past = []
+    future = []
+    draft = null
+    canvas.hidden = true
+  }
+
+  function pictureOf(shot) {
+    const out = document.createElement('canvas')
+    out.width = shot.base.width
+    out.height = shot.base.height
+    const octx = out.getContext('2d')
+    octx.drawImage(shot.base, 0, 0)
+    for (const mark of shot.marks) draw(octx, mark, shot.base)
+    return out
+  }
+
+  function cropCanvas(source, x, y, w, h) {
+    const out = document.createElement('canvas')
+    out.width = w
+    out.height = h
+    out.getContext('2d').drawImage(source, x, y, w, h, 0, 0, w, h)
+    return out
   }
 
   function finishTyping(keep) {
@@ -259,7 +365,7 @@ function installCaptureEditor() {
     if (tool === 'text') return startTyping(event, at)
     finishTyping(true)
     if (tool === 'badge') {
-      const n = marks.filter(mark => mark.type === 'badge').length + 1
+      const n = nextBadge([...shots.filter((_, index) => index !== active).map(shot => shot.marks), marks])
       commit([...marks, { type: 'badge', at, n, color, radius: Math.round((9 + width * 1.5) * s) }])
       onBadge(n)
       return
@@ -311,56 +417,110 @@ function installCaptureEditor() {
   })
   window.addEventListener('resize', place)
 
+  selectTool('arrow')
+  selectColor(COLORS[0])
+  selectWidth(WIDTHS[1])
+
   window.captureEditor = {
-    start(selection, options = {}) {
+    configure(options = {}) {
       onBadge = options.onBadge ?? (() => {})
-      region = pixelRegion(selection, { width: snapshot.naturalWidth, height: snapshot.naturalHeight })
-      if (!region) return false
-      base = document.createElement('canvas')
-      base.width = region.width
-      base.height = region.height
-      base.getContext('2d').drawImage(snapshot, region.x, region.y, region.width, region.height, 0, 0, region.width, region.height)
-      canvas.width = region.width
-      canvas.height = region.height
-      marks = []
-      past = []
-      future = []
-      draft = null
-      canvas.hidden = false
-      place()
-      selectTool('arrow')
-      selectColor(COLORS[0])
-      selectWidth(WIDTHS[1])
-      render()
-      return true
+      onChange = options.onChange ?? (() => {})
     },
-    reset() {
-      finishTyping(false)
-      region = null
-      base = null
-      marks = []
-      past = []
-      future = []
-      draft = null
-      canvas.hidden = true
+    /** Earlier captures of this run, from main: { image (PNG data URL), marks } each */
+    async loadShots(list) {
+      shots = await Promise.all(list.map(async (item, index) => {
+        const image = new Image()
+        image.src = item.image
+        await image.decode()
+        const kept = Array.isArray(item.marks) ? item.marks : []
+        return {
+          base: cropCanvas(image, 0, 0, image.naturalWidth, image.naturalHeight),
+          source: index, selection: null, marks: kept, past: restoredHistory(kept), future: []
+        }
+      }))
+      hide()
     },
+    /** Cut the selection from the frozen screen as a new capture and edit it; its index, or -1 */
+    addShot(selection) {
+      const pixels = pixelRegion(selection, { width: snapshot.naturalWidth, height: snapshot.naturalHeight })
+      if (!pixels || shots.length >= MAX_SHOTS || shots.some(shot => shot.source === -1)) return -1
+      stash()
+      const shot = {
+        base: cropCanvas(snapshot, pixels.x, pixels.y, pixels.width, pixels.height),
+        source: -1, selection, marks: [], past: [], future: []
+      }
+      shots = [...shots, shot]
+      show(shots.length - 1)
+      onChange()
+      return shots.length - 1
+    },
+    /** Edit capture i; the overlay has put the selection box where it is shown first */
+    select(index) {
+      if (!shots[index]) return
+      stash()
+      show(index)
+      onChange()
+    },
+    /** Drop capture i; nothing is edited until the overlay selects another */
+    removeShot(index) {
+      if (!shots[index]) return
+      stash()
+      shots = shots.filter((_, at) => at !== index)
+      hide()
+      onChange()
+    },
+    shots: () => shots.map(shot => ({ source: shot.source, width: shot.base.width, height: shot.base.height })),
+    active: () => active,
     hasMarks: () => marks.length > 0 || Boolean(typing?.input.value.trim()),
-    exportImage() {
-      finishTyping(true)
-      if (!region || !marks.length) return null
+    /** Capture i with its marks, scaled to `height` device pixels, for its thumbnail */
+    drawThumbnail(index, target, height) {
+      const shot = shots[index]
+      if (!shot) return
+      const picture = pictureOf(index === active ? { ...shot, marks } : shot)
+      const scale = Math.min(height / picture.height, height * 3 / picture.width)
+      target.width = Math.max(1, Math.round(picture.width * scale))
+      target.height = Math.max(1, Math.round(picture.height * scale))
+      target.getContext('2d').drawImage(picture, 0, 0, target.width, target.height)
+    },
+    exportShots(withImages) {
+      stash()
+      return shots.map(shot => ({
+        source: shot.source,
+        ...(shot.selection ? { region: shot.selection } : {}),
+        marks: shot.marks,
+        image: withImages && shot.marks.length ? pictureOf(shot).toDataURL('image/png') : null
+      }))
+    },
+    /** All captures stacked into one picture with their numbers (copying several), or null past canvas limits */
+    exportCombined() {
+      stash()
+      if (shots.length < 2) return null
+      const layout = stackLayout(shots.map(shot => ({ width: shot.base.width, height: shot.base.height })))
+      // The same pixel limit as main's own stacking (composeStack): copying more fails with a notice, not one capture
+      if (layout.width > 16384 || layout.height > 32767 || layout.width * layout.height > 67108864) return null
       const out = document.createElement('canvas')
-      out.width = region.width
-      out.height = region.height
+      out.width = layout.width
+      out.height = layout.height
       const octx = out.getContext('2d')
-      octx.drawImage(base, 0, 0)
-      for (const mark of marks) draw(octx, mark)
+      octx.fillStyle = '#20242c'
+      octx.fillRect(0, 0, out.width, out.height)
+      shots.forEach((shot, index) => {
+        const item = layout.items[index]
+        octx.fillStyle = '#ffffff'
+        octx.font = '600 17px "Segoe UI", "Malgun Gothic", sans-serif'
+        octx.textBaseline = 'middle'
+        octx.fillText('캡처 ' + (index + 1), 8, item.labelY + 16)
+        octx.drawImage(pictureOf(shot), 0, item.y)
+      })
       return out.toDataURL('image/png')
     }
   }
 }
 
-const EDITOR_SCRIPT = [pixelRegion, arrowHead, cornerBox, commentWithBadge, isMark, installCaptureEditor]
-  .map(fn => fn.toString()).join('\n') + '\ninstallCaptureEditor()\n'
+const MAX_SHOTS = 8
+const EDITOR_SCRIPT = 'const MAX_SHOTS = ' + MAX_SHOTS + '\n' +
+  [pixelRegion, arrowHead, cornerBox, commentWithBadge, isMark, stackLayout, fitBox, nextBadge, restoredHistory, installCaptureEditor]
+    .map(fn => fn.toString()).join('\n') + '\ninstallCaptureEditor()\n'
 
 /**
  * The marked image the overlay sends back, or null to use the plain crop: a PNG data URL that decodes to
@@ -376,4 +536,30 @@ function markedImage(value, region, nativeImage) {
   return width === region.width && height === region.height ? image : null
 }
 
-module.exports = { pixelRegion, arrowHead, cornerBox, commentWithBadge, isMark, markedImage, EDITOR_SCRIPT }
+/**
+ * Main's own stack of several captures when the overlay's picture cannot be used (wrong size, too big): the
+ * same layout from the pictures main checked, on a gray background, without the number text.
+ */
+// 64M pixels: a 256MB buffer in main at most
+const MAX_STACK_PIXELS = 64 * 1024 * 1024
+function composeStack(pictures, nativeImage) {
+  const sizes = pictures.map(picture => picture.getSize())
+  const layout = stackLayout(sizes)
+  if (!layout.width || layout.width * layout.height > MAX_STACK_PIXELS) return null
+  const out = Buffer.alloc(layout.width * layout.height * 4)
+  // The same value in every color channel: the order of the bitmap's channels does not matter
+  out.fill(Buffer.from([0x22, 0x22, 0x22, 0xff]))
+  for (const [index, picture] of pictures.entries()) {
+    const { width, height } = sizes[index]
+    const bitmap = picture.toBitmap()
+    if (bitmap.length < width * height * 4) return null
+    const top = layout.items[index].y
+    for (let row = 0; row < height; row++) bitmap.copy(out, (top + row) * layout.width * 4, row * width * 4, (row + 1) * width * 4)
+  }
+  return nativeImage.createFromBitmap(out, { width: layout.width, height: layout.height })
+}
+
+module.exports = {
+  pixelRegion, arrowHead, cornerBox, commentWithBadge, isMark, markedImage, stackLayout, fitBox, nextBadge, restoredHistory,
+  composeStack, MAX_SHOTS, EDITOR_SCRIPT
+}

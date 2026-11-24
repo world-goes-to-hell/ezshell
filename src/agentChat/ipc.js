@@ -1,7 +1,9 @@
 // The window names a shell and sends a draft. Main owns the transcript and clipboard image paths.
 const { randomUUID } = require('node:crypto')
+const path = require('node:path')
 const { linkTarget } = require('./links.js')
 const { readLinkPreview, resolveLocalPreviewPath } = require('./localPreview.js')
+const { sameOrInside } = require('../localFiles/roots.js')
 const { routeSubagent, subagentRelayText } = require('./subagentChat.js')
 const { watchCommand } = require('./commandScreen.js')
 const { customCommands } = require('./slashCommands.js')
@@ -118,7 +120,8 @@ const PICKER_REASONS = {
 }
 
 /**
- * links: { openExternal(url), openBrowserTab(url), showItemInFolder(path), openFolder(path), openLocalFile(path) }
+ * links: { openExternal(url), openBrowserTab(url), openWorkspaceBrowser(root, relative, permitted),
+ *   showItemInFolder(path), openFolder(path), openLocalFile(path) }
  * pins: answers pinned into windows of their own (pins.js); showShell(shellId): the main window
  * brings that shell's pane forward as a chat
  */
@@ -329,6 +332,22 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   })
   ipcMain.handle('agent-chat-read-clipboard', (event, shellId) => readAttachments(event, shellId, 'clipboard'))
   ipcMain.handle('agent-chat-pick-images', (event, shellId) => readAttachments(event, shellId, 'files'))
+  ipcMain.handle('agent-chat-preview-image', async (event, request) => {
+    if (!fromChatWindow(event)) return locked
+    const scope = shellIdOf(request?.shellId)
+    const imageId = request?.imageId
+    const unavailable = { ok: false, error: '원본 이미지를 불러올 수 없습니다.' }
+    if (!scope || typeof imageId !== 'string' || imageId.length !== 36) return unavailable
+    const file = imageDrafts.previewFile(scope, imageId)
+    if (!file) return unavailable
+    try {
+      const data = await clipboard.readStoredImage(file)
+      if (!fromChatWindow(event)) return locked
+      return imageDrafts.previewFile(scope, imageId) === file ? { ok: true, data } : unavailable
+    } catch {
+      return unavailable
+    }
+  })
   ipcMain.on('agent-chat-remove-image', (event, request) => {
     if (allowed(event) && typeof request?.imageId === 'string') imageDrafts.remove(shellIdOf(request.shellId), [request.imageId])
   })
@@ -361,7 +380,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     }
     const retry = retryRequest(request.retry)
     if (request.retry && (!retry || !text)) return { ok: false, error: '다시 보낼 메시지의 정보를 확인할 수 없습니다.' }
-    const selected = imageDrafts.select(id, keys, { retry: Boolean(retry), remember: Boolean(text) })
+    const selected = imageDrafts.select(id, keys, { retry: Boolean(retry), retainFor: text ? 'retry' : 'preview' })
     if (!selected.ok) return selected
     const { files } = selected
     if (!text && (!files.length || typeof request.text !== 'string' || request.text.trim() || request.text.length > MAX_TEXT)) {
@@ -514,8 +533,17 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (!allowed(event)) return locked
     const id = shellIdOf(request?.shellId)
     // A relative link is read against the agent's folder, as when the answer was read (chats.js)
-    const target = id ? linkTarget(request?.href, process.platform, chats.cwdOf?.(id) ?? null) : null
+    const cwd = id ? chats.cwdOf?.(id) ?? null : null
+    const target = id ? linkTarget(request?.href, process.platform, cwd) : null
     if (!id || !target || !chats.knowsLink(id, target.key)) return { ok: false, error: '대화에 나온 링크만 열 수 있습니다.' }
+    if (request.how === 'browser-tab' && target.kind === 'path') {
+      if (!fromChatWindow(event) || !links?.openWorkspaceBrowser) return { ok: false, error: '브라우저에서 파일을 열 수 없습니다.' }
+      const authorized = chats.linkAuthority(id, target.key)
+      const root = cwd && sameOrInside(cwd, target.path) ? cwd : path.dirname(target.path)
+      const relative = path.relative(root, target.path).split(path.sep).join('/')
+      const result = await links.openWorkspaceBrowser(root, relative, () => fromChatWindow(event) && authorized())
+      return result.success ? { ok: true } : { ok: false, error: result.error }
+    }
     return openTarget(target, request?.how, () => allowed(event))
   })
 
@@ -599,7 +627,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
       imageDrafts.clearAll()
       mcpSummaries.clear()
     },
-    async sendCapture(target, comment, getAttachment, stillOpen) {
+    async sendCapture(target, comment, getAttachments, stillOpen) {
       const local = shells()
       if (target.kind === 'antigravity' || local?.agentOf(target.shellId)?.kind === 'antigravity') return antigravityOnlyText
       const sameConversation = () => !isLocked() && stillOpen() && local?.chatAgentId(target.shellId) === target.id
@@ -607,19 +635,24 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
       const trimmed = comment.trim()
       const text = trimmed ? cleanChatText(comment) : '첨부한 화면을 확인해 주세요.'
       if (!text) return { ok: false, error: '코멘트에 사용할 수 없는 문자가 있거나 너무 깁니다.' }
-      const { file, preview } = getAttachment()
-      const { prompt, images } = chatPrompt(target.kind, text, [file])
+      // Every capture of the run, in order, in one message (docs/plan/2026-11-24-capture-multiple-shots.md)
+      const attachments = getAttachments()
+      const { prompt, images } = chatPrompt(target.kind, text, attachments.map(item => item.file))
       const shellId = target.shellId
       const id = `outgoing:${randomUUID()}`
       const queued = local.agentOf(shellId)?.status === 'working'
-      // Publish before Enter so even a transcript read on the next tick can match the preview.
-      notifyCapture({ shellId, id, text, preview, queued, time: Date.now() })
+      const imageIds = imageDrafts.rememberCaptures(shellId, attachments)
+      // Publish before Enter so even a transcript read on the next tick can match the previews.
+      notifyCapture({ shellId, id, text, previews: attachments.map(item => item.preview), imageIds, queued, time: Date.now() })
       let result
       try {
         result = await local.chatSend(shellId, prompt, images, undefined, sameConversation)
         return chatSendResult(result)
       } finally {
-        if (!result?.ok && !isLocked()) notifyCapture({ shellId, id, discard: true })
+        if (!result?.ok) {
+          imageDrafts.forgetSent(imageIds)
+          if (!isLocked()) notifyCapture({ shellId, id, discard: true })
+        }
       }
     }
   }

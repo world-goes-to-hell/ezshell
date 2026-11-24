@@ -34,6 +34,18 @@ function codexStatus(value) {
 const tag = (body, name) => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(body)?.[1]?.trim() ?? ''
 const active = status => status === 'starting' || status === 'running'
 
+/**
+ * The text of a Claude background-task notice in the parent transcript. It is a user line when the
+ * parent was idle, and a queued_command attachment when it came in while the parent was working
+ * (missing that kept a finished subagent at 작업 중). A line the user typed meanwhile is not a notice.
+ */
+function noticeText(line) {
+  if (line.type === 'user') return typeof line.message?.content === 'string' ? line.message.content : null
+  const queued = line.type === 'attachment' ? line.attachment : null
+  if (queued?.type !== 'queued_command' || typeof queued.prompt !== 'string') return null
+  return queued.origin?.kind === 'task-notification' || queued.commandMode === 'task-notification' ? queued.prompt : null
+}
+
 // A tracker belongs to one parent transcript. Only tool calls and provider lifecycle records
 // can create/update rows. Child transcript paths and raw tool arguments stay in the main process.
 function createSubagentTracker(kind) {
@@ -80,8 +92,7 @@ function createSubagentTracker(kind) {
       }
       return
     }
-    if (line.type !== 'user') return
-    if (Array.isArray(content)) {
+    if (line.type === 'user' && Array.isArray(content)) {
       for (const block of content) {
         const id = block?.tool_use_id
         if (block?.type !== 'tool_result' || !agents.has(id)) continue
@@ -94,8 +105,9 @@ function createSubagentTracker(kind) {
       }
       return
     }
-    if (typeof content !== 'string' || !content.trimStart().startsWith('<task-notification>')) return
-    const body = tag(content, 'task-notification')
+    const notice = noticeText(line)
+    if (!notice || !notice.trimStart().startsWith('<task-notification>')) return
+    const body = tag(notice, 'task-notification')
     const childId = tag(body, 'task-id')
     const id = tag(body, 'tool-use-id') || idOf(childId)
     const status = CLAUDE_STATUS.get(tag(body, 'status'))

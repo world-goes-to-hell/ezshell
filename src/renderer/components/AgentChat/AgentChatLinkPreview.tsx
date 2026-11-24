@@ -1,8 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { RiCloseLine, RiExternalLinkLine, RiFileCopyLine, RiFileLine, RiFolderOpenLine, RiLink, RiWindowLine } from 'react-icons/ri'
+import { RiCloseLine, RiExternalLinkLine, RiFileCopyLine, RiFileLine, RiFolderOpenLine, RiGlobalLine, RiLink, RiWindowLine } from 'react-icons/ri'
 import { formatBytes } from '../../lib/mcpLabels'
 import { isMarkdownFile } from '../../lib/markdownRender'
+import { isWorkspaceWebDocument } from '../../lib/workspaceDetails'
 import { copyToClipboard } from '../../lib/terminalClipboard'
 import { toast } from '../../stores/toastStore'
 import type { ChatLinkPreviewData, ChatLinkPreviewResult } from '../../types/chatLinkPreview'
@@ -84,7 +85,7 @@ interface AgentChatLinkPreviewProps {
   themeStyle?: CSSProperties
   onClose: () => void
   onRestoreFocus: () => void
-  onOpen: (href: string, how: 'app' | 'explorer') => void
+  onOpen: (href: string, how: 'app' | 'explorer' | 'browser-tab') => void
 }
 
 export function AgentChatLinkPreview({ shellId, href, themeStyle, onClose, onRestoreFocus, onOpen }: AgentChatLinkPreviewProps) {
@@ -170,6 +171,9 @@ export function AgentChatLinkPreview({ shellId, href, themeStyle, onClose, onRes
               {file.linked && <span>링크 · 실제 위치가 다릅니다</span>}
             </div>
             <div className="chat-link-preview-actions">
+              {file.kind !== 'directory' && isWorkspaceWebDocument(file.name) && (
+                <button type="button" onClick={() => onOpen(href, 'browser-tab')}><RiGlobalLine size={14} aria-hidden />브라우저로 열기</button>
+              )}
               <button type="button" onClick={() => onOpen(href, 'app')}><RiWindowLine size={14} aria-hidden />ezShell로 열기</button>
               <button type="button" onClick={() => onOpen(href, 'explorer')}><RiExternalLinkLine size={14} aria-hidden />파일 탐색기로 열기</button>
               <button type="button" onClick={async () => {

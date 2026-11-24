@@ -608,7 +608,7 @@ export interface AgentChatFrame {
 }
 
 export type AgentChatCapture = { shellId: string; id: string } & (
-  | { time: number; text: string; preview: Uint8Array<ArrayBuffer>; queued: boolean }
+  | { time: number; text: string; previews: Uint8Array<ArrayBuffer>[]; imageIds: string[]; queued: boolean }
   | { discard: true }
 )
 
@@ -801,6 +801,10 @@ export interface WorkspaceDirectoryEntry {
 export interface WorkspaceDirectorySearchResult {
   entries: (WorkspaceDirectoryEntry & { path: string })[]
   truncated: boolean
+  /** Installed/generated folders (node_modules, build…) the default search lists but does not read */
+  skipped?: { count: number; names: string[] }
+  /** The search read those folders too */
+  includedAll?: boolean
 }
 
 export interface WorkspaceGitCommit {
@@ -932,6 +936,7 @@ declare global {
       toggleFullscreen: () => Promise<void>
       showWorkOverview: () => Promise<{ backdrop: Uint8Array<ArrayBuffer> | null } | null>
       hideWorkOverview: () => void
+      setWorkOverviewKey?: (keys: string[]) => void
       onWorkOverviewRequest?: (callback: () => void) => () => void
       setShortcutRecording?: (recording: boolean) => void
 
@@ -1019,8 +1024,8 @@ declare global {
       localProjectDevelopmentStart: (options: { folder: string; id: string; cols: number; rows: number; includeSource: boolean; install: boolean }) =>
         Promise<{ success: true; id: string; name: string; cwd: string; label: string } | { success: false; error: string }>
       workspaceDirectoryList: (folder: string, relative?: string) => Promise<{ success: true; entries: WorkspaceDirectoryEntry[]; total: number } | { success: false; error: string }>
-      workspaceDirectoryPrepare?: (root: string, refresh?: boolean) => Promise<{ success: true } | { success: false; error: string }>
-      workspaceDirectorySearch?: (root: string, query: string) => Promise<({ success: true } & WorkspaceDirectorySearchResult) | { success: false; error: string }>
+      workspaceDirectoryPrepare?: (root: string, refresh?: boolean, includeAll?: boolean) => Promise<{ success: true } | { success: false; error: string }>
+      workspaceDirectorySearch?: (root: string, query: string, includeAll?: boolean) => Promise<({ success: true } & WorkspaceDirectorySearchResult) | { success: false; error: string }>
       workspaceGitStatus?: (root: string) => Promise<{ success: true; repo: WorkspaceGitStatus | null } | { success: false; error: string }>
       workspaceGitCommitFiles?: (root: string, hash: string) => Promise<{ success: true; files: WorkspaceGitFile[] } | { success: false; error: string }>
       workspaceGitDiff?: (root: string, file: string, hash?: string) => Promise<({ success: true } & WorkspaceGitDiff) | { success: false; error: string }>
@@ -1089,6 +1094,7 @@ declare global {
         { ok: true; kind: 'text'; text: string } | AgentChatImagesResult
       >
       agentChatPickImages?: (shellId: string) => Promise<AgentChatImagesResult>
+      agentChatPreviewImage?: (shellId: string, imageId: string) => Promise<{ ok: true; data: Uint8Array<ArrayBuffer> } | { ok: false; error: string }>
       agentChatRemoveImage?: (shellId: string, imageId: string) => void
       agentChatSend?: (shellId: string, text: string, imageIds?: string[], retry?: { acceptedAt: number; transcriptId: string; ignoreIds: string[] }, forceToken?: string) => Promise<AgentChatSendResult>
       agentChatMcpLogin?: (shellId: string, summaryId: string, server: string) => Promise<AgentChatSendResult>

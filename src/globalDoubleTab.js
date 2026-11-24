@@ -1,15 +1,19 @@
-// Tab pressed twice opens the work overview even while another program is in front (user request,
-// 2026-11-21: "ezShell 만 켜져 있다면 다른 작업 중일 때도"). The window itself only hears keys while it has
-// the focus, so a small helper (Windows PowerShell running C#) keeps a low-level keyboard hook:
-// - it looks at the Tab key only and tells main nothing but "double" (two Tabs within DOUBLE_TAB_MS, no
-//   modifier, no key between them, not a held key, not an injected one);
+// The work overview shortcut (default Ctrl+Alt+Space, settings > 키보드 단축키) opens the overview even while
+// another program is in front (user request, 2026-11-21; Tab Tab until 2026-11-24, when it was replaced: it
+// fired on a shell's Tab Tab completion and took a Tab from editors). The window itself only hears keys while
+// it has the focus, so a small helper (Windows PowerShell running C#) keeps a low-level keyboard hook:
+// - main gives it the binding as two numbers (overview <modifier bits> <virtual key>, checked here by
+//   overviewKeySpec and again by the helper); it tells main nothing but "overview" when that key is pressed
+//   with exactly those modifiers (not a held key, not an injected one);
 // - while ezShell's own window is in front it lets every key through: the window's handler does the rest
 //   (Sidebar/WorkOverview.tsx);
-// - otherwise the second Tab is kept from the program in front (the first one reached it already) and
-//   ezShell's window is brought forward (restored if minimized). Windows lets a process take the
-//   foreground only right after input of its own, hence the Alt tap before SetForegroundWindow.
-// It also tells where the program in front was: "double <x> <y>", the middle of that window in screen
-// pixels (read before ezShell comes forward), so the overview opens on the monitor the user is working on
+// - otherwise the key (down, repeats, up) is kept from the program in front, and once every modifier is
+//   released ezShell's window is brought forward (restored if minimized). Windows lets a process take the
+//   foreground only right after input of its own, hence the Alt tap before SetForegroundWindow. With Alt in
+//   the binding, a do-nothing key (vkE8, as AutoHotkey's menu mask) is sent at once, so releasing Alt does
+//   not open the menu bar of the program in front.
+// It also tells where the program in front was: "overview <x> <y>", the middle of that window in screen pixels
+// (read before ezShell comes forward), so the overview opens on the monitor the user is working on
 // (2026-11-22 user report: it opened on ezShell's monitor). Nothing else about that window.
 // The same hook reports "capture" when Ctrl+Alt+Shift or Ctrl+Win+Alt is pressed and released.
 // An unmodified Escape cancels an active capture whose overlay is outside the foreground.
@@ -18,10 +22,49 @@
 
 const { spawn: spawnProcess } = require('child_process')
 
-const DOUBLE_TAB_MS = 320
 const MAX_RESTARTS = 3
-// "double", or "double <x> <y>": where the window in front was (screen pixels)
-const DOUBLE_LINE = /^double(?: (-?\d{1,6}) (-?\d{1,6}))?$/
+// "overview", or "overview <x> <y>": where the window in front was (screen pixels)
+const OVERVIEW_LINE = /^overview(?: (-?\d{1,6}) (-?\d{1,6}))?$/
+const DEFAULT_OVERVIEW_KEYS = ['Ctrl', 'Alt', 'Space']
+// Modifier bits as the helper counts them (Win is 2 and never part of the binding)
+const MODIFIER_BITS = { ctrl: 1, control: 1, alt: 4, shift: 8 }
+// Virtual keys of the keys a binding may end in (lib/shortcutCapture.ts names them), Tab left out
+const NAMED_KEYS = {
+  space: 0x20, pageup: 0x21, pagedown: 0x22, end: 0x23, home: 0x24,
+  arrowleft: 0x25, arrowup: 0x26, arrowright: 0x27, arrowdown: 0x28, insert: 0x2d,
+  ';': 0xba, '+': 0xbb, ',': 0xbc, '-': 0xbd, '.': 0xbe, '/': 0xbf, '`': 0xc0,
+  '[': 0xdb, '\\': 0xdc, ']': 0xdd, "'": 0xde
+}
+
+/**
+ * The binding (['Ctrl', 'Alt', 'Space']) as the helper's numbers, or null. The shortcut is taken from every
+ * program and from the terminal, so it needs two or more of Ctrl, Alt and Shift, one of them Ctrl or Alt
+ * (Ctrl+O or Alt+B alone would take a key every program and the shell's readline use).
+ */
+function overviewKeySpec(keys) {
+  if (!Array.isArray(keys) || keys.length < 3 || keys.length > 4) return null
+  let mods = 0
+  let vk = 0
+  // Checked in the loop: `every` skips the holes of a sparse list, which would reach toLowerCase as undefined
+  for (const key of keys) {
+    if (typeof key !== 'string' || key.length === 0 || key.length > 12) return null
+    const name = key.toLowerCase()
+    // Own names only: 'constructor' or '__proto__' must not read Object.prototype
+    const bit = Object.hasOwn(MODIFIER_BITS, name) ? MODIFIER_BITS[name] : 0
+    if (bit) {
+      if (mods & bit) return null
+      mods |= bit
+      continue
+    }
+    if (vk) return null
+    if (/^[a-z0-9]$/.test(name)) vk = name.toUpperCase().charCodeAt(0)
+    else if (/^f([1-9]|1[0-9]|2[0-4])$/.test(name)) vk = 0x6f + Number(name.slice(1))
+    else vk = Object.hasOwn(NAMED_KEYS, name) ? NAMED_KEYS[name] : 0
+    if (!Number.isInteger(vk) || !vk) return null
+  }
+  const count = [1, 4, 8].filter(bit => mods & bit).length
+  return vk && count >= 2 && (mods & 5) ? { mods, vk } : null
+}
 
 const HOOK_SOURCE = String.raw`
 using System;
@@ -54,9 +97,15 @@ public static class EzShellDoubleTab {
   static uint appPid;
   static IntPtr appWindow;
   static volatile bool enabled = true;
-  static long lastTab = -1;
-  static bool tabDown;
-  static bool swallowUp;
+  // The overview binding: modifier bits (Ctrl 1, Alt 4, Shift 8) and a virtual key; 0 is off
+  static volatile int overviewMods = 5;
+  static volatile int overviewVk = 0x20;
+  // The binding's key is down in another program: its repeats and its release are kept from it too
+  static uint overviewHeld;
+  static long overviewHeldAt;
+  // The window that was in front, while the overview waits for the modifiers to be released
+  static long overviewFront;
+  static long overviewFrontAt;
   static int modifiers;
   static bool captureArmed;
   static bool captureBlocked;
@@ -68,18 +117,19 @@ public static class EzShellDoubleTab {
   static bool dryRun = false;
   static readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
 
-  public static void Run(uint pid, long window, int doubleMs) {
+  public static void Run(uint pid, long window) {
     appPid = pid;
     appWindow = new IntPtr(window);
-    keep = (code, wParam, lParam) => OnKey(code, wParam, lParam, doubleMs);
+    keep = (code, wParam, lParam) => OnKey(code, wParam, lParam);
     hook = SetWindowsHookEx(13, keep, GetModuleHandle(null), 0);
     if (hook == IntPtr.Zero) { Console.Out.WriteLine("error"); Console.Out.Flush(); return; }
     var input = new Thread(() => {
       string line;
       while ((line = Console.In.ReadLine()) != null) {
         if (line == "on") enabled = true;
-        else if (line == "off") { enabled = false; lastTab = -1; EndCapture(); }
+        else if (line == "off") { enabled = false; overviewHeld = 0; Interlocked.Exchange(ref overviewFront, 0); EndCapture(); }
         else if (line == "capture-end") EndCapture();
+        else if (line.StartsWith("overview ", StringComparison.Ordinal)) SetOverview(line.Substring(9));
         else if (line.StartsWith("capture-focus ", StringComparison.Ordinal)) {
           long handle;
           if (long.TryParse(line.Substring(14), out handle) && handle > 0) FocusCapture(new IntPtr(handle));
@@ -127,6 +177,46 @@ public static class EzShellDoubleTab {
     return false;
   }
 
+  // A virtual key the binding may use: space, page and arrow keys, insert, digits, letters, F1-F24, punctuation
+  static bool OverviewKeyAllowed(int vk) {
+    return vk == 0x20 || (vk >= 0x21 && vk <= 0x28) || vk == 0x2D || (vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A)
+      || (vk >= 0x70 && vk <= 0x87) || (vk >= 0xBA && vk <= 0xC0) || (vk >= 0xDB && vk <= 0xDE);
+  }
+
+  // "<mods> <vk>" from main, checked again: Ctrl 1, Alt 4, Shift 8 only, two or more with Ctrl or Alt. Anything else is off.
+  static void SetOverview(string value) {
+    int mods = 0, vk = 0;
+    string[] parts = value.Split(' ');
+    bool ok = parts.Length == 2 && int.TryParse(parts[0], out mods) && int.TryParse(parts[1], out vk)
+      && (mods & ~13) == 0 && (mods & 5) != 0 && ((mods & 1) + ((mods >> 2) & 1) + ((mods >> 3) & 1)) >= 2 && OverviewKeyAllowed(vk);
+    overviewMods = ok ? mods : 0;
+    overviewVk = ok ? vk : 0;
+    overviewHeld = 0;
+    Interlocked.Exchange(ref overviewFront, 0);
+  }
+
+  // Whether an event of the held key is kept from the program in front: its repeats and its release, but not a
+  // new press after a missed release (no event for 1.5 seconds, longer than the longest key repeat delay: a
+  // secure desktop such as Win+L or UAC took the release)
+  static bool KeepHeldKey(bool down, bool up, long now) {
+    if (down && now - overviewHeldAt > 1500) { overviewHeld = 0; return false; }
+    overviewHeldAt = now;
+    if (up) overviewHeld = 0;
+    return true;
+  }
+
+  // A chord still waiting for its modifiers after 5 seconds (a release missed the same way) does not bring
+  // ezShell forward later, on some unrelated modifier release
+  static bool FrontStillWaiting(long now) {
+    return now - Interlocked.Read(ref overviewFrontAt) <= 5000;
+  }
+
+  // The binding's key pressed with exactly its modifiers
+  static bool IsOverviewChord(uint vk, int held) {
+    int key = overviewVk;
+    return key != 0 && vk == (uint)key && held == overviewMods;
+  }
+
   static bool AppInFront() {
     uint pid;
     GetWindowThreadProcessId(GetForegroundWindow(), out pid);
@@ -137,7 +227,6 @@ public static class EzShellDoubleTab {
     long window = Interlocked.Read(ref captureWindow);
     if (down && enabled && modifiers == 0 && (window == 0 || foreground.ToInt64() != window)
         && Interlocked.CompareExchange(ref captureState, 2, 1) == 1) {
-      lastTab = -1;
       swallowEscapeUp = true;
       captureMessages.Add("capture-cancel");
     }
@@ -146,46 +235,36 @@ public static class EzShellDoubleTab {
     return true;
   }
 
-  static IntPtr OnKey(int code, IntPtr wParam, IntPtr lParam, int doubleMs) {
+  static IntPtr OnKey(int code, IntPtr wParam, IntPtr lParam) {
     if (code < 0) return CallNextHookEx(hook, code, wParam, lParam);
     var key = (KeyInfo)Marshal.PtrToStructure(lParam, typeof(KeyInfo));
     int message = wParam.ToInt32();
     bool down = message == 0x100 || message == 0x104;
     bool up = message == 0x101 || message == 0x105;
-    // Injected keys (automation, our own Alt tap) never count
+    // Injected keys (automation, our own Alt tap and menu mask) never count
     if ((key.flags & 0x10) != 0) return CallNextHookEx(hook, code, wParam, lParam);
     if (down || up) {
       bool modifierKey = key.vk == 0x5B || key.vk == 0x5C || (key.vk >= 0xA0 && key.vk <= 0xA5);
       if (modifierKey) modifiers = ModifierMask(key.vk, down);
       if (CaptureGesture(modifiers, modifierKey, down) && Interlocked.CompareExchange(ref captureState, 1, 0) == 0)
         captureMessages.Add("capture");
+      // Every modifier is up again: now the overview may come forward
+      if (modifierKey && modifiers == 0) {
+        long front = Interlocked.Exchange(ref overviewFront, 0);
+        if (front != 0 && FrontStillWaiting(clock.ElapsedMilliseconds)) ThreadPool.QueueUserWorkItem(_ => BringForward(new IntPtr(front)));
+      }
     }
     if (key.vk == 0x1B && CaptureEscape(down, up, GetForegroundWindow())) return new IntPtr(1);
-    if (key.vk != 9) {
-      if (down) lastTab = -1;
-      return CallNextHookEx(hook, code, wParam, lParam);
-    }
-    if (up) {
-      tabDown = false;
-      if (swallowUp) { swallowUp = false; return new IntPtr(1); }
-      return CallNextHookEx(hook, code, wParam, lParam);
-    }
-    if (!down) return CallNextHookEx(hook, code, wParam, lParam);
-    // A held Tab repeats its key down: not a second press
-    if (tabDown) { lastTab = -1; return CallNextHookEx(hook, code, wParam, lParam); }
-    tabDown = true;
-    bool modifier = Pressed(0x10) || Pressed(0x11) || Pressed(0x12) || Pressed(0x5B) || Pressed(0x5C);
-    if (!enabled || modifier || AppInFront()) { lastTab = -1; return CallNextHookEx(hook, code, wParam, lParam); }
+    if (overviewHeld != 0 && key.vk == overviewHeld && KeepHeldKey(down, up, clock.ElapsedMilliseconds)) return new IntPtr(1);
+    if (!down || !enabled || !IsOverviewChord(key.vk, modifiers) || AppInFront()) return CallNextHookEx(hook, code, wParam, lParam);
     long now = clock.ElapsedMilliseconds;
-    if (lastTab >= 0 && now - lastTab <= doubleMs) {
-      lastTab = -1;
-      swallowUp = true;
-      IntPtr front = GetForegroundWindow();
-      ThreadPool.QueueUserWorkItem(_ => BringForward(front));
-      return new IntPtr(1);
-    }
-    lastTab = now;
-    return CallNextHookEx(hook, code, wParam, lParam);
+    overviewHeld = key.vk;
+    overviewHeldAt = now;
+    // Keep the program in front from opening its menu bar when Alt is released
+    if ((modifiers & 4) != 0 && !dryRun) { keybd_event(0xE8, 0, 0, UIntPtr.Zero); keybd_event(0xE8, 0, 2, UIntPtr.Zero); }
+    if (Interlocked.CompareExchange(ref overviewFront, Math.Max(1, GetForegroundWindow().ToInt64()), 0) == 0)
+      Interlocked.Exchange(ref overviewFrontAt, now);
+    return new IntPtr(1);
   }
 
   static void EndCapture() {
@@ -220,21 +299,25 @@ public static class EzShellDoubleTab {
   }
 
   static void BringForward(IntPtr front) {
+    if (!enabled) return;
     string where = Where(front);
-    if (dryRun) { Console.Out.WriteLine("double" + where); Console.Out.Flush(); return; }
-    if (IsIconic(appWindow)) ShowWindow(appWindow, 9);
-    TapAlt();
-    SetForegroundWindow(appWindow);
-    Console.Out.WriteLine("double" + where);
-    Console.Out.Flush();
+    if (!dryRun) {
+      if (IsIconic(appWindow)) ShowWindow(appWindow, 9);
+      TapAlt();
+      SetForegroundWindow(appWindow);
+    }
+    captureMessages.Add("overview" + where);
   }
 }
 `
 
 /** The helper's PowerShell script: the hook's source and the window to bring forward (numbers only) */
-function helperScript(pid, windowHandle, doubleMs = DOUBLE_TAB_MS) {
-  if (![pid, windowHandle, doubleMs].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('bad helper arguments')
-  return `$ErrorActionPreference = 'Stop'\nAdd-Type -TypeDefinition @'\n${HOOK_SOURCE.trim()}\n'@\n[EzShellDoubleTab]::Run(${pid}, ${windowHandle}, ${doubleMs})\n`
+function helperScript(pid, windowHandle) {
+  if (![pid, windowHandle].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('bad helper arguments')
+  // Without comment lines and indentation: the script goes on PowerShell's command line (-EncodedCommand, UTF-16
+  // in base64), which Windows cuts at 32767 characters. The full source took 29,000 of them in 2026-11.
+  const source = HOOK_SOURCE.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//')).join('\n')
+  return `$ErrorActionPreference = 'Stop'\nAdd-Type -TypeDefinition @'\n${source}\n'@\n[EzShellDoubleTab]::Run(${pid}, ${windowHandle})\n`
 }
 
 /** The native window handle Electron gives (a pointer-sized buffer) as a number */
@@ -249,12 +332,14 @@ function handleNumber(buffer) {
 
 /**
  * @param {object} deps
- * @param {(point: { x: number, y: number } | null) => void} deps.onDoubleTab two Tabs while another program
- *   was in front (ezShell is in front now), with the middle of that program's window in screen pixels
+ * @param {(point: { x: number, y: number } | null) => void} deps.onOverview the overview shortcut while another
+ *   program was in front (ezShell is in front now), with the middle of that program's window in screen pixels
  */
-function createGlobalDoubleTab({ onDoubleTab, onCapture = () => {}, onCaptureCancel = () => {}, platform = process.platform, spawn = spawnProcess, env = process.env }) {
+function createGlobalDoubleTab({ onOverview, onCapture = () => {}, onCaptureCancel = () => {}, platform = process.platform, spawn = spawnProcess, env = process.env }) {
   let child = null
   let enabled = false
+  // What the helper is told about the overview shortcut: two numbers, or 0 0 (off)
+  let overviewLine = overviewLineOf(DEFAULT_OVERVIEW_KEYS)
   let restarts = 0
   let target = null
   let stopped = false
@@ -278,6 +363,7 @@ function createGlobalDoubleTab({ onDoubleTab, onCapture = () => {}, onCaptureCan
         if (line === 'ready') {
           restarts = 0
           send(enabled ? 'on' : 'off')
+          send(overviewLine)
         } else if (enabled) {
           if (line === 'capture') {
             onCapture()
@@ -287,8 +373,8 @@ function createGlobalDoubleTab({ onDoubleTab, onCapture = () => {}, onCaptureCan
             onCaptureCancel()
             continue
           }
-          const double = DOUBLE_LINE.exec(line)
-          if (double) onDoubleTab(double[1] === undefined ? null : { x: Number(double[1]), y: Number(double[2]) })
+          const overview = OVERVIEW_LINE.exec(line)
+          if (overview) onOverview(overview[1] === undefined ? null : { x: Number(overview[1]), y: Number(overview[2]) })
         }
       }
       if (pending.length > 1024) pending = ''
@@ -298,7 +384,7 @@ function createGlobalDoubleTab({ onDoubleTab, onCapture = () => {}, onCaptureCan
     proc.on('exit', () => {
       if (child !== proc) return
       child = null
-      // A crash or a failed start: a few more tries, then the window's own Tab Tab only
+      // A crash or a failed start: a few more tries, then the window's own shortcut only
       if (!stopped && restarts < MAX_RESTARTS) {
         restarts += 1
         setTimeout(launch, 2000 * restarts).unref?.()
@@ -327,6 +413,11 @@ function createGlobalDoubleTab({ onDoubleTab, onCapture = () => {}, onCaptureCan
       enabled = Boolean(value)
       send(enabled ? 'on' : 'off')
     },
+    /** The overview binding from the window's settings; one the rules refuse turns it off outside the window */
+    setOverviewKey(keys) {
+      overviewLine = overviewLineOf(keys)
+      send(overviewLine)
+    },
     focusCapture(windowHandleBuffer) {
       const windowHandle = handleNumber(windowHandleBuffer)
       if (enabled && windowHandle) send(`capture-focus ${windowHandle}`)
@@ -344,4 +435,9 @@ function createGlobalDoubleTab({ onDoubleTab, onCapture = () => {}, onCaptureCan
   }
 }
 
-module.exports = { createGlobalDoubleTab, helperScript, handleNumber, DOUBLE_TAB_MS }
+function overviewLineOf(keys) {
+  const spec = overviewKeySpec(keys)
+  return spec ? `overview ${spec.mods} ${spec.vk}` : 'overview 0 0'
+}
+
+module.exports = { createGlobalDoubleTab, helperScript, handleNumber, overviewKeySpec }

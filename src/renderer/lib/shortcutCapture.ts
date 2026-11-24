@@ -23,12 +23,12 @@ const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta', 'AltGraph', 'O
 /** Keys named by their place on the keyboard, so the Korean input mode ('ㅔ' for P) does not matter */
 const CODE_KEYS: Record<string, string> = {
   Comma: ',', Period: '.', Slash: '/', Semicolon: ';', Quote: "'", BracketLeft: '[', BracketRight: ']',
-  Backslash: '\\', Backquote: '`', Minus: '-', Equal: '+', Tab: 'Tab',
+  Backslash: '\\', Backquote: '`', Minus: '-', Equal: '+', Tab: 'Tab', Space: 'Space',
   ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight',
   Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', Insert: 'Insert'
 }
 
-/** The binding's main key for a key press, or null for a key that cannot be bound (Enter, Space, Esc...) */
+/** The binding's main key for a key press, or null for a key that cannot be bound (Enter, Esc, Backspace...) */
 export function mainKeyOf(press: Pick<KeyPress, 'key' | 'code'>): string | null {
   const { code } = press
   if (/^Key[A-Z]$/.test(code)) return code.slice(3)
@@ -75,6 +75,28 @@ export function bindingProblem(keys: readonly string[], isMac: boolean): string 
   if (isMac && hasCtrl && !hasAlt && !normal.includes('Shift') && RESERVED_ON_MAC.has(main)) {
     return 'macOS 가 쓰는 키(종료·가리기·최소화)라서 지정할 수 없습니다.'
   }
+  return null
+}
+
+/** The work overview's shortcut is taken in every program (Windows) and inside the terminal, not only by the app */
+export const WORK_OVERVIEW_SHORTCUT = 'work-overview'
+
+/**
+ * Why this shortcut cannot have the binding, or null. The work overview needs two or more of Ctrl, Alt and Shift,
+ * one of them Ctrl or Alt: Ctrl+O or Alt+B alone would take a key from every program and the shell
+ * (src/globalDoubleTab.js checks the same before the helper hears it).
+ */
+export function bindingProblemFor(id: string, keys: readonly string[], isMac: boolean): string | null {
+  const problem = bindingProblem(keys, isMac)
+  if (problem || id !== WORK_OVERVIEW_SHORTCUT) return problem
+  const normal = normalizeKeys(keys)
+  const modifiers = normal.filter(key => key === 'Ctrl' || key === 'Alt' || key === 'Shift')
+  if (modifiers.length < 2 || !(modifiers.includes('Ctrl') || modifiers.includes('Alt'))) {
+    return isMac
+      ? '로컬 작업 현황은 터미널 안에서도 키를 가져가므로 Command·Option·Shift 중 두 개 이상(Command 나 Option 포함)을 함께 눌러 주세요.'
+      : '로컬 작업 현황은 다른 프로그램과 터미널 안에서도 키를 가져가므로 Ctrl·Alt·Shift 중 두 개 이상(Ctrl 이나 Alt 포함)을 함께 눌러 주세요.'
+  }
+  if (normal[normal.length - 1] === 'Tab') return 'Tab 조합은 Windows 와 탭 이동이 쓰므로 다른 키를 골라 주세요.'
   return null
 }
 

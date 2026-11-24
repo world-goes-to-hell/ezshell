@@ -6,7 +6,8 @@ const { execFileSync } = require('child_process')
 const { commitSelected, requireCommitMessage } = require('./gitCommit.js')
 
 let temp
-afterEach(() => { if (temp) fs.rmSync(temp, { recursive: true, force: true }); temp = undefined })
+// A git process still closing can hold the folder on Windows for a moment: retry the removal
+afterEach(() => { if (temp) fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); temp = undefined })
 
 function repo() {
   temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-gitcommit-')))
@@ -50,7 +51,8 @@ describe('requireCommitMessage', () => {
   })
 })
 
-describe('commitSelected', () => {
+// Real git processes (and hooks): under a full parallel run they took more than vitest's default 5 seconds
+describe('commitSelected', { timeout: 30000 }, () => {
   it('commits only the chosen files; a staged file left out stays staged', async () => {
     const { top, g, write, committed, status, subject } = repo()
     write('src/a.txt', 'alpha 2\n')

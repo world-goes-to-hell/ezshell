@@ -10,6 +10,7 @@ import { AgentUsageFeed } from '../AgentUsage/AgentUsageMeters'
 import { OpacityStatus } from './OpacityStatus'
 import { DbIndicator } from '../DbClient/DbIndicator'
 import { isSshTab } from '../../lib/sessionTabs'
+import { ByteDaemonStatus } from '../ByteDaemon/ByteDaemonStatus'
 
 export function Footer() {
   const { terminals } = useTerminalStore()
@@ -43,6 +44,8 @@ export function Footer() {
         <OpacityStatus />
         <ZoomStatus open={zoomOpen} onOpenChange={setZoomOpen} />
         <VersionInfo />
+        {/* The mini game hidden at the very end (docs/plan/2026-11-24-byte-daemon-mini-game.md) */}
+        <ByteDaemonStatus />
       </div>
       <ZoomHud suppressed={zoomOpen} />
     </footer>

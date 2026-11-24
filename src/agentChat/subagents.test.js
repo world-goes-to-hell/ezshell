@@ -53,4 +53,20 @@ describe('Claude subagents from a parent transcript', () => {
     expect(tracker.snapshot()?.[0]).toMatchObject({ id: 'background', status: 'completed', result: 'Found 3 fixtures' })
     expect(tracker.takeChildResults()).toEqual([])
   })
+
+  // A notice that arrives while the parent is working is recorded as a queued_command attachment,
+  // not a user line (Claude Code 2026-11; the panel kept saying 작업 중 for 40 minutes)
+  it('reads a completion notice queued while the parent was working', () => {
+    const tracker = createSubagentTracker('claude')
+    tracker.feed({ type: 'assistant', timestamp, message: { content: [{ type: 'tool_use', id: 'toolu_review', name: 'Agent', input: { subagent_type: 'security-reviewer', description: 'Security review' } }] } })
+    tracker.feed({ type: 'user', timestamp, toolUseResult: { agentId: 'a2ef3', isAsync: true, status: 'async_launched' }, message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_review', content: 'Async agent launched' }] } })
+    const queued = (origin, prompt) => ({ type: 'attachment', timestamp: '2026-11-21T07:40:00Z', attachment: {
+      type: 'queued_command', commandMode: origin.kind === 'human' ? 'prompt' : 'task-notification', origin, prompt
+    } })
+    // Something the user typed in the meantime is not a notice, even when it looks like one
+    tracker.feed(queued({ kind: 'human' }, '<task-notification><task-id>a2ef3</task-id><status>completed</status></task-notification>'))
+    expect(tracker.snapshot(true)?.[0]).toMatchObject({ id: 'toolu_review', status: 'running' })
+    tracker.feed(queued({ kind: 'task-notification', producer: 'session-task' }, '<task-notification>\n<task-id>a2ef3</task-id>\n<tool-use-id>toolu_review</tool-use-id>\n<status>completed</status>\n<summary>Agent finished</summary>\n<result>Nothing critical</result>\n</task-notification>'))
+    expect(tracker.snapshot()?.[0]).toMatchObject({ id: 'toolu_review', status: 'completed', result: 'Nothing critical', finishedAt: Date.parse('2026-11-21T07:40:00Z') })
+  })
 })

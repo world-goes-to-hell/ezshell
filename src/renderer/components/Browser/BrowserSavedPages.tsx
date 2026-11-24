@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react'
-import { RiArrowDownSLine, RiArrowRightSLine, RiCheckboxMultipleLine, RiCloseLine, RiDeleteBinLine, RiDownload2Line, RiFolder3Line, RiFolderOpenLine } from 'react-icons/ri'
+import { RiArrowDownSLine, RiArrowRightSLine, RiCheckboxMultipleLine, RiCloseLine, RiDeleteBinLine, RiDownload2Line, RiFolder3Line, RiFolderOpenLine, RiGlobalLine } from 'react-icons/ri'
 import { bookmarkNodes, bookmarkTree, searchBookmarkTree, visibleBookmarkNodes, type BookmarkNode } from '../../lib/browserBookmarkTree'
 import { useBrowserBookmarkStore } from '../../stores/browserBookmarkStore'
 import { confirmDialog } from '../../stores/confirmStore'
@@ -16,9 +16,10 @@ function BookmarkCheckbox({ checked, mixed = false, disabled, label, onChange }:
   return <input type="checkbox" ref={checkbox} checked={checked} disabled={disabled} aria-label={label} onChange={event => onChange(event.target.checked)} />
 }
 
-function PageLink({ page, onClick }: { page: BrowserBookmarkPage | BrowserVisit; onClick: () => void }) {
+function PageLink({ page, onClick, icon = false }: { page: BrowserBookmarkPage | BrowserVisit; onClick: () => void; icon?: boolean }) {
   return (
     <button type="button" className="browser-review-bookmark-open" title={page.url} onClick={onClick}>
+      {icon && <RiGlobalLine aria-hidden="true" />}
       <span>{page.title}</span>
       <small>{page.url}</small>
       {'visitedAt' in page && <time dateTime={new Date(page.visitedAt).toISOString()}>{formatVisit.format(page.visitedAt)}</time>}
@@ -194,7 +195,7 @@ export function BrowserSavedPages({ id, importTrigger, expandedFolders, onExpand
                 <small>{open && !entry.children.length ? '빈 폴더' : `${entry.children.length.toLocaleString()}개`}</small>
               </button>
               : <>
-              <PageLink page={entry} onClick={() => selecting ? toggleNode(node, !checked) : onNavigate(entry.url)} />
+              <PageLink page={entry} icon onClick={() => selecting ? toggleNode(node, !checked) : onNavigate(entry.url)} />
               {!selecting && <button type="button" className="browser-review-bookmark-remove" title="즐겨찾기에서 제거"
                 aria-label={`${entry.title} 즐겨찾기에서 제거`} onClick={() => {
                   removeBookmark(entry)

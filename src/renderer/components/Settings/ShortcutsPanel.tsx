@@ -4,7 +4,7 @@ import { RiSearchLine, RiTerminalLine, RiServerLine, RiNavigationLine, RiAppsLin
 import { useShortcutsStore, ShortcutCategory } from '../../stores/shortcutsStore'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { confirmDialog } from '../../stores/confirmStore'
-import { captureKeys, findConflict } from '../../lib/shortcutCapture'
+import { bindingProblemFor, captureKeys, findConflict } from '../../lib/shortcutCapture'
 import { isMac, shortcutKeyLabels } from '../../lib/shortcutModifiers'
 import './ShortcutsPanel.css'
 
@@ -68,6 +68,12 @@ export function ShortcutsPanel() {
       if (captured.kind === 'waiting') return
       if (captured.kind === 'invalid') {
         setProblem(captured.reason)
+        return
+      }
+      // Rules of this shortcut itself (the work overview is taken outside the app too)
+      const own = bindingProblemFor(recordingId, captured.keys, onMac)
+      if (own) {
+        setProblem(own)
         return
       }
       const state = useShortcutsStore.getState()
@@ -178,7 +184,7 @@ export function ShortcutsPanel() {
                     >
                       <div className="shortcut-info">
                         <div className="shortcut-description">{shortcut.description}</div>
-                        {shortcut.fixed && <div className="shortcut-action">Windows 전역 · 세 키를 뗄 때 실행</div>}
+                        {shortcut.note && <div className="shortcut-action">{shortcut.note}</div>}
                         {isCustom && <div className="shortcut-action">직접 바꿈 · 기본값 {shortcutKeyLabels(shortcut.keys, onMac).join('+')}</div>}
                         {isRecording && problem && <div className="shortcut-problem" role="alert">{problem}</div>}
                       </div>

@@ -91,7 +91,7 @@ export function sessionFromDrop(text: string, terminals: ReadonlyMap<string, Ter
   }
   const tab = terminals.get(text)
   if (!tab) return null
-  if (tab.local || tab.db) return { error: '로컬 터미널과 DB 탭은 묶을 수 없습니다. SSH 세션만 서버로 묶입니다.' }
+  if (tab.local || tab.db || tab.browser) return { error: '로컬 터미널·DB·브라우저 탭은 묶을 수 없습니다. SSH 세션만 서버로 묶입니다.' }
   const id = tab.connectConfig?.savedSessionId
   if (!id || !savedIds.has(id)) return { error: '저장한 세션만 묶을 수 있습니다. 빠른 연결은 세션으로 저장한 뒤 묶어 주세요.' }
   return { sessionId: id }

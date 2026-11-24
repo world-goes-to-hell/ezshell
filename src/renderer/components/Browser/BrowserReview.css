@@ -113,7 +113,7 @@
 
 .browser-review-bookmarks {
   flex: none;
-  max-height: min(360px, 42vh);
+  max-height: min(560px, 62vh);
   padding: 0 12px 8px;
   overflow-y: auto;
   background: var(--bg-secondary);
@@ -186,15 +186,34 @@
   background: var(--bg-primary);
 }
 
+/* The bookmark tree: compact rows like a file tree, not a card per row (2026-11-24 user report: rows
+   stretched across the whole tab with the count at the far end, and few fit in the panel) */
 .browser-review-bookmarks .browser-bookmark-tree {
   grid-template-columns: minmax(0, 1fr);
-  gap: 2px;
+  gap: 0;
+  max-width: 1100px;
 }
 
 .browser-review-bookmarks .browser-bookmark-row {
-  padding-inline-start: min(calc(var(--bookmark-depth) * 14px), 25%);
+  --bookmark-indent: min(calc(var(--bookmark-depth) * 18px), 25%);
+  position: relative;
+  min-height: 30px;
+  padding-inline-start: var(--bookmark-indent);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
 }
-
+/* One guide line per level, under the chevrons of the folders above */
+.browser-review-bookmarks .browser-bookmark-row::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--bookmark-indent);
+  content: '';
+  pointer-events: none;
+  background: repeating-linear-gradient(to right, transparent 0 15px, var(--border-color) 15px 16px, transparent 16px 18px);
+}
+.browser-review-bookmarks .browser-bookmark-row:hover,
+.browser-review-bookmarks .browser-bookmark-row:focus-within { background: var(--bg-hover); }
 .browser-review-bookmarks .browser-bookmark-row[data-selected="true"] { background: var(--accent-muted); }
 .browser-bookmark-choice {
   flex: none;
@@ -218,24 +237,31 @@
 .browser-review .browser-bookmark-folder {
   align-items: center;
   flex-direction: row;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 4px 8px;
 }
-.browser-bookmark-folder > span { flex: 1; min-width: 0; font-weight: 600; }
+.browser-bookmark-folder > span { flex: 0 1 auto; min-width: 0; font-weight: 600; white-space: nowrap; }
+/* The count follows the name instead of sitting at the far end of a wide row */
+.browser-bookmark-folder > small { flex: none; font-size: 11px; }
 .browser-bookmark-folder svg { flex: none; color: var(--text-secondary); }
 
 .browser-review .browser-bookmark-row[data-kind="page"] .browser-review-bookmark-open {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  flex-direction: row;
+  justify-content: flex-start;
   align-items: center;
-  gap: 12px;
-  padding-inline-start: 27px;
+  gap: 8px;
+  padding: 4px 8px 4px 28px;
 }
+.browser-bookmark-row[data-kind="page"] .browser-review-bookmark-open > svg { flex: none; color: var(--text-secondary); }
+.browser-bookmark-row[data-kind="page"] .browser-review-bookmark-open > span { flex: 0 1 auto; max-width: 55%; white-space: nowrap; }
+.browser-bookmark-row[data-kind="page"] .browser-review-bookmark-open > small { flex: 1 1 0; min-width: 0; font-size: 12px; white-space: nowrap; }
+.browser-review .browser-bookmark-row .browser-review-bookmark-remove { opacity: 0; }
+.browser-review .browser-bookmark-row:is(:hover, :focus-within) .browser-review-bookmark-remove { opacity: 1; }
 
 @container (max-width: 550px) {
-  .browser-review .browser-bookmark-row[data-kind="page"] .browser-review-bookmark-open {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 2px;
-  }
+  .browser-bookmark-row[data-kind="page"] .browser-review-bookmark-open > small { display: none; }
+  .browser-bookmark-row[data-kind="page"] .browser-review-bookmark-open > span { max-width: none; flex: 1 1 0; }
 }
 
 .browser-review-bookmark-open :is(span, small) {

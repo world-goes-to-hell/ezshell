@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { cleanChatText, registerAgentChatIpc } from './ipc.js'
 
 function harness(kind = 'claude', { chats = {}, active = () => null, agentId = () => 'agent-1', status = () => 'idle', screen = () => null,
-  sessionId = () => null, approval = () => null, duringSend = () => {}, result = { ok: true } } = {}) {
+  sessionId = () => null, approval = () => null, duringSend = () => {}, result = { ok: true }, isLocked = () => false,
+  readStoredImage = async file => Buffer.from(file) } = {}) {
   const handlers = new Map()
   const ipcMain = { handle: (name, fn) => handlers.set(name, fn), on: (name, fn) => handlers.set(name, fn) }
   const sent = []
@@ -10,10 +11,10 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
   const captures = []
   let stored = 0
   const bitmap = { getSize: () => ({ width: 10, height: 10 }), toPNG: () => Buffer.from('png') }
-  const { sendCapture } = registerAgentChatIpc({
+  const { sendCapture, clearClipboard } = registerAgentChatIpc({
     ipcMain,
     fromMainWindow: () => true,
-    isLocked: () => false,
+    isLocked,
     chats,
     notifyCapture: capture => captures.push(capture),
     shells: () => ({
@@ -34,6 +35,7 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
       read: async () => ({ text: '', image: {} }),
       readText: async () => 'plain text',
       decodeImage: async () => bitmap,
+      readStoredImage,
       storeImage: () => `C:\\tmp\\shot-${++stored}.png`,
       discardImage: file => discarded.push(file)
     }
@@ -47,7 +49,7 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
     expect(result.images).toHaveLength(1)
     return result.images[0].id
   }
-  return { call, callFromChild, paste, sent, discarded, sendCapture, captures }
+  return { call, callFromChild, paste, sent, discarded, sendCapture, clearClipboard, captures }
 }
 
 const retryRequest = () => ({ acceptedAt: Date.now() - 15_000, transcriptId: 'a'.repeat(64), ignoreIds: [] })
@@ -312,24 +314,41 @@ describe('manual chat resend', () => {
 
 describe('screenshots sent from quick capture', () => {
   it.each(['codex', 'claude'])('delivers the saved region and comment via %s chat input', async kind => {
-    const { sendCapture, sent, captures } = harness(kind)
+    const { call, sendCapture, sent, captures } = harness(kind)
     const files = ['C:\\tmp\\capture.png']
     const preview = Buffer.from('preview png')
     const target = { id: 'agent-1', shellId: 'local:1', kind }
-    expect(await sendCapture(target, '화면 확인', () => ({ file: files[0], preview }), () => true)).toEqual({ ok: true })
+    expect(await sendCapture(target, '화면 확인', () => [{ file: files[0], preview }], () => true)).toEqual({ ok: true })
     expect(sent[0]).toEqual(kind === 'codex'
       ? { prompt: '화면 확인', images: { files } }
       : { prompt: files[0] + '\n\n화면 확인', images: { count: 1, text: '화면 확인' } })
-    expect(captures).toEqual([{ shellId: target.shellId, id: expect.stringMatching(/^outgoing:/), time: expect.any(Number), text: '화면 확인', preview, queued: false }])
+    expect(captures).toEqual([{ shellId: target.shellId, id: expect.stringMatching(/^outgoing:/), time: expect.any(Number), text: '화면 확인', previews: [preview], imageIds: [expect.any(String)], queued: false }])
+    expect(await call('agent-chat-preview-image', { shellId: target.shellId, imageId: captures[0].imageIds[0] }))
+      .toEqual({ ok: true, data: Buffer.from(files[0]) })
+  })
+
+  // 2026-11-24: several captures of one run go in one message, in order
+  it.each(['codex', 'claude'])('sends every capture of a run in one message via %s', async kind => {
+    const { sendCapture, sent, captures } = harness(kind)
+    const attachments = [{ file: 'C:\\tmp\\one.png', preview: Buffer.from('1') }, { file: 'C:\\tmp\\two.png', preview: Buffer.from('2') }]
+    const target = { id: 'agent-1', shellId: 'local:1', kind }
+    expect(await sendCapture(target, '', () => attachments, () => true)).toEqual({ ok: true })
+    const files = attachments.map(item => item.file)
+    const text = '첨부한 화면을 확인해 주세요.'
+    expect(sent[0]).toEqual(kind === 'codex'
+      ? { prompt: text, images: { files } }
+      : { prompt: files.join('\n') + '\n\n' + text, images: { count: 2, text } })
+    expect(captures[0].previews).toEqual(attachments.map(item => item.preview))
   })
 
   it('retracts the capture bubble when input is refused', async () => {
-    const { sendCapture, captures } = harness('claude', { result: { ok: false, reason: 'busy' } })
+    const { call, sendCapture, captures } = harness('claude', { result: { ok: false, reason: 'busy' } })
     const target = { id: 'agent-1', shellId: 'local:1', kind: 'claude' }
     const attachment = { file: 'capture.png', preview: Buffer.from('preview') }
-    expect(await sendCapture(target, '봐 줘', () => attachment, () => true)).toMatchObject({ ok: false, reason: 'busy' })
+    expect(await sendCapture(target, '봐 줘', () => [attachment], () => true)).toMatchObject({ ok: false, reason: 'busy' })
     expect(captures).toHaveLength(2)
     expect(captures[1]).toEqual({ shellId: target.shellId, id: captures[0].id, discard: true })
+    expect(await call('agent-chat-preview-image', { shellId: target.shellId, imageId: captures[0].imageIds[0] })).toMatchObject({ ok: false })
   })
 
   it('refuses a stale target, a closed overlay or control characters before storing the image', async () => {
@@ -340,6 +359,38 @@ describe('screenshots sent from quick capture', () => {
     expect((await sendCapture(target, '봐 줘', file, () => false)).ok).toBe(false)
     expect((await sendCapture(target, '봐 줘\x1b', file, () => true)).ok).toBe(false)
     expect(sent).toEqual([])
+  })
+})
+
+describe('previewing the image actually sent in chat', () => {
+  it('retains image-only sends and accepts only known ids from the owning shell and main frame', async () => {
+    const { call, callFromChild, paste } = harness('codex')
+    const shellId = 'local:1'
+    const imageId = await paste()
+    expect(await call('agent-chat-send', { shellId, text: '', imageIds: [imageId] })).toEqual({ ok: true })
+    const preview = request => call('agent-chat-preview-image', { shellId, imageId, ...request })
+    expect(await preview()).toEqual({ ok: true, data: Buffer.from('C:\\tmp\\shot-1.png') })
+    expect(await preview({ shellId: 'local:2' })).toMatchObject({ ok: false })
+    expect(await preview({ imageId: 'C:\\tmp\\shot-1.png' })).toMatchObject({ ok: false })
+    expect(await callFromChild('agent-chat-preview-image', { shellId, imageId })).toMatchObject({ ok: false })
+  })
+
+  it('drops pending reads when the app locks or clears the image ids', async () => {
+    let locked = false
+    let finishRead
+    const { call, clearClipboard, paste } = harness('codex', {
+      isLocked: () => locked,
+      readStoredImage: () => new Promise(resolve => { finishRead = resolve })
+    })
+    const imageId = await paste()
+    const request = { shellId: 'local:1', imageId }
+    const pending = call('agent-chat-preview-image', request)
+    locked = true
+    clearClipboard()
+    finishRead(Buffer.from('image'))
+    expect(await pending).toMatchObject({ ok: false })
+    locked = false
+    expect(await call('agent-chat-preview-image', request)).toMatchObject({ ok: false })
   })
 })
 
@@ -518,6 +569,42 @@ describe('answering a Claude question from the chat card', () => {
 })
 
 describe('opening a link of an answer', () => {
+  it('opens a chat document under its working folder and keeps the authorization through the async open', async () => {
+    const path = await import('node:path')
+    const root = path.resolve('project')
+    const doc = path.join(root, 'mockups', 'byte-daemon.html')
+    const key = process.platform === 'win32' ? doc.toLowerCase() : doc
+    const handlers = new Map()
+    const frame = {}
+    let active = true
+    let finishOpen
+    const opened = []
+    registerAgentChatIpc({
+      ipcMain: { handle: (name, fn) => handlers.set(name, fn), on: () => {} },
+      fromMainWindow: () => true, isLocked: () => false, clipboard: null,
+      chats: { cwdOf: () => root, knowsLink: (_id, link) => link === key, linkAuthority: () => () => active },
+      links: { openWorkspaceBrowser: async (root, relative, permitted) => {
+        await new Promise(resolve => { finishOpen = resolve })
+        if (!permitted()) return { success: false, error: 'stale' }
+        opened.push({ root, relative })
+        return { success: true }
+      } }
+    })
+    const open = (href, senderFrame = frame) => handlers.get('agent-chat-open-link')({ senderFrame, sender: { mainFrame: frame } },
+      { shellId: 'local:1', href, how: 'browser-tab' })
+    expect(await open('mockups/unlisted.html')).toMatchObject({ ok: false })
+    expect(await open('mockups/byte-daemon.html', {})).toMatchObject({ ok: false })
+    const pending = open('mockups/byte-daemon.html')
+    finishOpen()
+    expect(await pending).toEqual({ ok: true })
+    expect(opened).toEqual([{ root, relative: 'mockups/byte-daemon.html' }])
+    const stale = open(doc)
+    active = false
+    finishOpen()
+    expect(await stale).toEqual({ ok: false, error: 'stale' })
+    expect(opened).toHaveLength(1)
+  })
+
   it('opens a folder in the file manager instead of refusing it (2026-11-23 user report: `mockups/`)', async () => {
     const fs = await import('node:fs')
     const os = await import('node:os')

@@ -213,7 +213,7 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
   }
   const handleSearch = (channel, fallback, run) => {
     let pending
-    handle(channel, fallback, async ({ root, query, worktreeOnly } = {}) => {
+    handle(channel, fallback, async ({ root, query, worktreeOnly, includeAll } = {}) => {
       const term = requireSearchQuery(query)
       const generation = searchGeneration
       pending?.abort()
@@ -223,7 +223,7 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
         const folder = await roots.resolveRoot(root)
         controller.signal.throwIfAborted()
         checkSearch(generation)
-        const result = await run(folder, term, controller.signal, worktreeOnly === true)
+        const result = await run(folder, term, controller.signal, worktreeOnly === true, includeAll === true)
         checkSearch(generation)
         return result
       } finally {
@@ -302,12 +302,12 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
     return readWorkspaceGit(cwd, allBranches === true)
   })
   if (roots) {
-    handle('workspace-directory-prepare', '폴더를 검색하지 못했습니다.', async ({ root, refresh } = {}) => {
+    handle('workspace-directory-prepare', '폴더를 검색하지 못했습니다.', async ({ root, refresh, includeAll } = {}) => {
       const generation = searchGeneration
       const request = ++preparation
       const folder = await roots.resolveRoot(root)
       checkSearch(generation)
-      if (request === preparation) directorySearch.prepare(folder, refresh === true)
+      if (request === preparation) directorySearch.prepare(folder, refresh === true, includeAll === true)
       return {}
     })
     handleSearch('workspace-directory-search', '폴더를 검색하지 못했습니다.', directorySearch.search)

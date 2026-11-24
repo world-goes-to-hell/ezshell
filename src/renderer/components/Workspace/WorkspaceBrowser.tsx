@@ -8,7 +8,9 @@ import { CommitFiles } from './WorkspaceGitChanges'
 import { useGitTarget } from './useGitTarget'
 
 const searchFiles = (folder: string, query: string) => window.electronAPI.workspaceDirectorySearch?.(folder, query)
-const prepareFiles = (folder: string, refresh = false) => window.electronAPI.workspaceDirectoryPrepare?.(folder, refresh).catch(() => undefined)
+// node_modules, build output and the like too (the default search lists those folders but does not read them)
+const searchAllFiles = (folder: string, query: string) => window.electronAPI.workspaceDirectorySearch?.(folder, query, true)
+const prepareFiles = (folder: string, refresh = false, includeAll = false) => window.electronAPI.workspaceDirectoryPrepare?.(folder, refresh, includeAll).catch(() => undefined)
 const searchGit = (folder: string, query: string) => window.electronAPI.workspaceGitSearch?.(folder, query)
 const searchCheckoutGit = (folder: string, query: string) => window.electronAPI.workspaceGitSearch?.(folder, query, true)
 const date = new Intl.DateTimeFormat('ko-KR', { month: 'short', day: 'numeric' })
@@ -102,10 +104,12 @@ export function WorkspaceFiles({ folder, reveal, onRevealed }: { folder: string;
     ignoreCase: /^[a-zA-Z]:|^\\\\/.test(folder),
     done: () => doneRef.current?.(revealSeq)
   }, [revealSeq, revealTarget, folder])
-  const found = useWorkspaceSearch<WorkspaceDirectorySearchResult>(folder, term, revision, searchFiles, 90)
-  useEffect(() => { void prepareFiles(folder) }, [folder])
+  // Situational: kept while this folder's panel is open; the default search leaves those folders out
+  const [includeAll, setIncludeAll] = useState(false)
+  const found = useWorkspaceSearch<WorkspaceDirectorySearchResult>(folder, term, revision, includeAll ? searchAllFiles : searchFiles, 90)
+  useEffect(() => { void prepareFiles(folder, false, includeAll) }, [folder, includeAll])
   const refresh = async () => {
-    await prepareFiles(folder, true)
+    await prepareFiles(folder, true, includeAll)
     setRevision(value => value + 1)
   }
   const label = folderName(folder)
@@ -122,9 +126,31 @@ export function WorkspaceFiles({ folder, reveal, onRevealed }: { folder: string;
         : !found.success ? <WorkspaceNote error>{found.error}</WorkspaceNote>
         : <>
           <WorkspaceNote>{found.entries.length || found.truncated ? `검색 결과 ${found.entries.length}개` : '일치하는 파일·폴더가 없습니다.'}{found.truncated && ' · 일부 범위만 검색됨'}</WorkspaceNote>
+          <SkippedFolders result={found} onChange={setIncludeAll} />
           {found.entries.length > 0 && <WorkspaceFileResults root={folder} label={label} entries={found.entries} />}
         </>)}
     </>
+  )
+}
+
+/** Which installed/generated folders the search left out, with the switch to include them */
+function SkippedFolders({ result, onChange }: { result: WorkspaceDirectorySearchResult; onChange: (includeAll: boolean) => void }) {
+  if (result.includedAll) {
+    return (
+      <p className="workspace-search-scope">
+        <span>node_modules·빌드 결과 폴더 안까지 검색했습니다.</span>
+        <button type="button" onClick={() => onChange(false)}>제외하기</button>
+      </p>
+    )
+  }
+  const skipped = result.skipped
+  if (!skipped?.count) return null
+  const names = skipped.names.join(', ')
+  return (
+    <p className="workspace-search-scope">
+      <span title={names}>{names} 안은 검색하지 않았습니다 (폴더 {skipped.count}개).</span>
+      <button type="button" onClick={() => onChange(true)}>포함해서 검색</button>
+    </p>
   )
 }
 

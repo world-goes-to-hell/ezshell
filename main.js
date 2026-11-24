@@ -124,9 +124,9 @@ let masterPasswordVerification = null; // { hash, salt }
 let currentMasterPassword = null; // In-memory only, cleared on lock
 let isAppLocked = true;
 let mcpController = null; // Local MCP server for Claude Code (src/mcp), created once the window exists
-// Decrypted sessions for MCP calls while unlocked; decrypting (sync PBKDF2 per session) on every call froze the window.
-// Cleared on save-sessions, import-sessions, lock-app and reset-master-password.
-let mcpSessionsCache = null;
+// File records paired with their decrypted sessions. Reuse their encrypted secrets on metadata edits.
+// Cleared on lock, password changes and file replacements.
+let savedSessionRecords = null;
 const sshConnections = new Map();
 const sshStreams = new Map(); // sessionId:streamId -> stream (for split terminals)
 // streamId -> the listeners a split shell was opened with, so they can be taken off when the shell
@@ -318,7 +318,7 @@ function createWindow() {
       preload: path.join(__dirname, '../preload/index.js')
     }
   });
-  // Tab Tab while another program is in front opens the work overview (src/globalDoubleTab.js)
+  // The work overview shortcut while another program is in front opens the overview (src/globalDoubleTab.js)
   globalDoubleTab.stop();
   globalDoubleTab.start(mainWindow.getNativeWindowHandle());
 
@@ -604,14 +604,16 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
 ipcMain.on('quick-capture-theme', (event, theme) => {
   if (fromMainWindow(event) && event.senderFrame === event.sender.mainFrame) quickCapture.setTheme(theme);
 });
-// Tab Tab from any program: the helper brought ezShell forward, the window opens its work overview.
+// The work overview shortcut from any program (default Ctrl+Alt+Space, the window sends its setting): the
+// helper brought ezShell forward, the window opens its work overview.
 // Off while locked (every key goes through untouched); looked at each second instead of at each lock site.
 // The overview opens on the monitor of the program that was in front (the helper gives the middle of
 // its window in screen pixels), not on ezShell's.
 const globalDoubleTab = require('./src/globalDoubleTab.js').createGlobalDoubleTab({
   onCapture: () => { void quickCapture.start().finally(() => globalDoubleTab.endCapture()); },
-  onCaptureCancel: () => quickCapture.cancel(),
-  onDoubleTab: point => {
+  // Esc right after the hotkey drops only this capture: earlier ones of the run stay with their strip
+  onCaptureCancel: () => quickCapture.cancelCapture(),
+  onOverview: point => {
     if (!mainWindow || mainWindow.isDestroyed() || isAppLocked) return;
     const { screen } = require('electron');
     workOverview.aimAt(point ? screen.getDisplayNearestPoint(screen.screenToDipPoint ? screen.screenToDipPoint(point) : point) : null);
@@ -622,6 +624,10 @@ const globalDoubleTab = require('./src/globalDoubleTab.js').createGlobalDoubleTa
   }
 });
 setInterval(() => globalDoubleTab.setEnabled(!isAppLocked && Boolean(mainWindow) && !mainWindow.isDestroyed()), 1000).unref();
+// The binding from settings > 키보드 단축키: key names only, checked by overviewKeySpec before the helper sees numbers
+ipcMain.on('work-overview-key', (event, keys) => {
+  if (fromMainWindow(event) && event.senderFrame === event.sender.mainFrame) globalDoubleTab.setOverviewKey(keys);
+});
 app.on('will-quit', () => {
   globalDoubleTab.stop();
   quickCapture.cancel();
@@ -868,6 +874,7 @@ const agentChatIpc = require('./src/agentChat/ipc.js').registerAgentChatIpc({
   links: {
     openExternal: url => shell.openExternal(url),
     openBrowserTab: browserReview.openLink,
+    openWorkspaceBrowser: browserReview.openWorkspace,
     showItemInFolder: target => shell.showItemInFolder(target),
     // openPath runs a file, so only a folder (checked again right here) goes to it
     openFolder: async target => {
@@ -1071,6 +1078,7 @@ ipcMain.handle('setup-master-password', async (event, { password }) => {
 
   fs.writeFileSync(verificationPath, JSON.stringify(verification, null, 2));
   masterPasswordVerification = verification;
+  savedSessionRecords = null;
   currentMasterPassword = password;
   isAppLocked = false;
   localShells?.wakeInboxes();
@@ -1090,6 +1098,7 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
   const verification = JSON.parse(fs.readFileSync(verificationPath, 'utf8'));
 
   if (cryptoUtil.verifyPassword(password, verification.hash, verification.salt)) {
+    savedSessionRecords = null;
     currentMasterPassword = password;
     isAppLocked = false;
     localShells?.wakeInboxes();
@@ -1109,9 +1118,10 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   forgetCommandHistory();
   currentMasterPassword = null;
   isAppLocked = true;
+  globalDoubleTab.setEnabled(false);
   quickCapture.cancel();
   browserReview.close();
-  mcpSessionsCache = null;
+  savedSessionRecords = null;
   mcpController?.onLocked();
   localProjectIpc.clearSearches();
   agentHistory.clear();
@@ -1198,9 +1208,10 @@ ipcMain.handle('reset-master-password', async () => {
 
   currentMasterPassword = null;
   isAppLocked = true;
+  globalDoubleTab.setEnabled(false);
   quickCapture.cancel();
   browserReview.close();
-  mcpSessionsCache = null;
+  savedSessionRecords = null;
   mcpController?.onLocked();
   localProjectIpc.clearSearches();
   agentHistory.clear();
@@ -1222,24 +1233,23 @@ ipcMain.handle('reset-master-password', async () => {
 
 /** Decrypt sessions.json with the current master password. Callers check the lock state first. */
 function readDecryptedSessions() {
-  const sessionsPath = path.join(app.getPath('userData'), 'sessions.json');
-  if (!fs.existsSync(sessionsPath)) return [];
-
-  const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf8'));
+  savedSessionRecords = null;
+  const sessions = fs.existsSync(sessionsFilePath) ? JSON.parse(fs.readFileSync(sessionsFilePath, 'utf8')) : [];
   // Secret fields are in the encrypted blob (src/sessionSecrets.js); older files still open
-  return sessions.map(session => {
-    const opened = sessionSecrets.openSession(session, currentMasterPassword);
-    if (opened.decryptionFailed) console.error('Failed to decrypt session:', session.name);
-    return opened;
+  savedSessionRecords = sessions.map(stored => {
+    const opened = sessionSecrets.openSession(stored, currentMasterPassword);
+    if (opened.decryptionFailed) console.error('Failed to decrypt session:', stored.name);
+    return { stored, opened };
   });
+  return savedSessionRecords.map(record => record.opened);
 }
 
 /** Writes sessions.json through a temporary file, so a failed write cannot leave half a file */
 function writeSessionsFile(sessions) {
-  const sessionsPath = path.join(app.getPath('userData'), 'sessions.json');
-  const temporary = `${sessionsPath}.${process.pid}.tmp`;
+  const temporary = `${sessionsFilePath}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(sessions, null, 2));
-  fs.renameSync(temporary, sessionsPath);
+  fs.renameSync(temporary, sessionsFilePath);
+  savedSessionRecords = null;
 }
 
 /**
@@ -1254,7 +1264,6 @@ function resealSessionsFile() {
     const resealed = sessionSecrets.resealAll(JSON.parse(fs.readFileSync(sessionsPath, 'utf8')), currentMasterPassword);
     if (!resealed) return;
     writeSessionsFile(resealed);
-    mcpSessionsCache = null;
     console.log('[sessions] secrets written in plain text by an older version are now encrypted');
   } catch (error) {
     console.error('[sessions] could not encrypt the remaining secrets:', error.message);
@@ -1283,9 +1292,10 @@ ipcMain.handle('save-sessions', async (event, sessions) => {
   }
 
   if (!Array.isArray(sessions)) return { success: false, error: 'Invalid sessions' };
-  // Every secret field (passwords, key paths, saved database accounts) goes into the encrypted blob
-  writeSessionsFile(sessions.map(session => sessionSecrets.sealSession(session, currentMasterPassword)));
-  mcpSessionsCache = null;
+  // Metadata edits can keep each session's encrypted secrets. MCP uses the committed values directly.
+  const records = sessionSecrets.prepareSessionSaves(sessions, currentMasterPassword, savedSessionRecords ?? []);
+  writeSessionsFile(records.map(record => record.stored));
+  savedSessionRecords = records;
   mcpController?.onSessionsSaved();
 
   return { success: true };
@@ -1435,11 +1445,10 @@ function showMcpApproval(request) {
   return delivered;
 }
 
-/** Sessions for the MCP tools: decrypted once per unlock (and after each save), not on every call */
+/** Sessions for the MCP tools: from the last read or successful save while unlocked */
 function loadMcpSessions() {
   if (isAppLocked || !currentMasterPassword) return [];
-  if (!mcpSessionsCache) mcpSessionsCache = readDecryptedSessions();
-  return mcpSessionsCache;
+  return savedSessionRecords?.map(record => record.opened) ?? readDecryptedSessions();
 }
 
 function startMcp() {
@@ -1579,7 +1588,6 @@ ipcMain.handle('import-sessions', async (event, mode) => {
     // Save merged/replaced sessions. A backup holds its passwords in plain text: they are encrypted now
     writeSessionsFile(finalSessions);
     resealSessionsFile();
-    mcpSessionsCache = null;
     mcpController?.onSessionsSaved();
 
     // Handle folders

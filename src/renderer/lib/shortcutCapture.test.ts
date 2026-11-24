@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { captureKeys, mainKeyOf, normalizeKeys, sameBinding, bindingProblem, findConflict, parseCustomBindings, type KeyPress } from './shortcutCapture'
+import { captureKeys, mainKeyOf, normalizeKeys, sameBinding, bindingProblem, bindingProblemFor, findConflict, parseCustomBindings, type KeyPress } from './shortcutCapture'
 
 const press = (code: string, key: string, mods: Partial<KeyPress> = {}): KeyPress =>
   ({ code, key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods })
@@ -14,7 +14,14 @@ describe('mainKeyOf', () => {
   })
 
   it('gives nothing for keys that cannot be bound', () => {
-    for (const code of ['Enter', 'Space', 'Escape', 'Backspace', 'Delete']) expect(mainKeyOf({ code, key: code })).toBeNull()
+    for (const code of ['Enter', 'Escape', 'Backspace', 'Delete']) expect(mainKeyOf({ code, key: code })).toBeNull()
+  })
+
+  // 2026-11-24: the work overview's default is Ctrl+Alt+Space
+  it('reads the space bar as Space', () => {
+    expect(mainKeyOf({ code: 'Space', key: ' ' })).toBe('Space')
+    expect(captureKeys(press('Space', ' ', { ctrlKey: true, altKey: true }), false)).toEqual({ kind: 'keys', keys: ['Ctrl', 'Alt', 'Space'] })
+    expect(captureKeys(press('Space', ' '), false)).toMatchObject({ kind: 'invalid' })
   })
 })
 
@@ -57,6 +64,26 @@ describe('captureKeys', () => {
   it('on macOS refuses the menu keys', () => {
     expect(captureKeys(press('KeyQ', 'q', { metaKey: true }), true).kind).toBe('invalid')
     expect(bindingProblem(['Ctrl', 'Q'], false)).toBeNull()
+  })
+})
+
+describe('bindingProblemFor', () => {
+  // The work overview is taken in every program and inside the terminal
+  it('asks two of Ctrl, Alt and Shift, one of them Ctrl or Alt, for the work overview', () => {
+    for (const keys of [['Ctrl', 'Alt', 'Space'], ['Ctrl', 'Shift', 'O'], ['Alt', 'Shift', 'F9'], ['Ctrl', 'Alt', 'Shift', 'K']]) {
+      expect(bindingProblemFor('work-overview', keys, false)).toBeNull()
+    }
+    for (const keys of [['Ctrl', 'O'], ['Alt', 'B'], ['F9'], ['Ctrl', 'Space']]) {
+      expect(bindingProblemFor('work-overview', keys, false)).toMatch(/두 개 이상/)
+    }
+    expect(bindingProblemFor('work-overview', ['Ctrl', 'Alt', 'Tab'], false)).toMatch(/Tab/)
+    // Shift with a function key alone is still one modifier
+    expect(bindingProblemFor('work-overview', ['Shift', 'F9'], false)).toMatch(/두 개 이상/)
+  })
+
+  it('leaves the other shortcuts to the common rules', () => {
+    expect(bindingProblemFor('command-palette', ['Ctrl', 'O'], false)).toBeNull()
+    expect(bindingProblemFor('command-palette', ['Ctrl', 'C'], false)).toBe(bindingProblem(['Ctrl', 'C'], false))
   })
 })
 

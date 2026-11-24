@@ -42,11 +42,21 @@ const { check, finish } = createChecks()
     }
   }
   const selectRegion = async (overlay, from, to) => {
+    // The pointer events of the drag, shown when the region was not taken
+    await overlay.js(`(() => {
+      window.__dragEvents = []
+      if (window.__dragWatch) return
+      window.__dragWatch = true
+      for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'gotpointercapture', 'lostpointercapture', 'resize', 'blur', 'visibilitychange']) {
+        (type === 'resize' || type === 'blur' ? window : document).addEventListener(type, () => window.__dragEvents.push(type + '@' + Math.round(performance.now())), true)
+      }
+    })()`)
     await drag(overlay, from, to)
     if (!(await overlay.until('document.activeElement.id === "comment"', 3000))) {
       throw new Error('region was not selected: ' + await overlay.js(`JSON.stringify({
         focus: document.activeElement.id, screen: [innerWidth, innerHeight], state: { ...document.body.dataset },
-        selection: document.querySelector('#selection').style.cssText
+        selection: document.querySelector('#selection').style.cssText, events: window.__dragEvents,
+        shots: window.captureEditor.shots(), review: document.querySelector('#review').hidden
       })`))
     }
   }
@@ -428,6 +438,121 @@ const { check, finish } = createChecks()
     ${thumbnailIn(claudeCover, claudeComment)}
   `))
   await main.shot('quick-capture-chat-thumbnail')
+  // 2026-11-24 user request: 추가 캡처 takes another capture; the run is edited, copied and sent together
+  const isChip = page => page.title === 'ezShell 캡처 보관'
+  // A click that closes its window: the release is not acknowledged once the window is gone, so it is not awaited
+  const clickClosing = async (page, selector) => {
+    const [x, y] = await page.center(`document.querySelector(${JSON.stringify(selector)})`)
+    await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 })
+    void page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 })
+  }
+  const pressEscape = page => page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    .then(() => page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }))
+  const keepMore = async overlay => {
+    await clickClosing(overlay, '#more')
+    if (!await waitFor(async () => !(await pages()).some(isOverlay))) throw new Error('추가 캡처 did not close the overlay')
+    overlay.close()
+    const chip = await connect(isChip)
+    if (!await chip.until(`document.querySelector('#count').textContent.length > 0`)) throw new Error('the strip did not show its count')
+    return chip
+  }
+  const runComment = '두 화면을 비교해 주세요'
+  const firstShot = await openCapture(runComment)
+  check('a single capture offers 추가 캡처 without a list of captures', await firstShot.js(`
+    !document.querySelector('#more').disabled && document.querySelector('#shots').hidden
+  `))
+  await firstShot.js('document.querySelector("#comment").blur()')
+  await drag(firstShot, [140, 140], [320, 260])
+  const strip = await keepMore(firstShot)
+  check('the strip counts the kept capture without taking the keyboard', await strip.js(`
+    document.querySelector('#count').textContent === '캡처 1장 보관 중' && !document.hasFocus()
+  `))
+  await strip.shot('quick-capture-run-strip')
+  await clickClosing(strip, '#capture')
+  const choosing = await connect(isOverlay)
+  check('지금 캡처 hides the strip and freezes the screen again', await choosing.until(`
+    document.querySelector('#hint').textContent.includes('Esc 캡처 목록으로') && document.querySelector('#review').hidden
+  `) && !(await pages()).some(isChip))
+  strip.close()
+  await pressEscape(choosing)
+  check('Esc while choosing the next region goes back to the earlier capture with its marks and comment', await choosing.until(`
+    !document.querySelector('#review').hidden && document.querySelector('#shots').hidden &&
+    !document.querySelector('#undo').disabled && document.querySelector('#reselect').disabled &&
+    document.querySelector('#comment').value === ${JSON.stringify(runComment)}
+  `))
+  const strip2 = await keepMore(choosing)
+  strip2.close()
+  // The hotkey goes on with the run as well
+  fs.writeFileSync(file('capture-request'), '')
+  const secondShot = await connect(isOverlay)
+  if (!await secondShot.until('document.hasFocus() && document.querySelector("#review").hidden')) throw new Error('the second capture did not open')
+  await setViewport(secondShot, 1280, 880, 1.25)
+  await selectRegion(secondShot, [700, 120], [1000, 360])
+  check('the second capture shows both captures in the list, the new one selected', await secondShot.until(`(() => {
+    const picks = [...document.querySelectorAll('.shot-pick')]
+    return !document.querySelector('#shots').hidden && picks.length === 2 && picks[1].getAttribute('aria-pressed') === 'true' &&
+      picks.every(pick => pick.querySelector('canvas').width > 0) && !document.querySelector('#reselect').disabled
+  })()`))
+  await clickButton(secondShot, '.shot-pick')
+  check('choosing the first thumbnail edits it again, its marks still undoable', await secondShot.until(`
+    document.querySelector('.shot-pick').getAttribute('aria-pressed') === 'true' && window.captureEditor.active() === 0 &&
+    !document.querySelector('#undo').disabled && document.querySelector('#reselect').disabled
+  `))
+  await secondShot.shot('quick-capture-run-first')
+  await clickButton(secondShot, '[data-tool="badge"]')
+  const firstBox = await secondShot.js(`(() => { const r = document.querySelector('#ink').getBoundingClientRect(); return [r.left + 30, r.top + 30] })()`)
+  await secondShot.click(...firstBox)
+  await clickButton(secondShot, '.shot:nth-child(2) .shot-pick')
+  const secondBox = await secondShot.js(`(() => { const r = document.querySelector('#ink').getBoundingClientRect(); return [r.left + 30, r.top + 30] })()`)
+  await secondShot.click(...secondBox)
+  const nl = String.fromCharCode(10)
+  check('badge numbers go on across the captures of the run', await secondShot.until(`
+    document.querySelector('#comment').value === ${JSON.stringify(runComment + nl + '1.' + nl + '2. ')}
+  `), await secondShot.js(`JSON.stringify(document.querySelector('#comment').value)`))
+  await secondShot.js('document.querySelector("#comment").blur()')
+  await pressEscape(secondShot)
+  check('one Esc on two captures only warns', await secondShot.until(`
+    document.querySelector('#status').textContent.includes('한 번 더') && document.querySelector('#status').hasAttribute('data-error')
+  `) && (await pages()).some(isOverlay))
+  const sizes = await secondShot.js(`window.captureEditor.shots().map(shot => [shot.width, shot.height])`)
+  if (fs.existsSync(file('capture-copied'))) fs.unlinkSync(file('capture-copied'))
+  await clickClosing(secondShot, '#copy')
+  const copied = await waitFor(() => {
+    if (!fs.existsSync(file('capture-copied'))) return false
+    const png = fs.readFileSync(file('capture-copied'))
+    return png.length > 24 && png.readUInt32BE(16) === Math.max(sizes[0][0], sizes[1][0]) &&
+      png.readUInt32BE(20) === sizes[0][1] + sizes[1][1] + 32 + 16 + 32
+  })
+  check('copying the run puts both captures stacked in one picture', copied, JSON.stringify({ sizes, error: read('capture-error'),
+    titles: (await pages()).map(page => page.title),
+    page: (await pages()).some(isOverlay) ? await secondShot.js(`JSON.stringify({ status: document.querySelector('#status').textContent, copy: document.querySelector('#copy').getBoundingClientRect(), review: document.querySelector('#review').getBoundingClientRect() })`) : null }))
+  if (!copied) throw new Error('the run was not copied')
+  check('the run ends with the copy: no strip is left', await waitFor(async () => !(await pages()).some(page => isOverlay(page) || isChip(page))))
+  secondShot.close()
+
+  // Sent to an agent: every capture of the run, in order, in one message
+  const sendFirst = await openCapture('')
+  await sendFirst.js('document.querySelector("#comment").blur()')
+  await drag(sendFirst, [140, 140], [320, 260])
+  const strip3 = await keepMore(sendFirst)
+  strip3.close()
+  fs.writeFileSync(file('capture-request'), '')
+  const sendSecond = await connect(isOverlay)
+  if (!await sendSecond.until('document.hasFocus() && document.querySelector("#review").hidden')) throw new Error('the next capture did not open')
+  await setViewport(sendSecond, 1280, 880, 1.25)
+  await selectRegion(sendSecond, [700, 120], [1000, 360])
+  await clickButton(sendSecond, '#work')
+  await sendSecond.until('!document.querySelector("#picker").hidden')
+  await chooseProject(sendSecond, service)
+  await clickClosing(sendSecond, '.agent')
+  check('바로작업 sends both captures to Codex in one message, the marked one first', await waitFor(() => {
+    if (read('codex-1-chat-sent') !== '2') return false
+    const images = JSON.parse(read('codex-1-chat-images') || '[]')
+    return images.length === 2 && images.every(image => fs.existsSync(image)) && redPixels(images[0]) > 200 && redPixels(images[1]) === 0
+  }), read('codex-1-chat-images'))
+  sendSecond.close()
+  // Closing a capture with Esc is not an error either (it used to report "Render frame was disposed")
+  check('no capture reported an error, closed ones included', read('capture-error') === '', read('capture-error'))
   main.close()
   finish()
 })().catch(error => { console.error(error); process.exit(1) })

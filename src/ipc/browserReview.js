@@ -430,13 +430,12 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
     return success
   }
 
-  ipcMain.handle('browser-review-open', event => allowed(event) ? openTab() : fail('메인 창에서 잠금을 해제해 주세요.'))
-  ipcMain.handle('browser-review-open-workspace', async (event, root, relative) => {
-    const locked = '메인 창에서 잠금을 해제해 주세요.'
-    if (!allowed(event)) return fail(locked)
+  async function openWorkspace(root, relative, permitted) {
+    const unavailable = '작업 폴더의 링크를 다시 열어 주세요.'
+    if (!permitted()) return fail(unavailable)
     try {
       const preview = await workspacePreview(await resolveWorkspaceRoot(root), relative)
-      if (!allowed(event)) return fail(locked)
+      if (!permitted()) return fail(unavailable)
       const result = openTab(preview)
       if (!result.success) return result
       getWindow().webContents.send('browser-review-link-opened', result.id)
@@ -446,7 +445,11 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
     } catch (error) {
       return fail(error.userMessage || '브라우저에서 열 수 있는 작업 폴더의 파일을 선택해 주세요.')
     }
-  })
+  }
+
+  ipcMain.handle('browser-review-open', event => allowed(event) ? openTab() : fail('메인 창에서 잠금을 해제해 주세요.'))
+  ipcMain.handle('browser-review-open-workspace', (event, root, relative) => allowed(event)
+    ? openWorkspace(root, relative, () => allowed(event)) : fail('메인 창에서 잠금을 해제해 주세요.'))
   ipcMain.handle('browser-review-open-link', async (event, address, destination) => {
     const detached = event.senderFrame === event.sender.mainFrame && fromTerminalWindow(event)
     if (!allowed(event) && !detached) return fail('메인 창에서 잠금을 해제해 주세요.')
@@ -574,6 +577,7 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
 
   return {
     openLink,
+    openWorkspace,
     ownsPage: contents => [...sessions.values()].includes(contents.session),
     updateAgents: () => { for (const tab of tabs.values()) tab.publish() },
     close: () => {

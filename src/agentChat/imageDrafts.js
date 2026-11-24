@@ -15,8 +15,19 @@ function imagePreview(bitmap) {
 function createImageDrafts(clipboard) {
   const drafts = new Map()
   const reads = new Map()
-  // Sent files already stay on disk until exit. Keep opaque ids for explicit chat retries.
+  // Sent files already stay on disk until exit. Keep opaque ids for previews and explicit retries.
   let sent = new Map()
+
+  function retain(retained, scope, id, file, retryable = false) {
+    retained.delete(id)
+    retained.set(id, { scope, file, retryable })
+    if (retained.size > MAX_SENT_IMAGES) retained.delete(retained.keys().next().value)
+  }
+
+  function previewFile(scope, id) {
+    const image = sent.get(id)
+    return drafts.get(scope)?.get(id)?.file ?? (image && image.scope === scope ? image.file : null)
+  }
 
   function remove(scope, ids) {
     const draft = drafts.get(scope)
@@ -66,14 +77,14 @@ function createImageDrafts(clipboard) {
     }
   }
 
-  function select(scope, ids, { retry = false, remember = false } = {}) {
+  function select(scope, ids, { retry = false, retainFor = null } = {}) {
     const missing = fail('이미지를 다시 첨부해 주세요.')
     if (!Array.isArray(ids) || ids.length > MAX_IMAGES || new Set(ids).size !== ids.length) return missing
     const draft = drafts.get(scope)
     const retained = sent
     const images = ids.map(id => retry ? retained.get(id) : draft?.get(id))
     if (images.some(image => !image)) return missing
-    if (retry && images.some(image => image.scope !== scope)) return missing
+    if (retry && images.some(image => image.scope !== scope || !image.retryable)) return missing
     if (images.some(image => image.sending)) return fail('다른 입력을 넣는 중입니다. 잠시 뒤 다시 시도해 주세요.')
     const files = images.map(image => image.file)
     return {
@@ -91,11 +102,7 @@ function createImageDrafts(clipboard) {
             // Keep the file until app exit so the recipient can still open it after the draft closes.
             if (result?.ok) {
               if (!retry) draft.delete(id)
-              if (remember) {
-                retained.delete(id)
-                retained.set(id, { ...image, scope })
-                if (retained.size > MAX_SENT_IMAGES) retained.delete(retained.keys().next().value)
-              }
+              if (retainFor) retain(retained, scope, id, image.file, retainFor === 'retry')
             } else if (!retry && draft.get(id) !== image) clipboard.discardImage(image.file)
           })
           if (draft && !draft.size && drafts.get(scope) === draft) drafts.delete(scope)
@@ -105,7 +112,15 @@ function createImageDrafts(clipboard) {
   }
 
   return {
-    clear, remove, select,
+    clear, remove, select, previewFile,
+    rememberCaptures(scope, attachments) {
+      return attachments.map(({ file }) => {
+        const id = randomUUID()
+        retain(sent, scope, id, file)
+        return id
+      })
+    },
+    forgetSent(ids) { for (const id of ids) sent.delete(id) },
     clearAll() {
       reads.clear()
       for (const scope of drafts.keys()) remove(scope)

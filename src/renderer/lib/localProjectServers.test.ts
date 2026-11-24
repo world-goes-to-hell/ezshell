@@ -40,7 +40,8 @@ describe('sessionFromDrop', () => {
   const terminals = new Map<string, TerminalInfo>([
     ['ssh-1', terminal({ id: 'ssh-1', connectConfig: { savedSessionId: 's1' } as TerminalInfo['connectConfig'] })],
     ['quick-1', terminal({ id: 'quick-1', connectConfig: {} as TerminalInfo['connectConfig'] })],
-    ['local:1', terminal({ id: 'local:1', local: { shell: 'PowerShell' } })]
+    ['local:1', terminal({ id: 'local:1', local: { shell: 'PowerShell' } })],
+    ['browser:1', terminal({ id: 'browser:1', browser: { group: null } })]
   ])
   const saved = new Set(['s1', 's2'])
 
@@ -52,6 +53,8 @@ describe('sessionFromDrop', () => {
   it('explains why a quick connect or a local tab cannot be linked', () => {
     expect(sessionFromDrop('quick-1', terminals, saved)).toMatchObject({ error: expect.stringContaining('저장한') })
     expect(sessionFromDrop('local:1', terminals, saved)).toMatchObject({ error: expect.stringContaining('SSH') })
+    // A browser tab is not a quick connect to save first (2026-11-24)
+    expect(sessionFromDrop('browser:1', terminals, saved)).toMatchObject({ error: expect.stringContaining('브라우저') })
   })
 
   it('ignores folders, unknown text and deleted sessions', () => {

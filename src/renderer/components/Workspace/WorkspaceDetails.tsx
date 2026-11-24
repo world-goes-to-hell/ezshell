@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useRef, useState, type CSSPropert
 import { RiArrowDownSLine, RiArrowRightSLine, RiFileLine, RiFileTextLine, RiFolderLine, RiFolderOpenLine, RiGlobalLine, RiLinksLine } from 'react-icons/ri'
 import type { WorkspaceDirectoryEntry, WorkspaceDirectorySearchResult, WorkspaceGitDiff } from '../../types'
 import { toast } from '../../stores/toastStore'
-import { isMediaFile, joinRelative, diffLineKind, revealStep, splitPath } from '../../lib/workspaceDetails'
+import { isMediaFile, isWorkspaceWebDocument, joinRelative, diffLineKind, revealStep, splitPath } from '../../lib/workspaceDetails'
 import { TerminalContextMenu } from '../Terminal/TerminalContextMenu'
 import './WorkspaceDetails.css'
 
@@ -28,7 +28,7 @@ export async function openWorkspaceFile(root: string, relative: string, label: s
 export function useWorkspaceFileMenu(root: string, relative: string, openFile: () => void) {
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null)
   const reveal = window.electronAPI.localFileReveal
-  const canOpenInBrowser = /(?:^|\/)[^/]+\.(?:html?|xhtml|svg)$/i.test(relative)
+  const canOpenInBrowser = isWorkspaceWebDocument(relative)
   const revealFile = async () => {
     if (!reveal) return
     try {

@@ -77,10 +77,10 @@ function imageBytes(images: AgentChat['sentImages']): number {
   return Array.from(images.values()).reduce((total, entry) => total + entry.bytes, 0)
 }
 
-function addSentImages(images: AgentChat['sentImages'], item: AgentChatItem, text: string, previews: readonly Blob[]) {
+function addSentImages(images: AgentChat['sentImages'], item: AgentChatItem, text: string, previews: readonly Blob[], imageIds: readonly string[]) {
   if (!previews.length) return images
   const next = new Map(images)
-  next.set(sentImageKey(item), { text, previews, bytes: previews.reduce((total, preview) => total + preview.size, 0) })
+  next.set(sentImageKey(item), { text, previews, imageIds, bytes: previews.reduce((total, preview) => total + preview.size, 0) })
   let bytes = imageBytes(next)
   for (const [key, entry] of next) {
     if (bytes <= CHAT_IMAGE_BYTES) break
@@ -150,14 +150,14 @@ function discardEcho(chat: RetainedChat, sendId: string) {
   }
 }
 
-function appendEcho(chat: RetainedChat, echo: ChatEcho, previews: readonly Blob[]): RetainedChat {
+function appendEcho(chat: RetainedChat, echo: ChatEcho, previews: readonly Blob[], imageIds: readonly string[]): RetainedChat {
   const { id, time, text } = echo
   const item: AgentChatItem = { id, kind: 'user', time, text: text || '스크린샷 첨부' }
   const items = [...chat.items, item].slice(-MAX_CHAT_ITEMS)
   const droppedId = chat.items.length >= MAX_CHAT_ITEMS ? chat.items[0].id : null
   return {
     ...chat, items,
-    sentImages: addSentImages(chat.sentImages, item, text, previews),
+    sentImages: addSentImages(chat.sentImages, item, text, previews, imageIds),
     echoes: [...chat.echoes.filter(echo => echo.id !== droppedId), echo],
     reply: { sendId: id, itemId: id }
   }
@@ -240,7 +240,7 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
           ? { transcriptId: chat.transcriptId, imageIds } : undefined
         const echo = { id, text, queued, time: Date.now(), hasImage, delivery }
         return {
-          ...chat, ...appendEcho(chat, echo, previews),
+          ...chat, ...appendEcho(chat, echo, previews, imageIds),
           latestMcpSendId: !hasImage && text.trim() === '/mcp' ? id : chat.latestMcpSendId
         }
       })
@@ -298,13 +298,14 @@ export const useAgentChatStore = create<AgentChatStoreState>((set, get) => {
     applyCapture(capture) {
       const { shellId, id } = capture
       if ('discard' in capture) { get().discardSend(shellId, id); return }
-      const { time, text, queued, preview } = capture
+      const { time, text, queued } = capture
       const echo = { id, time, text, queued, hasImage: true }
-      const previews = [new Blob([preview], { type: 'image/png' })]
+      // Several captures of one run arrive in one message (docs/plan/2026-11-24-capture-multiple-shots.md)
+      const previews = capture.previews.map(preview => new Blob([preview], { type: 'image/png' }))
       if (get().chats.has(shellId)) {
-        update(shellId, chat => ({ ...chat, ...appendEcho(chat, echo, previews) }))
+        update(shellId, chat => ({ ...chat, ...appendEcho(chat, echo, previews, capture.imageIds) }))
       } else {
-        keepEchoes(shellId, appendEcho(takeEchoes(shellId), echo, previews))
+        keepEchoes(shellId, appendEcho(takeEchoes(shellId), echo, previews, capture.imageIds))
       }
     },
     discardSend(shellId, sendId) {

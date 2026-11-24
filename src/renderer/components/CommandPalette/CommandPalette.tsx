@@ -10,6 +10,7 @@ import { useSnippetStore } from '../../stores/snippetStore'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useSessionLogStore } from '../../stores/sessionLogStore'
 import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
+import { useByteDaemonStore } from '../../stores/byteDaemonStore'
 import { openSessionLogFolder, toggleSessionLog } from '../../lib/sessionLogActions'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { modalOverlayVariants } from '../../lib/animation/variants'
@@ -49,6 +50,8 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
   const { getTerminal } = useTerminalStore()
   const activeTerminalId = useTerminalStore(state => state.activeTerminalId)
   const sessionLogFiles = useSessionLogStore(state => state.files)
+  const byteDaemonHidden = useByteDaemonStore(state => state.save.hidden)
+  const setByteDaemonHidden = useByteDaemonStore(state => state.setHidden)
   const reducedMotion = useReducedMotion()
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -158,6 +161,16 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
       })
     }
 
+    // The Byte Daemon mini game hides at the end of the status bar; this is how to hide or bring it back
+    items.push({
+      id: 'byte-daemon-toggle',
+      title: byteDaemonHidden ? '미니 게임 아이콘 보이기' : '미니 게임 아이콘 숨기기',
+      subtitle: byteDaemonHidden ? '상태 줄 끝에 바이트 데몬을 다시 둡니다' : '상태 줄 끝의 바이트 데몬을 감춥니다 (진행 상황은 남음)',
+      category: 'command',
+      action: () => setByteDaemonHidden(!byteDaemonHidden),
+      keywords: ['byte', 'daemon', 'game', 'mini', 'idle', '미니 게임', '게임', '바이트', '데몬', '숨기기', '보이기'],
+    })
+
     if (onOpenWhatsNew) {
       items.push({
         id: 'whats-new',
@@ -257,7 +270,7 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
     })
 
     return items
-  }, [sessions, folders, recentConnections, themes, currentThemeId, snippets, activeSessionId, activeTerminalId, sessionLogFiles, onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, onOpenWhatsNew, onOpenBatch, onOpenStats, onOpenLocalProject, setTheme, clearHistory, close, expandVariables, getTerminal])
+  }, [sessions, folders, recentConnections, themes, currentThemeId, snippets, activeSessionId, activeTerminalId, sessionLogFiles, onNewConnection, onQuickConnect, onOpenSettings, onOpenSnippetManager, onOpenWhatsNew, onOpenBatch, onOpenStats, onOpenLocalProject, setTheme, clearHistory, close, expandVariables, getTerminal, byteDaemonHidden, setByteDaemonHidden])
 
   // Fuse.js search
   const fuse = useMemo(() => {

@@ -29,7 +29,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setShortcutRecording: (recording) => ipcRenderer.send('shortcut-recording', recording),
   showWorkOverview: () => ipcRenderer.invoke('work-overview-show'),
   hideWorkOverview: () => ipcRenderer.send('work-overview-hide'),
-  // Tab Tab while another program was in front (src/globalDoubleTab.js): ezShell came forward, open the overview
+  // The work overview shortcut, for the helper that hears it while another program is in front
+  setWorkOverviewKey: (keys) => ipcRenderer.send('work-overview-key', keys),
+  // The overview shortcut while another program was in front (src/globalDoubleTab.js): ezShell came forward, open the overview
   onWorkOverviewRequest: (callback) => {
     const listener = () => callback();
     ipcRenderer.on('work-overview-request', listener);
@@ -163,8 +165,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localProjectDevelopmentTasks: (folder) => ipcRenderer.invoke('local-project-development-tasks', folder),
   localProjectDevelopmentStart: (options) => ipcRenderer.invoke('local-project-development-start', options),
   workspaceDirectoryList: (folder, relative = '') => ipcRenderer.invoke('workspace-directory-list', { root: folder, path: relative }),
-  workspaceDirectoryPrepare: (root, refresh) => ipcRenderer.invoke('workspace-directory-prepare', { root, refresh }),
-  workspaceDirectorySearch: (root, query) => ipcRenderer.invoke('workspace-directory-search', { root, query }),
+  workspaceDirectoryPrepare: (root, refresh, includeAll) => ipcRenderer.invoke('workspace-directory-prepare', { root, refresh, includeAll }),
+  workspaceDirectorySearch: (root, query, includeAll) => ipcRenderer.invoke('workspace-directory-search', { root, query, includeAll }),
   workspaceGitStatus: (root) => ipcRenderer.invoke('workspace-git-status', root),
   workspaceGitCommitFiles: (root, hash) => ipcRenderer.invoke('workspace-git-commit-files', { root, hash }),
   workspaceGitDiff: (root, file, hash) => ipcRenderer.invoke('workspace-git-diff', { root, file, hash }),
@@ -266,6 +268,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentChatClose: (shellId) => ipcRenderer.send('agent-chat-close', shellId),
   agentChatReadClipboard: (shellId) => ipcRenderer.invoke('agent-chat-read-clipboard', shellId),
   agentChatPickImages: (shellId) => ipcRenderer.invoke('agent-chat-pick-images', shellId),
+  agentChatPreviewImage: (shellId, imageId) => ipcRenderer.invoke('agent-chat-preview-image', { shellId, imageId }),
   agentChatRemoveImage: (shellId, imageId) => ipcRenderer.send('agent-chat-remove-image', { shellId, imageId }),
   agentChatSend: (shellId, text, imageIds, retry, forceToken) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageIds, retry, forceToken }),
   agentChatMcpLogin: (shellId, summaryId, server) => ipcRenderer.invoke('agent-chat-mcp-login', { shellId, summaryId, server }),

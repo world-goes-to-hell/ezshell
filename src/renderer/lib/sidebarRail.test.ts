@@ -21,6 +21,19 @@ describe('railCounts', () => {
     })
   })
 
+  // 2026-11-24 user report: six browser tabs showed as seven connected sessions on the folded rail
+  it('does not count browser tabs as sessions, in the list or under local work', () => {
+    const terminals = new Map([
+      ['1', saved('1', 'web')],
+      ['browser:1', tab('browser:1', { browser: { group: null } })],
+      ['browser:2', tab('browser:2', { browser: { group: 'project', cwd: 'D:\\work' } })]
+    ])
+    expect(railCounts(terminals, new Set(['browser:2']))).toEqual({
+      sessions: { connected: 1, lost: 0 },
+      local: { terminals: 0, connected: 0, lost: 0 }
+    })
+  })
+
   it('keeps quick connects and unlinked sessions in the session list', () => {
     const terminals = new Map([['1', tab('1')], ['2', saved('2', 'web', false)]])
     expect(railCounts(terminals, new Set())).toEqual({

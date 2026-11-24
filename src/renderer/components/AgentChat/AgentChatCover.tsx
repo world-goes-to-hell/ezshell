@@ -3,7 +3,7 @@
 // the agent's transcript (src/agentChat) with a box that types into the agent's own composer.
 import { memo, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type ToggleEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { RiArrowDownLine, RiArrowUpLine, RiChat1Line, RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolder3Line, RiFolderOpenLine, RiImageAddLine, RiListUnordered, RiLoader4Line, RiMailLine, RiNotification3Line, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiTimeLine, RiToolsLine } from 'react-icons/ri'
+import { RiArrowDownLine, RiArrowUpLine, RiChat1Line, RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolder3Line, RiFolderOpenLine, RiGlobalLine, RiImageAddLine, RiListUnordered, RiLoader4Line, RiMailLine, RiNotification3Line, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiTimeLine, RiToolsLine } from 'react-icons/ri'
 import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatItem, AgentChatQuestion, AgentChatQuestionContext, AgentMessageSession, CodexSpeedMode } from '../../types'
 import { isUnconfirmedSend, useAgentChatStore } from '../../stores/agentChatStore'
 import { chatLinesToTakeBack, draftWithTakenBack, takeBackQueued } from '../../lib/chatTakeBack'
@@ -16,6 +16,7 @@ import { useShortcutsStore } from '../../stores/shortcutsStore'
 import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
 import { matchesBinding } from '../../lib/shortcutMatch'
 import { LOCAL_PATH_LINK, renderChatMarkdown } from '../../lib/markdownRender'
+import { isWorkspaceWebDocument } from '../../lib/workspaceDetails'
 import { copyToClipboard } from '../../lib/terminalClipboard'
 import { outputFileName } from '../../lib/terminalText'
 import { TerminalContextMenu, type TerminalMenuGroup, type TerminalMenuItem } from '../Terminal/TerminalContextMenu'
@@ -26,6 +27,7 @@ import { toast } from '../../stores/toastStore'
 import { AgentChatSubagents } from './AgentChatSubagents'
 import { AgentChatQuestions, receivedMessageLabel } from './AgentChatQuestions'
 import { AgentChatThemePicker } from './AgentChatThemePicker'
+import { AgentChatImagePreview, useChatImageUrl } from './AgentChatImagePreview'
 import { AgentChatLinkPreview } from './AgentChatLinkPreview'
 import { ChatQuoteCards, ChatQuoteReply, ChatQuoteSelection, QuotedChatMessage, type ChatQuote } from './ChatQuote'
 import { SubagentConversation } from './SubagentConversation'
@@ -108,6 +110,16 @@ function linkMenuTarget(link: HTMLAnchorElement | null): LinkMenu | undefined {
 
 /** A folder of this PC, written with the slash at its end (`docs/plan/`) */
 const isFolderLink = (menu: LinkMenu) => menu.isFile && /[\\/]$/.test(menu.href)
+
+function isBrowserFileLink(href: string): boolean {
+  try {
+    const value = /^file:\/\//i.test(href) ? new URL(href).pathname : href
+    const name = decodeURIComponent(value).replace(/(?::\d{1,7}(?::\d{1,7})?|#L\d{1,7}(?:-L?\d{1,7})?)$/, '')
+    return isWorkspaceWebDocument(name)
+  } catch {
+    return false
+  }
+}
 
 /** What a link names, for the menu's title: a file's or folder's name, or the address */
 function linkName(href: string, isFile: boolean): string {
@@ -259,18 +271,19 @@ function ApprovalCard({ shellId, approval }: { shellId: string; approval: AgentC
   )
 }
 
-function SentImageThumbnail({ preview, index }: { preview: Blob; index: number }) {
-  const [url, setUrl] = useState<string>()
-  useEffect(() => {
-    const next = URL.createObjectURL(preview)
-    setUrl(next)
-    return () => URL.revokeObjectURL(next)
-  }, [preview])
+type SentImageTarget = { thumbnail: Blob; index: number; imageId?: string; opener: HTMLButtonElement }
+
+function SentImageThumbnail({ preview, index, imageId, onOpen }: {
+  preview: Blob; index: number; imageId?: string; onOpen: (image: SentImageTarget) => void
+}) {
+  const url = useChatImageUrl(preview)
+  const label = chatImageReference(index + 1)
   return (
-    <span className="agent-chat-sent-image">
-      <img src={url} alt={chatImageReference(index + 1)} />
+    <button type="button" className="agent-chat-sent-image" aria-label={`${label} 크게 보기`} aria-haspopup="dialog" title="크게 보기"
+      onClick={event => onOpen({ thumbnail: preview, index, imageId, opener: event.currentTarget })}>
+      <img src={url} alt={label} draggable={false} />
       <span className="agent-chat-image-number" aria-hidden="true">{index + 1}</span>
-    </span>
+    </button>
   )
 }
 
@@ -282,11 +295,12 @@ function ChatTimestamp({ value, alwaysVisible = false }: { value: number | null;
     data-always-visible={alwaysVisible || undefined}>{sendClock.format(date)}</time>
 }
 
-const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, waiting, onRetry, retryDisabled, onPin, onQuote, onCommand, expanded, rememberDisclosure }: {
+const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, waiting, onRetry, retryDisabled, onPin, onQuote, onCommand, onOpenImage, expanded, rememberDisclosure }: {
   item: AgentChatItem; live: boolean; waiting?: 'queued' | 'input'; onPin?: (item: AgentChatItem) => void
   onQuote?: (text: string) => void
   onRetry?: (id: string) => void; retryDisabled?: boolean
   onCommand?: (command: string, loginServer?: string) => void
+  onOpenImage: (image: SentImageTarget) => void
   sentImages?: SentChatImages; sendTime: number | null; expanded: boolean; rememberDisclosure: (id: string, open: boolean) => void
 }) {
   const itemTime = item.sentAt ?? item.time
@@ -298,7 +312,8 @@ const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, wait
         <div className="agent-chat-user">
           {sentImages && (
             <div className="agent-chat-sent-images" role="group" aria-label="보낸 이미지">
-              {sentImages.previews.map((preview, index) => <SentImageThumbnail key={index} preview={preview} index={index} />)}
+              {sentImages.previews.map((preview, index) => <SentImageThumbnail key={index} preview={preview} index={index}
+                imageId={sentImages.imageIds[index]} onOpen={onOpenImage} />)}
             </div>
           )}
           <div className="agent-chat-user-message">
@@ -414,6 +429,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   const workingReply = useRef<string | null>(null)
   const [menu, setMenu] = useState<ChatMenu | null>(null)
   const [linkPreview, setLinkPreview] = useState<{ href: string; opener: HTMLAnchorElement; scope: string | null } | null>(null)
+  const [imagePreview, setImagePreview] = useState<(SentImageTarget & { scope: string | null }) | null>(null)
   const menuFocusOrigin = useRef<HTMLElement | null>(null)
   const [conversationAction, setConversationAction] = useState<'copy' | 'save' | null>(null)
   const coverRef = useRef<HTMLDivElement>(null)
@@ -427,6 +443,10 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   }, [])
 
   const scope = chat?.scope ?? null
+  const openImagePreview = useCallback((image: SentImageTarget) => {
+    setMenu(null)
+    setImagePreview({ ...image, scope })
+  }, [scope])
   const quoteKey = `${shellId}:${scope ?? ''}`
   const [forceSendOffer, setForceSendOffer] = useState<{ key: string; token: string } | null>(null)
   const forceToken = forceSendOffer?.key === quoteKey ? forceSendOffer.token : undefined
@@ -459,6 +479,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   const interactiveKind = kind === 'claude' || kind === 'codex' ? kind : null
   const subagent = !interactiveKind || chat?.approval?.usesTerminalInput ? undefined : chat?.subagents.find(child => child.id === subagentId)
   const preview = !subagent && linkPreview?.scope === scope ? linkPreview : null
+  const activeImagePreview = !subagent && imagePreview?.scope === scope ? imagePreview : null
   const ProviderIcon = kind ? AGENT_PROVIDER_ICONS[kind] : null
   const agentName = kind === 'claude' ? 'Claude' : kind ? AGENT_PROVIDER_NAMES[kind] : '에이전트'
   const status = chat?.state === 'ended' ? 'ended'
@@ -706,8 +727,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     }
   }
 
-  const restoreLinkPreviewFocus = () => {
-    const opener = preview?.opener
+  const restorePreviewFocus = (opener?: HTMLElement) => {
     if (opener?.isConnected && opener.checkVisibility({ visibilityProperty: true })) {
       opener.focus({ preventScroll: true })
       if (document.activeElement === opener) return
@@ -771,6 +791,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     try {
       const result = await window.electronAPI.agentChatOpenLink?.(shellId, href, how)
       if (!result?.ok) toast.error('열지 못했습니다', result && !result.ok ? result.error : '이 앱 버전에서는 쓸 수 없습니다.')
+      else if (how === 'browser-tab') setLinkPreview(null)
     } catch {
       toast.error('열지 못했습니다', '링크를 열 수 없습니다.')
     }
@@ -807,6 +828,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
       ]
     : menu.isFile
     ? [
+        ...(isBrowserFileLink(menu.href) ? [{ label: '브라우저로 열기', icon: RiGlobalLine, onSelect: () => void openLink(menu.href, 'browser-tab') }] : []),
         { label: 'ezShell 에서 열기', icon: RiFileTextLine, onSelect: () => void openInApp(menu.href) },
         { label: '파일 탐색기에서 열기', icon: RiFolderOpenLine, onSelect: () => void openLink(menu.href, 'explorer') },
         { label: '경로 복사', icon: RiFileCopyLine, onSelect: () => void copyToClipboard(menu.href) }
@@ -1244,7 +1266,10 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
           </span>
         )}
         {mailAgent?.active && <AgentIdentityBadge agent={mailAgent} location={location} />}
-        <span className="agent-chat-title" title={title}>{title}</span>
+        <button type="button" className="agent-chat-title agent-chat-title-copy" title={`${title} · 클릭하여 제목 복사`}
+          aria-label={`제목 복사 · ${title}`} onClick={() => void copyToClipboard(title)}>
+          {title}
+        </button>
         {(STATUS_LABELS[status] || (antigravity && idle)) && (
           <span className="agent-chat-status" data-status={status}>
             {status === 'working' && <RiLoader4Line className="agent-chat-spin" aria-hidden />}
@@ -1327,6 +1352,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
                     onCommand={summaryId && canRunOutputCommand
                       ? (command, server) => void send({ override: command, mcpAction: { summaryId, server } }) : undefined}
                     expanded={disclosures.current.has(entry.item.id)} rememberDisclosure={rememberDisclosure}
+                    onOpenImage={openImagePreview}
                     onQuote={canAddQuote ? addQuote : undefined}
                     onPin={window.electronAPI.agentChatPin ? pinReply : undefined} />}
                   {line && <p className="agent-chat-usage" title={line.title}>{line.text}</p>}
@@ -1474,7 +1500,10 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
       )}
       </div>
       {preview && <AgentChatLinkPreview shellId={shellId} href={preview.href} themeStyle={appearance?.style}
-        onClose={() => setLinkPreview(null)} onRestoreFocus={restoreLinkPreviewFocus} onOpen={openLink} />}
+        onClose={() => setLinkPreview(null)} onRestoreFocus={() => restorePreviewFocus(preview.opener)} onOpen={openLink} />}
+      {activeImagePreview && <AgentChatImagePreview shellId={shellId} imageId={activeImagePreview.imageId} thumbnail={activeImagePreview.thumbnail}
+        label={chatImageReference(activeImagePreview.index + 1)} themeStyle={appearance?.style} onClose={() => setImagePreview(null)}
+        onRestoreFocus={() => restorePreviewFocus(activeImagePreview.opener)} />}
       {subagent && interactiveKind && <SubagentConversation key={subagent.id} shellId={shellId} agent={subagent} kind={interactiveKind} menuStyle={appearance?.style}
         onBack={() => setSubagentId(null)} onShowTerminal={onShowTerminal} />}
     </div>

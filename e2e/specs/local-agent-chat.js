@@ -1028,6 +1028,11 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     return until(`[...document.querySelectorAll('.terminal-menu-item')].some(item => item.textContent === '채팅 전체 복사')`)
   }
   await js(`navigator.clipboard.writeText = async text => { window.copiedConversation = text }`)
+  const titleButton = `${cover(0)}.querySelector('.agent-chat-title-copy')`
+  const title = await js(`${titleButton}.textContent`)
+  await click(...await center(titleButton))
+  check('clicking the chat title copies the full title', Boolean(title) && await until(`window.copiedConversation === ${JSON.stringify(title)}`))
+  await js('window.copiedConversation = null')
   check('right-click in the chat offers conversation actions', await openChatMenu())
   check('the chat menu has the basic actions and both pane and utility submenus', await js(`
     ['복사', '붙여넣기', '모두 선택', '분할', '편의'].every(label =>

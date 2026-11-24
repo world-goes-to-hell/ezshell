@@ -24,7 +24,7 @@ interface Drag {
   points: Array<{ x: number; y: number }>
   scribbleFrom: number
   turns: number
-  /** Read as a scribble once: stays a close until the pointer leaves the pane or Esc */
+  /** A recognized scribble stays armed inside the pane, including while hovering over the cancel target. */
   scribble: boolean
 }
 
@@ -38,9 +38,9 @@ function isNearStart({ x, y, start }: Drag): boolean {
   return Math.hypot(x - start.x, y - start.y) <= PANE_GESTURE_CANCEL_RADIUS
 }
 
-/** Going back to the start cancels, except in a scribble: it passes the start again and again */
-function canCancelAtStart(drag: Drag): boolean {
-  return drag.canReturnToCancel && !drag.scribble && drag.turns < SCRIBBLE_TURNS - 1
+/** Hide the split or merge cancel target once the stroke starts to look like a scribble. */
+function canCancelSplitOrMerge(drag: Drag): boolean {
+  return drag.canReturnToCancel && drag.turns < SCRIBBLE_TURNS - 1
 }
 
 const refit = () => requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
@@ -88,6 +88,17 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       return line ? { kind: 'split', ...line } : null
     }
 
+    const gestureAtPointer = (gesture: Drag) => {
+      const nearStart = isNearStart(gesture)
+      // Returning to the start lets the user redraw in the source pane after a merge preview.
+      if (nearStart && canCancelSplitOrMerge(gesture)) gesture.leftPane = false
+      const action = actionAt(gesture)
+      if (action && !nearStart) gesture.canReturnToCancel = true
+      const canCancel = action?.kind === 'close' || canCancelSplitOrMerge(gesture)
+      const cancelling = canCancel && nearStart
+      return { action: cancelling ? null : action, canCancel, cancelling }
+    }
+
     const drawTo = (gesture: Drag, x: number, y: number) => {
       const { context, rect } = gesture
       context.beginPath()
@@ -108,23 +119,17 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       if (!drag || event.pointerId !== drag.pointer) return
       consume(event)
       drawTo(drag, event.clientX, event.clientY)
-      const nearStart = isNearStart(drag)
-      const cancelling = canCancelAtStart(drag) && nearStart
-      // Returning to the start also lets the user redraw in the source pane.
-      if (cancelling) drag.leftPane = false
-      const found = actionAt(drag)
-      const action = cancelling && !drag.scribble ? null : found
-      if (action && !nearStart) drag.canReturnToCancel = true
+      const { action, canCancel, cancelling } = gestureAtPointer(drag)
       const { start, rect } = drag
       const labelInset = Math.min(64, rect.width / 2)
       setPreview({
         from: drag.from,
         action,
-        cancelTarget: canCancelAtStart(drag) ? {
+        cancelTarget: canCancel ? {
           ...start,
           labelX: Math.min(rect.width - labelInset, Math.max(labelInset, start.x)),
           above: rect.height - start.y < PANE_GESTURE_CANCEL_RADIUS + 32,
-          active: cancelling && !drag.scribble
+          active: cancelling
         } : null
       })
     }
@@ -152,12 +157,12 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       if (!drag || event.pointerId !== drag.pointer) return
       consume(event)
       drawTo(drag, event.clientX, event.clientY)
-      if (canCancelAtStart(drag) && isNearStart(drag)) {
+      const { action, cancelling } = gestureAtPointer(drag)
+      if (cancelling) {
         stop(false)
         return
       }
       const { from } = drag
-      const action = actionAt(drag)
       const scribbled = drag.scribble
       stop(true)
       if (!action) {

@@ -18,7 +18,7 @@ async function monitorBackdrop(desktopCapturer, display) {
   }
 }
 
-// Tab Tab from another program aims at the monitor of that program for a moment (the window asks for
+// The overview shortcut from another program aims at the monitor of that program for a moment (the window asks for
 // the overview right after): the window moves there for the overview and goes back when it closes.
 const AIM_MS = 3000;
 
@@ -119,7 +119,7 @@ function registerWorkOverviewIpc({ ipcMain, desktopCapturer, getDisplay, getWind
   });
 
   return {
-    /** The monitor Tab Tab was pressed on, for the overview the window asks for next */
+    /** The monitor the overview shortcut was pressed on, for the overview the window asks for next */
     aimAt(display) { aim = display ? { display, at: Date.now() } : null; }
   };
 }

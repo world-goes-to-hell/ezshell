@@ -8,6 +8,7 @@
 // written again (main does that right after unlocking).
 
 const cryptoUtil = require('./crypto.js')
+const { isDeepStrictEqual } = require('node:util')
 
 const SECRET_FIELDS = [
   'password', 'passphrase', 'privateKeyPath',
@@ -22,8 +23,7 @@ const TRANSIENT_FIELDS = ['needsMigration', 'decryptionFailed']
 
 const isPresent = (value) => value !== undefined && value !== null && value !== ''
 
-/** The session as it is written to the file: secrets only inside `encrypted` */
-function sealSession(session, masterPassword) {
+function sessionFields(session) {
   const secrets = {}
   const rest = {}
   for (const [key, value] of Object.entries(session)) {
@@ -33,7 +33,31 @@ function sealSession(session, masterPassword) {
       rest[key] = value
     }
   }
-  return { ...rest, encrypted: cryptoUtil.encrypt(JSON.stringify(secrets), masterPassword), encryptedVersion: 1 }
+  return { rest, secrets }
+}
+
+/** The session as it is written to the file: secrets only inside `encrypted` */
+function sealSession(session, masterPassword) {
+  return prepareSession(session, masterPassword).stored
+}
+
+function prepareSession(session, masterPassword, previous) {
+  const { rest, secrets } = sessionFields(session)
+  const reuse = previous && !needsResealing(previous.stored) &&
+    isDeepStrictEqual(secrets, sessionFields(previous.opened).secrets)
+  const stored = {
+    ...rest,
+    encrypted: reuse ? previous.stored.encrypted : cryptoUtil.encrypt(JSON.stringify(secrets), masterPassword),
+    encryptedVersion: reuse ? previous.stored.encryptedVersion : 1
+  }
+  const opened = reuse && previous.opened.decryptionFailed ? { ...stored, decryptionFailed: true } : { ...rest, ...secrets }
+  return { stored, opened }
+}
+
+/** Reuse blobs only from the last file read or written with this unlock. */
+function prepareSessionSaves(sessions, masterPassword, previousRecords = []) {
+  const byId = new Map(previousRecords.filter(record => record.stored.id).map(record => [record.stored.id, record]))
+  return sessions.map(session => prepareSession(session, masterPassword, byId.get(session.id)))
 }
 
 /**
@@ -80,4 +104,4 @@ function resealAll(storedSessions, masterPassword) {
   })
 }
 
-module.exports = { SECRET_FIELDS, sealSession, openSession, needsResealing, resealAll }
+module.exports = { SECRET_FIELDS, sealSession, prepareSessionSaves, openSession, needsResealing, resealAll }

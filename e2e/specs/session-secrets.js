@@ -4,7 +4,7 @@
 // secret encrypted. Saving afterwards keeps it that way. Uses the test profile only.
 const fs = require('fs')
 const path = require('path')
-const { sleep, createChecks, connect, unlock } = require('../support/driver')
+const { sleep, createChecks, connect, unlock, SET } = require('../support/driver')
 const cryptoUtil = require('../../src/crypto.js')
 const { check, finish } = createChecks()
 
@@ -13,7 +13,7 @@ const SECRETS = ['ssh-secret', 'root-secret', 'jump-secret', 'db-secret']
 
 ;(async () => {
   const driver = await connect()
-  const { js, send } = driver
+  const { js, send, until, center, click } = driver
   const file = path.join(process.env.E2E_PROFILE, 'sessions.json')
   const plainSecretsIn = () => SECRETS.filter(secret => fs.readFileSync(file, 'utf8').includes(secret))
 
@@ -46,6 +46,54 @@ const SECRETS = ['ssh-secret', 'root-secret', 'jump-secret', 'db-secret']
   check('and writes no secret in plain text', plainSecretsIn().length === 0, JSON.stringify(plainSecretsIn()))
   const after = await js(`window.electronAPI.loadSessions().then(r => r.sessions[0])`)
   check('the saved session reads back with its database account', after?.name === '옛 형식 세션 (저장)' && after?.dbConnections?.[0]?.password === 'db-secret', JSON.stringify({ name: after?.name }))
+
+  const extraSessions = Array.from({ length: 39 }, (_, index) => ({
+    id: `extra-${index}`, name: `다른 세션 ${index}`, host: 'example.test', port: 22,
+    username: 'deploy', authType: 'password', password: 'ssh-secret'
+  }))
+  if (!(await js(`window.electronAPI.saveSessions(${JSON.stringify([after, ...extraSessions])})`))?.success) throw new Error('Could not seed the larger session list')
+  const storedBefore = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const row = `document.querySelector('[data-session-id="old-1"].session-item')`
+  const nameInput = `document.querySelector('.modal-content input[placeholder="My Server"]')`
+  await send('Page.reload')
+  await unlock(driver)
+  if (!await until(`document.querySelectorAll('.session-item').length === 40`)) throw new Error('The larger session list did not open')
+
+  const choose = async label => {
+    await click(...await center(row), 'right')
+    const item = `[...document.querySelectorAll('.session-context-menu .context-menu-item')].find(item => item.textContent.trim() === ${JSON.stringify(label)})`
+    if (!await until(`!!${item}`)) throw new Error(`The menu item ${label} did not open`)
+    await click(...await center(item))
+  }
+  const clickAndMeasure = button => js(`(async () => {
+    const target = ${button}
+    const start = performance.now()
+    target.click()
+    await Promise.all([
+      window.electronAPI.loadFolders(),
+      new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    ])
+    return Math.round(performance.now() - start)
+  })()`)
+
+  await choose('색상 변경')
+  const red = `document.querySelector('.context-menu .color-option[title="빨강"]')`
+  if (!await until(`!!${red}`)) throw new Error('The session color picker did not open')
+  const colorMs = await clickAndMeasure(red)
+  check('a color edit refreshes the row and main stays responsive with 40 saved sessions',
+    colorMs < 500 && await js(`${row}.style.getPropertyValue('--session-color') === '#ef4444'`), `${colorMs}ms`)
+
+  await choose('수정')
+  if (!await until(`!!${nameInput}`)) throw new Error('The connection edit dialog did not open')
+  await js(`(${SET})(${nameInput}, '수정한 서버')`)
+  const save = `[...document.querySelectorAll('.modal-content button')].find(button => button.textContent.trim() === '저장')`
+  const editMs = await clickAndMeasure(save)
+  check('saving a name edit immediately updates the same row', editMs < 500 && await js(`${row}.querySelector('.session-name').textContent === '수정한 서버'`), `${editMs}ms`)
+
+  const storedAfter = JSON.parse(fs.readFileSync(file, 'utf8'))
+  check('sidebar edits persist both changes and reuse every encrypted blob',
+    storedAfter[0].name === '수정한 서버' && storedAfter[0].backgroundColor === '#ef4444' &&
+    JSON.stringify(storedAfter.map(session => session.encrypted)) === JSON.stringify(storedBefore.map(session => session.encrypted)))
 
   finish()
 })().catch((error) => { console.error(error); process.exit(1) })
