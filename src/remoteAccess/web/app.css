@@ -30,6 +30,7 @@
   --terminal-cursor-accent: #000;
   --terminal-selection: rgba(255, 255, 255, 0.3);
   --tab-height: 56px;
+  --tab-safe-bottom: env(safe-area-inset-bottom);
   color-scheme: var(--scheme);
 }
 
@@ -238,6 +239,10 @@ body:not([data-workspace]) > .terminal-view {
   top: var(--visible-top, 0px);
 }
 
+body[data-terminal-keyboard] > .terminal-view {
+  padding-bottom: 0;
+}
+
 .terminal-view .bar {
   padding: 0 10px 6px;
 }
@@ -312,18 +317,18 @@ button.icon {
 
 /* ---- Screens with the tab bar ---- */
 .tabbed-view {
-  padding-bottom: calc(var(--tab-height) + 12px + env(safe-area-inset-bottom));
+  padding-bottom: calc(var(--tab-height) + 12px + var(--tab-safe-bottom));
 }
 
 .tabs {
   position: fixed;
   right: 0;
-  top: calc(var(--visible-top, 0px) + var(--visible-height, 100dvh) - var(--tab-height) - env(safe-area-inset-bottom));
+  top: calc(var(--visible-top, 0px) + var(--visible-height, 100dvh) - var(--tab-height) - var(--tab-safe-bottom));
   left: 0;
   z-index: 20;
   display: flex;
-  height: calc(var(--tab-height) + env(safe-area-inset-bottom));
-  padding-bottom: env(safe-area-inset-bottom);
+  height: calc(var(--tab-height) + var(--tab-safe-bottom));
+  padding-bottom: var(--tab-safe-bottom);
   border-top: 1px solid var(--line);
   background: var(--panel);
 }

@@ -49,6 +49,7 @@ function openPhone(storage, now, visualViewport) {
   const terminals = []
   const window = Object.assign(new EventTarget(), {
     matchMedia: vi.fn(() => Object.assign(new EventTarget(), { matches: false })),
+    innerHeight: 800,
     visualViewport,
     ezRemote: {
       createSessionTree: ({ onOpen }) => {
@@ -238,4 +239,34 @@ it('fits the terminal to the visual viewport and requires height for the desktop
   viewport.scale = 2
   viewport.dispatchEvent(new Event('resize'))
   expect(phone.style.has('--visible-height')).toBe(false)
+})
+
+it('hides terminal tabs below 75% visual height and clears the navigation safe-area inset until the keyboard closes', () => {
+  vi.useFakeTimers()
+  const viewport = Object.assign(new EventTarget(), { height: 800, offsetTop: 0, scale: 1 })
+  const phone = openPhone(rememberedDevice(), 1_800_000_000_000, viewport)
+  const [connection] = phone.sockets
+  signIn(connection)
+  startShell(phone, connection)
+
+  viewport.height = 600
+  viewport.dispatchEvent(new Event('resize'))
+  expect(phone.element('tabs').hidden).toBe(false)
+  expect(phone.style.has('--tab-safe-bottom')).toBe(false)
+
+  viewport.height = 599
+  viewport.dispatchEvent(new Event('resize'))
+  expect(phone.element('tabs').hidden).toBe(true)
+  expect(phone.style.get('--tab-safe-bottom')).toBe('0px')
+
+  phone.element('terminal-back').dispatchEvent(new Event('click'))
+  expect(phone.element('tabs').hidden).toBe(false)
+  expect(phone.style.get('--tab-safe-bottom')).toBe('0px')
+  phone.element('terminal-return').dispatchEvent(new Event('click'))
+  expect(phone.element('tabs').hidden).toBe(true)
+
+  viewport.height = 800
+  viewport.dispatchEvent(new Event('resize'))
+  expect(phone.element('tabs').hidden).toBe(false)
+  expect(phone.style.has('--tab-safe-bottom')).toBe(false)
 })

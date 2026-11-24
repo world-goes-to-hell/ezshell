@@ -26,9 +26,16 @@
   let currentView = null
   let tabsEnabled = false
   let agentsEnabled = false
+  let keyboardOpen = false
   const terminalView = view => view === 'terminal' || view === 'tab-terminal'
   const showsNavigation = view => TABBED.has(view) || terminalView(view)
   const inWorkspace = () => workspaceSize.matches && showsNavigation(currentView)
+
+  function updateNavigationVisibility(workspace = inWorkspace()) {
+    const hideForKeyboard = keyboardOpen && terminalView(currentView)
+    $('tabs').hidden = workspace || !showsNavigation(currentView) || hideForKeyboard
+    document.body.toggleAttribute('data-terminal-keyboard', hideForKeyboard)
+  }
 
   function layout() {
     const workspace = inWorkspace()
@@ -52,7 +59,7 @@
     const hint = workspace && workspaceHints[currentView]
     $('workspace-empty').hidden = !hint
     if (hint) $('workspace-empty-title').textContent = hint
-    $('tabs').hidden = workspace || !showsNavigation(currentView)
+    updateNavigationVisibility(workspace)
     const selected = workspaceLists[currentView] ?? currentView
     for (const tab of $('tabs').querySelectorAll('button')) {
       if (tab.dataset.view === selected) tab.setAttribute('aria-current', 'page')
@@ -649,13 +656,18 @@
   function fitViewport() {
     const viewport = window.visualViewport
     const style = document.documentElement.style
+    keyboardOpen = false
     if (viewport?.height > 0 && (viewport.scale ?? 1) === 1) {
       style.setProperty('--visible-height', `${Math.floor(viewport.height)}px`)
       style.setProperty('--visible-top', `${Math.floor(viewport.offsetTop || 0)}px`)
+      keyboardOpen = viewport.height < window.innerHeight * 0.75
     } else {
       style.removeProperty('--visible-height')
       style.removeProperty('--visible-top')
     }
+    if (keyboardOpen) style.setProperty('--tab-safe-bottom', '0px')
+    else style.removeProperty('--tab-safe-bottom')
+    updateNavigationVisibility()
     fitTerminal()
   }
   window.addEventListener('resize', fitViewport)

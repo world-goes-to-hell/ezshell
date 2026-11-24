@@ -3,6 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import http from 'http'
+import { once } from 'node:events'
 import { WebSocket } from 'ws'
 import { createAccessServer, trimOutput, activityForDevice, APPROVAL_ARM_MS, MAX_CLIENTS } from './server.js'
 import { sessionTree, remoteThemeOf } from './controller.js'
@@ -49,8 +50,8 @@ function setup({ isLocked = () => false, now, tabs = null, agents = null, readTh
 }
 
 /** A WebSocket with a queue of the messages it received */
-function connect({ origin = ORIGIN, headers } = {}) {
-  const socket = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { origin, headers })
+function connect({ origin = ORIGIN, headers, autoPong = true } = {}) {
+  const socket = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { origin, headers, autoPong })
   const inbox = []
   const waiters = []
   socket.on('message', (raw) => {
@@ -73,9 +74,9 @@ const get = (url, headers) => new Promise((resolve, reject) => {
   }).on('error', reject)
 })
 
-async function signedIn(context) {
+async function signedIn(context, options) {
   const { store } = context
-  const client = connect()
+  const client = connect(options)
   await client.opened
   client.send({ type: 'pair', code: store.startPairing().code, name: 'phone' })
   const { token } = await client.next()
@@ -304,6 +305,89 @@ describe('createAccessServer', () => {
       await client.closed
       setTimer.mockRestore()
       clearTimer.mockRestore()
+    }
+  })
+
+  it('clears the parked shell timer when its socket closes', async () => {
+    context = setup()
+    await context.server.start('127.0.0.1', PORT)
+    const client = await signedIn(context)
+    client.send({ type: 'open', requestId: 'q1', sessionId: 's1' })
+    const { shellId } = await client.next()
+    await client.next() // Early shell output
+    const setTimer = vi.spyOn(globalThis, 'setTimeout')
+    const clearTimer = vi.spyOn(globalThis, 'clearTimeout')
+
+    try {
+      client.send({ type: 'shell-visible', shellId, visible: false })
+      client.send({ type: 'probe' })
+      expect(await client.next()).toEqual({ type: 'probe' })
+      const timerIndex = setTimer.mock.calls.findIndex(([, delay]) => delay === 600_000)
+      expect(timerIndex).toBeGreaterThanOrEqual(0)
+      const timer = setTimer.mock.results[timerIndex].value
+      expect(clearTimer).not.toHaveBeenCalledWith(timer)
+
+      client.socket.close()
+      await client.closed
+      await vi.waitFor(() => expect(clearTimer).toHaveBeenCalledWith(timer))
+      expect(context.shells.closeAll).toHaveBeenCalledWith(context.opened[0].owner)
+    } finally {
+      setTimer.mockRestore()
+      clearTimer.mockRestore()
+    }
+  })
+
+  it('pings before sign-in and terminates a socket that does not pong by the next tick', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      context = setup()
+      await context.server.start('127.0.0.1', PORT)
+      const client = connect({ autoPong: false })
+      await client.opened
+      const ping = vi.fn()
+      client.socket.on('ping', ping)
+      vi.advanceTimersByTime(29_999)
+      expect(ping).not.toHaveBeenCalled()
+      const firstPing = once(client.socket, 'ping')
+      vi.advanceTimersByTime(1)
+      await firstPing
+      expect(ping).toHaveBeenCalledOnce()
+      vi.advanceTimersByTime(30_000)
+      await client.closed
+      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(0))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps a socket that pongs, then reclaims its shell and device slot if it stops answering', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      context = setup()
+      await context.server.start('127.0.0.1', PORT)
+      const client = await signedIn(context, { autoPong: false })
+      client.send({ type: 'open', requestId: 'q1', sessionId: 's1' })
+      expect(await client.next()).toMatchObject({ type: 'opened' })
+      await client.next() // Early shell output
+
+      const firstPing = once(client.socket, 'ping')
+      vi.advanceTimersByTime(30_000)
+      const [payload] = await firstPing
+      client.socket.pong(payload)
+      client.send({ type: 'probe' })
+      expect(await client.next()).toEqual({ type: 'probe' })
+      const secondPing = once(client.socket, 'ping')
+      vi.advanceTimersByTime(30_000)
+      await secondPing
+      expect(context.server.connected()).toHaveLength(1)
+      expect(context.shells.closeAll).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(30_000)
+      await client.closed
+      await vi.waitFor(() => expect(context.shells.closeAll).toHaveBeenCalledWith(context.opened[0].owner))
+      expect(context.server.connected()).toEqual([])
+    } finally {
+      vi.useRealTimers()
     }
   })
 

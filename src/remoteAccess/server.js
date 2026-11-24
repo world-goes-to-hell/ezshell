@@ -22,6 +22,7 @@ const MAX_WAITING_PER_ADDRESS = 3
 const SIGN_IN_MS = 60 * 1000
 /** A signed-in connection without any input is dropped after this */
 const IDLE_MS = 15 * 60 * 1000
+const SOCKET_PING_MS = 30 * 1000
 const MAX_MESSAGE_BYTES = 64 * 1024
 /** Failed registrations and sign-ins: a connection is dropped at the first limit, its address refused at the second */
 const MAX_FAILURES_PER_CONNECTION = 5
@@ -312,7 +313,18 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
     clients.add(client)
     arm(SIGN_IN_MS)
 
+    // WebSocket control frames check the transport without extending sign-in or idle time.
+    let awaitingPong = false
+    socket.on('pong', () => { awaitingPong = false })
+    const heartbeat = setInterval(() => {
+      if (socket.readyState !== socket.OPEN) return
+      if (awaitingPong) return socket.terminate()
+      awaitingPong = true
+      socket.ping()
+    }, SOCKET_PING_MS).unref()
+
     socket.on('close', () => {
+      clearInterval(heartbeat)
       clearTimeout(client.timer)
       clients.delete(client)
       for (const timer of parkedShells.values()) clearTimeout(timer)
