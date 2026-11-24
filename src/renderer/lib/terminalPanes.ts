@@ -12,6 +12,12 @@ export function registerTerminalPane(element: Element, terminal: Terminal): () =
   }
 }
 
+/** The terminal drawn inside `root` (a split pane's wrapper), if one is registered there */
+export function terminalWithin(root: Element): Terminal | null {
+  for (const [element, terminal] of panes) if (root.contains(element)) return terminal
+  return null
+}
+
 /** The terminal drawn in the element or in one of its ancestors */
 export function terminalPaneAt(target: EventTarget | null): Terminal | null {
   let element = target instanceof Element ? target : null

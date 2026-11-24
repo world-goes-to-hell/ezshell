@@ -53,6 +53,7 @@ import { focusTabPane } from './lib/paneFocus'
 import { MAIN_PANE, paneIds } from './lib/splitTree'
 import type { LocalDevelopmentTask } from './types'
 import { useTabGroups } from './hooks/useTabGroups'
+import { useTabStripScroll } from './hooks/useTabStripScroll'
 import { addScreenRefusal, dragDivider, evenSizes } from './lib/screenPanes'
 import { TabGroupChips } from './components/Terminal/TabGroupChips'
 import { agentKindsByShell, agentsOfLocalTab, openLocalWithAgents } from './lib/restoreAgents'
@@ -379,6 +380,8 @@ function App() {
     moveTerminalBetweenPanes,
     setPaneSizes
   } = useTerminalStore()
+  // The single tab strip scrolls sideways when its tabs do not fit (design review D5)
+  const tabStripRef = useTabStripScroll(activeTerminalId)
   // The tab strip shows one work at a time (hooks/useTabGroups.ts)
   const groupView = useTabGroups()
   const shownTabs = new Set(groupView.shownIds)
@@ -1560,7 +1563,7 @@ function App() {
               {layout.mode !== 'split' && (
                 <div className="terminal-tabs terminal-tab-header">
                   {workSelector}
-                  <div className="terminal-tab-items" role="group" aria-label="열린 탭">
+                  <div ref={tabStripRef} className="terminal-tab-items" role="group" aria-label="열린 탭">
                     <AnimatePresence initial={false} mode="popLayout">
                       {terminalArray.filter(([sessionId]) => shownTabs.has(sessionId)).map(([sessionId, terminal]) => (
                         <motion.div
@@ -1597,7 +1600,7 @@ function App() {
                           {terminal.db && <RiDatabase2Line size={13} className="tab-db-icon" aria-label="DB" />}
                           {terminal.local && <RiComputerLine size={13} className="tab-local-icon" aria-label="로컬" />}
                           {terminal.browser && <RiGlobalLine size={13} className="tab-local-icon" aria-hidden />}
-                          <span data-tab-label title={terminal.browser ? terminal.title : undefined}>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
+                          <span data-tab-label title={terminal.title || `${terminal.username}@${terminal.host}`}>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
                           {terminal.local?.cwd && <TabWorktreeBadge cwd={terminal.local.cwd} worktree={groupView.worktreeForFolder(terminal.local.cwd)} />}
                           {terminal.local && <AgentTabMessages tabId={sessionId} />}
                           {sessionId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[sessionId]}`} />}
@@ -1612,6 +1615,9 @@ function App() {
                         </motion.div>
                       ))}
                     </AnimatePresence>
+                  </div>
+                  {/* Outside the strip that scrolls: always in reach however many tabs are open */}
+                  <div className="terminal-tab-add">
                     <NewTabMenu
                       duplicateLabel={activeDuplicateLabel}
                       onDuplicate={() => void handleDuplicateTab(activeTerminalId)}

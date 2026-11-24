@@ -24,19 +24,53 @@
   padding: 0;
 }
 
+/*
+ * The tabs scroll sideways when they do not fit (design review D5: past the width they and the + button
+ * were cut off). The wheel moves them (hooks/useTabStripScroll.ts), the ends that hide tabs fade, and the
+ * + button sits outside the strip. The worktree badge sticks 4px above a tab: it stays inside the top
+ * padding, which a scrolling box does not clip.
+ */
 .terminal-tab-items {
+  /* The containing block of a closing tab: AnimatePresence's popLayout lifts it out with position:absolute,
+     and against another ancestor it jumped to a wrong x once the strip was scrolled */
+  position: relative;
   display: flex;
-  flex: 1;
+  flex: 0 1 auto;
   align-items: center;
   gap: 2px;
   min-width: 0;
   padding: 8px 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.terminal-tab-items::-webkit-scrollbar { display: none; }
+
+.terminal-tab-items[data-overflow-start] {
+  mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+.terminal-tab-items[data-overflow-end] {
+  mask-image: linear-gradient(to left, transparent, #000 28px);
+}
+.terminal-tab-items[data-overflow-start][data-overflow-end] {
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+
+.terminal-tab-add {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding: 8px 8px 0 2px;
 }
 
 .terminal-tab {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   padding: 8px 12px;
   background: transparent;
   border: none;
@@ -59,19 +93,22 @@
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
+/* A long session name ends in "…" instead of pushing the strip (the full name is in the tooltip) */
+.terminal-tab:not([data-browser-tab]) { max-width: 200px; }
+
 :is(.terminal-tab, .split-pane-tab-item)[data-browser-tab] {
   max-width: var(--browser-tab-max-width, 240px);
   min-width: 0;
 }
 
-[data-browser-tab] > [data-tab-label] {
+:is(.terminal-tab, [data-browser-tab]) > [data-tab-label] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-[data-browser-tab] > :is(svg, .tab-close, .split-pane-tab-close) { flex-shrink: 0; }
+:is(.terminal-tab, [data-browser-tab]) > :not([data-tab-label], .tab-worktree-badge) { flex-shrink: 0; }
 
 .terminal-tab:has(> .tab-worktree-badge),
 .split-pane-tab-item:has(> .tab-worktree-badge) {

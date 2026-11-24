@@ -21,6 +21,9 @@ export function tabHost(tabId: string): HTMLDivElement {
   return host
 }
 
+/** The tab's node if it has one already (does not make one) */
+export const existingTabHost = (tabId: string): HTMLDivElement | undefined => hosts.get(tabId)
+
 /** A regular layout change can replace the slot while a live preview has the host. */
 export function placeTabHost(tabId: string, slot: HTMLDivElement): void {
   slots.set(tabId, slot)

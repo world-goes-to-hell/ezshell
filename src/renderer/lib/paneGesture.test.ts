@@ -5,6 +5,8 @@ import { adoptLocalPaneShell, releaseLocalPaneShell } from './localPaneShells'
 import { commitPaneGesture, type PaneGestureAction } from './paneGesture'
 import { closeTabPane, mergePanes } from './paneToTab'
 import { MAIN_PANE, paneId, paneIds, singlePane } from './splitTree'
+import { useAgentMessagesStore } from '../components/Terminal/AgentMessages'
+import type { AgentMessageSession } from '../types'
 
 vi.mock('./paneToTab', () => ({ mergePanes: vi.fn(), closeTabPane: vi.fn() }))
 
@@ -34,6 +36,7 @@ function prepareMerge() {
 describe('Alt+drag session confirmation', () => {
   beforeEach(() => {
     useTerminalStore.setState(useTerminalStore.getInitialState())
+    useAgentMessagesStore.setState({ snapshot: { revision: -1, agents: [], messages: [] } })
     query.mockReset().mockResolvedValue(false)
     vi.mocked(mergePanes).mockReset().mockResolvedValue({ ok: true, sessionId: tabId })
     vi.mocked(closeTabPane).mockReset().mockResolvedValue({ ok: true, sessionId: tabId })
@@ -156,6 +159,34 @@ describe('Alt+drag session confirmation', () => {
     answer(false)
     await pending
     expect(closeTabPane).not.toHaveBeenCalled()
+  })
+
+  it('asks before closing a pane whose shell runs an idle agent (design review D9)', async () => {
+    prepareMerge()
+    useAgentMessagesStore.setState({ snapshot: { revision: 1, agents: [{ id: 'claude-1', kind: 'claude', active: true, shellId: 'local:adopted' } as AgentMessageSession], messages: [] } })
+    const pending = commitPaneGesture(tabId, other, close, visible)
+    await vi.waitFor(() => expect(question()?.message).toBe('이 칸에서 Claude 세션이 실행 중입니다. 칸을 닫으면 셸과 그 안의 프로그램이 함께 종료됩니다. 닫을까요?'))
+    expect(question()?.danger).toBe(true)
+    answer(true)
+    await pending
+    expect(closeTabPane).toHaveBeenCalledWith(tabId, other)
+  })
+
+  it('a merge asks about the pane it closes (dragged onto), not the one it keeps', async () => {
+    prepareMerge()
+    // The agent is in the pane the drag starts from: it stays
+    useAgentMessagesStore.setState({ snapshot: { revision: 1, agents: [{ id: 'claude-1', kind: 'claude', active: true, shellId: 'local:adopted' } as AgentMessageSession], messages: [] } })
+    await commitPaneGesture(tabId, other, merge, visible)
+    expect(question()).toBeNull()
+    expect(mergePanes).toHaveBeenCalledWith(tabId, other, MAIN_PANE)
+
+    vi.mocked(mergePanes).mockClear()
+    useAgentMessagesStore.setState({ snapshot: { revision: 2, agents: [{ id: 'codex-1', kind: 'codex', active: true, shellId: 'local:promoted' } as AgentMessageSession], messages: [] } })
+    const pending = commitPaneGesture(tabId, other, merge, visible)
+    await vi.waitFor(() => expect(question()?.message).toContain('Codex 세션이 실행 중입니다'))
+    answer(false)
+    await pending
+    expect(mergePanes).not.toHaveBeenCalled()
   })
 
   it('leaves an SSH split independent of local activity', async () => {

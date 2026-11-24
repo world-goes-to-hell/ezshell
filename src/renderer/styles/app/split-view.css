@@ -291,19 +291,34 @@
 }
 
 /* Split Pane Multi-Tab Support */
+/*
+ * Scrolls sideways when the tabs do not fit (hooks/useTabStripScroll.ts: wheel, active tab in sight,
+ * edge fades); the + menu follows the strip outside it, the actions keep the right end
+ */
 .split-pane-tabs {
   display: flex;
   align-items: center;
   gap: 2px;
-  flex: 1;
+  flex: 0 1 auto;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
+  overscroll-behavior-x: contain;
   min-width: 0;
 }
 
 .split-pane-tabs::-webkit-scrollbar {
   display: none;
 }
+
+.split-pane-tabs[data-overflow-start] { mask-image: linear-gradient(to right, transparent, #000 24px); }
+.split-pane-tabs[data-overflow-end] { mask-image: linear-gradient(to left, transparent, #000 24px); }
+.split-pane-tabs[data-overflow-start][data-overflow-end] {
+  mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+}
+
+.split-pane-header > .new-tab-btn { flex: none; }
+.split-pane-header > .split-pane-actions { margin-left: auto; }
 
 .split-pane-tabs:has(.tab-worktree-badge) { padding-block-start: 4px; }
 .split-pane-tabs:has(.tab-worktree-badge) .split-pane-tab-item { padding-block-start: 10px; }
@@ -319,6 +334,7 @@
   font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
+  flex: none;
   max-width: 150px;
   min-width: 0;
   transition: all var(--transition-fast);

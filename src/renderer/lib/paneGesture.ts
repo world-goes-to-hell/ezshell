@@ -1,8 +1,12 @@
 import { confirmDialog } from '../stores/confirmStore'
 import { useTerminalStore } from '../stores/terminalStore'
+import { useAgentMessagesStore } from '../components/Terminal/AgentMessages'
 import { getLocalPaneShellId } from './localPaneShells'
+import { paneCloseMessage, paneCloseRisk } from './paneCloseRisk'
 import { closeTabPane, mergePanes } from './paneToTab'
 import type { PaneId, Rect, SplitAxis } from './splitTree'
+import { existingTabHost } from './tabHosts'
+import { terminalWithin } from './terminalPanes'
 
 export type PaneGestureAction =
   | { kind: 'merge'; to: PaneId; expanded: Rect }
@@ -12,6 +16,28 @@ export type PaneGestureAction =
 
 const OPERATIONS = { merge: '병합', split: '분할', close: '닫기' } as const
 const QUESTIONS = { merge: '병합하시겠습니까', split: '분할하시겠습니까', close: '닫으시겠습니까' } as const
+
+/**
+ * Why closing `pane` needs a question (lib/paneCloseRisk.ts), or null. Its screen is read where it is
+ * drawn; a pane not found (not drawn yet) is not asked about.
+ */
+function closingPaneRisk(tabId: string, pane: PaneId): string | null {
+  const wrapper = existingTabHost(tabId)?.querySelector(`[data-pane="${pane.replace(/["\\]/g, '')}"]`)
+  const terminal = wrapper ? terminalWithin(wrapper) : null
+  const shellId = getLocalPaneShellId(tabId, pane)
+  const agent = shellId ? useAgentMessagesStore.getState().snapshot.agents.find(entry => entry.active && entry.shellId === shellId)?.kind : undefined
+  if (!terminal) return agent ? paneCloseRisk({ agent, alternate: false, cursorLine: '' }) : null
+  const buffer = terminal.buffer.active
+  // The cursor's line up to the cursor (a prompt's blank may be unwritten: ConPTY moves the cursor past
+  // it), with the rows it wraps from in front (a long prompt and command take several rows)
+  let row = buffer.baseY + buffer.cursorY
+  let line = buffer.getLine(row)?.translateToString(false, 0, buffer.cursorX) ?? ''
+  for (let rows = 0; rows < 20 && row > 0 && buffer.getLine(row)?.isWrapped; rows++) {
+    row -= 1
+    line = (buffer.getLine(row)?.translateToString(true) ?? '') + line
+  }
+  return paneCloseRisk({ agent, alternate: buffer.type === 'alternate', cursorLine: line })
+}
 
 /** Commits the Alt+drag after checking the actual shells of its source and destination. */
 export async function commitPaneGesture(tabId: string, from: PaneId, action: PaneGestureAction, isVisible: () => boolean) {
@@ -29,9 +55,9 @@ export async function commitPaneGesture(tabId: string, from: PaneId, action: Pan
   }
 
   const hasWorkingAgent = workingShellCandidates.length ? window.electronAPI.localShellHasWorkingAgent : undefined
+  const operation = OPERATIONS[action.kind]
   if (hasWorkingAgent && await hasWorkingAgent(workingShellCandidates)) {
     if (!isCurrent()) return
-    const operation = OPERATIONS[action.kind]
     const confirmed = await confirmDialog({
       title: `터미널 ${operation}`,
       message: `작업 중인 터미널이 있습니다. 정말 ${QUESTIONS[action.kind]}?`,
@@ -40,6 +66,21 @@ export async function commitPaneGesture(tabId: string, from: PaneId, action: Pan
       danger: action.kind !== 'split'
     })
     if (!confirmed) return
+  } else {
+    // A merge closes the pane dragged onto, a scribble its own pane: SSH panes and programs other than a
+    // working agent (tail -f, vim, an idle agent) are asked about too (design review D9)
+    const closing = action.kind === 'merge' ? action.to : action.kind === 'close' ? from : null
+    const risk = closing ? closingPaneRisk(tabId, closing) : null
+    if (risk) {
+      const confirmed = await confirmDialog({
+        title: `터미널 ${operation}`,
+        message: paneCloseMessage(risk),
+        confirmLabel: '칸 닫기',
+        cancelLabel: '취소',
+        danger: true
+      })
+      if (!confirmed) return
+    }
   }
 
   if (!isCurrent()) return

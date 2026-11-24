@@ -6,6 +6,7 @@ import { useSessionLogStore } from '../../stores/sessionLogStore'
 import { readableTextColor } from '../../lib/colorContrast'
 import type { WorktreeNode } from '../Sidebar/LocalProjectsTree'
 import { TabWorktreeBadge } from './TabWorktreeBadge'
+import { useTabStripScroll } from '../../hooks/useTabStripScroll'
 
 interface SplitPaneTabBarProps {
   paneType: 'primary' | 'secondary'
@@ -50,6 +51,8 @@ export function SplitPaneTabBar({
   // 활성 탭의 색상으로 header border 표시 (활성 패인일 때만)
   const activeTerminal = activeTerminalId ? terminals.get(activeTerminalId) : null
   const headerBorderColor = isActivePane && activeTerminal?.color ? activeTerminal.color : undefined
+  // The tabs scroll sideways when they do not fit; the + menu stays outside the scrolling strip
+  const stripRef = useTabStripScroll(activeTerminalId)
 
   return (
     <div
@@ -58,7 +61,7 @@ export function SplitPaneTabBar({
       style={headerBorderColor ? { borderBottomColor: headerBorderColor } : undefined}
     >
       {workSelector}
-      <div className="split-pane-tabs">
+      <div ref={stripRef} className="split-pane-tabs">
         {terminalIds.map(terminalId => {
           const terminal = terminals.get(terminalId)
           if (!terminal) return null
@@ -119,8 +122,8 @@ export function SplitPaneTabBar({
             </div>
           )
         })}
-        {newTabMenu}
       </div>
+      {newTabMenu}
 
       <div className="split-pane-actions">
         {/* SFTP toggle */}

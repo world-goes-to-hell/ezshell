@@ -37,6 +37,7 @@ import { isTabHostPreviewed } from '../../lib/tabHosts'
 import { focusPaneInput } from '../../lib/paneFocus'
 import { answerableAskItem, askTakenToTerminal } from '../../lib/askQuestion'
 import { hasTypedInput } from '../../lib/terminalReplies'
+import { registerTerminalPane } from '../../lib/terminalPanes'
 import { useAskQuestionStore } from '../../stores/askQuestionStore'
 import './LocalTerminalTab.css'
 
@@ -165,6 +166,8 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     const addon = new FitAddon()
     terminal.loadAddon(addon)
     terminal.open(host)
+    // Found by its pane (lib/terminalPanes.ts): an Alt+drag that closes the pane reads its screen first
+    const unregisterPane = registerTerminalPane(host, terminal)
     attachTerminalWebLinks(terminal)
     terminalRef.current = terminal
     fitRef.current = addon
@@ -316,6 +319,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       disableCopyOnSelect()
       logHighlight.dispose()
       detachCommandHistory()
+      unregisterPane()
       terminal.dispose()
       terminalRef.current = null
       fitRef.current = null
