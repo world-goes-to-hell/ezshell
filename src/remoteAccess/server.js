@@ -115,16 +115,19 @@ const STATIC = {
   '/agents.css': ['agents.css', 'text/css; charset=utf-8'],
   '/sw.js': ['sw.js', 'text/javascript; charset=utf-8']
 }
-// The terminal library: [file in web/vendor (copied there by the build), the package file it comes from, type]
+// Shared assets: [file copied to web/vendor by the build, source fallback, type]
 const VENDOR = {
+  '/app-icon.svg': ['app-icon.svg', '../renderer/assets/app-icon.svg', 'image/svg+xml'],
+  '/vendor/PretendardVariable.woff2': ['PretendardVariable.woff2', '../renderer/assets/fonts/PretendardVariable.woff2', 'font/woff2'],
+  '/vendor/title-bar.css': ['title-bar.css', '../renderer/styles/app/title-bar.css', 'text/css; charset=utf-8'],
+  '/vendor/terminal-tabs.css': ['terminal-tabs.css', '../renderer/styles/app/terminal-tabs.css', 'text/css; charset=utf-8'],
   '/vendor/xterm.js': ['xterm.js', 'xterm/lib/xterm.js', 'text/javascript; charset=utf-8'],
   '/vendor/xterm.css': ['xterm.css', 'xterm/css/xterm.css', 'text/css; charset=utf-8'],
   '/vendor/xterm-addon-fit.js': ['xterm-addon-fit.js', 'xterm-addon-fit/lib/xterm-addon-fit.js', 'text/javascript; charset=utf-8']
 }
 
 /**
- * Where a vendor file is: next to the page in a built app; in node_modules when running from the
- * source tree (tests). The packaged app has no node_modules/xterm, so the copy is looked for first.
+ * The built app serves copies beside the page. Tests from the source tree use the original files.
  */
 function vendorPath(webDir, [name, source]) {
   const copied = path.join(webDir, 'vendor', name)

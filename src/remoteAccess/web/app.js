@@ -12,43 +12,86 @@
   const TABBED = new Set(['sessions', 'tabs', 'activity', 'agents', 'chat'])
   const AGENT_VIEWS = new Set(['agents', 'chat'])
   const PC_TAB_VIEWS = new Set(['tabs', 'tab-terminal'])
+  const workspaceWidth = window.matchMedia('(min-width: 45rem)')
+  const workspaceLists = { terminal: 'sessions', 'tab-terminal': 'tabs', chat: 'agents' }
+  const workspaceHints = {
+    sessions: '목록에서 열 세션을 선택하세요.',
+    tabs: '이어서 볼 PC 탭을 선택하세요.',
+    agents: '대화를 열 에이전트를 선택하세요.'
+  }
   const THEME_VARIABLES = [
     '--bg', '--panel', '--line', '--text', '--muted', '--accent', '--on-accent',
     '--focus', '--error', '--danger', '--radius', '--panel-radius', '--font', '--scheme'
   ]
   let currentView = null
+  let tabsEnabled = false
+  let agentsEnabled = false
+  const inWorkspace = () => workspaceWidth.matches && (TABBED.has(currentView) || currentView === 'terminal' || currentView === 'tab-terminal')
+
+  function layout() {
+    const workspace = inWorkspace()
+    document.body.toggleAttribute('data-workspace', workspace)
+    views.forEach(view => { $(`view-${view}`).hidden = view !== currentView })
+    if (workspace) {
+      $('view-sessions').hidden = false
+      $('view-agents').hidden = !agentsEnabled
+      $('view-tabs').hidden = !tabsEnabled
+    }
+    $('workspace-header').hidden = !workspace
+    $('workspace-status').hidden = !workspace
+    $('workspace-activity').setAttribute('aria-pressed', String(currentView === 'activity'))
+    const active = $('workspace-current')
+    for (const [name, bar] of workspaceBars) {
+      const parent = workspace && name === currentView ? active : $(`view-${name}`)
+      if (bar.parentElement !== parent) parent.prepend(bar)
+    }
+    agents?.layout(workspace)
+    active.hidden = !active.childElementCount
+    const hint = workspace && workspaceHints[currentView]
+    $('workspace-empty').hidden = !hint
+    if (hint) $('workspace-empty-title').textContent = hint
+    $('tabs').hidden = workspace || !TABBED.has(currentView)
+    const selected = workspaceLists[currentView] ?? currentView
+    for (const tab of $('tabs').querySelectorAll('button')) {
+      if (tab.dataset.view === selected) tab.setAttribute('aria-current', 'page')
+      else tab.removeAttribute('aria-current')
+    }
+  }
+
+  function syncAgentList() {
+    if (agentsEnabled && (inWorkspace() || AGENT_VIEWS.has(currentView))) agents?.enter()
+    else agents?.leave()
+  }
+
   const show = (name) => {
     if (name === currentView) return
     const previous = currentView
     currentView = name
     if (previous === 'sessions') $('pc-tabs-status').hidden = true
-    views.forEach((view) => { $(`view-${view}`).hidden = view !== name })
-    $('tabs').hidden = !TABBED.has(name)
-    const selected = name === 'chat' ? 'agents' : name
-    for (const tab of $('tabs').querySelectorAll('button')) {
-      if (tab.dataset.view === selected) tab.setAttribute('aria-current', 'page')
-      else tab.removeAttribute('aria-current')
-    }
+    layout()
     if (previous === 'activity') activity.leave()
+    if (previous === 'terminal') closeTerminal()
     if (previous === 'tab-terminal') {
       pcTabs.detach()
       setCtrl(false)
     }
-    if (AGENT_VIEWS.has(previous) && !AGENT_VIEWS.has(name)) agents?.leave()
+    if (previous === 'chat' && name !== 'chat') agents?.closeChat()
+    syncAgentList()
     if (name === 'terminal' || name === 'tab-terminal') {
       $(`view-${name}`).append($('keys'))
       setKeysVisible(name === 'terminal')
     }
     if (name === 'activity') activity.enter()
     if (name === 'tabs') pcTabs.enter()
-    if (AGENT_VIEWS.has(name) && !AGENT_VIEWS.has(previous)) agents?.enter()
   }
 
   let socket = null
   let terminal = null
   let fit = null
   let shellId = null
+  let selectedSession = null
   let pendingOpen = null
+  let openSequence = 0
   let isCtrlArmed = false
   let wasReady = false
   const CONNECT_FAILED = 'PC 의 ezShell 에 연결하지 못했습니다. ezShell 이 켜져 있고 잠금이 풀려 있는지, 원격 접속이 켜져 있는지, 이 휴대폰의 Tailscale 이 연결되어 있는지 확인하세요.'
@@ -101,9 +144,11 @@
   const pcTabs = ez.createTabs({
     list: $('pc-tabs-list'), name: $('pc-tab-name'), notice: $('pc-tab-notice'), mode: $('pc-tab-mode'),
     viewport: $('pc-tab-viewport'), host: $('pc-tab-host'), send, show,
-    createTerminal, onData: sendTerminalInput, setKeysVisible
+    createTerminal, onData: sendTerminalInput, setKeysVisible, onClose: () => show('tabs')
   })
   const agents = ez.createAgents?.({ list: $('view-agents'), chat: $('view-chat'), send, show })
+  const workspaceBars = ['terminal', 'chat', 'activity'].map(name => [name, $(`view-${name}`).querySelector('.bar')])
+    .filter(([, bar]) => bar)
 
   function message(text, { canRetry = false } = {}) {
     $('message-text').textContent = text
@@ -118,6 +163,7 @@
   }
 
   function setPcTabsEnabled(enabled, reason = 'PC에서 탭 이어 보기를 껐습니다.') {
+    tabsEnabled = enabled
     $('tabs').querySelector('[data-view="tabs"]').hidden = !enabled
     const status = $('pc-tabs-status')
     if (enabled) {
@@ -134,8 +180,14 @@
   }
 
   function updateFeatures(features) {
+    agentsEnabled = Boolean(agents && features?.agents === true)
+    const showNewTabs = !tabsEnabled && features?.tabs === true
     setPcTabsEnabled(features?.tabs === true)
-    $('tabs').querySelector('[data-view="agents"]').hidden = !agents || features?.agents !== true
+    $('tabs').querySelector('[data-view="agents"]').hidden = !agentsEnabled
+    if (!agentsEnabled && AGENT_VIEWS.has(currentView)) show('sessions')
+    layout()
+    if (showNewTabs && inWorkspace()) pcTabs.enter()
+    syncAgentList()
   }
 
   function terminalColors(style) {
@@ -217,8 +269,11 @@
       case 'ready':
         wasReady = true
         $('device-name').textContent = msg.device
+        $('workspace-device').textContent = msg.device
         applyTheme(msg.theme)
         tree.update(msg.folders, msg.sessions)
+        tabsEnabled = false
+        agentsEnabled = false
         show('sessions')
         updateFeatures(msg.features)
         for (const request of Array.isArray(msg.approvals) ? msg.approvals : []) approvals.add(request)
@@ -258,8 +313,10 @@
         activity.stopResult(msg)
         break
       case 'tabs':
-        if (typeof msg.error === 'string' && msg.error) setPcTabsEnabled(false, msg.error)
-        else pcTabs.onMessage(msg)
+        if (typeof msg.error === 'string' && msg.error) {
+          setPcTabsEnabled(false, msg.error)
+          layout()
+        } else pcTabs.onMessage(msg)
         break
       case 'tab-attached':
       case 'tab-data':
@@ -288,7 +345,7 @@
           $('terminal-state').textContent = ''
           fitTerminal()
           terminal.focus()
-        }
+        } else if (msg.shellId !== shellId) send({ type: 'close', shellId: msg.shellId })
         break
       case 'open-failed':
         if (pendingOpen && msg.requestId === pendingOpen) {
@@ -324,6 +381,7 @@
     if (tab.dataset.view === 'sessions') send({ type: 'sessions' })
   })
   $('sessions-refresh').addEventListener('click', () => send({ type: 'sessions' }))
+  $('workspace-activity').addEventListener('click', () => show(currentView === 'activity' ? 'sessions' : 'activity'))
   $('pc-tabs-refresh').addEventListener('click', () => pcTabs.enter())
   $('pc-tab-back').addEventListener('click', () => show('tabs'))
 
@@ -339,6 +397,13 @@
   }
 
   function openTerminal(session) {
+    if (selectedSession === session.id && (shellId || pendingOpen)) {
+      terminal?.focus()
+      return
+    }
+    closeTerminal()
+    selectedSession = session.id
+    tree.select(selectedSession)
     $('terminal-name').textContent = session.name
     $('terminal-state').textContent = '접속 중…'
     show('terminal')
@@ -352,7 +417,7 @@
       // Sized again once the shell is open
     }
     terminal.onData((data) => { if (shellId) sendTerminalInput(data) })
-    pendingOpen = `q${Date.now()}`
+    pendingOpen = `q${++openSequence}`
     send({ type: 'open', requestId: pendingOpen, sessionId: session.id, cols: terminal.cols, rows: terminal.rows })
   }
 
@@ -368,6 +433,8 @@
   function closeTerminal() {
     if (shellId) send({ type: 'close', shellId })
     shellId = null
+    selectedSession = null
+    tree.select(null)
     pendingOpen = null
     setCtrl(false)
     if (terminal) terminal.dispose()
@@ -415,11 +482,16 @@
   $('keys').addEventListener('mousedown', (event) => event.preventDefault())
 
   $('terminal-back').addEventListener('click', () => {
-    closeTerminal()
     show('sessions')
     send({ type: 'sessions' })
   })
   window.addEventListener('resize', fitTerminal)
+  workspaceWidth.addEventListener('change', () => {
+    layout()
+    syncAgentList()
+    if (inWorkspace() && tabsEnabled) pcTabs.enter()
+    fitTerminal()
+  })
   if (window.visualViewport) window.visualViewport.addEventListener('resize', fitTerminal)
 
   // ---- Start ----

@@ -51,6 +51,8 @@
 .remote-chat-title { font-size: 16px; }
 .remote-chat-stop { min-height: 44px; padding: 6px 10px; color: var(--error); }
 .remote-chat-meta { padding-inline: 8px; color: var(--muted); font-size: 13px; }
+.remote-chat-pane-title { display: none; }
+.remote-chat-meta .remote-chat-stop { margin-inline-start: auto; }
 
 .remote-chat-scroll {
   min-width: 0;
@@ -193,3 +195,140 @@
 }
 
 .remote-chat-send { flex: none; padding-inline: 12px; }
+
+body[data-workspace] .remote-agent-card {
+  margin-bottom: 2px;
+  border-color: transparent;
+  background: transparent;
+}
+
+body[data-workspace] .remote-agent-card[aria-current="true"] { background: var(--workspace-selected); }
+body[data-workspace] .remote-agent-card-head { align-items: center; justify-content: start; gap: 6px; }
+body[data-workspace] .remote-agent-card-head .terminal-glyph { color: var(--accent-ink); }
+body[data-workspace] .remote-agent-card-head .remote-agent-status { margin-inline-start: auto; font-size: 11px; }
+body[data-workspace] .remote-agent-card-meta { padding-inline-start: 21px; font-size: 11px; }
+body[data-workspace] .remote-agent-card-meta .remote-agent-kind {
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+  background: var(--bg);
+}
+body[data-workspace] .remote-agent-status { display: inline-flex; align-items: center; gap: 4px; }
+
+body[data-workspace] .remote-agent-status::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+body[data-workspace] .remote-chat-view { --chat-frame-line: var(--line); gap: 0; }
+body[data-workspace] .remote-chat-view:has(.remote-chat-form:focus-within) { --chat-frame-line: var(--focus); }
+
+body[data-workspace] .remote-chat-meta {
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin: 8px 8px 0;
+  padding: 4px 10px;
+  border: 1px solid var(--chat-frame-line);
+  border-bottom-color: var(--line);
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  background: var(--panel);
+}
+
+body[data-workspace] .remote-chat-meta .remote-agent-kind {
+  padding: 1px 7px;
+  border-radius: var(--radius-xs);
+  background: var(--workspace-selected);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+body[data-workspace] .remote-chat-meta .remote-agent-kind[data-kind='claude']::before {
+  content: '✳';
+  margin-inline-end: 4px;
+  color: var(--warning-ink);
+}
+body[data-workspace] .remote-chat-pane-title {
+  display: block;
+  margin-inline-start: 6px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body[data-workspace] .remote-chat-stop {
+  flex: none;
+  min-height: 30px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+body[data-workspace] .remote-chat-scroll {
+  margin-inline: 8px;
+  padding: 8px 10px;
+  border-inline: 1px solid var(--chat-frame-line);
+}
+
+body[data-workspace] .remote-chat-user {
+  max-width: 82%;
+  padding: 6px 9px;
+  border-color: transparent;
+  border-radius: var(--radius-sm);
+  background: var(--workspace-selected);
+}
+
+body[data-workspace] :is(.remote-chat-turns, .remote-chat-composer, .remote-chat-note) {
+  font-size: 13px;
+}
+
+body[data-workspace] .remote-chat-older {
+  min-height: 32px;
+  width: 100%;
+  padding-inline: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--muted);
+  text-align: start;
+}
+
+body[data-workspace] .remote-chat-form {
+  margin: 0 8px 8px;
+  padding: 8px;
+  border: 1px solid var(--chat-frame-line);
+  border-top-color: var(--line);
+  border-radius: 0 0 var(--radius-xs) var(--radius-xs);
+  background: var(--panel);
+}
+
+body[data-workspace] .remote-chat-input {
+  min-height: 36px;
+  padding: 7px 9px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-size: 13px;
+  field-sizing: content;
+}
+body[data-workspace] .remote-chat-input:focus-visible { outline: none; border-color: var(--focus); }
+body[data-workspace] .remote-chat-send {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  min-height: 36px;
+  padding: 0;
+}
+body[data-workspace] .send-glyph {
+  display: block;
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+body[data-workspace] .remote-chat-approval {
+  width: min(calc(100% - 32px), 52rem);
+  margin: 4px auto 8px;
+}

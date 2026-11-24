@@ -98,24 +98,30 @@
 
     chat.classList.add('remote-chat-view')
     const listBar = el('header', 'bar')
-    listBar.append(el('strong', '', '에이전트'))
+    const listHeading = el('strong', '')
+    listHeading.append(el('span', 'compact-heading', '에이전트'), el('span', 'workspace-heading', '로컬 작업'))
+    listBar.append(listHeading)
     const cards = el('div', 'list remote-agent-cards')
     list.replaceChildren(listBar, cards)
 
     const chatBar = el('header', 'bar remote-chat-bar')
-    const back = button('‹ 목록', 'ghost', () => {
-      closeChat()
+    const back = button('', 'ghost workspace-return', () => {
       show('agents')
       cards.querySelector('button')?.focus({ preventScroll: true })
     })
+    const closeMark = el('span', '', '×')
+    closeMark.setAttribute('aria-hidden', 'true')
+    back.append(el('span', '', '‹ 목록'), closeMark)
     back.setAttribute('aria-label', '에이전트 목록으로')
     const title = el('strong', 'remote-chat-title')
     const stop = button('중지', 'remote-chat-stop', interrupt)
-    chatBar.append(back, title, stop)
+    chatBar.append(back, title)
     const meta = el('div', 'remote-chat-meta')
     const provider = el('span', 'remote-agent-kind')
     const status = el('span', 'remote-agent-status')
-    meta.append(provider, status)
+    const paneTitle = el('strong', 'remote-chat-pane-title')
+    meta.append(provider, status, paneTitle)
+    chatBar.append(stop)
 
     const scroll = el('div', 'list remote-chat-scroll')
     scroll.setAttribute('aria-label', '대화 내용')
@@ -138,8 +144,18 @@
     input.maxLength = MAX_TEXT
     input.setAttribute('aria-label', '에이전트에게 보낼 글')
     input.placeholder = '에이전트에게 보낼 글'
-    const submit = el('button', 'primary remote-chat-send', '보내기')
+    const submit = el('button', 'primary remote-chat-send')
     submit.type = 'submit'
+    const submitText = el('span', 'compact-heading', '보내기')
+    const sendIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    sendIcon.setAttribute('class', 'workspace-heading send-glyph')
+    sendIcon.setAttribute('aria-hidden', 'true')
+    sendIcon.setAttribute('viewBox', '0 0 24 24')
+    const sendPath = document.createElementNS(sendIcon.namespaceURI, 'path')
+    // Remix Icon RiSendPlane2Line, also used by AgentChatCover.
+    sendPath.setAttribute('d', 'M3.5 1.34558C3.58425 1.34558 3.66714 1.36687 3.74096 1.40747L22.2034 11.5618C22.4454 11.6949 22.5337 11.9989 22.4006 12.2409C22.3549 12.324 22.2865 12.3924 22.2034 12.4381L3.74096 22.5924C3.499 22.7255 3.19497 22.6372 3.06189 22.3953C3.02129 22.3214 3 22.2386 3 22.1543V1.84558C3 1.56944 3.22386 1.34558 3.5 1.34558ZM5 4.38249V10.9999H10V12.9999H5V19.6174L18.8499 11.9999L5 4.38249Z')
+    sendIcon.append(sendPath)
+    submit.append(submitText, sendIcon)
     const composer = el('div', 'remote-chat-composer')
     composer.append(input, submit)
     form.append(note, composer)
@@ -158,6 +174,7 @@
     }
 
     function renderList() {
+      const focusedId = cards.contains(document.activeElement) ? document.activeElement.dataset.agentShellId : null
       cards.replaceChildren()
       if (listError) {
         const message = el('p', 'error', listError)
@@ -170,33 +187,52 @@
         return
       }
       const fragment = document.createDocumentFragment()
+      let focusedCard = null
       for (const agent of agents) {
         const card = button('', 'remote-agent-card', () => openChat(agent))
+        card.dataset.agentShellId = agent.shellId
+        if (agent.shellId === focusedId) focusedCard = card
+        if (current?.agent.shellId === agent.shellId) card.setAttribute('aria-current', 'true')
         const head = el('span', 'remote-agent-card-head')
+        const glyph = el('span', 'terminal-glyph', '>_')
+        glyph.setAttribute('aria-hidden', 'true')
         const badge = el('span', 'remote-agent-status')
         setStatus(badge, statusOf(agent))
-        head.append(el('strong', 'remote-agent-name', nameOf(agent)), badge)
+        head.append(glyph, el('strong', 'remote-agent-name', nameOf(agent)), badge)
         const detail = el('span', 'remote-agent-card-meta')
-        detail.append(el('span', 'remote-agent-kind', providerOf(agent)))
+        const kind = el('span', 'remote-agent-kind', providerOf(agent))
+        kind.dataset.kind = agent.kind
+        detail.append(kind)
         if (agent.folderName) detail.append(el('span', 'remote-agent-folder', agent.folderName))
         card.append(head, detail)
         fragment.append(card)
       }
       cards.append(fragment)
+      focusedCard?.focus({ preventScroll: true })
+    }
+
+    function updateSelection() {
+      for (const card of cards.querySelectorAll('[data-agent-shell-id]')) {
+        if (card.dataset.agentShellId === current?.agent.shellId) card.setAttribute('aria-current', 'true')
+        else card.removeAttribute('aria-current')
+      }
     }
 
     function openChat(agent) {
-      if (!watching || current) return
+      if (!watching || (current?.agent.shellId === agent.shellId && !current.closed)) return
+      if (current) closeChat()
       current = { agent, connected: false, state: 'opening', title: null, hasOlder: false }
+      updateSelection()
       renderControls()
       show('chat')
-      back.focus({ preventScroll: true })
+      if (list.hidden) back.focus({ preventScroll: true })
       send({ type: 'chat-open', shellId: agent.shellId })
     }
 
     function closeChat(notify = true) {
       if (current && !current.closed && notify) send({ type: 'chat-close', shellId: current.agent.shellId })
       current = null
+      updateSelection()
       clearRows()
       input.value = ''
       setNote('')
@@ -209,7 +245,9 @@
       const state = active?.state
       const statusName = state === 'ended' ? 'ended' : active?.approval ? 'blocked' : active ? statusOf(active.agent) : 'unknown'
       title.textContent = active ? active.title || nameOf(active.agent) : ''
+      paneTitle.textContent = title.textContent
       provider.textContent = active ? providerOf(active.agent) : ''
+      provider.dataset.kind = active?.agent.kind || ''
       setStatus(status, statusName)
       stop.hidden = !active?.connected || active.agent.kind === 'antigravity' || statusName !== 'working'
       stop.disabled = Boolean(active?.interrupting)
@@ -222,7 +260,8 @@
       input.readOnly = !active?.connected || state === 'ended' || Boolean(active.sending)
       const canSend = statusName === 'idle' || (statusName === 'working' && active.agent.kind !== 'antigravity')
       submit.disabled = input.readOnly || !canSend || !input.value.trim() || Boolean(draftError(input.value))
-      submit.textContent = active?.sending ? '전송 중…' : '보내기'
+      submitText.textContent = active?.sending ? '전송 중…' : '보내기'
+      submit.setAttribute('aria-label', submitText.textContent)
     }
 
     function draftError(text) {
@@ -471,6 +510,10 @@
 
     closeChat(false)
     return {
+      layout(workspace) {
+        const parent = workspace ? meta : chatBar
+        if (stop.parentElement !== parent) parent.append(stop)
+      },
       enter() {
         if (watching) return
         watching = true
@@ -478,9 +521,11 @@
         requestList()
       },
       leave() {
-        if (watching) send({ type: 'agents-watch', on: false })
+        if (!watching) return
+        send({ type: 'agents-watch', on: false })
         reset(true)
       },
+      closeChat,
       reset,
       onMessage
     }

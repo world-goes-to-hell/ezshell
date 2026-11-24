@@ -40,7 +40,7 @@
     })
   }
 
-  ns.createTabs = function createTabs({ list, name, notice, mode, viewport, host, send, show, createTerminal, onData, setKeysVisible }) {
+  ns.createTabs = function createTabs({ list, name, notice, mode, viewport, host, send, show, createTerminal, onData, setKeysVisible, onClose }) {
     let tabId = null
     let terminal = null
     let ended = false
@@ -70,12 +70,16 @@
     }
 
     function attach(tab) {
+      if (tab.id === tabId && !ended) return
+      detach()
       tabId = tab.id
+      updateSelection()
       inputAllowed = tab.inputAllowed === true
       name.textContent = tab.name
       mode.hidden = inputAllowed
       setNotice('PC 탭에 연결하는 중…')
       show('tab-terminal')
+      setKeysVisible(false)
       send({ type: 'tab-attach', tabId })
     }
 
@@ -89,6 +93,17 @@
       host.replaceChildren()
       viewport.scrollLeft = 0
       viewport.scrollTop = 0
+      updateSelection()
+    }
+
+    function updateSelection() {
+      for (const row of list.querySelectorAll('[data-pc-tab-id]')) {
+        const active = row.dataset.pcTabId === tabId
+        row.parentElement.classList.toggle('active', active)
+        row.nextElementSibling.hidden = !active
+        if (active) row.setAttribute('aria-current', 'true')
+        else row.removeAttribute('aria-current')
+      }
     }
 
     function end(text) {
@@ -111,23 +126,36 @@
       const rows = []
       for (const tab of Array.isArray(tabs) ? tabs : []) {
         if (!tab || typeof tab.id !== 'string') continue
+        const item = el('div', 'terminal-tab pc-tab-item')
         const row = el('button', 'tree-session pc-tab-row')
         row.type = 'button'
+        row.dataset.pcTabId = tab.id
         if (typeof tab.color === 'string' && COLOR.test(tab.color)) {
           row.classList.add('has-color')
           row.style.setProperty('--session-color', tab.color)
         }
         const dot = el('span', `tree-dot ${tab.connected ? 'is-connected' : 'is-lost'}`)
         dot.setAttribute('aria-hidden', 'true')
+        const glyph = el('span', 'terminal-glyph', '>_')
+        glyph.setAttribute('aria-hidden', 'true')
         const state = tab.connected ? '연결됨' : '연결 끊김'
+        const access = tab.inputAllowed === true ? state : `${state} · 보기만`
+        row.setAttribute('aria-label', `${tab.name} · ${access}`)
+        row.title = `${tab.name} · ${access}`
         const details = el('span', 'pc-tab-details')
         details.append(el('span', 'tree-name', tab.name))
         if (tab.folder) details.append(el('span', 'pc-tab-folder muted', tab.folder))
-        row.append(dot, details, el('span', 'muted', tab.inputAllowed === true ? state : `${state} · 보기만`))
+        row.append(glyph, dot, details, el('span', 'muted', access))
         row.addEventListener('click', () => attach(tab))
-        rows.push(row)
+        const close = el('button', 'tab-close pc-tab-close', '×')
+        close.type = 'button'
+        close.setAttribute('aria-label', `${tab.name} 이어 보기 닫기`)
+        close.addEventListener('click', onClose)
+        item.append(row, close)
+        rows.push(item)
       }
       list.replaceChildren(...(rows.length ? rows : [el('p', 'empty', 'PC에 열린 SSH 탭이 없습니다.')]))
+      updateSelection()
     }
 
     return {

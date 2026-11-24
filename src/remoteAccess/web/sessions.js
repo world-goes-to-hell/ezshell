@@ -44,6 +44,7 @@
   ns.createSessionTree = function createSessionTree({ list, filter, onOpen }) {
     let folders = []
     let sessions = []
+    let selectedId = null
     // Folded or not, per folder id, for as long as the page is open (not stored)
     const expanded = new Map()
 
@@ -85,6 +86,8 @@
     function sessionRow(session, depth) {
       const button = el('button', 'tree-session')
       button.type = 'button'
+      button.dataset.sessionId = session.id
+      if (session.id === selectedId) button.setAttribute('aria-current', 'true')
       button.style.setProperty('--depth', String(depth))
       const color = colorOf(session.color)
       if (color) {
@@ -154,6 +157,15 @@
     }
 
     filter.addEventListener('input', render)
-    return { update, render }
+    return {
+      update, render,
+      select(id) {
+        selectedId = id
+        for (const row of list.querySelectorAll('[data-session-id]')) {
+          if (row.dataset.sessionId === id) row.setAttribute('aria-current', 'true')
+          else row.removeAttribute('aria-current')
+        }
+      }
+    }
   }
 })()

@@ -9,13 +9,15 @@ const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTe
 // Directories under src/ that main.js loads at runtime; copied whole, without their tests
 const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient', 'remoteAccess', 'sessionImport', 'containers', 'ipc', 'agentHistory', 'agentChat', 'localFiles']
 
-// The terminal library of the remote access page (a phone's browser), served by the main process.
-// xterm is a devDependency (the renderer bundles it), so the packaged app has no copy to serve:
-// these are copied next to the page. Names must match VENDOR in src/remoteAccess/server.js.
+// The main process serves these beside the remote access page. Names match VENDOR in server.js.
 const REMOTE_ACCESS_VENDOR: Record<string, string> = {
-  'xterm.js': 'xterm/lib/xterm.js',
-  'xterm.css': 'xterm/css/xterm.css',
-  'xterm-addon-fit.js': 'xterm-addon-fit/lib/xterm-addon-fit.js'
+  'xterm.js': 'node_modules/xterm/lib/xterm.js',
+  'xterm.css': 'node_modules/xterm/css/xterm.css',
+  'xterm-addon-fit.js': 'node_modules/xterm-addon-fit/lib/xterm-addon-fit.js',
+  'app-icon.svg': 'src/renderer/assets/app-icon.svg',
+  'PretendardVariable.woff2': 'src/renderer/assets/fonts/PretendardVariable.woff2',
+  'title-bar.css': 'src/renderer/styles/app/title-bar.css',
+  'terminal-tabs.css': 'src/renderer/styles/app/terminal-tabs.css'
 }
 
 function copyCryptoPlugin() {
@@ -40,7 +42,7 @@ function copyCryptoPlugin() {
       const vendorDir = path.resolve(__dirname, 'out/main/src/remoteAccess/web/vendor')
       fs.mkdirSync(vendorDir, { recursive: true })
       for (const [name, source] of Object.entries(REMOTE_ACCESS_VENDOR)) {
-        fs.copyFileSync(path.resolve(__dirname, 'node_modules', source), path.join(vendorDir, name))
+        fs.copyFileSync(path.resolve(__dirname, source), path.join(vendorDir, name))
       }
     }
   }
