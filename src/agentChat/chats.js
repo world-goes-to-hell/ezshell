@@ -489,14 +489,18 @@ function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigra
       return
     }
     if (chat.kind === 'antigravity') resetTranscript(chat, target.kind, null, 'waiting')
+    const sessionId = target.sessionId ?? null
+    const changed = chat.kind && (chat.kind !== target.kind || (sessionId && chat.sessionId && sessionId !== chat.sessionId))
     const file = await fileFor(chat, target)
     if (!live(chat)) return
     if (!file) {
       syncShells(chat, target.backgroundShellCount)
-      setState(chat, 'waiting')
+      if (changed) resetTranscript(chat, target.kind, sessionId, 'waiting')
+      else setState(chat, 'waiting')
       return
     }
-    if (file !== chat.file || target.kind !== chat.kind) await load(chat, file, target.kind)
+    chat.sessionId = sessionId ?? (changed ? null : chat.sessionId)
+    if (changed || file !== chat.file || target.kind !== chat.kind) await load(chat, file, target.kind)
     else {
       if (chat.state !== 'live') setState(chat, 'live')
       await follow(chat)

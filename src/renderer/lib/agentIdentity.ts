@@ -19,13 +19,26 @@ export function agentIdentityStatus(agent: AgentMessageSession, archived = false
   return { status, label }
 }
 
+/**
+ * Where an agent's state came from, for tooltips only (user decision 5 of
+ * docs/plan/2026-11-24-agent-state-via-official-signals.md). Only the word main sends, nothing else.
+ */
+export function agentStatusSourceNote(kind: AgentMessageSession['kind'], source: AgentMessageSession['statusSource']): string | undefined {
+  if (source === 'hook') return `${kind === 'claude' ? 'Claude' : AGENT_PROVIDER_NAMES[kind] ?? '에이전트'} 가 알려 준 신호로 판단`
+  if (source === 'screen') return '터미널 화면을 보고 판단'
+  return undefined
+}
+
 export function agentIdentityTooltip(agent: AgentMessageSession, location?: AgentPaneLocation, archived = false) {
   const { id, role, kind, cwd, exitCode } = agent
   const { status, label } = agentIdentityStatus(agent, archived)
   const detail = role && role !== id ? id : undefined
   const state = status === 'error' && exitCode ? label + ' (종료 코드 ' + exitCode + ')' : label
   const identity = detail ? role + ' · ' + detail : id
-  const title = [identity, AGENT_PROVIDER_NAMES[kind] + ' · ' + state, location?.label || cwd].filter(Boolean).join('\n')
+  // An archived card's state is not the agent's reported one: no source then
+  const source = archived ? undefined : agentStatusSourceNote(kind, agent.statusSource)
+  // Three lines (name / kind · state / place, CLAUDE.md): the state's source qualifies the state on its line
+  const title = [identity, [AGENT_PROVIDER_NAMES[kind], state, source].filter(Boolean).join(' · '), location?.label || cwd].filter(Boolean).join('\n')
   return { title, 'data-tooltip-detail': detail }
 }
 

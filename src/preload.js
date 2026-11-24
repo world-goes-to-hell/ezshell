@@ -188,6 +188,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localShellHasWorkingAgent: (ids) => ipcRenderer.invoke('local-shell-working-agent', ids),
   // Idle agents: memory given back, then asleep until woken (src/agentIdle.js)
   agentIdleConfigure: (config) => ipcRenderer.invoke('agent-idle-configure', config),
+  agentHooksConfigure: (config) => ipcRenderer.invoke('agent-hooks-configure', config),
   localShellSleeping: () => ipcRenderer.invoke('local-shell-sleeping'),
   localShellWake: (id) => ipcRenderer.invoke('local-shell-wake', id),
   localShellStayAwake: (id) => ipcRenderer.invoke('local-shell-stay-awake', id),
@@ -246,6 +247,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localShellComposing: (id, value) => ipcRenderer.send('local-shell-composing', { id, value }),
   localShellResize: (id, cols, rows) => ipcRenderer.send('local-shell-resize', { id, cols, rows }),
   localShellClose: (id) => ipcRenderer.send('local-shell-close', id),
+  localShellCodexHookReview: (id) => ipcRenderer.invoke('local-shell-codex-hook-review', id),
+  localShellDeclineCodexHooks: (id) => ipcRenderer.invoke('local-shell-decline-codex-hooks', id),
+  onCodexHooksDeclined: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('codex-hooks-declined', handler);
+    return () => ipcRenderer.removeListener('codex-hooks-declined', handler);
+  },
+  onLocalShellCodexHookReview: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('local-shell-codex-hook-review', handler);
+    return () => ipcRenderer.removeListener('local-shell-codex-hook-review', handler);
+  },
   onLocalShellData: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('local-shell-data', handler);

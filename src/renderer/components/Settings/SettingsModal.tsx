@@ -12,6 +12,7 @@ import { TerminalScrollbackControl } from './TerminalScrollbackControl'
 import { McpSettings } from '../Mcp/McpSettings'
 import { AgentMessageMcpSetup } from '../Mcp/AgentMessageMcpSetup'
 import { AgentIdleSettings } from './AgentIdleSettings'
+import { AgentHooksSettings } from './AgentHooksSettings'
 import { RemoteAccessSettings } from '../RemoteAccess/RemoteAccessSettings'
 import '../../styles/settings.css'
 
@@ -168,6 +169,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                             </p>
                             <AgentMessageMcpSetup />
                           </section>
+                          <AgentHooksSettings />
                           <AgentIdleSettings />
                         </div>
                       </Tabs.Content>

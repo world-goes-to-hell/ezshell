@@ -114,4 +114,12 @@ async function watchCommand({ read, kind, before, command, sleep = ms => new Pro
   }
 }
 
-module.exports = { watchCommand, readCommandOutput }
+function claudeQueueVisible(screen) {
+  const lines = screen?.lines ?? []
+  // The hint can replace the prompt or appear below the composer and wrap in a narrow pane.
+  const start = Math.min(screen?.footerRow ?? 0, Math.max(0, lines.length - 8))
+  const footer = lines.slice(start).join(' ').replace(/\s+/g, ' ')
+  return /(?:\bpress (?:up(?: arrow)?|↑)|↑(?= to\b)) .{0,72}?\bqueued messages?\b/i.test(footer)
+}
+
+module.exports = { watchCommand, readCommandOutput, claudeQueueVisible }

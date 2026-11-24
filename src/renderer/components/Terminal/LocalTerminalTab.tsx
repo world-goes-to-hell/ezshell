@@ -25,6 +25,7 @@ import { AgentPaneUsage } from '../AgentUsage/AgentUsageMeters'
 import { AgentChatCover } from '../AgentChat/AgentChatCover'
 import { AgentSleepCover } from '../AgentChat/AgentSleepCover'
 import { AgentScreenReturnBar } from '../AgentChat/AgentScreenReturnBar'
+import { CodexHookReviewBar } from '../AgentChat/CodexHookReviewBar'
 import { useAgentChatStore } from '../../stores/agentChatStore'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
 import { matchesBinding } from '../../lib/shortcutMatch'
@@ -445,6 +446,10 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       // the sleep cover and the return bar are drawn here and must follow the same palette
       style={chatTheme ? { ...chatTheme.style, ...style } : style}
     >
+      {/* A row above the terminal, not an overlay: the terminal gives up its height while the bar shows,
+          so Codex's review lines at the top stay readable. Mounted for every pane: Codex asks before its
+          MCP connects, when the pane's agent is not known yet */}
+      {!antigravity && !exit && <CodexHookReviewBar shellId={shellId} isChat={isChat} onShowTerminal={showTerminal} />}
       <div className="local-terminal-stage" data-chat-question={inlineQuestion || undefined}>
         <div
           ref={hostRef}

@@ -146,6 +146,68 @@ if (!manualChatOnly || (mcpConfig && mcpConfig === process.env.EZSHELL_AGENT_SHE
   connectMcp().catch(error => fs.writeFileSync(path.join(profile, id + '-mcp-error'), error.message))
 }
 
+// Hook mode (local-agent-hooks): `<id>-hooks` holds a list of hook events, e.g.
+// [{ "event": "UserPromptSubmit", "prompt": "p1" }, { "event": "Stop", "prompt": "p1", "delay": 600 }].
+// Each one runs the reporter the way Claude Code runs the hook it was given: the command comes from the
+// `--settings` file ezShell passed (src/ipc/agentMessages.js), and must be the fixed one. `delay` holds
+// that report's input back, so a later event can arrive first (async hooks); `after` starts it later.
+// Keep `delay` under 1000: the reporter gives up on its input after 1s (agentHookInput.js) and on the
+// whole report after 1.5s, and a report it gives up on is silently not sent. Each result is a line of
+// `<id>-hook-log`; when the reporter answers a Stop with `decision: block`, the fake does what Claude does
+// with the reason: it reads its inbox (`<id>-block-read`).
+const hooksPath = path.join(profile, id + '-hooks')
+const hookLogPath = path.join(profile, id + '-hook-log')
+const hookSession = require('crypto').randomUUID()
+const hookPrompts = new Map()
+const promptUuid = name => {
+  if (!hookPrompts.has(name)) hookPrompts.set(name, require('crypto').randomUUID())
+  return hookPrompts.get(name)
+}
+function hookCommand(event) {
+  const index = args.indexOf('--settings')
+  if (!claude || index < 0) return null
+  try {
+    return JSON.parse(fs.readFileSync(args[index + 1], 'utf8')).hooks?.[event]?.[0]?.hooks?.[0]?.command ?? null
+  } catch { return null }
+}
+function runHook(step) {
+  const command = hookCommand(step.event)
+  const log = entry => fs.appendFileSync(hookLogPath, JSON.stringify({ event: step.event, prompt: step.prompt, ...entry }) + '\n')
+  if (!command) return log({ skipped: true })
+  const { HOOK_COMMANDS } = require('../../src/agentHookReport.js')
+  if (command !== HOOK_COMMANDS.claude) return log({ error: 'unexpected hook command: ' + command })
+  // The same program, script and argument the command names, with ELECTRON_RUN_AS_NODE=1. Windows has no
+  // POSIX shell on this test's PATH (Claude Code uses Git Bash), so the command is not handed to one there.
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+  const child = process.platform === 'win32'
+    ? require('child_process').spawn(process.env.EZSHELL_CLI_EXE, [process.env.EZSHELL_AGENT_HOOK_SCRIPT, 'claude'], { env, windowsHide: true })
+    : require('child_process').spawn('/bin/sh', ['-c', command], { env })
+  let stdout = ''
+  child.stdout.on('data', chunk => { stdout += chunk })
+  child.on('close', () => {
+    let block = null
+    try { block = stdout.trim() ? JSON.parse(stdout) : null } catch { /* not a decision */ }
+    log({ stdout: stdout.trim(), block: block?.decision === 'block' ? block.reason : null })
+    if (block?.decision === 'block' && client) {
+      client.callTool({ name: 'read_inbox', arguments: {} })
+        .then(result => fs.appendFileSync(path.join(profile, id + '-block-read'), JSON.stringify(result) + '\n'))
+        .catch(error => fs.appendFileSync(path.join(profile, id + '-block-read'), JSON.stringify({ error: error.message }) + '\n'))
+    }
+  })
+  child.on('error', error => log({ error: error.message }))
+  const input = JSON.stringify({
+    hook_event_name: step.event,
+    session_id: hookSession,
+    ...(step.prompt ? { prompt_id: promptUuid(step.prompt) } : {}),
+    ...(step.tool ? { tool_use_id: step.tool, tool_name: 'Bash' } : {}),
+    ...(step.event === 'Stop' ? { stop_hook_active: step.active === true } : {}),
+    ...(step.event === 'SessionStart' ? { source: 'startup' } : {})
+  })
+  const send = () => child.stdin.end(input)
+  if (step.delay) setTimeout(send, step.delay)
+  else send()
+}
+
 let running = false
 let callingTool = false
 setInterval(() => {
@@ -192,6 +254,12 @@ setInterval(() => {
     process.stdout.write('\x1b]0;' + fs.readFileSync(titlePath, 'utf8') + '\x07')
     fs.unlinkSync(titlePath)
     draw()
+  }
+  if (fs.existsSync(hooksPath)) {
+    const steps = JSON.parse(fs.readFileSync(hooksPath, 'utf8'))
+    fs.unlinkSync(hooksPath)
+    // `after`: started that many ms later (its reporter's start time, the order main sorts by, comes later)
+    for (const step of steps) step.after ? setTimeout(() => runHook(step), step.after) : runHook(step)
   }
   if (fs.existsSync(statusPath)) {
     process.stdout.write('\x1b]7501;' + fs.readFileSync(statusPath, 'utf8') + '\x1b\\')

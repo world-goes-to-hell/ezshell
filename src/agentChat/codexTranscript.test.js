@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { createCodexParser, commandText, fileChange } from './codexTranscript.js'
+import { PROMPT, REMIND_PROMPT } from '../ipc/agentInboxPrompts.js'
 
 // Lines shaped like Codex 0.170's rollout files (this PC's files, contents replaced)
 const completed = item => ({ type: 'event_msg', timestamp: '2026-11-19T10:00:00Z', payload: { type: 'item_completed', item } })
 
 describe('Codex transcript lines to chat items', () => {
+  it.each([PROMPT, REMIND_PROMPT])('recognizes a recorded Stop reason as an inbox notice', reason => {
+    const parser = createCodexParser()
+    expect(parser.feed({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: reason }] } }).items).toEqual([])
+    expect(parser.feed(completed({ type: 'UserMessage', id: 'hook', content: [{ type: 'text', text: reason }] })).items)
+      .toEqual([expect.objectContaining({ kind: 'user', inboxNotice: true })])
+  })
   it('reads what was said and done from item_completed and skips the repeated response items', () => {
     const parser = createCodexParser()
     const items = [

@@ -125,6 +125,24 @@ describe('createCodexUsageWatcher', () => {
     expect(reports).toEqual([{ agentId: 'codex-1', usage: { agent: 'codex', model: 'gpt-6', effort: 'xhigh', sessionId: '01a1ec18-9b8a-71c1-839d-2e31c010300f', context: null, fiveHour: null, sevenDay: null } }])
   })
 
+  it('follows new hook session usage and file without changing the verified resume ID', async () => {
+    const resumeId = '01a1ec18-0000-7000-8000-000000000001'
+    const nextId = '01a1ec18-0000-7000-8000-000000000002'
+    const old = rollout(`initial-${resumeId}`, { meta: { id: resumeId } })
+    const next = rollout(`after-clear-${nextId}`, { meta: { id: nextId }, lines: [tokenCount(10, 30)] })
+    const running = { ...agent, cwd: work, resumeId }
+    const { watcher, reports, verifiedSessions } = setup([running])
+    await watcher.tick()
+    expect(watcher.fileOf(agent.id)).toBe(old)
+    running.hookSessionId = nextId
+    expect(watcher.fileOf(agent.id, nextId)).toBeNull()
+    await watcher.tick()
+    expect(watcher.fileOf(agent.id, nextId)).toBe(next)
+    expect(reports.at(-1).usage.sessionId).toBe(nextId)
+    expect(watcher.verifiedSessionOf(agent.id)).toBe(resumeId)
+    expect(verifiedSessions).toEqual([{ agentId: agent.id, sessionId: resumeId }])
+  })
+
   it('finds a resumed session by its id, so it does not take a new file of another Codex in the same folder', async () => {
     // Resumed with codex resume: it writes on in its old file (created long before it started)
     const old = '01a1ec18-0000-7000-8000-000000000001'

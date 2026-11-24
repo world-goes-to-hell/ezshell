@@ -55,6 +55,7 @@ function createCodexUsageWatcher({ agents, setUsage, setVerifiedSession = () => 
   const home = codexHome ?? (env.CODEX_HOME && path.isAbsolute(env.CODEX_HOME) ? env.CODEX_HOME : path.join(os.homedir(), '.codex'))
   // agent id → { file, size }
   const bound = new Map()
+  const verified = new Map()
   // Agents whose resumed session file was not found yet: which ID was checked and when
   const missed = new Map()
   let timer = null
@@ -189,46 +190,55 @@ function createCodexUsageWatcher({ agents, setUsage, setVerifiedSession = () => 
       }
       const liveIds = new Set(live.map(agent => agent.id))
       for (const id of bound.keys()) if (!liveIds.has(id)) bound.delete(id)
+      for (const id of verified.keys()) if (!liveIds.has(id)) verified.delete(id)
       for (const id of missed.keys()) if (!liveIds.has(id)) missed.delete(id)
       // Earlier agents pick first, so two Codex started in one folder get their own files in order
       for (const agent of [...live].sort((a, b) => a.startedAt - b.startedAt)) {
         const resumeId = typeof agent.resumeId === 'string' ? agent.resumeId.toLowerCase() : null
+        const hookId = SESSION_ID.test(agent.hookSessionId ?? '') ? agent.hookSessionId.toLowerCase() : null
+        const targetId = hookId ?? resumeId
+        if (verified.get(agent.id) !== resumeId) verified.delete(agent.id)
         let entry = bound.get(agent.id)
-        if (entry && entry.resumeId !== resumeId) {
+        if (entry && (entry.resumeId !== resumeId || (targetId && entry.id !== targetId) || (entry.targetId && !targetId))) {
           bound.delete(agent.id)
           entry = undefined
         }
         if (!entry) {
           // A resumed session not found: look again only now and then (the search walks the day folders)
           const previous = missed.get(agent.id)
-          if (resumeId && previous?.resumeId === resumeId && now() - previous.at < RESUME_RETRY_MS) continue
+          if (targetId && previous?.targetId === targetId && now() - previous.at < RESUME_RETRY_MS) continue
           const taken = new Set([...bound.values()].map(item => item.file))
-          const found = resumeId ? await findResumed(resumeId) : await findFile(agent, taken)
+          const found = targetId ? await findResumed(targetId) : await findFile(agent, taken)
           if (!found) {
-            if (resumeId) missed.set(agent.id, { resumeId, at: now() })
+            if (targetId) missed.set(agent.id, { targetId, at: now() })
             continue
           }
           missed.delete(agent.id)
-          entry = { file: found.file, id: found.id, size: -1, resumeId }
+          entry = { file: found.file, id: found.id, size: -1, resumeId, targetId }
           bound.set(agent.id, entry)
         }
         const stat = await fs.promises.stat(entry.file).catch(() => null)
-        if (!stat?.isFile() || (entry.resumeId && entry.ino !== undefined &&
+        if (!stat?.isFile() || (targetId && entry.ino !== undefined &&
           (entry.dev !== stat.dev || entry.ino !== stat.ino || stat.size < entry.size))) {
           if (entry.canReportTurn) setTurnStatus(agent.shellId, agent.id, entry.id, null)
+          if (entry.id === resumeId) verified.delete(agent.id)
           bound.delete(agent.id)
           continue
         }
         const { size } = stat
         entry.dev = stat.dev
         entry.ino = stat.ino
-        if (entry.resumeId) setVerifiedSession(agent.id, entry.resumeId)
-        const canReportTurn = resumeId && !agent.sleeping && resumeCounts.get(resumeId) === 1
+        const explicitSession = resumeId && entry.id === resumeId
+        if (explicitSession) {
+          verified.set(agent.id, resumeId)
+          setVerifiedSession(agent.id, resumeId)
+        }
+        const canReportTurn = explicitSession && !agent.sleeping && resumeCounts.get(resumeId) === 1
         const refreshTurn = canReportTurn && !entry.canReportTurn
         if (entry.canReportTurn && !canReportTurn) setTurnStatus(agent.shellId, agent.id, entry.id, null)
         entry.canReportTurn = canReportTurn
         if (size === entry.size && !refreshTurn) continue
-        const { usage, turn } = await readSession(refreshTurn ? { ...entry, size: -1 } : entry, size)
+        const { usage, turn } = await readSession({ ...entry, resumeId: canReportTurn ? resumeId : null, size: refreshTurn ? -1 : entry.size }, size)
         // Wait for the next poll if the writer appended another event during this read.
         if (canReportTurn && turn !== undefined) {
           const latest = await fs.promises.stat(entry.file).catch(() => null)
@@ -249,9 +259,12 @@ function createCodexUsageWatcher({ agents, setUsage, setVerifiedSession = () => 
   return {
     tick,
     /** The session file found for an agent (the chat view follows it), or null */
-    fileOf: agentId => bound.get(agentId)?.file ?? null,
+    fileOf(agentId, sessionId) {
+      const entry = bound.get(agentId)
+      return entry && (!sessionId || entry.id === sessionId) ? entry.file : null
+    },
     /** A time-based match is insufficient for resuming a conversation. */
-    verifiedSessionOf: agentId => bound.get(agentId)?.resumeId ?? null,
+    verifiedSessionOf: agentId => verified.get(agentId) ?? null,
     start() {
       if (timer) return
       timer = setInterval(() => { void tick().catch(() => {}) }, INTERVAL_MS)

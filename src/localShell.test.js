@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, promises, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, promises, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { createAgentMessages } from './ipc/agentMessages.js'
 import { rpc } from './ipc/agentMessageCli.js'
+import { PROMPT } from './ipc/agentInboxPrompts.js'
 import { createLocalShells, defaultShell, BACKLOG_CHARS } from './localShell.js'
 
 function fakePty() {
@@ -722,14 +723,14 @@ describe('createLocalShells', () => {
       report('working', 3050)
       report('idle', 3049)
       expect(status()).toBe('working')
-      expect(setStatus).toHaveBeenLastCalledWith('working')
+      expect(setStatus).toHaveBeenLastCalledWith('working', 'screen')
 
       vi.setSystemTime(3300)
       report('idle', 3200)
       expect(status()).toBe('idle')
       ptys[0].emit(working)
       expect(status()).toBe('working')
-      expect(setStatus).toHaveBeenLastCalledWith('working')
+      expect(setStatus).toHaveBeenLastCalledWith('working', 'screen')
 
       vi.setSystemTime(3500)
       report('idle', 3400)
@@ -755,6 +756,155 @@ describe('createLocalShells', () => {
       shells.close(id)
       vi.useRealTimers()
     }
+  })
+
+  it('accepts late official status for the owning shell and treats chat stop as a user interrupt', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const setStatus = vi.fn()
+    const setHookSession = vi.fn()
+    const { shells, ptys } = setup({
+      agents: { register: () => ({ env: { EZSHELL_AGENT_ID: 'claude-1' }, setStatus, close: vi.fn() }), setHookSession }
+    })
+    vi.setSystemTime(1000)
+    const { id } = shells.open({ agent: 'claude' })
+    const title = text => ptys[0].emit('\x1b]0;' + text + '\x07')
+    const status = () => shells.agentOf(id).status
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const turn = { kind: 'claude', event: 'UserPromptSubmit', sessionId, promptId: sessionId, startedAt: 20_000 }
+    try {
+      vi.setSystemTime(20_000)
+      title('✳ Claude')
+      expect(status()).toBe('idle')
+      shells.reportAgentHook(id, 'claude-2', turn)
+      expect(status()).toBe('idle')
+      shells.reportAgentHook(id, 'claude-1', turn)
+      expect(status()).toBe('working')
+      expect(setHookSession).toHaveBeenCalledExactlyOnceWith('claude-1', sessionId)
+      expect(shells.agentOf(id)).toMatchObject({ sessionId, status: 'working' })
+
+      vi.setSystemTime(20_100)
+      title('⠋ Claude')
+      shells.write(id, '\x1b[A')
+      vi.setSystemTime(20_200)
+      title('✳ Claude')
+      expect(status()).toBe('working')
+
+      vi.setSystemTime(20_300)
+      title('⠋ Claude')
+      expect(shells.interruptAgent(id)).toBe(true)
+      vi.setSystemTime(20_400)
+      title('✳ Claude')
+      expect(status()).toBe('idle')
+      expect(setStatus).toHaveBeenLastCalledWith('idle', 'hook')
+    } finally {
+      shells.close(id)
+      vi.useRealTimers()
+    }
+  })
+
+  it('records Codex approval and publishes a source-only status change from its authenticated hook', async () => {
+    let shells
+    const dir = mkdtempSync(join(tmpdir(), 'ezshell-hook-trust-'))
+    const codexHookTrustFile = join(dir, 'mode')
+    const agents = createAgentMessages({ notify: vi.fn(), isLocked: () => false,
+      codexHookTrustFile, onAgentHook: (id, agentId, report) => shells.reportAgentHook(id, agentId, report) })
+    await agents.ready()
+    const fixture = setup({ agents })
+    shells = fixture.shells
+    const { id } = shells.open({ agent: 'codex' })
+    const env = fixture.ptys[0].options.env
+    const request = { method: 'agent-event', kind: 'codex', event: 'SessionStart', startedAt: Date.now() }
+    const options = { pipe: env.EZSHELL_AGENT_PIPE, token: env.EZSHELL_AGENT_TOKEN }
+    try {
+      expect(agents.snapshot().agents[0]).not.toHaveProperty('statusSource')
+      fixture.ptys[0].emit('\x1b]7501;state=idle:app=codex\x07')
+      const before = agents.snapshot()
+      expect(before.agents[0]).toMatchObject({ status: 'idle', statusSource: 'screen' })
+      expect(agents.codexHookMode()).toBe('pending')
+      expect(await rpc(request, { ...options, token: 'foreign' })).toMatchObject({ success: false })
+      expect(agents.codexHookMode()).toBe('pending')
+      expect(await rpc(request, options)).toMatchObject({ stored: true })
+      expect(shells.agentOf(id).status).toBe('idle')
+      const after = agents.snapshot()
+      expect(after.agents[0]).toMatchObject({ status: 'idle', statusSource: 'hook' })
+      expect(after.revision).toBeGreaterThan(before.revision)
+      expect(agents.codexHookMode()).toBe('approved')
+      expect(readFileSync(codexHookTrustFile, 'utf8').trim()).toBe('approved')
+      expect(readFileSync(env.EZSHELL_CODEX_HOOK_MODE_FILE, 'utf8').trim()).toBe('approved')
+      const restarted = createAgentMessages({ notify: vi.fn(), isLocked: () => false, codexHookTrustFile })
+      expect(restarted.codexHookMode()).toBe('approved')
+    } finally {
+      shells.close(id)
+      agents.stop()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('recognizes a typed hook review only for its shell nonce and waits for an attached agent before saving a decline', async () => {
+    const setCodexHookMode = vi.fn(() => true)
+    const { shells, ptys } = setup({ platform: 'win32', agents: { codexHookMode: () => 'pending', setCodexHookMode,
+      registerShell: () => ({ EZSHELL_CODEX_HOOK_NONCE: 'nonce' }) } })
+    const { id } = shells.open()
+    try {
+      ptys[0].emit('\x1b]777;ezshell-codex-hooks=start;other\x07')
+      ptys[0].emit('Hooks need review\r\n10 hooks are new or changed.\r\n> 3. Continue without trusting')
+      expect(shells.codexHookReview(id)).toBeNull()
+      ptys[0].emit('\x1b]777;ezshell-codex-hooks=start;nonce\x07')
+      ptys[0].emit('Hooks need review\r\n10 hooks are new or changed.\r\n> 3. Continue without trusting')
+      await vi.waitFor(() => expect(shells.codexHookReview(id)).toMatchObject({ count: 10, declineSelected: true }))
+      shells.write(id, '\r')
+      expect(setCodexHookMode).not.toHaveBeenCalled()
+    } finally { shells.close(id) }
+  })
+
+  it('passes a Stop through after a user interrupt and keeps a later blocked turn working', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const { shells } = setup({ agents: { register: () => ({ env: { EZSHELL_AGENT_ID: 'claude-1' }, close: vi.fn() }),
+      unreadFor: () => ['new'] } })
+    vi.setSystemTime(1000)
+    const { id } = shells.open({ agent: 'claude' })
+    const report = (event, promptId, options) => shells.reportAgentHook(id, 'claude-1',
+      { kind: 'claude', event, promptId, startedAt: Date.now() }, options)
+    try {
+      report('UserPromptSubmit', 'first')
+      vi.setSystemTime(2000)
+      expect(shells.interruptAgent(id)).toBe(true)
+      vi.setSystemTime(3000)
+      expect(report('Stop', 'first', { checkStop: true })).toBe(true)
+      expect(shells.agentOf(id).status).toBe('idle')
+      vi.setSystemTime(13_000)
+      report('UserPromptSubmit', 'second')
+      vi.setSystemTime(14_000)
+      expect(report('StopFailure', 'second', { checkStop: true })).toBe(true)
+      expect(shells.agentOf(id).status).toBe('idle')
+      vi.setSystemTime(15_000)
+      report('UserPromptSubmit', 'third')
+      vi.setSystemTime(16_000)
+      expect(report('Stop', 'third', { checkStop: true })).toEqual({ block: PROMPT })
+      expect(shells.agentOf(id).status).toBe('working')
+    } finally { shells.close(id); vi.useRealTimers() }
+  })
+
+  it('clears every live hook state and returns to the shell signals when official hooks are turned off', () => {
+    let enabled = true
+    const agents = { hooksEnabled: () => enabled, register: (_kind, shellId) => ({ env: { EZSHELL_AGENT_ID: shellId }, close: vi.fn() }) }
+    const { shells, ptys } = setup({ agents })
+    const { id } = shells.open({ agent: 'claude' })
+    const { id: other } = shells.open({ agent: 'codex' })
+    const report = (shellId, kind) => shells.reportAgentHook(shellId, shellId,
+      { kind, event: 'UserPromptSubmit', promptId: 'turn', startedAt: Date.now() })
+    try {
+      ptys[0].emit('\x1b]7501;state=idle:app=claude\x07')
+      ptys[1].emit('\x1b]7501;state=done:app=codex\x07')
+      expect(report(id, 'claude')).toBe(true)
+      expect(report(other, 'codex')).toBe(true)
+      expect([shells.agentOf(id).status, shells.agentOf(other).status]).toEqual(['working', 'working'])
+      enabled = false
+      shells.clearAgentHooks()
+      expect([shells.agentOf(id).status, shells.agentOf(other).status]).toEqual(['idle', 'idle'])
+      expect(report(id, 'claude')).toBeUndefined()
+      expect(shells.agentOf(id).status).toBe('idle')
+    } finally { shells.close(id); shells.close(other) }
   })
 
   // Recorded from Claude Code (2026-11): working spins ◐/◑ in the title, idle is ✳, and it sends no
@@ -800,14 +950,14 @@ describe('createLocalShells', () => {
     const idle = `\x1b]7501;state=idle:app=${kind}\x07`
     try {
       ptys[0].emit(idle + clear + prompt.join('\r\n'))
-      await vi.waitFor(() => expect(setStatus).toHaveBeenLastCalledWith('blocked'))
+      await vi.waitFor(() => expect(setStatus).toHaveBeenLastCalledWith('blocked', 'screen'))
       expect(shells.agentOf(id).status).toBe('blocked')
       ptys[0].emit(idle)
-      expect(setStatus).toHaveBeenLastCalledWith('blocked')
+      expect(setStatus).toHaveBeenLastCalledWith('blocked', 'screen')
 
       // The next normal output may contain numbered text of its own.
       ptys[0].emit(clear + ['Here is the plan:', '  1. Read the file', '  2. Run the tests'].join('\r\n'))
-      await vi.waitFor(() => expect(setStatus).toHaveBeenLastCalledWith('idle'))
+      await vi.waitFor(() => expect(setStatus).toHaveBeenLastCalledWith('idle', 'screen'))
       expect(shells.agentOf(id).status).toBe('idle')
     } finally {
       shells.close(id)

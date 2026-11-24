@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createClaudeParser, toolSummary } from './claudeTranscript.js'
+import { PROMPT } from '../ipc/agentInboxPrompts.js'
 
 // Lines shaped like Claude Code's transcript (this PC's files, contents replaced)
 const assistant = (uuid, messageId, block) => ({ type: 'assistant', uuid, timestamp: '2026-11-19T10:00:00Z', message: { id: messageId, role: 'assistant', content: [block] } })
@@ -43,6 +44,17 @@ describe('Claude transcript lines to chat items', () => {
       { type: 'file-history-snapshot', snapshot: {} }
     ])
     expect(items).toEqual([])
+  })
+
+  it('skips the three Claude Stop hook records without hiding identical human text', () => {
+    const feedback = `Stop hook feedback:\n${PROMPT}`
+    const { items } = feedAll(createClaudeParser(), [
+      user('meta', [{ type: 'text', text: feedback }], { isMeta: true }),
+      { type: 'attachment', attachment: { type: 'hook_blocking_error', content: feedback } },
+      { type: 'system', subtype: 'stop_hook_summary', content: feedback },
+      user('user', feedback)
+    ])
+    expect(items).toEqual([expect.objectContaining({ kind: 'user', id: 'user:user', text: feedback })])
   })
 
   // A message typed while Claude works: enqueued first, then absorbed into the running turn as an

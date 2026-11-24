@@ -1,0 +1,46 @@
+/*
+ * A row at the top of a Codex pane while Codex asks to review hooks. Not an overlay like the screen
+ * return bar (AgentScreenReturnBar.css): Codex draws "Hooks need review / N hooks are new…" at the top
+ * of a fresh shell, and a bar over it hid what it tells to pick (review 22). As a row of the pane (a flex
+ * column) it takes its height from the terminal, which refits, and it never covers the return bar or the
+ * chat. Same look as the return bar; its text wraps (it says what to pick).
+ */
+.codex-hook-review {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 8px 4px;
+  padding: 8px 8px 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.codex-hook-review-icon { flex: none; margin-top: 2px; color: var(--accent); font-size: 15px; }
+.codex-hook-review-text { flex: 1; min-width: 0; }
+.codex-hook-review-text p { margin: 0; overflow-wrap: anywhere; }
+.codex-hook-review-note { margin-top: 4px !important; color: var(--text-secondary); }
+.codex-hook-review-actions { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 45%; }
+.codex-hook-review button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.codex-hook-review button:hover:not(:disabled) { border-color: var(--accent); }
+.codex-hook-review button:disabled { opacity: 0.6; cursor: default; }
+.codex-hook-review button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.codex-hook-review .codex-hook-review-close { border-color: transparent; background: transparent; color: var(--text-secondary); }
+
+/* A short pane: the text scrolls inside the bar instead of leaving the terminal no rows */
+.codex-hook-review-text { max-height: 6.2em; overflow-y: auto; }

@@ -5,6 +5,7 @@ import { THEME_STORAGE_KEY } from './themeSync'
 import type { ThemeDefinition } from '../types/theme'
 import type { SurfaceStyle } from './appearance'
 import { POINTER_PREFS_KEY, parsePointerPrefs, setPointerPrefs } from './pointerPrefs'
+import { AGENT_HOOKS_KEY, applyImportedAgentHooks } from './agentHooksPrefs'
 import {
   collectUiSettings, SHORTCUTS_KEY, UI_STORE_KEY,
   type NormalizeContext, type UiSettingsFile, type UiSettingsImport
@@ -34,6 +35,8 @@ export function applyUiSettings(values: UiSettingsImport['values']): number {
       else if (entry.key === SHORTCUTS_KEY) applyShortcuts(value)
       // Through the prefs so this window's pointer and effects change at once (setItem alone tells only other windows)
       else if (entry.key === POINTER_PREFS_KEY) setPointerPrefs(parsePointerPrefs(value))
+      // Through the prefs so main hears the switch now (stores/agentHooksStore.ts listens for the event)
+      else if (entry.key === AGENT_HOOKS_KEY) applyImportedAgentHooks(value)
       else localStorage.setItem(entry.key, value)
       applied += 1
     } catch (error) {

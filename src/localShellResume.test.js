@@ -4,18 +4,19 @@ import { createLocalShells } from './localShell.js'
 // Resuming a past session from the agent history panel (src/agentHistory)
 const ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
 
-function launchArgs({ platform, agent, resume, messaging = true }) {
+function launchArgs({ platform, agent, resume, messaging = true, mode, restoring }) {
   const spawn = vi.fn(() => ({ write() {}, resize() {}, kill() {}, onData() {}, onExit() {} }))
   const shells = createLocalShells({
     spawn,
     send: () => {},
-    agents: messaging ? { register: () => ({ env: {}, close() {} }) } : undefined,
+    agents: messaging ? { register: () => ({ env: {}, close() {} }), codexHookMode: () => mode } : undefined,
     shell: platform === 'win32' ? { file: 'powershell.exe', args: ['-NoLogo'], name: 'PowerShell' } : { file: '/bin/zsh', args: ['-l'], name: 'zsh' },
     cwd: platform === 'win32' ? 'C:\\' : '/',
     env: {},
     platform
   })
-  shells.open({ agent, resume })
+  const { id } = shells.open({ agent, resume, restoring })
+  shells.close(id)
   return spawn.mock.calls[0][1]
 }
 
@@ -61,6 +62,15 @@ describe('resuming an agent session', () => {
 
   it('starts a new session when there is nothing to resume', () => {
     expect(launch({ platform: 'linux', agent: 'claude', messaging: false })).toBe('exec claude')
+  })
+
+  it('adds Codex hooks before approval on manual launches and waits for approval on restore', () => {
+    const settings = { platform: 'win32', agent: 'codex', resume: ID }
+    expect(launch({ ...settings, mode: 'pending' })).toContain('Get-EzShellCodexHookArgs $cli $false')
+    expect(launch({ ...settings, mode: 'pending', restoring: true })).not.toContain('Get-EzShellCodexHookArgs')
+    expect(launch({ ...settings, mode: 'approved', restoring: true })).toContain('Get-EzShellCodexHookArgs $cli $true')
+    expect(launch({ ...settings, mode: 'disabled' })).not.toContain('Get-EzShellCodexHookArgs')
+    expect(launch({ ...settings, platform: 'linux', mode: 'pending' })).toContain('hooks.SessionStart=')
   })
 
   it('refuses anything but a session id, and resuming without an agent', () => {

@@ -35,6 +35,7 @@ export function localAgentPaneLocation(tab: TerminalInfo | undefined, agent: Age
 export interface PaneStart {
   agent: LocalAgent
   resume?: string
+  restoring?: true
 }
 const pendingStart = new Map<string, PaneStart>()
 
@@ -56,9 +57,12 @@ export function ensureLocalPaneShell(tabId: string, pane: PaneId): Promise<Local
       const start = pendingStart.get(key)
       pendingStart.delete(key)
       const openWith = (extra: object) => window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd, ...extra })
-      let result = await openWith(start ? { agent: start.agent, ...(start.resume ? { resume: start.resume } : {}) } : {})
+      let result = await openWith(start ?? {})
       // The conversation could not be resumed (its transcript is gone): the same agent fresh, then a plain shell
-      if (start?.resume && result && !result.success) result = await openWith({ agent: start.agent })
+      if (start?.resume && result && !result.success) {
+        const { resume: _resume, ...fresh } = start
+        result = await openWith(fresh)
+      }
       if (start && result && !result.success) result = await openWith({})
       if (!result) return { ok: false, error: '앱을 다시 시작해 주세요.' }
       if (!result.success) return { ok: false, error: result.error }

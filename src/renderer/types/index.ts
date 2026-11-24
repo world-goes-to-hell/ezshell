@@ -441,6 +441,13 @@ export interface PinnedReply {
 }
 
 /** An agent closed to save memory, resumed in its shell when woken (src/agentIdle.js) */
+export interface CodexHookReview {
+  count: number
+  injectedCount: number
+  declineSelected: boolean
+  projectHooks?: boolean
+}
+
 export interface AgentSleep {
   kind: 'claude' | 'codex'
   since: number
@@ -645,6 +652,8 @@ export interface AgentMessageSession {
   exitCode?: number | null
   /** Opaque key of the agent's conversation (main hashes it): where its card sits on the relationship map */
   layoutKey?: string | null
+  /** Where `status` came from: the CLI's own hooks, or reading its screen. Absent when main cannot tell (T7) */
+  statusSource?: 'hook' | 'screen'
 }
 
 /** A model or effort level the agent CLI's picker offers (src/ipc/agentPicker.js) */
@@ -1032,7 +1041,7 @@ declare global {
       // Local file system
       localList: (dirPath: string) => Promise<any>
       /** `resume`: a key from the agent history list; main then picks the folder, agent and session */
-      localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: AgentChatProvider; resume?: string; replacementFor?: string }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
+      localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: AgentChatProvider; resume?: string; replacementFor?: string; restoring?: true }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
       localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
       localProjectDevelopmentTasks: (folder: string) => Promise<{ success: true; tasks: LocalDevelopmentTask[] } | { success: false; error: string }>
       localProjectDevelopmentStart: (options: { folder: string; id: string; cols: number; rows: number; includeSource: boolean; install: boolean }) =>
@@ -1088,9 +1097,14 @@ declare global {
       localShellComposing?: (id: string, value: boolean) => void
       localShellResize?: (id: string, cols: number, rows: number) => void
       localShellClose?: (id: string) => void
+      localShellCodexHookReview?: (id: string) => Promise<CodexHookReview | null>
+      localShellDeclineCodexHooks?: (id: string) => Promise<boolean>
+      onCodexHooksDeclined?: (callback: () => void) => () => void
+      onLocalShellCodexHookReview?: (callback: (data: { id: string; review: CodexHookReview | null }) => void) => () => void
       onLocalShellData?: (callback: (data: { id: string; data: string }) => void) => () => void
       onLocalShellExit?: (callback: (data: { id: string; exitCode: number | null }) => void) => () => void
       agentIdleConfigure?: (config: { trimMinutes: number; sleepMinutes: number }) => Promise<{ trimMinutes: number; sleepMinutes: number } | null>
+      agentHooksConfigure?: (config: { enabled: boolean; resetCodexDecline?: true }) => Promise<{ success: boolean; codexMode?: 'pending' | 'approved' | 'disabled' }>
       localShellSleeping?: () => Promise<{ id: string; sleeping: AgentSleep }[]>
       localShellWake?: (id: string) => Promise<{ ok: boolean; reason?: string }>
       localShellStayAwake?: (id: string) => Promise<boolean>

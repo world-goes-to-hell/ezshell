@@ -648,10 +648,13 @@ const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages(
   },
   isLocked: () => isAppLocked,
   onInboxChanged: id => localShells?.wakeInbox(id),
+  onInboxRead: id => localShells?.confirmStopDelivery(id),
+  onAgentHook: (shellId, agentId, event, options) => localShells?.reportAgentHook(shellId, agentId, event, options),
   bindLocalAgent: request => localShells?.bindAgentProcess(request),
   reportLocalAntigravity: request => localShells?.reportAntigravityStatus(request),
   bridgeFile: agentBridgeFile,
-  roleFile: path.join(userDataPath, 'agent-roles.json')
+  roleFile: path.join(userDataPath, 'agent-roles.json'),
+  codexHookTrustFile: path.join(userDataPath, 'codex-hook-mode')
 });
 const localTerminalClipboard = require('./src/ipc/localTerminalClipboard.js').createLocalTerminalClipboard(clipboard, nativeImage);
 async function selectAgentImages(title) {
@@ -740,6 +743,12 @@ ipcMain.handle('local-shell-open', async (event, size) => {
   }
 });
 ipcMain.handle('local-shell-attach', (event, id) => (fromMainWindow(event) && localShells ? localShells.attach(id) : null));
+ipcMain.handle('local-shell-codex-hook-review', (event, id) =>
+  fromMainWindow(event) && !isAppLocked ? localShells?.codexHookReview(id) ?? null : null
+);
+ipcMain.handle('local-shell-decline-codex-hooks', (event, id) =>
+  fromMainWindow(event) && !isAppLocked && Boolean(localShells?.declineCodexHooks(id))
+);
 // A reloaded window has no tabs but the shells kept running: it takes them back (lib/localShellAdopt.ts)
 ipcMain.handle('local-shell-list', (event) => (fromMainWindow(event) && !isAppLocked && localShells ? localShells.list() : []));
 ipcMain.handle('local-shell-current-directory', (event, id) =>
@@ -782,6 +791,12 @@ app.on('will-quit', () => {
 ipcMain.handle('agent-messages-state', event =>
   fromMainWindow(event) && !isAppLocked ? agentMessages.snapshot() : null
 );
+ipcMain.handle('agent-hooks-configure', (event, config) => {
+  if (!fromMainWindow(event) || isAppLocked) return { success: false };
+  const result = agentMessages.configureHooks(config);
+  if (result.success && config.enabled === false) localShells?.clearAgentHooks();
+  return result;
+});
 ipcMain.handle('agent-message-set-role', (event, id, role) => {
   if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '에이전트 역할을 변경할 수 없습니다.' };
   try {
@@ -794,7 +809,7 @@ ipcMain.handle('agent-message-set-role', (event, id, role) => {
 // Usage of the agents ezShell launched (status bar): Claude reports it from its status line over the
 // agent pipe, Codex's comes from its session file. Numbers and the model name only.
 const codexUsageWatcher = require('./src/ipc/codexUsageWatcher.js').createCodexUsageWatcher({
-  agents: () => agentMessages.snapshot().agents,
+  agents: () => agentMessages.snapshot().agents.map(agent => ({ ...agent, hookSessionId: agentMessages.hookSessionOf(agent.id) })),
   setUsage: agentMessages.setUsage,
   setVerifiedSession: agentMessages.setVerifiedSession,
   setTurnStatus: (shellId, agentId, sessionId, turn) => localShells?.setCodexTurnStatus(shellId, agentId, sessionId, turn)
@@ -858,7 +873,7 @@ const agentChats = require('./src/agentChat/chats.js').createAgentChats({
       backgroundShellCount,
       cwd: running.cwd ?? agent.cwd ?? null,
       sessionId: running.sessionId ?? usage?.sessionId ?? agent.resumeId ?? null,
-      file: running.kind === 'codex' ? codexUsageWatcher.fileOf(agent.id) : null
+      file: running.kind === 'codex' ? codexUsageWatcher.fileOf(agent.id, agentMessages.hookSessionOf(agent.id)) : null
     };
   }
 });

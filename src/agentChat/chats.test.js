@@ -46,6 +46,21 @@ afterEach(() => {
 })
 
 const texts = frame => frame.items.map(item => item.text)
+
+it('resets Claude chat on a new session ID before following its next transcript', async () => {
+  fs.writeFileSync(file, prompt('before', 'Before clear'))
+  chats.open('local:1')
+  await vi.waitFor(() => expect(texts(frames.find(frame => frame.state === 'live' && frame.reset))).toEqual(['Before clear']))
+  const nextId = 'c596701e-7ae8-40df-b37c-5829171fbba3'
+  const next = path.join(path.dirname(file), nextId + '.jsonl')
+  target = { ...target, sessionId: nextId }
+  chats.tick()
+  await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ reset: true, state: 'waiting', items: [] }))
+  fs.writeFileSync(next, prompt('after', 'After clear'))
+  chats.tick()
+  await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ reset: true, state: 'live', items: [expect.objectContaining({ text: 'After clear' })] }))
+})
+
 const agyStep = (step_index, source, type, content) => JSON.stringify({
   step_index, source, type, content, created_at: new Date(1_700_000_000_000 + step_index).toISOString()
 }) + '\n'

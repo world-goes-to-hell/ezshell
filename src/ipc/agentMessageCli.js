@@ -18,10 +18,16 @@ async function stdinText() {
   return value.trimEnd()
 }
 
-function rpc(request, { pipe = process.env.EZSHELL_AGENT_PIPE, token = process.env.EZSHELL_AGENT_TOKEN } = {}) {
+function rpc(request, { pipe = process.env.EZSHELL_AGENT_PIPE, token = process.env.EZSHELL_AGENT_TOKEN, signal } = {}) {
   if (!pipe || !token) throw new Error('ezShell에서 시작한 에이전트의 터미널에서 실행해 주세요.')
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason)
     const socket = net.createConnection(pipe)
+    if (signal) {
+      const abort = () => socket.destroy(signal.reason)
+      signal.addEventListener('abort', abort, { once: true })
+      socket.once('close', () => signal.removeEventListener('abort', abort))
+    }
     socket.setEncoding('utf8')
     socket.setTimeout(request.method === 'wait-inbox' ? 35000 : 5000, () => socket.destroy(new Error('ezShell 응답이 지연되고 있습니다.')))
     socket.on('error', reject)

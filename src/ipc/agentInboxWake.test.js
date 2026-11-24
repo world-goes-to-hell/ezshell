@@ -22,6 +22,8 @@ function setup(kind = 'claude', cols = 100) {
     isUnknown: () => state.unknown,
     pendingMessages: () => state.ids,
     unhandledMessages: () => state.open,
+    isHookWorking: () => state.hookWorking === true,
+    messageSeenAt: id => state.seen?.get(id),
     isWorking: () => state.busy,
     isRunningTask: () => state.busy && state.running,
     write
@@ -30,6 +32,90 @@ function setup(kind = 'claude', cols = 100) {
 }
 
 afterEach(() => wake?.close())
+
+describe('official stop inbox wake', () => {
+  it('holds the busy paste, commits confirmed messages, and lets an expired notice go to the idle composer', async () => {
+    vi.useFakeTimers()
+    const { write, state } = setup()
+    const stop = { event: 'Stop', promptId: 'turn', sessionId: 'session', startedAt: 100 }
+    state.ids = ['one', 'two']
+    state.open = [...state.ids]
+    state.busy = state.hookWorking = true
+    wake.writeOutput(claudeDraft(''))
+    try {
+      await vi.advanceTimersByTimeAsync(100)
+      expect(write).not.toHaveBeenCalled()
+      expect(wake.prepareStopWake(stop, vi.fn())).toBe(PROMPT)
+      expect(wake.prepareStopWake({ ...stop, startedAt: 101 }, vi.fn())).toBeNull()
+      wake.stopWakeReport({ ...stop, event: 'PreToolUse', startedAt: 102 })
+      expect(wake.prepareStopWake({ ...stop, startedAt: 103 }, vi.fn())).toBeNull()
+      state.ids.push('three')
+      const onUnconfirmed = vi.fn(() => { state.busy = state.hookWorking = false })
+      expect(wake.prepareStopWake({ ...stop, startedAt: 104 }, onUnconfirmed)).toBe(PROMPT)
+      await vi.advanceTimersByTimeAsync(14_999)
+      expect(write).not.toHaveBeenCalled()
+      expect(onUnconfirmed).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(50)
+      expect(onUnconfirmed).toHaveBeenCalledOnce()
+      expect(write).toHaveBeenCalledExactlyOnceWith(paste)
+    } finally { wake.close(); vi.useRealTimers() }
+  })
+
+  it('does not block Stop while the Claude user queue is visible', async () => {
+    const { state } = setup()
+    state.ids = ['one']
+    state.busy = state.hookWorking = true
+    wake.writeOutput(paintedClaudeDraft('') + '\r\nPress up to edit queued messages')
+    await vi.waitFor(() => expect(wake.screenLines().join(' ')).toContain('Press up to edit queued messages'))
+    expect(wake.prepareStopWake({ promptId: 'turn' }, vi.fn())).toBeNull()
+  })
+
+  it('keeps the Claude reservation while the title spinner continues beyond 30 seconds', async () => {
+    vi.useFakeTimers()
+    const { state, write } = setup()
+    state.ids = ['one']
+    state.busy = state.hookWorking = true
+    let spinner = true
+    const onUnconfirmed = vi.fn(() => { state.busy = state.hookWorking = false })
+    wake.writeOutput(claudeDraft(''))
+    try {
+      expect(wake.prepareStopWake({ promptId: 'turn', startedAt: 1 }, onUnconfirmed, () => spinner)).toBe(PROMPT)
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(onUnconfirmed).not.toHaveBeenCalled()
+      expect(write).not.toHaveBeenCalled()
+      spinner = false
+      await vi.advanceTimersByTimeAsync(5100)
+      expect(onUnconfirmed).toHaveBeenCalledOnce()
+      expect(write).toHaveBeenCalledExactlyOnceWith(paste)
+    } finally { wake.close(); vi.useRealTimers() }
+  })
+
+  it('confirms a Codex stop continuation when the same session submits a new turn', () => {
+    const { state } = setup('codex')
+    state.ids = ['one']
+    const stop = { promptId: 'first', sessionId: 'same', startedAt: 1 }
+    expect(wake.prepareStopWake(stop, vi.fn())).toBe(PROMPT)
+    const next = { ...stop, promptId: 'second', startedAt: 2, event: 'UserPromptSubmit' }
+    wake.stopWakeReport(next)
+    state.open = ['one']
+    expect(wake.prepareStopWake({ ...next, startedAt: 3 }, vi.fn())).toBeNull()
+  })
+})
+
+it.each([
+  'Hooks need review\r\n10 hooks are new or changed.\r\n› 1. Review hooks\r\n  2. Trust all and continue\r\n  3. Continue without trusting',
+  'Event          Installed    Active    Review\r\nStop           1            1         Pending\r\nt trust all · enter review · esc close'
+])('keeps Codex hook trust screens terminal-only', async frame => {
+  const { write, state } = setup('codex')
+  state.ids = ['one']
+  wake.writeOutput(codexDraft('') + `\r\n${frame}\x1b[1;3H`)
+  await vi.waitFor(() => expect(wake.screenLines().join(' ')).toContain(frame.split('\r\n')[0]))
+  expect(wake.approvalPrompt()).toBeNull()
+  expect(wake.composerState()).toBeNull()
+  await expect(wake.submitText('Question')).resolves.toMatchObject({ ok: false, reason: 'approval' })
+  await expect(wake.submitText('Question', undefined, { strict: true })).resolves.toMatchObject({ ok: false, reason: 'approval' })
+  expect(write).not.toHaveBeenCalled()
+})
 
 it('preserves the last cell and continuation flag of a wrapped command row', async () => {
   setup('codex', 7)

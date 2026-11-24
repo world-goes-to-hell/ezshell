@@ -8,6 +8,8 @@ const { fileURLToPath } = require('url');
 const { execFile, execFileSync } = require('child_process');
 const { promisify } = require('util');
 const { getProcessTree } = require('./ipc/agentProcessParents.js');
+const { createAgentHookState, hookStatus, applyAgentHook, reconcileAgentHook } = require('./ipc/agentHookState.js');
+const { POWERSHELL_CODEX_HOOK_ARGS, injectCodexHooks, quoteCodexHookArgs, codexProjectHooksPossible, observeCodexHookReview } = require('./ipc/codexHookLaunch.js');
 const { processCommandLine, processList, resumeCommand, words } = require('./agentIdle.js');
 const { antigravityBrainRoot, openAntigravityTranscript } = require('./agentChat/antigravitySessions.js');
 
@@ -48,6 +50,7 @@ function global:prompt {
 // Keep the wrapper in the new PowerShell's process. Profiles and Codex's global config stay
 // available, and interactive Codex can associate its MCP process with this PTY.
 const POWERSHELL_CODEX_FUNCTION = String.raw`
+${POWERSHELL_CODEX_HOOK_ARGS}
 if ((Get-Command codex -ErrorAction SilentlyContinue).CommandType -in 'Application', 'ExternalScript') {
     function global:codex {
         $native = Get-Command codex -CommandType Application,ExternalScript | Select-Object -First 1
@@ -59,11 +62,13 @@ if ((Get-Command codex -ErrorAction SilentlyContinue).CommandType -in 'Applicati
             'apply', 'queue', 'archive', 'delete', 'migrate-rollouts', 'migrate-nfs-db', 'unarchive',
             'cloud', 'exec-server', 'features', 'help'
         $isolated = $true
+        $noDaemon = $false
         $seenPositional = $false
         for ($i = 0; $i -lt $args.Count; $i++) {
             $argument = [string]$args[$i]
             if ($argument -ceq '--') { break }
-            if ($argument -cmatch '^--(?:no-daemon|remote|remote-auth-token-env|help|version)(?:=|$)' -or $argument -cin '-h', '-V') {
+            if ($argument -ceq '--no-daemon') { $noDaemon = $true; continue }
+            if ($argument -cmatch '^--(?:remote|remote-auth-token-env|help|version)(?:=|$)' -or $argument -cin '-h', '-V') {
                 $isolated = $false
                 break
             }
@@ -73,10 +78,18 @@ if ((Get-Command codex -ErrorAction SilentlyContinue).CommandType -in 'Applicati
                 if ($argument -cin $otherCommands) { $isolated = $false; break }
             }
         }
-        if ($isolated -and ((& $native --help 2>$null) -match '^\s*--no-daemon(?:\s|$)')) {
-            & $native --no-daemon @args
-        } else {
-            & $native @args
+        $extras = @()
+        $hookArgs = @()
+        if ($isolated) {
+            if (!$noDaemon -and ((& $native --help 2>$null) -match '^\s*--no-daemon(?:\s|$)')) { $extras += '--no-daemon' }
+            $hookArgs = @(Get-EzShellCodexHookArgs $native ($__ezShellAutomaticCodex -eq $true))
+        }
+        if ($hookArgs.Count) { [Console]::Write("$([char]27)]777;ezshell-codex-hooks=start;$env:EZSHELL_CODEX_HOOK_NONCE$([char]7)") }
+        try {
+            if ($args -ccontains '--') { & $native @extras @hookArgs @args }
+            else { & $native @extras @args @hookArgs }
+        } finally {
+            if ($hookArgs.Count) { [Console]::Write("$([char]27)]777;ezshell-codex-hooks=end;$env:EZSHELL_CODEX_HOOK_NONCE$([char]7)") }
         }
     }
 }
@@ -92,7 +105,8 @@ const AGENT_SESSION_MARKERS = new Set([
   'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_SPAWN_BACKEND',
   'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH',
   'EZSHELL_AGENT_ID', 'EZSHELL_AGENT_TOKEN', 'EZSHELL_SHELL_TOKEN', 'EZSHELL_AGENT_PIPE',
-  'EZSHELL_AGENT_MCP_CONFIG', 'EZSHELL_AGENT_MCP_SCRIPT', 'EZSHELL_AGENT_SETTINGS', 'EZSHELL_AGENT_USAGE_SCRIPT',
+  'EZSHELL_AGENT_MCP_CONFIG', 'EZSHELL_AGENT_MCP_SCRIPT', 'EZSHELL_AGENT_SETTINGS', 'EZSHELL_AGENT_USAGE_SCRIPT', 'EZSHELL_AGENT_HOOK_SCRIPT',
+  'EZSHELL_CODEX_HOOK_MODE_FILE', 'EZSHELL_CODEX_HOOK_ARGS', 'EZSHELL_CODEX_HOOK_NONCE',
   'EZSHELL_AGENT_WAKE_KIND', 'EZSHELL_AGENT_WAKE_MCP_CONFIG', 'EZSHELL_AGENT_SHELL_KIND', 'EZSHELL_AGENT_SHELL_MCP_CONFIG',
   'EZSHELL_ANTIGRAVITY_SETTINGS', 'EZSHELL_ANTIGRAVITY_STATUS_SCRIPT', 'EZSHELL_ANTIGRAVITY_STATUS_FORWARD',
   'EZSHELL_ANTIGRAVITY_STATUS_COMMAND',
@@ -226,7 +240,7 @@ if ($env:EZSHELL_ANTIGRAVITY_SETTINGS -and !(Get-Command agy -CommandType Alias,
 }
 `;
 
-function shellArgs(shell, agent, platform, withMessaging, resume) {
+function shellArgs(shell, agent, platform, withMessaging, resume, codexHooks, restoring) {
   const resumed = resumeArgs(agent, resume);
   if (agent === undefined) {
     if (platform !== 'win32' || !/^(?:powershell|pwsh)(?:\.exe)?$/i.test(path.win32.basename(shell.file))) return shell.args;
@@ -256,8 +270,9 @@ else { Write-Host 'Antigravity CLI를 찾을 수 없습니다.' }
     const options = !withMessaging ? '' : agent === 'codex'
       ? codexConfig.map((value, index) => ` -c "${value}${index === 0 ? '$EZSHELL_CLI_EXE' : ''}"`).join('')
       : ' --mcp-config "$EZSHELL_AGENT_MCP_CONFIG" --settings "$EZSHELL_AGENT_SETTINGS"';
+    const hooks = codexHooks ? ' ' + quoteCodexHookArgs() : '';
     const launch = useLocalCodex
-      ? `exec /bin/sh -c 'case "$(codex --help 2>/dev/null)" in *--no-daemon*) exec codex${resumed} --no-daemon "$@" ;; *) exec codex${resumed} "$@" ;; esac' ezshell-codex${options}`
+      ? `exec /bin/sh -c 'case "$(codex --help 2>/dev/null)" in *--no-daemon*) exec codex${resumed} --no-daemon "$@" ;; *) exec codex${resumed} "$@" ;; esac' ezshell-codex${options}${hooks}`
       : `exec ${agent}${resumed}${options}`;
     return [...shell.args, '-i', '-c', launch];
   }
@@ -268,7 +283,8 @@ else { Write-Host 'Antigravity CLI를 찾을 수 없습니다.' }
   const localFlag = useLocalCodex
     ? "$ezShellArgs = @(); if ((& $cli --help 2>$null) -match '^\\s*--no-daemon(?:\\s|$)') { $ezShellArgs += '--no-daemon' }; "
     : '';
-  const launch = `$cli = Get-Command ${agent}.exe,${agent}.cmd,${agent} -ErrorAction SilentlyContinue | Select-Object -First 1; if (!$cli) { Write-Host '${agent} CLI를 찾을 수 없습니다.'; exit 127 }; ${localFlag}& $cli${resumed}${useLocalCodex ? ' @ezShellArgs' : ''}${options}; exit $LASTEXITCODE`;
+  const hooks = codexHooks ? `${POWERSHELL_CODEX_HOOK_ARGS}\n$ezShellArgs += @(Get-EzShellCodexHookArgs $cli ${restoring ? '$true' : '$false'}); ` : '';
+  const launch = `$cli = Get-Command ${agent}.exe,${agent}.cmd,${agent} -ErrorAction SilentlyContinue | Select-Object -First 1; if (!$cli) { Write-Host '${agent} CLI를 찾을 수 없습니다.'; exit 127 }; ${localFlag}${hooks}& $cli${resumed}${useLocalCodex ? ' @ezShellArgs' : ''}${options}; exit $LASTEXITCODE`;
   return [...shell.args, '-Command', launch];
 }
 
@@ -292,6 +308,8 @@ const WORKING_TITLE = /(?:^|\s)[⠁-⣿◐-◓◴-◷](?:\s|$)/u;
 
 function agentStatus(entry) {
   if (entry.screenApproval) return 'blocked';
+  const official = hookStatus(entry.hookState);
+  if (official) return official;
   if (entry.agent === 'antigravity') {
     const status = entry.externalAgent?.antigravity?.status;
     if (entry.reportedStatus === 'blocked' || status === 'blocked') return 'blocked';
@@ -299,13 +317,27 @@ function agentStatus(entry) {
     return entry.reportedStatus ?? status ?? 'unknown';
   }
   let status = entry.reportedStatus ?? entry.titleStatus;
-  const activity = entry.codexActivity;
+  const activity = entry.hookState ? null : entry.codexActivity;
   const turn = activity?.turn;
   if (turn && turn.at > Math.max(activity.oscAt, activity.submittedAt)) {
     if (turn.status === 'idle' && entry.reportedStatus === 'working' && entry.titleStatus !== 'blocked') status = 'idle';
     else if (turn.status === 'working' && status !== 'blocked' && status !== 'error') return 'working';
   }
   return status === 'working' && entry.codexInput && !entry.codexInput.submitted && !turn ? 'starting' : status;
+}
+
+function agentStatusSource(entry, status) {
+  if ((entry.agent !== 'claude' && entry.agent !== 'codex') || status === 'unknown') return;
+  if (entry.screenApproval) return 'screen';
+  if (hookStatus(entry.hookState)) return 'hook';
+  const screen = entry.reportedStatus ?? entry.titleStatus;
+  if (status === screen || (status === 'starting' && screen === 'working')) return 'screen';
+}
+
+function reportShellStatus(entry, setStatus, status) {
+  const source = agentStatusSource(entry, status);
+  if (source) setStatus?.(status, source);
+  else setStatus?.(status);
 }
 
 function directoryFromOsc(value, platform) {
@@ -341,8 +373,12 @@ const modeSequences = entry => Object.entries(entry.modes).map(([mode, on]) => `
 
 function trackTerminalOsc(entry, data, platform, replyToProbe = true) {
   const output = entry.oscTail + data;
-  const sequences = /\x1b\](0|2|7|9|7501);([^\x07\x1b]{0,4096})(?:\x07|\x1b\\)/g;
+  const sequences = /\x1b\](0|2|7|9|777|7501);([^\x07\x1b]{0,4096})(?:\x07|\x1b\\)/g;
   for (const [, code, value] of output.matchAll(sequences)) {
+    if (code === '777') {
+      if (replyToProbe) entry.codexLaunchMarker?.(value);
+      continue;
+    }
     if (code === '7') {
       entry.reportedDirectory = directoryFromOsc(value, platform) ?? entry.reportedDirectory;
       continue;
@@ -364,6 +400,7 @@ function trackTerminalOsc(entry, data, platform, replyToProbe = true) {
       if (!entry.agent || (entry.agent === 'antigravity' && !app)) continue;
       if (app && app !== entry.agent && !(entry.agent === 'claude' && app === 'claude-code')) continue;
       entry.reportedStatus = PROGRAM_STATES[state];
+      if (entry.agent === 'codex' && state === 'working') entry.codexReview?.turnStarted();
       if (entry.codexActivity) entry.codexActivity.oscAt = Date.now();
       continue;
     }
@@ -377,7 +414,13 @@ function trackTerminalOsc(entry, data, platform, replyToProbe = true) {
       if (/^\[\s*[!.]\s*\]\s*Action Required\b/i.test(title)) entry.titleStatus = 'blocked';
       else if (/^Starting\b/i.test(title)) entry.titleStatus = 'starting';
       else entry.titleStatus = WORKING_TITLE.test(title) || /^(?:Working|Thinking)\b/i.test(title) ? 'working' : 'idle';
+      if (entry.agent === 'claude' && replyToProbe) {
+        const status = entry.titleStatus === 'working' ? 'working' : /(?:^|\s)✳(?:\s|$)/u.test(title) ? 'idle' : null;
+        const at = Date.now();
+        entry.hookTitle = status ? { status, at, since: entry.hookTitle?.status === status ? entry.hookTitle.since : at } : null;
+      }
     }
+    if (entry.agent === 'codex' && entry.titleStatus === 'working') entry.codexReview?.turnStarted();
   }
   entry.oscTail = output.slice(-4110).match(/\x1b(?:\][^\x07\x1b]*\x1b?)?$/)?.[0] ?? '';
 }
@@ -485,6 +528,61 @@ function createLocalShells({
 
   const hasAgent = entry => Boolean(entry?.agent && !entry.exited && (!entry.externalAgent || processAlive(entry.externalAgent.pid)));
 
+  function publishHookStatus(entry, before) {
+    const status = agentStatus(entry);
+    entry.reportStatus?.(status);
+    if (status === before) return;
+    entry.activeAt = Date.now();
+    entry.inbox?.kick();
+  }
+
+  function clearHookTimer(entry) {
+    clearTimeout(entry.hookTimer);
+    entry.hookTimerAt = null;
+  }
+
+  function clearCodexReview(entry) {
+    entry.codexReview?.close();
+    entry.codexReview = null;
+  }
+
+  const entryAgentId = entry => entry.externalAgent?.id ?? entry.registration?.env?.EZSHELL_AGENT_ID;
+  const codexAttached = entry => hasAgent(entry) && entry.agent === 'codex' && agents?.hasConnectedAgent?.(entryAgentId(entry));
+
+  function startCodexReview(id, entry) {
+    const mode = agents?.codexHookMode?.();
+    if (!injectCodexHooks(mode) || (entry.agent && entry.agent !== 'codex')) return;
+    clearCodexReview(entry);
+    let projectHooks;
+    entry.codexReview = observeCodexHookReview({
+      cols: entry.cols, rows: entry.rows,
+      projectHooks: () => projectHooks ??= codexProjectHooksPossible(entry.reportedDirectory ?? entry.launchDirectory),
+      onReviewChange: review => send('local-shell-codex-hook-review', { id, review }),
+      mayDecline: () => codexAttached(entry) && agents.codexHookMode() === mode,
+      onDecline: () => agents.setCodexHookMode?.('disabled') === true
+    });
+  }
+
+  function reconcileHooks(entry) {
+    if (!entry.hookState) return;
+    const now = Date.now();
+    const next = reconcileAgentHook(entry.hookState, {
+      now, title: entry.hookTitle, screenBlocked: entry.screenApproval, interruptedAt: entry.userInterruptAt
+    });
+    if (next === entry.hookTimerAt) return;
+    clearHookTimer(entry);
+    if (next === null) return;
+    entry.hookTimerAt = next;
+    entry.hookTimer = setTimeout(() => {
+      entry.hookTimerAt = null;
+      if (!hasAgent(entry) || entry.sleeping) return;
+      const before = agentStatus(entry);
+      reconcileHooks(entry);
+      publishHookStatus(entry, before);
+    }, Math.max(1, next - now));
+    entry.hookTimer.unref?.();
+  }
+
   function observeInbox(id, entry) {
     const { createAgentInboxWake, supportsAntigravityInput } = require('./ipc/agentInboxWake.js');
     const antigravity = entry.agent === 'antigravity';
@@ -498,11 +596,15 @@ function createLocalShells({
       kind: entry.agent, cols: entry.cols, rows: entry.rows,
       pendingMessages,
       unhandledMessages,
+      messageSeenAt: id => agents.messageSeenAt?.(entryAgentId(entry), id),
+      isHookWorking: () => hookStatus(entry.hookState) === 'working',
       parentInput: entry.parentInput,
       onApprovalChange(visible) {
         if (!hasAgent(entry)) return;
+        const before = agentStatus(entry);
         entry.screenApproval = visible;
-        entry.reportStatus?.(agentStatus(entry));
+        reconcileHooks(entry);
+        publishHookStatus(entry, before);
       },
       isWorking: () => {
         const status = agentStatus(entry);
@@ -512,7 +614,7 @@ function createLocalShells({
       // Nothing reported yet (a CLI just started): the wake waits for a still, empty composer instead
       isUnknown: () => agentStatus(entry) === 'unknown',
       isLive: () => shells.get(id)?.inbox === inbox && hasAgent(entry),
-      isBlocked: () => antigravity ? agentStatus(entry) === 'blocked' : entry.reportedStatus === 'blocked',
+      isBlocked: () => (antigravity || hookStatus(entry.hookState)) ? agentStatus(entry) === 'blocked' : entry.reportedStatus === 'blocked',
       write(data) {
         if (!hasAgent(entry)) return false;
         // Pasting needs mail to announce; the Enter that submits a line already pasted does not (the
@@ -531,7 +633,10 @@ function createLocalShells({
         try {
           entry.pty.write(data);
           entry.activeAt = Date.now();
-          if (trackInput) trackCodexInput(entry, data);
+          if (trackInput) {
+            entry.codexReview?.input(data, agents?.codexHookMode?.());
+            trackCodexInput(entry, data);
+          }
           return true;
         } catch { return false; }
       }
@@ -604,11 +709,13 @@ function createLocalShells({
     const binding = entry.externalAgent;
     if (!binding) return;
     clearInterval(binding.timer);
+    clearHookTimer(entry);
     entry.inbox?.close();
     Object.assign(entry, {
       agent: undefined, reportStatus: undefined, externalAgent: undefined, inbox: undefined, picker: undefined, speedControl: undefined,
       codexInput: null, codexActivity: null, titleStatus: 'unknown', reportedStatus: null, pendingAntigravityStatus: null,
-      screenApproval: false, chatInterrupts: 0, oscTail: ''
+      screenApproval: false, chatInterrupts: 0, oscTail: '',
+      hookState: null, hookTitle: null, userInterruptAt: undefined
     });
     return binding;
   }
@@ -655,8 +762,9 @@ function createLocalShells({
       }, AGENT_PROCESS_CHECK_MS);
       binding.timer.unref?.();
     }
-    entry.reportStatus = setStatus;
-    return { shellId: id, agentId: binding.id, status: agentStatus(entry) };
+    entry.reportStatus = status => reportShellStatus(entry, setStatus, status);
+    const status = agentStatus(entry);
+    return { shellId: id, agentId: binding.id, status, statusSource: agentStatusSource(entry, status) };
   }
 
   async function findAgentProcess({ pid, kind, shellId }) {
@@ -903,7 +1011,7 @@ function createLocalShells({
     }, AGENT_PROCESS_CHECK_MS).unref?.();
   }
 
-  function open({ cols, rows, cwd: directory, agent, resume, replacementFor } = {}, developmentTask) {
+  function open({ cols, rows, cwd: directory, agent, resume, replacementFor, restoring } = {}, developmentTask) {
     const previous = replacementFor === undefined ? undefined : shells.get(replacementFor);
     if (replacementFor !== undefined) {
       if (!previous || !resume) throw new Error('바꿀 셸을 찾지 못했습니다.');
@@ -911,7 +1019,10 @@ function createLocalShells({
     }
     const workingDirectory = directory === undefined ? cwd : requireLocalDirectory(directory);
     const id = `local:${nextId++}`;
-    const args = developmentTask ? developmentShellArgs(shell, developmentTask, platform) : shellArgs(shell, agent, platform, Boolean(agents), resume);
+    const automatic = restoring === true;
+    const codexHooks = agent === 'codex' && injectCodexHooks(agents?.codexHookMode?.(), automatic);
+    const args = developmentTask ? developmentShellArgs(shell, developmentTask, platform)
+      : shellArgs(shell, agent, platform, Boolean(agents), resume, codexHooks, automatic);
     const columns = previous?.cols ?? size(cols, 80);
     const lines = previous?.rows ?? size(rows, 24);
     const shellEnv = localTerminalEnvironment(env, platform);
@@ -947,21 +1058,31 @@ function createLocalShells({
       // For a window that reloads and takes the shell back as a tab (`list`)
       cwd: directory === undefined ? null : workingDirectory,
       launchDirectory: workingDirectory, reportedDirectory: null,
-      reportStatus: status => registration?.setStatus?.(status),
+      reportStatus: status => reportShellStatus(entry, registration?.setStatus, status),
       backlog: '', modes: {}, modeTail: '', exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: '',
       // Last sign of work (status, typing, a line sent to the agent) and the sleep it may be in (agentIdle.js)
       activeAt: openedAt, openedAt, sleeping: null
     };
+    const nonce = shellUsageEnv.EZSHELL_CODEX_HOOK_NONCE;
+    if (!agent && !developmentTask && platform === 'win32' && nonce) {
+      entry.codexLaunchMarker = value => {
+        if (value === `ezshell-codex-hooks=start;${nonce}`) startCodexReview(id, entry);
+        else if (value === `ezshell-codex-hooks=end;${nonce}`) clearCodexReview(entry);
+      };
+    }
+    if (codexHooks) startCodexReview(id, entry);
     if (registration) observeInbox(id, entry);
     shells.set(id, entry);
     pty.onData((data) => {
       if (!entry.exited) {
         trackTerminalOsc(entry, data, platform);
+        reconcileHooks(entry);
         const status = agentStatus(entry);
         entry.reportStatus?.(status);
         if (entry.agent && status !== 'idle') entry.activeAt = Date.now();
       }
       trackTerminalModes(entry, data);
+      entry.codexReview?.write(data);
       entry.inbox?.writeOutput(data);
       entry.backlog += data;
       // Trimmed only now and then: cutting on every chunk copies the whole backlog each time
@@ -970,6 +1091,8 @@ function createLocalShells({
     });
     pty.onExit(({ exitCode }) => {
       entry.exited = true;
+      clearHookTimer(entry);
+      clearCodexReview(entry);
       entry.exitCode = exitCode;
       endSleep(id, entry);
       entry.inbox?.close();
@@ -1006,10 +1129,13 @@ function createLocalShells({
     // Asleep: the pane is covered and the shell waits for the resume line; keys would go before it
     if (entry.sleeping) return;
     entry.activeAt = Date.now();
+    if (data === '\x1b' || data === '\x03') entry.userInterruptAt = entry.activeAt;
     if (entry.inbox?.deferProbeInput(data)) return;
     entry.inbox?.userInput(data);
     entry.pty.write(data);
-    trackCodexInput(entry, data);
+    const reviewing = entry.codexReview?.review;
+    entry.codexReview?.input(data, agents?.codexHookMode?.());
+    if (!reviewing) trackCodexInput(entry, data);
   }
 
   function pasteClipboardImage(id) {
@@ -1030,6 +1156,7 @@ function createLocalShells({
       entry.cols = columns;
       entry.rows = lines;
       entry.inbox?.resize(columns, lines);
+      entry.codexReview?.resize(columns, lines);
     } catch {
       // The shell ended between the check and the call
     }
@@ -1039,6 +1166,8 @@ function createLocalShells({
     const entry = shells.get(id);
     if (!entry) return;
     shells.delete(id);
+    clearHookTimer(entry);
+    clearCodexReview(entry);
     endSleep(id, entry);
     entry.inbox?.close();
     finishExternalAgent(entry);
@@ -1126,6 +1255,10 @@ function createLocalShells({
           ].join('');
         }
       }
+      if (sleeping.kind === 'codex') {
+        if (platform === 'win32') line = `& { $__ezShellAutomaticCodex = $true; ${line} }`;
+        else if (injectCodexHooks(agents?.codexHookMode?.(), true)) line += ' ' + quoteCodexHookArgs();
+      }
     } catch {
       endSleep(id, entry, { notify: true });
       return { ok: false, reason: 'no-session' };
@@ -1201,15 +1334,60 @@ function createLocalShells({
       entry.composing = value;
       entry.inbox?.setComposing(value);
     },
+    reportAgentHook(id, agentId, report, { checkStop = false } = {}) {
+      const entry = shells.get(id);
+      if (agents?.hooksEnabled?.() === false || !hasAgent(entry) || entry.sleeping || entry.agent !== report.kind) return;
+      if (agentId !== entryAgentId(entry)) return;
+      const before = agentStatus(entry);
+      const now = Date.now();
+      entry.hookState ??= createAgentHookState(report.kind);
+      const state = entry.hookState;
+      const oldSession = state.sessionId;
+      entry.inbox?.stopWakeReport(report);
+      let block;
+      if (checkStop && report.event === 'Stop' && report.promptId && state.turn?.id === report.promptId &&
+          report.startedAt >= state.turnAt && (!report.sessionId || !state.sessionId || report.sessionId === state.sessionId) &&
+          agentStatus(entry) === 'working' && now - (entry.userInterruptAt ?? -Infinity) >= 10_000) {
+        const waitingForThisStop = () => hasAgent(entry) && !entry.sleeping && entry.hookState === state &&
+          state.turnAt === report.startedAt && state.turn?.id === report.promptId;
+        block = entry.inbox?.prepareStopWake(report, () => {
+          if (!waitingForThisStop()) return;
+          const status = agentStatus(entry);
+          applyAgentHook(state, report, Date.now());
+          reconcileHooks(entry);
+          publishHookStatus(entry, status);
+        }, () => report.kind === 'claude' && waitingForThisStop() && entry.hookTitle?.status === 'working');
+      }
+      applyAgentHook(state, report, now, { stopBlocked: Boolean(block), screenBlocked: entry.screenApproval });
+      const session = state.sessionId;
+      if (session && session !== oldSession) agents?.setHookSession?.(agentId, session);
+      if (report.kind === 'codex' && !report.subagent) clearCodexReview(entry);
+      reconcileHooks(entry);
+      publishHookStatus(entry, before);
+      return block ? { block } : true;
+    },
+    clearAgentHooks() {
+      for (const entry of shells.values()) {
+        const before = agentStatus(entry);
+        clearHookTimer(entry);
+        clearCodexReview(entry);
+        entry.hookState = null;
+        entry.hookTitle = null;
+        entry.inbox?.clearStopWakes();
+        publishHookStatus(entry, before);
+        entry.inbox?.kick();
+      }
+    },
     /** Internal rollout activity from the session UUID used to launch this Codex. */
     setCodexTurnStatus(id, agentId, sessionId, turn) {
       const entry = shells.get(id);
       const activity = entry?.codexActivity;
-      if (!activity || !hasAgent(entry) || entry.sleeping || activity.sessionId !== sessionId) return;
+      if (!activity || !hasAgent(entry) || entry.sleeping || entry.hookState || activity.sessionId !== sessionId) return;
       if (agentId !== (entry.externalAgent?.id ?? entry.registration?.env?.EZSHELL_AGENT_ID)) return;
       if (turn && (turn.at < activity.startedAt || turn.at < (activity.turn?.at ?? 0))) return;
       const previous = agentStatus(entry);
       activity.turn = turn;
+      if (turn?.status === 'working' && turn.at >= activity.submittedAt) entry.codexReview?.turnStarted();
       const status = agentStatus(entry);
       if (status !== previous) {
         entry.reportStatus?.(status);
@@ -1217,12 +1395,22 @@ function createLocalShells({
         entry.inbox?.kick();
       }
     },
+    codexHookReview: id => shells.get(id)?.codexReview?.review ?? null,
+    declineCodexHooks(id) {
+      const entry = shells.get(id);
+      if (!entry?.codexReview?.review || !agents?.setCodexHookMode?.('disabled')) return false;
+      clearCodexReview(entry);
+      return true;
+    },
+    confirmStopDelivery: id => shells.get(id)?.inbox?.stopWakeReport(),
     /** The agent running in the shell and its state, or null */
     agentOf(id) {
       const entry = shells.get(id);
       if (!hasAgent(entry)) return null;
       const binding = entry.externalAgent;
-      const session = binding?.antigravity
+      const session = entry.hookState?.sessionId
+        ? { sessionId: entry.hookState.sessionId, cwd: binding?.claudeSession?.cwd ?? entry.launchDirectory }
+        : binding?.antigravity
         ? { sessionId: binding.roleSessionId, cwd: binding.antigravity.cwd }
         : binding?.claudeSession;
       return { kind: entry.agent, status: agentStatus(entry), ...(session ? { sessionId: session.sessionId, cwd: session.cwd } : {}) };
@@ -1364,6 +1552,7 @@ function createLocalShells({
       const entry = shells.get(id);
       if (!hasAgent(entry) || (entry.agent === 'antigravity' && agentStatus(entry) === 'blocked')) return false;
       entry.chatInterrupts++;
+      entry.userInterruptAt = Date.now();
       if (entry.inbox?.deferProbeInput('\x1b')) return true;
       entry.inbox?.userInput('\x1b');
       try { entry.pty.write('\x1b'); return true; } catch { return false; }

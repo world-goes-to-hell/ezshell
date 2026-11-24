@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAgentMessages } from './agentMessages.js'
 import { rpc } from './agentMessageCli.js'
 
@@ -17,10 +17,12 @@ afterEach(() => {
 
 const usage = { agent: 'claude', model: 'Opus 5.5', effort: 'high', sessionId: null, context: { percent: 38, size: 1000000 }, fiveHour: { percent: 23, resetsAt: 1795000000000 }, sevenDay: null }
 
-async function setup() {
+async function setup({ codexDeclined = false } = {}) {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-agent-usage-test-'))
+  const codexHookTrustFile = path.join(root, 'codex-hook-mode')
+  if (codexDeclined) fs.writeFileSync(codexHookTrustFile, 'disabled\n')
   const sent = []
-  messages = createAgentMessages({ roleFile: path.join(root, 'agent-roles.json'),
+  messages = createAgentMessages({ roleFile: path.join(root, 'agent-roles.json'), codexHookTrustFile,
     notify: (channel, payload) => sent.push({ channel, payload }), isLocked: () => false })
   await messages.ready()
   const claude = messages.register('claude', 'local:1', root, {})
@@ -111,10 +113,50 @@ describe('usage reports', () => {
     })
   })
 
-  it('give a launched Claude a status line of this run that prints nothing visible', async () => {
+  it('gives a launched or typed Claude the same usage status line and official hooks', async () => {
     const { claude } = await setup()
     const settings = JSON.parse(fs.readFileSync(claude.env.EZSHELL_AGENT_SETTINGS, 'utf8'))
     expect(settings.statusLine.command).toBe('ELECTRON_RUN_AS_NODE=1 "$EZSHELL_CLI_EXE" "$EZSHELL_AGENT_USAGE_SCRIPT"')
     expect(fs.existsSync(claude.env.EZSHELL_AGENT_USAGE_SCRIPT)).toBe(true)
+    const shell = messages.registerShell('local:typed')
+    expect(shell.EZSHELL_AGENT_SETTINGS).toBe(claude.env.EZSHELL_AGENT_SETTINGS)
+    expect(shell.EZSHELL_AGENT_HOOK_SCRIPT).toBe(claude.env.EZSHELL_AGENT_HOOK_SCRIPT)
+    expect(Object.keys(settings.hooks)).toEqual(expect.arrayContaining(['SessionStart', 'SessionEnd', 'UserPromptSubmit',
+      'PreToolUse', 'PostToolUse', 'PermissionRequest', 'PermissionDenied', 'Notification', 'PreCompact', 'PostCompact',
+      'PostToolUseFailure', 'Elicitation', 'StopFailure', 'Stop']))
+    for (const [event, [config]] of Object.entries(settings.hooks)) {
+      expect(config.hooks).toEqual([{ type: 'command', command: 'ELECTRON_RUN_AS_NODE=1 "$EZSHELL_CLI_EXE" "$EZSHELL_AGENT_HOOK_SCRIPT" claude',
+        ...(event === 'Stop' ? { timeout: 5 } : { async: true }) }])
+    }
+    expect(settings.hooks.PreToolUse[0].matcher).toBe('*')
+    expect(settings.hooks.PostToolUse[0].matcher).toBe('*')
+  })
+
+  it('atomically replaces Claude settings and resets a persisted Codex decline only when asked', async () => {
+    const { sent, claude } = await setup({ codexDeclined: true })
+    const file = claude.env.EZSHELL_AGENT_SETTINGS
+    const original = JSON.parse(fs.readFileSync(file, 'utf8'))
+    const shell = messages.registerShell('local:typed')
+    const runtimeMode = () => fs.readFileSync(shell.EZSHELL_CODEX_HOOK_MODE_FILE, 'utf8').trim()
+    expect(messages.configureHooks({ enabled: true })).toEqual({ success: true, codexMode: 'disabled' })
+    const rename = vi.spyOn(fs, 'renameSync')
+    try {
+      expect(messages.configureHooks({ enabled: false })).toEqual({ success: true, codexMode: 'disabled' })
+      expect(rename).toHaveBeenCalledWith(expect.stringContaining(file + '.'), file)
+      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ statusLine: original.statusLine })
+      expect(runtimeMode()).toBe('disabled')
+      const credentials = { pipe: claude.env.EZSHELL_AGENT_PIPE, token: claude.env.EZSHELL_AGENT_TOKEN }
+      expect(await rpc({ method: 'agent-event', kind: 'claude', event: 'SessionStart', startedAt: Date.now() }, credentials))
+        .toMatchObject({ stored: false })
+      expect(messages.configureHooks({ enabled: true })).toEqual({ success: true, codexMode: 'disabled' })
+      expect(messages.configureHooks({ enabled: true, resetCodexDecline: true })).toEqual({ success: true, codexMode: 'pending' })
+      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(original)
+      expect(runtimeMode()).toBe('pending')
+      expect(fs.readFileSync(path.join(root, 'codex-hook-mode'), 'utf8').trim()).toBe('pending')
+      expect(sent.filter(item => item.channel === 'codex-hooks-declined')).toEqual([])
+      messages.setCodexHookMode('disabled')
+      messages.setCodexHookMode('disabled')
+      expect(sent.filter(item => item.channel === 'codex-hooks-declined')).toHaveLength(1)
+    } finally { rename.mockRestore() }
   })
 })

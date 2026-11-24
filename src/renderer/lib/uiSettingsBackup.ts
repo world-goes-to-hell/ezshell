@@ -15,6 +15,7 @@ import { THEME_STORAGE_KEY } from './themeSync'
 import { parseLogViewPrefs, LOG_VIEW_PREFS_KEY } from './logViewPrefs'
 import { MARKDOWN_SPLIT_KEY, readSplit } from './markdownSplit'
 import { AGENT_IDLE_KEY, parseAgentIdlePrefs } from './agentIdlePrefs'
+import { AGENT_HOOKS_KEY, parseAgentHooksPrefs } from './agentHooksPrefs'
 import { AGENT_MESSAGE_VIEW_KEY, parseAgentMessageView } from './agentMessageMap'
 import { POINTER_PREFS_KEY, parsePointerPrefs } from './pointerPrefs'
 
@@ -130,6 +131,7 @@ export const UI_SETTING_ENTRIES: readonly UiSettingEntry[] = [
   { key: FILE_EXPLORER_WIDTH_KEY, group: 'layout', label: '파일 탐색기 너비', normalize: number(parseExplorerWidth) },
   { key: QUEUE_HEIGHT_STORAGE_KEY, group: 'layout', label: 'SFTP 전송 큐 높이', normalize: number(parseQueueHeight) },
   { key: AGENT_IDLE_KEY, group: 'view', label: '쉬는 에이전트의 메모리 비우기·잠재우기', normalize: raw => JSON.stringify(parseAgentIdlePrefs(raw)) },
+  { key: AGENT_HOOKS_KEY, group: 'view', label: '에이전트가 직접 알려 주는 상태 신호', normalize: viaParser(parseAgentHooksPrefs) },
   { key: AGENT_MESSAGE_VIEW_KEY, group: 'view', label: '에이전트 메시지 보기', normalize: parseAgentMessageView },
   { key: 'dbTreeWidth', group: 'layout', label: 'DB 트리 너비', normalize: number(raw => clampTreeWidth(Number(raw))) },
   { key: ACTIVITY_PREFS_KEY, group: 'view', label: 'MCP 활동 패널 보기', normalize: viaParser(parseActivityPrefs) },

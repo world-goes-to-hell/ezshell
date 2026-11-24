@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalInfo } from '../stores/terminalStore'
 import type { AgentMessageSession } from '../types'
-import { agentDisplayName, agentIdentityColor, localAgentName, agentIdentityTooltip, agentMessageMatches, agentPaneLocation, agentSearchTerm } from './agentIdentity'
+import { agentDisplayName, agentIdentityColor, localAgentName, agentIdentityTooltip, agentStatusSourceNote, agentMessageMatches, agentPaneLocation, agentSearchTerm } from './agentIdentity'
 import { MAIN_PANE, singlePane, splitPane, swapPanes } from './splitTree'
 import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../components/ui/agentProviderIcons'
 
@@ -65,5 +65,17 @@ describe('agent identity', () => {
     expect(agentIdentityTooltip({ ...agent, role: agent.id, status: 'error', exitCode: 7 }).title)
       .toBe('claude-1\nClaude Code · 오류 (종료 코드 7)\nC:\\work')
     expect(agentIdentityTooltip(agent, undefined, true).title).toBe('claude-1\nClaude Code · 연결 끊김\nC:\\work')
+  })
+
+  it('tells where the state came from in the tooltip only, when main says', () => {
+    const agent = {
+      id: 'codex-2', shellId: 'local:1', kind: 'codex', cwd: 'C:\\work', active: true, status: 'working',
+      waitingForReply: false, mcpConnected: true
+    } as AgentMessageSession
+    expect(agentIdentityTooltip({ ...agent, statusSource: 'hook' }).title).toBe('codex-2\nCodex · 작업 중 · Codex 가 알려 준 신호로 판단\nC:\\work')
+    expect(agentIdentityTooltip({ ...agent, statusSource: 'screen' }).title).toBe('codex-2\nCodex · 작업 중 · 터미널 화면을 보고 판단\nC:\\work')
+    expect(agentIdentityTooltip(agent).title).toBe('codex-2\nCodex · 작업 중\nC:\\work')
+    expect(agentIdentityTooltip({ ...agent, statusSource: 'hook' }, undefined, true).title).not.toContain('판단')
+    expect(agentStatusSourceNote('claude', 'hook')).toBe('Claude 가 알려 준 신호로 판단')
   })
 })

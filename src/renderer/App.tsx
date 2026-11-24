@@ -66,6 +66,7 @@ import { DUPLICATE_TAB_EVENT, OPEN_SNIPPET_MANAGER_EVENT } from './components/Te
 import { RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './lib/agentHistory'
 import { adoptOrphanLocalShells, rememberLocalLayout } from './lib/localShellAdopt'
 import { startAgentSleep } from './stores/agentSleepStore'
+import { startAgentHooks } from './stores/agentHooksStore'
 import { TAB_DROP_TAKEN_EVENT, linkServer, readProjectServers, writeProjectServers } from './lib/localProjectServers'
 import { WorkspacePanel } from './components/Workspace/WorkspacePanel'
 import { SnippetManager } from './components/Snippets/SnippetManager'
@@ -964,8 +965,8 @@ function App() {
   }
 
   // A terminal of this PC as a new tab (the shell runs in the main process)
-  const handleOpenLocalTerminal = async ({ cwd, agent, workspaceLabel, resume }: Partial<LocalProjectTerminal> & { resume?: string } = {}, pane?: number): Promise<string | null> => {
-    const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd, agent, resume })
+  const handleOpenLocalTerminal = async ({ cwd, agent, workspaceLabel, resume, restoring }: Partial<LocalProjectTerminal> & { resume?: string; restoring?: true } = {}, pane?: number): Promise<string | null> => {
+    const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd, agent, resume, restoring })
     if (!result || !result.success) {
       toast.error('로컬 터미널을 열지 못했습니다', result ? result.error : '앱을 다시 시작해 주세요.')
       return null
@@ -1083,6 +1084,8 @@ function App() {
   // Idle agents of local shells: main gets the settings, panes show the ones asleep (src/agentIdle.js)
   const unlockedOnce = !isLocked && !isCheckingLock
   useEffect(() => (unlockedOnce ? startAgentSleep() : undefined), [unlockedOnce])
+  // Whether agents report their state through the CLIs' hooks: main gets the switch (T11)
+  useEffect(() => (unlockedOnce ? startAgentHooks() : undefined), [unlockedOnce])
 
   const [restoreBanner, setRestoreBanner] = useState<RestoreBannerState | null>(null)
   const restoreCheckedRef = useRef(false)
@@ -1111,7 +1114,7 @@ function App() {
         const result = await handleQuickConnect(session, undefined, { workGroup })
         return result.success && result.sessionId ? { id: result.sessionId } : { error: result.error || '연결하지 못했습니다.' }
       },
-      openLocal: (tab) => openLocalWithAgents(tab, handleOpenLocalTerminal),
+      openLocal: (tab) => openLocalWithAgents(tab, handleOpenLocalTerminal, undefined, undefined, true),
       onProgress: (done) => setRestoreBanner({ phase: 'running', done, total })
     })
     setRestoreBanner(outcome.failed.length === 0 && outcome.quick.length === 0 ? null : { phase: 'done', outcome })
@@ -1208,6 +1211,13 @@ function App() {
     if (isLocked) return
     return window.electronAPI.onAgentChatCapture?.(useAgentChatStore.getState().applyCapture)
   }, [isLocked])
+
+  // Codex hooks turned off (`묻지 않기` on the review bar, or Continue without trusting): told once here,
+  // not by each pane. Optional until main's IPC lands (codex-4, T9)
+  useEffect(() => {
+    const api = window.electronAPI as { onCodexHooksDeclined?: (callback: () => void) => () => void }
+    return api.onCodexHooksDeclined?.(() => toast.info('Codex 훅을 쓰지 않습니다.', '설정 > MCP > 에이전트 메시지에서 다시 켤 수 있습니다.'))
+  }, [])
 
   const handleToggleSftp = () => {
     if (activeTerminalId && isSshTab(terminals.get(activeTerminalId))) {

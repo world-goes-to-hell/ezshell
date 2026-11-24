@@ -3,6 +3,11 @@ const { Terminal } = require('@xterm/headless')
 const { hasCodexSpeedChoice } = require('./codexSpeed.js')
 const { readAntigravityScreen } = require('./antigravityInboxScreen.js')
 const { PROMPT, BUSY_PROMPT, REMIND_PROMPT } = require('./agentInboxPrompts.js')
+const { claudeQueueVisible } = require('../agentChat/commandScreen.js')
+const { isCodexHookTrustScreen } = require('./codexHookLaunch.js')
+const STOP_WAKE_TIMEOUT = 15_000
+const STOP_WAKE_THINKING_RECHECK = 5000
+const STOP_WAKE_MAX_WAIT = 120_000
 
 // The line pasted into the agent's composer. Reading the message is what the sender sees (check_sent:
 // "read"); the result follows with reply_to_message. Receipts (send_receipt) were removed on 2026-11-20.
@@ -101,12 +106,15 @@ function claudeQuestionPrompt(rows, bare, bottom, previous) {
 /**
  * write: our wake lines (gated on mail by the caller); rawWrite: a chat line the user sent (submitText)
  */
-function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMessages = () => [], isWorking, isRunningTask = () => false, isUnknown = () => false, isLive = () => true, isBlocked = () => false, quietMs = QUIET_MS, write, rawWrite = write, parentInput = () => true, onApprovalChange }) {
+function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMessages = () => [], isWorking, isRunningTask = () => false, isUnknown = () => false, isLive = () => true, isBlocked = () => false, isHookWorking = () => false, messageSeenAt = () => null, quietMs = QUIET_MS, write, rawWrite = write, parentInput = () => true, onApprovalChange }) {
   const screen = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true })
   const antigravity = kind === 'antigravity'
   const dispatched = new Set()
   // Announced while the agent was busy: reminded once after the task if still unanswered
   const deferred = new Set()
+  const stopWakes = new Set()
+  const stopPending = new Set()
+  const stopAnnounced = new Set()
   let stopped = false
   let timer = null
   let stage = null
@@ -350,6 +358,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   const approvalIdentity = signature => `${approvalOccurrence}:${signature}`
 
   function readApprovalScreen(checkBehindComposer = false) {
+    if (codexHookTrustScreen()) return null
     if (antigravity) {
       return readAntigravityScreen(screen).blocked
         ? { question: null, detail: [], options: [], selected: null, signature: 'antigravity-terminal', usesTerminalInput: true }
@@ -466,7 +475,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   function chatBlocked() {
-    if (isBlocked()) return true
+    if (isBlocked() || codexHookTrustScreen()) return true
     const approval = readApprovalScreen(true)
     return Boolean(approval?.usesTerminalInput || approval?.selected)
   }
@@ -795,7 +804,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   function advance() {
-    if (antigravity || stopped || composing || held || chat || !isLive()) return
+    if (antigravity || stopped || composing || held || chat || !isLive() || codexHookTrustScreen()) return
     const now = Date.now()
     const attempt = stage ?? expiredWake
     if (parsedOutputVersion !== outputVersion) {
@@ -811,10 +820,11 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     const freshIdle = isUnknown() && quietFor >= quietMs
     const working = isWorking() && !freshIdle
     const running = working && isRunningTask()
-    const waiting = pendingMessages().filter(id => !dispatched.has(id))
+    const hookWorking = isHookWorking()
+    const waiting = pendingMessages().filter(id => !dispatched.has(id) && !stopPending.has(id))
     const open = new Set(unhandledMessages())
     for (const id of deferred) if (!open.has(id)) deferred.delete(id)
-    const remind = working ? [] : [...deferred]
+    const remind = working ? [] : [...deferred].filter(id => !stopPending.has(id))
     const due = waiting.length > 0 || remind.length > 0
     const input = due || attempt ? composer() : null
     if (attempt) {
@@ -839,7 +849,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       // A word-wrapped notice can still be visible when Codex parks the cursor on its first row.
       // Use the whole draft to keep waiting; use the live caret to authorize Enter.
       const blocked = rendered && chatBlocked()
-      const canSubmit = !working || (mode === 'busy' && running)
+      const canSubmit = !working || (mode === 'busy' && running && !hookWorking)
       const readyCaret = atEnd && parentInput(targetOf(input))
       if (working || blocked) attempt.idleCaretUntil = undefined
       else if (rendered && !readyCaret) attempt.idleCaretUntil ??= now + WAKE_IDLE_CARET_TIMEOUT
@@ -893,7 +903,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     // State not reported yet: look again once the screen has been still long enough
     if (due && working && isUnknown() && input?.atStart) { schedule(quietMs - quietFor + DRAW_SETTLE); return }
     // Busy but not in a task (starting up, approval prompt, unknown): wait as before
-    if (!due || (working && !running) || !input?.atStart || (userDraft && input.text && !input.suggestion)) return
+    if (!due || hookWorking || (working && !running) || !input?.atStart || (userDraft && input.text && !input.suggestion)) return
     if (now < holdUntil) { schedule(holdUntil - now); return }
     userDraft = false
     emptyClaudeTarget = null
@@ -909,6 +919,72 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     if (stopped) return []
     const { active: buffer } = screen.buffer
     return Array.from({ length: screen.rows }, (_, row) => buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? '')
+  }
+
+  const codexHookTrustScreen = () => kind === 'codex' && isCodexHookTrustScreen(screenLines())
+
+  function settleStopWake(attempt, continued = false, expired = false) {
+    for (const [id, seenBefore] of attempt.messages) {
+      const seen = messageSeenAt(id)
+      if (!continued && !(seen && seen !== seenBefore)) continue
+      attempt.messages.delete(id)
+      stopPending.delete(id)
+      stopAnnounced.add(id)
+      dispatched.add(id)
+      deferred.delete(id)
+      attempt.confirmed = true
+    }
+    if (attempt.messages.size && !expired) return
+    const thinking = expired && !attempt.confirmed && attempt.isThinking()
+    if (thinking) {
+      const remaining = attempt.startedAt + STOP_WAKE_MAX_WAIT - Date.now()
+      if (remaining > 0) {
+        attempt.timer = setTimeout(() => settleStopWake(attempt, false, true), Math.min(STOP_WAKE_THINKING_RECHECK, remaining))
+        attempt.timer.unref?.()
+        return
+      }
+      console.debug('[agent inbox] stop wake released while working')
+    }
+    clearTimeout(attempt.timer)
+    stopWakes.delete(attempt)
+    for (const id of attempt.messages.keys()) stopPending.delete(id)
+    if (expired && !attempt.confirmed && !thinking) attempt.onUnconfirmed()
+    schedule()
+  }
+
+  function clearStopWakes() {
+    for (const attempt of stopWakes) clearTimeout(attempt.timer)
+    stopWakes.clear()
+    stopPending.clear()
+  }
+
+  function stopWakeReport(report) {
+    if (report?.subagent) return
+    for (const attempt of stopWakes) {
+      const stop = attempt.report
+      const sameTurn = report?.promptId === stop.promptId
+      const continued = report && report.promptId && report.sessionId === stop.sessionId && report.startedAt > stop.startedAt && (
+        (sameTurn && (report.event === 'PreToolUse' || (report.event === 'Stop' && report.stopHookActive === true))) ||
+        (!sameTurn && kind === 'codex' && report.event === 'UserPromptSubmit')
+      )
+      settleStopWake(attempt, continued)
+    }
+  }
+
+  function prepareStopWake(report, onUnconfirmed, isThinking = () => false) {
+    if (stopped || held || chat || stage || expiredWake || composing || !isLive() || chatBlocked()) return null
+    if (kind === 'claude' && claudeQueueVisible({ lines: screenLines(), footerRow: composer(Infinity)?.footerRow })) return null
+    const available = id => !stopPending.has(id) && !stopAnnounced.has(id)
+    const waiting = pendingMessages().filter(id => available(id) && !dispatched.has(id))
+    const ids = waiting.length ? waiting : unhandledMessages().filter(available)
+    if (!ids.length) return null
+    const attempt = { report, startedAt: Date.now(), messages: new Map(ids.map(id => [id, messageSeenAt(id)])),
+      confirmed: false, onUnconfirmed, isThinking }
+    for (const id of ids) stopPending.add(id)
+    stopWakes.add(attempt)
+    attempt.timer = setTimeout(() => settleStopWake(attempt, false, true), STOP_WAKE_TIMEOUT)
+    attempt.timer.unref?.()
+    return waiting.length ? PROMPT : REMIND_PROMPT
   }
 
   function commandRows() {
@@ -1002,7 +1078,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         const start = () => {
           if (stopped || !isLive()) return resolve({ ok: false, reason: 'not-agent' })
           if (chat || stage || composing || held) return resolve({ ok: false, reason: 'busy' })
-          if (relaxed && chatBlocked()) return resolve({ ok: false, reason: 'approval' })
+          if (codexHookTrustScreen() || (relaxed && chatBlocked())) return resolve({ ok: false, reason: 'approval' })
           if (antigravity && (isWorking() || isUnknown() || parsedOutputVersion !== outputVersion)) return resolve({ ok: false, reason: 'busy' })
           // Hangul and other wide characters can take two terminal cells per character.
           const files = kind === 'codex' ? images?.files : null
@@ -1185,7 +1261,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     inputTarget: () => targetOf(composer()),
     /** The agent's own composer: 'empty', 'draft' (text in it), or null (not on screen: a dialog of the CLI) */
     composerState() {
-      if (stopped) return null
+      if (stopped || codexHookTrustScreen()) return null
       const input = composer()
       return input ? (input.atStart ? 'empty' : 'draft') : null
     },
@@ -1193,11 +1269,15 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     applicationCursorKeys: () => !stopped && screen.modes.applicationCursorKeysMode,
     resize(cols, rows) { screen.resize(cols, rows); emptyClaudeTarget = null; scheduleApprovalCheck(); schedule() },
     kick: schedule,
+    prepareStopWake,
+    stopWakeReport,
+    clearStopWakes,
     close() {
       if (stopped) return
       stopped = true
       clearTimeout(timer)
       clearTimeout(approvalTimer)
+      clearStopWakes()
       finishApprovalAnswer({ ok: false, reason: 'not-agent' })
       cancelQueuedChats('not-agent')
       if (chat) finishChat({ ok: false, reason: 'not-agent' }, false)

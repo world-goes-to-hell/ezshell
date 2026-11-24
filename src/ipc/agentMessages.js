@@ -17,9 +17,42 @@ const reconnectDigest = token => createHash('sha256').update(token).digest()
 const USER = 'user'
 const { sanitizeUsage, sameUsage } = require('./agentUsage.js')
 const { antigravityStatusFromInput, antigravityStatusSettings } = require('./antigravityStatusReport.js')
+const { CLAUDE_HOOK_EVENTS, validateAgentHookEvent } = require('./agentHookEvent.js')
+const { HOOK_COMMANDS } = require('../agentHookReport.js')
+const { CODEX_HOOK_ARGS } = require('./codexHookLaunch.js')
+const { PROMPT, REMIND_PROMPT } = require('./agentInboxPrompts.js')
+const MAX_HOOK_EVENTS = 32
+const STOP_CHECK_WAIT_MS = 1500
+const CODEX_HOOK_MODE_FILE = 'codex-hook-mode'
+const CODEX_HOOK_MODES = new Set(['pending', 'approved', 'disabled'])
+const STATUS_SOURCES = new Set(['hook', 'screen'])
+const CLAUDE_SETTINGS_FILE = 'agent-settings.json'
+const CLAUDE_TOOL_HOOKS = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied'])
+const CLAUDE_HOOKS = Object.fromEntries(CLAUDE_HOOK_EVENTS.map(event => [event, [{
+  ...(CLAUDE_TOOL_HOOKS.has(event) ? { matcher: '*' } : {}),
+  ...(event === 'Notification' ? { matcher: 'permission_prompt|elicitation_dialog|idle_prompt' } : {}),
+  hooks: [{ type: 'command', command: HOOK_COMMANDS.claude, ...(event === 'Stop' ? { timeout: 5 } : { async: true }) }]
+}]]))
 
-function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bindLocalAgent, reportLocalAntigravity,
-  bridgeFile, roleFile, platform = process.platform, home = homedir(), now = Date.now }) {
+function claudeSettings(enabled) {
+  return JSON.stringify({
+    statusLine: { type: 'command', command: 'ELECTRON_RUN_AS_NODE=1 "$EZSHELL_CLI_EXE" "$EZSHELL_AGENT_USAGE_SCRIPT"', padding: 0 },
+    ...(enabled ? { hooks: CLAUDE_HOOKS } : {})
+  })
+}
+
+function writeAgentFile(file, data) {
+  const temporary = file + '.' + randomUUID()
+  try {
+    fs.writeFileSync(temporary, data, { mode: 0o600, flag: 'wx' })
+    fs.renameSync(temporary, file)
+  } finally {
+    try { fs.unlinkSync(temporary) } catch {}
+  }
+}
+
+function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onInboxRead, bindLocalAgent, reportLocalAntigravity, onAgentHook,
+  bridgeFile, roleFile, codexHookTrustFile, platform = process.platform, home = homedir(), now = Date.now }) {
   const instanceBridgeFile = bridgeFile ? `${bridgeFile}.${process.pid}` : null
   const agents = new Map()
   const roleStore = createAgentRoleStore(roleFile)
@@ -33,6 +66,10 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   const reconnects = new Map()
   // agent id → latest usage (agentUsage.js shape)
   const usages = new Map()
+  // Private per-agent hook history. It is deliberately absent from the renderer snapshot.
+  const hookEvents = new Map()
+  const hookSessions = new Map()
+  const stopChecks = new Map()
   // Every local shell's token → its id, for the status line of a Claude typed into it (registerShell)
   const shellTokens = new Map()
   const messages = []
@@ -46,6 +83,64 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   let pipe
   let antigravityStatusForward
   let antigravityReportSequence = 0
+  let hooksEnabled = true
+  let codexHookMode = 'pending'
+  if (codexHookTrustFile) {
+    try {
+      const saved = fs.readFileSync(codexHookTrustFile, 'utf8').trim()
+      if (CODEX_HOOK_MODES.has(saved)) codexHookMode = saved
+    } catch {}
+  }
+
+  const runtimeCodexMode = () => hooksEnabled ? codexHookMode : 'disabled'
+
+  function updateHookFiles(enabled, mode) {
+    const runtimeMode = enabled ? mode : 'disabled'
+    const changes = []
+    if (directory && enabled !== hooksEnabled) {
+      changes.push([path.join(directory, CLAUDE_SETTINGS_FILE), claudeSettings(enabled), claudeSettings(hooksEnabled)])
+    }
+    if (directory && runtimeMode !== runtimeCodexMode()) {
+      changes.push([path.join(directory, CODEX_HOOK_MODE_FILE), runtimeMode + '\n', runtimeCodexMode() + '\n'])
+    }
+    if (codexHookTrustFile && mode !== codexHookMode) {
+      changes.push([codexHookTrustFile, mode + '\n', codexHookMode + '\n'])
+    }
+    const applied = []
+    try {
+      for (const [file, data, previous] of changes) {
+        writeAgentFile(file, data)
+        applied.push([file, previous])
+      }
+    } catch {
+      for (const [file, previous] of applied.reverse()) {
+        try { writeAgentFile(file, previous) } catch {}
+      }
+      return false
+    }
+    hooksEnabled = enabled
+    codexHookMode = mode
+    return true
+  }
+
+  function setCodexHookMode(mode) {
+    if (!hooksEnabled || !CODEX_HOOK_MODES.has(mode)) return false
+    if (mode === codexHookMode) return true
+    if (!updateHookFiles(true, mode)) return false
+    if (mode === 'disabled') notify('codex-hooks-declined')
+    return true
+  }
+
+  function configureHooks(request) {
+    const { enabled, resetCodexDecline } = request ?? {}
+    if (typeof enabled !== 'boolean') return { success: false, codexMode: runtimeCodexMode() }
+    const mode = enabled && resetCodexDecline === true && codexHookMode === 'disabled' ? 'pending' : codexHookMode
+    const success = updateHookFiles(enabled, mode)
+    if (success && !enabled) {
+      for (const id of agents.keys()) forgetHookData(id)
+    }
+    return { success, codexMode: runtimeCodexMode() }
+  }
 
   const publicMessage = ({ requestId, ...message }) => message
   const roleNames = id => {
@@ -129,8 +224,22 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     if (bindRoleSession(id, sessionId)) changed()
   }
 
+  function setHookSession(id, sessionId) {
+    if (!agents.get(id)?.active || hookSessions.get(id) === sessionId) return
+    hookSessions.set(id, sessionId)
+    clearUsage(id)
+  }
+
+  function forgetHookData(id) {
+    hookEvents.delete(id)
+    hookSessions.delete(id)
+    clearTimeout(stopChecks.get(id)?.timer)
+    stopChecks.delete(id)
+  }
+
   function forgetAgent(id) {
     agents.delete(id)
+    forgetHookData(id)
     reconnects.delete(id)
     roleSessions.delete(id)
     roleConflicts.delete(id)
@@ -147,7 +256,11 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       message.seenAt = now
       seen = true
     }
-    if (seen) changed()
+    if (seen) {
+      changed()
+      const shellId = agents.get(id)?.shellId
+      if (shellId) onInboxRead?.(shellId)
+    }
     return taken.map(({ reviewRequest, ...message }) => publicMessage(message))
   }
 
@@ -179,8 +292,9 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     const waiting = new Set(Array.from(inboxWaits.values(), wait => wait.agentId))
     return {
       revision,
-      agents: Array.from(agents.values(), agent => ({
+      agents: Array.from(agents.values(), ({ statusSource, ...agent }) => ({
         ...agent,
+        ...(statusSource && agent.active && !agent.sleeping ? { statusSource } : {}),
         ...activeRole(agent.id),
         layoutKey: layoutKeyOf(agent.id),
         waitingForReply: waiting.has(agent.id),
@@ -244,13 +358,58 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     return { id }
   }
 
+  function applyHook(agent, event, checkStop = false) {
+    const accepted = onAgentHook?.(agent.shellId, agent.id, event, { checkStop })
+    if (accepted && event.kind === 'codex' && !event.subagent && codexHookMode === 'pending') setCodexHookMode('approved')
+    return accepted
+  }
+
+  function finishStopCheck(agent, pending, checkStop) {
+    clearTimeout(pending.timer)
+    stopChecks.delete(agent.id)
+    if (isLocked() || !agents.get(agent.id)?.active) return null
+    const block = applyHook(agent, pending.event, checkStop)?.block
+    return block === PROMPT || block === REMIND_PROMPT ? block : null
+  }
+
+  function receiveHook(agent, request) {
+    if (!hooksEnabled) return request.method === 'stop-check' ? { block: null } : { stored: false }
+    const event = validateAgentHookEvent(request)
+    if (!event || !agent?.active || !agent.shellId || agent.kind !== event.kind) return { stored: false }
+    const pending = stopChecks.get(agent.id)
+    if (request.method === 'stop-check') {
+      if (event.event !== 'Stop') return { stored: false }
+      const recorded = pending?.event
+      if (!recorded || event.promptId !== recorded.promptId || event.startedAt !== recorded.startedAt || event.sessionId !== recorded.sessionId) {
+        return { block: null }
+      }
+      return { block: finishStopCheck(agent, pending, true) }
+    }
+    const events = hookEvents.get(agent.id) ?? []
+    events.push(event)
+    if (events.length > MAX_HOOK_EVENTS) events.shift()
+    hookEvents.set(agent.id, events)
+    if (event.event === 'Stop' && pending) finishStopCheck(agent, pending, false)
+    if (event.event === 'Stop' && request.checkStop === true) {
+      const stop = { event, timer: setTimeout(() => finishStopCheck(agent, stop, false), STOP_CHECK_WAIT_MS) }
+      stop.timer.unref?.()
+      stopChecks.set(agent.id, stop)
+    } else {
+      applyHook(agent, event)
+    }
+    return { stored: true }
+  }
+
   function respond(request, socket) {
-    // The status line of a Claude typed into a local shell has no agent token, only its shell's
-    if (request?.method === 'usage' && typeof request.shellToken === 'string') {
+    const hookReport = request?.method === 'agent-event' || request?.method === 'stop-check'
+    // Reports from a CLI started in a plain local shell can use its shell token.
+    if ((request?.method === 'usage' || hookReport) && typeof request.shellToken === 'string') {
       const shellId = shellTokens.get(request.shellToken)
       if (!shellId) throw new Error('ezShell 로컬 터미널에서 실행해 주세요.')
       if (isLocked()) throw new Error('먼저 앱 잠금을 해제해 주세요.')
-      const agent = [...agents.values()].find(candidate => candidate.shellId === shellId && candidate.active && candidate.kind === 'claude')
+      const kind = hookReport ? request.kind : 'claude'
+      const agent = [...agents.values()].find(candidate => candidate.shellId === shellId && candidate.active && candidate.kind === kind)
+      if (hookReport) return receiveHook(agent, request)
       return { stored: agent ? setUsage(agent.id, request.usage) : false }
     }
     const from = tokens.get(request?.token)
@@ -276,6 +435,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       }
       // From the status line command of a Claude ezShell launched: saved as this agent's usage only
       case 'usage': return { stored: setUsage(from, request.usage) }
+      case 'agent-event':
+      case 'stop-check': return receiveHook(agents.get(from), request)
       case 'send': return deliver(from, request)
       default: throw new Error('지원하지 않는 명령입니다.')
     }
@@ -306,6 +467,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       return
     }
     clearUsage(id)
+    forgetHookData(id)
     if (messages.some(message => message.from === id || message.to === id)) {
       agents.set(id, { ...agent, shellId: '', active: false, status: 'ended' })
     } else {
@@ -346,16 +508,17 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     changed()
   }
 
-  function setStatus(id, status) {
+  function setStatus(id, status, source) {
     const agent = agents.get(id)
-    if (!agent?.active || agent.sleeping || agent.status === status) return
-    agents.set(id, { ...agent, status })
+    const statusSource = STATUS_SOURCES.has(source) ? source : undefined
+    if (!agent?.active || agent.sleeping || (agent.status === status && agent.statusSource === statusSource)) return
+    agents.set(id, { ...agent, status, statusSource })
     changed()
   }
 
   function attachExternal(kind, cwd, attach, startedAt, requireShell = false) {
     let id = `${kind}-${++serial}`
-    const binding = attach?.({ agentId: id, setStatus: status => setStatus(id, status), onExit: endExternal })
+    const binding = attach?.({ agentId: id, setStatus: (status, source) => setStatus(id, status, source), onExit: endExternal })
     if (!binding && requireShell) return null
     id = binding?.agentId ?? id
     const before = agents.get(id)
@@ -363,6 +526,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     const resumeId = before?.sleeping ? before.resumeId : binding?.resumeId
     agents.set(id, {
       id, shellId: binding?.shellId ?? '', kind, cwd, active: true, status: binding?.status ?? 'unknown',
+      ...(STATUS_SOURCES.has(binding?.statusSource) ? { statusSource: binding.statusSource } : {}),
       startedAt: before?.startedAt ?? startedAt, ...(resumeId ? { resumeId } : {})
     })
     return { id, binding }
@@ -552,6 +716,10 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
 
   function stop() {
     reconnects.clear()
+    hookEvents.clear()
+    hookSessions.clear()
+    for (const pending of stopChecks.values()) clearTimeout(pending.timer)
+    stopChecks.clear()
     for (const socket of inboxWaits.keys()) removeWait(socket)
     for (const socket of sockets) socket.destroy()
     server?.close()
@@ -564,9 +732,10 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       try { fs.unlinkSync(path.join(directory, 'agent-mcp.json')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'agent-wake-mcp.json')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'agent-shell-mcp.json')) } catch {}
-      try { fs.unlinkSync(path.join(directory, 'agent-settings.json')) } catch {}
+      try { fs.unlinkSync(path.join(directory, CLAUDE_SETTINGS_FILE)) } catch {}
       try { fs.unlinkSync(path.join(directory, 'antigravity-settings.json')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'antigravity-status.cmd')) } catch {}
+      try { fs.unlinkSync(path.join(directory, CODEX_HOOK_MODE_FILE)) } catch {}
       try { fs.unlinkSync(path.join(directory, 'messages.sock')) } catch {}
       try { fs.rmdirSync(directory) } catch {}
       directory = undefined
@@ -575,6 +744,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
 
   async function start() {
     directory = fs.mkdtempSync(path.join(tmpdir(), 'ezshell-agent-'))
+    writeAgentFile(path.join(directory, CODEX_HOOK_MODE_FILE), runtimeCodexMode() + '\n')
     pipe = platform === 'win32' ? '\\\\.\\pipe\\ezshell-' + randomUUID() : path.join(directory, 'messages.sock')
     const command = platform === 'win32'
       ? '@echo off\r\nsetlocal DisableDelayedExpansion\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%EZSHELL_CLI_EXE%" "%EZSHELL_CLI_SCRIPT%" %*\r\n'
@@ -598,9 +768,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     }
     // Added with --settings to the Claude ezShell launches, for that run only (the user's own status
     // line stays in their settings). Claude runs it in Git Bash on Windows and sh elsewhere.
-    fs.writeFileSync(path.join(directory, 'agent-settings.json'), JSON.stringify({
-      statusLine: { type: 'command', command: 'ELECTRON_RUN_AS_NODE=1 "$EZSHELL_CLI_EXE" "$EZSHELL_AGENT_USAGE_SCRIPT"', padding: 0 }
-    }), { mode: 0o600 })
+    writeAgentFile(path.join(directory, CLAUDE_SETTINGS_FILE), claudeSettings(hooksEnabled))
     const antigravity = antigravityStatusSettings(home, platform)
     antigravityStatusForward = antigravity.forward
     fs.writeFileSync(path.join(directory, 'antigravity-settings.json'), JSON.stringify({ statusLine: antigravity.statusLine }), { mode: 0o600 })
@@ -683,8 +851,9 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       EZSHELL_AGENT_MCP_SCRIPT: path.join(__dirname, 'agentMessageMcp.js'),
       EZSHELL_AGENT_MCP_CONFIG: path.join(directory, 'agent-mcp.json'),
       // Claude only: its status line reports usage to the app instead of drawing rows (agentUsageReport.js)
-      EZSHELL_AGENT_SETTINGS: path.join(directory, 'agent-settings.json'),
-      EZSHELL_AGENT_USAGE_SCRIPT: path.join(__dirname, 'agentUsageReport.js')
+      EZSHELL_AGENT_SETTINGS: path.join(directory, CLAUDE_SETTINGS_FILE),
+      EZSHELL_AGENT_USAGE_SCRIPT: path.join(__dirname, 'agentUsageReport.js'),
+      EZSHELL_AGENT_HOOK_SCRIPT: path.join(__dirname, '..', 'agentHookReport.js')
     }
     const stopReceiving = () => {
       tokens.delete(token)
@@ -698,12 +867,13 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     }
     return {
       env,
-      setStatus: status => setStatus(id, status),
+      setStatus: (status, source) => setStatus(id, status, source),
       finish(exitCode) {
         const agent = agents.get(id)
         if (!agent?.active) return
         stopReceiving()
         clearUsage(id)
+        forgetHookData(id)
         const status = agent.status === 'error' || (exitCode && exitCode !== 130) ? 'error' : 'ended'
         agents.set(id, { ...agent, active: false, status, exitCode })
         changed()
@@ -713,6 +883,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
         if (!agent) return
         stopReceiving()
         clearUsage(id)
+        forgetHookData(id)
         if (messages.some(message => message.from === id || message.to === id)) {
           if (!agent.active) return
           agents.set(id, { ...agent, active: false, status: 'ended' })
@@ -749,6 +920,9 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     if (!agent?.active) return false
     const clean = sanitizeUsage(value, agent.kind)
     if (!clean) return false
+    const sessionId = hookSessions.get(agentId)
+    if (sessionId && clean.sessionId && clean.sessionId.toLowerCase() !== sessionId) return false
+    if (sessionId) clean.sessionId = sessionId
     const previous = usages.get(agentId)
     // A long Codex turn can push its settings out of the transcript tail while usage keeps arriving.
     if (agent.kind === 'codex' && previous && previous.sessionId === clean.sessionId) {
@@ -794,8 +968,12 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       EZSHELL_AGENT_MCP_SCRIPT: path.join(__dirname, 'agentMessageMcp.js'),
       EZSHELL_AGENT_WAKE_MCP_CONFIG: path.join(directory, 'agent-wake-mcp.json'),
       EZSHELL_AGENT_SHELL_MCP_CONFIG: path.join(directory, 'agent-shell-mcp.json'),
-      EZSHELL_AGENT_SETTINGS: path.join(directory, 'agent-settings.json'),
+      EZSHELL_AGENT_SETTINGS: path.join(directory, CLAUDE_SETTINGS_FILE),
       EZSHELL_AGENT_USAGE_SCRIPT: path.join(__dirname, 'agentUsageReport.js'),
+      EZSHELL_AGENT_HOOK_SCRIPT: path.join(__dirname, '..', 'agentHookReport.js'),
+      EZSHELL_CODEX_HOOK_MODE_FILE: path.join(directory, CODEX_HOOK_MODE_FILE),
+      EZSHELL_CODEX_HOOK_ARGS: JSON.stringify(CODEX_HOOK_ARGS),
+      EZSHELL_CODEX_HOOK_NONCE: createHash('sha256').update('codex-hooks:' + token).digest('hex').slice(0, 24),
       EZSHELL_ANTIGRAVITY_SETTINGS: path.join(directory, 'antigravity-settings.json'),
       EZSHELL_ANTIGRAVITY_STATUS_SCRIPT: path.join(__dirname, 'antigravityStatusReport.js'),
       ...(platform === 'win32' ? { EZSHELL_ANTIGRAVITY_STATUS_COMMAND: `"${path.join(directory, 'antigravity-status.cmd')}"` } : {}),
@@ -819,6 +997,15 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     ready, enableExternalBridge, pauseExternalBridge, register, stop, snapshot, unreadFor, unhandledFor,
     sendAsUser: request => deliver(USER, request),
     setUserRole: (id, role) => setRole(id, role, 'user'),
+    hookEventsOf: id => (hookEvents.get(id) ?? []).map(event => ({ ...event })),
+    hookSessionOf: id => hookSessions.get(id) ?? null,
+    messageSeenAt: (agentId, messageId) => messages.find(message => message.to === agentId && message.id === messageId)?.seenAt ?? null,
+    hasConnectedAgent: id => isConnected(id) && !agents.get(id)?.sleeping,
+    setHookSession,
+    codexHookMode: runtimeCodexMode,
+    hooksEnabled: () => hooksEnabled,
+    configureHooks,
+    setCodexHookMode,
     setUsage, setVerifiedSession, applyPicked, usageSnapshot, registerShell, registerLocalClaude, registerLocalAntigravity, forgetShell, sleep, cancelSleep
   }
 }

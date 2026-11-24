@@ -12,6 +12,7 @@ import { CHAT_QUOTE_LIMIT, composeQuotedReply, prepareChatQuote } from '../../li
 import { openAgentMessages, useAgentMessagesStore, useAgentPaneLocation, usePaneAgentMail } from '../Terminal/AgentMessages'
 import { AgentRoleButton } from '../ui/AgentIdentity'
 import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../ui/agentProviderIcons'
+import { agentStatusSourceNote } from '../../lib/agentIdentity'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
 import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
 import { matchesBinding } from '../../lib/shortcutMatch'
@@ -485,6 +486,11 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   const status = chat?.state === 'ended' ? 'ended'
     : chat?.approval ? 'blocked'
       : (antigravity ? chat?.status : agent?.status) ?? 'unknown'
+  // Tooltip only (T7): where the shown state came from. A question read off the chat's screen is the
+  // screen's; Antigravity's and an ended chat's state are not the agent snapshot's
+  const statusSourceTitle = status === 'ended' || antigravity || !kind ? undefined
+    : chat?.approval ? '터미널 화면을 보고 판단'
+      : agentStatusSourceNote(kind, agent?.statusSource)
   // Claude's AskUserQuestion: answered on the chat's own card while its dialog shows (and while the card's
   // answer is on its way: the dialog is out of reach meanwhile), unless it went to the terminal
   const askSending = useAskQuestionStore(state => state.sending.get(shellId))
@@ -1272,7 +1278,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
           {title}
         </button>
         {(STATUS_LABELS[status] || (antigravity && idle)) && (
-          <span className="agent-chat-status" data-status={status}>
+          <span className="agent-chat-status" data-status={status} title={statusSourceTitle}>
             {status === 'working' && <RiLoader4Line className="agent-chat-spin" aria-hidden />}
             {antigravity && idle ? '입력 대기' : STATUS_LABELS[status]}
           </span>

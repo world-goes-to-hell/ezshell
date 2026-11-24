@@ -52,7 +52,7 @@ export function agentsOfLocalTab(
 export const agentKindsByShell = (): Map<string, LocalAgent> => new Map(useAgentMessagesStore.getState().snapshot.agents
   .flatMap(({ active, shellId, kind }) => active && shellId && (kind === 'claude' || kind === 'codex') ? [[shellId, kind] as const] : []))
 
-type OpenLocal = (options: { cwd?: string; workspaceLabel?: string; agent?: LocalAgent; resume?: string }) => Promise<string | null>
+type OpenLocal = (options: { cwd?: string; workspaceLabel?: string; agent?: LocalAgent; resume?: string; restoring?: true }) => Promise<string | null>
 
 /** How a pane's agent starts again: its conversation, or the same agent fresh */
 const startOf = (agent: RestoreAgent): PaneStart => (agent.sessionId
@@ -67,16 +67,18 @@ export async function openLocalWithAgents(
   tab: Extract<RestoreTab, { kind: 'local' }>,
   open: OpenLocal,
   queue: (tabId: string, pane: PaneId, start: PaneStart) => void = queuePaneStart,
-  queueChat: (tabId: string, pane: PaneId) => void = queueChatView
+  queueChat: (tabId: string, pane: PaneId) => void = queueChatView,
+  restoring = false
 ): Promise<string | null> {
   const main = tab.agents?.find(agent => agent.pane === MAIN_PANE)
-  const base = { cwd: tab.cwd, workspaceLabel: tab.workspaceLabel }
+  const launchPolicy = restoring ? { restoring: true as const } : {}
+  const base = { cwd: tab.cwd, workspaceLabel: tab.workspaceLabel, ...launchPolicy }
   let id: string | null = null
   if (main?.sessionId) id = await open({ ...base, ...startOf(main) })
   if (!id && main) id = await open({ ...base, agent: main.agent })
   if (!id) id = await open(base)
   if (id) {
-    for (const agent of tab.agents ?? []) if (agent.pane !== MAIN_PANE) queue(id, agent.pane as PaneId, startOf(agent))
+    for (const agent of tab.agents ?? []) if (agent.pane !== MAIN_PANE) queue(id, agent.pane as PaneId, { ...startOf(agent), ...launchPolicy })
     // Panes that were chats: shown as chats again once their agent is back in the shell
     for (const agent of tab.agents ?? []) if (agent.chat) queueChat(id, agent.pane as PaneId)
   }

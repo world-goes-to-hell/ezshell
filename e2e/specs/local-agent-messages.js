@@ -902,7 +902,8 @@ async function run() {
     await until(`${cardStatus('claude-7')}?.dataset.status === 'idle'`)
     await driver.move(...await driver.center(`${card('claude-7')}.querySelector('.agent-message-map-card-name strong')`))
     check('the roleless card tooltip contains the ID and the location once', await until(identityTooltip('claude-7', 'Claude Code'), 3000) &&
-      await js(`${tooltip}?.textContent === 'claude-7\\nClaude Code · 쉼\\nother workspace · 칸 1'`))
+      // The state line ends with where the state came from (statusSource, tooltip only): no hooks here
+      await js(`${tooltip}?.textContent === 'claude-7\\nClaude Code · 쉼 · 터미널 화면을 보고 판단\\nother workspace · 칸 1'`))
     await driver.shot('local-agent-message-map-tooltip-id')
     await driver.move(20, 45)
     const otherMessage = await mcp('codex-6', 'send_message', { to: 'claude-7', text: 'other-workspace-message' })

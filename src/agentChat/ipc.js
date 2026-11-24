@@ -5,7 +5,7 @@ const { linkTarget } = require('./links.js')
 const { readLinkPreview, resolveLocalPreviewPath } = require('./localPreview.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { routeSubagent, subagentRelayText } = require('./subagentChat.js')
-const { watchCommand } = require('./commandScreen.js')
+const { watchCommand, claudeQueueVisible } = require('./commandScreen.js')
 const { customCommands } = require('./slashCommands.js')
 const { createImageDrafts } = require('./imageDrafts.js')
 const { cleanAnswer } = require('./askQuestions.js')
@@ -87,13 +87,6 @@ function retryRequest(value) {
   return { acceptedAt: value.acceptedAt, transcriptId: value.transcriptId, ignoreIds: value.ignoreIds }
 }
 
-function claudeQueueVisible(screen) {
-  const lines = screen?.lines ?? []
-  // The hint can replace the prompt or appear below the composer and wrap in a narrow pane.
-  const start = Math.min(screen?.footerRow ?? 0, Math.max(0, lines.length - 8))
-  const footer = lines.slice(start).join(' ').replace(/\s+/g, ' ')
-  return /(?:\bpress (?:up(?: arrow)?|↑)|↑(?= to\b)) .{0,72}?\bqueued messages?\b/i.test(footer)
-}
 const SPEED_REASONS = {
   ...REASONS,
   working: 'Codex가 입력을 기다릴 때 전환할 수 있습니다.',
