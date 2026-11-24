@@ -80,9 +80,19 @@
   padding-inline: 0 6px;
 }
 
+/*
+ * Beside a tab strip that scrolls (App.tsx .terminal-tab-items, SplitPaneTabBar .split-pane-tabs), the strip
+ * gives up the room: shrinking with it left the selector an icon and a chevron once many tabs were open.
+ * Its own cap (max-inline-size) and the narrow-header rule below still bound it.
+ */
+.terminal-tab-header > .tab-group-control,
+.split-pane-header > .tab-group-control { flex: none; }
+
 .split-pane-header .tab-group-select { height: 34px; }
 
-@container split-tab-header (max-width: 220px) {
+/* Up to 320px the selector (at most 43% of the header) would leave the tab strip only 15~55px: icon and
+   chevron only from that width (review 30, a four-way screen split's header is about 260px) */
+@container split-tab-header (max-width: 320px) {
   .tab-group-control { flex: none; }
   .tab-group-select { gap: 2px; padding-inline: 3px; }
   .tab-group-select-copy { display: none; }

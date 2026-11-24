@@ -318,7 +318,7 @@
 }
 
 .split-pane-header > .new-tab-btn { flex: none; }
-.split-pane-header > .split-pane-actions { margin-left: auto; }
+.split-pane-header > .split-pane-actions { flex: none; margin-left: auto; }
 
 .split-pane-tabs:has(.tab-worktree-badge) { padding-block-start: 4px; }
 .split-pane-tabs:has(.tab-worktree-badge) .split-pane-tab-item { padding-block-start: 10px; }
