@@ -8,15 +8,17 @@ import { CODEX_HOOK_ARGS, codexProjectHooksPossible, observeCodexHookReview } fr
 afterEach(() => vi.useRealTimers())
 
 describe('Codex hook launch', () => {
-  it('gives the ten Codex events the stable commands with a synchronous Stop', () => {
+  // Codex warned at every start about SessionEnd / Interrupt above 3 s and an async SessionEnd (2026-11-25)
+  it('gives the ten Codex events the stable commands with the limits Codex actually runs', () => {
     expect(CODEX_HOOK_ARGS).toHaveLength(20)
     const events = []
     for (let i = 0; i < CODEX_HOOK_ARGS.length; i += 2) {
       expect(CODEX_HOOK_ARGS[i]).toBe('-c')
-      const [, event, posix, windows, async] = /^hooks\.(\w+)=\[\{hooks=\[\{type='command',command=("[^"]+"),command_windows=("[^"]+"),timeout=5,async=(true|false)\}\]\}\]$/.exec(CODEX_HOOK_ARGS[i + 1])
+      const [, event, posix, windows, timeout, async] = /^hooks\.(\w+)=\[\{hooks=\[\{type='command',command=("[^"]+"),command_windows=("[^"]+"),timeout=(\d+),async=(true|false)\}\]\}\]$/.exec(CODEX_HOOK_ARGS[i + 1])
       expect(JSON.parse(posix)).toBe(HOOK_COMMANDS.codex)
       expect(JSON.parse(windows)).toBe(HOOK_COMMANDS.codexWindows)
-      expect(async).toBe(event === 'Stop' ? 'false' : 'true')
+      expect(timeout).toBe(event === 'SessionEnd' || event === 'Interrupt' ? '3' : '5')
+      expect(async).toBe(event === 'Stop' || event === 'SessionEnd' ? 'false' : 'true')
       events.push(event)
     }
     expect(events).toContain('Interrupt')

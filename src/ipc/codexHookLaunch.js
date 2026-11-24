@@ -12,11 +12,17 @@ function tomlCommand(command) {
   return '"' + encoded + '"'
 }
 
+// Codex 0.171 caps SessionEnd and Interrupt at 3 seconds and always runs SessionEnd synchronously,
+// and warns at every start when the config asks for more (seen on a real Codex, 2026-11-25).
+// The reporter ends within 1.5 seconds, so ask for exactly what Codex runs.
+const SHORT_HOOK_EVENTS = new Set(['SessionEnd', 'Interrupt'])
+const SYNC_HOOK_EVENTS = new Set(['Stop', 'SessionEnd'])
+
 const CODEX_HOOK_ARGS = CODEX_HOOK_EVENTS.flatMap(event => [
   '-c',
   "hooks." + event + "=[{hooks=[{type='command',command=" + tomlCommand(HOOK_COMMANDS.codex) +
     ',command_windows=' + tomlCommand(HOOK_COMMANDS.codexWindows) +
-    ',timeout=5,async=' + (event !== 'Stop') + '}]}]'
+    ',timeout=' + (SHORT_HOOK_EVENTS.has(event) ? 3 : 5) + ',async=' + !SYNC_HOOK_EVENTS.has(event) + '}]}]'
 ])
 
 function injectCodexHooks(mode, automatic = false) {

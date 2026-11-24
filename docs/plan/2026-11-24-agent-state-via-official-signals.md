@@ -107,13 +107,38 @@ enter confirm · esc skip
 - "Review hooks" 는 이벤트별 표다 (Event / Installed / Active / Review / Description). 아래에 `t trust all · enter review · esc close` 가 있다.
 - 이 PC 에서는 Orca 의 훅이 이미 신뢰된 상태라, SessionStart·UserPromptSubmit 의 Installed 2, Active 1, Review 1 로 보였다. 우리 훅만 검토 대상이다.
 
-**남은 미확인 (Codex)**
-- 승인한 뒤의 신뢰 기록 위치(문서상 사용자 `config.toml` 의 `hooks.state`).
-- 명령 문자열을 고정했을 때 다음 실행에도 신뢰가 유지되는지.
-- Codex TUI 에서 Stop block 이 차례를 잇는지 (문서·소스로만 확인).
-- 확인하려면 다음 둘 중 하나가 필요하다:
-  - 사용자가 직접 임시 `CODEX_HOME` 에 인증 파일을 두고 실행한다 (예: `! ` 로 사용자가 복사 명령을 실행).
-  - 이 세션에 그 복사를 허용하는 권한 규칙을 둔다.
+### 앱으로 한 실측 (2026-11-25, 92e4b8b 빌드, 실제 계정)
+
+**방법**
+- `npm run build` 뒤 Electron 을 `--user-data-dir=<임시 프로필>` 로 따로 띄웠다. 설치본(2.33.0)과 단일 실행 잠금·메시지 연결 파일이 겹치지 않는다.
+- 빈 Git 폴더에서 Claude Code 2.1.331 과 Codex 0.171.0 을 앱이 띄우고, CDP 로 입력하며 툴팁의 상태를 0.5초마다 읽었다.
+- Codex 훅 신뢰와 Claude 폴더 신뢰는 사용자가 직접 눌렀다.
+- 주의: Claude Code 의 셸에서 앱을 띄우면 `NO_COLOR=1` 이 넘어가, 그 안의 Claude 가 색 없이 돈다. 시험 창을 띄울 때는 `NO_COLOR` 도 지운다 (아래 "찾은 것" 3).
+
+| 항목 | 결과 |
+|---|---|
+| Codex 신뢰 | 검토 표에서 `t`(trust all)로 우리 훅 10개를 승인했다. 사용자의 기존 훅은 이미 Active 라 새로 신뢰되지 않았다. 첫 신호(UserPromptSubmit)에 `codex-hook-mode` 가 `approved` 가 됐다 |
+| 신뢰 기록 | 사용자 `~/.codex/config.toml` 의 `[hooks.state.'C:\<session-flags>\config.toml:<이벤트>:0:0'] trusted_hash`. 설치 경로가 키에 없다 |
+| 다음 실행 | 앱을 다시 띄워도 다시 묻지 않았다 |
+| 해시에 드는 것 | `async` 를 바꾸면 그 훅만 다시 묻고(`1 hook is new or changed`), `timeout` 만 바꾼 훅은 묻지 않았다 |
+| Codex 상태 | 작업 중·쉼 모두 `Codex 가 알려 준 신호로 판단`. Esc 를 누르면 1초 안에 쉼 (Interrupt) |
+| Codex Stop block | 45초 명령 중에 온 메시지: 입력칸에 아무것도 넣지 않았다. 명령이 끝나자 `Blocked by hook — New ezShell message: …` 가 뜨고 같은 차례에서 `read_inbox` → `reply_to_message` |
+| Claude 상태 | ezShell 이 띄운 Claude 는 폴더 신뢰 직후 SessionStart 로 신호 판단이 됐다. 선택지 질문(AskUserQuestion) 동안 `응답 필요`, 답한 뒤 쉼 |
+| Claude Stop block | 35초 포그라운드 명령 중에 온 메시지: 입력칸에 넣지 않았다. 명령이 끝나자 `Ran 7 stop hooks · Stop hook reported a problem · New ezShell message: …` 뒤 같은 차례에서 읽고 답했다 (사용자의 다른 Stop 훅과 함께 돈다) |
+| 쉴 때 메시지 | Claude·Codex 모두 입력칸의 `PROMPT` 로 깨어나 답했다. Claude Code 는 포그라운드 `sleep 40` 을 막고 백그라운드로 돌린 뒤 차례를 끝내므로, 그 사이 온 메시지는 쉴 때 경로로 갔다 |
+| 직접 친 `claude` | PowerShell 함수가 `--settings` 를 붙여 훅이 온다. 다만 첫 질문 전에는 화면 판단이다 (아래 "찾은 것" 2) |
+
+**찾은 것**
+1. Codex 0.171 은 SessionEnd·Interrupt 의 `timeout` 을 3초로 줄이고 SessionEnd 를 항상 동기로 돌리며, 그 설정을 줄 때마다 시작 경고(`6 warnings` 중 3개)를 띄웠다. → 2026-11-25 에 값을 3초·동기로 맞췄다 (`codexHookLaunch.js`). 바꾼 뒤 검토 표의 Issues 가 사라졌고, 이미 승인한 이 PC 는 SessionEnd 하나만 다시 묻는다.
+2. 셸에 직접 친 Claude 의 SessionStart 는 메시지 MCP 가 그 셸에 묶이기 전에 와서 버려진다 (`agentMessages.respond` 의 셸 토큰 경로에서 같은 셸·종류의 에이전트가 아직 없음). 첫 질문부터는 훅 판단이고, 그 전에는 화면 판단이 쉼을 맞게 보여 준다. 고치려면 셸별로 짧게(수 초) 받아 두었다가 묶일 때 넘겨야 한다. 이득이 툴팁 문구뿐이라 미뤘다.
+3. `NO_COLOR` 환경에서는 Claude 의 다음 질문 제안이 흐림 속성 없이 그려져, 깨우기가 사용자가 쓰던 글로 보고 `PROMPT` 를 넣지 않는다 (훅 변경 전부터 있던 문제). 커서가 글 앞에 있는 모양으로 가를 수 있지만 사용자가 Home 을 누른 초안과 겹친다.
+4. Claude 폴더 신뢰 화면 동안(훅이 돌기 전) 화면 판단이 `쉼` 이다. 신뢰 화면을 확인 대기로 읽지 못한다 (예전부터).
+5. Claude 의 block 표시는 노란 `Stop hook reported a problem` 이다. Claude 의 고정 문구라 바꿀 수 없고, 아래 줄의 `reason` 만 우리 것이다.
+6. 이미 승인한 사용자도, 훅 정의가 바뀌어 다시 묻는 화면에서 `3`/Esc 를 누르면 `observeCodexHookReview` 의 decline 으로 `codex-hook-mode` 가 `disabled` 가 되어 Codex 훅 전체가 빠진다. 2.34.0 이 첫 배포라 지금 해당하는 사용자는 없다. 다음에 훅 정의를 바꾸기 전에 정할 것 (§6 남은 결정 7).
+
+**아직 실측하지 않은 것**
+- 하위 에이전트가 권한을 묻는 동안의 상태, 자동 모드가 아닐 때 Claude 권한 질문(Notification `permission_prompt`), Codex PermissionRequest (이번 Codex 는 명령을 묻지 않고 실행했다).
+- 채팅 보기에서의 같은 시나리오 (이번은 모두 터미널 보기).
 
 ### 이 PC 의 상황
 
@@ -380,7 +405,7 @@ CLI 훅 (Claude: --settings 파일 / Codex: -c hooks.*)
 
 | # | 작업 | 파일 | 담당 제안 | 확인 |
 |---|---|---|---|---|
-| T0 | **실측 보완** (2026-11-24 대부분 완료, §1 "T0 실측 결과"). 남은 것: Codex 승인 뒤 동작(신뢰 기록 위치·다음 실행 유지·Stop block) | 문서만 | 사용자와 함께 (인증 파일을 둔 임시 `CODEX_HOME`) | 결과를 §1 에 반영 |
+| T0 | **실측 보완** (완료: Claude 는 2026-11-24 "T0 실측 결과", Codex 승인 뒤 동작은 2026-11-25 "앱으로 한 실측") | 문서만 | 사용자와 함께 | §1 에 반영함 |
 | T9 | **Codex main 부분 (1단계, 사용자 결정 2)**: `-c hooks.*` 주입(고정 명령 문자열·`command_windows`), 승인 기억(사용자 데이터: "이 PC 의 Codex 가 우리 훅을 보낸 적 있음" / "넣지 않음")과 앱이 대신 띄우는 실행의 주입 여부(규칙 9), 검토 화면 닫힘 + 10초 무훅 = 거절, Interrupt 로 차례 닫기, 훅 있는 Codex 는 rollout 보정 끄기 | `src/localShell.js`(`POWERSHELL_CODEX_FUNCTION`·띄우는 인자·`resumeCommand`), `src/ipc/agentMessages.js`, `codexUsageWatcher.js` | T1~T5 담당, T3 다음 (규칙 12) | 단위: 주입 인자 고정 문자열, 승인 기억에 따른 주입 여부. 실측: 승인 화면 → 승인 → 다음 실행에 다시 묻지 않음, 승인한 Codex 의 Esc → Interrupt 여부, 검토 화면이 항목별 승인을 지원하는지 |
 | T9b | **Codex 승인 안내 띠 (화면)**: 검토 화면을 읽어 띠를 띄움 (K = N 일 때 문구 A, 그 밖엔 문구 B), 버튼 `다음에`·`묻지 않기`(IPC 로 main 의 "넣지 않음") | `AgentScreenReturnBar` 와 같은 자리의 새 부품, IPC 하나 | 화면 담당 (claude-3) | 단위: K·N 비교와 문구 선택 |
 | T1 | 훅 보고 스크립트 `src/ipc/agentHookReport.js`: stdin 을 끝까지 비우며 허용 목록 키만 스트림으로 꺼냄(C1) → rpc `agent-event`(`promptId`·`tool_use_id`·`startedAt` 포함). Stop 은 `stop-check` 답으로 block 출력. 실패 시 무출력·0 | 새 파일 + `MAIN_RUNTIME_MODULES` 등록 | main 담당 (T1~T5 한 사람) | 단위: 가짜 훅 입력(이벤트별 JSON, `prompt`·수 MB 의 `last_assistant_message` 가 든 것)으로 보낸 rpc 에 원문이 없는지, 키가 끝에 있어도 꺼내는지, 깨진 JSON·파이프 없음에서 0 종료 |
@@ -486,6 +511,7 @@ CLI 훅 (Claude: --settings 파일 / Codex: -c hooks.*)
 ### 남은 결정
 
 5. **상태 출처 표시 (T7):** 머리줄 툴팁에만 "훅" / "추정"을 둘지. 권장: 툴팁에만.
+7. **바뀐 훅을 다시 묻는 화면에서의 거절 (2026-11-25 실측에서 나옴):** 지금은 승인했던 사용자도 `3`/Esc 를 누르면 Codex 훅 전체가 꺼진다. 권장: `approved` 상태에서는 그 화면의 Esc 를 "이번만 건너뛰기"로 보고 끄지 않으며(나머지 훅은 신뢰된 채 돈다), 끄는 것은 안내 띠의 `묻지 않기` 로만. 다음에 훅 정의(명령·`async` 등)를 바꾸기 전에 정한다.
 6. **Codex 승인 뒤 실측 방법:** 승인 뒤 동작(신뢰 기록 위치, 다음 실행 유지, TUI 의 Stop block)은 인증 파일을 둔 임시 `CODEX_HOME` 이 필요하다. 이 세션에서는 그 복사가 권한 판정에 막혔다. 다음 중 하나가 필요하다:
    - 사용자가 직접 복사한다 (예: 터미널에서 `! ` 로 명령 실행).
    - 그 동작을 허용하는 권한 규칙을 둔다.
