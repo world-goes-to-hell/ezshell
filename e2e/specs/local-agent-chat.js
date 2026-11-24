@@ -870,25 +870,27 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await until(`document.activeElement === ${cover(0)}?.querySelector('.agent-chat-input')`, 3000)
 
   // Sending from the first chat types into that agent's composer only
+  const numberedLead = '1. 첫 번째 항목만 넣어 줘'
+  const numberedDraft = `${numberedLead}\n2. 지난 기록도 포함해 줘\n3. 확인이 필요한 목록은 따로 적어 줘`
   await js(`${cover(0)}.querySelector('.agent-chat-input').focus()`)
-  await send('Input.insertText', { text: '다음 할 일은?' })
+  await send('Input.insertText', { text: numberedDraft })
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' })
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
-  check('the line reaches the first agent\'s composer and is entered', await waitFor(() => read('claude-1-chat-sent') === '2'), read('claude-1-chat-text'))
-  check('it is exactly what was written', read('claude-1-chat-text') === '다음 할 일은?', JSON.stringify(read('claude-1-chat-text')))
+  check('the numbered draft reaches the first Claude composer and is submitted', await waitFor(() => read('claude-1-chat-sent') === '2'), read('claude-1-chat-text'))
+  check('it is exactly what was written', read('claude-1-chat-text') === numberedDraft, JSON.stringify(read('claude-1-chat-text')))
   check('the second agent got nothing', !read('manual-claude-chat-text'))
   check('the box is cleared after sending', await until(`${cover(0)}.querySelector('.agent-chat-input').value === ''`, 3000))
   const plain = fs.existsSync(file(String(firstShell).replace(':', '-') + '-input')) ? fs.readFileSync(file(String(firstShell).replace(':', '-') + '-input'), 'utf8') : ''
-  check('the line did not go through the terminal\'s own input', !plain.includes('다음 할 일은?'))
+  check('the line did not go through the terminal\'s own input', !plain.includes(numberedLead))
   // Not in the transcript yet (Claude writes a slash command only when it is done): a look at the
   // terminal and back keeps it shown (2026-11-20 user report: a /compact sent from the chat vanished)
-  check('the sent line shows in the chat at once', await until(`[...${cover(0)}.querySelectorAll('.agent-chat-user')].some(bubble => bubble.textContent.includes('다음 할 일은?'))`, 3000), await coverText(0))
+  check('the sent line shows in the chat at once', await until(`[...${cover(0)}.querySelectorAll('.agent-chat-user')].some(bubble => bubble.textContent.includes(${JSON.stringify(numberedLead)}))`, 3000), await coverText(0))
   await chooseChatAction(0, '채팅 닫고 터미널로 전환')
   await until(`!${cover(0)}`, 3000)
   await js(`${pane(0)}.querySelector('.xterm-helper-textarea').focus()`)
   await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
-  check('after a look at the terminal, the line not yet in the transcript is still shown', await until(`!!${cover(0)} && (${cover(0)}.textContent.includes('첫 칸 질문')) && [...${cover(0)}.querySelectorAll('.agent-chat-user')].some(bubble => bubble.textContent.includes('다음 할 일은?'))`, 8000), await coverText(0))
+  check('after a look at the terminal, the line not yet in the transcript is still shown', await until(`!!${cover(0)} && (${cover(0)}.textContent.includes('첫 칸 질문')) && [...${cover(0)}.querySelectorAll('.agent-chat-user')].some(bubble => bubble.textContent.includes(${JSON.stringify(numberedLead)}))`, 8000), await coverText(0))
 
   // The fixture provides an actual PNG from the main-process clipboard, like Windows Snipping Tool.
   const preview = `${cover(0)}.querySelector('.agent-chat-attachment img')`

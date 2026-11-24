@@ -1430,6 +1430,34 @@ describe('the agent\'s prompt with choices, answered from the chat view', () => 
     expect(wake.approvalPrompt()).toBeNull()
   })
 
+  it.each(['with a footer', 'with just the composer prompt'])('sends a numbered Claude draft %s', async layout => {
+    const { rawWrite } = promptSetup('claude')
+    const body = '1. 첫 번째 항목만 넣어 줘\n2. 지난 기록도 포함해 줘\n3. 확인이 필요한 목록은 따로 적어 줘'
+    const draw = text => '\x1b[?2004h\x1b[2J\x1b[H' + [
+      '─'.repeat(70), '❯ ' + text.replace(/\n/g, '\r\n  '),
+      ...(layout === 'with a footer' ? ['─'.repeat(70), '  ⏵⏵ auto mode on'] : [])
+    ].join('\r\n')
+    wake.writeOutput(draw(''))
+    await vi.waitFor(() => expect(wake.composerState()).toBe('empty'))
+    const sent = wake.submitText(body)
+    expect(rawWrite.mock.calls).toEqual([['\x1b[200~' + body + '\x1b[201~']])
+    wake.writeOutput(draw(body))
+    await expect(sent).resolves.toEqual({ ok: true })
+    expect(rawWrite.mock.calls).toEqual([['\x1b[200~' + body + '\x1b[201~'], ['\r']])
+  })
+
+  it('withholds Enter when a real dialog appears over the numbered draft', async () => {
+    const { rawWrite } = promptSetup('claude')
+    wake.writeOutput(claudeDraft(''))
+    await vi.waitFor(() => expect(wake.composerState()).toBe('empty'))
+    const body = '1. 검토\n2. 수정\n3. 보고'
+    const sent = wake.submitText(body)
+    wake.writeOutput(claudeDialogOverComposer.replace('\r\n❯ \r\n', '\r\n❯ 1. 검토\r\n  2. 수정\r\n  3. 보고\r\n'))
+    await expect(sent).resolves.toEqual({ ok: false, reason: 'approval' })
+    expect(rawWrite.mock.calls).toEqual([['\x1b[200~' + body + '\x1b[201~']])
+    expect(wake.approvalPrompt()).toMatchObject({ question: 'Teach auto mode about your environment?' })
+  })
+
   it('reads Codex\'s question up to the question line, past the hint below the choices', async () => {
     promptSetup('codex')
     wake.writeOutput(codexPrompt)

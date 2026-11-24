@@ -152,6 +152,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       if (edgeTitle === undefined && !isClaudeRule(top)) continue
       const target = claudeRuleLabel(top) ?? edgeTitle ?? claudeRuleLabel(line(bottom)) ?? ''
       const footerRow = bottom - buffer.baseY + 1
+      const editorRows = { firstRow: first - buffer.baseY, lastRow: footerRow - 2, footerRow, hasClaudeFooter }
       const startColumn = prefix[0].length
       // Claude's next-prompt suggestion is entirely dimmed and leaves the composer empty.
       let dimmedSuggestion = bottom === first + 1
@@ -171,7 +172,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         }
       }
       if (dimmedSuggestion && input[0].trim()) {
-        return { atStart: true, endsAtCursor: true, text: '', target, footerRow, display: '' }
+        return { atStart: true, endsAtCursor: true, text: '', target, ...editorRows, display: '' }
       }
       const display = input.map(row => row.trimEnd()).join('\n')
       const caretAtStart = input.length === 1 && (painted
@@ -183,7 +184,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         // paths and hard line breaks. Only a single blank or placeholder row counts as empty.
         const typed = input.join('\n').trim()
         const empty = input.length === 1 && !typed
-        return { atStart: empty, endsAtCursor: true, text: empty ? '' : compact(typed), caretAtStart, target, footerRow, display }
+        return { atStart: empty, endsAtCursor: true, text: empty ? '' : compact(typed), caretAtStart, target, ...editorRows, display }
       }
       if (!painted.blank) return null
       const text = compact(input.join(''))
@@ -196,7 +197,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         display,
         caretAtStart,
         target,
-        footerRow
+        ...editorRows
       }
     }
     return null
@@ -252,7 +253,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       const target = kind === 'claude' ? claudeRuleLabel(line(index - 1)) ?? '' : undefined
       const suggestion = Boolean(tail.trim()) && lines.every(row => !row.trim()) && isDimmedDraft(buffer.getLine(index), prefix[0].length)
       const display = [tail, ...lines].map(row => row.trimEnd()).join('\n')
-      return { atStart, endsAtCursor, suggestion, text: compact(display), display, lastRow: cursor - buffer.baseY, target }
+      return { atStart, endsAtCursor, suggestion, text: compact(display), display,
+        firstRow: index - buffer.baseY, lastRow: cursor - buffer.baseY, target }
     }
     return null
   }
@@ -348,6 +350,15 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         ? { question: null, detail: [], options: [], selected: null, signature: 'antigravity-terminal', usesTerminalInput: true }
         : null
     }
+    // Claude draws a numbered draft as "❯ 1. …", just like the selected row of a dialog.
+    // Exclude the ruled editor with its footer, or a frameless editor showing the chat paste.
+    // Keep checking the rows outside it for a dialog, even while a paste is waiting for Enter.
+    const claudeEditor = kind === 'claude' ? composer(checkBehindComposer ? Infinity : undefined) : null
+    const pastedHere = claudeEditor?.text && (
+      (chat?.draft && parsedOutputVersion > chat.pasteOutputVersion && claudeEditor.text === chat.text) ||
+      (lastChatDraft?.sent && lastChatDraft.enterOutputVersion === parsedOutputVersion && claudeEditor.text === lastChatDraft.displayed)
+    )
+    const editor = claudeEditor?.hasClaudeFooter || pastedHere ? claudeEditor : null
     const { active: buffer } = screen.buffer
     // The screen as lines: a row the terminal wrapped (a long choice in a narrow pane) joins the one before
     // Only text that runs up to the right edge continues: Claude pads its rule and the rows of a choice's
@@ -362,6 +373,12 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     const raws = []
     let previous = null
     for (let row = buffer.baseY; row < buffer.baseY + screen.rows; row++) {
+      const offset = row - buffer.baseY
+      if (editor && offset >= editor.firstRow && offset <= editor.lastRow) {
+        raws.push('')
+        previous = null
+        continue
+      }
       const cells = buffer.getLine(row)
       const text = cells?.translateToString(true) ?? ''
       const before = raws[raws.length - 1]
@@ -381,7 +398,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       if (hint > 0 && !bare(row).trim()) row--
       if (row >= top && APPROVAL_OPTION.test(bare(row))) dialogEnd = row
     }
-    if (!checkBehindComposer && dialogEnd < 0 && composer()) {
+    if (!checkBehindComposer && dialogEnd < 0 && (kind === 'claude' ? claudeEditor : composer())) {
       claudeQuestion = null
       return null
     }
