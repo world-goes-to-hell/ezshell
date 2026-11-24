@@ -16,6 +16,7 @@ const RESUME_RETRY_MS = 30000
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const TAIL_BYTES = 256 * 1024
 const TURN_CONTEXT_LOOKBACK_BYTES = 2 * 1024 * 1024
+const TURN_STATUS = { task_started: 'working', task_complete: 'idle', turn_aborted: 'idle' }
 const pad = n => String(n).padStart(2, '0')
 const modelFromContext = line => line.type === 'turn_context' && typeof line.payload?.model === 'string' ? line.payload.model.trim() : null
 
@@ -50,7 +51,7 @@ async function sessionMeta(file) {
   return meta
 }
 
-function createCodexUsageWatcher({ agents, setUsage, setVerifiedSession = () => {}, codexHome, now = () => Date.now(), platform = process.platform, env = process.env }) {
+function createCodexUsageWatcher({ agents, setUsage, setVerifiedSession = () => {}, setTurnStatus = () => {}, codexHome, now = () => Date.now(), platform = process.platform, env = process.env }) {
   const home = codexHome ?? (env.CODEX_HOME && path.isAbsolute(env.CODEX_HOME) ? env.CODEX_HOME : path.join(os.homedir(), '.codex'))
   // agent id → { file, size }
   const bound = new Map()
@@ -102,16 +103,40 @@ function createCodexUsageWatcher({ agents, setUsage, setVerifiedSession = () => 
           const dir = path.join(sessions, year, month, day)
           const names = await fs.promises.readdir(dir).catch(() => [])
           const name = names.find(item => item.startsWith('rollout-') && item.toLowerCase().endsWith(`-${id.toLowerCase()}.jsonl`))
-          if (name) return { file: path.join(dir, name), id }
+          if (name) {
+            const file = path.join(dir, name)
+            const meta = await sessionMeta(file).catch(() => null)
+            if (typeof meta?.id === 'string' && meta.id.toLowerCase() === id.toLowerCase()) {
+              return { file, id: id.toLowerCase() }
+            }
+          }
         }
       }
     }
     return null
   }
 
-  /** The last usage in the file; before the first answer just the session (its id lets a restart resume it) */
-  async function readUsage(file, sessionId, size, previousSize) {
+  /** Read usage and, for an explicitly resumed session, the latest root turn event. */
+  async function readSession({ file, id, resumeId, size: previousSize }, size) {
     const lines = (await readLinesFromEnd(file, { maxBytes: TAIL_BYTES })) ?? []
+    const turnStatus = line => {
+      const payload = line.payload
+      if (line.type !== 'event_msg' || !Object.hasOwn(TURN_STATUS, payload?.type)) return null
+      if (payload.root_turn_id && payload.root_turn_id !== payload.turn_id) return null
+      return TURN_STATUS[payload.type]
+    }
+    let turn
+    let turnId
+    const readTurn = line => {
+      const status = turnStatus(line)
+      if (!status) return
+      const at = Date.parse(line.timestamp)
+      const eventTurnId = line.payload.turn_id
+      if (status === 'idle' && turn?.status === 'working' && turnId && eventTurnId && turnId !== eventTurnId) return
+      if (turn && at < turn.at) return
+      turnId = eventTurnId
+      turn = Number.isFinite(at) ? { status, at } : null
+    }
     let model = null
     let effort = null
     const readContext = line => {
@@ -123,21 +148,31 @@ function createCodexUsageWatcher({ agents, setUsage, setVerifiedSession = () => 
       }
       if (typeof line.payload?.effort === 'string' && line.payload.effort.trim()) effort = line.payload.effort
     }
-    if (size - Math.max(previousSize, 0) > TAIL_BYTES && !lines.some(modelFromContext)) {
+    const grewBy = size - Math.max(previousSize, 0)
+    const lookForContext = grewBy > TAIL_BYTES && !lines.some(modelFromContext)
+    const lookForTurn = resumeId && grewBy > TAIL_BYTES && !lines.some(turnStatus)
+    if (lookForContext || lookForTurn) {
       // A resumed session or a large append can have settings just before the usage window.
       // Start at the previous newline when available, so the first newly appended record is read.
-      await readLinesFromStart(file, readContext, {
+      await readLinesFromStart(file, line => {
+        if (lookForContext) readContext(line)
+        if (lookForTurn) readTurn(line)
+      }, {
         start: Math.max(0, previousSize - 1, size - TURN_CONTEXT_LOOKBACK_BYTES),
         end: size - 1,
-        matchLine: line => line.includes('"turn_context"')
+        matchLine: line => (lookForContext && line.includes('"turn_context"'))
+          || (lookForTurn && /"(?:task_started|task_complete|turn_aborted)"/.test(line))
       })
     }
     let usage = null
     for (const line of lines) {
       readContext(line)
+      if (resumeId) readTurn(line)
       if (line.type === 'event_msg' && line.payload?.type === 'token_count' && line.payload.rate_limits) usage = line.payload
     }
-    return codexUsageFromTokenCount(usage ?? {}, model, effort, sessionId)
+    // An oversized append or a replaced file can leave a gap in the turn history.
+    if (!turn && (grewBy > TURN_CONTEXT_LOOKBACK_BYTES || size < previousSize)) turn = null
+    return { usage: codexUsageFromTokenCount(usage ?? {}, model, effort, id), turn }
   }
 
   async function tick() {
@@ -145,12 +180,19 @@ function createCodexUsageWatcher({ agents, setUsage, setVerifiedSession = () => 
     running = true
     try {
       const live = agents().filter(agent => agent.kind === 'codex' && agent.active && agent.shellId && agent.cwd && agent.startedAt)
+      const resumeCounts = new Map()
+      for (const { resumeId, sleeping } of live) {
+        if (typeof resumeId === 'string' && !sleeping) {
+          const id = resumeId.toLowerCase()
+          resumeCounts.set(id, (resumeCounts.get(id) ?? 0) + 1)
+        }
+      }
       const liveIds = new Set(live.map(agent => agent.id))
       for (const id of bound.keys()) if (!liveIds.has(id)) bound.delete(id)
       for (const id of missed.keys()) if (!liveIds.has(id)) missed.delete(id)
       // Earlier agents pick first, so two Codex started in one folder get their own files in order
       for (const agent of [...live].sort((a, b) => a.startedAt - b.startedAt)) {
-        const resumeId = agent.resumeId ?? null
+        const resumeId = typeof agent.resumeId === 'string' ? agent.resumeId.toLowerCase() : null
         let entry = bound.get(agent.id)
         if (entry && entry.resumeId !== resumeId) {
           bound.delete(agent.id)
@@ -171,14 +213,31 @@ function createCodexUsageWatcher({ agents, setUsage, setVerifiedSession = () => 
           bound.set(agent.id, entry)
         }
         const stat = await fs.promises.stat(entry.file).catch(() => null)
-        if (!stat?.isFile()) {
+        if (!stat?.isFile() || (entry.resumeId && entry.ino !== undefined &&
+          (entry.dev !== stat.dev || entry.ino !== stat.ino || stat.size < entry.size))) {
+          if (entry.canReportTurn) setTurnStatus(agent.shellId, agent.id, entry.id, null)
           bound.delete(agent.id)
           continue
         }
         const { size } = stat
+        entry.dev = stat.dev
+        entry.ino = stat.ino
         if (entry.resumeId) setVerifiedSession(agent.id, entry.resumeId)
-        if (size === entry.size) continue
-        const usage = await readUsage(entry.file, entry.id, size, entry.size)
+        const canReportTurn = resumeId && !agent.sleeping && resumeCounts.get(resumeId) === 1
+        const refreshTurn = canReportTurn && !entry.canReportTurn
+        if (entry.canReportTurn && !canReportTurn) setTurnStatus(agent.shellId, agent.id, entry.id, null)
+        entry.canReportTurn = canReportTurn
+        if (size === entry.size && !refreshTurn) continue
+        const { usage, turn } = await readSession(refreshTurn ? { ...entry, size: -1 } : entry, size)
+        // Wait for the next poll if the writer appended another event during this read.
+        if (canReportTurn && turn !== undefined) {
+          const latest = await fs.promises.stat(entry.file).catch(() => null)
+          if (latest?.size !== size || latest.mtimeMs !== stat.mtimeMs || latest.ino !== stat.ino || latest.dev !== stat.dev) {
+            if (refreshTurn) entry.canReportTurn = false
+            continue
+          }
+          if (!turn || turn.at <= now()) setTurnStatus(agent.shellId, agent.id, entry.id, turn)
+        }
         entry.size = size
         if (usage) setUsage(agent.id, usage)
       }

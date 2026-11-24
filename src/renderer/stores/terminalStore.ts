@@ -385,7 +385,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const tree = terminal.splitTree ?? singlePane()
     const seq = nextPaneSeq(tree, terminal.paneSeq ?? 0)
     const newPane = paneId(seq)
-    const next = splitPane(tree, pane, axis, newPane, ratio)
+    const next = splitPane(tree, pane, axis, newPane, ratio, terminal.local ? 'local' : 'ssh')
     if (next === tree) return state
     const newTerminals = new Map(state.terminals)
     newTerminals.set(sessionId, {

@@ -114,6 +114,16 @@
 
 .workspace-browser-header > svg { flex: none; }
 
+/*
+ * The Git tabs show the last answer while reading again: the refresh button turns, but only when the read
+ * takes a while (a quick one changes nothing in sight)
+ */
+.workspace-browser-header [data-refreshing] svg { animation: workspace-refresh-spin 0.9s linear 0.3s infinite; }
+@keyframes workspace-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .workspace-browser-header [data-refreshing] svg { animation: none; opacity: 0.55; }
+}
+
 .workspace-git-picker { flex: 1; min-width: 0; }
 .workspace-git-picker .select-menu-trigger { width: 100%; font: 11px var(--font-mono); }
 .workspace-git-picker .select-menu-trigger > svg { flex: none; }

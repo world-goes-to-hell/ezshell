@@ -75,6 +75,7 @@ describe('mergeBlock', () => {
   it('refuses a full target, unless it has an empty place', () => {
     const six = split(split(pane('main'), pane('split-1')), split(split(pane('split-2'), pane('split-3')), split(pane('split-4'), pane('split-5'))))
     expect(mergeBlock(tabsOf(ssh('a', 's1'), ssh('b', 's1', { splitTree: six })), 'a', 'b')).toMatch('6칸까지')
+    expect(mergeBlock(tabsOf(local('a'), { ...local('b'), splitTree: six }), 'a', 'b')).toBeNull()
     const withVacant = split(split(pane('main'), pane('split-1')), split(split(pane('split-2'), pane('split-3')), split(pane('split-4'), { kind: 'vacant', pane: 'split-5' })))
     expect(mergeBlock(tabsOf(ssh('a', 's1'), ssh('b', 's1', { splitTree: withVacant })), 'a', 'b')).toBeNull()
   })

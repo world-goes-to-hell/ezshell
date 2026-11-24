@@ -91,6 +91,7 @@ import { useSessionLogStore } from './stores/sessionLogStore'
 import { isChatShown, useAgentChatStore } from './stores/agentChatStore'
 import { useAskQuestionStore } from './stores/askQuestionStore'
 import { useGitCommitStore } from './stores/gitCommitStore'
+import { gitReads } from './lib/gitReadCache'
 import { useSessionLogFeed } from './hooks/useSessionLogFeed'
 import { useBrowserTabTitles } from './hooks/useBrowserTabTitles'
 import { usePinnedReplyGo } from './hooks/usePinnedReplyGo'
@@ -1196,6 +1197,8 @@ function App() {
     useAgentChatStore.getState().clearAll()
     useAskQuestionStore.getState().clearAll()
     useGitCommitStore.getState().clearAll()
+    // The workspace panel's kept Git answers (paths, commit subjects)
+    gitReads.clear()
   }, [isLocked])
 
   useEffect(() => {

@@ -298,8 +298,14 @@ function agentStatus(entry) {
     if (status === 'starting' || status === 'working' || status === 'error') return status;
     return entry.reportedStatus ?? status ?? 'unknown';
   }
-  const status = entry.reportedStatus ?? entry.titleStatus;
-  return status === 'working' && entry.codexInput && !entry.codexInput.submitted ? 'starting' : status;
+  let status = entry.reportedStatus ?? entry.titleStatus;
+  const activity = entry.codexActivity;
+  const turn = activity?.turn;
+  if (turn && turn.at > Math.max(activity.oscAt, activity.submittedAt)) {
+    if (turn.status === 'idle' && entry.reportedStatus === 'working' && entry.titleStatus !== 'blocked') status = 'idle';
+    else if (turn.status === 'working' && status !== 'blocked' && status !== 'error') return 'working';
+  }
+  return status === 'working' && entry.codexInput && !entry.codexInput.submitted && !turn ? 'starting' : status;
 }
 
 function directoryFromOsc(value, platform) {
@@ -358,6 +364,7 @@ function trackTerminalOsc(entry, data, platform, replyToProbe = true) {
       if (!entry.agent || (entry.agent === 'antigravity' && !app)) continue;
       if (app && app !== entry.agent && !(entry.agent === 'claude' && app === 'claude-code')) continue;
       entry.reportedStatus = PROGRAM_STATES[state];
+      if (entry.codexActivity) entry.codexActivity.oscAt = Date.now();
       continue;
     }
     if (!entry.agent) continue;
@@ -377,11 +384,17 @@ function trackTerminalOsc(entry, data, platform, replyToProbe = true) {
 
 // A fresh Codex session can spin while it connects to MCP servers with an
 // empty composer. Arm its PTY activity indicator after the first submission.
-function trackCodexInput(input, data) {
-  if (input.submitted) return;
+function trackCodexInput(entry, data) {
+  const input = entry.codexInput;
+  if (!input || (input.submitted && !entry.codexActivity)) return;
   if (/^(?:\r|\n|\x1b\[13(?:;1)?u)$/.test(data)) {
-    input.submitted = input.hasDraft;
+    const submitsDraft = input.hasDraft;
     input.hasDraft = false;
+    if (submitsDraft) {
+      input.submitted = true;
+      if (entry.codexActivity) entry.codexActivity.submittedAt = Date.now();
+      entry.reportStatus?.(agentStatus(entry));
+    }
     return;
   }
   if (data === '\x03' || data === '\x15' || data === '\x1b') {
@@ -392,6 +405,10 @@ function trackCodexInput(input, data) {
   const text = paste?.[1] ?? (data.startsWith('\x1b') ? '' : data);
   if (/[^\s\x00-\x1f\x7f]/u.test(text)) input.hasDraft = true;
 }
+
+const codexActivityFor = sessionId => sessionId
+  ? { sessionId, startedAt: Date.now(), oscAt: 0, submittedAt: 0, turn: null }
+  : null;
 
 // CLI-native image paste reads from the same Windows clipboard as ezShell.
 const WINDOWS_IMAGE_PASTE = { codex: '\x16', claude: '\x1bv' };
@@ -504,7 +521,7 @@ function createLocalShells({
         try {
           entry.pty.write(data);
           entry.activeAt = Date.now();
-          if (entry.codexInput) trackCodexInput(entry.codexInput, data);
+          trackCodexInput(entry, data);
           return true;
         } catch { return false; }
       },
@@ -514,7 +531,7 @@ function createLocalShells({
         try {
           entry.pty.write(data);
           entry.activeAt = Date.now();
-          if (trackInput && entry.codexInput) trackCodexInput(entry.codexInput, data);
+          if (trackInput) trackCodexInput(entry, data);
           return true;
         } catch { return false; }
       }
@@ -590,7 +607,7 @@ function createLocalShells({
     entry.inbox?.close();
     Object.assign(entry, {
       agent: undefined, reportStatus: undefined, externalAgent: undefined, inbox: undefined, picker: undefined, speedControl: undefined,
-      codexInput: null, titleStatus: 'unknown', reportedStatus: null, pendingAntigravityStatus: null,
+      codexInput: null, codexActivity: null, titleStatus: 'unknown', reportedStatus: null, pendingAntigravityStatus: null,
       screenApproval: false, chatInterrupts: 0, oscTail: ''
     });
     return binding;
@@ -601,7 +618,7 @@ function createLocalShells({
     binding?.onExit(binding.id);
   }
 
-  function attachExternalAgent(id, entry, kind, pid, { agentId, setStatus, onExit, antigravity, allowWake }) {
+  function attachExternalAgent(id, entry, kind, pid, { agentId, setStatus, onExit, antigravity, allowWake, resumeId }) {
     if (shells.get(id) !== entry || entry.exited || !processAlive(pid)) return;
     let binding = entry.externalAgent;
     if (binding && !processAlive(binding.pid)) {
@@ -621,6 +638,7 @@ function createLocalShells({
       entry.externalAgent = binding;
       entry.agent = kind;
       entry.codexInput = kind === 'codex' ? { hasDraft: false, submitted: false } : null;
+      entry.codexActivity = kind === 'codex' ? codexActivityFor(woken?.sessionId ?? resumeId) : null;
       if (antigravity) {
         binding.antigravity = antigravity;
         binding.roleSessionId = antigravity.roleSessionId;
@@ -736,7 +754,7 @@ function createLocalShells({
       // The first MCP registration gets a new ID instead of authenticating that provisional ID by PID.
       const claudeSession = sameAgent ? existing.claudeSession : undefined;
       if (sameAgent && !existing.hadMcp) finishExternalAgent(entry);
-      const attached = attachExternalAgent(id, entry, request.kind, agentPid, { ...registration, allowWake: waking });
+      const attached = attachExternalAgent(id, entry, request.kind, agentPid, { ...registration, allowWake: waking, resumeId });
       if (!attached) return;
       const binding = entry.externalAgent;
       if (claudeSession) Object.assign(binding, { claudeSession, claudeProcessStartedAt: existing.claudeProcessStartedAt });
@@ -899,7 +917,8 @@ function createLocalShells({
     const shellEnv = localTerminalEnvironment(env, platform);
     // A resumed Codex writes on in its old session file: the usage watcher finds it by this id
     const registeredAgent = agent === 'antigravity' ? undefined : agent;
-    const registration = registeredAgent && agents?.register(registeredAgent, id, workingDirectory, shellEnv, resume && SESSION_ID.test(resume) ? resume.toLowerCase() : null);
+    const resumeId = resume && SESSION_ID.test(resume) ? resume.toLowerCase() : null;
+    const registration = registeredAgent && agents?.register(registeredAgent, id, workingDirectory, shellEnv, resumeId);
     // The shell's own token authenticates status reports from a CLI started inside it.
     const shellUsageEnv = agents?.registerShell?.(id) ?? {};
     const openedAt = Date.now();
@@ -923,6 +942,7 @@ function createLocalShells({
     const codexInput = agent === 'codex' ? { hasDraft: false, submitted: false } : null;
     const entry = {
       pty, agent: registeredAgent, registration, codexInput, cols: columns, rows: lines, composing: false, replacementFor, developmentTask,
+      codexActivity: codexInput ? codexActivityFor(resumeId) : null,
       wakeMcp: Boolean(shellUsageEnv.EZSHELL_AGENT_WAKE_MCP_CONFIG),
       // For a window that reloads and takes the shell back as a tab (`list`)
       cwd: directory === undefined ? null : workingDirectory,
@@ -989,17 +1009,14 @@ function createLocalShells({
     if (entry.inbox?.deferProbeInput(data)) return;
     entry.inbox?.userInput(data);
     entry.pty.write(data);
-    if (entry.codexInput && !entry.codexInput.submitted) {
-      trackCodexInput(entry.codexInput, data);
-      if (entry.codexInput.submitted) entry.reportStatus?.(agentStatus(entry));
-    }
+    trackCodexInput(entry, data);
   }
 
   function pasteClipboardImage(id) {
     const entry = shells.get(id);
     if (platform !== 'win32' || !hasAgent(entry) || !Object.hasOwn(WINDOWS_IMAGE_PASTE, entry.agent)) return false;
     write(id, WINDOWS_IMAGE_PASTE[entry.agent]);
-    if (entry.codexInput && !entry.codexInput.submitted) entry.codexInput.hasDraft = true;
+    if (entry.codexInput) entry.codexInput.hasDraft = true;
     return true;
   }
 
@@ -1183,6 +1200,22 @@ function createLocalShells({
       if (!entry) return;
       entry.composing = value;
       entry.inbox?.setComposing(value);
+    },
+    /** Internal rollout activity from the session UUID used to launch this Codex. */
+    setCodexTurnStatus(id, agentId, sessionId, turn) {
+      const entry = shells.get(id);
+      const activity = entry?.codexActivity;
+      if (!activity || !hasAgent(entry) || entry.sleeping || activity.sessionId !== sessionId) return;
+      if (agentId !== (entry.externalAgent?.id ?? entry.registration?.env?.EZSHELL_AGENT_ID)) return;
+      if (turn && (turn.at < activity.startedAt || turn.at < (activity.turn?.at ?? 0))) return;
+      const previous = agentStatus(entry);
+      activity.turn = turn;
+      const status = agentStatus(entry);
+      if (status !== previous) {
+        entry.reportStatus?.(status);
+        entry.activeAt = Date.now();
+        entry.inbox?.kick();
+      }
     },
     /** The agent running in the shell and its state, or null */
     agentOf(id) {

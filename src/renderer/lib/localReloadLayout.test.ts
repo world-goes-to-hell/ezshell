@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalInfo } from '../stores/terminalStore'
-import type { SplitNode } from './splitTree'
+import { paneIds, type SplitNode } from './splitTree'
 import { planReloadedTabs, readReloadLayout, snapshotLocalTabs, type ReloadTab } from './localReloadLayout'
 import type { LiveLocalShell } from './localShellAdopt'
+import { LOCAL_RESTORE_MAX_PANES, readRestoreRecord } from './restoreTabs'
 
 const pane = (id: string): SplitNode => ({ kind: 'pane', pane: id })
 const row = (first: SplitNode, second: SplitNode): SplitNode => ({ kind: 'split', axis: 'row', ratio: 0.5, first, second })
@@ -52,6 +53,43 @@ describe('chat panes', () => {
 describe('readReloadLayout', () => {
   it('reads what was written', () => {
     expect(readReloadLayout(JSON.parse(JSON.stringify([saved()])))).toEqual([saved()])
+  })
+
+  it('keeps six-digit pane IDs and sequence numbers through reload and restart', () => {
+    const id = 'split-123456'
+    const splitTree = row(pane('main'), pane(id))
+    const paneSeq = 999_999
+    const reload = saved({ splitTree, paneSeq, panes: { [id]: 'local:2' }, chats: [id] })
+    const agents = [{ pane: id, agent: 'codex', chat: true }]
+    const restart = { kind: 'local', splitTree, paneSeq, agents }
+
+    expect(readReloadLayout([reload])[0]).toEqual(reload)
+    expect(readRestoreRecord({ version: 1, tabs: [restart] })?.tabs[0]).toMatchObject(restart)
+    expect(readReloadLayout([{ ...reload, paneSeq: paneSeq + 1 }])[0].paneSeq).toBeUndefined()
+    expect(readRestoreRecord({ version: 1, tabs: [{ ...restart, splitTree: row(pane('main'), pane('split-1000000')) }] })?.tabs[0])
+      .toMatchObject({ splitTree: undefined, paneSeq: undefined })
+  })
+
+  it('puts eight running shells and chat views back into their original panes', () => {
+    let splitTree = pane('main')
+    for (let index = 1; index < 8; index++) splitTree = row(splitTree, pane(`split-${index}`))
+    const chats = paneIds(splitTree)
+    const panes = Object.fromEntries(chats.slice(1).map((id, index) => [id, `local:${index + 2}`]))
+    const [read] = readReloadLayout([saved({ splitTree, paneSeq: 7, panes: { ...panes, 'split-99': 'local:99' }, chats: [...chats, 'split-99'] })])
+    const shells = ['local:1', ...Object.values(panes), 'local:99'].map(id => shell(id))
+    const result = planReloadedTabs(shells, [read])
+    expect(result.tabs[0]).toMatchObject({ splitTree, paneSeq: 7, panes, chats })
+    expect(result.loose.map(item => item.id)).toEqual(['local:99'])
+  })
+
+  it('leaves shells from a layout beyond the saved limit available as separate tabs', () => {
+    let splitTree = pane('main')
+    for (let index = 1; index <= LOCAL_RESTORE_MAX_PANES; index++) splitTree = row(splitTree, pane(`split-${index}`))
+    const read = readReloadLayout([saved({ splitTree, chats: ['main', 'split-1'] })])
+    const result = planReloadedTabs([shell('local:1'), shell('local:2')], read)
+    expect(result.tabs[0]).toMatchObject({ panes: {}, chats: ['main'] })
+    expect(result.tabs[0].splitTree).toBeUndefined()
+    expect(result.loose.map(item => item.id)).toEqual(['local:2'])
   })
 
   it('drops entries with bad ids, trees or text instead of trusting them', () => {

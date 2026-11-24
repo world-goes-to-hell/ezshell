@@ -2,6 +2,7 @@
 // files (docs/plan/2026-11-24-workspace-git-commit.md), and Git's words when it refused.
 import type { KeyboardEvent } from 'react'
 import { RiGitCommitLine } from 'react-icons/ri'
+import { forgetAfterCommit } from '../../lib/gitReadCache'
 import { toast } from '../../stores/toastStore'
 import { draftOf, useGitCommitStore } from '../../stores/gitCommitStore'
 
@@ -25,6 +26,8 @@ async function commitDraft(top: string, paths: string[], onDone: () => void): Pr
       return
     }
     useGitCommitStore.getState().committed(top)
+    // The kept history and changes are from before the commit: no tab may show them again
+    forgetAfterCommit()
     const summary = `${result.shortHash} · 파일 ${result.count.toLocaleString()}개`
     if (result.warning) toast.warning('커밋했습니다 (확인 필요)', `${summary} · ${result.warning}`)
     else toast.success('커밋했습니다', summary)
@@ -34,12 +37,13 @@ async function commitDraft(top: string, paths: string[], onDone: () => void): Pr
   }
 }
 
-export function GitCommitBox({ top, paths, onCommitted }: { top: string; paths: string[]; onCommitted: () => void }) {
+/** `waiting`: the changes shown are an earlier list being read again (after a commit, a refresh) */
+export function GitCommitBox({ top, paths, waiting = false, onCommitted }: { top: string; paths: string[]; waiting?: boolean; onCommitted: () => void }) {
   const draft = useGitCommitStore(state => draftOf(state.repos, top))
   const setMessage = useGitCommitStore(state => state.setMessage)
   const count = paths.length
   const hasMessage = draft.message.trim().length > 0
-  const canCommit = !draft.busy && count > 0 && hasMessage
+  const canCommit = !draft.busy && !waiting && count > 0 && hasMessage
   const commit = () => { if (canCommit) void commitDraft(top, paths, onCommitted) }
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey) || event.nativeEvent.isComposing) return
@@ -64,7 +68,7 @@ export function GitCommitBox({ top, paths, onCommitted }: { top: string; paths: 
         onKeyDown={onKeyDown}
       />
       <button type="button" className="workspace-commit-button" disabled={!canCommit} onClick={commit}
-        title={count > 0 && !hasMessage ? '커밋 메시지를 입력하세요' : undefined}>
+        title={waiting ? '변경 사항을 다시 읽는 중입니다' : count > 0 && !hasMessage ? '커밋 메시지를 입력하세요' : undefined}>
         <RiGitCommitLine size={15} aria-hidden="true" />
         <span>{label}</span>
       </button>

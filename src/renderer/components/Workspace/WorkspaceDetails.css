@@ -244,6 +244,10 @@
   min-height: 0;
 }
 
+/* The last list shows while it is read again (after a commit, a refresh): dimmed only if that takes a while */
+.workspace-uncommitted-body { transition: opacity 0.15s; }
+.workspace-changes[data-refreshing] .workspace-uncommitted-body { opacity: 0.6; transition-delay: 0.3s; }
+
 .workspace-commit-box {
   display: flex;
   flex: none;

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Terminal } from '@xterm/headless'
 import { createAgentInboxWake, PROMPT, BUSY_PROMPT, REMIND_PROMPT } from './agentInboxWake.js'
 
 const paste = '\x1b[200~' + PROMPT + '\x1b[201~'
@@ -299,6 +300,202 @@ describe('wake an idle agent with unread messages', () => {
     wake.writeOutput(claudeDraft(PROMPT))
     await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r']]))
   }, 10000)
+
+  describe('recovering a wake notice after a redraw', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    const cols = 64
+    const split = BUSY_PROMPT.lastIndexOf(' ', cols - 2)
+    const continuation = '  ' + BUSY_PROMPT.slice(split + 1)
+    const wrapped = BUSY_PROMPT.slice(0, split) + '\r\n' + continuation
+
+    async function paint(frame) {
+      wake.writeOutput(frame)
+      await vi.advanceTimersByTimeAsync(50)
+    }
+
+    async function startBusyCodex() {
+      const { write, state } = setup('codex', cols)
+      state.busy = true
+      state.ids = ['first']
+      await paint(codexDraft(''))
+      expect(write.mock.calls).toEqual([[busyPaste]])
+      state.ids = []
+      return { write, state }
+    }
+
+    it.each([
+      ['the caret stays on the prompt row', codexDraft(wrapped + '\r\n\r\n  Working') + '\x1b[1;3H'],
+      ['the composer briefly disappears', codexDraft('') + '\x1b[2J\x1b[H  Working']
+    ])('submits once and wakes for later mail after %s at the deadline', async (_layout, frame) => {
+      const { write, state } = await startBusyCodex()
+      await paint(frame)
+      await vi.advanceTimersByTimeAsync(1600)
+      expect(write.mock.calls).toEqual([[busyPaste]])
+
+      state.busy = false
+      await paint(codexDraft(wrapped))
+      await vi.advanceTimersByTimeAsync(250)
+      expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
+      await paint(codexDraft(wrapped))
+      await vi.advanceTimersByTimeAsync(1600)
+      expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
+
+      state.ids = ['follow-up']
+      await paint(codexDraft(''))
+      await paint(codexDraft(PROMPT))
+      expect(write.mock.calls).toEqual([[busyPaste], ['\r'], [paste], ['\r']])
+    })
+
+    it('withholds Enter at a shell prompt even while the CLI is reported live and cancels recovery on user input', async () => {
+      const { write, state } = await startBusyCodex()
+      state.busy = false
+      await paint(codexDraft(wrapped + '\r\n\r\nPS C:\\dev> '))
+      await vi.advanceTimersByTimeAsync(1600)
+      expect(write.mock.calls).toEqual([[busyPaste]])
+
+      wake.userInput(' extra words')
+      await paint(codexDraft(wrapped + ' extra words'))
+      await paint(codexDraft(wrapped))
+      expect(write.mock.calls).toEqual([[busyPaste]])
+    })
+
+    it('does not submit a history row after the notice has been absent for thirty seconds', async () => {
+      const { write, state } = await startBusyCodex()
+      await paint(codexDraft('') + '\x1b[2J\x1b[H  Working')
+      await vi.advanceTimersByTimeAsync(30_000)
+      state.busy = false
+      // Codex has painted the previous line in history with the caret there before drawing the empty editor.
+      await paint(codexDraft(wrapped + '\r\n\r\n  Conversation history') + `\x1b[2;${continuation.length + 1}H`)
+      await paint(codexDraft(''))
+      expect(write.mock.calls).toEqual([[busyPaste]])
+    })
+
+    it('does not send Enter for a history line above a newly drawn empty editor during recovery', async () => {
+      const { write, state } = await startBusyCodex()
+      await paint(codexDraft('') + '\x1b[2J\x1b[H  Working')
+      await vi.advanceTimersByTimeAsync(1700)
+      state.busy = false
+      await paint(codexDraft(wrapped + '\r\n\r\n› ') + `\x1b[2;${continuation.length + 1}H`)
+      await vi.advanceTimersByTimeAsync(250)
+      expect(write.mock.calls).toEqual([[busyPaste]])
+    })
+
+    it('gives up when idle Codex keeps the caret away from the end for five seconds', async () => {
+      const { write, state } = await startBusyCodex()
+      state.busy = false
+      await paint(codexDraft(wrapped) + '\x1b[1;3H')
+      await vi.advanceTimersByTimeAsync(5000)
+      await paint(codexDraft(wrapped))
+      expect(write.mock.calls).toEqual([[busyPaste]])
+    })
+
+    it('keeps a visible notice while a task runs longer than the hidden recovery window', async () => {
+      const { write, state } = await startBusyCodex()
+      await paint(codexDraft(wrapped) + '\x1b[1;3H')
+      await vi.advanceTimersByTimeAsync(35_000)
+      expect(write.mock.calls).toEqual([[busyPaste]])
+
+      state.busy = false
+      await paint(codexDraft(wrapped))
+      expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
+    })
+
+    it.each([1, 125])('keeps a visible notice when redraw interrupts recovery %i times', async redraws => {
+      const { write, state } = await startBusyCodex()
+      await paint(codexDraft('') + '\x1b[2J\x1b[H  Working')
+      await vi.advanceTimersToNextTimerAsync()
+      await paint(codexDraft(wrapped + '\r\n\r\n  Working') + '\x1b[1;3H')
+      await vi.advanceTimersByTimeAsync(190)
+
+      // Leave the screen write unacknowledged across each recovery timer, then let the parser
+      // finish normally. The notice stays visible and there is no inbox event to start a new check.
+      const writeFrame = Terminal.prototype.write
+      const screenWrite = vi.spyOn(Terminal.prototype, 'write')
+      try {
+        for (let i = 0; i < redraws; i++) {
+          let parsed
+          screenWrite.mockImplementationOnce(function (data, callback) {
+            writeFrame.call(this, data, () => { parsed = callback })
+          })
+          wake.writeOutput('\x1b7\x1b[4;1H  ⠋ Working\x1b8')
+          await vi.advanceTimersByTimeAsync(20)
+          expect(parsed).toBeTypeOf('function')
+          parsed()
+          await vi.advanceTimersByTimeAsync(230)
+        }
+      } finally {
+        screenWrite.mockRestore()
+      }
+      expect(write.mock.calls).toEqual([[busyPaste]])
+
+      state.busy = false
+      await paint(codexDraft(wrapped))
+      await vi.advanceTimersByTimeAsync(300)
+      expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
+    })
+
+    it('checks whether the notice is visible after the picker releases the editor', async () => {
+      const { write, state } = await startBusyCodex()
+      await paint(codexDraft('') + '\x1b[2J\x1b[H  Working')
+      await vi.advanceTimersByTimeAsync(1600)
+      wake.setHeld(true)
+      await paint(codexDraft(wrapped))
+      await vi.advanceTimersByTimeAsync(35_000)
+      expect(write.mock.calls).toEqual([[busyPaste]])
+
+      state.busy = false
+      wake.setHeld(false)
+      await vi.advanceTimersByTimeAsync(50)
+      expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
+    })
+
+    it('waits for a confirmation screen to close and then enters the notice once', async () => {
+      const { write, state } = await startBusyCodex()
+      state.busy = false
+      await paint(codexDraft(wrapped + '\r\n\r\nDo you want to proceed?\r\n❯ 1. Yes\r\n  2. No\r\nEnter to confirm · Esc to cancel')
+        + `\x1b[2;${continuation.length + 1}H`)
+      await vi.advanceTimersByTimeAsync(6000)
+      expect(write.mock.calls).toEqual([[busyPaste]])
+
+      await paint(codexDraft(wrapped))
+      await vi.advanceTimersByTimeAsync(250)
+      expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
+      await paint(codexDraft(wrapped))
+      await vi.advanceTimersByTimeAsync(1600)
+      expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
+    })
+
+    it('recovers Claude’s ruled notice after it temporarily disappears', async () => {
+      const { write, state } = setup('claude', 120)
+      state.busy = true
+      state.ids = ['first']
+      await paint(paintedClaudeDraft(''))
+      expect(write.mock.calls).toEqual([[busyPaste]])
+      state.ids = []
+      await paint('\x1b[2J\x1b[H  Working')
+      await vi.advanceTimersByTimeAsync(1600)
+      expect(write.mock.calls).toEqual([[busyPaste]])
+
+      state.busy = false
+      await paint(paintedClaudeDraft(BUSY_PROMPT))
+      await vi.advanceTimersByTimeAsync(250)
+      expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
+      await paint(paintedClaudeDraft(BUSY_PROMPT))
+      expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
+    })
+
+    it('does not enter a matching first row when the visible draft continues below it', async () => {
+      const { write, state } = setup('codex', cols)
+      state.ids = ['first']
+      await paint(codexDraft(''))
+      expect(write.mock.calls).toEqual([[paste]])
+      await paint(codexDraft(PROMPT + '\r\n  additional draft text') + `\x1b[1;${PROMPT.length + 3}H`)
+      await vi.advanceTimersByTimeAsync(1600)
+      expect(write.mock.calls).toEqual([[paste]])
+    })
+  })
 
   it('discards a staged submit when the user types or the session loses inbox access', async () => {
     const { write, state } = setup()

@@ -11,7 +11,7 @@ import { useTerminalStore } from '../../stores/terminalStore'
 import { toast } from '../../stores/toastStore'
 import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
 import { createRightClickFilter } from '../../lib/rightClickReports'
-import { MAIN_PANE, MAX_PANES, singlePane, layoutOf, leafCount, paneIds, equalize, paneBox, type PaneId } from '../../lib/splitTree'
+import { MAIN_PANE, singlePane, layoutOf, paneIds, equalize, paneBox, type PaneId } from '../../lib/splitTree'
 import { closeTabPane } from '../../lib/paneToTab'
 import { ensureLocalPaneShell, getLocalPaneShellId, closeLocalPaneShells } from '../../lib/localPaneShells'
 import { TerminalContextMenu, MENU_SEPARATOR, type TerminalMenuGroup } from './TerminalContextMenu'
@@ -358,7 +358,6 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     if (!terminal) return null
     const tree = tab?.splitTree ?? singlePane()
     const isSplit = tab?.isSplit === true
-    const isFull = leafCount(tree) >= MAX_PANES
     const isTooNarrow = Math.floor(terminal.cols / 2) < MIN_PANE_COLS
     const isTooShort = Math.floor(terminal.rows / 2) < MIN_PANE_ROWS
     return {
@@ -366,15 +365,15 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       icon: RiLayoutColumnLine,
       items: [
         {
-          label: isFull ? `좌우 분할 (칸은 ${MAX_PANES}개까지)` : isTooNarrow ? '좌우 분할 (칸이 좁습니다)' : '좌우 분할',
+          label: isTooNarrow ? '좌우 분할 (칸이 좁습니다)' : '좌우 분할',
           icon: RiSplitCellsHorizontal,
-          disabled: isFull || isTooNarrow,
+          disabled: isTooNarrow,
           onSelect: then(() => splitTerminalPane(tabId, pane, 'row'))
         },
         {
-          label: isFull ? `상하 분할 (칸은 ${MAX_PANES}개까지)` : isTooShort ? '상하 분할 (칸이 낮습니다)' : '상하 분할',
+          label: isTooShort ? '상하 분할 (칸이 낮습니다)' : '상하 분할',
           icon: RiSplitCellsVertical,
-          disabled: isFull || isTooShort,
+          disabled: isTooShort,
           onSelect: then(() => splitTerminalPane(tabId, pane, 'col'))
         },
         MENU_SEPARATOR,

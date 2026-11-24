@@ -6,8 +6,10 @@ import { RiFolderLine } from 'react-icons/ri'
 import { create } from 'zustand'
 import type { WorkspaceGitRepository } from '../../types'
 import { folderName } from '../../lib/agentHistory'
+import { gitLogKey, gitReads } from '../../lib/gitReadCache'
 import { isInsidePath, pathKey, worktreeOf } from '../../lib/localWorkspaceTree'
 import { SelectMenu } from '../ui/SelectMenu'
+import { useCachedGitRead } from './useCachedGitRead'
 
 const readGit = (folder: string) => window.electronAPI.workspaceGitLog(folder)
 const readAllGit = (folder: string) => window.electronAPI.workspaceGitLog(folder, true)
@@ -26,21 +28,17 @@ const useTargetChoice = create<{ choice: TargetChoice; setChoice: (next: TargetC
 
 type GitLogAnswer = Awaited<ReturnType<typeof readGit>>
 
-function useFolderData<T>(folder: string | null, load: (folder: string) => Promise<T>, revision: number) {
-  const [sample, setSample] = useState<{ folder: string; revision: number; load: typeof load; data: T | null } | null>(null)
-  useEffect(() => {
-    if (folder === null) return
-    let active = true
-    void Promise.resolve().then(() => load(folder)).then(
-      data => { if (active) setSample({ folder, revision, load, data }) },
-      () => { if (active) setSample({ folder, revision, load, data: null }) }
-    )
-    return () => { active = false }
-  }, [folder, load, revision])
-  const latest = sample?.folder === folder && sample.load === load ? sample : null
+/**
+ * A folder's history: what was read last time shows at once (also during a refresh, so the tab below it
+ * stays mounted and reads in parallel) while it is read again
+ */
+function useFolderData(folder: string | null, allBranches: boolean, revision: number) {
+  const read = useCachedGitRead<GitLogAnswer | null>(folder === null ? null : gitLogKey(folder, allBranches),
+    () => (allBranches ? readAllGit : readGit)(folder as string).catch(() => null), revision)
   return {
-    result: latest?.revision === revision ? latest : null,
-    latest: latest?.data
+    result: read.value === undefined ? null : { data: read.value },
+    latest: read.value ?? undefined,
+    refreshing: read.value !== undefined && !read.fresh
   }
 }
 
@@ -48,8 +46,10 @@ export interface GitTarget {
   /** Changes on refresh (and after a commit): everything shown is read again */
   revision: number
   refresh: () => void
-  /** null while reading */
+  /** null until anything is known (the last answer shows while reading again) */
   result: { data: GitLogAnswer | null } | null
+  /** An earlier answer shows while a new read runs */
+  refreshing: boolean
   repo: WorkspaceGitRepository | null
   displayPath: string
   displayBranch?: string
@@ -64,7 +64,7 @@ export function useGitTarget(folder: string, { offerAllBranches: allowAll }: { o
   const [revision, setRevision] = useState(0)
   const selection = useTargetChoice(state => state.choice)
   const setSelection = useTargetChoice(state => state.setChoice)
-  const terminal = useFolderData(anchor, readGit, revision)
+  const terminal = useFolderData(anchor, false, revision)
   const current = terminal.latest?.success ? terminal.latest.repo : null
   const worktrees = current?.worktrees ?? []
   const base = worktrees[0]?.path ?? anchor
@@ -90,8 +90,9 @@ export function useGitTarget(folder: string, { offerAllBranches: allowAll }: { o
   const chosen = choices.find(tree => tree.path === choice)
   const displayPath = chosen?.path ?? defaultPath
   const otherFolder = allBranches || pathKey(displayPath) !== pathKey(current?.root ?? anchor) ? displayPath : null
-  const alternate = useFolderData(otherFolder, allBranches ? readAllGit : readGit, revision)
+  const alternate = useFolderData(otherFolder, allBranches, revision)
   const result = otherFolder ? alternate.result : terminal.result
+  const refreshing = otherFolder ? alternate.refreshing : terminal.refreshing
   const data = result?.data
   const repo = data?.success ? data.repo : null
   const targetBranch = choices.find(tree => tree.path === displayPath)?.branch
@@ -107,5 +108,10 @@ export function useGitTarget(folder: string, { offerAllBranches: allowAll }: { o
         }), ...(offerAllBranches ? [{ value: ALL_BRANCHES, label: '전체 브랜치' }] : [])]} />
     </div>
   ) : undefined
-  return { revision, refresh: () => setRevision(value => value + 1), result, repo, displayPath, displayBranch, picker }
+  const refresh = () => {
+    // New reads, not ones already running (they may have begun before a commit)
+    gitReads.invalidate()
+    setRevision(value => value + 1)
+  }
+  return { revision, refresh, result, refreshing, repo, displayPath, displayBranch, picker }
 }

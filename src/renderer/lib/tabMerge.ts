@@ -3,7 +3,7 @@
 // out to a tab), the same server and account for quick connects, or two local tabs of the same folder.
 
 import type { TerminalInfo } from '../stores/terminalStore'
-import { MAX_PANES, leafCount, singlePane, type SplitAxis } from './splitTree'
+import { SSH_MAX_PANES, leafCount, paneLimitReached, singlePane, type SplitAxis } from './splitTree'
 import { pathKey } from './localWorkspaceTree'
 
 export const MERGE_BLOCKED_TITLE = '병합할 수 없습니다'
@@ -48,8 +48,9 @@ export function mergeBlock(tabs: Tabs, sourceId: string, targetId: string, hasPo
   if (source.splitTree) return '칸을 나눈 탭은 병합할 수 없습니다. 칸을 닫거나 탭으로 뺀 뒤에 다시 시도해 주세요.'
   const tree = target.splitTree ?? singlePane()
   // An empty place can be filled even when the tab is full
-  const hasVacant = leafCount(tree) > countPanes(tree)
-  if (!hasVacant && leafCount(tree) >= MAX_PANES) return `한 탭에는 ${MAX_PANES}칸까지 둘 수 있습니다.`
+  if (paneLimitReached(tree, target.local ? 'local' : 'ssh') && leafCount(tree) === countPanes(tree)) {
+    return `한 탭에는 ${SSH_MAX_PANES}칸까지 둘 수 있습니다.`
+  }
   for (const tab of tabs.values()) {
     if (tab.db?.sshSessionId === sourceId) return '이 탭의 연결을 쓰는 DB 탭이 있어 병합할 수 없습니다. DB 탭을 닫은 뒤에 다시 시도해 주세요.'
   }

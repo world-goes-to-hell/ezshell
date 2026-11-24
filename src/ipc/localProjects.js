@@ -3,6 +3,7 @@ const { promisify } = require('util')
 const fs = require('fs')
 const path = require('path')
 const { requireLocalDirectory } = require('../localShell.js')
+const { readRepoTop, clearReadRepoCache, SAFE } = require('../localFiles/git.js')
 const { createDirectorySearch } = require('../localFiles/search.js')
 const { inspectDevelopmentTasks, prepareDevelopmentTask } = require('./localDevelopmentTasks.js')
 
@@ -10,7 +11,12 @@ const exec = promisify(execFile)
 const DIRECTORY_LIMIT = 1000
 const COMMIT_LIMIT = 100
 const REPOSITORY_SCAN_LIMIT = 512
+const REPOSITORY_SCAN_BATCH = 16
+const REPOSITORY_SCAN_TTL_MS = 10000
+const REPOSITORY_SCAN_TIMEOUT_MS = 15000
+const REPOSITORY_SCAN_CACHE_MAX = 20
 const REPOSITORY_SCAN_SKIP = new Set(['.git', 'node_modules'])
+const repositoryScans = new Map()
 const LOG_OPTIONS = ['log', '-z', '--no-color', '--no-show-signature', '--decorate=short', '--encoding=UTF-8', '--format=%H%x00%P%x00%h%x00%an%x00%aI%x00%s%x00%D']
 
 async function git(cwd, args, { timeout = 15000, signal } = {}) {
@@ -20,35 +26,74 @@ async function git(cwd, args, { timeout = 15000, signal } = {}) {
   return stdout
 }
 
-function parseWorktrees(output) {
+function parseWorktrees(output, includeHead) {
   return output.split('\0\0').flatMap(record => {
     const fields = record.split('\0')
     const location = fields[0]?.startsWith('worktree ') && fields[0].slice(9)
     if (!location || fields.includes('bare') || fields.some(field => /^prunable(?: |$)/.test(field))) return []
     const branch = fields.find(field => field.startsWith('branch refs/heads/'))?.slice(18) ?? null
-    return [{ path: path.normalize(location), branch }]
+    const head = includeHead && fields.find(field => /^HEAD (?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(field))?.slice(5)
+    return [{
+      path: path.normalize(location), branch,
+      ...(head && (branch || fields.includes('detached')) && { head: /^0+$/.test(head) ? null : head })
+    }]
   })
 }
 
-const listWorktrees = root => git(root, ['worktree', 'list', '--porcelain', '-z']).then(parseWorktrees)
+const listWorktrees = (root, includeHead = false) => git(root, [...SAFE, 'worktree', 'list', '--porcelain', '-z'])
+  .then(output => parseWorktrees(output, includeHead))
 
-async function findNestedRepositories(root) {
+async function findNestedRepositories(root, signal) {
   const directories = [root]
   const repositories = []
   // Read nearby folders first. Symlinks and dependency trees are excluded from discovery.
-  for (const directory of directories) {
-    const real = await fs.promises.realpath(directory).catch(() => null)
-    if (!real || path.relative(directory, real) !== '') continue
-    const entries = await fs.promises.readdir(real, { withFileTypes: true }).catch(() => [])
-    if (directory !== root && entries.some(entry => entry.name === '.git' && (entry.isDirectory() || entry.isFile()))) {
-      repositories.push(real)
-    }
-    for (const entry of entries) {
-      if (directories.length >= REPOSITORY_SCAN_LIMIT) break
-      if (entry.isDirectory() && !REPOSITORY_SCAN_SKIP.has(entry.name.toLowerCase())) directories.push(path.join(real, entry.name))
+  for (let first = 0; first < directories.length;) {
+    signal.throwIfAborted()
+    const batch = directories.slice(first, first + REPOSITORY_SCAN_BATCH)
+    first += batch.length
+    const visited = await Promise.all(batch.map(async directory => {
+      const real = await fs.promises.realpath(directory).catch(() => null)
+      if (!real || path.relative(directory, real) !== '') return null
+      const entries = await fs.promises.readdir(real, { withFileTypes: true }).catch(() => [])
+      return { real, entries }
+    }))
+    for (const folder of visited) {
+      if (!folder) continue
+      const { real, entries } = folder
+      if (path.relative(root, real) !== '' && entries.some(entry => entry.name === '.git' && (entry.isDirectory() || entry.isFile()))) {
+        repositories.push(real)
+      }
+      for (const entry of entries) {
+        if (directories.length >= REPOSITORY_SCAN_LIMIT) break
+        if (entry.isDirectory() && !REPOSITORY_SCAN_SKIP.has(entry.name.toLowerCase())) directories.push(path.join(real, entry.name))
+      }
     }
   }
   return repositories
+}
+
+function nestedRepositoriesOf(root) {
+  const cached = repositoryScans.get(root)
+  if (cached && cached.until > Date.now()) return cached.read
+  const controller = new AbortController()
+  let timer
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error('하위 Git 저장소를 찾는 시간이 초과되었습니다.')
+      controller.abort(error)
+      reject(error)
+    }, REPOSITORY_SCAN_TIMEOUT_MS)
+  })
+  const read = Promise.race([findNestedRepositories(root, controller.signal), deadline])
+    .finally(() => clearTimeout(timer))
+  const entry = { until: Infinity, read }
+  repositoryScans.delete(root)
+  repositoryScans.set(root, entry)
+  if (repositoryScans.size > REPOSITORY_SCAN_CACHE_MAX) repositoryScans.delete(repositoryScans.keys().next().value)
+  entry.read.then(() => { entry.until = Date.now() + REPOSITORY_SCAN_TTL_MS }, () => {
+    if (repositoryScans.get(root) === entry) repositoryScans.delete(root)
+  })
+  return entry.read
 }
 
 async function inspectLocalProject(folder) {
@@ -84,29 +129,32 @@ async function readWorkspaceGit(folder, includeAllBranches = false) {
   const cwd = requireLocalDirectory(folder)
   let root
   try {
-    root = path.normalize((await git(cwd, ['rev-parse', '--show-toplevel'])).replace(/\r?\n$/, ''))
+    root = await readRepoTop(cwd)
   } catch (error) {
     if (error.code === 'ENOENT') return { repo: null, reason: 'git-missing' }
     if (error.code === 128 && /not a git repository/i.test(error.stderr ?? '')) return { repo: null, reason: 'not-repo' }
     throw error
   }
 
-  const [head, branch, worktrees, nested] = await Promise.all([
-    git(root, ['rev-parse', '--verify', '--quiet', 'HEAD']).then(text => text.trim(), missingHead),
-    git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']).then(text => text.trim(), missingHead),
-    listWorktrees(root).catch(() => []),
-    findNestedRepositories(root)
+  const nested = nestedRepositoriesOf(root)
+  const listed = await listWorktrees(root, true).catch(() => [])
+  const current = listed.findIndex(tree => path.relative(root, tree.path) === '')
+  const checkout = listed[current]
+  const [head, branch] = checkout?.head !== undefined ? [checkout.head, checkout.branch] : await Promise.all([
+    git(root, [...SAFE, 'rev-parse', '--verify', '--quiet', 'HEAD']).then(text => text.trim(), missingHead),
+    git(root, [...SAFE, 'symbolic-ref', '--quiet', '--short', 'HEAD']).then(text => text.trim(), missingHead)
   ])
-  const current = worktrees.findIndex(tree => path.relative(root, tree.path) === '')
+  const worktrees = listed.map(({ path, branch }) => ({ path, branch }))
   const active = { path: root, branch }
   if (current < 0) worktrees.unshift(active)
   else worktrees[current] = active
-  const nestedRepositories = nested.filter(folder => !worktrees.some(tree => path.relative(folder, tree.path) === ''))
   const allBranches = includeAllBranches || worktrees.length < 2
   const refs = [...(allBranches ? ['--all'] : []), ...(head ? ['HEAD'] : [])]
-  const log = refs.length ? await git(root, [
-    ...LOG_OPTIONS, '--topo-order', `--max-count=${COMMIT_LIMIT + 1}`, ...refs, '--'
-  ]) : ''
+  const [log, discovered] = await Promise.all([
+    refs.length ? git(root, [...SAFE, ...LOG_OPTIONS, '--topo-order', `--max-count=${COMMIT_LIMIT + 1}`, ...refs, '--']) : '',
+    nested
+  ])
+  const nestedRepositories = discovered.filter(folder => !worktrees.some(tree => path.relative(folder, tree.path) === ''))
   const commits = parseCommits(log)
   return { repo: { root, head, branch, worktrees, nestedRepositories, allBranches, commits: commits.slice(0, COMMIT_LIMIT), hasMore: commits.length > COMMIT_LIMIT } }
 }
@@ -317,6 +365,8 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
     clearSearches() {
       searchGeneration++
       directorySearch.clear()
+      repositoryScans.clear()
+      clearReadRepoCache()
     }
   }
 }

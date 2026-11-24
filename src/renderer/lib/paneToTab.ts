@@ -70,7 +70,7 @@ function readyPane(owner: TerminalInfo, candidates: PaneId[]): PaneId | undefine
 export async function mergePanes(ownerId: string, stay: PaneId, close: PaneId): Promise<MoveResult> {
   const store = useTerminalStore.getState()
   const owner = store.terminals.get(ownerId)
-  const plan = owner?.splitTree && mergePaneLayout(owner.splitTree, stay, close, owner.paneSeq)
+  const plan = owner?.splitTree && mergePaneLayout(owner.splitTree, stay, close, owner.paneSeq, owner.local ? 'local' : 'ssh')
   if (!owner || !plan) return { ok: false, error: '이 방향으로 합칠 수 있는 칸을 찾지 못했습니다.' }
   if (moves.has(ownerId)) return { ok: false, error: '이 탭의 셸을 옮기는 중입니다.' }
 
@@ -92,7 +92,7 @@ export async function mergePanes(ownerId: string, stay: PaneId, close: PaneId): 
     const current = useTerminalStore.getState().terminals.get(ownerId)
     if (!current) return { ok: false, error: '원래 탭이 닫혔습니다.' }
     const latest = current.splitTree === owner.splitTree ? plan
-      : current.splitTree && mergePaneLayout(current.splitTree, stay, close, current.paneSeq)
+      : current.splitTree && mergePaneLayout(current.splitTree, stay, close, current.paneSeq, current.local ? 'local' : 'ssh')
     if (latest) {
       if (latest.seq > (current.paneSeq ?? 0)) store.updateTerminalMeta(ownerId, { paneSeq: latest.seq })
       store.setSplitTree(ownerId, replacement ? assignMainPane(latest.tree, replacement) : latest.tree, stay === replacement ? MAIN_PANE : stay)

@@ -7,9 +7,11 @@ import type { WorkspaceGitFile, WorkspaceGitStatus } from '../../types'
 import { FILE_KIND_LABELS, FILE_KIND_MARKS, splitPath } from '../../lib/workspaceDetails'
 import { buildChangeTree, formatCount, mergeChanges, totalLines, type ChangeNode, type ChangedFile } from '../../lib/gitChangeTree'
 import { checkState, isSelectable, selectablePaths, toggleOne, togglePaths, type CheckState } from '../../lib/gitCommitSelection'
+import { gitCommitFilesKey, gitStatusKey } from '../../lib/gitReadCache'
 import { draftOf, useGitCommitStore } from '../../stores/gitCommitStore'
 import { GitDiffBlock, openWorkspaceFile, useWorkspaceFileMenu } from './WorkspaceDetails'
 import { GitCommitBox } from './GitCommitBox'
+import { useCachedGitRead } from './useCachedGitRead'
 
 interface FileRowProps {
   root: string
@@ -148,15 +150,28 @@ function ChangeTree({ nodes, root, label, depth, folded, onFold, selection }: {
 }
 
 type Load<T> = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; value: T }
+type Answer<T> = ({ success: true } & T) | { success: false; error: string }
+
+/** An IPC answer as what to show; undefined (nothing known yet) is loading */
+function loadOf<T, V>(answer: Answer<T> | undefined, value: (answer: { success: true } & T) => V): Load<V> {
+  if (answer === undefined) return { status: 'loading' }
+  return answer.success ? { status: 'ready', value: value(answer) } : { status: 'error', message: answer.error }
+}
 
 const NOTHING: ReadonlySet<string> = new Set()
 
 /**
  * The "변경" tab's list: the changes since the last commit as a folder tree with boxes, and the commit
- * box for the ticked files. Read again when `revision` changes (refresh, and after a commit).
+ * box for the ticked files. Read again when `revision` changes (refresh, and after a commit); the last
+ * list shows meanwhile, dimmed and not to be ticked or committed until the new one comes.
  */
 export function ChangeList({ folder, revision, label, onCommitted }: { folder: string; revision: number; label: string; onCommitted: () => void }) {
-  const [state, setState] = useState<Load<WorkspaceGitStatus | null>>({ status: 'loading' })
+  const readStatus = window.electronAPI.workspaceGitStatus
+  const status = useCachedGitRead<Answer<{ repo: WorkspaceGitStatus | null }>>(readStatus ? gitStatusKey(folder) : null,
+    () => (readStatus as NonNullable<typeof readStatus>)(folder).catch(() => ({ success: false as const, error: '커밋하지 않은 변경을 읽지 못했습니다.' })),
+    revision)
+  const state = loadOf(status.value, answer => answer.repo)
+  const stale = status.value !== undefined && !status.fresh
   // Folded folders of the tree (open by default); kept across refreshes
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set())
   const fold = (path: string) => setFolded(previous => {
@@ -177,22 +192,13 @@ export function ChangeList({ folder, revision, label, onCommitted }: { folder: s
   const selected = draft?.selected ?? NOTHING
   const chosen = useMemo(() => selectable.filter(path => selected.has(path)), [selectable, selected])
   useEffect(() => { if (top) applyStatus(top, files) }, [top, files, applyStatus])
-  useEffect(() => {
-    let active = true
-    const read = window.electronAPI.workspaceGitStatus
-    if (!read) return
-    void read(folder).then(
-      result => { if (active) setState(result.success ? { status: 'ready', value: result.repo } : { status: 'error', message: result.error }) },
-      () => { if (active) setState({ status: 'error', message: '커밋하지 않은 변경을 읽지 못했습니다.' }) }
-    )
-    return () => { active = false }
-  }, [folder, revision])
   if (state.status === 'loading') return <p className="workspace-diff-note">변경 사항을 읽는 중…</p>
   if (state.status === 'error') return <p className="workspace-diff-note is-error">{state.message}</p>
   const repo = state.value
   if (!repo || !top) return null
   const count = files.length
-  const busy = draft?.busy === true
+  // Ticking an earlier list (one from before a commit) could commit what is already committed
+  const busy = draft?.busy === true || stale
   const selection: TreeSelection = {
     selected,
     disabled: busy,
@@ -200,8 +206,8 @@ export function ChangeList({ folder, revision, label, onCommitted }: { folder: s
     onPaths: paths => setSelected(top, togglePaths(selected, paths))
   }
   return (
-    <div className="workspace-changes">
-      {count > 0 && <GitCommitBox top={top} paths={chosen} onCommitted={onCommitted} />}
+    <div className="workspace-changes" data-refreshing={stale || undefined} aria-busy={stale || undefined}>
+      {count > 0 && <GitCommitBox top={top} paths={chosen} waiting={stale} onCommitted={onCommitted} />}
       <section className="workspace-uncommitted" data-empty={count === 0 || undefined} aria-label="커밋하지 않은 변경">
         <div className="workspace-uncommitted-head">
           {count > 0 && <CheckBox state={checkState(selectable, selected)} disabled={busy || selectable.length === 0}
@@ -238,17 +244,12 @@ export function ChangeList({ folder, revision, label, onCommitted }: { folder: s
 
 /** The files a commit changed (against its first parent) */
 export function CommitFiles({ root, hash, label }: { root: string; hash: string; label: string }) {
-  const [state, setState] = useState<Load<WorkspaceGitFile[]>>({ status: 'loading' })
-  useEffect(() => {
-    let active = true
-    const read = window.electronAPI.workspaceGitCommitFiles
-    if (!read) return
-    void read(root, hash).then(
-      result => { if (active) setState(result.success ? { status: 'ready', value: result.files } : { status: 'error', message: result.error }) },
-      () => { if (active) setState({ status: 'error', message: '커밋의 파일을 읽지 못했습니다.' }) }
-    )
-    return () => { active = false }
-  }, [root, hash])
+  // A commit's files never change: opened again, the kept list is final
+  const readFiles = window.electronAPI.workspaceGitCommitFiles
+  const answer = useCachedGitRead<Answer<{ files: WorkspaceGitFile[] }>>(readFiles ? gitCommitFilesKey(root, hash) : null,
+    () => (readFiles as NonNullable<typeof readFiles>)(root, hash).catch(() => ({ success: false as const, error: '커밋의 파일을 읽지 못했습니다.' })),
+    0, { immutable: true })
+  const state = loadOf(answer.value, value => value.files)
   if (state.status === 'loading') return <p className="workspace-diff-note">바뀐 파일을 읽는 중…</p>
   if (state.status === 'error') return <p className="workspace-diff-note is-error">{state.message}</p>
   if (state.value.length === 0) return <p className="workspace-diff-note">바뀐 파일이 없습니다.</p>

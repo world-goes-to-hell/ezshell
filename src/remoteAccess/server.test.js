@@ -4,7 +4,7 @@ import os from 'os'
 import path from 'path'
 import http from 'http'
 import { WebSocket } from 'ws'
-import { createAccessServer, trimOutput, activityForDevice, APPROVAL_ARM_MS } from './server.js'
+import { createAccessServer, trimOutput, activityForDevice, APPROVAL_ARM_MS, MAX_CLIENTS } from './server.js'
 import { sessionTree, remoteThemeOf } from './controller.js'
 import { createAccessStore, TRUST_MS } from './accessStore.js'
 import totp from './totp.js'
@@ -146,23 +146,22 @@ describe('createAccessServer', () => {
     expect(await client.next()).toEqual({ type: 'theme', theme: { '--panel': '#123456', '--scheme': 'dark' } })
   })
 
-  it('remembers a device for a day and lets it resume without a code', async () => {
+  it('sends the remembered ticket before the signed-in view so a reload can resume immediately', async () => {
     context = setup()
     await context.server.start('127.0.0.1', PORT)
     const { store } = context
-    // Sign in asking to be remembered: the ready message carries a ticket
+    // Once the signed-in view appears, the browser may reload as soon as it receives ready.
     const client = connect()
     await client.opened
     client.send({ type: 'pair', code: store.startPairing().code, name: 'phone' })
     const { token } = await client.next()
     client.send({ type: 'signin', token, code: totp.codeFor(store.totpSecret, totp.counterAt(Date.now())), remember: true })
-    const ready = await client.next()
-    expect(ready.type).toBe('ready')
-    // The ticket arrives on its own, right after ready
     const trust = await client.next()
     expect(trust).toMatchObject({ type: 'trust' })
     expect(trust.ticket).toMatch(/^[\w-]{43}$/)
+    expect(await client.next()).toMatchObject({ type: 'ready', device: 'phone' })
     client.socket.close()
+    await client.closed
 
     // A new connection resumes with the ticket, no code, and is signed in
     const again = connect()
@@ -182,6 +181,29 @@ describe('createAccessServer', () => {
     bad.socket.close()
   })
 
+  it('applies the same connection limit to code sign-in and resume without replacing a ticket', async () => {
+    context = setup()
+    await context.server.start('127.0.0.1', PORT)
+    const { store } = context
+    for (let i = 0; i < MAX_CLIENTS; i++) await signedIn(context)
+    const { token, deviceId } = store.redeemPairing(store.startPairing().code, 'remembered phone')
+    const { ticket } = store.rememberDevice(deviceId)
+    const remember = vi.spyOn(store, 'rememberDevice')
+
+    for (const request of [
+      { type: 'signin', token, code: totp.codeFor(store.totpSecret, totp.counterAt(Date.now())), remember: true },
+      { type: 'resume', token, ticket }
+    ]) {
+      const client = connect()
+      await client.opened
+      client.send(request)
+      expect(await client.next()).toMatchObject({ type: 'bye', message: expect.stringContaining('너무 많습니다') })
+      await client.closed
+    }
+    expect(remember).not.toHaveBeenCalled()
+    expect(store.resume(token, ticket)).toMatchObject({ device: { id: deviceId } })
+  })
+
   it('tells a device whose remembered day has passed to use a code, without ending the connection', async () => {
     let clock = 1_800_000_000_000
     context = setup({ now: () => clock })
@@ -192,8 +214,9 @@ describe('createAccessServer', () => {
     client.send({ type: 'pair', code: store.startPairing().code, name: 'phone' })
     const { token } = await client.next()
     client.send({ type: 'signin', token, code: totp.codeFor(store.totpSecret, totp.counterAt(clock)), remember: true })
-    await client.next()
     const trust = await client.next()
+    expect(trust.type).toBe('trust')
+    expect(await client.next()).toMatchObject({ type: 'ready' })
     client.socket.close()
 
     clock += TRUST_MS + 1

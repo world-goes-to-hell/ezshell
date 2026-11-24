@@ -201,7 +201,7 @@ describe('the quick screen capture', () => {
   })
 
   it('sends the selected region to the chosen agent, retains it across retry, and never writes the clipboard', async () => {
-    const agent = { id: 'codex-2', kind: 'codex', shellId: 'local:2', cwd: path.resolve('service') }
+    const agent = { id: 'codex-2', kind: 'codex', shellId: 'local:2', cwd: path.resolve('service'), role: '리뷰어' }
     const request = { action: 'send', agentId: agent.id, region: selection, comment: '이 부분 봐 줘' }
     const attachment = { file: 'capture.png', preview: Buffer.from('preview') }
     const storeAttachment = vi.fn(() => attachment)
@@ -218,6 +218,8 @@ describe('the quick screen capture', () => {
       { listAgents: () => [agent], storeAttachment, sendCapture, onSent }
     )
     expect(await capture.start()).toBe(true)
+    const projects = [{ folder: agent.cwd, name: 'service', agents: [agent] }]
+    expect(windows[0].webContents.executeJavaScript).toHaveBeenCalledWith(`window.chooseCaptureTarget(${JSON.stringify(projects)})`)
     expect(windows[0].webContents.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining('다시 시도'))
     expect(sendCapture).toHaveBeenCalledTimes(2)
     expect(onSent).toHaveBeenCalledExactlyOnceWith(agent)

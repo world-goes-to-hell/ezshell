@@ -144,8 +144,8 @@ const page = `<!doctype html>
   #agents:not(:empty) { margin-top: 8px; padding: 2px; }
   .agent { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-align: left; padding: 7px 9px; }
   .agent-info { min-width: 0; }
-  .agent-title { display: block; font-weight: 600; }
-  .agent-send { font-weight: 600; white-space: nowrap; }
+  .agent-title { display: block; font-weight: 600; overflow-wrap: anywhere; }
+  .agent-send { flex: none; font-weight: 600; white-space: nowrap; }
   #status { margin: 8px 0 0; color: var(--capture-muted); }
   #status[data-error] { color: var(--capture-danger); }
   #status:empty { display: none; }
@@ -437,7 +437,8 @@ const page = `<!doctype html>
         const button = document.createElement('button')
         button.type = 'button'
         button.className = 'agent'
-        const who = (agent.kind === 'codex' ? 'Codex' : 'Claude Code') + ' · ' + agent.id
+        const provider = agent.kind === 'codex' ? 'Codex' : 'Claude Code'
+        const who = [provider, agent.role, agent.id].filter(Boolean).join(' · ')
         button.setAttribute('aria-label', who + '에 전송')
         const info = document.createElement('span')
         info.className = 'agent-info'

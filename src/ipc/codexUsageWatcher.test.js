@@ -15,6 +15,8 @@ const tokenCount = (used, total) => ({ type: 'event_msg', payload: {
   rate_limits: { primary: { used_percent: used, window_minutes: 300, resets_at: 1795000000 }, secondary: null }
 } })
 const largeOutput = { type: 'response_item', payload: { type: 'function_call_output', output: 'x'.repeat(300 * 1024) } }
+const turnEvent = (type, at, turn_id = 't1', root_turn_id = turn_id) =>
+  ({ type: 'event_msg', timestamp: new Date(at).toISOString(), payload: { type, turn_id, root_turn_id } })
 
 function rollout(name, { cwd = work, at = START + 1000, lines = [], meta = {} } = {}) {
   const dir = path.join(home, 'sessions', '2026', '11', '19')
@@ -29,14 +31,16 @@ function rollout(name, { cwd = work, at = START + 1000, lines = [], meta = {} } 
 function setup(agentList) {
   const reports = []
   const verifiedSessions = []
+  const turns = []
   const watcher = createCodexUsageWatcher({
     agents: () => agentList,
     setUsage: (agentId, usage) => { reports.push({ agentId, usage }); return true },
     setVerifiedSession: (agentId, sessionId) => verifiedSessions.push({ agentId, sessionId }),
+    setTurnStatus: (shellId, agentId, sessionId, turn) => turns.push({ shellId, agentId, sessionId, turn }),
     codexHome: home,
     now: () => START + 60_000
   })
-  return { watcher, reports, verifiedSessions }
+  return { watcher, reports, verifiedSessions, turns }
 }
 
 beforeEach(() => {
@@ -163,6 +167,57 @@ describe('createCodexUsageWatcher', () => {
       { agentId: agent.id, sessionId: resumed },
       { agentId: agent.id, sessionId: resumed }
     ])
+  })
+
+  it('reports only the latest root turn event from the verified resumed rollout', async () => {
+    const sessionId = '01a1ec18-0000-7000-8000-000000000001'
+    const file = rollout(sessionId, { at: START - 3600_000, lines: [
+      turnEvent('task_started', START + 1000),
+      turnEvent('task_complete', START + 2000),
+      turnEvent('task_started', START + 3000, 't2'),
+      turnEvent('task_complete', START + 4000, 't1'),
+      turnEvent('task_complete', START + 4100, 'child', 't2')
+    ] })
+    rollout('01a1ec18-0000-7000-8000-000000000002', { lines: [turnEvent('task_complete', START + 5000)] })
+    const { watcher, turns } = setup([
+      { ...agent, cwd: work, resumeId: sessionId },
+      { ...agent, id: 'codex-2', shellId: 'local:2', cwd: work }
+    ])
+    await watcher.tick()
+    const identity = { shellId: agent.shellId, agentId: agent.id, sessionId }
+    expect(turns).toEqual([{ ...identity, turn: { status: 'working', at: START + 3000 } }])
+
+    fs.appendFileSync(file, jsonl([turnEvent('task_complete', START + 6000, 't2'), largeOutput]))
+    await watcher.tick()
+    expect(turns.at(-1)).toEqual({ ...identity, turn: { status: 'idle', at: START + 6000 } })
+
+    fs.appendFileSync(file, jsonl([turnEvent('task_started', START + 7000, 't3'), largeOutput]))
+    await watcher.tick()
+    expect(turns.at(-1)).toEqual({ ...identity, turn: { status: 'working', at: START + 7000 } })
+
+    fs.appendFileSync(file, jsonl([turnEvent('turn_aborted', START + 8000, 't3')]))
+    await watcher.tick()
+    expect(turns.at(-1)).toEqual({ ...identity, turn: { status: 'idle', at: START + 8000 } })
+  })
+
+  it('requires the resumed UUID to match the file metadata', async () => {
+    const sessionId = '01a1ec18-0000-7000-8000-000000000001'
+    rollout(sessionId, { meta: { id: 'other-session' }, lines: [turnEvent('task_complete', START + 2000)] })
+    const { watcher, verifiedSessions, turns } = setup([{ ...agent, cwd: work, resumeId: sessionId }])
+    await watcher.tick()
+    expect(verifiedSessions).toEqual([])
+    expect(turns).toEqual([])
+  })
+
+  it('does not drive turn state when two active agents resumed the same session', async () => {
+    const sessionId = '01a1ec18-0000-7000-8000-000000000001'
+    rollout(sessionId, { lines: [turnEvent('task_complete', START + 2000)] })
+    const { watcher, turns } = setup([
+      { ...agent, cwd: work, resumeId: sessionId },
+      { ...agent, id: 'codex-2', shellId: 'local:2', cwd: work, resumeId: sessionId }
+    ])
+    await watcher.tick()
+    expect(turns).toEqual([])
   })
 
   it('does nothing for Claude or ended agents', async () => {

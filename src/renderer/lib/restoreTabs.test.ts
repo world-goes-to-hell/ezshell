@@ -1,11 +1,17 @@
 import { buildScreens } from './screenPanes'
 import { describe, it, expect } from 'vitest'
-import { buildRestoreRecord, readRestoreRecord, cdCommand, withoutVacants, reopenable, type RecordSource } from './restoreTabs'
+import { buildRestoreRecord, readRestoreRecord, readTree, cdCommand, withoutVacants, reopenable, LOCAL_RESTORE_MAX_PANES, type RecordSource } from './restoreTabs'
 import type { TerminalInfo, LayoutState } from '../stores/terminalStore'
 import type { SplitNode } from './splitTree'
 
 const pane = (id: string): SplitNode => ({ kind: 'pane', pane: id })
 const row = (first: SplitNode, second: SplitNode): SplitNode => ({ kind: 'split', axis: 'row', ratio: 0.5, first, second })
+const names = (count: number) => Array.from({ length: count }, (_, index) => index === 0 ? 'main' : `split-${index}`)
+const balanced = (ids: string[]): SplitNode => {
+  if (ids.length === 1) return pane(ids[0])
+  const middle = Math.floor(ids.length / 2)
+  return row(balanced(ids.slice(0, middle)), balanced(ids.slice(middle)))
+}
 const config = (extra: Record<string, unknown>) => ({ host: '10.0.0.5', port: 22, username: 'deploy', authType: 'password', password: 'secret-pw', ...extra }) as unknown as TerminalInfo['connectConfig']
 const ssh = (id: string, saved: string | null, extra: Partial<TerminalInfo> = {}): TerminalInfo => ({ id, host: '10.0.0.5', username: 'deploy', connected: true, connectConfig: config({ savedSessionId: saved }), ...extra })
 const single = (ids: string[]): LayoutState => buildScreens({ panes: [{ terminalIds: ids, activeTerminalId: ids[0] ?? null }] })
@@ -24,6 +30,14 @@ describe('agents in local tabs', () => {
       agentsOf: () => [{ pane: 'main', agent: 'codex', sessionId: CODEX }, { pane: 'split-1', agent: 'claude', sessionId: CLAUDE }]
     }))
     expect(record.tabs[0]).toMatchObject({ kind: 'local', agents: [{ pane: 'main', agent: 'codex', sessionId: CODEX }, { pane: 'split-1', agent: 'claude', sessionId: CLAUDE }] })
+  })
+
+  it('round-trips all panes and their agents up to the local layout limit', () => {
+    const ids = names(LOCAL_RESTORE_MAX_PANES)
+    const splitTree = balanced(ids)
+    const agents = ids.map(pane => ({ pane, agent: 'codex' as const, sessionId: CODEX, chat: true as const }))
+    const record = buildRestoreRecord(source([local('local:1', { splitTree, paneSeq: ids.length - 1 })], { agentsOf: () => agents }))
+    expect(readRestoreRecord(JSON.parse(JSON.stringify(record)))?.tabs[0]).toMatchObject({ splitTree, agents })
   })
 
   it('reads back only well-formed agents of panes the tab has', () => {
@@ -178,6 +192,25 @@ describe('readRestoreRecord', () => {
     expect(record.tabs).toHaveLength(2)
     expect(record.tabs[0]).toMatchObject({ splitTree: undefined, currentPath: undefined })
     expect(record.tabs[1]).toMatchObject({ splitTree: undefined })
+  })
+
+  it('keeps six SSH panes and seven local panes, but skips an oversized local layout', () => {
+    const six = balanced(names(6))
+    const seven = balanced(names(7))
+    const oversized = balanced(names(LOCAL_RESTORE_MAX_PANES + 1))
+    const record = readRestoreRecord({ version: 1, tabs: [
+      { kind: 'ssh', savedSessionId: 's1', splitTree: six },
+      { kind: 'ssh', savedSessionId: 's2', splitTree: seven },
+      { kind: 'local', splitTree: seven },
+      { kind: 'local', splitTree: oversized }
+    ] })!
+    expect(record.tabs.map(tab => 'splitTree' in tab ? tab.splitTree : undefined)).toEqual([six, undefined, seven, undefined])
+  })
+
+  it('rejects a local tree too deep to reach its first pane safely', () => {
+    const deep = names(LOCAL_RESTORE_MAX_PANES + 1).slice(1)
+      .reduce((tree, id) => row(tree, pane(id)), pane('main'))
+    expect(readTree(deep, 'local')).toBeUndefined()
   })
 
   it('is null for something that is not a record', () => {

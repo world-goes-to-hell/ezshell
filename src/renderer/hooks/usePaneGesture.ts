@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { commitPaneGesture, type PaneGestureAction } from '../lib/paneGesture'
-import { layoutOf, leafAt, leafCount, MAX_PANES, mergePaneLayout, singlePane, type PaneId } from '../lib/splitTree'
+import { layoutOf, leafAt, leafCount, paneLimitReached, mergePaneLayout, singlePane, type PaneId } from '../lib/splitTree'
 import { splitGestureLine } from '../lib/paneDropZones'
 import { scribbleTurns, SCRIBBLE_TURNS } from '../lib/paneScribble'
 import { useTerminalStore } from '../stores/terminalStore'
@@ -65,6 +65,7 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       const tab = tabOf()
       if (!tab) return null
       const tree = tab.splitTree ?? singlePane()
+      const kind = tab.local ? 'local' : 'ssh'
       const { width, height } = gesture.rect
       const target = leafAt(layoutOf(tree), gesture.x / width, gesture.y / height)
       if (target?.pane !== gesture.from) {
@@ -79,10 +80,10 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       if (gesture.scribble) return leafCount(tree) > 1 ? { kind: 'close' } : null
       if (!target || target.isVacant) return null
       if (target.pane !== gesture.from) {
-        const merge = mergePaneLayout(tree, gesture.from, target.pane, tab.paneSeq)
+        const merge = mergePaneLayout(tree, gesture.from, target.pane, tab.paneSeq, kind)
         return merge ? { kind: 'merge', to: target.pane, expanded: merge.expanded } : null
       }
-      if (gesture.leftPane || leafCount(tree) >= MAX_PANES) return null
+      if (gesture.leftPane || paneLimitReached(tree, kind)) return null
       const { x, y, w, h } = target.rect
       const line = splitGestureLine({ x: x * width, y: y * height, w: w * width, h: h * height }, gesture.start, gesture)
       return line ? { kind: 'split', ...line } : null

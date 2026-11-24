@@ -11,6 +11,9 @@ const LONGEST_PROMPT = Math.max(...Object.values(PROMPTS).map(text => text.lengt
 const pasteOf = text => '\x1b[200~' + text + '\x1b[201~'
 const DRAW_SETTLE = 35
 const INPUT_TIMEOUT = 1500
+const WAKE_HIDDEN_TIMEOUT = 30_000
+const WAKE_IDLE_CARET_TIMEOUT = 5000
+const WAKE_RECOVERY_POLL = 250
 const IMAGE_INPUT_TIMEOUT = 10_000
 const CHAT_MIN_PASTE_AGE = 500
 const CHAT_EXACT_POLL = 100
@@ -107,6 +110,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   let stopped = false
   let timer = null
   let stage = null
+  // Remember who pasted the notice even if a redraw hides its composer at the deadline.
+  let expiredWake = null
   // When the agent last drew anything (a fresh agent counts as waiting once this has been a while)
   let lastOutputAt = Date.now()
   let outputVersion = 0
@@ -790,8 +795,17 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   function advance() {
-    if (antigravity || stopped || composing || held || chat) return
+    if (antigravity || stopped || composing || held || chat || !isLive()) return
     const now = Date.now()
+    const attempt = stage ?? expiredWake
+    if (parsedOutputVersion !== outputVersion) {
+      // Pending terminal bytes are not evidence that the notice disappeared.
+      if (attempt) {
+        const remaining = attempt.visibleUntil - now
+        schedule(remaining > 0 ? Math.min(WAKE_RECOVERY_POLL, remaining) : WAKE_RECOVERY_POLL)
+      }
+      return
+    }
     // State never reported: waiting for input when the screen has been still (the composer check follows)
     const quietFor = now - lastOutputAt
     const freshIdle = isUnknown() && quietFor >= quietMs
@@ -802,31 +816,47 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     for (const id of deferred) if (!open.has(id)) deferred.delete(id)
     const remind = working ? [] : [...deferred]
     const due = waiting.length > 0 || remind.length > 0
-    const input = due || stage ? composer() : null
-    if (!parentInput(targetOf(input))) return
-    if (stage) {
-      const { expires, mode, prompt, ids } = stage
-      const isOurs = Boolean(input?.endsAtCursor) && input?.text === compact(prompt)
-      // A busy notice is entered while the task runs; the others only once the agent waits for input
-      const canSubmit = mode === 'busy' ? running || !working : !working
-      if (isOurs && !canSubmit) {
-        // Our line is in the composer and the agent is busy: keep it and press Enter when it is ready.
-        // Giving up here left the line in the composer for good (seen with two agents talking).
-        stage.expires = now + INPUT_TIMEOUT
-        // A never-reported agent counts as ready once its screen is still again: look then
-        schedule(isUnknown() ? Math.min(INPUT_TIMEOUT, quietMs - quietFor + DRAW_SETTLE) : INPUT_TIMEOUT)
-        return
-      }
-      if (!isOurs && now >= expires) {
+    const input = due || attempt ? composer() : null
+    if (attempt) {
+      const { expires, mode, prompt, ids } = attempt
+      const visible = visibleComposer()
+      const expected = compact(prompt)
+      const exact = input?.text === expected && !input.suggestion
+      const visibleExact = visible?.text === expected
+      // After expiry a matching cursor row alone could belong to history above the real editor.
+      const cursorOnly = !expiredWake && (kind !== 'codex' || !visible)
+      const rendered = !shellAtCursor() && (visibleExact || (exact && cursorOnly))
+      if (rendered) {
+        attempt.visibleUntil = now + WAKE_HIDDEN_TIMEOUT
+      } else if (now >= attempt.visibleUntil) {
         stage = null
+        expiredWake = null
         userDraft = true
+        if (due) schedule()
         return
       }
-      // Enter even when the message was read meanwhile (an agent reads its inbox inside a running
-      // turn): our exact line is in the composer, and leaving it there stalls the conversation
-      if (isOurs && canSubmit) {
-        // Send Enter only after the supported composer has rendered the exact draft we pasted.
+      const atEnd = exact && input.endsAtCursor && (kind !== 'codex' || !visible || input.lastRow === visible.lastRow)
+      // A word-wrapped notice can still be visible when Codex parks the cursor on its first row.
+      // Use the whole draft to keep waiting; use the live caret to authorize Enter.
+      const blocked = rendered && chatBlocked()
+      const canSubmit = !working || (mode === 'busy' && running)
+      const readyCaret = atEnd && parentInput(targetOf(input))
+      if (working || blocked) attempt.idleCaretUntil = undefined
+      else if (rendered && !readyCaret) attempt.idleCaretUntil ??= now + WAKE_IDLE_CARET_TIMEOUT
+      const idleCaretUntil = attempt.idleCaretUntil ?? Infinity
+      if (now >= idleCaretUntil) {
         stage = null
+        expiredWake = null
+        userDraft = true
+        schedule()
+        return
+      }
+      const recoveryUntil = Math.min(attempt.visibleUntil, idleCaretUntil)
+      if (rendered && readyCaret && canSubmit && !blocked) {
+        // Finish once even when the agent already read the message inside its running turn.
+        stage = null
+        expiredWake = null
+        userDraft = false
         if (write('\r')) {
           // The messages announced when pasting, and any that came since
           const announced = new Set([...ids, ...(mode === 'remind' ? remind : waiting)])
@@ -838,11 +868,28 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         }
         holdUntil = now + INPUT_TIMEOUT
         schedule(INPUT_TIMEOUT)
-      } else {
-        schedule(expires - now)
+        return
       }
-      return
+      if (rendered && !blocked) {
+        if (stage) stage.expires = now + INPUT_TIMEOUT
+        // A never-reported agent counts as ready once its screen is still again: look then.
+        const recheck = working && isUnknown() ? Math.min(INPUT_TIMEOUT, quietMs - quietFor + DRAW_SETTLE) : INPUT_TIMEOUT
+        schedule(Math.min(recheck, recoveryUntil - now))
+        return
+      }
+      if (stage && now < expires) {
+        schedule(Math.min(expires, recoveryUntil) - now)
+        return
+      }
+      if (stage) {
+        expiredWake = stage
+        stage = null
+        userDraft = !rendered
+      }
+      // A suspended notice checks at a bounded cadence instead of on each terminal write.
+      schedule(Math.min(WAKE_RECOVERY_POLL, recoveryUntil - now))
     }
+    if (!parentInput(targetOf(input)) || shellAtCursor() || isBlocked()) return
     // State not reported yet: look again once the screen has been still long enough
     if (due && working && isUnknown() && input?.atStart) { schedule(quietMs - quietFor + DRAW_SETTLE); return }
     // Busy but not in a task (starting up, approval prompt, unknown): wait as before
@@ -851,7 +898,9 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     userDraft = false
     emptyClaudeTarget = null
     const mode = waiting.length ? (working ? 'busy' : 'idle') : 'remind'
-    stage = { expires: now + INPUT_TIMEOUT, mode, prompt: PROMPTS[mode], ids: mode === 'remind' ? remind : waiting }
+    expiredWake = null
+    stage = { expires: now + INPUT_TIMEOUT, visibleUntil: now + WAKE_HIDDEN_TIMEOUT,
+      mode, prompt: PROMPTS[mode], ids: mode === 'remind' ? remind : waiting }
     if (!write(pasteOf(stage.prompt))) { stage = null; return }
     schedule(INPUT_TIMEOUT)
   }
@@ -876,6 +925,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     forceSendOffer = null
     emptyClaudeTarget = null
     lastChatDraft = null
+    expiredWake = null
     cancelQueuedChats('interrupted')
     if (chat && (chat.draft || chat.codexImages || (data === '\x1b' && !chat.probe))) {
       const reason = chat.draft || data === '\x1b' ? 'interrupted' : 'target-changed'
@@ -991,6 +1041,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
           }
 
           clearTimeout(timer)
+          expiredWake = null
           const claudeImages = kind === 'claude' && images ? { count: images.count, text: compact(images.text) } : null
           const compactText = compact(text)
           // Codex recognizes each local image when its path is pasted on its own.
@@ -1061,6 +1112,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         if (!input.endsAtCursor || input.text !== compact(joined)) return resolve({ ok: false, reason: 'different' })
         // One key per character from the end; extra keys on an empty composer do nothing
         if (!rawWrite('\x7f'.repeat(Array.from(joined).length + texts.length), false)) return resolve({ ok: false, reason: 'write-failed' })
+        expiredWake = null
         const expires = Date.now() + INPUT_TIMEOUT
         const check = () => {
           if (stopped) return resolve({ ok: false, reason: 'not-agent' })
@@ -1086,6 +1138,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       if (value) {
         forceSendOffer = null
         emptyClaudeTarget = null
+        expiredWake = null
         finishApprovalAnswer({ ok: false, reason: 'changed' })
         lastChatDraft = null
         cancelQueuedChats('interrupted')

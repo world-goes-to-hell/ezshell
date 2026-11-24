@@ -4,7 +4,7 @@ import { useTerminalStore, type TerminalInfo } from '../stores/terminalStore'
 import { adoptLocalPaneShell, releaseLocalPaneShell } from './localPaneShells'
 import { commitPaneGesture, type PaneGestureAction } from './paneGesture'
 import { closeTabPane, mergePanes } from './paneToTab'
-import { MAIN_PANE, paneId } from './splitTree'
+import { MAIN_PANE, paneId, paneIds, singlePane } from './splitTree'
 
 vi.mock('./paneToTab', () => ({ mergePanes: vi.fn(), closeTabPane: vi.fn() }))
 
@@ -52,6 +52,20 @@ describe('Alt+drag session confirmation', () => {
     expect(query).toHaveBeenCalledWith(['local:promoted'])
     expect(terminal()?.splitTree?.kind).toBe('split')
     expect(question()).toBeNull()
+  })
+
+  it('adds a seventh local pane by Alt+drag and stops at six SSH panes', async () => {
+    openLocal()
+    const sshTab = 'ssh:tab'
+    store().addTerminal(sshTab, { id: sshTab, host: 'host', username: 'user', connected: true })
+    for (let index = 0; index < 5; index++) {
+      store().splitTerminalPane(tabId, MAIN_PANE, 'row')
+      store().splitTerminalPane(sshTab, MAIN_PANE, 'row')
+    }
+    await commitPaneGesture(tabId, MAIN_PANE, split, visible)
+    await commitPaneGesture(sshTab, MAIN_PANE, split, visible)
+    expect(paneIds(terminal()?.splitTree ?? singlePane())).toHaveLength(7)
+    expect(paneIds(store().getTerminal(sshTab)?.splitTree ?? singlePane())).toHaveLength(6)
   })
 
   it('asks before a split of a working shell and a cancellation changes nothing', async () => {

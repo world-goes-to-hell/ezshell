@@ -242,7 +242,6 @@
       push.reset()
       pcTabs.reset()
       agents?.reset()
-      // Whatever the reason, signing in again needs a new code
       if (wasReady) message('연결이 끊겼습니다.', { canRetry: true })
       else if (!didOpen) {
         // Never reached the PC: said where the person is looking
@@ -263,7 +262,7 @@
         $('signin-code').focus()
         break
       case 'trust':
-        // A fresh ticket, sent right after a code sign-in that asked to be remembered
+        // Store the fresh ticket before opening the signed-in view.
         saveTrust(msg)
         break
       case 'ready':
@@ -510,19 +509,19 @@
 
   function start() {
     const pairCode = new URLSearchParams(location.hash.slice(1)).get('pair')
+    const token = readToken()
     signinError('')
     $('signin-code').value = ''
     if (pairCode) {
       message('이 기기를 등록하는 중…')
       connect(() => send({ type: 'pair', code: pairCode, name: deviceName() }))
-    } else if (readToken()) {
+    } else if (token) {
       const trust = readTrust()
-      // Within the day the device was remembered: come straight in with the ticket, no code
-      if (trust && trust.expiresAt > Date.now()) {
+      // The PC checks expiry using the same clock that issued the ticket.
+      if (trust) {
         message('접속하는 중…')
-        connect(() => send({ type: 'resume', token: readToken(), ticket: trust.ticket }))
+        connect(() => send({ type: 'resume', token, ticket: trust.ticket }))
       } else {
-        if (trust) clearTrust()
         $('signin-note').textContent = '인증 앱의 6자리 코드를 입력하세요.'
         show('signin')
         $('signin-code').focus()

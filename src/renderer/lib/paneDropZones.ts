@@ -2,7 +2,7 @@
 // (the side nearest the pointer gets the new pane), with a middle part for panes being moved
 // (dropped there, the two panes trade places).
 
-import { MAX_PANES, MIN_RATIO, MAX_RATIO, leafCount, paneIds, type PaneId, type SplitAxis, type SplitNode } from './splitTree'
+import { MIN_RATIO, MAX_RATIO, paneLimitReached, paneIds, type PaneId, type PaneTabKind, type SplitAxis, type SplitNode } from './splitTree'
 
 export type DropSide = 'left' | 'right' | 'top' | 'bottom'
 export type DropZone = DropSide | 'center'
@@ -99,8 +99,10 @@ function besides(tree: SplitNode, target: PaneId, side: DropSide, pane: PaneId):
 }
 
 /** A new pane on `side` of the pane `target` (a tab merged in). Unchanged when the tab is full or the id is taken. */
-export function insertBeside(tree: SplitNode, target: PaneId, side: DropSide, newPane: PaneId): SplitNode {
-  if (leafCount(tree) >= MAX_PANES || paneIds(tree).includes(newPane) || !paneIds(tree).includes(target)) return tree
+export function insertBeside(tree: SplitNode, target: PaneId, side: DropSide, newPane: PaneId, kind: PaneTabKind = 'ssh'): SplitNode {
+  if (paneLimitReached(tree, kind)) return tree
+  const panes = paneIds(tree)
+  if (panes.includes(newPane) || !panes.includes(target)) return tree
   return besides(tree, target, side, newPane)
 }
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   singlePane, splitPane, closePane, swapPanes, vacatePane, mergeVacant, layoutOf, setRatio, equalize, equalizeAt,
-  paneIds, leafCount, leafAt, nextPaneSeq, isSplitTree, mergePaneLayout, MAX_PANES, type SplitNode, type Rect
+  paneIds, leafCount, leafAt, nextPaneSeq, isSplitTree, mergePaneLayout, SSH_MAX_PANES, type SplitNode, type Rect
 } from './splitTree'
 
 const rectOf = (tree: SplitNode, pane: string): Rect | undefined => {
@@ -37,13 +37,20 @@ describe('splitPane', () => {
     expect(near(rectOf(tree, 'b'), 0.75, 0, 0.25, 1)).toBe(true)
   })
 
-  it('stops at the pane limit and ignores an id already in use', () => {
+  it('stops at six SSH panes and ignores an id already in use', () => {
     let tree = singlePane()
-    for (let i = 1; i < MAX_PANES; i++) tree = splitPane(tree, 'main', 'row', `p${i}`)
-    expect(leafCount(tree)).toBe(MAX_PANES)
+    for (let i = 1; i < SSH_MAX_PANES; i++) tree = splitPane(tree, 'main', 'row', `p${i}`)
+    expect(leafCount(tree)).toBe(SSH_MAX_PANES)
     expect(splitPane(tree, 'main', 'row', 'extra')).toBe(tree)
     const two = splitPane(singlePane(), 'main', 'row', 'a')
     expect(splitPane(two, 'main', 'col', 'a')).toBe(two)
+  })
+
+  it('splits local panes past the SSH and saved-layout limits', () => {
+    let tree = singlePane()
+    for (let i = 1; i < 70; i++) tree = splitPane(tree, 'main', 'row', `split-${i}`, 0.5, 'local')
+    expect(leafCount(tree)).toBe(70)
+    expect(splitPane(tree, 'main', 'col', 'split-1', 0.5, 'local')).toBe(tree)
   })
 })
 
@@ -87,6 +94,15 @@ describe('mergePaneLayout', () => {
     expect(near(plan.expanded, 0, 0, 1, 0.5)).toBe(true)
     expect(layoutOf(plan.tree).vacants).toEqual([])
     expect(mergePaneLayout(quad(), 'main', 'c')).toBeNull()
+  })
+
+  it('merges across an edge in a local layout with more than six places', () => {
+    let tree = tee()
+    for (let i = 1; i <= 4; i++) tree = splitPane(tree, 'main', 'row', `split-${i}`, 0.5, 'local')
+    const merged = mergePaneLayout(tree, 'bottom', 'right', 4, 'local')!
+    expect(leafCount(merged.tree)).toBe(7)
+    expect(near(rectOf(merged.tree, 'bottom'), 0, 0.4, 1, 0.6)).toBe(true)
+    expect(mergePaneLayout(tree, 'bottom', 'right', 4, 'ssh')).toBeNull()
   })
 })
 

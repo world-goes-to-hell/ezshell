@@ -4,10 +4,13 @@
 // The main process keeps the record encrypted; it is checked here again when it comes back.
 
 import type { TerminalInfo, LayoutState } from '../stores/terminalStore'
-import { MAIN_PANE, MAX_PANES, leafCount, type SplitNode } from './splitTree'
+import { MAIN_PANE, SSH_MAX_PANES, paneIds, type PaneTabKind, type SplitNode } from './splitTree'
 import { MAX_SCREENS } from './screenPanes'
 
 export const RESTORE_VERSION = 1
+// Applies to saved layouts only. The live local split tree has no pane-count limit.
+export const LOCAL_RESTORE_MAX_PANES = 64
+const LOCAL_RESTORE_MAX_DEPTH = LOCAL_RESTORE_MAX_PANES - 1
 const MAX_OTHER_TABS = 50
 const MAX_TEXT = 500
 
@@ -89,7 +92,7 @@ function tabOf(info: TerminalInfo, sftpPath: string | null, agents: RestoreAgent
   const splitTree = withoutVacants(info.splitTree)
   const paneSeq = splitTree ? info.paneSeq : undefined
   if (info.local) {
-    const kept = agents.filter(isRestoreAgent).slice(0, MAX_PANES)
+    const kept = agents.filter(isRestoreAgent).slice(0, LOCAL_RESTORE_MAX_PANES)
     return { kind: 'local', title, splitTree, paneSeq, cwd: path(info.local.cwd), workspaceLabel: text(info.local.workspaceLabel), ...(kept.length ? { agents: kept } : {}) }
   }
   const config = info.connectConfig
@@ -158,7 +161,13 @@ export function buildRestoreRecord(source: RecordSource): RestoreRecord {
   return record
 }
 
-const PANE_ID = /^(main|split-\d{1,4})$/
+const PANE_ID = /^(main|split-\d{1,6})$/
+const MAX_PANE_SEQ = 999_999
+
+export function readPaneSeq(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= MAX_PANE_SEQ ? value : undefined
+}
+
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const isRestoreAgent = (value: unknown): value is RestoreAgent => {
   const a = value as Record<string, unknown> | null
@@ -168,24 +177,27 @@ const isRestoreAgent = (value: unknown): value is RestoreAgent => {
 }
 
 /** A split tree read back from storage: valid pane ids, each once, the main pane among them; undefined otherwise */
-export function readTree(value: unknown): SplitNode | undefined {
+export function readTree(value: unknown, kind: PaneTabKind = 'ssh'): SplitNode | undefined {
+  const maxPanes = kind === 'local' ? LOCAL_RESTORE_MAX_PANES : SSH_MAX_PANES
+  const maxDepth = kind === 'local' ? LOCAL_RESTORE_MAX_DEPTH : SSH_MAX_PANES
+  const panes = new Set<string>()
   const read = (node: unknown, depth: number): SplitNode | null => {
-    if (!node || typeof node !== 'object' || depth > MAX_PANES) return null
+    if (!node || typeof node !== 'object' || depth > maxDepth) return null
     const n = node as Record<string, unknown>
-    if (n.kind === 'pane') return typeof n.pane === 'string' && PANE_ID.test(n.pane) ? { kind: 'pane', pane: n.pane } : null
+    if (n.kind === 'pane') {
+      if (typeof n.pane !== 'string' || !PANE_ID.test(n.pane) || panes.has(n.pane) || panes.size >= maxPanes) return null
+      panes.add(n.pane)
+      return { kind: 'pane', pane: n.pane }
+    }
     if (n.kind !== 'split' || (n.axis !== 'row' && n.axis !== 'col')) return null
     const ratio = typeof n.ratio === 'number' && n.ratio >= 0.1 && n.ratio <= 0.9 ? n.ratio : 0.5
     const first = read(n.first, depth + 1)
+    if (!first) return null
     const second = read(n.second, depth + 1)
-    return first && second ? { kind: 'split', axis: n.axis, ratio, first, second } : null
+    return second ? { kind: 'split', axis: n.axis, ratio, first, second } : null
   }
   const tree = read(value, 0)
-  if (!tree || tree.kind !== 'split' || leafCount(tree) > MAX_PANES) return undefined
-  // Every pane once, the tab's own shell among them
-  const ids: string[] = []
-  const collect = (node: SplitNode) => { if (node.kind === 'split') { collect(node.first); collect(node.second) } else ids.push(node.pane) }
-  collect(tree)
-  return ids.includes(MAIN_PANE) && new Set(ids).size === ids.length ? tree : undefined
+  return tree?.kind === 'split' && panes.has(MAIN_PANE) ? tree : undefined
 }
 
 const path = (value: unknown): string | undefined => {
@@ -197,8 +209,8 @@ function readTab(value: unknown, index: number): RestoreTab | null {
   if (!value || typeof value !== 'object') return null
   const t = value as Record<string, unknown>
   const title = text(t.title)
-  const tree = readTree(t.splitTree)
-  const paneSeq = tree && typeof t.paneSeq === 'number' && Number.isInteger(t.paneSeq) && t.paneSeq >= 0 && t.paneSeq < 10000 ? t.paneSeq : undefined
+  const tree = t.kind === 'ssh' || t.kind === 'local' ? readTree(t.splitTree, t.kind) : undefined
+  const paneSeq = tree ? readPaneSeq(t.paneSeq) : undefined
   switch (t.kind) {
     case 'ssh': {
       const savedSessionId = text(t.savedSessionId, 100)
@@ -216,11 +228,9 @@ function readTab(value: unknown, index: number): RestoreTab | null {
     }
     case 'local': {
       // Only panes the tab has (the main pane, or a pane of its tree), each once
-      const panes = new Set(['main'])
-      const collect = (node: SplitNode | undefined) => { if (!node) return; if (node.kind === 'split') { collect(node.first); collect(node.second) } else if (node.kind === 'pane') panes.add(node.pane) }
-      collect(tree)
+      const panes = new Set(tree ? paneIds(tree) : [MAIN_PANE])
       const seen = new Set<string>()
-      const agents = (Array.isArray(t.agents) ? t.agents : []).slice(0, MAX_PANES * 2)
+      const agents = (Array.isArray(t.agents) ? t.agents : []).slice(0, LOCAL_RESTORE_MAX_PANES * 2)
         .filter(isRestoreAgent).filter(a => panes.has(a.pane) && !seen.has(a.pane) && seen.add(a.pane))
         .map(({ pane, agent, sessionId, chat }) => ({ pane, agent, ...(sessionId ? { sessionId } : {}), ...(chat ? { chat } : {}) }))
       return { kind: 'local', title, splitTree: tree, paneSeq, cwd: path(t.cwd), workspaceLabel: text(t.workspaceLabel), ...(agents.length ? { agents } : {}) }

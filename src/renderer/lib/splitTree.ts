@@ -10,6 +10,7 @@ export type PaneId = string
 export const MAIN_PANE: PaneId = 'main'
 /** 'row': the two parts sit side by side. 'col': one above the other. */
 export type SplitAxis = 'row' | 'col'
+export type PaneTabKind = 'ssh' | 'local'
 
 export type SplitNode =
   | { kind: 'pane'; pane: PaneId }
@@ -35,7 +36,7 @@ export interface SplitLayout {
   dividers: DividerLine[]
 }
 
-export const MAX_PANES = 6
+export const SSH_MAX_PANES = 6
 export const MIN_RATIO = 0.1
 export const MAX_RATIO = 0.9
 
@@ -62,6 +63,9 @@ export function leafCount(node: SplitNode): number {
   return node.kind === 'split' ? leafCount(node.first) + leafCount(node.second) : 1
 }
 
+export const paneLimitReached = (tree: SplitNode, kind: PaneTabKind): boolean =>
+  kind === 'ssh' && leafCount(tree) >= SSH_MAX_PANES
+
 export const isSplitTree = (node: SplitNode | undefined): boolean => !!node && node.kind === 'split'
 
 function mapLeaf(node: SplitNode, pane: PaneId, change: (leaf: SplitNode) => SplitNode): SplitNode {
@@ -72,8 +76,8 @@ function mapLeaf(node: SplitNode, pane: PaneId, change: (leaf: SplitNode) => Spl
 }
 
 /** The pane is halved: it keeps the left / upper half, the new pane gets the other. Others do not move. */
-export function splitPane(tree: SplitNode, pane: PaneId, axis: SplitAxis, newPane: PaneId, ratio = 0.5): SplitNode {
-  if (leafCount(tree) >= MAX_PANES || paneIds(tree).includes(newPane)) return tree
+export function splitPane(tree: SplitNode, pane: PaneId, axis: SplitAxis, newPane: PaneId, ratio = 0.5, kind: PaneTabKind = 'ssh'): SplitNode {
+  if (paneLimitReached(tree, kind) || paneIds(tree).includes(newPane)) return tree
   return mapLeaf(tree, pane, leaf => (leaf.kind === 'pane'
     ? { kind: 'split', axis, ratio: clampRatio(ratio), first: leaf, second: { kind: 'pane', pane: newPane } }
     : leaf))
@@ -283,7 +287,7 @@ function treeOfCells(cells: LayoutCell[]): SplitNode | null {
 }
 
 /** Merge across the shared part of an edge and turn the longer pane's remaining strips into empty places. */
-export function mergePaneLayout(tree: SplitNode, from: PaneId, to: PaneId, lastSeq = 0): { tree: SplitNode; expanded: Rect; seq: number } | null {
+export function mergePaneLayout(tree: SplitNode, from: PaneId, to: PaneId, lastSeq = 0, kind: PaneTabKind = 'ssh'): { tree: SplitNode; expanded: Rect; seq: number } | null {
   if (from === to) return null
   const { panes, vacants } = layoutOf(tree)
   const first = panes.find(entry => entry.pane === from)?.rect
@@ -319,7 +323,7 @@ export function mergePaneLayout(tree: SplitNode, from: PaneId, to: PaneId, lastS
       })
     }
   }
-  if (cells.length > MAX_PANES) return null
+  if (kind === 'ssh' && cells.length > SSH_MAX_PANES) return null
   const combined = treeOfCells(cells)
   return combined ? { tree: combined, expanded, seq } : null
 }

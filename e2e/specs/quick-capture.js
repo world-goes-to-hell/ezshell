@@ -212,6 +212,9 @@ const { check, finish } = createChecks()
   await openLocalAgent(main, 'codex', service)
   await openLocalAgent(main, 'claude', tools)
   if (!(await waitFor(() => read('codex-1-tools') && read('claude-2-tools')))) throw new Error('fake agents did not start')
+  const claudeRole = '리뷰어' + 'W'.repeat(17)
+  const assigned = await main.js(`window.electronAPI.agentMessageSetRole('claude-2', ${JSON.stringify(claudeRole)})`)
+  if (!assigned?.success) throw new Error('Could not assign the test role: ' + assigned?.error)
 
   const holdProjects = file('capture-projects-hold')
   const loading = await openCapture('')
@@ -323,9 +326,29 @@ const { check, finish } = createChecks()
     !document.querySelector('.agent')
   `) && !read('codex-1-chat-sent') && !read('claude-2-chat-sent'), await overlay.js(`Array.from(document.querySelector('#project').options).map(option => option.text).join('|') + ' agents=' + document.querySelectorAll('.agent').length`))
   await chooseProject(overlay, tools)
-  check('the chosen project shows only its agent', await overlay.until(`
-    document.querySelectorAll('.agent').length === 1 && document.querySelector('.agent').textContent.includes('claude-2')
+  const claudeTarget = `Claude Code · ${claudeRole} · claude-2`
+  check('the chosen project shows its agent with the role in the title and accessible name', await overlay.until(`
+    document.querySelectorAll('.agent').length === 1 &&
+    document.querySelector('.agent-title').textContent.startsWith(${JSON.stringify(claudeTarget)}) &&
+    document.querySelector('.agent').getAttribute('aria-label') === ${JSON.stringify(claudeTarget + '에 전송')}
   `))
+  check('the longest role wraps and leaves room for Send in a narrow list', await overlay.js(`(() => {
+    const review = document.querySelector('#review')
+    const width = review.style.width
+    review.style.width = '272px'
+    try {
+      const list = document.querySelector('#agents')
+      const button = list.querySelector('.agent')
+      const title = button.querySelector('.agent-title')
+      const send = button.querySelector('.agent-send')
+      const text = document.createRange()
+      text.selectNodeContents(title)
+      return text.getClientRects().length > 1 && title.scrollWidth <= title.clientWidth &&
+        list.scrollWidth <= list.clientWidth && send.getBoundingClientRect().right < button.getBoundingClientRect().right
+    } finally {
+      review.style.width = width
+    }
+  })()`))
   await clickButton(overlay, '#back')
   check('back preserves the region and comment', await overlay.js(`
     !document.querySelector('#selection').hidden && document.querySelector('#comment').value === ${JSON.stringify(comment)}
@@ -333,6 +356,10 @@ const { check, finish } = createChecks()
   await clickButton(overlay, '#work')
   await overlay.until('!document.querySelector("#picker").hidden')
   await chooseProject(overlay, service)
+  check('an agent without a role keeps its usual label', await overlay.until(`
+    document.querySelector('.agent-title')?.textContent.startsWith('Codex · codex-1') &&
+    document.querySelector('.agent')?.getAttribute('aria-label') === 'Codex · codex-1에 전송'
+  `))
   await overlay.shot('quick-capture-agent')
   await clickButton(overlay, '.agent')
   check('choosing Codex submits the exact comment and cropped PNG to that session', await waitFor(() => {

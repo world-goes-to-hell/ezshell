@@ -16,15 +16,19 @@ const LIST_MAX = 2000
 const COUNT_MAX_BYTES = 5 * 1024 * 1024
 const COUNT_TOTAL_MAX_BYTES = 64 * 1024 * 1024
 const TIMEOUT_MS = 15000
+const READ_REPO_CACHE_MS = 10000
+const READ_REPO_CACHE_MAX = 64
+const readRepoCache = new Map()
+let readRepoGeneration = 0
 const HASH = /^[0-9a-f]{7,40}$/
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/
 // A repository's own config could start programs on a read (core.fsmonitor on status); turn those off
 const SAFE = ['-c', 'core.fsmonitor=false', '-c', 'core.quotepath=false', '-c', 'diff.external=', '--no-pager']
 
-function run(cwd, args, { maxBuffer = OUTPUT_MAX_BYTES, encoding = 'utf8' } = {}) {
+function run(cwd, args, { maxBuffer = OUTPUT_MAX_BYTES, encoding = 'utf8', env } = {}) {
   return new Promise((resolve, reject) => {
-    execFile('git', [...SAFE, ...args], { cwd, timeout: TIMEOUT_MS, windowsHide: true, encoding, maxBuffer }, (error, stdout, stderr) => {
+    execFile('git', [...SAFE, ...args], { cwd, timeout: TIMEOUT_MS, windowsHide: true, encoding, maxBuffer, env }, (error, stdout, stderr) => {
       if (error) {
         error.stderr = String(stderr ?? '')
         reject(error)
@@ -35,13 +39,40 @@ function run(cwd, args, { maxBuffer = OUTPUT_MAX_BYTES, encoding = 'utf8' } = {}
   })
 }
 
+async function discoverRepoTop(folder) {
+  return path.normalize((await run(folder, ['rev-parse', '--show-toplevel'])).replace(/\r?\n$/, ''))
+}
+
 /** The repository top of a folder, or null outside Git (or without Git) */
 async function repoTop(folder) {
   try {
-    return path.normalize((await run(folder, ['rev-parse', '--show-toplevel'])).replace(/\r?\n$/, ''))
+    return await discoverRepoTop(folder)
   } catch {
     return null
   }
+}
+
+/** Reuse a recent root for reads. A child directory can acquire its own repository at any time. */
+async function readRepoTop(folder) {
+  const generation = readRepoGeneration
+  const key = path.resolve(folder)
+  const cached = readRepoCache.get(key)
+  if (cached && cached.until > Date.now()) {
+    const marker = await fs.promises.lstat(path.join(key, '.git')).catch(() => null)
+    if (marker?.isDirectory() || marker?.isFile()) return cached.top
+  }
+  const top = await discoverRepoTop(folder)
+  if (generation === readRepoGeneration && path.relative(key, top) === '') {
+    readRepoCache.delete(key)
+    readRepoCache.set(key, { top, until: Date.now() + READ_REPO_CACHE_MS })
+    if (readRepoCache.size > READ_REPO_CACHE_MAX) readRepoCache.delete(readRepoCache.keys().next().value)
+  }
+  return top
+}
+
+function clearReadRepoCache() {
+  readRepoGeneration++
+  readRepoCache.clear()
 }
 
 /** The repository top and its worktrees, for the roots main accepts */
@@ -134,27 +165,43 @@ async function countNewFile(top, relative, budget) {
   }
 }
 
-/** The branch checked out (null when detached) and the branch it tracks (null when none) */
-async function branchInfo(top) {
-  const branch = await run(top, ['rev-parse', '--abbrev-ref', 'HEAD']).then(text => text.trim(), () => '')
-  const upstream = await run(top, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).then(text => text.trim(), () => '')
-  return { branch: branch && branch !== 'HEAD' ? branch : null, upstream: upstream || null }
+/** The `##` record of `git status --porcelain=v1 --branch -z` in the C locale. */
+function parseStatusBranch(header) {
+  if (/^## (?:No commits yet on|Initial commit on) /u.test(header)) {
+    return { hasHead: false, branch: null, upstream: null }
+  }
+  const [branch, tracking] = header.slice(3).split('...')
+  const upstream = tracking?.endsWith(' [gone]') ? null : tracking?.split(' ')[0] || null
+  return { hasHead: true, branch: branch === 'HEAD (no branch)' ? null : branch, upstream }
 }
 
 async function status(folder) {
-  const top = await repoTop(folder)
+  const top = await readRepoTop(folder).catch(() => null)
   if (!top) return { repo: null }
-  const output = await run(top, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
-  const parsed = parseStatus(output)
+  const diff = against => run(top, ['diff', '--numstat', '-z', '--no-renames', against, '--']).catch(() => '')
+  const [output, headStats] = await Promise.all([
+    run(top, ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--branch', '--no-ahead-behind', '--untracked-files=all'],
+      { env: { ...process.env, LC_ALL: 'C' } }),
+    diff('HEAD')
+  ])
+  const headerEnd = output.indexOf('\0')
+  const header = output.slice(0, headerEnd)
+  const { hasHead, branch, upstream: tracking } = parseStatusBranch(header)
+  const parsed = parseStatus(output.slice(headerEnd + 1))
   // Lines added / removed against HEAD (staged and not), and the lines of each new file
-  const against = (await hasHead(top)) ? ['HEAD'] : ['--cached']
-  const stats = parseNumstat(await run(top, ['diff', '--numstat', '-z', '--no-renames', ...against, '--']).catch(() => ''))
+  // An unborn branch's status can report [gone] even when its configured upstream exists.
+  const [numstat, upstream] = await Promise.all([
+    hasHead ? headStats : diff('--cached'),
+    !hasHead && header.includes('...') ? run(top, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
+      .then(text => text.trim() || null, () => null) : tracking
+  ])
+  const stats = parseNumstat(numstat)
   const budget = { left: COUNT_TOTAL_MAX_BYTES }
   for (const file of parsed.untracked.slice(0, LIST_MAX)) {
     const lines = await countNewFile(top, file.path, budget)
     stats[file.path] = [lines, lines === null ? null : 0]
   }
-  return { repo: { top, ...parsed, stats, ...(await branchInfo(top)) } }
+  return { repo: { top, ...parsed, stats, branch, upstream } }
 }
 
 /** `git show --name-status -z`: [{ path, kind, from? }] */
@@ -190,7 +237,7 @@ function requireRepoPath(file) {
 }
 
 async function commitFiles(folder, hash) {
-  const top = await repoTop(folder)
+  const top = await readRepoTop(folder).catch(() => null)
   if (!top) return { files: [] }
   const output = await run(top, ['show', '--no-color', '--format=', '--name-status', '-z', '--diff-merges=first-parent', requireHash(hash), '--'])
   return { files: parseNameStatus(output) }
@@ -209,7 +256,7 @@ function cutDiff(text) {
  * or the work tree against HEAD. Binary files give `binary: true`.
  */
 async function fileDiff(folder, { hash, file }) {
-  const top = await repoTop(folder)
+  const top = await readRepoTop(folder).catch(() => null)
   if (!top) return { text: '', truncated: false }
   const target = requireRepoPath(file)
   const common = ['--no-color', '--no-ext-diff', '--no-textconv']
@@ -223,7 +270,7 @@ async function fileDiff(folder, { hash, file }) {
 
 /** The file's text at HEAD (or a commit): null when the file is not in it or is not text */
 async function fileAt(folder, target, rev = 'HEAD') {
-  const top = await repoTop(folder)
+  const top = await readRepoTop(folder).catch(() => null)
   if (!top) return null
   const relative = repoPath(top, target)
   if (!relative) return null
@@ -236,7 +283,10 @@ async function fileAt(folder, target, rev = 'HEAD') {
     return null
   }
   if (!Number.isFinite(size) || size > FILE_MAX_BYTES) return null
-  const data = await run(top, ['cat-file', 'blob', spec], { encoding: 'buffer', maxBuffer: FILE_MAX_BYTES + 1024 })
+  const [data, stamp] = await Promise.all([
+    run(top, ['cat-file', 'blob', spec], { encoding: 'buffer', maxBuffer: FILE_MAX_BYTES + 1024 }),
+    run(top, ['log', '-1', '--format=%ct', rev]).catch(() => '0')
+  ])
   if (data.includes(0)) return null
   let content
   try {
@@ -244,13 +294,13 @@ async function fileAt(folder, target, rev = 'HEAD') {
   } catch {
     return null
   }
-  const time = Number((await run(top, ['log', '-1', '--format=%ct', rev]).catch(() => '0')).trim()) * 1000
+  const time = Number(stamp.trim()) * 1000
   return { content, size, time }
 }
 
 /** A file's revisions reachable from HEAD, using its path at each commit across renames. */
 async function fileHistory(folder, target) {
-  const top = await repoTop(folder)
+  const top = await readRepoTop(folder).catch(() => null)
   if (!top) return []
   const file = repoPath(top, target)
   if (!file || !(await hasHead(top))) return []
@@ -286,7 +336,7 @@ async function fileHistory(folder, target) {
 }
 
 module.exports = {
-  repoTop, repoFolders, status, commitFiles, fileDiff, fileAt, fileHistory,
-  parseStatus, statusEntries, parseNameStatus, parseNumstat, repoPath, requireRepoPath,
+  repoTop, readRepoTop, clearReadRepoCache, repoFolders, status, commitFiles, fileDiff, fileAt, fileHistory,
+  parseStatusBranch, parseStatus, statusEntries, parseNameStatus, parseNumstat, repoPath, requireRepoPath,
   SAFE, LIST_MAX, OUTPUT_MAX_BYTES
 }

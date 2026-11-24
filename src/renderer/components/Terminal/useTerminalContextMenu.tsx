@@ -14,7 +14,7 @@ import { useSnippetStore } from '../../stores/snippetStore'
 import { findQueryFromSelection } from '../../lib/terminalText'
 import { syncSftpToTerminal } from '../../lib/sftpSync'
 import { terminalPaneAt } from '../../lib/terminalPanes'
-import { MAIN_PANE, MAX_PANES, singlePane, leafCount, equalize, type PaneId } from '../../lib/splitTree'
+import { MAIN_PANE, SSH_MAX_PANES, singlePane, paneLimitReached, equalize, type PaneId } from '../../lib/splitTree'
 import { closeTabPane } from '../../lib/paneToTab'
 import { toast } from '../../stores/toastStore'
 import { FIND_QUERY_MAX_LENGTH, type FindKind } from '../../lib/terminalFind'
@@ -104,7 +104,7 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
     const selection = terminal.getSelection()
     const isSplit = tab?.isSplit === true
     const tree = tab?.splitTree ?? singlePane()
-    const isFull = leafCount(tree) >= MAX_PANES
+    const isFull = paneLimitReached(tree, 'ssh')
     // A half of the clicked pane must still be usable as a terminal
     const isTooNarrow = Math.floor(terminal.cols / 2) < MIN_PANE_COLS
     const isTooShort = Math.floor(terminal.rows / 2) < MIN_PANE_ROWS
@@ -133,13 +133,13 @@ export function useTerminalContextMenu({ sessionId, isFileExplorerOpen, onToggle
         items: [
           // Divides the pane that was clicked only: the new shell opens to its right or below it
           {
-            label: isFull ? `좌우 분할 (칸은 ${MAX_PANES}개까지)` : isTooNarrow ? '좌우 분할 (칸이 좁습니다)' : '좌우 분할',
+            label: isFull ? `좌우 분할 (칸은 ${SSH_MAX_PANES}개까지)` : isTooNarrow ? '좌우 분할 (칸이 좁습니다)' : '좌우 분할',
             icon: RiSplitCellsHorizontal,
             disabled: isFull || isTooNarrow,
             onSelect: then(() => splitTerminalPane(sessionId, menu.pane, 'row'))
           },
           {
-            label: isFull ? `상하 분할 (칸은 ${MAX_PANES}개까지)` : isTooShort ? '상하 분할 (칸이 낮습니다)' : '상하 분할',
+            label: isFull ? `상하 분할 (칸은 ${SSH_MAX_PANES}개까지)` : isTooShort ? '상하 분할 (칸이 낮습니다)' : '상하 분할',
             icon: RiSplitCellsVertical,
             disabled: isFull || isTooShort,
             onSelect: then(() => splitTerminalPane(sessionId, menu.pane, 'col'))

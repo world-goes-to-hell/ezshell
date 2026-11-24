@@ -10,7 +10,7 @@ export function WorkspaceChanges({ folder }: { folder: string }) {
   const data = target.result?.data
   return (
     <>
-      <BrowserHeader folder={target.displayPath} branch={target.displayBranch} picker={target.picker} onRefresh={target.refresh} />
+      <BrowserHeader folder={target.displayPath} branch={target.displayBranch} picker={target.picker} onRefresh={target.refresh} refreshing={target.refreshing} />
       {!target.result ? <WorkspaceNote>변경 사항을 읽는 중…</WorkspaceNote>
         : !data?.success ? <WorkspaceNote error>{data?.error ?? 'Git 저장소를 읽지 못했습니다.'}</WorkspaceNote>
         : data.repo ? <ChangeList key={data.repo.root} folder={data.repo.root} revision={target.revision}

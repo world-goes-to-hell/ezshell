@@ -689,6 +689,74 @@ describe('createLocalShells', () => {
     expect(shells.hasWorkingAgent([id])).toBe(true)
   })
 
+  it('reconciles stale Codex working with its resumed rollout and takes new work immediately', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const sessionId = '01a20800-880a-74f1-86d2-96226700df12'
+    const setStatus = vi.fn()
+    const { shells, ptys } = setup({
+      agents: { register: () => ({ env: { EZSHELL_AGENT_ID: 'codex-1' }, setStatus, close: vi.fn() }) }
+    })
+    vi.setSystemTime(1000)
+    const { id } = shells.open({ agent: 'codex', resume: sessionId })
+    const report = (status, at, session = sessionId, agent = 'codex-1') =>
+      shells.setCodexTurnStatus(id, agent, session, { status, at })
+    const working = '\x1b]7501;state=working:app=codex\x07'
+    const status = () => shells.agentOf(id).status
+    try {
+      shells.write(id, 'Initial request')
+      shells.write(id, '\r')
+      vi.setSystemTime(2000)
+      ptys[0].emit(working)
+      vi.setSystemTime(3000)
+      report('idle', 1900)
+      report('idle', 2000)
+      report('idle', 2800, '01a20800-880a-74f1-86d2-96226700df13')
+      report('idle', 2800, sessionId, 'codex-2')
+      expect(status()).toBe('working')
+
+      report('idle', 2900)
+      expect(status()).toBe('idle')
+      expect(setStatus).toHaveBeenLastCalledWith('idle')
+
+      vi.setSystemTime(3100)
+      report('working', 3050)
+      report('idle', 3049)
+      expect(status()).toBe('working')
+      expect(setStatus).toHaveBeenLastCalledWith('working')
+
+      vi.setSystemTime(3300)
+      report('idle', 3200)
+      expect(status()).toBe('idle')
+      ptys[0].emit(working)
+      expect(status()).toBe('working')
+      expect(setStatus).toHaveBeenLastCalledWith('working')
+
+      vi.setSystemTime(3500)
+      report('idle', 3400)
+      expect(status()).toBe('idle')
+      shells.write(id, 'Next request')
+      shells.write(id, '\r')
+      expect(status()).toBe('working')
+
+      vi.setSystemTime(3700)
+      ptys[0].emit('\x1b]7501;state=blocked:app=codex\x07')
+      vi.setSystemTime(3900)
+      report('idle', 3800)
+      expect(status()).toBe('blocked')
+
+      ptys[0].emit('\x1b]7501;state=done:app=codex\x07')
+      expect(status()).toBe('idle')
+      vi.setSystemTime(4100)
+      report('working', 4050)
+      expect(status()).toBe('working')
+      ptys[0].emit('\x1b]7501;state=done:app=codex\x07')
+      expect(status()).toBe('idle')
+    } finally {
+      shells.close(id)
+      vi.useRealTimers()
+    }
+  })
+
   // Recorded from Claude Code (2026-11): working spins ◐/◑ in the title, idle is ✳, and it sends no
   // program status report even after the probe is answered
   it('reads the half-circle spinner of Claude Code as working and ✳ as idle', () => {

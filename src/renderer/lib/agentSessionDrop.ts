@@ -10,7 +10,7 @@ import { tabHost } from './tabHosts'
 import { adoptLocalPaneShell, getLocalPaneShellId } from './localPaneShells'
 import { halfOf, zoneAt } from './paneDropZones'
 import { treeWithArrival, type MergePlace } from './tabToPane'
-import { MAIN_PANE, MAX_PANES, leafCount, paneIds, singlePane, type PaneId } from './splitTree'
+import { MAIN_PANE, paneIds, singlePane, type PaneId } from './splitTree'
 import { focusTabPane } from './paneFocus'
 import type { ResumeAgentSessionRequest } from './agentHistory'
 
@@ -42,7 +42,6 @@ export function draggedAgentSession(): ResumeAgentSessionRequest | null {
 }
 
 export const NOT_LOCAL = '에이전트 대화는 로컬 터미널 탭에서만 이어서 열 수 있습니다.'
-const FULL = `한 탭의 칸은 ${MAX_PANES}개까지입니다.`
 const PANE_CHANGED = '이 칸의 셸이 바뀌었습니다. 다시 끌어 놓아 주세요.'
 
 interface AgentPaneReplacement {
@@ -74,7 +73,6 @@ const boxOf = (element: Element) => {
 function roomIn(targetId: string, place?: MergePlace): string | null {
   const tab = useTerminalStore.getState().terminals.get(targetId)
   if (!tab?.local) return NOT_LOCAL
-  if (leafCount(tab.splitTree ?? singlePane()) >= MAX_PANES && !place?.isVacant) return FULL
   const arrival = treeWithArrival(targetId, place)
   return 'error' in arrival ? arrival.error : null
 }

@@ -90,6 +90,20 @@
 }
 .agent-chat-title-copy:hover { text-decoration: underline; }
 
+/*
+ * The agent's name (role · ID) in the header shows whole while there is room, and the title gives way first.
+ * The shared badge caps itself at 32% of its parent, but here that parent is the shrink-to-fit button, so the
+ * percentage resolved against the name's own width and cut it to "● cla…" (2026-11-24 user report).
+ * The title's huge shrink factor takes nearly all of a shortfall, so the name stays whole (its share is under
+ * 1/64px: a share of a fraction of a pixel, as with factors 1000 : 1, already draws the ellipsis) until the title
+ * is down to nothing, and then the name takes the rest. A tiny factor on the name instead would not do: once the
+ * title is frozen, a sum of factors under 1 shrinks by only that fraction of the shortfall (Flexbox 9.7 step 4b),
+ * and the header overflowed its buttons.
+ */
+.agent-chat-head .agent-identity-edit { flex: 0 1 auto; max-width: 50%; }
+.agent-chat-head .agent-identity-edit .agent-identity-badge { max-width: 100%; }
+.agent-chat-head .agent-chat-title-copy { flex-shrink: 100000; }
+
 .agent-chat-status {
   flex: none;
   display: inline-flex;

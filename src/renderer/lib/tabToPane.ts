@@ -47,6 +47,7 @@ function defaultPlace(tree: SplitNode): MergePlace {
 export function treeWithArrival(targetId: string, place?: MergePlace): { tree: SplitNode; pane: PaneId; seq: number } | { error: string } {
   const target = useTerminalStore.getState().terminals.get(targetId)
   if (!target) return { error: '병합할 탭을 찾지 못했습니다.' }
+  const kind = target.local ? 'local' : 'ssh'
   const tree = target.splitTree ?? singlePane()
   const at = place ?? defaultPlace(tree)
   const seq = nextPaneSeq(tree, target.paneSeq ?? 0)
@@ -58,12 +59,12 @@ export function treeWithArrival(targetId: string, place?: MergePlace): { tree: S
   const size = paneSize(targetId, at.pane)
   if (at.side) {
     if (size && !canHalve(size.width, size.height, at.side)) return { error: TOO_NARROW }
-    const beside = insertBeside(tree, at.pane, at.side, pane)
+    const beside = insertBeside(tree, at.pane, at.side, pane, kind)
     return beside === tree ? { error: '병합할 자리를 찾지 못했습니다.' } : { tree: beside, pane, seq }
   }
   const axis = size ? mergeAxis(size.width, size.height) : 'row'
   if (!axis) return { error: TOO_SMALL }
-  const divided = splitPane(tree, at.pane, axis, pane)
+  const divided = splitPane(tree, at.pane, axis, pane, undefined, kind)
   return divided === tree ? { error: '병합할 자리를 찾지 못했습니다.' } : { tree: divided, pane, seq }
 }
 

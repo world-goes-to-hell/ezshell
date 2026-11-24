@@ -324,8 +324,8 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
     })
 
     /**
-     * A device that has just proved itself (by a code, or by its remembered ticket) joins and is sent
-     * the session list. Every check that guards a sign-in guards both ways in here. Returns false when
+     * A device that has just proved itself (by a code, or by its remembered ticket) joins.
+     * Every check that guards a sign-in guards both ways in here. Returns false when
      * the connection was dropped (too many devices), so the caller stops.
      */
     function enter(device) {
@@ -333,11 +333,14 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
       client.device = device
       arm(IDLE_MS)
       onChange()
+      return true
+    }
+
+    function sendReady() {
       // A question that was already being asked when the device came in
       const asked = approvals ? approvals.current() : null
       if (asked) client.askedAt.set(asked.id, now())
-      send({ type: 'ready', device: device.name, ...listSessions(), approvals: asked ? [forDevice(asked)] : [], push: pushInfo(), features: features(), theme: readTheme() })
-      return true
+      send({ type: 'ready', device: client.device.name, ...listSessions(), approvals: asked ? [forDevice(asked)] : [], push: pushInfo(), features: features(), theme: readTheme() })
     }
 
     /** A failed registration or sign-in: answered, counted, and the connection dropped when there are too many */
@@ -564,21 +567,21 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
           // Not asked to be remembered: drop any earlier ticket so the choice is honoured
           if (message.remember !== true) store.forgetDevice(result.device.id)
           if (!enter(result.device)) return
-          // The ticket is issued only once the device is in, and sent on its own: if the ticket were
-          // made first and enter() then failed (too many devices), a valid earlier ticket would be
-          // overwritten by one the device never received.
+          // Send the ticket after admission and before showing the signed-in page, so the browser
+          // can store it before the user reloads or closes that page.
           if (message.remember === true) {
             const trust = store.rememberDevice(result.device.id)
             if (trust) send({ type: 'trust', ticket: trust.ticket, expiresAt: trust.expiresAt })
           }
-          return
+          return sendReady()
         }
         if (message.type === 'resume') {
           const result = store.resume(message.token, message.ticket)
           // The day simply passed (or no ticket): ask for a code, and do not count it as a failure
           if (result.error) return result.benign ? send({ type: 'error', code: 'trust-expired', message: ERRORS['trust-expired'] }) : refuse('signin-failed', result.error)
           log('resume', { device: result.device.name })
-          return enter(result.device)
+          if (enter(result.device)) return sendReady()
+          return
         }
         return drop()
       }

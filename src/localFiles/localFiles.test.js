@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -6,12 +6,13 @@ const { execFileSync } = require('child_process')
 const { createLocalRoots } = require('./roots.js')
 const localRead = require('./localRead.js')
 const git = require('./git.js')
+const { readWorkspaceGit, registerLocalProjectIpc } = require('../ipc/localProjects.js')
 
 let temp
 // A git process still closing can hold the folder on Windows for a moment: retry the removal
 afterEach(() => { if (temp) fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); temp = undefined })
 
-function repo() {
+function repo({ unborn = false } = {}) {
   temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-localfiles-')))
   const top = path.join(temp, 'app')
   fs.mkdirSync(path.join(top, 'src'), { recursive: true })
@@ -19,6 +20,7 @@ function repo() {
   g('init', '-q', '-b', 'main')
   g('config', 'user.email', 't@example.com')
   g('config', 'user.name', 'T')
+  if (unborn) return { top, g }
   fs.writeFileSync(path.join(top, 'README.md'), 'one\n')
   fs.writeFileSync(path.join(top, 'src', 'a.txt'), 'alpha\n')
   g('add', '.')
@@ -167,6 +169,17 @@ describe('git', { timeout: 30000 }, () => {
 })
 
 describe('git status line counts', { timeout: 30000 }, () => {
+  it.each([
+    ['## main', { hasHead: true, branch: 'main', upstream: null }],
+    ['## main...origin/main [different]', { hasHead: true, branch: 'main', upstream: 'origin/main' }],
+    ['## main...origin/main [gone]', { hasHead: true, branch: 'main', upstream: null }],
+    ['## HEAD (no branch)', { hasHead: true, branch: null, upstream: null }],
+    ['## No commits yet on main', { hasHead: false, branch: null, upstream: null }],
+    ['## Initial commit on main', { hasHead: false, branch: null, upstream: null }]
+  ])('reads the branch record %s without putting it in the file list', (header, expected) => {
+    expect(git.parseStatusBranch(header)).toEqual(expected)
+  })
+
   it('reads numstat with renames and binary files', () => {
     const out = ['3\t1\tsrc/a.txt', '-\t-\timg.png', '2\t0\t', 'old.txt', 'new.txt', ''].join('\0')
     expect(git.parseNumstat(out)).toEqual({ 'src/a.txt': [3, 1], 'img.png': [null, null], 'new.txt': [2, 0] })
@@ -185,5 +198,111 @@ describe('git status line counts', { timeout: 30000 }, () => {
     expect(status.stats['blob.bin']).toEqual([null, null])
     expect(status.branch).toBe('main')
     expect(status.upstream).toBeNull()
+  })
+
+  it('uses the index for staged counts with no HEAD and reads the first commit immediately', async () => {
+    const { top, g } = repo({ unborn: true })
+    fs.writeFileSync(path.join(top, 'staged.txt'), 'first\nsecond\n')
+    g('add', 'staged.txt')
+    fs.appendFileSync(path.join(top, 'staged.txt'), 'third\n')
+    fs.writeFileSync(path.join(top, 'new.txt'), 'untracked\n')
+    expect((await git.status(top)).repo).toEqual({
+      top,
+      branch: null,
+      upstream: null,
+      staged: [{ path: 'staged.txt', kind: 'added' }],
+      changed: [{ path: 'staged.txt', kind: 'modified' }],
+      untracked: [{ path: 'new.txt', kind: 'untracked' }],
+      truncated: false,
+      stats: { 'staged.txt': [2, 0], 'new.txt': [1, 0] }
+    })
+    expect((await readWorkspaceGit(top)).repo).toMatchObject({
+      head: null, branch: 'main', worktrees: [{ path: top, branch: 'main' }], commits: []
+    })
+    g('commit', '-qm', 'first')
+    const head = g('rev-parse', 'HEAD').trim()
+    expect((await readWorkspaceGit(top)).repo).toMatchObject({ head, commits: [{ hash: head, subject: 'first' }] })
+    expect((await git.status(top)).repo).toMatchObject({ branch: 'main', staged: [], stats: { 'staged.txt': [1, 0] } })
+  })
+
+  it('updates the upstream and detached HEAD immediately while the repository location is cached', async () => {
+    const { top, g } = repo()
+    g('config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*')
+    g('config', 'branch.main.remote', 'origin')
+    g('config', 'branch.main.merge', 'refs/heads/main')
+    g('update-ref', 'refs/remotes/origin/main', 'HEAD')
+    expect((await git.status(top)).repo).toMatchObject({ branch: 'main', upstream: 'origin/main' })
+    g('update-ref', '-d', 'refs/remotes/origin/main')
+    expect((await git.status(top)).repo).toMatchObject({ branch: 'main', upstream: null })
+    g('checkout', '--detach', 'HEAD~1')
+    const head = g('rev-parse', 'HEAD').trim()
+    expect((await git.status(top)).repo).toMatchObject({ branch: null, upstream: null })
+    expect((await readWorkspaceGit(top)).repo).toMatchObject({
+      head, branch: null, worktrees: [{ path: top, branch: null }]
+    })
+    g('symbolic-ref', 'HEAD', 'refs/heads/unborn')
+    g('config', 'branch.unborn.remote', '.')
+    g('config', 'branch.unborn.merge', 'refs/heads/main')
+    expect((await git.status(top)).repo).toMatchObject({ branch: null, upstream: 'main' })
+  })
+
+  it('detects a repository added to a folder previously under another repository', async () => {
+    const { top } = repo()
+    const nested = path.join(top, 'src')
+    expect(await git.readRepoTop(nested)).toBe(top)
+    execFileSync('git', ['init', '-q'], { cwd: nested })
+    expect(await git.readRepoTop(nested)).toBe(nested)
+    expect((await readWorkspaceGit(top)).repo.nestedRepositories).toEqual([nested])
+  })
+
+  it('clears the read root cache on lock and prevents pending reads from refilling it', async () => {
+    const { top } = repo()
+    const { clearSearches } = registerLocalProjectIpc({
+      ipcMain: { handle() {} }, fromMainWindow: () => true, isLocked: () => false
+    })
+    const marker = vi.spyOn(fs.promises, 'lstat')
+    try {
+      await git.readRepoTop(top)
+      await git.readRepoTop(top)
+      expect(marker).toHaveBeenCalledWith(path.join(top, '.git'))
+      marker.mockClear()
+
+      clearSearches()
+      const pending = git.readRepoTop(top)
+      clearSearches()
+      expect(await pending).toBe(top)
+      expect(await git.readRepoTop(top)).toBe(top)
+      expect(marker).not.toHaveBeenCalled()
+    } finally {
+      marker.mockRestore()
+    }
+  })
+
+  it('returns an IPC error for a stalled scan and retries it on the next authorized request', async () => {
+    const { top } = repo()
+    const nested = path.join(top, 'src')
+    execFileSync('git', ['init', '-q'], { cwd: nested })
+    const handlers = new Map()
+    const resolveRoot = vi.fn(async () => top)
+    registerLocalProjectIpc({
+      ipcMain: { handle: (name, callback) => handlers.set(name, callback) },
+      fromMainWindow: () => true, isLocked: () => false, roots: { resolveRoot }
+    })
+    const readLog = () => handlers.get('workspace-git-log')({}, { folder: top })
+    const originalTimeout = globalThis.setTimeout
+    const timeout = vi.spyOn(globalThis, 'setTimeout').mockImplementationOnce((callback, delay) =>
+      originalTimeout(callback, delay === 15000 ? 50 : delay))
+    let finishRead
+    const readdir = vi.spyOn(fs.promises, 'readdir').mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve }))
+    try {
+      expect(await readLog()).toEqual({ success: false, error: '하위 Git 저장소를 찾는 시간이 초과되었습니다.' })
+      expect(readdir).toHaveBeenCalledOnce()
+    } finally {
+      finishRead?.([])
+      readdir.mockRestore()
+      timeout.mockRestore()
+    }
+    expect(await readLog()).toMatchObject({ success: true, repo: { nestedRepositories: [nested] } })
+    expect(resolveRoot).toHaveBeenCalledTimes(2)
   })
 })

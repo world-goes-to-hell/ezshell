@@ -590,7 +590,7 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
     && !(mainWindow.isFocused() && shortcutRecorder === mainWindow.webContents),
   listAgents: () => agentMessages.snapshot().agents
     .filter(agent => agent.active && agent.kind !== 'antigravity' && localShells?.chatAgentId(agent.shellId) === agent.id)
-    .map(({ id, shellId, kind, cwd, status }) => ({ id, shellId, kind, cwd, status })),
+    .map(({ id, shellId, kind, cwd, role, status }) => ({ id, shellId, kind, cwd, role, status })),
   repoFolders: localGit.repoFolders,
   storeAttachment: image => ({ preview: imagePreview(image), file: localTerminalClipboard.storeImage(image) }),
   sendCapture: (...args) => agentChatIpc.sendCapture(...args),
@@ -796,7 +796,8 @@ ipcMain.handle('agent-message-set-role', (event, id, role) => {
 const codexUsageWatcher = require('./src/ipc/codexUsageWatcher.js').createCodexUsageWatcher({
   agents: () => agentMessages.snapshot().agents,
   setUsage: agentMessages.setUsage,
-  setVerifiedSession: agentMessages.setVerifiedSession
+  setVerifiedSession: agentMessages.setVerifiedSession,
+  setTurnStatus: (shellId, agentId, sessionId, turn) => localShells?.setCodexTurnStatus(shellId, agentId, sessionId, turn)
 });
 codexUsageWatcher.start();
 // Idle agents give back their memory, then sleep until they are needed (src/agentIdle.js; the window

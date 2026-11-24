@@ -73,6 +73,13 @@ describe('insertBeside', () => {
     expect(insertBeside(two, 'main', 'left', 'a')).toBe(two)
     expect(insertBeside(two, 'nope', 'left', 'b')).toBe(two)
   })
+
+  it('inserts a seventh pane locally and can move it without changing any pane id', () => {
+    const six = row(row(pane('main'), pane('a')), row(row(pane('b'), pane('c')), row(pane('d'), pane('e'))))
+    const seven = insertBeside(six, 'main', 'left', 'f', 'local')
+    expect(paneIds(seven)).toEqual(['f', 'main', 'a', 'b', 'c', 'd', 'e'])
+    expect(paneIds(movePaneBeside(seven, 'f', 'e', 'right'))).toEqual(['main', 'a', 'b', 'c', 'd', 'e', 'f'])
+  })
 })
 
 describe('movePaneBeside', () => {

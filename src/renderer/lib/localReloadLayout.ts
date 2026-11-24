@@ -7,12 +7,11 @@
 
 import type { TerminalInfo } from '../stores/terminalStore'
 import { MAIN_PANE, closePane, paneIds, type PaneId, type SplitNode } from './splitTree'
-import { readTree } from './restoreTabs'
+import { LOCAL_RESTORE_MAX_PANES, readPaneSeq, readTree } from './restoreTabs'
 import type { LiveLocalShell } from './localShellAdopt'
 
 const STORAGE_KEY = 'ezshell.localReloadLayout'
 const SHELL_ID = /^local:\d{1,9}$/
-const PANE_ID = /^split-\d{1,4}$/
 
 export interface ReloadTab {
   tabId: string
@@ -72,19 +71,23 @@ export function readReloadLayout(value: unknown): ReloadTab[] {
     const e = entry as Record<string, unknown> | null
     if (!e || typeof e !== 'object') return []
     if (typeof e.tabId !== 'string' || !SHELL_ID.test(e.tabId) || typeof e.mainShellId !== 'string' || !SHELL_ID.test(e.mainShellId)) return []
+    const splitTree = readTree(e.splitTree, 'local')
+    const paneNames = new Set(splitTree ? paneIds(splitTree) : [MAIN_PANE])
     const panes: Record<string, string> = {}
     if (e.panes && typeof e.panes === 'object') {
-      for (const [pane, id] of Object.entries(e.panes as Record<string, unknown>)) {
-        if (PANE_ID.test(pane) && typeof id === 'string' && SHELL_ID.test(id)) panes[pane] = id
+      const savedPanes = e.panes as Record<string, unknown>
+      for (const pane of paneNames) {
+        if (pane === MAIN_PANE) continue
+        const id = savedPanes[pane]
+        if (typeof id === 'string' && SHELL_ID.test(id)) panes[pane] = id
       }
     }
-    const splitTree = readTree(e.splitTree)
-    const paneSeq = splitTree && typeof e.paneSeq === 'number' && Number.isInteger(e.paneSeq) && e.paneSeq >= 0 && e.paneSeq < 10000 ? e.paneSeq : undefined
+    const paneSeq = splitTree ? readPaneSeq(e.paneSeq) : undefined
     const title = line(e.title, 200)
     const cwd = line(e.cwd, 1024)
     const workspaceLabel = line(e.workspaceLabel, 200)
     const chats = Array.isArray(e.chats)
-      ? [...new Set(e.chats.filter((pane): pane is string => typeof pane === 'string' && (pane === MAIN_PANE || PANE_ID.test(pane))))].slice(0, 6)
+      ? [...new Set(e.chats.slice(0, LOCAL_RESTORE_MAX_PANES * 2).filter((pane): pane is string => typeof pane === 'string' && paneNames.has(pane)))]
       : []
     return [{
       tabId: e.tabId, mainShellId: e.mainShellId, shell: line(e.shell, 100) ?? 'PowerShell',

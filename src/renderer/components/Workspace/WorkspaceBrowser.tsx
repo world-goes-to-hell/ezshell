@@ -57,7 +57,8 @@ function WorkspaceSearchBox({ label, placeholder, query, onChange }: { label: st
   )
 }
 
-export function BrowserHeader({ folder, branch, onRefresh, picker }: { folder: string; branch?: string; onRefresh: () => void; picker?: ReactNode }) {
+/** `refreshing`: what shows is the last answer and a new read runs (the refresh button turns after a moment) */
+export function BrowserHeader({ folder, branch, onRefresh, picker, refreshing = false }: { folder: string; branch?: string; onRefresh: () => void; picker?: ReactNode; refreshing?: boolean }) {
   return (
     <div className="workspace-browser-header">
       {picker ?? <>
@@ -65,7 +66,8 @@ export function BrowserHeader({ folder, branch, onRefresh, picker }: { folder: s
         <span className="workspace-browser-path" title={folder} dir="auto">{folder}</span>
       </>}
       {branch && <span className="workspace-branch" title={branch}><RiGitBranchLine size={13} />{branch}</span>}
-      <button type="button" className="workspace-close" onClick={onRefresh} aria-label="새로 고침" title="새로 고침">
+      <button type="button" className="workspace-close" data-refreshing={refreshing || undefined} onClick={onRefresh}
+        aria-label={refreshing ? '새로 고침 (다시 읽는 중)' : '새로 고침'} title={refreshing ? '다시 읽는 중…' : '새로 고침'}>
         <RiRefreshLine size={16} />
       </button>
     </div>
@@ -239,7 +241,7 @@ export function WorkspaceGit({ folder }: { folder: string }) {
   const found = useWorkspaceSearch<WorkspaceGitSearchResult>(repoRoot ?? '', term, revision, repo?.allBranches === false ? searchCheckoutGit : searchGit)
   return (
     <>
-      <BrowserHeader folder={target.displayPath} branch={target.displayBranch} picker={target.picker} onRefresh={target.refresh} />
+      <BrowserHeader folder={target.displayPath} branch={target.displayBranch} picker={target.picker} onRefresh={target.refresh} refreshing={target.refreshing} />
       {!result ? <WorkspaceNote>Git 기록을 읽는 중…</WorkspaceNote>
         : !data?.success ? <WorkspaceNote error>{data?.error ?? 'Git 기록을 읽지 못했습니다.'}</WorkspaceNote>
         : data.repo ? (
