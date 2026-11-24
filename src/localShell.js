@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const { fileURLToPath } = require('url');
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 const { promisify } = require('util');
 const { getProcessTree } = require('./ipc/agentProcessParents.js');
 const { processCommandLine, processList, resumeCommand, words } = require('./agentIdle.js');
@@ -93,7 +93,7 @@ const AGENT_SESSION_MARKERS = new Set([
   'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH',
   'EZSHELL_AGENT_ID', 'EZSHELL_AGENT_TOKEN', 'EZSHELL_SHELL_TOKEN', 'EZSHELL_AGENT_PIPE',
   'EZSHELL_AGENT_MCP_CONFIG', 'EZSHELL_AGENT_MCP_SCRIPT', 'EZSHELL_AGENT_SETTINGS', 'EZSHELL_AGENT_USAGE_SCRIPT',
-  'EZSHELL_AGENT_WAKE_KIND', 'EZSHELL_AGENT_WAKE_MCP_CONFIG',
+  'EZSHELL_AGENT_WAKE_KIND', 'EZSHELL_AGENT_WAKE_MCP_CONFIG', 'EZSHELL_AGENT_SHELL_KIND', 'EZSHELL_AGENT_SHELL_MCP_CONFIG',
   'EZSHELL_ANTIGRAVITY_SETTINGS', 'EZSHELL_ANTIGRAVITY_STATUS_SCRIPT', 'EZSHELL_ANTIGRAVITY_STATUS_FORWARD',
   'EZSHELL_ANTIGRAVITY_STATUS_COMMAND',
   'EZSHELL_CLI_EXE', 'EZSHELL_CLI_SCRIPT'
@@ -164,19 +164,25 @@ function resumeArgs(agent, resume) {
   return agent === 'codex' ? ` resume ${resume}` : ` --resume ${resume}`;
 }
 
-// A Claude typed into the shell gets ezShell's usage status line for that run (agentUsageReport.js:
-// the usage goes to the app's status bar and the terminal keeps its rows). Left alone when the user
-// passes --settings, and when the shell has no settings file (messaging off).
+// A Claude typed into the shell gets per-session messaging and the usage status line. Explicit
+// MCP flags (including the one sent by wake()) and explicit settings take priority.
 const POWERSHELL_CLAUDE_FUNCTION = String.raw`
 if ($env:EZSHELL_AGENT_SETTINGS -and (Get-Command claude -ErrorAction SilentlyContinue).CommandType -in 'Application', 'ExternalScript') {
     function global:claude {
         $native = Get-Command claude -CommandType Application,ExternalScript | Select-Object -First 1
         if (!$native) { return }
-        if (($args | Where-Object { [string]$_ -cmatch '^--settings(?:=|$)' }) -or !(Test-Path -LiteralPath $env:EZSHELL_AGENT_SETTINGS)) {
-            & $native @args
-        } else {
-            & $native --settings $env:EZSHELL_AGENT_SETTINGS @args
+        $settings = @()
+        if (!($args | Where-Object { [string]$_ -cmatch '^--settings(?:=|$)' }) -and (Test-Path -LiteralPath $env:EZSHELL_AGENT_SETTINGS)) {
+            $settings = @('--settings', $env:EZSHELL_AGENT_SETTINGS)
         }
+        $mcp = @()
+        $subcommands = 'agents', 'auth', 'doctor', 'help', 'install', 'mcp', 'plugin', 'plugins', 'setup-token', 'update', 'upgrade', 'remote-control', 'rc'
+        if (($args.Count -eq 0 -or $args[0] -cnotin $subcommands) -and $env:EZSHELL_AGENT_SHELL_MCP_CONFIG -and
+            !($args | Where-Object { [string]$_ -cmatch '^(?:--(?:mcp-config|strict-mcp-config|print|help|version)(?:=|$)|--$|-[phvV]$)' }) -and
+            (Test-Path -LiteralPath $env:EZSHELL_AGENT_SHELL_MCP_CONFIG)) {
+            $mcp = @('--mcp-config', $env:EZSHELL_AGENT_SHELL_MCP_CONFIG)
+        }
+        & $native @settings @args @mcp
     }
 }
 `;
@@ -415,6 +421,23 @@ async function antigravityConversationIsCurrent(root, sessionId, startedAt, plat
 }
 
 /**
+ * Ends whole process trees at once and waits (a quit that installs an update). Closing the terminal
+ * alone does not reach the agents: node-pty ends the console's processes asynchronously, after the app
+ * has already gone, so an agent kept running and its message MCP (this app's exe) held the install
+ * folder. The installer then failed with "Failed to uninstall old application files: 2".
+ */
+function killProcessTreesSync(pids, platform = process.platform) {
+  if (pids.length === 0) return;
+  try {
+    if (platform === 'win32') {
+      execFileSync('taskkill', ['/T', '/F', ...pids.flatMap(pid => ['/PID', String(pid)])], { windowsHide: true, stdio: 'ignore', timeout: 5000 });
+    } else {
+      for (const pid of pids) { try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ } }
+    }
+  } catch { /* some were already gone: taskkill exits non-zero */ }
+}
+
+/**
  * @param {object} deps
  * @param {(file: string, args: string[], options: object) => object} deps.spawn node-pty's spawn
  * @param {(channel: string, payload: object) => void} deps.send to the main window
@@ -423,7 +446,8 @@ function createLocalShells({
   spawn, send, agents, shell = defaultShell(), cwd = os.homedir(), env = process.env,
   platform = process.platform, processTree = () => getProcessTree(platform), processAlive = isProcessAlive,
   timedProcessTree = () => processList({ platform }), commandLine = pid => processCommandLine(pid, { platform }),
-  readClaudeSessions, antigravityRoot = antigravityBrainRoot()
+  readClaudeSessions, antigravityRoot = antigravityBrainRoot(),
+  killTrees = pids => killProcessTreesSync(pids, platform)
 }) {
   const shells = new Map();
   let nextId = 1;
@@ -1114,7 +1138,14 @@ function createLocalShells({
     return true;
   }
 
-  function closeAll() {
+  /** killTrees: the app quits to install an update, so nothing started in a shell may outlive it */
+  function closeAll({ killTrees: endTrees = false } = {}) {
+    if (endTrees) {
+      const pids = [...shells.values()]
+        .filter(entry => !entry.exited && Number.isInteger(entry.pty?.pid) && entry.pty.pid > 0)
+        .map(entry => entry.pty.pid);
+      if (pids.length > 0) killTrees(pids);
+    }
     for (const id of [...shells.keys()]) close(id);
   }
 

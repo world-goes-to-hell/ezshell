@@ -1389,6 +1389,47 @@ describe('the agent\'s prompt with choices, answered from the chat view', () => 
     expect(prompt.selected).toBe('1')
   })
 
+  // 2026-11-24 user report: Claude's startup question sat above its composer with a notice below it.
+  // The chat showed no card and only said the line could not be sent.
+  const claudeDialogOverComposer = '\x1b[?2004h\x1b[2J\x1b[H' + [
+    '─'.repeat(70),
+    ' Teach auto mode about your environment?', '',
+    ' Auto mode works better when it knows your environment. Takes about a', ' minute.', '',
+    ' ❯ 1. Yes', '   2. Not now', '   3. Don\'t show again', '',
+    ' Enter to confirm · Esc to cancel', '',
+    ' Heads up · 휴대폰에서 에이전트에게 채팅을 보낼 수 있게 되면 셸 입력을 막아도', ' 사실상 같습니다.',
+    ' 1: Learn more   2: Knew this already   0: Dismiss', '',
+    '─'.repeat(70), '❯ ', '─'.repeat(70), '  ⏵⏵ auto mode on (shift+tab to cycle)'
+  ].join('\r\n')
+
+  it('reads Claude\'s dialog drawn above a visible composer, past a notice below it', async () => {
+    promptSetup('claude')
+    wake.writeOutput(claudeDialogOverComposer)
+    await settle()
+    const prompt = wake.approvalPrompt()
+    expect(prompt).toMatchObject({ question: 'Teach auto mode about your environment?', selected: '1' })
+    expect(prompt.options.map(option => option.label)).toEqual(['Yes', 'Not now', 'Don\'t show again'])
+  })
+
+  it('refuses a chat line while that dialog is up, naming the question as the reason', async () => {
+    const write = vi.fn(() => true)
+    wake = createAgentInboxWake({ kind: 'claude', cols: 100, rows: 24, pendingMessages: () => [], isWorking: () => false, write })
+    wake.writeOutput(claudeDialogOverComposer)
+    await settle()
+    await expect(wake.submitText('응 다 끝나면 알려줘')).resolves.toEqual({ ok: false, reason: 'approval' })
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('does not take a numbered list in the conversation above an active composer for a question', async () => {
+    promptSetup('claude')
+    wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + [
+      '● 순서는 다음과 같습니다.', '  1. 빌드', '  2. 시험', '  3. 배포', '',
+      '─'.repeat(70), '❯ ', '─'.repeat(70), '  ⏵⏵ auto mode on'
+    ].join('\r\n'))
+    await settle()
+    expect(wake.approvalPrompt()).toBeNull()
+  })
+
   it('reads Codex\'s question up to the question line, past the hint below the choices', async () => {
     promptSetup('codex')
     wake.writeOutput(codexPrompt)

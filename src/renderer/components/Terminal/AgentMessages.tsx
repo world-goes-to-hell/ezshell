@@ -18,7 +18,7 @@ import { dismissThemedTooltipWithin } from '../../lib/themedTooltip'
 import { shellAgentOf } from '../../lib/agentChatItems'
 import { useTerminalStore, type TerminalInfo } from '../../stores/terminalStore'
 import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
-import { AgentIdentityAction, AgentIdentityBadge, AgentIdentityDot } from '../ui/AgentIdentity'
+import { AgentIdentityAction, AgentIdentityBadge, AgentIdentityDot, AgentRoleEditor } from '../ui/AgentIdentity'
 import { SelectMenu } from '../ui/SelectMenu'
 import { AgentMessageMap } from './AgentMessageMap'
 import { AgentMessageThread, MessageSearchText } from './AgentMessageThread'
@@ -353,38 +353,6 @@ interface DialogProps extends WorkspaceSelection {
 
 function locationOf(agent: AgentMessageSession, terminals: ReadonlyMap<string, TerminalInfo>, paneTabs: Record<string, string>) {
   return localAgentPaneLocation(terminals.get(paneTabs[agent.shellId]), agent)
-}
-
-function AgentRoleEditor({ agent, onClose }: { agent: AgentMessageSession; onClose: () => void }) {
-  const [value, setValue] = useState(agent.role ?? '')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string>()
-
-  async function save(role: string) {
-    if (saving) return
-    setSaving(true)
-    setError(undefined)
-    try {
-      const result = await window.electronAPI.agentMessageSetRole?.(agent.id, role)
-      if (result?.success) onClose()
-      else setError(result?.error ?? '에이전트 역할을 저장할 수 없습니다.')
-    } catch {
-      setError('에이전트 역할을 저장할 수 없습니다.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <form className="agent-role-editor" onSubmit={event => { event.preventDefault(); void save(value) }}>
-      <label htmlFor="agent-role-name">{agent.id} 역할</label>
-      <input id="agent-role-name" value={value} onChange={event => setValue(event.target.value)} autoFocus placeholder="예: 리뷰어" />
-      {agent.roleSource === 'user' && <button type="button" className="btn-secondary" disabled={saving} onClick={() => void save('')}>지우기</button>}
-      <button type="submit" className="btn-secondary" disabled={saving}>저장</button>
-      <button type="button" className="btn-secondary" onClick={onClose}>취소</button>
-      {error && <span role="alert">{error}</span>}
-    </form>
-  )
 }
 
 function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects, onClose }: DialogProps) {

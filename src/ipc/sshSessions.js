@@ -165,6 +165,8 @@ function registerSshSessionIpc(ctx) {
 
           stream.on('data', (data) => {
             if (ctx.sessionLogger) ctx.sessionLogger.write(sessionId, data);
+            // A phone following this tab (remote access) gets the same output
+            ctx.tabOutput?.record(sessionId, data);
             const targetWindow = getWindowForSession(sessionId);
             if (targetWindow) {
               targetWindow.webContents.send('ssh-data', { sessionId, data: data.toString() });
@@ -285,6 +287,8 @@ function registerSshSessionIpc(ctx) {
 
             stream.on('data', (data) => {
               if (ctx.sessionLogger) ctx.sessionLogger.write(sessionId, data);
+              // A phone following this tab (remote access) gets the same output
+              ctx.tabOutput?.record(sessionId, data);
               const targetWindow = getWindowForSession(sessionId);
               if (targetWindow) {
                 targetWindow.webContents.send('ssh-data', {
@@ -467,6 +471,8 @@ function registerSshSessionIpc(ctx) {
     }
     // Remembered even when no log is running, so a log started later uses the real width
     if (session) getSessionLogger().resize(sessionId, cols, rows);
+    // A phone following the tab draws it at the PC's size (it never resizes the tab itself)
+    if (session) ctx.tabOutput?.resize(sessionId, cols, rows);
   });
 
   // SSH 명령어 실행 (단일 명령어, 결과 반환)
@@ -510,6 +516,7 @@ function registerSshSessionIpc(ctx) {
   // SSH 연결 종료
   ipcMain.on('ssh-disconnect', (event, { sessionId }) => {
     endSessionLog(sessionId);
+    ctx.tabOutput?.ended(sessionId, 'closed');
     containers.forget(sessionId);
     closeSftpSession(sessionId);
     const session = sshConnections.get(sessionId);

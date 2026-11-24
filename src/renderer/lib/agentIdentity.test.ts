@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalInfo } from '../stores/terminalStore'
 import type { AgentMessageSession } from '../types'
-import { agentDisplayName, agentIdentityColor, agentIdentityTooltip, agentMessageMatches, agentPaneLocation, agentSearchTerm } from './agentIdentity'
+import { agentDisplayName, agentIdentityColor, localAgentName, agentIdentityTooltip, agentMessageMatches, agentPaneLocation, agentSearchTerm } from './agentIdentity'
 import { MAIN_PANE, singlePane, splitPane, swapPanes } from './splitTree'
 import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../components/ui/agentProviderIcons'
 
@@ -32,6 +32,13 @@ describe('agent identity', () => {
     expect(agentDisplayName({ ...agent, role: 'PL' }, location)).toBe('PL')
     expect(agentDisplayName(agent, location)).toBe(location?.label)
     expect(agentDisplayName(agent)).toBe('work')
+  })
+
+  // 2026-11-24 user request: the work overview showed "Codex 9" even after a role was given
+  it('names a local agent by its role first, keeping the provider and number', () => {
+    expect(localAgentName({ id: 'codex-9', kind: 'codex', role: '리뷰어' })).toBe('리뷰어 · Codex 9')
+    expect(localAgentName({ id: 'claude-10', kind: 'claude', role: null })).toBe('Claude Code 10')
+    expect(localAgentName({ id: 'claude-10', kind: 'claude', role: '  ' })).toBe('Claude Code 10')
   })
 
   it('matches message bodies, both IDs, and both roles with Unicode normalization', () => {

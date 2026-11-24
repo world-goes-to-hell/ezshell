@@ -35,7 +35,7 @@ function cleanChatText(value) {
 
 const REASONS = {
   'not-agent': '이 셸에서 돌고 있는 에이전트가 없습니다.',
-  approval: '에이전트가 확인을 기다리고 있습니다. 터미널에서 답해 주세요.',
+  approval: '에이전트 화면에 선택 질문이 떠 있어 보내지 않았습니다. 질문 카드에서 고르거나 터미널에서 답한 뒤 다시 보내 주세요.',
   'no-composer': '에이전트의 입력칸을 찾지 못했습니다. 터미널 보기에서 확인해 주세요.',
   'composer-not-empty': '에이전트 입력칸에 쓰던 글이 있습니다. 터미널에서 지우거나 보낸 뒤 다시 시도해 주세요.',
   'draft-changed': '터미널 입력 상태가 바뀌었습니다. 보내기를 다시 눌러 주세요.',
@@ -658,4 +658,5 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   }
 }
 
-module.exports = { registerAgentChatIpc, cleanChatText }
+// The phone's chat (src/remoteAccess/agentBridge.js) uses the same checks and wording
+module.exports = { registerAgentChatIpc, cleanChatText, chatSendResult, CHAT_PROVIDERS, REASONS }

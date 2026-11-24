@@ -3,7 +3,7 @@ import {
   RiChat1Line, RiCircleLine,
   RiErrorWarningLine, RiHourglassLine, RiPlayCircleLine, RiPlayFill, RiRecordCircleLine, RiStopCircleLine, RiMoonLine, RiTimeLine
 } from 'react-icons/ri'
-import { agentIdentityColor, agentIdentityStatus, agentIdentityTooltip } from '../../lib/agentIdentity'
+import { agentIdentityColor, agentIdentityStatus, agentIdentityTooltip, localAgentName } from '../../lib/agentIdentity'
 import { localAgentPaneLocation } from '../../lib/localPaneShells'
 import { focusTabPane } from '../../lib/paneFocus'
 import { MAIN_PANE } from '../../lib/splitTree'
@@ -11,7 +11,7 @@ import { tabHost } from '../../lib/tabHosts'
 import { useTerminalStore } from '../../stores/terminalStore'
 import type { AgentMessageSession, LocalAgentStatus } from '../../types'
 import { isAgentWorking, useAgentMessagesStore } from '../Terminal/AgentMessages'
-import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../ui/agentProviderIcons'
+import { AGENT_PROVIDER_ICONS } from '../ui/agentProviderIcons'
 
 const presentation = {
   unknown: { label: '상태 미확인', Icon: RiCircleLine },
@@ -35,7 +35,8 @@ export function localAgentAppearance(agent: AgentMessageSession, { compact = fal
   const { label, Icon: DefaultIcon } = presentation[status]
   const Icon = (compact && compactIcons[status]) || DefaultIcon
   const ProviderIcon = AGENT_PROVIDER_ICONS[agent.kind]
-  const name = `${AGENT_PROVIDER_NAMES[agent.kind]} ${agent.id.slice(agent.kind.length + 1)}`
+  // With the role the user or agent gave it (에이전트 메시지 · 채팅 머리줄에서 바꿈)
+  const name = localAgentName(agent)
   const statusDescription = `${label}${status === 'error' && agent.exitCode ? ` (종료 코드 ${agent.exitCode})` : ''}`
   const description = `${name} · ${statusDescription}`
   const color = compact ? { color: agentIdentityColor(agent.id) } : undefined

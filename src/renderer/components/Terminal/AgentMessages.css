@@ -232,19 +232,6 @@
   font-size: 12px;
 }
 .agent-message-search input::placeholder { color: var(--text-muted); }
-.agent-role-editor { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; font-size: 12px; }
-.agent-role-editor input {
-  flex: 1 1 105px;
-  min-width: 90px;
-  padding: 5px 7px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  font: inherit;
-}
-.agent-role-editor button { padding: 5px 8px; font-size: 12px; }
-.agent-role-editor [role='alert'] { flex-basis: 100%; color: var(--error-text); }
 .agent-message-map-switch {
   display: inline-flex;
   flex: none;

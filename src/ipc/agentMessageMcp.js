@@ -47,7 +47,8 @@ function runningBridges(file) {
 
 async function connectionOptions(env = process.env, processTree = getProcessTree, pid = process.pid) {
   const { EZSHELL_AGENT_PIPE: pipe, EZSHELL_AGENT_TOKEN: token, EZSHELL_AGENT_BRIDGE_FILE: bridgeFile,
-    EZSHELL_AGENT_BRIDGE_KIND: kind, EZSHELL_AGENT_WAKE_KIND: wakeKind, EZSHELL_SHELL_TOKEN: wakeToken } = env
+    EZSHELL_AGENT_BRIDGE_KIND: kind, EZSHELL_AGENT_WAKE_KIND: wakeKind, EZSHELL_AGENT_SHELL_KIND: shellKind,
+    EZSHELL_SHELL_TOKEN: shellToken } = env
   // A managed agent's token identifies that shell in its owning app. The shared bridge
   // cannot prove its identity in a new app, so retries keep using its scoped credentials.
   if (Object.hasOwn(env, 'EZSHELL_AGENT_TOKEN')) {
@@ -55,8 +56,12 @@ async function connectionOptions(env = process.env, processTree = getProcessTree
     return { pipe, token }
   }
   if (Object.hasOwn(env, 'EZSHELL_AGENT_WAKE_KIND')) {
-    if (!pipe || !wakeToken || !['codex', 'claude'].includes(wakeKind)) throw new Error('ezShell 깨우기 연결 설정을 확인해 주세요.')
-    return { pipe, wakeToken, kind: wakeKind }
+    if (!pipe || !shellToken || !['codex', 'claude'].includes(wakeKind)) throw new Error('ezShell 깨우기 연결 설정을 확인해 주세요.')
+    return { pipe, wakeToken: shellToken, kind: wakeKind }
+  }
+  if (Object.hasOwn(env, 'EZSHELL_AGENT_SHELL_KIND')) {
+    if (!pipe || !shellToken || shellKind !== 'claude') throw new Error('ezShell 로컬 터미널 연결 설정을 확인해 주세요.')
+    return { pipe, shellToken, kind: shellKind }
   }
   if (!bridgeFile || !['codex', 'claude'].includes(kind)) throw new Error('ezShell 메시지 MCP 설정을 확인해 주세요.')
   const shared = readBridge(bridgeFile)
@@ -81,7 +86,7 @@ async function connectionOptions(env = process.env, processTree = getProcessTree
   return { pipe: selected.pipe, token: selected.token, kind }
 }
 
-function openLease({ pipe, token, kind, wakeToken }, reconnectToken, signal) {
+function openLease({ pipe, token, kind, wakeToken, shellToken }, reconnectToken, signal) {
   return new Promise((resolve, reject) => {
     const offline = () => new Error('ezShell 앱을 실행한 뒤 메시지 MCP를 다시 연결해 주세요.')
     const socket = net.createConnection({ path: pipe, signal })
@@ -90,7 +95,7 @@ function openLease({ pipe, token, kind, wakeToken }, reconnectToken, signal) {
     socket.on('error', () => reject(offline()))
     socket.once('close', () => reject(offline()))
     socket.on('connect', () => socket.write(JSON.stringify({
-      method: 'watch-mcp', token, kind, wakeToken, reconnectToken, cwd: process.cwd(), pid: process.pid
+      method: 'watch-mcp', token, kind, wakeToken, shellToken, reconnectToken, cwd: process.cwd(), pid: process.pid
     }) + '\n'))
     let response = ''
     const receive = chunk => {

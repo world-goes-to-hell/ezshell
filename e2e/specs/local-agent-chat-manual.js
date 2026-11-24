@@ -33,7 +33,7 @@ async function run() {
     await until(`!${menuItem}`)
 
     fs.writeFileSync(file('manual-claude-session'), sessionId)
-    await js(`window.electronAPI.localShellWrite(${JSON.stringify(shellId)}, 'claude\\r')`)
+    await js(`window.electronAPI.localShellWrite(${JSON.stringify(shellId)}, 'claude --strict-mcp-config\\r')`)
     if (!await until(`${pane}.textContent.includes('fixture ready: manual-claude')`)) {
       throw new Error(`Manual Claude did not start: ${await js(`${pane}.querySelector('.xterm-rows')?.textContent`)}`)
     }
@@ -71,6 +71,21 @@ async function run() {
     check('the Claude detaches when it exits and the PowerShell pane stays open', await until(`
       ${agent}.then(agent => !agent && !!${pane})
     `))
+
+    await js(`window.electronAPI.localShellWrite(${JSON.stringify(shellId)}, 'claude\\r')`)
+    const connected = await until(`${agent}.then(agent => agent?.mcpConnected === true)`, 30000)
+    check('plain claude connects its message MCP to this shell without a shared bridge', connected &&
+      !fs.existsSync(file('agent-message-connection')), fs.existsSync(file('manual-claude-mcp-error'))
+      ? fs.readFileSync(file('manual-claude-mcp-error'), 'utf8') : '')
+    if (connected) {
+      const { id } = await js(agent)
+      fs.writeFileSync(file('manual-claude-mcp-request'), JSON.stringify({ name: 'list_agents', arguments: {} }))
+      const response = file('manual-claude-mcp-response')
+      for (let i = 0; i < 100 && !fs.existsSync(response); i++) await sleep(100)
+      const reply = fs.existsSync(response) ? JSON.parse(fs.readFileSync(response, 'utf8')) : null
+      const list = !reply?.isError && reply?.content?.[0]?.text ? JSON.parse(reply.content[0].text) : null
+      check('the attached MCP can list its own agent', list?.self === id && list.agents.some(agent => agent.id === id))
+    }
   } finally {
     driver.close()
   }

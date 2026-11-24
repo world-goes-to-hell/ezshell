@@ -126,6 +126,17 @@ async function run() {
     check('only the label opens the exact date and seconds', showedExactDate)
     await move(...await center(header))
     check('the answer time hides when the pointer leaves', await until(`!${visible(shortAnswer)}`))
+    // A mouse click leaves the focus on the button: the time must still go when the pointer leaves
+    await move(...await center(`${shortAnswer}?.querySelector('.agent-chat-md')`))
+    // 띄워 두기 keeps the focus on itself (the pinned window opens beside, the page keeps emulated focus)
+    await click(...await center(`${shortAnswer}?.querySelector('.agent-chat-pin')`))
+    await move(...await center(header))
+    check('a clicked answer button does not keep the time on screen', await until(`
+      ${shortAnswer}?.contains(document.activeElement) && !${shortAnswer}?.matches(':hover') && !${visible(shortAnswer)}
+    `), await js(`(document.activeElement?.className || '') + ' / focus in row: ' + !!${shortAnswer}?.contains(document.activeElement) + ' / hover: ' + !!${shortAnswer}?.matches(':hover')`))
+    // Keyboard: a key press first so Chromium treats the next focus as keyboard focus
+    await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Shift', code: 'ShiftLeft', windowsVirtualKeyCode: 16 })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Shift', code: 'ShiftLeft', windowsVirtualKeyCode: 16 })
     await js(`${shortAnswer}.querySelector('.agent-chat-pin').focus()`)
     check('keyboard focus on an answer action reveals the time', await until(visible(shortAnswer)))
     await js(`${cover}.querySelector('.agent-chat-input').focus()`)

@@ -104,6 +104,8 @@ export function RemoteAccessSettings() {
 
   const setEnabled = (isEnabled: boolean) => run(async () => apply(await api.remoteAccessSetEnabled!(isEnabled)))
   const setAnswerMcp = (isOn: boolean) => run(async () => apply(await api.remoteAccessSetAnswerMcp!(isOn)))
+  const setTabs = (isOn: boolean) => run(async () => apply(await api.remoteAccessSetTabs!(isOn)))
+  const setAgents = (isOn: boolean) => run(async () => apply(await api.remoteAccessSetAgents!(isOn)))
 
   const showPairing = () => run(async () => {
     const result = await api.remoteAccessPairing!()
@@ -236,6 +238,29 @@ export function RemoteAccessSettings() {
                 휴대폰 알림을 쓸 수 없습니다. {status.push?.note ?? ''} 알림 없이도 휴대폰 페이지를 열어 두면 요청이 뜹니다.
               </div>
             ))}
+          </section>
+
+          <section className="mcp-field settings-section mcp-settings-group">
+            <h3 className="settings-section-title mcp-field-label">PC 탭</h3>
+            <p className="remote-access-desc">
+              PC에 열린 SSH 탭의 주 터미널을 휴대폰에서 이어 볼 수 있습니다. 저장된 세션의 탭에는 입력할 수 있고, 빠른 연결 탭은 보기만 가능합니다.
+            </p>
+            <label className="mcp-toggle">
+              <input type="checkbox" checked={status.tabs === true} disabled={isBusy || !api.remoteAccessSetTabs} onChange={(event) => setTabs(event.target.checked)} />
+              <span>휴대폰에서 PC 탭 이어 보기</span>
+            </label>
+          </section>
+
+          <section className="mcp-field settings-section mcp-settings-group">
+            <h3 className="settings-section-title mcp-field-label">에이전트</h3>
+            <p className="remote-access-desc">
+              켜면 접속한 휴대폰에서 이 PC 의 로컬 터미널에서 돌고 있는 Claude Code·Codex 목록을 보고, 채팅을 읽고, 글을 보내고, 확인 질문에 답하고, 작업을 중지할 수 있습니다. 슬래시 명령(/…)과 ! 로 시작하는 글, 이미지는 휴대폰에서 보낼 수 없습니다. 끄면 열려 있던 휴대폰의 채팅도 바로 닫힙니다.
+            </p>
+            <p className="remote-access-desc">켜면 휴대폰에서 보낸 글로 에이전트가 PC에서 명령을 실행할 수 있습니다.</p>
+            <label className="mcp-toggle">
+              <input type="checkbox" checked={status.agents === true} disabled={isBusy || !api.remoteAccessSetAgents} onChange={(event) => setAgents(event.target.checked)} />
+              <span>휴대폰에서 에이전트 쓰기</span>
+            </label>
           </section>
 
           <section className="mcp-field settings-section mcp-settings-group">

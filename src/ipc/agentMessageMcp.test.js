@@ -245,6 +245,51 @@ describe('the MCP bridge for an agent started in a local terminal', () => {
     }
   })
 
+  it('registers a typed Claude with its own shell token and no shared bridge', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-shell-mcp-'))
+    const sockets = []
+    let mcp
+    const messages = createAgentMessages({
+      home: root, isLocked: () => false, notify: () => {},
+      bindLocalAgent: async ({ pid, shellId }) => {
+        if (pid === mcp?.child.pid && shellId === 'local:1') {
+          return ({ agentId, authorizeBinding }) => {
+            authorizeBinding(null)
+            return { agentId, shellId, detach: () => true }
+          }
+        }
+      }
+    })
+    try {
+      await messages.ready()
+      const shell = messages.registerShell('local:1')
+      const otherShell = messages.registerShell('local:2')
+      const pipe = shell.EZSHELL_AGENT_PIPE
+      mcp = startStdio(root, { ...shell, EZSHELL_AGENT_SHELL_KIND: 'claude' })
+      const request = { kind: 'claude', cwd: root, pid: mcp.child.pid }
+      const watchShell = auth => watch(pipe, { ...request, ...auth }, sockets)
+      expect((await watchShell({ shellToken: otherShell.EZSHELL_SHELL_TOKEN })).result.success).toBe(false)
+      expect((await watchShell({ wakeToken: shell.EZSHELL_SHELL_TOKEN })).result.success).toBe(false)
+      expect((await watchShell({ shellToken: shell.EZSHELL_SHELL_TOKEN, kind: 'codex' })).result.success).toBe(false)
+      expect(messages.snapshot().agents).toEqual([])
+
+      await mcp.initialize()
+      await vi.waitFor(async () => {
+        const result = await mcp.listAgents()
+        expect(result.isError).not.toBe(true)
+        const { self, agents } = JSON.parse(result.content[0].text)
+        expect(agents).toMatchObject([{ id: self, kind: 'claude', cwd: root }])
+        expect(messages.snapshot().agents).toMatchObject([{ id: self, shellId: 'local:1', mcpConnected: true }])
+      })
+    } finally {
+      for (const socket of sockets) socket.destroy()
+      mcp?.child.stdin.end()
+      if (mcp) await mcp.exited
+      messages.stop()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('carries its latest credential across socket closure within the same stdio process', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-reconnect-stdio-'))
     const pipe = process.platform === 'win32' ? '\\\\.\\pipe\\' + path.basename(root) : path.join(root, 'messages.sock')
@@ -317,4 +362,39 @@ describe('the MCP bridge for an agent started in a local terminal', () => {
       fs.rmSync(root, { recursive: true, force: true })
     }
   }, 12000)
+})
+
+describe('pausing the shared bridge for an update', () => {
+  it('stops the launcher from starting the app until the next start writes the bridge again', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-agent-bridge-pause-'))
+    const bridgeFile = path.join(root, 'agent-message-connection')
+    const messages = createAgentMessages({ bridgeFile, notify: () => {}, isLocked: () => false })
+    try {
+      await messages.enableExternalBridge()
+      messages.pauseExternalBridge()
+      // The Windows launcher needs four lines and the POSIX one two: a single line starts nothing
+      expect(fs.readFileSync(bridgeFile, 'utf8').split(/\r?\n/).filter(Boolean)).toHaveLength(1)
+      // No temporary file left behind
+      expect(fs.readdirSync(root).filter(name => name.includes('.') && !/\.\d+$/.test(name))).toEqual([])
+
+      await messages.enableExternalBridge()
+      expect(fs.readFileSync(bridgeFile, 'utf8').split('\n').filter(Boolean)).toHaveLength(4)
+    } finally {
+      messages.stop()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not create the bridge for a user who never set up the message MCP', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-agent-bridge-pause-'))
+    const bridgeFile = path.join(root, 'agent-message-connection')
+    const messages = createAgentMessages({ bridgeFile, notify: () => {}, isLocked: () => false })
+    try {
+      messages.pauseExternalBridge()
+      expect(fs.existsSync(bridgeFile)).toBe(false)
+    } finally {
+      messages.stop()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })

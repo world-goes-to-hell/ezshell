@@ -56,8 +56,8 @@ function captureFont(value) {
 }
 
 /** The renderer supplies values only. CSS names and syntax are owned here in main. */
-function captureThemeCss(theme) {
-  if (!theme || typeof theme !== 'object' || Array.isArray(theme)) return ''
+function captureThemeTokens(theme) {
+  if (!theme || typeof theme !== 'object' || Array.isArray(theme)) return {}
   const tokens = Object.entries(colorFields).map(([key, name]) => [name, captureColor(theme[key])])
   tokens.push(
     ['radius', captureRadius(theme.radius)],
@@ -65,7 +65,11 @@ function captureThemeCss(theme) {
     ['font', captureFont(theme.font)],
     ['scheme', theme.scheme === 'light' || theme.scheme === 'dark' ? theme.scheme : undefined]
   )
-  const declarations = tokens.flatMap(([name, value]) => value ? ['--capture-' + name + ':' + value + ';'] : [])
+  return Object.fromEntries(tokens.filter(([, value]) => value !== undefined))
+}
+
+function captureThemeCss(theme) {
+  const declarations = Object.entries(captureThemeTokens(theme)).map(([name, value]) => '--capture-' + name + ':' + value + ';')
   return declarations.length ? ':root{' + declarations.join('') + '}' : ''
 }
 
@@ -706,4 +710,4 @@ const captureOverlayUrl = theme => themedUrl(page, theme)
 const captureChipUrl = theme => themedUrl(chipPage, theme)
 
 const OVERLAY_URL = captureOverlayUrl()
-module.exports = { OVERLAY_URL, captureOverlayUrl, captureChipUrl, captureThemeCss }
+module.exports = { OVERLAY_URL, captureOverlayUrl, captureChipUrl, captureThemeCss, captureThemeTokens }

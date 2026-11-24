@@ -5,7 +5,7 @@ import path from 'path'
 import http from 'http'
 import { WebSocket } from 'ws'
 import { createAccessServer, trimOutput, activityForDevice, APPROVAL_ARM_MS } from './server.js'
-import { sessionTree } from './controller.js'
+import { sessionTree, remoteThemeOf } from './controller.js'
 import { createAccessStore, TRUST_MS } from './accessStore.js'
 import totp from './totp.js'
 
@@ -21,7 +21,7 @@ const TREE = {
   sessions: [{ id: 's1', name: 'web-01', folderId: 'f1', color: null, folder: '운영', openTabs: { connected: 1, disconnected: 0 } }]
 }
 
-function setup({ isLocked = () => false, now } = {}) {
+function setup({ isLocked = () => false, now, tabs = null, agents = null, readTheme } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-remote-'))
   const store = createAccessStore({ filePath: path.join(dir, 'remote-access.json'), ...(now ? { now } : {}) })
   store.setEnabled(true)
@@ -44,7 +44,7 @@ function setup({ isLocked = () => false, now } = {}) {
   const mcp = { asked: null, items: [] }
   const approvals = { current: () => mcp.asked, respond: vi.fn((id) => id === mcp.asked?.id) }
   const activity = { list: () => mcp.items, cancel: vi.fn((id) => id === 'run1') }
-  const server = createAccessServer({ store, shells, listSessions: () => TREE, isLocked, approvals, activity, log, isAllowedAddress: () => isAllowed, ...(now ? { now } : {}) })
+  const server = createAccessServer({ store, shells, listSessions: () => TREE, isLocked, approvals, activity, tabs, agents, log, isAllowedAddress: () => isAllowed, readTheme, ...(now ? { now } : {}) })
   return { store, shells, opened, server, log, mcp, approvals, activity }
 }
 
@@ -123,8 +123,19 @@ describe('createAccessServer', () => {
     context = setup()
     await context.server.start('127.0.0.1', PORT)
     const client = await signedIn(context)
-    expect(client.ready).toEqual({ type: 'ready', device: 'phone', ...TREE, approvals: [], push: { available: false, publicKey: null } })
+    expect(client.ready).toEqual({ type: 'ready', device: 'phone', ...TREE, approvals: [], push: { available: false, publicKey: null }, features: { tabs: false, agents: false }, theme: {} })
     expect(context.server.connected()).toEqual([{ id: expect.any(String), name: 'phone' }])
+  })
+
+  it('sends the validated PC theme on sign-in and when it changes', async () => {
+    let theme = remoteThemeOf({ background: '#fff', danger: '#a22', radius: '5px', scheme: 'light', font: 'serif; opacity:0', '--extra': '#000' })
+    context = setup({ readTheme: () => theme })
+    await context.server.start('127.0.0.1', PORT)
+    const client = await signedIn(context)
+    expect(client.ready.theme).toEqual({ '--bg': '#fff', '--error': '#a22', '--danger': '#a22', '--radius': '5px', '--scheme': 'light' })
+    theme = remoteThemeOf({ surface: '#123456', scheme: 'dark' })
+    context.server.themeChanged()
+    expect(await client.next()).toEqual({ type: 'theme', theme: { '--panel': '#123456', '--scheme': 'dark' } })
   })
 
   it('remembers a device for a day and lets it resume without a code', async () => {
@@ -558,6 +569,184 @@ describe('createAccessServer under a name (HTTPS by the tailnet name)', () => {
     expect(await client.next()).toMatchObject({ type: 'push-result', ok: false })
     expect(context.store.pushTargets()).toEqual([])
   })
+
+  it('lists the PC tabs, follows one from its kept output, types into it and tells when it ends', async () => {
+    const { createTabMirror } = await import('./tabMirror.js')
+    const mirror = createTabMirror()
+    const written = []
+    const list = [{ id: 't1', name: 'web-01', folder: '운영', color: null, connected: true, inputAllowed: true }]
+    const tabs = {
+      enabled: true,
+      list: () => list,
+      attach: (id, handlers) => (list.some((tab) => tab.id === id) ? { ...mirror.attach(id, handlers), name: 'web-01', inputAllowed: true } : null),
+      write: (id, data) => (list.some((tab) => tab.id === id) ? (written.push([id, data]), 'web-01') : null)
+    }
+    context = setup({ tabs })
+    await context.server.start('127.0.0.1', PORT)
+    mirror.resize('t1', 120, 40)
+    mirror.record('t1', 'hello\r\n')
+    const client = await signedIn(context)
+    expect(client.ready.features).toEqual({ tabs: true, agents: false })
+    client.send({ type: 'tabs-list' })
+    expect(await client.next()).toEqual({ type: 'tabs', tabs: list })
+    client.send({ type: 'tab-attach', tabId: 'nope' })
+    expect(await client.next()).toMatchObject({ type: 'tab-error', tabId: 'nope' })
+    client.send({ type: 'tab-attach', tabId: 't1' })
+    expect(await client.next()).toEqual({ type: 'tab-attached', tabId: 't1', cols: 120, rows: 40, snapshot: 'hello\r\n', inputAllowed: true })
+    expect(context.log).toHaveBeenCalledWith('tab-attach', { device: 'phone', tab: 'web-01' })
+    mirror.record('t1', 'a')
+    mirror.record('t1', 'b')
+    // Batched: both pieces in one message
+    expect(await client.next()).toEqual({ type: 'tab-data', tabId: 't1', data: 'ab' })
+    client.send({ type: 'tab-input', tabId: 't1', data: 'ls\r' })
+    client.send({ type: 'tab-input', tabId: 't1', data: 'pwd\r' })
+    await vi.waitFor(() => expect(written).toEqual([['t1', 'ls\r'], ['t1', 'pwd\r']]))
+    // Logged once with the tab's name, never the keys
+    const inputs = context.log.mock.calls.filter(([event]) => event === 'tab-input')
+    expect(inputs).toEqual([['tab-input', { device: 'phone', tab: 'web-01' }]])
+    expect(JSON.stringify(context.log.mock.calls)).not.toContain('pwd')
+    mirror.ended('t1', 'disconnected')
+    expect(await client.next()).toEqual({ type: 'tab-ended', tabId: 't1', reason: 'disconnected' })
+    // No longer attached: typing is refused
+    client.send({ type: 'tab-input', tabId: 't1', data: 'x' })
+    expect(await client.next()).toMatchObject({ type: 'tab-error', tabId: 't1' })
+    expect(written).toHaveLength(2)
+  })
+
+  it('keeps quick connections read-only and detaches them when PC tab access is switched off', async () => {
+    const detach = vi.fn()
+    const tabs = {
+      enabled: false,
+      list: () => [{ id: 'quick', name: '빠른 연결', connected: true, inputAllowed: false }],
+      attach: () => ({ name: '빠른 연결', cols: 80, rows: 24, snapshot: 'hello', inputAllowed: false, detach }),
+      write: vi.fn()
+    }
+    context = setup({ tabs })
+    await context.server.start('127.0.0.1', PORT)
+    const client = await signedIn(context)
+    expect(client.ready.features.tabs).toBe(false)
+    client.send({ type: 'tabs-list' })
+    expect(await client.next()).toMatchObject({ type: 'tabs', tabs: [], error: expect.stringContaining('꺼져') })
+    tabs.enabled = true
+    context.server.featuresChanged()
+    expect(await client.next()).toMatchObject({ type: 'features', features: { tabs: true } })
+    client.send({ type: 'tab-attach', tabId: 'quick' })
+    expect(await client.next()).toMatchObject({ type: 'tab-attached', tabId: 'quick', inputAllowed: false })
+    client.send({ type: 'tab-input', tabId: 'quick', data: 'ignored' })
+    expect(await client.next()).toMatchObject({ type: 'tab-error', tabId: 'quick' })
+    expect(tabs.write).not.toHaveBeenCalled()
+    tabs.enabled = false
+    context.server.stopTabs()
+    expect(await client.next()).toMatchObject({ type: 'tabs', tabs: [], error: expect.stringContaining('꺼져') })
+    expect(detach).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses every agent message while the setting is off', async () => {
+    const agents = { enabled: false, list: vi.fn(() => []), open: vi.fn(), send: vi.fn(), closeViewer: vi.fn(), close: vi.fn(), describe: () => 'claude-1' }
+    context = setup({ agents })
+    await context.server.start('127.0.0.1', PORT)
+    const client = await signedIn(context)
+    expect(client.ready.features).toEqual({ tabs: false, agents: false })
+    client.send({ type: 'agents-list' })
+    expect(await client.next()).toMatchObject({ type: 'agents', agents: [], error: expect.any(String) })
+    client.send({ type: 'chat-send', shellId: 'local:1', requestId: 'q1', text: 'hi' })
+    expect(await client.next()).toMatchObject({ type: 'chat-send-result', shellId: 'local:1', requestId: 'q1', ok: false })
+    expect(agents.send).not.toHaveBeenCalled()
+    expect(agents.list).not.toHaveBeenCalled()
+    expect(context.log).toHaveBeenCalledWith('chat-send', { device: 'phone', agent: 'claude-1', chars: 2, ok: false })
+  })
+
+  it('passes agent actions to the bridge, frames only to the device that opened the chat, and logs no text', async () => {
+    let frameTo = null
+    let closeChat = null
+    const agents = {
+      enabled: true,
+      list: () => [{ shellId: 'local:1', agentId: 'claude-1', kind: 'claude', name: 'Claude Code 1', role: null, status: 'idle', folderName: 'app', waitingApproval: false }],
+      open: vi.fn((viewer, shellId, onFrame, onClosed) => {
+        frameTo = onFrame
+        closeChat = onClosed
+        return { ok: true }
+      }),
+      older: vi.fn(async () => { frameTo({ shellId: 'local:1', older: true, items: [] }); return { ok: true } }),
+      send: vi.fn(async () => ({ ok: false, reason: 'busy', error: '다른 입력을 넣는 중입니다.' })),
+      answer: vi.fn(async () => ({ ok: true })),
+      interrupt: vi.fn(() => ({ ok: true })),
+      close: vi.fn(),
+      closeViewer: vi.fn(),
+      describe: () => 'claude-1'
+    }
+    context = setup({ agents })
+    await context.server.start('127.0.0.1', PORT)
+    const client = await signedIn(context)
+    const other = await signedIn(context)
+    expect(client.ready.features.agents).toBe(true)
+    client.send({ type: 'agents-watch', on: true })
+    expect(await client.next()).toMatchObject({ type: 'agents', agents: [{ shellId: 'local:1', agentId: 'claude-1' }] })
+    client.send({ type: 'chat-open', shellId: 'local:1' })
+    expect(await client.next()).toEqual({ type: 'chat-opened', shellId: 'local:1', ok: true })
+    frameTo({ shellId: 'local:1', reset: true, items: [{ id: 'a', kind: 'assistant', text: 'hi' }] })
+    expect(await client.next()).toEqual({ type: 'chat-frame', shellId: 'local:1', reset: true, items: [{ id: 'a', kind: 'assistant', text: 'hi' }] })
+    // The older part's frame comes before its result
+    client.send({ type: 'chat-older', shellId: 'local:1' })
+    expect(await client.next()).toMatchObject({ type: 'chat-frame', older: true })
+    expect(await client.next()).toEqual({ type: 'chat-older-result', shellId: 'local:1', ok: true })
+    client.send({ type: 'chat-send', shellId: 'local:1', requestId: 'q1', text: '비밀 문장' })
+    expect(await client.next()).toEqual({ type: 'chat-send-result', shellId: 'local:1', requestId: 'q1', ok: false, reason: 'busy', error: '다른 입력을 넣는 중입니다.' })
+    client.send({ type: 'chat-answer', shellId: 'local:1', key: '1', signature: 'sig' })
+    expect(await client.next()).toEqual({ type: 'chat-answer-result', shellId: 'local:1', ok: true })
+    client.send({ type: 'chat-interrupt', shellId: 'local:1' })
+    expect(await client.next()).toEqual({ type: 'chat-interrupt-result', shellId: 'local:1', ok: true })
+    expect(agents.send).toHaveBeenCalledWith(expect.stringMatching(/^remote:/), 'local:1', '비밀 문장')
+    const events = context.log.mock.calls.map(([event, detail]) => [event, detail])
+    expect(events).toEqual(expect.arrayContaining([
+      ['chat-send', { device: 'phone', agent: 'claude-1', chars: '비밀 문장'.length, ok: false }],
+      ['chat-answer', { device: 'phone', agent: 'claude-1', ok: true }],
+      ['chat-interrupt', { device: 'phone', agent: 'claude-1', ok: true }]
+    ]))
+    expect(JSON.stringify(context.log.mock.calls)).not.toContain('비밀')
+    closeChat('에이전트가 바뀌었습니다.')
+    expect(await client.next()).toEqual({ type: 'chat-opened', shellId: 'local:1', ok: false, error: '에이전트가 바뀌었습니다.' })
+    // Switching agents off: the device is told and its chats close
+    context.server.stopAgents()
+    expect(await client.next()).toMatchObject({ type: 'agents', agents: [], error: expect.any(String) })
+    expect(agents.closeViewer).toHaveBeenCalled()
+    other.socket.close()
+    await other.closed
+  })
+
+  it('disconnects only the device whose outgoing chat frame would exceed the byte limit', async () => {
+    let frameTo
+    const agents = { enabled: true, open: (_viewer, _id, onFrame) => { frameTo = onFrame; return { ok: true } }, closeViewer: vi.fn() }
+    context = setup({ agents })
+    await context.server.start('127.0.0.1', PORT)
+    const slow = await signedIn(context)
+    const other = await signedIn(context)
+    slow.send({ type: 'chat-open', shellId: 'local:1' })
+    expect(await slow.next()).toMatchObject({ type: 'chat-opened', ok: true })
+    frameTo({ shellId: 'local:1', items: [{ id: 'sample', kind: 'assistant', text: '가'.repeat(1_400_000) }] })
+    await slow.closed
+    expect(agents.closeViewer).toHaveBeenCalledWith(expect.stringMatching(/^remote:/))
+    other.send({ type: 'sessions' })
+    expect(await other.next()).toMatchObject({ type: 'sessions' })
+  })
+
+  it.each(['list', 'item', 'output'])('disconnects a device past the shared byte limit before skipping activity %s', async kind => {
+    context = setup()
+    await context.server.start('127.0.0.1', PORT)
+    const client = await signedIn(context)
+    client.send({ type: 'activity-watch', on: true })
+    client.send({ type: 'sessions' })
+    expect(await client.next()).toMatchObject({ type: 'sessions' })
+    const backlog = vi.spyOn(WebSocket.prototype, 'bufferedAmount', 'get').mockReturnValue(4 * 1024 * 1024 + 1)
+    try {
+      if (kind === 'list') client.send({ type: 'activity-list' })
+      if (kind === 'item') context.server.activityItem({ id: 'activity-test' })
+      if (kind === 'output') context.server.activityOutput({ id: 'activity-test', parts: [{ text: 'output' }] })
+      await client.closed
+    } finally {
+      backlog.mockRestore()
+    }
+  })
 })
 
 describe('activity sent to a device: named fields only', () => {
@@ -574,5 +763,25 @@ describe('activity sent to a device: named fields only', () => {
     const total = activityForDevice(items).reduce((sum, item) => sum + (item.output?.length ?? 0) + item.outputParts.reduce((s, part) => s + part.text.length, 0), 0)
     // The total for output, and at most one character of result text for each request after it is used up
     expect(total).toBeLessThanOrEqual(400 * 1024 + 16 * 1024 + 100)
+  })
+})
+
+describe('the PC tabs a phone lists', () => {
+  it('names a saved session\'s tab like the session list and never shows a quick connect\'s name', async () => {
+    const { tabList } = await import('./controller.js')
+    const sessions = [{ id: 's1', name: 'web-01', host: '10.0.0.5', folderId: 'f1', backgroundColor: '#2f6fed' }]
+    const folders = [{ id: 'f1', name: '운영' }]
+    const tabs = [
+      { id: 't1', savedSessionId: 's1', connected: true },
+      { id: 't2', savedSessionId: null, connected: false },
+      { id: 't3', savedSessionId: 'gone', connected: true }
+    ]
+    const listed = tabList({ tabs, sessions, folders })
+    expect(listed).toEqual([
+      { id: 't1', name: 'web-01', folder: '운영', color: '#2f6fed', connected: true, inputAllowed: true },
+      { id: 't2', name: '빠른 연결', folder: null, color: null, connected: false, inputAllowed: false },
+      { id: 't3', name: '빠른 연결', folder: null, color: null, connected: true, inputAllowed: false }
+    ])
+    expect(JSON.stringify(listed)).not.toContain('10.0.0.5')
   })
 })

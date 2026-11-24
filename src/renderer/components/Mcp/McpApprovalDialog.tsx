@@ -102,7 +102,14 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
     >
       <div className="mcp-approval-header">
         <Dialog.Title className="modal-title">{title}</Dialog.Title>
-        <span className="mcp-approval-timer">남은 시간 {remaining}초</span>
+        <span className="mcp-approval-header-side">
+          {request.sentToPhone && (
+            <span className="mcp-approval-phone" title="원격 접속으로 휴대폰에도 보냈습니다. 휴대폰에서 답해도 이 창이 닫힙니다.">
+              휴대폰에도 보냄
+            </span>
+          )}
+          <span className="mcp-approval-timer">남은 시간 {remaining}초</span>
+        </span>
       </div>
       <dl className="mcp-approval-fields">
         <dt>세션</dt>

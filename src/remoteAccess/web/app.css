@@ -6,8 +6,47 @@
   --text: #e6e8eb;
   --muted: #8a919c;
   --accent: #2f6fed;
+  --on-accent: #fff;
+  --focus: var(--accent);
   --error: #f2777a;
-  color-scheme: dark;
+  --danger: #f2777a;
+  --success: #3fb950;
+  --warning: #d29922;
+  --success-ink: var(--success);
+  --warning-ink: var(--warning);
+  --accent-ink: var(--accent);
+  --command-ink: #79c0ff;
+  --scheme: dark;
+  --font: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  --font-mono: ui-monospace, Menlo, Consolas, "D2Coding", monospace;
+  --radius: 10px;
+  --panel-radius: 12px;
+  --radius-sm: calc(var(--radius) * 0.8);
+  --radius-xs: calc(var(--radius) * 0.6);
+  --scrim: rgba(0, 0, 0, 0.6);
+  --dialog-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --toast-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  --terminal-cursor: #fff;
+  --terminal-cursor-accent: #000;
+  --terminal-selection: rgba(255, 255, 255, 0.3);
+  --tab-height: 56px;
+  color-scheme: var(--scheme);
+}
+
+:root[data-themed] {
+  --accent-ink: color-mix(in srgb, var(--focus) 55%, var(--text));
+  --command-ink: var(--accent-ink);
+  --terminal-cursor: var(--focus);
+  --terminal-cursor-accent: var(--bg);
+  --terminal-selection: var(--accent);
+}
+
+@supports (color: light-dark(black, white)) {
+  :root {
+    /* Keep the status hues on dots and borders. Small labels need darker ink on light surfaces. */
+    --success-ink: light-dark(color-mix(in srgb, var(--success) 30%, var(--text)), var(--success));
+    --warning-ink: light-dark(color-mix(in srgb, var(--warning) 30%, var(--text)), var(--warning));
+  }
 }
 
 * {
@@ -20,7 +59,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  font: 16px/1.5 var(--font);
   -webkit-text-size-adjust: 100%;
   overscroll-behavior: none;
 }
@@ -62,7 +101,7 @@ input {
   min-height: 48px;
   padding: 10px 14px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--panel);
   color: var(--text);
   font: inherit;
@@ -70,8 +109,13 @@ input {
 
 input:focus-visible,
 button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+::placeholder {
+  color: var(--muted);
+  opacity: 1;
 }
 
 #signin-form {
@@ -106,7 +150,7 @@ button {
   min-height: 48px;
   padding: 10px 16px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--panel);
   color: var(--text);
   font: inherit;
@@ -117,7 +161,7 @@ button {
 button.primary {
   border-color: var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
 }
 
@@ -126,7 +170,7 @@ button.ghost {
   padding: 4px 10px;
   border-color: transparent;
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 
 .bar {
@@ -228,27 +272,19 @@ button.ghost {
 .keys button[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent);
-  color: #fff;
-}
-
-/* ---- Colours shared with the PC (MCP risk, tab state) ---- */
-:root {
-  --success: #3fb950;
-  --warning: #d29922;
-  --danger: #f2777a;
-  --tab-height: 56px;
+  color: var(--on-accent);
 }
 
 button.chip {
   min-height: 32px;
   padding: 2px 12px;
-  border-radius: 16px;
+  border-radius: calc(var(--radius) * 1.6);
   font-size: 13px;
 }
 
 button.chip[aria-pressed="true"] {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 
 button.icon {
@@ -275,8 +311,10 @@ button.icon {
 }
 
 .tabs button {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
+  padding-inline: 4px;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -288,6 +326,50 @@ button.icon {
   color: var(--text);
   font-weight: 600;
   box-shadow: inset 0 2px 0 var(--accent);
+}
+
+/* ---- PC tabs ---- */
+.pc-tabs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pc-tab-details {
+  flex: 1;
+  min-width: 0;
+}
+
+.pc-tab-details span {
+  display: block;
+}
+
+.pc-tab-folder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pc-tab-notice {
+  margin: 0 10px 6px;
+}
+
+.pc-tab-viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.pc-tab-host {
+  width: max-content;
+  min-width: 100%;
+  padding-inline: 4px;
+}
+
+.pc-tab-host .xterm {
+  /* The screen uses every PC column. Leave room beyond it for xterm's scrollbar. */
+  padding-inline-end: 16px;
 }
 
 /* ---- Session tree (like the PC sidebar: a line for the folder colour, a short line for the session's) ---- */
@@ -305,7 +387,7 @@ button.icon {
   margin: 0;
   padding: 8px 12px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
   text-align: left;
 }
@@ -357,7 +439,7 @@ button.icon {
   left: 2px;
   width: 3px;
   height: 18px;
-  border-radius: 2px;
+  border-radius: calc(var(--radius) * 0.2);
   background: var(--session-color);
   transform: translateY(-50%);
 }
@@ -385,7 +467,7 @@ button.icon {
   min-width: 20px;
   padding: 0 6px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius);
   color: var(--muted);
   font-size: 12px;
   text-align: center;
@@ -395,13 +477,13 @@ button.icon {
 .risk-badge {
   display: inline-block;
   padding: 1px 8px;
-  border-radius: 10px;
+  border-radius: var(--radius);
   font-size: 12px;
   font-weight: 600;
 }
 
-.risk-badge.risk-low { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
-.risk-badge.risk-medium { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+.risk-badge.risk-low { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success-ink); }
+.risk-badge.risk-medium { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning-ink); }
 .risk-badge.risk-danger,
 .risk-badge.risk-forbidden { background: color-mix(in srgb, var(--danger) 20%, transparent); color: var(--danger); }
 
@@ -412,7 +494,7 @@ button.icon {
   z-index: 50;
   padding: calc(12px + env(safe-area-inset-top)) 10px calc(12px + env(safe-area-inset-bottom));
   overflow-y: auto;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--scrim);
   -webkit-overflow-scrolling: touch;
 }
 
@@ -423,9 +505,9 @@ button.icon {
   padding: 16px;
   border: 1px solid var(--line);
   border-left: 4px solid var(--danger);
-  border-radius: 12px;
+  border-radius: var(--panel-radius);
   background: var(--panel);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--dialog-shadow);
 }
 
 .approval-card.risk-low { border-left-color: var(--success); }
@@ -445,7 +527,7 @@ button.icon {
 
 .approval-timer {
   flex: none;
-  color: var(--warning);
+  color: var(--warning-ink);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
@@ -471,7 +553,7 @@ button.icon {
 
 .approval-fields code,
 .approval-command {
-  font-family: ui-monospace, Menlo, Consolas, "D2Coding", monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
 }
 
@@ -480,7 +562,7 @@ button.icon {
   margin: 0;
   padding: 8px 10px;
   overflow: auto;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   white-space: pre-wrap;
   word-break: break-all;
@@ -512,9 +594,9 @@ button.icon {
   max-height: 45vh;
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
-  font-family: ui-monospace, Menlo, Consolas, "D2Coding", monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -534,13 +616,13 @@ button.icon {
 .diff-line.is-add { background: color-mix(in srgb, var(--success) 16%, transparent); }
 .diff-line.is-remove { background: color-mix(in srgb, var(--danger) 16%, transparent); }
 .diff-line.is-note { color: var(--muted); font-style: italic; }
-.diff-stat.is-add { color: var(--success); }
+.diff-stat.is-add { color: var(--success-ink); }
 .diff-stat.is-remove { color: var(--danger); }
 
 .approval-warning {
   margin: 0;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--danger) 16%, transparent);
   color: var(--danger);
   font-size: 13px;
@@ -554,7 +636,7 @@ button.icon {
 }
 
 .approval-note {
-  color: var(--warning);
+  color: var(--warning-ink);
 }
 
 /* Not side by side: two equal buttons next to each other are easy to miss with a thumb. 거부 is
@@ -576,7 +658,7 @@ button.icon {
   position: relative;
   border-color: var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
 }
 
@@ -603,16 +685,16 @@ button.icon {
   max-width: calc(100% - 32px);
   padding: 10px 16px;
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: calc(var(--radius) * 2);
   background: var(--panel);
   font-size: 14px;
   transform: translateX(-50%);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--toast-shadow);
 }
 
 /* ---- MCP activity (like the PC panel's terminal view) ---- */
 .activity {
-  font-family: ui-monospace, Menlo, Consolas, "D2Coding", monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
 }
 
@@ -626,7 +708,7 @@ button.icon {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 8px;
-  font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  font-family: var(--font);
   font-size: 13px;
 }
 
@@ -644,8 +726,8 @@ button.icon {
 }
 
 .act-state.is-running,
-.act-state.is-waiting { color: var(--warning); }
-.act-state.is-done { color: var(--success); }
+.act-state.is-waiting { color: var(--warning-ink); }
+.act-state.is-done { color: var(--success-ink); }
 .act-state.is-denied,
 .act-state.is-blocked,
 .act-state.is-failed,
@@ -654,7 +736,7 @@ button.icon {
 .act-tag {
   padding: 0 6px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
   font-size: 11px;
 }
@@ -682,14 +764,14 @@ button.icon {
 }
 
 .act-command {
-  color: #79c0ff;
+  color: var(--command-ink);
 }
 
 .act-output {
   max-height: 50vh;
   padding: 6px 8px;
   overflow: auto;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   background: var(--panel);
 }
 
@@ -712,7 +794,7 @@ button.icon {
   height: 6px;
   margin-top: 6px;
   overflow: hidden;
-  border-radius: 3px;
+  border-radius: calc(var(--radius) * 0.3);
   background: var(--line);
 }
 

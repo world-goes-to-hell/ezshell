@@ -44,3 +44,44 @@
 }
 .agent-identity-action:hover { color: var(--text-link); background: var(--bg-hover); }
 .agent-identity-action:focus-visible { outline: 2px solid var(--text-link); outline-offset: -1px; }
+
+/* The role editor: the agent message window, and the chat header's name (a popover there) */
+.agent-role-editor { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; font-size: 12px; }
+.agent-role-editor input {
+  flex: 1 1 105px;
+  min-width: 90px;
+  padding: 5px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font: inherit;
+}
+.agent-role-editor button { padding: 5px 8px; font-size: 12px; }
+.agent-role-editor [role='alert'] { flex-basis: 100%; color: var(--error-text); }
+.agent-role-popover {
+  position: fixed;
+  z-index: 1000;
+  width: min(360px, calc(100vw - 24px));
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+}
+.agent-role-popover .agent-role-editor { margin-bottom: 0; }
+.agent-identity-edit {
+  display: inline-flex;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.agent-identity-edit:hover .agent-identity-badge,
+.agent-identity-edit[aria-expanded='true'] .agent-identity-badge { border-color: var(--accent); }
+.agent-identity-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

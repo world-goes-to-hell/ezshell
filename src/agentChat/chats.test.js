@@ -58,6 +58,39 @@ function agyLogs(sessionId = SESSION) {
   return { full: path.join(logs, 'transcript_full.jsonl'), compact: path.join(logs, 'transcript.jsonl') }
 }
 
+describe('a chat followed by the PC window and a phone', () => {
+  it('sends a phone\'s frames to it only, never restarts the PC\'s view, and closes per viewer', async () => {
+    fs.writeFileSync(file, prompt('u1', 'First question') + answer('a1', 'First answer'))
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.at(-1)).toMatchObject({ state: 'live' }))
+    const pcFrames = frames.length
+    const phone = []
+    expect(chats.open('local:1', { viewer: 'remote:a', onFrame: frame => phone.push(frame) })).toEqual({ ok: true })
+    await vi.waitFor(() => expect(phone.find(frame => frame.reset)).toBeTruthy())
+    expect(texts(phone.find(frame => frame.reset))).toEqual(['First question', 'First answer'])
+    // The PC's window got nothing for the phone's opening
+    expect(frames).toHaveLength(pcFrames)
+    expect(chats.isOpen('local:1', 'remote:a')).toBe(true)
+    expect(chats.count()).toBe(1)
+
+    fs.appendFileSync(file, prompt('u2', 'Second question'))
+    chats.tick()
+    await vi.waitFor(() => expect(texts(frames.at(-1))).toEqual(['Second question']))
+    await vi.waitFor(() => expect(texts(phone.at(-1))).toEqual(['Second question']))
+
+    chats.closeViewer('remote:a')
+    expect(chats.isOpen('local:1', 'remote:a')).toBe(false)
+    expect(chats.isOpen('local:1')).toBe(true)
+  })
+
+  it('limits the chats followed for phones apart from the PC\'s', () => {
+    fs.writeFileSync(file, prompt('u1', 'q'))
+    for (let i = 0; i < 8; i++) expect(chats.open('local:1', { viewer: `remote:${i}`, onFrame: () => {} }).ok).toBe(true)
+    expect(chats.open('local:1', { viewer: 'remote:9', onFrame: () => {} }).ok).toBe(false)
+    expect(chats.open('local:1').ok).toBe(true)
+  })
+})
+
 describe('following a local Antigravity transcript', () => {
   it('waits for the bound UUID, ignores a reported file and switches from compact to full', async () => {
     fs.writeFileSync(file, prompt('unrelated', 'Unrelated transcript'))

@@ -10,7 +10,7 @@ import { chatLinesToTakeBack, draftWithTakenBack, takeBackQueued } from '../../l
 import { chatImageReference, insertChatImages, resolveChatImages } from '../../lib/chatImageReferences'
 import { CHAT_QUOTE_LIMIT, composeQuotedReply, prepareChatQuote } from '../../lib/chatQuote'
 import { openAgentMessages, useAgentMessagesStore, useAgentPaneLocation, usePaneAgentMail } from '../Terminal/AgentMessages'
-import { AgentIdentityBadge } from '../ui/AgentIdentity'
+import { AgentRoleButton } from '../ui/AgentIdentity'
 import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../ui/agentProviderIcons'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
 import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
@@ -1265,7 +1265,8 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
             {agentName}
           </span>
         )}
-        {mailAgent?.active && <AgentIdentityBadge agent={mailAgent} location={location} />}
+        {/* Click to name the agent (its role), as in the agent message window */}
+        {mailAgent?.active && <AgentRoleButton agent={mailAgent} location={location} />}
         <button type="button" className="agent-chat-title agent-chat-title-copy" title={`${title} · 클릭하여 제목 복사`}
           aria-label={`제목 복사 · ${title}`} onClick={() => void copyToClipboard(title)}>
           {title}

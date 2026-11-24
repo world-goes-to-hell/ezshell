@@ -9,6 +9,8 @@ const { findTailnetAddress } = require('./tailnet.js')
 const totp = require('./totp.js')
 const tailscaleCert = require('./tailscaleCert.js')
 const webPush = require('./webPush.js')
+const { createTabMirror } = require('./tabMirror.js')
+const { captureThemeTokens } = require('../quickCaptureOverlay.js')
 
 const NOT_ALLOWED = { success: false, error: '본창에서만 바꿀 수 있습니다.' }
 const APP_LOCKED = { success: false, error: '앱 잠금을 해제하세요.' }
@@ -28,6 +30,19 @@ const HTTPS_OFF_NOTE = 'Tailscale 관리 화면에서 HTTPS 인증서를 켜면 
 /** A colour as the sidebar stores it; anything else is not passed on (the phone puts it into a style) */
 const COLOR = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\([\d\s.,%/]+\))$/i
 const colorOf = (value) => (typeof value === 'string' && COLOR.test(value.trim()) ? value.trim() : null)
+/** Agents are looked at this often while a device watches their list (a status or a prompt changes without an event) */
+const AGENTS_REFRESH_MS = 1000
+
+const THEME_VARIABLES = {
+  background: ['--bg'], surface: ['--panel'], border: ['--line'], text: ['--text'], muted: ['--muted'],
+  accent: ['--accent'], 'on-accent': ['--on-accent'], focus: ['--focus'], danger: ['--error', '--danger'],
+  radius: ['--radius'], 'panel-radius': ['--panel-radius'], font: ['--font'], scheme: ['--scheme']
+}
+
+function remoteThemeOf(theme) {
+  return Object.fromEntries(Object.entries(captureThemeTokens(theme))
+    .flatMap(([name, value]) => THEME_VARIABLES[name].map(variable => [variable, value])))
+}
 
 /**
  * The sidebar as the phone shows it: folders and sessions in the PC's order, with their names,
@@ -82,16 +97,48 @@ function sessionTree({ folders, sessions, expandedIds = [], openTabs = new Map()
  * @param {object} [deps.mcp] the MCP side: currentApproval(), respondApproval(id, approved, device), listActivity(), cancelActivity(id)
  * @param {(request: object) => string} [deps.describeApproval] the one line a notification says about a question (its kind and risk, never its content)
  * @param {() => boolean} [deps.isUserAway] nobody has used the PC for a while (a question is announced at once)
+ * @param {object} [deps.pcTabs] the PC's SSH tabs: list() → [{ id, savedSessionId, connected }] in opening order,
+ *   write(id, data) → whether it reached the tab's main terminal
+ * @param {object} [deps.agentDeps] for agentBridge.js: shells() (local shells), chats (agentChat/chats.js), agents() (agentMessages snapshot)
  */
-function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readSessions, readFolders, fromMainWindow, notify, sealer = null, readExpandedFolders = () => [], readOpenTabs = () => new Map(), mcp = null, describeApproval = () => 'MCP 확인 요청', isUserAway = () => false, networkInterfaces = os.networkInterfaces, certificates = tailscaleCert, sendPush = webPush.send }) {
+/**
+ * The PC's SSH tabs as the phone lists them, in the order they were opened. A tab of a saved session
+ * has that session's name, folder and colour (as in the session list); a quick connect is only called
+ * one: its name may be the address, which never goes to the phone.
+ */
+function tabList({ tabs, sessions, folders }) {
+  const byId = new Map((Array.isArray(sessions) ? sessions : []).filter((session) => session && session.id && !session.decryptionFailed).map((session) => [String(session.id), session]))
+  const folderNames = new Map((Array.isArray(folders) ? folders : []).filter((folder) => folder && typeof folder.id === 'string').map((folder) => [folder.id, String(folder.name ?? '')]))
+  return (Array.isArray(tabs) ? tabs : []).filter((tab) => tab && typeof tab.id === 'string').map((tab) => {
+    const saved = tab.savedSessionId ? byId.get(String(tab.savedSessionId)) : null
+    return {
+      id: tab.id,
+      name: saved ? String(saved.name || '').trim() || '이름 없는 세션' : '빠른 연결',
+      folder: saved && folderNames.has(saved.folderId) ? folderNames.get(saved.folderId) : null,
+      color: saved ? colorOf(saved.backgroundColor) : null,
+      connected: tab.connected === true,
+      // A quick connect's tab is shown only: typing goes into tabs of saved sessions
+      inputAllowed: Boolean(saved)
+    }
+  })
+}
+
+function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readSessions, readFolders, fromMainWindow, notify, sealer = null, readExpandedFolders = () => [], readOpenTabs = () => new Map(), mcp = null, describeApproval = () => 'MCP 확인 요청', isUserAway = () => false, pcTabs = null, agentDeps = null, networkInterfaces = os.networkInterfaces, certificates = tailscaleCert, sendPush = webPush.send }) {
   const store = createAccessStore({ filePath: path.join(userDataPath, 'remote-access.json'), sealer })
   const logPath = path.join(userDataPath, 'remote-access.log')
   let server = null
+  let theme = {}
   let lastError = null
   // Why notifications are not available (plain HTTP), for the settings page; null when they are
   let pushNote = null
   // The announcement waiting to be sent for the question being asked: { id, timer }
   let pendingNotice = null
+  // The agent list is looked at while remote access runs (only sent when a device watches it and it changed)
+  let agentsTimer = null
+  // The PC tabs' latest output for a phone that opens one: kept only while remote access is on
+  const tabsAllowed = () => store.enabled && store.tabs === true && !isLocked()
+  const tabMirror = createTabMirror({ isEnabled: tabsAllowed })
+  const agentsAllowed = () => store.enabled && store.agents === true && !isLocked()
 
   /** Who connected and what they opened; never what was typed or shown */
   function trimLog() {
@@ -133,6 +180,21 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
   // The question a device answered last: tells "answered on the phone" from "answered on the PC"
   let answeredByDevice = null
 
+  /** The PC's tabs as the server uses them: listed, followed and typed into only while they are open */
+  const tabAccess = pcTabs && {
+    /** `휴대폰에서 PC 탭 이어 보기` is on */
+    get enabled() { return tabsAllowed() },
+    list: () => (tabsAllowed() ? tabList({ tabs: pcTabs.list(), sessions: readSessions(), folders: readFolders() }) : []),
+    attach: (id, handlers) => {
+      const tab = tabAccess.list().find((entry) => entry.id === id)
+      return tab ? { ...tabMirror.attach(id, handlers), name: tab.name, inputAllowed: tab.inputAllowed } : null
+    },
+    write: (id, data) => {
+      const tab = tabAccess.list().find((entry) => entry.id === id)
+      return tab && tab.connected && tab.inputAllowed && pcTabs.write(id, data) === true ? tab.name : null
+    }
+  }
+
   // The server and its libraries are loaded when remote access is first started
   function getServer() {
     if (!server) {
@@ -146,9 +208,18 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
         store,
         shells,
         listSessions,
+        readTheme: () => theme,
         isLocked,
         log,
         onChange: () => notify('remote-access-changed'),
+        tabs: tabAccess,
+        agents: agentDeps && require('./agentBridge.js').createAgentBridge({
+          shells: agentDeps.shells,
+          chats: agentDeps.chats,
+          agents: agentDeps.agents,
+          isLocked,
+          isEnabled: agentsAllowed
+        }),
         approvals: mcp && {
           current: () => (answersMcp() ? mcp.currentApproval() : null),
           respond: (id, approved, device) => {
@@ -174,6 +245,8 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
       success: true,
       enabled: store.enabled,
       answerMcp: store.answerMcp,
+      agents: store.agents === true,
+      tabs: store.tabs === true,
       isRunning: Boolean(server?.isRunning),
       hasTailscale: tailnet !== null,
       url: address ? `${address.scheme}://${address.name}:${address.port}` : null,
@@ -206,6 +279,10 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
     if (!store.enabled || isLocked()) return
     try {
       await getServer().start(host, store.port, secure || {})
+      if (!agentsTimer && agentDeps) {
+        agentsTimer = setInterval(() => server?.refreshAgents(), AGENTS_REFRESH_MS)
+        agentsTimer.unref?.()
+      }
     } catch (err) {
       lastError = err && err.code === 'EADDRINUSE' ? `${store.port}번 포트를 다른 프로그램이 쓰고 있습니다.` : `시작하지 못했습니다: ${err.message}`
     }
@@ -214,6 +291,10 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
   /** `wasLocked`: the app was locked (the devices are told so) rather than switched off */
   function stop({ wasLocked = false } = {}) {
     cancelNotice()
+    clearInterval(agentsTimer)
+    agentsTimer = null
+    // The tabs' kept output does not outlive a lock or remote access being switched off
+    tabMirror.clear()
     if (wasLocked) server?.stop(LOCKED_MESSAGE)
     else server?.stop()
   }
@@ -262,6 +343,31 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
       stop()
       certificates.removeCertificate?.(userDataPath)
     }
+    return status()
+  })
+
+  /** `휴대폰에서 PC 탭 이어 보기`: off by default; switching it off lets go of every followed tab and forgets their output */
+  ipcMain.handle('remote-access-set-tabs', (event, isOn) => {
+    if (!fromMainWindow(event)) return NOT_ALLOWED
+    if (isLocked()) return APP_LOCKED
+    store.setTabs(isOn === true)
+    log(isOn === true ? 'tabs-on' : 'tabs-off')
+    if (isOn !== true) {
+      server?.stopTabs()
+      tabMirror.clear()
+    }
+    server?.featuresChanged()
+    return status()
+  })
+
+  /** `휴대폰에서 에이전트 쓰기`: off by default; switching it off ends every device's chats at once */
+  ipcMain.handle('remote-access-set-agents', (event, isOn) => {
+    if (!fromMainWindow(event)) return NOT_ALLOWED
+    if (isLocked()) return APP_LOCKED
+    store.setAgents(isOn === true)
+    log(isOn === true ? 'agents-on' : 'agents-off')
+    if (isOn !== true) server?.stopAgents()
+    server?.featuresChanged()
     return status()
   })
 
@@ -329,8 +435,23 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
     /** The least time an MCP question waits: longer while a device could answer it */
     approvalWaitMs: () => (canReachDevice() ? REMOTE_APPROVAL_WAIT_MS : 0),
     activityItem: (item) => server?.activityItem(item),
+    setTheme(value) {
+      const next = remoteThemeOf(value)
+      if (JSON.stringify(next) === JSON.stringify(theme)) return
+      theme = next
+      server?.themeChanged()
+    },
+    /** Output and size of the PC's SSH tabs (src/ipc/sshSessions.js), for a phone following one */
+    tabOutput: {
+      record: (id, data) => tabMirror.record(id, data),
+      resize: (id, cols, rows) => tabMirror.resize(id, cols, rows),
+      /** 'closed' (the tab was closed) or 'disconnected' (its connection was lost) */
+      ended: (id, reason) => tabMirror.ended(id, reason)
+    },
+    /** The agents changed (status, role): devices watching the list get it if it differs */
+    agentsChanged: () => server?.refreshAgents(),
     activityOutput: (payload) => server?.activityOutput(payload)
   }
 }
 
-module.exports = { registerRemoteAccess, sessionTree, REMOTE_APPROVAL_WAIT_MS, NOTIFY_AFTER_MS }
+module.exports = { registerRemoteAccess, sessionTree, tabList, remoteThemeOf, REMOTE_APPROVAL_WAIT_MS, NOTIFY_AFTER_MS }

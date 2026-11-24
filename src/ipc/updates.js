@@ -22,6 +22,9 @@ function registerUpdateIpc(ctx) {
   // user to its page (src/manualUpdate.js). The page address is kept here, the window never sends one.
   const USES_MANUAL_UPDATE = process.platform === 'darwin';
   let manualUpdateUrl = null;
+  // A downloaded update installs when the app quits (autoInstallOnAppQuit, and quitAndInstall below):
+  // main.js then clears what would hold the install folder (localShell closeAll, the agent bridge)
+  let updateReady = false;
 
   async function checkManualUpdate() {
     const result = await manualUpdate.checkLatest({ currentVersion: app.getVersion() });
@@ -82,6 +85,7 @@ function registerUpdateIpc(ctx) {
     });
 
     autoUpdater.on('update-downloaded', (info) => {
+      updateReady = true;
       updateChecker.setStage('downloaded');
       sendUpdateStatus('downloaded', {
         version: info.version
@@ -175,7 +179,7 @@ function registerUpdateIpc(ctx) {
     lastVersion.writeLastVersion(lastVersionPath(), app.getVersion());
   });
 
-  return { setupAutoUpdater };
+  return { setupAutoUpdater, installsUpdateOnQuit: () => updateReady };
 }
 
 module.exports = { registerUpdateIpc };

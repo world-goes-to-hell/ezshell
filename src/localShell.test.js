@@ -746,3 +746,35 @@ describe('createLocalShells', () => {
     }
   })
 })
+
+describe('closeAll before an update', () => {
+  it('ends the whole process tree of every live shell before closing the terminals', () => {
+    const order = []
+    const killTrees = vi.fn(pids => order.push(['trees', pids]))
+    const { shells, ptys } = setup({ killTrees })
+    shells.open()
+    shells.open()
+    shells.open()
+    ptys.forEach((pty, index) => {
+      pty.pid = 100 + index
+      pty.kill.mockImplementation(() => order.push(['kill', pty.pid]))
+    })
+    ptys[2].exit({ exitCode: 0 })
+
+    shells.closeAll({ killTrees: true })
+
+    expect(killTrees).toHaveBeenCalledTimes(1)
+    expect(order[0]).toEqual(['trees', [100, 101]])
+    expect(order.slice(1)).toEqual([['kill', 100], ['kill', 101]])
+  })
+
+  it('leaves the trees alone on a normal quit', () => {
+    const killTrees = vi.fn()
+    const { shells, ptys } = setup({ killTrees })
+    shells.open()
+    ptys[0].pid = 100
+    shells.closeAll()
+    expect(killTrees).not.toHaveBeenCalled()
+    expect(ptys[0].kill).toHaveBeenCalled()
+  })
+})

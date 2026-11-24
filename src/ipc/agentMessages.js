@@ -407,28 +407,32 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
     let binding
     let authorized = false
     if (external) {
-      const wakeShellId = shellTokens.get(request.wakeToken)
-      if ((request.wakeToken !== undefined ? !wakeShellId : !bridgeFile || token !== bridgeToken) ||
+      const waking = request.wakeToken !== undefined
+      const localClaude = request.shellToken !== undefined
+      const shellToken = waking ? request.wakeToken : request.shellToken
+      const shellId = shellTokens.get(shellToken)
+      if ((waking || localClaude ? !shellId : !bridgeFile || token !== bridgeToken) ||
+          (localClaude && (waking || request.kind !== 'claude')) ||
           !['codex', 'claude'].includes(request.kind)
         || typeof request.cwd !== 'string' || !path.isAbsolute(request.cwd) || request.cwd.length > 4096) {
         throw new Error('ezShell에 등록된 에이전트가 아닙니다.')
       }
       const attach = Number.isSafeInteger(request.pid) && request.pid > 0
-        ? await bindLocalAgent?.({ pid: request.pid, kind: request.kind, shellId: wakeShellId })
+        ? await bindLocalAgent?.({ pid: request.pid, kind: request.kind, shellId })
         : undefined
       if (socket.destroyed) return
-      if (wakeShellId && shellTokens.get(request.wakeToken) !== wakeShellId) throw new Error('깨우기 연결이 만료되었습니다.')
+      if (shellId && (!attach || shellTokens.get(shellToken) !== shellId)) throw new Error('ezShell 로컬 터미널 연결을 확인할 수 없습니다.')
       let authorizedId
-      const authorizeBinding = (existingId, waking = false, sameLiveCli = false) => {
+      const authorizeBinding = (existingId, resuming = false, sameLiveCli = false) => {
         if (existingId) {
           const agent = agents.get(existingId)
-          const authenticatedWake = waking && wakeShellId && agent?.sleeping && agent.shellId === wakeShellId
+          const authenticatedWake = waking && resuming && agent?.sleeping && agent.shellId === shellId
           const replacedMcpProcess = request.reconnectToken === undefined && sameLiveCli && !mcpReady.has(existingId)
           if (!authenticatedWake && !replacedMcpProcess && !authenticReconnect(existingId, request.reconnectToken)) {
             throw new Error('기존 에이전트에 다시 연결하려면 재연결 자격 증명이 필요합니다.')
           }
           authorizedId = existingId
-        } else if (wakeShellId) {
+        } else if (waking) {
           throw new Error('깨우기 연결이 만료되었습니다.')
         }
         if (mcpReady.size >= 40 && !mcpReady.has(existingId)) throw new Error('실행 중인 메시지 MCP 연결이 너무 많습니다.')
@@ -444,7 +448,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
         if (!authorizedId) authorizeBinding()
         return result
       })
-      const attached = attachExternal(request.kind, request.cwd, checkedAttach, Date.now() - 30_000)
+      const attached = attachExternal(request.kind, request.cwd, checkedAttach, Date.now() - 30_000, Boolean(shellId))
+      if (!attached) throw new Error('ezShell 로컬 터미널 연결을 확인할 수 없습니다.')
       id = attached.id
       binding = attached.binding
       authorized = id === authorizedId
@@ -558,6 +563,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       try { fs.unlinkSync(path.join(directory, platform === 'win32' ? 'ezshell.cmd' : 'ezshell')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'agent-mcp.json')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'agent-wake-mcp.json')) } catch {}
+      try { fs.unlinkSync(path.join(directory, 'agent-shell-mcp.json')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'agent-settings.json')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'antigravity-settings.json')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'antigravity-status.cmd')) } catch {}
@@ -574,25 +580,22 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       ? '@echo off\r\nsetlocal DisableDelayedExpansion\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%EZSHELL_CLI_EXE%" "%EZSHELL_CLI_SCRIPT%" %*\r\n'
       : '#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "$EZSHELL_CLI_EXE" "$EZSHELL_CLI_SCRIPT" "$@"\n'
     fs.writeFileSync(path.join(directory, platform === 'win32' ? 'ezshell.cmd' : 'ezshell'), command, { mode: 0o700 })
-    fs.writeFileSync(path.join(directory, 'agent-mcp.json'), JSON.stringify({
-      mcpServers: {
-        'ezshell-cli-mcp': {
-          command: '${EZSHELL_CLI_EXE}',
-          args: ['${EZSHELL_AGENT_MCP_SCRIPT}'],
-          env: { ELECTRON_RUN_AS_NODE: '1', EZSHELL_AGENT_PIPE: '${EZSHELL_AGENT_PIPE}', EZSHELL_AGENT_TOKEN: '${EZSHELL_AGENT_TOKEN}' }
+    const claudeMcpEnvironments = {
+      'agent-mcp.json': { EZSHELL_AGENT_TOKEN: '${EZSHELL_AGENT_TOKEN}' },
+      'agent-wake-mcp.json': { EZSHELL_SHELL_TOKEN: '${EZSHELL_SHELL_TOKEN}', EZSHELL_AGENT_WAKE_KIND: 'claude' },
+      'agent-shell-mcp.json': { EZSHELL_SHELL_TOKEN: '${EZSHELL_SHELL_TOKEN}', EZSHELL_AGENT_SHELL_KIND: 'claude' }
+    }
+    for (const [file, credentials] of Object.entries(claudeMcpEnvironments)) {
+      fs.writeFileSync(path.join(directory, file), JSON.stringify({
+        mcpServers: {
+          'ezshell-cli-mcp': {
+            command: '${EZSHELL_CLI_EXE}',
+            args: ['${EZSHELL_AGENT_MCP_SCRIPT}'],
+            env: { ELECTRON_RUN_AS_NODE: '1', EZSHELL_AGENT_PIPE: '${EZSHELL_AGENT_PIPE}', ...credentials }
+          }
         }
-      }
-    }), { mode: 0o600 })
-    fs.writeFileSync(path.join(directory, 'agent-wake-mcp.json'), JSON.stringify({
-      mcpServers: {
-        'ezshell-cli-mcp': {
-          command: '${EZSHELL_CLI_EXE}',
-          args: ['${EZSHELL_AGENT_MCP_SCRIPT}'],
-          env: { ELECTRON_RUN_AS_NODE: '1', EZSHELL_AGENT_PIPE: '${EZSHELL_AGENT_PIPE}',
-            EZSHELL_SHELL_TOKEN: '${EZSHELL_SHELL_TOKEN}', EZSHELL_AGENT_WAKE_KIND: 'claude' }
-        }
-      }
-    }), { mode: 0o600 })
+      }), { mode: 0o600 })
+    }
     // Added with --settings to the Claude ezShell launches, for that run only (the user's own status
     // line stays in their settings). Claude runs it in Git Bash on Windows and sh elsewhere.
     fs.writeFileSync(path.join(directory, 'agent-settings.json'), JSON.stringify({
@@ -636,6 +639,26 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       } finally {
         try { fs.unlinkSync(temporary) } catch {}
       }
+    }
+  }
+
+  /**
+   * The app quits to install an update: CLIs elsewhere (other terminals) start this app's exe through
+   * the shared bridge whenever they reconnect the message MCP. One running at that moment holds the
+   * install folder and the installer fails ("Failed to uninstall old application files: 2"). A single
+   * line makes both launchers stop before starting anything; the next start writes the bridge again
+   * (main.js re-enables it when the file exists). Never creates the file: it marks a configured user.
+   */
+  function pauseExternalBridge() {
+    if (!bridgeFile || !fs.existsSync(bridgeFile)) return
+    const temporary = bridgeFile + '.' + randomUUID()
+    try {
+      fs.writeFileSync(temporary, 'paused for an update\n', { mode: 0o600, flag: 'wx' })
+      fs.renameSync(temporary, bridgeFile)
+    } catch (error) {
+      console.error('Failed to pause the agent message bridge:', error.code || error.name)
+    } finally {
+      try { fs.unlinkSync(temporary) } catch {}
     }
   }
 
@@ -770,6 +793,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
       EZSHELL_CLI_EXE: process.execPath,
       EZSHELL_AGENT_MCP_SCRIPT: path.join(__dirname, 'agentMessageMcp.js'),
       EZSHELL_AGENT_WAKE_MCP_CONFIG: path.join(directory, 'agent-wake-mcp.json'),
+      EZSHELL_AGENT_SHELL_MCP_CONFIG: path.join(directory, 'agent-shell-mcp.json'),
       EZSHELL_AGENT_SETTINGS: path.join(directory, 'agent-settings.json'),
       EZSHELL_AGENT_USAGE_SCRIPT: path.join(__dirname, 'agentUsageReport.js'),
       EZSHELL_ANTIGRAVITY_SETTINGS: path.join(directory, 'antigravity-settings.json'),
@@ -792,7 +816,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, bind
   }
 
   return {
-    ready, enableExternalBridge, register, stop, snapshot, unreadFor, unhandledFor,
+    ready, enableExternalBridge, pauseExternalBridge, register, stop, snapshot, unreadFor, unhandledFor,
     sendAsUser: request => deliver(USER, request),
     setUserRole: (id, role) => setRole(id, role, 'user'),
     setUsage, setVerifiedSession, applyPicked, usageSnapshot, registerShell, registerLocalClaude, registerLocalAntigravity, forgetShell, sleep, cancelSleep

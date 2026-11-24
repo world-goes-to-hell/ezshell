@@ -577,7 +577,9 @@
   white-space: nowrap;
   user-select: none;
 }
-.agent-chat-row:is(:hover, :focus-within) .agent-chat-timestamp,
+/* Keyboard focus only: a mouse click on a disclosure or an answer button leaves the focus in the row,
+   and with :focus-within its time stayed on screen until something else was clicked (2026-11-24) */
+.agent-chat-row:is(:hover, :has(:focus-visible)) .agent-chat-timestamp,
 .agent-chat-timestamp[data-always-visible] { visibility: visible; }
 .agent-chat-user-message > .agent-chat-timestamp {
   flex: none;

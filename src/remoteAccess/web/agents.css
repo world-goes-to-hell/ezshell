@@ -1,0 +1,195 @@
+/* Phone agent list and chat. The shared controls and palette come from app.css. */
+.remote-agent-card {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 12px 14px;
+  text-align: start;
+}
+
+.remote-agent-card:active { border-color: var(--accent); }
+
+.remote-agent-card-head,
+.remote-agent-card-meta,
+.remote-chat-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.remote-agent-card-head { justify-content: space-between; }
+
+.remote-agent-card-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.remote-agent-name,
+.remote-agent-folder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-agent-kind,
+.remote-agent-status { flex: none; }
+.remote-agent-status { color: var(--muted); font-size: 13px; }
+.remote-agent-status[data-status='working'] { color: var(--success-ink); }
+.remote-agent-status[data-status='blocked'] { color: var(--warning-ink); }
+.remote-agent-status[data-status='error'] { color: var(--error); }
+
+.remote-chat-view {
+  gap: 8px;
+  padding-block-start: 10px;
+  padding-inline: 12px;
+}
+
+.remote-chat-bar { min-height: 44px; }
+.remote-chat-bar .ghost { flex: none; min-height: 44px; padding-inline: 8px; }
+.remote-chat-title { font-size: 16px; }
+.remote-chat-stop { min-height: 44px; padding: 6px 10px; color: var(--error); }
+.remote-chat-meta { padding-inline: 8px; color: var(--muted); font-size: 13px; }
+
+.remote-chat-scroll {
+  min-width: 0;
+  padding: 4px 2px 8px;
+  overflow-x: hidden;
+  overflow-anchor: none;
+  overscroll-behavior-y: contain;
+}
+
+.remote-chat-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  font-size: 14px;
+}
+
+.remote-chat-older {
+  display: block;
+  margin: 0 auto 10px;
+  min-height: 40px;
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+.remote-chat-user,
+.remote-chat-answer {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.remote-chat-user {
+  align-self: flex-end;
+  max-width: 88%;
+  padding: 8px 11px;
+  border: 1px solid var(--accent);
+  border-radius: var(--panel-radius) var(--panel-radius) calc(var(--panel-radius) * 0.25) var(--panel-radius);
+  background: var(--panel);
+}
+
+.remote-chat-answer { padding: 4px 2px; }
+
+.remote-chat-view pre,
+.remote-chat-view code { font: 13px/1.5 var(--font-mono); }
+
+.remote-chat-view pre {
+  margin: 6px 0 0;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--bg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.remote-chat-answer pre { margin-block: 6px; }
+.remote-chat-answer code { color: var(--text); background: var(--panel); }
+.remote-chat-answer pre code { background: transparent; }
+
+.remote-chat-detail {
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.remote-chat-detail summary {
+  min-height: 40px;
+  padding: 9px 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.remote-chat-detail pre { color: var(--text); }
+.remote-chat-detail pre:last-child { margin-bottom: 8px; }
+
+.remote-chat-notice {
+  margin: 0;
+  color: var(--muted);
+  text-align: center;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.remote-chat-approval {
+  flex: none;
+  max-height: 36dvh;
+  padding: 10px;
+  overflow-y: auto;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow-wrap: anywhere;
+}
+
+.remote-chat-choices {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.remote-chat-choices button { text-align: start; white-space: pre-wrap; }
+.remote-chat-view button:disabled { opacity: .55; cursor: default; }
+
+.remote-chat-form { flex: none; min-width: 0; }
+.remote-chat-composer { display: flex; align-items: flex-end; gap: 8px; }
+
+.remote-chat-note {
+  margin: 0 0 6px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.remote-chat-note.is-error { color: var(--error); }
+.remote-chat-approval .remote-chat-note { margin: 8px 0 0; }
+
+.remote-chat-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 48px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  resize: none;
+}
+
+.remote-chat-input:focus-visible,
+.remote-chat-detail summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.remote-chat-send { flex: none; padding-inline: 12px; }

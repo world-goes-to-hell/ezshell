@@ -69,6 +69,13 @@ export function agentDisplayName(agent: Pick<AgentMessageSession, 'role' | 'id' 
   return agent.role || location?.label || folderLabel(agent.cwd) || agent.id
 }
 
+/** A local agent's name in the work overview and sidebar: "Codex 9", or "리뷰어 · Codex 9" once it has a role */
+export function localAgentName(agent: Pick<AgentMessageSession, 'id' | 'kind' | 'role'>) {
+  const base = `${AGENT_PROVIDER_NAMES[agent.kind]} ${agent.id.slice(agent.kind.length + 1)}`
+  const role = agent.role?.trim()
+  return role ? `${role} · ${base}` : base
+}
+
 export const agentSearchTerm = (value: string) => value.trim().normalize('NFC').toLowerCase()
 
 export function agentMessageMatches(message: AgentMessage, term: string, roles: ReadonlyMap<string, string | null | undefined>) {

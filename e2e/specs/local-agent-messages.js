@@ -226,6 +226,18 @@ async function run() {
       ${claudeMail}?.closest('.local-terminal-pane')?.querySelector('.agent-chat-head .agent-identity-badge')?.textContent === 'claude-2 · 리뷰어'
     `))
     await driver.shot('local-agent-chat-role')
+    // 2026-11-24 user request: the name in the chat header is clicked to change the role
+    const chatHead = `${claudeMail}?.closest('.local-terminal-pane')?.querySelector('.agent-chat-head')`
+    const renameInChat = async role => {
+      await js(`${chatHead}.querySelector('.agent-identity-edit').click()`)
+      if (!await until(`!!document.querySelector('.agent-role-popover .agent-role-editor input')`)) throw new Error('the chat role editor did not open')
+      await js(`(${SET})(document.querySelector('.agent-role-popover input'), ${JSON.stringify(role)})`)
+      await js(`document.querySelector('.agent-role-popover button[type=submit]').click()`)
+      return until(`!document.querySelector('.agent-role-popover') && ${chatHead}.querySelector('.agent-identity-badge')?.textContent === ${JSON.stringify('claude-2 · ' + role)}`)
+    }
+    check('clicking the agent name in the chat header renames it there', await renameInChat('검토 담당'))
+    check('the renamed role reaches the agent message window too', (await mcp('codex-1', 'list_agents')).agents?.some(agent => agent.id === 'claude-2' && agent.role === '검토 담당'))
+    check('the chat header editor puts the role back', await renameInChat('리뷰어'))
     const firstWakes = Number(read('claude-2-wakes'))
     const nextRequest = await mcp('codex-1', 'send_message', { to: 'claude-2', text: 'Please check the next change' })
     check('in chat mode the arrival card opens below the bell and shows the unread count', await noticeAt(chatBell, 'codex-1 · 보내기 구현 → claude-2 · 리뷰어') &&
@@ -637,8 +649,8 @@ async function run() {
     await driver.enter()
     check('Enter collapses the message again', await until(`${expand}.getAttribute('aria-expanded') === 'false'`))
     await js(`${dialog}.querySelector('.agent-message-list-actions [data-action=edit]').click()`)
-    await until(`!!document.querySelector('#agent-role-name')`)
-    await js(`(${SET})(document.querySelector('#agent-role-name'), '보내기 담당')`)
+    await until(`!!document.querySelector('.agent-role-editor input')`)
+    await js(`(${SET})(document.querySelector('.agent-role-editor input'), '보내기 담당')`)
     await js(`document.querySelector('.agent-role-editor button[type=submit]').click()`)
     await mcp('codex-1', 'set_role', { role: 'MCP 역할 갱신' })
     check('the role edited in the list overrides an MCP update in the window and pane', await until(`
@@ -689,7 +701,7 @@ async function run() {
       !${card('claude-2')}?.querySelector('[data-action=go]')
     `))
     await js(`${card('codex-1')}.querySelector('[data-action=edit]').click()`)
-    check('the map pencil opens the same stored role for editing', await until(`document.querySelector('#agent-role-name')?.value === '보내기 담당'`))
+    check('the map pencil opens the same stored role for editing', await until(`document.querySelector('.agent-role-editor input')?.value === '보내기 담당'`))
     await js(`document.querySelector('.agent-role-editor button:last-of-type').click()`)
     const archivedEdge = `${edges}.find(edge => edge.getAttribute('aria-label').includes('claude-2') && edge.getAttribute('aria-label').includes('codex-1'))`
     const linePoint = await js(`(() => {

@@ -393,3 +393,30 @@ describe('createAccessStore: notifications', () => {
     expect(store.pushTargets()).toEqual([])
   })
 })
+
+describe('the agents setting', () => {
+  it('is off by default and kept across a restart once switched on', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-agents-'))
+    const filePath = path.join(dir, 'remote-access.json')
+    const store = createAccessStore({ filePath })
+    expect(store.agents).toBe(false)
+    store.setAgents(true)
+    expect(createAccessStore({ filePath }).agents).toBe(true)
+    store.setAgents('yes')
+    expect(createAccessStore({ filePath }).agents).toBe(false)
+  })
+})
+
+describe('the PC tabs setting', () => {
+  it('defaults to off for older profiles and persists the explicit value', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-pc-tabs-'))
+    const filePath = path.join(dir, 'remote-access.json')
+    fs.writeFileSync(filePath, JSON.stringify({ enabled: true, agents: true }))
+    const store = createAccessStore({ filePath })
+    expect(store.tabs).toBe(false)
+    store.setTabs(true)
+    expect(createAccessStore({ filePath }).tabs).toBe(true)
+    store.setTabs(false)
+    expect(createAccessStore({ filePath }).tabs).toBe(false)
+  })
+})

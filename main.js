@@ -146,11 +146,14 @@ const ConnectionState = {
 };
 
 const connectionStates = new Map(); // sessionId -> { state, config, retryCount, autoReconnect }
+let remoteTabOutput = null;
 
 function updateConnectionState(sessionId, state) {
   const connState = connectionStates.get(sessionId);
   if (connState) {
     connState.state = state;
+    // A phone following the tab is told its connection was lost (a reconnect continues under the same id).
+    if (state === ConnectionState.DISCONNECTED || state === ConnectionState.RECONNECTING) remoteTabOutput?.ended(sessionId, 'disconnected');
     const targetWindow = getWindowForSession(sessionId);
     if (targetWindow) {
       targetWindow.webContents.send('ssh-state-changed', { sessionId, state });
@@ -415,7 +418,7 @@ function createWindow() {
 }
 
 // Updates and the "업데이트 내용" state: src/ipc/updates.js
-const { setupAutoUpdater } = require('./src/ipc/updates.js').registerUpdateIpc({
+const { setupAutoUpdater, installsUpdateOnQuit } = require('./src/ipc/updates.js').registerUpdateIpc({
   ipcMain, app, shell, sessionsFilePath,
   // Declared further down the file: looked up when a request arrives, not now
   fromMainWindow: (event) => fromMainWindow(event),
@@ -601,9 +604,6 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
     if (Notification.isSupported()) new Notification({ title: 'ezShell 영역 캡처', body: '화면을 캡처하지 못했습니다.' }).show();
   }
 });
-ipcMain.on('quick-capture-theme', (event, theme) => {
-  if (fromMainWindow(event) && event.senderFrame === event.sender.mainFrame) quickCapture.setTheme(theme);
-});
 // The work overview shortcut from any program (default Ctrl+Alt+Space, the window sends its setting): the
 // helper brought ezShell forward, the window opens its work overview.
 // Off while locked (every key goes through untouched); looked at each second instead of at each lock site.
@@ -771,7 +771,12 @@ ipcMain.handle('local-shell-clipboard', async (event, id) => {
 });
 app.on('will-quit', () => localTerminalClipboard.dispose());
 app.on('will-quit', () => {
-  localShells?.closeAll();
+  // The installer runs right after this and must find nothing holding the install folder: end the shells'
+  // whole trees (their agents and the agents' message MCP, this app's exe) and keep CLIs in other terminals
+  // from starting the exe again meanwhile (docs/fix/2026-11-24-update-uninstall-failed-2.md)
+  const updating = installsUpdateOnQuit();
+  if (updating) agentMessages.pauseExternalBridge();
+  localShells?.closeAll({ killTrees: updating });
   agentMessages.stop();
 });
 ipcMain.handle('agent-messages-state', event =>
@@ -980,6 +985,27 @@ const remoteAccess = require('./src/remoteAccess/controller.js').registerRemoteA
     }
     return tabs;
   },
+  // The PC's SSH tabs for a phone that follows one (step 3): in the order they were opened, and
+  // typing reaches the tab's main terminal only (split panes and local tabs are not listed)
+  pcTabs: {
+    list: () => Array.from(connectionStates, ([id, connState]) => ({
+      id,
+      savedSessionId: connState && connState.config ? connState.config.savedSessionId || null : null,
+      connected: Boolean(connState && connState.state === ConnectionState.CONNECTED && sshConnections.get(id)?.stream)
+    })),
+    write: (id, data) => {
+      const session = sshConnections.get(id);
+      if (!session || !session.stream || typeof data !== 'string') return false;
+      session.stream.write(data);
+      return true;
+    }
+  },
+  // The local agents for a phone (only while `휴대폰에서 에이전트 쓰기` is on): the same shells and chat follower as the PC's chat view
+  agentDeps: {
+    shells: () => localShells,
+    chats: agentChats,
+    agents: () => agentMessages.snapshot().agents
+  },
   // What a phone notification says about a question: its kind and risk only (see approvalNotice.js)
   describeApproval: (request) => `${approvalNoticeTitle(request)} · 위험도 ${MCP_LEVEL_LABELS[request.level] || request.level}`,
   // Nobody at the PC for a minute: a question is announced on the phones without waiting
@@ -1009,6 +1035,12 @@ const remoteAccess = require('./src/remoteAccess/controller.js').registerRemoteA
   }
 });
 app.on('will-quit', () => remoteAccess.stop());
+remoteTabOutput = remoteAccess.tabOutput;
+ipcMain.on('quick-capture-theme', (event, theme) => {
+  if (!fromMainWindow(event) || event.senderFrame !== event.sender.mainFrame) return;
+  quickCapture.setTheme(theme);
+  remoteAccess.setTheme(theme);
+});
 
 // Terminal output chosen in the right-click menu, saved where the user picks
 ipcMain.handle('save-terminal-output', async (event, { defaultName, text }) => {
@@ -1425,7 +1457,14 @@ function keepMainWindowOnTop(onTop) {
 
 /** Ask in the app, with the window on top; when it is in the background, also flash it and show a notification */
 function showMcpApproval(request) {
-  const delivered = sendToMainWindow('mcp-approval-request', request);
+  // The PC copy says whether a phone can answer it too (the same test that makes the question wait longer)
+  let sentToPhone = false;
+  try {
+    sentToPhone = remoteAccess.approvalWaitMs() > 0;
+  } catch (err) {
+    console.error('Failed to check remote devices for the MCP approval:', err);
+  }
+  const delivered = sendToMainWindow('mcp-approval-request', { ...request, sentToPhone });
   if (delivered) keepMainWindowOnTop(true);
   // Also to the phones that are signed in (remote access), when the user wants answers from there
   if (delivered) {
@@ -1724,16 +1763,26 @@ const { attemptReconnect, endedByItself, reportShellExit } = require('./src/ipc/
   ipcMain, shell, sshConnections, sshStreams, splitStreamHandlers, connectionStates, ConnectionState, updateConnectionState,
   getWindowForSession, hostKeyStore, hostKeyPrompter, checkHostKeyAsking, hostKeyFailureText, setupRemoteForwardHandler, cleanupPortForwards, containers,
   getSessionLogger, notifySessionLog, endSessionLog, sessionLogDir, MAX_SESSION_LOG_NAME, closeSftpSession,
+  // Output and size of each tab for a phone following it (remote access, memory only)
+  tabOutput: remoteAccess.tabOutput,
   get mainWindow() { return mainWindow; },
   get isAppLocked() { return isAppLocked; },
   get sessionLogger() { return sessionLogger; }
 });
+// A tab made from a split shell sends its output in splitShells.js, through the session logger's
+// write: the phone's copy of the output is taken there as well
+const splitTabOutput = {
+  write: (sessionId, data) => {
+    remoteAccess.tabOutput.record(sessionId, data);
+    if (sessionLogger) sessionLogger.write(sessionId, data);
+  }
+};
 // Split shells and moving one out to a tab: src/ipc/splitShells.js
 require('./src/ipc/splitShells.js').registerSplitShellIpc({
   ipcMain, sshConnections, sshStreams, splitStreamHandlers, connectionStates, ConnectionState, updateConnectionState, getWindowForSession,
   fromMainWindow, attemptReconnect, endedByItself, reportShellExit, endSessionLog, portForwardCount, containers, closeSftpSession,
   get isAppLocked() { return isAppLocked; },
-  get sessionLogger() { return sessionLogger; }
+  get sessionLogger() { return splitTabOutput; }
 });
 
 // Other programs' sessions (Xshell, PuTTY, MobaXterm, Tabby, OpenSSH config): structure only, no

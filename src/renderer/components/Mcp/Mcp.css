@@ -354,6 +354,23 @@
   margin-bottom: 14px;
 }
 
+.mcp-approval-header-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* The question also went to a signed-in phone (remote access): it can be answered there */
+.mcp-approval-phone {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 .mcp-approval-timer {
   font-size: 13px;
   font-variant-numeric: tabular-nums;

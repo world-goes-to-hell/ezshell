@@ -8,6 +8,7 @@
   <title>ezShell</title>
   <link rel="stylesheet" href="/vendor/xterm.css">
   <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/agents.css">
 </head>
 <body>
   <!-- Sign in: the authenticator's code (after registering, when the address carried a one-time code) -->
@@ -37,9 +38,18 @@
       <button id="push-toggle" type="button" class="chip" aria-pressed="false" hidden>알림 켜기</button>
       <button id="sessions-refresh" type="button" class="ghost icon" aria-label="세션 목록 새로 받기">↻</button>
     </header>
+    <p id="pc-tabs-status" class="note muted" role="status" hidden></p>
     <p id="push-status" class="muted" role="status" hidden></p>
     <input id="session-filter" type="search" placeholder="세션 이름으로 찾기" aria-label="세션 찾기">
     <div id="session-list" class="list tree"></div>
+  </main>
+
+  <main id="view-tabs" class="view tabbed-view" hidden>
+    <header class="bar">
+      <strong>PC 탭</strong>
+      <button id="pc-tabs-refresh" type="button" class="ghost icon" aria-label="PC 탭 목록 새로 받기">↻</button>
+    </header>
+    <div id="pc-tabs-list" class="list pc-tabs-list" aria-live="polite"></div>
   </main>
 
   <!-- MCP activity: requests and what they printed -->
@@ -51,9 +61,14 @@
     <div id="activity-list" class="list activity" aria-live="polite"></div>
   </main>
 
+  <main id="view-agents" class="view tabbed-view" hidden></main>
+  <main id="view-chat" class="view tabbed-view" hidden></main>
+
   <nav id="tabs" class="tabs" aria-label="화면" hidden>
     <button type="button" data-view="sessions" aria-current="page">세션</button>
+    <button type="button" data-view="tabs" hidden>PC 탭</button>
     <button type="button" data-view="activity">MCP 활동</button>
+    <button type="button" data-view="agents" hidden>에이전트</button>
   </nav>
 
   <!-- One terminal -->
@@ -79,11 +94,25 @@
     </div>
   </main>
 
+  <main id="view-tab-terminal" class="view terminal-view" hidden>
+    <header class="bar">
+      <button id="pc-tab-back" type="button" class="ghost" aria-label="PC 탭 목록으로">‹ 목록</button>
+      <strong id="pc-tab-name"></strong>
+      <span id="pc-tab-mode" class="muted" hidden>보기만</span>
+    </header>
+    <p id="pc-tab-notice" class="muted pc-tab-notice" role="status" hidden></p>
+    <div id="pc-tab-viewport" class="pc-tab-viewport">
+      <div id="pc-tab-host" class="pc-tab-host"></div>
+    </div>
+  </main>
+
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/xterm-addon-fit.js"></script>
   <script src="/sessions.js"></script>
   <script src="/approvals.js"></script>
   <script src="/activity.js"></script>
+  <script src="/tabs.js"></script>
+  <script src="/agents.js"></script>
   <script src="/push.js"></script>
   <script src="/app.js"></script>
 </body>

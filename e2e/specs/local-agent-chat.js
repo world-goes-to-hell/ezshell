@@ -1480,7 +1480,8 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   `), `${await js(numberOfRows)} rows mounted out of 222`)
   await openQuestions(0)
   check('Codex lists its question outside the virtual viewport', await until(`
-    ${questionPanel(0)}?.textContent.includes('로그 기록을 검토해 줘') && !${longLog}.textContent.includes('로그 기록을 검토해 줘')
+    ${questionPanel(0)}?.textContent.includes('로그 기록을 검토해 줘') &&
+    !${longLog}.querySelector('[data-chat-row="item:UserMessage:scroll-question"]')
   `))
   await pickQuestion(0, '로그 기록을 검토해 줘')
   check('choosing a loaded question scrolls the virtual list to the question row', await until(`

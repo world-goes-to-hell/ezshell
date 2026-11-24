@@ -91,17 +91,22 @@ process.stdout.write('\x1b[?2004h\x1b]0;✳ ' + id + '\x07')
 draw()
 process.stdout.on('resize', draw)
 
+const args = process.argv.slice(3)
+const mcpConfigIndex = args.indexOf('--mcp-config')
+const mcpConfig = mcpConfigIndex >= 0 ? args[mcpConfigIndex + 1] : null
 async function connectMcp() {
-  const args = process.argv.slice(3)
   let entry
   if (!managedId) {
     if (!claude && (!args.includes('--no-daemon') || !args.includes('--yolo'))) {
       throw new Error('Manual Codex launch did not preserve its argument and use the per-terminal server')
     }
-    const mcpConfig = args.indexOf('--mcp-config')
-    if (claude && mcpConfig >= 0 && args[mcpConfig + 1] === process.env.EZSHELL_AGENT_WAKE_MCP_CONFIG) {
-      entry = { command: process.execPath, args: [process.env.EZSHELL_AGENT_MCP_SCRIPT],
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', EZSHELL_AGENT_WAKE_KIND: kind } }
+    if (claude && mcpConfig && [process.env.EZSHELL_AGENT_WAKE_MCP_CONFIG, process.env.EZSHELL_AGENT_SHELL_MCP_CONFIG].includes(mcpConfig)) {
+      const spec = JSON.parse(fs.readFileSync(mcpConfig, 'utf8')).mcpServers['ezshell-cli-mcp']
+      const expand = value => value.replace(/\$\{(\w+)\}/g, (_, name) => process.env[name])
+      entry = {
+        command: expand(spec.command), args: spec.args.map(expand),
+        env: { ...process.env, ...Object.fromEntries(Object.entries(spec.env).map(([key, value]) => [key, expand(value)])) }
+      }
     } else {
       const { createEntry } = require('../../src/ipc/agentMessageSetup.js')
       entry = createEntry(kind, path.join(profile, 'agent-message-connection'))
@@ -137,7 +142,7 @@ if (manualChatOnly || (claude && !managedId && process.env.EZSHELL_TEST_IDLE_MIN
   }))
   process.on('exit', () => fs.rmSync(session, { force: true }))
 }
-if (!manualChatOnly) {
+if (!manualChatOnly || (mcpConfig && mcpConfig === process.env.EZSHELL_AGENT_SHELL_MCP_CONFIG)) {
   connectMcp().catch(error => fs.writeFileSync(path.join(profile, id + '-mcp-error'), error.message))
 }
 

@@ -35,6 +35,8 @@ const FIND_RETRY_MS = 3000
 // How long a compaction notice waits for the /compact line written after it (claudeTranscript.js)
 const NOTICE_WAIT_MS = 1500
 const MAX_CHATS = 24
+/** Chats followed for remote devices (a phone), all devices together, apart from the PC's */
+const MAX_REMOTE_CHATS = 8
 // A Claude question's limits use the status line reading this long after its last answer (the report
 // comes after the answer is written), and are looked at again on the ticks for this long
 const LIMIT_SETTLE_MS = 10 * 1000
@@ -165,10 +167,14 @@ async function readClaudeChildResults(file, tracker, isLive) {
  *   usage rates and their increase from status line reports (limitHistory.js)
  */
 function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigravityBrainRoot(), isGone = () => false, claudeLimits = null, tickMs = TICK_MS, now = () => Date.now() }) {
+  // The PC window's chats are keyed by the shell id; a remote device's by shell and viewer, so the
+  // PC's view and a phone's follow the same transcript each at its own pace (opening one never
+  // starts the other over). Lookups by shell id alone (links, questions, copy) are the PC's.
   const chats = new Map()
   let timer = null
 
-  const live = chat => chats.get(chat.shellId) === chat
+  const keyOf = (shellId, viewer) => (viewer ? `${shellId}\u0000${viewer}` : shellId)
+  const live = chat => chats.get(chat.key) === chat
 
   /** A question's usage as the view gets it: Claude's limits added, the time it was worked out from left out */
   function viewUsage(chat, item) {
@@ -218,7 +224,8 @@ function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigra
       fields = { ...fields, items: withUsage(chat, fields.items, fields.older) }
       rememberLinks(chat, fields.items)
     }
-    send('agent-chat-frame', { shellId: chat.shellId, ...fields })
+    if (chat.onFrame) chat.onFrame({ shellId: chat.shellId, ...fields })
+    else send('agent-chat-frame', { shellId: chat.shellId, ...fields })
   }
 
   function setState(chat, state) {
@@ -440,7 +447,7 @@ function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigra
     if (isGone(chat.shellId)) {
       // The shell was closed (its tab or pane): nothing more to follow
       frame(chat, { gone: true })
-      chats.delete(chat.shellId)
+      chats.delete(chat.key)
       stopTimerIfIdle()
       return
     }
@@ -531,19 +538,27 @@ function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigra
   }
 
   return {
-    /** Starts following; what is read comes as frames. Opening a shell's view again starts it over. */
-    open(shellId) {
-      if (!chats.has(shellId) && chats.size >= MAX_CHATS) return { ok: false, error: `채팅 보기는 ${MAX_CHATS}개까지 열 수 있습니다.` }
-      const chat = { shellId, chain: Promise.resolve(), pending: false, file: null, kind: null, parser: null, state: null, status: null, title: null, lookup: null, approval: null, codexSpeed: null, backgroundShells: null, links: new Set() }
-      chats.set(shellId, chat)
+    /**
+     * Starts following; what is read comes as frames. Opening a shell's view again starts it over.
+     * A remote device passes its `viewer` key and `onFrame`: its frames go there, not to the window.
+     */
+    open(shellId, { viewer = null, onFrame = null } = {}) {
+      const key = keyOf(shellId, viewer)
+      if (!chats.has(key)) {
+        const remote = [...chats.values()].filter(chat => chat.viewer).length
+        if (viewer && remote >= MAX_REMOTE_CHATS) return { ok: false, error: `휴대폰에서는 채팅을 ${MAX_REMOTE_CHATS}개까지 열 수 있습니다.` }
+        if (!viewer && chats.size - remote >= MAX_CHATS) return { ok: false, error: `채팅 보기는 ${MAX_CHATS}개까지 열 수 있습니다.` }
+      }
+      const chat = { shellId, key, viewer, onFrame: viewer ? onFrame : null, chain: Promise.resolve(), pending: false, file: null, kind: null, parser: null, state: null, status: null, title: null, lookup: null, approval: null, codexSpeed: null, backgroundShells: null, links: new Set() }
+      chats.set(key, chat)
       startTimer()
       chat.pending = true
       void run(chat, () => sync(chat)).finally(() => { chat.pending = false })
       return { ok: true }
     },
-    /** The part of the file before what the view has */
-    older(shellId) {
-      const chat = chats.get(shellId)
+    /** The part of the file before what the view has (its frame is sent before the promise settles) */
+    older(shellId, viewer = null) {
+      const chat = chats.get(keyOf(shellId, viewer))
       if (!chat) return Promise.resolve()
       return run(chat, async () => {
         if (!chat.file || !(chat.oldest > 0)) return
@@ -718,10 +733,18 @@ function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigra
         return { ok: false, error: '대화 기록을 읽을 수 없습니다.' }
       } finally { await source?.handle.close() }
     },
-    close(shellId) {
-      chats.delete(shellId)
+    close(shellId, viewer = null) {
+      chats.delete(keyOf(shellId, viewer))
       stopTimerIfIdle()
     },
+    /** A remote device went away: every chat it followed stops */
+    closeViewer(viewer) {
+      if (!viewer) return
+      for (const [key, chat] of chats) if (chat.viewer === viewer) chats.delete(key)
+      stopTimerIfIdle()
+    },
+    /** Whether that device follows the shell's chat now */
+    isOpen: (shellId, viewer = null) => chats.has(keyOf(shellId, viewer)),
     /** App locked or quitting: stop following everything */
     closeAll() {
       chats.clear()
@@ -744,9 +767,9 @@ function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigra
       const chat = chats.get(shellId)
       return chat?.kind === 'claude' ? chat.parser?.question?.(itemId) ?? null : null
     },
-    count: () => chats.size,
+    count: () => [...chats.values()].filter(chat => !chat.viewer).length,
     tick
   }
 }
 
-module.exports = { createAgentChats, claudeFolderName, findClaudeFile, completeLines, latestById, MAX_CHATS }
+module.exports = { createAgentChats, claudeFolderName, findClaudeFile, completeLines, latestById, MAX_CHATS, MAX_REMOTE_CHATS }

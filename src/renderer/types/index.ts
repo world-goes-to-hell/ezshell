@@ -223,6 +223,11 @@ export interface McpApprovalRequest {
   level: McpRiskLevel
   reasons: string[]
   expiresAt: number
+  /**
+   * The PC window's copy only: the question also reached a signed-in phone (or its notifications), so it
+   * can be answered there and waits longer (remote access, main.js showMcpApproval)
+   */
+  sentToPhone?: boolean
   /** Set when the command is started as a background job: it may run this long after being allowed */
   background?: { limitMinutes: number }
   /**
@@ -901,6 +906,10 @@ export interface RemoteAccessStatus {
   enabled: boolean
   /** MCP questions also go to signed-in devices and wait up to five minutes for an answer */
   answerMcp: boolean
+  /** A signed-in device may follow the PC's SSH tabs. Off by default. */
+  tabs?: boolean
+  /** A signed-in device may use the PC's agents (list, chat, send, answer); off by default */
+  agents?: boolean
   isRunning: boolean
   hasTailscale: boolean
   /** The address a phone opens, when it is listening */
@@ -1137,6 +1146,8 @@ declare global {
       remoteAccessStatus?: () => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessSetEnabled?: (isEnabled: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessSetAnswerMcp?: (isOn: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
+      remoteAccessSetTabs?: (isOn: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
+      remoteAccessSetAgents?: (isOn: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessPairing?: () => Promise<{ success: true; url: string; expiresAt: number; qr: QrMatrix } | { success: false; error: string }>
       remoteAccessAuthenticator?: () => Promise<{ success: true; secret: string; qr: QrMatrix } | { success: false; error: string }>
       remoteAccessRevoke?: (deviceId: string) => Promise<RemoteAccessStatus | { success: false; error: string }>

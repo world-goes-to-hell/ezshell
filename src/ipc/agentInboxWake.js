@@ -46,6 +46,9 @@ const APPROVAL_OPTION = /^\s*([❯›>▶])?\s*([1-9])[.)]\s+(\S.*?)\s*$/u
 const APPROVAL_PROGRESS = /^\s*[✻✶✽✢✳✦•⠁-⣿◐-◓◴-◷]\s*\S.*\((?:\d+m\s+)?\d+(?:\.\d+)?s\b/iu
 const CODEX_APPROVAL_HINT = /\b(?:enter (?:to )?(?:confirm|submit|select)|esc (?:to )?cancel)\b/i
 const CLAUDE_QUESTION_HINT = /^(?:Enter to (?:select|submit|chat)|Space to toggle)\b.*\bEsc to cancel$/i
+// Claude's own dialogs ("Teach auto mode about your environment?") end their choices with this hint and
+// can sit above a composer that is still drawn, with a notice below them (2026-11-24 user report)
+const CLAUDE_DIALOG_HINT = /^Enter to confirm\b.*\bEsc to cancel$/i
 const CLAUDE_QUESTION_TABS = /(?:^\s*←.*\bSubmit\b|\bSubmit\b.*→\s*$|^\s*[☐□☒]\s+\S)/u
 const CLAUDE_QUESTION_CHOICE = /^(?:\[[ xX✓✔]\]\s+|(?:Type something\.?|Chat about this)$)/i
 const APPROVAL_ABSENCE_MS = 150
@@ -345,10 +348,6 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         ? { question: null, detail: [], options: [], selected: null, signature: 'antigravity-terminal', usesTerminalInput: true }
         : null
     }
-    if (!checkBehindComposer && composer()) {
-      claudeQuestion = null
-      return null
-    }
     const { active: buffer } = screen.buffer
     // The screen as lines: a row the terminal wrapped (a long choice in a narrow pane) joins the one before
     // Only text that runs up to the right edge continues: Claude pads its rule and the rows of a choice's
@@ -374,14 +373,29 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     const top = 0
     let last = raws.length - 1
     while (last > top && !bare(last).trim()) last--
+    // A Claude dialog's choices sit right above its "Enter to confirm · Esc to cancel" hint, wherever that is
+    let dialogEnd = -1
     if (kind === 'claude') {
+      const hint = raws.findIndex((_, index) => CLAUDE_DIALOG_HINT.test(bare(index).trim()))
+      let row = hint - 1
+      if (hint > 0 && !bare(row).trim()) row--
+      if (row >= top && APPROVAL_OPTION.test(bare(row))) dialogEnd = row
+    }
+    if (!checkBehindComposer && dialogEnd < 0 && composer()) {
+      claudeQuestion = null
+      return null
+    }
+    if (kind === 'claude' && dialogEnd < 0) {
       claudeQuestion = claudeQuestionPrompt(raws, bare, last, claudeQuestion)
       if (claudeQuestion) return claudeQuestion
     }
+    if (dialogEnd >= 0) claudeQuestion = null
     // The choices end at most a few lines above the bottom (a hint like "Esc to cancel" may follow)
-    let end = last
-    while (end >= Math.max(top, last - 4) && !APPROVAL_OPTION.test(bare(end))) end--
-    if (end < Math.max(top, last - 4)) return null
+    let end = dialogEnd >= 0 ? dialogEnd : last
+    if (dialogEnd < 0) {
+      while (end >= Math.max(top, last - 4) && !APPROVAL_OPTION.test(bare(end))) end--
+      if (end < Math.max(top, last - 4)) return null
+    }
     let start = end
     for (let row = end - 1; row >= Math.max(top, end - 20); row--) {
       const text = bare(row)
@@ -403,6 +417,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       if (marker) selected = number
     }
     if (options.length < 2 || options.length > 9) return null
+    // Above a live composer only a dialog with its selection marker counts (not a list in the conversation)
+    if (dialogEnd >= 0 && !selected) return null
     // What the question is about: up to the dialog's top rule (Claude) or the question itself (Codex)
     const lines = []
     const header = []

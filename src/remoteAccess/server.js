@@ -7,6 +7,7 @@ const http = require('http')
 const https = require('https')
 const fs = require('fs')
 const path = require('path')
+const { randomUUID } = require('crypto')
 const { WebSocketServer } = require('ws')
 const { isTailnetAddress } = require('./tailnet.js')
 const { readSubscription } = require('./webPush.js')
@@ -45,6 +46,20 @@ const MAX_ACTIVITY_ITEMS = 100
 const ACTIVITY_FIELDS = ['id', 'time', 'sessionId', 'sessionName', 'command', 'level', 'reasons', 'state', 'startedAt', 'finishedAt', 'cwd', 'exitCode', 'timedOut', 'truncated', 'error', 'background', 'jobId', 'transfer', 'outputTrimmed']
 /** A device that has this much unread data gets no more activity until it has caught up (questions are always sent) */
 const ACTIVITY_BACKLOG_BYTES = 1024 * 1024
+/** A PC tab's output cannot be paused for one phone (the PC would stall): a phone this far behind stops following it */
+const TAB_BACKLOG_BYTES = 2 * 1024 * 1024
+/** Typing into a PC tab is logged once per attach, then at most this often (the log names the tab, never the keys) */
+const TAB_INPUT_LOG_MS = 60 * 1000
+const TAB_ERRORS = {
+  missing: '그 탭은 PC 에 없습니다. 목록을 새로 고쳐 주세요.',
+  notAttached: '탭을 먼저 열어 주세요.',
+  slow: '휴대폰이 출력을 따라가지 못해 이어 보기를 멈췄습니다. 다시 열어 주세요.',
+  viewOnly: '빠른 연결 탭은 휴대폰에서 보기만 할 수 있습니다.'
+}
+const TABS_OFF = '휴대폰에서 PC 탭 이어 보기가 꺼져 있습니다. PC 의 설정 > 원격 접속에서 켜 주세요.'
+/** Any device this far behind is cut off (chat frames, lists and activity included): it stops reading */
+const MAX_BACKLOG_BYTES = 4 * 1024 * 1024
+const AGENTS_OFF = '휴대폰에서 에이전트 쓰기가 꺼져 있습니다. PC 의 설정 > 원격 접속에서 켜 주세요.'
 
 /**
  * A request as a device gets it: the named fields, and the end of what it printed and of its
@@ -94,6 +109,10 @@ const STATIC = {
   '/approvals.js': ['approvals.js', 'text/javascript; charset=utf-8'],
   '/activity.js': ['activity.js', 'text/javascript; charset=utf-8'],
   '/push.js': ['push.js', 'text/javascript; charset=utf-8'],
+  // Step 3: the PC's tabs and agents (docs/plan/2026-11-24-remote-access-tabs-and-agents.md)
+  '/tabs.js': ['tabs.js', 'text/javascript; charset=utf-8'],
+  '/agents.js': ['agents.js', 'text/javascript; charset=utf-8'],
+  '/agents.css': ['agents.css', 'text/css; charset=utf-8'],
   '/sw.js': ['sw.js', 'text/javascript; charset=utf-8']
 }
 // The terminal library: [file in web/vendor (copied there by the build), the package file it comes from, type]
@@ -149,14 +168,18 @@ const ERRORS = {
  * @param {object} deps.store accessStore
  * @param {object} deps.shells remote shells
  * @param {() => { folders: object[], sessions: object[] }} deps.listSessions names, colours and order only
+ * @param {() => object} [deps.readTheme] CSS variables validated by the remote access controller
  * @param {() => boolean} deps.isLocked the app is locked (nothing is answered)
  * @param {{ current: () => object | null, respond: (id: string, approved: boolean, device: string) => boolean }} [deps.approvals]
  *   MCP questions: the one being asked now, and answering it as a device. Without it devices get none.
  * @param {{ list: () => object[], cancel: (id: string) => boolean }} [deps.activity] MCP requests and stopping one
+ * @param {{ list: () => object[], attach: (id: string, handlers: object) => object | null, write: (id: string, data: string) => string | null }} [deps.tabs]
+ *   the PC's SSH tabs (controller.js): listing, following one's output, typing into it
+ * @param {object} [deps.agents] the PC's agents (agentBridge.js); `enabled` is false while the setting is off
  * @param {(event: string, detail?: object) => void} [deps.log]
  * @param {() => void} [deps.onChange] connected devices changed
  */
-function createAccessServer({ store, shells, listSessions, isLocked, approvals = null, activity = null, log = () => {}, onChange = () => {}, webDir = path.join(__dirname, 'web'), now = Date.now, isAllowedAddress = isTailnetAddress }) {
+function createAccessServer({ store, shells, listSessions, isLocked, approvals = null, activity = null, tabs = null, agents = null, log = () => {}, onChange = () => {}, webDir = path.join(__dirname, 'web'), now = Date.now, isAllowedAddress = isTailnetAddress, readTheme = () => ({}) }) {
   let server = null
   let sockets = null
   let address = null
@@ -166,6 +189,11 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
   const clients = new Set()
   /** Failed attempts by address: Map<address, { count, until }> */
   const failures = new Map()
+  /** The agent list last sent to watching devices (as JSON), so an unchanged list is not sent again */
+  let lastAgents = null
+  const agentsOn = () => Boolean(agents && agents.enabled)
+  const tabsOn = () => tabs?.enabled === true
+  const features = () => ({ tabs: tabsOn(), agents: agentsOn() })
 
   const isRefused = (remote) => {
     const entry = failures.get(remote)
@@ -190,8 +218,30 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
   /** A question as a device gets it: with the time left, since the phone's clock may differ from this PC's */
   const forDevice = (request) => ({ ...request, remainingMs: Math.max(0, Number(request.expiresAt) - now()) })
   const signedIn = () => [...clients].filter((c) => c.device)
+  /** A device that stopped reading: what it follows stops and the connection is closed, before main's memory fills */
+  function cutOff(client) {
+    for (const tab of [...(client.tabs?.values() ?? [])]) tab.stop()
+    agents?.closeViewer(client.viewer)
+    client.watchesAgents = false
+    client.watchesActivity = false
+    closeSocket(client.socket)
+  }
   const sendTo = (client, message) => {
-    if (client.socket.readyState === client.socket.OPEN) client.socket.send(JSON.stringify(message))
+    if (client.socket.readyState !== client.socket.OPEN) return
+    const pending = client.socket.bufferedAmount
+    if (pending > MAX_BACKLOG_BYTES) return cutOff(client)
+    const payload = JSON.stringify(message)
+    if (pending + Buffer.byteLength(payload) > MAX_BACKLOG_BYTES) return cutOff(client)
+    client.socket.send(payload)
+  }
+
+  function canSendActivity(client) {
+    const pending = client.socket.bufferedAmount
+    if (pending > MAX_BACKLOG_BYTES) {
+      cutOff(client)
+      return false
+    }
+    return pending <= ACTIVITY_BACKLOG_BYTES
   }
 
   /** The only name this server answers to. A page reached by another name (DNS rebinding) gets nothing. */
@@ -235,12 +285,11 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
   }
 
   function accept(socket, remote) {
-    const client = { socket, remote, device: null, timer: null, failures: 0, outputs: new Set(), askedAt: new Map(), watchesActivity: false }
+    // viewer: this connection's key for the chats it follows (one phone may connect twice)
+    const client = { socket, remote, device: null, timer: null, failures: 0, outputs: new Set(), askedAt: new Map(), watchesActivity: false, tabs: new Map(), watchesAgents: false, viewer: `remote:${randomUUID()}` }
     // First of all: a socket without an error listener throws into the main process
     socket.on('error', () => socket.terminate())
-    const send = (message) => {
-      if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message))
-    }
+    const send = (message) => sendTo(client, message)
     const drop = (reason) => {
       if (reason) send({ type: 'bye', message: reason })
       closeSocket(socket)
@@ -263,6 +312,8 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
       clients.delete(client)
       for (const stop of [...client.outputs]) stop()
       shells.closeAll(client)
+      for (const tab of [...client.tabs.values()]) tab.stop()
+      agents?.closeViewer(client.viewer)
       if (client.device) {
         log('disconnect', { device: client.device.name })
         onChange()
@@ -282,7 +333,7 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
       // A question that was already being asked when the device came in
       const asked = approvals ? approvals.current() : null
       if (asked) client.askedAt.set(asked.id, now())
-      send({ type: 'ready', device: device.name, ...listSessions(), approvals: asked ? [forDevice(asked)] : [], push: pushInfo() })
+      send({ type: 'ready', device: device.name, ...listSessions(), approvals: asked ? [forDevice(asked)] : [], push: pushInfo(), features: features(), theme: readTheme() })
       return true
     }
 
@@ -363,6 +414,124 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
         output.stop()
         send({ type: 'open-failed', requestId, message: err.message })
       })
+    }
+
+    // ---- The PC's SSH tabs: following one's output, typing into it (never resizing it) ----
+    function attachTab(tabId) {
+      if (!tabsOn()) return send({ type: 'tab-error', tabId, message: tabs ? TABS_OFF : TAB_ERRORS.missing })
+      // Attaching again starts over: the device gets the kept output once more
+      client.tabs.get(tabId)?.stop()
+      let buffer = ''
+      let timer = null
+      let attached = null
+      const flush = () => {
+        clearTimeout(timer)
+        timer = null
+        if (!buffer) return
+        send({ type: 'tab-data', tabId, data: buffer })
+        buffer = ''
+      }
+      const stop = () => {
+        clearTimeout(timer)
+        timer = null
+        attached?.detach()
+        if (client.tabs.get(tabId)?.stop === stop) client.tabs.delete(tabId)
+      }
+      const follow = {
+        onData(data) {
+          // The tab cannot wait for a slow phone: the phone lets go of it instead
+          if (socket.bufferedAmount > TAB_BACKLOG_BYTES) {
+            stop()
+            send({ type: 'tab-error', tabId, message: TAB_ERRORS.slow })
+            return
+          }
+          buffer += data
+          if (buffer.length >= OUTPUT_FLUSH_CHARS) flush()
+          else if (!timer) timer = setTimeout(flush, OUTPUT_BATCH_MS)
+        },
+        onEnd(reason) {
+          flush()
+          stop()
+          send({ type: 'tab-ended', tabId, reason })
+        }
+      }
+      attached = tabs.attach(tabId, follow)
+      if (!attached) return send({ type: 'tab-error', tabId, message: TAB_ERRORS.missing })
+      client.tabs.set(tabId, { stop, name: attached.name, inputAllowed: attached.inputAllowed === true, loggedAt: 0 })
+      log('tab-attach', { device: client.device.name, tab: attached.name })
+      send({ type: 'tab-attached', tabId, cols: attached.cols, rows: attached.rows, snapshot: attached.snapshot, inputAllowed: attached.inputAllowed === true })
+    }
+
+    function writeTab(tabId, data) {
+      const tab = client.tabs.get(tabId)
+      if (!tabsOn()) return send({ type: 'tab-error', tabId, message: TABS_OFF })
+      if (!tab) return send({ type: 'tab-error', tabId, message: TAB_ERRORS.notAttached })
+      if (!tab.inputAllowed) return send({ type: 'tab-error', tabId, message: TAB_ERRORS.viewOnly })
+      if (typeof data !== 'string' || !data) return undefined
+      const name = tabs.write(tabId, data)
+      if (name === null) {
+        tab.stop()
+        return send({ type: 'tab-error', tabId, message: TAB_ERRORS.missing })
+      }
+      if (now() - tab.loggedAt >= TAB_INPUT_LOG_MS) {
+        tab.loggedAt = now()
+        log('tab-input', { device: client.device.name, tab: name })
+      }
+      return undefined
+    }
+
+    // ---- The PC's agents (only while `휴대폰에서 에이전트 쓰기` is on) ----
+    const shellIdOf = (message) => String(message.shellId ?? '').slice(0, 40)
+    function sendAgents() {
+      const list = agentsOn() ? agents.list() : []
+      send({ type: 'agents', agents: list, ...(agentsOn() ? {} : { error: AGENTS_OFF }) })
+    }
+    /**
+     * An agent action: answered with its result message, and (when `logged`) logged once it is
+     * known with the device, the agent, whether it went through and `logDetail` (never any text)
+     */
+    function agentAction(type, shellId, extra, run, logged, logDetail = {}) {
+      const agent = logged ? agents?.describe?.(shellId) ?? 'unknown' : null
+      const finish = (result) => {
+        const ok = result?.ok === true
+        if (logged) log(logged, { device: client.device.name, agent, ...logDetail, ok })
+        send({ type, shellId, ...extra, ok, ...(ok ? {} : { ...(result?.reason ? { reason: result.reason } : {}), error: result?.error ?? '처리하지 못했습니다.' }) })
+      }
+      if (!agentsOn()) return finish({ ok: false, error: AGENTS_OFF })
+      Promise.resolve().then(run).then(finish, () => finish(null))
+      return undefined
+    }
+    function handleAgents(message) {
+      const shellId = shellIdOf(message)
+      switch (message.type) {
+        case 'agents-list':
+          return sendAgents()
+        case 'agents-watch':
+          client.watchesAgents = message.on === true && agentsOn()
+          if (client.watchesAgents) sendAgents()
+          return undefined
+        case 'chat-open':
+          // Closed by the bridge when the shell's agent changes: told the way a refused open is
+          return agentAction('chat-opened', shellId, {}, () => agents.open(client.viewer, shellId,
+            (frame) => send({ type: 'chat-frame', ...frame, shellId }),
+            (error) => send({ type: 'chat-opened', shellId, ok: false, error })))
+        case 'chat-older':
+          return agentAction('chat-older-result', shellId, {}, () => agents.older(client.viewer, shellId))
+        case 'chat-close':
+          agents?.close(client.viewer, shellId)
+          return undefined
+        case 'chat-send': {
+          const requestId = String(message.requestId ?? '').slice(0, 40)
+          const chars = typeof message.text === 'string' ? message.text.length : 0
+          return agentAction('chat-send-result', shellId, { requestId }, () => agents.send(client.viewer, shellId, message.text), 'chat-send', { chars })
+        }
+        case 'chat-answer':
+          return agentAction('chat-answer-result', shellId, {}, () => agents.answer(client.viewer, shellId, message.key, message.signature), 'chat-answer')
+        case 'chat-interrupt':
+          return agentAction('chat-interrupt-result', shellId, {}, () => agents.interrupt(client.viewer, shellId), 'chat-interrupt')
+        default:
+          return undefined
+      }
     }
 
     function handle(raw, isBinary) {
@@ -449,7 +618,7 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
           return send({ type: 'push-result', ok: true })
         case 'activity-list':
           // Not while the device is far behind: the list is large and it would only pile up
-          if (socket.bufferedAmount > ACTIVITY_BACKLOG_BYTES) return undefined
+          if (!canSendActivity(client)) return undefined
           return send({ type: 'activity', items: activity ? activityForDevice(activity.list()) : [] })
         case 'activity-watch':
           client.watchesActivity = message.on === true
@@ -468,6 +637,24 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
           return shells.resize(String(message.shellId), client, message.cols, message.rows)
         case 'close':
           return shells.close(String(message.shellId), client)
+        case 'tabs-list':
+          return send({ type: 'tabs', tabs: tabsOn() ? tabs.list() : [], ...(tabsOn() ? {} : { error: TABS_OFF }) })
+        case 'tab-attach':
+          return attachTab(String(message.tabId ?? '').slice(0, 80))
+        case 'tab-input':
+          return writeTab(String(message.tabId ?? '').slice(0, 80), message.data)
+        case 'tab-detach':
+          client.tabs.get(String(message.tabId ?? ''))?.stop()
+          return undefined
+        case 'agents-list':
+        case 'agents-watch':
+        case 'chat-open':
+        case 'chat-older':
+        case 'chat-close':
+        case 'chat-send':
+        case 'chat-answer':
+        case 'chat-interrupt':
+          return handleAgents(message)
         default:
           return undefined
       }
@@ -588,7 +775,7 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
     },
     /** An MCP request appeared or changed: to devices that are looking at the activity */
     activityItem: (item) => {
-      const watchers = signedIn().filter((c) => c.watchesActivity && c.socket.bufferedAmount <= ACTIVITY_BACKLOG_BYTES)
+      const watchers = signedIn().filter((c) => c.watchesActivity && canSendActivity(c))
       if (watchers.length === 0) return
       const message = { type: 'activity-item', item: trimOutput(item) }
       watchers.forEach((client) => sendTo(client, message))
@@ -596,10 +783,50 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
     /** Live output of a running request ({ id, parts }), to the same devices */
     activityOutput: (payload) => {
       if (!payload || !Array.isArray(payload.parts)) return
-      const watchers = signedIn().filter((c) => c.watchesActivity && c.socket.bufferedAmount <= ACTIVITY_BACKLOG_BYTES)
+      const watchers = signedIn().filter((c) => c.watchesActivity && canSendActivity(c))
       if (watchers.length === 0) return
       const parts = trimOutput({ outputParts: payload.parts }).outputParts
       watchers.forEach((client) => sendTo(client, { type: 'activity-output', id: payload.id, parts }))
+    },
+    /**
+     * The agents may have changed (a status, a prompt, a role): devices watching the list get it
+     * when it differs from what they were last sent.
+     */
+    refreshAgents: () => {
+      const watchers = signedIn().filter((c) => c.watchesAgents)
+      if (watchers.length === 0 || !agentsOn()) {
+        lastAgents = null
+        return
+      }
+      const list = agents.list()
+      const json = JSON.stringify(list)
+      if (json === lastAgents) return
+      lastAgents = json
+      watchers.forEach((client) => sendTo(client, { type: 'agents', agents: list }))
+    },
+    /** `휴대폰에서 에이전트 쓰기` was switched off: every device's chats stop and it is told */
+    stopAgents: () => {
+      lastAgents = null
+      for (const client of signedIn()) {
+        agents?.closeViewer(client.viewer)
+        client.watchesAgents = false
+        sendTo(client, { type: 'agents', agents: [], error: AGENTS_OFF })
+      }
+    },
+    /** `휴대폰에서 PC 탭 이어 보기` was switched off: every device lets go of its tabs and is told */
+    stopTabs: () => {
+      for (const client of signedIn()) {
+        for (const tab of [...client.tabs.values()]) tab.stop()
+        sendTo(client, { type: 'tabs', tabs: [], error: TABS_OFF })
+      }
+    },
+    /** Whether the settings changed what devices may use: they are sent `features` again */
+    featuresChanged: () => {
+      for (const client of signedIn()) sendTo(client, { type: 'features', features: features() })
+    },
+    themeChanged: () => {
+      const theme = readTheme()
+      for (const client of signedIn()) sendTo(client, { type: 'theme', theme })
     },
     get isRunning() { return server !== null },
     get address() { return address },
