@@ -19,3 +19,10 @@ export function isApprovalArmed({ shownAt, focusedAt, hasFocus, now }: ArmingSta
   if (!hasFocus || focusedAt === null) return false
   return now - Math.max(shownAt, focusedAt) >= APPROVAL_ARM_DELAY_MS
 }
+
+export const APPROVAL_END_VISIBLE_RATIO = 0.5
+
+/** Allow for fractional pixels at the edge of the scroll area when the app is zoomed. */
+export function isApprovalEndVisible({ isIntersecting, intersectionRatio }: Pick<IntersectionObserverEntry, 'isIntersecting' | 'intersectionRatio'>): boolean {
+  return isIntersecting && intersectionRatio >= APPROVAL_END_VISIBLE_RATIO
+}

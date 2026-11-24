@@ -1457,7 +1457,7 @@ function keepMainWindowOnTop(onTop) {
 }
 
 /** Ask in the app, with the window on top; when it is in the background, also flash it and show a notification */
-function showMcpApproval(request) {
+function showMcpApproval(request, waitingCount) {
   // The PC copy says whether a phone can answer it too (the same test that makes the question wait longer)
   let sentToPhone = false;
   try {
@@ -1465,7 +1465,7 @@ function showMcpApproval(request) {
   } catch (err) {
     console.error('Failed to check remote devices for the MCP approval:', err);
   }
-  const delivered = sendToMainWindow('mcp-approval-request', { ...request, sentToPhone });
+  const delivered = sendToMainWindow('mcp-approval-request', { ...request, sentToPhone, waitingCount });
   if (delivered) keepMainWindowOnTop(true);
   // Also to the phones that are signed in (remote access), when the user wants answers from there
   if (delivered) {
@@ -1500,6 +1500,7 @@ function startMcp() {
     loadFolders: () => loadFromFile(foldersFilePath, []),
     showApproval: showMcpApproval,
     dismissApproval: (id) => sendToMainWindow('mcp-approval-dismiss', { id }),
+    approvalQueueChanged: (update) => sendToMainWindow('mcp-approval-queue', update),
     approvalClosed: (id, outcome) => {
       keepMainWindowOnTop(false);
       remoteAccess.approvalClosed(id, outcome);

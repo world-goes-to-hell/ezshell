@@ -308,6 +308,12 @@
 
 .modal-content.mcp-approval {
   z-index: 20001;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(560px, calc(100vw - 32px));
+  max-width: none;
+  padding: 20px;
+  overflow: hidden;
 }
 
 .mcp-approval-fields code {
@@ -322,11 +328,6 @@
   border-radius: var(--radius-md);
   color: var(--warning, #d29922);
   font-size: 13px;
-}
-
-.mcp-approval {
-  width: min(560px, calc(100vw - 32px));
-  padding: 20px;
 }
 
 /* The session's own colour, so the request is recognised at a glance: a left edge on the dialog
@@ -348,17 +349,39 @@
 
 .mcp-approval-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
   margin-bottom: 14px;
+}
+
+.mcp-approval-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-approval-heading .modal-title {
+  margin: 0;
 }
 
 .mcp-approval-header-side {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
+}
+
+.mcp-approval-body {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.mcp-approval-footer {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
 }
 
 /* The question also went to a signed-in phone (remote access): it can be answered there */
@@ -371,10 +394,16 @@
   white-space: nowrap;
 }
 
-.mcp-approval-timer {
+.mcp-approval-timer,
+.mcp-approval-waiting {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
-  color: var(--warning);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.mcp-approval-timer-urgent {
+  color: var(--error-text);
 }
 
 .mcp-approval-fields {
@@ -403,7 +432,7 @@
 .mcp-approval-command {
   margin: 0;
   padding: 8px 10px;
-  max-height: 160px;
+  max-height: min(44vh, 260px);
   overflow: auto;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
@@ -413,8 +442,27 @@
   word-break: break-all;
 }
 
+.mcp-approval-command-text {
+  display: block;
+  font: inherit;
+}
+
+.mcp-approval-end {
+  display: block;
+  width: 1px;
+  height: 1px;
+  /* Keep the marker clear of the scroll boundary at fractional app zoom. */
+  margin-bottom: 4px;
+}
+
+.mcp-approval-body:focus-visible,
+.mcp-approval-command:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .mcp-approval-reasons {
-  margin: 6px 0 0;
+  margin: 0;
   padding-left: 18px;
   font-size: 13px;
   color: var(--text-secondary);
@@ -692,10 +740,4 @@
 .mcp-approval-raw-toggle:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
-}
-
-/* Laid-out commands are longer: more room before scrolling */
-.mcp-approval-command.sh-code {
-  max-height: 260px;
-  font-weight: 400;
 }

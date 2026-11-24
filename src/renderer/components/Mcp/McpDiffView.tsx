@@ -1,14 +1,12 @@
-import { memo, useCallback, useEffect, useRef } from 'react'
+import { memo } from 'react'
 import type { McpDiffHunk } from '../../types'
 import { DIFF_MARKS } from '../../lib/mcpDiff'
-
-/** How close to the bottom counts as having reached the end */
-const END_THRESHOLD_PX = 8
+import { McpApprovalEnd } from './McpApprovalEnd'
 
 interface McpDiffViewProps {
   hunks: McpDiffHunk[]
   id?: string
-  /** Called once the end of the change has been on screen (at once when it fits without scrolling) */
+  /** Called the first time the end of the change is visible in the dialog. */
   onSeenEnd?: () => void
 }
 
@@ -18,18 +16,8 @@ interface McpDiffViewProps {
  * re-renders four times a second for its countdown.
  */
 export const McpDiffView = memo(function McpDiffView({ hunks, id, onSeenEnd }: McpDiffViewProps) {
-  const boxRef = useRef<HTMLDivElement>(null)
-  const checkEnd = useCallback(() => {
-    const box = boxRef.current
-    if (box && box.scrollHeight - box.scrollTop - box.clientHeight <= END_THRESHOLD_PX) onSeenEnd?.()
-  }, [onSeenEnd])
-
-  useEffect(() => {
-    checkEnd()
-  }, [checkEnd, hunks])
-
   return (
-    <div className="mcp-diff" id={id} ref={boxRef} onScroll={checkEnd} role="region" aria-label="변경 내용" tabIndex={0}>
+    <div className="mcp-diff" id={id} role="region" aria-label="변경 내용" tabIndex={0}>
       {hunks.map((hunk, hunkIndex) => (
         <div key={hunkIndex} className="mcp-diff-hunk">
           <div className="mcp-diff-header">{hunk.header}</div>
@@ -41,6 +29,7 @@ export const McpDiffView = memo(function McpDiffView({ hunks, id, onSeenEnd }: M
           ))}
         </div>
       ))}
+      {onSeenEnd && <McpApprovalEnd onSeen={onSeenEnd} />}
     </div>
   )
 })

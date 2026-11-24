@@ -9,6 +9,7 @@ import { toast } from '../../stores/toastStore'
 import { isApprovalArmed } from '../../lib/approvalArming'
 import { formatShellCommand, isFaithfulLayout } from '../../lib/shellFormat'
 import { ShellCommandText } from './ShellCommandText'
+import { McpApprovalEnd } from './McpApprovalEnd'
 import './Mcp.css'
 
 const TICK_MS = 250
@@ -16,7 +17,7 @@ const UNFOCUSED_NOTE = '이 창을 한 번 누르면 잠시 뒤 응답할 수 �
 const COMMAND_HINT = 'Claude Code 가 요청한 명령입니다. 내용을 확인한 뒤 허용하세요. 응답하지 않으면 시간이 지나 자동으로 거부됩니다.'
 const FILE_HINT = 'Claude Code 가 요청한 파일 변경입니다. 허용하면 위 내용 그대로 서버의 파일에 씁니다. 응답하지 않으면 시간이 지나 자동으로 거부됩니다.'
 const TRANSFER_HINT = 'Claude Code 가 요청한 파일 전송입니다. 양쪽 경로와 방향을 확인한 뒤 허용하세요. 파일 내용은 여기에 표시되지 않습니다. 응답하지 않으면 시간이 지나 자동으로 거부됩니다.'
-const PURPOSE_NOTE = 'Claude Code 가 직접 적은 설명입니다. 실제 명령과 다를 수 있으니 아래 명령을 기준으로 판단하세요.'
+const PURPOSE_NOTE = 'Claude Code 가 직접 적은 설명입니다. 실제 명령과 다를 수 있으니 위 명령을 기준으로 판단하세요.'
 const NO_CHANGE_HINT = 'Claude Code 가 보낸 내용이 지금 파일과 같습니다. 허용하면 파일은 그대로 두고, 내용이 같다는 사실만 알려 줍니다.'
 
 interface ApprovalContentProps {
@@ -52,8 +53,8 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
   const isTransfer = request.kind === 'transfer'
   const hasDiff = isFile && (request.hunks?.length ?? 0) > 0
   // The whole change must have been on screen before it can be allowed
-  const [hasSeenEnd, setHasSeenEnd] = useState(!hasDiff)
-  const markSeenEnd = useCallback(() => setHasSeenEnd(true), [])
+  const [hasSeenDiffEnd, setHasSeenDiffEnd] = useState(!hasDiff)
+  const markSeenDiffEnd = useCallback(() => setHasSeenDiffEnd(true), [])
   const diff = useMemo(() => revealDiff(request.hunks ?? []), [request.hunks])
 
   const remaining = secondsLeft(request.expiresAt, now)
@@ -63,6 +64,9 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
   const commandLines = useMemo(() => formatShellCommand(command.text), [command.text])
   const canLayOut = useMemo(() => isFaithfulLayout(commandLines, command.text), [commandLines, command.text])
   const [showsOriginal, setShowsOriginal] = useState(false)
+  const [hasSeenCommandEnd, setHasSeenCommandEnd] = useState(false)
+  const markSeenCommandEnd = useCallback(() => setHasSeenCommandEnd(true), [])
+  const needsCommandScroll = !isFile && !isTransfer && !hasSeenCommandEnd
   const cwd = request.cwd === null ? null : revealHiddenChars(request.cwd)
   // Claude's own words: shown, but it is the command that counts
   const purpose = request.purpose ? revealHiddenChars(request.purpose) : null
@@ -77,7 +81,7 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
   const hasHiddenInReasons = reasons.some(reason => reason.hasHidden)
   const hasHidden = hasHiddenInReasons || (isTransfer ? hasHiddenInTransfer : isFile ? hasHiddenInFile : hasHiddenInCommand)
   const isArmed = isApprovalArmed({ shownAt, focusedAt, hasFocus, now })
-  const canApprove = isArmed && hasSeenEnd
+  const canApprove = isArmed && hasSeenDiffEnd && !needsCommandScroll
   const changeKind = request.noChange ? '변경 없음' : request.isNew ? '새 파일' : '기존 파일 수정'
   const title = isTransfer ? 'MCP 파일 전송 요청' : isFile ? 'MCP 파일 쓰기 요청' : 'MCP 명령 실행 요청'
   const fileHint = request.noChange ? NO_CHANGE_HINT : FILE_HINT
@@ -101,103 +105,120 @@ function ApprovalContent({ request, now, onRespond }: ApprovalContentProps) {
       onInteractOutside={(event) => event.preventDefault()}
     >
       <div className="mcp-approval-header">
-        <Dialog.Title className="modal-title">{title}</Dialog.Title>
+        <div className="mcp-approval-heading">
+          <Dialog.Title className="modal-title">{title}</Dialog.Title>
+          <span className={`mcp-risk mcp-risk-${request.level}`}>위험도 {RISK_LABELS[request.level] ?? request.level}</span>
+        </div>
         <span className="mcp-approval-header-side">
           {request.sentToPhone && (
             <span className="mcp-approval-phone" title="원격 접속으로 휴대폰에도 보냈습니다. 휴대폰에서 답해도 이 창이 닫힙니다.">
               휴대폰에도 보냄
             </span>
           )}
-          <span className="mcp-approval-timer">남은 시간 {remaining}초</span>
+          {!!request.waitingCount && <span className="mcp-approval-waiting" title="이 요청 뒤에 대기 중인 요청 수">대기 {request.waitingCount}건</span>}
+          <span className={`mcp-approval-timer${remaining <= 10 ? ' mcp-approval-timer-urgent' : ''}`}>남은 시간 {remaining}초</span>
         </span>
       </div>
-      <dl className="mcp-approval-fields">
-        <dt>세션</dt>
-        <dd>
-          {request.sessionColor && (
-            <span className="mcp-approval-swatch" style={{ backgroundColor: request.sessionColor }} aria-hidden="true" />
-          )}
-          {request.sessionName}
-          {request.folder && <span className="mcp-approval-folder"> ({request.folder})</span>}
-        </dd>
-        {isTransfer ? <McpTransferFields request={request} /> : isFile ? (
-          <>
-            <dt>파일</dt>
-            <dd>
-              <code>{filePath.text}</code>
-              {requestedPath && <div className="mcp-approval-requested">요청 경로: <code>{requestedPath.text}</code></div>}
-            </dd>
-            <dt>변경</dt>
-            <dd>
-              {changeKind}
-              {!request.noChange && (
+      <div className="mcp-approval-body" role="region" aria-label="요청 내용" tabIndex={0}>
+        <dl className="mcp-approval-fields">
+          <dt>세션</dt>
+          <dd>
+            {request.sessionColor && (
+              <span className="mcp-approval-swatch" style={{ backgroundColor: request.sessionColor }} aria-hidden="true" />
+            )}
+            {request.sessionName}
+            {request.folder && <span className="mcp-approval-folder"> ({request.folder})</span>}
+          </dd>
+          {isTransfer ? <McpTransferFields request={request} /> : isFile ? (
+            <>
+              <dt>파일</dt>
+              <dd>
+                <code>{filePath.text}</code>
+                {requestedPath && <div className="mcp-approval-requested">요청 경로: <code>{requestedPath.text}</code></div>}
+              </dd>
+              <dt>변경</dt>
+              <dd>
+                {changeKind}
+                {!request.noChange && (
+                  <>
+                    <span className="mcp-diff-stat mcp-diff-stat-add"> +{request.added ?? 0}줄</span>
+                    <span className="mcp-diff-stat mcp-diff-stat-remove"> -{request.removed ?? 0}줄</span>
+                  </>
+                )}
+                {request.isWholeFile && <div className="mcp-approval-requested">바뀐 곳이 많아 파일 전체를 지우고 새로 쓰는 것으로 표시합니다.</div>}
+              </dd>
+            </>
+          ) : (
+            <>
+              <dt>위치</dt>
+              <dd><code>{cwd?.text ?? '알 수 없음'}</code></dd>
+              <dt>
+                명령
+                {canLayOut && (
+                  <button type="button" className="mcp-approval-raw-toggle" onClick={() => {
+                    setHasSeenCommandEnd(false)
+                    setShowsOriginal(value => !value)
+                  }}
+                    title={showsOriginal ? '명령마다 줄을 나눠 보여 줍니다' : 'AI 가 보낸 글자 그대로 보여 줍니다'}>
+                    {showsOriginal ? '정렬해서 보기' : '원문 보기'}
+                  </button>
+                )}
+              </dt>
+              <dd>
+                <pre key={showsOriginal ? 'original' : 'formatted'} id="mcp-approval-command"
+                  className="mcp-approval-command sh-code" role="region" aria-label="명령" tabIndex={0}>
+                  <code className="mcp-approval-command-text">
+                    {canLayOut && !showsOriginal ? <ShellCommandText lines={commandLines} /> : command.text}
+                  </code>
+                  <McpApprovalEnd onSeen={markSeenCommandEnd} />
+                </pre>
+                {canLayOut && !showsOriginal && <div className="mcp-approval-requested">읽기 쉽게 줄만 나눠 보여 줍니다. 실행되는 것은 원문입니다.</div>}
+              </dd>
+              {request.background && (
                 <>
-                  <span className="mcp-diff-stat mcp-diff-stat-add"> +{request.added ?? 0}줄</span>
-                  <span className="mcp-diff-stat mcp-diff-stat-remove"> -{request.removed ?? 0}줄</span>
+                  <dt>실행 방식</dt>
+                  <dd>
+                    백그라운드 실행 · 최대 {request.background.limitMinutes}분
+                    <div className="mcp-approval-requested">허용하면 끝날 때까지 서버에서 계속 실행됩니다. MCP 활동 패널에서 중지할 수 있고, 앱을 잠그면 함께 중지됩니다.</div>
+                  </dd>
                 </>
               )}
-              {request.isWholeFile && <div className="mcp-approval-requested">바뀐 곳이 많아 파일 전체를 지우고 새로 쓰는 것으로 표시합니다.</div>}
-            </dd>
-          </>
-        ) : (
-          <>
-            {purpose && (
-              <>
-                <dt>요청 사유</dt>
-                <dd>
-                  <p className="mcp-approval-purpose">{purpose.text}</p>
-                  <div className="mcp-approval-requested">{PURPOSE_NOTE}</div>
-                </dd>
-              </>
-            )}
-            <dt>위치</dt>
-            <dd><code>{cwd?.text ?? '알 수 없음'}</code></dd>
-            <dt>
-              명령
-              {canLayOut && (
-                <button type="button" className="mcp-approval-raw-toggle" onClick={() => setShowsOriginal(value => !value)}
-                  title={showsOriginal ? '명령마다 줄을 나눠 보여 줍니다' : 'AI 가 보낸 글자 그대로 보여 줍니다'}>
-                  {showsOriginal ? '정렬해서 보기' : '원문 보기'}
-                </button>
-              )}
-            </dt>
-            <dd>
-              <pre id="mcp-approval-command" className="mcp-approval-command sh-code">
-                {canLayOut && !showsOriginal ? <ShellCommandText lines={commandLines} /> : command.text}
-              </pre>
-              {canLayOut && !showsOriginal && <div className="mcp-approval-requested">읽기 쉽게 줄만 나눠 보여 줍니다. 실행되는 것은 원문입니다.</div>}
-            </dd>
-            {request.background && (
-              <>
-                <dt>실행 방식</dt>
-                <dd>
-                  백그라운드 실행 · 최대 {request.background.limitMinutes}분
-                  <div className="mcp-approval-requested">허용하면 끝날 때까지 서버에서 계속 실행됩니다. MCP 활동 패널에서 중지할 수 있고, 앱을 잠그면 함께 중지됩니다.</div>
-                </dd>
-              </>
-            )}
-          </>
-        )}
-        <dt>위험도</dt>
-        <dd>
-          <span className={`mcp-risk mcp-risk-${request.level}`}>{RISK_LABELS[request.level] ?? request.level}</span>
-          {reasons.length > 0 && (
-            <ul className="mcp-approval-reasons">
-              {reasons.map((reason, index) => <li key={`${index}-${reason.text}`}>{reason.text}</li>)}
-            </ul>
+            </>
           )}
-        </dd>
-      </dl>
-      {hasDiff && <McpDiffView hunks={diff.hunks} id="mcp-approval-diff" onSeenEnd={markSeenEnd} />}
-      {hasHidden && (
-        <p className="mcp-approval-warning" role="alert">보이지 않는 문자가 포함되어 있습니다. {hasHiddenInReasons ? '위험도의 이유와 ' : ''}{checkedThing} 꼼꼼히 확인하세요.</p>
-      )}
-      <p className="mcp-approval-hint" id="mcp-approval-hint">{hint}</p>
-      {!hasSeenEnd && <p className="mcp-approval-scroll-note">변경 내용을 끝까지 내려 본 뒤에 허용할 수 있습니다.</p>}
-      {!hasFocus && <p className="mcp-approval-scroll-note">{UNFOCUSED_NOTE}</p>}
-      <div className="mcp-approval-actions">
-        <button type="button" className="btn-secondary" disabled={!isArmed} onClick={() => onRespond(false)}>거부</button>
-        <button type="button" className="mcp-approve-btn" disabled={!canApprove} onClick={() => onRespond(true)}>허용</button>
+          {reasons.length > 0 && (
+            <>
+              <dt>위험 근거</dt>
+              <dd>
+                <ul className="mcp-approval-reasons">
+                  {reasons.map((reason, index) => <li key={`${index}-${reason.text}`}>{reason.text}</li>)}
+                </ul>
+              </dd>
+            </>
+          )}
+          {!isFile && !isTransfer && purpose && (
+            <>
+              <dt>요청 사유</dt>
+              <dd>
+                <p className="mcp-approval-purpose">{purpose.text}</p>
+                <div className="mcp-approval-requested">{PURPOSE_NOTE}</div>
+              </dd>
+            </>
+          )}
+        </dl>
+        {hasDiff && <McpDiffView hunks={diff.hunks} id="mcp-approval-diff" onSeenEnd={markSeenDiffEnd} />}
+        {hasHidden && (
+          <p className="mcp-approval-warning" role="alert">보이지 않는 문자가 포함되어 있습니다. {hasHiddenInReasons ? '위험도의 이유와 ' : ''}{checkedThing} 꼼꼼히 확인하세요.</p>
+        )}
+        <p className="mcp-approval-hint" id="mcp-approval-hint">{hint}</p>
+      </div>
+      <div className="mcp-approval-footer">
+        {!hasSeenDiffEnd && <p className="mcp-approval-scroll-note">변경 내용을 끝까지 내려 본 뒤에 허용할 수 있습니다.</p>}
+        {needsCommandScroll && <p className="mcp-approval-scroll-note">명령을 끝까지 내려 본 뒤에 허용할 수 있습니다.</p>}
+        {!hasFocus && <p className="mcp-approval-scroll-note">{UNFOCUSED_NOTE}</p>}
+        <div className="mcp-approval-actions">
+          <button type="button" className="btn-secondary" disabled={!isArmed} onClick={() => { if (isArmed) onRespond(false) }}>거부</button>
+          <button type="button" className="mcp-approve-btn" disabled={!canApprove} onClick={() => { if (canApprove) onRespond(true) }}>허용</button>
+        </div>
       </div>
     </Dialog.Content>
   )
@@ -218,17 +239,22 @@ export function McpApprovalDialog() {
     const offDismiss = api.onMcpApprovalDismiss?.(({ id }) => {
       setRequest(current => (current?.id === id ? null : current))
     })
+    const offQueue = api.onMcpApprovalQueue?.(({ id, waitingCount }) => {
+      setRequest(current => (current?.id === id ? { ...current, waitingCount } : current))
+    })
     return () => {
       offRequest()
       offDismiss?.()
+      offQueue?.()
     }
   }, [])
 
+  const requestId = request?.id
   useEffect(() => {
-    if (!request) return
+    if (!requestId) return
     const timer = setInterval(() => setNow(Date.now()), TICK_MS)
     return () => clearInterval(timer)
-  }, [request])
+  }, [requestId])
 
   if (!request) return null
 

@@ -231,6 +231,8 @@ export interface McpApprovalRequest {
    * can be answered there and waits longer (remote access, main.js showMcpApproval)
    */
   sentToPhone?: boolean
+  /** Requests waiting behind this one in the desktop dialog. */
+  waitingCount?: number
   /** Set when the command is started as a background job: it may run this long after being allowed */
   background?: { limitMinutes: number }
   /**
@@ -1324,6 +1326,7 @@ declare global {
       onMcpActivityOutput?: (callback: (payload: McpActivityOutput) => void) => () => void
       onMcpApprovalRequest?: (callback: (request: McpApprovalRequest) => void) => () => void
       onMcpApprovalDismiss?: (callback: (payload: { id: string }) => void) => () => void
+      onMcpApprovalQueue?: (callback: (payload: { id: string; waitingCount: number }) => void) => () => void
       onHostKeyPrompt?: (callback: (request: HostKeyPrompt) => void) => () => void
       onHostKeyDismiss?: (callback: (payload: { id: string }) => void) => () => void
       respondHostKey?: (id: string, decision: 'trust' | 'reject') => void

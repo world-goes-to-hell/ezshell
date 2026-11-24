@@ -49,10 +49,13 @@ function describeStartError(err, port) {
 }
 
 /** `hostKeys` is the app's saved host key store; without it the gateway refuses every server. */
-function createMcpController({ userDataPath, version, isUnlocked, loadSessions, loadFolders, showApproval, dismissApproval, approvalClosed, approvalMinTimeoutMs, emitActivity, emitActivityOutput, hostKeys, deps = {} }) {
+function createMcpController({ userDataPath, version, isUnlocked, loadSessions, loadFolders, showApproval, dismissApproval, approvalClosed, approvalQueueChanged, approvalMinTimeoutMs, emitActivity, emitActivityOutput, hostKeys, deps = {} }) {
   const configStore = deps.configStore || createMcpConfigStore({ filePath: path.join(userDataPath, 'mcp.json') })
   const audit = deps.audit || createAuditLog({ filePath: path.join(userDataPath, 'mcp-audit.log') })
-  const approvals = deps.approvals || createApprovalBroker({ show: showApproval, dismiss: dismissApproval, onClose: approvalClosed, minTimeoutMs: approvalMinTimeoutMs })
+  const approvals = deps.approvals || createApprovalBroker({
+    show: showApproval, dismiss: dismissApproval, onClose: approvalClosed,
+    onQueueChange: approvalQueueChanged, minTimeoutMs: approvalMinTimeoutMs
+  })
   const gateway = deps.gateway || createSessionGateway(hostKeys ? { hostKeys } : {})
   const activity = deps.activity || createActivityLog({
     emit: (item) => {

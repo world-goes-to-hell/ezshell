@@ -7,7 +7,7 @@ const crypto = require('crypto')
 
 const DEFAULT_TIMEOUT_MS = 60 * 1000
 
-function createApprovalBroker({ show, dismiss = () => {}, onClose = () => {}, timeoutMs = DEFAULT_TIMEOUT_MS, minTimeoutMs = () => 0, newId = () => crypto.randomUUID(), now = () => Date.now() }) {
+function createApprovalBroker({ show, dismiss = () => {}, onClose = () => {}, onQueueChange = () => {}, timeoutMs = DEFAULT_TIMEOUT_MS, minTimeoutMs = () => 0, newId = () => crypto.randomUUID(), now = () => Date.now() }) {
   const queue = []
   let active = null
 
@@ -21,6 +21,15 @@ function createApprovalBroker({ show, dismiss = () => {}, onClose = () => {}, ti
       onClose(id, outcome)
     } catch {
       // onClose threw; the question is over either way
+    }
+  }
+
+  function reportQueueChange() {
+    if (!active) return
+    try {
+      onQueueChange({ id: active.item.id, waitingCount: queue.length })
+    } catch {
+      // The waiting count is display-only; an update failure does not change the queue.
     }
   }
 
@@ -60,7 +69,7 @@ function createApprovalBroker({ show, dismiss = () => {}, onClose = () => {}, ti
       const shown = { ...item.details, id: item.id, expiresAt: now() + limit }
       let delivered
       try {
-        delivered = show(shown)
+        delivered = show(shown, queue.length)
       } catch {
         finish(item, 'denied')
         continue
@@ -73,7 +82,10 @@ function createApprovalBroker({ show, dismiss = () => {}, onClose = () => {}, ti
   function cancel(id) {
     if (active && active.item.id === id) { closeActive('cancelled', true); return }
     const index = queue.findIndex(item => item.id === id)
-    if (index >= 0) finish(queue.splice(index, 1)[0], 'cancelled')
+    if (index >= 0) {
+      finish(queue.splice(index, 1)[0], 'cancelled')
+      reportQueueChange()
+    }
   }
 
   /** `timeoutMs` gives this request its own time limit (a file change takes longer to read than a command). */
@@ -87,7 +99,8 @@ function createApprovalBroker({ show, dismiss = () => {}, onClose = () => {}, ti
         signal.addEventListener('abort', item.onAbort, { once: true })
       }
       queue.push(item)
-      showNext()
+      if (active) reportQueueChange()
+      else showNext()
     })
   }
 

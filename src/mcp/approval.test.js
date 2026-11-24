@@ -78,6 +78,29 @@ describe('createApprovalBroker', () => {
     await expect(second).resolves.toBe('denied')
   })
 
+  it('reports how many requests are waiting behind the current dialog', async () => {
+    const show = vi.fn(() => true)
+    const onQueueChange = vi.fn()
+    const { broker } = setup({ show, onQueueChange })
+    const queued = new AbortController()
+    broker.request({ command: 'first' })
+    const cancelled = broker.request({ command: 'cancelled' }, { signal: queued.signal })
+    broker.request({ command: 'third' })
+    broker.request({ command: 'fourth' })
+    expect(show).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'a1' }), 0)
+    expect(onQueueChange.mock.calls).toEqual([
+      [{ id: 'a1', waitingCount: 1 }],
+      [{ id: 'a1', waitingCount: 2 }],
+      [{ id: 'a1', waitingCount: 3 }]
+    ])
+    queued.abort()
+    await expect(cancelled).resolves.toBe('cancelled')
+    expect(onQueueChange).toHaveBeenLastCalledWith({ id: 'a1', waitingCount: 2 })
+    broker.respond('a1', true)
+    expect(show).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'a3' }), 1)
+    broker.cancelAll()
+  })
+
   it('ignores answers for requests that are not on screen', () => {
     const { broker } = setup()
     broker.request({})
