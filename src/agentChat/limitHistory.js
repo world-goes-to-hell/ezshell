@@ -35,7 +35,7 @@ function createLimitHistory({ now = () => Date.now(), max = MAX_READINGS } = {})
       readings.push({ at, fiveHour, sevenDay })
       if (readings.length > max) readings.splice(0, readings.length - max)
     },
-    /** { fiveHour?, sevenDay? } used from `from` to `to` (ms), or undefined without a reading before `from` */
+    /** Compare the usage readings at `from` and `to` (ms), if a baseline is available. */
     between(from, to) {
       if (!Number.isFinite(from) || !Number.isFinite(to)) return undefined
       return limitsUsed(readingAt(from), readingAt(to))

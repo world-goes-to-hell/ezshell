@@ -65,6 +65,8 @@ async function run() {
       }
     }
     const row = id => `document.querySelector('.local-agent-chip[data-agent-id="${id}"]')`
+    const sidebarStatus = id => `${row(id)}.querySelector('.local-agent-status')`
+    const sidebarColor = id => `getComputedStyle(${sidebarStatus(id)}).color`
     const session = id => `${row(id)}?.closest('[data-local-session-id]')`
     const owner = id => `${session(id)}?.dataset.localSessionId`
     const paneTab = id => `document.querySelector('[aria-label="${id} 메시지함"]')?.closest('[data-local-tab-id]')?.dataset.localTabId`
@@ -81,6 +83,7 @@ async function run() {
       ${border(element)}.animationName === 'local-agent-trace' &&
       ${border(element)}.animationPlayState === 'running'
     `
+    const codexIdentityColor = await js(sidebarColor('codex-1'))
     // Codex reports startup until its composer has submitted a prompt.
     await js(`(() => {
       const shellId = document.querySelector('[aria-label="codex-1 메시지함"]').closest('[data-local-shell-id]').dataset.localShellId
@@ -89,22 +92,28 @@ async function run() {
     })()`)
     fs.writeFileSync(file('codex-1-program-status'), 'state=working:app=codex')
     check('a single working terminal animates the agent chip under its worktree heading', await until(`
-      ${runningTrace(row('codex-1'))} && !${session('codex-1')}?.dataset.agentWork
+      ${runningTrace(row('codex-1'))} && !${session('codex-1')}?.dataset.agentWork &&
+      ${sidebarStatus('codex-1')}.matches('svg') && ${sidebarColor('codex-1')} === ${JSON.stringify(codexIdentityColor)}
     `))
     fs.writeFileSync(file('codex-1-program-status'), 'state=idle:app=codex')
     await until(`${row('codex-1')}?.dataset.status === 'idle'`)
     await openAgent('claude', 'claude-2')
+    fs.writeFileSync(file('claude-2-title'), '✳ Claude')
     for (const [index, agent] of ['codex-1', 'claude-2'].entries()) {
-      check(agent + ' has a colored dot and icons directly underneath its own session information', await until(`
+      check(agent + ' has only the logo and its filled idle mark beneath its own session information', await until(`
         ${owner(agent)} && ${owner(agent)} === ${paneTab(agent)} &&
         ${row(agent)}.parentElement.previousElementSibling?.matches('.local-terms-row') &&
-        ${row(agent)}.textContent.trim() === '' && ${row(agent)}.querySelectorAll('svg').length === 2 &&
-        !!${row(agent)}.querySelector('.agent-identity-dot')
+        ${row(agent)}.textContent.trim() === '' && ${row(agent)}.childElementCount === 1 &&
+        ${row(agent)}.firstElementChild.childElementCount === 2 &&
+        ${row(agent)}.firstElementChild.firstElementChild.matches('.local-agent-provider') &&
+        ${sidebarStatus(agent)}.matches('.local-agent-status-dot') &&
+        getComputedStyle(${sidebarStatus(agent)}, '::before').borderTopWidth === '4px'
       `))
       check(agent + ' has its own label in the worktree without repeating its name', await until(`
         ${session(agent)}?.querySelector('.local-terms-name')?.textContent === '터미널 ${index + 1}'
       `))
     }
+    check('the idle marks retain distinct agent colors', await js(`${sidebarColor('codex-1')} !== ${sidebarColor('claude-2')}`))
     const focusAgent = async id => {
       await js(`${row(id)}.click()`)
       return until(`!!document.activeElement?.closest('[data-local-shell-id]')?.querySelector('[aria-label="${id} 메시지함"]')`)
@@ -136,7 +145,7 @@ async function run() {
     await driver.move(...await driver.center(row('codex-1')))
     check('the sidebar chip tooltip shows the agent ID and role, with the same color as its pane', await until(`
       ${identityTooltip('보내기 구현 · codex-1', 'Codex', 'codex-1')} &&
-      getComputedStyle(${row('codex-1')}.querySelector('.agent-identity-dot')).backgroundColor ===
+      ${sidebarColor('codex-1')} ===
         getComputedStyle(document.querySelector('.agent-pane-usage .agent-identity-badge[data-agent-id="codex-1"] .agent-identity-dot')).backgroundColor
     `))
     await driver.shot('local-agent-sidebar-role')
@@ -171,10 +180,10 @@ async function run() {
     check('the arrival is shown beside the receiver with both agent roles', await noticeAt(claudeMail, 'codex-1 · 보내기 구현 → claude-2 · 리뷰어'))
     check('first the message flies from the sender, with the sender\'s icon, before the card', await js(`window.flights.length === 1 && window.flights[0].icon === 'codex' && !window.flights[0].cardShown`), JSON.stringify(await js('window.flights')))
     check('the card shows each agent\'s icon beside its name', await js(`[...document.querySelectorAll('.agent-delivery-notice strong .agent-message-provider')].map(icon => icon.dataset.kind).join(',') === 'codex,claude'`))
-    check('both arrival dots match the same agents in the sidebar', await js(`['codex-1', 'claude-2'].every(id => {
+    check('both arrival dots match the status colors of the same agents in the sidebar', await js(`['codex-1', 'claude-2'].every(id => {
       const arrival = document.querySelector('.agent-delivery-notice [data-agent-id="' + id + '"] .agent-identity-dot')
-      const sidebar = document.querySelector('.local-agent-chip[data-agent-id="' + id + '"] .agent-identity-dot')
-      return arrival && sidebar && getComputedStyle(arrival).backgroundColor === getComputedStyle(sidebar).backgroundColor
+      const sidebar = document.querySelector('.local-agent-chip[data-agent-id="' + id + '"] .local-agent-status')
+      return arrival && sidebar && getComputedStyle(arrival).backgroundColor === getComputedStyle(sidebar).color
     })`))
     check('the flying message is gone once it landed', await until(`!document.querySelector('.agent-message-flight')`, 2000))
     check('the receiver has an unread mailbox and tab badge', await until(`

@@ -3,7 +3,7 @@
 // the agent's transcript (src/agentChat) with a box that types into the agent's own composer.
 import { memo, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type ToggleEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { RiArrowDownLine, RiArrowUpLine, RiChat1Line, RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolderOpenLine, RiImageAddLine, RiListUnordered, RiLoader4Line, RiMailLine, RiNotification3Line, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiTimeLine, RiToolsLine } from 'react-icons/ri'
+import { RiArrowDownLine, RiArrowUpLine, RiChat1Line, RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolder3Line, RiFolderOpenLine, RiImageAddLine, RiListUnordered, RiLoader4Line, RiMailLine, RiNotification3Line, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiTimeLine, RiToolsLine } from 'react-icons/ri'
 import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatItem, AgentChatQuestion, AgentChatQuestionContext, AgentMessageSession, CodexSpeedMode } from '../../types'
 import { isUnconfirmedSend, useAgentChatStore } from '../../stores/agentChatStore'
 import { chatLinesToTakeBack, draftWithTakenBack, takeBackQueued } from '../../lib/chatTakeBack'
@@ -13,6 +13,7 @@ import { openAgentMessages, useAgentMessagesStore, useAgentPaneLocation, usePane
 import { AgentIdentityBadge } from '../ui/AgentIdentity'
 import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../ui/agentProviderIcons'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
+import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
 import { matchesBinding } from '../../lib/shortcutMatch'
 import { LOCAL_PATH_LINK, renderChatMarkdown } from '../../lib/markdownRender'
 import { copyToClipboard } from '../../lib/terminalClipboard'
@@ -104,6 +105,9 @@ function linkMenuTarget(link: HTMLAnchorElement | null): LinkMenu | undefined {
   if (!href || href.startsWith('#') || /^mailto:/i.test(href)) return undefined
   return { href, isFile: LOCAL_PATH_LINK.test(href) }
 }
+
+/** A folder of this PC, written with the slash at its end (`docs/plan/`) */
+const isFolderLink = (menu: LinkMenu) => menu.isFile && /[\\/]$/.test(menu.href)
 
 /** What a link names, for the menu's title: a file's or folder's name, or the address */
 function linkName(href: string, isFile: boolean): string {
@@ -424,6 +428,8 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
 
   const scope = chat?.scope ?? null
   const quoteKey = `${shellId}:${scope ?? ''}`
+  const [forceSendOffer, setForceSendOffer] = useState<{ key: string; token: string } | null>(null)
+  const forceToken = forceSendOffer?.key === quoteKey ? forceSendOffer.token : undefined
   const [quoteDraft, setQuoteDraft] = useState<{ key: string; quotes: ChatQuote[] } | null>(null)
   const nextQuoteId = useRef(0)
   const quotes = quoteDraft?.key === quoteKey ? quoteDraft.quotes : EMPTY_QUOTES
@@ -684,6 +690,11 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     if (!link) return
     event.preventDefault()
     const target = linkMenuTarget(link)
+    // Folders written as code paths locate their tree entry. Markdown links can open the preview.
+    if (target && isFolderLink(target) && link.classList.contains('md-code-link')) {
+      void openInApp(target.href)
+      return
+    }
     if (target?.isFile && window.electronAPI.agentChatLinkPreview) {
       setMenu(null)
       setLinkPreview({ href: target.href, opener: link, scope })
@@ -765,15 +776,38 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     }
   }
 
-  const linkMenuItems = (menu: LinkMenu) => menu.isFile && /[\\/]$/.test(menu.href)
-    // A folder (`docs/plan/`): main opens it in the file manager
+  // A folder opens in the workspace panel's file tree, which opens up to it (2026-11-24 user request:
+  // the file manager was a step away from the work). A file, or a folder outside the panel's folder,
+  // opens as before (main: the file window or the file manager).
+  const openInApp = async (href: string) => {
+    try {
+      const found = await window.electronAPI.agentChatOpenLink?.(shellId, href, 'workspace')
+      if (found?.ok && found.folder) {
+        useWorkspacePanelStore.getState().revealFolder({
+          shellId,
+          folder: found.folder,
+          fallback: () => {
+            toast.info('파일 탐색기에서 엽니다', '작업 공간의 폴더 밖에 있는 폴더입니다.')
+            void openLink(href, 'app')
+          }
+        })
+        return
+      }
+    } catch {
+      // Opened as before
+    }
+    await openLink(href, 'app')
+  }
+
+  const linkMenuItems = (menu: LinkMenu) => isFolderLink(menu)
     ? [
-        { label: '폴더 열기', icon: RiFolderOpenLine, onSelect: () => void openLink(menu.href, 'app') },
+        { label: '작업 공간에서 보기', icon: RiFolder3Line, onSelect: () => void openInApp(menu.href) },
+        { label: '파일 탐색기에서 열기', icon: RiFolderOpenLine, onSelect: () => void openLink(menu.href, 'app') },
         { label: '경로 복사', icon: RiFileCopyLine, onSelect: () => void copyToClipboard(menu.href) }
       ]
     : menu.isFile
     ? [
-        { label: 'ezShell 에서 열기', icon: RiFileTextLine, onSelect: () => void openLink(menu.href, 'app') },
+        { label: 'ezShell 에서 열기', icon: RiFileTextLine, onSelect: () => void openInApp(menu.href) },
         { label: '파일 탐색기에서 열기', icon: RiFolderOpenLine, onSelect: () => void openLink(menu.href, 'explorer') },
         { label: '경로 복사', icon: RiFileCopyLine, onSelect: () => void copyToClipboard(menu.href) }
       ]
@@ -916,8 +950,8 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   const canRunOutputCommand = !history && interactiveKind === 'codex' && idle && canReply
     && !replyId && !sending && !stopping && !changingSpeed && !pasting
   const latestMcpOutputId = chat?.latestMcpSendId ? echoOutputId(chat.latestMcpSendId) : null
-  const send = async ({ override, retryId, mcpAction }: {
-    override?: string; retryId?: string; mcpAction?: { summaryId: string; server?: string }
+  const send = async ({ override, retryId, mcpAction, force }: {
+    override?: string; retryId?: string; mcpAction?: { summaryId: string; server?: string }; force?: string
   } = {}) => {
     if (!chat || sendPending.current || stopPending.current || speedPending.current || pastePending.current || isOver || composerBlocked) return
     if (antigravity && (!canReply || retryId)) return
@@ -946,6 +980,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
       return
     }
     sendPending.current = true
+    if (consumesDraft) setForceSendOffer(null)
     resetQuestionPosition()
     followAfterSend()
     setSending(true)
@@ -964,7 +999,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
         ? mcpAction.server === undefined
           ? await api.agentChatMcpVerbose?.(shellId, mcpAction.summaryId)
           : await api.agentChatMcpLogin?.(shellId, mcpAction.summaryId, mcpAction.server)
-        : await api.agentChatSend?.(shellId, text, imageIds, retryContext)
+        : await api.agentChatSend?.(shellId, text, imageIds, retryContext, force)
       if (result?.ok) {
         acceptSend(shellId, sendId, retry ? queued : undefined)
         if (!retry && interactiveKind && !imageIds.length && isSlashCommand(text)) void watchCommand(sendId)
@@ -978,7 +1013,9 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
         confirmSend(shellId, sendId, result.recorded)
       } else {
         restoreDraft()
-        if (result?.reason !== 'interrupted') {
+        if (consumesDraft && result?.forceToken) {
+          setForceSendOffer({ key: quoteKey, token: result.forceToken })
+        } else if (result?.reason !== 'interrupted') {
           toast.error('보내지 못했습니다', result && !result.ok ? result.error : '이 앱 버전에서는 쓸 수 없습니다.')
         }
       }
@@ -1352,6 +1389,15 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
           {progressLabel && <p className="agent-chat-reply-progress" role="status">
             <RiLoader4Line className="agent-chat-spin" aria-hidden />{progressLabel}
           </p>}
+          {kind === 'claude' && forceToken && (draftImages.text || draftImages.images.length > 0) && (
+            <div className="agent-chat-force-send">
+              <span role="status">Claude 입력칸에 글이 표시되어 있습니다. 강제로 보내면 기존 입력을 지웁니다.</span>
+              <button type="button" onClick={() => void send({ force: forceToken })}
+                disabled={composerBlocked || Boolean(quoteProblem) || sending || stopping || Boolean(changingSpeed) || pasting}>
+                강제로 보내기
+              </button>
+            </div>
+          )}
           <ChatQuoteCards quotes={quotes} disabled={sending || composerBlocked} onRemove={removeQuote}
             notice={quoteProblem === 'command' ? '슬래시 명령을 보내려면 인용을 제거하세요.'
               : quoteProblem === 'too-long' ? '본문을 줄이거나 인용을 제거하세요.'

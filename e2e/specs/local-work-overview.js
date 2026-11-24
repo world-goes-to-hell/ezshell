@@ -82,6 +82,14 @@ const { check, finish } = createChecks()
   check('hover shows the real Codex shell while Claude remains the active tab', await until(`
     ${preview}?.contains(${pane('codex-1')}) && ${activeTab} === ${JSON.stringify(claudeTab)}
   `))
+  // Most of the screen's height (2026-11-24 user request: 460px showed only a few lines)
+  const previewHeight = await js(`(() => {
+    const box = document.querySelector('.work-overview-preview').getBoundingClientRect()
+    return { height: Math.round(box.height), top: Math.round(box.top), bottom: Math.round(box.bottom), viewport: innerHeight }
+  })()`)
+  check('the preview takes most of the screen height and stays on screen',
+    previewHeight.height >= Math.min(Math.round(previewHeight.viewport * 0.8), previewHeight.viewport - 40) - 2 &&
+    previewHeight.top >= 0 && previewHeight.bottom <= previewHeight.viewport, JSON.stringify(previewHeight))
   await driver.shot('local-work-overview')
   const screen = `${pane('codex-1')}?.querySelector('.xterm-screen')`
   await move(...await center(q('.work-overview-preview .work-overview-header')))
@@ -135,7 +143,7 @@ const { check, finish } = createChecks()
   check('preview isolates the selected pane in a split tab', await until(`
     ${preview}?.contains(${pane('codex-1')}) &&
     ${splitPanes}.filter(pane => pane.checkVisibility()).length === 1 && ${pane('codex-1')}.checkVisibility()
-  `))
+  `), await js(`JSON.stringify({ inPreview: !!${preview}?.contains(${pane('codex-1')}), preview: !!document.querySelector('.work-overview-preview'), panes: ${splitPanes}.map(p => [p.dataset.localShellId, p.checkVisibility(), getComputedStyle(p).display, Math.round(p.getBoundingClientRect().height)]) })`))
   await click(...await js('[innerWidth / 2, innerHeight - 24]'))
   check('clicking the blank background with a preview open closes the overview and restores both panes', await until(`
     !${dialog} && ${splitPanes}.every(pane => pane.checkVisibility())

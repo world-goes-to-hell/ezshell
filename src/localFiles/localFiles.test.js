@@ -45,6 +45,35 @@ describe('roots', () => {
     await expect(roots.resolveInside(top, '../x')).rejects.toThrow('열 수 없는 경로')
     await expect(roots.resolveInside(top, path.join(temp))).rejects.toThrow('열 수 없는 경로')
   })
+
+  it('never resolves into a .git folder (its hooks and config run programs)', async () => {
+    const { top } = repo()
+    const roots = createLocalRoots({ knownFolders: () => [top], repoFolders: git.repoFolders })
+    for (const relative of ['.git/hooks/pre-commit', '.git/config', '.GIT/config', 'src/../.git/config', '.git']) {
+      await expect(roots.resolveInside(top, relative)).rejects.toThrow('열 수 없는 경로')
+    }
+    await expect(roots.resolveInside(path.join(top, '.git'), 'config')).rejects.toThrow('열 수 없는 경로')
+    await expect(roots.resolveInside(path.join(top, '.git', 'hooks'), '')).rejects.toThrow('열 수 없는 경로')
+    fs.writeFileSync(path.join(top, '.gitignore'), 'x\n')
+    expect((await roots.resolveInside(top, '.gitignore')).relative).toBe('.gitignore')
+  })
+
+  it('commits only in a repository a shell is in, or one inside it', async () => {
+    const { top, g } = repo()
+    const nested = path.join(top, 'vendor', 'lib')
+    fs.mkdirSync(nested, { recursive: true })
+    execFileSync('git', ['init', '-q'], { cwd: nested })
+    // A shell in a plain folder above both repositories: reading is allowed there, committing is not
+    const elsewhere = path.join(temp, 'elsewhere')
+    fs.mkdirSync(elsewhere)
+    execFileSync('git', ['init', '-q'], { cwd: elsewhere })
+    const roots = createLocalRoots({ knownFolders: () => [path.join(top, 'src'), temp], repoFolders: git.repoFolders })
+    expect(await roots.resolveRepoRoot(top)).toBe(top)
+    expect(await roots.resolveRepoRoot(nested)).toBe(nested)
+    expect(await roots.resolveRoot(elsewhere)).toBe(elsewhere)
+    await expect(roots.resolveRepoRoot(elsewhere)).rejects.toThrow('커밋')
+    void g
+  })
 })
 
 describe('localRead', () => {
@@ -106,6 +135,12 @@ describe('git', () => {
   it('parses renames in both outputs', () => {
     expect(git.parseNameStatus('R100\0old.txt\0new.txt\0M\0b.txt\0')).toEqual([{ path: 'new.txt', kind: 'renamed', from: 'old.txt' }, { path: 'b.txt', kind: 'modified' }])
     expect(git.parseStatus('R  new.txt\0old.txt\0').staged).toEqual([{ path: 'new.txt', kind: 'renamed', from: 'old.txt' }])
+  })
+
+  it('marks every unmerged pair as a conflict', () => {
+    const parsed = git.parseStatus('AA both.txt\0DD gone.txt\0UD side.txt\0M  plain.txt\0')
+    expect(parsed.staged.map(file => file.kind)).toEqual(['conflict', 'conflict', 'conflict', 'modified'])
+    expect(parsed.changed.map(file => file.kind)).toEqual(['conflict', 'conflict', 'conflict'])
   })
 
   it('lists all revisions of one literal path across a rename and a deletion', async () => {

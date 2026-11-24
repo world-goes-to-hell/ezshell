@@ -135,6 +135,19 @@ export function chatPresetForAppTheme(theme: ThemeDefinition | undefined) {
   return CHAT_PRESETS.find(preset => preset.id === theme?.chatThemeId)
 }
 
+/**
+ * The chat palette a choice stands for: a paired app theme (카톡 모드 the app theme) is its chat palette,
+ * not a second look of the same name. Choices saved before 2026-11-24 come back as the chat palette.
+ */
+export function chatThemeChoice(id: string): string {
+  return chatPresetForAppTheme(PRESET_THEMES.find(theme => theme.id === id))?.id ?? id
+}
+
+/** The app themes the chat picker offers: the paired ones are already there as their chat palettes */
+export function chatPickerAppThemes(customThemes: readonly ThemeDefinition[]): ThemeDefinition[] {
+  return [...PRESET_THEMES, ...customThemes].filter(theme => !theme.chatThemeId)
+}
+
 export interface ChatAppearance {
   id: string
   bubbles: boolean
@@ -156,7 +169,8 @@ export function appPaneIndicatorColors({ colors, terminal }: ThemeDefinition) {
 }
 
 /** Apply the palette and theme's shape to chat surfaces. */
-export function chatAppearance(id: string, customThemes: readonly ThemeDefinition[], appTheme?: ThemeDefinition): ChatAppearance | undefined {
+export function chatAppearance(choice: string, customThemes: readonly ThemeDefinition[], appTheme?: ThemeDefinition): ChatAppearance | undefined {
+  const id = chatThemeChoice(choice)
   const followsApp = id === FOLLOW_APP_CHAT_THEME
   const preset = followsApp ? chatPresetForAppTheme(appTheme) : CHAT_PRESETS.find(theme => theme.id === id)
   const theme = followsApp || preset ? undefined : PRESET_THEMES.find(theme => theme.id === id) ?? customThemes.find(theme => theme.id === id)

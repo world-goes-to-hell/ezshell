@@ -541,6 +541,11 @@ describe('opening a link of an answer', () => {
       expect(await open('a.md')).toEqual({ ok: true })
       expect(files).toEqual([fs.realpathSync(path.join(root, 'a.md'))])
       expect(folders).toHaveLength(1)
+      // 'workspace': main only says where the folder is, for the workspace panel's tree
+      const reveal = href => handlers.get('agent-chat-open-link')({ sender: {} }, { shellId: 'local:1', href, how: 'workspace' })
+      expect(await reveal('mockups/')).toEqual({ ok: true, folder: fs.realpathSync(path.join(root, 'mockups')) })
+      expect((await reveal('a.md')).ok).toBe(false)
+      expect(folders).toHaveLength(1)
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

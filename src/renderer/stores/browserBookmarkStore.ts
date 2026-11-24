@@ -13,6 +13,7 @@ interface BrowserBookmarkState {
   history: BrowserVisit[]
   toggleBookmark: (page: BrowserSavedPage) => void
   removeBookmark: (page: BrowserBookmarkPage) => void
+  removeBookmarks: (entries: ReadonlySet<BrowserBookmarkEntry>) => void
   clearHistory: () => void
   importPages: (profileId: string, bookmarks: BrowserBookmarkEntry[], history: BrowserVisit[]) => {
     bookmarks: ImportCount & { moved: number }
@@ -24,10 +25,22 @@ export function hasBookmark(entries: readonly BrowserBookmarkEntry[], url: strin
   return entries.some(entry => entry.kind === 'folder' ? hasBookmark(entry.children, url) : entry.url === url)
 }
 
-function withoutBookmarks(entries: BrowserBookmarkEntry[], remove: (entry: BrowserBookmarkPage) => boolean): BrowserBookmarkEntry[] {
-  return entries.flatMap<BrowserBookmarkEntry>(entry => entry.kind === 'folder'
-    ? [{ ...entry, children: withoutBookmarks(entry.children, remove) }]
-    : remove(entry) ? [] : [entry])
+function withoutBookmarks(entries: BrowserBookmarkEntry[], remove: (entry: BrowserBookmarkEntry) => boolean): BrowserBookmarkEntry[] {
+  const kept: BrowserBookmarkEntry[] = []
+  let changed = false
+  for (const entry of entries) {
+    if (remove(entry)) { changed = true; continue }
+    if (entry.kind === 'folder') {
+      const children = withoutBookmarks(entry.children, remove)
+      if (children !== entry.children) {
+        kept.push({ ...entry, children })
+        changed = true
+        continue
+      }
+    }
+    kept.push(entry)
+  }
+  return changed ? kept : entries
 }
 
 const pageKey = (page: BrowserSavedPage) => JSON.stringify([page.url, page.title])
@@ -115,11 +128,12 @@ export const useBrowserBookmarkStore = create<BrowserBookmarkState>()(
       history: [],
       toggleBookmark: page => set(({ bookmarks }) => ({
         bookmarks: hasBookmark(bookmarks, page.url)
-          ? withoutBookmarks(bookmarks, entry => entry.url === page.url)
+          ? withoutBookmarks(bookmarks, entry => entry.kind !== 'folder' && entry.url === page.url)
           : [{ url: page.url, title: pageTabTitle(page), local: true }, ...bookmarks]
       })),
-      removeBookmark: page => set(({ bookmarks }) => ({
-        bookmarks: withoutBookmarks(bookmarks, entry => entry === page)
+      removeBookmark: page => get().removeBookmarks(new Set([page])),
+      removeBookmarks: entries => set(({ bookmarks }) => ({
+        bookmarks: withoutBookmarks(bookmarks, entry => entries.has(entry))
       })),
       clearHistory: () => set({ history: [] }),
       importPages(profileId, bookmarks, history) {

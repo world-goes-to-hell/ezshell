@@ -3,16 +3,17 @@ import { useConfirmStore } from '../stores/confirmStore'
 import { useTerminalStore, type TerminalInfo } from '../stores/terminalStore'
 import { adoptLocalPaneShell, releaseLocalPaneShell } from './localPaneShells'
 import { commitPaneGesture, type PaneGestureAction } from './paneGesture'
-import { mergePanes } from './paneToTab'
+import { closeTabPane, mergePanes } from './paneToTab'
 import { MAIN_PANE, paneId } from './splitTree'
 
-vi.mock('./paneToTab', () => ({ mergePanes: vi.fn() }))
+vi.mock('./paneToTab', () => ({ mergePanes: vi.fn(), closeTabPane: vi.fn() }))
 
 const tabId = 'local:tab'
 const other = paneId(1)
 const visible = () => true
 const split = { kind: 'split', axis: 'row', ratio: 0.5 } satisfies PaneGestureAction
 const merge = { kind: 'merge', to: MAIN_PANE, expanded: { x: 0, y: 0, w: 1, h: 1 } } satisfies PaneGestureAction
+const close = { kind: 'close' } satisfies PaneGestureAction
 const query = vi.fn<(_: string[]) => Promise<boolean>>()
 const store = useTerminalStore.getState
 const terminal = () => store().terminals.get(tabId)
@@ -35,6 +36,7 @@ describe('Alt+drag session confirmation', () => {
     useTerminalStore.setState(useTerminalStore.getInitialState())
     query.mockReset().mockResolvedValue(false)
     vi.mocked(mergePanes).mockReset().mockResolvedValue({ ok: true, sessionId: tabId })
+    vi.mocked(closeTabPane).mockReset().mockResolvedValue({ ok: true, sessionId: tabId })
     vi.stubGlobal('window', { electronAPI: { localShellHasWorkingAgent: query } })
   })
 
@@ -121,6 +123,25 @@ describe('Alt+drag session confirmation', () => {
     answer(true)
     await pending
     expect(mergePanes).not.toHaveBeenCalled()
+  })
+
+  it('closes a scribbled pane the way 이 칸 닫기 does', async () => {
+    prepareMerge()
+    await commitPaneGesture(tabId, other, close, visible)
+    expect(query).toHaveBeenCalledWith(['local:adopted'])
+    expect(closeTabPane).toHaveBeenCalledWith(tabId, other)
+    expect(question()).toBeNull()
+  })
+
+  it('asks before closing a working shell, as a danger, and a cancellation keeps it', async () => {
+    prepareMerge()
+    query.mockResolvedValue(true)
+    const pending = commitPaneGesture(tabId, other, close, visible)
+    await vi.waitFor(() => expect(question()?.message).toBe('작업 중인 터미널이 있습니다. 정말 닫으시겠습니까?'))
+    expect(question()?.danger).toBe(true)
+    answer(false)
+    await pending
+    expect(closeTabPane).not.toHaveBeenCalled()
   })
 
   it('leaves an SSH split independent of local activity', async () => {

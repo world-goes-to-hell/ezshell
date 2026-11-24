@@ -36,6 +36,8 @@ const REASONS = {
   approval: '에이전트가 확인을 기다리고 있습니다. 터미널에서 답해 주세요.',
   'no-composer': '에이전트의 입력칸을 찾지 못했습니다. 터미널 보기에서 확인해 주세요.',
   'composer-not-empty': '에이전트 입력칸에 쓰던 글이 있습니다. 터미널에서 지우거나 보낸 뒤 다시 시도해 주세요.',
+  'draft-changed': '터미널 입력 상태가 바뀌었습니다. 보내기를 다시 눌러 주세요.',
+  'not-cleared': '터미널 입력칸이 비워지지 않았습니다. 터미널에서 입력 내용을 확인해 주세요.',
   'not-drawn': '입력칸에 글이 그대로 들어가지 않아 보내지 않았습니다. 터미널 보기에서 확인해 주세요.',
   busy: '다른 입력을 넣는 중입니다. 잠시 뒤 다시 시도해 주세요.',
   changed: '화면의 질문이 바뀌었습니다. 새 질문을 보고 다시 골라 주세요.',
@@ -56,7 +58,8 @@ function chatPrompt(kind, text, files) {
 }
 
 function chatSendResult(result) {
-  return result.ok ? { ok: true } : { ok: false, reason: result.reason, error: REASONS[result.reason] ?? '보내지 못했습니다.' }
+  return result.ok ? { ok: true } : { ok: false, reason: result.reason, error: REASONS[result.reason] ?? '보내지 못했습니다.',
+    ...(result.forceToken ? { forceToken: result.forceToken } : {}) }
 }
 
 function mcpLoginCommands(output) {
@@ -338,6 +341,10 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const local = shells()
     const agent = local?.agentOf(id)
     if (!agent || !CHAT_PROVIDERS.has(agent.kind)) return { ok: false, error: REASONS['not-agent'] }
+    const forceToken = request.forceToken
+    if (forceToken !== undefined && (agent.kind !== 'claude' || request.retry || typeof forceToken !== 'string' || forceToken.length !== 36)) {
+      return chatSendResult({ ok: false, reason: 'draft-changed' })
+    }
     if (agent.kind === 'antigravity') {
       if (!Array.isArray(keys) || keys.length || request.imageId !== undefined || request.retry || /^\/[^\s/]+(?:\s|$)/.test(text?.trimStart() ?? '')) return antigravityOnlyText
       if (!text) return { ok: false, error: '보낼 수 없는 글입니다 (비어 있거나, 제어 문자가 있거나, 너무 깁니다).' }
@@ -382,7 +389,9 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
       }
     }
     if (isCommand) commandWatches.delete(id)
-    const result = await selected.send(() => local.chatSend(id, prompt, images))
+    const result = await selected.send(() => agent.kind === 'claude'
+      ? local.chatSend(id, prompt, images, undefined, undefined, { offerForce: true, forceToken, canSend: () => allowed(event) })
+      : local.chatSend(id, prompt, images))
     if (result?.ok && isCommand) commandWatches.set(id, { before, kind: agent.kind, command: prompt, mcpSummary })
     if (!allowed(event)) return locked
     return chatSendResult(result)
@@ -563,6 +572,10 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (how === 'explorer' && links?.showItemInFolder) {
       links.showItemInFolder(real)
       return { ok: true }
+    }
+    if (how === 'workspace') {
+      // The chat shows the folder in the workspace panel's tree; main only says where it is
+      return stat.isDirectory() ? { ok: true, folder: real } : { ok: false, error: '폴더가 아닙니다.' }
     }
     if (how === 'app' && stat.isDirectory()) {
       // A folder (`docs/plan/`) opens in the file manager: ezShell has no window for a folder (2026-11-23 user report)

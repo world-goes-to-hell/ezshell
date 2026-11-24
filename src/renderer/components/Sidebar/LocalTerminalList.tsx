@@ -18,6 +18,7 @@ import { toast } from '../../stores/toastStore'
 import { LocalProjectsTree, buildProjectNodes, type ProjectNode, type WorktreeNode, type WorktreeTab } from './LocalProjectsTree'
 import { workTabsByWorktree } from '../../lib/tabGroups'
 import { effectiveSessionColor } from '../../lib/sessionEffectiveColor'
+import type { LocalDevelopmentTask } from '../../types'
 import './LocalTerminalList.css'
 
 const KEY_STEP = 30
@@ -30,6 +31,7 @@ interface LocalTerminalListProps {
   onClose: (terminalId: string) => void
   /** Opens a local terminal in a worktree of the tree */
   onOpenFolder?: (cwd: string, workspaceLabel: string) => void
+  onStartDevelopmentTask?: (folder: string, task: LocalDevelopmentTask) => void
   /** Connects a saved session linked to a project when it has no tab open (as a press in the session list) */
   onConnectSession?: (session: Session, workGroup: string) => void
 }
@@ -68,7 +70,7 @@ function localTabName({ title, local }: TerminalInfo) {
  * terminals open in each (with their agents), then the other local terminals. When empty, the docked
  * sidebar shows the actions in its header. The list grows to its rows or a manually set height.
  */
-export function LocalTerminalList({ fillAvailableSpace = false, workingTabs, serverTabs, onOpen, onClose, onOpenFolder, onConnectSession }: LocalTerminalListProps) {
+export function LocalTerminalList({ fillAvailableSpace = false, workingTabs, serverTabs, onOpen, onClose, onOpenFolder, onStartDevelopmentTask, onConnectSession }: LocalTerminalListProps) {
   const terminals = useTerminalStore(state => state.terminals)
   const visibleId = useTerminalStore(state => visibleTerminalId(state.layout, state.activeTerminalId))
   const focusTerminal = useTerminalStore(state => state.focusTerminal)
@@ -437,6 +439,7 @@ export function LocalTerminalList({ fillAvailableSpace = false, workingTabs, ser
               renderTab={renderTab}
               renderTabActions={renderTabActions}
               onOpenWorktree={openWorktree}
+              onStartDevelopmentTask={onStartDevelopmentTask}
               renderServers={renderServers}
               onDropOnProject={linkDropped}
               onRemoveProject={removeProject}

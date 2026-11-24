@@ -722,6 +722,26 @@
   gap: 6px;
   min-width: 0;
 }
+.agent-chat-force-send {
+  display: flex;
+  flex: 0 0 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.agent-chat-force-send button {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 3px);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.agent-chat-force-send button:disabled { opacity: 0.55; cursor: default; }
 .agent-chat-input {
   --agent-chat-input-lines: 8;
   --agent-chat-input-padding: 6px;

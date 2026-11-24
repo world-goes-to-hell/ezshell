@@ -38,3 +38,29 @@ export function splitPath(file: string): { name: string; folder: string } {
   const index = file.lastIndexOf('/')
   return index < 0 ? { name: file, folder: '' } : { name: file.slice(index + 1), folder: file.slice(0, index) }
 }
+
+const isWindowsPath = (value: string) => /^[a-zA-Z]:[\\/]?/.test(value) || value.startsWith('\\\\')
+
+/**
+ * `target` relative to `root` with forward slashes ('' for the root itself), or null when it is not
+ * below it. The names come from `target`, as main read them from the disk.
+ */
+export function relativeInside(root: string, target: string): string | null {
+  const windows = isWindowsPath(root)
+  const parts = (value: string) => value.replace(/\\/g, '/').split('/').filter(Boolean)
+  const base = parts(root)
+  const full = parts(target)
+  if (full.length < base.length) return null
+  const same = (a: string, b: string) => (windows ? a.toLowerCase() === b.toLowerCase() : a === b)
+  if (!base.every((part, index) => same(part, full[index]))) return null
+  return full.slice(base.length).join('/')
+}
+
+/** A tree row on the way to the revealed folder opens (`ancestor`); the folder itself is shown (`target`) */
+export function revealStep(relative: string, target: string, ignoreCase: boolean): 'ancestor' | 'target' | null {
+  const row = ignoreCase ? relative.toLowerCase() : relative
+  const goal = ignoreCase ? target.toLowerCase() : target
+  if (!row) return null
+  if (row === goal) return 'target'
+  return goal.startsWith(`${row}/`) ? 'ancestor' : null
+}

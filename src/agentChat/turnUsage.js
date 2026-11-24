@@ -29,19 +29,24 @@ function mergeInto(target, from) {
   if (from.lastAt !== undefined) target.lastAt = Math.max(target.lastAt ?? 0, from.lastAt)
 }
 
-/** Percent of one window used between two of its readings ({ percent, resetsAt }), or undefined */
-function windowUsed(before, after) {
+/** Compare two readings ({ percent, resetsAt }) of the same kind of limit. */
+function windowUsage(before, after) {
   if (!before || !after || !Number.isFinite(before.percent) || !Number.isFinite(after.percent)) return undefined
   const reset = before.resetsAt && after.resetsAt && after.resetsAt - before.resetsAt > RESET_SLACK_MS
   const used = reset ? after.percent : after.percent - before.percent
-  return Math.max(0, Math.round(used * 10) / 10)
+  return {
+    before: before.percent,
+    after: after.percent,
+    used: Math.max(0, Math.round(used * 10) / 10),
+    ...(reset ? { reset: true } : {})
+  }
 }
 
-/** { fiveHour?, sevenDay? } used between two readings ({ fiveHour, sevenDay }), or undefined */
+/** { fiveHour?, sevenDay? } comparisons between two readings, or undefined */
 function limitsUsed(before, after) {
   if (!before || !after) return undefined
-  const fiveHour = windowUsed(before.fiveHour, after.fiveHour)
-  const sevenDay = windowUsed(before.sevenDay, after.sevenDay)
+  const fiveHour = windowUsage(before.fiveHour, after.fiveHour)
+  const sevenDay = windowUsage(before.sevenDay, after.sevenDay)
   if (fiveHour === undefined && sevenDay === undefined) return undefined
   return { ...(fiveHour !== undefined ? { fiveHour } : {}), ...(sevenDay !== undefined ? { sevenDay } : {}) }
 }
@@ -136,4 +141,4 @@ function createTurnUsage() {
   }
 }
 
-module.exports = { createTurnUsage, limitsUsed, windowUsed }
+module.exports = { createTurnUsage, limitsUsed }

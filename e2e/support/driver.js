@@ -199,6 +199,14 @@ async function pickTabGroup({ js, until, center, click }, name) {
   await click(spot[0], spot[1])
 }
 
+async function selectThemeTab({ js, until }, label) {
+  const tab = `[...document.querySelectorAll('[role=tablist][aria-label="테마 설정"] > [role=tab]')]
+    .find(tab => tab.textContent.trim() === ${JSON.stringify(label)})`
+  if (!await until(`!!${tab}`)) throw new Error(`No theme settings tab named ${label}`)
+  await js(`${tab}.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))`)
+  if (!await until(`${tab}.getAttribute('aria-selected') === 'true'`)) throw new Error(`Theme settings tab ${label} did not open`)
+}
+
 /** Quick connect to the test server; trusts its host key the first time. Resolves when a shell is on screen. */
 async function connectSsh(driver) {
   const { send, js, until, click, center } = driver
@@ -237,4 +245,4 @@ async function pageProblems(page) {
     .map((e) => e.params.entry.text.slice(0, 240))
 }
 
-module.exports = { pageProblems, sleep, createChecks, connect, pages, findPage, isMainPage, unlock, connectSsh, openLocalProject, openLocalAgent, pickTabGroup, SET, PANEL }
+module.exports = { pageProblems, sleep, createChecks, connect, pages, findPage, isMainPage, unlock, connectSsh, openLocalProject, openLocalAgent, pickTabGroup, selectThemeTab, SET, PANEL }

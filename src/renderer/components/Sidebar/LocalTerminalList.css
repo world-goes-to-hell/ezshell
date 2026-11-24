@@ -426,7 +426,6 @@
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
   min-height: 22px;
   padding: 0 5px;
   border: 1px solid var(--border);
@@ -456,6 +455,22 @@
 .local-agent-icons[data-status='blocked'] .local-agent-status { color: var(--warning); }
 .local-agent-icons[data-status='error'] .local-agent-status { color: var(--error); }
 .local-agent-icons[data-agent-kind='claude'] .local-agent-provider { color: var(--warning); }
+
+.local-agent-status-dot {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 12px;
+  block-size: 12px;
+}
+
+.local-agent-status-dot::before {
+  content: '';
+  box-sizing: border-box;
+  inline-size: 11px;
+  block-size: 11px;
+  border: 4px solid currentColor;
+  border-radius: 50%;
+}
 
 .local-terms-row {
   display: flex;

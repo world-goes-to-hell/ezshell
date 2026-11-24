@@ -1,4 +1,4 @@
-const { connect, createChecks, openLocalAgent, sleep, unlock } = require('../support/driver')
+const { connect, createChecks, openLocalAgent, selectThemeTab, sleep, unlock } = require('../support/driver')
 
 const { check, finish } = createChecks()
 const categories = [
@@ -16,6 +16,8 @@ async function run() {
   }
   const button = (selector, name) => `[...document.querySelectorAll(${JSON.stringify(selector)})].find(item => item.textContent.trim() === ${JSON.stringify(name)})`
   const card = name => `[...document.querySelectorAll('.theme-card-main')].find(item => item.querySelector('.theme-name').textContent === ${JSON.stringify(name)})`
+  const themeList = `document.querySelector('.settings-theme-tabs-list')`
+  const activePanel = `document.querySelector('.settings-theme-panel[data-state="active"]')`
   const themeSetting = 'JSON.parse(localStorage.getItem("theme-store")).state.chatThemeId'
   const themeNames = () => js(`[...document.querySelectorAll('.theme-grid .theme-name')].map(name => name.textContent)`)
   const pairedNames = categories.flatMap(category => category.names)
@@ -27,12 +29,12 @@ async function run() {
     ${card(name)}?.getAttribute('aria-pressed') === 'true'`))
   async function showLastCards(names) {
     await js(`(() => {
-      const panel = document.querySelector('.settings-tab-content[data-state="active"] .settings-content')
+      const panel = ${activePanel}
       const grid = panel.querySelector('.theme-grid')
       panel.scrollTop += grid.getBoundingClientRect().bottom - panel.getBoundingClientRect().bottom + 4
     })()`)
     if (!await until(`(() => {
-      const panel = document.querySelector('.settings-tab-content[data-state="active"] .settings-content')
+      const panel = ${activePanel}
       const top = panel.querySelector('.theme-toolbar').getBoundingClientRect().bottom
       const bottom = panel.getBoundingClientRect().bottom
       return ${JSON.stringify(names)}.every(name => {
@@ -73,14 +75,32 @@ async function run() {
     if (!await until("!!document.querySelector('.theme-grid')")) throw new Error('Settings > Theme did not open')
     const initialNames = await themeNames()
     check('all nine paired app themes appear in the full list', pairedNames.every(name => initialNames.includes(name)))
+    check('all six theme categories are visible above the app theme grid', await js(`(() => {
+      const list = ${themeList}
+      const tabs = [...list.querySelectorAll('[role=tab]')]
+      const bounds = list.getBoundingClientRect()
+      return tabs.map(tab => tab.textContent.trim()).join('|') === '앱 테마|채팅 테마|창 효과|포인터 모양|포인터 효과|브라우저 탭' &&
+        tabs[0].getAttribute('aria-selected') === 'true' &&
+        tabs.every(tab => tab.getBoundingClientRect().right <= bounds.right) &&
+        bounds.bottom <= ${activePanel}.getBoundingClientRect().top
+    })()`))
+    await sleep(250)
+    await shot('settings-theme-tabs')
+    await js(`${themeList}.querySelector('[aria-selected=true]').focus()`)
+    await press({ key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 })
 
     const chat = `document.querySelector('.settings-modal button[aria-label^="채팅 테마"]')`
+    check('the arrow key opens only the chat theme panel', await until(`!!${chat} && !document.querySelector('.theme-grid')`))
     await click(...await center(chat))
     const paper = button('[role=menuitemradio]', '종이 노트')
-    check('the chat picker distinguishes a paired app theme from its chat palette',
-      await until(`!!${paper} && !!${button('[role=menuitemradio]', '종이 노트 (앱 테마)')}`))
+    // A paired app theme is the same look as its chat palette: listed once (2026-11-24 user report)
+    check('the chat picker lists each paired look once, as its chat palette',
+      await until(`!!${paper} && [...document.querySelectorAll('[role=menuitemradio]')].filter(item => item.textContent.includes('종이 노트')).length === 1 &&
+        ![...document.querySelectorAll('[role=menuitemradio]')].some(item => item.textContent.includes('(앱 테마)'))`))
     await click(...await center(paper))
     if (!await until(`${themeSetting} === 'chat-paper'`)) throw new Error('The chat palette was not saved')
+    await click(...await center(button('.settings-theme-tabs-list [role=tab]', '앱 테마')))
+    if (!await until("!!document.querySelector('.theme-grid')")) throw new Error('The app theme tab did not reopen')
 
     for (const { label, names } of categories) {
       await selectFilter(label)
@@ -92,7 +112,16 @@ async function run() {
 
     await selectFilter('다크')
     check('Midnight applies as a dark app theme', await selectAppTheme('미드나잇', 'midnight', 'dark'))
+    const tabTop = await js(`${themeList}.getBoundingClientRect().top`)
     await showLastCards(categories[1].names)
+    const scroll = await js(`(() => {
+      const panel = ${activePanel}
+      return { panelScroll: panel.scrollTop, outerScroll: panel.parentElement.parentElement.scrollTop,
+        tabsMoved: ${themeList}.getBoundingClientRect().top - ${tabTop},
+        toolbarInset: panel.querySelector('.theme-toolbar').getBoundingClientRect().top - panel.getBoundingClientRect().top }
+    })()`)
+    check('theme tabs and the theme grid toolbar stay fixed when scrolling the theme cards', scroll.panelScroll > 0 &&
+      scroll.outerScroll === 0 && Math.abs(scroll.tabsMoved) < 1 && Math.abs(scroll.toolbarInset) < 1, JSON.stringify(scroll))
     await sleep(250)
     await shot('app-chat-themes-dark')
     await selectFilter('특수')
@@ -113,6 +142,14 @@ async function run() {
     await sleep(250)
     await shot('app-chat-themes-light')
 
+    await selectThemeTab(driver, '창 효과')
+    const opacity = `${activePanel}.querySelector('input[aria-label="창 투명도"]')`
+    await js(`${opacity}.focus()`)
+    await press({ key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37 })
+    check('window opacity can still be adjusted from the window effects tab', await until(`
+      ${opacity}.value === '95' && JSON.parse(localStorage.getItem('theme-store')).state.windowOpacity === 0.95
+    `))
+    await press({ key: 'End', code: 'End', windowsVirtualKeyCode: 35 })
     await js(`document.querySelector('.settings-modal .modal-close-btn').click()`)
     if (!await until("!document.querySelector('.settings-modal')")) throw new Error('Settings did not close')
     await shot('app-chat-themes-kakao')

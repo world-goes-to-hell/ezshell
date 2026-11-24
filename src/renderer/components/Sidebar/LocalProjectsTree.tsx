@@ -1,7 +1,10 @@
-import { useState, type DragEvent, type ReactNode } from 'react'
-import { RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolder3Line, RiGitBranchLine } from 'react-icons/ri'
+import { useState, type DragEvent, type MouseEvent, type ReactNode } from 'react'
+import { RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolder3Line, RiGitBranchLine, RiPlayLine } from 'react-icons/ri'
 import type { LocalProjectState } from '../../hooks/useLocalProjects'
+import type { LocalDevelopmentTask } from '../../types'
 import { folderLabel, pathKey } from '../../lib/localWorkspaceTree'
+import { confirmDialog } from '../../stores/confirmStore'
+import { TerminalContextMenu, type TerminalMenuItem } from '../Terminal/TerminalContextMenu'
 import { LocalSessionAgents } from './LocalSessionAgents'
 
 export interface WorktreeNode {
@@ -71,6 +74,7 @@ interface LocalProjectsTreeProps {
   renderTab: (tabId: string, label?: string) => ReactNode
   renderTabActions: (tabId: string, name: string) => ReactNode
   onOpenWorktree: (project: ProjectNode, worktree: WorktreeNode) => void
+  onStartDevelopmentTask?: (folder: string, task: LocalDevelopmentTask) => void
   /** The saved SSH sessions linked to the project ("서버"), drawn above its worktrees */
   renderServers?: (project: ProjectNode) => ReactNode
   /** A sidebar session or a tab dropped on the project (the drag's text/plain) */
@@ -90,12 +94,53 @@ export interface WorktreeTab {
 export const projectFoldKey = (folder: string) => `p:${pathKey(folder)}`
 export const worktreeFoldKey = (path: string) => `w:${pathKey(path)}`
 
+type TaskMenu = {
+  position: { x: number; y: number }
+  worktree: WorktreeNode
+  result?: Awaited<ReturnType<Window['electronAPI']['localProjectDevelopmentTasks']>>
+}
+
 /** Registered folders → worktrees → the local terminals open in each (with their agents) */
 // Past agent sessions are not listed here: the agent history of the right panel shows them (user's choice)
 export function LocalProjectsTree({
-  nodes, folded, onToggleFold, tabsOf, currentTabId, renderTab, renderTabActions, onOpenWorktree, renderServers, onDropOnProject, onRemoveProject
+  nodes, folded, onToggleFold, tabsOf, currentTabId, renderTab, renderTabActions, onOpenWorktree, onStartDevelopmentTask, renderServers, onDropOnProject, onRemoveProject
 }: LocalProjectsTreeProps) {
   const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [taskMenu, setTaskMenu] = useState<TaskMenu | null>(null)
+  const openTasks = async (event: MouseEvent<HTMLElement>, worktree: WorktreeNode) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = event.clientX === 0 && event.clientY === 0 ? event.currentTarget.getBoundingClientRect() : null
+    const opened = { position: { x: rect?.left ?? event.clientX, y: rect?.bottom ?? event.clientY }, worktree }
+    setTaskMenu(opened)
+    try {
+      const result = await window.electronAPI.localProjectDevelopmentTasks(worktree.path)
+      setTaskMenu(current => current === opened ? { ...opened, result } : current)
+    } catch {
+      setTaskMenu(current => current === opened ? { ...opened, result: { success: false, error: '기동 명령을 읽지 못했습니다.' } } : current)
+    }
+  }
+  const runTask = async (worktree: WorktreeNode, task: LocalDevelopmentTask) => {
+    if (task.includeSource || task.installCommand) {
+      const actions = [task.includeSource ? `이 워크트리의 sparse checkout에 ${task.relative}/ 폴더를 포함합니다.` : '',
+        task.installCommand ? `의존성 설치 명령 ${task.installCommand}` : '', `기동 명령 ${task.command}`].filter(Boolean)
+      const confirmed = await confirmDialog({ title: `${task.name} 기동`, message: [worktree.path, ...actions].join('\n'), confirmLabel: '기동' })
+      if (!confirmed) return
+    }
+    onStartDevelopmentTask?.(worktree.path, task)
+  }
+  const taskItems = (menu: TaskMenu): TerminalMenuItem[] => {
+    const { result, worktree } = menu
+    const tasks = result?.success ? result.tasks : []
+    if (!tasks.length) return [{ icon: RiPlayLine, disabled: true, onSelect: () => {},
+      label: !result ? '기동 명령 찾는 중…' : result.success ? '찾은 기동 명령이 없습니다' : result.error }]
+    const preferred = (worktree.branch?.split('/').pop() || folderLabel(worktree.path)).toLowerCase()
+    const match = (task: LocalDevelopmentTask) => Number(task.relative.toLowerCase() === preferred)
+    return [...tasks].sort((a, b) => match(b) - match(a)).map(task => ({
+      label: `${task.name} 기동${task.relative === '.' ? '' : ` · ${task.relative}`}`,
+      icon: RiPlayLine, onSelect: () => void runTask(worktree, task)
+    }))
+  }
   // Sessions and tabs are dragged as text/plain (`session:<id>` / the tab id)
   const dropProps = (project: ProjectNode, key: string) => onDropOnProject ? {
     onDragOver: (event: DragEvent<HTMLLIElement>) => {
@@ -114,7 +159,7 @@ export function LocalProjectsTree({
       onDropOnProject(project, event.dataTransfer.getData('text/plain'))
     }
   } : {}
-  return (
+  return (<>
     <ul className="local-projects">
       {nodes.map(project => {
         const projectKey = projectFoldKey(project.folder)
@@ -167,7 +212,7 @@ export function LocalProjectsTree({
                     <li key={treeKey} className={`local-worktree${tabs.length > 0 ? ' has-tabs' : ''}${isCurrent ? ' is-current' : ''}`}
                       data-worktree-path={worktree.path} data-local-session-id={singleTab?.id}
                       data-agent-work={worktreeWorking ? 'working' : undefined}>
-                      <div className="local-worktree-row">
+                      <div className="local-worktree-row" onContextMenu={onStartDevelopmentTask ? event => void openTasks(event, worktree) : undefined}>
                         <button
                           type="button"
                           className="local-worktree-open"
@@ -222,5 +267,8 @@ export function LocalProjectsTree({
         )
       })}
     </ul>
-  )
+      {taskMenu && <TerminalContextMenu key={`${taskMenu.worktree.path}:${taskMenu.position.x}:${taskMenu.position.y}`}
+        position={taskMenu.position} top={[]} groups={[]} onClose={() => setTaskMenu(null)}
+        target={{ name: folderLabel(taskMenu.worktree.path), hint: '개발 서버', items: taskItems(taskMenu) }} />}
+  </>)
 }

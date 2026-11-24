@@ -161,8 +161,8 @@ async function readClaudeChildResults(file, tracker, isLive) {
  * @param {(channel: string, payload: object) => void} deps.send to the main window
  * @param {string} deps.claudeRoot `$CLAUDE_CONFIG_DIR` or `~/.claude`
  * @param {(shellId: string) => boolean} deps.isGone the shell is closed (not just its agent ended)
- * @param {(from: number, to: number) => object | undefined} [deps.claudeLimits] the percent of Claude's
- *   windows used between two times (limitHistory.js): a Claude transcript has no limits
+ * @param {(from: number, to: number) => object | undefined} [deps.claudeLimits] Claude's before and after
+ *   usage rates and their increase from status line reports (limitHistory.js)
  */
 function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigravityBrainRoot(), isGone = () => false, claudeLimits = null, tickMs = TICK_MS, now = () => Date.now() }) {
   const chats = new Map()

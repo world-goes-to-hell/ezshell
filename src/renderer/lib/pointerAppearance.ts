@@ -11,15 +11,16 @@
 // canvas, because terminals can be covered by the chat view, dialogs or menus.
 import '../styles/pointerCursors.css'
 import {
-  CURSOR_STATES, cursorHotspot, cursorSet, cursorSvg, cursorValue, cursorVariable, type CursorSetId, type CursorSize
+  CURSOR_STATES, cursorHotspot, cursorSet, cursorSvg, cursorValue, cursorVariable, type CursorSetId, type CursorSize, type CursorState
 } from './pointerCursors'
 import { getPointerPrefs, hasEffects, subscribePointerPrefs, type PointerPrefs } from './pointerPrefs'
 import {
-  addClick, addMove, clearEffects, createEffectState, drawFrame, effectiveEffects, keepRunning, pageAllowsEffects, prune, type EffectConfig
+  addClick, addMove, clearEffects, createEffectState, drawFrame, effectiveEffects, keepRunning, pageAllowsEffects, prune, type EffectConfig, type GhostCursor
 } from './pointerEffects'
 import { effectInk } from './pointerInk'
 
 const urls = new Map<string, string>()
+const ghostCursors = new Map<string, GhostCursor>()
 
 /** The blob: URL of one pointer image, made the first time it is asked for */
 export function cursorImageUrl(setId: CursorSetId, state: typeof CURSOR_STATES[number], size: number): string {
@@ -30,6 +31,43 @@ export function cursorImageUrl(setId: CursorSetId, state: typeof CURSOR_STATES[n
     urls.set(key, url)
   }
   return url
+}
+
+export function ghostCursor(set: CursorSetId, state: CursorState, size: CursorSize): GhostCursor {
+  const url = cursorImageUrl(set, state, size)
+  let cursor = ghostCursors.get(url)
+  if (!cursor) {
+    const image = new Image()
+    image.src = url
+    cursor = { image, hotspot: cursorHotspot(cursorSet(set), state, size) }
+    ghostCursors.set(url, cursor)
+  }
+  return cursor
+}
+
+function autoCursor(target: Element, x: number, y: number): CursorState {
+  if (target.closest('a:any-link')) return 'pointer'
+  if ((target instanceof HTMLElement && target.isContentEditable) ||
+    target.matches('textarea:not(:disabled), input:not(:disabled):is(:not([type]), [type=text], [type=search], [type=password], [type=email], [type=url], [type=tel], [type=number])')) return 'text'
+  const range = document.caretRangeFromPoint(x, y)
+  if (!range) return 'default'
+  const node = range.startContainer
+  if (node.nodeType !== Node.TEXT_NODE || !node.parentElement || getComputedStyle(node.parentElement).userSelect === 'none') return 'default'
+  // A caret can snap to the nearest line even over whitespace. Only glyph bounds make it text.
+  range.selectNodeContents(node)
+  return [...range.getClientRects()].some(rect => x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom)
+    ? 'text' : 'default'
+}
+
+function ghostAt(event: PointerEvent, prefs: PointerPrefs): GhostCursor | null {
+  const target = event.target
+  if (!(target instanceof Element)) return null
+  const computed = getComputedStyle(target).cursor
+  const fallback = computed.slice(computed.lastIndexOf(',') + 1).trim()
+  const state = fallback === 'auto' ? autoCursor(target, event.clientX, event.clientY) : CURSOR_STATES.find(state => state === fallback)
+  if (!state) return null
+  const custom = prefs.set !== 'system' && computed.includes(cursorImageUrl(prefs.set, state, prefs.size))
+  return custom ? ghostCursor(prefs.set, state, prefs.size) : ghostCursor('system', state, 32)
 }
 
 function applyCursors(setId: CursorSetId, size: CursorSize) {
@@ -134,7 +172,8 @@ function createOverlay(initial: PointerPrefs) {
     const visible = c.moveOnTerminal || !overTerminal(event.target)
     // Over a terminal with moving effects off there is nothing to add; the spotlight hides without frames
     if (!visible && c.move !== 'spot') return
-    addMove(state, c.move, event.clientX, event.clientY, performance.now(), c.moveLevel, c.ink, c.dark, visible)
+    addMove(state, c.move, event.clientX, event.clientY, performance.now(), c.moveLevel, c.ink, c.dark, visible,
+      c.move === 'ghost' ? () => ghostAt(event, prefs) : undefined)
     if (visible || frame) wake()
   }
   const onDown = (event: PointerEvent) => {

@@ -60,5 +60,6 @@ export function useWorkspaceDirectory(enabled: boolean) {
     if (current && !sameAsShown) setShown(sampled)
   }, [current, sampled, sameAsShown])
   const folder = !shellId ? null : current ? (sameAsShown ? shown : sampled) : shown
-  return { shellId, folder, isLoading: Boolean(shellId && !current && !shown) }
+  // `settled`: the folder shown is the one read for this shell (not the previous shell's, kept meanwhile)
+  return { shellId, folder, isLoading: Boolean(shellId && !current && !shown), settled: Boolean(current) }
 }

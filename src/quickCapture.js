@@ -45,22 +45,23 @@ function createQuickCapture({
   async function start() {
     if (active || !isAvailable()) return false
     let abort
-    const cancelled = new Promise(resolve => { abort = () => resolve([]) })
+    const cancelled = new Promise(resolve => { abort = () => resolve(null) })
+    const wait = (...operations) => Promise.race([...operations, cancelled])
     const task = { window: null, abort }
+    const available = () => active === task && !task.window?.isDestroyed() && isAvailable()
     active = task
     let timer
     try {
       const display = getDisplay()
       const { bounds, scaleFactor } = display
-      const sources = await Promise.race([
+      const sources = await wait(
         desktopCapturer.getSources({
           types: ['screen'],
           thumbnailSize: { width: Math.round(bounds.width * scaleFactor), height: Math.round(bounds.height * scaleFactor) }
         }),
-        new Promise(resolve => { timer = setTimeout(resolve, 4000, []); timer.unref?.() }),
-        cancelled
-      ])
-      if (active !== task || !isAvailable()) return false
+        new Promise(resolve => { timer = setTimeout(resolve, 4000, []); timer.unref?.() })
+      )
+      if (!available()) return false
       const image = sources.find(source => source.display_id === String(display.id))?.thumbnail
       if (!image || image.isEmpty()) throw new Error('해당 모니터의 화면을 읽지 못했습니다.')
 
@@ -70,18 +71,21 @@ function createQuickCapture({
         webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
       })
       task.window = win
-      const closed = new Promise(resolve => win.once('closed', () => resolve(null)))
+      win.on('close', () => win.hide())
+      win.once('closed', () => {
+        task.window = null
+        if (active === task) cancel()
+      })
       win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
       win.webContents.on('will-navigate', event => event.preventDefault())
       win.webContents.once('render-process-gone', () => { if (!win.isDestroyed()) win.destroy() })
       win.setAlwaysOnTop(true, 'screen-saver')
-      await win.loadURL(overlayUrl)
-      if (active !== task || win.isDestroyed() || !isAvailable()) return false
+      await wait(win.loadURL(overlayUrl))
+      if (!available()) return false
       win.webContents.setZoomFactor(1)
-      await win.webContents.executeJavaScript(`window.setCaptureImage(${JSON.stringify(image.toDataURL())})`)
-      if (active !== task || win.isDestroyed() || !isAvailable()) return false
-      const available = () => active === task && !win.isDestroyed() && isAvailable()
-      const action = code => Promise.race([win.webContents.executeJavaScript(code), closed])
+      await wait(win.webContents.executeJavaScript(`window.setCaptureImage(${JSON.stringify(image.toDataURL())})`))
+      if (!available()) return false
+      const action = code => wait(win.webContents.executeJavaScript(code))
       let next = action('window.pickCaptureRegion()')
       // A normal Windows window stops at the taskbar; the selection must cover the whole display.
       win.setFullScreen(true)
@@ -97,7 +101,7 @@ function createQuickCapture({
         const capture = await next
         if (!capture || !available()) return false
         if (capture.action === 'targets') {
-          projects = await captureProjects(listAgents(), repoFolders)
+          projects = await wait(captureProjects(listAgents(), repoFolders))
           if (!available()) return false
           targets = new Map(projects.flatMap(project => project.agents.map(agent => [agent.id, agent])))
           next = action(`window.chooseCaptureTarget(${JSON.stringify(projects)})`)
@@ -110,8 +114,8 @@ function createQuickCapture({
         if (capture.action === 'copy') {
           const contents = { 'image/png': new Blob([picture().toPNG()], { type: 'image/png' }) }
           if (capture.comment.trim()) contents['text/plain'] = capture.comment
-          await clipboard.write([new ClipboardItem(contents)])
-          return true
+          await wait(clipboard.write([new ClipboardItem(contents)]))
+          return available()
         }
         if (capture.action !== 'send') return false
         const agent = targets.get(capture.agentId)
@@ -121,12 +125,13 @@ function createQuickCapture({
             // Reuse the same file if the user retries. Keep it available to the CLI as long as
             // other chat attachments, including if the input was left in its composer.
             const key = JSON.stringify(capture.region) + (typeof capture.image === 'string' ? capture.image : '')
-            const result = await sendCapture(agent, capture.comment, () => {
+            const result = await wait(sendCapture(agent, capture.comment, () => {
               if (stored?.key !== key) stored = { key, attachment: storeAttachment(picture()) }
               return stored.attachment
-            }, available)
+            }, available))
+            if (!available()) return false
             if (result.ok) {
-              if (available()) onSent(agent)
+              onSent(agent)
               return true
             }
             error = result.error

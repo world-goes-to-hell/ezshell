@@ -13,11 +13,25 @@ const { check, finish } = createChecks()
 ;(async () => {
   const repo = path.join(process.env.E2E_PROFILE, 'files repo')
   fs.mkdirSync(path.join(repo, 'src'), { recursive: true })
+  fs.mkdirSync(path.join(repo, 'mockups', 'assets'), { recursive: true })
+  const htmlName = '미리보기 #1.HTML'
+  const htmlPath = `mockups/${htmlName}`
+  const htmlFile = path.join(repo, htmlPath)
+  const html = `<!doctype html><meta charset="utf-8"><title>Workspace HTML fixture</title>
+    <link rel="stylesheet" href="assets/page.css"><script src="assets/page.js" defer></script>
+    <h1 id="demo">테스트 페이지</h1><img src="assets/mark.svg" alt="테스트 이미지">`
+  fs.writeFileSync(htmlFile, html)
+  fs.writeFileSync(path.join(repo, 'mockups', 'assets', 'page.css'), 'h1 { color: rgb(8, 92, 147); }')
+  fs.writeFileSync(path.join(repo, 'mockups', 'assets', 'page.js'), 'document.body.dataset.preview = "ready"')
+  fs.writeFileSync(path.join(repo, 'mockups', 'assets', 'mark.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="#085c93"/></svg>')
   fs.writeFileSync(path.join(repo, 'README.md'), '# Hello\n\n- **item** <script>alert(1)</script>\n')
   fs.writeFileSync(path.join(repo, 'application.properties'), '# comment\nserver.port=8080\n')
   fs.writeFileSync(path.join(repo, 'src', 'app.txt'), 'one\n')
   const git = (...args) => execFileSync('git', ['-c', 'user.name=Files Test', '-c', 'user.email=files@example.invalid', ...args], { cwd: repo, stdio: 'pipe', windowsHide: true, encoding: 'utf8' })
   git('init', '-b', 'main')
+  // The panel's commit uses the repository's own identity (not the test's -c values)
+  git('config', 'user.name', 'Panel Tester')
+  git('config', 'user.email', 'panel@example.invalid')
   git('add', '.')
   git('commit', '-m', 'Create files')
   fs.writeFileSync(path.join(repo, 'src', 'app.txt'), 'one\ntwo\n')
@@ -35,12 +49,12 @@ const { check, finish } = createChecks()
   const driver = await connect()
   const { js, until } = driver
   const setSearch = (label, query) => js(`(${SET})(document.querySelector('input[aria-label="${label}"]'), ${JSON.stringify(query)})`)
-  const clearSearch = () => js(`document.querySelector('.workspace-search button').click()`)
+  const clearSearch = () => js(`document.querySelector('.workspace-search button')?.click()`)
   const fileMenu = `Array.from(document.querySelectorAll('.terminal-menu-item'), item => item.textContent.trim()).join(',')`
-  const rightClickFile = async (selector) => {
+  const rightClickFile = async (selector, web = false) => {
     await js(`(${selector}).scrollIntoView({ block: 'nearest' })`)
     await driver.click(...await driver.center(selector), 'right')
-    return until(`${fileMenu} === '파일 탐색기로 열기,ezShell로 열기'`, 5000)
+    return until(`${fileMenu} === '${web ? '브라우저로 열기,' : ''}파일 탐색기로 열기,ezShell로 열기'`, 5000)
   }
   try {
     await unlock(driver)
@@ -54,11 +68,51 @@ const { check, finish } = createChecks()
 
     const row = name => `[...document.querySelectorAll('.workspace-tree-row')].find(r => r.textContent.trim() === ${JSON.stringify(name)})`
     check('the tree lists the folder and the file at the top', await until(`!!${row('src')} && !!${row('README.md')}`, 15000))
+
+    await js(`${row('mockups')}.click()`)
+    await until(`!!${row(htmlName)}`)
+    check('an HTML file in the tree offers Open in Browser', await rightClickFile(row(htmlName), true))
+    const fileSearch = `document.querySelector('input[aria-label="파일·폴더 검색"]')`
+    await driver.click(...await driver.center(fileSearch))
+    await driver.type('미리보기')
+    const htmlMatch = `document.querySelector('.workspace-tree-results button[title="${htmlPath}"]')`
+    if (!await until(`!!${htmlMatch}`, 6000)) {
+      throw new Error(`The HTML result was missing: ${await js(`JSON.stringify({ value: ${fileSearch}?.value, note: document.querySelector('.workspace-note')?.textContent,
+        results: [...document.querySelectorAll('.workspace-tree-results button')].map(row => row.title) })`)}`)
+    }
+    check('the same action appears in file search results', await rightClickFile(htmlMatch, true))
+    await driver.pick('브라우저로 열기')
+    const preview = await findPage(p => p.url.startsWith('ezshell-workspace://'), 10000)
+    check('opening the result creates a workspace browser page', !!preview)
+    if (preview) {
+      const page = await connect(p => p.id === preview.id)
+      check('the page renders its sibling stylesheet, script and SVG without app APIs', await page.until(`
+        document.querySelector('h1')?.textContent === '테스트 페이지' &&
+        getComputedStyle(document.querySelector('h1')).color === 'rgb(8, 92, 147)' &&
+        document.body.dataset.preview === 'ready' && document.querySelector('img')?.naturalWidth === 24 &&
+        typeof window.electronAPI === 'undefined' && typeof window.require === 'undefined'
+      `))
+      const address = `document.querySelector('.browser-review input[aria-label="로컬 파일 경로"]')`
+      check('the app browser displays the readable file path', await until(`${address}?.value === ${JSON.stringify(htmlPath)} && ${address}.readOnly`))
+      await page.shot('workspace-html-browser')
+      fs.writeFileSync(htmlFile, html.replace('테스트 페이지', '새로 고침 완료'))
+      await js(`document.querySelector('.browser-review button[aria-label="새로고침"]').click()`)
+      check('Reload reads edits from disk', await page.until(`document.querySelector('h1')?.textContent === '새로 고침 완료'`))
+      fs.writeFileSync(htmlFile, html)
+      page.close()
+      const previewTab = `.terminal-tab[data-tab-id="browser:${new URL(preview.url).host}"] .tab-close`
+      await js(`document.querySelector(${JSON.stringify(previewTab)})?.click()`)
+      await until(`!document.querySelector('.browser-review')`)
+    }
+    await clearSearch()
+
+    await until(`!!${row('src')}`)
     await js(`${row('src')}.click()`)
     check('a folder expands in place', await until(`!!${row('app.txt')} && ${row('src')}.getAttribute('aria-expanded') === 'true'`, 8000))
     check('a file in the tree offers the explorer and ezShell actions', await rightClickFile(row('app.txt')))
     await driver.click(...await driver.center(row('src')))
     await until(`!document.querySelector('.terminal-menu')`)
+    await driver.click(...await driver.center(fileSearch))
     await setSearch('파일·폴더 검색', 'SRC\\APP.TXT')
     const fileMatch = `document.querySelector('.workspace-tree-results button[title="src/app.txt"]')`
     check('file search finds a file in a collapsed folder by its case-insensitive path', await until(`
@@ -238,8 +292,9 @@ const { check, finish } = createChecks()
       check('a .properties file opens', false)
     }
 
-    // ---- Git: the uncommitted change and a commit's files ----
-    await js(`document.querySelector('#workspace-tab-git').click()`)
+    // ---- 변경 tab: the uncommitted change (the history is its own tab) ----
+    await js(`document.querySelector('#workspace-tab-changes').click()`)
+    check('the changes tab has no commit history in it', await until(`!!document.querySelector('.workspace-uncommitted') && !document.querySelector('.workspace-git-list')`, 15000))
     const gitFile = `[...document.querySelectorAll('.workspace-uncommitted .workspace-git-file-toggle')].find(b => b.textContent.includes('app.txt'))`
     check('the uncommitted changes list the edited file', await until(`!!${gitFile} && !!document.querySelector('.workspace-uncommitted .workspace-git-file[data-path="src/app.txt"] .workspace-git-mark[data-kind="modified"]')`, 15000))
     check('as a folder tree with line counts', await until(`(() => {
@@ -266,6 +321,60 @@ const { check, finish } = createChecks()
       try { await fetch(`${process.env.E2E_CDP}/json/close/${compareTarget.id}`) } catch { /* gone */ }
     }
 
+    // ---- Committing the ticked files from the changes tab ----
+    fs.writeFileSync(path.join(repo, 'src', 'new.txt'), 'new\n')
+    fs.writeFileSync(path.join(repo, 'README.md'), '# Hello again\n')
+    const refreshPanel = () => js(`document.querySelector('.workspace-browser-header [aria-label="새로 고침"]').click()`)
+    await refreshPanel()
+    const box = file => `document.querySelector('.workspace-uncommitted .workspace-git-file[data-path="${file}"] .workspace-git-check')`
+    const commitButton = `document.querySelector('.workspace-commit-button')`
+    const headBox = `document.querySelector('.workspace-uncommitted-head .workspace-git-check')`
+    const setMessage = text => js(`(() => {
+      const area = document.querySelector('textarea[aria-label="커밋 메시지"]')
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(area, ${JSON.stringify(text)})
+      area.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    check('the list shows the new and the other changed file, nothing ticked, the commit button off', await until(`
+      !!${box('src/new.txt')} && !!${box('README.md')} && !!${box('src/app.txt')} &&
+      [...document.querySelectorAll('.workspace-uncommitted .workspace-git-check')].every(b => !b.checked) && ${commitButton}?.disabled === true
+    `, 10000), await js(`document.querySelector('.workspace-changes')?.textContent ?? null`))
+    await js(`${box('src/app.txt')}.click(); ${box('src/new.txt')}.click()`)
+    check('ticking every file of a folder ticks the folder, and the whole list is partly ticked', await until(`
+      document.querySelector('.workspace-git-folder[data-path="src"] .workspace-git-check')?.checked === true && ${headBox}?.indeterminate === true
+    `, 5000))
+    check('without a message the button stays off', await until(`${commitButton}?.disabled === true && ${commitButton}.textContent.includes('선택한 2개 파일 커밋')`, 5000))
+
+    // A pre-commit hook that refuses: no commit, Git's words under the button, the files still listed
+    const hookFile = path.join(repo, '.git', 'hooks', 'pre-commit')
+    fs.writeFileSync(hookFile, '#!/bin/sh\necho "lint failed: panel hook" >&2\nexit 1\n')
+    fs.chmodSync(hookFile, 0o755)
+    await setMessage('Commit from the panel\n\nPicked in the changes tab')
+    await until(`${commitButton}?.disabled === false`, 5000)
+    await js(`${commitButton}.click()`)
+    check('a refusing hook shows its output and commits nothing', await until(`
+      (document.querySelector('.workspace-commit-error')?.textContent || '').includes('lint failed: panel hook')
+    `, 20000), await js(`document.querySelector('.workspace-commit-box')?.textContent ?? null`))
+    check('the new file is untracked again after the refused commit', git('status', '--porcelain', '--untracked-files=all').includes('?? src/new.txt'))
+    fs.rmSync(hookFile)
+
+    await js(`${commitButton}.click()`)
+    check('committing leaves only the file not ticked in the list', await until(`
+      !${box('src/app.txt')} && !${box('src/new.txt')} && !!${box('README.md')} &&
+      document.querySelector('textarea[aria-label="커밋 메시지"]')?.value === '' && !document.querySelector('.workspace-commit-error')
+    `, 20000), await js(`document.querySelector('.workspace-changes')?.textContent ?? null`))
+    check('Git has the commit with the ticked files only', git('log', '-1', '--format=%B').trim() === 'Commit from the panel\n\nPicked in the changes tab' &&
+      git('show', '--name-only', '--format=', 'HEAD').trim().split('\n').sort().join(',') === 'src/app.txt,src/new.txt' &&
+      git('status', '--porcelain').trim() === 'M README.md', git('status', '--porcelain'))
+    check('a toast says it was committed', await until(`[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('커밋했습니다'))`, 5000))
+    await driver.shot('local-workspace-files-committed')
+    check('the window cannot commit a file outside the change list', await js(`window.electronAPI.workspaceGitCommit(
+      ${JSON.stringify(repo)}, ['README.md', 'mockups/assets/page.css'], 'sneak').then(r => !r.success && r.error.includes('목록'))`))
+
+    // ---- Git 기록 tab: search and a commit's files ----
+    await js(`document.querySelector('#workspace-tab-git').click()`)
+    check('the history tab has no change list and starts with the new commit', await until(`
+      !document.querySelector('.workspace-uncommitted') && document.querySelector('.workspace-commit-subject')?.textContent === 'Commit from the panel'
+    `, 15000))
     const commit = `[...document.querySelectorAll('.workspace-git-detail')].find(b => b.textContent.includes('Add a second line'))`
     check('an older commit is outside the initial log', await until(`document.querySelectorAll('.workspace-git-list .workspace-git-detail').length === 100 && !${commit}`))
     await setSearch('Git 이력 검색', '[second]')
@@ -289,9 +398,14 @@ const { check, finish } = createChecks()
       window.electronAPI.workspaceDirectorySearch(${outside}, 'app'),
       window.electronAPI.workspaceGitSearch(${outside}, 'app'),
       window.electronAPI.localFileOpen(${JSON.stringify(repo)}, '../outside.txt', 'edit'),
-      window.electronAPI.workspaceGitDiff(${JSON.stringify(repo)}, 'src/app.txt', 'HEAD; whoami')
+      window.electronAPI.browserReviewOpenWorkspace(${outside}, 'outside.html'),
+      window.electronAPI.browserReviewOpenWorkspace(${JSON.stringify(repo)}, '../outside.html'),
+      window.electronAPI.browserReviewOpenWorkspace(${JSON.stringify(repo)}, 'README.md'),
+      window.electronAPI.workspaceGitDiff(${JSON.stringify(repo)}, 'src/app.txt', 'HEAD; whoami'),
+      window.electronAPI.workspaceGitCommit(${outside}, ['app.txt'], 'outside'),
+      window.electronAPI.workspaceGitCommit(${JSON.stringify(repo)}, ['../outside.txt'], 'outside')
     ]).then(results => results.map(r => r.success))`)
-    check('a folder outside the shell\'s, a climbing path and a bad commit are refused', JSON.stringify(refused) === '[false,false,false,false,false]', JSON.stringify(refused))
+    check('unapproved workspace paths, non-web files, a bad commit hash and commits outside are refused', refused.length === 10 && refused.every(result => result === false), JSON.stringify(refused))
     await driver.shot('local-workspace-files')
   } finally {
     driver.close()

@@ -1,8 +1,10 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification, Menu, clipboard, ClipboardItem, nativeImage, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification, Menu, clipboard, ClipboardItem, nativeImage, systemPreferences, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const userDataDir = require('./src/userDataDir.js');
 const navigationGuard = require('./src/navigationGuard.js');
+const { WORKSPACE_SCHEME } = require('./src/ipc/browserWorkspace.js');
+protocol.registerSchemesAsPrivileged([{ scheme: WORKSPACE_SCHEME, privileges: { standard: true, secure: true, stream: true } }]);
 
 // The app was renamed from my-ssh-client to ezshell. Keep the old user data folder (sessions,
 // master password, settings, theme) when it exists. Must run before anything reads userData.
@@ -656,6 +658,7 @@ async function selectAgentImages(title) {
 }
 const browserReview = require('./src/ipc/browserReview.js').registerBrowserReview({
   fromMainWindow: event => !isAppLocked && fromMainWindow(event),
+  resolveWorkspaceRoot: root => localRoots.resolveRoot(root),
   fromTerminalWindow: event => !isAppLocked && Array.from(terminalWindows.values()).some(win => !win.isDestroyed() && win.webContents === event.sender),
   getWindow: () => mainWindow,
   userDataPath,
@@ -807,7 +810,11 @@ ipcMain.handle('local-shell-wake', (event, id) => (fromMainWindow(event) && !isA
 ipcMain.handle('local-shell-stay-awake', (event, id) => Boolean(fromMainWindow(event) && !isAppLocked && localShells?.stayAwake(id)));
 app.on('will-quit', () => agentIdle.stop());
 ipcMain.handle('agent-usage-state', event => (fromMainWindow(event) && !isAppLocked ? agentMessages.usageSnapshot() : []));
-const localProjectIpc = require('./src/ipc/localProjects.js').registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit });
+const localProjectIpc = require('./src/ipc/localProjects.js').registerLocalProjectIpc({
+  ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit,
+  gitCommit: require('./src/localFiles/gitCommit.js'),
+  openDevelopmentTask: (task, size) => getLocalShells().openDevelopmentTask(task, size)
+});
 // Past Claude Code and Codex sessions of this PC, for the right panel (src/agentHistory)
 const agentHistory = require('./src/agentHistory/history.js').createAgentHistory();
 require('./src/agentHistory/ipc.js').registerAgentHistoryIpc({

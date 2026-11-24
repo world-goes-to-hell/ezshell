@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import { commitPaneGesture, type PaneGestureAction } from '../lib/paneGesture'
 import { layoutOf, leafAt, leafCount, MAX_PANES, mergePaneLayout, singlePane, type PaneId } from '../lib/splitTree'
 import { splitGestureLine } from '../lib/paneDropZones'
+import { scribbleTurns, SCRIBBLE_TURNS } from '../lib/paneScribble'
 import { useTerminalStore } from '../stores/terminalStore'
 import { toast } from '../stores/toastStore'
 import { isTabHostPreviewed } from '../lib/tabHosts'
@@ -19,6 +20,12 @@ interface Drag {
   start: { x: number; y: number }
   leftPane: boolean
   canReturnToCancel: boolean
+  /** The stroke so far; a scribble counts only the points since it was last outside its pane */
+  points: Array<{ x: number; y: number }>
+  scribbleFrom: number
+  turns: number
+  /** Read as a scribble once: stays a close until the pointer leaves the pane or Esc */
+  scribble: boolean
 }
 
 interface GesturePreview {
@@ -30,6 +37,14 @@ interface GesturePreview {
 function isNearStart({ x, y, start }: Drag): boolean {
   return Math.hypot(x - start.x, y - start.y) <= PANE_GESTURE_CANCEL_RADIUS
 }
+
+/** Going back to the start cancels, except in a scribble: it passes the start again and again */
+function canCancelAtStart(drag: Drag): boolean {
+  return drag.canReturnToCancel && !drag.scribble && drag.turns < SCRIBBLE_TURNS - 1
+}
+
+const refit = () => requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
+const FAILURES = { merge: '분할 칸을 병합하지 못했습니다', split: '터미널을 분할하지 못했습니다', close: '칸을 닫지 못했습니다' } as const
 
 /** Alt+drag is captured before xterm starts a text selection or sends a mouse event to the shell. */
 export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElement | null>) {
@@ -52,7 +67,16 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       const tree = tab.splitTree ?? singlePane()
       const { width, height } = gesture.rect
       const target = leafAt(layoutOf(tree), gesture.x / width, gesture.y / height)
-      if (target?.pane !== gesture.from) gesture.leftPane = true
+      if (target?.pane !== gesture.from) {
+        gesture.leftPane = true
+        gesture.scribble = false
+        gesture.turns = 0
+        gesture.scribbleFrom = gesture.points.length
+      } else if (!gesture.leftPane && !gesture.scribble) {
+        gesture.turns = scribbleTurns(gesture.points.slice(gesture.scribbleFrom))
+        gesture.scribble = gesture.turns >= SCRIBBLE_TURNS
+      }
+      if (gesture.scribble) return leafCount(tree) > 1 ? { kind: 'close' } : null
       if (!target || target.isVacant) return null
       if (target.pane !== gesture.from) {
         const merge = mergePaneLayout(tree, gesture.from, target.pane, tab.paneSeq)
@@ -72,6 +96,7 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       gesture.y = y - rect.top
       context.lineTo(gesture.x, gesture.y)
       context.stroke()
+      gesture.points.push({ x: gesture.x, y: gesture.y })
     }
 
     const consume = (event: Event) => {
@@ -84,21 +109,22 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       consume(event)
       drawTo(drag, event.clientX, event.clientY)
       const nearStart = isNearStart(drag)
-      const cancelling = drag.canReturnToCancel && nearStart
+      const cancelling = canCancelAtStart(drag) && nearStart
       // Returning to the start also lets the user redraw in the source pane.
       if (cancelling) drag.leftPane = false
-      const action = cancelling ? null : actionAt(drag)
+      const found = actionAt(drag)
+      const action = cancelling && !drag.scribble ? null : found
       if (action && !nearStart) drag.canReturnToCancel = true
       const { start, rect } = drag
       const labelInset = Math.min(64, rect.width / 2)
       setPreview({
         from: drag.from,
         action,
-        cancelTarget: drag.canReturnToCancel ? {
+        cancelTarget: canCancelAtStart(drag) ? {
           ...start,
           labelX: Math.min(rect.width - labelInset, Math.max(labelInset, start.x)),
           above: rect.height - start.y < PANE_GESTURE_CANCEL_RADIUS + 32,
-          active: cancelling
+          active: cancelling && !drag.scribble
         } : null
       })
     }
@@ -126,19 +152,24 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       if (!drag || event.pointerId !== drag.pointer) return
       consume(event)
       drawTo(drag, event.clientX, event.clientY)
-      if (drag.canReturnToCancel && isNearStart(drag)) {
+      if (canCancelAtStart(drag) && isNearStart(drag)) {
         stop(false)
         return
       }
       const { from } = drag
       const action = actionAt(drag)
+      const scribbled = drag.scribble
       stop(true)
-      if (!action) return
+      if (!action) {
+        if (scribbled) toast.info('칸을 닫지 않았습니다', '칸이 하나뿐인 탭은 탭 닫기로 닫아 주세요.')
+        return
+      }
       moving = true
-      const failure = action.kind === 'merge' ? '분할 칸을 병합하지 못했습니다' : '터미널을 분할하지 못했습니다'
+      const failure = FAILURES[action.kind]
       const isVisible = () => !disposed && !isTabHostPreviewed(tabId) && root.isConnected && getComputedStyle(root).visibility === 'visible'
       void commitPaneGesture(tabId, from, action, isVisible).then(result => {
         if (result && !result.ok) toast.error(failure, result.error)
+        else if (result && action.kind === 'close') refit()
       }).catch(() => toast.error(failure, '잠시 후 다시 시도해 주세요.'))
         .finally(() => { moving = false })
     }
@@ -164,7 +195,7 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       context.lineWidth = 2.5
       context.lineCap = 'round'
       const start = { x: event.clientX - rect.left, y: event.clientY - rect.top }
-      drag = { pointer: event.pointerId, from, rect, context, ...start, start, leftPane: false, canReturnToCancel: false }
+      drag = { pointer: event.pointerId, from, rect, context, ...start, start, leftPane: false, canReturnToCancel: false, points: [start], scribbleFrom: 0, turns: 0, scribble: false }
       setTrail('active')
       setPreview({ from, action: null, cancelTarget: null })
       window.addEventListener('pointermove', onMove, true)

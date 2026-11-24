@@ -3,7 +3,7 @@ import { createClaudeParser } from './claudeTranscript.js'
 import { createCodexParser } from './codexTranscript.js'
 import { latestById } from './chats.js'
 import { createLimitHistory } from './limitHistory.js'
-import { windowUsed } from './turnUsage.js'
+import { limitsUsed } from './turnUsage.js'
 
 // Lines shaped like this PC's transcripts (2026-11-21), contents replaced
 const prompt = (uuid, text) => ({ type: 'user', uuid, timestamp: '2026-11-21T10:00:00Z', message: { role: 'user', content: text } })
@@ -63,7 +63,10 @@ describe('the tokens of each question', () => {
       { type: 'event_msg', payload: { type: 'task_complete', duration_ms: 57783 } }
     ])
     // The weekly window went 15 → 17% and the 5-hour one 30 → 34% while it ran
-    expect(usageOf(items, 'UserMessage:u1')).toEqual({ input: 1900, cached: 1700, output: 200, durationMs: 57783, limits: { fiveHour: 4, sevenDay: 2 } })
+    expect(usageOf(items, 'UserMessage:u1')).toEqual({
+      input: 1900, cached: 1700, output: 200, durationMs: 57783,
+      limits: { fiveHour: { before: 30, after: 34, used: 4 }, sevenDay: { before: 15, after: 17, used: 2 } }
+    })
   })
 
   it('gives the lines that open what was read to the question found when scrolling up', () => {
@@ -109,10 +112,15 @@ describe('the tokens of each question', () => {
     expect(usageOf(items, 'user:p1')).toEqual({ input: 0, cached: 0, output: 0 })
   })
 
-  it('counts a window that was reset from zero, and never below zero', () => {
-    expect(windowUsed({ percent: 90, resetsAt: 1_000_000 }, { percent: 3, resetsAt: 1_000_000 + 5 * 3600_000 })).toBe(3)
-    expect(windowUsed({ percent: 40, resetsAt: 1_000_000 }, { percent: 39.6, resetsAt: 1_000_020 })).toBe(0)
-    expect(windowUsed({ percent: 40.25, resetsAt: null }, { percent: 41.5, resetsAt: null })).toBe(1.3)
+  it('preserves the readings across resets and small drops', () => {
+    expect(limitsUsed(
+      { fiveHour: { percent: 90, resetsAt: 1_000_000 }, sevenDay: { percent: 40, resetsAt: 1_000_000 } },
+      { fiveHour: { percent: 3, resetsAt: 1_000_000 + 5 * 3600_000 }, sevenDay: { percent: 39.6, resetsAt: 1_000_020 } }
+    )).toEqual({ fiveHour: { before: 90, after: 3, used: 3, reset: true }, sevenDay: { before: 40, after: 39.6, used: 0 } })
+    expect(limitsUsed(
+      { fiveHour: { percent: 40.25, resetsAt: null } },
+      { fiveHour: { percent: 41.5, resetsAt: null }, sevenDay: { percent: 72, resetsAt: null } }
+    )).toEqual({ fiveHour: { before: 40.25, after: 41.5, used: 1.3 } })
   })
 
   it('gives a Claude question the status line readings from before it started to after its last answer', () => {
@@ -125,7 +133,9 @@ describe('the tokens of each question', () => {
     history.record({ fiveHour: { percent: 23, resetsAt: 9e12 }, sevenDay: { percent: 51, resetsAt: 9e12 } }, at('2026-11-21T10:00:04Z'))
     // A later question's use
     history.record({ fiveHour: { percent: 30, resetsAt: 9e12 }, sevenDay: { percent: 52, resetsAt: 9e12 } }, at('2026-11-21T10:05:00Z'))
-    expect(history.between(at('2026-11-21T10:00:00Z'), at('2026-11-21T10:00:01Z') + 10_000)).toEqual({ fiveHour: 3, sevenDay: 1 })
+    expect(history.between(at('2026-11-21T10:00:00Z'), at('2026-11-21T10:00:01Z') + 10_000)).toEqual({
+      fiveHour: { before: 20, after: 23, used: 3 }, sevenDay: { before: 50, after: 51, used: 1 }
+    })
     // Nothing read before the question: not known
     expect(history.between(at('2026-11-21T09:00:00Z'), at('2026-11-21T10:00:00Z'))).toBeUndefined()
   })

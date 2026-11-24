@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { PRESET_THEMES } from '../themes/presets'
-import { FOLLOW_APP_CHAT_THEME, appPaneIndicatorColors, isChatThemeId } from '../themes/chatThemes'
+import { FOLLOW_APP_CHAT_THEME, appPaneIndicatorColors, chatThemeChoice, isChatThemeId } from '../themes/chatThemes'
 import { ThemeDefinition, TerminalColors } from '../types/theme'
 import { colorSchemeFor } from '../lib/colorScheme'
 import { normalizeTheme, sanitizeStoredThemes } from '../lib/themeValidation'
@@ -152,7 +152,7 @@ export const useThemeStore = create<ThemeState>()(
       },
 
       setChatTheme: (chatThemeId) => {
-        if (isChatThemeId(chatThemeId, get().customThemes)) set({ chatThemeId })
+        if (isChatThemeId(chatThemeId, get().customThemes)) set({ chatThemeId: chatThemeChoice(chatThemeId) })
       },
 
       getTerminalTheme: () => {
@@ -238,7 +238,7 @@ export const useThemeStore = create<ThemeState>()(
           ...current,
           customThemes,
           currentThemeId: isKnown && chosen ? chosen : current.currentThemeId,
-          chatThemeId: isChatThemeId(stored.chatThemeId, customThemes) ? stored.chatThemeId : FOLLOW_APP_CHAT_THEME,
+          chatThemeId: isChatThemeId(stored.chatThemeId, customThemes) ? chatThemeChoice(stored.chatThemeId) : FOLLOW_APP_CHAT_THEME,
           surface: parseSurface(stored.surface),
           windowOpacity: clampWindowOpacity(stored.windowOpacity)
         }

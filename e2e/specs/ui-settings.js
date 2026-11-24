@@ -1,7 +1,7 @@
 // 설정 > 백업 > 화면 설정: a settings file is read, shown before anything changes, and applied without
 // reloading the window. Only listed keys are written. Run by e2e/run.js (fresh profile, no server needed).
 // Export is not driven here: it ends in the OS save dialog, which CDP cannot answer.
-const { sleep, createChecks, connect, unlock } = require('../support/driver')
+const { sleep, createChecks, connect, selectThemeTab, unlock } = require('../support/driver')
 const { check, finish } = createChecks()
 
 ;(async () => {
@@ -40,6 +40,7 @@ const { check, finish } = createChecks()
   await unlock(driver)
   const startTheme = await theme()
   check('Ctrl+, opens settings', await openSettings())
+  await selectThemeTab(driver, '채팅 테마')
   const chatTheme = `document.querySelector('.settings-modal button[aria-label^="채팅 테마"]')`
   await until(`!!${chatTheme}`)
   await driver.click(...await driver.center(chatTheme))

@@ -173,6 +173,9 @@ pty.spawn = (file, args, options) => {
       fs.writeFileSync(path.join(profile, id + '-speed-checked'), 'yes')
       pending = null
       fs.writeFileSync(path.join(profile, id + '-draft'), '')
+    } else if (id && /^\x15+\x0b+$/.test(data) && process.env.EZSHELL_TEST_AGENT_CHAT) {
+      fs.appendFileSync(path.join(profile, id + '-forced-clear'), 'x')
+      fs.writeFileSync(path.join(profile, id + '-draft'), '')
     } else if (id && pending !== 'speed-probe' && /^\x7f+$/.test(data) && process.env.EZSHELL_TEST_AGENT_CHAT) {
       // The chat taking that line back (agentInboxWake.takeBack): the composer empties
       fs.appendFileSync(path.join(profile, id + '-taken-back'), 'x')

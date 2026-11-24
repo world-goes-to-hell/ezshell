@@ -160,12 +160,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Local terminal tabs (shells of this PC)
   localShellOpen: (options) => ipcRenderer.invoke('local-shell-open', options),
   localProjectInspect: (folder) => ipcRenderer.invoke('local-project-inspect', folder),
+  localProjectDevelopmentTasks: (folder) => ipcRenderer.invoke('local-project-development-tasks', folder),
+  localProjectDevelopmentStart: (options) => ipcRenderer.invoke('local-project-development-start', options),
   workspaceDirectoryList: (folder, relative = '') => ipcRenderer.invoke('workspace-directory-list', { root: folder, path: relative }),
   workspaceDirectoryPrepare: (root, refresh) => ipcRenderer.invoke('workspace-directory-prepare', { root, refresh }),
   workspaceDirectorySearch: (root, query) => ipcRenderer.invoke('workspace-directory-search', { root, query }),
   workspaceGitStatus: (root) => ipcRenderer.invoke('workspace-git-status', root),
   workspaceGitCommitFiles: (root, hash) => ipcRenderer.invoke('workspace-git-commit-files', { root, hash }),
   workspaceGitDiff: (root, file, hash) => ipcRenderer.invoke('workspace-git-diff', { root, file, hash }),
+  workspaceGitCommit: (root, files, message) => ipcRenderer.invoke('workspace-git-commit', { root, files, message }),
   localFileOpen: (root, relative, mode, label, options) => ipcRenderer.invoke('local-file-open', { root, path: relative, mode, label, compareHead: options?.compareHead === true }),
   localFileReveal: (root, relative) => ipcRenderer.invoke('local-file-reveal', { root, path: relative }),
   workspaceGitLog: (folder, allBranches) => ipcRenderer.invoke('workspace-git-log', { folder, allBranches }),
@@ -194,6 +197,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentMessagesSnapshot: () => ipcRenderer.invoke('agent-messages-state'),
   agentMessageSetRole: (id, role) => ipcRenderer.invoke('agent-message-set-role', id, role),
   browserReviewOpen: () => ipcRenderer.invoke('browser-review-open'),
+  browserReviewOpenWorkspace: (root, relative) => ipcRenderer.invoke('browser-review-open-workspace', root, relative),
   browserReviewOpenLink: (address, destination) => ipcRenderer.invoke('browser-review-open-link', address, destination),
   onBrowserReviewLinkOpened: (callback) => {
     const listener = (_event, id) => callback(id);
@@ -263,7 +267,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentChatReadClipboard: (shellId) => ipcRenderer.invoke('agent-chat-read-clipboard', shellId),
   agentChatPickImages: (shellId) => ipcRenderer.invoke('agent-chat-pick-images', shellId),
   agentChatRemoveImage: (shellId, imageId) => ipcRenderer.send('agent-chat-remove-image', { shellId, imageId }),
-  agentChatSend: (shellId, text, imageIds, retry) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageIds, retry }),
+  agentChatSend: (shellId, text, imageIds, retry, forceToken) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageIds, retry, forceToken }),
   agentChatMcpLogin: (shellId, summaryId, server) => ipcRenderer.invoke('agent-chat-mcp-login', { shellId, summaryId, server }),
   agentChatMcpVerbose: (shellId, summaryId) => ipcRenderer.invoke('agent-chat-mcp-verbose', { shellId, summaryId }),
   agentChatToggleSpeed: (shellId, speed) => ipcRenderer.invoke('agent-chat-toggle-speed', { shellId, speed }),

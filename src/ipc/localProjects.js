@@ -4,6 +4,7 @@ const fs = require('fs')
 const path = require('path')
 const { requireLocalDirectory } = require('../localShell.js')
 const { createDirectorySearch } = require('../localFiles/search.js')
+const { inspectDevelopmentTasks, prepareDevelopmentTask } = require('./localDevelopmentTasks.js')
 
 const exec = promisify(execFile)
 const DIRECTORY_LIMIT = 1000
@@ -192,7 +193,7 @@ function requireSearchQuery(value) {
  * `roots` (src/localFiles/roots.js) checks the folders the workspace panel reads, `git` is
  * src/localFiles/git.js. Requests name a root and a path relative to it.
  */
-function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = null, git: localGit = null }) {
+function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = null, git: localGit = null, gitCommit = null, openDevelopmentTask }) {
   const directorySearch = createDirectorySearch()
   let searchGeneration = 0
   let preparation = 0
@@ -232,6 +233,39 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
   }
   handle('local-project-inspect', '폴더의 Git 정보를 읽지 못했습니다.', inspectLocalProject)
   handle('local-worktree-create', '워크트리를 만들지 못했습니다.', createLocalWorktree)
+  if (openDevelopmentTask) {
+    const preparing = new Map()
+    const canLaunch = event => fromMainWindow(event) && event.senderFrame === event.sender.mainFrame && !isLocked()
+    const startError = error => ({ success: false, error })
+    const locked = '잠금 해제 후 본창에서 이용할 수 있습니다.'
+    ipcMain.handle('local-project-development-tasks', async (event, folder) => {
+      if (!canLaunch(event)) return startError(locked)
+      try {
+        const { tasks } = await inspectDevelopmentTasks(folder)
+        return canLaunch(event) ? { success: true, tasks } : startError(locked)
+      } catch (error) {
+        return startError(error.code ? '기동할 프로젝트를 읽지 못했습니다.' : error.message)
+      }
+    })
+    ipcMain.handle('local-project-development-start', async (event, request) => {
+      if (!canLaunch(event)) return startError(locked)
+      const { folder, id, includeSource, install, cols, rows } = request ?? {}
+      if (typeof folder !== 'string' || typeof id !== 'string' || id.length > 300) return startError('기동할 프로젝트를 선택해 주세요.')
+      const normalized = path.normalize(folder)
+      const key = process.platform === 'win32' ? normalized.toLowerCase() : normalized
+      if (preparing.has(key)) return startError('이 작업의 기동 준비가 진행 중입니다.')
+      preparing.set(key, true)
+      try {
+        const task = await prepareDevelopmentTask(folder, id, {
+          includeSource: includeSource === true, install: install === true, allowed: () => canLaunch(event)
+        })
+        if (!canLaunch(event)) return startError(locked)
+        return { success: true, ...openDevelopmentTask(task, { cols, rows }) }
+      } catch (error) {
+        return startError(error.stderr?.trim().slice(0, 300) || (error.code ? '개발 서버를 기동하지 못했습니다.' : error.message))
+      } finally { preparing.delete(key) }
+    })
+  }
   // A folder inside the panel's root ({ root, path }); a bare string is the root itself (older windows)
   handle('workspace-directory-list', '폴더 목록을 읽지 못했습니다.', async (input) => {
     if (!roots) return listWorkspaceDirectory(input)
@@ -245,6 +279,22 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
     // `file` is relative to the repository top (as the status and commit lists give it)
     handle('workspace-git-diff', '변경 내용을 읽지 못했습니다.', async ({ root, hash, file } = {}) =>
       localGit.fileDiff(await roots.resolveRoot(root), { hash: hash || undefined, file }))
+  }
+  if (roots && gitCommit) {
+    // The panel's one write (docs/plan/2026-11-24-workspace-git-commit.md): only the main window's own
+    // frame, unlocked. The window names files of the change list; gitCommit checks them against Git.
+    const canCommit = event => fromMainWindow(event) && event.senderFrame === event.sender.mainFrame && !isLocked()
+    const locked = { success: false, error: '잠금 해제 후 본창에서 이용할 수 있습니다.' }
+    ipcMain.handle('workspace-git-commit', async (event, { root, files, message } = {}) => {
+      if (!canCommit(event)) return locked
+      try {
+        // Narrower than reading: a repository of an open shell (or one inside it), not any folder below one
+        const result = await gitCommit.commitSelected(await roots.resolveRepoRoot(root), { files, message })
+        return { success: true, ...result }
+      } catch (error) {
+        return { success: false, error: error.userMessage || '커밋하지 못했습니다.' }
+      }
+    })
   }
   handle('workspace-git-log', 'Git 기록을 읽지 못했습니다.', async input => {
     const { folder, allBranches } = typeof input === 'string' ? { folder: input } : input ?? {}

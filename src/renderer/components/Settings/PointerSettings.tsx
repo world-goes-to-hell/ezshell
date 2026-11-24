@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { CURSOR_SETS, CURSOR_SIZES, type CursorSet, type CursorSize } from '../../lib/pointerCursors'
-import { cursorImageUrl } from '../../lib/pointerAppearance'
+import { cursorImageUrl, ghostCursor } from '../../lib/pointerAppearance'
 import {
   DEFAULT_POINTER_PREFS, getPointerPrefs, setPointerPrefs, subscribePointerPrefs,
   type ClickEffect, type EffectLevel, type MoveEffect, type PointerPrefs
@@ -89,6 +89,8 @@ function useEffectPreview(group: 'move' | 'click', id: string, reduced: boolean)
       moveLevel: 2, clickLevel: 2, moveOnTerminal: true, clickOnTerminal: true
     }
     const state = createEffectState()
+    const previewGhost = config.move === 'ghost' ? ghostCursor(getPointerPrefs().set, 'default', 32) : null
+    const clickY = id === 'word' ? height - 3 : height * 0.55
     const start = performance.now()
     let last = start
     let lastClick = -Infinity
@@ -100,10 +102,11 @@ function useEffectPreview(group: 'move' | 'click', id: string, reduced: boolean)
       const elapsed = now - start
       if (group === 'move' && elapsed < PREVIEW_MS) {
         const phase = (elapsed % 1500) / 1500
-        addMove(state, config.move as MoveEffect, 14 + phase * (width - 28), height / 2 + Math.sin(phase * 9.4) * height * 0.26, now, 2, ink, dark, true)
+        addMove(state, config.move as MoveEffect, 14 + phase * (width - 28), height / 2 + Math.sin(phase * 9.4) * height * 0.26, now, 2, ink, dark, true,
+          previewGhost ? () => previewGhost : undefined)
       } else if (group === 'click' && elapsed < PREVIEW_MS && now - lastClick > 850) {
         lastClick = now
-        addClick(state, config.click as ClickEffect, width * 0.5 + (Math.random() - 0.5) * width * 0.3, height * 0.55, now, 2, ink, dark)
+        addClick(state, config.click as ClickEffect, width * 0.5 + (Math.random() - 0.5) * width * 0.3, clickY, now, 2, ink, dark)
       }
       drawFrame(ctx, state, width, height, now, dt, config)
       if (elapsed < PREVIEW_MS || (needsFrame(state, config) && elapsed < PREVIEW_MS + PREVIEW_TAIL_MS)) {
@@ -130,10 +133,7 @@ function EffectCard<T extends string>({ group, info, selected, reduced, onPick }
         <span className="pointer-effect-icon" aria-hidden="true" dangerouslySetInnerHTML={{ __html: info.icon }} />
         {info.id !== 'none' && <canvas ref={canvasRef} className="pointer-effect-canvas" aria-hidden="true" />}
       </span>
-      <span className="pointer-card-name">
-        {info.name}
-        {info.tag && <span className="pointer-card-tag" data-tag={info.tag}>{info.tag === 'practical' ? '실용' : '귀염'}</span>}
-      </span>
+      <span className="pointer-card-name">{info.name}</span>
       <span className="pointer-card-desc">{info.description}</span>
     </button>
   )
@@ -154,30 +154,36 @@ function Row({ title, hint, children }: { title: string; hint: string; children:
 const levelOptions = ([1, 2, 3] as const).map(value => ({ value, label: LEVEL_LABELS[value] }))
 const terminalOptions = [{ value: true, label: '켜기' }, { value: false, label: '끄기' }] as const
 
-export function PointerSettings() {
+export function PointerShapeSettings() {
+  const prefs = usePointerPrefs()
+
+  return (
+    <div className="pointer-settings">
+      <p className="settings-section-desc">앱 안에서 쓰는 화살표, 손가락, 글자 입력 포인터의 모양과 크기를 고릅니다.</p>
+      <div className="pointer-cards" role="radiogroup" aria-label="포인터 모양">
+        {CURSOR_SETS.map(item => (
+          <SetCard key={item.id} set={item} selected={prefs.set === item.id} onPick={() => setPointerPrefs({ set: item.id })} />
+        ))}
+      </div>
+      <Row title="포인터 크기" hint="기본 32px · 크게 48px · 아주 크게 64px (시스템 기본 모양은 크기 설정을 따르지 않음). 크게·아주 크게는 그림이 창 밖으로 나가는 가장자리 근처에서 시스템 포인터로 바뀝니다">
+        <Segment label="포인터 크기" value={prefs.size} onChange={size => setPointerPrefs({ size })}
+          options={CURSOR_SIZES.map(value => ({ value, label: SIZE_LABELS[value] }))} />
+      </Row>
+      <p className="pointer-note">터미널 안에서는 글자 입력(I-beam) 모양을 유지합니다. 선택한 세트의 I-beam 으로 바뀔 뿐, 모양의 역할은 그대로입니다.</p>
+    </div>
+  )
+}
+
+export function PointerEffectSettings() {
   const prefs = usePointerPrefs()
   const reduced = useReducedMotion()
   const set = (patch: Partial<PointerPrefs>) => setPointerPrefs(patch)
   const reducedNote = reduced && ((prefs.move !== 'none' && prefs.move !== 'spot') || prefs.click !== 'none')
-  const setCards = (kind: CursorSet['kind']) => CURSOR_SETS.filter(item => item.kind === kind).map(item => (
-    <SetCard key={item.id} set={item} selected={prefs.set === item.id} onPick={() => set({ set: item.id })} />
-  ))
 
   return (
     <div className="pointer-settings">
-      <h4 className="pointer-group-title">포인터 모양 <span>화살표 · 손가락 · 글자 입력 모양을 미리 봅니다</span></h4>
-      <h4 className="pointer-subtitle"><span className="pointer-tag">실용</span><span>잘 보이고 정확하게</span></h4>
-      <div className="pointer-cards" role="radiogroup" aria-label="실용 포인터">{setCards('practical')}</div>
-      <h4 className="pointer-subtitle"><span className="pointer-tag">귀염 뽀짝</span><span>기분 전환용</span></h4>
-      <div className="pointer-cards" role="radiogroup" aria-label="귀염 포인터">{setCards('cute')}</div>
-      <Row title="포인터 크기" hint="기본 32px · 크게 48px · 아주 크게 64px (시스템 기본 모양은 크기 설정을 따르지 않음). 크게·아주 크게는 그림이 창 밖으로 나가는 가장자리 근처에서 시스템 포인터로 바뀝니다">
-        <Segment label="포인터 크기" value={prefs.size} onChange={size => set({ size })}
-          options={CURSOR_SIZES.map(value => ({ value, label: SIZE_LABELS[value] }))} />
-      </Row>
-      <p className="pointer-note">터미널 안에서는 글자 입력(I-beam) 모양을 유지합니다. 선택한 세트의 I-beam 으로 바뀔 뿐, 모양의 역할은 그대로입니다.</p>
-
-      <h4 className="pointer-group-title pointer-effects-title">마우스 효과 <span>‘움직일 때’와 ‘누를 때’를 따로 골라 함께 쓸 수 있습니다. 카드에 올리면 미리 보기</span></h4>
-      <h4 className="pointer-subtitle"><span className="pointer-tag">움직일 때</span><span>포인터를 움직이면 따라오는 효과</span></h4>
+      <p className="settings-section-desc">움직일 때와 누를 때의 효과를 따로 고릅니다. 카드에 마우스를 올리면 미리 볼 수 있습니다.</p>
+      <h4 className="pointer-subtitle">움직일 때 효과</h4>
       <div className="pointer-cards" role="radiogroup" aria-label="움직일 때 효과">
         {MOVE_EFFECT_CARDS.map(info => (
           <EffectCard key={info.id} group="move" info={info} selected={prefs.move === info.id} reduced={reduced} onPick={() => set({ move: info.id })} />
@@ -190,7 +196,7 @@ export function PointerSettings() {
         <Segment label="움직일 때 효과 터미널 위" value={prefs.moveOnTerminal} options={terminalOptions} onChange={moveOnTerminal => set({ moveOnTerminal })} />
       </Row>
 
-      <h4 className="pointer-subtitle"><span className="pointer-tag">누를 때</span><span>클릭하는 순간 나오는 효과</span></h4>
+      <h4 className="pointer-subtitle">누를 때 효과</h4>
       <div className="pointer-cards" role="radiogroup" aria-label="누를 때 효과">
         {CLICK_EFFECT_CARDS.map(info => (
           <EffectCard key={info.id} group="click" info={info} selected={prefs.click === info.id} reduced={reduced} onPick={() => set({ click: info.id })} />
@@ -210,7 +216,7 @@ export function PointerSettings() {
       )}
       <p className="pointer-note">움직일 때와 누를 때는 서로 독립이라 예를 들어 '고양이 발자국 + 톡! 말풍선'처럼 섞을 수 있습니다. 효과는 앱 화면 위에 투명 캔버스 하나만 얹으며 클릭을 막지 않고, 그릴 것이 없으면 멈춥니다.</p>
       <div className="pointer-actions">
-        <button type="button" className="theme-action-btn" onClick={() => setPointerPrefs(DEFAULT_POINTER_PREFS)}>기본값으로</button>
+        <button type="button" className="theme-action-btn" onClick={() => setPointerPrefs(DEFAULT_POINTER_PREFS)}>포인터 설정 모두 기본값으로</button>
       </div>
     </div>
   )

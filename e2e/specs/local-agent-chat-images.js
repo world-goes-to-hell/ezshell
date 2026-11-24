@@ -139,6 +139,25 @@ async function run() {
       check(`${kind} removing the preview also removes the reference`, await until(`
         !${input}.value && !${widths('.agent-chat-attachment img')} && ${cover}.querySelector('.agent-chat-send').disabled
       `))
+      if (kind === 'claude') {
+        const terminalDraft = 'Claude input left in the terminal'
+        const forcedText = '채팅에서 강제로 보내는 메시지'
+        fs.writeFileSync(file(agent + '-draft'), terminalDraft)
+        await setDraft(forcedText)
+        await sleep(350)
+        await click(...await center(`${cover}.querySelector('.agent-chat-send')`))
+        const forceButton = `${cover}.querySelector('.agent-chat-force-send button')`
+        const offered = await until(`!!${forceButton} && ${input}.value === ${JSON.stringify(forcedText)}`)
+        check('Claude offers force send while preserving both drafts after a normal rejection', offered
+          && !read(agent + '-forced-clear') && read(agent + '-chat-sent') === '1')
+        if (offered) {
+          await click(...await center(forceButton))
+          for (let i = 0; i < 80 && read(agent + '-chat-sent') !== '2'; i++) await sleep(75)
+          check('the force button clears the Claude editor and sends only the new chat draft',
+            read(agent + '-forced-clear') === 'x' && read(agent + '-chat-sent') === '2' && read(agent + '-chat-text') === forcedText
+            && await until(`!${forceButton} && !${input}.value`))
+        }
+      }
     }
   } finally { driver.close() }
 }

@@ -17,7 +17,6 @@ type Shapes = Record<CursorState, Shape>
 
 export interface CursorSet {
   id: CursorSetId
-  kind: 'practical' | 'cute'
   name: string
   description: string
   /** The OS pointer: nothing is replaced (the cards still show a drawing of it) */
@@ -189,50 +188,50 @@ const PIXEL: Shapes = {
 
 export const CURSOR_SETS: readonly CursorSet[] = [
   {
-    id: 'system', kind: 'practical', name: '시스템 기본', description: 'OS 의 모양 그대로. 바꾸지 않음', system: true,
+    id: 'system', name: '시스템 기본', description: 'OS 의 모양 그대로. 바꾸지 않음', system: true,
     shapes: vectorSet({ fill: '#fff', stroke: '#000', sw: 1.2, line: '#222', lineOutline: '#fff' })
   },
   {
-    id: 'big', kind: 'practical', name: '큼직한 화살표', description: '흰 몸통에 굵은 검정 테두리. 어떤 배경에서도 잘 보임',
+    id: 'big', name: '큼직한 화살표', description: '흰 몸통에 굵은 검정 테두리. 어떤 배경에서도 잘 보임',
     shapes: vectorSet({ fill: '#fff', stroke: '#111', sw: 2, line: '#fff', accent: '#ff7a00', k: 1.15, lw: 3 })
   },
   {
-    id: 'contrast', kind: 'practical', name: '고대비', description: '검정 몸통 + 노랑 테두리. 시력이 낮거나 화면 공유용',
+    id: 'contrast', name: '고대비', description: '검정 몸통 + 노랑 테두리. 시력이 낮거나 화면 공유용',
     shapes: vectorSet({ fill: '#000', stroke: '#ffe600', sw: 2, line: '#000', accent: '#fff', bad: '#ff3355', k: 1.1, lw: 3 })
   },
   {
-    id: 'fine', kind: 'practical', name: '정밀', description: '가는 선, 작은 화살표. 칸 맞추기·캡처에 알맞음',
+    id: 'fine', name: '정밀', description: '가는 선, 작은 화살표. 칸 맞추기·캡처에 알맞음',
     shapes: vectorSet({ fill: '#fff', stroke: '#111', sw: 1, line: '#fff', lineOutline: '#111', accent: '#e5253b', k: 0.9, lw: 1.3, ring: true })
   },
   {
-    id: 'paw', kind: 'cute', name: '고양이 발바닥', description: '분홍 젤리 발바닥이 손가락 자리에',
+    id: 'paw', name: '고양이 발바닥', description: '분홍 젤리 발바닥이 손가락 자리에',
     shapes: vectorSet({ fill: '#fff3e6', stroke: '#7b4b3a', sw: 1.8, line: '#fff3e6', accent: '#ff8fab', bad: '#e5575f', join: 'round', cap: 'round', lw: 2.6, k: 1.05 }, t => ({
       default: { svg: t.arrow('<g fill="#ff8fab"><circle cx="8.9" cy="9.5" r="1.1"/><circle cx="8.9" cy="13.3" r="1.1"/><circle cx="8.9" cy="17.1" r="1.1"/></g>', t.o.k, '#ffd9b8'), hotspot: [ARROW_TIP, ARROW_TIP] },
       pointer: { svg: t.two('<ellipse cx="16" cy="21.5" rx="7.2" ry="5.8"/><circle cx="8.4" cy="15" r="3.1"/><circle cx="13.2" cy="9.6" r="3.3"/><circle cx="19.2" cy="9.6" r="3.3"/><circle cx="24" cy="15" r="3.1"/>', '#ffc2d1'), hotspot: [16, 8] }
     }))
   },
   {
-    id: 'jelly', kind: 'cute', name: '말랑 젤리', description: '둥글둥글 파스텔. 통통한 테두리',
+    id: 'jelly', name: '말랑 젤리', description: '둥글둥글 파스텔. 통통한 테두리',
     shapes: vectorSet({ fill: '#ffb8d9', stroke: '#d1569a', sw: 2.2, line: '#cfe3ff', lineOutline: '#5c6bc0', accent: '#7be0c3', bad: '#ff6b81', join: 'round', cap: 'round', k: 1.1, lw: 3.2 }, t => ({
       default: { svg: t.arrow('<ellipse cx="8.6" cy="10" rx="1.1" ry="2.8" fill="#fff" opacity=".75" transform="rotate(-8 8.6 10)"/>'), hotspot: [ARROW_TIP, ARROW_TIP] },
       pointer: { svg: t.two(t.handShape, '#a8f0d8') + '<ellipse cx="13.4" cy="8" rx="1" ry="3" fill="#fff" opacity=".75"/><ellipse cx="12" cy="20" rx="1.6" ry="2.6" fill="#fff" opacity=".6"/>', hotspot: [13.5, 3] }
     }))
   },
   {
-    id: 'star', kind: 'cute', name: '별사탕 · 반짝 별', description: '노란 화살표에 반짝이, 손가락은 별',
+    id: 'star', name: '별사탕 · 반짝 별', description: '노란 화살표에 반짝이, 손가락은 별',
     shapes: vectorSet({ fill: '#ffe066', stroke: '#c27a00', sw: 1.8, line: '#fff7c2', lineOutline: '#c27a00', accent: '#ff9ecb', bad: '#ff5c7a', join: 'round', cap: 'round', k: 1.05, lw: 2.6 }, t => ({
       default: { svg: t.arrow('') + `<path d="${sparkle(24, 24, 5)}" fill="#fff" stroke="#c27a00" stroke-width=".9" stroke-linejoin="round"/>`, hotspot: [ARROW_TIP, ARROW_TIP] },
       pointer: { svg: t.two(`<path d="${star(16, 17, 13, 5.6)}"/>`, '#ffe066') + `<path d="${sparkle(25, 6, 3)}" fill="#fff" stroke="#c27a00" stroke-width=".7"/>`, hotspot: [16, 16] }
     }))
   },
   {
-    id: 'heart', kind: 'cute', name: '하트', description: '분홍 화살표 + 하트. 손가락 자리는 큰 하트',
+    id: 'heart', name: '하트', description: '분홍 화살표 + 하트. 손가락 자리는 큰 하트',
     shapes: vectorSet({ fill: '#ff7aa8', stroke: '#b02a5c', sw: 1.8, line: '#ffd1e0', lineOutline: '#b02a5c', accent: '#ff4f8b', bad: '#7a1d3d', join: 'round', cap: 'round', k: 1.05, lw: 2.6 }, t => ({
       default: { svg: t.arrow('') + `<path d="${heartPath(24, 22, 0.62)}" fill="#fff" stroke="#b02a5c" stroke-width="1" stroke-linejoin="round"/>`, hotspot: [ARROW_TIP, ARROW_TIP] },
       pointer: { svg: t.two(`<path d="${heartPath(16, 15, 1.12)}"/>`, '#ff7aa8') + '<ellipse cx="10.5" cy="11.5" rx="2" ry="1.3" fill="#fff" opacity=".7" transform="rotate(-30 10.5 11.5)"/>', hotspot: [16, 16] }
     }))
   },
-  { id: 'pixel', kind: 'cute', name: '픽셀 레트로', description: '8비트 도트. 또렷한 계단 모양', shapes: PIXEL }
+  { id: 'pixel', name: '픽셀 레트로', description: '8비트 도트. 또렷한 계단 모양', shapes: PIXEL }
 ]
 
 export function cursorSet(id: CursorSetId): CursorSet {

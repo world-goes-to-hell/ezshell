@@ -1,11 +1,15 @@
-// Git details of the workspace panel: the changes not committed yet (staged, changed, new) and the files
-// of a commit. A file row opens its diff in place; a file that exists opens in the file window too.
+// Git details of the workspace panel: the changes not committed yet (staged, changed, new) with boxes to
+// pick what to commit, and the files of a commit. A file row opens its diff in place; a file that exists
+// opens in the file window too.
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { RiArrowDownSLine, RiArrowRightSLine, RiExternalLinkLine, RiFolderLine, RiFolderOpenLine, RiGitBranchLine } from 'react-icons/ri'
 import type { WorkspaceGitFile, WorkspaceGitStatus } from '../../types'
 import { FILE_KIND_LABELS, FILE_KIND_MARKS, splitPath } from '../../lib/workspaceDetails'
 import { buildChangeTree, formatCount, mergeChanges, totalLines, type ChangeNode, type ChangedFile } from '../../lib/gitChangeTree'
+import { checkState, isSelectable, selectablePaths, toggleOne, togglePaths, type CheckState } from '../../lib/gitCommitSelection'
+import { draftOf, useGitCommitStore } from '../../stores/gitCommitStore'
 import { GitDiffBlock, openWorkspaceFile, useWorkspaceFileMenu } from './WorkspaceDetails'
+import { GitCommitBox } from './GitCommitBox'
 
 interface FileRowProps {
   root: string
@@ -15,6 +19,8 @@ interface FileRowProps {
   label: string
   /** In the folder tree: the depth (indent) and the lines added / removed; the folder is not repeated */
   tree?: { depth: number; changed: ChangedFile }
+  /** The file's box in the change list */
+  select?: { checked: boolean; disabled: boolean; onToggle: () => void }
 }
 
 /** "+12 −3" of a file; nothing for a binary file */
@@ -28,7 +34,7 @@ function LineCounts({ added, removed }: { added: number | null; removed: number 
   )
 }
 
-function GitFileRow({ root, file, hash, label, tree }: FileRowProps) {
+function GitFileRow({ root, file, hash, label, tree, select }: FileRowProps) {
   const [isOpen, setIsOpen] = useState(false)
   const split = splitPath(file.path)
   const name = split.name
@@ -45,6 +51,11 @@ function GitFileRow({ root, file, hash, label, tree }: FileRowProps) {
     <li className="workspace-git-file" data-kind={file.kind} data-path={file.path}>
       <div className="workspace-git-file-row" style={tree ? { '--workspace-tree-depth': tree.depth } as CSSProperties : undefined}
         onContextMenu={canOpen ? openMenu : undefined}>
+        {select && (
+          <CheckBox state={select.checked ? 'all' : 'none'} disabled={select.disabled} onToggle={select.onToggle}
+            label={`${file.path} 선택`} title={file.kind === 'conflict' ? '충돌을 해결한 뒤 커밋할 수 있습니다'
+              : file.path.endsWith('/') ? '이 저장소 안의 다른 저장소는 여기서 커밋할 수 없습니다' : undefined} />
+        )}
         <button
           type="button"
           className="workspace-git-file-toggle"
@@ -77,27 +88,58 @@ function GitFileRow({ root, file, hash, label, tree }: FileRowProps) {
   )
 }
 
+/** A file's or a folder's box; a folder with some files ticked shows the mixed state */
+function CheckBox({ state, disabled = false, label, title, onToggle }: {
+  state: CheckState; disabled?: boolean; label: string; title?: string; onToggle: () => void
+}) {
+  return (
+    <input type="checkbox" className="workspace-git-check" checked={state === 'all'} disabled={disabled}
+      ref={element => { if (element) element.indeterminate = state === 'some' }}
+      aria-label={label} title={title} onChange={onToggle} />
+  )
+}
+
+interface TreeSelection {
+  selected: ReadonlySet<string>
+  disabled: boolean
+  onFile: (path: string) => void
+  onPaths: (paths: readonly string[]) => void
+}
+
 /** The changes as folders → files: folders open by default, a folder row folds what is under it */
-function ChangeTree({ nodes, root, label, depth, folded, onFold }: {
-  nodes: ChangeNode[]; root: string; label: string; depth: number; folded: ReadonlySet<string>; onFold: (path: string) => void
+function ChangeTree({ nodes, root, label, depth, folded, onFold, selection }: {
+  nodes: ChangeNode[]; root: string; label: string; depth: number; folded: ReadonlySet<string>; onFold: (path: string) => void; selection: TreeSelection
 }) {
   return (
     <ul className="workspace-git-files is-tree">
       {nodes.map(node => {
-        if (node.kind === 'file') return <GitFileRow key={node.path} root={root} file={node.file} label={label} tree={{ depth, changed: node.file }} />
+        if (node.kind === 'file') {
+          const canSelect = isSelectable(node.file)
+          return (
+            <GitFileRow key={node.path} root={root} file={node.file} label={label} tree={{ depth, changed: node.file }} select={{
+              checked: canSelect && selection.selected.has(node.path),
+              disabled: selection.disabled || !canSelect,
+              onToggle: () => selection.onFile(node.path)
+            }} />
+          )
+        }
         const isOpen = !folded.has(node.path)
         const Chevron = isOpen ? RiArrowDownSLine : RiArrowRightSLine
         const Icon = isOpen ? RiFolderOpenLine : RiFolderLine
+        const paths = selectablePaths(node)
         return (
           <li key={node.path} className="workspace-git-folder" data-path={node.path}>
-            <button type="button" className="workspace-git-folder-row" aria-expanded={isOpen} onClick={() => onFold(node.path)}
-              style={{ '--workspace-tree-depth': depth } as CSSProperties} title={node.path}>
-              <Chevron size={14} className="workspace-tree-chevron" aria-hidden="true" />
-              <Icon size={14} className="workspace-git-folder-icon" aria-hidden="true" />
-              <span className="workspace-git-folder-name" dir="auto">{node.name}</span>
-              <span className="workspace-git-folder-count" title={`바뀐 파일 ${node.count}개`}>{node.count}</span>
-            </button>
-            {isOpen && <ChangeTree nodes={node.children} root={root} label={label} depth={depth + 1} folded={folded} onFold={onFold} />}
+            <div className="workspace-git-folder-line" style={{ '--workspace-tree-depth': depth } as CSSProperties}>
+              <CheckBox state={checkState(paths, selection.selected)} disabled={selection.disabled || paths.length === 0}
+                label={`${node.path} 폴더의 파일 모두 선택`} onToggle={() => selection.onPaths(paths)} />
+              <button type="button" className="workspace-git-folder-row" aria-expanded={isOpen} onClick={() => onFold(node.path)} title={node.path}>
+                <Chevron size={14} className="workspace-tree-chevron" aria-hidden="true" />
+                <Icon size={14} className="workspace-git-folder-icon" aria-hidden="true" />
+                <span className="workspace-git-folder-name" dir="auto">{node.name}</span>
+                <span className="workspace-git-folder-count" title={`바뀐 파일 ${node.count}개`}>{node.count}</span>
+              </button>
+            </div>
+            {isOpen && <ChangeTree nodes={node.children} root={root} label={label} depth={depth + 1} folded={folded} onFold={onFold} selection={selection} />}
           </li>
         )
       })}
@@ -107,10 +149,14 @@ function ChangeTree({ nodes, root, label, depth, folded, onFold }: {
 
 type Load<T> = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; value: T }
 
-/** The changes since the last commit, read again when `revision` changes (the panel's refresh) */
-export function UncommittedChanges({ folder, revision, label }: { folder: string; revision: number; label: string }) {
+const NOTHING: ReadonlySet<string> = new Set()
+
+/**
+ * The "변경" tab's list: the changes since the last commit as a folder tree with boxes, and the commit
+ * box for the ticked files. Read again when `revision` changes (refresh, and after a commit).
+ */
+export function ChangeList({ folder, revision, label, onCommitted }: { folder: string; revision: number; label: string; onCommitted: () => void }) {
   const [state, setState] = useState<Load<WorkspaceGitStatus | null>>({ status: 'loading' })
-  const [isOpen, setIsOpen] = useState(true)
   // Folded folders of the tree (open by default); kept across refreshes
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set())
   const fold = (path: string) => setFolded(previous => {
@@ -123,6 +169,14 @@ export function UncommittedChanges({ folder, revision, label }: { folder: string
   const files = useMemo(() => (repoValue ? mergeChanges(repoValue.staged, repoValue.changed, repoValue.untracked, repoValue.stats) : []), [repoValue])
   const tree = useMemo(() => buildChangeTree(files), [files])
   const lines = useMemo(() => totalLines(files), [files])
+  const selectable = useMemo(() => selectablePaths(tree), [tree])
+  const top = repoValue?.top ?? null
+  const draft = useGitCommitStore(store => (top ? draftOf(store.repos, top) : null))
+  const applyStatus = useGitCommitStore(store => store.applyStatus)
+  const setSelected = useGitCommitStore(store => store.setSelected)
+  const selected = draft?.selected ?? NOTHING
+  const chosen = useMemo(() => selectable.filter(path => selected.has(path)), [selectable, selected])
+  useEffect(() => { if (top) applyStatus(top, files) }, [top, files, applyStatus])
   useEffect(() => {
     let active = true
     const read = window.electronAPI.workspaceGitStatus
@@ -136,36 +190,49 @@ export function UncommittedChanges({ folder, revision, label }: { folder: string
   if (state.status === 'loading') return <p className="workspace-diff-note">변경 사항을 읽는 중…</p>
   if (state.status === 'error') return <p className="workspace-diff-note is-error">{state.message}</p>
   const repo = state.value
-  if (!repo) return null
+  if (!repo || !top) return null
   const count = files.length
-  const Chevron = isOpen ? RiArrowDownSLine : RiArrowRightSLine
+  const busy = draft?.busy === true
+  const selection: TreeSelection = {
+    selected,
+    disabled: busy,
+    onFile: path => setSelected(top, toggleOne(selected, path)),
+    onPaths: paths => setSelected(top, togglePaths(selected, paths))
+  }
   return (
-    <section className="workspace-uncommitted" data-empty={count === 0 || undefined} data-open={isOpen || undefined} aria-label="커밋하지 않은 변경">
-      <button type="button" className="workspace-uncommitted-head" aria-expanded={isOpen} onClick={() => setIsOpen(open => !open)}>
-        <Chevron size={15} aria-hidden="true" />
-        <span className="workspace-uncommitted-label">커밋하지 않은 변경</span>
-        {count > 0 && (
-          <span className="workspace-uncommitted-lines" title="HEAD 와 비교한 줄 수 (새 파일 포함)">
-            <span className="is-add">+{formatCount(lines.added)}</span>
-            <span className="is-remove">−{formatCount(lines.removed)}</span>
+    <div className="workspace-changes">
+      {count > 0 && <GitCommitBox top={top} paths={chosen} onCommitted={onCommitted} />}
+      <section className="workspace-uncommitted" data-empty={count === 0 || undefined} aria-label="커밋하지 않은 변경">
+        <div className="workspace-uncommitted-head">
+          {count > 0 && <CheckBox state={checkState(selectable, selected)} disabled={busy || selectable.length === 0}
+            label="모든 파일 선택" title="모든 파일 선택 · 해제" onToggle={() => setSelected(top, togglePaths(selected, selectable))} />}
+          <span className="workspace-uncommitted-label">커밋하지 않은 변경</span>
+          {count > 0 && (
+            <span className="workspace-uncommitted-lines" title="HEAD 와 비교한 줄 수 (새 파일 포함)">
+              <span className="is-add">+{formatCount(lines.added)}</span>
+              <span className="is-remove">−{formatCount(lines.removed)}</span>
+            </span>
+          )}
+          <span className="workspace-uncommitted-count" title={count > 0 ? `바뀐 파일 ${count}개 중 ${chosen.length}개 선택` : undefined}>
+            {count === 0 ? '없음' : chosen.length > 0 ? `${chosen.length} / ${count}개` : `${count}개`}
           </span>
+        </div>
+        {/* The header names the branch already; this line is for where it goes */}
+        {count > 0 && repo.branch && repo.upstream && (
+          <div className="workspace-uncommitted-branch" title={`${repo.branch} → ${repo.upstream}`}>
+            <RiGitBranchLine size={12} aria-hidden="true" />
+            <span className="workspace-uncommitted-branch-name">{repo.branch}</span>
+            <span className="workspace-uncommitted-upstream">→ {repo.upstream}</span>
+          </div>
         )}
-        <span className="workspace-uncommitted-count">{count === 0 ? '없음' : `${count}개`}</span>
-      </button>
-      {isOpen && count > 0 && repo.branch && (
-        <div className="workspace-uncommitted-branch" title={repo.upstream ? `${repo.branch} → ${repo.upstream}` : repo.branch}>
-          <RiGitBranchLine size={12} aria-hidden="true" />
-          <span className="workspace-uncommitted-branch-name">{repo.branch}</span>
-          {repo.upstream && <span className="workspace-uncommitted-upstream">→ {repo.upstream}</span>}
-        </div>
-      )}
-      {isOpen && count > 0 && (
-        <div className="workspace-uncommitted-body">
-          <ChangeTree nodes={tree} root={repo.top} label={label} depth={0} folded={folded} onFold={fold} />
-          {repo.truncated && <p className="workspace-diff-note">변경이 많아 일부만 표시했습니다.</p>}
-        </div>
-      )}
-    </section>
+        {count > 0 ? (
+          <div className="workspace-uncommitted-body">
+            <ChangeTree nodes={tree} root={repo.top} label={label} depth={0} folded={folded} onFold={fold} selection={selection} />
+            {repo.truncated && <p className="workspace-diff-note">변경이 많아 일부만 표시했습니다 (표시된 파일만 커밋할 수 있습니다).</p>}
+          </div>
+        ) : <p className="workspace-diff-note">마지막 커밋 뒤로 바뀐 파일이 없습니다.</p>}
+      </section>
+    </div>
   )
 }
 

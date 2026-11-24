@@ -20,6 +20,7 @@ import { useProjectServers } from '../../hooks/useProjectServers'
 import { railCounts } from '../../lib/sidebarRail'
 import { groupTabsBySession } from '../../lib/sessionTabs'
 import type { TabGroupView } from '../../hooks/useTabGroups'
+import type { LocalDevelopmentTask } from '../../types'
 import './SidebarTree.css'
 
 const TOGGLE_SHORTCUT_ID = 'toggle-sidebar'
@@ -39,11 +40,12 @@ interface SidebarProps {
   onLocalTerminal?: (button: HTMLButtonElement) => void
   /** Opens a local terminal in a worktree of the local tree */
   onLocalFolder?: (cwd: string, workspaceLabel: string) => void
+  onStartDevelopmentTask?: (folder: string, task: LocalDevelopmentTask) => void
   /** Closes a tab; used by the local terminal list */
   onCloseTerminal?: (terminalId: string) => void
 }
 
-export function Sidebar({ tabGroupView, onNewConnection, onQuickConnect, onConnectProjectSession, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onImportSession, onLocalTerminal, onLocalFolder, onCloseTerminal }: SidebarProps) {
+export function Sidebar({ tabGroupView, onNewConnection, onQuickConnect, onConnectProjectSession, onEditSession, onDuplicateSession, onOpenQuickConnect, onAddSession, onImportSession, onLocalTerminal, onLocalFolder, onStartDevelopmentTask, onCloseTerminal }: SidebarProps) {
   const { sidebarMode, toggleSidebarMode, setSidebarMode } = useUIStore()
   const zenMode = useUIStore(state => state.zenMode)
   const { addFolder, saveToBackend } = useSessionStore()
@@ -236,6 +238,7 @@ export function Sidebar({ tabGroupView, onNewConnection, onQuickConnect, onConne
                 onOpen={onLocalTerminal}
                 onClose={onCloseTerminal}
                 onOpenFolder={onLocalFolder}
+                onStartDevelopmentTask={onStartDevelopmentTask}
                 onConnectSession={onConnectProjectSession}
               />
             )}

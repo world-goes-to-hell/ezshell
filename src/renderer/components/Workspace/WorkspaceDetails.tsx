@@ -1,10 +1,10 @@
 // The parts of the workspace panel that open things (docs/plan/2026-11-19-workspace-files-and-git-details.md):
 // the folder tree that expands in place and opens files in the file window, and the diff of one file.
-import { useEffect, useState, type CSSProperties, type MouseEvent } from 'react'
-import { RiArrowDownSLine, RiArrowRightSLine, RiFileLine, RiFileTextLine, RiFolderLine, RiFolderOpenLine, RiLinksLine } from 'react-icons/ri'
+import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
+import { RiArrowDownSLine, RiArrowRightSLine, RiFileLine, RiFileTextLine, RiFolderLine, RiFolderOpenLine, RiGlobalLine, RiLinksLine } from 'react-icons/ri'
 import type { WorkspaceDirectoryEntry, WorkspaceDirectorySearchResult, WorkspaceGitDiff } from '../../types'
 import { toast } from '../../stores/toastStore'
-import { isMediaFile, joinRelative, diffLineKind, splitPath } from '../../lib/workspaceDetails'
+import { isMediaFile, joinRelative, diffLineKind, revealStep, splitPath } from '../../lib/workspaceDetails'
 import { TerminalContextMenu } from '../Terminal/TerminalContextMenu'
 import './WorkspaceDetails.css'
 
@@ -28,6 +28,7 @@ export async function openWorkspaceFile(root: string, relative: string, label: s
 export function useWorkspaceFileMenu(root: string, relative: string, openFile: () => void) {
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null)
   const reveal = window.electronAPI.localFileReveal
+  const canOpenInBrowser = /(?:^|\/)[^/]+\.(?:html?|xhtml|svg)$/i.test(relative)
   const revealFile = async () => {
     if (!reveal) return
     try {
@@ -43,8 +44,17 @@ export function useWorkspaceFileMenu(root: string, relative: string, openFile: (
     const bounds = event.clientX === 0 && event.clientY === 0 ? event.currentTarget.getBoundingClientRect() : null
     setPosition({ x: bounds?.left ?? event.clientX, y: bounds?.bottom ?? event.clientY })
   }
+  const openInBrowser = async () => {
+    try {
+      const result = await window.electronAPI.browserReviewOpenWorkspace(root, relative)
+      if (!result.success) toast.error('브라우저로 열지 못했습니다', result.error)
+    } catch {
+      toast.error('브라우저로 열지 못했습니다')
+    }
+  }
   const menu = position && (
     <TerminalContextMenu key={`${position.x}:${position.y}`} position={position} groups={[]} onClose={() => setPosition(null)} top={[
+      ...(canOpenInBrowser ? [{ label: '브라우저로 열기', icon: RiGlobalLine, onSelect: () => void openInBrowser() }] : []),
       { label: '파일 탐색기로 열기', icon: RiFolderOpenLine, disabled: !reveal, onSelect: () => void revealFile() },
       { label: 'ezShell로 열기', icon: RiFileTextLine, onSelect: openFile }
     ]} />
@@ -67,8 +77,40 @@ function useListing(root: string, relative: string): Listing {
   return listing
 }
 
+/** A folder the tree opens up to and lights (a chat's folder link); `done` once it is shown */
+export interface TreeReveal {
+  target: string
+  seq: number
+  ignoreCase: boolean
+  done: () => void
+}
+
+export const TreeRevealContext = createContext<TreeReveal | null>(null)
+
+const REVEAL_LIGHT_MS = 1600
+
 function TreeEntry({ root, relative, entry, depth, label, showPath = false }: { root: string; relative: string; entry: WorkspaceDirectoryEntry; depth: number; label: string; showPath?: boolean }) {
   const [isOpen, setIsOpen] = useState(false)
+  const [isLit, setIsLit] = useState(false)
+  const rowRef = useRef<HTMLButtonElement>(null)
+  const reveal = useContext(TreeRevealContext)
+  const step = reveal && entry.kind === 'directory' ? revealStep(relative, reveal.target, reveal.ignoreCase) : null
+  // Folders on the way open (they read their entries then), and the folder itself opens and is lit
+  useEffect(() => {
+    if (!reveal || !step) return
+    setIsOpen(true)
+    if (step !== 'target') return
+    rowRef.current?.scrollIntoView({ block: 'center' })
+    setIsLit(true)
+    reveal.done()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal?.seq, step])
+  // Its own timer: `done` clears the request, which must not cut the light short
+  useEffect(() => {
+    if (!isLit) return
+    const timer = window.setTimeout(() => setIsLit(false), REVEAL_LIGHT_MS)
+    return () => window.clearTimeout(timer)
+  }, [isLit])
   const parent = showPath ? splitPath(relative).folder : ''
   const isFolder = entry.kind === 'directory'
   const openFile = () => void openWorkspaceFile(root, relative, label)
@@ -79,7 +121,8 @@ function TreeEntry({ root, relative, entry, depth, label, showPath = false }: { 
     <li className="workspace-tree-item" data-kind={entry.kind}>
       <button
         type="button"
-        className="workspace-tree-row"
+        ref={rowRef}
+        className={`workspace-tree-row${isLit ? ' is-revealed' : ''}`}
         title={showPath ? relative : isFolder ? entry.name : `${entry.name} 열기`}
         aria-expanded={isFolder ? isOpen : undefined}
         onClick={() => (isFolder ? setIsOpen(open => !open) : openFile())}

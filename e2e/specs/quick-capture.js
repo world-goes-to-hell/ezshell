@@ -15,12 +15,19 @@ const { check, finish } = createChecks()
   const file = name => path.join(profile, name)
   const read = name => fs.existsSync(file(name)) ? fs.readFileSync(file(name), 'utf8') : ''
   const isOverlay = page => page.title === 'ezShell 영역 캡처'
-  const waitFor = async test => {
-    for (let i = 0; i < 100; i++) {
+  const waitFor = async (test, attempts = 100, interval = 100) => {
+    for (let i = 0; i < attempts; i++) {
       if (await test()) return true
-      await sleep(100)
+      await sleep(interval)
     }
     return false
+  }
+  const closeWithEscape = async overlay => {
+    const started = performance.now()
+    // The window can close before CDP acknowledges the key.
+    void overlay.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {})
+    const closed = await waitFor(async () => !(await pages()).some(isOverlay), 32, 25)
+    return { closed, ms: Math.round(performance.now() - started) }
   }
   const openOverlay = async () => {
     fs.writeFileSync(file('capture-request'), '')
@@ -187,11 +194,32 @@ const { check, finish } = createChecks()
     typeof window.electronAPI === 'undefined' &&
       getComputedStyle(document.documentElement).getPropertyValue('--capture-surface').trim() === ${JSON.stringify(initialSurface)}
   `))
-  // The window can close before CDP acknowledges the Escape key.
-  void beforeSelection.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }).catch(() => {})
-  check('Escape closes a new capture before any click or selection', await waitFor(async () => !(await pages()).some(isOverlay)))
+  const firstCancel = await closeWithEscape(beforeSelection)
+  check('Escape promptly closes a new capture before any click or selection', firstCancel.closed, `${firstCancel.ms}ms`)
   beforeSelection.close()
   check('cancelling a new capture leaves the clipboard alone', !fs.existsSync(file('capture-copied')))
+
+  await openLocalAgent(main, 'codex', service)
+  await openLocalAgent(main, 'claude', tools)
+  if (!(await waitFor(() => read('codex-1-tools') && read('claude-2-tools')))) throw new Error('fake agents did not start')
+
+  const holdProjects = file('capture-projects-hold')
+  const loading = await openCapture('')
+  fs.writeFileSync(holdProjects, '')
+  try {
+    await clickButton(loading, '#work')
+    if (!await waitFor(() => fs.existsSync(file('capture-projects-opening')))) throw new Error('Projects did not start loading')
+    const cancelled = await closeWithEscape(loading)
+    check('Escape promptly closes the capture while the project lookup is still held', cancelled.closed, `${cancelled.ms}ms`)
+    if (!cancelled.closed) throw new Error('Escape did not close a capture with a pending project lookup')
+    const fresh = await openOverlay()
+    const nextCancel = await closeWithEscape(fresh)
+    check('the hotkey can open another capture before the old project lookup finishes', nextCancel.closed)
+    fresh.close()
+  } finally {
+    fs.unlinkSync(holdProjects)
+    loading.close()
+  }
 
   const placement = await openOverlay()
   const cases = [
@@ -242,10 +270,6 @@ const { check, finish } = createChecks()
     if (!await waitFor(async () => !(await pages()).some(isOverlay))) throw new Error('the themed capture did not close')
     themed.close()
   }
-
-  await openLocalAgent(main, 'codex', service)
-  await openLocalAgent(main, 'claude', tools)
-  if (!(await waitFor(() => read('codex-1-tools') && read('claude-2-tools')))) throw new Error('fake agents did not start')
 
   const comment = '선택한 화면을 확인해 주세요'
   const overlay = await openCapture(comment)

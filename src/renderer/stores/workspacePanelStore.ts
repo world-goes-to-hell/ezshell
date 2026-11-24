@@ -1,8 +1,22 @@
 import { create } from 'zustand'
 import { WORKSPACE_PANEL_KEY, parseWorkspacePrefs, type WorkspacePanelPrefs, type WorkspaceSection } from '../lib/workspacePanel'
 
+/** A folder a chat link asked the files tree to show (`shellId`: the chat's shell, whose folder is the root) */
+export interface WorkspaceReveal {
+  shellId: string
+  folder: string
+  seq: number
+  at: number
+  /** When the folder cannot be shown in the tree (outside the panel's folder): the file manager */
+  fallback: () => void
+}
+
 interface WorkspacePanelState extends WorkspacePanelPrefs {
   section: WorkspaceSection
+  reveal: WorkspaceReveal | null
+  revealFolder: (request: Omit<WorkspaceReveal, 'seq' | 'at'>) => void
+  /** Clears the request, only if it is still that one */
+  finishReveal: (seq: number) => void
   toggle: () => void
   open: (section?: WorkspaceSection) => void
   close: () => void
@@ -30,6 +44,14 @@ function save(prefs: WorkspacePanelPrefs) {
 export const useWorkspacePanelStore = create<WorkspacePanelState>((set, get) => ({
   ...load(),
   section: 'history',
+  reveal: null,
+  revealFolder: (request) => {
+    set({ isOpen: true, section: 'files', reveal: { ...request, seq: (get().reveal?.seq ?? 0) + 1, at: Date.now() } })
+    save({ isOpen: true, width: get().width })
+  },
+  finishReveal: (seq) => {
+    if (get().reveal?.seq === seq) set({ reveal: null })
+  },
   toggle: () => {
     const isOpen = !get().isOpen
     set({ isOpen })

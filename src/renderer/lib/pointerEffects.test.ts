@@ -1,20 +1,27 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   addClick, addMove, CLICK_CAP, clearEffects, createEffectState, effectiveEffects, keepRunning, MOVE_CAP, needsFrame,
-  pageAllowsEffects, prune, type EffectConfig
+  drawFrame, pageAllowsEffects, prune, type EffectConfig, type GhostCursor
 } from './pointerEffects'
 import { CLICK_EFFECTS, MOVE_EFFECTS } from './pointerPrefs'
+import { PRESET_THEMES } from '../themes/presets'
+import { contrastRatio, type Rgb } from './colorContrast'
+import { inkFor } from './pointerInk'
 
 const config = (patch: Partial<EffectConfig> = {}): EffectConfig => ({
   reduced: false, dark: true, ink: '#4fd1a5', move: 'sparkle', click: 'firework',
   moveLevel: 3, clickLevel: 3, moveOnTerminal: false, clickOnTerminal: true, ...patch
 })
 const page = { hidden: false, focused: true }
+const sprite = (hotspot: GhostCursor['hotspot']): GhostCursor => ({
+  image: { complete: true, naturalWidth: 32 } as HTMLImageElement, hotspot
+})
 
 /** A pointer sweeping far each step, so every effect's distance threshold is passed */
 function sweep(effect: typeof MOVE_EFFECTS[number], steps: number, visible = true) {
   const state = createEffectState()
-  for (let i = 0; i < steps; i++) addMove(state, effect, (i % 2) * 400 + i, i * 3, 1000 + i, 3, '#4fd1a5', true, visible)
+  const arrow = sprite([2, 2])
+  for (let i = 0; i < steps; i++) addMove(state, effect, (i % 2) * 400 + i, i * 3, 1000 + i, 3, '#4fd1a5', true, visible, () => arrow)
   return state
 }
 
@@ -25,7 +32,7 @@ describe('pointer effect limits', () => {
       expect(state.move.length, effect).toBeLessThanOrEqual(MOVE_CAP)
     }
     expect(sweep('rainbow', 500).move.length).toBeLessThanOrEqual(44)
-    expect(sweep('ghost', 500).move.length).toBeLessThanOrEqual(16)
+    expect(sweep('ghost', 500).move.length).toBe(16)
     expect(sweep('paw', 500).move.length).toBeLessThanOrEqual(30)
     expect(sweep('sparkle', 2000).move.length).toBe(MOVE_CAP)
   })
@@ -45,6 +52,37 @@ describe('pointer effect limits', () => {
     addClick(state, 'none', 10, 10, 0, 2, '#4fd1a5', true)
     expect(state.click).toHaveLength(0)
   })
+})
+
+it('draws each ghost with the image and hotspot used where it was recorded', () => {
+  const state = createEffectState()
+  const arrow = sprite([2, 2])
+  const text = sprite([16, 16])
+  addMove(state, 'ghost', 20, 40, 100, 2, '#4fd1a5', true, true, () => arrow)
+  addMove(state, 'ghost', 70, 40, 112, 2, '#4fd1a5', true, true, () => text)
+  const drawImage = vi.fn()
+  const ctx = { clearRect: vi.fn(), save: vi.fn(), restore: vi.fn(), drawImage } as unknown as CanvasRenderingContext2D
+  drawFrame(ctx, state, 160, 90, 128, 16, config({ move: 'ghost', click: 'none' }))
+  expect(drawImage.mock.calls).toEqual([[arrow.image, 18, 38], [text.image, 54, 24]])
+})
+
+it('draws legible word bubbles in every app palette and keeps them inside the canvas', () => {
+  const rgb = (hex: string): Rgb => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)) as Rgb
+  for (const { id, colors } of PRESET_THEMES) {
+    const settings = config({ ...inkFor(colors.accent, colors.bgPrimary), move: 'none', click: 'word' })
+    const state = createEffectState()
+    addClick(state, 'word', 0, 0, 100, settings.clickLevel, settings.ink, settings.dark)
+    const ctx = {
+      clearRect: vi.fn(), save: vi.fn(), restore: vi.fn(), scale: vi.fn(), translate: vi.fn(),
+      beginPath: vi.fn(), roundRect: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), closePath: vi.fn(), stroke: vi.fn(),
+      measureText: () => ({ width: 24 }), fill: vi.fn(() => ctx.fillStyle), fillText: vi.fn(() => ctx.fillStyle), fillStyle: ''
+    }
+    drawFrame(ctx as unknown as CanvasRenderingContext2D, state, 160, 54, 440, 16, settings)
+    const background = ctx.fill.mock.results[0]?.value
+    const text = ctx.fillText.mock.results[0]?.value
+    expect(contrastRatio(rgb(text), rgb(background)), id).toBeGreaterThanOrEqual(4.5)
+    expect(ctx.translate, id).toHaveBeenCalledWith(23, 14)
+  }
 })
 
 describe('when the effect loop stops', () => {

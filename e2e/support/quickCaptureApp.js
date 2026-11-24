@@ -9,12 +9,16 @@ hotkey.createGlobalDoubleTab = ({ onCapture, onCaptureCancel }) => {
   const request = path.join(profile, 'capture-request')
   const cancel = path.join(profile, 'capture-cancel')
   let timer
+  let capturing = false
   return {
     start() {
       timer = setInterval(() => {
         if (fs.existsSync(request)) {
           fs.unlinkSync(request)
-          onCapture()
+          if (!capturing) {
+            capturing = true
+            onCapture()
+          }
         }
         if (fs.existsSync(cancel)) {
           fs.unlinkSync(cancel)
@@ -26,7 +30,7 @@ hotkey.createGlobalDoubleTab = ({ onCapture, onCaptureCancel }) => {
     stop() { clearInterval(timer) },
     setEnabled() {},
     focusCapture() {},
-    endCapture() {}
+    endCapture() { capturing = false }
   }
 }
 
@@ -34,6 +38,16 @@ const capture = require('../../out/main/src/quickCapture.js')
 const createQuickCapture = capture.createQuickCapture
 capture.createQuickCapture = options => createQuickCapture({
   ...options,
+  async repoFolders(cwd) {
+    const hold = path.join(profile, 'capture-projects-hold')
+    if (fs.existsSync(hold)) {
+      fs.writeFileSync(path.join(profile, 'capture-projects-opening'), '')
+      for (let attempt = 0; attempt < 250 && fs.existsSync(hold); attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 20))
+      }
+    }
+    return options.repoFolders(cwd)
+  },
   desktopCapturer: {
     async getSources() {
       const hold = path.join(profile, 'capture-hold')

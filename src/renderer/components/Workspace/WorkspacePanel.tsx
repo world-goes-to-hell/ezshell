@@ -1,18 +1,22 @@
-import { useRef, type KeyboardEvent, type PointerEvent } from 'react'
-import { RiChatHistoryLine, RiCloseLine, RiFolder3Line, RiGitBranchLine } from 'react-icons/ri'
+import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react'
+import { RiChatHistoryLine, RiCloseLine, RiFileEditLine, RiFolder3Line, RiGitBranchLine } from 'react-icons/ri'
 import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
 import { WORKSPACE_DEFAULT_WIDTH, clampWorkspaceWidth, type WorkspaceSection } from '../../lib/workspacePanel'
 import { AgentHistoryPanel } from '../AgentHistory/AgentHistoryPanel'
 import { useWorkspaceDirectory } from '../../hooks/useWorkspaceDirectory'
 import { WorkspaceFiles, WorkspaceGit, WorkspaceNote } from './WorkspaceBrowser'
+import { WorkspaceChanges } from './WorkspaceChanges'
+import { relativeInside } from '../../lib/workspaceDetails'
 import './Workspace.css'
 
 const SECTIONS: ReadonlyArray<{ id: WorkspaceSection; label: string; Icon: typeof RiChatHistoryLine }> = [
   { id: 'history', label: '대화 기록', Icon: RiChatHistoryLine },
   { id: 'files', label: '파일', Icon: RiFolder3Line },
+  { id: 'changes', label: '변경', Icon: RiFileEditLine },
   { id: 'git', label: 'Git 기록', Icon: RiGitBranchLine }
 ]
 const KEY_STEP = 24
+const REVEAL_WAIT_MS = 3000
 
 /**
  * "작업 공간": docked right of the main area for work in local shells. It sits beside the terminals
@@ -25,7 +29,30 @@ export function WorkspacePanel() {
   const close = useWorkspacePanelStore(state => state.close)
   const setWidth = useWorkspacePanelStore(state => state.setWidth)
   const setSection = useWorkspacePanelStore(state => state.setSection)
-  const { folder, shellId, isLoading } = useWorkspaceDirectory(isOpen && section !== 'history')
+  const { folder, shellId, isLoading, settled } = useWorkspaceDirectory(isOpen && section !== 'history')
+  const reveal = useWorkspacePanelStore(state => state.reveal)
+  const finishReveal = useWorkspacePanelStore(state => state.finishReveal)
+  // A chat's folder link: shown in the tree once the panel's folder is that chat's shell's folder
+  const ready = Boolean(reveal && folder && settled && shellId === reveal.shellId)
+  const revealRelative = ready && reveal && folder ? relativeInside(folder, reveal.folder) : null
+  useEffect(() => {
+    if (!reveal) return
+    if (ready) {
+      // Outside the panel's folder: the file manager, as before
+      if (revealRelative === null) {
+        finishReveal(reveal.seq)
+        reveal.fallback()
+      }
+      return
+    }
+    // The chat's shell never became the panel's (or its folder was not read): the file manager
+    const timer = window.setTimeout(() => {
+      if (useWorkspacePanelStore.getState().reveal?.seq !== reveal.seq) return
+      finishReveal(reveal.seq)
+      reveal.fallback()
+    }, Math.max(0, REVEAL_WAIT_MS - (Date.now() - reveal.at)))
+    return () => window.clearTimeout(timer)
+  }, [reveal, ready, revealRelative, finishReveal])
   // The latest dragged width: the pointer-up handler may still belong to the render before it
   const drag = useRef<{ startX: number; startWidth: number; width?: number } | null>(null)
 
@@ -102,7 +129,9 @@ export function WorkspacePanel() {
       </header>
       <div className="workspace-content" id="workspace-content" role="tabpanel" aria-labelledby={`workspace-tab-${section}`}>
         {section === 'history' ? <AgentHistoryPanel />
-          : folder ? (section === 'files' ? <WorkspaceFiles key={folder} folder={folder} /> : <WorkspaceGit folder={folder} />)
+          : folder ? (section === 'files' ? <WorkspaceFiles key={folder} folder={folder} onRevealed={finishReveal}
+              reveal={reveal && revealRelative !== null ? { relative: revealRelative, seq: reveal.seq } : null} />
+            : section === 'changes' ? <WorkspaceChanges folder={folder} /> : <WorkspaceGit folder={folder} />)
           : <WorkspaceNote>{isLoading ? '작업 폴더를 확인하는 중…' : shellId
             ? '현재 작업 폴더를 읽지 못했습니다.'
             : '로컬 터미널을 선택하면 작업 폴더를 볼 수 있습니다.'}</WorkspaceNote>}

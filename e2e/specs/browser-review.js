@@ -118,8 +118,12 @@ async function run() {
     try {
       const savedPages = `${root}.querySelector('.browser-review-bookmarks')`
       const savedButton = label => `[...${savedPages}.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})`
-      const folderButton = title => `${savedPages}.querySelector('.browser-bookmark-folder[title="${title}"]')`
+      const folderButtons = `[...${savedPages}.querySelectorAll('.browser-bookmark-folder')]`
+      const folderButton = title => `${folderButtons}.find(button => button.querySelector('span')?.textContent === ${JSON.stringify(title)})`
       const openFolder = title => main.js(`${folderButton(title)}.click()`)
+      const bookmarkRows = `${savedPages}.querySelectorAll('.browser-bookmark-row[data-kind="page"]')`
+      const checkBox = label => `${savedPages}.querySelector('input[aria-label="${label}"]')`
+      const searchBookmarks = value => main.js(`(${SET})(${savedPages}.querySelector('input[type=search]'), ${JSON.stringify(value)})`)
       const importer = "document.querySelector('.browser-data-import')"
       const importButton = label => `[...${importer}.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})`
       const openImport = async () => {
@@ -139,26 +143,42 @@ async function run() {
       `))
       await main.js(`${importButton('완료')}.click()`)
       check('the source folders retain their order at the root', await main.until(`
-        [...${savedPages}.querySelectorAll('.browser-bookmark-folder')].map(button => button.title).join('/') === '북마크바/기타 북마크' &&
+        ${folderButtons}.map(button => button.querySelector('span')?.textContent).join('/') === '북마크바/기타 북마크' &&
         !${savedPages}.textContent.includes('업무 링크')
       `))
       await openFolder('기타 북마크')
-      check('empty folders can still be opened', await main.until(`${savedPages}.textContent.includes('이 폴더는 비어 있습니다.')`))
-      await main.js(`${savedButton('즐겨찾기 전체')}.click()`)
+      check('an empty folder can be expanded in place', await main.until(`${folderButton('기타 북마크')}.textContent.includes('빈 폴더')`))
       await openFolder('북마크바')
       await openFolder('업무 묶음')
       await openFolder('시스템')
-      check('the nested folder contains its bookmark and filters out unsafe URLs', await main.until(`
-        [...${savedPages}.querySelectorAll('nav button')].map(button => button.textContent).join('/') === '즐겨찾기 전체/북마크바/업무 묶음/시스템' &&
-        ${savedPages}.querySelectorAll('li').length === 1 &&
-        ${savedPages}.querySelector('.browser-review-bookmark-open').title === ${JSON.stringify(bookmarkUrl)}
+      check('multiple folders can stay open with nested bookmarks on the same list', await main.until(`
+        ${folderButtons}.map(button => button.querySelector('span')?.textContent).join('/') === '북마크바/업무 묶음/시스템/기타 북마크' &&
+        ${folderButtons}.every(button => button.getAttribute('aria-expanded') === 'true') && ${bookmarkRows}.length === 2 &&
+        [...${bookmarkRows}].every(row => row.querySelector('.browser-review-bookmark-open small').textContent === ${JSON.stringify(bookmarkUrl)}) &&
+        !${savedPages}.textContent.includes('차단된 링크')
       `))
       await main.shot('browser-review-bookmark-folders')
-      await main.js(`${savedButton('즐겨찾기 전체')}.click()`)
-      await main.js(`(${SET})(${savedPages}.querySelector('input[type=search]'), '업무 링크')`)
-      check('search finds the same bookmark in different folders and shows both locations', await main.until(`
-        ${savedPages}.querySelectorAll('li').length === 2 &&
-        ${savedPages}.textContent.includes('북마크바 › 업무 묶음 › 시스템')
+      const toggleBookmarks = `${root}.querySelector('.browser-review-bookmarks-toggle')`
+      await main.js(`${toggleBookmarks}.click()`)
+      await main.until(`!${savedPages}`)
+      await main.js(`${toggleBookmarks}.click()`)
+      check('reopening saved pages restores expanded folders in the tab', await main.until(`
+        ${folderButton('시스템')}?.getAttribute('aria-expanded') === 'true' && ${bookmarkRows}.length === 2
+      `))
+      await openFolder('북마크바')
+      await searchBookmarks('업무 링크')
+      check('search finds matching pages inside collapsed folders and shows their folder path', await main.until(`
+        ${bookmarkRows}.length === 2 && ${folderButton('시스템')}?.getAttribute('aria-expanded') === 'true' && !${folderButton('기타 북마크')}
+      `))
+      await main.js(`${savedButton('선택')}.click()`)
+      await main.js(`${checkBox('검색 결과 전체 선택')}.click()`)
+      check('selecting all matches selects both links without the folders that only show their paths', await main.until(`
+        !${checkBox('북마크바 폴더 선택')} && ${savedButton('선택 삭제 (2)')}?.disabled === false
+      `))
+      await main.js(`${savedButton('선택 취소')}.click()`)
+      await searchBookmarks('')
+      check('clearing search restores the previous open and closed folders', await main.until(`
+        ${folderButton('북마크바')}?.getAttribute('aria-expanded') === 'false' && ${folderButton('기타 북마크')}?.getAttribute('aria-expanded') === 'true'
       `))
       await main.js(`${savedButton('방문 기록')}.click()`)
       check('hidden visits are excluded from the imported history view', await main.until(`
@@ -176,6 +196,39 @@ async function run() {
         !${importer} && ${passwordPanel}?.querySelector('.browser-login-import select')?.selectedOptions[0]?.textContent === 'Google Chrome · 업무'
       `))
       await main.js(`[...${passwordPanel}.querySelectorAll('button')].find(button => button.textContent.trim() === '닫기').click()`)
+      await main.js(`${savedButton('즐겨찾기')}.click()`)
+      await openFolder('북마크바')
+      await main.js(`${savedButton('선택')}.click()`)
+      await main.js(`${checkBox('북마크바 폴더 선택')}.click()`)
+      await main.js(`${bookmarkRows}[1].querySelector('input[type=checkbox]').click()`)
+      await main.js(`${checkBox('기타 북마크 폴더 선택')}.click()`)
+      check('unchecking a link keeps its containing folder and updates the partial selection', await main.until(`
+        ${checkBox('북마크바 폴더 선택')}.indeterminate && ${savedButton('선택 삭제 (4)')}?.disabled === false
+      `))
+      await main.shot('browser-review-bookmarks-bulk')
+      const confirmDelete = `document.querySelector('.confirm-dialog .btn-danger')`
+      await main.js(`${savedButton('선택 삭제 (4)')}.click()`)
+      check('bulk deletion asks for confirmation with page and folder counts', await main.until(`
+        !!${confirmDelete} && document.querySelector('.confirm-dialog-message')?.textContent.includes('즐겨찾기 1개 및 폴더 3개')
+      `))
+      await main.js(`document.querySelector('.confirm-dialog .btn-secondary').click()`)
+      check('cancel keeps the bookmarks and checkboxes', await main.until(`!${confirmDelete} && ${bookmarkRows}.length === 2 && !!${savedButton('선택 삭제 (4)')}`))
+      await main.js(`${savedButton('선택 삭제 (4)')}.click()`)
+      await main.until(`!!${confirmDelete}`)
+      await main.js(`${confirmDelete}.click()`)
+      check('bulk deletion keeps the unchecked copy of a URL and removes selected folders', await main.until(`
+        ${bookmarkRows}.length === 1 && !!${folderButton('북마크바')} && !${folderButton('업무 묶음')} && !${folderButton('기타 북마크')}
+      `))
+      await openFolder('북마크바')
+      await main.js(`${savedButton('선택')}.click()`)
+      await main.js(`${checkBox('전체 선택')}.click()`)
+      await main.js(`${savedButton('선택 삭제 (2)')}.click()`)
+      await main.until(`!!${confirmDelete}`)
+      await main.js(`${confirmDelete}.click()`)
+      check('select all can clear every bookmark including links in collapsed folders', await main.until(`
+        ${savedPages}.textContent.includes('저장된 즐겨찾기가 없습니다.') && !${savedPages}.querySelector('li')
+      `) && fs.readFileSync(path.join(workProfile, 'Bookmarks'), 'utf8').includes('업무 링크'))
+      await main.js(`${savedButton('방문 기록')}.click()`)
       await main.js(`${savedPages}.querySelector('.browser-review-bookmark-open').click()`)
       check('an imported visit opens normally in the browser tab', await main.until(`${state}.then(state => state.url === ${JSON.stringify(historyUrl)} && !state.loading)`))
     } finally { historyDb.close() }
@@ -461,8 +514,10 @@ async function run() {
       const vault = fs.readFileSync(path.join(profile, 'browser-logins.json'), 'utf8')
       check('saved and imported passwords are encrypted on disk', !vault.includes('only-a-test-password') && !vault.includes('comma,quote') && !vault.includes('imported@example.test'))
       const account = `${loginModal}.querySelectorAll('.browser-login-list li')`
-      await main.js(`[...${account}].find(item => item.textContent.includes('imported@example.test')).querySelector('.btn-primary').click()`)
-      check('choosing Fill enters the selected account without submitting the page', await main.until(`!${loginModal}`) && await loginPage.js(`
+      const fill = `[...${account}].find(item => item.textContent.includes('imported@example.test'))?.querySelector('.btn-primary')`
+      const fillReady = await main.until(`(() => { const button = ${fill}; return !!button && !button.disabled })()`)
+      if (fillReady) await main.js(`${fill}.click()`)
+      check('choosing Fill enters the selected account without submitting the page', fillReady && await main.until(`!${loginModal}`) && await loginPage.js(`
         document.querySelector('#username').value === 'imported@example.test' &&
         document.querySelector('#password').value === 'comma,quote"test' && !document.body.dataset.submitted
       `))

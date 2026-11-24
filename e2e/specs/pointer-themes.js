@@ -1,8 +1,8 @@
-// 설정 > 테마 > 마우스 포인터: choosing a pointer set puts blob: images in the :root cursor variables
+// 설정 > 테마 > 포인터 모양 / 효과: choosing a pointer set puts blob: images in the :root cursor variables
 // (no CSP refusal), every rewritten `cursor` rule follows them (app buttons, xterm's own rules), the
 // size changes the image and its hotspot, and an effect brings the overlay canvas that goes away
 // again when both effects are off. Run by e2e/run.js (fresh profile, no server needed).
-const { sleep, createChecks, connect, unlock, pageProblems } = require('../support/driver')
+const { sleep, createChecks, connect, selectThemeTab, unlock, pageProblems } = require('../support/driver')
 const { check, finish } = createChecks()
 
 ;(async () => {
@@ -16,7 +16,7 @@ const { check, finish } = createChecks()
   await js(`document.activeElement && document.activeElement.blur()`)
   await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...comma })
   await send('Input.dispatchKeyEvent', { type: 'keyUp', ...comma })
-  check('settings open on the theme tab with the pointer section', await until(`!!document.querySelector('.settings-modal .pointer-settings')`, 8000))
+  await selectThemeTab(driver, '포인터 모양')
 
   const rootVar = name => js(`document.documentElement.style.getPropertyValue('${name}')`)
   const card = selector => `document.querySelector('.pointer-settings ${selector}')`
@@ -31,10 +31,10 @@ const { check, finish } = createChecks()
   check('the system pointer is the default: no set and no cursor variables',
     await js(`!document.documentElement.dataset.cursorSet && !document.documentElement.style.getPropertyValue('--ez-cursor-default')`))
   check('no effect canvas while both effects are off', await js(`!document.querySelector('.pointer-effects-canvas')`))
-  check('nine pointer sets, ten moving effects and nine press effects are offered', await js(`
-    document.querySelectorAll('.pointer-settings [data-set]').length === 9 &&
-    document.querySelectorAll('.pointer-settings [aria-label="움직일 때 효과"] [data-effect]').length === 10 &&
-    document.querySelectorAll('.pointer-settings [aria-label="누를 때 효과"] [data-effect]').length === 9
+  check('the shape tab shows all nine pointer sets in one grid without category badges', await js(`
+    document.querySelectorAll('.pointer-settings [aria-label="포인터 모양"] [data-set]').length === 9 &&
+    !/귀염|실용/.test(document.querySelector('.pointer-settings').textContent) &&
+    !document.querySelector('.pointer-settings [data-effect]')
   `))
   const previews = `[...document.querySelectorAll('.pointer-settings [data-set] img')]`
   await js(`Promise.all(${previews}.map(img => img.decode().catch(() => null)))`)
@@ -79,6 +79,13 @@ const { check, finish } = createChecks()
   await shot('pointer-settings-sets')
 
   // Effects
+  await selectThemeTab(driver, '포인터 효과')
+  check('the effects tab shows all moving and press effects without category badges', await js(`
+    !document.querySelector('.pointer-settings [data-set]') &&
+    !/귀염|실용/.test(document.querySelector('.pointer-settings').textContent) &&
+    document.querySelectorAll('.pointer-settings [aria-label="움직일 때 효과"] [data-effect]').length === 10 &&
+    document.querySelectorAll('.pointer-settings [aria-label="누를 때 효과"] [data-effect]').length === 9
+  `))
   check('the overlay is still absent before an effect is chosen', await js(`!document.querySelector('.pointer-effects-canvas')`))
   await pick('[aria-label="움직일 때 효과"] [data-effect="sparkle"]')
   check('a moving effect brings one overlay canvas that does not take the pointer', await until(`(() => {
@@ -131,10 +138,52 @@ const { check, finish } = createChecks()
   check('a cover over the terminal (like the chat view) shows the effect', await until(drawn, 3000))
   await js(`document.getElementById('pt-cover').remove()`)
   await until(`document.querySelector('.pointer-effects-canvas')?.width === 0`, 4000)
+  const savedPrefs = await js("localStorage.getItem('pointerPrefs')")
+  const applyPrefs = raw => js(`
+    localStorage.setItem('pointerPrefs', ${JSON.stringify(raw)})
+    dispatchEvent(new StorageEvent('storage', { key: 'pointerPrefs' }))
+  `)
+  const ghostPrefs = { ...JSON.parse(savedPrefs), move: 'ghost', moveOnTerminal: true }
+  await js(`(() => {
+    const prototype = CanvasRenderingContext2D.prototype
+    const original = prototype.drawImage
+    window.ptGhostSamples = []
+    prototype.drawImage = function(image, ...args) {
+      if (this.canvas.matches('.pointer-effects-canvas')) {
+        window.ptGhostSamples.push([image.src, image.naturalWidth, ...args])
+      }
+      return original.call(this, image, ...args)
+    }
+    window.ptRestoreDrawImage = () => { prototype.drawImage = original; delete window.ptGhostSamples; delete window.ptRestoreDrawImage }
+  })()`)
+  try {
+    await applyPrefs(JSON.stringify(ghostPrefs))
+    const [left, top] = await js(`(() => {
+      const screen = [...document.querySelectorAll('.xterm-screen')].find(el => el.checkVisibility({ visibilityProperty: true }))
+      const rect = screen.getBoundingClientRect()
+      return [Math.round(rect.left + rect.width / 3), Math.round(rect.top + rect.height / 3)]
+    })()`)
+    const textCursor = await rootVar('--ez-cursor-text')
+    const [_, image, hx, hy] = /url\("(blob:[^"]+)"\) (\d+) (\d+), text/.exec(textCursor)
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: left, y: top })
+    check('a terminal ghost uses the same themed I-beam image, size and hotspot as the cursor', await until(`
+      window.ptGhostSamples.some(([src, size, x, y]) => src === ${JSON.stringify(image)}
+        && size === 64 && x === ${left - Number(hx)} && y === ${top - Number(hy)})
+    `, 3000))
+
+    await applyPrefs(JSON.stringify({ ...ghostPrefs, set: 'system' }))
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: left + 45, y: top + 30 })
+    check('the system pointer also leaves a centered text ghost over the terminal', await until(`
+      window.ptGhostSamples.some(([, size, x, y]) => size === 32 && x === ${left + 45 - 16} && y === ${top + 30 - 16})
+    `, 3000))
+  } finally {
+    await js('window.ptRestoreDrawImage()')
+    await applyPrefs(savedPrefs)
+  }
   await js(`document.activeElement && document.activeElement.blur()`)
   await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...comma })
   await send('Input.dispatchKeyEvent', { type: 'keyUp', ...comma })
-  await until(`!!document.querySelector('.settings-modal .pointer-settings')`, 8000)
+  check('reopening settings restores the last theme tab', await until(`!!${card('[data-effect]')}`, 8000))
   const overlap = await js(`(() => {
     const dialog = document.querySelector('.settings-modal').getBoundingClientRect()
     const left = Math.max(dialog.left, ${termLeft}) + 40, right = Math.min(dialog.right, ${termLeft + termWidth}) - 40
@@ -157,7 +206,44 @@ const { check, finish } = createChecks()
 
   await js(`[...document.querySelectorAll('.pointer-settings .pointer-actions button')].find(b => b.textContent.includes('기본값')).click()`)
   check('기본값으로 returns to the system pointer', await until(`!document.documentElement.dataset.cursorSet && !document.documentElement.style.getPropertyValue('--ez-cursor-pointer')`, 3000))
+  await selectThemeTab(driver, '포인터 모양')
   check('with the system pointer the rules fall back to their own keywords', await js(`getComputedStyle(document.querySelector('.pointer-settings .pointer-card')).cursor === 'pointer'`))
+
+  const wordCard = '[aria-label="누를 때 효과"] [data-effect="word"]'
+  const appTheme = name => `[...document.querySelectorAll('.theme-card-main')].find(button =>
+    button.querySelector('.theme-name').textContent === ${JSON.stringify(name)})`
+  const sampleWords = selector => js(`(() => {
+    const canvas = ${selector}
+    const ctx = canvas.getContext('2d')
+    const drawText = ctx.fillText.bind(ctx)
+    ctx.fillText = (label, x, y) => {
+      drawText(label, x, y)
+      if (ctx.globalAlpha < 0.9) return
+      const { a, d, e, f } = ctx.getTransform()
+      const metrics = ctx.measureText(label)
+      if (a < 1 || e - a * metrics.width / 2 < 0 || e + a * metrics.width / 2 > canvas.width) return
+      if (f + d * (y - metrics.actualBoundingBoxAscent) < 0 || f + d * (y + metrics.actualBoundingBoxDescent) > canvas.height) return
+      canvas.dataset.wordInk = ctx.fillStyle
+    }
+  })()`)
+  const preview = `${card(wordCard)}.querySelector('canvas')`
+  await selectThemeTab(driver, '앱 테마')
+  await js(`${appTheme('흑백 만화')}.click()`)
+  check('the monochrome comic app theme is active', await until(`document.documentElement.dataset.theme === 'monochrome-comic'`))
+  await selectThemeTab(driver, '포인터 효과')
+  await sampleWords(preview)
+  await pick(wordCard)
+  check('the word preview draws the whole label in white on the comic bubble', await until(`${preview}.dataset.wordInk === '#ffffff'`, 3500))
+  await shot('pointer-word-comic-preview')
+
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...escape })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', ...escape })
+  await until(`!document.querySelector('.settings-modal')`, 4000)
+  const overlay = `document.querySelector('.pointer-effects-canvas')`
+  await sampleWords(overlay)
+  await click(termLeft + termWidth * 0.55, termTop + termHeight * 0.35)
+  check('a click in the comic terminal draws the word in white', await until(`${overlay}.dataset.wordInk === '#ffffff'`, 2500))
+  await shot('pointer-word-comic-terminal')
 
   const problems = await pageProblems(driver)
   check('no console errors or CSP refusals', problems.length === 0, problems.join(' | '))

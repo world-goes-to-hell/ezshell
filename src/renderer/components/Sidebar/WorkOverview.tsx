@@ -114,13 +114,17 @@ export function WorkOverview({ groupView }: { groupView: WorkView }) {
   )
 }
 
+const PREVIEW_HEIGHT_SHARE = 0.8
+
 function positionPreview(anchor: HTMLElement): CSSProperties {
   const margin = 20
   const gap = 10
   const box = anchor.getBoundingClientRect()
   const left = box.left - margin - gap
   const right = innerWidth - box.right - margin - gap
-  const maxHeight = Math.min(460, innerHeight - 2 * margin)
+  // Most of the screen's height: a conversation or log needs rows more than width (2026-11-24 user
+  // request: 460px showed only a few tool lines)
+  const maxHeight = Math.min(Math.max(460, Math.round(innerHeight * PREVIEW_HEIGHT_SHARE)), innerHeight - 2 * margin)
   if (Math.max(left, right) >= 360) {
     const width = Math.min(680, Math.max(left, right))
     return {

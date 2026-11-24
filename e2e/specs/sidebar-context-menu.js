@@ -1,4 +1,4 @@
-const { createChecks, connect, sleep, unlock } = require('../support/driver')
+const { createChecks, connect, selectThemeTab, sleep, unlock } = require('../support/driver')
 
 const { check, finish } = createChecks()
 const folderName = 'Sidebar folder'
@@ -82,7 +82,7 @@ const q = (selector) => `document.querySelector(${JSON.stringify(selector)})`
   await unlock(driver)
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'no-preference' }] })
   await press({ key: ',', code: 'Comma', windowsVirtualKeyCode: 188, modifiers: process.platform === 'darwin' ? 4 : 2 })
-  await until(`!!${q('.theme-grid')}`)
+  await selectThemeTab(driver, '창 효과')
   await js(`[...document.querySelectorAll('.appearance-segment button')].find(button => button.textContent.trim() === 'Glass').click()`)
   if (!await until(`document.documentElement.dataset.surface === 'glass'`)) throw new Error('Glass mode did not apply')
   await escape()

@@ -1,8 +1,9 @@
+import { FaExclamation } from 'react-icons/fa'
 import {
   RiChat1Line, RiCircleLine,
-  RiErrorWarningLine, RiHourglassLine, RiPlayCircleLine, RiRecordCircleLine, RiStopCircleLine, RiMoonLine, RiTimeLine
+  RiErrorWarningLine, RiHourglassLine, RiPlayCircleLine, RiPlayFill, RiRecordCircleLine, RiStopCircleLine, RiMoonLine, RiTimeLine
 } from 'react-icons/ri'
-import { agentIdentityStatus, agentIdentityTooltip } from '../../lib/agentIdentity'
+import { agentIdentityColor, agentIdentityStatus, agentIdentityTooltip } from '../../lib/agentIdentity'
 import { localAgentPaneLocation } from '../../lib/localPaneShells'
 import { focusTabPane } from '../../lib/paneFocus'
 import { MAIN_PANE } from '../../lib/splitTree'
@@ -10,7 +11,6 @@ import { tabHost } from '../../lib/tabHosts'
 import { useTerminalStore } from '../../stores/terminalStore'
 import type { AgentMessageSession, LocalAgentStatus } from '../../types'
 import { isAgentWorking, useAgentMessagesStore } from '../Terminal/AgentMessages'
-import { AgentIdentityDot } from '../ui/AgentIdentity'
 import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../ui/agentProviderIcons'
 
 const presentation = {
@@ -25,17 +25,27 @@ const presentation = {
   sleeping: { label: '잠듦', Icon: RiMoonLine }
 } satisfies Record<LocalAgentStatus | 'reply', { label: string; Icon: typeof RiCircleLine }>
 
-export function localAgentAppearance(agent: AgentMessageSession) {
+const compactIcons: Partial<Record<LocalAgentStatus | 'reply', typeof RiCircleLine>> = {
+  working: RiPlayFill,
+  blocked: FaExclamation
+}
+
+export function localAgentAppearance(agent: AgentMessageSession, { compact = false } = {}) {
   const { status } = agentIdentityStatus(agent)
-  const { label, Icon } = presentation[status]
+  const { label, Icon: DefaultIcon } = presentation[status]
+  const Icon = (compact && compactIcons[status]) || DefaultIcon
   const ProviderIcon = AGENT_PROVIDER_ICONS[agent.kind]
   const name = `${AGENT_PROVIDER_NAMES[agent.kind]} ${agent.id.slice(agent.kind.length + 1)}`
   const statusDescription = `${label}${status === 'error' && agent.exitCode ? ` (종료 코드 ${agent.exitCode})` : ''}`
   const description = `${name} · ${statusDescription}`
+  const color = compact ? { color: agentIdentityColor(agent.id) } : undefined
+  const mark = compact && status === 'idle'
+    ? <span className="local-agent-status local-agent-status-dot" style={color} />
+    : <Icon className="local-agent-status" size={12} style={color} />
+  const provider = <ProviderIcon className="local-agent-provider" size={14} />
   const icons = (
     <span className="local-agent-icons" data-status={status} data-agent-kind={agent.kind} aria-hidden>
-      <Icon className="local-agent-status" size={12} />
-      <ProviderIcon className="local-agent-provider" size={14} />
+      {compact ? <>{provider}{mark}</> : <>{mark}{provider}</>}
     </span>
   )
   return { status, name, label, description, icons }
@@ -52,7 +62,7 @@ export function LocalSessionAgents({ tabId }: { tabId: string }) {
   return (
     <div className="local-agent-strip" role="group" aria-label="이 세션의 에이전트">
       {sessionAgents.map(agent => {
-        const { status, icons } = localAgentAppearance(agent)
+        const { status, icons } = localAgentAppearance(agent, { compact: true })
         const tooltip = agentIdentityTooltip(agent, localAgentPaneLocation(tab, agent))
         return (
           <button
@@ -70,7 +80,6 @@ export function LocalSessionAgents({ tabId }: { tabId: string }) {
               focusTabPane(focusTerminal, tabId, pane?.dataset.pane ?? MAIN_PANE)
             }}
           >
-            <AgentIdentityDot id={agent.id} />
             {icons}
           </button>
         )

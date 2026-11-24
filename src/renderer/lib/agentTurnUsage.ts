@@ -1,4 +1,4 @@
-import type { AgentChatItem, AgentTurnUsage } from '../types'
+import type { AgentChatItem, AgentTurnLimitUsage, AgentTurnUsage } from '../types'
 
 // The tokens of each question in the chat view, drawn at the end of its turn (the usage rides on the
 // user item that started the turn: src/agentChat/turnUsage.js).
@@ -36,25 +36,25 @@ function duration(ms: number): string {
   return seconds % 60 ? `${minutes}분 ${seconds % 60}초` : `${minutes}분`
 }
 
-/** +2% / +0.4% / <1% (a window read in whole percent shows no change for a small question) */
-export function limitStep(used: number): string {
-  if (used <= 0) return '<1%'
-  return `+${Number.isInteger(used) ? used : used.toFixed(1)}%`
+function limitText({ before, after, used, reset }: AgentTurnLimitUsage): string {
+  const readings = `${before}% → ${after}%`
+  if (reset) return used > 0 ? `${readings} (초기화 후 +${used}%p)` : `${readings} (초기화)`
+  return used > 0 ? `${readings} (+${used}%p)` : readings
 }
 
-/** The line: "토큰 입력 12.3만 · 출력 3,412 · 캐시 98% · 52초 · 5시간 +2% · 주간 <1%" and its exact numbers for the tooltip */
+/** The token and limit usage summary, with exact token counts in its tooltip. */
 export function turnUsageText(usage: AgentTurnUsage): { text: string; title: string } {
   const parts = [`토큰 입력 ${tokenCount(usage.input)}`, `출력 ${tokenCount(usage.output)}`]
   if (usage.input > 0 && usage.cached > 0) parts.push(`캐시 ${Math.round((usage.cached / usage.input) * 100)}%`)
   if (usage.durationMs) parts.push(duration(usage.durationMs))
   const { fiveHour, sevenDay } = usage.limits ?? {}
-  if (fiveHour !== undefined) parts.push(`5시간 ${limitStep(fiveHour)}`)
-  if (sevenDay !== undefined) parts.push(`주간 ${limitStep(sevenDay)}`)
+  if (fiveHour) parts.push(`5시간 ${limitText(fiveHour)}`)
+  if (sevenDay) parts.push(`주간 ${limitText(sevenDay)}`)
   const title = [
     `이번 질문에 쓴 토큰`,
     `입력 ${exact(usage.input)} (캐시에서 읽음 ${exact(usage.cached)})`,
     `출력 ${exact(usage.output)} (생각 포함)`,
-    ...(usage.limits ? ['', '한도: 질문 전과 마지막 답변 뒤의 사용률 차이입니다.', '같은 계정의 다른 세션이 그동안 쓴 것도 함께 들어갑니다.'] : [])
+    ...(usage.limits ? ['', '질문 전과 마지막 답변 뒤에 기록된 한도 사용률입니다.', '같은 계정의 다른 세션 사용량도 포함될 수 있습니다.'] : [])
   ].join('\n')
   return { text: parts.join(' · '), title }
 }

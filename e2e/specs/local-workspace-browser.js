@@ -53,11 +53,11 @@ const { check, finish } = createChecks()
       return {
         aligned: Math.abs(tabs.top - header.top) < 1 && Math.abs(tabs.bottom - header.bottom) < 1,
         labels: [...workspace.querySelectorAll('[role=tab]')].map(tab => tab.getAttribute('aria-label')),
-        iconOnly: workspace.textContent.trim() === '' && workspace.querySelectorAll('[role=tab] > svg').length === 3
+        iconOnly: workspace.textContent.trim() === '' && workspace.querySelectorAll('[role=tab] > svg').length === 4
       }
     })()`)
     check('the icon-only workspace tabs align with the main tab strip and retain their names',
-      tabStrip.aligned && tabStrip.iconOnly && tabStrip.labels.join(',') === '대화 기록,파일,Git 기록', JSON.stringify(tabStrip))
+      tabStrip.aligned && tabStrip.iconOnly && tabStrip.labels.join(',') === '대화 기록,파일,변경,Git 기록', JSON.stringify(tabStrip))
 
     await section('files')
     // The files are a tree now: each entry is a .workspace-tree-item with its own row button
@@ -114,10 +114,16 @@ const { check, finish } = createChecks()
       ${branch} === 'frontend-main' && ${subjects}.join() === 'Independent frontend repository'
     `))
     await selectWorktree('checkouts/backend')
-    check('the nested worktree shows its own HEAD, history and uncommitted changes', await until(`
-      ${branch} === 'backend' && ${subjects}[0] === 'Backend checkout commit' &&
-      !${subjects}.includes('Refresh this commit') && !!document.querySelector('[data-path="backend-draft.txt"]')
+    check('the nested worktree shows its own HEAD and history', await until(`
+      ${branch} === 'backend' && ${subjects}[0] === 'Backend checkout commit' && !${subjects}.includes('Refresh this commit')
     `))
+    // The changes tab shows the repository picked in the history
+    await section('changes')
+    check('the changes tab follows the picked worktree and lists its uncommitted changes', await until(`
+      ${branch} === 'backend' && !!document.querySelector('.workspace-uncommitted [data-path="backend-draft.txt"]') && !document.querySelector('.workspace-git-list')
+    `))
+    await section('git')
+    await until(`${branch} === 'backend' && ${subjects}[0] === 'Backend checkout commit'`)
     const search = value => js(`(${SET})(document.querySelector('input[aria-label="Git 이력 검색"]'), ${JSON.stringify(value)})`)
     await search(mainOnlyHash)
     check('a hash outside the worktree history is not returned by search', await until(`
@@ -131,6 +137,9 @@ const { check, finish } = createChecks()
     check('all branches restores the shared history', await until(`
       ${subjects}.includes('Refresh this commit') && ${subjects}.includes('Backend checkout commit') && ${subjects}.includes('Frontend checkout commit')
     `))
+    // The pick is shared by the Git tabs and kept while switching tabs: back to the terminal's checkout
+    await selectWorktree('workspace repo')
+    await until(`${branch} === 'main' && !${subjects}.includes('Backend checkout commit')`)
 
     await section('files')
     const bounds = await js(`(() => {

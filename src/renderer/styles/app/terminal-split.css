@@ -724,6 +724,16 @@ body.resizing .split-pane-content * {
   padding: 0 8px 12px;
 }
 
+/* A scribbled pane (Alt+drag back and forth): it closes when the pointer is let go */
+.pane-merge-preview.is-closing {
+  z-index: 15;
+  align-items: end;
+  padding: 0 8px 12px;
+  box-shadow: inset 0 0 0 2px var(--error);
+  background-color: color-mix(in srgb, var(--error) 16%, transparent);
+}
+
+.pane-merge-preview.is-closing > span,
 .pane-merge-preview.is-destination > span {
   padding: 5px 9px;
   border-radius: var(--radius-sm);

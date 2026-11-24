@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { contrastRatio, type Rgb } from '../lib/colorContrast'
-import { CHAT_PRESETS, FOLLOW_APP_CHAT_THEME, appPaneIndicatorColors, chatAppearance } from './chatThemes'
+import { CHAT_PRESETS, FOLLOW_APP_CHAT_THEME, appPaneIndicatorColors, chatAppearance, chatPickerAppThemes, chatThemeChoice } from './chatThemes'
 import { PRESET_THEMES } from './presets'
 
 function rgb(hex: string): Rgb {
@@ -106,9 +106,24 @@ describe('app theme used as the chat theme', () => {
     expect(chatAppearance(FOLLOW_APP_CHAT_THEME, [], theme)).toEqual(paired)
   })
 
-  it('keeps an explicit chat palette or app palette when the app theme has a companion', () => {
+  it('keeps an explicit chat palette when the app theme has a companion', () => {
     const kakao = PRESET_THEMES.find(theme => theme.chatThemeId === 'chat-kakao')!
     expect(chatAppearance('chat-paper', [], kakao)).toEqual(chatAppearance('chat-paper', []))
-    expect(chatAppearance(kakao.id, [], kakao)).toMatchObject({ id: kakao.id, bubbles: false })
+  })
+
+  // A paired app theme is the same look as its chat palette, not a second choice (2026-11-24 user report:
+  // "카톡 모드 (앱 테마)" stood in the chat picker right under "카톡 모드")
+  it('reads a paired app theme chosen as the chat palette as its chat palette', () => {
+    const kakao = PRESET_THEMES.find(theme => theme.chatThemeId === 'chat-kakao')!
+    expect(chatThemeChoice(kakao.id)).toBe('chat-kakao')
+    expect(chatThemeChoice('minimal-dark')).toBe('minimal-dark')
+    expect(chatThemeChoice(FOLLOW_APP_CHAT_THEME)).toBe(FOLLOW_APP_CHAT_THEME)
+    expect(chatAppearance(kakao.id, [])).toEqual(chatAppearance('chat-kakao', []))
+  })
+
+  it('offers each look once: paired app themes stay out of the chat choices', () => {
+    const appChoices = chatPickerAppThemes([])
+    expect(appChoices.some(theme => theme.chatThemeId)).toBe(false)
+    expect(appChoices.some(theme => theme.id === 'minimal-dark')).toBe(true)
   })
 })

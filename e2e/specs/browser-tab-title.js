@@ -1,6 +1,6 @@
 // A browser tab takes the name of the page it shows (its <title>), the host when the page has none.
 const http = require('node:http')
-const { connect, createChecks, SET, unlock } = require('../support/driver')
+const { connect, createChecks, selectThemeTab, SET, unlock } = require('../support/driver')
 
 const { check, finish } = createChecks()
 
@@ -70,6 +70,7 @@ async function run() {
     await main.move(10, 10)
 
     await main.js(`document.querySelector('.title-bar-btn[title="설정"]').click()`)
+    await selectThemeTab(main, '브라우저 탭')
     const widthSetting = `document.querySelector('#browser-tab-width')`
     await main.until(`!!${widthSetting}`)
     await main.js(`${widthSetting}.focus()`)

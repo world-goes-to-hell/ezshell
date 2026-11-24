@@ -10,8 +10,13 @@ const { isLocalFilePath } = require('../localKeyPath.js')
 const MESSAGES = {
   root: '이 폴더는 작업 공간에서 열 수 없습니다 (열려 있는 로컬 터미널의 폴더나 그 Git 저장소만).',
   path: '열 수 없는 경로입니다.',
-  outside: '작업 폴더 밖의 파일은 열 수 없습니다.'
+  outside: '작업 폴더 밖의 파일은 열 수 없습니다.',
+  repo: '이 저장소에서는 커밋할 수 없습니다 (열려 있는 로컬 터미널의 Git 저장소와 그 안의 저장소만).'
 }
+
+// A repository's .git folder holds hooks and config that run programs on the next Git command (the
+// panel can commit): the workspace never opens anything in it
+const inGitFolder = (value) => value.split(/[\\/]/).some(part => part.toLowerCase() === '.git')
 
 class LocalPathError extends Error {
   constructor(userMessage) {
@@ -57,8 +62,10 @@ function createLocalRoots({ knownFolders, repoFolders, now = Date.now }) {
     return list
   }
 
-  async function allowed(refresh = false) {
+  /** The known folders and, separately, their repositories (top folders and worktrees) */
+  async function collect(refresh = false) {
     const folders = new Set()
+    const repos = new Set()
     for (const folder of await knownFolders()) {
       if (typeof folder !== 'string' || !isLocalFilePath(folder)) continue
       const real = await fs.promises.realpath(folder).catch(() => null)
@@ -66,11 +73,12 @@ function createLocalRoots({ knownFolders, repoFolders, now = Date.now }) {
       folders.add(real)
       for (const extra of await repoFoldersOf(real, refresh)) {
         const resolved = await fs.promises.realpath(extra).catch(() => null)
-        if (resolved) folders.add(resolved)
+        if (resolved) repos.add(resolved)
       }
     }
-    return [...folders]
+    return { folders: [...folders, ...repos], repos: [...repos] }
   }
+  const allowed = async (refresh = false) => (await collect(refresh)).folders
 
   /** The real path of an accepted root; a LocalPathError otherwise */
   async function resolveRoot(root, { refreshWorktreesOnMiss = false } = {}) {
@@ -99,10 +107,24 @@ function createLocalRoots({ knownFolders, repoFolders, now = Date.now }) {
       throw new LocalPathError(MESSAGES.path)
     }
     if (!sameOrInside(key(base), key(real))) throw new LocalPathError(MESSAGES.outside)
+    // Checked on the real path too: a link, `.git.` or a short name (GIT~1) resolves to `.git`
+    if (inGitFolder(relative) || inGitFolder(real)) throw new LocalPathError(MESSAGES.path)
     return { root: base, path: real, relative: path.relative(base, real) }
   }
 
-  return { resolveRoot, resolveInside }
+  /**
+   * A root the panel may commit in: inside a repository of a folder main knows (an open shell's
+   * repository, its worktrees, a repository nested in them). Reading is allowed more widely (any folder
+   * under a shell's folder); writing is not, so a shell in a home folder does not open every repository
+   * below it to commits.
+   */
+  async function resolveRepoRoot(root) {
+    const real = await resolveRoot(root)
+    if ((await collect()).repos.some(repo => sameOrInside(key(repo), key(real)))) return real
+    throw new LocalPathError(MESSAGES.repo)
+  }
+
+  return { resolveRoot, resolveInside, resolveRepoRoot }
 }
 
 module.exports = { createLocalRoots, LocalPathError, MESSAGES, sameOrInside }

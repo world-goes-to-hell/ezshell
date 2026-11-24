@@ -329,6 +329,35 @@ describe('a line sent from the chat view (submitText)', () => {
     await expect(sent).resolves.toMatchObject({ ok: false, reason: 'target-changed' })
     expect(write.mock.calls).toEqual([['\x1b[200~Check the narrow pane\x1b[201~']])
   })
+  // Like Orca (MIT), native-chat-runtime-send.ts: an ordinary send is aimed at the PTY, not at the label
+  // Claude draws on its composer rule (a session name, 2026-11-24 user report: "CLI의 입력 대상이 바뀌었습니다")
+  it('sends an ordinary line even when the label on the composer rule changes before Enter', async () => {
+    const { write } = setup('claude', 100)
+    const screen = (target, text = '') => '\x1b[?2004h\x1b[2J\x1b[H' + '─'.repeat(65) + ` ${target} ─\r\n> ${text}\r\n${'─'.repeat(70)}\x1b[2;${3 + text.length}H`
+    wake.writeOutput(screen('운영 도메인 전환'))
+    await vi.waitFor(() => expect(wake.inputTarget()).toBe('운영 도메인 전환'))
+    const sent = wake.submitText('Check the narrow pane')
+    await vi.waitFor(() => expect(write).toHaveBeenCalledWith('\x1b[200~Check the narrow pane\x1b[201~'))
+    wake.writeOutput(screen('배포 확인', 'Check the narrow pane'))
+    await expect(sent).resolves.toEqual({ ok: true })
+    expect(write.mock.calls).toEqual([['\x1b[200~Check the narrow pane\x1b[201~'], ['\r']])
+  })
+
+  it('finds the composer under a session name too long for the rule (Claude draws no dashes then)', async () => {
+    setup('claude', 60)
+    const name = '운영 도메인 test.mbris.kr에서 mbris.kr 전환 작업과 배포 …'
+    wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + ` ${name} ─\r\n❯ \r\n${'─'.repeat(60)}\x1b[2;3H`)
+    await vi.waitFor(() => expect(wake.composerState()).toBe('empty'))
+    expect(wake.inputTarget()).toBe(name)
+  })
+
+  it('does not take a line of text that merely ends in a dash for the composer rule', async () => {
+    setup('claude', 60)
+    wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + ' a note ─\r\n❯ \r\n' + 'plain footer\x1b[2;3H')
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(wake.composerState()).toBeNull()
+  })
+
   function chatSetup(kind = 'claude', state = { busy: false }, { isLive, isBlocked } = {}) {
     const write = vi.fn(() => true)
     const rawWrite = vi.fn(() => true)
@@ -585,6 +614,115 @@ describe('a line sent from the chat view (submitText)', () => {
       wake.writeOutput(frame)
       await vi.advanceTimersByTimeAsync(1)
     }
+
+    it.each([
+      ['a session name at the right edge', ' 화성시 임시 조치 방안', '❯ '],
+      ['a prompt without a gap', ' 화성시 임시 조치 방안 ─', '❯'],
+      ['both changes', ' 화성시 임시 조치 방안', '❯']
+    ])('submits the Claude draft after /config redraws %s', async (_layout, title, promptGlyph) => {
+      const { rawWrite } = chatSetup()
+      const rule = '─'.repeat(90)
+      const text = '프로젝트에 적용한 프레임워크 버전이 뭐야?'
+      const frame = (top, editor) => '\x1b[?2004h\x1b[2J\x1b[H'
+        + ['❯ /config', '  Set Prompt suggestions to off', '', top, editor, rule, '  ⏵⏵ auto mode on'].join('\r\n')
+      await paint(frame(rule, '❯ ') + '\x1b[5;3H')
+      const sent = wake.submitText(text)
+      const top = '─'.repeat(67) + title
+      await paint(frame(top, promptGlyph + text + ' ') + '\x1b[5;65H')
+      expect(wake.composerState()).toBe('draft')
+      expect(wake.inputTarget()).toBe('화성시 임시 조치 방안')
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+    })
+
+    it('requires a Claude footer before using a title without a trailing rule', async () => {
+      const { rawWrite } = chatSetup()
+      const rule = '─'.repeat(80)
+      await paint('\x1b[?2004h\x1b[2J\x1b[H' + [`${rule} some output`, '❯ ', rule, 'other output'].join('\r\n') + '\x1b[2;3H')
+      await expect(wake.submitText('My new question')).resolves.toEqual({ ok: false, reason: 'no-composer' })
+      expect(rawWrite).not.toHaveBeenCalled()
+    })
+
+    const graySuggestion = '\x1b[38;2;190;190;190mSuggested follow-up\x1b[0m'
+    const caretAtStart = '\x1b[2;3H'
+    const forcedClear = '\x15'.repeat(29) + '\x0b'.repeat(29)
+
+    it('sends normally when a color-only suggestion appears in a previously empty editor', async () => {
+      const { rawWrite } = chatSetup()
+      await paint(ruledClaude(100, ['']))
+      await paint(ruledClaude(100, [graySuggestion], false) + caretAtStart)
+      const sent = wake.submitText('My new question')
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste('My new question')]])
+      await paint(ruledClaude(100, ['My new question']))
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste('My new question')], ['\r']])
+    })
+
+    it.each(['typed', 'accepted with Tab', 'recalled with Up'])('preserves a Claude draft %s even with the caret at the start', async action => {
+      const { rawWrite } = chatSetup()
+      await paint(ruledClaude(100, ['']))
+      wake.userInput({ typed: 'Draft', 'accepted with Tab': '\t', 'recalled with Up': '\x1b[A' }[action])
+      await paint(ruledClaude(100, ['Suggested follow-up'], false) + caretAtStart)
+      await expect(wake.submitText('My new question', undefined, { offerForce: true }))
+        .resolves.toMatchObject({ ok: false, reason: 'composer-not-empty', forceToken: expect.any(String) })
+      expect(rawWrite).not.toHaveBeenCalled()
+    })
+
+    it.each([true, false])('retries a rejected Claude send after an explicit clear (clear redraw: %s)', async redraw => {
+      const { rawWrite } = chatSetup()
+      const previous = redraw ? 'Unsent draft' : graySuggestion
+      await paint(ruledClaude(100, [previous], redraw) + (redraw ? '' : caretAtStart))
+      const text = 'My new question'
+      const offer = await wake.submitText(text, undefined, { offerForce: true })
+      expect(offer).toMatchObject({ ok: false, reason: 'composer-not-empty', forceToken: expect.any(String) })
+      expect(rawWrite).not.toHaveBeenCalled()
+
+      const sent = wake.submitText(text, undefined, { forceToken: offer.forceToken })
+      expect(rawWrite.mock.calls).toEqual([[forcedClear, false]])
+      if (redraw) await paint(ruledClaude(100, ['']))
+      await vi.advanceTimersByTimeAsync(250)
+      expect(rawWrite.mock.calls).toEqual([[forcedClear, false], [bracketedPaste(text)]])
+      await paint(ruledClaude(100, [text]))
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[forcedClear, false], [bracketedPaste(text)], ['\r']])
+    })
+
+    it('does not submit when a forced paste joins an uncleared draft', async () => {
+      const { rawWrite } = chatSetup()
+      await paint(ruledClaude(100, ['Unsent draft']))
+      const { forceToken } = await wake.submitText('My new question', undefined, { offerForce: true })
+      const sent = wake.submitText('My new question', undefined, { forceToken })
+      await vi.advanceTimersByTimeAsync(250)
+      await paint(ruledClaude(100, ['Unsent draftMy new question']))
+      await vi.advanceTimersByTimeAsync(5100)
+      await expect(sent).resolves.toEqual({ ok: false, reason: 'not-drawn' })
+      expect(rawWrite.mock.calls).toEqual([[forcedClear, false], [bracketedPaste('My new question')]])
+    })
+
+    it('rejects a force offer after the user edits the draft', async () => {
+      const { rawWrite } = chatSetup()
+      await paint(ruledClaude(100, ['Unsent draft']))
+      const { forceToken } = await wake.submitText('My new question', undefined, { offerForce: true })
+      wake.userInput('!')
+      await expect(wake.submitText('My new question', undefined, { forceToken }))
+        .resolves.toEqual({ ok: false, reason: 'draft-changed' })
+      expect(rawWrite).not.toHaveBeenCalled()
+    })
+
+    it('cancels a forced send when the user types between clear and paste', async () => {
+      const { rawWrite } = chatSetup()
+      await paint(ruledClaude(100, ['Unsent draft']))
+      const { forceToken } = await wake.submitText('My new question', undefined, { offerForce: true })
+      const sent = wake.submitText('My new question', undefined, { forceToken })
+      wake.userInput('my edit')
+      await paint(ruledClaude(100, ['my edit']))
+      await vi.advanceTimersByTimeAsync(250)
+      await expect(sent).resolves.toEqual({ ok: false, reason: 'interrupted' })
+      expect(rawWrite.mock.calls).toEqual([[forcedClear, false]])
+    })
 
     it('waits for 300 ms of composer stability when the paste and screen differ', async () => {
       const { rawWrite } = chatSetup()

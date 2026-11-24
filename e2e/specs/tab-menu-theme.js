@@ -1,5 +1,5 @@
 // Right-click terminal tab menu: the selected theme stays readable over either terminal palette.
-const { connect, createChecks, unlock } = require('../support/driver')
+const { connect, createChecks, selectThemeTab, unlock } = require('../support/driver')
 const { check, finish } = createChecks()
 
 ;(async () => {
@@ -20,10 +20,12 @@ const { check, finish } = createChecks()
       { name: 'macOS Dark', id: 'macos-dark', surface: 'flat' }
     ]) {
       await press({ key: ',', code: 'Comma', windowsVirtualKeyCode: 188, modifiers: 2 })
+      await selectThemeTab(driver, '앱 테마')
       await until("!!document.querySelector('.theme-grid')")
       await js(`[...document.querySelectorAll('.theme-card-main')].find(button =>
         button.querySelector('.theme-name').textContent === ${JSON.stringify(name)}).click()`)
       const surfaceLabel = surface === 'glass' ? 'Glass' : '플랫'
+      await selectThemeTab(driver, '창 효과')
       await js(`[...document.querySelectorAll('.appearance-segment button')].find(button =>
         button.textContent.trim() === ${JSON.stringify(surfaceLabel)}).click()`)
       await until(`document.documentElement.dataset.theme === '${id}' && document.documentElement.dataset.surface === '${surface}'`)

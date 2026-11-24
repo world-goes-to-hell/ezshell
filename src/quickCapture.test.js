@@ -25,6 +25,7 @@ function setup(result = { action: 'copy', region: selection, comment: '' }, opti
       })
       this.loadURL = vi.fn(async () => {})
       this.show = vi.fn()
+      this.hide = vi.fn()
       this.moveTop = vi.fn()
       this.focus = vi.fn()
       this.setAlwaysOnTop = vi.fn()
@@ -209,6 +210,29 @@ describe('the quick screen capture', () => {
     )
     expect(await capture.start()).toBe(true)
     expect(files).toEqual(['capture-1.png', 'capture-1.png', 'capture-2.png'])
+  })
+
+  it('ends a closed capture while its send is still settling and can start a new capture', async () => {
+    const agent = { id: 'codex-1', kind: 'codex', shellId: 'local:1', cwd: path.resolve('service') }
+    const sendCapture = vi.fn(async () => new Promise(() => {}))
+    const onSent = vi.fn()
+    const { capture, clipboard, windows } = setup([
+      { action: 'targets' },
+      { action: 'send', agentId: agent.id, region: selection, comment: '' },
+      { action: 'copy', region: selection, comment: '' }
+    ], { listAgents: () => [agent], sendCapture, onSent })
+    const pending = capture.start()
+    await vi.waitFor(() => expect(sendCapture).toHaveBeenCalledOnce())
+    const stillOpen = sendCapture.mock.calls[0][3]
+    windows[0].emit('close')
+    windows[0].destroy()
+
+    expect(windows[0].hide).toHaveBeenCalledOnce()
+    expect(await pending).toBe(false)
+    expect(stillOpen()).toBe(false)
+    expect(onSent).not.toHaveBeenCalled()
+    expect(clipboard.write).not.toHaveBeenCalled()
+    expect(await capture.start()).toBe(true)
   })
 })
 

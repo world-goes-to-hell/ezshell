@@ -65,9 +65,11 @@ function repoPath(top, target) {
 }
 
 const KINDS = { M: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'copied', T: 'modified', U: 'conflict' }
+// Unmerged pairs of `git status`: either side U, or both added / both deleted
+const UNMERGED = /^(?:U.|.U|AA|DD)$/
 
-/** `git status -z` (v1): staged, changed in the work tree, untracked; paths relative to the top */
-function parseStatus(output) {
+/** The entries of `git status --porcelain=v1 -z`: { path, x, y, from?, unmerged }, at most LIST_MAX */
+function statusEntries(output) {
   const fields = output.split('\0')
   const entries = []
   for (let index = 0; index < fields.length && entries.length < LIST_MAX; index++) {
@@ -77,10 +79,17 @@ function parseStatus(output) {
     const y = field[1]
     const file = field.slice(3)
     const renamedFrom = x === 'R' || x === 'C' ? fields[++index] : undefined
-    entries.push({ path: file, x, y, ...(renamedFrom ? { from: renamedFrom } : {}) })
+    entries.push({ path: file, x, y, ...(renamedFrom ? { from: renamedFrom } : {}), unmerged: UNMERGED.test(x + y) })
   }
-  const staged = entries.filter(e => e.x !== ' ' && e.x !== '?' && e.x !== '!').map(e => ({ path: e.path, kind: KINDS[e.x] ?? 'modified', ...(e.from ? { from: e.from } : {}) }))
-  const changed = entries.filter(e => e.y !== ' ' && e.x !== '?' && e.y !== '?').map(e => ({ path: e.path, kind: KINDS[e.y] ?? 'modified' }))
+  return entries
+}
+
+/** `git status -z` (v1): staged, changed in the work tree, untracked; paths relative to the top */
+function parseStatus(output) {
+  const entries = statusEntries(output)
+  const kindOf = (e, letter) => (e.unmerged ? 'conflict' : KINDS[letter] ?? 'modified')
+  const staged = entries.filter(e => e.x !== ' ' && e.x !== '?' && e.x !== '!').map(e => ({ path: e.path, kind: kindOf(e, e.x), ...(e.from ? { from: e.from } : {}) }))
+  const changed = entries.filter(e => e.y !== ' ' && e.x !== '?' && e.y !== '?').map(e => ({ path: e.path, kind: kindOf(e, e.y) }))
   const untracked = entries.filter(e => e.x === '?').map(e => ({ path: e.path, kind: 'untracked' }))
   return { staged, changed, untracked, truncated: entries.length >= LIST_MAX }
 }
@@ -276,4 +285,8 @@ async function fileHistory(folder, target) {
   return revisions
 }
 
-module.exports = { repoTop, repoFolders, status, commitFiles, fileDiff, fileAt, fileHistory, parseStatus, parseNameStatus, parseNumstat, repoPath, requireRepoPath }
+module.exports = {
+  repoTop, repoFolders, status, commitFiles, fileDiff, fileAt, fileHistory,
+  parseStatus, statusEntries, parseNameStatus, parseNumstat, repoPath, requireRepoPath,
+  SAFE, LIST_MAX, OUTPUT_MAX_BYTES
+}

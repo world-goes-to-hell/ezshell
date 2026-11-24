@@ -51,4 +51,17 @@ describe('imported bookmark folders', () => {
       .toEqual({ added: 1, moved: 0, limited: false })
     expect(bookmarks.getState().bookmarks[0]).toEqual({ ...page, local: true })
   })
+
+  it('deletes exact selected folders and links in one update while keeping other locations and history', async () => {
+    const page = { title: '공통', url: 'https://example.test/shared' }
+    const visit = { ...page, visitedAt: 1 }
+    bookmarks.getState().importPages('profile-b', [folder('bar', '북마크바', [folder('work', '업무', [page]), page])], [visit])
+    const [first, kept, bar] = bookmarks.getState().bookmarks
+    if (bar.kind !== 'folder') throw new Error('Expected a folder')
+    bookmarks.getState().removeBookmarks(new Set([first, bar.children[0]]))
+    expect(bookmarks.getState().bookmarks).toEqual([kept, { ...bar, children: [page] }])
+    expect(bookmarks.getState().history).toEqual([visit])
+    await bookmarks.persist.rehydrate()
+    expect(bookmarks.getState().bookmarks).toEqual([kept, { ...bar, children: [page] }])
+  })
 })

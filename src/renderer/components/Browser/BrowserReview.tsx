@@ -48,6 +48,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const [feedback, setFeedback] = useState<{ text: string; error?: boolean } | null>(null)
   const [sending, setSending] = useState(false)
   const [bookmarksOpen, setBookmarksOpen] = useState(false)
+  const [expandedBookmarkFolders, setExpandedBookmarkFolders] = useState<ReadonlySet<string>>(() => new Set())
   const [importOpen, setImportOpen] = useState(false)
   const [loginsOpen, setLoginsOpen] = useState<boolean | { profileId?: string }>(false)
   const [toolsOpen, setToolsOpen] = useState(false)
@@ -60,11 +61,13 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const agentFieldId = `${elementPickerId}-agent`
   const draftFieldId = `${elementPickerId}-draft`
   const url = state?.url ?? ''
+  const localFile = state?.localFile
+  const localPreview = localFile !== undefined
   const selection = state?.selection
   const agents = state?.agents ?? []
   const recipient = agents.find(agent => agent.id === agentId)
   const elementPickerOpen = toolsOpen && openTool === 'element-picker'
-  const canPick = Boolean(url && !state?.loading && !state?.error)
+  const canPick = Boolean(!localPreview && url && !state?.loading && !state?.error)
   const bookmarked = hasBookmark(bookmarks, url)
 
   useEffect(() => {
@@ -76,7 +79,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
     return () => { mounted = false; off() }
   }, [api, tabId])
 
-  useEffect(() => { setAddress(url) }, [url])
+  useEffect(() => { setAddress(localFile ?? url) }, [localFile, url])
   useEffect(() => { if (!isVisible) setLoginsOpen(false) }, [isVisible])
 
   const releaseAttachment = useCallback((id: string) => {
@@ -260,41 +263,46 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
         </div>
         <form className="browser-review-address" onSubmit={event => {
           event.preventDefault()
-          void act({ type: 'navigate', address })
+          if (!localPreview) void act({ type: 'navigate', address })
         }}>
           <RiGlobalLine aria-hidden="true" />
-          <input type="text" inputMode="url" aria-label="웹 주소" placeholder="https://example.com 또는 localhost:5173"
+          <input type="text" inputMode="url" aria-label={localPreview ? '로컬 파일 경로' : '웹 주소'} placeholder="https://example.com 또는 localhost:5173"
+            readOnly={localPreview} title={localFile}
             value={address} spellCheck={false} autoFocus onFocus={event => event.target.select()}
             onChange={event => setAddress(event.target.value)} />
-          <button type="submit" title="주소 열기" aria-label="주소 열기" disabled={!address.trim()}>
-            <RiArrowRightUpLine />
-          </button>
-          <button type="button" className="browser-review-bookmark" aria-label="현재 페이지 즐겨찾기"
-            aria-pressed={bookmarked} title={bookmarked ? '즐겨찾기에서 제거' : '즐겨찾기에 추가'}
-            disabled={!bookmarked && (!canPick || url.length > MAX_ADDRESS_LENGTH)}
-            onClick={() => state && toggleBookmark(state)}>
-            {bookmarked ? <RiStarFill aria-hidden="true" /> : <RiStarLine aria-hidden="true" />}
-          </button>
+          {!localPreview && <>
+            <button type="submit" title="주소 열기" aria-label="주소 열기" disabled={!address.trim()}>
+              <RiArrowRightUpLine />
+            </button>
+            <button type="button" className="browser-review-bookmark" aria-label="현재 페이지 즐겨찾기"
+              aria-pressed={bookmarked} title={bookmarked ? '즐겨찾기에서 제거' : '즐겨찾기에 추가'}
+              disabled={!bookmarked && (!canPick || url.length > MAX_ADDRESS_LENGTH)}
+              onClick={() => state && toggleBookmark(state)}>
+              {bookmarked ? <RiStarFill aria-hidden="true" /> : <RiStarLine aria-hidden="true" />}
+            </button>
+          </>}
         </form>
-        <button ref={bookmarksButton} type="button" className="browser-review-bookmarks-toggle" title="즐겨찾기 및 방문 기록"
-          aria-label="즐겨찾기 및 방문 기록" aria-expanded={bookmarksOpen} aria-controls={bookmarksId}
-          onClick={() => setBookmarksOpen(open => !open)}>
-          <RiBookmark3Line aria-hidden="true" />
-        </button>
-        <button ref={loginsButton} type="button" className="browser-review-logins" title="로그인 정보" aria-label="로그인 정보"
-          aria-haspopup="dialog" aria-expanded={!!loginsOpen} onClick={() => setLoginsOpen(true)}>
-          <RiKey2Line aria-hidden="true" />
-        </button>
+        {!localPreview && <>
+          <button ref={bookmarksButton} type="button" className="browser-review-bookmarks-toggle" title="즐겨찾기 및 방문 기록"
+            aria-label="즐겨찾기 및 방문 기록" aria-expanded={bookmarksOpen} aria-controls={bookmarksId}
+            onClick={() => setBookmarksOpen(open => !open)}>
+            <RiBookmark3Line aria-hidden="true" />
+          </button>
+          <button ref={loginsButton} type="button" className="browser-review-logins" title="로그인 정보" aria-label="로그인 정보"
+            aria-haspopup="dialog" aria-expanded={!!loginsOpen} onClick={() => setLoginsOpen(true)}>
+            <RiKey2Line aria-hidden="true" />
+          </button>
+        </>}
         {/* The page's own developer tools, in a window of their own (F12 / Ctrl+Shift+I in the page too) */}
         <button type="button" className="browser-review-devtools" disabled={!url}
           title={state?.devToolsOpen ? '개발자 도구 닫기 (F12)' : '개발자 도구 열기 (F12)'} aria-label="개발자 도구"
           aria-pressed={!!state?.devToolsOpen} onClick={() => void act({ type: 'devtools' })}>
           <RiCodeSSlashLine aria-hidden="true" />
         </button>
-        <button type="button" className="browser-review-tools-toggle" title="브라우저 부가기능" aria-label="브라우저 부가기능"
+        {!localPreview && <button type="button" className="browser-review-tools-toggle" title="브라우저 부가기능" aria-label="브라우저 부가기능"
           aria-expanded={toolsOpen} aria-controls={toolsId} onClick={toggleTools}>
           <RiToolsLine aria-hidden="true" />
-        </button>
+        </button>}
       </header>
       {isVisible && loginsOpen && <BrowserLoginsDialog tabId={tabId} origin={state?.loginOrigin ?? null}
         trigger={loginsButton.current} importOptions={typeof loginsOpen === 'object' ? loginsOpen : undefined}
@@ -302,7 +310,8 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
       {isVisible && importOpen && <BrowserDataImportDialog tabId={tabId} trigger={importButton.current} onClose={() => setImportOpen(false)}
         onShowPasswords={profileId => { setImportOpen(false); setLoginsOpen({ profileId }) }} />}
       {bookmarksOpen && (
-        <BrowserSavedPages id={bookmarksId} importTrigger={importButton} onImport={() => setImportOpen(true)} onClose={closeBookmarks}
+        <BrowserSavedPages id={bookmarksId} importTrigger={importButton} expandedFolders={expandedBookmarkFolders}
+          onExpandedFoldersChange={setExpandedBookmarkFolders} onImport={() => setImportOpen(true)} onClose={closeBookmarks}
           onNavigate={address => { closeBookmarks(); void act({ type: 'navigate', address }) }} />
       )}
       {browserError && <p className="browser-review-error" role="alert">{browserError}</p>}

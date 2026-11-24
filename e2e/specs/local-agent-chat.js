@@ -611,6 +611,21 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('a path written as inline code shows as a file link', await until(`!!${codeLink} && !!${codeLink}.querySelector('code')`, 8000), await coverText(0))
   const codeOpen = await js(`window.electronAPI.agentChatOpenLink(${JSON.stringify(shellOfChat)}, ${codeLink}.getAttribute('href'), 'app')`)
   check('that link opens (main counts the inline code as a link of the conversation)', codeOpen?.ok === true, JSON.stringify(codeOpen))
+  // A folder link opens the workspace panel's file tree up to that folder (2026-11-24 user request)
+  fs.mkdirSync(file(path.join('reveal-me', 'inner-folder')), { recursive: true })
+  fs.writeFileSync(file(path.join('reveal-me', 'inner-folder', 'deep.txt')), '안')
+  fs.appendFileSync(path.join(projects, `${SESSIONS[0]}.jsonl`), answer('a-folder-link', '시안은 `reveal-me/inner-folder/` 폴더에 있습니다'))
+  const folderLink = `${cover(0)}.querySelector('.agent-chat-md a.md-code-link[href="reveal-me/inner-folder/"]')`
+  check('a folder written as inline code shows as a link', await until(`!!${folderLink}`, 8000), await coverText(0))
+  await js(`${folderLink}.scrollIntoView({ block: 'nearest' })`)
+  await click(...await center(folderLink))
+  const revealedRow = `[...document.querySelectorAll('.workspace-panel .workspace-tree-row')].find(row => row.textContent.trim() === 'inner-folder')`
+  check('clicking it opens the workspace files tree up to that folder and lights it', await until(`
+    !!${revealedRow} && ${revealedRow}.classList.contains('is-revealed') && ${revealedRow}.getAttribute('aria-expanded') === 'true' &&
+    [...document.querySelectorAll('.workspace-panel .workspace-tree-row')].some(row => row.textContent.trim() === 'deep.txt')
+  `, 10000), await js(`document.querySelector('.workspace-panel')?.innerText.slice(0, 600) ?? 'no panel'`))
+  await shot('local-agent-chat-folder-reveal')
+  await js(`document.querySelector('.workspace-panel .workspace-close[aria-label="작업 공간 닫기"]')?.click()`)
   check('the terminal stays mounted under the chat', await js(`!!${pane(0)}.querySelector('.xterm-screen') && ${pane(0)}.querySelector('.xterm-screen').offsetWidth > 0`))
   await checkChatLinkPreviews({ driver, cover: cover(0), shellId: shellOfChat, profile, check,
     addAnswer: text => fs.appendFileSync(firstTranscript, answer('a-previews', text)) })
@@ -823,7 +838,10 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   }))
   await new Promise(done => setTimeout(done, 300))
   await reportSession('manual-claude', SESSIONS[1], windows(23, 51))
-  check('a Claude question shows how much of its windows it took', await until(`${usageLine}.endsWith('|토큰 입력 100 · 출력 5 · 5시간 +3% · 주간 +1%')`, 8000), await js(usageLine))
+  check('a Claude question shows the before and after readings for both windows', await until(`
+    ${usageLine}.endsWith('|토큰 입력 100 · 출력 5 · 5시간 20% → 23% (+3%p) · 주간 50% → 51% (+1%p)')
+  `, 8000), await js(usageLine))
+  await shot('local-agent-chat-turn-usage')
 
   // A draft starting with "/" lists the slash commands; Esc closes the list and keeps the draft
   await js(`${cover(0)}.querySelector('.agent-chat-input').focus()`)

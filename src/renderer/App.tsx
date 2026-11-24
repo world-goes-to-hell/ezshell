@@ -49,7 +49,9 @@ import { buildRestoreRecord, readRestoreRecord, type RecordSource, type RestoreT
 import { restoreTabs } from './lib/restoreTabsRun'
 import { RestoreTabsBanner, type RestoreBannerState } from './components/Restore/RestoreTabsBanner'
 import { closeLocalPaneShells, getLocalPaneShellId } from './lib/localPaneShells'
+import { focusTabPane } from './lib/paneFocus'
 import { MAIN_PANE, paneIds } from './lib/splitTree'
+import type { LocalDevelopmentTask } from './types'
 import { useTabGroups } from './hooks/useTabGroups'
 import { addScreenRefusal, dragDivider, evenSizes } from './lib/screenPanes'
 import { TabGroupChips } from './components/Terminal/TabGroupChips'
@@ -88,6 +90,7 @@ import { HostKeyDialog } from './components/Modal/HostKeyDialog'
 import { useSessionLogStore } from './stores/sessionLogStore'
 import { isChatShown, useAgentChatStore } from './stores/agentChatStore'
 import { useAskQuestionStore } from './stores/askQuestionStore'
+import { useGitCommitStore } from './stores/gitCommitStore'
 import { useSessionLogFeed } from './hooks/useSessionLogFeed'
 import { useBrowserTabTitles } from './hooks/useBrowserTabTitles'
 import { usePinnedReplyGo } from './hooks/usePinnedReplyGo'
@@ -936,13 +939,7 @@ function App() {
     }
   }
 
-  // A terminal of this PC as a new tab (the shell runs in the main process)
-  const handleOpenLocalTerminal = async ({ cwd, agent, workspaceLabel, resume }: Partial<LocalProjectTerminal> & { resume?: string } = {}, pane?: number): Promise<string | null> => {
-    const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd, agent, resume })
-    if (!result || !result.success) {
-      toast.error('로컬 터미널을 열지 못했습니다', result ? result.error : '앱을 다시 시작해 주세요.')
-      return null
-    }
+  const addLocalTerminalTab = (result: { id: string; name: string; cwd?: string }, workspaceLabel?: string, pane?: number) => {
     const store = useTerminalStore.getState()
     const count = Array.from(store.terminals.values()).filter(info => info.local).length
     store.addTerminal(result.id, {
@@ -960,6 +957,41 @@ function App() {
       if (pane !== undefined) store.focusTerminal(result.id)
     }
     return result.id
+  }
+
+  // A terminal of this PC as a new tab (the shell runs in the main process)
+  const handleOpenLocalTerminal = async ({ cwd, agent, workspaceLabel, resume }: Partial<LocalProjectTerminal> & { resume?: string } = {}, pane?: number): Promise<string | null> => {
+    const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd, agent, resume })
+    if (!result || !result.success) {
+      toast.error('로컬 터미널을 열지 못했습니다', result ? result.error : '앱을 다시 시작해 주세요.')
+      return null
+    }
+    return addLocalTerminalTab(result, workspaceLabel, pane)
+  }
+
+  const startDevelopmentTask = async (folder: string, task: LocalDevelopmentTask) => {
+    try {
+      const result = await window.electronAPI.localProjectDevelopmentStart({
+        folder, id: task.id, cols: 80, rows: 24, includeSource: task.includeSource, install: Boolean(task.installCommand)
+      })
+      if (!result.success) {
+        toast.error('개발 서버를 기동하지 못했습니다', result.error)
+        return
+      }
+      const store = useTerminalStore.getState()
+      for (const [tabId, tab] of store.terminals) {
+        if (!tab.local) continue
+        const panes = tab.splitTree ? paneIds(tab.splitTree) : [MAIN_PANE]
+        const pane = panes.find(id => getLocalPaneShellId(tabId, id) === result.id)
+        if (pane) {
+          focusTabPane(store.focusTerminal, tabId, pane)
+          return
+        }
+      }
+      addLocalTerminalTab(result, result.label)
+    } catch {
+      toast.error('개발 서버를 기동하지 못했습니다')
+    }
   }
 
   const handleOpenLocalFromTabStrip = (pane?: number) => {
@@ -1163,6 +1195,7 @@ function App() {
     // Agent conversations too (main stops following the transcripts): the panes show their terminals
     useAgentChatStore.getState().clearAll()
     useAskQuestionStore.getState().clearAll()
+    useGitCommitStore.getState().clearAll()
   }, [isLocked])
 
   useEffect(() => {
@@ -1503,6 +1536,7 @@ function App() {
           onImportSession={(folderId) => setImportTarget({ folderId })}
           onLocalTerminal={button => void handleOpenSidebarLocalTerminal(button)}
           onLocalFolder={(cwd, workspaceLabel) => void handleOpenLocalTerminal({ cwd, workspaceLabel })}
+          onStartDevelopmentTask={(folder, task) => void startDevelopmentTask(folder, task)}
           onCloseTerminal={closeTerminal}
         />
         <main className="main-area" id="main-content" style={{ '--browser-tab-max-width': `${browserTabMaxWidth}px` } as CSSProperties}>

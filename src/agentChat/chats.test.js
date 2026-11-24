@@ -422,7 +422,7 @@ describe('following a chat view\'s transcript', () => {
 
 describe('the windows a Claude question took', () => {
   it('adds them from the status line readings and sends the question again when a later reading changes them', async () => {
-    let used = { fiveHour: 1 }
+    let used = { fiveHour: { before: 20, after: 21, used: 1 } }
     const asked = []
     frames = []
     chats.closeAll()
@@ -441,7 +441,7 @@ describe('the windows a Claude question took', () => {
     await vi.waitFor(() => expect(frames.some(frame => frame.reset)).toBe(true))
     const question = frames.find(frame => frame.reset).items.find(item => item.id === 'user:u1')
     // The time it was worked out from stays in main
-    expect(question.usage).toEqual({ input: 10, cached: 0, output: 5, limits: { fiveHour: 1 } })
+    expect(question.usage).toEqual({ input: 10, cached: 0, output: 5, limits: used })
     expect(asked[0]).toEqual([Date.parse(at), Date.parse('2026-11-21T10:00:15.000Z')])
 
     // The report of the last answer came after it was read: the question goes again, once
@@ -449,10 +449,10 @@ describe('the windows a Claude question took', () => {
     chats.tick()
     await new Promise(done => setTimeout(done, 100))
     expect(frames.length).toBe(sent)
-    used = { fiveHour: 2 }
+    used = { fiveHour: { before: 20, after: 22, used: 2 } }
     chats.tick()
     await vi.waitFor(() => expect(frames.length).toBe(sent + 1))
-    expect(frames.at(-1).items).toEqual([expect.objectContaining({ id: 'user:u1', usage: { input: 10, cached: 0, output: 5, limits: { fiveHour: 2 } } })])
+    expect(frames.at(-1).items).toEqual([expect.objectContaining({ id: 'user:u1', usage: { input: 10, cached: 0, output: 5, limits: used } })])
     chats.tick()
     await new Promise(done => setTimeout(done, 100))
     expect(frames.length).toBe(sent + 1)

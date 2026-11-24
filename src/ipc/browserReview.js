@@ -9,6 +9,7 @@ const { importBrowserProfile } = require('./browserProfileImport.js')
 const { createBrowserPasswordImport } = require('./browserPasswordImport.js')
 const { createImageDrafts } = require('../agentChat/imageDrafts.js')
 const { browserContextMenu } = require('./browserContextMenu.js')
+const { WORKSPACE_SCHEME, workspaceDocument, workspacePreview, serveWorkspaceAsset } = require('./browserWorkspace.js')
 
 const WORLD = 1001
 const LOGIN_WORLD = 1002
@@ -45,10 +46,11 @@ function reviewMessage(request, selection, files = []) {
   ].join('\n\n')
 }
 
-function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, listAgents, sendMessage, clipboard, selectImages, openExternal, userDataPath, getMasterPassword }) {
+function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTerminalWindow, getWindow, listAgents, sendMessage, clipboard, selectImages, openExternal, userDataPath, getMasterPassword }) {
   const { WebContentsView, session, ipcMain, dialog, Menu, clipboard: systemClipboard } = require('electron')
   const tabs = new Map()
   const sessions = new Map()
+  const workspacePreviews = new Map()
   const imageDrafts = createImageDrafts(clipboard)
   const logins = createBrowserLogins(userDataPath, getMasterPassword)
   const importSources = createBrowserImportSources()
@@ -65,22 +67,25 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
   const allowed = event => fromMainWindow(event) && event.senderFrame === event.sender.mainFrame
   const tabFor = (event, id) => allowed(event) ? tabs.get(id) : undefined
 
-  function sessionFor(persistent) {
-    const existing = sessions.get(persistent)
+  function sessionFor(persistent, workspace = false) {
+    const key = workspace ? 'workspace' : persistent
+    const existing = sessions.get(key)
     if (existing) return existing
-    const pageSession = session.fromPartition(`${persistent ? 'persist:' : ''}ezshell-browser-review`, { cache: !persistent })
+    const partition = workspace ? 'ezshell-browser-workspace' : `${persistent ? 'persist:' : ''}ezshell-browser-review`
+    const pageSession = session.fromPartition(partition, { cache: !persistent && !workspace })
     pageSession.setPermissionCheckHandler(() => false)
     pageSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
     pageSession.setDevicePermissionHandler(() => false)
     pageSession.on('will-download', event => event.preventDefault())
-    sessions.set(persistent, pageSession)
+    if (workspace) pageSession.protocol.handle(WORKSPACE_SCHEME, request => serveWorkspaceAsset(request, workspacePreviews))
+    sessions.set(key, pageSession)
     return pageSession
   }
 
-  function createTab(win, id) {
-    const persistent = rememberSession
+  function createTab(win, id, workspace) {
+    const persistent = !workspace && rememberSession
     const page = new WebContentsView({
-      webPreferences: { session: sessionFor(persistent), sandbox: true, contextIsolation: true, nodeIntegration: false }
+      webPreferences: { session: sessionFor(persistent, Boolean(workspace)), sandbox: true, contextIsolation: true, nodeIntegration: false }
     })
     const contents = page.webContents
     page.setVisible(false)
@@ -92,10 +97,12 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
       if (linkUrl(url)) setImmediate(() => { if (!win.isDestroyed()) openLink(url) })
       return { action: 'deny' }
     })
+    const localDocument = url => workspace && workspaceDocument(url, workspace.host)
+    const tabUrl = url => workspace ? localDocument(url) : webUrl(url)
     const guardNavigation = (event, url) => {
-      if (!webUrl(event.url ?? url)) event.preventDefault()
+      if (!tabUrl(event.url ?? url)) event.preventDefault()
     }
-    contents.on('will-navigate', guardNavigation)
+    contents.on(workspace ? 'will-frame-navigate' : 'will-navigate', guardNavigation)
     contents.on('will-redirect', guardNavigation)
     const ui = { url: '', title: '', loading: false, error: '', picking: false, selection: null }
     let generation = 0
@@ -105,6 +112,7 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
     function state() {
       return {
         ...ui, canGoBack: contents.navigationHistory.canGoBack(), canGoForward: contents.navigationHistory.canGoForward(),
+        ...(workspace ? { localFile: localDocument(ui.url) ?? '' } : {}),
         loginOrigin: currentLoginOrigin(),
         devToolsOpen: contents.isDevToolsOpened(),
         agents: listAgents()
@@ -202,17 +210,27 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
       showPage()
       publish()
     }
+    function load(url) {
+      navigation(url)
+      // Loading failures are reported by did-fail-load. ERR_ABORTED can be a click or a redirect.
+      void contents.loadURL(url).catch(() => {})
+    }
     contents.on('did-start-navigation', event => {
-      if (event.isMainFrame && webUrl(event.url)) navigation(event.url)
+      if (event.isMainFrame && tabUrl(event.url)) navigation(event.url)
     })
     contents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
-      if (isMainFrame && ui.url !== url && webUrl(url)) navigation(url)
+      if (isMainFrame && ui.url !== url && tabUrl(url)) navigation(url)
     })
-    contents.on('did-navigate', (_event, url) => {
-      if (!webUrl(url)) return
+    contents.on('did-navigate', (_event, url, responseCode) => {
+      if (!tabUrl(url)) return
       // A new document: its title (page-title-updated) comes after; until then the tab shows the host
-      ui.title = ''
+      ui.title = workspace ? path.posix.basename(localDocument(url)) : ''
       navigation(url)
+      if (workspace && responseCode >= 400) {
+        ui.error = '파일을 열 수 없습니다. 작업 폴더에서 파일을 확인해 주세요.'
+        showPage()
+        publish()
+      }
     })
     // The tab name follows the page's title. The page sets it, so only a bounded string goes to the window
     contents.on('page-title-updated', (_event, title) => {
@@ -227,9 +245,9 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
       if (visible && !win.isDestroyed()) win.webContents.send('browser-review-focus', id)
     })
     contents.on('did-fail-load', (_event, code, _description, url, isMainFrame) => {
-      if (code === -3 || !isMainFrame || !webUrl(url)) return
+      if (code === -3 || !isMainFrame || !tabUrl(url)) return
       ui.url = url
-      ui.error = '페이지를 열 수 없습니다. 주소나 연결을 확인해 주세요.'
+      ui.error = workspace ? '파일을 열 수 없습니다. 작업 폴더에서 파일을 확인해 주세요.' : '페이지를 열 수 없습니다. 주소나 연결을 확인해 주세요.'
       showPage()
       publish()
     })
@@ -284,11 +302,10 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
     async function action(request) {
       switch (request?.type) {
         case 'navigate': {
+          if (workspace) return fail('작업 공간의 파일 목록에서 열어 주세요.')
           const url = addressUrl(request.address)
           if (!url) return fail('올바른 HTTP 또는 HTTPS 주소를 입력해 주세요.')
-          navigation(url.href)
-          // Loading failures are reported by did-fail-load. ERR_ABORTED can be a click or a redirect.
-          void contents.loadURL(url.href).catch(() => {})
+          load(url.href)
           return success
         }
         case 'back':
@@ -298,6 +315,10 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
           if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward()
           return success
         case 'reload':
+          if (workspace && ui.error && ui.url) {
+            load(ui.url)
+            return success
+          }
           if (ui.error) return action({ type: 'navigate', address: ui.url })
           if (ui.url) contents.reload()
           return success
@@ -358,9 +379,10 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
     }
 
     return {
-      state, publish, bounds, action, currentLoginOrigin, fill, persistent,
+      state, publish, bounds, action, currentLoginOrigin, fill, persistent, load,
       close() {
         generation++
+        if (workspace) workspacePreviews.delete(workspace.host)
         // Its developer tools window goes with the tab (closing the app locks or closes every tab)
         if (!contents.isDestroyed() && contents.isDevToolsOpened()) contents.closeDevTools()
         if (!win.isDestroyed()) win.contentView.removeChildView(page)
@@ -378,11 +400,14 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
     tab.close()
   }
 
-  function openTab() {
+  function openTab(preview) {
     const win = getWindow()
-    const id = 'browser:' + randomUUID()
+    const host = randomUUID()
+    const id = 'browser:' + host
+    const workspace = preview && { ...preview, host }
     try {
-      tabs.set(id, createTab(win, id))
+      tabs.set(id, createTab(win, id, workspace))
+      if (workspace) workspacePreviews.set(host, workspace)
       return { success: true, id }
     } catch {
       return fail('브라우저 탭을 열 수 없습니다.')
@@ -406,6 +431,22 @@ function registerBrowserReview({ fromMainWindow, fromTerminalWindow, getWindow, 
   }
 
   ipcMain.handle('browser-review-open', event => allowed(event) ? openTab() : fail('메인 창에서 잠금을 해제해 주세요.'))
+  ipcMain.handle('browser-review-open-workspace', async (event, root, relative) => {
+    const locked = '메인 창에서 잠금을 해제해 주세요.'
+    if (!allowed(event)) return fail(locked)
+    try {
+      const preview = await workspacePreview(await resolveWorkspaceRoot(root), relative)
+      if (!allowed(event)) return fail(locked)
+      const result = openTab(preview)
+      if (!result.success) return result
+      getWindow().webContents.send('browser-review-link-opened', result.id)
+      const host = result.id.slice('browser:'.length)
+      tabs.get(result.id).load(`${WORKSPACE_SCHEME}://${host}/${preview.path}`)
+      return success
+    } catch (error) {
+      return fail(error.userMessage || '브라우저에서 열 수 있는 작업 폴더의 파일을 선택해 주세요.')
+    }
+  })
   ipcMain.handle('browser-review-open-link', async (event, address, destination) => {
     const detached = event.senderFrame === event.sender.mainFrame && fromTerminalWindow(event)
     if (!allowed(event) && !detached) return fail('메인 창에서 잠금을 해제해 주세요.')

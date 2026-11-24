@@ -1,6 +1,7 @@
 // The mouse effects (designed in mockups/cursor-themes.html): particles made by pointer moves and
 // presses, drawn on a 2D canvas. The window overlay (pointerAppearance.ts) and the settings cards'
 // previews run the same code. Nothing here touches the DOM, so the limits are tested directly.
+import { contrastingMonochrome } from './colorContrast'
 import type { ClickEffect, EffectLevel, MoveEffect } from './pointerPrefs'
 
 /** Particle limits: a fast pointer or a burst of clicks never grows the work past these */
@@ -21,6 +22,11 @@ export interface EffectState {
   lastX: number
   lastY: number
   side: number
+}
+
+export interface GhostCursor {
+  image: HTMLImageElement
+  hotspot: readonly [number, number]
 }
 
 export interface EffectConfig {
@@ -53,6 +59,10 @@ export function effectiveEffects(move: MoveEffect, click: ClickEffect, reduced: 
 
 const random = Math.random
 const palette = (ink: string, dark: boolean) => (dark ? [ink, '#fff', '#ffe066', '#ff9ecb'] : [ink, '#ff9f1a', '#ff6b9d', '#4aa3ff'])
+const BUBBLE_BLUE = '#5aaaf5'
+const DARK_OUTLINE = '#000000'
+const particlePaint = (color: string) => ({ color, outline: contrastingMonochrome(color) })
+type ParticlePaint = ReturnType<typeof particlePaint>
 
 export function rgba(hex: string, alpha: number): string {
   let value = hex.replace('#', '')
@@ -72,7 +82,7 @@ function put(list: Particle[], particle: Particle, cap: number) {
  * there: nothing new is added (what is already drifting may cross the terminal), and the spotlight
  * hides at once, already on the pointer, so no frames run for it.
  */
-export function addMove(S: EffectState, effect: MoveEffect, x: number, y: number, now: number, level: EffectLevel, ink: string, dark: boolean, visible: boolean): void {
+export function addMove(S: EffectState, effect: MoveEffect, x: number, y: number, now: number, level: EffectLevel, ink: string, dark: boolean, visible: boolean, ghost?: () => GhostCursor | null): void {
   if (effect === 'spot') {
     const s = S.spot
     s.tx = x
@@ -96,7 +106,7 @@ export function addMove(S: EffectState, effect: MoveEffect, x: number, y: number
     S.lastX = x; S.lastY = y
     for (let i = 0; i < L; i++) {
       put(A, { k: 'sp', x: x + (random() - 0.5) * 8, y: y + (random() - 0.5) * 8, vx: (random() - 0.5) * 0.7, vy: 0.15 + random() * 0.5,
-        t0: now, life: 520 + random() * 420, size: 3 + random() * (2 + L * 1.6), rot: random() * 6, c: colors[random() * 4 | 0] }, MOVE_CAP)
+        t0: now, life: 520 + random() * 420, size: 3 + random() * (2 + L * 1.6), rot: random() * 6, paint: particlePaint(colors[random() * 4 | 0]) }, MOVE_CAP)
     }
   } else if (effect === 'bubble' && distance > 26) {
     S.lastX = x; S.lastY = y
@@ -109,16 +119,18 @@ export function addMove(S: EffectState, effect: MoveEffect, x: number, y: number
     for (let i = 0, n = L > 1 ? 2 : 1; i < n; i++) {
       put(A, { k: 'pe', x: x + (random() - 0.5) * 10, y: y + (random() - 0.5) * 6, vx: (random() - 0.5) * 0.5, vy: 0.35 + random() * 0.45,
         ph: random() * 6, rot: random() * 6, vr: (random() - 0.5) * 0.08, size: 3.5 + random() * (2 + L),
-        c: random() < 0.5 ? '#ff9fc0' : '#ffd0e0', t0: now, life: 1100 + random() * 600 }, MOVE_CAP)
+        color: random() < 0.5 ? '#ff9fc0' : '#ffd0e0', t0: now, life: 1100 + random() * 600 }, MOVE_CAP)
     }
   } else if (effect === 'ghost' && distance > 16) {
     S.lastX = x; S.lastY = y
-    put(A, { k: 'gh', x, y, t0: now, life: 240 + L * 70 }, GHOST_CAP)
+    const cursor = ghost?.()
+    if (cursor) put(A, { k: 'gh', x, y, t0: now, life: 240 + L * 70, cursor }, GHOST_CAP)
   } else if (effect === 'pixel' && distance > 8) {
     S.lastX = x; S.lastY = y
     for (let i = 0; i < L; i++) {
       put(A, { k: 'px', x: x + (random() - 0.5) * 8, y: y + (random() - 0.5) * 8, vx: (random() - 0.5) * 0.8, vy: -0.2 + random() * 0.6,
-        s: 2 * (1 + (random() * 2 | 0)), c: [ink, dark ? '#fff' : '#222', '#ff3b6b', '#ffd23f'][random() * 4 | 0], t0: now, life: 380 + random() * 260 }, MOVE_CAP)
+        s: 2 * (1 + (random() * 2 | 0)), paint: particlePaint([ink, dark ? '#fff' : '#222', '#ff3b6b', '#ffd23f'][random() * 4 | 0]),
+        t0: now, life: 380 + random() * 260 }, MOVE_CAP)
     }
   } else if (effect === 'paw' && distance > 46) {
     const angle = S.lastX > -90 ? Math.atan2(y - S.lastY, x - S.lastX) : 0
@@ -142,7 +154,7 @@ export function addClick(S: EffectState, effect: ClickEffect | 'rs', x: number, 
     case 'heart':
       for (let i = 0, n = 4 + L * 3; i < n; i++) {
         put(A, { k: 'h', x: x + (random() - 0.5) * 10, y, vx: (random() - 0.5) * 1.5, vy: -(0.7 + random() * 1.1), ph: random() * 6,
-          size: 7 + random() * (4 + L * 2), c: colors[random() * 4 | 0], t0: now, life: 850 + random() * 500 }, CLICK_CAP)
+          size: 7 + random() * (4 + L * 2), paint: particlePaint(colors[random() * 4 | 0]), t0: now, life: 850 + random() * 500 }, CLICK_CAP)
       }
       break
     case 'firework':
@@ -150,7 +162,7 @@ export function addClick(S: EffectState, effect: ClickEffect | 'rs', x: number, 
         const angle = i / n * 6.283 + random() * 0.3
         const speed = 1.6 + random() * (1.2 + L * 0.4)
         put(A, { k: 'fw', x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-          c: [ink, '#ff6b9d', '#ffd23f', '#4aa3ff', '#4fd1a5'][random() * 5 | 0], t0: now, life: 700 + random() * 300 }, CLICK_CAP)
+          paint: particlePaint([ink, '#ff6b9d', '#ffd23f', '#4aa3ff', '#4fd1a5'][random() * 5 | 0]), t0: now, life: 700 + random() * 300 }, CLICK_CAP)
       }
       break
     case 'starpop':
@@ -158,7 +170,7 @@ export function addClick(S: EffectState, effect: ClickEffect | 'rs', x: number, 
         const angle = random() * 6.283
         const speed = 1.4 + random() * 1.8
         put(A, { k: 'st', x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, size: 5 + random() * (3 + L * 1.5), rot: random() * 6,
-          c: ['#ffd23f', ink, '#ff9ecb'][random() * 3 | 0], t0: now, life: 560 + random() * 200 }, CLICK_CAP)
+          paint: particlePaint(['#ffd23f', ink, '#ff9ecb'][random() * 3 | 0]), t0: now, life: 560 + random() * 200 }, CLICK_CAP)
       }
       break
     case 'word': put(A, { k: 'wd', x, y, tx: ['톡!', '뿅!', '콕!'][random() * 3 | 0], t0: now, life: 850 }, CLICK_CAP); break
@@ -171,24 +183,44 @@ export function addClick(S: EffectState, effect: ClickEffect | 'rs', x: number, 
   }
 }
 
-function drawHeart(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, color: string, alpha: number) {
-  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(x, y); ctx.scale(s / 12, s / 12); ctx.fillStyle = color
+// A thin contrasting outline keeps the colored shape visible over a differently themed pane.
+function strokeEffect(ctx: CanvasRenderingContext2D, width: number, color: string, outline: string, alpha: number) {
+  ctx.globalAlpha = alpha * 0.72
+  ctx.lineWidth = width + 1.6
+  ctx.strokeStyle = outline
+  ctx.stroke()
+  ctx.globalAlpha = alpha
+  ctx.lineWidth = width
+  ctx.strokeStyle = color
+  ctx.stroke()
+  ctx.globalAlpha = 1
+}
+
+function fillEffect(ctx: CanvasRenderingContext2D, color: string, outline: string, width = 1.2) {
+  ctx.strokeStyle = rgba(outline, 0.72)
+  ctx.lineWidth = width
+  ctx.lineJoin = 'round'
+  ctx.stroke()
+  ctx.fillStyle = color
+  ctx.fill()
+}
+
+function drawHeart(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, paint: ParticlePaint, alpha: number) {
+  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(x, y); ctx.scale(s / 12, s / 12)
   ctx.beginPath(); ctx.moveTo(0, 10)
   ctx.bezierCurveTo(-12, 2, -12, -8, -5.5, -8); ctx.bezierCurveTo(-2.5, -8, -0.5, -6, 0, -4)
   ctx.bezierCurveTo(0.5, -6, 2.5, -8, 5.5, -8); ctx.bezierCurveTo(12, -8, 12, 2, 0, 10)
-  ctx.fill(); ctx.restore()
+  ctx.closePath(); fillEffect(ctx, paint.color, paint.outline, 14.4 / s); ctx.restore()
 }
 
-function drawSparkle(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, color: string, alpha: number, rotation: number) {
-  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(x, y); ctx.rotate(rotation); ctx.fillStyle = color
+function drawSparkle(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, paint: ParticlePaint, alpha: number, rotation: number) {
+  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(x, y); ctx.rotate(rotation)
   ctx.beginPath(); ctx.moveTo(0, -s)
   ctx.quadraticCurveTo(0, 0, s, 0); ctx.quadraticCurveTo(0, 0, 0, s); ctx.quadraticCurveTo(0, 0, -s, 0); ctx.quadraticCurveTo(0, 0, 0, -s)
-  ctx.fill(); ctx.restore()
+  ctx.closePath(); fillEffect(ctx, paint.color, paint.outline); ctx.restore()
 }
 
-let ghostPath: Path2D | null = null
-
-function drawMove(ctx: CanvasRenderingContext2D, S: EffectState, now: number, dt: number, c: EffectConfig) {
+function drawMove(ctx: CanvasRenderingContext2D, S: EffectState, now: number, dt: number, c: EffectConfig, outline: string) {
   const ink = c.ink
   const L = c.moveLevel
   const f = dt / 16
@@ -200,18 +232,18 @@ function drawMove(ctx: CanvasRenderingContext2D, S: EffectState, now: number, dt
       case 'tr': trail.push(it); break
       case 'sp':
         it.x += it.vx * f; it.y += it.vy * f
-        drawSparkle(ctx, it.x, it.y, it.size * (1 - u * 0.5), it.c, 1 - u, it.rot + u * 2)
+        drawSparkle(ctx, it.x, it.y, it.size * (1 - u * 0.5), it.paint, 1 - u, it.rot + u * 2)
         break
       case 'bu':
         it.x += (Math.sin(age / 260 + it.ph) * 0.35 + it.vx) * f; it.y += it.vy * f
         if (u < 0.86) {
           ctx.beginPath(); ctx.arc(it.x, it.y, it.r, 0, 6.283); ctx.fillStyle = 'rgba(124,196,255,.16)'; ctx.fill()
-          ctx.lineWidth = 1.4; ctx.strokeStyle = 'rgba(90,170,245,.9)'; ctx.stroke()
+          strokeEffect(ctx, 1.4, BUBBLE_BLUE, DARK_OUTLINE, 0.9)
           ctx.beginPath(); ctx.arc(it.x, it.y, it.r * 0.62, 3.6, 4.5); ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.stroke()
         } else {
           const q = (u - 0.86) / 0.14
           ctx.beginPath(); ctx.arc(it.x, it.y, it.r * (1 + q * 0.7), 0, 6.283)
-          ctx.lineWidth = 1.4 * (1 - q) + 0.2; ctx.strokeStyle = `rgba(90,170,245,${0.9 * (1 - q)})`; ctx.stroke()
+          strokeEffect(ctx, 1.4 * (1 - q) + 0.2, BUBBLE_BLUE, DARK_OUTLINE, 0.9 * (1 - q))
           for (let i = 0; i < 6; i++) {
             const a = i * 1.047
             const rr = it.r * (1 + q * 1.4)
@@ -223,27 +255,31 @@ function drawMove(ctx: CanvasRenderingContext2D, S: EffectState, now: number, dt
       case 'pe':
         it.x += (it.vx + Math.sin(age / 240 + it.ph) * 0.5) * f; it.y += it.vy * f; it.rot += it.vr * f
         ctx.save(); ctx.globalAlpha = u > 0.7 ? 1 - (u - 0.7) / 0.3 : 1; ctx.translate(it.x, it.y); ctx.rotate(it.rot)
-        ctx.fillStyle = it.c; ctx.beginPath(); ctx.ellipse(0, 0, it.size, it.size * 0.55, 0, 0, 6.283); ctx.fill(); ctx.restore()
+        ctx.beginPath(); ctx.ellipse(0, 0, it.size, it.size * 0.55, 0, 0, 6.283)
+        fillEffect(ctx, it.color, DARK_OUTLINE); ctx.restore()
         break
-      case 'gh':
-        ghostPath ??= new Path2D('M0 0V21.5L5 16.7L8.4 24.2L12.2 22.5L8.8 15.1H15.4Z')
-        ctx.save(); ctx.translate(it.x - 3, it.y - 3); ctx.scale(0.95, 0.95); ctx.globalAlpha = 0.9 * (1 - u); ctx.lineJoin = 'round'
-        ctx.lineWidth = 5; ctx.strokeStyle = rgba(ink, 0.25); ctx.stroke(ghostPath)
-        ctx.lineWidth = 1.6; ctx.strokeStyle = ink; ctx.stroke(ghostPath)
-        ctx.fillStyle = rgba(ink, 0.35); ctx.fill(ghostPath); ctx.restore()
+      case 'gh': {
+        const { image, hotspot } = it.cursor as GhostCursor
+        if (!image.complete || !image.naturalWidth) break
+        ctx.globalAlpha = 0.65 * (1 - u)
+        ctx.drawImage(image, it.x - hotspot[0], it.y - hotspot[1])
+        ctx.globalAlpha = 1
         break
+      }
       case 'px':
         it.x += it.vx * f; it.y += it.vy * f; it.vy += 0.03 * f
-        ctx.globalAlpha = u > 0.6 ? 0.5 : 1; ctx.fillStyle = it.c
-        ctx.fillRect(Math.round(it.x / 2) * 2, Math.round(it.y / 2) * 2, it.s, it.s); ctx.globalAlpha = 1
+        ctx.globalAlpha = u > 0.6 ? 0.5 : 1
+        ctx.beginPath(); ctx.rect(Math.round(it.x / 2) * 2, Math.round(it.y / 2) * 2, it.s, it.s)
+        fillEffect(ctx, it.paint.color, it.paint.outline, 2); ctx.globalAlpha = 1
         break
       case 'pw':
         ctx.save(); ctx.translate(it.x, it.y); ctx.rotate(it.ang + 1.5708); ctx.scale(it.sc, it.sc)
-        ctx.fillStyle = `rgba(${c.dark ? '236,150,178' : '205,100,135'},${u < 0.65 ? 0.85 : 0.85 * (1 - (u - 0.65) / 0.35)})`
-        ctx.beginPath(); ctx.ellipse(0, 3, 4.2, 3.4, 0, 0, 6.283); ctx.fill()
+        ctx.globalAlpha = u < 0.65 ? 0.85 : 0.85 * (1 - (u - 0.65) / 0.35)
+        ctx.beginPath(); ctx.ellipse(0, 3, 4.2, 3.4, 0, 0, 6.283); ctx.closePath()
         for (const [a, b, r] of [[-4.4, -1.6, 1.7], [-1.5, -4.6, 1.8], [1.5, -4.6, 1.8], [4.4, -1.6, 1.7]]) {
-          ctx.beginPath(); ctx.arc(a, b, r, 0, 6.283); ctx.fill()
+          ctx.moveTo(a + r, b); ctx.arc(a, b, r, 0, 6.283); ctx.closePath()
         }
+        fillEffect(ctx, c.dark ? '#ec96b2' : '#cd6487', DARK_OUTLINE)
         ctx.restore()
         break
     }
@@ -259,11 +295,10 @@ function drawMove(ctx: CanvasRenderingContext2D, S: EffectState, now: number, dt
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y)
       if (comet) {
         ctx.lineWidth = (5 + L * 3) * k; ctx.strokeStyle = rgba(ink, 0.28 * k); ctx.stroke()
-        ctx.lineWidth = (1.4 + L * 0.9) * k; ctx.strokeStyle = inner; ctx.globalAlpha = Math.min(1, k * 1.2); ctx.stroke(); ctx.globalAlpha = 1
+        strokeEffect(ctx, (1.4 + L * 0.9) * k, inner, c.dark ? DARK_OUTLINE : outline, Math.min(1, k * 1.2))
       } else {
-        ctx.lineWidth = (2 + L * 2.2) * k
-        ctx.strokeStyle = `hsla(${(b.t0 * 0.25 + i * 14) % 360},95%,${c.dark ? 62 : 50}%,${0.9 * k})`
-        ctx.stroke()
+        const color = `hsl(${(b.t0 * 0.25 + i * 14) % 360},95%,62%)`
+        strokeEffect(ctx, (2 + L * 2.2) * k, color, DARK_OUTLINE, 0.9 * k)
       }
     }
   }
@@ -280,12 +315,13 @@ function drawMove(ctx: CanvasRenderingContext2D, S: EffectState, now: number, dt
       const glow = ctx.createRadialGradient(s.x, s.y, R * 0.2, s.x, s.y, R * 1.7)
       glow.addColorStop(0, rgba(ink, 0)); glow.addColorStop(0.55, rgba(ink, 0.22 * s.a)); glow.addColorStop(1, rgba(ink, 0))
       ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(s.x, s.y, R * 1.7, 0, 6.283); ctx.fill()
-      ctx.beginPath(); ctx.arc(s.x, s.y, R, 0, 6.283); ctx.lineWidth = 2.5; ctx.strokeStyle = rgba(ink, 0.8 * s.a); ctx.stroke()
+      ctx.beginPath(); ctx.arc(s.x, s.y, R, 0, 6.283)
+      strokeEffect(ctx, 2.5, ink, outline, 0.9 * s.a)
     }
   }
 }
 
-function drawClick(ctx: CanvasRenderingContext2D, S: EffectState, now: number, dt: number, c: EffectConfig) {
+function drawClick(ctx: CanvasRenderingContext2D, S: EffectState, width: number, height: number, now: number, dt: number, c: EffectConfig, outline: string) {
   const ink = c.ink
   const L = c.clickLevel
   const f = dt / 16
@@ -295,7 +331,8 @@ function drawClick(ctx: CanvasRenderingContext2D, S: EffectState, now: number, d
     const u = age / it.life
     switch (it.k) {
       case 'rs':
-        ctx.beginPath(); ctx.arc(it.x, it.y, 14, 0, 6.283); ctx.lineWidth = 2; ctx.strokeStyle = rgba(ink, 0.8 * (1 - u)); ctx.stroke()
+        ctx.beginPath(); ctx.arc(it.x, it.y, 14, 0, 6.283)
+        strokeEffect(ctx, 2, ink, outline, 0.8 * (1 - u))
         break
       case 'rp': {
         [0, 0.18].forEach((delay, i) => {
@@ -303,7 +340,7 @@ function drawClick(ctx: CanvasRenderingContext2D, S: EffectState, now: number, d
           if (q <= 0) return
           const e = 1 - Math.pow(1 - q, 3)
           ctx.beginPath(); ctx.arc(it.x, it.y, 6 + e * (34 + L * 16) * (i ? 0.65 : 1), 0, 6.283)
-          ctx.lineWidth = (i ? 1.5 : 2.5) * (1 - q * 0.6); ctx.strokeStyle = rgba(ink, 0.85 * (1 - q)); ctx.stroke()
+          strokeEffect(ctx, (i ? 1.5 : 2.5) * (1 - q * 0.6), ink, outline, 0.85 * (1 - q))
         })
         const e = 1 - Math.pow(1 - u, 3)
         ctx.beginPath(); ctx.arc(it.x, it.y, 4 + e * 10, 0, 6.283); ctx.fillStyle = rgba(ink, 0.25 * (1 - u)); ctx.fill()
@@ -312,57 +349,64 @@ function drawClick(ctx: CanvasRenderingContext2D, S: EffectState, now: number, d
       case 'pl': {
         const e = 1 - Math.pow(1 - u, 2)
         ctx.beginPath(); ctx.arc(it.x, it.y, 8 + e * (26 + L * 12), 0, 6.283)
-        ctx.lineWidth = 4.5 * (1 - u) + 0.5; ctx.strokeStyle = rgba(ink, 0.75 * (1 - u)); ctx.stroke()
+        strokeEffect(ctx, 4.5 * (1 - u) + 0.5, ink, outline, 0.75 * (1 - u))
         break
       }
       case 'pr': {
         const e = Math.min(1, u * 1.7)
         const r = 5 + (1 - e) * 24
         const a = u > 0.6 ? 1 - (u - 0.6) / 0.4 : 1
-        for (const [width, color] of [[4.6, `rgba(0,0,0,${0.3 * a})`], [2.2, rgba(ink, a)]] as const) {
-          ctx.beginPath()
-          for (let d = 0; d < 4; d++) {
-            const cx = Math.cos(d * 1.5708)
-            const sy = Math.sin(d * 1.5708)
-            ctx.moveTo(it.x + cx * r, it.y + sy * r); ctx.lineTo(it.x + cx * (r + 8), it.y + sy * (r + 8))
-          }
-          ctx.lineWidth = width; ctx.lineCap = 'round'; ctx.strokeStyle = color; ctx.stroke()
+        ctx.beginPath()
+        for (let d = 0; d < 4; d++) {
+          const cx = Math.cos(d * 1.5708)
+          const sy = Math.sin(d * 1.5708)
+          ctx.moveTo(it.x + cx * r, it.y + sy * r); ctx.lineTo(it.x + cx * (r + 8), it.y + sy * (r + 8))
         }
-        ctx.beginPath(); ctx.arc(it.x, it.y, 1.8, 0, 6.283); ctx.fillStyle = rgba(ink, a); ctx.fill()
+        ctx.lineCap = 'round'
+        strokeEffect(ctx, 2.2, ink, outline, a)
+        ctx.globalAlpha = a
+        ctx.beginPath(); ctx.arc(it.x, it.y, 1.8, 0, 6.283); fillEffect(ctx, ink, outline)
+        ctx.globalAlpha = 1
         break
       }
       case 'h':
         it.x += (it.vx + Math.sin((age + it.ph * 100) / 180) * 0.35) * f; it.y += it.vy * f
-        drawHeart(ctx, it.x, it.y, it.size * (0.5 + 0.5 * Math.min(1, u / 0.15)), it.c, u > 0.6 ? 1 - (u - 0.6) / 0.4 : 1)
+        drawHeart(ctx, it.x, it.y, it.size * (0.5 + 0.5 * Math.min(1, u / 0.15)), it.paint, u > 0.6 ? 1 - (u - 0.6) / 0.4 : 1)
         break
       case 'fw':
         it.x += it.vx * f; it.y += it.vy * f; it.vy += 0.045 * f
         ctx.beginPath(); ctx.moveTo(it.x - it.vx * 2.6, it.y - it.vy * 2.6); ctx.lineTo(it.x, it.y)
-        ctx.lineCap = 'round'; ctx.lineWidth = 2.4 * (1 - u * 0.5); ctx.strokeStyle = it.c; ctx.globalAlpha = 1 - u; ctx.stroke(); ctx.globalAlpha = 1
+        ctx.lineCap = 'round'
+        strokeEffect(ctx, 2.4 * (1 - u * 0.5), it.paint.color, it.paint.outline, 1 - u)
         break
       case 'st': {
         it.x += it.vx * (1 - u) * f; it.y += it.vy * (1 - u) * f
         const R = it.size * (1 - u * 0.4)
         ctx.save(); ctx.translate(it.x, it.y); ctx.rotate(it.rot + u * 3); ctx.globalAlpha = 1 - u * u
-        ctx.fillStyle = it.c; ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.lineWidth = 0.8; ctx.beginPath()
+        ctx.beginPath()
         for (let i = 0; i < 10; i++) {
           const a = -1.5708 + i * 0.6283
           const rr = i % 2 ? R * 0.45 : R
           ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr)
         }
-        ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore()
+        ctx.closePath(); fillEffect(ctx, it.paint.color, it.paint.outline); ctx.restore()
         break
       }
       case 'wd': {
         const scale = u < 0.2 ? u / 0.2 * 1.2 : u < 0.3 ? 1.2 - (u - 0.2) / 0.1 * 0.2 : 1
-        ctx.save(); ctx.globalAlpha = u > 0.7 ? 1 - (u - 0.7) / 0.3 : 1; ctx.translate(it.x, it.y - 24 - u * 14); ctx.scale(scale, scale)
+        ctx.save()
         ctx.font = '700 14px "Malgun Gothic","Segoe UI",sans-serif'
         const w = ctx.measureText(it.tx).width + 18
-        ctx.fillStyle = ink; ctx.strokeStyle = 'rgba(0,0,0,.3)'; ctx.lineWidth = 1; ctx.beginPath()
+        const side = w * scale / 2 + 2
+        const x = Math.max(side, Math.min(width - side, it.x))
+        const y = Math.max(12 * scale + 2, Math.min(height - 18 * scale - 2, it.y - 24 - u * 14))
+        ctx.translate(x, y); ctx.scale(scale, scale)
+        ctx.globalAlpha = u > 0.7 ? 1 - (u - 0.7) / 0.3 : 1
+        ctx.beginPath()
         if (ctx.roundRect) ctx.roundRect(-w / 2, -12, w, 24, 12); else ctx.rect(-w / 2, -12, w, 24)
-        ctx.fill(); ctx.stroke()
-        ctx.beginPath(); ctx.moveTo(-4, 11.5); ctx.lineTo(0, 18); ctx.lineTo(4, 11.5); ctx.fill()
-        ctx.fillStyle = c.dark ? '#06231a' : '#1b1b1b'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(it.tx, 0, 1)
+        ctx.moveTo(-4, 11.5); ctx.lineTo(4, 11.5); ctx.lineTo(0, 18); ctx.closePath()
+        fillEffect(ctx, ink, outline, 2)
+        ctx.fillStyle = outline; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(it.tx, 0, 1)
         ctx.restore()
         break
       }
@@ -370,7 +414,10 @@ function drawClick(ctx: CanvasRenderingContext2D, S: EffectState, now: number, d
         const e = 1 - Math.pow(1 - u, 3)
         ctx.fillStyle = rgba(ink, 0.42 * (1 - u))
         for (const b of it.bl) { ctx.beginPath(); ctx.arc(it.x + b.dx * e, it.y + b.dy * e, b.r * (0.3 + e * 0.9), 0, 6.283); ctx.fill() }
-        ctx.beginPath(); ctx.arc(it.x, it.y, 10 + e * 14, 0, 6.283); ctx.fill()
+        ctx.globalAlpha = 0.5 * (1 - u)
+        ctx.beginPath(); ctx.arc(it.x, it.y, 10 + e * 14, 0, 6.283)
+        fillEffect(ctx, ink, outline)
+        ctx.globalAlpha = 1
         break
       }
     }
@@ -392,8 +439,9 @@ export function drawFrame(ctx: CanvasRenderingContext2D, S: EffectState, width: 
   ctx.clearRect(0, 0, width, height)
   prune(S, now)
   const step = Math.max(0, dt)
-  ctx.save(); drawMove(ctx, S, now, step, c); ctx.restore()
-  ctx.save(); drawClick(ctx, S, now, step, c); ctx.restore()
+  const outline = contrastingMonochrome(c.ink)
+  ctx.save(); drawMove(ctx, S, now, step, c, outline); ctx.restore()
+  ctx.save(); drawClick(ctx, S, width, height, now, step, c, outline); ctx.restore()
 }
 
 function spotMoving(S: EffectState, c: EffectConfig): boolean {

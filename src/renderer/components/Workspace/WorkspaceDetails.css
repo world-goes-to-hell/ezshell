@@ -118,6 +118,18 @@
   font-weight: 600;
 }
 
+/* The folder a chat link asked for: lit for a moment after the tree opened up to it */
+.workspace-tree-row.is-revealed {
+  box-shadow: inset 2px 0 0 var(--accent);
+  animation: workspace-tree-reveal 1.6s ease-out;
+}
+@keyframes workspace-tree-reveal {
+  from { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace-tree-row.is-revealed { animation: none; }
+}
+
 .workspace-tree-row:focus-visible,
 .workspace-git-detail:focus-visible,
 .workspace-uncommitted-head:focus-visible,
@@ -224,15 +236,96 @@
   background: var(--bg-tertiary);
 }
 
-/* Uncommitted changes: with changes it may take up to 70% of the panel (the log keeps the rest) */
-.workspace-uncommitted {
+/* ---- The "변경" tab (WorkspaceChanges.tsx): the commit box, then the change list filling the rest ---- */
+.workspace-changes {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.workspace-commit-box {
+  display: flex;
   flex: none;
-  max-height: 45%;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 8px 0;
+}
+
+.workspace-commit-message {
+  min-height: 52px;
+  max-height: 30vh;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.workspace-commit-message:focus { border-color: var(--accent); }
+.workspace-commit-message::placeholder { color: var(--text-muted); }
+.workspace-commit-box[data-busy] .workspace-commit-message { opacity: 0.7; }
+
+.workspace-commit-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--on-accent, var(--bg-primary));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.workspace-commit-button:hover:not(:disabled) { filter: brightness(1.1); }
+.workspace-commit-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.workspace-commit-button:disabled {
+  border-color: var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.workspace-commit-error {
+  max-height: 160px;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--error) 45%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--error) 9%, var(--bg-primary));
+  color: var(--error-text, var(--error));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  user-select: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* The change list takes the rest of the tab; an empty one only its own lines */
+.workspace-uncommitted {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   margin: 8px 8px 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
 }
+
+.workspace-uncommitted[data-empty] { flex: none; }
 
 .workspace-uncommitted-head {
   position: sticky;
@@ -244,19 +337,24 @@
   width: 100%;
   min-height: 34px;
   padding: 5px 8px;
-  border: 0;
   background: var(--bg-tertiary);
   color: var(--text-primary);
-  font: inherit;
   font-size: 12px;
   font-weight: 600;
-  text-align: start;
+}
+
+/* The boxes of the change list */
+.workspace-git-check {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
   cursor: pointer;
 }
 
-.workspace-uncommitted-head:hover { background: var(--bg-hover); }
-.workspace-uncommitted-head > svg { flex: none; color: var(--text-secondary); }
-.workspace-uncommitted-head[aria-expanded="true"] > svg { color: var(--accent); }
+.workspace-git-check:disabled { cursor: default; opacity: 0.45; }
+.workspace-git-check:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .workspace-uncommitted-count,
 .workspace-git-group-title span {
@@ -436,10 +534,6 @@
 .workspace-diff-line.is-remove { --workspace-diff-tone: var(--error); }
 .workspace-diff-line.is-note { color: var(--text-secondary); }
 
-.workspace-uncommitted:not([data-empty])[data-open] {
-  max-height: 70%;
-}
-
 /* ---- The changes as a folder tree (WorkspaceGitChanges.tsx ChangeTree) ---- */
 .workspace-uncommitted-lines,
 .workspace-git-lines {
@@ -498,14 +592,24 @@
   list-style: none;
 }
 
-.workspace-git-folder-row {
+/* A folder: its box, then the row that folds it; the indent is on the line so the boxes line up */
+.workspace-git-folder-line {
   display: flex;
   align-items: center;
+  min-width: 0;
+  padding-inline-start: calc(6px + var(--workspace-tree-depth, 0) * 14px);
+}
+
+.workspace-git-folder-line:hover { background: var(--bg-modifier-hover, var(--bg-hover)); }
+
+.workspace-git-folder-row {
+  display: flex;
+  flex: 1;
+  align-items: center;
   gap: 5px;
-  width: 100%;
   min-width: 0;
   min-height: 26px;
-  padding: 3px 8px 3px calc(6px + var(--workspace-tree-depth, 0) * 14px);
+  padding: 3px 8px 3px 4px;
   border: 0;
   background: transparent;
   color: var(--text-secondary);
@@ -536,9 +640,12 @@
   font-variant-numeric: tabular-nums;
 }
 
-.is-tree .workspace-git-file-row .workspace-git-file-toggle {
+.is-tree .workspace-git-file-row {
+  align-items: center;
   padding-inline-start: calc(6px + var(--workspace-tree-depth, 0) * 14px);
 }
+
+.is-tree .workspace-git-file-row .workspace-git-file-toggle { padding-inline-start: 4px; }
 
 .is-tree .workspace-git-file-name { flex: 0 1 auto; min-width: 0; font-weight: 500; }
 .is-tree .workspace-git-mark { margin-inline-start: 4px; }

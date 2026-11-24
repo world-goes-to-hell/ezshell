@@ -480,14 +480,18 @@ const page = `<!doctype html>
       delete document.body.dataset.review
       message('')
     }
-    document.querySelector('#cancel').addEventListener('click', () => submit(null))
+    // Closing the window works even while main is looking up projects or waiting for a send.
+    const cancel = () => window.close()
+    document.querySelector('#cancel').addEventListener('click', cancel)
     document.addEventListener('contextmenu', event => {
       if (review.contains(event.target)) return
       event.preventDefault()
-      submit(null)
+      cancel()
     })
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && !event.isComposing) submit(null)
+      if (event.key !== 'Escape' || event.isComposing || event.repeat) return
+      event.preventDefault()
+      cancel()
     })
     return nextAction()
   }

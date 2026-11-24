@@ -266,6 +266,15 @@ else { Write-Host 'Antigravity CLI를 찾을 수 없습니다.' }
   return [...shell.args, '-Command', launch];
 }
 
+function developmentShellArgs(shell, task, platform) {
+  if (platform !== 'win32') {
+    return [...shell.args, '-i', '-c', [task.installCommand, task.command].filter(Boolean).join(' && ')];
+  }
+  const commands = [task.installCommand, task.command].filter(Boolean);
+  const script = commands.map(command => `${command}\nif (!$?) { exit 1 }`).join('\n');
+  return [...shell.args, '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
+}
+
 const PROGRAM_STATUS_REPLY = '\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\';
 const PROGRAM_STATES = { idle: 'idle', working: 'working', done: 'idle', blocked: 'blocked', error: 'error', clear: 'unknown' };
 const PROGRESS_STATES = ['idle', 'working', 'error', 'working', 'working'];
@@ -852,7 +861,7 @@ function createLocalShells({
     }, AGENT_PROCESS_CHECK_MS).unref?.();
   }
 
-  function open({ cols, rows, cwd: directory, agent, resume, replacementFor } = {}) {
+  function open({ cols, rows, cwd: directory, agent, resume, replacementFor } = {}, developmentTask) {
     const previous = replacementFor === undefined ? undefined : shells.get(replacementFor);
     if (replacementFor !== undefined) {
       if (!previous || !resume) throw new Error('바꿀 셸을 찾지 못했습니다.');
@@ -860,7 +869,7 @@ function createLocalShells({
     }
     const workingDirectory = directory === undefined ? cwd : requireLocalDirectory(directory);
     const id = `local:${nextId++}`;
-    const args = shellArgs(shell, agent, platform, Boolean(agents), resume);
+    const args = developmentTask ? developmentShellArgs(shell, developmentTask, platform) : shellArgs(shell, agent, platform, Boolean(agents), resume);
     const columns = previous?.cols ?? size(cols, 80);
     const lines = previous?.rows ?? size(rows, 24);
     const shellEnv = localTerminalEnvironment(env, platform);
@@ -889,7 +898,7 @@ function createLocalShells({
     }
     const codexInput = agent === 'codex' ? { hasDraft: false, submitted: false } : null;
     const entry = {
-      pty, agent: registeredAgent, registration, codexInput, cols: columns, rows: lines, composing: false, replacementFor,
+      pty, agent: registeredAgent, registration, codexInput, cols: columns, rows: lines, composing: false, replacementFor, developmentTask,
       wakeMcp: Boolean(shellUsageEnv.EZSHELL_AGENT_WAKE_MCP_CONFIG),
       // For a window that reloads and takes the shell back as a tab (`list`)
       cwd: directory === undefined ? null : workingDirectory,
@@ -926,6 +935,18 @@ function createLocalShells({
       send('local-shell-exit', { id, exitCode });
     });
     return { id, name: shell.name, ...(directory === undefined ? {} : { cwd: workingDirectory }) };
+  }
+
+  function openDevelopmentTask(task, { cols, rows }) {
+    const label = task.relative === '.' ? task.name : `${task.name} · ${path.basename(task.cwd)}`;
+    const normalized = value => platform === 'win32' ? value.toLowerCase() : value;
+    for (const [id, entry] of shells) {
+      const running = entry.developmentTask;
+      if (!entry.exited && running?.id === task.id && normalized(running.cwd) === normalized(task.cwd)) {
+        return { id, name: shell.name, cwd: task.cwd, label };
+      }
+    }
+    return { ...open({ cols, rows, cwd: task.cwd }, task), label };
   }
 
   /** What a tab needs to draw itself again; null when the shell is gone */
@@ -1118,7 +1139,7 @@ function createLocalShells({
   }
 
   return {
-    open, attach, write, pasteClipboardImage, resize, close, closeAll, bindAgentProcess, reportAntigravityStatus, currentDirectory,
+    open, openDevelopmentTask, attach, write, pasteClipboardImage, resize, close, closeAll, bindAgentProcess, reportAntigravityStatus, currentDirectory,
     /**
      * Every shell, oldest first. The shells outlive their tabs, so a window that reloaded (and lost
      * all its tabs) takes these back; otherwise they kept running unseen, agents included.
@@ -1180,7 +1201,7 @@ function createLocalShells({
       labels.add(label);
       if (labels.size > 64) labels.delete(labels.values().next().value);
     },
-    async chatSend(id, text, images, target, sameConversation = () => true, { canSend } = {}) {
+    async chatSend(id, text, images, target, sameConversation = () => true, { canSend, offerForce, forceToken } = {}) {
       const entry = shells.get(id);
       const inbox = entry?.inbox;
       if (!inbox) return { ok: false, reason: 'not-agent' };
@@ -1199,8 +1220,12 @@ function createLocalShells({
         canSend = () => entry.externalAgent === binding && binding.roleSessionId === sessionId &&
           agentStatus(entry) === 'idle' && (!confirm || confirm());
       }
-      const verify = active => sameConversation() && (target === undefined ? entry.parentInput(active) : active === target);
-      const result = await inbox.submitText(text, images, { verify, canSend });
+      // Like Orca (MIT), native-chat-runtime-send.ts, an ordinary send goes to this agent's PTY whatever the
+      // composer's label says (a session name). Only a send aimed at a subagent's label checks that label.
+      const verify = target === undefined ? undefined : active => sameConversation() && active === target;
+      const given = canSend;
+      const stillSame = target === undefined ? () => sameConversation() && (!given || given()) : canSend;
+      const result = await inbox.submitText(text, images, { verify, canSend: stillSame, offerForce, forceToken });
       if (result.ok && entry.codexInput && entry.codexInput.submitted) entry.reportStatus?.(agentStatus(entry));
       return result;
     },

@@ -33,6 +33,12 @@ export function contrastRatio(first: Rgb, second: Rgb): number {
   return (lighter + 0.05) / (darker + 0.05)
 }
 
+/** Pick the stronger of black and white for small text or an outline against a solid fill. */
+export function contrastingMonochrome(background: string): string {
+  const rgb = parseOpaqueHex(background)
+  return rgb && contrastRatio([0, 0, 0], rgb) > contrastRatio([255, 255, 255], rgb) ? '#000000' : LIGHT_TEXT
+}
+
 /** Keep custom colors when their contrast depends on how the browser paints them. */
 export function visibleIndicatorColor(preferred: string, backgrounds: readonly string[]): string {
   const preferredRgb = parseOpaqueHex(preferred)

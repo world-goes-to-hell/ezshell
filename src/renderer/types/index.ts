@@ -437,17 +437,24 @@ export interface AgentSleep {
   waking?: boolean
 }
 
+export interface AgentTurnLimitUsage {
+  before: number
+  after: number
+  used: number
+  reset?: true
+}
+
 /** Tokens one question used: input counts what came from the cache too; output counts thinking */
 export interface AgentTurnUsage {
   input: number
   cached: number
   output: number
   durationMs?: number
-  /** Percent of the account's 5-hour and weekly windows used while it ran */
-  limits?: { fiveHour?: number; sevenDay?: number }
+  /** Account usage rates before and after the turn, with the increase in percentage points */
+  limits?: { fiveHour?: AgentTurnLimitUsage; sevenDay?: AgentTurnLimitUsage }
 }
 
-type AgentChatSendResult = { ok: true } | { ok: false; reason?: string; error: string; recorded?: AgentChatItem }
+type AgentChatSendResult = { ok: true } | { ok: false; reason?: string; error: string; recorded?: AgentChatItem; forceToken?: string }
 export type AgentChatMcpSummary = { id: string; canLogin: boolean }
 
 export interface AgentChatItem {
@@ -673,6 +680,7 @@ export interface BrowserReviewSelection {
 
 export interface BrowserReviewState {
   url: string
+  localFile?: string
   loginOrigin: string | null
   /** The page's title (empty until it arrives); the tab name follows it */
   title: string
@@ -774,6 +782,15 @@ export interface LocalWorktree {
 export interface LocalProjectInfo {
   repo: { root: string; branch: string | null; worktrees: LocalWorktree[] } | null
   gitMissing: boolean
+}
+
+export interface LocalDevelopmentTask {
+  id: string
+  name: string
+  relative: string
+  command: string
+  installCommand?: string
+  includeSource: boolean
 }
 
 export interface WorkspaceDirectoryEntry {
@@ -998,12 +1015,17 @@ declare global {
       /** `resume`: a key from the agent history list; main then picks the folder, agent and session */
       localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: AgentChatProvider; resume?: string; replacementFor?: string }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
       localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
+      localProjectDevelopmentTasks: (folder: string) => Promise<{ success: true; tasks: LocalDevelopmentTask[] } | { success: false; error: string }>
+      localProjectDevelopmentStart: (options: { folder: string; id: string; cols: number; rows: number; includeSource: boolean; install: boolean }) =>
+        Promise<{ success: true; id: string; name: string; cwd: string; label: string } | { success: false; error: string }>
       workspaceDirectoryList: (folder: string, relative?: string) => Promise<{ success: true; entries: WorkspaceDirectoryEntry[]; total: number } | { success: false; error: string }>
       workspaceDirectoryPrepare?: (root: string, refresh?: boolean) => Promise<{ success: true } | { success: false; error: string }>
       workspaceDirectorySearch?: (root: string, query: string) => Promise<({ success: true } & WorkspaceDirectorySearchResult) | { success: false; error: string }>
       workspaceGitStatus?: (root: string) => Promise<{ success: true; repo: WorkspaceGitStatus | null } | { success: false; error: string }>
       workspaceGitCommitFiles?: (root: string, hash: string) => Promise<{ success: true; files: WorkspaceGitFile[] } | { success: false; error: string }>
       workspaceGitDiff?: (root: string, file: string, hash?: string) => Promise<({ success: true } & WorkspaceGitDiff) | { success: false; error: string }>
+      /** Commits the ticked files of the change list (paths relative to the repository top) */
+      workspaceGitCommit?: (root: string, files: string[], message: string) => Promise<{ success: true; hash: string; shortHash: string; count: number; warning?: string } | { success: false; error: string }>
       /** A file on this PC in the file window; `relative` is relative to `root` */
       localFileOpen?: (root: string, relative: string, mode: 'edit' | 'preview', label?: string, options?: { compareHead?: boolean }) => Promise<{ success: true } | { success: false; error: string }>
       localFileReveal?: (root: string, relative: string) => Promise<{ success: true } | { success: false; error: string }>
@@ -1023,6 +1045,7 @@ declare global {
       agentMessagesSnapshot: () => Promise<AgentMessagesSnapshot | null>
       agentMessageSetRole: (id: string, role: string) => Promise<{ success: true } | { success: false; error: string }>
       browserReviewOpen: () => Promise<{ success: true; id: string } | { success: false; error: string }>
+      browserReviewOpenWorkspace: (root: string, relative: string) => Promise<BrowserReviewResult>
       browserReviewOpenLink: (address: string, destination: 'internal' | 'external') => Promise<BrowserReviewResult>
       onBrowserReviewLinkOpened: (callback: (id: string) => void) => () => void
       browserReviewState: (id: string) => Promise<BrowserReviewState | null>
@@ -1067,7 +1090,7 @@ declare global {
       >
       agentChatPickImages?: (shellId: string) => Promise<AgentChatImagesResult>
       agentChatRemoveImage?: (shellId: string, imageId: string) => void
-      agentChatSend?: (shellId: string, text: string, imageIds?: string[], retry?: { acceptedAt: number; transcriptId: string; ignoreIds: string[] }) => Promise<AgentChatSendResult>
+      agentChatSend?: (shellId: string, text: string, imageIds?: string[], retry?: { acceptedAt: number; transcriptId: string; ignoreIds: string[] }, forceToken?: string) => Promise<AgentChatSendResult>
       agentChatMcpLogin?: (shellId: string, summaryId: string, server: string) => Promise<AgentChatSendResult>
       agentChatMcpVerbose?: (shellId: string, summaryId: string) => Promise<AgentChatSendResult>
       agentChatToggleSpeed?: (shellId: string, speed: CodexSpeedMode) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
@@ -1089,7 +1112,7 @@ declare global {
         | { ok: true; options?: AgentPickerOption[] }
         | { ok: false; reason?: string; error: string; options?: AgentPickerOption[] }
       >
-      agentChatOpenLink?: (shellId: string, href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab') => Promise<{ ok: true } | { ok: false; error: string }>
+      agentChatOpenLink?: (shellId: string, href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab' | 'workspace') => Promise<{ ok: true; folder?: string } | { ok: false; error: string }>
       agentChatLinkPreview?: (shellId: string, link: string) => Promise<ChatLinkPreviewResult>
       onAgentChatFrame?: (callback: (frame: AgentChatFrame) => void) => () => void
       onAgentChatCapture?: (callback: (capture: AgentChatCapture) => void) => () => void
