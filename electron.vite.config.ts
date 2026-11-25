@@ -4,7 +4,7 @@ import path from 'path'
 import fs from 'fs'
 
 // CommonJS modules main.js loads at runtime with require('./src/...'); they are not bundled
-const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js', 'navigationGuard.js', 'updateChecker.js', 'sshAlgorithms.js', 'rootSwitch.js', 'localShell.js', 'windowState.js', 'sftpListing.js', 'lastVersion.js', 'localPlaces.js', 'localKeyPath.js', 'manualUpdate.js', 'sharedConn.js', 'macMenu.js', 'nativeBackdrop.js', 'sftpDownloadDir.js', 'detachedPlaces.js', 'restoreTabs.js', 'sessionSecrets.js', 'agentIdle.js', 'agentHookReport.js', 'globalDoubleTab.js', 'quickCapture.js', 'quickCaptureOverlay.js', 'quickCaptureEditor.js', 'testWindows.js', 'globalPointer.js']
+const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js', 'navigationGuard.js', 'updateChecker.js', 'sshAlgorithms.js', 'rootSwitch.js', 'localShell.js', 'windowState.js', 'sftpListing.js', 'lastVersion.js', 'localPlaces.js', 'localKeyPath.js', 'manualUpdate.js', 'sharedConn.js', 'macMenu.js', 'nativeBackdrop.js', 'sftpDownloadDir.js', 'detachedPlaces.js', 'restoreTabs.js', 'sessionSecrets.js', 'agentIdle.js', 'agentHookReport.js', 'globalDoubleTab.js', 'quickCapture.js', 'quickCaptureOverlay.js', 'quickCaptureEditor.js', 'testWindows.js', 'globalPointer.js', 'globalPointerEffects.js']
 
 // Directories under src/ that main.js loads at runtime; copied whole, without their tests
 const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient', 'remoteAccess', 'sessionImport', 'containers', 'ipc', 'agentHistory', 'agentChat', 'localFiles']
@@ -66,7 +66,8 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: {
-          index: path.resolve(__dirname, 'src/preload.js')
+          index: path.resolve(__dirname, 'src/preload.js'),
+          'pointer-effects': path.resolve(__dirname, 'src/preloadPointerEffects.js')
         }
       }
     }
@@ -89,7 +90,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: path.resolve(__dirname, 'src/renderer/index.html'),
-          startup: path.resolve(__dirname, 'src/renderer/startup.html')
+          startup: path.resolve(__dirname, 'src/renderer/startup.html'),
+          'pointer-effects': path.resolve(__dirname, 'src/renderer/pointer-effects.html')
         }
       }
     },

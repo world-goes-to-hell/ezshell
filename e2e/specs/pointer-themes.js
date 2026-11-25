@@ -97,6 +97,20 @@ const { check, finish } = createChecks()
   `))
   check('the overlay is still absent before an effect is chosen', await js(`!document.querySelector('.pointer-effects-canvas')`))
   await pick('[aria-label="움직일 때 효과"] [data-effect="sparkle"]')
+  if (process.platform === 'win32') {
+    check('the desktop effect toggle starts off', await until(`document.documentElement.dataset.desktopPointerEffects === 'off'`))
+    await outside('켜기')
+    check('enabling desktop effects sends the choices main accepts without enabling the desktop cursor set', await until(`
+      document.documentElement.dataset.desktopPointerEffects === 'on' &&
+      JSON.parse(localStorage.getItem('pointerPrefs')).effectsOutsideApp && !document.documentElement.dataset.systemPointer
+    `))
+    await outside('끄기')
+    check('disabling desktop effects reaches main', await until(`
+      document.documentElement.dataset.desktopPointerEffects === 'off' && !JSON.parse(localStorage.getItem('pointerPrefs')).effectsOutsideApp
+    `))
+  } else {
+    check('desktop effects settings are only available on Windows', await js(`!${card('[aria-label="다른 프로그램에서도 쓰기"]')}`))
+  }
   check('a moving effect brings one overlay canvas that does not take the pointer', await until(`(() => {
     const canvases = document.querySelectorAll('.pointer-effects-canvas')
     return canvases.length === 1 && getComputedStyle(canvases[0]).pointerEvents === 'none'

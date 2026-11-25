@@ -11,40 +11,15 @@
 // canvas, because terminals can be covered by the chat view, dialogs or menus.
 import '../styles/pointerCursors.css'
 import {
-  CURSOR_STATES, cursorHotspot, cursorSet, cursorSvg, cursorValue, cursorVariable, type CursorSetId, type CursorSize, type CursorState
+  CURSOR_STATES, cursorHotspot, cursorSet, cursorValue, cursorVariable, type CursorSetId, type CursorSize, type CursorState
 } from './pointerCursors'
 import { getPointerPrefs, hasEffects, subscribePointerPrefs, type PointerPrefs } from './pointerPrefs'
 import {
   addClick, addMove, clearEffects, createEffectState, drawFrame, effectiveEffects, keepRunning, pageAllowsEffects, prune, type EffectConfig, type GhostCursor
 } from './pointerEffects'
 import { effectInk } from './pointerInk'
+import { cursorImageUrl, ghostCursor } from './pointerImages'
 import { createSystemPointerSync } from './pointerSystem'
-
-const urls = new Map<string, string>()
-const ghostCursors = new Map<string, GhostCursor>()
-
-/** The blob: URL of one pointer image, made the first time it is asked for */
-export function cursorImageUrl(setId: CursorSetId, state: typeof CURSOR_STATES[number], size: number): string {
-  const key = `${setId}:${state}:${size}`
-  let url = urls.get(key)
-  if (!url) {
-    url = URL.createObjectURL(new Blob([cursorSvg(cursorSet(setId), state, size)], { type: 'image/svg+xml' }))
-    urls.set(key, url)
-  }
-  return url
-}
-
-export function ghostCursor(set: CursorSetId, state: CursorState, size: CursorSize): GhostCursor {
-  const url = cursorImageUrl(set, state, size)
-  let cursor = ghostCursors.get(url)
-  if (!cursor) {
-    const image = new Image()
-    image.src = url
-    cursor = { image, hotspot: cursorHotspot(cursorSet(set), state, size) }
-    ghostCursors.set(url, cursor)
-  }
-  return cursor
-}
 
 function autoCursor(target: Element, x: number, y: number): CursorState {
   if (target.closest('a:any-link')) return 'pointer'

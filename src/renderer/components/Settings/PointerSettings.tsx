@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { CURSOR_SETS, CURSOR_SIZES, type CursorSet, type CursorSize } from '../../lib/pointerCursors'
-import { cursorImageUrl, ghostCursor } from '../../lib/pointerAppearance'
+import { cursorImageUrl, ghostCursor } from '../../lib/pointerImages'
 import {
   DEFAULT_POINTER_PREFS, getPointerPrefs, setPointerPrefs, subscribePointerPrefs,
   type ClickEffect, type EffectLevel, type MoveEffect, type PointerPrefs
@@ -172,7 +172,7 @@ export function PointerShapeSettings() {
           options={CURSOR_SIZES.map(value => ({ value, label: SIZE_LABELS[value] }))} />
       </Row>
       {canReplaceSystemPointer() && (
-        <Row title="다른 프로그램에서도 쓰기" hint="앱이 켜져 있는 동안 Windows 전체의 포인터를 이 세트로 바꿉니다. 끄거나 앱을 닫으면 원래 포인터로 돌아옵니다. 잡기 모양은 Windows 기본 포인터 그대로입니다">
+        <Row title="다른 프로그램에서도 쓰기" hint="앱이 켜져 있는 동안 Windows 전체의 포인터를 이 세트로 바꿉니다. 끄거나 앱을 닫으면 원래 포인터로 돌아옵니다. 잡기 모양은 Windows 기본 포인터 그대로입니다. 효과는 포인터 효과 탭에서 따로 켭니다.">
           <Segment label="다른 프로그램에서도 쓰기" value={prefs.outsideApp} options={outsideOptions} onChange={outsideApp => setPointerPrefs({ outsideApp })} />
         </Row>
       )}
@@ -190,6 +190,12 @@ export function PointerEffectSettings() {
   return (
     <div className="pointer-settings">
       <p className="settings-section-desc">움직일 때와 누를 때의 효과를 따로 고릅니다. 카드에 마우스를 올리면 미리 볼 수 있습니다.</p>
+      {canReplaceSystemPointer() && (
+        <Row title="다른 프로그램에서도 쓰기" hint="앱이 켜져 있는 동안 다른 Windows 프로그램에서도 선택한 효과를 보여 줍니다.">
+          <Segment label="다른 프로그램에서도 쓰기" value={prefs.effectsOutsideApp} options={outsideOptions}
+            onChange={effectsOutsideApp => set({ effectsOutsideApp })} />
+        </Row>
+      )}
       <h4 className="pointer-subtitle">움직일 때 효과</h4>
       <div className="pointer-cards" role="radiogroup" aria-label="움직일 때 효과">
         {MOVE_EFFECT_CARDS.map(info => (

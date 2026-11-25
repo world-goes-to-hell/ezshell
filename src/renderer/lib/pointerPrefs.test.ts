@@ -8,23 +8,24 @@ import { collectUiSettings, parseUiSettingsFile } from './uiSettingsBackup'
 describe('pointer prefs', () => {
   it('starts with the system pointer and no effects', () => {
     expect(parsePointerPrefs(null)).toEqual(DEFAULT_POINTER_PREFS)
-    expect(DEFAULT_POINTER_PREFS).toMatchObject({ set: 'system', size: 32, move: 'none', click: 'none', moveOnTerminal: false, clickOnTerminal: true, outsideApp: false })
+    expect(DEFAULT_POINTER_PREFS).toMatchObject({ set: 'system', size: 32, move: 'none', click: 'none', moveOnTerminal: false, clickOnTerminal: true, outsideApp: false, effectsOutsideApp: false })
     expect(hasEffects(DEFAULT_POINTER_PREFS)).toBe(false)
   })
 
   it('reads a stored value and falls back field by field on anything unknown', () => {
-    const stored = { set: 'paw', size: 64, move: 'comet', click: 'word', moveLevel: 3, clickLevel: 1, moveOnTerminal: true, clickOnTerminal: false, outsideApp: true }
+    const stored = { set: 'paw', size: 64, move: 'comet', click: 'word', moveLevel: 3, clickLevel: 1, moveOnTerminal: true, clickOnTerminal: false, outsideApp: false, effectsOutsideApp: true }
     expect(parsePointerPrefs(JSON.stringify(stored))).toEqual(stored)
-    expect(parsePointerPrefs(JSON.stringify({ set: 'evil', size: 128, move: 'x', click: 7, moveLevel: 9, moveOnTerminal: 'yes', clickOnTerminal: false, outsideApp: 'yes' })))
+    expect(parsePointerPrefs(JSON.stringify({ set: 'evil', size: 128, move: 'x', click: 7, moveLevel: 9, moveOnTerminal: 'yes', clickOnTerminal: false, outsideApp: 'yes', effectsOutsideApp: 1 })))
       .toEqual({ ...DEFAULT_POINTER_PREFS, clickOnTerminal: false })
+    expect(parsePointerPrefs('{"outsideApp":true}')).toMatchObject({ outsideApp: true, effectsOutsideApp: false })
     for (const raw of ['', '{', '[]', '"paw"', 'null', '42']) expect(parsePointerPrefs(raw)).toEqual(DEFAULT_POINTER_PREFS)
     expect(hasEffects(parsePointerPrefs('{"click":"ripple"}'))).toBe(true)
   })
 
   it('travels in the screen settings backup as its checked form', () => {
-    const value = JSON.stringify({ set: 'pixel', size: 48, move: 'pixel', click: 'press', extra: 'dropped' })
+    const value = JSON.stringify({ set: 'pixel', size: 48, move: 'pixel', click: 'press', effectsOutsideApp: true, extra: 'dropped' })
     const file = collectUiSettings(key => (key === 'pointerPrefs' ? value : null), { shortcutIds: [] }, new Date(0))
-    expect(JSON.parse(file.settings.pointerPrefs!)).toEqual({ ...DEFAULT_POINTER_PREFS, set: 'pixel', size: 48, move: 'pixel', click: 'press' })
+    expect(JSON.parse(file.settings.pointerPrefs!)).toEqual({ ...DEFAULT_POINTER_PREFS, set: 'pixel', size: 48, move: 'pixel', click: 'press', effectsOutsideApp: true })
     const read = parseUiSettingsFile(JSON.stringify(file), { shortcutIds: [] })
     expect(read.ok && read.import.values.some(({ entry }) => entry.key === 'pointerPrefs')).toBe(true)
     const broken = parseUiSettingsFile(JSON.stringify({ ...file, settings: { ...file.settings, pointerPrefs: 'not json', terminalFileZone: 'on' } }), { shortcutIds: [] })

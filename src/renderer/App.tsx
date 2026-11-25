@@ -70,6 +70,7 @@ import { RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './li
 import { adoptOrphanLocalShells, rememberLocalLayout } from './lib/localShellAdopt'
 import { startAgentSleep } from './stores/agentSleepStore'
 import { startAgentHooks } from './stores/agentHooksStore'
+import { startDesktopPointerEffects } from './lib/pointerDesktop'
 import { LOCAL_PROJECT_SERVERS_EVENT, TAB_DROP_TAKEN_EVENT, linkServer, readProjectServers, writeProjectServers } from './lib/localProjectServers'
 import { WorkspacePanel } from './components/Workspace/WorkspacePanel'
 import { SnippetManager } from './components/Snippets/SnippetManager'
@@ -1108,6 +1109,7 @@ function App() {
   useEffect(() => (unlockedOnce ? startAgentSleep() : undefined), [unlockedOnce])
   // Whether agents report their state through the CLIs' hooks: main gets the switch (T11)
   useEffect(() => (unlockedOnce ? startAgentHooks() : undefined), [unlockedOnce])
+  useEffect(() => (unlockedOnce ? startDesktopPointerEffects() : undefined), [unlockedOnce])
 
   const [restoreBanner, setRestoreBanner] = useState<RestoreBannerState | null>(null)
   const [restoreReady, setRestoreReady] = useState(false)

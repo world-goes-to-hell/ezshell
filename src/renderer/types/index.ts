@@ -1,4 +1,5 @@
 import type { RootSwitchOutcome } from '../lib/rootSwitch'
+import type { DesktopPointerConfig } from '../lib/pointerDesktop'
 import type { ChatLinkPreviewResult } from './chatLinkPreview'
 import type { DbColumnSource, DbCredentials, DbDatabase, DbEndpoint, DbQueryResult, DbRelations, DbResult, DbSchema, DbServerInfo, DbTable, DbTableColumn, DbWindowInfo, DiscoveredDb } from './db'
 
@@ -977,6 +978,7 @@ declare global {
       /** The app's pointer set in other programs (Windows only; main checks each PNG). false: refused */
       pointerSystemApply?: (request: { size: number; cursors: { state: string; png: string; hotspot: [number, number] }[] }) => Promise<boolean>
       pointerSystemRestore?: () => Promise<void>
+      pointerEffectsConfigure?: (request: DesktopPointerConfig) => Promise<boolean>
       onWorkOverviewRequest?: (callback: (requestId: number) => void) => () => void
       setShortcutRecording?: (recording: boolean) => void
 

@@ -358,12 +358,14 @@ function createWindow() {
     startupSplash.dismiss();
   }, 20000);
   win.once('closed', () => {
+    globalPointerEffects.stop();
     quickCapture.cancel();
     starting = false;
     clearTimeout(startupTimeout);
     startupSplash.dismiss();
     browserReview.close();
   });
+  win.webContents.on('render-process-gone', () => globalPointerEffects.stop());
   win.webContents.ipc.on('app-startup-ready', (event) => {
     if (!starting || event.senderFrame !== win.webContents.mainFrame) return;
     startupSplash.revealWhenReady(reveal, () => win.webContents.executeJavaScript(
@@ -644,12 +646,26 @@ ipcMain.on('quick-capture-start', (event) => {
 app.on('will-quit', () => {
   globalDoubleTab.stop();
   quickCapture.cancel();
+  globalPointerEffects.stop();
   globalPointer.stop();
 });
 // 설정 > 포인터 모양 > 다른 프로그램에서도 쓰기 (Windows): the main window sends its pointers as PNGs, checked
 // in src/globalPointer.js before a helper puts them in place of the system's. Screen tests never start it.
+const allowNativePointer = !['0', '1'].includes(process.env.EZSHELL_TEST_HIDDEN_WINDOWS);
 const globalPointer = require('./src/globalPointer.js').createGlobalPointer({
-  folder: path.join(userDataPath, 'pointer-cursors'), allowNative: !hiddenTestWindows
+  folder: path.join(userDataPath, 'pointer-cursors'), allowNative: allowNativePointer,
+  onPress: () => globalPointerEffects.onPress(),
+  onNotificationState: state => globalPointerEffects.onNotificationState(state)
+});
+const globalPointerEffects = require('./src/globalPointerEffects.js').createGlobalPointerEffects({
+  BrowserWindow, getScreen: () => electron.screen, allowNative: allowNativePointer,
+  preload: path.join(__dirname, '../preload/pointer-effects.js'), setWatching: globalPointer.setWatching,
+  loadPage: win => {
+    const url = process.env.ELECTRON_RENDERER_URL ||
+      ((process.env.NODE_ENV === 'development' || process.argv.includes('--dev')) ? DEV_RENDERER_URL : null);
+    return url ? win.loadURL(new URL('pointer-effects.html', url).href)
+      : win.loadFile(path.join(__dirname, '../renderer/pointer-effects.html'));
+  }
 });
 globalPointer.recover();
 ipcMain.handle('pointer-system-apply', (event, request) =>
@@ -657,6 +673,8 @@ ipcMain.handle('pointer-system-apply', (event, request) =>
 ipcMain.handle('pointer-system-restore', (event) => {
   if (fromMainWindow(event) && event.senderFrame === event.sender.mainFrame) globalPointer.restore();
 });
+ipcMain.handle('pointer-effects-configure', (event, request) =>
+  !isAppLocked && fromMainWindow(event) && event.senderFrame === event.sender.mainFrame && globalPointerEffects.configure(request));
 const sendToLocalWindow = (channel, payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 };
@@ -1207,6 +1225,7 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   currentMasterPassword = null;
   isAppLocked = true;
   agentMessages.invalidateFreshRoleChecks();
+  globalPointerEffects.stop();
   shortcutRecorder = null;
   globalDoubleTab.setEnabled(false);
   workOverview.cancel();
@@ -1301,6 +1320,7 @@ ipcMain.handle('reset-master-password', async () => {
   currentMasterPassword = null;
   isAppLocked = true;
   agentMessages.invalidateFreshRoleChecks();
+  globalPointerEffects.stop();
   shortcutRecorder = null;
   globalDoubleTab.setEnabled(false);
   workOverview.cancel();

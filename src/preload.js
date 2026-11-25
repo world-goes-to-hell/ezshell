@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // The app's pointer set in other programs (Windows): PNGs per state, checked by main (src/globalPointer.js)
   pointerSystemApply: (request) => ipcRenderer.invoke('pointer-system-apply', request),
   pointerSystemRestore: () => ipcRenderer.invoke('pointer-system-restore'),
+  pointerEffectsConfigure: (request) => ipcRenderer.invoke('pointer-effects-configure', request),
   // The overview shortcut while another program was in front (src/globalDoubleTab.js): ezShell came forward, open the overview
   onWorkOverviewRequest: (callback) => {
     const listener = (_event, requestId) => callback(requestId);

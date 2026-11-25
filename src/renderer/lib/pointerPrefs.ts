@@ -22,10 +22,13 @@ export interface PointerPrefs {
   clickOnTerminal: boolean
   /** The pointer set in other programs too (Windows: replaces the system pointers while the app runs) */
   outsideApp: boolean
+  /** Draw the selected effects on the Windows desktop as well */
+  effectsOutsideApp: boolean
 }
 
 export const DEFAULT_POINTER_PREFS: PointerPrefs = Object.freeze({
-  set: 'system', size: 32, move: 'none', click: 'none', moveLevel: 2, clickLevel: 2, moveOnTerminal: false, clickOnTerminal: true, outsideApp: false
+  set: 'system', size: 32, move: 'none', click: 'none', moveLevel: 2, clickLevel: 2, moveOnTerminal: false, clickOnTerminal: true, outsideApp: false,
+  effectsOutsideApp: false
 })
 
 const oneOf = <T>(list: readonly T[], value: unknown, fallback: T): T => (list.includes(value as T) ? value as T : fallback)
@@ -48,7 +51,8 @@ export function parsePointerPrefs(raw: string | null | undefined): PointerPrefs 
     clickLevel: oneOf([1, 2, 3] as const, value.clickLevel, d.clickLevel),
     moveOnTerminal: flag(value.moveOnTerminal, d.moveOnTerminal),
     clickOnTerminal: flag(value.clickOnTerminal, d.clickOnTerminal),
-    outsideApp: flag(value.outsideApp, d.outsideApp)
+    outsideApp: flag(value.outsideApp, d.outsideApp),
+    effectsOutsideApp: flag(value.effectsOutsideApp, d.effectsOutsideApp)
   }
 }
 

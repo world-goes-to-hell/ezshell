@@ -70,16 +70,56 @@ function cursorFile(png, size, [x, y]) {
 
 const HELPER_SOURCE = `
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 public static class EzShellPointer {
   [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern IntPtr LoadImage(IntPtr instance, string name, uint type, int cx, int cy, uint load);
   [DllImport("user32.dll", SetLastError = true)] static extern bool SetSystemCursor(IntPtr cursor, uint id);
   [DllImport("user32.dll")] static extern bool DestroyCursor(IntPtr cursor);
   [DllImport("user32.dll", SetLastError = true)] static extern bool SystemParametersInfo(uint action, uint param, IntPtr value, uint update);
-  static void Restore() { SystemParametersInfo(0x57, 0, IntPtr.Zero, 0); }
+  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+  [DllImport("shell32.dll")] static extern int SHQueryUserNotificationState(out int state);
+  static readonly object OutputLock = new object();
+  static bool Restore() { return SystemParametersInfo(0x57, 0, IntPtr.Zero, 0); }
+  static void Write(string line) {
+    lock (OutputLock) {
+      Console.Out.WriteLine(line);
+      Console.Out.Flush();
+    }
+  }
+  static bool Down(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; }
+  static void Watch(ManualResetEvent done) {
+    var clock = Stopwatch.StartNew();
+    long nextState = 0;
+    int lastState = -1;
+    bool left = Down(1), right = Down(2);
+    try {
+      do {
+        if (clock.ElapsedMilliseconds >= nextState) {
+          int state;
+          if (SHQueryUserNotificationState(out state) != 0) state = 0;
+          if (state != lastState) { Write("notification " + state); lastState = state; }
+          nextState = clock.ElapsedMilliseconds + 2000;
+        }
+        bool newLeft = Down(1), newRight = Down(2);
+        if (newLeft && !left) Write("press");
+        if (newRight && !right) Write("press");
+        left = newLeft;
+        right = newRight;
+      } while (!done.WaitOne(15));
+    } catch (IOException) { /* the app's output pipe closed */ }
+  }
+  static void StopWatching(ref Thread watcher, ref ManualResetEvent done) {
+    if (watcher == null) return;
+    done.Set();
+    if (watcher.Join(500)) done.Dispose();
+    watcher = null;
+    done = null;
+  }
   // apply: "apply <state>=<id>,..." loads <folder>\\<state>.cur at its own size and puts it in place of <id>
-  static string Apply(string folder, string list) {
+  static string Apply(string folder, string list, ref bool replaced) {
     foreach (string item in list.Split(',')) {
       string[] pair = item.Split('=');
       uint id;
@@ -88,22 +128,33 @@ public static class EzShellPointer {
       if (cursor == IntPtr.Zero) return "error " + pair[0];
       // SetSystemCursor owns the handle when it succeeds
       if (!SetSystemCursor(cursor, id)) { DestroyCursor(cursor); return "error " + pair[0]; }
+      replaced = true;
     }
     return "applied";
   }
   public static void Run(string folder) {
-    Console.Out.WriteLine("ready");
-    Console.Out.Flush();
+    bool replaced = File.Exists(Path.Combine(folder, "${MARKER}"));
+    Thread watcher = null;
+    ManualResetEvent done = null;
+    Write("ready");
     string line;
     try {
       while ((line = Console.In.ReadLine()) != null) {
-        if (line == "restore") { Restore(); Console.Out.WriteLine("restored"); }
-        else if (line.StartsWith("apply ")) Console.Out.WriteLine(Apply(folder, line.Substring(6)));
-        Console.Out.Flush();
+        if (line == "restore") {
+          if (Restore()) { replaced = false; Write("restored"); }
+          else Write("error restore");
+        } else if (line.StartsWith("apply ")) Write(Apply(folder, line.Substring(6), ref replaced));
+        else if (line == "watch on" && watcher == null) {
+          done = new ManualResetEvent(false);
+          var stopSignal = done;
+          watcher = new Thread(() => Watch(stopSignal)) { IsBackground = true };
+          watcher.Start();
+        } else if (line == "watch off") StopWatching(ref watcher, ref done);
       }
     } finally {
       // The app went away (its end of the pipe closed): the user's own pointers come back
-      Restore();
+      StopWatching(ref watcher, ref done);
+      if (replaced) Restore();
     }
   }
 }
@@ -120,17 +171,21 @@ function helperScript(folder) {
  * @param {string} deps.folder where the .cur files and the marker go (the app's user data)
  * @param {boolean} [deps.allowNative] false in screen tests: commands are kept in `sent`, nothing is started
  */
-function createGlobalPointer({ folder, platform = process.platform, allowNative = true, spawn = spawnProcess, env = process.env, fsImpl = fs }) {
+function createGlobalPointer({ folder, platform = process.platform, allowNative = true, spawn = spawnProcess, env = process.env, fsImpl = fs,
+  onPress = () => {}, onNotificationState = () => {} }) {
   const supported = platform === 'win32'
   const sent = []
   let child = null
   let ready = false
+  let closing = false
   let queue = []
   let restarts = 0
+  let watching = false
+  let stopped = false
 
   const marker = () => path.join(folder, MARKER)
   function launch() {
-    if (child || !allowNative) return
+    if (child || stopped || !allowNative || !queue.length) return
     const powershell = `${env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
     const proc = spawn(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(helperScript(folder), 'utf16le').toString('base64')], {
       windowsHide: true, stdio: ['pipe', 'pipe', 'ignore']
@@ -140,6 +195,7 @@ function createGlobalPointer({ folder, platform = process.platform, allowNative 
     let pending = ''
     proc.stdout.setEncoding('utf8')
     proc.stdout.on('data', chunk => {
+      if (child !== proc) return
       pending += chunk
       let end
       while ((end = pending.indexOf('\n')) >= 0) {
@@ -148,34 +204,62 @@ function createGlobalPointer({ folder, platform = process.platform, allowNative 
         if (line === 'ready') {
           ready = true
           restarts = 0
-          for (const command of queue) proc.stdin.write(command + '\n')
-          queue = []
+          if (!closing) {
+            flushQueue(proc)
+            closeIfIdle()
+          }
         } else if (line.startsWith('error')) {
           console.error(`[globalPointer] ${line}`)
+        } else if (watching) {
+          const state = /^notification ([0-7])$/.exec(line)
+          if (state) onNotificationState(Number(state[1]))
+          else if (line === 'press') onPress()
         }
       }
       if (pending.length > 1024) pending = ''
     })
-    proc.on('error', () => {})
     proc.stdin.on('error', () => {})
-    proc.on('exit', () => {
+    const disconnected = () => {
       if (child !== proc) return
+      const wasClosing = closing
       child = null
       ready = false
+      closing = false
+      if (watching) {
+        onNotificationState(null)
+        queue = queue.filter(command => !command.startsWith('watch '))
+        queue.push('watch on')
+      }
+      if (wasClosing) { launch(); return }
       // A failed start: a few more tries while there is still something to do
       if (queue.length && restarts++ < 3) setTimeout(launch, 2000 * restarts).unref?.()
       else queue = []
-    })
+    }
+    proc.on('error', disconnected)
+    proc.on('exit', disconnected)
   }
 
   function send(command) {
     sent.push(command)
     if (!allowNative) return
-    if (child && ready) child.stdin.write(command + '\n')
+    if (child && ready && !closing) child.stdin.write(command + '\n')
     else {
       queue.push(command)
       launch()
     }
+  }
+
+  function flushQueue(proc) {
+    for (const command of queue) proc.stdin.write(command + '\n')
+    queue = []
+  }
+
+  function closeIfIdle() {
+    if (!child || closing || watching || fsImpl.existsSync(marker())) return
+    closing = true
+    // The pipe holds any commands queued while PowerShell was compiling the helper.
+    flushQueue(child)
+    child.stdin.end()
   }
 
   /** Puts the window's pointers in place of the system's. Returns false when the request is refused. */
@@ -197,10 +281,10 @@ function createGlobalPointer({ folder, platform = process.platform, allowNative 
   /** The system's own pointers again (nothing to do if none were replaced) */
   function restore() {
     if (!supported) return
-    const replaced = fsImpl.existsSync(marker())
-    if (!replaced && !child) return
+    if (!fsImpl.existsSync(marker())) return
     send('restore')
     try { fsImpl.rmSync(marker(), { force: true }) } catch { /* the helper still restores */ }
+    closeIfIdle()
   }
 
   /** At start: pointers left replaced by a helper that was killed */
@@ -208,15 +292,34 @@ function createGlobalPointer({ folder, platform = process.platform, allowNative 
     if (supported && fsImpl.existsSync(marker())) restore()
   }
 
+  function setWatching(enabled) {
+    if (!supported || stopped || enabled === watching) return
+    watching = enabled
+    // A not-yet-ready helper only needs the latest watch command.
+    queue = queue.filter(command => !command.startsWith('watch '))
+    if (enabled || (child && !closing) || !allowNative) send(enabled ? 'watch on' : 'watch off')
+    if (!enabled) closeIfIdle()
+  }
+
   /** App quit: the helper restores on the end of its input */
   function stop() {
-    if (!child) return
-    try { fsImpl.rmSync(marker(), { force: true }) } catch { /* next start retries */ }
+    stopped = true
+    watching = false
+    queue = []
+    if (!child || closing) return
+    if (fsImpl.existsSync(marker()) && child.stdin.writable !== false) {
+      // Send directly even during compilation. A helper still compiling may never read it (the app is
+      // quitting), so its marker stays and the next start's recover() restores once more; a ready helper
+      // already holds replaced=true and restores on the end of its input anyway.
+      sent.push('restore')
+      child.stdin.write('restore\n')
+      if (ready) try { fsImpl.rmSync(marker(), { force: true }) } catch { /* next start retries */ }
+    }
     child.stdin.end()
     child = null
   }
 
-  return { apply, restore, recover, stop, supported, sent }
+  return { apply, restore, recover, setWatching, stop, supported, sent }
 }
 
 module.exports = { createGlobalPointer, checkCursorSet, cursorFile, pngSize, helperScript, SYSTEM_CURSOR_IDS, HELPER_SOURCE }

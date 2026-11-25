@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createGlobalPointer, checkCursorSet, cursorFile, pngSize, helperScript, SYSTEM_CURSOR_IDS, HELPER_SOURCE } from './globalPointer.js'
 
 /** A PNG head of the given size (enough for the IHDR check) */
@@ -17,6 +17,16 @@ function png(width, height = width) {
   return data
 }
 const cursor = (state, size = 48, hotspot = [2, 3]) => ({ state, png: png(size).toString('base64'), hotspot })
+
+function fakeProcess(file) {
+  const child = new EventEmitter()
+  child.file = file
+  child.stdout = Object.assign(new EventEmitter(), { setEncoding() {} })
+  child.written = []
+  child.ended = false
+  child.stdin = Object.assign(new EventEmitter(), { write: text => child.written.push(text), end: () => { child.ended = true } })
+  return child
+}
 
 describe('checking the pointers the window sends', () => {
   it('takes known states with a PNG of the chosen size and a hotspot inside it', () => {
@@ -97,15 +107,8 @@ describe('putting pointers in place and back', () => {
 
   it('starts the helper once, sends after it is ready, and ends its input on quit', () => {
     const children = []
-    const spawn = (file, args) => {
-      const child = new EventEmitter()
-      child.file = file
-      child.args = args
-      child.stdout = new EventEmitter()
-      child.stdout.setEncoding = () => {}
-      child.written = []
-      child.ended = false
-      child.stdin = Object.assign(new EventEmitter(), { write: text => child.written.push(text), end: () => { child.ended = true } })
+    const spawn = file => {
+      const child = fakeProcess(file)
       children.push(child)
       return child
     }
@@ -118,7 +121,76 @@ describe('putting pointers in place and back', () => {
     children[0].stdout.emit('data', 'ready\n')
     expect(children[0].written).toEqual(['apply default=32512\n', 'apply pointer=32649\n'])
     pointer.stop()
+    expect(children[0].written.at(-1)).toBe('restore\n')
     expect(children[0].ended).toBe(true)
+  })
+
+  it('sends restore before removing the marker when stopping a restarted helper', () => {
+    vi.useFakeTimers()
+    try {
+      const first = fakeProcess()
+      const second = fakeProcess()
+      const marker = path.join(folder, 'applied')
+      const wasMarked = []
+      second.stdin.write = text => { wasMarked.push(fs.existsSync(marker)); second.written.push(text) }
+      const spawn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second)
+      const pointer = createGlobalPointer({ folder, platform: 'win32', spawn })
+      pointer.apply({ size: 48, cursors: [cursor('default')] })
+      pointer.setWatching(true)
+      first.stdout.emit('data', 'ready\n')
+      first.emit('exit', 1)
+      vi.advanceTimersByTime(2000)
+      expect(spawn).toHaveBeenCalledTimes(2)
+      // The restarted helper may still be compiling when the app quits.
+      pointer.stop()
+      expect(second.written).toEqual(['restore\n'])
+      expect(wasMarked).toEqual([true])
+      expect(second.ended).toBe(true)
+      // It may never read that line: the marker stays for the next start's recover()
+      expect(fs.existsSync(marker)).toBe(true)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('removes the marker when a ready helper is stopped (it restores on the end of its input)', () => {
+    const child = fakeProcess()
+    const marker = path.join(folder, 'applied')
+    const pointer = createGlobalPointer({ folder, platform: 'win32', spawn: vi.fn(() => child) })
+    pointer.apply({ size: 48, cursors: [cursor('default')] })
+    child.stdout.emit('data', 'ready\n')
+    pointer.stop()
+    expect(child.written.at(-1)).toBe('restore\n')
+    expect(fs.existsSync(marker)).toBe(false)
+  })
+
+  it('watches presses and shell state in the same helper and leaves system pointers alone in watch-only use', () => {
+    const child = fakeProcess()
+    const events = []
+    const pointer = createGlobalPointer({ folder, platform: 'win32', spawn: () => child,
+      onPress: () => events.push('press'), onNotificationState: state => events.push(state) })
+    pointer.setWatching(true)
+    pointer.setWatching(true)
+    pointer.restore()
+    child.stdout.emit('data', 'ready\nnotification 3\npre')
+    child.stdout.emit('data', 'ss\nnotification 5\nnotification 8\n')
+    expect(child.written).toEqual(['watch on\n'])
+    expect(events).toEqual([3, 'press', 5])
+    pointer.setWatching(false)
+    expect(child.ended).toBe(true)
+    child.stdout.emit('data', 'press\nnotification 2\n')
+    expect(events).toEqual([3, 'press', 5])
+    pointer.stop()
+    expect(child.written).toEqual(['watch on\n', 'watch off\n'])
+    expect(child.ended).toBe(true)
+    expect(fs.readdirSync(folder)).toEqual([])
+  })
+
+  it('closes a helper after restoring the shape when no effects are active', () => {
+    const child = fakeProcess()
+    const pointer = createGlobalPointer({ folder, platform: 'win32', spawn: () => child })
+    pointer.apply({ size: 48, cursors: [cursor('default')] })
+    pointer.restore()
+    expect(child.written).toEqual(['apply default=32512\n', 'restore\n'])
+    expect(child.ended).toBe(true)
   })
 
   it('puts the folder in the script as a quoted literal', () => {
