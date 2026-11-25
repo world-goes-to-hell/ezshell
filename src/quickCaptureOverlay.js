@@ -127,7 +127,7 @@ const page = `<!doctype html>
   .comment-field { display: grid; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--capture-border) 60%, var(--capture-surface)); }
   #review .comment-field label { margin: 0; }
   .optional { color: var(--capture-muted); font-weight: 400; }
-  #comment { display: block; width: 100%; height: 56px; resize: none; padding: 9px 10px; font: inherit;
+  #comment { display: block; width: 100%; min-height: 80px; max-height: 260px; field-sizing: content; resize: none; padding: 9px 10px; font: inherit;
     color: inherit; background: var(--capture-background); border: 1px solid var(--capture-border); border-radius: var(--capture-radius); }
   #comment::placeholder { color: var(--capture-muted); }
   .actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 9px; }
@@ -591,6 +591,14 @@ const page = `<!doctype html>
       review.style.top = top + 'px'
       review.scrollTop = scrollTop
     }
+    // The comment grows with its lines (field-sizing, up to 260px): place the panel again when its height changes
+    let commentHeight = 0
+    comment.addEventListener('input', () => {
+      const height = comment.offsetHeight
+      if (height === commentHeight) return
+      commentHeight = height
+      placeReview()
+    })
     document.body.addEventListener('pointerdown', event => {
       if (event.button !== 0 || start || !review.hidden) return
       drags += 1
