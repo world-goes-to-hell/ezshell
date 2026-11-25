@@ -174,22 +174,31 @@ async function connectJdwp({ host, port, timeoutMs = 5000, signal } = {}) {
   socket.once('close', () => flushClose(used ? new Error('JVM 디버그 패킷이 중간에서 끊겼습니다.') : closedError()))
   signal?.addEventListener('abort', abort, { once: true })
 
-  let referenceTypeSize
-  try {
-    await handshake
-    const sizes = reader(await request(7))
-    const ids = Array.from({ length: 5 }, sizes.number)
-    sizes.end()
-    if (ids.some(size => size < 1 || size > 8)) throw packetError()
-    referenceTypeSize = ids[3]
-  } catch (error) {
-    flushClose(error)
-    throw error
+  await handshake
+  if (closed) throw closed
+  let idSizes
+
+  function getReferenceTypeSize() {
+    // Reconnecting while the app is locked may complete the handshake only.
+    idSizes ??= request(7).then(body => {
+      const sizes = reader(body)
+      const ids = Array.from({ length: 5 }, sizes.number)
+      sizes.end()
+      if (ids.some(size => size < 1 || size > 8)) throw packetError()
+      return ids[3]
+    }).catch(error => {
+      flushClose(error)
+      throw error
+    })
+    return idSizes
   }
 
-  async function classesBySignature(signature) {
+  async function classesBySignature(signature, referenceTypeSize, signal) {
     const encoded = Buffer.from(signature, 'utf8')
-    const result = reader(await request(2, [int(encoded.length), encoded], signature))
+    signal?.throwIfAborted()
+    const body = await request(2, [int(encoded.length), encoded], signature)
+    signal?.throwIfAborted()
+    const result = reader(body)
     const count = result.count(1 + referenceTypeSize + 4)
     const classes = []
     for (let index = 0; index < count; index++) {
@@ -216,7 +225,8 @@ async function connectJdwp({ host, port, timeoutMs = 5000, signal } = {}) {
       result.end()
       return { baseDir, classpaths, bootclasspaths }
     },
-    async redefine(classes) {
+    async redefine(classes, { signal } = {}) {
+      signal?.throwIfAborted()
       if (!Array.isArray(classes)) throw new Error('다시 적재할 클래스를 확인해 주세요.')
       const seen = new Set()
       for (const entry of classes) {
@@ -226,12 +236,16 @@ async function connectJdwp({ host, port, timeoutMs = 5000, signal } = {}) {
         }
         seen.add(entry.signature)
       }
+      if (!classes.length) return { redefined: 0, notLoaded: [] }
+
+      const referenceTypeSize = await getReferenceTypeSize()
+      signal?.throwIfAborted()
       const notLoaded = []
       const parts = []
       const loadedSignatures = new Set()
       let length = HEADER_BYTES + 4
       for (const { signature, bytes } of classes) {
-        const ids = await classesBySignature(signature)
+        const ids = await classesBySignature(signature, referenceTypeSize, signal)
         if (!ids.length) notLoaded.push(signature)
         for (const id of ids) {
           length += referenceTypeSize + 4 + bytes.length
@@ -244,7 +258,9 @@ async function connectJdwp({ host, port, timeoutMs = 5000, signal } = {}) {
       if (redefined) {
         // One VM request so a schema error cannot leave half a change applied. The VM gives one error code for the batch.
         const signature = loadedSignatures.size === 1 ? loadedSignatures.values().next().value : null
+        signal?.throwIfAborted()
         const result = await request(18, [int(redefined), ...parts], signature, Math.max(timeoutMs, REDEFINE_TIMEOUT_MS))
+        signal?.throwIfAborted()
         if (result.length) throw packetError()
       }
       return { redefined, notLoaded }

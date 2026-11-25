@@ -33,6 +33,7 @@ afterEach(async () => {
 
 async function peer(onCommand, { size = 8, opening = handshake, silent = false } = {}) {
   const sockets = new Set()
+  const commands = []
   const server = net.createServer(socket => {
     sockets.add(socket)
     socket.on('error', () => {})
@@ -57,6 +58,7 @@ async function peer(onCommand, { size = 8, opening = handshake, silent = false }
         const length = bytes.readUInt32BE(0)
         const id = bytes.readUInt32BE(4)
         const cmd = bytes[10]
+        commands.push(cmd)
         const body = bytes.subarray(11, length)
         bytes = bytes.subarray(length)
         if (cmd === 7) socket.write(reply(id, ints(8, 8, 8, size, 8)))
@@ -67,7 +69,7 @@ async function peer(onCommand, { size = 8, opening = handshake, silent = false }
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
   const port = server.address().port
-  fixture = { port, close: () => {
+  fixture = { port, commands, close: () => {
     for (const socket of sockets) socket.destroy()
     return new Promise(resolve => server.close(resolve))
   } }
@@ -98,6 +100,7 @@ describe('local JVM JDWP', () => {
     const [capability, paths] = await Promise.all([vm.canRedefine(), vm.classPaths()])
     expect(capability).toBe(true)
     expect(paths).toEqual({ baseDir: 'C:/folder', classpaths: ['one', '한글'], bootclasspaths: ['boot'] })
+    expect(fixture.commands).toEqual([17, 13])
   })
 
   it('loads every reference ID using the negotiated width and reports unloaded classes', async () => {
@@ -118,6 +121,7 @@ describe('local JVM JDWP', () => {
     expect(await vm.redefine([{ signature: 'Lcom/x/Foo;', bytes: Buffer.from('class') },
       { signature: 'Lcom/x/Unloaded;', bytes: Buffer.from('another') }])).toEqual({ redefined: 2, notLoaded: ['Lcom/x/Unloaded;'] })
     expect(calls).toEqual([2, 2, 18])
+    expect(fixture.commands).toEqual([7, 2, 2, 18])
   })
 
   it('returns a Korean JDWP reason and the signature when the VM rejects one class', async () => {
@@ -176,6 +180,26 @@ describe('local JVM JDWP', () => {
     const waiting = vm.classPaths()
     active.abort()
     await expect(waiting).rejects.toThrow(/연결이 닫혔습니다/)
+  })
+
+  it('stops a cancelled redefinition before sending more commands and keeps the session open', async () => {
+    const watching = new AbortController()
+    vm = await connectJdwp(await peer(({ cmd, id, socket }) => {
+      if (cmd === 2) {
+        watching.abort()
+        socket.write(reply(id, Buffer.concat([ints(1), ref('0000000100000002')])))
+      }
+      if (cmd === 17) {
+        const capabilities = Buffer.alloc(32)
+        capabilities[7] = 1
+        socket.write(reply(id, capabilities))
+      }
+    }))
+    const batch = [{ signature: 'LFoo;', bytes: Buffer.from('class') }, { signature: 'LBar;', bytes: Buffer.from('class') }]
+    await expect(vm.redefine(batch, { signal: watching.signal })).rejects.toMatchObject({ name: 'AbortError' })
+    await expect(vm.redefine(batch, { signal: watching.signal })).rejects.toMatchObject({ name: 'AbortError' })
+    expect(await vm.canRedefine()).toBe(true)
+    expect(fixture.commands).toEqual([7, 2, 17])
   })
 })
 
