@@ -4,7 +4,7 @@
 
 시안: `mockups/dev-run-presets.html` (장면 1~8, 사용자가 좋다고 함)
 
-상태: 1단계 끝 (2026-11-26, 리뷰 3회 반영). 2·3단계 남음.
+상태: 1단계 끝 (2026-11-26, 리뷰 3회 반영). 3단계 진행 중 (2026-11-26). 2단계 남음.
 
 ## 지금 있는 것 (2.36.2, 바탕으로 쓴다)
 - `src/ipc/localDevelopmentTasks.js`:
@@ -264,6 +264,59 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
   - 원격 디버깅 포트를 화면이나 MCP 로 알려 주지 않는다.
 - **에이전트:** `run_log` 에 "바로 반영됨 · 클래스 3개" 또는 "재기동 필요: 메서드 추가" 가 남는다. 에이전트가 고친 뒤 결과를 확인할 수 있다.
 - **한계:** JRebel 도 못 하는 것과 비슷하다. 상속 구조, 정적 초기화, 프레임워크 설정 파일 일부는 재기동이 필요하다. 이건 화면에 그대로 알린다.
+
+### 3단계에서 정한 것 (2026-11-26, PL 결정. 사용자가 출근해 있어 확인받지 못함. 사용자가 확인한 뒤 바꿀 수 있다)
+| 항목 | 결정 |
+|---|---|
+| 대상 | Spring Boot 실행 후보(`task`, Maven `spring-boot:run`·Gradle `bootRun`)만. 직접 입력 명령·Node 는 안 된다. Tomcat 은 2단계에서 `CATALINA_OPTS` 로 붙인다 |
+| 구성 필드 | `hotReload: 'off' \| 'standard' \| 'enhanced'`, 기본 `'off'`. 옛 파일에 없으면 `'off'` |
+| 클래스패스 | Maven·Gradle 을 따로 돌리지 않는다. 붙은 JVM 에 JDWP `VirtualMachine.ClassPaths`(1/13)로 묻는다. 서버가 실제로 쓰는 클래스패스이고, 네트워크·빌드 도구 실행이 없다 |
+| 출력 폴더 | 그 클래스패스 중 워크트리 안의 폴더(`target/classes`, `build/classes/java/main`). 소스 루트는 그 짝(`src/main/java`) |
+| DevTools | 의존성에 `spring-boot-devtools` 가 있으면 JDWP 를 붙이지 않고 컴파일만 한다 (DevTools 가 다시 시작한다) |
+| 확장 등급 | JDK 17·21 만 (JBR). JDK 8·11 프로젝트는 표준만 (DCEVM 8·11 은 받지 않는다) |
+| IDE 디버거 | 바로 반영을 켠 실행에는 IDE 디버거를 붙일 수 없다 (JDWP 는 한 번에 하나만 붙는다). 구성 창에 적는다 |
+
+### 3단계 흐름의 세부 (바꾸면 안 되는 것 포함)
+- **JVM 인자:** `-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,quiet=y,address=127.0.0.1:<빈 포트>`.
+  - `quiet=y` 로 JVM 의 `Listening for transport dt_socket at address: N` 줄을 막는다. 그 줄이 터미널·`run_log` 에 포트를 드러내고, `developmentProcess.js` 의 주소 판독이 그 포트를 서버 주소로 잘못 읽을 수 있다.
+  - Maven(Windows 는 PowerShell `-EncodedCommand`): `'-Dspring-boot.run.jvmArguments=<인자>'` 를 작은따옴표로 감싸 명령 끝에 붙인다. PowerShell 은 따옴표 없는 `-Dname.with.dot=…` 를 점에서 나눈다.
+  - Gradle: 앱이 쓰는 고정 init 스크립트(`userData/hot-reload/init.gradle`)를 `-I` 로 넘기고, 인자는 PTY 환경 변수 `EZSHELL_HOT_RELOAD_JVM_ARGS` 로 준다. 스크립트는 `bootRun` 의 `jvmArgs` 에만 더한다.
+- **연결:** 실행 직후부터 그 포트에 붙기를 되풀이해(최대 시작 제한 시간까지) 붙은 채로 둔다. JDWP 는 인증이 없고 한 번에 하나만 붙으므로 먼저 붙어 있는 것이 다른 프로세스가 끼어들 틈을 줄인다. 끊기면 다음 변경 때 다시 붙는다.
+- **포트:** 실행마다 새로 고른다. 화면·MCP·`run_log`·`run_list`·로그 파일 어디에도 내보내지 않는다.
+- **감시:** 소스 루트를 `fs.watch`(재귀)로 본다. 마지막 변경 뒤 300ms 조용하면 묶어서 한 번 처리한다. 상태가 `running` 일 때만. 처리 중 생긴 변경은 다음 묶음으로 미룬다. `.java` 삭제는 클래스를 지우지 않는다.
+- **컴파일:** 그 구성의 JDK 의 `javac`(구성이 `system` 이면 PTY 와 같은 `JAVA_HOME`·`PATH` 규칙). JRE 만 있으면 "javac 를 찾을 수 없습니다".
+  - `execFile`(셸 없음) + 인자 파일(`@파일`, Windows 명령 길이 32K 제한). 60초 제한.
+  - 인자: `-d <출력 폴더> -cp <JVM 클래스패스> -implicit:none -g -parameters -encoding <pom/gradle 의 소스 인코딩, 없으면 UTF-8>` 와 기존 `.class` 의 major 버전에 맞춘 `--release N`(javac 8 이면 `-source/-target`).
+  - Lombok: 빌드 파일에 lombok 이 있고 JVM 클래스패스에 없으면 `~/.m2`·Gradle 캐시에서 jar 를 찾아 `-processorpath` 로 준다. 못 찾으면 컴파일 오류로 알린다.
+  - 컴파일 오류는 그 실행의 오류 묶음에 넣는다 (`오류 N`, 에이전트에게 보내기에 그대로 쓰인다).
+- **적용:** 바뀐 소스에서 나온 클래스(`$` 내부 클래스 포함)를 `ClassesBySignature` 로 찾아 `RedefineClasses`. 아직 적재되지 않은 클래스는 파일만 쓰면 된다 (처음 쓸 때 적재된다). 여러 클래스 로더에 있으면 모두 바꾼다.
+  - JDWP 오류 60~72 는 "재기동 필요: 메서드 추가" 처럼 이유를 한국어로 보인다.
+- **확장 등급:** JVM 인자에 `-XX:+AllowEnhancedClassRedefinition` 과 HotswapAgent 를 더한다 (정확한 인자는 codex-4 가 HotswapAgent 문서로 확인해 여기에 적는다). 컴파일·적용 흐름은 표준과 같다. 구성의 `jdk` 가 보관함의 JBR 이어야 하고 HotswapAgent 가 받아져 있어야 한다.
+
+### 3단계 작업 나눔과 계약
+- **codex-4: JDWP 클라이언트와 확장 등급 받기**
+  - `src/runtimes/jdwp.js`: 핸드셰이크, `IDSizes`(1/7), `CapabilitiesNew`(1/17), `ClassPaths`(1/13), `ClassesBySignature`(1/2), `RedefineClasses`(1/18), 오류 코드 → 한국어 이유. VM 이 먼저 보내는 이벤트 패킷은 읽고 버린다. 응답 제한 시간.
+  - `src/runtimes/classFile.js`: `.class` 의 이름·major 버전 읽기.
+  - 시험: 가짜 JDWP 서버로 단위 시험. 이 PC 의 JDK 17(`C:\DEV\JAVA\zulu17…`)로 작은 Java 프로그램을 띄워 실제로 몸체를 바꾸고, 메서드 추가가 거부되는지 한 번 확인한다 (손으로 돌리는 스크립트, 결과를 보고에 적는다).
+  - 보관함에 JBR 17·21 과 HotswapAgent 받기 (1단계 JDK 받기 규칙: 정해진 호스트, https, 체크섬, 경로 검사). 설정 > 개발 도구에 목록·받기·지우기. 신뢰의 기준점과 호스트 목록은 이 문서에 적는다.
+  - main 에 내보내기: `runtimes.hotswapAgentPath() → 절대 경로 | null`, `runtimes.isJbr(id) → boolean`.
+- **codex-5: main 연결**
+  - 구성 필드 `hotReload` 저장·검사, JVM 인자 넣기, 감시·컴파일·적용, DevTools 판단, 상태 이벤트, `run_*` 확장.
+- **claude-1: 화면**
+  - 구성 창의 `바로 반영` 선택(끄기·표준·확장, Spring Boot 후보에서만 고를 수 있음, 확장은 JBR·HotswapAgent 가 없으면 받기 안내), 카드 줄의 반영 상태 칩, `재기동 필요` 때 재기동 버튼 강조.
+
+```ts
+type Preset = { /* 1단계 필드 */ hotReload: 'off' | 'standard' | 'enhanced' }
+type RunState = { /* 1단계 필드 */ reload?: {
+  status: 'watching' | 'compiling' | 'applied' | 'restartNeeded' | 'compileError' | 'failed'
+  classes?: number   // applied: 바꾼 클래스 수 (아직 적재 안 된 것 포함)
+  reason?: string    // restartNeeded·compileError·failed: 한 줄 이유 (포트·경로 없이)
+  devtools?: true    // DevTools 가 다시 시작하는 방식
+  at: number } }
+```
+- `run_list` 의 각 구성에 `reload` 를 더한다. `run_log` 는 맨 앞에 최근 반영 결과 10개를 `HH:MM:SS 바로 반영됨 · 클래스 3개` / `HH:MM:SS 재기동 필요: 메서드 추가 (com.example.Foo)` 꼴로 보인다.
+- `run_wait(name, seconds, { until: 'reload' })`: 부른 뒤에 처음 나오는 반영 결과(`applied`·`restartNeeded`·`compileError`·`failed`)를 기다린다. 기본 `until` 은 지금처럼 시작 완료.
+- 새 IPC 채널은 없다. 화면은 `run-preset-state` 의 `state.reload` 로 그린다.
 
 ## 진행
 - [x] 1단계 설계 확정 (이 문서)
