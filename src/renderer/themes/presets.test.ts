@@ -114,3 +114,35 @@ describe('app themes paired with chat', () => {
     assertContrast(cursor, cursorAccent, 4.5)
   })
 })
+
+// Every preset, not only the chat pairs (design review D10, 2026-11-25): 11-12px muted labels were
+// 2.2-3.0:1 on the sidebar in the older themes. The UI reads the CSS block, so the block is checked.
+const READABLE_TEXT = ['--text-primary', '--text-secondary', '--text-muted', '--text-link'] as const
+const SURFACES = ['--bg-primary', '--bg-secondary', '--bg-tertiary'] as const
+
+describe('every preset theme', () => {
+  it.each(PRESET_THEMES.map(t => [t.id, t] as const))('%s keeps the CSS block text colors equal to its definition', (id, theme) => {
+    const block = cssBlock(id)!
+    for (const token of [...READABLE_TEXT, ...SURFACES]) {
+      const key = token.slice(2).replace(/-([a-z])/g, (_, letter: string) => letter.toUpperCase()) as keyof typeof theme.colors
+      expect(block[token], `${id} ${token}`).toBe(theme.colors[key].toLowerCase())
+    }
+  })
+
+  it.each(PRESET_THEMES.map(t => [t.id, t] as const))('%s keeps text readable at 4.5:1 on its surfaces', (id) => {
+    const block = cssBlock(id)!
+    for (const surface of SURFACES) {
+      for (const text of READABLE_TEXT) assertContrast(block[text], block[surface], 4.5)
+    }
+  })
+
+  // Body text first, then secondary, then muted: the fix may not make muted text the loudest
+  it.each(PRESET_THEMES.map(t => [t.id, t] as const))('%s keeps body > secondary > muted', (id) => {
+    const block = cssBlock(id)!
+    for (const surface of SURFACES) {
+      const ratio = (token: string) => contrastRatio(hexRgb(block[token]), hexRgb(block[surface]))
+      expect(ratio('--text-primary'), `${id} on ${surface}`).toBeGreaterThan(ratio('--text-secondary'))
+      expect(ratio('--text-secondary'), `${id} on ${surface}`).toBeGreaterThan(ratio('--text-muted'))
+    }
+  })
+})

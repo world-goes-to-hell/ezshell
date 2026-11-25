@@ -110,6 +110,16 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
       keywords: ['settings', 'preferences', '설정'],
     })
 
+    if (/^Win/i.test(navigator.platform) && window.electronAPI.startQuickCapture) {
+      items.push({
+        id: 'quick-capture',
+        title: '영역 캡처',
+        category: 'command',
+        action: () => window.setTimeout(() => window.electronAPI.startQuickCapture?.(), 200),
+        keywords: ['capture', 'screenshot', '화면', '스크린샷'],
+      })
+    }
+
     // Opened from here only (the sidebar's bottom buttons were taken out)
     items.push({
       id: 'agent-messages',

@@ -159,7 +159,7 @@ function createQuickCapture({
    * the run, they come back into the overlay; `review` opens them without choosing a new region.
    * True when the captures were copied or sent.
    */
-  async function start({ review = false } = {}) {
+  async function start({ review = false, released } = {}) {
     if (active || !isAvailable()) return false
     if (!session) session = { captures: [], comment: '', display: null, chip: null }
     const run = session
@@ -191,6 +191,7 @@ function createQuickCapture({
       if (!available()) return false
       const image = sources.find(source => source.display_id === String(display.id))?.thumbnail
       if (!image || image.isEmpty()) throw new Error('해당 모니터의 화면을 읽지 못했습니다.')
+      if (released && (!await wait(released) || !available())) return false
 
       const win = new BrowserWindow({
         ...bounds, show: false, frame: false, movable: false, skipTaskbar: true,

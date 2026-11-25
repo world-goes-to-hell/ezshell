@@ -4,7 +4,7 @@ import { RiSearchLine, RiTerminalLine, RiServerLine, RiNavigationLine, RiAppsLin
 import { useShortcutsStore, ShortcutCategory } from '../../stores/shortcutsStore'
 import { useReducedMotion } from '../../hooks/useReducedMotion'
 import { confirmDialog } from '../../stores/confirmStore'
-import { bindingProblemFor, captureKeys, findConflict } from '../../lib/shortcutCapture'
+import { bindingProblemFor, captureKeys, createCaptureRecorder, findConflict, isCaptureShortcut, sameBinding } from '../../lib/shortcutCapture'
 import { isMac, shortcutKeyLabels } from '../../lib/shortcutModifiers'
 import './ShortcutsPanel.css'
 
@@ -32,7 +32,7 @@ export function ShortcutsPanel() {
   const [searchQuery, setSearchQuery] = useState('')
   // The shortcut whose new keys are being recorded, and why the last press was refused
   const [recordingId, setRecordingId] = useState<string | null>(null)
-  const [problem, setProblem] = useState<string | null>(null)
+  const [problem, setProblem] = useState<{ id: string; text: string } | null>(null)
   const reducedMotion = useReducedMotion()
   const onMac = isMac()
 
@@ -56,42 +56,59 @@ export function ShortcutsPanel() {
   useEffect(() => {
     if (!recordingId) return
     window.electronAPI.setShortcutRecording?.(true)
-    const onKeyDown = (event: KeyboardEvent) => {
+    const recorder = isCaptureShortcut(recordingId) ? createCaptureRecorder() : null
+    let pending: string[] | null = null
+    const save = (keys: string[]) => {
+      const shortcut = useShortcutsStore.getState().getShortcut(recordingId)
+      if (shortcut && sameBinding(shortcut.keys, keys)) resetCustomBinding(recordingId)
+      else setCustomBinding(recordingId, keys)
+      setRecordingId(null)
+      setProblem(null)
+    }
+    const onKey = (event: KeyboardEvent) => {
       event.preventDefault()
       event.stopImmediatePropagation()
-      if (event.key === 'Escape') {
+      const down = event.type === 'keydown'
+      if (down && event.key === 'Escape') {
         setRecordingId(null)
         setProblem(null)
         return
       }
-      const captured = captureKeys(event, onMac)
+      const modifiersHeld = event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
+      if (pending) {
+        if (!down && !modifiersHeld) save(pending)
+        return
+      }
+      if (!recorder && !down) return
+      const captured = recorder ? recorder(event, down) : captureKeys(event, onMac)
       if (captured.kind === 'waiting') return
       if (captured.kind === 'invalid') {
-        setProblem(captured.reason)
+        setProblem({ id: recordingId, text: captured.reason })
         return
       }
       // Rules of this shortcut itself (the work overview is taken outside the app too)
       const own = bindingProblemFor(recordingId, captured.keys, onMac)
       if (own) {
-        setProblem(own)
+        setProblem({ id: recordingId, text: own })
         return
       }
       const state = useShortcutsStore.getState()
       const conflict = findConflict(state.shortcuts, state.customBindings, recordingId, captured.keys)
       if (conflict) {
-        setProblem(`이미 '${conflict.description}' 에 쓰고 있습니다. 그쪽을 먼저 바꾸거나 다른 키를 눌러 주세요.`)
+        setProblem({ id: recordingId, text: `이미 '${conflict.description}' 에 쓰고 있습니다. 그쪽을 먼저 바꾸거나 다른 키를 눌러 주세요.` })
         return
       }
-      const shortcut = state.shortcuts.find(item => item.id === recordingId)
-      // The default again: no custom binding needs to be kept
-      if (shortcut && shortcut.keys.join('+') === captured.keys.join('+')) resetCustomBinding(recordingId)
-      else setCustomBinding(recordingId, captured.keys)
-      setRecordingId(null)
-      setProblem(null)
+      // Keep the native hook suspended through the release of a recorded capture chord.
+      if (recorder && modifiersHeld) {
+        pending = captured.keys
+        setProblem(null)
+      } else save(captured.keys)
     }
-    window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('keydown', onKey, true)
+    window.addEventListener('keyup', onKey, true)
     return () => {
-      window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('keydown', onKey, true)
+      window.removeEventListener('keyup', onKey, true)
       window.electronAPI.setShortcutRecording?.(false)
     }
   }, [recordingId, onMac, setCustomBinding, resetCustomBinding])
@@ -111,6 +128,17 @@ export function ShortcutsPanel() {
   const startRecording = (id: string) => {
     setProblem(null)
     setRecordingId(current => (current === id ? null : id))
+  }
+
+  const reset = (id: string, keys: string[]) => {
+    const relevant = isCaptureShortcut(id) ? shortcuts : shortcuts.filter(shortcut => isCaptureShortcut(shortcut.id))
+    const conflict = findConflict(relevant, customBindings, id, keys)
+    if (conflict) {
+      setProblem({ id, text: `기본값을 이미 '${conflict.description}' 에 쓰고 있습니다.` })
+      return
+    }
+    setProblem(null)
+    resetCustomBinding(id)
   }
 
   const renderKeys = (keys: string[]) => {
@@ -174,6 +202,8 @@ export function ShortcutsPanel() {
                   const effectiveKeys = getEffectiveKeys(shortcut.id)
                   const isCustom = customBindings[shortcut.id] !== undefined
                   const isRecording = recordingId === shortcut.id
+                  const capture = isCaptureShortcut(shortcut.id)
+                  const captureNote = effectiveKeys.some(key => !['Ctrl', 'Win', 'Alt', 'Shift'].includes(key)) ? '주 키를 누르면 실행' : '수정키를 모두 떼면 실행'
 
                   return (
                     <motion.div
@@ -184,9 +214,10 @@ export function ShortcutsPanel() {
                     >
                       <div className="shortcut-info">
                         <div className="shortcut-description">{shortcut.description}</div>
-                        {shortcut.note && <div className="shortcut-action">{shortcut.note}</div>}
+                        {capture ? <div className="shortcut-action">Windows 전역{effectiveKeys.length > 0 && ` · ${captureNote}`}</div>
+                          : shortcut.note && <div className="shortcut-action">{shortcut.note}</div>}
                         {isCustom && <div className="shortcut-action">직접 바꿈 · 기본값 {shortcutKeyLabels(shortcut.keys, onMac).join('+')}</div>}
-                        {isRecording && problem && <div className="shortcut-problem" role="alert">{problem}</div>}
+                        {problem?.id === shortcut.id && <div className="shortcut-problem" role="alert">{problem.text}</div>}
                       </div>
 
                       <div className="shortcut-binding">
@@ -197,10 +228,13 @@ export function ShortcutsPanel() {
                           aria-label={`${shortcut.description} 단축키 바꾸기`}
                           title={isRecording ? '취소하려면 다시 누르거나 Esc' : '눌러서 단축키 바꾸기'}
                         >
-                          {isRecording ? <span className="shortcut-recording">새 키를 누르세요…</span> : <>{renderKeys(effectiveKeys)}<RiEditLine size={14} className="shortcut-edit-icon" /></>}
+                          {isRecording ? <span className="shortcut-recording">새 키를 누르세요…</span> : <>{effectiveKeys.length ? renderKeys(effectiveKeys) : '사용 안 함'}<RiEditLine size={14} className="shortcut-edit-icon" /></>}
                         </button>}
+                        {capture && !isRecording && effectiveKeys.length > 0 && (
+                          <button type="button" className="shortcut-change-btn" onClick={() => { setProblem(null); setCustomBinding(shortcut.id, []) }}>사용 안 함</button>
+                        )}
                         {isCustom && !isRecording && (
-                          <button className="shortcut-reset-btn" onClick={() => resetCustomBinding(shortcut.id)} title="기본값으로 되돌리기" aria-label="기본값으로 되돌리기">
+                          <button className="shortcut-reset-btn" onClick={() => reset(shortcut.id, shortcut.keys)} title="기본값으로 되돌리기" aria-label="기본값으로 되돌리기">
                             <RiRestartLine size={16} />
                           </button>
                         )}

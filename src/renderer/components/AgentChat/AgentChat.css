@@ -592,9 +592,12 @@
   user-select: none;
 }
 /* Keyboard focus only: a mouse click on a disclosure or an answer button leaves the focus in the row,
-   and with :focus-within its time stayed on screen until something else was clicked (2026-11-24) */
+   and with :focus-within its time stayed on screen until something else was clicked (2026-11-24).
+   `inherit`, never `visible`: a tab that is not in front is hidden with visibility: hidden, and a
+   child set to visible shows through it, so a background chat's times floated over the tab in
+   front (2026-11-25 user report) */
 .agent-chat-row:is(:hover, :has(:focus-visible)) .agent-chat-timestamp,
-.agent-chat-timestamp[data-always-visible] { visibility: visible; }
+.agent-chat-timestamp[data-always-visible] { visibility: inherit; }
 .agent-chat-user-message > .agent-chat-timestamp {
   flex: none;
   margin-block-end: 2px;

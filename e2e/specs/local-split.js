@@ -94,6 +94,29 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   check('좌우 분할 opens a second shell of this PC beside the first', await ready(2), JSON.stringify(await js(`${PANES}.map(el => el.className + ' | ' + el.textContent.slice(0, 80))`)))
   let r = await rects()
   check('side by side', r[0][0] < r[1][0] && Math.abs(r[0][3] - r[1][3]) < 4, JSON.stringify(r))
+  const divider = "document.querySelector('.local-terminal-tab.is-split > .pane-divider-v')"
+  const [dividerX, dividerY] = await center(divider)
+  await mouse('mouseMoved', dividerX, dividerY)
+  check('the 6px gap remains a resizable divider', await js(`(() => {
+    const [left, right] = ${PANES}.map(pane => pane.getBoundingClientRect())
+    const divider = ${divider}.getBoundingClientRect()
+    return divider.width === 6 && Math.abs(divider.left - left.right) < 0.1 && Math.abs(divider.right - right.left) < 0.1 &&
+      document.elementFromPoint(${dividerX}, ${dividerY}) === ${divider}
+  })()`))
+  const resize = (type, x, button, buttons, clickCount) => send('Input.dispatchMouseEvent', { type, x, y: dividerY, button, buttons, clickCount })
+  await resize('mousePressed', dividerX, 'left', 1, 1)
+  await resize('mouseMoved', dividerX + 55, 'none', 1, 0)
+  await resize('mouseReleased', dividerX + 55, 'left', 0, 1)
+  check('dragging the gap resizes the cards and keeps it 6px wide', await until(`(() => {
+    const [left, right] = ${PANES}.map(pane => pane.getBoundingClientRect())
+    return left.right > ${dividerX + 35} && Math.abs(right.left - left.right - 6) < 0.1
+  })()`))
+  const [movedX] = await center(divider)
+  for (const count of [1, 2]) {
+    await resize('mousePressed', movedX, 'left', 1, count)
+    await resize('mouseReleased', movedX, 'left', 0, count)
+  }
+  check('double-clicking the gap makes both cards the same size again', await until(`Math.abs(${divider}.getBoundingClientRect().left + 3 - ${dividerX}) < 0.5`))
   await typeIn(0, 'echo PANE-ONE')
   await typeIn(1, 'echo PANE-TWO')
   let t = await texts()
@@ -126,6 +149,11 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   await mouse('mouseMoved', r[1][0] + r[1][2] / 2, r[1][1] + 40)
   await mouse('mouseMoved', r[1][0] + r[1][2] / 2, r[1][1] + 8)
   await sleep(250)
+  check('the grip stays centered on the card edge', await js(`(() => {
+    const grip = document.querySelector('.pane-grip.is-shown')?.getBoundingClientRect()
+    const frame = ${PANES}[1].getBoundingClientRect()
+    return grip && Math.abs(grip.left + grip.width / 2 - frame.left - frame.width / 2) < 0.1 && Math.abs(grip.top - frame.top - 2) < 0.1
+  })()`))
   const dropped = await js(`(async () => {
     const grip = document.querySelector('.pane-grip.is-shown')
     if (!grip) return 'no grip'
@@ -150,6 +178,11 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   check('and the shell still answers', /STILL-ALIVE/.test((await texts())[0]))
   await js(`document.querySelectorAll('.terminal-tab')[0].click()`); await sleep(800)
   check('the old tab keeps an empty place with merge buttons', await js(`[...document.querySelectorAll('.pane-vacant')].some(v => v.offsetParent !== null)`))
+  check('the vacant card keeps the width of the removed pane and the same gap', await js(`(() => {
+    const vacant = document.querySelector('.pane-vacant').getBoundingClientRect()
+    const neighbor = ${PANES}[0].getBoundingClientRect()
+    return Math.abs(vacant.left - neighbor.right - 6) < 0.1 && Math.abs(vacant.width - ${r[1][2]}) < 1
+  })()`))
   // 2026-11-20 user report: the drop zones of that drag stayed over the panes and the shells could not be used
   check('no drop zone of the finished drag is left over the panes', await until(`!document.querySelector('.pane-drop-zone')`, 3000))
   await shot('2-vacant')
@@ -179,6 +212,11 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, modifiers: 1, button: 'left', buttons: 1, clickCount: 1 })
   await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: destinationX, y: destinationY, modifiers: 1, button: 'none', buttons: 1 })
   check('Alt drag previews a merge between local shells', await until(`!!document.querySelector('.pane-merge-preview.is-area')`, 4000))
+  check('the Alt merge preview fills both cards and the gap', await js(`(() => {
+    const [first, second] = ${PANES}.map(pane => pane.getBoundingClientRect())
+    const area = document.querySelector('.pane-merge-preview.is-area').getBoundingClientRect()
+    return Math.abs(area.left - Math.min(first.left, second.left)) < 0.1 && Math.abs(area.right - Math.max(first.right, second.right)) < 0.1
+  })()`))
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: destinationX, y: destinationY, modifiers: 1, button: 'left', buttons: 0, clickCount: 1 })
   check('the original tab promotes the source shell without opening a tab', await until(`document.querySelectorAll('.terminal-tab').length === 1 && ${PANES}.length === 1 && ${PANES}[0].textContent.includes('MERGED-BACK')`, 12000))
   check('the main process closed the original shell', await until(`window.electronAPI.localShellAttach(${JSON.stringify(mainId)}).then(state => state === null)`, 8000))

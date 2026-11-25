@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
-import { WORKSPACE_SCHEME, workspaceDocument, workspacePreview, serveWorkspaceAsset } from './browserWorkspace.js'
+import { WORKSPACE_SCHEME, workspaceDocument, workspacePreview, serveWorkspaceAsset, resolveLinkFolder } from './browserWorkspace.js'
 
 const host = 'workspace-test'
 const url = relative => `${WORKSPACE_SCHEME}://${host}/${relative}`
@@ -49,4 +49,30 @@ it('refuses directories, files outside the workspace and unrelated local resourc
   for (const relative of ['%2e%2e%2foutside%2fother.html', 'shortcut/other.html', 'private.env', '.git/config.json']) {
     expect((await read(relative, previews)).status).toBe(404)
   }
+})
+
+// A chat link outside every workspace (2026-11-25 user report: a scratchpad page was refused)
+it('serves a linked folder without its dot files or JSON', async () => {
+  await fs.writeFile(path.join(root, 'page.html'), '<link rel="stylesheet" href="page.css">')
+  await fs.writeFile(path.join(root, 'page.css'), 'body{}')
+  await fs.writeFile(path.join(root, 'tokens.json'), '{"token":"x"}')
+  await fs.writeFile(path.join(root, '.claude.json'), '{}')
+  await fs.mkdir(path.join(root, '.ssh'))
+  await fs.writeFile(path.join(root, '.ssh', 'key.svg'), '<svg/>')
+  const folder = await resolveLinkFolder(root)
+  const preview = await workspacePreview(folder, 'page.html', true)
+  const previews = new Map([[host, preview]])
+  expect((await read('page.html', previews)).status).toBe(200)
+  expect((await read('page.css', previews)).status).toBe(200)
+  expect((await read('tokens.json', previews)).status).toBe(404)
+  expect((await read('.claude.json', previews)).status).toBe(404)
+  expect((await read('.ssh/key.svg', previews)).status).toBe(404)
+  await expect(workspacePreview(folder, '.hidden.html', true)).rejects.toThrow()
+})
+
+it('takes only a local folder below a drive root as a linked folder', async () => {
+  await fs.writeFile(path.join(root, 'page.html'), '')
+  await expect(resolveLinkFolder(path.join(root, 'page.html'))).rejects.toThrow()
+  await expect(resolveLinkFolder(path.parse(root).root)).rejects.toThrow()
+  await expect(resolveLinkFolder('\\\\host\\share')).rejects.toThrow()
 })

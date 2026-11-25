@@ -10,6 +10,15 @@
   background: var(--terminal-bg, var(--bg-primary));
 }
 
+/* The existing 6px divider box remains the hit target for resizing. */
+.local-terminal-tab.is-split {
+  background: var(--pane-card-gap, var(--bg-tertiary));
+}
+
+.local-terminal-tab.is-split > .pane-divider:not(:hover, :active) {
+  background: transparent;
+}
+
 /* The terminal and, over it, the chat view of its agent (AgentChat/AgentChatCover.tsx) */
 .local-terminal-stage {
   position: relative;
@@ -74,6 +83,7 @@
 
 /* One shell in a pane: the whole tab when it is not split, a placed box (lib/splitTree.ts) when it is */
 .local-terminal-pane {
+  --pane-card-radius: 0px;
   --agent-trace-inset: 4px;
   --agent-trace-width: 3px;
   /* Reserve room even when the pane is idle so the overlays never cover terminal cells. */
@@ -88,13 +98,53 @@
   background: var(--terminal-bg, var(--bg-primary));
 }
 
+.local-terminal-tab.is-split > :is(.local-terminal-pane, .pane-vacant, .pane-merge-preview, .pane-arrival) {
+  --pane-card-radius: var(--radius-md);
+  border-radius: var(--pane-card-radius);
+}
+
+.local-terminal-tab.is-split > .local-terminal-pane {
+  --local-pane-focus: var(--pane-card-focus);
+  --local-pane-trace: var(--pane-card-trace);
+  background-color: var(--pane-card-surface, var(--bg-primary));
+  box-shadow: 0 2px 4px rgb(0 0 0 / 28%);
+}
+
+.local-terminal-tab.is-split :is(.agent-chat-cover, .agent-chat-subagent-conversation) {
+  background-color: var(--pane-card-surface, var(--terminal-bg, var(--bg-primary)));
+}
+
+.local-terminal-tab.is-split > .pane-vacant {
+  border-color: var(--pane-card-border, var(--border-strong));
+}
+
+.local-terminal-tab.is-split .local-terminal-pane[data-chat-kind='claude'] { --pane-provider-color: #d97757; }
+.local-terminal-tab.is-split .local-terminal-pane[data-chat-kind='codex'] { --pane-provider-color: #849ab3; }
+.local-terminal-tab.is-split .local-terminal-pane[data-chat-kind='antigravity'] { --pane-provider-color: var(--success); }
+
+.local-terminal-tab.is-split .agent-chat-head {
+  position: relative;
+  border-bottom-color: var(--pane-card-border, var(--border-strong));
+}
+
+.local-terminal-tab.is-split [data-chat-kind] .agent-chat-head::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 3px; /* Keep the stripe inside the 1px keyline and 2px focus border. */
+  inline-size: 3px;
+  background: var(--pane-provider-color);
+  pointer-events: none;
+}
+
 /* Keep the overlay inside the pane so fractional zoom and xterm sizing cannot clip it. */
-.local-terminal-tab.is-split .local-terminal-pane:focus-within::before,
+.local-terminal-tab.is-split > .local-terminal-pane::before,
 .local-terminal-pane:is([data-chat-mode], [data-agent-work]):focus-within::before,
 .local-terminal-pane[data-agent-work='working']::before {
   content: '';
   position: absolute;
   inset: 0;
+  border-radius: inherit;
   z-index: 10; /* above xterm's viewport and helper layers */
   pointer-events: none;
 }
@@ -109,18 +159,24 @@
   border-color: color-mix(in srgb, var(--chat-trace, var(--border-strong)) 45%, var(--border-strong));
 }
 
+.local-terminal-tab.is-split > .local-terminal-pane:not(:focus-within)::before {
+  border: 1px solid var(--pane-card-border, var(--border-strong));
+}
+
 .local-terminal-tab.is-split .local-terminal-pane:focus-within::before,
 .local-terminal-pane:is([data-chat-mode], [data-agent-work]):focus-within::before {
   inset: 1px;
-  border: 2px solid var(--pane-focus-color, var(--accent));
+  border-radius: max(0px, calc(var(--pane-card-radius) - 1px));
+  border: 2px solid var(--local-pane-focus, var(--pane-focus-color, var(--accent)));
   box-shadow: 0 0 0 1px var(--pane-focus-keyline, var(--text-primary));
 }
 
 /* The light follows an inner track so it stays visible beside the solid focus outline. */
 .local-terminal-pane[data-agent-work]::after {
+  border-radius: max(0px, calc(var(--pane-card-radius) - var(--agent-trace-inset)));
   --agent-trace-z-index: 11;
   --agent-trace-reduced-width: var(--agent-trace-width);
-  --agent-trace-color: var(--pane-trace-color, var(--accent));
+  --agent-trace-color: var(--local-pane-trace, var(--pane-trace-color, var(--accent)));
   --agent-trace-gradient: conic-gradient(
     from var(--local-agent-trace-angle),
     transparent,
@@ -141,4 +197,23 @@
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+.local-terminal-inbox-draft {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+
+.local-terminal-inbox-draft button {
+  flex: none;
+  color: var(--accent);
+  cursor: pointer;
 }

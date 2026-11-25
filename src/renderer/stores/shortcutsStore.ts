@@ -25,6 +25,8 @@ interface ShortcutsState {
   resetCustomBinding: (id: string) => void
 }
 
+const NO_SHORTCUT_KEYS: string[] = []
+
 // Default shortcuts configuration
 const defaultShortcuts: Shortcut[] = [
   // General
@@ -33,17 +35,13 @@ const defaultShortcuts: Shortcut[] = [
     keys: ['Ctrl', 'Alt', 'Shift'],
     description: '영역 캡처',
     category: 'general' as const,
-    action: 'quickCapture',
-    fixed: true,
-    note: 'Windows 전역 · 세 키를 뗄 때 실행'
+    action: 'quickCapture'
   }, {
     id: 'quick-capture-win',
     keys: ['Ctrl', 'Win', 'Alt'],
     description: '영역 캡처',
     category: 'general' as const,
-    action: 'quickCapture',
-    fixed: true,
-    note: 'Windows 전역 · 세 키를 뗄 때 실행'
+    action: 'quickCapture'
   }] : []),
   {
     id: 'command-palette',
@@ -282,7 +280,7 @@ export const useShortcutsStore = create<ShortcutsState>((set, get) => ({
     if (custom) return custom
 
     const shortcut = shortcuts.find(s => s.id === id)
-    return shortcut?.keys || []
+    return shortcut?.keys ?? NO_SHORTCUT_KEYS
   },
 
   setCustomBinding: (id: string, keys: string[]) => {

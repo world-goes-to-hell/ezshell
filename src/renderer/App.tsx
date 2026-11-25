@@ -53,6 +53,7 @@ import { focusTabPane } from './lib/paneFocus'
 import { MAIN_PANE, paneIds } from './lib/splitTree'
 import type { LocalDevelopmentTask } from './types'
 import { useTabGroups } from './hooks/useTabGroups'
+import { HandoffProjectsContext } from './components/AgentChat/HandoffProjectsContext'
 import { useTabStripScroll } from './hooks/useTabStripScroll'
 import { addScreenRefusal, dragDivider, evenSizes } from './lib/screenPanes'
 import { TabGroupChips } from './components/Terminal/TabGroupChips'
@@ -1218,9 +1219,11 @@ function App() {
     }
     if (terminals.get(sessionId)?.local) {
       return (
-        <Suspense fallback={null}>
-          <LocalTerminalTab terminalId={sessionId} isActive={isActive} onActivate={onActivate} />
-        </Suspense>
+        <HandoffProjectsContext.Provider value={groupView.projects}>
+          <Suspense fallback={null}>
+            <LocalTerminalTab terminalId={sessionId} isActive={isActive} onActivate={onActivate} />
+          </Suspense>
+        </HandoffProjectsContext.Provider>
       )
     }
     return <TerminalPanel sessionId={sessionId} isActive={isActive} onActivate={onActivate} onClose={onClose} borderColor={borderColor} />

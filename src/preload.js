@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   hideWorkOverview: () => ipcRenderer.send('work-overview-hide'),
   // The work overview shortcut, for the helper that hears it while another program is in front
   setWorkOverviewKey: (keys) => ipcRenderer.send('work-overview-key', keys),
+  setQuickCaptureKeys: (keys) => ipcRenderer.send('quick-capture-keys', keys),
+  startQuickCapture: () => ipcRenderer.send('quick-capture-start'),
   // The overview shortcut while another program was in front (src/globalDoubleTab.js): ezShell came forward, open the overview
   onWorkOverviewRequest: (callback) => {
     const listener = (_event, requestId) => callback(requestId);
@@ -182,6 +184,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentHistorySearch: (shellId, query) => ipcRenderer.invoke('agent-history-search', shellId, query),
   agentHistoryOpenFolder: (shellId, key) => ipcRenderer.invoke('agent-history-open-folder', shellId, key),
   localShellAttach: (id) => ipcRenderer.invoke('local-shell-attach', id),
+  onLocalShellInboxDraft: (callback) => {
+    const listener = (_event, notice) => callback(notice);
+    ipcRenderer.on('local-shell-inbox-draft', listener);
+    return () => ipcRenderer.removeListener('local-shell-inbox-draft', listener);
+  },
   localShellList: () => ipcRenderer.invoke('local-shell-list'),
   localShellCurrentDirectory: (id) => ipcRenderer.invoke('local-shell-current-directory', id),
   localShellClipboard: (id) => ipcRenderer.invoke('local-shell-clipboard', id),

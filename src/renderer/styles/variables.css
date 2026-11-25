@@ -102,7 +102,7 @@
   --bg-modifier-selected: rgba(20, 24, 31, 0.09);
   --text-primary: #16181c;
   --text-secondary: #4a4f57;
-  --text-muted: #6b717a;
+  --text-muted: #646972;
   --text-link: #1f5fd6;
   --accent: #2f6fed;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -137,7 +137,7 @@
   --bg-modifier-selected: rgba(255, 0, 255, 0.2);
   --text-primary: #00ffff;
   --text-secondary: #ff00ff;
-  --text-muted: #666699;
+  --text-muted: #7d7da8;
   --text-link: #00ffff;
   --accent: #ff00ff;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -167,7 +167,7 @@
   --bg-modifier-selected: rgba(74, 159, 122, 0.3);
   --text-primary: #e8f0ed;
   --text-secondary: #a8c4b8;
-  --text-muted: #6b8f7f;
+  --text-muted: #769989;
   --text-link: #7bc9a6;
   --accent: #4a9f7a;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -197,7 +197,7 @@
   --bg-modifier-selected: rgba(224, 112, 80, 0.3);
   --text-primary: #f5e8e0;
   --text-secondary: #c9a898;
-  --text-muted: #8a7068;
+  --text-muted: #9e857e;
   --text-link: #f0a070;
   --accent: #e07050;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -227,7 +227,7 @@
   --bg-modifier-selected: rgba(32, 128, 192, 0.3);
   --text-primary: #e0f0f8;
   --text-secondary: #90b8d0;
-  --text-muted: #607890;
+  --text-muted: #768da3;
   --text-link: #40a0e0;
   --accent: #2080c0;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -287,7 +287,7 @@
   --bg-modifier-selected: rgba(0, 170, 0, 0.3);
   --text-primary: #00ff00;
   --text-secondary: #00cc00;
-  --text-muted: #008800;
+  --text-muted: #009200;
   --text-link: #00ff88;
   --accent: #00aa00;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -317,7 +317,7 @@
   --bg-modifier-selected: rgba(189, 147, 249, 0.3);
   --text-primary: #f8f8f2;
   --text-secondary: #d0d0d0;
-  --text-muted: #6272a4;
+  --text-muted: #8592b8;
   --text-link: #8be9fd;
   --accent: #bd93f9;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -347,7 +347,7 @@
   --bg-modifier-selected: rgba(136, 192, 208, 0.3);
   --text-primary: #eceff4;
   --text-secondary: #d8dee9;
-  --text-muted: #8892a8;
+  --text-muted: #a8b0c0;
   --text-link: #88c0d0;
   --accent: #88c0d0;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -377,8 +377,8 @@
   --bg-modifier-selected: rgba(38, 139, 210, 0.3);
   --text-primary: #fdf6e3;
   --text-secondary: #93a1a1;
-  --text-muted: #657b83;
-  --text-link: #2aa198;
+  --text-muted: #8a9da4;
+  --text-link: #2caba1;
   --accent: #268bd2;
   /* Text on accent backgrounds, picked by contrast against --accent */
   --on-accent: #16181c;
@@ -407,7 +407,7 @@
   --bg-modifier-selected: rgba(255, 216, 102, 0.25);
   --text-primary: #fcfcfa;
   --text-secondary: #c1c0c0;
-  --text-muted: #727072;
+  --text-muted: #acabac;
   --text-link: #78dce8;
   --accent: #ffd866;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -437,7 +437,7 @@
   --bg-modifier-selected: rgba(122, 162, 247, 0.3);
   --text-primary: #c0caf5;
   --text-secondary: #a9b1d6;
-  --text-muted: #565f89;
+  --text-muted: #888fb4;
   --text-link: #7dcfff;
   --accent: #7aa2f7;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -467,8 +467,8 @@
   --bg-modifier-selected: rgba(215, 153, 33, 0.3);
   --text-primary: #ebdbb2;
   --text-secondary: #d5c4a1;
-  --text-muted: #928374;
-  --text-link: #83a598;
+  --text-muted: #ada296;
+  --text-link: #8baa9e;
   --accent: #d79921;
   /* Text on accent backgrounds, picked by contrast against --accent */
   --on-accent: #16181c;
@@ -497,7 +497,7 @@
   --bg-modifier-selected: rgba(203, 166, 247, 0.3);
   --text-primary: #cdd6f4;
   --text-secondary: #bac2de;
-  --text-muted: #6c7086;
+  --text-muted: #989cac;
   --text-link: #89dceb;
   --accent: #cba6f7;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -527,7 +527,7 @@
   --bg-modifier-selected: rgba(97, 175, 239, 0.3);
   --text-primary: #abb2bf;
   --text-secondary: #9da5b4;
-  --text-muted: #5c6370;
+  --text-muted: #8d95a2;
   --text-link: #61afef;
   --accent: #61afef;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -557,7 +557,7 @@
   --bg-modifier-selected: rgba(196, 167, 231, 0.3);
   --text-primary: #e0def4;
   --text-secondary: #908caa;
-  --text-muted: #6e6a86;
+  --text-muted: #88859e;
   --text-link: #9ccfd8;
   --accent: #c4a7e7;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -586,9 +586,9 @@
   --bg-modifier-hover: rgba(38, 139, 210, 0.1);
   --bg-modifier-selected: rgba(38, 139, 210, 0.2);
   --text-primary: #073642;
-  --text-secondary: #586e75;
-  --text-muted: #93a1a1;
-  --text-link: #268bd2;
+  --text-secondary: #53676e;
+  --text-muted: #5c6a6a;
+  --text-link: #1d6ca2;
   --accent: #268bd2;
   /* Text on accent backgrounds, picked by contrast against --accent */
   --on-accent: #16181c;
@@ -616,8 +616,8 @@
   --bg-modifier-hover: rgba(9, 105, 218, 0.1);
   --bg-modifier-selected: rgba(9, 105, 218, 0.2);
   --text-primary: #1f2328;
-  --text-secondary: #656d76;
-  --text-muted: #8b949e;
+  --text-secondary: #626a73;
+  --text-muted: #646d78;
   --text-link: #0969da;
   --accent: #0969da;
   /* Text on accent backgrounds, picked by contrast against --accent */
@@ -647,7 +647,7 @@
   --bg-modifier-selected: rgba(255, 204, 102, 0.25);
   --text-primary: #cbccc6;
   --text-secondary: #a6a7a2;
-  --text-muted: #707a8c;
+  --text-muted: #8891a0;
   --text-link: #73d0ff;
   --accent: #ffcc66;
   /* Text on accent backgrounds, picked by contrast against --accent */

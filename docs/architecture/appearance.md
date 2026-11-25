@@ -1,0 +1,38 @@
+# 테마와 창·포인터 모양
+
+[공통 작업 규칙과 기능별 목록](../../CLAUDE.md)
+
+## macOS Themes (모양까지 바꾸는 테마)
+
+`macOS Light` / `macOS Dark`(`themes/macosPresets.ts`, `styles/themes-macos.css`)는 색과 함께 모양을 바꾼다. 테마 정의의 `chrome: 'mac'` 이 루트에 `data-chrome="mac"` 을 붙이고(`themeStore` 의 `applyThemeToDocument`), CSS 가 그 속성으로 타이틀바(왼쪽 신호등 `.title-bar-close/-min/-max`, 가운데 제목), 입력칸(밝은 바탕·가는 테두리·부드러운 포커스 고리), 스크롤 막대를 바꾼다. 둥근 모서리는 테마 블록이 `--radius-*` 를 덮어쓴 것이다 (다른 테마는 모두 0). 컴포넌트에 테마 id 를 적지 않는다. 설계: `docs/plan/2026-11-17-macos-theme.md`.
+- 강조색은 `#0071e3` 이다. 순정 시스템 파랑 `#007aff` 는 흰 글자와 4.0:1 이라 쓰지 않는다.
+- 사용자 지정 테마는 `chrome` 을 갖지 못한다 (`normalizeTheme` 이 버린다). 둥근 모서리가 프리셋의 CSS 블록에 있어서, `chrome` 만 남으면 각진 화면에 둥근 신호등이 붙는다.
+- 창에 포커스가 없으면 루트에 `data-window-blurred` 가 붙고 신호등이 회색이 된다.
+- 저장된 테마가 없는 첫 실행에서 macOS 이면 시스템 모양에 따라 이 테마가 기본값이다 (`lib/defaultTheme.ts`). 그 밖의 OS 는 `minimal-dark`.
+- 새 화면을 확인할 때: 개발 서버(`http://localhost:15173`)를 Chrome 에서 열고 `window.electronAPI` 를 흉내 내면 잠금 없이 본창·연결 창·설정을 볼 수 있다 (터미널·SFTP·DB 는 안 된다).
+
+## Preset Theme Contrast (프리셋 테마의 글자 대비)
+프리셋 테마는 모두 본문·보조·흐림·링크 글자가 `bg-primary`·`bg-secondary`·`bg-tertiary` 위에서 4.5:1 이상이고, 면마다 본문 > 보조 > 흐림 순서다 (`themes/presets.test.ts` 의 `every preset theme`, 화면이 읽는 CSS 블록 값으로 검사하고 TS 정의와 같은지도 본다). 2026-11-25 까지 이 검사가 채팅 짝 테마에만 있어서 옛 테마의 11~12px 흐린 글자가 2.2~3.0:1 이었다 (디자인 리뷰 D10·T9, 전후 표는 `docs/plan/2026-11-24-design-review-shell-terminal-servers.md` 의 T9). 바꾸면 안 되는 것: 새 프리셋을 더하거나 색을 고칠 때는 테마의 색상·채도는 두고 명도만 옮겨 맞춘다. 사용자 지정 테마는 검사하지 않는다.
+
+## Glass Surface and Window Opacity (표면 스타일·창 투명도)
+
+색 테마와 따로 고르는 두 가지 (설정 > 테마 맨 위, `themeStore` 의 `surface`·`windowOpacity`, 계산은 `lib/appearance.ts`). 설계: `docs/plan/2026-11-17-glass-surface-and-window-opacity.md`.
+- Glass: 루트의 `data-surface="glass"` 로 `styles/glass.css` 가 패널과 떠 있는 창을 반투명 + 뒤 흐림으로 그리고, 앱 뒤에 테마 색에서 만든 색 번짐을 깐다. 터미널·목록은 거의 불투명. `high-contrast` 테마와 OS 의 투명도 줄이기에서는 플랫. 새 패널·떠 있는 창을 만들면 `glass.css` 의 목록에 클래스를 더한다.
+- 창 뒤가 비치는 Glass (Windows 아크릴): 재질은 창을 만들 때만 줄 수 있다 (Electron 28 에서 실행 중 `setBackgroundMaterial` 은 그려지지 않는 것을 시험으로 확인). 그래서 선택을 main 이 `userData/appearance.json` 에 두고(`src/nativeBackdrop.js`) 다음 실행 때 본창을 `backgroundMaterial: 'acrylic'` 로 만든다. 재질이 있으면 루트에 `data-backdrop="native"` 가 붙어 색 번짐이 사라진다. Windows 11 22H2 미만·macOS·분리 창은 색 번짐 배경. 아크릴이 있는 창은 최대화하면 재질이 사라지고 되살릴 수 없다 (시험으로 확인): 그래서 그 본창은 `maximizable: false` 이고, 최대화 버튼과 저장된 최대화 상태는 화면의 작업 영역을 채우는 것으로 대신한다 (`createFillToggle`, 그 창에 `maximize()` 를 부르지 말 것). 바꾸면 안 되는 것: `appearance-set` 은 본창에서만, 파일에는 정해진 두 낱말만 쓴다. 새 `src/*.js` 라서 `MAIN_RUNTIME_MODULES` 에 있다.
+- 창 투명도: `window-set-opacity` IPC 가 보낸 창에 `setOpacity` 를 건다 (50~100%, 렌더러와 main 양쪽에서 제한). 상태 줄의 물방울 버튼(`Footer/OpacityStatus.tsx`)으로도 바꾼다.
+- 설정 > 백업은 하위 탭 넷(세션 백업 / 세션 가져오기 / 다른 프로그램에서 가져오기 / 화면 설정)이고, 내보낼 세션은 폴더 트리(`Settings/BackupSessionTree.tsx`, `lib/backupTree.ts`)에서 폴더 체크박스로 한 번에 고른다.
+- 화면 설정 내보내기·가져오기(`Settings/UiSettingsBackup.tsx`): 테마·단축키·패널 크기·보기 옵션의 `localStorage` 값을 JSON 파일(`format: 'ezshell-ui-settings'`)로 옮긴다. 옮기는 키는 `lib/uiSettingsBackup.ts` 의 `UI_SETTING_ENTRIES` 뿐이고, 키마다 그 기능의 읽기 함수로 값을 다시 써서 내보내고 가져온다. 적용(`lib/uiSettingsApply.ts`)은 창을 다시 불러오지 않는다 (열린 탭이 닫힌다): 테마·단축키·사이드바·확대 비율은 스토어로 바로, 나머지는 그 화면을 다시 열 때 반영된다. 바꾸면 안 되는 것: 목록에 없는 키는 파일에 있어도 쓰지 않는다. 서버·계정·폴더를 드러내는 키(접속 기록, 통계, 최근 명령, 스니펫, `dbTreeFilter:*`·`dbConsoles:*`·`dbDefaultSchema:*`, `terminalFindPrefs`)는 목록에 넣지 않는다. 새 `localStorage` 설정을 만들면 옮겨도 되는 값인지 보고 목록에 더한다.
+
+## Themed Tooltips (title 안내를 앱이 그린다)
+
+`title` 속성의 안내는 OS 가 그려서 테마를 따르지 않았다. `lib/themedTooltip.ts` 가 창마다 한 번(`main.tsx`) 설치되어, 포인터가 `title` 이 있는 요소에 올라가면 속성을 잠시 떼어 두고(`data-held-title`, OS 안내가 뜨지 않게) 같은 글자를 테마 색의 상자(`.app-tooltip`, `styles/tooltip.css`)로 보여 준 뒤, 벗어나면 속성을 되돌린다. 컴포넌트는 지금처럼 `title="..."` 만 쓰면 된다 (새 컴포넌트를 쓰거나 버튼마다 고칠 필요 없음). 위치는 요소 아래, 자리가 없으면 위 (`lib/tooltipPosition.ts`).
+- 바꾸면 안 되는 것: 속성을 떼어 둔 동안 React 가 새 `title` 을 쓰면(누르면 "열기"가 "닫기"로 바뀌는 버튼) 그 값을 다시 가져간다 (MutationObserver). 되돌릴 때 이미 새 `title` 이 있으면 덮어쓰지 않는다. 글자 없는 아이콘 버튼은 `title` 이 이름이었으므로 떼어 둔 동안 `aria-label` 로 채운다.
+- 누르거나 키를 누르거나 스크롤하면 닫는다. 요소가 사라졌는데(메뉴가 닫힘) 상자가 남지 않게 포인터가 움직일 때 요소가 아직 문서에 있는지 본다.
+
+## Pointer Appearance (마우스 포인터 모양·효과)
+
+설정 > 테마 > `마우스 포인터`(`Settings/PointerSettings.tsx`, 효과 카드 목록 `pointerEffectList.ts`)에서 포인터 세트 9개(시스템 기본·큼직한 화살표·고대비·정밀 / 고양이 발바닥·말랑 젤리·반짝 별·하트·픽셀 레트로), 크기(32·48·64px), `움직일 때` 효과 10개·`누를 때` 효과 9개(각각 `없음` 포함), 효과마다 세기(약·보통·강)와 `터미널 위에서` 켜기·끄기(기본: 움직일 때 끄기, 누를 때 켜기)를 고른다. 카드에 포인터를 올리거나 포커스를 주면 그 카드 안에서 미리 재생한다. 기본값은 시스템 포인터, 효과 둘 다 없음. 시안 `mockups/cursor-themes.html` (2026-11-24 사용자가 고름). 저장은 `localStorage` 의 `pointerPrefs` 한 키(`lib/pointerPrefs.ts` 의 `parsePointerPrefs` 가 필드마다 검사)이고 화면 설정 백업 목록에 있다. 다른 창은 `storage` 이벤트로 따라간다. 적용은 `main.tsx` 의 `installPointerAppearance`(`lib/pointerAppearance.ts`)라서 같은 페이지로 뜨는 분리 창 모두에 적용된다. 브라우저 탭의 페이지(`WebContentsView`), 창 테두리, 시작 화면, 캡처 덮개는 대상이 아니다. 화면 테스트 `pointer-themes`.
+- 포인터 그림: 세트는 `lib/pointerCursors.ts` 의 SVG(32 단위 격자)이고, 상태 11개(default·pointer·text·wait·progress·not-allowed·grab·grabbing·col-resize·row-resize·crosshair)를 `:root` 의 `--ez-cursor-<상태>` 에 `url("blob:…") x y, <같은 뜻의 OS 포인터>` 로 넣는다. 핫스팟은 크기에 비례한다. 앱 CSS 의 `cursor: pointer` 같은 값은 빌드 때 PostCSS 플러그인(`scripts/postcss-cursor-vars.cjs`, `postcss.config.js` 의 마지막)이 모두 `var(--ez-cursor-pointer, pointer)` 로 바꾼다 (앱·Tailwind·xterm.css 전부. `ew-resize`·`ns-resize` 는 좌우·상하 조절로). 그래서 시스템 기본일 때는 변수가 없어 원래 낱말 그대로다. 규칙이 없는 곳(상속되는 화살표, 글자 입력칸, 링크, 글자를 고르는 영역(`user-select: text`: 채팅 대화·마크다운·diff 등, 시스템 포인터일 때 `cursor: auto` 로 I-beam 이던 곳), CodeMirror)은 `styles/pointerCursors.css` 가 `:root[data-cursor-set]` 일 때만 특이도 0(`:where`)으로 덮는다. 글자를 고르는 영역을 새로 만들면 이 목록에 더한다. CodeMirror 패키지가 JS 로 넣는 손가락(접기, 자동완성, lint, merge)은 특이도를 두고 덮는다. xterm 은 자기 CSS 가 바뀌어서 터미널은 세트의 I-beam, 마우스 보고 모드(`.enable-mouse-events`)는 세트의 화살표, 링크 밑줄(`.xterm-cursor-pointer`)은 세트의 손가락이다.
+- 바꾸면 안 되는 것 (blob URL): 페이지 CSP 가 `img-src 'self' blob:` 이라 `data:` 커서는 막힌다. 그림마다 처음 쓸 때 Blob 으로 만들어 그 `blob:` 주소를 다시 쓴다 (`cursorImageUrl`). blob 주소는 그 창의 것이라 창마다 따로 만든다. `fetch(blob:)` 는 CSP 의 `connect-src` 에 막히므로, 그림을 읽어 볼 때는 `<img>` 로 읽는다. 새 CSS 를 쓸 때 `cursor` 는 낱말로 적으면 된다 (플러그인이 바꾼다). JS 로 넣는 스타일(CodeMirror 테마)은 플러그인이 보지 못하므로 `cursor: 'var(--ez-cursor-pointer, pointer)'` 처럼 변수로 적는다 (`codeEditorSetup.ts`, `logMarkerView.ts`).
+- 48·64px: Electron 45 가 그 크기의 커서 그림을 줄이지 않고 그대로 넘기는 것을 `webContents` 의 `cursor-changed`(이미지 48×48, 64×64)로 확인했다 (화면 캡처에는 포인터가 찍히지 않는다). 다만 32px 를 넘는 그림은 창 밖으로 나가는 가장자리 근처(오른쪽 끝 20px 에서 확인)에서 Chromium 이 다음 값(같은 뜻의 OS 포인터)으로 바꾼다. 우회할 수 없어 크기 설명에 적었다.
+- 효과(`lib/pointerEffects.ts` 계산·그리기, DOM 없음): 창 전체를 덮는 캔버스 하나(`.pointer-effects-canvas`, `pointer-events: none`, z-index 10050: 대화상자(100)·메뉴(1000)·툴팁(10000) 위에 그려도 클릭을 막지 않음. 결정을 묻는 창은 일부러 그보다 위다: 서버 파일 창의 확인 14000, ConfirmDialog 15000, SelectMenu 목록 15002, 호스트 키 16000, MCP 확인 20000). 바꾸면 안 되는 것: 효과가 둘 다 `없음` 이면 캔버스와 리스너를 만들지 않는다. 프레임(rAF)은 그릴 입자가 남아 있을 때만 돌고, 창이 가려지거나(`document.hidden`) 포커스를 잃으면 입자를 버리고 멈춘다 (`keepRunning`·`pageAllowsEffects`). 입자 상한은 움직임 120·누름 150(꼬리 44, 잔상 16, 발자국 30). 터미널 위 판정은 입자가 생길 때의 `pointermove`·`pointerdown` 의 `target.closest('.xterm')` 뿐이다 (터미널 위면 새 입자를 만들지 않고 위치 강조는 바로 숨긴다. 이미 생긴 입자가 터미널로 흘러가는 것은 둔다). 바꾸면 안 되는 것: 터미널의 화면 위치로 캔버스를 잘라 내지 말 것. 터미널 위에 채팅 보기·설정 창·명령 팔레트·MCP 패널·겹친 사이드바·메뉴가 덮여 있어도 잘려서 효과가 보이지 않았다 (리뷰에서 찾음). 멈추면 캔버스 크기를 0 으로 돌려 메모리를 돌려주고, 화면 배율이 바뀌면(`resolution` 미디어 쿼리) 다시 잰다. 시스템의 동작 줄이기가 켜지면 움직일 때 효과는 `포인터 위치 강조`만 움직임 없이 남고, 누를 때 효과는 제자리에서 옅어지는 고리 하나로 바뀐다 (`effectiveEffects`). 색은 테마의 `--motion-accent`(없으면 `--accent`)를 앱 바탕(`--bg-primary`)과 대비 3:1 이 될 때까지 어둡게·밝게 한 것(`lib/pointerInk.ts`, 밝은 테마의 노랑 강조색이 흐려지지 않게).

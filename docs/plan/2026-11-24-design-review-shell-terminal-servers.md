@@ -250,10 +250,53 @@
   - Surfaced by: P1-9
   - Files: `usePaneGesture.ts`, `SplitChrome.tsx`, 로컬은 `src/localShell.js` 의 자식 프로세스 조회, SSH 는 판단 방법 설계 필요
   - Verify: e2e `local-split`
-- [ ] **T9 (P1, human: ~2h / CC: ~20min)** — 테마 — 흐린 글자 4.5:1, 검사 테스트를 모든 프리셋에 (D10)
+- [x] **T9 (P1, human: ~2h / CC: ~20min)** — 테마 — 흐린 글자 4.5:1, 검사 테스트를 모든 프리셋에 (D10)
   - Surfaced by: P1-10
   - Files: `themes/presets.ts`, `lightPresets.ts`, `presets.test.ts`
   - Verify: `npx vitest run src/renderer/themes/presets.test.ts`
+  - 완료 (2026-11-25, claude-4): `presets.test.ts` 의 `every preset theme` 가 모든 프리셋의 CSS 블록에서 본문·보조·흐림·링크 글자를 `bg-primary`·`bg-secondary`·`bg-tertiary` 위 4.5:1 로, 위계(본문 > 보조 > 흐림)를 면마다 검사하고, CSS 블록의 글자·면 색이 TS 정의와 같은지 본다. 바꾸기 전 24개 테마가 실패했다.
+  - 조정 규칙: 색상·채도는 두고 HSL 명도만 면에서 멀어지는 쪽으로 옮겨, 가장 어두운(밝은) 면 위에서 4.6:1 이 되는 첫 값을 골랐다 (16진 반올림 여유). 4.5:1 을 이미 넘는 색은 두었다. 보조 글자는 흐린 글자보다 면마다 0.2 이상 높을 때까지, 본문 글자는 보조보다 낮던 두 테마(Tokyo Night Day, Ayu Light)만 1 이상 높을 때까지 옮겼다. 채팅 짝 테마와 macOS 는 원래 통과해서 바뀌지 않았다. 사용자 지정 테마는 대상이 아니다.
+  - 전후 (대비는 세 면 중 가장 낮은 값):
+
+    | 테마 | 글자 | 전 | 후 |
+    |---|---|---|---|
+    | minimal-light | 흐림 | `#6b717a` 4.12 | `#646972` 4.62 |
+    | cyberpunk-neon | 흐림 | `#666699` 3.4 | `#7d7da8` 4.65 |
+    | nature-zen | 흐림 | `#6b8f7f` 4.05 | `#769989` 4.62 |
+    | sunset-warm | 흐림 | `#8a7068` 3.47 | `#9e857e` 4.61 |
+    | ocean-deep | 흐림 | `#607890` 3.46 | `#768da3` 4.61 |
+    | retro-terminal | 흐림 | `#008800` 4.1 | `#009200` 4.63 |
+    | dracula | 흐림 | `#6272a4` 3.03 | `#8592b8` 4.61 |
+    | nord | 흐림 | `#8892a8` 3.22 | `#a8b0c0` 4.62 |
+    | solarized-dark | 흐림 | `#657b83` 2.92 | `#8a9da4` 4.61 |
+    | solarized-dark | 링크 | `#2aa198` 4.12 | `#2caba1` 4.61 |
+    | monokai-pro | 흐림 | `#727072` 2.16 | `#acabac` 4.63 |
+    | tokyo-night | 흐림 | `#565f89` 2.35 | `#888fb4` 4.6 |
+    | gruvbox-dark | 흐림 | `#928374` 3.16 | `#ada296` 4.63 |
+    | gruvbox-dark | 링크 | `#83a598` 4.31 | `#8baa9e` 4.61 |
+    | catppuccin-mocha | 흐림 | `#6c7086` 2.57 | `#989cac` 4.6 |
+    | one-dark-pro | 흐림 | `#5c6370` 2.32 | `#8d95a2` 4.64 |
+    | rose-pine | 흐림 | `#6e6a86` 3.2 | `#88859e` 4.63 |
+    | solarized-light | 보조 | `#586e75` 4.39 | `#53676e` 4.85 |
+    | solarized-light | 흐림 | `#93a1a1` 2.18 | `#5c6a6a` 4.6 |
+    | solarized-light | 링크 | `#268bd2` 3 | `#1d6ca2` 4.61 |
+    | github-light | 보조 | `#656d76` 4.63 | `#626a73` 4.84 |
+    | github-light | 흐림 | `#8b949e` 2.71 | `#646d78` 4.63 |
+    | ayu-mirage | 흐림 | `#707a8c` 3.41 | `#8891a0` 4.64 |
+    | catppuccin-latte | 흐림 | `#6c6f85` 3.73 | `#5f6174` 4.6 |
+    | catppuccin-latte | 링크 | `#1c5fe4` 4.17 | `#1a59d6` 4.61 |
+    | gruvbox-light | 흐림 | `#7c6f64` 3.55 | `#685e54` 4.61 |
+    | tokyo-night-day | 본문 | `#3459b4` 4.84 | `#2d4c9b` 5.97 |
+    | tokyo-night-day | 흐림 | `#68709a` 3.58 | `#585f84` 4.62 |
+    | tokyo-night-day | 링크 | `#2463b8` 4.4 | `#2360b3` 4.61 |
+    | rose-pine-dawn | 흐림 | `#797593` 3.67 | `#696582` 4.63 |
+    | one-light | 흐림 | `#696c77` 4.16 | `#636570` 4.6 |
+    | one-light | 링크 | `#3868d3` 4.08 | `#2d5fcc` 4.61 |
+    | ayu-light | 본문 | `#5c6166` 5.23 | `#51555a` 6.28 |
+    | ayu-light | 흐림 | `#787b80` 3.55 | `#67696d` 4.6 |
+    | ayu-light | 링크 | `#2a75aa` 4.16 | `#276e9f` 4.6 |
+
+  - 화면 전후 캡처: `e2e/.out/contrast/index.html` (Monokai Pro, Solarized Light, Dracula, Minimal Light 의 시작 화면·사이드바와 설정, 커밋하지 않는 폴더). 바꾼 색을 문서에 인라인으로 옛 값으로 덮어 '전' 을 찍었다.
 - [ ] **T10 (P2, human: ~1d / CC: ~1h)** — 디자인 시스템 — DESIGN.md 작성, 글자·간격·레이어 토큰, 공용 IconButton·Menu·StatusItem (D6). 기존 화면은 고칠 때마다 옮김
   - Surfaced by: 디자인 시스템 절
   - Files: 새 `DESIGN.md`, `styles/variables.css`, `components/ui/`

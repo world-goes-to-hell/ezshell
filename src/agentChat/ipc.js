@@ -42,6 +42,8 @@ const REASONS = {
   'draft-changed': '터미널 입력 상태가 바뀌었습니다. 보내기를 다시 눌러 주세요.',
   'not-cleared': '터미널 입력칸이 비워지지 않았습니다. 터미널에서 입력 내용을 확인해 주세요.',
   'not-drawn': '입력칸에 글이 그대로 들어가지 않아 보내지 않았습니다. 터미널 보기에서 확인해 주세요.',
+  'images-not-drawn': 'Claude 입력칸에서 첨부 이미지와 본문이 모두 들어갔는지 확인하지 못했습니다. 터미널 보기에서 확인해 주세요.',
+  interrupted: '터미널 입력이 바뀌어 전송을 중단했습니다. 입력칸을 확인한 뒤 다시 보내 주세요.',
   busy: '다른 입력을 넣는 중입니다. 잠시 뒤 다시 시도해 주세요.',
   changed: '화면의 질문이 바뀌었습니다. 새 질문을 보고 다시 골라 주세요.',
   stuck: '선택이 반영되지 않았습니다. 다시 골라 주세요.',
@@ -535,9 +537,13 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (request.how === 'browser-tab' && target.kind === 'path') {
       if (!fromChatWindow(event) || !links?.openWorkspaceBrowser) return { ok: false, error: '브라우저에서 파일을 열 수 없습니다.' }
       const authorized = chats.linkAuthority(id, target.key)
-      const root = cwd && sameOrInside(cwd, target.path) ? cwd : path.dirname(target.path)
+      // Outside the agent's folder the file's own folder serves it: a scratchpad file was refused as
+      // "not a workspace folder" (2026-11-25 user report)
+      const inWorkspace = Boolean(cwd && sameOrInside(cwd, target.path))
+      const root = inWorkspace ? cwd : path.dirname(target.path)
       const relative = path.relative(root, target.path).split(path.sep).join('/')
-      const result = await links.openWorkspaceBrowser(root, relative, () => fromChatWindow(event) && authorized())
+      const result = await links.openWorkspaceBrowser(root, relative, () => fromChatWindow(event) && authorized(),
+        { linkFolder: !inWorkspace })
       return result.success ? { ok: true } : { ok: false, error: result.error }
     }
     return openTarget(target, request?.how, () => allowed(event))

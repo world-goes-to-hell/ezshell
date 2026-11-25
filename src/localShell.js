@@ -557,7 +557,7 @@ function createLocalShells({
   spawn, send, agents, shell = defaultShell(), cwd = os.homedir(), env = process.env,
   platform = process.platform, processTree = () => getProcessTree(platform), processAlive = isProcessAlive,
   timedProcessTree = () => processList({ platform }), commandLine = pid => processCommandLine(pid, { platform }),
-  readClaudeSessions, antigravityRoot = antigravityBrainRoot(),
+  readClaudeSessions, onInboxDraftBlocked, antigravityRoot = antigravityBrainRoot(),
   killTrees = pids => killProcessTreesSync(pids, platform)
 }) {
   const shells = new Map();
@@ -647,6 +647,7 @@ function createLocalShells({
       kind: entry.agent, cols: entry.cols, rows: entry.rows,
       pendingMessages,
       unhandledMessages,
+      wakeRecovery: entry.inboxWakeRecovery ??= { blocked: false },
       messageSeenAt: id => agents.messageSeenAt?.(entryAgentId(entry), id),
       isHookWorking: () => hookStatus(entry.hookState) === 'working',
       parentInput: entry.parentInput,
@@ -656,6 +657,13 @@ function createLocalShells({
         entry.screenApproval = visible;
         reconcileHooks(entry);
         publishHookStatus(entry, before);
+      },
+      onDraftBlockChange(blocked) {
+        if (shells.get(id) !== entry || entry.inbox !== inbox) return;
+        entry.inboxDraftBlocked = blocked;
+        send('local-shell-inbox-draft', { id, blocked });
+        const agentId = entryAgentId(entry);
+        if (blocked && agentId) onInboxDraftBlocked?.({ id: agentId, shellId: id, kind: 'inbox-draft' });
       },
       isWorking: () => {
         const status = agentStatus(entry);
@@ -1173,7 +1181,8 @@ function createLocalShells({
   function attach(id) {
     const entry = shells.get(id);
     if (!entry) return null;
-    return { backlog: entry.backlog.slice(-BACKLOG_CHARS), exited: entry.exited, exitCode: entry.exitCode };
+    return { backlog: entry.backlog.slice(-BACKLOG_CHARS), exited: entry.exited, exitCode: entry.exitCode,
+      ...(entry.inboxDraftBlocked && { inboxDraftBlocked: true }) };
   }
 
   function write(id, data) {
@@ -1184,6 +1193,7 @@ function createLocalShells({
     entry.activeAt = Date.now();
     if (data === '\x1b' || data === '\x03') entry.userInterruptAt = entry.activeAt;
     if (entry.inbox?.deferProbeInput(data)) return;
+    if (!entry.inbox) (entry.inboxWakeRecovery ??= { blocked: false }).blocked = true;
     entry.inbox?.userInput(data);
     entry.pty.write(data);
     const reviewing = entry.codexReview?.review;

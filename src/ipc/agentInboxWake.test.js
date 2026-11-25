@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Terminal } from '@xterm/headless'
+import { readFileSync, readdirSync } from 'node:fs'
 import { createAgentInboxWake, PROMPT, BUSY_PROMPT, REMIND_PROMPT } from './agentInboxWake.js'
 import { watchCommand } from '../agentChat/commandScreen.js'
 
@@ -13,13 +14,13 @@ const paintedClaudeDraft = text => '\x1b[?2004h\x1b[?25l\x1b[2J\x1b[20;1H' +
   '─'.repeat(70) + '\r\n  ⏵⏵ auto mode on'
 
 let wake
-function setup(kind = 'claude', cols = 100, onApprovalChange) {
+function setup(kind = 'claude', cols = 100, onApprovalChange, onDraftBlockChange, wakeRecovery, rows = 24) {
   const write = vi.fn(() => true)
   // ids: unread (wake for these); open: not answered yet, read or not
   // busy: not waiting for input; running: busy with a task (not starting up or asking for approval)
   const state = { busy: false, running: true, unknown: false, ids: [], open: [] }
   wake = createAgentInboxWake({
-    kind, cols, rows: 24, quietMs: 60,
+    kind, cols, rows, quietMs: 60,
     isUnknown: () => state.unknown,
     pendingMessages: () => state.ids,
     unhandledMessages: () => state.open,
@@ -27,12 +28,145 @@ function setup(kind = 'claude', cols = 100, onApprovalChange) {
     messageSeenAt: id => state.seen?.get(id),
     isWorking: () => state.busy,
     isRunningTask: () => state.busy && state.running,
-    write, onApprovalChange
+    write, onApprovalChange, onDraftBlockChange, wakeRecovery
   })
   return { write, state }
 }
 
 afterEach(() => wake?.close())
+
+describe('actual Codex and Claude PTY frames', () => {
+  const directory = new URL('./fixtures/agent-inbox-pty/', import.meta.url)
+  const fixtures = readdirSync(directory).filter(name => name.endsWith('.json')).map(name => ({
+    name, ...JSON.parse(readFileSync(new URL(name, directory), 'utf8'))
+  }))
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  const configure = fixture => setup(fixture.kind, fixture.cols, undefined, undefined, undefined, fixture.rows)
+  const paint = async (phase, suffix = '') => {
+    wake.writeOutput(phase.frame + suffix)
+    await vi.advanceTimersByTimeAsync(80)
+  }
+
+  it.each(fixtures.flatMap(fixture => ['pasted', 'atStart'].map(phase => ({ ...fixture, phase }))))(
+    'submits the whole notice from the current editor in $name ($phase)', async fixture => {
+    const { write, state } = configure(fixture)
+    const { submittedNotice, phases } = fixture
+    state.ids = ['unread']
+    state.busy = submittedNotice === BUSY_PROMPT
+    if (submittedNotice !== REMIND_PROMPT) {
+      await paint(phases.idle)
+      expect(write.mock.calls).toEqual([[state.busy ? busyPaste : paste]])
+    }
+    await paint(phases[fixture.phase])
+    await vi.advanceTimersByTimeAsync(7000)
+    expect(write.mock.calls.map(([data]) => data).filter(data => data === '\r')).toEqual(['\r'])
+    expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'draft', ours: true } })
+    state.ids.push('arrived-after-enter')
+    await paint(phases[fixture.phase])
+    expect(write.mock.calls.map(([data]) => data).filter(data => data === '\r')).toEqual(['\r'])
+  })
+
+  it.each(fixtures)('submits an exact strict chat paste in $name with the caret away from the end', async fixture => {
+    const { write } = configure(fixture)
+    await paint(fixture.phases.idle)
+    const sent = wake.submitText(fixture.submittedNotice, undefined, { strict: true })
+    await paint(fixture.phases.atStart)
+    await vi.advanceTimersByTimeAsync(1700)
+    await expect(sent).resolves.toEqual({ ok: true })
+    expect(write.mock.calls).toEqual([['\x1b[200~' + fixture.submittedNotice + '\x1b[201~'], ['\r']])
+  })
+
+  it.each(fixtures.flatMap(fixture => ['warningDetail', 'updatePrompt', 'settingsWarning'].filter(name => fixture.phases[name])
+    .map(phase => ({ ...fixture, phase }))))('writes nothing into $phase in $name and resumes after the editor returns', async fixture => {
+    const { write, state } = configure(fixture)
+    state.ids = ['unread']
+    await paint(fixture.phases[fixture.phase])
+    await vi.advanceTimersByTimeAsync(6100)
+    expect(write).not.toHaveBeenCalled()
+    expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: fixture.phase === 'settingsWarning' ? 'approval' : 'cli-screen' } })
+    if (fixture.submittedNotice === REMIND_PROMPT) {
+      await paint(fixture.phases.atStart)
+      expect(write.mock.calls).toEqual([['\r']])
+      return
+    }
+    await paint(fixture.phases.idle)
+    expect(write.mock.calls).toEqual([[paste]])
+    await paint(fixture.phases[fixture.phase])
+    await vi.advanceTimersByTimeAsync(6100)
+    expect(write.mock.calls).toEqual([[paste]])
+    await paint(fixture.phases.atStart)
+    expect(write.mock.calls).toEqual([[paste], ['\r']])
+  })
+
+  it.each(fixtures.filter(fixture => fixture.phases.queued))('leaves the queue in $name alone until the new notice is drawn', async fixture => {
+    const { write, state } = configure(fixture)
+    state.ids = ['unread']
+    state.busy = true
+    await paint(fixture.phases.idle)
+    expect(write.mock.calls).toEqual([[busyPaste]])
+    state.hookWorking = true
+    await paint(fixture.phases.queued)
+    await vi.advanceTimersByTimeAsync(6100)
+    expect(write.mock.calls).toEqual([[busyPaste]])
+    state.hookWorking = false
+    await paint(fixture.phases.atStart)
+    expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
+  })
+
+  it.each(fixtures)('does not resubmit terminal history in $name after the CLI consumes the notice', async fixture => {
+    const { write, state } = configure(fixture)
+    state.ids = ['new-unread']
+    await paint(fixture.phases.enter)
+    if (fixture.phases.queueDrained) await paint(fixture.phases.queueDrained)
+    await vi.advanceTimersByTimeAsync(2400)
+    expect(write.mock.calls.map(([data]) => data)).not.toContain('\r')
+  })
+
+  it.each(['', '  Session activity · new status widget', '  Activity notice\r\n  Another hint below it'])(
+    'finishes the warning-free bounded Codex editor beneath arbitrary surrounding text %j', async footer => {
+      const fixture = fixtures.find(item => item.name === 'codex-59x15-warning-wrapped.json')
+      const { write, state } = configure(fixture)
+      state.ids = ['unread']
+      await paint(fixture.phases.idle)
+      await paint(fixture.phases.atStart, `\x1b7\x1b[7;1H\x1b[2K${footer}\x1b8`)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(write.mock.calls).toEqual([[paste], ['\r']])
+    }
+  )
+
+  it('does not submit a matching first block when more draft text remains after an internal blank line', async () => {
+    const fixture = fixtures.find(item => item.name === 'codex-59x15-warning-wrapped.json')
+    const { write, state } = configure(fixture)
+    state.ids = ['unread']
+    await paint(fixture.phases.idle)
+    const extra = '\x1b[7;1H\x1b[2K  retained user draft\x1b[9;1H  89% context left\x1b[4;3H'
+    await paint(fixture.phases.atStart, extra)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(write.mock.calls).toEqual([[paste]])
+  })
+
+  it('uses the native Codex editor boundaries when both cursor and footer are elsewhere', async () => {
+    const fixture = fixtures.find(item => item.name === 'codex-59x15-warning-wrapped.json')
+    const { write, state } = configure(fixture)
+    state.ids = ['unread']
+    await paint(fixture.phases.idle)
+    await paint(fixture.phases.atStart, '\x1b[7;1H\x1b[2K  Other terminal status\x1b[1;1H')
+    expect(write.mock.calls).toEqual([[paste], ['\r']])
+  })
+
+  it.each(fixtures.filter(item => item.submittedNotice === PROMPT))('leaves the native draft in $name after keyboard input', async fixture => {
+    const { write, state } = configure(fixture)
+    state.ids = ['unread']
+    await paint(fixture.phases.idle)
+    wake.userInput('\x1b[H')
+    await paint(fixture.phases.atStart)
+    await vi.advanceTimersByTimeAsync(6100)
+    expect(write.mock.calls).toEqual([[paste]])
+    expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'draft', ours: false } })
+  })
+})
 
 it.each([
   ['unnumbered', ' ❯ No, exit\r\n   Yes, I trust this folder', ' Enter to confirm · Esc to cancel'],
@@ -228,6 +362,115 @@ it('inspects draft origin, a native menu and distinct occurrences of the same ap
 })
 
 describe('wake an idle agent with unread messages', () => {
+  describe('Codex inbox notices in the live composer', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+    const warning = '                                                 89% context left · ⚠ 1 warning · f2 to view'
+    const frame = (text, column = text.length + 3, gap = '\r\n\r\n') => codexDraft(text + gap + warning) + `\x1b[1;${column}H`
+    async function paint(text) {
+      wake.writeOutput(text)
+      await vi.advanceTimersByTimeAsync(80)
+    }
+
+    it('does not count the warning footer against a freshly pasted notice', async () => {
+      const { write, state } = setup('codex')
+      state.ids = ['one']
+      await paint(frame(''))
+      await paint(frame(PROMPT, undefined, '\r\n'))
+      expect(write.mock.calls).toEqual([[paste], ['\r']])
+      state.ids.push('two')
+      await paint(frame(PROMPT))
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'draft', ours: true } })
+      expect(write.mock.calls).toEqual([[paste], ['\r']])
+    })
+
+    it.each([PROMPT, BUSY_PROMPT, REMIND_PROMPT])('recovers an exact notice with unread mail after rebuilding its observer', async text => {
+      const { write, state } = setup('codex', 140)
+      state.ids = ['one']
+      wake.writeOutput(frame(text))
+      await vi.advanceTimersByTimeAsync(5)
+      expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'draft', ours: true } })
+      await vi.advanceTimersByTimeAsync(200)
+      state.ids.push('two')
+      await paint(frame(text))
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(write.mock.calls).toEqual([['\r']])
+    })
+
+    it('still announces unread mail after finishing a reminder from a previous turn', async () => {
+      const { write, state } = setup('codex', 140)
+      state.ids = ['one']
+      await paint(frame(REMIND_PROMPT))
+      expect(write.mock.calls).toEqual([['\r']])
+      await paint(frame(''))
+      await vi.advanceTimersByTimeAsync(1700)
+      expect(write.mock.calls).toEqual([['\r'], [paste]])
+    })
+
+    it('submits the whole current editor while the Codex caret is parked at the start', async () => {
+      const { write, state } = setup('codex')
+      state.ids = ['one']
+      await paint(frame(''))
+      await paint(frame(PROMPT, 3))
+      await vi.advanceTimersByTimeAsync(5500)
+      expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'draft', ours: true } })
+      expect(write.mock.calls).toEqual([[paste], ['\r']])
+      await paint(frame(PROMPT))
+      expect(write.mock.calls).toEqual([[paste], ['\r']])
+    })
+
+    it('does not submit again after the observer of the same shell restarts before the draft clears', async () => {
+      const wakeRecovery = { blocked: false }
+      const first = setup('codex', 100, undefined, undefined, wakeRecovery)
+      first.state.ids = ['one']
+      await paint(frame(''))
+      await paint(frame(PROMPT))
+      expect(first.write.mock.calls).toEqual([[paste], ['\r']])
+      wake.close()
+      const next = setup('codex', 100, undefined, undefined, wakeRecovery)
+      next.state.ids = ['one', 'two']
+      await paint(frame(PROMPT))
+      expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'draft', ours: true } })
+      expect(next.write).not.toHaveBeenCalled()
+      await paint(frame(''))
+      expect(next.write.mock.calls).toEqual([[paste]])
+    })
+
+    it('cannot adopt the notice after user input, without unread mail, or on a shell or confirmation screen', async () => {
+      const { write, state } = setup('codex')
+      await paint(frame(PROMPT))
+      expect(write).not.toHaveBeenCalled()
+      state.ids = ['one']
+      await paint(frame(PROMPT) + '\r\nPS D:\\dev> ')
+      await paint(frame(PROMPT) + '\r\nDo you want to proceed?\r\n› 1. Yes\r\n  2. No\r\nEnter to confirm · Esc to cancel')
+      expect(write).not.toHaveBeenCalled()
+      wake.userInput('\x1b[D')
+      await paint(frame(PROMPT))
+      expect(write).not.toHaveBeenCalled()
+      expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'draft', ours: false } })
+    })
+
+    it('reports a blocked unread inbox once after a minute and clears the notice when the draft clears', async () => {
+      const onDraftBlockChange = vi.fn()
+      const { write, state } = setup('codex', 100, undefined, onDraftBlockChange)
+      state.ids = ['one']
+      await paint(frame('User draft'))
+      await vi.advanceTimersByTimeAsync(59_000)
+      expect(onDraftBlockChange).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1200)
+      expect(onDraftBlockChange.mock.calls).toEqual([[true]])
+      state.ids.push('two')
+      await paint(frame('User draft with changes'))
+      await vi.advanceTimersByTimeAsync(65_000)
+      expect(onDraftBlockChange.mock.calls).toEqual([[true]])
+      expect(write).not.toHaveBeenCalled()
+      await paint(frame(''))
+      expect(onDraftBlockChange.mock.calls).toEqual([[true], [false]])
+      expect(write.mock.calls).toEqual([[paste]])
+    })
+  })
+
   it('waits for the exact rendered draft before submitting and batches all pending messages', async () => {
     const { write, state } = setup()
     state.ids.push('first')
@@ -516,11 +759,13 @@ describe('wake an idle agent with unread messages', () => {
       ['the composer briefly disappears', codexDraft('') + '\x1b[2J\x1b[H  Working']
     ])('submits once and wakes for later mail after %s at the deadline', async (_layout, frame) => {
       const { write, state } = await startBusyCodex()
+      state.hookWorking = true
       await paint(frame)
       await vi.advanceTimersByTimeAsync(1600)
       expect(write.mock.calls).toEqual([[busyPaste]])
 
       state.busy = false
+      state.hookWorking = false
       await paint(codexDraft(wrapped))
       await vi.advanceTimersByTimeAsync(250)
       expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
@@ -568,28 +813,33 @@ describe('wake an idle agent with unread messages', () => {
       expect(write.mock.calls).toEqual([[busyPaste]])
     })
 
-    it('gives up when idle Codex keeps the caret away from the end for five seconds', async () => {
+    it('keeps a notice after five seconds when there is insufficient evidence of the active editor', async () => {
       const { write, state } = await startBusyCodex()
       state.busy = false
-      await paint(codexDraft(wrapped) + '\x1b[1;3H')
-      await vi.advanceTimersByTimeAsync(5000)
-      await paint(codexDraft(wrapped))
+      await paint(codexDraft(wrapped) + '\x1b[5;1H')
+      await vi.advanceTimersByTimeAsync(5500)
       expect(write.mock.calls).toEqual([[busyPaste]])
+      expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'draft', ours: true } })
+      await paint(codexDraft(wrapped))
+      expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
     })
 
     it('keeps a visible notice while a task runs longer than the hidden recovery window', async () => {
       const { write, state } = await startBusyCodex()
+      state.hookWorking = true
       await paint(codexDraft(wrapped) + '\x1b[1;3H')
       await vi.advanceTimersByTimeAsync(35_000)
       expect(write.mock.calls).toEqual([[busyPaste]])
 
       state.busy = false
+      state.hookWorking = false
       await paint(codexDraft(wrapped))
       expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
     })
 
     it.each([1, 125])('keeps a visible notice when redraw interrupts recovery %i times', async redraws => {
       const { write, state } = await startBusyCodex()
+      state.hookWorking = true
       await paint(codexDraft('') + '\x1b[2J\x1b[H  Working')
       await vi.advanceTimersToNextTimerAsync()
       await paint(codexDraft(wrapped + '\r\n\r\n  Working') + '\x1b[1;3H')
@@ -617,6 +867,7 @@ describe('wake an idle agent with unread messages', () => {
       expect(write.mock.calls).toEqual([[busyPaste]])
 
       state.busy = false
+      state.hookWorking = false
       await paint(codexDraft(wrapped))
       await vi.advanceTimersByTimeAsync(300)
       expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
@@ -1030,6 +1281,68 @@ describe('a line sent from the chat view (submitText)', () => {
     const graySuggestion = '\x1b[38;2;190;190;190mSuggested follow-up\x1b[0m'
     const caretAtStart = '\x1b[2;3H'
     const forcedClear = '\x15'.repeat(29) + '\x0b'.repeat(29)
+    const imageBody = '[첨부이미지 1] [첨부이미지 2] Compare the two images.\nCheck both.'
+    const imagePaste = 'C:\\Temp\\one.png\nC:\\Temp\\two.png\n\n' + imageBody
+    const twoImages = { count: 2, text: imageBody }
+
+    it.each([true, false])('submits Claude images and a body chip after clearing (empty redraw: %s)', async redraw => {
+      const { rawWrite } = chatSetup()
+      await paint(ruledClaude(100, ['[Image #1] [Pasted text #2 +3 lines]']))
+      const { forceToken } = await wake.submitText(imagePaste, twoImages, { offerForce: true })
+      const sent = wake.submitText(imagePaste, twoImages, { forceToken })
+      if (redraw) await paint(ruledClaude(100, ['']))
+      await vi.advanceTimersByTimeAsync(redraw ? 250 : 5300)
+      expect(rawWrite.mock.calls).toEqual([[forcedClear, false], [bracketedPaste(imagePaste)]])
+      await paint(ruledClaude(100, ['[Image #3] [Image #4][Pasted text #5 +1 lines]']))
+      await vi.advanceTimersByTimeAsync(1100)
+      expect(rawWrite.mock.calls).toEqual([[forcedClear, false], [bracketedPaste(imagePaste)], ['\r']])
+      await expect(sent).resolves.toEqual({ ok: true })
+    })
+
+    it('submits an ordinary Claude image paste when Claude collapses the body', async () => {
+      const { rawWrite } = chatSetup()
+      await paint(ruledClaude(100, ['']))
+      const sent = wake.submitText(imagePaste, twoImages)
+      await paint(ruledClaude(100, ['[Image #1] [Image #2][Pasted text #3 +1 lines]']))
+      await vi.advanceTimersByTimeAsync(750)
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(imagePaste)], ['\r']])
+      await expect(sent).resolves.toEqual({ ok: true })
+    })
+
+    it.each([
+      '[Image #1] [Image #3][Pasted text #4 +1 lines]',
+      '[Image #3] [Image #3][Pasted text #4 +1 lines]',
+      '[Image #3] [Image #4][Pasted text #2 +3 lines]',
+      '[Image #3] [Pasted text #4 +1 lines]',
+      '[Image #3] [Image #4]'
+    ])('does not submit an incomplete or retained Claude image draft: %s', async displayed => {
+      const { rawWrite } = chatSetup()
+      await paint(ruledClaude(100, ['[Image #1] [Pasted text #2 +3 lines]']))
+      const { forceToken } = await wake.submitText(imagePaste, twoImages, { offerForce: true })
+      const sent = wake.submitText(imagePaste, twoImages, { forceToken })
+      await vi.advanceTimersByTimeAsync(250)
+      await paint(ruledClaude(100, [displayed]))
+      await vi.advanceTimersByTimeAsync(10500)
+      await expect(sent).resolves.toEqual({ ok: false, reason: 'images-not-drawn' })
+      expect(rawWrite.mock.calls).toEqual([[forcedClear, false], [bracketedPaste(imagePaste)]])
+    })
+
+    it.each([true, false])('retries clearing a remaining Claude draft exactly once (second clear succeeds: %s)', async clears => {
+      const { rawWrite } = chatSetup()
+      await paint(ruledClaude(100, ['First line', 'Last line']))
+      const { forceToken } = await wake.submitText(imagePaste, twoImages, { offerForce: true })
+      const sent = wake.submitText(imagePaste, twoImages, { forceToken })
+      await paint(ruledClaude(100, ['First line']))
+      await vi.advanceTimersByTimeAsync(250)
+      expect(rawWrite.mock.calls).toEqual([[forcedClear, false], [forcedClear, false]])
+      await paint(ruledClaude(100, [clears ? '' : 'Part of the first line']))
+      await vi.advanceTimersByTimeAsync(250)
+      if (clears) await paint(ruledClaude(100, ['[Image #1] [Image #2][Pasted text #3 +1 lines]']))
+      await vi.advanceTimersByTimeAsync(2200)
+      await expect(sent).resolves.toEqual(clears ? { ok: true } : { ok: false, reason: 'not-cleared' })
+      expect(rawWrite.mock.calls).toEqual([[forcedClear, false], [forcedClear, false],
+        ...(clears ? [[bracketedPaste(imagePaste)], ['\r']] : [])])
+    })
 
     it('sends normally when a color-only suggestion appears in a previously empty editor', async () => {
       const { rawWrite } = chatSetup()

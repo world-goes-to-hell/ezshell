@@ -91,6 +91,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const fitRef = useRef<FitAddon | null>(null)
   const pasteRef = useRef<(() => void) | undefined>(undefined)
   const [exit, setExit] = useState<{ code: number | null } | null>(null)
+  const [inboxDraftBlocked, setInboxDraftBlocked] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [showHistory, setShowHistory] = useState(false)
   const [usageActions, setUsageActions] = useState<HTMLSpanElement | null>(null)
@@ -288,6 +289,12 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     const stopExit = window.electronAPI.onLocalShellExit?.(({ id, exitCode }) => {
       if (id === shellId) setExit({ code: exitCode })
     })
+    let receivedInboxDraft = false
+    const stopInboxDraft = window.electronAPI.onLocalShellInboxDraft?.(({ id, blocked }) => {
+      if (id !== shellId) return
+      receivedInboxDraft = true
+      setInboxDraftBlocked(blocked)
+    })
     void window.electronAPI.localShellAttach?.(shellId).then((state) => {
       if (isDisposed) return
       isAttached = true
@@ -296,6 +303,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
         return
       }
       if (state.backlog) terminal.write(state.backlog)
+      if (!receivedInboxDraft) setInboxDraftBlocked(Boolean(state.inboxDraftBlocked))
       if (state.exited) setExit({ code: state.exitCode })
     })
 
@@ -315,6 +323,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       host.removeEventListener('paste', onNativePaste, true)
       stopData?.()
       stopExit?.()
+      stopInboxDraft?.()
       window.removeEventListener('theme-changed', onTheme)
       observer.disconnect()
       refit.cancel()
@@ -443,6 +452,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       data-local-tab-id={tabId}
       data-agent-work={agentWork}
       data-chat-mode={isChat || undefined}
+      data-chat-kind={isChat ? (chatKind ?? chatAgent) : undefined}
       // The chat theme goes on the pane, not just the cover: its focus border, the working trace,
       // the sleep cover and the return bar are drawn here and must follow the same palette
       style={chatTheme ? { ...chatTheme.style, ...style } : style}
@@ -451,6 +461,12 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
           so Codex's review lines at the top stay readable. Mounted for every pane: Codex asks before its
           MCP connects, when the pane's agent is not known yet */}
       {!antigravity && !exit && <CodexHookReviewBar shellId={shellId} isChat={isChat} onShowTerminal={showTerminal} />}
+      {!exit && inboxDraftBlocked && (
+        <div className="local-terminal-inbox-draft" role="status">
+          <span>입력칸에 글이 남아 메시지를 전하지 못했습니다</span>
+          {isChat && <button type="button" onClick={showTerminal}>터미널 보기</button>}
+        </div>
+      )}
       <div className="local-terminal-stage" data-chat-question={inlineQuestion || undefined}>
         <div
           ref={hostRef}

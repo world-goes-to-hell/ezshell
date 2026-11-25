@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { captureKeys, mainKeyOf, normalizeKeys, sameBinding, bindingProblem, bindingProblemFor, findConflict, parseCustomBindings, type KeyPress } from './shortcutCapture'
+import { captureKeys, createCaptureRecorder, mainKeyOf, normalizeKeys, sameBinding, bindingProblem, bindingProblemFor, findConflict, parseCustomBindings, type KeyPress } from './shortcutCapture'
 
 const press = (code: string, key: string, mods: Partial<KeyPress> = {}): KeyPress =>
   ({ code, key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods })
@@ -68,6 +68,25 @@ describe('captureKeys', () => {
 })
 
 describe('bindingProblemFor', () => {
+  it('checks the capture-specific modifier, Win and Tab rules', () => {
+    for (const keys of [['Ctrl', 'Win', 'Shift'], ['Win', 'Alt', 'Shift'], ['Ctrl', 'Win', 'Alt', 'Shift'], ['Ctrl', 'Alt', 'F9']]) {
+      expect(bindingProblemFor('quick-capture', keys, false)).toBeNull()
+    }
+    expect(bindingProblemFor('quick-capture', ['Ctrl', 'Alt'], false)).toMatch(/세 개 이상/)
+    expect(bindingProblemFor('quick-capture', ['Ctrl', 'Win', 'K'], false)).toMatch(/Windows/)
+    expect(bindingProblemFor('quick-capture', ['Alt', 'Shift', 'Tab'], false)).toMatch(/Tab/)
+    expect(bindingProblemFor('quick-capture', ['Ctrl', 'F9'], false)).toMatch(/두 개 이상/)
+  })
+
+  it('records all held modifiers including Win when the last one is released', () => {
+    const recorder = createCaptureRecorder()
+    expect(recorder(press('ControlLeft', 'Control', { ctrlKey: true }), true).kind).toBe('waiting')
+    expect(recorder(press('MetaLeft', 'Meta', { ctrlKey: true, metaKey: true }), true).kind).toBe('waiting')
+    expect(recorder(press('ShiftLeft', 'Shift', { ctrlKey: true, metaKey: true, shiftKey: true }), true).kind).toBe('waiting')
+    expect(recorder(press('MetaLeft', 'Meta', { ctrlKey: true, shiftKey: true }), false).kind).toBe('waiting')
+    expect(recorder(press('ControlLeft', 'Control', { shiftKey: true }), false).kind).toBe('waiting')
+    expect(recorder(press('ShiftLeft', 'Shift'), false)).toEqual({ kind: 'keys', keys: ['Ctrl', 'Win', 'Shift'] })
+  })
   // The work overview is taken in every program and inside the terminal
   it('asks two of Ctrl, Alt and Shift, one of them Ctrl or Alt, for the work overview', () => {
     for (const keys of [['Ctrl', 'Alt', 'Space'], ['Ctrl', 'Shift', 'O'], ['Alt', 'Shift', 'F9'], ['Ctrl', 'Alt', 'Shift', 'K']]) {
@@ -114,6 +133,12 @@ describe('findConflict', () => {
 })
 
 describe('parseCustomBindings', () => {
+  it('round-trips an off capture binding and normalizes valid Win bindings in backups', () => {
+    const capture = ['quick-capture', 'quick-capture-win', 'palette']
+    expect(parseCustomBindings('{"quick-capture":[],"quick-capture-win":["Shift","Win","Alt"],"palette":[]}', capture))
+      .toEqual({ 'quick-capture': [], 'quick-capture-win': ['Win', 'Alt', 'Shift'] })
+    expect(parseCustomBindings('{"quick-capture":["Ctrl","Win","F9"]}', capture)).toEqual({})
+  })
   const ids = ['palette', 'new']
   it('reads saved bindings of known shortcuts', () => {
     expect(parseCustomBindings('{"palette":["ctrl","k"],"gone":["Ctrl","J"]}', ids)).toEqual({ palette: ['Ctrl', 'K'] })

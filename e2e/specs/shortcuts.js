@@ -70,12 +70,11 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
 
   check('the shortcuts tab lists the shortcuts in Korean', await openShortcuts(), String(await js(`[...document.querySelectorAll('.shortcut-description')].slice(0, 4).map(d => d.textContent).join(', ')`)))
   check('with the default keys', (await keysOf('명령 팔레트 열기')) === 'Ctrl+P', await keysOf('명령 팔레트 열기'))
-  // Two rows since Ctrl+Alt+Shift was added beside Ctrl+Win+Alt; neither can be changed
-  if (process.platform === 'win32') check('area capture shows the fixed Windows key combinations',
+  if (process.platform === 'win32') check('area capture shows two independently editable default combinations',
     await js(`(() => {
       const rows = [...document.querySelectorAll('.shortcut-item')].filter(r => r.querySelector('.shortcut-description')?.textContent === '영역 캡처')
       const keys = rows.map(r => [...r.querySelectorAll('.shortcut-key')].map(k => k.textContent).join('+')).sort().join(',')
-      return keys === 'Ctrl+Alt+Shift,Ctrl+Win+Alt' && rows.every(r => !r.querySelector('.shortcut-change-btn'))
+      return keys === 'Ctrl+Alt+Shift,Ctrl+Win+Alt' && rows.every(r => r.querySelector('.shortcut-change-btn'))
     })()`))
 
   // Start recording, press a combination another shortcut uses

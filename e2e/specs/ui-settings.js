@@ -133,13 +133,15 @@ const { check, finish } = createChecks()
 
   // ---- A settings file: shown first, nothing changes yet ----
   const target = startTheme === 'macos-light' ? 'minimal-dark' : 'macos-light'
+  const shortcutSettings = { 'command-palette': ['Ctrl', 'J'] }
+  const captureSettings = process.platform === 'win32' ? { 'quick-capture': [], 'quick-capture-win': ['Win', 'Alt', 'Shift'] } : {}
   const file = {
     format: 'ezshell-ui-settings',
     version: 1,
     settings: {
       'theme-store': JSON.stringify({ state: { currentThemeId: target, chatThemeId: 'chat-midnight', customThemes: [], surface: 'flat', windowOpacity: 1 } }),
       'ui-store': JSON.stringify({ state: { sidebarMode: 'compact' } }),
-      customShortcuts: JSON.stringify({ 'command-palette': ['Ctrl', 'J'], 'no-such-shortcut': ['Ctrl', 'X'] }),
+      customShortcuts: JSON.stringify({ ...shortcutSettings, ...captureSettings, 'no-such-shortcut': ['Ctrl', 'X'] }),
       sftpTransferQueueHeight: '222',
       terminalFileZone: 'maybe',
       'ssh-connection-history': JSON.stringify([{ host: '10.0.0.1' }]),
@@ -166,7 +168,9 @@ const { check, finish } = createChecks()
   check('적용 changes the theme at once', await until(`document.documentElement.dataset.theme === ${JSON.stringify(target)}`, 4000), String(await theme()))
   check('the backup restores the independent chat theme', await until(`JSON.parse(localStorage.getItem('theme-store')).state.chatThemeId === 'chat-midnight'`))
   check('and folds the sidebar', await until(`!!document.querySelector('.sidebar.rail')`, 4000))
-  check('the shortcut is replaced, the unknown one dropped', (await js(`localStorage.getItem('customShortcuts')`)) === '{"command-palette":["Ctrl","J"]}', String(await js(`localStorage.getItem('customShortcuts')`)))
+  const restoredShortcuts = await js(`localStorage.getItem('customShortcuts')`)
+  check('the backup restores custom bindings and disabled capture rows, and drops the unknown binding',
+    restoredShortcuts === JSON.stringify({ ...shortcutSettings, ...captureSettings }), String(restoredShortcuts))
   check('a plain value is stored for its panel', (await js(`localStorage.getItem('sftpTransferQueueHeight')`)) === '222')
   check('a bad value is not stored', (await js(`localStorage.getItem('terminalFileZone')`)) === null)
   check('keys that are not on the list are never written', (await js(`localStorage.getItem('ssh-connection-history')`)) === null && (await js(`localStorage.getItem('recentCommands')`)) === null)

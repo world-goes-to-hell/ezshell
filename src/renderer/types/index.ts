@@ -963,6 +963,8 @@ declare global {
       showWorkOverview: (requestId?: number) => Promise<{ backdrop: Uint8Array<ArrayBuffer> | null } | null>
       hideWorkOverview: () => void
       setWorkOverviewKey?: (keys: string[]) => void
+      setQuickCaptureKeys?: (keys: [string[], string[]]) => void
+      startQuickCapture?: () => void
       onWorkOverviewRequest?: (callback: (requestId: number) => void) => () => void
       setShortcutRecording?: (recording: boolean) => void
 
@@ -1067,7 +1069,8 @@ declare global {
       agentHistoryDetail?: (shellId: string, key: string) => Promise<({ success: true } & AgentHistoryDetail) | { success: false; error: string }>
       agentHistoryOpenFolder?: (shellId: string, key: string) => Promise<{ success: true } | { success: false; error: string }>
       localWorktreeCreate: (options: { folder: string; branch: string; base: string }) => Promise<({ success: true } & LocalWorktree) | { success: false; error: string }>
-      localShellAttach?: (id: string) => Promise<{ backlog: string; exited: boolean; exitCode: number | null } | null>
+      localShellAttach?: (id: string) => Promise<{ backlog: string; exited: boolean; exitCode: number | null; inboxDraftBlocked?: boolean } | null>
+      onLocalShellInboxDraft?: (callback: (notice: { id: string; blocked: boolean }) => void) => () => void
       /** Shells main still runs, for a reloaded window to take back as tabs */
       localShellList?: () => Promise<Array<{ id: string; name: string; exited: boolean; cwd: string | null; agent: AgentChatProvider | null }>>
       localShellCurrentDirectory: (id: string) => Promise<string | null>

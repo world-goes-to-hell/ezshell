@@ -1,0 +1,261 @@
+{
+  "kind": "codex",
+  "version": "0.172.0",
+  "cols": 59,
+  "rows": 15,
+  "submittedNotice": "New ezShell message while you are busy: read it now with read_inbox; handle it after your current task.",
+  "phases": {
+    "idle": {
+      "cursor": {
+        "x": 2,
+        "y": 12
+      },
+      "bracketedPaste": true,
+      "lines": [
+        "",
+        "  To get started, describe a task or try one of these      ",
+        "  commands:                                                ",
+        "                                                           ",
+        "  /init - create an AGENTS.md file with instructions for   ",
+        "  Codex                                                    ",
+        "  /status - show current session configuration             ",
+        "  /permissions - choose what Codex is allowed to do        ",
+        "  /model - choose what model and reasoning effort to use   ",
+        "  /review - review any changes and find issues             ",
+        "                                                           ",
+        "                                                           ",
+        "› Ask Codex to do anything                                 ",
+        "                                                           ",
+        "  ← for agents · ? for shortcuts        100% context left  "
+      ],
+      "wraps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "frame": "\u001b[0m\u001b[2J\u001b[H\u001b[?2004h\u001b[2;1H\u001b[0;2m  To get started, describe a task or try one of these\u001b[0m      \u001b[3;1H\u001b[0;2m  commands:\u001b[0m                                                \u001b[4;1H                                                           \u001b[5;1H  /init\u001b[0;2m - create an AGENTS.md file with instructions for\u001b[0m   \u001b[6;1H  \u001b[0;2mCodex\u001b[0m                                                    \u001b[7;1H  /status\u001b[0;2m - show current session configuration\u001b[0m             \u001b[8;1H  /permissions\u001b[0;2m - choose what Codex is allowed to do\u001b[0m        \u001b[9;1H  /model\u001b[0;2m - choose what model and reasoning effort to use\u001b[0m   \u001b[10;1H  /review\u001b[0;2m - review any changes and find issues\u001b[0m             \u001b[11;1H                                                           \u001b[12;1H                                                           \u001b[13;1H› \u001b[0;2mAsk Codex to do anything\u001b[0m                                 \u001b[14;1H                                                           \u001b[15;1H  ← for agents · ? for shortcuts        100% context left  \u001b[13;3H"
+    },
+    "queued": {
+      "cursor": {
+        "x": 2,
+        "y": 12
+      },
+      "bracketedPaste": true,
+      "lines": [
+        "  /review - review any changes and find issues             ",
+        "                                                           ",
+        "                                                           ",
+        "› Fixture slow request.                                    ",
+        "                                                           ",
+        "                                                           ",
+        "◦ Working (1s • esc to interrupt)                          ",
+        "                                                           ",
+        "• Queued follow-up inputs                                  ",
+        "  ↳ Fixture queued request.                                ",
+        "    shift+← edit last queued message                       ",
+        "                                                           ",
+        "› Ask Codex to do anything                                 ",
+        "                                                           ",
+        "  ← for agents                100% context left · ⚠ 1 · f2 "
+      ],
+      "wraps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "frame": "\u001b[0m\u001b[2J\u001b[H\u001b[?2004h\u001b[1;1H  /review\u001b[0;2m - review any changes and find issues\u001b[0m             \u001b[2;1H                                                           \u001b[3;1H                                                           \u001b[4;1H\u001b[0;2m› \u001b[0mFixture slow request.                                    \u001b[5;1H                                                           \u001b[6;1H                                                           \u001b[7;1H\u001b[0;2m◦\u001b[0m \u001b[0;2mWorking\u001b[0m \u001b[0;2m(1s • \u001b[0mesc\u001b[0;2m to interrupt)\u001b[0m                          \u001b[8;1H                                                           \u001b[9;1H\u001b[0;2m• \u001b[0mQueued follow-up inputs                                  \u001b[10;1H\u001b[0;2m  ↳ Fixture queued request.\u001b[0m                                \u001b[11;1H    shift+←\u001b[0;2m edit last queued message\u001b[0m                       \u001b[12;1H                                                           \u001b[13;1H› \u001b[0;2mAsk Codex to do anything\u001b[0m                                 \u001b[14;1H                                                           \u001b[15;1H  ← for agents                100% context left · ⚠ 1 · f2 \u001b[13;3H"
+    },
+    "pasted": {
+      "cursor": {
+        "x": 48,
+        "y": 12
+      },
+      "bracketedPaste": true,
+      "lines": [
+        "                                                           ",
+        "                                                           ",
+        "› Fixture slow request.                                    ",
+        "                                                           ",
+        "                                                           ",
+        "• Working (1s • esc to interrupt)                          ",
+        "                                                           ",
+        "• Queued follow-up inputs                                  ",
+        "  ↳ Fixture queued request.                                ",
+        "    shift+← edit last queued message                       ",
+        "                                                           ",
+        "› New ezShell message while you are busy: read it now with ",
+        "  read_inbox; handle it after your current task.           ",
+        "                                                           ",
+        "  tab to queue message                  100% context left  "
+      ],
+      "wraps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "frame": "\u001b[0m\u001b[2J\u001b[H\u001b[?2004h\u001b[1;1H                                                           \u001b[2;1H                                                           \u001b[3;1H\u001b[0;2m› \u001b[0mFixture slow request.                                    \u001b[4;1H                                                           \u001b[5;1H                                                           \u001b[6;1H• \u001b[0;2mWorking\u001b[0m \u001b[0;2m(1s • \u001b[0mesc\u001b[0;2m to interrupt)\u001b[0m                          \u001b[7;1H                                                           \u001b[8;1H\u001b[0;2m• \u001b[0mQueued follow-up inputs                                  \u001b[9;1H\u001b[0;2m  ↳ Fixture queued request.\u001b[0m                                \u001b[10;1H    shift+←\u001b[0;2m edit last queued message\u001b[0m                       \u001b[11;1H                                                           \u001b[12;1H› New ezShell message while you are busy: read it now with \u001b[13;1H  read_inbox; handle it after your current task.           \u001b[14;1H                                                           \u001b[15;1H  tab to queue message                  100% context left  \u001b[13;49H"
+    },
+    "atStart": {
+      "cursor": {
+        "x": 2,
+        "y": 11
+      },
+      "bracketedPaste": true,
+      "lines": [
+        "                                                           ",
+        "                                                           ",
+        "› Fixture slow request.                                    ",
+        "                                                           ",
+        "                                                           ",
+        "◦ Working (2s • esc to interrupt)                          ",
+        "                                                           ",
+        "• Queued follow-up inputs                                  ",
+        "  ↳ Fixture queued request.                                ",
+        "    shift+← edit last queued message                       ",
+        "                                                           ",
+        "› New ezShell message while you are busy: read it now with ",
+        "  read_inbox; handle it after your current task.           ",
+        "                                                           ",
+        "  tab to queue message                  100% context left  "
+      ],
+      "wraps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "frame": "\u001b[0m\u001b[2J\u001b[H\u001b[?2004h\u001b[1;1H                                                           \u001b[2;1H                                                           \u001b[3;1H\u001b[0;2m› \u001b[0mFixture slow request.                                    \u001b[4;1H                                                           \u001b[5;1H                                                           \u001b[6;1H\u001b[0;2m◦\u001b[0m \u001b[0;2mWorking\u001b[0m \u001b[0;2m(2s • \u001b[0mesc\u001b[0;2m to interrupt)\u001b[0m                          \u001b[7;1H                                                           \u001b[8;1H\u001b[0;2m• \u001b[0mQueued follow-up inputs                                  \u001b[9;1H\u001b[0;2m  ↳ Fixture queued request.\u001b[0m                                \u001b[10;1H    shift+←\u001b[0;2m edit last queued message\u001b[0m                       \u001b[11;1H                                                           \u001b[12;1H› New ezShell message while you are busy: read it now with \u001b[13;1H  read_inbox; handle it after your current task.           \u001b[14;1H                                                           \u001b[15;1H  tab to queue message                  100% context left  \u001b[12;3H"
+    },
+    "enter": {
+      "cursor": {
+        "x": 2,
+        "y": 12
+      },
+      "bracketedPaste": true,
+      "lines": [
+        "",
+        "• Fixture reply.",
+        "",
+        "  Worked for 2s • 4:03 PM",
+        "",
+        "                                                           ",
+        "› Fixture queued request.                                  ",
+        "                                                           ",
+        "                                                           ",
+        "• Working (0s • esc to interrupt)                          ",
+        "                                                           ",
+        "                                                           ",
+        "› Ask Codex to do anything                                 ",
+        "                                                           ",
+        "  ← for agents                100% context left · ⚠ 1 · f2 "
+      ],
+      "wraps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "frame": "\u001b[0m\u001b[2J\u001b[H\u001b[?2004h\u001b[2;1H\u001b[0;2m• \u001b[0mFixture reply.\u001b[4;1H\u001b[0;2m  Worked for 2s • 4:03 PM\u001b[0m\u001b[6;1H                                                           \u001b[7;1H\u001b[0;2m› \u001b[0mFixture queued request.                                  \u001b[8;1H                                                           \u001b[9;1H                                                           \u001b[10;1H• \u001b[0;2mWorking\u001b[0m \u001b[0;2m(0s • \u001b[0mesc\u001b[0;2m to interrupt)\u001b[0m                          \u001b[11;1H                                                           \u001b[12;1H                                                           \u001b[13;1H› \u001b[0;2mAsk Codex to do anything\u001b[0m                                 \u001b[14;1H                                                           \u001b[15;1H  ← for agents                100% context left · ⚠ 1 · f2 \u001b[13;3H"
+    },
+    "queueDrained": {
+      "cursor": {
+        "x": 2,
+        "y": 12
+      },
+      "bracketedPaste": true,
+      "lines": [
+        "",
+        "• Fixture reply.",
+        "",
+        "  Worked for 2s • 4:03 PM",
+        "",
+        "                                                           ",
+        "› Fixture queued request.                                  ",
+        "                                                           ",
+        "                                                           ",
+        "• Working (0s • esc to interrupt)                          ",
+        "                                                           ",
+        "                                                           ",
+        "› Ask Codex to do anything                                 ",
+        "                                                           ",
+        "  ← for agents                100% context left · ⚠ 1 · f2 "
+      ],
+      "wraps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "frame": "\u001b[0m\u001b[2J\u001b[H\u001b[?2004h\u001b[2;1H\u001b[0;2m• \u001b[0mFixture reply.\u001b[4;1H\u001b[0;2m  Worked for 2s • 4:03 PM\u001b[0m\u001b[6;1H                                                           \u001b[7;1H\u001b[0;2m› \u001b[0mFixture queued request.                                  \u001b[8;1H                                                           \u001b[9;1H                                                           \u001b[10;1H• \u001b[0;2mWorking\u001b[0m \u001b[0;2m(0s • \u001b[0mesc\u001b[0;2m to interrupt)\u001b[0m                          \u001b[11;1H                                                           \u001b[12;1H                                                           \u001b[13;1H› \u001b[0;2mAsk Codex to do anything\u001b[0m                                 \u001b[14;1H                                                           \u001b[15;1H  ← for agents                100% context left · ⚠ 1 · f2 \u001b[13;3H"
+    }
+  }
+}

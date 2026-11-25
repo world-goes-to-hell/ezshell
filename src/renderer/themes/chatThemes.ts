@@ -154,16 +154,38 @@ export interface ChatAppearance {
   style: CSSProperties
 }
 
-function paneMotionColors(focus: string, trace: string, surfaces: readonly string[]) {
+function paneMotionColors(focus: string, trace: string, surfaces: readonly string[], cardSurface: string) {
+  const focusColor = visibleIndicatorColor(focus, surfaces)
+  const traceColor = visibleIndicatorColor(trace, surfaces)
+  const cardSurfaces = [...surfaces, cardSurface]
   return {
-    '--pane-focus-color': visibleIndicatorColor(focus, surfaces),
-    '--pane-trace-color': visibleIndicatorColor(trace, surfaces)
+    '--pane-focus-color': focusColor,
+    '--pane-trace-color': traceColor,
+    '--pane-card-focus': visibleIndicatorColor(focusColor, cardSurfaces, { retainTone: true }),
+    '--pane-card-trace': visibleIndicatorColor(traceColor, cardSurfaces, { retainTone: true })
   }
 }
 
+const DARK_PANE_GAP = '#0d0f13'
+const LIGHT_PANE_GAP = '#b9c0c8'
+
+function paneCardColors(preferredBorder: string, canvas: string, adjacent: readonly string[], scheme = colorSchemeFor(canvas) ?? 'dark') {
+  const dark = scheme === 'dark'
+  const gap = dark ? DARK_PANE_GAP : LIGHT_PANE_GAP
+  // Near-black canvases need a small lift to separate them from the gap. Terminal cells keep their own palette.
+  const surface = dark ? visibleIndicatorColor(canvas, [gap], { retainTone: true, minimumRatio: 1.34 }) : canvas
+  const border = visibleIndicatorColor(preferredBorder, [surface, ...adjacent, gap], { retainTone: true, minimumRatio: 3.25 })
+  return { gap, surface, border }
+}
+
 export function appPaneIndicatorColors({ colors, terminal }: ThemeDefinition) {
+  const surfaces = [terminal.background, colors.bgPrimary, colors.bgSecondary]
+  const card = paneCardColors(colors.borderStrong, colors.bgPrimary, surfaces)
   return {
-    ...paneMotionColors(colors.accent, colors.textLink, [terminal.background, colors.bgPrimary, colors.bgSecondary]),
+    ...paneMotionColors(colors.accent, colors.textLink, surfaces, card.surface),
+    '--pane-card-gap': card.gap,
+    '--pane-card-surface': card.surface,
+    '--pane-card-border': card.border,
     '--pane-focus-keyline': visibleIndicatorColor(colors.textPrimary, [colors.bgPrimary, colors.bgSecondary, colors.bgTertiary, colors.border])
   }
 }
@@ -177,13 +199,15 @@ export function chatAppearance(choice: string, customThemes: readonly ThemeDefin
   const colors = preset?.colors ?? theme?.colors
   if (!colors) return undefined
   const canvas = preset?.canvas ?? colors.bgPrimary
+  const colorScheme = colorSchemeFor(canvas) ?? (theme?.category === 'light' ? 'light' : 'dark')
+  const card = paneCardColors(colors.borderStrong, canvas, [canvas, colors.bgSecondary], colorScheme)
   const send = preset?.send ?? colors.accent
   const motion = preset?.motion ?? { focus: colors.accent, trace: colors.accent, working: colors.accent }
   return {
     id: preset?.id ?? id,
     bubbles: Boolean(preset),
     style: {
-      colorScheme: colorSchemeFor(canvas) ?? (theme?.category === 'light' ? 'light' : 'dark'),
+      colorScheme,
       ...(theme?.chrome === 'mac' && {
         '--radius-sm': 'var(--mac-radius-sm)',
         '--radius-md': 'var(--mac-radius-md)',
@@ -205,7 +229,9 @@ export function chatAppearance(choice: string, customThemes: readonly ThemeDefin
       '--on-accent': readableTextColor(colors.accent),
       // The inner outline and trace run over the chat canvas, header and footer. The outer
       // focus edge stays on the app palette to contrast with the surrounding pane frame.
-      ...paneMotionColors(motion.focus, motion.trace, [canvas, colors.bgSecondary]),
+      ...paneMotionColors(motion.focus, motion.trace, [canvas, colors.bgSecondary], card.surface),
+      '--pane-card-surface': card.surface,
+      '--pane-card-border': card.border,
       '--chat-focus': motion.focus,
       '--chat-timestamp': colors.textSecondary,
       '--chat-working': motion.working,

@@ -576,7 +576,9 @@ const workOverview = require('./src/ipc/workOverview.js').registerWorkOverviewIp
 });
 let shortcutRecorder = null;
 ipcMain.on('shortcut-recording', (event, recording) => {
-  if (fromMainWindow(event)) shortcutRecorder = recording === true ? event.sender : null;
+  if (!fromMainWindow(event) || event.senderFrame !== event.sender.mainFrame || typeof recording !== 'boolean') return;
+  shortcutRecorder = !isAppLocked && recording ? event.sender : null;
+  globalDoubleTab.setEnabled(!isAppLocked && !shortcutRecorder);
 });
 const { imagePreview } = require('./src/agentChat/imageDrafts.js');
 const quickCapture = require('./src/quickCapture.js').createQuickCapture({
@@ -614,7 +616,7 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
 // its window in screen pixels), not on ezShell's.
 const globalDoubleTab = require('./src/globalDoubleTab.js').createGlobalDoubleTab({
   allowNativeHook: !hiddenTestWindows,
-  onCapture: () => { void quickCapture.start().finally(() => globalDoubleTab.endCapture()); },
+  onCapture: released => { void quickCapture.start({ released }).finally(() => globalDoubleTab.endCapture()); },
   // Esc right after the hotkey drops only this capture: earlier ones of the run stay with their strip
   onCaptureCancel: () => quickCapture.cancelCapture(),
   onOverview: point => {
@@ -627,10 +629,17 @@ const globalDoubleTab = require('./src/globalDoubleTab.js').createGlobalDoubleTa
     if (requestId !== null) mainWindow.webContents.send('work-overview-request', requestId);
   }
 });
-setInterval(() => globalDoubleTab.setEnabled(!isAppLocked && Boolean(mainWindow) && !mainWindow.isDestroyed()), 1000).unref();
+setInterval(() => globalDoubleTab.setEnabled(!isAppLocked && Boolean(mainWindow) && !mainWindow.isDestroyed()
+  && shortcutRecorder !== mainWindow.webContents), 1000).unref();
 // The binding from settings > 키보드 단축키: key names only, checked by overviewKeySpec before the helper sees numbers
 ipcMain.on('work-overview-key', (event, keys) => {
   if (fromMainWindow(event) && event.senderFrame === event.sender.mainFrame) globalDoubleTab.setOverviewKey(keys);
+});
+ipcMain.on('quick-capture-keys', (event, keys) => {
+  if (!isAppLocked && fromMainWindow(event) && event.senderFrame === event.sender.mainFrame) globalDoubleTab.setCaptureKeys(keys);
+});
+ipcMain.on('quick-capture-start', (event) => {
+  if (!isAppLocked && fromMainWindow(event) && event.senderFrame === event.sender.mainFrame) void quickCapture.start();
 });
 app.on('will-quit', () => {
   globalDoubleTab.stop();
@@ -711,6 +720,7 @@ function getLocalShells() {
       spawn: pty.spawn,
       send: sendToLocalWindow,
       agents: agentMessages,
+      onInboxDraftBlocked: alertAgentEscalation,
       readClaudeSessions: () => readClaudeSessions(claudeRoot)
     });
   }
@@ -1184,6 +1194,7 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   currentMasterPassword = null;
   isAppLocked = true;
   agentMessages.invalidateFreshRoleChecks();
+  shortcutRecorder = null;
   globalDoubleTab.setEnabled(false);
   workOverview.cancel();
   quickCapture.cancel();
@@ -1277,6 +1288,7 @@ ipcMain.handle('reset-master-password', async () => {
   currentMasterPassword = null;
   isAppLocked = true;
   agentMessages.invalidateFreshRoleChecks();
+  shortcutRecorder = null;
   globalDoubleTab.setEnabled(false);
   workOverview.cancel();
   quickCapture.cancel();
@@ -1487,8 +1499,9 @@ function alertMcpApproval(request) {
 function alertAgentEscalation({ id, shellId, kind }) {
   if (isAppLocked || !flashMainWindow()) return false;
   const { HUMAN_BLOCK_LABELS } = require('./src/ipc/agentInspection.js');
-  const title = `${id} 가 응답을 기다립니다`;
-  const label = HUMAN_BLOCK_LABELS[kind];
+  const draft = kind === 'inbox-draft';
+  const title = draft ? `${id} 메시지 전달 지연` : `${id} 가 응답을 기다립니다`;
+  const label = draft ? '입력칸에 글이 남아 메시지를 전하지 못했습니다' : HUMAN_BLOCK_LABELS[kind];
   sendToLocalWindow('agent-escalation', { id, shellId, title, label });
   try {
     if (!hiddenTestWindows && Notification.isSupported()) {

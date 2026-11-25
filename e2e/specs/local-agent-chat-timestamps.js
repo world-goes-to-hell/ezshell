@@ -113,6 +113,15 @@ async function run() {
     check('Kakao keeps the time visible on the last outgoing message in a same-minute run', await until(`
       ${visible(multilineOutgoing)} && !${visible(longOutgoing)}
     `))
+    // A tab that is not in front is hidden with visibility: hidden (App.tsx .terminal-wrapper.hidden):
+    // its chat's times must hide with it, not float over the tab in front (2026-11-25 user report)
+    const tabWrapper = `(${cover}?.closest('.terminal-wrapper') ?? ${pane}?.parentElement)`
+    await js(`${tabWrapper}.style.visibility = 'hidden'`)
+    check('a background tab hides its chat times with it', await until(`
+      !!${timeOf(multilineOutgoing)} && getComputedStyle(${timeOf(multilineOutgoing)}).visibility === 'hidden'
+    `), await js(`${timeOf(multilineOutgoing)} ? getComputedStyle(${timeOf(multilineOutgoing)}).visibility : 'no time'`))
+    await js(`${tabWrapper}.style.removeProperty('visibility')`)
+    check('the front tab shows the time again', await until(visible(multilineOutgoing)))
     await hoverTime('kakao-short-answer', shortAnswer, false)
     let showedExactDate = false
     for (let attempt = 0; attempt < 2 && !showedExactDate; attempt++) {

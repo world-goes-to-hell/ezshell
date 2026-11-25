@@ -15,7 +15,7 @@
 // It also tells where the program in front was: "overview <x> <y>", the middle of that window in screen pixels
 // (read before ezShell comes forward), so the overview opens on the monitor the user is working on
 // (2026-11-22 user report: it opened on ezShell's monitor). Nothing else about that window.
-// The same hook reports "capture" when Ctrl+Alt+Shift or Ctrl+Win+Alt is pressed and released.
+// The same hook recognizes two configurable capture bindings and reports only "capture".
 // An unmodified Escape cancels an active capture whose overlay is outside the foreground.
 // Off while the app is locked (`off` on its input), and it ends when main goes (its input closes).
 // Windows only: elsewhere a global key watch needs a permission the user grants by hand.
@@ -26,8 +26,8 @@ const MAX_RESTARTS = 3
 // "overview", or "overview <x> <y>": where the window in front was (screen pixels)
 const OVERVIEW_LINE = /^overview(?: (-?\d{1,6}) (-?\d{1,6}))?$/
 const DEFAULT_OVERVIEW_KEYS = ['Ctrl', 'Alt', 'Space']
-// Modifier bits as the helper counts them (Win is 2 and never part of the binding)
-const MODIFIER_BITS = { ctrl: 1, control: 1, alt: 4, shift: 8 }
+const DEFAULT_CAPTURE_KEYS = [['Ctrl', 'Alt', 'Shift'], ['Ctrl', 'Win', 'Alt']]
+const MODIFIER_BITS = { ctrl: 1, control: 1, win: 2, alt: 4, shift: 8 }
 // Virtual keys of the keys a binding may end in (lib/shortcutCapture.ts names them), Tab left out
 const NAMED_KEYS = {
   space: 0x20, pageup: 0x21, pagedown: 0x22, end: 0x23, home: 0x24,
@@ -41,7 +41,7 @@ const NAMED_KEYS = {
  * program and from the terminal, so it needs two or more of Ctrl, Alt and Shift, one of them Ctrl or Alt
  * (Ctrl+O or Alt+B alone would take a key every program and the shell's readline use).
  */
-function overviewKeySpec(keys) {
+function keySpec(keys, capture) {
   if (!Array.isArray(keys) || keys.length < 3 || keys.length > 4) return null
   let mods = 0
   let vk = 0
@@ -62,9 +62,14 @@ function overviewKeySpec(keys) {
     else vk = Object.hasOwn(NAMED_KEYS, name) ? NAMED_KEYS[name] : 0
     if (!Number.isInteger(vk) || !vk) return null
   }
-  const count = [1, 4, 8].filter(bit => mods & bit).length
-  return vk && count >= 2 && (mods & 5) ? { mods, vk } : null
+  const count = [1, 2, 4, 8].filter(bit => mods & bit).length
+  const allowed = vk ? !(mods & 2) && count >= 2 && (mods & 5) : capture && count >= 3
+  return allowed ? { mods, vk } : null
 }
+
+const overviewKeySpec = keys => keySpec(keys, false)
+const captureKeySpec = keys => keySpec(keys, true)
+const sameSpec = (a, b) => Boolean(a && b && a.mods === b.mods && a.vk === b.vk)
 
 const HOOK_SOURCE = String.raw`
 using System;
@@ -96,10 +101,10 @@ public static class EzShellDoubleTab {
   static IntPtr hook;
   static uint appPid;
   static IntPtr appWindow;
-  static volatile bool enabled = true;
+  static volatile bool enabled = false;
   // The overview binding: modifier bits (Ctrl 1, Alt 4, Shift 8) and a virtual key; 0 is off
-  static volatile int overviewMods = 5;
-  static volatile int overviewVk = 0x20;
+  static volatile int overviewBinding = 0;
+  static volatile int[] captureBindings = new int[2];
   // The binding's key is down in another program: its repeats and its release are kept from it too
   static uint overviewHeld;
   static long overviewHeldAt;
@@ -107,7 +112,7 @@ public static class EzShellDoubleTab {
   static long overviewFront;
   static long overviewFrontAt;
   static int modifiers;
-  static bool captureArmed;
+  static volatile bool captureArmed;
   static bool captureBlocked;
   static int captureState; // idle, started, cancelling
   static long captureWindow;
@@ -127,9 +132,10 @@ public static class EzShellDoubleTab {
       string line;
       while ((line = Console.In.ReadLine()) != null) {
         if (line == "on") enabled = true;
-        else if (line == "off") { enabled = false; overviewHeld = 0; Interlocked.Exchange(ref overviewFront, 0); EndCapture(); }
+        else if (line == "off") { enabled = false; ResetBindings(); EndCapture(); }
         else if (line == "capture-end") EndCapture();
         else if (line.StartsWith("overview ", StringComparison.Ordinal)) SetOverview(line.Substring(9));
+        else if (line.StartsWith("bindings ", StringComparison.Ordinal)) SetCapture(line.Substring(9));
         else if (line.StartsWith("capture-focus ", StringComparison.Ordinal)) {
           long handle;
           if (long.TryParse(line.Substring(14), out handle) && handle > 0) FocusCapture(new IntPtr(handle));
@@ -171,9 +177,8 @@ public static class EzShellDoubleTab {
       captureBlocked = false;
       return fire;
     }
-    // A fourth key makes this an ordinary Windows shortcut. Wait for all modifiers before rearming.
-    if ((held & 10) == 10 || (!modifier && down)) captureBlocked = true;
-    if ((held == 7 || held == 13) && modifier && down && !captureBlocked) captureArmed = true;
+    if (!modifier && down) captureBlocked = true;
+    if (modifier && down && !captureBlocked) captureArmed = IsCaptureChord(0, held);
     return false;
   }
 
@@ -183,16 +188,37 @@ public static class EzShellDoubleTab {
       || (vk >= 0x70 && vk <= 0x87) || (vk >= 0xBA && vk <= 0xC0) || (vk >= 0xDB && vk <= 0xDE);
   }
 
-  // "<mods> <vk>" from main, checked again: Ctrl 1, Alt 4, Shift 8 only, two or more with Ctrl or Alt. Anything else is off.
-  static void SetOverview(string value) {
+  static int ReadBinding(string[] parts, int slot, bool capture) {
     int mods = 0, vk = 0;
-    string[] parts = value.Split(' ');
-    bool ok = parts.Length == 2 && int.TryParse(parts[0], out mods) && int.TryParse(parts[1], out vk)
-      && (mods & ~13) == 0 && (mods & 5) != 0 && ((mods & 1) + ((mods >> 2) & 1) + ((mods >> 3) & 1)) >= 2 && OverviewKeyAllowed(vk);
-    overviewMods = ok ? mods : 0;
-    overviewVk = ok ? vk : 0;
+    if (!int.TryParse(parts[slot], out mods) || !int.TryParse(parts[slot + 1], out vk) || mods < 0 || mods > 15) return 0;
+    int count = (mods & 1) + ((mods >> 1) & 1) + ((mods >> 2) & 1) + (mods >> 3);
+    if (vk == 0) return capture && count >= 3 ? mods : 0;
+    return (mods & 2) == 0 && count >= 2 && OverviewKeyAllowed(vk) ? (vk << 4) | mods : 0;
+  }
+
+  static void ResetBindings() {
     overviewHeld = 0;
     Interlocked.Exchange(ref overviewFront, 0);
+    captureArmed = false;
+  }
+
+  static void SetOverview(string value) {
+    string[] parts = value.Split(' ');
+    overviewBinding = parts.Length == 2 ? ReadBinding(parts, 0, false) : 0;
+    ResetBindings();
+  }
+
+  static void SetCapture(string value) {
+    string[] parts = value.Split(' ');
+    captureBindings = parts.Length == 4 ? new int[] { ReadBinding(parts, 0, true), ReadBinding(parts, 2, true) } : new int[2];
+    ResetBindings();
+  }
+
+  static bool IsCaptureChord(uint vk, int held) {
+    if (held == 0 || IsOverviewChord(vk, held)) return false;
+    int binding = ((int)vk << 4) | held;
+    var capture = captureBindings;
+    return capture[0] == binding || capture[1] == binding;
   }
 
   // Whether an event of the held key is kept from the program in front: its repeats and its release, but not a
@@ -213,8 +239,7 @@ public static class EzShellDoubleTab {
 
   // The binding's key pressed with exactly its modifiers
   static bool IsOverviewChord(uint vk, int held) {
-    int key = overviewVk;
-    return key != 0 && vk == (uint)key && held == overviewMods;
+    return held != 0 && (((int)vk << 4) | held) == overviewBinding;
   }
 
   static bool AppInFront() {
@@ -245,29 +270,41 @@ public static class EzShellDoubleTab {
     if ((key.flags & 0x10) != 0) return CallNextHookEx(hook, code, wParam, lParam);
     if (down || up) {
       bool modifierKey = key.vk == 0x5B || key.vk == 0x5C || (key.vk >= 0xA0 && key.vk <= 0xA5);
-      if (modifierKey) modifiers = ModifierMask(key.vk, down);
-      if (CaptureGesture(modifiers, modifierKey, down) && Interlocked.CompareExchange(ref captureState, 1, 0) == 0)
-        captureMessages.Add("capture");
+      // A secure desktop may have consumed a modifier's release before this key down.
+      if (modifierKey || down) modifiers = ModifierMask(key.vk, down);
+      if (CaptureGesture(modifiers, modifierKey, down)) StartCapture("capture");
       // Every modifier is up again: now the overview may come forward
       if (modifierKey && modifiers == 0) {
         long front = Interlocked.Exchange(ref overviewFront, 0);
-        if (front != 0 && FrontStillWaiting(clock.ElapsedMilliseconds)) ThreadPool.QueueUserWorkItem(_ => BringForward(new IntPtr(front)));
+        if (front != 0 && FrontStillWaiting(clock.ElapsedMilliseconds)) {
+          if (front == -1) captureMessages.Add("capture-release");
+          else ThreadPool.QueueUserWorkItem(_ => BringForward(new IntPtr(front)));
+        }
       }
     }
     if (key.vk == 0x1B && CaptureEscape(down, up, GetForegroundWindow())) return new IntPtr(1);
     if (overviewHeld != 0 && key.vk == overviewHeld && KeepHeldKey(down, up, clock.ElapsedMilliseconds)) return new IntPtr(1);
-    if (!down || !enabled || !IsOverviewChord(key.vk, modifiers) || AppInFront()) return CallNextHookEx(hook, code, wParam, lParam);
+    if (!down || !enabled) return CallNextHookEx(hook, code, wParam, lParam);
+    bool capture = IsCaptureChord(key.vk, modifiers);
+    if (!capture && (!IsOverviewChord(key.vk, modifiers) || AppInFront())) return CallNextHookEx(hook, code, wParam, lParam);
     long now = clock.ElapsedMilliseconds;
     overviewHeld = key.vk;
     overviewHeldAt = now;
     // Keep the program in front from opening its menu bar when Alt is released
     if ((modifiers & 4) != 0 && !dryRun) { keybd_event(0xE8, 0, 0, UIntPtr.Zero); keybd_event(0xE8, 0, 2, UIntPtr.Zero); }
-    if (Interlocked.CompareExchange(ref overviewFront, Math.Max(1, GetForegroundWindow().ToInt64()), 0) == 0)
+    if (Interlocked.CompareExchange(ref overviewFront, capture ? -1 : Math.Max(1, GetForegroundWindow().ToInt64()), 0) == 0) {
       Interlocked.Exchange(ref overviewFrontAt, now);
+      if (capture) StartCapture("capture-press");
+    }
     return new IntPtr(1);
   }
 
+  static void StartCapture(string message) {
+    if (enabled && Interlocked.CompareExchange(ref captureState, 1, 0) == 0) captureMessages.Add(message);
+  }
+
   static void EndCapture() {
+    Interlocked.CompareExchange(ref overviewFront, 0, -1);
     Interlocked.Exchange(ref captureState, 0);
     Interlocked.Exchange(ref captureWindow, 0);
   }
@@ -314,9 +351,10 @@ public static class EzShellDoubleTab {
 /** The helper's PowerShell script: the hook's source and the window to bring forward (numbers only) */
 function helperScript(pid, windowHandle) {
   if (![pid, windowHandle].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('bad helper arguments')
-  // Without comment lines and indentation: the script goes on PowerShell's command line (-EncodedCommand, UTF-16
-  // in base64), which Windows cuts at 32767 characters. The full source took 29,000 of them in 2026-11.
+  // The script goes on PowerShell's command line (-EncodedCommand, UTF-16 in base64), which Windows cuts at
+  // 32767 characters. Strip comments, indentation and spaces around punctuation, leaving string literals intact.
   const source = HOOK_SOURCE.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//')).join('\n')
+    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'| *([(),{};]) */g, (match, punctuation) => punctuation ?? match)
   return `$ErrorActionPreference = 'Stop'\nAdd-Type -TypeDefinition @'\n${source}\n'@\n[EzShellDoubleTab]::Run(${pid}, ${windowHandle})\n`
 }
 
@@ -338,8 +376,10 @@ function handleNumber(buffer) {
 function createGlobalDoubleTab({ onOverview, onCapture = () => {}, onCaptureCancel = () => {}, platform = process.platform, allowNativeHook = true, spawn = spawnProcess, env = process.env }) {
   let child = null
   let enabled = false
-  // What the helper is told about the overview shortcut: two numbers, or 0 0 (off)
-  let overviewLine = overviewLineOf(DEFAULT_OVERVIEW_KEYS)
+  let overview = overviewKeySpec(DEFAULT_OVERVIEW_KEYS)
+  let captureKeys = DEFAULT_CAPTURE_KEYS.map(captureKeySpec)
+  let captureLine = captureLineOf()
+  let releaseCapture = null
   let restarts = 0
   let target = null
   let stopped = false
@@ -362,9 +402,24 @@ function createGlobalDoubleTab({ onOverview, onCapture = () => {}, onCaptureCanc
         pending = pending.slice(end + 1)
         if (line === 'ready') {
           restarts = 0
+          send(`overview ${bindingNumbers(overview)}`)
+          send(captureLine)
           send(enabled ? 'on' : 'off')
-          send(overviewLine)
         } else if (enabled) {
+          if (line === 'capture-press') {
+            finishCaptureRelease(false)
+            const released = new Promise(resolve => {
+              const timer = setTimeout(() => finishCaptureRelease(false), 5000)
+              timer.unref?.()
+              releaseCapture = result => { clearTimeout(timer); resolve(result) }
+            })
+            onCapture(released)
+            continue
+          }
+          if (line === 'capture-release') {
+            finishCaptureRelease(true)
+            continue
+          }
           if (line === 'capture') {
             onCapture()
             continue
@@ -383,6 +438,7 @@ function createGlobalDoubleTab({ onOverview, onCapture = () => {}, onCaptureCanc
     proc.stdin.on('error', () => {})
     proc.on('exit', () => {
       if (child !== proc) return
+      finishCaptureRelease(false)
       child = null
       // A crash or a failed start: a few more tries, then the window's own shortcut only
       if (!stopped && restarts < MAX_RESTARTS) {
@@ -394,6 +450,25 @@ function createGlobalDoubleTab({ onOverview, onCapture = () => {}, onCaptureCanc
 
   function send(line) {
     try { child?.stdin.write(line + '\n') } catch { /* gone: restarted on exit */ }
+  }
+
+  function finishCaptureRelease(result) {
+    const finish = releaseCapture
+    releaseCapture = null
+    finish?.(result)
+  }
+
+  function captureLineOf() {
+    const [first, second] = captureKeys.map(spec => sameSpec(spec, overview) ? null : spec)
+    return `bindings ${bindingNumbers(first)} ${bindingNumbers(sameSpec(first, second) ? null : second)}`
+  }
+
+  function sendCaptureBindings() {
+    const line = captureLineOf()
+    if (line === captureLine) return
+    finishCaptureRelease(false)
+    captureLine = line
+    send(line)
   }
 
   return {
@@ -411,21 +486,31 @@ function createGlobalDoubleTab({ onOverview, onCapture = () => {}, onCaptureCanc
     setEnabled(value) {
       if (enabled === Boolean(value)) return
       enabled = Boolean(value)
+      if (!enabled) finishCaptureRelease(false)
       send(enabled ? 'on' : 'off')
     },
     /** The overview binding from the window's settings; one the rules refuse turns it off outside the window */
     setOverviewKey(keys) {
-      overviewLine = overviewLineOf(keys)
-      send(overviewLine)
+      finishCaptureRelease(false)
+      overview = overviewKeySpec(keys)
+      send(`overview ${bindingNumbers(overview)}`)
+      sendCaptureBindings()
+    },
+    setCaptureKeys(keys) {
+      if (!Array.isArray(keys) || keys.length !== 2 || !Array.isArray(keys[0]) || !Array.isArray(keys[1])) return
+      captureKeys = keys.map(captureKeySpec)
+      sendCaptureBindings()
     },
     focusCapture(windowHandleBuffer) {
       const windowHandle = handleNumber(windowHandleBuffer)
       if (enabled && windowHandle) send(`capture-focus ${windowHandle}`)
     },
     endCapture() {
+      finishCaptureRelease(false)
       send('capture-end')
     },
     stop() {
+      finishCaptureRelease(false)
       stopped = true
       const proc = child
       child = null
@@ -435,9 +520,8 @@ function createGlobalDoubleTab({ onOverview, onCapture = () => {}, onCaptureCanc
   }
 }
 
-function overviewLineOf(keys) {
-  const spec = overviewKeySpec(keys)
-  return spec ? `overview ${spec.mods} ${spec.vk}` : 'overview 0 0'
+function bindingNumbers(spec) {
+  return spec ? `${spec.mods} ${spec.vk}` : '0 0'
 }
 
-module.exports = { createGlobalDoubleTab, helperScript, handleNumber, overviewKeySpec }
+module.exports = { captureKeySpec, createGlobalDoubleTab, helperScript, handleNumber, overviewKeySpec }

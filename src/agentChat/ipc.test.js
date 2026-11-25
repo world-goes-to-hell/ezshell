@@ -583,10 +583,10 @@ describe('opening a link of an answer', () => {
       ipcMain: { handle: (name, fn) => handlers.set(name, fn), on: () => {} },
       fromMainWindow: () => true, isLocked: () => false, clipboard: null,
       chats: { cwdOf: () => root, knowsLink: (_id, link) => link === key, linkAuthority: () => () => active },
-      links: { openWorkspaceBrowser: async (root, relative, permitted) => {
+      links: { openWorkspaceBrowser: async (root, relative, permitted, options) => {
         await new Promise(resolve => { finishOpen = resolve })
         if (!permitted()) return { success: false, error: 'stale' }
-        opened.push({ root, relative })
+        opened.push({ root, relative, ...options })
         return { success: true }
       } }
     })
@@ -597,12 +597,35 @@ describe('opening a link of an answer', () => {
     const pending = open('mockups/byte-daemon.html')
     finishOpen()
     expect(await pending).toEqual({ ok: true })
-    expect(opened).toEqual([{ root, relative: 'mockups/byte-daemon.html' }])
+    expect(opened).toEqual([{ root, relative: 'mockups/byte-daemon.html', linkFolder: false }])
     const stale = open(doc)
     active = false
     finishOpen()
     expect(await stale).toEqual({ ok: false, error: 'stale' })
     expect(opened).toHaveLength(1)
+  })
+
+  it('opens a linked page outside the working folder from its own folder (2026-11-25 user report: scratchpad)', async () => {
+    const path = await import('node:path')
+    const root = path.resolve('project')
+    const page = path.resolve('scratchpad', 'pane-divider.html')
+    const key = process.platform === 'win32' ? page.toLowerCase() : page
+    const handlers = new Map()
+    const frame = {}
+    const opened = []
+    registerAgentChatIpc({
+      ipcMain: { handle: (name, fn) => handlers.set(name, fn), on: () => {} },
+      fromMainWindow: () => true, isLocked: () => false, clipboard: null,
+      chats: { cwdOf: () => root, knowsLink: (_id, link) => link === key, linkAuthority: () => () => true },
+      links: { openWorkspaceBrowser: async (folder, relative, permitted, options) => {
+        opened.push({ folder, relative, ...options })
+        return { success: true }
+      } }
+    })
+    const result = await handlers.get('agent-chat-open-link')({ senderFrame: frame, sender: { mainFrame: frame } },
+      { shellId: 'local:1', href: page, how: 'browser-tab' })
+    expect(result).toEqual({ ok: true })
+    expect(opened).toEqual([{ folder: path.dirname(page), relative: 'pane-divider.html', linkFolder: true }])
   })
 
   it('opens a folder in the file manager instead of refusing it (2026-11-23 user report: `mockups/`)', async () => {

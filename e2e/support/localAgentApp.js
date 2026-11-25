@@ -8,6 +8,12 @@ const { createFakeAskDialog } = require('./fakeAskDialog.js')
 require('../../out/main/src/testWindows.js').createTestWindows(require('electron'))
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
+const inboxWake = require('../../out/main/src/ipc/agentInboxWake.js')
+const createAgentInboxWake = inboxWake.createAgentInboxWake
+inboxWake.createAgentInboxWake = options => createAgentInboxWake({
+  ...options,
+  ...(options.kind === 'codex' && fs.existsSync(path.join(profile, 'test-inbox-draft-notice')) && { draftNoticeMs: 900 })
+})
 process.env.CODEX_HOME = path.join(profile, 'codex-home')
 const notificationLog = path.join(profile, 'test-notifications')
 const notificationSupported = Notification.isSupported.bind(Notification)

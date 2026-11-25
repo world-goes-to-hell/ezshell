@@ -4,7 +4,7 @@
 const fs = require('fs')
 const http = require('node:http')
 const path = require('path')
-const { connect, createChecks, sleep, unlock, openLocalAgent, pages } = require('../support/driver')
+const { connect, createChecks, sleep, unlock, openLocalAgent, pages, pickTabGroup } = require('../support/driver')
 const { checkChatLinkPreviews, checkSplitChatLinkPreview } = require('../support/chatLinkPreviews')
 
 const { check, finish } = createChecks()
@@ -1028,6 +1028,25 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('a Claude paste chip after the forced clear sends the full text once',
     await waitFor(() => read('claude-1-chat-sent') === '6') && read('claude-1-chat-text') === longClaudeDraft, await chatFeedback())
 
+  await driver.menuPick(...await center(chatLog(0)), '편의', '이미지 첨부…')
+  check('the file picker attaches two images before the forced send', await until(`${previewWidths} === '2,3'`))
+  fs.writeFileSync(file('claude-1-draft'), '[Image #1] [Pasted text #2 +41 lines]')
+  await until(`window.electronAPI.agentChatScreenState(${JSON.stringify(firstShell)}).then(state => state?.composer === 'draft')`)
+  fs.writeFileSync(file('claude-1-paste-chip'), '[Image #3] [Image #4][Pasted text #5 +39 lines]')
+  const forcedImageBody = '[첨부이미지 1] [첨부이미지 2] ' + longClaudeDraft
+  await setChatDraft(forcedImageBody)
+  await js(`${sendButton}.click()`)
+  check('a Claude image paste with an existing terminal draft waits for forced send',
+    await until(`!!${forceSend}`) && read('claude-1-chat-sent') === '6' && await js(`${previewWidths} === '2,3'`), await chatFeedback())
+  await js(`${forceSend}?.click()`)
+  check('a Claude image paste chip after the forced clear sends both files and the full text once', await waitFor(() => {
+    if (read('claude-1-chat-sent') !== '7') return false
+    const [first, second, separator, ...body] = read('claude-1-chat-text').split('\n')
+    return first !== second && separator === '' && body.join('\n') === forcedImageBody
+      && [first, second].every((file, index) => fs.existsSync(file) && fs.readFileSync(file).readUInt32BE(16) === index + 2)
+  }), await chatFeedback())
+  check('the force-sent thumbnail order follows the attached files', await until(`${sentImageWidths(forcedImageBody)} === '2,3'`))
+
   // A permission prompt in the terminal shows as choices in the chat, and a choice answers it
   const approvalCard = `${cover(0)}?.querySelector('.agent-chat-approval')`
   const firstApprovalOption = `${approvalCard}?.querySelector('.agent-chat-approval-option')`
@@ -1675,28 +1694,91 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   // (at the end: the receiving fake agent may be woken by it)
   const handoffCard = `${cover(0)}.querySelector('.agent-chat-handoff')`
   const handoffAgents = `${handoffCard}?.querySelectorAll('.agent-chat-handoff-agent input')`
-  await js(`${quoteAnswer}.querySelector('.agent-chat-handoff-button').click()`)
-  check('the hand-off card lists other connected agents, never the chat\'s own', await until(`
-    !!${handoffCard} && ${handoffAgents}.length > 0 && ![...${handoffAgents}].some(input => input.value === ${JSON.stringify(codexId)})
-  `), await js(`${handoffCard}?.textContent ?? 'no card'`))
-  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
-  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  const handoffProjects = `${handoffCard}?.querySelectorAll('.agent-chat-handoff-project')`
+  const openHandoff = () => js(`${quoteAnswer}.querySelector('.agent-chat-handoff-button').click()`)
+  const handoffKey = async (key, windowsVirtualKeyCode, modifiers = 0) => {
+    const down = key === 'Enter' && !modifiers ? { type: 'keyDown', text: '\r' } : { type: 'rawKeyDown' }
+    await send('Input.dispatchKeyEvent', { ...down, key, code: key, windowsVirtualKeyCode, modifiers })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode, modifiers })
+  }
+  await openHandoff()
+  check('a single-project hand-off immediately lists eligible agents and excludes the sender', await until(`
+    ${handoffProjects}.length === 0 && ${handoffAgents}.length > 0 &&
+    ![...${handoffAgents}].some(input => input.value === ${JSON.stringify(codexId)})
+  `))
+  await handoffKey('Escape', 27)
   check('Esc closes only the hand-off card', await until(`!${handoffCard} && !!${cover(0)}`))
-  await js(`${quoteAnswer}.querySelector('.agent-chat-handoff-button').click()`)
-  await until(`!!${handoffCard}`)
-  const handoffTarget = await js(`[...${handoffAgents}].find(input => input.checked)?.value`)
-  await js(`${handoffCard}.querySelector('textarea').focus()`)
+
+  const reviewFolder = path.join(profile, 'Atlas')
+  fs.mkdirSync(reviewFolder)
+  await js(`
+    localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([profile, reviewFolder]))});
+    window.dispatchEvent(new Event('ezshell:local-projects-changed'))
+  `)
+  const targetAgent = `window.electronAPI.agentMessagesSnapshot().then(state => state.agents.find(agent =>
+    agent.active && agent.mcpConnected && agent.cwd === ${JSON.stringify(reviewFolder)})?.id)`
+  await openLocalAgent(driver, 'claude', reviewFolder)
+  check('the alternate project has a connected hand-off recipient', await until(targetAgent, 12000))
+  const handoffTarget = await js(targetAgent)
+  await js(`window.electronAPI.agentMessageSetRole(${JSON.stringify(handoffTarget)}, '리뷰어')`)
+  await pickTabGroup(driver, path.basename(profile))
+  if (!await until(`!!${quoteAnswer}`, 2000)) await scrollLongLog(true)
+  if (!await until(`!!${quoteAnswer}`)) throw new Error('the hand-off answer did not return after switching work')
+  await chooseChatTheme(0, '종이 노트')
+  await openHandoff()
+  check('projects show eligible and working counts with the sender project first', await until(`
+    ${handoffProjects}.length === 2 &&
+    ${handoffProjects}[0].querySelector('.agent-chat-handoff-name').textContent === ${JSON.stringify(path.basename(profile))} &&
+    ${handoffProjects}[1].textContent.includes('Atlas') &&
+    ${handoffProjects}[1].textContent.includes('에이전트 1명 · 작업 중 0명') &&
+    ${handoffCard}.querySelector('.agent-chat-handoff-send').disabled
+  `))
+  await shot('local-agent-chat-handoff-projects-light')
+  await handoffKey('ArrowDown', 40)
+  check('Down focuses the next project', await until(`document.activeElement === ${handoffProjects}[1]`))
+  await handoffKey('ArrowUp', 38)
+  check('Up returns to the preceding project', await until(`document.activeElement === ${handoffProjects}[0]`))
+  await handoffKey('ArrowDown', 40)
+  await handoffKey('Enter', 13)
+  check('Enter opens only the selected project with the role and provider logo', await until(`
+    ${handoffAgents}.length === 1 && ${handoffAgents}[0].value === ${JSON.stringify(handoffTarget)} &&
+    ${handoffCard}.querySelector('.agent-chat-handoff-back')?.textContent === 'Atlas' &&
+    ${handoffCard}.querySelector('.agent-chat-handoff-agent svg') &&
+    ${handoffCard}.querySelector('.agent-chat-handoff-agent .agent-chat-handoff-name').textContent.startsWith('리뷰어 · Claude Code')
+  `))
+  await shot('local-agent-chat-handoff-agent-light')
+  await handoffKey('Backspace', 8)
+  check('Backspace returns to the focused project', await until(`document.activeElement === ${handoffProjects}[1]`))
+  await handoffKey('Enter', 13)
+  await until(`${handoffAgents}.length === 1`)
+  await handoffKey('ArrowLeft', 37)
+  check('Left returns to the project list', await until(`${handoffProjects}.length === 2`))
+  await handoffKey('Escape', 27)
+  await chooseChatTheme(0, '미드나잇')
+  await openHandoff()
+  await until(`${handoffProjects}.length === 2`)
+  await shot('local-agent-chat-handoff-projects-dark')
+  await js(`${handoffProjects}[1].click()`)
+  await until(`document.activeElement === ${handoffAgents}[0]`)
+  await handoffKey('Enter', 13)
+  check('Enter selects the recipient and moves to the comment', await until(`document.activeElement === ${handoffCard}.querySelector('textarea')`))
   await send('Input.insertText', { text: '이 답변을 검토해 주세요.' })
-  await shot('local-agent-chat-handoff')
+  await handoffKey('ArrowLeft', 37)
+  check('Left in the comment keeps editing the comment', await until(`
+    document.activeElement === ${handoffCard}.querySelector('textarea') && ${handoffAgents}.length === 1
+  `))
+  await js(`${handoffCard}.querySelector('.agent-chat-handoff-preview summary').click()`)
+  await shot('local-agent-chat-handoff-agent-dark')
   check('the hand-off buttons have one size', await js(`(() => {
     const [cancel, sendButton] = ['.agent-chat-handoff-cancel', '.agent-chat-handoff-send'].map(selector => ${handoffCard}.querySelector(selector).getBoundingClientRect())
     return cancel.height === sendButton.height && cancel.top === sendButton.top
   })()`))
-  await js(`${handoffCard}.querySelector('.agent-chat-handoff-send').click()`)
+  await handoffKey('Enter', 13, 2)
   check('the chosen agent gets the answer and the comment from the user', await until(`window.electronAPI.agentMessagesSnapshot().then(state =>
     state.messages.some(message => message.from === 'user' && message.to === ${JSON.stringify(handoffTarget)} &&
       message.text.startsWith('[인계] ') && message.text.includes('이 답변을 검토해 주세요.') && message.text.includes('인용할 답변의 첫째 문장입니다.')))
   `) && await until(`!${handoffCard}`), String(handoffTarget))
+  await chooseChatTheme(0, '앱 테마 따르기')
 
   // Codex's numbered model picker belongs in the terminal, including when older MCP output is still visible.
   await setChatDraft('/model')

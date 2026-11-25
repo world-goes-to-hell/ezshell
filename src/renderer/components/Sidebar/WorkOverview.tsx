@@ -8,7 +8,7 @@ import { MAIN_PANE } from '../../lib/splitTree'
 import { previewTabHost, tabHost } from '../../lib/tabHosts'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { useShortcutsStore } from '../../stores/shortcutsStore'
-import { WORK_OVERVIEW_SHORTCUT } from '../../lib/shortcutCapture'
+import { QUICK_CAPTURE_SHORTCUTS, WORK_OVERVIEW_SHORTCUT } from '../../lib/shortcutCapture'
 import { matchesBinding } from '../../lib/shortcutMatch'
 import type { AgentMessageSession } from '../../types'
 import { useAgentMessagesStore } from '../Terminal/AgentMessages'
@@ -27,6 +27,8 @@ export function WorkOverview({ groupView }: { groupView: WorkView }) {
   const pending = useRef<symbol | null>(null)
   // Ctrl+Alt+Space unless changed in settings > 키보드 단축키 (Tab Tab until 2026-11-24)
   const overviewKeys = useShortcutsStore(state => state.getEffectiveKeys(WORK_OVERVIEW_SHORTCUT))
+  const primaryCapture = useShortcutsStore(state => state.getEffectiveKeys(QUICK_CAPTURE_SHORTCUTS[0]))
+  const secondaryCapture = useShortcutsStore(state => state.getEffectiveKeys(QUICK_CAPTURE_SHORTCUTS[1]))
   const returnFocus = useRef<HTMLElement | null>(null)
   const close = () => {
     window.electronAPI.hideWorkOverview()
@@ -46,6 +48,10 @@ export function WorkOverview({ groupView }: { groupView: WorkView }) {
   useEffect(() => {
     window.electronAPI.setWorkOverviewKey?.(overviewKeys)
   }, [overviewKeys])
+
+  useEffect(() => {
+    if (/^Win/i.test(navigator.platform)) window.electronAPI.setQuickCaptureKeys?.([primaryCapture, secondaryCapture])
+  }, [primaryCapture, secondaryCapture])
 
   useEffect(() => {
     if (overview) return

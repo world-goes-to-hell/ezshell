@@ -39,7 +39,7 @@ function copyCryptoPlugin() {
       for (const dir of MAIN_RUNTIME_DIRECTORIES) {
         fs.cpSync(path.resolve(__dirname, 'src', dir), path.resolve(__dirname, 'out/main/src', dir), {
           recursive: true,
-          filter: (source) => !source.endsWith('.test.js') && !source.endsWith('.testhelper.js')
+          filter: (source) => !source.endsWith('.test.js') && !source.endsWith('.testhelper.js') && path.basename(source) !== 'fixtures'
         })
       }
       const vendorDir = path.resolve(__dirname, 'out/main/src/remoteAccess/web/vendor')

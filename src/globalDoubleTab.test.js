@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { createGlobalDoubleTab, handleNumber, helperScript, overviewKeySpec } from './globalDoubleTab.js'
+import { captureKeySpec, createGlobalDoubleTab, handleNumber, helperScript, overviewKeySpec } from './globalDoubleTab.js'
 
 function fakeSpawn() {
   const children = []
@@ -30,6 +30,28 @@ const handle = value => {
 }
 
 describe('the work overview shortcut from any program', () => {
+  it('validates each global capture binding before encoding it', () => {
+    expect(captureKeySpec(['Ctrl', 'Shift', 'Win'])).toEqual({ mods: 11, vk: 0 })
+    expect(captureKeySpec(['Ctrl', 'Alt', 'Shift', 'Win'])).toEqual({ mods: 15, vk: 0 })
+    expect(captureKeySpec(['Alt', 'Shift', 'F9'])).toEqual({ mods: 12, vk: 120 })
+    for (const keys of [[], ['Ctrl', 'Win'], ['Ctrl', 'F9'], ['Ctrl', 'Win', 'K'], ['Ctrl', 'Alt', 'Tab'],
+      ['Ctrl', 'Alt', 'Alt'], ['Ctrl', 'Alt', 'constructor'], ['Ctrl', 'Alt', '__proto__']]) expect(captureKeySpec(keys)).toBeNull()
+  })
+
+  it('configures capture slots individually and keeps conflicts away from the helper', () => {
+    const { spawn, children } = fakeSpawn()
+    const watch = createGlobalDoubleTab({ onOverview: () => {}, platform: 'win32', spawn })
+    watch.start(handle(77))
+    const [child] = children
+    watch.setCaptureKeys([['Ctrl', 'Alt', 'Space'], ['Win', 'Alt', 'Shift']])
+    expect(child.written.at(-1)).toBe('bindings 0 0 14 0\n')
+    watch.setOverviewKey(['Alt', 'Shift', 'F9'])
+    expect(child.written.at(-1)).toBe('bindings 5 32 14 0\n')
+    watch.setCaptureKeys([[], []])
+    child.stdout.emit('data', 'ready\n')
+    expect(child.written.slice(-3)).toEqual(['overview 12 120\n', 'bindings 0 0 0 0\n', 'off\n'])
+    watch.stop()
+  })
   it('builds the helper only from numbers', () => {
     const script = helperScript(4321, 987654)
     expect(script).toContain('[EzShellDoubleTab]::Run(4321, 987654)')
@@ -64,7 +86,7 @@ describe('the work overview shortcut from any program', () => {
 
     // Ctrl+Alt+Space until the window says otherwise: Ctrl 1 + Alt 4, the space bar's virtual key
     child.stdout.emit('data', 'ready\r\n')
-    expect(child.written).toEqual(['off\n', 'overview 5 32\n'])
+    expect(child.written).toEqual(['overview 5 32\n', 'bindings 13 0 7 0\n', 'off\n'])
     child.stdout.emit('data', 'overview\r\n')
     expect(onOverview).not.toHaveBeenCalled()
 
@@ -103,7 +125,7 @@ describe('the work overview shortcut from any program', () => {
       children[0].emit('exit', 1)
       vi.advanceTimersByTime(3000)
       children[1].stdout.emit('data', 'ready\r\n')
-      expect(children[1].written).toEqual(['off\n', 'overview 12 120\n'])
+      expect(children[1].written).toEqual(['overview 12 120\n', 'bindings 13 0 7 0\n', 'off\n'])
       watch.stop()
     } finally {
       vi.useRealTimers()
@@ -172,10 +194,40 @@ describe('the work overview shortcut from any program', () => {
     watch.stop()
   })
 
+  it('starts a keyed capture on the press but gates foreground until all modifiers are up', async () => {
+    const { spawn, children } = fakeSpawn()
+    const onCapture = vi.fn()
+    const watch = createGlobalDoubleTab({ onOverview: () => {}, onCapture, platform: 'win32', spawn })
+    watch.start(handle(77))
+    watch.setEnabled(true)
+    const [child] = children
+    child.stdout.emit('data', 'capture-press\r\n')
+    expect(onCapture).toHaveBeenCalledTimes(1)
+    const released = onCapture.mock.calls[0][0]
+    const shown = vi.fn()
+    void released.then(shown)
+    await Promise.resolve()
+    expect(shown).not.toHaveBeenCalled()
+    child.stdout.emit('data', 'capture-release\r\n')
+    await expect(released).resolves.toBe(true)
+    child.stdout.emit('data', 'capture-press\r\n')
+    watch.setEnabled(false)
+    child.stdout.emit('data', 'capture-release\r\n')
+    await expect(onCapture.mock.calls[1][0]).resolves.toBe(false)
+    watch.stop()
+  })
+
   it.skipIf(process.platform !== 'win32')('compiles the native helper and recognizes the capture gesture and the overview keys', () => {
     const source = "$ProgressPreference = 'SilentlyContinue'\n" + helperScript(123, 456).split('\n[EzShellDoubleTab]::Run')[0]
     const script = source + String.raw`
-$gesture = [EzShellDoubleTab].GetMethod('CaptureGesture', [Reflection.BindingFlags]'NonPublic,Static')
+$flags = [Reflection.BindingFlags]'NonPublic,Static'
+[EzShellDoubleTab].GetField('enabled', $flags).SetValue($null, $true)
+[EzShellDoubleTab].GetField('dryRun', $flags).SetValue($null, $true)
+$set = [EzShellDoubleTab].GetMethod('SetOverview', $flags)
+$set.Invoke($null, @('5 32'))
+$setCapture = [EzShellDoubleTab].GetMethod('SetCapture', $flags)
+$setCapture.Invoke($null, @('13 0 7 0'))
+$gesture = [EzShellDoubleTab].GetMethod('CaptureGesture', $flags)
 function G([int]$held, [bool]$modifier, [bool]$down) { [bool]$gesture.Invoke($null, @($held, $modifier, $down)) }
 if ((G 1 $true $true) -or (G 3 $true $true) -or (G 7 $true $true) -or (G 5 $true $false)) { exit 1 }
 if (!(G 0 $true $false) -or (G 0 $true $false)) { exit 2 }
@@ -192,7 +244,20 @@ if (!(G 0 $true $false) -or (G 0 $true $false)) { exit 6 }
 G 13 $true $true
 G 13 $false $true
 if (G 0 $true $false) { exit 7 }
-$flags = [Reflection.BindingFlags]'NonPublic,Static'
+$capture = [EzShellDoubleTab].GetMethod('IsCaptureChord', $flags)
+function A([int]$vk, [int]$held) { [bool]$capture.Invoke($null, @([uint32]$vk, $held)) }
+$setCapture.Invoke($null, @('15 0 12 120'))
+if (!(A 0 15) -or !(A 120 12) -or (A 120 13) -or (A 0 13) -or (A 0 7)) { exit 30 }
+G 13 $true $true
+G 15 $true $true
+G 13 $true $false
+if (!(G 0 $true $false)) { exit 31 }
+$setCapture.Invoke($null, @('5 32 11 75'))
+if ((A 32 5) -or (A 75 11)) { exit 32 }
+foreach ($bad in @('1 75', '3 0', '16 0', '5 9', '5 300', 'x 75')) {
+  $setCapture.Invoke($null, @("$bad 0 0"))
+  if ((A 75 1) -or (A 0 3) -or (A 0 16) -or (A 9 5) -or (A 300 5)) { exit 33 }
+}
 $escape = [EzShellDoubleTab].GetMethod('CaptureEscape', $flags)
 $state = [EzShellDoubleTab].GetField('captureState', $flags)
 $captureWindow = [EzShellDoubleTab].GetField('captureWindow', $flags)
@@ -215,7 +280,6 @@ if (!(E $false $true) -or (E $true $false)) { exit 12 }
 $captureWindow.SetValue($null, [long]0)
 $state.SetValue($null, 1)
 if (!(E $true $false) -or !(E $false $true) -or $messages.Take() -ne 'capture-cancel') { exit 14 }
-$set = [EzShellDoubleTab].GetMethod('SetOverview', $flags)
 $chord = [EzShellDoubleTab].GetMethod('IsOverviewChord', $flags)
 function C([int]$vk, [int]$held) { [bool]$chord.Invoke($null, @([uint32]$vk, $held)) }
 # Ctrl+Alt+Space by default: that key with exactly those modifiers

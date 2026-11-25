@@ -70,7 +70,9 @@ async function run() {
     const session = id => `${row(id)}?.closest('[data-local-session-id]')`
     const owner = id => `${session(id)}?.dataset.localSessionId`
     const paneTab = id => `document.querySelector('[aria-label="${id} 메시지함"]')?.closest('[data-local-tab-id]')?.dataset.localTabId`
+    fs.writeFileSync(file('test-inbox-draft-notice'), '')
     await openAgent('codex', 'codex-1')
+    fs.unlinkSync(file('test-inbox-draft-notice'))
     check('the single terminal shows its agent under the worktree heading', await until(`
       ${owner('codex-1')} === ${paneTab('codex-1')} && ${session('codex-1')}?.matches('.local-worktree') &&
       ${row('codex-1')}.parentElement.previousElementSibling?.matches('.local-worktree-row') &&
@@ -479,7 +481,18 @@ async function run() {
     await mcp('claude-2', 'acknowledge_message', { message_id: task.id })
 
     const beforeCodexWake = Number(read('codex-1-wakes')) || 0
+    await draw('draft', 'PRIVATE-BLOCKING-DRAFT', 'PRIVATE-BLOCKING-DRAFT')
     await mcp('claude-2', 'send_message', { to: 'codex-1', text: 'check-next' })
+    const inboxWarning = `${pane}?.querySelector('.local-terminal-inbox-draft')`
+    const draftToast = `[...document.querySelectorAll('.toast')].filter(item => item.textContent.includes('codex-1 메시지 전달 지연'))`
+    check('unread mail blocked by a draft adds a notice to that pane and leaves the draft alone',
+      await until(`${inboxWarning}?.textContent.includes('입력칸에 글이 남아 메시지를 전하지 못했습니다')`) &&
+      (Number(read('codex-1-wakes')) || 0) === beforeCodexWake)
+    await sleep(1000)
+    check('the inbox warning appears once and keeps the draft text private', await js(`
+      ${draftToast}.length === 1 && !${draftToast}[0].textContent.includes('PRIVATE-BLOCKING-DRAFT')`))
+    await draw('draft', '', 'PRIVATE-BLOCKING-DRAFT')
+    check('clearing the draft removes the pane notice', await until(`!${inboxWarning}`))
     check('a new message starts a turn in an already idle Codex session', await waitFor(() => Number(read('codex-1-wakes')) === beforeCodexWake + 1))
 
     await until(`!document.querySelector('.confirm-dialog')`)
@@ -943,8 +956,8 @@ async function run() {
     await until(`${cardStatus('claude-7')}?.dataset.status === 'idle'`)
     await driver.move(...await driver.center(`${card('claude-7')}.querySelector('.agent-message-map-card-name strong')`))
     check('the roleless card tooltip contains the ID and the location once', await until(identityTooltip('claude-7', 'Claude Code'), 3000) &&
-      // The state line ends with where the state came from (statusSource, tooltip only): no hooks here
-      await js(`${tooltip}?.textContent === 'claude-7\\nClaude Code · 쉼 · 터미널 화면을 보고 판단\\nother workspace · 칸 1'`))
+      // No "where the state came from" note on the state line (user, 2026-11-25)
+      await js(`${tooltip}?.textContent === 'claude-7\\nClaude Code · 쉼\\nother workspace · 칸 1'`))
     await driver.shot('local-agent-message-map-tooltip-id')
     await driver.move(20, 45)
     const otherMessage = await mcp('codex-6', 'send_message', { to: 'claude-7', text: 'other-workspace-message' })

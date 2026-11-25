@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { contrastRatio, type Rgb } from '../lib/colorContrast'
+import { colorSchemeFor } from '../lib/colorScheme'
 import { CHAT_PRESETS, FOLLOW_APP_CHAT_THEME, appPaneIndicatorColors, chatAppearance, chatPickerAppThemes, chatThemeChoice } from './chatThemes'
 import { PRESET_THEMES } from './presets'
 
@@ -22,10 +23,16 @@ describe('chat preset motion colors', () => {
     const style = vars(preset.id)
     for (const backdrop of [preset.canvas, preset.colors.bgSecondary]) {
       expect(ratio(style['--pane-focus-color'], backdrop)).toBeGreaterThanOrEqual(3)
+      expect(ratio(style['--pane-card-border'], backdrop)).toBeGreaterThanOrEqual(3)
       // The trace is inset into the pane, so its two edges run over these same surfaces.
       expect(ratio(style['--pane-trace-color'], backdrop)).toBeGreaterThanOrEqual(3)
     }
+    for (const color of ['--pane-card-border', '--pane-card-focus', '--pane-card-trace']) {
+      expect(ratio(style[color], style['--pane-card-surface'])).toBeGreaterThanOrEqual(3)
+    }
     expect(style['--pane-focus-keyline']).toBeUndefined() // inherited from the outside app palette
+    const appTheme = PRESET_THEMES.find(theme => theme.id === `minimal-${colorSchemeFor(preset.canvas)}`)!
+    expect(ratio(style['--pane-card-surface'], appPaneIndicatorColors(appTheme)['--pane-card-gap'])).toBeGreaterThanOrEqual(1.3)
   })
 
   it.each(PRESET_THEMES)('$name: the keyline contrasts with the app frame and terminal ink contrasts with pane backgrounds', theme => {
@@ -37,6 +44,10 @@ describe('chat preset motion colors', () => {
     for (const inside of [terminal.background, colors.bgPrimary, colors.bgSecondary]) {
       expect(ratio(style['--pane-focus-color'], inside)).toBeGreaterThanOrEqual(3)
       expect(ratio(style['--pane-trace-color'], inside)).toBeGreaterThanOrEqual(3)
+      expect(ratio(style['--pane-card-border'], inside)).toBeGreaterThanOrEqual(3)
+    }
+    for (const color of ['--pane-card-border', '--pane-card-focus', '--pane-card-trace'] as const) {
+      expect(ratio(style[color], style['--pane-card-surface'])).toBeGreaterThanOrEqual(3)
     }
   })
 

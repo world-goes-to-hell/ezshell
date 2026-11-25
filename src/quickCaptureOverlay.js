@@ -733,7 +733,7 @@ const chipPage = `<!doctype html>
   button:focus-visible { outline: 2px solid var(--capture-focus); outline-offset: 1px; }
 </style>
 <span id="count" role="status"></span>
-<button id="capture" type="button" title="지금 화면을 캡처합니다 (Ctrl+Win+Alt)">지금 캡처</button>
+<button id="capture" type="button" title="지금 화면을 캡처합니다">지금 캡처</button>
 <button id="open" type="button" title="캡처한 것을 다시 열어 고치거나 보냅니다">모아 보기</button>
 <button id="discard" type="button" title="보관한 캡처를 모두 버립니다">버리기</button>
 <script>

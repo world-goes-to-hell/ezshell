@@ -9,7 +9,7 @@ const { importBrowserProfile } = require('./browserProfileImport.js')
 const { createBrowserPasswordImport } = require('./browserPasswordImport.js')
 const { createImageDrafts } = require('../agentChat/imageDrafts.js')
 const { browserContextMenu } = require('./browserContextMenu.js')
-const { WORKSPACE_SCHEME, workspaceDocument, workspacePreview, serveWorkspaceAsset } = require('./browserWorkspace.js')
+const { WORKSPACE_SCHEME, workspaceDocument, workspacePreview, serveWorkspaceAsset, resolveLinkFolder } = require('./browserWorkspace.js')
 
 const WORLD = 1001
 const LOGIN_WORLD = 1002
@@ -487,11 +487,14 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
     return success
   }
 
-  async function openWorkspace(root, relative, permitted) {
+  // linkFolder: the folder of a file a chat answer linked, outside every workspace (agentChat/ipc.js
+  // checks the link). It is not a workspace root, so dot files and JSON are not served there.
+  async function openWorkspace(root, relative, permitted, { linkFolder = false } = {}) {
     const unavailable = '작업 폴더의 링크를 다시 열어 주세요.'
     if (!permitted()) return fail(unavailable)
     try {
-      const preview = await workspacePreview(await resolveWorkspaceRoot(root), relative)
+      const folder = linkFolder ? await resolveLinkFolder(root) : await resolveWorkspaceRoot(root)
+      const preview = await workspacePreview(folder, relative, linkFolder)
       if (!permitted()) return fail(unavailable)
       const result = openTab(preview)
       if (!result.success) return result

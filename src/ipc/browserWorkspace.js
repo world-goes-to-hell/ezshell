@@ -27,6 +27,19 @@ function safeParts(parts) {
   return parts.every(part => part && part !== '.' && part !== '..' && part.toLowerCase() !== '.git' && !/[\\/:\x00-\x1f\x7f]/.test(part))
 }
 
+// A chat link outside any workspace serves its own folder, which can be a broad one (the home folder).
+// There, dot files and folders (.claude.json, .ssh) and JSON stay out: config secrets live there.
+function linkFolderParts(parts) {
+  return safeParts(parts) && parts.every(part => !part.startsWith('.')) && extensionOf(parts.at(-1) ?? '') !== 'json'
+}
+
+/** The folder of a file the conversation linked: a local folder, never a drive root */
+async function resolveLinkFolder(folder) {
+  const entry = await resolveLocalPreviewPath(folder)
+  if (!entry.stat.isDirectory() || path.parse(entry.path).root === entry.path) throw new Error('Unavailable folder')
+  return entry.path
+}
+
 function workspacePagePath(value, host) {
   try {
     const url = new URL(value)
@@ -41,19 +54,21 @@ function workspaceDocument(value, host) {
   return relative && DOCUMENT_TYPES.has(extensionOf(relative)) ? relative : null
 }
 
-async function resolveAsset(root, relative) {
+async function resolveAsset(root, relative, linkFolder = false) {
+  const allowedParts = linkFolder ? linkFolderParts : safeParts
+  if (!allowedParts(relative.split('/'))) throw new Error('Unavailable file')
   const entry = await resolveLocalPreviewPath(path.join(root, relative))
   const inside = path.relative(root, entry.path)
-  if (!entry.stat.isFile() || !sameOrInside(root, entry.path) || !safeParts(inside.split(path.sep))) throw new Error('Unavailable file')
+  if (!entry.stat.isFile() || !sameOrInside(root, entry.path) || !allowedParts(inside.split(path.sep))) throw new Error('Unavailable file')
   return entry
 }
 
-async function workspacePreview(root, relative) {
+async function workspacePreview(root, relative, linkFolder = false) {
   if (typeof relative !== 'string' || !safeParts(relative.split('/')) || !DOCUMENT_TYPES.has(extensionOf(relative))) {
     throw new Error('Unsupported file')
   }
-  await resolveAsset(root, relative)
-  return { root, path: relative.split('/').map(encodeURIComponent).join('/') }
+  await resolveAsset(root, relative, linkFolder)
+  return { root, path: relative.split('/').map(encodeURIComponent).join('/'), linkFolder }
 }
 
 async function serveWorkspaceAsset(request, previews) {
@@ -65,7 +80,7 @@ async function serveWorkspaceAsset(request, previews) {
     const relative = preview && workspacePagePath(request.url, host)
     const type = relative && webAssetType(relative)
     if (!type) return new Response(null, { status: 404 })
-    const entry = await resolveAsset(preview.root, relative)
+    const entry = await resolveAsset(preview.root, relative, preview.linkFolder)
     handle = await fs.promises.open(entry.path, READ_FLAGS)
     const opened = await handle.stat()
     if (previews.get(host) !== preview || !opened.isFile() || opened.dev !== entry.stat.dev || opened.ino !== entry.stat.ino || opened.birthtimeMs !== entry.stat.birthtimeMs) {
@@ -83,4 +98,4 @@ async function serveWorkspaceAsset(request, previews) {
   }
 }
 
-module.exports = { WORKSPACE_SCHEME, workspaceDocument, workspacePreview, serveWorkspaceAsset }
+module.exports = { WORKSPACE_SCHEME, workspaceDocument, workspacePreview, serveWorkspaceAsset, resolveLinkFolder }
