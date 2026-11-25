@@ -49,6 +49,7 @@ describe('the work overview shortcut from any program', () => {
     const { spawn } = fakeSpawn()
     expect(createGlobalDoubleTab({ onOverview: () => {}, platform: 'darwin', spawn }).start(handle(5))).toBe(false)
     expect(createGlobalDoubleTab({ onOverview: () => {}, platform: 'win32', spawn }).start(Buffer.alloc(8))).toBe(false)
+    expect(createGlobalDoubleTab({ onOverview: () => {}, platform: 'win32', allowNativeHook: false, spawn }).start(handle(5))).toBe(false)
     expect(spawn).not.toHaveBeenCalled()
   })
 

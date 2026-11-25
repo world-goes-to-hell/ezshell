@@ -128,20 +128,24 @@ async function run() {
       try { return (await (await fetch(process.env.E2E_CDP + '/json')).json()).filter(t => t.url.startsWith('devtools://')).length } catch { return -1 }
     }
     check('the toolbar has a developer tools button', await main.js(`!!${button} && !${button}.disabled && ${button}.getAttribute('aria-pressed') === 'false'`))
-    await main.js(`${button}.click()`)
-    check('it opens the page\'s developer tools and shows as pressed', await main.until(`${devToolsOpen}.then(open => open && ${button}.getAttribute('aria-pressed') === 'true')`, 10000))
-    check('in a window of their own', await (async () => { for (let i = 0; i < 30; i++) { if (await devToolsTargets() > 0) return true; await new Promise(r => setTimeout(r, 300)) } return false })())
-    await main.js(`${button}.click()`)
-    check('pressing it again closes them', await main.until(`${devToolsOpen}.then(open => !open && ${button}.getAttribute('aria-pressed') === 'false')`, 10000))
+    if (process.env.EZSHELL_TEST_HIDDEN_WINDOWS === '1') {
+      await main.js(`${button}.click()`)
+      check('the hidden test app never opens a detached developer tools window',
+        !await main.js(devToolsOpen) && await devToolsTargets() === 0)
+      await closeTab(id)
+    } else {
+      await main.js(`${button}.click()`)
+      check('it opens the page\'s developer tools and shows as pressed', await main.until(`${devToolsOpen}.then(open => open && ${button}.getAttribute('aria-pressed') === 'true')`, 10000))
+      check('in a window of their own', await (async () => { for (let i = 0; i < 30; i++) { if (await devToolsTargets() > 0) return true; await new Promise(r => setTimeout(r, 300)) } return false })())
+      await main.js(`${button}.click()`)
+      check('pressing it again closes them', await main.until(`${devToolsOpen}.then(open => !open && ${button}.getAttribute('aria-pressed') === 'false')`, 10000))
 
-    // F12 / Ctrl+Shift+I in the page are not checked here: keys sent over CDP never reach before-input-event
-    // (tried with a bare Electron script: CDP keys are not seen, sendInputEvent like real keys is seen as keyDown:F12)
-
-    // Closing the tab takes its developer tools window along
-    await main.js(`${button}.click()`)
-    await main.until(devToolsOpen, 10000)
-    await closeTab(id)
-    check('closing the tab closes its developer tools window', await (async () => { for (let i = 0; i < 30; i++) { if (await devToolsTargets() === 0) return true; await new Promise(r => setTimeout(r, 300)) } return false })())
+      // CDP key events do not reach before-input-event, so the test uses the toolbar.
+      await main.js(`${button}.click()`)
+      await main.until(devToolsOpen, 10000)
+      await closeTab(id)
+      check('closing the tab closes its developer tools window', await (async () => { for (let i = 0; i < 30; i++) { if (await devToolsTargets() === 0) return true; await new Promise(r => setTimeout(r, 300)) } return false })())
+    }
 
     const savedUrl = origin + '/?view=demo#section'
     const savedId = await openBrowserTab()

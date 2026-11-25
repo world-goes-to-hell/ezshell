@@ -335,7 +335,7 @@ function handleNumber(buffer) {
  * @param {(point: { x: number, y: number } | null) => void} deps.onOverview the overview shortcut while another
  *   program was in front (ezShell is in front now), with the middle of that program's window in screen pixels
  */
-function createGlobalDoubleTab({ onOverview, onCapture = () => {}, onCaptureCancel = () => {}, platform = process.platform, spawn = spawnProcess, env = process.env }) {
+function createGlobalDoubleTab({ onOverview, onCapture = () => {}, onCaptureCancel = () => {}, platform = process.platform, allowNativeHook = true, spawn = spawnProcess, env = process.env }) {
   let child = null
   let enabled = false
   // What the helper is told about the overview shortcut: two numbers, or 0 0 (off)
@@ -399,7 +399,7 @@ function createGlobalDoubleTab({ onOverview, onCapture = () => {}, onCaptureCanc
   return {
     /** Starts watching for the window of this process (the main window's native handle) */
     start(windowHandleBuffer, pid = process.pid) {
-      if (platform !== 'win32' || child) return false
+      if (!allowNativeHook || platform !== 'win32' || child) return false
       const windowHandle = handleNumber(windowHandleBuffer)
       if (!windowHandle) return false
       target = { pid, windowHandle }

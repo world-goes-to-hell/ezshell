@@ -1,5 +1,5 @@
 // Runs the screen tests against the built app: `npm run e2e` (all) or `npm run e2e -- shortcuts`.
-// With E2E_APP=<path to a packaged ezShell.exe> the packaged app is tested instead of out/.
+// --visible permits real windows. E2E_APP=<path to a packaged ezShell.exe> requires --visible.
 // Each spec gets its own app with a fresh profile in the system temp folder, so the real app data
 // (%APPDATA%\my-ssh-client) is never touched. The app is started directly (not through npx): killing
 // npx leaves Electron running with the debugging port held, and the next spec would attach to it.
@@ -16,6 +16,10 @@ const SSH_PORT = Number(process.env.E2E_SSH_PORT) || 2222
 const SPEC_TIMEOUT_MS = 5 * 60 * 1000
 // A window covered by another stops repainting and throttles timers: the specs read the screen
 const APP_FLAGS = ['--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-background-timer-throttling']
+const VISIBLE_SPECS = {
+  'local-work-overview': 'checks the native fullscreen size and window restoration',
+  'window-place': 'moves and restores native windows on a real display'
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -68,7 +72,7 @@ async function startSshd(workDir) {
   return sshd
 }
 
-async function runSpec(name) {
+async function runSpec(name, visible) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), `ezshell-e2e-${name}-`))
   const sshDir = name.startsWith('ssh-') ? fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-e2e-sshd-')) : null
   const sshd = sshDir ? await startSshd(sshDir) : null
@@ -76,6 +80,7 @@ async function runSpec(name) {
   const packaged = process.env.E2E_APP
   const appEntry = { 'quick-capture': 'e2e/support/quickCaptureApp.js', 'browser-review': 'e2e/support/localAgentApp.js', 'local-agent-messages': 'e2e/support/localAgentApp.js', 'local-agent-hooks': 'e2e/support/localAgentApp.js', 'local-agent-pane-map': 'e2e/support/localAgentApp.js', 'local-agent-tab-close': 'e2e/support/localAgentApp.js', 'local-agent-usage': 'e2e/support/localAgentApp.js', 'local-work-overview': 'e2e/support/localAgentApp.js', 'local-agent-history': 'e2e/support/agentHistoryApp.js', 'ssh-agent-drop': 'e2e/support/agentHistoryApp.js', 'local-restore-agents': 'e2e/support/agentHistoryApp.js', 'local-agent-chat': 'e2e/support/agentChatApp.js', 'local-agent-pane-contrast': 'e2e/support/agentChatApp.js', 'local-agent-chat-scroll': 'e2e/support/agentChatApp.js', 'local-agent-chat-images': 'e2e/support/agentChatApp.js', 'local-agent-sleep': 'e2e/support/agentSleepApp.js' }[name] ?? 'out/main/index.js'
   const manualClaude = name === 'local-agent-chat-manual'
+  const env = { ...process.env, EZSHELL_TEST_HIDDEN_WINDOWS: visible ? '0' : '1' }
   const chatFixture = manualClaude || name === 'app-chat-follow-theme' || name === 'local-agent-chat-timestamps'
   const entry = name === 'local-agent-chat-antigravity' && process.platform === 'win32'
     ? 'e2e/support/antigravityChatApp.js' : chatFixture ? 'e2e/support/agentChatApp.js' : appEntry
@@ -85,14 +90,14 @@ async function runSpec(name) {
     `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, ...APP_FLAGS
   ], {
     cwd: ROOT, stdio: 'ignore',
-    env: manualClaude ? { ...process.env, EZSHELL_TEST_MANUAL_CLAUDE_CHAT: '1' } : process.env
+    env: manualClaude ? { ...env, EZSHELL_TEST_MANUAL_CLAUDE_CHAT: '1' } : env
   })
   try {
     if (app && !(await waitUntil(portAnswers, 60000))) throw new Error('the app did not open its debugging port')
     const code = await new Promise((resolve, reject) => {
       const spec = spawn(process.execPath, [path.join(SPECS_DIR, `${name}.js`)], {
         stdio: 'inherit',
-        env: { ...process.env, E2E_CDP: `http://127.0.0.1:${PORT}`, E2E_PROFILE: profile, E2E_OUT: OUT_DIR, E2E_SSH_PORT: String(SSH_PORT) }
+        env: { ...env, E2E_CDP: `http://127.0.0.1:${PORT}`, E2E_PROFILE: profile, E2E_OUT: OUT_DIR, E2E_SSH_PORT: String(SSH_PORT) }
       })
       const timer = setTimeout(() => {
         spec.kill()
@@ -121,11 +126,14 @@ async function runSpec(name) {
 }
 
 async function main() {
+  const args = process.argv.slice(2)
+  const visible = args.includes('--visible')
+  if (process.env.E2E_APP && !visible) throw new Error('packaged apps require --visible because they do not read the hidden test setting')
   if (process.env.E2E_APP && !fs.existsSync(process.env.E2E_APP)) throw new Error(`E2E_APP does not exist: ${process.env.E2E_APP}`)
   if (!process.env.E2E_APP && !fs.existsSync(path.join(ROOT, 'out/main/index.js'))) throw new Error('out/ is missing: run `npm run build` first')
   if (await portAnswers()) throw new Error(`port ${PORT} is in use (a test app left running?): close it or set E2E_PORT`)
   const all = fs.readdirSync(SPECS_DIR).filter((file) => file.endsWith('.js')).map((file) => file.slice(0, -3)).sort()
-  const wanted = process.argv.slice(2)
+  const wanted = args.filter(arg => arg !== '--visible')
   const unknown = wanted.filter((name) => !all.includes(name))
   if (unknown.length) throw new Error(`no such spec: ${unknown.join(', ')} (have: ${all.join(', ')})`)
   fs.mkdirSync(OUT_DIR, { recursive: true })
@@ -133,17 +141,22 @@ async function main() {
   const results = []
   for (const name of wanted.length ? wanted : all) {
     console.log(`\n=== ${name} ===`)
+    if (!visible && Object.hasOwn(VISIBLE_SPECS, name)) {
+      console.log(`SKIP  ${name} needs --visible: ${VISIBLE_SPECS[name]}`)
+      results.push({ name, skipped: true })
+      continue
+    }
     let passed = false
     try {
-      passed = await runSpec(name)
+      passed = await runSpec(name, visible)
     } catch (error) {
       console.error(`${name}: ${error.message}`)
     }
     results.push({ name, passed })
   }
   console.log('\n=== result ===')
-  for (const { name, passed } of results) console.log(`${passed ? 'PASS' : 'FAIL'}  ${name}`)
-  process.exit(results.every((r) => r.passed) ? 0 : 1)
+  for (const { name, passed, skipped } of results) console.log(`${skipped ? 'SKIP' : passed ? 'PASS' : 'FAIL'}  ${name}`)
+  process.exit(results.every(r => r.passed || r.skipped) ? 0 : 1)
 }
 
 main().catch((error) => {

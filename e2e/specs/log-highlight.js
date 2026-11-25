@@ -3,18 +3,11 @@
 // Run by e2e/run.js (fresh profile, no server needed).
 const fs = require('fs'), path = require('path')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const { findPage, isMainPage } = require('../support/driver')
+const { connect } = require('../support/driver')
 let failures = 0
 const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? '  -- ' + d : ''}`) }
 ;(async () => {
-  const mainPage = await findPage(isMainPage)
-  if (!mainPage) throw new Error('the app has no main page')
-  const ws = new WebSocket(mainPage.webSocketDebuggerUrl)
-  await new Promise((res) => { ws.onopen = res })
-  let id = 0; const pending = new Map()
-  ws.onmessage = (e) => { const m = JSON.parse(e.data); if (pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) } }
-  const send = (method, params = {}) => new Promise((res) => { const n = ++id; pending.set(n, res); ws.send(JSON.stringify({ id: n, method, params })) })
-  const js = async (expression) => { const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }); if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails)); return r.result?.result?.value }
+  const { send, js } = await connect()
   const shot = async (name) => { await send('Page.bringToFront'); const r = await Promise.race([send('Page.captureScreenshot', { format: 'png' }), sleep(5000).then(() => null)]); if (r?.result?.data) fs.writeFileSync(path.join(process.env.E2E_OUT, `loghl-${name}.png`), Buffer.from(r.result.data, 'base64')) }
   const until = async (expr, ms = 15000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await js(expr)) return true; await sleep(200) } return false }
   let at = [600, 400]

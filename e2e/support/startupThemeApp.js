@@ -1,5 +1,7 @@
 // One process seeds the built app's storage. A fresh process observes its normal startup and reveal.
-const { app, BrowserWindow, systemPreferences } = require('electron')
+const electron = require('electron')
+const { app, systemPreferences } = electron
+const { BrowserWindow } = require('../../out/main/src/testWindows.js').createTestWindows(electron)
 const fs = require('node:fs')
 const path = require('node:path')
 

@@ -45,10 +45,10 @@
 
   <header id="workspace-header" class="title-bar workspace-header" hidden>
     <button id="workspace-menu" type="button" class="title-bar-btn workspace-menu" aria-label="목록 열기" aria-expanded="false" aria-controls="workspace-sidebar">☰</button>
+    <button id="workspace-sidebar-toggle" type="button" class="title-bar-btn workspace-menu" aria-label="사이드바 접기" aria-expanded="true" aria-controls="workspace-sidebar" hidden>‹</button>
     <span class="title-bar-drag"><img class="title-bar-icon" src="/app-icon.svg" alt=""><span class="title-bar-title">ezShell</span></span>
     <div class="title-bar-controls">
       <button id="workspace-install" type="button" class="title-bar-btn" hidden>앱 설치</button>
-      <button id="workspace-split-toggle" type="button" class="title-bar-btn" aria-pressed="false" hidden>나란히 보기</button>
       <button id="workspace-activity" type="button" class="title-bar-btn" aria-pressed="false">MCP 활동</button>
     </div>
   </header>
@@ -62,8 +62,6 @@
 
   <button id="workspace-scrim" type="button" aria-label="목록 닫기" hidden></button>
   <aside id="workspace-sidebar" aria-label="작업 목록" tabindex="-1" hidden>
-  <div id="workspace-sidebar-controls" class="workspace-sidebar-controls" hidden>
-    <button id="workspace-sidebar-toggle" class="ghost" type="button" aria-expanded="true" aria-label="사이드바 접기" title="사이드바 접기">‹</button>
     <div id="workspace-sidebar-summary" class="workspace-sidebar-summary" hidden>
       <button id="sidebar-session-status" class="sidebar-rail-item" type="button" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg>
@@ -83,7 +81,6 @@
         <span id="sidebar-approval-count" class="sidebar-rail-count is-pending" aria-hidden="true" hidden></span>
       </button>
     </div>
-  </div>
   <div class="workspace-sidebar-lists">
   <section id="view-sessions" class="view tabbed-view workspace-list" aria-label="저장된 세션" hidden>
     <header class="bar">
@@ -108,7 +105,10 @@
   </aside>
   <div id="workspace-sidebar-divider" class="workspace-divider sidebar-divider" role="separator" aria-label="사이드바 너비" aria-orientation="vertical" tabindex="0" hidden></div>
 
-  <nav id="workspace-tabs" class="terminal-tabs terminal-tab-header" aria-label="열린 탭" hidden>
+  <div id="workspace-content" class="workspace-content" hidden>
+  <section id="workspace-primary" class="workspace-pane" aria-label="첫 번째 화면">
+  <nav id="workspace-tabs" class="terminal-tabs terminal-tab-header workspace-pane-tabs" aria-label="첫 번째 화면의 탭" hidden>
+    <button id="workspace-group-select" class="workspace-group-select" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="workspace-context-menu" hidden></button>
     <div id="workspace-current" class="terminal-tab-items workspace-current"></div>
   </nav>
 
@@ -121,8 +121,6 @@
     <div id="activity-list" class="list activity" aria-live="polite"></div>
   </main>
 
-  <div id="workspace-content" class="workspace-content" hidden>
-  <section id="workspace-primary" class="workspace-pane" aria-label="첫 번째 화면">
   <main id="view-chat" class="view tabbed-view workspace-detail" hidden></main>
 
   <main id="workspace-empty" class="view workspace-detail workspace-empty" hidden>
@@ -191,8 +189,14 @@
     </section>
   </main>
   </section>
-  <div id="workspace-split-divider" class="workspace-divider split-divider" role="separator" aria-label="화면 나누기 너비" aria-orientation="vertical" tabindex="0" hidden></div>
-  <section id="workspace-secondary" class="workspace-pane" aria-label="두 번째 화면" hidden></section>
+  <div id="workspace-split-divider" class="workspace-divider split-divider" role="separator" aria-label="화면 비율" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="75" aria-valuenow="50" tabindex="0" hidden></div>
+  <section id="workspace-secondary" class="workspace-pane" aria-label="두 번째 화면" hidden>
+    <nav id="workspace-tabs-split" class="terminal-tabs terminal-tab-header workspace-pane-tabs" aria-label="두 번째 화면의 탭" hidden>
+      <button id="workspace-group-select-split" class="workspace-group-select" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="workspace-context-menu" hidden></button>
+      <div id="workspace-current-split" class="terminal-tab-items workspace-current"></div>
+    </nav>
+  </section>
+  <div id="workspace-drop-preview" class="workspace-drop-preview" aria-hidden="true" hidden></div>
   </div>
   <div id="workspace-context-menu" class="workspace-context-menu" role="menu" aria-label="탭 및 터미널 메뉴" hidden></div>
   <p id="workspace-clipboard-status" class="approval-toast" role="status" hidden></p>

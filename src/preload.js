@@ -27,13 +27,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   closeWindow: () => ipcRenderer.send('window-close'),
   toggleFullscreen: () => ipcRenderer.invoke('window-toggle-fullscreen'),
   setShortcutRecording: (recording) => ipcRenderer.send('shortcut-recording', recording),
-  showWorkOverview: () => ipcRenderer.invoke('work-overview-show'),
+  showWorkOverview: (requestId) => ipcRenderer.invoke('work-overview-show', requestId),
   hideWorkOverview: () => ipcRenderer.send('work-overview-hide'),
   // The work overview shortcut, for the helper that hears it while another program is in front
   setWorkOverviewKey: (keys) => ipcRenderer.send('work-overview-key', keys),
   // The overview shortcut while another program was in front (src/globalDoubleTab.js): ezShell came forward, open the overview
   onWorkOverviewRequest: (callback) => {
-    const listener = () => callback();
+    const listener = (_event, requestId) => callback(requestId);
     ipcRenderer.on('work-overview-request', listener);
     return () => ipcRenderer.removeListener('work-overview-request', listener);
   },
@@ -345,7 +345,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   // Remote access (settings page of the main window)
   remoteAccessStatus: () => ipcRenderer.invoke('remote-access-status'),
-  remoteAccessSetProjects: (projects, reviewGroups) => ipcRenderer.send('remote-access-local-projects', projects, reviewGroups),
+  remoteAccessSetProjects: (projects, tabGroups, projectServers) => ipcRenderer.send('remote-access-local-projects', projects, tabGroups, projectServers),
   remoteAccessSetEnabled: (isEnabled) => ipcRenderer.invoke('remote-access-set-enabled', isEnabled),
   remoteAccessSetAnswerMcp: (isOn) => ipcRenderer.invoke('remote-access-set-answer-mcp', isOn),
   remoteAccessSetTabs: (isOn) => ipcRenderer.invoke('remote-access-set-tabs', isOn),

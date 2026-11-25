@@ -67,7 +67,7 @@ import { RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './li
 import { adoptOrphanLocalShells, rememberLocalLayout } from './lib/localShellAdopt'
 import { startAgentSleep } from './stores/agentSleepStore'
 import { startAgentHooks } from './stores/agentHooksStore'
-import { TAB_DROP_TAKEN_EVENT, linkServer, readProjectServers, writeProjectServers } from './lib/localProjectServers'
+import { LOCAL_PROJECT_SERVERS_EVENT, TAB_DROP_TAKEN_EVENT, linkServer, readProjectServers, writeProjectServers } from './lib/localProjectServers'
 import { WorkspacePanel } from './components/Workspace/WorkspacePanel'
 import { SnippetManager } from './components/Snippets/SnippetManager'
 import { StatsDashboard } from './components/Modal/StatsDashboard'
@@ -391,12 +391,21 @@ function App() {
   const groupView = useTabGroups(!isLocked)
   const { projects: localProjects, groups: localGroups } = groupView
   useEffect(() => {
-    if (!isLocked) {
-      const reviewGroups = localGroups.flatMap(({ key, label, tabIds }) =>
-        tabIds.filter(id => id.startsWith('browser:')).map(id => ({ id, key, label })))
-      window.electronAPI.remoteAccessSetProjects?.(localProjects, reviewGroups)
+    if (isLocked) return
+    const tabGroups = localGroups.flatMap(({ key, label, tabIds }) =>
+      tabIds.filter(id => {
+        const tab = terminals.get(id)
+        return tab && !tab.local && !tab.db
+      }).map(id => ({ id, key, label })))
+    const sendWorkspace = () => {
+      const links = readProjectServers()
+      const projectServers = localProjects.map(({ key }) => ({ key, sessionIds: links[key] ?? [] }))
+      window.electronAPI.remoteAccessSetProjects?.(localProjects, tabGroups, projectServers)
     }
-  }, [isLocked, localProjects, localGroups])
+    sendWorkspace()
+    window.addEventListener(LOCAL_PROJECT_SERVERS_EVENT, sendWorkspace)
+    return () => window.removeEventListener(LOCAL_PROJECT_SERVERS_EVENT, sendWorkspace)
+  }, [isLocked, localProjects, localGroups, terminals])
   const shownTabs = new Set(groupView.shownIds)
   const shownSplitPanes = layout.mode === 'split' ? layout.panes.map(pane => {
     const terminalIds = pane.terminalIds.filter(id => shownTabs.has(id))

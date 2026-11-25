@@ -3,6 +3,7 @@
 const { app, BrowserWindow, dialog, ipcMain, nativeImage, WebContentsView } = require('electron')
 const fs = require('fs')
 const path = require('path')
+require('../../out/main/src/testWindows.js').createTestWindows(require('electron'))
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
 process.env.CLAUDE_CONFIG_DIR = path.join(profile, 'claude-home')

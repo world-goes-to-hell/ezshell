@@ -8,13 +8,16 @@
   // A ticket from a code sign-in that lets this device resume without a code for a day
   const TRUST_KEY = 'ezshell-device-trust'
   const SIDEBAR_KEY = 'ezshell-workspace-sidebar'
+  const GENERAL = { id: 'general', name: '일반' }
   const $ = (id) => document.getElementById(id)
   const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true
   const views = ['signin', 'message', 'activity', 'chat', 'terminal', 'tab-terminal']
   const tabViews = { ssh: 'terminal', pc: 'tab-terminal', chat: 'chat' }
   const tabIcons = { ssh: '>_', pc: '▣', chat: '◉', browser: '▤' }
   const workspaceSize = window.matchMedia('(min-width: 45rem) and (min-height: 40rem)')
-  const splitSize = window.matchMedia('(min-width: 52rem) and (min-height: 40rem) and (orientation: landscape)')
+  const portrait = window.matchMedia('(orientation: portrait)')
+  let tabletLayout = workspaceSize.matches
+  let stackedPanes = portrait.matches
   let currentView = null
   let tabsEnabled = false
   let agentsEnabled = false
@@ -23,10 +26,13 @@
   let viewportWidth = 0
   let drawerOpen = false
   let openTabs = []
+  let activeGroup = GENERAL.id
+  let groupPanes = new Map()
   let frontTab = null
   let viewer = null
   let splitTab = null
   let secondFocused = false
+  let splitRatio = 50
   let secondary = null
   let secondaryViewer = null
   let agentList = null
@@ -35,15 +41,20 @@
   const pcSessionTabs = { connected: 0, lost: 0 }
   let pcTabCount = 0
   let workingAgents = 0
+  let hasProjectServers = false
+  const workTabs = () => openTabs.filter(tab => tab.group.id === activeGroup)
+  const groupOf = item => typeof item?.id === 'string' && item.id && item.id !== GENERAL.id && typeof item.name === 'string' && item.name ? item : GENERAL
   const terminalView = view => view === 'terminal' || view === 'tab-terminal'
   const isWorkspace = () => wasReady && currentView !== 'signin' && currentView !== 'message'
-  const activeShell = () => currentView === 'terminal' ? frontTab : null
-  const splitVisible = () => isWorkspace() && currentView !== 'activity' && splitSize.matches && Boolean(splitTab)
-  const focusedTab = () => splitVisible() && secondFocused ? splitTab : frontTab
+  const splitVisible = () => isWorkspace() && currentView !== 'activity' && tabletLayout && Boolean(splitTab)
+  const focusedPane = () => splitTab && secondFocused ? 1 : 0
+  const focusedTab = () => focusedPane() === 1 ? splitTab : frontTab
+  const primaryTab = () => tabletLayout ? frontTab : focusedTab()
+  const activeShell = () => currentView === 'terminal' ? primaryTab() : null
 
   function layout() {
     const signedIn = isWorkspace()
-    const wide = signedIn && workspaceSize.matches
+    const wide = signedIn && tabletLayout
     const collapsed = wide && sidebar.collapsed
     const showDrawer = signedIn && !wide && drawerOpen
     document.body.toggleAttribute('data-remote-workspace', signedIn)
@@ -52,7 +63,7 @@
     document.body.toggleAttribute('data-keyboard', keyboardOpen)
     views.forEach(view => { $(`view-${view}`).hidden = view !== currentView })
     $('workspace-sidebar').hidden = !wide && !showDrawer
-    $('workspace-sidebar-controls').hidden = !wide
+    $('workspace-sidebar-toggle').hidden = !wide
     $('workspace-sidebar-summary').hidden = !collapsed
     $('workspace-sidebar-divider').hidden = !wide || collapsed
     const sidebarToggle = $('workspace-sidebar-toggle')
@@ -62,28 +73,23 @@
     sidebarToggle.setAttribute('aria-label', sidebarAction)
     sidebarToggle.title = sidebarAction
     $('workspace-scrim').hidden = !showDrawer
-    for (const detail of ['workspace-tabs', 'workspace-empty', 'view-activity', 'view-terminal', 'view-tab-terminal', 'view-chat']) {
-      $(detail).inert = showDrawer
-    }
     $('workspace-menu').hidden = !signedIn || wide
     $('workspace-menu').setAttribute('aria-expanded', String(showDrawer))
     $('view-sessions').hidden = !signedIn || collapsed
-    $('view-agents').hidden = !signedIn || collapsed || (!agentsEnabled && !agents?.hasReviewTabs)
+    $('view-agents').hidden = !signedIn || collapsed || (!agentsEnabled && !agents?.hasReviewTabs && !hasProjectServers)
     $('view-tabs').hidden = !signedIn || collapsed || !tabsEnabled
     $('workspace-header').hidden = !signedIn
-    $('workspace-tabs').hidden = !signedIn || openTabs.length === 0
-    $('workspace-content').hidden = !signedIn || currentView === 'activity'
+    $('workspace-tabs').hidden = !signedIn || workTabs().length === 0
+    $('workspace-content').hidden = !signedIn
     $('workspace-content').inert = showDrawer
-    $('workspace-split-toggle').hidden = !signedIn || !splitSize.matches || currentView === 'activity'
-    $('workspace-split-toggle').disabled = openTabs.length < 2
-    $('workspace-split-toggle').setAttribute('aria-pressed', String(splitVisible()))
     $('workspace-status').hidden = !signedIn || keyboardOpen
     $('workspace-activity').setAttribute('aria-pressed', String(currentView === 'activity'))
     const blank = currentView === 'workspace'
+    const tab = primaryTab()
     $('workspace-empty').hidden = !signedIn || !blank
     if (blank) {
-      $('workspace-empty-title').textContent = frontTab?.waiting ? '목록을 확인하는 중…'
-        : frontTab ? 'PC에서 이 항목의 공유가 종료되었습니다.'
+      $('workspace-empty-title').textContent = tab?.waiting ? '목록을 확인하는 중…'
+        : tab ? 'PC에서 이 항목의 공유가 종료되었습니다.'
           : collapsed ? '사이드바를 펼쳐 열 작업을 선택하세요.' : '목록에서 열 작업을 선택하세요.'
     }
     layoutSplit()
@@ -176,7 +182,8 @@
   }
 
   function rememberView() {
-    savedView = { tabs: [...openTabs], front: frontTab, split: splitTab, secondFocused, activity: currentView === 'activity' }
+    const groups = new Map(groupPanes).set(activeGroup, paneState())
+    savedView = { tabs: [...openTabs], activeGroup, groups, activity: currentView === 'activity' }
     if (viewer?.type === 'chat') viewer.draft = agents.draft
     if (secondaryViewer?.type === 'chat') secondaryViewer.draft = secondary.chat.draft
   }
@@ -189,13 +196,12 @@
     for (const tab of openTabs) {
       if (tab.type !== 'ssh') tab.waiting = true
     }
-    frontTab = openTabs.includes(saved.front) ? saved.front : openTabs.at(-1) ?? null
-    splitTab = openTabs.includes(saved.split) && saved.split !== frontTab ? saved.split : null
+    groupPanes = saved.groups
+    activeGroup = saved.activeGroup
+    restorePanes()
+    recoverActiveGroup()
     if (saved.activity) show('activity')
-    else selectPrimary(frontTab)
-    secondFocused = Boolean(saved.secondFocused && splitVisible())
-    layout()
-    renderTabs()
+    refreshWorkspace()
   }
 
   function discardSavedView() {
@@ -258,10 +264,12 @@
   const pcTabs = ez.createTabs({
     list: $('pc-tabs-list'), name: $('pc-tab-name'), notice: $('pc-tab-notice'), mode: $('pc-tab-mode'),
     viewport: $('pc-tab-viewport'), host: $('pc-tab-host'), send,
-    createTerminal, onData: data => sendTerminalInput(data, frontTab), setKeysVisible, onOpen: openPcTab
+    createTerminal, onData: data => sendTerminalInput(data, primaryTab()), setKeysVisible, onOpen: openPcTab
   })
   const secondaryViews = ['workspace-empty', 'view-terminal', 'view-tab-terminal', 'view-chat'].map(id => $(id).cloneNode(true))
-  const agents = ez.createAgents({ list: $('view-agents'), chat: $('view-chat'), send, onOpen: openChat, openReview: openPcTab })
+  const agents = ez.createAgents({
+    list: $('view-agents'), chat: $('view-chat'), send, onOpen: openChat, openReview: openPcTab, openServer: openTerminal
+  })
 
   function createSecondary() {
     const pane = $('workspace-secondary')
@@ -313,7 +321,11 @@
     const showSplit = splitVisible()
     $('workspace-secondary').hidden = !showSplit
     $('workspace-split-divider').hidden = !showSplit
-    $('workspace-content').toggleAttribute('data-split', showSplit)
+    splitRoot.toggleAttribute('data-split', showSplit)
+    splitRoot.setAttribute('data-split-axis', stackedPanes ? 'rows' : 'columns')
+    splitRoot.style.setProperty('--split-size', `${splitRatio}%`)
+    splitDivider.setAttribute('aria-orientation', stackedPanes ? 'horizontal' : 'vertical')
+    splitDivider.setAttribute('aria-valuenow', String(splitRatio))
     $('workspace-primary').toggleAttribute('data-focused', showSplit && !secondFocused)
     $('workspace-secondary').toggleAttribute('data-focused', showSplit && secondFocused)
     if (!showSplit) {
@@ -458,12 +470,16 @@
       wasReady = false
       endShells()
       openTabs = []
+      groupPanes.clear()
+      activeGroup = GENERAL.id
       viewer = null
       frontTab = null
       secondaryViewer = null
       splitTab = null
       secondFocused = false
+      splitRatio = 50
       agentList = null
+      hasProjectServers = false
       drawerOpen = false
       approvalIds.clear()
       pcTabCount = 0
@@ -531,6 +547,8 @@
         break
       case 'sessions':
         updateSessions(msg)
+        layout()
+        renderGroupSelectors()
         break
       case 'approval':
         addApproval(msg.request)
@@ -656,7 +674,7 @@
 
   // ---- Screens ----
   function setDrawer(open, focusMenu = false) {
-    drawerOpen = open && isWorkspace() && !workspaceSize.matches
+    drawerOpen = open && isWorkspace() && !tabletLayout
     layout()
     if (drawerOpen) $('workspace-sidebar').focus({ preventScroll: true })
     else if (focusMenu) $('workspace-menu').focus()
@@ -681,7 +699,8 @@
     if (drawerOpen && event.key === 'Escape') setDrawer(false, true)
   })
   document.addEventListener('keydown', event => {
-    if (!isWorkspace() || !openTabs.length || approvals.isOpen || !event.ctrlKey || event.altKey || event.metaKey) return
+    const tabs = workTabs()
+    if (!isWorkspace() || !tabs.length || approvals.isOpen || !event.ctrlKey || event.altKey || event.metaKey) return
     const tab = focusedTab()
     if (event.key.toLowerCase() === 'w' && !event.shiftKey) {
       if (!tab || event.target?.closest?.('.xterm')) return
@@ -695,8 +714,8 @@
     let target
     if (event.key === 'Tab') {
       const step = event.shiftKey ? -1 : 1
-      target = openTabs[(openTabs.indexOf(tab) + step + openTabs.length) % openTabs.length]
-    } else if (!event.shiftKey && /^[1-9]$/.test(event.key)) target = openTabs[Number(event.key) - 1]
+      target = tabs[(tabs.indexOf(tab) + step + tabs.length) % tabs.length]
+    } else if (!event.shiftKey && /^[1-9]$/.test(event.key)) target = tabs[Number(event.key) - 1]
     if (!target) return
     event.preventDefault()
     event.stopPropagation()
@@ -706,7 +725,7 @@
   let edgeTouch = null
   document.addEventListener('touchstart', event => {
     const touch = event.touches.length === 1 ? event.touches[0] : null
-    edgeTouch = touch && !workspaceSize.matches && isWorkspace() && touch.clientX <= 24
+    edgeTouch = touch && !tabletLayout && isWorkspace() && touch.clientX <= 24
       ? { x: touch.clientX, y: touch.clientY } : null
   }, { passive: true })
   document.addEventListener('touchend', event => {
@@ -721,26 +740,26 @@
   $('workspace-activity').addEventListener('click', () => {
     setDrawer(false)
     if (currentView === 'activity') {
-      const restoreSecond = secondFocused && splitTab && splitSize.matches
-      selectPrimary(frontTab)
-      if (restoreSecond) setPaneFocus(true)
+      renderWorkspace()
     }
     else {
       pauseViewer()
+      pauseSecondary()
       show('activity')
       renderTabs()
     }
   })
   $('pc-tabs-refresh').addEventListener('click', () => pcTabs.enter())
-  function bindDivider(element, size, resize, reset, done = () => {}) {
+  function bindDivider(element, size, resize, reset, done = () => {}, vertical = () => false) {
     let drag = null
+    const coordinate = (event) => vertical() ? event.clientY : event.clientX
     element.addEventListener('pointerdown', event => {
       if (event.button !== 0) return
-      drag = { start: event.clientX, size: size(), id: event.pointerId }
+      drag = { start: coordinate(event), size: size(), id: event.pointerId }
       element.setPointerCapture(event.pointerId)
     })
     element.addEventListener('pointermove', event => {
-      if (drag?.id === event.pointerId) resize(drag.size + event.clientX - drag.start)
+      if (drag?.id === event.pointerId) resize(drag.size + coordinate(event) - drag.start)
     })
     element.addEventListener('lostpointercapture', () => {
       if (!drag) return
@@ -752,7 +771,8 @@
       done()
     })
     element.addEventListener('keydown', event => {
-      const delta = event.key === 'ArrowLeft' ? -16 : event.key === 'ArrowRight' ? 16 : 0
+      const [back, forward] = vertical() ? ['ArrowUp', 'ArrowDown'] : ['ArrowLeft', 'ArrowRight']
+      const delta = event.key === back ? -16 : event.key === forward ? 16 : 0
       if (!delta) return
       event.preventDefault()
       resize(size() + delta)
@@ -776,53 +796,55 @@
     applySidebarWidth()
   }, saveSidebar)
   const splitRoot = $('workspace-content')
-  bindDivider($('workspace-split-divider'), () => $('workspace-primary').getBoundingClientRect().width, width => {
-    const total = splitRoot.getBoundingClientRect().width
-    if (!total) return
-    splitRoot.style.setProperty('--split-size', `${Math.max(30, Math.min(70, 100 * width / total))}%`)
+  const splitDivider = $('workspace-split-divider')
+  const axisSize = (element) => element.getBoundingClientRect()[stackedPanes ? 'height' : 'width']
+  const sizeSplit = (ratio) => {
+    splitRatio = Math.round(Math.max(25, Math.min(75, ratio)) * 10) / 10
+    splitRoot.style.setProperty('--split-size', `${splitRatio}%`)
+    splitDivider.setAttribute('aria-valuenow', String(splitRatio))
     fitTerminal()
-  }, () => {
-    splitRoot.style.removeProperty('--split-size')
-    fitTerminal()
-  })
-  $('workspace-split-toggle').addEventListener('click', () => {
-    if (!splitSize.matches || openTabs.length < 2) return
-    if (splitTab) {
-      const chosen = focusedTab()
-      pauseSecondary()
-      splitTab = null
-      selectPrimary(chosen)
-      return
-    }
-    const index = openTabs.indexOf(frontTab)
-    splitTab = openTabs[index > 0 ? index - 1 : 1]
-    layout()
-    fitTerminal()
-    renderTabs()
-  })
+    revealPaneTabs()
+  }
+  bindDivider(splitDivider, () => axisSize($('workspace-primary')), size => {
+    const total = axisSize(splitRoot)
+    if (total && splitVisible()) sizeSplit(100 * size / total)
+  }, () => sizeSplit(50), undefined, () => stackedPanes)
 
   for (const [id, isSecondary] of [['workspace-primary', false], ['workspace-secondary', true]]) {
-    for (const type of ['pointerdown', 'focusin']) $(id).addEventListener(type, () => {
+    for (const type of ['pointerdown', 'focusin']) $(id).addEventListener(type, event => {
+      if (event.target?.closest?.('.workspace-group-select')) return
       if (splitVisible() && secondFocused !== isSecondary) setPaneFocus(isSecondary)
     })
   }
 
-  // The tab strip owns open items. Only the foreground PC or chat view subscribes.
+  // Each visible pane subscribes to its selected tab only.
   const pcKey = item => JSON.stringify([item.id, item.kind || 'terminal'])
   const chatKey = item => JSON.stringify([item.shellId, item.agentId, item.kind])
-  const strip = $('workspace-current')
-  const tabFadeWidth = 28  // The edge fade in the shared terminal-tabs.css.
-  const tabWidths = window.ResizeObserver ? new window.ResizeObserver(keepFrontTabInView) : null
-  tabWidths?.observe(strip)
-  strip.addEventListener('scroll', updateStripOverflow, { passive: true })
-  strip.addEventListener('wheel', event => {
-    if (event.ctrlKey || event.deltaX || !event.deltaY || strip.scrollWidth <= strip.clientWidth) return
-    event.preventDefault()
-    strip.scrollLeft += event.deltaY * (event.deltaMode === 1 ? 16 : 1)
-  }, { passive: false })
+  const strips = [$('workspace-current'), $('workspace-current-split')]
+  const groupSelectors = [$('workspace-group-select'), $('workspace-group-select-split')]
+  const tabFadeWidth = 28
+  const tabWidths = window.ResizeObserver ? new window.ResizeObserver(revealPaneTabs) : null
+  for (const strip of strips) {
+    tabWidths?.observe(strip)
+    strip.addEventListener('scroll', () => updateStripOverflow(strip), { passive: true })
+    strip.addEventListener('wheel', event => {
+      if (event.ctrlKey || event.deltaX || !event.deltaY || strip.scrollWidth <= strip.clientWidth) return
+      event.preventDefault()
+      strip.scrollLeft += event.deltaY * (event.deltaMode === 1 ? 16 : 1)
+    }, { passive: false })
+  }
 
-  function updateSessions({ folders, sessions }) {
+  function updateSessions({ folders, sessions, linkedProjects }) {
     tree.update(folders, sessions)
+    const projects = Array.isArray(linkedProjects)
+      ? linkedProjects.filter(project => typeof project?.id === 'string' && Array.isArray(project.servers) && project.servers.length) : []
+    hasProjectServers = projects.length > 0
+    agents.setProjectServers?.(projects)
+    const labels = new Map(projects.map(project => [project.id, project.name]))
+    for (const tab of openTabs) {
+      const name = labels.get(tab.group.id)
+      if (tab.type === 'ssh' && name) tab.group = { id: tab.group.id, name }
+    }
     pcSessionTabs.connected = 0
     pcSessionTabs.lost = 0
     for (const session of Array.isArray(sessions) ? sessions : []) {
@@ -881,14 +903,18 @@
   }
 
   function renderTabs() {
-    $('workspace-split-toggle').disabled = openTabs.length < 2
-    for (const row of [...strip.children]) {
-      if (!openTabs.some(tab => tab.row === row)) {
-        tabWidths?.unobserve(row)
-        row.remove()
+    const tabs = workTabs()
+    for (const strip of strips) {
+      for (const row of [...strip.children]) {
+        if (!tabs.some(tab => tab.row === row)) {
+          tabWidths?.unobserve(row)
+          row.remove()
+        }
       }
     }
-    for (const tab of openTabs) {
+    const two = splitVisible()
+    const counts = [0, 0]
+    for (const tab of tabs) {
       if (!tab.row) {
         tab.row = document.createElement('div')
         tab.row.className = 'terminal-tab workspace-tab'
@@ -915,27 +941,73 @@
         tab.close.textContent = '×'
         tab.close.addEventListener('click', () => {
           removeTabs(item => item === tab)
-          frontTab?.button.focus()
+          focusedTab()?.button.focus({ preventScroll: true })
         })
         tab.row.append(tab.button, tab.close)
+        bindTabDrag(tab)
       }
-      const active = tab === focusedTab() && currentView !== 'activity'
+      const active = currentView !== 'activity' && (two ? tab === frontTab || tab === splitTab : tab === primaryTab())
       tab.row.classList.toggle('active', active)
-      tab.row.toggleAttribute('data-visible-pane', splitVisible() && (tab === splitTab || tab === frontTab))
+      tab.row.draggable = canArrangeTabs()
       tab.row.toggleAttribute('data-ended', Boolean(tab.ended || tab.unavailable))
       tab.button.setAttribute('aria-pressed', String(active))
       tab.label.textContent = tab.name
       tab.button.title = tab.name
       tab.close.setAttribute('aria-label', `${tab.name} 닫기`)
       if (tab.dot) agents.setTabStatus(tab.dot, tab.item, tab.unavailable)
-      if (tab.row.parentElement !== strip) {
-        strip.append(tab.row)
+      const pane = two ? tab.pane : 0
+      const strip = strips[pane]
+      const next = strip.children[counts[pane]++]
+      if (next !== tab.row) {
+        strip.insertBefore(tab.row, next ?? null)
         tabWidths?.observe(tab.row)
       }
     }
-    updateStripOverflow()
+    $('workspace-tabs-split').hidden = !two
+    renderGroupSelectors()
+    revealPaneTabs()
     renderStatus()
   }
+
+  function groupsWithTabs() {
+    const groups = new Map()
+    for (const tab of openTabs) {
+      const { id, name } = tab.group
+      const group = groups.get(id) ?? { id, name, count: 0 }
+      group.count++
+      groups.set(id, group)
+    }
+    return groups
+  }
+
+  function renderGroupSelectors() {
+    const groups = groupsWithTabs()
+    const active = groups.get(activeGroup)
+    for (const [index, button] of groupSelectors.entries()) {
+      button.hidden = !active || (groups.size === 1 && active.id === GENERAL.id) || (index === 1 && !splitVisible())
+      const label = active?.name ?? ''
+      button.textContent = label
+      button.title = active ? `작업 목록 · ${label} · 탭 ${active.count}개` : '작업 목록'
+      button.setAttribute('aria-label', button.title)
+    }
+  }
+
+  for (const trigger of groupSelectors) trigger.addEventListener('click', () => {
+    if (contextOrigin === trigger) return closeContextMenu(true)
+    if (trigger.hidden || approvals.isOpen) return
+    const { left, bottom } = trigger.getBoundingClientRect()
+    const options = [...groupsWithTabs().values()].map(group => ({
+      text: group.name, count: group.count, current: group.id === activeGroup,
+      run: () => {
+        if (!openTabs.some(tab => tab.group.id === group.id)) return
+        enterGroup(group.id)
+        renderWorkspace()
+        if (trigger.hidden || !trigger.getClientRects().length) focusedTab()?.button.focus({ preventScroll: true })
+      }
+    }))
+    trigger.setAttribute('aria-expanded', 'true')
+    openContextMenu({ clientX: left, clientY: bottom + 3 }, { focus: trigger, label: '작업 목록', options })
+  })
 
   function pauseViewer() {
     if (viewer?.type === 'pc') pcTabs.detach()
@@ -947,7 +1019,7 @@
   }
 
   function resumeViewer() {
-    const tab = frontTab
+    const tab = primaryTab()
     if (viewer || document.hidden || !tab || tab.type === 'ssh' || currentView !== tabViews[tab.type]) return
     viewer = tab
     if (tab.type === 'pc') pcTabs.reopen(tab.item)
@@ -956,59 +1028,57 @@
 
   function selectTab(tab) {
     closeContextMenu()
-    if (currentView === 'activity' && tab && tab === splitTab && splitSize.matches) {
-      selectPrimary(frontTab)
-      return setPaneFocus(true)
-    }
-    if (splitVisible() && tab === splitTab) return setPaneFocus(true)
-    if (splitVisible() && secondFocused && tab && tab !== frontTab) {
-      splitTab = tab
-      setPaneFocus(true)
-      return
-    }
-    selectPrimary(tab)
+    enterGroup(tab.group.id)
+    if (focusedTab() !== tab) setCtrl(false)
+    if (tab.pane === 1) splitTab = tab
+    else frontTab = tab
+    secondFocused = tab.pane === 1
+    const wasDrawerOpen = drawerOpen
+    drawerOpen = false
+    renderWorkspace()
+    if (wasDrawerOpen) tab.button.focus({ preventScroll: true })
   }
 
   function setPaneFocus(isSecondary) {
-    if (secondFocused !== isSecondary) setCtrl(false)
-    secondFocused = isSecondary
-    layout()
-    const tab = focusedTab()
-    tree.select(tab?.type === 'ssh' ? tab.key : null)
+    const tab = isSecondary ? splitTab : frontTab
+    if (tab) selectTab(tab)
+  }
+
+  function renderWorkspace() {
+    const tab = primaryTab()
+    if (viewer && viewer !== tab) pauseViewer()
+    const available = tab && !tab.waiting && !tab.unavailable
+    if (viewer && !available) pauseViewer()
+    if (secondaryViewer && (!tabletLayout || secondaryViewer !== splitTab)) pauseSecondary()
+    show(available ? tabViews[tab.type] : 'workspace')
+    const focused = focusedTab()
+    tree.select(focused?.type === 'ssh' && focused.group.id === GENERAL.id ? focused.key : null)
+    agents.selectServer?.(focused?.type === 'ssh' ? focused.key : null, focused?.group.id)
+    if (available && tab.type === 'ssh') renderShell(tab, $)
+    else resumeViewer()
     fitTerminal()
     renderTabs()
-    keepFrontTabInView()
   }
 
-  function selectPrimary(tab) {
-    if (viewer && viewer !== tab) pauseViewer()
-    if (tab && tab === splitTab) {
-      pauseSecondary()
-      splitTab = frontTab !== tab ? frontTab : null
+  function refreshWorkspace() {
+    if (isWorkspace() && currentView !== 'activity') renderWorkspace()
+    else {
+      layout()
+      renderTabs()
     }
-    const switched = frontTab !== tab || secondFocused
-    secondFocused = false
-    if (switched) setCtrl(false)
-    const wasDrawerOpen = drawerOpen
-    frontTab = tab
-    drawerOpen = false
-    const available = tab && !tab.waiting && !tab.unavailable
-    show(available ? tabViews[tab.type] : 'workspace')
-    tree.select(tab?.type === 'ssh' ? tab.key : null)
-    if (tab?.type === 'ssh') showShell(tab)
-    else resumeViewer()
-    renderTabs()
-    keepFrontTabInView()
-    if (wasDrawerOpen) (tab?.button ?? $('workspace-menu')).focus({ preventScroll: true })
   }
 
-  function updateStripOverflow() {
+  function updateStripOverflow(strip) {
     strip.toggleAttribute('data-overflow-start', strip.scrollLeft > 1)
     strip.toggleAttribute('data-overflow-end', strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1)
   }
 
-  function keepFrontTabInView() {
-    const row = focusedTab()?.row
+  function revealPaneTabs() {
+    revealTab(strips[0], primaryTab()?.row)
+    revealTab(strips[1], splitVisible() ? splitTab.row : null)
+  }
+
+  function revealTab(strip, row) {
     const maxScroll = strip.scrollWidth - strip.clientWidth
     if (row && isWorkspace() && maxScroll > 0) {
       const start = strip.scrollLeft
@@ -1021,37 +1091,174 @@
       if (left < start + startFade) strip.scrollLeft = left - tabFadeWidth
       else if (right > end - endFade) strip.scrollLeft = right - strip.clientWidth + tabFadeWidth
     }
-    updateStripOverflow()
+    updateStripOverflow(strip)
   }
+
+  function paneState() {
+    return { frontTab, splitTab, secondFocused, splitRatio }
+  }
+
+  function restorePanes() {
+    const saved = groupPanes.get(activeGroup)
+    frontTab = saved?.frontTab ?? null
+    splitTab = saved?.splitTab ?? null
+    secondFocused = saved?.secondFocused ?? false
+    splitRatio = saved?.splitRatio ?? 50
+    reconcilePanes()
+  }
+
+  function enterGroup(id) {
+    if (id === activeGroup) return
+    setCtrl(false)
+    if (workTabs().length) groupPanes.set(activeGroup, paneState())
+    else groupPanes.delete(activeGroup)
+    activeGroup = id
+    restorePanes()
+  }
+
+  function recoverActiveGroup(previous = openTabs) {
+    if (!workTabs().length && openTabs.length) enterGroup(openTabs[0].group.id)
+    else reconcilePanes(previous)
+  }
+
+  function reconcilePanes(previous = openTabs) {
+    const tabs = workTabs()
+    function resolve(active, pane) {
+      if (active?.pane === pane && tabs.includes(active)) return active
+      const candidates = tabs.filter(tab => tab.pane === pane)
+      const index = previous.filter(tab => tab.group.id === activeGroup && tab.pane === pane).indexOf(active)
+      return candidates[Math.min(index < 0 ? candidates.length - 1 : index, candidates.length - 1)] ?? null
+    }
+    frontTab = resolve(frontTab, 0)
+    splitTab = resolve(splitTab, 1)
+    if (!frontTab && splitTab) {
+      for (const tab of tabs) tab.pane = 0
+      frontTab = splitTab
+      splitTab = null
+    }
+    if (!splitTab) {
+      secondFocused = false
+      splitRatio = 50
+    }
+  }
+
+  function openInFocusedPane(tab) {
+    enterGroup(tab.group.id)
+    const pane = focusedPane()
+    if (tab.pane !== pane) moveTab(tab, pane)
+    else selectTab(tab)
+  }
+
+  function moveTab(tab, pane) {
+    if (tab.pane === pane) return
+    tab.pane = pane
+    reconcilePanes()
+    selectTab(tab)
+    tab.button.focus({ preventScroll: true })
+  }
+
+  function splitWithTab(tab, pane) {
+    const tabs = workTabs()
+    if (splitTab || tabs.length < 2) return
+    const remaining = frontTab === tab ? tabs.findLast(item => item !== tab) : frontTab
+    for (const item of tabs) item.pane = item === tab ? pane : 1 - pane
+    frontTab = pane === 0 ? tab : remaining
+    splitTab = pane === 1 ? tab : remaining
+    splitRatio = 50
+    selectTab(tab)
+    tab.button.focus({ preventScroll: true })
+  }
+
+  function canArrangeTabs() {
+    return isWorkspace() && tabletLayout && currentView !== 'activity' && !approvals.isOpen
+  }
+
+  let draggedTab = null
+  function bindTabDrag(tab) {
+    tab.row.addEventListener('dragstart', event => {
+      if (!canArrangeTabs() || (!splitTab && workTabs().length < 2) || !event.dataTransfer) {
+        event.preventDefault()
+        return
+      }
+      draggedTab = tab
+      event.dataTransfer.effectAllowed = 'move'
+      event.dataTransfer.setData('application/x-ezshell-workspace-tab', 'move')
+    })
+    tab.row.addEventListener('dragend', () => {
+      draggedTab = null
+      showTabDrop(null)
+    })
+  }
+
+  function tabDropTarget(event) {
+    if (!draggedTab || !workTabs().includes(draggedTab) || !canArrangeTabs()) return null
+    const { left, top, right, bottom, width, height } = splitRoot.getBoundingClientRect()
+    const { clientX: x, clientY: y } = event
+    if (x < left || x > right || y < top || y > bottom) return null
+    if (splitVisible()) {
+      const target = 1 - draggedTab.pane
+      const header = $(target === 1 ? 'workspace-tabs-split' : 'workspace-tabs')
+      if (event.target?.closest?.('.workspace-pane-tabs') === header) return { pane: target, header }
+    }
+    const vertical = stackedPanes
+    const band = Math.min(48, (vertical ? height : width) * .25)
+    const start = vertical ? y - top : x - left
+    const end = vertical ? bottom - y : right - x
+    const pane = start < band ? 0 : end < band ? 1 : null
+    if (pane === null || (splitVisible() && pane === draggedTab.pane)) return null
+    return { pane, edge: pane === 0 ? 'start' : 'end' }
+  }
+
+  function showTabDrop(target) {
+    splitRoot.removeAttribute('data-drop-edge')
+    $('workspace-tabs').toggleAttribute('data-drop-target', target?.header === $('workspace-tabs'))
+    $('workspace-tabs-split').toggleAttribute('data-drop-target', target?.header === $('workspace-tabs-split'))
+    if (target?.edge) splitRoot.setAttribute('data-drop-edge', target.edge)
+    const hint = $('workspace-drop-preview')
+    hint.hidden = !target?.edge
+    if (target?.edge) hint.textContent = splitVisible() ? '다른 화면으로 옮기기' : '화면 나누기'
+  }
+
+  splitRoot.addEventListener('dragover', event => {
+    if (!draggedTab) return
+    const target = tabDropTarget(event)
+    showTabDrop(target)
+    if (!target) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+  })
+  splitRoot.addEventListener('dragleave', event => {
+    if (event.target === splitRoot || (event.relatedTarget && !splitRoot.contains(event.relatedTarget))) showTabDrop(null)
+  })
+  splitRoot.addEventListener('drop', event => {
+    if (!draggedTab) return
+    const target = tabDropTarget(event)
+    const tab = draggedTab
+    draggedTab = null
+    showTabDrop(null)
+    if (!target) return
+    event.preventDefault()
+    if (splitVisible()) moveTab(tab, target.pane)
+    else splitWithTab(tab, target.pane)
+  })
 
   function removeTabs(matches) {
     const removed = openTabs.filter(matches)
     if (!removed.length) return
-    const index = openTabs.indexOf(frontTab)
+    const previous = openTabs
     if (removed.includes(viewer)) pauseViewer()
-    if (removed.includes(splitTab)) {
-      pauseSecondary()
-      splitTab = null
-      secondFocused = false
-    }
+    if (removed.includes(secondaryViewer)) pauseSecondary()
     for (const tab of removed) {
       if (tab.shellId) send({ type: 'close', shellId: tab.shellId })
       tab.terminal?.dispose()
       tab.host?.remove()
     }
     openTabs = openTabs.filter(tab => !removed.includes(tab))
-    if (removed.includes(frontTab)) {
-      const choices = openTabs.filter(tab => tab !== splitTab)
-      frontTab = choices[Math.min(index, choices.length - 1)] ?? splitTab
-      if (frontTab && frontTab === splitTab) {
-        pauseSecondary()
-        splitTab = null
-      }
-      if (currentView !== 'activity') return selectPrimary(frontTab)
+    for (const group of groupPanes.keys()) {
+      if (!openTabs.some(tab => tab.group.id === group)) groupPanes.delete(group)
     }
-    layout()
-    fitTerminal()
-    renderTabs()
+    recoverActiveGroup(previous)
+    refreshWorkspace()
   }
 
   function openPcTab(item) {
@@ -1065,17 +1272,19 @@
   function openViewer(type, key, item, name) {
     let tab = openTabs.find(tab => tab.type === type && tab.key === key)
     if (!tab) {
-      tab = { type, key, item, name }
+      tab = { type, key, item, name, group: groupOf(item.project), pane: 0 }
       openTabs.push(tab)
     }
     // Re-selecting a list item can retry a viewer that ended in the foreground.
     if (viewer === tab && (type === 'pc' ? pcTabs.selectedId === null : agents.isOpen === false)) pauseViewer()
     if (secondaryViewer === tab && (type === 'pc' ? secondary.pc.selectedId === null : secondary.chat.isOpen === false)) pauseSecondary()
-    selectTab(tab)
+    openInFocusedPane(tab)
   }
 
   function syncTabs(type, items, keyOf) {
-    const activeWasWaiting = frontTab?.type === type && frontTab.waiting
+    const focused = focusedTab()
+    const activeWasWaiting = primaryTab()?.type === type && primaryTab().waiting
+    let changedGroup = false
     const list = new Map((Array.isArray(items) ? items : []).filter(Boolean).map(item => [keyOf(item), item]))
     for (const tab of openTabs) {
       if (tab.type !== type) continue
@@ -1083,15 +1292,25 @@
       tab.waiting = false
       tab.unavailable = !found
       if (found) {
+        const group = groupOf(found.project)
+        if (tab.group.id !== group.id) {
+          tab.pane = 0
+          changedGroup = true
+        }
+        tab.group = group
         tab.item = found
         tab.name = type === 'chat' ? agents.nameOf(found) : found.name
       }
     }
-    if (activeWasWaiting && currentView !== 'activity') {
-      const restoreSecond = secondFocused && splitVisible()
-      selectPrimary(frontTab)
-      if (restoreSecond) setPaneFocus(true)
+    if (changedGroup) {
+      if (focused && focused.group.id !== activeGroup) {
+        enterGroup(focused.group.id)
+        frontTab = focused
+        secondFocused = false
+      } else recoverActiveGroup()
+      refreshWorkspace()
     }
+    else if (activeWasWaiting && currentView !== 'activity') renderWorkspace()
     else {
       layoutSplit()
       renderTabs()
@@ -1115,10 +1334,11 @@
     if (shellId) send({ type: 'resize', shellId, cols: terminal.cols, rows: terminal.rows })
   }
 
-  function openTerminal(session) {
-    const existing = openTabs.find(tab => tab.type === 'ssh' && tab.key === session.id)
-    if (existing && !existing.ended) return selectTab(existing)
-    const tab = existing ?? { type: 'ssh', key: session.id, name: session.name }
+  function openTerminal(session, project = GENERAL) {
+    const group = groupOf(project)
+    const existing = openTabs.find(tab => tab.type === 'ssh' && tab.key === session.id && tab.group.id === group.id)
+    if (existing && !existing.ended) return openInFocusedPane(existing)
+    const tab = existing ?? { type: 'ssh', key: session.id, name: session.name, group, pane: 0 }
     tab.terminal?.dispose()
     tab.ended = null
     tab.pending = `q${++openSequence}`
@@ -1128,7 +1348,7 @@
     host.className = 'remote-shell-host'
     terminal.loadAddon(fit)
     if (!existing) openTabs.push(tab)
-    selectTab(tab)
+    openInFocusedPane(tab)
     terminal.open(host)
     fitTerminal()
     terminal.onData(data => sendTerminalInput(data, tab))
@@ -1196,8 +1416,9 @@
 
   function setCtrl(isOn) {
     isCtrlArmed = isOn
-    $('keys').querySelector('[data-key="ctrl"]').setAttribute('aria-pressed', String(isOn && !secondFocused))
-    secondary?.find('keys').querySelector('[data-key="ctrl"]').setAttribute('aria-pressed', String(isOn && secondFocused))
+    const second = splitVisible() && secondFocused
+    $('keys').querySelector('[data-key="ctrl"]').setAttribute('aria-pressed', String(isOn && !second))
+    secondary?.find('keys').querySelector('[data-key="ctrl"]').setAttribute('aria-pressed', String(isOn && second))
   }
 
   function setKeysVisible(visible) {
@@ -1206,12 +1427,13 @@
   }
 
   function isVisibleTab(tab) {
-    return Boolean(tab && ((tab === frontTab && currentView === tabViews[tab.type]) || (splitVisible() && tab === splitTab)))
+    return Boolean(tab && !tab.waiting && !tab.unavailable
+      && ((tab === primaryTab() && currentView === tabViews[tab.type]) || (splitVisible() && tab === splitTab)))
   }
 
   function sendToTerminal(data, tab) {
     if (!data || !isVisibleTab(tab)) return
-    if (tab.type === 'pc') (tab === splitTab ? secondary.pc : pcTabs).input(data)
+    if (tab.type === 'pc') pcViewerOf(tab)?.input(data)
     else if (tab.shellId) send({ type: 'input', shellId: tab.shellId, data })
   }
 
@@ -1262,7 +1484,7 @@
   }
 
   function pcViewerOf(tab) {
-    return tab === splitTab ? secondary?.pc : pcTabs
+    return splitVisible() && tab === splitTab ? secondary?.pc : pcTabs
   }
 
   function terminalOf(tab) {
@@ -1286,19 +1508,24 @@
     if (!isWorkspace() || approvals.isOpen) return null
     const row = target?.closest?.('.workspace-tab')
     const tab = row && openTabs.find(item => item.row === row)
-    if (tab) return {
-      focus: tab.button,
-      options: [
+    if (tab) {
+      const tabs = workTabs()
+      const peers = splitVisible() ? tabs.filter(item => item.pane === tab.pane) : tabs
+      const trailing = peers.slice(peers.indexOf(tab) + 1)
+      const options = [
         { text: '탭 닫기', run: () => removeTabs(item => item === tab) },
-        { text: '오른쪽 탭 모두 닫기', disabled: tab === openTabs.at(-1),
-          run: () => {
-            const index = openTabs.indexOf(tab)
-            if (index >= 0) removeTabs((item, position) => position > index)
-          } }
+        { text: '오른쪽 탭 모두 닫기', disabled: !trailing.length, run: () => removeTabs(item => trailing.includes(item)) }
       ]
+      if (canArrangeTabs()) {
+        if (splitVisible()) options.push({ text: '다른 화면으로 옮기기', run: () => moveTab(tab, 1 - tab.pane) })
+        else options.push({ text: '화면 나누기', disabled: tabs.length < 2, run: () => splitWithTab(tab, 1) })
+      }
+      return { focus: tab.button, options }
     }
+    const chip = target?.closest?.('.remote-agent-chip')
+    if (chip) return { focus: chip, label: chip.title, options: [{ text: '채팅 열기', run: () => chip.click() }] }
     const xterm = target?.closest?.('.xterm')
-    const current = xterm && [frontTab, splitTab].find(item => terminalOf(item)?.element === xterm)
+    const current = xterm && [primaryTab(), splitTab].find(item => terminalOf(item)?.element === xterm)
     if (!current) return null
     const term = terminalOf(current)
     const canPaste = current.type === 'ssh' ? Boolean(current.shellId) : Boolean(pcViewerOf(current)?.canInput)
@@ -1312,17 +1539,23 @@
   function closeContextMenu(restoreFocus = false) {
     if (contextMenu.hidden) return
     contextMenu.hidden = true
+    if (groupSelectors.includes(contextOrigin)) contextOrigin.setAttribute('aria-expanded', 'false')
     if (restoreFocus && contextOrigin?.isConnected) contextOrigin.focus({ preventScroll: true })
     contextOrigin = null
   }
 
   function openContextMenu(event, menu) {
     contextOrigin = menu.focus
-    contextMenu.replaceChildren(...menu.options.map(option => {
+    const buttons = menu.options.map(option => {
       const button = document.createElement('button')
       button.type = 'button'
       button.setAttribute('role', 'menuitem')
       button.textContent = option.text
+      if (option.count !== undefined) {
+        button.dataset.tabCount = String(option.count)
+        button.setAttribute('aria-label', `${option.text} · 탭 ${option.count}개`)
+        if (option.current) button.setAttribute('aria-current', 'true')
+      }
       button.disabled = Boolean(option.disabled)
       button.addEventListener('click', () => {
         ignorePressClick = false
@@ -1330,7 +1563,15 @@
         option.run()
       })
       return button
-    }))
+    })
+    contextMenu.replaceChildren(...buttons)
+    if (menu.label) {
+      const label = document.createElement('p')
+      label.className = 'workspace-context-label'
+      label.textContent = menu.label
+      contextMenu.insertBefore(label, buttons[0])
+      contextMenu.setAttribute('aria-label', menu.label)
+    } else contextMenu.setAttribute('aria-label', '작업 메뉴')
     contextMenu.hidden = false
     const viewport = window.visualViewport
     const left = viewport?.offsetLeft || 0
@@ -1352,6 +1593,7 @@
     ignorePressClick = false
     clearPress()
     if (contextMenu.contains(event.target)) return
+    if (groupSelectors.includes(contextOrigin) && contextOrigin.contains(event.target)) return
     closeContextMenu()
     if (event.pointerType !== 'touch' || !contextActions(event.target)) return
     const press = { x: event.clientX, y: event.clientY }
@@ -1411,12 +1653,12 @@
     // A tap on the key row must not take the keyboard away from the terminal.
     keys.addEventListener('mousedown', event => event.preventDefault())
   }
-  bindKeys($('keys'), () => frontTab, pcTabs)
+  bindKeys($('keys'), primaryTab, pcTabs)
 
   $('terminal-close').addEventListener('click', () => removeTabs(tab => tab === activeShell()))
   $('terminal-reopen').addEventListener('click', () => reopenShell(activeShell()))
   function reopenShell(tab) {
-    if (tab?.ended) openTerminal({ id: tab.key, name: tab.name })
+    if (tab?.ended) openTerminal({ id: tab.key, name: tab.name }, tab.group)
   }
   function fitViewport() {
     closeContextMenu()
@@ -1438,30 +1680,17 @@
       style.removeProperty('--visible-height')
       style.removeProperty('--visible-top')
     }
-    layout()
-    fitTerminal()
-    keepFrontTabInView()
+    // A soft keyboard can temporarily make the layout viewport short or landscape.
+    if (!keyboardOpen) {
+      if (tabletLayout !== workspaceSize.matches) drawerOpen = false
+      tabletLayout = workspaceSize.matches
+      stackedPanes = portrait.matches
+    }
+    refreshWorkspace()
   }
   window.addEventListener('resize', fitViewport)
-  workspaceSize.addEventListener('change', () => {
-    drawerOpen = false
-    layout()
-    fitTerminal()
-    keepFrontTabInView()
-  })
-  splitSize.addEventListener('change', () => {
-    if (!splitSize.matches && secondFocused && splitTab) {
-      const previous = frontTab
-      const chosen = splitTab
-      pauseSecondary()
-      splitTab = previous
-      selectPrimary(chosen)
-    } else {
-      layout()
-      fitTerminal()
-      renderTabs()
-    }
-  })
+  workspaceSize.addEventListener('change', fitViewport)
+  portrait.addEventListener('change', fitViewport)
   window.visualViewport?.addEventListener('resize', fitViewport)
   window.visualViewport?.addEventListener('scroll', fitViewport)
   if (window.visualViewport) fitViewport()

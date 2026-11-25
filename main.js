@@ -1,4 +1,6 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, shell, Notification, Menu, clipboard, ClipboardItem, nativeImage, systemPreferences, protocol } = require('electron');
+const electron = require('electron');
+const { app, ipcMain, dialog, safeStorage, shell, Notification, Menu, clipboard, ClipboardItem, nativeImage, systemPreferences, protocol } = electron;
+const { enabled: hiddenTestWindows, BrowserWindow } = require('./src/testWindows.js').createTestWindows(electron);
 const path = require('path');
 const fs = require('fs');
 const userDataDir = require('./src/userDataDir.js');
@@ -564,9 +566,10 @@ const dbIpc = registerDbIpc({
 // ==================== Local terminal tabs ====================
 // Shells of this PC (src/localShell.js). Only the main window opens and drives them.
 const fromMainWindow = (event) => Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
+const desktopCapturer = hiddenTestWindows ? { getSources: async () => [] } : electron.desktopCapturer;
 const workOverview = require('./src/ipc/workOverview.js').registerWorkOverviewIpc({
   ipcMain,
-  desktopCapturer: require('electron').desktopCapturer,
+  desktopCapturer,
   getDisplay: bounds => require('electron').screen.getDisplayMatching(bounds),
   getWindow: () => mainWindow,
   isLocked: () => isAppLocked
@@ -580,7 +583,7 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
   BrowserWindow,
   clipboard,
   ClipboardItem,
-  desktopCapturer: require('electron').desktopCapturer,
+  desktopCapturer,
   nativeImage: require('electron').nativeImage,
   getDisplay: () => {
     const { screen } = require('electron');
@@ -597,11 +600,11 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
   focusWindow: win => globalDoubleTab.focusCapture(win.getNativeWindowHandle()),
   onSent: ({ id }) => {
     try {
-      if (Notification.isSupported()) new Notification({ title: 'ezShell 바로작업', body: `${id}에 캡처를 보냈습니다.` }).show();
+      if (!hiddenTestWindows && Notification.isSupported()) new Notification({ title: 'ezShell 바로작업', body: `${id}에 캡처를 보냈습니다.` }).show();
     } catch { /* The chat submission has already succeeded. */ }
   },
   onError: () => {
-    if (Notification.isSupported()) new Notification({ title: 'ezShell 영역 캡처', body: '화면을 캡처하지 못했습니다.' }).show();
+    if (!hiddenTestWindows && Notification.isSupported()) new Notification({ title: 'ezShell 영역 캡처', body: '화면을 캡처하지 못했습니다.' }).show();
   }
 });
 // The work overview shortcut from any program (default Ctrl+Alt+Space, the window sends its setting): the
@@ -610,17 +613,18 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
 // The overview opens on the monitor of the program that was in front (the helper gives the middle of
 // its window in screen pixels), not on ezShell's.
 const globalDoubleTab = require('./src/globalDoubleTab.js').createGlobalDoubleTab({
+  allowNativeHook: !hiddenTestWindows,
   onCapture: () => { void quickCapture.start().finally(() => globalDoubleTab.endCapture()); },
   // Esc right after the hotkey drops only this capture: earlier ones of the run stay with their strip
   onCaptureCancel: () => quickCapture.cancelCapture(),
   onOverview: point => {
     if (!mainWindow || mainWindow.isDestroyed() || isAppLocked) return;
     const { screen } = require('electron');
-    workOverview.aimAt(point ? screen.getDisplayNearestPoint(screen.screenToDipPoint ? screen.screenToDipPoint(point) : point) : null);
+    const requestId = workOverview.aimAt(point ? screen.getDisplayNearestPoint(screen.screenToDipPoint ? screen.screenToDipPoint(point) : point) : null);
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
-    mainWindow.webContents.send('work-overview-request');
+    if (requestId !== null) mainWindow.webContents.send('work-overview-request', requestId);
   }
 });
 setInterval(() => globalDoubleTab.setEnabled(!isAppLocked && Boolean(mainWindow) && !mainWindow.isDestroyed()), 1000).unref();
@@ -1181,6 +1185,7 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   isAppLocked = true;
   agentMessages.invalidateFreshRoleChecks();
   globalDoubleTab.setEnabled(false);
+  workOverview.cancel();
   quickCapture.cancel();
   browserReview.close();
   savedSessionRecords = null;
@@ -1273,6 +1278,7 @@ ipcMain.handle('reset-master-password', async () => {
   isAppLocked = true;
   agentMessages.invalidateFreshRoleChecks();
   globalDoubleTab.setEnabled(false);
+  workOverview.cancel();
   quickCapture.cancel();
   browserReview.close();
   savedSessionRecords = null;
@@ -1454,6 +1460,7 @@ function revealMainWindow() {
 
 function flashMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (hiddenTestWindows) return true;
   if (!mcpFlashHandlerAttached) {
     const window = mainWindow;
     window.on('focus', () => window.flashFrame(false));
@@ -1467,7 +1474,7 @@ function flashMainWindow() {
 /** Flash the taskbar and show an OS notification. Never includes the command (toasts persist in the Action Center). */
 function alertMcpApproval(request) {
   if (!flashMainWindow()) return;
-  if (Notification.isSupported()) {
+  if (!hiddenTestWindows && Notification.isSupported()) {
     mcpNotice = new Notification({
       title: approvalNoticeTitle(request),
       body: `${request.sessionName} · 위험도 ${MCP_LEVEL_LABELS[request.level] || request.level}`
@@ -1484,7 +1491,7 @@ function alertAgentEscalation({ id, shellId, kind }) {
   const label = HUMAN_BLOCK_LABELS[kind];
   sendToLocalWindow('agent-escalation', { id, shellId, title, label });
   try {
-    if (Notification.isSupported()) {
+    if (!hiddenTestWindows && Notification.isSupported()) {
       agentEscalationNotice = new Notification({ title, body: label });
       agentEscalationNotice.on('click', revealMainWindow);
       agentEscalationNotice.show();
@@ -1500,7 +1507,7 @@ function alertAgentEscalation({ id, shellId, kind }) {
  * It does not take keyboard focus: an Enter or Esc typed into another program would answer the dialog.
  */
 function keepMainWindowOnTop(onTop) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (hiddenTestWindows || !mainWindow || mainWindow.isDestroyed()) return;
   try {
     mainWindow.setAlwaysOnTop(onTop);
     if (!onTop) return;

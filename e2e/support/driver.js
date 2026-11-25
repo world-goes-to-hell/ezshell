@@ -45,7 +45,7 @@ async function findPage(match, ms = 30000) {
 }
 
 /** Attaches to a window of the app: the main one, or the one `match` picks */
-async function connect(match = isMainPage) {
+async function connect(match = isMainPage, { focus = true } = {}) {
   const page = await findPage(match)
   if (!page) throw new Error('the app has no such page')
   const ws = new WebSocket(page.webSocketDebuggerUrl)
@@ -60,10 +60,23 @@ async function connect(match = isMainPage) {
     else if (message.method) events.push(message)
   }
   const send = (method, params = {}) => new Promise((resolve) => {
+    if (process.env.EZSHELL_TEST_HIDDEN_WINDOWS === '1') {
+      if (method === 'Page.bringToFront') {
+        method = 'Emulation.setFocusEmulationEnabled'
+        params = { enabled: true }
+      } else if (method === 'Browser.setWindowBounds') {
+        const { width, height } = params.bounds
+        if (width === undefined && height === undefined) return resolve({ result: {} })
+        params = { ...params, bounds: { width, height } }
+      }
+    }
     const n = ++id
     pending.set(n, resolve)
     ws.send(JSON.stringify({ id: n, method, params }))
   })
+  if (focus && process.env.EZSHELL_TEST_HIDDEN_WINDOWS === '1') {
+    await send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  }
   const js = async (expression) => {
     const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails))

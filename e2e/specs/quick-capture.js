@@ -329,8 +329,10 @@ const { check, finish } = createChecks()
   const claudeTarget = `Claude Code · ${claudeRole} · claude-2`
   check('the chosen project shows its agent with the role in the title and accessible name', await overlay.until(`
     document.querySelectorAll('.agent').length === 1 &&
-    document.querySelector('.agent-title').textContent.startsWith(${JSON.stringify(claudeTarget)}) &&
-    document.querySelector('.agent').getAttribute('aria-label') === ${JSON.stringify(claudeTarget + '에 전송')}
+    document.querySelector('.agent-title').textContent === ${JSON.stringify(claudeRole + ' · claude-2')} &&
+    document.querySelector('.agent-icon[data-kind="claude"]')?.textContent === 'Claude Code' &&
+    /^.+에 전송$/.test(document.querySelector('.agent').getAttribute('aria-label')) &&
+    document.querySelector('.agent').getAttribute('aria-label').startsWith(${JSON.stringify(claudeTarget)})
   `))
   check('the longest role wraps and leaves room for Send in a narrow list', await overlay.js(`(() => {
     const review = document.querySelector('#review')
@@ -357,8 +359,9 @@ const { check, finish } = createChecks()
   await overlay.until('!document.querySelector("#picker").hidden')
   await chooseProject(overlay, service)
   check('an agent without a role keeps its usual label', await overlay.until(`
-    document.querySelector('.agent-title')?.textContent.startsWith('Codex · codex-1') &&
-    document.querySelector('.agent')?.getAttribute('aria-label') === 'Codex · codex-1에 전송'
+    document.querySelector('.agent-title')?.textContent === 'codex-1' &&
+    !!document.querySelector('.agent-icon[data-kind="codex"]') &&
+    /^Codex · codex-1( · [^·]+)?에 전송$/.test(document.querySelector('.agent')?.getAttribute('aria-label') ?? '')
   `))
   await overlay.shot('quick-capture-agent')
   await clickButton(overlay, '.agent')
@@ -479,7 +482,7 @@ const { check, finish } = createChecks()
     await clickClosing(overlay, '#more')
     if (!await waitFor(async () => !(await pages()).some(isOverlay))) throw new Error('추가 캡처 did not close the overlay')
     overlay.close()
-    const chip = await connect(isChip)
+    const chip = await connect(isChip, { focus: false })
     if (!await chip.until(`document.querySelector('#count').textContent.length > 0`)) throw new Error('the strip did not show its count')
     return chip
   }

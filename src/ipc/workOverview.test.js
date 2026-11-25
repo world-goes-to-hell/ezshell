@@ -30,7 +30,7 @@ function setup({ fullscreen = false, locked = false, maximized = false } = {}) {
   const event = { sender: webContents, senderFrame: webContents.mainFrame }
   return {
     win, sources, getDisplay, desktopCapturer, api,
-    show: (sender = event) => handlers.get('work-overview-show')(sender),
+    show: (requestId, sender = event) => handlers.get('work-overview-show')(sender, requestId),
     hide: () => handlers.get('work-overview-hide')(event)
   }
 }
@@ -67,11 +67,11 @@ describe('monitor work overview', () => {
 
   const other = { id: 4, bounds: { x: -1920, y: 0, width: 1920, height: 1080 }, workArea: { x: -1920, y: 0, width: 1920, height: 1040 } }
 
-  it('opens on the monitor Tab Tab was pressed on and puts the window back afterwards', async () => {
-    const { show, hide, win, sources, api } = setup()
-    api.aimAt(other)
-    expect(await show()).toEqual({ backdrop: new Uint8Array([4]) })
-    expect(sources[1].thumbnail.toJPEG).not.toHaveBeenCalled()
+  it('opens on the external shortcut monitor without calling the capturer, then restores the window', async () => {
+    const { show, hide, win, desktopCapturer, api } = setup()
+    const requestId = api.aimAt(other)
+    expect(await show(requestId)).toEqual({ backdrop: null })
+    expect(desktopCapturer.getSources).not.toHaveBeenCalled()
     // Moved onto that monitor (same size, in the middle of its work area) before going fullscreen
     expect(win.setBounds).toHaveBeenCalledWith({ x: -1560, y: 120, width: 1200, height: 800 })
     expect(win.setBounds.mock.invocationCallOrder[0]).toBeLessThan(win.setFullScreen.mock.invocationCallOrder[0])
@@ -82,8 +82,7 @@ describe('monitor work overview', () => {
 
   it('brings a maximized window back maximized, and forgets an old aim', async () => {
     const maximized = setup({ maximized: true })
-    maximized.api.aimAt(other)
-    await maximized.show()
+    await maximized.show(maximized.api.aimAt(other))
     expect(maximized.win.unmaximize).toHaveBeenCalled()
     maximized.hide()
     expect(maximized.win.setBounds).toHaveBeenLastCalledWith({ x: 120, y: 140, width: 1000, height: 700 })
@@ -92,8 +91,9 @@ describe('monitor work overview', () => {
     vi.useFakeTimers()
     try {
       const late = setup()
-      late.api.aimAt(other)
+      const requestId = late.api.aimAt(other)
       vi.advanceTimersByTime(5000)
+      expect(await late.show(requestId)).toBeNull()
       expect(await late.show()).toEqual({ backdrop: new Uint8Array([9]) })
       expect(late.win.setBounds).not.toHaveBeenCalled()
     } finally {
@@ -103,20 +103,42 @@ describe('monitor work overview', () => {
 
   it('stays put when aimed at its own monitor or when the window is already fullscreen', async () => {
     const own = setup()
-    own.api.aimAt({ id: 9, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: { x: 0, y: 0, width: 1920, height: 1040 } })
-    await own.show()
+    await own.show(own.api.aimAt({ id: 9, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: { x: 0, y: 0, width: 1920, height: 1040 } }))
     expect(own.win.setBounds).not.toHaveBeenCalled()
+    expect(own.desktopCapturer.getSources).not.toHaveBeenCalled()
     const full = setup({ fullscreen: true })
-    full.api.aimAt(other)
-    await full.show()
+    await full.show(full.api.aimAt(other))
     expect(full.win.setBounds).not.toHaveBeenCalled()
+    expect(full.desktopCapturer.getSources).not.toHaveBeenCalled()
+  })
+
+  it('keeps a pending external shortcut separate from an in-window request', async () => {
+    const { show, win, api } = setup()
+    api.aimAt(other)
+    expect(await show()).toEqual({ backdrop: new Uint8Array([9]) })
+    expect(win.setBounds).not.toHaveBeenCalled()
+  })
+
+  it('ignores external requests that were cancelled, superseded or already used', async () => {
+    const { api, show, hide, win, desktopCapturer } = setup()
+    const cancelled = api.aimAt(other)
+    hide()
+    expect(await show(cancelled)).toBeNull()
+    const superseded = api.aimAt(other)
+    const current = api.aimAt(null)
+    expect(await show(superseded)).toBeNull()
+    expect(await show(current)).toEqual({ backdrop: null })
+    hide()
+    expect(await show(current)).toBeNull()
+    expect(win.setBounds).not.toHaveBeenCalled()
+    expect(desktopCapturer.getSources).not.toHaveBeenCalled()
   })
 
   it('accepts requests only from the unlocked main renderer', async () => {
     const locked = setup({ locked: true })
     const unlocked = setup()
     expect(await locked.show()).toBeNull()
-    expect(await unlocked.show({ sender: unlocked.win.webContents, senderFrame: {} })).toBeNull()
+    expect(await unlocked.show(undefined, { sender: unlocked.win.webContents, senderFrame: {} })).toBeNull()
     expect(locked.desktopCapturer.getSources).not.toHaveBeenCalled()
     expect(unlocked.desktopCapturer.getSources).not.toHaveBeenCalled()
   })

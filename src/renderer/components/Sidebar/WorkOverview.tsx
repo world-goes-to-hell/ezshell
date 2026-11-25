@@ -69,11 +69,11 @@ export function WorkOverview({ groupView }: { groupView: WorkView }) {
       event.stopPropagation()
       open(event.target instanceof HTMLElement ? event.target : null)
     }
-    const open = (from: HTMLElement | null) => {
+    const open = (from: HTMLElement | null, requestId?: number) => {
       returnFocus.current = from
       const request = Symbol()
       pending.current = request
-      void window.electronAPI.showWorkOverview().then(result => {
+      void window.electronAPI.showWorkOverview(requestId).then(result => {
         if (pending.current !== request) return
         pending.current = null
         if (result) {
@@ -87,9 +87,9 @@ export function WorkOverview({ groupView }: { groupView: WorkView }) {
       })
     }
     // The shortcut pressed in another program: main brought this window forward (src/globalDoubleTab.js)
-    const stopRequests = window.electronAPI.onWorkOverviewRequest?.(() => {
+    const stopRequests = window.electronAPI.onWorkOverviewRequest?.(requestId => {
       if (pending.current || document.querySelector(OPEN_DIALOG)) return
-      open(document.activeElement instanceof HTMLElement ? document.activeElement : null)
+      open(document.activeElement instanceof HTMLElement ? document.activeElement : null, requestId)
     })
     window.addEventListener('keydown', onKeyDown, true)
     return () => {

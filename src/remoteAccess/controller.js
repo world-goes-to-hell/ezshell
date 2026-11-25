@@ -118,7 +118,7 @@ function sessionTree({ folders, sessions, expandedIds = [], openTabs = new Map()
  * has that session's name, folder and colour (as in the session list); a quick connect is only called
  * one: its name may be the address, which never goes to the phone.
  */
-function tabList({ tabs, sessions, folders }) {
+function tabList({ tabs, sessions, folders, groups = new Map() }) {
   const byId = new Map((Array.isArray(sessions) ? sessions : []).filter((session) => session && session.id && !session.decryptionFailed).map((session) => [String(session.id), session]))
   const folderNames = new Map((Array.isArray(folders) ? folders : []).filter((folder) => folder && typeof folder.id === 'string').map((folder) => [folder.id, String(folder.name ?? '')]))
   return (Array.isArray(tabs) ? tabs : []).filter((tab) => tab && typeof tab.id === 'string').map((tab) => {
@@ -130,8 +130,52 @@ function tabList({ tabs, sessions, folders }) {
       color: saved ? colorOf(saved.backgroundColor) : null,
       connected: tab.connected === true,
       // A quick connect's tab is shown only: typing goes into tabs of saved sessions
-      inputAllowed: Boolean(saved)
+      inputAllowed: Boolean(saved),
+      ...(groups.has(tab.id) ? { project: groups.get(tab.id) } : {})
     }
+  })
+}
+
+// Only opaque project ids, labels and ids of known saved sessions leave main.
+const isProjectPath = value => typeof value === 'string' && value.length <= 4096 && path.isAbsolute(value) && !value.includes('\0')
+const isWorkspaceId = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\x00-\x1f\x7f]/.test(value)
+const workspaceLabel = value => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 120) : ''
+
+function workspaceMetadata(projects, groups, links, projectId) {
+  const byProject = new Map()
+  for (const project of projects.slice(0, 200)) {
+    const name = workspaceLabel(project?.name)
+    if (!name || !isProjectPath(project?.key) || !Array.isArray(project.worktrees)) continue
+    byProject.set(project.key, { key: project.key, name, worktrees: project.worktrees.slice(0, 200).filter(isProjectPath) })
+  }
+  const tabGroups = new Map()
+  for (const item of Array.isArray(groups) ? groups.slice(0, 2000) : []) {
+    if (!isWorkspaceId(item?.id) || typeof item.key !== 'string') continue
+    if (item.key === 'general') {
+      tabGroups.set(item.id, { id: 'general', name: '일반' })
+      continue
+    }
+    const pathKey = item.key.startsWith('folder:') ? item.key.slice(7) : item.key
+    const name = byProject.get(item.key)?.name ?? workspaceLabel(item.label)
+    if (name && isProjectPath(pathKey) && (byProject.has(item.key) || item.key.startsWith('folder:'))) {
+      tabGroups.set(item.id, { id: projectId(pathKey), name })
+    }
+  }
+  const linked = new Map()
+  for (const item of Array.isArray(links) ? links.slice(0, 200) : []) {
+    const project = byProject.get(item?.key)
+    if (!project || !Array.isArray(item.sessionIds)) continue
+    const sessionIds = [...new Set(item.sessionIds.slice(0, 50).filter(isWorkspaceId))]
+    if (sessionIds.length) linked.set(projectId(project.key), { name: project.name, sessionIds })
+  }
+  return { projects: [...byProject.values()], tabGroups, linked }
+}
+
+function linkedProjects(linked, sessions) {
+  const byId = new Map(sessions.map(({ id, name }) => [id, { id, name }]))
+  return [...linked].flatMap(([id, { name, sessionIds }]) => {
+    const servers = sessionIds.map(sessionId => byId.get(sessionId)).filter(Boolean)
+    return servers.length ? [{ id, name, servers }] : []
   })
 }
 
@@ -179,7 +223,8 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
 
   function listSessions() {
     if (isLocked()) return { folders: [], sessions: [] }
-    return sessionTree({ folders: readFolders(), sessions: readSessions(), expandedIds: readExpandedFolders(), openTabs: readOpenTabs() })
+    const tree = sessionTree({ folders: readFolders(), sessions: readSessions(), expandedIds: readExpandedFolders(), openTabs: readOpenTabs() })
+    return { ...tree, linkedProjects: linkedProjects(projectServerLinks, tree.sessions) }
   }
 
   /** MCP questions go to devices when the user wants that and a device is registered */
@@ -193,34 +238,29 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
   // The question a device answered last: tells "answered on the phone" from "answered on the PC"
   let answeredByDevice = null
   let localProjects = []
-  let browserGroups = new Map()
+  let pcGroups = new Map()
+  let projectServerLinks = new Map()
   const projectId = createProjectId()
 
   // The desktop already resolves repository and worktree membership. Keep paths on the PC.
-  const isProjectPath = value => typeof value === 'string' && value.length <= 4096 && path.isAbsolute(value) && !value.includes('\0')
-  ipcMain.on('remote-access-local-projects', (event, projects, reviewGroups) => {
-    if (!fromMainWindow(event) || event.senderFrame !== event.sender.mainFrame || isLocked() || !Array.isArray(projects)) return
-    localProjects = projects.slice(0, 200).flatMap(project => {
-      if (!isProjectPath(project?.key) || typeof project.name !== 'string' || !Array.isArray(project.worktrees)) return []
-      return [{ key: project.key, name: project.name.slice(0, 120), worktrees: project.worktrees.slice(0, 200).filter(isProjectPath) }]
-    })
+  ipcMain.on('remote-access-local-projects', (event, projects, groups, links) => {
+    if (!fromMainWindow(event) || !event.senderFrame || event.senderFrame !== event.sender.mainFrame || isLocked() || !Array.isArray(projects)) return
+    const workspace = workspaceMetadata(projects, groups, links, projectId)
+    const changedGroups = JSON.stringify([...pcGroups]) !== JSON.stringify([...workspace.tabGroups])
+    const changedLinks = JSON.stringify([...projectServerLinks]) !== JSON.stringify([...workspace.linked])
+    localProjects = workspace.projects
+    pcGroups = workspace.tabGroups
+    projectServerLinks = workspace.linked
     server?.refreshAgents()
-    if (Array.isArray(reviewGroups)) {
-      browserGroups = new Map(reviewGroups.slice(0, 200).flatMap(item => {
-        if (typeof item?.id !== 'string' || !item.id.startsWith('browser:') || item.id.length > 80
-          || typeof item.label !== 'string' || typeof item.key !== 'string') return []
-        const key = item.key.startsWith('folder:') ? item.key.slice('folder:'.length) : item.key
-        if (key !== 'general' && !isProjectPath(key)) return []
-        return [[item.id, { id: key === 'general' ? 'general' : projectId(key), name: item.label.slice(0, 120) }]]
-      }))
-    }
+    if (changedGroups) server?.tabsChanged()
+    if (changedLinks) server?.sessionsChanged()
   })
 
   /** The PC's tabs as the server uses them: listed, followed and typed into only while they are open */
   const tabAccess = pcTabs && {
     /** `휴대폰에서 PC 탭 이어 보기` is on */
     get enabled() { return tabsAllowed() },
-    list: () => (tabsAllowed() ? tabList({ tabs: pcTabs.list(), sessions: readSessions(), folders: readFolders() }) : []),
+    list: () => (tabsAllowed() ? tabList({ tabs: pcTabs.list(), sessions: readSessions(), folders: readFolders(), groups: pcGroups }) : []),
     attach: (id, handlers) => {
       const tab = tabAccess.list().find((entry) => entry.id === id)
       return tab ? { ...tabMirror.attach(id, handlers), name: tab.name, inputAllowed: tab.inputAllowed } : null
@@ -252,7 +292,7 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
         browser: browserReview && {
           get enabled() { return browserAllowed() },
           list: () => browserReview.list().map(tab => {
-            const project = browserGroups.get(tab.id) ?? null
+            const project = pcGroups.get(tab.id) ?? null
             return { ...tab, kind: 'browser', folder: project?.name ?? null, project }
           }),
           tab: browserReview.tab,
@@ -513,4 +553,4 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
   }
 }
 
-module.exports = { registerRemoteAccess, sessionTree, tabList, remoteThemeOf, REMOTE_APPROVAL_WAIT_MS, NOTIFY_AFTER_MS }
+module.exports = { registerRemoteAccess, sessionTree, tabList, workspaceMetadata, linkedProjects, remoteThemeOf, REMOTE_APPROVAL_WAIT_MS, NOTIFY_AFTER_MS }

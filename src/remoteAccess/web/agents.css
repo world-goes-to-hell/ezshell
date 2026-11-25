@@ -6,74 +6,108 @@
   --agent-trace-reduced-width: 2px;
 }
 
-.remote-agent-project { margin-bottom: 8px; }
-
-.remote-agent-project-toggle {
+.remote-agent-project-heading {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 36px;
-  padding: 4px 8px;
-  border-color: transparent;
-  background: var(--bg);
+  min-height: 34px;
+  gap: 4px;
+  padding-inline: 3px;
+}
+
+.remote-agent-project-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 3px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
   text-align: start;
   font-size: 13px;
 }
 
-.remote-agent-project-toggle::before {
+.remote-agent-project-title::before {
   content: '';
   flex: none;
+  width: 11px;
+  height: 8px;
+  border: 1px solid var(--muted);
+  border-radius: 1px;
+}
+
+.remote-agent-project-toggle::before {
   width: 6px;
   height: 6px;
+  margin-inline: 1px 4px;
+  border: 0;
+  border-radius: 0;
   border-inline-end: 2px solid currentColor;
   border-block-end: 2px solid currentColor;
   transform: rotate(-45deg);
 }
 
 .remote-agent-project-toggle[aria-expanded='true']::before { transform: rotate(45deg); }
-.remote-agent-project-count { flex: none; margin-inline-start: auto; color: var(--muted); font-size: 12px; }
+.remote-agent-project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .remote-agent-project-children {
-  margin: 3px 0 0 7px;
-  padding-inline-start: 7px;
+  margin-inline-start: 8px;
+  padding-inline-start: 6px;
   border-inline-start: 1px solid var(--line);
 }
 
-.remote-agent-card {
-  display: block;
-  width: 100%;
-  margin-bottom: 8px;
-  padding: 12px 14px;
-  text-align: start;
-}
+.remote-project-server-title { padding: 1px 6px; color: var(--muted); font-size: 11px; font-weight: 600; }
 
-.remote-agent-card:active { border-color: var(--accent); }
-
-.remote-agent-card-head,
-.remote-agent-card-meta,
-.remote-chat-meta {
+.remote-agent-chips {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
+  flex: 0 1 auto;
+  gap: 3px;
+  max-width: 72%;
+  padding: 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
 }
 
-.remote-agent-card-head { justify-content: space-between; }
-
-.remote-agent-card-meta {
-  margin-top: 4px;
+.remote-agent-chip {
+  --agent-trace-inset: -1px;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 34px;
+  min-height: 26px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
   color: var(--muted);
-  font-size: 13px;
 }
 
-.remote-agent-project-name,
-.remote-agent-name,
-.remote-agent-folder {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.remote-agent-chip[data-agent-work='working'] {
+  border-color: color-mix(in srgb, var(--success-ink) 42%, var(--line));
 }
 
+.remote-agent-chip > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+.remote-agent-chip-provider { color: var(--text); }
+.remote-agent-chip[data-kind='claude'] .remote-agent-chip-provider { color: #d97757; }
+.remote-agent-chip[data-kind='antigravity'] .remote-agent-chip-provider { color: var(--accent-ink); }
+.remote-agent-chip[data-status='working'] .remote-agent-chip-status { color: var(--success-ink); }
+.remote-agent-chip:is([data-status='blocked'], [data-status='starting']) .remote-agent-chip-status { color: var(--warning-ink); }
+.remote-agent-chip[data-status='error'] .remote-agent-chip-status { color: var(--error); }
+
+@media (pointer: coarse) {
+  .remote-agent-chip { min-width: 44px; min-height: 44px; }
+}
+
+.remote-chat-meta { display: flex; gap: 8px; min-width: 0; }
 .remote-agent-kind { flex: none; }
 .remote-agent-status {
   --status-ink: var(--muted);
@@ -426,20 +460,6 @@
   .remote-chat-send { width: 44px; }
 }
 
-body[data-workspace] .remote-agent-card {
-  margin-bottom: 2px;
-  border-color: transparent;
-  background: transparent;
-}
-
-body[data-workspace] .remote-agent-card[aria-current="true"] { background: var(--workspace-selected); }
-body[data-workspace] .remote-agent-card-head { align-items: center; gap: 6px; }
-body[data-workspace] .remote-agent-card-meta { font-size: 11px; }
-body[data-workspace] .remote-agent-card-meta .remote-agent-kind {
-  padding: 0 4px;
-  border-radius: var(--radius-xs);
-  background: var(--bg);
-}
 body[data-workspace] .remote-chat-pane {
   margin: 8px;
   border: 1px solid var(--line);

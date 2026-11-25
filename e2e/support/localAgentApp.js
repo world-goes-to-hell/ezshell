@@ -5,6 +5,7 @@ const path = require('path')
 const pty = require('node-pty')
 const { PROMPT, BUSY_PROMPT, REMIND_PROMPT } = require('../../src/ipc/agentInboxWake.js')
 const { createFakeAskDialog } = require('./fakeAskDialog.js')
+require('../../out/main/src/testWindows.js').createTestWindows(require('electron'))
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
 process.env.CODEX_HOME = path.join(profile, 'codex-home')

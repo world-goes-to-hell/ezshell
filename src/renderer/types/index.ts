@@ -960,10 +960,10 @@ declare global {
       maximizeWindow: () => void
       closeWindow: () => void
       toggleFullscreen: () => Promise<void>
-      showWorkOverview: () => Promise<{ backdrop: Uint8Array<ArrayBuffer> | null } | null>
+      showWorkOverview: (requestId?: number) => Promise<{ backdrop: Uint8Array<ArrayBuffer> | null } | null>
       hideWorkOverview: () => void
       setWorkOverviewKey?: (keys: string[]) => void
-      onWorkOverviewRequest?: (callback: () => void) => () => void
+      onWorkOverviewRequest?: (callback: (requestId: number) => void) => () => void
       setShortcutRecording?: (recording: boolean) => void
 
       // SSH
@@ -1170,7 +1170,8 @@ declare global {
       onOracleClientProgress?: (callback: (progress: OracleClientProgress) => void) => () => void
       remoteAccessStatus?: () => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessSetProjects?: (projects: readonly { key: string; name: string; worktrees: readonly string[] }[],
-        reviewGroups?: readonly { id: string; key: string; label: string }[]) => void
+        tabGroups?: readonly { id: string; key: string; label: string }[],
+        projectServers?: readonly { key: string; sessionIds: readonly string[] }[]) => void
       remoteAccessSetEnabled?: (isEnabled: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessSetAnswerMcp?: (isOn: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessSetTabs?: (isOn: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>

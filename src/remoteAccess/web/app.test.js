@@ -13,6 +13,7 @@ function openPhone(storage, now, visualViewport, standalone = false, wide = fals
   const elements = new Map()
   const makeElement = (id = '') => Object.assign(new EventTarget(), {
     id, hidden: true, value: '', checked: id === 'signin-remember', children: [], dataset: {}, attributes: new Map(),
+    style: Object.assign(new Map(), { setProperty(name, value) { this.set(name, value) } }),
     classList: { toggle() {} },
     querySelector: selector => selector === '.bar' ? null : element(`${id} ${selector}`),
     querySelectorAll: () => [],
@@ -24,6 +25,11 @@ function openPhone(storage, now, visualViewport, standalone = false, wide = fals
       }
     },
     replaceChildren(...children) { for (const child of [...this.children]) child.remove(); this.append(...children) },
+    insertBefore(child, next) {
+      if (child.parentElement) child.remove()
+      this.children.splice(next ? this.children.indexOf(next) : this.children.length, 0, child)
+      child.parentElement = this
+    },
     remove() {
       if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(child => child !== this)
       this.parentElement = null
@@ -31,6 +37,8 @@ function openPhone(storage, now, visualViewport, standalone = false, wide = fals
     requestSubmit() { this.dispatchEvent(new Event('submit', { cancelable: true })) },
     cloneNode() { return makeElement(id) },
     focus() {},
+    getClientRects() { return [{}] },
+    getBoundingClientRect() { return { left: 0, top: 0, right: 1000, bottom: 700, width: 1000, height: 700 } },
     setAttribute(name, value) { this.attributes.set(name, value) },
     getAttribute(name) { return this.attributes.get(name) ?? null },
     removeAttribute(name) { this.attributes.delete(name) },
@@ -69,13 +77,18 @@ function openPhone(storage, now, visualViewport, standalone = false, wide = fals
   class PhoneDate extends Date {
     static now() { return now }
   }
-  let openTerminal, openPcTab, openChat
+  let openTerminal, openPcTab, openChat, openProjectServer
   const style = new Map()
   const pcOptions = vi.fn()
   const agentMessages = vi.fn()
   const terminals = []
+  const media = new Map()
   const window = Object.assign(new EventTarget(), {
-    matchMedia: vi.fn(query => Object.assign(new EventTarget(), { matches: wide && !query.includes('display-mode') })),
+    matchMedia: vi.fn(query => {
+      const list = Object.assign(new EventTarget(), { matches: wide && !query.includes('display-mode') && !query.includes('orientation: portrait') })
+      media.set(query, list)
+      return list
+    }),
     innerHeight: 800,
     visualViewport,
     ezRemote: {
@@ -95,8 +108,9 @@ function openPhone(storage, now, visualViewport, standalone = false, wide = fals
           detach() { if (current) send({ type: 'tab-detach', tabId: current }); current = null }
         }
       },
-      createAgents: ({ onOpen, send }) => {
+      createAgents: ({ onOpen, openServer, send }) => {
         openChat = onOpen
+        openProjectServer = openServer
         let current
         return {
           enter() {}, leave() {}, reset() { current = null }, onMessage: agentMessages, setReviewTabs() {}, setTabStatus() {},
@@ -142,7 +156,7 @@ function openPhone(storage, now, visualViewport, standalone = false, wide = fals
     },
     WebSocket: Socket, Date: PhoneDate, URLSearchParams
   })
-  return { element, sockets, terminals, pcOptions, agentMessages, style, window, document, openTerminal, openPcTab, openChat, history }
+  return { element, sockets, terminals, pcOptions, agentMessages, style, window, document, openTerminal, openPcTab, openChat, openProjectServer, history, media }
 }
 
 it('registers an installed app through a same-origin pairing link and opens the code sign-in', () => {
@@ -250,9 +264,106 @@ function startShell(phone, socket, id = 'session', shellId = 'shell') {
   socket.receive({ type: 'opened', shellId, requestId })
 }
 
-function selectTab(phone, index, button = 0) {
-  phone.element('workspace-current').children[index].children[button].dispatchEvent(new Event('click'))
+function selectTab(phone, index, button = 0, secondary = false) {
+  phone.element(secondary ? 'workspace-current-split' : 'workspace-current').children[index].children[button].dispatchEvent(new Event('click'))
 }
+
+function dropTab(phone, row, x, y) {
+  const root = phone.element('workspace-content')
+  const dataTransfer = { setData() {}, effectAllowed: '', dropEffect: '' }
+  const drag = type => Object.assign(new Event(type, { cancelable: true }), { clientX: x, clientY: y, dataTransfer })
+  row.dispatchEvent(drag('dragstart'))
+  root.dispatchEvent(drag('dragover'))
+  root.dispatchEvent(drag('drop'))
+  row.dispatchEvent(drag('dragend'))
+}
+
+function chooseGroup(phone, name) {
+  phone.element('workspace-group-select').dispatchEvent(new Event('click'))
+  const choice = phone.element('workspace-context-menu').children.find(item => item.textContent === name)
+  expect(choice).toBeDefined()
+  choice.dispatchEvent(new Event('click'))
+}
+
+it('shows one work at a time and opens the same saved session separately from its project', () => {
+  const phone = openPhone(rememberedDevice(), Date.now())
+  const [connection] = phone.sockets
+  signIn(connection, { agents: true, tabs: true })
+  const project = { id: 'project-a', name: 'Aurora' }
+  const session = { id: 'session', name: 'web-01' }
+  const agent = { shellId: 'local:1', agentId: 'codex-1', kind: 'codex', project }
+  const pc = { id: 'pc-1', name: 'Desktop project shell', project }
+  connection.receive({ type: 'agents', agents: [agent] })
+  connection.receive({ type: 'tabs', tabs: [pc] })
+  startShell(phone, connection)
+  expect(phone.element('workspace-group-select').hidden).toBe(true)
+  phone.openChat(agent)
+  const strip = phone.element('workspace-current')
+  expect(strip.children.map(row => row.children[0].title)).toEqual(['codex-1'])
+  expect(phone.element('workspace-group-select').textContent).toBe('Aurora')
+  phone.openPcTab(pc)
+  expect(strip.children.map(row => row.children[0].title)).toEqual(['codex-1', pc.name])
+  chooseGroup(phone, '일반')
+  expect(strip.children.map(row => row.children[0].title)).toEqual(['web-01'])
+  expect(connection.sent).not.toContainEqual({ type: 'close', shellId: 'shell' })
+  chooseGroup(phone, 'Aurora')
+  expect(strip.children[1].children[0].getAttribute('aria-pressed')).toBe('true')
+  phone.openProjectServer(session, project)
+  const opens = connection.sent.filter(message => message.type === 'open')
+  expect(opens).toHaveLength(2)
+  expect(opens[1]).toEqual({ type: 'open', requestId: opens[1].requestId, sessionId: session.id, cols: 80, rows: 24 })
+  expect(strip.children.map(row => row.children[0].title)).toEqual(['codex-1', pc.name, 'web-01'])
+})
+
+it('follows a selected PC tab into its new desktop group when its metadata changes', () => {
+  const phone = openPhone(rememberedDevice(), Date.now())
+  const [connection] = phone.sockets
+  signIn(connection, { tabs: true })
+  const pc = { id: 'pc-1', name: 'Desktop tab' }
+  connection.receive({ type: 'tabs', tabs: [pc] })
+  startShell(phone, connection)
+  phone.openPcTab(pc)
+  const project = { id: 'project-a', name: 'Aurora' }
+  connection.receive({ type: 'tabs', tabs: [{ ...pc, project }] })
+  const strip = phone.element('workspace-current')
+  expect(strip.children.map(row => row.children[0].title)).toEqual([pc.name])
+  expect(phone.element('workspace-group-select').textContent).toBe('Aurora')
+  const subscriptions = connection.sent.filter(msg => msg.type === 'tab-attach' || msg.type === 'tab-detach')
+  expect(subscriptions).toEqual([{ type: 'tab-attach', tabId: 'pc-1' }])
+  chooseGroup(phone, '일반')
+  expect(strip.children.map(row => row.children[0].title)).toEqual(['web-01'])
+  expect(connection.sent.findLast(message => message.type === 'tab-detach')).toEqual({ type: 'tab-detach', tabId: 'pc-1' })
+})
+
+it('restores a work split and its focus after visiting and dividing another work', () => {
+  const phone = openPhone(rememberedDevice(), Date.now(), undefined, false, true)
+  const [connection] = phone.sockets
+  signIn(connection, { tabs: true })
+  const project = { id: 'project-a', name: 'Aurora' }
+  const tabs = [{ id: 'a', name: 'General one' }, { id: 'b', name: 'General two' },
+    { id: 'c', name: 'Work one', project }, { id: 'd', name: 'Work two', project }]
+  connection.receive({ type: 'tabs', tabs })
+  const first = phone.element('workspace-current')
+  const second = phone.element('workspace-current-split')
+  phone.openPcTab(tabs[0])
+  phone.openPcTab(tabs[1])
+  dropTab(phone, first.children[1], 995, 340)
+  phone.element('workspace-primary').getBoundingClientRect = () => ({ width: 500, height: 700 })
+  phone.element('workspace-split-divider').dispatchEvent(Object.assign(new Event('keydown'), { key: 'ArrowRight' }))
+  phone.openPcTab(tabs[2])
+  expect(phone.element('workspace-secondary').hidden).toBe(true)
+  phone.openPcTab(tabs[3])
+  dropTab(phone, first.children[1], 995, 340)
+  chooseGroup(phone, '일반')
+  expect(first.children[0].children[0].title).toBe('General one')
+  expect(second.children[0].children[0].title).toBe('General two')
+  expect(phone.element('workspace-secondary').attributes.has('data-focused')).toBe(true)
+  expect(phone.element('workspace-content').style.get('--split-size')).toBe('51.6%')
+  chooseGroup(phone, 'Aurora')
+  expect(first.children[0].children[0].title).toBe('Work one')
+  expect(second.children[0].children[0].title).toBe('Work two')
+  expect(phone.element('workspace-content').style.get('--split-size')).toBe('50%')
+})
 
 it('fades only the scrollable tab edges and leaves Ctrl+wheel available for zoom', () => {
   const phone = openPhone(rememberedDevice(), Date.now())
@@ -413,34 +524,91 @@ it('detaches background PC and chat viewers, then restores the open tabs on sign
   ])
 })
 
-it('keeps both visible PC tabs subscribed in a tablet split until the split closes', () => {
+it('moves tabs between independent tablet strips and subscribes only to their visible tabs', () => {
   const phone = openPhone(rememberedDevice(), Date.now(), undefined, false, true)
   const [connection] = phone.sockets
   signIn(connection, { tabs: true })
   const a = { id: 'left', name: 'PC left' }
   const b = { id: 'right', name: 'PC right' }
-  connection.receive({ type: 'tabs', tabs: [a, b] })
+  const c = { id: 'new', name: 'PC new' }
+  connection.receive({ type: 'tabs', tabs: [a, b, c] })
   phone.openPcTab(a)
   phone.openPcTab(b)
-  const changes = () => connection.sent.filter(msg => msg.type === 'tab-attach' || msg.type === 'tab-detach')
-  const toggle = phone.element('workspace-split-toggle')
-  const click = () => toggle.dispatchEvent(new Event('click'))
-  click()
+  const first = phone.element('workspace-current')
+  const second = phone.element('workspace-current-split')
+  const active = () => {
+    const ids = new Set()
+    for (const msg of connection.sent) {
+      if (msg.type === 'tab-attach') ids.add(msg.tabId)
+      if (msg.type === 'tab-detach') ids.delete(msg.tabId)
+    }
+    return [...ids].sort()
+  }
+  dropTab(phone, first.children[1], 997, 350)
   expect(phone.element('workspace-secondary').hidden).toBe(false)
-  expect(changes().slice(-2)).toEqual([{ type: 'tab-attach', tabId: b.id }, { type: 'tab-attach', tabId: a.id }])
-  const attached = changes().length
+  expect(first.children).toHaveLength(1)
+  expect(second.children).toHaveLength(1)
+  expect(active()).toEqual(['left', 'right'])
   selectTab(phone, 0)
-  selectTab(phone, 1)
-  expect(changes()).toHaveLength(attached)
+  phone.openPcTab(c)
+  expect(first.children).toHaveLength(2)
+  expect(active()).toEqual(['new', 'right'])
   phone.element('workspace-activity').dispatchEvent(new Event('click'))
-  selectTab(phone, 0)
+  expect(active()).toEqual([])
+  selectTab(phone, first.children.findIndex(row => row.children[0].title === b.name))
   expect(phone.element('workspace-secondary').hidden).toBe(false)
-  expect(changes().slice(-2)).toEqual([{ type: 'tab-attach', tabId: a.id }, { type: 'tab-attach', tabId: b.id }])
-  selectTab(phone, 1)
-  const resumed = changes().length
-  click()
+  expect(active()).toEqual(['new', 'right'])
+  dropTab(phone, second.children[0], 2, 350)
   expect(phone.element('workspace-secondary').hidden).toBe(true)
-  expect(changes().slice(resumed)).toEqual([{ type: 'tab-detach', tabId: a.id }])
+  expect(first.children).toHaveLength(3)
+  expect(active()).toEqual(['right'])
+})
+
+it('retains the split tabs, focused pane and ratio when the device resumes', () => {
+  vi.useFakeTimers()
+  const viewport = Object.assign(new EventTarget(), { height: 768, scale: 1 })
+  const phone = openPhone(rememberedDevice(), 1_800_000_000_000, viewport, false, true)
+  const [connection] = phone.sockets
+  signIn(connection)
+  startShell(phone, connection)
+  startShell(phone, connection, 'web-02', 'shell2')
+  const first = phone.element('workspace-current')
+  const second = phone.element('workspace-current-split')
+  const root = phone.element('workspace-content')
+  dropTab(phone, first.children[1], 999, 350)
+  phone.element('workspace-primary').getBoundingClientRect = () => ({ width: 500, height: 700 })
+  const resize = Object.assign(new Event('keydown', { cancelable: true }), { key: 'ArrowRight' })
+  phone.element('workspace-split-divider').dispatchEvent(resize)
+  expect(root.style.get('--split-size')).toBe('51.6%')
+  connection.close()
+  vi.advanceTimersByTime(1000)
+  signIn(phone.sockets[1])
+  expect(first.children).toHaveLength(1)
+  expect(second.children).toHaveLength(1)
+  expect(second.children[0].children[0].getAttribute('aria-pressed')).toBe('true')
+  expect(root.style.get('--split-size')).toBe('51.6%')
+  const portrait = phone.media.get('(orientation: portrait)')
+  phone.window.innerWidth = 768
+  phone.window.innerHeight = viewport.height = 1024
+  portrait.matches = true
+  portrait.dispatchEvent(new Event('change'))
+  expect(root.getAttribute('data-split-axis')).toBe('rows')
+  expect(second.children).toHaveLength(1)
+
+  phone.document.activeElement = { matches: () => true }
+  const tablet = phone.media.get('(min-width: 45rem) and (min-height: 40rem)')
+  phone.window.innerHeight = viewport.height = 535
+  portrait.matches = tablet.matches = false
+  tablet.dispatchEvent(new Event('change'))
+  expect(phone.element('workspace-status').hidden).toBe(true)
+  expect(root.getAttribute('data-split-axis')).toBe('rows')
+  expect(second.children).toHaveLength(1)
+  phone.window.innerHeight = viewport.height = 1024
+  portrait.matches = tablet.matches = true
+  viewport.dispatchEvent(new Event('resize'))
+
+  selectTab(phone, 0, 1, true)
+  expect(phone.element('workspace-secondary').hidden).toBe(true)
 })
 
 it('cycles and closes tabs from the keyboard while leaving Ctrl+W available to xterm', () => {

@@ -912,6 +912,12 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
         sendTo(client, tabMessage())
       }
     },
+    sessionsChanged: () => {
+      const devices = signedIn()
+      if (!devices.length || isLocked()) return
+      const message = { type: 'sessions', ...listSessions() }
+      devices.forEach(client => sendTo(client, message))
+    },
     /** Whether the settings changed what devices may use: they are sent `features` again */
     featuresChanged: () => {
       for (const client of signedIn()) sendTo(client, { type: 'features', features: features() })

@@ -38,10 +38,12 @@ function placeOn(display, bounds) {
 function registerWorkOverviewIpc({ ipcMain, desktopCapturer, getDisplay, getWindow, isLocked }) {
   let overview = null;
   let aim = null;
-  const takeAim = () => {
-    const current = aim && Date.now() - aim.at <= AIM_MS ? aim.display : null;
+  let requestSequence = 0;
+  const takeAim = (requestId, win) => {
+    if (!aim || aim.id !== requestId) return null;
+    const current = aim;
     aim = null;
-    return current;
+    return current.win === win && Date.now() - current.at <= AIM_MS ? current : null;
   };
 
   function putBack(current) {
@@ -69,9 +71,16 @@ function registerWorkOverviewIpc({ ipcMain, desktopCapturer, getDisplay, getWind
     } else putBack(current);
   }
 
-  ipcMain.handle('work-overview-show', async event => {
+  function cancel() {
+    aim = null;
+    if (overview) close(overview);
+  }
+
+  ipcMain.handle('work-overview-show', async (event, requestId) => {
     const win = getWindow();
     if (!belongsToWindow(event, win) || isLocked() || overview) return null;
+    const external = requestId === undefined ? null : takeAim(requestId, win);
+    if (requestId !== undefined && !external) return null;
     const current = { win, changedFullscreen: false, unsubscribe: () => {} };
     const onClose = () => close(current);
     const onNavigation = details => { if (details.isMainFrame && !details.isSameDocument) onClose(); };
@@ -88,9 +97,11 @@ function registerWorkOverviewIpc({ ipcMain, desktopCapturer, getDisplay, getWind
     };
 
     const own = getDisplay(win.getBounds());
-    const aimed = takeAim();
+    const aimed = external?.display;
     const display = aimed && aimed.id !== own.id && !win.isFullScreen() ? aimed : own;
-    const backdrop = await monitorBackdrop(desktopCapturer, display);
+    // On Windows with several displays getSources can block main before returning its promise.
+    // The global shortcut opens with the overview's blur, without capturing the other desktop.
+    const backdrop = external ? null : await monitorBackdrop(desktopCapturer, display);
     if (overview !== current) return null;
     if (isLocked() || win.isDestroyed()) {
       close(current);
@@ -115,12 +126,18 @@ function registerWorkOverviewIpc({ ipcMain, desktopCapturer, getDisplay, getWind
   });
 
   ipcMain.on('work-overview-hide', event => {
-    if (overview && belongsToWindow(event, overview.win)) close(overview);
+    if (belongsToWindow(event, getWindow())) cancel();
   });
 
   return {
-    /** The monitor the overview shortcut was pressed on, for the overview the window asks for next */
-    aimAt(display) { aim = display ? { display, at: Date.now() } : null; }
+    /** A short-lived request for this window and the display of the external shortcut. */
+    aimAt(display) {
+      const win = getWindow();
+      if (!win || win.isDestroyed() || isLocked() || overview) return null;
+      aim = { id: ++requestSequence, win, display, at: Date.now() };
+      return aim.id;
+    },
+    cancel
   };
 }
 

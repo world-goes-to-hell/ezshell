@@ -149,8 +149,10 @@ async function run() {
     const firstAlert = await mcp('claude-2', 'escalate', escalation)
     const again = await mcp('claude-2', 'escalate', escalation)
     const notices = read('test-notifications').trim().split('\n').filter(Boolean).map(JSON.parse)
-    check('escalate sends one OS notification with only the agent and the kind', firstAlert.notified && !again.notified &&
-      notices.length === 1 && notices[0].title === 'codex-1 가 응답을 기다립니다' && notices[0].body === '확인 요청', JSON.stringify(notices))
+    const hidden = process.env.EZSHELL_TEST_HIDDEN_WINDOWS === '1'
+    check(hidden ? 'escalation never sends an OS notification from a hidden test app' : 'escalate sends one OS notification with only the agent and the kind',
+      firstAlert.notified && !again.notified && (hidden ? notices.length === 0 :
+        notices.length === 1 && notices[0].title === 'codex-1 가 응답을 기다립니다' && notices[0].body === '확인 요청'), JSON.stringify(notices))
     const alertToast = `[...document.querySelectorAll('.toast')].find(item => item.textContent.includes('codex-1 가 응답을 기다립니다'))`
     check('the in-app alert keeps the question and reason private', await until(`
       ${alertToast}?.textContent.includes('그 칸으로 가기') &&

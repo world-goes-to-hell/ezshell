@@ -51,12 +51,13 @@ function openChat(status = 'idle') {
   runInNewContext(script, { window, document, setTimeout, clearTimeout, performance })
   const chat = new Node('main')
   const send = vi.fn()
-  const phone = window.ezRemote.createAgents({ chat, list: new Node('aside'), send })
+  const list = new Node('aside')
+  const phone = window.ezRemote.createAgents({ chat, list, send })
   const message = (type, frame) => phone.onMessage({ ...frame, type, shellId: 'local:1' })
   phone.enter()
   phone.reopen({ shellId: 'local:1', agentId: 'claude-1', kind: 'claude', status })
   message('chat-opened', { ok: true })
-  return { chat, send, nameOf: phone.nameOf, frame: fields => message('chat-frame', fields) }
+  return { chat, list, send, nameOf: phone.nameOf, message, frame: fields => message('chat-frame', fields) }
 }
 
 afterEach(() => vi.useRealTimers())
@@ -68,6 +69,27 @@ it('uses the PC display name with an optional trimmed role', () => {
   expect(nameOf({ ...agent, role: '   ' })).toBe('Codex 9')
   expect(nameOf({ agentId: 'codex-9' })).toBe('codex-9')
   expect(nameOf({})).toBe('에이전트')
+})
+
+it('shows a provider logo and a status SVG on each compact agent chip', () => {
+  const { list, message } = openChat()
+  message('agents', { agents: [
+    { shellId: 'local:1', agentId: 'claude-1', kind: 'claude', status: 'working', name: 'Claude Code 1' },
+    { shellId: 'local:2', agentId: 'codex-2', kind: 'codex', status: 'idle', name: 'Codex 2' },
+    { shellId: 'local:3', agentId: 'antigravity-3', kind: 'antigravity', status: 'working', waitingApproval: true, name: 'Antigravity 3' }
+  ] })
+  const chips = list.querySelectorAll('.remote-agent-chip')
+  expect(chips.map(chip => chip.attributes['aria-label'])).toEqual([
+    'Claude Code 1 · 작업 중', 'Codex 2 · 쉬는 중', 'Antigravity 3 · 확인 대기'
+  ])
+  expect(chips.map(chip => chip.dataset.agentWork)).toEqual(['working', 'idle', 'idle'])
+  const paths = chips.map(chip => {
+    const icons = chip.querySelectorAll('svg')
+    expect(icons.map(icon => icon.attributes.viewBox)).toEqual(['0 0 24 24', '0 0 24 24'])
+    expect(icons.every(icon => icon.attributes['aria-hidden'] === 'true')).toBe(true)
+    return icons.map(icon => icon.querySelector('path').attributes.d)
+  })
+  expect(new Set(paths.flat()).size).toBe(6)
 })
 
 it('shows the send time and keeps per-question usage on the final row across frame updates', () => {

@@ -6,7 +6,8 @@ import http from 'http'
 import { once } from 'node:events'
 import { WebSocket } from 'ws'
 import { createAccessServer, trimOutput, activityForDevice, APPROVAL_ARM_MS, MAX_CLIENTS } from './server.js'
-import { sessionTree, remoteThemeOf } from './controller.js'
+import { sessionTree, tabList, workspaceMetadata, linkedProjects, remoteThemeOf } from './controller.js'
+import { createProjectId } from './projectId.js'
 import { createAccessStore, TRUST_MS } from './accessStore.js'
 import totp from './totp.js'
 
@@ -718,6 +719,38 @@ describe('sessionTree (what the phone gets of the sidebar)', () => {
   it('copies nothing else of a session', () => {
     const text = JSON.stringify(sessionTree({ folders, sessions }))
     for (const secret of ['10.0.0.9', 'web.internal', 'root', 'secret', 'deploy', 'C:/k', 'javascript']) expect(text).not.toContain(secret)
+  })
+
+  it('uses the same opaque project for PC tabs and links, with only saved server ids and names', () => {
+    const projectId = createProjectId()
+    const key = path.join(os.tmpdir(), 'repo-private-folder')
+    const outside = path.join(os.tmpdir(), 'another-private-folder')
+    const workspace = workspaceMetadata(
+      [{ key, name: 'Aurora', worktrees: [key] }],
+      [
+        { id: 'remote-shell', key, label: 'ignored label' },
+        { id: 'browser:review', key, label: 'ignored label' },
+        { id: 'general-shell', key: 'general', label: 'ignored label' },
+        { id: 'quick-shell', key: 'folder:' + outside, label: 'Scratch' },
+        { id: 'invalid', key: outside, label: 'Unregistered project' }
+      ],
+      [{ key, sessionIds: ['s2', 's2', 's3', 'unknown', null] }, { key: outside, sessionIds: ['s1'] }],
+      projectId
+    )
+    const tree = sessionTree({ folders, sessions })
+    const linked = linkedProjects(workspace.linked, tree.sessions)
+    const project = { id: projectId(key), name: 'Aurora' }
+    expect(linked).toEqual([{ ...project, servers: [{ id: 's2', name: 'db-01' }] }])
+    expect(workspace.tabGroups.get('browser:review')).toEqual(project)
+    expect(workspace.tabGroups.has('invalid')).toBe(false)
+    const tabs = tabList({
+      tabs: [{ id: 'remote-shell', savedSessionId: 's2', connected: true }, { id: 'quick-shell', connected: true }],
+      sessions, folders, groups: workspace.tabGroups
+    })
+    expect(tabs[0]).toMatchObject({ project, inputAllowed: true })
+    expect(tabs[1]).toMatchObject({ project: { id: projectId(outside), name: 'Scratch' }, inputAllowed: false })
+    const wire = JSON.stringify({ linked, tabs })
+    for (const secret of [key, outside, '10.0.0.9', 'root', 'secret', 'unknown']) expect(wire).not.toContain(secret)
   })
 })
 
