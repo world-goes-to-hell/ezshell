@@ -27,7 +27,10 @@ export function agentIdentityTooltip(agent: AgentMessageSession, location?: Agen
   const identity = detail ? role + ' · ' + detail : id
   // Three lines (name / kind · state / place, CLAUDE.md). Where the state came from (hook or screen) is not
   // shown: the user found it noise (2026-11-25)
-  const title = [identity, [AGENT_PROVIDER_NAMES[kind], state].filter(Boolean).join(' · '), location?.label || cwd].filter(Boolean).join('\n')
+  // The place of a running agent is its folder's name only: no branch, no pane number (user request,
+  // 2026-11-25: "ezshell · main · 칸 2" was too much)
+  const place = location ? folderLabel(cwd ?? '') || location.tabLabel.split(' · ')[0] : cwd
+  const title = [identity, [AGENT_PROVIDER_NAMES[kind], state].filter(Boolean).join(' · '), place].filter(Boolean).join('\n')
   return { title, 'data-tooltip-detail': detail }
 }
 

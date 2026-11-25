@@ -72,12 +72,14 @@ describe('agent identity', () => {
       active: true, status: 'idle', waitingForReply: false, mcpConnected: true
     }
     const location = { tabId: 'tab', pane: MAIN_PANE, tabLabel: 'ezshell · main', number: 1, label: 'ezshell · main · 칸 1' }
+    // A running agent's place is its folder's name: no branch, no pane number (2026-11-25)
     expect(agentIdentityTooltip(agent, location)).toEqual({
-      title: 'claude-1\nClaude Code · 쉼\nezshell · main · 칸 1', 'data-tooltip-detail': undefined
+      title: 'claude-1\nClaude Code · 쉼\nwork', 'data-tooltip-detail': undefined
     })
     expect(agentIdentityTooltip({ ...agent, role: '리뷰어' }, location)).toEqual({
-      title: '리뷰어 · claude-1\nClaude Code · 쉼\nezshell · main · 칸 1', 'data-tooltip-detail': 'claude-1'
+      title: '리뷰어 · claude-1\nClaude Code · 쉼\nwork', 'data-tooltip-detail': 'claude-1'
     })
+    expect(agentIdentityTooltip({ ...agent, cwd: '' }, location).title).toBe('claude-1\nClaude Code · 쉼\nezshell')
     expect(agentIdentityTooltip({ ...agent, role: agent.id, status: 'error', exitCode: 7 }).title)
       .toBe('claude-1\nClaude Code · 오류 (종료 코드 7)\nC:\\work')
     expect(agentIdentityTooltip(agent, undefined, true).title).toBe('claude-1\nClaude Code · 연결 끊김\nC:\\work')

@@ -183,7 +183,9 @@ async function run() {
       const tip = ${tooltip}
       const lines = tip?.textContent.split('\\n')
       return lines?.length === 3 && lines[0] === ${JSON.stringify(identity)} &&
-        lines[1].startsWith(${JSON.stringify(provider + ' · ')}) && lines[2].includes(' · 칸 ') &&
+        lines[1].startsWith(${JSON.stringify(provider + ' · ')}) &&
+        // The place is the folder's name alone: no branch, no pane number (user request, 2026-11-25)
+        !!lines[2] && !lines[2].includes(' · ') &&
         getComputedStyle(tip).whiteSpace === 'pre-line' &&
         (tip.querySelector('small')?.textContent.trim() ?? '') === ${JSON.stringify(detail ? '· ' + detail : '')}
     })()`
@@ -960,7 +962,7 @@ async function run() {
     await driver.move(...await driver.center(`${card('claude-7')}.querySelector('.agent-message-map-card-name strong')`))
     check('the roleless card tooltip contains the ID and the location once', await until(identityTooltip('claude-7', 'Claude Code'), 3000) &&
       // No "where the state came from" note on the state line (user, 2026-11-25)
-      await js(`${tooltip}?.textContent === 'claude-7\\nClaude Code · 쉼\\nother workspace · 칸 1'`))
+      await js(`${tooltip}?.textContent === 'claude-7\\nClaude Code · 쉼\\nother workspace'`))
     await driver.shot('local-agent-message-map-tooltip-id')
     await driver.move(20, 45)
     const otherMessage = await mcp('codex-6', 'send_message', { to: 'claude-7', text: 'other-workspace-message' })
