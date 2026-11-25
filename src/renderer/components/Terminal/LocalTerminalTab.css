@@ -121,23 +121,8 @@
   border-color: var(--pane-card-border, var(--border-strong));
 }
 
-.local-terminal-tab.is-split .local-terminal-pane[data-chat-kind='claude'] { --pane-provider-color: #d97757; }
-.local-terminal-tab.is-split .local-terminal-pane[data-chat-kind='codex'] { --pane-provider-color: #849ab3; }
-.local-terminal-tab.is-split .local-terminal-pane[data-chat-kind='antigravity'] { --pane-provider-color: var(--success); }
-
 .local-terminal-tab.is-split .agent-chat-head {
-  position: relative;
   border-bottom-color: var(--pane-card-border, var(--border-strong));
-}
-
-.local-terminal-tab.is-split [data-chat-kind] .agent-chat-head::before {
-  content: '';
-  position: absolute;
-  inset-block: 0;
-  inset-inline-start: 3px; /* Keep the stripe inside the 1px keyline and 2px focus border. */
-  inline-size: 3px;
-  background: var(--pane-provider-color);
-  pointer-events: none;
 }
 
 /* Keep the overlay inside the pane so fractional zoom and xterm sizing cannot clip it. */
