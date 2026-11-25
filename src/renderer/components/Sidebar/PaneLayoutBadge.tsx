@@ -5,7 +5,7 @@ import { placeTooltip } from '../../lib/tooltipPosition'
 import { cellStyle } from '../../lib/paneFocus'
 import { getLocalPaneShellId } from '../../lib/localPaneShells'
 import type { AgentMessageSession } from '../../types'
-import { useAgentMessagesStore } from '../Terminal/AgentMessages'
+import { isAgentWorking, useAgentMessagesStore } from '../Terminal/AgentMessages'
 import { localAgentAppearance } from './LocalSessionAgents'
 import './PaneMap.css'
 
@@ -128,6 +128,8 @@ export function PaneLayoutBadge({ tabId, tabName, tree, currentPane, onPick }: P
                   title={appearance?.description}
                   data-agent-id={agent?.id}
                   data-status={appearance?.status}
+                  // The same border trace the terminal pane and the agent chips show while the agent works
+                  data-agent-work={agent ? (isAgentWorking(agent) ? 'working' : 'idle') : undefined}
                 >
                   <span className="pane-map-cell-content">
                     <span>{index + 1}</span>

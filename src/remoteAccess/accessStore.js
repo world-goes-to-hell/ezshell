@@ -35,7 +35,7 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
   // answerMcp: MCP questions are also sent to signed-in devices and wait longer for an answer
   // agents: a signed-in device may use the PC's agents (list, chat, send, answer); off unless switched on
   // vapid: the key pair notifications are signed with ({ publicKey, privateKeySealed | privateKey })
-  let state = { enabled: false, port: DEFAULT_PORT, answerMcp: true, agents: false, tabs: false, totpSecret: null, vapid: null, devices: [] }
+  let state = { enabled: false, port: DEFAULT_PORT, answerMcp: true, agents: false, tabs: false, browserReview: false, totpSecret: null, vapid: null, devices: [] }
   // The private half, opened (memory only)
   let vapidPrivate = null
   // The secret as it is in the file. Opened on first use: the OS cannot open it before the app is ready.
@@ -48,6 +48,7 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
         answerMcp: saved.answerMcp !== false,
         agents: saved.agents === true,
         tabs: saved.tabs === true,
+        browserReview: saved.browserReview === true,
         vapid: saved.vapid && typeof saved.vapid.publicKey === 'string' ? saved.vapid : null,
         port: Number.isInteger(saved.port) && saved.port >= 1024 && saved.port <= 65535 ? saved.port : DEFAULT_PORT,
         totpSecret: typeof saved.totpSecret === 'string' ? saved.totpSecret : null,
@@ -174,6 +175,11 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
     save()
   }
 
+  function setBrowserReview(isOn) {
+    state = { ...state, browserReview: isOn === true }
+    save()
+  }
+
   /** A new one-time code for registering a device; the one before stops working */
   function startPairing() {
     pairing = { code: randomBytes(18).toString('base64url'), expiresAt: now() + PAIRING_MS }
@@ -284,6 +290,8 @@ function createAccessStore({ filePath, now = Date.now, randomBytes = crypto.rand
     get answerMcp() { return state.answerMcp },
     setAgents,
     setTabs,
+    setBrowserReview,
+    get browserReview() { return state.browserReview },
     get tabs() { return state.tabs },
     get agents() { return state.agents },
     startPairing,

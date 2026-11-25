@@ -28,7 +28,8 @@ afterEach(async () => {
 })
 
 async function agent(kind, shellId) {
-  const { env } = messages.register(kind, shellId, root, {})
+  const registration = messages.register(kind, shellId, root, {})
+  const { env } = registration
   const client = new Client({ name: 'ezshell-test', version: '1' })
   clients.push(client)
   await client.connect(new StdioClientTransport({
@@ -43,14 +44,15 @@ async function agent(kind, shellId) {
   }
   // Ready once its MCP connection is counted
   await vi.waitFor(async () => expect((await call('list_agents')).self).toBe(env.EZSHELL_AGENT_ID))
-  return { id: env.EZSHELL_AGENT_ID, call, listTools: () => client.listTools() }
+  return { id: env.EZSHELL_AGENT_ID, call, listTools: () => client.listTools(), finish: registration.finish }
 }
 
-async function pair() {
+async function pair(options = {}) {
   messages = createAgentMessages({
     notify: (channel, payload) => { if (channel === 'agent-messages-state') states.push(payload) },
     isLocked: () => false,
-    onInboxChanged: shell => woken.push(shell)
+    onInboxChanged: shell => woken.push(shell),
+    ...options
   })
   await messages.ready()
   const lead = await agent('claude', 'local:1')
@@ -61,6 +63,46 @@ async function pair() {
 }
 
 const statusOf = async (agentClient, id) => (await agentClient.call('check_sent', { message_ids: [id] })).messages[0]
+
+describe('agent inspection and escalation', () => {
+  it('reports only public screen fields and notifies once per verified human prompt', async () => {
+    let locked = false
+    let ticket = Symbol()
+    let blocked = { kind: 'approval', question: 'Ask?\nSECRET', options: ['🙂'.repeat(220), 'No'], detail: 'SECRET' }
+    const onEscalate = vi.fn(() => true)
+    const { lead, worker } = await pair({
+      isLocked: () => locked,
+      inspectLocalAgent: (_shellId, id) => id === 'codex-2' ? { status: 'blocked', statusSource: 'screen', blocked, ticket } : null,
+      onEscalate
+    })
+    const tools = (await lead.listTools()).tools.map(tool => tool.name)
+    expect(tools).toEqual(expect.arrayContaining(['inspect_agent', 'escalate']))
+    const target = { id: worker.id }
+    expect(await lead.call('inspect_agent', target)).toEqual({
+      error: null, id: worker.id, status: 'blocked', statusSource: 'screen',
+      blocked: { kind: 'approval', question: 'Ask?', options: ['🙂'.repeat(200), 'No'] },
+      unread: 1, idleFor: null, exitCode: null
+    })
+    expect(await lead.call('escalate', { ...target, reason: 'Needs a decision' })).toMatchObject({ notified: true })
+    expect(await worker.call('escalate', { ...target, reason: 'The same prompt' })).toMatchObject({ notified: false })
+    expect(onEscalate).toHaveBeenCalledExactlyOnceWith({ id: worker.id, shellId: 'local:2', kind: 'approval' })
+    expect((await lead.call('escalate', { ...target, reason: 'Line 1\nLine 2' })).error).toBeTruthy()
+    blocked = { kind: 'draft', ours: false, text: 'SECRET' }
+    expect((await lead.call('inspect_agent', target)).blocked).toEqual({ kind: 'draft', ours: false })
+    expect((await lead.call('escalate', { ...target, reason: 'Draft' })).error).toBeTruthy()
+    blocked = { kind: 'question', question: 'Which option?' }
+    ticket = Symbol()
+    expect(await lead.call('escalate', { ...target, reason: 'New question' })).toMatchObject({ notified: true })
+    locked = true
+    expect((await lead.call('inspect_agent', target)).error).toMatch(/잠금/)
+    expect((await lead.call('escalate', { ...target, reason: 'Locked' })).error).toMatch(/잠금/)
+    expect(onEscalate).toHaveBeenCalledTimes(2)
+    locked = false
+    worker.finish(2)
+    expect(await lead.call('inspect_agent', target)).toMatchObject({ status: 'error', blocked: { kind: 'ended' }, exitCode: 2 })
+    expect((await lead.call('inspect_agent', { id: 'codex-999' })).error).toBeTruthy()
+  }, 15000)
+})
 
 describe('read marks', () => {
   it('lists effective roles, keeps agent changes under the user override, and clears the override', async () => {

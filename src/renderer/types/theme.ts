@@ -16,6 +16,8 @@ export interface QuickCaptureTheme {
   panelRadius: string
   font: string
   scheme: 'light' | 'dark'
+  terminal?: Partial<TerminalColors>
+  terminalFont?: string
 }
 
 export interface ThemeColors {

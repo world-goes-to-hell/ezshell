@@ -69,6 +69,15 @@ const { check, finish } = createChecks()
     const row = name => `[...document.querySelectorAll('.workspace-tree-row')].find(r => r.textContent.trim() === ${JSON.stringify(name)})`
     check('the tree lists the folder and the file at the top', await until(`!!${row('src')} && !!${row('README.md')}`, 15000))
 
+    // A folder row only offers the file explorer (not picked: that would open a real Explorer window)
+    await driver.click(...await driver.center(row('src')), 'right')
+    check('a folder in the tree offers Open in File Explorer only', await until(`${fileMenu} === '파일 탐색기로 열기'`, 5000))
+    for (const type of ['rawKeyDown', 'keyUp']) {
+      await driver.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+    }
+    await until(`!document.querySelector('.terminal-menu-item')`)
+    check('right-clicking a folder does not open it', await js(`${row('src')}.getAttribute('aria-expanded') === 'false'`))
+
     await js(`${row('mockups')}.click()`)
     await until(`!!${row(htmlName)}`)
     check('an HTML file in the tree offers Open in Browser', await rightClickFile(row(htmlName), true))
@@ -293,7 +302,20 @@ const { check, finish } = createChecks()
     }
 
     // ---- 변경 tab: the uncommitted change (the history is its own tab) ----
-    await js(`document.querySelector('#workspace-tab-changes').click()`)
+    // The panel read the history and the changes ahead (lib/workspaceGitReads.ts): the first open shows a list at once
+    const firstOpen = await js(`new Promise(resolve => {
+      const started = performance.now()
+      document.querySelector('#workspace-tab-changes').click()
+      const look = () => document.querySelector('.workspace-uncommitted') ? resolve(Math.round(performance.now() - started)) : requestAnimationFrame(look)
+      look()
+    })`)
+    const coldReads = await js(`(async () => {
+      const started = performance.now()
+      const log = await window.electronAPI.workspaceGitLog(${JSON.stringify(repo)})
+      await window.electronAPI.workspaceGitStatus(log.repo.root)
+      return Math.round(performance.now() - started)
+    })()`)
+    check('the changes tab opens the first time without waiting for Git', firstOpen < 150, `${firstOpen}ms (the two Git reads it used to wait for: ${coldReads}ms)`)
     check('the changes tab has no commit history in it', await until(`!!document.querySelector('.workspace-uncommitted') && !document.querySelector('.workspace-git-list')`, 15000))
     const gitFile = `[...document.querySelectorAll('.workspace-uncommitted .workspace-git-file-toggle')].find(b => b.textContent.includes('app.txt'))`
     check('the uncommitted changes list the edited file', await until(`!!${gitFile} && !!document.querySelector('.workspace-uncommitted .workspace-git-file[data-path="src/app.txt"] .workspace-git-mark[data-kind="modified"]')`, 15000))

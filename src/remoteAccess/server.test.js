@@ -22,7 +22,7 @@ const TREE = {
   sessions: [{ id: 's1', name: 'web-01', folderId: 'f1', color: null, folder: '운영', openTabs: { connected: 1, disconnected: 0 } }]
 }
 
-function setup({ isLocked = () => false, now, tabs = null, agents = null, readTheme } = {}) {
+function setup({ isLocked = () => false, now, tabs = null, browser = null, agents = null, readTheme } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-remote-'))
   const store = createAccessStore({ filePath: path.join(dir, 'remote-access.json'), ...(now ? { now } : {}) })
   store.setEnabled(true)
@@ -45,7 +45,7 @@ function setup({ isLocked = () => false, now, tabs = null, agents = null, readTh
   const mcp = { asked: null, items: [] }
   const approvals = { current: () => mcp.asked, respond: vi.fn((id) => id === mcp.asked?.id) }
   const activity = { list: () => mcp.items, cancel: vi.fn((id) => id === 'run1') }
-  const server = createAccessServer({ store, shells, listSessions: () => TREE, isLocked, approvals, activity, tabs, agents, log, isAllowedAddress: () => isAllowed, readTheme, ...(now ? { now } : {}) })
+  const server = createAccessServer({ store, shells, listSessions: () => TREE, isLocked, approvals, activity, tabs, browser, agents, log, isAllowedAddress: () => isAllowed, readTheme, ...(now ? { now } : {}) })
   return { store, shells, opened, server, log, mcp, approvals, activity }
 }
 
@@ -67,7 +67,7 @@ function connect({ origin = ORIGIN, headers, autoPong = true } = {}) {
 }
 
 const get = (url, headers) => new Promise((resolve, reject) => {
-  http.get(`${ORIGIN}${url}`, { headers }, (res) => {
+  http.get(`${ORIGIN}${url}`, { headers, agent: false }, (res) => {
     let body = ''
     res.on('data', (chunk) => { body += chunk })
     res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }))
@@ -108,8 +108,22 @@ describe('createAccessServer', () => {
     expect(font.headers['content-type']).toBe('font/woff2')
     expect((await get('/vendor/title-bar.css')).status).toBe(200)
     expect((await get('/vendor/terminal-tabs.css')).status).toBe(200)
+    expect((await get('/vendor/agent-work-trace.css')).status).toBe(200)
     expect((await get('/../../main.js')).status).toBe(404)
     expect((await get('/remote-access.json')).status).toBe(404)
+  })
+
+  it('serves a standalone manifest with same-origin icons and a clean launch URL', async () => {
+    context = setup()
+    await context.server.start('127.0.0.1', PORT)
+    const response = await get('/manifest.webmanifest')
+    expect(response.headers['content-type']).toBe('application/manifest+json')
+    const manifest = JSON.parse(response.body)
+    expect(manifest).toMatchObject({ id: '/', start_url: '/', scope: '/', display: 'standalone' })
+    expect(manifest.icons.map(icon => icon.sizes)).toEqual(['192x192', '512x512'])
+    for (const icon of manifest.icons) {
+      expect(await get(icon.src)).toMatchObject({ status: 200, headers: { 'content-type': 'image/png' } })
+    }
   })
 
   it('drops a connection that does not come from Tailscale', async () => {
@@ -137,14 +151,32 @@ describe('createAccessServer', () => {
   })
 
   it('sends the validated PC theme on sign-in and when it changes', async () => {
-    let theme = remoteThemeOf({ background: '#fff', danger: '#a22', radius: '5px', scheme: 'light', font: 'serif; opacity:0', '--extra': '#000' })
+    const ansi = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white']
+    const palette = Object.fromEntries(ansi.flatMap((name, index) => [
+      [name, `#00a00${index}`],
+      [`bright${name[0].toUpperCase()}${name.slice(1)}`, `#b0000${index}`]
+    ]))
+    let theme = remoteThemeOf({
+      background: '#fff', danger: '#a22', radius: '5px', scheme: 'light',
+      terminal: { ...palette, arbitrary: '#000' }, terminalFont: 'D2Coding',
+      font: 'serif; opacity:0', '--extra': '#000'
+    })
     context = setup({ readTheme: () => theme })
     await context.server.start('127.0.0.1', PORT)
     const client = await signedIn(context)
-    expect(client.ready.theme).toEqual({ '--bg': '#fff', '--error': '#a22', '--danger': '#a22', '--radius': '5px', '--scheme': 'light' })
-    theme = remoteThemeOf({ surface: '#123456', scheme: 'dark' })
+    expect(client.ready.theme).toEqual({
+      '--bg': '#fff', '--error': '#a22', '--danger': '#a22', '--radius': '5px', '--scheme': 'light',
+      '--terminal-font': '"D2Coding", Consolas, "D2Coding", ui-monospace, monospace',
+      ...Object.fromEntries(ansi.flatMap((name, index) => [
+        [`--t-${name}`, `#00a00${index}`], [`--t-bright-${name}`, `#b0000${index}`]
+      ]))
+    })
+    theme = remoteThemeOf({
+      surface: '#123456', scheme: 'dark', terminalFont: 'font; background: red',
+      terminal: { cyan: 'rgba(10, 20, 30, 0.5)', red: 'rgb(256 0 0)', black: 'url(/resource)', brightGreen: '0'.repeat(90) }
+    })
     context.server.themeChanged()
-    expect(await client.next()).toEqual({ type: 'theme', theme: { '--panel': '#123456', '--scheme': 'dark' } })
+    expect(await client.next()).toEqual({ type: 'theme', theme: { '--panel': '#123456', '--scheme': 'dark', '--t-cyan': 'rgba(10, 20, 30, 0.5)' } })
   })
 
   it('sends the remembered ticket before the signed-in view so a reload can resume immediately', async () => {
@@ -764,6 +796,52 @@ describe('createAccessServer under a name (HTTPS by the tailnet name)', () => {
     expect(written).toHaveLength(2)
   })
 
+  it('limits a device to six PC tab subscriptions and frees a place on detach', async () => {
+    const detach = vi.fn()
+    const tabs = {
+      enabled: true,
+      attach: vi.fn(id => ({ name: id, cols: 80, rows: 24, snapshot: '', detach: () => detach(id) }))
+    }
+    const browser = { enabled: true, tab: () => ({ available: true }) }
+    context = setup({ tabs, browser })
+    await context.server.start('127.0.0.1', PORT)
+    const device = connect()
+    await device.opened
+    device.send({ type: 'pair', code: context.store.startPairing().code, name: 'phone' })
+    const { token } = await device.next()
+    device.send({ type: 'signin', token, code: totp.codeFor(context.store.totpSecret, totp.counterAt(Date.now())), remember: true })
+    const { ticket } = await device.next()
+    expect(await device.next()).toMatchObject({ type: 'ready' })
+    const sameDevice = connect()
+    await sameDevice.opened
+    sameDevice.send({ type: 'resume', token, ticket })
+    expect(await sameDevice.next()).toMatchObject({ type: 'ready' })
+
+    async function attach(client, tabId, result = 'tab-attached') {
+      client.send({ type: 'tab-attach', tabId })
+      expect(await client.next()).toMatchObject({ type: result, tabId })
+    }
+    for (let index = 0; index < 6; index++) await attach(device, `t${index}`)
+    await attach(device, 't6', 'tab-error')
+    await attach(sameDevice, 't6', 'tab-error')
+    const browserView = { viewId: 1, tabId: 'browser:fixture' }
+    sameDevice.send({ type: 'browser-open', ...browserView })
+    expect(await sameDevice.next()).toMatchObject({ type: 'browser-ended', ...browserView, message: expect.stringContaining('6개') })
+    expect(tabs.attach).toHaveBeenCalledTimes(6)
+    await attach(device, 't0')
+    expect(detach).toHaveBeenCalledWith('t0')
+
+    const otherDevice = await signedIn(context)
+    await attach(otherDevice, 't6')
+    device.send({ type: 'tab-detach', tabId: 't1' })
+    await vi.waitFor(() => expect(detach).toHaveBeenCalledWith('t1'))
+    sameDevice.send({ type: 'browser-open', ...browserView })
+    expect(await sameDevice.next()).toMatchObject({ type: 'browser-opened', ...browserView })
+    await attach(sameDevice, 't6', 'tab-error')
+    sameDevice.send({ type: 'browser-close', ...browserView })
+    await attach(sameDevice, 't6')
+  })
+
   it('keeps quick connections read-only and detaches them when PC tab access is switched off', async () => {
     const detach = vi.fn()
     const tabs = {
@@ -792,6 +870,60 @@ describe('createAccessServer under a name (HTTPS by the tailnet name)', () => {
     expect(detach).toHaveBeenCalledTimes(1)
   })
 
+  it('follows a browser tab and sends only the selected element through the agent setting', async () => {
+    let clock = Date.now()
+    const tabId = 'browser:review'
+    const selection = { id: 'selection-1', tag: 'button', label: '저장', selector: '#save', componentFile: 'local-path' }
+    const frame = { viewport: [1, 1, 1024, 768] }
+    const tab = {
+      available: true,
+      capture: vi.fn(async () => ({ frame, jpeg: 'abcd' })),
+      pick: vi.fn(async () => ({ selection, rect: { x: 0.2, y: 0.3, width: 0.2, height: 0.1 } })),
+      send: vi.fn(() => ({ success: true }))
+    }
+    const list = [{ id: tabId, name: '개발 화면', kind: 'browser', folder: 'ezShell' }]
+    const browser = { enabled: true, list: () => list, tab: id => id === tabId ? tab : null, recipients: () => [{ id: 'codex-1' }] }
+    const agents = { enabled: false, closeViewer() {} }
+    context = setup({ browser, agents, now: () => clock })
+    await context.server.start('127.0.0.1', PORT)
+    const client = await signedIn(context)
+    const send = (type, fields) => client.send({ type, tabId, viewId: 1, ...fields })
+    expect(client.ready.features).toEqual({ tabs: true, agents: false })
+    client.send({ type: 'tabs-list' })
+    expect(await client.next()).toEqual({ type: 'tabs', tabs: list })
+    send('browser-open')
+    expect(await client.next()).toMatchObject({ type: 'browser-opened', tabId, viewId: 1 })
+    send('browser-frame')
+    const preview = await client.next()
+    expect(preview).toEqual({ type: 'browser-image', viewId: 1, tabId, frameId: expect.any(String), jpeg: 'abcd' })
+    send('browser-pick', { frameId: 'other-view', x: 0.3, y: 0.4 })
+    expect(await client.next()).toMatchObject({ operation: 'browser-pick', refresh: true })
+    expect(tab.pick).not.toHaveBeenCalled()
+    send('browser-pick', { frameId: preview.frameId, x: 0.3, y: 0.4 })
+    const picked = await client.next()
+    expect(picked).toMatchObject({ operation: 'browser-pick', selection: { id: selection.id, selector: '#save' }, recipients: [] })
+    expect(JSON.stringify(picked)).not.toContain('local-path')
+    expect(tab.pick).toHaveBeenCalledWith(frame, 0.3, 0.4)
+    const request = { selectionId: selection.id, agentId: 'codex-1', text: '문구를 바꿔 주세요' }
+    send('browser-request', request)
+    expect(await client.next()).toMatchObject({ error: expect.stringContaining('에이전트 쓰기') })
+    expect(tab.send).not.toHaveBeenCalled()
+    agents.enabled = true
+    send('browser-request', request)
+    expect(await client.next()).toMatchObject({ type: 'browser-result', operation: 'browser-request', ok: true })
+    expect(tab.send).toHaveBeenCalledExactlyOnceWith(frame, selection, 'codex-1', request.text)
+    expect(JSON.stringify(context.log.mock.calls)).not.toContain(request.text)
+    send('browser-request', request)
+    expect(await client.next()).toMatchObject({ error: expect.stringContaining('다시 선택') })
+    clock += 15_001
+    send('browser-pick', { frameId: preview.frameId, x: 0.3, y: 0.4 })
+    expect(await client.next()).toMatchObject({ refresh: true })
+    browser.enabled = false
+    context.server.tabsChanged()
+    expect(await client.next()).toMatchObject({ type: 'browser-ended', tabId })
+    expect(await client.next()).toMatchObject({ type: 'tabs', tabs: [] })
+  })
+
   it('refuses every agent message while the setting is off', async () => {
     const agents = { enabled: false, list: vi.fn(() => []), open: vi.fn(), send: vi.fn(), closeViewer: vi.fn(), close: vi.fn(), describe: () => 'claude-1' }
     context = setup({ agents })
@@ -805,6 +937,30 @@ describe('createAccessServer under a name (HTTPS by the tailnet name)', () => {
     expect(agents.send).not.toHaveBeenCalled()
     expect(agents.list).not.toHaveBeenCalled()
     expect(context.log).toHaveBeenCalledWith('chat-send', { device: 'phone', agent: 'claude-1', chars: 2, ok: false })
+  })
+
+  it('keeps two browser previews attached with distinct view IDs and closes only the selected one', async () => {
+    let clock = Date.now()
+    const browser = {
+      enabled: true,
+      list: () => [],
+      tab: id => ({ available: true, capture: async () => ({ frame: {}, jpeg: id }) })
+    }
+    context = setup({ browser, now: () => clock })
+    await context.server.start('127.0.0.1', PORT)
+    const client = await signedIn(context)
+    const a = { tabId: 'browser:a', viewId: 1 }
+    const b = { tabId: 'browser:b', viewId: 2 }
+    for (const view of [a, b]) {
+      client.send({ type: 'browser-open', ...view })
+      expect(await client.next()).toMatchObject({ type: 'browser-opened', ...view })
+    }
+    client.send({ type: 'browser-frame', ...a })
+    expect(await client.next()).toMatchObject({ type: 'browser-image', ...a, jpeg: a.tabId })
+    client.send({ type: 'browser-close', ...a })
+    clock += 700
+    client.send({ type: 'browser-frame', ...b })
+    expect(await client.next()).toMatchObject({ type: 'browser-image', ...b, jpeg: b.tabId })
   })
 
   it('passes agent actions to the bridge, frames only to the device that opened the chat, and logs no text', async () => {

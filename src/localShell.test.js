@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, promises, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, promises, readFileSync, realpathSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { createAgentMessages } from './ipc/agentMessages.js'
@@ -44,6 +45,115 @@ describe('defaultShell', () => {
 })
 
 describe('createLocalShells', () => {
+  it.skipIf(process.platform !== 'win32')('passes through legacy agy, caches the probe, and rechecks a replaced binary', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'ezshell-agy-launch-'))
+    const settings = join(profile, 'chat settings.json')
+    const shim = join(profile, 'agy.ps1')
+    const helpLog = join(profile, 'help.log')
+    try {
+      writeFileSync(settings, '{}')
+      writeFileSync(shim, String.raw`
+if ($args[0] -ceq '--help') {
+    $global:LASTEXITCODE = 0
+    if ($env:EZSHELL_TEST_AGY_UPDATED) { Write-Output '  -s, --settings' }
+    else { Write-Output '  --settings-file string' }
+    Write-Output '  --version'
+    Add-Content -LiteralPath $env:EZSHELL_TEST_AGY_HELP 'probe'
+} else {
+    Write-Output (ConvertTo-Json -Compress -InputObject @($env:AGY_CLI_OSC7501, $env:AGY_CLI_OSC7501_MESSAGES, @($args)))
+}
+`)
+      const { shells, spawn } = setup({
+        platform: 'win32', shell: defaultShell('win32'), cwd: profile,
+        agents: { registerShell: () => ({ EZSHELL_ANTIGRAVITY_SETTINGS: settings }) }
+      })
+      const id = shells.open().id
+      const launch = spawn.mock.calls[0][1].at(-1)
+      shells.close(id)
+      const script = String.raw`
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$ProgressPreference = 'SilentlyContinue'
+function global:Get-Command {
+    param($Name, $CommandType, $ErrorAction)
+    if ($Name -eq 'agy.exe') { return $env:EZSHELL_TEST_AGY_SHIM }
+    if ($Name -eq 'agy') { return }
+    Microsoft.PowerShell.Core\Get-Command @PSBoundParameters
+}
+$env:AGY_CLI_OSC7501 = 'user-osc'
+$env:AGY_CLI_OSC7501_MESSAGES = 'user-messages'
+${launch}
+agy 'two words' '$literal'
+agy second
+$env:EZSHELL_TEST_AGY_UPDATED = 'yes'
+agy --settings 'user settings.json'
+agy update
+Add-Content -LiteralPath $env:EZSHELL_TEST_AGY_SHIM '# updated'
+agy 'after update'
+agy again
+Write-Output "$env:AGY_CLI_OSC7501/$env:AGY_CLI_OSC7501_MESSAGES"
+`
+      const output = execFileSync('powershell.exe', [
+        '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')
+      ], {
+        windowsHide: true, encoding: 'utf8', env: {
+          ...process.env, EZSHELL_ANTIGRAVITY_SETTINGS: settings,
+          EZSHELL_TEST_AGY_SHIM: shim, EZSHELL_TEST_AGY_HELP: helpLog
+        }
+      })
+      const lines = output.trim().split(/\r?\n/)
+      expect(lines.filter(line => line.startsWith('\x1b[2m'))).toEqual([
+        '\x1b[2m이 Antigravity CLI 는 ezShell 채팅 보기에 필요한 설정을 지원하지 않습니다. agy update 로 업데이트하면 채팅 보기를 쓸 수 있습니다.\x1b[0m'
+      ])
+      expect(lines.filter(line => line.startsWith('[')).map(line => JSON.parse(line))).toEqual([
+        ['user-osc', 'user-messages', ['two words', '$literal']],
+        ['user-osc', 'user-messages', ['second']],
+        ['user-osc', 'user-messages', ['--settings', 'user settings.json']],
+        ['user-osc', 'user-messages', ['update']],
+        ['on', 'brief', ['--settings', settings, 'after update']],
+        ['on', 'brief', ['--settings', settings, 'again']]
+      ])
+      expect(lines.at(-1)).toBe('user-osc/user-messages')
+      expect(readFileSync(helpLog, 'utf8').trim().split(/\r?\n/)).toEqual(['probe', 'probe'])
+    } finally {
+      for (const file of [settings, shim, helpLog]) rmSync(file, { force: true })
+      rmdirSync(profile)
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('only injects Antigravity settings in managed Unix launches that support them', () => {
+    const profile = mkdtempSync(join(tmpdir(), 'ezshell-agy-launch-'))
+    const settings = join(profile, 'chat settings.json')
+    const shim = join(profile, 'agy')
+    try {
+      writeFileSync(shim, String.raw`#!/bin/sh
+if [ "$1" = "--help" ]; then
+    printf "%s\n" "$EZSHELL_TEST_AGY_HELP"
+    exit 0
+fi
+printf "run:<%s><%s><%s><%s>\n" "$AGY_CLI_OSC7501" "$AGY_CLI_OSC7501_MESSAGES" "$1" "$2"
+`, { mode: 0o755 })
+      const { shells, spawn } = setup({
+        platform: 'linux', shell: { file: '/bin/sh', args: [], name: 'sh' }, cwd: profile,
+        agents: { registerShell: () => ({ EZSHELL_ANTIGRAVITY_SETTINGS: settings }) }
+      })
+      const id = shells.open({ agent: 'antigravity' }).id
+      const launch = spawn.mock.calls[0][1].at(-1)
+      shells.close(id)
+      const run = help => execFileSync('/bin/sh', ['-c', launch], {
+        encoding: 'utf8', env: {
+          ...process.env, PATH: `${profile}:${process.env.PATH}`, EZSHELL_ANTIGRAVITY_SETTINGS: settings,
+          EZSHELL_TEST_AGY_HELP: help, AGY_CLI_OSC7501: '', AGY_CLI_OSC7501_MESSAGES: ''
+        }
+      })
+      expect(run('  --settings-file string')).toMatch(/^\x1b\[2m이 Antigravity CLI .*\x1b\[0m\nrun:<><><><>\n$/)
+      expect(run('  -s, --settings string')).toBe(`run:<on><brief><--settings><${settings}>\n`)
+    } finally {
+      rmSync(shim, { force: true })
+      rmdirSync(profile)
+    }
+  })
+
   it('binds the Antigravity status reporter, rejects tool descendants, keeps OSC blocking, and detaches on exit', async () => {
     let shells
     let locked = false
@@ -351,6 +461,36 @@ describe('createLocalShells', () => {
       }
     } finally {
       shells.closeAll()
+    }
+  })
+
+  it.each(['launch', 'reported', 'mismatch', 'missing'])('attests an external Codex working folder from the shell (%s)', async mode => {
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), 'ezshell-codex-folder-')))
+    const moved = join(folder, 'moved')
+    mkdirSync(moved)
+    const processes = new Map([
+      [13, { parent: 10, name: 'codex.exe', startedAt: 1500 }],
+      [14, { parent: 13, name: 'electron.exe' }]
+    ])
+    const { shells, ptys } = setup({ cwd: folder, processTree: async () => processes, processAlive: pid => processes.has(pid), agents: {} })
+    shells.open()
+    ptys[0].pid = 10
+    try {
+      if (mode === 'reported' || mode === 'mismatch') {
+        ptys[0].emit(`\x1b]7;${require('node:url').pathToFileURL(moved).href}\x07`)
+      }
+      const cwd = mode === 'reported' ? moved : mode === 'missing' ? undefined : folder
+      const attach = await shells.bindAgentProcess({ pid: 14, kind: 'codex', cwd })
+      const binding = attach({ agentId: 'codex-1', setStatus: vi.fn(), onExit: vi.fn() })
+      if (mode === 'mismatch' || mode === 'missing') {
+        expect(binding).not.toHaveProperty('codexProcessStartedAt')
+        expect(binding).not.toHaveProperty('codexRoleCwd')
+      } else {
+        expect(binding).toMatchObject({ codexProcessStartedAt: 1500, codexRoleCwd: cwd })
+      }
+    } finally {
+      shells.closeAll()
+      rmSync(folder, { recursive: true, force: true })
     }
   })
 
@@ -905,6 +1045,30 @@ describe('createLocalShells', () => {
       expect(report(id, 'claude')).toBeUndefined()
       expect(shells.agentOf(id).status).toBe('idle')
     } finally { shells.close(id); shells.close(other) }
+  })
+
+  it('reports a quiet open hook turn and time since the last idle activity only for the owning agent', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const { shells } = setup({ agents: { register: () => ({ env: { EZSHELL_AGENT_ID: 'claude-1' }, close: vi.fn() }) } })
+    vi.setSystemTime(1000)
+    const { id } = shells.open({ agent: 'claude' })
+    const report = (event, promptId) => shells.reportAgentHook(id, 'claude-1',
+      { kind: 'claude', event, promptId, startedAt: Date.now() })
+    try {
+      report('SessionStart')
+      vi.setSystemTime(2000)
+      expect(shells.inspectAgent(id, 'claude-1')).toMatchObject({ status: 'idle', statusSource: 'hook', idleFor: 1000, blocked: null })
+      expect(shells.inspectAgent(id, 'claude-2')).toBeNull()
+      report('UserPromptSubmit', 'turn')
+      vi.setSystemTime(121_999)
+      expect(shells.inspectAgent(id, 'claude-1')).toMatchObject({ status: 'working', idleFor: null, blocked: null })
+      vi.setSystemTime(122_000)
+      expect(shells.inspectAgent(id, 'claude-1')).toMatchObject({ status: 'working', blocked: { kind: 'hook-running' } })
+      report('PreToolUse', 'turn')
+      expect(shells.inspectAgent(id, 'claude-1')).toMatchObject({ blocked: null })
+      report('SessionEnd', 'turn')
+      expect(shells.inspectAgent(id, 'claude-1')).toMatchObject({ status: 'ended', blocked: { kind: 'ended' } })
+    } finally { shells.close(id); vi.useRealTimers() }
   })
 
   // Recorded from Claude Code (2026-11): working spins ◐/◑ in the title, idle is ✳, and it sends no

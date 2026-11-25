@@ -10,6 +10,7 @@ export interface Toast {
   message?: string
   duration?: number  // ms, 0 = no auto-dismiss
   dismissible?: boolean
+  action?: { label: string; run: () => void }
 }
 
 interface ToastState {

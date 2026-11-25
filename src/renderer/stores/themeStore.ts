@@ -8,6 +8,7 @@ import { normalizeTheme, sanitizeStoredThemes } from '../lib/themeValidation'
 import { detectDefaultThemeId } from '../lib/defaultTheme'
 import { clampWindowOpacity, effectiveSurface, parseSurface, type SurfaceStyle } from '../lib/appearance'
 import { quickCaptureTheme } from '../lib/quickCaptureTheme'
+import { useTerminalStore } from './terminalStore'
 
 interface ThemeState {
   currentThemeId: string
@@ -55,10 +56,13 @@ function applyThemeToDocument(theme: ThemeDefinition, surface: SurfaceStyle) {
   if (theme.chrome) root.setAttribute('data-chrome', theme.chrome)
   else root.removeAttribute('data-chrome')
   root.style.colorScheme = colorSchemeFor(theme.colors.bgPrimary) ?? ''
-  if (window.electronAPI?.setQuickCaptureTheme) {
-    const capture = quickCaptureTheme(theme.colors, getComputedStyle(root), scheme)
-    if (capture) window.electronAPI.setQuickCaptureTheme(capture)
-  }
+  publishCaptureTheme(theme, scheme, useTerminalStore.getState().fontFamily)
+}
+
+function publishCaptureTheme(theme: ThemeDefinition, scheme: 'light' | 'dark', terminalFont: string) {
+  if (!window.electronAPI?.setQuickCaptureTheme) return
+  const capture = quickCaptureTheme(theme.colors, getComputedStyle(document.documentElement), scheme, theme.terminal)
+  if (capture) window.electronAPI.setQuickCaptureTheme({ ...capture, terminalFont })
 }
 
 type BackdropApi = {
@@ -246,3 +250,9 @@ export const useThemeStore = create<ThemeState>()(
     }
   )
 )
+
+useTerminalStore.subscribe((next, previous) => {
+  if (typeof window === 'undefined' || next.fontFamily === previous.fontFamily) return
+  const theme = useThemeStore.getState().getCurrentTheme()
+  publishCaptureTheme(theme, colorSchemeFor(theme.colors.bgPrimary) ?? 'dark', next.fontFamily)
+})

@@ -1,0 +1,60 @@
+# Builds the Windows portable exe on a GitHub-hosted Windows runner and attaches it to the release.
+#
+# The local deploy (npm run build:publish) builds and uploads only the installer (NSIS) and
+# latest.yml, which is all that auto-update needs. The portable exe took about 2 of the 3 minutes
+# of a local deploy (2.34.0), so it is built here after the release is published instead.
+#
+# - A release is published (the Windows deploy does that): build, then attach to that release.
+# - Run workflow (Actions tab): build only, the file is kept as a workflow artifact. With a release
+#   tag given (v2.35.0), the file is also attached to that release (for a release whose build failed).
+
+name: Windows portable build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach the file to (empty: build only)'
+        required: false
+        default: ''
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-portable:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # From Electron 42 the npm package no longer downloads the binary when it is installed
+      - name: Download the Electron binary
+        run: npx install-electron --no
+
+      - name: Build portable exe
+        run: npm run build:portable -- --publish never
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ezshell-windows-portable
+          if-no-files-found: error
+          path: release/*-portable.exe
+
+      - name: Attach to the release
+        if: github.event_name == 'release' || inputs.tag != ''
+        shell: bash
+        run: gh release upload "$TAG" release/*-portable.exe --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}

@@ -97,7 +97,7 @@ export function AgentMessageThread({ messages, originals, name, actor, identityO
   messages: readonly AgentMessage[]
   originals: ReadonlyMap<string, AgentMessage>
   name: string
-  actor: (id: string) => ReactNode
+  actor: (id: string, nameOnly?: boolean) => ReactNode
   identityOf: (id: string) => string
   states: ReadonlyMap<string, MessageState>
   term: string
@@ -112,13 +112,12 @@ export function AgentMessageThread({ messages, originals, name, actor, identityO
           <div className="agent-message-date">{day.label}</div>
           {day.groups.map(group => {
             const outgoing = group.from === rightAgent
-            const allAgents = rightAgent === undefined
             return (
               <div key={group.messages[0].id} className="agent-message-group" data-side={outgoing ? 'right' : 'left'} data-sender={group.from}
                 style={{ '--agent-bubble-color': group.from === 'user' ? 'var(--text-secondary)' : agentIdentityColor(group.from) } as CSSProperties}>
                 <div className="agent-message-group-label">
-                  {(pair || allAgents || !outgoing) && actor(group.from)}
-                  {!pair && (outgoing || allAgents) && <><span className="agent-message-send-arrow" aria-hidden="true">{'→ '}</span>{actor(group.to)}</>}
+                  {actor(group.from, outgoing && !pair)}
+                  {!pair && rightAgent === undefined && <><span className="agent-message-send-arrow" aria-hidden="true">{'→ '}</span>{actor(group.to)}</>}
                 </div>
                 {group.messages.map(message => {
                   const original = message.replyTo ? originals.get(message.replyTo) : undefined

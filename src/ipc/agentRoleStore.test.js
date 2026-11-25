@@ -46,6 +46,43 @@ const getRole = id => messages.snapshot().agents.find(agent => agent.id === id)
 const readFile = () => JSON.parse(fs.readFileSync(file, 'utf8'))
 
 describe('agent roles saved by conversation', () => {
+  it('persists both fresh Codex roles only when the watcher proof agrees with the current authenticated hook', async () => {
+    await restart()
+    const codex = register('codex', 'local:1')
+    const startedAt = getRole(codex.id).startedAt
+    const originalEpoch = messages.freshRoleEpoch()
+    await codex.setRole('리뷰')
+    messages.setUserRole(codex.id, '개발')
+    expect(messages.setFreshCodexRoleSession(codex.id, session, startedAt, originalEpoch)).toBe(false)
+    messages.setHookSession(codex.id, session)
+    expect(messages.setFreshCodexRoleSession(codex.id, anotherSession, startedAt, originalEpoch)).toBe(false)
+    expect(messages.setFreshCodexRoleSession(codex.id, session, startedAt + 1, originalEpoch)).toBe(false)
+    expect(fs.existsSync(file)).toBe(false)
+    expect(getRole(codex.id).layoutKey).toBeNull()
+    locked = true
+    messages.invalidateFreshRoleChecks()
+    expect(messages.setFreshCodexRoleSession(codex.id, session, startedAt, originalEpoch)).toBe(false)
+    locked = false
+    expect(messages.setFreshCodexRoleSession(codex.id, session, startedAt, originalEpoch)).toBe(false)
+    expect(fs.existsSync(file)).toBe(false)
+    expect(messages.setFreshCodexRoleSession(codex.id, session, startedAt, messages.freshRoleEpoch())).toBe(true)
+    expect(getRole(codex.id).layoutKey).toEqual(expect.any(String))
+    expect(getRole(codex.id)).not.toHaveProperty('resumeId')
+    expect(readFile()[`codex:${session}`]).toMatchObject({ user: '개발', agent: '리뷰' })
+
+    messages.setHookSession(codex.id, anotherSession)
+    expect(getRole(codex.id)).toMatchObject({ role: '개발', layoutKey: null })
+    messages.setUserRole(codex.id, '다른 대화')
+    expect(messages.setFreshCodexRoleSession(codex.id, anotherSession, startedAt, messages.freshRoleEpoch())).toBe(false)
+    expect(readFile()[`codex:${session}`].user).toBe('개발')
+    expect(readFile()).not.toHaveProperty(`codex:${anotherSession}`)
+
+    await restart()
+    const resumed = register('codex', 'local:2', session)
+    expect(getRole(resumed.id)).toMatchObject({ role: '개발', roleSource: 'user' })
+    expect(messages.setUserRole(resumed.id, '')).toMatchObject({ role: '리뷰', roleSource: 'agent' })
+  })
+
   it('restores both choices on restart and keeps different conversations and providers separate', async () => {
     await restart()
     const first = register('claude', 'local:1')

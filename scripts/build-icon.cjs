@@ -13,6 +13,7 @@ const { smallIconSvg } = require('./iconSvg.cjs');
 
 const ASSETS = path.join(__dirname, '..', 'assets');
 const TITLE_BAR_ICON = path.join(__dirname, '..', 'src', 'renderer', 'assets', 'app-icon.svg');
+const REMOTE_WEB = path.join(__dirname, '..', 'src', 'remoteAccess', 'web');
 const SIZES = [16, 20, 24, 32, 40, 48, 64, 256];
 const ICNS_SIZES = [32, 64, 128, 256, 512, 1024]; // macOS .icns slots (see icns.cjs)
 const PNG_ONLY_FROM = 256; // Windows expects PNG for the 256px entry
@@ -101,7 +102,14 @@ async function main() {
   }
   fs.writeFileSync(path.join(ASSETS, 'icon.icns'), packIcns(icnsEntries));
 
-  fs.writeFileSync(TITLE_BAR_ICON, smallIconSvg(svgText));
+  const smallIcon = smallIconSvg(svgText);
+  fs.writeFileSync(TITLE_BAR_ICON, smallIcon);
+  for (const size of [192, 512]) {
+    const { png } = await win.webContents.executeJavaScript(
+      `(${renderInPage.toString()})(${JSON.stringify(smallIcon)}, ${size}, 0)`
+    );
+    fs.writeFileSync(path.join(REMOTE_WEB, `icon-${size}.png`), dataUrlToBuffer(png));
+  }
 
   if (process.env.ICON_PREVIEW) {
     const sheet = await win.webContents.executeJavaScript(`(${previewInPage.toString()})(${JSON.stringify(pngBySize)})`);

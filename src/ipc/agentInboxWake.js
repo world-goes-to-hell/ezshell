@@ -2,6 +2,7 @@ const { createHash, randomUUID } = require('node:crypto')
 const { Terminal } = require('@xterm/headless')
 const { hasCodexSpeedChoice } = require('./codexSpeed.js')
 const { readAntigravityScreen } = require('./antigravityInboxScreen.js')
+const { isAgentPickerScreen } = require('./agentPicker.js')
 const { PROMPT, BUSY_PROMPT, REMIND_PROMPT } = require('./agentInboxPrompts.js')
 const { claudeQueueVisible } = require('../agentChat/commandScreen.js')
 const { isCodexHookTrustScreen } = require('./codexHookLaunch.js')
@@ -57,6 +58,12 @@ const CLAUDE_QUESTION_HINT = /^(?:Enter to (?:select|submit|chat)|Space to toggl
 // Claude's own dialogs ("Teach auto mode about your environment?") end their choices with this hint and
 // can sit above a composer that is still drawn, with a notice below them (2026-11-24 user report)
 const CLAUDE_DIALOG_HINT = /^Enter to confirm\b.*\bEsc to cancel$/i
+// The startup trust gate has both choices and its key hint at the end of the visible screen.
+const CLAUDE_TRUST_CHOICE = '(❯ *)?(?:[12][.)] *)?(Yes, I trust this folder|No, exit)'
+const CLAUDE_TRUST_MENU = new RegExp(`(?:^| )${CLAUDE_TRUST_CHOICE} ${CLAUDE_TRUST_CHOICE} Enter to confirm *· *Esc to cancel$`, 'u')
+const CLAUDE_FOLDER_TRUST = {
+  question: null, detail: [], options: [], selected: null, signature: 'claude-folder-trust', terminalOnly: 'folder-trust'
+}
 const CLAUDE_QUESTION_TABS = /(?:^\s*←.*\bSubmit\b|\bSubmit\b.*→\s*$|^\s*[☐□☒]\s+\S)/u
 const CLAUDE_QUESTION_CHOICE = /^(?:\[[ xX✓✔]\]\s+|(?:Type something\.?|Chat about this)$)/i
 const APPROVAL_ABSENCE_MS = 150
@@ -135,6 +142,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   let approvalTimer = null
   let approvalVisible = false
   let approvalOccurrence = 0
+  let observedHumanBlock = null
+  let commandScreenOpen = false
   const prompt = kind === 'codex' ? /^\s*›[ \u00a0]/u : /^\s*[>❯][ \u00a0]/u
 
   function isDimmedDraft(line, start) {
@@ -219,7 +228,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   /** `textLength`: the longest draft to look for (default: our own prompts) */
   function composer(textLength = LONGEST_PROMPT, textLines = 1, matchesCodexAttachment) {
     if (antigravity) return readAntigravityScreen(screen).composer
-    if (!screen.modes.bracketedPasteMode) return null
+    if (!screen.modes.bracketedPasteMode || claudeFolderTrustScreen() || agentPickerScreen()) return null
     const { active: buffer } = screen.buffer
     const cursor = buffer.baseY + buffer.cursorY
     const line = index => buffer.getLine(index)?.translateToString(false) ?? ''
@@ -352,13 +361,21 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     // Not while a model / effort picker is open: main is answering that one itself (agentPicker.js)
     if (stopped || chat || stage || held) return null
     const prompt = readApprovalScreen()
-    return prompt && !prompt.usesTerminalInput ? { ...prompt, signature: approvalIdentity(prompt.signature) } : prompt
+    return prompt && !prompt.usesTerminalInput && !prompt.terminalOnly ? { ...prompt, signature: approvalIdentity(prompt.signature) } : prompt
   }
 
   const approvalIdentity = signature => `${approvalOccurrence}:${signature}`
 
   function readApprovalScreen(checkBehindComposer = false) {
     if (codexHookTrustScreen()) return null
+    if (claudeFolderTrustScreen()) {
+      claudeQuestion = null
+      return CLAUDE_FOLDER_TRUST
+    }
+    if (agentPickerScreen()) {
+      claudeQuestion = null
+      return null
+    }
     if (antigravity) {
       return readAntigravityScreen(screen).blocked
         ? { question: null, detail: [], options: [], selected: null, signature: 'antigravity-terminal', usesTerminalInput: true }
@@ -477,7 +494,41 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   function chatBlocked() {
     if (isBlocked() || codexHookTrustScreen()) return true
     const approval = readApprovalScreen(true)
-    return Boolean(approval?.usesTerminalInput || approval?.selected)
+    return Boolean(approval?.usesTerminalInput || approval?.terminalOnly || approval?.selected)
+  }
+
+  function readHumanBlock(prompt) {
+    if (codexHookTrustScreen()) return { kind: 'hook-trust' }
+    if (prompt?.terminalOnly === 'folder-trust') return { kind: 'folder-trust' }
+    if (kind === 'claude' && prompt?.usesTerminalInput) {
+      return { kind: 'question', question: prompt.question }
+    }
+    if (!prompt?.selected || !prompt.options.length) return null
+    return { kind: 'approval', question: prompt.question, options: prompt.options.map(option => option.label) }
+  }
+
+  function observeHumanBlock(human) {
+    if (!human) observedHumanBlock = null
+    // The visible approval may be rewrapped or redrawn while the user is still making the same decision.
+    else if (human.kind !== observedHumanBlock?.kind) observedHumanBlock = { kind: human.kind, ticket: Symbol() }
+    return observedHumanBlock?.ticket
+  }
+
+  function inspectBlock() {
+    if (stopped || parsedOutputVersion !== outputVersion) return null
+    const human = readHumanBlock(readApprovalScreen())
+    const ticket = observeHumanBlock(human)
+    if (human) return { blocked: human, ticket }
+    if (agentPickerScreen()) return { blocked: { kind: 'cli-screen' } }
+    const input = composer(Infinity)
+    if (commandScreenOpen && !input && !shellAtCursor()) return { blocked: { kind: 'cli-screen' } }
+    if (input?.text && !input.suggestion && !shellAtCursor()) {
+      const wakeText = (stage ?? expiredWake)?.prompt
+      const ours = !userDraft && (input.text === lastChatDraft?.text ||
+        input.text === lastChatDraft?.displayed || (wakeText !== undefined && input.text === compact(wakeText)))
+      return { blocked: { kind: 'draft', ours } }
+    }
+    return { blocked: null }
   }
 
   function chatComposerIsEmpty(input) {
@@ -493,17 +544,18 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   function scheduleApprovalCheck() {
-    if (!onApprovalChange || stopped || held || approvalTimer) return
+    if ((!onApprovalChange && !observedHumanBlock) || stopped || held || approvalTimer) return
     approvalTimer = setTimeout(() => {
       approvalTimer = null
       if (stopped || held) return
       const prompt = readApprovalScreen()
+      if (observedHumanBlock && parsedOutputVersion === outputVersion) observeHumanBlock(readHumanBlock(prompt))
       // A numbered list in streamed output has no selected row. Claude's checklist has its own footer.
-      const visible = Boolean(prompt?.usesTerminalInput || prompt?.selected)
+      const visible = Boolean(prompt?.usesTerminalInput || prompt?.terminalOnly || prompt?.selected)
       if (visible === approvalVisible) return
       if (!visible) approvalOccurrence++
       approvalVisible = visible
-      onApprovalChange(visible)
+      onApprovalChange?.(visible)
     }, DRAW_SETTLE)
     approvalTimer.unref?.()
   }
@@ -921,7 +973,31 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     return Array.from({ length: screen.rows }, (_, row) => buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? '')
   }
 
+  function claudeFolderTrustScreen() {
+    if (kind !== 'claude' || stopped) return false
+    const { active: buffer } = screen.buffer
+    const tail = []
+    for (let row = buffer.baseY + screen.rows - 1; row >= buffer.baseY && tail.length < 8; row--) {
+      const text = buffer.getLine(row)?.translateToString(true).trim()
+      if (text) tail.unshift(text)
+    }
+    const match = CLAUDE_TRUST_MENU.exec(tail.join(' ').replace(/\s+/g, ' '))
+    return Boolean(match && match[2] !== match[4] && Boolean(match[1]) !== Boolean(match[3]))
+  }
+
   const codexHookTrustScreen = () => kind === 'codex' && isCodexHookTrustScreen(screenLines())
+  // Direct /model and /effort have no picker transaction to hold the PTY. Their numbered highlight
+  // is neither a live composer nor an approval: the slash-command watcher hands the screen to the terminal.
+  function agentPickerScreen() {
+    if (antigravity) return false
+    const { lines, wraps } = commandRows()
+    const logical = []
+    for (const [row, line] of lines.entries()) {
+      if (wraps[row] && logical.length) logical[logical.length - 1] += line
+      else logical.push(line)
+    }
+    return isAgentPickerScreen(kind, logical)
+  }
 
   function settleStopWake(attempt, continued = false, expired = false) {
     for (const [id, seenBefore] of attempt.messages) {
@@ -1028,6 +1104,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       const wasWriting = stage !== null
       screen.write(data, () => {
         parsedOutputVersion = version
+        if (commandScreenOpen && composer()) commandScreenOpen = false
         checkApprovalAnswer(true)
         if (chat) checkChat()
         else {
@@ -1039,6 +1116,10 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       })
     },
     approvalPrompt,
+    inspectBlock,
+    noteCommandScreen() {
+      commandScreenOpen = !stopped && parsedOutputVersion === outputVersion && !composer() && !shellAtCursor()
+    },
     /**
      * Answers the prompt on screen with one of its numbered choices, only if it is still the prompt the
      * user saw (same question and choices). The number key; then Enter only when the CLI just moved
@@ -1050,7 +1131,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         if (approvalWatch) return resolve({ ok: false, reason: 'busy' })
         if (chat || stage || held || composing || parsedOutputVersion !== outputVersion) return resolve({ ok: false, reason: 'changed' })
         const prompt = readApprovalScreen()
-        if (!prompt || prompt.usesTerminalInput || approvalIdentity(prompt.signature) !== signature || !prompt.options.some(option => option.key === key)) {
+        if (!prompt || prompt.usesTerminalInput || prompt.terminalOnly || approvalIdentity(prompt.signature) !== signature || !prompt.options.some(option => option.key === key)) {
           return resolve({ ok: false, reason: 'changed' })
         }
         const startedAt = Date.now()
@@ -1078,7 +1159,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         const start = () => {
           if (stopped || !isLive()) return resolve({ ok: false, reason: 'not-agent' })
           if (chat || stage || composing || held) return resolve({ ok: false, reason: 'busy' })
-          if (codexHookTrustScreen() || (relaxed && chatBlocked())) return resolve({ ok: false, reason: 'approval' })
+          if (relaxed ? chatBlocked() : codexHookTrustScreen() || claudeFolderTrustScreen()) return resolve({ ok: false, reason: 'approval' })
           if (antigravity && (isWorking() || isUnknown() || parsedOutputVersion !== outputVersion)) return resolve({ ok: false, reason: 'busy' })
           // Hangul and other wide characters can take two terminal cells per character.
           const files = kind === 'codex' ? images?.files : null

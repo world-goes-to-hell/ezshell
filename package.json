@@ -1,6 +1,6 @@
 {
   "name": "ezshell",
-  "version": "2.34.0",
+  "version": "2.35.0",
   "description": "Simple SSH Client with Beautiful UI",
   "main": "./out/main/index.js",
   "scripts": {
@@ -11,7 +11,7 @@
     "build:legacy": "electron-builder --win portable",
     "build:install": "electron-builder --win nsis",
     "build:copy-extra": "node -e \"const fs=require('fs');fs.mkdirSync('out/main/src',{recursive:true});for(const f of ['crypto.js','commandHistory.js'])fs.copyFileSync('src/'+f,'out/main/src/'+f)\"",
-    "build:publish": "electron-vite build && npm run build:copy-extra && electron-builder --win --publish always",
+    "build:publish": "electron-vite build && npm run build:copy-extra && electron-builder --win nsis --publish always",
     "build:nsis": "electron-vite build && npm run build:copy-extra && electron-builder --win nsis",
     "build:portable": "electron-vite build && npm run build:copy-extra && electron-builder --win portable",
     "build:all": "electron-vite build && npm run build:copy-extra && electron-builder --win nsis --win portable",

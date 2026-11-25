@@ -1,0 +1,118 @@
+/* `인계`: an answer handed to another agent (ChatHandoff.tsx). The card sits over the chat, not inside
+   the virtual list: a row that changed height there would move the conversation. */
+.agent-chat-handoff-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.agent-chat-handoff {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  inline-size: min(440px, 100%);
+  max-block-size: 100%;
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  font-size: 13px;
+}
+
+.agent-chat-handoff-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.agent-chat-handoff-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-block-size: 220px;
+  overflow: auto;
+}
+
+/* One row: the radio, the agent's colour dot, then its name over its status line */
+.agent-chat-handoff-agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+}
+.agent-chat-handoff-agent input { flex: none; width: 14px; height: 14px; margin: 0; }
+.agent-chat-handoff-agent:hover { background: var(--bg-hover); }
+.agent-chat-handoff-agent[data-selected] { border-color: var(--chat-focus, var(--accent)); }
+.agent-chat-handoff-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.agent-chat-handoff-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-chat-handoff-meta { overflow: hidden; color: var(--text-secondary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+
+.agent-chat-handoff-label { color: var(--text-secondary); font-size: 12px; }
+.agent-chat-handoff-comment {
+  inline-size: 100%;
+  min-block-size: 64px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  resize: vertical;
+}
+.agent-chat-handoff-comment:focus-visible { outline: 2px solid var(--chat-focus, var(--accent)); outline-offset: -1px; }
+
+.agent-chat-handoff-preview summary { color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.agent-chat-handoff-preview pre {
+  max-block-size: 160px;
+  margin: 6px 0 0;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-primary);
+  font: inherit;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-chat-handoff-empty,
+.agent-chat-handoff-error { margin: 0; font-size: 12px; }
+.agent-chat-handoff-empty { color: var(--text-secondary); }
+.agent-chat-handoff-error { color: var(--error-text, #e5534b); }
+
+.agent-chat-handoff-actions { display: flex; align-items: center; gap: 6px; }
+.agent-chat-handoff-hint { margin-inline-end: auto; color: var(--text-secondary); font-size: 11px; }
+
+/* The two buttons share one size; only their colours differ */
+.agent-chat-handoff-cancel,
+.agent-chat-handoff-send {
+  min-inline-size: 64px;
+  block-size: 30px;
+  margin: 0;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-sm, 4px);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.agent-chat-handoff-cancel { background: var(--bg-hover); color: var(--text-primary); }
+.agent-chat-handoff-cancel:hover { background: var(--bg-modifier-selected, var(--bg-hover)); }
+.agent-chat-handoff-send { border-color: var(--accent); background: var(--accent); color: var(--on-accent, #fff); }
+.agent-chat-handoff-send:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); }
+.agent-chat-handoff-send:disabled { opacity: 0.55; cursor: default; }
+.agent-chat-handoff-cancel:focus-visible,
+.agent-chat-handoff-send:focus-visible { outline: 2px solid var(--chat-focus, var(--accent)); outline-offset: 2px; }

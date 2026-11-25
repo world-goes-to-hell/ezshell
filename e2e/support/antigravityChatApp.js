@@ -44,6 +44,23 @@ class AgyFixture {
     }
 
     static int Main(string[] args) {
+        string profile = Environment.GetEnvironmentVariable("EZSHELL_TEST_AGY_PROFILE");
+        string prefix = Path.Combine(profile, Environment.GetEnvironmentVariable("EZSHELL_TEST_AGY_PANE") + "-agy-");
+        bool legacy = File.Exists(Path.Combine(profile, "agy-legacy"));
+        if (args.Length == 1 && args[0] == "--help") {
+            File.AppendAllText(prefix + "help", "probe" + Environment.NewLine);
+            Console.WriteLine(legacy ? "  --settings-file string" : "  -s, --settings string");
+            return 0;
+        }
+        if (legacy) {
+            if (Array.IndexOf(args, "--settings") >= 0) {
+                Console.Error.WriteLine("flags provided but not defined: -settings");
+                return 2;
+            }
+            File.AppendAllText(prefix + "legacy-args", string.Join("|", args) + Environment.NewLine);
+            Console.WriteLine("Legacy Antigravity started");
+            return 0;
+        }
         if (args.Length < 2 || args[0] != "--settings") return 2;
         var options = new ProcessStartInfo();
         options.FileName = Environment.GetEnvironmentVariable("EZSHELL_TEST_AGY_ELECTRON");
@@ -52,8 +69,6 @@ class AgyFixture {
         options.EnvironmentVariables["ELECTRON_RUN_AS_NODE"] = "1";
         options.EnvironmentVariables["EZSHELL_TEST_AGY_SETTINGS"] = args[1];
         using (var child = Process.Start(options)) {
-            string prefix = Path.Combine(Environment.GetEnvironmentVariable("EZSHELL_TEST_AGY_PROFILE"),
-                Environment.GetEnvironmentVariable("EZSHELL_TEST_AGY_PANE") + "-agy-");
             int sequence = 1;
             while (!child.WaitForExit(25)) {
                 var request = prefix + "status-request-" + sequence;

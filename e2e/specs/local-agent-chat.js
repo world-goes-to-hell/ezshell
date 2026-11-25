@@ -326,6 +326,34 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     window.electronAPI.agentMessagesSnapshot().then(state => state.agents.some(agent => agent.id === 'claude-1' && agent.status === 'idle'))
   `, 8000))
 
+  fs.writeFileSync(file('claude-1-approval'), [
+    '─'.repeat(60), ' Accessing workspace:', '', ' C:\\temp\\new-workspace', '',
+    ' Quick safety check: Is this a project you created or one you trust?', '',
+    ' Security guide', '', ' ❯ No, exit', '   Yes, I trust this folder', '', ' Enter to confirm · Esc to cancel'
+  ].join('\r\n'))
+  check('Claude folder trust shows the real terminal and blocks the chat composer', await until(`
+    ${checklist}?.textContent.includes('이 폴더를 신뢰할지 터미널에서 답해 주세요.') &&
+    ${questionScreen}?.textContent.includes('Yes, I trust this folder') && !${questionScreen}.inert &&
+    ${cover(0)}.querySelector('.agent-chat-status')?.dataset.status === 'blocked' &&
+    ${composer(0)}.readOnly && !${cover(0)}.querySelector('.agent-chat-approval-option') &&
+    window.electronAPI.agentMessagesSnapshot().then(state => state.agents.some(agent => agent.id === 'claude-1' && agent.status === 'blocked'))
+  `, 8000))
+  const beforeTrustKeys = read(questionInputFile).length
+  // xterm sends its own focus reports when the user moves between the chat and terminal.
+  const trustKeys = () => read(questionInputFile).slice(beforeTrustKeys).replace(/\x1b\[[IO]/g, '')
+  check('a direct chat send is rejected without typing into folder trust', await js(`
+    window.electronAPI.agentChatSend(${pane(0)}.dataset.localShellId, 'This must not be pasted').then(result => result.ok === false)
+  `) && trustKeys() === '')
+  await click(...await center(`${checklist}.querySelector('button')`))
+  check('the folder trust button focuses the terminal without selecting a choice', await until(`
+    ${questionScreen}?.querySelector('.xterm-helper-textarea') === document.activeElement
+  `) && trustKeys() === '', JSON.stringify(trustKeys()))
+  await pressQuestionKey('Enter', 13)
+  check('only the user’s Enter reaches the folder trust prompt', !!await waitFor(() => trustKeys() === '\r'), JSON.stringify(trustKeys()))
+  fs.writeFileSync(file('claude-1-approval'), '')
+  check('after folder trust closes the keyboard returns to the chat composer', await until(`
+    ${composer(0)} === document.activeElement && !${composer(0)}.readOnly && !${checklist} && !${questionScreen}
+  `, 8000))
 
   const shells = `${cover(0)}?.querySelector('.agent-chat-background-shells')`
   const shellFooter = badge => ['─'.repeat(60), '> ', '─'.repeat(60), '  ⏵⏵ auto mode on' + badge, '\x1b[2;3H'].join('\r\n')
@@ -1629,6 +1657,45 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
       quotes[1].getBoundingClientRect().top - quotes[0].getBoundingClientRect().bottom >= 8
   })()`))
   await shot('local-agent-chat-quoted-reply')
+
+  // `인계`: the answer and a comment go to another agent's inbox as a message from the user
+  // (at the end: the receiving fake agent may be woken by it)
+  const handoffCard = `${cover(0)}.querySelector('.agent-chat-handoff')`
+  const handoffAgents = `${handoffCard}?.querySelectorAll('.agent-chat-handoff-agent input')`
+  await js(`${quoteAnswer}.querySelector('.agent-chat-handoff-button').click()`)
+  check('the hand-off card lists other connected agents, never the chat\'s own', await until(`
+    !!${handoffCard} && ${handoffAgents}.length > 0 && ![...${handoffAgents}].some(input => input.value === ${JSON.stringify(codexId)})
+  `), await js(`${handoffCard}?.textContent ?? 'no card'`))
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  check('Esc closes only the hand-off card', await until(`!${handoffCard} && !!${cover(0)}`))
+  await js(`${quoteAnswer}.querySelector('.agent-chat-handoff-button').click()`)
+  await until(`!!${handoffCard}`)
+  const handoffTarget = await js(`[...${handoffAgents}].find(input => input.checked)?.value`)
+  await js(`${handoffCard}.querySelector('textarea').focus()`)
+  await send('Input.insertText', { text: '이 답변을 검토해 주세요.' })
+  await shot('local-agent-chat-handoff')
+  check('the hand-off buttons have one size', await js(`(() => {
+    const [cancel, sendButton] = ['.agent-chat-handoff-cancel', '.agent-chat-handoff-send'].map(selector => ${handoffCard}.querySelector(selector).getBoundingClientRect())
+    return cancel.height === sendButton.height && cancel.top === sendButton.top
+  })()`))
+  await js(`${handoffCard}.querySelector('.agent-chat-handoff-send').click()`)
+  check('the chosen agent gets the answer and the comment from the user', await until(`window.electronAPI.agentMessagesSnapshot().then(state =>
+    state.messages.some(message => message.from === 'user' && message.to === ${JSON.stringify(handoffTarget)} &&
+      message.text.startsWith('[인계] ') && message.text.includes('이 답변을 검토해 주세요.') && message.text.includes('인용할 답변의 첫째 문장입니다.')))
+  `) && await until(`!${handoffCard}`), String(handoffTarget))
+
+  // Codex's numbered model picker belongs in the terminal, including when older MCP output is still visible.
+  await setChatDraft('/model')
+  await js(`${sendButton}.click()`)
+  check('Codex /model opens in the terminal with the chat return bar', await until(`
+    !${cover(0)} && !!${pane(0)}?.querySelector('.agent-screen-return') &&
+    ${pane(0)}?.querySelector('.xterm-rows')?.textContent.includes('Select Model and Effort')
+  `, 8000))
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  check('Esc closes Codex /model and restores the chat composer', await waitFor(() => read(codexId + '-screen-closed') === 'x') &&
+    await until(`!!${composer(0)} && document.activeElement === ${composer(0)} && !document.querySelector('.agent-screen-return')`, 8000))
 
   // Locking drops every conversation
   await js(`document.activeElement?.blur(); document.body.focus()`)

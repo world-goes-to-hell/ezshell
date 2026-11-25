@@ -28,8 +28,8 @@ const splitOf = (layout: LayoutState): SavedSplit | null =>
     ? { direction: layout.direction, panes: layout.panes.map(pane => ({ ...pane })), sizes: [...layout.sizes], focus: layout.activePane ?? 0 }
     : null
 
-export function useTabGroups(): TabGroupView {
-  const { projects } = useLocalProjects()
+export function useTabGroups(unlocked: boolean): TabGroupView {
+  const { projects } = useLocalProjects(unlocked)
   const terminals = useTerminalStore(state => state.terminals)
   const activeId = useTerminalStore(state => state.activeTerminalId)
 

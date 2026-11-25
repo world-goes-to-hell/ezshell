@@ -650,6 +650,8 @@ const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages(
   onInboxChanged: id => localShells?.wakeInbox(id),
   onInboxRead: id => localShells?.confirmStopDelivery(id),
   onAgentHook: (shellId, agentId, event, options) => localShells?.reportAgentHook(shellId, agentId, event, options),
+  inspectLocalAgent: (shellId, agentId) => localShells?.inspectAgent(shellId, agentId),
+  onEscalate: alertAgentEscalation,
   bindLocalAgent: request => localShells?.bindAgentProcess(request),
   reportLocalAntigravity: request => localShells?.reportAntigravityStatus(request),
   bridgeFile: agentBridgeFile,
@@ -809,9 +811,13 @@ ipcMain.handle('agent-message-set-role', (event, id, role) => {
 // Usage of the agents ezShell launched (status bar): Claude reports it from its status line over the
 // agent pipe, Codex's comes from its session file. Numbers and the model name only.
 const codexUsageWatcher = require('./src/ipc/codexUsageWatcher.js').createCodexUsageWatcher({
-  agents: () => agentMessages.snapshot().agents.map(agent => ({ ...agent, hookSessionId: agentMessages.hookSessionOf(agent.id) })),
+  agents: () => agentMessages.snapshot().agents.map(agent => ({
+    ...agent, hookSessionId: agentMessages.hookSessionOf(agent.id), ...agentMessages.codexRoleContextOf(agent.id)
+  })),
   setUsage: agentMessages.setUsage,
   setVerifiedSession: agentMessages.setVerifiedSession,
+  setFreshRoleSession: agentMessages.setFreshCodexRoleSession,
+  freshRoleEpoch: agentMessages.freshRoleEpoch,
   setTurnStatus: (shellId, agentId, sessionId, turn) => localShells?.setCodexTurnStatus(shellId, agentId, sessionId, turn)
 });
 codexUsageWatcher.start();
@@ -885,6 +891,11 @@ const agentChatIpc = require('./src/agentChat/ipc.js').registerAgentChatIpc({
   notifyCapture: capture => sendToLocalWindow('agent-chat-capture', capture),
   selectImages: () => selectAgentImages('채팅에 이미지 첨부'),
   pins: agentChatPins,
+  // `인계`: an answer and the user's comment into another agent's inbox (src/agentChat/handoff.js)
+  handoff: {
+    agents: () => agentMessages.snapshot().agents,
+    send: request => agentMessages.sendAsUser(request)
+  },
   showShell: (shellId) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -1016,6 +1027,7 @@ const remoteAccess = require('./src/remoteAccess/controller.js').registerRemoteA
       return true;
     }
   },
+  browserReview: browserReview.remote,
   // The local agents for a phone (only while `휴대폰에서 에이전트 쓰기` is on): the same shells and chat follower as the PC's chat view
   agentDeps: {
     shells: () => localShells,
@@ -1160,12 +1172,14 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
 
 // Lock the app
 ipcMain.handle('lock-app', async (event, restoreRecord) => {
-  if (fromMainWindow(event)) restoreTabsIpc.rememberBeforeLock(restoreRecord);
+  const fromMainFrame = fromMainWindow(event) && event.senderFrame && event.senderFrame === event.sender.mainFrame;
+  restoreTabsIpc.rememberBeforeLock(fromMainFrame ? restoreRecord : null);
   // Write pending history while the password is still known, then drop the decrypted copy
   flushCommandHistory();
   forgetCommandHistory();
   currentMasterPassword = null;
   isAppLocked = true;
+  agentMessages.invalidateFreshRoleChecks();
   globalDoubleTab.setEnabled(false);
   quickCapture.cancel();
   browserReview.close();
@@ -1253,9 +1267,11 @@ ipcMain.handle('reset-master-password', async () => {
   if (fs.existsSync(foldersPath)) fs.unlinkSync(foldersPath);
   // Encrypted with the old password, so it can never be read again
   discardCommandHistory();
+  restoreTabsIpc.discardForPasswordReset();
 
   currentMasterPassword = null;
   isAppLocked = true;
+  agentMessages.invalidateFreshRoleChecks();
   globalDoubleTab.setEnabled(false);
   quickCapture.cancel();
   browserReview.close();
@@ -1426,6 +1442,7 @@ function endSessionLog(sessionId) {
 const MCP_LEVEL_LABELS = { low: '낮음', medium: '중간', danger: '위험' };
 let mcpFlashHandlerAttached = false;
 let mcpNotice = null; // keep a reference so the notification is not garbage-collected before its click fires
+let agentEscalationNotice = null;
 
 /** Bring the main window back (notification click); it may already be closed while a pop-out stays open */
 function revealMainWindow() {
@@ -1435,13 +1452,21 @@ function revealMainWindow() {
   mainWindow.focus();
 }
 
-/** Flash the taskbar and show an OS notification. Never includes the command (toasts persist in the Action Center). */
-function alertMcpApproval(request) {
+function flashMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
   if (!mcpFlashHandlerAttached) {
-    mainWindow.on('focus', () => mainWindow.flashFrame(false));
+    const window = mainWindow;
+    window.on('focus', () => window.flashFrame(false));
+    window.once('closed', () => { mcpFlashHandlerAttached = false; });
     mcpFlashHandlerAttached = true;
   }
   mainWindow.flashFrame(true);
+  return true;
+}
+
+/** Flash the taskbar and show an OS notification. Never includes the command (toasts persist in the Action Center). */
+function alertMcpApproval(request) {
+  if (!flashMainWindow()) return;
   if (Notification.isSupported()) {
     mcpNotice = new Notification({
       title: approvalNoticeTitle(request),
@@ -1450,6 +1475,24 @@ function alertMcpApproval(request) {
     mcpNotice.on('click', revealMainWindow);
     mcpNotice.show();
   }
+}
+
+function alertAgentEscalation({ id, shellId, kind }) {
+  if (isAppLocked || !flashMainWindow()) return false;
+  const { HUMAN_BLOCK_LABELS } = require('./src/ipc/agentInspection.js');
+  const title = `${id} 가 응답을 기다립니다`;
+  const label = HUMAN_BLOCK_LABELS[kind];
+  sendToLocalWindow('agent-escalation', { id, shellId, title, label });
+  try {
+    if (Notification.isSupported()) {
+      agentEscalationNotice = new Notification({ title, body: label });
+      agentEscalationNotice.on('click', revealMainWindow);
+      agentEscalationNotice.show();
+    }
+  } catch (error) {
+    console.error('Failed to show agent escalation notification:', error);
+  }
+  return true;
 }
 
 /**

@@ -7,108 +7,102 @@
   const TOKEN_KEY = 'ezshell-device-token'
   // A ticket from a code sign-in that lets this device resume without a code for a day
   const TRUST_KEY = 'ezshell-device-trust'
+  const SIDEBAR_KEY = 'ezshell-workspace-sidebar'
   const $ = (id) => document.getElementById(id)
-  const views = ['signin', 'message', 'sessions', 'tabs', 'activity', 'agents', 'chat', 'terminal', 'tab-terminal']
-  const TABBED = new Set(['sessions', 'tabs', 'activity', 'agents', 'chat'])
-  const AGENT_VIEWS = new Set(['agents', 'chat'])
-  const PC_TAB_VIEWS = new Set(['tabs', 'tab-terminal'])
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true
+  const views = ['signin', 'message', 'activity', 'chat', 'terminal', 'tab-terminal']
+  const tabViews = { ssh: 'terminal', pc: 'tab-terminal', chat: 'chat' }
+  const tabIcons = { ssh: '>_', pc: '▣', chat: '◉', browser: '▤' }
   const workspaceSize = window.matchMedia('(min-width: 45rem) and (min-height: 40rem)')
-  const workspaceLists = { terminal: 'sessions', 'tab-terminal': 'tabs', chat: 'agents' }
-  const workspaceHints = {
-    sessions: '목록에서 열 세션을 선택하세요.',
-    tabs: '이어서 볼 PC 탭을 선택하세요.',
-    agents: '대화를 열 에이전트를 선택하세요.'
-  }
-  const THEME_VARIABLES = [
-    '--bg', '--panel', '--line', '--text', '--muted', '--accent', '--on-accent',
-    '--focus', '--error', '--danger', '--radius', '--panel-radius', '--font', '--scheme'
-  ]
+  const splitSize = window.matchMedia('(min-width: 52rem) and (min-height: 40rem) and (orientation: landscape)')
   let currentView = null
   let tabsEnabled = false
   let agentsEnabled = false
   let keyboardOpen = false
+  let keyboardBaseline = 0
+  let viewportWidth = 0
+  let drawerOpen = false
+  let openTabs = []
+  let frontTab = null
+  let viewer = null
+  let splitTab = null
+  let secondFocused = false
+  let secondary = null
+  let secondaryViewer = null
+  let agentList = null
+  const sidebar = readSidebar()
+  const approvalIds = new Set()
+  const pcSessionTabs = { connected: 0, lost: 0 }
+  let pcTabCount = 0
+  let workingAgents = 0
   const terminalView = view => view === 'terminal' || view === 'tab-terminal'
-  const showsNavigation = view => TABBED.has(view) || terminalView(view)
-  const inWorkspace = () => workspaceSize.matches && showsNavigation(currentView)
-
-  function updateNavigationVisibility(workspace = inWorkspace()) {
-    const hideForKeyboard = keyboardOpen && terminalView(currentView)
-    $('tabs').hidden = workspace || !showsNavigation(currentView) || hideForKeyboard
-    document.body.toggleAttribute('data-terminal-keyboard', hideForKeyboard)
-  }
+  const isWorkspace = () => wasReady && currentView !== 'signin' && currentView !== 'message'
+  const activeShell = () => currentView === 'terminal' ? frontTab : null
+  const splitVisible = () => isWorkspace() && currentView !== 'activity' && splitSize.matches && Boolean(splitTab)
+  const focusedTab = () => splitVisible() && secondFocused ? splitTab : frontTab
 
   function layout() {
-    const workspace = inWorkspace()
-    document.body.toggleAttribute('data-workspace', workspace)
+    const signedIn = isWorkspace()
+    const wide = signedIn && workspaceSize.matches
+    const collapsed = wide && sidebar.collapsed
+    const showDrawer = signedIn && !wide && drawerOpen
+    document.body.toggleAttribute('data-remote-workspace', signedIn)
+    document.body.toggleAttribute('data-workspace', wide)
+    document.body.toggleAttribute('data-sidebar-collapsed', collapsed)
+    document.body.toggleAttribute('data-keyboard', keyboardOpen)
     views.forEach(view => { $(`view-${view}`).hidden = view !== currentView })
-    if (workspace) {
-      $('view-sessions').hidden = false
-      $('view-agents').hidden = !agentsEnabled
-      $('view-tabs').hidden = !tabsEnabled
+    $('workspace-sidebar').hidden = !wide && !showDrawer
+    $('workspace-sidebar-controls').hidden = !wide
+    $('workspace-sidebar-summary').hidden = !collapsed
+    $('workspace-sidebar-divider').hidden = !wide || collapsed
+    const sidebarToggle = $('workspace-sidebar-toggle')
+    const sidebarAction = collapsed ? '사이드바 펼치기' : '사이드바 접기'
+    sidebarToggle.textContent = collapsed ? '›' : '‹'
+    sidebarToggle.setAttribute('aria-expanded', String(!collapsed))
+    sidebarToggle.setAttribute('aria-label', sidebarAction)
+    sidebarToggle.title = sidebarAction
+    $('workspace-scrim').hidden = !showDrawer
+    for (const detail of ['workspace-tabs', 'workspace-empty', 'view-activity', 'view-terminal', 'view-tab-terminal', 'view-chat']) {
+      $(detail).inert = showDrawer
     }
-    $('workspace-header').hidden = !workspace
-    $('workspace-status').hidden = !workspace
+    $('workspace-menu').hidden = !signedIn || wide
+    $('workspace-menu').setAttribute('aria-expanded', String(showDrawer))
+    $('view-sessions').hidden = !signedIn || collapsed
+    $('view-agents').hidden = !signedIn || collapsed || (!agentsEnabled && !agents?.hasReviewTabs)
+    $('view-tabs').hidden = !signedIn || collapsed || !tabsEnabled
+    $('workspace-header').hidden = !signedIn
+    $('workspace-tabs').hidden = !signedIn || openTabs.length === 0
+    $('workspace-content').hidden = !signedIn || currentView === 'activity'
+    $('workspace-content').inert = showDrawer
+    $('workspace-split-toggle').hidden = !signedIn || !splitSize.matches || currentView === 'activity'
+    $('workspace-split-toggle').disabled = openTabs.length < 2
+    $('workspace-split-toggle').setAttribute('aria-pressed', String(splitVisible()))
+    $('workspace-status').hidden = !signedIn || keyboardOpen
     $('workspace-activity').setAttribute('aria-pressed', String(currentView === 'activity'))
-    const active = $('workspace-current')
-    for (const [name, bar] of workspaceBars) {
-      const parent = workspace && name === currentView ? active : $(`view-${name}`)
-      if (bar.parentElement !== parent) parent.prepend(bar)
+    const blank = currentView === 'workspace'
+    $('workspace-empty').hidden = !signedIn || !blank
+    if (blank) {
+      $('workspace-empty-title').textContent = frontTab?.waiting ? '목록을 확인하는 중…'
+        : frontTab ? 'PC에서 이 항목의 공유가 종료되었습니다.'
+          : collapsed ? '사이드바를 펼쳐 열 작업을 선택하세요.' : '목록에서 열 작업을 선택하세요.'
     }
-    agents?.layout(workspace)
-    active.hidden = !active.childElementCount
-    const hint = workspace && workspaceHints[currentView]
-    $('workspace-empty').hidden = !hint
-    if (hint) $('workspace-empty-title').textContent = hint
-    updateNavigationVisibility(workspace)
-    const selected = workspaceLists[currentView] ?? currentView
-    for (const tab of $('tabs').querySelectorAll('button')) {
-      if (tab.dataset.view === selected) tab.setAttribute('aria-current', 'page')
-      else tab.removeAttribute('aria-current')
-    }
-  }
-
-  function syncAgentList() {
-    if (agentsEnabled && (inWorkspace() || AGENT_VIEWS.has(currentView))) agents?.enter()
-    else agents?.leave()
+    layoutSplit()
   }
 
   const show = (name) => {
-    if (name === currentView) return
     const previous = currentView
-    if (previous === reselect?.view) reselect = null
     currentView = name
-    if (previous === 'sessions') $('pc-tabs-status').hidden = true
     layout()
+    if (name === previous) return
     if (previous === 'activity') activity.leave()
-    if (previous === 'terminal') {
-      setShellVisible(false)
-      setCtrl(false)
-    }
-    if (previous === 'tab-terminal') {
-      pcTabs.detach()
-      setCtrl(false)
-    }
-    if (previous === 'chat' && name !== 'chat') agents?.closeChat()
-    syncAgentList()
+    setKeysVisible(false)
     if (terminalView(name)) {
       $(`view-${name}`).append($('keys'))
-      setKeysVisible(name === 'terminal' && Boolean(shellId))
-    }
-    if (name === 'terminal') {
-      setShellVisible(true)
-      fitTerminal()
     }
     if (name === 'activity') activity.enter()
-    if (name === 'tabs') pcTabs.enter()
   }
 
   let socket = null
-  let terminal = null
-  let fit = null
-  let shellId = null
-  let selectedSession = null
-  let terminalName = ''
-  let pendingOpen = null
   let openSequence = 0
   let isCtrlArmed = false
   let wasReady = false
@@ -118,7 +112,7 @@
   let wakeTimer = null
   let retryCount = 0
   let savedView = null
-  let reselect = null
+  let signingIn = false
   let forgetTicketOnReady = false
   const RETRY_DELAYS = [1000, 2000, 4000, 8000, 16000]
   const RESUME_TIMEOUT_MS = 10000
@@ -129,6 +123,23 @@
       return localStorage.getItem(TOKEN_KEY)
     } catch {
       return null
+    }
+  }
+  function readSidebar() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(SIDEBAR_KEY))
+      return {
+        collapsed: saved?.collapsed === true,
+        width: Number.isFinite(saved?.width) ? Math.max(172, Math.min(420, saved.width)) : null
+      }
+    } catch {
+      return { collapsed: false, width: null }
+    }
+  }
+
+  function saveSidebar() {
+    try { localStorage.setItem(SIDEBAR_KEY, JSON.stringify(sidebar)) } catch {
+      // Use the current size until the page closes if storage is unavailable.
     }
   }
   const saveToken = (token) => {
@@ -165,28 +176,34 @@
   }
 
   function rememberView() {
-    if (currentView === 'tabs' && reselect?.view === 'tabs') {
-      savedView = { view: 'tab-terminal', tabId: reselect.id }
-    } else if (currentView === 'agents' && reselect?.view === 'agents') {
-      savedView = { view: 'chat', agent: reselect.agent }
-    } else {
-      savedView = { view: currentView, tabId: pcTabs.selectedId, agent: agents?.selectedAgent }
-    }
-    reselect = null
+    savedView = { tabs: [...openTabs], front: frontTab, split: splitTab, secondFocused, activity: currentView === 'activity' }
+    if (viewer?.type === 'chat') viewer.draft = agents.draft
+    if (secondaryViewer?.type === 'chat') secondaryViewer.draft = secondary.chat.draft
   }
 
   function restoreView() {
     const saved = savedView
     savedView = null
     if (!saved) return
-    if (saved.view === 'terminal' && terminal) show('terminal')
-    else if (PC_TAB_VIEWS.has(saved.view) && tabsEnabled) {
-      if (saved.view === 'tab-terminal' && saved.tabId) reselect = { view: 'tabs', id: saved.tabId }
-      show('tabs')
-    } else if (AGENT_VIEWS.has(saved.view) && agentsEnabled) {
-      if (saved.view === 'chat' && saved.agent) reselect = { view: 'agents', agent: saved.agent }
-      show('agents')
-    } else if (saved.view === 'activity') show('activity')
+    openTabs = saved.tabs.filter(tab => tab.type === 'ssh' || (tab.type === 'pc' ? tabsEnabled : agentsEnabled))
+    for (const tab of openTabs) {
+      if (tab.type !== 'ssh') tab.waiting = true
+    }
+    frontTab = openTabs.includes(saved.front) ? saved.front : openTabs.at(-1) ?? null
+    splitTab = openTabs.includes(saved.split) && saved.split !== frontTab ? saved.split : null
+    if (saved.activity) show('activity')
+    else selectPrimary(frontTab)
+    secondFocused = Boolean(saved.secondFocused && splitVisible())
+    layout()
+    renderTabs()
+  }
+
+  function discardSavedView() {
+    for (const tab of savedView?.tabs ?? []) {
+      tab.terminal?.dispose()
+      tab.host?.remove()
+    }
+    savedView = null
   }
 
   function cancelRetry() {
@@ -232,22 +249,105 @@
   }
 
   const ez = window.ezRemote
+  let terminalPresentation = { ...ez.theme.terminalOptions(), fontFamily: 'ui-monospace, monospace' }
+  let fontRequest = 0
   const tree = ez.createSessionTree({ list: $('session-list'), filter: $('session-filter'), onOpen: (session) => openTerminal(session) })
   const approvals = ez.createApprovals({ send })
   const activity = ez.createActivity({ list: $('activity-list'), send })
   const push = ez.createPush({ button: $('push-toggle'), status: $('push-status'), send })
   const pcTabs = ez.createTabs({
     list: $('pc-tabs-list'), name: $('pc-tab-name'), notice: $('pc-tab-notice'), mode: $('pc-tab-mode'),
-    viewport: $('pc-tab-viewport'), host: $('pc-tab-host'), send, show,
-    createTerminal, onData: sendTerminalInput, setKeysVisible, onClose: () => show('tabs')
+    viewport: $('pc-tab-viewport'), host: $('pc-tab-host'), send,
+    createTerminal, onData: data => sendTerminalInput(data, frontTab), setKeysVisible, onOpen: openPcTab
   })
-  const agents = ez.createAgents?.({ list: $('view-agents'), chat: $('view-chat'), send, show })
-  const workspaceBars = ['terminal', 'chat', 'activity'].map(name => [name, $(`view-${name}`).querySelector('.bar')])
-    .filter(([, bar]) => bar)
+  const secondaryViews = ['workspace-empty', 'view-terminal', 'view-tab-terminal', 'view-chat'].map(id => $(id).cloneNode(true))
+  const agents = ez.createAgents({ list: $('view-agents'), chat: $('view-chat'), send, onOpen: openChat, openReview: openPcTab })
 
-  function message(text, { canRetry = false } = {}) {
+  function createSecondary() {
+    const pane = $('workspace-secondary')
+    for (const clone of secondaryViews) {
+      clone.id += '-split'
+      for (const node of clone.querySelectorAll('[id]')) node.id += '-split'
+      for (const label of clone.querySelectorAll('label[for]')) label.htmlFor += '-split'
+      pane.append(clone)
+    }
+    const find = id => $(`${id}-split`)
+    find('workspace-empty-open')?.remove()
+    // The extra key row follows the terminal type that occupies this pane.
+    if (!find('keys')) {
+      const keys = $('keys').cloneNode(true)
+      keys.id = 'keys-split'
+      find('view-terminal').append(keys)
+    }
+    const pc = ez.createTabs({
+      name: find('pc-tab-name'), notice: find('pc-tab-notice'), mode: find('pc-tab-mode'),
+      viewport: find('pc-tab-viewport'), host: find('pc-tab-host'), send, find, createTerminal,
+      onData: data => sendTerminalInput(data, splitTab),
+      setKeysVisible: visible => { find('keys').hidden = !visible },
+      onOpen: openPcTab
+    })
+    const chat = ez.createAgents({
+      list: document.createElement('section'), chat: find('view-chat'),
+      send: message => { if (message.type !== 'agents-list' && message.type !== 'agents-watch') send(message) },
+      onOpen: openChat, openReview: openPcTab
+    })
+    pc.setAgentsEnabled?.(agentsEnabled)
+    if (agentsEnabled) chat.enter()
+    if (agentList) chat.onMessage(agentList)
+    bindKeys(find('keys'), () => splitTab, pc, true)
+    find('terminal-close').addEventListener('click', () => removeTabs(tab => tab === splitTab))
+    find('terminal-reopen').addEventListener('click', () => reopenShell(splitTab))
+    return { find, pc, chat }
+  }
+
+  function pauseSecondary() {
+    if (secondaryViewer?.type === 'pc') secondary.pc.detach()
+    if (secondaryViewer?.type === 'chat') {
+      secondaryViewer.draft = secondary.chat.draft
+      secondary.chat.closeChat()
+    }
+    secondaryViewer = null
+  }
+
+  function layoutSplit() {
+    const showSplit = splitVisible()
+    $('workspace-secondary').hidden = !showSplit
+    $('workspace-split-divider').hidden = !showSplit
+    $('workspace-content').toggleAttribute('data-split', showSplit)
+    $('workspace-primary').toggleAttribute('data-focused', showSplit && !secondFocused)
+    $('workspace-secondary').toggleAttribute('data-focused', showSplit && secondFocused)
+    if (!showSplit) {
+      pauseSecondary()
+      for (const host of secondary?.find('terminal-host').children ?? []) host.hidden = true
+      return
+    }
+    secondary ??= createSecondary()
+    const { find, pc, chat } = secondary
+    const tab = splitTab
+    if (secondaryViewer && secondaryViewer !== tab) pauseSecondary()
+    const available = !tab.waiting && !tab.unavailable
+    const view = available ? tabViews[tab.type] : null
+    for (const kind of Object.values(tabViews)) find(`view-${kind}`).hidden = kind !== view
+    find('workspace-empty').hidden = Boolean(view)
+    if (!view) {
+      if (secondaryViewer === tab) pauseSecondary()
+      find('workspace-empty-title').textContent = tab.waiting ? '목록을 확인하는 중…' : 'PC에서 이 항목의 공유가 종료되었습니다.'
+      return
+    }
+    if (terminalView(view) && find('keys').parentElement !== find(`view-${view}`)) find(`view-${view}`).append(find('keys'))
+    if (view === 'terminal') renderShell(tab, find)
+    if (!secondaryViewer && tab.type !== 'ssh' && !document.hidden) {
+      secondaryViewer = tab
+      if (tab.type === 'pc') pc.reopen(tab.item)
+      else chat.reopen(tab.item, tab.draft)
+    }
+  }
+
+  function message(text, { canRetry = false, canPair = false } = {}) {
     $('message-text').textContent = text
     $('message-retry').hidden = !canRetry
+    $('pair-link-form').hidden = !standalone || !canPair
+    $('pair-link-error').hidden = true
     show('message')
   }
 
@@ -258,59 +358,71 @@
   }
 
   function setPcTabsEnabled(enabled, reason = 'PC에서 탭 이어 보기를 껐습니다.') {
+    const changed = enabled !== tabsEnabled
     tabsEnabled = enabled
-    $('tabs').querySelector('[data-view="tabs"]').hidden = !enabled
-    const status = $('pc-tabs-status')
     if (enabled) {
-      status.hidden = true
+      $('pc-tabs-status').hidden = true
+      if (changed) pcTabs.enter()
       return
     }
-    if (PC_TAB_VIEWS.has(currentView)) {
-      show('sessions')
-      status.textContent = reason
-      status.hidden = false
-      send({ type: 'sessions' })
+    if (changed) {
+      $('pc-tabs-status').textContent = reason
+      $('pc-tabs-status').hidden = false
     }
+    pcTabCount = 0
+    removeTabs(tab => tab.type === 'pc')
     pcTabs.reset()
+    secondary?.pc.reset()
+    agents.setReviewTabs([])
+    renderStatus()
   }
 
   function updateFeatures(features) {
-    agentsEnabled = Boolean(agents && features?.agents === true)
-    const showNewTabs = !tabsEnabled && features?.tabs === true
+    agentsEnabled = features?.agents === true
+    pcTabs.setAgentsEnabled?.(agentsEnabled)
+    secondary?.pc.setAgentsEnabled?.(agentsEnabled)
     setPcTabsEnabled(features?.tabs === true)
-    $('tabs').querySelector('[data-view="agents"]').hidden = !agentsEnabled
-    if (!agentsEnabled && AGENT_VIEWS.has(currentView)) show('sessions')
-    layout()
-    if (showNewTabs && inWorkspace()) pcTabs.enter()
-    syncAgentList()
-  }
-
-  function terminalColors(style) {
-    const token = (name) => style.getPropertyValue(name).trim()
-    return {
-      background: token('--bg'), foreground: token('--text'),
-      cursor: token('--terminal-cursor'), cursorAccent: token('--terminal-cursor-accent'),
-      selectionBackground: token('--terminal-selection')
+    if (agentsEnabled) {
+      agents.enter()
+      secondary?.chat.enter()
     }
+    else {
+      removeTabs(tab => tab.type === 'chat')
+      agents.leave()
+      secondary?.chat.leave()
+      agentList = null
+      workingAgents = 0
+    }
+    layout()
+    renderStatus()
   }
 
   function applyTheme(theme) {
-    const root = document.documentElement
-    let themed = false
-    for (const key of THEME_VARIABLES) {
-      const value = theme?.[key]
-      // The server validates these values before sending them. Missing or removed tokens use CSS defaults.
-      if (typeof value !== 'string' || !value) root.style.removeProperty(key)
-      else {
-        root.style.setProperty(key, value === '0' && key.endsWith('radius') ? '0px' : value)
-        themed = true
-      }
+    ez.theme.set(theme)
+    updateTerminalPresentation()
+  }
+
+  function updateTerminalPresentation() {
+    const next = ez.theme.terminalOptions()
+    const request = ++fontRequest
+    const update = fontFamily => {
+      const fontChanged = terminalPresentation.fontFamily !== fontFamily
+      terminalPresentation = { theme: next.theme, fontFamily }
+      for (const tab of openTabs) if (tab.terminal) Object.assign(tab.terminal.options, terminalPresentation)
+      pcTabs.setTerminalOptions(terminalPresentation)
+      secondary?.pc.setTerminalOptions(terminalPresentation)
+      if (fontChanged) fitTerminal()
     }
-    root.toggleAttribute('data-themed', themed)
-    const colors = terminalColors(getComputedStyle(root))
-    document.querySelector('meta[name="theme-color"]').content = colors.background
-    if (terminal) terminal.options.theme = colors
-    pcTabs.setTheme(colors)
+    const font = `13px ${next.fontFamily}`
+    const sample = 'A한'
+    if (!document.fonts || document.fonts.check(font, sample)) {
+      update(next.fontFamily)
+      return
+    }
+    // xterm measures cells when the family changes. Wait for bundled fonts before doing that.
+    update(terminalPresentation.fontFamily)
+    const useFont = () => { if (request === fontRequest) update(next.fontFamily) }
+    void document.fonts.load(font, sample).then(useFont, useFont)
   }
 
   // ---- Connection ----
@@ -338,23 +450,37 @@
       clearTimeout(deadline)
       if (socket !== next) return
       socket = null
+      signingIn = false
       clearTimeout(wakeTimer)
       wakeTimer = null
       const wasSignedIn = wasReady
       if (wasSignedIn) rememberView()
       wasReady = false
-      endTerminal()
+      endShells()
+      openTabs = []
+      viewer = null
+      frontTab = null
+      secondaryViewer = null
+      splitTab = null
+      secondFocused = false
+      agentList = null
+      drawerOpen = false
+      approvalIds.clear()
+      pcTabCount = 0
+      workingAgents = 0
       approvals.reset()
       activity.reset()
       push.reset()
       pcTabs.reset()
-      agents?.reset()
+      agents.reset()
+      secondary?.pc.reset()
+      secondary?.chat.reset()
       if ((wasSignedIn || resuming) && scheduleReconnect()) return
       if (wasSignedIn || (resuming && reconnectAllowed)) message('연결이 끊겼습니다.', { canRetry: true })
       else if (!didOpen) {
         // Never reached the PC: said where the person is looking
         if (!$('view-signin').hidden) signinError(CONNECT_FAILED)
-        else message(CONNECT_FAILED, { canRetry: true })
+        else message(CONNECT_FAILED, { canRetry: true, canPair: !readToken() })
       }
     })
   }
@@ -362,7 +488,9 @@
   function handle(msg) {
     switch (msg.type) {
       case 'paired':
+        discardSavedView()
         saveToken(msg.token)
+        clearTrust()
         history.replaceState(null, '', location.pathname)
         $('signin-note').textContent = '이 기기를 등록했습니다. 인증 앱의 6자리 코드를 입력하세요.'
         show('signin')
@@ -373,41 +501,44 @@
         saveTrust(msg)
         break
       case 'ready':
+        signingIn = false
         wasReady = true
         if (forgetTicketOnReady) clearTrust()
         forgetTicketOnReady = false
         reconnectAllowed = Boolean(readToken() && readTrust())
         retryCount = 0
         cancelRetry()
-        $('device-name').textContent = msg.device
         $('workspace-device').textContent = msg.device
-        applyTheme(msg.theme)
-        tree.update(msg.folders, msg.sessions)
+        updateSessions(msg)
         tabsEnabled = false
         agentsEnabled = false
-        show('sessions')
+        show('workspace')
         updateFeatures(msg.features)
         restoreView()
-        for (const request of Array.isArray(msg.approvals) ? msg.approvals : []) approvals.add(request)
+        applyTheme(msg.theme)
+        for (const request of Array.isArray(msg.approvals) ? msg.approvals : []) addApproval(request)
         void push.setAvailability(msg.push)
         break
       case 'features':
         if (wasReady) {
           updateFeatures(msg.features)
-          agents?.onMessage(msg)
+          agents.onMessage(msg)
+          secondary?.chat.onMessage(msg)
         }
         break
       case 'theme':
         if (wasReady) applyTheme(msg.theme)
         break
       case 'sessions':
-        tree.update(msg.folders, msg.sessions)
+        updateSessions(msg)
         break
       case 'approval':
-        approvals.add(msg.request)
+        addApproval(msg.request)
         break
       case 'approval-closed':
         approvals.closed(msg)
+        approvalIds.delete(msg.id)
+        renderStatus()
         break
       case 'approval-result':
         approvals.result(msg)
@@ -425,33 +556,42 @@
         activity.stopResult(msg)
         break
       case 'tabs':
-        if (typeof msg.error === 'string' && msg.error) {
+        if (msg.error) {
           setPcTabsEnabled(false, msg.error)
           layout()
-        } else {
+        } else if (tabsEnabled) {
+          pcTabCount = Array.isArray(msg.tabs) ? msg.tabs.filter(tab => typeof tab?.id === 'string').length : 0
           pcTabs.onMessage(msg)
-          if (reselect?.view === 'tabs') {
-            const tab = Array.isArray(msg.tabs) && msg.tabs.find(item => item?.id === reselect.id)
-            reselect = null
-            if (tab && currentView === 'tabs') pcTabs.reopen(tab)
-          }
+          secondary?.pc.onMessage(msg)
+          agents.setReviewTabs(msg.tabs)
+          syncTabs('pc', msg.tabs, pcKey)
+          layout()
         }
         break
       case 'tab-attached':
       case 'tab-data':
       case 'tab-ended':
       case 'tab-error':
+      case 'browser-opened':
+      case 'browser-image':
+      case 'browser-result':
+      case 'browser-ended':
         pcTabs.onMessage(msg)
+        secondary?.pc.onMessage(msg)
         break
       case 'push-result':
         push.result(msg)
         break
       case 'error':
+        signingIn = false
         reconnectAllowed = false
         cancelRetry()
         // A stored ticket that no longer works (a day passed, or it did not match): forget it and ask for a code
         if (msg.code === 'trust-expired' || msg.code === 'bad-ticket') clearTrust()
-        if (!readToken() || msg.code === 'unknown-device') message(msg.message)
+        if (!readToken() || msg.code === 'unknown-device' || msg.code === 'pair-failed') {
+          discardSavedView()
+          message(msg.message, { canPair: true })
+        }
         else {
           show('signin')
           signinError(msg.code === 'trust-expired' ? '' : msg.message)
@@ -460,69 +600,498 @@
         }
         break
       case 'opened':
-        if (pendingOpen && msg.requestId === pendingOpen) {
-          shellId = msg.shellId
-          pendingOpen = null
-          $('terminal-state').textContent = ''
-          updateShellActions()
-          if (currentView === 'terminal') {
-            setKeysVisible(true)
-            fitTerminal()
-            terminal.focus()
-          } else setShellVisible(false)
-        } else if (msg.shellId !== shellId) send({ type: 'close', shellId: msg.shellId })
+        shellOpened(msg)
         break
       case 'open-failed':
-        if (pendingOpen && msg.requestId === pendingOpen) {
-          pendingOpen = null
-          updateShellActions()
-          $('terminal-state').textContent = ''
-          terminal.write(`\r\n\x1b[31m${msg.message}\x1b[0m\r\n`)
+        {
+          const tab = openTabs.find(tab => tab.pending && tab.pending === msg.requestId)
+          if (tab) endShell(tab, msg.message || '연결하지 못했습니다.')
         }
         break
       case 'data':
-        if (msg.shellId === shellId && terminal) terminal.write(msg.data)
+        shellOf(msg.shellId)?.terminal.write(msg.data)
         break
       case 'closed':
-        if (msg.shellId === shellId) {
-          endTerminal()
+        {
+          const tab = shellOf(msg.shellId)
+          if (tab) endShell(tab)
         }
         break
       case 'bye':
-        if (wasReady) rememberView()
+        signingIn = false
+        if (wasReady && msg.code === 'idle') rememberView()
+        else {
+          discardSavedView()
+          removeTabs(() => true)
+        }
         wasReady = false
         reconnectAllowed = msg.code === 'idle'
         waitForWake = reconnectAllowed
         cancelRetry()
         message(msg.message, { canRetry: true })
         break
+      case 'agents':
+        if (agentsEnabled) {
+          const listed = !msg.error && Array.isArray(msg.agents) ? msg.agents
+            .filter(agent => typeof agent?.shellId === 'string')
+            .map(({ role, ...agent }) => ({
+              ...agent,
+              // The server supplies the desktop provider name and number. The role only decorates that label.
+              name: [typeof role === 'string' ? role.trim() : '', agent.name || agent.agentId || '에이전트'].filter(Boolean).join(' · ')
+            })) : []
+          agentList = { ...msg, agents: listed }
+          agents.onMessage(agentList)
+          secondary?.chat.onMessage(agentList)
+          workingAgents = listed.filter(agent => agent.status === 'working' && !agent.waitingApproval).length
+          syncTabs('chat', listed, chatKey)
+        }
+        break
       default:
-        if (msg.type === 'agents' || msg.type?.startsWith('chat-')) agents?.onMessage(msg)
-        if (msg.type === 'agents' && reselect?.view === 'agents') {
-          const { agent } = reselect
-          const match = !msg.error && Array.isArray(msg.agents) && msg.agents.find(item => item?.shellId === agent.shellId
-            && item.agentId === agent.agentId && item.kind === agent.kind)
-          reselect = null
-          if (match && currentView === 'agents') agents?.reopen(match)
+        if (msg.type?.startsWith('chat-')) {
+          agents.onMessage(msg)
+          secondary?.chat.onMessage(msg)
         }
     }
   }
 
   // ---- Screens ----
-  $('tabs').addEventListener('click', (event) => {
-    const tab = event.target.closest('button[data-view]')
-    if (!tab || tab.hidden || tab.dataset.view === currentView) return
-    show(tab.dataset.view)
-    if (tab.dataset.view === 'sessions') send({ type: 'sessions' })
+  function setDrawer(open, focusMenu = false) {
+    drawerOpen = open && isWorkspace() && !workspaceSize.matches
+    layout()
+    if (drawerOpen) $('workspace-sidebar').focus({ preventScroll: true })
+    else if (focusMenu) $('workspace-menu').focus()
+  }
+
+  $('workspace-menu').addEventListener('click', () => setDrawer(!drawerOpen))
+  $('workspace-sidebar-toggle').addEventListener('click', () => {
+    sidebar.collapsed = !sidebar.collapsed
+    saveSidebar()
+    layout()
+    fitTerminal()
   })
+  for (const id of ['session', 'agent', 'pc', 'approval']) {
+    $(`sidebar-${id}-status`).addEventListener('click', () => {
+      $('workspace-sidebar-toggle').click()
+      $('workspace-sidebar-toggle').focus({ preventScroll: true })
+    })
+  }
+  $('workspace-scrim').addEventListener('click', () => setDrawer(false, true))
+  $('workspace-empty-open').addEventListener('click', () => setDrawer(true))
+  document.addEventListener('keydown', event => {
+    if (drawerOpen && event.key === 'Escape') setDrawer(false, true)
+  })
+  document.addEventListener('keydown', event => {
+    if (!isWorkspace() || !openTabs.length || approvals.isOpen || !event.ctrlKey || event.altKey || event.metaKey) return
+    const tab = focusedTab()
+    if (event.key.toLowerCase() === 'w' && !event.shiftKey) {
+      if (!tab || event.target?.closest?.('.xterm')) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.repeat) return
+      removeTabs(item => item === tab)
+      focusedTab()?.button.focus({ preventScroll: true })
+      return
+    }
+    let target
+    if (event.key === 'Tab') {
+      const step = event.shiftKey ? -1 : 1
+      target = openTabs[(openTabs.indexOf(tab) + step + openTabs.length) % openTabs.length]
+    } else if (!event.shiftKey && /^[1-9]$/.test(event.key)) target = openTabs[Number(event.key) - 1]
+    if (!target) return
+    event.preventDefault()
+    event.stopPropagation()
+    selectTab(target)
+    target.button?.focus({ preventScroll: true })
+  }, true)
+  let edgeTouch = null
+  document.addEventListener('touchstart', event => {
+    const touch = event.touches.length === 1 ? event.touches[0] : null
+    edgeTouch = touch && !workspaceSize.matches && isWorkspace() && touch.clientX <= 24
+      ? { x: touch.clientX, y: touch.clientY } : null
+  }, { passive: true })
+  document.addEventListener('touchend', event => {
+    const start = edgeTouch
+    edgeTouch = null
+    const end = event.changedTouches[0]
+    if (start && end && end.clientX - start.x > 64 && Math.abs(end.clientY - start.y) < 40) setDrawer(true)
+  }, { passive: true })
+  document.addEventListener('touchcancel', () => { edgeTouch = null }, { passive: true })
+
   $('sessions-refresh').addEventListener('click', () => send({ type: 'sessions' }))
-  $('workspace-activity').addEventListener('click', () => show(currentView === 'activity' ? 'sessions' : 'activity'))
+  $('workspace-activity').addEventListener('click', () => {
+    setDrawer(false)
+    if (currentView === 'activity') {
+      const restoreSecond = secondFocused && splitTab && splitSize.matches
+      selectPrimary(frontTab)
+      if (restoreSecond) setPaneFocus(true)
+    }
+    else {
+      pauseViewer()
+      show('activity')
+      renderTabs()
+    }
+  })
   $('pc-tabs-refresh').addEventListener('click', () => pcTabs.enter())
-  $('pc-tab-back').addEventListener('click', () => show('tabs'))
+  function bindDivider(element, size, resize, reset, done = () => {}) {
+    let drag = null
+    element.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return
+      drag = { start: event.clientX, size: size(), id: event.pointerId }
+      element.setPointerCapture(event.pointerId)
+    })
+    element.addEventListener('pointermove', event => {
+      if (drag?.id === event.pointerId) resize(drag.size + event.clientX - drag.start)
+    })
+    element.addEventListener('lostpointercapture', () => {
+      if (!drag) return
+      drag = null
+      done()
+    })
+    element.addEventListener('dblclick', () => {
+      reset()
+      done()
+    })
+    element.addEventListener('keydown', event => {
+      const delta = event.key === 'ArrowLeft' ? -16 : event.key === 'ArrowRight' ? 16 : 0
+      if (!delta) return
+      event.preventDefault()
+      resize(size() + delta)
+      done()
+    })
+  }
+
+  function applySidebarWidth() {
+    const style = document.documentElement.style
+    if (sidebar.width === null) style.removeProperty('--preferred-sidebar-width')
+    else style.setProperty('--preferred-sidebar-width', `${sidebar.width}px`)
+    fitTerminal()
+  }
+
+  const sidebarNode = $('workspace-sidebar')
+  bindDivider($('workspace-sidebar-divider'), () => sidebarNode.getBoundingClientRect().width, width => {
+    sidebar.width = Math.round(Math.max(172, Math.min(420, width)))
+    applySidebarWidth()
+  }, () => {
+    sidebar.width = null
+    applySidebarWidth()
+  }, saveSidebar)
+  const splitRoot = $('workspace-content')
+  bindDivider($('workspace-split-divider'), () => $('workspace-primary').getBoundingClientRect().width, width => {
+    const total = splitRoot.getBoundingClientRect().width
+    if (!total) return
+    splitRoot.style.setProperty('--split-size', `${Math.max(30, Math.min(70, 100 * width / total))}%`)
+    fitTerminal()
+  }, () => {
+    splitRoot.style.removeProperty('--split-size')
+    fitTerminal()
+  })
+  $('workspace-split-toggle').addEventListener('click', () => {
+    if (!splitSize.matches || openTabs.length < 2) return
+    if (splitTab) {
+      const chosen = focusedTab()
+      pauseSecondary()
+      splitTab = null
+      selectPrimary(chosen)
+      return
+    }
+    const index = openTabs.indexOf(frontTab)
+    splitTab = openTabs[index > 0 ? index - 1 : 1]
+    layout()
+    fitTerminal()
+    renderTabs()
+  })
+
+  for (const [id, isSecondary] of [['workspace-primary', false], ['workspace-secondary', true]]) {
+    for (const type of ['pointerdown', 'focusin']) $(id).addEventListener(type, () => {
+      if (splitVisible() && secondFocused !== isSecondary) setPaneFocus(isSecondary)
+    })
+  }
+
+  // The tab strip owns open items. Only the foreground PC or chat view subscribes.
+  const pcKey = item => JSON.stringify([item.id, item.kind || 'terminal'])
+  const chatKey = item => JSON.stringify([item.shellId, item.agentId, item.kind])
+  const strip = $('workspace-current')
+  const tabWidths = window.ResizeObserver ? new window.ResizeObserver(keepFrontTabInView) : null
+  tabWidths?.observe(strip)
+  strip.addEventListener('wheel', event => {
+    if (event.deltaX || !event.deltaY || strip.scrollWidth <= strip.clientWidth) return
+    event.preventDefault()
+    strip.scrollLeft += event.deltaY * (event.deltaMode === 1 ? 16 : 1)
+  }, { passive: false })
+
+  function updateSessions({ folders, sessions }) {
+    tree.update(folders, sessions)
+    pcSessionTabs.connected = 0
+    pcSessionTabs.lost = 0
+    for (const session of Array.isArray(sessions) ? sessions : []) {
+      pcSessionTabs.connected += Number(session.openTabs?.connected) || 0
+      pcSessionTabs.lost += Number(session.openTabs?.disconnected) || 0
+    }
+    renderStatus()
+  }
+
+  function renderRailItem(id, counts, detail) {
+    const labels = []
+    for (const [badgeId, label, count] of counts) {
+      const badge = $(badgeId)
+      badge.hidden = count <= 0
+      badge.textContent = String(count)
+      badge.title = count > 0 ? `${label} ${count}개` : ''
+      if (count > 0) labels.push(badge.title)
+    }
+    const item = $(id)
+    item.hidden = labels.length === 0
+    if (detail) labels.push(detail)
+    item.title = labels.join(' · ')
+    item.setAttribute('aria-label', item.title)
+  }
+
+  function renderStatus() {
+    let shells = 0
+    let lostShells = 0
+    for (const tab of openTabs) {
+      if (tab.shellId) shells++
+      else if (tab.type === 'ssh' && tab.ended) lostShells++
+    }
+    $('workspace-shell-count').textContent = `셸 ${shells}`
+    $('workspace-approval-count').textContent = `MCP 대기 ${approvalIds.size}`
+    $('workspace-working-count').textContent = `작업 중 ${workingAgents}`
+    renderRailItem('sidebar-session-status', [
+      ['sidebar-session-connected', '연결된 세션 탭', pcSessionTabs.connected + shells],
+      ['sidebar-session-lost', '끊긴 세션 탭', pcSessionTabs.lost + lostShells]
+    ])
+    renderRailItem('sidebar-agent-status', [['sidebar-agent-count', '로컬 작업 에이전트', agentList?.agents.length ?? 0]],
+      workingAgents > 0 ? `작업 중 ${workingAgents}개` : '')
+    if (workingAgents > 0) $('sidebar-agent-status').dataset.agentWork = 'working'
+    else delete $('sidebar-agent-status').dataset.agentWork
+    renderRailItem('sidebar-pc-status', [['sidebar-pc-count', '공유된 PC 탭', pcTabCount]])
+    renderRailItem('sidebar-approval-status', [['sidebar-approval-count', 'MCP 대기', approvalIds.size]])
+  }
+
+  function addApproval(request) {
+    if (typeof request?.id === 'string') {
+      approvalIds.add(request.id)
+      closeContextMenu()
+      clearPress()
+    }
+    approvals.add(request)
+    renderStatus()
+  }
+
+  function renderTabs() {
+    $('workspace-split-toggle').disabled = openTabs.length < 2
+    for (const row of [...strip.children]) {
+      if (!openTabs.some(tab => tab.row === row)) {
+        tabWidths?.unobserve(row)
+        row.remove()
+      }
+    }
+    for (const tab of openTabs) {
+      if (!tab.row) {
+        tab.row = document.createElement('div')
+        tab.row.className = 'terminal-tab workspace-tab'
+        tab.row.dataset.type = tab.item?.kind === 'browser' ? 'browser' : tab.type
+        tab.button = document.createElement('button')
+        tab.button.type = 'button'
+        tab.button.className = 'workspace-tab-select'
+        const icon = document.createElement('span')
+        icon.className = 'workspace-tab-icon'
+        icon.textContent = tabIcons[tab.row.dataset.type]
+        icon.setAttribute('aria-hidden', 'true')
+        tab.label = document.createElement('span')
+        tab.label.dataset.tabLabel = ''
+        tab.button.append(icon, tab.label)
+        if (tab.type === 'chat') {
+          tab.dot = document.createElement('span')
+          tab.dot.className = 'workspace-tab-dot'
+          tab.button.append(tab.dot)
+        }
+        tab.button.addEventListener('click', () => selectTab(tab))
+        tab.close = document.createElement('button')
+        tab.close.type = 'button'
+        tab.close.className = 'tab-close workspace-tab-close'
+        tab.close.textContent = '×'
+        tab.close.addEventListener('click', () => {
+          removeTabs(item => item === tab)
+          frontTab?.button.focus()
+        })
+        tab.row.append(tab.button, tab.close)
+      }
+      const active = tab === focusedTab() && currentView !== 'activity'
+      tab.row.classList.toggle('active', active)
+      tab.row.toggleAttribute('data-visible-pane', splitVisible() && (tab === splitTab || tab === frontTab))
+      tab.row.toggleAttribute('data-ended', Boolean(tab.ended || tab.unavailable))
+      tab.button.setAttribute('aria-pressed', String(active))
+      tab.label.textContent = tab.name
+      tab.button.title = tab.name
+      tab.close.setAttribute('aria-label', `${tab.name} 닫기`)
+      if (tab.dot) agents.setTabStatus(tab.dot, tab.item, tab.unavailable)
+      if (tab.row.parentElement !== strip) {
+        strip.append(tab.row)
+        tabWidths?.observe(tab.row)
+      }
+    }
+    renderStatus()
+  }
+
+  function pauseViewer() {
+    if (viewer?.type === 'pc') pcTabs.detach()
+    if (viewer?.type === 'chat') {
+      viewer.draft = agents.draft
+      agents.closeChat()
+    }
+    viewer = null
+  }
+
+  function resumeViewer() {
+    const tab = frontTab
+    if (viewer || document.hidden || !tab || tab.type === 'ssh' || currentView !== tabViews[tab.type]) return
+    viewer = tab
+    if (tab.type === 'pc') pcTabs.reopen(tab.item)
+    else agents.reopen(tab.item, tab.draft)
+  }
+
+  function selectTab(tab) {
+    closeContextMenu()
+    if (currentView === 'activity' && tab && tab === splitTab && splitSize.matches) {
+      selectPrimary(frontTab)
+      return setPaneFocus(true)
+    }
+    if (splitVisible() && tab === splitTab) return setPaneFocus(true)
+    if (splitVisible() && secondFocused && tab && tab !== frontTab) {
+      splitTab = tab
+      setPaneFocus(true)
+      return
+    }
+    selectPrimary(tab)
+  }
+
+  function setPaneFocus(isSecondary) {
+    if (secondFocused !== isSecondary) setCtrl(false)
+    secondFocused = isSecondary
+    layout()
+    const tab = focusedTab()
+    tree.select(tab?.type === 'ssh' ? tab.key : null)
+    fitTerminal()
+    renderTabs()
+    keepFrontTabInView()
+  }
+
+  function selectPrimary(tab) {
+    if (viewer && viewer !== tab) pauseViewer()
+    if (tab && tab === splitTab) {
+      pauseSecondary()
+      splitTab = frontTab !== tab ? frontTab : null
+    }
+    const switched = frontTab !== tab || secondFocused
+    secondFocused = false
+    if (switched) setCtrl(false)
+    const wasDrawerOpen = drawerOpen
+    frontTab = tab
+    drawerOpen = false
+    const available = tab && !tab.waiting && !tab.unavailable
+    show(available ? tabViews[tab.type] : 'workspace')
+    tree.select(tab?.type === 'ssh' ? tab.key : null)
+    if (tab?.type === 'ssh') showShell(tab)
+    else resumeViewer()
+    renderTabs()
+    keepFrontTabInView()
+    if (wasDrawerOpen) (tab?.button ?? $('workspace-menu')).focus({ preventScroll: true })
+  }
+
+  function keepFrontTabInView() {
+    const row = focusedTab()?.row
+    if (!row || !isWorkspace()) return
+    const left = row.offsetLeft
+    // The layout APIs round to whole pixels. Leave space for the close button at a fractional edge.
+    const right = left + row.offsetWidth + 4
+    if (left < strip.scrollLeft) strip.scrollLeft = left
+    else if (right > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = right - strip.clientWidth
+  }
+
+  function removeTabs(matches) {
+    const removed = openTabs.filter(matches)
+    if (!removed.length) return
+    const index = openTabs.indexOf(frontTab)
+    if (removed.includes(viewer)) pauseViewer()
+    if (removed.includes(splitTab)) {
+      pauseSecondary()
+      splitTab = null
+      secondFocused = false
+    }
+    for (const tab of removed) {
+      if (tab.shellId) send({ type: 'close', shellId: tab.shellId })
+      tab.terminal?.dispose()
+      tab.host?.remove()
+    }
+    openTabs = openTabs.filter(tab => !removed.includes(tab))
+    if (removed.includes(frontTab)) {
+      const choices = openTabs.filter(tab => tab !== splitTab)
+      frontTab = choices[Math.min(index, choices.length - 1)] ?? splitTab
+      if (frontTab && frontTab === splitTab) {
+        pauseSecondary()
+        splitTab = null
+      }
+      if (currentView !== 'activity') return selectPrimary(frontTab)
+    }
+    layout()
+    fitTerminal()
+    renderTabs()
+  }
+
+  function openPcTab(item) {
+    if (tabsEnabled) openViewer('pc', pcKey(item), item, item.name)
+  }
+
+  function openChat(item) {
+    if (agentsEnabled) openViewer('chat', chatKey(item), item, agents.nameOf(item))
+  }
+
+  function openViewer(type, key, item, name) {
+    let tab = openTabs.find(tab => tab.type === type && tab.key === key)
+    if (!tab) {
+      tab = { type, key, item, name }
+      openTabs.push(tab)
+    }
+    // Re-selecting a list item can retry a viewer that ended in the foreground.
+    if (viewer === tab && (type === 'pc' ? pcTabs.selectedId === null : agents.isOpen === false)) pauseViewer()
+    if (secondaryViewer === tab && (type === 'pc' ? secondary.pc.selectedId === null : secondary.chat.isOpen === false)) pauseSecondary()
+    selectTab(tab)
+  }
+
+  function syncTabs(type, items, keyOf) {
+    const activeWasWaiting = frontTab?.type === type && frontTab.waiting
+    const list = new Map((Array.isArray(items) ? items : []).filter(Boolean).map(item => [keyOf(item), item]))
+    for (const tab of openTabs) {
+      if (tab.type !== type) continue
+      const found = list.get(tab.key)
+      tab.waiting = false
+      tab.unavailable = !found
+      if (found) {
+        tab.item = found
+        tab.name = type === 'chat' ? agents.nameOf(found) : found.name
+      }
+    }
+    if (activeWasWaiting && currentView !== 'activity') {
+      const restoreSecond = secondFocused && splitVisible()
+      selectPrimary(frontTab)
+      if (restoreSecond) setPaneFocus(true)
+    }
+    else {
+      layoutSplit()
+      renderTabs()
+    }
+  }
 
   // ---- Terminal ----
   function fitTerminal() {
-    if (currentView !== 'terminal' || !terminal || !fit) return
+    fitShell(activeShell())
+    if (splitVisible() && splitTab.type === 'ssh') fitShell(splitTab)
+  }
+
+  function fitShell(tab) {
+    if (!tab?.terminal) return
+    const { terminal, fit, shellId } = tab
     try {
       fit.fit()
     } catch {
@@ -532,83 +1101,88 @@
   }
 
   function openTerminal(session) {
-    if (shellId || pendingOpen) {
-      show('terminal')
-      if (selectedSession === session.id) terminal?.focus()
-      else $('terminal-state').textContent = '열린 셸을 종료한 뒤 다른 세션을 열 수 있습니다.'
-      return
-    }
-    closeTerminal()
-    selectedSession = session.id
-    tree.select(selectedSession)
-    terminalName = $('terminal-name').textContent = session.name
-    $('terminal-state').textContent = '접속 중…'
-    show('terminal')
-    terminal = createTerminal()
-    fit = new FitAddon.FitAddon()
+    const existing = openTabs.find(tab => tab.type === 'ssh' && tab.key === session.id)
+    if (existing && !existing.ended) return selectTab(existing)
+    const tab = existing ?? { type: 'ssh', key: session.id, name: session.name }
+    tab.terminal?.dispose()
+    tab.ended = null
+    tab.pending = `q${++openSequence}`
+    const terminal = tab.terminal = createTerminal()
+    const fit = tab.fit = new FitAddon.FitAddon()
+    const host = tab.host ??= document.createElement('div')
+    host.className = 'remote-shell-host'
     terminal.loadAddon(fit)
-    terminal.open($('terminal-host'))
-    try {
-      fit.fit()
-    } catch {
-      // Sized again once the shell is open
-    }
-    terminal.onData((data) => { if (shellId) sendTerminalInput(data) })
-    pendingOpen = `q${++openSequence}`
-    updateShellActions()
-    send({ type: 'open', requestId: pendingOpen, sessionId: session.id, cols: terminal.cols, rows: terminal.rows })
+    if (!existing) openTabs.push(tab)
+    selectTab(tab)
+    terminal.open(host)
+    fitTerminal()
+    terminal.onData(data => sendTerminalInput(data, tab))
+    send({ type: 'open', requestId: tab.pending, sessionId: session.id, cols: terminal.cols, rows: terminal.rows })
   }
 
   function createTerminal(options) {
-    const style = getComputedStyle(document.documentElement)
     return new Terminal({
-      fontSize: 13, fontFamily: style.getPropertyValue('--font-mono').trim(),
-      cursorBlink: true, scrollback: 3000, minimumContrastRatio: 4.5, theme: terminalColors(style),
+      fontSize: 13, cursorBlink: true, scrollback: 3000, minimumContrastRatio: 4.5,
+      ...terminalPresentation,
       ...options
     })
   }
 
-  function closeTerminal() {
-    if (shellId) send({ type: 'close', shellId })
-    shellId = null
-    selectedSession = null
-    terminalName = ''
-    tree.select(null)
-    pendingOpen = null
-    setCtrl(false)
-    if (terminal) terminal.dispose()
-    terminal = null
-    fit = null
-    $('terminal-host').textContent = ''
-    updateShellActions()
+  function showShell(tab) {
+    renderShell(tab, $)
+    fitTerminal()
   }
 
-  function updateShellActions() {
-    const hasShell = Boolean(shellId || pendingOpen)
-    $('terminal-return').hidden = !hasShell
-    $('terminal-return').textContent = hasShell ? `열린 셸 · ${terminalName}` : ''
-    $('terminal-close').hidden = !hasShell
+  function renderShell(tab, find) {
+    const container = find('terminal-host')
+    if (tab.host.parentElement !== container) container.append(tab.host)
+    for (const host of container.children) host.hidden = host !== tab.host
+    find('terminal-name').textContent = tab.name
+    find('terminal-state').textContent = tab.pending ? '접속 중…' : tab.ended || ''
+    find('terminal-close').hidden = !tab.shellId && !tab.pending
+    find('terminal-reopen').hidden = !tab.ended
+    find('keys').hidden = !tab.shellId
   }
 
-  function setShellVisible(visible) {
-    if (shellId) send({ type: 'shell-visible', shellId, visible })
+  const shellOf = id => typeof id === 'string' ? openTabs.find(tab => tab.shellId === id) : undefined
+
+  function shellOpened(msg) {
+    const tab = openTabs.find(tab => tab.pending && tab.pending === msg.requestId)
+    if (!tab) {
+      if (!shellOf(msg.shellId)) send({ type: 'close', shellId: msg.shellId })
+      return
+    }
+    tab.shellId = msg.shellId
+    tab.pending = null
+    if (activeShell() === tab) {
+      showShell(tab)
+    }
+    if (splitVisible() && splitTab === tab) {
+      renderShell(tab, secondary.find)
+      fitShell(tab)
+    }
+    if (focusedTab() === tab && (activeShell() === tab || splitVisible())) tab.terminal.focus()
+    renderStatus()
   }
 
-  function endTerminal() {
-    if (!shellId && !pendingOpen) return
-    shellId = null
-    pendingOpen = null
-    selectedSession = null
-    tree.select(null)
-    updateShellActions()
-    if (currentView === 'terminal') setKeysVisible(false)
-    $('terminal-state').textContent = '연결 종료됨'
-    terminal?.write('\r\n\x1b[2m연결이 종료되었습니다.\x1b[0m\r\n')
+  function endShell(tab, reason = '연결 종료됨') {
+    tab.shellId = null
+    tab.pending = null
+    tab.ended = reason
+    tab.terminal.options.disableStdin = true
+    if (activeShell() === tab) showShell(tab)
+    if (splitVisible() && splitTab === tab) renderShell(tab, secondary.find)
+    renderTabs()
+  }
+
+  function endShells() {
+    for (const tab of openTabs) if (tab.shellId || tab.pending) endShell(tab)
   }
 
   function setCtrl(isOn) {
     isCtrlArmed = isOn
-    $('keys').querySelector('[data-key="ctrl"]').setAttribute('aria-pressed', String(isOn))
+    $('keys').querySelector('[data-key="ctrl"]').setAttribute('aria-pressed', String(isOn && !secondFocused))
+    secondary?.find('keys').querySelector('[data-key="ctrl"]').setAttribute('aria-pressed', String(isOn && secondFocused))
   }
 
   function setKeysVisible(visible) {
@@ -616,66 +1190,262 @@
     if (!visible) setCtrl(false)
   }
 
-  function sendToTerminal(data) {
-    if (!data) return
-    if (currentView === 'tab-terminal') pcTabs.input(data)
-    else if (currentView === 'terminal' && shellId) send({ type: 'input', shellId, data })
+  function isVisibleTab(tab) {
+    return Boolean(tab && ((tab === frontTab && currentView === tabViews[tab.type]) || (splitVisible() && tab === splitTab)))
   }
 
-  function sendTerminalInput(data) {
+  function sendToTerminal(data, tab) {
+    if (!data || !isVisibleTab(tab)) return
+    if (tab.type === 'pc') (tab === splitTab ? secondary.pc : pcTabs).input(data)
+    else if (tab.shellId) send({ type: 'input', shellId: tab.shellId, data })
+  }
+
+  function sendTerminalInput(data, tab) {
     // Ctrl from the key row turns the next letter into its control character.
-    if (isCtrlArmed && data.length === 1) {
+    if (isCtrlArmed && tab === focusedTab() && data.length === 1) {
       const code = data.toUpperCase().charCodeAt(0)
       setCtrl(false)
       if (code >= 64 && code <= 95) data = String.fromCharCode(code - 64)
     }
-    sendToTerminal(data)
+    sendToTerminal(data, tab)
   }
 
-  const KEYS = { esc: '\x1b', tab: '\t', up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' }
-  $('keys').addEventListener('click', (event) => {
-    const button = event.target.closest('button')
-    if (!button || $('keys').hidden) return
-    if (button.dataset.key === 'ctrl') setCtrl(!isCtrlArmed)
-    else sendToTerminal(KEYS[button.dataset.key] ?? button.dataset.text ?? '')
-    if (currentView === 'tab-terminal') pcTabs.focus()
-    else terminal?.focus()
-  })
-  // A tap on the key row must not take the keyboard away from the terminal
-  $('keys').addEventListener('mousedown', (event) => event.preventDefault())
+  const contextMenu = $('workspace-context-menu')
+  let contextOrigin = null
+  let pendingPress = null
+  let ignorePressClick = false
+  let clipboardNoteTimer = null
+  const clipboardText = /^[^\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]{1,16000}$/
 
-  $('terminal-back').addEventListener('click', () => {
-    show('sessions')
-    send({ type: 'sessions' })
-  })
-  $('terminal-return').addEventListener('click', () => show('terminal'))
-  $('terminal-close').addEventListener('click', () => {
-    closeTerminal()
-    show('sessions')
-  })
-  function fitViewport() {
+  function clipboardNote(message) {
+    const note = $('workspace-clipboard-status')
+    note.textContent = message
+    note.hidden = false
+    clearTimeout(clipboardNoteTimer)
+    clipboardNoteTimer = setTimeout(() => { note.hidden = true }, 3000)
+  }
+
+  async function copySelection(text) {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error()
+      await navigator.clipboard.writeText(text)
+    } catch {
+      const field = document.createElement('textarea')
+      field.className = 'workspace-clipboard-field'
+      field.value = text
+      field.readOnly = true
+      document.body.append(field)
+      field.select()
+      let copied = false
+      try {
+        copied = document.execCommand('copy')
+      } catch {
+        // The browser can block the legacy copy command as well.
+      } finally { field.remove() }
+      if (!copied) clipboardNote('이 브라우저에서 선택한 텍스트를 복사할 수 없습니다.')
+    }
+  }
+
+  function pcViewerOf(tab) {
+    return tab === splitTab ? secondary?.pc : pcTabs
+  }
+
+  function terminalOf(tab) {
+    if (!isVisibleTab(tab)) return null
+    return tab.type === 'ssh' ? tab.terminal : tab.type === 'pc' ? pcViewerOf(tab)?.terminal : null
+  }
+
+  async function pasteClipboard(tab) {
+    let text
+    try { text = await navigator.clipboard?.readText() } catch { /* Permission can be denied. */ }
+    if (!isVisibleTab(tab)) return
+    if (!clipboardText.test(text || '')) {
+      clipboardNote('붙여넣을 수 있는 텍스트가 없습니다.')
+      return
+    }
+    if (tab.type === 'pc') pcViewerOf(tab)?.paste(text)
+    else if (tab.shellId) tab.terminal.paste(text)
+  }
+
+  function contextActions(target) {
+    if (!isWorkspace() || approvals.isOpen) return null
+    const row = target?.closest?.('.workspace-tab')
+    const tab = row && openTabs.find(item => item.row === row)
+    if (tab) return {
+      focus: tab.button,
+      options: [
+        { text: '탭 닫기', run: () => removeTabs(item => item === tab) },
+        { text: '오른쪽 탭 모두 닫기', disabled: tab === openTabs.at(-1),
+          run: () => {
+            const index = openTabs.indexOf(tab)
+            if (index >= 0) removeTabs((item, position) => position > index)
+          } }
+      ]
+    }
+    const xterm = target?.closest?.('.xterm')
+    const current = xterm && [frontTab, splitTab].find(item => terminalOf(item)?.element === xterm)
+    if (!current) return null
+    const term = terminalOf(current)
+    const canPaste = current.type === 'ssh' ? Boolean(current.shellId) : Boolean(pcViewerOf(current)?.canInput)
+    return { focus: term.textarea, options: [
+      { text: '복사', disabled: !term.hasSelection(), run: () => void copySelection(term.getSelection()) },
+      { text: '붙여넣기', disabled: !canPaste, run: () => void pasteClipboard(current) },
+      { text: '모두 선택', run: () => term.selectAll() }
+    ] }
+  }
+
+  function closeContextMenu(restoreFocus = false) {
+    if (contextMenu.hidden) return
+    contextMenu.hidden = true
+    if (restoreFocus && contextOrigin?.isConnected) contextOrigin.focus({ preventScroll: true })
+    contextOrigin = null
+  }
+
+  function openContextMenu(event, menu) {
+    contextOrigin = menu.focus
+    contextMenu.replaceChildren(...menu.options.map(option => {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.setAttribute('role', 'menuitem')
+      button.textContent = option.text
+      button.disabled = Boolean(option.disabled)
+      button.addEventListener('click', () => {
+        ignorePressClick = false
+        closeContextMenu(true)
+        option.run()
+      })
+      return button
+    }))
+    contextMenu.hidden = false
     const viewport = window.visualViewport
-    const style = document.documentElement.style
+    const left = viewport?.offsetLeft || 0
+    const top = viewport?.offsetTop || 0
+    const right = left + (viewport?.width || window.innerWidth)
+    const bottom = top + (viewport?.height || window.innerHeight)
+    contextMenu.style.left = `${Math.max(left + 8, Math.min(event.clientX, right - contextMenu.offsetWidth - 8))}px`
+    contextMenu.style.top = `${Math.max(top + 8, Math.min(event.clientY, bottom - contextMenu.offsetHeight - 8))}px`
+    contextMenu.querySelector('button:not(:disabled)')?.focus({ preventScroll: true })
+  }
+
+  function clearPress() {
+    if (!pendingPress) return
+    clearTimeout(pendingPress.timer)
+    pendingPress = null
+  }
+
+  document.addEventListener('pointerdown', event => {
+    ignorePressClick = false
+    clearPress()
+    if (contextMenu.contains(event.target)) return
+    closeContextMenu()
+    if (event.pointerType !== 'touch' || !contextActions(event.target)) return
+    const press = { x: event.clientX, y: event.clientY }
+    press.timer = setTimeout(() => {
+      const menu = contextActions(event.target)
+      if (!menu) return
+      pendingPress = null
+      ignorePressClick = true
+      openContextMenu(event, menu)
+    }, 500)
+    pendingPress = press
+  }, true)
+  document.addEventListener('pointermove', event => {
+    if (pendingPress && Math.hypot(event.clientX - pendingPress.x, event.clientY - pendingPress.y) > 8) clearPress()
+  }, true)
+  document.addEventListener('pointerup', clearPress, true)
+  document.addEventListener('pointercancel', clearPress, true)
+  document.addEventListener('contextmenu', event => {
+    const menu = contextActions(event.target)
+    if (!menu) return
+    event.preventDefault()
+    clearPress()
+    openContextMenu(event, menu)
+  })
+  document.addEventListener('click', event => {
+    if (!ignorePressClick || event.detail === 0 || contextMenu.contains(event.target)) return
+    ignorePressClick = false
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  }, true)
+  document.addEventListener('keydown', event => {
+    if (contextMenu.hidden || event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    closeContextMenu(true)
+  }, true)
+  contextMenu.addEventListener('keydown', event => {
+    const direction = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0
+    if (!direction) return
+    const buttons = [...contextMenu.querySelectorAll('button:not(:disabled)')]
+    event.preventDefault()
+    buttons[(buttons.indexOf(document.activeElement) + direction + buttons.length) % buttons.length]?.focus()
+  })
+
+  const KEYS = { esc: '\x1b', tab: '\t', up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D' }
+  function bindKeys(keys, tabOf, pc, isSecondary = false) {
+    keys.addEventListener('click', event => {
+      const button = event.target.closest('button')
+      if (!button || keys.hidden) return
+      if (splitVisible() && secondFocused !== isSecondary) setPaneFocus(isSecondary)
+      const tab = tabOf()
+      if (button.dataset.key === 'ctrl') setCtrl(!isCtrlArmed)
+      else sendToTerminal(KEYS[button.dataset.key] ?? button.dataset.text ?? '', tab)
+      if (tab?.type === 'pc') pc.focus()
+      else tab?.terminal.focus()
+    })
+    // A tap on the key row must not take the keyboard away from the terminal.
+    keys.addEventListener('mousedown', event => event.preventDefault())
+  }
+  bindKeys($('keys'), () => frontTab, pcTabs)
+
+  $('terminal-close').addEventListener('click', () => removeTabs(tab => tab === activeShell()))
+  $('terminal-reopen').addEventListener('click', () => reopenShell(activeShell()))
+  function reopenShell(tab) {
+    if (tab?.ended) openTerminal({ id: tab.key, name: tab.name })
+  }
+  function fitViewport() {
+    closeContextMenu()
+    const viewport = window.visualViewport
+    const root = document.documentElement
+    const style = root.style
     keyboardOpen = false
     if (viewport?.height > 0 && (viewport.scale ?? 1) === 1) {
       style.setProperty('--visible-height', `${Math.floor(viewport.height)}px`)
       style.setProperty('--visible-top', `${Math.floor(viewport.offsetTop || 0)}px`)
-      keyboardOpen = viewport.height < window.innerHeight * 0.75
+      const width = root.clientWidth || window.innerWidth
+      const height = root.clientHeight || window.innerHeight
+      // In resizes-content mode a keyboard can also shrink the layout viewport.
+      const editing = document.activeElement?.matches('input, textarea, [contenteditable="true"]')
+      keyboardBaseline = editing && width === viewportWidth ? Math.max(height, keyboardBaseline) : height
+      viewportWidth = width
+      keyboardOpen = viewport.height < keyboardBaseline * 0.75
     } else {
       style.removeProperty('--visible-height')
       style.removeProperty('--visible-top')
     }
-    if (keyboardOpen) style.setProperty('--tab-safe-bottom', '0px')
-    else style.removeProperty('--tab-safe-bottom')
-    updateNavigationVisibility()
+    layout()
     fitTerminal()
+    keepFrontTabInView()
   }
   window.addEventListener('resize', fitViewport)
   workspaceSize.addEventListener('change', () => {
+    drawerOpen = false
     layout()
-    syncAgentList()
-    if (inWorkspace() && tabsEnabled) pcTabs.enter()
     fitTerminal()
+    keepFrontTabInView()
+  })
+  splitSize.addEventListener('change', () => {
+    if (!splitSize.matches && secondFocused && splitTab) {
+      const previous = frontTab
+      const chosen = splitTab
+      pauseSecondary()
+      splitTab = previous
+      selectPrimary(chosen)
+    } else {
+      layout()
+      fitTerminal()
+      renderTabs()
+    }
   })
   window.visualViewport?.addEventListener('resize', fitViewport)
   window.visualViewport?.addEventListener('scroll', fitViewport)
@@ -685,17 +1455,28 @@
       cancelRetry()
       clearTimeout(wakeTimer)
       wakeTimer = null
+      pauseViewer()
+      pauseSecondary()
     }
-    else wake()
+    else {
+      wake()
+      resumeViewer()
+      layoutSplit()
+    }
   })
   window.addEventListener('online', wake)
   window.addEventListener('pageshow', event => { if (event.persisted) wake() })
 
   // ---- Start ----
+  $('signin-code').addEventListener('input', () => {
+    if (/^\d{6}$/.test($('signin-code').value)) $('signin-form').requestSubmit()
+  })
   $('signin-form').addEventListener('submit', (event) => {
     event.preventDefault()
+    if (signingIn) return
     const code = $('signin-code').value.trim()
     if (!/^\d{6}$/.test(code)) return signinError('6자리 숫자를 입력하세요.')
+    signingIn = true
     signinError('')
     const token = readToken()
     const remember = $('signin-remember').checked
@@ -705,6 +1486,65 @@
     else connect(() => send(payload))
   })
   $('message-retry').addEventListener('click', start)
+
+  const installButtons = [$('workspace-install')]
+  let installPrompt = null
+  window.addEventListener('beforeinstallprompt', (event) => {
+    if (standalone) return
+    event.preventDefault()
+    installPrompt = event
+    for (const button of installButtons) button.hidden = false
+  })
+  function hideInstall() {
+    installPrompt = null
+    for (const button of installButtons) button.hidden = true
+  }
+  for (const button of installButtons) {
+    button.addEventListener('click', async () => {
+      const prompt = installPrompt
+      if (!prompt) return
+      hideInstall()
+      try {
+        await prompt.prompt()
+      } catch {
+        // The browser's install menu is still available.
+      }
+    })
+  }
+  window.addEventListener('appinstalled', hideInstall)
+  if (window.isSecureContext && 'serviceWorker' in navigator) {
+    void navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {})
+  }
+
+  $('pair-link-form').addEventListener('submit', (event) => {
+    event.preventDefault()
+    if (!standalone) return
+    const input = $('pair-link')
+    let code = null
+    try {
+      const link = new URL(input.value)
+      if (link.origin === location.origin && link.pathname === '/' && !link.username && !link.password) {
+        code = new URLSearchParams(link.hash.slice(1)).get('pair')
+      }
+    } catch {
+      // Keep the form open so the link can be corrected.
+    }
+    if (!code || !/^[A-Za-z0-9_-]{24}$/.test(code)) {
+      const error = $('pair-link-error')
+      error.textContent = '이 ezShell의 새 기기 등록 링크를 붙여넣어 주세요.'
+      error.hidden = false
+      return
+    }
+    input.value = ''
+    pair(code)
+  })
+
+  function pair(code) {
+    message('이 기기를 등록하는 중…')
+    const payload = { type: 'pair', code, name: deviceName() }
+    if (socket?.readyState === WebSocket.OPEN) send(payload)
+    else connect(() => send(payload))
+  }
 
   function start() {
     if (socket) return
@@ -717,8 +1557,7 @@
     signinError('')
     $('signin-code').value = ''
     if (pairCode) {
-      message('이 기기를 등록하는 중…')
-      connect(() => send({ type: 'pair', code: pairCode, name: deviceName() }))
+      pair(pairCode)
     } else if (token) {
       const trust = readTrust()
       // The PC checks expiry using the same clock that issued the ticket.
@@ -732,7 +1571,10 @@
         $('signin-code').focus()
       }
     } else {
-      message('이 기기는 등록되어 있지 않습니다. PC 의 ezShell 설정 > 원격 접속에서 QR 을 찍어 등록하세요.')
+      message(standalone
+        ? 'PC의 ezShell 설정 > 원격 접속에서 새 등록 QR을 만들고 등록 링크를 복사하세요.'
+        : '이 기기는 등록되어 있지 않습니다. PC 의 ezShell 설정 > 원격 접속에서 QR 을 찍어 등록하세요.',
+      { canPair: true })
     }
   }
 
@@ -744,5 +1586,7 @@
     return [model ? model[0] : '기기', browser ? browser[0].replace('Edg', 'Edge') : ''].filter(Boolean).join(' · ')
   }
 
+  updateTerminalPresentation()
+  applySidebarWidth()
   start()
 })()

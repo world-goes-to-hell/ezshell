@@ -64,6 +64,34 @@ async function watch(pipe, request, sockets) {
 }
 
 describe('the MCP bridge for an agent started in a local terminal', () => {
+  it('records Codex role launch evidence only when the shell binding confirms the requested folder', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-codex-role-bridge-'))
+    const bridgeFile = path.join(root, 'agent-message-connection')
+    const sockets = []
+    const startedAt = Date.now() - 1000
+    const messages = createAgentMessages({
+      bridgeFile, home: root, notify: () => {}, isLocked: () => false,
+      bindLocalAgent: async ({ cwd, pid }) => ({ agentId }) => ({
+        agentId, shellId: `local:${pid}`, detach: () => true,
+        ...(cwd === root ? { codexRoleCwd: root, codexProcessStartedAt: startedAt } : {})
+      })
+    })
+    try {
+      await messages.enableExternalBridge()
+      const [, , pipe, token] = fs.readFileSync(bridgeFile, 'utf8').split(/\r?\n/)
+      const matching = await watch(pipe, { token, pid: 101, kind: 'codex', cwd: root }, sockets)
+      const different = await watch(pipe, { token, pid: 102, kind: 'codex', cwd: os.tmpdir() }, sockets)
+      expect(matching.result.success).toBe(true)
+      expect(different.result.success).toBe(true)
+      expect(messages.codexRoleContextOf('codex-1')).toEqual({ roleCwd: root, roleStartedAt: startedAt })
+      expect(messages.codexRoleContextOf('codex-2')).toBeNull()
+    } finally {
+      for (const socket of sockets) socket.destroy()
+      messages.stop()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('uses the ancestor app when a newer app has replaced the shared bridge', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-agent-bridge-test-'))
     const bridgeFile = path.join(root, 'agent-message-connection')

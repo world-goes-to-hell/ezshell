@@ -1,7 +1,7 @@
 const { randomUUID } = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
-const { pickBrowserElement, readVueComponent } = require('./browserReviewPicker.js')
+const { describeBrowserElement, pickBrowserElement, readReviewViewport, readVueComponent } = require('./browserReviewPicker.js')
 const { createBrowserLogins, loginOrigin } = require('./browserLogins.js')
 const { fillLoginForm } = require('./browserLoginForm.js')
 const { createBrowserImportSources } = require('./browserImportSources.js')
@@ -15,6 +15,9 @@ const WORLD = 1001
 const LOGIN_WORLD = 1002
 const MAX_REQUEST = 4000
 const MAX_TITLE_CHARS = 300
+const VIEWPORT_WORLD = 1003
+const PICK_SCRIPT = `(${pickBrowserElement})(${describeBrowserElement})`
+const VIEWPORT_SCRIPT = `(${readReviewViewport})(${describeBrowserElement}`
 
 function webUrl(value) {
   try {
@@ -66,6 +69,12 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
   const fail = error => ({ success: false, error })
   const allowed = event => fromMainWindow(event) && event.senderFrame === event.sender.mainFrame
   const tabFor = (event, id) => allowed(event) ? tabs.get(id) : undefined
+
+  function deliverReview(selection, agentId, text, files = []) {
+    const { url, selector } = selection
+    sendMessage({ to: agentId, text: reviewMessage(text, selection, files),
+      reviewRequest: { text, url, selector, ...(files.length ? { imageCount: files.length } : {}) } })
+  }
 
   function sessionFor(persistent, workspace = false) {
     const key = workspace ? 'workspace' : persistent
@@ -259,6 +268,25 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
       publish()
     })
 
+    async function describeSelection(element, url) {
+      const vue = element.selector.length <= 750
+        ? await contents.executeJavaScript(`(${readVueComponent})(${JSON.stringify(element.selectors)})`).catch(() => null)
+        : null
+      const component = typeof vue?.component === 'string' ? vue.component.trim().slice(0, 100) : ''
+      const componentFile = typeof vue?.componentFile === 'string' ? vue.componentFile.trim().slice(0, 360) : ''
+      return {
+        id: randomUUID(),
+        url: (url.origin + url.pathname).slice(0, 1200),
+        selector: element.selector.slice(0, 750),
+        tag: element.tag.slice(0, 80),
+        label: element.label,
+        text: element.text,
+        classes: element.classes,
+        ...(component ? { component } : {}),
+        ...(componentFile ? { componentFile } : {})
+      }
+    }
+
     async function pick() {
       const url = webUrl(contents.getURL())
       if (!url || ui.loading || ui.error || ui.picking || !visible) return fail('페이지가 열린 뒤 요소를 선택해 주세요.')
@@ -268,26 +296,10 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
       publish()
       try {
         contents.focus()
-        const element = await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: `(${pickBrowserElement})()` }])
+        const element = await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: PICK_SCRIPT }])
         if (generation !== current || !element?.selector) return success
-        const vue = element.selector.length <= 750
-          ? await contents.executeJavaScript(`(${readVueComponent})(${JSON.stringify(element.selectors)})`).catch(() => null)
-          : null
-        if (generation === current && element?.selector && webUrl(contents.getURL())?.href === url.href) {
-          const component = typeof vue?.component === 'string' ? vue.component.trim().slice(0, 100) : ''
-          const componentFile = typeof vue?.componentFile === 'string' ? vue.componentFile.trim().slice(0, 360) : ''
-          ui.selection = {
-            id: randomUUID(),
-            url: (url.origin + url.pathname).slice(0, 1200),
-            selector: element.selector.slice(0, 750),
-            tag: element.tag.slice(0, 80),
-            label: element.label,
-            text: element.text,
-            classes: element.classes,
-            ...(component ? { component } : {}),
-            ...(componentFile ? { componentFile } : {})
-          }
-        }
+        const selection = await describeSelection(element, url)
+        if (generation === current && webUrl(contents.getURL())?.href === url.href) ui.selection = selection
         return success
       } catch {
         return generation === current ? fail('이 페이지에서 요소를 선택할 수 없습니다.') : success
@@ -296,6 +308,52 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
           ui.picking = false
           publish()
         }
+      }
+    }
+
+    // This surface is limited to the existing HTTP(S) tab and a read-only DOM hit test.
+    const reviewUrl = () => !workspace && !contents.isDestroyed() && webUrl(contents.getURL())
+    const validFrame = frame => frame.generation === generation && !ui.loading && !ui.error && !ui.picking && Boolean(reviewUrl())
+    const viewport = (...args) => contents.executeJavaScriptInIsolatedWorld(VIEWPORT_WORLD,
+      [{ code: `${VIEWPORT_SCRIPT}, ${args.map(value => JSON.stringify(value)).join(', ')})` }])
+    let capturing = false
+    const remote = {
+      get title() { return ui.title || '브라우저' },
+      get available() { return Boolean(reviewUrl()) },
+      async capture() {
+        const frame = { generation }
+        if (!validFrame(frame) || capturing) return null
+        capturing = true
+        try {
+          frame.viewport = await viewport('read')
+          if (!frame.viewport || !validFrame(frame)) return null
+          const image = await contents.capturePage(undefined, { stayHidden: true })
+          if (!validFrame(frame) || image.isEmpty()) return null
+          const settled = await viewport('read')
+          if (!validFrame(frame) || !settled?.every((value, index) => value === frame.viewport[index])) return null
+          const { width, height } = image.getSize()
+          const scale = Math.min(1, 1280 / width, 960 / height)
+          const preview = scale < 1 ? image.resize({ width: Math.max(1, Math.round(width * scale)) }) : image
+          const jpeg = preview.toJPEG(72)
+          return jpeg.length <= 450_000 ? { frame, jpeg: jpeg.toString('base64') } : null
+        } finally { capturing = false }
+      },
+      async pick(frame, x, y) {
+        if (!validFrame(frame)) return null
+        const url = reviewUrl()
+        const picked = await viewport('pick', frame.viewport, x, y)
+        if (!picked?.element) return picked
+        const selection = await describeSelection(picked.element, url)
+        return validFrame(frame) ? { selection, rect: picked.rect } : null
+      },
+      async scroll(frame, x, y, amount) {
+        return validFrame(frame) && await viewport('scroll', frame.viewport, x, y, amount)
+      },
+      send(frame, selection, to, text) {
+        if (!validFrame(frame)) return { ...fail('페이지가 바뀌었습니다. 요소를 다시 선택해 주세요.'), refresh: true }
+        if (!listAgents().some(agent => agent.id === to)) return fail('연결된 에이전트를 선택해 주세요.')
+        deliverReview(selection, to, text)
+        return success
       }
     }
 
@@ -346,11 +404,10 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
           }
           if (!listAgents().some(agent => agent.id === request.agentId)) return fail('연결된 에이전트를 선택해 주세요.')
           try {
-            const { url, selector } = ui.selection
+            const selection = ui.selection
             const text = enteredText || '첨부 이미지를 참고해 선택한 요소를 확인해 주세요.'
-            const message = reviewMessage(text, ui.selection, images.files)
             await images.send(() => {
-              sendMessage({ to: request.agentId, text: message, reviewRequest: { text, url, selector, ...(imageCount ? { imageCount } : {}) } })
+              deliverReview(selection, request.agentId, text, images.files)
               return { ok: true }
             })
             return success
@@ -379,7 +436,7 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
     }
 
     return {
-      state, publish, bounds, action, currentLoginOrigin, fill, persistent, load,
+      state, publish, bounds, action, currentLoginOrigin, fill, persistent, load, remote,
       close() {
         generation++
         if (workspace) workspacePreviews.delete(workspace.host)
@@ -578,6 +635,11 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
   return {
     openLink,
     openWorkspace,
+    remote: {
+      list: () => [...tabs].flatMap(([id, tab]) => tab.remote.available ? [{ id, name: tab.remote.title }] : []),
+      tab: id => tabs.get(id)?.remote,
+      recipients: () => listAgents().map(({ id, kind, status }) => ({ id, kind, status }))
+    },
     ownsPage: contents => [...sessions.values()].includes(contents.session),
     updateAgents: () => { for (const tab of tabs.values()) tab.publish() },
     close: () => {

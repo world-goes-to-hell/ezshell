@@ -128,6 +128,44 @@ async function run() {
     }
     const list = await cli('codex-1', 'agent list')
     check('the bundled CLI can see both agents with independent ids on the same folder', list.self === 'codex-1' && list.agents.length === 2 && list.agents.every(agent => agent.cwd === workspace))
+
+    // Open actual screens in the fixture PTY and query them from the other agent's MCP.
+    const inspect = () => mcp('claude-2', 'inspect_agent', { id: 'codex-1' })
+    const approval = 'Would you like to run this command?'
+    const pane = `document.querySelector('[aria-label="codex-1 메시지함"]')?.closest('[data-local-shell-id]')`
+    const draw = async (suffix, value, visibleText) => {
+      fs.writeFileSync(file('codex-1-' + suffix), value)
+      const visible = `${pane}?.querySelector('.xterm-rows')?.textContent.includes(${JSON.stringify(visibleText)})`
+      if (!(await until(value ? visible : `!(${visible})`))) throw new Error(`fixture did not redraw ${suffix}`)
+    }
+    await draw('approval', [approval, '  $ PRIVATE-COMMAND', '› 1. Yes', '  2. No', 'Press enter to confirm or esc to cancel'].join('\r\n'), approval)
+    const inspected = await inspect()
+    check('inspect_agent reports the live approval without its terminal details', inspected.status === 'blocked' &&
+      inspected.statusSource === 'screen' && inspected.blocked?.kind === 'approval' &&
+      inspected.blocked.question === approval && inspected.blocked.options?.join(',') === 'Yes,No' &&
+      !JSON.stringify(inspected).includes('PRIVATE-COMMAND'), JSON.stringify(inspected))
+    fs.writeFileSync(file('test-notifications'), '')
+    const escalation = { id: 'codex-1', reason: 'PRIVATE-REASON' }
+    const firstAlert = await mcp('claude-2', 'escalate', escalation)
+    const again = await mcp('claude-2', 'escalate', escalation)
+    const notices = read('test-notifications').trim().split('\n').filter(Boolean).map(JSON.parse)
+    check('escalate sends one OS notification with only the agent and the kind', firstAlert.notified && !again.notified &&
+      notices.length === 1 && notices[0].title === 'codex-1 가 응답을 기다립니다' && notices[0].body === '확인 요청', JSON.stringify(notices))
+    const alertToast = `[...document.querySelectorAll('.toast')].find(item => item.textContent.includes('codex-1 가 응답을 기다립니다'))`
+    check('the in-app alert keeps the question and reason private', await until(`
+      ${alertToast}?.textContent.includes('그 칸으로 가기') &&
+      !${alertToast}?.textContent.includes('PRIVATE-REASON') && !${alertToast}?.textContent.includes(${JSON.stringify(approval)})
+    `))
+    await js(`${alertToast}.querySelector('.toast-action').click()`)
+    check('the escalation action focuses the waiting agent’s pane', await until(`${pane}?.contains(document.activeElement)`))
+    await draw('approval', '', approval)
+    await draw('screen', ['Select Model and Effort', '› 1. Model A', '  2. Model B', 'enter select · esc back'].join('\r\n'), 'Select Model and Effort')
+    check('inspect_agent names a native CLI menu without its options', JSON.stringify((await inspect()).blocked) === '{"kind":"cli-screen"}')
+    await draw('screen', '', 'Select Model and Effort')
+    await draw('draft', 'PRIVATE-DRAFT', 'PRIVATE-DRAFT')
+    check('inspect_agent returns the draft origin without draft text', JSON.stringify((await inspect()).blocked) === '{"kind":"draft","ours":false}')
+    await draw('draft', '', 'PRIVATE-DRAFT')
+    await focusAgent('claude-2')
     await mcp('codex-1', 'set_role', { role: '보내기 구현' })
     await mcp('claude-2', 'set_role', { role: '리뷰어' })
     check('MCP roles appear on the terminal strip and in the agent list',
@@ -177,7 +215,8 @@ async function run() {
     })()`)
     const request = await cli('codex-1', 'message send --to claude-2 --text review-please --request-id review-1')
     const claudeMail = 'document.querySelector(\'[aria-label="claude-2 메시지함"]\')'
-    check('the arrival is shown beside the receiver with both agent roles', await noticeAt(claudeMail, 'codex-1 · 보내기 구현 → claude-2 · 리뷰어'))
+    // 2026-11-25 user request: the card names an agent by its role alone (the tooltip keeps the id)
+    check('the arrival is shown beside the receiver with both agent roles alone', await noticeAt(claudeMail, '보내기 구현 → 리뷰어'))
     check('first the message flies from the sender, with the sender\'s icon, before the card', await js(`window.flights.length === 1 && window.flights[0].icon === 'codex' && !window.flights[0].cardShown`), JSON.stringify(await js('window.flights')))
     check('the card shows each agent\'s icon beside its name', await js(`[...document.querySelectorAll('.agent-delivery-notice strong .agent-message-provider')].map(icon => icon.dataset.kind).join(',') === 'codex,claude'`))
     check('both arrival dots match the status colors of the same agents in the sidebar', await js(`['codex-1', 'claude-2'].every(id => {
@@ -203,7 +242,7 @@ async function run() {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
     const reply = await cli('claude-2', `message reply --reply-to ${request.id} --text looks-good`)
     const codexBadge = `[...document.querySelectorAll('.terminal-tab')].find(tab => tab.dataset.tabId === ${paneTab('codex-1')})?.querySelector('.agent-tab-mail')`
-    check('the reply appears alongside the inactive Codex tab with reduced motion enabled', await noticeAt(codexBadge, 'claude-2 · 리뷰어 → codex-1 · 보내기 구현'))
+    check('the reply appears alongside the inactive Codex tab with reduced motion enabled', await noticeAt(codexBadge, '리뷰어 → 보내기 구현'))
     check('with reduced motion nothing flies', await js('window.flights.length === 1'), JSON.stringify(await js('window.flights')))
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
     const result = await cli('codex-1', 'message inbox --unread')
@@ -240,7 +279,7 @@ async function run() {
     check('the chat header editor puts the role back', await renameInChat('리뷰어'))
     const firstWakes = Number(read('claude-2-wakes'))
     const nextRequest = await mcp('codex-1', 'send_message', { to: 'claude-2', text: 'Please check the next change' })
-    check('in chat mode the arrival card opens below the bell and shows the unread count', await noticeAt(chatBell, 'codex-1 · 보내기 구현 → claude-2 · 리뷰어') &&
+    check('in chat mode the arrival card opens below the bell and shows the unread count', await noticeAt(chatBell, '보내기 구현 → 리뷰어') &&
       await until(`${chatBell}?.getAttribute('aria-label') === '읽지 않은 메시지 1개'`))
     check('Claude starts a new turn for a follow-up even when its empty composer shows a suggestion',
       await waitFor(() => Number(read('claude-2-wakes')) === firstWakes + 1))
@@ -617,19 +656,19 @@ async function run() {
     check('the list heading names the selected agent and puts the pane and its action below', await until(`
       ${subject}?.textContent === '보내기 구현 · codex-1 의 메시지' &&
       !!${subject}.querySelector('.agent-identity-dot') && ${subject}.querySelector('.agent-message-provider')?.dataset.kind === 'codex' &&
-      ${subjectLocation}?.firstElementChild.textContent.includes(' · 칸 ') &&
+      ${subjectLocation}?.querySelector('.agent-message-pane-number')?.textContent.match(/^ · [0-9]+$/) &&
       ${subjectLocation}.querySelector('[data-action=go]')?.textContent === '그 칸으로 가기' &&
       ${subjectLocation}.getBoundingClientRect().top >= ${subject}.getBoundingClientRect().bottom
     `))
     const longRow = '(' + messageRow(longText) + ')'
     const expand = longRow + "?.querySelector('.agent-message-expand')"
-    check('the agent’s outgoing messages align right and its incoming messages align left', await until(`
+    check('outgoing messages align right and show the sender’s role alone', await until(`
       ${longRow}?.closest('.agent-message-group')?.dataset.side === 'right' &&
       (${messageRow('looks-good')})?.closest('.agent-message-group')?.dataset.side === 'left' &&
       ${bubbleLabel('looks-good')}?.textContent === '리뷰어 · claude-2' &&
-      ${bubbleLabel('review-please')}?.textContent === '→ 리뷰어 · claude-2' &&
-      ${bubbleLabel('note-for-user')}?.textContent === '→ 나' &&
-      parseFloat(getComputedStyle(${bubbleLabel('review-please')}.querySelector('.agent-message-send-arrow')).fontSize) >= 14
+      ${bubbleLabel('review-please')}?.textContent === '보내기 구현' &&
+      !${bubbleLabel('review-please')}?.querySelector('svg, .agent-identity-dot') &&
+      ${bubbleLabel('note-for-user')}?.textContent === '보내기 구현'
     `))
     check('consecutive messages to the same recipient share their single label', await js(`
       ${longRow}?.parentElement === (${messageRow('note-for-user')})?.parentElement &&
@@ -721,7 +760,7 @@ async function run() {
       return getComputedStyle(note.parentElement.querySelector('.agent-identity-dot')).backgroundColor === cardColor &&
         getComputedStyle(document.querySelector('.agent-pane-usage .agent-identity-badge[data-agent-id="codex-1"] .agent-identity-dot')).backgroundColor === cardColor &&
         [...document.querySelectorAll('.agent-message-map-line')].some(line => getComputedStyle(line).stroke === cardColor) &&
-        document.querySelector('.agent-message-pair-locations [data-agent-id="codex-1"]')?.textContent.includes('칸 ')
+        document.querySelector('.agent-message-pair-locations [data-agent-id="codex-1"] .agent-message-pane-number')?.textContent.match(/^ · [0-9]+$/)
     })()`))
     check('the edge shows the two participants once in the header and alternates colored bubble sides', await js(`(() => {
       const outgoing = ${messageRow('review-please')}
@@ -849,8 +888,8 @@ async function run() {
       ${cardPick('codex-1')}.getAttribute('aria-pressed') === 'true' &&
       ['note-for-user', 'review-please', 'hello-manual-claude'].every(text => ${messageTexts}.includes(text)) &&
       ${subject}?.textContent === '보내기 담당 · codex-1 의 메시지' &&
-      ${subjectLocation}?.firstElementChild.textContent.includes(' · 칸 ') &&
-      ${bubbleLabel('review-please')}?.textContent === '→ 리뷰어 · claude-2'
+      ${subjectLocation}?.querySelector('.agent-message-pane-number')?.textContent.match(/^ · [0-9]+$/) &&
+      ${bubbleLabel('review-please')}?.textContent === '보내기 담당'
     `))
     await driver.move(20, 45)
     await driver.shot('local-agent-messages-selected-agent')
@@ -882,7 +921,7 @@ async function run() {
     await until(`!!${filter}`)
     check('a roleless agent heading uses its ID and puts location below', await until(`
       ${subject}?.textContent === 'claude-7 의 메시지' &&
-      ${subjectLocation}?.firstElementChild.textContent === 'other workspace · 칸 1'
+      ${subjectLocation}?.firstElementChild.textContent === 'other workspace · 1'
     `))
     await openFilter()
     check('the second project only offers its agents in the filter', await js(`
@@ -894,7 +933,7 @@ async function run() {
       ${card('codex-6')}?.querySelector('.agent-message-map-card-name strong')?.textContent === 'codex-6' &&
       ${card('claude-7')}?.querySelector('.agent-message-map-card-name strong')?.textContent === 'claude-7' &&
       ${card('claude-7')}?.querySelector('.agent-message-map-card-folder > span')?.textContent === 'other workspace' &&
-      ${card('claude-7')}?.querySelector('.agent-message-map-card-folder > small')?.textContent === '칸 1' &&
+      ${card('claude-7')}?.querySelector('.agent-message-map-card-folder > small')?.textContent === '1' &&
       !${card('claude-7')}?.querySelector('.agent-message-map-card-meta > small') &&
       !${card('codex-1')} && ${edges}.length === 0
     `))
@@ -956,6 +995,31 @@ async function run() {
           actor.querySelector('.agent-message-actor-name')?.textContent === '나' &&
           actor.querySelector('.agent-message-actor-id')?.textContent === 'codex-1')
       `))
+
+    // Run last because the authenticated hook changes this fixture's status source.
+    const codexSession = '01a1ec18-0000-7000-8000-000000000071'
+    const stamp = new Date()
+    const padDate = number => String(number).padStart(2, '0')
+    const rollouts = file(path.join('codex-home', 'sessions', String(stamp.getFullYear()), padDate(stamp.getMonth() + 1), padDate(stamp.getDate())))
+    fs.mkdirSync(rollouts, { recursive: true })
+    fs.writeFileSync(path.join(rollouts, `rollout-${codexSession}.jsonl`), JSON.stringify({
+      type: 'session_meta', payload: { id: codexSession, cwd: workspace, timestamp: stamp.toISOString() }
+    }) + '\n')
+    const codexSnapshot = 'window.electronAPI.agentMessagesSnapshot().then(state => state.agents.find(agent => agent.id === "codex-1"))'
+    check('the rollout alone never assigns the role layout key', await until(`window.electronAPI.agentUsageState().then(reports =>
+      reports.some(report => report.agentId === 'codex-1' && report.usage.sessionId === ${JSON.stringify(codexSession)}))`) &&
+      !(await js(codexSnapshot)).layoutKey)
+    const hookInput = file('codex-role-hook.json')
+    fs.writeFileSync(hookInput, JSON.stringify({ hook_event_name: 'SessionStart', session_id: codexSession, source: 'startup' }))
+    fs.writeFileSync(file('codex-1-command'), `"%EZSHELL_TEST_AGENT_EXE%" "%EZSHELL_AGENT_HOOK_SCRIPT%" codex < "${hookInput}"`)
+    const hookResult = await waitFor(() => read('codex-1-result'))
+    if (hookResult) fs.unlinkSync(file('codex-1-result'))
+    const roleRecord = () => JSON.parse(read('agent-roles.json') || '{}')[`codex:${codexSession}`]
+    check('the matching hook and rollout persist both roles and expose only the layout key',
+      Boolean(hookResult && JSON.parse(hookResult).exit === 0 && await waitFor(roleRecord)) &&
+      roleRecord()?.user === '나' && roleRecord()?.agent === 'MCP 역할 갱신' &&
+      await until(`(${codexSnapshot}).then(agent => !!agent?.layoutKey && !agent.resumeId && agent.role === '나')`),
+      JSON.stringify(roleRecord()))
   } finally {
     driver.close()
   }

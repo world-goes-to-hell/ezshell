@@ -1,5 +1,5 @@
 import { contrastRatio, type Rgb } from './colorContrast'
-import type { QuickCaptureTheme, ThemeColors } from '../types/theme'
+import type { QuickCaptureTheme, TerminalColors, ThemeColors } from '../types/theme'
 
 const black: Rgb = [0, 0, 0]
 const white: Rgb = [255, 255, 255]
@@ -16,7 +16,7 @@ function contrasting(color: Rgb, surfaces: Rgb[], minimum: number): Rgb {
   return end
 }
 
-export function quickCaptureTheme(colors: ThemeColors, tokens: CSSStyleDeclaration, scheme: 'light' | 'dark'): QuickCaptureTheme | undefined {
+export function quickCaptureTheme(colors: ThemeColors, tokens: CSSStyleDeclaration, scheme: 'light' | 'dark', terminal?: TerminalColors): QuickCaptureTheme | undefined {
   const canvas = document.createElement('canvas')
   canvas.width = canvas.height = 1
   const context = canvas.getContext('2d', { willReadFrequently: true })
@@ -36,6 +36,12 @@ export function quickCaptureTheme(colors: ThemeColors, tokens: CSSStyleDeclarati
   const surface = pixel(colors.bgSecondary, background)
   const surfaces = [surface, background]
   const accent = contrasting(pixel(colors.accent, surface), [surface], 3)
+  // Canvas serializes the renderer's HSL and short alpha hex colors into literal sRGB.
+  const terminalColors = terminal && Object.fromEntries(Object.entries(terminal).flatMap(([name, color]) => {
+    if (!CSS.supports('color', color)) return []
+    context.fillStyle = color
+    return [[name, context.fillStyle]]
+  }))
   return {
     background: hex(background),
     surface: hex(surface),
@@ -49,6 +55,7 @@ export function quickCaptureTheme(colors: ThemeColors, tokens: CSSStyleDeclarati
     radius: token('--radius-md'),
     panelRadius: token('--radius-lg'),
     font: token('--font-sans'),
-    scheme
+    scheme,
+    terminal: terminalColors
   }
 }

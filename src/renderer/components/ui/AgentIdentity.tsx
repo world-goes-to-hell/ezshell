@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import type { AgentMessageSession } from '../../types'
 import { RiArrowRightUpLine, RiPencilLine } from 'react-icons/ri'
-import { agentIdentityColor, agentIdentityLabel, agentIdentityTooltip, type AgentPaneLocation } from '../../lib/agentIdentity'
+import { agentIdentityColor, agentIdentityLabel, agentIdentityTooltip, agentShortName, type AgentPaneLocation } from '../../lib/agentIdentity'
 import { AGENT_PROVIDER_ICONS } from './agentProviderIcons'
 import './AgentIdentity.css'
 
@@ -10,8 +10,12 @@ export function AgentIdentityDot({ id }: { id: string }) {
   return <span className="agent-identity-dot" style={{ backgroundColor: agentIdentityColor(id) }} aria-hidden="true" />
 }
 
-export function AgentIdentityBadge({ agent, location, showProvider = false }: { agent: AgentMessageSession; location?: AgentPaneLocation; showProvider?: boolean }) {
-  const label = agentIdentityLabel(agent)
+/**
+ * `nameOnly`: the role alone when it has one, else the id (the arrival card, 2026-11-25 user request).
+ * The tooltip still names both
+ */
+export function AgentIdentityBadge({ agent, location, showProvider = false, nameOnly = false }: { agent: AgentMessageSession; location?: AgentPaneLocation; showProvider?: boolean; nameOnly?: boolean }) {
+  const label = nameOnly ? agentShortName(agent) : agentIdentityLabel(agent)
   const ProviderIcon = AGENT_PROVIDER_ICONS[agent.kind]
   return (
     <span className="agent-identity-badge" {...agentIdentityTooltip(agent, location)} data-agent-id={agent.id}>

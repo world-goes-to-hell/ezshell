@@ -46,6 +46,11 @@ export function agentIdentityLabel({ id, role }: Pick<AgentMessageSession, 'id' 
   return role ? `${id} · ${role}` : id
 }
 
+/** The role alone when the agent has one, else its id */
+export function agentShortName({ id, role }: Pick<AgentMessageSession, 'id' | 'role'>) {
+  return role?.trim() || id
+}
+
 export function agentIdentityColor(id: string): string {
   const serial = Number(/-(\d+)$/.exec(id)?.[1])
   let slot = 0

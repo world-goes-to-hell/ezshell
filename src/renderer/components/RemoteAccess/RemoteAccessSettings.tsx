@@ -105,6 +105,7 @@ export function RemoteAccessSettings() {
   const setEnabled = (isEnabled: boolean) => run(async () => apply(await api.remoteAccessSetEnabled!(isEnabled)))
   const setAnswerMcp = (isOn: boolean) => run(async () => apply(await api.remoteAccessSetAnswerMcp!(isOn)))
   const setTabs = (isOn: boolean) => run(async () => apply(await api.remoteAccessSetTabs!(isOn)))
+  const setBrowserReview = (isOn: boolean) => run(async () => apply(await api.remoteAccessSetBrowserReview!(isOn)))
   const setAgents = (isOn: boolean) => run(async () => apply(await api.remoteAccessSetAgents!(isOn)))
 
   const showPairing = () => run(async () => {
@@ -198,9 +199,9 @@ export function RemoteAccessSettings() {
           </section>
 
           <section className="mcp-field settings-section mcp-settings-group">
-            <h3 className="settings-section-title mcp-field-label">2. 휴대폰 등록</h3>
+            <h3 className="settings-section-title mcp-field-label">2. 원격 기기 등록</h3>
             <p className="remote-access-desc">
-              Tailscale 이 켜진 휴대폰의 카메라로 QR 을 찍으면 브라우저가 열리고 그 휴대폰이 등록됩니다. QR 은 2분 동안, 한 번만 쓸 수 있습니다.
+              Tailscale이 켜진 휴대폰이나 태블릿으로 QR을 찍거나, 설치한 ezShell 앱에 등록 링크를 붙여넣으세요. 등록 링크는 2분 동안 한 번 쓸 수 있습니다.
             </p>
             <div className="mcp-setup-actions">
               <button type="button" className="mcp-setup-btn" disabled={isBusy || !status.isRunning} onClick={showPairing}>
@@ -215,6 +216,9 @@ export function RemoteAccessSettings() {
                   <strong>휴대폰 카메라로 찍으세요</strong>
                   <span className="remote-access-countdown" aria-live="off">{remainingLabel(pairing.expiresAt, now)} 남음</span>
                   <span className="remote-access-note">등록이 끝나면 이 QR 은 사라집니다.</span>
+                  <button type="button" className="mcp-setup-btn" onClick={() => copyText(pairing.url, '등록 링크')}>
+                    <RiFileCopyLine size={16} />등록 링크 복사
+                  </button>
                 </div>
               </div>
             )}
@@ -249,6 +253,12 @@ export function RemoteAccessSettings() {
               <input type="checkbox" checked={status.tabs === true} disabled={isBusy || !api.remoteAccessSetTabs} onChange={(event) => setTabs(event.target.checked)} />
               <span>휴대폰에서 PC 탭 이어 보기</span>
             </label>
+            <label className="mcp-toggle">
+              <input type="checkbox" checked={status.browserReview === true} disabled={isBusy || !api.remoteAccessSetBrowserReview}
+                onChange={(event) => setBrowserReview(event.target.checked)} />
+              <span>태블릿에서 PC 브라우저 검토</span>
+            </label>
+            <p className="remote-access-desc">등록된 기기가 ezShell 브라우저 화면을 보고 요소를 고를 수 있습니다. 수정 요청을 보내려면 아래의 에이전트 쓰기도 켜세요.</p>
           </section>
 
           <section className="mcp-field settings-section mcp-settings-group">

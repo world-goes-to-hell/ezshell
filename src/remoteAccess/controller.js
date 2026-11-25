@@ -10,7 +10,9 @@ const totp = require('./totp.js')
 const tailscaleCert = require('./tailscaleCert.js')
 const webPush = require('./webPush.js')
 const { createTabMirror } = require('./tabMirror.js')
-const { captureThemeTokens } = require('../quickCaptureOverlay.js')
+const { createProjectId } = require('./projectId.js')
+const { captureThemeTokens, captureColor, captureFont } = require('../quickCaptureOverlay.js')
+const { ansiVariables } = require('./web/theme.js')
 
 const NOT_ALLOWED = { success: false, error: '본창에서만 바꿀 수 있습니다.' }
 const APP_LOCKED = { success: false, error: '앱 잠금을 해제하세요.' }
@@ -26,10 +28,11 @@ const LOG_TRIM_EVERY = 200
 const REMOTE_APPROVAL_WAIT_MS = 4 * 60 * 1000
 /** A question not answered on the PC within this is announced on the phones (at once when nobody is at the PC) */
 const NOTIFY_AFTER_MS = 15 * 1000
-const HTTPS_OFF_NOTE = 'Tailscale 관리 화면에서 HTTPS 인증서를 켜면 휴대폰 알림을 쓸 수 있습니다.'
+const HTTPS_OFF_NOTE = 'Tailscale 관리 화면에서 HTTPS 인증서를 켜면 앱 설치와 알림을 쓸 수 있습니다.'
 /** A colour as the sidebar stores it; anything else is not passed on (the phone puts it into a style) */
-const COLOR = /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\([\d\s.,%/]+\))$/i
-const colorOf = (value) => (typeof value === 'string' && COLOR.test(value.trim()) ? value.trim() : null)
+const COLOR = /^(?:#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})|(?:rgb|hsl)a?\([\d., %/]+\))$/i
+const colorOf = value => typeof value === 'string' && value.length <= 64
+  && COLOR.test(value.trim()) ? value.trim() : null
 /** Agents are looked at this often while a device watches their list (a status or a prompt changes without an event) */
 const AGENTS_REFRESH_MS = 1000
 
@@ -40,8 +43,17 @@ const THEME_VARIABLES = {
 }
 
 function remoteThemeOf(theme) {
-  return Object.fromEntries(Object.entries(captureThemeTokens(theme))
+  const tokens = Object.fromEntries(Object.entries(captureThemeTokens(theme))
     .flatMap(([name, value]) => THEME_VARIABLES[name].map(variable => [variable, value])))
+  for (const [name, variable] of Object.entries(ansiVariables)) {
+    const color = captureColor(theme?.terminal?.[name])
+    if (color) tokens[variable] = color
+  }
+  if (typeof theme?.terminalFont === 'string') {
+    const font = captureFont(`"${theme.terminalFont}", Consolas, "D2Coding", ui-monospace, monospace`)
+    if (font) tokens['--terminal-font'] = font
+  }
+  return tokens
 }
 
 /**
@@ -123,7 +135,7 @@ function tabList({ tabs, sessions, folders }) {
   })
 }
 
-function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readSessions, readFolders, fromMainWindow, notify, sealer = null, readExpandedFolders = () => [], readOpenTabs = () => new Map(), mcp = null, describeApproval = () => 'MCP 확인 요청', isUserAway = () => false, pcTabs = null, agentDeps = null, networkInterfaces = os.networkInterfaces, certificates = tailscaleCert, sendPush = webPush.send }) {
+function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readSessions, readFolders, fromMainWindow, notify, sealer = null, readExpandedFolders = () => [], readOpenTabs = () => new Map(), mcp = null, describeApproval = () => 'MCP 확인 요청', isUserAway = () => false, pcTabs = null, browserReview = null, agentDeps = null, networkInterfaces = os.networkInterfaces, certificates = tailscaleCert, sendPush = webPush.send }) {
   const store = createAccessStore({ filePath: path.join(userDataPath, 'remote-access.json'), sealer })
   const logPath = path.join(userDataPath, 'remote-access.log')
   let server = null
@@ -139,6 +151,7 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
   const tabsAllowed = () => store.enabled && store.tabs === true && !isLocked()
   const tabMirror = createTabMirror({ isEnabled: tabsAllowed })
   const agentsAllowed = () => store.enabled && store.agents === true && !isLocked()
+  const browserAllowed = () => store.enabled && store.browserReview === true && !isLocked()
 
   /** Who connected and what they opened; never what was typed or shown */
   function trimLog() {
@@ -179,6 +192,29 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
   const canReachDevice = () => answersMcp() && (server.connected().length > 0 || (server.address?.scheme === 'https' && store.pushTargets().length > 0))
   // The question a device answered last: tells "answered on the phone" from "answered on the PC"
   let answeredByDevice = null
+  let localProjects = []
+  let browserGroups = new Map()
+  const projectId = createProjectId()
+
+  // The desktop already resolves repository and worktree membership. Keep paths on the PC.
+  const isProjectPath = value => typeof value === 'string' && value.length <= 4096 && path.isAbsolute(value) && !value.includes('\0')
+  ipcMain.on('remote-access-local-projects', (event, projects, reviewGroups) => {
+    if (!fromMainWindow(event) || event.senderFrame !== event.sender.mainFrame || isLocked() || !Array.isArray(projects)) return
+    localProjects = projects.slice(0, 200).flatMap(project => {
+      if (!isProjectPath(project?.key) || typeof project.name !== 'string' || !Array.isArray(project.worktrees)) return []
+      return [{ key: project.key, name: project.name.slice(0, 120), worktrees: project.worktrees.slice(0, 200).filter(isProjectPath) }]
+    })
+    server?.refreshAgents()
+    if (Array.isArray(reviewGroups)) {
+      browserGroups = new Map(reviewGroups.slice(0, 200).flatMap(item => {
+        if (typeof item?.id !== 'string' || !item.id.startsWith('browser:') || item.id.length > 80
+          || typeof item.label !== 'string' || typeof item.key !== 'string') return []
+        const key = item.key.startsWith('folder:') ? item.key.slice('folder:'.length) : item.key
+        if (key !== 'general' && !isProjectPath(key)) return []
+        return [[item.id, { id: key === 'general' ? 'general' : projectId(key), name: item.label.slice(0, 120) }]]
+      }))
+    }
+  })
 
   /** The PC's tabs as the server uses them: listed, followed and typed into only while they are open */
   const tabAccess = pcTabs && {
@@ -213,10 +249,21 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
         log,
         onChange: () => notify('remote-access-changed'),
         tabs: tabAccess,
+        browser: browserReview && {
+          get enabled() { return browserAllowed() },
+          list: () => browserReview.list().map(tab => {
+            const project = browserGroups.get(tab.id) ?? null
+            return { ...tab, kind: 'browser', folder: project?.name ?? null, project }
+          }),
+          tab: browserReview.tab,
+          recipients: browserReview.recipients
+        },
         agents: agentDeps && require('./agentBridge.js').createAgentBridge({
           shells: agentDeps.shells,
           chats: agentDeps.chats,
           agents: agentDeps.agents,
+          projects: () => localProjects,
+          projectId,
           isLocked,
           isEnabled: agentsAllowed
         }),
@@ -247,6 +294,7 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
       answerMcp: store.answerMcp,
       agents: store.agents === true,
       tabs: store.tabs === true,
+      browserReview: store.browserReview === true,
       isRunning: Boolean(server?.isRunning),
       hasTailscale: tailnet !== null,
       url: address ? `${address.scheme}://${address.name}:${address.port}` : null,
@@ -274,7 +322,7 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
       if (name && canCertify) secure = { name, tls: await certificates.ensureCertificate({ dir: userDataPath, name }) }
       else pushNote = HTTPS_OFF_NOTE
     } catch (err) {
-      pushNote = `HTTPS 인증서를 받지 못해 알림 없이 엽니다: ${String(err && err.message).slice(0, 200)}`
+      pushNote = `HTTPS 인증서를 받지 못해 앱 설치와 알림을 쓸 수 없습니다. ${String(err && err.message).slice(0, 200)}`
     }
     if (!store.enabled || isLocked()) return
     try {
@@ -357,6 +405,17 @@ function registerRemoteAccess({ ipcMain, userDataPath, hostKeys, isLocked, readS
       tabMirror.clear()
     }
     server?.featuresChanged()
+    if (isOn === true) server?.tabsChanged()
+    return status()
+  })
+
+  ipcMain.handle('remote-access-set-browser-review', (event, isOn) => {
+    if (!fromMainWindow(event)) return NOT_ALLOWED
+    if (isLocked()) return APP_LOCKED
+    store.setBrowserReview(isOn === true)
+    log(isOn === true ? 'browser-review-on' : 'browser-review-off')
+    server?.featuresChanged()
+    server?.tabsChanged()
     return status()
   })
 

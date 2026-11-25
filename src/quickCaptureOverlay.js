@@ -711,4 +711,4 @@ const captureOverlayUrl = theme => themedUrl(page, theme)
 const captureChipUrl = theme => themedUrl(chipPage, theme)
 
 const OVERLAY_URL = captureOverlayUrl()
-module.exports = { OVERLAY_URL, captureOverlayUrl, captureChipUrl, captureThemeCss, captureThemeTokens }
+module.exports = { OVERLAY_URL, captureOverlayUrl, captureChipUrl, captureThemeCss, captureThemeTokens, captureColor, captureFont }

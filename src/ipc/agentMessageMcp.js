@@ -6,6 +6,7 @@ const net = require('node:net')
 const path = require('node:path')
 const { rpc } = require('./agentMessageCli.js')
 const { getProcessTree } = require('./agentProcessParents.js')
+const { validEscalationReason } = require('./agentInspection.js')
 
 const instructions = [
   'Use these tools to collaborate with agents opened in ezShell.',
@@ -168,6 +169,14 @@ async function main() {
   }
   server.registerTool('list_agents', { description: 'List connected ezShell agents and their roles, along with your own agent ID.' },
     () => call({ method: 'list' }))
+  server.registerTool('inspect_agent', {
+    description: 'Inspect an ezShell agent by ID. Returns status, source, what is blocking it, unread count, idle milliseconds and exit code.',
+    inputSchema: { id }
+  }, ({ id }) => call({ method: 'inspect-agent', id }))
+  server.registerTool('escalate', {
+    description: 'Alert the user once when an ezShell agent is waiting for a human decision.',
+    inputSchema: { id, reason: z.string().refine(validEscalationReason, 'Use one line of 1–200 characters.') }
+  }, ({ id, reason }) => call({ method: 'escalate', id, reason }))
   server.registerTool('set_role', {
     description: 'Set the short role shown for your own ezShell agent in this app session. A user-assigned role takes priority.',
     inputSchema: { role: z.string().describe('A visible label of up to 20 characters. Agent ID and reserved-name lookalikes are rejected, as are labels beginning with 나 or 사용자. An empty string clears your role.') }

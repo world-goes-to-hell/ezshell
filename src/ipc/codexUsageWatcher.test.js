@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCodexUsageWatcher, dayFolders } from './codexUsageWatcher.js'
 
 const jsonl = lines => lines.map(line => JSON.stringify(line)).join('\n') + '\n'
@@ -28,19 +28,22 @@ function rollout(name, { cwd = work, at = START + 1000, lines = [], meta = {} } 
   return file
 }
 
-function setup(agentList) {
+function setup(agentList, options = {}) {
   const reports = []
   const verifiedSessions = []
+  const roleSessions = []
   const turns = []
   const watcher = createCodexUsageWatcher({
     agents: () => agentList,
     setUsage: (agentId, usage) => { reports.push({ agentId, usage }); return true },
     setVerifiedSession: (agentId, sessionId) => verifiedSessions.push({ agentId, sessionId }),
+    setFreshRoleSession: (agentId, sessionId, startedAt) => { roleSessions.push({ agentId, sessionId, startedAt }); return true },
     setTurnStatus: (shellId, agentId, sessionId, turn) => turns.push({ shellId, agentId, sessionId, turn }),
     codexHome: home,
-    now: () => START + 60_000
+    now: () => START + 60_000,
+    ...options
   })
-  return { watcher, reports, verifiedSessions, turns }
+  return { watcher, reports, verifiedSessions, roleSessions, turns }
 }
 
 beforeEach(() => {
@@ -62,6 +65,147 @@ describe('dayFolders', () => {
 
 describe('createCodexUsageWatcher', () => {
   const agent = { id: 'codex-1', kind: 'codex', active: true, shellId: 'local:1', startedAt: START }
+  const firstId = '01a1ec18-0000-7000-8000-000000000001'
+  const secondId = '01a1ec18-0000-7000-8000-000000000002'
+  const freshWithHook = () => ({ ...agent, cwd: work, roleCwd: work, roleStartedAt: START, hookSessionId: firstId })
+
+  it.each([false, true])('uses the main-owned folder for role discovery (available but different: %s)', async mismatch => {
+    rollout(firstId)
+    const fresh = freshWithHook()
+    fresh.roleCwd = mismatch ? os.tmpdir() : undefined
+    const { watcher, roleSessions } = setup([fresh])
+    await watcher.tick()
+    expect(roleSessions).toEqual([])
+  })
+
+  it('counts a rollout claimed by another agent through usage estimation as an ambiguous candidate', async () => {
+    const guess = { ...agent, id: 'codex-2', shellId: 'local:2', cwd: work, startedAt: START - 1000 }
+    const guessed = rollout(secondId)
+    rollout(firstId, { at: START + 2000 })
+    const { watcher, roleSessions } = setup([guess, freshWithHook()])
+    await watcher.tick()
+    expect(watcher.fileOf(guess.id)).toBe(guessed)
+    expect(roleSessions).toEqual([])
+  })
+
+  it('excludes a rollout owned by another agent through a verified explicit resume', async () => {
+    const resumed = { ...agent, id: 'codex-2', shellId: 'local:2', cwd: work, startedAt: START - 1000, resumeId: secondId }
+    rollout(secondId)
+    rollout(firstId, { at: START + 2000 })
+    const { watcher, roleSessions } = setup([resumed, freshWithHook()])
+    await watcher.tick()
+    expect(roleSessions).toEqual([{ agentId: agent.id, sessionId: firstId, startedAt: START }])
+  })
+
+  it('rechecks the evidence on the next poll after a lock and unlock during file verification', async () => {
+    const file = rollout(firstId)
+    let epoch = 0
+    const { watcher, roleSessions } = setup([freshWithHook()], { freshRoleEpoch: () => epoch })
+    const stat = fs.promises.stat.bind(fs.promises)
+    const spy = vi.spyOn(fs.promises, 'stat').mockImplementation(async (...args) => {
+      const result = await stat(...args)
+      if (args[0] === file && epoch === 0) epoch++
+      return result
+    })
+    try {
+      await watcher.tick()
+      expect(roleSessions).toEqual([])
+      await watcher.tick()
+      expect(roleSessions).toEqual([{ agentId: agent.id, sessionId: firstId, startedAt: START }])
+    } finally { spy.mockRestore() }
+  })
+
+  it.each(['replaced file', 'rewritten header'])('rejects a %s after the usage watcher has sampled its identity', async mutation => {
+    const file = rollout(firstId)
+    const replacement = file + '.replacement'
+    if (mutation === 'replaced file') fs.copyFileSync(file, replacement)
+    const stat = fs.promises.stat.bind(fs.promises)
+    let changed = false
+    const spy = vi.spyOn(fs.promises, 'stat').mockImplementation(async (...args) => {
+      const result = await stat(...args)
+      if (!changed && args[0] === file) {
+        changed = true
+        if (mutation === 'replaced file') fs.renameSync(replacement, file)
+        else rollout(firstId, { cwd: os.tmpdir() })
+      }
+      return result
+    })
+    try {
+      const { watcher, roleSessions } = setup([freshWithHook()])
+      await watcher.tick()
+      expect(changed).toBe(true)
+      expect(roleSessions).toEqual([])
+    } finally { spy.mockRestore() }
+  })
+
+  it('refuses to prove uniqueness when the time window exceeds the day-folder scan', async () => {
+    rollout(firstId)
+    const { watcher, roleSessions } = setup([freshWithHook()], { now: () => START + 8 * 86_400_000 })
+    await watcher.tick()
+    expect(roleSessions).toEqual([])
+  })
+
+  it('confirms the fresh role key with one independently found matching rollout, leaving resume unverified', async () => {
+    const file = rollout(firstId)
+    const fresh = { ...freshWithHook(), hookSessionId: null }
+    const { watcher, verifiedSessions, roleSessions } = setup([fresh])
+    await watcher.tick()
+    expect(watcher.fileOf(agent.id)).toBe(file)
+    expect(roleSessions).toEqual([])
+    fresh.hookSessionId = firstId
+    await watcher.tick()
+    await watcher.tick()
+    expect(roleSessions).toEqual([{ agentId: agent.id, sessionId: firstId, startedAt: START }])
+    expect(verifiedSessions).toEqual([])
+    expect(watcher.verifiedSessionOf(agent.id)).toBeNull()
+  })
+
+  it.each(['hook only', 'mismatch', 'two files', 'different cwd', 'prelaunch', 'filename mismatch', 'no verified start'])(
+    'keeps a fresh role in memory with %s', async mode => {
+      const fresh = freshWithHook()
+      if (mode === 'mismatch') rollout(secondId)
+      else if (mode === 'prelaunch') rollout(firstId, { at: START - 10 })
+      else if (mode === 'different cwd') rollout(firstId, { cwd: os.tmpdir() })
+      else if (mode === 'filename mismatch') rollout(secondId, { meta: { id: firstId } })
+      else if (mode === 'no verified start') { delete fresh.roleStartedAt; rollout(firstId) }
+      else if (mode === 'two files') { rollout(firstId); rollout(secondId) }
+      const { watcher, roleSessions } = setup([fresh])
+      await watcher.tick()
+      // Ambiguity observed while running cannot be erased by removing the other candidate.
+      if (mode === 'two files') {
+        fs.unlinkSync(path.join(home, 'sessions', '2026', '11', '19', `rollout-${secondId}.jsonl`))
+        await watcher.tick()
+      }
+      expect(roleSessions).toEqual([])
+    }
+  )
+
+  it('rejects a second rollout even when the new file and a later hook agree', async () => {
+    const first = rollout(firstId)
+    const fresh = { ...freshWithHook(), hookSessionId: null }
+    const { watcher, roleSessions } = setup([fresh])
+    await watcher.tick()
+    fs.unlinkSync(first)
+    rollout(secondId)
+    fresh.hookSessionId = secondId
+    await watcher.tick()
+    expect(roleSessions).toEqual([])
+  })
+
+  it('waits for every fresh rollout header before deciding that one file is eligible', async () => {
+    rollout(firstId)
+    const incomplete = rollout(secondId)
+    fs.writeFileSync(incomplete, '')
+    const recent = new Date(START + 2000)
+    fs.utimesSync(incomplete, recent, recent)
+    const fresh = freshWithHook()
+    const { watcher, roleSessions } = setup([fresh])
+    await watcher.tick()
+    expect(roleSessions).toEqual([])
+    rollout(secondId, { cwd: os.tmpdir() })
+    await watcher.tick()
+    expect(roleSessions).toEqual([{ agentId: agent.id, sessionId: firstId, startedAt: START }])
+  })
 
   it('reads the last token count of the session the agent started in its folder', async () => {
     rollout('mine', { lines: [tokenCount(10, 20000), tokenCount(12, 50000)] })

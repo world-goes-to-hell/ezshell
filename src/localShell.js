@@ -201,6 +201,8 @@ if ($env:EZSHELL_AGENT_SETTINGS -and (Get-Command claude -ErrorAction SilentlyCo
 }
 `;
 
+const AGY_SETTINGS_WARNING = '이 Antigravity CLI 는 ezShell 채팅 보기에 필요한 설정을 지원하지 않습니다. agy update 로 업데이트하면 채팅 보기를 쓸 수 있습니다.';
+
 const POWERSHELL_FIND_AGY = String.raw`
 $agyCommand = Get-Command agy.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (!$agyCommand -and $env:LOCALAPPDATA) {
@@ -209,16 +211,44 @@ if (!$agyCommand -and $env:LOCALAPPDATA) {
 }
 `;
 
-const POWERSHELL_AGY_WITH_STATUS = String.raw`
-$savedAgyOsc = $env:AGY_CLI_OSC7501
-$savedAgyMessages = $env:AGY_CLI_OSC7501_MESSAGES
-try {
-    $env:AGY_CLI_OSC7501 = 'on'
-    $env:AGY_CLI_OSC7501_MESSAGES = 'brief'
-    & $agyCommand --settings $env:EZSHELL_ANTIGRAVITY_SETTINGS @args
-} finally {
-    $env:AGY_CLI_OSC7501 = $savedAgyOsc
-    $env:AGY_CLI_OSC7501_MESSAGES = $savedAgyMessages
+const POWERSHELL_AGY_SETTINGS_SUPPORT = String.raw`
+function global:Test-EzShellAgySettings($command) {
+    $executable = if ($command -is [System.Management.Automation.ApplicationInfo]) { $command.Path } else { $command }
+    $file = Get-Item -LiteralPath $executable -ErrorAction SilentlyContinue
+    $probe = $global:ezShellAgySettingsProbe
+    if ($file -and $probe -and $probe.Path -ceq $file.FullName -and $probe.Length -eq $file.Length -and $probe.Modified -eq $file.LastWriteTimeUtc.Ticks) {
+        return $probe.Supported
+    }
+    $ErrorActionPreference = 'Continue'
+    $helpText = & $command --help 2>&1
+    $supported = ($helpText -join [Environment]::NewLine) -cmatch '(?:^|\s)--settings(?:[=\s]|$)'
+    if ($file -and ($supported -or $LASTEXITCODE -eq 0)) {
+        $global:ezShellAgySettingsProbe = @{
+            Path = $file.FullName; Length = $file.Length; Modified = $file.LastWriteTimeUtc.Ticks; Supported = $supported
+        }
+    }
+    return $supported
+}
+`;
+
+const POWERSHELL_AGY_LAUNCH = String.raw`
+if (Test-EzShellAgySettings $agyCommand) {
+    $savedAgyOsc = $env:AGY_CLI_OSC7501
+    $savedAgyMessages = $env:AGY_CLI_OSC7501_MESSAGES
+    try {
+        $env:AGY_CLI_OSC7501 = 'on'
+        $env:AGY_CLI_OSC7501_MESSAGES = 'brief'
+        & $agyCommand --settings $env:EZSHELL_ANTIGRAVITY_SETTINGS @args
+    } finally {
+        $env:AGY_CLI_OSC7501 = $savedAgyOsc
+        $env:AGY_CLI_OSC7501_MESSAGES = $savedAgyMessages
+    }
+} else {
+    if (!$global:ezShellAgySettingsWarningShown) {
+        $global:ezShellAgySettingsWarningShown = $true
+        [Console]::WriteLine("$([char]27)[2m${AGY_SETTINGS_WARNING}$([char]27)[0m")
+    }
+    & $agyCommand @args
 }
 `;
 
@@ -226,6 +256,7 @@ const POWERSHELL_AGY_FUNCTION = String.raw`
 if ($env:EZSHELL_ANTIGRAVITY_SETTINGS -and !(Get-Command agy -CommandType Alias,Function,ExternalScript -ErrorAction SilentlyContinue)) {
     ${POWERSHELL_FIND_AGY}
     if ($agyCommand) {
+        ${POWERSHELL_AGY_SETTINGS_SUPPORT}
         function global:agy {
             ${POWERSHELL_FIND_AGY}
             if (!$agyCommand) { return }
@@ -233,12 +264,23 @@ if ($env:EZSHELL_ANTIGRAVITY_SETTINGS -and !(Get-Command agy -CommandType Alias,
             if (($args | Where-Object { [string]$_ -cmatch '^(?:--(?:settings|help|version|print|prompt|input-format|output-format|remote-agent|remote-control)(?:=|$)|-[phV]$)' -or [string]$_ -cin $subcommands }) -or !(Test-Path -LiteralPath $env:EZSHELL_ANTIGRAVITY_SETTINGS)) {
                 & $agyCommand @args
             } else {
-                ${POWERSHELL_AGY_WITH_STATUS}
+                ${POWERSHELL_AGY_LAUNCH}
             }
         }
     }
 }
 `;
+
+const POSIX_AGY_LAUNCH = String.raw`exec /bin/sh -c '
+agy_command=$(command -v agy) || { printf "%s\n" "Antigravity CLI를 찾을 수 없습니다." >&2; exit 127; }
+if "$agy_command" --help 2>&1 | grep -Eq "(^|[[:space:]])--settings([=[:space:]]|$)"; then
+    AGY_CLI_OSC7501=on AGY_CLI_OSC7501_MESSAGES=brief "$agy_command" --settings "$EZSHELL_ANTIGRAVITY_SETTINGS"
+else
+    printf "\033[2m%s\033[0m\n" "${AGY_SETTINGS_WARNING}"
+    "$agy_command"
+fi
+exit $?
+'`;
 
 function shellArgs(shell, agent, platform, withMessaging, resume, codexHooks, restoring) {
   const resumed = resumeArgs(agent, resume);
@@ -249,9 +291,9 @@ function shellArgs(shell, agent, platform, withMessaging, resume, codexHooks, re
   }
   if (agent === 'antigravity') {
     // Keep the shell as the CLI's parent so the status reporter can prove which PTY it belongs to.
-    if (platform !== 'win32') return [...shell.args, '-i', '-c', 'AGY_CLI_OSC7501=on AGY_CLI_OSC7501_MESSAGES=brief agy --settings "$EZSHELL_ANTIGRAVITY_SETTINGS"; exit'];
-    return [...shell.args, '-NoExit', '-Command', POWERSHELL_DIRECTORY_PROMPT + POWERSHELL_FIND_AGY + String.raw`
-if ($agyCommand) { ${POWERSHELL_AGY_WITH_STATUS} }
+    if (platform !== 'win32') return [...shell.args, '-i', '-c', POSIX_AGY_LAUNCH];
+    return [...shell.args, '-NoExit', '-Command', POWERSHELL_DIRECTORY_PROMPT + POWERSHELL_FIND_AGY + POWERSHELL_AGY_SETTINGS_SUPPORT + String.raw`
+if ($agyCommand) { ${POWERSHELL_AGY_LAUNCH} }
 else { Write-Host 'Antigravity CLI를 찾을 수 없습니다.' }
 `];
   }
@@ -305,6 +347,7 @@ const PROGRESS_STATES = ['idle', 'working', 'error', 'working', 'working'];
 // Claude Code) or half/quarter circles (Claude Code since 2026: ◐◑, idle shows ✳). Recorded from the
 // real CLIs; Claude Code sends no program status report, so its title is all there is.
 const WORKING_TITLE = /(?:^|\s)[⠁-⣿◐-◓◴-◷](?:\s|$)/u;
+const LONG_HOOK_TURN_MS = 120_000;
 
 function agentStatus(entry) {
   if (entry.screenApproval) return 'blocked';
@@ -350,6 +393,14 @@ function directoryFromOsc(value, platform) {
   } catch {
     return null;
   }
+}
+
+function verifiedCodexRoleDirectory(entry, reportedCwd, platform) {
+  const cwd = entry.reportedDirectory ?? entry.launchDirectory;
+  const paths = platform === 'win32' ? path.win32 : path.posix;
+  if (typeof cwd !== 'string' || typeof reportedCwd !== 'string' ||
+      !paths.isAbsolute(cwd) || !paths.isAbsolute(reportedCwd)) return null;
+  return paths.relative(cwd, reportedCwd) === '' ? cwd : null;
 }
 
 // Keep partial OSC reports across chunks, including the shell's working directory and agent state.
@@ -827,7 +878,7 @@ function createLocalShells({
       const agentPid = antigravity ? cliPid : cliPid ?? runtimePid;
       if (agentPid && (shellId === undefined || id === shellId)) {
         return { id, entry, agentPid, ptyPid: parent, codexLaunchPid: runtimeAboveCli ? undefined : codexLaunchPid,
-          agentStartedAt: processes.get(agentPid)?.startedAt };
+          agentStartedAt: processes.get(agentPid)?.startedAt, nativeCodex: kind === 'codex' && Boolean(cliPid) };
       }
       return;
     }
@@ -837,7 +888,7 @@ function createLocalShells({
   async function bindAgentProcess(request) {
     const match = await findAgentProcess(request);
     if (!match) return;
-    const { id, entry, agentPid, ptyPid, codexLaunchPid, agentStartedAt } = match;
+    const { id, entry, agentPid, ptyPid, codexLaunchPid, agentStartedAt, nativeCodex } = match;
     // A UUID explicitly passed to the CLI can be looked up by filename. The picker and a
     // time-based transcript match do not identify the session of this process.
     let resumeId;
@@ -861,6 +912,7 @@ function createLocalShells({
       // A CLI discovered through its own file has a provisional UI identity and no message lease.
       // The first MCP registration gets a new ID instead of authenticating that provisional ID by PID.
       const claudeSession = sameAgent ? existing.claudeSession : undefined;
+      const codexRoleCwd = nativeCodex ? verifiedCodexRoleDirectory(entry, request.cwd, platform) : null;
       if (sameAgent && !existing.hadMcp) finishExternalAgent(entry);
       const attached = attachExternalAgent(id, entry, request.kind, agentPid, { ...registration, allowWake: waking, resumeId });
       if (!attached) return;
@@ -873,6 +925,7 @@ function createLocalShells({
       return {
         ...attached,
         ...(resumeId ? { resumeId } : {}),
+        ...(codexRoleCwd ? { codexProcessStartedAt: agentStartedAt, codexRoleCwd } : {}),
         detach() {
           if (entry.externalAgent !== binding || binding.connection !== connection) return false;
           binding.connection = undefined;
@@ -1511,6 +1564,27 @@ function createLocalShells({
       if (!hasAgent(entry) || !entry.inbox) return null;
       const approval = entry.agent === 'antigravity' ? agentStatus(entry) === 'blocked' : Boolean(entry.inbox.approvalPrompt());
       return { ...entry.inbox.commandRows(), composer: entry.inbox.composerState(), footerRow: entry.inbox.composerFooterRow(), approval };
+    },
+    noteChatCommandScreen(id, agentId) {
+      const entry = shells.get(id);
+      if (hasAgent(entry) && entryAgentId(entry) === agentId) entry.inbox?.noteCommandScreen();
+    },
+    inspectAgent(id, agentId) {
+      const entry = shells.get(id);
+      if (!hasAgent(entry) || entryAgentId(entry) !== agentId || entry.sleeping) return null;
+      if (entry.hookState?.phase === 'ended') return { status: 'ended', statusSource: 'hook', blocked: { kind: 'ended' }, idleFor: null };
+      const diagnostic = entry.inbox?.inspectBlock();
+      const status = diagnostic?.ticket ? 'blocked' : agentStatus(entry);
+      const statusSource = diagnostic?.ticket ? 'screen' : agentStatusSource(entry, status);
+      const now = Date.now();
+      const turn = entry.hookState?.turn;
+      const staleHook = diagnostic && !diagnostic.blocked && status === 'working' && statusSource === 'hook'
+        && turn && now - Math.max(turn.startedAt, entry.hookState.seenAt) >= LONG_HOOK_TURN_MS;
+      return {
+        status, statusSource, ticket: diagnostic?.ticket,
+        blocked: diagnostic?.blocked ?? (staleHook ? { kind: 'hook-running' } : null),
+        idleFor: status === 'idle' ? Math.max(0, now - entry.activeAt) : null
+      };
     },
     /** Answers that prompt with a choice, only if the screen still shows the same prompt */
     async answerApproval(id, key, signature) {

@@ -535,6 +535,8 @@ export interface AgentChatApproval {
   selected: string | null
   /** Input goes to the CLI's own question screen embedded in chat. */
   usesTerminalInput?: boolean
+  /** A startup screen that only accepts input directly in the terminal. */
+  terminalOnly?: 'folder-trust'
   /** Sent back with the answer: main answers only if the screen still shows this prompt */
   signature: string
 }
@@ -922,6 +924,7 @@ export interface RemoteAccessStatus {
   answerMcp: boolean
   /** A signed-in device may follow the PC's SSH tabs. Off by default. */
   tabs?: boolean
+  browserReview?: boolean
   /** A signed-in device may use the PC's agents (list, chat, send, answer); off by default */
   agents?: boolean
   isRunning: boolean
@@ -1093,6 +1096,7 @@ declare global {
       agentUsageState?: () => Promise<AgentUsageReport[]>
       onAgentUsage?: (callback: (report: AgentUsageReport) => void) => () => void
       onAgentMessageDelivered: (callback: (delivery: AgentMessageDelivery) => void) => () => void
+      onAgentEscalation?: (callback: (notice: { id: string; shellId: string; title: string; label: string }) => void) => () => void
       localShellWrite?: (id: string, data: string) => void
       localShellComposing?: (id: string, value: boolean) => void
       localShellResize?: (id: string, cols: number, rows: number) => void
@@ -1151,6 +1155,8 @@ declare global {
       onAgentChatFrame?: (callback: (frame: AgentChatFrame) => void) => () => void
       onAgentChatCapture?: (callback: (capture: AgentChatCapture) => void) => () => void
       agentChatPin?: (request: { shellId: string; itemId: string; text: string; kind: AgentChatProvider | null; title: string; time: number | null }) => Promise<{ ok: true; id: string; existing?: boolean } | { ok: false; error: string }>
+      /** An answer and a comment handed to another agent's inbox, as a message from the user */
+      agentChatHandoff?: (request: { shellId: string; to: string; comment: string; answer: string }) => Promise<{ ok: true; to: string; toLabel: string } | { ok: false; error: string }>
       pinnedReplyGet?: () => Promise<{ ok: true; pin: PinnedReply } | { ok: false; error: string }>
       pinnedReplyOpenLink?: (href: string, how: 'app' | 'explorer' | 'browser' | 'browser-tab') => Promise<{ ok: true } | { ok: false; error: string }>
       pinnedReplyFold?: (folded: boolean) => void
@@ -1163,9 +1169,12 @@ declare global {
       oracleClientLicense?: () => Promise<{ success: boolean }>
       onOracleClientProgress?: (callback: (progress: OracleClientProgress) => void) => () => void
       remoteAccessStatus?: () => Promise<RemoteAccessStatus | { success: false; error: string }>
+      remoteAccessSetProjects?: (projects: readonly { key: string; name: string; worktrees: readonly string[] }[],
+        reviewGroups?: readonly { id: string; key: string; label: string }[]) => void
       remoteAccessSetEnabled?: (isEnabled: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessSetAnswerMcp?: (isOn: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessSetTabs?: (isOn: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
+      remoteAccessSetBrowserReview?: (isOn: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessSetAgents?: (isOn: boolean) => Promise<RemoteAccessStatus | { success: false; error: string }>
       remoteAccessPairing?: () => Promise<{ success: true; url: string; expiresAt: number; qr: QrMatrix } | { success: false; error: string }>
       remoteAccessAuthenticator?: () => Promise<{ success: true; secret: string; qr: QrMatrix } | { success: false; error: string }>
@@ -1287,6 +1296,7 @@ declare global {
       restoreTabsSave?: (record: unknown) => Promise<{ success: boolean; error?: string }>
       /** Those tabs, once (the file is removed); null when there are none */
       restoreTabsTake?: () => Promise<{ savedAt: number; record: unknown; source?: 'close' } | null>
+      restoreTabsCheckpoint?: (record: unknown) => void
       onRestoreTabsBeforeClose?: (readRecord: () => unknown) => () => void
       /** What an update would cut off */
       updateBusyWork?: () => Promise<{ transfers: number; unsavedEdits: number }>

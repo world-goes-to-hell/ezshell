@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalInfo } from '../stores/terminalStore'
 import type { AgentMessageSession } from '../types'
-import { agentDisplayName, agentIdentityColor, localAgentName, agentIdentityTooltip, agentStatusSourceNote, agentMessageMatches, agentPaneLocation, agentSearchTerm } from './agentIdentity'
+import { agentDisplayName, agentIdentityColor, agentShortName, localAgentName, agentIdentityTooltip, agentStatusSourceNote, agentMessageMatches, agentPaneLocation, agentSearchTerm } from './agentIdentity'
 import { MAIN_PANE, singlePane, splitPane, swapPanes } from './splitTree'
 import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../components/ui/agentProviderIcons'
 
 describe('agent identity', () => {
+  it('names an agent by its role alone, or its id without one', () => {
+    expect(agentShortName({ id: 'claude-6', role: 'PL' })).toBe('PL')
+    expect(agentShortName({ id: 'codex-11', role: null })).toBe('codex-11')
+    expect(agentShortName({ id: 'codex-11', role: '  ' })).toBe('codex-11')
+  })
+
   it('shares named icons for Claude Code, Codex, and Antigravity', () => {
     expect(AGENT_PROVIDER_NAMES).toEqual({ claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity' })
     for (const provider of ['claude', 'codex', 'antigravity'] as const) expect(AGENT_PROVIDER_ICONS[provider]).toBeTypeOf('function')

@@ -11,6 +11,7 @@ import { gitCommitFilesKey, gitStatusKey } from '../../lib/gitReadCache'
 import { draftOf, useGitCommitStore } from '../../stores/gitCommitStore'
 import { GitDiffBlock, openWorkspaceFile, useWorkspaceFileMenu } from './WorkspaceDetails'
 import { GitCommitBox } from './GitCommitBox'
+import { loadGitStatus } from '../../lib/workspaceGitReads'
 import { useCachedGitRead } from './useCachedGitRead'
 
 interface FileRowProps {
@@ -168,8 +169,7 @@ const NOTHING: ReadonlySet<string> = new Set()
 export function ChangeList({ folder, revision, label, onCommitted }: { folder: string; revision: number; label: string; onCommitted: () => void }) {
   const readStatus = window.electronAPI.workspaceGitStatus
   const status = useCachedGitRead<Answer<{ repo: WorkspaceGitStatus | null }>>(readStatus ? gitStatusKey(folder) : null,
-    () => (readStatus as NonNullable<typeof readStatus>)(folder).catch(() => ({ success: false as const, error: '커밋하지 않은 변경을 읽지 못했습니다.' })),
-    revision)
+    () => loadGitStatus(folder), revision)
   const state = loadOf(status.value, answer => answer.repo)
   const stale = status.value !== undefined && !status.fresh
   // Folded folders of the tree (open by default); kept across refreshes

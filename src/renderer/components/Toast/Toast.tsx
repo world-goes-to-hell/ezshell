@@ -38,6 +38,11 @@ export function Toast({ toast }: ToastProps) {
       <div className="toast-content">
         <div className="toast-title">{toast.title}</div>
         {toast.message && <div className="toast-message">{toast.message}</div>}
+        {toast.action && (
+          <button type="button" className="toast-action" onClick={() => { removeToast(toast.id); toast.action?.run() }}>
+            {toast.action.label}
+          </button>
+        )}
       </div>
       {toast.dismissible && (
         <button

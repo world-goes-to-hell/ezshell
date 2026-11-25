@@ -9,6 +9,7 @@ const { watchCommand, claudeQueueVisible } = require('./commandScreen.js')
 const { customCommands } = require('./slashCommands.js')
 const { createImageDrafts } = require('./imageDrafts.js')
 const { cleanAnswer } = require('./askQuestions.js')
+const { prepareHandoff } = require('./handoff.js')
 
 const SHELL_ID = /^local:\d+$/
 const MAX_TEXT = 16_000
@@ -118,7 +119,7 @@ const PICKER_REASONS = {
  * pins: answers pinned into windows of their own (pins.js); showShell(shellId): the main window
  * brings that shell's pane forward as a chat
  */
-function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells, clipboard, selectImages, links, pins = null, showShell = null, notifyCapture = () => {} }) {
+function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells, clipboard, selectImages, links, pins = null, showShell = null, notifyCapture = () => {}, handoff = null }) {
   const allowed = event => fromMainWindow(event) && !isLocked()
   const fromChatWindow = event => allowed(event) && Boolean(event.senderFrame && event.senderFrame === event.sender?.mainFrame)
   const shellIdOf = value => (typeof value === 'string' && SHELL_ID.test(value) ? value : null)
@@ -259,9 +260,11 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     if (!pending) return { ok: false, error: '확인할 명령이 없습니다.' }
     if (pending.mcpSummary && !fromChatWindow(event)) return locked
     commandWatches.delete(id)
+    const agentId = shells()?.chatAgentId?.(id)
     const outcome = await watchCommand({ read: () => shells()?.chatScreen?.(id) ?? null, ...pending })
     if (!allowed(event)) return locked
     const { echoVerified, ...result } = outcome
+    if (result.state === 'screen' && agentId) shells()?.noteChatCommandScreen?.(id, agentId)
     const summary = pending.mcpSummary
     if (result.output && summary && fromChatWindow(event) && mcpSummaries.get(id) === summary
       && shells()?.chatAgentId?.(id) === summary.agentId) {
@@ -542,6 +545,24 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
 
   // An answer pinned out into a window of its own (pins.js): the window asks only about itself
   const pinOf = event => (!isLocked() && pins ? pins.ofSender(event.sender) : null)
+  // An answer handed to another agent: into its inbox as a message from the user (handoff.js).
+  // handoff: { agents() (agentMessages snapshot), send({ to, text }) (agentMessages.sendAsUser) }
+  ipcMain.handle('agent-chat-handoff', (event, request) => {
+    if (!fromChatWindow(event)) return locked
+    if (!handoff) return { ok: false, error: '이 앱 버전에서는 쓸 수 없습니다.' }
+    const id = shellIdOf(request?.shellId)
+    const local = shells()
+    const agent = id && local?.agentOf(id)
+    if (!agent) return { ok: false, error: REASONS['not-agent'] }
+    const prepared = prepareHandoff({ request, sourceAgentId: local.chatAgentId?.(id) ?? null, sourceKind: agent.kind, agents: handoff.agents() })
+    if (prepared.error) return { ok: false, error: prepared.error }
+    try {
+      handoff.send({ to: prepared.to, text: prepared.text })
+    } catch (error) {
+      return { ok: false, error: String(error?.message || '인계하지 못했습니다.').slice(0, 200) }
+    }
+    return { ok: true, to: prepared.to, toLabel: prepared.toLabel }
+  })
   ipcMain.handle('agent-chat-pin', (event, request) => {
     if (!allowed(event)) return locked
     if (!pins) return { ok: false, error: '이 앱 버전에서는 쓸 수 없습니다.' }

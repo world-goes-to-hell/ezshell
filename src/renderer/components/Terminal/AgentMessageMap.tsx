@@ -389,7 +389,7 @@ export function AgentMessageMap({ model, scope, selectedAgent, selectedEdge, loc
                   </span>
                   {context && <span className="agent-message-map-card-folder">
                     <RiFolder3Line size={13} aria-hidden="true" /><span>{context}</span>
-                    {location && <small>칸 {location.number}</small>}
+                    {location && <small>{location.number}</small>}
                   </span>}
                 </button>
                 <div className="agent-message-map-card-actions">

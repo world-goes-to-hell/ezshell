@@ -97,6 +97,7 @@ import { gitReads } from './lib/gitReadCache'
 import { useSessionLogFeed } from './hooks/useSessionLogFeed'
 import { useBrowserTabTitles } from './hooks/useBrowserTabTitles'
 import { usePinnedReplyGo } from './hooks/usePinnedReplyGo'
+import { useAgentEscalations } from './hooks/useAgentEscalations'
 import { openSessionLogFolder, toggleSessionLog } from './lib/sessionLogActions'
 import './styles/sessionLog.css'
 import { McpActivityWindow } from './components/Mcp/McpActivityWindow'
@@ -287,6 +288,7 @@ function App() {
   useBrowserTabTitles()
   // "원래 대화로 가기" in a pinned answer window
   usePinnedReplyGo()
+  useAgentEscalations(isLocked)
   const sessionLogFiles = useSessionLogStore(state => state.files)
 
   // Tab drag state
@@ -299,12 +301,14 @@ function App() {
   const readRestoreSource = useCallback((): RecordSource => {
     const { terminals, layout, activeTerminalId } = useTerminalStore.getState()
     const sftp = useSftpStore.getState()
+    const usage = useAgentUsageStore.getState().byShell
+    const kinds = agentKindsByShell()
     return {
       terminals, layout, activeId: activeTerminalId,
       sftpPathOf: tabId => sftp.isOpen(tabId) ? sftp.remotePath(tabId) : null,
       detached: Array.from(detachedTabsRef.current.values()),
       // The agent sessions in a local tab's panes, so a restart can resume them (lib/restoreAgents.ts)
-      agentsOf: tabId => agentsOfLocalTab(tabId, terminals.get(tabId), useAgentUsageStore.getState().byShell, agentKindsByShell(), isChatShown)
+      agentsOf: tabId => agentsOfLocalTab(tabId, terminals.get(tabId), usage, kinds, isChatShown)
     }
   }, [])
   const [splitPaneDraggingTabId, setSplitPaneDraggingTabId] = useState<string | null>(null)
@@ -384,7 +388,15 @@ function App() {
   // The single tab strip scrolls sideways when its tabs do not fit (design review D5)
   const tabStripRef = useTabStripScroll(activeTerminalId)
   // The tab strip shows one work at a time (hooks/useTabGroups.ts)
-  const groupView = useTabGroups()
+  const groupView = useTabGroups(!isLocked)
+  const { projects: localProjects, groups: localGroups } = groupView
+  useEffect(() => {
+    if (!isLocked) {
+      const reviewGroups = localGroups.flatMap(({ key, label, tabIds }) =>
+        tabIds.filter(id => id.startsWith('browser:')).map(id => ({ id, key, label })))
+      window.electronAPI.remoteAccessSetProjects?.(localProjects, reviewGroups)
+    }
+  }, [isLocked, localProjects, localGroups])
   const shownTabs = new Set(groupView.shownIds)
   const shownSplitPanes = layout.mode === 'split' ? layout.panes.map(pane => {
     const terminalIds = pane.terminalIds.filter(id => shownTabs.has(id))
@@ -1073,11 +1085,13 @@ function App() {
 
   // Once, after the first unlock: local shells still running from before a window reload come back as tabs
   const orphanShellsCheckedRef = useRef(false)
+  const [orphanShellsAdopted, setOrphanShellsAdopted] = useState(false)
   useEffect(() => {
     if (isLocked || isCheckingLock || orphanShellsCheckedRef.current) return
     orphanShellsCheckedRef.current = true
     void adoptOrphanLocalShells().then(count => {
       if (count > 0) toast.info('로컬 터미널을 다시 열었습니다', `화면을 다시 불러오기 전에 실행 중이던 셸 ${count}개`)
+      setOrphanShellsAdopted(true)
     })
   }, [isLocked, isCheckingLock])
 
@@ -1088,6 +1102,7 @@ function App() {
   useEffect(() => (unlockedOnce ? startAgentHooks() : undefined), [unlockedOnce])
 
   const [restoreBanner, setRestoreBanner] = useState<RestoreBannerState | null>(null)
+  const [restoreReady, setRestoreReady] = useState(false)
   const restoreCheckedRef = useRef(false)
   // Once, after the first unlock: the main process gives the record only once and removes it
   useEffect(() => {
@@ -1100,7 +1115,44 @@ function App() {
         if (record) setRestoreBanner({ phase: 'ask', record, source: taken?.source ?? 'update' })
       })
       .catch(() => { /* nothing to offer */ })
+      .finally(() => setRestoreReady(true))
   }, [isLocked, isCheckingLock, areSessionsLoading])
+
+  useEffect(() => {
+    const send = window.electronAPI.restoreTabsCheckpoint
+    if (!restoreReady || !orphanShellsAdopted || !unlockedOnce || typeof send !== 'function') return
+    let timer: number | undefined
+    let lastRecord: string | undefined
+    const schedule = () => {
+      if (timer !== undefined) return
+      timer = window.setTimeout(() => {
+        timer = undefined
+        const record = buildRestoreRecord(readRestoreSource())
+        const text = JSON.stringify(record)
+        if (text === lastRecord) return
+        lastRecord = text
+        send(record)
+      }, 500)
+    }
+    const unsubscribe = [
+      useTerminalStore.subscribe((current, before) => {
+        if (current.terminals !== before.terminals || current.layout !== before.layout || current.activeTerminalId !== before.activeTerminalId) schedule()
+      }),
+      useSftpStore.subscribe(schedule),
+      useAgentUsageStore.subscribe(schedule),
+      useAgentMessagesStore.subscribe((current, before) => {
+        if (current.snapshot.agents !== before.snapshot.agents) schedule()
+      }),
+      useAgentChatStore.subscribe((current, before) => {
+        if (current.chats !== before.chats) schedule()
+      })
+    ]
+    schedule()
+    return () => {
+      window.clearTimeout(timer)
+      unsubscribe.forEach(off => off())
+    }
+  }, [restoreReady, orphanShellsAdopted, unlockedOnce, readRestoreSource])
 
   const handleRestoreTabs = async () => {
     if (restoreBanner?.phase !== 'ask') return

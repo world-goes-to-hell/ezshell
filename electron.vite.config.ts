@@ -16,7 +16,10 @@ const REMOTE_ACCESS_VENDOR: Record<string, string> = {
   'xterm-addon-fit.js': 'node_modules/xterm-addon-fit/lib/xterm-addon-fit.js',
   'app-icon.svg': 'src/renderer/assets/app-icon.svg',
   'PretendardVariable.woff2': 'src/renderer/assets/fonts/PretendardVariable.woff2',
+  'JetBrainsMono-Regular.woff2': 'src/renderer/assets/fonts/JetBrainsMono-Regular.woff2',
+  'D2Coding-Regular.woff2': 'src/renderer/assets/fonts/D2Coding-Regular.woff2',
   'title-bar.css': 'src/renderer/styles/app/title-bar.css',
+  'agent-work-trace.css': 'src/renderer/styles/app/agent-work-trace.css',
   'terminal-tabs.css': 'src/renderer/styles/app/terminal-tabs.css'
 }
 

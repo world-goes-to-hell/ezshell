@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LocalProjectInfo } from '../types'
 import { LOCAL_PROJECTS_EVENT, readLocalProjects } from '../lib/localProjectList'
 
@@ -16,7 +16,7 @@ const FOCUS_REFRESH_MS = 30_000
  * The registered work folders with their worktrees. Git is asked when the list changes, when
  * `refresh` is called and when the window gets the focus back (not on a timer).
  */
-export function useLocalProjects(): { projects: LocalProjectState[]; refresh: () => void } {
+export function useLocalProjects(enabled = true): { projects: LocalProjectState[]; refresh: () => void } {
   const [folders, setFolders] = useState(readLocalProjects)
   const [found, setFound] = useState<ReadonlyMap<string, Omit<LocalProjectState, 'folder'>>>(new Map())
   const lastRead = useRef(0)
@@ -42,16 +42,18 @@ export function useLocalProjects(): { projects: LocalProjectState[]; refresh: ()
     return () => window.removeEventListener(LOCAL_PROJECTS_EVENT, onChange)
   }, [])
 
-  useEffect(() => { inspect(folders) }, [folders, inspect])
+  useEffect(() => { if (enabled) inspect(folders) }, [enabled, folders, inspect])
 
   useEffect(() => {
+    if (!enabled) return
     const onFocus = () => {
       if (Date.now() - lastRead.current >= FOCUS_REFRESH_MS) inspect(folders)
     }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
-  }, [folders, inspect])
+  }, [enabled, folders, inspect])
 
-  const refresh = useCallback(() => inspect(folders), [folders, inspect])
-  return { projects: folders.map(folder => ({ folder, ...found.get(folder) })), refresh }
+  const refresh = useCallback(() => { window.dispatchEvent(new Event(LOCAL_PROJECTS_EVENT)) }, [])
+  const projects = useMemo(() => folders.map(folder => ({ folder, ...found.get(folder) })), [folders, found])
+  return { projects, refresh }
 }

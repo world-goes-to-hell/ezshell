@@ -95,6 +95,19 @@ const readers = {
   codexModel: lines => readNumberedPicker(lines, PICKER_TITLES.codexModel),
   codexEffort: lines => readNumberedPicker(lines, PICKER_TITLES.codexEffort)
 }
+
+/** Match the live picker's title and controls, including a footer wrapped across a narrow pane. */
+function isAgentPickerScreen(kind, lines) {
+  const footer = lines.filter(line => line.trim()).slice(-3).map(line => line.trim()).join(' ')
+  if (kind === 'codex') {
+    return /\benter (?:select|default)\s*·\s*(?:s session\s*·\s*)?esc back$/i.test(footer)
+      && (readers.codexModel(lines)?.selected != null || readers.codexEffort(lines)?.selected != null)
+  }
+  return kind === 'claude' && /\bEsc to cancel$/i.test(footer)
+    && SESSION_KEYS.some(({ hint }) => hint.test(footer))
+    && (readers.claudeModel(lines)?.selected != null || Boolean(readers.claudeEffort(lines)))
+}
+
 const sameName = (a, b) => a.toLowerCase().replace(/[\s-]/g, '') === b.toLowerCase().replace(/[\s-]/g, '')
 
 // What the CLI says it applied, the newest line on screen: the usage line takes it at once (Codex's own
@@ -371,4 +384,4 @@ function createAgentPicker({
   }
 }
 
-module.exports = { createAgentPicker, readNumberedPicker, readClaudeEffort, appliedFromScreen, PICKER_TITLES }
+module.exports = { createAgentPicker, readNumberedPicker, readClaudeEffort, appliedFromScreen, isAgentPickerScreen, PICKER_TITLES }

@@ -5,6 +5,7 @@ const { homedir, tmpdir } = require('os')
 const path = require('path')
 const { validateRole } = require('./agentRole.js')
 const { createAgentRoleStore, roleSessionKey } = require('./agentRoleStore.js')
+const { HUMAN_BLOCK_LABELS, publicBlock, validEscalationReason } = require('./agentInspection.js')
 
 const MAX_REQUEST = 64 * 1024
 const MAX_MESSAGES = 500
@@ -52,6 +53,7 @@ function writeAgentFile(file, data) {
 }
 
 function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onInboxRead, bindLocalAgent, reportLocalAntigravity, onAgentHook,
+  inspectLocalAgent, onEscalate,
   bridgeFile, roleFile, codexHookTrustFile, platform = process.platform, home = homedir(), now = Date.now }) {
   const instanceBridgeFile = bridgeFile ? `${bridgeFile}.${process.pid}` : null
   const agents = new Map()
@@ -61,6 +63,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   const pendingRoles = new Map()
   const tokens = new Map()
   const mcpReady = new Map()
+  const escalated = new Map()
   const bridgeToken = randomUUID()
   const leases = new Map()
   const reconnects = new Map()
@@ -69,6 +72,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   // Private per-agent hook history. It is deliberately absent from the renderer snapshot.
   const hookEvents = new Map()
   const hookSessions = new Map()
+  const codexRoleLaunches = new Map()
   const stopChecks = new Map()
   // Every local shell's token → its id, for the status line of a Claude typed into it (registerShell)
   const shellTokens = new Map()
@@ -77,6 +81,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   const inboxWaits = new Map()
   let serial = 0
   let revision = 0
+  let roleEpoch = 0
   let runtime
   let server
   let directory
@@ -224,10 +229,43 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     if (bindRoleSession(id, sessionId)) changed()
   }
 
+  /** A watcher proof may persist a fresh Codex's roles while its original authenticated hook agrees. */
+  const freshRoleEpoch = () => isLocked() ? null : roleEpoch
+
+  function setFreshCodexRoleSession(id, sessionId, startedAt, epoch) {
+    if (epoch === null || epoch !== freshRoleEpoch()) return false
+    const agent = agents.get(id)
+    const launch = codexRoleLaunches.get(id)
+    if (!agent?.active || agent.kind !== 'codex' || !agent.shellId || agent.sleeping || agent.resumeId ||
+        !launch || launch.changedSession || launch.startedAt !== startedAt ||
+        !sessionId || launch.hookId !== sessionId || hookSessions.get(id) !== sessionId) return false
+    const key = roleSessionKey('codex', sessionId)
+    if (!key) return false
+    const before = roleSessions.get(id)?.key
+    const roleChanged = bindRoleSession(id, sessionId)
+    const binding = roleSessions.get(id)
+    if (binding?.key !== key || binding.explicitResume) return false
+    binding.freshCodex = true
+    if (roleChanged || before !== key) changed()
+    return binding.saved
+  }
+
   function setHookSession(id, sessionId) {
     if (!agents.get(id)?.active || hookSessions.get(id) === sessionId) return
     hookSessions.set(id, sessionId)
     clearUsage(id)
+    const launch = codexRoleLaunches.get(id)
+    if (!launch) return
+    launch.hookId ??= sessionId
+    if (launch.hookId === sessionId) return
+    launch.changedSession = true
+    if (!roleSessions.get(id)?.freshCodex) return
+    // This CLI opened another conversation. The last saved roles are still useful in this pane,
+    // but edits now belong to its in-memory roles until the CLI is reopened.
+    const { user, agent } = roleNames(id)
+    pendingRoles.set(id, { user, agent })
+    roleSessions.delete(id)
+    changed()
   }
 
   function forgetHookData(id) {
@@ -235,10 +273,12 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     hookSessions.delete(id)
     clearTimeout(stopChecks.get(id)?.timer)
     stopChecks.delete(id)
+    escalated.delete(id)
   }
 
   function forgetAgent(id) {
     agents.delete(id)
+    codexRoleLaunches.delete(id)
     forgetHookData(id)
     reconnects.delete(id)
     roleSessions.delete(id)
@@ -417,6 +457,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     if (isLocked()) throw new Error('먼저 앱 잠금을 해제해 주세요.')
     switch (request.method) {
       case 'list': return { agents: [...agents.values()].filter(agent => isConnected(agent.id)).map(({ id, kind, cwd }) => ({ id, kind, cwd, role: activeRole(id).role })), self: from }
+      case 'inspect-agent': return inspectAgent(request.id).state
+      case 'escalate': return escalate(request.id, request.reason)
       case 'set-role': return setRole(from, request.role, 'agent')
       case 'inbox': return { messages: readInbox(from, request.unread) }
       case 'wait-inbox': {
@@ -449,6 +491,34 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     if (agent?.active === true && agent.sleeping) return true
     const lease = mcpReady.get(id)
     return agent?.active === true && lease != null && !lease.destroyed
+  }
+
+  function inspectAgent(id) {
+    const agent = agents.get(id)
+    const local = agent?.active && !agent.sleeping && agent.shellId ? inspectLocalAgent?.(agent.shellId, id) : null
+    // Both MCP peers and verified local shells belong to this app instance. A startup trust screen
+    // can block a registered local agent before its MCP lease connects.
+    if (!agent || (agent.active && !isConnected(id) && !local)) throw new Error('에이전트를 찾을 수 없습니다.')
+    const blocked = agent.active ? publicBlock(local?.blocked) : { kind: 'ended' }
+    return {
+      agent, ticket: local?.ticket,
+      state: {
+        id, status: local?.status ?? agent.status,
+        statusSource: (local ? local.statusSource : agent.active ? agent.statusSource : null) ?? null,
+        blocked, unread: unreadMessages(id).length, idleFor: local?.idleFor ?? null, exitCode: agent.exitCode ?? null
+      }
+    }
+  }
+
+  function escalate(id, reason) {
+    if (!validEscalationReason(reason)) throw new Error('사유는 200자 이내 한 줄로 입력해 주세요.')
+    const { state, agent, ticket } = inspectAgent(id)
+    const kind = state.blocked?.kind
+    if (!ticket || !Object.hasOwn(HUMAN_BLOCK_LABELS, kind)) throw new Error('사용자 응답을 기다리는 화면이 없습니다.')
+    if (escalated.get(id) === ticket) return { notified: false }
+    if (!onEscalate?.({ id, shellId: agent.shellId, kind })) throw new Error('앱 알림을 표시할 수 없습니다.')
+    escalated.set(id, ticket)
+    return { notified: true }
   }
 
   function stopWaiting(id) {
@@ -524,6 +594,10 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     const before = agents.get(id)
     // Woken from sleep under the same id, with the session it was asked to resume
     const resumeId = before?.sleeping ? before.resumeId : binding?.resumeId
+    const launch = binding?.codexProcessStartedAt
+    if (!before && kind === 'codex' && !resumeId && Number.isSafeInteger(launch) && launch > 0 && binding.codexRoleCwd) {
+      codexRoleLaunches.set(id, { startedAt: launch, cwd: binding.codexRoleCwd })
+    }
     agents.set(id, {
       id, shellId: binding?.shellId ?? '', kind, cwd, active: true, status: binding?.status ?? 'unknown',
       ...(STATUS_SOURCES.has(binding?.statusSource) ? { statusSource: binding.statusSource } : {}),
@@ -582,7 +656,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
         throw new Error('ezShell에 등록된 에이전트가 아닙니다.')
       }
       const attach = Number.isSafeInteger(request.pid) && request.pid > 0
-        ? await bindLocalAgent?.({ pid: request.pid, kind: request.kind, shellId })
+        ? await bindLocalAgent?.({ pid: request.pid, kind: request.kind, shellId, cwd: request.cwd })
         : undefined
       if (socket.destroyed) return
       if (shellId && (!attach || shellTokens.get(shellToken) !== shellId)) throw new Error('ezShell 로컬 터미널 연결을 확인할 수 없습니다.')
@@ -715,9 +789,11 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   }
 
   function stop() {
+    escalated.clear()
     reconnects.clear()
     hookEvents.clear()
     hookSessions.clear()
+    codexRoleLaunches.clear()
     for (const pending of stopChecks.values()) clearTimeout(pending.timer)
     stopChecks.clear()
     for (const socket of inboxWaits.keys()) removeWait(socket)
@@ -835,7 +911,9 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     const token = randomUUID()
     // startedAt: Codex usage is read from the session file it starts after this (codexUsageWatcher);
     // resumeId: a resumed session writes on in its old file, found by this id instead
-    agents.set(id, { id, shellId, kind, cwd, active: true, status: 'unknown', startedAt: Date.now(), ...(resumeId ? { resumeId } : {}) })
+    const startedAt = Date.now()
+    agents.set(id, { id, shellId, kind, cwd, active: true, status: 'unknown', startedAt, ...(resumeId ? { resumeId } : {}) })
+    if (kind === 'codex' && !resumeId) codexRoleLaunches.set(id, { startedAt, cwd })
     tokens.set(token, id)
     bindRoleSession(id, resumeId, true)
     changed()
@@ -894,14 +972,13 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   }
 
   const connectedAgentOf = shellId => [...agents.values()].find(candidate => candidate.shellId === shellId && isConnected(candidate.id))
+  const unreadMessages = id => messages.filter(message => message.to === id && !message.read && !message.seenAt)
 
   /** Messages for the agent in this shell that it has not read yet: the terminal wakes it for these */
   function unreadFor(shellId) {
     if (isLocked()) return []
     const agent = connectedAgentOf(shellId)
-    return agent ? messages.filter(message =>
-      message.to === agent.id && !message.read && !message.seenAt
-    ).map(message => message.id) : []
+    return agent ? unreadMessages(agent.id).map(message => message.id) : []
   }
 
   /** Messages it has not answered or acknowledged yet, read or not: a request put off while busy stays here */
@@ -999,6 +1076,13 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     setUserRole: (id, role) => setRole(id, role, 'user'),
     hookEventsOf: id => (hookEvents.get(id) ?? []).map(event => ({ ...event })),
     hookSessionOf: id => hookSessions.get(id) ?? null,
+    codexRoleContextOf: id => {
+      const launch = codexRoleLaunches.get(id)
+      return launch && !launch.changedSession ? { roleStartedAt: launch.startedAt, roleCwd: launch.cwd } : null
+    },
+    freshRoleEpoch,
+    invalidateFreshRoleChecks: () => { roleEpoch++ },
+    setFreshCodexRoleSession,
     messageSeenAt: (agentId, messageId) => messages.find(message => message.to === agentId && message.id === messageId)?.seenAt ?? null,
     hasConnectedAgent: id => isConnected(id) && !agents.get(id)?.sleeping,
     setHookSession,

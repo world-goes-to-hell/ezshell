@@ -1,3 +1,5 @@
+const fs = require('fs')
+const path = require('path')
 const { connect, createChecks, openLocalAgent, unlock } = require('../support/driver')
 
 ;(async () => {
@@ -41,5 +43,25 @@ const { connect, createChecks, openLocalAgent, unlock } = require('../support/dr
       ${JSON.stringify(JSON.stringify(expected))} &&
     document.querySelectorAll('.pane-map-cell .local-agent-provider').length === 5
   `))
+
+  // A working agent's cell shows the border trace the terminal pane shows (styles/app/agent-work-trace.css)
+  const worker = expected.find(id => id.startsWith('codex-'))
+  const statusFile = path.join(process.env.E2E_PROFILE, `${worker}-program-status`)
+  const cell = `document.querySelector('.pane-map-cell[data-agent-id="${worker}"]')`
+  const trace = `getComputedStyle(${cell}, '::after')`
+  check('an idle agent\'s cell has no trace', await until(`${cell}?.dataset.agentWork === 'idle' && ${trace}.opacity === '0'`))
+  // A prompt first, as a user starts a turn (local-agent-messages does the same)
+  await js(`window.electronAPI.agentMessagesSnapshot().then(state => {
+    const shellId = state.agents.find(agent => agent.id === ${JSON.stringify(worker)}).shellId
+    window.electronAPI.localShellWrite(shellId, 'start work')
+    window.electronAPI.localShellWrite(shellId, '\\r')
+  })`)
+  fs.writeFileSync(statusFile, 'state=working:app=codex')
+  check('a working agent\'s cell runs the trace around its border', await until(`
+    ${cell}?.dataset.agentWork === 'working' && ${trace}.opacity === '1' && ${trace}.animationPlayState === 'running'
+  `, 10000))
+  await driver.shot('local-agent-pane-map-working')
+  fs.writeFileSync(statusFile, 'state=idle:app=codex')
+  check('the trace goes when the agent rests', await until(`${cell}?.dataset.agentWork === 'idle' && ${trace}.opacity === '0'`, 10000))
   finish()
 })().catch(error => { console.error(error); process.exit(1) })

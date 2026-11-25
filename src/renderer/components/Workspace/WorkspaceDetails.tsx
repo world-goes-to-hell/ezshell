@@ -25,10 +25,11 @@ export async function openWorkspaceFile(root: string, relative: string, label: s
   }
 }
 
-export function useWorkspaceFileMenu(root: string, relative: string, openFile: () => void) {
+/** The right-click menu of a tree row. A folder (`openFile` null) only shows it in the file explorer */
+export function useWorkspaceFileMenu(root: string, relative: string, openFile: (() => void) | null) {
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null)
   const reveal = window.electronAPI.localFileReveal
-  const canOpenInBrowser = isWorkspaceWebDocument(relative)
+  const canOpenInBrowser = openFile !== null && isWorkspaceWebDocument(relative)
   const revealFile = async () => {
     if (!reveal) return
     try {
@@ -56,7 +57,7 @@ export function useWorkspaceFileMenu(root: string, relative: string, openFile: (
     <TerminalContextMenu key={`${position.x}:${position.y}`} position={position} groups={[]} onClose={() => setPosition(null)} top={[
       ...(canOpenInBrowser ? [{ label: '브라우저로 열기', icon: RiGlobalLine, onSelect: () => void openInBrowser() }] : []),
       { label: '파일 탐색기로 열기', icon: RiFolderOpenLine, disabled: !reveal, onSelect: () => void revealFile() },
-      { label: 'ezShell로 열기', icon: RiFileTextLine, onSelect: openFile }
+      ...(openFile ? [{ label: 'ezShell로 열기', icon: RiFileTextLine, onSelect: openFile }] : [])
     ]} />
   )
   return { openMenu, menu }
@@ -114,7 +115,7 @@ function TreeEntry({ root, relative, entry, depth, label, showPath = false }: { 
   const parent = showPath ? splitPath(relative).folder : ''
   const isFolder = entry.kind === 'directory'
   const openFile = () => void openWorkspaceFile(root, relative, label)
-  const { openMenu, menu } = useWorkspaceFileMenu(root, relative, openFile)
+  const { openMenu, menu } = useWorkspaceFileMenu(root, relative, isFolder ? null : openFile)
   const Icon = isFolder && isOpen ? RiFolderOpenLine : fileIcons[entry.kind]
   const Chevron = isOpen ? RiArrowDownSLine : RiArrowRightSLine
   return (
@@ -126,7 +127,7 @@ function TreeEntry({ root, relative, entry, depth, label, showPath = false }: { 
         title={showPath ? relative : isFolder ? entry.name : `${entry.name} 열기`}
         aria-expanded={isFolder ? isOpen : undefined}
         onClick={() => (isFolder ? setIsOpen(open => !open) : openFile())}
-        onContextMenu={isFolder ? undefined : openMenu}
+        onContextMenu={openMenu}
       >
         {isFolder ? <Chevron size={14} className="workspace-tree-chevron" aria-hidden="true" /> : <span className="workspace-tree-chevron" aria-hidden="true" />}
         <Icon size={15} className="workspace-tree-icon" aria-hidden="true" />

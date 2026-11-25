@@ -82,6 +82,22 @@ describe('file window IPC', () => {
     expect(windows).toHaveLength(0)
   })
 
+  it('reveals a folder below the workspace root, not the root itself', async () => {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const root = dirname(here)
+    const roots = createLocalRoots({ knownFolders: () => [root], repoFolders: async () => [] })
+    const revealed = []
+    const { invoke } = setup({
+      fromMainWindow: event => event.sender.id === 1,
+      resolveLocal: roots.resolveInside,
+      revealLocal: file => revealed.push(file)
+    })
+    expect(await invoke('local-file-reveal', 1, { root, path: basename(here) })).toEqual({ success: true })
+    expect(await invoke('local-file-reveal', 1, { root, path: '.' })).toMatchObject({ success: false })
+    expect(await invoke('local-file-reveal', 1, { root, path: '' })).toMatchObject({ success: false })
+    expect(revealed).toEqual([(await roots.resolveInside(root, basename(here))).path])
+  })
+
   it('follows a log only while the app is unlocked', async () => {
     let locked = false
     const { invoke, windows, docs } = setup({ isLocked: () => locked })

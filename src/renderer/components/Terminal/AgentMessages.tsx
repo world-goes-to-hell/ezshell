@@ -178,7 +178,7 @@ function DeliveryParty({ id, agent }: { id: string; agent?: AgentMessageSession 
   return (
     <span className="agent-delivery-party">
       <MessageProviderIcon kind={id === USER ? USER : agent?.kind} />
-      {agent ? <AgentIdentityBadge agent={agent} location={location} /> : label(id)}
+      {agent ? <AgentIdentityBadge agent={agent} location={location} nameOnly /> : label(id)}
     </span>
   )
 }
@@ -420,15 +420,15 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
     const name = nameOf(id)
     return roles.get(id) && name !== id ? `${name} · ${id}` : name
   }
-  const actor = (id: string) => {
+  const actor = (id: string, nameOnly = false) => {
     const agent = agentsById.get(id)
     const name = nameOf(id)
     return (
       <span className="agent-message-actor" data-agent-id={id} {...(agent ? agentIdentityTooltip(agent, locations.get(id)) : {})}>
-        {agent && <AgentIdentityDot id={id} />}
-        <MessageProviderIcon kind={id === USER ? USER : agent?.kind} />
+        {!nameOnly && agent && <AgentIdentityDot id={id} />}
+        {!nameOnly && <MessageProviderIcon kind={id === USER ? USER : agent?.kind} />}
         <span className="agent-message-actor-name"><MessageSearchText text={name} term={term} /></span>
-        {agent?.role && name !== id && <>
+        {!nameOnly && agent?.role && name !== id && <>
           <span className="agent-message-actor-separator" aria-hidden="true">{' · '}</span>
           <small className="agent-message-actor-id"><MessageSearchText text={id} term={term} /></small>
         </>}
@@ -441,7 +441,7 @@ function AgentMessagesDialog({ initialAgent, sourceTabId, currentGroup, projects
       <div className="agent-message-actor-location" data-agent-id={id}>
         <span className="agent-message-pane-label">
           <span className="agent-message-pane-tab">{location.tabLabel}</span>
-          <span className="agent-message-pane-number">{` · 칸 ${location.number}`}</span>
+          <span className="agent-message-pane-number">{` · ${location.number}`}</span>
         </span>
         <AgentIdentityAction id={id} action="go" showLabel onClick={() => goToPane(id)} />
       </div>

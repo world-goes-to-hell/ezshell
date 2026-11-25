@@ -8,6 +8,7 @@ const memoryFs = () => {
     files,
     writeFileSync: (p, text) => files.set(p, text),
     readFileSync: (p) => { if (!files.has(p)) throw new Error('ENOENT'); return files.get(p) },
+    renameSync: (from, to) => { files.set(to, files.get(from)); files.delete(from) },
     unlinkSync: (p) => { files.delete(p) }
   }
 }
@@ -32,6 +33,17 @@ describe('restore tabs file', () => {
     expect(saveRestoreTabs(PATH, record, null, { now: 1000, io }).success).toBe(false)
     expect(saveRestoreTabs(PATH, { blob: 'x'.repeat(300 * 1024) }, 'p', { now: 1000, io }).success).toBe(false)
     expect(io.files.size).toBe(0)
+  })
+
+  it('keeps the old encrypted record and cleans up if replacing it fails', () => {
+    const io = memoryFs()
+    expect(saveRestoreTabs(PATH, record, 'p', { now: 1000, io })).toEqual({ success: true })
+    const previous = io.files.get(PATH)
+    io.renameSync = () => { throw new Error('cannot replace') }
+
+    expect(saveRestoreTabs(PATH, { version: 1, tabs: [] }, 'p', { now: 2000, io }).success).toBe(false)
+    expect([...io.files]).toEqual([[PATH, previous]])
+    expect(takeRestoreTabs(PATH, 'p', 3000, io)).toEqual({ savedAt: 1000, record })
   })
 
   it('drops an old file, a file from the future and one of another password, removing it', () => {

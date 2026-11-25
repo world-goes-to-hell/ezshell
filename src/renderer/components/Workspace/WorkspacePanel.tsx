@@ -7,6 +7,7 @@ import { useWorkspaceDirectory } from '../../hooks/useWorkspaceDirectory'
 import { WorkspaceFiles, WorkspaceGit, WorkspaceNote } from './WorkspaceBrowser'
 import { WorkspaceChanges } from './WorkspaceChanges'
 import { relativeInside } from '../../lib/workspaceDetails'
+import { prefetchWorkspaceGit } from '../../lib/workspaceGitReads'
 import './Workspace.css'
 
 const SECTIONS: ReadonlyArray<{ id: WorkspaceSection; label: string; Icon: typeof RiChatHistoryLine }> = [
@@ -17,6 +18,7 @@ const SECTIONS: ReadonlyArray<{ id: WorkspaceSection; label: string; Icon: typeo
 ]
 const KEY_STEP = 24
 const REVEAL_WAIT_MS = 3000
+const PREFETCH_DELAY_MS = 250
 
 /**
  * "작업 공간": docked right of the main area for work in local shells. It sits beside the terminals
@@ -29,7 +31,15 @@ export function WorkspacePanel() {
   const close = useWorkspacePanelStore(state => state.close)
   const setWidth = useWorkspacePanelStore(state => state.setWidth)
   const setSection = useWorkspacePanelStore(state => state.setSection)
-  const { folder, shellId, isLoading, settled } = useWorkspaceDirectory(isOpen && section !== 'history')
+  // Read on every tab (also the history): the other tabs then open on a folder already known
+  const { folder, shellId, isLoading, settled } = useWorkspaceDirectory(isOpen)
+  // What the Git tabs show first is read ahead, a moment after the folder is known (not competing with
+  // what the panel draws when it opens)
+  useEffect(() => {
+    if (!isOpen || !folder) return
+    const timer = window.setTimeout(() => void prefetchWorkspaceGit(folder).catch(() => undefined), PREFETCH_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [isOpen, folder])
   const reveal = useWorkspacePanelStore(state => state.reveal)
   const finishReveal = useWorkspacePanelStore(state => state.finishReveal)
   // A chat's folder link: shown in the tree once the panel's folder is that chat's shell's folder

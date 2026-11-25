@@ -5,9 +5,10 @@
   'use strict'
   const ns = (window.ezRemote = window.ezRemote || {})
 
-  // Only plain hex colours are drawn: anything else from the server is ignored
-  const COLOR = /^#[0-9a-f]{3,8}$/i
-  const colorOf = (value) => (typeof value === 'string' && COLOR.test(value) ? value : null)
+  const COLOR = /^(?:#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})|(?:rgb|hsl)a?\([\d., %/]+\))$/i
+  const colorOf = value => typeof value === 'string' && value.length <= 64
+    && COLOR.test(value) && CSS.supports('color', value) ? value : null
+  ns.sessionColor = colorOf
 
   function el(tag, className, text) {
     const node = document.createElement(tag)
@@ -71,16 +72,23 @@
       return sessionsIn(folderId).length + childrenOf(folderId).reduce((sum, f) => sum + countIn(f.id, seen), 0)
     }
 
-    function statusDot(session) {
+    function appendStatus(row, session) {
       const tabs = session.openTabs || {}
       const connected = Number(tabs.connected) || 0
       const disconnected = Number(tabs.disconnected) || 0
       const dot = el('span', 'tree-dot')
       if (connected > 0) dot.classList.add('is-connected')
       else if (disconnected > 0) dot.classList.add('is-lost')
-      const total = connected + disconnected
-      dot.setAttribute('aria-label', total === 0 ? '열린 탭 없음' : `PC 에 열린 탭 ${total}개 (연결 ${connected}, 끊김 ${disconnected})`)
-      return { dot, total }
+      dot.setAttribute('aria-hidden', 'true')
+      row.append(dot, el('span', 'tree-name', session.name))
+      if (connected + disconnected === 0) return
+      const badges = el('span', 'tree-tab-badges')
+      badges.setAttribute('aria-hidden', 'true')
+      for (const [count, state] of [[connected, 'connected'], [disconnected, 'disconnected']]) {
+        if (count > 0) badges.append(el('span', `tree-tabs is-${state}`, String(count)))
+      }
+      row.append(badges)
+      row.setAttribute('aria-label', `${session.name} · PC 탭 연결 ${connected}, 끊김 ${disconnected}`)
     }
 
     function sessionRow(session, depth) {
@@ -94,9 +102,7 @@
         button.classList.add('has-color')
         button.style.setProperty('--session-color', color)
       }
-      const { dot, total } = statusDot(session)
-      button.append(dot, el('span', 'tree-name', session.name))
-      if (total > 0) button.append(el('span', 'tree-tabs', String(total)))
+      appendStatus(button, session)
       button.addEventListener('click', () => onOpen(session))
       return button
     }

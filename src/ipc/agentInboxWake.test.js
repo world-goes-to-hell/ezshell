@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Terminal } from '@xterm/headless'
 import { createAgentInboxWake, PROMPT, BUSY_PROMPT, REMIND_PROMPT } from './agentInboxWake.js'
+import { watchCommand } from '../agentChat/commandScreen.js'
 
 const paste = '\x1b[200~' + PROMPT + '\x1b[201~'
 const busyPaste = '\x1b[200~' + BUSY_PROMPT + '\x1b[201~'
@@ -12,7 +13,7 @@ const paintedClaudeDraft = text => '\x1b[?2004h\x1b[?25l\x1b[2J\x1b[20;1H' +
   '─'.repeat(70) + '\r\n  ⏵⏵ auto mode on'
 
 let wake
-function setup(kind = 'claude', cols = 100) {
+function setup(kind = 'claude', cols = 100, onApprovalChange) {
   const write = vi.fn(() => true)
   // ids: unread (wake for these); open: not answered yet, read or not
   // busy: not waiting for input; running: busy with a task (not starting up or asking for approval)
@@ -26,12 +27,39 @@ function setup(kind = 'claude', cols = 100) {
     messageSeenAt: id => state.seen?.get(id),
     isWorking: () => state.busy,
     isRunningTask: () => state.busy && state.running,
-    write
+    write, onApprovalChange
   })
   return { write, state }
 }
 
 afterEach(() => wake?.close())
+
+it.each([
+  ['unnumbered', ' ❯ No, exit\r\n   Yes, I trust this folder', ' Enter to confirm · Esc to cancel'],
+  ['numbered and wrapped', ' ❯ 1. Yes, I trust this\r\n   folder\r\n   2. No, exit', ' Enter to confirm ·\r\n Esc to cancel']
+])('keeps the %s Claude folder trust screen in the live terminal until its composer returns', async (_, choices, footer) => {
+  const onApprovalChange = vi.fn()
+  const { write, state } = setup('claude', 100, onApprovalChange)
+  state.ids = ['one']
+  wake.writeOutput(claudeDraft('') + '\r\n' + [
+    '─'.repeat(70), ' Accessing workspace:', '', ' C:\\temp\\fresh-workspace', '',
+    ' Quick safety check: Is this a project you created or one you trust?', '',
+    ' Security guide', '', choices, '', footer, '\x1b[2;3H'
+  ].join('\r\n'))
+  await vi.waitFor(() => expect(onApprovalChange).toHaveBeenLastCalledWith(true))
+  expect(wake.approvalPrompt()).toMatchObject({ terminalOnly: 'folder-trust', options: [] })
+  expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'folder-trust' }, ticket: expect.any(Symbol) })
+  expect(wake.composerState()).toBeNull()
+  await expect(wake.submitText('Question')).resolves.toMatchObject({ ok: false, reason: 'approval' })
+  await expect(wake.submitText('Question', undefined, { strict: true })).resolves.toMatchObject({ ok: false, reason: 'approval' })
+  await expect(wake.answerApproval('1', wake.approvalPrompt().signature)).resolves.toMatchObject({ ok: false, reason: 'changed' })
+  expect(write).not.toHaveBeenCalled()
+
+  wake.writeOutput(claudeDraft(''))
+  await vi.waitFor(() => expect(onApprovalChange).toHaveBeenLastCalledWith(false))
+  expect(wake.approvalPrompt()).toBeNull()
+  await vi.waitFor(() => expect(write).toHaveBeenCalledExactlyOnceWith(paste))
+})
 
 describe('official stop inbox wake', () => {
   it('holds the busy paste, commits confirmed messages, and lets an expired notice go to the idle composer', async () => {
@@ -111,9 +139,43 @@ it.each([
   wake.writeOutput(codexDraft('') + `\r\n${frame}\x1b[1;3H`)
   await vi.waitFor(() => expect(wake.screenLines().join(' ')).toContain(frame.split('\r\n')[0]))
   expect(wake.approvalPrompt()).toBeNull()
+  expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'hook-trust' }, ticket: expect.any(Symbol) })
   expect(wake.composerState()).toBeNull()
   await expect(wake.submitText('Question')).resolves.toMatchObject({ ok: false, reason: 'approval' })
   await expect(wake.submitText('Question', undefined, { strict: true })).resolves.toMatchObject({ ok: false, reason: 'approval' })
+  expect(write).not.toHaveBeenCalled()
+})
+
+it.each([
+  { kind: 'codex', command: '/model', lines: [
+    '🔌  MCP Tools', '  • ezshell-cli-mcp: connected (7 tools)', '',
+    '  Select Model and Effort', '› 1. GPT-6.2-Sol (current)  Fast model.',
+    '  2. GPT-6.2-Astra          For complex work.', '  ↓', '  enter select · esc back'
+  ] },
+  { kind: 'codex', command: '/model', cols: 35, lines: [
+    '  Select Reasoning Level for GPT-6.2-Sol', '  1. Low (default)', '› 2. Medium (current)',
+    '  3. High', '  enter default · s session · esc back'
+  ] },
+  { kind: 'claude', command: '/model', lines: [
+    '  Select model', '  Your pick is the default for new sessions.', '  ❯ 1. Opus 5.5 ✔',
+    '    2. Sonnet 5.5', '    3. Haiku 5.5', '  ● High effort ←/→ to adjust',
+    '  s to use this session only · Enter to save · Esc to cancel'
+  ] },
+  { kind: 'claude', command: '/effort', lines: [
+    '  Effort', '      Faster             Smarter', '      ──────────▲────────────',
+    '      low     medium     high     max', '  ←/→ to adjust · Enter to use this session only · Esc to cancel'
+  ] }
+])('hands the $kind $command picker to the terminal', async ({ kind, command, cols, lines }) => {
+  const { write } = setup(kind, cols)
+  wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + lines.join('\r\n'))
+  await vi.waitFor(() => expect(wake.commandRows().lines.join('')).toContain(lines.at(-1)))
+  let time = 0
+  await expect(watchCommand({
+    kind, command,
+    read: () => ({ ...wake.commandRows(), composer: wake.composerState(), approval: Boolean(wake.approvalPrompt()) }),
+    now: () => time, sleep: async ms => { time += ms }
+  })).resolves.toEqual({ state: 'screen' })
+  await expect(wake.submitText('A new chat message')).resolves.toMatchObject({ ok: false, reason: 'no-composer' })
   expect(write).not.toHaveBeenCalled()
 })
 
@@ -125,6 +187,44 @@ it('preserves the last cell and continuation flag of a wrapped command row', asy
     expect(lines.slice(0, 2)).toEqual(['› /mcp ', 'verbose'])
     expect(wraps.slice(0, 2)).toEqual([false, true])
   })
+})
+
+it('inspects draft origin, a native menu and distinct occurrences of the same approval without writing', async () => {
+  const { write } = setup('codex')
+  const draw = async lines => {
+    wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + lines.join('\r\n'))
+    await vi.waitFor(() => expect(wake.screenLines().map(row => row.trim())).toContain(lines.at(-1).trim()))
+  }
+  await draw(['› private draft'])
+  expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'draft', ours: false } })
+  await draw(['› '])
+  const sent = wake.submitText('App draft')
+  await draw(['› App draft'])
+  const writes = write.mock.calls.length
+  expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'draft', ours: true } })
+  expect(write.mock.calls).toHaveLength(writes)
+  wake.userInput('\x1b')
+  await expect(sent).resolves.toMatchObject({ ok: false, reason: 'interrupted' })
+  write.mockClear()
+  await draw(['  Select Model and Effort', '› 1. Model A', '  2. Model B', '  enter select · esc back'])
+  expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'cli-screen' } })
+  await draw(['CLI settings', 'Esc to close'])
+  wake.noteCommandScreen()
+  expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'cli-screen' } })
+  await draw(['› '])
+  wake.noteCommandScreen()
+  await draw(['plain terminal output'])
+  expect(wake.inspectBlock().blocked).toBeNull()
+  const question = ['Would you like to run this?', '  $ private command', '› 1. Yes', '  2. No', 'Press enter to confirm or esc to cancel']
+  await draw(question)
+  const first = wake.inspectBlock()
+  expect(first).toMatchObject({ blocked: { kind: 'approval', question: question[0], options: ['Yes', 'No'] }, ticket: expect.any(Symbol) })
+  expect(wake.inspectBlock().ticket).toBe(first.ticket)
+  await draw(['› '])
+  expect(wake.inspectBlock().blocked).toBeNull()
+  await draw(question)
+  expect(wake.inspectBlock().ticket).not.toBe(first.ticket)
+  expect(write).not.toHaveBeenCalled()
 })
 
 describe('wake an idle agent with unread messages', () => {
@@ -1743,7 +1843,11 @@ describe('the agent\'s prompt with choices, answered from the chat view', () => 
 
   it('reads Codex\'s question up to the question line, past the hint below the choices', async () => {
     promptSetup('codex')
-    wake.writeOutput(codexPrompt)
+    // A previous model picker can still appear in the scrollback above the live Yes/No prompt.
+    wake.writeOutput(codexPrompt.replace('earlier answer', [
+      '  Select Model and Effort', '› 1. GPT-6.2-Sol (current)', '  2. GPT-6.2-Astra',
+      '  enter select · esc back'
+    ].join('\r\n')))
     await settle()
     const prompt = wake.approvalPrompt()
     expect(prompt.question).toBe('Would you like to run the following command?')

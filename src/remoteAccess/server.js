@@ -11,6 +11,7 @@ const { randomUUID } = require('crypto')
 const { WebSocketServer } = require('ws')
 const { isTailnetAddress } = require('./tailnet.js')
 const { readSubscription } = require('./webPush.js')
+const { createBrowserViewer } = require('./browserViewer.js')
 
 /** Signed-in connections at once */
 const MAX_CLIENTS = 4
@@ -50,9 +51,11 @@ const ACTIVITY_FIELDS = ['id', 'time', 'sessionId', 'sessionName', 'command', 'l
 const ACTIVITY_BACKLOG_BYTES = 1024 * 1024
 /** A PC tab's output cannot be paused for one phone (the PC would stall): a phone this far behind stops following it */
 const TAB_BACKLOG_BYTES = 2 * 1024 * 1024
+const MAX_TABS_PER_DEVICE = 6
 /** Typing into a PC tab is logged once per attach, then at most this often (the log names the tab, never the keys) */
 const TAB_INPUT_LOG_MS = 60 * 1000
 const TAB_ERRORS = {
+  limit: `PC 탭은 기기당 ${MAX_TABS_PER_DEVICE}개까지 이어 볼 수 있습니다.`,
   missing: '그 탭은 PC 에 없습니다. 목록을 새로 고쳐 주세요.',
   notAttached: '탭을 먼저 열어 주세요.',
   slow: '휴대폰이 출력을 따라가지 못해 이어 보기를 멈췄습니다. 다시 열어 주세요.',
@@ -105,7 +108,11 @@ function activityForDevice(items) {
 const STATIC = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+  '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'],
   '/app.css': ['app.css', 'text/css; charset=utf-8'],
+  '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
+  '/icon-192.png': ['icon-192.png', 'image/png'],
+  '/icon-512.png': ['icon-512.png', 'image/png'],
   // The parts of the page (plain scripts, no build step) and its service worker (notifications)
   '/sessions.js': ['sessions.js', 'text/javascript; charset=utf-8'],
   '/approvals.js': ['approvals.js', 'text/javascript; charset=utf-8'],
@@ -113,6 +120,7 @@ const STATIC = {
   '/push.js': ['push.js', 'text/javascript; charset=utf-8'],
   // Step 3: the PC's tabs and agents (docs/plan/2026-11-24-remote-access-tabs-and-agents.md)
   '/tabs.js': ['tabs.js', 'text/javascript; charset=utf-8'],
+  '/browser.js': ['browser.js', 'text/javascript; charset=utf-8'],
   '/agents.js': ['agents.js', 'text/javascript; charset=utf-8'],
   '/agents.css': ['agents.css', 'text/css; charset=utf-8'],
   '/sw.js': ['sw.js', 'text/javascript; charset=utf-8']
@@ -121,8 +129,11 @@ const STATIC = {
 const VENDOR = {
   '/app-icon.svg': ['app-icon.svg', '../renderer/assets/app-icon.svg', 'image/svg+xml'],
   '/vendor/PretendardVariable.woff2': ['PretendardVariable.woff2', '../renderer/assets/fonts/PretendardVariable.woff2', 'font/woff2'],
+  '/vendor/JetBrainsMono-Regular.woff2': ['JetBrainsMono-Regular.woff2', '../renderer/assets/fonts/JetBrainsMono-Regular.woff2', 'font/woff2'],
+  '/vendor/D2Coding-Regular.woff2': ['D2Coding-Regular.woff2', '../renderer/assets/fonts/D2Coding-Regular.woff2', 'font/woff2'],
   '/vendor/title-bar.css': ['title-bar.css', '../renderer/styles/app/title-bar.css', 'text/css; charset=utf-8'],
   '/vendor/terminal-tabs.css': ['terminal-tabs.css', '../renderer/styles/app/terminal-tabs.css', 'text/css; charset=utf-8'],
+  '/vendor/agent-work-trace.css': ['agent-work-trace.css', '../renderer/styles/app/agent-work-trace.css', 'text/css; charset=utf-8'],
   '/vendor/xterm.js': ['xterm.js', 'xterm/lib/xterm.js', 'text/javascript; charset=utf-8'],
   '/vendor/xterm.css': ['xterm.css', 'xterm/css/xterm.css', 'text/css; charset=utf-8'],
   '/vendor/xterm-addon-fit.js': ['xterm-addon-fit.js', 'xterm-addon-fit/lib/xterm-addon-fit.js', 'text/javascript; charset=utf-8']
@@ -184,7 +195,7 @@ const ERRORS = {
  * @param {(event: string, detail?: object) => void} [deps.log]
  * @param {() => void} [deps.onChange] connected devices changed
  */
-function createAccessServer({ store, shells, listSessions, isLocked, approvals = null, activity = null, tabs = null, agents = null, log = () => {}, onChange = () => {}, webDir = path.join(__dirname, 'web'), now = Date.now, isAllowedAddress = isTailnetAddress, readTheme = () => ({}) }) {
+function createAccessServer({ store, shells, listSessions, isLocked, approvals = null, activity = null, tabs = null, browser = null, agents = null, log = () => {}, onChange = () => {}, webDir = path.join(__dirname, 'web'), now = Date.now, isAllowedAddress = isTailnetAddress, readTheme = () => ({}) }) {
   let server = null
   let sockets = null
   let address = null
@@ -198,7 +209,12 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
   let lastAgents = null
   const agentsOn = () => Boolean(agents && agents.enabled)
   const tabsOn = () => tabs?.enabled === true
-  const features = () => ({ tabs: tabsOn(), agents: agentsOn() })
+  const browserOn = () => browser?.enabled === true
+  const anyTabs = () => tabsOn() || browserOn()
+  const features = () => ({ tabs: anyTabs(), agents: agentsOn() })
+  const tabMessage = () => ({ type: 'tabs',
+    tabs: [...(tabsOn() ? tabs.list() : []), ...(browserOn() ? browser.list() : [])],
+    ...(anyTabs() ? {} : { error: TABS_OFF }) })
 
   const isRefused = (remote) => {
     const entry = failures.get(remote)
@@ -227,6 +243,7 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
   function cutOff(client) {
     for (const tab of [...(client.tabs?.values() ?? [])]) tab.stop()
     agents?.closeViewer(client.viewer)
+    client.browser?.close()
     client.watchesAgents = false
     client.watchesActivity = false
     closeSocket(client.socket)
@@ -295,6 +312,12 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
     // First of all: a socket without an error listener throws into the main process
     socket.on('error', () => socket.terminate())
     const send = (message) => sendTo(client, message)
+    if (browser) client.browser = createBrowserViewer({
+      browser, send, now, canAsk: agentsOn,
+      canUse: () => socket.readyState === socket.OPEN && client.device && store.hasDevice(client.device.id) && !isLocked() && browserOn(),
+      attachError: viewId => !client.browser.has(viewId) && atTabLimit() ? TAB_ERRORS.limit : '',
+      log: (event, detail) => log(event, { device: client.device.name, ...detail })
+    })
     const parkedShells = new Map()
     const drop = (reason, code) => {
       if (reason) send({ type: 'bye', message: reason, ...(code && { code }) })
@@ -333,6 +356,7 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
       shells.closeAll(client)
       for (const tab of [...client.tabs.values()]) tab.stop()
       agents?.closeViewer(client.viewer)
+      client.browser?.close()
       if (client.device) {
         log('disconnect', { device: client.device.name })
         onChange()
@@ -457,8 +481,19 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
     }
 
     // ---- The PC's SSH tabs: following one's output, typing into it (never resizing it) ----
+    function atTabLimit() {
+      let attached = 0
+      for (const connection of clients) {
+        if (connection.device?.id === client.device.id) {
+          attached += connection.tabs.size + (connection.browser?.count ?? 0)
+        }
+      }
+      return attached >= MAX_TABS_PER_DEVICE
+    }
+
     function attachTab(tabId) {
       if (!tabsOn()) return send({ type: 'tab-error', tabId, message: tabs ? TABS_OFF : TAB_ERRORS.missing })
+      if (!client.tabs.has(tabId) && atTabLimit()) return send({ type: 'tab-error', tabId, message: TAB_ERRORS.limit })
       // Attaching again starts over: the device gets the kept output once more
       client.tabs.get(tabId)?.stop()
       let buffer = ''
@@ -624,7 +659,7 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
       // The device may have been removed on the PC meanwhile
       if (!store.hasDevice(client.device.id)) return drop('이 기기는 PC 에서 등록이 해제되었습니다.')
       if (message.type === 'probe') return send({ type: 'probe' })
-      arm(IDLE_MS)
+      if (message.type !== 'browser-frame') arm(IDLE_MS)
       switch (message.type) {
         case 'sessions':
           return send({ type: 'sessions', ...listSessions() })
@@ -681,7 +716,7 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
         case 'close':
           return shells.close(String(message.shellId), client)
         case 'tabs-list':
-          return send({ type: 'tabs', tabs: tabsOn() ? tabs.list() : [], ...(tabsOn() ? {} : { error: TABS_OFF }) })
+          return send(tabMessage())
         case 'tab-attach':
           return attachTab(String(message.tabId ?? '').slice(0, 80))
         case 'tab-input':
@@ -689,6 +724,14 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
         case 'tab-detach':
           client.tabs.get(String(message.tabId ?? ''))?.stop()
           return undefined
+        case 'browser-open':
+        case 'browser-close':
+        case 'browser-frame':
+        case 'browser-pick':
+        case 'browser-scroll':
+        case 'browser-recipients':
+        case 'browser-request':
+          return void client.browser?.handle(message).catch(() => drop())
         case 'agents-list':
         case 'agents-watch':
         case 'chat-open':
@@ -860,7 +903,13 @@ function createAccessServer({ store, shells, listSessions, isLocked, approvals =
     stopTabs: () => {
       for (const client of signedIn()) {
         for (const tab of [...client.tabs.values()]) tab.stop()
-        sendTo(client, { type: 'tabs', tabs: [], error: TABS_OFF })
+        sendTo(client, tabMessage())
+      }
+    },
+    tabsChanged: () => {
+      for (const client of signedIn()) {
+        if (!browserOn()) client.browser?.close('PC에서 브라우저 검토 공유를 껐습니다.')
+        sendTo(client, tabMessage())
       }
     },
     /** Whether the settings changed what devices may use: they are sent `features` again */

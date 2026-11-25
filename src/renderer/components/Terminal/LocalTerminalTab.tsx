@@ -108,9 +108,10 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     [chatThemeId, customThemes, followedTheme])
   const chatKind = useAgentChatStore(state => state.chats.get(shellId)?.kind)
   const antigravity = (chatKind ?? chatAgent) === 'antigravity'
-  const hasInteractiveQuestion = useAgentChatStore(state => {
+  const terminalApproval = useAgentChatStore(state => {
     const chat = state.chats.get(shellId)
-    return chat?.state !== 'ended' && chat?.approval?.usesTerminalInput === true
+    const approval = chat?.state !== 'ended' ? chat?.approval : null
+    return approval?.terminalOnly ?? (approval?.usesTerminalInput ? 'question' : null)
   })
   // Claude's AskUserQuestion goes on the chat's own card (AskQuestionCard) unless the user took it to the terminal
   const answerableAskId = useAgentChatStore(state => {
@@ -118,7 +119,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     return chat?.kind === 'claude' && chat.state !== 'ended' ? answerableAskItem(chat.items, chat.approval)?.id ?? null : null
   })
   const askInTerminal = useAskQuestionStore(state => state.inTerminal.get(shellId))
-  const inlineQuestion = !exit && hasInteractiveQuestion && (!answerableAskId || askInTerminal === answerableAskId)
+  const inlineQuestion = !exit && terminalApproval !== null && (!answerableAskId || askInTerminal === answerableAskId)
   const hasSpeedControls = isChat && (chatKind ?? chatAgent) === 'codex' && !!window.electronAPI.agentChatToggleSpeed
   const fontSize = useTerminalStore(state => state.fontSize)
   const fontFamily = useTerminalStore(state => state.fontFamily)
@@ -456,7 +457,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
           className="local-terminal-host"
           inert={isChat && !inlineQuestion}
           role={inlineQuestion ? 'region' : undefined}
-          aria-label={inlineQuestion ? (antigravity ? 'Antigravity 터미널 입력' : 'Claude 질문 응답') : undefined}
+          aria-label={inlineQuestion ? (terminalApproval === 'folder-trust' ? 'Claude 폴더 신뢰 확인' : antigravity ? 'Antigravity 터미널 입력' : 'Claude 질문 응답') : undefined}
           onContextMenu={onContextMenu}
         />
         {showHistory && !exit && !isChat && !chatAgent && (

@@ -60,6 +60,12 @@
   container: pane-map-agent / size;
 }
 
+/* An agent at work: the shared border trace (styles/app/agent-work-trace.css) inside the cell's
+   border. On the cell with the keyboard (accent background) it takes the text color to stay visible */
+.pane-map-cell.is-current[data-agent-work] {
+  --agent-trace-color: var(--on-accent);
+}
+
 .pane-map-cell-content {
   display: flex;
   flex-direction: column;

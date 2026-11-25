@@ -32,6 +32,7 @@ import { AgentChatImagePreview, useChatImageUrl } from './AgentChatImagePreview'
 import { AgentChatLinkPreview } from './AgentChatLinkPreview'
 import { ChatQuoteCards, ChatQuoteReply, ChatQuoteSelection, QuotedChatMessage, type ChatQuote } from './ChatQuote'
 import { SubagentConversation } from './SubagentConversation'
+import { ChatHandoff, ChatHandoffButton } from './ChatHandoff'
 import { useChatWindow } from './useChatWindow'
 import { isApprovalClick, isApprovalShortcut, useApprovalArming } from './useApprovalArming'
 import { isAwayFromBottom, isChatQuestion, previousQuestionIndex, questionLine } from '../../lib/chatScrollNav'
@@ -296,9 +297,10 @@ function ChatTimestamp({ value, alwaysVisible = false }: { value: number | null;
     data-always-visible={alwaysVisible || undefined}>{sendClock.format(date)}</time>
 }
 
-const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, waiting, onRetry, retryDisabled, onPin, onQuote, onCommand, onOpenImage, expanded, rememberDisclosure }: {
+const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, waiting, onRetry, retryDisabled, onPin, onQuote, onHandoff, onCommand, onOpenImage, expanded, rememberDisclosure }: {
   item: AgentChatItem; live: boolean; waiting?: 'queued' | 'input'; onPin?: (item: AgentChatItem) => void
   onQuote?: (text: string) => void
+  onHandoff?: (text: string) => void
   onRetry?: (id: string) => void; retryDisabled?: boolean
   onCommand?: (command: string, loginServer?: string) => void
   onOpenImage: (image: SentImageTarget) => void
@@ -355,9 +357,10 @@ const ChatItem = memo(function ChatItem({ item, sentImages, sendTime, live, wait
         <div className="agent-chat-incoming">
           <div className="agent-chat-assistant">
             <Markdown text={answer} />
-            {(onPin || onQuote) && (
+            {(onPin || onQuote || onHandoff) && (
               <div className="agent-chat-answer-actions">
                 {onQuote && answer.trim() && <ChatQuoteReply onClick={() => onQuote(answer)} />}
+                {onHandoff && answer.trim() && <ChatHandoffButton onClick={() => onHandoff(answer)} />}
                 {onPin && <button type="button" className="agent-chat-pin" aria-label="이 답변 띄워 두기" onClick={() => onPin(item)}>
                   <RiPushpinLine aria-hidden /> 띄워 두기
                 </button>}
@@ -477,8 +480,9 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   const highlighted = chosenQuestion && (chosenQuestion.itemId ?? chosenQuestion.id)
   const kind = chat?.kind ?? (isAgentChatProvider(agent?.kind) ? agent.kind : null)
   const antigravity = kind === 'antigravity'
+  const folderTrust = chat?.approval?.terminalOnly === 'folder-trust'
   const interactiveKind = kind === 'claude' || kind === 'codex' ? kind : null
-  const subagent = !interactiveKind || chat?.approval?.usesTerminalInput ? undefined : chat?.subagents.find(child => child.id === subagentId)
+  const subagent = !interactiveKind || folderTrust || chat?.approval?.usesTerminalInput ? undefined : chat?.subagents.find(child => child.id === subagentId)
   const preview = !subagent && linkPreview?.scope === scope ? linkPreview : null
   const activeImagePreview = !subagent && imagePreview?.scope === scope ? imagePreview : null
   const ProviderIcon = kind ? AGENT_PROVIDER_ICONS[kind] : null
@@ -500,8 +504,8 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   const answerableAsk = useMemo(() => (
     kind === 'claude' && chat?.state !== 'ended' ? answerableAskItem(liveItems, chat?.approval ?? null) : null
   ), [kind, liveItems, chat?.approval, chat?.state])
-  const askCard = answerableAsk && askInTerminal !== answerableAsk.id ? answerableAsk
-    : askSending && pendingAsk?.id === askSending.itemId ? pendingAsk : null
+  const askCard = !folderTrust && (answerableAsk && askInTerminal !== answerableAsk.id ? answerableAsk
+    : askSending && pendingAsk?.id === askSending.itemId ? pendingAsk : null)
   const composerBlocked = status === 'blocked' || Boolean(askCard)
   // Claude's question still waits but its dialog was not read off the screen (a layout not known): said
   // after a moment (the dialog closes a little before the answer is recorded), with the way to answer it
@@ -841,6 +845,9 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
       ]
     : webLinkItems(menu.href, destination => void openLink(menu.href, destination === 'internal' ? 'browser-tab' : 'browser'))
 
+  // `인계`: the answer shown in the hand-off card (ChatHandoff), or null while it is closed
+  const [handoffText, setHandoffText] = useState<string | null>(null)
+  const closeHandoff = useCallback(() => setHandoffText(null), [])
   const pinReply = useCallback(async (item: AgentChatItem) => {
     const pin = window.electronAPI.agentChatPin
     if (!pin) return
@@ -1361,6 +1368,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
                     expanded={disclosures.current.has(entry.item.id)} rememberDisclosure={rememberDisclosure}
                     onOpenImage={openImagePreview}
                     onQuote={canAddQuote ? addQuote : undefined}
+                    onHandoff={window.electronAPI.agentChatHandoff ? setHandoffText : undefined}
                     onPin={window.electronAPI.agentChatPin ? pinReply : undefined} />}
                   {line && <p className="agent-chat-usage" title={line.title}>{line.text}</p>}
                 </div>
@@ -1369,7 +1377,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
           </div>
         )}
         {chat?.state === 'opening' && !items.length && <p className="agent-chat-empty">대화를 불러오는 중…</p>}
-        {chat?.state === 'waiting' && !items.length && <p className="agent-chat-empty">대화가 시작되면 여기에 보입니다.</p>}
+        {chat?.state === 'waiting' && !items.length && !folderTrust && <p className="agent-chat-empty">대화가 시작되면 여기에 보입니다.</p>}
         {chat?.state === 'live' && !items.length && <p className="agent-chat-empty">아직 주고받은 말이 없습니다.</p>}
         {scrollNav.away && (
           <div className="agent-chat-scroll-control is-bottom">
@@ -1383,13 +1391,13 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
       </div>
       {!isOver && chat?.backgroundShells && <BackgroundShells {...chat.backgroundShells} />}
       {askCard && !isOver && <AskQuestionCard key={askCard.id} shellId={shellId} item={askCard} onTerminal={() => requestAnimationFrame(onFocusQuestion)} />}
-      {!antigravity && chat?.approval && !askCard && !isOver && (chat.approval.usesTerminalInput ? (
+      {!antigravity && chat?.approval && !askCard && !isOver && ((folderTrust || chat.approval.usesTerminalInput) ? (
         <div className="agent-chat-approval agent-chat-inline-question">
           <div role="status">
-            <div className="agent-chat-approval-state">답변 대기 중</div>
+            <div className="agent-chat-approval-state">{folderTrust ? '이 폴더를 신뢰할지 터미널에서 답해 주세요.' : '답변 대기 중'}</div>
             {chat.approval.question && <div className="agent-chat-approval-question">{chat.approval.question}</div>}
           </div>
-          <button type="button" className="agent-chat-head-btn" onClick={onFocusQuestion}>질문에 답하기</button>
+          <button type="button" className="agent-chat-head-btn" onClick={onFocusQuestion}>{folderTrust ? '터미널에서 답하기' : '질문에 답하기'}</button>
         </div>
       ) : <ApprovalCard key={chat.approval.signature} shellId={shellId} approval={chat.approval} />)}
       {askUnread && unreadAskId === askUnread && status !== 'blocked' && !isOver && (
@@ -1490,6 +1498,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
         </div>
       )}
       <ChatQuoteSelection coverRef={coverRef} logRef={logRef} enabled={canAddQuote} onQuote={addQuote} />
+      {handoffText !== null && <ChatHandoff shellId={shellId} answer={handoffText} source={mailAgent ?? null} onClose={closeHandoff} />}
       {menu && (
         <TerminalContextMenu
           key={`${menu.x}:${menu.y}`}

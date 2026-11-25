@@ -420,3 +420,20 @@ describe('the PC tabs setting', () => {
     expect(createAccessStore({ filePath }).tabs).toBe(false)
   })
 })
+
+describe('the browser review setting', () => {
+  it('keeps the browser off on existing profiles and persists it independently of SSH tabs', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-browser-review-'))
+    const filePath = path.join(dir, 'remote-access.json')
+    fs.writeFileSync(filePath, JSON.stringify({ enabled: true, tabs: true }))
+    const store = createAccessStore({ filePath })
+    expect(store.browserReview).toBe(false)
+    store.setBrowserReview(true)
+    store.setTabs(false)
+    const restored = createAccessStore({ filePath })
+    expect(restored.browserReview).toBe(true)
+    expect(restored.tabs).toBe(false)
+    restored.setBrowserReview(false)
+    expect(createAccessStore({ filePath }).browserReview).toBe(false)
+  })
+})

@@ -9,10 +9,9 @@ import { folderName } from '../../lib/agentHistory'
 import { gitLogKey, gitReads } from '../../lib/gitReadCache'
 import { isInsidePath, pathKey, worktreeOf } from '../../lib/localWorkspaceTree'
 import { SelectMenu } from '../ui/SelectMenu'
+import { loadGitLog, type GitLogAnswer } from '../../lib/workspaceGitReads'
 import { useCachedGitRead } from './useCachedGitRead'
 
-const readGit = (folder: string) => window.electronAPI.workspaceGitLog(folder)
-const readAllGit = (folder: string) => window.electronAPI.workspaceGitLog(folder, true)
 const ALL_BRANCHES = 'all-branches'
 
 type TargetChoice = { origin: string; value: string } | null
@@ -26,7 +25,6 @@ const useTargetChoice = create<{ choice: TargetChoice; setChoice: (next: TargetC
   setChoice: next => set(state => ({ choice: typeof next === 'function' ? next(state.choice) : next }))
 }))
 
-type GitLogAnswer = Awaited<ReturnType<typeof readGit>>
 
 /**
  * A folder's history: what was read last time shows at once (also during a refresh, so the tab below it
@@ -34,7 +32,7 @@ type GitLogAnswer = Awaited<ReturnType<typeof readGit>>
  */
 function useFolderData(folder: string | null, allBranches: boolean, revision: number) {
   const read = useCachedGitRead<GitLogAnswer | null>(folder === null ? null : gitLogKey(folder, allBranches),
-    () => (allBranches ? readAllGit : readGit)(folder as string).catch(() => null), revision)
+    () => loadGitLog(folder as string, allBranches), revision)
   return {
     result: read.value === undefined ? null : { data: read.value },
     latest: read.value ?? undefined,

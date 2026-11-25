@@ -7,6 +7,7 @@
 // Loaded by main.js at runtime (copied to out/main/src), so keep it CommonJS.
 const path = require('path')
 const { cleanChatText, chatSendResult, CHAT_PROVIDERS, REASONS } = require('../agentChat/ipc.js')
+const { createProjectId } = require('./projectId.js')
 
 const SHELL_ID = /^local:\d+$/
 /** An answer is not taken sooner than this after the device was sent the prompt (as on the PC) */
@@ -20,6 +21,7 @@ const MAX_CHATS_PER_DEVICE = 4
  * "for this session"): a phone may not pick them. Read from the label main read off the screen.
  */
 const STANDING_GRANT = /don['’]?t ask again|do not ask again|always|for (?:this|the rest of the) session|for the session|remember|다시 묻지|묻지 않|항상|계속 허용|이 세션|세션 동안|기억/i
+const isStandingGrant = option => STANDING_GRANT.test(String(option?.label ?? ''))
 
 const ERRORS = {
   off: '휴대폰에서 에이전트 쓰기가 꺼져 있습니다. PC 의 설정 > 원격 접속에서 켜 주세요.',
@@ -52,6 +54,25 @@ function folderNameOf(cwd) {
   return name ? name.slice(0, 120) : null
 }
 
+function projectForFolder(cwd, projects) {
+  if (typeof cwd !== 'string' || !cwd) return null
+  let match = null
+  let depth = 0
+  for (const project of projects) {
+    for (const worktree of project.worktrees) {
+      const relative = path.relative(worktree, cwd)
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue
+      const length = path.resolve(worktree).length
+      if (length <= depth) continue
+      depth = length
+      match = project
+    }
+  }
+  if (match) return match
+  const name = folderNameOf(cwd)
+  return name ? { key: cwd, name } : null
+}
+
 /** A line the phone may send: as the PC would take it, and no command of any kind */
 function phoneText(value) {
   const text = cleanChatText(value)
@@ -61,15 +82,22 @@ function phoneText(value) {
   return { text }
 }
 
+function phoneApproval(approval) {
+  if (!Array.isArray(approval?.options)) return approval
+  const options = approval.options.map(option => isStandingGrant(option) ? { ...option, phoneBlocked: true } : option)
+  return { ...approval, options }
+}
+
 /**
  * @param {object} deps
  * @param {() => object | null} deps.shells the local shells (src/localShell.js), or null before they exist
  * @param {object} deps.chats the chat follower (src/agentChat/chats.js)
  * @param {() => object[]} deps.agents agentMessages.snapshot().agents (roles, folders)
+ * @param {() => object[]} [deps.projects] the registered projects and their worktrees on the PC
  * @param {() => boolean} deps.isLocked
  * @param {() => boolean} deps.isEnabled `휴대폰에서 에이전트 쓰기` is on
  */
-function createAgentBridge({ shells, chats, agents = () => [], isLocked = () => false, isEnabled = () => false, now = Date.now }) {
+function createAgentBridge({ shells, chats, agents = () => [], projects = () => [], projectId = createProjectId(), isLocked = () => false, isEnabled = () => false, now = Date.now }) {
   /** `${viewer}\u0000${shellId}` → { agentId, kind, asked: { signature, at } | null } */
   const opened = new Map()
   const keyOf = (viewer, shellId) => `${viewer}\u0000${shellId}`
@@ -118,6 +146,7 @@ function createAgentBridge({ shells, chats, agents = () => [], isLocked = () => 
       const local = shells()
       if (!local) return []
       const known = new Map((agents() ?? []).filter((agent) => agent && agent.active).map((agent) => [agent.id, agent]))
+      const projectList = projects()
       const rows = []
       for (const entry of local.list()) {
         if (!entry || entry.exited || !SHELL_ID.test(entry.id)) continue
@@ -126,6 +155,8 @@ function createAgentBridge({ shells, chats, agents = () => [], isLocked = () => 
         const agentId = local.chatAgentId?.(entry.id) ?? null
         const record = agentId ? known.get(agentId) : null
         const status = typeof running.status === 'string' ? running.status : 'unknown'
+        const cwd = running.cwd ?? record?.cwd ?? entry.cwd
+        const project = projectForFolder(entry.cwd ?? cwd, projectList)
         rows.push({
           shellId: entry.id,
           agentId,
@@ -133,7 +164,8 @@ function createAgentBridge({ shells, chats, agents = () => [], isLocked = () => 
           name: agentName(running.kind, agentId),
           role: typeof record?.role === 'string' && record.role ? record.role : null,
           status,
-          folderName: folderNameOf(running.cwd ?? record?.cwd ?? entry.cwd),
+          folderName: folderNameOf(cwd),
+          project: project ? { id: projectId(project.key), name: project.name } : null,
           waitingApproval: status === 'blocked' || Boolean(local.approvalOf?.(entry.id))
         })
       }
@@ -172,6 +204,8 @@ function createAgentBridge({ shells, chats, agents = () => [], isLocked = () => 
           // The prompt this device was shown, and when: an answer must name it and wait a moment
           if (Object.prototype.hasOwnProperty.call(frame, 'approval')) {
             entry.asked = frame.approval?.signature ? { signature: frame.approval.signature, at: now() } : null
+            onFrame({ ...frame, approval: phoneApproval(frame.approval) })
+            return
           }
           onFrame(frame)
         }
@@ -246,7 +280,7 @@ function createAgentBridge({ shells, chats, agents = () => [], isLocked = () => 
       if (!prompt || prompt.signature !== signature) return { ok: false, error: ERRORS.notAsked }
       const option = (prompt.options ?? []).find((choice) => String(choice?.key) === key)
       if (!option) return { ok: false, error: ERRORS.badAnswer }
-      if (STANDING_GRANT.test(String(option.label ?? ''))) return { ok: false, error: ERRORS.standing }
+      if (isStandingGrant(option)) return { ok: false, error: ERRORS.standing }
       const result = await live.local.answerApproval(shellId, key, signature)
       if (refusal()) return { ok: false, error: refusal() }
       return result.ok ? { ok: true } : { ok: false, reason: result.reason, error: REASONS[result.reason] ?? '답하지 못했습니다.' }

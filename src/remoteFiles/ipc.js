@@ -218,7 +218,10 @@ function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLock
     try {
       const { root, path: relative } = request || {}
       const found = await resolveWorkspaceFile(event, root, relative)
-      if (!revealLocal || !(await stat(found.path)).isFile()) throw new DocumentError('파일을 찾을 수 없습니다.')
+      // A file, or a folder below the root (the root itself is the panel's own folder)
+      const info = await stat(found.path)
+      const revealable = info.isFile() || (info.isDirectory() && found.relative !== '')
+      if (!revealLocal || !revealable) throw new DocumentError('파일이나 폴더를 찾을 수 없습니다.')
       refuseWhileLocked()
       revealLocal(found.path)
       return { success: true }

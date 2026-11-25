@@ -128,6 +128,23 @@ async function run() {
     `))
     const afterExit = read(2, 'keys')
     check('the ended chat cannot send text into PowerShell', !(await sendText(second, 'never a shell command')).ok && read(2, 'keys') === afterExit)
+
+    fs.writeFileSync(path.join(profile, 'agy-legacy'), '')
+    const legacyShell = await openTab()
+    if (!await until(`/PS [A-Z]:/.test(${rows(legacyShell)})`)) throw new Error('Legacy fixture PowerShell did not start')
+    const write = command => js(`window.electronAPI.localShellWrite(${literal(legacyShell)}, ${literal(command + '\r')})`)
+    await write("agy 'two words'")
+    check('a manually typed legacy agy receives the original arguments without settings',
+      await waitForFile(() => read(3, 'legacy-args') === 'two words\r\n'))
+    await write('agy second')
+    check('the shell reuses the legacy capability check on the next launch',
+      await waitForFile(() => read(3, 'legacy-args') === 'two words\r\nsecond\r\n') && read(3, 'help') === 'probe\r\n')
+    check('the manual terminal shows the legacy chat warning once',
+      await until(`(${rows(legacyShell)}.match(/이 Antigravity CLI/g) ?? []).length === 1`))
+
+    const managedLegacy = await openTab('antigravity')
+    check('the app opens legacy agy without injecting settings into the managed launch',
+      await waitForFile(() => read(4, 'legacy-args') === '\r\n') && await until(`${rows(managedLegacy)}.includes('Legacy Antigravity started')`))
   } finally {
     for (const slot of [1, 2]) {
       if (fs.existsSync(file(slot, 'ready')) && !fs.existsSync(file(slot, 'ended'))) action(slot, 'exit')

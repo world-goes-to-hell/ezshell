@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
+import path from 'node:path'
 import { createAgentBridge, agentName, folderNameOf, phoneText, ANSWER_ARM_MS, MAX_CHATS_PER_DEVICE } from './agentBridge.js'
 
-function setup({ kind = 'claude', status = 'idle', approval = null, shellCount = 1 } = {}) {
+function setup({ kind = 'claude', status = 'idle', approval = null, shellCount = 1, projects } = {}) {
   let clock = 1_000
   const state = { kind, status, agentId: `${kind}-3`, sessionId: 'session-1', approval, exited: false }
   const ids = Array.from({ length: shellCount }, (_, index) => `local:${index + 1}`)
@@ -27,6 +28,7 @@ function setup({ kind = 'claude', status = 'idle', approval = null, shellCount =
     shells: () => local,
     chats,
     agents: () => [{ id: state.agentId, active: true, role: '리뷰어', cwd: 'D:\\work\\app' }],
+    projects,
     isLocked: () => flags.locked,
     isEnabled: () => flags.enabled,
     now: () => clock
@@ -54,7 +56,8 @@ describe('agentBridge helpers', () => {
 describe('createAgentBridge', () => {
   it('lists the agents with their role, status and folder name, and nothing while off or locked', () => {
     const { bridge, flags, state } = setup({ status: 'working' })
-    expect(bridge.list()).toEqual([{ shellId: 'local:1', agentId: 'claude-3', kind: 'claude', name: 'Claude Code 3', role: '리뷰어', status: 'working', folderName: 'app', waitingApproval: false }])
+    expect(bridge.list()).toEqual([{ shellId: 'local:1', agentId: 'claude-3', kind: 'claude', name: 'Claude Code 3', role: '리뷰어', status: 'working',
+      folderName: 'app', project: { id: expect.stringMatching(/^[\w-]{43}$/), name: 'app' }, waitingApproval: false }])
     state.approval = { signature: 's' }
     expect(bridge.list()[0].waitingApproval).toBe(true)
     flags.enabled = false
@@ -62,6 +65,29 @@ describe('createAgentBridge', () => {
     flags.enabled = true
     flags.locked = true
     expect(bridge.list()).toEqual([])
+  })
+
+  it('groups a registered project with its linked worktree and uses the deepest matching project', () => {
+    const root = path.resolve('projects', 'app')
+    const worktree = path.resolve('projects', 'app-feature')
+    const nested = path.join(root, 'nested')
+    const other = path.resolve('other', 'app')
+    const { local, bridge } = setup({
+      shellCount: 4,
+      projects: () => [
+        { key: root, name: 'app', worktrees: [root, worktree] },
+        { key: nested, name: 'nested', worktrees: [nested] }
+      ]
+    })
+    const originalList = local.list
+    local.list = () => originalList().map((entry, index) => ({
+      ...entry, cwd: [root, path.join(worktree, 'src'), nested, other][index]
+    }))
+    const projects = bridge.list().map(row => row.project)
+    expect(projects.map(project => project.name)).toEqual(['app', 'app', 'nested', 'app'])
+    expect(projects[0]).toEqual(projects[1])
+    expect(projects[0].id).not.toBe(projects[3].id)
+    expect(bridge.list().map(row => row.project)).toEqual(projects)
   })
 
   it('sends a line through chatSend only for the chat the device opened, with the same agent', async () => {
@@ -108,8 +134,13 @@ describe('createAgentBridge', () => {
     ('blocks a standing approval from a phone (%s)', async label => {
       const approval = { signature: 'sig', options: [{ key: '1', label: 'Yes' }, { key: '2', label }] }
       const { bridge, local, frames, tick } = setup({ approval })
-      bridge.open('v1', 'local:1', vi.fn())
+      const onFrame = vi.fn()
+      bridge.open('v1', 'local:1', onFrame)
       frames.get('v1')({ shellId: 'local:1', approval })
+      expect(onFrame).toHaveBeenCalledWith({ shellId: 'local:1', approval: { signature: 'sig', options: [
+        { key: '1', label: 'Yes' }, { key: '2', label, phoneBlocked: true }
+      ] } })
+      expect(approval.options[1]).toEqual({ key: '2', label })
       tick(ANSWER_ARM_MS)
       expect(await bridge.answer('v1', 'local:1', '2', 'sig')).toEqual({ ok: false, error: bridge.ERRORS.standing })
       expect(local.answerApproval).not.toHaveBeenCalled()

@@ -2,15 +2,19 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" content="#16181c">
+  <script src="/theme.js"></script>
   <meta name="robots" content="noindex">
   <title>ezShell</title>
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/app-icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="stylesheet" href="/vendor/xterm.css">
   <link rel="stylesheet" href="/vendor/title-bar.css">
   <link rel="stylesheet" href="/vendor/terminal-tabs.css">
   <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/vendor/agent-work-trace.css">
   <link rel="stylesheet" href="/agents.css">
 </head>
 <body>
@@ -18,8 +22,8 @@
   <main id="view-signin" class="view" hidden>
     <h1>ezShell</h1>
     <p id="signin-note" class="note">인증 앱의 6자리 코드를 입력하세요.</p>
-    <form id="signin-form" autocomplete="off">
-      <input id="signin-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="000000" aria-label="인증 코드" required>
+    <form id="signin-form">
+      <input id="signin-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000" aria-label="인증 코드" required>
       <label id="signin-remember-row" class="check"><input id="signin-remember" type="checkbox" checked> 하루 동안 이 기기 기억 (코드 없이 접속)</label>
       <button type="submit" class="primary">접속</button>
     </form>
@@ -31,39 +35,67 @@
     <h1>ezShell</h1>
     <p id="message-text" class="note"></p>
     <button id="message-retry" type="button" class="primary" hidden>다시 접속</button>
+    <form id="pair-link-form" autocomplete="off" hidden>
+      <label for="pair-link">새 기기 등록 링크</label>
+      <input id="pair-link" type="url" maxlength="2048" autocapitalize="off" spellcheck="false" required placeholder="PC에서 복사한 등록 링크">
+      <button type="submit" class="primary">기기 등록</button>
+      <p id="pair-link-error" class="error" role="alert" hidden></p>
+    </form>
   </main>
 
   <header id="workspace-header" class="title-bar workspace-header" hidden>
+    <button id="workspace-menu" type="button" class="title-bar-btn workspace-menu" aria-label="목록 열기" aria-expanded="false" aria-controls="workspace-sidebar">☰</button>
     <span class="title-bar-drag"><img class="title-bar-icon" src="/app-icon.svg" alt=""><span class="title-bar-title">ezShell</span></span>
     <div class="title-bar-controls">
+      <button id="workspace-install" type="button" class="title-bar-btn" hidden>앱 설치</button>
+      <button id="workspace-split-toggle" type="button" class="title-bar-btn" aria-pressed="false" hidden>나란히 보기</button>
       <button id="workspace-activity" type="button" class="title-bar-btn" aria-pressed="false">MCP 활동</button>
     </div>
   </header>
   <footer id="workspace-status" class="workspace-status" hidden>
     <span class="workspace-connection"><span aria-hidden="true"></span>원격 연결됨</span>
+    <span id="workspace-shell-count">셸 0</span>
+    <span id="workspace-approval-count">MCP 대기 0</span>
+    <span id="workspace-working-count">작업 중 0</span>
     <span id="workspace-device"></span>
   </footer>
 
-  <!-- Saved sessions and running agents occupy the desktop sidebar. -->
-  <aside id="workspace-sidebar" aria-label="작업 목록">
+  <button id="workspace-scrim" type="button" aria-label="목록 닫기" hidden></button>
+  <aside id="workspace-sidebar" aria-label="작업 목록" tabindex="-1" hidden>
+  <div id="workspace-sidebar-controls" class="workspace-sidebar-controls" hidden>
+    <button id="workspace-sidebar-toggle" class="ghost" type="button" aria-expanded="true" aria-label="사이드바 접기" title="사이드바 접기">‹</button>
+    <div id="workspace-sidebar-summary" class="workspace-sidebar-summary" hidden>
+      <button id="sidebar-session-status" class="sidebar-rail-item" type="button" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg>
+        <span id="sidebar-session-connected" class="sidebar-rail-count is-connected" aria-hidden="true" hidden></span>
+        <span id="sidebar-session-lost" class="sidebar-rail-count is-lost" aria-hidden="true" hidden></span>
+      </button>
+      <button id="sidebar-agent-status" class="sidebar-rail-item" type="button" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4m-4 0h8"/></svg>
+        <span id="sidebar-agent-count" class="sidebar-rail-count" aria-hidden="true" hidden></span>
+      </button>
+      <button id="sidebar-pc-status" class="sidebar-rail-item" type="button" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18m-13-5v5"/></svg>
+        <span id="sidebar-pc-count" class="sidebar-rail-count" aria-hidden="true" hidden></span>
+      </button>
+      <button id="sidebar-approval-status" class="sidebar-rail-item" type="button" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 8V4m6 4V4M6 8h12v3a6 6 0 0 1-12 0Zm6 9v4"/></svg>
+        <span id="sidebar-approval-count" class="sidebar-rail-count is-pending" aria-hidden="true" hidden></span>
+      </button>
+    </div>
+  </div>
   <section id="view-sessions" class="view tabbed-view workspace-list" aria-label="저장된 세션" hidden>
     <header class="bar">
-      <strong><span class="compact-heading">세션</span><span class="workspace-heading">연결 목록</span></strong>
-      <span id="device-name" class="muted"></span>
+      <strong>연결 목록</strong>
       <button id="push-toggle" type="button" class="chip" aria-pressed="false" hidden>알림 켜기</button>
       <button id="sessions-refresh" type="button" class="ghost icon" aria-label="세션 목록 새로 받기">↻</button>
     </header>
     <p id="pc-tabs-status" class="note muted" role="status" hidden></p>
     <p id="push-status" class="muted" role="status" hidden></p>
-    <button id="terminal-return" type="button" class="ghost terminal-return" hidden></button>
     <label class="session-search"><span aria-hidden="true"></span><input id="session-filter" type="search" placeholder="세션 이름으로 찾기" aria-label="세션 찾기"></label>
     <div id="session-list" class="list tree"></div>
   </section>
   <section id="view-agents" class="view tabbed-view workspace-list" aria-label="에이전트 목록" hidden></section>
-  </aside>
-
-  <div id="workspace-tabs" class="terminal-tabs terminal-tab-header">
-    <div id="workspace-current" class="terminal-tab-items workspace-current" hidden></div>
   <section id="view-tabs" class="view tabbed-view workspace-list" aria-label="PC 탭 목록" hidden>
     <header class="bar">
       <strong>PC 탭</strong>
@@ -71,7 +103,12 @@
     </header>
     <div id="pc-tabs-list" class="list pc-tabs-list" aria-live="polite"></div>
   </section>
-  </div>
+  </aside>
+  <div id="workspace-sidebar-divider" class="workspace-divider sidebar-divider" role="separator" aria-label="사이드바 너비" aria-orientation="vertical" tabindex="0" hidden></div>
+
+  <nav id="workspace-tabs" class="terminal-tabs terminal-tab-header" aria-label="열린 탭" hidden>
+    <div id="workspace-current" class="terminal-tab-items workspace-current"></div>
+  </nav>
 
   <!-- MCP activity: requests and what they printed -->
   <main id="view-activity" class="view tabbed-view workspace-detail" hidden>
@@ -82,29 +119,25 @@
     <div id="activity-list" class="list activity" aria-live="polite"></div>
   </main>
 
+  <div id="workspace-content" class="workspace-content" hidden>
+  <section id="workspace-primary" class="workspace-pane" aria-label="첫 번째 화면">
   <main id="view-chat" class="view tabbed-view workspace-detail" hidden></main>
 
   <main id="workspace-empty" class="view workspace-detail workspace-empty" hidden>
     <img src="/app-icon.svg" alt="" width="48" height="48">
     <p id="workspace-empty-title"></p>
+    <button id="workspace-empty-open" type="button" class="ghost">목록 열기</button>
   </main>
 
-  <nav id="tabs" class="tabs" aria-label="화면" hidden>
-    <button type="button" data-view="sessions" aria-current="page">세션</button>
-    <button type="button" data-view="tabs" hidden>PC 탭</button>
-    <button type="button" data-view="activity">MCP 활동</button>
-    <button type="button" data-view="agents" hidden>에이전트</button>
-  </nav>
-
-  <!-- One terminal -->
+  <!-- Each open SSH tab has its own xterm host. -->
   <main id="view-terminal" class="view terminal-view workspace-detail" hidden>
     <header class="bar">
-      <button id="terminal-back" type="button" class="ghost workspace-return" aria-label="세션 목록으로"><span>‹ 목록</span><span aria-hidden="true">‹</span></button>
       <strong id="terminal-name"></strong>
-      <span id="terminal-state" class="muted" role="status"></span>
+      <span id="terminal-state" class="muted workspace-terminal-state" role="status"></span>
       <button id="terminal-close" type="button" class="ghost terminal-close" hidden>연결 종료</button>
+      <button id="terminal-reopen" type="button" class="ghost terminal-close" hidden>다시 열기</button>
     </header>
-    <div id="terminal-host"></div>
+    <div id="terminal-host" class="workspace-terminal-host"></div>
     <div id="keys" class="keys" role="toolbar" aria-label="추가 키">
       <button type="button" data-key="esc">Esc</button>
       <button type="button" data-key="tab">Tab</button>
@@ -120,23 +153,54 @@
     </div>
   </main>
 
-  <main id="view-tab-terminal" class="view terminal-view workspace-detail" hidden>
+  <main id="view-tab-terminal" class="view terminal-view workspace-detail workspace-pc-view" hidden>
     <header class="bar">
-      <button id="pc-tab-back" type="button" class="ghost workspace-return" aria-label="PC 탭 목록으로"><span>‹ 목록</span><span aria-hidden="true">×</span></button>
       <strong id="pc-tab-name"></strong>
-      <span id="pc-tab-mode" class="muted" hidden>보기만</span>
+      <span id="pc-tab-mode" class="muted pc-tab-mode" hidden>보기만</span>
     </header>
     <p id="pc-tab-notice" class="muted pc-tab-notice" role="status" hidden></p>
     <div id="pc-tab-viewport" class="pc-tab-viewport">
       <div id="pc-tab-host" class="pc-tab-host"></div>
     </div>
+    <section id="pc-browser-view" class="remote-browser" aria-label="브라우저 요소 검토" hidden>
+      <div class="remote-browser-tools">
+        <button id="pc-browser-up" type="button" aria-label="페이지 위로" title="페이지 위로">↑</button>
+        <button id="pc-browser-down" type="button" aria-label="페이지 아래로" title="페이지 아래로">↓</button>
+        <button id="pc-browser-refresh" type="button" aria-label="PC 화면 다시 가져오기" title="PC 화면 다시 가져오기">↻</button>
+        <button id="pc-browser-pick" class="chip remote-browser-pick" type="button" aria-pressed="false">요소 선택</button>
+      </div>
+      <p id="pc-browser-note" class="muted remote-browser-note" role="status" hidden></p>
+      <div id="pc-browser-picture" class="remote-browser-picture" aria-label="PC에서 열린 웹페이지">
+        <img id="pc-browser-image" class="remote-browser-image" alt="PC 브라우저 화면" draggable="false" hidden>
+        <div id="pc-browser-outline" class="remote-browser-outline" aria-hidden="true" hidden></div>
+      </div>
+      <form id="pc-browser-form" class="remote-browser-form" hidden>
+        <div class="remote-browser-selection">
+          <strong id="pc-browser-element"></strong>
+          <code id="pc-browser-selector"></code>
+        </div>
+        <div class="remote-browser-compose">
+          <label for="pc-browser-agent" class="remote-browser-agent-label">받는 에이전트</label>
+          <select id="pc-browser-agent" required></select>
+          <textarea id="pc-browser-draft" aria-label="수정 요청" placeholder="이 요소를 어떻게 수정할까요?" rows="2" maxlength="4000" required></textarea>
+          <button id="pc-browser-send" class="primary remote-browser-send" type="submit">수정 요청 보내기</button>
+        </div>
+      </form>
+    </section>
   </main>
+  </section>
+  <div id="workspace-split-divider" class="workspace-divider split-divider" role="separator" aria-label="화면 나누기 너비" aria-orientation="vertical" tabindex="0" hidden></div>
+  <section id="workspace-secondary" class="workspace-pane" aria-label="두 번째 화면" hidden></section>
+  </div>
+  <div id="workspace-context-menu" class="workspace-context-menu" role="menu" aria-label="탭 및 터미널 메뉴" hidden></div>
+  <p id="workspace-clipboard-status" class="approval-toast" role="status" hidden></p>
 
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/xterm-addon-fit.js"></script>
   <script src="/sessions.js"></script>
   <script src="/approvals.js"></script>
   <script src="/activity.js"></script>
+  <script src="/browser.js"></script>
   <script src="/tabs.js"></script>
   <script src="/agents.js"></script>
   <script src="/push.js"></script>

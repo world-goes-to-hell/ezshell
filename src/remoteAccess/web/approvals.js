@@ -132,12 +132,22 @@
     let queue = []
     let timer = 0
     let toastTimer = 0
+    let returnFocus = null
     let visibleAt = document.visibilityState === 'visible' ? Date.now() : Infinity
 
     document.addEventListener('visibilitychange', () => {
       // Back on screen: the buttons wait again, so a tap meant for something else does not answer
       visibleAt = document.visibilityState === 'visible' ? Date.now() : Infinity
       refresh()
+    })
+    layer.addEventListener('keydown', event => {
+      if (event.key !== 'Tab' || !current) return
+      const targets = [...layer.querySelectorAll('[tabindex="0"], button:not(:disabled)')]
+      const index = targets.indexOf(document.activeElement)
+      if (targets.length && index >= 0 && (event.shiftKey ? index > 0 : index < targets.length - 1)) return
+      event.preventDefault()
+      const target = (event.shiftKey ? targets.at(-1) : targets[0]) ?? current.card
+      target.focus()
     })
 
     function showToast(text) {
@@ -241,6 +251,7 @@
     }
 
     function show(request) {
+      if (layer.hidden && !returnFocus) returnFocus = document.activeElement
       const receivedAt = Date.now()
       const deadline = Number.isFinite(request.remainingMs) ? receivedAt + request.remainingMs : Number(request.expiresAt) || receivedAt
       const parts = build(request)
@@ -266,6 +277,8 @@
       layer.append(parts.card)
       layer.hidden = false
       layer.scrollTop = 0
+      parts.card.tabIndex = -1
+      parts.card.focus({ preventScroll: true })
       clearInterval(timer)
       timer = setInterval(refresh, TICK_MS)
       refresh()
@@ -302,9 +315,14 @@
       layer.textContent = ''
       const next = queue.shift()
       if (next) show(next)
+      else {
+        if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true })
+        returnFocus = null
+      }
     }
 
     return {
+      get isOpen() { return Boolean(current) },
       /** A request started (also each one in `ready.approvals`) */
       add(request) {
         if (!request || typeof request.id !== 'string') return

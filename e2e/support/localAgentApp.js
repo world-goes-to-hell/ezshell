@@ -1,5 +1,5 @@
 // Launch the real Electron app with local fixtures for the clipboard and the two agent executables.
-const { app, clipboard, ClipboardItem, dialog, ipcMain, nativeImage } = require('electron')
+const { app, clipboard, ClipboardItem, dialog, ipcMain, nativeImage, Notification } = require('electron')
 const fs = require('fs')
 const path = require('path')
 const pty = require('node-pty')
@@ -7,6 +7,15 @@ const { PROMPT, BUSY_PROMPT, REMIND_PROMPT } = require('../../src/ipc/agentInbox
 const { createFakeAskDialog } = require('./fakeAskDialog.js')
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
+process.env.CODEX_HOME = path.join(profile, 'codex-home')
+const notificationLog = path.join(profile, 'test-notifications')
+const notificationSupported = Notification.isSupported.bind(Notification)
+const showNotification = Notification.prototype.show
+Notification.isSupported = () => fs.existsSync(notificationLog) || notificationSupported()
+Notification.prototype.show = function (...args) {
+  if (!fs.existsSync(notificationLog)) return showNotification.apply(this, args)
+  fs.appendFileSync(notificationLog, JSON.stringify({ title: this.title, body: this.body }) + '\n')
+}
 const writeClipboard = clipboard.writeText.bind(clipboard)
 clipboard.writeText = (text, ...args) => {
   if (path.basename(text) === 'passwords.csv' && path.basename(path.dirname(text)).startsWith('ezshell-password-import-')) {
@@ -135,15 +144,25 @@ pty.spawn = (file, args, options) => {
     } else if (id?.startsWith('codex-') && ['/fast', '/ultrafas', '/ultrafast'].includes(pasted) && process.env.EZSHELL_TEST_AGENT_CHAT) {
       pending = pasted === '/ultrafas' ? 'speed-probe' : pasted.slice(1) + '-toggles'
       fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
-    } else if (id && pasted === '/config' && process.env.EZSHELL_TEST_AGENT_CHAT) {
+    } else if (id && process.env.EZSHELL_TEST_AGENT_CHAT && (pasted === '/config' || (id.startsWith('codex-') && pasted === '/model'))) {
       // A slash command that opens a screen of the CLI's own: Enter opens it, Esc closes it
-      pending = 'screen-command'
+      pending = pasted === '/model' ? 'model-screen' : 'screen-command'
       fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
-    } else if (pending === 'screen-command' && data === '\r') {
+    } else if (['screen-command', 'model-screen'].includes(pending) && data === '\r') {
+      const screen = pending === 'model-screen' ? [
+        '🔌  MCP Tools',
+        '  • codex_apps: connected (108 tools)',
+        '',
+        '  Select Model and Effort',
+        '› 1. GPT-6.2-Sol (current)  Fast model.',
+        '  2. GPT-6.2-Astra          For complex work.',
+        '  ↓',
+        '  enter select · esc back'
+      ].join('\r\n') : 'Settings\r\n  Theme      dark\r\n  Esc to close'
       pending = null
       screenOpen = true
       fs.writeFileSync(path.join(profile, id + '-draft'), '')
-      fs.writeFileSync(path.join(profile, id + '-screen'), 'Settings\r\n  Theme      dark\r\n  Esc to close')
+      fs.writeFileSync(path.join(profile, id + '-screen'), screen)
     } else if (screenOpen && data === '\x1b') {
       screenOpen = false
       fs.appendFileSync(path.join(profile, id + '-screen-closed'), 'x')

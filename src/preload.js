@@ -243,6 +243,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('agent-message-delivered', handler);
     return () => ipcRenderer.removeListener('agent-message-delivered', handler);
   },
+  onAgentEscalation: (callback) => {
+    const handler = (_event, notice) => callback(notice);
+    ipcRenderer.on('agent-escalation', handler);
+    return () => ipcRenderer.removeListener('agent-escalation', handler);
+  },
   localShellWrite: (id, data) => ipcRenderer.send('local-shell-write', { id, data }),
   localShellComposing: (id, value) => ipcRenderer.send('local-shell-composing', { id, value }),
   localShellResize: (id, cols, rows) => ipcRenderer.send('local-shell-resize', { id, cols, rows }),
@@ -301,6 +306,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentChatLinkPreview: (shellId, link) => ipcRenderer.invoke('agent-chat-preview-link', { shellId, link }),
   // An answer pinned into a window of its own (the chat view pins, the pinned window asks about itself)
   agentChatPin: (request) => ipcRenderer.invoke('agent-chat-pin', request),
+  agentChatHandoff: (request) => ipcRenderer.invoke('agent-chat-handoff', request),
   pinnedReplyGet: () => ipcRenderer.invoke('pinned-reply-get'),
   pinnedReplyOpenLink: (href, how) => ipcRenderer.invoke('pinned-reply-open-link', { href, how }),
   pinnedReplyFold: (folded) => ipcRenderer.send('pinned-reply-fold', folded),
@@ -339,9 +345,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   // Remote access (settings page of the main window)
   remoteAccessStatus: () => ipcRenderer.invoke('remote-access-status'),
+  remoteAccessSetProjects: (projects, reviewGroups) => ipcRenderer.send('remote-access-local-projects', projects, reviewGroups),
   remoteAccessSetEnabled: (isEnabled) => ipcRenderer.invoke('remote-access-set-enabled', isEnabled),
   remoteAccessSetAnswerMcp: (isOn) => ipcRenderer.invoke('remote-access-set-answer-mcp', isOn),
   remoteAccessSetTabs: (isOn) => ipcRenderer.invoke('remote-access-set-tabs', isOn),
+  remoteAccessSetBrowserReview: (isOn) => ipcRenderer.invoke('remote-access-set-browser-review', isOn),
   remoteAccessSetAgents: (isOn) => ipcRenderer.invoke('remote-access-set-agents', isOn),
   remoteAccessPairing: () => ipcRenderer.invoke('remote-access-pairing'),
   remoteAccessAuthenticator: () => ipcRenderer.invoke('remote-access-authenticator'),
@@ -529,6 +537,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
   restoreTabsSave: (record) => ipcRenderer.invoke('restore-tabs-save', record),
   restoreTabsTake: () => ipcRenderer.invoke('restore-tabs-take'),
+  restoreTabsCheckpoint: (record) => ipcRenderer.send('restore-tabs-checkpoint', record),
   onRestoreTabsBeforeClose: (readRecord) => {
     const handler = (_, id) => {
       let record = null;
