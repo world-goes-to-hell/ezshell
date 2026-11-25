@@ -27,6 +27,7 @@ const CHAT_EDITOR_QUIET = 300
 const CHAT_INPUT_TIMEOUT = 5000
 const CHAT_DRAFT_TIMEOUT = 2000
 const CHAT_CLEAR_SETTLE = 140
+const CLAUDE_TAKE_BACK_LIMIT = 10
 // Ctrl+U and Ctrl+K clear both sides of Claude's cursor. Match Orca's bounded multiline clear.
 const CLAUDE_CLEAR_DRAFT = '\x15'.repeat(29) + '\x0b'.repeat(29)
 // A CLI that has not reported its state yet (just started, before its first turn) is taken to wait for
@@ -34,6 +35,32 @@ const CLAUDE_CLEAR_DRAFT = '\x15'.repeat(29) + '\x0b'.repeat(29)
 const QUIET_MS = 1500
 const submitKey = data => /^(?:\r|\n|\x1b\[13(?:;1)?u)$/.test(data)
 const compact = text => text.replace(/\s/g, '')
+// All whitespace has already been removed, including visual line breaks inside a Claude chip.
+const CLAUDE_PASTE_CHIP = /\[Pastedtext#[1-9]\d*(?:\+[1-9]\d*lines|[1-9]\d*chars)?\](?:#[1-9]\d*)?/g
+
+function matchesClaudePaste(displayed, expected, previousDisplay, requireChipOnly) {
+  const pieces = displayed.split(CLAUDE_PASTE_CHIP)
+  if (pieces.length < 2 || !expected) return false
+  if (previousDisplay) {
+    const before = compact(previousDisplay)
+    // A clear can finish without an empty redraw. A prior chip or retained draft text cannot
+    // prove that the new chips replaced it.
+    if (before && (displayed.includes(before) || before.split(CLAUDE_PASTE_CHIP).length > 1 ||
+        (requireChipOnly && pieces.some(Boolean)))) return false
+  }
+  const prefix = pieces.shift()
+  const suffix = pieces.pop()
+  if (!expected.startsWith(prefix) || !expected.endsWith(suffix)) return false
+  let at = prefix.length
+  const end = expected.length - suffix.length
+  for (const piece of pieces) {
+    const next = expected.indexOf(piece, at)
+    if (next < 0) return false
+    at = next + piece.length
+  }
+  return at <= end
+}
+
 const claudeRule = /^\s*─{8,}\s*$/u
 // Claude writes a label (a session name, a subagent's task) at the right end of its composer's top rule.
 // A long one leaves few or no dashes and ends in an ellipsis: " 운영 도메인 … ─" (2026-11-24)
@@ -563,6 +590,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   // The prior chat paste can need time to leave the composer or need clearing on the next send.
   let chat = null
   let lastChatDraft = null
+  let claudeSentDrafts = []
+  let claudeTakeBack = null
   // Per-PTY sequencing follows Orca (MIT), native-chat-pty-send-queue.ts. A paste and its delayed
   // Enter own the editor until both writes finish, so the next send cannot merge into that draft.
   const chatQueue = []
@@ -721,6 +750,13 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     // Keep the attempt marked even if the PTY write fails, since delivery may be uncertain.
     lastChatDraft = { ...chat.draft, sent: true, displayed: input.text, enterOutputVersion: outputVersion }
     const ok = rawWrite('\r')
+    if (kind === 'claude') {
+      if (ok && input.endsAtCursor && (input.text === chat.text || input.text === chat.draft.displayedPaste)) {
+        claudeSentDrafts = [...claudeSentDrafts.slice(1 - CLAUDE_TAKE_BACK_LIMIT), lastChatDraft]
+      } else {
+        claudeSentDrafts = []
+      }
+    }
     userDraft = false
     holdUntil = now + INPUT_TIMEOUT
     finishChat(ok ? { ok: true } : { ok: false, reason: 'write-failed' }, false)
@@ -811,9 +847,15 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     const parsed = composer(chat.draft ? Infinity : chat.length, chat.lines, matchesAttachments)
     const input = chat.draft ? (!shellAtCursor() && (parsed ?? (!chat.requireExact && visibleComposer()))) : parsed
     if (blocked) return finish('approval')
+    const claudePaste = kind === 'claude' && input?.endsAtCursor && !chat.claudeImages
+      && matchesClaudePaste(input.text, chat.text, chat.unverifiedDisplay, Boolean(chat.force))
+    if (claudePaste && chat.draft && parsedOutputVersion > chat.pasteOutputVersion) {
+      chat.draft.displayedPaste = input.text
+    }
     const drawn = input?.endsAtCursor && (matchesAttachments ? matchesAttachments(input.text) : (
-      input.text === chat.text || (chat.claudeImages && matchesImageCount(input.text, chat.claudeImages.count, chat.claudeImages.text))
-      || (!chat.unverifiedDisplay && PASTED_PLACEHOLDER.test(input.text))
+      input.text === chat.text || claudePaste
+      || (chat.claudeImages && matchesImageCount(input.text, chat.claudeImages.count, chat.claudeImages.text))
+      || ((kind !== 'claude' || chat.claudeImages) && !chat.unverifiedDisplay && PASTED_PLACEHOLDER.test(input.text))
     ))
     if (chat.draft) return checkOrdinaryChat(now, input, drawn)
     const command = chat.codexSpeed
@@ -1072,11 +1114,28 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     return { lines, wraps }
   }
 
+  function resetClaudeTakeBack() {
+    claudeSentDrafts = []
+    claudeTakeBack = null
+  }
+
+  function matchesReturnedClaudePaste(input, texts) {
+    if (!claudeTakeBack || Date.now() >= claudeTakeBack.until || userDraft ||
+        parsedOutputVersion !== outputVersion || outputVersion <= claudeTakeBack.interruptedAt ||
+        shellAtCursor() || chatBlocked()) return false
+    const previous = claudeTakeBack.drafts.slice(-texts.length)
+    return previous.length === texts.length &&
+      previous.some(draft => draft.displayedPaste) &&
+      previous.every((draft, index) => draft.text === compact(texts[index])) &&
+      previous.map(draft => draft.displayed).join('') === input.text
+  }
+
   function userInput(data) {
     finishApprovalAnswer({ ok: false, reason: 'changed' })
     forceSendOffer = null
     emptyClaudeTarget = null
     lastChatDraft = null
+    resetClaudeTakeBack()
     expiredWake = null
     cancelQueuedChats('interrupted')
     if (chat && (chat.draft || chat.codexImages || (data === '\x1b' && !chat.probe))) {
@@ -1182,7 +1241,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
             && parsedOutputVersion <= previous.enterOutputVersion
           const ours = !empty && sameTarget && input.text
             && (previous.sent || (input.endsAtCursor && (kind !== 'codex' || !input.text.includes('↑'))))
-            && (input.text.normalize() === previous.text.normalize() || (previous.sent && input.text === previous.displayed))
+            && (input.text.normalize() === previous.text.normalize() || (previous.sent && input.text === previous.displayed)
+              || (!userDraft && input.text === previous.displayedPaste))
             && (!previous.verify || previous.verify(target))
           const offer = forceSendOffer
           forceSendOffer = null
@@ -1199,6 +1259,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
 
           clearTimeout(timer)
           expiredWake = null
+          claudeTakeBack = null
           const claudeImages = kind === 'claude' && images ? { count: images.count, text: compact(images.text) } : null
           const compactText = compact(text)
           // Codex recognizes each local image when its path is pasted on its own.
@@ -1266,9 +1327,13 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         const input = composer(length, texts.reduce((count, text) => count + text.split('\n').length, 0))
         if (!input || input.atStart) return resolve({ ok: false, reason: 'empty' })
         if (!parentInput(targetOf(input))) return resolve({ ok: false, reason: 'different' })
-        if (!input.endsAtCursor || input.text !== compact(joined)) return resolve({ ok: false, reason: 'different' })
+        const sameText = input.text === compact(joined)
+        const recoveredPaste = !sameText && input.endsAtCursor && matchesReturnedClaudePaste(input, texts)
+        if (!input.endsAtCursor || (!sameText && !recoveredPaste)) return resolve({ ok: false, reason: 'different' })
+        resetClaudeTakeBack()
         // One key per character from the end; extra keys on an empty composer do nothing
-        if (!rawWrite('\x7f'.repeat(Array.from(joined).length + texts.length), false)) return resolve({ ok: false, reason: 'write-failed' })
+        const displayed = recoveredPaste ? input.display : joined
+        if (!rawWrite('\x7f'.repeat(Array.from(displayed).length + texts.length), false)) return resolve({ ok: false, reason: 'write-failed' })
         expiredWake = null
         const expires = Date.now() + INPUT_TIMEOUT
         const check = () => {
@@ -1285,6 +1350,14 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       })
     },
     userInput,
+    interruptChat() {
+      const drafts = claudeSentDrafts
+      userInput('\x1b')
+      // Only a deliberate chat Esc can authorize taking back the exact chips observed at Enter.
+      if (drafts.some(draft => draft.displayedPaste)) {
+        claudeTakeBack = { drafts, interruptedAt: outputVersion, until: Date.now() + CHAT_INPUT_TIMEOUT }
+      }
+    },
     deferProbeInput(data) {
       if (!chat?.probe) return false
       chat.terminalInput.push(data)
@@ -1298,6 +1371,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         expiredWake = null
         finishApprovalAnswer({ ok: false, reason: 'changed' })
         lastChatDraft = null
+        resetClaudeTakeBack()
         cancelQueuedChats('interrupted')
         if (chat?.draft) finishChat({ ok: false, reason: 'interrupted' }, false)
       }
@@ -1315,6 +1389,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         emptyClaudeTarget = null
         finishApprovalAnswer({ ok: false, reason: 'changed' })
         lastChatDraft = null
+        resetClaudeTakeBack()
         cancelQueuedChats('interrupted')
         if (chat?.draft) finishChat({ ok: false, reason: 'interrupted' }, false)
       }

@@ -67,13 +67,13 @@ async function run() {
         time.dateTime === '2026-11-23T14:50:27.000Z' && /년.*:\\d{2}:27/.test(time.title || time.dataset.heldTitle || '')
     })()`, 3000))
     if (!outgoing) {
-      check(`${name} places both answer buttons outside the bubble`, await until(`(() => {
+      // Above the bubble, not beside it: a column beside every answer kept ~200px empty (2026-11-25)
+      check(`${name} floats both answer buttons above the bubble`, await until(`(() => {
         const rect = ${bubble}.getBoundingClientRect()
         const buttons = [...${row}.querySelectorAll('.agent-chat-answer-actions button')]
-        return buttons.length === 2 && buttons.every(button => {
+        return buttons.length >= 2 && buttons.every(button => {
           const bounds = button.getBoundingClientRect()
-          return getComputedStyle(button).opacity === '1' &&
-            (bounds.left >= rect.right + 5 || bounds.bottom <= rect.top - 3)
+          return getComputedStyle(button).opacity === '1' && bounds.bottom <= rect.top - 3
         })
       })()`, 3000))
     }
@@ -157,9 +157,9 @@ async function run() {
     await chooseTheme('카톡 모드', 'chat-kakao')
     await js(`${cover}?.style.setProperty('inline-size', '244px')`)
     const narrowAnswer = rowOf('time-narrow:0')
-    const narrowLayout = `${narrowAnswer}?.querySelector('.agent-chat-assistant')`
-    if (!await until(`${narrowLayout} && getComputedStyle(${narrowLayout}).flexDirection === 'column-reverse'`)) {
-      throw new Error('The answer did not switch to the narrow layout')
+    const narrowActions = `${narrowAnswer}?.querySelector('.agent-chat-answer-actions')`
+    if (!await until(`${narrowActions} && getComputedStyle(${narrowActions}).position === 'absolute'`)) {
+      throw new Error('The narrow answer did not render its floating buttons')
     }
     const log = `${cover}?.querySelector('.agent-chat-log')`
     await js(`${log}?.scrollTo({ top: ${log}.scrollHeight, behavior: 'instant' })`)

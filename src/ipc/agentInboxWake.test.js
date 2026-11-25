@@ -1043,6 +1043,49 @@ describe('a line sent from the chat view (submitText)', () => {
       expect(rawWrite.mock.calls).toEqual([[bracketedPaste('My new question')], ['\r']])
     })
 
+    it.each([
+      ['one chip', '[Pasted text #13 +39 lines]'],
+      ['wrapped chip', '[Pasted text #13 +39\nlines]'],
+      ['multiple chips with surrounding text', 'Prefix [Pasted text #13 +20 lines] [Pasted text #14 +19 lines] Suffix']
+    ])('submits a long Claude paste over a verified suggestion when it draws %s', async (_shape, rendered) => {
+      const { rawWrite } = chatSetup()
+      const text = 'Prefix\n' + 'Sample line\n'.repeat(39) + 'Suffix'
+      await paint(ruledClaude(100, ['']))
+      await paint(ruledClaude(100, [graySuggestion], false) + caretAtStart)
+      const sent = wake.submitText(text)
+      await paint(ruledClaude(100, rendered.split('\n')))
+      await vi.advanceTimersByTimeAsync(5100)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[bracketedPaste(text)], ['\r']])
+    })
+
+    it('submits a new long Claude paste after force clearing without an empty redraw', async () => {
+      const { rawWrite } = chatSetup()
+      const text = 'Sample line\n'.repeat(39).trimEnd()
+      await paint(ruledClaude(100, [graySuggestion], false) + caretAtStart)
+      const offer = await wake.submitText(text, undefined, { offerForce: true })
+      expect(offer).toMatchObject({ reason: 'composer-not-empty', forceToken: expect.any(String) })
+      const sent = wake.submitText(text, undefined, { forceToken: offer.forceToken })
+      await vi.advanceTimersByTimeAsync(250)
+      await paint(ruledClaude(100, ['[Pasted text #13 +38 lines]']))
+      await vi.advanceTimersByTimeAsync(5100)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls).toEqual([[forcedClear, false], [bracketedPaste(text)], ['\r']])
+    })
+
+    it('does not use a paste chip to submit text appended to an uncleared draft', async () => {
+      const { rawWrite } = chatSetup()
+      const text = 'Unsent draft\n' + 'Sample line\n'.repeat(39).trimEnd()
+      await paint(ruledClaude(100, ['Unsent draft']))
+      const offer = await wake.submitText(text, undefined, { offerForce: true })
+      const sent = wake.submitText(text, undefined, { forceToken: offer.forceToken })
+      await vi.advanceTimersByTimeAsync(250)
+      await paint(ruledClaude(100, ['Unsent draft[Pasted text #13 +38 lines]']))
+      await vi.advanceTimersByTimeAsync(5100)
+      await expect(sent).resolves.toEqual({ ok: false, reason: 'not-drawn' })
+      expect(rawWrite.mock.calls).toEqual([[forcedClear, false], [bracketedPaste(text)]])
+    })
+
     it.each(['typed', 'accepted with Tab', 'recalled with Up'])('preserves a Claude draft %s even with the caret at the start', async action => {
       const { rawWrite } = chatSetup()
       await paint(ruledClaude(100, ['']))
@@ -1403,6 +1446,53 @@ describe('a line sent from the chat view (submitText)', () => {
       await vi.advanceTimersByTimeAsync(750)
       await expect(sent).resolves.toEqual({ ok: true })
       expect(rawWrite).toHaveBeenLastCalledWith('\r')
+    })
+
+    it('clears its own unsubmitted Claude paste chip before the next send', async () => {
+      const canSend = vi.fn(() => true)
+      const { rawWrite } = chatSetup()
+      const text = 'Sample line\n'.repeat(39).trimEnd()
+      await paint(claudeDraft(''))
+      const stopped = wake.submitText(text, undefined, { canSend })
+      await paint(claudeDraft('[Pasted text #13 +38 lines]'))
+      canSend.mockReturnValue(false)
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(stopped).resolves.toEqual({ ok: false, reason: 'target-changed' })
+
+      const sent = wake.submitText('New question')
+      await vi.advanceTimersByTimeAsync(100)
+      expect(rawWrite).toHaveBeenLastCalledWith(expect.stringMatching(/^\x7f+$/), false)
+      await paint(claudeDraft(''))
+      await paint(claudeDraft('New question'))
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: true })
+      expect(rawWrite.mock.calls.filter(([key]) => key === '\r')).toHaveLength(1)
+    })
+
+    it.each(['unchanged', 'different chip', 'terminal edit'])('takes a Claude paste chip back after chat Esc only if its recorded display is %s', async mode => {
+      const { rawWrite } = chatSetup()
+      const text = 'Sample line\n'.repeat(39).trimEnd()
+      const chip = '[Pasted text #13 +38 lines]'
+      await paint(claudeDraft(''))
+      const sent = wake.submitText(text)
+      await paint(claudeDraft(chip))
+      await vi.advanceTimersByTimeAsync(750)
+      await expect(sent).resolves.toEqual({ ok: true })
+      await paint(claudeDraft(''))
+      wake.interruptChat()
+      if (mode === 'terminal edit') wake.userInput('x')
+      await paint(claudeDraft(mode === 'different chip' ? '[Pasted text #14 +38 lines]' : chip))
+
+      const taken = wake.takeBack([text])
+      if (mode === 'unchanged') {
+        await paint(claudeDraft(''))
+        await vi.advanceTimersByTimeAsync(150)
+        await expect(taken).resolves.toEqual({ ok: true })
+        expect(rawWrite).toHaveBeenLastCalledWith(expect.stringMatching(/^\x7f+$/), false)
+      } else {
+        await expect(taken).resolves.toEqual({ ok: false, reason: 'different' })
+        expect(rawWrite).toHaveBeenLastCalledWith('\r')
+      }
     })
 
     it('leaves the resend gate behind when a normal send recovers its aborted draft', async () => {

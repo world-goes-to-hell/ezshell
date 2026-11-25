@@ -173,7 +173,10 @@ pty.spawn = (file, args, options) => {
       const image = /^(?:codex-\d+|manual-codex)$/.test(id) && path.isAbsolute(pasted) && pasted.endsWith('.png') && fs.existsSync(pasted)
       if (image) codexImages.push(pasted)
       const body = image ? '' : pasted
-      const draft = [...codexImages.map((_, index) => `[Image #${index + 1}]`), body].filter(Boolean).join(' ')
+      const chipFile = path.join(profile, id + '-paste-chip')
+      const chip = fs.existsSync(chipFile) ? fs.readFileSync(chipFile, 'utf8') : null
+      if (chip !== null) fs.unlinkSync(chipFile)
+      const draft = chip ?? [...codexImages.map((_, index) => `[Image #${index + 1}]`), body].filter(Boolean).join(' ')
       fs.writeFileSync(path.join(profile, id + '-chat-text'), body)
       fs.writeFileSync(path.join(profile, id + '-draft'), draft)
     } else if (id && data === '\x1b' && process.env.EZSHELL_TEST_AGENT_CHAT) {
@@ -194,7 +197,8 @@ pty.spawn = (file, args, options) => {
       fs.writeFileSync(path.join(profile, id + '-draft'), '')
     } else if (id && /^\x15+\x0b+$/.test(data) && process.env.EZSHELL_TEST_AGENT_CHAT) {
       fs.appendFileSync(path.join(profile, id + '-forced-clear'), 'x')
-      fs.writeFileSync(path.join(profile, id + '-draft'), '')
+      // In the paste-chip case Claude redraws only after the next paste, skipping the empty frame.
+      if (!fs.existsSync(path.join(profile, id + '-paste-chip'))) fs.writeFileSync(path.join(profile, id + '-draft'), '')
     } else if (id && pending !== 'speed-probe' && /^\x7f+$/.test(data) && process.env.EZSHELL_TEST_AGENT_CHAT) {
       // The chat taking that line back (agentInboxWake.takeBack): the composer empties
       fs.appendFileSync(path.join(profile, id + '-taken-back'), 'x')

@@ -1628,7 +1628,7 @@ function createLocalShells({
       entry.chatInterrupts++;
       entry.userInterruptAt = Date.now();
       if (entry.inbox?.deferProbeInput('\x1b')) return true;
-      entry.inbox?.userInput('\x1b');
+      entry.inbox?.interruptChat();
       try { entry.pty.write('\x1b'); return true; } catch { return false; }
     },
     sleep, wake, stayAwake,

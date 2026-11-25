@@ -34,7 +34,10 @@ function openPhone(storage, now, visualViewport, standalone = false, wide = fals
     setAttribute(name, value) { this.attributes.set(name, value) },
     getAttribute(name) { return this.attributes.get(name) ?? null },
     removeAttribute(name) { this.attributes.delete(name) },
-    toggleAttribute() {}
+    toggleAttribute(name, enabled) {
+      if (enabled) this.setAttribute(name, '')
+      else this.removeAttribute(name)
+    }
   })
   const element = id => {
     if (!elements.has(id)) elements.set(id, makeElement(id))
@@ -250,6 +253,24 @@ function startShell(phone, socket, id = 'session', shellId = 'shell') {
 function selectTab(phone, index, button = 0) {
   phone.element('workspace-current').children[index].children[button].dispatchEvent(new Event('click'))
 }
+
+it('fades only the scrollable tab edges and leaves Ctrl+wheel available for zoom', () => {
+  const phone = openPhone(rememberedDevice(), Date.now())
+  const strip = phone.element('workspace-current')
+  Object.assign(strip, { scrollLeft: 0, clientWidth: 390, scrollWidth: 640 })
+  const at = scrollLeft => {
+    strip.scrollLeft = scrollLeft
+    strip.dispatchEvent(new Event('scroll'))
+    return [strip.attributes.has('data-overflow-start'), strip.attributes.has('data-overflow-end')]
+  }
+  expect(at(0)).toEqual([false, true])
+  expect(at(100)).toEqual([true, true])
+  expect(at(250)).toEqual([true, false])
+  const zoom = Object.assign(new Event('wheel', { cancelable: true }), { ctrlKey: true, deltaX: 0, deltaY: -16 })
+  strip.dispatchEvent(zoom)
+  expect(zoom.defaultPrevented).toBe(false)
+  expect(strip.scrollLeft).toBe(250)
+})
 
 it('summarizes the folded sidebar by source and hides zero counts and the empty tab row', () => {
   const storage = rememberedDevice()

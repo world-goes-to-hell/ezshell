@@ -811,10 +811,12 @@
   const pcKey = item => JSON.stringify([item.id, item.kind || 'terminal'])
   const chatKey = item => JSON.stringify([item.shellId, item.agentId, item.kind])
   const strip = $('workspace-current')
+  const tabFadeWidth = 28  // The edge fade in the shared terminal-tabs.css.
   const tabWidths = window.ResizeObserver ? new window.ResizeObserver(keepFrontTabInView) : null
   tabWidths?.observe(strip)
+  strip.addEventListener('scroll', updateStripOverflow, { passive: true })
   strip.addEventListener('wheel', event => {
-    if (event.deltaX || !event.deltaY || strip.scrollWidth <= strip.clientWidth) return
+    if (event.ctrlKey || event.deltaX || !event.deltaY || strip.scrollWidth <= strip.clientWidth) return
     event.preventDefault()
     strip.scrollLeft += event.deltaY * (event.deltaMode === 1 ? 16 : 1)
   }, { passive: false })
@@ -931,6 +933,7 @@
         tabWidths?.observe(tab.row)
       }
     }
+    updateStripOverflow()
     renderStatus()
   }
 
@@ -999,14 +1002,26 @@
     if (wasDrawerOpen) (tab?.button ?? $('workspace-menu')).focus({ preventScroll: true })
   }
 
+  function updateStripOverflow() {
+    strip.toggleAttribute('data-overflow-start', strip.scrollLeft > 1)
+    strip.toggleAttribute('data-overflow-end', strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1)
+  }
+
   function keepFrontTabInView() {
     const row = focusedTab()?.row
-    if (!row || !isWorkspace()) return
-    const left = row.offsetLeft
-    // The layout APIs round to whole pixels. Leave space for the close button at a fractional edge.
-    const right = left + row.offsetWidth + 4
-    if (left < strip.scrollLeft) strip.scrollLeft = left
-    else if (right > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = right - strip.clientWidth
+    const maxScroll = strip.scrollWidth - strip.clientWidth
+    if (row && isWorkspace() && maxScroll > 0) {
+      const start = strip.scrollLeft
+      const end = start + strip.clientWidth
+      const left = row.offsetLeft
+      // Whole-pixel layout measurements can round down at the close button's edge.
+      const right = left + row.offsetWidth + 4
+      const startFade = start > 1 ? tabFadeWidth : 0
+      const endFade = start < maxScroll - 1 ? tabFadeWidth : 0
+      if (left < start + startFade) strip.scrollLeft = left - tabFadeWidth
+      else if (right > end - endFade) strip.scrollLeft = right - strip.clientWidth + tabFadeWidth
+    }
+    updateStripOverflow()
   }
 
   function removeTabs(matches) {

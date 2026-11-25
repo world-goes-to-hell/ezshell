@@ -280,6 +280,29 @@ describe('following a chat view\'s transcript', () => {
     expect(await chats.findRecordedSend('local:1', request)).toBeUndefined()
   })
 
+  it('confirms a long Claude send with expanded paste wrappers and refuses a chip-only transcript', async () => {
+    const acceptedAt = Date.parse('2026-11-25T10:00:00Z')
+    const timestamp = new Date(acceptedAt).toISOString()
+    const first = 'First fixture section\n'.repeat(20).trimEnd()
+    const second = 'Tail fixture section\n'.repeat(19).trimEnd()
+    const text = `Before\n${first}\n${second}\nAfter`
+    const record = (uuid, content) => JSON.stringify({ type: 'user', uuid, timestamp, message: { role: 'user', content } }) + '\n'
+    fs.writeFileSync(file, record('chip', '[Pasted text #1 +39 lines]'))
+    chats.open('local:1')
+    await vi.waitFor(() => expect(frames.some(frame => frame.state === 'live' && frame.reset)).toBe(true))
+    const { transcriptId } = frames.find(frame => frame.state === 'live' && frame.reset)
+    const request = { transcriptId, acceptedAt, text, hasImage: false, ignoreIds: [] }
+    expect(await chats.findRecordedSend('local:1', request)).toBeNull()
+
+    fs.appendFileSync(file, record('expanded', [
+      { type: 'text', text: 'Before' },
+      { type: 'text', text: `<pasted_content id="1">\n${first}\n</pasted_content id="1">` },
+      { type: 'text', text: `<pasted_content id="2">\n${second}\n</pasted_content id="2">` },
+      { type: 'text', text: 'After' }
+    ]))
+    expect(await chats.findRecordedSend('local:1', request)).toMatchObject({ id: 'user:expanded' })
+  })
+
   it('reads a large file from its end and the part before it on request', async () => {
     const filler = JSON.stringify({ type: 'attachment', attachment: { text: 'x'.repeat(1000) } }) + '\n'
     fs.writeFileSync(file, prompt('u0', '맨 처음') + filler.repeat(2200) + prompt('u1', '마지막'))

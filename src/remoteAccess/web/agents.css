@@ -267,7 +267,7 @@
 .remote-chat-tool-name { max-width: 60%; font-weight: 600; }
 .remote-chat-tool-name,
 .remote-chat-tool-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.remote-chat-tool-summary { flex: 1; color: var(--muted); font-family: var(--font-mono); }
+.remote-chat-tool-summary { flex: 1; color: var(--muted); }
 .remote-chat-tool-failed { flex: none; margin-inline-start: auto; color: var(--error); }
 .remote-chat-tool-body { display: flex; flex-direction: column; gap: 6px; padding: 0 9px 9px; }
 

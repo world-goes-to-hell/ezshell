@@ -10,32 +10,36 @@
   scrollbar-color: var(--border-strong) transparent;
 }
 
+/* The answer buttons float above the bubble's top-right corner on hover and take no width of their own:
+   as a flex sibling they kept about 200px beside every answer empty (2026-11-25 user report).
+   The box is as wide as the bubble (at least the buttons' width) so the buttons line up with its right edge. */
 .agent-chat-cover[data-chat-bubbles] .agent-chat-assistant {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  align-self: flex-start;
+  inline-size: fit-content;
+  min-inline-size: min(100%, 232px);
+  max-inline-size: min(95%, 88ch);
 }
 
 .agent-chat-cover[data-chat-bubbles] .agent-chat-assistant > .agent-chat-md {
   min-inline-size: 0;
-  max-width: min(95%, 88ch);
+  max-inline-size: 100%;
   padding: 9px 13px;
   border: 1px solid var(--border);
   border-radius: 6px 15px 15px 15px;
   background: var(--bg-secondary);
 }
 
+/* The 3px gap is the box's own padding: with an empty gap the pointer left the answer on its way up,
+   the hover ended and the buttons became unclickable before it got there */
 .agent-chat-cover[data-chat-bubbles] .agent-chat-answer-actions {
-  position: static;
-  flex: none;
+  inset-block: auto 100%;
+  inset-inline-end: 0;
+  padding-block-end: 3px;
 }
-
-.agent-chat-cover[data-chat-bubbles] .agent-chat-incoming { container-type: inline-size; }
-@container (max-width: 260px) {
-  .agent-chat-cover[data-chat-bubbles] .agent-chat-assistant {
-    flex-direction: column-reverse;
-    gap: 4px;
-  }
+.agent-chat-cover[data-chat-bubbles] .agent-chat-assistant:is(:hover, :has(:focus-visible)) .agent-chat-answer-actions {
+  pointer-events: auto;
 }
 
 .agent-chat-cover[data-chat-bubbles] :is(.agent-chat-user .agent-chat-bubble, .agent-chat-subagent-message[data-role='user']) {

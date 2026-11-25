@@ -1015,6 +1015,19 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('sending several images clears the entire attachment tray', await until(`${previewWidths} === ''`))
   check('sent thumbnails keep the order of the remaining images', await until(`${sentImageWidths(comparisonBody)} === '1,2,3'`))
 
+  const longClaudeDraft = Array.from({ length: 40 }, (_, i) => `Claude paste fixture line ${i + 1}`).join('\n')
+  fs.writeFileSync(file('claude-1-draft'), '기존 터미널 초안')
+  await until(`window.electronAPI.agentChatScreenState(${JSON.stringify(firstShell)}).then(state => state?.composer === 'draft')`)
+  fs.writeFileSync(file('claude-1-paste-chip'), '[Pasted text #2 +39 lines]')
+  await setChatDraft(longClaudeDraft)
+  await js(`${sendButton}.click()`)
+  const forceSend = `${cover(0)}.querySelector('.agent-chat-force-send button')`
+  check('a long Claude paste waits for the user to approve clearing the existing draft',
+    await until(`!!${forceSend}`) && read('claude-1-chat-sent') === '5')
+  await js(`${forceSend}?.click()`)
+  check('a Claude paste chip after the forced clear sends the full text once',
+    await waitFor(() => read('claude-1-chat-sent') === '6') && read('claude-1-chat-text') === longClaudeDraft, await chatFeedback())
+
   // A permission prompt in the terminal shows as choices in the chat, and a choice answers it
   const approvalCard = `${cover(0)}?.querySelector('.agent-chat-approval')`
   const firstApprovalOption = `${approvalCard}?.querySelector('.agent-chat-approval-option')`
