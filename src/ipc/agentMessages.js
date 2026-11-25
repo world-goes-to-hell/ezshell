@@ -639,24 +639,27 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   }
 
   async function watchMcp(request, socket) {
+    const { kind } = request
     let token = request.token
     let id = tokens.get(token)
     const external = id === undefined
     let binding
     let authorized = false
+    const localKind = kind === 'claude' || kind === 'codex'
+    const registrationError = 'ezShell에 등록된 에이전트가 아닙니다.'
+    if (!external && kind !== undefined && !localKind) throw new Error(registrationError)
     if (external) {
       const waking = request.wakeToken !== undefined
       const localClaude = request.shellToken !== undefined
       const shellToken = waking ? request.wakeToken : request.shellToken
       const shellId = shellTokens.get(shellToken)
-      if ((waking || localClaude ? !shellId : !bridgeFile || token !== bridgeToken) ||
-          (localClaude && (waking || request.kind !== 'claude')) ||
-          !['codex', 'claude'].includes(request.kind)
+      const validKind = localClaude ? !waking && kind === 'claude' : localKind || (!waking && kind === 'aside')
+      if (!validKind || (waking || localClaude ? !shellId : !bridgeFile || token !== bridgeToken)
         || typeof request.cwd !== 'string' || !path.isAbsolute(request.cwd) || request.cwd.length > 4096) {
-        throw new Error('ezShell에 등록된 에이전트가 아닙니다.')
+        throw new Error(registrationError)
       }
-      const attach = Number.isSafeInteger(request.pid) && request.pid > 0
-        ? await bindLocalAgent?.({ pid: request.pid, kind: request.kind, shellId, cwd: request.cwd })
+      const attach = localKind && Number.isSafeInteger(request.pid) && request.pid > 0
+        ? await bindLocalAgent?.({ pid: request.pid, kind, shellId, cwd: request.cwd })
         : undefined
       if (socket.destroyed) return
       if (shellId && (!attach || shellTokens.get(shellToken) !== shellId)) throw new Error('ezShell 로컬 터미널 연결을 확인할 수 없습니다.')
@@ -686,7 +689,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
         if (!authorizedId) authorizeBinding()
         return result
       })
-      const attached = attachExternal(request.kind, request.cwd, checkedAttach, Date.now() - 30_000, Boolean(shellId))
+      const attached = attachExternal(kind, request.cwd, checkedAttach, Date.now() - 30_000, Boolean(shellId))
       if (!attached) throw new Error('ezShell 로컬 터미널 연결을 확인할 수 없습니다.')
       id = attached.id
       binding = attached.binding
@@ -695,7 +698,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     }
     const previous = mcpReady.get(id)
     // A bridge-issued tool token expires with its lease. A reconnect uses the bridge again.
-    if (!external && leases.get(previous)?.external) throw new Error('ezShell에 등록된 에이전트가 아닙니다.')
+    if (!external && leases.get(previous)?.external) throw new Error(registrationError)
     if (!external) authorized = authenticReconnect(id, request.reconnectToken)
     if (previous && !previous.destroyed && !authorized) throw new Error('이 에이전트의 메시지 MCP가 이미 연결되어 있습니다.')
     const reconnectToken = randomBytes(32).toString('base64url')
@@ -994,7 +997,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
    */
   function setUsage(agentId, value) {
     const agent = agents.get(agentId)
-    if (!agent?.active) return false
+    if (!agent?.active || agent.kind === 'aside') return false
     const clean = sanitizeUsage(value, agent.kind)
     if (!clean) return false
     const sessionId = hookSessions.get(agentId)

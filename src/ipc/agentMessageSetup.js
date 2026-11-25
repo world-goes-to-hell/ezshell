@@ -3,6 +3,7 @@ const { homedir } = require('node:os')
 const path = require('node:path')
 const { promisify } = require('node:util')
 const { applyServerEntry } = require('../mcp/clientSetup.js')
+const { shellQuote } = require('../mcp/shellQuote.js')
 
 const runFile = promisify(execFile)
 const SERVER_NAME = 'ezshell-cli-mcp'
@@ -42,6 +43,13 @@ function createEntry(kind, bridgeFile, platform = process.platform) {
     args: ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodePowerShell(windowsBridge)],
     env
   }
+}
+
+function externalClientEntry(bridgeFile, platform = process.platform) {
+  const { command, args, env } = createEntry('aside', bridgeFile, platform)
+  const commandLine = [command, ...(platform === 'win32' ? args : args.map(shellQuote))].join(' ')
+  const environment = Object.entries(env).map(([key, value]) => `${key}=${value}`).join('\n')
+  return { command: commandLine, environment }
 }
 
 const windowsCodex = `
@@ -116,4 +124,4 @@ async function installAgentMessageMcp(kind, {
   return current && !legacy ? 'unchanged' : 'added'
 }
 
-module.exports = { installAgentMessageMcp, createEntry }
+module.exports = { installAgentMessageMcp, createEntry, externalClientEntry }

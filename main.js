@@ -725,7 +725,7 @@ const browserReview = require('./src/ipc/browserReview.js').registerBrowserRevie
   selectImages: () => selectAgentImages('수정 요청에 이미지 첨부'),
   openExternal: url => shell.openExternal(url)
 });
-const { installAgentMessageMcp } = require('./src/ipc/agentMessageSetup.js');
+const { installAgentMessageMcp, externalClientEntry } = require('./src/ipc/agentMessageSetup.js');
 const agentSetupInProgress = new Set();
 ipcMain.handle('agent-message-mcp-setup', async (event, kind) => {
   if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
@@ -739,6 +739,23 @@ ipcMain.handle('agent-message-mcp-setup', async (event, kind) => {
     return { success: false, error: error.message };
   } finally {
     agentSetupInProgress.delete(kind);
+  }
+});
+ipcMain.handle('agent-message-mcp-external', async (event, action) => {
+  const fromUnlockedMain = () => !isAppLocked && fromMainWindow(event) && event.senderFrame && event.senderFrame === event.sender.mainFrame;
+  const unlockError = { success: false, error: '먼저 잠금을 해제해 주세요.' };
+  if (!fromUnlockedMain()) return unlockError;
+  if (!['read', 'copy-command', 'copy-env'].includes(action)) return { success: false, error: '지원하지 않는 작업입니다.' };
+
+  const { command, environment } = externalClientEntry(agentBridgeFile);
+  if (action === 'read') return { success: true, environment };
+  try {
+    await agentMessages.enableExternalBridge();
+    if (!fromUnlockedMain()) return unlockError;
+    clipboard.writeText(action === 'copy-command' ? command : environment);
+    return { success: true, environment };
+  } catch {
+    return { success: false, error: '외부 메시지 MCP 설정을 복사하지 못했습니다.' };
   }
 });
 function getLocalShells() {

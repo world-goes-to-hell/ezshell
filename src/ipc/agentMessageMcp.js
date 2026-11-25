@@ -8,21 +8,27 @@ const { rpc } = require('./agentMessageCli.js')
 const { getProcessTree } = require('./agentProcessParents.js')
 const { validEscalationReason } = require('./agentInspection.js')
 
-// Sent to every agent that connects (Claude and Codex), on every turn: keep it short.
+// Sent to every agent that connects, on every turn: keep it short.
 // Details go in the tool descriptions. A Claude skill would reach Claude only and need files in ~/.claude.
+const notifiedArrival = 'When ezShell says a message arrived, call read_inbox: the sender sees that you have read it.'
+const notifiedReply = 'Read the result when ezShell notifies you of new mail.'
 const instructions = [
   'Use these tools to collaborate with agents opened in ezShell.',
   'send_message takes an agent ID. When asked to message an agent by role (for example "the reviewer"), call list_agents and use the ID whose role matches; if none or several match, ask the user.',
   'The recipient cannot see your conversation. Write each request so it stands alone: the goal, the files involved, what you already checked, and the answer you expect back.',
-  'When ezShell says a message arrived, call read_inbox: the sender sees that you have read it.',
+  notifiedArrival,
   'Handle the request within your delegated task and tool permissions, then send the result with reply_to_message, leading with the outcome.',
   'Use acknowledge_message for notes that need no reply.',
-  'After sending a request, continue other work or finish your turn. Read the result when ezShell notifies you of new mail.',
+  'After sending a request, continue other work or finish your turn.',
+  notifiedReply,
   'Use check_sent to see whether the recipient has read and answered. A busy agent reads mail when its current task ends, so unread can be normal for a while.',
   'Before sending again, call inspect_agent: resend only if it is idle and the message is still unread, use escalate if it waits for a human decision, otherwise wait or tell the user.',
   'When several agents work together, set your role with set_role so others can find you.',
   'In your answers, write local file paths as inline code (for example `src/app.js:12`): the ezShell chat view turns them into links.'
 ].join(' ')
+const asideInstructions = instructions
+  .replace(notifiedArrival, 'Check read_inbox at the start of a task and periodically while working. Aside does not receive new-mail notifications from ezShell.')
+  .replace(notifiedReply, 'Check read_inbox for replies when you resume work.')
 const text = z.string().trim().min(1).max(8000)
 const id = z.string().min(1).max(100)
 const RETRY_DELAYS = [1000, 2000, 5000, 10000, 30000]
@@ -60,18 +66,18 @@ async function connectionOptions(env = process.env, processTree = getProcessTree
   // A managed agent's token identifies that shell in its owning app. The shared bridge
   // cannot prove its identity in a new app, so retries keep using its scoped credentials.
   if (Object.hasOwn(env, 'EZSHELL_AGENT_TOKEN')) {
-    if (!pipe || !token) throw new Error('ezShell 전용 메시지 MCP 설정을 확인해 주세요.')
+    if (!pipe || !token || kind === 'aside') throw new Error('ezShell 전용 메시지 MCP 설정을 확인해 주세요.')
     return { pipe, token }
   }
   if (Object.hasOwn(env, 'EZSHELL_AGENT_WAKE_KIND')) {
-    if (!pipe || !shellToken || !['codex', 'claude'].includes(wakeKind)) throw new Error('ezShell 깨우기 연결 설정을 확인해 주세요.')
+    if (!pipe || !shellToken || kind === 'aside' || !['codex', 'claude'].includes(wakeKind)) throw new Error('ezShell 깨우기 연결 설정을 확인해 주세요.')
     return { pipe, wakeToken: shellToken, kind: wakeKind }
   }
   if (Object.hasOwn(env, 'EZSHELL_AGENT_SHELL_KIND')) {
-    if (!pipe || !shellToken || shellKind !== 'claude') throw new Error('ezShell 로컬 터미널 연결 설정을 확인해 주세요.')
+    if (!pipe || !shellToken || kind === 'aside' || shellKind !== 'claude') throw new Error('ezShell 로컬 터미널 연결 설정을 확인해 주세요.')
     return { pipe, shellToken, kind: shellKind }
   }
-  if (!bridgeFile || !['codex', 'claude'].includes(kind)) throw new Error('ezShell 메시지 MCP 설정을 확인해 주세요.')
+  if (!bridgeFile || !['codex', 'claude', 'aside'].includes(kind)) throw new Error('ezShell 메시지 MCP 설정을 확인해 주세요.')
   const shared = readBridge(bridgeFile)
   const instances = runningBridges(bridgeFile)
   const available = [...instances.values()]
@@ -132,7 +138,8 @@ async function main() {
   let retryTimer = null
   let retryStep = 0
   let initialized = false
-  const server = new McpServer({ name: 'ezshell-cli-mcp', version: '1.0.0' }, { instructions })
+  const aside = process.env.EZSHELL_AGENT_BRIDGE_KIND === 'aside'
+  const server = new McpServer({ name: 'ezshell-cli-mcp', version: '1.0.0' }, { instructions: aside ? asideInstructions : instructions })
   const retry = () => {
     if (lifetime.signal.aborted) return
     const delay = RETRY_DELAYS[retryStep]
@@ -189,7 +196,7 @@ async function main() {
     inputSchema: { role: z.string().describe('A visible label of up to 20 characters. Agent ID and reserved-name lookalikes are rejected, as are labels beginning with 나 or 사용자. An empty string clears your role.') }
   }, ({ role }) => call({ method: 'set-role', role }))
   server.registerTool('send_message', {
-    description: 'Send a task or note to another ezShell agent by ID (list_agents shows IDs and roles). The recipient cannot see your conversation, so include the context it needs. After sending a task, continue other work or finish your turn. ezShell notifies you when the result arrives.',
+    description: 'Send a task or note to another ezShell agent by ID (list_agents shows IDs and roles). The recipient cannot see your conversation, so include the context it needs. After sending a task, continue other work or finish your turn. ' + (aside ? 'Check read_inbox for replies.' : 'ezShell notifies you when the result arrives.'),
     inputSchema: { to: id, text, request_id: id.optional().describe('Reuse this ID when retrying the same send.') }
   }, ({ to, text, request_id }) => call({ method: 'send', to, text, requestId: request_id }))
   server.registerTool('read_inbox', {

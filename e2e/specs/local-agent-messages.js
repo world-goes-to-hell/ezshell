@@ -1,5 +1,8 @@
 const fs = require('fs')
 const path = require('path')
+const { Client } = require('@modelcontextprotocol/sdk/client/index.js')
+const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js')
+const { createEntry } = require('../../src/ipc/agentMessageSetup.js')
 const { connect, createChecks, sleep, unlock, openLocalAgent, pickTabGroup, SET } = require('../support/driver')
 
 const { check, finish } = createChecks()
@@ -1010,6 +1013,36 @@ async function run() {
           actor.querySelector('.agent-message-actor-name')?.textContent === '나' &&
           actor.querySelector('.agent-message-actor-id')?.textContent === 'codex-1')
       `))
+
+    const bridgeFile = file('agent-message-connection')
+    const entry = createEntry('aside', bridgeFile)
+    const external = await js(`window.electronAPI.agentMessageMcpExternal('read')`)
+    check('external MCP setup exposes only the configured bridge path and Aside kind', external.success &&
+      external.environment === `EZSHELL_AGENT_BRIDGE_FILE=${bridgeFile}\nEZSHELL_AGENT_BRIDGE_KIND=aside`)
+    const asideClient = new Client({ name: 'aside-e2e', version: '1' })
+    try {
+      await asideClient.connect(new StdioClientTransport({ ...entry, cwd: workspace, stderr: 'pipe' }))
+      const aside = await waitFor(async () => (await js('window.electronAPI.agentMessagesSnapshot()')).agents
+        .find(agent => agent.kind === 'aside' && agent.mcpConnected))
+      if (!aside) throw new Error('Aside MCP did not register')
+      check('external Aside has a polling instruction and no terminal association', aside.shellId === '' &&
+        asideClient.getInstructions()?.includes('Check read_inbox at the start of a task and periodically'))
+      await showView('관계도')
+      check('the relationship map displays Aside with its ID and provider without a jump action', await until(`
+        ${card(aside.id)}?.querySelector('strong')?.textContent === ${JSON.stringify(aside.id)} &&
+        ${card(aside.id)}?.querySelector('[data-kind="aside"]') &&
+        ${cardPick(aside.id)}?.getAttribute('aria-label').includes('Aside ·') &&
+        !${card(aside.id)}?.querySelector('[data-action="go"]') && !${row(aside.id)}
+      `))
+      await js(`${cardPick(aside.id)}.click()`)
+      await showView('목록')
+      check('the list shows the same Aside identity without a pane action', await until(`
+        ${subject}?.textContent === ${JSON.stringify(`${aside.id} 의 메시지`)} &&
+        ${subject}?.querySelector('[data-kind="aside"]') && !${subjectLocation}
+      `))
+    } finally {
+      await asideClient.close()
+    }
 
     // Run last because the authenticated hook changes this fixture's status source.
     const codexSession = '01a1ec18-0000-7000-8000-000000000071'

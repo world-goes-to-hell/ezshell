@@ -5,7 +5,7 @@ import { MAIN_PANE, paneIds, type PaneId } from './splitTree'
 
 const COLOR_COUNT = 8
 
-export const AGENT_PROVIDER_NAMES = { codex: 'Codex', claude: 'Claude Code', antigravity: 'Antigravity' } as const
+export const AGENT_PROVIDER_NAMES = { codex: 'Codex', claude: 'Claude Code', antigravity: 'Antigravity', aside: 'Aside' } as const
 
 const statusLabels: Record<LocalAgentStatus | 'reply', string> = {
   unknown: '상태 확인 중', starting: '시작 중', idle: '쉼', working: '작업 중',

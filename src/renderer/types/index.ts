@@ -380,6 +380,7 @@ export type McpSetupResult =
 // Extend Window interface for electronAPI
 export type LocalAgent = 'codex' | 'claude'
 export type AgentChatProvider = LocalAgent | 'antigravity'
+export type AgentMessageKind = AgentChatProvider | 'aside'
 
 /** A past Claude Code or Codex session of this PC (src/agentHistory). `key` is all the main process takes back. */
 export interface AgentHistorySession {
@@ -644,7 +645,7 @@ export type LocalAgentStatus = 'unknown' | 'starting' | 'idle' | 'working' | 'bl
 export interface AgentMessageSession {
   id: string
   shellId: string
-  kind: AgentChatProvider
+  kind: AgentMessageKind
   cwd: string
   active: boolean
   status: LocalAgentStatus
@@ -1111,6 +1112,9 @@ declare global {
       onBrowserReviewFocus: (callback: (id: string) => void) => () => void
       agentMessageMcpSetup: (kind: LocalAgent) => Promise<
         { success: true; result: 'added' | 'unchanged' | 'conflict' } | { success: false; error: string }
+      >
+      agentMessageMcpExternal: (action: 'read' | 'copy-command' | 'copy-env') => Promise<
+        { success: true; environment: string } | { success: false; error: string }
       >
       onAgentMessagesState: (callback: (snapshot: AgentMessagesSnapshot) => void) => () => void
       agentUsageState?: () => Promise<AgentUsageReport[]>

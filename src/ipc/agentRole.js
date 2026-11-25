@@ -74,9 +74,9 @@ for (const [ascii, group] of Object.entries(confusableGroups)) {
 const ROLE_SEPARATORS = /[_\p{Dash}\p{White_Space}\p{Default_Ignorable_Code_Point}]/gu
 const RESERVED_NAMES = /^(?:나|사용자)|^(?:user|ezshell)$/
 // Anywhere in the role: "PL · claude-1" would read as another agent's name in front of the real ID.
-const AGENT_ID = /(?:claude|codex|antigravity)\p{Nd}+/u
+const AGENT_ID = /(?:claude|codex|antigravity|aside)\p{Nd}+/u
 // The same vertical-stroke lookalike can resemble lowercase L or uppercase I.
-const CONFUSABLE_AGENT_ID = /(?:c[il]aude|codex|ant[il]grav[il]ty)\p{Nd}+/u
+const CONFUSABLE_AGENT_ID = /(?:c[il]aude|codex|ant[il]grav[il]ty|as[il]de)\p{Nd}+/u
 const ROLE_CONTROL = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}]/u
 
 function foldRole(role) {

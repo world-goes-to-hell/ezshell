@@ -500,6 +500,16 @@
 }
 
 /* 에이전트 MCP 자동 설정 */
+.mcp-external-setup {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.mcp-external-setup :is(h4, p) {
+  margin: 0;
+}
+
 .mcp-setup-actions {
   display: flex;
   flex-wrap: wrap;

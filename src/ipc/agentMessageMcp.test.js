@@ -32,8 +32,9 @@ function startStdio(cwd, parentEnv) {
   return {
     child, exited, request,
     async initialize() {
-      await request('initialize', { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'lease-test', version: '1' } })
+      const result = await request('initialize', { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'lease-test', version: '1' } })
       send({ method: 'notifications/initialized' })
+      return result
     },
     listAgents: () => request('tools/call', { name: 'list_agents', arguments: {} })
   }
@@ -62,6 +63,81 @@ async function watch(pipe, request, sockets) {
   if (result.success) socket.setTimeout(0)
   return { result, socket, closed }
 }
+
+describe('Aside on the shared message bridge', () => {
+  it('registers through stdio without binding a shell and tells the client to check its inbox', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-agent-aside-'))
+    const bridgeFile = path.join(root, 'agent-message-connection')
+    const roleFile = path.join(root, 'agent-roles.json')
+    const bindLocalAgent = vi.fn()
+    const onInboxChanged = vi.fn()
+    const messages = createAgentMessages({ bridgeFile, roleFile, home: root, bindLocalAgent, onInboxChanged, notify() {}, isLocked: () => false })
+    let mcp
+    try {
+      await messages.enableExternalBridge()
+      mcp = startStdio(root, { EZSHELL_AGENT_BRIDGE_FILE: bridgeFile, EZSHELL_AGENT_BRIDGE_KIND: 'aside' })
+      const { instructions } = await mcp.initialize()
+      expect(instructions).toContain('Check read_inbox at the start of a task and periodically')
+      expect(instructions).not.toContain('when ezShell notifies you')
+      expect(instructions.length).toBeLessThan(2000)
+      await vi.waitFor(async () => {
+        const listed = JSON.parse((await mcp.listAgents()).content[0].text)
+        expect(listed).toMatchObject({ self: 'aside-1', agents: [{ id: 'aside-1', kind: 'aside', cwd: root }] })
+      })
+      expect(messages.snapshot().agents[0]).toMatchObject({ id: 'aside-1', kind: 'aside', shellId: '', mcpConnected: true })
+      const role = await mcp.request('tools/call', { name: 'set_role', arguments: { role: '브라우저' } })
+      expect(role.isError).not.toBe(true)
+      expect(messages.snapshot().agents[0]).toMatchObject({ role: '브라우저' })
+      expect(fs.existsSync(roleFile)).toBe(false)
+      messages.sendAsUser({ to: 'aside-1', text: '확인할 메시지' })
+      const inbox = await mcp.request('tools/call', { name: 'read_inbox', arguments: {} })
+      expect(JSON.parse(inbox.content[0].text).messages[0].text).toBe('확인할 메시지')
+      expect(bindLocalAgent).not.toHaveBeenCalled()
+      expect(onInboxChanged).not.toHaveBeenCalled()
+    } finally {
+      if (mcp && mcp.child.exitCode === null && !mcp.child.signalCode) mcp.child.kill()
+      await mcp?.exited
+      messages.stop()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects Aside on all scoped registrations and rejects unknown kinds on the shared bridge', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-agent-aside-scoped-'))
+    const bridgeFile = path.join(root, 'agent-message-connection')
+    const bindLocalAgent = vi.fn()
+    const messages = createAgentMessages({ bridgeFile, home: root, bindLocalAgent, notify() {}, isLocked: () => false })
+    const sockets = []
+    try {
+      await messages.enableExternalBridge()
+      const [, , pipe, token] = fs.readFileSync(bridgeFile, 'utf8').split(/\r?\n/)
+      const { env } = messages.register('claude', 'local:managed', root, {})
+      const { EZSHELL_SHELL_TOKEN: shellToken } = messages.registerShell('local:plain')
+      const requests = [
+        { token: env.EZSHELL_AGENT_TOKEN, kind: 'aside' },
+        { wakeToken: shellToken, kind: 'aside' },
+        { shellToken, kind: 'aside' },
+        { token, kind: 'foo' }
+      ]
+      for (const request of requests) {
+        const { result } = await watch(pipe, { ...request, cwd: root }, sockets)
+        expect(result).toMatchObject({ success: false })
+      }
+      expect(bindLocalAgent).not.toHaveBeenCalled()
+      expect(messages.snapshot().agents.map(({ kind }) => kind)).toEqual(['claude'])
+      const shared = { EZSHELL_AGENT_BRIDGE_FILE: bridgeFile, EZSHELL_AGENT_BRIDGE_KIND: 'aside' }
+      expect(await connectionOptions(shared)).toEqual({ pipe, token, kind: 'aside' })
+      await expect(connectionOptions({ ...shared, EZSHELL_AGENT_PIPE: pipe, EZSHELL_AGENT_TOKEN: env.EZSHELL_AGENT_TOKEN })).rejects.toThrow(/전용/)
+      await expect(connectionOptions({ EZSHELL_AGENT_PIPE: pipe, EZSHELL_SHELL_TOKEN: shellToken, EZSHELL_AGENT_WAKE_KIND: 'aside' })).rejects.toThrow(/깨우기/)
+      await expect(connectionOptions({ EZSHELL_AGENT_PIPE: pipe, EZSHELL_SHELL_TOKEN: shellToken, EZSHELL_AGENT_SHELL_KIND: 'aside' })).rejects.toThrow(/로컬 터미널/)
+      await expect(connectionOptions({ ...shared, EZSHELL_AGENT_BRIDGE_KIND: 'foo' })).rejects.toThrow(/설정/)
+    } finally {
+      for (const socket of sockets) socket.destroy()
+      messages.stop()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('the MCP bridge for an agent started in a local terminal', () => {
   it('records Codex role launch evidence only when the shell binding confirms the requested folder', async () => {

@@ -12,9 +12,19 @@ describe('agent identity', () => {
     expect(agentShortName({ id: 'codex-11', role: '  ' })).toBe('codex-11')
   })
 
-  it('shares named icons for Claude Code, Codex, and Antigravity', () => {
-    expect(AGENT_PROVIDER_NAMES).toEqual({ claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity' })
-    for (const provider of ['claude', 'codex', 'antigravity'] as const) expect(AGENT_PROVIDER_ICONS[provider]).toBeTypeOf('function')
+  it('shares named icons for Claude Code, Codex, Antigravity, and Aside', () => {
+    expect(AGENT_PROVIDER_NAMES).toEqual({ claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity', aside: 'Aside' })
+    for (const provider of ['claude', 'codex', 'antigravity', 'aside'] as const) expect(AGENT_PROVIDER_ICONS[provider]).toBeTypeOf('function')
+  })
+
+  it('shows an unbound Aside agent with its ID color and no pane location', () => {
+    const aside: AgentMessageSession = {
+      id: 'aside-1', kind: 'aside', shellId: '', cwd: 'C:\\work', active: true,
+      status: 'unknown', waitingForReply: false, mcpConnected: true
+    }
+    expect(agentShortName(aside)).toBe('aside-1')
+    expect(agentIdentityColor(aside.id)).toBe('var(--agent-identity-tone-1)')
+    expect(agentIdentityTooltip(aside).title).toBe('aside-1\nAside · 상태 확인 중\nC:\\work')
   })
 
   it('assigns adjacent session IDs distinct palette colors and keeps the same ID stable', () => {

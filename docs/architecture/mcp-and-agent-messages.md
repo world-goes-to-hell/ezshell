@@ -6,6 +6,10 @@
 
 설정 > MCP > 에이전트 메시지에서 `ezshell-cli-mcp` 를 등록하면 일반 터미널에서 실행한 Codex·Claude Code도 `src/ipc/agentMessages.js` 의 메시지함을 쓴다. 사용자 설정은 앱의 사용자 데이터 폴더에 있는 연결 파일을 참조한다. 앱을 시작할 때 실행 파일과 인증 정보를 갱신하고, 살아 있는 MCP 연결만 `list_agents` 에 표시한다.
 
+같은 설정의 `Aside 등 외부 MCP 클라이언트`에서 Command와 Env를 복사해 Aside의 Local stdio 서버에 붙여 넣을 수 있다. 기존 등록을 쓰고 있다면 `EZSHELL_AGENT_BRIDGE_KIND=aside`로 바꾸고 MCP를 다시 연결한다. Env에는 연결 파일 경로와 종류가 들어간다. Aside는 공용 브리지에서 `aside-N`으로 등록되며 셸 연결과 대화 UUID가 없다. 역할은 현재 연결에서 메모리에 보관한다. 새 메시지 알림이나 터미널 깨우기를 받지 않으므로 작업을 시작할 때와 진행 중에 `read_inbox`로 받은편지함을 확인한다.
+- 한계: 셸이 없어 `inspect_agent` 의 상태는 늘 알 수 없음이고, 보낸 쪽 `check_sent` 에 `unread` 가 오래 남는 것이 정상이다 (Aside 가 스스로 확인할 때까지). 다시 연결할 때마다(MCP 재시작, ezShell 재시작) 새 `aside-N` id 가 된다. 프로세스 계보로 같은 에이전트임을 확인할 수 없어 재연결 복구를 하지 않는다. 옛 id 앞으로 온 메시지는 새 id 로 이어지지 않는다.
+- 복사하는 Command 는 한 줄(`powershell.exe -NoProfile -NonInteractive -EncodedCommand …`)이다. Aside 의 Local stdio 가 이 한 줄을 그대로 실행하는 것을 실제로 확인했다 (2026-11-25).
+
 - `inspect_agent(id)`는 같은 앱의 에이전트 상태·출처, 막힘 종류, 안 읽은 수, 유휴 시간과 종료 코드를 조회한다. 확인 질문 한 줄과 선택지 이름만 제한해 보여 준다. `escalate(id, reason)`는 화면에서 사용자 응답 대기를 다시 확인해 해당 막힘에 PC 알림과 `그 칸으로 가기`를 한 번 띄운다. 잠금 중에는 두 도구 모두 거부한다. 새 도구는 메시지 MCP 프로세스를 다시 띄울 때 등록된다. 설계와 응답 범위는 `docs/plan/2026-11-25-agent-unblock-by-orchestrator.md`에 있다.
 
 Windows 의 ezShell 로컬 PowerShell 에서 `claude` 를 직접 실행하면 셸의 `claude` 함수가 그 실행에 `agent-shell-mcp.json` 을 넘긴다. 사용자 등록 없이 동작한다. 명시한 MCP 설정, 엄격한 MCP 모드, 관리 명령과 비대화형 실행은 호출자의 인자를 따른다. main 은 셸 토큰과 CLI 프로세스 계보가 같은 셸을 가리킬 때 등록한다. 재연결에는 기존 자격 증명 규칙을 쓰고, 잠재우기 복귀에는 별도의 `agent-wake-mcp.json` 을 쓴다. 화면 테스트 `local-agent-chat-manual`.

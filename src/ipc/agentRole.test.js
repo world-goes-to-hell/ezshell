@@ -6,7 +6,7 @@ const { validateRole } = require('./agentRole.js')
 
 describe('validateRole', () => {
   it('rejects an agent role that names another agent anywhere in it', () => {
-    for (const role of ['PL · claude-1', 'claude-1 PL', 'codex2팀장', 'ｃｌａｕｄｅ１ 리드', '리드 antigravity-3']) {
+    for (const role of ['PL · claude-1', 'claude-1 PL', 'codex2팀장', 'ｃｌａｕｄｅ１ 리드', '리드 antigravity-3', '리드 aside-7', 'asіde-7']) {
       expect(() => validateRole(role, 'agent')).toThrow()
     }
   })

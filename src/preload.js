@@ -243,6 +243,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('browser-review-focus', listener);
   },
   agentMessageMcpSetup: (kind) => ipcRenderer.invoke('agent-message-mcp-setup', kind),
+  agentMessageMcpExternal: (action) => ipcRenderer.invoke('agent-message-mcp-external', action),
   onAgentMessagesState: (callback) => {
     const handler = (_event, snapshot) => callback(snapshot);
     ipcRenderer.on('agent-messages-state', handler);

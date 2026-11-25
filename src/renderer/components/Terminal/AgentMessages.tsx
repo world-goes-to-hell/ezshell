@@ -5,7 +5,7 @@ import * as Tabs from '@radix-ui/react-tabs'
 import { RiContractLeftRightLine, RiExpandLeftRightLine, RiListUnordered, RiMailLine, RiNodeTree, RiSearchLine, RiTeamLine, RiUser3Line } from 'react-icons/ri'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/react/shallow'
-import type { AgentChatProvider, AgentMessage, AgentMessageDelivery, AgentMessageSession, AgentMessagesSnapshot } from '../../types'
+import type { AgentMessage, AgentMessageDelivery, AgentMessageKind, AgentMessageSession, AgentMessagesSnapshot } from '../../types'
 import { folderLabel, isInsidePath, pathKey } from '../../lib/localWorkspaceTree'
 import { visibleTerminalId } from '../../lib/localTerminalPane'
 import { projectOfFolder, type GroupProject } from '../../lib/tabGroups'
@@ -28,7 +28,7 @@ const USER = 'user'
 const ALL = 'all'
 const label = (id: string) => id === USER ? '나' : id
 
-function MessageProviderIcon({ kind }: { kind?: AgentChatProvider | typeof USER | typeof ALL }) {
+function MessageProviderIcon({ kind }: { kind?: AgentMessageKind | typeof USER | typeof ALL }) {
   if (!kind) return null
   const Icon = kind === USER ? RiUser3Line : kind === ALL ? RiTeamLine : AGENT_PROVIDER_ICONS[kind]
   return <Icon className="agent-message-provider" data-kind={kind} size={14} aria-hidden="true" />

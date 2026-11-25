@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { createAgentMessages } from './agentMessages.js'
-import { createEntry, installAgentMessageMcp } from './agentMessageSetup.js'
+import { createEntry, externalClientEntry, installAgentMessageMcp } from './agentMessageSetup.js'
 
 let root
 let bridgeFile
@@ -25,6 +25,15 @@ afterEach(async () => {
 })
 
 describe('register local agent message MCP', () => {
+  it('formats the shared launcher and two token-free environment lines for Aside', () => {
+    const { command, args } = createEntry('claude', bridgeFile, 'win32')
+    expect(externalClientEntry(bridgeFile, 'win32')).toEqual({
+      command: [command, ...args].join(' '),
+      environment: `EZSHELL_AGENT_BRIDGE_FILE=${bridgeFile}\nEZSHELL_AGENT_BRIDGE_KIND=aside`
+    })
+    expect(externalClientEntry(bridgeFile, 'darwin').command).toMatch(/^\/bin\/sh '-c' '/)
+  })
+
   it('preserves the existing Claude settings and reuses an identical registration', async () => {
     const file = path.join(root, '.claude.json')
     const original = { mcpServers: { other: { command: 'other' } }, projects: { sample: { enabled: true } } }
