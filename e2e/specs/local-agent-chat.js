@@ -111,12 +111,21 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await openAgent('claude')
   check('a Claude opens in a local tab', await until(`document.body.textContent.includes('fixture ready: claude-1')`, 30000))
 
+  // An error line on the terminal gets its tint (Terminal Log Highlight), which must not show over the chat
+  fs.writeFileSync(file('claude-1-command-history'), 'fixture ready: claude-1\r\n2026-11-25 10:00:00 SEVERE [main] boom\r\n')
+  const logTints = `[...${pane(0)}.querySelectorAll('.xterm-decoration.terminal-log-row')].filter(el => el.getClientRects().length)`
+  check('an error line on the agent terminal is tinted', await until(`${logTints}.length > 0`, 5000))
+
   // The chat key in the terminal turns the pane into a chat
   await js(`${pane(0)}.querySelector('.xterm-helper-textarea').focus()`)
   await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
   check('Ctrl+Shift+F11 in the terminal shows its agent as a chat', await until(`!!${cover(0)}`, 5000))
   check('a chat without a transcript starts empty', await until(`${cover(0)}.querySelector('.agent-chat-empty')?.textContent === '대화가 시작되면 여기에 보입니다.'`, 5000))
+  // xterm's decorations (z-index 6) drew over the chat cover (5): the tints are dropped under the chat,
+  // and the terminal host is its own stacking context so no layer of it can come over a cover
+  check('the terminal tints are not drawn over the chat view', await until(`${logTints}.length === 0 &&
+    getComputedStyle(${pane(0)}.querySelector('.local-terminal-host')).isolation === 'isolate'`, 3000), await js(`${logTints}.length`))
   check('the focused composer gets a pane outline even in a single idle chat', await until(focusedChat(0), 2000))
   await js(`${pane(0)}.querySelector('.xterm-helper-textarea').focus()`)
   check('the terminal behind a chat cannot steal focus from the composer', await js(`document.activeElement === ${composer(0)}`))
@@ -162,6 +171,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('choosing the terminal action returns focus to the same pane terminal', await until(`
     !${cover(0)} && document.activeElement === ${pane(0)}.querySelector('.xterm-helper-textarea')
   `))
+  check('back on the terminal its error line is tinted again', await until(`${logTints}.length > 0`, 3000))
   await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
   await until(`!!${composer(0)}`)

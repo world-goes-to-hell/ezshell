@@ -16,7 +16,7 @@ import { closeTabPane } from '../../lib/paneToTab'
 import { ensureLocalPaneShell, getLocalPaneShellId, closeLocalPaneShells } from '../../lib/localPaneShells'
 import { TerminalContextMenu, MENU_SEPARATOR, type TerminalMenuGroup } from './TerminalContextMenu'
 import { commonTerminalItems } from './terminalMenuCommon'
-import { attachLogHighlight } from './terminalLogHighlight'
+import { attachLogHighlight, type LogHighlight } from './terminalLogHighlight'
 import { attachTerminalWebLinks } from './terminalWebLinks'
 import { PaneArrival, SplitChrome, PANE_DIVIDER_PX } from './SplitChrome'
 import { AgentPaneMessages, isAgentWorking, useAgentMessagesStore } from './AgentMessages'
@@ -88,6 +88,9 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const paneRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
+  // The chat view covers the terminal: its error/warning tints are not drawn meanwhile
+  const logHighlightRef = useRef<LogHighlight | null>(null)
+  const coveredRef = useRef(false)
   const fitRef = useRef<FitAddon | null>(null)
   const pasteRef = useRef<(() => void) | undefined>(undefined)
   const [exit, setExit] = useState<{ code: number | null } | null>(null)
@@ -177,6 +180,8 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     const detachCommandHistory = commandHistory.attach(terminal)
     const disableCopyOnSelect = enableCopyOnSelect(terminal)
     const logHighlight = attachLogHighlight(terminal)
+    logHighlight.setPaused(coveredRef.current)
+    logHighlightRef.current = logHighlight
 
     let isDisposed = false
     let deferredInput: string[] | null = null
@@ -337,6 +342,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       refit.cancel()
       disableCopyOnSelect()
       logHighlight.dispose()
+      if (logHighlightRef.current === logHighlight) logHighlightRef.current = null
       detachCommandHistory()
       unregisterPane()
       terminal.dispose()
@@ -378,6 +384,14 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   useLayoutEffect(() => {
     const pane = paneRef.current
     if (pane && isChat && !inlineQuestion && hostRef.current?.contains(document.activeElement)) focusPaneInput(pane)
+  }, [inlineQuestion, isChat])
+
+  // Under the chat view the terminal is hidden (but for a question answered in it): no tints, no reading
+  // its screen every frame; back on the terminal they are drawn again
+  useEffect(() => {
+    const covered = isChat && !inlineQuestion
+    coveredRef.current = covered
+    logHighlightRef.current?.setPaused(covered)
   }, [inlineQuestion, isChat])
 
   const onContextMenu = (event: MouseEvent): void => {

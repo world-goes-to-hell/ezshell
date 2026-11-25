@@ -40,6 +40,9 @@
   padding: var(--pane-indicator-space);
   padding-left: 8px;
   overflow: hidden;
+  /* Its own stacking context: xterm's decorations (z-index 6, top layer 7: the error/warning tints) and
+     helpers otherwise compete with the pane's covers (chat view 5, sleep cover 6) and drew over the chat */
+  isolation: isolate;
 }
 
 .local-terminal-stage[data-chat-question] > .agent-chat-cover {

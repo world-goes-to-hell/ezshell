@@ -33,9 +33,18 @@ interface Drawn { marker: IMarker; decoration: IDecoration | undefined; level: R
  * scrolls; a row that keeps its level keeps its decoration (recreating them every frame flickers).
  * Full-screen programs (vim, less, top) are left alone.
  */
-export function attachLogHighlight(terminal: Terminal): IDisposable {
+export interface LogHighlight extends IDisposable {
+  /**
+   * Paused while something covers the terminal (a local pane's chat view): the tints are removed and the
+   * screen is not read every frame; resuming draws them again
+   */
+  setPaused(paused: boolean): void
+}
+
+export function attachLogHighlight(terminal: Terminal): LogHighlight {
   let drawn: Drawn[] = []
   let frame = 0
+  let paused = false
 
   const release = (item: Drawn) => {
     item.decoration?.dispose()
@@ -50,7 +59,7 @@ export function attachLogHighlight(terminal: Terminal): IDisposable {
   const draw = () => {
     frame = 0
     const buffer = terminal.buffer.active
-    if (!isLogHighlightOn() || buffer.type === 'alternate') {
+    if (paused || !isLogHighlightOn() || buffer.type === 'alternate') {
       clear()
       return
     }
@@ -99,6 +108,11 @@ export function attachLogHighlight(terminal: Terminal): IDisposable {
   schedule()
 
   return {
+    setPaused: (next) => {
+      if (next === paused) return
+      paused = next
+      schedule()
+    },
     dispose: () => {
       if (frame) cancelAnimationFrame(frame)
       window.removeEventListener(PREF_EVENT, schedule)
