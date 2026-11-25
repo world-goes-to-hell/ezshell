@@ -71,8 +71,17 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   const focusedChat = index => `(() => {
     const input = ${composer(index)}
     if (!input || document.activeElement !== input) return false
-    const outline = getComputedStyle(${pane(index)}, '::before')
-    return outline.borderTopWidth === '2px' && outline.borderTopColor === getComputedStyle(input).borderTopColor
+    const frame = ${pane(index)}
+    const outline = getComputedStyle(frame, '::before')
+    // Split cards tune the pane outline against their own surface. The input has its own focus color.
+    const token = frame.parentElement.matches('.is-split') ? '--pane-card-focus' : '--pane-focus-color'
+    const expected = getComputedStyle(frame).getPropertyValue(token).trim()
+    const color = new OffscreenCanvas(1, 1).getContext('2d')
+    color.fillStyle = outline.borderTopColor
+    const actual = color.fillStyle
+    color.fillStyle = expected
+    return expected && color.fillStyle === actual && outline.borderTopWidth === '2px' &&
+      outline.borderTopStyle === 'solid' && outline.top === '1px' && outline.boxShadow !== 'none'
   })()`
   const coverText = index => js(`${cover(index)}?.querySelector('.agent-chat-log')?.textContent ?? ''`)
   const chatThemeButton = index => `${cover(index)}.querySelector('.agent-chat-theme-trigger')`
@@ -783,7 +792,9 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('each chat shows its own conversation', await until(`(${cover(0)}.textContent.includes('첫 칸 질문') && !${cover(0)}.textContent.includes('둘째 칸')) &&
     (${cover(1)}.textContent.includes('둘째 칸 질문') && !${cover(1)}.textContent.includes('첫 칸'))`, 8000), JSON.stringify([await coverText(0), await coverText(1)]))
   await click(...await center(composer(0)))
-  check('the pane outline follows the clicked composer in a split chat', await until(`${focusedChat(0)} && !${pane(1)}.matches(':focus-within')`, 2500))
+  check('the pane outline follows the clicked composer in a split chat', await until(`
+    ${focusedChat(0)} && !${pane(1)}.matches(':focus-within') && getComputedStyle(${pane(1)}, '::before').borderTopWidth === '1px'
+  `, 2500))
   check('a tool call without its result shows as running', await js(`${cover(1)}.querySelector('.agent-chat-tool')?.textContent.includes('실행 중')`))
   await shot('local-agent-chat-two-panes')
 

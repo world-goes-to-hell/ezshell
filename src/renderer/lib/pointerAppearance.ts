@@ -18,6 +18,7 @@ import {
   addClick, addMove, clearEffects, createEffectState, drawFrame, effectiveEffects, keepRunning, pageAllowsEffects, prune, type EffectConfig, type GhostCursor
 } from './pointerEffects'
 import { effectInk } from './pointerInk'
+import { createSystemPointerSync } from './pointerSystem'
 
 const urls = new Map<string, string>()
 const ghostCursors = new Map<string, GhostCursor>()
@@ -225,8 +226,12 @@ export function installPointerAppearance(): void {
   if (installed || typeof document === 'undefined') return
   installed = true
   let overlay: ReturnType<typeof createOverlay> | null = null
+  // Other programs' pointers: the main window only (detached windows open with a ...Mode parameter)
+  const mainWindow = ![...new URLSearchParams(location.search).keys()].some(key => key.endsWith('Mode'))
+  const syncSystemPointer = mainWindow ? createSystemPointerSync() : null
   const apply = (prefs: PointerPrefs) => {
     applyCursors(prefs.set, prefs.size)
+    void syncSystemPointer?.(prefs).catch(() => {})
     if (!hasEffects(prefs)) {
       overlay?.destroy()
       overlay = null

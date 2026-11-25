@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   RiCloseLine, RiCloseFill, RiArrowLeftLine, RiArrowRightLine,
   RiFileCopyLine, RiEditLine, RiSplitCellsHorizontal,
-  RiSplitCellsVertical, RiRecordCircleLine, RiStopCircleLine, RiFolderOpenLine, RiMergeCellsHorizontal
+  RiSplitCellsVertical, RiRecordCircleLine, RiStopCircleLine, RiFolderOpenLine, RiMergeCellsHorizontal, RiRefreshLine
 } from 'react-icons/ri'
 import type { MergeChoice } from '../../lib/tabMerge'
 import './TabContextMenu.css'
@@ -31,6 +31,7 @@ interface TabContextMenuProps {
   mergeChoices?: MergeChoice[]
   /** A choice was picked; a blocked one is passed too, so the reason can be told */
   onMergeInto?: (choice: MergeChoice) => void
+  developmentActions?: Array<{ label: string; action: 'restart' | 'stop'; onSelect: () => void }>
 }
 
 interface MenuEntry {
@@ -47,7 +48,7 @@ export function TabContextMenu({
   isOpen, position, onClose,
   onCloseTab, onCloseOthers, onCloseToLeft, onCloseToRight,
   onDuplicate, onRename, onSplitHorizontal, onSplitVertical,
-  isLogging, onToggleLog, onOpenLogFolder, isTerminal = true, mergeChoices, onMergeInto
+  isLogging, onToggleLog, onOpenLogFolder, isTerminal = true, mergeChoices, onMergeInto, developmentActions = []
 }: TabContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -75,6 +76,8 @@ export function TabContextMenu({
       }))
 
   const menuItems: MenuEntry[] = [
+    ...developmentActions.map(({ label, action, onSelect }) => ({ label, icon: action === 'restart' ? RiRefreshLine : RiStopCircleLine, action: onSelect })),
+    ...(developmentActions.length ? [{ type: 'separator' }] : []),
     { icon: RiCloseLine, label: '탭 닫기', action: onCloseTab },
     { icon: RiCloseFill, label: '다른 탭 닫기', action: onCloseOthers },
     { icon: RiArrowLeftLine, label: '왼쪽 탭 닫기', action: onCloseToLeft },

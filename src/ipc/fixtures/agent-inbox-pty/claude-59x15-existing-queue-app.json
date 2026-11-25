@@ -1,0 +1,261 @@
+{
+  "kind": "claude",
+  "version": "2.1.332",
+  "cols": 59,
+  "rows": 15,
+  "submittedNotice": "New ezShell message while you are busy: read it now with read_inbox; handle it after your current task.",
+  "phases": {
+    "idle": {
+      "cursor": {
+        "x": 7,
+        "y": 1
+      },
+      "bracketedPaste": true,
+      "lines": [
+        "",
+        " ▐▛███▛█   Claude Code v2.1.332",
+        "▝▜██████▀  Sonnet 4.6 · API Usage Billing",
+        " ▝▝   ▝▝   ~\\AppData\\Local\\Temp\\ezshell-codex-wake-pro…    ",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "                                         ● high · /effort  ",
+        "───────────────────────────────────────────────────────────",
+        "❯  ",
+        "───────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts · ← for agents"
+      ],
+      "wraps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        false,
+        true
+      ],
+      "frame": "\u001b[0m\u001b[2J\u001b[H\u001b[?2004h\u001b[2;1H ▐▛███▛█   Claude Code v2.1.332\u001b[3;1H▝▜██████▀  Sonnet 4.6 · API Usage Billing\u001b[4;1H ▝▝   ▝▝   ~\\AppData\\Local\\Temp\\ezshell-codex-wake-pro…    \u001b[11;1H                                         ● high · /effort  \u001b[12;1H───────────────────────────────────────────────────────────\u001b[13;1H❯ \u001b[0;7m \u001b[0m\u001b[14;1H───────────────────────────────────────────────────────────\u001b[15;1H  ⏸ manual mode on · ? for shortcuts · ← for agents\u001b[2;8H"
+    },
+    "queued": {
+      "cursor": {
+        "x": 1,
+        "y": 9
+      },
+      "bracketedPaste": true,
+      "lines": [
+        "▝▜██████▀  Sonnet 4.6 · API Usage Billing",
+        " ▝▝   ▝▝   ~\\AppData\\Local\\Temp\\ezshell-codex-wake-pro…",
+        "",
+        " ",
+        "❯ Fixture slow request.",
+        "",
+        "❯ Fixture queued request.",
+        "  ⎿  Queued · ctrl+x ctrl+s to send now",
+        "",
+        "✻ Generating…",
+        "                                         ● high · /effort  ",
+        "───────────────────────────────────────────────────────────",
+        "❯ Press up to edit queued messages",
+        "───────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · esc to interrupt · ← for agents"
+      ],
+      "wraps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        false,
+        true
+      ],
+      "frame": "\u001b[0m\u001b[2J\u001b[H\u001b[?2004h\u001b[1;1H▝▜██████▀  Sonnet 4.6 · API Usage Billing\u001b[2;1H ▝▝   ▝▝   ~\\AppData\\Local\\Temp\\ezshell-codex-wake-pro…\u001b[4;1H \u001b[5;1H❯ Fixture slow request.\u001b[7;1H❯ Fixture queued request.\u001b[8;1H  ⎿  Queued · ctrl+x ctrl+s to send now\u001b[10;1H✻ Generating…\u001b[11;1H                                         ● high · /effort  \u001b[12;1H───────────────────────────────────────────────────────────\u001b[13;1H❯ \u001b[0;7mP\u001b[0mress up to edit queued messages\u001b[14;1H───────────────────────────────────────────────────────────\u001b[15;1H  ⏸ manual mode on · esc to interrupt · ← for agents\u001b[10;2H"
+    },
+    "pasted": {
+      "cursor": {
+        "x": 1,
+        "y": 8
+      },
+      "bracketedPaste": true,
+      "lines": [
+        " ▝▝   ▝▝   ~\\AppData\\Local\\Temp\\ezshell-codex-wake-pro…",
+        " ",
+        "",
+        "❯ Fixture slow request.",
+        "",
+        "❯ Fixture queued request.",
+        "  ⎿  Queued · ctrl+x ctrl+s to send now",
+        "",
+        "✢ Razzle-dazzling…",
+        "                                         ● high · /effort",
+        "───────────────────────────────────────────────────────────",
+        "❯ New ezShell message while you are busy: read it now      ",
+        "  with read_inbox; handle it after your current task. ",
+        "───────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on"
+      ],
+      "wraps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        false,
+        true
+      ],
+      "frame": "\u001b[0m\u001b[2J\u001b[H\u001b[?2004h\u001b[1;1H ▝▝   ▝▝   ~\\AppData\\Local\\Temp\\ezshell-codex-wake-pro…\u001b[2;1H \u001b[4;1H❯ Fixture slow request.\u001b[6;1H❯ Fixture queued request.\u001b[7;1H  ⎿  Queued · ctrl+x ctrl+s to send now\u001b[9;1H✢ Razzle-dazzling…\u001b[10;1H                                         ● high · /effort\u001b[11;1H───────────────────────────────────────────────────────────\u001b[12;1H❯ New ezShell message while you are busy: read it now      \u001b[13;1H  with read_inbox; handle it after your current task.\u001b[0;7m \u001b[0m\u001b[14;1H───────────────────────────────────────────────────────────\u001b[15;1H  ⏸ manual mode on\u001b[9;2H"
+    },
+    "atStart": {
+      "cursor": {
+        "x": 1,
+        "y": 8
+      },
+      "bracketedPaste": true,
+      "lines": [
+        " ▝▝   ▝▝   ~\\AppData\\Local\\Temp\\ezshell-codex-wake-pro…",
+        " ",
+        "",
+        "❯ Fixture slow request.",
+        "",
+        "❯ Fixture queued request.",
+        "  ⎿  Queued · ctrl+x ctrl+s to send now",
+        "",
+        "✢ Generating…",
+        "                                         ● high · /effort",
+        "───────────────────────────────────────────────────────────",
+        "❯ New ezShell message while you are busy: read it now      ",
+        "  with read_inbox; handle it after your current task.",
+        "───────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on"
+      ],
+      "wraps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        false,
+        true
+      ],
+      "frame": "\u001b[0m\u001b[2J\u001b[H\u001b[?2004h\u001b[1;1H ▝▝   ▝▝   ~\\AppData\\Local\\Temp\\ezshell-codex-wake-pro…\u001b[2;1H \u001b[4;1H❯ Fixture slow request.\u001b[6;1H❯ Fixture queued request.\u001b[7;1H  ⎿  Queued · ctrl+x ctrl+s to send now\u001b[9;1H✢ Generating…\u001b[10;1H                                         ● high · /effort\u001b[11;1H───────────────────────────────────────────────────────────\u001b[12;1H❯ \u001b[0;7mN\u001b[0mew ezShell message while you are busy: read it now      \u001b[13;1H  with read_inbox; handle it after your current task.\u001b[14;1H───────────────────────────────────────────────────────────\u001b[15;1H  ⏸ manual mode on\u001b[9;2H"
+    },
+    "enter": {
+      "cursor": {
+        "x": 52,
+        "y": 14
+      },
+      "bracketedPaste": true,
+      "lines": [
+        " ",
+        "❯ Fixture slow request.",
+        "",
+        "❯ Fixture queued request.",
+        "",
+        "❯ New ezShell message while you are busy: read it now with",
+        "  read_inbox; handle it after your current task.",
+        "  ⎿  Queued · ctrl+x ctrl+s to send now",
+        "",
+        "✢ Generating…",
+        "                                         ● high · /effort  ",
+        "───────────────────────────────────────────────────────────",
+        "❯ Press up to edit queued messages",
+        "───────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · esc to interrupt · ← for agents"
+      ],
+      "wraps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        false,
+        true
+      ],
+      "frame": "\u001b[0m\u001b[2J\u001b[H\u001b[?2004h\u001b[1;1H \u001b[2;1H❯ Fixture slow request.\u001b[4;1H❯ Fixture queued request.\u001b[6;1H❯ New ezShell message while you are busy: read it now with\u001b[7;1H  read_inbox; handle it after your current task.\u001b[8;1H  ⎿  Queued · ctrl+x ctrl+s to send now\u001b[10;1H✢ Generating…\u001b[11;1H                                         ● high · /effort  \u001b[12;1H───────────────────────────────────────────────────────────\u001b[13;1H❯ \u001b[0;7mP\u001b[0mress up to edit queued messages\u001b[14;1H───────────────────────────────────────────────────────────\u001b[15;1H  ⏸ manual mode on · esc to interrupt · ← for agents\u001b[15;53H"
+    },
+    "queueDrained": {
+      "cursor": {
+        "x": 59,
+        "y": 14
+      },
+      "bracketedPaste": true,
+      "lines": [
+        " ",
+        "",
+        "❯ Fixture queued request.",
+        "",
+        "❯ New ezShell message while you are busy: read it now with",
+        "  read_inbox; handle it after your current task.",
+        "",
+        "● Fixture reply.",
+        "",
+        "✻ Churned for 0s · done 오후 4:31",
+        "                                         ● high · /effort  ",
+        "───────────────────────────────────────────────────────────",
+        "❯  ",
+        "───────────────────────────────────────────────────────────",
+        "  ⏸ manual mode on · ? for shortcuts · ← for agents        "
+      ],
+      "wraps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        false,
+        true
+      ],
+      "frame": "\u001b[0m\u001b[2J\u001b[H\u001b[?2004h\u001b[1;1H \u001b[3;1H❯ Fixture queued request.\u001b[5;1H❯ New ezShell message while you are busy: read it now with\u001b[6;1H  read_inbox; handle it after your current task.\u001b[8;1H● Fixture reply.\u001b[10;1H✻ Churned for 0s · done 오후 4:31\u001b[11;1H                                         ● high · /effort  \u001b[12;1H───────────────────────────────────────────────────────────\u001b[13;1H❯ \u001b[0;7m \u001b[0m\u001b[14;1H───────────────────────────────────────────────────────────\u001b[15;1H  ⏸ manual mode on · ? for shortcuts · ← for agents        \u001b[15;59H"
+    }
+  }
+}

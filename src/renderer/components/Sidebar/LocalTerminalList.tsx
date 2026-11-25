@@ -19,6 +19,7 @@ import { LocalProjectsTree, buildProjectNodes, type ProjectNode, type WorktreeNo
 import { workTabsByWorktree } from '../../lib/tabGroups'
 import { effectiveSessionColor } from '../../lib/sessionEffectiveColor'
 import type { LocalDevelopmentTask } from '../../types'
+import { DevelopmentRunChips } from '../Terminal/DevelopmentRunStatus'
 import './LocalTerminalList.css'
 
 const KEY_STEP = 30
@@ -315,6 +316,7 @@ export function LocalTerminalList({ fillAvailableSpace = false, workingTabs, ser
     const tree = terminals.get(id)?.splitTree
     return (
       <>
+        <DevelopmentRunChips tabId={id} />
         {tree && isSplitTree(tree) && paneIds(tree).length > 1 && (
           <PaneLayoutBadge tabId={id} tabName={name} tree={tree} currentPane={() => focusedPaneOf(id)} onPick={pane => focusTabPane(focusTerminal, id, pane)} />
         )}

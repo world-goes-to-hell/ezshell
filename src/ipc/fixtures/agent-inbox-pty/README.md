@@ -16,6 +16,7 @@ Windows ConPTY에서 Codex CLI 0.172.0과 Claude Code 2.1.332로 기록했다. C
 | `claude-100x15-idle.json` | 낮은 편집기와 위쪽에 놓인 PTY 커서 |
 | `claude-59x24-wrapped.json` | 구분선 사이 두 줄로 접힌 알림 |
 | `claude-59x15-queue.json` | `Press up to edit queued messages` 제안, 접힌 알림, Enter 뒤 대기열 |
+| `claude-59x15-existing-queue-app.json` | Claude에 기존 요청이 있을 때 앱이 붙인 알림. 일반 커서와 Ctrl+A를 각각 기록했고 로컬 서버에서 기존 요청, 작업 중 알림, 후속 알림 순서를 확인함 |
 
 `cols`, `rows`는 캡처 시 칸 크기다. `phases.idle`, `pasted`, `atStart`, `enter`는 붙여넣기 전, 붙여넣은 직후, 커서를 입력 시작점으로 옮긴 뒤, Enter 뒤 화면이다. 일부 표본에는 `warningDetail`, `queued`, `queueDrained`, `updatePrompt`, `settingsWarning`이 있다. F2 상세와 업데이트 선택창에서는 Enter를 누르지 않았다. Claude의 `settingsWarning`은 `Continue`를 선택해 닫은 뒤 편집기 제출을 검증했다.
 

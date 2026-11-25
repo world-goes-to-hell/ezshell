@@ -644,6 +644,18 @@ ipcMain.on('quick-capture-start', (event) => {
 app.on('will-quit', () => {
   globalDoubleTab.stop();
   quickCapture.cancel();
+  globalPointer.stop();
+});
+// 설정 > 포인터 모양 > 다른 프로그램에서도 쓰기 (Windows): the main window sends its pointers as PNGs, checked
+// in src/globalPointer.js before a helper puts them in place of the system's. Screen tests never start it.
+const globalPointer = require('./src/globalPointer.js').createGlobalPointer({
+  folder: path.join(userDataPath, 'pointer-cursors'), allowNative: !hiddenTestWindows
+});
+globalPointer.recover();
+ipcMain.handle('pointer-system-apply', (event, request) =>
+  fromMainWindow(event) && event.senderFrame === event.sender.mainFrame ? globalPointer.apply(request) : false);
+ipcMain.handle('pointer-system-restore', (event) => {
+  if (fromMainWindow(event) && event.senderFrame === event.sender.mainFrame) globalPointer.restore();
 });
 const sendToLocalWindow = (channel, payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
@@ -860,7 +872,8 @@ ipcMain.handle('agent-usage-state', event => (fromMainWindow(event) && !isAppLoc
 const localProjectIpc = require('./src/ipc/localProjects.js').registerLocalProjectIpc({
   ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit,
   gitCommit: require('./src/localFiles/gitCommit.js'),
-  openDevelopmentTask: (task, size) => getLocalShells().openDevelopmentTask(task, size)
+  openDevelopmentTask: (task, size, allowed) => getLocalShells().openDevelopmentTask(task, size, allowed),
+  changeDevelopmentTask: (id, taskId, action, allowed) => getLocalShells().changeDevelopmentTask(id, taskId, action, allowed)
 });
 // Past Claude Code and Codex sessions of this PC, for the right panel (src/agentHistory)
 const agentHistory = require('./src/agentHistory/history.js').createAgentHistory();

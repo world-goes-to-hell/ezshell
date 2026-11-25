@@ -33,6 +33,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setWorkOverviewKey: (keys) => ipcRenderer.send('work-overview-key', keys),
   setQuickCaptureKeys: (keys) => ipcRenderer.send('quick-capture-keys', keys),
   startQuickCapture: () => ipcRenderer.send('quick-capture-start'),
+  // The app's pointer set in other programs (Windows): PNGs per state, checked by main (src/globalPointer.js)
+  pointerSystemApply: (request) => ipcRenderer.invoke('pointer-system-apply', request),
+  pointerSystemRestore: () => ipcRenderer.invoke('pointer-system-restore'),
   // The overview shortcut while another program was in front (src/globalDoubleTab.js): ezShell came forward, open the overview
   onWorkOverviewRequest: (callback) => {
     const listener = (_event, requestId) => callback(requestId);
@@ -166,6 +169,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localProjectInspect: (folder) => ipcRenderer.invoke('local-project-inspect', folder),
   localProjectDevelopmentTasks: (folder) => ipcRenderer.invoke('local-project-development-tasks', folder),
   localProjectDevelopmentStart: (options) => ipcRenderer.invoke('local-project-development-start', options),
+  localProjectDevelopmentChange: (options) => ipcRenderer.invoke('local-project-development-change', options),
+  onLocalShellDevelopmentState: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('local-shell-development-state', listener);
+    return () => ipcRenderer.removeListener('local-shell-development-state', listener);
+  },
   workspaceDirectoryList: (folder, relative = '') => ipcRenderer.invoke('workspace-directory-list', { root: folder, path: relative }),
   workspaceDirectoryPrepare: (root, refresh, includeAll) => ipcRenderer.invoke('workspace-directory-prepare', { root, refresh, includeAll }),
   workspaceDirectorySearch: (root, query, includeAll) => ipcRenderer.invoke('workspace-directory-search', { root, query, includeAll }),

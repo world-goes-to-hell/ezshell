@@ -12,6 +12,7 @@ const { createAgentHookState, hookStatus, applyAgentHook, reconcileAgentHook } =
 const { POWERSHELL_CODEX_HOOK_ARGS, injectCodexHooks, quoteCodexHookArgs, codexProjectHooksPossible, observeCodexHookReview } = require('./ipc/codexHookLaunch.js');
 const { processCommandLine, processList, resumeCommand, words } = require('./agentIdle.js');
 const { antigravityBrainRoot, openAntigravityTranscript } = require('./agentChat/antigravitySessions.js');
+const { developmentAddress, stopDevelopmentProcess: stopDeveloperTree, waitDevelopmentPort: waitDeveloperPort } = require('./ipc/developmentProcess.js');
 
 /** Output kept per shell so a tab that is drawn again (pane split, tab moved) continues from it */
 const BACKLOG_CHARS = 256 * 1024;
@@ -332,10 +333,10 @@ else { Write-Host 'Antigravity CLI를 찾을 수 없습니다.' }
 
 function developmentShellArgs(shell, task, platform) {
   if (platform !== 'win32') {
-    return [...shell.args, '-i', '-c', [task.installCommand, task.command].filter(Boolean).join(' && ')];
+    return [...shell.args, '-c', [task.installCommand, `exec ${task.command}`].filter(Boolean).join(' && ')];
   }
   const commands = [task.installCommand, task.command].filter(Boolean);
-  const script = commands.map(command => `${command}\nif (!$?) { exit 1 }`).join('\n');
+  const script = commands.map(command => `${command}\nif (!$?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }`).join('\n');
   return [...shell.args, '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
 }
 
@@ -558,7 +559,8 @@ function createLocalShells({
   platform = process.platform, processTree = () => getProcessTree(platform), processAlive = isProcessAlive,
   timedProcessTree = () => processList({ platform }), commandLine = pid => processCommandLine(pid, { platform }),
   readClaudeSessions, onInboxDraftBlocked, antigravityRoot = antigravityBrainRoot(),
-  killTrees = pids => killProcessTreesSync(pids, platform)
+  killTrees = pids => killProcessTreesSync(pids, platform),
+  stopDevelopmentProcess = pty => stopDeveloperTree(pty, platform, processAlive), waitDevelopmentPort = waitDeveloperPort
 }) {
   const shells = new Map();
   let nextId = 1;
@@ -829,7 +831,7 @@ function createLocalShells({
   async function findAgentProcess({ pid, kind, shellId }) {
     const candidates = new Map();
     for (const [id, entry] of shells) {
-      if (!entry.exited && (!entry.agent || entry.externalAgent) && entry.pty.pid > 0) candidates.set(entry.pty.pid, { id, entry });
+      if (!entry.development && !entry.exited && (!entry.agent || entry.externalAgent) && entry.pty.pid > 0) candidates.set(entry.pty.pid, { id, entry });
     }
     if (!candidates.size) return;
     let processes;
@@ -981,6 +983,7 @@ function createLocalShells({
   async function discoverLocalClaude() {
     const candidates = new Map();
     for (const [id, entry] of shells) {
+      if (entry.development) continue;
       const pid = entry.pty.pid;
       if (entry.exited || entry.sleeping || !Number.isSafeInteger(pid) || pid <= 0 || (entry.agent && entry.agent !== 'claude')) continue;
       candidates.set(pid, { id, entry, ptyPid: pid });
@@ -1072,7 +1075,7 @@ function createLocalShells({
     }, AGENT_PROCESS_CHECK_MS).unref?.();
   }
 
-  function open({ cols, rows, cwd: directory, agent, resume, replacementFor, restoring } = {}, developmentTask) {
+  function open({ cols, rows, cwd: directory, agent, resume, replacementFor, restoring } = {}) {
     const previous = replacementFor === undefined ? undefined : shells.get(replacementFor);
     if (replacementFor !== undefined) {
       if (!previous || !resume) throw new Error('바꿀 셸을 찾지 못했습니다.');
@@ -1082,8 +1085,7 @@ function createLocalShells({
     const id = `local:${nextId++}`;
     const automatic = restoring === true;
     const codexHooks = agent === 'codex' && injectCodexHooks(agents?.codexHookMode?.(), automatic);
-    const args = developmentTask ? developmentShellArgs(shell, developmentTask, platform)
-      : shellArgs(shell, agent, platform, Boolean(agents), resume, codexHooks, automatic);
+    const args = shellArgs(shell, agent, platform, Boolean(agents), resume, codexHooks, automatic);
     const columns = previous?.cols ?? size(cols, 80);
     const lines = previous?.rows ?? size(rows, 24);
     const shellEnv = localTerminalEnvironment(env, platform);
@@ -1113,7 +1115,7 @@ function createLocalShells({
     }
     const codexInput = agent === 'codex' ? { hasDraft: false, submitted: false } : null;
     const entry = {
-      pty, agent: registeredAgent, registration, codexInput, cols: columns, rows: lines, composing: false, replacementFor, developmentTask,
+      pty, agent: registeredAgent, registration, codexInput, cols: columns, rows: lines, composing: false, replacementFor,
       codexActivity: codexInput ? codexActivityFor(resumeId) : null,
       wakeMcp: Boolean(shellUsageEnv.EZSHELL_AGENT_WAKE_MCP_CONFIG),
       // For a window that reloads and takes the shell back as a tab (`list`)
@@ -1125,7 +1127,7 @@ function createLocalShells({
       activeAt: openedAt, openedAt, sleeping: null
     };
     const nonce = shellUsageEnv.EZSHELL_CODEX_HOOK_NONCE;
-    if (!agent && !developmentTask && platform === 'win32' && nonce) {
+    if (!agent && platform === 'win32' && nonce) {
       entry.codexLaunchMarker = value => {
         if (value === `ezshell-codex-hooks=start;${nonce}`) startCodexReview(id, entry);
         else if (value === `ezshell-codex-hooks=end;${nonce}`) clearCodexReview(entry);
@@ -1165,16 +1167,110 @@ function createLocalShells({
     return { id, name: shell.name, ...(directory === undefined ? {} : { cwd: workingDirectory }) };
   }
 
-  function openDevelopmentTask(task, { cols, rows }) {
+  function setDevelopment(id, entry, patch) {
+    entry.development = { ...entry.development, ...patch };
+    send('local-shell-development-state', { id, development: entry.development });
+  }
+
+  function launchDevelopment(id, entry) {
+    setDevelopment(id, entry, { status: 'starting', url: null, exitCode: null });
+    try {
+      const pty = spawn(shell.file, developmentShellArgs(shell, entry.developmentTask, platform), {
+        name: TERMINAL_TYPE, cols: entry.cols, rows: entry.rows, cwd: entry.launchDirectory,
+        env: localTerminalEnvironment(env, platform)
+      });
+      entry.pty = pty;
+      entry.exited = false;
+      entry.exitCode = null;
+      let fragment = '';
+      entry.developmentExit = new Promise(resolve => pty.onExit(({ exitCode }) => {
+        resolve();
+        if (entry.pty !== pty || entry.exited) return;
+        entry.exited = true;
+        entry.exitCode = exitCode;
+        if (shells.get(id) !== entry) return;
+        if (!entry.developmentAction) setDevelopment(id, entry, { status: 'exited', exitCode });
+        send('local-shell-exit', { id, exitCode });
+      }));
+      pty.onData(data => {
+        if (shells.get(id) !== entry || entry.pty !== pty) return;
+        entry.backlog = (entry.backlog + data).slice(-BACKLOG_CHARS);
+        send('local-shell-data', { id, data });
+        if (entry.development.url || entry.exited) return;
+        const lines = (fragment + data).split(/[\r\n]+/);
+        fragment = lines.pop().slice(-2048);
+        const url = developmentAddress(lines);
+        if (url) setDevelopment(id, entry, { url });
+      });
+      if (!entry.exited) setDevelopment(id, entry, { status: 'running' });
+    } catch (error) {
+      entry.exited = true;
+      setDevelopment(id, entry, { status: 'exited' });
+      throw error;
+    }
+  }
+
+  async function openDevelopmentTask(task, { cols, rows }, allowed = () => true) {
     const label = task.relative === '.' ? task.name : `${task.name} · ${path.basename(task.cwd)}`;
     const normalized = value => platform === 'win32' ? value.toLowerCase() : value;
     for (const [id, entry] of shells) {
       const running = entry.developmentTask;
-      if (!entry.exited && running?.id === task.id && normalized(running.cwd) === normalized(task.cwd)) {
-        return { id, name: shell.name, cwd: task.cwd, label };
+      if (running?.id === task.id && normalized(running.cwd) === normalized(task.cwd)) {
+        if (entry.exited && !entry.developmentAction) await changeDevelopmentTask(id, task.id, 'restart', allowed);
+        return { id, name: shell.name, cwd: task.cwd, label, development: entry.development };
       }
     }
-    return { ...open({ cols, rows, cwd: task.cwd }, task), label };
+    const directory = requireLocalDirectory(task.cwd);
+    const id = `local:${nextId++}`;
+    const entry = {
+      cwd: directory, launchDirectory: directory, cols: size(cols, 80), rows: size(rows, 24),
+      developmentTask: task, development: { taskId: task.id, name: task.name, label },
+      backlog: '', exited: true, exitCode: null
+    };
+    shells.set(id, entry);
+    try { launchDevelopment(id, entry) }
+    catch (error) { close(id); throw error }
+    return { id, name: shell.name, cwd: directory, label, development: entry.development };
+  }
+
+  function stopDevelopmentEntry(entry) {
+    return entry.developmentStop ??= Promise.resolve().then(() => stopDevelopmentProcess(entry.pty))
+      .finally(() => { entry.developmentStop = null });
+  }
+
+  async function changeDevelopmentTask(id, taskId, action, allowed = () => true) {
+    const entry = shells.get(id);
+    if (!entry?.developmentTask || entry.developmentTask.id !== taskId || !['restart', 'stop'].includes(action)) {
+      throw new Error('기동한 개발 서버를 찾을 수 없습니다.');
+    }
+    if (!allowed()) throw new Error('먼저 잠금을 해제해 주세요.');
+    if (entry.developmentAction) throw new Error('개발 서버를 전환하는 중입니다.');
+    entry.developmentAction = action;
+    try {
+      if (!entry.exited) {
+        setDevelopment(id, entry, { status: 'stopping' });
+        await stopDevelopmentEntry(entry);
+        if (shells.get(id) !== entry) throw new Error('개발 서버 탭이 닫혔습니다.');
+        await Promise.race([entry.developmentExit, delay(4500)]);
+        if (!entry.exited) throw new Error('개발 서버의 종료를 확인하지 못했습니다.');
+      }
+      if (action === 'restart') {
+        await waitDevelopmentPort(entry.development.url);
+        if (shells.get(id) !== entry) throw new Error('개발 서버 탭이 닫혔습니다.');
+        if (!allowed()) throw new Error('먼저 잠금을 해제해 주세요.');
+        // ConPTY starts the new console with ED 2 and CUP home. Move the old viewport into
+        // scrollback first so its logs and this divider survive the new console's redraw.
+        const data = `\x1b[?1049l\x1b[?6l\x1b[r\x1b[0m\x1b[${entry.rows};1H\r\n── 개발 서버 재기동 ──${'\r\n'.repeat(entry.rows)}`;
+        entry.backlog = (entry.backlog + data).slice(-BACKLOG_CHARS);
+        send('local-shell-data', { id, data });
+        launchDevelopment(id, entry);
+      }
+    } finally {
+      entry.developmentAction = undefined;
+      if (shells.get(id) === entry && entry.development.status !== 'running') {
+        setDevelopment(id, entry, { status: entry.exited ? 'exited' : 'running', exitCode: entry.exitCode });
+      }
+    }
   }
 
   /** What a tab needs to draw itself again; null when the shell is gone */
@@ -1182,7 +1278,7 @@ function createLocalShells({
     const entry = shells.get(id);
     if (!entry) return null;
     return { backlog: entry.backlog.slice(-BACKLOG_CHARS), exited: entry.exited, exitCode: entry.exitCode,
-      ...(entry.inboxDraftBlocked && { inboxDraftBlocked: true }) };
+      ...(entry.inboxDraftBlocked && { inboxDraftBlocked: true }), ...(entry.development && { development: entry.development }) };
   }
 
   function write(id, data) {
@@ -1211,11 +1307,11 @@ function createLocalShells({
 
   function resize(id, cols, rows) {
     const entry = shells.get(id);
-    if (!entry || entry.exited) return;
+    if (!entry || (entry.exited && !entry.development)) return;
     try {
       const columns = size(cols, 80);
       const lines = size(rows, 24);
-      entry.pty.resize(columns, lines);
+      if (!entry.exited) entry.pty.resize(columns, lines);
       entry.cols = columns;
       entry.rows = lines;
       entry.inbox?.resize(columns, lines);
@@ -1229,6 +1325,15 @@ function createLocalShells({
     const entry = shells.get(id);
     if (!entry) return;
     shells.delete(id);
+    if (entry.development) {
+      send('local-shell-development-state', { id, development: null });
+      if (!entry.exited) {
+        void stopDevelopmentEntry(entry).catch(() => {
+          try { entry.pty.kill() } catch { /* already gone */ }
+        });
+      }
+      return;
+    }
     clearHookTimer(entry);
     clearCodexReview(entry);
     endSleep(id, entry);
@@ -1353,11 +1458,11 @@ function createLocalShells({
 
   /** killTrees: the app quits to install an update, so nothing started in a shell may outlive it */
   function closeAll({ killTrees: endTrees = false } = {}) {
-    if (endTrees) {
-      const pids = [...shells.values()]
-        .filter(entry => !entry.exited && Number.isInteger(entry.pty?.pid) && entry.pty.pid > 0)
-        .map(entry => entry.pty.pid);
-      if (pids.length > 0) killTrees(pids);
+    const live = [...shells.values()].filter(entry => !entry.exited && Number.isInteger(entry.pty?.pid) && entry.pty.pid > 0);
+    const pids = live.filter(entry => endTrees || (platform === 'win32' && entry.development)).map(entry => entry.pty.pid);
+    if (pids.length > 0) killTrees(pids);
+    if (platform !== 'win32') for (const entry of live.filter(entry => entry.development)) {
+      try { process.kill(-entry.pty.pid, 'SIGTERM') } catch { /* already gone */ }
     }
     for (const id of [...shells.keys()]) close(id);
   }
@@ -1383,13 +1488,14 @@ function createLocalShells({
   }
 
   return {
-    open, openDevelopmentTask, attach, write, pasteClipboardImage, resize, close, closeAll, bindAgentProcess, reportAntigravityStatus, currentDirectory,
+    open, openDevelopmentTask, changeDevelopmentTask, attach, write, pasteClipboardImage, resize, close, closeAll, bindAgentProcess, reportAntigravityStatus, currentDirectory,
     /**
      * Every shell, oldest first. The shells outlive their tabs, so a window that reloaded (and lost
      * all its tabs) takes these back; otherwise they kept running unseen, agents included.
      */
     list: () => [...shells].map(([id, entry]) => ({
-      id, name: shell.name, exited: entry.exited, cwd: entry.cwd, agent: entry.agent ?? null
+      id, name: shell.name, exited: entry.exited, cwd: entry.cwd, agent: entry.agent ?? null,
+      ...(entry.development && { development: entry.development })
     })),
     setComposing(id, value) {
       const entry = shells.get(id);

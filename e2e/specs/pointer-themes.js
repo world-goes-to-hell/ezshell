@@ -76,6 +76,15 @@ const { check, finish } = createChecks()
   // Read through an image (the page's CSP refuses fetch of blob: URLs, which is fine: only images use them)
   const bigWidth = await js(`(() => { const img = new Image(); img.src = ${JSON.stringify(big.match(/blob:[^"]+/)?.[0] ?? '')}; return img.decode().then(() => img.naturalWidth, () => 0) })()`)
   check('the largest size draws a 64px image and scales the hotspot to the arrow tip', / 3 3, default$/.test(big) && bigWidth === 64, `${big} (${bigWidth}px)`)
+  // Other programs (Windows): main checks the drawn PNGs; the screen test never starts the helper
+  const outside = label => js(`[...document.querySelectorAll('.pointer-settings [aria-label="다른 프로그램에서도 쓰기"] button')].find(b => b.textContent.trim() === ${JSON.stringify(label)})?.click()`)
+  if (process.platform === 'win32') {
+    await outside('켜기')
+    check('turning on other programs sends pointers main accepts', await until(`document.documentElement.dataset.systemPointer === 'paw:64'`, 5000),
+      await js(`document.documentElement.dataset.systemPointer ?? 'none'`))
+    await outside('끄기')
+    check('turning it off gives the system pointers back', await until(`!document.documentElement.dataset.systemPointer && !JSON.parse(localStorage.getItem('pointerPrefs')).outsideApp`))
+  }
   await shot('pointer-settings-sets')
 
   // Effects

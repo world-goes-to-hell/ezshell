@@ -814,6 +814,15 @@ export interface LocalDevelopmentTask {
   includeSource: boolean
 }
 
+export interface LocalDevelopmentRun {
+  taskId: string
+  name: string
+  label: string
+  status: 'starting' | 'running' | 'stopping' | 'exited'
+  exitCode: number | null
+  url: string | null
+}
+
 export interface WorkspaceDirectoryEntry {
   name: string
   kind: 'directory' | 'file' | 'link'
@@ -965,6 +974,9 @@ declare global {
       setWorkOverviewKey?: (keys: string[]) => void
       setQuickCaptureKeys?: (keys: [string[], string[]]) => void
       startQuickCapture?: () => void
+      /** The app's pointer set in other programs (Windows only; main checks each PNG). false: refused */
+      pointerSystemApply?: (request: { size: number; cursors: { state: string; png: string; hotspot: [number, number] }[] }) => Promise<boolean>
+      pointerSystemRestore?: () => Promise<void>
       onWorkOverviewRequest?: (callback: (requestId: number) => void) => () => void
       setShortcutRecording?: (recording: boolean) => void
 
@@ -1050,7 +1062,10 @@ declare global {
       localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
       localProjectDevelopmentTasks: (folder: string) => Promise<{ success: true; tasks: LocalDevelopmentTask[] } | { success: false; error: string }>
       localProjectDevelopmentStart: (options: { folder: string; id: string; cols: number; rows: number; includeSource: boolean; install: boolean }) =>
-        Promise<{ success: true; id: string; name: string; cwd: string; label: string } | { success: false; error: string }>
+        Promise<{ success: true; id: string; name: string; cwd: string; label: string; development: LocalDevelopmentRun } | { success: false; error: string }>
+      localProjectDevelopmentChange: (options: { shellId: string; taskId: string; action: 'restart' | 'stop' }) =>
+        Promise<{ success: true } | { success: false; error: string }>
+      onLocalShellDevelopmentState?: (callback: (event: { id: string; development: LocalDevelopmentRun | null }) => void) => () => void
       workspaceDirectoryList: (folder: string, relative?: string) => Promise<{ success: true; entries: WorkspaceDirectoryEntry[]; total: number } | { success: false; error: string }>
       workspaceDirectoryPrepare?: (root: string, refresh?: boolean, includeAll?: boolean) => Promise<{ success: true } | { success: false; error: string }>
       workspaceDirectorySearch?: (root: string, query: string, includeAll?: boolean) => Promise<({ success: true } & WorkspaceDirectorySearchResult) | { success: false; error: string }>
@@ -1069,10 +1084,10 @@ declare global {
       agentHistoryDetail?: (shellId: string, key: string) => Promise<({ success: true } & AgentHistoryDetail) | { success: false; error: string }>
       agentHistoryOpenFolder?: (shellId: string, key: string) => Promise<{ success: true } | { success: false; error: string }>
       localWorktreeCreate: (options: { folder: string; branch: string; base: string }) => Promise<({ success: true } & LocalWorktree) | { success: false; error: string }>
-      localShellAttach?: (id: string) => Promise<{ backlog: string; exited: boolean; exitCode: number | null; inboxDraftBlocked?: boolean } | null>
+      localShellAttach?: (id: string) => Promise<{ backlog: string; exited: boolean; exitCode: number | null; inboxDraftBlocked?: boolean; development?: LocalDevelopmentRun } | null>
       onLocalShellInboxDraft?: (callback: (notice: { id: string; blocked: boolean }) => void) => () => void
       /** Shells main still runs, for a reloaded window to take back as tabs */
-      localShellList?: () => Promise<Array<{ id: string; name: string; exited: boolean; cwd: string | null; agent: AgentChatProvider | null }>>
+      localShellList?: () => Promise<Array<{ id: string; name: string; exited: boolean; cwd: string | null; agent: AgentChatProvider | null; development?: LocalDevelopmentRun }>>
       localShellCurrentDirectory: (id: string) => Promise<string | null>
       localShellClipboard?: (id: string) => Promise<{ success: true; text: string } | { success: false; error: string }>
       localShellHasWorkingAgent?: (ids: string[]) => Promise<boolean>

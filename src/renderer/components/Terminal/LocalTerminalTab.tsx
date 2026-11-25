@@ -289,6 +289,13 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     const stopExit = window.electronAPI.onLocalShellExit?.(({ id, exitCode }) => {
       if (id === shellId) setExit({ code: exitCode })
     })
+    let receivedDevelopment = false
+    const stopDevelopment = window.electronAPI.onLocalShellDevelopmentState?.(({ id, development }) => {
+      if (id !== shellId || !development) return
+      receivedDevelopment = true
+      if (development.status === 'starting' || development.status === 'running') setExit(null)
+      if (development.status === 'exited') setExit({ code: development.exitCode })
+    })
     let receivedInboxDraft = false
     const stopInboxDraft = window.electronAPI.onLocalShellInboxDraft?.(({ id, blocked }) => {
       if (id !== shellId) return
@@ -304,7 +311,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       }
       if (state.backlog) terminal.write(state.backlog)
       if (!receivedInboxDraft) setInboxDraftBlocked(Boolean(state.inboxDraftBlocked))
-      if (state.exited) setExit({ code: state.exitCode })
+      if (state.exited && !receivedDevelopment) setExit({ code: state.exitCode })
     })
 
     const onTheme = (): void => { terminal.options.theme = useThemeStore.getState().getTerminalTheme() }
@@ -323,6 +330,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       host.removeEventListener('paste', onNativePaste, true)
       stopData?.()
       stopExit?.()
+      stopDevelopment?.()
       stopInboxDraft?.()
       window.removeEventListener('theme-changed', onTheme)
       observer.disconnect()

@@ -7,6 +7,7 @@ import {
 } from '../../lib/pointerPrefs'
 import { addClick, addMove, createEffectState, drawFrame, needsFrame, type EffectConfig } from '../../lib/pointerEffects'
 import { effectInk } from '../../lib/pointerInk'
+import { canReplaceSystemPointer } from '../../lib/pointerSystem'
 import { CLICK_EFFECT_CARDS, MOVE_EFFECT_CARDS, type EffectCardInfo } from './pointerEffectList'
 import './PointerSettings.css'
 
@@ -153,6 +154,7 @@ function Row({ title, hint, children }: { title: string; hint: string; children:
 
 const levelOptions = ([1, 2, 3] as const).map(value => ({ value, label: LEVEL_LABELS[value] }))
 const terminalOptions = [{ value: true, label: '켜기' }, { value: false, label: '끄기' }] as const
+const outsideOptions = [{ value: false, label: '끄기' }, { value: true, label: '켜기' }] as const
 
 export function PointerShapeSettings() {
   const prefs = usePointerPrefs()
@@ -169,6 +171,11 @@ export function PointerShapeSettings() {
         <Segment label="포인터 크기" value={prefs.size} onChange={size => setPointerPrefs({ size })}
           options={CURSOR_SIZES.map(value => ({ value, label: SIZE_LABELS[value] }))} />
       </Row>
+      {canReplaceSystemPointer() && (
+        <Row title="다른 프로그램에서도 쓰기" hint="앱이 켜져 있는 동안 Windows 전체의 포인터를 이 세트로 바꿉니다. 끄거나 앱을 닫으면 원래 포인터로 돌아옵니다. 잡기 모양은 Windows 기본 포인터 그대로입니다">
+          <Segment label="다른 프로그램에서도 쓰기" value={prefs.outsideApp} options={outsideOptions} onChange={outsideApp => setPointerPrefs({ outsideApp })} />
+        </Row>
+      )}
       <p className="pointer-note">터미널 안에서는 글자 입력(I-beam) 모양을 유지합니다. 선택한 세트의 I-beam 으로 바뀔 뿐, 모양의 역할은 그대로입니다.</p>
     </div>
   )

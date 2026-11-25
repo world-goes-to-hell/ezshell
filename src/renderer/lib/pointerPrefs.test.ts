@@ -8,14 +8,14 @@ import { collectUiSettings, parseUiSettingsFile } from './uiSettingsBackup'
 describe('pointer prefs', () => {
   it('starts with the system pointer and no effects', () => {
     expect(parsePointerPrefs(null)).toEqual(DEFAULT_POINTER_PREFS)
-    expect(DEFAULT_POINTER_PREFS).toMatchObject({ set: 'system', size: 32, move: 'none', click: 'none', moveOnTerminal: false, clickOnTerminal: true })
+    expect(DEFAULT_POINTER_PREFS).toMatchObject({ set: 'system', size: 32, move: 'none', click: 'none', moveOnTerminal: false, clickOnTerminal: true, outsideApp: false })
     expect(hasEffects(DEFAULT_POINTER_PREFS)).toBe(false)
   })
 
   it('reads a stored value and falls back field by field on anything unknown', () => {
-    const stored = { set: 'paw', size: 64, move: 'comet', click: 'word', moveLevel: 3, clickLevel: 1, moveOnTerminal: true, clickOnTerminal: false }
+    const stored = { set: 'paw', size: 64, move: 'comet', click: 'word', moveLevel: 3, clickLevel: 1, moveOnTerminal: true, clickOnTerminal: false, outsideApp: true }
     expect(parsePointerPrefs(JSON.stringify(stored))).toEqual(stored)
-    expect(parsePointerPrefs(JSON.stringify({ set: 'evil', size: 128, move: 'x', click: 7, moveLevel: 9, moveOnTerminal: 'yes', clickOnTerminal: false })))
+    expect(parsePointerPrefs(JSON.stringify({ set: 'evil', size: 128, move: 'x', click: 7, moveLevel: 9, moveOnTerminal: 'yes', clickOnTerminal: false, outsideApp: 'yes' })))
       .toEqual({ ...DEFAULT_POINTER_PREFS, clickOnTerminal: false })
     for (const raw of ['', '{', '[]', '"paw"', 'null', '42']) expect(parsePointerPrefs(raw)).toEqual(DEFAULT_POINTER_PREFS)
     expect(hasEffects(parsePointerPrefs('{"click":"ripple"}'))).toBe(true)

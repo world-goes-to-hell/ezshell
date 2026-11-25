@@ -115,6 +115,65 @@ describe('actual Codex and Claude PTY frames', () => {
     expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
   })
 
+  const claudeQueues = fixtures.filter(fixture => fixture.kind === 'claude' && fixture.phases.queued)
+
+  it.each(claudeQueues)('pastes into the empty Claude queue composer in $name and waits for the new notice before Enter', async fixture => {
+    const { write, state } = configure(fixture)
+    state.busy = true
+    state.ids = ['unread']
+    await paint(fixture.phases.queued)
+    await vi.advanceTimersByTimeAsync(1700)
+    expect(wake.composerState()).toBe('empty')
+    expect(wake.inspectBlock()).toEqual({ blocked: null })
+    expect(write.mock.calls).toEqual([[busyPaste]])
+    await paint(fixture.phases.atStart)
+    expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
+  })
+
+  it.each(claudeQueues)('lets the chat send into the empty Claude queue composer in $name', async fixture => {
+    const { write, state } = configure(fixture)
+    state.busy = true
+    await paint(fixture.phases.queued)
+    const sent = wake.submitText(BUSY_PROMPT)
+    await vi.advanceTimersByTimeAsync(900)
+    expect(write.mock.calls).toEqual([[busyPaste]])
+    await paint(fixture.phases.atStart)
+    await vi.advanceTimersByTimeAsync(750)
+    await expect(sent).resolves.toEqual({ ok: true })
+    expect(write.mock.calls).toEqual([[busyPaste], ['\r']])
+  })
+
+  it.each(claudeQueues)('preserves user input matching the Claude queue hint in $name', async fixture => {
+    const { write, state } = configure(fixture)
+    state.busy = true
+    await paint(fixture.phases.queued)
+    wake.userInput('\x1b[A')
+    state.ids = ['unread']
+    await paint(fixture.phases.queued)
+    expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'draft', ours: false } })
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it.each(claudeQueues)('treats the hint text as a draft without a nearby Claude queue item in $name', async fixture => {
+    const { write, state } = configure(fixture)
+    state.busy = true
+    state.ids = ['unread']
+    const { frame, lines } = fixture.phases.queued
+    const queueRow = lines.findIndex(line => line.trimStart().startsWith('⎿  Queued'))
+    await paint({ frame }, `\x1b7\x1b[${queueRow + 1};1H\x1b[2K\x1b8`)
+    expect(wake.inspectBlock()).toMatchObject({ blocked: { kind: 'draft', ours: false } })
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it.each(claudeQueues)('does not use Stop to resume ahead of the native queue in $name', async fixture => {
+    const { write, state } = configure(fixture)
+    state.busy = state.hookWorking = true
+    state.ids = ['unread']
+    await paint(fixture.phases.queued)
+    expect(wake.prepareStopWake({ promptId: 'turn', startedAt: 1 }, vi.fn())).toBeNull()
+    expect(write).not.toHaveBeenCalled()
+  })
+
   it.each(fixtures)('does not resubmit terminal history in $name after the CLI consumes the notice', async fixture => {
     const { write, state } = configure(fixture)
     state.ids = ['new-unread']

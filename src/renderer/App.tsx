@@ -48,7 +48,7 @@ import { setRestoreSource } from './lib/updateInstall'
 import { buildRestoreRecord, readRestoreRecord, type RecordSource, type RestoreTab } from './lib/restoreTabs'
 import { restoreTabs } from './lib/restoreTabsRun'
 import { RestoreTabsBanner, type RestoreBannerState } from './components/Restore/RestoreTabsBanner'
-import { closeLocalPaneShells, getLocalPaneShellId } from './lib/localPaneShells'
+import { closeLocalPaneShells, getLocalPaneShellId, localTabShellIds } from './lib/localPaneShells'
 import { focusTabPane } from './lib/paneFocus'
 import { MAIN_PANE, paneIds } from './lib/splitTree'
 import type { LocalDevelopmentTask } from './types'
@@ -62,6 +62,8 @@ import { useAgentUsageStore } from './stores/agentUsageStore'
 import { UpdateNotification } from './components/Update/UpdateNotification'
 import { CommandPalette } from './components/CommandPalette'
 import { TabContextMenu } from './components/Terminal/TabContextMenu'
+import { DevelopmentTabDots } from './components/Terminal/DevelopmentRunStatus'
+import { changeDevelopmentRun, developmentRunsForTab, useDevelopmentRunEvents, useDevelopmentRuns } from './lib/developmentRun'
 import { TabRenameDialog } from './components/Terminal/TabRenameDialog'
 import { DUPLICATE_TAB_EVENT, OPEN_SNIPPET_MANAGER_EVENT } from './components/Terminal/useTerminalContextMenu'
 import { RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './lib/agentHistory'
@@ -116,13 +118,6 @@ interface SessionConnectionTarget {
   workGroup?: string
   /** A saved session opened from the tab strip is also added to that project's server list. */
   assignProject?: boolean
-}
-
-function localTabShellIds(tabId: string): string[] {
-  const tab = useTerminalStore.getState().getTerminal(tabId)
-  if (!tab?.local) return []
-  const panes = tab.splitTree ? paneIds(tab.splitTree) : [MAIN_PANE]
-  return panes.map(pane => getLocalPaneShellId(tabId, pane)).filter((id): id is string => id !== undefined)
 }
 
 // Check if we're in a special window mode
@@ -290,6 +285,8 @@ function App() {
   // "원래 대화로 가기" in a pinned answer window
   usePinnedReplyGo()
   useAgentEscalations(isLocked)
+  useDevelopmentRunEvents(isLocked)
+  const developmentRuns = useDevelopmentRuns(state => state.runs)
   const sessionLogFiles = useSessionLogStore(state => state.files)
 
   // Tab drag state
@@ -1005,6 +1002,7 @@ function App() {
         toast.error('개발 서버를 기동하지 못했습니다', result.error)
         return
       }
+      useDevelopmentRuns.setState(({ runs }) => runs[result.id] ? { runs } : { runs: { ...runs, [result.id]: result.development } })
       const store = useTerminalStore.getState()
       for (const [tabId, tab] of store.terminals) {
         if (!tab.local) continue
@@ -1570,6 +1568,16 @@ function App() {
     toggleSessionLog(contextMenuTabId, tab ? (tab.title || `${tab.username}@${tab.host}`) : '')
   }
 
+  const contextDevelopment = contextMenuTabId ? developmentRunsForTab(contextMenuTabId, developmentRuns) : []
+  const developmentActions = contextDevelopment.flatMap(({ id, run }) => {
+    if (run.status === 'starting' || run.status === 'stopping') return []
+    const suffix = contextDevelopment.length > 1 ? ` · ${run.label}` : ''
+    return [
+      { label: `재기동${suffix}`, action: 'restart' as const, onSelect: (): void => { void changeDevelopmentRun(id, run.taskId, 'restart') } },
+      ...(run.status === 'running' ? [{ label: `중지${suffix}`, action: 'stop' as const, onSelect: (): void => { void changeDevelopmentRun(id, run.taskId, 'stop') } }] : [])
+    ]
+  })
+
   // Show loading while checking lock status
   if (isCheckingLock) {
     return (
@@ -1675,6 +1683,7 @@ function App() {
                           {terminal.local && <RiComputerLine size={13} className="tab-local-icon" aria-label="로컬" />}
                           {terminal.browser && <RiGlobalLine size={13} className="tab-local-icon" aria-hidden />}
                           <span data-tab-label title={terminal.title || `${terminal.username}@${terminal.host}`}>{terminal.title || `${terminal.username}@${terminal.host}`}</span>
+                          {terminal.local && <DevelopmentTabDots tabId={sessionId} />}
                           {terminal.local?.cwd && <TabWorktreeBadge cwd={terminal.local.cwd} worktree={groupView.worktreeForFolder(terminal.local.cwd)} />}
                           {terminal.local && <AgentTabMessages tabId={sessionId} />}
                           {sessionId in sessionLogFiles && <span className="tab-log-indicator" role="img" aria-label="로그 저장 중" title={`로그 저장 중: ${sessionLogFiles[sessionId]}`} />}
@@ -1754,6 +1763,7 @@ function App() {
                                 setActivePaneType(index)
                               }}
                               onTabClose={terminalId => void requestCloseTabs([terminalId])}
+                              onTabContextMenu={handleTabContextMenu}
                               newTabMenu={renderPaneNewTabMenu(index)}
                               worktreeForFolder={groupView.worktreeForFolder}
                               onUnsplit={index === 0 ? closeSplit : undefined}
@@ -1939,6 +1949,7 @@ function App() {
         onOpenLogFolder={openSessionLogFolder}
         mergeChoices={contextMenuTabId ? mergeChoices(terminals, contextMenuTabId) : undefined}
         onMergeInto={handleContextMergeInto}
+        developmentActions={developmentActions}
       />
       {renamingTab && (
         <TabRenameDialog

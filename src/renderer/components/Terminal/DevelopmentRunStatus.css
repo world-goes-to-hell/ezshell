@@ -1,0 +1,33 @@
+.development-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  min-height: 20px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.development-status-chip:hover,
+.development-status-chip[data-state='open'] {
+  border-color: var(--accent);
+}
+
+.development-status-dot {
+  display: inline-block;
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.development-status-dot[data-status='running'] { background: var(--success); }
+.development-status-dot[data-status='exited'] { background: var(--danger); }
+.development-status-port { font-variant-numeric: tabular-nums; }

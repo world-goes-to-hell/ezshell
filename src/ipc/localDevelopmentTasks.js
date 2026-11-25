@@ -66,7 +66,8 @@ async function tasksIn(relative, source, { windows, includeSource = false, rootI
   )
   if (/org\.springframework\.boot/.test(`${gradle}\n${kotlin}`)) {
     const wrapper = windows ? 'gradlew.bat' : 'gradlew'
-    add('gradle', 'Spring Boot', `${source.has(wrapper) ? windows ? '.\\gradlew.bat' : './gradlew' : 'gradle'} bootRun`)
+    // A shared Gradle daemon can launch the server outside the PTY's process tree.
+    add('gradle', 'Spring Boot', `${source.has(wrapper) ? windows ? '.\\gradlew.bat' : './gradlew' : 'gradle'} bootRun --no-daemon`)
   } else if (/spring-boot-(?:starter|maven-plugin)/.test(maven)) {
     const wrapper = windows ? 'mvnw.cmd' : 'mvnw'
     add('maven', 'Spring Boot', `${source.has(wrapper) ? windows ? '.\\mvnw.cmd' : './mvnw' : 'mvn'} spring-boot:run`)

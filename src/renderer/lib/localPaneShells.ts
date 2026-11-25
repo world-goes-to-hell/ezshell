@@ -4,7 +4,7 @@
 // attaches to the same shell, and a shell is closed only when its pane leaves the split or its
 // tab closes.
 
-import { MAIN_PANE, type PaneId } from './splitTree'
+import { MAIN_PANE, paneIds, type PaneId } from './splitTree'
 import { agentPaneLocation } from './agentIdentity'
 import type { AgentMessageSession, LocalAgent } from '../types'
 import { useTerminalStore, type TerminalInfo } from '../stores/terminalStore'
@@ -22,6 +22,13 @@ export function getLocalPaneShellId(tabId: string, pane: PaneId): string | undef
   const local = useTerminalStore.getState().terminals.get(tabId)?.local
   if (!local) return undefined
   return pane === MAIN_PANE ? local.shellId ?? tabId : opened.get(keyOf(tabId, pane))
+}
+
+export function localTabShellIds(tabId: string): string[] {
+  const tab = useTerminalStore.getState().getTerminal(tabId)
+  if (!tab?.local) return []
+  const panes = tab.splitTree ? paneIds(tab.splitTree) : [MAIN_PANE]
+  return panes.map(pane => getLocalPaneShellId(tabId, pane)).filter((id): id is string => id !== undefined)
 }
 
 export function localAgentPaneLocation(tab: TerminalInfo | undefined, agent: AgentMessageSession) {

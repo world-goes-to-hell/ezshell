@@ -76,6 +76,8 @@ const claudeScrollRule = /^\s*─{3,}\s+([↑↓])\s+[1-9]\d*\s+more\s+─{3,}\s
 const isClaudeRule = row => claudeRule.test(row) || claudeTargetRule.test(row)
 const CLAUDE_SHELL_COUNT = /^(\d+) shells?$/i
 const CLAUDE_FOOTER_HINT = /(?:mode on|permissions on|accept edits on|\? for shortcuts|↓ to manage)/iu
+const CLAUDE_QUEUE_HINT = compact('Press up to edit queued messages')
+const CLAUDE_QUEUED_ITEM = /^\s*⎿\s+Queued\s*·/u
 const SHELL_PROMPT = /^\s*(?:PS\s+[^>]+>|[A-Z]:[\\/][^>]*>|(?:\S+[@:]\S+|~\S*|\/\S*)\s*[$%#])(?:\s|$)/i
 const POWERSHELL_CONTINUATION = /^\s*>>(?:\s|$)/u
 // A numbered choice of a prompt: "❯ 1. Yes", "  2. No, and tell Claude what to do differently (esc)"
@@ -229,9 +231,17 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         return { atStart: true, endsAtCursor: true, text: '', target, ...editorRows, display: '' }
       }
       const display = input.map(row => row.trimEnd()).join('\n')
-      const caretAtStart = input.length === 1 && (painted
+      const atFirstCell = painted
         ? painted.row === first && painted.x === startColumn
-        : buffer.baseY + buffer.cursorY === first && buffer.cursorX === startColumn)
+        : buffer.baseY + buffer.cursorY === first && buffer.cursorX === startColumn
+      const caretAtStart = input.length === 1 && atFirstCell
+      const text = compact(display)
+      const queueHint = hasClaudeFooter && !userDraft && (!painted || atFirstCell) && text === CLAUDE_QUEUE_HINT &&
+        Array.from({ length: Math.min(8, first - buffer.baseY) }, (_, offset) => line(first - 1 - offset))
+          .some(row => CLAUDE_QUEUED_ITEM.test(row))
+      // At this empty prompt Claude uses its queue hint even without dim styling. Submitting
+      // still requires a later redraw of the full pasted text, since bare Enter sends the queue.
+      if (queueHint) return { atStart: true, endsAtCursor: true, text: '', target, ...editorRows, display: '', queueHint }
       if (!painted) {
         // No cursor painted either: Claude out of focus (the chat view or the usage menu has the keyboard)
         // draws its composer without one. Read the entire draft between the rules, including wrapped
@@ -240,7 +250,6 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         const empty = input.length === 1 && !typed
         return { atStart: empty, endsAtCursor: true, text: empty ? '' : compact(typed), caretAtStart, target, ...editorRows, display }
       }
-      const text = compact(input.join(''))
       const afterCursor = (buffer.getLine(painted.row)?.translateToString(false, painted.x) ?? '')
         + input.slice(painted.row - first + 1).join('')
       return {
@@ -1118,6 +1127,9 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       }
       // A suspended notice checks at a bounded cadence instead of on each terminal write.
       schedule(Math.min(WAKE_RECOVERY_POLL, recoveryUntil - now))
+      // Claude redraws the same queue hint while processing a paste. Keep one attempt until
+      // the new draft appears or the recovery window expires, even though this hint is empty.
+      if (input?.queueHint) return
     }
     if (!parentInput(targetOf(input)) || shellAtCursor() || chatBlocked()) return
     // State not reported yet: look again once the screen has been still long enough
@@ -1259,6 +1271,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   function userInput(data) {
+    const editingQueue = kind === 'claude' && /^(?:\x1b\[A|\x1bOA|\x10)$/.test(data) && composer()?.queueHint
     finishApprovalAnswer({ ok: false, reason: 'changed' })
     forceSendOffer = null
     emptyClaudeTarget = null
@@ -1278,6 +1291,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     if (submitKey(data) || data === '\x03' || data === '\x15') {
       userDraft = false
       holdUntil = Date.now() + INPUT_TIMEOUT
+    } else if (editingQueue) {
+      userDraft = true
     } else if (!data.startsWith('\x1b') || data.startsWith('\x1b[200~')) {
       if (/[^\x00-\x1f\x7f]/u.test(data)) userDraft = true
     }

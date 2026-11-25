@@ -1,4 +1,4 @@
-import type { AgentChatProvider } from '../types'
+import type { AgentChatProvider, LocalDevelopmentRun } from '../types'
 import { useTerminalStore } from '../stores/terminalStore'
 import { folderName } from './agentHistory'
 import { adoptLocalPaneShell, getLocalPaneShellId } from './localPaneShells'
@@ -17,6 +17,7 @@ export interface LiveLocalShell {
   exited: boolean
   cwd: string | null
   agent: AgentChatProvider | null
+  development?: LocalDevelopmentRun
 }
 
 
@@ -24,13 +25,14 @@ export interface LiveLocalShell {
 export function planAdoption(shells: readonly LiveLocalShell[], hasLocalTabs: boolean): { adopt: LiveLocalShell[]; close: string[] } {
   if (hasLocalTabs) return { adopt: [], close: [] }
   return {
-    adopt: shells.filter(shell => !shell.exited),
+    adopt: shells.filter(shell => !shell.exited || shell.development),
     // An ended shell had a tab showing "종료됨": nothing to give back, just let it go
-    close: shells.filter(shell => shell.exited).map(shell => shell.id)
+    close: shells.filter(shell => shell.exited && !shell.development).map(shell => shell.id)
   }
 }
 
 export function adoptedTitle(shell: LiveLocalShell, index: number): string {
+  if (shell.development) return shell.development.label
   const folder = folderName(shell.cwd)
   if (folder) return folder
   return index === 0 ? shell.name : `${shell.name} (${index + 1})`

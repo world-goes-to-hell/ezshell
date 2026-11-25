@@ -45,6 +45,32 @@ describe('defaultShell', () => {
 })
 
 describe('createLocalShells', () => {
+  it('tracks a development process, restarts in place, and keeps the port and exit code independent of log output', async () => {
+    const cwd = realpathSync(tmpdir())
+    const { shells, ptys, sent, spawn } = setup({ stopDevelopmentProcess: async pty => pty.exit({ exitCode: 1 }), waitDevelopmentPort: vi.fn() })
+    const task = { id: '.:node', name: 'Node', relative: '.', command: 'node run.cjs', cwd }
+    const { id } = await shells.openDevelopmentTask(task, {})
+    expect(shells.list()[0].development).toMatchObject({ taskId: task.id, status: 'running', url: null })
+    ptys[0].emit('Ready at http://localhost:51')
+    ptys[0].emit('73/\r\n')
+    expect(shells.list()[0].development).toMatchObject({ status: 'running', url: 'http://localhost:5173' })
+    await expect(shells.changeDevelopmentTask(id, 'other:id', 'stop')).rejects.toThrow()
+    await shells.changeDevelopmentTask(id, task.id, 'restart')
+    expect(shells.list()).toHaveLength(1)
+    expect(shells.list()[0]).toMatchObject({ id, development: { status: 'running', url: null } })
+    expect(spawn.mock.calls[1][1]).toEqual(spawn.mock.calls[0][1])
+    ptys[0].exit({ exitCode: 2 })
+    expect(shells.list()[0].development.status).toBe('running')
+    ptys[1].exit({ exitCode: 23 })
+    expect(shells.list()[0].development).toMatchObject({ status: 'exited', exitCode: 23 })
+    expect(shells.attach(id).backlog).toContain('Ready at')
+    await shells.changeDevelopmentTask(id, task.id, 'restart')
+    await shells.changeDevelopmentTask(id, task.id, 'stop')
+    expect(shells.list()[0].development.status).toBe('exited')
+    expect(sent.some(({ channel, payload }) => channel === 'local-shell-development-state' && payload.development?.status === 'stopping')).toBe(true)
+    shells.close(id)
+  })
+
   it.skipIf(process.platform !== 'win32')('passes through legacy agy, caches the probe, and rechecks a replaced binary', () => {
     const profile = mkdtempSync(join(tmpdir(), 'ezshell-agy-launch-'))
     const settings = join(profile, 'chat settings.json')

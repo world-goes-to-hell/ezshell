@@ -241,7 +241,7 @@ function requireSearchQuery(value) {
  * `roots` (src/localFiles/roots.js) checks the folders the workspace panel reads, `git` is
  * src/localFiles/git.js. Requests name a root and a path relative to it.
  */
-function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = null, git: localGit = null, gitCommit = null, openDevelopmentTask }) {
+function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = null, git: localGit = null, gitCommit = null, openDevelopmentTask, changeDevelopmentTask }) {
   const directorySearch = createDirectorySearch()
   let searchGeneration = 0
   let preparation = 0
@@ -308,10 +308,21 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
           includeSource: includeSource === true, install: install === true, allowed: () => canLaunch(event)
         })
         if (!canLaunch(event)) return startError(locked)
-        return { success: true, ...openDevelopmentTask(task, { cols, rows }) }
+        return { success: true, ...await openDevelopmentTask(task, { cols, rows }, () => canLaunch(event)) }
       } catch (error) {
         return startError(error.stderr?.trim().slice(0, 300) || (error.code ? '개발 서버를 기동하지 못했습니다.' : error.message))
       } finally { preparing.delete(key) }
+    })
+    if (changeDevelopmentTask) ipcMain.handle('local-project-development-change', async (event, request) => {
+      if (!canLaunch(event)) return startError(locked)
+      const { shellId, taskId, action } = request ?? {}
+      if (typeof shellId !== 'string' || typeof taskId !== 'string' || taskId.length > 300) return startError('기동한 개발 서버를 찾을 수 없습니다.')
+      try {
+        await changeDevelopmentTask(shellId, taskId, action, () => canLaunch(event))
+        return { success: true }
+      } catch (error) {
+        return startError(error.code ? '개발 서버를 전환하지 못했습니다.' : error.message)
+      }
     })
   }
   // A folder inside the panel's root ({ root, path }); a bare string is the root itself (older windows)
