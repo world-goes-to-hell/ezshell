@@ -333,11 +333,24 @@ else { Write-Host 'Antigravity CLI를 찾을 수 없습니다.' }
 
 function developmentShellArgs(shell, task, platform) {
   if (platform !== 'win32') {
-    return [...shell.args, '-c', [task.installCommand, `exec ${task.command}`].filter(Boolean).join(' && ')];
+    const command = task.custom ? task.command : `exec ${task.command}`;
+    return [...shell.args, '-c', [task.installCommand, command].filter(Boolean).join(' && ')];
   }
   const commands = [task.installCommand, task.command].filter(Boolean);
   const script = commands.map(command => `${command}\nif (!$?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }`).join('\n');
   return [...shell.args, '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
+}
+
+function developmentEnvironment(env, task, platform) {
+  const result = localTerminalEnvironment(env, platform);
+  const keyOf = key => platform === 'win32' ? Object.keys(result).find(name => name.toUpperCase() === key) ?? key : key;
+  for (const [key, value] of Object.entries(task.env ?? {})) result[keyOf(key)] = value;
+  if (task.javaHome) {
+    const pathKey = keyOf('PATH');
+    result[keyOf('JAVA_HOME')] = task.javaHome;
+    result[pathKey] = [path.join(task.javaHome, 'bin'), result[pathKey]].filter(Boolean).join(path.delimiter);
+  }
+  return result;
 }
 
 const PROGRAM_STATUS_REPLY = '\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\';
@@ -1173,11 +1186,14 @@ function createLocalShells({
   }
 
   function launchDevelopment(id, entry) {
+    const task = entry.developmentTask;
+    task.onEvent?.({ type: 'start', shellId: id });
+    entry.developmentInterrupted = false;
     setDevelopment(id, entry, { status: 'starting', url: null, exitCode: null });
     try {
-      const pty = spawn(shell.file, developmentShellArgs(shell, entry.developmentTask, platform), {
+      const pty = spawn(shell.file, developmentShellArgs(shell, task, platform), {
         name: TERMINAL_TYPE, cols: entry.cols, rows: entry.rows, cwd: entry.launchDirectory,
-        env: localTerminalEnvironment(env, platform)
+        env: developmentEnvironment(env, task, platform)
       });
       entry.pty = pty;
       entry.exited = false;
@@ -1189,6 +1205,7 @@ function createLocalShells({
         entry.exited = true;
         entry.exitCode = exitCode;
         if (shells.get(id) !== entry) return;
+        task.onEvent?.({ type: 'exit', shellId: id, exitCode, action: entry.developmentAction ?? (entry.developmentInterrupted ? 'stop' : undefined) });
         if (!entry.developmentAction) setDevelopment(id, entry, { status: 'exited', exitCode });
         send('local-shell-exit', { id, exitCode });
       }));
@@ -1196,6 +1213,7 @@ function createLocalShells({
         if (shells.get(id) !== entry || entry.pty !== pty) return;
         entry.backlog = (entry.backlog + data).slice(-BACKLOG_CHARS);
         send('local-shell-data', { id, data });
+        task.onEvent?.({ type: 'data', shellId: id, data });
         if (entry.development.url || entry.exited) return;
         const lines = (fragment + data).split(/[\r\n]+/);
         fragment = lines.pop().slice(-2048);
@@ -1205,22 +1223,24 @@ function createLocalShells({
       if (!entry.exited) setDevelopment(id, entry, { status: 'running' });
     } catch (error) {
       entry.exited = true;
+      task.onEvent?.({ type: 'exit', shellId: id, exitCode: null, failed: true });
       setDevelopment(id, entry, { status: 'exited' });
       throw error;
     }
   }
 
   async function openDevelopmentTask(task, { cols, rows }, allowed = () => true) {
-    const label = task.relative === '.' ? task.name : `${task.name} · ${path.basename(task.cwd)}`;
+    const label = task.label ?? (task.relative === '.' ? task.name : `${task.name} · ${path.basename(task.cwd)}`);
     const normalized = value => platform === 'win32' ? value.toLowerCase() : value;
     for (const [id, entry] of shells) {
       const running = entry.developmentTask;
       if (running?.id === task.id && normalized(running.cwd) === normalized(task.cwd)) {
-        if (entry.exited && !entry.developmentAction) await changeDevelopmentTask(id, task.id, 'restart', allowed);
+        if (entry.exited && !entry.developmentAction) await changeDevelopmentTask(id, task.id, 'restart', allowed, () => task);
         return { id, name: shell.name, cwd: task.cwd, label, development: entry.development };
       }
     }
     const directory = requireLocalDirectory(task.cwd);
+    if (!allowed()) throw new Error('실행 권한을 다시 확인해 주세요.');
     const id = `local:${nextId++}`;
     const entry = {
       cwd: directory, launchDirectory: directory, cols: size(cols, 80), rows: size(rows, 24),
@@ -1238,12 +1258,13 @@ function createLocalShells({
       .finally(() => { entry.developmentStop = null });
   }
 
-  async function changeDevelopmentTask(id, taskId, action, allowed = () => true) {
+  async function changeDevelopmentTask(id, taskId, action, allowed = () => true, prepare) {
     const entry = shells.get(id);
     if (!entry?.developmentTask || entry.developmentTask.id !== taskId || !['restart', 'stop'].includes(action)) {
       throw new Error('기동한 개발 서버를 찾을 수 없습니다.');
     }
     if (!allowed()) throw new Error('먼저 잠금을 해제해 주세요.');
+    if (action === 'restart' && entry.developmentTask.onEvent && !prepare) throw new Error('실행 구성에서 재기동해 주세요.');
     if (entry.developmentAction) throw new Error('개발 서버를 전환하는 중입니다.');
     entry.developmentAction = action;
     try {
@@ -1258,6 +1279,13 @@ function createLocalShells({
         await waitDevelopmentPort(entry.development.url);
         if (shells.get(id) !== entry) throw new Error('개발 서버 탭이 닫혔습니다.');
         if (!allowed()) throw new Error('먼저 잠금을 해제해 주세요.');
+        if (prepare) {
+          const task = await prepare();
+          if (!allowed() || shells.get(id) !== entry || task.id !== taskId) throw new Error('실행 구성이 바뀌었습니다.');
+          entry.cwd = entry.launchDirectory = requireLocalDirectory(task.cwd);
+          entry.developmentTask = task;
+          if (task.label) setDevelopment(id, entry, { name: task.name, label: task.label });
+        }
         // ConPTY starts the new console with ED 2 and CUP home. Move the old viewport into
         // scrollback first so its logs and this divider survive the new console's redraw.
         const data = `\x1b[?1049l\x1b[?6l\x1b[r\x1b[0m\x1b[${entry.rows};1H\r\n── 개발 서버 재기동 ──${'\r\n'.repeat(entry.rows)}`;
@@ -1289,6 +1317,10 @@ function createLocalShells({
     entry.activeAt = Date.now();
     if (data === '\x1b' || data === '\x03') entry.userInterruptAt = entry.activeAt;
     if (entry.inbox?.deferProbeInput(data)) return;
+    if (data === '\x03' && entry.developmentTask?.onEvent) {
+      entry.developmentInterrupted = true;
+      entry.developmentTask.onEvent({ type: 'interrupt', shellId: id });
+    }
     if (!entry.inbox) (entry.inboxWakeRecovery ??= { blocked: false }).blocked = true;
     entry.inbox?.userInput(data);
     entry.pty.write(data);
@@ -1326,6 +1358,7 @@ function createLocalShells({
     if (!entry) return;
     shells.delete(id);
     if (entry.development) {
+      entry.developmentTask.onEvent?.({ type: 'closed', shellId: id, wasRunning: !entry.exited });
       send('local-shell-development-state', { id, development: null });
       if (!entry.exited) {
         void stopDevelopmentEntry(entry).catch(() => {

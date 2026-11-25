@@ -2,7 +2,7 @@
 // of 50 lines is one error. The list lives in the editor state and follows every change of the text
 // (lines added at the end, old lines trimmed at the start) by reading only the lines that changed.
 import { StateField, type ChangeDesc, type EditorState, type Text } from '@codemirror/state'
-import { classifyDetail, classifyLine, isFrameSource, type JumpLevel, type LogLevel } from './logLevels'
+import { classifyProblemLine, classifyLine, isFrameSource, type JumpLevel, type LogLevel } from './logLevels'
 
 export interface LogProblem {
   /** Start of the problem's first line */
@@ -35,10 +35,9 @@ export function scanProblems(doc: Text, fromLine = 1, toLine = doc.lines): LogPr
   let isInsideReport = first > 1 && (isProblemLevel(classifyLine(previous)) || (first > 2 && isFrameSource(doc.line(first - 2).text, previous)))
   for (let number = first; number <= last; number++) {
     const line = doc.line(number)
-    const { level, explicit } = classifyDetail(line.text)
-    const isProblem = isProblemLevel(level)
-    if (isProblem && (explicit || !isInsideReport)) found.push({ pos: line.from, level })
-    isInsideReport = isProblem || isFrameSource(previous, line.text)
+    const { level, start, inside } = classifyProblemLine(line.text, previous, isInsideReport)
+    if (level && start) found.push({ pos: line.from, level })
+    isInsideReport = inside
     previous = line.text
   }
   return found

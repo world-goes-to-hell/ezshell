@@ -889,6 +889,87 @@ export interface WorkspaceGitDiff {
   binary?: boolean
 }
 
+export type JdkVendor = 'temurin' | 'zulu'
+
+/** A run preset of a local project (docs/plan/2026-11-25-local-project-run.md): main keeps them in userData */
+export interface RunPreset {
+  id: string
+  name: string
+  relative: string
+  kind: 'task' | 'custom'
+  taskId?: string
+  /** Shown only: main runs the saved command */
+  command?: string
+  jdk: string | 'system'
+  env: Record<string, string>
+  notify: boolean
+  agentControl: boolean
+  inAll: boolean
+  waitReady: boolean
+}
+
+export type RunStatus = 'idle' | 'starting' | 'running' | 'stopped' | 'crashed'
+
+export interface RunAction {
+  /** 'user' or the agent id that did it */
+  by: string
+  action: 'start' | 'restart' | 'stop'
+  at: number
+}
+
+export interface RunState {
+  status: RunStatus
+  exitCode?: number | null
+  address?: string
+  startedAt?: number
+  readyAt?: number
+  errors: number
+  /** The shell the server runs in: the screen finds its tab and pane by it */
+  shellId?: string
+  lastAction?: RunAction
+}
+
+export interface RunCandidate {
+  taskId: string
+  name: string
+  command: string
+}
+
+export interface RunErrorGroup {
+  at: number
+  lines: string[]
+}
+
+/** Every run preset answer: `{ ok: false, error }` on failure, or a question to ask the user first */
+export interface RunPresetResult {
+  ok: boolean
+  error?: string
+  needsConfirm?: { command: string }
+  needsInstall?: { command: string }
+}
+
+export type RunPresetOptions = { confirmCustom?: true; confirmInstall?: true }
+
+export interface JdkRuntime {
+  id: string
+  vendor: string
+  version: string
+  feature: number
+  arch: string
+  managed: boolean
+  sizeBytes?: number
+  folder?: string
+}
+
+export type JdkBuild = Pick<JdkRuntime, 'id' | 'version' | 'feature' | 'arch' | 'sizeBytes'> & { vendor: JdkVendor; licenseUrl: string }
+export interface JdkProgress {
+  vendor: JdkVendor
+  feature: number
+  phase: 'lookup' | 'download' | 'unpack'
+  received: number
+  total: number | null
+}
+
 export interface OracleClientProgress {
   step: 'download' | 'unpack'
   received: number
@@ -1187,6 +1268,30 @@ declare global {
       onPinnedReplyMaximized?: (callback: (maximized: boolean) => void) => () => void
       pinnedReplyGo?: () => void
       onPinnedReplyGo?: (callback: (shellId: string) => void) => () => void
+      runtimesList: () => Promise<{ jdks: JdkRuntime[] }>
+      runtimesAvailable: (vendor: JdkVendor, feature: number) => Promise<{ jdk: JdkBuild | null; error?: string }>
+      runtimesInstall: (vendor: JdkVendor, feature: number) => Promise<{ ok: true; jdk: JdkRuntime } | { ok: false; error?: string; cancelled?: true }>
+      runtimesCancel: () => Promise<boolean>
+      runtimesRemove: (id: string) => Promise<{ ok: true } | { ok: false; error: string }>
+      runtimesRequired: (projectFolder: string) => Promise<{ feature: number | null }>
+      runtimesOpenLicense: (vendor: JdkVendor) => Promise<boolean>
+      // Run presets of the local projects (src/ipc/runPresets.js; main window, unlocked). The first
+      // argument is the worktree folder of the card: the presets are the project's, the states that worktree's
+      runPresetsList?: (worktreeFolder: string) => Promise<RunPresetResult & { projectKey: string; worktreeKey: string; presets: RunPreset[]; states: Record<string, RunState> }>
+      runPresetsCandidates?: (projectFolder: string, relative: string) => Promise<RunPresetResult & { candidates: RunCandidate[] }>
+      runPresetsSave?: (projectFolder: string, preset: Partial<RunPreset>) => Promise<RunPresetResult & { preset?: RunPreset }>
+      runPresetsDelete?: (projectFolder: string, id: string) => Promise<RunPresetResult>
+      runPresetsReorder?: (projectFolder: string, ids: string[]) => Promise<RunPresetResult>
+      runPresetStart?: (projectFolder: string, id: string, options?: RunPresetOptions) => Promise<RunPresetResult>
+      runPresetRestart?: (projectFolder: string, id: string, options?: RunPresetOptions) => Promise<RunPresetResult>
+      runPresetStop?: (projectFolder: string, id: string) => Promise<RunPresetResult>
+      runPresetStartAll?: (projectFolder: string, options?: RunPresetOptions) => Promise<RunPresetResult>
+      runPresetStopAll?: (projectFolder: string) => Promise<RunPresetResult>
+      runPresetErrors?: (projectFolder: string, id: string) => Promise<RunPresetResult & { groups: RunErrorGroup[] }>
+      runPresetSendPreview?: (worktreeFolder: string, id: string) => Promise<RunPresetResult & { text?: string }>
+      runPresetSend?: (projectFolder: string, id: string, agentId: string, note: string) => Promise<RunPresetResult>
+      onRunPresetState?: (callback: (event: { projectKey: string; worktreeKey: string; id: string; state: RunState; firstAgentAction?: true }) => void) => () => void
+      onRuntimesProgress: (callback: (progress: JdkProgress | null) => void) => () => void
       oracleClientStatus?: () => Promise<OracleClientStatus | { success: false; error: string }>
       oracleClientInstall?: () => Promise<OracleClientStatus | { success: false; error: string }>
       oracleClientRemove?: () => Promise<OracleClientStatus | { success: false; error: string }>

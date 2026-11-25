@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { OPEN_SETTINGS_EVENT, type OpenSettings } from '../../lib/settingsNavigation'
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -13,6 +14,7 @@ import { McpSettings } from '../Mcp/McpSettings'
 import { AgentMessageMcpSetup } from '../Mcp/AgentMessageMcpSetup'
 import { AgentIdleSettings } from './AgentIdleSettings'
 import { AgentHooksSettings } from './AgentHooksSettings'
+import { JdkSettings } from './JdkSettings'
 import { RemoteAccessSettings } from '../RemoteAccess/RemoteAccessSettings'
 import '../../styles/settings.css'
 
@@ -25,6 +27,12 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState('theme')
   const [activeThemeTab, setActiveThemeTab] = useState('app')
   const [activeMcpTab, setActiveMcpTab] = useState('ssh')
+  // openSettingsTab (lib/settingsNavigation.ts): App opens the window, the tab is picked here
+  useEffect(() => {
+    const onOpen = (event: Event) => setActiveTab((event as CustomEvent<OpenSettings>).detail.tab)
+    window.addEventListener(OPEN_SETTINGS_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpen)
+  }, [])
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -86,6 +94,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                       <RiSmartphoneLine size={18} />
                       원격 접속
                     </Tabs.Trigger>
+                    <Tabs.Trigger value="development" className="settings-tab-trigger">개발 도구</Tabs.Trigger>
                   </Tabs.List>
 
                   <Tabs.Content value="theme" className="settings-tab-content settings-theme-content">
@@ -180,6 +189,9 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                     <div className="settings-content">
                       <RemoteAccessSettings />
                     </div>
+                  </Tabs.Content>
+                  <Tabs.Content value="development" className="settings-tab-content">
+                    <div className="settings-content"><JdkSettings /></div>
                   </Tabs.Content>
                 </Tabs.Root>
               </motion.div>

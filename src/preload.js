@@ -167,10 +167,40 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localList: (dirPath) => ipcRenderer.invoke('local-list', { dirPath }),
   // Local terminal tabs (shells of this PC)
   localShellOpen: (options) => ipcRenderer.invoke('local-shell-open', options),
+  runtimesList: () => ipcRenderer.invoke('runtimes-list'),
+  runtimesAvailable: (vendor, feature) => ipcRenderer.invoke('runtimes-available', vendor, feature),
+  runtimesInstall: (vendor, feature) => ipcRenderer.invoke('runtimes-install', vendor, feature),
+  runtimesCancel: () => ipcRenderer.invoke('runtimes-cancel'),
+  runtimesRemove: (id) => ipcRenderer.invoke('runtimes-remove', id),
+  runtimesRequired: (projectFolder) => ipcRenderer.invoke('runtimes-required', projectFolder),
+  runtimesOpenLicense: (vendor) => ipcRenderer.invoke('runtimes-open-license', vendor),
+  onRuntimesProgress: (callback) => {
+    const handler = (_event, progress) => callback(progress);
+    ipcRenderer.on('runtimes-progress', handler);
+    return () => ipcRenderer.removeListener('runtimes-progress', handler);
+  },
   localProjectInspect: (folder) => ipcRenderer.invoke('local-project-inspect', folder),
   localProjectDevelopmentTasks: (folder) => ipcRenderer.invoke('local-project-development-tasks', folder),
   localProjectDevelopmentStart: (options) => ipcRenderer.invoke('local-project-development-start', options),
   localProjectDevelopmentChange: (options) => ipcRenderer.invoke('local-project-development-change', options),
+  runPresetsList: (folder) => ipcRenderer.invoke('run-presets-list', folder),
+  runPresetsCandidates: (folder, relative) => ipcRenderer.invoke('run-presets-candidates', folder, relative),
+  runPresetsSave: (folder, preset) => ipcRenderer.invoke('run-presets-save', folder, preset),
+  runPresetsDelete: (folder, id) => ipcRenderer.invoke('run-presets-delete', folder, id),
+  runPresetsReorder: (folder, ids) => ipcRenderer.invoke('run-presets-reorder', folder, ids),
+  runPresetStart: (folder, id, options) => ipcRenderer.invoke('run-preset-start', folder, id, options),
+  runPresetRestart: (folder, id, options) => ipcRenderer.invoke('run-preset-restart', folder, id, options),
+  runPresetStop: (folder, id) => ipcRenderer.invoke('run-preset-stop', folder, id),
+  runPresetStartAll: (folder, options) => ipcRenderer.invoke('run-preset-start-all', folder, options),
+  runPresetStopAll: (folder) => ipcRenderer.invoke('run-preset-stop-all', folder),
+  runPresetErrors: (folder, id) => ipcRenderer.invoke('run-preset-errors', folder, id),
+  runPresetSendPreview: (folder, id) => ipcRenderer.invoke('run-preset-send-preview', folder, id),
+  runPresetSend: (folder, id, agentId, note) => ipcRenderer.invoke('run-preset-send', folder, id, agentId, note),
+  onRunPresetState: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('run-preset-state', listener);
+    return () => ipcRenderer.removeListener('run-preset-state', listener);
+  },
   onLocalShellDevelopmentState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('local-shell-development-state', listener);

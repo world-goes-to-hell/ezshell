@@ -29,7 +29,8 @@ function rpc(request, { pipe = process.env.EZSHELL_AGENT_PIPE, token = process.e
       socket.once('close', () => signal.removeEventListener('abort', abort))
     }
     socket.setEncoding('utf8')
-    socket.setTimeout(request.method === 'wait-inbox' ? 35000 : 5000, () => socket.destroy(new Error('ezShell 응답이 지연되고 있습니다.')))
+    const timeout = request.method === 'run-wait' ? 325_000 : typeof request.method === 'string' && request.method.startsWith('run-') ? 46_000 : request.method === 'wait-inbox' ? 35_000 : 5000
+    socket.setTimeout(timeout, () => socket.destroy(new Error('ezShell 응답이 지연되고 있습니다.')))
     socket.on('error', reject)
     socket.on('connect', () => socket.write(JSON.stringify({ ...request, token }) + '\n'))
     let data = ''

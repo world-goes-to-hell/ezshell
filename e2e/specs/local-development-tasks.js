@@ -206,6 +206,95 @@ function fixture(backendPort, frontendPort) {
       !!document.querySelector('.development-status-dot[aria-label="종료 23"]')
     `))
     await js(`document.querySelectorAll('.terminal-tab .tab-close').forEach(button => button.click())`)
+
+    // Run presets on the project card (docs/plan/2026-11-25-local-project-run.md): add one, run it, it
+    // becomes ready on its port, crashes with an error, the notice offers the agent hand-off and a restart
+    // Each worktree runs the project's presets on its own: the main checkout's card first
+    const sectionOf = checkout => `[...document.querySelectorAll('.run-presets')].find(el =>
+      el.dataset.runWorktree.toLowerCase().replace(/\\\\/g, '/') === ${normalize(checkout)})`
+    const section = sectionOf(repo)
+    check('a project without presets offers to add one', await until(`!!${section}?.querySelector('.run-presets-add')`, 8000))
+    await click(...await center(`${section}.querySelector('.run-presets-add')`))
+    check('the add dialog opens for the project', await until(`!!document.querySelector('.run-preset-dialog')`))
+    const setValue = (selector, value) => js(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)})
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(value)})
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    await setValue('#run-preset-name', '시험 서버')
+    await setValue('#run-preset-folder', '.')
+    await until(`[...document.querySelectorAll('.run-preset-choice')].some(c => c.textContent.includes('직접 입력'))`)
+    await js(`[...document.querySelectorAll('.run-preset-choice')].find(c => c.textContent.includes('직접 입력')).querySelector('input').click()`)
+    const server = path.join(__dirname, '..', 'support', 'devRunServer.js')
+    await until(`!!document.querySelector('.run-preset-command')`)
+    // Two spaces on purpose: the question must show the command as it runs
+    const typed = `node "${server}" --crash-after  5000`
+    await setValue('.run-preset-command', typed)
+    check('a typed command is warned about in the dialog', await js(`!!document.querySelector('.run-preset-warn')`))
+    await js(`document.querySelector('.run-preset-dialog button[type="submit"]').click()`)
+    const presetRow = `${section}?.querySelector('.run-preset')`
+    check('the saved preset is a row with a start button', await until(`!document.querySelector('.run-preset-dialog') &&
+      ${presetRow}?.textContent.includes('시험 서버') && !!${presetRow}.querySelector('[data-action="start"]')`, 8000))
+    await shot('local-run-preset-idle')
+    await click(...await center(`${presetRow}.querySelector('[data-action="start"]')`))
+    const ask = `document.querySelector('.run-command-dialog')`
+    check('the typed command is shown exactly, spaces kept, before it first runs', await until(`
+      document.querySelector('.run-command-text')?.textContent === ${JSON.stringify(typed)}`))
+    check('the question starts on 취소 and its 실행 is off at first', await js(`
+      document.activeElement?.textContent.trim() === '취소' &&
+      [...${ask}.querySelectorAll('button')].find(b => b.textContent.trim() === '실행')?.disabled === true`))
+    await driver.enter()
+    check('Enter right away does not run it', await until(`!${ask}`) && await js(`['idle', 'stopped'].includes(${presetRow}?.dataset.status)`))
+    await click(...await center(`${presetRow}.querySelector('[data-action="start"]')`))
+    await until(`!!${ask}`)
+    await sleep(900)
+    await js(`[...${ask}.querySelectorAll('button')].find(b => b.textContent.trim() === '실행').click()`)
+    check('the preset starts and its tab comes to the front', await until(`['starting', 'running'].includes(${presetRow}?.dataset.status) &&
+      ${inTerminal('VITE v5.4.0 ready')}`, 15000))
+    check('once ready the row shows its port', await until(`${presetRow}?.dataset.status === 'running' &&
+      /:\\d+/.test(${presetRow}.querySelector('.run-preset-pill[data-kind="port"]')?.textContent ?? '')`, 10000))
+    // The row tells the preset server's state (the tab of a local shell is its id)
+    const presetShell = await js(`${activeTab}?.dataset.tabId`)
+    // The tab keeps its status dot (seen with the sidebar folded); only the text chip is left to the card
+    check('the old development chip leaves a preset server alone, the tab keeps its dot', await js(`!document.querySelector('.development-status-chip[data-development-shell="' + ${JSON.stringify(presetShell)} + '"]') &&
+      !!${activeTab}?.querySelector('.development-status-dot')`), String(presetShell))
+    await shot('local-run-preset-running')
+    check('a crash turns the row red and tells the exit code', await until(`${presetRow}?.dataset.status === 'crashed' &&
+      ${presetRow}.textContent.includes('종료 1')`, 15000))
+    const notice = `document.querySelector('.run-crash')`
+    check('the crash notice shows the last error lines', await until(`${notice}?.textContent.includes('Internal server error')`, 5000))
+    await shot('local-run-preset-crash')
+    await js(`${notice}.querySelector('.btn-primary').click()`)
+    // The preview is main's text (what goes out): the name, the folder relative to the project, the errors
+    check('the hand-off dialog previews main’s text and opens sending after it', await until(`
+      document.querySelector('.run-send-dialog .run-send-preview[data-ready]')?.textContent.startsWith('시험 서버') &&
+      document.querySelector('.run-send-dialog .run-send-preview').textContent.includes('폴더 ./') &&
+      document.querySelector('.run-send-dialog .run-send-preview').textContent.includes('Internal server error')`))
+    await shot('local-run-preset-send')
+    await js(`[...document.querySelectorAll('.run-send-dialog button')].find(b => b.textContent.trim() === '취소').click()`)
+    await until(`!document.querySelector('.run-send-dialog')`)
+    await js(`[...${notice}.querySelectorAll('button')].find(b => b.textContent.includes('다시 실행')).click()`)
+    check('다시 실행 starts it again and takes the notice away', await until(`['starting', 'running'].includes(${presetRow}?.dataset.status) && !${notice}`, 10000))
+    // It crashes again by design: stop it first so the next crash does not race the end of the spec
+    await until(`${presetRow}?.dataset.status === 'running'`, 10000)
+    await click(...await center(`${presetRow}.querySelector('[data-action="stop"]')`))
+    check('■ stops the preset (stopped, not crashed)', await until(`${presetRow}?.dataset.status === 'stopped' && !${notice}`, 10000))
+
+    // The same preset in another worktree of the project: listed there too, run there on its own
+    const otherRow = `${sectionOf(backTree)}?.querySelector('.run-preset')`
+    check('a preset added once is listed under every worktree of the project', await until(`${otherRow}?.textContent.includes('시험 서버')`, 8000))
+    await js(`${otherRow}.scrollIntoView({ block: 'nearest' })`)
+    await click(...await center(`${otherRow}.querySelector('[data-action="start"]')`))
+    if (await until(`!!document.querySelector('.run-command-dialog')`, 3000)) {
+      await sleep(900)
+      await js(`[...document.querySelectorAll('.run-command-dialog button')].find(b => b.textContent.trim() === '실행').click()`)
+    }
+    check('running it in the other worktree leaves the first worktree’s state alone', await until(`
+      ['starting', 'running'].includes(${otherRow}?.dataset.status) && ${presetRow}?.dataset.status === 'stopped'`, 15000))
+    await until(`${otherRow}?.dataset.status === 'running'`, 10000)
+    await click(...await center(`${otherRow}.querySelector('[data-action="stop"]')`))
+    await until(`${otherRow}?.dataset.status === 'stopped'`, 10000)
   } finally { driver.close() }
   finish()
 })().catch(error => { console.error(error); process.exit(1) })

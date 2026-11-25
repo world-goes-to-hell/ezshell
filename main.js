@@ -694,6 +694,7 @@ const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages(
   onInboxRead: id => localShells?.confirmStopDelivery(id),
   onAgentHook: (shellId, agentId, event, options) => localShells?.reportAgentHook(shellId, agentId, event, options),
   inspectLocalAgent: (shellId, agentId) => localShells?.inspectAgent(shellId, agentId),
+  runPresetTool: (id, request, allowed, signal) => runPresets.agentTool(id, request, allowed, signal),
   onEscalate: alertAgentEscalation,
   bindLocalAgent: request => localShells?.bindAgentProcess(request),
   reportLocalAntigravity: request => localShells?.reportAntigravityStatus(request),
@@ -904,11 +905,35 @@ ipcMain.handle('local-shell-wake', (event, id) => (fromMainWindow(event) && !isA
 ipcMain.handle('local-shell-stay-awake', (event, id) => Boolean(fromMainWindow(event) && !isAppLocked && localShells?.stayAwake(id)));
 app.on('will-quit', () => agentIdle.stop());
 ipcMain.handle('agent-usage-state', event => (fromMainWindow(event) && !isAppLocked ? agentMessages.usageSnapshot() : []));
+const runtimes = require('./src/runtimes/index.js').createRuntimes({ userData: userDataPath });
+require('./src/runtimes/ipc.js').registerRuntimesIpc({
+  ipcMain, runtimes,
+  canUse: event => Boolean(!isAppLocked && fromMainWindow(event) && event.senderFrame && event.senderFrame === event.sender.mainFrame),
+  openExternal: url => shell.openExternal(url)
+});
+app.on('will-quit', () => runtimes.cancel());
+const { createRunPresets, registerRunPresetIpc, withSubject } = require('./src/ipc/runPresets.js');
+const runPresets = createRunPresets({
+  file: path.join(userDataPath, 'run-presets.json'),
+  getShells: getLocalShells,
+  getAgent: id => agentMessages.snapshot().agents.find(agent => agent.id === id && agent.mcpConnected),
+  isLocked: () => isAppLocked,
+  javaHomeOf: id => runtimes.javaHomeOf(id),
+  sendState: state => sendToLocalWindow('run-preset-state', state),
+  sendAsUser: agentMessages.sendAsUser,
+  notifyCrash: (project, preset) => {
+    if (hiddenTestWindows || !mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused() || !flashMainWindow()) return;
+    if (process.platform === 'win32' && Notification.isSupported()) {
+      new Notification({ title: 'ezShell', body: `${project} · ${withSubject(preset)} 멈췄습니다` }).show();
+    }
+  }
+});
+const runPresetIpc = registerRunPresetIpc({ ipcMain, controller: runPresets, fromMainWindow, isLocked: () => isAppLocked });
 const localProjectIpc = require('./src/ipc/localProjects.js').registerLocalProjectIpc({
   ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit,
   gitCommit: require('./src/localFiles/gitCommit.js'),
   openDevelopmentTask: (task, size, allowed) => getLocalShells().openDevelopmentTask(task, size, allowed),
-  changeDevelopmentTask: (id, taskId, action, allowed) => getLocalShells().changeDevelopmentTask(id, taskId, action, allowed)
+  changeDevelopmentTask: (id, taskId, action, allowed) => runPresets.changeFromShell(id, taskId, action, allowed)
 });
 // Past Claude Code and Codex sessions of this PC, for the right panel (src/agentHistory)
 const agentHistory = require('./src/agentHistory/history.js').createAgentHistory();
@@ -1241,6 +1266,9 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   forgetCommandHistory();
   currentMasterPassword = null;
   isAppLocked = true;
+  runtimes.cancel();
+  runPresetIpc.clearConfirmations();
+  runPresets.cancelBatches();
   agentMessages.invalidateFreshRoleChecks();
   globalPointerEffects.stop();
   shortcutRecorder = null;
@@ -1336,6 +1364,9 @@ ipcMain.handle('reset-master-password', async () => {
 
   currentMasterPassword = null;
   isAppLocked = true;
+  runtimes.cancel();
+  runPresetIpc.clearConfirmations();
+  runPresets.cancelBatches();
   agentMessages.invalidateFreshRoleChecks();
   globalPointerEffects.stop();
   shortcutRecorder = null;

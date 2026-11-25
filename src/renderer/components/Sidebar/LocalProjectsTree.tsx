@@ -6,6 +6,7 @@ import { folderLabel, pathKey } from '../../lib/localWorkspaceTree'
 import { confirmDialog } from '../../stores/confirmStore'
 import { TerminalContextMenu, type TerminalMenuItem } from '../Terminal/TerminalContextMenu'
 import { LocalSessionAgents } from './LocalSessionAgents'
+import { RunPresetsSection } from './RunPresetsSection'
 
 export interface WorktreeNode {
   path: string
@@ -258,6 +259,9 @@ export function LocalProjectsTree({
                           </ul>
                         </div>
                       )}
+                      {/* The project's run presets as this worktree runs them (docs/plan/2026-11-25-local-project-run.md):
+                          the presets are shared, each worktree has its own servers and states */}
+                      <RunPresetsSection folder={worktree.path} projectName={project.name} roots={project.worktrees.map(tree => tree.path)} />
                     </li>
                   )
                 })}

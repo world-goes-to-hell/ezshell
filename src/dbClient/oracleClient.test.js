@@ -17,7 +17,7 @@ function zipOf(entries) {
   const locals = []
   const directory = []
   let offset = 0
-  for (const { name, data = Buffer.alloc(0), isDeflated = false, flags = 0 } of entries) {
+  for (const { name, data = Buffer.alloc(0), isDeflated = false, flags = 0, size = data.length } of entries) {
     const nameBytes = Buffer.from(name)
     const body = isDeflated ? zlib.deflateRawSync(data) : data
     const local = Buffer.alloc(30)
@@ -32,7 +32,7 @@ function zipOf(entries) {
     central.writeUInt16LE(flags, 8)
     central.writeUInt16LE(isDeflated ? 8 : 0, 10)
     central.writeUInt32LE(body.length, 20)
-    central.writeUInt32LE(data.length, 24)
+    central.writeUInt32LE(size, 24)
     central.writeUInt16LE(nameBytes.length, 28)
     central.writeUInt32LE(offset, 42)
     locals.push(local, nameBytes, body)
@@ -83,6 +83,30 @@ describe('extractZip', () => {
     const notZip = path.join(dir, 'n.zip')
     fs.writeFileSync(notZip, Buffer.alloc(200, 7))
     await expect(extractZip(notZip, path.join(dir, 'out'))).rejects.toThrow()
+  })
+
+  it('stops deflating an oversized file before writing bytes beyond the declared size', async () => {
+    const archive = path.join(dir, 'incorrect-size.zip')
+    fs.writeFileSync(archive, zipOf([{ name: 'large.bin', data: Buffer.alloc(100_000, 7), isDeflated: true, size: 20_000 }]))
+    const out = path.join(dir, 'out')
+    await expect(extractZip(archive, out)).rejects.toThrow(/wrong size/)
+    expect(fs.statSync(path.join(out, 'large.bin'), { throwIfNoEntry: false })?.size ?? 0).toBeLessThanOrEqual(20_000)
+  })
+
+  it('rejects the declared aggregate above 2 GiB before writing anything', async () => {
+    const archive = path.join(dir, 'too-large.zip')
+    fs.writeFileSync(archive, zipOf([{ name: 'a', size: 2 * 1024 ** 3 }, { name: 'b', size: 1 }]))
+    const out = path.join(dir, 'out')
+    await expect(extractZip(archive, out)).rejects.toThrow(/unpack to too much/)
+    expect(fs.existsSync(out)).toBe(false)
+  })
+
+  it.each([['jdk/file', 'jdk/file'], ['jdk/file', 'jdk/FILE'], ['jdk/One/a', 'jdk/one/b']])('rejects colliding ZIP paths %s and %s before extraction', async (first, second) => {
+    const archive = path.join(dir, 'duplicate.zip')
+    fs.writeFileSync(archive, zipOf([{ name: first }, { name: second }]))
+    const out = path.join(dir, 'out')
+    await expect(extractZip(archive, out)).rejects.toThrow(/colliding paths/)
+    expect(fs.existsSync(out)).toBe(false)
   })
 
   it('knows which names stay inside the folder', () => {

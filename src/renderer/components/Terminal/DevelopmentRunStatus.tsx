@@ -9,8 +9,23 @@ import { focusTabPane } from '../../lib/paneFocus'
 import { MAIN_PANE, paneIds } from '../../lib/splitTree'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { toast } from '../../stores/toastStore'
+import { useRunPresets } from '../../stores/runPresetStore'
 import './TerminalContextMenu.css'
 import './DevelopmentRunStatus.css'
+
+/**
+ * The shells of servers started from a run preset: their state is the preset row's on the sidebar card
+ * (docs/plan/2026-11-25-local-project-run.md), so the old chip and its buttons leave them alone (the tab's
+ * status dot stays: it shows the state with the sidebar folded)
+ */
+function usePresetShells(): ReadonlySet<string> {
+  const worktrees = useRunPresets(state => state.worktrees)
+  const shells = new Set<string>()
+  for (const project of Object.values(worktrees)) {
+    for (const state of Object.values(project.states)) if (state.shellId) shells.add(state.shellId)
+  }
+  return shells
+}
 
 export function DevelopmentTabDots({ tabId }: { tabId: string }) {
   const runs = useDevelopmentRuns(state => state.runs)
@@ -82,5 +97,6 @@ function DevelopmentRunChip({ id, tabId, run }: { id: string; tabId: string; run
 
 export function DevelopmentRunChips({ tabId }: { tabId: string }) {
   const runs = useDevelopmentRuns(state => state.runs)
-  return developmentRunsForTab(tabId, runs).map(({ id, run }) => <DevelopmentRunChip key={id} id={id} tabId={tabId} run={run} />)
+  const presetShells = usePresetShells()
+  return developmentRunsForTab(tabId, runs).filter(({ id }) => !presetShells.has(id)).map(({ id, run }) => <DevelopmentRunChip key={id} id={id} tabId={tabId} run={run} />)
 }

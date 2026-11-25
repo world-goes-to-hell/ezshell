@@ -70,6 +70,12 @@ import { RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './li
 import { adoptOrphanLocalShells, rememberLocalLayout } from './lib/localShellAdopt'
 import { startAgentSleep } from './stores/agentSleepStore'
 import { startAgentHooks } from './stores/agentHooksStore'
+import { clearRunPresets, REVEAL_RUN_SHELL_EVENT, startRunPresets, type RevealRunShell } from './stores/runPresetStore'
+import { RunCrashNotices } from './components/Sidebar/RunCrashNotices'
+import { RunCommandConfirm } from './components/Sidebar/RunCommandConfirm'
+import { firstErrorRow } from './lib/runPresets'
+import { terminalWithin } from './lib/terminalPanes'
+import { OPEN_SETTINGS_EVENT } from './lib/settingsNavigation'
 import { startDesktopPointerEffects } from './lib/pointerDesktop'
 import { LOCAL_PROJECT_SERVERS_EVENT, TAB_DROP_TAKEN_EVENT, linkServer, readProjectServers, writeProjectServers } from './lib/localProjectServers'
 import { WorkspacePanel } from './components/Workspace/WorkspacePanel'
@@ -1020,6 +1026,63 @@ function App() {
     }
   }
 
+  // A run preset's server (the card's 로그 / ▶, the crash notice): its tab to the front, made from main's
+  // shell list when the server has none yet (an agent started it, or the tab was closed); with an error
+  // line, scrolled to the first line that has it
+  const revealRunShellTab = async ({ shellId, label, errorLine }: RevealRunShell) => {
+    const findPane = () => {
+      const store = useTerminalStore.getState()
+      for (const [tabId, tab] of store.terminals) {
+        if (!tab.local) continue
+        const pane = (tab.splitTree ? paneIds(tab.splitTree) : [MAIN_PANE]).find(id => getLocalPaneShellId(tabId, id) === shellId)
+        if (pane) return { tabId, pane }
+      }
+      return null
+    }
+    let found = findPane()
+    if (!found) {
+      const shells = await window.electronAPI.localShellList?.().catch(() => undefined)
+      const shell = shells?.find(item => item.id === shellId && !item.exited)
+      if (!shell) {
+        toast.error('서버의 터미널을 찾지 못했습니다', label)
+        return
+      }
+      addLocalTerminalTab({ id: shell.id, name: shell.name, cwd: shell.cwd ?? undefined }, label)
+      found = findPane()
+    }
+    if (!found) return
+    focusTabPane(useTerminalStore.getState().focusTerminal, found.tabId, found.pane)
+    if (!errorLine) return
+    // After the tab is laid out and its terminal holds the screen
+    window.setTimeout(() => {
+      const host = document.querySelector(`[data-local-shell-id="${CSS.escape(shellId)}"] .local-terminal-host`)
+      const terminal = host ? terminalWithin(host) : null
+      if (!terminal) return
+      const buffer = terminal.buffer.active
+      const rows = Array.from({ length: buffer.length }, (_, row) => {
+        const line = buffer.getLine(row)
+        return { text: line?.translateToString(true) ?? '', wrapped: line?.isWrapped ?? false }
+      })
+      const row = firstErrorRow(rows, errorLine)
+      if (row === null) return
+      terminal.scrollToLine(Math.max(0, row - 2))
+      terminal.select(0, row, terminal.cols)
+    }, 120)
+  }
+  // openSettingsTab: the settings window at a tab (SettingsModal picks it)
+  useEffect(() => {
+    const onOpen = () => setSettingsModalOpen(true)
+    window.addEventListener(OPEN_SETTINGS_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpen)
+  }, [])
+  const revealRunShellRef = useRef(revealRunShellTab)
+  revealRunShellRef.current = revealRunShellTab
+  useEffect(() => {
+    const onReveal = (event: Event) => void revealRunShellRef.current((event as CustomEvent<RevealRunShell>).detail)
+    window.addEventListener(REVEAL_RUN_SHELL_EVENT, onReveal)
+    return () => window.removeEventListener(REVEAL_RUN_SHELL_EVENT, onReveal)
+  }, [])
+
   const handleOpenLocalFromTabStrip = (pane?: number) => {
     const front = pane === undefined ? useTerminalStore.getState().activeTerminalId : shownSplitPanes[pane]?.activeTerminalId ?? null
     void handleOpenLocalTerminal({ cwd: groupView.localFolder(front) }, pane)
@@ -1109,6 +1172,8 @@ function App() {
   useEffect(() => (unlockedOnce ? startAgentSleep() : undefined), [unlockedOnce])
   // Whether agents report their state through the CLIs' hooks: main gets the switch (T11)
   useEffect(() => (unlockedOnce ? startAgentHooks() : undefined), [unlockedOnce])
+  // Run presets of the local projects: their state changes and crash notices (docs/plan/2026-11-25-local-project-run.md)
+  useEffect(() => (unlockedOnce ? startRunPresets() : undefined), [unlockedOnce])
   useEffect(() => (unlockedOnce ? startDesktopPointerEffects() : undefined), [unlockedOnce])
 
   const [restoreBanner, setRestoreBanner] = useState<RestoreBannerState | null>(null)
@@ -1266,6 +1331,8 @@ function App() {
     // Agent conversations too (main stops following the transcripts): the panes show their terminals
     useAgentChatStore.getState().clearAll()
     useAskQuestionStore.getState().clearAll()
+    // The run presets' states and crash notices (main keeps the presets)
+    clearRunPresets()
     useGitCommitStore.getState().clearAll()
     // The workspace panel's kept Git answers (paths, commit subjects)
     gitReads.clear()
@@ -1981,6 +2048,8 @@ function App() {
       )}
 
       <ToastContainer />
+      <RunCrashNotices />
+      <RunCommandConfirm />
       <UpdateNotification />
     </div>
   )

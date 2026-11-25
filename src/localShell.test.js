@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, promises, readFileSync, realpathSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, delimiter, dirname, join } from 'node:path'
 import { createAgentMessages } from './ipc/agentMessages.js'
 import { rpc } from './ipc/agentMessageCli.js'
 import { PROMPT } from './ipc/agentInboxPrompts.js'
@@ -69,6 +69,25 @@ describe('createLocalShells', () => {
     expect(shells.list()[0].development.status).toBe('exited')
     expect(sent.some(({ channel, payload }) => channel === 'local-shell-development-state' && payload.development?.status === 'stopping')).toBe(true)
     shells.close(id)
+  })
+
+  it('applies a preset environment inside its PTY only', async () => {
+    const cwd = realpathSync(tmpdir())
+    const pathKey = process.platform === 'win32' ? 'Path' : 'PATH'
+    const env = { [pathKey]: 'system-bin', JAVA_HOME: 'system-java', PORT: '8080' }
+    const { shells, spawn } = setup({ env, stopDevelopmentProcess: async pty => pty.exit({ exitCode: 1 }) })
+    const javaHome = join(cwd, 'preset-java')
+    const task = { id: 'preset:test', name: 'Dev', relative: '.', command: 'node run.cjs', cwd, javaHome,
+      env: { PORT: '26789', JAVA_HOME: 'ignored', PATH: 'project-bin' } }
+    const { id } = await shells.openDevelopmentTask(task, {})
+    expect(spawn.mock.calls[0][2].env).toMatchObject({
+      PORT: '26789', JAVA_HOME: javaHome, [pathKey]: `${join(javaHome, 'bin')}${delimiter}project-bin`
+    })
+    expect(env).toEqual({ [pathKey]: 'system-bin', JAVA_HOME: 'system-java', PORT: '8080' })
+    shells.close(id)
+    const plain = await shells.openDevelopmentTask({ ...task, id: '.:node', javaHome: undefined, env: undefined }, {})
+    expect(spawn.mock.calls[1][2].env).toMatchObject(env)
+    shells.close(plain.id)
   })
 
   it.skipIf(process.platform !== 'win32')('passes through legacy agy, caches the probe, and rechecks a replaced binary', () => {

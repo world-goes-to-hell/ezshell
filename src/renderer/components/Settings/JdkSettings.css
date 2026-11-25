@@ -1,0 +1,15 @@
+.jdk-settings { display: grid; gap: 12px; }
+.jdk-heading, .jdk-choice-row, .jdk-actions, .jdk-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.jdk-heading { justify-content: space-between; }
+.jdk-settings :is(h3, h4, p) { margin: 0; }
+.jdk-download, .jdk-list-section { display: grid; gap: 8px; }
+.jdk-download { padding: 12px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.jdk-choice-row label { display: grid; gap: 4px; color: var(--text-secondary); font-size: 13px; }
+.jdk-choice-row select { min-height: 32px; padding: 4px 8px; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.jdk-list { margin: 0; padding: 0; list-style: none; }
+.jdk-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.jdk-item-name { min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.jdk-item-name span { color: var(--text-secondary); font-size: 13px; }
+.jdk-progress progress { flex: 1; min-width: 72px; accent-color: var(--accent); }
+.jdk-error { color: var(--error-text); }
+.jdk-requirement { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--warning); }

@@ -171,11 +171,11 @@ async function main() {
       retry()
     }
   }
-  const call = async request => {
+  const call = async (request, signal) => {
     const current = lease
     try {
       if (!current || current.socket.destroyed || current.socket.readableEnded) throw new Error(RECONNECTING)
-      const { success, ...result } = await rpc(request, current)
+      const { success, ...result } = await rpc(request, { ...current, signal })
       return { content: [{ type: 'text', text: JSON.stringify(result) }], ...(success ? {} : { isError: true }) }
     } catch (error) {
       return { content: [{ type: 'text', text: current === lease ? error.message : RECONNECTING }], isError: true }
@@ -218,6 +218,22 @@ async function main() {
     description: 'Mark a message as handled when it needs no reply.',
     inputSchema: { message_id: id }
   }, ({ message_id }) => call({ method: 'ack', id: message_id }))
+
+  const runName = z.string().trim().min(1).max(40)
+  server.registerTool('run_list', { description: 'List the project presets and their status in your local shell’s worktree, including presets with agent control off.' },
+    (_args, extra) => call({ method: 'run-list' }, extra?.signal))
+  for (const action of ['start', 'restart', 'stop']) {
+    server.registerTool(`run_${action}`, { description: `${action[0].toUpperCase() + action.slice(1)} a project preset by name in your worktree. Requires agentControl.`, inputSchema: { name: runName } },
+      ({ name }, extra) => call({ method: `run-${action}`, name }, extra?.signal))
+  }
+  server.registerTool('run_wait', {
+    description: 'Wait up to 300 seconds for a preset in your worktree to become ready or stop. Works with agent control off.',
+    inputSchema: { name: runName, seconds: z.number().int().min(1).max(300).optional() }
+  }, ({ name, seconds }, extra) => call({ method: 'run-wait', name, seconds }, extra?.signal))
+  server.registerTool('run_log', {
+    description: 'Read recent output or errors for a preset in your worktree. Works with agent control off.',
+    inputSchema: { name: runName, lines: z.number().int().min(1).max(400).optional(), errors: z.literal(true).optional() }
+  }, ({ name, lines, errors }, extra) => call({ method: 'run-log', name, lines, errors }, extra?.signal))
 
   server.server.oninitialized = () => {
     if (initialized || lifetime.signal.aborted) return

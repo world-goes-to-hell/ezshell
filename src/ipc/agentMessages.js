@@ -53,7 +53,7 @@ function writeAgentFile(file, data) {
 }
 
 function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onInboxRead, bindLocalAgent, reportLocalAntigravity, onAgentHook,
-  inspectLocalAgent, onEscalate,
+  inspectLocalAgent, onEscalate, runPresetTool,
   bridgeFile, roleFile, codexHookTrustFile, platform = process.platform, home = homedir(), now = Date.now }) {
   const instanceBridgeFile = bridgeFile ? `${bridgeFile}.${process.pid}` : null
   const agents = new Map()
@@ -458,6 +458,15 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     switch (request.method) {
       case 'list': return { agents: [...agents.values()].filter(agent => isConnected(agent.id)).map(({ id, kind, cwd }) => ({ id, kind, cwd, role: activeRole(id).role })), self: from }
       case 'inspect-agent': return inspectAgent(request.id).state
+      case 'run-list': case 'run-start': case 'run-restart': case 'run-stop': case 'run-wait': case 'run-log': {
+        const allowed = () => !isLocked() && tokens.get(request.token) === from && isConnected(from) && !agents.get(from)?.sleeping && !socket.destroyed
+        if (!runPresetTool || !allowed()) throw new Error('연결된 로컬 에이전트만 이용할 수 있습니다.')
+        socket.setTimeout(request.method === 'run-wait' ? 320_000 : 45_000)
+        const lifetime = new AbortController()
+        const cancel = () => lifetime.abort()
+        socket.once('close', cancel)
+        return Promise.resolve(runPresetTool(from, request, allowed, lifetime.signal)).finally(() => socket.off('close', cancel))
+      }
       case 'escalate': return escalate(request.id, request.reason)
       case 'set-role': return setRole(from, request.role, 'agent')
       case 'inbox': return { messages: readInbox(from, request.unread) }
@@ -783,7 +792,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
           answer(socket, { success: true, ...result })
           return
         }
-        const result = respond(request, socket)
+        const result = await respond(request, socket)
         if (result) answer(socket, { success: true, ...result })
       } catch (error) {
         answer(socket, { success: false, error: error.message })

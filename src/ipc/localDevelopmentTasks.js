@@ -102,10 +102,11 @@ async function sparseModules(root) {
   return modules
 }
 
-async function inspectDevelopmentTasks(folder, platform = process.platform) {
+async function inspectDevelopmentTasks(folder, platform = process.platform, { rootOnly = false } = {}) {
   const root = await projectRoot(folder)
   const windows = platform === 'win32'
   const rootSource = await diskModule(root)
+  if (rootOnly) return { root, tasks: await tasksIn('.', rootSource, { windows }) }
   const directories = rootSource.entries
     .filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && !['node_modules', 'build', 'dist', 'target'].includes(entry.name))
     .map(entry => entry.name)
@@ -126,11 +127,11 @@ async function inspectDevelopmentTasks(folder, platform = process.platform) {
   return { root, tasks: [...unique.values()] }
 }
 
-async function prepareDevelopmentTask(folder, id, { includeSource, install, allowed }) {
-  const plan = await inspectDevelopmentTasks(folder)
+async function prepareDevelopmentTask(folder, id, { includeSource, install, allowed, rootOnly = false, allowPendingInstall = false }) {
+  const plan = await inspectDevelopmentTasks(folder, process.platform, { rootOnly })
   let task = plan.tasks.find(candidate => candidate.id === id)
   if (!task) throw new Error('기동 명령이 바뀌었습니다. 메뉴를 다시 열어 주세요.')
-  if (task.installCommand && !install) throw new Error('의존성 설치를 확인한 뒤 기동해 주세요.')
+  if (task.installCommand && !install && !allowPendingInstall) throw new Error('의존성 설치를 확인한 뒤 기동해 주세요.')
   if (task.includeSource) {
     if (!includeSource || !SPARSE_MODULES.includes(task.relative)) throw new Error('소스 폴더 포함을 확인한 뒤 기동해 주세요.')
     const cone = (await git(plan.root, ['config', '--bool', '--get', 'core.sparseCheckoutCone']).catch(() => '')).trim() === 'true'
@@ -138,7 +139,7 @@ async function prepareDevelopmentTask(folder, id, { includeSource, install, allo
     await git(plan.root, ['sparse-checkout', 'add', '--', cone ? task.relative : `/${task.relative}/`], true)
     task = (await inspectDevelopmentTasks(plan.root)).tasks.find(candidate => candidate.id === id && !candidate.includeSource)
     if (!task) throw new Error('소스 폴더의 실행 파일을 찾지 못했습니다. 워크트리 상태를 확인해 주세요.')
-    if (task.installCommand && !install) throw new Error('의존성 설치를 확인한 뒤 기동해 주세요.')
+    if (task.installCommand && !install && !allowPendingInstall) throw new Error('의존성 설치를 확인한 뒤 기동해 주세요.')
   }
   const cwd = path.resolve(plan.root, task.relative)
   const actual = await projectRoot(cwd)

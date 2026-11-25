@@ -4,7 +4,7 @@
 
 시안: `mockups/dev-run-presets.html` (장면 1~8, 사용자가 좋다고 함)
 
-상태: 설계. 1단계 진행.
+상태: 1단계 끝 (2026-11-26, 리뷰 3회 반영). 2·3단계 남음.
 
 ## 지금 있는 것 (2.36.2, 바탕으로 쓴다)
 - `src/ipc/localDevelopmentTasks.js`:
@@ -33,6 +33,7 @@
 
 ### 실행 구성
 - 프로젝트(로컬 작업의 프로젝트 키: 기본 체크아웃 경로, `lib/localProjectServers.ts` 의 `projectKeyOf` 와 같은 값)마다 여러 개.
+- 구성은 프로젝트에서 공유한다. 카드가 놓인 워크트리 또는 에이전트 셸의 워크트리가 실행 루트다. 같은 구성을 워크트리마다 별도의 셸에서 실행할 수 있고, 상태와 오류도 워크트리마다 둔다.
 - 한 구성의 필드:
   - `id`, `name`(20자)
   - `relative`: 프로젝트 루트 기준 폴더
@@ -47,7 +48,9 @@
   - `custom` 명령은 본창 설정 화면에서 사용자가 입력한 것만 저장한다 (IPC 는 본창 주 프레임·잠금 해제).
   - 저장 후 처음 실행할 때 명령 전체를 보여 주고 한 번 확인받는다. 명령이 바뀌면 다시 확인받는다.
   - 에이전트·MCP·휴대폰은 구성을 만들거나 고칠 수 없다. 이름으로 실행만 한다.
-- 폴더는 프로젝트 루트 안이어야 한다 (`resolveInside` 와 같은 검사, 링크를 푼 실제 경로 기준).
+  - 에이전트 조작을 허용하면 에이전트가 프로젝트의 빌드 스크립트를 샌드박스 밖에서 실행할 수 있다. main 은 요청받은 구성 이름으로 그 워크트리의 실제 폴더와 실행 후보를 다시 확인한다.
+- 실행 폴더는 해당 워크트리 안이어야 한다 (`resolveInside`와 같은 검사, 링크를 푼 실제 경로 기준).
+- 한계. 확인 해시는 앱의 확인 여부를 기억한다. 같은 OS 사용자로 실행되어 `run-presets.json`을 수정할 수 있는 프로세스는 해시도 다시 쓸 수 있다.
 
 ### 카드 버튼 (사이드바 로컬 작업 카드)
 - 시안 장면 1·3·4·5·8.
@@ -85,7 +88,7 @@
 
 ### 에이전트에게 보내기 (화면, 시안 장면 7)
 - 대상: 같은 프로젝트의 셸에서 도는 에이전트 목록. 역할·상태와 함께 보인다.
-- 보내는 것: 구성 이름·폴더·실행 방식 이름·종료 코드와 마지막 오류 묶음(최대 80줄), 사용자가 덧붙인 말.
+- 보내는 것: 구성 이름·프로젝트 기준 상대 폴더·실행 방식 이름·종료 코드와 마지막 오류 묶음(최대 80줄), 사용자가 덧붙인 말. main이 미리보기에 반환한 본문에 메모를 붙여 보낸다.
 - 에이전트 메시지 경로로 보낸다. 보낸 사람은 `user` 다.
 
 ### 에이전트 조작 (MCP, `ezshell-cli-mcp` 에 도구 추가)
@@ -99,8 +102,9 @@
 - 바꾸면 안 되는 것:
   - 부른 에이전트가 셸에 묶여 있어야 한다 (`shellId` 있음, Aside 같은 셸 없는 에이전트는 거부).
   - 그 셸의 폴더가 구성의 프로젝트 안이어야 한다.
-  - `agentControl` 이 꺼진 구성은 `run_list` 에만 보이고 조작은 거부한다.
-- 사용자가 30초 안에 직접 중지한 구성은 에이전트의 `run_start`·`run_restart` 를 거부한다 ("사용자가 방금 중지했습니다").
+  - `agentControl` 이 꺼지면 시작·재기동·중지를 거부한다. `run_list`, `run_wait`, `run_log`는 사용할 수 있다.
+- 에이전트가 구성을 처음 시작하거나 재기동하면 누가 조작했는지와 허용을 끄는 버튼을 앱 안에 한 번 보여 준다. 안내 여부는 모든 워크트리가 공유하는 프로젝트 구성에 저장한다.
+- 사용자가 해당 워크트리에서 30초 안에 직접 중지한 구성은 에이전트의 `run_start`·`run_restart` 를 거부한다 ("사용자가 방금 중지했습니다").
 - 조작 기록은 메모리에 남는다 (구성마다 최근 20개: 누가·무엇을·언제). 카드 줄에 "codex-5 가 재기동 · 4초 전" 을 10초 보이고, 줄의 기록 보기에 남는다.
 - 잠금 중에는 모든 `run_*` 를 거부한다.
 - 문서의 기존 규칙("재기동·중지 IPC 를 MCP 에 노출하지 않는다")은 이 방식으로 고쳐 적는다. 에이전트는 사용자가 만든 구성을 이름으로만 부르고 명령·폴더를 넘기지 못한다.
@@ -108,11 +112,14 @@
 ### JDK 보관함 (main, 새 폴더 `src/runtimes/`)
 - **받기:**
   - Eclipse Temurin: Adoptium API `api.adoptium.net/v3/assets/feature_releases/<ver>/ga`. 파일은 GitHub 릴리스에 있다.
-  - Azul Zulu: `api.azul.com/metadata/v1/zulu/packages`. JDK 6·7 이 있다.
+  - Azul Zulu: `api.azul.com/metadata/v1/zulu/packages`.
+  - JDK 6·7 은 무료 배포가 없다 (2026-11-25 확인: Azul 무료 메타데이터에 Windows x64 6·7 ZIP 이 없고, 6·7 최신 빌드는 구독자용이다). 6·7 을 고르면 그렇다고 알리고 대안을 준다: 이 PC 에서 찾은 6·7 쓰기, 또는 JDK 8 로 받기 (대부분의 6·7 프로젝트와 옛 Tomcat 은 JDK 8 에서 돈다). 컴파일 버전(-source/-target)은 2단계에서 맞춘다.
   - 버전·OS·CPU 로 zip(Windows)·tar.gz(mac·Linux)와 SHA-256 을 받는다.
 - **바꾸면 안 되는 것:**
   - https 만 쓴다.
-  - 정해진 호스트만 받는다: `api.adoptium.net`, `github.com`, `objects.githubusercontent.com`, `api.azul.com`, `cdn.azul.com`. 리다이렉트도 같은 목록 안에서만 따라간다.
+  - 신뢰의 기준점은 `api.adoptium.net`·`api.azul.com`의 TLS다. 파일 주소와 SHA-256은 같은 공급자 API 응답에서 받는다.
+  - 정해진 호스트만 받는다: `api.adoptium.net`, `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`, `api.azul.com`, `cdn.azul.com`. 리다이렉트도 같은 목록 안에서만 따라간다. 단계마다 https·호스트를 다시 보고, 5번까지 따라간다.
+    - `release-assets…` 는 2026-11-25 실측으로 더했다: Adoptium 이 준 GitHub 주소가 302 로 그 호스트에 보낸다.
   - SHA-256 이 맞아야 푼다.
   - 압축은 쓰기 전에 모든 항목의 경로를 검사한다 (`dbClient/unzip.js` 의 `safeTarget` 재사용). tar.gz 는 Node 로 직접 풀거나, 목록을 먼저 검사한 뒤 시스템 `tar` 로 푼다.
   - 받는 중에는 임시 폴더에 두고, 다 끝난 뒤 이름을 바꾼다.
@@ -143,7 +150,7 @@
   - `run_*` 권한(셸 없음, 다른 프로젝트, agentControl 꺼짐, 사용자 중지 30초, 잠금)
   - JDK API 응답 해석, 체크섬 불일치 거부, 경로 탈출 거부, 호스트 목록
 - 화면: `local-development-tasks` 명세를 넓힌다. 가짜 서버 명령으로 구성 추가 → ▶ → 시작 완료 칩 → 오류 줄 → `오류 1` → 강제 종료 → 멈춤 알림 → 재기동.
-- JDK 실제 받기는 사용자 PC 에서 한 번 확인한다 (시험은 가짜 서버).
+- JDK 실제 받기는 사용자 PC 에서 한 번 확인한다 (시험은 가짜 서버). Windows에서 Temurin 21과 Zulu 8을 받아 압축 항목 수가 상한 안에 드는지 확인한다.
 
 ### 1단계 작업 나눔과 IPC 계약
 세 사람이 함께 만든다. 이름은 이대로 쓰고, 바꿔야 하면 PL 에게 먼저 알린다.
@@ -158,20 +165,21 @@
   - `src/runtimes/`, 설정 > 개발 도구 탭.
   - main 쪽에 `runtimes.javaHomeOf(id) → 절대 경로 | null` 을 내보내면 codex-5 가 실행 때 부른다.
 
-IPC 는 모두 본창 주 프레임·잠금 해제에서만 받는다. `projectFolder` 는 로컬 작업의 프로젝트 폴더이고, main 이 프로젝트 키로 바꾼다.
+IPC 는 모두 본창 주 프레임·잠금 해제에서만 받는다. `worktreeFolder`는 카드가 놓인 워크트리 폴더다. 목록과 이벤트의 `worktreeKey`는 화면의 `pathKey`와 같은 정규화 키다. `presets`는 프로젝트가 공유하고 `states`는 요청한 워크트리 기준이다.
 
 | 채널 | 요청 → 응답 |
 |---|---|
-| `run-presets-list` | `(projectFolder)` → `{ projectKey, presets: Preset[], states: Record<id, RunState> }` |
-| `run-presets-candidates` | `(projectFolder, relative)` → `{ candidates: [{ taskId, name, command }] }` (그 폴더의 후보만. command 는 보여 주기용) |
-| `run-presets-save` | `(projectFolder, preset)` → `{ preset }` 또는 오류. id 가 없으면 새로 |
-| `run-presets-delete` | `(projectFolder, id)` |
-| `run-presets-reorder` | `(projectFolder, ids[])` |
-| `run-preset-start` / `-restart` / `-stop` | `(projectFolder, id, { confirmCustom?: true })` → `{ ok }` 또는 `{ needsConfirm: { command } }` |
-| `run-preset-start-all` / `-stop-all` | `(projectFolder)` |
-| `run-preset-errors` | `(projectFolder, id)` → `{ groups: [{ at, lines: string[] }] }` |
-| `run-preset-send` | `(projectFolder, id, agentId, note)` → `{ ok }` (에이전트에게 보내기) |
-| 이벤트 `run-preset-state` | `{ projectKey, id, state: RunState }` |
+| `run-presets-list` | `(worktreeFolder)` → `{ projectKey, worktreeKey, presets: Preset[], states: Record<id, RunState> }` |
+| `run-presets-candidates` | `(worktreeFolder, relative)` → `{ candidates: [{ taskId, name, command }] }` (그 폴더의 후보만. command 는 보여 주기용) |
+| `run-presets-save` | `(worktreeFolder, preset)` → `{ preset }` 또는 오류. id 가 없으면 새로 |
+| `run-presets-delete` | `(worktreeFolder, id)` |
+| `run-presets-reorder` | `(worktreeFolder, ids[])` |
+| `run-preset-start` / `-restart` / `-stop` | `(worktreeFolder, id, { confirmCustom?: true, confirmInstall?: true })` → `{ ok }`, `{ needsConfirm: { command } }`(직접 명령 첫 실행) 또는 `{ needsInstall: { command } }`(의존성 설치 필요, 이번 실행에만 확인) |
+| `run-preset-start-all` / `-stop-all` | `(worktreeFolder, 같은 확인 필드)` → 확인이 필요한 구성이 있으면 하나씩 같은 형식으로 돌려준다. 모두 중지는 전환 중인 구성을 최대 10초 기다린 뒤 멈춘다 |
+| `run-preset-errors` | `(worktreeFolder, id)` → `{ groups: [{ at, lines: string[] }] }` |
+| `run-preset-send-preview` | `(worktreeFolder, id)` → `{ text }` (메모를 붙이기 전 본문) |
+| `run-preset-send` | `(worktreeFolder, id, agentId, note)` → `{ ok }` (에이전트에게 보내기) |
+| 이벤트 `run-preset-state` | `{ projectKey, worktreeKey, id, state: RunState, firstAgentAction?: true }` (처음 에이전트 조작은 `state.lastAction`으로 표시) |
 
 ```ts
 type Preset = { id: string; name: string; relative: string; kind: 'task' | 'custom'; taskId?: string; command?: string
@@ -183,6 +191,8 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
 
 - `stopped` 는 사용자·에이전트가 멈춘 것, `crashed` 는 스스로 0 이 아닌 코드로 끝난 것이다.
 - `custom` 의 `command` 는 화면에 보여 주기 위해서만 돌려준다. 실행은 main 이 저장된 값으로 한다.
+- 의존성 설치(`installCommand`)도 main 이 다시 확정한 것만 실행한다. 에이전트의 `run_*` 가 설치를 만나면 거부하고, 사용자가 카드에서 한 번 실행하라고 알린다.
+- sparse checkout 으로 빠진 폴더의 task 는 1단계에서 후보로 내지 않는다.
 
 ## 2단계: 레거시 (Ant·Tomcat·이클립스·Maven)
 - **실행 구성을 "준비 + 서버" 두 단계로:**
@@ -256,9 +266,10 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
 - **한계:** JRebel 도 못 하는 것과 비슷하다. 상속 구조, 정적 초기화, 프레임워크 설정 파일 일부는 재기동이 필요하다. 이건 화면에 그대로 알린다.
 
 ## 진행
-- [ ] 1단계 설계 확정 (이 문서)
-- [ ] 1단계 main: 구성 저장·검사, 오류·시작 판정, `run_*` MCP 도구
-- [ ] 1단계 화면: 카드 버튼, 구성 창, 알림, 에이전트에게 보내기
-- [ ] 1단계 JDK 보관함
+- [x] 1단계 설계 확정 (이 문서)
+- [x] 1단계 main: 구성 저장·검사, 오류·시작 판정, `run_*` MCP 도구, 워크트리별 실행 (리뷰에서 바꿈: 실행 폴더는 부른 쪽 워크트리)
+- [x] 1단계 화면: 카드 버튼, 구성 창, 전용 명령 확인 창(0.8초 무장), 알림, 첫 에이전트 조작 알림, 에이전트에게 보내기
+- [x] 1단계 JDK 보관함 (6·7 은 무료 배포 없음 → 찾은 것 또는 JDK 8)
+- [ ] 사용자 PC 확인: 실제 JDK 받기(Temurin 17·21, Zulu 8), 실제 Spring Boot·Vue 프로젝트로 구성 추가·재기동·멈춤 알림, 에이전트 run_restart
 - [ ] 2단계
 - [ ] 3단계

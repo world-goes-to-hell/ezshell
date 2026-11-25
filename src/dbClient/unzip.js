@@ -5,6 +5,7 @@
 const fs = require('fs')
 const path = require('path')
 const zlib = require('zlib')
+const { Readable, Transform } = require('stream')
 const { pipeline } = require('stream/promises')
 
 const END_SIGNATURE = 0x06054b50
@@ -23,10 +24,27 @@ function safeTarget(targetDir, name) {
   const normal = String(name).replace(/\\/g, '/')
   if (!normal || normal.startsWith('/') || /^[A-Za-z]:/.test(normal) || normal.includes('\0')) return null
   const parts = normal.split('/').filter((part) => part !== '' && part !== '.')
-  if (parts.length === 0 || parts.some((part) => part === '..' || /[<>:"|?*]/.test(part))) return null
+  if (parts.length === 0 || parts.some((part) => part === '..' || /[\u0000-\u001f<>:"|?*]/.test(part))) return null
+  if (process.platform === 'win32' && parts.some(part => /[. ]$/.test(part)
+    || /^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])$/i.test(part.split('.')[0].trimEnd()))) return null
   const target = path.resolve(targetDir, ...parts)
   const root = path.resolve(targetDir)
   return target === root || target.startsWith(root + path.sep) ? target : null
+}
+
+/** Each entry and its implicit parents must have one unambiguous spelling and type. */
+function claimArchivePath(paths, root, target, isDirectory) {
+  const base = path.resolve(root)
+  for (let current = target; current !== base; current = path.dirname(current)) {
+    const isEntry = current === target
+    const directory = !isEntry || isDirectory
+    const key = current.toLowerCase().normalize('NFC')
+    const known = paths.get(key)
+    if (known && (known.path !== current || !directory || !known.directory || (isEntry && known.explicit))) return false
+    if (known && !isEntry) break
+    paths.set(key, { path: current, directory, explicit: isEntry })
+  }
+  return true
 }
 
 async function readAt(file, position, length) {
@@ -79,16 +97,18 @@ async function readEntries(file, fileSize) {
  * `targetDir`, when an entry's name would leave the folder or the archive is not one this reads.
  * Resolves with the number of files written.
  */
-async function extractZip(zipPath, targetDir) {
+async function extractZip(zipPath, targetDir, { signal } = {}) {
   const file = await fs.promises.open(zipPath, 'r')
   try {
     const { size: fileSize } = await file.stat()
     const entries = await readEntries(file, fileSize)
     // Everything is checked before anything is written
     let total = 0
+    const paths = new Map()
     const planned = entries.map((entry) => {
       const target = safeTarget(targetDir, entry.name)
       if (!target) throw new Error(`The archive holds a path that leaves the folder: ${entry.name.slice(0, 80)}`)
+      if (!claimArchivePath(paths, targetDir, target, entry.isDirectory)) throw new Error('The archive contains colliding paths')
       if (!entry.isDirectory && entry.method !== 0 && entry.method !== 8) throw new Error('The archive uses a compression this reader does not know')
       total += entry.size
       return { ...entry, target }
@@ -96,7 +116,9 @@ async function extractZip(zipPath, targetDir) {
     if (total > MAX_TOTAL_BYTES) throw new Error('The archive would unpack to too much')
 
     let written = 0
+    let expanded = 0
     for (const entry of planned) {
+      signal?.throwIfAborted()
       if (entry.isDirectory) {
         await fs.promises.mkdir(entry.target, { recursive: true })
         continue
@@ -105,16 +127,19 @@ async function extractZip(zipPath, targetDir) {
       const local = await readAt(file, entry.offset, 30)
       if (local.readUInt32LE(0) !== LOCAL_SIGNATURE) throw new Error('The archive is damaged')
       const start = entry.offset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28)
-      const output = fs.createWriteStream(entry.target)
-      if (entry.compressedSize === 0) {
-        await new Promise((resolve, reject) => output.end((err) => (err ? reject(err) : resolve())))
-      } else {
-        const input = fs.createReadStream(zipPath, { start, end: start + entry.compressedSize - 1 })
-        if (entry.method === 8) await pipeline(input, zlib.createInflateRaw(), output)
-        else await pipeline(input, output)
-      }
-      const { size } = await fs.promises.stat(entry.target)
-      if (size !== entry.size) throw new Error(`A file came out with the wrong size: ${entry.name.slice(0, 80)}`)
+      const input = entry.compressedSize > 0 ? fs.createReadStream(zipPath, { start, end: start + entry.compressedSize - 1 }) : Readable.from([])
+      const sizeError = () => new Error(`A file came out with the wrong size: ${entry.name.slice(0, 80)}`)
+      let size = 0
+      const limit = new Transform({ transform(chunk, _encoding, done) {
+        size += chunk.length
+        expanded += chunk.length
+        if (size > entry.size) return done(sizeError())
+        if (expanded > MAX_TOTAL_BYTES) return done(new Error('The archive would unpack to too much'))
+        done(null, chunk)
+      } })
+      const decoding = entry.compressedSize > 0 && entry.method === 8 ? [zlib.createInflateRaw()] : []
+      await pipeline(input, ...decoding, limit, fs.createWriteStream(entry.target), { signal })
+      if (size !== entry.size) throw sizeError()
       written += 1
     }
     return written
@@ -123,4 +148,4 @@ async function extractZip(zipPath, targetDir) {
   }
 }
 
-module.exports = { extractZip, safeTarget }
+module.exports = { extractZip, safeTarget, claimArchivePath }

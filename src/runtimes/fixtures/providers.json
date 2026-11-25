@@ -1,0 +1,56 @@
+{
+  "temurin17WindowsX64": [
+    {
+      "binaries": [{
+        "architecture": "x64",
+        "image_type": "jdk",
+        "os": "windows",
+        "package": {
+          "checksum": "eafba0944f777abdc74d5aad16049c9b5a1275b6ce99e2939ba9f7f3e6f08c87",
+          "link": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21.1%2B2/OpenJDK17U-jdk_x64_windows_hotspot_17.0.21.1_2.zip",
+          "size": 191150540
+        }
+      }],
+      "release_name": "jdk-17.0.21.1+2",
+      "version_data": { "major": 17, "build": 2, "openjdk_version": "17.0.21.1+2" }
+    }
+  ],
+  "zulu17Windows": [
+    {
+      "availability_type": "CA",
+      "java_version": [17, 0, 21, 1],
+      "name": "zulu17.70.201-ca-jdk17.0.21.1-win_i686.zip",
+      "openjdk_build_number": 2,
+      "package_uuid": "80af84a2-ab24-4036-8836-700e2f55a534"
+    },
+    {
+      "availability_type": "CA",
+      "java_version": [17, 0, 21, 1],
+      "name": "zulu17.70.201-ca-jdk17.0.21.1-win_x64.zip",
+      "openjdk_build_number": 2,
+      "package_uuid": "d31c2dbe-d0d6-4f4c-b61a-ea36fef75e33"
+    },
+    {
+      "availability_type": "CA",
+      "java_version": [17, 0, 19],
+      "name": "zulu17.66.19-ca-jdk17.0.19-win_x64.zip",
+      "openjdk_build_number": 10,
+      "package_uuid": "f337e1e1-4666-46dd-930e-10da2286d2bf"
+    }
+  ],
+  "zulu17WindowsX64Detail": {
+    "arch": "x86",
+    "archive_type": "zip",
+    "availability_type": "CA",
+    "download_url": "https://cdn.azul.com/zulu/bin/zulu17.70.201-ca-jdk17.0.21.1-win_x64.zip",
+    "hw_bitness": 64,
+    "java_package_type": "jdk",
+    "java_version": [17, 0, 21, 1],
+    "name": "zulu17.70.201-ca-jdk17.0.21.1-win_x64.zip",
+    "openjdk_build_number": 2,
+    "os": "windows",
+    "package_uuid": "d31c2dbe-d0d6-4f4c-b61a-ea36fef75e33",
+    "sha256_hash": "78865bdbc82b1164e475c36d471f53880250a768385bc8e4132598d75b58bc36",
+    "size": 196357000
+  }
+}
