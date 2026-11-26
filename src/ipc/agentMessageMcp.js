@@ -231,7 +231,7 @@ async function main() {
     inputSchema: { name: runName, seconds: z.number().int().min(1).max(300).optional(), until: z.enum(['ready', 'reload']).optional() }
   }, ({ name, seconds, until }, extra) => call({ method: 'run-wait', name, seconds, until }, extra?.signal))
   server.registerTool('run_log', {
-    description: 'Read recent hot reload results and output or errors for a preset in your worktree. Works with agent control off.',
+    description: 'Read recent hot reload results and output, or error groups and diagnosis suggestions, for a preset in your worktree. Works with agent control off.',
     inputSchema: { name: runName, lines: z.number().int().min(1).max(400).optional(), errors: z.literal(true).optional() }
   }, ({ name, lines, errors }, extra) => call({ method: 'run-log', name, lines, errors }, extra?.signal))
 

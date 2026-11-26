@@ -61,7 +61,7 @@ describe('createLocalShells', () => {
     expect(shells.list()[0].development.url).toBeNull()
     ptys[0].exit({ exitCode: 0 })
     await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2))
-    expect(prepare).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal))
+    expect(prepare).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), undefined)
     expect(shells.list()).toHaveLength(1)
     expect(shells.list()[0]).toMatchObject({ id, development: { status: 'running', url: runtime.expectedUrl } })
     expect(onEvent).toHaveBeenCalledWith({ type: 'prepared', shellId: id })
@@ -69,6 +69,25 @@ describe('createLocalShells', () => {
     await shells.changeDevelopmentTask(id, task.id, 'stop')
     await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(1))
     expect(sent.filter(x => x.channel === 'local-shell-exit')).toHaveLength(1)
+    shells.close(id)
+  })
+
+  it('runs main-process preparation without a build PTY and retains its compiler failure', async () => {
+    const cwd = realpathSync(tmpdir())
+    const { shells, spawn } = setup()
+    const onEvent = vi.fn()
+    const prepare = vi.fn(async ({ log }) => {
+      log('javac\r\n')
+      throw Object.assign(new Error('javac exit'), { code: 2, stderr: 'Probe.java:3: error: failed' })
+    })
+    const finish = vi.fn()
+    const { id } = await shells.openDevelopmentTask({ id: 'preset:eclipse', name: 'Eclipse', cwd, onEvent,
+      preparation: { run: prepare, finish } }, {})
+    expect(onEvent).toHaveBeenCalledWith({ type: 'start', shellId: id, phase: 'prepare' })
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'exit', phase: 'prepare', exitCode: 2 }))
+    expect(shells.attach(id).backlog).toContain('Probe.java:3: error: failed')
+    expect(spawn).not.toHaveBeenCalled()
+    expect(finish).not.toHaveBeenCalled()
     shells.close(id)
   })
 

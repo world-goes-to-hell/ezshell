@@ -2,7 +2,7 @@
 // the types of the IPC contract and the words and buttons a preset row shows. Kept free of React so the
 // rules are tested on their own.
 
-import type { HotReload, HotswapAgentStatus, JdkRuntime, RunAction, RunErrorGroup, RunPrepare, RunPreset, RunState } from '../types'
+import type { EclipseImportDraft, HotReload, HotswapAgentStatus, JdkRuntime, RunAction, RunErrorGroup, RunPrepare, RunPreset, RunState } from '../types'
 export type { HotReload, RunAction, RunCandidate, RunErrorGroup, RunPrepare, RunPreset, RunReload, RunState, RunStatus } from '../types'
 
 export const IDLE_STATE: RunState = { status: 'idle', errors: 0 }
@@ -151,6 +151,8 @@ export function tomcatFromDraft(draft: Pick<PresetDraft, 'tomcat' | 'webapp' | '
   if (draft.prepareTool === 'ant') {
     if (!TOOL_TOKEN.test(draft.antTarget)) return { error: 'Ant 타깃을 골라 주세요.' }
     prepare = { tool: 'ant', target: draft.antTarget }
+  } else if (draft.prepareTool === 'eclipse') {
+    prepare = { tool: 'eclipse' }
   } else if (draft.prepareTool === 'maven') {
     const goals = draft.mavenGoals.trim().split(/\s+/).filter(Boolean)
     if (!goals.length || goals.length > 12 || !goals.every(goal => TOOL_TOKEN.test(goal))) return { error: 'Maven 목표를 확인해 주세요 (예: clean package).' }
@@ -323,6 +325,42 @@ export function runError(result: unknown): string | null {
   if (typeof value.error === 'string' && value.error) return value.error
   if (value.success === false) return '요청을 처리하지 못했습니다.'
   return null
+}
+
+// --- Eclipse project import (stage 2, second batch) ---
+
+/**
+ * The dialog fields an Eclipse import fills (the user saves them): the web folder and the context path.
+ * main reads the Eclipse project in `relative` and gives the web folder from there; the preset keeps it
+ * from the worktree, so a module's folder goes in front.
+ */
+export function eclipseFill(imported: Pick<EclipseImportDraft, 'webapp' | 'contextPath'>, relative = '.'): Partial<PresetDraft> {
+  const patch: Partial<PresetDraft> = {}
+  const module = relative.replace(/\\/g, '/').replace(/^\.\/?/, '').replace(/\/+$/, '')
+  const webapp = imported.webapp?.trim().replace(/\\/g, '/').replace(/^\.\/?/, '').replace(/\/+$/, '')
+  if (webapp) patch.webapp = module ? `${module}/${webapp}` : webapp
+  // '.': the web folder is the Eclipse project's folder itself
+  else if (/^\.\/?$/.test(imported.webapp?.trim() ?? '')) patch.webapp = module || '.'
+  if (imported.contextPath?.trim()) patch.contextPath = imported.contextPath.trim().startsWith('/') ? imported.contextPath.trim() : `/${imported.contextPath.trim()}`
+  return patch
+}
+
+/** A list in a line: the first few and how many more */
+function listLine(items: readonly string[], shown = 3): string {
+  if (!items.length) return '없음'
+  const head = items.slice(0, shown).join(', ')
+  return items.length > shown ? `${head} 외 ${items.length - shown}개` : head
+}
+
+/** What was read, line by line (shown under the button; only the web folder and context path are filled) */
+export function eclipseSummary(imported: EclipseImportDraft, notes: readonly string[] = []): string[] {
+  return [
+    `웹 폴더: ${imported.webapp || '못 찾음'} · 컨텍스트 경로: ${imported.contextPath || '/'}`,
+    `소스 폴더: ${listLine(imported.sources)}`,
+    `lib: ${imported.libs.length ? `${imported.libs.length}개 (${listLine(imported.libs, 2)})` : '없음'}`,
+    `컴파일 버전: ${imported.release ? `Java ${imported.release}` : '설정 없음'} · 인코딩: ${imported.encoding || '설정 없음 (MS949 일 수 있음)'}`,
+    ...notes.filter(note => typeof note === 'string' && note.trim()).map(note => note.trim())
+  ]
 }
 
 // --- Hot reload (stage 3: saved Java changes applied to the running server) ---

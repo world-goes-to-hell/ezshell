@@ -5,6 +5,7 @@ const { isLocalFilePath } = require('../localKeyPath.js')
 const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { validateTomcat } = require('./tomcatRun.js')
+const { mavenApproval, mavenFields } = require('./runSuggestions.js')
 
 const MAX_BYTES = 2 * 1024 * 1024
 const MAX_PROJECTS = 200
@@ -13,7 +14,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ONE_LINE = /^[^\x00\r\n\u2028\u2029]*$/
 const NAME_CONTROL = /[\p{Cc}\p{Cf}\p{Cs}]/u
 const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/
-const JDK_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,159}$/
+const JDK_ID = /^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,159}$/
 
 // Keep the same separators, drive-root form and case as the sidebar's projectKeyOf.
 function projectKey(root) {
@@ -55,11 +56,14 @@ const commandHash = command => createHash('sha256').update(command).digest('hex'
 
 function presetApproval(preset) {
   if (preset.kind === 'custom') return { command: preset.command, hash: commandHash(preset.command) }
-  if (preset.kind !== 'tomcat' || (!preset.vmArgs.trim() && !preset.prepare)) return null
+  const maven = mavenApproval(preset)
+  if (preset.kind !== 'tomcat') return maven && { command: maven.text, hash: commandHash(JSON.stringify(maven.signature)) }
+  if (!preset.vmArgs.trim() && !preset.prepare) return null
   const prepare = preset.prepare
-  const command = [prepare && `기동 전 빌드\n${prepare.tool} ${prepare.target ?? prepare.goals}`,
-    preset.vmArgs.trim() && `Tomcat VM 인자\n${preset.vmArgs}`].filter(Boolean).join('\n\n')
-  return { command, hash: commandHash(JSON.stringify(['tomcat', preset.vmArgs, prepare])) }
+  const build = prepare?.tool === 'eclipse' ? '이클립스식 빌드 (.classpath의 Java 소스와 리소스)' : prepare && `${prepare.tool} ${prepare.target ?? prepare.goals}`
+  const command = [build && `기동 전 빌드\n${build}`,
+    preset.vmArgs.trim() && `Tomcat VM 인자\n${preset.vmArgs}`, maven?.text].filter(Boolean).join('\n\n')
+  return { command, hash: commandHash(JSON.stringify(['tomcat', preset.vmArgs, prepare, ...(maven ? [maven.signature] : [])])) }
 }
 
 function validatePreset(input, id) {
@@ -86,9 +90,12 @@ function validatePreset(input, id) {
     flags[key] = input[key]
   }
   const base = { id, name, relative, jdk, hotReload, env: Object.fromEntries(entries), ...flags }
-  if (input.kind === 'tomcat') return { ...base, ...validateTomcat(input, presetRelative) }
+  if (input.kind === 'tomcat') {
+    const tomcat = validateTomcat(input, presetRelative)
+    return { ...base, ...tomcat, ...mavenFields({ ...input, ...tomcat }) }
+  }
   if (input.kind === 'task' && typeof input.taskId === 'string' && input.taskId.length <= 300 && /^(?:.+):(gradle|maven|node)$/.test(input.taskId) && ONE_LINE.test(input.taskId)) {
-    return { ...base, kind: 'task', taskId: input.taskId }
+    return { ...base, kind: 'task', taskId: input.taskId, ...mavenFields(input) }
   }
   if (input.kind === 'custom' && typeof input.command === 'string' && input.command.trim() && input.command.length <= 4096 && ONE_LINE.test(input.command)) {
     return { ...base, kind: 'custom', command: input.command.trim() }

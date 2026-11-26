@@ -14,6 +14,7 @@ import {
   useRunPresets, type AgentActionNotice, type CrashNotice
 } from '../../stores/runPresetStore'
 import { toast } from '../../stores/toastStore'
+import { RunSuggestionsDialog } from './RunSuggestions'
 import './RunPresets.css'
 
 interface Sending { notice: CrashNotice; preset: RunPreset; state: RunState; group?: RunErrorGroup }
@@ -37,6 +38,7 @@ function CrashCard({ notice, onSend }: { notice: CrashNotice; onSend: (sending: 
   const preset = project?.presets.find(item => item.id === notice.id)
   const state = project?.states[notice.id] ?? IDLE_STATE
   const [group, setGroup] = useState<RunErrorGroup | undefined>()
+  const [diagnosing, setDiagnosing] = useState(false)
   useEffect(() => {
     let active = true
     void fetchRunErrors(notice.folder, notice.id).then(groups => { if (active) setGroup(groups[groups.length - 1]) })
@@ -55,7 +57,13 @@ function CrashCard({ notice, onSend }: { notice: CrashNotice; onSend: (sending: 
           <RiCloseLine size={14} />
         </button>
       </div>
-      <div className="run-crash-detail">{detail}</div>
+      <div className="run-crash-detail">
+        <span>{detail}</span>
+        {/* What the logs suggest (a missing jar, the JDK, a blocked Maven repository…) */}
+        {typeof window.electronAPI.runPresetDiagnosis === 'function' && (
+          <button type="button" className="run-crash-diagnose" onClick={() => setDiagnosing(true)}>진단 보기</button>
+        )}
+      </div>
       {group && group.lines.length > 0 && <pre className="run-crash-log">{group.lines.slice(0, 12).join('\n')}</pre>}
       <div className="run-crash-actions">
         <button type="button" className="btn-secondary modal-btn" disabled={!state.shellId}
@@ -73,6 +81,7 @@ function CrashCard({ notice, onSend }: { notice: CrashNotice; onSend: (sending: 
           <RiSendPlaneFill size={13} aria-hidden="true" /> 에이전트에게 보내기
         </button>
       </div>
+      {diagnosing && <RunSuggestionsDialog folder={notice.folder} presetId={preset.id} presetName={preset.name} onClose={() => setDiagnosing(false)} />}
     </div>
   )
 }

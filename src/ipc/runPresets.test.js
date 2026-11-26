@@ -77,6 +77,96 @@ async function fixture(options = {}) {
 }
 
 describe('saved project runs', () => {
+  it('applies Maven suggestions only to their current run and confirms changed invocation options', async () => {
+    const f = await fixture()
+    const wrapper = path.join(f.folder, '.mvn', 'wrapper')
+    await mkdir(wrapper, { recursive: true })
+    await writeFile(path.join(wrapper, 'maven-wrapper.properties'), 'distributionUrl=https://example.invalid/apache-maven-3.6.3-bin.zip')
+    await writeFile(path.join(f.folder, 'pom.xml'), '<project>spring-boot-maven-plugin</project>')
+    await writeFile(path.join(f.folder, process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw'), 'fixture')
+    const saved = await f.save('Maven', { kind: 'task', taskId: '.:maven', mavenMirrors: [{ repositoryId: 'forged', url: 'https://wrong.example.test/' }] })
+    expect(saved).not.toHaveProperty('mavenMirrors')
+    expect(await f.invoke('run-preset-start', saved.id)).toEqual({ ok: true })
+    const { shellId } = f.list().states[saved.id]
+    const blocked = '[ERROR] Could not transfer artifact example:demo:jar:1 from/to maven-default-http-blocker (http://0.0.0.0/): Blocked mirror for repositories: [legacy (http://legacy.invalid/maven/, default)]'
+    f.emit(shellId, { type: 'data', data: blocked + '\n' })
+    f.emit(shellId, { type: 'exit', exitCode: 1 })
+    const { suggestions } = await f.invoke('run-preset-diagnosis', saved.id)
+    expect(suggestions).toMatchObject([{ kind: 'mavenHttpBlocked', repositoryId: 'legacy', apply: 'mavenMirror' }])
+    expect(await f.agent('log', 'Maven', { errors: true })).toMatchObject({
+      suggestions: [expect.objectContaining({ kind: 'mavenHttpBlocked', repositoryId: 'legacy' })]
+    })
+    const report = await f.agent('log', 'Maven', { errors: true })
+    expect(report.suggestions[0]).not.toHaveProperty('apply')
+    expect(report.suggestions[0]).not.toHaveProperty('id')
+    const request = { id: suggestions[0].id, replacementUrl: 'https://repo.example.test/maven/' }
+    expect(await f.invokeCheckout('run-preset-apply-suggestion', saved.id, request)).toMatchObject({ ok: false })
+    const otherFrame = { ...f.event, senderFrame: {} }
+    expect(await f.handlers.get('run-preset-apply-suggestion')(otherFrame, f.folder, saved.id, request)).toMatchObject({ ok: false })
+    const result = await f.invoke('run-preset-apply-suggestion', saved.id, request)
+    expect(result).toMatchObject({ ok: true, preset: { mavenMirrors: [{ repositoryId: 'legacy', url: request.replacementUrl }] } })
+    const renamed = await f.invoke('run-presets-save', { ...result.preset, name: 'Maven 실행', mavenMirrors: [] })
+    expect(renamed.preset.mavenMirrors).toEqual(result.preset.mavenMirrors)
+    await expect(f.agent('start', 'Maven 실행')).rejects.toThrow(/사용자가/)
+    expect(await f.invoke('run-preset-start', saved.id)).toMatchObject({ needsConfirm: { command: expect.stringContaining('legacy → https://repo.example.test/maven/') } })
+    expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual({ ok: true })
+    const setting = path.join(path.dirname(f.file), 'runtimes', 'maven-settings', `${saved.id}.xml`)
+    expect(f.shellTasks.get(shellId).command).toContain(' -gs ')
+    expect(f.shellTasks.get(shellId).command).toContain(`${path.dirname(setting)}${path.sep}.run-${saved.id}-`)
+    expect((await readFile(setting, 'utf8'))).not.toContain('<blocked>')
+    expect(await f.invoke('run-preset-apply-suggestion', saved.id, request)).toMatchObject({ ok: false })
+
+    f.emit(shellId, { type: 'data', data: '[DEBUG] Using mirror user-mirror (https://other.example.test/maven) for legacy (http://legacy.invalid/maven/).\n' })
+    f.emit(shellId, { type: 'exit', exitCode: 1 })
+    const conflict = (await f.invoke('run-preset-diagnosis', saved.id)).suggestions[0]
+    expect(conflict).toMatchObject({ kind: 'mavenUserMirror', apply: 'mavenUserSettings' })
+    expect(await f.invoke('run-preset-apply-suggestion', saved.id, { id: conflict.id })).toMatchObject({
+      ok: true, preset: { mavenUserSettings: false }
+    })
+    expect(await f.invoke('run-preset-start', saved.id)).toMatchObject({ needsConfirm: { command: expect.stringContaining('서버 인증·프록시·미러·로컬 저장소') } })
+    expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual({ ok: true })
+    expect(f.shellTasks.get(shellId).command).toContain(' -s ')
+    f.emit(shellId, { type: 'exit', exitCode: 0 })
+    f.emit(shellId, { type: 'closed' })
+    expect(await f.invoke('run-presets-delete', saved.id)).toEqual({ ok: true })
+    await expect(readFile(setting, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('applies Maven settings to Tomcat preparation and reads the selected Maven version', async () => {
+    let home, maven
+    const f = await fixture({ toolHomeOf: () => home, toolHomeFor: kind => kind === 'maven' ? maven : null })
+    home = f.outside
+    maven = path.join(path.dirname(f.file), 'maven-install')
+    await Promise.all([mkdir(path.join(home, 'bin')), mkdir(path.join(home, 'conf')),
+      mkdir(path.join(maven, 'bin'), { recursive: true }), mkdir(path.join(maven, 'lib'), { recursive: true }),
+      mkdir(path.join(f.folder, 'WebContent', 'WEB-INF'), { recursive: true })])
+    await Promise.all([
+      writeFile(path.join(home, 'bin', process.platform === 'win32' ? 'catalina.bat' : 'catalina.sh'), 'fixture'),
+      writeFile(path.join(home, 'conf', 'server.xml'), '<Server><Service><Connector/><Engine><Host/></Engine></Service></Server>'),
+      writeFile(path.join(maven, 'bin', process.platform === 'win32' ? 'mvn.cmd' : 'mvn'), 'fixture'),
+      writeFile(path.join(maven, 'lib', 'maven-core-3.6.3.jar'), 'fixture')
+    ])
+    const saved = await f.save('Tomcat Maven', { kind: 'tomcat', tomcat: 'fixture', webapp: 'WebContent', prepare: { tool: 'maven', goals: 'verify' } })
+    await f.start(saved.id, '기동 전 빌드\nmaven verify')
+    const { shellId } = f.list().states[saved.id]
+    f.emit(shellId, { type: 'data', phase: 'prepare', data: '[ERROR] Could not transfer artifact a:b:jar:1 from/to retired (https://retired.invalid/maven): status code: 404\n' })
+    f.emit(shellId, { type: 'exit', phase: 'prepare', exitCode: 1 })
+    const { suggestions } = await f.invoke('run-preset-diagnosis', saved.id)
+    expect(await f.invoke('run-preset-apply-suggestion', saved.id, {
+      id: suggestions[0].id, replacementUrl: 'https://mirror.example.test/maven/'
+    })).toMatchObject({ ok: true })
+    expect(await f.invoke('run-preset-start', saved.id)).toMatchObject({ needsConfirm: { command: expect.stringContaining('기동 전 빌드\nmaven verify') } })
+    expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual({ ok: true })
+    const task = f.shellTasks.get(shellId)
+    expect(task.preparation.command).toContain('verify -gs ')
+    const xml = await readFile(path.join(path.dirname(f.file), 'runtimes', 'maven-settings', `${saved.id}.xml`), 'utf8')
+    expect(xml).toContain('<mirrorOf>retired</mirrorOf>')
+    expect(xml).not.toContain('<blocked>')
+    const server = await task.preparation.finish()
+    expect(server.command).not.toContain('-gs')
+    await server.cleanup()
+  })
+
   it('confirms Tomcat preparation and VM options, reports build failure and lets MCP run approved builds by name', async () => {
     let home
     const f = await fixture({ toolHomeOf: () => home })
@@ -131,6 +221,14 @@ describe('saved project runs', () => {
     await writeFile(f.file, JSON.stringify(data))
     expect(createRunPresetStore(f.file).list(projectKey(f.folder))).toEqual([preset])
   })
+
+  it.each(['temurin-21.0.5+11-x64', 'jbr-21.0.11+1163.125-x64', 'zulu-17.0.15-x64'])(
+    'saves and reloads the managed JDK ID %s', async jdk => {
+      const f = await fixture()
+      const preset = await f.save('Server', { jdk })
+      expect(preset).toMatchObject({ jdk })
+      expect(createRunPresetStore(f.file).list(projectKey(f.folder))).toEqual([preset])
+    })
 
   it('allows hot reload only for Spring Boot candidates and checks enhanced JDK support at launch', async () => {
     const f = await fixture()
@@ -221,7 +319,7 @@ describe('saved project runs', () => {
     const privateShell = f.list().states[privatePreset.id].shellId
     f.emit(privateShell, { type: 'data', data: 'VITE v5 ready in 11 ms\nERROR compile failed\n' })
     expect(await f.agent('wait', 'private')).toEqual({ result: 'ready', status: 'running' })
-    expect(await f.agent('log', 'private', { errors: true })).toEqual({ groups: [{ at: 100, lines: ['ERROR compile failed'] }] })
+    expect(await f.agent('log', 'private', { errors: true })).toEqual({ groups: [{ at: 100, lines: ['ERROR compile failed'] }], suggestions: [] })
     await expect(f.agent('start', 'web')).rejects.toThrow('사용자가')
     await expect(f.agent('wait', 'web', { until: 'reload' })).rejects.toThrow('바로 반영이 꺼져')
     f.state.bound = false

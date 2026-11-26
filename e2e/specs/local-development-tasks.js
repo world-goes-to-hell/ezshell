@@ -36,6 +36,16 @@ function fixture(backendPort, frontendPort) {
   fs.mkdirSync(path.join(repo, 'backend'), { recursive: true })
   fs.mkdirSync(path.join(repo, 'frontend'))
   fs.writeFileSync(path.join(repo, 'README.md'), '# Development fixture\n')
+  // An Eclipse web project in a module folder, for 이클립스 설정에서 채우기 (stage 2, second batch)
+  fs.mkdirSync(path.join(repo, 'legacy', 'src'), { recursive: true })
+  fs.mkdirSync(path.join(repo, 'legacy', '.settings'))
+  fs.mkdirSync(path.join(repo, 'legacy', 'WebContent', 'WEB-INF'), { recursive: true })
+  fs.writeFileSync(path.join(repo, 'legacy', 'src', 'Keep.java'), 'class Keep {}\n')
+  fs.writeFileSync(path.join(repo, 'legacy', 'WebContent', 'WEB-INF', 'web.xml'), '<web-app/>\n')
+  fs.writeFileSync(path.join(repo, 'legacy', '.classpath'), '<?xml version="1.0"?><classpath><classpathentry kind="src" path="src"/><classpathentry kind="output" path="build/classes"/></classpath>\n')
+  fs.writeFileSync(path.join(repo, 'legacy', '.settings', 'org.eclipse.wst.common.component'),
+    '<?xml version="1.0"?><project-modules id="moduleCoreId"><wb-module deploy-name="shop"><wb-resource deploy-path="/" source-path="/WebContent"/><property name="context-root" value="shop"/></wb-module></project-modules>\n')
+  fs.writeFileSync(path.join(repo, 'legacy', '.settings', 'org.eclipse.jdt.core.prefs'), 'org.eclipse.jdt.core.compiler.compliance=1.8\n')
   fs.writeFileSync(path.join(repo, 'backend', 'build.gradle'), "plugins { id 'org.springframework.boot' }\n")
   fs.writeFileSync(path.join(repo, 'backend', 'gradlew.bat'), '@echo off\r\nnode run.cjs %*\r\n')
   fs.writeFileSync(path.join(repo, 'backend', 'gradlew'), '#!/bin/sh\nexec node run.cjs "$@"\n', { mode: 0o755 })
@@ -241,11 +251,26 @@ function fixture(backendPort, frontendPort) {
       const tomcat = !!box.querySelector('#run-preset-tomcat') || box.textContent.includes('설정 > 개발 도구에서 받기')
       return tomcat && !!box.querySelector('#run-preset-webapp') && box.querySelector('#run-preset-context')?.value === '/' &&
         box.querySelector('#run-preset-port')?.value === '8080' && !!box.querySelector('#run-preset-vmargs') &&
-        box.querySelectorAll('input[name="run-preset-prepare"]').length === 3
+        box.querySelectorAll('input[name="run-preset-prepare"]').length === 4
     })()`))
+    // 이클립스 설정에서 채우기: main reads the module's Eclipse settings; the web folder is kept from the worktree
+    await setValue('#run-preset-folder', 'legacy')
+    await until(`!!document.querySelector('.run-preset-eclipse-btn') && !document.querySelector('.run-preset-eclipse-btn').disabled`)
+    await js(`document.querySelector('.run-preset-eclipse-btn').click()`)
+    check('이클립스 설정에서 채우기 fills the web folder and context path and shows what it read', await until(`
+      document.querySelector('#run-preset-webapp')?.value === 'legacy/WebContent' &&
+      document.querySelector('#run-preset-context')?.value === '/shop' &&
+      document.querySelector('.run-preset-eclipse-read')?.textContent.includes('소스 폴더: src') &&
+      document.querySelector('.run-preset-eclipse-read').textContent.includes('Java 8')`, 8000),
+      await js(`document.querySelector('.run-preset-eclipse')?.textContent`))
+    await setValue('#run-preset-folder', '.')
     check('바로 반영 can be picked for a Tomcat preset', await until(`
       !!document.querySelector('.run-preset-reload')?.dataset.usable &&
       !document.querySelector('input[name="run-preset-reload"][value="standard"]').disabled`))
+    // Second batch: the Eclipse-style build (compiled with the Eclipse settings, without build.xml)
+    await js(`document.querySelector('input[name="run-preset-prepare"][value="eclipse"]').click()`)
+    check('the Eclipse-style build says what it does', await until(`
+      document.querySelector('.run-preset-tomcat .run-preset-prepare-note')?.textContent.includes('build.xml 없이 이클립스 설정')`))
     await js(`document.querySelector('input[name="run-preset-prepare"][value="maven"]').click()`)
     check('a build before the server is warned about as a command that runs', await until(`
       !!document.querySelector('.run-preset-tomcat [aria-label="Maven 목표"]') &&
@@ -308,6 +333,27 @@ function fixture(backendPort, frontendPort) {
     await shot('local-run-preset-send')
     await js(`[...document.querySelectorAll('.run-send-dialog button')].find(b => b.textContent.trim() === '취소').click()`)
     await until(`!document.querySelector('.run-send-dialog')`)
+    // Run diagnosis: from the notice, and from the row's menu (a click inside must not open the row's log)
+    await js(`${notice}.querySelector('.run-crash-diagnose').click()`)
+    const diagnosis = `document.querySelector('.run-suggestions-dialog')`
+    check('진단 보기 on the notice opens the diagnosis of the run', await until(`!!${diagnosis} &&
+      (${diagnosis}.textContent.includes('로그에서 알려진 문제를 찾지 못했습니다') || !!${diagnosis}.querySelector('.run-suggestion'))`, 8000),
+      await js(`${diagnosis}?.textContent`))
+    await js(`[...${diagnosis}.querySelectorAll('button')].find(b => b.textContent.trim() === '닫기').click()`)
+    await until(`!${diagnosis}`)
+    // Another tab in front first: a click that reached the row would bring the preset's log tab forward
+    await js(`[...document.querySelectorAll('.terminal-tab')].find(tab => tab.dataset.tabId !== ${JSON.stringify(presetShell)})?.click()`)
+    await until(`${activeTab}?.dataset.tabId !== ${JSON.stringify(presetShell)}`)
+    const tabBeforeDiagnosis = await js(`${activeTab}?.dataset.tabId`)
+    await click(...await center(`${presetRow}.querySelector('[aria-label$="더 보기"]')`))
+    await driver.pick('실행 진단')
+    await until(`!!${diagnosis}`, 8000)
+    await click(...await center(`${diagnosis}.querySelector('#run-suggestions-lead')`))
+    check('실행 진단 in the row menu opens the same dialog, and neither the pick nor clicks in it open the row\u2019s log', await until(`!!${diagnosis}`) &&
+      tabBeforeDiagnosis !== presetShell && await js(`${activeTab}?.dataset.tabId`) === tabBeforeDiagnosis,
+      JSON.stringify({ before: tabBeforeDiagnosis, after: await js(`${activeTab}?.dataset.tabId`), presetShell }))
+    await js(`[...${diagnosis}.querySelectorAll('button')].find(b => b.textContent.trim() === '닫기').click()`)
+    await until(`!${diagnosis}`)
     await js(`[...${notice}.querySelectorAll('button')].find(b => b.textContent.includes('다시 실행')).click()`)
     check('다시 실행 starts it again and takes the notice away', await until(`['starting', 'running'].includes(${presetRow}?.dataset.status) && !${notice}`, 10000))
     // It crashes again by design: stop it first so the next crash does not race the end of the spec
@@ -329,6 +375,55 @@ function fixture(backendPort, frontendPort) {
     await until(`${otherRow}?.dataset.status === 'running'`, 10000)
     await click(...await center(`${otherRow}.querySelector('[data-action="stop"]')`))
     await until(`${otherRow}?.dataset.status === 'stopped'`, 10000)
+
+    const maven = path.join(profile, 'Maven diagnosis fixture')
+    fs.mkdirSync(maven)
+    fs.writeFileSync(path.join(maven, 'pom.xml'), '<project>spring-boot-maven-plugin</project>')
+    fs.writeFileSync(path.join(maven, 'mvnw.cmd'), '@echo off\r\nnode run.cjs %*\r\n')
+    fs.writeFileSync(path.join(maven, 'mvnw'), '#!/bin/sh\nexec node run.cjs "$@"\n', { mode: 0o755 })
+    fs.writeFileSync(path.join(maven, 'run.cjs'), `
+      const fs = require('node:fs');
+      const args = process.argv.slice(2);
+      if (!args.includes('-gs')) {
+        console.error('[ERROR] Could not transfer artifact sample:demo:jar:1 from/to maven-default-http-blocker (http://0.0.0.0/): Blocked mirror for repositories: [legacy (http://legacy.invalid/maven/, default)]');
+        process.exit(1);
+      }
+      fs.writeFileSync('received.json', JSON.stringify(args));
+      console.log('BUILD SUCCESS');
+    `)
+    const folderArg = JSON.stringify(maven)
+    const savedMaven = await js(`window.electronAPI.runPresetsSave(${folderArg}, ${JSON.stringify({
+      name: 'Maven 설정 시험', kind: 'task', taskId: '.:maven', notify: false
+    })})`)
+    if (!savedMaven?.preset) throw new Error('Could not create the Maven diagnosis fixture')
+    const mavenId = savedMaven.preset.id
+    const args = `${folderArg}, ${JSON.stringify(mavenId)}`
+    const diagnose = `window.electronAPI.runPresetDiagnosis(${args})`
+    const mavenState = `(await window.electronAPI.runPresetsList(${folderArg})).states[${JSON.stringify(mavenId)}]?.status`
+    await js(`window.electronAPI.runPresetStart(${args})`)
+    if (!await until(`(async () => ${mavenState} === 'crashed' &&
+      (await ${diagnose}).suggestions?.some(item => item.kind === 'mavenHttpBlocked'))()`, 15000)) {
+      throw new Error('The failed Maven invocation did not produce a diagnosis')
+    }
+    const { suggestions } = await js(diagnose)
+    const chosen = suggestions.find(item => item.kind === 'mavenHttpBlocked')
+    const approved = { id: chosen.id, replacementUrl: 'https://mirror.example.test/maven/' }
+    const accepted = await js(`window.electronAPI.runPresetApplySuggestion(${args}, ${JSON.stringify(approved)})`)
+    const question = await js(`window.electronAPI.runPresetStart(${args})`)
+    check('Maven replacement applies the diagnosed repository and needs a fresh execution confirmation',
+      accepted.ok && accepted.preset.mavenMirrors[0].repositoryId === 'legacy' &&
+      question.needsConfirm?.command.includes(approved.replacementUrl) && !fs.existsSync(path.join(maven, 'received.json')),
+      JSON.stringify({ applied: accepted.ok, applyError: accepted.error, confirmation: Boolean(question.needsConfirm), startError: question.error }))
+    check('the confirmed Spring Boot launch passes the saved mirror as a Maven settings argument',
+      (await js(`window.electronAPI.runPresetStart(${args}, { confirmCustom: true })`)).ok &&
+      await until(`(async () => ${mavenState} === 'stopped')()`, 15000))
+    const received = JSON.parse(fs.readFileSync(path.join(maven, 'received.json'), 'utf8'))
+    const settings = path.join(fs.realpathSync(profile), 'runtimes', 'maven-settings', `${mavenId}.xml`)
+    check('the Maven launcher receives a single absolute settings filename and cleanup removes it on deletion',
+      received.length === 3 && received[0] === 'spring-boot:run' && received[1] === '-gs' &&
+      path.dirname(path.dirname(received[2])) === path.dirname(settings) && path.basename(received[2]) === path.basename(settings) &&
+      fs.readFileSync(settings, 'utf8').includes('<mirrorOf>legacy</mirrorOf>') &&
+      (await js(`window.electronAPI.runPresetsDelete(${args})`)).ok && !fs.existsSync(settings) && !fs.existsSync(received[2]))
   } finally { driver.close() }
   finish()
 })().catch(error => { console.error(error); process.exit(1) })

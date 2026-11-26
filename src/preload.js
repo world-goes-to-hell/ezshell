@@ -193,6 +193,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runPresetsCandidates: (folder, relative) => ipcRenderer.invoke('run-presets-candidates', folder, relative),
   runPresetAntTargets: (folder, relative) => ipcRenderer.invoke('run-preset-ant-targets', folder, relative),
   runPresetWebapps: (folder) => ipcRenderer.invoke('run-preset-webapps', folder),
+  runPresetEclipseImport: (folder, relative) => ipcRenderer.invoke('run-preset-eclipse-import', folder, relative),
   runPresetsSave: (folder, preset) => ipcRenderer.invoke('run-presets-save', folder, preset),
   runPresetsDelete: (folder, id) => ipcRenderer.invoke('run-presets-delete', folder, id),
   runPresetsReorder: (folder, ids) => ipcRenderer.invoke('run-presets-reorder', folder, ids),
@@ -202,6 +203,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runPresetStartAll: (folder, options) => ipcRenderer.invoke('run-preset-start-all', folder, options),
   runPresetStopAll: (folder) => ipcRenderer.invoke('run-preset-stop-all', folder),
   runPresetErrors: (folder, id) => ipcRenderer.invoke('run-preset-errors', folder, id),
+  runPresetDiagnosis: (folder, id) => ipcRenderer.invoke('run-preset-diagnosis', folder, id),
+  runPresetApplySuggestion: (folder, id, suggestion) => ipcRenderer.invoke('run-preset-apply-suggestion', folder, id, suggestion),
   runPresetSendPreview: (folder, id) => ipcRenderer.invoke('run-preset-send-preview', folder, id),
   runPresetSend: (folder, id, agentId, note) => ipcRenderer.invoke('run-preset-send', folder, id, agentId, note),
   onRunPresetState: (callback) => {

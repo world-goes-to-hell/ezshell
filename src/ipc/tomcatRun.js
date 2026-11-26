@@ -3,12 +3,14 @@ const path = require('node:path')
 const { parseXml } = require('../sessionImport/filezilla.js')
 const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
 const { sameOrInside } = require('../localFiles/roots.js')
+const { eclipseTestSource } = require('./eclipseProject.js')
+const { mavenVersionFromHome } = require('../runtimes/apacheToolHome.js')
 
 const XML_LIMIT = 256 * 1024
 const TOOL_TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/
 const BASE_NAME = /^run-(?:(\d+)-)?[A-Za-z0-9]{6}$/
 const LEGACY_BASE_MAX_AGE = 24 * 60 * 60 * 1000
-const MODELS = ['maven', 'ant']
+const MODELS = ['maven', 'ant', 'eclipse']
 const BAD_ARGUMENTS = 'Tomcat VM 인자를 한 줄에 입력하고 공백이 있는 인자는 따옴표로 묶어 주세요.'
 const BAD_WEBAPP = '워크트리 안에서 WEB-INF가 있는 웹 폴더를 선택해 주세요.'
 
@@ -38,6 +40,7 @@ function vmOptionTokens(raw) {
 function validatePreparation(input) {
   if (input === undefined) return undefined
   if (!input || typeof input !== 'object' || !MODELS.includes(input.tool)) throw new Error('기동 전 빌드 도구를 확인해 주세요.')
+  if (input.tool === 'eclipse') return { tool: 'eclipse' }
   if (input.tool === 'ant' && typeof input.target === 'string' && TOOL_TOKEN.test(input.target)) return { tool: 'ant', target: input.target }
   if (input.tool === 'maven' && typeof input.goals === 'string' && input.goals.length <= 1024 && !/[\r\n\u2028\u2029]/u.test(input.goals)) {
     const goals = input.goals.trim().split(/\s+/)
@@ -46,12 +49,14 @@ function validatePreparation(input) {
   throw new Error('Ant 타깃이나 Maven 목표를 확인해 주세요.')
 }
 
+const validContextPath = value => value === '/' || (typeof value === 'string' && value !== '/ROOT' && /^\/[\p{L}\p{N}_-][\p{L}\p{N}._-]{0,63}$/u.test(value))
+
 function validateTomcat(input, presetRelative) {
   const { tomcat, vmArgs = '', contextPath = '/', port = 8080 } = input
   if (typeof tomcat !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,159}$/.test(tomcat)) throw new Error('등록된 Tomcat을 선택해 주세요.')
   if (typeof input.webapp !== 'string' || !input.webapp.trim()) throw new Error(BAD_WEBAPP)
   const webapp = presetRelative(input.webapp)
-  if (contextPath !== '/' && (typeof contextPath !== 'string' || !/^\/[\p{L}\p{N}_-][\p{L}\p{N}._-]{0,63}$/u.test(contextPath) || contextPath === '/ROOT')) {
+  if (!validContextPath(contextPath)) {
     throw new Error('컨텍스트 경로를 / 또는 /이름 형식으로 입력해 주세요.')
   }
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('HTTP 포트는 1~65535 사이의 숫자로 입력해 주세요.')
@@ -123,14 +128,17 @@ function launchCommand(binary, words, platform) {
 }
 
 async function preparationCommand(prepare, cwd, toolHomeFor, platform) {
-  if (!prepare) return null
+  if (!prepare || prepare.tool === 'eclipse') return { prepareCommand: null }
   if (prepare.tool === 'ant' && !(await antTargets(cwd)).includes(prepare.target)) throw new Error('build.xml에서 선택한 Ant 타깃을 찾을 수 없습니다.')
   const home = await toolHomeFor(prepare.tool)
   const base = prepare.tool === 'ant' ? 'ant' : 'mvn'
   const launcher = platform === 'win32' ? `${base}${prepare.tool === 'ant' ? '.bat' : '.cmd'}` : base
   const binary = home ? path.join(home, 'bin', launcher) : base
   if (home && !(await local(binary))?.stat.isFile()) throw new Error('선택한 빌드 도구를 실행할 수 없습니다.')
-  return launchCommand(binary, prepare.tool === 'ant' ? [prepare.target] : prepare.goals.split(' '), platform)
+  return {
+    prepareCommand: launchCommand(binary, prepare.tool === 'ant' ? [prepare.target] : prepare.goals.split(' '), platform),
+    ...(prepare.tool === 'maven' && { mavenVersion: mavenVersionFromHome(home) })
+  }
 }
 
 function xmlEscape(value) {
@@ -148,7 +156,22 @@ function writeElement(element, depth = 0) {
   return `${indent}<${element.name}${attrs}>${element.text ? xmlEscape(element.text) : ''}${body ? `\n${body}${indent}` : ''}</${element.name}>\n`
 }
 
-function tomcatConfiguration(server, preset, webapp) {
+function eclipseResources(major, { output, extraJars, jarDirectory }) {
+  const entries = major === 7 ? [output, ...extraJars] : [output, ...(jarDirectory ? [jarDirectory] : [])]
+  if (entries.some(file => file.includes('${') || /[\x00-\x1f]/.test(file) || (major === 7 && file.includes(';')))) {
+    throw new Error('Tomcat에 연결할 수 없는 문자가 이클립스 빌드 경로에 있습니다.')
+  }
+  if (major === 7) return node('Loader', { className: 'org.apache.catalina.loader.VirtualWebappLoader', virtualClasspath: entries.join(';'), searchVirtualFirst: 'true' })
+  if (!(major >= 8)) throw new Error('이클립스식 빌드를 실행하려면 버전을 확인할 수 있는 Tomcat 7 이상이 필요합니다.')
+  const resources = node('Resources', {})
+  const mount = (base, webAppMount) => node('PreResources', { className: 'org.apache.catalina.webresources.DirResourceSet', base, webAppMount })
+  resources.children.push(mount(output, '/WEB-INF/classes'))
+  // Expose external jars as entries of WEB-INF/lib so class loading and web-fragment scanning agree.
+  if (jarDirectory) resources.children.push(mount(jarDirectory, '/WEB-INF/lib'))
+  return resources
+}
+
+function tomcatConfiguration(server, preset, webapp, eclipseBuild) {
   const service = child(server, 'Service')
   const engine = child(service, 'Engine')
   const host = engine?.children.find(item => item.name === 'Host' && item.attrs.name === 'localhost') ?? child(engine, 'Host')
@@ -169,8 +192,9 @@ function tomcatConfiguration(server, preset, webapp) {
   Object.assign(host.attrs, { name: 'localhost', autoDeploy: 'false', deployOnStartup: 'false', appBase: 'apps' })
   host.children = host.children.filter(item => item.name !== 'Context')
   const context = node('Context', { docBase: webapp })
+  if (eclipseBuild) context.children.push(eclipseResources(eclipseBuild.major, eclipseBuild))
   // With both Host deployment scanners off, start just this explicit context at boot.
-  host.children.push(node('Context', { ...context.attrs, path: preset.contextPath === '/' ? '' : preset.contextPath }))
+  host.children.push({ ...context, attrs: { ...context.attrs, path: preset.contextPath === '/' ? '' : preset.contextPath } })
   return { server: `<?xml version="1.0" encoding="UTF-8"?>\n${writeElement(server)}`, context: writeElement(context),
     descriptor: preset.contextPath === '/' ? 'ROOT.xml' : `${preset.contextPath.slice(1)}.xml` }
 }
@@ -230,8 +254,7 @@ async function tomcatLayout(worktree, cwd, webapp, home) {
   const defaultOutput = entries.find(item => item.attrs.kind === 'output')?.attrs.path
   const listed = entries.filter(item => {
     const { kind, path: source, output: destination } = item.attrs
-    if (kind !== 'src' || !source || source.split(/[\\/]/).some(part => /^tests?$/i.test(part))) return false
-    if (child(item, 'attributes')?.children.some(attribute => attribute.name === 'attribute' && attribute.attrs.name === 'test' && attribute.attrs.value === 'true')) return false
+    if (kind !== 'src' || !source || eclipseTestSource(item)) return false
     if (!destination) return true
     const target = path.resolve(cwd, destination)
     return path.relative(output, target) === '' || Boolean(defaultOutput && path.relative(path.resolve(cwd, defaultOutput), target) === '')
@@ -247,14 +270,15 @@ async function tomcatLayout(worktree, cwd, webapp, home) {
     sources = conventional.slice(0, 1)
   }
   if (!sources.length) return { reason: 'Tomcat에서 감시할 Java 소스 폴더를 찾을 수 없습니다.' }
-  const jars = async (root, relative) => {
-    const directory = await directoryUnder(root, relative)
-    if (!directory) return []
-    return (await fs.readdir(directory, { withFileTypes: true })).filter(entry => entry.isFile() && /\.jar$/i.test(entry.name))
-      .map(entry => path.join(directory, entry.name))
-  }
-  return { classpath: [output, ...await jars(webapp, path.join('WEB-INF', 'lib')), ...await jars(home, 'lib')],
+  return { classpath: [output, ...await tomcatJars(webapp, path.join('WEB-INF', 'lib')), ...await tomcatJars(home, 'lib')],
     roots: [...new Set(sources)].map(source => ({ source, output, moduleRoot: cwd })) }
+}
+
+async function tomcatJars(root, relative) {
+  const directory = await directoryUnder(root, relative)
+  if (!directory) return []
+  return (await fs.readdir(directory, { withFileTypes: true })).filter(entry => entry.isFile() && /\.jar$/i.test(entry.name))
+    .map(entry => path.join(directory, entry.name)).sort()
 }
 
 function catalinaOptions(tokens, platform) {
@@ -264,33 +288,34 @@ function catalinaOptions(tokens, platform) {
   return tokens.map(token => /\s/.test(token) ? `"${token.replace(/\\+$/, '$&$&')}"` : token).join(' ')
 }
 
-async function planTomcat(preset, cwd, { toolHomeOf, toolHomeFor, platform = process.platform }) {
+async function planTomcat(preset, cwd, { toolHomeOf, toolHomeFor, toolVersionOf = () => null, platform = process.platform }) {
   const home = (await local(await toolHomeOf(preset.tomcat)))?.path
   const name = platform === 'win32' ? 'catalina.bat' : 'catalina.sh'
   const launcher = home && await local(path.join(home, 'bin', name))
   if (!launcher?.stat.isFile() || !sameOrInside(home, launcher.path) || !await directoryUnder(home, 'conf')) throw new Error('선택한 Tomcat을 찾을 수 없습니다.')
-  const prepareCommand = await preparationCommand(preset.prepare, cwd, toolHomeFor, platform)
+  const preparation = await preparationCommand(preset.prepare, cwd, toolHomeFor, platform)
   const command = launchCommand(path.join(home, 'bin', name), ['run'], platform)
   // Tomcat's default ConsoleHandler writes UTF-8 even on non-UTF-8 Windows consoles.
   const consoleEncoding = platform === 'win32' ? '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n' : ''
-  return { home, command: consoleEncoding + command, prepareCommand, platform }
+  const version = preset.prepare?.tool === 'eclipse' ? await toolVersionOf(preset.tomcat) ?? /^tomcat-(\d+\.\d+(?:\.\d+)?)/.exec(preset.tomcat)?.[1] : undefined
+  return { home, command: consoleEncoding + command, ...preparation, platform, major: Number(version?.split('.')[0]) }
 }
 
-async function stageTomcat(plan, { preset, task, worktree, userData, prepareReload }) {
+async function stageTomcat(plan, { preset, task, worktree, userData, prepareReload, eclipseBuild }) {
   const webapp = await webDirectory(worktree, preset.webapp)
   const conf = await directoryUnder(plan.home, 'conf')
   let server
   try { if (conf) server = await xmlFile(conf, 'server.xml') } catch { /* Report a localized error below. */ }
   if (!server) throw new Error('Tomcat server.xml을 읽을 수 없습니다.')
-  const reload = preset.hotReload === 'off' ? {} : await prepareReload({ layout: await tomcatLayout(worktree, task.cwd, webapp, plan.home),
+  const reload = preset.hotReload === 'off' ? {} : await prepareReload({ layout: eclipseBuild?.layout ?? await tomcatLayout(worktree, task.cwd, webapp, plan.home),
     worktree, cwd: task.cwd, mode: preset.hotReload, args: task.enhancedArgs })
   const { jvmArgs = [], ...hot } = reload
   const opts = catalinaOptions([...vmOptionTokens(preset.vmArgs), ...jvmArgs], plan.platform)
-  const config = tomcatConfiguration(server, preset, webapp)
+  const config = tomcatConfiguration(server, preset, webapp, eclipseBuild)
   const base = await makeBase(userData, preset.id, conf, config)
   return { ...task, ...hot, command: plan.command, env: { ...task.env, CATALINA_HOME: plan.home, CATALINA_BASE: base.directory, CATALINA_OPTS: opts,
     ...(task.javaHome && { JRE_HOME: task.javaHome }) }, expectedUrl: `http://127.0.0.1:${preset.port}${encodeURI(preset.contextPath)}`,
     cleanup: base.cleanup }
 }
 
-module.exports = { validateTomcat, antTargets, webDirectory, webappCandidates, planTomcat, stageTomcat, tomcatLayout, tomcatConfiguration, catalinaOptions }
+module.exports = { validateTomcat, validContextPath, antTargets, webDirectory, webappCandidates, planTomcat, stageTomcat, tomcatLayout, tomcatJars, tomcatConfiguration, catalinaOptions }

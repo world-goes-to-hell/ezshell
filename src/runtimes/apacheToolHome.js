@@ -54,15 +54,21 @@ function directoryEntries(directory) {
   } catch { return [] }
 }
 
+function mavenVersionFromHome(home) {
+  if (!isLocalFilePath(home)) return undefined
+  const versions = directoryEntries(path.join(home, 'lib')).filter(entry => entry.isFile())
+    .map(entry => /^maven-core-(\d{1,4}\.\d{1,4}\.\d{1,4})\.jar$/.exec(entry.name)?.[1]).filter(Boolean)
+  return versions.length === 1 ? versions[0] : undefined
+}
+
 function localVersion(home, tool) {
   if (tool === 'tomcat') {
     const version = tomcatVersion(home)
     if (version) return version
   }
   if (tool === 'maven') {
-    const versions = directoryEntries(path.join(home, 'lib')).filter(entry => entry.isFile())
-      .map(entry => /^maven-core-(\d{1,4}\.\d{1,4}\.\d{1,4})\.jar$/.exec(entry.name)?.[1]).filter(Boolean)
-    if (versions.length === 1) return versions[0]
+    const version = mavenVersionFromHome(home)
+    if (version) return version
   }
   return new RegExp(`^apache-${tool}-(\\d{1,4}\\.\\d{1,4}\\.\\d{1,4})$`, 'i').exec(path.basename(home))?.[1] ?? null
 }
@@ -119,4 +125,4 @@ function findLocalApacheTools({ env = process.env, home = os.homedir(), platform
   return [...found.values()]
 }
 
-module.exports = { LOCAL_TOOL_ID, seriesOf, hasApacheToolHome, unpackedApacheHome, inspectLocalTomcat6, findLocalApacheTools }
+module.exports = { LOCAL_TOOL_ID, seriesOf, hasApacheToolHome, unpackedApacheHome, inspectLocalTomcat6, findLocalApacheTools, mavenVersionFromHome }

@@ -13,3 +13,38 @@
 .run-preset-tomcat .run-preset-prepare-options { margin-bottom: 4px; }
 .run-preset-tomcat > .run-preset-warn { display: block; margin-bottom: 4px; }
 .run-preset-tomcat-local { display: block; margin: -2px 0 4px; }
+
+/* 기동 전 빌드: four choices in two rows */
+.run-preset-tomcat .run-preset-prepare-options { grid-template-columns: 1fr 1fr; }
+.run-preset-prepare-note { display: block; margin-bottom: 4px; }
+
+/* 이클립스 설정에서 채우기 and what it read */
+.run-preset-eclipse { display: grid; gap: 4px; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+.run-preset-tomcat button.run-preset-eclipse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.run-preset-tomcat button.run-preset-eclipse-btn:hover:not(:disabled) { border-color: var(--accent); background: var(--bg-hover); }
+.run-preset-tomcat button.run-preset-eclipse-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.run-preset-tomcat button.run-preset-eclipse-btn:disabled { opacity: 0.6; cursor: default; }
+.run-preset-eclipse-read {
+  margin: 0;
+  padding: 6px 8px 6px 22px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.run-preset-eclipse-read li { overflow-wrap: anywhere; }
+.run-preset-eclipse .run-preset-warn { margin: 0; }

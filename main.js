@@ -924,6 +924,7 @@ const runPresets = createRunPresets({
   isLocked: () => isAppLocked,
   javaHomeOf: id => runtimes.javaHomeOf(id),
   toolHomeOf: id => runtimes.listTools().some(entry => entry.id === id && entry.tool === 'tomcat') ? runtimes.toolHomeOf(id) : null,
+  toolVersionOf: id => runtimes.listTools().find(entry => entry.id === id && entry.tool === 'tomcat')?.version,
   toolHomeFor: kind => {
     for (const entry of runtimes.listTools()) {
       if (entry.tool !== kind || !entry.managed) continue;

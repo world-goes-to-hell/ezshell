@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   firstErrorRow, agentActionNotice, agentNoticeName, withObject, withSubject, runCommandLabel, agentActionNote, crashKey, draftOf, emptyDraft, parseEnvText, presetFromDraft, runButtons, runError, runFolderLabel,
   runHead, runKind, runPills, runPort, sendPreview, type RunPreset, type RunState,
-  tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
+  eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
 } from './runPresets'
 
 const preset = (over: Partial<RunPreset> = {}): RunPreset => ({
@@ -306,5 +306,45 @@ describe('Tomcat presets (stage 2)', () => {
     expect(runKind(tomcatPreset)).toBe('tomcat')
     expect(hotReloadChoice({ kind: 'tomcat', jdk: 'system', jdks: [], hotswapAgent: { installed: false } })).toMatchObject({ usable: true, enhanced: false })
     expect(HOT_RELOAD_SPRING_ONLY).toBe('Spring Boot·Tomcat 실행에서만 됩니다.')
+  })
+})
+
+describe('Eclipse project import (stage 2, second batch)', () => {
+  const imported = { webapp: 'WebContent', contextPath: 'shop', release: 8, encoding: 'MS949', sources: ['src', 'resources'], libs: ['WebContent/WEB-INF/lib/a.jar', 'lib/b.jar', 'lib/c.jar'] }
+
+  it('fills only the web folder and the context path', () => {
+    expect(eclipseFill(imported)).toEqual({ webapp: 'WebContent', contextPath: '/shop' })
+    expect(eclipseFill({ webapp: ' ', contextPath: '/' })).toEqual({ contextPath: '/' })
+    // From a module folder: the preset keeps the web folder from the worktree
+    expect(eclipseFill(imported, 'legacy/shop-web/')).toEqual({ webapp: 'legacy/shop-web/WebContent', contextPath: '/shop' })
+    expect(eclipseFill(imported, '.')).toMatchObject({ webapp: 'WebContent' })
+    // The web folder is the Eclipse project's folder itself
+    expect(eclipseFill({ webapp: '.', contextPath: '/' }, 'legacy')).toEqual({ webapp: 'legacy', contextPath: '/' })
+    expect(eclipseFill({ webapp: '.', contextPath: '/' }, '.')).toEqual({ webapp: '.', contextPath: '/' })
+    expect(eclipseFill({ webapp: '', contextPath: '/' }, 'legacy')).toEqual({ contextPath: '/' })
+  })
+
+  it('shows what it read, line by line, with main\u2019s notes', () => {
+    expect(eclipseSummary(imported, ['JDK 8 이 맞습니다 (Java facet 1.8)', '  '])).toEqual([
+      '웹 폴더: WebContent · 컨텍스트 경로: shop',
+      '소스 폴더: src, resources',
+      'lib: 3개 (WebContent/WEB-INF/lib/a.jar, lib/b.jar 외 1개)',
+      '컴파일 버전: Java 8 · 인코딩: MS949',
+      'JDK 8 이 맞습니다 (Java facet 1.8)'
+    ])
+    expect(eclipseSummary({ webapp: '', contextPath: '', sources: [], libs: [] })).toEqual([
+      '웹 폴더: 못 찾음 · 컨텍스트 경로: /',
+      '소스 폴더: 없음',
+      'lib: 없음',
+      '컴파일 버전: 설정 없음 · 인코딩: 설정 없음 (MS949 일 수 있음)'
+    ])
+  })
+
+  it('saves the Eclipse-style build and reads it back', () => {
+    expect(tomcatFromDraft({ tomcat: 't', webapp: 'WebContent', contextPath: '/', portText: '8080', vmArgs: '', prepareTool: 'eclipse', antTarget: 'x', mavenGoals: 'y' }))
+      .toEqual({ tomcat: 't', webapp: 'WebContent', contextPath: '/', port: 8080, vmArgs: '', prepare: { tool: 'eclipse' } })
+    const saved = preset({ kind: 'tomcat', taskId: undefined, tomcat: 't', webapp: 'WebContent', contextPath: '/', port: 8080, vmArgs: '', prepare: { tool: 'eclipse' }, hotReload: 'off' })
+    expect(draftOf(saved).prepareTool).toBe('eclipse')
+    expect(presetFromDraft(draftOf(saved))).toEqual({ preset: saved })
   })
 })

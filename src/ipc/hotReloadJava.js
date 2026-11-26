@@ -178,11 +178,11 @@ async function lombokJar(env, home = os.homedir()) {
 
 const quoteArgument = value => `"${value.replace(/[\\"]/g, '\\$&')}"`
 
-function javacArguments({ output, classpath, encoding, release, compilerVersion, processor, sources }) {
+function javacArguments({ output, classpath, encoding, release, compilerVersion, processor, noProcessors, sources }) {
   const version = !release ? [] : compilerVersion <= 8 ? ['-source', release <= 8 ? `1.${release}` : String(release), '-target', release <= 8 ? `1.${release}` : String(release)]
     : ['--release', String(release)]
   return ['-d', output, '-cp', classpath.join(path.delimiter), ...JAVA_OPTIONS, '-encoding', encoding, ...version,
-    ...(processor ? ['-processorpath', processor] : []), ...sources].map(quoteArgument).join('\n') + '\n'
+    ...(noProcessors ? ['-proc:none'] : processor ? ['-processorpath', processor] : []), ...sources].map(quoteArgument).join('\n') + '\n'
 }
 
 async function stagedClasses(directory, readClassInfo, signal) {
@@ -233,12 +233,16 @@ async function publishClasses(root, classes, signal) {
   }
 }
 
-function createJavac({ env, signal, readClassInfo, run = exec, tempRoot = os.tmpdir(), home }) {
+function eclipseCompilerEnvironment(env) {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !/^(?:JDK_JAVAC_OPTIONS|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS)$/i.test(key)))
+}
+
+function createJavac({ env, signal, readClassInfo, run = exec, tempRoot = os.tmpdir(), home, isolatedOutput = false }) {
   const javac = javaTool('javac', env)
   let version
   const releases = new Map()
-  async function invoke(args, cwd, timeout) {
-    try { return await run(javac, args, { cwd, env, signal, timeout, windowsHide: true, maxBuffer: 1024 * 1024 }) }
+  async function invoke(args, cwd, timeout, compilerEnv) {
+    try { return await run(javac, args, { cwd, env: compilerEnv, signal, timeout, windowsHide: true, maxBuffer: 1024 * 1024 }) }
     catch (error) {
       signal.throwIfAborted()
       if (error.code === 'ENOENT') throw new Error('선택한 JDK에서 javac를 찾을 수 없습니다.')
@@ -246,27 +250,30 @@ function createJavac({ env, signal, readClassInfo, run = exec, tempRoot = os.tmp
     }
   }
   return async ({ root, sources, classpath }) => {
+    const compilerEnv = root.compilerOptions?.noProcessors ? eclipseCompilerEnvironment(env) : env
     if (!version) {
-      const { stdout, stderr } = await invoke(['-version'], root.moduleRoot, 10_000)
+      const { stdout, stderr } = await invoke(['-version'], root.moduleRoot, 10_000, compilerEnv)
       version = Number(/\bjavac\s+(?:1\.)?(\d+)/.exec(`${stdout}\n${stderr}`)?.[1])
       if (!version) throw new Error('javac 버전을 확인하지 못했습니다.')
     }
-    const build = await inspectJavaBuild(root.moduleRoot)
+    const build = root.compilerOptions ?? await inspectJavaBuild(root.moduleRoot)
     const lombok = classpath.find(file => /[\\/]lombok(?:-[^\\/]+)?\.jar$/i.test(file))
     let processor = build.lombok && version >= 23 ? lombok : undefined
     if (build.lombok && !lombok) {
       processor = await lombokJar(env, home)
       if (!processor) throw new Error('Lombok을 Maven 또는 Gradle 캐시에서 찾을 수 없습니다.')
     }
-    if (!releases.has(root.output)) releases.set(root.output, await existingRelease(root.output))
+    if (!root.compilerOptions && !releases.has(root.output)) releases.set(root.output, await existingRelease(root.output))
     const staging = await fs.mkdtemp(path.join(tempRoot, 'ezshell-javac-'))
     try {
-      const output = path.join(staging, 'classes')
+      const output = isolatedOutput ? root.output : path.join(staging, 'classes')
       const args = path.join(staging, 'javac.args')
-      await fs.mkdir(output)
+      if (!isolatedOutput) await fs.mkdir(output)
       await fs.writeFile(args, javacArguments({ output, classpath: processor && !lombok ? [...classpath, processor] : classpath, encoding: build.encoding,
-        release: releases.get(root.output), compilerVersion: version, processor, sources }), { mode: 0o600, signal })
-      await invoke(['-J-Dfile.encoding=UTF-8', `@${args}`], root.moduleRoot, 60_000)
+        release: root.compilerOptions ? build.release : releases.get(root.output), compilerVersion: version, processor,
+        noProcessors: build.noProcessors, sources }), { mode: 0o600, signal })
+      await invoke(['-J-Dfile.encoding=UTF-8', `@${args}`], root.moduleRoot, isolatedOutput ? 600_000 : 60_000, compilerEnv)
+      if (isolatedOutput) return []
       const classes = await stagedClasses(output, readClassInfo, signal)
       await publishClasses(root.output, classes, signal)
       return classes
@@ -274,4 +281,4 @@ function createJavac({ env, signal, readClassInfo, run = exec, tempRoot = os.tmp
   }
 }
 
-module.exports = { inspectJavaBuild, javaLayout, javacArguments, createJavac, javaTool, devtoolsLayout, lombokJar }
+module.exports = { inspectJavaBuild, javaLayout, javacArguments, createJavac, javaTool, devtoolsLayout, lombokJar, eclipseCompilerEnvironment }

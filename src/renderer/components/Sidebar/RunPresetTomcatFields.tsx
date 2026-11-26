@@ -2,9 +2,11 @@
 // stage 2 first batch): which Tomcat, the web folder with WEB-INF, the context path and port, the VM
 // arguments and the build before the server. main makes a CATALINA_BASE of its own for the preset; the VM
 // arguments and the build are shown and confirmed before they first run, like a typed command.
+// `이클립스 설정에서 채우기` (second batch) fills the web folder and context path from the Eclipse project's
+// settings and shows what else it read; the user saves.
 import { useEffect, useState } from 'react'
-import { RiFolder3Line } from 'react-icons/ri'
-import type { PresetDraft } from '../../lib/runPresets'
+import { RiDownloadLine, RiFolder3Line } from 'react-icons/ri'
+import { eclipseFill, eclipseSummary, type PresetDraft } from '../../lib/runPresets'
 import { runPresetApi } from '../../stores/runPresetStore'
 import type { ApacheToolRuntime } from '../../types'
 import './RunPresetTomcat.css'
@@ -55,9 +57,46 @@ export function RunPresetTomcatFields({ folder, relative, draft, set, tomcats, o
     return () => { active = false; window.clearTimeout(timer) }
   }, [folder, relative, wantsAnt])
 
+  // The Eclipse project's settings, read when asked: what was read, or why not
+  const [eclipse, setEclipse] = useState<{ lines: string[] } | { error: string } | null>(null)
+  const [reading, setReading] = useState(false)
+  const canImport = typeof runPresetApi().runPresetEclipseImport === 'function'
+  const importEclipse = async () => {
+    const read = runPresetApi().runPresetEclipseImport
+    if (!read || reading) return
+    setReading(true)
+    try {
+      const result = await read(folder, relative)
+      if (result?.ok === false || !result?.draft) {
+        setEclipse({ error: result?.error || '이클립스 설정을 읽지 못했습니다.' })
+        return
+      }
+      const imported = { ...result.draft, sources: Array.isArray(result.draft.sources) ? result.draft.sources : [], libs: Array.isArray(result.draft.libs) ? result.draft.libs : [] }
+      set(eclipseFill(imported, relative))
+      setEclipse({ lines: eclipseSummary(imported, Array.isArray(result.notes) ? result.notes : []) })
+    } catch {
+      setEclipse({ error: '이클립스 설정을 읽지 못했습니다.' })
+    } finally {
+      setReading(false)
+    }
+  }
+
   const known = tomcats?.some(tool => tool.id === draft.tomcat)
   return (
     <div className="run-preset-tomcat">
+      {canImport && (
+        <div className="run-preset-eclipse">
+          <button type="button" className="run-preset-eclipse-btn" onClick={() => void importEclipse()} disabled={reading}>
+            <RiDownloadLine size={13} aria-hidden="true" /> {reading ? '읽는 중…' : '이클립스 설정에서 채우기'}
+          </button>
+          <span className="run-preset-hint">{relative === '.' ? '프로젝트 폴더' : relative}의 .classpath·.settings 를 읽어 웹 폴더와 컨텍스트 경로를 채웁니다. 저장해야 반영됩니다.</span>
+          {eclipse && ('error' in eclipse
+            ? <p className="run-preset-warn" role="alert">{eclipse.error}</p>
+            : <ul className="run-preset-eclipse-read" aria-label="이클립스 설정에서 읽은 것">
+                {eclipse.lines.map((line, index) => <li key={index}>{line}</li>)}
+              </ul>)}
+        </div>
+      )}
       <div className="form-group">
         <label htmlFor="run-preset-tomcat">Tomcat</label>
         {tomcats !== null && tomcats.length === 0 ? (
@@ -106,7 +145,7 @@ export function RunPresetTomcatFields({ folder, relative, draft, set, tomcats, o
       <div className="form-group" role="radiogroup" aria-label="기동 전 빌드">
         <span className="run-preset-field-label">기동 전 빌드 <span className="run-preset-hint">({relative === '.' ? '프로젝트 폴더' : relative}에서)</span></span>
         <div className="run-preset-reload-options run-preset-prepare-options">
-          {([['none', '없음'], ['ant', 'Ant 타깃'], ['maven', 'Maven 목표']] as const).map(([value, label]) => (
+          {([['none', '없음'], ['ant', 'Ant 타깃'], ['maven', 'Maven 목표'], ['eclipse', '이클립스식']] as const).map(([value, label]) => (
             <label key={value} className="run-preset-reload-option" data-on={draft.prepareTool === value || undefined}>
               <input type="radio" name="run-preset-prepare" value={value} checked={draft.prepareTool === value}
                 onChange={() => set({ prepareTool: value })} />
@@ -124,6 +163,9 @@ export function RunPresetTomcatFields({ folder, relative, draft, set, tomcats, o
               {draft.antTarget && targets !== null && !targets.includes(draft.antTarget) && <option value={draft.antTarget}>{draft.antTarget} (build.xml 에 없음)</option>}
             </select>
           )
+        )}
+        {draft.prepareTool === 'eclipse' && (
+          <small className="run-preset-hint run-preset-prepare-note">build.xml 없이 이클립스 설정(.classpath 의 소스·lib)으로 javac 컴파일합니다. 결과는 프로젝트가 아니라 앱 폴더에 둡니다.</small>
         )}
         {draft.prepareTool === 'maven' && (
           <input className="run-preset-command" aria-label="Maven 목표" value={draft.mavenGoals} placeholder="예: clean package"

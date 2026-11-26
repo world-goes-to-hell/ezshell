@@ -1221,16 +1221,30 @@ function createLocalShells({
       task.onEvent?.({ type: 'data', shellId: id, data, phase });
     }
 
-    async function startAfterPreparation() {
+    async function startAfterPreparation(prepared) {
       entry.pty = null;
       task.onEvent?.({ type: 'prepared', shellId: id });
       try {
-        runtime = await task.preparation.finish(signal);
+        runtime = await task.preparation.finish(signal, prepared);
         if (signal.aborted || shells.get(id) !== entry) { finish(null, 'launch'); return; }
         launchProcess(runtime, 'server');
       } catch (error) {
         if (!signal.aborted) forward(`\r\nERROR ${error.code ? 'Tomcat 실행 폴더를 준비하지 못했습니다.' : error.message}\r\n`, 'launch');
         finish(null, 'launch', true);
+      }
+    }
+
+    async function prepareInMain() {
+      try {
+        const prepared = await task.preparation.run({ signal, env: developmentEnvironment(env, task, platform), log: data => forward(data, 'prepare') });
+        if (stopAction() || shells.get(id) !== entry) finish(null, 'prepare');
+        else await startAfterPreparation(prepared);
+      } catch (error) {
+        if (signal.aborted) { finish(null, 'prepare'); return; }
+        const diagnostics = typeof error.stderr === 'string' ? error.stderr.trim() : '';
+        const message = diagnostics ? 'javac 컴파일에 실패했습니다.' : error.code ? '이클립스식 빌드를 실행하지 못했습니다.' : error.message;
+        forward(`\r\nERROR ${message}\r\n${diagnostics ? diagnostics.replace(/\r?\n/g, '\r\n') + '\r\n' : ''}`, 'prepare');
+        finish(Number.isInteger(error.code) ? error.code : 1, 'prepare', true);
       }
     }
 
@@ -1266,7 +1280,8 @@ function createLocalShells({
     }
 
     try {
-      if (task.preparation) launchProcess({ cwd: task.cwd, command: task.preparation.command, env: task.env, javaHome: task.javaHome }, 'prepare');
+      if (task.preparation?.run) void prepareInMain();
+      else if (task.preparation) launchProcess({ cwd: task.cwd, command: task.preparation.command, env: task.env, javaHome: task.javaHome }, 'prepare');
       else launchProcess(task, 'server');
     } catch (error) {
       finish(null, task.preparation ? 'prepare' : 'server', true);

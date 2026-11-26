@@ -5,7 +5,7 @@ import { useEffect, useState, type MouseEvent } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   RiAddLine, RiArrowDownLine, RiArrowUpLine, RiDeleteBinLine, RiEditLine, RiExternalLinkLine, RiFileList3Line, RiFlashlightLine,
-  RiMoreFill, RiPlayFill, RiRefreshLine, RiStopFill, RiTerminalLine
+  RiMoreFill, RiPlayFill, RiRefreshLine, RiStethoscopeLine, RiStopFill, RiTerminalLine
 } from 'react-icons/ri'
 import { SiApachetomcat, SiNodedotjs, SiSpringboot, SiVite, SiVuedotjs } from 'react-icons/si'
 import { FaJava } from 'react-icons/fa'
@@ -21,6 +21,7 @@ import { confirmDialog } from '../../stores/confirmStore'
 import { pathKey } from '../../lib/localWorkspaceTree'
 import { toast } from '../../stores/toastStore'
 import { RunPresetDialog } from './RunPresetDialog'
+import { RunSuggestionsDialog } from './RunSuggestions'
 import './RunPresets.css'
 
 const KIND_ICONS = { spring: SiSpringboot, vue: SiVuedotjs, vite: SiVite, node: SiNodedotjs, java: FaJava, tomcat: SiApachetomcat, custom: RiTerminalLine }
@@ -127,6 +128,7 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
   const pills = runPills(state, now)
   const buttons = runButtons(state)
   const note = agentActionNote(state.lastAction, now)
+  const [diagnosing, setDiagnosing] = useState(false)
   const reload = reloadChip(state, now)
 
   const showLog = async (toFirstError = false) => {
@@ -203,8 +205,15 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
-          <DropdownMenu.Content className="terminal-menu sidebar-popover" side="bottom" align="end" sideOffset={4} collisionPadding={8}>
+          {/* A portal too: a picked item's click must not reach the row (which opens the log) */}
+          <DropdownMenu.Content className="terminal-menu sidebar-popover" side="bottom" align="end" sideOffset={4} collisionPadding={8}
+            onClick={event => event.stopPropagation()}>
             <DropdownMenu.Item className="terminal-menu-item" onSelect={onEdit}><RiEditLine size={15} aria-hidden="true" /> 수정</DropdownMenu.Item>
+            {typeof window.electronAPI.runPresetDiagnosis === 'function' && (
+              <DropdownMenu.Item className="terminal-menu-item" onSelect={() => setDiagnosing(true)}>
+                <RiStethoscopeLine size={15} aria-hidden="true" /> 실행 진단
+              </DropdownMenu.Item>
+            )}
             <DropdownMenu.Item className="terminal-menu-item" disabled={first} onSelect={() => void move(-1)}><RiArrowUpLine size={15} aria-hidden="true" /> 위로</DropdownMenu.Item>
             <DropdownMenu.Item className="terminal-menu-item" disabled={last} onSelect={() => void move(1)}><RiArrowDownLine size={15} aria-hidden="true" /> 아래로</DropdownMenu.Item>
             <DropdownMenu.Separator className="terminal-menu-separator" />
@@ -213,6 +222,12 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
       </div>
+      {/* The dialog is a portal, but its clicks still bubble through React to the row (which opens the log) */}
+      {diagnosing && (
+        <span hidden onClick={event => event.stopPropagation()}>
+          <RunSuggestionsDialog folder={folder} presetId={preset.id} presetName={preset.name} onClose={() => setDiagnosing(false)} />
+        </span>
+      )}
       {/* Hot reload: its own line under the row while it is on (beside the state there is no room in the
           sidebar's width), kept from watching to the result so the row does not jump at each save */}
       {reload && (

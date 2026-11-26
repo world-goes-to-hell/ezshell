@@ -50,25 +50,27 @@ function repositoryUrl(value) {
  * Each approved mirror applies to one repository ID. An exact match takes precedence over Maven's
  * default HTTP blocker. The replacement uses HTTPS or a local file repository.
  */
-function renderMavenSettings({ mirrors = [], mavenVersion } = {}) {
+function normalizeMavenMirrors(mirrors = []) {
   if (!Array.isArray(mirrors)) throw new Error('Maven 저장소 대체 목록을 확인해 주세요.')
   const seen = new Set()
-  const entries = mirrors.map(mirror => {
+  return mirrors.map(mirror => {
     const id = mirror?.repositoryId
-    const mirrorId = projectMirrorId(id)
-    if (!mirrorId || seen.has(id)) {
+    if (!projectMirrorId(id) || seen.has(id)) {
       throw new Error('중복 없이 정확한 Maven 저장소 ID를 입력해 주세요.')
     }
     seen.add(id)
-    const url = repositoryUrl(mirror.url)
-    return [
-      '    <mirror>',
-      `      <id>${xml(mirrorId)}</id>`,
-      `      <mirrorOf>${xml(id)}</mirrorOf>`,
-      `      <url>${xml(url)}</url>`,
-      '    </mirror>'
-    ].join('\n')
+    return { repositoryId: id, url: repositoryUrl(mirror.url) }
   })
+}
+
+function renderMavenSettings({ mirrors, mavenVersion } = {}) {
+  const entries = normalizeMavenMirrors(mirrors).map(({ repositoryId, url }) => [
+    '    <mirror>',
+    `      <id>${xml(projectMirrorId(repositoryId))}</id>`,
+    `      <mirrorOf>${xml(repositoryId)}</mirrorOf>`,
+    `      <url>${xml(url)}</url>`,
+    '    </mirror>'
+  ].join('\n'))
   const blocked = includesHttpBlocker(mavenVersion)
   const schema = blocked ? '1.2.0' : '1.0.0'
   if (blocked) entries.push(HTTP_BLOCKER)
@@ -77,26 +79,33 @@ function renderMavenSettings({ mirrors = [], mavenVersion } = {}) {
     '  <mirrors>', ...entries, '  </mirrors>', '</settings>', ''].join('\n')
 }
 
-/**
- * Returns the absolute filename to pass after -gs. Maven keeps using its usual user settings.
- * Pass the selected Maven version to match that release's default HTTP blocker.
- */
-function writeMavenSettings({ userData, presetId, mirrors, mavenVersion } = {}) {
+function mavenSettingsFile(userData, presetId, create) {
   if (typeof presetId !== 'string' || !PRESET_ID.test(presetId)) {
     throw new Error('Maven 설정의 실행 구성 ID를 확인해 주세요.')
   }
-  const contents = renderMavenSettings({ mirrors, mavenVersion })
   if (!isLocalFilePath(userData)) throw new Error('앱의 Maven 설정 폴더를 확인할 수 없습니다.')
   let directory = fs.realpathSync(userData)
   if (!isLocalFilePath(directory)) throw new Error('앱의 Maven 설정 폴더를 확인할 수 없습니다.')
   for (const segment of ['runtimes', 'maven-settings']) {
     directory = path.join(directory, segment)
-    try { fs.mkdirSync(directory) } catch (error) { if (error.code !== 'EEXIST') throw error }
-    if (!fs.lstatSync(directory).isDirectory()) throw new Error('앱의 Maven 설정 폴더를 확인할 수 없습니다.')
+    if (create) {
+      try { fs.mkdirSync(directory) } catch (error) { if (error.code !== 'EEXIST') throw error }
+    }
+    const stat = fs.lstatSync(directory, { throwIfNoEntry: false })
+    if (!stat && !create) return null
+    if (!stat?.isDirectory()) throw new Error('앱의 Maven 설정 폴더를 확인할 수 없습니다.')
   }
   const target = path.join(directory, `${presetId}.xml`)
   const current = fs.lstatSync(target, { throwIfNoEntry: false })
   if (current && !current.isFile()) throw new Error('앱의 Maven 설정 파일을 확인할 수 없습니다.')
+  return target
+}
+
+/** Returns the absolute Maven settings filename. Pass the selected Maven version for its HTTP policy. */
+function writeMavenSettings({ userData, presetId, mirrors, mavenVersion } = {}) {
+  const contents = renderMavenSettings({ mirrors, mavenVersion })
+  const target = mavenSettingsFile(userData, presetId, true)
+  const directory = path.dirname(target)
   const temporary = path.join(directory, `.${randomUUID()}.tmp`)
   const fd = fs.openSync(temporary, 'wx', 0o600)
   try {
@@ -108,4 +117,40 @@ function writeMavenSettings({ userData, presetId, mirrors, mavenVersion } = {}) 
   }
 }
 
-module.exports = { renderMavenSettings, writeMavenSettings, projectMirrorId }
+function removeLaunchSettings(directory, name) {
+  const stat = fs.lstatSync(directory, { throwIfNoEntry: false })
+  if (!stat?.isDirectory()) return
+  fs.rmSync(path.join(directory, name), { force: true })
+  try { fs.rmdirSync(directory) } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTEMPTY') throw error }
+}
+
+/** Keep each subprocess's settings stable when the same preset runs in another worktree. */
+function stageMavenSettings(options) {
+  const saved = writeMavenSettings(options)
+  const name = path.basename(saved)
+  const directory = fs.mkdtempSync(path.join(path.dirname(saved), `.run-${options.presetId}-`))
+  const file = path.join(directory, name)
+  const cleanup = () => removeLaunchSettings(directory, name)
+  try {
+    fs.copyFileSync(saved, file, fs.constants.COPYFILE_EXCL)
+    return { file, cleanup }
+  } catch (error) {
+    cleanup()
+    throw error
+  }
+}
+
+function removeMavenSettings({ userData, presetId }) {
+  const target = mavenSettingsFile(userData, presetId, false)
+  if (!target) return
+  fs.rmSync(target, { force: true })
+  const root = path.dirname(target)
+  const prefix = `.run-${presetId}-`
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name.startsWith(prefix) && /^[A-Za-z0-9]{6}$/.test(entry.name.slice(prefix.length))) {
+      removeLaunchSettings(path.join(root, entry.name), path.basename(target))
+    }
+  }
+}
+
+module.exports = { renderMavenSettings, writeMavenSettings, stageMavenSettings, removeMavenSettings, normalizeMavenMirrors, projectMirrorId }

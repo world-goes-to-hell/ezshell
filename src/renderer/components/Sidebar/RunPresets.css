@@ -228,7 +228,10 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
 .run-crash-title span { flex: 1; min-width: 0; }
 .run-crash-close { display: grid; place-items: center; padding: 2px; border: none; border-radius: var(--radius-sm, 4px); background: transparent; color: var(--text-secondary); cursor: pointer; }
 .run-crash-close:hover { background: var(--bg-hover); color: var(--text-primary); }
-.run-crash-detail { color: var(--text-secondary); font-size: 12px; }
+.run-crash-detail { display: flex; align-items: baseline; gap: 8px; color: var(--text-secondary); font-size: 12px; }
+.run-crash-diagnose { margin-left: auto; padding: 0; border: none; background: none; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
+.run-crash-diagnose:hover { text-decoration: underline; }
+.run-crash-diagnose:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
 .run-crash-log {
   max-height: 140px;
   margin: 0;

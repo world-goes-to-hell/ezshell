@@ -211,7 +211,8 @@ function watchJavaChanges(config, { pid, env, running, onState, watchSource = wa
       const sources = []
       for (const [root, files] of batch) {
         const entries = await Promise.all([...files].map(file => resolveLocalPreviewPath(file).catch(() => null)))
-        const changed = entries.filter(entry => entry?.stat.isFile() && sameOrInside(root.source, entry.path) && /\.java$/i.test(entry.path)).map(entry => entry.path)
+        const changed = entries.filter(entry => entry?.stat.isFile() && sameOrInside(root.source, entry.path) && /\.java$/i.test(entry.path) &&
+          !root.excluded?.some(folder => sameOrInside(folder, entry.path))).map(entry => entry.path)
         if (changed.length) sources.push({ root, changed })
       }
       if (!sources.length || signal.aborted || !running()) return

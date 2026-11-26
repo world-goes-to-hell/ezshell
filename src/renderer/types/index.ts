@@ -908,6 +908,8 @@ export interface RunPreset {
   waitReady: boolean
   /** Applying saved Java changes to the running server (stage 3): Spring Boot tasks and Tomcat. Missing in old files: off */
   hotReload?: HotReload
+  mavenMirrors?: { repositoryId: string; url: string }[]
+  mavenUserSettings?: false
   // kind 'tomcat' (stage 2): main runs `catalina run` with a CATALINA_BASE of its own for the preset
   /** The store's (or a found) Tomcat id */
   tomcat?: string
@@ -923,7 +925,23 @@ export interface RunPreset {
   prepare?: RunPrepare
 }
 
-export type RunPrepare = { tool: 'ant'; target: string } | { tool: 'maven'; goals: string }
+/** `eclipse`: compile with the Eclipse project's settings (.classpath), for a project whose build.xml is missing or broken */
+export type RunPrepare = { tool: 'ant'; target: string } | { tool: 'maven'; goals: string } | { tool: 'eclipse' }
+
+/**
+ * What main read from an Eclipse project: fills the dialog, saved only by the user. Paths are from the
+ * Eclipse project's folder (the preset's `relative`), not the worktree.
+ */
+export interface EclipseImportDraft {
+  webapp: string
+  contextPath: string
+  /** Compile version, e.g. 8 (main reads it again at each run) */
+  release?: number | string
+  /** Source encoding; missing when the project does not say */
+  encoding?: string
+  sources: string[]
+  libs: string[]
+}
 
 export type HotReload = 'off' | 'standard' | 'enhanced'
 
@@ -973,6 +991,27 @@ export interface RunCandidate {
 export interface RunErrorGroup {
   at: number
   lines: string[]
+}
+
+export interface RunSuggestion {
+  id: string
+  kind: 'missingClass' | 'jdkVersion' | 'jndi' | 'sourceEncoding' | 'portInUse' | 'mavenHttpBlocked'
+    | 'mavenRepositoryUnavailable' | 'mavenUnauthorized' | 'mavenTls' | 'mavenArtifactMissing' | 'mavenPluginJdk' | 'mavenUserMirror'
+  message: string
+  apply?: 'mavenMirror' | 'mavenUserSettings'
+  repositoryId?: string
+  mirrorId?: string
+  reason?: 'notFound' | 'unknownHost'
+  artifact?: string
+  className?: string
+  requiredFeature?: number | null
+  classMajor?: number
+  preview?: true
+  name?: string
+  encoding?: string
+  port?: number | null
+  settingsFlag?: '-s'
+  requiresApproval?: true
 }
 
 /** Every run preset answer: `{ ok: false, error }` on failure, or a question to ask the user first */
@@ -1345,11 +1384,15 @@ declare global {
       runPresetStartAll?: (projectFolder: string, options?: RunPresetOptions) => Promise<RunPresetResult>
       runPresetStopAll?: (projectFolder: string) => Promise<RunPresetResult>
       runPresetErrors?: (projectFolder: string, id: string) => Promise<RunPresetResult & { groups: RunErrorGroup[] }>
+      runPresetDiagnosis?: (worktreeFolder: string, id: string) => Promise<RunPresetResult & { suggestions?: RunSuggestion[] }>
+      runPresetApplySuggestion?: (worktreeFolder: string, id: string, suggestion: { id: string; replacementUrl?: string }) => Promise<RunPresetResult & { preset?: RunPreset }>
       runPresetSendPreview?: (worktreeFolder: string, id: string) => Promise<RunPresetResult & { text?: string }>
       /** The `<target name>`s of the build.xml in a folder of the project (a Tomcat preset's Ant build) */
       runPresetAntTargets?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { targets?: string[] }>
       /** Folders of the project with WEB-INF (a Tomcat preset's web folder), from the project root */
       runPresetWebapps?: (worktreeFolder: string) => Promise<RunPresetResult & { folders?: string[] }>
+      /** Reads the Eclipse settings of a folder of the project (.classpath, .settings) for a Tomcat preset */
+      runPresetEclipseImport?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { draft?: EclipseImportDraft; notes?: string[] }>
       runPresetSend?: (projectFolder: string, id: string, agentId: string, note: string) => Promise<RunPresetResult>
       onRunPresetState?: (callback: (event: { projectKey: string; worktreeKey: string; id: string; state: RunState; firstAgentAction?: true }) => void) => () => void
       onRuntimesProgress: (callback: (progress: JdkProgress | null) => void) => () => void

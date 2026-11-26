@@ -209,9 +209,10 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
   - 워크스페이스 `Servers` 프로젝트의 `server.xml`·`context.xml`(JNDI), 서버 `.launch` 의 VM 인자
   - "워크스페이스 폴더 선택" 한 번으로 구성을 미리 채운다.
 - **손으로 고칠 칸:** 클래스패스(lib 폴더·jar·순서), JDK, 소스 인코딩, 컴파일 버전, VM 인자, 컨텍스트 경로, 포트, JNDI 데이터소스, 기동 전 복사·연결할 파일.
-- **이클립스식 빌드:** 가져온 클래스패스로 `javac` 를 돌려 `WEB-INF/classes` 로 컴파일한다. 처음은 전체, 다음은 바뀐 파일만. `build.xml` 이 깨진 프로젝트용이다.
+- **이클립스식 빌드:** 가져온 클래스패스로 `javac`를 실행한다. 결과는 ezShell 사용자 데이터에 저장하고 Tomcat의 `/WEB-INF/classes`에 연결한다. 처음에는 전체를, 이후에는 바뀐 소스만 컴파일한다. `build.xml`이 깨진 프로젝트에도 쓸 수 있다.
 - **로그 인코딩:** 구성마다 고른다 (자동 판정 + MS949·UTF-8).
 - **실패 진단과 제안:** 사용자가 승인해야 반영한다.
+  - `run-preset-diagnosis`는 선택한 워크트리 실행의 오류 묶음과 최근 로그로 제안한다. `run-preset-apply-suggestion`은 잠금 해제된 본창에서 최신 진단을 확인한 뒤 Maven 변경을 구성에 저장한다. 다음 실행 때 변경된 명령 내용을 다시 확인한다.
 
   | 로그 | 제안 |
   |---|---|
@@ -269,10 +270,10 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
   - `.classpath`: `src`(소스·출력), `lib`(jar), 컨테이너(`org.eclipse.jst.j2ee.internal.web.container` → `WEB-INF/lib`, `org.eclipse.jst.server.core.container/…Tomcat…` → Tomcat 의 `lib`, JRE 컨테이너는 무시)
   - `.settings/org.eclipse.wst.common.component`: 웹 폴더(`wb-resource deploy-path="/"`)와 `context-root`
   - `.settings/org.eclipse.jdt.core.prefs`: 컴파일 버전(`org.eclipse.jdt.core.compiler.compliance`)
-  - `.settings/org.eclipse.core.resources.prefs`: 소스 인코딩 (없으면 MS949 를 후보로 보인다)
+  - `.settings/org.eclipse.core.resources.prefs`: 소스 인코딩. 설정이 없으면 MS949로 컴파일하고 가져오기에서 알린다.
   - `.settings/org.eclipse.wst.common.project.facet.core.xml`: Java·웹 facet 버전 → 맞는 JDK·Tomcat 제안
   - 결과는 구성 창의 칸을 미리 채울 뿐이다. 사용자가 저장해야 반영된다.
-  - IPC `run-preset-eclipse-import(worktreeFolder, relative)` → `{ ok, draft: { webapp, contextPath, release?, encoding?, sources: string[], libs: string[] }, notes: string[] }` (경로는 프로젝트 기준 상대, 워크트리 밖·링크 탈출은 버린다).
+  - IPC `run-preset-eclipse-import(worktreeFolder, relative)` → `{ ok, draft: { webapp, contextPath, release?, encoding?, sources: string[], libs: string[] }, notes: string[] }`. 가져온 경로는 `relative`로 고른 구성 폴더 기준이며, 웹 폴더를 구성에 저장할 때는 워크트리 기준 경로로 바꾼다. `release`는 `8`과 같은 숫자다. 워크트리 밖으로 나가는 경로는 버린다.
 - **이클립스식 빌드 `prepare: { tool: 'eclipse' }`:** `build.xml` 이 없거나 깨진 프로젝트용. 이클립스 설정의 소스 폴더를 javac 로 컴파일한다.
   - 클래스패스: `.classpath` 의 lib jar + `WEB-INF/lib/*.jar` + Tomcat `lib/*.jar`. `-encoding`·`--release`(또는 -source/-target)는 가져온 값.
   - 출력은 프로젝트 안이 아니라 `userData/runtimes/tomcat-classes/<구성 id>/<워크트리 키>/` 다. 저장소에 컴파일 결과가 생기지 않게 한다. 소스 폴더의 `.java` 가 아닌 파일(설정 xml·properties)도 거기에 복사한다.

@@ -4,8 +4,13 @@ const { inspectLocalProject } = require('./localProjects.js')
 const { inspectDevelopmentTasks, prepareDevelopmentTask } = require('./localDevelopmentTasks.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { createDevelopmentErrors, MAX_LOG_LINES } = require('./developmentErrors.js')
+const { mavenFields, diagnosisContext, presetSuggestions, suggestedMavenFields, prepareMavenSettings,
+  appendMavenSettings, wrapperMavenVersion } = require('./runSuggestions.js')
+const { removeMavenSettings } = require('../runtimes/mavenSettings.js')
 const { prepareHotReload, prepareTomcatReload, startHotReload, reloadLog, RESULTS: RELOAD_RESULTS } = require('./hotReload.js')
-const { planTomcat, stageTomcat, webDirectory, antTargets, webappCandidates } = require('./tomcatRun.js')
+const { planTomcat, stageTomcat, webDirectory, antTargets, webappCandidates, validContextPath, tomcatJars } = require('./tomcatRun.js')
+const { loadEclipseProject } = require('./eclipseProject.js')
+const { buildEclipse } = require('./eclipseBuild.js')
 const { createRunPresetStore, validatePreset, presetName, publicPreset, presetApproval, projectKey, realDirectory, directoryInProject } = require('./runPresetStore.js')
 
 const READY_TIMEOUT = 300_000
@@ -70,7 +75,7 @@ async function resolveProject(folder) {
 }
 
 function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHomeOf = () => null,
-  toolHomeOf = () => null, toolHomeFor = () => null,
+  toolHomeOf = () => null, toolHomeFor = () => null, toolVersionOf = () => null,
   enhancedJvmArgs = () => null, userData = file && path.dirname(file), prepareReload = prepareHotReload, startReload = startHotReload,
   sendState = () => {}, notifyCrash = () => {}, sendAsUser, now = Date.now, projectOf = resolveProject,
   prepareTask = prepareDevelopmentTask }) {
@@ -152,13 +157,14 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     run.reloadLaunch = undefined
   }
 
-  function onEvent(run, event, task) {
+  function onEvent(run, event, task, preset) {
     const { type, shellId } = event
     if (type === 'start') {
       closeReload(run)
       run.expectedUrl = undefined
       byShell.set(shellId, run)
       run.logs = createDevelopmentErrors(now, { tomcat: task.tomcat === true })
+      run.diagnosis = diagnosisContext(preset)
       update(run, { status: event.phase === 'prepare' ? 'preparing' : 'starting', startedAt: now(), shellId,
         exitCode: null, failedAt: undefined, address: undefined, readyAt: undefined, reload: undefined, errors: 0 })
       return
@@ -205,7 +211,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     const cwd = await directoryInProject(project.worktree, preset.relative)
     const defined = preset.kind === 'task'
       ? await prepareTask(cwd, preset.taskId, { ...optionsForTask, allowed: () => !isLocked() && allowed() })
-      : preset.kind === 'tomcat' ? { cwd, tomcat: true, tomcatPlan: await planTomcat(preset, cwd, { toolHomeOf, toolHomeFor }) }
+      : preset.kind === 'tomcat' ? { cwd, tomcat: true, tomcatPlan: await planTomcat(preset, cwd, { toolHomeOf, toolHomeFor, toolVersionOf }) }
         : { cwd, command: preset.command, custom: true }
     if (defined.cwd !== cwd) throw new Error(MOVED)
     const javaHome = preset.jdk === 'system' ? undefined : await javaHomeOf(preset.jdk)
@@ -243,19 +249,39 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
 
   async function buildTomcatTask(task, project, preset, withEvents) {
     const { tomcatPlan, ...base } = task
-    const finish = async signal => {
-      const check = async () => {
-        signal?.throwIfAborted()
-        if (await directoryInProject(project.worktree, preset.relative) !== base.cwd || find(project, preset.id) !== preset) throw new Error(MOVED)
-        ensureAllowed(() => !signal?.aborted)
-      }
-      await check()
-      const runtime = await stageTomcat(tomcatPlan, { preset, task: base, worktree: project.worktree, userData, prepareReload: prepareTomcatReload })
-      try { await check(); return runtime }
+    const check = async signal => {
+      signal?.throwIfAborted()
+      if (await directoryInProject(project.worktree, preset.relative) !== base.cwd || find(project, preset.id) !== preset) throw new Error(MOVED)
+      ensureAllowed(() => !signal?.aborted)
+    }
+    const finish = async (signal, eclipseBuild) => {
+      await check(signal)
+      const runtime = await stageTomcat(tomcatPlan, { preset, task: base, worktree: project.worktree, userData, prepareReload: prepareTomcatReload, eclipseBuild })
+      try { await check(signal); return runtime }
       catch (error) { await runtime.cleanup(); throw error }
     }
+    if (preset.prepare?.tool === 'eclipse') {
+      const run = async ({ signal, log, env }) => {
+        await check(signal)
+        if (!(tomcatPlan.major >= 7)) throw new Error('이클립스식 빌드를 실행하려면 버전을 확인할 수 있는 Tomcat 7 이상이 필요합니다.')
+        const webapp = await webDirectory(project.worktree, preset.webapp)
+        const eclipse = await loadEclipseProject(project.worktree, base.cwd)
+        const webLibs = await tomcatJars(webapp, path.join('WEB-INF', 'lib'))
+        const libs = [...new Set([...eclipse.libs, ...webLibs, ...await tomcatJars(tomcatPlan.home, 'lib')])]
+        const extraJars = eclipse.libs.filter(jar => !webLibs.includes(jar))
+        const built = await buildEclipse({ eclipse, libs, webLibs, externalJars: tomcatPlan.major >= 8 ? extraJars : [], userData, id: preset.id, worktreeKey: project.worktreeKey,
+          worktree: project.worktree, cwd: base.cwd, env, signal, log })
+        return { ...built, major: tomcatPlan.major, extraJars }
+      }
+      return { ...base, preparation: { run, finish: async (signal, built) => withEvents(await finish(signal, built)) } }
+    }
     if (!tomcatPlan.prepareCommand) return finish()
-    return { ...base, preparation: { command: tomcatPlan.prepareCommand, finish: async signal => withEvents(await finish(signal)) } }
+    const { args, cleanup } = prepareMavenSettings(preset, { userData, mavenVersion: tomcatPlan.mavenVersion })
+    const command = appendMavenSettings(tomcatPlan.prepareCommand, args, tomcatPlan.platform)
+    return { ...base, cleanup, preparation: { command, finish: async signal => {
+      cleanup?.()
+      return withEvents(await finish(signal))
+    } } }
   }
 
   async function act(project, id, action, { by = USER, allowed, approve = noApproval, verifyActor } = {}) {
@@ -276,14 +302,20 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       return true
     }
     const makeTask = async () => {
-      const withEvents = task => ({ ...task, onEvent: event => onEvent(run, event, task) })
+      const withEvents = task => ({ ...task, onEvent: event => onEvent(run, event, task, preset) })
       let task = await freshTask(project, preset, by, approve, canAct)
-      if (preset.kind === 'tomcat') task = await buildTomcatTask(task, project, preset, withEvents)
-      else if (preset.hotReload && preset.hotReload !== 'off') {
-        const { enhancedArgs, ...base } = task
-        task = await prepareReload(base, { worktree: project.worktree, kind: preset.taskId, mode: preset.hotReload, args: enhancedArgs, userData })
-      }
       try {
+        if (preset.kind === 'tomcat') task = await buildTomcatTask(task, project, preset, withEvents)
+        else {
+          if (preset.mavenMirrors?.length || preset.mavenUserSettings === false) {
+            const { args, cleanup } = prepareMavenSettings(preset, { userData, mavenVersion: wrapperMavenVersion(task) })
+            task = { ...task, command: appendMavenSettings(task.command, args), cleanup }
+          }
+          if (preset.hotReload && preset.hotReload !== 'off') {
+            const { enhancedArgs, ...base } = task
+            task = await prepareReload(base, { worktree: project.worktree, kind: preset.taskId, mode: preset.hotReload, args: enhancedArgs, userData })
+          }
+        }
         if (verifyActor) await verifyActor()
         ensureAllowed(canAct)
         return withEvents(task)
@@ -396,7 +428,9 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
         throw new Error('로그는 최대 400줄까지 볼 수 있습니다.')
       }
       const history = run.reloadResults.slice(0, count).map(entry => reloadLog(entry.reload))
-      if (request.errors) return { ...(history.length && { reload: history }), groups: recentErrorGroups(run.logs, MAX_LOG_LINES - history.length) }
+      if (request.errors) return { ...(history.length && { reload: history }),
+        groups: recentErrorGroups(run.logs, MAX_LOG_LINES - history.length),
+        suggestions: presetSuggestions(preset, run).map(({ id: _id, apply: _apply, ...item }) => item) }
       return { lines: [...history, ...(count > history.length ? run.logs.lines(count - history.length) : [])] }
     }
     if (!['start', 'restart', 'stop'].includes(operation)) throw new Error('지원하지 않는 조작입니다.')
@@ -475,6 +509,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     const instances = [...runs.values()].filter(run => run.id === id && run.project.key === project.key)
     if (instances.some(run => run.busy || ACTIVE.has(run.state.status))) throw new Error('실행을 중지한 뒤 구성을 삭제해 주세요.')
     ensureAllowed(allowed)
+    if (userData) removeMavenSettings({ userData, presetId: id })
     store.write(project.root, store.list(project.key).filter(preset => preset.id !== id))
     for (const run of instances) {
       closeReload(run)
@@ -489,7 +524,10 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
 
   async function save(project, input, allowed) {
     const id = input?.id ?? randomUUID()
-    const next = validatePreset(input, id)
+    // Execute-time Maven settings change only through an approved, current diagnosis.
+    const draft = input && typeof input === 'object' && !Array.isArray(input)
+      ? { ...input, mavenMirrors: undefined, mavenUserSettings: undefined } : input
+    const next = validatePreset(draft, id)
     const cwd = await directoryInProject(project.worktree, next.relative)
     if (next.kind === 'task') {
       const { tasks } = await inspectDevelopmentTasks(cwd, process.platform, { rootOnly: true })
@@ -500,11 +538,23 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     const current = store.list(project.key)
     const previous = input?.id === undefined ? null : find(project, id)
     if (current.some(item => item.name === next.name && item.id !== id)) throw new Error('같은 이름의 실행 구성이 있습니다.')
+    Object.assign(next, mavenFields({ ...next, mavenMirrors: previous?.mavenMirrors, mavenUserSettings: previous?.mavenUserSettings }))
     const approval = presetApproval(next)
     if (approval && previous?.confirmedHash === approval.hash) next.confirmedHash = previous.confirmedHash
     if (previous?.agentActionNotified) next.agentActionNotified = true
     store.write(project.root, previous ? current.map(item => item.id === id ? next : item) : [...current, next])
     return { preset: publicPreset(next) }
+  }
+
+  function applySuggestion(project, id, request, allowed) {
+    ensureAllowed(allowed)
+    const preset = find(project, id)
+    const run = getRun(project, id)
+    if (run?.busy) throw new Error('이 실행 구성을 전환하는 중입니다.')
+    const fields = suggestedMavenFields(preset, run, request)
+    const { confirmedHash: _confirmedHash, ...next } = { ...preset, ...fields }
+    store.write(project.root, store.list(project.key).map(item => item.id === id ? next : item))
+    return { ok: true, preset: publicPreset(next) }
   }
 
   function sendPreview(project, id) {
@@ -533,7 +583,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   }
 
   return {
-    projectOf, act, save, remove, send, sendPreview, startAll, stopAll, agentTool,
+    projectOf, act, save, remove, send, sendPreview, startAll, stopAll, agentTool, applySuggestion,
     list(project) {
       const presets = store.list(project.key)
       return { projectKey: project.key, worktreeKey: project.worktreeKey, presets: presets.map(publicPreset),
@@ -546,6 +596,14 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     },
     async antTargets(project, relative) { return { ok: true, targets: await antTargets(await directoryInProject(project.worktree, relative)) } },
     async webapps(project) { return { ok: true, folders: await webappCandidates(project.worktree) } },
+    async eclipseImport(project, relative) {
+      const { draft, notes } = await loadEclipseProject(project.worktree, await directoryInProject(project.worktree, relative))
+      if (!validContextPath(draft.contextPath)) {
+        draft.contextPath = '/'
+        notes.push('가져온 컨텍스트 경로를 사용할 수 없어 기본 경로 /를 표시합니다.')
+      }
+      return { ok: true, draft, notes }
+    },
     reorder(project, ids) {
       const current = store.list(project.key)
       if (!Array.isArray(ids) || ids.length !== current.length || new Set(ids).size !== ids.length) throw new Error('구성 순서를 확인해 주세요.')
@@ -553,6 +611,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       return { ok: true }
     },
     errors(project, id) { return { groups: getRun(project, find(project, id).id)?.logs.groups() ?? [] } },
+    diagnosis(project, id) { return { ok: true, suggestions: presetSuggestions(find(project, id), getRun(project, id)) } },
     async changeFromShell(shellId, taskId, action, allowed) {
       const run = byShell.get(shellId)
       if (!run) return getShells().changeDevelopmentTask(shellId, taskId, action, allowed)
@@ -594,6 +653,7 @@ function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked })
   handle('run-presets-candidates', (project, _allowed, _frame, relative) => controller.candidates(project, relative))
   handle('run-preset-ant-targets', (project, _allowed, _frame, relative) => controller.antTargets(project, relative))
   handle('run-preset-webapps', project => controller.webapps(project))
+  handle('run-preset-eclipse-import', (project, _allowed, _frame, relative) => controller.eclipseImport(project, relative))
   handle('run-presets-save', (project, allowed, _frame, preset) => controller.save(project, preset, allowed))
   handle('run-presets-delete', (project, allowed, _frame, id) => controller.remove(project, id, allowed))
   handle('run-presets-reorder', (project, _allowed, _frame, ids) => controller.reorder(project, ids))
@@ -619,6 +679,8 @@ function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked })
     approve => controller.startAll(project, allowed, approve)))
   handle('run-preset-stop-all', (project, allowed) => controller.stopAll(project, allowed))
   handle('run-preset-errors', (project, _allowed, _frame, id) => controller.errors(project, id))
+  handle('run-preset-diagnosis', (project, _allowed, _frame, id) => controller.diagnosis(project, id))
+  handle('run-preset-apply-suggestion', (project, allowed, _frame, id, request) => controller.applySuggestion(project, id, request, allowed))
   handle('run-preset-send-preview', (project, _allowed, frame, id) => {
     const text = controller.sendPreview(project, id)
     pendingPreview = { frame, key: previewKey(project, id), text }

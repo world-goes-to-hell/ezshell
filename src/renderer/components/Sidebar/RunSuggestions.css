@@ -1,0 +1,45 @@
+/* The run diagnosis dialog (RunSuggestionsDialog) */
+.run-suggestions-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; display: grid; gap: 8px; }
+.run-suggestions-dialog > p { margin: 0; }
+.run-suggestions { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.run-suggestion {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-primary);
+}
+.run-suggestion[data-apply] { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.run-suggestion-title { color: var(--text-primary); font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+.run-suggestion-message { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
+.run-suggestions-empty { color: var(--text-secondary); font-size: 12px; }
+.run-suggestion-apply { display: grid; gap: 5px; margin-top: 5px; padding-top: 6px; border-top: 1px dashed var(--border); }
+.run-suggestion-apply > label:not(.run-suggestion-check) { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.run-suggestion-apply input:not([type="checkbox"]) {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+.run-suggestion-apply .modal-btn { justify-self: end; min-width: 0; padding: 6px 12px; font-size: 12px; }
+/* The -s warning: what will not apply, in plain sight before the approval */
+.run-suggestion-warning {
+  display: flex;
+  gap: 7px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--warning) 55%, var(--border));
+  border-radius: var(--radius-sm, 4px);
+  background: color-mix(in srgb, var(--warning) 12%, var(--bg-primary));
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.run-suggestion-warning > svg { flex: none; margin-top: 2px; color: var(--warning); }
+.run-suggestion-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-primary); cursor: pointer; }
+.run-suggestion-check input { margin: 0; accent-color: var(--accent); }
+.run-suggestion-apply .modal-btn:disabled { opacity: 0.45; cursor: not-allowed; }
