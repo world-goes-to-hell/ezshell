@@ -5,6 +5,7 @@ import type { BrowserBookmarkEntry, BrowserBookmarkPage, BrowserSavedPage, Brows
 
 const MAX_IMPORTED_CHARS = 1_000_000
 const MAX_HISTORY = 1000
+const MAX_VISIT_URL = 4096
 
 type ImportCount = { added: number; limited: boolean }
 
@@ -15,6 +16,8 @@ interface BrowserBookmarkState {
   removeBookmark: (page: BrowserBookmarkPage) => void
   removeBookmarks: (entries: ReadonlySet<BrowserBookmarkEntry>) => void
   clearHistory: () => void
+  /** A page shown in a browser tab of the app: the address bar suggests it later */
+  recordVisit: (page: BrowserSavedPage) => void
   importPages: (profileId: string, bookmarks: BrowserBookmarkEntry[], history: BrowserVisit[]) => {
     bookmarks: ImportCount & { moved: number }
     history: ImportCount
@@ -136,6 +139,15 @@ export const useBrowserBookmarkStore = create<BrowserBookmarkState>()(
         bookmarks: withoutBookmarks(bookmarks, entry => entries.has(entry))
       })),
       clearHistory: () => set({ history: [] }),
+      recordVisit(page) {
+        if (!/^https?:\/\//i.test(page.url) || page.url.length > MAX_VISIT_URL) return
+        const title = pageTabTitle(page)
+        const { history } = get()
+        // The same page again (a title change, a reload): nothing to write unless its title arrived
+        if (history[0]?.url === page.url && history[0].title === title) return
+        const visit = { url: page.url, title, visitedAt: Date.now() }
+        set({ history: [visit, ...history.filter(entry => entry.url !== page.url)].slice(0, MAX_HISTORY) })
+      },
       importPages(profileId, bookmarks, history) {
         const current = get()
         const nextBookmarks = mergeBookmarks(current.bookmarks, bookmarks, profileId)

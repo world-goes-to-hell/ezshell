@@ -234,7 +234,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   workspaceGitCommitFiles: (root, hash) => ipcRenderer.invoke('workspace-git-commit-files', { root, hash }),
   workspaceGitDiff: (root, file, hash) => ipcRenderer.invoke('workspace-git-diff', { root, file, hash }),
   workspaceGitCommit: (root, files, message) => ipcRenderer.invoke('workspace-git-commit', { root, files, message }),
-  localFileOpen: (root, relative, mode, label, options) => ipcRenderer.invoke('local-file-open', { root, path: relative, mode, label, compareHead: options?.compareHead === true }),
+  localFileOpen: (root, relative, mode, label, options) => ipcRenderer.invoke('local-file-open', { root, path: relative, mode, label, compareHead: options?.compareHead === true, ...(Number.isSafeInteger(options?.line) ? { line: options.line } : {}) }),
+  // 프로젝트 검색 (Ctrl+Shift+F): the lines holding the text in the files of a folder main knows
+  workspaceContentSearch: (root, query, caseSensitive) => ipcRenderer.invoke('workspace-content-search', { root, query, caseSensitive: caseSensitive === true }),
   localFileReveal: (root, relative) => ipcRenderer.invoke('local-file-reveal', { root, path: relative }),
   workspaceGitLog: (folder, allBranches) => ipcRenderer.invoke('workspace-git-log', { folder, allBranches }),
   workspaceGitSearch: (root, query, worktreeOnly) => ipcRenderer.invoke('workspace-git-search', { root, query, worktreeOnly }),
@@ -271,7 +273,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentMessageSetRole: (id, role) => ipcRenderer.invoke('agent-message-set-role', id, role),
   browserReviewOpen: () => ipcRenderer.invoke('browser-review-open'),
   browserReviewOpenWorkspace: (root, relative) => ipcRenderer.invoke('browser-review-open-workspace', root, relative),
-  browserReviewOpenLink: (address, destination) => ipcRenderer.invoke('browser-review-open-link', address, destination),
+  browserReviewOpenLink: (address, destination, opener) => ipcRenderer.invoke('browser-review-open-link', address, destination, opener),
+  browserReviewProjects: (id) => ipcRenderer.invoke('browser-review-projects', id),
   onBrowserReviewLinkOpened: (callback) => {
     const listener = (_event, id) => callback(id);
     ipcRenderer.on('browser-review-link-opened', listener);

@@ -117,6 +117,13 @@ function registerUpdateIpc(ctx) {
   // Returns the outcome itself, not only through 'update-status' events: electron-updater sends no
   // event at all when it skips the check (unpackaged dev app), so the renderer would wait forever.
   ipcMain.handle('check-for-updates', async () => {
+    // Screen tests only (never a packaged app): an update that is "downloaded" at once, so a spec presses the
+    // notice's 재시작 like a user and goes through lib/updateInstall.ts (tabs written down, layout kept)
+    if (ctx.testUpdateRestart) {
+      updateReady = true;
+      sendUpdateStatus('downloaded', { version: '99.0.0' });
+      return { success: true, status: 'available', version: '99.0.0' };
+    }
     try {
       if (USES_MANUAL_UPDATE) {
         if (!app.isPackaged) return { success: true, status: 'unsupported' };

@@ -5,7 +5,7 @@ import { useEffect, useState, type MouseEvent } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   RiAddLine, RiArrowDownLine, RiArrowUpLine, RiDeleteBinLine, RiEditLine, RiExternalLinkLine, RiFileList3Line, RiFlashlightLine,
-  RiLightbulbLine, RiMoreFill, RiPlayFill, RiRefreshLine, RiStethoscopeLine, RiStopFill, RiTerminalLine
+  RiLightbulbLine, RiMoreFill, RiPlayFill, RiRefreshLine, RiStethoscopeLine, RiStopFill, RiTerminalLine, RiErrorWarningFill
 } from 'react-icons/ri'
 import { SiApachetomcat, SiNodedotjs, SiSpringboot, SiVite, SiVuedotjs } from 'react-icons/si'
 import { FaJava } from 'react-icons/fa'
@@ -169,7 +169,7 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
   const open = async () => {
     if (!state.address) return
     try {
-      const result = await window.electronAPI.browserReviewOpenLink(state.address, 'internal')
+      const result = await window.electronAPI.browserReviewOpenLink(state.address, 'internal', { folder })
       if (!result.success) toast.error('브라우저 열기', result.error)
     } catch { toast.error('브라우저를 열지 못했습니다') }
   }
@@ -206,14 +206,23 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
       <span className="run-preset-name">{preset.name}</span>
       {note
         ? <span className="run-preset-note" role="status">{note}</span>
-        : <span className="run-preset-folder">{state.status === 'idle' || state.status === 'stopped' ? runFolderLabel(preset.relative) : ''}</span>}
+        : state.status === 'idle' || state.status === 'stopped'
+          ? <span className="run-preset-folder">{runFolderLabel(preset.relative)}</span>
+          // Nothing to show while running: a spacer that cancels its gap (the row is tight beside the state and four buttons)
+          : <span className="run-preset-spacer" aria-hidden="true" />}
       {pills.length > 0 && (
         <span className="run-preset-state">
           {(state.status === 'starting' || state.status === 'preparing') && <span className="run-preset-spin" aria-hidden="true" />}
           {pills.map(pill => pill.errors
-            ? <button key={pill.text} type="button" className="run-preset-pill" data-kind={pill.kind}
-                onClick={event => { event.stopPropagation(); void showLog(true) }} title="첫 오류 줄로 가기">{pill.text}</button>
-            : <span key={pill.text} className="run-preset-pill" data-kind={pill.kind}>{pill.text}</span>)}
+            // "오류 20" as a warning sign and the count: the row has no room for the word beside the port
+            ? <button key={pill.text} type="button" className="run-preset-pill is-count" data-kind={pill.kind} aria-label={pill.text}
+                onClick={event => { event.stopPropagation(); void showLog(true) }} title={`${pill.text} · 첫 오류 줄로 가기`}>
+                <RiErrorWarningFill size={10} aria-hidden="true" />{pill.text.replace(/^\D+/, '')}
+              </button>
+            : pill.kind === 'port' && state.address
+              ? <button key={pill.text} type="button" className="run-preset-pill" data-kind={pill.kind} aria-label={`${preset.name} 브라우저로 열기 ${pill.text}`}
+                  onClick={press('open')} title={`브라우저로 열기 · ${state.address}`}>{pill.text}</button>
+              : <span key={pill.text} className="run-preset-pill" data-kind={pill.kind}>{pill.text}</span>)}
         </span>
       )}
       {buttons.map(button => {

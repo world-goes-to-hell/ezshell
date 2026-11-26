@@ -1,4 +1,5 @@
-const path = require('node:path')
+// Projects are named with their parent folder and gather a repository's worktrees (agentProjects.js)
+const { agentProjects: captureProjects } = require('./agentProjects.js')
 const { OVERLAY_URL, captureOverlayUrl, captureChipUrl } = require('./quickCaptureOverlay.js')
 // The overlay computes the same rectangles to draw its marks in and to stack several captures (quickCaptureEditor.js)
 const { pixelRegion, markedImage, stackLayout, composeStack, MAX_SHOTS } = require('./quickCaptureEditor.js')
@@ -11,34 +12,6 @@ const MARK_TYPES = new Set(['arrow', 'box', 'pen', 'text', 'badge', 'mosaic'])
 const CHIP_HIDE_MS = 150
 const CHIP_SIZE = { width: 440, height: 48 }
 const TOO_BIG_TO_STACK = '캡처가 너무 커서 한 장으로 합쳐 복사할 수 없습니다. 바로작업으로 보내거나 캡처 수를 줄여 주세요.'
-
-// A folder name alone is often generic (backend, frontend), so the parent folder comes with it: "shop / backend".
-function projectName(folder) {
-  const name = path.basename(folder)
-  if (!name) return folder
-  const parent = path.basename(path.dirname(folder))
-  return parent ? `${parent} / ${name}` : name
-}
-
-async function captureProjects(agents, repoFolders) {
-  const folders = new Map()
-  const projects = new Map()
-  const keyOf = folder => path.normalize(folder).toLowerCase()
-  const locations = await Promise.all(agents.map(async agent => {
-    const key = keyOf(agent.cwd)
-    if (!folders.has(key)) folders.set(key, repoFolders(agent.cwd))
-    // Git lists the main checkout first, even when the agent is in a linked worktree.
-    const [top, main] = await folders.get(key)
-    return main ?? top ?? agent.cwd
-  }))
-  agents.forEach((agent, index) => {
-    const folder = locations[index]
-    const key = keyOf(folder)
-    if (!projects.has(key)) projects.set(key, { folder, name: projectName(folder), agents: [] })
-    projects.get(key).agents.push(agent)
-  })
-  return [...projects.values()].sort((a, b) => a.name.localeCompare(b.name, 'ko') || a.folder.localeCompare(b.folder, 'ko'))
-}
 
 /**
  * The marks the overlay drew on a capture. Main keeps them between captures only to give them back to the next

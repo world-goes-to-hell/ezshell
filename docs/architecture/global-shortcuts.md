@@ -31,4 +31,5 @@
 - 바꾸면 안 되는 것: 녹화 중에는 창의 캡처 단계에서 모든 키를 가로채 `stopImmediatePropagation` 한다 (누른 조합이 다른 단축키를 실행하거나 설정 창을 닫으면 안 된다).
 - 바꾸면 안 되는 것: 이 훅은 여러 곳(App, Sidebar)에서 쓰인다. 처리기가 있는 호출만 `preventDefault` 한다. 처리기가 없는 쪽이 먼저 `preventDefault` 하면 처리기가 있는 쪽이 `defaultPrevented` 를 보고 건너뛴다 (명령 팔레트 단축키가 그래서 훅으로는 동작하지 않았고, `CommandPalette` 가 따로 듣던 고정 `Ctrl+P` 가 가려 주고 있었다. 그 고정 처리기는 없앴다: 단축키를 바꿔도 옛 키가 계속 동작했다).
 - 터미널에 입력 중일 때는 명령 팔레트 단축키만 동작한다 (xterm 의 입력칸이 `TEXTAREA` 라서 나머지는 건너뛴다).
+- 예외로 프로젝트 검색의 두 키(`project-file-search` Shift 두 번, 고정 / `project-content-search` Ctrl+Shift+F)는 `ProjectSearchKeys` 가 창의 캡처 단계에서 듣는다: 터미널·입력칸에서도 열리고 Ctrl+Shift+F 는 셸로 가지 않는다. Shift 두 번은 `lib/projectSearch.ts` 의 `createDoubleShift`: 400ms 안의 두 번의 단독 Shift 만, 사이에 다른 키가 하나라도 있거나 Ctrl/Alt/Meta 가 함께면 아니다(대문자·한글 쌍자음 입력).
 - 시험할 때: 시험용 앱을 `TaskStop` 으로 끄면 `npx` 만 끝나고 Electron 은 남아 CDP 포트를 잡고 있다. 새로 띄운 앱 대신 옛 앱(옛 코드)에 붙게 되므로, 프로필 경로로 남은 `electron.exe` 를 찾아 끝낸 뒤 다시 띄운다.

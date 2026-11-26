@@ -11,7 +11,7 @@ import './WorkspaceDetails.css'
 const fileIcons = { directory: RiFolderLine, file: RiFileLine, link: RiLinksLine }
 
 /** Opens a file of `root` in the file window: text in the editor, images and PDFs in the preview */
-export async function openWorkspaceFile(root: string, relative: string, label: string, options?: { compareHead?: boolean }): Promise<void> {
+export async function openWorkspaceFile(root: string, relative: string, label: string, options?: { compareHead?: boolean; line?: number }): Promise<void> {
   const open = window.electronAPI.localFileOpen
   if (!open) {
     toast.error('파일을 열지 못했습니다', '앱을 다시 시작한 뒤에 사용할 수 있습니다.')

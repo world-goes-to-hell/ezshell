@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -148,5 +148,22 @@ describe('local shells in the session host', () => {
     expect(shells.chatAgentId('local:3')).toBeUndefined()
     handed = ['claude-4']
     expect(shells.chatAgentId('local:3')).toBe('claude-4')
+  })
+
+  // 2026-11-26 user report: after the update, sending from the chat view failed with "에이전트의 입력칸을 찾지
+  // 못했습니다" until the terminal was shown once. The wake's screen started empty and an idle CLI draws nothing.
+  it.each(['claude-100x24-idle', 'codex-100x24-idle'])('reads an adopted agent’s screen from what the host kept (%s), so the chat sends at once', async name => {
+    const fixture = JSON.parse(readFileSync(new URL(`./ipc/fixtures/agent-inbox-pty/${name}.json`, import.meta.url), 'utf8'))
+    const host = fakeHost()
+    const registration = { close: vi.fn(), setStatus: vi.fn() }
+    const agents = { adopt: vi.fn(() => registration), adoptShell: vi.fn(), agentsOfShell: vi.fn(() => ['agent-1']), register: vi.fn(), registerShell: vi.fn(() => ({})),
+      unreadFor: () => [], unhandledFor: () => [] }
+    const { shells } = setup({ host, agents })
+    shells.adopt([{ id: 'local:3', pid: 4200, cols: fixture.cols, rows: fixture.rows, meta: { agent: fixture.kind }, buffer: fixture.phases.idle.frame, exited: false }])
+    const pty = host.remotes.get('local:3').remote.pty
+    const written = vi.spyOn(pty, 'write')
+    const result = await Promise.race([shells.chatSend('local:3', 'hello after update'), new Promise(resolve => setTimeout(() => resolve('pending'), 3000))])
+    expect(result).not.toMatchObject({ reason: 'no-composer' })
+    expect(written.mock.calls.map(([data]) => data).join('')).toContain('hello after update')
   })
 })

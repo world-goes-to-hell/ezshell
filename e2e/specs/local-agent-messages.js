@@ -50,6 +50,8 @@ async function run() {
   try {
     const { js, send, until } = driver
     await unlock(driver)
+    // These checks measure the light running around the border (도는 빛), one of the looks in 설정 > 테마 > 창 효과
+    await driver.js(`localStorage.setItem('agent-work-style', 'trace'); document.documentElement.dataset.agentWorkStyle = 'trace'`)
     await send('Page.bringToFront')
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
     const workspace = path.join(profile, 'workspace (2)')

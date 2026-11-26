@@ -6,6 +6,7 @@ import { installThemedTooltips } from './lib/themedTooltip'
 import { installCaptionDoubleClick } from './lib/captionDoubleClick'
 import { installSftpWindowReturn } from './lib/sftpDetach'
 import { installPointerAppearance } from './lib/pointerAppearance'
+import { installAgentWorkStyle } from './lib/agentWorkStyle'
 
 // Suppress ResizeObserver loop warning (harmless)
 const resizeObserverErr = window.onerror
@@ -27,6 +28,8 @@ if (document.fonts?.load) {
 
 // Every window (main, popped-out terminal / SFTP / DB / file windows) goes through this entry
 installThemedTooltips()
+// The look of a working agent's pane (설정 > 테마 > 창 효과), before the first paint
+installAgentWorkStyle()
 installCaptionDoubleClick()
 installSftpWindowReturn()
 installPointerAppearance()

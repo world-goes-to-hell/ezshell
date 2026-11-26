@@ -42,6 +42,7 @@ import { answerableAskItem, pendingAskItem } from '../../lib/askQuestion'
 import { useAskQuestionStore } from '../../stores/askQuestionStore'
 import { allSlashCommands, draftFor, isSlashCommand, matchSlashCommands, type SlashCommand } from '../../lib/slashCommands'
 import { useAgentScreenReturnStore } from '../../stores/agentScreenReturnStore'
+import { useAgentScreenWatch } from './useAgentScreenWatch'
 import type { ChatAppearance } from '../../themes/chatThemes'
 import './AgentChat.css'
 import './AgentChatThemes.css'
@@ -534,6 +535,11 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   }, [customCommands, draft, interactiveKind, slashClosedFor, slashTyping])
   useEffect(() => { setSlashIndex(0) }, [draft])
   const isOver = chat?.state === 'ended' || (!agent && !antigravity)
+  // A screen of the CLI's own (not a question) took the composer's place: the terminal shows it. Not while
+  // Claude's question waits or its answer is being keyed in (its dialog has its own card and terminal way
+  // out), nor during a send or the folder trust screen (handled on their own)
+  useAgentScreenWatch(shellId, Boolean(chat) && interactiveKind !== null && !isOver && !pendingAsk && !askSending
+    && !folderTrust && !sending, onShowTerminal)
   const replyId = chat?.reply?.sendId
   const idle = status === 'idle'
   const canReply = !isOver && !composerBlocked && status !== 'error' && (!antigravity || idle)

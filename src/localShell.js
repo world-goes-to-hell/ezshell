@@ -1255,7 +1255,13 @@ function createLocalShells({
       // What the screen was left in (bracketed paste, the title's working sign): read again from the output
       trackTerminalModes(entry, entry.backlog);
       trackTerminalOsc(entry, entry.backlog, platform, false);
-      if (registration) observeInbox(shell.id, entry);
+      if (registration) {
+        observeInbox(shell.id, entry);
+        // The wake reads the CLI's composer from its own screen, which starts empty, and an idle CLI draws
+        // nothing until something changes: the chat view's send failed ("입력칸을 찾지 못했습니다") until the
+        // terminal was shown and resized it. It gets what the host kept, as the tab's terminal does.
+        if (entry.backlog) entry.inbox?.writeOutput(entry.backlog);
+      }
       shells.set(shell.id, entry);
       listen(shell.id, entry);
       nextId = Math.max(nextId, Number(number) + 1);

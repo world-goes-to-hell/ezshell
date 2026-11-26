@@ -173,6 +173,24 @@ const defaultShortcuts: Shortcut[] = [
     action: 'openWorkOverview',
     note: typeof navigator !== 'undefined' && /^Win/i.test(navigator.platform) ? '다른 프로그램과 터미널에서도 동작 · 수정키 두 개 이상' : '터미널에서도 동작 · 수정키 두 개 이상'
   },
+  // 프로젝트 검색 (components/ProjectSearch): heard everywhere in the window, a terminal included
+  {
+    id: 'project-file-search',
+    keys: ['Shift', 'Shift'],
+    description: '프로젝트 파일 찾기',
+    category: 'navigation',
+    action: 'openProjectFileSearch',
+    fixed: true,
+    note: 'Shift 를 빠르게 두 번 · 터미널에서도 동작'
+  },
+  {
+    id: 'project-content-search',
+    keys: ['Ctrl', 'Shift', 'F'],
+    description: '프로젝트 내용 검색',
+    category: 'navigation',
+    action: 'openProjectContentSearch',
+    note: '터미널에서도 동작'
+  },
   {
     id: 'next-tab',
     keys: ['Ctrl', 'Tab'],

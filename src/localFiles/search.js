@@ -374,4 +374,4 @@ function createDirectorySearch({ now = Date.now, watch = defaultWatch } = {}) {
   }
 }
 
-module.exports = { createDirectorySearch }
+module.exports = { createDirectorySearch, SKIPPED_DIRS }

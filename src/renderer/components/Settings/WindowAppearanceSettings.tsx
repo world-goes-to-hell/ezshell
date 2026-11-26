@@ -1,6 +1,36 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { MIN_WINDOW_OPACITY, type SurfaceStyle } from '../../lib/appearance'
+import { AGENT_WORK_STYLES, AGENT_WORK_STYLE_CHANGED, getAgentWorkStyle, setAgentWorkStyle, type AgentWorkStyle } from '../../lib/agentWorkStyle'
 import { useThemeStore } from '../../stores/themeStore'
+
+/** 에이전트 작업 중 표시: each card shows its look on a small working pane (styles/app/agent-work-trace.css) */
+function AgentWorkStyleSetting() {
+  const [style, setStyle] = useState<AgentWorkStyle>(getAgentWorkStyle)
+  useEffect(() => {
+    const changed = (event: Event) => setStyle((event as CustomEvent<AgentWorkStyle>).detail)
+    window.addEventListener(AGENT_WORK_STYLE_CHANGED, changed)
+    return () => window.removeEventListener(AGENT_WORK_STYLE_CHANGED, changed)
+  }, [])
+  return (
+    <div className="appearance-row appearance-row-stack">
+      <div className="appearance-label">
+        <span>에이전트 작업 중 표시</span>
+        <span className="appearance-hint">에이전트가 일하는 칸과 사이드바 항목에 보이는 표시입니다. 움직이는 표시는 작업 중인 곳마다 CPU 를 씁니다.</span>
+      </div>
+      <div className="agent-work-styles" role="radiogroup" aria-label="에이전트 작업 중 표시">
+        {AGENT_WORK_STYLES.map(item => (
+          <button key={item.id} type="button" role="radio" aria-checked={style === item.id} className="agent-work-style" data-style={item.id}
+            style={{ '--agent-work-style': item.id } as CSSProperties} onClick={() => { setAgentWorkStyle(item.id); setStyle(item.id) }}>
+            <span className="agent-work-preview" data-agent-work="working" aria-hidden="true" />
+            <span className="agent-work-style-name">{item.label}</span>
+            <span className="agent-work-style-desc">{item.description}</span>
+            <span className="agent-work-style-cpu" data-cost={item.id === 'trace' ? 'high' : 'low'}>{item.cpu}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 const SURFACES: { id: SurfaceStyle; label: string }[] = [
   { id: 'flat', label: '플랫' },
@@ -72,6 +102,7 @@ export function WindowAppearanceSettings() {
           <span className="appearance-value">{opacityPercent}%</span>
         </div>
       </div>
+      <AgentWorkStyleSetting />
     </div>
   )
 }

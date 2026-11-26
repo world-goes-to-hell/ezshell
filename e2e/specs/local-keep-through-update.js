@@ -13,7 +13,7 @@ const { check, finish } = createChecks()
 const profile = path.join(process.env.E2E_PROFILE, 'keep-through-update')
 const flags = ['--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-background-timer-throttling']
 
-async function start() {
+async function start(env = {}) {
   const portProbe = net.createServer().listen(0, '127.0.0.1')
   await once(portProbe, 'listening')
   const port = portProbe.address().port
@@ -21,7 +21,7 @@ async function start() {
   process.env.E2E_CDP = `http://127.0.0.1:${port}`
   return spawn(require('electron'), [
     path.resolve(__dirname, '../../out/main/index.js'), `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, ...flags
-  ], { stdio: 'ignore', windowsHide: true, env: { ...process.env, EZSHELL_TEST_UPDATE_RESTART: '1' } })
+  ], { stdio: 'ignore', windowsHide: true, env: { ...process.env, EZSHELL_TEST_UPDATE_RESTART: '1', ...env } })
 }
 
 async function kill(app) {
@@ -57,10 +57,12 @@ const lastTick = text => Math.max(0, ...[...text.matchAll(/tick-(\d+)/g)].map(ma
     const pid = /pid-(\d+)/.exec(before)?.[1]
     check('the shell printed its process id', Boolean(pid), before.slice(-300))
 
-    // The update path: the layout for the next window, then the install request (a plain quit here)
-    await driver.js(`window.electronAPI.localShellKeepLayout([{ tabId: ${JSON.stringify(shell.id)}, mainShellId: ${JSON.stringify(shell.id)}, shell: 'PowerShell', panes: {} }])`)
+    // The update path as a user takes it: the notice's 재시작 (lib/updateInstall.ts writes the open tabs down
+    // for the restore notice and gives the session host the layout), then the install request (a plain quit here)
+    await driver.js(`window.electronAPI.checkForUpdates()`)
+    check('the notice offers to restart for the update', await driver.until(`!!document.querySelector('.update-install-btn')`, 10000))
     const exited = once(app, 'exit')
-    driver.js(`window.electronAPI.installUpdate()`).catch(() => {})
+    await driver.js(`document.querySelector('.update-install-btn').click()`)
     await Promise.race([exited, sleep(20000)])
     check('the app quits for the update', app.exitCode !== null || app.signalCode !== null)
     driver.close()
@@ -68,7 +70,9 @@ const lastTick = text => Math.max(0, ...[...text.matchAll(/tick-(\d+)/g)].map(ma
     const quitTick = lastTick(before)
     await sleep(3000)
 
-    app = await start()
+    // The new app finds the session host only after the window is unlocked (a slow start): the window must
+    // still take the shell back into its tab and not offer it again (2026-11-26 user report: tabs twice)
+    app = await start({ EZSHELL_TEST_SESSION_HOST_DELAY_MS: '5000' })
     driver = await connect()
     await unlock(driver)
     check('the same shell is there after the restart', await driver.until(`

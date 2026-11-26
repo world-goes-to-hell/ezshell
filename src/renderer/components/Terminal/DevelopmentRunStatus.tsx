@@ -53,7 +53,7 @@ function DevelopmentRunChip({ id, tabId, run }: { id: string; tabId: string; run
     if (!run.url) return
     focusLog()
     try {
-      const result = await window.electronAPI.browserReviewOpenLink(run.url, 'internal')
+      const result = await window.electronAPI.browserReviewOpenLink(run.url, 'internal', { shellId: id })
       if (!result.success) toast.error('브라우저 열기', result.error)
     } catch { toast.error('브라우저를 열지 못했습니다') }
   }

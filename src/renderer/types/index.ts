@@ -701,6 +701,15 @@ export interface BrowserReviewSelection {
   componentFile?: string
 }
 
+/** Where a browser tab was opened from: its project's agents come first in the element request */
+export type BrowserReviewOpener = { folder: string } | { shellId: string }
+
+export interface BrowserReviewProjects {
+  projects: { folder: string; name: string; agentIds: string[] }[]
+  /** The listed project the tab was opened from */
+  preferred: string | null
+}
+
 export interface BrowserReviewState {
   url: string
   localFile?: string
@@ -837,6 +846,14 @@ export interface WorkspaceDirectorySearchResult {
   skipped?: { count: number; names: string[] }
   /** The search read those folders too */
   includedAll?: boolean
+}
+
+/** 프로젝트 검색's content search (src/localFiles/contentSearch.js): lines per file, paths relative with / */
+export interface WorkspaceContentSearchResult {
+  engine: 'git' | 'scan'
+  files: { path: string; matches: { line: number; text: string }[] }[]
+  /** A limit was reached (lines, files, lines per file, time): there is more */
+  truncated: boolean
 }
 
 export interface WorkspaceGitCommit {
@@ -1300,13 +1317,14 @@ declare global {
       workspaceDirectoryList: (folder: string, relative?: string) => Promise<{ success: true; entries: WorkspaceDirectoryEntry[]; total: number } | { success: false; error: string }>
       workspaceDirectoryPrepare?: (root: string, refresh?: boolean, includeAll?: boolean) => Promise<{ success: true } | { success: false; error: string }>
       workspaceDirectorySearch?: (root: string, query: string, includeAll?: boolean) => Promise<({ success: true } & WorkspaceDirectorySearchResult) | { success: false; error: string }>
+      workspaceContentSearch?: (root: string, query: string, caseSensitive?: boolean) => Promise<({ success: true } & WorkspaceContentSearchResult) | { success: false; error: string }>
       workspaceGitStatus?: (root: string) => Promise<{ success: true; repo: WorkspaceGitStatus | null } | { success: false; error: string }>
       workspaceGitCommitFiles?: (root: string, hash: string) => Promise<{ success: true; files: WorkspaceGitFile[] } | { success: false; error: string }>
       workspaceGitDiff?: (root: string, file: string, hash?: string) => Promise<({ success: true } & WorkspaceGitDiff) | { success: false; error: string }>
       /** Commits the ticked files of the change list (paths relative to the repository top) */
       workspaceGitCommit?: (root: string, files: string[], message: string) => Promise<{ success: true; hash: string; shortHash: string; count: number; warning?: string } | { success: false; error: string }>
       /** A file on this PC in the file window; `relative` is relative to `root` */
-      localFileOpen?: (root: string, relative: string, mode: 'edit' | 'preview', label?: string, options?: { compareHead?: boolean }) => Promise<{ success: true } | { success: false; error: string }>
+      localFileOpen?: (root: string, relative: string, mode: 'edit' | 'preview', label?: string, options?: { compareHead?: boolean; line?: number }) => Promise<{ success: true } | { success: false; error: string }>
       localFileReveal?: (root: string, relative: string) => Promise<{ success: true } | { success: false; error: string }>
       workspaceGitLog: (folder: string, allBranches?: boolean) => Promise<{ success: true; repo: WorkspaceGitRepository } | { success: true; repo: null; reason: 'git-missing' | 'not-repo' } | { success: false; error: string }>
       workspaceGitSearch?: (root: string, query: string, worktreeOnly?: boolean) => Promise<({ success: true } & WorkspaceGitSearchResult) | { success: false; error: string }>
@@ -1330,7 +1348,8 @@ declare global {
       agentMessageSetRole: (id: string, role: string) => Promise<{ success: true } | { success: false; error: string }>
       browserReviewOpen: () => Promise<{ success: true; id: string } | { success: false; error: string }>
       browserReviewOpenWorkspace: (root: string, relative: string) => Promise<BrowserReviewResult>
-      browserReviewOpenLink: (address: string, destination: 'internal' | 'external') => Promise<BrowserReviewResult>
+      browserReviewOpenLink: (address: string, destination: 'internal' | 'external', opener?: BrowserReviewOpener) => Promise<BrowserReviewResult>
+      browserReviewProjects: (id: string) => Promise<BrowserReviewProjects | null>
       onBrowserReviewLinkOpened: (callback: (id: string) => void) => () => void
       browserReviewState: (id: string) => Promise<BrowserReviewState | null>
       browserReviewAction: (id: string, request: BrowserReviewAction) => Promise<BrowserReviewResult>

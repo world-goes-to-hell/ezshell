@@ -8,6 +8,7 @@ const { createBrowserImportSources } = require('./browserImportSources.js')
 const { importBrowserProfile } = require('./browserProfileImport.js')
 const { createBrowserPasswordImport } = require('./browserPasswordImport.js')
 const { createImageDrafts } = require('../agentChat/imageDrafts.js')
+const { agentProjects, preferredProject } = require('../agentProjects.js')
 const { browserContextMenu } = require('./browserContextMenu.js')
 const { WORKSPACE_SCHEME, workspaceDocument, workspacePreview, serveWorkspaceAsset, resolveLinkFolder } = require('./browserWorkspace.js')
 
@@ -49,9 +50,12 @@ function reviewMessage(request, selection, files = []) {
   ].join('\n\n')
 }
 
-function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTerminalWindow, getWindow, listAgents, sendMessage, clipboard, selectImages, openExternal, userDataPath, getMasterPassword }) {
+function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTerminalWindow, getWindow, listAgents, sendMessage, clipboard, selectImages, openExternal, userDataPath, getMasterPassword, repoFolders = async () => [], shellFolder = () => null }) {
   const { WebContentsView, session, ipcMain, dialog, Menu, clipboard: systemClipboard } = require('electron')
   const tabs = new Map()
+  // The folder each tab was opened from (a run preset's worktree, a server's shell, a workspace file): the
+  // element request offers that project's agents first. Only a hint for the screen; it grants nothing.
+  const tabFolders = new Map()
   const sessions = new Map()
   const workspacePreviews = new Map()
   const imageDrafts = createImageDrafts(clipboard)
@@ -62,8 +66,10 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
   const passwordImport = createBrowserPasswordImport({ openSource: importSources.open, logins,
     copyPath: file => systemClipboard.writeText(file) })
   const profilePath = path.join(userDataPath, 'browser-profile.json')
-  let rememberSession = false
-  try { rememberSession = JSON.parse(fs.readFileSync(profilePath, 'utf8')).rememberSession === true } catch {}
+  // Logins stay, as in a web browser, unless the user turned it off (2026-11-26 user report: a login in the
+  // browser tab was forgotten after a restart; it used to be off until turned on)
+  let rememberSession = true
+  try { rememberSession = JSON.parse(fs.readFileSync(profilePath, 'utf8')).rememberSession !== false } catch {}
 
   const success = { success: true }
   const fail = error => ({ success: false, error })
@@ -103,7 +109,7 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
     // of the app instead, as in a web browser; never a window of its own (2026-11-23 user report: such links
     // did nothing)
     contents.setWindowOpenHandler(({ url }) => {
-      if (linkUrl(url)) setImmediate(() => { if (!win.isDestroyed()) openLink(url) })
+      if (linkUrl(url)) setImmediate(() => { if (!win.isDestroyed()) openLink(url, tabFolders.get(id)) })
       return { action: 'deny' }
     })
     const localDocument = url => workspace && workspaceDocument(url, workspace.host)
@@ -147,7 +153,7 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
         canGoBack: contents.navigationHistory.canGoBack(),
         canGoForward: contents.navigationHistory.canGoForward(),
         isWebUrl: url => Boolean(linkUrl(url)),
-        openTab: url => { if (linkUrl(url)) openLink(url) },
+        openTab: url => { if (linkUrl(url)) openLink(url, tabFolders.get(id)) },
         openExternal: url => { const link = linkUrl(url); if (link) void Promise.resolve(openExternal(link.href)).catch(() => {}) },
         copy: text => systemClipboard.writeText(String(text)),
         back: () => void action({ type: 'back' }),
@@ -452,23 +458,32 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
     const tab = tabs.get(id)
     if (!tab) return
     tabs.delete(id)
+    tabFolders.delete(id)
     imageDrafts.clear(id)
     passwordImport.cancel(id)
     tab.close()
   }
 
-  function openTab(preview) {
+  function openTab(preview, folder) {
     const win = getWindow()
     const host = randomUUID()
     const id = 'browser:' + host
     const workspace = preview && { ...preview, host }
     try {
       tabs.set(id, createTab(win, id, workspace))
+      if (typeof folder === 'string' && folder) tabFolders.set(id, folder)
       if (workspace) workspacePreviews.set(host, workspace)
       return { success: true, id }
     } catch {
       return fail('브라우저 탭을 열 수 없습니다.')
     }
+  }
+
+  function openerFolder(opener) {
+    if (!opener || typeof opener !== 'object') return undefined
+    if (typeof opener.shellId === 'string' && opener.shellId.length <= 200) return shellFolder(opener.shellId) ?? undefined
+    // preferredProject checks it is a local path before Git ever sees it
+    return typeof opener.folder === 'string' && opener.folder.length <= 4096 ? opener.folder : undefined
   }
 
   function linkUrl(address) {
@@ -477,10 +492,10 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
     return url && url.href.length <= 4096 ? url : null
   }
 
-  function openLink(address) {
+  function openLink(address, folder) {
     const url = linkUrl(address)
     if (!url) return fail('올바른 HTTP 또는 HTTPS 링크를 선택해 주세요.')
-    const result = openTab()
+    const result = openTab(undefined, folder)
     if (!result.success) return result
     void tabs.get(result.id).action({ type: 'navigate', address: url.href })
     getWindow().webContents.send('browser-review-link-opened', result.id)
@@ -496,7 +511,7 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
       const folder = linkFolder ? await resolveLinkFolder(root) : await resolveWorkspaceRoot(root)
       const preview = await workspacePreview(folder, relative, linkFolder)
       if (!permitted()) return fail(unavailable)
-      const result = openTab(preview)
+      const result = openTab(preview, folder)
       if (!result.success) return result
       getWindow().webContents.send('browser-review-link-opened', result.id)
       const host = result.id.slice('browser:'.length)
@@ -510,11 +525,12 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
   ipcMain.handle('browser-review-open', event => allowed(event) ? openTab() : fail('메인 창에서 잠금을 해제해 주세요.'))
   ipcMain.handle('browser-review-open-workspace', (event, root, relative) => allowed(event)
     ? openWorkspace(root, relative, () => allowed(event)) : fail('메인 창에서 잠금을 해제해 주세요.'))
-  ipcMain.handle('browser-review-open-link', async (event, address, destination) => {
+  // opener: where the screen opened the page from, { folder } or { shellId } (main reads that shell's folder)
+  ipcMain.handle('browser-review-open-link', async (event, address, destination, opener) => {
     const detached = event.senderFrame === event.sender.mainFrame && fromTerminalWindow(event)
     if (!allowed(event) && !detached) return fail('메인 창에서 잠금을 해제해 주세요.')
     if (destination === 'internal') {
-      const result = openLink(address)
+      const result = openLink(address, openerFolder(opener))
       if (result.success && detached) getWindow().show()
       return result
     }
@@ -528,6 +544,17 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
     }
   })
   ipcMain.handle('browser-review-state', (event, id) => tabFor(event, id)?.state() ?? null)
+  // The agents grouped by project for the element request, and the project the tab was opened from
+  ipcMain.handle('browser-review-projects', async (event, id) => {
+    if (!tabFor(event, id)) return null
+    try {
+      const projects = await agentProjects(listAgents(), repoFolders)
+      const preferred = await preferredProject(projects, tabFolders.get(id), repoFolders)
+      return { projects: projects.map(({ folder, name, agents }) => ({ folder, name, agentIds: agents.map(agent => agent.id) })), preferred }
+    } catch {
+      return null
+    }
+  })
   ipcMain.handle('browser-review-action', (event, id, request) => tabFor(event, id)?.action(request)
     ?? fail('열려 있는 브라우저 탭을 찾을 수 없습니다.'))
   ipcMain.handle('browser-review-add-images', (event, id, source) => {

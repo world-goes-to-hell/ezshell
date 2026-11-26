@@ -918,6 +918,24 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('once the screen closes the pane is a chat again', await until(`!!${cover(0)} && !document.querySelector('.agent-screen-return')`, 8000))
   await until(`document.activeElement === ${cover(0)}?.querySelector('.agent-chat-input')`, 3000)
 
+  // 2026-11-26 user report: a screen the CLI opened by itself ("Teach auto mode about your environment?")
+  // stood in the terminal while the chat showed nothing. It goes to the terminal too, and back once it closes
+  fs.writeFileSync(path.join(profile, 'claude-1-screen'), [
+    'Teach auto mode about your environment?',
+    '',
+    '  How you use Claude here     Mixed',
+    '❯ Also scan shell history     on',
+    '  Also scan your other repos  off',
+    '',
+    '  Continue',
+    '',
+    '↑/↓ to navigate · Space to toggle · Esc to cancel'
+  ].join('\r\n'))
+  check('a screen the CLI opens by itself hands the pane to the terminal', await until(`!${cover(0)} && !!document.querySelector('.agent-screen-return')`, 10000))
+  fs.writeFileSync(path.join(profile, 'claude-1-screen'), '')
+  check('once that screen closes the pane is a chat again', await until(`!!${cover(0)} && !document.querySelector('.agent-screen-return')`, 8000))
+  await until(`document.activeElement === ${cover(0)}?.querySelector('.agent-chat-input')`, 3000)
+
   // Sending from the first chat types into that agent's composer only
   const numberedLead = '1. 첫 번째 항목만 넣어 줘'
   const numberedDraft = `${numberedLead}\n2. 지난 기록도 포함해 줘\n3. 확인이 필요한 목록은 따로 적어 줘`

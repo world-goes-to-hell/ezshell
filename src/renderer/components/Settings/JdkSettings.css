@@ -1,15 +1,64 @@
-.jdk-settings { display: grid; gap: 12px; }
-.jdk-heading, .jdk-choice-row, .jdk-actions, .jdk-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.jdk-heading { justify-content: space-between; }
-.jdk-settings :is(h3, h4, p) { margin: 0; }
-.jdk-download, .jdk-list-section { display: grid; gap: 8px; }
-.jdk-download { padding: 12px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: var(--radius-md); }
-.jdk-choice-row label { display: grid; gap: 4px; color: var(--text-secondary); font-size: 13px; }
-.jdk-choice-row select { min-height: 32px; padding: 4px 8px; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.jdk-list { margin: 0; padding: 0; list-style: none; }
-.jdk-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
-.jdk-item-name { min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
-.jdk-item-name span { color: var(--text-secondary); font-size: 13px; }
-.jdk-progress progress { flex: 1; min-width: 72px; accent-color: var(--accent); }
+/* 설정 > 개발 도구: cards (JDK, 확장 바로 반영, 빌드·실행 도구), each a head and rows of one shape */
+.devtools { display: grid; gap: 14px; }
+.devtools :is(h3, h4, p) { margin: 0; }
+
+.devtools-card { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-secondary); overflow: hidden; }
+.devtools-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; }
+.devtools-card-title { min-width: 0; display: grid; gap: 3px; }
+.devtools-card-title .settings-section-title { font-size: 14px; }
+.devtools-card-title .settings-section-desc { font-size: 12px; }
+
+/* Buttons sized for rows (the dialog's btn-secondary is 15px with a 10×20 padding) */
+.devtools-btn {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  padding: 5px 11px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-primary); color: var(--text-primary); font-size: 12px; white-space: nowrap; cursor: pointer;
+}
+.devtools-btn:hover:not(:disabled) { background: var(--bg-hover); }
+.devtools-btn:disabled { opacity: 0.5; cursor: default; }
+.devtools-btn.is-on { border-color: var(--accent); color: var(--accent); }
+.devtools-btn.is-primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.devtools-btn.is-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.devtools-btn.is-quiet { border-color: transparent; background: transparent; color: var(--text-secondary); }
+.devtools-btn.is-quiet:hover:not(:disabled) { color: var(--error-text, var(--text-primary)); background: var(--bg-hover); }
+.devtools-btn.is-danger { border-color: var(--error-text, var(--border)); color: var(--error-text, var(--text-primary)); }
+.devtools-btn:focus-visible, .devtools-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.devtools-link { padding: 0; border: none; background: none; color: var(--text-link, var(--accent)); font-size: 12px; cursor: pointer; }
+.devtools-link:hover { text-decoration: underline; }
+
+/* The download panel opens under the card head */
+.jdk-download { display: grid; gap: 8px; margin: 0 14px 12px; padding: 10px 12px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.jdk-choice-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.jdk-choice-row label { display: grid; gap: 4px; color: var(--text-secondary); font-size: 12px; }
+.jdk-choice-row select { min-height: 28px; padding: 3px 8px; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; }
+.jdk-choice-row .devtools-btn { min-height: 28px; }
+.devtools-download-note { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; color: var(--text-secondary); font-size: 12px; }
+.devtools-download-note .devtools-link { margin-left: 6px; }
+
+/* Rows: badge, name and detail, where it comes from, its action */
+.devtools-list { margin: 0; padding: 0; list-style: none; }
+.devtools-list li {
+  display: grid; grid-template-columns: 34px minmax(0, 1fr) auto 76px; align-items: center; gap: 10px;
+  padding: 8px 14px; border-top: 1px solid var(--border);
+}
+.devtools-list li:hover { background: var(--bg-modifier-hover); }
+.devtools-badge {
+  display: grid; place-items: center; width: 34px; height: 26px; border-radius: var(--radius-sm);
+  background: var(--accent-muted); color: var(--accent); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.devtools-badge.is-icon { background: var(--bg-hover); color: var(--text-secondary); }
+.jdk-item-name { min-width: 0; display: grid; gap: 1px; }
+.jdk-item-name strong { overflow: hidden; color: var(--text-primary); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.jdk-item-name span { overflow: hidden; color: var(--text-muted); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.devtools-tag { padding: 1px 7px; border: 1px solid var(--border); border-radius: var(--radius-full, 999px); color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.devtools-tag.is-managed { border-color: var(--accent-alpha); background: var(--accent-muted); color: var(--accent); }
+.devtools-row-actions { display: inline-flex; justify-content: flex-end; gap: 4px; }
+.devtools-list li > .devtools-btn { justify-self: end; }
+
+.devtools-empty { padding: 10px 14px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 12px; }
+.devtools-card-head + .devtools-empty { border-top: 1px solid var(--border); }
+.devtools-alert { padding: 8px 12px; border: 1px solid var(--error-text, var(--border)); border-radius: var(--radius-md); font-size: 12px; }
+.devtools-progress { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-secondary); font-size: 12px; }
+.devtools-progress progress { flex: 1; min-width: 72px; accent-color: var(--accent); }
 .jdk-error { color: var(--error-text); }
 .jdk-requirement { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--warning); }

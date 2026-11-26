@@ -669,3 +669,36 @@
   .browser-review-toolbar { gap: 4px; padding: 0 6px; }
   .browser-review-toolbar button { padding: 0 5px; }
 }
+
+/* Address suggestions: pages visited or bookmarked before (BrowserAddressBar). The page view hides while
+   this list is shown, since the page is drawn above the app. */
+.browser-review-address { position: relative; }
+.browser-address-suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: -1px;
+  right: -1px;
+  z-index: 20;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+}
+.browser-address-suggestions li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.browser-address-suggestions li svg { flex: none; font-size: 14px; color: var(--text-muted); }
+.browser-address-suggestions li:hover, .browser-address-suggestions li[aria-selected="true"] { background: var(--bg-hover); color: var(--text-primary); }
+.browser-address-suggestion-url { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.browser-address-suggestion-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.browser-address-suggestion-title::before { content: '— '; }

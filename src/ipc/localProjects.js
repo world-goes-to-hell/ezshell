@@ -6,6 +6,7 @@ const { requireLocalDirectory } = require('../localShell.js')
 const { isLocalFilePath } = require('../localKeyPath.js')
 const { readRepoTop, clearReadRepoCache, SAFE } = require('../localFiles/git.js')
 const { createDirectorySearch } = require('../localFiles/search.js')
+const { searchContent, checkContentQuery } = require('../localFiles/contentSearch.js')
 const { inspectDevelopmentTasks, prepareDevelopmentTask } = require('./localDevelopmentTasks.js')
 
 const exec = promisify(execFile)
@@ -389,6 +390,22 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
       return {}
     })
     handleSearch('workspace-directory-search', '폴더를 검색하지 못했습니다.', directorySearch.search)
+    // 프로젝트 검색's content search: a new one ends the one before (its git grep is stopped)
+    let contentSearch = null
+    handle('workspace-content-search', '파일 내용을 검색하지 못했습니다.', async ({ root, query, caseSensitive } = {}) => {
+      checkContentQuery(query)
+      contentSearch?.abort()
+      const controller = new AbortController()
+      contentSearch = controller
+      try {
+        const folder = await roots.resolveRoot(root)
+        const result = await searchContent(folder, query, { caseSensitive: caseSensitive === true, signal: controller.signal })
+        if (isLocked()) throw new Error('잠금 해제 후 이용할 수 있습니다.')
+        return result
+      } finally {
+        if (contentSearch === controller) contentSearch = null
+      }
+    })
     handleSearch('workspace-git-search', 'Git 기록을 검색하지 못했습니다.', searchWorkspaceGit)
   }
   return {

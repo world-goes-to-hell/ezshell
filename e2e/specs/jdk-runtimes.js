@@ -65,9 +65,15 @@ async function run() {
     await click('HotswapAgent 받기')
     const agentRow = `document.querySelector('.jdk-settings [aria-label="HotswapAgent 지우기"]')`
     check('shows installed HotswapAgent version and makes it available to run presets', await until(`
-      (async () => ${agentRow}?.parentElement.textContent.includes('2.0.5') &&
+      (async () => ${agentRow}?.closest('li').textContent.includes('HotswapAgent 2.0.5') &&
         (await window.electronAPI.runtimesList()).hotswapAgent.version === '2.0.5')()
     `))
+    // The tab with a downloaded JBR, HotswapAgent and the PC's JDKs, top and bottom (design review)
+    const scrollTab = to => js(`(() => { const box = document.querySelector('.jdk-settings').closest('.settings-content') ?? document.querySelector('.jdk-settings').parentElement; box.scrollTop = ${to}; })()`)
+    await scrollTab(0)
+    await driver.shot(`devtools-${process.env.DEVTOOLS_SHOT ?? 'now'}-1`)
+    await scrollTab(100000)
+    await driver.shot(`devtools-${process.env.DEVTOOLS_SHOT ?? 'now'}-2`)
     await js(`${agentRow}.click()`)
     if (!await until(`!!(${button('삭제 확인')})`)) throw new Error('HotswapAgent removal confirmation missing')
     await click('삭제 확인')
@@ -86,7 +92,7 @@ async function run() {
     await click('Tomcat 6 폴더 등록')
     const registered = await until(`
       (async () => [...document.querySelectorAll('.apache-tools .jdk-list li')].some(row =>
-        row.textContent.includes('Tomcat 6.0.53') && row.textContent.includes('찾은 것')) &&
+        row.textContent.includes('Tomcat 6.0.53') && row.textContent.includes('이 PC')) &&
         (await window.electronAPI.runtimesList()).tools.some(tool => tool.tool === 'tomcat' && tool.series === '6' && !tool.managed && !tool.home))()
     `)
     if (!registered) {
@@ -120,6 +126,8 @@ async function run() {
       (async () => document.querySelector('.apache-tools .jdk-list').textContent.includes('Node.js 24.14.0') &&
         (await window.electronAPI.runtimesList()).tools.some(tool => tool.tool === 'node' && tool.version === '24.14.0' && !tool.managed && !tool.home))()
     `))
+    await js(`document.querySelector('.apache-tools').scrollIntoView({ block: 'start' })`)
+    await driver.shot(`devtools-${process.env.DEVTOOLS_SHOT ?? 'now'}-3`)
     const toolSelect = `document.querySelector('.apache-tools .jdk-choice-row label:first-child select')`
     for (const [tool, series, name, version] of [['gradle', 'current', 'Gradle', '9.9.2'], ['node', 'lts', 'Node.js', '26.13.1']]) {
       await js(`((select) => { select.value = '${tool}'; select.dispatchEvent(new Event('change', { bubbles: true })) })(${toolSelect})`)

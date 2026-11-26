@@ -10,6 +10,11 @@ export const CLICK_CAP = 150
 const TRAIL_CAP = 44
 const GHOST_CAP = 16
 const PAW_CAP = 30
+/** The trail limit of the effect windows outside the app: they add points between the positions main reads (pointerFill.ts) */
+export const DESKTOP_TRAIL_CAP = 132
+
+/** How far the pointer goes before a moving effect adds its next particles (the trails add every point) */
+export const MOVE_DISTANCE = { sparkle: 12, bubble: 26, petal: 20, ghost: 16, pixel: 8, paw: 46 } as const
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Particle = { k: string; t0: number; life: number; [field: string]: any }
@@ -82,7 +87,7 @@ function put(list: Particle[], particle: Particle, cap: number) {
  * there: nothing new is added (what is already drifting may cross the terminal), and the spotlight
  * hides at once, already on the pointer, so no frames run for it.
  */
-export function addMove(S: EffectState, effect: MoveEffect, x: number, y: number, now: number, level: EffectLevel, ink: string, dark: boolean, visible: boolean, ghost?: () => GhostCursor | null): void {
+export function addMove(S: EffectState, effect: MoveEffect, x: number, y: number, now: number, level: EffectLevel, ink: string, dark: boolean, visible: boolean, ghost?: () => GhostCursor | null, trailCap = TRAIL_CAP): void {
   if (effect === 'spot') {
     const s = S.spot
     s.tx = x
@@ -98,41 +103,41 @@ export function addMove(S: EffectState, effect: MoveEffect, x: number, y: number
   const colors = palette(ink, dark)
   const L = level
   if (effect === 'rainbow' || effect === 'comet') {
-    put(A, { k: 'tr', v: effect, x, y, t0: now, life: 480 }, TRAIL_CAP)
+    put(A, { k: 'tr', v: effect, x, y, t0: now, life: 480 }, trailCap)
     S.lastX = x; S.lastY = y
     return
   }
-  if (effect === 'sparkle' && distance > 12) {
+  if (effect === 'sparkle' && distance > MOVE_DISTANCE.sparkle) {
     S.lastX = x; S.lastY = y
     for (let i = 0; i < L; i++) {
       put(A, { k: 'sp', x: x + (random() - 0.5) * 8, y: y + (random() - 0.5) * 8, vx: (random() - 0.5) * 0.7, vy: 0.15 + random() * 0.5,
         t0: now, life: 520 + random() * 420, size: 3 + random() * (2 + L * 1.6), rot: random() * 6, paint: particlePaint(colors[random() * 4 | 0]) }, MOVE_CAP)
     }
-  } else if (effect === 'bubble' && distance > 26) {
+  } else if (effect === 'bubble' && distance > MOVE_DISTANCE.bubble) {
     S.lastX = x; S.lastY = y
     for (let i = 0, n = L > 2 ? 2 : 1; i < n; i++) {
       put(A, { k: 'bu', x: x + (random() - 0.5) * 10, y, vx: (random() - 0.5) * 0.3, vy: -(0.35 + random() * 0.5), ph: random() * 6,
         r: 4 + random() * (4 + L * 2), t0: now, life: 950 + random() * 500 }, MOVE_CAP)
     }
-  } else if (effect === 'petal' && distance > 20) {
+  } else if (effect === 'petal' && distance > MOVE_DISTANCE.petal) {
     S.lastX = x; S.lastY = y
     for (let i = 0, n = L > 1 ? 2 : 1; i < n; i++) {
       put(A, { k: 'pe', x: x + (random() - 0.5) * 10, y: y + (random() - 0.5) * 6, vx: (random() - 0.5) * 0.5, vy: 0.35 + random() * 0.45,
         ph: random() * 6, rot: random() * 6, vr: (random() - 0.5) * 0.08, size: 3.5 + random() * (2 + L),
         color: random() < 0.5 ? '#ff9fc0' : '#ffd0e0', t0: now, life: 1100 + random() * 600 }, MOVE_CAP)
     }
-  } else if (effect === 'ghost' && distance > 16) {
+  } else if (effect === 'ghost' && distance > MOVE_DISTANCE.ghost) {
     S.lastX = x; S.lastY = y
     const cursor = ghost?.()
     if (cursor) put(A, { k: 'gh', x, y, t0: now, life: 240 + L * 70, cursor }, GHOST_CAP)
-  } else if (effect === 'pixel' && distance > 8) {
+  } else if (effect === 'pixel' && distance > MOVE_DISTANCE.pixel) {
     S.lastX = x; S.lastY = y
     for (let i = 0; i < L; i++) {
       put(A, { k: 'px', x: x + (random() - 0.5) * 8, y: y + (random() - 0.5) * 8, vx: (random() - 0.5) * 0.8, vy: -0.2 + random() * 0.6,
         s: 2 * (1 + (random() * 2 | 0)), paint: particlePaint([ink, dark ? '#fff' : '#222', '#ff3b6b', '#ffd23f'][random() * 4 | 0]),
         t0: now, life: 380 + random() * 260 }, MOVE_CAP)
     }
-  } else if (effect === 'paw' && distance > 46) {
+  } else if (effect === 'paw' && distance > MOVE_DISTANCE.paw) {
     const angle = S.lastX > -90 ? Math.atan2(y - S.lastY, x - S.lastX) : 0
     S.lastX = x; S.lastY = y
     S.side *= -1

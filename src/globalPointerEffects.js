@@ -6,7 +6,9 @@ const LEVELS = [1, 2, 3]
 const SIZES = [32, 48, 64]
 const DISPLAY_EVENTS = ['display-added', 'display-removed', 'display-metrics-changed']
 const MOVE_SAMPLE_MS = 16
-const IDLE_SAMPLE_MS = 80
+// The first move after a rest waits for this at most (it was 80ms). It runs all the time the pointer rests, and one
+// cursor read costs little: 32ms is about two Windows timer ticks (15.6ms), 31 reads a second
+const IDLE_SAMPLE_MS = 32
 const IDLE_AFTER_MS = 250
 const CHANNEL = 'pointer-effects-frame'
 // Windows puts a topmost window that comes later (the taskbar after a click, another app's always-on-top
@@ -253,4 +255,4 @@ function createGlobalPointerEffects({ BrowserWindow, getScreen, preload, loadPag
   }
 }
 
-module.exports = { checkPointerEffects, displayPoint, overFocusedWindow, createGlobalPointerEffects }
+module.exports = { IDLE_SAMPLE_MS, MOVE_SAMPLE_MS, checkPointerEffects, displayPoint, overFocusedWindow, createGlobalPointerEffects }

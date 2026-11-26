@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { ClipboardEvent, FormEvent } from 'react'
 import {
-  RiArrowDownSLine, RiArrowLeftLine, RiArrowRightLine, RiArrowRightUpLine, RiBookmark3Line, RiCloseLine,
-  RiCodeSSlashLine, RiCursorLine, RiGlobalLine, RiImageAddLine, RiKey2Line, RiRefreshLine, RiSendPlane2Line, RiStarFill, RiStarLine, RiToolsLine
+  RiArrowDownSLine, RiArrowLeftLine, RiArrowRightLine, RiBookmark3Line, RiCloseLine,
+  RiCodeSSlashLine, RiCursorLine, RiGlobalLine, RiImageAddLine, RiKey2Line, RiRefreshLine, RiSendPlane2Line, RiToolsLine
 } from 'react-icons/ri'
-import type { BrowserReviewAction, BrowserReviewState, LocalAgentStatus } from '../../types'
+import type { BrowserReviewAction, BrowserReviewProjects, BrowserReviewState, LocalAgentStatus } from '../../types'
+import { chooseProject, chooseRecipient } from '../../lib/browserReviewProjects'
+import { BrowserAddressBar } from './BrowserAddressBar'
 import { uncoveredBox } from '../../lib/browserViewClip'
 import { hasBookmark, useBrowserBookmarkStore } from '../../stores/browserBookmarkStore'
 import { BrowserReviewHistory } from './BrowserReviewHistory'
@@ -20,11 +22,15 @@ const statusLabels: Record<LocalAgentStatus, string> = {
 
 const MAX_ADDRESS_LENGTH = 4096
 
-const appOverlays = '[role="menu"], [role="dialog"], [role="alertdialog"], .context-menu, .tab-context-menu, .command-palette-overlay, .modal-overlay, .batch-overlay'
+const appOverlays = '.browser-address-suggestions, [role="menu"], [role="dialog"], [role="alertdialog"], .context-menu, .tab-context-menu, .command-palette-overlay, .modal-overlay, .batch-overlay'
 /** Panels that slide over the tab from a side: the page narrows to give way instead of hiding */
 const sidePanels = '.sidebar.rail.peek-open .sidebar-panel, .sidebar-popover, .mcp-activity-panel:not(.is-window)'
 
 type BrowserTool = 'element-picker'
+
+// An agent in the project's own folder needs no path beside its name; one in a worktree or subfolder shows it
+const trimFolder = (folder: string) => folder.replace(/[\\/]+$/, '').toLowerCase()
+const sameFolder = (a: string, b: string) => trimFolder(a) === trimFolder(b)
 
 export default function BrowserReview({ tabId, isVisible, onActivate }: {
   tabId: string
@@ -37,8 +43,12 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const importButton = useRef<HTMLButtonElement>(null)
   const loginsButton = useRef<HTMLButtonElement>(null)
   const [state, setState] = useState<BrowserReviewState | null>(null)
-  const [address, setAddress] = useState('')
   const [agentId, setAgentId] = useState('')
+  // The agents by project (main groups a repository's worktrees), and the project the request goes to
+  const [grouped, setGrouped] = useState<BrowserReviewProjects | null>(null)
+  const [projectFolder, setProjectFolder] = useState('')
+  // The same choice for the regrouping effect, which runs on agent changes, not on this choice
+  const chosenProject = useRef('')
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<{ id: string; url: string }[]>([])
   const previewUrls = useRef(new Map<string, string>())
@@ -55,18 +65,24 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const [openTool, setOpenTool] = useState<BrowserTool | null>(null)
   const bookmarks = useBrowserBookmarkStore(store => store.bookmarks)
   const toggleBookmark = useBrowserBookmarkStore(store => store.toggleBookmark)
+  const recordVisit = useBrowserBookmarkStore(store => store.recordVisit)
   const bookmarksId = useId()
   const toolsId = useId()
   const elementPickerId = `${toolsId}-element-picker`
   const agentFieldId = `${elementPickerId}-agent`
+  const projectFieldId = `${elementPickerId}-project`
   const draftFieldId = `${elementPickerId}-draft`
   const url = state?.url ?? ''
   const localFile = state?.localFile
   const localPreview = localFile !== undefined
   const selection = state?.selection
   const agents = state?.agents ?? []
-  const recipient = agents.find(agent => agent.id === agentId)
+  const project = grouped?.projects.find(item => item.folder === projectFolder)
+  // Without the grouping (still loading, or it failed) every agent is offered as before
+  const projectAgents = grouped ? agents.filter(agent => project?.agentIds.includes(agent.id)) : agents
+  const recipient = projectAgents.find(agent => agent.id === agentId)
   const elementPickerOpen = toolsOpen && openTool === 'element-picker'
+  const agentsKey = agents.map(agent => `${agent.id} ${agent.cwd}`).join('|')
   const canPick = Boolean(!localPreview && url && !state?.loading && !state?.error)
   const bookmarked = hasBookmark(bookmarks, url)
 
@@ -79,7 +95,27 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
     return () => { mounted = false; off() }
   }, [api, tabId])
 
-  useEffect(() => { setAddress(localFile ?? url) }, [localFile, url])
+  // Pages shown here are what the address bar suggests later (the history used to hold imported visits only)
+  useEffect(() => {
+    if (localPreview || !url || state?.loading || state?.error) return
+    recordVisit({ url, title: state?.title ?? '' })
+  }, [localPreview, url, state?.loading, state?.error, state?.title, recordVisit])
+
+  // Group again whenever an agent comes, goes or moves; status changes alone keep the grouping
+  useEffect(() => {
+    if (!elementPickerOpen) return
+    let live = true
+    void api.browserReviewProjects(tabId).then(next => {
+      if (!live) return
+      setGrouped(next)
+      if (!next) return
+      const folder = chooseProject(next, chosenProject.current)
+      chosenProject.current = folder
+      setProjectFolder(folder)
+      setAgentId(agent => chooseRecipient(next.projects.find(item => item.folder === folder), agent))
+    }).catch(() => { if (live) setGrouped(null) })
+    return () => { live = false }
+  }, [api, tabId, elementPickerOpen, agentsKey])
   useEffect(() => { if (!isVisible) setLoginsOpen(false) }, [isVisible])
 
   const releaseAttachment = useCallback((id: string) => {
@@ -261,27 +297,9 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
             <RiRefreshLine className={state?.loading ? 'browser-review-spinning' : ''} />
           </button>
         </div>
-        <form className="browser-review-address" onSubmit={event => {
-          event.preventDefault()
-          if (!localPreview) void act({ type: 'navigate', address })
-        }}>
-          <RiGlobalLine aria-hidden="true" />
-          <input type="text" inputMode="url" aria-label={localPreview ? '로컬 파일 경로' : '웹 주소'} placeholder="https://example.com 또는 localhost:5173"
-            readOnly={localPreview} title={localFile}
-            value={address} spellCheck={false} autoFocus onFocus={event => event.target.select()}
-            onChange={event => setAddress(event.target.value)} />
-          {!localPreview && <>
-            <button type="submit" title="주소 열기" aria-label="주소 열기" disabled={!address.trim()}>
-              <RiArrowRightUpLine />
-            </button>
-            <button type="button" className="browser-review-bookmark" aria-label="현재 페이지 즐겨찾기"
-              aria-pressed={bookmarked} title={bookmarked ? '즐겨찾기에서 제거' : '즐겨찾기에 추가'}
-              disabled={!bookmarked && (!canPick || url.length > MAX_ADDRESS_LENGTH)}
-              onClick={() => state && toggleBookmark(state)}>
-              {bookmarked ? <RiStarFill aria-hidden="true" /> : <RiStarLine aria-hidden="true" />}
-            </button>
-          </>}
-        </form>
+        <BrowserAddressBar url={url} localFile={localFile} disabledBookmark={!bookmarked && (!canPick || url.length > MAX_ADDRESS_LENGTH)}
+          bookmarked={bookmarked} onToggleBookmark={() => state && toggleBookmark(state)}
+          onNavigate={address => void act({ type: 'navigate', address })} />
         {!localPreview && <>
           <button ref={bookmarksButton} type="button" className="browser-review-bookmarks-toggle" title="즐겨찾기 및 방문 기록"
             aria-label="즐겨찾기 및 방문 기록" aria-expanded={bookmarksOpen} aria-controls={bookmarksId}
@@ -359,12 +377,29 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
                         : canPick ? '요소 선택 버튼을 눌러 수정할 곳을 고르세요.' : '페이지를 열면 요소를 선택할 수 있습니다.'}
                     </div>
                   )}
+                  {grouped && grouped.projects.length > 0 && <>
+                    <label htmlFor={projectFieldId}>프로젝트</label>
+                    <select id={projectFieldId} className="browser-review-project" value={project?.folder ?? ''} disabled={sending}
+                      title={project?.folder}
+                      onChange={event => {
+                        const folder = event.target.value
+                        chosenProject.current = folder
+                        setProjectFolder(folder)
+                        setAgentId(chooseRecipient(grouped.projects.find(item => item.folder === folder), agentId))
+                        setFeedback(null)
+                      }}>
+                      <option value="" disabled>프로젝트 선택</option>
+                      {grouped.projects.map(item => <option key={item.folder} value={item.folder}>{item.name}</option>)}
+                    </select>
+                  </>}
                   <label htmlFor={agentFieldId}>받는 에이전트</label>
-                  <select id={agentFieldId} value={recipient?.id ?? ''} disabled={!agents.length || sending}
+                  <select id={agentFieldId} className="browser-review-agent" value={recipient?.id ?? ''} disabled={!projectAgents.length || sending}
                     onChange={event => { setAgentId(event.target.value); setFeedback(null) }}>
-                    <option value="">{agents.length ? '에이전트 선택' : '연결된 에이전트 없음'}</option>
-                    {agents.map(agent => (
-                      <option key={agent.id} value={agent.id}>{agent.id} · {statusLabels[agent.status]} · {agent.cwd}</option>
+                    <option value="">{!agents.length ? '연결된 에이전트 없음' : grouped && !project ? '프로젝트를 먼저 선택하세요' : '에이전트 선택'}</option>
+                    {projectAgents.map(agent => (
+                      <option key={agent.id} value={agent.id}>
+                        {agent.id} · {statusLabels[agent.status]}{project && sameFolder(agent.cwd, project.folder) ? '' : ` · ${agent.cwd}`}
+                      </option>
                     ))}
                   </select>
                   {!agents.length && <p className="browser-review-hint">ezShell 터미널에서 Codex 또는 Claude Code를 실행하면 여기에 표시됩니다.</p>}

@@ -204,10 +204,12 @@ function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLock
 
   ipcMain.handle('local-file-open', async (event, request) => {
     try {
-      const { root, path: relative, mode, label, compareHead } = request || {}
+      const { root, path: relative, mode, label, compareHead, line } = request || {}
       const found = await resolveWorkspaceFile(event, root, relative)
-      const registered = docs.registerLocal({ root: found.root, path: found.path, label, mode, compareHead: compareHead === true })
-      openWindowFor(registered, compareHead === true ? { compareHead: true } : undefined)
+      // 프로젝트 검색's content results open at their line (docs/plan/2026-11-26-project-search.md)
+      const revealLine = Number.isSafeInteger(line) && line > 0 && compareHead !== true ? line : null
+      const registered = docs.registerLocal({ root: found.root, path: found.path, label, mode, compareHead: compareHead === true, ...(revealLine ? { revealLine } : {}) })
+      openWindowFor(registered, compareHead === true ? { compareHead: true } : revealLine ? { line: revealLine } : undefined)
       return { success: true }
     } catch (err) {
       return { success: false, error: userMessage(err) }

@@ -18,6 +18,7 @@ import { AGENT_IDLE_KEY, parseAgentIdlePrefs } from './agentIdlePrefs'
 import { AGENT_HOOKS_KEY, parseAgentHooksPrefs } from './agentHooksPrefs'
 import { AGENT_MESSAGE_VIEW_KEY, parseAgentMessageView } from './agentMessageMap'
 import { POINTER_PREFS_KEY, parsePointerPrefs } from './pointerPrefs'
+import { AGENT_WORK_STYLE_KEY, parseAgentWorkStyle } from './agentWorkStyle'
 
 /**
  * 화면 설정 내보내기·가져오기 (설정 > 백업 > 화면 설정).
@@ -120,6 +121,7 @@ export const SHORTCUTS_KEY = 'customShortcuts'
 export const UI_SETTING_ENTRIES: readonly UiSettingEntry[] = [
   { key: THEME_STORAGE_KEY, group: 'theme', label: '테마, 사용자 지정 테마, 표면 스타일, 창 투명도', normalize: normalizeThemeStore },
   { key: POINTER_PREFS_KEY, group: 'theme', label: '마우스 포인터 모양·크기·효과', normalize: viaParser(parsePointerPrefs) },
+  { key: AGENT_WORK_STYLE_KEY, group: 'theme', label: '에이전트 작업 중 표시', normalize: raw => parseAgentWorkStyle(raw) },
   {
     key: SHORTCUTS_KEY,
     group: 'shortcuts',

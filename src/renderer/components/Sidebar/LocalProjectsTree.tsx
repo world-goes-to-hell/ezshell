@@ -152,14 +152,17 @@ export function LocalProjectsTree({
     // The card keeps no place for a project without presets: adding one is also offered here
     const add: TerminalMenuItem[] = typeof window.electronAPI.runPresetsList === 'function'
       ? [{ label: '실행 구성 추가…', icon: RiAddLine, onSelect: () => requestAddRunPreset(worktree.path) }] : []
-    if (!tasks.length) return [{ icon: RiPlayLine, disabled: true, onSelect: () => {},
-      label: !result ? '기동 명령 찾는 중…' : result.success ? '찾은 기동 명령이 없습니다' : result.error }, ...add, ...folderItem(worktree.path)]
+    // The items that are there from the start come first: the start commands arrive a moment later, and
+    // above them they pushed the other items down under the pointer (2026-11-26 user report)
+    const fixed = [...add, ...folderItem(worktree.path)]
+    if (!tasks.length) return [...fixed, { icon: RiPlayLine, disabled: true, onSelect: () => {},
+      label: !result ? '기동 명령 찾는 중…' : result.success ? '찾은 기동 명령이 없습니다' : result.error }]
     const preferred = (worktree.branch?.split('/').pop() || folderLabel(worktree.path)).toLowerCase()
     const match = (task: LocalDevelopmentTask) => Number(task.relative.toLowerCase() === preferred)
-    return [...[...tasks].sort((a, b) => match(b) - match(a)).map(task => ({
+    return [...fixed, ...[...tasks].sort((a, b) => match(b) - match(a)).map(task => ({
       label: `${task.name} 기동${task.relative === '.' ? '' : ` · ${task.relative}`}`,
       icon: RiPlayLine, onSelect: () => void runTask(worktree, task)
-    })), ...add, ...folderItem(worktree.path)]
+    }))]
   }
   // Sessions and tabs are dragged as text/plain (`session:<id>` / the tab id)
   const dropProps = (project: ProjectNode, key: string) => onDropOnProject ? {

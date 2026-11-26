@@ -61,6 +61,7 @@ import { agentKindsByShell, agentsOfLocalTab, openLocalWithAgents } from './lib/
 import { useAgentUsageStore } from './stores/agentUsageStore'
 import { UpdateNotification } from './components/Update/UpdateNotification'
 import { CommandPalette } from './components/CommandPalette'
+import { ProjectSearch, ProjectSearchKeys } from './components/ProjectSearch/ProjectSearch'
 import { TabContextMenu } from './components/Terminal/TabContextMenu'
 import { DevelopmentTabDots } from './components/Terminal/DevelopmentRunStatus'
 import { changeDevelopmentRun, developmentRunsForTab, useDevelopmentRunEvents, useDevelopmentRuns } from './lib/developmentRun'
@@ -1990,6 +1991,9 @@ function App() {
         onOpenChange={setSettingsModalOpen}
       />
 
+      {/* Shift twice, Ctrl+Shift+F: files of the local tab's project (docs/plan/2026-11-26-project-search.md) */}
+      <ProjectSearchKeys />
+      <ProjectSearch />
       <CommandPalette
         onNewConnection={handleNewConnection}
         onQuickConnect={handleQuickConnect}

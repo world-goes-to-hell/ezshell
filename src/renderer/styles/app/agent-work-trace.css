@@ -4,50 +4,119 @@
   initial-value: 0turn;
 }
 
+/*
+ * A working agent's sign on its terminal pane and its sidebar rows, one of four looks chosen in
+ * 설정 > 테마 > 창 효과 (lib/agentWorkStyle.ts sets data-agent-work-style on the root). The look is the
+ * inherited --agent-work-style read by style queries, so an element (the settings' previews) can show
+ * another look than the app's. Without one (the phone page, an old browser): 안쪽 번짐.
+ * Keep the moving looks to opacity: 도는 빛 animates a gradient angle and repaints every frame on every
+ * working element; with a few agents that was a tenth of the CPU (2026-11-26). 안쪽 번짐 and 테두리 깜빡임
+ * are drawn once and only fade (the GPU fades them, no repaint).
+ */
+:root { --agent-work-style: glow; }
+:root[data-agent-work-style='pulse'] { --agent-work-style: pulse; }
+:root[data-agent-work-style='trace'] { --agent-work-style: trace; }
+:root[data-agent-work-style='static'] { --agent-work-style: static; }
+
 :where([data-agent-work]) {
   position: relative;
 }
 
-/* One border trace shared by the terminal pane and the local work list. */
 [data-agent-work]::after {
   content: '';
   position: absolute;
   inset: var(--agent-trace-inset, 0);
   z-index: var(--agent-trace-z-index, 1);
-  padding: var(--agent-trace-width, 2px);
   border-radius: inherit;
   pointer-events: none;
   color: var(--agent-trace-color, color-mix(in srgb, var(--motion-accent, var(--accent)) 55%, var(--border)));
-  background: var(--agent-trace-gradient, conic-gradient(
-    from var(--local-agent-trace-angle),
-    transparent,
-    color-mix(in srgb, currentColor 40%, transparent) 18deg,
-    currentColor 27deg,
-    transparent 32deg
-  ));
-  mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
-  mask-composite: exclude;
   opacity: 0;
   transition: opacity 180ms ease-out, color 180ms ease-out;
-  animation: local-agent-trace 3.6s linear infinite paused;
+  /* 안쪽 번짐 (the default): a soft light just inside the edge and a thin line on it */
+  box-shadow:
+    inset 0 0 var(--agent-glow-size, calc(var(--agent-trace-width, 2px) * 7)) calc(var(--agent-trace-width, 2px) * 0.5) color-mix(in srgb, currentColor 70%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, currentColor 80%, transparent);
 }
 
 [data-agent-work='working']::after {
-  opacity: 1;
-  animation-play-state: running;
+  animation: agent-work-breathe 2.2s ease-in-out infinite alternate;
+}
+
+@keyframes agent-work-breathe {
+  from { opacity: 0.25; }
+  to { opacity: 1; }
+}
+
+/* 테두리 깜빡임: the border grows brighter and dimmer */
+@container style(--agent-work-style: pulse) {
+  [data-agent-work]::after {
+    box-shadow: none;
+    border: var(--agent-trace-width, 2px) solid currentColor;
+  }
+
+  [data-agent-work='working']::after {
+    animation: agent-work-pulse 1.8s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes agent-work-pulse {
+  from { opacity: 0.3; }
+  to { opacity: 1; }
+}
+
+/* 도는 빛: a light running around the border (repainted every frame: the costly one) */
+@container style(--agent-work-style: trace) {
+  [data-agent-work]::after {
+    box-shadow: none;
+    padding: var(--agent-trace-width, 2px);
+    background: var(--agent-trace-gradient, conic-gradient(
+      from var(--local-agent-trace-angle),
+      transparent,
+      color-mix(in srgb, currentColor 40%, transparent) 18deg,
+      currentColor 27deg,
+      transparent 32deg
+    ));
+    mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
+    mask-composite: exclude;
+    animation: local-agent-trace 3.6s linear infinite paused;
+  }
+
+  [data-agent-work='working']::after {
+    opacity: 1;
+    animation-play-state: running;
+  }
 }
 
 @keyframes local-agent-trace {
   to { --local-agent-trace-angle: 1turn; }
 }
 
-@media (prefers-reduced-motion: reduce) {
+/* 움직이지 않음: the border only */
+@container style(--agent-work-style: static) {
   [data-agent-work]::after {
+    box-shadow: none;
+    border: var(--agent-trace-width, 2px) solid currentColor;
+  }
+
+  [data-agent-work='working']::after {
+    opacity: 1;
+    animation: none;
+  }
+}
+
+/* Whatever the choice, reduced motion shows a still border (after the queries, with more weight) */
+@media (prefers-reduced-motion: reduce) {
+  :root [data-agent-work][data-agent-work]::after {
     padding: 0;
     border: var(--agent-trace-reduced-width, 1px) solid currentColor;
     background: none;
+    box-shadow: none;
     mask: none;
     animation: none;
     transition: none;
+  }
+
+  :root [data-agent-work='working'][data-agent-work]::after {
+    opacity: 1;
   }
 }

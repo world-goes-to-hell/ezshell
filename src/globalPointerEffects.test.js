@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { checkPointerEffects, createGlobalPointerEffects, displayPoint, overFocusedWindow } from './globalPointerEffects.js'
+import {
+  checkPointerEffects, createGlobalPointerEffects, displayPoint, IDLE_SAMPLE_MS, MOVE_SAMPLE_MS, overFocusedWindow
+} from './globalPointerEffects.js'
 import { CURSOR_SET_IDS, CURSOR_SIZES } from './renderer/lib/pointerCursors'
 import { CLICK_EFFECTS, MOVE_EFFECTS } from './renderer/lib/pointerPrefs'
 
@@ -117,7 +119,7 @@ describe('desktop effects windows', () => {
     expect(packets(wins[0])).toHaveLength(2)
     screen.getCursorScreenPoint.mockClear()
     vi.advanceTimersByTime(320)
-    expect(screen.getCursorScreenPoint.mock.calls.length).toBeLessThanOrEqual(5)
+    expect(screen.getCursorScreenPoint.mock.calls.length).toBeLessThanOrEqual(Math.ceil(320 / IDLE_SAMPLE_MS))
 
     desktop.point = { x: 30, y: 40 }
     effects.onPress()
@@ -164,6 +166,30 @@ describe('desktop effects windows', () => {
     expect(wins[2].showInactive).toHaveBeenCalledOnce()
     effects.configure({ ...config, enabled: false })
     expect(wins.every(win => win.isDestroyed())).toBe(true)
+  })
+
+  it('reads less often at rest, and still notices the first move after a rest within one rest interval', () => {
+    expect(IDLE_SAMPLE_MS).toBeGreaterThan(MOVE_SAMPLE_MS)
+    expect(IDLE_SAMPLE_MS).toBeLessThanOrEqual(40)
+    const { effects, desktop, wins, screen } = setup()
+    effects.configure(config)
+    for (const win of wins) win.webContents.emit('did-finish-load')
+    effects.onNotificationState(5)
+    vi.advanceTimersByTime(1000)
+    screen.getCursorScreenPoint.mockClear()
+    vi.advanceTimersByTime(IDLE_SAMPLE_MS * 10)
+    expect(screen.getCursorScreenPoint.mock.calls.length).toBeGreaterThanOrEqual(9)
+    expect(screen.getCursorScreenPoint.mock.calls.length).toBeLessThanOrEqual(10)
+
+    const sent = packets(wins[0]).length
+    desktop.point = { x: -450, y: 70 }
+    vi.advanceTimersByTime(IDLE_SAMPLE_MS)
+    expect(packets(wins[0]).slice(sent)).toEqual([{ type: 'move', x: 350, y: 100 }])
+    // Moving again: back to the short interval
+    screen.getCursorScreenPoint.mockClear()
+    vi.advanceTimersByTime(MOVE_SAMPLE_MS * 10)
+    expect(screen.getCursorScreenPoint.mock.calls.length).toBeGreaterThanOrEqual(9)
+    effects.stop()
   })
 
   it('samples positions only on press while a click-only effect is active', () => {

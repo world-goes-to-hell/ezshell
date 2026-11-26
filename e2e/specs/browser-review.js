@@ -64,7 +64,8 @@ async function run() {
     const tools = `${root}.querySelector('.browser-review-tools-toggle')`
     const tool = `${root}.querySelector('.browser-review-tool-toggle')`
     const compose = `${root}.querySelector('.browser-review-compose')`
-    const recipient = `${compose}.querySelector('select')`
+    const recipient = `${compose}.querySelector('.browser-review-agent')`
+    const projectChoice = `${compose}.querySelector('.browser-review-project')`
     const editor = `${compose}.querySelector('textarea')`
     const sendRequest = `${compose}.querySelector('.browser-review-send')`
     const previews = `[...${compose}.querySelectorAll('.browser-review-attachments img')].map(img => img.naturalWidth).join(',')`
@@ -269,6 +270,11 @@ async function run() {
     fs.writeFileSync(path.join(profile, 'codex-1-program-status'), 'state=working:app=codex')
     check('a working agent remains selectable', await browser.until(`[...${recipient}.options].some(
       option => option.value === 'codex-1' && option.textContent.includes('작업 중'))`))
+    // 2026-11-26 user request: the project first, then its agents (names like backend alone were ambiguous)
+    check('the only project is chosen first, named with its parent folder, and its only agent with it', await browser.until(`
+      ${projectChoice}?.selectedOptions[0]?.textContent === ${JSON.stringify(`${path.basename(path.dirname(profile))} / ${path.basename(profile)}`)}
+      && ${recipient}.value === 'codex-1'
+    `), await browser.js(`(${projectChoice}?.selectedOptions[0]?.textContent ?? 'no project select') + ' / ' + ${recipient}.value`))
     await browser.js(`(() => {
       const select = ${recipient}
       select.value = 'codex-1'
@@ -445,6 +451,9 @@ async function run() {
     const loginPage = await navigateLogin(loginTab)
     try {
       await loginPage.js("document.cookie = 'temporary_fixture=1; path=/; max-age=86400'")
+      // 2026-11-26 user report: a login was forgotten after a restart. Logins stay unless turned off
+      check('logins stay by default', await main.js(`window.electronAPI.browserReviewLogins(${JSON.stringify(loginTab)}, {type: 'list'})
+        .then(result => result.rememberSession === true && result.sessionPersistent === true)`))
       const settings = `${loginRoot}.querySelector('.browser-review-logins')`
       await main.js(`${settings}.click()`)
       const modalButton = label => `[...${loginModal}.querySelectorAll('button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})`
@@ -526,12 +535,13 @@ async function run() {
       await main.js(`${loginModal}.querySelector('input[type=checkbox]').click()`)
       check('login retention applies to new tabs', await main.until(`${loginModal}.textContent.includes('새 브라우저 탭부터')`))
       await main.js(`${modalButton('닫기')}.click()`)
+      // The click turned retention off: the new tab browses apart from the kept logins
       const persistent = await openBrowserTab()
       const persistentPage = await navigateLogin(persistent, '?foreign=1')
       try {
-        check('retained sessions are separate from browsing with login retention turned off',
+        check('browsing with login retention turned off is separate from the kept logins',
           await persistentPage.js("!document.cookie.includes('temporary_fixture')") &&
-          await main.js(`window.electronAPI.browserReviewLogins(${JSON.stringify(persistent)}, {type: 'list'}).then(result => result.sessionPersistent === true)`))
+          await main.js(`window.electronAPI.browserReviewLogins(${JSON.stringify(persistent)}, {type: 'list'}).then(result => result.sessionPersistent === false)`))
         check('the browser refuses to fill a form that submits to another origin', await main.js(`(async () => {
           const tab = ${JSON.stringify(persistent)}
           const { accounts } = await window.electronAPI.browserReviewLogins(tab, {type: 'list'})
@@ -557,6 +567,46 @@ async function run() {
       })()`, 8000))
       check('the page it came from stays as it was', await main.js(`window.electronAPI.browserReviewState(${JSON.stringify(linkTab)}).then(state => state.url === ${JSON.stringify(origin + '/?blank=1')})`))
     } finally { linkPage.close() }
+
+    // A page opened from a project (a run preset's 열기, a server's chip) offers that project first
+    await main.js(`window.electronAPI.browserReviewOpenLink(${JSON.stringify(origin + '/?project=1')}, 'internal', { folder: ${JSON.stringify(profile)} })`)
+    const preferredOf = `(async () => {
+      const tab = document.querySelector('.terminal-tab.active[data-tab-id^="browser:"]')?.dataset.tabId
+      const state = tab && await window.electronAPI.browserReviewState(tab)
+      if (state?.url !== ${JSON.stringify(origin + '/?project=1')}) return ''
+      return (await window.electronAPI.browserReviewProjects(tab))?.preferred ?? ''
+    })()`
+    await main.until(preferredOf, 8000)
+    const preferred = await main.js(preferredOf)
+    check('a tab opened from a project prefers that project in the element request',
+      typeof preferred === 'string' && path.relative(preferred, profile) === '', String(preferred))
+
+    // 2026-11-26 user request: the address bar suggests pages visited before and completes the address inline
+    const suggestTab = await openBrowserTab()
+    const suggestRoot = `document.querySelector('[data-browser-tab-id="${suggestTab}"]')`
+    const addressInput = `${suggestRoot}.querySelector('.browser-review-address input')`
+    const host = origin.replace(/^http:\/\//, '')
+    await main.click(...await main.center(addressInput))
+    await main.js(`${addressInput}.select()`)
+    await main.type(host + '/op')
+    check('typing completes a visited address inline, the added part selected, with the list below', await main.until(`(() => {
+      const input = ${addressInput}
+      return input.value === ${JSON.stringify(host + '/opened')} && input.selectionStart === ${host.length + 3}
+        && input.selectionEnd === input.value.length && !!${suggestRoot}.querySelector('.browser-address-suggestions [role=option]')
+    })()`), await main.js(`${addressInput}.value`))
+    await main.enter()
+    check('Enter opens the completed page', await main.until(`window.electronAPI.browserReviewState(${JSON.stringify(suggestTab)})
+      .then(state => state.url === ${JSON.stringify(origin + '/opened')})`, 8000)
+      && await main.until(`!${suggestRoot}.querySelector('.browser-address-suggestions')`))
+    await main.click(...await main.center(addressInput))
+    await main.js(`${addressInput}.select()`)
+    await main.type('project')
+    const projectRow = `[...${suggestRoot}.querySelectorAll('.browser-address-suggestions [role=option]')].find(row => row.textContent.includes('?project=1'))`
+    check('a part of a visited address finds it in the list without completing it inline',
+      await main.until(`!!${projectRow} && ${addressInput}.value === 'project'`))
+    await main.click(...await main.center(projectRow))
+    check('clicking a suggestion opens it', await main.until(`window.electronAPI.browserReviewState(${JSON.stringify(suggestTab)})
+      .then(state => state.url === ${JSON.stringify(origin + '/?project=1')})`, 8000))
   } finally {
     main.close()
     page?.close()

@@ -65,3 +65,24 @@ describe('imported bookmark folders', () => {
     expect(bookmarks.getState().bookmarks).toEqual([kept, { ...bar, children: [page] }])
   })
 })
+
+describe('pages visited in the browser tab', () => {
+  it('records each page once, newest first, and takes the title when it arrives', () => {
+    const store = bookmarks.getState()
+    store.recordVisit({ url: 'https://example.test/a', title: '' })
+    store.recordVisit({ url: 'https://example.test/b', title: 'B' })
+    store.recordVisit({ url: 'https://example.test/a', title: '' })
+    store.recordVisit({ url: 'https://example.test/a', title: '첫 페이지' })
+    expect(bookmarks.getState().history.map(page => [page.url, page.title])).toEqual([
+      ['https://example.test/a', '첫 페이지'], ['https://example.test/b', 'B']
+    ])
+  })
+
+  it('does not record local files, other schemes or overlong addresses', () => {
+    const store = bookmarks.getState()
+    for (const url of ['file:///C:/a.html', 'ezshell-workspace://x/a.html', 'https://example.test/' + 'a'.repeat(5000)]) {
+      store.recordVisit({ url, title: 'x' })
+    }
+    expect(bookmarks.getState().history).toEqual([])
+  })
+})

@@ -454,7 +454,7 @@ app.whenReady().then(() => {
   // replaces it with quit / edit / window only. Other platforms have no menu (frameless windows).
   if (process.platform === 'darwin') Menu.setApplicationMenu(Menu.buildFromTemplate(macMenuTemplate(app.name)));
   createWindow();
-  void startSessionHost().catch(error => console.error('[sessionHost] start failed:', error.message));
+  sessionHostStarting = startSessionHost().catch(error => console.error('[sessionHost] start failed:', error.message));
   startMcp();
   if (fs.existsSync(agentBridgeFile)) {
     void agentMessages.enableExternalBridge().catch(error => console.error('Failed to start the agent message bridge:', error.code || error.name));
@@ -704,10 +704,24 @@ const sessionHost = require('./src/sessionHost/client.js').createSessionHostClie
   runtime: () => sessionRuntime.current()
 });
 /** At start: the host (taking back one an earlier app kept), then the shells it kept */
+// The window asks for the shells to take back (and the kept layout) once it is unlocked; with an automatic
+// unlock that can come before the session host was found, and the window then offered the kept tabs again
+// as new ones (2026-11-26 user report: every session twice, chats back as terminals). It waits for the start.
+let sessionHostStarting = null;
+const SESSION_HOST_WAIT_MS = 15000;
+function sessionHostStarted() {
+  if (!sessionHostStarting) return Promise.resolve();
+  let timer;
+  return Promise.race([sessionHostStarting, new Promise(resolve => { timer = setTimeout(resolve, SESSION_HOST_WAIT_MS); })])
+    .finally(() => clearTimeout(timer));
+}
 async function startSessionHost() {
   // Screen-test apps that replace node-pty's spawn in this process (e2e/support/*App.js)
   if (process.env.EZSHELL_TEST_NO_SESSION_HOST === '1') return;
   await sessionRuntime.prepare();
+  // Screen tests only: the host found late (a slow copy, a busy PC) while the window is already unlocked
+  const testDelay = app.isPackaged ? 0 : Number(process.env.EZSHELL_TEST_SESSION_HOST_DELAY_MS) || 0;
+  if (testDelay > 0) await new Promise(resolve => setTimeout(resolve, Math.min(testDelay, 30000)));
   if (!(await sessionHost.start())) return;
   const kept = sessionHost.takeAdoptable();
   if (kept.length > 0) getLocalShells().adopt(kept);
@@ -770,6 +784,9 @@ const browserReview = require('./src/ipc/browserReview.js').registerBrowserRevie
   listAgents: () => agentMessages.snapshot().agents
     .filter(agent => agent.active && (agent.mcpConnected || agent.sleeping) && localShells?.isRunning(agent.shellId))
     .map(({ id, kind, cwd, status }) => ({ id, kind, cwd, status })),
+  // The element request offers first the agents of the project a tab was opened from (src/agentProjects.js)
+  repoFolders: localGit.repoFolders,
+  shellFolder: shellId => localShells?.list().find(entry => entry.id === shellId && !entry.exited)?.cwd ?? null,
   sendMessage: agentMessages.sendAsUser,
   clipboard: localTerminalClipboard,
   selectImages: () => selectAgentImages('수정 요청에 이미지 첨부'),
@@ -865,13 +882,21 @@ ipcMain.handle('local-shell-decline-codex-hooks', (event, id) =>
   fromMainWindow(event) && !isAppLocked && Boolean(localShells?.declineCodexHooks(id))
 );
 // A reloaded window has no tabs but the shells kept running: it takes them back (lib/localShellAdopt.ts)
-ipcMain.handle('local-shell-list', (event) => (fromMainWindow(event) && !isAppLocked && localShells ? localShells.list() : []));
+ipcMain.handle('local-shell-list', async (event) => {
+  if (!fromMainWindow(event) || isAppLocked) return [];
+  await sessionHostStarted();
+  return fromMainWindow(event) && !isAppLocked && localShells ? localShells.list() : [];
+});
 // Before the restart for an update: which shell sits in which pane, kept by the session host for the
 // next window (the window checks it again when it reads it back, lib/localReloadLayout.ts)
 ipcMain.handle('local-shell-keep-layout', (event, layout) => {
   if (fromMainWindow(event) && !isAppLocked && Array.isArray(layout)) sessionHost.setLayout(layout);
 });
-ipcMain.handle('local-shell-kept-layout', (event) => (fromMainWindow(event) && !isAppLocked ? sessionHost.takeKeptLayout() : null));
+ipcMain.handle('local-shell-kept-layout', async (event) => {
+  if (!fromMainWindow(event) || isAppLocked) return null;
+  await sessionHostStarted();
+  return fromMainWindow(event) && !isAppLocked ? sessionHost.takeKeptLayout() : null;
+});
 ipcMain.handle('local-shell-current-directory', (event, id) =>
   fromMainWindow(event) && !isAppLocked ? localShells?.currentDirectory(id) ?? null : null
 );

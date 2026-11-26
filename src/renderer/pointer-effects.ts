@@ -1,6 +1,7 @@
 import {
-  addClick, addMove, createEffectState, drawFrame, effectiveEffects, needsFrame, type EffectConfig
+  addClick, createEffectState, drawFrame, effectiveEffects, needsFrame, type EffectConfig
 } from './lib/pointerEffects'
+import { addDesktopMove, createFillTrack, resetFill } from './lib/pointerFill'
 import type { DesktopPointerConfig, DesktopPointerFrame } from './lib/pointerDesktop'
 import { ghostCursor } from './lib/pointerImages'
 
@@ -13,6 +14,8 @@ declare global {
 const canvas = document.querySelector('canvas')!
 const context = canvas.getContext('2d')!
 let state = createEffectState()
+// The positions before the newest, to fill the points between them (main reads one about every 16ms)
+const track = createFillTrack()
 let prefs: DesktopPointerConfig | undefined
 let config: EffectConfig | undefined
 let frame = 0
@@ -26,6 +29,7 @@ function release() {
 
 function clear() {
   state = createEffectState()
+  resetFill(track)
   release()
 }
 
@@ -72,12 +76,13 @@ window.pointerEffectsOverlay?.onFrame(packet => {
       state.spot.a = 0
       state.spot.visible = false
       state.lastX = state.lastY = -99
+      resetFill(track)
       if (!state.move.length && !state.click.length) release()
       break
     case 'move':
       if (config && prefs) {
         const { set, size } = prefs
-        addMove(state, config.move, packet.x, packet.y, performance.now(), config.moveLevel, config.ink, config.dark, true,
+        addDesktopMove(state, track, config.move, packet.x, packet.y, performance.now(), config.moveLevel, config.ink, config.dark,
           config.move === 'ghost' ? () => ghostCursor(set, 'default', set === 'system' ? 32 : size) : undefined)
         wake()
       }

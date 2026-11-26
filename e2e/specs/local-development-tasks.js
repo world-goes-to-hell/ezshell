@@ -77,13 +77,23 @@ function fixture(backendPort, frontendPort) {
   const normalize = value => JSON.stringify(value.toLowerCase().replace(/\\/g, '/'))
   const row = checkout => `[...document.querySelectorAll('.local-worktree')].find(row =>
     row.dataset.worktreePath.toLowerCase().replace(/\\\\/g, '/') === ${normalize(checkout)})?.querySelector('.local-worktree-open')`
-  const firstTask = `document.querySelector('.terminal-menu [role="menuitem"]')`
+  const menuLabels = `[...document.querySelectorAll('.terminal-menu [role="menuitem"]')].map(item => item.textContent.trim())`
+  // The start commands come after the items that are there from the start (they arrive a moment later)
+  const firstTask = `[...document.querySelectorAll('.terminal-menu [role="menuitem"]')].find(item => / 기동(?: · |$)/.test(item.textContent.trim()))`
+  let checkedMenuOrder = false
   const confirm = `document.querySelector('.confirm-dialog .btn-primary')`
   const message = `document.querySelector('.confirm-dialog-message')?.textContent`
   const launch = async (checkout, name) => {
     await js(`${row(checkout)}.scrollIntoView({ block: 'nearest' })`)
     await click(...await center(row(checkout)), 'right')
     if (!await until(`${firstTask}?.textContent.trim() === ${JSON.stringify(name)}`)) throw new Error(`Missing preferred task ${name}`)
+    if (!checkedMenuOrder) {
+      checkedMenuOrder = true
+      const labels = await js(menuLabels)
+      const firstStart = labels.findIndex(label => / 기동(?: · |$)/.test(label))
+      check('found start commands join below the items the menu opened with, so those do not move', firstStart > 0
+        && labels.slice(0, firstStart).includes('실행 구성 추가…'), labels.join(' | '))
+    }
     await driver.pick(name)
   }
   const activeTab = `document.querySelector('.terminal-tab.active')`
@@ -427,6 +437,28 @@ function fixture(backendPort, frontendPort) {
       ${inTerminal('VITE v5.4.0 ready')}`, 15000))
     check('once ready the row shows its port', await until(`${presetRow}?.dataset.status === 'running' &&
       /:\\d+/.test(${presetRow}.querySelector('.run-preset-pill[data-kind="port"]')?.textContent ?? '')`, 10000))
+    // 2026-11-26 user report: with its port and "오류 20", the row pushed 중지 and 더 보기 out of the sidebar.
+    // An error count is put beside the port for the measure: every button stays inside the row, the name gives way.
+    const fits = await js(`(() => {
+      const row = ${presetRow}
+      const state = row.querySelector('.run-preset-state')
+      // As the row draws an error count: a warning sign and the number
+      const extra = state.querySelector('.run-preset-pill').cloneNode()
+      extra.classList.add('is-count')
+      extra.innerHTML = '<svg width="10" height="10" aria-hidden="true"></svg>20'
+      extra.dataset.kind = 'err'
+      state.append(extra)
+      const box = row.getBoundingClientRect()
+      const buttons = [...row.querySelectorAll('.run-preset-main > .run-preset-btn, .run-preset-main > button')]
+      const out = buttons.filter(button => { const b = button.getBoundingClientRect(); return b.width < 16 || b.right > box.right - 1 || b.left < box.left })
+      const name = row.querySelector('.run-preset-name')
+      const port = row.querySelector('.run-preset-pill[data-kind="port"]')
+      const result = { buttons: buttons.length, portOpens: port?.tagName === 'BUTTON' && /브라우저로 열기/.test(port.getAttribute('aria-label') ?? ''), out: out.map(b => b.getAttribute('aria-label')), nameWidth: Math.round(name.getBoundingClientRect().width), row: Math.round(box.width),
+        parts: [...row.querySelector('.run-preset-main').children].map(el => el.className.split(' ')[0].replace('run-preset-', '') + ':' + Math.round(el.getBoundingClientRect().width)).join(' ') }
+      extra.remove()
+      return result
+    })()`)
+    check('a running row with its port and an error count keeps all its buttons inside, its port opens the browser', fits.buttons >= 3 && fits.portOpens && fits.out.length === 0 && fits.nameWidth >= 20, JSON.stringify(fits))
     // The row tells the preset server's state (the tab of a local shell is its id)
     const presetShell = await js(`${activeTab}?.dataset.tabId`)
     // The tab keeps its status dot (seen with the sidebar folded); only the text chip is left to the card
