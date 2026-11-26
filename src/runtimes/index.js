@@ -1,8 +1,9 @@
 const fs = require('node:fs')
 const path = require('node:path')
-const { randomUUID } = require('node:crypto')
+const { createHash, randomUUID } = require('node:crypto')
 const { findBuild, featureOf, validSelection, VERSION } = require('./providers.js')
-const { downloadArchive } = require('./download.js')
+const { downloadArchive, SHA256 } = require('./download.js')
+const { findHotswapAgent, AGENT_VERSION, MAX_AGENT_BYTES } = require('./enhancedProviders.js')
 const { extractArchive } = require('./archive.js')
 const { findLocalJdks, unpackedHome, readRelease } = require('./discovery.js')
 
@@ -11,6 +12,8 @@ const LOOKUP_TTL_MS = 5 * 60 * 1000
 const LOCAL_ID = /^local-[0-9a-f]{24}$/
 const stagingPaths = new Set()
 const TEMPORARY_DIR = /^\.(?:install|remove)-/
+const AGENT = 'hotswap-agent'
+const AGENT_JAR = 'hotswap-agent.jar'
 const buildId = ({ vendor, version, arch }) => `${vendor}-${version}-${arch}`
 const publicJdk = ({ home: _home, relativeHome: _relativeHome, ...entry }) => entry
 const samePath = (left, right) => path.relative(left, right) === ''
@@ -78,9 +81,9 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     } finally { fs.rmSync(temporary, { force: true }) }
   }
 
-  function managedBase(create = false) {
+  function managedBase(create = false, kind = 'jdk') {
     let directory = fs.realpathSync(userData)
-    for (const segment of ['runtimes', 'jdk']) {
+    for (const segment of ['runtimes', kind]) {
       directory = path.join(directory, segment)
       if (create) {
         try { fs.mkdirSync(directory) } catch (error) { if (error.code !== 'EEXIST') throw error }
@@ -90,11 +93,11 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     return directory
   }
 
-  function cleanStaging() {
+  function cleanStaging(kind) {
     let root
     let entries
     try {
-      root = managedBase()
+      root = managedBase(false, kind)
       entries = fs.readdirSync(root, { withFileTypes: true })
     } catch { return }
     for (const entry of entries) {
@@ -108,7 +111,8 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
   function cleanAtFirstUse() {
     if (cleanedAtFirstUse) return
     cleanedAtFirstUse = true
-    cleanStaging()
+    cleanStaging('jdk')
+    cleanStaging(AGENT)
   }
 
   function managedHome(entry) {
@@ -139,6 +143,57 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     return entry ? managedHome(entry) : null
   }
 
+  function agentRecord(root, version) {
+    try {
+      const directory = path.join(root, version)
+      const recordFile = path.join(directory, 'release.json')
+      if (!fs.lstatSync(directory).isDirectory()) return null
+      const record = fs.lstatSync(recordFile)
+      if (!record.isFile() || record.size > 1024) return null
+      const metadata = JSON.parse(fs.readFileSync(recordFile, 'utf8'))
+      if (!SHA256.test(metadata.sha256) || !Number.isSafeInteger(metadata.sizeBytes) || metadata.sizeBytes <= 0 || metadata.sizeBytes > MAX_AGENT_BYTES) return null
+      const jar = path.join(directory, AGENT_JAR)
+      const stat = fs.lstatSync(jar)
+      if (!stat.isFile() || stat.size !== metadata.sizeBytes) return null
+      if (createHash('sha256').update(fs.readFileSync(jar)).digest('hex') !== metadata.sha256) return null
+      return { version, jar }
+    } catch { return null }
+  }
+
+  function agentsIn(root) {
+    return fs.readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory() && AGENT_VERSION.test(entry.name))
+      .map(entry => entry.name).sort((a, b) => b.localeCompare(a, 'en', { numeric: true }))
+  }
+
+  function installedAgent() {
+    cleanAtFirstUse()
+    try {
+      const root = managedBase(false, AGENT)
+      for (const version of agentsIn(root)) {
+        const agent = agentRecord(root, version)
+        if (agent) return agent
+      }
+    } catch { /* No installed agent. */ }
+    return null
+  }
+
+  function hotswapAgentStatus() {
+    const agent = installedAgent()
+    return agent ? { installed: true, version: agent.version } : { installed: false }
+  }
+
+  function hotswapAgentPath() { return installedAgent()?.jar ?? null }
+
+  function isJbr(id) {
+    const entry = index().find(item => item.id === id && item.vendor === 'jbr')
+    return Boolean(entry && managedHome(entry))
+  }
+
+  function enhancedJvmArgs(id) {
+    const jar = isJbr(id) ? hotswapAgentPath() : null
+    return jar ? ['-XX:+AllowEnhancedClassRedefinition', '-XX:HotswapAgent=external', `-javaagent:${jar}`] : null
+  }
+
   async function getBuild(vendor, feature, signal) {
     if (!validSelection(vendor, feature)) throw new Error('JDK 공급자와 버전을 선택해 주세요.')
     const key = `${vendor}:${feature}`
@@ -154,13 +209,12 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     cleanAtFirstUse()
     const build = await getBuild(vendor, feature)
     if (!build) return null
-    const { url: _url, sha256: _sha256, archive: _archive, ...summary } = build
+    const { url: _url, sha256: _sha256, sha512: _sha512, archive: _archive, ...summary } = build
     return { id: buildId(build), ...summary }
   }
 
-  async function install(vendor, feature, onProgress = () => {}) {
-    if (!validSelection(vendor, feature)) throw new Error('JDK 공급자와 버전을 선택해 주세요.')
-    if (operation) throw new Error('이미 JDK를 받고 있습니다.')
+  async function withInstallation(kind, vendor, feature, onProgress, run) {
+    if (operation) throw new Error('이미 개발 도구를 받고 있습니다.')
     const controller = new AbortController()
     const { signal } = controller
     operation = controller
@@ -168,9 +222,27 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     let root
     const report = (phase, received, total) => onProgress({ vendor, feature, phase, received, total })
     try {
-      cleanedAtFirstUse = true
-      cleanStaging()
+      cleanAtFirstUse()
+      cleanStaging(kind)
       report('lookup', 0, null)
+      return await run({ signal, report, stagingIn(base) {
+        root = base
+        staging = fs.mkdtempSync(path.join(root, `.install-${process.pid}-`))
+        stagingPaths.add(staging)
+        return staging
+      } })
+    } finally {
+      try { if (staging) removeInside(root, staging) } finally {
+        stagingPaths.delete(staging)
+        operation = null
+        onProgress(null)
+      }
+    }
+  }
+
+  async function install(vendor, feature, onProgress = () => {}) {
+    if (!validSelection(vendor, feature)) throw new Error('JDK 공급자와 버전을 선택해 주세요.')
+    return withInstallation('jdk', vendor, feature, onProgress, async ({ signal, report, stagingIn }) => {
       const build = await getBuild(vendor, feature, signal)
       signal.throwIfAborted()
       if (!build) throw new Error('현재 플랫폼에 맞는 공개 JDK 빌드가 없습니다.')
@@ -178,11 +250,10 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
       const current = index().find(entry => entry.id === id)
       if (current && managedHome(current)) return publicJdk(current)
 
-      root = managedBase(true)
+      const root = managedBase(true)
       const destination = path.join(root, id)
       if (fs.existsSync(destination)) throw new Error('같은 이름의 JDK 폴더가 이미 있습니다.')
-      staging = fs.mkdtempSync(path.join(root, `.install-${process.pid}-`))
-      stagingPaths.add(staging)
+      const staging = stagingIn(root)
       const archive = path.join(staging, `jdk.${build.archive}`)
       report('download', 0, build.sizeBytes ?? null)
       const bytes = await downloadArchive(build, archive, { request, signal, onProgress: (received, total) => report('download', received, total) })
@@ -204,13 +275,37 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
         throw error
       }
       return publicJdk(entry)
-    } finally {
-      try { if (staging) removeInside(root, staging) } finally {
-        stagingPaths.delete(staging)
-        operation = null
-        onProgress(null)
+    })
+  }
+
+  async function installHotswapAgent(onProgress = () => {}) {
+    return withInstallation(AGENT, AGENT, null, onProgress, async ({ signal, report, stagingIn }) => {
+      const build = await findHotswapAgent({ request, signal })
+      signal.throwIfAborted()
+      if (!build) throw new Error('검증할 수 있는 HotswapAgent 릴리스가 없습니다.')
+      const root = managedBase(true, AGENT)
+      if (agentRecord(root, build.version)) return
+      const target = path.join(root, build.version)
+      const staging = stagingIn(root)
+      report('download', 0, build.sizeBytes)
+      const sizeBytes = await downloadArchive(build, path.join(staging, AGENT_JAR), { request, signal,
+        onProgress: (received, total) => report('download', received, total) })
+      signal.throwIfAborted()
+      fs.writeFileSync(path.join(staging, 'release.json'), JSON.stringify({ sizeBytes, sha256: build.sha256.toLowerCase() }), { flag: 'wx', mode: 0o600 })
+      const old = fs.existsSync(target) ? moveAside(root, target) : null
+      try { fs.renameSync(staging, target) } catch (error) {
+        if (old) fs.renameSync(old, target)
+        throw error
       }
-    }
+      if (old) removeInside(root, old)
+    })
+  }
+
+  function moveAside(root, folder) {
+    if (!fs.lstatSync(folder).isDirectory() || !samePath(fs.realpathSync(folder), folder)) throw new Error('보관함 밖의 파일은 지울 수 없습니다.')
+    const hidden = path.join(root, `.remove-${process.pid}-${randomUUID()}`)
+    fs.renameSync(folder, hidden)
+    return hidden
   }
 
   function remove(id) {
@@ -220,15 +315,18 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     if (!records.some(entry => entry.id === id)) throw new Error('ezShell에서 받은 JDK만 지울 수 있습니다.')
     const root = managedBase()
     const folder = path.join(root, id)
-    const real = fs.realpathSync(folder)
-    if (!samePath(real, folder)) throw new Error('JDK 보관함 밖의 파일은 지울 수 없습니다.')
-    const hidden = path.join(root, `.remove-${process.pid}-${randomUUID()}`)
-    fs.renameSync(folder, hidden)
+    const hidden = moveAside(root, folder)
     try { writeIndex(records.filter(entry => entry.id !== id)) } catch (error) {
       fs.renameSync(hidden, folder)
       throw error
     }
     removeInside(root, hidden)
+  }
+
+  function removeHotswapAgent() {
+    if (operation) throw new Error('개발 도구를 받은 다음 다시 시도해 주세요.')
+    const root = managedBase(false, AGENT)
+    for (const version of agentsIn(root)) removeInside(root, moveAside(root, path.join(root, version)))
   }
 
   function cancel() {
@@ -237,7 +335,8 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     return true
   }
 
-  return { list, available, install, remove, cancel, javaHomeOf }
+  return { list, available, install, remove, cancel, javaHomeOf, isJbr, enhancedJvmArgs,
+    hotswapAgentStatus, hotswapAgentPath, installHotswapAgent, removeHotswapAgent }
 }
 
 module.exports = { createRuntimes }

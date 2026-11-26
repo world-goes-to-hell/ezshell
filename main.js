@@ -919,6 +919,7 @@ const runPresets = createRunPresets({
   getAgent: id => agentMessages.snapshot().agents.find(agent => agent.id === id && agent.mcpConnected),
   isLocked: () => isAppLocked,
   javaHomeOf: id => runtimes.javaHomeOf(id),
+  enhancedJvmArgs: id => runtimes.enhancedJvmArgs?.(id) ?? null,
   sendState: state => sendToLocalWindow('run-preset-state', state),
   sendAsUser: agentMessages.sendAsUser,
   notifyCrash: (project, preset) => {
@@ -929,6 +930,7 @@ const runPresets = createRunPresets({
   }
 });
 const runPresetIpc = registerRunPresetIpc({ ipcMain, controller: runPresets, fromMainWindow, isLocked: () => isAppLocked });
+app.on('will-quit', () => runPresets.stopReloads());
 const localProjectIpc = require('./src/ipc/localProjects.js').registerLocalProjectIpc({
   ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit,
   gitCommit: require('./src/localFiles/gitCommit.js'),
@@ -1228,6 +1230,7 @@ ipcMain.handle('setup-master-password', async (event, { password }) => {
   savedSessionRecords = null;
   currentMasterPassword = password;
   isAppLocked = false;
+  runPresets.resumeReloads();
   localShells?.wakeInboxes();
   void remoteAccess.start();
 
@@ -1248,6 +1251,7 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
     savedSessionRecords = null;
     currentMasterPassword = password;
     isAppLocked = false;
+    runPresets.resumeReloads();
     localShells?.wakeInboxes();
     resealSessionsFile();
     void remoteAccess.start();
@@ -1269,6 +1273,7 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   runtimes.cancel();
   runPresetIpc.clearConfirmations();
   runPresets.cancelBatches();
+  runPresets.suspendReloads();
   agentMessages.invalidateFreshRoleChecks();
   globalPointerEffects.stop();
   shortcutRecorder = null;
@@ -1367,6 +1372,7 @@ ipcMain.handle('reset-master-password', async () => {
   runtimes.cancel();
   runPresetIpc.clearConfirmations();
   runPresets.cancelBatches();
+  runPresets.suspendReloads();
   agentMessages.invalidateFreshRoleChecks();
   globalPointerEffects.stop();
   shortcutRecorder = null;

@@ -889,7 +889,7 @@ export interface WorkspaceGitDiff {
   binary?: boolean
 }
 
-export type JdkVendor = 'temurin' | 'zulu'
+export type JdkVendor = 'temurin' | 'zulu' | 'jbr'
 
 /** A run preset of a local project (docs/plan/2026-11-25-local-project-run.md): main keeps them in userData */
 export interface RunPreset {
@@ -906,6 +906,22 @@ export interface RunPreset {
   agentControl: boolean
   inAll: boolean
   waitReady: boolean
+  /** Applying saved Java changes to the running server (stage 3): Spring Boot tasks only. Missing in old files: off */
+  hotReload?: HotReload
+}
+
+export type HotReload = 'off' | 'standard' | 'enhanced'
+
+/** The last thing the hot reload of a running preset did (stage 3 contract) */
+export interface RunReload {
+  status: 'watching' | 'compiling' | 'applied' | 'restartNeeded' | 'compileError' | 'failed'
+  /** applied: the classes changed (including ones not loaded yet) */
+  classes?: number
+  /** restartNeeded, compileError, failed: one line, without ports or paths */
+  reason?: string
+  /** Spring Boot DevTools restarts the app instead */
+  devtools?: true
+  at: number
 }
 
 export type RunStatus = 'idle' | 'starting' | 'running' | 'stopped' | 'crashed'
@@ -927,6 +943,7 @@ export interface RunState {
   /** The shell the server runs in: the screen finds its tab and pane by it */
   shellId?: string
   lastAction?: RunAction
+  reload?: RunReload
 }
 
 export interface RunCandidate {
@@ -962,9 +979,13 @@ export interface JdkRuntime {
 }
 
 export type JdkBuild = Pick<JdkRuntime, 'id' | 'version' | 'feature' | 'arch' | 'sizeBytes'> & { vendor: JdkVendor; licenseUrl: string }
+export interface HotswapAgentStatus {
+  installed: boolean
+  version?: string
+}
 export interface JdkProgress {
-  vendor: JdkVendor
-  feature: number
+  vendor: JdkVendor | 'hotswap-agent'
+  feature: number | null
   phase: 'lookup' | 'download' | 'unpack'
   received: number
   total: number | null
@@ -1268,13 +1289,15 @@ declare global {
       onPinnedReplyMaximized?: (callback: (maximized: boolean) => void) => () => void
       pinnedReplyGo?: () => void
       onPinnedReplyGo?: (callback: (shellId: string) => void) => () => void
-      runtimesList: () => Promise<{ jdks: JdkRuntime[] }>
+      runtimesList: () => Promise<{ jdks: JdkRuntime[]; hotswapAgent: HotswapAgentStatus }>
       runtimesAvailable: (vendor: JdkVendor, feature: number) => Promise<{ jdk: JdkBuild | null; error?: string }>
       runtimesInstall: (vendor: JdkVendor, feature: number) => Promise<{ ok: true; jdk: JdkRuntime } | { ok: false; error?: string; cancelled?: true }>
       runtimesCancel: () => Promise<boolean>
       runtimesRemove: (id: string) => Promise<{ ok: true } | { ok: false; error: string }>
+      runtimesHotswapInstall: () => Promise<{ ok: true } | { ok: false; error?: string; cancelled?: true }>
+      runtimesHotswapRemove: () => Promise<{ ok: true } | { ok: false; error: string }>
       runtimesRequired: (projectFolder: string) => Promise<{ feature: number | null }>
-      runtimesOpenLicense: (vendor: JdkVendor) => Promise<boolean>
+      runtimesOpenLicense: (vendor: JdkVendor | 'hotswap-agent') => Promise<boolean>
       // Run presets of the local projects (src/ipc/runPresets.js; main window, unlocked). The first
       // argument is the worktree folder of the card: the presets are the project's, the states that worktree's
       runPresetsList?: (worktreeFolder: string) => Promise<RunPresetResult & { projectKey: string; worktreeKey: string; presets: RunPreset[]; states: Record<string, RunState> }>

@@ -227,11 +227,11 @@ async function main() {
       ({ name }, extra) => call({ method: `run-${action}`, name }, extra?.signal))
   }
   server.registerTool('run_wait', {
-    description: 'Wait up to 300 seconds for a preset in your worktree to become ready or stop. Works with agent control off.',
-    inputSchema: { name: runName, seconds: z.number().int().min(1).max(300).optional() }
-  }, ({ name, seconds }, extra) => call({ method: 'run-wait', name, seconds }, extra?.signal))
+    description: 'Wait up to 300 seconds for readiness or the next hot reload result in your worktree. Works with agent control off.',
+    inputSchema: { name: runName, seconds: z.number().int().min(1).max(300).optional(), until: z.enum(['ready', 'reload']).optional() }
+  }, ({ name, seconds, until }, extra) => call({ method: 'run-wait', name, seconds, until }, extra?.signal))
   server.registerTool('run_log', {
-    description: 'Read recent output or errors for a preset in your worktree. Works with agent control off.',
+    description: 'Read recent hot reload results and output or errors for a preset in your worktree. Works with agent control off.',
     inputSchema: { name: runName, lines: z.number().int().min(1).max(400).optional(), errors: z.literal(true).optional() }
   }, ({ name, lines, errors }, extra) => call({ method: 'run-log', name, lines, errors }, extra?.signal))
 

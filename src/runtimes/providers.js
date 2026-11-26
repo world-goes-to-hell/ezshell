@@ -1,8 +1,11 @@
 const { approvedUrl, readJson, SHA256 } = require('./download.js')
+const { findJbrBuild, AGENT_LICENSE_URL, JBR_LICENSE_URL } = require('./enhancedProviders.js')
 
 const LICENSE_URLS = {
   temurin: 'https://openjdk.org/legal/gplv2+ce.html',
-  zulu: 'https://www.azul.com/products/core/openjdk-terms-of-use/'
+  zulu: 'https://www.azul.com/products/core/openjdk-terms-of-use/',
+  jbr: JBR_LICENSE_URL,
+  'hotswap-agent': AGENT_LICENSE_URL
 }
 const ADOPTIUM_OS = { win32: 'windows', darwin: 'mac', linux: 'linux' }
 const AZUL_OS = { win32: 'windows', darwin: 'macos', linux: 'linux' }
@@ -19,8 +22,8 @@ const ARCHITECTURES = {
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i
 const VERSION = /^\d[\da-z._+-]{0,79}$/i
 const featureOf = (version) => Number(/^(?:1\.)?(\d+)(?:[._+-]|$)/.exec(version ?? '')?.[1]) || null
-const validSelection = (vendor, feature) => typeof vendor === 'string' && Object.hasOwn(LICENSE_URLS, vendor)
-  && Number.isInteger(feature) && feature >= 6 && feature <= 25
+const validSelection = (vendor, feature) => typeof vendor === 'string' && vendor !== 'hotswap-agent' && Object.hasOwn(LICENSE_URLS, vendor)
+  && Number.isInteger(feature) && feature >= 6 && feature <= 25 && (vendor !== 'jbr' || feature === 17 || feature === 21)
 
 function buildOf({ vendor, feature, arch, version, archive, url, sha256, size }) {
   const link = approvedUrl(url)
@@ -77,6 +80,7 @@ function parseZulu(data, row, { feature, platform, arch }) {
 
 async function findBuild(vendor, feature, { platform, arch, request, signal }) {
   if (!validSelection(vendor, feature)) throw new Error('JDK 공급자와 버전을 선택해 주세요.')
+  if (vendor === 'jbr') return findJbrBuild(feature, { platform, arch, request, signal })
   const spec = { feature, platform, arch }
   const cpu = ARCHITECTURES[arch]
   const options = { request, signal }

@@ -2,8 +2,8 @@
 // the types of the IPC contract and the words and buttons a preset row shows. Kept free of React so the
 // rules are tested on their own.
 
-import type { RunAction, RunErrorGroup, RunPreset, RunState } from '../types'
-export type { RunAction, RunCandidate, RunErrorGroup, RunPreset, RunState, RunStatus } from '../types'
+import type { HotReload, HotswapAgentStatus, JdkRuntime, RunAction, RunErrorGroup, RunPreset, RunState } from '../types'
+export type { HotReload, RunAction, RunCandidate, RunErrorGroup, RunPreset, RunReload, RunState, RunStatus } from '../types'
 
 export const IDLE_STATE: RunState = { status: 'idle', errors: 0 }
 
@@ -141,10 +141,11 @@ export interface PresetDraft {
   agentControl: boolean
   inAll: boolean
   waitReady: boolean
+  hotReload: HotReload
 }
 
 export function emptyDraft(): PresetDraft {
-  return { name: '', relative: '', kind: 'task', command: '', jdk: 'system', envText: '', notify: true, agentControl: true, inAll: true, waitReady: false }
+  return { name: '', relative: '', kind: 'task', command: '', jdk: 'system', envText: '', notify: true, agentControl: true, inAll: true, waitReady: false, hotReload: 'off' }
 }
 
 export function draftOf(preset: RunPreset): PresetDraft {
@@ -152,7 +153,8 @@ export function draftOf(preset: RunPreset): PresetDraft {
     id: preset.id, name: preset.name, relative: preset.relative, kind: preset.kind, taskId: preset.taskId,
     command: preset.command ?? '', jdk: preset.jdk || 'system',
     envText: Object.entries(preset.env ?? {}).map(([key, value]) => `${key}=${value}`).join('\n'),
-    notify: preset.notify, agentControl: preset.agentControl, inAll: preset.inAll, waitReady: preset.waitReady
+    notify: preset.notify, agentControl: preset.agentControl, inAll: preset.inAll, waitReady: preset.waitReady,
+    hotReload: preset.hotReload ?? 'off'
   }
 }
 
@@ -197,7 +199,8 @@ export function presetFromDraft(draft: PresetDraft): { preset: Omit<RunPreset, '
       notify: draft.notify,
       agentControl: draft.agentControl,
       inAll: draft.inAll,
-      waitReady: draft.waitReady
+      waitReady: draft.waitReady,
+      hotReload: draft.hotReload
     }
   }
 }
@@ -262,3 +265,112 @@ export function runError(result: unknown): string | null {
   if (value.success === false) return '요청을 처리하지 못했습니다.'
   return null
 }
+
+// --- Hot reload (stage 3: saved Java changes applied to the running server) ---
+
+/**
+ * A Spring Boot run, by the same rule main saves with (src/ipc/runPresetStore.js): a found task whose id
+ * ends in `:maven` (`spring-boot:run`) or `:gradle` (`bootRun`) (src/ipc/localDevelopmentTasks.js)
+ */
+export function isSpringBootTask(kind: RunPreset['kind'], taskId: string | undefined): boolean {
+  return kind === 'task' && typeof taskId === 'string' && /:(?:maven|gradle)$/.test(taskId)
+}
+
+export const HOT_RELOAD_SPRING_ONLY = 'Spring Boot 실행에서만 됩니다.'
+
+export interface HotReloadChoice {
+  /** Whether the field can be anything but 끄기 (a Spring Boot task) */
+  usable: boolean
+  /** Why it is fixed to 끄기 */
+  reason?: string
+  /** Whether 확장 can be picked */
+  enhanced: boolean
+  /** What 확장 is missing */
+  enhancedMissing?: string
+  /** Something has to be fetched first (the link to Settings > 개발 도구); otherwise only the JDK to pick */
+  needsDownload?: boolean
+}
+
+/**
+ * What the 바로 반영 field allows for a preset (main checks again): Spring Boot tasks only; 확장 needs the
+ * chosen JDK to be a JBR 17 or 21 fetched into the store (vendor `jbr`) and HotswapAgent fetched.
+ * `system` cannot be told apart.
+ */
+export function hotReloadChoice({ kind, taskId, jdk, jdks, hotswapAgent }: {
+  kind: RunPreset['kind']; taskId?: string; jdk: string
+  jdks: ReadonlyArray<Pick<JdkRuntime, 'id' | 'feature' | 'vendor' | 'managed'>>; hotswapAgent: HotswapAgentStatus | undefined
+}): HotReloadChoice {
+  if (!isSpringBootTask(kind, taskId)) return { usable: false, reason: HOT_RELOAD_SPRING_ONLY, enhanced: false }
+  const isJbr = (item: Pick<JdkRuntime, 'feature' | 'vendor' | 'managed'> | undefined) =>
+    item?.vendor === 'jbr' && item.managed && (item.feature === 17 || item.feature === 21)
+  const chosen = isJbr(jdks.find(item => item.id === jdk))
+  const agent = !!hotswapAgent?.installed
+  if (chosen && agent) return { usable: true, enhanced: true }
+  const inStore = jdks.some(isJbr)
+  // What to fetch from Settings > 개발 도구, or only which JDK to pick here
+  const enhancedMissing = !inStore && !agent ? '확장에는 JBR 17·21 과 HotswapAgent 가 필요합니다.'
+    : !inStore ? '확장에는 JBR 17·21 이 필요합니다.'
+    : !agent ? (chosen ? '확장에는 HotswapAgent 가 필요합니다.' : '확장에는 HotswapAgent 가 필요하고, JDK 를 JBR 17·21 로 골라야 합니다.')
+    : '확장은 JDK 를 JBR 17·21 로 고르면 쓸 수 있습니다.'
+  return { usable: true, enhanced: false, enhancedMissing, needsDownload: !inStore || !agent }
+}
+
+/** The value saved: 끄기 where the field is not usable (main runs without the debug agent then) */
+export function hotReloadToSave(value: HotReload, choice: HotReloadChoice): HotReload {
+  return choice.usable ? value : 'off'
+}
+
+export interface ReloadChip {
+  tone: 'muted' | 'busy' | 'ok' | 'warn' | 'err'
+  text: string
+  /** The whole text (the chip cuts long ones) */
+  title: string
+  /** compileError: pressing the chip goes to the first error line, as the `오류 N` badge does */
+  toErrors?: true
+  /** restartNeeded: the row's restart button stands out */
+  restart?: true
+}
+
+/** "방금", "12초 전", "3분 전", "2시간 전" */
+export function reloadAge(at: number, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - at) / 1000))
+  if (seconds < 5) return '방금'
+  if (seconds < 60) return `${seconds}초 전`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}분 전`
+  return `${Math.floor(seconds / 3600)}시간 전`
+}
+
+/** The hot reload chip beside a running preset's state, or nothing (not on, or the server is not up) */
+export function reloadChip(state: RunState, now: number): ReloadChip | null {
+  const reload = state.reload
+  if (!reload || !isRunActive(state)) return null
+  const reason = reload.reason?.trim()
+  switch (reload.status) {
+    case 'watching':
+      return { tone: 'muted', text: '바로 반영', title: '바로 반영 켜짐 · Java 파일을 저장하면 실행 중인 서버에 반영합니다' }
+    case 'compiling':
+      return { tone: 'busy', text: '컴파일 중', title: '바뀐 Java 파일을 컴파일하고 있습니다' }
+    case 'applied': {
+      const text = reload.devtools
+        ? '반영됨 · DevTools 재시작'
+        : ['반영됨', typeof reload.classes === 'number' && `클래스 ${reload.classes}`, reloadAge(reload.at, now)].filter(Boolean).join(' · ')
+      return { tone: 'ok', text, title: reload.devtools ? `${text} · ${reloadAge(reload.at, now)}` : text }
+    }
+    case 'restartNeeded': {
+      const text = reason ? `재기동 필요: ${reason}` : '재기동 필요'
+      return { tone: 'warn', text, title: `${text} · 바로 반영할 수 없는 변경입니다. ↻ 로 재기동하세요`, restart: true }
+    }
+    case 'compileError':
+      return { tone: 'err', text: '컴파일 오류', title: reason ? `컴파일 오류: ${reason} · 눌러서 첫 오류 줄로` : '컴파일 오류 · 눌러서 첫 오류 줄로', toErrors: true }
+    case 'failed': {
+      const text = reason ? `바로 반영 실패: ${reason}` : '바로 반영 실패'
+      return { tone: 'err', text, title: text }
+    }
+    default:
+      return null
+  }
+}
+
+/** Whether a row's clock has to tick for its hot reload chip ("N초 전") */
+export const reloadTicks = (state: RunState | undefined, now: number) =>
+  state?.reload?.status === 'applied' && isRunActive(state) && now - state.reload.at < 3_600_000

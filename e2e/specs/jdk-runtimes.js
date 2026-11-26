@@ -49,6 +49,32 @@ async function run() {
     check('shows a JDK 8 fallback when a legacy public build is unavailable', await until(`!!(${button('JDK 8로 받기')})`))
     await click('JDK 8로 받기')
     check('selects JDK 8 for review before downloading', await until(`${version}?.value === '8'`))
+
+    const provider = `document.querySelector('.jdk-choice-row select')`
+    await js(`((select) => { select.value = 'jbr'; select.dispatchEvent(new Event('change', { bubbles: true })) })(${provider})`)
+    check('offers only JetBrains Runtime 21 and 17', await until(`
+      [...${version}.options].map(option => option.value).join(',') === '21,17' &&
+      (${button('받아 두기')})?.disabled === false
+    `))
+    await click('받아 두기')
+    const jbrRow = `document.querySelector('.jdk-list [aria-label="21.0.11+1163.125 지우기"]')`
+    check('shows the installed SDK in the managed list', await until(`
+      ${jbrRow}?.closest('li').textContent.includes('JetBrains Runtime 21.0.11+1163.125')
+    `))
+    check('shows the HotswapAgent license before installation', await js(`!!(${button('HotswapAgent 라이선스')})`))
+    await click('HotswapAgent 받기')
+    const agentRow = `document.querySelector('.jdk-settings [aria-label="HotswapAgent 지우기"]')`
+    check('shows installed HotswapAgent version and makes it available to run presets', await until(`
+      (async () => ${agentRow}?.parentElement.textContent.includes('2.0.5') &&
+        (await window.electronAPI.runtimesList()).hotswapAgent.version === '2.0.5')()
+    `))
+    await js(`${agentRow}.click()`)
+    if (!await until(`!!(${button('삭제 확인')})`)) throw new Error('HotswapAgent removal confirmation missing')
+    await click('삭제 확인')
+    check('removes HotswapAgent independently of the JBR SDK', await until(`
+      (async () => !!(${button('HotswapAgent 받기')}) && !!${jbrRow} &&
+        !(await window.electronAPI.runtimesList()).hotswapAgent.installed)()
+    `))
   } finally { driver.close() }
 }
 

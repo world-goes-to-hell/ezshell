@@ -1191,26 +1191,17 @@ function createLocalShells({
     entry.developmentInterrupted = false;
     setDevelopment(id, entry, { status: 'starting', url: null, exitCode: null });
     try {
+      const taskEnv = developmentEnvironment(env, task, platform);
       const pty = spawn(shell.file, developmentShellArgs(shell, task, platform), {
         name: TERMINAL_TYPE, cols: entry.cols, rows: entry.rows, cwd: entry.launchDirectory,
-        env: developmentEnvironment(env, task, platform)
+        env: taskEnv
       });
       entry.pty = pty;
       entry.exited = false;
       entry.exitCode = null;
       let fragment = '';
-      entry.developmentExit = new Promise(resolve => pty.onExit(({ exitCode }) => {
-        resolve();
-        if (entry.pty !== pty || entry.exited) return;
-        entry.exited = true;
-        entry.exitCode = exitCode;
-        if (shells.get(id) !== entry) return;
-        task.onEvent?.({ type: 'exit', shellId: id, exitCode, action: entry.developmentAction ?? (entry.developmentInterrupted ? 'stop' : undefined) });
-        if (!entry.developmentAction) setDevelopment(id, entry, { status: 'exited', exitCode });
-        send('local-shell-exit', { id, exitCode });
-      }));
-      pty.onData(data => {
-        if (shells.get(id) !== entry || entry.pty !== pty) return;
+      const forward = data => {
+        if (!data || shells.get(id) !== entry || entry.pty !== pty) return;
         entry.backlog = (entry.backlog + data).slice(-BACKLOG_CHARS);
         send('local-shell-data', { id, data });
         task.onEvent?.({ type: 'data', shellId: id, data });
@@ -1219,7 +1210,20 @@ function createLocalShells({
         fragment = lines.pop().slice(-2048);
         const url = developmentAddress(lines);
         if (url) setDevelopment(id, entry, { url });
-      });
+      };
+      entry.developmentExit = new Promise(resolve => pty.onExit(({ exitCode }) => {
+        resolve();
+        if (entry.pty !== pty || entry.exited) return;
+        entry.exited = true;
+        entry.exitCode = exitCode;
+        if (shells.get(id) !== entry) return;
+        if (task.filterOutput) forward(task.filterOutput('', true));
+        task.onEvent?.({ type: 'exit', shellId: id, exitCode, action: entry.developmentAction ?? (entry.developmentInterrupted ? 'stop' : undefined) });
+        if (!entry.developmentAction) setDevelopment(id, entry, { status: 'exited', exitCode });
+        send('local-shell-exit', { id, exitCode });
+      }));
+      pty.onData(data => forward(task.filterOutput ? task.filterOutput(data) : data));
+      if (task.hotReload && !entry.exited) task.onEvent?.({ type: 'launched', shellId: id, pid: pty.pid, env: taskEnv });
       if (!entry.exited) setDevelopment(id, entry, { status: 'running' });
     } catch (error) {
       entry.exited = true;

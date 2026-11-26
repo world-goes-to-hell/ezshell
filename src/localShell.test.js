@@ -7,6 +7,7 @@ import { createAgentMessages } from './ipc/agentMessages.js'
 import { rpc } from './ipc/agentMessageCli.js'
 import { PROMPT } from './ipc/agentInboxPrompts.js'
 import { createLocalShells, defaultShell, BACKLOG_CHARS } from './localShell.js'
+import { portFilter } from './ipc/hotReload.js'
 
 function fakePty() {
   const pty = {
@@ -45,6 +46,23 @@ describe('defaultShell', () => {
 })
 
 describe('createLocalShells', () => {
+  it('redacts a hot reload port before writing backlog, terminal events or run log events', async () => {
+    const cwd = realpathSync(tmpdir())
+    const { shells, ptys, sent } = setup()
+    const onEvent = vi.fn()
+    const { id } = await shells.openDevelopmentTask({ id: 'preset:fixture', name: 'Spring Boot', relative: '.',
+      command: 'mvn spring-boot:run', cwd, hotReload: { port: 51837 }, filterOutput: portFilter(51837), onEvent }, {})
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'launched', shellId: id }))
+    ptys[0].emit('Debug at http://127.0.0.1:51')
+    ptys[0].emit('837/\r\n')
+    expect(shells.list()[0].development.url).toBeNull()
+    ptys[0].emit('Spring listening at http://localhost:8080/\r\n')
+    expect(shells.list()[0].development.url).toBe('http://localhost:8080')
+    expect(JSON.stringify([sent, onEvent.mock.calls, shells.attach(id)])).not.toContain('51837')
+    ptys[0].exit({ exitCode: 0 })
+    shells.close(id)
+  })
+
   it('tracks a development process, restarts in place, and keeps the port and exit code independent of log output', async () => {
     const cwd = realpathSync(tmpdir())
     const { shells, ptys, sent, spawn } = setup({ stopDevelopmentProcess: async pty => pty.exit({ exitCode: 1 }), waitDevelopmentPort: vi.fn() })

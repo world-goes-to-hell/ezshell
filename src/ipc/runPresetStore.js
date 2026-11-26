@@ -58,6 +58,9 @@ function validatePreset(input, id) {
   const relative = presetRelative(input.relative ?? '.')
   const jdk = input.jdk ?? 'system'
   if (typeof jdk !== 'string' || !JDK_ID.test(jdk)) throw new Error('등록된 JDK를 선택해 주세요.')
+  const hotReload = input.hotReload === undefined ? 'off' : input.hotReload
+  const springTask = input.kind === 'task' && typeof input.taskId === 'string' && /:(?:maven|gradle)$/.test(input.taskId)
+  if (!['off', 'standard', 'enhanced'].includes(hotReload) || (hotReload !== 'off' && !springTask)) throw new Error('바로 반영은 Spring Boot 실행 구성에서만 선택할 수 있습니다.')
   const env = input.env ?? {}
   if (typeof env !== 'object' || Array.isArray(env)) throw new Error('환경 변수를 확인해 주세요.')
   const entries = Object.entries(env)
@@ -70,7 +73,7 @@ function validatePreset(input, id) {
     if (typeof input[key] !== 'boolean') throw new Error('실행 구성의 스위치를 확인해 주세요.')
     flags[key] = input[key]
   }
-  const base = { id, name, relative, jdk, env: Object.fromEntries(entries), ...flags }
+  const base = { id, name, relative, jdk, hotReload, env: Object.fromEntries(entries), ...flags }
   if (input.kind === 'task' && typeof input.taskId === 'string' && input.taskId.length <= 300 && /^(?:.+):(gradle|maven|node)$/.test(input.taskId) && ONE_LINE.test(input.taskId)) {
     return { ...base, kind: 'task', taskId: input.taskId }
   }

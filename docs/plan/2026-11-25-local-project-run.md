@@ -4,7 +4,7 @@
 
 시안: `mockups/dev-run-presets.html` (장면 1~8, 사용자가 좋다고 함)
 
-상태: 1단계 끝 (2026-11-26, 리뷰 3회 반영). 3단계 진행 중 (2026-11-26). 2단계 남음.
+상태: 1단계 끝 (2026-11-26, 리뷰 3회 반영). 3단계 표준·확장 끝 (2026-11-26, 사용자 확인 전). 2단계 진행 중 (도구 받기부터).
 
 ## 지금 있는 것 (2.36.2, 바탕으로 쓴다)
 - `src/ipc/localDevelopmentTasks.js`:
@@ -245,13 +245,13 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
   - 모든 JDK(6 이상)에서 된다. 메서드 몸체 수정만 된다.
   - 실행할 때 JVM 에 디버그 에이전트를 붙인다: `-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:<빈 포트>`.
   - main 의 작은 JDWP 클라이언트(`src/runtimes/jdwp.js`)가 `ClassesBySignature` → `RedefineClasses` 로 바꾼다.
-  - 메서드 추가·필드 추가·상속 변경은 JVM 이 거부한다 (JDWP 오류 62~70). 그때 "재기동 필요" 를 띄운다.
+  - 메서드 추가·필드 추가·상속 변경은 JVM 이 거부한다. 그때 "재기동 필요" 를 띄운다.
 - **등급 B: 확장 HotSwap (JRebel 에 가까움)**
-  - JetBrains Runtime(JBR 17·21, DCEVM 내장, `-XX:+AllowEnhancedClassRedefinition`)과 HotswapAgent(`-javaagent:hotswap-agent.jar`)를 쓴다.
+  - JetBrains Runtime SDK 17·21과 HotswapAgent 2.x를 쓴다.
   - 메서드·필드 추가·삭제와 Spring 빈 다시 읽기, MyBatis 매퍼 XML, Hibernate 엔티티 일부까지 된다.
-  - JDK 8 은 DCEVM 8, 11 은 JBR 11 을 쓴다.
-  - JBR 과 HotswapAgent 는 JDK 보관함에서 받는다 (GitHub 릴리스, 체크섬 확인). HotswapAgent 는 GPL-2.0 이라 앱에 넣지 않고 받는다.
-  - 등급 B 에서는 2번의 컴파일만 하면 HotswapAgent 가 클래스 폴더 변경을 보고 다시 적재한다 (`autoHotswap`).
+  - JDK 8·11에는 표준 등급을 쓴다.
+  - 개발 도구 설정에서 JBR SDK와 HotswapAgent를 받는다. GPL-2.0 라이선스는 HotswapAgent 받기 버튼 옆에서 볼 수 있다.
+  - 표준과 같은 JDWP 요청으로 컴파일 결과를 적용한다.
 - **JVM 인자를 넣는 자리:**
   - Maven: `-Dspring-boot.run.jvmArguments=…`
   - Gradle: init 스크립트(`-I`, 앱 폴더)로 `bootRun.jvmArgs`
@@ -280,8 +280,9 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
 - **JVM 인자:** `-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,quiet=y,address=127.0.0.1:<빈 포트>`.
   - `quiet=y` 로 JVM 의 `Listening for transport dt_socket at address: N` 줄을 막는다. 그 줄이 터미널·`run_log` 에 포트를 드러내고, `developmentProcess.js` 의 주소 판독이 그 포트를 서버 주소로 잘못 읽을 수 있다.
   - Maven(Windows 는 PowerShell `-EncodedCommand`): `'-Dspring-boot.run.jvmArguments=<인자>'` 를 작은따옴표로 감싸 명령 끝에 붙인다. PowerShell 은 따옴표 없는 `-Dname.with.dot=…` 를 점에서 나눈다.
+  - Windows의 확장 인자는 PTY의 `EZSHELL_HOT_RELOAD_MAVEN_OPTIONS`를 Maven이 `${env.EZSHELL_HOT_RELOAD_MAVEN_OPTIONS}`로 펼친다. `.cmd` 래퍼가 공백·작은따옴표가 든 에이전트 경로를 다시 해석할 필요가 없다. 디버그 포트는 이 변수에 넣지 않는다.
   - Gradle: 앱이 쓰는 고정 init 스크립트(`userData/hot-reload/init.gradle`)를 `-I` 로 넘기고, 인자는 PTY 환경 변수 `EZSHELL_HOT_RELOAD_JVM_ARGS` 로 준다. 스크립트는 `bootRun` 의 `jvmArgs` 에만 더한다.
-- **연결:** 실행 직후부터 그 포트에 붙기를 되풀이해(최대 시작 제한 시간까지) 붙은 채로 둔다. JDWP 는 인증이 없고 한 번에 하나만 붙으므로 먼저 붙어 있는 것이 다른 프로세스가 끼어들 틈을 줄인다. 끊기면 다음 변경 때 다시 붙는다.
+- **연결에서 바꾸면 안 되는 것:** 실행 직후부터 JVM이 종료될 때까지 루프백 JDWP 연결을 유지하고, 끊기면 바로 재접속한다. 잠금·클래스패스 확인 실패·감시 오류에도 인증 없는 포트를 비워 두지 않는다. 잠금 중 감시와 컴파일을 멈추고 재접속 핸드셰이크 외에 JVM 명령을 보내지 않는다. JVM이나 앱이 종료될 때 연결을 닫는다. `ClassPaths`의 출력 폴더는 실제 경로가 워크트리 안인지 검사한 뒤 사용한다.
 - **포트:** 실행마다 새로 고른다. 화면·MCP·`run_log`·`run_list`·로그 파일 어디에도 내보내지 않는다.
 - **감시:** 소스 루트를 `fs.watch`(재귀)로 본다. 마지막 변경 뒤 300ms 조용하면 묶어서 한 번 처리한다. 상태가 `running` 일 때만. 처리 중 생긴 변경은 다음 묶음으로 미룬다. `.java` 삭제는 클래스를 지우지 않는다.
 - **컴파일:** 그 구성의 JDK 의 `javac`(구성이 `system` 이면 PTY 와 같은 `JAVA_HOME`·`PATH` 규칙). JRE 만 있으면 "javac 를 찾을 수 없습니다".
@@ -290,8 +291,11 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
   - Lombok: 빌드 파일에 lombok 이 있고 JVM 클래스패스에 없으면 `~/.m2`·Gradle 캐시에서 jar 를 찾아 `-processorpath` 로 준다. 못 찾으면 컴파일 오류로 알린다.
   - 컴파일 오류는 그 실행의 오류 묶음에 넣는다 (`오류 N`, 에이전트에게 보내기에 그대로 쓰인다).
 - **적용:** 바뀐 소스에서 나온 클래스(`$` 내부 클래스 포함)를 `ClassesBySignature` 로 찾아 `RedefineClasses`. 아직 적재되지 않은 클래스는 파일만 쓰면 된다 (처음 쓸 때 적재된다). 여러 클래스 로더에 있으면 모두 바꾼다.
-  - JDWP 오류 60~72 는 "재기동 필요: 메서드 추가" 처럼 이유를 한국어로 보인다.
-- **확장 등급:** JVM 인자에 `-XX:+AllowEnhancedClassRedefinition` 과 HotswapAgent 를 더한다 (정확한 인자는 codex-4 가 HotswapAgent 문서로 확인해 여기에 적는다). 컴파일·적용 흐름은 표준과 같다. 구성의 `jdk` 가 보관함의 JBR 이어야 하고 HotswapAgent 가 받아져 있어야 한다.
+  - JDWP 오류 63·64·66·67·70·71·72는 "재기동 필요: 메서드 추가"처럼 표시한다. 그 외 오류는 반영 실패로 표시한다. 다시 정의하는 요청은 60초까지 기다린다. 시간 안에 응답이 없으면 반영 여부를 확인할 수 없다고 표시한다.
+- **확장 등급:** 표준과 같은 컴파일·적용 흐름에 `-XX:+AllowEnhancedClassRedefinition`, `-XX:HotswapAgent=external`, `-javaagent:<앱 보관함 JAR의 절대 경로>`를 추가한다. 외부 에이전트 모드에서 JBR이 필요한 모듈을 열어 준다. JAR는 앱 프로필의 `runtimes/hotswap-agent/<버전>/hotswap-agent.jar`에 둔다. [HotswapAgent 공식 실행 안내](https://github.com/HotswapProjects/HotswapAgent#quick-start)
+- **JBR SDK 신뢰 기준:** `api.github.com`의 JetBrains/JetBrainsRuntime 공식 릴리스가 가리키는 `jbrsdk` 주소와 `cache-redirector.jetbrains.com` 및 허용 CDN의 TLS 응답을 신뢰한다. 공식 `.checksum`의 SHA-512를 파일과 비교해 다운로드 손상과 파일 혼동을 검출한다. 아카이브와 체크섬 모두 JetBrains가 관리하는 CDN에서 받으므로 그 CDN이 침해되면 두 값이 함께 바뀔 수 있다. 검증한 아카이브의 경로를 검사한 뒤 임시 폴더에 풀고, 이름을 바꿔 설치한다. [JetBrains Runtime 릴리스](https://github.com/JetBrains/JetBrainsRuntime/releases)
+- **HotswapAgent 신뢰 기준:** `api.github.com` TLS 응답에서 HotswapProjects/HotswapAgent 공식 공개 2.x 릴리스 자산에 대해 GitHub가 계산한 `digest`를 신뢰한다. 릴리스 게시 권한이 침해되면 새 자산에도 유효한 해시가 붙을 수 있다. 검증한 SHA-256과 크기를 JAR와 함께 기록하고 설치 폴더는 이름 바꾸기로 게시한다. [HotswapAgent 릴리스](https://github.com/HotswapProjects/HotswapAgent/releases)
+- **추가 HTTPS 호스트:** `api.github.com`, `cache-redirector.jetbrains.com`, `d2xrhe97vsfxuc.cloudfront.net` (JetBrains 다운로드 CDN). GitHub 자산은 기존에 허용된 `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`을 사용한다. 리디렉션도 같은 호스트 허용 목록으로 검사한다.
 
 ### 3단계 작업 나눔과 계약
 - **codex-4: JDWP 클라이언트와 확장 등급 받기**
@@ -299,7 +303,8 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
   - `src/runtimes/classFile.js`: `.class` 의 이름·major 버전 읽기.
   - 시험: 가짜 JDWP 서버로 단위 시험. 이 PC 의 JDK 17(`C:\DEV\JAVA\zulu17…`)로 작은 Java 프로그램을 띄워 실제로 몸체를 바꾸고, 메서드 추가가 거부되는지 한 번 확인한다 (손으로 돌리는 스크립트, 결과를 보고에 적는다).
   - 보관함에 JBR 17·21 과 HotswapAgent 받기 (1단계 JDK 받기 규칙: 정해진 호스트, https, 체크섬, 경로 검사). 설정 > 개발 도구에 목록·받기·지우기. 신뢰의 기준점과 호스트 목록은 이 문서에 적는다.
-  - main 에 내보내기: `runtimes.hotswapAgentPath() → 절대 경로 | null`, `runtimes.isJbr(id) → boolean`.
+  - main의 `runtimes.enhancedJvmArgs(jdkId)`는 보관함의 JBR과 검증된 HotswapAgent가 있으면 위 인자 세 개를 배열로 돌려주고, 그 외에는 `null`을 돌려준다.
+  - 화면의 `runtimes-list` 응답은 `jdks`에 `managed: true, vendor: 'jbr'`인 JBR을 표시하고 `hotswapAgent: { installed, version? }`를 제공한다.
 - **codex-5: main 연결**
   - 구성 필드 `hotReload` 저장·검사, JVM 인자 넣기, 감시·컴파일·적용, DevTools 판단, 상태 이벤트, `run_*` 확장.
 - **claude-1: 화면**
@@ -325,4 +330,7 @@ type RunState = { /* 1단계 필드 */ reload?: {
 - [x] 1단계 JDK 보관함 (6·7 은 무료 배포 없음 → 찾은 것 또는 JDK 8)
 - [ ] 사용자 PC 확인: 실제 JDK 받기(Temurin 17·21, Zulu 8), 실제 Spring Boot·Vue 프로젝트로 구성 추가·재기동·멈춤 알림, 에이전트 run_restart
 - [ ] 2단계
-- [ ] 3단계
+- [x] 3단계 표준 등급: JDWP 클라이언트, 감시·javac·반영, 잠금 중 연결 유지, `run_*` 의 `reload` (실제 확인: Zulu 17 + Maven 3.9.9 + Spring Boot 3.3.4 에서 HTTP 11→22 재기동 없음, 메서드 추가는 재기동 필요)
+- [x] 3단계 확장 등급: JBR SDK 17·21 + HotswapAgent 2.0.5 받기와 실행 인자 (실제 확인: 작은 Java 프로그램에서 메서드 추가 호출까지)
+- [x] 3단계 화면: 구성 창 `바로 반영`, 카드의 반영 상태 줄
+- [ ] 3단계 사용자 PC 확인: 실제 프로젝트에서 바로 반영 켜고 저장, 확장 등급 받기와 Spring 빈 다시 읽기, DevTools 프로젝트 (실제 DevTools 확인은 오프라인 의존성 부족으로 못 함)

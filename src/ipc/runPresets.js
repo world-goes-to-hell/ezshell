@@ -4,6 +4,7 @@ const { inspectLocalProject } = require('./localProjects.js')
 const { inspectDevelopmentTasks, prepareDevelopmentTask } = require('./localDevelopmentTasks.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { createDevelopmentErrors, MAX_LOG_LINES } = require('./developmentErrors.js')
+const { prepareHotReload, startHotReload, reloadLog, RESULTS: RELOAD_RESULTS } = require('./hotReload.js')
 const { createRunPresetStore, validatePreset, presetName, publicPreset, commandHash, projectKey, realDirectory, directoryInProject } = require('./runPresetStore.js')
 
 const READY_TIMEOUT = 300_000
@@ -11,6 +12,7 @@ const USER = 'user'
 const USER_STOP_MS = 30_000
 const STOP_ALL_TRANSITION_MS = 10_000
 const MAX_ACTIONS = 20
+const MAX_RELOAD_RESULTS = 10
 const MAX_SEND_NOTE = 4000
 const MAX_SEND_BODY = 8000 - MAX_SEND_NOTE - '\n\n'.length
 const ACTIVE = new Set(['starting', 'running'])
@@ -38,11 +40,11 @@ function portOf(address) {
   return url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80
 }
 
-function recentErrorGroups(logs) {
+function recentErrorGroups(logs, limit = MAX_LOG_LINES) {
   const groups = logs.groups()
   let count = 0
   let i = groups.length
-  while (i > 0 && count + groups[i - 1].lines.length <= MAX_LOG_LINES) count += groups[--i].lines.length
+  while (i > 0 && count + groups[i - 1].lines.length <= limit) count += groups[--i].lines.length
   return groups.slice(i)
 }
 
@@ -67,6 +69,7 @@ async function resolveProject(folder) {
 }
 
 function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHomeOf = () => null,
+  enhancedJvmArgs = () => null, userData = file && path.dirname(file), prepareReload = prepareHotReload, startReload = startHotReload,
   sendState = () => {}, notifyCrash = () => {}, sendAsUser, now = Date.now, projectOf = resolveProject,
   prepareTask = prepareDevelopmentTask }) {
   store ??= createRunPresetStore(file)
@@ -74,6 +77,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   const byShell = new Map()
   const batches = new Map()
   const stoppingAll = new Set()
+  let reloadSequence = 0
   const getRun = (project, id) => runs.get(runKey(project, id))
 
   function find(project, id) {
@@ -85,7 +89,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   function runFor(project, id) {
     let run = getRun(project, id)
     if (!run) {
-      run = { id, project, state: idle(), actions: [], waiters: new Set(), logs: createDevelopmentErrors(now) }
+      run = { id, project, state: idle(), actions: [], reloadResults: [], waiters: new Set(), logs: createDevelopmentErrors(now) }
       runs.set(runKey(project, id), run)
     }
     return run
@@ -117,25 +121,57 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     update(run, { address, readyAt, errors, ...(readyAt !== undefined && run.state.status === 'starting' ? { status: 'running' } : {}) })
   }
 
-  function onEvent(run, event) {
+  function suspendReload(run) {
+    run.reloadWorker?.suspend()
+  }
+
+  function openReload(run) {
+    if (!run.reloadLaunch || !ACTIVE.has(run.state.status)) return
+    const paused = isLocked()
+    if (run.reloadWorker) { if (!paused) run.reloadWorker.resume(); return }
+    const { config, pid, env } = run.reloadLaunch
+    run.reloadWorker = startReload(config, { pid, env, paused, running: () => run.state.status === 'running' && !isLocked(),
+      onState(reload, diagnostics) {
+        if (reload.status === 'compileError') run.logs.addError(`ERROR ${reload.reason}`, diagnostics)
+        if (RELOAD_RESULTS.has(reload.status)) {
+          run.reloadResults.unshift({ sequence: ++reloadSequence, reload })
+          if (run.reloadResults.length > MAX_RELOAD_RESULTS) run.reloadResults.pop()
+        }
+        update(run, { reload, errors: run.logs.state().errors })
+      } })
+  }
+
+  function closeReload(run) {
+    run.reloadWorker?.close()
+    run.reloadWorker = undefined
+    run.reloadLaunch = undefined
+  }
+
+  function onEvent(run, event, hotReload) {
     const { type, shellId } = event
     if (type === 'start') {
+      closeReload(run)
       byShell.set(shellId, run)
       run.logs = createDevelopmentErrors(now)
-      update(run, { status: 'starting', startedAt: now(), shellId, exitCode: null, address: undefined, readyAt: undefined, errors: 0 })
+      update(run, { status: 'starting', startedAt: now(), shellId, exitCode: null, address: undefined, readyAt: undefined, reload: undefined, errors: 0 })
       return
     }
     if (run.state.shellId !== shellId) return
-    if (type === 'data' && ACTIVE.has(run.state.status)) {
+    if (type === 'launched' && hotReload && ACTIVE.has(run.state.status)) {
+      run.reloadLaunch = { config: hotReload, pid: event.pid, env: event.env }
+      openReload(run)
+    } else if (type === 'data' && ACTIVE.has(run.state.status)) {
       run.logs.feed(event.data)
       updateLogs(run)
     } else if (type === 'interrupt') {
       record(run, USER, 'stop')
     } else if (type === 'closed') {
+      closeReload(run)
       byShell.delete(shellId)
       if (event.wasRunning && !run.deleting) record(run, USER, 'stop')
       update(run, { shellId: undefined, ...(ACTIVE.has(run.state.status) && { status: 'stopped' }) })
     } else if (type === 'exit' && ACTIVE.has(run.state.status)) {
+      closeReload(run)
       run.logs.finish()
       const logState = run.logs.state()
       const crashed = !event.action && (event.failed || (typeof event.exitCode === 'number' && event.exitCode !== 0))
@@ -157,6 +193,8 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     if (defined.cwd !== cwd) throw new Error(MOVED)
     const javaHome = preset.jdk === 'system' ? undefined : await javaHomeOf(preset.jdk)
     if (preset.jdk !== 'system' && (!javaHome || !path.isAbsolute(javaHome))) throw new Error('선택한 JDK를 찾을 수 없습니다.')
+    const enhancedArgs = preset.hotReload === 'enhanced' ? await enhancedJvmArgs(preset.jdk) : undefined
+    if (preset.hotReload === 'enhanced' && !Array.isArray(enhancedArgs)) throw new Error('확장 바로 반영에는 JetBrains Runtime과 HotswapAgent가 필요합니다.')
     if (await directoryInProject(project.worktree, preset.relative) !== cwd || find(project, preset.id) !== preset) throw new Error(MOVED)
     ensureAllowed(allowed)
     if (defined.installCommand) {
@@ -165,7 +203,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       if (!approve(question)) throw question
     }
     return { ...defined, id: `preset:${preset.id}`, relative: preset.relative, name: preset.name, label: preset.name,
-      javaHome, env: preset.env }
+      javaHome, env: preset.env, enhancedArgs }
   }
 
   function guardAgent(preset, run, action) {
@@ -203,19 +241,28 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       return true
     }
     const makeTask = async () => {
-      const task = await freshTask(project, preset, by, approve, canAct)
+      let task = await freshTask(project, preset, by, approve, canAct)
+      if (preset.hotReload && preset.hotReload !== 'off') {
+        const { enhancedArgs, ...base } = task
+        task = await prepareReload(base, { worktree: project.worktree, kind: preset.taskId, mode: preset.hotReload, args: enhancedArgs, userData })
+      }
       if (verifyActor) await verifyActor()
       ensureAllowed(canAct)
-      return { ...task, onEvent: event => onEvent(run, event) }
+      return { ...task, onEvent: event => onEvent(run, event, task.hotReload) }
     }
     try {
       if (action === 'stop') {
         if (verifyActor) await verifyActor()
         ensureAllowed(canAct)
+        suspendReload(run)
         await getShells().changeDevelopmentTask(run.state.shellId, `preset:${id}`, 'stop', canAct)
+        closeReload(run)
         update(run, { status: 'stopped' })
       } else if (run.state.shellId) {
-        await makeTask()
+        await freshTask(project, preset, by, approve, canAct)
+        if (verifyActor) await verifyActor()
+        ensureAllowed(canAct)
+        suspendReload(run)
         await getShells().changeDevelopmentTask(run.state.shellId, `preset:${id}`, 'restart', canAct, makeTask)
       } else {
         const task = await makeTask()
@@ -223,25 +270,31 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       }
       record(run, by, action)
       return { ok: true }
+    } catch (error) {
+      openReload(run)
+      throw error
     } finally {
       run.busy = null
       finishTransition()
     }
   }
 
-  function wait(run, milliseconds, signal) {
+  function wait(run, milliseconds, signal, until = 'ready', after = reloadSequence) {
     // Signals are tied to the request socket or the lifetime of the current batch.
     return new Promise(resolve => {
       let timer
-      function finish(result) {
+      function finish(result, reload) {
         signal?.removeEventListener('abort', abort)
         run.waiters.delete(check)
         clearTimeout(timer)
-        resolve({ result, status: run.state.status })
+        resolve({ result, status: run.state.status, ...(reload && { reload }) })
       }
       const abort = () => finish('cancelled')
       const check = () => {
-        if (run.state.status === 'running') finish('ready')
+        const next = until === 'reload' ? run.reloadResults.findLast(entry => entry.sequence > after) : null
+        if (isLocked()) finish('cancelled')
+        else if (next) finish(next.reload.status, next.reload)
+        else if (until === 'ready' && run.state.status === 'running') finish('ready')
         else if (!ACTIVE.has(run.state.status)) finish(run.state.status)
       }
       if (signal?.aborted) return abort()
@@ -267,6 +320,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   }
 
   async function agentTool(by, request, allowed, signal) {
+    const afterReload = reloadSequence
     ensureAllowed(allowed)
     const project = await agentProject(getAgent(by))
     ensureAllowed(allowed)
@@ -274,7 +328,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       return { presets: store.list(project.key).map(preset => {
         const state = getRun(project, preset.id)?.state ?? idle()
         return { name: preset.name, status: state.status, port: portOf(state.address),
-          errors: state.errors, agentControl: preset.agentControl }
+          errors: state.errors, agentControl: preset.agentControl, ...(state.reload && { reload: state.reload }) }
       }) }
     }
     const preset = store.list(project.key).find(item => item.name === presetName(request.name))
@@ -290,7 +344,10 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     if (operation === 'wait') {
       const seconds = request.seconds ?? 30
       if (!Number.isInteger(seconds) || seconds < 1 || seconds > 300) throw new Error('대기 시간은 1~300초입니다.')
-      const result = await wait(run, seconds * 1000, signal)
+      const until = request.until ?? 'ready'
+      if (!['ready', 'reload'].includes(until)) throw new Error('시작 완료 또는 바로 반영 결과를 기다릴 수 있습니다.')
+      if (until === 'reload' && preset.hotReload === 'off') throw new Error('이 구성은 바로 반영이 꺼져 있습니다.')
+      const result = await wait(run, seconds * 1000, signal, until, afterReload)
       await verifyActor()
       return result
     }
@@ -299,7 +356,9 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       if (!Number.isInteger(count) || count < 1 || count > MAX_LOG_LINES || (request.errors !== undefined && (request.errors !== true || request.lines !== undefined))) {
         throw new Error('로그는 최대 400줄까지 볼 수 있습니다.')
       }
-      return request.errors ? { groups: recentErrorGroups(run.logs) } : { lines: run.logs.lines(count) }
+      const history = run.reloadResults.slice(0, count).map(entry => reloadLog(entry.reload))
+      if (request.errors) return { ...(history.length && { reload: history }), groups: recentErrorGroups(run.logs, MAX_LOG_LINES - history.length) }
+      return { lines: [...history, ...(count > history.length ? run.logs.lines(count - history.length) : [])] }
     }
     if (!['start', 'restart', 'stop'].includes(operation)) throw new Error('지원하지 않는 조작입니다.')
     return act(project, preset.id, operation, { by, allowed, verifyActor })
@@ -379,6 +438,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     ensureAllowed(allowed)
     store.write(project.root, store.list(project.key).filter(preset => preset.id !== id))
     for (const run of instances) {
+      closeReload(run)
       if (run.state.shellId) {
         run.deleting = true
         getShells().close(run.state.shellId)
@@ -455,7 +515,15 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       if (taskId !== `preset:${run.id}` || !['restart', 'stop'].includes(action)) throw new Error(MISSING)
       return act(run.project, run.id, action, { allowed })
     },
-    cancelBatches() { for (const batch of batches.values()) batch.abort() }
+    cancelBatches() { for (const batch of batches.values()) batch.abort() },
+    suspendReloads() {
+      for (const run of runs.values()) {
+        suspendReload(run)
+        for (const settle of run.waiters) settle()
+      }
+    },
+    resumeReloads() { for (const run of runs.values()) openReload(run) },
+    stopReloads() { for (const run of runs.values()) closeReload(run) }
   }
 }
 

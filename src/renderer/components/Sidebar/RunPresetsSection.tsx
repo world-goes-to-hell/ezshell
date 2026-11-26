@@ -4,13 +4,13 @@
 import { useEffect, useState, type MouseEvent } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
-  RiAddLine, RiArrowDownLine, RiArrowUpLine, RiDeleteBinLine, RiEditLine, RiExternalLinkLine, RiFileList3Line,
+  RiAddLine, RiArrowDownLine, RiArrowUpLine, RiDeleteBinLine, RiEditLine, RiExternalLinkLine, RiFileList3Line, RiFlashlightLine,
   RiMoreFill, RiPlayFill, RiRefreshLine, RiStopFill, RiTerminalLine
 } from 'react-icons/ri'
 import { SiNodedotjs, SiSpringboot, SiVite, SiVuedotjs } from 'react-icons/si'
 import { FaJava } from 'react-icons/fa'
 import {
-  agentActionNote, AGENT_ACTION_MS, IDLE_STATE, runButtons, runFolderLabel, runHead, runKind, runPills,
+  agentActionNote, AGENT_ACTION_MS, IDLE_STATE, reloadChip, reloadTicks, runButtons, runFolderLabel, runHead, runKind, runPills,
   type RunButton, type RunPreset, type RunState
 } from '../../lib/runPresets'
 import {
@@ -58,6 +58,7 @@ export function RunPresetsSection({ folder, projectName, roots }: { folder: stri
   const ticking = presets.some(preset => {
     const state = states[preset.id]
     return state?.status === 'starting' || (!!state?.lastAction && state.lastAction.by !== 'user' && Date.now() - state.lastAction.at < AGENT_ACTION_MS)
+      || reloadTicks(state, Date.now())
   })
   const now = useNow(ticking)
   if (!hasApi || !project) return null
@@ -104,6 +105,7 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
   const pills = runPills(state, now)
   const buttons = runButtons(state)
   const note = agentActionNote(state.lastAction, now)
+  const reload = reloadChip(state, now)
 
   const showLog = async (toFirstError = false) => {
     if (!state.shellId) return
@@ -145,7 +147,8 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
   return (
     <li className="run-preset" data-run-preset={preset.id} data-status={state.status} data-agent-acted={note ? 'true' : undefined}
       onClick={() => { if (state.shellId) void showLog() }}
-      title={state.shellId ? `${preset.name} · 로그 보기` : preset.name}>
+      title={state.shellId ? `${preset.name} · 로그 보기` : preset.name} data-reload={state.reload && reload ? state.reload.status : undefined}>
+      <div className="run-preset-main">
       <span className="run-preset-kind" data-kind={kind} aria-hidden="true"><KindIcon size={11} /></span>
       <span className="run-preset-name">{preset.name}</span>
       {note
@@ -165,7 +168,8 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
         const shown = crashed && button === 'restart' ? '다시 실행' : label
         return (
           <button key={button} type="button" className="run-preset-btn" data-action={button} onClick={press(button)}
-            title={shown} aria-label={`${preset.name} ${shown}`}>
+            data-emphasis={button === 'restart' && reload?.restart ? 'true' : undefined}
+            title={button === 'restart' && reload?.restart ? `${shown} · 바뀐 내용을 적용하려면 재기동이 필요합니다` : shown} aria-label={`${preset.name} ${shown}`}>
             <Icon size={13} aria-hidden="true" />
           </button>
         )
@@ -186,6 +190,18 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
+      </div>
+      {/* Hot reload: its own line under the row while it is on (beside the state there is no room in the
+          sidebar's width), kept from watching to the result so the row does not jump at each save */}
+      {reload && (
+        <div className="run-preset-reload-line">
+          <RiFlashlightLine size={10} aria-hidden="true" />
+          {reload.toErrors
+            ? <button type="button" className="run-preset-reload-chip" data-tone={reload.tone}
+                onClick={event => { event.stopPropagation(); void showLog(true) }} title={reload.title}>{reload.text}</button>
+            : <span className="run-preset-reload-chip" data-tone={reload.tone} title={reload.title}>{reload.text}</span>}
+        </div>
+      )}
     </li>
   )
 }

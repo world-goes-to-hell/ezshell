@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { takePendingJdkFeature } from '../../lib/settingsNavigation'
 import { formatBytes } from '../../lib/mcpLabels'
-import type { JdkBuild, JdkProgress, JdkRuntime, JdkVendor } from '../../types'
+import type { HotswapAgentStatus, JdkBuild, JdkProgress, JdkRuntime, JdkVendor } from '../../types'
 import './JdkSettings.css'
 
 const FEATURES = Array.from({ length: 20 }, (_, index) => 25 - index)
-const VENDOR_NAMES: Record<JdkVendor, string> = { temurin: 'Eclipse Temurin', zulu: 'Azul Zulu' }
-const providerName = (vendor: string) => vendor === 'temurin' || vendor === 'zulu' ? VENDOR_NAMES[vendor] : vendor
+const JBR_FEATURES = [21, 17]
+const AGENT = 'hotswap-agent'
+const VENDOR_NAMES: Record<JdkVendor, string> = { temurin: 'Eclipse Temurin', zulu: 'Azul Zulu', jbr: 'JetBrains Runtime' }
+const providerName = (vendor: string) => vendor === 'temurin' || vendor === 'zulu' || vendor === 'jbr' ? VENDOR_NAMES[vendor] : vendor
 
 export function JdkRequirementNotice({ feature, jdks, onInstall }: { feature: number | null; jdks: readonly JdkRuntime[]; onInstall?: () => void }) {
   if (!feature || jdks.some(jdk => jdk.feature >= feature)) return null
@@ -19,6 +21,7 @@ export function JdkRequirementNotice({ feature, jdks, onInstall }: { feature: nu
 export function JdkSettings() {
   const api = window.electronAPI
   const [jdks, setJdks] = useState<JdkRuntime[] | null>(null)
+  const [hotswapAgent, setHotswapAgent] = useState<HotswapAgentStatus | null>(null)
   // Opened from a run preset's JDK notice (lib/settingsNavigation.ts): 받기 open at that version
   const [asked] = useState(takePendingJdkFeature)
   const [expanded, setExpanded] = useState(asked !== null)
@@ -36,8 +39,11 @@ export function JdkSettings() {
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
-    try { setJdks((await api.runtimesList()).jdks) }
-    catch { setNotice({ text: 'JDK 목록을 읽지 못했습니다.', error: true }) }
+    try {
+      const runtimes = await api.runtimesList()
+      setJdks(runtimes.jdks)
+      setHotswapAgent(runtimes.hotswapAgent)
+    } catch { setNotice({ text: '개발 도구 목록을 읽지 못했습니다.', error: true }) }
   }, [api])
 
   useEffect(() => {
@@ -72,17 +78,20 @@ export function JdkSettings() {
   const legacy = feature === 6 || feature === 7
   const localLegacy = legacy ? jdks?.find(jdk => !jdk.managed && jdk.feature === feature) : undefined
 
-  const install = async () => {
-    if (busy || !selectedBuild) return
+  const install = async (agent = false) => {
+    if (busy || (!agent && !selectedBuild)) return
+    const label = agent ? 'HotswapAgent' : 'JDK'
     setInstalling(true)
     setNotice(null)
     try {
-      const result = await api.runtimesInstall(vendor, feature)
+      const result = agent
+        ? await api.runtimesHotswapInstall().then(outcome => outcome.ok ? { ...outcome, jdk: null } : outcome)
+        : await api.runtimesInstall(vendor, feature)
       if (result.ok) {
-        setNotice({ text: `JDK ${result.jdk.version}을 보관함에 추가했습니다.` })
+        setNotice({ text: result.jdk ? `JDK ${result.jdk.version}을 보관함에 추가했습니다.` : 'HotswapAgent를 보관함에 추가했습니다.' })
         await refresh()
-      } else setNotice(result.cancelled ? { text: 'JDK 받기를 취소했습니다.' } : { text: result.error ?? 'JDK를 받지 못했습니다.', error: true })
-    } catch { setNotice({ text: 'JDK를 받지 못했습니다.', error: true }) }
+      } else setNotice(result.cancelled ? { text: `${label} 받기를 취소했습니다.` } : { text: result.error ?? `${label}를 받지 못했습니다.`, error: true })
+    } catch { setNotice({ text: `${label}를 받지 못했습니다.`, error: true }) }
     finally { setInstalling(false); setCancelling(false) }
   }
 
@@ -96,16 +105,22 @@ export function JdkSettings() {
     if (busy || removing) return
     setRemoving(true)
     setNotice(null)
+    const label = id === AGENT ? 'HotswapAgent' : 'JDK'
     try {
-      const result = await api.runtimesRemove(id)
+      const result = id === AGENT ? await api.runtimesHotswapRemove() : await api.runtimesRemove(id)
       if (result.ok) {
         setPendingRemoval(null)
-        setNotice({ text: '보관함에서 JDK를 지웠습니다.' })
+        setNotice({ text: `보관함에서 ${label}를 지웠습니다.` })
         await refresh()
       } else setNotice({ text: result.error, error: true })
-    } catch { setNotice({ text: 'JDK를 지우지 못했습니다.', error: true }) }
+    } catch { setNotice({ text: `${label}를 지우지 못했습니다.`, error: true }) }
     finally { setRemoving(false) }
   }
+
+  const removeButtons = (id: string, label: string) => pendingRemoval === id ? <div className="jdk-actions">
+    <button type="button" className="btn-secondary" disabled={removing} onClick={() => setPendingRemoval(null)}>취소</button>
+    <button type="button" className="btn-secondary" disabled={busy || removing} onClick={() => void remove(id)}>삭제 확인</button>
+  </div> : <button type="button" className="btn-secondary" disabled={busy || removing} aria-label={`${label} 지우기`} onClick={() => setPendingRemoval(id)}>지우기</button>
 
   const renderList = (managed: boolean) => {
     const visible = jdks?.filter(jdk => jdk.managed === managed)
@@ -119,10 +134,7 @@ export function JdkSettings() {
             <strong>{providerName(jdk.vendor)} {jdk.version}</strong>
             <span>{[jdk.arch === 'unknown' ? null : jdk.arch, jdk.folder, jdk.sizeBytes === undefined ? null : formatBytes(jdk.sizeBytes)].filter(Boolean).join(' · ')}</span>
           </div>
-          {managed && (pendingRemoval === jdk.id ? <div className="jdk-actions">
-            <button type="button" className="btn-secondary" disabled={removing} onClick={() => setPendingRemoval(null)}>취소</button>
-            <button type="button" className="btn-secondary" disabled={busy || removing} onClick={() => void remove(jdk.id)}>삭제 확인</button>
-          </div> : <button type="button" className="btn-secondary" disabled={busy || removing} aria-label={`${jdk.version} 지우기`} onClick={() => setPendingRemoval(jdk.id)}>지우기</button>)}
+          {managed && removeButtons(jdk.id, jdk.version)}
         </li>)}
       </ul>}
     </section>
@@ -136,12 +148,17 @@ export function JdkSettings() {
     <p className="settings-section-desc">받은 JDK는 ezShell 실행 구성에서 선택해 사용합니다.</p>
     {expanded && <div className="jdk-download">
       <div className="jdk-choice-row">
-        <label>공급자<select value={vendor} disabled={busy} onChange={event => setVendor(event.target.value as JdkVendor)}>
+        <label>공급자<select value={vendor} disabled={busy} onChange={event => {
+          const next = event.target.value as JdkVendor
+          setVendor(next)
+          if (next === 'jbr' && !JBR_FEATURES.includes(feature)) setFeature(21)
+        }}>
           <option value="temurin">Eclipse Temurin (추천)</option>
           <option value="zulu">Azul Zulu</option>
+          <option value="jbr">JetBrains Runtime (확장 바로 반영)</option>
         </select></label>
         <label>버전<select value={feature} disabled={busy} onChange={event => setFeature(Number(event.target.value))}>
-          {FEATURES.map(version => <option key={version} value={version}>JDK {version}</option>)}
+          {(vendor === 'jbr' ? JBR_FEATURES : FEATURES).map(version => <option key={version} value={version}>JDK {version}</option>)}
         </select></label>
       </div>
       <div className="jdk-actions">
@@ -166,12 +183,23 @@ export function JdkSettings() {
         : <p className="settings-section-desc">이 버전의 공개 빌드가 없습니다. 이 PC에서 찾은 JDK를 실행 구성에서 선택할 수 있습니다.</p>}
     </div>}
     {busy && <div className="jdk-progress">
-      <span role="status">{cancelling ? '취소 중…' : progress?.phase === 'unpack' ? 'JDK 압축 푸는 중…' : progress?.phase === 'download' ? `받는 중 · ${formatBytes(progress.received)}` : 'JDK 확인 중…'}</span>
-      <progress aria-label="JDK 받기 진행률" max={progress?.total ?? undefined} value={progress?.total ? progress.received : undefined} />
+      <span role="status">{cancelling ? '취소 중…' : progress?.phase === 'unpack' ? 'JDK 압축 푸는 중…' : progress?.phase === 'download' ? `받는 중 · ${formatBytes(progress.received)}` : '다운로드 확인 중…'}</span>
+      <progress aria-label="개발 도구 받기 진행률" max={progress?.total ?? undefined} value={progress?.total ? progress.received : undefined} />
       <button type="button" className="btn-secondary" disabled={cancelling} onClick={() => void cancel()}>받기 취소</button>
     </div>}
     {notice && <p className={notice.error ? 'jdk-error' : 'settings-section-desc'} role={notice.error ? 'alert' : 'status'}>{notice.text}</p>}
     {renderList(true)}
     {renderList(false)}
+    <section className="jdk-list-section">
+      <h4>HotswapAgent</h4>
+      <p className="settings-section-desc">JetBrains Runtime 17·21에서 확장 바로 반영에 사용합니다.</p>
+      <div className="jdk-actions">
+        <button type="button" className="btn-secondary" onClick={() => void api.runtimesOpenLicense(AGENT)}>HotswapAgent 라이선스</button>
+        {hotswapAgent?.installed ? <>
+          <span>받음 · {hotswapAgent.version}</span>
+          {removeButtons(AGENT, 'HotswapAgent')}
+        </> : <button type="button" className="btn-primary" disabled={!hotswapAgent || busy || removing} onClick={() => void install(true)}>HotswapAgent 받기</button>}
+      </div>
+    </section>
   </section>
 }

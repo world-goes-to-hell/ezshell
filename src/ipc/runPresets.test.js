@@ -57,9 +57,9 @@ async function fixture() {
       }
     }
   }
-  const makeController = () => createRunPresets({ file, getShells: () => shells, getAgent: id => id === 'agent-1' ? { id, active: true, shellId: 'agent-shell' } : null,
+  const makeController = (options = {}) => createRunPresets({ file, getShells: () => shells, getAgent: id => id === 'agent-1' ? { id, active: true, shellId: 'agent-shell' } : null,
     isLocked: () => state.locked, sendState, sendAsUser, notifyCrash, now: () => state.now, javaHomeOf: id => id === 'jdk-21' ? outside : null,
-    projectOf: async cwd => cwd === checkout || cwd === checkoutSubfolder ? { ...location(cwd, checkout, folder), gitWorktree: true } : location(cwd) })
+    projectOf: async cwd => cwd === checkout || cwd === checkoutSubfolder ? { ...location(cwd, checkout, folder), gitWorktree: true } : location(cwd), ...options })
   const controller = makeController()
   const ipc = registerRunPresetIpc({ ipcMain: { handle: (channel, fn) => handlers.set(channel, fn) }, controller, fromMainWindow: e => e.sender === event.sender, isLocked: () => state.locked })
   const invoke = (channel, ...args) => handlers.get(channel)(event, folder, ...args)
@@ -85,13 +85,71 @@ describe('saved project runs', () => {
     }
     const preset = await f.save('web', { env: { PORT: '5431' }, confirmedHash: commandHash('npm run dev') })
     expect(preset).toMatchObject({ env: { PORT: '5431' } })
+    expect(preset.hotReload).toBe('off')
     expect(preset).not.toHaveProperty('confirmedHash')
     const data = JSON.parse(await readFile(f.file, 'utf8'))
     expect(data.projects[0].presets[0]).not.toHaveProperty('confirmedHash')
     data.projects[0].presets.push({ ...preset, name: 'x'.repeat(21) })
     data.projects[0].presets[0].confirmedHash = commandHash('a different command')
+    delete data.projects[0].presets[0].hotReload
     await writeFile(f.file, JSON.stringify(data))
     expect(createRunPresetStore(f.file).list(projectKey(f.folder))).toEqual([preset])
+  })
+
+  it('allows hot reload only for Spring Boot candidates and checks enhanced JDK support at launch', async () => {
+    const f = await fixture()
+    for (const input of [{ kind: 'custom', command: 'node dev' }, { kind: 'task', taskId: '.:node' }]) {
+      expect(await f.invoke('run-presets-save', { name: 'try', hotReload: 'standard', ...input })).toMatchObject({ ok: false, error: expect.stringContaining('Spring Boot') })
+    }
+    await writeFile(path.join(f.folder, 'pom.xml'), '<artifactId>spring-boot-starter</artifactId>')
+    const saved = await f.save('Spring', { kind: 'task', taskId: '.:maven', hotReload: 'enhanced', jdk: 'jdk-21' })
+    expect(saved).toMatchObject({ hotReload: 'enhanced' })
+    expect(await f.invoke('run-preset-start', saved.id)).toMatchObject({ ok: false, error: expect.stringContaining('HotswapAgent') })
+    expect(f.operations).toEqual([])
+  })
+
+  it('reports hot reload in run_list, prepends results and lets run_wait observe the first new result', async () => {
+    const f = await fixture()
+    await writeFile(path.join(f.folder, 'pom.xml'), '<artifactId>spring-boot-starter</artifactId>')
+    const close = vi.fn()
+    const suspend = vi.fn()
+    const resume = vi.fn()
+    let callbacks
+    const controller = f.makeController({ prepareReload: async task => ({ ...task, hotReload: { port: 57334 } }),
+      startReload(config, options) { callbacks = options; expect(config.port).toBe(57334); return { close, suspend, resume } } })
+    const { preset } = await controller.save(f.project, { name: 'Spring', kind: 'task', taskId: '.:maven', hotReload: 'standard' }, f.allowed)
+    await controller.act(f.project, preset.id, 'start', { allowed: f.allowed })
+    expect(callbacks).toBeUndefined()
+    f.emit('local:1', { type: 'launched', pid: 13, env: { Path: 'JDK' } })
+    expect(callbacks).toMatchObject({ pid: 13, env: { Path: 'JDK' } })
+    expect(callbacks.running()).toBe(false)
+    f.emit('local:1', { type: 'data', data: 'INFO Started Spring in 1.2 seconds\r\n' })
+    expect(callbacks.running()).toBe(true)
+    const read = (operation, fields) => controller.agentTool('agent-1', { method: `run-${operation}`, name: 'Spring', ...fields }, f.allowed)
+    callbacks.onState({ status: 'applied', classes: 1, at: 101 })
+    const wait = read('wait', { seconds: 2, until: 'reload' })
+    const failure = { status: 'compileError', at: 102, reason: 'javac 컴파일에 실패했습니다.' }
+    callbacks.onState({ status: 'compiling', at: 102 })
+    callbacks.onState(failure, ['Example.java:1: error: Missing symbol'])
+    callbacks.onState({ status: 'applied', classes: 2, at: 103 })
+    expect(await wait).toMatchObject({ result: 'compileError', status: 'running', reload: failure })
+    const listed = await read('list')
+    expect(listed.presets[0]).toMatchObject({ status: 'running', port: null, errors: 1, reload: { status: 'applied', classes: 2 } })
+    expect(JSON.stringify(listed)).not.toContain('57334')
+    const recent = await read('log', { lines: 2 })
+    expect(recent.lines).toEqual([expect.stringContaining('바로 반영됨 · 클래스 2개'), expect.stringContaining('컴파일 오류')])
+    const { groups } = await read('log', { errors: true })
+    expect(groups.at(-1).lines).toEqual(['ERROR javac 컴파일에 실패했습니다.', 'Example.java:1: error: Missing symbol'])
+    expect(JSON.stringify(f.sendState.mock.calls)).not.toContain('57334')
+    f.state.locked = true
+    controller.suspendReloads()
+    expect(suspend).toHaveBeenCalledTimes(1)
+    expect(close).not.toHaveBeenCalled()
+    f.state.locked = false
+    controller.resumeReloads()
+    expect(resume).toHaveBeenCalledTimes(1)
+    await controller.act(f.project, preset.id, 'stop', { allowed: f.allowed })
+    expect(close).toHaveBeenCalledTimes(1)
   })
 
   it('confirms the exact command from the main frame and restarts in one shell', async () => {
@@ -129,6 +187,7 @@ describe('saved project runs', () => {
     expect(await f.agent('wait', 'private')).toEqual({ result: 'ready', status: 'running' })
     expect(await f.agent('log', 'private', { errors: true })).toEqual({ groups: [{ at: 100, lines: ['ERROR compile failed'] }] })
     await expect(f.agent('start', 'web')).rejects.toThrow('사용자가')
+    await expect(f.agent('wait', 'web', { until: 'reload' })).rejects.toThrow('바로 반영이 꺼져')
     f.state.bound = false
     await expect(f.agent('list')).rejects.toThrow('작업 폴더')
     f.state.bound = true

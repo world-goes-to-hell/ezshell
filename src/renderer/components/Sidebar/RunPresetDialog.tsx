@@ -4,19 +4,31 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiFolder3Line, RiPlayLine } from 'react-icons/ri'
-import { draftOf, emptyDraft, presetFromDraft, runFolderLabel, type PresetDraft, type RunCandidate, type RunPreset } from '../../lib/runPresets'
+import {
+  draftOf, emptyDraft, hotReloadChoice, hotReloadToSave, presetFromDraft, runFolderLabel,
+  type HotReload, type PresetDraft, type RunCandidate, type RunPreset
+} from '../../lib/runPresets'
 import { draftKey, dropDraft, keepDraft, reloadProjectPresets, runPresetApi, takeDraft, worktreeRuns } from '../../stores/runPresetStore'
 import { JdkRequirementNotice } from '../Settings/JdkSettings'
 import { openSettingsTab } from '../../lib/settingsNavigation'
-import type { JdkRuntime } from '../../types'
+import type { HotswapAgentStatus, JdkRuntime } from '../../types'
 
-// The JDK store (codex-4's src/runtimes): entries without paths; optional until a build has it
+// The JDK store (codex-4's src/runtimes): entries without paths; optional until a build has it.
+// `hotswapAgent` (stage 3): whether HotswapAgent is fetched, for the enhanced hot reload.
 type RuntimesApi = {
-  runtimesList?: () => Promise<{ jdks: JdkRuntime[] } | undefined>
+  runtimesList?: () => Promise<{ jdks: JdkRuntime[]; hotswapAgent?: HotswapAgentStatus } | undefined>
   runtimesRequired?: (projectFolder: string) => Promise<{ feature: number | null } | undefined>
 }
 
-const jdkLabel = (jdk: JdkRuntime) => [jdk.vendor, `JDK ${jdk.feature}`, jdk.version && `(${jdk.version})`, jdk.managed ? '' : '· 이 PC'].filter(Boolean).join(' ')
+const HOT_RELOAD_OPTIONS: Array<{ value: HotReload; label: string; detail?: string }> = [
+  { value: 'off', label: '끄기' },
+  { value: 'standard', label: '표준', detail: '메서드 안의 코드 수정 · 모든 JDK' },
+  { value: 'enhanced', label: '확장', detail: '메서드·필드 추가, Spring 빈 다시 읽기 · JBR 17·21 필요' }
+]
+
+// The store's vendor ids by the names Settings > 개발 도구 shows (a JDK found on the PC keeps its own)
+const VENDOR_NAMES: Record<string, string> = { temurin: 'Eclipse Temurin', zulu: 'Azul Zulu', jbr: 'JetBrains Runtime' }
+const jdkLabel = (jdk: JdkRuntime) => [VENDOR_NAMES[jdk.vendor] ?? jdk.vendor, `JDK ${jdk.feature}`, jdk.version && `(${jdk.version})`, jdk.managed ? '' : '· 이 PC'].filter(Boolean).join(' ')
 
 export function RunPresetDialog({ folder, projectName, preset, onClose }: {
   folder: string; projectName: string; roots: string[]; preset: RunPreset | null; onClose: () => void
@@ -28,6 +40,7 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
   const [folders, setFolders] = useState<string[]>([])
   const [candidates, setCandidates] = useState<RunCandidate[] | null>(null)
   const [jdks, setJdks] = useState<JdkRuntime[]>([])
+  const [hotswapAgent, setHotswapAgent] = useState<HotswapAgentStatus | undefined>(undefined)
   // The JDK the project's build asks for (pom.xml, Gradle, Spring Boot 3), when known
   const [required, setRequired] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -44,6 +57,7 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
     void runtimes.runtimesList?.().then(result => {
       const list = result?.jdks
       if (active && Array.isArray(list)) setJdks(list.filter(jdk => jdk && typeof jdk.id === 'string'))
+      if (active) setHotswapAgent({ installed: result?.hotswapAgent?.installed === true })
     }).catch(() => {})
     void runtimes.runtimesRequired?.(folder).then(result => {
       if (active && typeof result?.feature === 'number') setRequired(result.feature)
@@ -77,9 +91,23 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
       ...(!known && draft.jdk !== 'system' ? [{ id: draft.jdk, label: `${draft.jdk} (보관함에 없음)` }] : [])]
   }, [jdks, draft.jdk])
 
+  // 바로 반영: what the chosen way to run and JDK allow
+  const runtimesKnown = hotswapAgent !== undefined
+  const reloadChoice = hotReloadChoice({ kind: draft.kind, taskId: draft.taskId, jdk: draft.jdk, jdks, hotswapAgent })
+  const hotReload = hotReloadToSave(draft.hotReload, reloadChoice)
+
+  const toSettings = () => {
+    // As for a JDK: the dialog closes over the settings window, its input kept for when it opens again
+    keepDraft(keyOfDraft, draft)
+    onClose()
+    openSettingsTab('development')
+  }
+
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    const made = presetFromDraft(draft)
+    // Before the store's list comes the answer is not known: main checks the enhanced grade again
+    if (runtimesKnown && hotReload === 'enhanced' && !reloadChoice.enhanced) { setError(reloadChoice.enhancedMissing ?? '확장을 쓸 수 없습니다.'); return }
+    const made = presetFromDraft({ ...draft, hotReload })
     if ('error' in made) { setError(made.error); return }
     const save = runPresetApi().runPresetsSave
     if (!save) return
@@ -163,6 +191,30 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
                 onClose()
                 openSettingsTab('development', { jdkFeature: required })
               }} />
+            </div>
+            <div className="form-group run-preset-reload" role="radiogroup" aria-label="바로 반영" data-usable={reloadChoice.usable || undefined}>
+              <span className="run-preset-field-label">바로 반영 <span className="run-preset-hint">(Java 수정을 재기동 없이)</span></span>
+              <div className="run-preset-reload-options">
+                {HOT_RELOAD_OPTIONS.map(option => {
+                  const disabled = option.value !== 'off' && (!reloadChoice.usable || (option.value === 'enhanced' && !reloadChoice.enhanced && hotReload !== 'enhanced'))
+                  return (
+                    <label key={option.value} className="run-preset-reload-option" data-on={hotReload === option.value || undefined} data-disabled={disabled || undefined}>
+                      <input type="radio" name="run-preset-reload" value={option.value} checked={hotReload === option.value} disabled={disabled}
+                        onChange={() => set({ hotReload: option.value })} />
+                      <strong>{option.label}</strong>
+                      {option.detail && <small>{option.detail}</small>}
+                    </label>
+                  )
+                })}
+              </div>
+              {!reloadChoice.usable && <small className="run-preset-hint run-preset-reload-reason">{reloadChoice.reason}</small>}
+              {runtimesKnown && reloadChoice.usable && !reloadChoice.enhanced && (
+                <div className="run-preset-reload-missing" data-selected={hotReload === 'enhanced' || undefined}>
+                  <small>{reloadChoice.enhancedMissing}</small>
+                  {reloadChoice.needsDownload && <button type="button" className="run-preset-link" onClick={toSettings}>설정 &gt; 개발 도구에서 받기</button>}
+                </div>
+              )}
+              <small className="run-preset-hint">바로 반영을 켜면 이 실행에 IDE 디버거를 붙일 수 없습니다.</small>
             </div>
             <div className="form-group">
               <label htmlFor="run-preset-env">환경 변수 <span className="run-preset-hint">(한 줄에 하나, 이름=값)</span></label>

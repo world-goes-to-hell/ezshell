@@ -5,6 +5,8 @@
  */
 .run-presets {
   display: grid;
+  /* One column as wide as the card: the rows shrink (name, chips cut) instead of pushing their buttons out */
+  grid-template-columns: minmax(0, 1fr);
   gap: 3px;
   margin: 2px 6px 6px 22px;
 }
@@ -52,18 +54,24 @@
 .run-presets-head button:disabled { color: var(--text-muted); cursor: default; }
 .run-presets-head .run-presets-head-add { color: var(--text-secondary); padding: 1px 3px; }
 
-.run-presets-list { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.run-presets-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; margin: 0; padding: 0; list-style: none; }
 
 .run-preset {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 2px 0 6px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 4px);
   background: var(--bg-primary);
   font-size: 12px;
+}
+/* The row's own line (kind, name, state, buttons); the hot reload line goes under it */
+.run-preset-main {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 2px 0 6px;
 }
 .run-preset[data-status="running"] { border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
 .run-preset[data-status="crashed"] { border-color: var(--error); background: color-mix(in srgb, var(--error) 7%, var(--bg-primary)); }
@@ -282,7 +290,7 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
 
 /* Narrow sidebar: a row keeps all its buttons */
 .run-presets { margin-left: 14px; margin-right: 2px; }
-.run-preset { gap: 3px; }
+.run-preset-main { gap: 3px; }
 .run-preset-btn { width: 20px; }
 .run-preset-name { max-width: 34%; }
 
@@ -310,3 +318,85 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
   word-break: break-all;
   tab-size: 8;
 }
+
+/* 바로 반영 in the dialog (stage 3): three options side by side, the reason when it is fixed to 끄기 */
+.run-preset-reload-options { display: grid; grid-template-columns: 0.6fr 1fr 1fr; gap: 4px; }
+.run-preset-form .form-group label.run-preset-reload-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-content: start;
+  column-gap: 6px;
+  row-gap: 2px;
+  margin-bottom: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 400;
+  cursor: pointer;
+}
+.run-preset-form .form-group .run-preset-reload-option input[type="radio"] { width: auto; margin: 1px 0 0; padding: 0; box-shadow: none; accent-color: var(--accent); }
+.run-preset-reload-option strong { font-weight: 600; }
+.run-preset-reload-option small { grid-column: 1 / -1; color: var(--text-muted); font-size: 10.5px; line-height: 1.35; }
+.run-preset-form .form-group label.run-preset-reload-option[data-on] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--bg-primary)); }
+.run-preset-form .form-group label.run-preset-reload-option[data-disabled] { cursor: not-allowed; opacity: 0.5; }
+.run-preset-reload-reason { display: block; margin-top: 4px; }
+.run-preset-reload-missing { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin-top: 4px; font-size: 11px; color: var(--text-muted); }
+.run-preset-reload-missing[data-selected] { color: var(--warning); }
+.run-preset-reload > .run-preset-hint:last-child { display: block; margin-top: 4px; }
+.run-preset-form button.run-preset-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.run-preset-form button.run-preset-link:hover { text-decoration: underline; }
+.run-preset-form button.run-preset-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
+
+/* The hot reload line under a row (small; long reasons cut, the whole text in the tooltip) */
+.run-preset-reload-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin-top: -3px;
+  padding: 0 6px 3px 27px;
+  color: var(--text-muted);
+}
+.run-preset-reload-line > svg { flex: none; }
+.run-preset[data-reload="restartNeeded"] .run-preset-reload-line > svg { color: var(--warning); }
+.run-preset[data-reload="applied"] .run-preset-reload-line > svg { color: var(--success); }
+.run-preset-reload-chip {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 5px;
+  border: none;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.run-preset-reload-chip[data-tone="muted"] { color: var(--text-muted); background: color-mix(in srgb, var(--text-muted) 10%, transparent); font-weight: 400; }
+.run-preset-reload-chip[data-tone="busy"] { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.run-preset-reload-chip[data-tone="ok"] { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.run-preset-reload-chip[data-tone="warn"] { color: var(--warning); background: color-mix(in srgb, var(--warning) 16%, transparent); font-weight: 600; }
+.run-preset-reload-chip[data-tone="err"] { color: var(--error-text, var(--error)); background: color-mix(in srgb, var(--error) 13%, transparent); }
+button.run-preset-reload-chip { cursor: pointer; }
+button.run-preset-reload-chip:hover { text-decoration: underline; }
+button.run-preset-reload-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* 재기동 필요: the row's ↻ stands out */
+.run-preset-btn[data-action="restart"][data-emphasis] {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 45%, transparent);
+}
+.run-preset[data-status="running"][data-reload="restartNeeded"] { border-color: color-mix(in srgb, var(--warning) 60%, var(--border)); }

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   firstErrorRow, agentActionNotice, agentNoticeName, withObject, withSubject, runCommandLabel, agentActionNote, crashKey, draftOf, emptyDraft, parseEnvText, presetFromDraft, runButtons, runError, runFolderLabel,
-  runHead, runKind, runPills, runPort, sendPreview, type RunPreset, type RunState
+  runHead, runKind, runPills, runPort, sendPreview, type RunPreset, type RunState,
+  hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
 } from './runPresets'
 
 const preset = (over: Partial<RunPreset> = {}): RunPreset => ({
@@ -78,7 +79,7 @@ describe('the preset form', () => {
     const made = presetFromDraft({ ...emptyDraft(), name: ' 프론트 ', relative: './frontend/', taskId: 'npm:dev', envText: 'PORT=5173' })
     expect(made).toEqual({ preset: {
       name: '프론트', relative: 'frontend', kind: 'task', taskId: 'npm:dev', jdk: 'system', env: { PORT: '5173' },
-      notify: true, agentControl: true, inAll: true, waitReady: false
+      notify: true, agentControl: true, inAll: true, waitReady: false, hotReload: 'off'
     } })
     const custom = presetFromDraft({ ...emptyDraft(), name: 'x', kind: 'custom', command: ' gradlew run ', taskId: 'old' })
     expect('preset' in custom && custom.preset).toMatchObject({ kind: 'custom', command: 'gradlew run' })
@@ -86,7 +87,7 @@ describe('the preset form', () => {
   })
 
   it('round-trips a saved preset through the form', () => {
-    const saved = preset({ env: { A: '1', B: 'x=y' } })
+    const saved = preset({ env: { A: '1', B: 'x=y' }, hotReload: 'standard' })
     const again = presetFromDraft(draftOf(saved))
     expect(again).toEqual({ preset: saved })
   })
@@ -157,5 +158,93 @@ describe('crash notice and agent message', () => {
     expect(runError({ success: false })).toBe('요청을 처리하지 못했습니다.')
     expect(runError({ ok: true })).toBeNull()
     expect(runError(undefined)).toBe('응답이 없습니다.')
+  })
+})
+
+describe('hot reload (stage 3)', () => {
+  const jbr17 = { id: 'jbr-17', feature: 17, vendor: 'jbr' as const, managed: true }
+  const zulu17 = { id: 'zulu-17', feature: 17, vendor: 'zulu' as const, managed: true }
+  const jbr11 = { id: 'jbr-11', feature: 11, vendor: 'jbr' as const, managed: true }
+  const agent = { installed: true, version: '2.0.1' }
+  const noAgent = { installed: false }
+
+  it('knows a Spring Boot run by its found task, as main does', () => {
+    expect(isSpringBootTask('task', 'backend:maven')).toBe(true)
+    expect(isSpringBootTask('task', '.:gradle')).toBe(true)
+    expect(isSpringBootTask('task', 'frontend:npm:dev')).toBe(false)
+    expect(isSpringBootTask('custom', 'backend:maven')).toBe(false)
+    expect(isSpringBootTask('task', undefined)).toBe(false)
+  })
+
+  it('is fixed to 끄기 for a typed command and for Node, with the reason', () => {
+    for (const choice of [
+      hotReloadChoice({ kind: 'custom', jdk: 'jbr-17', jdks: [jbr17], hotswapAgent: agent }),
+      hotReloadChoice({ kind: 'task', taskId: 'frontend:npm:dev', jdk: 'system', jdks: [], hotswapAgent: noAgent })
+    ]) {
+      expect(choice).toEqual({ usable: false, reason: HOT_RELOAD_SPRING_ONLY, enhanced: false })
+      expect(hotReloadToSave('standard', choice)).toBe('off')
+    }
+  })
+
+  it('allows 확장 only with a JBR 17 or 21 chosen and HotswapAgent fetched', () => {
+    const spring = { kind: 'task' as const, taskId: 'backend:maven' }
+    expect(hotReloadChoice({ ...spring, jdk: 'jbr-17', jdks: [jbr17], hotswapAgent: agent })).toEqual({ usable: true, enhanced: true })
+    expect(hotReloadToSave('enhanced', hotReloadChoice({ ...spring, jdk: 'jbr-17', jdks: [jbr17], hotswapAgent: agent }))).toBe('enhanced')
+    // Nothing fetched: both, with the link to the settings
+    expect(hotReloadChoice({ ...spring, jdk: 'system', jdks: [zulu17], hotswapAgent: noAgent }))
+      .toEqual({ usable: true, enhanced: false, needsDownload: true, enhancedMissing: '확장에는 JBR 17·21 과 HotswapAgent 가 필요합니다.' })
+    // A JBR 11 is not one (JDK 8·11 projects get the standard grade only)
+    expect(hotReloadChoice({ ...spring, jdk: 'jbr-11', jdks: [jbr11], hotswapAgent: agent }))
+      .toMatchObject({ enhanced: false, needsDownload: true, enhancedMissing: '확장에는 JBR 17·21 이 필요합니다.' })
+    // In the store but another JDK picked: only which JDK to pick, nothing to fetch
+    expect(hotReloadChoice({ ...spring, jdk: 'zulu-17', jdks: [zulu17, jbr17], hotswapAgent: agent }))
+      .toEqual({ usable: true, enhanced: false, needsDownload: false, enhancedMissing: '확장은 JDK 를 JBR 17·21 로 고르면 쓸 수 있습니다.' })
+    expect(hotReloadChoice({ ...spring, jdk: 'jbr-17', jdks: [jbr17], hotswapAgent: noAgent }))
+      .toMatchObject({ enhanced: false, needsDownload: true, enhancedMissing: '확장에는 HotswapAgent 가 필요합니다.' })
+    // The standard grade works with any JDK
+    expect(hotReloadToSave('standard', hotReloadChoice({ ...spring, jdk: 'system', jdks: [], hotswapAgent: noAgent }))).toBe('standard')
+  })
+
+  it('keeps hotReload through the draft and reads old presets as 끄기', () => {
+    expect(emptyDraft().hotReload).toBe('off')
+    expect(draftOf(preset()).hotReload).toBe('off')
+    expect(draftOf(preset({ hotReload: 'enhanced' })).hotReload).toBe('enhanced')
+    const made = presetFromDraft({ ...draftOf(preset()), hotReload: 'standard' })
+    expect('preset' in made && made.preset.hotReload).toBe('standard')
+  })
+
+  it('tells how long ago', () => {
+    expect(reloadAge(10_000, 13_000)).toBe('방금')
+    expect(reloadAge(10_000, 22_000)).toBe('12초 전')
+    expect(reloadAge(0, 185_000)).toBe('3분 전')
+    expect(reloadAge(0, 7_300_000)).toBe('2시간 전')
+  })
+
+  it('shows a chip for each reload state of a running server', () => {
+    const running = (reload: RunState['reload']) => state({ status: 'running', address: 'http://localhost:8080/', reload })
+    expect(reloadChip(running({ status: 'watching', at: 0 }), 0)).toMatchObject({ tone: 'muted', text: '바로 반영' })
+    expect(reloadChip(running({ status: 'compiling', at: 0 }), 0)).toMatchObject({ tone: 'busy', text: '컴파일 중' })
+    expect(reloadChip(running({ status: 'applied', classes: 3, at: 1_000 }), 2_000)).toMatchObject({ tone: 'ok', text: '반영됨 · 클래스 3 · 방금' })
+    expect(reloadChip(running({ status: 'applied', classes: 1, at: 1_000 }), 31_000)?.text).toBe('반영됨 · 클래스 1 · 30초 전')
+    expect(reloadChip(running({ status: 'applied', devtools: true, at: 1_000 }), 2_000)).toMatchObject({ tone: 'ok', text: '반영됨 · DevTools 재시작' })
+    const restart = reloadChip(running({ status: 'restartNeeded', reason: '메서드 추가', at: 0 }), 0)
+    expect(restart).toMatchObject({ tone: 'warn', text: '재기동 필요: 메서드 추가', restart: true })
+    expect(restart?.toErrors).toBeUndefined()
+    const compile = reloadChip(running({ status: 'compileError', reason: 'Foo.java:12 세미콜론', at: 0 }), 0)
+    expect(compile).toMatchObject({ tone: 'err', text: '컴파일 오류', toErrors: true })
+    expect(compile?.title).toContain('Foo.java:12 세미콜론')
+    expect(reloadChip(running({ status: 'failed', reason: 'javac 를 찾을 수 없습니다', at: 0 }), 0))
+      .toMatchObject({ tone: 'err', text: '바로 반영 실패: javac 를 찾을 수 없습니다' })
+    expect(reloadChip(running({ status: 'restartNeeded', at: 0 }), 0)?.text).toBe('재기동 필요')
+  })
+
+  it('shows no chip when hot reload is off or the server is not up, and ticks only for a fresh 반영됨', () => {
+    expect(reloadChip(state({ status: 'running' }), 0)).toBeNull()
+    expect(reloadChip(state({ status: 'crashed', reload: { status: 'restartNeeded', at: 0 } }), 0)).toBeNull()
+    expect(reloadChip(state({ status: 'stopped', reload: { status: 'watching', at: 0 } }), 0)).toBeNull()
+    expect(reloadTicks(state({ status: 'running', reload: { status: 'applied', at: 0 } }), 10_000)).toBe(true)
+    expect(reloadTicks(state({ status: 'running', reload: { status: 'applied', at: 0 } }), 4_000_000)).toBe(false)
+    expect(reloadTicks(state({ status: 'running', reload: { status: 'watching', at: 0 } }), 10_000)).toBe(false)
+    expect(reloadTicks(undefined, 0)).toBe(false)
   })
 })

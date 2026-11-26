@@ -172,6 +172,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runtimesInstall: (vendor, feature) => ipcRenderer.invoke('runtimes-install', vendor, feature),
   runtimesCancel: () => ipcRenderer.invoke('runtimes-cancel'),
   runtimesRemove: (id) => ipcRenderer.invoke('runtimes-remove', id),
+  runtimesHotswapInstall: () => ipcRenderer.invoke('runtimes-hotswap-install'),
+  runtimesHotswapRemove: () => ipcRenderer.invoke('runtimes-hotswap-remove'),
   runtimesRequired: (projectFolder) => ipcRenderer.invoke('runtimes-required', projectFolder),
   runtimesOpenLicense: (vendor) => ipcRenderer.invoke('runtimes-open-license', vendor),
   onRuntimesProgress: (callback) => {

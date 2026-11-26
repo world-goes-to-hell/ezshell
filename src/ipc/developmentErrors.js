@@ -25,18 +25,26 @@ function createDevelopmentErrors(now = Date.now) {
   let address
   let readyAt
 
-  function consume(raw) {
-    const line = cleanLogLine(raw)
+  function pushLine(line) {
     if (lines.length === MAX_LOG_LINES) lines.shift()
     lines.push(line)
+  }
+
+  function pushGroup(report) {
+    if (groups.length === MAX_GROUPS) groups.shift()
+    groups.push(report)
+  }
+
+  function consume(raw) {
+    const line = cleanLogLine(raw)
+    pushLine(line)
     address ??= developmentAddress([line]) ?? undefined
     if (address || READY.test(line)) readyAt ??= now()
     const next = classifyProblemLine(line, previous, inside)
     const known = KNOWN_ERROR.test(line)
     if (known || (next.start && next.level === 'error')) {
       group = { at: now(), lines: [line] }
-      if (groups.length === MAX_GROUPS) groups.shift()
-      groups.push(group)
+      pushGroup(group)
     } else if (!next.inside || (next.start && next.level === 'warn')) {
       group = null
     } else if (group && group.lines.length < MAX_GROUP_LINES) {
@@ -56,6 +64,11 @@ function createDevelopmentErrors(now = Date.now) {
 
   return {
     feed,
+    addError(title, details = []) {
+      const report = [title, ...details].slice(0, MAX_GROUP_LINES).map(cleanLogLine)
+      pushGroup({ at: now(), lines: report })
+      for (const line of report) pushLine(line)
+    },
     finish() { if (fragment) { consume(fragment); fragment = '' } },
     state: () => ({ address, readyAt, errors: groups.length }),
     groups: () => groups.map(item => ({ ...item, lines: [...item.lines] })),

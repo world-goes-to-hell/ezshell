@@ -112,6 +112,11 @@ function fixture(backendPort, frontendPort) {
     await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([repo]))});
       window.dispatchEvent(new Event('ezshell:local-projects-changed'))`)
     if (!await until(`!!${row(backTree)} && !!${row(frontTree)}`)) throw new Error('Worktrees were not listed')
+    // Each worktree's run presets load after its row and push the rows below down: wait for them, or the
+    // right click lands on another worktree (whose menu puts another task first)
+    if (!await until(`document.querySelectorAll('[data-run-worktree]').length === document.querySelectorAll('.local-worktree').length`)) {
+      throw new Error('The run presets of the worktrees did not load')
+    }
     await launch(backTree, 'Spring Boot 기동 · backend')
     check('the sparse worktree is confirmed with its own path and command', await until(`
       ${message}?.includes(${JSON.stringify(backTree)}) && ${message}.includes('backend/') && ${message}.includes('bootRun')
@@ -232,6 +237,15 @@ function fixture(backendPort, frontendPort) {
     const typed = `node "${server}" --crash-after  5000`
     await setValue('.run-preset-command', typed)
     check('a typed command is warned about in the dialog', await js(`!!document.querySelector('.run-preset-warn')`))
+    // Stage 3: hot reload is for Spring Boot runs only; a typed command (the Node fixture) keeps it off
+    check('바로 반영 is fixed to 끄기 for a typed command, with the reason and the debugger note', await until(`(() => {
+      const field = document.querySelector('.run-preset-reload')
+      if (!field || field.dataset.usable) return false
+      const radio = value => field.querySelector('input[name="run-preset-reload"][value="' + value + '"]')
+      return radio('off')?.checked && !radio('off').disabled && radio('standard')?.disabled && radio('enhanced')?.disabled &&
+        field.textContent.includes('Spring Boot 실행에서만 됩니다.') &&
+        field.textContent.includes('바로 반영을 켜면 이 실행에 IDE 디버거를 붙일 수 없습니다.')
+    })()`))
     await js(`document.querySelector('.run-preset-dialog button[type="submit"]').click()`)
     const presetRow = `${section}?.querySelector('.run-preset')`
     check('the saved preset is a row with a start button', await until(`!document.querySelector('.run-preset-dialog') &&

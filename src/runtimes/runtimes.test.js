@@ -14,7 +14,7 @@ import { requiredFeature } from './required.js'
 import { createRuntimes } from './index.js'
 import { registerRuntimesIpc } from './ipc.js'
 import providers from './fixtures/providers.json'
-import { digest, fakeTemurin, fixtureRequest, jdkFiles, release, zipOf } from '../../e2e/support/jdkFixture.js'
+import { digest, fakeEnhanced, fakeTemurin, fixtureRequest, jdkFiles, release, zipOf } from '../../e2e/support/jdkFixture.js'
 
 const platform = 'win32'
 const arch = 'x64'
@@ -111,6 +111,14 @@ describe('JDK downloads and archives', () => {
       { request: fixtureRequest(hit) })).rejects.toThrow(/허용되지 않은/)
     expect(hit).toHaveBeenCalledOnce()
     expect(fs.existsSync(target)).toBe(false)
+  })
+
+  it('allows only the exact additional JBR and HotswapAgent HTTPS hosts', () => {
+    for (const host of ['api.github.com', 'cache-redirector.jetbrains.com', 'd2xrhe97vsfxuc.cloudfront.net']) {
+      expect(approvedUrl(`https://${host}/file`)?.hostname).toBe(host)
+      expect(approvedUrl(`https://${host}.invalid/file`)).toBeNull()
+    }
+    expect(approvedUrl('https://unrelated.cloudfront.net/file')).toBeNull()
   })
 
   it.each(['objects.githubusercontent.com', 'release-assets.githubusercontent.com'])('follows a GitHub redirect to %s and verifies its bytes', async (host) => {
@@ -283,14 +291,62 @@ describe('JDK inventory and project requirements', () => {
 
   it('returns neither provider info nor manages files for an unauthorized renderer', async () => {
     const handlers = new Map()
-    const runtimes = { list: vi.fn(), available: vi.fn(), install: vi.fn(), cancel: vi.fn(), remove: vi.fn() }
+    const runtimes = { list: vi.fn(), available: vi.fn(), install: vi.fn(), cancel: vi.fn(), remove: vi.fn(),
+      hotswapAgentStatus: vi.fn(), installHotswapAgent: vi.fn(), removeHotswapAgent: vi.fn() }
     registerRuntimesIpc({ ipcMain: { handle: (channel, fn) => handlers.set(channel, fn) }, runtimes,
       canUse: () => false, openExternal: vi.fn() })
-    expect(handlers.get('runtimes-list')({})).toEqual({ jdks: [] })
+    expect(handlers.get('runtimes-list')({})).toEqual({ jdks: [], hotswapAgent: { installed: false } })
     expect(await handlers.get('runtimes-available')({}, 'zulu', 17)).toMatchObject({ jdk: null })
     expect(await handlers.get('runtimes-install')({}, 'zulu', 17)).toMatchObject({ ok: false })
     expect(handlers.get('runtimes-cancel')({})).toBe(false)
     expect(handlers.get('runtimes-remove')({}, 'some-id')).toMatchObject({ ok: false })
+    expect(await handlers.get('runtimes-hotswap-install')({})).toMatchObject({ ok: false })
+    expect(handlers.get('runtimes-hotswap-remove')({})).toMatchObject({ ok: false })
     for (const action of Object.values(runtimes)) expect(action).not.toHaveBeenCalled()
+  })
+})
+
+describe('enhanced Java runtimes', () => {
+  const manager = (request = fakeEnhanced()) => createRuntimes({ userData: root, platform, arch, home: root, env: {}, request })
+
+  it('installs only eligible JBR SDKs and uses the separately managed agent for enhanced mode', async () => {
+    const runtimes = manager()
+    expect(await runtimes.available('jbr', 17)).toMatchObject({ feature: 17, version: '17.0.11+1163.125' })
+    const available = await runtimes.available('jbr', 21)
+    expect(available).toMatchObject({ vendor: 'jbr', version: '21.0.11+1163.125' })
+    expect(available).not.toHaveProperty('url')
+    expect(available).not.toHaveProperty('sha512')
+    await expect(runtimes.available('jbr', 11)).rejects.toThrow()
+    const jbr = await runtimes.install('jbr', 21)
+    const temurin = await runtimes.install('temurin', 17)
+    expect(jbr).toMatchObject({ vendor: 'jbr', managed: true, feature: 21 })
+    expect(runtimes.enhancedJvmArgs(jbr.id)).toBeNull()
+
+    await runtimes.installHotswapAgent()
+    const reopened = manager()
+    const jar = path.join(fs.realpathSync(root), 'runtimes', 'hotswap-agent', '2.0.5', 'hotswap-agent.jar')
+    expect(reopened.hotswapAgentStatus()).toEqual({ installed: true, version: '2.0.5' })
+    expect(reopened.enhancedJvmArgs(temurin.id)).toBeNull()
+    expect(reopened.enhancedJvmArgs(jbr.id)).toEqual([
+      '-XX:+AllowEnhancedClassRedefinition', '-XX:HotswapAgent=external', `-javaagent:${jar}`
+    ])
+
+    fs.writeFileSync(jar, 'agent-fixturE')
+    expect(reopened.hotswapAgentStatus()).toEqual({ installed: false })
+    expect(reopened.enhancedJvmArgs(jbr.id)).toBeNull()
+    await reopened.installHotswapAgent()
+    expect(reopened.hotswapAgentPath()).toBe(jar)
+    reopened.removeHotswapAgent()
+    expect(reopened.hotswapAgentStatus()).toEqual({ installed: false })
+    expect(reopened.list()).toEqual([jbr, temurin])
+  })
+
+  it('does not publish a JBR or agent when its official checksum differs', async () => {
+    const runtimes = manager(fakeEnhanced({ badJbrChecksum: true, badAgentDigest: true }))
+    await expect(runtimes.install('jbr', 21)).rejects.toThrow(/SHA-512/)
+    await expect(runtimes.installHotswapAgent()).rejects.toThrow(/SHA-256/)
+    expect(runtimes.list()).toEqual([])
+    expect(runtimes.hotswapAgentStatus()).toEqual({ installed: false })
+    for (const kind of ['jdk', 'hotswap-agent']) expect(fs.readdirSync(path.join(root, 'runtimes', kind))).toEqual([])
   })
 })
