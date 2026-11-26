@@ -223,7 +223,8 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
 
 - **Maven:**
   - 실패 분류: HTTP 저장소 차단, 사라진 저장소, 401, 옛 JDK 의 TLS, 어디에도 없는 jar, 플러그인·JDK 불일치.
-  - 우회: 프로젝트 전용 `settings.xml`(`-s`, 사용자의 `~/.m2/settings.xml` 은 그대로)로 사라진 저장소를 대체 주소나 로컬 보관소로 돌린다.
+  - 저장소 대체: 승인한 저장소 ID를 프로젝트 전용 `settings.xml`에서 HTTPS 주소나 로컬 파일 보관소에 연결한다. `-gs`로 설치본 전역 설정을 대체하고 Maven은 평소처럼 사용자 설정을 적용한다. 설정 생성기에 선택한 Maven 버전을 넘긴다. Maven 3.8.1 이상이거나 버전을 확인할 수 없으면 기본 외부 HTTP 차단을 생성 파일에 포함한다. [Apache Maven 실행 옵션](https://maven.apache.org/ref/3.9.16/maven-embedder/cli.html) · [Maven 3.8.1 릴리스 노트](https://maven.apache.org/docs/3.8.1/release-notes.html)
+  - Maven은 와일드카드보다 저장소 ID가 정확히 일치하는 미러를 먼저 고른다. 사용자 설정에 같은 대상을 정확히 가리키는 미러가 있거나 생성한 미러와 ID가 같으면 사용자 미러가 우선할 수 있다. 로그에서 이 선택을 확인하면 `-s` 재시도를 별도 승인 사항으로 제안한다. 그 실행에서 서버 인증·프록시·미러·로컬 보관소는 생성한 사용자 설정과 설치본 전역 설정으로 결정된다. [Apache Maven 미러 선택](https://maven.apache.org/guides/mini/guide-mirror-settings.html)
   - Maven 은 최신 TLS 가 되는 JDK 로 돌리고, 컴파일은 toolchains 로 프로젝트 JDK 를 쓴다.
   - 없는 jar 는 `~/.m2`·`lib`·사용자가 가리킨 폴더에서 찾아 프로젝트 전용 보관소에 넣는다.
   - 성공한 의존성·플러그인을 보관소에 고정한다 (이 PC, 또는 저장소의 `.mvn-repo/`).
