@@ -6,7 +6,7 @@ const missingClass = item => item.kind === 'missingClass' && jarClassName(item.c
 const tomcatInvocation = preset => preset.kind === 'tomcat' ? JSON.stringify([
   preset.tomcat, preset.relative, preset.webapp, preset.contextPath, preset.contextXml, preset.prepare
 ]) : null
-const canAttachJar = (preset, run) => run.jarDiagnosis?.major >= 7 && run.jarDiagnosis.invocation === tomcatInvocation(preset)
+const canAttachJar = (preset, run) => run?.jarDiagnosis?.major >= 7 && run.jarDiagnosis.invocation === tomcatInvocation(preset)
 
 async function findJarCandidates(suggestions, projectRoot, home, signal) {
   const classes = suggestions.filter(missingClass)
@@ -39,17 +39,33 @@ function jarSuggestion(item, candidates, preset, run) {
     ...(jars.length && canAttachJar(preset, run) && { apply: 'tomcatJar' }) }
 }
 
-function mcpJarSuggestion({ id, apply: _apply, ...item }, candidates) {
-  const match = candidates.get(id)
-  if (!match) return item
-  const jars = match.jars.filter(jar => jar.source === 'project' || jar.coordinate)
+const visibleJars = (item, candidates, preset) => (candidates.get(item.id)?.jars ?? [])
+  .filter(jar => !preset.extraLibs?.includes(jar.reference) && (jar.source === 'project' || jar.coordinate))
+
+function mcpJarSuggestion(item, candidates, preset, run) {
+  const { id, apply, ...diagnostic } = item
+  const jars = visibleJars(item, candidates, preset)
     .map(jar => ({ ...(jar.source === 'project' && { path: jar.reference }), ...(jar.coordinate && { coordinate: jar.coordinate }) }))
-  return { ...item, ...(jars.length && { jars }), ...(match.jarSearchIncomplete && { jarSearchIncomplete: true }) }
+  const proposalKind = apply === 'mavenMirror' || apply === 'mavenUserSettings' ? apply
+    : jars.length && canAttachJar(preset, run) ? 'tomcatJar' : undefined
+  return { ...diagnostic, ...(jars.length && { jars }), ...(candidates.get(id)?.jarSearchIncomplete && { jarSearchIncomplete: true }),
+    ...(proposalKind && { suggestion: id, proposalKind }) }
 }
 
-async function selectedJarReferences({ preset, run, suggestions, request, projectRoot, home }) {
+function proposedJarId(item, candidates, preset, reference) {
+  if (typeof reference !== 'string' || !reference || reference.length > 4096) throw new Error(STALE_JAR)
+  const jars = visibleJars(item, candidates, preset)
+  const projectJar = jars.find(jar => jar.source === 'project' && jar.reference === reference)
+  if (projectJar) return projectJar.id
+  const coordinates = jars.filter(jar => jar.coordinate === reference)
+  if (coordinates.length > 1) throw new Error('같은 좌표의 JAR 후보가 여러 개 있습니다. 프로젝트 상대 경로로 구분할 수 있는 후보를 선택해 주세요.')
+  if (coordinates.length !== 1) throw new Error(STALE_JAR)
+  return coordinates[0].id
+}
+
+async function selectedJarReferences({ preset, run, suggestions, request, projectRoot, home, candidates = run?.jarOffered }) {
   const suggestion = suggestions.find(item => item.id === request.id && missingClass(item))
-  const candidate = suggestion && run?.jarOffered?.get(suggestion.id)?.jars.find(item => item.id === request.jarId)
+  const candidate = suggestion && candidates?.get(suggestion.id)?.jars.find(item => item.id === request.jarId)
   if (!candidate || !canAttachJar(preset, run) || preset.extraLibs?.includes(candidate.reference) || request.replacementUrl !== undefined) {
     throw new Error(STALE_JAR)
   }
@@ -59,4 +75,4 @@ async function selectedJarReferences({ preset, run, suggestions, request, projec
   return extraLibs
 }
 
-module.exports = { tomcatInvocation, findJarCandidates, jarSuggestion, mcpJarSuggestion, selectedJarReferences, STALE_JAR }
+module.exports = { tomcatInvocation, findJarCandidates, jarSuggestion, mcpJarSuggestion, proposedJarId, selectedJarReferences, STALE_JAR }

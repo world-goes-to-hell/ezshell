@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { createMavenPinSession, exportMavenPin } from './mavenPin.js'
+import { createMavenPinSession, deleteMavenPin, exportMavenPin, inspectMavenPin } from './mavenPin.js'
 
 const presetId = 'ac86ad87-3068-47bf-8621-5b16dc159738'
 const jar = 'org/example/old/1.0/old-1.0.jar'
@@ -129,14 +129,20 @@ describe('pinned Maven repositories', () => {
     await Promise.all([active.finish(1), later.finish(1)])
   })
 
-  it('exports to a new project repository only after explicit approval', async () => {
+  it('exports and deletes the profile snapshot only after their separate approvals', async () => {
     const capture = await open()
     await tracked(capture, jar, 'artifact')
-    await capture.finish(0)
+    const pinned = await capture.finish(0)
+    expect(await inspectMavenPin({ userData, presetId })).toBe(true)
     await expect(exportMavenPin({ userData, presetId, worktree })).rejects.toThrow('내보내기를 확인')
     const target = await exportMavenPin({ userData, presetId, worktree, approved: true })
     expect(target).toBe(path.join(worktree, '.mvn-repo'))
     expect(await fs.readFile(path.join(target, jar), 'utf8')).toBe('artifact')
     await expect(exportMavenPin({ userData, presetId, worktree, approved: true })).rejects.toThrow('이미 프로젝트에')
+    await expect(deleteMavenPin({ userData, presetId })).rejects.toThrow('삭제를 확인')
+    await deleteMavenPin({ userData, presetId, approved: true })
+    expect(await inspectMavenPin({ userData, presetId })).toBe(false)
+    await expect(fs.stat(pinned.repository)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await fs.readFile(path.join(target, jar), 'utf8')).toBe('artifact')
   })
 })

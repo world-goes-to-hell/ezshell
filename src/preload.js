@@ -206,7 +206,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runPresetStopAll: (folder) => ipcRenderer.invoke('run-preset-stop-all', folder),
   runPresetErrors: (folder, id) => ipcRenderer.invoke('run-preset-errors', folder, id),
   runPresetDiagnosis: (folder, id) => ipcRenderer.invoke('run-preset-diagnosis', folder, id),
+  runPresetMavenPinStatus: (folder, id) => ipcRenderer.invoke('run-preset-maven-pin-status', folder, id),
+  runPresetExportMavenPin: (folder, id, options) => ipcRenderer.invoke('run-preset-export-maven-pin', folder, id, options),
+  runPresetDeleteMavenPin: (folder, id, options) => ipcRenderer.invoke('run-preset-delete-maven-pin', folder, id, options),
   runPresetApplySuggestion: (folder, id, suggestion) => ipcRenderer.invoke('run-preset-apply-suggestion', folder, id, suggestion),
+  runPresetDismissProposal: (folder, id, proposalId) => ipcRenderer.invoke('run-preset-dismiss-proposal', folder, id, proposalId),
   runPresetSendPreview: (folder, id) => ipcRenderer.invoke('run-preset-send-preview', folder, id),
   runPresetSend: (folder, id, agentId, note) => ipcRenderer.invoke('run-preset-send', folder, id, agentId, note),
   onRunPresetState: (callback) => {

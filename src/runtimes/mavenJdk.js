@@ -28,27 +28,34 @@ function launchEnvironment(env, home, platform) {
   return options
 }
 
-/** The private runtime list supplies managed JDK IDs. Return literal Maven argv tokens for the caller's launcher. */
-async function planMavenJdk({ projectJdkHome, jdks, javaHomeOf, mavenJdkId, env = {}, platform = process.platform }) {
-  const project = await jdkHome(projectJdkHome, platform)
-  if (!project) throw new Error('컴파일과 테스트에 사용할 프로젝트 JDK를 찾을 수 없습니다.')
+async function selectMavenJdk({ jdks, javaHomeOf, mavenJdkId, platform = process.platform }) {
   const managed = jdks.filter(jdk => jdk.managed && RUNTIME_ORDER.includes(jdk.feature) && (!mavenJdkId || jdk.id === mavenJdkId))
     .sort((a, b) => RUNTIME_ORDER.indexOf(a.feature) - RUNTIME_ORDER.indexOf(b.feature))
   for (const candidate of managed) {
     const runtime = await jdkHome(await javaHomeOf(candidate.id), platform)
-    if (runtime?.feature !== candidate.feature) continue
-    return {
-      mavenJdk: { id: candidate.id, home: runtime.home, feature: runtime.feature },
-      projectJdk: project,
-      env: launchEnvironment(env, runtime.home, platform),
-      args: [
-        '-Dmaven.compiler.fork=true',
-        `-Dmaven.compiler.executable=${javaExecutable(project.home, 'javac', platform)}`,
-        `-Djvm=${javaExecutable(project.home, 'java', platform)}`
-      ]
-    }
+    if (runtime?.feature === candidate.feature) return { id: candidate.id, ...runtime }
   }
-  throw new Error('개발 도구에서 Maven 실행에 사용할 JDK 17 또는 21을 받아 주세요.')
+  return null
 }
 
-module.exports = { planMavenJdk }
+/** Return literal Maven argv tokens for the caller's launcher. */
+async function planMavenJdk({ projectJdkHome, jdks, javaHomeOf, mavenJdkId, env = {}, platform = process.platform,
+  split = true, projectFeature, allowMissingRunner = false }) {
+  const mavenJdk = await selectMavenJdk({ jdks, javaHomeOf, mavenJdkId, platform })
+  if (!mavenJdk && (mavenJdkId || !allowMissingRunner)) throw new Error('개발 도구에서 Maven 실행에 사용할 JDK 17 또는 21을 받아 주세요.')
+  const useProjectJdk = split === 'auto' ? Boolean(mavenJdk && projectFeature && projectFeature < 17) : split
+  const projectJdk = useProjectJdk ? await jdkHome(projectJdkHome, platform) : null
+  if (useProjectJdk && !projectJdk) throw new Error('컴파일과 테스트에 사용할 프로젝트 JDK를 찾을 수 없습니다.')
+  return {
+    mavenJdk,
+    projectJdk,
+    env: mavenJdk ? launchEnvironment(env, mavenJdk.home, platform) : env,
+    args: projectJdk ? [
+      '-Dmaven.compiler.fork=true',
+      `-Dmaven.compiler.executable=${javaExecutable(projectJdk.home, 'javac', platform)}`,
+      `-Djvm=${javaExecutable(projectJdk.home, 'java', platform)}`
+    ] : []
+  }
+}
+
+module.exports = { planMavenJdk, selectMavenJdk }

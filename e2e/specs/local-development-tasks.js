@@ -300,6 +300,10 @@ function fixture(backendPort, frontendPort) {
     check('a build before the server is warned about as a command that runs', await until(`
       !!document.querySelector('.run-preset-tomcat [aria-label="Maven 목표"]') &&
       document.querySelector('.run-preset-confirm-note')?.textContent.includes('처음 실행할 때')`))
+    // A Maven build brings Maven's settings under 고급 (which JDK runs Maven, the pin)
+    check('a Maven build shows Maven\u2019s settings under 고급', await until(`
+      !!document.querySelector('.run-preset-advanced .run-preset-maven #run-preset-maven-runner') &&
+      document.querySelectorAll('.run-preset-maven input[name="run-preset-maven-source"]').length === 2`))
     await js(`document.querySelector('input[name="run-preset-kind"][value="custom"]').click()`)
     const server = path.join(__dirname, '..', 'support', 'devRunServer.js')
     await until(`!!document.querySelector('.run-preset-command')`)
@@ -414,10 +418,29 @@ function fixture(backendPort, frontendPort) {
     fs.writeFileSync(path.join(maven, 'mvnw'), '#!/bin/sh\nexec node run.cjs "$@"\n', { mode: 0o755 })
     fs.writeFileSync(path.join(maven, 'run.cjs'), `
       const fs = require('node:fs');
+      const path = require('node:path');
+      const { fileURLToPath } = require('node:url');
       const args = process.argv.slice(2);
       if (!args.includes('-gs')) {
         console.error('[ERROR] Could not transfer artifact sample:demo:jar:1 from/to maven-default-http-blocker (http://0.0.0.0/): Blocked mirror for repositories: [legacy (http://legacy.invalid/maven/, default)]');
         process.exit(1);
+      }
+      const local = args.find(arg => arg.startsWith('-Dmaven.repo.local='))?.slice('-Dmaven.repo.local='.length);
+      const relative = path.join('sample', 'demo', '1');
+      if (args.includes('-s')) {
+        const contents = fs.readFileSync(args[args.indexOf('-s') + 1], 'utf8');
+        const url = contents.split('<url>')[1]?.split('</url>')[0];
+        const mirror = fileURLToPath(url);
+        if (fs.readFileSync(path.join(mirror, relative, 'demo-1.jar'), 'utf8') !== 'pinned artifact') process.exit(2);
+        if (!(args.filter(arg => arg === '-gs').length === 1 && args.filter(arg => arg === '-s').length === 1)) process.exit(3);
+      } else if (local && fs.existsSync('repository-gone')) {
+        console.error('[ERROR] Could not transfer artifact sample:demo:jar:1 from/to legacy (https://legacy.invalid/maven): status code: 401');
+        process.exit(1);
+      } else if (local) {
+        const folder = path.join(local, relative);
+        fs.mkdirSync(folder, { recursive: true });
+        fs.writeFileSync(path.join(folder, 'demo-1.jar'), 'pinned artifact');
+        fs.writeFileSync(path.join(folder, '_remote.repositories'), 'demo-1.jar>legacy=\\n');
       }
       fs.writeFileSync('received.json', JSON.stringify(args));
       console.log('BUILD SUCCESS');
@@ -450,11 +473,38 @@ function fixture(backendPort, frontendPort) {
       await until(`(async () => ${mavenState} === 'stopped')()`, 15000))
     const received = JSON.parse(fs.readFileSync(path.join(maven, 'received.json'), 'utf8'))
     const settings = path.join(fs.realpathSync(profile), 'runtimes', 'maven-settings', `${mavenId}.xml`)
-    check('the Maven launcher receives a single absolute settings filename and cleanup removes it on deletion',
+    check('the Maven launcher receives a single absolute settings filename',
       received.length === 3 && received[0] === 'spring-boot:run' && received[1] === '-gs' &&
       path.dirname(path.dirname(received[2])) === path.dirname(settings) && path.basename(received[2]) === path.basename(settings) &&
-      fs.readFileSync(settings, 'utf8').includes('<mirrorOf>legacy</mirrorOf>') &&
-      (await js(`window.electronAPI.runPresetsDelete(${args})`)).ok && !fs.existsSync(settings) && !fs.existsSync(received[2]))
+      fs.readFileSync(settings, 'utf8').includes('<mirrorOf>legacy</mirrorOf>'))
+
+    const enabledPin = await js(`window.electronAPI.runPresetsSave(${folderArg}, ${JSON.stringify({ ...accepted.preset, mavenPin: true })})`)
+    const pinStatus = `window.electronAPI.runPresetMavenPinStatus(${args})`
+    const pinQuestion = await js(`window.electronAPI.runPresetStart(${args})`)
+    check('a successfully completed Spring Maven PTY publishes its repository after confirmation',
+      enabledPin.preset?.mavenPin === true && pinQuestion.needsConfirm?.command.includes('의존성 보관') &&
+      (await js(`window.electronAPI.runPresetStart(${args}, { confirmCustom: true })`)).ok &&
+      await until(`(async () => ${mavenState} === 'stopped' && (await ${pinStatus}).pinned)()`, 15000))
+    fs.writeFileSync(path.join(maven, 'repository-gone'), '')
+    await js(`window.electronAPI.runPresetStart(${args})`)
+    check('Maven suggests replay after a repository becomes unauthorized', await until(`(async () => ${mavenState} === 'crashed' &&
+      (await ${diagnose}).suggestions?.some(item => item.apply === 'mavenPinned'))()`, 15000))
+    const pinnedSuggestion = (await js(diagnose)).suggestions.find(item => item.apply === 'mavenPinned')
+    const selectedPin = await js(`window.electronAPI.runPresetApplySuggestion(${args}, { id: ${JSON.stringify(pinnedSuggestion.id)} })`)
+    const replayQuestion = await js(`window.electronAPI.runPresetStart(${args})`)
+    check('pinned replay uses the captured file mirror with exactly one settings argument per slot',
+      selectedPin.preset?.mavenSource === 'pinned' && replayQuestion.needsConfirm?.command.includes('file:') &&
+      (await js(`window.electronAPI.runPresetStart(${args}, { confirmCustom: true })`)).ok &&
+      await until(`(async () => ${mavenState} === 'stopped')()`, 15000))
+    const exportQuestion = await js(`window.electronAPI.runPresetExportMavenPin(${args})`)
+    const exported = path.join(maven, '.mvn-repo', 'sample', 'demo', '1', 'demo-1.jar')
+    check('export requires confirmation and writes the captured artifact to the active worktree',
+      exportQuestion.needsConfirm?.command.includes('.mvn-repo/') && !fs.existsSync(exported) &&
+      (await js(`window.electronAPI.runPresetExportMavenPin(${args}, { confirmCustom: true })`)).ok &&
+      fs.readFileSync(exported, 'utf8') === 'pinned artifact')
+    check('deleting the preset removes temporary and online settings while retaining the pin',
+      (await js(`window.electronAPI.runPresetsDelete(${args})`)).ok && !fs.existsSync(settings) && !fs.existsSync(received[2]) &&
+      fs.readdirSync(path.join(profile, 'runtimes', 'maven-pinned', mavenId)).some(name => name.startsWith('repo-')))
   } finally { driver.close() }
   finish()
 })().catch(error => { console.error(error); process.exit(1) })

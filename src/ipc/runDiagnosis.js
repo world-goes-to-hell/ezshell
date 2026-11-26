@@ -28,6 +28,7 @@ const TRANSFER_CAUSE = /^\s*Caused by:.*\b(?:UnknownHostException|SSLHandshakeEx
 const SELECTED_MIRROR = /\bUsing mirror\s+([A-Za-z0-9][A-Za-z0-9_.-]{0,135})\s+\((.*?)\)\s+for\s+([A-Za-z0-9][A-Za-z0-9_.-]{0,127})\s+\(/
 const PORT_BUSY = /\bEADDRINUSE\b|\baddress already in use\b|\bPort\s+\d+\s+(?:is|was)\s+(?:already )?in use\b/i
 const PORT_CONTEXT = /\b(?:http|https|ajp)-(?:jsse-|openssl-)?(?:nio2?|apr|bio)-([0-9]{1,5})\b|\bConnector\[(?:HTTP|AJP)\/[\d.]+-([0-9]{1,5})\]/i
+const OBSOLETE_JVM_OPTION = /\bUnrecognized VM option ['"](?:[+-])?(MaxPermSize|PermSize|UseConcMarkSweepGC|UseParNewGC|CMSIncrementalMode|UseCMSCompactAtFullCollection|CMSClassUnloadingEnabled|AggressiveOpts)(?:=[^'"\r\n]*)?['"]/i
 
 function positiveInteger(value, limit) {
   const number = Number(value)
@@ -118,11 +119,13 @@ function inspectMaven(line, nearby, transferContext, add) {
  * Accepts createDevelopmentErrors().groups() and/or its recent lines(). Pass the approved mirrors
  * used for the invocation to diagnose Maven's debug messages about effective mirror selection.
  */
-function diagnoseRun({ groups = [], lines = [], mirrors = [] } = {}) {
+function diagnoseRun({ groups = [], lines = [], mirrors = [], maven = true } = {}) {
   const suggestions = new Map()
   const add = (kind, fields = {}) => {
     const key = JSON.stringify([kind, fields])
-    const message = kind === 'jdkVersion' && fields.preview
+    const message = kind === 'mavenObsoleteJvmOption'
+      ? `MAVEN_OPTS와 .mvn/jvm.config에서 현재 JDK가 지원하지 않는 ${fields.option} 옵션을 확인하고 제거하세요.`
+      : kind === 'jdkVersion' && fields.preview
       ? '클래스를 컴파일한 버전과 같은 JDK에서 미리보기 기능 설정을 확인하세요.'
       : MESSAGES[kind]
     if (!suggestions.has(key)) suggestions.set(key, { kind, message, ...fields })
@@ -168,6 +171,8 @@ function diagnoseRun({ groups = [], lines = [], mirrors = [] } = {}) {
       if (PORT_BUSY.test(line)) add('portInUse', { port: busyPort(line, nearby) })
       if (/\bCould not transfer artifact\b/i.test(line)) transferContext = line
       inspectMaven(line, nearby, transferContext, add)
+      const obsolete = maven && OBSOLETE_JVM_OPTION.exec(line)?.[1]
+      if (obsolete) add('mavenObsoleteJvmOption', { option: obsolete })
       if (expectedMirrors.size) inspectMirrorSelection(line, expectedMirrors, add)
     }
   }

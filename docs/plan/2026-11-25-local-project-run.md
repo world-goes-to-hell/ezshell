@@ -97,12 +97,13 @@
 | `run_list` | 부른 에이전트의 프로젝트에 있는 구성: 이름, 상태, 포트, 오류 수, `agentControl` |
 | `run_start(name)` / `run_restart(name)` / `run_stop(name)` | 실행·재기동·중지 |
 | `run_wait(name, seconds≤300)` | 시작 완료·멈춤·제한 시간 중 먼저 오는 것을 기다려 결과를 돌려준다 |
-| `run_log(name, { lines≤400 } \| { errors: true })` | 마지막 N줄, 또는 오류 묶음만. 색 코드·제어 문자는 뺀다 |
+| `run_log(name, { lines≤400 } \| { errors: true })` | 마지막 N줄 또는 오류 묶음·현재 진단·내 제안 상태. 색 코드와 제어 문자는 뺀다 |
+| `run_propose(name, { suggestion, url?, jar?, note })` | 최신 실행 진단의 수정안을 사용자가 검토하도록 카드에 표시한다 |
 
 - 바꾸면 안 되는 것:
   - 부른 에이전트가 셸에 묶여 있어야 한다 (`shellId` 있음, Aside 같은 셸 없는 에이전트는 거부).
   - 그 셸의 폴더가 구성의 프로젝트 안이어야 한다.
-  - `agentControl` 이 꺼지면 시작·재기동·중지를 거부한다. `run_list`, `run_wait`, `run_log`는 사용할 수 있다.
+  - `agentControl` 이 꺼지면 시작·재기동·중지를 거부한다. `run_list`, `run_wait`, `run_log`, `run_propose`는 사용할 수 있다. 제안은 실행 구성을 바꾸지 않는다.
 - 에이전트가 구성을 처음 시작하거나 재기동하면 누가 조작했는지와 허용을 끄는 버튼을 앱 안에 한 번 보여 준다. 안내 여부는 모든 워크트리가 공유하는 프로젝트 구성에 저장한다.
 - 사용자가 해당 워크트리에서 30초 안에 직접 중지한 구성은 에이전트의 `run_start`·`run_restart` 를 거부한다 ("사용자가 방금 중지했습니다").
 - 조작 기록은 메모리에 남는다 (구성마다 최근 20개: 누가·무엇을·언제). 카드 줄에 "codex-5 가 재기동 · 4초 전" 을 10초 보이고, 줄의 기록 보기에 남는다.
@@ -231,8 +232,9 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
   - 성공한 의존성·플러그인을 보관소에 고정한다 (이 PC, 또는 저장소의 `.mvn-repo/`).
   - `pom.xml` 수정은 사용자가 승인할 때만 한다.
 - **에이전트가 들어갈 자리:**
-  - "기동 맞추기 맡기기": 에이전트가 `run_log` 를 읽고 구성 변경을 제안한다 (jar 추가·JDK·저장소 대체).
-  - 변경은 사용자가 화면에서 보고 승인할 때만 반영한다. 클래스패스·VM 인자는 실행 내용이라 에이전트가 직접 바꾸지 못한다.
+  - 같은 프로젝트의 로컬 셸에 묶인 에이전트가 `run_log(name, { errors: true })` 에서 자기 워크트리의 최신 진단을 읽는다. `suggestion` 이 있는 항목을 `run_propose` 로 보낸다. Maven 저장소 대체에는 `url`, Tomcat JAR 연결에는 프로젝트 상대 경로나 고유 의존성 좌표 `jar` 를 함께 보낸다. 사용자 Maven 설정을 빼는 제안은 진단과 메모를 보낸다.
+  - main 은 잠금, 셸·워크트리, 진단 ID와 URL 또는 JAR 후보를 확인한다. 구성·워크트리마다 최근 5개를 메모리에 두고 새 실행이나 재기동이 시작되면 비운다. `run_log` 의 `proposals` 에서는 보낸 에이전트가 자기 제안의 `pending`·`applied`·`dismissed` 상태를 확인한다.
+  - 카드의 `보기` 는 진단 창을 열어 제안한 URL이나 JAR 후보를 채운다. 사용자가 내용을 보고 기존 주소 확인 또는 Maven 사용자 설정 제외 확인을 거친 뒤에만 실행 구성이 바뀐다. 다음 실행에서 바뀐 내용을 다시 확인한다. `버리기` 는 제안만 치운다.
 - **보관함 넓히기:** Maven·Ant·Gradle·Tomcat·Node 받기. Apache 는 SHA-512, Node 는 SHASUMS. 1단계 JDK 보관함과 같은 규칙을 따른다.
 
 ### 2단계 첫 묶음: 도구 받기와 Tomcat 실행 (2026-11-26, PL 결정. 사용자 확인 전)
@@ -299,10 +301,11 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
   - 새 다운로드 허용 호스트는 `services.gradle.org`, `downloads.gradle.org`, `nodejs.org` 세 곳이다. 모든 리디렉션의 HTTPS와 호스트를 확인한다.
 
 ### 2단계 넷째 묶음: Maven 실행 JDK 나누기와 성공 빌드 보관 (2026-11-26, codex-5 조사·확인, PL 결정. 사용자 확인 전)
-모듈: `src/runtimes/mavenJdk.js`, `src/runtimes/mavenPin.js`. 실행 구성·IPC 연결은 다음 작업.
-- **실행 JDK 와 프로젝트 JDK:** Maven 프로세스는 보관함의 JDK 17(없으면 21, 사용자가 고르면 그것)로 돌린다. 그 프로세스의 `JAVA_HOME`·`PATH` 에만 넣는다. 프로젝트 JDK 는 `-Dmaven.compiler.fork=true -Dmaven.compiler.executable=<javac> -Djvm=<java>` 로 넘겨 컴파일과 포크된 Surefire 테스트만 그 JDK 로 돌린다. POM 은 고치지 않는다.
+모듈은 `src/runtimes/mavenJdk.js`, `src/runtimes/mavenPin.js`이며 Spring Boot·Tomcat의 Maven 실행에 연결한다.
+- **실행 JDK 와 프로젝트 JDK:** Maven 실행 JDK를 고른 경우 그 프로세스의 `JAVA_HOME`·`PATH`에 적용한다. 자동 선택은 구성 JDK가 17 미만인 경우 17→21→구성 JDK 순이며, 그 외에는 구성 JDK를 쓴다. 프로젝트 JDK는 `-Dmaven.compiler.fork=true -Dmaven.compiler.executable=<javac> -Djvm=<java>`로 넘겨 컴파일과 포크된 Surefire 테스트를 실행한다. POM은 고치지 않는다.
   - 확인한 조합 (Windows, 프로젝트 JDK 8): Maven 3.6.3·3.8.9·3.9.16 × Compiler 2.3.2·3.1·3.8.1 × Surefire 2.12.4, Maven JVM 17·21. Maven 3.6.3 조합은 프로젝트 JDK 6·7 도 통과.
   - 한계: POM 이 `<fork>false</fork>`·실행 파일을 고정하면 POM 이 이긴다. 포크를 끈 테스트와 `spring-boot:run` 의 앱은 Maven JVM 에서 돈다. `MAVEN_OPTS` 에 최신 JDK 에서 없어진 옵션(`-XX:MaxPermSize`)이 있으면 Maven 이 뜨지 않는다 (진단이 알릴 것).
+  - Tomcat 기동 전 Maven 빌드는 구성 JDK가 17 미만이면 기본으로 분리한다. Spring Boot Maven 실행은 고급 설정에서 분리를 켜야 자동 선택을 적용한다. Spring Boot 앱이 Maven 실행 JDK로 뜰 수 있다는 점을 고급 설정·실행 로그·TLS 진단에 알린다. 확장 바로 반영은 구성과 동일한 JBR에서 실행한다.
 - **성공 빌드 보관:** 보관을 켠 실행은 `-Dmaven.repo.local=<실행별 빈 폴더>` 로 돌리고, 종료 코드 0 이면 Resolver 의 `_remote.repositories` 로 그 실행이 원격에서 받은 정식 버전 POM·JAR·플러그인을 원격 저장소 형식으로 `userData/runtimes/maven-pinned/<구성 id>/` 에 게시한다 (메타데이터는 보관한 버전·플러그인 접두사만).
   - 상한 1 GiB·12,000 파일 (검사 10만 항목). 실패·중단·빈 수집·상한 초과면 이전 보관본을 그대로 둔다. SNAPSHOT·로컬 install 결과는 뺀다.
   - 보관본으로 다시 빌드: 새 로컬 저장소 + `-s`(mirrorOf=* 의 file 미러 임시 설정) + `-gs`(빈 임시 설정). 이때는 진단의 미러 인수를 함께 붙이지 않는다. 사용자 settings.xml 의 프로필·속성은 읽지 않으므로 거기에 기대는 빌드는 따로 처리해야 한다. 플러그인 최소 Maven 버전 때문에 보관 때와 같은 Maven 버전을 쓴다.

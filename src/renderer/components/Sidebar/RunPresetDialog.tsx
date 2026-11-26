@@ -7,9 +7,10 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiFolder3Line, RiPlayLine } from 'react-icons/ri'
 import { RunPresetTomcatAdvanced, RunPresetTomcatFields } from './RunPresetTomcatFields'
+import { RunPresetMavenFields } from './RunPresetMavenFields'
 import {
   draftOf, emptyDraft, hasAdvancedValues, hasRunContent, hotReloadChoice, hotReloadToSave, LOG_ENCODINGS, presetFromDraft,
-  suggestPresetName, usesJdk,
+  suggestPresetName, usesJdk, usesMaven,
   type HotReload, type PresetDraft, type RunCandidate, type RunPreset
 } from '../../lib/runPresets'
 import { draftKey, dropDraft, keepDraft, reloadProjectPresets, runPresetApi, takeDraft, worktreeRuns } from '../../stores/runPresetStore'
@@ -279,6 +280,7 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
                   {hotReload !== 'off' && <small className="run-preset-hint">바로 반영을 켜면 이 실행에 IDE 디버거를 붙일 수 없습니다.</small>}
                 </div>
                 {draft.kind === 'tomcat' && <RunPresetTomcatAdvanced folder={folder} draft={draft} set={set} />}
+                {usesMaven(draft) && <RunPresetMavenFields folder={folder} presetId={preset?.id ?? null} draft={draft} set={set} jdks={jdks} />}
                 {!jdkUp && jdkField}
                 <div className="form-group">
                   <label htmlFor="run-preset-env">환경 변수 <span className="run-preset-hint">(한 줄에 하나, 이름=값)</span></label>

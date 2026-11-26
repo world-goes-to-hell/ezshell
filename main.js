@@ -923,6 +923,7 @@ const runPresets = createRunPresets({
   getAgent: id => agentMessages.snapshot().agents.find(agent => agent.id === id && agent.mcpConnected),
   isLocked: () => isAppLocked,
   javaHomeOf: id => runtimes.javaHomeOf(id),
+  listJdks: () => runtimes.list(),
   toolHomeOf: id => runtimes.listTools().some(entry => entry.id === id && entry.tool === 'tomcat') ? runtimes.toolHomeOf(id) : null,
   toolVersionOf: id => runtimes.listTools().find(entry => entry.id === id && entry.tool === 'tomcat')?.version,
   toolHomeFor: kind => {

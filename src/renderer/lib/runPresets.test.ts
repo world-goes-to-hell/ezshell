@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   firstErrorRow, agentActionNotice, agentNoticeName, withObject, withSubject, runCommandLabel, agentActionNote, crashKey, draftOf, emptyDraft, parseEnvText, presetFromDraft, runButtons, runError, runFolderLabel,
   runHead, runKind, runPills, runPort, sendPreview, type RunPreset, type RunState,
-  hasAdvancedValues, hasRunContent, suggestPresetName, usesJdk, shortPath, workspaceServerFill, eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
+  usesMaven, hasAdvancedValues, hasRunContent, suggestPresetName, usesJdk, shortPath, workspaceServerFill, eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
 } from './runPresets'
 
 const preset = (over: Partial<RunPreset> = {}): RunPreset => ({
@@ -418,5 +418,40 @@ describe('the dialog layout (review, 2026-11-26)', () => {
     expect(hasRunContent({ ...fresh, kind: 'tomcat' })).toBe(false)
     expect(hasRunContent({ ...fresh, kind: 'tomcat', prepareTool: 'eclipse' })).toBe(true)
     expect(hasRunContent({ ...fresh, kind: 'tomcat', contextXml: 'conf/context.xml' })).toBe(true)
+  })
+})
+
+describe('Maven settings (stage 2, Maven runs)', () => {
+  const maven = preset({ taskId: 'backend:maven' })
+
+  it('knows a Maven run as main does', () => {
+    expect(usesMaven({ kind: 'task', taskId: 'backend:maven', prepareTool: 'none' })).toBe(true)
+    expect(usesMaven({ kind: 'task', taskId: 'backend:gradle', prepareTool: 'none' })).toBe(false)
+    expect(usesMaven({ kind: 'tomcat', prepareTool: 'maven' })).toBe(true)
+    expect(usesMaven({ kind: 'tomcat', prepareTool: 'ant' })).toBe(false)
+  })
+
+  it('saves only what differs from main\u2019s defaults, and only for a Maven run', () => {
+    const plain = presetFromDraft(draftOf(maven))
+    expect('preset' in plain && ['mavenRunner', 'mavenSplit', 'mavenPin', 'mavenSource'].some(key => key in plain.preset)).toBe(false)
+    const set = presetFromDraft({ ...draftOf(maven), mavenRunner: 'temurin-17', mavenSplit: 'off', mavenPin: true, mavenSource: 'pinned' })
+    expect('preset' in set && set.preset).toMatchObject({ mavenRunner: 'temurin-17', mavenSplit: false, mavenSource: 'pinned' })
+    const keep = presetFromDraft({ ...draftOf(maven), mavenPin: true })
+    expect('preset' in keep && keep.preset).toMatchObject({ mavenPin: true })
+    // Building from the pin: the keep switch is not saved
+    const pinned = presetFromDraft({ ...draftOf(maven), mavenPin: true, mavenSource: 'pinned' })
+    expect('preset' in pinned && 'mavenPin' in pinned.preset).toBe(false)
+    const saved = preset({ taskId: 'backend:maven', hotReload: 'off', mavenRunner: 'temurin-21', mavenSplit: true, mavenSource: 'pinned' })
+    expect(presetFromDraft(draftOf(saved))).toEqual({ preset: saved })
+    // A Gradle run keeps none of them
+    const gradle = presetFromDraft({ ...draftOf(preset({ taskId: 'backend:gradle' })), mavenRunner: 'temurin-17', mavenPin: true })
+    expect('preset' in gradle && ('mavenRunner' in gradle.preset || 'mavenPin' in gradle.preset)).toBe(false)
+  })
+
+  it('opens 고급 and says the run changes when Maven settings are set', () => {
+    expect(hasAdvancedValues(draftOf(maven))).toBe(false)
+    expect(hasAdvancedValues({ ...draftOf(maven), mavenSource: 'pinned' })).toBe(true)
+    expect(hasRunContent({ ...draftOf(maven), mavenRunner: 'temurin-17' })).toBe(true)
+    expect(hasRunContent(draftOf(maven))).toBe(false)
   })
 })

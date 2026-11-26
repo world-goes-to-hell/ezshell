@@ -470,3 +470,59 @@ button.run-preset-reload-chip:focus-visible { outline: 2px solid var(--accent); 
   .run-preset-reload .run-preset-reload-options { grid-template-columns: 1fr; }
   .run-preset-reload .run-preset-reload-option small { grid-column: auto; }
 }
+
+/* An agent's proposal waiting for the user (run_propose): a line under the row, 보기 opens the diagnosis */
+.run-preset-proposal-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-top: -3px;
+  padding: 0 4px 4px 27px;
+  color: var(--accent);
+  font-size: 11px;
+}
+.run-preset-proposal-line > svg { flex: none; }
+.run-preset-proposal-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.run-preset-proposal-text strong { color: var(--text-primary); font-weight: 600; }
+.run-preset-proposal-btn {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.run-preset-proposal-btn:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.run-preset-proposal-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.run-preset[data-status] .run-preset-proposal-line + * { margin-top: 0; }
+
+/* Maven's settings under 고급 (RunPresetMavenFields) */
+.run-preset-maven { container-type: inline-size; display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm, 4px); background: var(--bg-primary); }
+.run-preset-maven-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.run-preset-maven-row select { width: 100%; }
+.run-preset-maven-source { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0; }
+.run-preset-form label.run-preset-maven-choice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.run-preset-form label.run-preset-maven-choice[data-on] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--bg-primary)); }
+.run-preset-form .run-preset-maven-choice input[type="radio"] { width: auto; margin: 0; padding: 0; box-shadow: none; accent-color: var(--accent); }
+.run-preset-form label.run-preset-switch[data-disabled] { opacity: 0.5; cursor: not-allowed; }
+.run-preset-maven-pin { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; color: var(--text-secondary); }
+.run-preset-maven-pin > svg { flex: none; }
+.run-preset-form button.run-preset-link-danger { color: var(--error-text, var(--error)); }
+@container (max-width: 400px) { .run-preset-maven-row { grid-template-columns: 1fr; } }

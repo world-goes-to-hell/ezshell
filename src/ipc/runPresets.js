@@ -4,11 +4,14 @@ const { inspectLocalProject } = require('./localProjects.js')
 const { inspectDevelopmentTasks, prepareDevelopmentTask } = require('./localDevelopmentTasks.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { createDevelopmentErrors, MAX_LOG_LINES } = require('./developmentErrors.js')
-const { mavenFields, diagnosisContext, presetSuggestions, suggestedMavenFields, prepareMavenSettings,
-  appendMavenSettings, wrapperMavenVersion } = require('./runSuggestions.js')
+const { usesMaven, mavenFields, diagnosisContext, presetSuggestions, suggestedMavenFields, wrapperMavenVersion } = require('./runSuggestions.js')
+const { prepareMavenRun } = require('./runMaven.js')
 const { removeMavenSettings } = require('../runtimes/mavenSettings.js')
+const { inspectMavenPin, exportMavenPin, deleteMavenPin, cleanMavenPinRuns } = require('../runtimes/mavenPin.js')
+const { selectMavenJdk } = require('../runtimes/mavenJdk.js')
 const { allowedJar } = require('../runtimes/jarSearch.js')
 const { tomcatInvocation, findJarCandidates, jarSuggestion, mcpJarSuggestion, selectedJarReferences, STALE_JAR } = require('./runJarSuggestions.js')
+const { MAX_PROPOSALS, STALE_PROPOSAL, prepareProposal, proposalStillCurrent, approvedProposalStatus, pendingProposals, agentProposals } = require('./runProposals.js')
 const { prepareHotReload, prepareTomcatReload, javaRunWithOptions, startHotReload, reloadLog, RESULTS: RELOAD_RESULTS } = require('./hotReload.js')
 const { planTomcat, stageTomcat, webDirectory, antTargets, webappCandidates, validContextPath, workspaceVmArguments, tomcatJars, closeTomcatBases } = require('./tomcatRun.js')
 const { createWorkspaceAccess, workspaceServers } = require('./workspaceServers.js')
@@ -78,7 +81,7 @@ async function resolveProject(folder) {
   return { root, key: projectKey(root), worktree, worktreeKey: projectKey(worktree), cwd, gitWorktree }
 }
 
-function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHomeOf = () => null,
+function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHomeOf = () => null, listJdks = () => [],
   toolHomeOf = () => null, toolHomeFor = () => null, toolVersionOf = () => null,
   enhancedJvmArgs = () => null, userData = file && path.dirname(file), prepareReload = prepareHotReload, startReload = startHotReload,
   sendState = () => {}, notifyCrash = () => {}, sendAsUser, now = Date.now, projectOf = resolveProject,
@@ -86,6 +89,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   store ??= createRunPresetStore(file)
   const workspaceAccess = createWorkspaceAccess(userData && path.join(userData, 'run-workspace-folders.json'))
   const javaVersion = javaVersionProbe()
+  const mavenOptions = { userData, listJdks, javaHomeOf, javaVersion }
   const runs = new Map()
   const byShell = new Map()
   const batches = new Map()
@@ -114,6 +118,27 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     for (const settle of run.waiters) settle()
     if (!isLocked()) sendState({ projectKey: run.project.key, worktreeKey: run.project.worktreeKey,
       id: run.id, state: run.state, ...(firstAgentAction && { firstAgentAction: true }) })
+  }
+
+  function publishProposals(run, proposals) {
+    run.proposals = proposals
+    update(run, { proposals: pendingProposals(proposals) })
+  }
+
+  function changeProposalStatuses(run, statusOf) {
+    if (!run?.proposals?.some(item => item.status === 'pending')) return
+    const updated = run.proposals.map(item => {
+      const status = item.status === 'pending' ? statusOf(item) : item.status
+      return status === item.status ? item : { ...item, status }
+    })
+    if (updated.some((item, index) => item !== run.proposals[index])) publishProposals(run, updated)
+  }
+
+  function expireProposals(run, preset, suggestions) {
+    if (run?.proposals?.some(item => item.status === 'pending')) {
+      const current = suggestions ?? presetSuggestions(preset, run)
+      changeProposalStatuses(run, item => proposalStillCurrent(item, preset, run, current) ? 'pending' : 'dismissed')
+    }
   }
 
   function record(run, by, action) {
@@ -171,11 +196,12 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       byShell.set(shellId, run)
       run.logs = createDevelopmentErrors(now, { tomcat: task.tomcat === true })
       run.jarDiagnosis?.search?.controller.abort(new Error(STALE_JAR))
-      run.diagnosis = diagnosisContext(preset)
+      run.diagnosis = diagnosisContext(preset, task.mavenFeature)
       run.jarDiagnosis = { invocation: tomcatInvocation(preset), major: task.tomcatMajor }
       run.jarOffered = undefined
+      run.proposals = []
       update(run, { status: event.phase === 'prepare' ? 'preparing' : 'starting', startedAt: now(), shellId,
-        exitCode: null, failedAt: undefined, address: undefined, readyAt: undefined, reload: undefined, errors: 0 })
+        exitCode: null, failedAt: undefined, address: undefined, readyAt: undefined, reload: undefined, proposals: undefined, errors: 0 })
       return
     }
     if (run.state.shellId !== shellId) return
@@ -189,7 +215,8 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       }
       if (task.missingJdbcDrivers?.length) updateLogs(run)
       if (task.hotReload) {
-        run.reloadLaunch = { config: task.hotReload, pid: event.pid, env: event.env }
+        const env = task.projectJavaHome ? { ...event.env, JAVA_HOME: task.projectJavaHome } : event.env
+        run.reloadLaunch = { config: task.hotReload, pid: event.pid, env }
         openReload(run)
       } else if (task.hotReloadFailure) recordReload(run, { status: 'failed', reason: task.hotReloadFailure, at: now() })
     } else if (type === 'data' && ACTIVE.has(run.state.status)) {
@@ -212,6 +239,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       update(run, { ...logState, address: logState.readyAt !== undefined ? run.expectedUrl ?? logState.address : undefined,
         status: crashed ? 'crashed' : 'stopped', exitCode: event.exitCode, ...(buildFailed && { failedAt: 'prepare' }) })
       const preset = store.list(run.project.key).find(item => item.id === run.id)
+      if (preset) expireProposals(run, preset)
       if (crashed && preset?.notify && !isLocked()) notifyCrash(path.basename(run.project.root) || '로컬 프로젝트', preset.name)
     }
   }
@@ -303,12 +331,14 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       return { ...base, preparation: { run, finish: async (signal, built) => withEvents(await finish(signal, built)) } }
     }
     if (!tomcatPlan.prepareCommand) return finish()
-    const { args, cleanup } = prepareMavenSettings(preset, { userData, mavenVersion: tomcatPlan.mavenVersion })
-    const command = appendMavenSettings(tomcatPlan.prepareCommand, args, tomcatPlan.platform)
-    return { ...base, cleanup, preparation: { command, finish: async signal => {
-      cleanup?.()
-      return withEvents(await finish(signal))
-    } } }
+    const build = usesMaven(preset) ? await prepareMavenRun({ ...base, command: tomcatPlan.prepareCommand }, preset,
+      { ...mavenOptions, mavenVersion: tomcatPlan.mavenVersion, platform: tomcatPlan.platform }) : { command: tomcatPlan.prepareCommand }
+    return { ...base, mavenFeature: build.mavenFeature, cleanup: build.cleanup,
+      preparation: { command: build.command, launch: { ...(build.javaHome && { javaHome: build.javaHome }), clearJavaCommand: build.clearJavaCommand },
+        finish: async signal => {
+          await build.cleanup?.(0, signal)
+          return withEvents(await finish(signal))
+        } } }
   }
 
   async function act(project, id, action, { by = USER, allowed, approve = noApproval, verifyActor } = {}) {
@@ -334,10 +364,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       try {
         if (preset.kind === 'tomcat') task = await buildTomcatTask(task, project, preset, withEvents)
         else {
-          if (preset.mavenMirrors?.length || preset.mavenUserSettings === false) {
-            const { args, cleanup } = prepareMavenSettings(preset, { userData, mavenVersion: wrapperMavenVersion(task) })
-            task = { ...task, command: appendMavenSettings(task.command, args), cleanup }
-          }
+          if (usesMaven(preset)) task = await prepareMavenRun(task, preset, { ...mavenOptions, mavenVersion: wrapperMavenVersion(task) })
           const javaTask = preset.kind === 'task' && /:(?:maven|gradle)$/.test(preset.taskId)
           const logOptions = javaTask && preset.logEncoding !== 'auto' ? javaLogOptions(preset.logEncoding, await javaVersion(task.javaHome, task.env, task.cwd)) : []
           if (preset.hotReload && preset.hotReload !== 'off') {
@@ -441,6 +468,23 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       ensureAllowed(allowed)
     }
     const run = runFor(project, preset.id)
+    if (operation === 'propose') {
+      if (typeof request.suggestion !== 'string' || !/^[a-f0-9]{64}$/.test(request.suggestion) || run.busy) throw new Error(STALE_PROPOSAL)
+      const generation = run.diagnosis
+      const current = presetSuggestions(preset, run).find(item => item.id === request.suggestion)
+      if (!current) throw new Error(STALE_PROPOSAL)
+      const candidates = current.kind === 'missingClass' ? await jarCandidates(project, preset, run) : new Map()
+      const proposal = await prepareProposal({ by, request, preset, run, candidates, suggestions: presetSuggestions(preset, run),
+        projectRoot: project.worktree, home: jarHome, now })
+      await verifyActor()
+      signal?.throwIfAborted()
+      const suggestions = presetSuggestions(preset, run)
+      if (getRun(project, preset.id) !== run || run.diagnosis !== generation || run.busy
+        || !proposalStillCurrent(proposal, preset, run, suggestions)) throw new Error(STALE_PROPOSAL)
+      expireProposals(run, preset, suggestions)
+      publishProposals(run, [proposal, ...(run.proposals ?? [])].slice(0, MAX_PROPOSALS))
+      return { id: proposal.id, status: proposal.status }
+    }
     if (operation === 'wait') {
       const seconds = request.seconds ?? 30
       if (!Number.isInteger(seconds) || seconds < 1 || seconds > 300) throw new Error('대기 시간은 1~300초입니다.')
@@ -460,8 +504,10 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       if (request.errors) {
         const candidates = await jarCandidates(project, preset, run)
         await verifyActor()
+        const suggestions = presetSuggestions(preset, run)
+        expireProposals(run, preset, suggestions)
         return { ...(history.length && { reload: history }), groups: recentErrorGroups(run.logs, MAX_LOG_LINES - history.length),
-          suggestions: presetSuggestions(preset, run).map(item => mcpJarSuggestion(item, candidates)) }
+          suggestions: suggestions.map(item => mcpJarSuggestion(item, candidates, preset, run)), proposals: agentProposals(run.proposals, by) }
       }
       return { lines: [...history, ...(count > history.length ? run.logs.lines(count - history.length) : [])] }
     }
@@ -537,10 +583,14 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   }
 
   async function remove(project, id, allowed) {
-    find(project, id)
+    const preset = find(project, id)
     const instances = [...runs.values()].filter(run => run.id === id && run.project.key === project.key)
     if (instances.some(run => run.busy || ACTIVE.has(run.state.status))) throw new Error('실행을 중지한 뒤 구성을 삭제해 주세요.')
     ensureAllowed(allowed)
+    if (userData) await cleanMavenPinRuns({ userData, presetId: id }).catch(() => {})
+    ensureAllowed(allowed)
+    if (find(project, id) !== preset || [...runs.values()].some(run => run.id === id && run.project.key === project.key
+      && (run.busy || ACTIVE.has(run.state.status)))) throw new Error(MOVED)
     if (userData) removeMavenSettings({ userData, presetId: id })
     store.write(project.root, store.list(project.key).filter(preset => preset.id !== id))
     for (const run of instances) {
@@ -551,6 +601,33 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       }
       runs.delete(runKey(run.project, id))
     }
+    return { ok: true }
+  }
+
+  async function mavenPinStatus(project, id) {
+    find(project, id)
+    const pinned = Boolean(userData && await inspectMavenPin({ userData, presetId: id }))
+    return { ok: true, pinned }
+  }
+
+  async function changeMavenPin(project, id, action, allowed, approve) {
+    const preset = find(project, id)
+    const pinned = userData && await inspectMavenPin({ userData, presetId: id })
+    const authorize = () => {
+      ensureAllowed(allowed)
+      if (find(project, id) !== preset) throw new Error(MOVED)
+      if (action === 'delete' && [...runs.values()].some(run => run.id === id && run.project.key === project.key
+        && (run.busy || ACTIVE.has(run.state.status)))) throw new Error('실행을 중지한 뒤 Maven 보관본을 삭제해 주세요.')
+    }
+    authorize()
+    if (!pinned) throw new Error('이 실행 구성의 Maven 보관본이 없습니다.')
+    const question = new RunConfirmation('needsConfirm', id, action === 'export'
+      ? `${preset.name}의 Maven 보관본을 현재 워크트리의 .mvn-repo/에 내보내기`
+      : `${preset.name}의 Maven 보관본 삭제`, project.worktree)
+    if (!approve(question)) throw question
+    const request = { userData, presetId: id, approved: true, authorize }
+    if (action === 'export') await exportMavenPin({ ...request, worktree: project.worktree })
+    else await deleteMavenPin(request)
     return { ok: true }
   }
 
@@ -577,6 +654,9 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     if (approval && previous?.confirmedHash === approval.hash) next.confirmedHash = previous.confirmedHash
     if (previous?.agentActionNotified) next.agentActionNotified = true
     store.write(project.root, previous ? current.map(item => item.id === id ? next : item) : [...current, next])
+    if (previous) for (const run of runs.values()) {
+      if (run.id === id && run.project.key === project.key) expireProposals(run, next)
+    }
     return { preset: publicPreset(next) }
   }
 
@@ -600,11 +680,26 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     const preset = find(project, id)
     const run = getRun(project, id)
     const currentDiagnosis = run?.jarDiagnosis
-    const candidates = await jarCandidates(project, preset, run)
+    const mavenDiagnosis = run?.diagnosis
+    const [candidates] = await Promise.all([jarCandidates(project, preset, run), refreshMavenDiagnosis(preset, mavenDiagnosis)])
     ensureAllowed(allowed)
-    if (getRun(project, id) !== run || run?.jarDiagnosis !== currentDiagnosis || find(project, id) !== preset) throw new Error(MOVED)
+    if (getRun(project, id) !== run || run?.jarDiagnosis !== currentDiagnosis || run?.diagnosis !== mavenDiagnosis || find(project, id) !== preset) throw new Error(MOVED)
     if (run) run.jarOffered = candidates
-    return { ok: true, suggestions: presetSuggestions(preset, run).map(item => jarSuggestion(item, candidates, preset, run)) }
+    const suggestions = presetSuggestions(preset, run)
+    expireProposals(run, preset, suggestions)
+    return { ok: true, suggestions: suggestions.map(item => jarSuggestion(item, candidates, preset, run)) }
+  }
+
+  async function refreshMavenDiagnosis(preset, diagnosis) {
+    if (!diagnosis?.invocation) return
+    const [pinned, runner] = await Promise.all([
+      userData && inspectMavenPin({ userData, presetId: preset.id }).catch(() => false),
+      diagnosis.mavenFeature && diagnosis.mavenFeature < 17
+        ? Promise.resolve(listJdks()).then(jdks => selectMavenJdk({ jdks: jdks.filter(jdk => jdk.feature === 17), javaHomeOf })).catch(() => null)
+        : null
+    ])
+    diagnosis.pinned = Boolean(pinned)
+    diagnosis.mavenRunner17 = runner?.id
   }
 
   async function applySuggestion(project, id, request, allowed) {
@@ -622,10 +717,29 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       if (getRun(project, id) !== run || run.jarDiagnosis !== generation || run.jarOffered !== offered || run.busy || find(project, id) !== preset
         || !presetSuggestions(preset, run).some(item => item.id === request.id)) throw new Error(STALE_JAR)
       fields = { extraLibs }
-    } else fields = suggestedMavenFields(preset, run, request)
+    } else {
+      const context = run?.diagnosis
+      const selected = presetSuggestions(preset, run).find(item => item.id === request?.id)
+      if (selected?.apply === 'mavenPinned' || selected?.apply === 'mavenRunner') {
+        await refreshMavenDiagnosis(preset, context)
+        ensureAllowed(allowed)
+        if (getRun(project, id) !== run || run.diagnosis !== context || run.busy || find(project, id) !== preset) throw new Error(MOVED)
+      }
+      fields = suggestedMavenFields(preset, run, request)
+    }
     const { confirmedHash: _confirmedHash, ...next } = { ...preset, ...fields }
     store.write(project.root, store.list(project.key).map(item => item.id === id ? next : item))
+    changeProposalStatuses(run, item => approvedProposalStatus(item, request, next))
     return { ok: true, preset: publicPreset(next) }
+  }
+
+  function dismissProposal(project, id, proposalId, allowed) {
+    ensureAllowed(allowed)
+    find(project, id)
+    const run = getRun(project, id)
+    if (!run?.proposals?.some(item => item.id === proposalId && item.status !== 'applied')) throw new Error(STALE_PROPOSAL)
+    changeProposalStatuses(run, item => item.id === proposalId ? 'dismissed' : 'pending')
+    return { ok: true }
   }
 
   function sendPreview(project, id) {
@@ -654,7 +768,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   }
 
   return {
-    projectOf, act, save, remove, send, sendPreview, startAll, stopAll, agentTool, applySuggestion,
+    projectOf, act, save, remove, send, sendPreview, startAll, stopAll, agentTool, applySuggestion, dismissProposal, mavenPinStatus, changeMavenPin,
     list(project) {
       const presets = store.list(project.key)
       return { projectKey: project.key, worktreeKey: project.worktreeKey, presets: presets.map(publicPreset),
@@ -779,6 +893,11 @@ function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, c
   handle('run-preset-errors', (project, _allowed, _frame, id) => controller.errors(project, id))
   handle('run-preset-diagnosis', (project, allowed, _frame, id) => controller.diagnosis(project, id, allowed))
   handle('run-preset-apply-suggestion', (project, allowed, _frame, id, request) => controller.applySuggestion(project, id, request, allowed))
+  handle('run-preset-maven-pin-status', (project, _allowed, _frame, id) => controller.mavenPinStatus(project, id))
+  for (const action of ['export', 'delete']) handle(`run-preset-${action}-maven-pin`, (project, allowed, frame, id, config) =>
+    withConfirmation(project, allowed, frame, `${action}-maven-pin`, id, config,
+      approve => controller.changeMavenPin(project, id, action, allowed, approve)))
+  handle('run-preset-dismiss-proposal', (project, allowed, _frame, id, proposalId) => controller.dismissProposal(project, id, proposalId, allowed))
   handle('run-preset-send-preview', (project, _allowed, frame, id) => {
     const text = controller.sendPreview(project, id)
     pendingPreview = { frame, key: previewKey(project, id), text }

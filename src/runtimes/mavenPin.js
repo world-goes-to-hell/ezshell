@@ -19,6 +19,7 @@ const MAX_ENTRIES = 100_000
 const MAX_TRACKING_BYTES = 64 * 1024
 const MAX_METADATA_BYTES = 256 * 1024
 const serial = new Map()
+const activeRuns = new Set()
 
 const equalPath = (a, b) => path.relative(a, b) === ''
 const xml = text => text.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[char])
@@ -40,10 +41,18 @@ async function childDirectory(parent, name) {
   return directory
 }
 
-async function presetRoot(userData, id) {
+async function presetRoot(userData, id, create = true) {
   if (typeof id !== 'string' || !PRESET.test(id)) throw new Error('Maven 보관의 실행 구성 ID를 확인해 주세요.')
   let directory = await realDirectory(userData)
-  for (const part of ['runtimes', 'maven-pinned', id]) directory = await childDirectory(directory, part)
+  for (const part of ['runtimes', 'maven-pinned', id]) {
+    if (create) directory = await childDirectory(directory, part)
+    else {
+      directory = path.join(directory, part)
+      const stat = await fs.lstat(directory).catch(error => { if (error.code !== 'ENOENT') throw error; return null })
+      if (!stat) return null
+      if (!stat.isDirectory() || !equalPath(directory, await fs.realpath(directory))) throw new Error('Maven 보관 폴더를 확인할 수 없습니다.')
+    }
+  }
   return directory
 }
 
@@ -57,14 +66,19 @@ async function removeOwned(root, directory) {
   }
 }
 
-async function cleanAbandonedRuns(root) {
+async function cleanAbandonedRuns(root, includeIdle = false) {
   for (const entry of await fs.readdir(root, { withFileTypes: true })) {
     const match = RUN_FOLDER.exec(entry.name)
     if (!match || !entry.isDirectory()) continue
     const pid = Number(match[1])
-    if (pid === process.pid || pid > 2147483647) continue
+    const directory = path.join(root, entry.name)
+    if (pid === process.pid) {
+      if (includeIdle && !activeRuns.has(directory)) await removeOwned(root, directory).catch(() => {})
+      continue
+    }
+    if (pid > 2147483647) continue
     try { process.kill(pid, 0) }
-    catch (error) { if (error.code === 'ESRCH') await removeOwned(root, path.join(root, entry.name)).catch(() => {}) }
+    catch (error) { if (error.code === 'ESRCH') await removeOwned(root, directory).catch(() => {}) }
   }
 }
 
@@ -304,31 +318,59 @@ async function createMavenPinSession({ userData, presetId, mode = 'capture', max
   const root = await presetRoot(userData, presetId)
   await cleanAbandonedRuns(root)
   const scratch = await fs.mkdtemp(path.join(root, `run-${process.pid}-`))
+  activeRuns.add(scratch)
   const repository = path.join(scratch, 'local')
+  const cleanup = async () => {
+    try { await removeOwned(root, scratch) } finally { activeRuns.delete(scratch) }
+  }
   let completion
   try {
     await fs.mkdir(repository, { mode: 0o700 })
     const replay = mode === 'replay' ? await prepareReplay(root, scratch, signal) : null
     return { repository, args: [`-Dmaven.repo.local=${repository}`, ...(replay?.args ?? [])], replay,
-      finish(exitCode) {
+      finish(exitCode, processSignal = signal) {
         return completion ??= (async () => {
+          const finishing = signal && processSignal && signal !== processSignal ? AbortSignal.any([signal, processSignal]) : processSignal
           try {
-            if (exitCode !== 0 || mode === 'replay' || signal?.aborted) return { status: 'skipped' }
+            if (exitCode !== 0 || mode === 'replay' || finishing?.aborted) return { status: 'skipped' }
             return await exclusive(root, async () => {
-              const result = await remoteFiles(repository, maxBytes, signal)
+              const result = await remoteFiles(repository, maxBytes, finishing)
               if (!result.artifacts.length) return { status: 'empty', skippedSnapshots: result.skippedSnapshots }
-              const pinned = await publish(root, scratch, result, signal)
+              const pinned = await publish(root, scratch, result, finishing)
               return { status: 'pinned', repository: pinned, artifacts: result.artifacts.length, metadata: result.metadata.length,
                 bytes: result.bytes, skippedSnapshots: result.skippedSnapshots }
             })
-          } finally { await removeOwned(root, scratch) }
+          } finally { await cleanup() }
         })()
       }
     }
-  } catch (error) { await removeOwned(root, scratch); throw error }
+  } catch (error) { await cleanup(); throw error }
 }
 
-async function exportMavenPin({ userData, presetId, worktree, approved = false, signal } = {}) {
+async function inspectMavenPin({ userData, presetId }) {
+  const root = await presetRoot(userData, presetId, false)
+  return root ? exclusive(root, async () => Boolean(await currentSnapshot(root))) : false
+}
+
+async function cleanMavenPinRuns({ userData, presetId }) {
+  const root = await presetRoot(userData, presetId, false)
+  if (root) await exclusive(root, () => cleanAbandonedRuns(root, true))
+}
+
+async function deleteMavenPin({ userData, presetId, approved = false, authorize = () => {} }) {
+  if (approved !== true) throw new Error('먼저 Maven 보관본 삭제를 확인해 주세요.')
+  const root = await presetRoot(userData, presetId, false)
+  if (!root) return
+  await exclusive(root, async () => {
+    const pinned = await currentSnapshot(root)
+    authorize()
+    if (!pinned) return
+    await fs.unlink(path.join(root, 'current.json'))
+    await removeOwned(root, pinned)
+  })
+}
+
+async function exportMavenPin({ userData, presetId, worktree, approved = false, signal, authorize = () => {} } = {}) {
   if (approved !== true) throw new Error('먼저 프로젝트의 .mvn-repo로 내보내기를 확인해 주세요.')
   const root = await presetRoot(userData, presetId)
   const folder = await realDirectory(worktree)
@@ -337,13 +379,14 @@ async function exportMavenPin({ userData, presetId, worktree, approved = false, 
     const pinned = await currentSnapshot(root)
     if (!pinned) throw new Error('먼저 성공한 Maven 빌드의 의존성을 보관해 주세요.')
     signal?.throwIfAborted()
+    authorize()
     await fs.mkdir(target, { mode: 0o700 }).catch(error => {
       if (error.code !== 'EEXIST') throw error
       throw new Error('이미 프로젝트에 .mvn-repo 폴더가 있습니다.')
     })
-    try { await copySnapshot(pinned, target, signal); return target }
+    try { await copySnapshot(pinned, target, signal); authorize(); return target }
     catch (error) { await removeOwned(folder, target); throw error }
   })
 }
 
-module.exports = { createMavenPinSession, exportMavenPin }
+module.exports = { createMavenPinSession, exportMavenPin, inspectMavenPin, deleteMavenPin, cleanMavenPinRuns }

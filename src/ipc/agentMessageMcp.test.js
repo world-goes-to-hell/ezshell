@@ -140,6 +140,36 @@ describe('Aside on the shared message bridge', () => {
 })
 
 describe('the MCP bridge for an agent started in a local terminal', () => {
+  it('routes run_propose through the authenticated bridge and refuses it while locked', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-run-proposal-bridge-'))
+    let locked = false
+    const runPresetTool = vi.fn((_agent, _request, allowed) => ({ id: 'fixture-proposal', status: allowed() ? 'pending' : 'rejected' }))
+    const messages = createAgentMessages({ bridgeFile: path.join(root, 'connection'), runPresetTool, isLocked: () => locked, notify() {} })
+    let mcp
+    try {
+      await messages.enableExternalBridge()
+      const { env } = messages.register('codex', 'local:fixture', root, {})
+      mcp = startStdio(root, env)
+      await mcp.initialize()
+      await vi.waitFor(() => expect(messages.snapshot().agents[0].mcpConnected).toBe(true))
+      const args = { name: 'Test Maven', suggestion: 'a'.repeat(64), url: 'https://repo.example.test/', note: 'Review the mirror.' }
+      const call = input => mcp.request('tools/call', { name: 'run_propose', arguments: input })
+      expect(await call({ ...args, suggestion: 'unrecognized' })).toMatchObject({ isError: true })
+      expect(runPresetTool).not.toHaveBeenCalled()
+      const proposed = await call(args)
+      expect(JSON.parse(proposed.content[0].text)).toEqual({ id: 'fixture-proposal', status: 'pending' })
+      expect(runPresetTool).toHaveBeenCalledWith(env.EZSHELL_AGENT_ID, expect.objectContaining({ method: 'run-propose', ...args }), expect.any(Function), expect.any(AbortSignal))
+      locked = true
+      expect(await call(args)).toMatchObject({ isError: true })
+      expect(runPresetTool).toHaveBeenCalledTimes(1)
+    } finally {
+      if (mcp && mcp.child.exitCode === null && !mcp.child.signalCode) mcp.child.kill()
+      await mcp?.exited
+      messages.stop()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('records Codex role launch evidence only when the shell binding confirms the requested folder', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ezshell-codex-role-bridge-'))
     const bridgeFile = path.join(root, 'agent-message-connection')

@@ -5,7 +5,9 @@ const { diagnoseRun } = require('./runDiagnosis.js')
 const { normalizeMavenMirrors, projectMirrorId, stageMavenSettings } = require('../runtimes/mavenSettings.js')
 
 const USER_SETTINGS_IMPACT = '이 실행의 사용자 서버 인증·프록시·미러·로컬 저장소 설정을 제외합니다.'
+const SPRING_BOOT_MAVEN_JVM = 'Spring Boot 앱은 플러그인 설정에 따라 Maven 실행용 JDK에서 실행될 수 있습니다.'
 const MIRROR_DIAGNOSES = new Set(['mavenHttpBlocked', 'mavenRepositoryUnavailable'])
+const PIN_DIAGNOSES = new Set(['mavenRepositoryUnavailable', 'mavenUnauthorized'])
 
 function usesMaven(preset) {
   return (preset.kind === 'task' && typeof preset.taskId === 'string' && preset.taskId.endsWith(':maven'))
@@ -35,16 +37,20 @@ function mavenApproval(preset) {
 }
 
 const mavenInvocation = preset => usesMaven(preset)
-  ? JSON.stringify([preset.kind, preset.taskId, preset.relative, preset.prepare?.goals])
+  ? JSON.stringify([preset.kind, preset.taskId, preset.relative, preset.prepare?.goals, preset.jdk,
+    preset.mavenRunner, preset.mavenSplit, preset.mavenPin === true, preset.mavenSource ?? 'online'])
   : null
 
-function diagnosisContext(preset) {
+function diagnosisContext(preset, mavenFeature) {
   return { key: randomUUID(), invocation: mavenInvocation(preset),
-    mirrors: preset.mavenUserSettings === false ? undefined : preset.mavenMirrors }
+    mirrors: preset.mavenUserSettings === false || preset.mavenSource === 'pinned' ? undefined : preset.mavenMirrors, mavenFeature }
 }
 
 function applyKind(preset, suggestion, diagnosis) {
-  if (!diagnosis.invocation || diagnosis.invocation !== mavenInvocation(preset) || !projectMirrorId(suggestion.repositoryId)) return undefined
+  if (!diagnosis.invocation || diagnosis.invocation !== mavenInvocation(preset) || preset.mavenSource === 'pinned') return undefined
+  if (suggestion.kind === 'mavenPinnedAvailable') return 'mavenPinned'
+  if (suggestion.kind === 'mavenTls' && diagnosis.mavenRunner17 && diagnosis.mavenFeature && diagnosis.mavenFeature < 17) return 'mavenRunner'
+  if (!projectMirrorId(suggestion.repositoryId)) return undefined
   if (MIRROR_DIAGNOSES.has(suggestion.kind)) return 'mavenMirror'
   if (suggestion.kind === 'mavenUserMirror' && preset.mavenUserSettings !== false) {
     const expected = diagnosis.mirrors?.find(mirror => mirror.repositoryId === suggestion.repositoryId)
@@ -57,11 +63,21 @@ function applyKind(preset, suggestion, diagnosis) {
 
 function presetSuggestions(preset, run) {
   if (!run?.diagnosis) return []
-  const { key, mirrors } = run.diagnosis
-  return diagnoseRun({ groups: run.logs.groups(), lines: run.logs.lines(), mirrors }).map(item => {
-    const id = createHash('sha256').update(JSON.stringify([key, item])).digest('hex')
+  const { key, mirrors, invocation, mavenFeature, mavenRunner17, pinned } = run.diagnosis
+  const items = diagnoseRun({ groups: run.logs.groups(), lines: run.logs.lines(), mirrors, maven: Boolean(invocation) })
+  if (pinned && invocation === mavenInvocation(preset) && preset.mavenSource !== 'pinned' && items.some(item => PIN_DIAGNOSES.has(item.kind))) {
+    items.push({ kind: 'mavenPinnedAvailable', message: '성공한 빌드의 Maven 보관본으로 빌드할 수 있습니다.' })
+  }
+  return items.map(item => {
     const apply = applyKind(preset, item, run.diagnosis)
-    return { ...item, id, ...(apply && { apply }) }
+    const signature = apply === 'mavenRunner' ? [key, item, mavenRunner17] : [key, item]
+    const id = createHash('sha256').update(JSON.stringify(signature)).digest('hex')
+    let message = item.message
+    if (item.kind === 'mavenTls' && mavenFeature && mavenFeature < 17) {
+      message = mavenRunner17 ? 'Maven을 JDK 17로 돌려 보세요.' : '개발 도구에서 JDK 17을 받은 뒤 Maven 실행 JDK로 사용해 보세요.'
+      if (preset.kind === 'task' && invocation) message += ` ${SPRING_BOOT_MAVEN_JVM}`
+    }
+    return { ...item, message, id, ...(apply && { apply }) }
   })
 }
 
@@ -70,6 +86,10 @@ function suggestedMavenFields(preset, run, request) {
   if (typeof id !== 'string' || !/^[0-9a-f]{64}$/.test(id)) throw new Error('적용할 진단을 다시 선택해 주세요.')
   const suggestion = presetSuggestions(preset, run).find(item => item.id === id)
   if (!suggestion?.apply) throw new Error('최근 실행에서 적용할 진단을 찾을 수 없습니다. 진단을 다시 확인해 주세요.')
+  if (suggestion.apply === 'mavenPinned' || suggestion.apply === 'mavenRunner') {
+    if (request.replacementUrl !== undefined) throw new Error('Maven 진단을 다시 선택해 주세요.')
+    return suggestion.apply === 'mavenPinned' ? { mavenSource: 'pinned' } : { mavenRunner: run.diagnosis.mavenRunner17 }
+  }
   if (suggestion.apply === 'mavenUserSettings') {
     if (request.replacementUrl !== undefined) throw new Error('Maven 사용자 설정의 적용 여부를 확인해 주세요.')
     return { ...mavenFields(preset), mavenUserSettings: false }
@@ -88,11 +108,11 @@ function prepareMavenSettings(preset, { userData, mavenVersion } = {}) {
 
 function appendMavenSettings(command, args, platform = process.platform) {
   if (!args.length) return command
-  const [flag, file] = args
+  if (platform === 'win32' && args.some(arg => arg.includes('%'))) throw new Error('Windows에서 Maven에 넘길 경로에는 %를 사용할 수 없습니다.')
   // PowerShell removes its own quotes before forwarding to Maven's cmd wrapper. Keep native
   // double quotes even when the path has no spaces so cmd treats characters such as & literally.
-  const quoted = platform === 'win32' ? `'"${file.replaceAll("'", "''")}"'` : `'${file.replaceAll("'", "'\\''")}'`
-  return `${command} ${flag} ${quoted}`
+  const quote = value => platform === 'win32' ? `'"${value.replaceAll("'", "''")}"'` : `'${value.replaceAll("'", "'\\''")}'`
+  return `${command} ${args.map(arg => arg === '-s' || arg === '-gs' ? arg : quote(arg)).join(' ')}`
 }
 
 function wrapperMavenVersion(task) {
@@ -110,4 +130,4 @@ function wrapperMavenVersion(task) {
 }
 
 module.exports = { usesMaven, mavenFields, mavenApproval, diagnosisContext, presetSuggestions, suggestedMavenFields,
-  prepareMavenSettings, appendMavenSettings, wrapperMavenVersion }
+  prepareMavenSettings, appendMavenSettings, wrapperMavenVersion, SPRING_BOOT_MAVEN_JVM }

@@ -32,7 +32,7 @@ async function fixture(options = {}) {
   const sendAsUser = vi.fn()
   const sendState = vi.fn()
   const notifyCrash = vi.fn()
-  const state = { locked: false, now: 100, cwd: subfolder, bound: true }
+  const state = { locked: false, now: 100, cwd: subfolder, bound: true, agentId: 'agent-1' }
   const handlers = new Map()
   const frame = {}
   const event = { senderFrame: frame, sender: { mainFrame: frame } }
@@ -40,7 +40,7 @@ async function fixture(options = {}) {
   const emit = (id, event) => shellTasks.get(id).onEvent({ shellId: id, ...event })
   const shells = {
     currentDirectory: async () => state.cwd,
-    chatAgentId: () => state.bound ? 'agent-1' : null,
+    chatAgentId: () => state.bound ? state.agentId : null,
     async openDevelopmentTask(task) {
       if (state.beforeOpen) await state.beforeOpen()
       const id = `local:${shellTasks.size + 1}`
@@ -59,7 +59,7 @@ async function fixture(options = {}) {
       }
     }
   }
-  const makeController = (options = {}) => createRunPresets({ file, getShells: () => shells, getAgent: id => id === 'agent-1' ? { id, active: true, shellId: 'agent-shell' } : null,
+  const makeController = (options = {}) => createRunPresets({ file, getShells: () => shells, getAgent: id => id === state.agentId ? { id, active: true, shellId: 'agent-shell' } : null,
     isLocked: () => state.locked, sendState, sendAsUser, notifyCrash, now: () => state.now, jarHome: root, javaHomeOf: id => id === 'jdk-21' ? outside : null,
     projectOf: async cwd => cwd === checkout || cwd === checkoutSubfolder ? { ...location(cwd, checkout, folder), gitWorktree: true } : location(cwd), ...options })
   const controller = makeController(options)
@@ -77,7 +77,81 @@ async function fixture(options = {}) {
     state, list, operations, emit, save, start, invoke, invokeCheckout, agent, sendAsUser, sendState, notifyCrash, shellTasks }
 }
 
+async function mavenFixtureJdk(root, name, version) {
+  const folder = path.join(root, name)
+  const suffix = process.platform === 'win32' ? '.exe' : ''
+  await mkdir(path.join(folder, 'bin'), { recursive: true })
+  for (const binary of ['java', 'javac']) await writeFile(path.join(folder, 'bin', `${binary}${suffix}`), 'fixture')
+  await writeFile(path.join(folder, 'release'), `JAVA_VERSION="${version}"\nOS_ARCH="amd64"\n`)
+  return folder
+}
+
 describe('saved project runs', () => {
+  it('keeps agent proposals separate from the preset until the user approves or dismisses them', async () => {
+    const f = await fixture()
+    await writeFile(path.join(f.folder, 'pom.xml'), '<project>spring-boot-maven-plugin</project>')
+    await writeFile(path.join(f.folder, process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw'), 'fixture')
+    const saved = await f.save('Maven 제안', { kind: 'task', taskId: '.:maven', agentControl: false })
+    const fileBefore = await readFile(f.file, 'utf8')
+    const propose = fields => f.agent('propose', saved.name, fields)
+    const log = () => f.agent('log', saved.name, { errors: true })
+    await expect(f.agent('start', saved.name)).rejects.toThrow('꺼져')
+    await expect(propose({ suggestion: 'f'.repeat(64), note: 'N/A' })).rejects.toThrow('최신 진단')
+    expect(await f.invoke('run-preset-start', saved.id)).toEqual({ ok: true })
+    const { shellId } = f.list().states[saved.id]
+    const blocked = '[ERROR] Could not transfer artifact example:demo:jar:1 from/to maven-default-http-blocker (http://0.0.0.0/): Blocked mirror for repositories: [legacy (http://legacy.invalid/maven/, default)]\n'
+    f.emit(shellId, { type: 'data', data: blocked })
+    f.emit(shellId, { type: 'exit', exitCode: 1 })
+    const [item] = (await log()).suggestions
+    expect(item).toMatchObject({ kind: 'mavenHttpBlocked', suggestion: expect.stringMatching(/^[a-f\d]{64}$/), proposalKind: 'mavenMirror' })
+    const fields = { suggestion: item.suggestion, note: '제안합니다.' }
+    await expect(propose({ ...fields, url: 'http://example.test/unsupported/' })).rejects.toThrow('HTTPS')
+    await expect(propose({ ...fields, url: 'https://user:secret@example.test/' })).rejects.toThrow('자격 증명')
+    await expect(propose({ ...fields, url: 'https://example.test/', note: '\u200b' })).rejects.toThrow('메모')
+    f.state.locked = true
+    await expect(propose({ ...fields, url: 'https://example.test/' })).rejects.toThrow('잠금')
+    f.state.locked = false
+    f.state.bound = false
+    await expect(propose({ ...fields, url: 'https://example.test/' })).rejects.toThrow('작업 폴더')
+    f.state.bound = true
+    f.state.cwd = f.checkoutSubfolder
+    await expect(propose({ ...fields, url: 'https://example.test/' })).rejects.toThrow('최신 진단')
+    f.state.cwd = f.subfolder
+    const recent = []
+    for (let index = 0; index < 6; index++) {
+      const url = `https://repo${index}.example.test/maven/`
+      const result = await propose({ ...fields, url, note: `\x1b[31m저장소 ${index}\x1b[0m` })
+      expect(result).toMatchObject({ status: 'pending' })
+      recent.unshift({ ...result, url, note: `저장소 ${index}` })
+    }
+    expect(await readFile(f.file, 'utf8')).toBe(fileBefore)
+    expect(f.list().states[saved.id].proposals.map(({ id }) => id)).toEqual(recent.slice(0, 5).map(({ id }) => id))
+    expect(f.sendState).toHaveBeenLastCalledWith(expect.objectContaining({ id: saved.id, state: expect.objectContaining({ proposals: [
+      expect.objectContaining({ id: recent[0].id, by: 'agent-1', note: recent[0].note, at: f.state.now,
+        suggestion: { id: item.suggestion, apply: 'mavenMirror', repositoryId: 'legacy', replacementUrl: recent[0].url } }),
+      ...Array(4).fill(expect.anything())
+    ] }) }))
+    expect((await log()).proposals.map(({ status }) => status)).toEqual(Array(5).fill('pending'))
+    f.state.agentId = 'agent-2'
+    const other = await f.controller.agentTool('agent-2', { method: 'run-log', name: saved.name, errors: true }, f.allowed)
+    expect(other.proposals).toEqual([])
+    f.state.agentId = 'agent-1'
+    expect(await f.invokeCheckout('run-preset-dismiss-proposal', saved.id, recent[1].id)).toMatchObject({ ok: false })
+    const childFrame = { ...f.event, senderFrame: {} }
+    expect(await f.handlers.get('run-preset-dismiss-proposal')(childFrame, f.folder, saved.id, recent[1].id)).toMatchObject({ ok: false })
+    expect(await f.invoke('run-preset-dismiss-proposal', saved.id, recent[1].id)).toEqual({ ok: true })
+    expect(await f.invoke('run-preset-dismiss-proposal', saved.id, recent[1].id)).toEqual({ ok: true })
+    expect((await log()).proposals[1].status).toBe('dismissed')
+    expect(await f.invoke('run-preset-apply-suggestion', saved.id, { id: item.suggestion, replacementUrl: recent[0].url })).toMatchObject({ ok: true })
+    expect((await log()).proposals.map(({ status }) => status)).toEqual(['applied', 'dismissed', 'dismissed', 'dismissed', 'dismissed'])
+    expect(f.list().states[saved.id].proposals).toEqual([])
+    expect((await f.makeController().agentTool('agent-1', { method: 'run-log', name: saved.name, errors: true }, f.allowed)).proposals).toEqual([])
+    expect(await f.invoke('run-preset-start', saved.id)).toMatchObject({ needsConfirm: { command: expect.stringContaining(recent[0].url) } })
+    expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual({ ok: true })
+    expect((await log()).proposals).toEqual([])
+    await expect(propose({ ...fields, url: recent[0].url })).rejects.toThrow('최신 진단')
+  })
+
   it.each([7, 9])('approves one current missing JDBC JAR and mounts it for Tomcat %i', async major => {
     let home
     const f = await fixture({ toolHomeOf: () => home, toolVersionOf: () => `${major}.0.99` })
@@ -115,6 +189,11 @@ describe('saved project runs', () => {
     expect(JSON.stringify(logged)).not.toContain(cacheLib)
     expect(JSON.stringify(logged)).not.toContain('fixture-secret')
     expect(logged.suggestions[0]).not.toHaveProperty('id')
+    const proposalFields = { suggestion: logged.suggestions[0].suggestion, note: '이 드라이버를 연결해 주세요.' }
+    expect(logged.suggestions[0]).toMatchObject({ proposalKind: 'tomcatJar' })
+    await expect(f.agent('propose', 'JDBC', { ...proposalFields, jar: path.join(cacheLib, 'driver-3.0.jar') })).rejects.toThrow('JAR 후보')
+    const fromCache = await f.agent('propose', 'JDBC', { ...proposalFields, jar: 'example.jdbc:driver:3.0' })
+    const fromProject = await f.agent('propose', 'JDBC', { ...proposalFields, jar: 'lib/driver-2.jar' })
     const { suggestions: [suggestion] } = await f.invoke('run-preset-diagnosis', saved.id)
     expect(suggestion).toMatchObject({ kind: 'missingClass', className: 'example.jdbc.Driver', apply: 'tomcatJar' })
     expect(suggestion.jars).toEqual(expect.arrayContaining([
@@ -126,10 +205,14 @@ describe('saved project runs', () => {
     expect(await f.invokeCheckout('run-preset-apply-suggestion', saved.id, request)).toMatchObject({ ok: false })
     expect(await f.invoke('run-preset-apply-suggestion', saved.id, { ...request, jarId: alternate })).toMatchObject({ ok: false })
     await writeFile(alternate, zipOf({ 'example/jdbc/Missing.class': 'fixture' }))
+    await expect(f.agent('propose', 'JDBC', { ...proposalFields, jar: 'lib/driver-2.jar' })).rejects.toThrow('JAR 후보')
     expect(await f.invoke('run-preset-apply-suggestion', saved.id, request)).toMatchObject({ ok: false })
     await writeFile(alternate, driverJar)
     const { preset } = await f.invoke('run-preset-apply-suggestion', saved.id, request)
     expect(preset.extraLibs).toEqual(['lib/driver-2.jar'])
+    expect((await f.agent('log', 'JDBC', { errors: true })).proposals).toMatchObject([
+      { id: fromProject.id, status: 'applied' }, { id: fromCache.id, status: 'dismissed' }
+    ])
     await expect(f.agent('start', 'JDBC')).rejects.toThrow('사용자가')
     await f.start(saved.id, 'Tomcat 컨텍스트 설정 파일\ncontext.xml\n\nTomcat에 연결할 JAR\nlib/driver-2.jar')
     const runtime = f.shellTasks.get(shellId)
@@ -198,9 +281,12 @@ describe('saved project runs', () => {
     f.emit(shellId, { type: 'exit', exitCode: 1 })
     const conflict = (await f.invoke('run-preset-diagnosis', saved.id)).suggestions[0]
     expect(conflict).toMatchObject({ kind: 'mavenUserMirror', apply: 'mavenUserSettings' })
+    const beforeUserSettings = await f.agent('propose', renamed.preset.name, { suggestion: conflict.id, note: '사용자 설정 없이 한 번 시도하세요.' })
+    expect(beforeUserSettings.status).toBe('pending')
     expect(await f.invoke('run-preset-apply-suggestion', saved.id, { id: conflict.id })).toMatchObject({
       ok: true, preset: { mavenUserSettings: false }
     })
+    expect((await f.agent('log', renamed.preset.name, { errors: true })).proposals).toMatchObject([{ id: beforeUserSettings.id, status: 'applied' }])
     expect(await f.invoke('run-preset-start', saved.id)).toMatchObject({ needsConfirm: { command: expect.stringContaining('서버 인증·프록시·미러·로컬 저장소') } })
     expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual({ ok: true })
     expect(f.shellTasks.get(shellId).command).toContain(' -s ')
@@ -208,6 +294,126 @@ describe('saved project runs', () => {
     f.emit(shellId, { type: 'closed' })
     expect(await f.invoke('run-presets-delete', saved.id)).toEqual({ ok: true })
     await expect(readFile(setting, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('splits a Spring Maven run, captures a successful repository and applies a current pinned-build diagnosis', async () => {
+    const homes = {}
+    const f = await fixture({ javaHomeOf: id => homes[id], listJdks: () => [{ id: 'managed-17', feature: 17, managed: true }] })
+    const suffix = process.platform === 'win32' ? '.exe' : ''
+    for (const [id, version] of [['legacy-8', '1.8.0_281'], ['managed-17', '17.0.15']]) {
+      homes[id] = await mavenFixtureJdk(path.dirname(f.file), `${id} JDKs`, version)
+    }
+    await writeFile(path.join(f.folder, 'pom.xml'), '<project>spring-boot-maven-plugin</project>')
+    const saved = await f.save('보관할 Maven', { kind: 'task', taskId: '.:maven', jdk: 'legacy-8', mavenSplit: true, mavenPin: true })
+    expect(f.makeController().list(f.project).presets[0]).toMatchObject({ mavenPin: true })
+    expect(await f.invoke('run-preset-maven-pin-status', saved.id)).toEqual({ ok: true, pinned: false })
+    const split = '프로젝트 JDK로 Maven 컴파일·테스트 켜기'
+    await f.start(saved.id, `${split}\n성공한 Maven 빌드의 의존성 보관`)
+    const [shellId, task] = [...f.shellTasks][0]
+    expect(task).toMatchObject({ javaHome: homes['managed-17'], projectJavaHome: homes['legacy-8'], clearJavaCommand: true })
+    expect(task.launchNotice).toContain('Spring Boot 앱')
+    expect(task.command).toContain(`-Dmaven.compiler.executable=${path.join(homes['legacy-8'], 'bin', `javac${suffix}`)}`)
+    expect(task.command).toContain('-Dmaven.repo.local=')
+    const pinRoot = path.join(path.dirname(f.file), 'runtimes', 'maven-pinned', saved.id)
+    const [scratch] = await readdir(pinRoot)
+    const artifact = path.join(pinRoot, scratch, 'local', 'example', 'sample', '1')
+    await mkdir(artifact, { recursive: true })
+    await writeFile(path.join(artifact, 'sample-1.jar'), 'artifact')
+    await writeFile(path.join(artifact, '_remote.repositories'), 'sample-1.jar>private-repo=\n')
+    await task.cleanup(0)
+    f.emit(shellId, { type: 'exit', exitCode: 0 })
+    expect(await f.invoke('run-preset-maven-pin-status', saved.id)).toEqual({ ok: true, pinned: true })
+    expect(await f.invoke('run-preset-export-maven-pin', saved.id, { confirmCustom: true })).toHaveProperty('needsConfirm')
+    expect(await f.invokeCheckout('run-preset-export-maven-pin', saved.id, { confirmCustom: true })).toHaveProperty('needsConfirm')
+    expect(await f.invoke('run-preset-export-maven-pin', saved.id, { confirmCustom: true })).toEqual({ ok: true })
+    expect(await readFile(path.join(f.folder, '.mvn-repo', 'example', 'sample', '1', 'sample-1.jar'), 'utf8')).toBe('artifact')
+    expect(await f.invoke('run-preset-export-maven-pin', saved.id)).toHaveProperty('needsConfirm')
+    expect(await f.invoke('run-preset-export-maven-pin', saved.id, { confirmCustom: true })).toMatchObject({ ok: false, error: expect.stringContaining('이미') })
+
+    expect(await f.invoke('run-preset-start', saved.id)).toEqual({ ok: true })
+    f.emit(shellId, { type: 'data', phase: 'server', data: '[ERROR] Could not transfer artifact example:sample:jar:1 from/to private-repo (https://repo.invalid): status code: 401\n' })
+    await f.shellTasks.get(shellId).cleanup(1)
+    f.emit(shellId, { type: 'exit', exitCode: 1 })
+    const { suggestions } = await f.invoke('run-preset-diagnosis', saved.id)
+    const replay = suggestions.find(item => item.apply === 'mavenPinned')
+    expect(replay).toMatchObject({ kind: 'mavenPinnedAvailable' })
+    expect(await f.invoke('run-preset-apply-suggestion', saved.id, { id: replay.id })).toMatchObject({ ok: true, preset: { mavenSource: 'pinned' } })
+    await f.start(saved.id, `${split}\nMaven 보관본으로 빌드 (file: 미러)`)
+    const replayTask = f.shellTasks.get(shellId)
+    expect(replayTask.command.match(/\s-gs\s/g)).toHaveLength(1)
+    expect(replayTask.command.match(/\s-s\s/g)).toHaveLength(1)
+    expect(replayTask.command).toContain('pinned-settings.xml')
+    await replayTask.cleanup(null)
+    f.emit(shellId, { type: 'exit', exitCode: 1 })
+    f.emit(shellId, { type: 'closed', wasRunning: false })
+    expect(await f.invoke('run-presets-delete', saved.id)).toEqual({ ok: true })
+    expect(await readdir(pinRoot)).toEqual(expect.arrayContaining(['current.json', expect.stringMatching(/^repo-/)]))
+    expect(await readdir(pinRoot)).toHaveLength(2)
+  })
+
+  it('keeps the Spring Boot project JVM by default and rejects a different runtime with enhanced reload', async () => {
+    const homes = {}
+    const f = await fixture({ javaHomeOf: id => homes[id], listJdks: () => [{ id: 'managed-17', managed: true, feature: 17 }],
+      enhancedJvmArgs: () => ['-XX:+AllowEnhancedClassRedefinition'], prepareReload: async task => task })
+    for (const [id, version] of [['legacy', '1.8.0_281'], ['managed-17', '17.0.15'], ['jbr-21', '21.0.11']]) {
+      homes[id] = await mavenFixtureJdk(path.dirname(f.file), id, version)
+    }
+    await writeFile(path.join(f.folder, 'pom.xml'), '<project>spring-boot-maven-plugin</project>')
+    const legacy = await f.save('Spring Boot 8', { kind: 'task', taskId: '.:maven', jdk: 'legacy' })
+    expect(await f.invoke('run-preset-start', legacy.id)).toEqual({ ok: true })
+    const [legacyShell, first] = [...f.shellTasks][0]
+    expect(first.javaHome).toBe(homes.legacy)
+    expect(first.command).not.toContain('-Dmaven.compiler.fork=')
+    f.emit(legacyShell, { type: 'data', data: '[ERROR] Could not transfer artifact sample:demo:jar:1 from/to legacy (https://repo.invalid): SSLHandshakeException: protocol_version\n' })
+    f.emit(legacyShell, { type: 'exit', exitCode: 1 })
+    expect((await f.invoke('run-preset-diagnosis', legacy.id)).suggestions).toContainEqual(expect.objectContaining({
+      apply: 'mavenRunner', message: expect.stringContaining('Spring Boot 앱')
+    }))
+
+    const enhanced = await f.save('Spring Boot 21', { kind: 'task', taskId: '.:maven', jdk: 'jbr-21', hotReload: 'enhanced' })
+    expect(await f.invoke('run-preset-start', enhanced.id)).toEqual({ ok: true })
+    const [shellId, task] = [...f.shellTasks].at(-1)
+    expect(task.javaHome).toBe(homes['jbr-21'])
+    expect(task.launchNotice).toBeUndefined()
+    f.emit(shellId, { type: 'exit', exitCode: 0 })
+    expect((await f.invoke('run-presets-save', { ...enhanced, mavenRunner: 'managed-17' })).preset.mavenRunner).toBe('managed-17')
+    expect(await f.invoke('run-preset-start', enhanced.id)).toHaveProperty('needsConfirm')
+    expect(await f.invoke('run-preset-start', enhanced.id, { confirmCustom: true })).toMatchObject({
+      ok: false, error: expect.stringContaining('같은 JetBrains Runtime')
+    })
+  })
+
+  it('offers JDK 17 after legacy Maven TLS failure and uses it only for Tomcat preparation', async () => {
+    let managed = false
+    const paths = {}
+    const f = await fixture({ javaHomeOf: id => paths[id], toolHomeOf: () => paths.tomcat,
+      listJdks: () => managed ? [{ id: 'modern', managed: true, feature: 17 }] : [] })
+    const windows = process.platform === 'win32'
+    for (const [id, version] of [['legacy', '1.8.0_281'], ['modern', '17.0.15']]) {
+      paths[id] = await mavenFixtureJdk(path.dirname(f.file), id, version)
+    }
+    paths.tomcat = path.join(path.dirname(f.file), 'tomcat')
+    for (const rel of ['bin', 'conf']) await mkdir(path.join(paths.tomcat, rel), { recursive: true })
+    await writeFile(path.join(paths.tomcat, 'bin', windows ? 'catalina.bat' : 'catalina.sh'), 'fixture')
+    const saved = await f.save('오래된 Maven', { kind: 'tomcat', tomcat: 'fixture', jdk: 'legacy', webapp: 'WebContent', prepare: { tool: 'maven', goals: 'verify' } })
+    await f.start(saved.id, '기동 전 빌드\nmaven verify')
+    const [shellId, fallback] = [...f.shellTasks][0]
+    expect(fallback.preparation.launch.javaHome).toBe(paths.legacy)
+    f.emit(shellId, { type: 'data', phase: 'prepare', data: '[ERROR] Could not transfer artifact sample:demo:jar:1 from/to legacy (https://repo.invalid): SSLHandshakeException: protocol_version\n' })
+    f.emit(shellId, { type: 'exit', phase: 'prepare', exitCode: 1 })
+    expect((await f.invoke('run-preset-diagnosis', saved.id)).suggestions).toContainEqual(expect.objectContaining({ kind: 'mavenTls', message: expect.stringContaining('개발 도구') }))
+    managed = true
+    const suggestion = (await f.invoke('run-preset-diagnosis', saved.id)).suggestions.find(item => item.apply === 'mavenRunner')
+    expect(suggestion.kind).toBe('mavenTls')
+    expect(await f.invoke('run-preset-apply-suggestion', saved.id, { id: suggestion.id })).toMatchObject({ ok: true, preset: { mavenRunner: 'modern' } })
+    await f.start(saved.id, '기동 전 빌드\nmaven verify\n\nMaven 실행 JDK modern')
+    expect(f.shellTasks.get(shellId)).toMatchObject({ javaHome: paths.legacy,
+      preparation: { command: expect.stringContaining('-Dmaven.compiler.executable='), launch: { javaHome: paths.modern, clearJavaCommand: true } } })
+    f.emit(shellId, { type: 'data', phase: 'prepare', data: "Unrecognized VM option 'MaxPermSize=256m'\nError: Could not create the Java Virtual Machine.\n" })
+    f.emit(shellId, { type: 'exit', phase: 'prepare', exitCode: 1 })
+    expect((await f.invoke('run-preset-diagnosis', saved.id)).suggestions).toContainEqual(expect.objectContaining({
+      kind: 'mavenObsoleteJvmOption', message: expect.stringContaining('MAVEN_OPTS'), option: 'MaxPermSize'
+    }))
   })
 
   it('applies Maven settings to Tomcat preparation and reads the selected Maven version', async () => {
@@ -428,7 +634,7 @@ describe('saved project runs', () => {
     const privateShell = f.list().states[privatePreset.id].shellId
     f.emit(privateShell, { type: 'data', data: 'VITE v5 ready in 11 ms\nERROR compile failed\n' })
     expect(await f.agent('wait', 'private')).toEqual({ result: 'ready', status: 'running' })
-    expect(await f.agent('log', 'private', { errors: true })).toEqual({ groups: [{ at: 100, lines: ['ERROR compile failed'] }], suggestions: [] })
+    expect(await f.agent('log', 'private', { errors: true })).toEqual({ groups: [{ at: 100, lines: ['ERROR compile failed'] }], suggestions: [], proposals: [] })
     await expect(f.agent('start', 'web')).rejects.toThrow('사용자가')
     await expect(f.agent('wait', 'web', { until: 'reload' })).rejects.toThrow('바로 반영이 꺼져')
     f.state.bound = false

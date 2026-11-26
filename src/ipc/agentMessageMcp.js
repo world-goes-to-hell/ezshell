@@ -231,9 +231,19 @@ async function main() {
     inputSchema: { name: runName, seconds: z.number().int().min(1).max(300).optional(), until: z.enum(['ready', 'reload']).optional() }
   }, ({ name, seconds, until }, extra) => call({ method: 'run-wait', name, seconds, until }, extra?.signal))
   server.registerTool('run_log', {
-    description: 'Read recent hot reload results and output, or error groups and diagnosis suggestions, for a preset in your worktree. Works with agent control off.',
+    description: 'Read recent output or, with errors: true, error groups, current diagnosis suggestions and the status of your proposals for a preset in your worktree. Works with agent control off.',
     inputSchema: { name: runName, lines: z.number().int().min(1).max(400).optional(), errors: z.literal(true).optional() }
   }, ({ name, lines, errors }, extra) => call({ method: 'run-log', name, lines, errors }, extra?.signal))
+  server.registerTool('run_propose', {
+    description: 'Ask the user to review one current diagnosis from run_log with errors: true. Works with agent control off. The user approves edits in the app.',
+    inputSchema: {
+      name: runName,
+      suggestion: z.string().regex(/^[a-f0-9]{64}$/).describe('The suggestion value from run_log for the current diagnosis.'),
+      url: z.string().max(2048).optional().describe('For mavenMirror, a replacement HTTPS or local file:/// URL.'),
+      jar: z.string().min(1).max(4096).optional().describe('For tomcatJar, a project-relative path or a unique dependency coordinate shown by run_log.'),
+      note: z.string().trim().min(1).max(1000).describe('Explain briefly what the user should review.')
+    }
+  }, ({ name, suggestion, url, jar, note }, extra) => call({ method: 'run-propose', name, suggestion, url, jar, note }, extra?.signal))
 
   server.server.oninitialized = () => {
     if (initialized || lifetime.signal.aborted) return

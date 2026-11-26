@@ -910,6 +910,11 @@ export interface RunPreset {
   hotReload?: HotReload
   mavenMirrors?: { repositoryId: string; url: string }[]
   mavenUserSettings?: false
+  mavenRunner?: string
+  /** Missing uses the Java version of the project to choose whether to split. */
+  mavenSplit?: boolean
+  mavenPin?: boolean
+  mavenSource?: 'online' | 'pinned'
   // kind 'tomcat' (stage 2): main runs `catalina run` with a CATALINA_BASE of its own for the preset
   /** The store's (or a found) Tomcat id */
   tomcat?: string
@@ -995,6 +1000,21 @@ export interface RunAction {
   at: number
 }
 
+export interface RunProposal {
+  id: string
+  by: string
+  at: number
+  note: string
+  suggestion: {
+    id: string
+    apply: 'mavenMirror' | 'mavenUserSettings' | 'tomcatJar'
+    replacementUrl?: string
+    jarId?: string
+    repositoryId?: string
+    className?: string
+  }
+}
+
 export interface RunState {
   status: RunStatus
   exitCode?: number | null
@@ -1006,6 +1026,8 @@ export interface RunState {
   shellId?: string
   lastAction?: RunAction
   reload?: RunReload
+  /** Pending proposals for this run, newest first */
+  proposals?: RunProposal[]
   /** crashed: the build before the server failed (the server was not started) */
   failedAt?: 'prepare'
 }
@@ -1025,8 +1047,9 @@ export interface RunSuggestion {
   id: string
   kind: 'missingClass' | 'jdkVersion' | 'jndi' | 'sourceEncoding' | 'portInUse' | 'mavenHttpBlocked'
     | 'mavenRepositoryUnavailable' | 'mavenUnauthorized' | 'mavenTls' | 'mavenArtifactMissing' | 'mavenPluginJdk' | 'mavenUserMirror'
+    | 'mavenPinnedAvailable' | 'mavenObsoleteJvmOption'
   message: string
-  apply?: 'mavenMirror' | 'mavenUserSettings' | 'tomcatJar'
+  apply?: 'mavenMirror' | 'mavenUserSettings' | 'tomcatJar' | 'mavenPinned' | 'mavenRunner'
   /** tomcatJar: the jars found with the missing class */
   jars?: JarCandidate[]
   /** tomcatJar: some places could not be searched to the end (limits) */
@@ -1418,7 +1441,11 @@ declare global {
       runPresetStopAll?: (projectFolder: string) => Promise<RunPresetResult>
       runPresetErrors?: (projectFolder: string, id: string) => Promise<RunPresetResult & { groups: RunErrorGroup[] }>
       runPresetDiagnosis?: (worktreeFolder: string, id: string) => Promise<RunPresetResult & { suggestions?: RunSuggestion[] }>
+      runPresetMavenPinStatus?: (worktreeFolder: string, id: string) => Promise<RunPresetResult & { pinned?: boolean }>
+      runPresetExportMavenPin?: (worktreeFolder: string, id: string, options?: RunPresetOptions) => Promise<RunPresetResult>
+      runPresetDeleteMavenPin?: (worktreeFolder: string, id: string, options?: RunPresetOptions) => Promise<RunPresetResult>
       runPresetApplySuggestion?: (worktreeFolder: string, id: string, suggestion: { id: string; replacementUrl?: string; jarId?: string }) => Promise<RunPresetResult & { preset?: RunPreset }>
+      runPresetDismissProposal?: (worktreeFolder: string, id: string, proposalId: string) => Promise<RunPresetResult>
       runPresetSendPreview?: (worktreeFolder: string, id: string) => Promise<RunPresetResult & { text?: string }>
       /** The `<target name>`s of the build.xml in a folder of the project (a Tomcat preset's Ant build) */
       runPresetAntTargets?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { targets?: string[] }>

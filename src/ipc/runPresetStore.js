@@ -5,7 +5,7 @@ const { isLocalFilePath } = require('../localKeyPath.js')
 const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { validateTomcat } = require('./tomcatRun.js')
-const { mavenApproval, mavenFields } = require('./runSuggestions.js')
+const { usesMaven, mavenApproval, mavenFields } = require('./runSuggestions.js')
 const { normalizeContextReference } = require('./workspaceServers.js')
 const { validateLogEncoding } = require('./developmentEncoding.js')
 const { normalizeJarReferences } = require('../runtimes/jarSearch.js')
@@ -57,18 +57,49 @@ async function directoryInProject(root, relative) {
 
 const commandHash = command => createHash('sha256').update(command).digest('hex')
 
+function mavenExecutionFields(preset) {
+  if (!usesMaven(preset)) return {}
+  const { mavenRunner, mavenSplit, mavenPin, mavenSource } = preset
+  if (mavenRunner !== undefined && (typeof mavenRunner !== 'string' || !JDK_ID.test(mavenRunner))) {
+    throw new Error('Maven을 실행할 보관함 JDK를 선택해 주세요.')
+  }
+  if ([mavenSplit, mavenPin].some(value => value !== undefined && typeof value !== 'boolean')) {
+    throw new Error('Maven JDK 분리와 보관 스위치를 확인해 주세요.')
+  }
+  if (mavenSource !== undefined && !['online', 'pinned'].includes(mavenSource)) throw new Error('Maven 저장소 선택을 확인해 주세요.')
+  return { ...(mavenRunner !== undefined && { mavenRunner }), ...(mavenSplit !== undefined && { mavenSplit }),
+    ...(mavenPin !== undefined && { mavenPin }), ...(mavenSource !== undefined && { mavenSource }) }
+}
+
+function mavenExecutionApproval(preset) {
+  const { mavenRunner, mavenSplit, mavenPin, mavenSource } = mavenExecutionFields(preset)
+  const lines = [mavenRunner && `Maven 실행 JDK ${mavenRunner}`,
+    mavenSplit !== undefined && `프로젝트 JDK로 Maven 컴파일·테스트 ${mavenSplit ? '켜기' : '끄기'}`,
+    mavenSource === 'pinned' && 'Maven 보관본으로 빌드 (file: 미러)',
+    mavenSource !== 'pinned' && mavenPin && '성공한 Maven 빌드의 의존성 보관'].filter(Boolean)
+  if (!lines.length) return null
+  return { text: lines.join('\n'), signature: ['mavenExecution', preset.jdk, mavenRunner ?? null, mavenSplit ?? null,
+    mavenPin === true, mavenSource ?? 'online'] }
+}
+
 function presetApproval(preset) {
   if (preset.kind === 'custom') return { command: preset.command, hash: commandHash(preset.command) }
-  const maven = mavenApproval(preset)
-  if (preset.kind !== 'tomcat') return maven && { command: maven.text, hash: commandHash(JSON.stringify(maven.signature)) }
+  const maven = preset.mavenSource === 'pinned' ? null : mavenApproval(preset)
+  const execution = mavenExecutionApproval(preset)
+  if (preset.kind !== 'tomcat') {
+    if (!execution) return maven && { command: maven.text, hash: commandHash(JSON.stringify(maven.signature)) }
+    const command = [maven?.text, execution.text].filter(Boolean).join('\n\n')
+    return { command, hash: commandHash(JSON.stringify([preset.kind, preset.taskId, preset.relative, maven?.signature, execution.signature])) }
+  }
   if (!preset.vmArgs.trim() && !preset.prepare && !preset.contextXml && !preset.extraLibs?.length) return null
   const prepare = preset.prepare
   const build = prepare?.tool === 'eclipse' ? '이클립스식 빌드 (.classpath의 Java 소스와 리소스)' : prepare && `${prepare.tool} ${prepare.target ?? prepare.goals}`
   const command = [build && `기동 전 빌드\n${build}`,
-    preset.vmArgs.trim() && `Tomcat VM 인자\n${preset.vmArgs}`, maven?.text,
+    preset.vmArgs.trim() && `Tomcat VM 인자\n${preset.vmArgs}`, maven?.text, execution?.text,
     preset.contextXml && `Tomcat 컨텍스트 설정 파일\n${preset.contextXml}`,
     preset.extraLibs?.length && `Tomcat에 연결할 JAR\n${preset.extraLibs.join('\n')}`].filter(Boolean).join('\n\n')
   return { command, hash: commandHash(JSON.stringify(['tomcat', preset.vmArgs, prepare, ...(maven ? [maven.signature] : []),
+    ...(execution ? [execution.signature] : []),
     ...(preset.contextXml ? [['contextXml', preset.contextXml]] : []),
     ...(preset.extraLibs?.length ? [['extraLibs', preset.extraLibs]] : [])])) }
 }
@@ -101,10 +132,11 @@ function validatePreset(input, id) {
     const tomcat = validateTomcat(input, presetRelative)
     const contextXml = normalizeContextReference(input.contextXml, presetRelative)
     const extraLibs = normalizeJarReferences(input.extraLibs)
-    return { ...base, ...tomcat, ...(contextXml && { contextXml }), ...(extraLibs.length && { extraLibs }), ...mavenFields({ ...input, ...tomcat }) }
+    const preset = { ...input, ...tomcat }
+    return { ...base, ...tomcat, ...(contextXml && { contextXml }), ...(extraLibs.length && { extraLibs }), ...mavenFields(preset), ...mavenExecutionFields(preset) }
   }
   if (input.kind === 'task' && typeof input.taskId === 'string' && input.taskId.length <= 300 && /^(?:.+):(gradle|maven|node)$/.test(input.taskId) && ONE_LINE.test(input.taskId)) {
-    return { ...base, kind: 'task', taskId: input.taskId, ...mavenFields(input) }
+    return { ...base, kind: 'task', taskId: input.taskId, ...mavenFields(input), ...mavenExecutionFields(input) }
   }
   if (input.kind === 'custom' && typeof input.command === 'string' && input.command.trim() && input.command.length <= 4096 && ONE_LINE.test(input.command)) {
     return { ...base, kind: 'custom', command: input.command.trim() }

@@ -5,7 +5,7 @@ import { useEffect, useState, type MouseEvent } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   RiAddLine, RiArrowDownLine, RiArrowUpLine, RiDeleteBinLine, RiEditLine, RiExternalLinkLine, RiFileList3Line, RiFlashlightLine,
-  RiMoreFill, RiPlayFill, RiRefreshLine, RiStethoscopeLine, RiStopFill, RiTerminalLine
+  RiLightbulbLine, RiMoreFill, RiPlayFill, RiRefreshLine, RiStethoscopeLine, RiStopFill, RiTerminalLine
 } from 'react-icons/ri'
 import { SiApachetomcat, SiNodedotjs, SiSpringboot, SiVite, SiVuedotjs } from 'react-icons/si'
 import { FaJava } from 'react-icons/fa'
@@ -22,6 +22,7 @@ import { pathKey } from '../../lib/localWorkspaceTree'
 import { toast } from '../../stores/toastStore'
 import { RunPresetDialog } from './RunPresetDialog'
 import { RunSuggestionsDialog } from './RunSuggestions'
+import { cleanProposals, proposalSummary } from '../../lib/runSuggestions'
 import './RunPresets.css'
 
 const KIND_ICONS = { spring: SiSpringboot, vue: SiVuedotjs, vite: SiVite, node: SiNodedotjs, java: FaJava, tomcat: SiApachetomcat, custom: RiTerminalLine }
@@ -130,6 +131,8 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
   const note = agentActionNote(state.lastAction, now)
   const [diagnosing, setDiagnosing] = useState(false)
   const reload = reloadChip(state, now)
+  // Agents' proposals waiting for the user (newest first): a line under the row, reviewed in the diagnosis
+  const proposals = cleanProposals(state.proposals)
 
   const showLog = async (toFirstError = false) => {
     if (!state.shellId) return
@@ -225,7 +228,7 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
       {/* The dialog is a portal, but its clicks still bubble through React to the row (which opens the log) */}
       {diagnosing && (
         <span hidden onClick={event => event.stopPropagation()}>
-          <RunSuggestionsDialog folder={folder} presetId={preset.id} presetName={preset.name} onClose={() => setDiagnosing(false)} />
+          <RunSuggestionsDialog folder={folder} presetId={preset.id} presetName={preset.name} proposals={proposals} onClose={() => setDiagnosing(false)} />
         </span>
       )}
       {/* Hot reload: its own line under the row while it is on (beside the state there is no room in the
@@ -237,6 +240,16 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
             ? <button type="button" className="run-preset-reload-chip" data-tone={reload.tone}
                 onClick={event => { event.stopPropagation(); void showLog(true) }} title={reload.title}>{reload.text}</button>
             : <span className="run-preset-reload-chip" data-tone={reload.tone} title={reload.title}>{reload.text}</span>}
+        </div>
+      )}
+      {proposals.length > 0 && (
+        <div className="run-preset-proposal-line" data-proposals={proposals.length}>
+          <RiLightbulbLine size={11} aria-hidden="true" />
+          <span className="run-preset-proposal-text" title={[`${proposals[0].by}: ${proposalSummary(proposals[0])}`, proposals[0].note].filter(Boolean).join(' — ')}>
+            <strong>{proposals[0].by}</strong> 제안 · {proposalSummary(proposals[0])}{proposals.length > 1 ? ` 외 ${proposals.length - 1}개` : ''}
+          </span>
+          <button type="button" className="run-preset-proposal-btn" title="진단 창에서 제안을 보고 직접 적용하거나 버립니다"
+            onClick={event => { event.stopPropagation(); setDiagnosing(true) }}>보기</button>
         </div>
       )}
     </li>

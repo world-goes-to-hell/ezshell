@@ -458,7 +458,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     switch (request.method) {
       case 'list': return { agents: [...agents.values()].filter(agent => isConnected(agent.id)).map(({ id, kind, cwd }) => ({ id, kind, cwd, role: activeRole(id).role })), self: from }
       case 'inspect-agent': return inspectAgent(request.id).state
-      case 'run-list': case 'run-start': case 'run-restart': case 'run-stop': case 'run-wait': case 'run-log': {
+      case 'run-list': case 'run-start': case 'run-restart': case 'run-stop': case 'run-wait': case 'run-log': case 'run-propose': {
         const allowed = () => !isLocked() && tokens.get(request.token) === from && isConnected(from) && !agents.get(from)?.sleeping && !socket.destroyed
         if (!runPresetTool || !allowed()) throw new Error('연결된 로컬 에이전트만 이용할 수 있습니다.')
         socket.setTimeout(request.method === 'run-wait' ? 320_000 : 45_000)

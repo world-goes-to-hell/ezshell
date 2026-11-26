@@ -347,6 +347,7 @@ function developmentEnvironment(env, task, platform) {
   const result = localTerminalEnvironment(env, platform);
   const keyOf = key => platform === 'win32' ? Object.keys(result).find(name => name.toUpperCase() === key) ?? key : key;
   for (const [key, value] of Object.entries(task.env ?? {})) result[keyOf(key)] = value;
+  if (task.clearJavaCommand) delete result[keyOf('JAVACMD')];
   if (task.javaHome) {
     const pathKey = keyOf('PATH');
     result[keyOf('JAVA_HOME')] = task.javaHome;
@@ -1208,7 +1209,7 @@ function createLocalShells({
       if (!active()) return;
       entry.exited = true;
       entry.exitCode = exitCode;
-      disposeDevelopmentTask(runtime);
+      disposeDevelopmentTask(runtime, !failed && !stopAction() ? exitCode : null);
       exit.resolve();
       if (shells.get(id) !== entry) return;
       task.onEvent?.({ type: 'exit', shellId: id, exitCode, phase, failed, action: stopAction() });
@@ -1286,8 +1287,10 @@ function createLocalShells({
     }
 
     try {
+      if (task.launchNotice) forward(`\r\n${task.launchNotice}\r\n`, 'launch');
       if (task.preparation?.run) void prepareInMain();
-      else if (task.preparation) launchProcess({ cwd: task.cwd, command: task.preparation.command, env: task.env, javaHome: task.javaHome, logEncoding: task.logEncoding }, 'prepare');
+      else if (task.preparation) launchProcess({ cwd: task.cwd, command: task.preparation.command, env: task.env, javaHome: task.javaHome,
+        logEncoding: task.logEncoding, ...task.preparation.launch }, 'prepare');
       else launchProcess(task, 'server');
     } catch (error) {
       finish(null, task.preparation ? 'prepare' : 'server', true);
@@ -1295,8 +1298,8 @@ function createLocalShells({
     }
   }
 
-  function disposeDevelopmentTask(task) {
-    if (task?.cleanup) void Promise.resolve().then(() => task.cleanup()).catch(() => {});
+  function disposeDevelopmentTask(task, exitCode = null) {
+    if (task?.cleanup) void Promise.resolve().then(() => task.cleanup(exitCode)).catch(() => {});
   }
 
   async function openDevelopmentTask(task, { cols, rows }, allowed = () => true) {

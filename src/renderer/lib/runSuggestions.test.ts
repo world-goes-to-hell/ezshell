@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cleanSuggestions, jarSource, replacementUrl, suggestionTitle, USER_SETTINGS_WARNING, type RunSuggestion } from './runSuggestions'
+import { cleanProposals, cleanSuggestions, jarSource, proposalHost, proposalSummary, replacementUrl, suggestionTitle, USER_SETTINGS_WARNING, type RunSuggestion } from './runSuggestions'
 
 const item = (over: Partial<RunSuggestion>): RunSuggestion => ({ id: 's1', kind: 'missingClass', message: '…', ...over })
 
@@ -21,6 +21,8 @@ describe('run suggestions', () => {
     expect(suggestionTitle(item({ kind: 'mavenPluginJdk', requiredFeature: 11 }))).toBe('빌드 플러그인에 JDK 11 필요')
     expect(suggestionTitle(item({ kind: 'mavenUserMirror', mirrorId: 'nexus', repositoryId: 'central' }))).toBe('사용자 미러가 대신 쓰임: nexus (central)')
     expect(suggestionTitle(item({ kind: 'somethingNew' }))).toBe('실행 진단')
+    expect(suggestionTitle(item({ kind: 'mavenPinnedAvailable' }))).toBe('성공한 빌드의 Maven 보관본이 있음')
+    expect(suggestionTitle(item({ kind: 'mavenObsoleteJvmOption' }))).toBe('이 JDK 가 받지 않는 JVM 옵션')
   })
 
   it('takes a replacement repository as main does: https or a local file:/// folder', () => {
@@ -39,6 +41,8 @@ describe('run suggestions', () => {
     expect(cleanSuggestions([{ id: 'a', kind: 'mavenTls', message: 'm', apply: 'runScript' }, { kind: 'x' }, 'text']))
       .toEqual([{ id: 'a', kind: 'mavenTls', message: 'm', apply: undefined }])
     expect(cleanSuggestions([{ id: 'b', kind: 'mavenUserMirror', message: 'm', apply: 'mavenUserSettings' }])[0].apply).toBe('mavenUserSettings')
+    expect(cleanSuggestions([{ id: 'c', kind: 'mavenPinnedAvailable', message: 'm', apply: 'mavenPinned' }])[0].apply).toBe('mavenPinned')
+    expect(cleanSuggestions([{ id: 'd', kind: 'mavenTls', message: 'm', apply: 'mavenRunner' }])[0].apply).toBe('mavenRunner')
   })
 
   it('names what -s leaves out before it is approved', () => {
@@ -59,5 +63,24 @@ describe('run suggestions', () => {
     expect(shown).toMatchObject({ apply: undefined, jars: [{ id: 'x' }], jarSearchIncomplete: true })
     expect(jarSource('maven')).toBe('Maven 저장소 (~/.m2)')
     expect(jarSource('elsewhere')).toBe('')
+  })
+})
+
+describe('agents\u2019 proposals (run_propose)', () => {
+  const mirror = { id: 'p1', by: 'codex-4', at: 1, note: '사내 미러를 쓰세요.\n두 번째 줄', suggestion: { id: 's1', apply: 'mavenMirror' as const, replacementUrl: 'https://nexus.example.test/repository/maven/', repositoryId: 'legacy' } }
+
+  it('keeps only well-formed proposals', () => {
+    expect(cleanProposals(undefined)).toEqual([])
+    expect(cleanProposals([mirror, { id: 'x' }, { id: 'y', by: 'a', suggestion: { id: 's' } }, null])).toEqual([mirror])
+    expect(cleanProposals([{ ...mirror, note: 3, at: 'soon' }])[0]).toMatchObject({ note: '', at: 0 })
+  })
+
+  it('names the host of a proposed repository and what a proposal changes', () => {
+    expect(proposalHost('https://nexus.example.test:8443/repo/')).toBe('nexus.example.test:8443')
+    expect(proposalHost('file:///C:/maven-repo')).toBe('이 PC 폴더')
+    expect(proposalHost('not a url')).toBe('')
+    expect(proposalSummary(mirror)).toBe('저장소 대체 (legacy) → nexus.example.test')
+    expect(proposalSummary({ ...mirror, suggestion: { id: 's2', apply: 'mavenUserSettings' } })).toBe('프로젝트 Maven 설정으로 실행 (-s)')
+    expect(proposalSummary({ ...mirror, suggestion: { id: 's3', apply: 'tomcatJar', jarId: 'j', className: 'oracle.jdbc.OracleDriver' } })).toBe('jar 추가: oracle.jdbc.OracleDriver')
   })
 })

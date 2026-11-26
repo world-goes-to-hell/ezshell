@@ -72,17 +72,20 @@ describe('Maven run suggestions', () => {
       .toBe(".\\mvnw.cmd spring-boot:run -gs '\"C:\\Jane''s workspace\\settings.xml\"'")
     expect(appendMavenSettings('./mvnw spring-boot:run', ['-s', "/Jane's workspace/settings.xml"], 'linux'))
       .toBe("./mvnw spring-boot:run -s '/Jane'\\''s workspace/settings.xml'")
+    expect(() => appendMavenSettings('mvn verify', ['-gs', 'C:\\test\\%TEMP%\\settings.xml'], 'win32')).toThrow('%')
   })
 
-  it.skipIf(process.platform !== 'win32')('passes a literal ampersand through PowerShell to the Maven batch launcher', () => {
+  it.skipIf(process.platform !== 'win32')('passes literal settings and Maven properties through PowerShell to the batch launcher', () => {
     const bat = path.join(root, 'mvn.cmd')
     fs.writeFileSync(bat, `@echo off\r\n"${process.execPath}" -e "console.log(JSON.stringify(process.argv.slice(1)))" -- %*\r\n`)
     const filename = path.join(root, 'R&D', 'settings.xml')
+    const javac = `-Dmaven.compiler.executable=${path.join(root, "Jane's R&D JDK", 'bin', 'javac.exe')}`
     const launcher = `& '${bat.replaceAll("'", "''")}' verify`
-    const command = appendMavenSettings(launcher, ['-gs', filename], 'win32')
+    const args = [javac, '-s', filename, '-gs', path.join(root, 'empty.xml')]
+    const command = appendMavenSettings(launcher, args, 'win32')
     const encoded = Buffer.from(command, 'utf16le').toString('base64')
     const stdout = execFileSync('powershell.exe', ['-NoProfile', '-EncodedCommand', encoded], { encoding: 'utf8', windowsHide: true })
-    expect(JSON.parse(stdout)).toEqual(['verify', '-gs', filename])
+    expect(JSON.parse(stdout)).toEqual(['verify', ...args])
   })
 
   it('reads the version of the selected wrapper from local bounded metadata', () => {

@@ -2,7 +2,7 @@
 // main's diagnosis (src/ipc/runDiagnosis.js) found in the logs, in words, and which ones the user may apply.
 // Applying is always the user's press after reading it; agents cannot (main checks the window and lock).
 
-import type { RunSuggestion as MainSuggestion } from '../types'
+import type { RunProposal, RunSuggestion as MainSuggestion } from '../types'
 
 /** A suggestion as main sends it (types/index.ts); a kind this build does not know yet is still shown */
 export type RunSuggestion = Omit<MainSuggestion, 'kind' | 'reason'> & { kind: MainSuggestion['kind'] | (string & {}); reason?: string }
@@ -27,6 +27,8 @@ export function suggestionTitle(item: RunSuggestion): string {
     case 'mavenArtifactMissing': return item.artifact ? `의존성을 찾지 못함: ${item.artifact}` : `의존성을 찾지 못함${repo(item)}`
     case 'mavenPluginJdk': return item.requiredFeature ? `빌드 플러그인에 JDK ${item.requiredFeature} 필요` : '빌드 플러그인과 JDK 가 맞지 않음'
     case 'mavenUserMirror': return `사용자 미러가 대신 쓰임${item.mirrorId ? `: ${item.mirrorId}` : ''}${repo(item)}`
+    case 'mavenPinnedAvailable': return '성공한 빌드의 Maven 보관본이 있음'
+    case 'mavenObsoleteJvmOption': return '이 JDK 가 받지 않는 JVM 옵션'
     default: return '실행 진단'
   }
 }
@@ -34,6 +36,12 @@ export function suggestionTitle(item: RunSuggestion): string {
 /** What -s leaves out, shown before the user approves it (main's diagnosis says the same) */
 export const USER_SETTINGS_WARNING = '이 프로젝트 전용 settings.xml 을 사용자 설정(-s)으로 지정해 다시 실행합니다. ' +
   '그러면 ~/.m2/settings.xml 의 servers(저장소 인증)·proxies(프록시)·mirrors(미러)·localRepository(로컬 저장소) 설정이 이 실행에는 적용되지 않습니다.'
+
+/** The button of the suggestions main applies by their id alone (what changes is in main's message) */
+export const SIMPLE_APPLIES: Record<'mavenPinned' | 'mavenRunner', string> = {
+  mavenPinned: '보관본으로 빌드하게 하기',
+  mavenRunner: 'Maven 을 보관함의 JDK 17 로 실행하게 하기'
+}
 
 /** After an applied suggestion the run's content changed: main asks again before the next run */
 export const APPLIED_NOTE = '적용했습니다. 다음 실행 때 바뀐 실행 내용을 한 번 더 확인합니다.'
@@ -57,7 +65,7 @@ export function replacementUrl(text: string): { url: string } | { error: string 
   return { url: value }
 }
 
-const APPLIES = new Set(['mavenMirror', 'mavenUserSettings', 'tomcatJar'])
+const APPLIES = new Set(['mavenMirror', 'mavenUserSettings', 'tomcatJar', 'mavenPinned', 'mavenRunner'])
 
 /** Only well-formed suggestions from main (it is the app's own answer, but shown as text only) */
 export function cleanSuggestions(value: unknown): RunSuggestion[] {
@@ -79,3 +87,39 @@ const JAR_SOURCES: Record<string, string> = { project: '프로젝트', maven: 'M
 
 /** Where a candidate jar was found, in words */
 export const jarSource = (source: string | undefined) => (source && JAR_SOURCES[source]) || ''
+
+// --- Agents' proposals (run_propose): a fix an agent proposed for a failed run, applied only by the user ---
+
+/** Only well-formed proposals (main's own answer, shown as text only), newest first as main keeps them */
+export function cleanProposals(value: unknown): RunProposal[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is RunProposal => !!item && typeof item === 'object'
+    && typeof (item as RunProposal).id === 'string' && typeof (item as RunProposal).by === 'string'
+    && typeof (item as RunProposal).suggestion?.id === 'string' && typeof (item as RunProposal).suggestion?.apply === 'string')
+    .map(item => ({ ...item, note: typeof item.note === 'string' ? item.note : '', at: Number.isFinite(item.at) ? item.at : 0 }))
+}
+
+/** The host of a proposed repository, to read at a glance ("이 PC 폴더" for file:///); '' when not a URL */
+export function proposalHost(url: string | undefined): string {
+  if (!url) return ''
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'file:' ? '이 PC 폴더' : parsed.host
+  } catch {
+    return ''
+  }
+}
+
+/** What a proposal would change, in a few words (the row's line) */
+export function proposalSummary(proposal: RunProposal): string {
+  const { suggestion } = proposal
+  switch (suggestion.apply) {
+    case 'mavenMirror': {
+      const host = proposalHost(suggestion.replacementUrl)
+      return `저장소 대체${suggestion.repositoryId ? ` (${suggestion.repositoryId})` : ''}${host ? ` → ${host}` : ''}`
+    }
+    case 'mavenUserSettings': return '프로젝트 Maven 설정으로 실행 (-s)'
+    case 'tomcatJar': return `jar 추가${suggestion.className ? `: ${suggestion.className}` : ''}`
+    default: return '실행 설정 바꾸기'
+  }
+}

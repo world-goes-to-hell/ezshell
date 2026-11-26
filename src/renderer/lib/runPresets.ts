@@ -203,12 +203,21 @@ export interface PresetDraft {
   extraLibs: string[]
   /** Every kind */
   logEncoding: LogEncoding
+  // Maven runs (a Spring Boot Maven task, a Tomcat's Maven build)
+  /** The store's JDK that runs Maven; '' for automatic */
+  mavenRunner: string
+  /** Compile and test with the project's JDK: 'auto' leaves it to main (Tomcat: when the project's JDK is under 17) */
+  mavenSplit: 'auto' | 'on' | 'off'
+  mavenPin: boolean
+  mavenSource: 'online' | 'pinned'
 }
+
+const MAVEN_DEFAULTS = { mavenRunner: '', mavenSplit: 'auto' as const, mavenPin: false, mavenSource: 'online' as const }
 
 const TOMCAT_DEFAULTS = { tomcat: '', webapp: '', contextPath: '/', portText: '8080', vmArgs: '', prepareTool: 'none' as const, antTarget: '', mavenGoals: '', contextXml: '', extraLibs: [] as string[] }
 
 export function emptyDraft(): PresetDraft {
-  return { name: '', relative: '', kind: 'task', command: '', jdk: 'system', envText: '', notify: true, agentControl: true, inAll: true, waitReady: false, hotReload: 'off', logEncoding: 'auto', ...TOMCAT_DEFAULTS }
+  return { name: '', relative: '', kind: 'task', command: '', jdk: 'system', envText: '', notify: true, agentControl: true, inAll: true, waitReady: false, hotReload: 'off', logEncoding: 'auto', ...MAVEN_DEFAULTS, ...TOMCAT_DEFAULTS }
 }
 
 export function draftOf(preset: RunPreset): PresetDraft {
@@ -219,6 +228,10 @@ export function draftOf(preset: RunPreset): PresetDraft {
     notify: preset.notify, agentControl: preset.agentControl, inAll: preset.inAll, waitReady: preset.waitReady,
     hotReload: preset.hotReload ?? 'off',
     logEncoding: preset.logEncoding ?? 'auto',
+    mavenRunner: preset.mavenRunner ?? '',
+    mavenSplit: preset.mavenSplit === undefined ? 'auto' : preset.mavenSplit ? 'on' : 'off',
+    mavenPin: preset.mavenPin === true,
+    mavenSource: preset.mavenSource === 'pinned' ? 'pinned' : 'online',
     ...TOMCAT_DEFAULTS,
     ...(preset.kind === 'tomcat' ? {
       tomcat: preset.tomcat ?? '', webapp: preset.webapp ?? '', contextPath: preset.contextPath || '/',
@@ -277,6 +290,14 @@ export function presetFromDraft(draft: PresetDraft): { preset: Omit<RunPreset, '
       hotReload: draft.hotReload,
       // auto is main's default: left out so a preset saved before keeps its shape
       ...(draft.logEncoding && draft.logEncoding !== 'auto' ? { logEncoding: draft.logEncoding } : {}),
+      // Maven's settings only for a Maven run, and only what differs from main's defaults
+      ...(usesMaven(draft) ? {
+        ...(draft.mavenRunner ? { mavenRunner: draft.mavenRunner } : {}),
+        ...(draft.mavenSplit !== 'auto' ? { mavenSplit: draft.mavenSplit === 'on' } : {}),
+        // Building from the pin keeps nothing new: main ignores the switch then, so it is not saved (or confirmed)
+        ...(draft.mavenPin && draft.mavenSource !== 'pinned' ? { mavenPin: true } : {}),
+        ...(draft.mavenSource === 'pinned' ? { mavenSource: 'pinned' as const } : {})
+      } : {}),
       ...(tomcat ?? {})
     }
   }
@@ -369,9 +390,16 @@ export function usesJdk(preset: Pick<RunPreset, 'kind' | 'taskId' | 'command'>):
   return kind === 'spring' || kind === 'java'
 }
 
+/** A Maven run, as main tells it (src/ipc/runSuggestions.js): a Spring Boot Maven task, or a Tomcat's Maven build */
+export function usesMaven(draft: Pick<PresetDraft, 'kind' | 'taskId' | 'prepareTool'>): boolean {
+  return (draft.kind === 'task' && typeof draft.taskId === 'string' && draft.taskId.endsWith(':maven'))
+    || (draft.kind === 'tomcat' && draft.prepareTool === 'maven')
+}
+
 /** Whether the 고급 section opens by itself: something in it differs from a new preset's */
 export function hasAdvancedValues(draft: PresetDraft): boolean {
   return !!draft.envText.trim() || draft.logEncoding !== 'auto' || draft.hotReload !== 'off' || !draft.inAll || draft.waitReady
+    || (usesMaven(draft) && (!!draft.mavenRunner || draft.mavenSplit !== 'auto' || draft.mavenPin || draft.mavenSource === 'pinned'))
     || (draft.kind === 'tomcat' && (!!draft.vmArgs.trim() || !!draft.contextXml || draft.extraLibs.length > 0))
     || (draft.kind === 'custom' && draft.jdk !== 'system')
 }
@@ -379,6 +407,7 @@ export function hasAdvancedValues(draft: PresetDraft): boolean {
 /** Whether the preset runs what was typed or chosen as is (asked once more before it first runs, and after a change) */
 export function hasRunContent(draft: PresetDraft): boolean {
   if (draft.kind === 'custom') return !!draft.command.trim()
+  if (usesMaven(draft) && (!!draft.mavenRunner || draft.mavenSplit !== 'auto' || draft.mavenPin || draft.mavenSource === 'pinned')) return true
   return draft.kind === 'tomcat' && (!!draft.vmArgs.trim() || draft.prepareTool !== 'none' || !!draft.contextXml || draft.extraLibs.length > 0)
 }
 

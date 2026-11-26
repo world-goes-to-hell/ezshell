@@ -42,7 +42,8 @@ export interface AgentActionNotice {
 }
 
 /** A question main asked before running (a typed command the first time, an install): RunCommandConfirm shows it */
-export interface RunCommandAsk { key: number; kind: 'custom' | 'install'; command: string }
+/** `action`: a one-off action main describes (exporting or deleting a Maven pin), confirmed like a command */
+export interface RunCommandAsk { key: number; kind: 'custom' | 'install' | 'action'; command: string }
 
 interface RunPresetState {
   /** By worktree key, as main sends it (the worktree's real path) */
