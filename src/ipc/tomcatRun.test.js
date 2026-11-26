@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { antTargets, catalinaOptions, planTomcat, stageTomcat, tomcatLayout, webappCandidates } from './tomcatRun.js'
+import { antTargets, catalinaOptions, closeTomcatBases, planTomcat, stageTomcat, tomcatLayout, webappCandidates } from './tomcatRun.js'
 import { prepareTomcatReload } from './hotReload.js'
 import { validatePreset, presetApproval } from './runPresetStore.js'
 import { parseXml } from '../sessionImport/filezilla.js'
@@ -117,6 +117,15 @@ describe('Tomcat execution presets', () => {
     await first.cleanup()
     await expect(fs.stat(base)).rejects.toMatchObject({ code: 'ENOENT' })
     expect((await fs.stat(second.env.CATALINA_BASE)).isDirectory()).toBe(true)
+  })
+
+  it('cleans an active private base on application shutdown', async () => {
+    const p = preset()
+    const runtime = await stage(await launch(p), p)
+    const base = runtime.env.CATALINA_BASE
+    expect((await fs.stat(path.join(base, 'conf', 'server.xml'))).isFile()).toBe(true)
+    closeTomcatBases()
+    await expect(fs.stat(base)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('does not use external web folders or follow links while looking for webapp candidates', async () => {

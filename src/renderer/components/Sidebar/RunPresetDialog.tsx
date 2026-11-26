@@ -7,13 +7,13 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { RiFolder3Line, RiPlayLine } from 'react-icons/ri'
 import { RunPresetTomcatFields } from './RunPresetTomcatFields'
 import {
-  draftOf, emptyDraft, hotReloadChoice, hotReloadToSave, presetFromDraft, runFolderLabel,
+  draftOf, emptyDraft, hotReloadChoice, hotReloadToSave, LOG_ENCODINGS, presetFromDraft, runFolderLabel,
   type HotReload, type PresetDraft, type RunCandidate, type RunPreset
 } from '../../lib/runPresets'
 import { draftKey, dropDraft, keepDraft, reloadProjectPresets, runPresetApi, takeDraft, worktreeRuns } from '../../stores/runPresetStore'
 import { JdkRequirementNotice } from '../Settings/JdkSettings'
 import { openSettingsTab } from '../../lib/settingsNavigation'
-import type { ApacheToolRuntime, HotswapAgentStatus, JdkRuntime } from '../../types'
+import type { ApacheToolRuntime, HotswapAgentStatus, JdkRuntime, LogEncoding } from '../../types'
 
 // The JDK store (codex-4's src/runtimes): entries without paths; optional until a build has it.
 // `hotswapAgent` (stage 3): whether HotswapAgent is fetched, for the enhanced hot reload; `tools` (stage 2):
@@ -237,6 +237,13 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
               <label htmlFor="run-preset-env">환경 변수 <span className="run-preset-hint">(한 줄에 하나, 이름=값)</span></label>
               <textarea id="run-preset-env" rows={2} value={draft.envText} placeholder="SPRING_PROFILES_ACTIVE=local"
                 onChange={event => set({ envText: event.target.value })} spellCheck={false} />
+            </div>
+            <div className="form-group">
+              <label htmlFor="run-preset-log-encoding">로그 인코딩</label>
+              <select id="run-preset-log-encoding" value={draft.logEncoding} onChange={event => set({ logEncoding: event.target.value as LogEncoding })}>
+                {LOG_ENCODINGS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              <small className="run-preset-hint">로그 표시만 바뀝니다 (앱의 기본 문자 집합은 VM 설정을 따릅니다). 서버 출력의 한글이 깨지면 MS949 를 고르세요.</small>
             </div>
             <div className="run-preset-switches">
               <Switch on={draft.notify} onChange={notify => set({ notify })} label="오류가 나면 알리기" />

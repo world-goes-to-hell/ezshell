@@ -14,7 +14,8 @@ import { requiredFeature } from './required.js'
 import { createRuntimes } from './index.js'
 import { registerRuntimesIpc } from './ipc.js'
 import providers from './fixtures/providers.json'
-import { digest, fakeApache, fakeEnhanced, fakeTemurin, fixtureRequest, jdkFiles, release, tomcatFiles, zipOf } from '../../e2e/support/jdkFixture.js'
+import { digest, fakeApache, fakeEnhanced, fakeGradleNode, fakeTemurin, fixtureRequest, jdkFiles, release, tomcatFiles, zipOf } from '../../e2e/support/jdkFixture.js'
+import { unpackedGradleNodeHome } from './gradleNodeHome.js'
 
 const platform = 'win32'
 const arch = 'x64'
@@ -379,6 +380,42 @@ describe('Apache tools in the runtime library', () => {
     await expect(handlers.get('runtimes-tomcat-register')({})).resolves.toMatchObject({ ok: false })
     expect(pick).toHaveBeenCalledOnce()
     expect(runtimes.registerTomcat6).not.toHaveBeenCalled()
+  })
+})
+
+describe('Gradle and Node.js in the runtime library', () => {
+  it.each([['gradle', 'current', '9.9.2', 'bin/gradle.bat'], ['node', 'lts', '26.13.1', 'node.exe']])(
+    'discovers %s, verifies its archive and removes only the managed installation', async (tool, series, version, executable) => {
+      const local = put(`local/${executable}`, 'local executable')
+      const env = tool === 'gradle' ? { GRADLE_HOME: path.join(root, 'local') } : { NODE_HOME: path.join(root, 'local') }
+      const manager = (request = fakeGradleNode()) => createRuntimes({ userData: root, platform, arch, home: root, env, request })
+      const runtimes = manager()
+      const [found] = runtimes.listTools()
+      expect(found).toMatchObject({ tool, managed: false, folder: 'local' })
+      expect(found).not.toHaveProperty('home')
+      const build = await runtimes.toolAvailable(tool, series)
+      expect(build).toMatchObject({ id: `${tool}-${version}`, tool, series, version })
+      expect(build).not.toHaveProperty('url')
+      expect(build).not.toHaveProperty('sha256')
+      expect(build).not.toHaveProperty('distributionFolder')
+      await expect(manager(fakeGradleNode({ badChecksum: true })).installTool(tool, series)).rejects.toThrow(/SHA-256/)
+      expect(runtimes.listTools()).toEqual([found])
+      const installed = await runtimes.installTool(tool, series)
+      const reopened = manager()
+      expect(reopened.listTools()).toEqual([installed, found])
+      expect(fs.readFileSync(path.join(reopened.toolHomeOf(installed.id), executable), 'utf8')).toContain('fake-')
+      expect(() => reopened.removeTool(found.id)).toThrow(/받은 도구만/)
+      reopened.removeTool(installed.id)
+      expect(reopened.listTools()).toEqual([found])
+      expect(fs.readFileSync(local, 'utf8')).toBe('local executable')
+    })
+
+  it.skipIf(process.platform === 'win32')('makes the extracted Unix Gradle launcher executable', () => {
+    const file = put('gradle-9.9.2/bin/gradle', '#!/bin/sh\n')
+    fs.chmodSync(file, 0o600)
+    const home = unpackedGradleNodeHome(root, { tool: 'gradle', version: '9.9.2', distributionFolder: 'gradle-9.9.2' }, 'linux')
+    expect(home).toBe(path.join(root, 'gradle-9.9.2'))
+    expect(fs.statSync(file).mode & 0o111).toBe(0o111)
   })
 })
 

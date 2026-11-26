@@ -9,6 +9,8 @@ const { findLocalJdks, unpackedHome, readRelease } = require('./discovery.js')
 const { findApacheBuild, validApacheSelection } = require('./apacheProviders.js')
 const { LOCAL_TOOL_ID, seriesOf, hasApacheToolHome, unpackedApacheHome,
   inspectLocalTomcat6, findLocalApacheTools } = require('./apacheToolHome.js')
+const { findGradleBuild, findNodeBuild } = require('./gradleNodeProviders.js')
+const { hasGradleNodeHome, unpackedGradleNodeHome, findLocalGradleNodeTools } = require('./gradleNodeHome.js')
 
 const MAX_INDEX_BYTES = 1024 * 1024
 const LOOKUP_TTL_MS = 5 * 60 * 1000
@@ -18,6 +20,9 @@ const TEMPORARY_DIR = /^\.(?:install|remove)-/
 const AGENT = 'hotswap-agent'
 const AGENT_JAR = 'hotswap-agent.jar'
 const TOOLS = 'tools'
+const GRADLE_NODE_SERIES = { gradle: 'current', node: 'lts' }
+const isGradleNode = tool => typeof tool === 'string' && Object.hasOwn(GRADLE_NODE_SERIES, tool)
+const validToolSelection = (tool, series) => isGradleNode(tool) ? GRADLE_NODE_SERIES[tool] === series : validApacheSelection(tool, series)
 const buildId = ({ vendor, version, arch }) => `${vendor}-${version}-${arch}`
 const publicJdk = ({ home: _home, relativeHome: _relativeHome, ...entry }) => entry
 const toolId = ({ tool, version }) => `${tool}-${version}`
@@ -162,13 +167,17 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     } catch { return [] }
   }
 
-  const localTools = () => findLocalApacheTools({ env, home, platform, registered: registeredTools() })
+  const localTools = () => [
+    ...findLocalApacheTools({ env, home, platform, registered: registeredTools() }),
+    ...findLocalGradleNodeTools({ env, home, platform })
+  ]
 
   function managedTool(root, id) {
-    const parts = /^(tomcat|maven|ant)-(\d{1,4}\.\d{1,4}\.\d{1,4})$/.exec(id)
+    const parts = /^(tomcat|maven|ant|gradle|node)-(\d{1,4}\.\d{1,4}(?:\.\d{1,4})?)$/.exec(id)
     if (!parts) return null
     const [, tool, version] = parts
-    const series = seriesOf(tool, version)
+    if (tool !== 'gradle' && version.split('.').length !== 3) return null
+    const series = isGradleNode(tool) ? GRADLE_NODE_SERIES[tool] : seriesOf(tool, version)
     if (!series || (tool === 'tomcat' && series === '6')) return null
     try {
       const directory = path.join(root, id)
@@ -179,7 +188,8 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
       const { sizeBytes } = JSON.parse(fs.readFileSync(record, 'utf8'))
       if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0) return null
       const home = path.join(directory, 'home')
-      if (!hasApacheToolHome(home, tool, platform)) return null
+      const validHome = isGradleNode(tool) ? hasGradleNodeHome : hasApacheToolHome
+      if (!validHome(home, tool, platform)) return null
       return { id, tool, version, series, managed: true, sizeBytes, home }
     } catch { return null }
   }
@@ -282,11 +292,12 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
   }
 
   async function getToolBuild(tool, series, signal) {
-    if (!validApacheSelection(tool, series)) throw new Error('Apache 도구와 버전 계열을 선택해 주세요.')
+    if (!validToolSelection(tool, series)) throw new Error('개발 도구와 버전 계열을 선택해 주세요.')
     const key = `tool:${tool}:${series}`
     const cached = cache.get(key)
     if (cached && cached.expires > Date.now()) return cached.build
-    const build = await findApacheBuild(tool, series, { platform, request, signal })
+    const options = { platform, arch, request, signal }
+    const build = await (tool === 'gradle' ? findGradleBuild(options) : tool === 'node' ? findNodeBuild(options) : findApacheBuild(tool, series, options))
     signal?.throwIfAborted()
     cache.set(key, { build, expires: Date.now() + LOOKUP_TTL_MS })
     return build
@@ -295,7 +306,7 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
   async function toolAvailable(tool, series) {
     const build = await getToolBuild(tool, series)
     if (!build) return null
-    const { url: _url, sha512: _sha512, archive: _archive, ...summary } = build
+    const { url: _url, sha256: _sha256, sha512: _sha512, archive: _archive, distributionFolder: _folder, ...summary } = build
     return { id: toolId(build), ...summary }
   }
 
@@ -388,11 +399,11 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
   }
 
   async function installTool(tool, series, onProgress = () => {}) {
-    if (!validApacheSelection(tool, series)) throw new Error('Apache 도구와 버전 계열을 선택해 주세요.')
+    if (!validToolSelection(tool, series)) throw new Error('개발 도구와 버전 계열을 선택해 주세요.')
     return withInstallation(TOOLS, tool, null, onProgress, async ({ signal, report, stagingIn }) => {
       const build = await getToolBuild(tool, series, signal)
       signal.throwIfAborted()
-      if (!build) throw new Error('현재 플랫폼에 맞는 Apache 배포본이 없습니다.')
+      if (!build) throw new Error('현재 플랫폼에 맞는 개발 도구 배포본이 없습니다.')
       const id = toolId(build)
       const root = managedBase(true, TOOLS)
       const current = managedTool(root, id)
@@ -408,7 +419,8 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
       report('unpack', bytes, bytes)
       const unpack = path.join(staging, 'contents')
       await extractArchive(archive, unpack, build.archive, signal, { allowRepeatedDirectories: tool === 'maven' })
-      const folder = unpackedApacheHome(unpack, build, platform)
+      const unpackedHome = isGradleNode(tool) ? unpackedGradleNodeHome : unpackedApacheHome
+      const folder = unpackedHome(unpack, build, platform)
       const sizeBytes = await installedSize(folder, signal)
       signal.throwIfAborted()
       const ready = path.join(staging, 'ready')

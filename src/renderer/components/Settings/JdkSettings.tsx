@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { takePendingJdkFeature } from '../../lib/settingsNavigation'
 import { formatBytes } from '../../lib/mcpLabels'
-import type { ApacheToolBuild, ApacheToolRuntime, HotswapAgentStatus, JdkBuild, JdkProgress, JdkRuntime, JdkVendor } from '../../types'
+import type { HotswapAgentStatus, JdkBuild, JdkProgress, JdkRuntime, JdkVendor, ToolBuild, ToolRuntime } from '../../types'
 import { ApacheToolSettings } from './ApacheToolSettings'
 import './JdkSettings.css'
 
@@ -23,7 +23,7 @@ export function JdkSettings() {
   const api = window.electronAPI
   const [jdks, setJdks] = useState<JdkRuntime[] | null>(null)
   const [hotswapAgent, setHotswapAgent] = useState<HotswapAgentStatus | null>(null)
-  const [tools, setTools] = useState<ApacheToolRuntime[] | null>(null)
+  const [tools, setTools] = useState<ToolRuntime[] | null>(null)
   // Opened from a run preset's JDK notice (lib/settingsNavigation.ts): 받기 open at that version
   const [asked] = useState(takePendingJdkFeature)
   const [expanded, setExpanded] = useState(asked !== null)
@@ -82,14 +82,14 @@ export function JdkSettings() {
   const legacy = feature === 6 || feature === 7
   const localLegacy = legacy ? jdks?.find(jdk => !jdk.managed && jdk.feature === feature) : undefined
 
-  const install = async (agent = false, apache?: ApacheToolBuild) => {
-    if (busy || registering || removing || (!agent && !apache && !selectedBuild)) return
-    const label = apache ? 'Apache 도구' : agent ? 'HotswapAgent' : 'JDK'
+  const install = async (agent = false, tool?: ToolBuild) => {
+    if (busy || registering || removing || (!agent && !tool && !selectedBuild)) return
+    const label = tool ? '개발 도구' : agent ? 'HotswapAgent' : 'JDK'
     setInstalling(true)
     setNotice(null)
     try {
-      const result = apache
-        ? await api.runtimesToolInstall(apache.tool, apache.series).then(outcome => outcome.ok ? { ...outcome, version: outcome.tool.version } : outcome)
+      const result = tool
+        ? await api.runtimesToolInstall(tool.tool, tool.series).then(outcome => outcome.ok ? { ...outcome, version: outcome.tool.version } : outcome)
         : agent
           ? await api.runtimesHotswapInstall().then(outcome => outcome.ok ? { ...outcome, version: null } : outcome)
           : await api.runtimesInstall(vendor, feature).then(outcome => outcome.ok ? { ...outcome, version: outcome.jdk.version } : outcome)
@@ -121,13 +121,13 @@ export function JdkSettings() {
     catch { setCancelling(false); setNotice({ text: '받기를 취소하지 못했습니다.', error: true }) }
   }
 
-  const remove = async (id: string, apache: boolean) => {
+  const remove = async (id: string, isTool: boolean) => {
     if (busy || removing || registering) return
     setRemoving(true)
     setNotice(null)
-    const label = apache ? 'Apache 도구' : id === AGENT ? 'HotswapAgent' : 'JDK'
+    const label = isTool ? '개발 도구' : id === AGENT ? 'HotswapAgent' : 'JDK'
     try {
-      const result = apache ? await api.runtimesToolRemove(id) : id === AGENT ? await api.runtimesHotswapRemove() : await api.runtimesRemove(id)
+      const result = isTool ? await api.runtimesToolRemove(id) : id === AGENT ? await api.runtimesHotswapRemove() : await api.runtimesRemove(id)
       if (result.ok) {
         setPendingRemoval(null)
         setNotice({ text: `보관함에서 ${label}를 지웠습니다.` })

@@ -6,6 +6,9 @@ const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { validateTomcat } = require('./tomcatRun.js')
 const { mavenApproval, mavenFields } = require('./runSuggestions.js')
+const { normalizeContextReference } = require('./workspaceServers.js')
+const { validateLogEncoding } = require('./developmentEncoding.js')
+const { normalizeJarReferences } = require('../runtimes/jarSearch.js')
 
 const MAX_BYTES = 2 * 1024 * 1024
 const MAX_PROJECTS = 200
@@ -58,12 +61,16 @@ function presetApproval(preset) {
   if (preset.kind === 'custom') return { command: preset.command, hash: commandHash(preset.command) }
   const maven = mavenApproval(preset)
   if (preset.kind !== 'tomcat') return maven && { command: maven.text, hash: commandHash(JSON.stringify(maven.signature)) }
-  if (!preset.vmArgs.trim() && !preset.prepare) return null
+  if (!preset.vmArgs.trim() && !preset.prepare && !preset.contextXml && !preset.extraLibs?.length) return null
   const prepare = preset.prepare
   const build = prepare?.tool === 'eclipse' ? '이클립스식 빌드 (.classpath의 Java 소스와 리소스)' : prepare && `${prepare.tool} ${prepare.target ?? prepare.goals}`
   const command = [build && `기동 전 빌드\n${build}`,
-    preset.vmArgs.trim() && `Tomcat VM 인자\n${preset.vmArgs}`, maven?.text].filter(Boolean).join('\n\n')
-  return { command, hash: commandHash(JSON.stringify(['tomcat', preset.vmArgs, prepare, ...(maven ? [maven.signature] : [])])) }
+    preset.vmArgs.trim() && `Tomcat VM 인자\n${preset.vmArgs}`, maven?.text,
+    preset.contextXml && `Tomcat 컨텍스트 설정 파일\n${preset.contextXml}`,
+    preset.extraLibs?.length && `Tomcat에 연결할 JAR\n${preset.extraLibs.join('\n')}`].filter(Boolean).join('\n\n')
+  return { command, hash: commandHash(JSON.stringify(['tomcat', preset.vmArgs, prepare, ...(maven ? [maven.signature] : []),
+    ...(preset.contextXml ? [['contextXml', preset.contextXml]] : []),
+    ...(preset.extraLibs?.length ? [['extraLibs', preset.extraLibs]] : [])])) }
 }
 
 function validatePreset(input, id) {
@@ -89,10 +96,12 @@ function validatePreset(input, id) {
     if (typeof input[key] !== 'boolean') throw new Error('실행 구성의 스위치를 확인해 주세요.')
     flags[key] = input[key]
   }
-  const base = { id, name, relative, jdk, hotReload, env: Object.fromEntries(entries), ...flags }
+  const base = { id, name, relative, jdk, hotReload, logEncoding: validateLogEncoding(input.logEncoding), env: Object.fromEntries(entries), ...flags }
   if (input.kind === 'tomcat') {
     const tomcat = validateTomcat(input, presetRelative)
-    return { ...base, ...tomcat, ...mavenFields({ ...input, ...tomcat }) }
+    const contextXml = normalizeContextReference(input.contextXml, presetRelative)
+    const extraLibs = normalizeJarReferences(input.extraLibs)
+    return { ...base, ...tomcat, ...(contextXml && { contextXml }), ...(extraLibs.length && { extraLibs }), ...mavenFields({ ...input, ...tomcat }) }
   }
   if (input.kind === 'task' && typeof input.taskId === 'string' && input.taskId.length <= 300 && /^(?:.+):(gradle|maven|node)$/.test(input.taskId) && ONE_LINE.test(input.taskId)) {
     return { ...base, kind: 'task', taskId: input.taskId, ...mavenFields(input) }

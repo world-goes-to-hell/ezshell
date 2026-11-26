@@ -923,9 +923,37 @@ export interface RunPreset {
   vmArgs?: string
   /** The build before the server (run in `relative`) */
   prepare?: RunPrepare
+  /** Tomcat: an existing context.xml (JNDI) main reads at each run; its passwords are never saved here */
+  contextXml?: string
+  /** Tomcat: jars added to /WEB-INF/lib (approved from a missing-class diagnosis) */
+  extraLibs?: string[]
+  /** How the server's output is read (every kind); missing: auto */
+  logEncoding?: LogEncoding
 }
 
 /** `eclipse`: compile with the Eclipse project's settings (.classpath), for a project whose build.xml is missing or broken */
+export type LogEncoding = 'auto' | 'utf-8' | 'ms949'
+
+/** A server of an Eclipse workspace (Servers/<name>-config, its .launch VM arguments), to fill a Tomcat preset */
+export interface WorkspaceServer {
+  name: string
+  port?: number
+  vmArgs?: string
+  contextPath?: string
+  /** The server's context.xml, as the preset keeps it */
+  contextXml?: string
+}
+
+/** A jar that holds a missing class (a candidate of the tomcatJar suggestion) */
+export interface JarCandidate {
+  /** Opaque: sent back to approve it */
+  id: string
+  /** For the user to read: from the project, or shortened like ~/.m2/… */
+  path: string
+  coordinate?: string | null
+  source?: 'project' | 'maven' | 'gradle'
+}
+
 export type RunPrepare = { tool: 'ant'; target: string } | { tool: 'maven'; goals: string } | { tool: 'eclipse' }
 
 /**
@@ -998,7 +1026,11 @@ export interface RunSuggestion {
   kind: 'missingClass' | 'jdkVersion' | 'jndi' | 'sourceEncoding' | 'portInUse' | 'mavenHttpBlocked'
     | 'mavenRepositoryUnavailable' | 'mavenUnauthorized' | 'mavenTls' | 'mavenArtifactMissing' | 'mavenPluginJdk' | 'mavenUserMirror'
   message: string
-  apply?: 'mavenMirror' | 'mavenUserSettings'
+  apply?: 'mavenMirror' | 'mavenUserSettings' | 'tomcatJar'
+  /** tomcatJar: the jars found with the missing class */
+  jars?: JarCandidate[]
+  /** tomcatJar: some places could not be searched to the end (limits) */
+  jarSearchIncomplete?: boolean
   repositoryId?: string
   mirrorId?: string
   reason?: 'notFound' | 'unknownHost'
@@ -1040,20 +1072,21 @@ export interface HotswapAgentStatus {
   installed: boolean
   version?: string
 }
-export type ApacheTool = 'tomcat' | 'maven' | 'ant'
-export interface ApacheToolRuntime {
+export type DevelopmentTool = 'tomcat' | 'maven' | 'ant' | 'gradle' | 'node'
+export interface ToolRuntime {
   id: string
-  tool: ApacheTool
+  tool: DevelopmentTool
   version: string | null
   series: string | null
   managed: boolean
   folder?: string
   sizeBytes?: number
 }
-export type ApacheToolBuild = { id: string; tool: ApacheTool; version: string; series: string; licenseUrl: string }
-type ApacheToolResult = { ok: true; tool: ApacheToolRuntime } | { ok: false; error?: string; cancelled?: true }
+export type ApacheToolRuntime = ToolRuntime
+export type ToolBuild = { id: string; tool: DevelopmentTool; version: string; series: string; licenseUrl: string }
+type ToolResult = { ok: true; tool: ToolRuntime } | { ok: false; error?: string; cancelled?: true }
 export interface JdkProgress {
-  vendor: JdkVendor | 'hotswap-agent' | ApacheTool
+  vendor: JdkVendor | 'hotswap-agent' | DevelopmentTool
   feature: number | null
   phase: 'lookup' | 'download' | 'unpack'
   received: number
@@ -1358,19 +1391,19 @@ declare global {
       onPinnedReplyMaximized?: (callback: (maximized: boolean) => void) => () => void
       pinnedReplyGo?: () => void
       onPinnedReplyGo?: (callback: (shellId: string) => void) => () => void
-      runtimesList: () => Promise<{ jdks: JdkRuntime[]; hotswapAgent: HotswapAgentStatus; tools: ApacheToolRuntime[] }>
+      runtimesList: () => Promise<{ jdks: JdkRuntime[]; hotswapAgent: HotswapAgentStatus; tools: ToolRuntime[] }>
       runtimesAvailable: (vendor: JdkVendor, feature: number) => Promise<{ jdk: JdkBuild | null; error?: string }>
       runtimesInstall: (vendor: JdkVendor, feature: number) => Promise<{ ok: true; jdk: JdkRuntime } | { ok: false; error?: string; cancelled?: true }>
       runtimesCancel: () => Promise<boolean>
       runtimesRemove: (id: string) => Promise<{ ok: true } | { ok: false; error: string }>
       runtimesHotswapInstall: () => Promise<{ ok: true } | { ok: false; error?: string; cancelled?: true }>
       runtimesHotswapRemove: () => Promise<{ ok: true } | { ok: false; error: string }>
-      runtimesToolAvailable: (tool: ApacheTool, series: string) => Promise<{ tool: ApacheToolBuild | null; error?: string }>
-      runtimesToolInstall: (tool: ApacheTool, series: string) => Promise<ApacheToolResult>
+      runtimesToolAvailable: (tool: DevelopmentTool, series: string) => Promise<{ tool: ToolBuild | null; error?: string }>
+      runtimesToolInstall: (tool: DevelopmentTool, series: string) => Promise<ToolResult>
       runtimesToolRemove: (id: string) => Promise<{ ok: true } | { ok: false; error: string }>
-      runtimesTomcatRegister: () => Promise<ApacheToolResult>
+      runtimesTomcatRegister: () => Promise<ToolResult>
       runtimesRequired: (projectFolder: string) => Promise<{ feature: number | null }>
-      runtimesOpenLicense: (vendor: JdkVendor | 'hotswap-agent' | ApacheTool) => Promise<boolean>
+      runtimesOpenLicense: (vendor: JdkVendor | 'hotswap-agent' | DevelopmentTool) => Promise<boolean>
       // Run presets of the local projects (src/ipc/runPresets.js; main window, unlocked). The first
       // argument is the worktree folder of the card: the presets are the project's, the states that worktree's
       runPresetsList?: (worktreeFolder: string) => Promise<RunPresetResult & { projectKey: string; worktreeKey: string; presets: RunPreset[]; states: Record<string, RunState> }>
@@ -1385,7 +1418,7 @@ declare global {
       runPresetStopAll?: (projectFolder: string) => Promise<RunPresetResult>
       runPresetErrors?: (projectFolder: string, id: string) => Promise<RunPresetResult & { groups: RunErrorGroup[] }>
       runPresetDiagnosis?: (worktreeFolder: string, id: string) => Promise<RunPresetResult & { suggestions?: RunSuggestion[] }>
-      runPresetApplySuggestion?: (worktreeFolder: string, id: string, suggestion: { id: string; replacementUrl?: string }) => Promise<RunPresetResult & { preset?: RunPreset }>
+      runPresetApplySuggestion?: (worktreeFolder: string, id: string, suggestion: { id: string; replacementUrl?: string; jarId?: string }) => Promise<RunPresetResult & { preset?: RunPreset }>
       runPresetSendPreview?: (worktreeFolder: string, id: string) => Promise<RunPresetResult & { text?: string }>
       /** The `<target name>`s of the build.xml in a folder of the project (a Tomcat preset's Ant build) */
       runPresetAntTargets?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { targets?: string[] }>
@@ -1393,6 +1426,10 @@ declare global {
       runPresetWebapps?: (worktreeFolder: string) => Promise<RunPresetResult & { folders?: string[] }>
       /** Reads the Eclipse settings of a folder of the project (.classpath, .settings) for a Tomcat preset */
       runPresetEclipseImport?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { draft?: EclipseImportDraft; notes?: string[] }>
+      /** Picks an Eclipse workspace folder (main's chooser) and reads its servers */
+      runPresetWorkspaceServers?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; workspace?: string; servers?: WorkspaceServer[] }>
+      /** Picks an existing context.xml (JNDI) for a Tomcat preset */
+      runPresetChooseContextXml?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; contextXml?: string; label?: string }>
       runPresetSend?: (projectFolder: string, id: string, agentId: string, note: string) => Promise<RunPresetResult>
       onRunPresetState?: (callback: (event: { projectKey: string; worktreeKey: string; id: string; state: RunState; firstAgentAction?: true }) => void) => () => void
       onRuntimesProgress: (callback: (progress: JdkProgress | null) => void) => () => void

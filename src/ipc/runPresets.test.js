@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createRunPresets, registerRunPresetIpc, resolveProject, withSubject } from './runPresets.js'
 import { commandHash, createRunPresetStore, projectKey, realDirectory } from './runPresetStore.js'
 import { pathKey } from '../renderer/lib/localWorkspaceTree'
 import { withSubject as rendererSubject } from '../renderer/lib/runPresets'
+import { zipOf } from '../../e2e/support/jdkFixture.js'
 
 let base
 beforeEach(async () => { base = await mkdtemp(path.join(tmpdir(), 'ezshell-run-')) })
@@ -59,7 +60,7 @@ async function fixture(options = {}) {
     }
   }
   const makeController = (options = {}) => createRunPresets({ file, getShells: () => shells, getAgent: id => id === 'agent-1' ? { id, active: true, shellId: 'agent-shell' } : null,
-    isLocked: () => state.locked, sendState, sendAsUser, notifyCrash, now: () => state.now, javaHomeOf: id => id === 'jdk-21' ? outside : null,
+    isLocked: () => state.locked, sendState, sendAsUser, notifyCrash, now: () => state.now, jarHome: root, javaHomeOf: id => id === 'jdk-21' ? outside : null,
     projectOf: async cwd => cwd === checkout || cwd === checkoutSubfolder ? { ...location(cwd, checkout, folder), gitWorktree: true } : location(cwd), ...options })
   const controller = makeController(options)
   const ipc = registerRunPresetIpc({ ipcMain: { handle: (channel, fn) => handlers.set(channel, fn) }, controller, fromMainWindow: e => e.sender === event.sender, isLocked: () => state.locked })
@@ -77,6 +78,83 @@ async function fixture(options = {}) {
 }
 
 describe('saved project runs', () => {
+  it.each([7, 9])('approves one current missing JDBC JAR and mounts it for Tomcat %i', async major => {
+    let home
+    const f = await fixture({ toolHomeOf: () => home, toolVersionOf: () => `${major}.0.99` })
+    home = f.outside
+    const webLib = path.join(f.folder, 'WebContent', 'WEB-INF', 'lib')
+    const projectLib = path.join(f.folder, 'lib')
+    const cacheLib = path.join(path.dirname(f.file), '.m2', 'repository', 'example', 'jdbc', 'driver', '3.0')
+    await Promise.all([mkdir(path.join(home, 'bin')), mkdir(path.join(home, 'conf')), mkdir(path.join(home, 'lib')),
+      mkdir(webLib, { recursive: true }), mkdir(projectLib), mkdir(cacheLib, { recursive: true })])
+    const driverJar = zipOf({ 'example/jdbc/Driver.class': 'fixture' })
+    const first = path.join(projectLib, 'driver-1.jar')
+    const alternate = path.join(projectLib, 'driver-2.jar')
+    await Promise.all([
+      writeFile(path.join(home, 'bin', process.platform === 'win32' ? 'catalina.bat' : 'catalina.sh'), 'fixture'),
+      writeFile(path.join(home, 'conf', 'server.xml'), '<Server><Service><Connector/><Engine><Host/></Engine></Service></Server>'),
+      writeFile(path.join(home, 'conf', 'context.xml'), '<Context><Resources cacheMaxSize="10240"/></Context>'),
+      writeFile(path.join(f.folder, 'context.xml'), '<Context><Resource name="jdbc/Test" driverClassName="example.jdbc.Driver" password="fixture-secret"/></Context>'),
+      writeFile(first, driverJar), writeFile(alternate, driverJar), writeFile(path.join(cacheLib, 'driver-3.0.jar'), driverJar)
+    ])
+    const input = { kind: 'tomcat', tomcat: 'fixture-tomcat', webapp: 'WebContent', contextXml: 'context.xml' }
+    expect(await f.invoke('run-presets-save', { ...input, name: 'JDBC', extraLibs: ['lib/driver-1.jar'] })).toMatchObject({ ok: false })
+    const saved = await f.save('JDBC', input)
+    await f.start(saved.id, 'Tomcat 컨텍스트 설정 파일\ncontext.xml')
+    const { shellId } = f.list().states[saved.id]
+    const initial = f.shellTasks.get(shellId)
+    expect(initial.missingJdbcDrivers).toEqual(['example.jdbc.Driver'])
+    f.emit(shellId, { type: 'launched' })
+    f.emit(shellId, { type: 'exit', exitCode: 1 })
+    await initial.cleanup()
+    const logged = await f.agent('log', 'JDBC', { errors: true })
+    expect(logged.suggestions).toMatchObject([{ kind: 'missingClass' }])
+    expect(logged.suggestions[0].jars).toEqual(expect.arrayContaining([
+      { path: 'lib/driver-1.jar' }, { path: 'lib/driver-2.jar' }, { coordinate: 'example.jdbc:driver:3.0' }
+    ]))
+    expect(JSON.stringify(logged)).not.toContain(cacheLib)
+    expect(JSON.stringify(logged)).not.toContain('fixture-secret')
+    expect(logged.suggestions[0]).not.toHaveProperty('id')
+    const { suggestions: [suggestion] } = await f.invoke('run-preset-diagnosis', saved.id)
+    expect(suggestion).toMatchObject({ kind: 'missingClass', className: 'example.jdbc.Driver', apply: 'tomcatJar' })
+    expect(suggestion.jars).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'lib/driver-1.jar', source: 'project' }),
+      expect.objectContaining({ path: 'lib/driver-2.jar', source: 'project' }),
+      expect.objectContaining({ path: '~/.m2/repository/example/jdbc/driver/3.0/driver-3.0.jar', source: 'maven' })
+    ]))
+    const request = { id: suggestion.id, jarId: suggestion.jars.find(jar => jar.path === 'lib/driver-2.jar').id }
+    expect(await f.invokeCheckout('run-preset-apply-suggestion', saved.id, request)).toMatchObject({ ok: false })
+    expect(await f.invoke('run-preset-apply-suggestion', saved.id, { ...request, jarId: alternate })).toMatchObject({ ok: false })
+    await writeFile(alternate, zipOf({ 'example/jdbc/Missing.class': 'fixture' }))
+    expect(await f.invoke('run-preset-apply-suggestion', saved.id, request)).toMatchObject({ ok: false })
+    await writeFile(alternate, driverJar)
+    const { preset } = await f.invoke('run-preset-apply-suggestion', saved.id, request)
+    expect(preset.extraLibs).toEqual(['lib/driver-2.jar'])
+    await expect(f.agent('start', 'JDBC')).rejects.toThrow('사용자가')
+    await f.start(saved.id, 'Tomcat 컨텍스트 설정 파일\ncontext.xml\n\nTomcat에 연결할 JAR\nlib/driver-2.jar')
+    const runtime = f.shellTasks.get(shellId)
+    const base = runtime.env.CATALINA_BASE
+    expect(runtime.missingJdbcDrivers).toBeUndefined()
+    expect(await readFile(path.join(base, 'approved-lib', 'ezshell-approved-1.jar'))).toEqual(driverJar)
+    expect(await readFile(path.join(base, 'lib', 'ezshell-approved-1.jar'))).toEqual(driverJar)
+    const xml = await readFile(path.join(base, 'conf', 'server.xml'), 'utf8')
+    expect(xml).toContain(major === 7 ? 'VirtualWebappLoader' : '<PostResources')
+    expect(xml).toContain(major === 7 ? 'ezshell-approved-1.jar' : 'webAppMount="/WEB-INF/lib/ezshell-approved-1.jar"')
+    if (major >= 8) {
+      const defaults = await readFile(path.join(base, 'conf', 'context.xml'), 'utf8')
+      expect(defaults).toContain('<Resources cacheMaxSize="10240">')
+      expect(defaults).toContain('webAppMount="/WEB-INF/lib/ezshell-approved-1.jar"')
+      expect(await readFile(path.join(home, 'conf', 'context.xml'), 'utf8')).not.toContain('PostResources')
+    }
+    expect(await readdir(webLib)).toEqual([])
+    expect(await readdir(path.join(home, 'lib'))).toEqual([])
+    expect(await f.invoke('run-preset-apply-suggestion', saved.id, request)).toMatchObject({ ok: false })
+    f.emit(shellId, { type: 'exit', exitCode: 0 })
+    await runtime.cleanup()
+    const { preset: removed } = await f.invoke('run-presets-save', { ...preset, extraLibs: [] })
+    expect(removed).not.toHaveProperty('extraLibs')
+  })
+
   it('applies Maven suggestions only to their current run and confirms changed invocation options', async () => {
     const f = await fixture()
     const wrapper = path.join(f.folder, '.mvn', 'wrapper')
@@ -200,6 +278,37 @@ describe('saved project runs', () => {
     await f.invoke('run-preset-stop', saved.id)
     await f.save('Tomcat', { ...saved, prepare: { tool: 'ant', target: 'compile' } })
     expect(await f.invoke('run-preset-start', saved.id)).toMatchObject({ needsConfirm: { command: expect.stringContaining('ant compile') } })
+  })
+
+  it('takes workspace trust from the main-frame dialog and approves context paths without copying settings to the store', async () => {
+    const f = await fixture()
+    const workspace = f.outside
+    const server = path.join(workspace, 'Servers', 'Tomcat-config')
+    await mkdir(server, { recursive: true })
+    await mkdir(path.join(f.folder, 'WebContent', 'WEB-INF'), { recursive: true })
+    const reference = path.join(server, 'context.xml')
+    await writeFile(reference, '<Context><Resource name="jdbc/Test" password="fixture-password"/></Context>')
+    await writeFile(path.join(server, 'server.xml'), '<Server><Service><Connector port="8180"/></Service></Server>')
+    const handlers = new Map()
+    const pickWorkspace = vi.fn(async () => workspace)
+    const pickContext = vi.fn(async () => reference)
+    registerRunPresetIpc({ ipcMain: { handle: (key, handle) => handlers.set(key, handle) }, controller: f.controller,
+      fromMainWindow: event => event.sender === f.event.sender, isLocked: () => f.state.locked,
+      chooseWorkspaceFolder: pickWorkspace, chooseContextFile: pickContext })
+    const input = { name: 'Tomcat', kind: 'tomcat', tomcat: 'tomcat-9.0.124', webapp: 'WebContent', contextXml: reference, logEncoding: 'ms949' }
+    expect(await f.invoke('run-presets-save', input)).toMatchObject({ ok: false })
+    expect(await handlers.get('run-preset-workspace-servers')({ ...f.event, senderFrame: {} }, f.folder)).toMatchObject({ ok: false })
+    expect(pickWorkspace).not.toHaveBeenCalled()
+    expect(await handlers.get('run-preset-workspace-servers')(f.event, f.folder, 'renderer-overridden path'))
+      .toMatchObject({ ok: true, workspace: 'second-project', servers: [{ contextXml: reference, name: 'Tomcat', port: 8180 }] })
+    expect(pickWorkspace).toHaveBeenCalledExactlyOnceWith(f.folder)
+    expect(await handlers.get('run-preset-choose-context-xml')(f.event, f.folder))
+      .toMatchObject({ ok: true, contextXml: reference, label: 'context.xml' })
+    const { preset } = await f.invoke('run-presets-save', input)
+    expect(preset).toMatchObject({ contextXml: reference, logEncoding: 'ms949' })
+    expect(await readFile(f.file, 'utf8')).not.toContain('fixture-password')
+    const approval = await f.invoke('run-preset-start', preset.id)
+    expect(approval).toEqual({ needsConfirm: { command: `Tomcat 컨텍스트 설정 파일\n${reference}` } })
   })
 
   it('checks names, env, relative paths and stored data', async () => {

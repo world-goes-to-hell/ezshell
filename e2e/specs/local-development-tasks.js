@@ -269,6 +269,15 @@ function fixture(backendPort, frontendPort) {
       !document.querySelector('input[name="run-preset-reload"][value="standard"]').disabled`))
     // Second batch: the Eclipse-style build (compiled with the Eclipse settings, without build.xml)
     await js(`document.querySelector('input[name="run-preset-prepare"][value="eclipse"]').click()`)
+    // Third batch: a workspace's servers and a context.xml are picked in main's folder chooser (not driven
+    // here); the dialog offers both, says the passwords stay in the original file, and lists no extra libs yet
+    check('Tomcat offers the workspace servers and a context.xml that is pointed at, not saved', await until(`(() => {
+      const box = document.querySelector('.run-preset-tomcat')
+      return !!box && [...box.querySelectorAll('.run-preset-eclipse-btn')].some(b => b.textContent.includes('워크스페이스 서버 설정에서 채우기')) &&
+        box.textContent.includes('비밀번호는 저장하지 않고 실행 때 원본에서 읽습니다') &&
+        [...box.querySelectorAll('.run-preset-context-xml .run-preset-link')].some(b => b.textContent.trim() === '고르기') &&
+        !box.querySelector('.run-preset-extra-libs')
+    })()`))
     check('the Eclipse-style build says what it does', await until(`
       document.querySelector('.run-preset-tomcat .run-preset-prepare-note')?.textContent.includes('build.xml 없이 이클립스 설정')`))
     await js(`document.querySelector('input[name="run-preset-prepare"][value="maven"]').click()`)
@@ -291,10 +300,17 @@ function fixture(backendPort, frontendPort) {
         /Spring Boot.* 실행에서만 됩니다\./.test(field.textContent) &&
         field.textContent.includes('바로 반영을 켜면 이 실행에 IDE 디버거를 붙일 수 없습니다.')
     })()`))
+    // The log encoding is for every kind (this typed command too) and is saved with the preset
+    check('the log encoding offers 자동·UTF-8·MS949', await js(`[...document.querySelectorAll('#run-preset-log-encoding option')].map(o => o.value).join(',') === 'auto,utf-8,ms949'`))
+    await js(`(() => { const select = document.querySelector('#run-preset-log-encoding'); select.value = 'utf-8'; select.dispatchEvent(new Event('change', { bubbles: true })) })()`)
     await js(`document.querySelector('.run-preset-dialog button[type="submit"]').click()`)
     const presetRow = `${section}?.querySelector('.run-preset')`
     check('the saved preset is a row with a start button', await until(`!document.querySelector('.run-preset-dialog') &&
       ${presetRow}?.textContent.includes('시험 서버') && !!${presetRow}.querySelector('[data-action="start"]')`, 8000))
+    check('the chosen log encoding is saved with the preset', await js(`(async () => {
+      const list = await window.electronAPI.runPresetsList(${JSON.stringify(repo)})
+      return list.presets?.find(item => item.name === '시험 서버')?.logEncoding === 'utf-8'
+    })()`))
     await shot('local-run-preset-idle')
     await click(...await center(`${presetRow}.querySelector('[data-action="start"]')`))
     const ask = `document.querySelector('.run-command-dialog')`

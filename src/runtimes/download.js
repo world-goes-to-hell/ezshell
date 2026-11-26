@@ -6,7 +6,7 @@ const { pipeline } = require('node:stream/promises')
 
 const HOSTS = new Set(['api.adoptium.net', 'github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com',
   'api.azul.com', 'cdn.azul.com', 'api.github.com', 'cache-redirector.jetbrains.com', 'd2xrhe97vsfxuc.cloudfront.net',
-  'downloads.apache.org', 'archive.apache.org'])
+  'downloads.apache.org', 'archive.apache.org', 'services.gradle.org', 'downloads.gradle.org', 'nodejs.org'])
 const MAX_REDIRECTS = 5
 const MAX_JSON_BYTES = 2 * 1024 * 1024
 const MAX_ARCHIVE_BYTES = 768 * 1024 * 1024

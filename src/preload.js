@@ -194,6 +194,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runPresetAntTargets: (folder, relative) => ipcRenderer.invoke('run-preset-ant-targets', folder, relative),
   runPresetWebapps: (folder) => ipcRenderer.invoke('run-preset-webapps', folder),
   runPresetEclipseImport: (folder, relative) => ipcRenderer.invoke('run-preset-eclipse-import', folder, relative),
+  runPresetWorkspaceServers: folder => ipcRenderer.invoke('run-preset-workspace-servers', folder),
+  runPresetChooseContextXml: folder => ipcRenderer.invoke('run-preset-choose-context-xml', folder),
   runPresetsSave: (folder, preset) => ipcRenderer.invoke('run-presets-save', folder, preset),
   runPresetsDelete: (folder, id) => ipcRenderer.invoke('run-presets-delete', folder, id),
   runPresetsReorder: (folder, ids) => ipcRenderer.invoke('run-presets-reorder', folder, ids),

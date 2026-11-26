@@ -116,6 +116,20 @@ describe('createLocalShells', () => {
     shells.close(id)
   })
 
+  it('decodes raw development output before sending it to the terminal and run log', async () => {
+    const cwd = realpathSync(tmpdir())
+    const { shells, ptys, sent } = setup({ platform: 'linux' })
+    const onEvent = vi.fn()
+    const { id } = await shells.openDevelopmentTask({ id: 'preset:encoded', name: 'MS949', cwd, command: 'run-server', logEncoding: 'auto', onEvent }, {})
+    expect(ptys[0].options.encoding).toBeNull()
+    ptys[0].emit(Buffer.concat([Buffer.from('ERROR '), Buffer.from('c7d1b1db', 'hex'), Buffer.from('\r\n')]))
+    expect(shells.attach(id).backlog).toContain('ERROR 한글')
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'data', data: 'ERROR 한글\r\n' }))
+    expect(sent.some(event => event.channel === 'local-shell-data' && event.payload.data === 'ERROR 한글\r\n')).toBe(true)
+    ptys[0].exit({ exitCode: 1 })
+    shells.close(id)
+  })
+
   it('redacts a hot reload port before writing backlog, terminal events or run log events', async () => {
     const cwd = realpathSync(tmpdir())
     const { shells, ptys, sent } = setup()

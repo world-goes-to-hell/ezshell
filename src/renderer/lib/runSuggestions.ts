@@ -57,11 +57,25 @@ export function replacementUrl(text: string): { url: string } | { error: string 
   return { url: value }
 }
 
+const APPLIES = new Set(['mavenMirror', 'mavenUserSettings', 'tomcatJar'])
+
 /** Only well-formed suggestions from main (it is the app's own answer, but shown as text only) */
 export function cleanSuggestions(value: unknown): RunSuggestion[] {
   if (!Array.isArray(value)) return []
   return value.filter((item): item is RunSuggestion => !!item && typeof item === 'object'
     && typeof (item as RunSuggestion).id === 'string' && typeof (item as RunSuggestion).kind === 'string'
     && typeof (item as RunSuggestion).message === 'string')
-    .map(item => item.apply === 'mavenMirror' || item.apply === 'mavenUserSettings' ? item : { ...item, apply: undefined })
+    .map(item => {
+      const jars = Array.isArray(item.jars)
+        ? item.jars.filter(jar => jar && typeof jar.id === 'string' && jar.id && typeof jar.path === 'string' && jar.path)
+        : []
+      // A jar suggestion without a jar has nothing to approve
+      const apply = item.apply && APPLIES.has(item.apply) && (item.apply !== 'tomcatJar' || jars.length) ? item.apply : undefined
+      return { ...item, apply, ...(Array.isArray(item.jars) ? { jars } : {}) }
+    })
 }
+
+const JAR_SOURCES: Record<string, string> = { project: '프로젝트', maven: 'Maven 저장소 (~/.m2)', gradle: 'Gradle 캐시' }
+
+/** Where a candidate jar was found, in words */
+export const jarSource = (source: string | undefined) => (source && JAR_SOURCES[source]) || ''

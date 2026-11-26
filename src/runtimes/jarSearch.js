@@ -2,6 +2,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { promisify } = require('node:util')
+const { pipeline } = require('node:stream/promises')
 const yauzl = require('yauzl')
 const { isLocalFilePath } = require('../localKeyPath.js')
 const { sameOrInside } = require('../localFiles/roots.js')
@@ -25,6 +26,8 @@ const JAR = /\.jar$/i
 const isLocalAbsolute = value => isLocalFilePath(value) && path.isAbsolute(value)
 const identity = stat => `${stat.dev}:${stat.ino}`
 const pathKey = value => process.platform === 'win32' ? value.toLowerCase() : value
+const jarClassName = value => typeof value === 'string' && value.length <= 512 && CLASS.test(value)
+const CACHE_ROOTS = { maven: '.m2/repository', gradle: '.gradle/caches/modules-2/files-2.1' }
 
 class CentralDirectoryReader extends yauzl.RandomAccessReader {
   constructor(fd, size) {
@@ -69,6 +72,69 @@ async function checkedEntry(root, target) {
   return isLocalAbsolute(real) && path.relative(target, real) === '' ? stat : null
 }
 
+async function cacheRoots(home) {
+  const roots = {}
+  const cacheHome = await canonicalDirectory(home)
+  if (cacheHome) for (const [name, relative] of Object.entries(CACHE_ROOTS)) {
+    const root = path.join(cacheHome, relative)
+    if ((await checkedEntry(cacheHome, root))?.isDirectory()) roots[name] = root
+  }
+  return roots
+}
+
+const relativePath = (root, target) => path.relative(root, target).split(path.sep).join('/')
+const jarReference = value => typeof value === 'string' && value.length <= 4096 && JAR.test(value)
+  && !/[\p{Cc}\p{Cf}\p{Cs}%]/u.test(value) && !value.includes('${')
+
+function normalizeJarReferences(values) {
+  if (values === undefined) return []
+  if (!Array.isArray(values) || values.length > 20 || !values.every(value => {
+    if (!jarReference(value)) return false
+    if (path.isAbsolute(value)) return isLocalAbsolute(value)
+    return !/[:\\]/.test(value) && value.split('/').every(part => part && part !== '.' && part !== '..')
+  })) throw new Error('Tomcat에 연결할 JAR 경로를 확인해 주세요. 최대 20개까지 연결할 수 있습니다.')
+  return [...new Set(values)]
+}
+
+async function allowedJar({ projectRoot, reference, home = os.homedir() }) {
+  if (!jarReference(reference)) return null
+  const project = await canonicalDirectory(projectRoot)
+  if (!project) return null
+  const target = path.resolve(project, reference)
+  if (!isLocalAbsolute(target) || (!path.isAbsolute(reference) && !sameOrInside(project, target))) return null
+  const roots = sameOrInside(project, target) ? { project } : await cacheRoots(home)
+  for (const [source, root] of Object.entries(roots)) {
+    if (!sameOrInside(root, target)) continue
+    const stat = await checkedEntry(root, target)
+    if (!stat?.isFile() || stat.size > LIMITS.maxJarBytes) return null
+    const relative = relativePath(root, target)
+    return { path: target, stat, source, reference: source === 'project' ? relative : target,
+      displayPath: source === 'project' ? relative : `~/${CACHE_ROOTS[source]}/${relative}` }
+  }
+  return null
+}
+
+async function jarHasClass(jar, className, signal = AbortSignal.timeout(LIMITS.timeoutMs)) {
+  if (!jarClassName(className)) return false
+  const classEntry = className.replaceAll('.', '/') + '.class'
+  const result = await inspectJar(jar.path, jar.stat, new Set([classEntry]), true, LIMITS.maxJarBytes, signal).catch(() => null)
+  signal.throwIfAborted()
+  return result?.found.has(classEntry) ?? false
+}
+
+async function copyCheckedJar(jar, destination, signal) {
+  const source = await fs.promises.open(jar.path, FLAGS)
+  try {
+    const stat = await source.stat()
+    const unchanged = current => current.isFile() && identity(current) === identity(jar.stat)
+      && current.size === jar.stat.size && current.mtimeMs === jar.stat.mtimeMs && current.ctimeMs === jar.stat.ctimeMs
+    if (!unchanged(stat)) throw new Error('연결한 JAR 파일이 바뀌었습니다. 다시 실행해 주세요.')
+    await pipeline(source.createReadStream({ autoClose: false, end: Math.max(0, stat.size - 1) }),
+      fs.createWriteStream(destination, { flags: 'wx', mode: 0o600 }), { signal })
+    if (!unchanged(await source.stat())) throw new Error('연결한 JAR 파일이 바뀌었습니다. 다시 실행해 주세요.')
+  } finally { await source.close() }
+}
+
 function artifactFile(filename, artifact, version) {
   const stem = filename.replace(JAR, '')
   return stem === `${artifact}-${version}` || stem.startsWith(`${artifact}-${version}-`)
@@ -105,11 +171,11 @@ function metadataCoordinate(entry, filename) {
     ? `${group}:${artifact}:${version}` : null
 }
 
-function searchDirectory(zip, classEntry, filename, coordinate, signal) {
+function searchDirectory(zip, classEntries, filename, coordinate, signal) {
   if (zip.entryCount > MAX_ZIP_ENTRIES) return Promise.resolve({ limited: true })
   return new Promise((resolve, reject) => {
     let bytes = 0
-    let found = false
+    const found = new Set()
     let guessed = null
     let ambiguous = false
     let finished = false
@@ -130,9 +196,9 @@ function searchDirectory(zip, classEntry, filename, coordinate, signal) {
       if (bytes > MAX_CENTRAL_BYTES) return finish({ found, coordinate, limited: true })
       // JAR names are UTF-8, including old tools that omitted the ZIP UTF-8 flag.
       const name = entry.fileName.toString('utf8')
-      if (name === classEntry) {
-        found = true
-        if (coordinate) return finish({ found, coordinate })
+      if (classEntries.has(name)) {
+        found.add(name)
+        if (coordinate && found.size === classEntries.size) return finish({ found, coordinate })
       } else if (!coordinate) {
         const guess = metadataCoordinate(name, filename)
         if (guess && guessed && guessed !== guess) ambiguous = true
@@ -145,7 +211,7 @@ function searchDirectory(zip, classEntry, filename, coordinate, signal) {
   })
 }
 
-async function inspectJar(filename, stat, classEntry, coordinate, limit, signal) {
+async function inspectJar(filename, stat, classEntries, coordinate, limit, signal) {
   const fd = await open(filename, FLAGS)
   let reader, zip
   try {
@@ -155,7 +221,7 @@ async function inspectJar(filename, stat, classEntry, coordinate, limit, signal)
     if (current.size > limit) return { limited: true }
     reader = new CentralDirectoryReader(fd, current.size)
     zip = await openZip(reader, current.size, { lazyEntries: true, autoClose: false, decodeStrings: false })
-    return await searchDirectory(zip, classEntry, filename, coordinate, signal)
+    return await searchDirectory(zip, classEntries, filename, coordinate, signal)
   } finally {
     if (zip) zip.close()
     else if (reader) reader.unref()
@@ -215,8 +281,8 @@ async function scanScope(root, start, project, context) {
  * Returns every matching JAR found within the budgets. An incomplete search reports its partial
  * matches. The caller authorizes the project root and additional folders before passing them here.
  */
-async function searchJars({ projectRoot, className, home = os.homedir(), folders = [], signal, limits = {} } = {}) {
-  if (typeof className !== 'string' || className.length > 512 || !CLASS.test(className)) throw new Error('찾을 Java 클래스 이름을 확인해 주세요.')
+async function searchJarClasses({ projectRoot, classNames, home = os.homedir(), folders = [], signal, limits = {} } = {}) {
+  if (!Array.isArray(classNames) || !classNames.length || !classNames.every(jarClassName)) throw new Error('찾을 Java 클래스 이름을 확인해 주세요.')
   if (!isLocalAbsolute(projectRoot) || !Array.isArray(folders) || folders.some(folder => !isLocalAbsolute(folder))) {
     throw new Error('이 PC의 프로젝트와 검색 폴더를 선택해 주세요.')
   }
@@ -225,10 +291,12 @@ async function searchJars({ projectRoot, className, home = os.homedir(), folders
   }
   signal?.throwIfAborted()
   const { maxFiles, maxEntries, maxJarBytes, timeoutMs } = { ...LIMITS, ...limits }
-  const classEntry = className.replaceAll('.', '/') + '.class'
+  const entryOf = name => name.replaceAll('.', '/') + '.class'
+  const entriesByClass = new Map(classNames.map(name => [name, entryOf(name)]))
+  const classEntries = new Set(entriesByClass.values())
   const deadline = new AbortController()
   const active = signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal
-  const matches = []
+  const byEntry = new Map([...classEntries].map(entry => [entry, []]))
   const seen = new Set()
   const roots = {}
   let entries = 0
@@ -252,10 +320,10 @@ async function searchJars({ projectRoot, className, home = os.homedir(), folders
       if (scanned >= maxFiles) { incomplete = context.stopped = true; return }
       scanned++
       if (stat.size > maxJarBytes) { incomplete = true; return }
-      const result = await inspectJar(filename, stat, classEntry, cacheCoordinate(filename, roots), maxJarBytes, active).catch(() => null)
+      const result = await inspectJar(filename, stat, classEntries, cacheCoordinate(filename, roots), maxJarBytes, active).catch(() => null)
       active.throwIfAborted()
       if (result?.limited) incomplete = true
-      if (result?.found) matches.push({ path: filename, coordinate: result.coordinate })
+      if (result?.found) for (const entry of result.found) byEntry.get(entry).push({ path: filename, coordinate: result.coordinate })
     }
   }
   let stopSearch
@@ -267,12 +335,7 @@ async function searchJars({ projectRoot, className, home = os.homedir(), folders
   async function scan() {
     const project = await canonicalDirectory(projectRoot)
     if (!project) throw new Error('검색할 프로젝트 폴더를 찾을 수 없습니다.')
-    const cacheHome = await canonicalDirectory(home)
-    for (const [name, parts] of [['maven', ['.m2', 'repository']], ['gradle', ['.gradle', 'caches', 'modules-2', 'files-2.1']]]) {
-      if (!cacheHome) break
-      const root = path.join(cacheHome, ...parts)
-      if ((await checkedEntry(cacheHome, root))?.isDirectory()) roots[name] = root
-    }
+    Object.assign(roots, await cacheRoots(home))
     for (const relative of ['lib', 'WEB-INF/lib', 'WebContent/WEB-INF/lib', 'src/main/webapp/WEB-INF/lib']) {
       await scanScope(project, path.join(project, relative), false, context)
     }
@@ -293,7 +356,12 @@ async function searchJars({ projectRoot, className, home = os.homedir(), folders
     clearTimeout(timer)
     active.removeEventListener('abort', stopSearch)
   }
-  return { matches: matches.slice(), scanned, incomplete }
+  return { matches: new Map([...entriesByClass].map(([name, entry]) => [name, byEntry.get(entry).slice()])), scanned, incomplete }
 }
 
-module.exports = { searchJars }
+async function searchJars({ className, ...options } = {}) {
+  const result = await searchJarClasses({ ...options, classNames: [className] })
+  return { ...result, matches: result.matches.get(className) }
+}
+
+module.exports = { searchJars, searchJarClasses, allowedJar, jarHasClass, jarClassName, normalizeJarReferences, copyCheckedJar }

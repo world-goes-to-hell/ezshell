@@ -7,8 +7,12 @@ const { createDevelopmentErrors, MAX_LOG_LINES } = require('./developmentErrors.
 const { mavenFields, diagnosisContext, presetSuggestions, suggestedMavenFields, prepareMavenSettings,
   appendMavenSettings, wrapperMavenVersion } = require('./runSuggestions.js')
 const { removeMavenSettings } = require('../runtimes/mavenSettings.js')
-const { prepareHotReload, prepareTomcatReload, startHotReload, reloadLog, RESULTS: RELOAD_RESULTS } = require('./hotReload.js')
-const { planTomcat, stageTomcat, webDirectory, antTargets, webappCandidates, validContextPath, tomcatJars } = require('./tomcatRun.js')
+const { allowedJar } = require('../runtimes/jarSearch.js')
+const { tomcatInvocation, findJarCandidates, jarSuggestion, mcpJarSuggestion, selectedJarReferences, STALE_JAR } = require('./runJarSuggestions.js')
+const { prepareHotReload, prepareTomcatReload, javaRunWithOptions, startHotReload, reloadLog, RESULTS: RELOAD_RESULTS } = require('./hotReload.js')
+const { planTomcat, stageTomcat, webDirectory, antTargets, webappCandidates, validContextPath, workspaceVmArguments, tomcatJars, closeTomcatBases } = require('./tomcatRun.js')
+const { createWorkspaceAccess, workspaceServers } = require('./workspaceServers.js')
+const { javaVersionProbe, javaLogOptions } = require('./developmentEncoding.js')
 const { loadEclipseProject } = require('./eclipseProject.js')
 const { buildEclipse } = require('./eclipseBuild.js')
 const { createRunPresetStore, validatePreset, presetName, publicPreset, presetApproval, projectKey, realDirectory, directoryInProject } = require('./runPresetStore.js')
@@ -78,8 +82,10 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   toolHomeOf = () => null, toolHomeFor = () => null, toolVersionOf = () => null,
   enhancedJvmArgs = () => null, userData = file && path.dirname(file), prepareReload = prepareHotReload, startReload = startHotReload,
   sendState = () => {}, notifyCrash = () => {}, sendAsUser, now = Date.now, projectOf = resolveProject,
-  prepareTask = prepareDevelopmentTask }) {
+  prepareTask = prepareDevelopmentTask, jarHome }) {
   store ??= createRunPresetStore(file)
+  const workspaceAccess = createWorkspaceAccess(userData && path.join(userData, 'run-workspace-folders.json'))
+  const javaVersion = javaVersionProbe()
   const runs = new Map()
   const byShell = new Map()
   const batches = new Map()
@@ -164,7 +170,10 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       run.expectedUrl = undefined
       byShell.set(shellId, run)
       run.logs = createDevelopmentErrors(now, { tomcat: task.tomcat === true })
+      run.jarDiagnosis?.search?.controller.abort(new Error(STALE_JAR))
       run.diagnosis = diagnosisContext(preset)
+      run.jarDiagnosis = { invocation: tomcatInvocation(preset), major: task.tomcatMajor }
+      run.jarOffered = undefined
       update(run, { status: event.phase === 'prepare' ? 'preparing' : 'starting', startedAt: now(), shellId,
         exitCode: null, failedAt: undefined, address: undefined, readyAt: undefined, reload: undefined, errors: 0 })
       return
@@ -175,6 +184,10 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       update(run, { status: 'starting', errors: run.logs.state().errors })
     } else if (type === 'launched' && ACTIVE.has(run.state.status)) {
       run.expectedUrl = task.expectedUrl
+      for (const driver of task.missingJdbcDrivers ?? []) {
+        run.logs.addError('ERROR Tomcat JNDI JDBC 드라이버를 찾을 수 없습니다.', [`java.lang.ClassNotFoundException: ${driver}`])
+      }
+      if (task.missingJdbcDrivers?.length) updateLogs(run)
       if (task.hotReload) {
         run.reloadLaunch = { config: task.hotReload, pid: event.pid, env: event.env }
         openReload(run)
@@ -226,7 +239,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       if (!approve(question)) throw question
     }
     return { ...defined, id: `preset:${preset.id}`, relative: preset.relative, name: preset.name, label: preset.name,
-      javaHome, env: preset.env, enhancedArgs }
+      javaHome, env: preset.env, enhancedArgs, logEncoding: preset.logEncoding }
   }
 
   function guardAgent(preset, run, action) {
@@ -249,6 +262,15 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
 
   async function buildTomcatTask(task, project, preset, withEvents) {
     const { tomcatPlan, ...base } = task
+    base.tomcatMajor = tomcatPlan.major
+    const extraLibraries = async () => {
+      if (preset.extraLibs?.length && !(tomcatPlan.major >= 7)) throw new Error('JAR 연결에는 버전을 확인할 수 있는 Tomcat 7 이상이 필요합니다.')
+      return Promise.all((preset.extraLibs ?? []).map(async reference => {
+        const jar = await allowedJar({ projectRoot: project.worktree, home: jarHome, reference })
+        if (!jar || jar.reference !== reference) throw new Error('연결한 JAR를 찾을 수 없습니다. 실행 구성이나 JAR 경로를 확인해 주세요.')
+        return jar
+      }))
+    }
     const check = async signal => {
       signal?.throwIfAborted()
       if (await directoryInProject(project.worktree, preset.relative) !== base.cwd || find(project, preset.id) !== preset) throw new Error(MOVED)
@@ -256,7 +278,11 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     }
     const finish = async (signal, eclipseBuild) => {
       await check(signal)
-      const runtime = await stageTomcat(tomcatPlan, { preset, task: base, worktree: project.worktree, userData, prepareReload: prepareTomcatReload, eclipseBuild })
+      const contextEntries = preset.contextXml ? await workspaceAccess.contextEntries(project, preset.contextXml) : undefined
+      const javaFeature = tomcatPlan.effectiveEncoding === 'auto' ? undefined : await javaVersion(base.javaHome, base.env, base.cwd)
+      await check(signal)
+      const runtime = await stageTomcat(tomcatPlan, { preset, task: base, worktree: project.worktree, userData,
+        prepareReload: prepareTomcatReload, eclipseBuild, contextEntries, javaFeature, extraLibraries: await extraLibraries(), signal })
       try { await check(signal); return runtime }
       catch (error) { await runtime.cleanup(); throw error }
     }
@@ -267,7 +293,8 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
         const webapp = await webDirectory(project.worktree, preset.webapp)
         const eclipse = await loadEclipseProject(project.worktree, base.cwd)
         const webLibs = await tomcatJars(webapp, path.join('WEB-INF', 'lib'))
-        const libs = [...new Set([...eclipse.libs, ...webLibs, ...await tomcatJars(tomcatPlan.home, 'lib')])]
+        const approved = (await extraLibraries()).map(jar => jar.path)
+        const libs = [...new Set([...eclipse.libs, ...webLibs, ...approved, ...await tomcatJars(tomcatPlan.home, 'lib')])]
         const extraJars = eclipse.libs.filter(jar => !webLibs.includes(jar))
         const built = await buildEclipse({ eclipse, libs, webLibs, externalJars: tomcatPlan.major >= 8 ? extraJars : [], userData, id: preset.id, worktreeKey: project.worktreeKey,
           worktree: project.worktree, cwd: base.cwd, env, signal, log })
@@ -311,10 +338,12 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
             const { args, cleanup } = prepareMavenSettings(preset, { userData, mavenVersion: wrapperMavenVersion(task) })
             task = { ...task, command: appendMavenSettings(task.command, args), cleanup }
           }
+          const javaTask = preset.kind === 'task' && /:(?:maven|gradle)$/.test(preset.taskId)
+          const logOptions = javaTask && preset.logEncoding !== 'auto' ? javaLogOptions(preset.logEncoding, await javaVersion(task.javaHome, task.env, task.cwd)) : []
           if (preset.hotReload && preset.hotReload !== 'off') {
             const { enhancedArgs, ...base } = task
-            task = await prepareReload(base, { worktree: project.worktree, kind: preset.taskId, mode: preset.hotReload, args: enhancedArgs, userData })
-          }
+            task = await prepareReload(base, { worktree: project.worktree, kind: preset.taskId, mode: preset.hotReload, args: enhancedArgs, logOptions, userData })
+          } else if (logOptions.length) task = await javaRunWithOptions(task, { kind: preset.taskId, args: logOptions, userData })
         }
         if (verifyActor) await verifyActor()
         ensureAllowed(canAct)
@@ -428,9 +457,12 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
         throw new Error('로그는 최대 400줄까지 볼 수 있습니다.')
       }
       const history = run.reloadResults.slice(0, count).map(entry => reloadLog(entry.reload))
-      if (request.errors) return { ...(history.length && { reload: history }),
-        groups: recentErrorGroups(run.logs, MAX_LOG_LINES - history.length),
-        suggestions: presetSuggestions(preset, run).map(({ id: _id, apply: _apply, ...item }) => item) }
+      if (request.errors) {
+        const candidates = await jarCandidates(project, preset, run)
+        await verifyActor()
+        return { ...(history.length && { reload: history }), groups: recentErrorGroups(run.logs, MAX_LOG_LINES - history.length),
+          suggestions: presetSuggestions(preset, run).map(item => mcpJarSuggestion(item, candidates)) }
+      }
       return { lines: [...history, ...(count > history.length ? run.logs.lines(count - history.length) : [])] }
     }
     if (!['start', 'restart', 'stop'].includes(operation)) throw new Error('지원하지 않는 조작입니다.')
@@ -534,9 +566,11 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       if (!tasks.some(task => task.id === next.taskId)) throw new Error('선택한 폴더의 실행 후보를 다시 선택해 주세요.')
     }
     if (next.kind === 'tomcat' && !next.prepare) await webDirectory(project.worktree, next.webapp)
+    if (next.contextXml) next.contextXml = (await workspaceAccess.contextFile(project, next.contextXml)).reference
     ensureAllowed(allowed)
     const current = store.list(project.key)
     const previous = input?.id === undefined ? null : find(project, id)
+    if (next.extraLibs?.some(reference => !previous?.extraLibs?.includes(reference))) throw new Error(STALE_JAR)
     if (current.some(item => item.name === next.name && item.id !== id)) throw new Error('같은 이름의 실행 구성이 있습니다.')
     Object.assign(next, mavenFields({ ...next, mavenMirrors: previous?.mavenMirrors, mavenUserSettings: previous?.mavenUserSettings }))
     const approval = presetApproval(next)
@@ -546,12 +580,49 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     return { preset: publicPreset(next) }
   }
 
-  function applySuggestion(project, id, request, allowed) {
+  async function jarCandidates(project, preset, run) {
+    const diagnosis = run?.jarDiagnosis
+    const suggestions = presetSuggestions(preset, run)
+    if (!diagnosis || !suggestions.some(item => item.kind === 'missingClass')) return new Map()
+    const key = suggestions.filter(item => item.kind === 'missingClass').map(item => item.id).join(':')
+    let search = diagnosis.search
+    if (search?.key !== key || search.expires <= now()) {
+      if (search?.key !== key) search?.controller.abort(new Error(STALE_JAR))
+      const controller = new AbortController()
+      search = { key, controller, expires: Infinity }
+      diagnosis.search = search
+      search.result = findJarCandidates(suggestions, project.worktree, jarHome, controller.signal).finally(() => { search.expires = now() + 15_000 })
+    }
+    return search.result
+  }
+
+  async function diagnosis(project, id, allowed) {
+    const preset = find(project, id)
+    const run = getRun(project, id)
+    const currentDiagnosis = run?.jarDiagnosis
+    const candidates = await jarCandidates(project, preset, run)
+    ensureAllowed(allowed)
+    if (getRun(project, id) !== run || run?.jarDiagnosis !== currentDiagnosis || find(project, id) !== preset) throw new Error(MOVED)
+    if (run) run.jarOffered = candidates
+    return { ok: true, suggestions: presetSuggestions(preset, run).map(item => jarSuggestion(item, candidates, preset, run)) }
+  }
+
+  async function applySuggestion(project, id, request, allowed) {
     ensureAllowed(allowed)
     const preset = find(project, id)
     const run = getRun(project, id)
     if (run?.busy) throw new Error('이 실행 구성을 전환하는 중입니다.')
-    const fields = suggestedMavenFields(preset, run, request)
+    let fields
+    if (request?.jarId !== undefined) {
+      const generation = run?.jarDiagnosis
+      const offered = run?.jarOffered
+      const extraLibs = await selectedJarReferences({ preset, run, suggestions: presetSuggestions(preset, run), request,
+        projectRoot: project.worktree, home: jarHome })
+      ensureAllowed(allowed)
+      if (getRun(project, id) !== run || run.jarDiagnosis !== generation || run.jarOffered !== offered || run.busy || find(project, id) !== preset
+        || !presetSuggestions(preset, run).some(item => item.id === request.id)) throw new Error(STALE_JAR)
+      fields = { extraLibs }
+    } else fields = suggestedMavenFields(preset, run, request)
     const { confirmedHash: _confirmedHash, ...next } = { ...preset, ...fields }
     store.write(project.root, store.list(project.key).map(item => item.id === id ? next : item))
     return { ok: true, preset: publicPreset(next) }
@@ -596,6 +667,22 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     },
     async antTargets(project, relative) { return { ok: true, targets: await antTargets(await directoryInProject(project.worktree, relative)) } },
     async webapps(project) { return { ok: true, folders: await webappCandidates(project.worktree) } },
+    async workspaceServers(project, folder, allowed) {
+      ensureAllowed(allowed)
+      const root = await workspaceAccess.selectedRoot(folder)
+      const result = await workspaceServers(root, { launchArguments: workspaceVmArguments, validContextPath })
+      ensureAllowed(allowed)
+      workspaceAccess.grant(project, root)
+      for (const server of result.servers) {
+        if (server.contextXml) server.contextXml = (await workspaceAccess.contextFile(project, server.contextXml)).reference
+      }
+      return { ok: true, workspace: path.basename(root) || '이클립스 워크스페이스', ...result }
+    },
+    async chooseContextXml(project, file, allowed) {
+      ensureAllowed(allowed)
+      const { reference } = await workspaceAccess.contextFile(project, file)
+      return { ok: true, contextXml: reference, label: path.basename(file) }
+    },
     async eclipseImport(project, relative) {
       const { draft, notes } = await loadEclipseProject(project.worktree, await directoryInProject(project.worktree, relative))
       if (!validContextPath(draft.contextPath)) {
@@ -611,7 +698,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       return { ok: true }
     },
     errors(project, id) { return { groups: getRun(project, find(project, id).id)?.logs.groups() ?? [] } },
-    diagnosis(project, id) { return { ok: true, suggestions: presetSuggestions(find(project, id), getRun(project, id)) } },
+    diagnosis,
     async changeFromShell(shellId, taskId, action, allowed) {
       const run = byShell.get(shellId)
       if (!run) return getShells().changeDevelopmentTask(shellId, taskId, action, allowed)
@@ -626,11 +713,14 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       }
     },
     resumeReloads() { for (const run of runs.values()) openReload(run) },
-    stopReloads() { for (const run of runs.values()) closeReload(run) }
+    stopReloads() {
+      for (const run of runs.values()) closeReload(run)
+      closeTomcatBases()
+    }
   }
 }
 
-function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked }) {
+function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, chooseWorkspaceFolder = async () => null, chooseContextFile = async () => null }) {
   // Accept only the command shown to this frame. Keep earlier install approvals for this batch retry.
   const confirms = new Map()
   // Keep the text displayed by the send dialog if the run changes while it is open.
@@ -653,6 +743,14 @@ function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked })
   handle('run-presets-candidates', (project, _allowed, _frame, relative) => controller.candidates(project, relative))
   handle('run-preset-ant-targets', (project, _allowed, _frame, relative) => controller.antTargets(project, relative))
   handle('run-preset-webapps', project => controller.webapps(project))
+  handle('run-preset-workspace-servers', async (project, allowed) => {
+    const folder = await chooseWorkspaceFolder(project.worktree)
+    return folder ? controller.workspaceServers(project, folder, allowed) : { ok: false, cancelled: true }
+  })
+  handle('run-preset-choose-context-xml', async (project, allowed) => {
+    const file = await chooseContextFile(project.worktree)
+    return file ? controller.chooseContextXml(project, file, allowed) : { ok: false, cancelled: true }
+  })
   handle('run-preset-eclipse-import', (project, _allowed, _frame, relative) => controller.eclipseImport(project, relative))
   handle('run-presets-save', (project, allowed, _frame, preset) => controller.save(project, preset, allowed))
   handle('run-presets-delete', (project, allowed, _frame, id) => controller.remove(project, id, allowed))
@@ -679,7 +777,7 @@ function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked })
     approve => controller.startAll(project, allowed, approve)))
   handle('run-preset-stop-all', (project, allowed) => controller.stopAll(project, allowed))
   handle('run-preset-errors', (project, _allowed, _frame, id) => controller.errors(project, id))
-  handle('run-preset-diagnosis', (project, _allowed, _frame, id) => controller.diagnosis(project, id))
+  handle('run-preset-diagnosis', (project, allowed, _frame, id) => controller.diagnosis(project, id, allowed))
   handle('run-preset-apply-suggestion', (project, allowed, _frame, id, request) => controller.applySuggestion(project, id, request, allowed))
   handle('run-preset-send-preview', (project, _allowed, frame, id) => {
     const text = controller.sendPreview(project, id)

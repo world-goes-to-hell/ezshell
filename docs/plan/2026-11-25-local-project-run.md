@@ -283,12 +283,20 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
 
 ### 2단계 셋째 묶음: 워크스페이스 서버 설정·JNDI·로그 인코딩·jar 찾기 (2026-11-26, PL 결정. 사용자 확인 전)
 - **워크스페이스 서버 설정 가져오기 (codex-5 main, claude-1 화면):** 구성 창에서 이클립스 워크스페이스 폴더를 한 번 고르면 `Servers/<서버 이름>-config/` 의 `server.xml`·`context.xml` 과 `.metadata/.plugins/org.eclipse.debug.core/.launches/*.launch` 의 VM 인자를 읽어 채운다. 고른 폴더 안의 그 파일들만 읽는다 (크기 상한, XML 안전 파싱).
+  - `run-preset-workspace-servers(worktreeFolder)`는 잠금 해제된 본창의 폴더 선택 창에서 새로 승인한 실제 폴더에 한해 서버 목록을 돌려준다. 워크스페이스 권한은 프로젝트별로 앱 사용자 데이터에 기록한다. 가져온 VM 인자에서 ezShell이 관리하는 Tomcat 경로와 자격 증명 속성은 건너뛴다.
 - **JNDI·컨텍스트 설정 파일 (codex-5):** Tomcat 구성에 `contextXml?: string`(프로젝트·워크스페이스 안의 기존 `context.xml` 경로)을 둔다. 실행할 때 그 파일의 `<Resource>`·`<Environment>`·`<Parameter>` 만 CATALINA_BASE 의 컨텍스트에 옮겨 넣는다.
   - 바꾸면 안 되는 것: DB 비밀번호 같은 값을 `run-presets.json` 에 저장하지 않는다 (그 파일은 평문). 원본 파일을 가리키고 실행 때 읽어 base 안에만 쓴다. base 폴더는 실행이 끝나면 지운다.
   - 파일 경로는 확인 해시에 넣는다. JDBC 드라이버 jar 가 Tomcat `lib` 에 없으면 진단이 알린다 (jar 찾기와 연결).
-- **로그 인코딩 (codex-5):** 구성마다 `logEncoding: 'auto' | 'utf-8' | 'ms949'`. auto 는 UTF-8 로 읽다가 잘못된 바이트가 이어지면 MS949 로 바꾼다. Tomcat·Java 실행에는 지정 인코딩에 맞춰 `-Dfile.encoding`·`-Dsun.stdout.encoding`(JDK 18+ 는 `stdout.encoding`)을 넣는다.
+  - `run-preset-choose-context-xml(worktreeFolder)`는 파일 선택 창을 열고 현재 워크트리 안의 파일이나 이 프로젝트에 대해 직접 고른 워크스페이스 안의 파일만 받는다. 워크트리 안의 경로는 워크트리 기준 상대 경로로 저장한다. 승인된 워크스페이스의 경로는 절대 경로로 저장하며, 실행 때 해당 폴더와 파일의 실제 경로를 다시 확인한다.
+- **로그 인코딩 (codex-5):** 구성마다 `logEncoding: 'auto' | 'utf-8' | 'ms949'`. Unix PTY의 자동 모드는 UTF-8로 읽다가 잘못된 바이트가 이어지면 MS949로 바꾼다. Windows ConPTY는 전용 콘솔의 코드 페이지로 해석한 문자열을 보낸다. Windows에서는 지정 모드에 맞춰 코드 페이지를 고르고 자동 모드에서 이미 해석된 문자열을 사용한다.
+  - 터미널·오류 판정·`run_log`는 같은 디코딩 결과를 쓴다. Java의 지정 모드는 표준 출력과 오류에 `sun.stdout.encoding`·`sun.stderr.encoding`을 지정한다. JDK 18 이상은 `stdout.encoding`·`stderr.encoding`을 쓴다. Tomcat은 실행별 복사본의 `ConsoleHandler.encoding`도 설정한다. JVM 기본 문자 집합을 지정하는 `-Dfile.encoding`은 사용자가 VM 인자로 설정할 때 적용한다.
 - **jar 찾기 (codex-4):** `ClassNotFoundException`·`NoClassDefFoundError` 진단에 그 클래스가 든 jar 후보(프로젝트 lib·`~/.m2`·Gradle 캐시)를 붙인다. 승인하면 Tomcat 구성의 `extraLibs`(프로젝트·`~/.m2`·Gradle 캐시 안의 jar 경로)에 더하고, 실행 때 `/WEB-INF/lib` 로 붙인다. 확인 해시에 넣는다.
-- **보관함 넓히기 (codex-4):** Gradle(공식 `.sha256`), Node LTS(`SHASUMS256.txt`) 받기와 찾기.
+  - main 이 실행 워크트리·`~/.m2/repository`·`~/.gradle/caches/modules-2/files-2.1` 안의 실제 파일과 최신 진단의 클래스를 확인하고, 선택한 후보 하나를 다음 실행에 쓴다. MCP 에는 좌표와 프로젝트 상대 경로만 보낸다.
+  - Tomcat 8 이상은 임시 실행 폴더의 JAR를 `/WEB-INF/lib` 에 파일별 PostResources 로 붙이고, Tomcat 7 은 VirtualWebappLoader 를 쓴다. 배포본 `conf/context.xml` 에 같은 컴포넌트가 있으면 임시 복사본에 마운트를 병합한다. 승인한 JNDI 드라이버는 Tomcat 배포본의 `lib` 에 없을 때 임시 `CATALINA_BASE/lib` 에도 복사한다.
+- **보관함 넓히기 (codex-4):** Gradle 최신 안정 버전과 Node.js 최신 LTS 받기, PC에 이미 설치된 도구 찾기.
+  - Gradle 은 `services.gradle.org/versions/current` 의 HTTPS 응답이 가리키는 버전별 `-bin.zip` 과 `.sha256` 주소를 공식 주소와 대조하고, 배포 파일의 SHA-256 을 대조한다. 체크섬의 `downloads.gradle.org` 리디렉션과 배포 파일의 `github.com`, `release-assets.githubusercontent.com` 리디렉션을 허용 목록으로 확인한다. Unix 에서는 ZIP을 푼 뒤 `bin/gradle` 에 실행 권한을 준다.
+  - Node.js 는 `nodejs.org` 의 `index.json` 에서 최신 LTS를 고르고 같은 호스트의 `SHASUMS256.txt` 에서 플랫폼별 파일 이름과 SHA-256 을 확인한다. 배포 파일도 같은 호스트에서 받는다. 두 공급자의 체크섬은 전송 손상과 파일 혼동을 검출한다. 공급자가 게시한 HTTPS 응답을 신뢰하며, 별도의 GPG 배포 서명 검증은 범위 밖이다.
+  - 새 다운로드 허용 호스트는 `services.gradle.org`, `downloads.gradle.org`, `nodejs.org` 세 곳이다. 모든 리디렉션의 HTTPS와 호스트를 확인한다.
 
 ## 3단계: 바로 반영 (JRebel 처럼 재기동 없이 Java 수정 적용)
 - **목표:** Java 파일을 저장하면(사용자든 에이전트든) 몇 초 안에 실행 중인 서버에 반영한다. 안 되는 변경이면 "재기동이 필요합니다" 와 재기동 버튼을 띄운다.

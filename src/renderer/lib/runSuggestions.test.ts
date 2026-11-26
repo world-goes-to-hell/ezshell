@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cleanSuggestions, replacementUrl, suggestionTitle, USER_SETTINGS_WARNING, type RunSuggestion } from './runSuggestions'
+import { cleanSuggestions, jarSource, replacementUrl, suggestionTitle, USER_SETTINGS_WARNING, type RunSuggestion } from './runSuggestions'
 
 const item = (over: Partial<RunSuggestion>): RunSuggestion => ({ id: 's1', kind: 'missingClass', message: '…', ...over })
 
@@ -43,5 +43,21 @@ describe('run suggestions', () => {
 
   it('names what -s leaves out before it is approved', () => {
     for (const word of ['servers', 'proxies', 'mirrors', 'localRepository', '-s']) expect(USER_SETTINGS_WARNING).toContain(word)
+  })
+
+  it('offers the jars that hold a missing class, and nothing to approve without one', () => {
+    const [withJars, without] = cleanSuggestions([
+      { id: 'j', kind: 'missingClass', className: 'oracle.jdbc.OracleDriver', message: 'm', apply: 'tomcatJar',
+        jars: [{ id: 'j1', path: '~/.m2/repository/com/oracle/ojdbc6.jar', coordinate: 'com.oracle:ojdbc6:11.2', source: 'maven' }, { id: 'j2', path: '' }, { path: 'lib/no-id.jar' }, null] },
+      { id: 'k', kind: 'missingClass', message: 'm', apply: 'tomcatJar', jars: [] }
+    ])
+    expect(withJars).toMatchObject({ apply: 'tomcatJar', jars: [{ id: 'j1', path: '~/.m2/repository/com/oracle/ojdbc6.jar' }] })
+    expect(withJars.jars).toHaveLength(1)
+    expect(without.apply).toBeUndefined()
+    // Shown only (another kind of run): the jars stay, with nothing to approve
+    const [shown] = cleanSuggestions([{ id: 'r', kind: 'missingClass', message: 'm', jars: [{ id: 'x', path: 'lib/x.jar' }], jarSearchIncomplete: true }])
+    expect(shown).toMatchObject({ apply: undefined, jars: [{ id: 'x' }], jarSearchIncomplete: true })
+    expect(jarSource('maven')).toBe('Maven 저장소 (~/.m2)')
+    expect(jarSource('elsewhere')).toBe('')
   })
 })

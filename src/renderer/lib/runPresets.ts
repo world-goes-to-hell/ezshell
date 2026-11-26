@@ -2,7 +2,7 @@
 // the types of the IPC contract and the words and buttons a preset row shows. Kept free of React so the
 // rules are tested on their own.
 
-import type { EclipseImportDraft, HotReload, HotswapAgentStatus, JdkRuntime, RunAction, RunErrorGroup, RunPrepare, RunPreset, RunState } from '../types'
+import type { EclipseImportDraft, HotReload, HotswapAgentStatus, JdkRuntime, LogEncoding, RunAction, RunErrorGroup, RunPrepare, RunPreset, RunState, WorkspaceServer } from '../types'
 export type { HotReload, RunAction, RunCandidate, RunErrorGroup, RunPrepare, RunPreset, RunReload, RunState, RunStatus } from '../types'
 
 export const IDLE_STATE: RunState = { status: 'idle', errors: 0 }
@@ -134,10 +134,11 @@ export function firstErrorRow(rows: ReadonlyArray<{ text: string; wrapped: boole
 const TOOL_TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/
 const CONTEXT_PATH = /^\/[\p{L}\p{N}_-][\p{L}\p{N}._-]{0,63}$/u
 
-type TomcatFields = Pick<RunPreset, 'tomcat' | 'webapp' | 'contextPath' | 'port' | 'vmArgs' | 'prepare'>
+type TomcatFields = Pick<RunPreset, 'tomcat' | 'webapp' | 'contextPath' | 'port' | 'vmArgs' | 'prepare' | 'contextXml' | 'extraLibs'>
 
 /** The Tomcat fields to save, or the first problem (the same rules main checks; the VM arguments' quoting is main's) */
-export function tomcatFromDraft(draft: Pick<PresetDraft, 'tomcat' | 'webapp' | 'contextPath' | 'portText' | 'vmArgs' | 'prepareTool' | 'antTarget' | 'mavenGoals'>): TomcatFields | { error: string } {
+export function tomcatFromDraft(draft: Pick<PresetDraft, 'tomcat' | 'webapp' | 'contextPath' | 'portText' | 'vmArgs' | 'prepareTool' | 'antTarget' | 'mavenGoals'>
+  & Partial<Pick<PresetDraft, 'contextXml' | 'extraLibs'>>): TomcatFields | { error: string } {
   if (!draft.tomcat) return { error: 'Tomcat 을 골라 주세요.' }
   const webapp = draft.webapp.trim().replace(/\\/g, '/').replace(/^\.\/?/, '').replace(/\/+$/, '')
   if (!webapp) return { error: '웹 폴더(WEB-INF 가 든 폴더)를 골라 주세요.' }
@@ -158,7 +159,12 @@ export function tomcatFromDraft(draft: Pick<PresetDraft, 'tomcat' | 'webapp' | '
     if (!goals.length || goals.length > 12 || !goals.every(goal => TOOL_TOKEN.test(goal))) return { error: 'Maven 목표를 확인해 주세요 (예: clean package).' }
     prepare = { tool: 'maven', goals: goals.join(' ') }
   }
-  return { tomcat: draft.tomcat, webapp, contextPath, port, vmArgs, ...(prepare ? { prepare } : {}) }
+  return {
+    tomcat: draft.tomcat, webapp, contextPath, port, vmArgs, ...(prepare ? { prepare } : {}),
+    // Only when set: a preset without them stays as it was saved
+    ...(draft.contextXml ? { contextXml: draft.contextXml } : {}),
+    ...(draft.extraLibs?.length ? { extraLibs: draft.extraLibs } : {})
+  }
 }
 
 export const MAX_NAME = 20
@@ -190,12 +196,19 @@ export interface PresetDraft {
   prepareTool: 'none' | RunPrepare['tool']
   antTarget: string
   mavenGoals: string
+  /** The context.xml main reads at each run ('' for none); the label is shown when the dialog picked it */
+  contextXml: string
+  contextXmlLabel?: string
+  /** Approved jars; the dialog only takes them away */
+  extraLibs: string[]
+  /** Every kind */
+  logEncoding: LogEncoding
 }
 
-const TOMCAT_DEFAULTS = { tomcat: '', webapp: '', contextPath: '/', portText: '8080', vmArgs: '', prepareTool: 'none' as const, antTarget: '', mavenGoals: '' }
+const TOMCAT_DEFAULTS = { tomcat: '', webapp: '', contextPath: '/', portText: '8080', vmArgs: '', prepareTool: 'none' as const, antTarget: '', mavenGoals: '', contextXml: '', extraLibs: [] as string[] }
 
 export function emptyDraft(): PresetDraft {
-  return { name: '', relative: '', kind: 'task', command: '', jdk: 'system', envText: '', notify: true, agentControl: true, inAll: true, waitReady: false, hotReload: 'off', ...TOMCAT_DEFAULTS }
+  return { name: '', relative: '', kind: 'task', command: '', jdk: 'system', envText: '', notify: true, agentControl: true, inAll: true, waitReady: false, hotReload: 'off', logEncoding: 'auto', ...TOMCAT_DEFAULTS }
 }
 
 export function draftOf(preset: RunPreset): PresetDraft {
@@ -205,12 +218,14 @@ export function draftOf(preset: RunPreset): PresetDraft {
     envText: Object.entries(preset.env ?? {}).map(([key, value]) => `${key}=${value}`).join('\n'),
     notify: preset.notify, agentControl: preset.agentControl, inAll: preset.inAll, waitReady: preset.waitReady,
     hotReload: preset.hotReload ?? 'off',
+    logEncoding: preset.logEncoding ?? 'auto',
     ...TOMCAT_DEFAULTS,
     ...(preset.kind === 'tomcat' ? {
       tomcat: preset.tomcat ?? '', webapp: preset.webapp ?? '', contextPath: preset.contextPath || '/',
       portText: String(preset.port ?? 8080), vmArgs: preset.vmArgs ?? '', prepareTool: preset.prepare?.tool ?? 'none',
       antTarget: preset.prepare?.tool === 'ant' ? preset.prepare.target : '',
-      mavenGoals: preset.prepare?.tool === 'maven' ? preset.prepare.goals : ''
+      mavenGoals: preset.prepare?.tool === 'maven' ? preset.prepare.goals : '',
+      contextXml: preset.contextXml ?? '', extraLibs: Array.isArray(preset.extraLibs) ? [...preset.extraLibs] : []
     } : {})
   }
 }
@@ -260,6 +275,8 @@ export function presetFromDraft(draft: PresetDraft): { preset: Omit<RunPreset, '
       inAll: draft.inAll,
       waitReady: draft.waitReady,
       hotReload: draft.hotReload,
+      // auto is main's default: left out so a preset saved before keeps its shape
+      ...(draft.logEncoding && draft.logEncoding !== 'auto' ? { logEncoding: draft.logEncoding } : {}),
       ...(tomcat ?? {})
     }
   }
@@ -325,6 +342,31 @@ export function runError(result: unknown): string | null {
   if (typeof value.error === 'string' && value.error) return value.error
   if (value.success === false) return '요청을 처리하지 못했습니다.'
   return null
+}
+
+// --- Eclipse workspace servers, context.xml, log encoding (stage 2, third batch) ---
+
+export const LOG_ENCODINGS: Array<{ value: LogEncoding; label: string }> = [
+  { value: 'auto', label: '자동 (UTF-8, 깨지면 MS949)' },
+  { value: 'utf-8', label: 'UTF-8' },
+  { value: 'ms949', label: 'MS949 (EUC-KR)' }
+]
+
+/** The fields a server of an Eclipse workspace fills (the user saves them) */
+export function workspaceServerFill(server: WorkspaceServer): Partial<PresetDraft> {
+  const patch: Partial<PresetDraft> = {}
+  if (typeof server.vmArgs === 'string' && server.vmArgs.trim()) patch.vmArgs = server.vmArgs.replace(/[\r\n]+/g, ' ').trim()
+  if (Number.isInteger(server.port) && server.port! > 0 && server.port! <= 65535) patch.portText = String(server.port)
+  const context = server.contextPath?.trim()
+  if (context) patch.contextPath = context.startsWith('/') ? context : `/${context}`
+  if (server.contextXml) { patch.contextXml = server.contextXml; patch.contextXmlLabel = `${server.name} 서버의 context.xml` }
+  return patch
+}
+
+/** A long path in a line: its last two parts (the whole path in the tooltip) */
+export function shortPath(value: string): string {
+  const parts = value.replace(/\\/g, '/').split('/').filter(Boolean)
+  return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : parts.join('/') || value
 }
 
 // --- Eclipse project import (stage 2, second batch) ---

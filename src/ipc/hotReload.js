@@ -101,24 +101,30 @@ function portFilter(port) {
   }
 }
 
-async function prepareHotReload(task, { worktree, kind = task.id, mode, args = [], userData, platform = process.platform, reserve = freePort }) {
-  const build = await inspectJavaBuild(task.cwd)
-  if (build.devtools) return { ...task, hotReload: { devtools: true, worktree, cwd: task.cwd } }
-  const port = await reserve()
-  const jvmArgs = [jdwpOption(port), ...args]
-  const setting = { port, worktree, cwd: task.cwd, mode }
+async function javaRunWithOptions(task, { kind = task.id, args = [], jdwp, userData, platform = process.platform }) {
+  if (!args.length && !jdwp) return task
+  const jvmArgs = jdwp ? [jdwp, ...args] : args
   if (kind.endsWith(':maven')) {
     // Windows batch launchers parse nested quotes twice. Have Maven expand the enhanced
     // options after the batch invocation. The private JDWP argument stays out of the environment.
     const windowsOptions = platform === 'win32' && args.length > 0
-    const value = windowsOptions ? `${jvmArgs[0]} \${env.${MAVEN_ARGS}}` : mavenOptions(jvmArgs)
+    const value = windowsOptions ? `${jdwp ? `${jdwp} ` : ''}\${env.${MAVEN_ARGS}}` : mavenOptions(jvmArgs)
     const property = shellArgument(`-Dspring-boot.run.jvmArguments=${value}`, platform)
-    return { ...task, command: `${task.command} ${property}`, ...(windowsOptions && { env: { ...task.env, [MAVEN_ARGS]: mavenOptions(args) } }),
-      hotReload: setting, filterOutput: portFilter(port) }
+    return { ...task, command: `${task.command} ${property}`, ...(windowsOptions && { env: { ...task.env, [MAVEN_ARGS]: mavenOptions(args) } }) }
   }
   const init = await gradleInitFile(userData)
-  return { ...task, command: `${task.command} -I ${shellArgument(init, platform)}`, env: { ...task.env, [HOT_ARGS]: JSON.stringify(jvmArgs) },
-    hotReload: setting, filterOutput: portFilter(port) }
+  return { ...task, command: `${task.command} -I ${shellArgument(init, platform)}`, env: { ...task.env, [HOT_ARGS]: JSON.stringify(jvmArgs) } }
+}
+
+async function prepareHotReload(task, { worktree, kind = task.id, mode, args = [], logOptions = [], userData, platform = process.platform, reserve = freePort }) {
+  const build = await inspectJavaBuild(task.cwd)
+  if (build.devtools) {
+    const launch = await javaRunWithOptions(task, { kind, args: logOptions, userData, platform })
+    return { ...launch, hotReload: { devtools: true, worktree, cwd: task.cwd } }
+  }
+  const port = await reserve()
+  const launch = await javaRunWithOptions(task, { kind, args: [...logOptions, ...args], jdwp: jdwpOption(port), userData, platform })
+  return { ...launch, hotReload: { port, worktree, cwd: task.cwd, mode }, filterOutput: portFilter(port) }
 }
 
 function signatureName(signature) {
@@ -317,4 +323,4 @@ function watchJavaChanges(config, { pid, env, running, onState, watchSource = wa
   return { close }
 }
 
-module.exports = { prepareHotReload, prepareTomcatReload, startHotReload, portFilter, reloadLog, RESULTS, HOT_ARGS, MAVEN_ARGS, INIT_GRADLE }
+module.exports = { prepareHotReload, prepareTomcatReload, javaRunWithOptions, startHotReload, portFilter, reloadLog, RESULTS, HOT_ARGS, MAVEN_ARGS, INIT_GRADLE }

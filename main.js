@@ -943,7 +943,18 @@ const runPresets = createRunPresets({
     }
   }
 });
-const runPresetIpc = registerRunPresetIpc({ ipcMain, controller: runPresets, fromMainWindow, isLocked: () => isAppLocked });
+const runPresetIpc = registerRunPresetIpc({
+  ipcMain, controller: runPresets, fromMainWindow, isLocked: () => isAppLocked,
+  chooseWorkspaceFolder: async defaultPath => {
+    const result = await dialog.showOpenDialog(mainWindow, { title: '이클립스 워크스페이스 선택', defaultPath, properties: ['openDirectory'] });
+    return result.canceled ? null : result.filePaths[0];
+  },
+  chooseContextFile: async defaultPath => {
+    const result = await dialog.showOpenDialog(mainWindow, { title: 'Tomcat 컨텍스트 XML 선택', defaultPath,
+      properties: ['openFile'], filters: [{ name: 'XML', extensions: ['xml'] }] });
+    return result.canceled ? null : result.filePaths[0];
+  }
+});
 app.on('will-quit', () => runPresets.stopReloads());
 const localProjectIpc = require('./src/ipc/localProjects.js').registerLocalProjectIpc({
   ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit,

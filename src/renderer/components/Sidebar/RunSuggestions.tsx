@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiAlertLine, RiStethoscopeLine } from 'react-icons/ri'
 import {
-  APPLIED_NOTE, cleanSuggestions, replacementUrl, suggestionTitle, USER_SETTINGS_WARNING, type RunSuggestion
+  APPLIED_NOTE, cleanSuggestions, jarSource, replacementUrl, suggestionTitle, USER_SETTINGS_WARNING, type RunSuggestion
 } from '../../lib/runSuggestions'
 import { reloadProjectPresets } from '../../stores/runPresetStore'
 import { toast } from '../../stores/toastStore'
@@ -35,12 +35,12 @@ export function RunSuggestionsDialog({ folder, presetId, presetName, onClose }: 
     return () => { active = false }
   }, [folder, presetId])
 
-  const apply = async (item: RunSuggestion, url?: string) => {
+  const apply = async (item: RunSuggestion, url?: string, jarId?: string) => {
     const send = window.electronAPI.runPresetApplySuggestion
     if (!send || busy) return
     setBusy(true)
     try {
-      const result = await send(folder, presetId, { id: item.id, ...(url ? { replacementUrl: url } : {}) })
+      const result = await send(folder, presetId, { id: item.id, ...(url ? { replacementUrl: url } : {}), ...(jarId ? { jarId } : {}) })
       if (result?.ok === false) {
         toast.error('제안을 적용하지 못했습니다', result.error)
         return
@@ -79,8 +79,10 @@ export function RunSuggestionsDialog({ folder, presetId, presetName, onClose }: 
   )
 }
 
-function SuggestionItem({ item, busy, onApply }: { item: RunSuggestion; busy: boolean; onApply: (item: RunSuggestion, url?: string) => void }) {
+function SuggestionItem({ item, busy, onApply }: { item: RunSuggestion; busy: boolean; onApply: (item: RunSuggestion, url?: string, jarId?: string) => void }) {
   const [url, setUrl] = useState('')
+  // tomcatJar: the only candidate when there is one, otherwise the user picks
+  const [jar, setJar] = useState<string | null>(item.jars?.length === 1 ? item.jars[0].id : null)
   const [understood, setUnderstood] = useState(false)
   const checked = url ? replacementUrl(url) : null
   return (
@@ -98,6 +100,52 @@ function SuggestionItem({ item, busy, onApply }: { item: RunSuggestion; busy: bo
             onClick={() => { if (checked && 'url' in checked) onApply(item, checked.url) }}>이 주소로 대체</button>
         </div>
       )}
+      {/* The jars that hold the missing class: to pick and add for a Tomcat preset (tomcatJar), otherwise only
+          shown (another kind of run, Tomcat 6); a search cut short is said even when nothing was found */}
+      {item.jars && (item.jars.length > 0 || item.jarSearchIncomplete) && (() => {
+        const choose = item.apply === 'tomcatJar'
+        const jars = item.jars
+        return (
+          <div className="run-suggestion-apply" {...(choose ? { role: 'radiogroup', 'aria-label': '추가할 jar' } : {})}>
+            {jars.length > 0 && (
+              <span className="run-suggestion-label">
+                {choose && jars.length > 1 ? `이 클래스가 든 jar ${jars.length}개 — 하나를 고르세요` : `이 클래스가 든 jar${jars.length > 1 ? ` ${jars.length}개` : ''}`}
+              </span>
+            )}
+            {jars.map(candidate => {
+              const text = (
+                <span className="run-suggestion-jar-text">
+                  <code title={candidate.path}>{candidate.path}</code>
+                  {(candidate.coordinate || candidate.source) && (
+                    <small>{[candidate.coordinate, jarSource(candidate.source)].filter(Boolean).join(' · ')}</small>
+                  )}
+                </span>
+              )
+              return choose ? (
+                <label key={candidate.id} className="run-suggestion-jar" data-on={jar === candidate.id || undefined}>
+                  <input type="radio" name={`run-suggestion-jar-${item.id}`} checked={jar === candidate.id} onChange={() => setJar(candidate.id)} />
+                  {text}
+                </label>
+              ) : (
+                <div key={candidate.id} className="run-suggestion-jar" data-readonly>{text}</div>
+              )
+            })}
+            {item.jarSearchIncomplete && (
+              <small className="run-preset-warn">
+                {jars.length ? '찾을 곳이 많아 일부는 끝까지 찾지 못했습니다.' : '찾을 곳이 많아 끝까지 찾지 못했고, 찾은 jar 가 없습니다.'} 원하는 jar 가 없으면 프로젝트 lib 폴더에 넣고 다시 진단해 주세요.
+              </small>
+            )}
+            {choose ? (<>
+              <small className="run-preset-hint">이 구성의 추가 lib 에 더해 실행할 때 /WEB-INF/lib 로 붙입니다. 프로젝트 파일은 바꾸지 않습니다.</small>
+              <button type="button" className="btn-primary modal-btn" disabled={busy || !jar} onClick={() => { if (jar) onApply(item, undefined, jar) }}>
+                추가 lib 으로 더하기
+              </button>
+            </>) : jars.length > 0 && (
+              <small className="run-preset-hint">이 실행에는 앱이 붙일 수 없습니다. 이 jar 를 프로젝트의 lib 이나 의존성에 넣어 주세요.</small>
+            )}
+          </div>
+        )
+      })()}
       {item.apply === 'mavenUserSettings' && (
         <div className="run-suggestion-apply">
           <div className="run-suggestion-warning" role="note">

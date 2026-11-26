@@ -13,6 +13,7 @@ const { POWERSHELL_CODEX_HOOK_ARGS, injectCodexHooks, quoteCodexHookArgs, codexP
 const { processCommandLine, processList, resumeCommand, words } = require('./agentIdle.js');
 const { antigravityBrainRoot, openAntigravityTranscript } = require('./agentChat/antigravitySessions.js');
 const { developmentAddress, stopDevelopmentProcess: stopDeveloperTree, waitDevelopmentPort: waitDeveloperPort } = require('./ipc/developmentProcess.js');
+const { createLogDecoder, windowsConsoleEncoding } = require('./ipc/developmentEncoding.js');
 
 /** Output kept per shell so a tab that is drawn again (pane split, tab moved) continues from it */
 const BACKLOG_CHARS = 256 * 1024;
@@ -337,7 +338,8 @@ function developmentShellArgs(shell, task, platform) {
     return [...shell.args, '-c', [task.installCommand, command].filter(Boolean).join(' && ')];
   }
   const commands = [task.installCommand, task.command].filter(Boolean);
-  const script = commands.map(command => `${command}\nif (!$?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }`).join('\n');
+  const encoding = !task.tomcat && windowsConsoleEncoding(task.logEncoding);
+  const script = [encoding, ...commands.map(command => `${command}\nif (!$?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }`)].filter(Boolean).join('\n');
   return [...shell.args, '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
 }
 
@@ -1250,14 +1252,17 @@ function createLocalShells({
 
     function launchProcess(currentTask, phase) {
       const taskEnv = developmentEnvironment(env, currentTask, platform);
+      const decoder = createLogDecoder(currentTask.logEncoding);
       const pty = spawn(shell.file, developmentShellArgs(shell, currentTask, platform), {
-        name: TERMINAL_TYPE, cols: entry.cols, rows: entry.rows, cwd: entry.launchDirectory, env: taskEnv
+        name: TERMINAL_TYPE, cols: entry.cols, rows: entry.rows, cwd: entry.launchDirectory, env: taskEnv,
+        ...(platform !== 'win32' && currentTask.logEncoding !== undefined && { encoding: null })
       });
       entry.pty = pty;
       let fragment = '';
       pty.onData(raw => {
         if (!active() || entry.pty !== pty) return;
-        const data = currentTask.filterOutput ? currentTask.filterOutput(raw) : raw;
+        const decoded = decoder.write(raw);
+        const data = currentTask.filterOutput ? currentTask.filterOutput(decoded) : decoded;
         forward(data, phase);
         if (phase !== 'server' || entry.development.url) return;
         const lines = (fragment + data).split(/[\r\n]+/);
@@ -1267,7 +1272,8 @@ function createLocalShells({
       });
       pty.onExit(({ exitCode }) => {
         if (!active() || entry.pty !== pty) return;
-        if (currentTask.filterOutput) forward(currentTask.filterOutput('', true), phase);
+        const remaining = decoder.finish();
+        forward(currentTask.filterOutput ? currentTask.filterOutput(remaining, true) : remaining, phase);
         if (phase === 'prepare' && exitCode === 0 && !stopAction() && shells.get(id) === entry) void startAfterPreparation();
         else finish(exitCode, phase);
       });
@@ -1281,7 +1287,7 @@ function createLocalShells({
 
     try {
       if (task.preparation?.run) void prepareInMain();
-      else if (task.preparation) launchProcess({ cwd: task.cwd, command: task.preparation.command, env: task.env, javaHome: task.javaHome }, 'prepare');
+      else if (task.preparation) launchProcess({ cwd: task.cwd, command: task.preparation.command, env: task.env, javaHome: task.javaHome, logEncoding: task.logEncoding }, 'prepare');
       else launchProcess(task, 'server');
     } catch (error) {
       finish(null, task.preparation ? 'prepare' : 'server', true);

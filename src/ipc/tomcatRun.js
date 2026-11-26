@@ -1,15 +1,19 @@
 const fs = require('node:fs/promises')
+const { lstatSync, realpathSync, rmSync } = require('node:fs')
 const path = require('node:path')
 const { parseXml } = require('../sessionImport/filezilla.js')
 const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { eclipseTestSource } = require('./eclipseProject.js')
+const { javaCharset, javaLogOptions, windowsConsoleEncoding } = require('./developmentEncoding.js')
 const { mavenVersionFromHome } = require('../runtimes/apacheToolHome.js')
+const { allowedJar, jarHasClass, jarClassName, copyCheckedJar } = require('../runtimes/jarSearch.js')
 
 const XML_LIMIT = 256 * 1024
 const TOOL_TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/
 const BASE_NAME = /^run-(?:(\d+)-)?[A-Za-z0-9]{6}$/
 const LEGACY_BASE_MAX_AGE = 24 * 60 * 60 * 1000
+const activeBases = new Map()
 const MODELS = ['maven', 'ant', 'eclipse']
 const BAD_ARGUMENTS = 'Tomcat VM 인자를 한 줄에 입력하고 공백이 있는 인자는 따옴표로 묶어 주세요.'
 const BAD_WEBAPP = '워크트리 안에서 WEB-INF가 있는 웹 폴더를 선택해 주세요.'
@@ -35,6 +39,20 @@ function vmOptionTokens(raw) {
   if (quote) throw new Error(BAD_ARGUMENTS)
   finish()
   return tokens
+}
+
+function workspaceVmArguments(raw) {
+  const setting = /^-D([^=]+)(?:=|$)/i
+  const managed = /^(?:catalina\.(?:home|base)|wtp\.deploy|java\.(?:io\.tmpdir|endorsed\.dirs|util\.logging\.config\.file))$/i
+  const confidential = /password|passwd|secret|credential|token|api[._-]?key|access[._-]?key|(?:^|[._-])pwd?(?:$|[._-])/i
+  let omittedCredentials = 0
+  const tokens = vmOptionTokens(raw.replace(/[\r\n]+/g, ' ')).filter(arg => {
+    const property = setting.exec(arg)?.[1] ?? ''
+    if (confidential.test(property)) { omittedCredentials++; return false }
+    return !managed.test(property) && !/^-agentlib:jdwp|^-Xrunjdwp/.test(arg)
+  })
+  catalinaOptions(tokens, process.platform)
+  return { vmArgs: tokens.map(arg => /\s/.test(arg) ? `"${arg}"` : arg).join(' '), omittedCredentials }
 }
 
 function validatePreparation(input) {
@@ -156,22 +174,28 @@ function writeElement(element, depth = 0) {
   return `${indent}<${element.name}${attrs}>${element.text ? xmlEscape(element.text) : ''}${body ? `\n${body}${indent}` : ''}</${element.name}>\n`
 }
 
-function eclipseResources(major, { output, extraJars, jarDirectory }) {
-  const entries = major === 7 ? [output, ...extraJars] : [output, ...(jarDirectory ? [jarDirectory] : [])]
+function webappResources(major, eclipseBuild, approved) {
+  const { output, extraJars = [], jarDirectory } = eclipseBuild ?? {}
+  const jars = approved?.paths ?? []
+  const entries = (major === 7 ? [output, ...extraJars, ...jars] : [output, jarDirectory, ...jars]).filter(Boolean)
   if (entries.some(file => file.includes('${') || /[\x00-\x1f]/.test(file) || (major === 7 && file.includes(';')))) {
-    throw new Error('Tomcat에 연결할 수 없는 문자가 이클립스 빌드 경로에 있습니다.')
+    throw new Error('Tomcat에 연결할 수 없는 문자가 클래스 또는 JAR 경로에 있습니다.')
   }
   if (major === 7) return node('Loader', { className: 'org.apache.catalina.loader.VirtualWebappLoader', virtualClasspath: entries.join(';'), searchVirtualFirst: 'true' })
-  if (!(major >= 8)) throw new Error('이클립스식 빌드를 실행하려면 버전을 확인할 수 있는 Tomcat 7 이상이 필요합니다.')
+  if (!(major >= 8)) throw new Error('클래스 또는 JAR를 연결하려면 버전을 확인할 수 있는 Tomcat 7 이상이 필요합니다.')
   const resources = node('Resources', {})
-  const mount = (base, webAppMount) => node('PreResources', { className: 'org.apache.catalina.webresources.DirResourceSet', base, webAppMount })
-  resources.children.push(mount(output, '/WEB-INF/classes'))
+  const mount = (name, base, webAppMount) => node(name, { className: 'org.apache.catalina.webresources.DirResourceSet', base, webAppMount })
+  if (output) resources.children.push(mount('PreResources', output, '/WEB-INF/classes'))
   // Expose external jars as entries of WEB-INF/lib so class loading and web-fragment scanning agree.
-  if (jarDirectory) resources.children.push(mount(jarDirectory, '/WEB-INF/lib'))
+  if (jarDirectory) resources.children.push(mount('PreResources', jarDirectory, '/WEB-INF/lib'))
+  // Mount each file so Tomcat registers it as a WEB-INF/lib JAR, including when the webapp lacks that directory.
+  for (const base of jars) resources.children.push(node('PostResources', {
+    className: 'org.apache.catalina.webresources.FileResourceSet', base, webAppMount: `/WEB-INF/lib/${path.basename(base)}`
+  }))
   return resources
 }
 
-function tomcatConfiguration(server, preset, webapp, eclipseBuild) {
+function tomcatConfiguration(server, preset, webapp, eclipseBuild, contextEntries = [], approved) {
   const service = child(server, 'Service')
   const engine = child(service, 'Engine')
   const host = engine?.children.find(item => item.name === 'Host' && item.attrs.name === 'localhost') ?? child(engine, 'Host')
@@ -192,14 +216,16 @@ function tomcatConfiguration(server, preset, webapp, eclipseBuild) {
   Object.assign(host.attrs, { name: 'localhost', autoDeploy: 'false', deployOnStartup: 'false', appBase: 'apps' })
   host.children = host.children.filter(item => item.name !== 'Context')
   const context = node('Context', { docBase: webapp })
-  if (eclipseBuild) context.children.push(eclipseResources(eclipseBuild.major, eclipseBuild))
+  context.children.push(...contextEntries)
+  const component = (eclipseBuild || approved) && webappResources(approved?.major ?? eclipseBuild.major, eclipseBuild, approved)
+  if (component) context.children.push(component)
   // With both Host deployment scanners off, start just this explicit context at boot.
   host.children.push({ ...context, attrs: { ...context.attrs, path: preset.contextPath === '/' ? '' : preset.contextPath } })
   return { server: `<?xml version="1.0" encoding="UTF-8"?>\n${writeElement(server)}`, context: writeElement(context),
-    descriptor: preset.contextPath === '/' ? 'ROOT.xml' : `${preset.contextPath.slice(1)}.xml` }
+    descriptor: preset.contextPath === '/' ? 'ROOT.xml' : `${preset.contextPath.slice(1)}.xml`, component }
 }
 
-async function makeBase(userData, id, conf, config) {
+async function makeBase(userData, id, conf, configure, encoding) {
   const base = (await local(userData))?.path
   if (!base || !/^[a-f\d-]{36}$/i.test(id)) throw new Error('Tomcat 실행 폴더를 확인할 수 없습니다.')
   let parent = base
@@ -229,20 +255,61 @@ async function makeBase(userData, id, conf, config) {
     } catch { /* Retry on the next launch if the directory is busy. */ }
   }
   const directory = await fs.mkdtemp(path.join(parent, `run-${process.pid}-`))
-  const cleanup = () => removeBase(directory)
+  activeBases.set(directory, parent)
+  const cleanup = async () => {
+    await removeBase(directory)
+    activeBases.delete(directory)
+  }
   try {
+    const config = await configure(directory)
     const target = path.join(directory, 'conf')
     await fs.cp(conf, target, { recursive: true, filter: async from => {
       if (path.relative(conf, from).split(path.sep)[0]?.toLowerCase() === 'catalina') return false
+      if (path.relative(conf, from).toLowerCase() === 'server.xml') return false
       const stat = await fs.lstat(from)
       return stat.isDirectory() || stat.isFile()
     } })
+    if (config.component) {
+      // Tomcat applies conf/context.xml after server.xml to each Context. Preserve a customized
+      // default component and add the run's mounts there too so that it cannot replace them.
+      const defaults = await xmlFile(target, 'context.xml')
+      const existing = child(defaults, config.component.name)
+      if (defaults?.name === 'Context' && existing) {
+        const previousClasspath = existing.attrs.virtualClasspath
+        Object.assign(existing.attrs, config.component.attrs)
+        if (config.component.name === 'Loader' && previousClasspath) {
+          existing.attrs.virtualClasspath = `${previousClasspath};${config.component.attrs.virtualClasspath}`
+        }
+        existing.children.push(...config.component.children)
+        await fs.writeFile(path.join(target, 'context.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n${writeElement(defaults)}`)
+      }
+    }
     const context = path.join(target, 'Catalina', 'localhost')
     await Promise.all(['logs', 'temp', 'work', 'apps', path.relative(directory, context)].map(name => fs.mkdir(path.join(directory, name), { recursive: true })))
-    await fs.writeFile(path.join(target, 'server.xml'), config.server)
-    await fs.writeFile(path.join(context, config.descriptor), config.context, { flag: 'wx' })
+    await fs.writeFile(path.join(target, 'server.xml'), config.server, { flag: 'wx', mode: 0o600 })
+    await fs.writeFile(path.join(context, config.descriptor), config.context, { flag: 'wx', mode: 0o600 })
+    if (encoding !== 'auto') {
+      const logging = path.join(target, 'logging.properties')
+      const stat = await fs.lstat(logging).catch(() => null)
+      if (stat?.isFile() && stat.size <= XML_LIMIT) {
+        const original = await fs.readFile(logging, 'utf8')
+        const configured = original.replace(/^[ \t]*java\.util\.logging\.ConsoleHandler\.encoding[ \t]*[=:].*$/gm, '')
+        await fs.writeFile(logging, `${configured}\njava.util.logging.ConsoleHandler.encoding = ${javaCharset(encoding)}\n`)
+      }
+    }
     return { directory, cleanup }
   } catch (error) { await cleanup(); throw error }
+}
+
+function closeTomcatBases() {
+  for (const [directory, parent] of activeBases) {
+    try {
+      if (path.dirname(directory) === parent && lstatSync(directory).isDirectory() && realpathSync(directory) === directory) {
+        rmSync(directory, { recursive: true, force: true, maxRetries: 1, retryDelay: 60 })
+      }
+    } catch { /* A busy directory is retried on the next launch. */ }
+    activeBases.delete(directory)
+  }
 }
 
 async function tomcatLayout(worktree, cwd, webapp, home) {
@@ -295,27 +362,85 @@ async function planTomcat(preset, cwd, { toolHomeOf, toolHomeFor, toolVersionOf 
   if (!launcher?.stat.isFile() || !sameOrInside(home, launcher.path) || !await directoryUnder(home, 'conf')) throw new Error('선택한 Tomcat을 찾을 수 없습니다.')
   const preparation = await preparationCommand(preset.prepare, cwd, toolHomeFor, platform)
   const command = launchCommand(path.join(home, 'bin', name), ['run'], platform)
-  // Tomcat's default ConsoleHandler writes UTF-8 even on non-UTF-8 Windows consoles.
-  const consoleEncoding = platform === 'win32' ? '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n' : ''
-  const version = preset.prepare?.tool === 'eclipse' ? await toolVersionOf(preset.tomcat) ?? /^tomcat-(\d+\.\d+(?:\.\d+)?)/.exec(preset.tomcat)?.[1] : undefined
-  return { home, command: consoleEncoding + command, ...preparation, platform, major: Number(version?.split('.')[0]) }
+  const encoding = preset.logEncoding ?? 'auto'
+  const inheritedMs949 = encoding === 'auto' && vmOptionTokens(preset.vmArgs).some(arg => /^-D(?:file|(?:sun\.)?stdout)\.encoding=(?:ms949|cp949|windows-949|euc-kr)$/i.test(arg))
+  const effectiveEncoding = inheritedMs949 ? 'ms949' : encoding
+  // Tomcat's stock ConsoleHandler uses UTF-8. ConPTY transcodes from the selected console page.
+  const consoleEncoding = platform === 'win32' ? `${windowsConsoleEncoding(effectiveEncoding === 'auto' ? 'utf-8' : effectiveEncoding)}\n` : ''
+  const version = await toolVersionOf(preset.tomcat) ?? /^tomcat-(\d+\.\d+(?:\.\d+)?)/.exec(preset.tomcat)?.[1]
+  return { home, command: consoleEncoding + command, ...preparation, platform, effectiveEncoding, major: Number(version?.split('.')[0]) }
 }
 
-async function stageTomcat(plan, { preset, task, worktree, userData, prepareReload, eclipseBuild }) {
+async function jdbcLibraries(contextEntries, home, extraLibraries, signal) {
+  const drivers = [...new Set(contextEntries.filter(item => item.name === 'Resource').map(item => item.attrs.driverClassName))]
+    .filter(driver => jarClassName(driver) && !driver.includes('/'))
+  const missing = []
+  const common = new Set()
+  if (!drivers.length) return { missing, common }
+  const installed = (await Promise.all((await tomcatJars(home, 'lib')).map(reference => allowedJar({ projectRoot: home, home: null, reference }))))
+    .filter(Boolean)
+  const find = async (jars, driver) => {
+    for (const jar of jars) if (await jarHasClass(jar, driver, signal)) return jar
+    return null
+  }
+  for (const driver of drivers) {
+    if (await find(installed, driver)) continue
+    const jar = await find(extraLibraries, driver)
+    if (jar) common.add(jar.path)
+    else missing.push(driver)
+  }
+  return { missing, common }
+}
+
+async function stageLibraries(directory, major, jars, common, webapp, eclipseBuild, signal) {
+  if (!jars.length) return undefined
+  const lib = path.join(directory, 'approved-lib')
+  await fs.mkdir(lib)
+  const commonLib = path.join(directory, 'lib')
+  if (common.size) await fs.mkdir(commonLib)
+  const usedNames = new Set((await tomcatJars(webapp, path.join('WEB-INF', 'lib'))).concat(eclipseBuild?.extraJars ?? [])
+    .map(jar => path.basename(jar).toLowerCase()))
+  const paths = []
+  let index = 0
+  for (const jar of jars) {
+    let name
+    do { name = `ezshell-approved-${++index}.jar` } while (usedNames.has(name))
+    const staged = path.join(lib, name)
+    await copyCheckedJar(jar, staged, signal)
+    if (common.has(jar.path)) await fs.copyFile(staged, path.join(commonLib, name))
+    paths.push(staged)
+  }
+  return { major, paths }
+}
+
+async function stageTomcat(plan, { preset, task, worktree, userData, prepareReload, eclipseBuild, contextEntries = [], javaFeature, extraLibraries = [], signal }) {
   const webapp = await webDirectory(worktree, preset.webapp)
   const conf = await directoryUnder(plan.home, 'conf')
   let server
   try { if (conf) server = await xmlFile(conf, 'server.xml') } catch { /* Report a localized error below. */ }
   if (!server) throw new Error('Tomcat server.xml을 읽을 수 없습니다.')
-  const reload = preset.hotReload === 'off' ? {} : await prepareReload({ layout: eclipseBuild?.layout ?? await tomcatLayout(worktree, task.cwd, webapp, plan.home),
-    worktree, cwd: task.cwd, mode: preset.hotReload, args: task.enhancedArgs })
-  const { jvmArgs = [], ...hot } = reload
-  const opts = catalinaOptions([...vmOptionTokens(preset.vmArgs), ...jvmArgs], plan.platform)
-  const config = tomcatConfiguration(server, preset, webapp, eclipseBuild)
-  const base = await makeBase(userData, preset.id, conf, config)
-  return { ...task, ...hot, command: plan.command, env: { ...task.env, CATALINA_HOME: plan.home, CATALINA_BASE: base.directory, CATALINA_OPTS: opts,
-    ...(task.javaHome && { JRE_HOME: task.javaHome }) }, expectedUrl: `http://127.0.0.1:${preset.port}${encodeURI(preset.contextPath)}`,
-    cleanup: base.cleanup }
+  const { missing, common } = await jdbcLibraries(contextEntries, plan.home, extraLibraries, signal)
+  let approved
+  const base = await makeBase(userData, preset.id, conf, async directory => {
+    approved = await stageLibraries(directory, plan.major, extraLibraries, common, webapp, eclipseBuild, signal)
+    return tomcatConfiguration(server, preset, webapp, eclipseBuild, contextEntries, approved)
+  }, plan.effectiveEncoding ?? 'auto')
+  try {
+    let reload = {}
+    if (preset.hotReload !== 'off') {
+      const layout = eclipseBuild?.layout ?? await tomcatLayout(worktree, task.cwd, webapp, plan.home)
+      if (layout.classpath && approved) {
+        const originals = new Set(extraLibraries.map(jar => jar.path))
+        layout.classpath = [...layout.classpath.filter(jar => !originals.has(jar)), ...approved.paths]
+      }
+      reload = await prepareReload({ layout, worktree, cwd: task.cwd, mode: preset.hotReload, args: task.enhancedArgs })
+    }
+    const { jvmArgs = [], ...hot } = reload
+    const opts = catalinaOptions([...vmOptionTokens(preset.vmArgs), ...javaLogOptions(plan.effectiveEncoding ?? 'auto', javaFeature), ...jvmArgs], plan.platform)
+    return { ...task, ...hot, logEncoding: plan.effectiveEncoding, command: plan.command, env: { ...task.env, CATALINA_HOME: plan.home, CATALINA_BASE: base.directory, CATALINA_OPTS: opts,
+      ...(task.javaHome && { JRE_HOME: task.javaHome }) }, expectedUrl: `http://127.0.0.1:${preset.port}${encodeURI(preset.contextPath)}`,
+      ...(missing.length && { missingJdbcDrivers: missing }), cleanup: base.cleanup }
+  } catch (error) { await base.cleanup(); throw error }
 }
 
-module.exports = { validateTomcat, validContextPath, antTargets, webDirectory, webappCandidates, planTomcat, stageTomcat, tomcatLayout, tomcatJars, tomcatConfiguration, catalinaOptions }
+module.exports = { validateTomcat, validContextPath, workspaceVmArguments, antTargets, webDirectory, webappCandidates, planTomcat, stageTomcat, tomcatLayout, tomcatJars, tomcatConfiguration, catalinaOptions, closeTomcatBases }

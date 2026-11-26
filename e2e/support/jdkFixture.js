@@ -131,4 +131,26 @@ function fakeApache({ badChecksum = false } = {}) {
   })
 }
 
-module.exports = { zipOf, fixtureRequest, digest, release, jdkFiles, fakeTemurin, fakeEnhanced, fakeApache, tomcatFiles }
+function fakeGradleNode({ badChecksum = false } = {}) {
+  const json = value => ({ body: Buffer.from(JSON.stringify(value)) })
+  const gradleVersion = '9.9.2'
+  const gradleUrl = `https://services.gradle.org/distributions/gradle-${gradleVersion}-bin.zip`
+  const gradle = zipOf({ [`gradle-${gradleVersion}/bin/gradle.bat`]: 'fake-gradle', [`gradle-${gradleVersion}/lib/gradle-launcher-${gradleVersion}.jar`]: 'fake-launcher' })
+  const nodeVersion = 'v26.13.1'
+  const nodePlatform = `node-${nodeVersion}-win-x64`
+  const nodeUrl = `https://nodejs.org/dist/${nodeVersion}`
+  const node = zipOf({ [`${nodePlatform}/node.exe`]: 'fake-node' })
+  const checksum = bytes => badChecksum ? '0'.repeat(64) : digest(bytes)
+  return fixtureRequest(url => {
+    if (url.href === 'https://services.gradle.org/versions/current') return json({ version: gradleVersion,
+      downloadUrl: gradleUrl, checksumUrl: `${gradleUrl}.sha256`, snapshot: false, nightly: false, releaseNightly: false, activeRc: false })
+    if (url.href === `${gradleUrl}.sha256`) return { body: Buffer.from(checksum(gradle)) }
+    if (url.href === gradleUrl) return { body: gradle }
+    if (url.href === 'https://nodejs.org/dist/index.json') return json([{ version: nodeVersion, lts: 'Fixture', files: ['win-x64-zip'] }])
+    if (url.href === `${nodeUrl}/SHASUMS256.txt`) return { body: Buffer.from(`${checksum(node)}  ${nodePlatform}.zip\n`) }
+    if (url.href === `${nodeUrl}/${nodePlatform}.zip`) return { body: node }
+    throw new Error('Unexpected request in the Gradle/Node fixture')
+  })
+}
+
+module.exports = { zipOf, fixtureRequest, digest, release, jdkFiles, fakeTemurin, fakeEnhanced, fakeApache, tomcatFiles, fakeGradleNode }

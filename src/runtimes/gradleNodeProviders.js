@@ -29,7 +29,8 @@ async function findGradleBuild({ request, signal, loadJson = readJson, loadText 
   const checksum = await loadText(release.checksumUrl, { ...options, maxBytes: 4096 })
   const match = /^([a-f0-9]{64})(?:[ \t]+\*?([^\r\n]+))?$/i.exec(checksum?.trim() ?? '')
   if (!match || (match[2] && match[2] !== filename)) throw new Error('Gradle이 공개한 SHA-256을 확인할 수 없습니다.')
-  return { tool: 'gradle', series: 'current', version, archive: 'zip', url, sha256: match[1].toLowerCase(), licenseUrl: GRADLE_LICENSE_URL }
+  return { tool: 'gradle', series: 'current', version, archive: 'zip', url, sha256: match[1].toLowerCase(),
+    distributionFolder: `gradle-${version}`, licenseUrl: GRADLE_LICENSE_URL }
 }
 
 function nodePackage(platform, arch) {
@@ -61,7 +62,8 @@ async function findNodeBuild({ platform = process.platform, arch = process.arch,
     .filter(match => match[2] === filename)
   if (hashes.length !== 1) throw new Error('Node.js가 공개한 배포 파일의 SHA-256을 확인할 수 없습니다.')
   return { tool: 'node', series: 'lts', version: release.version.slice(1), arch, archive,
-    url: `${folder}/${filename}`, sha256: hashes[0][1].toLowerCase(), licenseUrl: NODE_LICENSE_URL }
+    url: `${folder}/${filename}`, sha256: hashes[0][1].toLowerCase(),
+    distributionFolder: `node-${release.version}-${platformId}`, licenseUrl: NODE_LICENSE_URL }
 }
 
 module.exports = { findGradleBuild, findNodeBuild, GRADLE_LICENSE_URL, NODE_LICENSE_URL }

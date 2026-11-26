@@ -76,7 +76,7 @@ async function run() {
         !(await window.electronAPI.runtimesList()).hotswapAgent.installed)()
     `))
 
-    await click('Apache 도구 받기')
+    await click('개발 도구 받기')
     const apacheVersion = `document.querySelector('.apache-tools .jdk-choice-row label:nth-child(2) select')`
     await js(`((select) => { select.value = '6'; select.dispatchEvent(new Event('change', { bubbles: true })) })(${apacheVersion})`)
     check('explains the blocked Tomcat 6 download and offers registration and Tomcat 7', await until(`
@@ -115,6 +115,28 @@ async function run() {
       (async () => !${tomcatRow} && (await window.electronAPI.runtimesList()).tools.some(tool =>
         tool.tool === 'tomcat' && tool.series === '6' && !tool.managed))()
     `))
+
+    check('lists an existing Node.js without its absolute home', await until(`
+      (async () => document.querySelector('.apache-tools .jdk-list').textContent.includes('Node.js 24.14.0') &&
+        (await window.electronAPI.runtimesList()).tools.some(tool => tool.tool === 'node' && tool.version === '24.14.0' && !tool.managed && !tool.home))()
+    `))
+    const toolSelect = `document.querySelector('.apache-tools .jdk-choice-row label:first-child select')`
+    for (const [tool, series, name, version] of [['gradle', 'current', 'Gradle', '9.9.2'], ['node', 'lts', 'Node.js', '26.13.1']]) {
+      await js(`((select) => { select.value = '${tool}'; select.dispatchEvent(new Event('change', { bubbles: true })) })(${toolSelect})`)
+      check(`shows ${name} ${version} and its license`, await until(`
+        ${apacheVersion}?.value === '${series}' && !!(${button('도구 라이선스 보기')})?.title &&
+        document.querySelector('.apache-tools .jdk-download').textContent.includes('${name} ${version}') &&
+        (${button('도구 받아 두기')})?.disabled === false
+      `))
+      await click('도구 받아 두기')
+      const row = `document.querySelector('.apache-tools [aria-label="${name} ${version} 지우기"]')`
+      check(`installs and lists verified ${name}`, await until(`
+        !!${row} && (async () => (await window.electronAPI.runtimesList()).tools.some(tool => tool.id === '${tool}-${version}' && tool.managed && !tool.home))()
+      `))
+      await js(`${row}.click()`)
+      await click('삭제 확인')
+      check(`removes managed ${name}`, await until(`!${row}`))
+    }
   } finally { driver.close() }
 }
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   firstErrorRow, agentActionNotice, agentNoticeName, withObject, withSubject, runCommandLabel, agentActionNote, crashKey, draftOf, emptyDraft, parseEnvText, presetFromDraft, runButtons, runError, runFolderLabel,
   runHead, runKind, runPills, runPort, sendPreview, type RunPreset, type RunState,
-  eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
+  shortPath, workspaceServerFill, eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
 } from './runPresets'
 
 const preset = (over: Partial<RunPreset> = {}): RunPreset => ({
@@ -346,5 +346,31 @@ describe('Eclipse project import (stage 2, second batch)', () => {
     const saved = preset({ kind: 'tomcat', taskId: undefined, tomcat: 't', webapp: 'WebContent', contextPath: '/', port: 8080, vmArgs: '', prepare: { tool: 'eclipse' }, hotReload: 'off' })
     expect(draftOf(saved).prepareTool).toBe('eclipse')
     expect(presetFromDraft(draftOf(saved))).toEqual({ preset: saved })
+  })
+})
+
+describe('workspace servers, context.xml, log encoding, extra libs (stage 2, third batch)', () => {
+  it('fills the VM arguments, port, context and context.xml from a workspace server', () => {
+    expect(workspaceServerFill({ name: 'Tomcat v7.0 Server at localhost', port: 8090, vmArgs: '-Xmx512m\n-Dfile.encoding=MS949', contextPath: 'shop', contextXml: 'C:/ws/Servers/Tomcat v7.0-config/context.xml' }))
+      .toEqual({ vmArgs: '-Xmx512m -Dfile.encoding=MS949', portText: '8090', contextPath: '/shop', contextXml: 'C:/ws/Servers/Tomcat v7.0-config/context.xml', contextXmlLabel: 'Tomcat v7.0 Server at localhost 서버의 context.xml' })
+    expect(workspaceServerFill({ name: 'empty', port: 70000, vmArgs: '  ' })).toEqual({})
+  })
+
+  it('shortens a long path to its last two parts', () => {
+    expect(shortPath('C:\\ws\\Servers\\Tomcat-config\\context.xml')).toBe('…/Tomcat-config/context.xml')
+    expect(shortPath('lib/a.jar')).toBe('lib/a.jar')
+  })
+
+  it('keeps the new fields through the form, and leaves them out when unset', () => {
+    const saved = preset({ kind: 'tomcat', taskId: undefined, tomcat: 't', webapp: 'WebContent', contextPath: '/', port: 8080, vmArgs: '', hotReload: 'off',
+      contextXml: 'C:/ws/Servers/x/context.xml', extraLibs: ['~/.m2/repository/com/oracle/ojdbc6/11.2/ojdbc6-11.2.jar'], logEncoding: 'ms949' })
+    expect(presetFromDraft(draftOf(saved))).toEqual({ preset: saved })
+    const draft = draftOf(saved)
+    const plain = presetFromDraft({ ...draft, contextXml: '', extraLibs: [], logEncoding: 'auto' })
+    expect('preset' in plain && ['contextXml', 'extraLibs', 'logEncoding'].some(key => key in plain.preset)).toBe(false)
+    // Log encoding is for every kind; the Tomcat fields are not
+    const task = presetFromDraft({ ...draftOf(preset()), logEncoding: 'utf-8', contextXml: 'x', extraLibs: ['y'] })
+    expect('preset' in task && task.preset).toMatchObject({ logEncoding: 'utf-8' })
+    expect('preset' in task && ('contextXml' in task.preset || 'extraLibs' in task.preset)).toBe(false)
   })
 })

@@ -3,7 +3,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const runtimes = require('../../out/main/src/runtimes/index.js')
 const ipc = require('../../out/main/src/runtimes/ipc.js')
-const { fakeApache, fakeEnhanced, tomcatFiles } = require('./jdkFixture.js')
+const { fakeApache, fakeEnhanced, fakeGradleNode, tomcatFiles } = require('./jdkFixture.js')
 const createRuntimes = runtimes.createRuntimes
 let tomcatFolder
 runtimes.createRuntimes = options => {
@@ -15,9 +15,16 @@ runtimes.createRuntimes = options => {
   }
   const apache = fakeApache()
   const jdk = fakeEnhanced()
-  const request = (url, ...args) => url.hostname === 'downloads.apache.org' || url.hostname === 'archive.apache.org'
-    ? apache(url, ...args) : jdk(url, ...args)
-  return createRuntimes({ ...options, platform: 'win32', arch: 'x64', request })
+  const gradleNode = fakeGradleNode()
+  const request = (url, ...args) => {
+    if (['downloads.apache.org', 'archive.apache.org'].includes(url.hostname)) return apache(url, ...args)
+    if (['services.gradle.org', 'nodejs.org'].includes(url.hostname)) return gradleNode(url, ...args)
+    return jdk(url, ...args)
+  }
+  const localNode = path.join(options.userData, 'local-node', 'v24.14.0')
+  fs.mkdirSync(localNode, { recursive: true })
+  fs.writeFileSync(path.join(localNode, 'node.exe'), 'fixture')
+  return createRuntimes({ ...options, env: { ...process.env, NODE_HOME: localNode }, platform: 'win32', arch: 'x64', request })
 }
 const registerIpc = ipc.registerRuntimesIpc
 ipc.registerRuntimesIpc = options => registerIpc({ ...options, chooseTomcatFolder: async () => tomcatFolder })

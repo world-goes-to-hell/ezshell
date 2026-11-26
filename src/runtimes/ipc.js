@@ -2,6 +2,8 @@ const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
 const { requiredFeature } = require('./required.js')
 const { LICENSE_URLS } = require('./providers.js')
 const { APACHE_LICENSE_URL, APACHE_SERIES } = require('./apacheProviders.js')
+const { GRADLE_LICENSE_URL, NODE_LICENSE_URL } = require('./gradleNodeProviders.js')
+const TOOL_LICENSE_URLS = { gradle: GRADLE_LICENSE_URL, node: NODE_LICENSE_URL }
 
 const LOCKED = '잠금 해제 후 본창에서 이용할 수 있습니다.'
 const reason = (error, fallback) => error?.code ? fallback : error?.message || fallback
@@ -41,10 +43,10 @@ function registerRuntimesIpc({ ipcMain, runtimes, canUse, openExternal, chooseTo
     try {
       const build = await runtimes.toolAvailable(tool, series)
       return canUse(event) ? { tool: build } : { tool: null, error: LOCKED }
-    } catch (error) { return { tool: null, error: reason(error, 'Apache 배포본을 확인하지 못했습니다.') } }
+    } catch (error) { return { tool: null, error: reason(error, '개발 도구 배포본을 확인하지 못했습니다.') } }
   })
   ipcMain.handle('runtimes-tool-install', (event, tool, series) => install(event,
-    async progress => ({ tool: await runtimes.installTool(tool, series, progress) }), 'Apache 도구를 받지 못했습니다.'))
+    async progress => ({ tool: await runtimes.installTool(tool, series, progress) }), '개발 도구를 받지 못했습니다.'))
   ipcMain.handle('runtimes-tool-remove', (event, id) => {
     if (!canUse(event)) return { ok: false, error: LOCKED }
     try { runtimes.removeTool(id); return { ok: true } }
@@ -82,7 +84,9 @@ function registerRuntimesIpc({ ipcMain, runtimes, canUse, openExternal, chooseTo
 
   ipcMain.handle('runtimes-open-license', async (event, vendor) => {
     if (!canUse(event) || typeof vendor !== 'string') return false
-    const url = Object.hasOwn(APACHE_SERIES, vendor) ? APACHE_LICENSE_URL : Object.hasOwn(LICENSE_URLS, vendor) ? LICENSE_URLS[vendor] : null
+    const url = Object.hasOwn(TOOL_LICENSE_URLS, vendor) ? TOOL_LICENSE_URLS[vendor]
+      : Object.hasOwn(APACHE_SERIES, vendor) ? APACHE_LICENSE_URL
+        : Object.hasOwn(LICENSE_URLS, vendor) ? LICENSE_URLS[vendor] : null
     if (!url) return false
     try { await openExternal(url); return true } catch { return false }
   })
