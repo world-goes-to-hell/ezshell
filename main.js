@@ -917,6 +917,9 @@ require('./src/runtimes/ipc.js').registerRuntimesIpc({
 });
 app.on('will-quit', () => runtimes.cancel());
 const { createRunPresets, registerRunPresetIpc, withSubject } = require('./src/ipc/runPresets.js');
+const { reapRunScratch, waitRunCleanup } = require('./src/ipc/runScratch.js');
+const { closeTomcatBases } = require('./src/ipc/tomcatRun.js');
+void app.whenReady().then(() => reapRunScratch(userDataPath)).catch(() => {});
 const runPresets = createRunPresets({
   file: path.join(userDataPath, 'run-presets.json'),
   getShells: getLocalShells,
@@ -1202,20 +1205,28 @@ ipcMain.handle('save-terminal-output', async (event, { defaultName, text }) => {
   }
 });
 
-// Set once the MCP side has shut down, so the quit that follows goes through
-let isMcpShutDownForQuit = false;
+let quitCleanup;
+let quitCleanupFinished = false;
 
 app.on('before-quit', (event) => {
   sessionLogger?.closeAllNow();
-  if (!mcpController || isMcpShutDownForQuit) return;
+  if (quitCleanupFinished) return;
+  if (quitCleanup) { event.preventDefault(); return; }
   // A background job is stopped by a command sent to its server; quitting at once would lose that
   // command and leave the job running there. The wait is bounded (a few seconds at most).
-  const mustWait = mcpController.hasJobs();
-  const shutdown = mcpController.shutdown().catch(() => {});
-  if (!mustWait) return;
+  const mustWait = mcpController?.hasJobs();
+  const shutdown = mcpController?.shutdown().catch(() => {});
+  runPresets.cancelBatches();
+  runPresets.suspendReloads();
+  const draining = localShells ? localShells.drainDevelopmentTasks() : waitRunCleanup();
+  const development = draining ? draining.then(closeTomcatBases) : closeTomcatBases();
+  if (!mustWait && !development) return;
   event.preventDefault();
-  shutdown.finally(() => {
-    isMcpShutDownForQuit = true;
+  let timer;
+  const localCleanup = development && Promise.race([development, new Promise(resolve => { timer = setTimeout(resolve, 5000); })])
+    .finally(() => clearTimeout(timer));
+  quitCleanup = Promise.allSettled([mustWait && shutdown, localCleanup]).then(() => {
+    quitCleanupFinished = true;
     app.quit();
   });
 });

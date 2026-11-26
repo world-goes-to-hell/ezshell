@@ -158,4 +158,7 @@ async function readLinkPreview(target, permitted = () => true) {
   return text === null ? { ...metadata, kind: 'unavailable', reason: 'unsupported' } : { ...metadata, kind, text, truncated }
 }
 
-module.exports = { isPreviewLocalPath, readLinkPreview, resolveLocalPreviewPath, TEXT_HEAD_BYTES, TEXT_MAX_BYTES, MEDIA_MAX_BYTES, DIRECTORY_LIMIT }
+module.exports = {
+  isPreviewLocalPath, readLinkPreview, resolveLocalPreviewPath, readPrefix, sameEntry,
+  TEXT_HEAD_BYTES, TEXT_MAX_BYTES, MEDIA_MAX_BYTES, DIRECTORY_LIMIT
+}

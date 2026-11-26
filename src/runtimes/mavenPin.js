@@ -5,7 +5,7 @@ const { createHash, randomUUID } = require('node:crypto')
 const { Transform } = require('node:stream')
 const { pipeline } = require('node:stream/promises')
 const { pathToFileURL } = require('node:url')
-const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
+const { resolveLocalPreviewPath, sameEntry } = require('../agentChat/localPreview.js')
 const { parseXml } = require('../sessionImport/filezilla.js')
 
 const PRESET = /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i
@@ -370,23 +370,55 @@ async function deleteMavenPin({ userData, presetId, approved = false, authorize 
   })
 }
 
-async function exportMavenPin({ userData, presetId, worktree, approved = false, signal, authorize = () => {} } = {}) {
+async function mavenExportDestination(worktree) {
+  const destination = await local(worktree)
+  if (!destination?.stat.isDirectory() || !equalPath(destination.path, worktree)) throw new Error('내보낼 워크트리 폴더를 다시 확인해 주세요.')
+  return destination
+}
+
+async function exportMavenPin({ userData, presetId, worktree, expectedWorktree, approved = false, signal, authorize = () => {} } = {}) {
   if (approved !== true) throw new Error('먼저 프로젝트의 .mvn-repo로 내보내기를 확인해 주세요.')
+  const destination = await mavenExportDestination(worktree)
+  if (expectedWorktree && !sameEntry(expectedWorktree, destination.stat)) throw new Error('내보낼 워크트리 폴더가 바뀌었습니다.')
   const root = await presetRoot(userData, presetId)
-  const folder = await realDirectory(worktree)
+  const folder = destination.path
   const target = path.join(folder, '.mvn-repo')
+  const confirms = async (directory, expected) => {
+    const entry = await local(directory)
+    return entry?.stat.isDirectory() && equalPath(entry.path, directory) && sameEntry(entry.stat, expected)
+  }
+  const checkWorktree = async () => {
+    if (!await confirms(folder, destination.stat)) throw new Error('내보낼 워크트리 폴더가 바뀌었습니다.')
+  }
   return exclusive(root, async () => {
     const pinned = await currentSnapshot(root)
     if (!pinned) throw new Error('먼저 성공한 Maven 빌드의 의존성을 보관해 주세요.')
     signal?.throwIfAborted()
     authorize()
-    await fs.mkdir(target, { mode: 0o700 }).catch(error => {
+    await checkWorktree()
+    signal?.throwIfAborted()
+    authorize()
+    const targetStat = await fs.mkdir(target, { mode: 0o700 }).then(() => fs.lstat(target)).catch(error => {
       if (error.code !== 'EEXIST') throw error
       throw new Error('이미 프로젝트에 .mvn-repo 폴더가 있습니다.')
     })
-    try { await copySnapshot(pinned, target, signal); authorize(); return target }
-    catch (error) { await removeOwned(folder, target); throw error }
+    const checkTarget = async () => {
+      await checkWorktree()
+      if (!await confirms(target, targetStat)) throw new Error('Maven 보관본을 내보낼 폴더가 바뀌었습니다.')
+    }
+    try {
+      await checkTarget()
+      authorize()
+      await copySnapshot(pinned, target, signal)
+      await checkTarget()
+      signal?.throwIfAborted()
+      authorize()
+      return target
+    } catch (error) {
+      await checkTarget().then(() => removeOwned(folder, target)).catch(() => {})
+      throw error
+    }
   })
 }
 
-module.exports = { createMavenPinSession, exportMavenPin, inspectMavenPin, deleteMavenPin, cleanMavenPinRuns }
+module.exports = { createMavenPinSession, exportMavenPin, mavenExportDestination, inspectMavenPin, deleteMavenPin, cleanMavenPinRuns }

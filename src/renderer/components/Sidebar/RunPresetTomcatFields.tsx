@@ -9,7 +9,7 @@
 // preset; jars approved from a diagnosis can only be taken away here.
 import { useEffect, useState } from 'react'
 import { RiCloseLine, RiDownloadLine, RiFileCodeLine, RiFolder3Line, RiServerLine } from 'react-icons/ri'
-import { eclipseFill, eclipseSummary, shortPath, workspaceServerFill, type PresetDraft } from '../../lib/runPresets'
+import { eclipseFill, eclipseSummary, PLAIN_TEXT_WARNING, secretVmArgNames, shortPath, workspaceServerFill, type PresetDraft } from '../../lib/runPresets'
 import type { WorkspaceServer } from '../../types'
 import { runPresetApi } from '../../stores/runPresetStore'
 import type { ApacheToolRuntime } from '../../types'
@@ -253,6 +253,9 @@ export function RunPresetTomcatAdvanced({ folder, draft, set }: {
         <label htmlFor="run-preset-vmargs">VM 인자 <span className="run-preset-hint">(한 줄, CATALINA_OPTS)</span></label>
         <input id="run-preset-vmargs" className="run-preset-command" value={draft.vmArgs} placeholder="예: -Xmx1g -Dspring.profiles.active=local"
           onChange={event => set({ vmArgs: event.target.value })} spellCheck={false} autoComplete="off" />
+        {secretVmArgNames(draft.vmArgs).length > 0 && (
+          <small className="run-preset-warn run-preset-secret-warn" role="note">{PLAIN_TEXT_WARNING} ({secretVmArgNames(draft.vmArgs).map(name => `-D${name}`).join(', ')})</small>
+        )}
       </div>
       <div className="form-group">
         <span className="run-preset-field-label">컨텍스트 설정 파일 <span className="run-preset-hint">(JNDI 데이터소스용 context.xml)</span></span>

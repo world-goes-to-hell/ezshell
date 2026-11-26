@@ -156,7 +156,7 @@ async function buildEclipse({ eclipse, libs, webLibs = [], externalJars = [], us
     return { output, layout, jarDirectory }
   }
 
-  const scratch = await fs.mkdtemp(path.join(parent, '.build-'))
+  const scratch = await fs.mkdtemp(path.join(parent, `.build-${process.pid}-`))
   const next = path.join(scratch, 'next')
   const classes = path.join(next, 'classes')
   try {

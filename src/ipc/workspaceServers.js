@@ -3,7 +3,7 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 const { randomUUID } = require('node:crypto')
 const { isLocalFilePath } = require('../localKeyPath.js')
-const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
+const { readPrefix, resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { parseXml } = require('../sessionImport/filezilla.js')
 
@@ -29,14 +29,10 @@ function normalizeContextReference(value, relative) {
   return relative(value)
 }
 
-async function readXml(file) {
-  const handle = await fsp.open(file, 'r')
-  try {
-    const bytes = Buffer.alloc(MAX_XML + 1)
-    const count = (await handle.read(bytes, 0, bytes.length, 0)).bytesRead
-    if (count > MAX_XML) throw new Error('XML 설정 파일이 너무 큽니다.')
-    return parseXml(bytes.toString('utf8', 0, count))
-  } finally { await handle.close() }
+async function readXml(entry) {
+  const bytes = await readPrefix(entry, MAX_XML + 1, () => true)
+  if (bytes.length > MAX_XML) throw new Error('XML 설정 파일이 너무 큽니다.')
+  return parseXml(bytes.toString('utf8'))
 }
 
 function createWorkspaceAccess(file) {
@@ -68,7 +64,7 @@ function createWorkspaceAccess(file) {
     } finally { try { fs.unlinkSync(temporary) } catch { /* Renamed or absent. */ } }
   }
 
-  async function contextFile(project, reference) {
+  async function resolveContext(project, reference) {
     const absolute = path.isAbsolute(reference) ? reference : path.join(project.worktree, reference)
     if (!validAbsolute(absolute)) throw new Error(BAD_CONTEXT)
     const roots = [project.worktree, ...(read().get(project.key) ?? []).filter(root => typeof root === 'string' && validAbsolute(root))]
@@ -79,13 +75,18 @@ function createWorkspaceAccess(file) {
     const entry = await canonical(absolute)
     if (!entry?.stat.isFile() || !validAbsolute(entry.path) || !sameOrInside(root, entry.path) || !/\.xml$/i.test(entry.path)) throw new Error(BAD_CONTEXT)
     const value = equalPath(root, project.worktree) ? path.relative(root, entry.path).split(path.sep).join('/') : entry.path
-    return { file: entry.path, reference: value }
+    return { entry, reference: value }
+  }
+
+  async function contextFile(project, reference) {
+    const context = await resolveContext(project, reference)
+    return { file: context.entry.path, reference: context.reference }
   }
 
   async function contextEntries(project, reference) {
-    const { file } = await contextFile(project, reference)
+    const { entry } = await resolveContext(project, reference)
     let xml
-    try { xml = await readXml(file) } catch { throw new Error('컨텍스트 XML을 읽을 수 없거나 크기 제한을 넘었습니다.') }
+    try { xml = await readXml(entry) } catch { throw new Error('컨텍스트 XML을 읽을 수 없거나 크기 제한을 넘었습니다.') }
     if (xml?.name !== 'Context') throw new Error('컨텍스트 XML에서 Context 항목을 찾을 수 없습니다.')
     return xml.children.filter(node => CONTEXT_ELEMENTS.has(node.name))
       .map(({ name, attrs }) => ({ name, attrs, children: [], text: '' }))
@@ -98,7 +99,7 @@ async function fixedEntry(root, relative, directory = false) {
   const file = path.join(root, relative)
   const entry = await canonical(file)
   if (!entry || !equalPath(file, entry.path) || !(directory ? entry.stat.isDirectory() : entry.stat.isFile())) return null
-  return entry.path
+  return entry
 }
 
 async function optionalXml(root, relative, notes) {
@@ -114,7 +115,7 @@ async function workspaceServers(root, { launchArguments, validContextPath }) {
   const launchDirectory = await fixedEntry(root, LAUNCHES, true)
   const launches = new Map()
   if (launchDirectory) {
-    const entries = await fsp.readdir(launchDirectory, { withFileTypes: true })
+    const entries = await fsp.readdir(launchDirectory.path, { withFileTypes: true })
     for (const entry of entries.filter(candidate => candidate.isFile() && /\.launch$/i.test(candidate.name)).slice(0, 96)) {
       const xml = await optionalXml(root, path.join(LAUNCHES, entry.name), notes)
       const attributes = xml?.name === 'launchConfiguration' ? xml.children.filter(node => node.name === 'stringAttribute') : []
@@ -127,7 +128,7 @@ async function workspaceServers(root, { launchArguments, validContextPath }) {
   }
   const imported = []
   let omittedCredentials = 0
-  const folders = await fsp.readdir(servers, { withFileTypes: true })
+  const folders = await fsp.readdir(servers.path, { withFileTypes: true })
   for (const folder of folders.filter(entry => entry.isDirectory() && /-config$/.test(entry.name) && !CONTROL.test(entry.name)).slice(0, 48)) {
     const relative = path.join('Servers', folder.name)
     const server = await optionalXml(root, path.join(relative, 'server.xml'), notes)

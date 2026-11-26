@@ -14,6 +14,8 @@ const { processCommandLine, processList, resumeCommand, words } = require('./age
 const { antigravityBrainRoot, openAntigravityTranscript } = require('./agentChat/antigravitySessions.js');
 const { developmentAddress, stopDevelopmentProcess: stopDeveloperTree, waitDevelopmentPort: waitDeveloperPort } = require('./ipc/developmentProcess.js');
 const { createLogDecoder, windowsConsoleEncoding } = require('./ipc/developmentEncoding.js');
+const { trackRunCleanup, waitRunCleanup } = require('./ipc/runScratch.js');
+const { isLocalFilePath } = require('./localKeyPath.js');
 
 /** Output kept per shell so a tab that is drawn again (pane split, tab moved) continues from it */
 const BACKLOG_CHARS = 256 * 1024;
@@ -164,6 +166,16 @@ function requireLocalDirectory(folder) {
     throw new Error('작업 폴더를 찾을 수 없습니다.');
   }
   return directory;
+}
+
+function launchedDirectoryIdentity(folder) {
+  if (!isLocalFilePath(folder)) return null;
+  try {
+    const directory = fs.realpathSync.native(folder);
+    if (!isLocalFilePath(directory)) return null;
+    const stat = fs.statSync(directory, { bigint: true });
+    return stat.isDirectory() && stat.ino !== 0n ? { directory, dev: stat.dev, ino: stat.ino } : null;
+  } catch { return null; }
 }
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1097,7 +1109,8 @@ function createLocalShells({
       if (!previous || !resume) throw new Error('바꿀 셸을 찾지 못했습니다.');
       if ([...shells.values()].some(entry => entry.replacementFor === replacementFor)) throw new Error('이 칸의 셸을 바꾸는 중입니다.');
     }
-    const workingDirectory = directory === undefined ? cwd : requireLocalDirectory(directory);
+    const workingDirectory = directory === undefined ? previous?.launchDirectory ?? cwd : requireLocalDirectory(directory);
+    const launchIdentity = platform === 'win32' ? launchedDirectoryIdentity(workingDirectory) : null;
     const id = `local:${nextId++}`;
     const automatic = restoring === true;
     const codexHooks = agent === 'codex' && injectCodexHooks(agents?.codexHookMode?.(), automatic);
@@ -1121,7 +1134,7 @@ function createLocalShells({
         name: TERMINAL_TYPE,
         cols: columns,
         rows: lines,
-        cwd: workingDirectory,
+        cwd: launchIdentity?.directory ?? workingDirectory,
         env: { ...(registration?.env ?? shellEnv), ...shellUsageEnv }
       });
     } catch (error) {
@@ -1135,8 +1148,8 @@ function createLocalShells({
       codexActivity: codexInput ? codexActivityFor(resumeId) : null,
       wakeMcp: Boolean(shellUsageEnv.EZSHELL_AGENT_WAKE_MCP_CONFIG),
       // For a window that reloads and takes the shell back as a tab (`list`)
-      cwd: directory === undefined ? null : workingDirectory,
-      launchDirectory: workingDirectory, reportedDirectory: null,
+      cwd: directory === undefined ? previous?.cwd ?? null : workingDirectory,
+      launchDirectory: workingDirectory, launchIdentity, reportedDirectory: null,
       reportStatus: status => reportShellStatus(entry, registration?.setStatus, status),
       backlog: '', modes: {}, modeTail: '', exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: '',
       // Last sign of work (status, typing, a line sent to the agent) and the sleep it may be in (agentIdle.js)
@@ -1298,11 +1311,16 @@ function createLocalShells({
     }
   }
 
+  let developmentClosing = false;
   function disposeDevelopmentTask(task, exitCode = null) {
-    if (task?.cleanup) void Promise.resolve().then(() => task.cleanup(exitCode)).catch(() => {});
+    if (task?.cleanup) trackRunCleanup(Promise.resolve().then(() => task.cleanup(exitCode)));
   }
 
   async function openDevelopmentTask(task, { cols, rows }, allowed = () => true) {
+    if (developmentClosing) {
+      disposeDevelopmentTask(task);
+      throw new Error('앱이 종료되는 중입니다.');
+    }
     const label = task.label ?? (task.relative === '.' ? task.name : `${task.name} · ${path.basename(task.cwd)}`);
     const normalized = value => platform === 'win32' ? value.toLowerCase() : value;
     for (const [id, entry] of shells) {
@@ -1336,12 +1354,23 @@ function createLocalShells({
       .finally(() => { entry.developmentStop = null });
   }
 
+  function drainDevelopmentTasks() {
+    developmentClosing = true;
+    const active = [...shells.values()].filter(entry => entry.development && !entry.exited);
+    if (!active.length) return waitRunCleanup();
+    return Promise.allSettled(active.map(async entry => {
+      await stopDevelopmentEntry(entry).catch(() => {});
+      await entry.developmentExit;
+    })).then(waitRunCleanup);
+  }
+
   async function changeDevelopmentTask(id, taskId, action, allowed = () => true, prepare) {
     const entry = shells.get(id);
     if (!entry?.developmentTask || entry.developmentTask.id !== taskId || !['restart', 'stop'].includes(action)) {
       throw new Error('기동한 개발 서버를 찾을 수 없습니다.');
     }
     if (!allowed()) throw new Error('먼저 잠금을 해제해 주세요.');
+    if (developmentClosing && action === 'restart') throw new Error('앱이 종료되는 중입니다.');
     if (action === 'restart' && entry.developmentTask.onEvent && !prepare) throw new Error('실행 구성에서 재기동해 주세요.');
     if (entry.developmentAction) throw new Error('개발 서버를 전환하는 중입니다.');
     const previousLaunch = entry.developmentLaunch;
@@ -1356,11 +1385,12 @@ function createLocalShells({
       }
       if (action === 'restart') {
         await waitDevelopmentPort(entry.development.url);
+        if (developmentClosing) throw new Error('앱이 종료되는 중입니다.');
         if (shells.get(id) !== entry) throw new Error('개발 서버 탭이 닫혔습니다.');
         if (!allowed()) throw new Error('먼저 잠금을 해제해 주세요.');
         if (prepare) {
           const task = await prepare();
-          if (!allowed() || shells.get(id) !== entry || task.id !== taskId) {
+          if (developmentClosing || !allowed() || shells.get(id) !== entry || task.id !== taskId) {
             disposeDevelopmentTask(task);
             throw new Error('실행 구성이 바뀌었습니다.');
           }
@@ -1445,9 +1475,9 @@ function createLocalShells({
       entry.developmentTask.onEvent?.({ type: 'closed', shellId: id, wasRunning: !entry.exited });
       send('local-shell-development-state', { id, development: null });
       if (!entry.exited) {
-        void stopDevelopmentEntry(entry).catch(() => {
+        trackRunCleanup(stopDevelopmentEntry(entry).catch(() => {
           try { entry.pty?.kill() } catch { /* already gone */ }
-        });
+        }).then(() => entry.developmentExit));
       }
       return;
     }
@@ -1584,10 +1614,11 @@ function createLocalShells({
     for (const id of [...shells.keys()]) close(id);
   }
 
-  async function currentDirectory(id) {
+  async function processDirectory(id) {
     const entry = shells.get(id);
     if (!entry) return null;
-    const pid = entry.pty?.pid;
+    const pty = entry.pty;
+    const pid = pty?.pid;
     if (!entry.exited && Number.isInteger(pid) && pid > 0 && platform !== 'win32') {
       try {
         let folder;
@@ -1598,14 +1629,30 @@ function createLocalShells({
           });
           folder = stdout.split('\0').find(field => field.startsWith('n/'))?.slice(1);
         }
-        if (folder && path.isAbsolute(folder) && shells.get(id) === entry && !entry.exited) return folder;
+        if (folder && path.isAbsolute(folder) && shells.get(id) === entry && entry.pty === pty && !entry.exited) return folder;
       } catch { /* keep the most recent reported or launch directory */ }
     }
-    return shells.get(id) === entry ? entry.reportedDirectory ?? entry.launchDirectory : null;
+    return null;
+  }
+
+  async function currentDirectory(id) {
+    const entry = shells.get(id);
+    return await processDirectory(id) ?? (entry && shells.get(id) === entry ? entry.reportedDirectory ?? entry.launchDirectory : null);
+  }
+
+  async function runAuthorityDirectory(id) {
+    if (platform !== 'win32') return processDirectory(id);
+    const entry = shells.get(id);
+    const identity = entry?.launchIdentity;
+    const pid = entry?.pty?.pid;
+    if (!identity || entry.exited || !Number.isInteger(pid) || pid <= 0 || !processAlive(pid)) return null;
+    // ConPTY supplies the launch directory but has no live CWD query. Display OSCs never grant authority.
+    const current = launchedDirectoryIdentity(identity.directory);
+    return current && current.dev === identity.dev && current.ino === identity.ino ? identity.directory : null;
   }
 
   return {
-    open, openDevelopmentTask, changeDevelopmentTask, attach, write, pasteClipboardImage, resize, close, closeAll, bindAgentProcess, reportAntigravityStatus, currentDirectory,
+    open, openDevelopmentTask, changeDevelopmentTask, drainDevelopmentTasks, attach, write, pasteClipboardImage, resize, close, closeAll, bindAgentProcess, reportAntigravityStatus, currentDirectory, runAuthorityDirectory,
     /**
      * Every shell, oldest first. The shells outlive their tabs, so a window that reloaded (and lost
      * all its tabs) takes these back; otherwise they kept running unseen, agents included.

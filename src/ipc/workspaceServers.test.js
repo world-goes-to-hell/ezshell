@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
@@ -64,5 +64,14 @@ describe('Eclipse workspace server settings', () => {
     const selected = await write(worktree, 'src/META-INF/context.xml', context())
     const access = createWorkspaceAccess(file)
     expect(await access.contextFile(project, selected)).toEqual({ file: selected, reference: 'src/META-INF/context.xml' })
+  })
+
+  it('rejects an opened XML handle with a different file identity', async () => {
+    const selected = await write(worktree, 'context.xml', context())
+    const unrelated = await write(outsiders, 'context.xml', context('fixture-other-file'))
+    const open = vi.spyOn(fs, 'open').mockResolvedValueOnce(await fs.open(unrelated, 'r'))
+    try {
+      await expect(createWorkspaceAccess(file).contextEntries(project, selected)).rejects.toThrow('컨텍스트 XML을 읽을 수 없거나')
+    } finally { open.mockRestore() }
   })
 })

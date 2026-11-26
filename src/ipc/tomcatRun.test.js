@@ -57,13 +57,13 @@ describe('Tomcat execution presets', () => {
       { hotReload: 'enhanced', vmArgs: '-Xrunjdwp:server=y' }]) expect(() => preset(bad)).toThrow()
   })
 
-  it('ties confirmation to the VM arguments and build text', () => {
-    expect(presetApproval(preset())).toBeNull()
+  it('ties confirmation to the Tomcat target, VM arguments and build text', () => {
+    expect(presetApproval(preset()).command).toContain('http://127.0.0.1:8080/')
     const approved = preset({ vmArgs: '-Xmx512m', prepare: { tool: 'maven', goals: 'package' } })
-    expect(presetApproval(approved)).toMatchObject({ command: '기동 전 빌드\nmaven package\n\nTomcat VM 인자\n-Xmx512m' })
+    expect(presetApproval(approved)).toMatchObject({ command: expect.stringContaining('기동 전 빌드\nmaven package\n\nTomcat VM 인자\n-Xmx512m') })
     expect(presetApproval({ ...approved, vmArgs: '-Xmx1024m' }).hash).not.toBe(presetApproval(approved).hash)
     expect(presetApproval({ ...approved, prepare: { tool: 'maven', goals: 'clean package' } }).hash).not.toBe(presetApproval(approved).hash)
-    expect(presetApproval({ ...approved, port: 9090 }).hash).toBe(presetApproval(approved).hash)
+    expect(presetApproval({ ...approved, port: 9090 }).hash).not.toBe(presetApproval(approved).hash)
   })
 
   it('rechecks Ant targets and builds a command only from registered tool paths and safe goal tokens', async () => {
@@ -124,7 +124,7 @@ describe('Tomcat execution presets', () => {
     const runtime = await stage(await launch(p), p)
     const base = runtime.env.CATALINA_BASE
     expect((await fs.stat(path.join(base, 'conf', 'server.xml'))).isFile()).toBe(true)
-    closeTomcatBases()
+    await closeTomcatBases()
     await expect(fs.stat(base)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 

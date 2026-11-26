@@ -322,6 +322,12 @@ function fixture(backendPort, frontendPort) {
     // The log encoding is for every kind (this typed command too) and is saved with the preset
     check('the log encoding offers 자동·UTF-8·MS949', await js(`[...document.querySelectorAll('#run-preset-log-encoding option')].map(o => o.value).join(',') === 'auto,utf-8,ms949'`))
     await js(`(() => { const select = document.querySelector('#run-preset-log-encoding'); select.value = 'utf-8'; select.dispatchEvent(new Event('change', { bubbles: true })) })()`)
+    // A secret-looking env name: told it is saved as plain text (saving is not stopped); cleared before saving
+    await setValue('#run-preset-env', 'DB_PASSWORD=hunter2')
+    check('a secret-looking env name is warned about as plain text', await until(`
+      document.querySelector('.run-preset-secret-warn')?.textContent.includes('평문으로 저장됩니다') &&
+      document.querySelector('.run-preset-secret-warn').textContent.includes('DB_PASSWORD')`))
+    await setValue('#run-preset-env', '')
     await js(`document.querySelector('.run-preset-dialog button[type="submit"]').click()`)
     const presetRow = `${section}?.querySelector('.run-preset')`
     check('the saved preset is a row with a start button', await until(`!document.querySelector('.run-preset-dialog') &&
@@ -357,7 +363,9 @@ function fixture(backendPort, frontendPort) {
     check('a crash turns the row red and tells the exit code', await until(`${presetRow}?.dataset.status === 'crashed' &&
       ${presetRow}.textContent.includes('종료 1')`, 15000))
     const notice = `document.querySelector('.run-crash')`
-    check('the crash notice shows the last error lines', await until(`${notice}?.textContent.includes('Internal server error')`, 5000))
+    check('the crash notice masks the credential while the terminal shows the original output', await until(`
+      ${notice}?.textContent.includes('Internal server error: fixture failed pwd=****') &&
+      !${notice}.textContent.includes('fixture-terminal-only') && ${inTerminal('fixture-terminal-only')}`, 5000))
     await shot('local-run-preset-crash')
     await js(`${notice}.querySelector('.btn-primary').click()`)
     // The preview is main's text (what goes out): the name, the folder relative to the project, the errors
@@ -365,6 +373,13 @@ function fixture(backendPort, frontendPort) {
       document.querySelector('.run-send-dialog .run-send-preview[data-ready]')?.textContent.startsWith('시험 서버') &&
       document.querySelector('.run-send-dialog .run-send-preview').textContent.includes('폴더 ./') &&
       document.querySelector('.run-send-dialog .run-send-preview').textContent.includes('Internal server error')`))
+    await setValue('.run-send-note-input', '확인 부탁합니다 token=fixture-send-note')
+    check('the preview includes the note and masks credentials from both the note and the log', await until(`
+      (() => {
+        const text = document.querySelector('.run-send-dialog .run-send-preview[data-ready]')?.textContent
+        return text?.includes('pwd=****') && text.includes('확인 부탁합니다 token=****') &&
+          !text.includes('fixture-send-note') && !text.includes('fixture-terminal-only')
+      })()`))
     await shot('local-run-preset-send')
     await js(`[...document.querySelectorAll('.run-send-dialog button')].find(b => b.textContent.trim() === '취소').click()`)
     await until(`!document.querySelector('.run-send-dialog')`)
@@ -454,7 +469,10 @@ function fixture(backendPort, frontendPort) {
     const args = `${folderArg}, ${JSON.stringify(mavenId)}`
     const diagnose = `window.electronAPI.runPresetDiagnosis(${args})`
     const mavenState = `(await window.electronAPI.runPresetsList(${folderArg})).states[${JSON.stringify(mavenId)}]?.status`
-    await js(`window.electronAPI.runPresetStart(${args})`)
+    const initialMaven = await js(`window.electronAPI.runPresetStart(${args})`)
+    if (!initialMaven.needsConfirm?.command.includes('.:maven') || !(await js(`window.electronAPI.runPresetStart(${args}, { confirmCustom: true })`)).ok) {
+      throw new Error('The first Maven run did not require and accept approval')
+    }
     if (!await until(`(async () => ${mavenState} === 'crashed' &&
       (await ${diagnose}).suggestions?.some(item => item.kind === 'mavenHttpBlocked'))()`, 15000)) {
       throw new Error('The failed Maven invocation did not produce a diagnosis')

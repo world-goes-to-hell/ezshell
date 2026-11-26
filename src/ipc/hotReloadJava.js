@@ -9,6 +9,7 @@ const yauzl = require('yauzl')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
 const { processList } = require('../agentIdle.js')
+const { trackRunCleanup } = require('./runScratch.js')
 
 const exec = promisify(execFile)
 const BUILD_BYTES = 256 * 1024
@@ -249,7 +250,7 @@ function createJavac({ env, signal, readClassInfo, run = exec, tempRoot = os.tmp
       throw error
     }
   }
-  return async ({ root, sources, classpath }) => {
+  const compile = async ({ root, sources, classpath }) => {
     const compilerEnv = root.compilerOptions?.noProcessors ? eclipseCompilerEnvironment(env) : env
     if (!version) {
       const { stdout, stderr } = await invoke(['-version'], root.moduleRoot, 10_000, compilerEnv)
@@ -264,7 +265,7 @@ function createJavac({ env, signal, readClassInfo, run = exec, tempRoot = os.tmp
       if (!processor) throw new Error('Lombok을 Maven 또는 Gradle 캐시에서 찾을 수 없습니다.')
     }
     if (!root.compilerOptions && !releases.has(root.output)) releases.set(root.output, await existingRelease(root.output))
-    const staging = await fs.mkdtemp(path.join(tempRoot, 'ezshell-javac-'))
+    const staging = await fs.mkdtemp(path.join(tempRoot, `ezshell-javac-${process.pid}-`))
     try {
       const output = isolatedOutput ? root.output : path.join(staging, 'classes')
       const args = path.join(staging, 'javac.args')
@@ -279,6 +280,7 @@ function createJavac({ env, signal, readClassInfo, run = exec, tempRoot = os.tmp
       return classes
     } finally { await fs.rm(staging, { recursive: true, force: true, maxRetries: 4, retryDelay: 75 }) }
   }
+  return args => trackRunCleanup(compile(args))
 }
 
 module.exports = { inspectJavaBuild, javaLayout, javacArguments, createJavac, javaTool, devtoolsLayout, lombokJar, eclipseCompilerEnvironment }

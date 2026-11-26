@@ -2,7 +2,7 @@
 // the types of the IPC contract and the words and buttons a preset row shows. Kept free of React so the
 // rules are tested on their own.
 
-import type { EclipseImportDraft, HotReload, HotswapAgentStatus, JdkRuntime, LogEncoding, RunAction, RunErrorGroup, RunPrepare, RunPreset, RunState, WorkspaceServer } from '../types'
+import type { EclipseImportDraft, HotReload, HotswapAgentStatus, JdkRuntime, LogEncoding, RunAction, RunPrepare, RunPreset, RunState, WorkspaceServer } from '../types'
 export type { HotReload, RunAction, RunCandidate, RunErrorGroup, RunPrepare, RunPreset, RunReload, RunState, RunStatus } from '../types'
 
 export const IDLE_STATE: RunState = { status: 'idle', errors: 0 }
@@ -110,7 +110,7 @@ export const RESTART_DIVIDER = '개발 서버 재기동'
  * line (120 characters, as a terminal may cut what follows), below the last restart divider; null if none
  */
 export function firstErrorRow(rows: ReadonlyArray<{ text: string; wrapped: boolean }>, errorLine: string): number | null {
-  const wanted = errorLine.replace(/\s+$/, '').trimStart().slice(0, 120)
+  const wanted = errorLine.split('****', 1)[0].trim().slice(0, 120)
   if (!wanted) return null
   const lines: Array<{ row: number; text: string }> = []
   rows.forEach(({ text, wrapped }, row) => {
@@ -346,13 +346,6 @@ export function runCommandLabel(preset: Pick<RunPreset, 'kind' | 'taskId' | 'com
   return preset.kind === 'custom' ? preset.command || '직접 입력' : KIND_NAMES[runKind(preset)]
 }
 
-/** The message sent to an agent with a crash (scene 7): the server, its folder and command, the error lines */
-export function sendPreview(preset: RunPreset, state: RunState, group: RunErrorGroup | undefined, commandLabel: string): string {
-  const exit = state.exitCode === null || state.exitCode === undefined ? '' : ` · 종료 ${state.exitCode}`
-  const head = `[${preset.name} · ${runFolderLabel(preset.relative)} · ${commandLabel}${exit}]`
-  return [head, ...(group?.lines.slice(0, 80) ?? [])].join('\n')
-}
-
 /** A crash is told once: by the preset and the time it started (a new run that crashes again is told again) */
 export const crashKey = (projectKey: string, id: string, state: RunState) => `${projectKey}:${id}:${state.startedAt ?? 0}`
 
@@ -580,3 +573,57 @@ export function reloadChip(state: RunState, now: number): ReloadChip | null {
 /** Whether a row's clock has to tick for its hot reload chip ("N초 전") */
 export const reloadTicks = (state: RunState | undefined, now: number) =>
   state?.reload?.status === 'applied' && isRunActive(state) && now - state.reload.at < 3_600_000
+
+// --- Values that look like secrets (they are saved as plain text in run-presets.json) ---
+
+/** What the user is told under the field (saving is not stopped) */
+export const PLAIN_TEXT_WARNING = '이 값은 이 PC 의 설정 파일에 평문으로 저장됩니다. 비밀번호는 컨텍스트 설정 파일(JNDI)이나 OS 환경 변수로 두세요.'
+
+const SECRET_WORDS = ['password', 'passwd', 'secret', 'token', 'apikey', 'accesskey', 'privatekey', 'credential']
+
+/**
+ * Whether a name looks like it holds a secret: DB_PASSWORD, apiKey, jwt.secret, DB_PWD, db.pw (a pw or pwd piece of a
+ * longer name, as main's workspace filter in src/ipc/tomcatRun.js; not PWD alone, the folder)
+ */
+export function looksSecret(name: string): boolean {
+  const parts = name.split(/[._-]+/).filter(Boolean)
+  const joined = parts.join('').toLowerCase()
+  if (SECRET_WORDS.some(word => joined.includes(word))) return true
+  return parts.length > 1 && parts.some(part => /^pwd?$/i.test(part))
+}
+
+/** The env names with a value that look like secrets */
+export function secretEnvNames(envText: string): string[] {
+  return envText.split(/\r?\n/).map(line => line.trim()).filter(Boolean).flatMap(line => {
+    const at = line.indexOf('=')
+    const name = at > 0 ? line.slice(0, at).trim() : ''
+    return name && line.slice(at + 1).trim() && looksSecret(name) ? [name] : []
+  })
+}
+
+/** A typed command's arguments that look like secrets: `-Dname=value`, and `--name=value` / `--name value` */
+export function secretCommandArgNames(command: string): string[] {
+  const options = [...command.matchAll(/(?:^|\s)["']?(--?[A-Za-z][\w.-]*)(?:=|\s+)(?=[^\s-])/g)]
+    .map(match => match[1]).filter(option => !option.startsWith('-D') && looksSecret(option.replace(/^-+/, '')))
+  return [...secretVmArgNames(command).map(name => `-D${name}`), ...options]
+}
+
+/** The `-Dname=value` VM arguments whose name looks like a secret (the names only) */
+export function secretVmArgNames(vmArgs: string): string[] {
+  return [...vmArgs.matchAll(/(?:^|\s)["']?-D([^\s="']+)=(?=\S)/g)].map(match => match[1]).filter(looksSecret)
+}
+
+/**
+ * A confirmation main asks with several parts (blank-line separated, each titled by its first line: "기동 전
+ * 빌드", "Tomcat VM 인자", …) as sections to read; null for a single text (a typed command, shown as it is).
+ * main keeps that shape (src/ipc/runPresetStore.js presetApproval): a part's first line is its title, never
+ * something that runs, since the title is drawn small.
+ */
+export function confirmSections(command: string): Array<{ title: string; body: string }> | null {
+  const blocks = command.split(/\r?\n[ \t]*\r?\n/).filter(block => block.trim())
+  if (blocks.length < 2 && !blocks[0]?.includes('\n')) return null
+  return blocks.map(block => {
+    const lines = block.split(/\r?\n/)
+    return lines.length > 1 ? { title: lines[0].trim(), body: lines.slice(1).join('\n') } : { title: '', body: block }
+  })
+}

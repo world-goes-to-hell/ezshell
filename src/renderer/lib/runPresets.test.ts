@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   firstErrorRow, agentActionNotice, agentNoticeName, withObject, withSubject, runCommandLabel, agentActionNote, crashKey, draftOf, emptyDraft, parseEnvText, presetFromDraft, runButtons, runError, runFolderLabel,
-  runHead, runKind, runPills, runPort, sendPreview, type RunPreset, type RunState,
-  usesMaven, hasAdvancedValues, hasRunContent, suggestPresetName, usesJdk, shortPath, workspaceServerFill, eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
+  runHead, runKind, runPills, runPort, type RunPreset, type RunState,
+  confirmSections, looksSecret, secretCommandArgNames, secretEnvNames, secretVmArgNames, usesMaven, hasAdvancedValues, hasRunContent, suggestPresetName, usesJdk, shortPath, workspaceServerFill, eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
 } from './runPresets'
 
 const preset = (over: Partial<RunPreset> = {}): RunPreset => ({
@@ -102,6 +102,10 @@ describe('the first error line', () => {
     expect(at).toBe(1)
   })
 
+  it('uses the unmasked prefix to jump to the original terminal error', () => {
+    expect(firstErrorRow(rows('starting', 'ERROR password=fixture-terminal-secret'), 'ERROR password=****')).toBe(1)
+  })
+
   it('looks below the last restart divider only', () => {
     const error = 'Failed to compile'
     expect(firstErrorRow(rows('Failed to compile', '── 개발 서버 재기동 ──', 'ok', 'Failed to compile'), error)).toBe(3)
@@ -146,11 +150,6 @@ describe('crash notice and agent message', () => {
   it('tells one crash once per run', () => {
     expect(crashKey('k', 'p1', state({ startedAt: 5 }))).toBe('k:p1:5')
     expect(crashKey('k', 'p1', state({ startedAt: 6 }))).not.toBe(crashKey('k', 'p1', state({ startedAt: 5 })))
-  })
-
-  it('heads the error lines with the server, folder, command and exit code', () => {
-    const text = sendPreview(preset(), state({ status: 'crashed', exitCode: 1 }), { at: 0, lines: ['APPLICATION FAILED TO START', 'Port 8080 was already in use.'] }, 'gradlew bootRun')
-    expect(text).toBe('[백엔드 · backend/ · gradlew bootRun · 종료 1]\nAPPLICATION FAILED TO START\nPort 8080 was already in use.')
   })
 
   it('reads either error shape of main', () => {
@@ -453,5 +452,36 @@ describe('Maven settings (stage 2, Maven runs)', () => {
     expect(hasAdvancedValues({ ...draftOf(maven), mavenSource: 'pinned' })).toBe(true)
     expect(hasRunContent({ ...draftOf(maven), mavenRunner: 'temurin-17' })).toBe(true)
     expect(hasRunContent(draftOf(maven))).toBe(false)
+  })
+})
+
+describe('values that look like secrets, and the run confirmation (hardening)', () => {
+  it('knows names that look like secrets', () => {
+    for (const name of ['DB_PASSWORD', 'db.passwd', 'JWT_SECRET', 'GITHUB_TOKEN', 'API_KEY', 'apiKey', 'AWS_ACCESS_KEY_ID', 'ssh.private-key', 'GOOGLE_CREDENTIALS', 'DB_PWD', 'javax.net.ssl.trustStorePassword']) {
+      expect(looksSecret(name)).toBe(true)
+    }
+    for (const name of ['PWD', 'SPRING_PROFILES_ACTIVE', 'JAVA_HOME', 'server.port', 'PASSIVE_MODE']) expect(looksSecret(name)).toBe(false)
+    // A pw piece of a longer name, as main's workspace filter
+    expect(looksSecret('db.pw')).toBe(true)
+    expect(looksSecret('PW')).toBe(false)
+  })
+
+  it('finds the env names and -D arguments with a secret-looking name and a value', () => {
+    expect(secretEnvNames('SPRING_PROFILES_ACTIVE=local\nDB_PASSWORD=hunter2\nAPI_KEY=\n  JWT_SECRET = x ')).toEqual(['DB_PASSWORD', 'JWT_SECRET'])
+    expect(secretVmArgNames('-Xmx1g -Ddb.password=hunter2 "-Dapi.token=abc" -Dserver.port=8080 -Dempty.secret=')).toEqual(['db.password', 'api.token'])
+    expect(secretVmArgNames('java -jar app.jar')).toEqual([])
+    expect(secretCommandArgNames('java -Ddb.password=x -jar app.jar --db-password hunter2 --token=abc --port 8080 --verbose')).toEqual(['-Ddb.password', '--db-password', '--token'])
+    expect(secretCommandArgNames('npm run dev -- --port 3000')).toEqual([])
+  })
+
+  it('reads a confirmation of several parts as titled sections, and keeps a single command as it is', () => {
+    expect(confirmSections('node "C:/x/server.js" --port  8080')).toBeNull()
+    expect(confirmSections('기동 전 빌드\nant war\n\nTomcat VM 인자\n-Xmx1g  -Dx=1')).toEqual([
+      { title: '기동 전 빌드', body: 'ant war' },
+      { title: 'Tomcat VM 인자', body: '-Xmx1g  -Dx=1' }
+    ])
+    expect(confirmSections('Maven 실행 JDK temurin-17\n프로젝트 JDK로 Maven 컴파일·테스트 켜기')).toEqual([
+      { title: 'Maven 실행 JDK temurin-17', body: '프로젝트 JDK로 Maven 컴파일·테스트 켜기' }
+    ])
   })
 })

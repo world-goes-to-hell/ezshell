@@ -1,5 +1,4 @@
 const fs = require('node:fs/promises')
-const { lstatSync, realpathSync, rmSync } = require('node:fs')
 const path = require('node:path')
 const { parseXml } = require('../sessionImport/filezilla.js')
 const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
@@ -13,7 +12,7 @@ const XML_LIMIT = 256 * 1024
 const TOOL_TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/
 const BASE_NAME = /^run-(?:(\d+)-)?[A-Za-z0-9]{6}$/
 const LEGACY_BASE_MAX_AGE = 24 * 60 * 60 * 1000
-const activeBases = new Map()
+const activeBases = new Set()
 const MODELS = ['maven', 'ant', 'eclipse']
 const BAD_ARGUMENTS = 'Tomcat VM 인자를 한 줄에 입력하고 공백이 있는 인자는 따옴표로 묶어 주세요.'
 const BAD_WEBAPP = '워크트리 안에서 WEB-INF가 있는 웹 폴더를 선택해 주세요.'
@@ -255,11 +254,11 @@ async function makeBase(userData, id, conf, configure, encoding) {
     } catch { /* Retry on the next launch if the directory is busy. */ }
   }
   const directory = await fs.mkdtemp(path.join(parent, `run-${process.pid}-`))
-  activeBases.set(directory, parent)
   const cleanup = async () => {
     await removeBase(directory)
-    activeBases.delete(directory)
+    activeBases.delete(cleanup)
   }
+  activeBases.add(cleanup)
   try {
     const config = await configure(directory)
     const target = path.join(directory, 'conf')
@@ -302,14 +301,7 @@ async function makeBase(userData, id, conf, configure, encoding) {
 }
 
 function closeTomcatBases() {
-  for (const [directory, parent] of activeBases) {
-    try {
-      if (path.dirname(directory) === parent && lstatSync(directory).isDirectory() && realpathSync(directory) === directory) {
-        rmSync(directory, { recursive: true, force: true, maxRetries: 1, retryDelay: 60 })
-      }
-    } catch { /* A busy directory is retried on the next launch. */ }
-    activeBases.delete(directory)
-  }
+  return activeBases.size ? Promise.allSettled([...activeBases].map(cleanup => cleanup())) : null
 }
 
 async function tomcatLayout(worktree, cwd, webapp, home) {

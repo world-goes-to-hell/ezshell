@@ -1446,7 +1446,7 @@ declare global {
       runPresetDeleteMavenPin?: (worktreeFolder: string, id: string, options?: RunPresetOptions) => Promise<RunPresetResult>
       runPresetApplySuggestion?: (worktreeFolder: string, id: string, suggestion: { id: string; replacementUrl?: string; jarId?: string }) => Promise<RunPresetResult & { preset?: RunPreset }>
       runPresetDismissProposal?: (worktreeFolder: string, id: string, proposalId: string) => Promise<RunPresetResult>
-      runPresetSendPreview?: (worktreeFolder: string, id: string) => Promise<RunPresetResult & { text?: string }>
+      runPresetSendPreview?: (worktreeFolder: string, id: string, note?: string) => Promise<RunPresetResult & { text?: string; token?: string }>
       /** The `<target name>`s of the build.xml in a folder of the project (a Tomcat preset's Ant build) */
       runPresetAntTargets?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { targets?: string[] }>
       /** Folders of the project with WEB-INF (a Tomcat preset's web folder), from the project root */
@@ -1457,7 +1457,7 @@ declare global {
       runPresetWorkspaceServers?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; workspace?: string; servers?: WorkspaceServer[] }>
       /** Picks an existing context.xml (JNDI) for a Tomcat preset */
       runPresetChooseContextXml?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; contextXml?: string; label?: string }>
-      runPresetSend?: (projectFolder: string, id: string, agentId: string, note: string) => Promise<RunPresetResult>
+      runPresetSend?: (worktreeFolder: string, id: string, agentId: string, token: string) => Promise<RunPresetResult>
       onRunPresetState?: (callback: (event: { projectKey: string; worktreeKey: string; id: string; state: RunState; firstAgentAction?: true }) => void) => () => void
       onRuntimesProgress: (callback: (progress: JdkProgress | null) => void) => () => void
       oracleClientStatus?: () => Promise<OracleClientStatus | { success: false; error: string }>

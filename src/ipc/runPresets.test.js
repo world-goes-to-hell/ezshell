@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createRunPresets, registerRunPresetIpc, resolveProject, withSubject } from './runPresets.js'
-import { commandHash, createRunPresetStore, projectKey, realDirectory } from './runPresetStore.js'
+import { commandHash, createRunPresetStore, presetApproval, projectKey, realDirectory, validatePreset } from './runPresetStore.js'
 import { pathKey } from '../renderer/lib/localWorkspaceTree'
 import { withSubject as rendererSubject } from '../renderer/lib/runPresets'
 import { zipOf } from '../../e2e/support/jdkFixture.js'
@@ -39,7 +39,8 @@ async function fixture(options = {}) {
   const allowed = () => !state.locked
   const emit = (id, event) => shellTasks.get(id).onEvent({ shellId: id, ...event })
   const shells = {
-    currentDirectory: async () => state.cwd,
+    currentDirectory: async () => state.displayCwd ?? state.cwd,
+    runAuthorityDirectory: async () => state.cwd,
     chatAgentId: () => state.bound ? state.agentId : null,
     async openDevelopmentTask(task) {
       if (state.beforeOpen) await state.beforeOpen()
@@ -70,7 +71,7 @@ async function fixture(options = {}) {
   const agent = (method, name, fields = {}) => controller.agentTool('agent-1', { method: `run-${method}`, name, ...fields }, allowed)
   const list = () => controller.list(project)
   const start = async (id, command = 'npm run dev') => {
-    expect(await invoke('run-preset-start', id)).toEqual({ needsConfirm: { command } })
+    expect(await invoke('run-preset-start', id)).toEqual({ needsConfirm: { command: expect.stringContaining(command) } })
     expect(await invoke('run-preset-start', id, { confirmCustom: true })).toEqual({ ok: true })
   }
   return { file, outside, folder, subfolder, checkout, checkoutSubfolder, project, controller, makeController, allowed, event, handlers, ipc,
@@ -92,12 +93,12 @@ describe('saved project runs', () => {
     await writeFile(path.join(f.folder, 'pom.xml'), '<project>spring-boot-maven-plugin</project>')
     await writeFile(path.join(f.folder, process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw'), 'fixture')
     const saved = await f.save('Maven 제안', { kind: 'task', taskId: '.:maven', agentControl: false })
-    const fileBefore = await readFile(f.file, 'utf8')
     const propose = fields => f.agent('propose', saved.name, fields)
     const log = () => f.agent('log', saved.name, { errors: true })
     await expect(f.agent('start', saved.name)).rejects.toThrow('꺼져')
     await expect(propose({ suggestion: 'f'.repeat(64), note: 'N/A' })).rejects.toThrow('최신 진단')
-    expect(await f.invoke('run-preset-start', saved.id)).toEqual({ ok: true })
+    await f.start(saved.id, '기동 후보\n.:maven')
+    const fileBefore = await readFile(f.file, 'utf8')
     const { shellId } = f.list().states[saved.id]
     const blocked = '[ERROR] Could not transfer artifact example:demo:jar:1 from/to maven-default-http-blocker (http://0.0.0.0/): Blocked mirror for repositories: [legacy (http://legacy.invalid/maven/, default)]\n'
     f.emit(shellId, { type: 'data', data: blocked })
@@ -120,9 +121,9 @@ describe('saved project runs', () => {
     const recent = []
     for (let index = 0; index < 6; index++) {
       const url = `https://repo${index}.example.test/maven/`
-      const result = await propose({ ...fields, url, note: `\x1b[31m저장소 ${index}\x1b[0m` })
+      const result = await propose({ ...fields, url, note: `\x1b[31m저장소 ${index} password=fixture-proposal-marker\x1b[0m` })
       expect(result).toMatchObject({ status: 'pending' })
-      recent.unshift({ ...result, url, note: `저장소 ${index}` })
+      recent.unshift({ ...result, url, note: `저장소 ${index} password=****` })
     }
     expect(await readFile(f.file, 'utf8')).toBe(fileBefore)
     expect(f.list().states[saved.id].proposals.map(({ id }) => id)).toEqual(recent.slice(0, 5).map(({ id }) => id))
@@ -131,7 +132,7 @@ describe('saved project runs', () => {
         suggestion: { id: item.suggestion, apply: 'mavenMirror', repositoryId: 'legacy', replacementUrl: recent[0].url } }),
       ...Array(4).fill(expect.anything())
     ] }) }))
-    expect((await log()).proposals.map(({ status }) => status)).toEqual(Array(5).fill('pending'))
+    expect((await log()).proposals).toMatchObject(recent.slice(0, 5).map(({ note }) => ({ status: 'pending', note })))
     f.state.agentId = 'agent-2'
     const other = await f.controller.agentTool('agent-2', { method: 'run-log', name: saved.name, errors: true }, f.allowed)
     expect(other.proposals).toEqual([])
@@ -247,7 +248,7 @@ describe('saved project runs', () => {
     await writeFile(path.join(f.folder, process.platform === 'win32' ? 'mvnw.cmd' : 'mvnw'), 'fixture')
     const saved = await f.save('Maven', { kind: 'task', taskId: '.:maven', mavenMirrors: [{ repositoryId: 'forged', url: 'https://wrong.example.test/' }] })
     expect(saved).not.toHaveProperty('mavenMirrors')
-    expect(await f.invoke('run-preset-start', saved.id)).toEqual({ ok: true })
+    await f.start(saved.id, '기동 후보\n.:maven')
     const { shellId } = f.list().states[saved.id]
     const blocked = '[ERROR] Could not transfer artifact example:demo:jar:1 from/to maven-default-http-blocker (http://0.0.0.0/): Blocked mirror for repositories: [legacy (http://legacy.invalid/maven/, default)]'
     f.emit(shellId, { type: 'data', data: blocked + '\n' })
@@ -325,6 +326,10 @@ describe('saved project runs', () => {
     expect(await f.invoke('run-preset-maven-pin-status', saved.id)).toEqual({ ok: true, pinned: true })
     expect(await f.invoke('run-preset-export-maven-pin', saved.id, { confirmCustom: true })).toHaveProperty('needsConfirm')
     expect(await f.invokeCheckout('run-preset-export-maven-pin', saved.id, { confirmCustom: true })).toHaveProperty('needsConfirm')
+    await rename(f.checkout, `${f.checkout}-previous`)
+    await mkdir(f.checkout)
+    expect(await f.invokeCheckout('run-preset-export-maven-pin', saved.id, { confirmCustom: true })).toHaveProperty('needsConfirm')
+    expect(await readdir(f.checkout)).toEqual([])
     expect(await f.invoke('run-preset-export-maven-pin', saved.id, { confirmCustom: true })).toEqual({ ok: true })
     expect(await readFile(path.join(f.folder, '.mvn-repo', 'example', 'sample', '1', 'sample-1.jar'), 'utf8')).toBe('artifact')
     expect(await f.invoke('run-preset-export-maven-pin', saved.id)).toHaveProperty('needsConfirm')
@@ -360,7 +365,7 @@ describe('saved project runs', () => {
     }
     await writeFile(path.join(f.folder, 'pom.xml'), '<project>spring-boot-maven-plugin</project>')
     const legacy = await f.save('Spring Boot 8', { kind: 'task', taskId: '.:maven', jdk: 'legacy' })
-    expect(await f.invoke('run-preset-start', legacy.id)).toEqual({ ok: true })
+    await f.start(legacy.id, 'JDK\nlegacy')
     const [legacyShell, first] = [...f.shellTasks][0]
     expect(first.javaHome).toBe(homes.legacy)
     expect(first.command).not.toContain('-Dmaven.compiler.fork=')
@@ -371,7 +376,7 @@ describe('saved project runs', () => {
     }))
 
     const enhanced = await f.save('Spring Boot 21', { kind: 'task', taskId: '.:maven', jdk: 'jbr-21', hotReload: 'enhanced' })
-    expect(await f.invoke('run-preset-start', enhanced.id)).toEqual({ ok: true })
+    await f.start(enhanced.id, '바로 반영\n확장')
     const [shellId, task] = [...f.shellTasks].at(-1)
     expect(task.javaHome).toBe(homes['jbr-21'])
     expect(task.launchNotice).toBeUndefined()
@@ -463,7 +468,8 @@ describe('saved project runs', () => {
     expect(await f.invoke('run-preset-webapps')).toEqual({ ok: true, folders: ['WebContent'] })
     const saved = await f.save('Tomcat', { kind: 'tomcat', tomcat: 'fixture-tomcat', webapp: 'WebContent', vmArgs: '-Xmx512m', prepare: { tool: 'ant', target: 'pack' } })
     await expect(f.agent('start', 'Tomcat')).rejects.toThrow('사용자가')
-    expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual({ needsConfirm: { command: '기동 전 빌드\nant pack\n\nTomcat VM 인자\n-Xmx512m' } })
+    expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual({ needsConfirm: {
+      command: expect.stringContaining('기동 전 빌드\nant pack\n\nTomcat VM 인자\n-Xmx512m') } })
     expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual({ ok: true })
     const { shellId } = f.list().states[saved.id]
     f.emit(shellId, { type: 'data', phase: 'prepare', data: 'Server startup in 50 seconds http://localhost:8080/\n' })
@@ -514,7 +520,7 @@ describe('saved project runs', () => {
     expect(preset).toMatchObject({ contextXml: reference, logEncoding: 'ms949' })
     expect(await readFile(f.file, 'utf8')).not.toContain('fixture-password')
     const approval = await f.invoke('run-preset-start', preset.id)
-    expect(approval).toEqual({ needsConfirm: { command: `Tomcat 컨텍스트 설정 파일\n${reference}` } })
+    expect(approval).toEqual({ needsConfirm: { command: expect.stringContaining(`Tomcat 컨텍스트 설정 파일\n${reference}`) } })
   })
 
   it('checks names, env, relative paths and stored data', async () => {
@@ -553,7 +559,8 @@ describe('saved project runs', () => {
     await writeFile(path.join(f.folder, 'pom.xml'), '<artifactId>spring-boot-starter</artifactId>')
     const saved = await f.save('Spring', { kind: 'task', taskId: '.:maven', hotReload: 'enhanced', jdk: 'jdk-21' })
     expect(saved).toMatchObject({ hotReload: 'enhanced' })
-    expect(await f.invoke('run-preset-start', saved.id)).toMatchObject({ ok: false, error: expect.stringContaining('HotswapAgent') })
+    expect(await f.invoke('run-preset-start', saved.id)).toHaveProperty('needsConfirm')
+    expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toMatchObject({ ok: false, error: expect.stringContaining('HotswapAgent') })
     expect(f.operations).toEqual([])
   })
 
@@ -567,7 +574,7 @@ describe('saved project runs', () => {
     const controller = f.makeController({ prepareReload: async task => ({ ...task, hotReload: { port: 57334 } }),
       startReload(config, options) { callbacks = options; expect(config.port).toBe(57334); return { close, suspend, resume } } })
     const { preset } = await controller.save(f.project, { name: 'Spring', kind: 'task', taskId: '.:maven', hotReload: 'standard' }, f.allowed)
-    await controller.act(f.project, preset.id, 'start', { allowed: f.allowed })
+    await controller.act(f.project, preset.id, 'start', { allowed: f.allowed, approve: () => true })
     expect(callbacks).toBeUndefined()
     f.emit('local:1', { type: 'launched', pid: 13, env: { Path: 'JDK' } })
     expect(callbacks).toMatchObject({ pid: 13, env: { Path: 'JDK' } })
@@ -577,18 +584,19 @@ describe('saved project runs', () => {
     const read = (operation, fields) => controller.agentTool('agent-1', { method: `run-${operation}`, name: 'Spring', ...fields }, f.allowed)
     callbacks.onState({ status: 'applied', classes: 1, at: 101 })
     const wait = read('wait', { seconds: 2, until: 'reload' })
-    const failure = { status: 'compileError', at: 102, reason: 'javac 컴파일에 실패했습니다.' }
+    const failure = { status: 'compileError', at: 102, reason: 'javac 컴파일에 실패했습니다. token=fixture-reload-marker' }
     callbacks.onState({ status: 'compiling', at: 102 })
     callbacks.onState(failure, ['Example.java:1: error: Missing symbol'])
     callbacks.onState({ status: 'applied', classes: 2, at: 103 })
-    expect(await wait).toMatchObject({ result: 'compileError', status: 'running', reload: failure })
+    expect(await wait).toMatchObject({ result: 'compileError', status: 'running',
+      reload: { ...failure, reason: 'javac 컴파일에 실패했습니다. token=****' } })
     const listed = await read('list')
     expect(listed.presets[0]).toMatchObject({ status: 'running', port: null, errors: 1, reload: { status: 'applied', classes: 2 } })
     expect(JSON.stringify(listed)).not.toContain('57334')
     const recent = await read('log', { lines: 2 })
-    expect(recent.lines).toEqual([expect.stringContaining('바로 반영됨 · 클래스 2개'), expect.stringContaining('컴파일 오류')])
+    expect(recent.lines).toEqual([expect.stringContaining('바로 반영됨 · 클래스 2개'), expect.stringContaining('token=****')])
     const { groups } = await read('log', { errors: true })
-    expect(groups.at(-1).lines).toEqual(['ERROR javac 컴파일에 실패했습니다.', 'Example.java:1: error: Missing symbol'])
+    expect(groups.at(-1).lines).toEqual(['ERROR javac 컴파일에 실패했습니다. token=****', 'Example.java:1: error: Missing symbol'])
     expect(JSON.stringify(f.sendState.mock.calls)).not.toContain('57334')
     f.state.locked = true
     controller.suspendReloads()
@@ -607,9 +615,10 @@ describe('saved project runs', () => {
     const { id } = saved
     const unauthorized = await f.handlers.get('run-preset-start')({ ...f.event, senderFrame: {} }, f.folder, id)
     expect(unauthorized.ok).toBe(false)
-    expect(await f.invoke('run-preset-start', id, { confirmCustom: true })).toEqual({ needsConfirm: { command: 'npm run dev' } })
-    await f.save('web', { ...saved, command: 'node dev.js' })
-    expect(await f.invoke('run-preset-start', id, { confirmCustom: true })).toEqual({ needsConfirm: { command: 'node dev.js' } })
+    const options = '\n\nJDK\njdk-21\n\n환경 변수 이름\nPORT'
+    expect(await f.invoke('run-preset-start', id, { confirmCustom: true })).toEqual({ needsConfirm: { command: 'npm run dev' + options } })
+    const changed = await f.save('web', { ...saved, command: 'node dev.js' })
+    expect(await f.invoke('run-preset-start', id, { confirmCustom: true })).toEqual({ needsConfirm: { command: 'node dev.js' + options } })
     expect(f.operations).toEqual([])
     expect(await f.invoke('run-preset-start', id, { confirmCustom: true })).toEqual({ ok: true })
     const shellId = f.list().states[id].shellId
@@ -618,7 +627,7 @@ describe('saved project runs', () => {
     expect(f.operations).toEqual([['start', 'web', shellId], ['restart', 'web', shellId]])
     expect(f.notifyCrash).not.toHaveBeenCalled()
     expect(f.sendState).toHaveBeenLastCalledWith(expect.objectContaining({ id, state: expect.objectContaining({ shellId, status: 'starting' }) }))
-    expect(createRunPresetStore(f.file).list(projectKey(f.folder))[0].confirmedHash).toBe(commandHash('node dev.js'))
+    expect(createRunPresetStore(f.file).list(projectKey(f.folder))[0].confirmedHash).toBe(presetApproval(changed).hash)
   })
 
   it('checks shell binding, project, lock, per-preset control and the user stop window', async () => {
@@ -658,6 +667,68 @@ describe('saved project runs', () => {
     expect(await f.invoke('run-preset-stop', web.id)).toMatchObject({ ok: false })
   })
 
+  it('keeps every agent run operation inside the verified project when the displayed folder differs', async () => {
+    const f = await fixture()
+    await f.save('accessible')
+    const inOtherProject = (channel, ...args) => f.handlers.get(channel)(f.event, f.outside, ...args)
+    const { preset: privatePreset } = await inOtherProject('run-presets-save', { name: 'other', kind: 'custom', command: 'npm run dev' })
+    expect(await inOtherProject('run-preset-start', privatePreset.id)).toHaveProperty('needsConfirm')
+    expect(await inOtherProject('run-preset-start', privatePreset.id, { confirmCustom: true })).toEqual({ ok: true })
+    const shellId = f.operations[0][2]
+    f.emit(shellId, { type: 'data', data: 'ERROR private worktree output\n' })
+    f.state.displayCwd = f.outside
+
+    const list = await f.agent('list')
+    expect(list.presets.map(item => item.name)).toEqual(['accessible'])
+    for (const operation of ['log', 'start', 'restart', 'stop', 'wait', 'propose']) {
+      await expect(f.agent(operation, 'other', { errors: true, suggestion: 'a'.repeat(64), note: 'Fixture' }))
+        .rejects.toThrow('실행 구성을 찾을 수 없습니다')
+    }
+    expect(f.operations).toHaveLength(1)
+    f.state.cwd = null
+    await expect(f.agent('list')).rejects.toThrow('작업 폴더')
+    if (process.platform === 'win32') {
+      f.state.cwd = path.join(path.dirname(f.file), 'no-preset')
+      await mkdir(f.state.cwd)
+      expect(await f.agent('list')).toEqual({ presets: [], message: expect.stringContaining('no-preset에서 열렸습니다') })
+      await expect(f.agent('log', 'other')).rejects.toThrow('새 로컬 셸을 열어 주세요')
+    }
+  })
+
+  it('hashes execution scope and options while keeping log encoding and environment order outside the approval', () => {
+    const id = 'a1a729f9-0e10-4f7e-b510-8affbe1b2655'
+    const common = { name: '시험', kind: 'task', taskId: '.:maven', env: { PORT: '5000', TOKEN: 'fixture-secret' } }
+    const approval = input => presetApproval(validatePreset(input, id))
+    const original = approval(common)
+    expect(original.command).toContain('TOKEN')
+    expect(original.command).not.toContain('fixture-secret')
+    expect(approval({ ...common, logEncoding: 'ms949', env: { TOKEN: 'fixture-secret', PORT: '5000' } }).hash).toBe(original.hash)
+    for (const change of [{ relative: 'backend' }, { jdk: 'jdk-21' }, { hotReload: 'standard' }, { env: { ...common.env, TOKEN: 'changed' } }]) {
+      expect(approval({ ...common, ...change }).hash).not.toBe(original.hash)
+    }
+    const tomcat = { ...common, kind: 'tomcat', tomcat: 'tomcat-9.0.99', webapp: 'WebContent', contextPath: '/app', port: 8080 }
+    for (const change of [{ tomcat: 'tomcat-10.1.2' }, { webapp: 'other' }, { contextPath: '/other' }, { port: 8081 }]) {
+      expect(approval({ ...tomcat, ...change }).hash).not.toBe(approval(tomcat).hash)
+    }
+  })
+
+  it('requires fresh approval after migration or an environment value change with the same summary', async () => {
+    const f = await fixture()
+    const saved = await f.save('web', { env: { TOKEN: 'first-fixture' } })
+    const data = JSON.parse(await readFile(f.file, 'utf8'))
+    data.projects[0].presets[0].confirmedHash = commandHash(saved.command)
+    await writeFile(f.file, JSON.stringify(data))
+    expect(createRunPresetStore(f.file).list(f.project.key)[0].confirmedHash).toBeUndefined()
+
+    const question = await f.invoke('run-preset-start', saved.id)
+    expect(question.needsConfirm.command).toContain('TOKEN')
+    expect(question.needsConfirm.command).not.toContain('first-fixture')
+    await f.save('web', { ...saved, env: { TOKEN: 'second-fixture' } })
+    expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual(question)
+    expect(f.operations).toHaveLength(0)
+    expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual({ ok: true })
+  })
+
   it('confirms a batch before starting, follows its order and waits for the previous preset', async () => {
     const f = await fixture()
     const front = await f.save('front', { command: 'node front.js', waitReady: true })
@@ -680,8 +751,10 @@ describe('saved project runs', () => {
     const { candidates } = await f.invoke('run-presets-candidates', '.')
     const saved = await f.save('web', { kind: 'task', taskId: candidates[0].taskId })
     const install = process.platform === 'win32' ? 'npm.cmd install' : 'npm install'
+    await expect(f.agent('start', 'web')).rejects.toThrow('사용자가')
+    expect(await f.invoke('run-preset-start', saved.id, { confirmInstall: true })).toHaveProperty('needsConfirm')
+    expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual({ needsInstall: { command: install } })
     await expect(f.agent('start', 'web')).rejects.toThrow('의존성 설치가 필요합니다')
-    expect(await f.invoke('run-preset-start', saved.id, { confirmInstall: true })).toEqual({ needsInstall: { command: install } })
     expect(await f.invoke('run-preset-start', saved.id, { confirmInstall: true })).toEqual({ ok: true })
     expect(f.shellTasks.get('local:1').installCommand).toBe(install)
     expect(await f.invoke('run-preset-restart', saved.id, { confirmInstall: true })).toEqual({ needsInstall: { command: install } })
@@ -695,16 +768,22 @@ describe('saved project runs', () => {
     const f = await fixture()
     const { id } = await f.save('web')
     await f.start(id)
-    f.emit('local:1', { type: 'data', data: '\x1b[31mERROR failed\x1b[0m\r\n    at fixture (main.js:1:2)\r\n' })
+    f.emit('local:1', { type: 'data', data: '\x1b[31mERROR failed password=fixture-log-marker\x1b[0m\r\n    at fixture (main.js:1:2)\r\n' })
     f.emit('local:1', { type: 'exit', exitCode: 1 })
     f.emit('local:1', { type: 'exit', exitCode: 1 })
     expect(f.notifyCrash).toHaveBeenCalledExactlyOnceWith('project', 'web')
     expect(f.list().states[id]).toMatchObject({ status: 'crashed', exitCode: 1, errors: 1 })
-    expect(await f.agent('log', 'web', { lines: 2 })).toEqual({ lines: ['ERROR failed', '    at fixture (main.js:1:2)'] })
-    expect(await f.invoke('run-preset-send', id, 'agent-1', '확인 부탁합니다')).toEqual({ ok: true })
-    expect(f.sendAsUser.mock.calls[0][0]).toMatchObject({ to: 'agent-1', text: expect.stringContaining('ERROR failed\n    at fixture (main.js:1:2)\n\n확인 부탁합니다') })
+    const lines = ['ERROR failed password=****', '    at fixture (main.js:1:2)']
+    expect(await f.agent('log', 'web', { lines: 2 })).toEqual({ lines })
+    expect(await f.invoke('run-preset-errors', id)).toEqual({ groups: [{ at: 100, lines }] })
+    const { text, token } = await f.invoke('run-preset-send-preview', id, '확인 부탁합니다 secret=fixture-note-marker')
+    expect(text).toContain(`${lines.join('\n')}\n\n확인 부탁합니다 secret=****`)
+    expect(await f.invoke('run-preset-send', id, 'agent-1', token)).toEqual({ ok: true })
+    expect(f.sendAsUser.mock.calls[0][0]).toEqual({ to: 'agent-1', text })
     f.state.cwd = f.outside
-    expect(await f.invoke('run-preset-send', id, 'agent-1', '')).toMatchObject({ ok: false })
+    const outsider = await f.invoke('run-preset-send-preview', id)
+    expect(await f.invoke('run-preset-send', id, 'agent-1', outsider.token)).toMatchObject({ ok: false })
+    expect(f.sendAsUser).toHaveBeenCalledTimes(1)
     const silent = await f.save('quiet', { notify: false })
     await f.start(silent.id)
     f.emit('local:2', { type: 'exit', exitCode: 1 })
@@ -717,24 +796,37 @@ describe('saved project runs', () => {
     await f.start(id)
     f.emit('local:1', { type: 'data', data: `ERROR failure ${'x'.repeat(1500)}\n${'    at fixture (src/very-long-fixture-name/main.js:1:2)\n'.repeat(80)}` })
     f.emit('local:1', { type: 'exit', exitCode: 2 })
-    const preview = (event = f.event) => f.handlers.get('run-preset-send-preview')(event, f.folder, id)
+    const preview = (event = f.event, note) => f.handlers.get('run-preset-send-preview')(event, f.folder, id, note)
     await expect(preview({ ...f.event, senderFrame: {} })).resolves.toMatchObject({ ok: false })
     f.state.locked = true
     await expect(preview()).resolves.toMatchObject({ ok: false })
     f.state.locked = false
-    const { text } = await preview()
+    const note = 'n'.repeat(4000)
+    const { text, token } = await preview(f.event, note)
     expect(text).toMatch(/^web\n폴더 sub\/\n실행 방식 직접 입력\n종료 코드 2\n\nERROR failure/)
     expect(text).not.toContain(f.folder)
-    expect(text).toHaveLength(3998)
+    expect(text).toHaveLength(8000)
+    expect(text.endsWith(`\n\n${note}`)).toBe(true)
+    expect(await f.invoke('run-preset-send', id, 'agent-1')).toMatchObject({ ok: false })
+    expect(await f.invoke('run-preset-send', id, 'agent-1', 'other-token')).toMatchObject({ ok: false })
+    expect(await f.invokeCheckout('run-preset-send', id, 'agent-1', token)).toMatchObject({ ok: false })
+    const other = await f.save('other')
+    expect(await f.invoke('run-preset-send', other.id, 'agent-1', token)).toMatchObject({ ok: false })
+    const previousFrame = f.event.sender.mainFrame
+    const newFrame = {}
+    f.event.sender.mainFrame = newFrame
+    const send = f.handlers.get('run-preset-send')
+    expect(await send({ ...f.event, senderFrame: newFrame }, f.folder, id, 'agent-1', token)).toMatchObject({ ok: false })
+    f.event.sender.mainFrame = previousFrame
+    expect(f.sendAsUser).not.toHaveBeenCalled()
     expect(await f.invoke('run-preset-restart', id)).toEqual({ ok: true })
-    const note = 'n'.repeat(4000)
-    expect(await f.invoke('run-preset-send', id, 'agent-1', note)).toEqual({ ok: true })
-    expect(f.sendAsUser).toHaveBeenLastCalledWith({ to: 'agent-1', text: `${text}\n\n${note}` })
-    expect(f.sendAsUser.mock.lastCall[0].text.length).toBeLessThanOrEqual(8000)
-    const fresh = await preview()
+    const sends = await Promise.all([1, 2].map(() => f.invoke('run-preset-send', id, 'agent-1', token)))
+    expect(sends.filter(result => result.ok)).toEqual([{ ok: true }])
+    expect(f.sendAsUser).toHaveBeenCalledExactlyOnceWith({ to: 'agent-1', text })
+    const fresh = await preview(f.event, '  ')
     expect(fresh.text).not.toContain('ERROR failure')
-    expect(await f.invoke('run-preset-send', id, 'agent-1', '  ')).toEqual({ ok: true })
-    expect(f.sendAsUser).toHaveBeenLastCalledWith({ to: 'agent-1', text: fresh.text })
+    f.ipc.clearConfirmations()
+    expect(await f.invoke('run-preset-send', id, 'agent-1', fresh.token)).toMatchObject({ ok: false })
   })
 
   it('resolves the primary project and current worktree separately in a real Git repository', async () => {
@@ -799,7 +891,7 @@ describe('saved project runs', () => {
       mkdir(path.join(f.folder, 'node_modules')), mkdir(path.join(f.checkout, 'node_modules'))])
     const { candidates } = await f.invoke('run-presets-candidates', '.')
     const saved = await f.save('web', { kind: 'task', taskId: candidates[0].taskId })
-    expect(await f.invoke('run-preset-start', saved.id)).toEqual({ ok: true })
+    await f.start(saved.id, '기동 후보\n.:node')
     expect(await f.invokeCheckout('run-preset-start', saved.id)).toEqual({ ok: true })
     expect(f.shellTasks.get('local:1')).toMatchObject({ cwd: f.folder, command: expect.stringMatching(/ run dev$/) })
     expect(f.shellTasks.get('local:2')).toMatchObject({ cwd: f.checkout, command: expect.stringMatching(/ run serve$/) })

@@ -1,11 +1,14 @@
 // The question main asks before a run preset runs something the user should read first: a typed command
 // the first time (needsConfirm), or the install before the server (needsInstall). Not the shared confirm
 // dialog: there Enter on the first focus approved at once, whitespace folded so the text read differed
-// from what runs, and a long command pushed the window off the screen (review of stage 1).
+// from what runs, and a long command pushed the window off the screen (review of stage 1). What main asks
+// about grew (folder, JDK, env, hot reload, Tomcat's and Maven's settings): several parts are shown as titled
+// sections. main keeps only a hash of what was approved, so it says what runs, not what changed.
 import { useRef } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiTerminalBoxLine } from 'react-icons/ri'
 import { answerRunCommand, useRunPresets } from '../../stores/runPresetStore'
+import { confirmSections } from '../../lib/runPresets'
 import { useApprovalArming } from '../AgentChat/useApprovalArming'
 import './RunPresets.css'
 
@@ -25,7 +28,11 @@ const TEXTS = {
 function RunCommandDialog({ kind, command }: { kind: 'custom' | 'install' | 'action'; command: string }) {
   const { armed, canActivate } = useApprovalArming()
   const cancel = useRef<HTMLButtonElement>(null)
-  const text = TEXTS[kind]
+  const sections = kind === 'custom' ? confirmSections(command) : null
+  // Several parts: what the preset runs as a whole (a typed command alone keeps its own words)
+  const text = sections
+    ? { title: '실행 내용 확인', lead: '처음 실행하거나 실행 내용이 바뀌었습니다. 내용을 확인해 주세요.', confirm: '실행' }
+    : TEXTS[kind]
   return (
     <Dialog.Root open onOpenChange={open => { if (!open) answerRunCommand(false) }}>
       <Dialog.Portal>
@@ -38,7 +45,20 @@ function RunCommandDialog({ kind, command }: { kind: 'custom' | 'install' | 'act
           </Dialog.Title>
           <p className="run-command-lead">{text.lead}</p>
           {/* The exact text that runs: spaces and tabs as they are, long commands scroll inside */}
-          <pre id="run-command-text" className="run-command-text">{command}</pre>
+          {sections ? (
+            <div id="run-command-text" className="run-command-text run-command-sections">
+              {sections.map((section, index) => (
+                <section key={index}>
+                  {section.title && <strong>{section.title}</strong>}
+                  <pre>{section.body}</pre>
+                  {/* Env values are only in main's hash: a changed value asks again with the same names */}
+                  {section.title.includes('환경 변수') && <small className="run-command-note">값은 보이지 않습니다. 값이 바뀌어도 다시 확인합니다.</small>}
+                </section>
+              ))}
+            </div>
+          ) : (
+            <pre id="run-command-text" className="run-command-text">{command}</pre>
+          )}
           <div className="modal-actions">
             <button ref={cancel} type="button" className="btn-secondary modal-btn" onClick={() => answerRunCommand(false)}>취소</button>
             <button type="button" className="btn-primary modal-btn" disabled={!armed}

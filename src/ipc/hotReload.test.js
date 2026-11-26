@@ -161,13 +161,26 @@ function fakeWatch() {
 }
 
 describe('hot reload worker', () => {
+  it('keeps the JDWP handshake behind the ownership check even while paused', async () => {
+    let ownsListener = false
+    const vm = { close: vi.fn(), onClose: vi.fn() }
+    const connect = vi.fn(async () => vm)
+    const verifyListener = vi.fn(async () => ownsListener)
+    leases.push(startHotReload({ port: 58140, cwd: root, worktree: root }, { env: {}, pid: 6, paused: true,
+      running: () => true, onState: vi.fn(), connect, verifyListener }))
+    await vi.waitFor(() => expect(verifyListener).toHaveBeenCalledWith({ pid: 6, port: 58140, signal: expect.any(AbortSignal) }))
+    expect(connect).not.toHaveBeenCalled()
+    ownsListener = true
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(1), { timeout: 1600 })
+  })
+
   it('sends no classpath request when a pause interrupts the capability check', async () => {
     const capabilities = Promise.withResolvers()
     const report = vi.fn()
     const vm = { canRedefine: vi.fn(() => capabilities.promise), classPaths: vi.fn(), close: vi.fn(), onClose: vi.fn() }
     const connect = vi.fn(async () => vm)
     const session = startHotReload({ port: 58140, cwd: root, worktree: root }, { env: {}, pid: 6, paused: true, running: () => true,
-      onState: report, connect })
+      onState: report, connect, verifyListener: async () => true })
     leases.push(session)
     await vi.waitFor(() => expect(connect).toHaveBeenCalled())
     expect(vm.canRedefine).not.toHaveBeenCalled()
@@ -186,7 +199,7 @@ describe('hot reload worker', () => {
     const vm = { canRedefine: async () => false, close: vi.fn(), onClose: vi.fn() }
     const connect = vi.fn(async () => vm)
     const session = startHotReload({ port: 58140, cwd: root, worktree: root }, { env: {}, pid: 6, running: () => true,
-      onState: report, watchSource: events.watch, connect })
+      onState: report, watchSource: events.watch, connect, verifyListener: async () => true })
     leases.push(session)
     await vi.waitFor(() => expect(report).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed' }), undefined))
     expect(events.watch).not.toHaveBeenCalled()
@@ -224,7 +237,7 @@ describe('hot reload worker', () => {
     const report = vi.fn()
     let running = false
     leases.push(startHotReload({ port: 58140, cwd: root, worktree: root }, { env: {}, pid: 6,
-      running: () => running, onState: report, watchSource: events.watch, connect, makeCompiler: () => compile,
+      running: () => running, onState: report, watchSource: events.watch, connect, verifyListener: async () => true, makeCompiler: () => compile,
       readClassInfo: vi.fn(), timeout: 2000, quiet: 25 }))
     await vi.waitFor(() => expect(report).toHaveBeenCalledWith(expect.objectContaining({ status: 'watching' }), undefined))
     expect(connect).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ host: '127.0.0.1', port: 58140 }))
@@ -259,7 +272,7 @@ describe('hot reload worker', () => {
       .mockRejectedValueOnce(Object.assign(new Error('diagnostic'), { stderr: `bytecode error near ${port}` }))
       .mockResolvedValueOnce(classes)
     leases.push(startHotReload({ port, cwd: root, worktree: root }, { env: {}, pid: 6, running: () => true,
-      onState: report, watchSource: events.watch, connect, makeCompiler: () => compile, readClassInfo: vi.fn(), quiet: 10 }))
+      onState: report, watchSource: events.watch, connect, verifyListener: async () => true, makeCompiler: () => compile, readClassInfo: vi.fn(), quiet: 10 }))
     await vi.waitFor(() => expect(disconnected).toBeTypeOf('function'))
     await vi.waitFor(() => expect(events.watch).toHaveBeenCalled())
     disconnected()

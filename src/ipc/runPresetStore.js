@@ -83,25 +83,26 @@ function mavenExecutionApproval(preset) {
 }
 
 function presetApproval(preset) {
-  if (preset.kind === 'custom') return { command: preset.command, hash: commandHash(preset.command) }
+  const { kind, relative, jdk, hotReload } = preset
+  const environment = Object.entries(preset.env).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+  const signature = [2, kind, relative, jdk, environment, hotReload]
+  const options = [relative !== '.' && `실행 폴더\n${relative}`, jdk !== 'system' && `JDK\n${jdk}`,
+    environment.length && `환경 변수 이름\n${environment.map(([name]) => name).join('\n')}`,
+    hotReload !== 'off' && `바로 반영\n${hotReload === 'enhanced' ? '확장' : '표준'}`]
+  const approval = (parts, target) => ({ command: [...parts, ...options].filter(Boolean).join('\n\n'),
+    hash: commandHash(JSON.stringify([...signature, ...target])) })
+  if (kind === 'custom') return approval([preset.command], [preset.command])
   const maven = preset.mavenSource === 'pinned' ? null : mavenApproval(preset)
   const execution = mavenExecutionApproval(preset)
-  if (preset.kind !== 'tomcat') {
-    if (!execution) return maven && { command: maven.text, hash: commandHash(JSON.stringify(maven.signature)) }
-    const command = [maven?.text, execution.text].filter(Boolean).join('\n\n')
-    return { command, hash: commandHash(JSON.stringify([preset.kind, preset.taskId, preset.relative, maven?.signature, execution.signature])) }
-  }
-  if (!preset.vmArgs.trim() && !preset.prepare && !preset.contextXml && !preset.extraLibs?.length) return null
-  const prepare = preset.prepare
+  const mavenParts = [maven?.text, execution?.text]
+  const mavenSignature = [maven?.signature, execution?.signature]
+  if (kind === 'task') return approval([`기동 후보\n${preset.taskId}`, ...mavenParts], [preset.taskId, ...mavenSignature])
+  const { tomcat, webapp, contextPath, port, prepare, contextXml, extraLibs, vmArgs } = preset
   const build = prepare?.tool === 'eclipse' ? '이클립스식 빌드 (.classpath의 Java 소스와 리소스)' : prepare && `${prepare.tool} ${prepare.target ?? prepare.goals}`
-  const command = [build && `기동 전 빌드\n${build}`,
-    preset.vmArgs.trim() && `Tomcat VM 인자\n${preset.vmArgs}`, maven?.text, execution?.text,
-    preset.contextXml && `Tomcat 컨텍스트 설정 파일\n${preset.contextXml}`,
-    preset.extraLibs?.length && `Tomcat에 연결할 JAR\n${preset.extraLibs.join('\n')}`].filter(Boolean).join('\n\n')
-  return { command, hash: commandHash(JSON.stringify(['tomcat', preset.vmArgs, prepare, ...(maven ? [maven.signature] : []),
-    ...(execution ? [execution.signature] : []),
-    ...(preset.contextXml ? [['contextXml', preset.contextXml]] : []),
-    ...(preset.extraLibs?.length ? [['extraLibs', preset.extraLibs]] : [])])) }
+  return approval([`Tomcat 실행 대상\n${tomcat}\n웹 폴더 ${webapp}\nhttp://127.0.0.1:${port}${contextPath}`,
+    build && `기동 전 빌드\n${build}`, vmArgs.trim() && `Tomcat VM 인자\n${vmArgs}`, ...mavenParts,
+    contextXml && `Tomcat 컨텍스트 설정 파일\n${contextXml}`, extraLibs?.length && `Tomcat에 연결할 JAR\n${extraLibs.join('\n')}`],
+  [tomcat, webapp, contextPath, port, vmArgs, prepare, contextXml, extraLibs, ...mavenSignature])
 }
 
 function validatePreset(input, id) {

@@ -7,6 +7,7 @@ const { setTimeout: delay } = require('node:timers/promises')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
 const { inspectJavaBuild, javaLayout, devtoolsLayout, createJavac } = require('./hotReloadJava.js')
+const { ownsJdwpListener } = require('./developmentProcess.js')
 
 const START_TIMEOUT = 300_000
 const QUIET_MS = 300
@@ -139,7 +140,7 @@ function compilerFailure(error) {
   return { reason: /^선택한 JDK에서 javac|^javac 버전|^Lombok을 |^컴파일(?:한| 출력)/.test(reason) ? reason : 'javac 컴파일에 실패했습니다.' }
 }
 
-function keepVmConnected(port, connect) {
+function keepVmConnected(port, pid, connect, verifyListener) {
   const lifetime = new AbortController()
   const { signal } = lifetime
   let connection
@@ -148,9 +149,16 @@ function keepVmConnected(port, connect) {
   async function maintain() {
     if (signal.aborted || connecting || connection) return
     connecting = true
+    let ownershipRetry = 500
     try {
       while (!signal.aborted && !connection) {
         try {
+          if (!await verifyListener({ port, pid, signal }) || signal.aborted) {
+            await delay(ownershipRetry, undefined, { signal, ref: false })
+            ownershipRetry = Math.min(ownershipRetry * 2, 5000)
+            continue
+          }
+          ownershipRetry = 500
           const start = connect ?? require('../runtimes/jdwp.js').connectJdwp
           const vm = await start({ host: '127.0.0.1', port, signal })
           if (signal.aborted) { vm.close(); return }
@@ -175,7 +183,7 @@ function keepVmConnected(port, connect) {
 }
 
 function startHotReload(config, options) {
-  const debug = config.devtools ? null : keepVmConnected(config.port, options.connect)
+  const debug = config.devtools ? null : keepVmConnected(config.port, options.pid, options.connect, options.verifyListener ?? ownsJdwpListener)
   let monitor
   let closed = false
   function resume() {

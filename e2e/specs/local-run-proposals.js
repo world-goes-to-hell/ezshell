@@ -16,7 +16,7 @@ function fixture() {
   fs.writeFileSync(path.join(project, 'mvnw.cmd'), '@echo off\r\nnode fail.cjs\r\n')
   fs.writeFileSync(path.join(project, 'mvnw'), '#!/bin/sh\nexec node fail.cjs\n', { mode: 0o755 })
   fs.writeFileSync(path.join(project, 'fail.cjs'), `
-    console.error('[ERROR] Could not transfer artifact sample:demo:jar:1 from/to maven-default-http-blocker (http://0.0.0.0/): Blocked mirror for repositories: [legacy (http://legacy.invalid/maven/, default)]');
+    console.error('[ERROR] Could not transfer artifact sample:demo:jar:1 from/to maven-default-http-blocker (http://0.0.0.0/): Blocked mirror for repositories: [legacy (http://legacy.invalid/maven/, default)] password=fixture-maven-secret');
     process.exitCode = 1;
   `)
   const git = (...args) => execFileSync('git', args, { cwd: project, stdio: 'pipe', windowsHide: true })
@@ -43,7 +43,9 @@ async function run() {
     const args = `${folder}, ${id}`
     const row = `document.querySelector('[data-run-preset="${preset.id}"]')`
     if (!await until(`!!${row}`)) throw new Error('Could not find the Maven card')
-    if (!(await js(`window.electronAPI.runPresetStart(${args})`)).ok || !await until(`${row}?.dataset.status === 'crashed'`, 13000)) {
+    let started = await js(`window.electronAPI.runPresetStart(${args})`)
+    if (started.needsConfirm) started = await js(`window.electronAPI.runPresetStart(${args}, { confirmCustom: true })`)
+    if (!started.ok || !await until(`${row}?.dataset.status === 'crashed'`, 13000)) {
       throw new Error('The Maven fixture did not exit with a failure')
     }
     const diagnose = `window.electronAPI.runPresetDiagnosis(${args})`
@@ -76,6 +78,13 @@ async function run() {
       const terminal = (await output()).slice(-500)
       throw new Error(`The shell-bound agent could not submit the proposal: ${JSON.stringify(submitted)}\n${terminal}`)
     }
+    const preview = await js(`window.electronAPI.runPresetSendPreview(${args}, '다시 확인해 주세요. secret=fixture-handoff-secret')`)
+    if (!preview.token || !preview.text?.includes('secret=****') || preview.text.includes('fixture-handoff-secret')) {
+      throw new Error('The hand-off preview did not mask the fixture credential')
+    }
+    const sent = await js(`window.electronAPI.runPresetSend(${args}, ${JSON.stringify(submitted.by)}, ${JSON.stringify(preview.token)})`)
+    if (!sent.ok) throw new Error(`The previewed body could not be sent: ${sent.error}`)
+
     const view = `[...(${row})?.querySelectorAll('button') ?? []].find(button => button.textContent.trim() === '보기')`
     const visible = await until(`!!(${view}) && ${row}.textContent.includes(${JSON.stringify(submitted.by)})`)
     check('the Maven card shows the proposed fix and the MCP agent who sent it', visible)
@@ -89,7 +98,8 @@ async function run() {
     await js(`[...${dialog}.querySelectorAll('button')].find(button => button.textContent.trim() === '버리기').click()`)
     const reviewReady = await until(`
       (async () => ${urlInput}?.value === ${JSON.stringify(mirror)} &&
-        ${dialog}.textContent.includes('테스트 미러 주소를 확인해 주세요.') &&
+        ${dialog}.textContent.includes('테스트 미러 주소를 확인해 주세요. token=****') &&
+        !${dialog}.textContent.includes('fixture-proposal-secret') &&
         ${dialog}.textContent.includes(${JSON.stringify(mirror)}) && !(${chosen}).mavenMirrors)()`)
     check('discarding the latest proposal prefills the next mirror and waits for the user', reviewReady)
     if (!reviewReady) throw new Error('The remaining proposal was not prefilled after discarding the latest')
@@ -98,6 +108,7 @@ async function run() {
     for (let attempt = 0; attempt < 60 && result()?.status === 'pending'; attempt++) await sleep(150)
     check('user approval is visible to the same MCP agent as applied', closed && result()?.status === 'applied', JSON.stringify(result()))
     check('discarding the newer proposal is visible only as dismissed', result()?.newer === 'dismissed')
+    check('the shell-bound agent receives exactly the masked preview', result()?.handoff === preview.text)
     check('saving the replacement asks for fresh execution confirmation', await js(`
       (async () => (${chosen}).mavenMirrors?.[0]?.url === ${JSON.stringify(mirror)} &&
         (await window.electronAPI.runPresetStart(${args})).needsConfirm?.command.includes(${JSON.stringify(mirror)}))()`))

@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, promises, readFileSync, realpathSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, delimiter, dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { createAgentMessages } from './ipc/agentMessages.js'
 import { rpc } from './ipc/agentMessageCli.js'
 import { PROMPT } from './ipc/agentInboxPrompts.js'
@@ -46,6 +47,51 @@ describe('defaultShell', () => {
 })
 
 describe('createLocalShells', () => {
+  it.skipIf(process.platform !== 'win32')('keeps a verified launch directory through adoption, shell replacement, and restoration', async () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), 'ezshell-cwd-'))
+    const original = join(root, 'actual')
+    const shown = join(root, 'shown')
+    mkdirSync(original)
+    mkdirSync(shown)
+    const { shells, ptys } = setup({ platform: 'win32', processAlive: () => true, cwd: root })
+    try {
+      const { id } = shells.open({ cwd: original })
+      ptys[0].pid = 789
+      ptys[0].emit(`\x1b]7;${pathToFileURL(shown).href}\x07`)
+      expect(await shells.currentDirectory(id)).toBe(shown)
+      expect(await shells.runAuthorityDirectory(id)).toBe(original)
+      // Splitting, promoting a pane and taking a tab out all attach the same shell ID.
+      expect(shells.attach(id)).toBeTruthy()
+      expect(shells.list().find(item => item.id === id).cwd).toBe(original)
+      expect(await shells.runAuthorityDirectory(id)).toBe(original)
+      const replacement = shells.open({ replacementFor: id, agent: 'codex', resume: 'a1a729f9-0e10-4f7e-b510-8affbe1b2655' })
+      ptys[1].pid = 790
+      expect(await shells.runAuthorityDirectory(replacement.id)).toBe(original)
+      const restored = shells.open({ cwd: shells.list().find(item => item.id === replacement.id).cwd, restoring: true })
+      ptys[2].pid = 791
+      expect(await shells.runAuthorityDirectory(restored.id)).toBe(original)
+    } finally { shells.closeAll(); rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('drains active development cleanup and refuses a new launch during shutdown', async () => {
+    const cwd = realpathSync(tmpdir())
+    const { shells, ptys, spawn } = setup({ stopDevelopmentProcess: async pty => pty.exit({ exitCode: 0 }) })
+    const cleanup = Promise.withResolvers()
+    const release = vi.fn(() => cleanup.promise)
+    await shells.openDevelopmentTask({ id: 'test:drain', name: 'Test', cwd, command: 'run-app', cleanup: release }, {})
+    const drained = vi.fn()
+    const closing = shells.drainDevelopmentTasks().then(drained)
+    await vi.waitFor(() => expect(release).toHaveBeenCalledWith(null))
+    expect(drained).not.toHaveBeenCalled()
+    await expect(shells.openDevelopmentTask({ id: 'test:late', name: 'Late', cwd, command: 'run-app' }, {})).rejects.toThrow('종료')
+    expect(spawn).toHaveBeenCalledTimes(1)
+    expect(shells.attach(shells.list()[0].id).exited).toBe(true)
+    expect(ptys).toHaveLength(1)
+    cleanup.resolve()
+    await closing
+    shells.closeAll()
+  })
+
   it('runs a preparation PTY before launching the runtime in the same shell', async () => {
     const cwd = realpathSync(tmpdir())
     const { shells, ptys, sent, spawn } = setup({ stopDevelopmentProcess: async pty => pty.exit({ exitCode: 1 }) })

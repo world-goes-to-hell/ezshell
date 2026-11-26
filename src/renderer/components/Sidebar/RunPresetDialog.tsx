@@ -10,7 +10,7 @@ import { RunPresetTomcatAdvanced, RunPresetTomcatFields } from './RunPresetTomca
 import { RunPresetMavenFields } from './RunPresetMavenFields'
 import {
   draftOf, emptyDraft, hasAdvancedValues, hasRunContent, hotReloadChoice, hotReloadToSave, LOG_ENCODINGS, presetFromDraft,
-  suggestPresetName, usesJdk, usesMaven,
+  PLAIN_TEXT_WARNING, secretCommandArgNames, secretEnvNames, suggestPresetName, usesJdk, usesMaven,
   type HotReload, type PresetDraft, type RunCandidate, type RunPreset
 } from '../../lib/runPresets'
 import { draftKey, dropDraft, keepDraft, reloadProjectPresets, runPresetApi, takeDraft, worktreeRuns } from '../../stores/runPresetStore'
@@ -234,6 +234,9 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
                 <input className="run-preset-command" value={draft.command} placeholder="예: ./gradlew bootRun --args='--spring.profiles.active=local'"
                   onChange={event => set({ command: event.target.value })} spellCheck={false} autoComplete="off" aria-label="실행할 명령" />
                 <small className="run-preset-warn">직접 입력한 명령은 그대로 실행됩니다.</small>
+                {secretCommandArgNames(draft.command).length > 0 && (
+                  <small className="run-preset-warn run-preset-secret-warn" role="note">{PLAIN_TEXT_WARNING} ({secretCommandArgNames(draft.command).join(', ')})</small>
+                )}
               </div>
             )}
             {draft.kind === 'tomcat' && (
@@ -286,6 +289,9 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
                   <label htmlFor="run-preset-env">환경 변수 <span className="run-preset-hint">(한 줄에 하나, 이름=값)</span></label>
                   <textarea id="run-preset-env" rows={2} value={draft.envText} placeholder="SPRING_PROFILES_ACTIVE=local"
                     onChange={event => set({ envText: event.target.value })} spellCheck={false} />
+                  {secretEnvNames(draft.envText).length > 0 && (
+                    <small className="run-preset-warn run-preset-secret-warn" role="note">{PLAIN_TEXT_WARNING} ({secretEnvNames(draft.envText).join(', ')})</small>
+                  )}
                 </div>
                 <div className="form-group">
                   <label htmlFor="run-preset-log-encoding">로그 인코딩</label>

@@ -56,17 +56,24 @@ async function run() {
       const { suggestions } = JSON.parse(response)
       diagnosis = suggestions.map(({ kind, proposalKind }) => ({ kind, proposalKind }))
       suggestion = suggestions.find(item => item.proposalKind === 'mavenMirror')
+      if (suggestion && (response.includes('fixture-maven-secret') || !response.includes('password=****'))) {
+        throw new Error('MCP error groups did not mask the fixture credential')
+      }
     }
     if (suggestion) break
     await delay(250)
   } while (Date.now() < diagnosisDeadline)
   if (!suggestion) throw new Error(`MCP did not see a Maven replacement diagnosis: ${JSON.stringify(diagnosis)}`)
+  const plain = await tool('run_log', { name: presetName })
+  if (plain.isError || plain.content[0].text.includes('fixture-maven-secret') || !plain.content[0].text.includes('password=****')) {
+    throw new Error('MCP log lines did not mask the fixture credential')
+  }
   const propose = async (url, note) => {
     const result = await tool('run_propose', { name: presetName, suggestion: suggestion.suggestion, url, note })
     if (result.isError) throw new Error(result.content[0].text)
     return JSON.parse(result.content[0].text)
   }
-  const initial = await propose(url, '테스트 미러 주소를 확인해 주세요.')
+  const initial = await propose(url, '테스트 미러 주소를 확인해 주세요. token=fixture-proposal-secret')
   const newer = await propose(newerUrl, '다른 미러도 검토해 주세요.')
   report({ ...initial, by, newer: newer.status })
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -76,7 +83,11 @@ async function run() {
       const first = proposals.find(item => item.id === initial.id)
       const latest = proposals.find(item => item.id === newer.id)
       if (first && latest && first.status !== 'pending' && latest.status !== 'pending') {
-        report({ ...first, by, newer: latest.status })
+        if (!first.note?.endsWith('token=****')) throw new Error('MCP proposal note did not mask the fixture credential')
+        const inbox = await tool('read_inbox', { unread_only: true })
+        if (inbox.isError) throw new Error(inbox.content[0].text)
+        const handoff = JSON.parse(inbox.content[0].text).messages.find(message => message.from === 'user')?.text
+        report({ ...first, by, newer: latest.status, handoff })
         return
       }
     }

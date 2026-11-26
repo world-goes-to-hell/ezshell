@@ -128,7 +128,7 @@ function removeLaunchSettings(directory, name) {
 function stageMavenSettings(options) {
   const saved = writeMavenSettings(options)
   const name = path.basename(saved)
-  const directory = fs.mkdtempSync(path.join(path.dirname(saved), `.run-${options.presetId}-`))
+  const directory = fs.mkdtempSync(path.join(path.dirname(saved), `.run-${options.presetId}-${process.pid}-`))
   const file = path.join(directory, name)
   const cleanup = () => removeLaunchSettings(directory, name)
   try {
@@ -146,8 +146,9 @@ function removeMavenSettings({ userData, presetId }) {
   fs.rmSync(target, { force: true })
   const root = path.dirname(target)
   const prefix = `.run-${presetId}-`
+  const ownRun = new RegExp(`^(?:${process.pid}-)?[A-Za-z0-9]{6}$`)
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (entry.isDirectory() && entry.name.startsWith(prefix) && /^[A-Za-z0-9]{6}$/.test(entry.name.slice(prefix.length))) {
+    if (entry.isDirectory() && entry.name.startsWith(prefix) && ownRun.test(entry.name.slice(prefix.length))) {
       removeLaunchSettings(path.join(root, entry.name), path.basename(target))
     }
   }

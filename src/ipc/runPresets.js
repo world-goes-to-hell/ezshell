@@ -1,19 +1,20 @@
 const path = require('node:path')
-const { randomUUID } = require('node:crypto')
+const { createHash, randomUUID } = require('node:crypto')
 const { inspectLocalProject } = require('./localProjects.js')
 const { inspectDevelopmentTasks, prepareDevelopmentTask } = require('./localDevelopmentTasks.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { createDevelopmentErrors, MAX_LOG_LINES } = require('./developmentErrors.js')
+const { redactRunSecrets, redactRunOutput } = require('./runSecrets.js')
 const { usesMaven, mavenFields, diagnosisContext, presetSuggestions, suggestedMavenFields, wrapperMavenVersion } = require('./runSuggestions.js')
 const { prepareMavenRun } = require('./runMaven.js')
 const { removeMavenSettings } = require('../runtimes/mavenSettings.js')
-const { inspectMavenPin, exportMavenPin, deleteMavenPin, cleanMavenPinRuns } = require('../runtimes/mavenPin.js')
+const { inspectMavenPin, exportMavenPin, mavenExportDestination, deleteMavenPin, cleanMavenPinRuns } = require('../runtimes/mavenPin.js')
 const { selectMavenJdk } = require('../runtimes/mavenJdk.js')
 const { allowedJar } = require('../runtimes/jarSearch.js')
 const { tomcatInvocation, findJarCandidates, jarSuggestion, mcpJarSuggestion, selectedJarReferences, STALE_JAR } = require('./runJarSuggestions.js')
 const { MAX_PROPOSALS, STALE_PROPOSAL, prepareProposal, proposalStillCurrent, approvedProposalStatus, pendingProposals, agentProposals } = require('./runProposals.js')
 const { prepareHotReload, prepareTomcatReload, javaRunWithOptions, startHotReload, reloadLog, RESULTS: RELOAD_RESULTS } = require('./hotReload.js')
-const { planTomcat, stageTomcat, webDirectory, antTargets, webappCandidates, validContextPath, workspaceVmArguments, tomcatJars, closeTomcatBases } = require('./tomcatRun.js')
+const { planTomcat, stageTomcat, webDirectory, antTargets, webappCandidates, validContextPath, workspaceVmArguments, tomcatJars } = require('./tomcatRun.js')
 const { createWorkspaceAccess, workspaceServers } = require('./workspaceServers.js')
 const { javaVersionProbe, javaLogOptions } = require('./developmentEncoding.js')
 const { loadEclipseProject } = require('./eclipseProject.js')
@@ -28,15 +29,20 @@ const MAX_ACTIONS = 20
 const MAX_RELOAD_RESULTS = 10
 const MAX_SEND_NOTE = 4000
 const MAX_SEND_BODY = 8000 - MAX_SEND_NOTE - '\n\n'.length
+const MAX_SEND_PREVIEWS = 20
+const MISSING_PREVIEW = '보낼 내용의 미리보기를 다시 열어 주세요.'
 const ACTIVE = new Set(['preparing', 'starting', 'running'])
 const NOT_ALLOWED = '잠금 해제 후 본창에서 이용할 수 있습니다.'
 const MISSING = '실행 구성을 찾을 수 없습니다.'
 const MOVED = '실행 구성이 바뀌었습니다. 다시 선택해 주세요.'
 const idle = () => ({ status: 'idle', errors: 0 })
 const optionsForTask = { includeSource: false, rootOnly: true, allowPendingInstall: true }
-const failure = error => ({ ok: false, error: error.code ? '실행 구성을 처리하지 못했습니다.' : error.message })
+const failure = error => ({ ok: false, error: error?.code || typeof error?.message !== 'string'
+  ? '실행 구성을 처리하지 못했습니다.' : redactRunSecrets(error.message) })
 const noApproval = () => false
 const runKey = (project, id) => `${project.worktreeKey}\0${id}`
+const WINDOWS_RUN_FOLDER = 'run_*는 셸을 연 폴더 기준입니다. 다른 워크트리는 해당 폴더에서 새 로컬 셸을 열어 주세요.'
+const runFolderHint = cwd => `이 셸은 ${path.basename(cwd) || path.parse(cwd).root}에서 열렸습니다. ${WINDOWS_RUN_FOLDER}`
 
 // Same rule as the window's hasFinalConsonant (lib/runPresets.ts): a Hangul syllable by its own final
 // consonant, a digit as it is read (영·일·삼·육·칠·팔 have one), anything else shows both particles
@@ -62,11 +68,11 @@ function recentErrorGroups(logs, limit = MAX_LOG_LINES) {
 }
 
 class RunConfirmation extends Error {
-  constructor(type, id, command, cwd) {
+  constructor(type, id, command, cwd, binding) {
     super('실행 카드에서 확인한 뒤 실행해 주세요.')
     this.type = type
     this.command = command
-    this.key = JSON.stringify([id, command, cwd])
+    this.key = JSON.stringify([id, command, cwd, binding])
   }
 }
 
@@ -170,7 +176,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       run.reloadResults.unshift({ sequence: ++reloadSequence, reload })
       if (run.reloadResults.length > MAX_RELOAD_RESULTS) run.reloadResults.pop()
     }
-    update(run, { reload, errors: run.logs.state().errors })
+    update(run, { reload: redactRunOutput(reload), errors: run.logs.state().errors })
   }
 
   function openReload(run) {
@@ -280,7 +286,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   function confirmCommand(project, preset, by, approve) {
     const confirmation = presetApproval(preset)
     if (!confirmation || preset.confirmedHash === confirmation.hash) return preset
-    if (by !== USER) throw new Error('먼저 사용자가 화면에서 실행 명령을 확인해야 합니다.')
+    if (by !== USER) throw new Error('먼저 사용자가 화면에서 이 실행 설정을 한 번 확인해야 합니다.')
     const question = new RunConfirmation('needsConfirm', preset.id, confirmation.command, confirmation.hash)
     if (!approve(question)) throw question
     const confirmed = { ...preset, confirmedHash: confirmation.hash }
@@ -435,9 +441,16 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
 
   async function agentProject(agent) {
     if (!agent?.active || agent.sleeping || !agent.shellId) throw new Error('프로젝트의 로컬 셸에 묶인 에이전트만 이용할 수 있습니다.')
-    const cwd = await getShells().currentDirectory(agent.shellId)
-    if (!cwd || getShells().chatAgentId(agent.shellId) !== agent.id) throw new Error('에이전트의 로컬 작업 폴더를 확인하지 못했습니다.')
-    const project = await projectOf(cwd)
+    const cwd = await getShells().runAuthorityDirectory(agent.shellId)
+    if (!cwd || getShells().chatAgentId(agent.shellId) !== agent.id) {
+      throw new Error('에이전트의 로컬 작업 폴더를 확인하지 못했습니다.' + (process.platform === 'win32' ? ` ${WINDOWS_RUN_FOLDER}` : ''))
+    }
+    let project
+    try { project = await projectOf(cwd) } catch (error) {
+      if (process.platform === 'win32') throw new Error(runFolderHint(cwd))
+      throw error
+    }
+    if (getShells().chatAgentId(agent.shellId) !== agent.id) throw new Error('에이전트의 로컬 작업 폴더를 확인하지 못했습니다.')
     if (project.gitWorktree || store.list(project.key).length) return project
     // A non-Git project can be the containing folder of a shell opened in one of its modules.
     const root = store.roots().filter(candidate => sameOrInside(candidate, project.cwd)).sort((a, b) => b.length - a.length)[0]
@@ -452,14 +465,15 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     const project = await agentProject(getAgent(by))
     ensureAllowed(allowed)
     if (request.method === 'run-list') {
-      return { presets: store.list(project.key).map(preset => {
+      const presets = store.list(project.key).map(preset => {
         const state = getRun(project, preset.id)?.state ?? idle()
         return { name: preset.name, status: state.status, port: portOf(state.address),
           errors: state.errors, agentControl: preset.agentControl, ...(state.failedAt && { failedAt: state.failedAt }), ...(state.reload && { reload: state.reload }) }
-      }) }
+      })
+      return { presets, ...(process.platform === 'win32' && !presets.length && { message: runFolderHint(project.cwd) }) }
     }
     const preset = store.list(project.key).find(item => item.name === presetName(request.name))
-    if (!preset) throw new Error(MISSING)
+    if (!preset) throw new Error(process.platform === 'win32' ? `${MISSING} ${runFolderHint(project.cwd)}` : MISSING)
     const operation = request.method.slice(4)
     const verifyActor = async () => {
       ensureAllowed(allowed)
@@ -621,12 +635,15 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     }
     authorize()
     if (!pinned) throw new Error('이 실행 구성의 Maven 보관본이 없습니다.')
+    const destination = action === 'export' ? await mavenExportDestination(project.worktree) : null
+    authorize()
+    const binding = destination && [destination.stat.dev, destination.stat.ino, destination.stat.birthtimeMs]
     const question = new RunConfirmation('needsConfirm', id, action === 'export'
       ? `${preset.name}의 Maven 보관본을 현재 워크트리의 .mvn-repo/에 내보내기`
-      : `${preset.name}의 Maven 보관본 삭제`, project.worktree)
+      : `${preset.name}의 Maven 보관본 삭제`, project.worktree, binding)
     if (!approve(question)) throw question
     const request = { userData, presetId: id, approved: true, authorize }
-    if (action === 'export') await exportMavenPin({ ...request, worktree: project.worktree })
+    if (action === 'export') await exportMavenPin({ ...request, worktree: project.worktree, expectedWorktree: destination.stat })
     else await deleteMavenPin(request)
     return { ok: true }
   }
@@ -687,7 +704,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     if (run) run.jarOffered = candidates
     const suggestions = presetSuggestions(preset, run)
     expireProposals(run, preset, suggestions)
-    return { ok: true, suggestions: suggestions.map(item => jarSuggestion(item, candidates, preset, run)) }
+    return { ok: true, suggestions: redactRunOutput(suggestions.map(item => jarSuggestion(item, candidates, preset, run))) }
   }
 
   async function refreshMavenDiagnosis(preset, diagnosis) {
@@ -742,33 +759,42 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     return { ok: true }
   }
 
-  function sendPreview(project, id) {
+  function sendPreview(project, id, note = '') {
+    if (typeof note !== 'string' || note.length > MAX_SEND_NOTE) throw new Error('덧붙일 말을 확인해 주세요.')
     const preset = find(project, id)
     const run = getRun(project, id)
     const kind = preset.kind === 'task' ? { node: 'Node', gradle: 'Spring Boot (Gradle)', maven: 'Spring Boot (Maven)' }[preset.taskId.slice(2)]
       : preset.kind === 'tomcat' ? 'Tomcat' : '직접 입력'
     const folder = preset.relative.length <= 1500 ? `${preset.relative}/` : `${preset.relative.slice(0, 1500)}…`
-    const summary = [preset.name, `폴더 ${folder}`, `실행 방식 ${kind}`,
-      `종료 코드 ${run?.state.exitCode ?? '—'}`].join('\n')
+    const summary = redactRunSecrets([preset.name, `폴더 ${folder}`, `실행 방식 ${kind}`,
+      `종료 코드 ${run?.state.exitCode ?? '—'}`].join('\n'))
     // Reserve room for the longest note so the message body stays as shown in the preview.
     const logs = run?.logs.groups().at(-1)?.lines.join('\n') ?? ''
-    const detail = logs.slice(0, MAX_SEND_BODY - summary.length - '\n\n'.length).trimEnd()
-    return detail ? `${summary}\n\n${detail}` : summary
+    const detail = redactRunSecrets(logs).slice(0, MAX_SEND_BODY - summary.length - '\n\n'.length).trimEnd()
+    const extra = redactRunSecrets(note.trim()).slice(0, MAX_SEND_NOTE)
+    return [summary, detail, extra].filter(Boolean).join('\n\n')
   }
 
-  async function send(project, id, agentId, note, allowed, preview) {
-    if (typeof agentId !== 'string' || (note !== undefined && (typeof note !== 'string' || note.length > MAX_SEND_NOTE))) throw new Error('받는 에이전트와 메모를 확인해 주세요.')
+  async function send(project, id, agentId, allowed, takePreview) {
+    if (typeof agentId !== 'string') throw new Error('받는 에이전트를 확인해 주세요.')
     if ((await agentProject(getAgent(agentId))).key !== project.key) throw new Error('같은 프로젝트의 에이전트만 선택할 수 있습니다.')
     ensureAllowed(allowed)
     find(project, id)
-    const text = preview ?? sendPreview(project, id)
-    const extra = note?.trim()
-    sendAsUser({ to: agentId, text: extra ? `${text}\n\n${extra}` : text })
+    sendAsUser({ to: agentId, text: takePreview() })
     return { ok: true }
   }
 
   return {
-    projectOf, act, save, remove, send, sendPreview, startAll, stopAll, agentTool, applySuggestion, dismissProposal, mavenPinStatus, changeMavenPin,
+    projectOf, act, save, remove, send, sendPreview, startAll, stopAll, applySuggestion, dismissProposal, mavenPinStatus, changeMavenPin,
+    async agentTool(...args) {
+      try { return redactRunOutput(await agentTool(...args)) }
+      catch (error) {
+        if (typeof error?.message !== 'string') throw error
+        const message = redactRunSecrets(error.message)
+        if (message !== error.message) throw new Error(message)
+        throw error
+      }
+    },
     list(project) {
       const presets = store.list(project.key)
       return { projectKey: project.key, worktreeKey: project.worktreeKey, presets: presets.map(publicPreset),
@@ -811,7 +837,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       store.write(project.root, ids.map(id => find(project, id)))
       return { ok: true }
     },
-    errors(project, id) { return { groups: getRun(project, find(project, id).id)?.logs.groups() ?? [] } },
+    errors(project, id) { return { groups: redactRunOutput(getRun(project, find(project, id).id)?.logs.groups() ?? []) } },
     diagnosis,
     async changeFromShell(shellId, taskId, action, allowed) {
       const run = byShell.get(shellId)
@@ -829,7 +855,6 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     resumeReloads() { for (const run of runs.values()) openReload(run) },
     stopReloads() {
       for (const run of runs.values()) closeReload(run)
-      closeTomcatBases()
     }
   }
 }
@@ -837,8 +862,8 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
 function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, chooseWorkspaceFolder = async () => null, chooseContextFile = async () => null }) {
   // Accept only the command shown to this frame. Keep earlier install approvals for this batch retry.
   const confirms = new Map()
-  // Keep the text displayed by the send dialog if the run changes while it is open.
-  let pendingPreview
+  // A preview is a snapshot, including the note. Only its originating frame can send it once.
+  const previews = new Map()
   const previewKey = (project, id) => JSON.stringify([project.key, project.worktreeKey, id])
   function handle(channel, run) {
     ipcMain.handle(channel, async (event, projectFolder, ...args) => {
@@ -898,18 +923,23 @@ function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, c
     withConfirmation(project, allowed, frame, `${action}-maven-pin`, id, config,
       approve => controller.changeMavenPin(project, id, action, allowed, approve)))
   handle('run-preset-dismiss-proposal', (project, allowed, _frame, id, proposalId) => controller.dismissProposal(project, id, proposalId, allowed))
-  handle('run-preset-send-preview', (project, _allowed, frame, id) => {
-    const text = controller.sendPreview(project, id)
-    pendingPreview = { frame, key: previewKey(project, id), text }
-    return { text }
+  handle('run-preset-send-preview', (project, _allowed, frame, id, note) => {
+    const text = controller.sendPreview(project, id, note)
+    const key = previewKey(project, id)
+    const token = createHash('sha256').update(JSON.stringify([randomUUID(), key, text])).digest('hex')
+    previews.set(token, { frame, key, text })
+    if (previews.size > MAX_SEND_PREVIEWS) previews.delete(previews.keys().next().value)
+    return { text, token }
   })
-  handle('run-preset-send', async (project, allowed, frame, id, agentId, note) => {
-    const preview = pendingPreview?.frame === frame && pendingPreview.key === previewKey(project, id) ? pendingPreview : undefined
-    const result = await controller.send(project, id, agentId, note, allowed, preview?.text)
-    if (pendingPreview === preview) pendingPreview = undefined
-    return result
+  handle('run-preset-send', (project, allowed, frame, id, agentId, token) => {
+    const preview = previews.get(token)
+    if (!preview || preview.frame !== frame || preview.key !== previewKey(project, id)) throw new Error(MISSING_PREVIEW)
+    return controller.send(project, id, agentId, allowed, () => {
+      if (!previews.delete(token)) throw new Error(MISSING_PREVIEW)
+      return preview.text
+    })
   })
-  return { clearConfirmations() { confirms.clear(); pendingPreview = undefined } }
+  return { clearConfirmations() { confirms.clear(); previews.clear() } }
 }
 
 module.exports = { createRunPresets, registerRunPresetIpc, resolveProject, withSubject }

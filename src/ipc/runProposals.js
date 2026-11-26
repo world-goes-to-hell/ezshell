@@ -1,5 +1,6 @@
 const { randomUUID } = require('node:crypto')
 const { cleanLogLine } = require('./developmentErrors.js')
+const { redactRunSecrets } = require('./runSecrets.js')
 const { suggestedMavenFields } = require('./runSuggestions.js')
 const { mcpJarSuggestion, proposedJarId, selectedJarReferences, tomcatInvocation } = require('./runJarSuggestions.js')
 
@@ -8,7 +9,7 @@ const STALE_PROPOSAL = '이 실행에서 제안할 수 있는 최신 진단을 �
 
 async function prepareProposal({ by, request, preset, run, suggestions, candidates, projectRoot, home, now }) {
   if (typeof request.note !== 'string' || request.note.length > 1000) throw new Error('제안 메모를 1~1000자로 입력해 주세요.')
-  const note = request.note.split(/\r\n|\r|\n/).map(cleanLogLine).join('\n').trim()
+  const note = redactRunSecrets(request.note.split(/\r\n|\r|\n/).map(cleanLogLine).join('\n').trim())
   if (!note) throw new Error('제안 메모를 1~1000자로 입력해 주세요.')
   const current = suggestions.find(item => item.id === request.suggestion)
   if (!current) throw new Error(STALE_PROPOSAL)

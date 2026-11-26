@@ -8,7 +8,7 @@ import { useAgentMessagesStore } from '../Terminal/AgentMessages'
 import { AgentIdentityBadge } from '../ui/AgentIdentity'
 import { agentIdentityStatus } from '../../lib/agentIdentity'
 import { folderLabel, pathKey } from '../../lib/localWorkspaceTree'
-import { agentActionNotice, agentNoticeName, IDLE_STATE, runCommandLabel, sendPreview, withSubject, type RunErrorGroup, type RunPreset, type RunState } from '../../lib/runPresets'
+import { agentActionNotice, agentNoticeName, IDLE_STATE, withSubject, type RunErrorGroup, type RunPreset } from '../../lib/runPresets'
 import {
   dismissAgentNotice, dismissCrash, fetchRunErrors, revealRunShell, runPresetAction, runPresetApi, turnOffAgentControl,
   useRunPresets, type AgentActionNotice, type CrashNotice
@@ -17,7 +17,7 @@ import { toast } from '../../stores/toastStore'
 import { RunSuggestionsDialog } from './RunSuggestions'
 import './RunPresets.css'
 
-interface Sending { notice: CrashNotice; preset: RunPreset; state: RunState; group?: RunErrorGroup }
+interface Sending { notice: CrashNotice; preset: RunPreset }
 
 export function RunCrashNotices() {
   const notices = useRunPresets(state => state.notices)
@@ -76,8 +76,9 @@ function CrashCard({ notice, onSend }: { notice: CrashNotice; onSend: (sending: 
         }}>
           <RiRefreshLine size={13} aria-hidden="true" /> 다시 실행
         </button>
-        <button type="button" className="btn-primary modal-btn" disabled={typeof runPresetApi().runPresetSend !== 'function'}
-          onClick={() => onSend({ notice, preset, state, group })}>
+        <button type="button" className="btn-primary modal-btn"
+          disabled={!runPresetApi().runPresetSend || !runPresetApi().runPresetSendPreview}
+          onClick={() => onSend({ notice, preset })}>
           <RiSendPlaneFill size={13} aria-hidden="true" /> 에이전트에게 보내기
         </button>
       </div>
@@ -123,43 +124,41 @@ const within = (path: string, root: string) => {
   return a === b || a.startsWith(b.endsWith('/') ? b : `${b}/`)
 }
 
-function RunSendDialog({ notice, preset, state, group, onClose }: Sending & { onClose: () => void }) {
+function RunSendDialog({ notice, preset, onClose }: Sending & { onClose: () => void }) {
   const snapshot = useAgentMessagesStore(store => store.snapshot)
   const projectRoots = useRunPresets(store => store.projectRoots[notice.projectKey])
   // Every worktree of the project, as the sidebar lists them (and the card's own folder)
   const roots = useMemo(() => [notice.folder, notice.projectKey, ...(projectRoots ?? [])].filter(Boolean), [notice.folder, notice.projectKey, projectRoots])
-  // The text main will send (folders relative to the project). When main can say it, sending waits for it:
-  // a preview made here could differ from what goes out.
   const askPreview = runPresetApi().runPresetSendPreview
-  const [mainPreview, setMainPreview] = useState<string | null>(null)
+  const [note, setNote] = useState('')
+  const [preview, setPreview] = useState<{ text: string; token: string; note: string }>()
   const [previewError, setPreviewError] = useState<string | null>(null)
   useEffect(() => {
     if (!askPreview) return
     let active = true
-    setMainPreview(null)
     setPreviewError(null)
-    askPreview(notice.folder, preset.id).then(result => {
-      if (!active) return
-      if (typeof result?.text === 'string') setMainPreview(result.text)
-      else setPreviewError(result?.error || '보낼 내용을 만들지 못했습니다.')
-    }).catch(() => { if (active) setPreviewError('보낼 내용을 만들지 못했습니다.') })
-    return () => { active = false }
-  }, [askPreview, notice.folder, preset.id])
-  const previewReady = !askPreview || mainPreview !== null
+    const timer = window.setTimeout(() => {
+      askPreview(notice.folder, preset.id, note).then(result => {
+        if (!active) return
+        if (typeof result?.text === 'string' && result.token) setPreview({ text: result.text, token: result.token, note })
+        else setPreviewError(result?.error || '보낼 내용을 만들지 못했습니다.')
+      }).catch(() => { if (active) setPreviewError('보낼 내용을 만들지 못했습니다.') })
+    }, 150)
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [askPreview, notice.folder, preset.id, note])
+  const currentPreview = preview?.note === note ? preview : undefined
   // Agents bound to a shell of this project (an agent without a shell cannot take it: Aside and the like)
   const agents = useMemo(() => snapshot.agents.filter(agent => agent.active && agent.shellId && agent.cwd && roots.some(root => within(agent.cwd, root))), [snapshot.agents, roots])
   const [picked, setPicked] = useState<string | null>(null)
-  const [note, setNote] = useState('')
   const [sending, setSending] = useState(false)
   const target = picked && agents.some(agent => agent.id === picked) ? picked : agents[0]?.id ?? null
-  const label = runCommandLabel(preset)
 
   const send = async () => {
     const run = runPresetApi().runPresetSend
-    if (!target || !run) return
+    if (!target || !run || !currentPreview) return
     setSending(true)
     try {
-      const result = await run(notice.folder, preset.id, target, note.trim())
+      const result = await run(notice.folder, preset.id, target, currentPreview.token)
       if (result?.ok !== true) {
         toast.error('에이전트에게 보내지 못했습니다', result?.error)
         return
@@ -190,15 +189,15 @@ function RunSendDialog({ notice, preset, state, group, onClose }: Sending & { on
               </label>
             ))}
           </div>
-          <pre className="run-crash-log run-send-preview" data-ready={previewReady || undefined}>
-            {askPreview ? (mainPreview ?? previewError ?? '보낼 내용을 만드는 중…') : sendPreview(preset, state, group, label)}
+          <pre className="run-crash-log run-send-preview" data-ready={currentPreview ? true : undefined}>
+            {currentPreview?.text ?? previewError ?? '보낼 내용을 만드는 중…'}
           </pre>
-          <textarea className="run-send-note-input" rows={2} value={note} maxLength={2000} placeholder="덧붙일 말 (선택)"
+          <textarea className="run-send-note-input" rows={2} value={note} maxLength={2000} disabled={sending} placeholder="덧붙일 말 (선택)"
             onChange={event => setNote(event.target.value)} aria-label="덧붙일 말" />
           <p id="run-send-note" className="run-preset-hint">보내는 것: 서버 이름·폴더·명령·종료 코드, 마지막 오류 묶음(최대 80줄). 같은 프로젝트의 에이전트만 위에 나옵니다.</p>
           <div className="modal-actions">
             <button type="button" className="btn-secondary modal-btn" onClick={onClose} disabled={sending}>취소</button>
-            <button type="button" className="btn-primary modal-btn" onClick={() => void send()} disabled={sending || !target || !previewReady}>
+            <button type="button" className="btn-primary modal-btn" onClick={() => void send()} disabled={sending || !target || !currentPreview}>
               <RiSendPlaneFill size={13} aria-hidden="true" /> 보내기
             </button>
           </div>

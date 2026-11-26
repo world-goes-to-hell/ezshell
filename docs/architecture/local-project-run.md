@@ -15,7 +15,9 @@
 **바꾸면 안 되는 것**
 
 - 저장·제어 IPC는 잠금 해제된 본창의 주 프레임에서 받고, 기동 탭 제어는 셸 ID와 기동 ID가 모두 맞는지 확인한다. main에서 워크트리 안의 실제 경로와 현재 실행 후보를 확인한 뒤 실행한다. 구성의 `jdk`와 `env`는 해당 실행 PTY에만 적용한다. 일반 기동 탭의 제어 경로와 에이전트용 구성 이름 경로의 권한을 각각 유지한다.
-- `presetApproval`은 직접 명령 전체, Tomcat의 준비 빌드·VM 인자·컨텍스트 설정 파일(`contextXml`) 경로·추가 JAR, Maven의 승인된 미러와 사용자 설정 제외 및 실행 JDK·분리·보관·보관본 사용 같은 실행 옵션을 해시에 반영한다. 이 확인이 필요한 실행은 본창에서 제시된 명령과 일치하는 확인을 받은 뒤 시작한다. 해시는 앱의 확인 여부를 기억한다. 같은 OS 사용자로 설정 파일에 쓸 수 있는 프로세스는 해시도 바꿀 수 있다.
+- `presetApproval`은 직접 입력한 명령이나 자동 후보 ID와 함께 `relative`·`jdk`·`env`·`hotReload`를 해시에 반영한다. Tomcat의 설치 ID·웹 폴더·컨텍스트 경로·포트·준비 빌드·VM 인자·컨텍스트 설정 파일(`contextXml`) 경로·추가 JAR과 Maven 실행 옵션 및 승인된 온라인 설정도 반영한다. `logEncoding`은 출력의 인코딩과 해석에 쓰이므로 실행 대상의 확인 해시에서 제외한다. 확인 창에는 환경 변수 이름을 보여 주고 값은 해시에만 반영한다. 기존 해시는 새 형식으로 한 번 다시 확인받는다. 같은 OS 사용자로 설정 파일에 쓸 수 있는 프로세스는 해시도 바꿀 수 있다.
+
+- 앱이 시작하면 소유 PID가 종료된 javac, 이클립스 빌드, Maven, Tomcat 실행 임시 폴더를 앱 소유 경로에서 회수한다. 정리 대상은 검증된 실제 경로와 소유 PID가 들어 있는 실행 폴더 이름으로 제한한다. 앱 종료 시 개발 프로세스를 중지하고 진행 중인 정리를 최대 5초 기다린다. 잠겨 있는 임시 폴더는 다음 시작에서 다시 검사한다. [실행 임시 폴더](../../src/ipc/runScratch.js)
 
 **파일 지도** — 프로젝트와 후보는 [localProjects.js](../../src/ipc/localProjects.js)·[localDevelopmentTasks.js](../../src/ipc/localDevelopmentTasks.js), 저장·실행·PTY는 [runPresetStore.js](../../src/ipc/runPresetStore.js)·[runPresets.js](../../src/ipc/runPresets.js)·[localShell.js](../../src/localShell.js), 화면은 [RunPresetDialog.tsx](../../src/renderer/components/Sidebar/RunPresetDialog.tsx)·[RunPresetsSection.tsx](../../src/renderer/components/Sidebar/RunPresetsSection.tsx)·[runPresetStore.ts](../../src/renderer/stores/runPresetStore.ts)에서 본다.
 
@@ -32,12 +34,12 @@
 ## 로그, 오류 판정, 진단과 제안
 
 - PTY가 실행·종료의 기준이다. 준비 중에는 로그 주소를 서버의 시작 완료로 세지 않는다. 서버 단계에서는 프레임워크의 시작 문구와 로그의 루프백 주소로 `readyAt`과 표시 주소를 정한다. 주소를 읽지 못해도 중지와 재기동은 동작한다. 포트 확인은 재기동 전 해제 확인에 쓴다. 사용자 중지와 별개로 실패하거나 0이 아닌 코드로 끝나면 `crashed`, 정상 종료는 `stopped`다. 준비 빌드 실패에는 `failedAt: 'prepare'`가 붙는다.
-- 알려진 기동·빌드 오류와 일반 로그 수준 규칙으로 스택 줄을 오류 묶음에 붙인다. 최근 로그 400줄, 오류 20묶음과 묶음당 최대 80줄은 실행의 메모리에 둔다. 새 실행에서 비운다. Windows 시스템 알림에는 프로젝트·구성 이름만 넣고, 오류 내용은 본창에서 본다. `에이전트에게 보내기`는 main이 만든 미리보기의 구성·상대 폴더·종료 코드·마지막 오류에 사용자 메모를 붙여 `user`로 보낸다.
+- 알려진 기동·빌드 오류와 일반 로그 수준 규칙으로 스택 줄을 오류 묶음에 붙인다. 최근 로그 400줄, 오류 20묶음과 묶음당 최대 80줄은 실행의 메모리에 둔다. 새 실행에서 비운다. Windows 시스템 알림에는 프로젝트·구성 이름만 넣고, 오류 내용은 본창에서 본다. `에이전트에게 보내기`는 main에서 구성 이름·상대 폴더·실행 방식·종료 코드·마지막 오류와 사용자 메모를 합쳐 미리 보여 준다. main은 프레임·프로젝트·워크트리·구성에 묶인 본문 해시 토큰을 발급하고, 같은 토큰의 본문을 `user`로 한 번만 보낸다.
 - 진단은 현재 워크트리의 최신 실행 로그에서 누락 클래스·JDK 버전·JNDI·인코딩·포트·Maven 의존성과 저장소 문제를 찾는다. 누락 클래스의 JAR 후보는 프로젝트, `~/.m2/repository`, Gradle 모듈 캐시에서 찾는다. Tomcat에 붙일 JAR은 실제 파일과 허용된 위치를 승인 직전에 다시 확인한다. 제안은 실행별로 메모리에 두며, 최신 진단과 맞을 때 본창에서 적용하거나 버린다. 저장 값이 바뀌는 제안은 적용 뒤 다음 실행에서 바뀐 내용을 확인받는다.
 
 **바꾸면 안 되는 것**
 
-- 터미널의 색·제어 문자열을 진단과 MCP 반환값에서 정리한다. 제안은 원래 실행과 최신 진단 ID에 묶는다. 실행이나 관련 구성이 바뀌면 다시 검증하며, 에이전트의 제안 등록은 사용자 승인 전까지 구성이나 실행을 바꾸지 않는다. 사용자 승인으로 넣는 미러·JAR은 일반 구성 저장 요청의 임의 필드로 추가할 수 없다.
+- 터미널의 색·제어 문자열을 진단과 MCP 반환값에서 정리한다. MCP 실행 도구의 응답, 화면 오류 묶음과 진단, 에이전트에게 전달할 본문, 제안 메모에 들어 있는 자격 증명 패턴을 `****`로 가린다. 제안 메모는 가린 값으로 보관하고 터미널은 원래 출력을 표시한다. 제안은 원래 실행과 최신 진단 ID에 묶는다. 실행이나 관련 구성이 바뀌면 다시 검증하며, 에이전트의 제안 등록은 사용자 승인 전까지 구성이나 실행을 바꾸지 않는다. 사용자 승인으로 넣는 미러·JAR은 일반 구성 저장 요청의 임의 필드로 추가할 수 없다.
 
 **파일 지도** — 주소·오류·진단은 [developmentProcess.js](../../src/ipc/developmentProcess.js)·[developmentErrors.js](../../src/ipc/developmentErrors.js)·[runDiagnosis.js](../../src/ipc/runDiagnosis.js), 진단 적용·제안은 [runSuggestions.js](../../src/ipc/runSuggestions.js)·[runJarSuggestions.js](../../src/ipc/runJarSuggestions.js)·[runProposals.js](../../src/ipc/runProposals.js), 화면은 [RunSuggestions.tsx](../../src/renderer/components/Sidebar/RunSuggestions.tsx)·[RunPresetsSection.tsx](../../src/renderer/components/Sidebar/RunPresetsSection.tsx)에서 본다. [공통 로그 수준 규칙](terminal-logs.md)
 
@@ -49,7 +51,7 @@
 
 **바꾸면 안 되는 것**
 
-- JDWP는 실행마다 고른 `127.0.0.1`의 포트에서 `quiet=y`로 연다. JDWP 포트는 터미널·오류·주소·MCP 결과에서 가린다. JVM이 실행되는 동안 연결을 유지하고, 끊기면 바로 다시 연결한다. 잠금 중에는 감시와 컴파일을 중지하고 재접속 핸드셰이크 외의 JVM 명령을 보내지 않는다. JVM이나 앱이 종료되면 연결을 닫는다. JDWP를 쓰는 실행과 IDE 디버거는 연결을 공유할 수 없다.
+- JDWP는 실행마다 고른 `127.0.0.1`의 포트에서 `quiet=y`로 연다. 접속할 때마다 Windows `netstat`, macOS `lsof`, Linux `/proc`로 리스너가 실행 프로세스 트리 소유인지 확인한다. 확인할 수 없는 동안에는 접속을 보류한다. OS 조회와 TCP 접속 사이에는 짧은 시차가 있다. JDWP 포트는 터미널·오류·주소·MCP 결과에서 가린다. JVM이 실행되는 동안 연결을 유지하고, 끊기면 바로 다시 연결한다. 잠금 중에는 감시와 컴파일을 중지하고 재접속 핸드셰이크 외의 JVM 명령을 보내지 않는다. JVM이나 앱이 종료되면 연결을 닫는다. JDWP를 쓰는 실행과 IDE 디버거는 연결을 공유할 수 없다.
 - JVM이 알려 준 경로를 실제 경로로 확인하고, 이 기능에 허용된 클래스 출력에만 쓴다. 디버그 JVM 인자는 앱에만 적용한다. Maven 실행 JDK를 바꾼 Spring Boot의 확장 바로 반영은 구성과 같은 JBR이 필요하다.
 
 **파일 지도** — 실행 인자·연결 수명·감시는 [hotReload.js](../../src/ipc/hotReload.js), 클래스패스·컴파일은 [hotReloadJava.js](../../src/ipc/hotReloadJava.js), 프로토콜·클래스 파일은 [jdwp.js](../../src/runtimes/jdwp.js)·[classFile.js](../../src/runtimes/classFile.js), 확장 보관함은 [enhancedProviders.js](../../src/runtimes/enhancedProviders.js)에서 본다.
@@ -63,7 +65,7 @@
 
 **바꾸면 안 되는 것**
 
-- 원본 Tomcat 설정, 이클립스 설정, 컨텍스트 XML은 읽기 전용으로 다룬다. ezShell이 만드는 base와 이클립스식 빌드 출력은 사용자 데이터에 둔다. `run-presets.json`에는 XML 경로만 저장한다. DB 비밀번호 등 컨텍스트 값은 필요한 실행의 임시 base에만 쓰고 로그·제안·구성에 복사하지 않는다. 승인된 실제 경로와 파일 읽기 상한을 유지한다.
+- 원본 Tomcat 설정, 이클립스 설정, 컨텍스트 XML은 읽기 전용으로 다룬다. ezShell이 만드는 base와 이클립스식 빌드 출력은 사용자 데이터에 둔다. `run-presets.json`에는 XML 경로만 저장한다. DB 비밀번호 등 컨텍스트 값은 필요한 실행의 임시 base에만 쓰고 로그·제안·구성에 복사하지 않는다. 승인된 실제 경로의 파일과 열린 XML 핸들의 파일 ID가 같은지 확인하고 읽기 상한을 지킨다.
 
 **파일 지도** — 기동과 가상 웹 리소스는 [tomcatRun.js](../../src/ipc/tomcatRun.js), 이클립스는 [eclipseProject.js](../../src/ipc/eclipseProject.js)·[eclipseBuild.js](../../src/ipc/eclipseBuild.js), 워크스페이스·컨텍스트는 [workspaceServers.js](../../src/ipc/workspaceServers.js), 인코딩은 [developmentEncoding.js](../../src/ipc/developmentEncoding.js), 구성 화면은 [RunPresetTomcatFields.tsx](../../src/renderer/components/Sidebar/RunPresetTomcatFields.tsx)에서 본다.
 
@@ -76,13 +78,17 @@
 
 **바꾸면 안 되는 것**
 
-- 보관본 실행에는 온라인 진단 미러 인수를 섞지 않는다. Windows에서 `-D이름=경로`와 공백이 든 경로를 각각 원래 인수 하나로 보존한다. 앱이 만드는 설정·보관·실행 임시 폴더는 사용자 데이터에 둔다. 워크트리의 `.mvn-repo/`는 본창에서 별도로 확인한 내보내기 때 새로 만들고 기존 폴더에는 덮어쓰지 않는다. 구성 삭제는 전용 미러 설정과 실행 임시 폴더를 정리하고, 보관본 삭제는 별도 사용자 확인을 거친다.
+- 보관본 실행에는 온라인 진단 미러 인수를 섞지 않는다. Windows에서 `-D이름=경로`와 공백이 든 경로를 각각 원래 인수 하나로 보존한다. 앱이 만드는 설정·보관·실행 임시 폴더는 사용자 데이터에 둔다. 워크트리의 `.mvn-repo/`는 본창에서 확인한 워크트리의 폴더 ID가 일치할 때 새로 만들고 기존 폴더에는 덮어쓰지 않는다. 복사 전후와 실패 정리 전에 대상 폴더를 다시 확인한다. 구성 삭제는 전용 미러 설정과 실행 임시 폴더를 정리하고, 보관본 삭제는 별도 사용자 확인을 거친다.
+
+### 같은 OS 사용자가 파일을 바꾸는 경우
+
+ezShell은 파싱 전에 열린 XML 파일의 동일성을 확인하고 Maven 내보내기 때 대상 폴더를 다시 확인한다. 파일 검사와 경로를 사용하는 작업 사이에는 시간차가 있다. 해당 폴더에 쓰기 권한이 있는 같은 OS 사용자의 다른 프로세스는 그 사이에 경로나 폴더 내용을 바꿀 수 있다. 이런 동시 변경은 로컬 파일 경로 검사의 한계다.
 
 **파일 지도** — Maven 실행 연결은 [runMaven.js](../../src/ipc/runMaven.js)·[runPresets.js](../../src/ipc/runPresets.js), 설정·JDK·보관은 [mavenSettings.js](../../src/runtimes/mavenSettings.js)·[mavenJdk.js](../../src/runtimes/mavenJdk.js)·[mavenPin.js](../../src/runtimes/mavenPin.js), 내보내기·삭제·상태 IPC는 [preload.js](../../src/preload.js)와 `registerRunPresetIpc`에서 본다.
 
 ## 에이전트의 `run_*` 도구
 
-메시지 MCP는 활성 에이전트의 인증된 로컬 셸과 현재 폴더를 확인한다. 잠든 에이전트나 셸에 묶이지 않은 에이전트는 거부한다. 모든 도구는 해당 프로젝트·워크트리에서 동작한다.
+메시지 MCP는 활성 에이전트의 인증된 로컬 셸을 확인한다. Linux와 macOS에서는 OS에서 조회한 셸의 현재 폴더를 쓴다. Windows에서는 앱이 검증해 ConPTY에 넘긴 시작 폴더에 권한을 고정하고, 다른 워크트리는 해당 폴더에서 새 로컬 셸을 열어 이용한다. 터미널 출력에서 읽은 폴더는 표시용이다. 분할·탭 이동은 셸 ID로 같은 권한을 유지하며, 교체·복원은 시작 폴더에서 다시 연다. 잠든 에이전트나 셸에 묶이지 않은 에이전트는 거부한다.
 
 | 도구 | 동작 |
 | --- | --- |
