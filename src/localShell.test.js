@@ -46,6 +46,57 @@ describe('defaultShell', () => {
 })
 
 describe('createLocalShells', () => {
+  it('runs a preparation PTY before launching the runtime in the same shell', async () => {
+    const cwd = realpathSync(tmpdir())
+    const { shells, ptys, sent, spawn } = setup({ stopDevelopmentProcess: async pty => pty.exit({ exitCode: 1 }) })
+    const onEvent = vi.fn()
+    const cleanup = vi.fn()
+    const runtime = { cwd, command: 'run-server', expectedUrl: 'http://127.0.0.1:8080/demo', cleanup, onEvent }
+    const prepare = vi.fn(async () => runtime)
+    const task = { id: 'preset:tomcat', name: 'Tomcat', cwd, onEvent, preparation: { command: 'build-app', finish: prepare } }
+    const { id } = await shells.openDevelopmentTask(task, {})
+    expect(shells.list()[0].development.status).toBe('starting')
+    expect(onEvent).toHaveBeenCalledWith({ type: 'start', shellId: id, phase: 'prepare' })
+    ptys[0].emit('build output http://localhost:4567\n')
+    expect(shells.list()[0].development.url).toBeNull()
+    ptys[0].exit({ exitCode: 0 })
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2))
+    expect(prepare).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal))
+    expect(shells.list()).toHaveLength(1)
+    expect(shells.list()[0]).toMatchObject({ id, development: { status: 'running', url: runtime.expectedUrl } })
+    expect(onEvent).toHaveBeenCalledWith({ type: 'prepared', shellId: id })
+    expect(sent.some(x => x.channel === 'local-shell-exit')).toBe(false)
+    await shells.changeDevelopmentTask(id, task.id, 'stop')
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalledTimes(1))
+    expect(sent.filter(x => x.channel === 'local-shell-exit')).toHaveLength(1)
+    shells.close(id)
+  })
+
+  it('never starts the server after a failed build or a stop during staging', async () => {
+    const cwd = realpathSync(tmpdir())
+    const { shells, ptys, spawn } = setup()
+    const onEvent = vi.fn()
+    const staging = Promise.withResolvers()
+    const runtime = { cwd, command: 'run-server', cleanup: vi.fn() }
+    const prepare = vi.fn(() => staging.promise)
+    const task = { id: 'preset:tomcat', name: 'Tomcat', cwd, onEvent, preparation: { command: 'build-app', finish: prepare } }
+    const { id } = await shells.openDevelopmentTask(task, {})
+    ptys[0].exit({ exitCode: 7 })
+    expect(prepare).not.toHaveBeenCalled()
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'exit', shellId: id, phase: 'prepare', exitCode: 7 }))
+    await shells.changeDevelopmentTask(id, task.id, 'restart', () => true, () => task)
+    ptys[1].exit({ exitCode: 0 })
+    const [signal] = prepare.mock.calls[0]
+    const stopping = shells.changeDevelopmentTask(id, task.id, 'stop')
+    expect(signal.aborted).toBe(true)
+    staging.resolve(runtime)
+    await stopping
+    expect(spawn).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(runtime.cleanup).toHaveBeenCalledTimes(1))
+    expect(shells.attach(id).exited).toBe(true)
+    shells.close(id)
+  })
+
   it('redacts a hot reload port before writing backlog, terminal events or run log events', async () => {
     const cwd = realpathSync(tmpdir())
     const { shells, ptys, sent } = setup()

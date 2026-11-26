@@ -1,9 +1,11 @@
 // Adds or edits a run preset (mockups/dev-run-presets.html scene 2): the folder inside the project, what
-// runs there (one of the ways main found, or a typed command), the JDK, env and the switches. main checks
-// all of it again; a typed command is shown in full and confirmed before it first runs.
+// runs there (one of the ways main found, a Tomcat, or a typed command), the JDK, env and the switches.
+// main checks all of it again; a typed command (and a Tomcat's VM arguments and build) is shown in full
+// and confirmed before it first runs.
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { RiFolder3Line, RiPlayLine } from 'react-icons/ri'
+import { RunPresetTomcatFields } from './RunPresetTomcatFields'
 import {
   draftOf, emptyDraft, hotReloadChoice, hotReloadToSave, presetFromDraft, runFolderLabel,
   type HotReload, type PresetDraft, type RunCandidate, type RunPreset
@@ -11,12 +13,13 @@ import {
 import { draftKey, dropDraft, keepDraft, reloadProjectPresets, runPresetApi, takeDraft, worktreeRuns } from '../../stores/runPresetStore'
 import { JdkRequirementNotice } from '../Settings/JdkSettings'
 import { openSettingsTab } from '../../lib/settingsNavigation'
-import type { HotswapAgentStatus, JdkRuntime } from '../../types'
+import type { ApacheToolRuntime, HotswapAgentStatus, JdkRuntime } from '../../types'
 
 // The JDK store (codex-4's src/runtimes): entries without paths; optional until a build has it.
-// `hotswapAgent` (stage 3): whether HotswapAgent is fetched, for the enhanced hot reload.
+// `hotswapAgent` (stage 3): whether HotswapAgent is fetched, for the enhanced hot reload; `tools` (stage 2):
+// the Apache tools fetched or found (Tomcat for a Tomcat preset).
 type RuntimesApi = {
-  runtimesList?: () => Promise<{ jdks: JdkRuntime[]; hotswapAgent?: HotswapAgentStatus } | undefined>
+  runtimesList?: () => Promise<{ jdks: JdkRuntime[]; hotswapAgent?: HotswapAgentStatus; tools?: ApacheToolRuntime[] } | undefined>
   runtimesRequired?: (projectFolder: string) => Promise<{ feature: number | null } | undefined>
 }
 
@@ -41,6 +44,7 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
   const [candidates, setCandidates] = useState<RunCandidate[] | null>(null)
   const [jdks, setJdks] = useState<JdkRuntime[]>([])
   const [hotswapAgent, setHotswapAgent] = useState<HotswapAgentStatus | undefined>(undefined)
+  const [tomcats, setTomcats] = useState<ApacheToolRuntime[] | null>(null)
   // The JDK the project's build asks for (pom.xml, Gradle, Spring Boot 3), when known
   const [required, setRequired] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -58,7 +62,8 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
       const list = result?.jdks
       if (active && Array.isArray(list)) setJdks(list.filter(jdk => jdk && typeof jdk.id === 'string'))
       if (active) setHotswapAgent({ installed: result?.hotswapAgent?.installed === true })
-    }).catch(() => {})
+      if (active) setTomcats(Array.isArray(result?.tools) ? result.tools.filter(tool => tool?.tool === 'tomcat' && typeof tool.id === 'string') : [])
+    }).catch(() => { if (active) setTomcats([]) })
     void runtimes.runtimesRequired?.(folder).then(result => {
       if (active && typeof result?.feature === 'number') setRequired(result.feature)
     }).catch(() => {})
@@ -95,6 +100,9 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
   const runtimesKnown = hotswapAgent !== undefined
   const reloadChoice = hotReloadChoice({ kind: draft.kind, taskId: draft.taskId, jdk: draft.jdk, jdks, hotswapAgent })
   const hotReload = hotReloadToSave(draft.hotReload, reloadChoice)
+
+  // Tomcat chosen: the first one fetched or found, unless the preset names one
+  const chooseTomcat = () => set({ kind: 'tomcat', tomcat: draft.tomcat || tomcats?.[0]?.id || '' })
 
   const toSettings = () => {
     // As for a JDK: the dialog closes over the settings window, its input kept for when it opens again
@@ -159,7 +167,7 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
               <span className="run-preset-field-label">실행할 것</span>
               <div className="run-preset-choices">
                 {candidates === null && <div className="run-preset-hint">찾는 중…</div>}
-                {candidates?.length === 0 && <div className="run-preset-hint">이 폴더에서 찾은 실행 방법이 없습니다. 폴더를 바꾸거나 직접 입력하세요.</div>}
+                {candidates?.length === 0 && <div className="run-preset-hint">이 폴더에서 찾은 실행 방법이 없습니다. 폴더를 바꾸거나 Tomcat·직접 입력을 고르세요.</div>}
                 {candidates?.map(candidate => (
                   <label key={candidate.taskId} className="run-preset-choice" data-on={draft.kind === 'task' && draft.taskId === candidate.taskId || undefined}>
                     <input type="radio" name="run-preset-kind" checked={draft.kind === 'task' && draft.taskId === candidate.taskId}
@@ -168,6 +176,11 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
                     <em>{candidate.name}</em>
                   </label>
                 ))}
+                <label className="run-preset-choice" data-on={draft.kind === 'tomcat' || undefined}>
+                  <input type="radio" name="run-preset-kind" value="tomcat" checked={draft.kind === 'tomcat'} onChange={chooseTomcat} />
+                  <span>Tomcat</span>
+                  <em>웹 폴더를 Tomcat 으로 띄우기</em>
+                </label>
                 <label className="run-preset-choice" data-on={draft.kind === 'custom' || undefined}>
                   <input type="radio" name="run-preset-kind" checked={draft.kind === 'custom'} onChange={() => set({ kind: 'custom' })} />
                   <span>직접 입력</span>
@@ -179,6 +192,10 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
                 </>)}
               </div>
             </div>
+            {draft.kind === 'tomcat' && (
+              <RunPresetTomcatFields folder={folder} relative={relative} draft={draft} set={set} tomcats={tomcats}
+                onToSettings={toSettings} />
+            )}
             <div className="form-group">
               <label htmlFor="run-preset-jdk">JDK</label>
               <select id="run-preset-jdk" value={draft.jdk} onChange={event => set({ jdk: event.target.value })}>

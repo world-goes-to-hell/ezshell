@@ -254,11 +254,13 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
   - `vmArgs`·`prepare` 는 실행 내용이다. 직접 입력 명령과 같이 본창에서만 저장하고, 확인 해시에 넣어 바뀌면 다시 확인받는다. 에이전트·MCP 는 고칠 수 없다.
   - Ant 타깃은 실행할 때 `build.xml` 의 `<target name>` 목록에 있는지 다시 본다. Ant·Maven 은 보관함의 것, 없으면 PATH.
   - 준비가 실패하면 "빌드 실패" 로 멈춤 처리하고 서버를 띄우지 않는다.
-- **CATALINA_BASE:** 실행마다 `userData/runtimes/tomcat-base/<구성 id>/` 를 다시 만든다.
-  - 설치된 Tomcat(`CATALINA_HOME`)의 `conf/` 를 복사하고 `server.xml` 의 HTTP 포트를 구성 값으로, 종료 포트는 `-1`, AJP 커넥터는 뺀다. `Host` 의 `autoDeploy`·`deployOnStartup` 은 끄고 `appBase` 는 base 안의 빈 폴더.
-  - `conf/Catalina/localhost/<컨텍스트>.xml`(루트는 `ROOT.xml`)에 `<Context docBase="<웹 폴더 실제 경로>"/>`. 웹 폴더는 워크트리 안이어야 한다 (실제 경로 검사).
+  - 준비 중에는 `RunState.status: 'preparing'`와 `startedAt`을 보낸다. 실패하면 `status: 'crashed'`, `failedAt: 'prepare'`, `exitCode`와 빌드 오류 묶음을 보낸다.
+  - 본창 IPC `run-preset-ant-targets(worktreeFolder, relative)`는 `{ ok, targets }`, `run-preset-webapps(worktreeFolder)`는 `{ ok, folders }`를 돌려준다. 후보는 워크트리 안에서 찾는다.
+- **CATALINA_BASE:** `userData/runtimes/tomcat-base/<구성 id>/` 아래에 실행마다 자체 폴더를 만든다. 같은 구성을 다른 워크트리에서 실행해도 설정과 작업 파일을 공유하지 않는다.
+  - 설치된 Tomcat(`CATALINA_HOME`)의 `conf/` 설정을 복사하고 `server.xml`의 HTTP를 지정 포트의 루프백에 연결한다. 종료 포트는 `-1`이고 AJP 커넥터를 뺀다. `Host`의 `autoDeploy`·`deployOnStartup`은 끄고 `appBase`는 base 안의 빈 폴더다. 구성의 웹 앱만 `server.xml`의 명시적인 `Context`로 기동한다.
+  - `conf/Catalina/localhost/<컨텍스트>.xml`(루트는 `ROOT.xml`)에 `<Context docBase="<웹 폴더 실제 경로>"/>`를 기록한다. 자동 배포가 꺼져 있으므로 기동은 `server.xml`의 명시적인 `Context`가 맡는다. 웹 폴더는 워크트리 안이어야 한다 (실제 경로 검사).
   - `logs`·`temp`·`work` 도 base 안. 바꾸면 안 되는 것: `CATALINA_HOME` 의 파일은 읽기만 한다.
-- **실행:** `<home>\bin\catalina.bat run` (mac·Linux `catalina.sh run`). PTY 환경에만 `CATALINA_HOME`·`CATALINA_BASE`·`JAVA_HOME`·`CATALINA_OPTS`. 시작 완료 `Server startup in`, 오류 `SEVERE`·배포 실패 (1단계 판정에 이미 있음).
+- **실행:** `<home>\bin\catalina.bat run` (mac·Linux `catalina.sh run`). PTY 환경에만 `CATALINA_HOME`·`CATALINA_BASE`·`JAVA_HOME`·`CATALINA_OPTS`. `Server startup in`이나 `Catalina.start`의 시작 완료 정보 로그를 판정한다. 오류는 `SEVERE`·배포 실패 등을 기존 오류 묶음에 담는다.
 - **바로 반영 (Tomcat):** `CATALINA_OPTS` 에 JDWP 인자. Tomcat 은 웹 앱 클래스가 `java.class.path` 에 없으므로 클래스패스를 JVM 에 묻지 않고 만든다: `WEB-INF/classes` + `WEB-INF/lib/*.jar` + `CATALINA_HOME/lib/*.jar`. 출력은 `WEB-INF/classes`, 소스 루트는 이클립스 `.classpath` 의 `src` 항목, 없으면 `src/main/java`·`src`. JSP·정적 파일은 Tomcat 이 스스로 다시 읽는다.
 
 ## 3단계: 바로 반영 (JRebel 처럼 재기동 없이 Java 수정 적용)

@@ -55,6 +55,13 @@ function shellArgument(value, platform) {
 }
 
 const mavenOptions = args => args.map(arg => /[\s"']/u.test(arg) ? `"${arg.replaceAll('"', `"'"'"`)}"` : arg).join(' ')
+const jdwpOption = port => `-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,quiet=y,address=127.0.0.1:${port}`
+
+async function prepareTomcatReload({ layout, worktree, cwd, mode, args = [], reserve = freePort }) {
+  if (layout.reason) return { hotReloadFailure: layout.reason, jvmArgs: [] }
+  const port = await reserve()
+  return { hotReload: { port, worktree, cwd, mode, layout }, filterOutput: portFilter(port), jvmArgs: [jdwpOption(port), ...args] }
+}
 
 async function gradleInitFile(userData) {
   const base = await fs.realpath(userData)
@@ -98,7 +105,7 @@ async function prepareHotReload(task, { worktree, kind = task.id, mode, args = [
   const build = await inspectJavaBuild(task.cwd)
   if (build.devtools) return { ...task, hotReload: { devtools: true, worktree, cwd: task.cwd } }
   const port = await reserve()
-  const jvmArgs = [`-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,quiet=y,address=127.0.0.1:${port}`, ...args]
+  const jvmArgs = [jdwpOption(port), ...args]
   const setting = { port, worktree, cwd: task.cwd, mode }
   if (kind.endsWith(':maven')) {
     // Windows batch launchers parse nested quotes twice. Have Maven expand the enhanced
@@ -275,7 +282,7 @@ function watchJavaChanges(config, { pid, env, running, onState, watchSource = wa
             return
           }
           signal.throwIfAborted()
-          layout = await javaLayout(await vm.classPaths(), config.worktree)
+          layout = config.layout ?? await javaLayout(await vm.classPaths(), config.worktree)
         }
       } catch { /* The build or JVM may still be starting. */ }
       if (signal.aborted) return
@@ -309,4 +316,4 @@ function watchJavaChanges(config, { pid, env, running, onState, watchSource = wa
   return { close }
 }
 
-module.exports = { prepareHotReload, startHotReload, portFilter, reloadLog, RESULTS, HOT_ARGS, MAVEN_ARGS, INIT_GRADLE }
+module.exports = { prepareHotReload, prepareTomcatReload, startHotReload, portFilter, reloadLog, RESULTS, HOT_ARGS, MAVEN_ARGS, INIT_GRADLE }

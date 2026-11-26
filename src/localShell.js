@@ -1187,50 +1187,95 @@ function createLocalShells({
 
   function launchDevelopment(id, entry) {
     const task = entry.developmentTask;
-    task.onEvent?.({ type: 'start', shellId: id });
+    task.onEvent?.({ type: 'start', shellId: id, phase: task.preparation ? 'prepare' : 'server' });
     entry.developmentInterrupted = false;
     setDevelopment(id, entry, { status: 'starting', url: null, exitCode: null });
-    try {
-      const taskEnv = developmentEnvironment(env, task, platform);
-      const pty = spawn(shell.file, developmentShellArgs(shell, task, platform), {
-        name: TERMINAL_TYPE, cols: entry.cols, rows: entry.rows, cwd: entry.launchDirectory,
-        env: taskEnv
+    const launch = new AbortController();
+    const { signal } = launch;
+    const exit = Promise.withResolvers();
+    entry.developmentLaunch = launch;
+    entry.developmentExit = exit.promise;
+    entry.pty = null;
+    entry.exited = false;
+    entry.exitCode = null;
+    let runtime = task;
+    const active = () => entry.developmentLaunch === launch && !entry.exited;
+    const stopAction = () => entry.developmentAction ?? (entry.developmentInterrupted || signal.aborted ? 'stop' : undefined);
+
+    function finish(exitCode, phase, failed = false) {
+      if (!active()) return;
+      entry.exited = true;
+      entry.exitCode = exitCode;
+      disposeDevelopmentTask(runtime);
+      exit.resolve();
+      if (shells.get(id) !== entry) return;
+      task.onEvent?.({ type: 'exit', shellId: id, exitCode, phase, failed, action: stopAction() });
+      if (!entry.developmentAction) setDevelopment(id, entry, { status: 'exited', exitCode });
+      send('local-shell-exit', { id, exitCode });
+    }
+
+    function forward(data, phase) {
+      if (!data || shells.get(id) !== entry) return;
+      entry.backlog = (entry.backlog + data).slice(-BACKLOG_CHARS);
+      send('local-shell-data', { id, data });
+      task.onEvent?.({ type: 'data', shellId: id, data, phase });
+    }
+
+    async function startAfterPreparation() {
+      entry.pty = null;
+      task.onEvent?.({ type: 'prepared', shellId: id });
+      try {
+        runtime = await task.preparation.finish(signal);
+        if (signal.aborted || shells.get(id) !== entry) { finish(null, 'launch'); return; }
+        launchProcess(runtime, 'server');
+      } catch (error) {
+        if (!signal.aborted) forward(`\r\nERROR ${error.code ? 'Tomcat 실행 폴더를 준비하지 못했습니다.' : error.message}\r\n`, 'launch');
+        finish(null, 'launch', true);
+      }
+    }
+
+    function launchProcess(currentTask, phase) {
+      const taskEnv = developmentEnvironment(env, currentTask, platform);
+      const pty = spawn(shell.file, developmentShellArgs(shell, currentTask, platform), {
+        name: TERMINAL_TYPE, cols: entry.cols, rows: entry.rows, cwd: entry.launchDirectory, env: taskEnv
       });
       entry.pty = pty;
-      entry.exited = false;
-      entry.exitCode = null;
       let fragment = '';
-      const forward = data => {
-        if (!data || shells.get(id) !== entry || entry.pty !== pty) return;
-        entry.backlog = (entry.backlog + data).slice(-BACKLOG_CHARS);
-        send('local-shell-data', { id, data });
-        task.onEvent?.({ type: 'data', shellId: id, data });
-        if (entry.development.url || entry.exited) return;
+      pty.onData(raw => {
+        if (!active() || entry.pty !== pty) return;
+        const data = currentTask.filterOutput ? currentTask.filterOutput(raw) : raw;
+        forward(data, phase);
+        if (phase !== 'server' || entry.development.url) return;
         const lines = (fragment + data).split(/[\r\n]+/);
         fragment = lines.pop().slice(-2048);
         const url = developmentAddress(lines);
         if (url) setDevelopment(id, entry, { url });
-      };
-      entry.developmentExit = new Promise(resolve => pty.onExit(({ exitCode }) => {
-        resolve();
-        if (entry.pty !== pty || entry.exited) return;
-        entry.exited = true;
-        entry.exitCode = exitCode;
-        if (shells.get(id) !== entry) return;
-        if (task.filterOutput) forward(task.filterOutput('', true));
-        task.onEvent?.({ type: 'exit', shellId: id, exitCode, action: entry.developmentAction ?? (entry.developmentInterrupted ? 'stop' : undefined) });
-        if (!entry.developmentAction) setDevelopment(id, entry, { status: 'exited', exitCode });
-        send('local-shell-exit', { id, exitCode });
-      }));
-      pty.onData(data => forward(task.filterOutput ? task.filterOutput(data) : data));
-      if (task.hotReload && !entry.exited) task.onEvent?.({ type: 'launched', shellId: id, pid: pty.pid, env: taskEnv });
-      if (!entry.exited) setDevelopment(id, entry, { status: 'running' });
+      });
+      pty.onExit(({ exitCode }) => {
+        if (!active() || entry.pty !== pty) return;
+        if (currentTask.filterOutput) forward(currentTask.filterOutput('', true), phase);
+        if (phase === 'prepare' && exitCode === 0 && !stopAction() && shells.get(id) === entry) void startAfterPreparation();
+        else finish(exitCode, phase);
+      });
+      if (phase === 'server' && active()) {
+        if (currentTask.hotReload || currentTask.hotReloadFailure || currentTask.expectedUrl) {
+          (currentTask.onEvent ?? task.onEvent)?.({ type: 'launched', shellId: id, pid: pty.pid, env: taskEnv });
+        }
+        setDevelopment(id, entry, { status: 'running', ...(currentTask.expectedUrl && { url: currentTask.expectedUrl }) });
+      }
+    }
+
+    try {
+      if (task.preparation) launchProcess({ cwd: task.cwd, command: task.preparation.command, env: task.env, javaHome: task.javaHome }, 'prepare');
+      else launchProcess(task, 'server');
     } catch (error) {
-      entry.exited = true;
-      task.onEvent?.({ type: 'exit', shellId: id, exitCode: null, failed: true });
-      setDevelopment(id, entry, { status: 'exited' });
+      finish(null, task.preparation ? 'prepare' : 'server', true);
       throw error;
     }
+  }
+
+  function disposeDevelopmentTask(task) {
+    if (task?.cleanup) void Promise.resolve().then(() => task.cleanup()).catch(() => {});
   }
 
   async function openDevelopmentTask(task, { cols, rows }, allowed = () => true) {
@@ -1240,11 +1285,15 @@ function createLocalShells({
       const running = entry.developmentTask;
       if (running?.id === task.id && normalized(running.cwd) === normalized(task.cwd)) {
         if (entry.exited && !entry.developmentAction) await changeDevelopmentTask(id, task.id, 'restart', allowed, () => task);
+        else disposeDevelopmentTask(task);
         return { id, name: shell.name, cwd: task.cwd, label, development: entry.development };
       }
     }
-    const directory = requireLocalDirectory(task.cwd);
-    if (!allowed()) throw new Error('실행 권한을 다시 확인해 주세요.');
+    let directory;
+    try {
+      directory = requireLocalDirectory(task.cwd);
+      if (!allowed()) throw new Error('실행 권한을 다시 확인해 주세요.');
+    } catch (error) { disposeDevelopmentTask(task); throw error; }
     const id = `local:${nextId++}`;
     const entry = {
       cwd: directory, launchDirectory: directory, cols: size(cols, 80), rows: size(rows, 24),
@@ -1258,7 +1307,8 @@ function createLocalShells({
   }
 
   function stopDevelopmentEntry(entry) {
-    return entry.developmentStop ??= Promise.resolve().then(() => stopDevelopmentProcess(entry.pty))
+    entry.developmentLaunch?.abort();
+    return entry.developmentStop ??= Promise.resolve().then(() => entry.pty && stopDevelopmentProcess(entry.pty))
       .finally(() => { entry.developmentStop = null });
   }
 
@@ -1270,6 +1320,7 @@ function createLocalShells({
     if (!allowed()) throw new Error('먼저 잠금을 해제해 주세요.');
     if (action === 'restart' && entry.developmentTask.onEvent && !prepare) throw new Error('실행 구성에서 재기동해 주세요.');
     if (entry.developmentAction) throw new Error('개발 서버를 전환하는 중입니다.');
+    const previousLaunch = entry.developmentLaunch;
     entry.developmentAction = action;
     try {
       if (!entry.exited) {
@@ -1285,8 +1336,12 @@ function createLocalShells({
         if (!allowed()) throw new Error('먼저 잠금을 해제해 주세요.');
         if (prepare) {
           const task = await prepare();
-          if (!allowed() || shells.get(id) !== entry || task.id !== taskId) throw new Error('실행 구성이 바뀌었습니다.');
-          entry.cwd = entry.launchDirectory = requireLocalDirectory(task.cwd);
+          if (!allowed() || shells.get(id) !== entry || task.id !== taskId) {
+            disposeDevelopmentTask(task);
+            throw new Error('실행 구성이 바뀌었습니다.');
+          }
+          try { entry.cwd = entry.launchDirectory = requireLocalDirectory(task.cwd); }
+          catch (error) { disposeDevelopmentTask(task); throw error; }
           entry.developmentTask = task;
           if (task.label) setDevelopment(id, entry, { name: task.name, label: task.label });
         }
@@ -1299,7 +1354,7 @@ function createLocalShells({
       }
     } finally {
       entry.developmentAction = undefined;
-      if (shells.get(id) === entry && entry.development.status !== 'running') {
+      if (shells.get(id) === entry && entry.developmentLaunch === previousLaunch && entry.development.status !== 'running') {
         setDevelopment(id, entry, { status: entry.exited ? 'exited' : 'running', exitCode: entry.exitCode });
       }
     }
@@ -1324,10 +1379,11 @@ function createLocalShells({
     if (data === '\x03' && entry.developmentTask?.onEvent) {
       entry.developmentInterrupted = true;
       entry.developmentTask.onEvent({ type: 'interrupt', shellId: id });
+      if (!entry.pty) entry.developmentLaunch?.abort();
     }
     if (!entry.inbox) (entry.inboxWakeRecovery ??= { blocked: false }).blocked = true;
     entry.inbox?.userInput(data);
-    entry.pty.write(data);
+    entry.pty?.write(data);
     const reviewing = entry.codexReview?.review;
     entry.codexReview?.input(data, agents?.codexHookMode?.());
     if (!reviewing) trackCodexInput(entry, data);
@@ -1347,7 +1403,7 @@ function createLocalShells({
     try {
       const columns = size(cols, 80);
       const lines = size(rows, 24);
-      if (!entry.exited) entry.pty.resize(columns, lines);
+      if (!entry.exited) entry.pty?.resize(columns, lines);
       entry.cols = columns;
       entry.rows = lines;
       entry.inbox?.resize(columns, lines);
@@ -1366,7 +1422,7 @@ function createLocalShells({
       send('local-shell-development-state', { id, development: null });
       if (!entry.exited) {
         void stopDevelopmentEntry(entry).catch(() => {
-          try { entry.pty.kill() } catch { /* already gone */ }
+          try { entry.pty?.kill() } catch { /* already gone */ }
         });
       }
       return;
@@ -1507,7 +1563,7 @@ function createLocalShells({
   async function currentDirectory(id) {
     const entry = shells.get(id);
     if (!entry) return null;
-    const pid = entry.pty.pid;
+    const pid = entry.pty?.pid;
     if (!entry.exited && Number.isInteger(pid) && pid > 0 && platform !== 'win32') {
       try {
         let folder;

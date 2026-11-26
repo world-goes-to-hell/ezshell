@@ -15,7 +15,7 @@ afterEach(async () => {
   await rm(base, { recursive: true, force: true })
 })
 
-async function fixture() {
+async function fixture(options = {}) {
   const root = await realDirectory(base)
   const file = path.join(root, 'run-presets.json')
   const outside = path.join(root, 'second-project')
@@ -45,22 +45,23 @@ async function fixture() {
       const id = `local:${shellTasks.size + 1}`
       shellTasks.set(id, task)
       operations.push(['start', task.name, id])
-      emit(id, { type: 'start' })
+      emit(id, { type: 'start', phase: task.preparation ? 'prepare' : 'server' })
       return { id }
     },
     async changeDevelopmentTask(id, _taskId, action, _allowed, prepare) {
       operations.push([action, shellTasks.get(id).name, id])
       emit(id, { type: 'exit', action, exitCode: 1 })
       if (action === 'restart') {
-        shellTasks.set(id, await prepare())
-        emit(id, { type: 'start' })
+        const task = await prepare()
+        shellTasks.set(id, task)
+        emit(id, { type: 'start', phase: task.preparation ? 'prepare' : 'server' })
       }
     }
   }
   const makeController = (options = {}) => createRunPresets({ file, getShells: () => shells, getAgent: id => id === 'agent-1' ? { id, active: true, shellId: 'agent-shell' } : null,
     isLocked: () => state.locked, sendState, sendAsUser, notifyCrash, now: () => state.now, javaHomeOf: id => id === 'jdk-21' ? outside : null,
     projectOf: async cwd => cwd === checkout || cwd === checkoutSubfolder ? { ...location(cwd, checkout, folder), gitWorktree: true } : location(cwd), ...options })
-  const controller = makeController()
+  const controller = makeController(options)
   const ipc = registerRunPresetIpc({ ipcMain: { handle: (channel, fn) => handlers.set(channel, fn) }, controller, fromMainWindow: e => e.sender === event.sender, isLocked: () => state.locked })
   const invoke = (channel, ...args) => handlers.get(channel)(event, folder, ...args)
   const invokeCheckout = (channel, ...args) => handlers.get(channel)(event, checkout, ...args)
@@ -76,6 +77,41 @@ async function fixture() {
 }
 
 describe('saved project runs', () => {
+  it('confirms Tomcat preparation and VM options, reports build failure and lets MCP run approved builds by name', async () => {
+    let home
+    const f = await fixture({ toolHomeOf: () => home })
+    home = f.outside
+    await Promise.all([mkdir(path.join(home, 'bin')), mkdir(path.join(home, 'conf')), mkdir(path.join(f.folder, 'WebContent', 'WEB-INF'), { recursive: true })])
+    await Promise.all([writeFile(path.join(home, 'bin', process.platform === 'win32' ? 'catalina.bat' : 'catalina.sh'), 'fixture'),
+      writeFile(path.join(home, 'conf', 'server.xml'), '<Server><Service><Connector/><Engine><Host/></Engine></Service></Server>'),
+      writeFile(path.join(f.folder, 'build.xml'), '<project><target name="pack"/><target name="compile"/></project>')])
+    expect(await f.invoke('run-preset-ant-targets', '.')).toEqual({ ok: true, targets: ['pack', 'compile'] })
+    expect(await f.invoke('run-preset-webapps')).toEqual({ ok: true, folders: ['WebContent'] })
+    const saved = await f.save('Tomcat', { kind: 'tomcat', tomcat: 'fixture-tomcat', webapp: 'WebContent', vmArgs: '-Xmx512m', prepare: { tool: 'ant', target: 'pack' } })
+    await expect(f.agent('start', 'Tomcat')).rejects.toThrow('사용자가')
+    expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual({ needsConfirm: { command: '기동 전 빌드\nant pack\n\nTomcat VM 인자\n-Xmx512m' } })
+    expect(await f.invoke('run-preset-start', saved.id, { confirmCustom: true })).toEqual({ ok: true })
+    const { shellId } = f.list().states[saved.id]
+    f.emit(shellId, { type: 'data', phase: 'prepare', data: 'Server startup in 50 seconds http://localhost:8080/\n' })
+    expect(f.list().states[saved.id]).toMatchObject({ status: 'preparing', address: undefined })
+    f.emit(shellId, { type: 'data', phase: 'prepare', data: 'ERROR missing output\n' })
+    f.emit(shellId, { type: 'exit', phase: 'prepare', exitCode: 7 })
+    expect(f.list().states[saved.id]).toMatchObject({ status: 'crashed', failedAt: 'prepare', exitCode: 7 })
+    expect(await f.agent('log', 'Tomcat', { errors: true })).toMatchObject({ groups: expect.arrayContaining([expect.objectContaining({ lines: ['ERROR 빌드 실패', 'ERROR missing output'] })]) })
+    await expect(f.agent('start', 'Tomcat')).resolves.toEqual({ ok: true })
+    const task = f.shellTasks.get(shellId)
+    const runtime = await task.preparation.finish(new AbortController().signal)
+    f.emit(shellId, { type: 'prepared' })
+    runtime.onEvent({ type: 'launched', shellId, pid: 17, env: runtime.env })
+    f.emit(shellId, { type: 'data', phase: 'server', data: 'INFO Server startup in 108 milliseconds\n' })
+    expect((await f.agent('list')).presets[0]).toMatchObject({ status: 'running', port: 8080 })
+    expect(f.list().states[saved.id].address).toBe('http://127.0.0.1:8080/')
+    await runtime.cleanup()
+    await f.invoke('run-preset-stop', saved.id)
+    await f.save('Tomcat', { ...saved, prepare: { tool: 'ant', target: 'compile' } })
+    expect(await f.invoke('run-preset-start', saved.id)).toMatchObject({ needsConfirm: { command: expect.stringContaining('ant compile') } })
+  })
+
   it('checks names, env, relative paths and stored data', async () => {
     const f = await fixture()
     await symlink(f.outside, path.join(f.folder, 'outside'), process.platform === 'win32' ? 'junction' : 'dir')

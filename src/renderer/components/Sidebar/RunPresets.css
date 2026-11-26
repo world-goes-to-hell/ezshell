@@ -92,6 +92,7 @@
 .run-preset-kind[data-kind="vite"] { color: #a66bff; }
 .run-preset-kind[data-kind="node"] { color: #5fa04e; }
 .run-preset-kind[data-kind="java"] { color: #e76f00; }
+.run-preset-kind[data-kind="tomcat"] { color: #c8960c; }
 
 .run-preset-name { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--text-primary); }
 .run-preset-folder,

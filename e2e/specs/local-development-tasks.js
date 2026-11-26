@@ -233,6 +233,23 @@ function fixture(backendPort, frontendPort) {
     await setValue('#run-preset-name', '시험 서버')
     await setValue('#run-preset-folder', '.')
     await until(`[...document.querySelectorAll('.run-preset-choice')].some(c => c.textContent.includes('직접 입력'))`)
+    // Stage 2: Tomcat is a kind of its own, with its fields, and hot reload can be picked for it
+    await js(`document.querySelector('input[name="run-preset-kind"][value="tomcat"]').click()`)
+    check('Tomcat shows its fields: the Tomcat (or where to fetch one), web folder, context path, port, VM arguments, build', await until(`(() => {
+      const box = document.querySelector('.run-preset-tomcat')
+      if (!box) return false
+      const tomcat = !!box.querySelector('#run-preset-tomcat') || box.textContent.includes('설정 > 개발 도구에서 받기')
+      return tomcat && !!box.querySelector('#run-preset-webapp') && box.querySelector('#run-preset-context')?.value === '/' &&
+        box.querySelector('#run-preset-port')?.value === '8080' && !!box.querySelector('#run-preset-vmargs') &&
+        box.querySelectorAll('input[name="run-preset-prepare"]').length === 3
+    })()`))
+    check('바로 반영 can be picked for a Tomcat preset', await until(`
+      !!document.querySelector('.run-preset-reload')?.dataset.usable &&
+      !document.querySelector('input[name="run-preset-reload"][value="standard"]').disabled`))
+    await js(`document.querySelector('input[name="run-preset-prepare"][value="maven"]').click()`)
+    check('a build before the server is warned about as a command that runs', await until(`
+      !!document.querySelector('.run-preset-tomcat [aria-label="Maven 목표"]') &&
+      document.querySelector('.run-preset-tomcat > .run-preset-warn')?.textContent.includes('처음 실행할 때')`))
     await js(`[...document.querySelectorAll('.run-preset-choice')].find(c => c.textContent.includes('직접 입력')).querySelector('input').click()`)
     const server = path.join(__dirname, '..', 'support', 'devRunServer.js')
     await until(`!!document.querySelector('.run-preset-command')`)

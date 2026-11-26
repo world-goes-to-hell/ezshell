@@ -4,8 +4,9 @@ const { inspectLocalProject } = require('./localProjects.js')
 const { inspectDevelopmentTasks, prepareDevelopmentTask } = require('./localDevelopmentTasks.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { createDevelopmentErrors, MAX_LOG_LINES } = require('./developmentErrors.js')
-const { prepareHotReload, startHotReload, reloadLog, RESULTS: RELOAD_RESULTS } = require('./hotReload.js')
-const { createRunPresetStore, validatePreset, presetName, publicPreset, commandHash, projectKey, realDirectory, directoryInProject } = require('./runPresetStore.js')
+const { prepareHotReload, prepareTomcatReload, startHotReload, reloadLog, RESULTS: RELOAD_RESULTS } = require('./hotReload.js')
+const { planTomcat, stageTomcat, webDirectory, antTargets, webappCandidates } = require('./tomcatRun.js')
+const { createRunPresetStore, validatePreset, presetName, publicPreset, presetApproval, projectKey, realDirectory, directoryInProject } = require('./runPresetStore.js')
 
 const READY_TIMEOUT = 300_000
 const USER = 'user'
@@ -15,7 +16,7 @@ const MAX_ACTIONS = 20
 const MAX_RELOAD_RESULTS = 10
 const MAX_SEND_NOTE = 4000
 const MAX_SEND_BODY = 8000 - MAX_SEND_NOTE - '\n\n'.length
-const ACTIVE = new Set(['starting', 'running'])
+const ACTIVE = new Set(['preparing', 'starting', 'running'])
 const NOT_ALLOWED = '잠금 해제 후 본창에서 이용할 수 있습니다.'
 const MISSING = '실행 구성을 찾을 수 없습니다.'
 const MOVED = '실행 구성이 바뀌었습니다. 다시 선택해 주세요.'
@@ -69,6 +70,7 @@ async function resolveProject(folder) {
 }
 
 function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHomeOf = () => null,
+  toolHomeOf = () => null, toolHomeFor = () => null,
   enhancedJvmArgs = () => null, userData = file && path.dirname(file), prepareReload = prepareHotReload, startReload = startHotReload,
   sendState = () => {}, notifyCrash = () => {}, sendAsUser, now = Date.now, projectOf = resolveProject,
   prepareTask = prepareDevelopmentTask }) {
@@ -118,11 +120,21 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
 
   function updateLogs(run) {
     const { address, readyAt, errors } = run.logs.state()
-    update(run, { address, readyAt, errors, ...(readyAt !== undefined && run.state.status === 'starting' ? { status: 'running' } : {}) })
+    update(run, { address: readyAt === undefined ? undefined : run.expectedUrl ?? address, readyAt, errors,
+      ...(readyAt !== undefined && run.state.status === 'starting' ? { status: 'running' } : {}) })
   }
 
   function suspendReload(run) {
     run.reloadWorker?.suspend()
+  }
+
+  function recordReload(run, reload, diagnostics) {
+    if (reload.status === 'compileError') run.logs.addError(`ERROR ${reload.reason}`, diagnostics)
+    if (RELOAD_RESULTS.has(reload.status)) {
+      run.reloadResults.unshift({ sequence: ++reloadSequence, reload })
+      if (run.reloadResults.length > MAX_RELOAD_RESULTS) run.reloadResults.pop()
+    }
+    update(run, { reload, errors: run.logs.state().errors })
   }
 
   function openReload(run) {
@@ -131,14 +143,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     if (run.reloadWorker) { if (!paused) run.reloadWorker.resume(); return }
     const { config, pid, env } = run.reloadLaunch
     run.reloadWorker = startReload(config, { pid, env, paused, running: () => run.state.status === 'running' && !isLocked(),
-      onState(reload, diagnostics) {
-        if (reload.status === 'compileError') run.logs.addError(`ERROR ${reload.reason}`, diagnostics)
-        if (RELOAD_RESULTS.has(reload.status)) {
-          run.reloadResults.unshift({ sequence: ++reloadSequence, reload })
-          if (run.reloadResults.length > MAX_RELOAD_RESULTS) run.reloadResults.pop()
-        }
-        update(run, { reload, errors: run.logs.state().errors })
-      } })
+      onState: (reload, diagnostics) => recordReload(run, reload, diagnostics) })
   }
 
   function closeReload(run) {
@@ -147,21 +152,29 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     run.reloadLaunch = undefined
   }
 
-  function onEvent(run, event, hotReload) {
+  function onEvent(run, event, task) {
     const { type, shellId } = event
     if (type === 'start') {
       closeReload(run)
+      run.expectedUrl = undefined
       byShell.set(shellId, run)
-      run.logs = createDevelopmentErrors(now)
-      update(run, { status: 'starting', startedAt: now(), shellId, exitCode: null, address: undefined, readyAt: undefined, reload: undefined, errors: 0 })
+      run.logs = createDevelopmentErrors(now, { tomcat: task.tomcat === true })
+      update(run, { status: event.phase === 'prepare' ? 'preparing' : 'starting', startedAt: now(), shellId,
+        exitCode: null, failedAt: undefined, address: undefined, readyAt: undefined, reload: undefined, errors: 0 })
       return
     }
     if (run.state.shellId !== shellId) return
-    if (type === 'launched' && hotReload && ACTIVE.has(run.state.status)) {
-      run.reloadLaunch = { config: hotReload, pid: event.pid, env: event.env }
-      openReload(run)
+    if (type === 'prepared' && run.state.status === 'preparing') {
+      run.logs.finish(false)
+      update(run, { status: 'starting', errors: run.logs.state().errors })
+    } else if (type === 'launched' && ACTIVE.has(run.state.status)) {
+      run.expectedUrl = task.expectedUrl
+      if (task.hotReload) {
+        run.reloadLaunch = { config: task.hotReload, pid: event.pid, env: event.env }
+        openReload(run)
+      } else if (task.hotReloadFailure) recordReload(run, { status: 'failed', reason: task.hotReloadFailure, at: now() })
     } else if (type === 'data' && ACTIVE.has(run.state.status)) {
-      run.logs.feed(event.data)
+      run.logs.feed(event.data, event.phase !== 'prepare' && event.phase !== 'launch')
       updateLogs(run)
     } else if (type === 'interrupt') {
       record(run, USER, 'stop')
@@ -172,10 +185,13 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       update(run, { shellId: undefined, ...(ACTIVE.has(run.state.status) && { status: 'stopped' }) })
     } else if (type === 'exit' && ACTIVE.has(run.state.status)) {
       closeReload(run)
-      run.logs.finish()
-      const logState = run.logs.state()
+      run.logs.finish(event.phase !== 'prepare' && event.phase !== 'launch')
       const crashed = !event.action && (event.failed || (typeof event.exitCode === 'number' && event.exitCode !== 0))
-      update(run, { ...logState, status: crashed ? 'crashed' : 'stopped', exitCode: event.exitCode })
+      const buildFailed = crashed && event.phase === 'prepare'
+      if (buildFailed) run.logs.addError('ERROR 빌드 실패', run.logs.groups().at(-1)?.lines)
+      const logState = run.logs.state()
+      update(run, { ...logState, address: logState.readyAt !== undefined ? run.expectedUrl ?? logState.address : undefined,
+        status: crashed ? 'crashed' : 'stopped', exitCode: event.exitCode, ...(buildFailed && { failedAt: 'prepare' }) })
       const preset = store.list(run.project.key).find(item => item.id === run.id)
       if (crashed && preset?.notify && !isLocked()) notifyCrash(path.basename(run.project.root) || '로컬 프로젝트', preset.name)
     }
@@ -189,7 +205,8 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     const cwd = await directoryInProject(project.worktree, preset.relative)
     const defined = preset.kind === 'task'
       ? await prepareTask(cwd, preset.taskId, { ...optionsForTask, allowed: () => !isLocked() && allowed() })
-      : { cwd, command: preset.command, custom: true }
+      : preset.kind === 'tomcat' ? { cwd, tomcat: true, tomcatPlan: await planTomcat(preset, cwd, { toolHomeOf, toolHomeFor }) }
+        : { cwd, command: preset.command, custom: true }
     if (defined.cwd !== cwd) throw new Error(MOVED)
     const javaHome = preset.jdk === 'system' ? undefined : await javaHomeOf(preset.jdk)
     if (preset.jdk !== 'system' && (!javaHome || !path.isAbsolute(javaHome))) throw new Error('선택한 JDK를 찾을 수 없습니다.')
@@ -214,13 +231,31 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   }
 
   function confirmCommand(project, preset, by, approve) {
-    if (preset.kind !== 'custom' || preset.confirmedHash === commandHash(preset.command)) return preset
+    const confirmation = presetApproval(preset)
+    if (!confirmation || preset.confirmedHash === confirmation.hash) return preset
     if (by !== USER) throw new Error('먼저 사용자가 화면에서 실행 명령을 확인해야 합니다.')
-    const question = new RunConfirmation('needsConfirm', preset.id, preset.command)
+    const question = new RunConfirmation('needsConfirm', preset.id, confirmation.command, confirmation.hash)
     if (!approve(question)) throw question
-    const confirmed = { ...preset, confirmedHash: commandHash(preset.command) }
+    const confirmed = { ...preset, confirmedHash: confirmation.hash }
     store.write(project.root, store.list(project.key).map(item => item.id === preset.id ? confirmed : item))
     return confirmed
+  }
+
+  async function buildTomcatTask(task, project, preset, withEvents) {
+    const { tomcatPlan, ...base } = task
+    const finish = async signal => {
+      const check = async () => {
+        signal?.throwIfAborted()
+        if (await directoryInProject(project.worktree, preset.relative) !== base.cwd || find(project, preset.id) !== preset) throw new Error(MOVED)
+        ensureAllowed(() => !signal?.aborted)
+      }
+      await check()
+      const runtime = await stageTomcat(tomcatPlan, { preset, task: base, worktree: project.worktree, userData, prepareReload: prepareTomcatReload })
+      try { await check(); return runtime }
+      catch (error) { await runtime.cleanup(); throw error }
+    }
+    if (!tomcatPlan.prepareCommand) return finish()
+    return { ...base, preparation: { command: tomcatPlan.prepareCommand, finish: async signal => withEvents(await finish(signal)) } }
   }
 
   async function act(project, id, action, { by = USER, allowed, approve = noApproval, verifyActor } = {}) {
@@ -241,14 +276,18 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       return true
     }
     const makeTask = async () => {
+      const withEvents = task => ({ ...task, onEvent: event => onEvent(run, event, task) })
       let task = await freshTask(project, preset, by, approve, canAct)
-      if (preset.hotReload && preset.hotReload !== 'off') {
+      if (preset.kind === 'tomcat') task = await buildTomcatTask(task, project, preset, withEvents)
+      else if (preset.hotReload && preset.hotReload !== 'off') {
         const { enhancedArgs, ...base } = task
         task = await prepareReload(base, { worktree: project.worktree, kind: preset.taskId, mode: preset.hotReload, args: enhancedArgs, userData })
       }
-      if (verifyActor) await verifyActor()
-      ensureAllowed(canAct)
-      return { ...task, onEvent: event => onEvent(run, event, task.hotReload) }
+      try {
+        if (verifyActor) await verifyActor()
+        ensureAllowed(canAct)
+        return withEvents(task)
+      } catch (error) { await task.cleanup?.(); throw error }
     }
     try {
       if (action === 'stop') {
@@ -328,7 +367,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       return { presets: store.list(project.key).map(preset => {
         const state = getRun(project, preset.id)?.state ?? idle()
         return { name: preset.name, status: state.status, port: portOf(state.address),
-          errors: state.errors, agentControl: preset.agentControl, ...(state.reload && { reload: state.reload }) }
+          errors: state.errors, agentControl: preset.agentControl, ...(state.failedAt && { failedAt: state.failedAt }), ...(state.reload && { reload: state.reload }) }
       }) }
     }
     const preset = store.list(project.key).find(item => item.name === presetName(request.name))
@@ -456,11 +495,13 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       const { tasks } = await inspectDevelopmentTasks(cwd, process.platform, { rootOnly: true })
       if (!tasks.some(task => task.id === next.taskId)) throw new Error('선택한 폴더의 실행 후보를 다시 선택해 주세요.')
     }
+    if (next.kind === 'tomcat' && !next.prepare) await webDirectory(project.worktree, next.webapp)
     ensureAllowed(allowed)
     const current = store.list(project.key)
     const previous = input?.id === undefined ? null : find(project, id)
     if (current.some(item => item.name === next.name && item.id !== id)) throw new Error('같은 이름의 실행 구성이 있습니다.')
-    if (next.kind === 'custom' && previous?.confirmedHash === commandHash(next.command)) next.confirmedHash = previous.confirmedHash
+    const approval = presetApproval(next)
+    if (approval && previous?.confirmedHash === approval.hash) next.confirmedHash = previous.confirmedHash
     if (previous?.agentActionNotified) next.agentActionNotified = true
     store.write(project.root, previous ? current.map(item => item.id === id ? next : item) : [...current, next])
     return { preset: publicPreset(next) }
@@ -469,7 +510,8 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   function sendPreview(project, id) {
     const preset = find(project, id)
     const run = getRun(project, id)
-    const kind = preset.kind === 'task' ? { node: 'Node', gradle: 'Spring Boot (Gradle)', maven: 'Spring Boot (Maven)' }[preset.taskId.slice(2)] : '직접 입력'
+    const kind = preset.kind === 'task' ? { node: 'Node', gradle: 'Spring Boot (Gradle)', maven: 'Spring Boot (Maven)' }[preset.taskId.slice(2)]
+      : preset.kind === 'tomcat' ? 'Tomcat' : '직접 입력'
     const folder = preset.relative.length <= 1500 ? `${preset.relative}/` : `${preset.relative.slice(0, 1500)}…`
     const summary = [preset.name, `폴더 ${folder}`, `실행 방식 ${kind}`,
       `종료 코드 ${run?.state.exitCode ?? '—'}`].join('\n')
@@ -502,6 +544,8 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       const { tasks } = await inspectDevelopmentTasks(cwd, process.platform, { rootOnly: true })
       return { candidates: tasks.map(({ id, name, command }) => ({ taskId: id, name, command })) }
     },
+    async antTargets(project, relative) { return { ok: true, targets: await antTargets(await directoryInProject(project.worktree, relative)) } },
+    async webapps(project) { return { ok: true, folders: await webappCandidates(project.worktree) } },
     reorder(project, ids) {
       const current = store.list(project.key)
       if (!Array.isArray(ids) || ids.length !== current.length || new Set(ids).size !== ids.length) throw new Error('구성 순서를 확인해 주세요.')
@@ -548,6 +592,8 @@ function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked })
   }
   handle('run-presets-list', project => controller.list(project))
   handle('run-presets-candidates', (project, _allowed, _frame, relative) => controller.candidates(project, relative))
+  handle('run-preset-ant-targets', (project, _allowed, _frame, relative) => controller.antTargets(project, relative))
+  handle('run-preset-webapps', project => controller.webapps(project))
   handle('run-presets-save', (project, allowed, _frame, preset) => controller.save(project, preset, allowed))
   handle('run-presets-delete', (project, allowed, _frame, id) => controller.remove(project, id, allowed))
   handle('run-presets-reorder', (project, _allowed, _frame, ids) => controller.reorder(project, ids))

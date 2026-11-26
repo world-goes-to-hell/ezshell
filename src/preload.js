@@ -191,6 +191,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localProjectDevelopmentChange: (options) => ipcRenderer.invoke('local-project-development-change', options),
   runPresetsList: (folder) => ipcRenderer.invoke('run-presets-list', folder),
   runPresetsCandidates: (folder, relative) => ipcRenderer.invoke('run-presets-candidates', folder, relative),
+  runPresetAntTargets: (folder, relative) => ipcRenderer.invoke('run-preset-ant-targets', folder, relative),
+  runPresetWebapps: (folder) => ipcRenderer.invoke('run-preset-webapps', folder),
   runPresetsSave: (folder, preset) => ipcRenderer.invoke('run-presets-save', folder, preset),
   runPresetsDelete: (folder, id) => ipcRenderer.invoke('run-presets-delete', folder, id),
   runPresetsReorder: (folder, ids) => ipcRenderer.invoke('run-presets-reorder', folder, ids),

@@ -4,6 +4,7 @@ const { createHash, randomUUID } = require('node:crypto')
 const { isLocalFilePath } = require('../localKeyPath.js')
 const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
 const { sameOrInside } = require('../localFiles/roots.js')
+const { validateTomcat } = require('./tomcatRun.js')
 
 const MAX_BYTES = 2 * 1024 * 1024
 const MAX_PROJECTS = 200
@@ -52,6 +53,15 @@ async function directoryInProject(root, relative) {
 
 const commandHash = command => createHash('sha256').update(command).digest('hex')
 
+function presetApproval(preset) {
+  if (preset.kind === 'custom') return { command: preset.command, hash: commandHash(preset.command) }
+  if (preset.kind !== 'tomcat' || (!preset.vmArgs.trim() && !preset.prepare)) return null
+  const prepare = preset.prepare
+  const command = [prepare && `기동 전 빌드\n${prepare.tool} ${prepare.target ?? prepare.goals}`,
+    preset.vmArgs.trim() && `Tomcat VM 인자\n${preset.vmArgs}`].filter(Boolean).join('\n\n')
+  return { command, hash: commandHash(JSON.stringify(['tomcat', preset.vmArgs, prepare])) }
+}
+
 function validatePreset(input, id) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || typeof id !== 'string' || !UUID.test(id)) throw new Error('실행 구성을 확인해 주세요.')
   const name = presetName(input.name)
@@ -60,7 +70,9 @@ function validatePreset(input, id) {
   if (typeof jdk !== 'string' || !JDK_ID.test(jdk)) throw new Error('등록된 JDK를 선택해 주세요.')
   const hotReload = input.hotReload === undefined ? 'off' : input.hotReload
   const springTask = input.kind === 'task' && typeof input.taskId === 'string' && /:(?:maven|gradle)$/.test(input.taskId)
-  if (!['off', 'standard', 'enhanced'].includes(hotReload) || (hotReload !== 'off' && !springTask)) throw new Error('바로 반영은 Spring Boot 실행 구성에서만 선택할 수 있습니다.')
+  if (!['off', 'standard', 'enhanced'].includes(hotReload) || (hotReload !== 'off' && !springTask && input.kind !== 'tomcat')) {
+    throw new Error('바로 반영은 Spring Boot와 Tomcat 실행 구성에서만 선택할 수 있습니다.')
+  }
   const env = input.env ?? {}
   if (typeof env !== 'object' || Array.isArray(env)) throw new Error('환경 변수를 확인해 주세요.')
   const entries = Object.entries(env)
@@ -74,6 +86,7 @@ function validatePreset(input, id) {
     flags[key] = input[key]
   }
   const base = { id, name, relative, jdk, hotReload, env: Object.fromEntries(entries), ...flags }
+  if (input.kind === 'tomcat') return { ...base, ...validateTomcat(input, presetRelative) }
   if (input.kind === 'task' && typeof input.taskId === 'string' && input.taskId.length <= 300 && /^(?:.+):(gradle|maven|node)$/.test(input.taskId) && ONE_LINE.test(input.taskId)) {
     return { ...base, kind: 'task', taskId: input.taskId }
   }
@@ -102,7 +115,8 @@ function createRunPresetStore(file) {
         try {
           const preset = validatePreset(entry, entry?.id)
           if (ids.has(preset.id) || names.has(preset.name)) continue
-          if (preset.kind === 'custom' && entry.confirmedHash === commandHash(preset.command)) preset.confirmedHash = entry.confirmedHash
+          const approval = presetApproval(preset)
+          if (approval && entry.confirmedHash === approval.hash) preset.confirmedHash = entry.confirmedHash
           if (entry.agentActionNotified === true) preset.agentActionNotified = true
           ids.add(preset.id)
           names.add(preset.name)
@@ -143,4 +157,4 @@ function createRunPresetStore(file) {
   return { list, roots: () => [...projects.values()].map(project => project.root), write, markAgentAction }
 }
 
-module.exports = { createRunPresetStore, validatePreset, presetName, presetRelative, publicPreset, commandHash, projectKey, realDirectory, directoryInProject }
+module.exports = { createRunPresetStore, validatePreset, presetName, presetRelative, publicPreset, commandHash, presetApproval, projectKey, realDirectory, directoryInProject }

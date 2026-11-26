@@ -4,6 +4,27 @@ import { scanProblems } from '../renderer/lib/logProblems'
 import { createDevelopmentErrors } from './developmentErrors.js'
 
 describe('development task output', () => {
+  it('recognizes the locale-independent Tomcat startup logger only for a server run', () => {
+    const log = createDevelopmentErrors(() => 99, { tomcat: true })
+    const line = '26-Nov-2026 09:21:35.621 정보 [main] org.apache.catalina.startup.Catalina.start\r\n'
+    log.feed(line, false)
+    log.feed('  Local: http://localhost:8080/\n')
+    expect(log.state().readyAt).toBeUndefined()
+    log.feed(line)
+    expect(log.state().readyAt).toBe(99)
+  })
+
+  it('distinguishes startup failures from information in both Tomcat log formats', () => {
+    const log = createDevelopmentErrors(() => 88, { tomcat: true })
+    log.feed('26-Nov-2026 09:21:35.621 심각 [main] org.apache.catalina.startup.Catalina.start 서버 시작 실패\r\n')
+    const header = 'Nov 26, 2026 9:21:37 AM org.apache.catalina.startup.Catalina start\r\n'
+    log.feed(header + 'SEVERE: The required Server component failed to start\r\n')
+    expect(log.state().readyAt).toBeUndefined()
+    log.feed(header)
+    log.feed('정보: 서버가 시작되었습니다.\r\n')
+    expect(log.state().readyAt).toBe(88)
+  })
+
   it.each([
     ['2026-11-25 10:00:01 INFO Tomcat started on port 8080 (http) with context path \'/\'', 'http://localhost:8080'],
     ['2026-11-25 10:00:02 INFO Started DemoApplication in 2.437 seconds (process running for 2.903)', undefined],

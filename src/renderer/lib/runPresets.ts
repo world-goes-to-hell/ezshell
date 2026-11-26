@@ -2,8 +2,8 @@
 // the types of the IPC contract and the words and buttons a preset row shows. Kept free of React so the
 // rules are tested on their own.
 
-import type { HotReload, HotswapAgentStatus, JdkRuntime, RunAction, RunErrorGroup, RunPreset, RunState } from '../types'
-export type { HotReload, RunAction, RunCandidate, RunErrorGroup, RunPreset, RunReload, RunState, RunStatus } from '../types'
+import type { HotReload, HotswapAgentStatus, JdkRuntime, RunAction, RunErrorGroup, RunPrepare, RunPreset, RunState } from '../types'
+export type { HotReload, RunAction, RunCandidate, RunErrorGroup, RunPrepare, RunPreset, RunReload, RunState, RunStatus } from '../types'
 
 export const IDLE_STATE: RunState = { status: 'idle', errors: 0 }
 
@@ -33,16 +33,18 @@ export function runPort(address?: string): string {
 /** The pills of a row: starting N초 / :port / 멈춤·종료 N / 오류 N */
 export function runPills(state: RunState, now: number): RunPill[] {
   const pills: RunPill[] = []
-  if (state.status === 'starting') {
+  if (state.status === 'starting' || state.status === 'preparing') {
     const seconds = state.startedAt ? Math.max(0, Math.floor((now - state.startedAt) / 1000)) : 0
-    pills.push({ kind: 'wait', text: `시작 중 ${seconds}초` })
+    pills.push({ kind: 'wait', text: `${state.status === 'preparing' ? '준비 중' : '시작 중'} ${seconds}초` })
   } else if (state.status === 'running') {
     const port = runPort(state.address)
     if (port) pills.push({ kind: 'port', text: port })
   } else if (state.status === 'crashed') {
-    pills.push({ kind: 'err', text: state.exitCode === null || state.exitCode === undefined ? '멈춤' : `멈춤 · 종료 ${state.exitCode}` })
+    // The build before the server failed: the server never started
+    const word = state.failedAt === 'prepare' ? '빌드 실패' : '멈춤'
+    pills.push({ kind: 'err', text: state.exitCode === null || state.exitCode === undefined ? word : `${word} · 종료 ${state.exitCode}` })
   }
-  if (state.errors > 0 && (state.status === 'running' || state.status === 'starting')) {
+  if (state.errors > 0 && isRunActive(state)) {
     pills.push({ kind: 'err', text: `오류 ${state.errors}`, errors: true })
   }
   return pills
@@ -51,6 +53,7 @@ export function runPills(state: RunState, now: number): RunPill[] {
 /** The buttons of a row, in order (scenes 3·4·5) */
 export function runButtons(state: RunState): RunButton[] {
   switch (state.status) {
+    case 'preparing':
     case 'starting': return ['log', 'stop']
     case 'running': return state.address ? ['open', 'restart', 'stop'] : ['log', 'restart', 'stop']
     case 'crashed': return ['log', 'restart']
@@ -58,7 +61,7 @@ export function runButtons(state: RunState): RunButton[] {
   }
 }
 
-export const isRunActive = (state: RunState) => state.status === 'starting' || state.status === 'running'
+export const isRunActive = (state: RunState) => state.status === 'preparing' || state.status === 'starting' || state.status === 'running'
 
 const ACTION_WORDS: Record<RunAction['action'], string> = { start: '실행', restart: '재기동', stop: '중지' }
 
@@ -82,7 +85,8 @@ export function runHead(presets: readonly RunPreset[], states: Readonly<Record<s
 }
 
 /** The kind icon of a row, from the candidate's name or the custom command */
-export function runKind(preset: Pick<RunPreset, 'kind' | 'taskId' | 'command' | 'name'>): 'spring' | 'vue' | 'vite' | 'node' | 'java' | 'custom' {
+export function runKind(preset: Pick<RunPreset, 'kind' | 'taskId' | 'command' | 'name'>): 'spring' | 'vue' | 'vite' | 'node' | 'java' | 'tomcat' | 'custom' {
+  if (preset.kind === 'tomcat') return 'tomcat'
   const text = `${preset.taskId ?? ''} ${preset.command ?? ''}`.toLowerCase()
   if (/spring|bootrun|spring-boot/.test(text)) return 'spring'
   if (/\bvue\b|vue-cli|serve\b/.test(text)) return 'vue'
@@ -123,6 +127,38 @@ export function firstErrorRow(rows: ReadonlyArray<{ text: string; wrapped: boole
 
 // --- The add / edit form ---
 
+/**
+ * A token of a build tool (an Ant target, a Maven goal), as main accepts it. Keep it and CONTEXT_PATH the
+ * same as TOOL_TOKEN and the context rule of src/ipc/tomcatRun.js: a stricter screen refuses what main takes.
+ */
+const TOOL_TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/
+const CONTEXT_PATH = /^\/[\p{L}\p{N}_-][\p{L}\p{N}._-]{0,63}$/u
+
+type TomcatFields = Pick<RunPreset, 'tomcat' | 'webapp' | 'contextPath' | 'port' | 'vmArgs' | 'prepare'>
+
+/** The Tomcat fields to save, or the first problem (the same rules main checks; the VM arguments' quoting is main's) */
+export function tomcatFromDraft(draft: Pick<PresetDraft, 'tomcat' | 'webapp' | 'contextPath' | 'portText' | 'vmArgs' | 'prepareTool' | 'antTarget' | 'mavenGoals'>): TomcatFields | { error: string } {
+  if (!draft.tomcat) return { error: 'Tomcat 을 골라 주세요.' }
+  const webapp = draft.webapp.trim().replace(/\\/g, '/').replace(/^\.\/?/, '').replace(/\/+$/, '')
+  if (!webapp) return { error: '웹 폴더(WEB-INF 가 든 폴더)를 골라 주세요.' }
+  const contextPath = draft.contextPath.trim() || '/'
+  if (contextPath !== '/' && (!CONTEXT_PATH.test(contextPath) || contextPath === '/ROOT')) return { error: '컨텍스트 경로를 / 또는 /이름 형식으로 입력해 주세요.' }
+  const port = Number(draft.portText.trim())
+  if (!/^\d+$/.test(draft.portText.trim()) || !Number.isInteger(port) || port < 1 || port > 65535) return { error: 'HTTP 포트는 1~65535 사이의 숫자로 입력해 주세요.' }
+  const vmArgs = draft.vmArgs.trim()
+  if (/[\r\n\u0000-\u0008\u000b-\u001f\u007f]/.test(vmArgs)) return { error: 'VM 인자는 한 줄로 입력해 주세요.' }
+  let prepare: RunPrepare | undefined
+  if (draft.prepareTool === 'ant') {
+    if (!TOOL_TOKEN.test(draft.antTarget)) return { error: 'Ant 타깃을 골라 주세요.' }
+    prepare = { tool: 'ant', target: draft.antTarget }
+  } else if (draft.prepareTool === 'maven') {
+    const goals = draft.mavenGoals.trim().split(/\s+/).filter(Boolean)
+    if (!goals.length || goals.length > 12 || !goals.every(goal => TOOL_TOKEN.test(goal))) return { error: 'Maven 목표를 확인해 주세요 (예: clean package).' }
+    prepare = { tool: 'maven', goals: goals.join(' ') }
+  }
+  return { tomcat: draft.tomcat, webapp, contextPath, port, vmArgs, ...(prepare ? { prepare } : {}) }
+}
+
 export const MAX_NAME = 20
 export const MAX_ENV = 20
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/
@@ -131,7 +167,7 @@ export interface PresetDraft {
   id?: string
   name: string
   relative: string
-  kind: 'task' | 'custom'
+  kind: RunPreset['kind']
   taskId?: string
   command: string
   jdk: string
@@ -142,10 +178,22 @@ export interface PresetDraft {
   inAll: boolean
   waitReady: boolean
   hotReload: HotReload
+  // kind 'tomcat'
+  tomcat: string
+  webapp: string
+  contextPath: string
+  /** As typed (checked on save) */
+  portText: string
+  vmArgs: string
+  prepareTool: 'none' | RunPrepare['tool']
+  antTarget: string
+  mavenGoals: string
 }
 
+const TOMCAT_DEFAULTS = { tomcat: '', webapp: '', contextPath: '/', portText: '8080', vmArgs: '', prepareTool: 'none' as const, antTarget: '', mavenGoals: '' }
+
 export function emptyDraft(): PresetDraft {
-  return { name: '', relative: '', kind: 'task', command: '', jdk: 'system', envText: '', notify: true, agentControl: true, inAll: true, waitReady: false, hotReload: 'off' }
+  return { name: '', relative: '', kind: 'task', command: '', jdk: 'system', envText: '', notify: true, agentControl: true, inAll: true, waitReady: false, hotReload: 'off', ...TOMCAT_DEFAULTS }
 }
 
 export function draftOf(preset: RunPreset): PresetDraft {
@@ -154,7 +202,14 @@ export function draftOf(preset: RunPreset): PresetDraft {
     command: preset.command ?? '', jdk: preset.jdk || 'system',
     envText: Object.entries(preset.env ?? {}).map(([key, value]) => `${key}=${value}`).join('\n'),
     notify: preset.notify, agentControl: preset.agentControl, inAll: preset.inAll, waitReady: preset.waitReady,
-    hotReload: preset.hotReload ?? 'off'
+    hotReload: preset.hotReload ?? 'off',
+    ...TOMCAT_DEFAULTS,
+    ...(preset.kind === 'tomcat' ? {
+      tomcat: preset.tomcat ?? '', webapp: preset.webapp ?? '', contextPath: preset.contextPath || '/',
+      portText: String(preset.port ?? 8080), vmArgs: preset.vmArgs ?? '', prepareTool: preset.prepare?.tool ?? 'none',
+      antTarget: preset.prepare?.tool === 'ant' ? preset.prepare.target : '',
+      mavenGoals: preset.prepare?.tool === 'maven' ? preset.prepare.goals : ''
+    } : {})
   }
 }
 
@@ -185,6 +240,8 @@ export function presetFromDraft(draft: PresetDraft): { preset: Omit<RunPreset, '
     if (!command) return { error: '명령을 입력해 주세요.' }
     if (/[\r\n\u0000-\u0008\u000b-\u001f\u007f]/.test(draft.command.replace(/\r?\n$/, ''))) return { error: '명령은 한 줄로 입력해 주세요.' }
   }
+  const tomcat = draft.kind === 'tomcat' ? tomcatFromDraft(draft) : null
+  if (tomcat && 'error' in tomcat) return tomcat
   const env = parseEnvText(draft.envText)
   if ('error' in env) return env
   return {
@@ -193,14 +250,15 @@ export function presetFromDraft(draft: PresetDraft): { preset: Omit<RunPreset, '
       name,
       relative: draft.relative.replace(/\\/g, '/').replace(/^\.\/?/, '').replace(/\/+$/, '') || '.',
       kind: draft.kind,
-      ...(draft.kind === 'task' ? { taskId: draft.taskId } : { command }),
+      ...(draft.kind === 'task' ? { taskId: draft.taskId } : draft.kind === 'custom' ? { command } : {}),
       jdk: draft.jdk || 'system',
       env: env.env,
       notify: draft.notify,
       agentControl: draft.agentControl,
       inAll: draft.inAll,
       waitReady: draft.waitReady,
-      hotReload: draft.hotReload
+      hotReload: draft.hotReload,
+      ...(tomcat ?? {})
     }
   }
 }
@@ -240,10 +298,11 @@ export function agentActionNotice(agentName: string, presetName: string, action:
 export const agentNoticeName = (agent: { id: string; role?: string | null } | undefined, id: string) =>
   agent?.role && agent.role !== id ? `${agent.role} · ${id}` : id
 
-const KIND_NAMES = { spring: 'Spring Boot', vue: 'Vue', vite: 'Vite', node: 'Node', java: 'Java', custom: '직접 입력' } as const
+const KIND_NAMES = { spring: 'Spring Boot', vue: 'Vue', vite: 'Vite', node: 'Node', java: 'Java', tomcat: 'Tomcat', custom: '직접 입력' } as const
 
 /** What runs, in words: the typed command, or the kind of the way main found ("Spring Boot") */
-export function runCommandLabel(preset: Pick<RunPreset, 'kind' | 'taskId' | 'command' | 'name'>): string {
+export function runCommandLabel(preset: Pick<RunPreset, 'kind' | 'taskId' | 'command' | 'name' | 'contextPath' | 'port'>): string {
+  if (preset.kind === 'tomcat') return `Tomcat ${preset.contextPath || '/'} :${preset.port ?? 8080}`
   return preset.kind === 'custom' ? preset.command || '직접 입력' : KIND_NAMES[runKind(preset)]
 }
 
@@ -276,7 +335,7 @@ export function isSpringBootTask(kind: RunPreset['kind'], taskId: string | undef
   return kind === 'task' && typeof taskId === 'string' && /:(?:maven|gradle)$/.test(taskId)
 }
 
-export const HOT_RELOAD_SPRING_ONLY = 'Spring Boot 실행에서만 됩니다.'
+export const HOT_RELOAD_SPRING_ONLY = 'Spring Boot·Tomcat 실행에서만 됩니다.'
 
 export interface HotReloadChoice {
   /** Whether the field can be anything but 끄기 (a Spring Boot task) */
@@ -300,7 +359,7 @@ export function hotReloadChoice({ kind, taskId, jdk, jdks, hotswapAgent }: {
   kind: RunPreset['kind']; taskId?: string; jdk: string
   jdks: ReadonlyArray<Pick<JdkRuntime, 'id' | 'feature' | 'vendor' | 'managed'>>; hotswapAgent: HotswapAgentStatus | undefined
 }): HotReloadChoice {
-  if (!isSpringBootTask(kind, taskId)) return { usable: false, reason: HOT_RELOAD_SPRING_ONLY, enhanced: false }
+  if (kind !== 'tomcat' && !isSpringBootTask(kind, taskId)) return { usable: false, reason: HOT_RELOAD_SPRING_ONLY, enhanced: false }
   const isJbr = (item: Pick<JdkRuntime, 'feature' | 'vendor' | 'managed'> | undefined) =>
     item?.vendor === 'jbr' && item.managed && (item.feature === 17 || item.feature === 21)
   const chosen = isJbr(jdks.find(item => item.id === jdk))

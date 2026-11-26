@@ -896,7 +896,7 @@ export interface RunPreset {
   id: string
   name: string
   relative: string
-  kind: 'task' | 'custom'
+  kind: 'task' | 'custom' | 'tomcat'
   taskId?: string
   /** Shown only: main runs the saved command */
   command?: string
@@ -906,9 +906,24 @@ export interface RunPreset {
   agentControl: boolean
   inAll: boolean
   waitReady: boolean
-  /** Applying saved Java changes to the running server (stage 3): Spring Boot tasks only. Missing in old files: off */
+  /** Applying saved Java changes to the running server (stage 3): Spring Boot tasks and Tomcat. Missing in old files: off */
   hotReload?: HotReload
+  // kind 'tomcat' (stage 2): main runs `catalina run` with a CATALINA_BASE of its own for the preset
+  /** The store's (or a found) Tomcat id */
+  tomcat?: string
+  /** The unpacked web folder with WEB-INF, from the project root */
+  webapp?: string
+  /** '/' or '/name' */
+  contextPath?: string
+  /** HTTP port (8080 by default) */
+  port?: number
+  /** One line, into CATALINA_OPTS (confirmed before it first runs, like a typed command) */
+  vmArgs?: string
+  /** The build before the server (run in `relative`) */
+  prepare?: RunPrepare
 }
+
+export type RunPrepare = { tool: 'ant'; target: string } | { tool: 'maven'; goals: string }
 
 export type HotReload = 'off' | 'standard' | 'enhanced'
 
@@ -924,7 +939,8 @@ export interface RunReload {
   at: number
 }
 
-export type RunStatus = 'idle' | 'starting' | 'running' | 'stopped' | 'crashed'
+/** `preparing`: the build before the server (a Tomcat preset's prepare) */
+export type RunStatus = 'idle' | 'preparing' | 'starting' | 'running' | 'stopped' | 'crashed'
 
 export interface RunAction {
   /** 'user' or the agent id that did it */
@@ -944,6 +960,8 @@ export interface RunState {
   shellId?: string
   lastAction?: RunAction
   reload?: RunReload
+  /** crashed: the build before the server failed (the server was not started) */
+  failedAt?: 'prepare'
 }
 
 export interface RunCandidate {
@@ -1328,6 +1346,10 @@ declare global {
       runPresetStopAll?: (projectFolder: string) => Promise<RunPresetResult>
       runPresetErrors?: (projectFolder: string, id: string) => Promise<RunPresetResult & { groups: RunErrorGroup[] }>
       runPresetSendPreview?: (worktreeFolder: string, id: string) => Promise<RunPresetResult & { text?: string }>
+      /** The `<target name>`s of the build.xml in a folder of the project (a Tomcat preset's Ant build) */
+      runPresetAntTargets?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { targets?: string[] }>
+      /** Folders of the project with WEB-INF (a Tomcat preset's web folder), from the project root */
+      runPresetWebapps?: (worktreeFolder: string) => Promise<RunPresetResult & { folders?: string[] }>
       runPresetSend?: (projectFolder: string, id: string, agentId: string, note: string) => Promise<RunPresetResult>
       onRunPresetState?: (callback: (event: { projectKey: string; worktreeKey: string; id: string; state: RunState; firstAgentAction?: true }) => void) => () => void
       onRuntimesProgress: (callback: (progress: JdkProgress | null) => void) => () => void

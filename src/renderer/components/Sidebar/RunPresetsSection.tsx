@@ -7,7 +7,7 @@ import {
   RiAddLine, RiArrowDownLine, RiArrowUpLine, RiDeleteBinLine, RiEditLine, RiExternalLinkLine, RiFileList3Line, RiFlashlightLine,
   RiMoreFill, RiPlayFill, RiRefreshLine, RiStopFill, RiTerminalLine
 } from 'react-icons/ri'
-import { SiNodedotjs, SiSpringboot, SiVite, SiVuedotjs } from 'react-icons/si'
+import { SiApachetomcat, SiNodedotjs, SiSpringboot, SiVite, SiVuedotjs } from 'react-icons/si'
 import { FaJava } from 'react-icons/fa'
 import {
   agentActionNote, AGENT_ACTION_MS, IDLE_STATE, reloadChip, reloadTicks, runButtons, runFolderLabel, runHead, runKind, runPills,
@@ -23,7 +23,7 @@ import { toast } from '../../stores/toastStore'
 import { RunPresetDialog } from './RunPresetDialog'
 import './RunPresets.css'
 
-const KIND_ICONS = { spring: SiSpringboot, vue: SiVuedotjs, vite: SiVite, node: SiNodedotjs, java: FaJava, custom: RiTerminalLine }
+const KIND_ICONS = { spring: SiSpringboot, vue: SiVuedotjs, vite: SiVite, node: SiNodedotjs, java: FaJava, tomcat: SiApachetomcat, custom: RiTerminalLine }
 
 const BUTTONS: Record<RunButton, { label: string; Icon: typeof RiPlayFill }> = {
   start: { label: '실행', Icon: RiPlayFill },
@@ -60,7 +60,7 @@ export function RunPresetsSection({ folder, projectName, roots }: { folder: stri
   const states = project?.states ?? {}
   const ticking = presets.some(preset => {
     const state = states[preset.id]
-    return state?.status === 'starting' || (!!state?.lastAction && state.lastAction.by !== 'user' && Date.now() - state.lastAction.at < AGENT_ACTION_MS)
+    return state?.status === 'starting' || state?.status === 'preparing' || (!!state?.lastAction && state.lastAction.by !== 'user' && Date.now() - state.lastAction.at < AGENT_ACTION_MS)
       || reloadTicks(state, Date.now())
   })
   const now = useNow(ticking)
@@ -178,7 +178,7 @@ function RunPresetRow({ folder, preset, state, now, first, last, order, onEdit }
         : <span className="run-preset-folder">{state.status === 'idle' || state.status === 'stopped' ? runFolderLabel(preset.relative) : ''}</span>}
       {pills.length > 0 && (
         <span className="run-preset-state">
-          {state.status === 'starting' && <span className="run-preset-spin" aria-hidden="true" />}
+          {(state.status === 'starting' || state.status === 'preparing') && <span className="run-preset-spin" aria-hidden="true" />}
           {pills.map(pill => pill.errors
             ? <button key={pill.text} type="button" className="run-preset-pill" data-kind={pill.kind}
                 onClick={event => { event.stopPropagation(); void showLog(true) }} title="첫 오류 줄로 가기">{pill.text}</button>

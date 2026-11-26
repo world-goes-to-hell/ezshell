@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   firstErrorRow, agentActionNotice, agentNoticeName, withObject, withSubject, runCommandLabel, agentActionNote, crashKey, draftOf, emptyDraft, parseEnvText, presetFromDraft, runButtons, runError, runFolderLabel,
   runHead, runKind, runPills, runPort, sendPreview, type RunPreset, type RunState,
-  hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
+  tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
 } from './runPresets'
 
 const preset = (over: Partial<RunPreset> = {}): RunPreset => ({
@@ -246,5 +246,65 @@ describe('hot reload (stage 3)', () => {
     expect(reloadTicks(state({ status: 'running', reload: { status: 'applied', at: 0 } }), 4_000_000)).toBe(false)
     expect(reloadTicks(state({ status: 'running', reload: { status: 'watching', at: 0 } }), 10_000)).toBe(false)
     expect(reloadTicks(undefined, 0)).toBe(false)
+  })
+})
+
+describe('Tomcat presets (stage 2)', () => {
+  const tomcatPreset = preset({
+    kind: 'tomcat', taskId: undefined, relative: 'legacy', tomcat: 'tomcat-9.0.98', webapp: 'WebContent', contextPath: '/shop', port: 8081,
+    vmArgs: '-Xmx1g -Dfile.encoding=UTF-8', prepare: { tool: 'ant', target: 'compile' }, hotReload: 'standard'
+  })
+  const fields = (over: Partial<Parameters<typeof tomcatFromDraft>[0]> = {}) => ({
+    tomcat: 'tomcat-9', webapp: 'src/main/webapp/', contextPath: '/', portText: '8080', vmArgs: '', prepareTool: 'none' as const, antTarget: '', mavenGoals: '', ...over
+  })
+
+  it('round-trips a Tomcat preset through the form', () => {
+    const draft = draftOf(tomcatPreset)
+    expect(draft).toMatchObject({ kind: 'tomcat', tomcat: 'tomcat-9.0.98', portText: '8081', prepareTool: 'ant', antTarget: 'compile', mavenGoals: '' })
+    expect(presetFromDraft(draft)).toEqual({ preset: tomcatPreset })
+    // A task preset keeps no Tomcat fields
+    const task = presetFromDraft(draftOf(preset()))
+    expect('preset' in task && 'tomcat' in task.preset).toBe(false)
+  })
+
+  it('checks the Tomcat fields as main does', () => {
+    expect(tomcatFromDraft(fields())).toEqual({ tomcat: 'tomcat-9', webapp: 'src/main/webapp', contextPath: '/', port: 8080, vmArgs: '' })
+    expect(tomcatFromDraft(fields({ tomcat: '' }))).toEqual({ error: 'Tomcat 을 골라 주세요.' })
+    expect(tomcatFromDraft(fields({ webapp: ' ' }))).toEqual({ error: '웹 폴더(WEB-INF 가 든 폴더)를 골라 주세요.' })
+    for (const contextPath of ['shop', '/ROOT', '/a/b', '/' + 'x'.repeat(65)]) {
+      expect(tomcatFromDraft(fields({ contextPath }))).toEqual({ error: '컨텍스트 경로를 / 또는 /이름 형식으로 입력해 주세요.' })
+    }
+    expect(tomcatFromDraft(fields({ contextPath: '/쇼핑-몰' }))).toMatchObject({ contextPath: '/쇼핑-몰' })
+    for (const portText of ['0', '65536', '', '80a']) {
+      expect(tomcatFromDraft(fields({ portText }))).toEqual({ error: 'HTTP 포트는 1~65535 사이의 숫자로 입력해 주세요.' })
+    }
+    expect(tomcatFromDraft(fields({ vmArgs: '-Xmx1g\n-Da=b' }))).toEqual({ error: 'VM 인자는 한 줄로 입력해 주세요.' })
+  })
+
+  it('takes the build before the server: an Ant target or Maven goals', () => {
+    expect(tomcatFromDraft(fields({ prepareTool: 'ant', antTarget: 'war' }))).toMatchObject({ prepare: { tool: 'ant', target: 'war' } })
+    expect(tomcatFromDraft(fields({ prepareTool: 'ant', antTarget: '' }))).toEqual({ error: 'Ant 타깃을 골라 주세요.' })
+    expect(tomcatFromDraft(fields({ prepareTool: 'maven', mavenGoals: '  clean   package ' }))).toMatchObject({ prepare: { tool: 'maven', goals: 'clean package' } })
+    expect(tomcatFromDraft(fields({ prepareTool: 'maven', mavenGoals: 'clean -DskipTests' }))).toEqual({ error: 'Maven 목표를 확인해 주세요 (예: clean package).' })
+    expect(tomcatFromDraft(fields({ prepareTool: 'maven', mavenGoals: '' }))).toEqual({ error: 'Maven 목표를 확인해 주세요 (예: clean package).' })
+    // 없음 saves no prepare even with leftovers typed
+    expect(tomcatFromDraft(fields({ prepareTool: 'none', antTarget: 'war' }))).not.toHaveProperty('prepare')
+  })
+
+  it('shows the build stage and a failed build on the row', () => {
+    const preparing = state({ status: 'preparing', startedAt: 1_000 })
+    expect(runPills(preparing, 13_500)).toEqual([{ kind: 'wait', text: '준비 중 12초' }])
+    expect(runButtons(preparing)).toEqual(['log', 'stop'])
+    expect(isRunActive(preparing)).toBe(true)
+    expect(runPills(state({ status: 'crashed', failedAt: 'prepare', exitCode: 1 }), 0)).toEqual([{ kind: 'err', text: '빌드 실패 · 종료 1' }])
+    expect(runPills(state({ status: 'crashed', exitCode: 1 }), 0)).toEqual([{ kind: 'err', text: '멈춤 · 종료 1' }])
+    expect(runHead([tomcatPreset], { p1: preparing }).label).toBe('실행 · 1개 실행 중')
+  })
+
+  it('names what runs, and allows hot reload for Tomcat', () => {
+    expect(runCommandLabel(tomcatPreset)).toBe('Tomcat /shop :8081')
+    expect(runKind(tomcatPreset)).toBe('tomcat')
+    expect(hotReloadChoice({ kind: 'tomcat', jdk: 'system', jdks: [], hotswapAgent: { installed: false } })).toMatchObject({ usable: true, enhanced: false })
+    expect(HOT_RELOAD_SPRING_ONLY).toBe('Spring Boot·Tomcat 실행에서만 됩니다.')
   })
 })

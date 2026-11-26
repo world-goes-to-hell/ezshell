@@ -1,0 +1,15 @@
+/* The Tomcat fields of the run preset dialog (RunPresetTomcatFields) */
+.run-preset-tomcat {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px 4px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: color-mix(in srgb, var(--accent) 3%, var(--bg-primary));
+}
+.run-preset-tomcat-row { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 8px; }
+.run-preset-tomcat select { width: 100%; }
+.run-preset-tomcat .run-preset-prepare-options { margin-bottom: 4px; }
+.run-preset-tomcat > .run-preset-warn { display: block; margin-bottom: 4px; }
+.run-preset-tomcat-local { display: block; margin: -2px 0 4px; }
