@@ -1,6 +1,6 @@
 {
   "name": "ezshell",
-  "version": "2.36.2",
+  "version": "2.37.0",
   "description": "Simple SSH Client with Beautiful UI",
   "main": "./out/main/index.js",
   "scripts": {
