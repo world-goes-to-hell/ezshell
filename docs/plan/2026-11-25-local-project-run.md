@@ -263,6 +263,22 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
 - **실행:** `<home>\bin\catalina.bat run` (mac·Linux `catalina.sh run`). PTY 환경에만 `CATALINA_HOME`·`CATALINA_BASE`·`JAVA_HOME`·`CATALINA_OPTS`. `Server startup in`이나 `Catalina.start`의 시작 완료 정보 로그를 판정한다. 오류는 `SEVERE`·배포 실패 등을 기존 오류 묶음에 담는다.
 - **바로 반영 (Tomcat):** `CATALINA_OPTS` 에 JDWP 인자. Tomcat 은 웹 앱 클래스가 `java.class.path` 에 없으므로 클래스패스를 JVM 에 묻지 않고 만든다: `WEB-INF/classes` + `WEB-INF/lib/*.jar` + `CATALINA_HOME/lib/*.jar`. 출력은 `WEB-INF/classes`, 소스 루트는 이클립스 `.classpath` 의 `src` 항목, 없으면 `src/main/java`·`src`. JSP·정적 파일은 Tomcat 이 스스로 다시 읽는다.
 
+### 2단계 둘째 묶음: 이클립스 프로젝트 가져오기와 이클립스식 빌드 (2026-11-26, PL 결정. 사용자 확인 전)
+- **가져오기 (codex-5 main, claude-1 화면):** 구성 창의 `이클립스 설정에서 채우기`. 프로젝트 폴더의 파일만 읽는다 (워크스페이스 `.metadata`·`Servers` 프로젝트는 다음에).
+  - `.classpath`: `src`(소스·출력), `lib`(jar), 컨테이너(`org.eclipse.jst.j2ee.internal.web.container` → `WEB-INF/lib`, `org.eclipse.jst.server.core.container/…Tomcat…` → Tomcat 의 `lib`, JRE 컨테이너는 무시)
+  - `.settings/org.eclipse.wst.common.component`: 웹 폴더(`wb-resource deploy-path="/"`)와 `context-root`
+  - `.settings/org.eclipse.jdt.core.prefs`: 컴파일 버전(`org.eclipse.jdt.core.compiler.compliance`)
+  - `.settings/org.eclipse.core.resources.prefs`: 소스 인코딩 (없으면 MS949 를 후보로 보인다)
+  - `.settings/org.eclipse.wst.common.project.facet.core.xml`: Java·웹 facet 버전 → 맞는 JDK·Tomcat 제안
+  - 결과는 구성 창의 칸을 미리 채울 뿐이다. 사용자가 저장해야 반영된다.
+  - IPC `run-preset-eclipse-import(worktreeFolder, relative)` → `{ ok, draft: { webapp, contextPath, release?, encoding?, sources: string[], libs: string[] }, notes: string[] }` (경로는 프로젝트 기준 상대, 워크트리 밖·링크 탈출은 버린다).
+- **이클립스식 빌드 `prepare: { tool: 'eclipse' }`:** `build.xml` 이 없거나 깨진 프로젝트용. 이클립스 설정의 소스 폴더를 javac 로 컴파일한다.
+  - 클래스패스: `.classpath` 의 lib jar + `WEB-INF/lib/*.jar` + Tomcat `lib/*.jar`. `-encoding`·`--release`(또는 -source/-target)는 가져온 값.
+  - 출력은 프로젝트 안이 아니라 `userData/runtimes/tomcat-classes/<구성 id>/<워크트리 키>/` 다. 저장소에 컴파일 결과가 생기지 않게 한다. 소스 폴더의 `.java` 가 아닌 파일(설정 xml·properties)도 거기에 복사한다.
+  - Tomcat 이 그 폴더를 `/WEB-INF/classes` 로 보게 한다: Tomcat 8 이상은 컨텍스트의 `<Resources><PreResources className="org.apache.catalina.webresources.DirResourceSet" webAppMount="/WEB-INF/classes" base="…"/>`, Tomcat 7 은 `VirtualWebappLoader` 의 `virtualClasspath`. `.classpath` 의 lib jar 중 `WEB-INF/lib` 밖의 것도 같은 방식으로 붙인다.
+  - 처음은 전체, 다음부터는 바뀐 소스만 (수정 시각과 클래스 비교, 지운 소스의 클래스는 지운다). 컴파일 오류는 빌드 실패와 오류 묶음.
+  - 바로 반영의 출력 폴더도 이 폴더다.
+
 ## 3단계: 바로 반영 (JRebel 처럼 재기동 없이 Java 수정 적용)
 - **목표:** Java 파일을 저장하면(사용자든 에이전트든) 몇 초 안에 실행 중인 서버에 반영한다. 안 되는 변경이면 "재기동이 필요합니다" 와 재기동 버튼을 띄운다.
 - **흐름:**
