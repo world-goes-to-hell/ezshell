@@ -400,3 +400,9 @@ button.run-preset-reload-chip:focus-visible { outline: 2px solid var(--accent); 
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 45%, transparent);
 }
 .run-preset[data-status="running"][data-reload="restartNeeded"] { border-color: color-mix(in srgb, var(--warning) 60%, var(--border)); }
+
+/* The place held while a card's presets load (as tall as what comes: the add button, or the head and rows) */
+.run-presets-skeleton { border-radius: var(--radius-sm, 4px); }
+.run-presets-skeleton[data-kind="add"] { height: 26px; border: 1px dashed color-mix(in srgb, var(--border) 60%, transparent); }
+.run-presets-skeleton[data-kind="head"] { height: 20px; }
+.run-presets-skeleton[data-kind="row"] { height: 26px; border: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }

@@ -14,9 +14,11 @@ import {
   type RunButton, type RunPreset, type RunState
 } from '../../lib/runPresets'
 import {
-  fetchRunErrors, loadRunPresets, reloadProjectPresets, revealRunShell, runPresetAction, runPresetApi, selectWorktree, useRunPresets
+  fetchRunErrors, knownPresetCount, loadRunPresets, reloadProjectPresets, revealRunShell, runPresetAction, runPresetApi, selectWorktree,
+  useRunPresets
 } from '../../stores/runPresetStore'
 import { confirmDialog } from '../../stores/confirmStore'
+import { pathKey } from '../../lib/localWorkspaceTree'
 import { toast } from '../../stores/toastStore'
 import { RunPresetDialog } from './RunPresetDialog'
 import './RunPresets.css'
@@ -46,6 +48,7 @@ function useNow(ticking: boolean) {
 /** The run presets of a project as one worktree runs them (`folder` is the worktree's) */
 export function RunPresetsSection({ folder, projectName, roots }: { folder: string; projectName: string; roots: string[] }) {
   const project = useRunPresets(state => selectWorktree(state, folder))
+  const failed = useRunPresets(state => !!state.failed[pathKey(folder)])
   const [editing, setEditing] = useState<RunPreset | 'new' | null>(null)
   const hasApi = typeof runPresetApi().runPresetsList === 'function'
 
@@ -61,7 +64,9 @@ export function RunPresetsSection({ folder, projectName, roots }: { folder: stri
       || reloadTicks(state, Date.now())
   })
   const now = useNow(ticking)
-  if (!hasApi || !project) return null
+  if (!hasApi) return null
+  // The place is held only while the list is on its way: a refused list shows nothing, as before
+  if (!project) return failed ? null : <RunPresetsPlaceholder count={knownPresetCount(folder)} />
   const head = runHead(presets, states)
 
   return (
@@ -93,6 +98,23 @@ export function RunPresetsSection({ folder, projectName, roots }: { folder: stri
       </>)}
       {editing && <RunPresetDialog folder={folder} projectName={projectName} roots={roots}
         preset={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
+    </div>
+  )
+}
+
+/**
+ * The place of the card's presets while they load: the add button's height, or the head and as many rows
+ * as last time, so the rows below do not move when the list comes
+ */
+function RunPresetsPlaceholder({ count }: { count: number }) {
+  return (
+    <div className="run-presets run-presets-placeholder" aria-hidden="true">
+      {count === 0 ? <div className="run-presets-skeleton" data-kind="add" /> : (<>
+        <div className="run-presets-skeleton" data-kind="head" />
+        <div className="run-presets-list">
+          {Array.from({ length: count }, (_, index) => <div key={index} className="run-presets-skeleton" data-kind="row" />)}
+        </div>
+      </>)}
     </div>
   )
 }

@@ -112,11 +112,14 @@ function fixture(backendPort, frontendPort) {
     await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([repo]))});
       window.dispatchEvent(new Event('ezshell:local-projects-changed'))`)
     if (!await until(`!!${row(backTree)} && !!${row(frontTree)}`)) throw new Error('Worktrees were not listed')
-    // Each worktree's run presets load after its row and push the rows below down: wait for them, or the
-    // right click lands on another worktree (whose menu puts another task first)
+    // Each worktree's run presets load after its row; their place is held meanwhile, so the rows below do not
+    // move when they come (a right click used to land on another worktree, whose menu puts another task first)
+    const rowTops = `JSON.stringify([...document.querySelectorAll('.local-worktree')].map(item => Math.round(item.getBoundingClientRect().top)))`
+    const topsAtListing = await js(rowTops)
     if (!await until(`document.querySelectorAll('[data-run-worktree]').length === document.querySelectorAll('.local-worktree').length`)) {
       throw new Error('The run presets of the worktrees did not load')
     }
+    check('the worktree rows stay in place when their run presets load', await js(rowTops) === topsAtListing, `${topsAtListing} → ${await js(rowTops)}`)
     await launch(backTree, 'Spring Boot 기동 · backend')
     check('the sparse worktree is confirmed with its own path and command', await until(`
       ${message}?.includes(${JSON.stringify(backTree)}) && ${message}.includes('backend/') && ${message}.includes('bootRun')
@@ -243,7 +246,7 @@ function fixture(backendPort, frontendPort) {
       if (!field || field.dataset.usable) return false
       const radio = value => field.querySelector('input[name="run-preset-reload"][value="' + value + '"]')
       return radio('off')?.checked && !radio('off').disabled && radio('standard')?.disabled && radio('enhanced')?.disabled &&
-        field.textContent.includes('Spring Boot 실행에서만 됩니다.') &&
+        /Spring Boot.* 실행에서만 됩니다\./.test(field.textContent) &&
         field.textContent.includes('바로 반영을 켜면 이 실행에 IDE 디버거를 붙일 수 없습니다.')
     })()`))
     await js(`document.querySelector('.run-preset-dialog button[type="submit"]').click()`)

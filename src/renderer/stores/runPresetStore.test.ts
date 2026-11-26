@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  answerRunCommand, askRunCommand, clearRunPresets, draftKey, dropDraft, keepDraft, loadRunPresets, startRunPresets, stateKey,
+  answerRunCommand, askRunCommand, clearRunPresets, draftKey, dropDraft, keepDraft, knownPresetCount, loadRunPresets, startRunPresets, stateKey,
   takeDraft, turnOffAgentControl, useRunPresets, worktreeRuns
 } from './runPresetStore'
 import { emptyDraft } from '../lib/runPresets'
@@ -110,6 +110,45 @@ describe('run preset store', () => {
     } }))
     expect(await turnOffAgentControl(ROOT, preset)).toBe(true)
     expect(save).toHaveBeenCalledWith(ROOT, { ...preset, name: '바뀐 이름', agentControl: false })
+  })
+
+  it('remembers how many presets a card showed, to hold their place while the list loads', async () => {
+    const stored = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => { stored.set(key, value) }
+    })
+    vi.stubGlobal('window', Object.assign(new EventTarget(), { electronAPI: {
+      runPresetsList: async () => ({ ok: true, projectKey: 'c:/work/app', worktreeKey: 'c:/work/app', presets: [preset, { ...preset, id: 'p2' }], states: {} })
+    } }))
+    expect(knownPresetCount(ROOT)).toBe(0)
+    await loadRunPresets(ROOT)
+    expect(knownPresetCount(ROOT)).toBe(2)
+    // Kept across a lock (only counts), and a broken store reads as none
+    clearRunPresets()
+    expect(knownPresetCount(ROOT)).toBe(2)
+    stored.set('ezshell.runPresetCounts', '{not json')
+    expect(knownPresetCount(ROOT)).toBe(0)
+    vi.stubGlobal('localStorage', { getItem: () => { throw new Error('blocked') }, setItem: () => { throw new Error('blocked') } })
+    expect(knownPresetCount(ROOT)).toBe(0)
+    await expect(loadRunPresets(ROOT)).resolves.toBeUndefined()
+  })
+
+  it('marks a card whose list main refused, and clears the mark when a list comes', async () => {
+    let answer: unknown = { ok: false, error: '프로젝트를 찾지 못했습니다.' }
+    vi.stubGlobal('window', Object.assign(new EventTarget(), { electronAPI: { runPresetsList: async () => answer } }))
+    await loadRunPresets(ROOT)
+    expect(Object.keys(useRunPresets.getState().failed)).toHaveLength(1)
+    expect(worktreeRuns(ROOT)).toBeUndefined()
+    answer = { ok: true, projectKey: 'c:/work/app', worktreeKey: 'c:/work/app', presets: [], states: {} }
+    await loadRunPresets(ROOT)
+    expect(useRunPresets.getState().failed).toEqual({})
+    // A thrown call is a refusal too, and the lock clears the marks
+    vi.stubGlobal('window', Object.assign(new EventTarget(), { electronAPI: { runPresetsList: async () => { throw new Error('gone') } } }))
+    await loadRunPresets(TREE)
+    expect(Object.keys(useRunPresets.getState().failed)).toHaveLength(1)
+    clearRunPresets()
+    expect(useRunPresets.getState().failed).toEqual({})
   })
 
   it('keeps a draft until it is dropped or the app locks', () => {

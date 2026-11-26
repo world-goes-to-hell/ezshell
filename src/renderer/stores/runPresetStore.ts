@@ -57,9 +57,14 @@ interface RunPresetState {
   notices: CrashNotice[]
   agentNotices: AgentActionNotice[]
   commandAsk: RunCommandAsk | null
+  /**
+   * By pathKey(card folder): its list did not come (main refused it: locked, the folder gone or not a
+   * project). The card then shows nothing, not the place held for a list that will not come.
+   */
+  failed: Record<string, true>
 }
 
-export const useRunPresets = create<RunPresetState>(() => ({ worktrees: {}, aliases: {}, projectRoots: {}, notices: [], agentNotices: [], commandAsk: null }))
+export const useRunPresets = create<RunPresetState>(() => ({ worktrees: {}, aliases: {}, projectRoots: {}, notices: [], agentNotices: [], commandAsk: null, failed: {} }))
 
 /** Crashes already told (by the run: preset, worktree and start time) */
 const told = new Set<string>()
@@ -94,28 +99,76 @@ export function selectWorktree(state: Pick<RunPresetState, 'worktrees' | 'aliase
 }
 export const worktreeRuns = (folder: string) => selectWorktree(useRunPresets.getState(), folder)
 
+/**
+ * How many presets each card showed last time (pathKey of its folder → count), so a card can hold their
+ * place while its list loads: the area appearing later pushed the rows below down (a click landed on
+ * another worktree). Only folder keys and counts, nothing secret, in this browser's storage; a missing or
+ * broken store means 0.
+ */
+const PRESET_COUNTS_KEY = 'ezshell.runPresetCounts'
+const MAX_COUNTS = 200
+
+function readPresetCounts(): Record<string, number> {
+  try {
+    const value = JSON.parse(localStorage.getItem(PRESET_COUNTS_KEY) ?? '{}')
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch {
+    return {}
+  }
+}
+
+export function knownPresetCount(folder: string): number {
+  const count = readPresetCounts()[pathKey(folder)]
+  return Number.isInteger(count) && count > 0 ? Math.min(count, 50) : 0
+}
+
+function rememberPresetCount(folder: string, count: number) {
+  try {
+    const counts = readPresetCounts()
+    const key = pathKey(folder)
+    if (counts[key] === count) return
+    delete counts[key]
+    counts[key] = count
+    const keys = Object.keys(counts)
+    for (const old of keys.slice(0, Math.max(0, keys.length - MAX_COUNTS))) delete counts[old]
+    localStorage.setItem(PRESET_COUNTS_KEY, JSON.stringify(counts))
+  } catch { /* the place is held as for none */ }
+}
+
 /** The state of one preset in one worktree */
 export const stateKey = (worktreeKey: string, id: string) => `${worktreeKey}\n${id}`
 
 export async function loadRunPresets(folder: string, roots?: string[]): Promise<void> {
   const list = runPresetApi().runPresetsList
   if (!list) return
+  const failed = (yes: boolean) => useRunPresets.setState(state => {
+    const key = pathKey(folder)
+    if (!!state.failed[key] === yes) return {}
+    const next = { ...state.failed }
+    if (yes) next[key] = true
+    else delete next[key]
+    return { failed: next }
+  })
   try {
     const result = await list(folder)
-    if (runError(result) && !Array.isArray(result?.presets)) return
+    if (runError(result) && !Array.isArray(result?.presets)) { failed(true); return }
     const worktreeKey = result.worktreeKey || pathKey(folder)
     useRunPresets.setState(({ worktrees, aliases, projectRoots }) => ({
       worktrees: { ...worktrees, [worktreeKey]: { folder, projectKey: result.projectKey, worktreeKey, presets: result.presets ?? [], states: result.states ?? {} } },
       aliases: { ...aliases, [pathKey(folder)]: worktreeKey },
       projectRoots: roots ? { ...projectRoots, [result.projectKey]: roots } : projectRoots
     }))
+    rememberPresetCount(folder, result.presets?.length ?? 0)
+    failed(false)
     // What came for this worktree before its list: the list holds the states, the agent notice is told now
     for (const [key, event] of unseen) {
       if (event.worktreeKey !== worktreeKey) continue
       unseen.delete(key)
       if (event.firstAgentAction) tellAgentAction(event, folder)
     }
-  } catch { /* the card shows no presets */ }
+  } catch {
+    failed(true)
+  }
 }
 
 /** The presets are the project's: after a change every worktree of the project reads them again */
@@ -209,7 +262,7 @@ export function clearRunPresets() {
   unseen.clear()
   pendingAnswer?.(false)
   pendingAnswer = null
-  useRunPresets.setState({ worktrees: {}, aliases: {}, projectRoots: {}, notices: [], agentNotices: [], commandAsk: null })
+  useRunPresets.setState({ worktrees: {}, aliases: {}, projectRoots: {}, notices: [], agentNotices: [], commandAsk: null, failed: {} })
 }
 
 let pendingAnswer: ((yes: boolean) => void) | null = null
