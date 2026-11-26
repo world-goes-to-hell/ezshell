@@ -298,6 +298,17 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
   - Node.js 는 `nodejs.org` 의 `index.json` 에서 최신 LTS를 고르고 같은 호스트의 `SHASUMS256.txt` 에서 플랫폼별 파일 이름과 SHA-256 을 확인한다. 배포 파일도 같은 호스트에서 받는다. 두 공급자의 체크섬은 전송 손상과 파일 혼동을 검출한다. 공급자가 게시한 HTTPS 응답을 신뢰하며, 별도의 GPG 배포 서명 검증은 범위 밖이다.
   - 새 다운로드 허용 호스트는 `services.gradle.org`, `downloads.gradle.org`, `nodejs.org` 세 곳이다. 모든 리디렉션의 HTTPS와 호스트를 확인한다.
 
+### 2단계 넷째 묶음: Maven 실행 JDK 나누기와 성공 빌드 보관 (2026-11-26, codex-5 조사·확인, PL 결정. 사용자 확인 전)
+모듈: `src/runtimes/mavenJdk.js`, `src/runtimes/mavenPin.js`. 실행 구성·IPC 연결은 다음 작업.
+- **실행 JDK 와 프로젝트 JDK:** Maven 프로세스는 보관함의 JDK 17(없으면 21, 사용자가 고르면 그것)로 돌린다. 그 프로세스의 `JAVA_HOME`·`PATH` 에만 넣는다. 프로젝트 JDK 는 `-Dmaven.compiler.fork=true -Dmaven.compiler.executable=<javac> -Djvm=<java>` 로 넘겨 컴파일과 포크된 Surefire 테스트만 그 JDK 로 돌린다. POM 은 고치지 않는다.
+  - 확인한 조합 (Windows, 프로젝트 JDK 8): Maven 3.6.3·3.8.9·3.9.16 × Compiler 2.3.2·3.1·3.8.1 × Surefire 2.12.4, Maven JVM 17·21. Maven 3.6.3 조합은 프로젝트 JDK 6·7 도 통과.
+  - 한계: POM 이 `<fork>false</fork>`·실행 파일을 고정하면 POM 이 이긴다. 포크를 끈 테스트와 `spring-boot:run` 의 앱은 Maven JVM 에서 돈다. `MAVEN_OPTS` 에 최신 JDK 에서 없어진 옵션(`-XX:MaxPermSize`)이 있으면 Maven 이 뜨지 않는다 (진단이 알릴 것).
+- **성공 빌드 보관:** 보관을 켠 실행은 `-Dmaven.repo.local=<실행별 빈 폴더>` 로 돌리고, 종료 코드 0 이면 Resolver 의 `_remote.repositories` 로 그 실행이 원격에서 받은 정식 버전 POM·JAR·플러그인을 원격 저장소 형식으로 `userData/runtimes/maven-pinned/<구성 id>/` 에 게시한다 (메타데이터는 보관한 버전·플러그인 접두사만).
+  - 상한 1 GiB·12,000 파일 (검사 10만 항목). 실패·중단·빈 수집·상한 초과면 이전 보관본을 그대로 둔다. SNAPSHOT·로컬 install 결과는 뺀다.
+  - 보관본으로 다시 빌드: 새 로컬 저장소 + `-s`(mirrorOf=* 의 file 미러 임시 설정) + `-gs`(빈 임시 설정). 이때는 진단의 미러 인수를 함께 붙이지 않는다. 사용자 settings.xml 의 프로필·속성은 읽지 않으므로 거기에 기대는 빌드는 따로 처리해야 한다. 플러그인 최소 Maven 버전 때문에 보관 때와 같은 Maven 버전을 쓴다.
+  - 확인: Maven 3.6.3·3.8.9·3.9.16 각각 보관 → HTTP 원격을 끄고 새 로컬 저장소와 file 미러만으로 BUILD SUCCESS, HTTP 다운로드 0건 (버전 없는 플러그인·버전 범위 의존성 포함).
+  - 저장소 안 `.mvn-repo/` 로 내보내기는 사용자가 명시적으로 승인하고 그 폴더가 아직 없을 때만.
+
 ## 3단계: 바로 반영 (JRebel 처럼 재기동 없이 Java 수정 적용)
 - **목표:** Java 파일을 저장하면(사용자든 에이전트든) 몇 초 안에 실행 중인 서버에 반영한다. 안 되는 변경이면 "재기동이 필요합니다" 와 재기동 버튼을 띄운다.
 - **흐름:**
