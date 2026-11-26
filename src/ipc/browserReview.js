@@ -50,7 +50,7 @@ function reviewMessage(request, selection, files = []) {
   ].join('\n\n')
 }
 
-function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTerminalWindow, getWindow, listAgents, sendMessage, clipboard, selectImages, openExternal, userDataPath, getMasterPassword, repoFolders = async () => [], shellFolder = () => null }) {
+function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTerminalWindow, getWindow, listAgents, sendMessage, openAgentRequest, clipboard, selectImages, openExternal, userDataPath, getMasterPassword, repoFolders = async () => [], shellFolder = () => null }) {
   const { WebContentsView, session, ipcMain, dialog, Menu, clipboard: systemClipboard } = require('electron')
   const tabs = new Map()
   // The folder each tab was opened from (a run preset's worktree, a server's shell, a workspace file): the
@@ -76,10 +76,14 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
   const allowed = event => fromMainWindow(event) && event.senderFrame === event.sender.mainFrame
   const tabFor = (event, id) => allowed(event) ? tabs.get(id) : undefined
 
-  function deliverReview(selection, agentId, text, files = []) {
+  function reviewRequest(selection, text, files) {
     const { url, selector } = selection
-    sendMessage({ to: agentId, text: reviewMessage(text, selection, files),
-      reviewRequest: { text, url, selector, ...(files.length ? { imageCount: files.length } : {}) } })
+    return { text: reviewMessage(text, selection, files),
+      reviewRequest: { text, url, selector, ...(files.length ? { imageCount: files.length } : {}) } }
+  }
+
+  function deliverReview(selection, agentId, text, files = []) {
+    sendMessage({ ...reviewRequest(selection, text, files), to: agentId })
   }
 
   function sessionFor(persistent, workspace = false) {
@@ -363,7 +367,7 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
       }
     }
 
-    async function action(request) {
+    async function action(request, tabIsCurrent) {
       switch (request?.type) {
         case 'navigate': {
           if (workspace) return fail('작업 공간의 파일 목록에서 열어 주세요.')
@@ -396,7 +400,8 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
             publish()
           }
           return success
-        case 'send': {
+        case 'send':
+        case 'send-new': {
           if (!ui.selection || ui.selection.id !== request.selectionId || ui.picking || ui.loading) {
             return fail('페이지에서 요소를 다시 선택해 주세요.')
           }
@@ -408,15 +413,24 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
           if (enteredText.length > MAX_REQUEST || (!enteredText && !imageCount)) {
             return fail('수정 요청을 4000자 이내로 입력하거나 이미지를 첨부해 주세요.')
           }
-          if (!listAgents().some(agent => agent.id === request.agentId)) return fail('연결된 에이전트를 선택해 주세요.')
+          const newSession = request.type === 'send-new'
+          if (!newSession && !listAgents().some(agent => agent.id === request.agentId)) return fail('연결된 에이전트를 선택해 주세요.')
           try {
             const selection = ui.selection
             const text = enteredText || '첨부 이미지를 참고해 선택한 요소를 확인해 주세요.'
-            await images.send(() => {
+            const result = await images.send(() => {
+              if (newSession) return openAgentRequest({
+                kind: request.kind,
+                folder: request.projectFolder || tabFolders.get(id),
+                parent: win,
+                current: () => tabIsCurrent() && ui.selection === selection && !ui.picking && !ui.loading,
+                request: () => reviewRequest(selection, text, images.files)
+              })
               deliverReview(selection, request.agentId, text, images.files)
               return { ok: true }
             })
-            return success
+            if (result.ok) return success
+            return result.cancelled ? { ...fail(''), cancelled: true } : fail(result.error)
           } catch (error) {
             return fail(error.message)
           }
@@ -555,8 +569,11 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
       return null
     }
   })
-  ipcMain.handle('browser-review-action', (event, id, request) => tabFor(event, id)?.action(request)
-    ?? fail('열려 있는 브라우저 탭을 찾을 수 없습니다.'))
+  ipcMain.handle('browser-review-action', (event, id, request) => {
+    const tab = tabFor(event, id)
+    return tab ? tab.action(request, () => tabFor(event, id) === tab)
+      : fail('열려 있는 브라우저 탭을 찾을 수 없습니다.')
+  })
   ipcMain.handle('browser-review-add-images', (event, id, source) => {
     const tab = tabFor(event, id)
     const unavailable = '열려 있는 브라우저 탭에서 다시 첨부해 주세요.'

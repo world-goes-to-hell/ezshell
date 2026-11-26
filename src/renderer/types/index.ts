@@ -381,6 +381,8 @@ export type McpSetupResult =
 export type LocalAgent = 'codex' | 'claude'
 export type AgentChatProvider = LocalAgent | 'antigravity'
 export type AgentMessageKind = AgentChatProvider | 'aside'
+export interface ClaudeProfile { id: string; name: string }
+type ClaudeProfilesResult = { success: true; profiles: ClaudeProfile[] } | { success: false; error: string }
 
 /** A past Claude Code or Codex session of this PC (src/agentHistory). `key` is all the main process takes back. */
 export interface AgentHistorySession {
@@ -396,6 +398,8 @@ export interface AgentHistorySession {
   hasPrompt: boolean
   created: number | null
   updated: number
+  claudeProfileId?: string
+  claudeProfileName?: string
 }
 
 export interface AgentHistoryTurn {
@@ -646,6 +650,7 @@ export interface AgentMessageSession {
   id: string
   shellId: string
   kind: AgentMessageKind
+  claudeProfileId?: string
   cwd: string
   active: boolean
   status: LocalAgentStatus
@@ -731,7 +736,8 @@ export type BrowserReviewAction =
   | { type: 'navigate'; address: string }
   | { type: 'back' | 'forward' | 'reload' | 'pick' | 'cancel' | 'devtools' }
   | { type: 'send'; agentId: string; text: string; selectionId: string; imageIds?: string[] }
-export type BrowserReviewResult = { success: true } | { success: false; error: string }
+  | { type: 'send-new'; kind: 'claude' | 'codex'; projectFolder?: string; text: string; selectionId: string; imageIds?: string[] }
+export type BrowserReviewResult = { success: true } | { success: false; error: string; cancelled?: true }
 
 export interface BrowserLoginAccount {
   id: string
@@ -1305,7 +1311,10 @@ declare global {
       // Local file system
       localList: (dirPath: string) => Promise<any>
       /** `resume`: a key from the agent history list; main then picks the folder, agent and session */
-      localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: AgentChatProvider; resume?: string; replacementFor?: string; restoring?: true }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
+      localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: AgentChatProvider; resume?: string; replacementFor?: string; restoring?: true; claudeProfileId?: string; reuseClaudeProfile?: true }) => Promise<{ success: true; id: string; name: string; cwd?: string; reused?: true } | { success: false; error: string }>
+      claudeProfilesList: () => Promise<ClaudeProfilesResult>
+      claudeProfileSave: (request: { id?: string; name: string }) => Promise<ClaudeProfilesResult>
+      onLocalAgentRequestOpened: (callback: (opened: { id: string; name: string; cwd: string; workspaceLabel: string }) => void) => () => void
       localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
       localProjectDevelopmentTasks: (folder: string) => Promise<{ success: true; tasks: LocalDevelopmentTask[] } | { success: false; error: string }>
       localProjectOpenFolder?: (folder: string) => Promise<{ success: true } | { success: false; error: string }>
@@ -1413,8 +1422,8 @@ declare global {
       agentChatAnswer?: (shellId: string, key: string, signature: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatAnswerQuestions?: (shellId: string, itemId: string, answers: AgentAskAnswer[]) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       /** After a slash command was sent: it ran (output: what Codex printed), asks a question, or opened a screen */
-      agentChatCommandWatch?: (shellId: string) => Promise<{ ok: true; state: 'done' | 'approval' | 'screen' | 'gone'; output?: string; mcpSummary?: AgentChatMcpSummary } | { ok: false; error: string }>
-      agentChatScreenState?: (shellId: string) => Promise<{ composer: 'empty' | 'draft' | null; approval: boolean } | null>
+      agentChatCommandWatch?: (shellId: string) => Promise<{ ok: true; state: 'done' | 'approval' | 'screen' | 'gone'; screen?: 'claude-login'; output?: string; mcpSummary?: AgentChatMcpSummary } | { ok: false; error: string }>
+      agentChatScreenState?: (shellId: string) => Promise<{ composer: 'empty' | 'draft' | null; approval: boolean; loginStage?: 'active' | 'continue' } | null>
       /** The slash commands the user made for the agent (its folders' commands, skills, prompts) */
       agentChatSlashCommands?: (shellId: string) => Promise<{ name: string; description: string; source: 'user' | 'project' }[]>
       agentPickerList?: (shellId: string, what: 'model' | 'effort') => Promise<

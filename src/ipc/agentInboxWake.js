@@ -4,7 +4,7 @@ const { hasCodexSpeedChoice } = require('./codexSpeed.js')
 const { readAntigravityScreen } = require('./antigravityInboxScreen.js')
 const { isAgentPickerScreen } = require('./agentPicker.js')
 const { PROMPT, BUSY_PROMPT, REMIND_PROMPT } = require('./agentInboxPrompts.js')
-const { claudeQueueVisible } = require('../agentChat/commandScreen.js')
+const { claudeQueueVisible, claudeLoginStage } = require('../agentChat/commandScreen.js')
 const { isCodexHookTrustScreen } = require('./codexHookLaunch.js')
 const STOP_WAKE_TIMEOUT = 15_000
 const STOP_WAKE_THINKING_RECHECK = 5000
@@ -165,6 +165,8 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   let lastOutputAt = Date.now()
   let outputVersion = 0
   let parsedOutputVersion = 0
+  let loginVersion = -1
+  let loginStage = null
   let userDraft = false
   let forceSendOffer = null
   let emptyClaudeTarget = null
@@ -268,7 +270,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   /** `textLength`: the longest draft to look for (default: our own prompts) */
   function composer(textLength = LONGEST_PROMPT, textLines = 1, matchesCodexAttachment) {
     if (antigravity) return readAntigravityScreen(screen).composer
-    if (!screen.modes.bracketedPasteMode || claudeFolderTrustScreen() || agentPickerScreen()) return null
+    if (!screen.modes.bracketedPasteMode || claudeFolderTrustScreen() || claudeLoginScreen() || agentPickerScreen()) return null
     const { active: buffer } = screen.buffer
     const cursor = buffer.baseY + buffer.cursorY
     const line = index => buffer.getLine(index)?.translateToString(false) ?? ''
@@ -324,7 +326,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   // The cursor can be parked above the editor on redraw. This fallback identifies the visible
   // draft and its target, and cannot prove emptiness for a new paste.
   function visibleComposer() {
-    if (antigravity || !screen.modes.bracketedPasteMode || agentPickerScreen()) return null
+    if (antigravity || !screen.modes.bracketedPasteMode || claudeLoginScreen() || agentPickerScreen()) return null
     const rows = screenLines()
     if (rows.some(row => SHELL_PROMPT.test(row))) return null
     if (kind === 'claude') {
@@ -445,7 +447,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       claudeQuestion = null
       return CLAUDE_FOLDER_TRUST
     }
-    if (agentPickerScreen()) {
+    if (claudeLoginScreen() || agentPickerScreen()) {
       claudeQuestion = null
       return null
     }
@@ -565,7 +567,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   function chatBlocked() {
-    if (isBlocked() || codexHookTrustScreen()) return true
+    if (isBlocked() || codexHookTrustScreen() || claudeLoginScreen()) return true
     const approval = readApprovalScreen(true)
     return Boolean(approval?.usesTerminalInput || approval?.terminalOnly || approval?.selected)
   }
@@ -592,7 +594,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     const human = readHumanBlock(readApprovalScreen())
     const ticket = observeHumanBlock(human)
     if (human) return { blocked: human, ticket }
-    if (agentPickerScreen()) return { blocked: { kind: 'cli-screen' } }
+    if (claudeLoginScreen() || agentPickerScreen()) return { blocked: { kind: 'cli-screen' } }
     const parsed = composer(Infinity)
     const input = editorWithBounds(parsed, visibleComposer()) ?? parsed
     if (commandScreenOpen && !input && !shellAtCursor()) return { blocked: { kind: 'cli-screen' } }
@@ -1166,6 +1168,14 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   }
 
   const codexHookTrustScreen = () => kind === 'codex' && isCodexHookTrustScreen(screenLines())
+  function claudeLoginScreen() {
+    if (stopped || kind !== 'claude') return null
+    if (loginVersion !== parsedOutputVersion) {
+      loginVersion = parsedOutputVersion
+      loginStage = claudeLoginStage(commandRows())
+    }
+    return loginStage
+  }
   // Direct /model and /effort have no picker transaction to hold the PTY. Their numbered highlight
   // is neither a live composer nor an approval: the slash-command watcher hands the screen to the terminal.
   function agentPickerScreen() {
@@ -1545,6 +1555,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     /** The visible screen, one string per row (agentPicker.js reads the CLI's pickers from it) */
     screenLines,
     commandRows,
+    claudeLoginScreen,
     /** First row below Claude's ruled composer, including when the draft wraps. */
     composerFooterRow: () => !stopped && kind === 'claude' ? composer(Infinity)?.footerRow ?? null : null,
     /** Background shells in Claude's own composer footer. Null while the footer cannot be read. */
@@ -1567,7 +1578,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     },
     /** The CLI asked for application cursor keys (arrows as ESC O A) */
     applicationCursorKeys: () => !stopped && screen.modes.applicationCursorKeysMode,
-    resize(cols, rows) { screen.resize(cols, rows); emptyClaudeTarget = null; scheduleApprovalCheck(); schedule() },
+    resize(cols, rows) { screen.resize(cols, rows); loginVersion = -1; emptyClaudeTarget = null; scheduleApprovalCheck(); schedule() },
     kick: schedule,
     prepareStopWake,
     stopWakeReport,

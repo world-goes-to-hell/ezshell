@@ -34,7 +34,7 @@ async function findPage(match, timeout) {
   execFileSync('git', ['init', '-q'], { cwd: work, windowsHide: true })
 
   const driver = await connect()
-  const { js, until, send } = driver
+  const { js, until, send, type } = driver
   const key = async (type, keyName, code, vk, modifiers = 0) => send('Input.dispatchKeyEvent', { type, key: keyName, code, windowsVirtualKeyCode: vk, modifiers })
   const shiftTap = async () => {
     await key('rawKeyDown', 'Shift', 'ShiftLeft', 16, 8)
@@ -95,6 +95,28 @@ async function findPage(match, timeout) {
     check('Enter opens it in the file window and closes the search', !!javaFile && !(await js(`!!${dialog}`)) &&
       await javaFile.page.until(`(document.querySelector('.cm-content')?.textContent || '').includes('public class OrderService')`, 15000))
     if (javaFile) await closeFile(javaFile)
+
+    // Opening again keeps the search; the opened search is listed in the empty box and completes typing
+    await driver.js(`window.focus()`)
+    check('the terminal has the keys before reopening', await focusTerminal())
+    await shiftTap()
+    await shiftTap()
+    const box = `document.querySelector('.project-search-input > input')`
+    check('Shift twice again shows the last search and its results', await until(`${box}?.value === 'OrderServ' && !!${fileRow}`, 10000),
+      await js(`${box}?.value ?? 'no box'`))
+    await setQuery('')
+    const recentRow = `document.querySelector('.project-search-row.is-recent')`
+    check('the empty box lists the search whose result was opened', await until(`(${recentRow}?.textContent ?? '') === 'OrderServ'`, 5000),
+      await js(`document.querySelector('.project-search-list')?.textContent ?? ''`))
+    await js(`${box}.focus()`)
+    await type('Ord')
+    check('typing completes the earlier search, the added part selected', await until(`${box}.value === 'OrderServ' &&
+      ${box}.selectionStart === 3 && ${box}.selectionEnd === 9`, 5000),
+      await js(`JSON.stringify([${box}.value, ${box}.selectionStart, ${box}.selectionEnd])`))
+    await type('X')
+    check('typing on replaces the completed part', await until(`${box}.value === 'OrdX'`, 3000), await js(`${box}.value`))
+    await key('rawKeyDown', 'Escape', 'Escape', 27)
+    await until(`!${dialog}`, 3000)
 
     await driver.js(`window.focus()`)
     check('the terminal has the keys again', await focusTerminal())

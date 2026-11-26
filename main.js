@@ -46,6 +46,7 @@ const { registerDbIpc } = require('./src/dbClient/ipc.js');
 const { createDbConnections } = require('./src/dbClient/connections.js');
 const { createDiscoveryCache } = require('./src/dbClient/discovery.js');
 const { createLocalShells } = require('./src/localShell.js');
+const { isLocalFilePath } = require('./src/localKeyPath.js');
 const windowState = require('./src/windowState.js');
 const nativeBackdrop = require('./src/nativeBackdrop.js');
 
@@ -608,10 +609,21 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
   repoFolders: localGit.repoFolders,
   storeAttachment: image => ({ preview: imagePreview(image), file: localTerminalClipboard.storeImage(image) }),
   sendCapture: (...args) => agentChatIpc.sendCapture(...args),
+  sendNewCapture: (kind, folder, parent, current, comment, attachments) => openAgentRequest({
+    kind, folder, parent, current,
+    request: () => ({
+      text: ['캡처 화면에 대한 요청입니다.', comment.trim(), '첨부한 화면 파일을 열어 확인해 주세요.',
+        attachments().map(({ file }) => file).join('\n')].filter(Boolean).join('\n\n')
+    })
+  }),
   focusWindow: win => globalDoubleTab.focusCapture(win.getNativeWindowHandle()),
-  onSent: ({ id }) => {
+  onSent: ({ id }, newSession) => {
+    if (newSession && !hiddenTestWindows) setImmediate(() => { if (!isAppLocked) revealMainWindow(); });
     try {
-      if (!hiddenTestWindows && Notification.isSupported()) new Notification({ title: 'ezShell 바로작업', body: `${id}에 캡처를 보냈습니다.` }).show();
+      if (!hiddenTestWindows && Notification.isSupported()) new Notification({
+        title: 'ezShell 바로작업',
+        body: newSession ? `${id} 새 세션에 캡처 요청을 등록했습니다.` : `${id}에 캡처를 보냈습니다.`
+      }).show();
     } catch { /* The chat submission has already succeeded. */ }
   },
   onError: () => {
@@ -728,8 +740,10 @@ async function startSessionHost() {
 }
 const agentBridgeFile = path.join(userDataPath, 'agent-message-connection');
 const claudeRoot = require('./src/agentHistory/history.js').agentRoots(process.env, require('os').homedir()).claude;
+const claudeProfiles = require('./src/agentChat/claudeProfiles.js').createClaudeProfiles(userDataPath);
 // Claude's 5-hour and weekly windows over time: the chat view's percent per question (its transcript has none)
-const claudeLimitHistory = require('./src/agentChat/limitHistory.js').createLimitHistory();
+const { createLimitHistory } = require('./src/agentChat/limitHistory.js');
+const claudeLimitHistories = new Map();
 // An update's handover for the agents that outlive the app in the session host (src/ipc/agentHandoff.js):
 // the pipe and folder their CLIs keep are listened on again at start, the rest comes back after the unlock
 const agentHandoff = require('./src/ipc/agentHandoff.js');
@@ -739,7 +753,11 @@ const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages(
   agentRuntime: () => sessionRuntime.current(),
   handoffEndpoint: agentHandoff.readHandoffEndpoint(agentHandoffFiles),
   notify: (channel, payload) => {
-    if (channel === 'agent-usage' && payload?.usage?.agent === 'claude') claudeLimitHistory.record(payload.usage);
+    if (channel === 'agent-usage' && payload?.usage?.agent === 'claude') {
+      const profile = localShells?.claudeProfileOf(payload.shellId) ?? 'default';
+      if (!claudeLimitHistories.has(profile)) claudeLimitHistories.set(profile, createLimitHistory());
+      claudeLimitHistories.get(profile).record(payload.usage);
+    }
     sendToLocalWindow(channel, payload);
     if (channel === 'agent-messages-state') browserReview?.updateAgents();
   },
@@ -788,6 +806,7 @@ const browserReview = require('./src/ipc/browserReview.js').registerBrowserRevie
   repoFolders: localGit.repoFolders,
   shellFolder: shellId => localShells?.list().find(entry => entry.id === shellId && !entry.exited)?.cwd ?? null,
   sendMessage: agentMessages.sendAsUser,
+  openAgentRequest,
   clipboard: localTerminalClipboard,
   selectImages: () => selectAgentImages('수정 요청에 이미지 첨부'),
   openExternal: url => shell.openExternal(url)
@@ -835,13 +854,68 @@ function getLocalShells() {
       send: sendToLocalWindow,
       agents: agentMessages,
       onInboxDraftBlocked: alertAgentEscalation,
-      readClaudeSessions: () => readClaudeSessions(claudeRoot),
+      readClaudeSessions: async () => (await Promise.all([
+        readClaudeSessions(claudeRoot),
+        ...claudeProfiles.roots().map(({ id, root }) => readClaudeSessions(root)
+          .then(sessions => sessions.map(session => ({ ...session, claudeProfileId: id }))))
+      ])).flat(),
+      claudeProfileRoot: claudeProfiles.rootFor,
       host: sessionHost,
       runtimeExe: () => sessionRuntime.current()?.exe ?? null
     });
   }
   return localShells;
 }
+
+// Both desktop request composers use the native folder picker. A project or browser opener only
+// suggests where to start the picker. Only the folder the user selects is used for the new shell.
+async function openAgentRequest({ kind, folder, parent, current, request }) {
+  if (kind !== 'claude' && kind !== 'codex') return { ok: false, error: 'Claude Code 또는 Codex를 선택해 주세요.' };
+  const allowed = () => !isAppLocked && !parent.isDestroyed() && current();
+  const cancelled = { ok: false, cancelled: true };
+  if (!allowed()) return cancelled;
+  try {
+    const suggested = typeof folder === 'string' && folder.length <= 4096 && isLocalFilePath(folder) && path.isAbsolute(folder)
+      ? await localRoots.resolveRoot(folder).catch(() => undefined) : undefined;
+    const defaultPath = isLocalFilePath(suggested) ? suggested : undefined;
+    if (!allowed()) return cancelled;
+    const chosen = await dialog.showOpenDialog(parent, {
+      title: '새 세션의 작업 폴더 선택', defaultPath, properties: ['openDirectory']
+    });
+    if (chosen.canceled || !allowed()) return cancelled;
+    const selected = chosen.filePaths[0];
+    const cwd = isLocalFilePath(selected) && path.isAbsolute(selected)
+      ? await fs.promises.realpath(selected).catch(() => null) : null;
+    if (!isLocalFilePath(cwd)) return { ok: false, error: '이 PC의 작업 폴더를 선택해 주세요.' };
+    await agentMessages.ready();
+    if (!allowed()) return cancelled;
+
+    const message = request();
+    const local = getLocalShells();
+    const opened = local.open({ cwd, agent: kind, cols: 80, rows: 24 });
+    const agentId = local.chatAgentId(opened.id);
+    try {
+      agentMessages.sendToNewSession(opened.id, { ...message, to: agentId });
+    } catch (error) {
+      local.close(opened.id);
+      throw error;
+    }
+    sendToLocalWindow('local-agent-request-opened', { ...opened, workspaceLabel: path.basename(cwd) || cwd });
+    return { ok: true, agentId };
+  } catch (error) {
+    return { ok: false, error: error.code ? '새 에이전트 세션을 열 수 없습니다.' : error.message };
+  }
+}
+
+const fromClaudeProfilesWindow = event => fromMainWindow(event) && !isAppLocked && event.senderFrame === event.sender.mainFrame;
+for (const [channel, operation] of [['claude-profiles-list', claudeProfiles.list], ['claude-profile-save', claudeProfiles.save]]) {
+  ipcMain.handle(channel, (event, request) => {
+    if (!fromClaudeProfilesWindow(event)) return { success: false, error: '잠금 해제 후 본창에서 이용할 수 있습니다.' };
+    try { return { success: true, profiles: operation(request) }; }
+    catch (error) { return { success: false, error: error.code ? 'Claude 계정 설정을 저장할 수 없습니다.' : error.message }; }
+  });
+}
+
 ipcMain.handle('local-shell-open', async (event, size) => {
   if (!fromMainWindow(event)) return { success: false, error: '본창에서만 열 수 있습니다.' };
   if (isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
@@ -849,6 +923,9 @@ ipcMain.handle('local-shell-open', async (event, size) => {
     // Resuming takes a key from the agent history list: the folder, agent and session id are the
     // ones main read from the transcript, never what the window sends
     const { resume, ...options } = size || {};
+    if ((options.claudeProfileId !== undefined || options.reuseClaudeProfile !== undefined) && !fromClaudeProfilesWindow(event)) {
+      return { success: false, error: '본창에서만 Claude 계정을 선택할 수 있습니다.' };
+    }
     if (resume !== undefined) {
       let target = typeof resume === 'string' ? agentHistory.target(resume) : null;
       // Tabs opened again right after a restart: nothing has listed the transcripts yet
@@ -858,7 +935,8 @@ ipcMain.handle('local-shell-open', async (event, size) => {
         target = agentHistory.target(resume);
       }
       if (!target) return { success: false, error: '에이전트 기록을 새로 고친 뒤 다시 시도해 주세요.' };
-      Object.assign(options, { cwd: target.cwd, agent: target.agent, resume: target.id });
+      if (target.claudeProfileId && !fromClaudeProfilesWindow(event)) return { success: false, error: '본창에서만 Claude 계정을 선택할 수 있습니다.' };
+      Object.assign(options, { cwd: target.cwd, agent: target.agent, resume: target.id, claudeProfileId: target.claudeProfileId });
     }
     if (['codex', 'claude', 'antigravity'].includes(options.agent)) {
       await agentMessages.ready();
@@ -868,6 +946,9 @@ ipcMain.handle('local-shell-open', async (event, size) => {
       // opens all the same
       await agentMessages.ready().catch(() => {});
       if (!fromMainWindow(event) || isAppLocked) return { success: false, error: '먼저 잠금을 해제해 주세요.' };
+    }
+    if ((options.claudeProfileId !== undefined || options.reuseClaudeProfile !== undefined) && !fromClaudeProfilesWindow(event)) {
+      return { success: false, error: '본창에서만 Claude 계정을 선택할 수 있습니다.' };
     }
     return { success: true, ...getLocalShells().open(options) };
   } catch (err) {
@@ -1067,7 +1148,7 @@ const localProjectIpc = require('./src/ipc/localProjects.js').registerLocalProje
   openFolder: folder => shell.openPath(folder)
 });
 // Past Claude Code and Codex sessions of this PC, for the right panel (src/agentHistory)
-const agentHistory = require('./src/agentHistory/history.js').createAgentHistory();
+const agentHistory = require('./src/agentHistory/history.js').createAgentHistory({ claudeProfiles: claudeProfiles.roots });
 require('./src/agentHistory/ipc.js').registerAgentHistoryIpc({
   ipcMain, fromMainWindow, isLocked: () => isAppLocked, history: agentHistory,
   folderForShell: id => localShells?.list().find(entry => entry.id === id)?.cwd,
@@ -1079,7 +1160,7 @@ const agentChats = require('./src/agentChat/chats.js').createAgentChats({
   send: sendToLocalWindow,
   claudeRoot,
   isGone: shellId => !localShells?.list().some(entry => entry.id === shellId),
-  claudeLimits: (from, to) => claudeLimitHistory.between(from, to),
+  claudeLimits: (from, to, profileId) => claudeLimitHistories.get(profileId ?? 'default')?.between(from, to),
   resolve: async (shellId) => {
     const running = localShells?.agentOf(shellId);
     if (!running) return null;
@@ -1087,14 +1168,17 @@ const agentChats = require('./src/agentChat/chats.js').createAgentChats({
     if (running.kind === 'antigravity') return { ...running, approval };
     const codexSpeed = running.kind === 'codex' ? localShells.codexSpeedOf(shellId) : null;
     const backgroundShellCount = running.kind === 'claude' ? localShells.backgroundShellCountOf(shellId) : null;
+    const claudeProfileId = running.kind === 'claude' ? localShells.claudeProfileOf(shellId) : undefined;
+    const profile = claudeProfileId ? { claudeProfileId, claudeRoot: localShells.claudeRootOf(shellId) } : {};
     const agent = agentMessages.snapshot().agents.filter(item => item.active && item.shellId === shellId && item.kind === running.kind).at(-1);
-    if (!agent) return { kind: running.kind, approval, codexSpeed, backgroundShellCount };
+    if (!agent) return { kind: running.kind, approval, codexSpeed, backgroundShellCount, ...profile };
     const usage = agentMessages.usageSnapshot().find(item => item.agentId === agent.id)?.usage;
     return {
       kind: running.kind,
       approval,
       codexSpeed,
       backgroundShellCount,
+      ...profile,
       cwd: running.cwd ?? agent.cwd ?? null,
       sessionId: running.sessionId ?? usage?.sessionId ?? agent.resumeId ?? null,
       file: running.kind === 'codex' ? codexUsageWatcher.fileOf(agent.id, agentMessages.hookSessionOf(agent.id)) : null

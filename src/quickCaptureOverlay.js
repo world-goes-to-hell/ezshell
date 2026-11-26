@@ -164,6 +164,10 @@ const page = `<!doctype html>
   .agent-icon[data-state="blocked"] { color: var(--capture-danger); }
   .agent-title { display: block; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
   .agent-send { flex: none; font-weight: 600; white-space: nowrap; }
+  #new-capture-session { margin-top: 8px; }
+  #new-capture-session summary { cursor: pointer; padding: 6px 0; font-weight: 600; }
+  .new-capture-providers { display: flex; gap: 8px; }
+  .new-capture-providers button { flex: 1; gap: 6px; }
   #status { margin: 8px 0 0; color: var(--capture-muted); }
   #status[data-error] { color: var(--capture-danger); }
   #status:empty { display: none; }
@@ -301,10 +305,19 @@ const page = `<!doctype html>
     <p id="work-description">프로젝트와 에이전트를 선택해 캡처와 코멘트를 보냅니다.</p>
   </div>
   <div id="picker" hidden>
-    <label for="project">프로젝트 선택</label>
-    <select id="project" aria-describedby="project-path"></select>
-    <small id="project-path"></small>
-    <div id="agents" role="group" aria-label="전송할 에이전트"></div>
+    <div id="project-fields">
+      <label for="project">프로젝트 선택</label>
+      <select id="project" aria-describedby="project-path"></select>
+      <small id="project-path"></small>
+      <div id="agents" role="group" aria-label="전송할 에이전트"></div>
+    </div>
+    <details id="new-capture-session">
+      <summary>새 세션에 요청</summary>
+      <div class="new-capture-providers">
+        <button type="button" data-kind="claude">Claude Code</button>
+        <button type="button" data-kind="codex">Codex</button>
+      </div>
+    </details>
     <div class="actions"><button id="back" type="button">뒤로</button></div>
   </div>
   <p id="status" role="status"></p>
@@ -317,9 +330,12 @@ const page = `<!doctype html>
   const comment = document.querySelector('#comment')
   const reviewComment = document.querySelector('#review-comment')
   const picker = document.querySelector('#picker')
+  const projectFields = document.querySelector('#project-fields')
   const project = document.querySelector('#project')
   const projectPath = document.querySelector('#project-path')
   const agents = document.querySelector('#agents')
+  const newSession = document.querySelector('#new-capture-session')
+  const newProviders = [...newSession.querySelectorAll('button')]
   const status = document.querySelector('#status')
   const back = document.querySelector('#back')
   const agentStates = { idle: '대기 중', working: '작업 중', blocked: '확인 대기', starting: '시작 중' }
@@ -461,6 +477,20 @@ const page = `<!doctype html>
       if (!list.length) return enterSelect()
       showShot(Math.min(index, list.length - 1))
     }
+    function sendRequest(destination, text) {
+      if (!accept) return
+      for (const control of [project, back, ...agents.children, ...newProviders]) control.disabled = true
+      message(text)
+      submit({ ...destination, shots: editor.exportShots(true), comment: comment.value })
+    }
+    newSession.ontoggle = placeReview
+    for (const button of newProviders) {
+      const kind = button.dataset.kind
+      const logo = agentIcon(kind, button.textContent)
+      logo.dataset.kind = kind
+      button.prepend(logo)
+      button.onclick = () => sendRequest({ action: 'send-new', kind, folder: project.value }, '새 세션을 여는 중…')
+    }
     function renderAgents(selectedAgent) {
       const chosen = projects.find(item => item.folder === project.value)
       projectPath.textContent = projectPath.title = chosen?.folder ?? ''
@@ -497,12 +527,7 @@ const page = `<!doctype html>
         send.className = 'agent-send'
         send.textContent = '전송'
         button.append(info, send)
-        button.onclick = () => {
-          if (!accept) return
-          for (const control of [project, back, ...agents.children]) control.disabled = true
-          message(who + '에 보내는 중…')
-          submit({ action: 'send', agentId: agent.id, shots: editor.exportShots(true), comment: comment.value })
-        }
+        button.onclick = () => sendRequest({ action: 'send', agentId: agent.id }, who + '에 보내는 중…')
         if (agent.id === selectedAgent) button.dataset.retry = ''
         return button
       })
@@ -524,13 +549,16 @@ const page = `<!doctype html>
       }))
       if (projects.length === 1) project.value = projects[0].folder
       else if (projects.some(item => item.folder === previous)) project.value = previous
+      projectFields.hidden = !projects.length
       project.disabled = !projects.length
       back.disabled = false
+      for (const button of newProviders) button.disabled = false
       reviewComment.hidden = true
       picker.hidden = false
       renderAgents(selectedAgent)
-      message(error || (projects.length ? '' : '열려 있는 에이전트가 없습니다.'), Boolean(error))
-      const focus = agents.querySelector('[data-retry]') ?? (projects.length ? project : back)
+      message(error || '', Boolean(error))
+      const focus = agents.querySelector('[data-retry]') ?? (newSession.open ? newProviders[0]
+        : projects.length ? project : newSession.querySelector('summary'))
       focus.focus()
       return nextAction()
     }

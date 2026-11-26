@@ -9,9 +9,12 @@ const MAX_BYTES = 256 * 1024
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 const PROVIDERS = new Set(['claude', 'codex', 'antigravity'])
 
-function roleSessionKey(kind, sessionId) {
+function roleSessionKey(kind, sessionId, claudeProfileId) {
   const id = sessionIdOf(sessionId)
-  return id && PROVIDERS.has(kind) ? `${kind}:${id}` : null
+  if (!id || !PROVIDERS.has(kind)) return null
+  if (claudeProfileId === undefined) return `${kind}:${id}`
+  const profile = sessionIdOf(claudeProfileId)
+  return kind === 'claude' && profile ? `claude:${profile}:${id}` : null
 }
 
 function readRole(value, source) {
@@ -41,8 +44,9 @@ function readEntries(file, now) {
   const entries = new Map()
   let needsCleanup = false
   for (const [key, entry] of saved) {
-    const [kind, id] = key.split(':', 2)
-    if (roleSessionKey(kind, id) !== key || !Number.isSafeInteger(entry?.usedAt)) continue
+    const [kind, first, second] = key.split(':', 3)
+    if (roleSessionKey(kind, second ?? first, second === undefined ? undefined : first) !== key ||
+        !Number.isSafeInteger(entry?.usedAt)) continue
     const user = readRole(entry.user, 'user')
     const agent = readRole(entry.agent, 'agent')
     if (!user && !agent) continue

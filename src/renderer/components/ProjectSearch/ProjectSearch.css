@@ -44,6 +44,16 @@
 .project-search-folder { flex: 1; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .project-search mark { padding: 0; border-radius: 2px; background: color-mix(in srgb, var(--accent) 28%, transparent); color: inherit; font-weight: 600; }
 
+.project-search-recent-head { padding: 6px 14px 4px; color: var(--text-muted); font-size: 11.5px; }
+.project-search-row.is-recent { color: var(--text-muted); }
+.project-search-row.is-recent .project-search-name { flex: 1; max-width: none; }
+.project-search-forget {
+  display: inline-flex; flex: none; padding: 2px; border: none; border-radius: var(--radius-sm); background: none;
+  color: var(--text-muted); cursor: pointer; opacity: 0;
+}
+.project-search-row.is-recent[aria-selected="true"] .project-search-forget, .project-search-forget:focus-visible { opacity: 1; }
+.project-search-forget:hover { background: var(--bg-hover); color: var(--text-primary); }
+
 .project-search-file-head {
   position: sticky; top: -4px; z-index: 1; display: flex; align-items: center; gap: 8px; margin-top: 4px; padding: 5px 14px;
   background: var(--bg-secondary); color: var(--text-secondary); font-size: 12.5px;

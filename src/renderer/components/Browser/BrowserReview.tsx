@@ -44,6 +44,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const loginsButton = useRef<HTMLButtonElement>(null)
   const [state, setState] = useState<BrowserReviewState | null>(null)
   const [agentId, setAgentId] = useState('')
+  const [newSessionKind, setNewSessionKind] = useState<'claude' | 'codex' | null>(null)
   // The agents by project (main groups a repository's worktrees), and the project the request goes to
   const [grouped, setGrouped] = useState<BrowserReviewProjects | null>(null)
   const [projectFolder, setProjectFolder] = useState('')
@@ -259,20 +260,23 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   async function send(event: FormEvent) {
     event.preventDefault()
     const text = draft.trim()
-    if (!selection || !recipient || (!text && !attachments.length) || draftBusy.current) return
+    if (!selection || (!newSessionKind && !recipient) || (!text && !attachments.length) || draftBusy.current) return
     draftBusy.current = true
     setSending(true)
     setFeedback(null)
     try {
-      const result = await api.browserReviewAction(tabId, {
-        type: 'send', selectionId: selection.id, agentId, text, imageIds: attachments.map(image => image.id)
-      })
+      const body = { selectionId: selection.id, text, imageIds: attachments.map(image => image.id) }
+      const result = await api.browserReviewAction(tabId, newSessionKind
+        ? { ...body, type: 'send-new', kind: newSessionKind, projectFolder: project?.folder }
+        : { ...body, type: 'send', agentId })
       if (result.success) {
         for (const { id } of attachments) releaseAttachment(id)
         setAttachments([])
         setDraft('')
-        setFeedback({ text: `${recipient.id}에게 수정 요청을 보냈습니다.` })
-      } else {
+        setFeedback({ text: newSessionKind
+          ? '새 세션에 수정 요청을 등록했습니다.'
+          : `${agentId}에게 수정 요청을 보냈습니다.` })
+      } else if (!result.cancelled) {
         setFeedback({ text: result.error, error: true })
       }
     } catch {
@@ -393,16 +397,29 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
                     </select>
                   </>}
                   <label htmlFor={agentFieldId}>받는 에이전트</label>
-                  <select id={agentFieldId} className="browser-review-agent" value={recipient?.id ?? ''} disabled={!projectAgents.length || sending}
-                    onChange={event => { setAgentId(event.target.value); setFeedback(null) }}>
-                    <option value="">{!agents.length ? '연결된 에이전트 없음' : grouped && !project ? '프로젝트를 먼저 선택하세요' : '에이전트 선택'}</option>
+                  <select id={agentFieldId} className="browser-review-agent" disabled={sending}
+                    value={newSessionKind ? `new:${newSessionKind}` : recipient?.id ?? ''}
+                    onChange={event => {
+                      const value = event.target.value
+                      if (value === 'new:claude' || value === 'new:codex') {
+                        setNewSessionKind(value === 'new:claude' ? 'claude' : 'codex')
+                      } else {
+                        setNewSessionKind(null)
+                        setAgentId(value)
+                      }
+                      setFeedback(null)
+                    }}>
+                    <option value="">에이전트 선택</option>
                     {projectAgents.map(agent => (
                       <option key={agent.id} value={agent.id}>
                         {agent.id} · {statusLabels[agent.status]}{project && sameFolder(agent.cwd, project.folder) ? '' : ` · ${agent.cwd}`}
                       </option>
                     ))}
+                    <optgroup label="새 세션에 요청">
+                      <option value="new:claude">Claude Code 새 세션</option>
+                      <option value="new:codex">Codex 새 세션</option>
+                    </optgroup>
                   </select>
-                  {!agents.length && <p className="browser-review-hint">ezShell 터미널에서 Codex 또는 Claude Code를 실행하면 여기에 표시됩니다.</p>}
                   <label htmlFor={draftFieldId}>수정 요청</label>
                   <textarea id={draftFieldId} value={draft} maxLength={4000} disabled={sending}
                     placeholder="예: 이 버튼의 문구를 ‘저장’으로 바꿔줘."
@@ -428,8 +445,8 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
                     <RiImageAddLine aria-hidden="true" />{readingImages ? '이미지 읽는 중…' : '이미지 첨부'}
                   </button>
                   <button type="submit" className="browser-review-send"
-                    disabled={!selection || !recipient || (!draft.trim() && !attachments.length) || sending || readingImages}>
-                    <RiSendPlane2Line /> {sending ? '보내는 중…' : '에이전트에게 보내기'}
+                    disabled={!selection || (!newSessionKind && !recipient) || (!draft.trim() && !attachments.length) || sending || readingImages}>
+                    <RiSendPlane2Line /> {sending ? '보내는 중…' : newSessionKind ? '작업 폴더 선택 및 보내기' : '에이전트에게 보내기'}
                   </button>
                   {feedback && <p role={feedback.error ? 'alert' : 'status'} className={feedback.error ? 'browser-review-compose-error' : 'browser-review-feedback'}>
                     {feedback.text}

@@ -117,7 +117,8 @@
 .agent-chat-status[data-status='ended'],
 .agent-chat-status[data-status='error'] { color: var(--error-text); }
 
-.agent-chat-head-btn {
+.agent-chat-head-btn,
+.agent-chat-profile {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -131,7 +132,8 @@
   font-size: 12px;
   cursor: pointer;
 }
-.agent-chat-head-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.agent-chat-head-btn:hover,
+.agent-chat-profile:hover { background: var(--bg-hover); color: var(--text-primary); }
 .agent-chat-questions {
   flex: none;
   min-width: 0;
@@ -1152,4 +1154,20 @@
   border-radius: var(--radius-sm, 3px);
   color: var(--text-muted);
   font-size: 10px;
+}
+.agent-chat-head .agent-chat-profile {
+  max-width: min(28%, 130px);
+  min-width: 0;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.agent-chat-profile span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-chat-profile svg {
+  flex: none;
 }

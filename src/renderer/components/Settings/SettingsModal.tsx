@@ -15,6 +15,7 @@ import { AgentMessageMcpSetup } from '../Mcp/AgentMessageMcpSetup'
 import { AgentIdleSettings } from './AgentIdleSettings'
 import { AgentHooksSettings } from './AgentHooksSettings'
 import { JdkSettings } from './JdkSettings'
+import { ClaudeProfilesSettings } from './ClaudeProfilesSettings'
 import { RemoteAccessSettings } from '../RemoteAccess/RemoteAccessSettings'
 import '../../styles/settings.css'
 
@@ -95,6 +96,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                       원격 접속
                     </Tabs.Trigger>
                     <Tabs.Trigger value="development" className="settings-tab-trigger">개발 도구</Tabs.Trigger>
+                    <Tabs.Trigger value="claude-accounts" className="settings-tab-trigger">Claude 계정</Tabs.Trigger>
                   </Tabs.List>
 
                   <Tabs.Content value="theme" className="settings-tab-content settings-theme-content">
@@ -192,6 +194,9 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                   </Tabs.Content>
                   <Tabs.Content value="development" className="settings-tab-content">
                     <div className="settings-content"><JdkSettings /></div>
+                  </Tabs.Content>
+                  <Tabs.Content value="claude-accounts" className="settings-tab-content">
+                    <div className="settings-content"><ClaudeProfilesSettings onOpen={() => onOpenChange(false)} /></div>
                   </Tabs.Content>
                 </Tabs.Root>
               </motion.div>

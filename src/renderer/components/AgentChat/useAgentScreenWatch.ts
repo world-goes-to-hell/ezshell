@@ -17,14 +17,17 @@ export function useAgentScreenWatch(shellId: string, enabled: boolean, onShowTer
     if (!enabled || !read) return
     let watch = INITIAL_SCREEN_WATCH
     let reading = false
-    const timer = window.setInterval(async () => {
+    let active = true
+    const poll = async () => {
       if (reading || useAgentScreenReturnStore.getState().returns.has(shellId)) return
       reading = true
       try {
-        const next = readScreenWatch(watch, await read(shellId))
+        const screen = await read(shellId)
+        if (!active) return
+        const next = readScreenWatch(watch, screen)
         watch = next.watch
         if (next.open && !useAgentScreenReturnStore.getState().returns.has(shellId)) {
-          useAgentScreenReturnStore.getState().begin(shellId)
+          useAgentScreenReturnStore.getState().begin(shellId, Boolean(screen?.loginStage))
           show.current()
         }
       } catch {
@@ -32,7 +35,9 @@ export function useAgentScreenWatch(shellId: string, enabled: boolean, onShowTer
       } finally {
         reading = false
       }
-    }, POLL_MS)
-    return () => window.clearInterval(timer)
+    }
+    void poll()
+    const timer = window.setInterval(poll, POLL_MS)
+    return () => { active = false; window.clearInterval(timer) }
   }, [shellId, enabled])
 }

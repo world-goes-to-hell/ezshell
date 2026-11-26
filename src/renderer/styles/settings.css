@@ -1,5 +1,35 @@
 /* Settings Modal Styles */
 
+.claude-profile-list {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0 18px;
+  padding: 0;
+  list-style: none;
+}
+
+.claude-profile-list li,
+.claude-profile-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.claude-profile-list li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.claude-profile-list li span,
+.claude-profile-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+.claude-profile-form button {
+  white-space: nowrap;
+}
+
 .modal-content.settings-modal {
   width: 700px !important;
   height: 600px !important;

@@ -315,9 +315,9 @@ async function run() {
       ${rows}[0].querySelector('summary').textContent.includes('이미지 2장') &&
       ${requestStatus(`${rows}[0]`)} === 'waiting'
     `))
-    const requestPath = path.join(profile, 'codex-1-mcp-request')
-    const responsePath = path.join(profile, 'codex-1-mcp-response')
-    async function mcp(name, args = {}) {
+    async function mcp(name, args = {}, agent = 'codex-1') {
+      const requestPath = path.join(profile, agent + '-mcp-request')
+      const responsePath = path.join(profile, agent + '-mcp-response')
       fs.writeFileSync(requestPath, JSON.stringify({ name, arguments: args }))
       for (let attempt = 0; attempt < 40 && !fs.existsSync(responsePath); attempt++) await sleep(150)
       const response = JSON.parse(fs.readFileSync(responsePath, 'utf8'))
@@ -607,6 +607,66 @@ async function run() {
     await main.click(...await main.center(projectRow))
     check('clicking a suggestion opens it', await main.until(`window.electronAPI.browserReviewState(${JSON.stringify(suggestTab)})
       .then(state => state.url === ${JSON.stringify(origin + '/?project=1')})`, 8000))
+
+    const requestFolder = path.join(profile, 'new-review-project')
+    fs.mkdirSync(requestFolder)
+    const newUrl = origin + '/?new-session=1'
+    await main.js(`window.electronAPI.browserReviewAction(${JSON.stringify(suggestTab)}, {
+      type: 'navigate', address: ${JSON.stringify(newUrl)}
+    })`)
+    const newPage = await connect(target => target.url === newUrl)
+    try {
+      const newCompose = `${suggestRoot}.querySelector('.browser-review-compose')`
+      await main.until(`window.electronAPI.browserReviewState(${JSON.stringify(suggestTab)}).then(state => !state.loading)`)
+      await main.js(`${suggestRoot}.querySelector('.browser-review-tools-toggle').click()`)
+      await main.until(`!!${suggestRoot}.querySelector('.browser-review-tool-toggle')`)
+      await main.js(`${suggestRoot}.querySelector('.browser-review-tool-toggle').click()`)
+      await main.until(`${newCompose}.querySelector('.browser-review-pick')?.getAttribute('aria-pressed') === 'true'`)
+      await newPage.click(...await newPage.center("document.querySelector('#save-button')"))
+      await main.until(`${newCompose}.querySelector('.browser-review-selection code')?.textContent === '#save-button'`)
+      const newRecipient = `${newCompose}.querySelector('.browser-review-agent')`
+      const sendNew = `${newCompose}.querySelector('.browser-review-send')`
+      const newDraft = '새 Codex 세션에 요소 수정을 요청합니다.'
+      check('the browser offers Claude Code and Codex alongside existing recipients', await main.js(`
+        [...${newRecipient}.querySelectorAll('optgroup[label="새 세션에 요청"] option')].map(option => option.value).join(',') === 'new:claude,new:codex'
+      `))
+      await main.js(`(() => {
+        const select = ${newRecipient}
+        select.value = 'new:codex'
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+        const draft = ${newCompose}.querySelector('textarea')
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(draft, ${JSON.stringify(newDraft)})
+        draft.dispatchEvent(new Event('input', { bubbles: true }))
+      })()`)
+      await main.js(`${newCompose}.querySelector('.browser-review-add-image').click()`)
+      await main.until(`${newCompose}.querySelectorAll('.browser-review-attachments img').length === 2 && !${sendNew}.disabled`)
+      await main.js(`${sendNew}.click()`)
+      const dialogLog = path.join(profile, 'test-agent-request-dialog')
+      for (let attempt = 0; attempt < 40 && !fs.existsSync(dialogLog); attempt++) await sleep(150)
+      const options = JSON.parse(fs.readFileSync(dialogLog, 'utf8'))
+      check('the project prefills the folder picker and cancelling keeps the request and both images',
+        options.defaultPath && path.relative(profile, options.defaultPath) === '' && await main.until(`
+          !${sendNew}.disabled && ${newCompose}.querySelector('textarea').value === ${JSON.stringify(newDraft)} &&
+          ${newCompose}.querySelectorAll('.browser-review-attachments img').length === 2
+        `))
+
+      fs.writeFileSync(path.join(profile, 'test-agent-request-folder'), requestFolder)
+      await main.js(`${sendNew}.click()`)
+      const newAgent = `window.electronAPI.agentMessagesSnapshot().then(({ agents }) => agents.find(agent =>
+        agent.kind === 'codex' && agent.mcpConnected && agent.cwd === ${JSON.stringify(requestFolder)}))`
+      check('the new Codex session gets its own tab', await main.until(`${newAgent}.then(agent => !!agent &&
+        !!document.querySelector('.terminal-tab[data-tab-id="' + agent.shellId + '"]'))`, 8000))
+      const { id: agentId } = await main.js(newAgent)
+      const inbox = await mcp('read_inbox', {}, agentId)
+      const message = inbox.messages[0]
+      const files = message?.text.split('\n').filter(line => path.isAbsolute(line) && line.endsWith('.png'))
+      check('the new Codex inbox receives one request with the selected element, text and attachments',
+        inbox.messages.length === 1 && message.text.includes(newDraft) && message.text.includes('#save-button') &&
+        files?.length === 2 && files.every(file => fs.existsSync(file)))
+      check('the new session request also appears in browser review history', await main.until(`
+        ${history(suggestRoot)}.querySelector('[data-request-id="${message.id}"]')?.textContent.includes(${JSON.stringify(newDraft)})
+      `))
+    } finally { newPage.close() }
   } finally {
     main.close()
     page?.close()

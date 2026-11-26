@@ -33,7 +33,7 @@ interface Props {
 
 /** The expanded part of a row: where and what, the first prompt, the latest turns and the actions */
 export function AgentHistoryDetail({ session, state, shellId, onResume }: Props) {
-  const command = resumeCommand(session, isWindowsHost())
+  const command = session.claudeProfileId ? null : resumeCommand(session, isWindowsHost())
   const openFolder = async () => {
     const result = await window.electronAPI.agentHistoryOpenFolder?.(shellId, session.key)
     if (result && !result.success) toast.error('폴더를 열지 못했습니다', result.error)
@@ -42,6 +42,7 @@ export function AgentHistoryDetail({ session, state, shellId, onResume }: Props)
     ['폴더', session.cwd],
     ['브랜치', session.branch],
     ['모델', session.model],
+    ['Claude 계정', session.claudeProfileName ?? null],
     ['시작', formatDate(session.created)],
     ['세션 ID', session.id]
   ]
@@ -63,10 +64,10 @@ export function AgentHistoryDetail({ session, state, shellId, onResume }: Props)
           <RiPlayLine size={14} aria-hidden="true" />
           이어서 실행
         </button>
-        <button type="button" disabled={!command} onClick={() => command && void copy(command, '재개 명령')} title={command ?? undefined}>
+        {!session.claudeProfileId && <button type="button" disabled={!command} onClick={() => command && void copy(command, '재개 명령')} title={command ?? undefined}>
           <RiFileCopyLine size={14} aria-hidden="true" />
           재개 명령 복사
-        </button>
+        </button>}
         <button type="button" onClick={() => void copy(session.id, '세션 ID')}>세션 ID 복사</button>
         <button type="button" disabled={!session.cwd} onClick={() => void openFolder()}>
           <RiFolderOpenLine size={14} aria-hidden="true" />

@@ -3,7 +3,7 @@ const { requireLocalDirectory } = require('../localShell.js')
 const { isLocalFilePath } = require('../localKeyPath.js')
 const { inspectLocalProject } = require('../ipc/localProjects.js')
 
-const KEY = /^(claude|codex):[0-9a-f-]{36}$/
+const KEY = /^(?:claude:(?:[0-9a-f-]{36}:)?|codex:)[0-9a-f-]{36}$/
 const isLocalDirectoryPath = folder => isLocalFilePath(folder) && path.isAbsolute(folder)
 
 async function projectOf(folder) {

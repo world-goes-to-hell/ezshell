@@ -10,11 +10,14 @@ const POLL_MS = 600
 // Read twice in a row: a screen being redrawn can look like the composer for a moment
 const STEADY_READS = 2
 const GIVE_UP_MS = 30 * 60_000
+const LOGIN_DRAW_MS = 1800
+
+type ScreenReturn = { login: boolean; continueLogin: boolean }
 
 interface AgentScreenReturnState {
-  /** Shell id → when its pane went to the terminal for a screen */
-  returns: ReadonlyMap<string, number>
-  begin: (shellId: string) => void
+  /** Shell id → the terminal screen the pane is waiting for */
+  returns: ReadonlyMap<string, ScreenReturn>
+  begin: (shellId: string, login?: boolean) => void
   /** Back to the chat now (button), or stay in the terminal (`back` false) */
   end: (shellId: string, back: boolean) => void
 }
@@ -41,31 +44,42 @@ export const useAgentScreenReturnStore = create<AgentScreenReturnState>((set, ge
 
   return {
     returns: new Map(),
-    begin(shellId) {
+    begin(shellId, login = false) {
       const read = window.electronAPI.agentChatScreenState
       if (!read) return
       stop(shellId)
       const started = Date.now()
-      set({ returns: new Map(get().returns).set(shellId, started) })
+      const initial: ScreenReturn = { login, continueLogin: false }
+      set({ returns: new Map(get().returns).set(shellId, initial) })
       let steady = 0
       let reading = false
-      timers.set(shellId, window.setInterval(async () => {
+      let sawScreen = false
+      const timer = window.setInterval(async () => {
         // The user opened the chat again meanwhile, or it has been long enough
         if (useAgentChatStore.getState().chats.has(shellId) || Date.now() - started > GIVE_UP_MS) return stop(shellId)
         if (reading) return
         reading = true
         try {
           const screen = await read(shellId)
-          if (!get().returns.has(shellId)) return
+          if (timers.get(shellId) !== timer) return
           if (!screen) return stop(shellId)
-          steady = screen.composer !== null && !screen.approval ? steady + 1 : 0
+          const previous = get().returns.get(shellId)
+          if (!previous) return
+          const next = { login: previous.login || Boolean(screen.loginStage), continueLogin: screen.loginStage === 'continue' }
+          if (next.login !== previous.login || next.continueLogin !== previous.continueLogin) {
+            set({ returns: new Map(get().returns).set(shellId, next) })
+          }
+          sawScreen ||= screen.composer === null || Boolean(screen.loginStage)
+          const drawn = !login || sawScreen || Date.now() - started >= LOGIN_DRAW_MS
+          steady = drawn && screen.composer !== null && !screen.approval && !screen.loginStage ? steady + 1 : 0
           if (steady >= STEADY_READS) backToChat(shellId)
         } catch {
-          stop(shellId)
+          if (timers.get(shellId) === timer) stop(shellId)
         } finally {
           reading = false
         }
-      }, POLL_MS))
+      }, POLL_MS)
+      timers.set(shellId, timer)
     },
     end(shellId, back) {
       if (back) backToChat(shellId)

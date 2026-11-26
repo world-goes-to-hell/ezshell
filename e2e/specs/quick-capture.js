@@ -696,6 +696,40 @@ const { check, finish } = createChecks()
     return images.length === 2 && images.every(image => fs.existsSync(image)) && redPixels(images[0]) > 200 && redPixels(images[1]) === 0
   }), read('codex-1-chat-images'))
   sendSecond.close()
+
+  await main.js(`window.electronAPI.agentMessagesSnapshot().then(({ agents }) => {
+    for (const agent of agents.filter(agent => agent.active)) window.electronAPI.localShellClose(agent.shellId)
+  })`)
+  await main.until(`window.electronAPI.agentMessagesSnapshot().then(({ agents }) => !agents.some(agent => agent.active))`)
+  const requestFolder = file('new-capture-project')
+  fs.mkdirSync(requestFolder)
+  fs.writeFileSync(file('test-agent-request-folder'), requestFolder)
+  const newCapture = await openCapture('새 세션에서 이 화면을 확인해 주세요.')
+  await clickButton(newCapture, '#work')
+  check('capture offers a new session even with no existing projects or agents', await newCapture.until(`
+    !document.querySelector('#picker').hidden && document.querySelector('#project-fields').hidden &&
+    document.querySelector('#new-capture-session summary').textContent === '새 세션에 요청'
+  `))
+  await clickButton(newCapture, '#new-capture-session summary')
+  check('capture offers both agents for a new session', await newCapture.js(`
+    [...document.querySelectorAll('.new-capture-providers button')].map(button => button.dataset.kind).join(',') === 'claude,codex'
+  `))
+  await clickClosing(newCapture, '.new-capture-providers [data-kind="claude"]')
+  check('the capture overlay closes and the new Claude tab opens in the chosen folder',
+    await waitFor(async () => !(await pages()).some(isOverlay)) && await main.until(`
+      window.electronAPI.agentMessagesSnapshot().then(({ agents }) => agents.some(agent =>
+        agent.mcpConnected && agent.kind === 'claude' && agent.cwd === ${JSON.stringify(requestFolder)} &&
+        document.querySelector('.terminal-tab[data-tab-id="' + agent.shellId + '"]')))
+    `))
+  const captureRequest = await main.js(`window.electronAPI.agentMessagesSnapshot().then(({ agents, messages }) => {
+    const agent = agents.find(agent => agent.cwd === ${JSON.stringify(requestFolder)})
+    return messages.find(message => message.to === agent?.id)
+  })`)
+  const captureImage = captureRequest?.text.split('\n').find(line => path.isAbsolute(line) && line.endsWith('.png'))
+  check('the new Claude inbox has the capture comment and a readable screenshot',
+    captureRequest?.text.includes('새 세션에서 이 화면을 확인해 주세요.') && captureImage && fs.existsSync(captureImage))
+  newCapture.close()
+
   // Closing a capture with Esc is not an error either (it used to report "Render frame was disposed")
   check('no capture reported an error, closed ones included', read('capture-error') === '', read('capture-error'))
   main.close()

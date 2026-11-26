@@ -16,6 +16,26 @@ const MAX_OUTPUT_CHARS = 8000
 const CODEX_PROMPT = /^\s*›(?:\s|$)/u
 const ECHO_PROMPT = /^[›>❯]\s*/u
 
+const isClaudeLogin = (kind, command) => kind === 'claude' && command?.trim() === '/login'
+
+function claudeLoginStage({ lines, wraps }) {
+  const rows = []
+  for (const [index, line] of lines.entries()) {
+    if (wraps[index] && rows.length) rows[rows.length - 1] += line
+    else rows.push(line)
+  }
+  trimHistory(rows)
+  const heading = rows.findLastIndex(row => /^\s*Login\s*$/i.test(row))
+  // Wide and split panes both keep the dialog near the end of the visible screen.
+  const tail = rows.slice(Math.max(heading + 1, rows.length - 12))
+  const composer = tail.findLastIndex((row, index) => index > 0 && /^\s*[❯>]\s/u.test(row + ' ') &&
+    /^\s*─{8,}/u.test(tail[index - 1]))
+  const dialog = tail.slice(composer + 1).join('\n')
+  if (/^\s*[✓✔]?\s*Login successful\.\s+Press Enter to continue\s*$/im.test(dialog)) return 'continue'
+  if (heading >= 0 && /(?:Select login method|Paste code here if prompted|Waiting for (?:browser|authentication)|Browser (?:didn.t|not) open)/i.test(dialog)) return 'active'
+  return null
+}
+
 function historyAbove({ lines, wraps = [] }, joinWrapped = false) {
   let composer = -1
   for (let row = lines.length - 1; row >= 0; row--) {
@@ -98,6 +118,7 @@ async function watchCommand({ read, kind, before, command, sleep = ms => new Pro
     await sleep(STEP_MS)
     const screen = read()
     if (!screen) return { state: 'gone' }
+    if (isClaudeLogin(kind, command)) return { state: 'screen', screen: 'claude-login' }
     last = screen
     const next = `${screen.composer}|${screen.approval}|${screen.wraps?.join(',')}|${screen.lines.join('\n')}`
     if (next !== signature) { signature = next; since = now() }
@@ -122,4 +143,4 @@ function claudeQueueVisible(screen) {
   return /(?:\bpress (?:up(?: arrow)?|↑)|↑(?= to\b)) .{0,72}?\bqueued messages?\b/i.test(footer)
 }
 
-module.exports = { watchCommand, readCommandOutput, claudeQueueVisible }
+module.exports = { watchCommand, readCommandOutput, claudeQueueVisible, claudeLoginStage }

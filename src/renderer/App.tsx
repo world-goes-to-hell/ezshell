@@ -59,6 +59,8 @@ import { useTabStripScroll } from './hooks/useTabStripScroll'
 import { addScreenRefusal, dragDivider, evenSizes } from './lib/screenPanes'
 import { TabGroupChips } from './components/Terminal/TabGroupChips'
 import { agentKindsByShell, agentsOfLocalTab, openLocalWithAgents } from './lib/restoreAgents'
+import { OPEN_CLAUDE_PROFILE_EVENT, useClaudeProfiles, type OpenClaudeProfile } from './lib/claudeProfiles'
+import { useAgentScreenReturnStore } from './stores/agentScreenReturnStore'
 import { useAgentUsageStore } from './stores/agentUsageStore'
 import { UpdateNotification } from './components/Update/UpdateNotification'
 import { CommandPalette } from './components/CommandPalette'
@@ -68,7 +70,7 @@ import { DevelopmentTabDots } from './components/Terminal/DevelopmentRunStatus'
 import { changeDevelopmentRun, developmentRunsForTab, useDevelopmentRunEvents, useDevelopmentRuns } from './lib/developmentRun'
 import { TabRenameDialog } from './components/Terminal/TabRenameDialog'
 import { DUPLICATE_TAB_EVENT, OPEN_SNIPPET_MANAGER_EVENT } from './components/Terminal/useTerminalContextMenu'
-import { RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './lib/agentHistory'
+import { folderName, RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './lib/agentHistory'
 import { adoptOrphanLocalShells, keptLocalShells, rememberLocalLayout } from './lib/localShellAdopt'
 import { startAgentSleep } from './stores/agentSleepStore'
 import { startAgentHooks } from './stores/agentHooksStore'
@@ -310,12 +312,14 @@ function App() {
     const sftp = useSftpStore.getState()
     const usage = useAgentUsageStore.getState().byShell
     const kinds = agentKindsByShell()
+    const profiles = new Map(useAgentMessagesStore.getState().snapshot.agents.flatMap(agent =>
+      agent.active && agent.shellId && agent.claudeProfileId ? [[agent.shellId, agent.claudeProfileId] as const] : []))
     return {
       terminals, layout, activeId: activeTerminalId,
       sftpPathOf: tabId => sftp.isOpen(tabId) ? sftp.remotePath(tabId) : null,
       detached: Array.from(detachedTabsRef.current.values()),
       // The agent sessions in a local tab's panes, so a restart can resume them (lib/restoreAgents.ts)
-      agentsOf: tabId => agentsOfLocalTab(tabId, terminals.get(tabId), usage, kinds, isChatShown)
+      agentsOf: tabId => agentsOfLocalTab(tabId, terminals.get(tabId), usage, kinds, isChatShown, profiles)
     }
   }, [])
   const [splitPaneDraggingTabId, setSplitPaneDraggingTabId] = useState<string | null>(null)
@@ -972,7 +976,7 @@ function App() {
     }
   }
 
-  const addLocalTerminalTab = (result: { id: string; name: string; cwd?: string }, workspaceLabel?: string, pane?: number) => {
+  const addLocalTerminalTab = useCallback((result: { id: string; name: string; cwd?: string }, workspaceLabel?: string, pane?: number) => {
     const store = useTerminalStore.getState()
     const count = Array.from(store.terminals.values()).filter(info => info.local).length
     store.addTerminal(result.id, {
@@ -990,17 +994,64 @@ function App() {
       if (pane !== undefined) store.focusTerminal(result.id)
     }
     return result.id
-  }
+  }, [])
+
+  useEffect(() => window.electronAPI.onLocalAgentRequestOpened(opened => {
+    addLocalTerminalTab(opened, opened.workspaceLabel)
+  }), [addLocalTerminalTab])
 
   // A terminal of this PC as a new tab (the shell runs in the main process)
-  const handleOpenLocalTerminal = async ({ cwd, agent, workspaceLabel, resume, restoring }: Partial<LocalProjectTerminal> & { resume?: string; restoring?: true } = {}, pane?: number): Promise<string | null> => {
-    const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd, agent, resume, restoring })
+  const handleOpenLocalTerminal = async ({ cwd, agent, workspaceLabel, resume, restoring, claudeProfileId }: Partial<LocalProjectTerminal> & {
+    resume?: string; restoring?: true; claudeProfileId?: string
+  } = {}, pane?: number): Promise<string | null> => {
+    const result = await window.electronAPI.localShellOpen?.({ cols: 80, rows: 24, cwd, agent, resume, restoring, claudeProfileId })
     if (!result || !result.success) {
       toast.error('로컬 터미널을 열지 못했습니다', result ? result.error : '앱을 다시 시작해 주세요.')
       return null
     }
     return addLocalTerminalTab(result, workspaceLabel, pane)
   }
+
+  const unlockedOnce = !isLocked && !isCheckingLock
+  useEffect(() => {
+    if (!unlockedOnce) return
+    void useClaudeProfiles.getState().load().catch(() => {})
+    const open = async (event: Event) => {
+      const { profileId, shellId } = (event as CustomEvent<OpenClaudeProfile>).detail
+      const current = useTerminalStore.getState()
+      const active = current.activeTerminalId ? current.terminals.get(current.activeTerminalId) : undefined
+      try {
+        const cwd = (shellId ? await window.electronAPI.localShellCurrentDirectory(shellId) : null) ?? active?.local?.cwd
+        const result = await window.electronAPI.localShellOpen?.({
+          cols: 80, rows: 24, agent: 'claude', cwd, claudeProfileId: profileId, reuseClaudeProfile: true
+        })
+        if (!result?.success) {
+          toast.error('Claude 계정을 열지 못했습니다', result?.error ?? '앱을 다시 시작해 주세요.')
+          return
+        }
+        if (result.reused) {
+          const store = useTerminalStore.getState()
+          for (const [tabId, tab] of store.terminals) {
+            if (!tab.local) continue
+            const pane = (tab.splitTree ? paneIds(tab.splitTree) : [MAIN_PANE])
+              .find(id => getLocalPaneShellId(tabId, id) === result.id)
+            if (pane) {
+              focusTabPane(store.focusTerminal, tabId, pane)
+              if (shellId && !isChatShown(result.id) && !useAgentScreenReturnStore.getState().returns.has(result.id)) {
+                void useAgentChatStore.getState().show(result.id)
+              }
+              return
+            }
+          }
+        }
+        addLocalTerminalTab(result, folderName(result.cwd ?? null) || undefined)
+      } catch {
+        toast.error('Claude 계정을 열지 못했습니다')
+      }
+    }
+    window.addEventListener(OPEN_CLAUDE_PROFILE_EVENT, open)
+    return () => window.removeEventListener(OPEN_CLAUDE_PROFILE_EVENT, open)
+  }, [addLocalTerminalTab, unlockedOnce])
 
   const startDevelopmentTask = async (folder: string, task: LocalDevelopmentTask) => {
     try {
@@ -1180,7 +1231,6 @@ function App() {
   }, [isLocked, isCheckingLock])
 
   // Idle agents of local shells: main gets the settings, panes show the ones asleep (src/agentIdle.js)
-  const unlockedOnce = !isLocked && !isCheckingLock
   useEffect(() => (unlockedOnce ? startAgentSleep() : undefined), [unlockedOnce])
   // Whether agents report their state through the CLIs' hooks: main gets the switch (T11)
   useEffect(() => (unlockedOnce ? startAgentHooks() : undefined), [unlockedOnce])

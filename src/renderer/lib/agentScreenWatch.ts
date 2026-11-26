@@ -14,6 +14,7 @@ export interface ScreenWatch {
 export interface ScreenRead {
   composer: string | null
   approval: unknown
+  loginStage?: 'active' | 'continue'
 }
 
 export const INITIAL_SCREEN_WATCH: ScreenWatch = { seen: false, missing: 0 }
@@ -24,6 +25,7 @@ export const UNSEEN_SCREEN_READS = 10
 
 export function readScreenWatch(watch: ScreenWatch, screen: ScreenRead | null): { watch: ScreenWatch; open: boolean } {
   if (!screen) return { watch: { ...watch, missing: 0 }, open: false }
+  if (screen.loginStage) return { watch: { ...watch, missing: 0 }, open: true }
   if (screen.composer !== null || screen.approval) {
     return { watch: { seen: watch.seen || screen.composer !== null, missing: 0 }, open: false }
   }

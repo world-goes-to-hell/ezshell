@@ -43,6 +43,7 @@ export interface PaneStart {
   agent: LocalAgent
   resume?: string
   restoring?: true
+  claudeProfileId?: string
 }
 const pendingStart = new Map<string, PaneStart>()
 

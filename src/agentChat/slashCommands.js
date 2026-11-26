@@ -79,7 +79,7 @@ async function claudeFolder(root, source, add) {
  * [{ name: '/q-copy', description, source: 'user' | 'project' }], sorted by name
  * cwd: the agent's working folder (the project's commands), local paths only
  */
-async function customCommands({ kind, cwd, env = process.env, home = os.homedir() }) {
+async function customCommands({ kind, cwd, claudeRoot, env = process.env, home = os.homedir() }) {
   const found = new Map()
   const add = (name, description, source) => {
     const command = kind === 'codex' ? `prompts:${name}` : name
@@ -89,7 +89,7 @@ async function customCommands({ kind, cwd, env = process.env, home = os.homedir(
   if (kind === 'claude') {
     // The project's first: the CLI prefers them over the user's of the same name
     if (typeof cwd === 'string' && isLocalFilePath(cwd)) await claudeFolder(path.join(cwd, '.claude'), 'project', add)
-    await claudeFolder(env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'user', add)
+    if (claudeRoot !== null) await claudeFolder(claudeRoot || env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'user', add)
   } else if (kind === 'codex') {
     const dir = path.join(env.CODEX_HOME || path.join(home, '.codex'), 'prompts')
     let entries

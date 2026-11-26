@@ -163,7 +163,7 @@ async function readClaudeChildResults(file, tracker, isLive) {
  * @param {(channel: string, payload: object) => void} deps.send to the main window
  * @param {string} deps.claudeRoot `$CLAUDE_CONFIG_DIR` or `~/.claude`
  * @param {(shellId: string) => boolean} deps.isGone the shell is closed (not just its agent ended)
- * @param {(from: number, to: number) => object | undefined} [deps.claudeLimits] Claude's before and after
+ * @param {(from: number, to: number, profileId?: string) => object | undefined} [deps.claudeLimits] Claude's before and after
  *   usage rates and their increase from status line reports (limitHistory.js)
  */
 function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigravityBrainRoot(), isGone = () => false, claudeLimits = null, tickMs = TICK_MS, now = () => Date.now() }) {
@@ -180,7 +180,7 @@ function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigra
   function viewUsage(chat, item) {
     const { lastAt, ...usage } = item.usage
     if (chat.kind !== 'claude' || !claudeLimits || item.time === null || lastAt === undefined) return usage
-    const limits = claudeLimits(item.time, lastAt + LIMIT_SETTLE_MS)
+    const limits = claudeLimits(item.time, lastAt + LIMIT_SETTLE_MS, chat.claudeProfileId)
     return limits ? { ...usage, limits } : usage
   }
 
@@ -242,7 +242,9 @@ function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigra
       if (chat.lookup.file) return chat.lookup.file
       if (now() - chat.lookup.at < FIND_RETRY_MS) return null
     }
-    const file = await findClaudeFile(claudeRoot, target.cwd, target.sessionId)
+    const root = target.claudeProfileId ? target.claudeRoot : claudeRoot
+    if (!root) return null
+    const file = await findClaudeFile(root, target.cwd, target.sessionId)
     chat.lookup = { sessionId: target.sessionId, file, at: now() }
     return file
   }
@@ -490,7 +492,10 @@ function createAgentChats({ resolve, send, claudeRoot, antigravityRoot = antigra
     }
     if (chat.kind === 'antigravity') resetTranscript(chat, target.kind, null, 'waiting')
     const sessionId = target.sessionId ?? null
-    const changed = chat.kind && (chat.kind !== target.kind || (sessionId && chat.sessionId && sessionId !== chat.sessionId))
+    const changed = chat.kind && (chat.kind !== target.kind || chat.claudeProfileId !== target.claudeProfileId ||
+      (sessionId && chat.sessionId && sessionId !== chat.sessionId))
+    if (chat.claudeProfileId !== target.claudeProfileId) chat.lookup = null
+    chat.claudeProfileId = target.claudeProfileId
     const file = await fileFor(chat, target)
     if (!live(chat)) return
     if (!file) {

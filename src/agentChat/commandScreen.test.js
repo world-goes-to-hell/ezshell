@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readCommandOutput, watchCommand } from './commandScreen.js'
+import { claudeLoginStage, readCommandOutput, watchCommand } from './commandScreen.js'
 
 // Codex's screen: history rows, then the composer and its footer
 const screen = (history, composer = '› ', wraps = []) => ({
@@ -88,11 +88,11 @@ describe('what a slash command printed on Codex\'s screen', () => {
 })
 
 describe('watching the screen after a slash command', () => {
-  function run(frames, { kind = 'codex', before = screen([]) } = {}) {
+  function run(frames, { kind = 'codex', before = screen([]), command = '/status' } = {}) {
     let time = 0
     let index = 0
     return watchCommand({
-      kind, before, command: '/status',
+      kind, before, command,
       read: () => frames[Math.min(index++, frames.length - 1)],
       sleep: async ms => { time += ms },
       now: () => time
@@ -118,5 +118,17 @@ describe('watching the screen after a slash command', () => {
 
   it('the agent went away', async () => {
     expect(await run([null])).toEqual({ state: 'gone' })
+  })
+
+  it('hands off Claude login while an old composer is still visible', async () => {
+    expect(await run([shown('empty')], { kind: 'claude', command: '/login' }))
+      .toEqual({ state: 'screen', screen: 'claude-login' })
+  })
+
+  it('finds a wrapped login confirmation and ignores it once the composer comes back below it', () => {
+    const lines = ['Login', '', '  ✓ Login successful. Press Enter ', 'to continue']
+    const wraps = [false, false, false, true]
+    expect(claudeLoginStage({ lines: [...lines, ...Array(16).fill('')], wraps })).toBe('continue')
+    expect(claudeLoginStage({ lines: [...lines, '────────', '❯ '], wraps })).toBeNull()
   })
 })

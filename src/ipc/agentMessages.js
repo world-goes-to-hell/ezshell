@@ -246,7 +246,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   function bindRoleSession(id, sessionId, explicitResume = false) {
     const agent = agents.get(id)
     if (!agent?.active) return false
-    const key = roleSessionKey(agent.kind, sessionId)
+    const key = roleSessionKey(agent.kind, sessionId, agent.claudeProfileId)
     if (!key) return false
     let binding = roleSessions.get(id)
     if (binding?.key === key && binding.saved) return false
@@ -403,7 +403,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     if (delivery) notify('agent-message-delivered', delivery)
   }
 
-  function deliver(from, request) {
+  function deliver(from, request, startingAgent) {
     const { text, replyTo, requestId, replyStatus } = request
     // An agent started before the update still has send_receipt: taken as a reply it would close the
     // request without its result, so it is refused with what to do instead
@@ -423,7 +423,9 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
       }
       return { id: existing.id }
     }
-    if (from === to || (to !== USER && !isConnected(to))) throw new Error('메시지를 받을 실행 중인 에이전트를 찾을 수 없습니다.')
+    if (from === to || (to !== USER && !isConnected(to) && (!startingAgent || agents.get(to) !== startingAgent))) {
+      throw new Error('메시지를 받을 실행 중인 에이전트를 찾을 수 없습니다.')
+    }
     if (messages.length >= MAX_MESSAGES) throw new Error('이번 실행의 메시지 한도에 도달했습니다.')
     const message = { id: randomUUID(), from, to, text, replyTo, requestId, sentAt: Date.now(), read: false, seenAt: null }
     if (replyStatus) message.replyStatus = replyStatus
@@ -438,7 +440,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     }
     changed({ id: message.id, from, to, toShell: agents.get(to)?.shellId })
     const recipient = agents.get(to)?.shellId
-    if (recipient && !deliveredToWaiter) onInboxChanged(recipient)
+    if (recipient && !deliveredToWaiter && isConnected(to)) onInboxChanged(recipient)
     return { id: message.id }
   }
 
@@ -658,6 +660,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     const before = agents.get(id)
     // Woken from sleep under the same id, with the session it was asked to resume
     const resumeId = before?.sleeping ? before.resumeId : binding?.resumeId
+    const claudeProfileId = kind === 'claude' ? binding?.claudeProfileId : undefined
     const launch = binding?.codexProcessStartedAt
     if (!before && kind === 'codex' && !resumeId && Number.isSafeInteger(launch) && launch > 0 && binding.codexRoleCwd) {
       codexRoleLaunches.set(id, { startedAt: launch, cwd: binding.codexRoleCwd })
@@ -665,7 +668,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     agents.set(id, {
       id, shellId: binding?.shellId ?? '', kind, cwd, active: true, status: binding?.status ?? 'unknown',
       ...(STATUS_SOURCES.has(binding?.statusSource) ? { statusSource: binding.statusSource } : {}),
-      startedAt: before?.startedAt ?? startedAt, ...(resumeId ? { resumeId } : {})
+      startedAt: before?.startedAt ?? startedAt, ...(resumeId && { resumeId }), ...(claudeProfileId && { claudeProfileId })
     })
     return { id, binding }
   }
@@ -997,13 +1000,14 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     }
   }
 
-  function register(kind, shellId, cwd, shellEnv, resumeId = null) {
+  function register(kind, shellId, cwd, shellEnv, resumeId = null, claudeProfileId) {
     const id = `${kind}-${++serial}`
     const token = randomUUID()
     // startedAt: Codex usage is read from the session file it starts after this (codexUsageWatcher);
     // resumeId: a resumed session writes on in its old file, found by this id instead
     const startedAt = Date.now()
-    agents.set(id, { id, shellId, kind, cwd, active: true, status: 'unknown', startedAt, ...(resumeId ? { resumeId } : {}) })
+    agents.set(id, { id, shellId, kind, cwd, active: true, status: 'unknown', startedAt,
+      ...(resumeId && { resumeId }), ...(claudeProfileId && { claudeProfileId }) })
     if (kind === 'codex' && !resumeId) codexRoleLaunches.set(id, { startedAt, cwd })
     tokens.set(token, id)
     bindRoleSession(id, resumeId, true)
@@ -1310,6 +1314,15 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     ready, enableExternalBridge, pauseExternalBridge, register, stop, snapshot, unreadFor, unhandledFor,
     exportHandoff, importHandoff, discardHandoff, awaitingHandoff: () => awaitingHandoff, agentsOfShell, adoptAgent, adopt, adoptShell,
     sendAsUser: request => deliver(USER, request),
+    // Main's request launcher has just opened this local shell. Its first request can wait for
+    // the MCP lease to connect, including while the CLI is asking the user to trust the folder.
+    sendToNewSession(shellId, request) {
+      const agent = agents.get(request.to)
+      if (isLocked() || !agent?.active || agent.shellId !== shellId || !['claude', 'codex'].includes(agent.kind)) {
+        throw new Error('새로 연 에이전트 세션을 찾을 수 없습니다.')
+      }
+      return deliver(USER, request, agent)
+    },
     setUserRole: (id, role) => setRole(id, role, 'user'),
     hookEventsOf: id => (hookEvents.get(id) ?? []).map(event => ({ ...event })),
     hookSessionOf: id => hookSessions.get(id) ?? null,

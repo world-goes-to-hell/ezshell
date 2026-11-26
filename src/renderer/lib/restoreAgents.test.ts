@@ -53,6 +53,17 @@ describe('openLocalWithAgents', () => {
     expect(queue.mock.calls).toEqual([['local:7', 'split-1', { agent: 'claude', resume: `claude:${CLAUDE}` }]])
   })
 
+  it('keeps the Claude profile when a conversation is restored or started fresh', async () => {
+    const claudeProfileId = '11111111-2222-4333-8444-555555555555'
+    const agents = agentsOfPanes(['main'], () => 'local:1', new Map([['local:1', usage('claude', CLAUDE)]]),
+      new Map(), () => true, new Map([['local:1', claudeProfileId]]))
+    const open = vi.fn<(options: { resume?: string }) => Promise<string | null>>()
+      .mockResolvedValueOnce(null).mockResolvedValueOnce('local:8')
+    await openLocalWithAgents({ kind: 'local', cwd: 'D:\\work', agents }, open, vi.fn(), vi.fn())
+    expect(open).toHaveBeenNthCalledWith(1, expect.objectContaining({ claudeProfileId, resume: `claude:${claudeProfileId}:${CLAUDE}` }))
+    expect(open).toHaveBeenNthCalledWith(2, expect.objectContaining({ claudeProfileId, agent: 'claude' }))
+  })
+
   it('starts the same agent fresh when there was no conversation or it cannot be resumed', async () => {
     const fresh = { kind: 'local' as const, cwd: 'D:\\work', agents: [{ pane: 'main', agent: 'codex' as const }, { pane: 'split-1', agent: 'claude' as const }] }
     const open = vi.fn(async () => 'local:5')

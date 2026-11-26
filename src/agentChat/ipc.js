@@ -305,14 +305,16 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     const id = shellIdOf(shellId)
     if (!allowed(event) || !id) return null
     const screen = shells()?.chatScreen?.(id)
-    return screen ? { composer: screen.composer, approval: screen.approval } : null
+    return screen ? { composer: screen.composer, approval: screen.approval, ...(screen.loginStage && { loginStage: screen.loginStage }) } : null
   })
   // The slash commands of the agent's own folders (names and descriptions), for the composer's list
   ipcMain.handle('agent-chat-slash-commands', async (event, shellId) => {
     const id = shellIdOf(shellId)
     const agent = allowed(event) && id ? shells()?.agentOf(id) : null
     if (!agent || (agent.kind !== 'claude' && agent.kind !== 'codex')) return []
-    const commands = await customCommands({ kind: agent.kind, cwd: chats.cwdOf(id) }).catch(() => [])
+    const local = shells()
+    const claudeRoot = local?.claudeProfileOf?.(id) ? local.claudeRootOf(id) ?? null : undefined
+    const commands = await customCommands({ kind: agent.kind, cwd: chats.cwdOf(id), claudeRoot }).catch(() => [])
     return allowed(event) ? commands : []
   })
   ipcMain.handle('agent-chat-copy', async (event, shellId) => {

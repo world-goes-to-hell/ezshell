@@ -36,7 +36,7 @@ async function eachLimited(items, limit, run) {
   await Promise.all(workers)
 }
 
-function createAgentHistory({ env = process.env, homeDir = os.homedir() } = {}) {
+function createAgentHistory({ env = process.env, homeDir = os.homedir(), claudeProfiles = () => [] } = {}) {
   // file → { size, mtimeMs, summary }: a file is read again only when it changed
   let cache = new Map()
   // key → { agent, id, file, cwd }, from the latest list
@@ -53,6 +53,11 @@ function createAgentHistory({ env = process.env, homeDir = os.homedir() } = {}) 
     const found = []
     for (const agent of Object.keys(READERS)) {
       for (const file of await READERS[agent].listFiles(roots[agent])) found.push({ agent, file })
+    }
+    for (const profile of claudeProfiles()) {
+      for (const file of await claude.listFiles(profile.root)) {
+        found.push({ agent: 'claude', file, claudeProfileId: profile.id, claudeProfileName: profile.name })
+      }
     }
     const stats = await Promise.all(found.map(async item => {
       try {
@@ -79,7 +84,8 @@ function createAgentHistory({ env = process.env, homeDir = os.homedir() } = {}) 
         }
       }
       nextCache.set(item.file, { size: item.size, mtimeMs: item.mtimeMs, summary })
-      summaries[index] = summary && { ...summary, updated: item.mtimeMs, file: item.file }
+      summaries[index] = summary && { ...summary, updated: item.mtimeMs, file: item.file,
+        ...(item.claudeProfileId && { claudeProfileId: item.claudeProfileId, claudeProfileName: item.claudeProfileName }) }
     })
     if (started !== generation) return { sessions: [], total: 0, truncated: false }
     cache = nextCache
@@ -88,11 +94,11 @@ function createAgentHistory({ env = process.env, homeDir = os.homedir() } = {}) 
     const sessions = []
     for (const summary of summaries) {
       if (!summary || !isUuid(summary.id)) continue
-      const key = `${summary.agent}:${summary.id.toLowerCase()}`
+      const key = [summary.agent, summary.claudeProfileId, summary.id.toLowerCase()].filter(Boolean).join(':')
       // The same session can be in two files (Codex keeps a copy while compressing): the newest wins
       if (nextEntries.has(key)) continue
       const { file, ...shown } = summary
-      nextEntries.set(key, { agent: summary.agent, id: summary.id, file, cwd: summary.cwd })
+      nextEntries.set(key, { agent: summary.agent, id: summary.id, file, cwd: summary.cwd, claudeProfileId: summary.claudeProfileId })
       const named = summary.agent === 'codex' ? names.get(summary.id.toLowerCase()) : null
       sessions.push({ ...shown, key, title: named ? oneLine(named, LIMITS.title) : shown.title })
     }
@@ -119,7 +125,7 @@ function createAgentHistory({ env = process.env, homeDir = os.homedir() } = {}) 
     target(key) {
       const entry = entries.get(key)
       if (!entry || !isUuid(entry.id) || !isLocalFilePath(entry.cwd)) return null
-      return { agent: entry.agent, id: entry.id, cwd: entry.cwd }
+      return { agent: entry.agent, id: entry.id, cwd: entry.cwd, ...(entry.claudeProfileId && { claudeProfileId: entry.claudeProfileId }) }
     },
     /**
      * Sessions of the latest list whose questions and answers hold every word, newest first, each with

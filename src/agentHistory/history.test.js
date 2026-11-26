@@ -6,6 +6,7 @@ import zlib from 'zlib'
 import { createAgentHistory, agentRoots } from './history.js'
 import { readLinesFromStart } from './boundedRead.js'
 import claude from './claude.js'
+import { createClaudeProfiles } from '../agentChat/claudeProfiles.js'
 
 const CLAUDE_ID = 'abcdef11-2222-4333-8444-555555555555'
 const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
@@ -67,6 +68,31 @@ describe('agentRoots', () => {
 })
 
 describe('Claude transcripts', () => {
+  it('keeps the same session ID separate across the default and named account and resolves the correct resume target', async () => {
+    const profiles = createClaudeProfiles(home)
+    const [, named] = profiles.save({ name: '업무' })
+    const root = profiles.rootFor(named.id, true)
+    const folder = path.join(root, 'projects', 'work')
+    fs.mkdirSync(folder, { recursive: true })
+    const turn = text => ({ type: 'user', cwd: work, message: { content: text } })
+    writeClaude(CLAUDE_ID, [turn('기본 대화')])
+    fs.writeFileSync(path.join(folder, CLAUDE_ID + '.jsonl'), jsonl([turn('업무 대화')]))
+
+    const persisted = createClaudeProfiles(home)
+    expect(persisted.list()).toEqual([{ id: 'default', name: '기본 계정' }, named])
+    expect(() => persisted.save({ name: '업무' })).toThrow(/같은 이름/)
+    expect(persisted.rootFor('../outside', true)).toBeUndefined()
+    const history = createAgentHistory({ env: {}, homeDir: home, claudeProfiles: persisted.roots })
+    const { sessions } = await history.list()
+    const key = `claude:${named.id}:${CLAUDE_ID}`
+    expect(sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key, title: '업무 대화', claudeProfileName: '업무' }),
+      expect.objectContaining({ key: `claude:${CLAUDE_ID}`, title: '기본 대화' })
+    ]))
+    expect(history.target(key)).toEqual({ agent: 'claude', id: CLAUDE_ID, cwd: work, claudeProfileId: named.id })
+    expect(await history.detail(key)).toMatchObject({ firstPrompt: '업무 대화' })
+  })
+
   it('skips injected input and takes the latest name over the AI title', async () => {
     writeClaude(CLAUDE_ID, [
       { type: 'mode', mode: 'default', sessionId: CLAUDE_ID },

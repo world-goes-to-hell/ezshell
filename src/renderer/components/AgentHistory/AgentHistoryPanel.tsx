@@ -196,6 +196,7 @@ function ProjectHistory({ shellId }: { shellId: string }) {
                 </span>
                 <span className="agent-history-meta">
                   <span title={session.cwd ?? undefined}>{folderName(session.cwd) || '폴더 모름'}</span>
+                  {session.claudeProfileName && <span>{session.claudeProfileName}</span>}
                   {session.branch && <span className="agent-history-branch">{session.branch}</span>}
                 </span>
                 {hits.has(session.key) && (

@@ -108,6 +108,7 @@ const AGENT_SESSION_MARKERS = new Set([
   'CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT',
   'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_SPAWN_BACKEND',
   'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH',
+  'EZSHELL_CLAUDE_PROFILE_ROOT',
   'EZSHELL_AGENT_ID', 'EZSHELL_AGENT_TOKEN', 'EZSHELL_SHELL_TOKEN', 'EZSHELL_AGENT_PIPE',
   'EZSHELL_AGENT_MCP_CONFIG', 'EZSHELL_AGENT_MCP_SCRIPT', 'EZSHELL_AGENT_SETTINGS', 'EZSHELL_AGENT_USAGE_SCRIPT', 'EZSHELL_AGENT_HOOK_SCRIPT',
   'EZSHELL_CODEX_HOOK_MODE_FILE', 'EZSHELL_CODEX_HOOK_ARGS', 'EZSHELL_CODEX_HOOK_NONCE',
@@ -116,6 +117,14 @@ const AGENT_SESSION_MARKERS = new Set([
   'EZSHELL_ANTIGRAVITY_STATUS_COMMAND',
   'EZSHELL_CLI_EXE', 'EZSHELL_CLI_SCRIPT'
 ]);
+
+const CLAUDE_PROFILE_AUTH_ENV = ['CLAUDE_CONFIG_DIR', 'CLAUDE_SECURESTORAGE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_REFRESH_TOKEN', 'CLAUDE_CODE_OAUTH_SCOPES', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
+const powershellClaudeProfile = CLAUDE_PROFILE_AUTH_ENV.map(key => `Remove-Item Env:${key} -ErrorAction SilentlyContinue; `).join('') +
+  '$env:CLAUDE_CONFIG_DIR = $env:EZSHELL_CLAUDE_PROFILE_ROOT; ';
+const posixClaudeProfile = 'env ' + CLAUDE_PROFILE_AUTH_ENV.map(key => '-u ' + key).join(' ') +
+  ' "CLAUDE_CONFIG_DIR=$EZSHELL_CLAUDE_PROFILE_ROOT" ';
 
 function localTerminalEnvironment(env, platform) {
   const shellEnv = { ...env };
@@ -296,7 +305,7 @@ fi
 exit $?
 '`;
 
-function shellArgs(shell, agent, platform, withMessaging, resume, codexHooks, restoring) {
+function shellArgs(shell, agent, platform, withMessaging, resume, codexHooks, restoring, claudeProfile) {
   const resumed = resumeArgs(agent, resume);
   if (agent === undefined) {
     if (platform !== 'win32' || !/^(?:powershell|pwsh)(?:\.exe)?$/i.test(path.win32.basename(shell.file))) return shell.args;
@@ -329,7 +338,7 @@ else { Write-Host 'Antigravity CLI를 찾을 수 없습니다.' }
     const hooks = codexHooks ? ' ' + quoteCodexHookArgs() : '';
     const launch = useLocalCodex
       ? `exec /bin/sh -c 'case "$(codex --help 2>/dev/null)" in *--no-daemon*) exec codex${resumed} --no-daemon "$@" ;; *) exec codex${resumed} "$@" ;; esac' ezshell-codex${options}${hooks}`
-      : `exec ${agent}${resumed}${options}`;
+      : `exec ${claudeProfile ? posixClaudeProfile : ''}${agent}${resumed}${options}`;
     return [...shell.args, '-i', '-c', launch];
   }
   // Prefer installed .exe and .cmd launchers, including npm's launcher on PowerShell systems.
@@ -341,7 +350,7 @@ else { Write-Host 'Antigravity CLI를 찾을 수 없습니다.' }
     : '';
   const hooks = codexHooks ? `${POWERSHELL_CODEX_HOOK_ARGS}\n$ezShellArgs += @(Get-EzShellCodexHookArgs $cli ${restoring ? '$true' : '$false'}); ` : '';
   const launch = `$cli = Get-Command ${agent}.exe,${agent}.cmd,${agent} -ErrorAction SilentlyContinue | Select-Object -First 1; if (!$cli) { Write-Host '${agent} CLI를 찾을 수 없습니다.'; exit 127 }; ${localFlag}${hooks}& $cli${resumed}${useLocalCodex ? ' @ezShellArgs' : ''}${options}; exit $LASTEXITCODE`;
-  return [...shell.args, '-Command', launch];
+  return [...shell.args, '-Command', (claudeProfile ? powershellClaudeProfile : '') + launch];
 }
 
 function developmentShellArgs(shell, task, platform) {
@@ -601,7 +610,7 @@ function createLocalShells({
   spawn, send, agents, shell = defaultShell(), cwd = os.homedir(), env = process.env,
   platform = process.platform, processTree = () => getProcessTree(platform), processAlive = isProcessAlive,
   timedProcessTree = () => processList({ platform }), commandLine = pid => processCommandLine(pid, { platform }),
-  readClaudeSessions, onInboxDraftBlocked, antigravityRoot = antigravityBrainRoot(),
+  readClaudeSessions, claudeProfileRoot = () => undefined, onInboxDraftBlocked, antigravityRoot = antigravityBrainRoot(),
   killTrees = pids => killProcessTreesSync(pids, platform),
   // The session host (src/sessionHost/client.js): shells opened there outlive an app restarting for an update
   host = null,
@@ -872,7 +881,8 @@ function createLocalShells({
     }
     entry.reportStatus = status => reportShellStatus(entry, setStatus, status);
     const status = agentStatus(entry);
-    return { shellId: id, agentId: binding.id, status, statusSource: agentStatusSource(entry, status) };
+    return { shellId: id, agentId: binding.id, status, statusSource: agentStatusSource(entry, status),
+      ...(kind === 'claude' && entry.claudeProfileId && { claudeProfileId: entry.claudeProfileId }) };
   }
 
   async function findAgentProcess({ pid, kind, shellId }) {
@@ -1080,7 +1090,7 @@ function createLocalShells({
         // belong to the parent CLI, even when that parent is also the PTY process.
         const direct = candidates.get(session.pid);
         const candidate = direct?.entry.registration ? direct : !sessionPids.has(parent) && candidates.get(parent);
-        if (candidate && session.startedAt >= candidate.entry.openedAt) {
+        if (candidate && candidate.entry.claudeProfileId === session.claudeProfileId && session.startedAt >= candidate.entry.openedAt) {
           claudeChecks.set(key, { ...candidate, startedAt: process.startedAt });
         }
       }
@@ -1123,25 +1133,48 @@ function createLocalShells({
     }, AGENT_PROCESS_CHECK_MS).unref?.();
   }
 
-  function open({ cols, rows, cwd: directory, agent, resume, replacementFor, restoring } = {}) {
+  function open({ cols, rows, cwd: directory, agent, resume, replacementFor, restoring, claudeProfileId, reuseClaudeProfile } = {}) {
     const previous = replacementFor === undefined ? undefined : shells.get(replacementFor);
     if (replacementFor !== undefined) {
       if (!previous || !resume) throw new Error('바꿀 셸을 찾지 못했습니다.');
       if ([...shells.values()].some(entry => entry.replacementFor === replacementFor)) throw new Error('이 칸의 셸을 바꾸는 중입니다.');
     }
+    if (claudeProfileId !== undefined && directory !== undefined && !isLocalFilePath(directory)) {
+      throw new Error('이 PC의 작업 폴더를 선택해 주세요.');
+    }
     const workingDirectory = directory === undefined ? previous?.launchDirectory ?? cwd : requireLocalDirectory(directory);
+    const profileId = claudeProfileId === 'default' ? undefined : claudeProfileId;
+    if (claudeProfileId !== undefined && agent !== 'claude') throw new Error('Claude 세션에서만 계정을 선택할 수 있습니다.');
+    const configDir = profileId === undefined ? undefined : claudeProfileRoot(profileId, true);
+    if (profileId !== undefined && !configDir) throw new Error('Claude 계정을 찾지 못했습니다.');
+    if (reuseClaudeProfile === true && agent === 'claude' && !resume && !previous) {
+      const samePath = folder => platform === 'win32' ? folder.toLowerCase() === workingDirectory.toLowerCase() : folder === workingDirectory;
+      const match = [...shells].findLast(([, entry]) => !entry.exited && entry.agent === 'claude' &&
+        entry.claudeProfileId === profileId && samePath(entry.launchDirectory));
+      if (match) return { id: match[0], name: shell.name, cwd: workingDirectory, reused: true };
+    }
     const launchIdentity = platform === 'win32' ? launchedDirectoryIdentity(workingDirectory) : null;
+    const tabDirectory = directory !== undefined || claudeProfileId !== undefined ? workingDirectory : null;
     const id = `local:${nextId++}`;
     const automatic = restoring === true;
     const codexHooks = agent === 'codex' && injectCodexHooks(agents?.codexHookMode?.(), automatic);
-    const args = shellArgs(shell, agent, platform, Boolean(agents), resume, codexHooks, automatic);
+    const args = shellArgs(shell, agent, platform, Boolean(agents), resume, codexHooks, automatic, Boolean(configDir));
     const columns = previous?.cols ?? size(cols, 80);
     const lines = previous?.rows ?? size(rows, 24);
     const shellEnv = localTerminalEnvironment(env, platform);
+    if (configDir) {
+      // A named subscription must not inherit a different credential store, API key or provider.
+      for (const key of Object.keys(shellEnv)) {
+        if (CLAUDE_PROFILE_AUTH_ENV.includes(platform === 'win32' ? key.toUpperCase() : key)) delete shellEnv[key];
+      }
+      shellEnv.CLAUDE_CONFIG_DIR = configDir;
+      shellEnv.EZSHELL_CLAUDE_PROFILE_ROOT = configDir;
+    }
     // A resumed Codex writes on in its old session file: the usage watcher finds it by this id
     const registeredAgent = agent === 'antigravity' ? undefined : agent;
     const resumeId = resume && SESSION_ID.test(resume) ? resume.toLowerCase() : null;
-    const registration = registeredAgent && agents?.register(registeredAgent, id, workingDirectory, shellEnv, resumeId);
+    const registration = registeredAgent && agents?.register(registeredAgent, id, workingDirectory, shellEnv, resumeId,
+      ...(profileId ? [profileId] : []));
     // The shell's own token authenticates status reports from a CLI started inside it.
     const shellUsageEnv = agents?.registerShell?.(id) ?? {};
     const openedAt = Date.now();
@@ -1158,7 +1191,8 @@ function createLocalShells({
         env: { ...(registration?.env ?? shellEnv), ...shellUsageEnv }
       };
       pty = host?.ready()
-        ? host.spawn(id, shell.file, args, options, { agent: agent ?? null, cwd: directory === undefined ? null : workingDirectory, launchDirectory: workingDirectory, resumeId })
+        ? host.spawn(id, shell.file, args, options, { agent: agent ?? null, cwd: tabDirectory,
+          launchDirectory: workingDirectory, resumeId, ...(profileId && { claudeProfileId: profileId }) })
         : spawn(shell.file, args, options);
     } catch (error) {
       agents?.forgetShell?.(id);
@@ -1171,12 +1205,12 @@ function createLocalShells({
       codexActivity: codexInput ? codexActivityFor(resumeId) : null,
       wakeMcp: Boolean(shellUsageEnv.EZSHELL_AGENT_WAKE_MCP_CONFIG),
       // For a window that reloads and takes the shell back as a tab (`list`)
-      cwd: directory === undefined ? previous?.cwd ?? null : workingDirectory,
+      cwd: tabDirectory ?? previous?.cwd ?? null,
       launchDirectory: workingDirectory, launchIdentity, reportedDirectory: null,
       reportStatus: status => reportShellStatus(entry, registration?.setStatus, status),
       backlog: '', modes: {}, modeTail: '', exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: '',
       // Last sign of work (status, typing, a line sent to the agent) and the sleep it may be in (agentIdle.js)
-      activeAt: openedAt, openedAt, sleeping: null, resumeId
+      activeAt: openedAt, openedAt, sleeping: null, resumeId, claudeProfileId: profileId
     };
     const nonce = shellUsageEnv.EZSHELL_CODEX_HOOK_NONCE;
     if (!agent && platform === 'win32' && nonce) {
@@ -1189,7 +1223,7 @@ function createLocalShells({
     if (registration) observeInbox(id, entry);
     shells.set(id, entry);
     listen(id, entry);
-    return { id, name: shell.name, ...(directory === undefined ? {} : { cwd: workingDirectory }) };
+    return { id, name: shell.name, ...(tabDirectory && { cwd: tabDirectory }) };
   }
 
   function listen(id, entry) {
@@ -1263,7 +1297,9 @@ function createLocalShells({
         reportStatus: status => reportShellStatus(entry, registration?.setStatus, status),
         backlog: typeof shell.buffer === 'string' ? shell.buffer.slice(-BACKLOG_CHARS) : '', modes: keptModes(meta.modes, agent), modeTail: '',
         exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: '',
-        activeAt: now, openedAt: now, sleeping: null, adopted: true, resumeId
+        activeAt: now, openedAt: now, sleeping: null, adopted: true, resumeId,
+        claudeProfileId: agent === 'claude' && typeof meta.claudeProfileId === 'string' && SESSION_ID.test(meta.claudeProfileId)
+          ? meta.claudeProfileId : undefined
       };
       // What the screen was left in (bracketed paste, the title's working sign): the kept modes, then what the
       // kept output still says
@@ -1300,6 +1336,7 @@ function createLocalShells({
         reportedDirectory: entry.reportedDirectory ?? null,
         launchIdentity: identity ? { directory: identity.directory, dev: String(identity.dev), ino: String(identity.ino) } : null,
         resumeId: entry.resumeId ?? null,
+        ...(entry.claudeProfileId && { claudeProfileId: entry.claudeProfileId }),
         // Bracketed paste and cursor keys: the next app reads the composer only with them (keptModes)
         modes: { ...entry.modes }
       });
@@ -1867,6 +1904,8 @@ function createLocalShells({
       const entry = shells.get(id);
       return hasAgent(entry) ? entry.externalAgent?.id ?? entry.registration?.env?.EZSHELL_AGENT_ID : null;
     },
+    claudeProfileOf: id => shells.get(id)?.claudeProfileId,
+    claudeRootOf: id => claudeProfileRoot(shells.get(id)?.claudeProfileId),
     codexSpeedOf(id) {
       const entry = shells.get(id);
       if (!hasAgent(entry) || !entry.speedControl) return null;
@@ -1958,7 +1997,8 @@ function createLocalShells({
       const entry = shells.get(id);
       if (!hasAgent(entry) || !entry.inbox) return null;
       const approval = entry.agent === 'antigravity' ? agentStatus(entry) === 'blocked' : Boolean(entry.inbox.approvalPrompt());
-      return { ...entry.inbox.commandRows(), composer: entry.inbox.composerState(), footerRow: entry.inbox.composerFooterRow(), approval };
+      return { ...entry.inbox.commandRows(), composer: entry.inbox.composerState(), footerRow: entry.inbox.composerFooterRow(), approval,
+        loginStage: entry.inbox.claudeLoginScreen() };
     },
     noteChatCommandScreen(id, agentId) {
       const entry = shells.get(id);

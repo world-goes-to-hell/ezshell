@@ -33,8 +33,8 @@ async function restart() {
   await messages.ready()
 }
 
-function register(kind, shellId, resume) {
-  const { env, finish } = messages.register(kind, shellId, directory, {}, resume)
+function register(kind, shellId, resume, claudeProfileId) {
+  const { env, finish } = messages.register(kind, shellId, directory, {}, resume, claudeProfileId)
   return {
     id: env.EZSHELL_AGENT_ID,
     finish: () => finish(0),
@@ -46,6 +46,19 @@ const getRole = id => messages.snapshot().agents.find(agent => agent.id === id)
 const readFile = () => JSON.parse(fs.readFileSync(file, 'utf8'))
 
 describe('agent roles saved by conversation', () => {
+  it('keeps restored Claude roles on the account that owns the transcript', async () => {
+    const profile = '11111111-2222-4333-8444-555555555555'
+    await restart()
+    const work = register('claude', 'local:1', session, profile)
+    const personal = register('claude', 'local:2', session)
+    messages.setUserRole(work.id, '업무 검토')
+    messages.setUserRole(personal.id, '개인 개발')
+    expect(readFile()[`claude:${profile}:${session}`]).toMatchObject({ user: '업무 검토' })
+    await restart()
+    expect(getRole(register('claude', 'local:1', session, profile).id).role).toBe('업무 검토')
+    expect(getRole(register('claude', 'local:2', session).id).role).toBe('개인 개발')
+  })
+
   it('persists both fresh Codex roles only when the watcher proof agrees with the current authenticated hook', async () => {
     await restart()
     const codex = register('codex', 'local:1')

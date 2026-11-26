@@ -53,6 +53,12 @@ browserImportSources.createBrowserImportSources = () => {
 }
 const openFileDialog = dialog.showOpenDialog.bind(dialog)
 dialog.showOpenDialog = (window, options) => {
+  if (options?.title === '새 세션의 작업 폴더 선택') {
+    fs.writeFileSync(path.join(profile, 'test-agent-request-dialog'), JSON.stringify(options))
+    const selection = path.join(profile, 'test-agent-request-folder')
+    const folder = fs.existsSync(selection) ? fs.readFileSync(selection, 'utf8') : ''
+    return Promise.resolve({ canceled: !folder, filePaths: folder ? [folder] : [] })
+  }
   if (options?.title === '수정 요청에 이미지 첨부') {
     const filePaths = [36, 52].map(width => {
       const file = path.join(profile, `review-${width}.png`)
@@ -111,6 +117,7 @@ pty.spawn = (file, args, options) => {
   let pending = null
   let speed = 'default'
   let screenOpen = false
+  let loginOpen = false
   const codexImages = []
   // Claude's AskUserQuestion dialog (local-agent-chat): `<id>-ask-dialog` holds its questions; the keys go
   // to the fake dialog, its screen is drawn as the fixture's prompt and the answers land in `<id>-ask-submitted`
@@ -153,6 +160,20 @@ pty.spawn = (file, args, options) => {
     } else if (id?.startsWith('codex-') && ['/fast', '/ultrafas', '/ultrafast'].includes(pasted) && process.env.EZSHELL_TEST_AGENT_CHAT) {
       pending = pasted === '/ultrafas' ? 'speed-probe' : pasted.slice(1) + '-toggles'
       fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
+    } else if (id?.startsWith('claude-') && process.env.EZSHELL_TEST_AGENT_CHAT && pasted === '/login') {
+      pending = 'login'
+      fs.writeFileSync(path.join(profile, id + '-draft'), pasted)
+    } else if (pending === 'login' && data === '\r') {
+      pending = null
+      loginOpen = true
+      fs.writeFileSync(path.join(profile, id + '-draft'), '')
+      fs.writeFileSync(path.join(profile, id + '-screen'), [
+        '────────────', '❯ ', '────────────', '? for shortcuts', 'Login', '  Paste code here if prompted'
+      ].join('\r\n'))
+    } else if (loginOpen && (data === '\r' || data === '\x1b')) {
+      loginOpen = false
+      fs.writeFileSync(path.join(profile, id + '-login-closed'), data === '\r' ? 'confirmed' : 'cancelled')
+      fs.writeFileSync(path.join(profile, id + '-screen'), '')
     } else if (id && process.env.EZSHELL_TEST_AGENT_CHAT && (pasted === '/config' || (id.startsWith('codex-') && pasted === '/model'))) {
       // A slash command that opens a screen of the CLI's own: Enter opens it, Esc closes it
       pending = pasted === '/model' ? 'model-screen' : 'screen-command'

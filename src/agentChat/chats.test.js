@@ -47,6 +47,33 @@ afterEach(() => {
 
 const texts = frame => frame.items.map(item => item.text)
 
+it('reads a named Claude profile transcript and its usage even if the default has the same session ID', async () => {
+  const claudeProfileId = '11111111-2222-4333-8444-555555555555'
+  const claudeRoot = path.join(root, 'work-claude')
+  const folder = path.join(claudeRoot, 'projects', claudeFolderName(CWD))
+  fs.mkdirSync(folder, { recursive: true })
+  fs.writeFileSync(file, prompt('default', '기본 계정 대화'))
+  const at = '2026-11-21T10:00:00.000Z'
+  fs.writeFileSync(path.join(folder, `${SESSION}.jsonl`), JSON.stringify({
+    type: 'user', uuid: 'work', timestamp: at, message: { content: '업무 계정 대화' }
+  }) + '\n' + JSON.stringify({
+    type: 'assistant', timestamp: at, message: { id: 'answer', content: [{ type: 'text', text: '답변' }], usage: { input_tokens: 10 } }
+  }) + '\n')
+  const limits = { fiveHour: { before: 4, after: 5, used: 1 } }
+  const claudeLimits = vi.fn((_from, _to, profileId) => profileId === claudeProfileId ? limits : undefined)
+  chats.closeAll()
+  chats = createAgentChats({
+    claudeRoot: root, tickMs: 60_000, send: (_channel, frame) => frames.push(frame),
+    resolve: async () => ({ ...target, claudeProfileId, claudeRoot }), claudeLimits
+  })
+  chats.open('local:1')
+  await vi.waitFor(() => expect(frames.find(frame => frame.reset)?.items).toEqual([
+    expect.objectContaining({ text: '업무 계정 대화', usage: expect.objectContaining({ limits }) }),
+    expect.objectContaining({ text: '답변' })
+  ]))
+  expect(claudeLimits).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), claudeProfileId)
+})
+
 it('resets Claude chat on a new session ID before following its next transcript', async () => {
   fs.writeFileSync(file, prompt('before', 'Before clear'))
   chats.open('local:1')

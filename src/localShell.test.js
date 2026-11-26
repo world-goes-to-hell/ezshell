@@ -47,6 +47,32 @@ describe('defaultShell', () => {
 })
 
 describe('createLocalShells', () => {
+  it('starts Claude profiles with isolated environments and reuses only the requested account in that folder', () => {
+    const cwd = tmpdir()
+    const work = join(cwd, 'test-work-profile')
+    const personal = join(cwd, 'test-personal-profile')
+    const roots = { work, personal }
+    const { shells, spawn, ptys } = setup({ cwd, platform: process.platform, agents: undefined,
+      env: { CLAUDE_CONFIG_DIR: 'existing', CLAUDE_SECURESTORAGE_CONFIG_DIR: 'existing-auth', ANTHROPIC_API_KEY: 'existing-key' },
+      claudeProfileRoot: id => roots[id]
+    })
+    try {
+      const first = shells.open({ agent: 'claude', claudeProfileId: 'work', reuseClaudeProfile: true })
+      const second = shells.open({ agent: 'claude', claudeProfileId: 'personal', reuseClaudeProfile: true })
+      expect(shells.open({ agent: 'claude', claudeProfileId: 'work', reuseClaudeProfile: true }))
+        .toMatchObject({ id: first.id, reused: true })
+      expect(second.id).not.toBe(first.id)
+      expect(ptys.map(pty => pty.options.env.CLAUDE_CONFIG_DIR)).toEqual([work, personal])
+      expect(ptys.map(pty => pty.options.env.CLAUDE_SECURESTORAGE_CONFIG_DIR)).toEqual([undefined, undefined])
+      expect(ptys.map(pty => pty.options.env.ANTHROPIC_API_KEY)).toEqual([undefined, undefined])
+      expect(shells.claudeProfileOf(second.id)).toBe('personal')
+      expect(spawn.mock.calls[0][1].at(-1)).toContain('EZSHELL_CLAUDE_PROFILE_ROOT')
+      expect(() => shells.open({ agent: 'claude', claudeProfileId: 'unknown' })).toThrow(/계정을 찾지/)
+      shells.open({ agent: 'claude' })
+      expect(ptys[2].options.env.CLAUDE_CONFIG_DIR).toBe('existing')
+    } finally { shells.closeAll() }
+  })
+
   it.skipIf(process.platform !== 'win32')('keeps a verified launch directory through adoption, shell replacement, and restoration', async () => {
     const root = mkdtempSync(join(realpathSync(tmpdir()), 'ezshell-cwd-'))
     const original = join(root, 'actual')

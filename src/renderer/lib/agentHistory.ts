@@ -14,7 +14,7 @@ export const AGENT_LABELS: Record<LocalAgent, string> = { claude: 'Claude', code
 
 function matchesQuery(session: AgentHistorySession, words: readonly string[]): boolean {
   if (!words.length) return true
-  const text = [session.title, session.preview, session.cwd, session.branch, session.model, AGENT_LABELS[session.agent]]
+  const text = [session.title, session.preview, session.cwd, session.branch, session.model, session.claudeProfileName, AGENT_LABELS[session.agent]]
     .filter(Boolean).join('\n').toLowerCase()
   return words.every(word => text.includes(word))
 }

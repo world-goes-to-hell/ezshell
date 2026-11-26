@@ -13,7 +13,7 @@ import type { RestoreAgent, RestoreTab } from './restoreTabs'
 import { useAgentMessagesStore } from '../components/Terminal/AgentMessages'
 
 /** The agent history key main resumes by */
-export const historyKey = (agent: RestoreAgent & { sessionId: string }) => `${agent.agent}:${agent.sessionId}`
+export const historyKey = (agent: RestoreAgent & { sessionId: string }) => [agent.agent, agent.claudeProfileId, agent.sessionId].filter(Boolean).join(':')
 
 /**
  * For each pane, its agent: the session reported in its usage when there is one, otherwise the agent
@@ -25,39 +25,43 @@ export function agentsOfPanes(
   byShell: ReadonlyMap<string, AgentUsage>,
   kinds: ReadonlyMap<string, LocalAgent> = new Map(),
   /** The shell's pane shows its agent as a chat now */
-  isChat: (shell: string) => boolean = () => false
+  isChat: (shell: string) => boolean = () => false,
+  profiles: ReadonlyMap<string, string> = new Map()
 ): RestoreAgent[] {
   return panes.flatMap((pane): RestoreAgent[] => {
     const shell = shellOf(pane)
     if (!shell) return []
     const usage = byShell.get(shell)
     const chat = isChat(shell) ? { chat: true as const } : {}
-    if (usage?.sessionId) return [{ pane, agent: usage.agent, sessionId: usage.sessionId, ...chat }]
     const agent = usage?.agent ?? kinds.get(shell)
-    return agent ? [{ pane, agent, ...chat }] : []
+    const claudeProfileId = agent === 'claude' ? profiles.get(shell) : undefined
+    return agent ? [{ pane, agent, ...(usage?.sessionId && { sessionId: usage.sessionId }), ...chat,
+      ...(claudeProfileId && { claudeProfileId }) }] : []
   })
 }
 
 export function agentsOfLocalTab(
   tabId: string, info: TerminalInfo | undefined, byShell: ReadonlyMap<string, AgentUsage>,
-  kinds?: ReadonlyMap<string, LocalAgent>, isChat?: (shell: string) => boolean
+  kinds?: ReadonlyMap<string, LocalAgent>, isChat?: (shell: string) => boolean, profiles?: ReadonlyMap<string, string>
 ): RestoreAgent[] {
   const local = info?.local
   if (!local) return []
   const panes = isSplitTree(info.splitTree) && info.splitTree ? paneIds(info.splitTree) : [MAIN_PANE]
-  return agentsOfPanes(panes, pane => (pane === MAIN_PANE ? local.shellId ?? tabId : getLocalPaneShellId(tabId, pane)), byShell, kinds, isChat)
+  return agentsOfPanes(panes, pane => (pane === MAIN_PANE ? local.shellId ?? tabId : getLocalPaneShellId(tabId, pane)), byShell, kinds, isChat, profiles)
 }
 
 /** The agents running in local shells (shell id → kind), as the message list knows them */
 export const agentKindsByShell = (): Map<string, LocalAgent> => new Map(useAgentMessagesStore.getState().snapshot.agents
   .flatMap(({ active, shellId, kind }) => active && shellId && (kind === 'claude' || kind === 'codex') ? [[shellId, kind] as const] : []))
 
-type OpenLocal = (options: { cwd?: string; workspaceLabel?: string; agent?: LocalAgent; resume?: string; restoring?: true }) => Promise<string | null>
+type OpenLocal = (options: { cwd?: string; workspaceLabel?: string; agent?: LocalAgent; resume?: string; restoring?: true; claudeProfileId?: string }) => Promise<string | null>
 
 /** How a pane's agent starts again: its conversation, or the same agent fresh */
-const startOf = (agent: RestoreAgent): PaneStart => (agent.sessionId
-  ? { agent: agent.agent, resume: historyKey({ ...agent, sessionId: agent.sessionId }) }
-  : { agent: agent.agent })
+const startOf = (agent: RestoreAgent, resume = true): PaneStart => ({
+  agent: agent.agent,
+  ...(agent.claudeProfileId && { claudeProfileId: agent.claudeProfileId }),
+  ...(resume && agent.sessionId && { resume: historyKey({ ...agent, sessionId: agent.sessionId }) })
+})
 
 /**
  * Opens a recorded local tab: its main pane resumes its agent's conversation (or starts that agent
@@ -75,7 +79,7 @@ export async function openLocalWithAgents(
   const base = { cwd: tab.cwd, workspaceLabel: tab.workspaceLabel, ...launchPolicy }
   let id: string | null = null
   if (main?.sessionId) id = await open({ ...base, ...startOf(main) })
-  if (!id && main) id = await open({ ...base, agent: main.agent })
+  if (!id && main) id = await open({ ...base, ...startOf(main, false) })
   if (!id) id = await open(base)
   if (id) {
     for (const agent of tab.agents ?? []) if (agent.pane !== MAIN_PANE) queue(id, agent.pane as PaneId, { ...startOf(agent), ...launchPolicy })

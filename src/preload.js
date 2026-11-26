@@ -167,6 +167,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localList: (dirPath) => ipcRenderer.invoke('local-list', { dirPath }),
   // Local terminal tabs (shells of this PC)
   localShellOpen: (options) => ipcRenderer.invoke('local-shell-open', options),
+  claudeProfilesList: () => ipcRenderer.invoke('claude-profiles-list'),
+  claudeProfileSave: (request) => ipcRenderer.invoke('claude-profile-save', request),
+  onLocalAgentRequestOpened: (callback) => {
+    const listener = (_event, opened) => callback(opened)
+    ipcRenderer.on('local-agent-request-opened', listener)
+    return () => ipcRenderer.removeListener('local-agent-request-opened', listener)
+  },
   runtimesList: () => ipcRenderer.invoke('runtimes-list'),
   runtimesAvailable: (vendor, feature) => ipcRenderer.invoke('runtimes-available', vendor, feature),
   runtimesInstall: (vendor, feature) => ipcRenderer.invoke('runtimes-install', vendor, feature),

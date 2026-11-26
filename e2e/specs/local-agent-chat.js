@@ -918,6 +918,23 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('once the screen closes the pane is a chat again', await until(`!!${cover(0)} && !document.querySelector('.agent-screen-return')`, 8000))
   await until(`document.activeElement === ${cover(0)}?.querySelector('.agent-chat-input')`, 3000)
 
+  await setChatDraft('/login')
+  await js(`${cover(0)}.querySelector('.agent-chat-send').click()`)
+  check('Claude login hands off to the terminal even with the old composer painted', await until(`
+    !${cover(0)} && ${pane(0)}.querySelector('.agent-screen-return')?.textContent.includes('Claude 로그인')
+  `, 8000))
+  fs.writeFileSync(file('claude-1-screen'), [
+    '────────────', '❯ ', '────────────', '? for shortcuts', 'Login', '',
+    '  Logged in as test@example.test', '  ✓ Login successful. Press Enter to continue'
+  ].join('\r\n'))
+  check('the login confirmation asks for Enter and waits for the user', await until(`
+    ${pane(0)}.querySelector('.agent-screen-return')?.textContent.includes('Enter를 눌러')
+  `, 8000) && !read('claude-1-login-closed'))
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+  check('one Enter completes login and returns focus to chat', await waitFor(() => read('claude-1-login-closed') === 'confirmed') &&
+    await until(`!!${composer(0)} && document.activeElement === ${composer(0)} && !${pane(0)}.querySelector('.agent-screen-return')`, 8000))
+
   // 2026-11-26 user report: a screen the CLI opened by itself ("Teach auto mode about your environment?")
   // stood in the terminal while the chat showed nothing. It goes to the terminal too, and back once it closes
   fs.writeFileSync(path.join(profile, 'claude-1-screen'), [
@@ -1830,6 +1847,74 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
   check('Esc closes Codex /model and restores the chat composer', await waitFor(() => read(codexId + '-screen-closed') === 'x') &&
     await until(`!!${composer(0)} && document.activeElement === ${composer(0)} && !document.querySelector('.agent-screen-return')`, 8000))
+
+  await js("window.dispatchEvent(new CustomEvent('ezshell:open-settings', { detail: { tab: 'claude-accounts' } }))")
+  const profileInput = "document.getElementById('claude-profile-name')"
+  if (!await until(`!!${profileInput}`, 5000)) throw new Error('Claude account settings did not open')
+  for (const name of ['업무 테스트', '개인 테스트']) {
+    await click(...await center(profileInput))
+    await send('Input.insertText', { text: name })
+    await js(`${profileInput}.form.requestSubmit()`)
+    if (!await until(`!!document.querySelector(${JSON.stringify(`[aria-label="${name} 열기"]`)})`, 5000)) {
+      throw new Error(`Claude account was not created: ${name}`)
+    }
+  }
+  const profiles = await js('window.electronAPI.claudeProfilesList().then(result => result.profiles)')
+  const workProfile = profiles.find(item => item.name === '업무 테스트')
+  const personalProfile = profiles.find(item => item.name === '개인 테스트')
+  const agentForProfile = item => js(`window.electronAPI.agentMessagesSnapshot().then(state =>
+    state.agents.find(agent => agent.active && agent.claudeProfileId === ${JSON.stringify(item.id)}))`)
+  const showProfileChat = async (agent) => {
+    const element = `document.querySelector('[data-local-shell-id="${agent.shellId}"]')`
+    if (!await until(`${element}?.querySelector('.xterm-helper-textarea')`, 5000)) throw new Error('Claude terminal did not open')
+    await js(`${element}.querySelector('.xterm-helper-textarea').focus()`)
+    await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
+    if (!await until(`!!${element}?.querySelector('.agent-chat-profile')`, 5000)) throw new Error('Claude profile chat did not open')
+    return `${element}.querySelector('.agent-chat-profile')`
+  }
+  const pickProfile = async (trigger, name) => {
+    await click(...await center(trigger))
+    const option = `[...document.querySelectorAll('.new-tab-menu [role="menuitem"]')].find(item => item.textContent.trim() === ${JSON.stringify(name)})`
+    if (!await until(`!!${option}`, 5000)) throw new Error(`Claude account menu option missing: ${name}`)
+    await click(...await center(option))
+  }
+  await click(...await center('document.querySelector(\'[aria-label="업무 테스트 열기"]\')'))
+  const workAgent = await waitFor(() => agentForProfile(workProfile))
+  if (!workAgent) throw new Error('Work Claude profile failed to start')
+  const workButton = await showProfileChat(workAgent)
+  check('a chat shows the Claude account it started with', (await js(`${workButton}.textContent`)).includes(workProfile.name))
+  await pickProfile(workButton, personalProfile.name)
+  const personalAgent = await waitFor(() => agentForProfile(personalProfile))
+  if (!personalAgent) throw new Error('Personal Claude profile failed to start')
+  const privateButton = await showProfileChat(personalAgent)
+  for (const [account, agent] of [[workProfile, workAgent], [personalProfile, personalAgent]]) {
+    const root = path.join(profile, 'claude-profiles', account.id)
+    const actual = await inAgent(agent.id, 'echo %CLAUDE_CONFIG_DIR%')
+    check(`Claude launches with the selected config directory (${account.name})`, actual.stdout.trim() === root)
+    const transcripts = path.join(root, 'projects', 'test')
+    fs.mkdirSync(transcripts, { recursive: true })
+    fs.writeFileSync(path.join(transcripts, `${SESSIONS[0]}.jsonl`), line({
+      type: 'user', cwd: agent.cwd, message: { content: account.name + ' 대화' }
+    }))
+  }
+  await pickProfile(privateButton, workProfile.name)
+  check('switching back focuses the existing Claude chat', await until(`
+    !!${workButton} && ${workButton}.closest('.local-terminal-tab') &&
+    getComputedStyle(${workButton}.closest('.local-terminal-tab')).visibility !== 'hidden'
+  `, 5000) && (await agentForProfile(workProfile)).shellId === workAgent.shellId)
+  const resumeKey = `claude:${workProfile.id}:${SESSIONS[0]}`
+  const history = await js(`window.electronAPI.agentHistoryList(${JSON.stringify(workAgent.shellId)})`)
+  check('the history distinguishes both conversations with the same session UUID', history.sessions?.filter(session =>
+    session.id === SESSIONS[0] && [workProfile.id, personalProfile.id].includes(session.claudeProfileId)).length === 2)
+  const resumed = await js(`window.electronAPI.localShellOpen({
+    cols: 80, rows: 24, resume: ${JSON.stringify(resumeKey)}, claudeProfileId: ${JSON.stringify(personalProfile.id)}
+  })`)
+  const resumedAgent = resumed.success && await waitFor(() => js(`window.electronAPI.agentMessagesSnapshot().then(state =>
+    state.agents.find(agent => agent.active && agent.shellId === ${JSON.stringify(resumed.id)}))`))
+  check('resume uses the transcript owner and passes the session ID to Claude', resumedAgent?.claudeProfileId === workProfile.id &&
+    await waitFor(() => read(resumedAgent.id + '-argv').includes(SESSIONS[0])))
+  if (resumed.success) await js(`window.electronAPI.localShellClose(${JSON.stringify(resumed.id)})`)
 
   // Locking drops every conversation
   await js(`document.activeElement?.blur(); document.body.focus()`)

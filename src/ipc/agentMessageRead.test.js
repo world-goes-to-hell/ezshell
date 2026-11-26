@@ -27,8 +27,7 @@ afterEach(async () => {
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-async function agent(kind, shellId) {
-  const registration = messages.register(kind, shellId, root, {})
+async function agent(kind, shellId, registration = messages.register(kind, shellId, root, {})) {
   const { env } = registration
   const client = new Client({ name: 'ezshell-test', version: '1' })
   clients.push(client)
@@ -105,6 +104,30 @@ describe('agent inspection and escalation', () => {
 })
 
 describe('read marks', () => {
+  it('holds a new session’s first request until MCP connects, scoped to its registered shell', async () => {
+    let locked = false
+    messages = createAgentMessages({
+      notify: () => {}, isLocked: () => locked, onInboxChanged: shell => woken.push(shell)
+    })
+    await messages.ready()
+    const registration = messages.register('claude', 'local:1', root, {})
+    const request = { to: registration.env.EZSHELL_AGENT_ID, text: '첫 요청' }
+    expect(() => messages.sendAsUser(request)).toThrow(/실행 중인/)
+    expect(() => messages.sendAsUser({ ...request, to: 'claude-999' })).toThrow(/실행 중인/)
+    expect(() => messages.sendToNewSession('local:2', request)).toThrow(/새로 연/)
+    locked = true
+    expect(() => messages.sendToNewSession('local:1', request)).toThrow(/새로 연/)
+    locked = false
+    const { id } = messages.sendToNewSession('local:1', request)
+    expect(messages.unreadFor('local:1')).toEqual([])
+    expect(woken).toEqual([])
+
+    const worker = await agent('claude', 'local:1', registration)
+    expect(woken).toEqual(['local:1'])
+    expect(messages.unreadFor('local:1')).toEqual([id])
+    expect((await worker.call('read_inbox')).messages).toMatchObject([{ id, from: 'user', ...request }])
+  }, 15000)
+
   it('lists effective roles, keeps agent changes under the user override, and clears the override', async () => {
     const { lead, worker } = await pair()
     expect((await worker.listTools()).tools.map(tool => tool.name)).toContain('set_role')

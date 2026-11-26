@@ -53,7 +53,7 @@ function resolveShots(list, earlierCount, imageSize) {
 
 function createQuickCapture({
   desktopCapturer, clipboard, ClipboardItem, BrowserWindow, getDisplay, isAvailable, nativeImage = null,
-  listAgents = () => [], repoFolders = async () => [], storeAttachment, sendCapture, focusWindow = () => {},
+  listAgents = () => [], repoFolders = async () => [], storeAttachment, sendCapture, sendNewCapture, focusWindow = () => {},
   onSent = () => {}, onError = () => {}, delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 }) {
   let active = null
@@ -271,25 +271,31 @@ function createQuickCapture({
           outcome = 'done'
           return true
         }
-        if (capture.action !== 'send') return false
+        const newSession = capture.action === 'send-new'
+        if (!newSession && capture.action !== 'send') return false
         const agent = targets.get(capture.agentId)
         let error = '선택한 에이전트를 찾을 수 없습니다.'
-        if (agent) {
+        if (agent || newSession) {
           try {
             // Reuse the same files if the user retries. Keep them available to the CLI as long as
             // other chat attachments, including if the input was left in its composer.
             const key = JSON.stringify(shots.map(shot => [shot.source, shot.region, shot.image]))
-            const result = await wait(sendCapture(agent, capture.comment, () => {
+            const attachments = () => {
               if (stored?.key !== key) stored = { key, attachments: shots.map(shot => storeAttachment(pictureOf(shot))) }
               return stored.attachments
-            }, available))
+            }
+            const folder = projects.find(project => project.folder === capture.folder)?.folder
+            const result = await wait(newSession
+              ? sendNewCapture(capture.kind, folder, win, available, capture.comment, attachments)
+              : sendCapture(agent, capture.comment, attachments, available))
             if (!available()) return false
             if (result.ok) {
-              onSent(agent)
+              if (newSession) onSent({ id: result.agentId }, true)
+              else onSent(agent)
               outcome = 'done'
               return true
             }
-            error = result.error
+            error = result.cancelled ? '' : result.error
           } catch {
             error = '캡처와 코멘트를 보내지 못했습니다. 다시 시도해 주세요.'
           }

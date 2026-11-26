@@ -43,6 +43,7 @@ import { useAskQuestionStore } from '../../stores/askQuestionStore'
 import { allSlashCommands, draftFor, isSlashCommand, matchSlashCommands, type SlashCommand } from '../../lib/slashCommands'
 import { useAgentScreenReturnStore } from '../../stores/agentScreenReturnStore'
 import { useAgentScreenWatch } from './useAgentScreenWatch'
+import { ClaudeProfileMenu } from './ClaudeProfileMenu'
 import type { ChatAppearance } from '../../themes/chatThemes'
 import './AgentChat.css'
 import './AgentChatThemes.css'
@@ -977,7 +978,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
       useAgentChatStore.getState().settleCommand(shellId, sendId, { state: result.state, output: result.output, mcpSummary: result.mcpSummary })
     }
     if (result.state === 'screen' && useAgentChatStore.getState().chats.has(shellId)) {
-      useAgentScreenReturnStore.getState().begin(shellId)
+      useAgentScreenReturnStore.getState().begin(shellId, result.screen === 'claude-login')
       onShowTerminal()
     }
   }
@@ -1296,6 +1297,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
             {unreadMail > 0 && <span className="agent-mail-count" aria-hidden="true">{unreadMail > 99 ? '99+' : unreadMail}</span>}
           </span>
         )}
+        {kind === 'claude' && <ClaudeProfileMenu shellId={shellId} profileId={agent?.claudeProfileId} />}
         <AgentChatThemePicker toolbar menuStyle={appearance?.style} />
       </header>
       {usageActions && !subagent && kind === 'codex' && createPortal(
