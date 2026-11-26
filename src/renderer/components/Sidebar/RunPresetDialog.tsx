@@ -51,6 +51,7 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
   // The JDK the project's build asks for (pom.xml, Gradle, Spring Boot 3), when known
   const [required, setRequired] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [folderError, setFolderError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const set = (patch: Partial<PresetDraft>) => setDraft(current => ({ ...current, ...patch }))
   // A new preset's name follows what was chosen until the user types in it (an edited preset keeps its own)
@@ -58,6 +59,17 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
   // 고급 opens by itself when the preset has something set in it
   const [advancedOpen, setAdvancedOpen] = useState(() => hasAdvancedValues(draft))
   const contentRef = useRef<HTMLDivElement>(null)
+  const canChooseFolder = typeof window.electronAPI.runPresetChooseFolder === 'function'
+  // A folder dialog at the worktree; main checks the pick is inside it and gives it back relative
+  const chooseFolder = async () => {
+    const choose = window.electronAPI.runPresetChooseFolder
+    if (!choose) return
+    try {
+      const result = await choose(folder, draft.relative)
+      if (result?.ok && result.relative) { setFolderError(null); set({ relative: result.relative }) }
+      else if (result?.ok === false && !result.cancelled) setFolderError(result.error || '폴더를 고르지 못했습니다.')
+    } catch { setFolderError('폴더를 고르지 못했습니다.') }
+  }
 
   // The project's top folders, to pick from (a deeper folder can be typed)
   useEffect(() => {
@@ -207,11 +219,15 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
               <div className="run-preset-folder-input">
                 <RiFolder3Line size={13} aria-hidden="true" />
                 <input id="run-preset-folder" list="run-preset-folders" value={draft.relative} placeholder=". (프로젝트 폴더)"
-                  onChange={event => set({ relative: event.target.value })} spellCheck={false} autoComplete="off" />
+                  onChange={event => { setFolderError(null); set({ relative: event.target.value }) }} spellCheck={false} autoComplete="off" />
                 <datalist id="run-preset-folders">
                   {folders.map(name => <option key={name} value={name} />)}
                 </datalist>
+                {canChooseFolder && (
+                  <button type="button" className="modal-btn run-preset-folder-browse" onClick={() => void chooseFolder()}>찾아보기</button>
+                )}
               </div>
+              {folderError && <small className="run-preset-warn" role="alert">{folderError}</small>}
             </div>
             {draft.kind === 'task' && (
               <div className="form-group" role="radiogroup" aria-label="찾은 실행 방법">

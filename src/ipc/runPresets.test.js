@@ -523,6 +523,37 @@ describe('saved project runs', () => {
     expect(approval).toEqual({ needsConfirm: { command: expect.stringContaining(`Tomcat 컨텍스트 설정 파일\n${reference}`) } })
   })
 
+  it('fills the folder from the main-frame folder dialog, only with a folder inside the worktree', async () => {
+    const f = await fixture()
+    const api = path.join(f.folder, 'backend', 'api')
+    await mkdir(api, { recursive: true })
+    await mkdir(path.join(f.folder, '.git', 'hooks'), { recursive: true })
+    await symlink(f.outside, path.join(f.folder, 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+    const handlers = new Map()
+    let chosen = null
+    const pickFolder = vi.fn(async () => chosen)
+    registerRunPresetIpc({ ipcMain: { handle: (key, handle) => handlers.set(key, handle) }, controller: f.controller,
+      fromMainWindow: event => event.sender === f.event.sender, isLocked: () => f.state.locked, chooseProjectFolder: pickFolder })
+    const choose = (relative, event = f.event) => handlers.get('run-preset-choose-folder')(event, f.folder, relative)
+
+    expect(await choose('.', { ...f.event, senderFrame: {} })).toMatchObject({ ok: false })
+    expect(pickFolder).not.toHaveBeenCalled()
+    expect(await choose('backend')).toEqual({ ok: false, cancelled: true })
+    // The dialog opens at the folder already typed, or at the worktree when that is not a folder inside it
+    expect(pickFolder).toHaveBeenLastCalledWith(path.join(f.folder, 'backend'))
+    await choose('../second-project')
+    expect(pickFolder).toHaveBeenLastCalledWith(f.folder)
+
+    chosen = api
+    expect(await choose('.')).toEqual({ ok: true, relative: 'backend/api' })
+    chosen = f.folder
+    expect(await choose('.')).toEqual({ ok: true, relative: '.' })
+    for (const outside of [f.outside, path.join(f.folder, 'linked'), path.join(f.folder, '.git', 'hooks'), path.join(f.folder, 'missing')]) {
+      chosen = outside
+      expect(await choose('.')).toMatchObject({ ok: false, error: expect.any(String) })
+    }
+  })
+
   it('checks names, env, relative paths and stored data', async () => {
     const f = await fixture()
     await symlink(f.outside, path.join(f.folder, 'outside'), process.platform === 'win32' ? 'junction' : 'dir')

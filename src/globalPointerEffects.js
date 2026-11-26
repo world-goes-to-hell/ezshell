@@ -9,6 +9,10 @@ const MOVE_SAMPLE_MS = 16
 const IDLE_SAMPLE_MS = 80
 const IDLE_AFTER_MS = 250
 const CHANNEL = 'pointer-effects-frame'
+// Windows puts a topmost window that comes later (the taskbar after a click, another app's always-on-top
+// window) above the overlay, and the overlay never takes focus to come back: it is raised again this often
+// while the pointer moves over it, and on every press
+const RAISE_MS = 1000
 
 function checkPointerEffects(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
@@ -46,9 +50,19 @@ function createGlobalPointerEffects({ BrowserWindow, getScreen, preload, loadPag
   let lastPoint = null
   let lastMoveAt = 0
   let lastSent = null
+  // The choices to bring back after the app is unlocked (suspend / resume); stop() forgets them
+  let wanted = null
 
   function send(view, packet) {
     if (view?.ready && !view.win.isDestroyed()) view.win.webContents.send(CHANNEL, packet)
+  }
+
+  // HWND_TOPMOST again: placed at the top of the topmost windows (Electron sets it only when the level changes)
+  function raise(view, at = now()) {
+    if (!view || view.win.isDestroyed()) return
+    view.raisedAt = at
+    view.win.setAlwaysOnTop(false)
+    view.win.setAlwaysOnTop(true, 'screen-saver')
   }
 
   function paint(view) {
@@ -70,9 +84,10 @@ function createGlobalPointerEffects({ BrowserWindow, getScreen, preload, loadPag
       ...display.bounds, show: false, frame: false, transparent: true, backgroundColor: '#00000000',
       focusable: false, skipTaskbar: true, type: 'toolbar', resizable: false, movable: false,
       fullscreenable: false, hasShadow: false, paintWhenInitiallyHidden: false,
-      webPreferences: { preload, contextIsolation: true, sandbox: true, nodeIntegration: false }
+      // Chromium can take a transparent, click-through topmost window for occluded and stop its frames
+      webPreferences: { preload, contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false }
     })
-    const view = { win, ready: false, id: display.id, bounds: display.bounds }
+    const view = { win, ready: false, id: display.id, bounds: display.bounds, raisedAt: 0 }
     views.set(display.id, view)
     effectWindows.add(win)
     win.setAlwaysOnTop(true, 'screen-saver')
@@ -143,7 +158,9 @@ function createGlobalPointerEffects({ BrowserWindow, getScreen, preload, loadPag
     const view = target && views.get(target.id)
     if (!view?.ready) return
     const { x, y } = target
-    if (hasMove(config) && (!lastSent || lastSent.x !== x || lastSent.y !== y)) send(view, { type: 'move', x, y })
+    const moved = !lastSent || lastSent.x !== x || lastSent.y !== y
+    if (pressed || (moved && now() - view.raisedAt >= RAISE_MS)) raise(view)
+    if (hasMove(config) && moved) send(view, { type: 'move', x, y })
     lastSent = target
     if (pressed) send(view, { type: 'press', x, y })
   }
@@ -177,12 +194,21 @@ function createGlobalPointerEffects({ BrowserWindow, getScreen, preload, loadPag
         view.win.hide()
       }
     } else {
-      for (const view of views.values()) if (view.ready) view.win.showInactive()
+      for (const view of views.values()) {
+        if (!view.ready) continue
+        view.win.showInactive()
+        raise(view)
+      }
     }
     updatePolling()
   }
 
   function stop() {
+    wanted = null
+    halt()
+  }
+
+  function halt() {
     if (!config) return
     config = null
     paused = true
@@ -198,8 +224,9 @@ function createGlobalPointerEffects({ BrowserWindow, getScreen, preload, loadPag
     const next = checkPointerEffects(request)
     if (!next || platform !== 'win32') return false
     if (!allowNative) return true
+    wanted = next
     if (!next.enabled || (!hasMove(next) && next.click === 'none')) {
-      stop()
+      halt()
       return true
     }
     const starting = !config
@@ -219,6 +246,9 @@ function createGlobalPointerEffects({ BrowserWindow, getScreen, preload, loadPag
 
   return {
     configure, onNotificationState, stop,
+    /** The app locked: no effects until it is unlocked, then the same choices (the window sends them only on change) */
+    suspend: halt,
+    resume() { if (wanted && !config) configure(wanted) },
     onPress() { if (config && !paused && config.click !== 'none') sample(true) }
   }
 }

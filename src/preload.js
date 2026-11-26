@@ -187,6 +187,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   localProjectInspect: (folder) => ipcRenderer.invoke('local-project-inspect', folder),
   localProjectDevelopmentTasks: (folder) => ipcRenderer.invoke('local-project-development-tasks', folder),
+  // The sidebar's 파일 탐색기로 열기 for a project or worktree folder (main checks it is a folder of this PC)
+  localProjectOpenFolder: (folder) => ipcRenderer.invoke('local-project-open-folder', folder),
   localProjectDevelopmentStart: (options) => ipcRenderer.invoke('local-project-development-start', options),
   localProjectDevelopmentChange: (options) => ipcRenderer.invoke('local-project-development-change', options),
   runPresetsList: (folder) => ipcRenderer.invoke('run-presets-list', folder),
@@ -196,6 +198,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runPresetEclipseImport: (folder, relative) => ipcRenderer.invoke('run-preset-eclipse-import', folder, relative),
   runPresetWorkspaceServers: folder => ipcRenderer.invoke('run-preset-workspace-servers', folder),
   runPresetChooseContextXml: folder => ipcRenderer.invoke('run-preset-choose-context-xml', folder),
+  // The run preset's folder from a folder dialog at the worktree; main returns it relative, checked inside the worktree
+  runPresetChooseFolder: (folder, relative) => ipcRenderer.invoke('run-preset-choose-folder', folder, relative),
   runPresetsSave: (folder, preset) => ipcRenderer.invoke('run-presets-save', folder, preset),
   runPresetsDelete: (folder, id) => ipcRenderer.invoke('run-presets-delete', folder, id),
   runPresetsReorder: (folder, ids) => ipcRenderer.invoke('run-presets-reorder', folder, ids),

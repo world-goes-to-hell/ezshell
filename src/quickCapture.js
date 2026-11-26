@@ -12,6 +12,14 @@ const CHIP_HIDE_MS = 150
 const CHIP_SIZE = { width: 440, height: 48 }
 const TOO_BIG_TO_STACK = '캡처가 너무 커서 한 장으로 합쳐 복사할 수 없습니다. 바로작업으로 보내거나 캡처 수를 줄여 주세요.'
 
+// A folder name alone is often generic (backend, frontend), so the parent folder comes with it: "shop / backend".
+function projectName(folder) {
+  const name = path.basename(folder)
+  if (!name) return folder
+  const parent = path.basename(path.dirname(folder))
+  return parent ? `${parent} / ${name}` : name
+}
+
 async function captureProjects(agents, repoFolders) {
   const folders = new Map()
   const projects = new Map()
@@ -26,7 +34,7 @@ async function captureProjects(agents, repoFolders) {
   agents.forEach((agent, index) => {
     const folder = locations[index]
     const key = keyOf(folder)
-    if (!projects.has(key)) projects.set(key, { folder, name: path.basename(folder) || folder, agents: [] })
+    if (!projects.has(key)) projects.set(key, { folder, name: projectName(folder), agents: [] })
     projects.get(key).agents.push(agent)
   })
   return [...projects.values()].sort((a, b) => a.name.localeCompare(b.name, 'ko') || a.folder.localeCompare(b.folder, 'ko'))

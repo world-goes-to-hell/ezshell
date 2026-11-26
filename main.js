@@ -1023,6 +1023,10 @@ const runPresetIpc = registerRunPresetIpc({
     const result = await dialog.showOpenDialog(mainWindow, { title: '이클립스 워크스페이스 선택', defaultPath, properties: ['openDirectory'] });
     return result.canceled ? null : result.filePaths[0];
   },
+  chooseProjectFolder: async defaultPath => {
+    const result = await dialog.showOpenDialog(mainWindow, { title: '실행할 폴더 선택', defaultPath, properties: ['openDirectory'] });
+    return result.canceled ? null : result.filePaths[0];
+  },
   chooseContextFile: async defaultPath => {
     const result = await dialog.showOpenDialog(mainWindow, { title: 'Tomcat 컨텍스트 XML 선택', defaultPath,
       properties: ['openFile'], filters: [{ name: 'XML', extensions: ['xml'] }] });
@@ -1034,7 +1038,8 @@ const localProjectIpc = require('./src/ipc/localProjects.js').registerLocalProje
   ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit,
   gitCommit: require('./src/localFiles/gitCommit.js'),
   openDevelopmentTask: (task, size, allowed) => getLocalShells().openDevelopmentTask(task, size, allowed),
-  changeDevelopmentTask: (id, taskId, action, allowed) => runPresets.changeFromShell(id, taskId, action, allowed)
+  changeDevelopmentTask: (id, taskId, action, allowed) => runPresets.changeFromShell(id, taskId, action, allowed),
+  openFolder: folder => shell.openPath(folder)
 });
 // Past Claude Code and Codex sessions of this PC, for the right panel (src/agentHistory)
 const agentHistory = require('./src/agentHistory/history.js').createAgentHistory();
@@ -1338,6 +1343,7 @@ ipcMain.handle('setup-master-password', async (event, { password }) => {
   currentMasterPassword = password;
   isAppLocked = false;
   restoreAgentHandoff();
+  globalPointerEffects.resume();
   runPresets.resumeReloads();
   localShells?.wakeInboxes();
   void remoteAccess.start();
@@ -1360,6 +1366,7 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
     currentMasterPassword = password;
     isAppLocked = false;
     restoreAgentHandoff();
+  globalPointerEffects.resume();
     runPresets.resumeReloads();
     localShells?.wakeInboxes();
     resealSessionsFile();
@@ -1384,7 +1391,8 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   runPresets.cancelBatches();
   runPresets.suspendReloads();
   agentMessages.invalidateFreshRoleChecks();
-  globalPointerEffects.stop();
+  // Back with the same choices after the unlock (restoreAgentHandoff's places): the window sends them only on change
+  globalPointerEffects.suspend();
   shortcutRecorder = null;
   globalDoubleTab.setEnabled(false);
   workOverview.cancel();
@@ -1483,7 +1491,8 @@ ipcMain.handle('reset-master-password', async () => {
   runPresets.cancelBatches();
   runPresets.suspendReloads();
   agentMessages.invalidateFreshRoleChecks();
-  globalPointerEffects.stop();
+  // Back with the same choices after the unlock (restoreAgentHandoff's places): the window sends them only on change
+  globalPointerEffects.suspend();
   shortcutRecorder = null;
   globalDoubleTab.setEnabled(false);
   workOverview.cancel();

@@ -2,7 +2,7 @@
 
 작성: 2026-11-26 (사용자 요청: "앱 업데이트 받을때 작업중인 세션 중단되지 않도록 하는 기능")
 
-상태: 1단계 구현 끝 (2026-11-26), 사용자 PC 의 실제 업데이트 시험 남음. claude-1(개발A)과 claude-2 가 나눠서 했다.
+상태: 1단계 구현 끝, 2.37.0 으로 배포 (2026-11-26, `f639ec0`). 사용자 PC 의 실제 업데이트 시험은 2.37.0 → 2.37.1 때 한다. claude-1(개발A)과 claude-2 가 나눠서 했다.
 
 ## 지금
 업데이트를 설치하기 직전에 로컬 셸의 프로세스 트리를 모두 끝낸다 (`closeAll({ killTrees: true })`, `docs/architecture/app-updates.md`). 다시 켜면 탭을 다시 열고 Claude·Codex 는 `--resume` 으로 대화만 이어 간다. 돌던 명령(개발 서버, 빌드, 에이전트가 처리하던 차례)과 화면 내용은 잃는다.
@@ -104,4 +104,5 @@
 - [x] 0단계 B: 재시작 때 에이전트 연결 조사 (코드 조사. 실제 CLI 확인 두 가지 남음)
 - [x] 1단계 A (claude-1, 커밋 전). `src/sessionHost/`(`host.js` 보관 프로세스, `client.js` 앱 쪽 연결과 node-pty 모양의 `spawn`, `runtimeCopy.js` 복사본), `localShell.js` 의 `host`·`adopt`·`handOver`, `main.js` 의 시작·종료·`beforeUpdateRestart`, `updates.js` 가 설치 전에 keep 을 기다림, 화면의 칸 배치 넘기기(`local-shell-keep-layout`)와 복원 기록의 `shellId`(되살아난 탭은 다시 열지 않음). 넘겨받은 에이전트 등록에는 `env.EZSHELL_AGENT_ID` 를 `agentsOfShell` 로 채운다(봉인된 기록이 잠금 해제 뒤에 열리므로 그때 정해짐). 시험: 단위 `sessionHost/*.test.js` 25개·`localShellHost.test.js` 5개·`restoreTabsRun.test.ts`, 화면 `local-keep-through-update`(업데이트 경로로 끝내고 다시 켜도 같은 프로세스가 계속 돌고 탭에 붙음, 강제 종료면 셸도 끝남). 패키징 확인: `release/win-unpacked` 를 복사한 가짜 설치 폴더에서 asar 안의 모듈로 복사본을 만들고(첫 복사 0.1초), 셸이 도는 동안 설치 폴더를 옮기고, 두 번째 실행이 같은 pid 의 셸을 넘겨받음 (scratchpad `host-spike/packaged.cjs`).
 - [x] 1단계 B (claude-2, 커밋 전). 번들 `out/main/agent-runtime/*.js`(electron.vite `agentRuntimePlugin`, 메시지 MCP 는 stdio 전용 `src/mcp/sdkStdio.js`), `agentMessages.js` 의 `agentRuntimePaths`·`agentRuntime` 옵션(복사본이 없으면 설치 폴더 경로), 넘겨받기 `exportHandoff`·`importHandoff`·`discardHandoff`, 되살린 셸용 `adopt(kind, shellId)`(잠금 해제 전에는 마지막 상태와 종료만 기억했다가 기록이 열리면 적용)·`adoptShell`(셸 토큰은 기록과 함께 돌아오므로 새로 발급하지 않음), 토큰은 SHA-256 해시로만 넘김, 넘겨받는 동안 요청 거절(`awaitingHandoff`), `stop({ handOver })` 는 설정 파일 폴더를 남김. 봉인·열기는 `src/ipc/agentHandoff.js`(엔드포인트는 평문, 기록은 마스터 비밀번호, 24시간). `main.js`: 생성 옵션, will-quit 의 `saveAgentHandoff`, 잠금 해제 두 곳의 `restoreAgentHandoff()`. 시험 `agentHandoff.test.js` 11개, 화면 시험 `local-agent-hooks`·`local-agent-messages` 통과(번들 경로로 훅·메시지 MCP 동작). claude-1 의 `localShell.adopt` 와 맞물림 확인. 남은 것: 실제 업데이트 시험.
-- [ ] 사용자 PC 에서 실제 업데이트 한 번
+- [x] 커밋·배포: `f639ec0`, 2.37.0 (`37c32d2`)
+- [ ] 사용자 PC 에서 실제 업데이트 한 번: 2.37.0 이 설치된 뒤 2.37.1 로 올릴 때 (2.37.0 으로 올리는 업데이트는 예전처럼 셸이 닫힌다)

@@ -11,22 +11,26 @@
   margin: 2px 6px 6px 22px;
 }
 
-.run-presets-add {
+/* A worktree without presets: a small add button on its row, shown while the row is in use (as its close) */
+.run-presets-row-add {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  height: 26px;
-  border: 1px dashed var(--border-strong, var(--border));
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
   border-radius: var(--radius-sm, 4px);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
   cursor: pointer;
+  opacity: 0;
 }
-.run-presets-add:hover,
-.run-presets-add:focus-visible { border-color: var(--accent); color: var(--text-primary); background: var(--bg-hover); }
-.run-presets-add-hint { color: var(--text-muted); }
+.local-worktree:hover > .local-worktree-row > .run-presets-row-add,
+.local-worktree:focus-within > .local-worktree-row > .run-presets-row-add { opacity: 1; }
+.run-presets-row-add:hover,
+.run-presets-row-add:focus-visible { background: var(--bg-hover); color: var(--text-primary); }
 
 .run-presets-head {
   display: flex;
@@ -289,6 +293,7 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
 }
 .run-preset-form textarea:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 .run-preset-form .run-preset-folder-input input { padding: 8px 10px; }
+.run-preset-form .run-preset-folder-browse { flex: none; min-width: 0; padding: 7px 12px; font-size: 12px; white-space: nowrap; }
 .run-preset-form .run-preset-command { padding: 8px 10px; font-size: 12px; }
 .run-preset-dialog { max-height: calc(100vh - 48px); overflow-y: auto; }
 
@@ -407,7 +412,6 @@ button.run-preset-reload-chip:focus-visible { outline: 2px solid var(--accent); 
 
 /* The place held while a card's presets load (as tall as what comes: the add button, or the head and rows) */
 .run-presets-skeleton { border-radius: var(--radius-sm, 4px); }
-.run-presets-skeleton[data-kind="add"] { height: 26px; border: 1px dashed color-mix(in srgb, var(--border) 60%, transparent); }
 .run-presets-skeleton[data-kind="head"] { height: 20px; }
 .run-presets-skeleton[data-kind="row"] { height: 26px; border: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
 

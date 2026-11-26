@@ -194,9 +194,21 @@ describe('the quick screen capture', () => {
     const tools = path.resolve('tools')
     const agents = [repo, linked, tools].map((cwd, index) => ({ id: `codex-${index + 1}`, cwd }))
     const folders = cwd => cwd === tools ? [] : [cwd, repo, linked]
+    const parent = path.basename(path.dirname(repo))
     expect(await captureProjects(agents, folders)).toEqual([
-      { folder: repo, name: 'service', agents: agents.slice(0, 2) },
-      { folder: tools, name: 'tools', agents: agents.slice(2) }
+      { folder: repo, name: `${parent} / service`, agents: agents.slice(0, 2) },
+      { folder: tools, name: `${parent} / tools`, agents: agents.slice(2) }
+    ])
+  })
+
+  it('names a project with its parent folder, so two backend folders of different projects can be told apart', async () => {
+    const shop = path.resolve('shop', 'backend')
+    const blog = path.resolve('blog', 'backend')
+    const drive = path.parse(process.cwd()).root
+    const atRoot = path.join(drive, 'service')
+    const agents = [shop, blog, atRoot, drive].map((cwd, index) => ({ id: `claude-${index + 1}`, cwd }))
+    expect((await captureProjects(agents, () => [])).map(project => project.name)).toEqual([
+      'blog / backend', drive, 'service', 'shop / backend'
     ])
   })
 
@@ -218,7 +230,7 @@ describe('the quick screen capture', () => {
       { listAgents: () => [agent], storeAttachment, sendCapture, onSent }
     )
     expect(await capture.start()).toBe(true)
-    const projects = [{ folder: agent.cwd, name: 'service', agents: [agent] }]
+    const projects = [{ folder: agent.cwd, name: `${path.basename(process.cwd())} / service`, agents: [agent] }]
     expect(windows[0].webContents.executeJavaScript).toHaveBeenCalledWith(`window.chooseCaptureTarget(${JSON.stringify(projects)})`)
     expect(windows[0].webContents.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining('다시 시도'))
     expect(sendCapture).toHaveBeenCalledTimes(2)

@@ -81,6 +81,19 @@ public static class EzShellPointer {
   [DllImport("user32.dll", SetLastError = true)] static extern bool SystemParametersInfo(uint action, uint param, IntPtr value, uint update);
   [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
   [DllImport("shell32.dll")] static extern int SHQueryUserNotificationState(out int state);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
+  [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr window);
+  [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr window, int index);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out Rect rect);
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
+  [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr window, System.Text.StringBuilder name, int size);
+  [StructLayout(LayoutKind.Sequential)] struct Rect { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)] struct MonitorInfo { public int Size; public Rect Monitor, Work; public uint Flags; }
+  static uint AppProcess;
   static readonly object OutputLock = new object();
   static bool Restore() { return SystemParametersInfo(0x57, 0, IntPtr.Zero, 0); }
   static void Write(string line) {
@@ -90,6 +103,34 @@ public static class EzShellPointer {
     }
   }
   static bool Down(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; }
+  // Windows' "busy" (2) is its guess that a full-screen app runs: any topmost window covering a monitor, the
+  // app's own effect windows too (they hid, Windows said 5, they showed again: a 2 s flicker). The guess is
+  // dropped and the foreground window is checked instead; the effect windows never take the foreground.
+  public static int Adjust(int shell, bool fullScreen) {
+    if (shell == 2) shell = 5;
+    return fullScreen && (shell == 0 || shell >= 5) ? 2 : shell;
+  }
+  // A window covering its whole monitor, other than the desktop, the taskbar, this app or a maximized window
+  public static bool FullScreenWindow(int left, int top, int right, int bottom, int monitorLeft, int monitorTop, int monitorRight, int monitorBottom,
+      bool maximized, bool captioned, string className, bool ours) {
+    if (ours || (maximized && captioned)) return false;
+    if (className == "Progman" || className == "WorkerW" || className == "Shell_TrayWnd" || className == "Shell_SecondaryTrayWnd") return false;
+    return left <= monitorLeft && top <= monitorTop && right >= monitorRight && bottom >= monitorBottom;
+  }
+  static bool ForegroundFullScreen() {
+    IntPtr window = GetForegroundWindow();
+    if (window == IntPtr.Zero || !IsWindowVisible(window) || IsIconic(window)) return false;
+    uint process;
+    GetWindowThreadProcessId(window, out process);
+    Rect rect;
+    MonitorInfo info = new MonitorInfo();
+    info.Size = Marshal.SizeOf(typeof(MonitorInfo));
+    if (!GetWindowRect(window, out rect) || !GetMonitorInfo(MonitorFromWindow(window, 2), ref info)) return false;
+    var name = new System.Text.StringBuilder(64);
+    GetClassName(window, name, name.Capacity);
+    return FullScreenWindow(rect.Left, rect.Top, rect.Right, rect.Bottom, info.Monitor.Left, info.Monitor.Top, info.Monitor.Right, info.Monitor.Bottom,
+      IsZoomed(window), (GetWindowLong(window, -16) & 0x00C00000) == 0x00C00000, name.ToString(), process == AppProcess);
+  }
   static void Watch(ManualResetEvent done) {
     var clock = Stopwatch.StartNew();
     long nextState = 0;
@@ -100,8 +141,9 @@ public static class EzShellPointer {
         if (clock.ElapsedMilliseconds >= nextState) {
           int state;
           if (SHQueryUserNotificationState(out state) != 0) state = 0;
+          state = Adjust(state, ForegroundFullScreen());
           if (state != lastState) { Write("notification " + state); lastState = state; }
-          nextState = clock.ElapsedMilliseconds + 2000;
+          nextState = clock.ElapsedMilliseconds + 1000;
         }
         bool newLeft = Down(1), newRight = Down(2);
         if (newLeft && !left) Write("press");
@@ -132,7 +174,8 @@ public static class EzShellPointer {
     }
     return "applied";
   }
-  public static void Run(string folder) {
+  public static void Run(string folder, uint app) {
+    AppProcess = app;
     bool replaced = File.Exists(Path.Combine(folder, "${MARKER}"));
     Thread watcher = null;
     ManualResetEvent done = null;
@@ -160,10 +203,11 @@ public static class EzShellPointer {
 }
 `
 
-/** The helper's PowerShell script: the C# source and the folder of the .cur files */
-function helperScript(folder) {
+/** The helper's PowerShell script: the C# source, the folder of the .cur files and this app's process (its windows are not a full-screen app) */
+function helperScript(folder, app = process.pid) {
   if (typeof folder !== 'string' || !path.isAbsolute(folder) || /[\r\n\0]/.test(folder)) throw new Error('bad pointer folder')
-  return `$ErrorActionPreference = 'Stop'\nAdd-Type -TypeDefinition @'\n${HELPER_SOURCE}\n'@\n[EzShellPointer]::Run('${folder.replace(/'/g, "''")}')\n`
+  if (!Number.isSafeInteger(app) || app <= 0 || app > 0xffffffff) throw new Error('bad app process')
+  return `$ErrorActionPreference = 'Stop'\nAdd-Type -TypeDefinition @'\n${HELPER_SOURCE}\n'@\n[EzShellPointer]::Run('${folder.replace(/'/g, "''")}', ${app})\n`
 }
 
 /**

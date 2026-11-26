@@ -183,6 +183,65 @@ describe('desktop effects windows', () => {
     effects.stop()
   })
 
+  it('comes back with the same choices after the app is locked and unlocked', () => {
+    const { effects, wins, setWatching } = setup()
+    effects.configure(config)
+    for (const win of wins) win.webContents.emit('did-finish-load')
+    effects.onNotificationState(5)
+    effects.suspend()
+    expect(wins.every(win => win.isDestroyed())).toBe(true)
+    expect(setWatching.mock.calls).toEqual([[true], [false]])
+    expect(vi.getTimerCount()).toBe(0)
+    effects.resume()
+    expect(wins).toHaveLength(4)
+    expect(setWatching.mock.calls).toEqual([[true], [false], [true]])
+    wins[2].webContents.emit('did-finish-load')
+    expect(packets(wins[2])[0]).toEqual({ type: 'config', config })
+    // A later choice is the one that comes back; turning it off, or the window going away, leaves nothing to resume
+    effects.configure({ ...config, click: 'heart' })
+    effects.suspend()
+    effects.resume()
+    wins[4].webContents.emit('did-finish-load')
+    expect(packets(wins[4])[0]).toEqual({ type: 'config', config: { ...config, click: 'heart' } })
+    effects.configure({ ...config, enabled: false })
+    effects.suspend()
+    effects.resume()
+    expect(wins.filter(win => !win.isDestroyed())).toHaveLength(0)
+    effects.configure(config)
+    effects.stop()
+    effects.resume()
+    expect(wins.filter(win => !win.isDestroyed())).toHaveLength(0)
+  })
+
+  it('keeps drawing while Windows calls the overlay occluded and puts it back on top of later topmost windows', () => {
+    const { effects, desktop, wins } = setup()
+    effects.configure(config)
+    expect(wins[0].options.webPreferences).toMatchObject({ backgroundThrottling: false, sandbox: true, contextIsolation: true })
+    for (const win of wins) win.webContents.emit('did-finish-load')
+    const raises = win => win.setAlwaysOnTop.mock.calls.filter(([on]) => on === true).length
+    const hidden = raises(wins[1])
+    // Shown again after a pause (a full-screen app, the lock screen): back on top as well
+    effects.onNotificationState(5)
+    expect(raises(wins[1])).toBe(hidden + 1)
+    const before = raises(wins[1])
+    desktop.point = { x: 30, y: 40 }
+    // A press always raises its monitor's overlay (the taskbar or another topmost window may have come above)
+    effects.onPress()
+    expect(raises(wins[1])).toBe(before + 1)
+    expect(wins[1].setAlwaysOnTop.mock.calls.at(-1)).toEqual([true, 'screen-saver'])
+    effects.onPress()
+    expect(raises(wins[1])).toBe(before + 2)
+    // While the pointer moves: at most once a second
+    const moving = raises(wins[1])
+    for (let step = 1; step <= 30; step++) {
+      desktop.point = { x: 30 + step, y: 40 }
+      vi.advanceTimersByTime(100)
+    }
+    expect(raises(wins[1]) - moving).toBeGreaterThanOrEqual(2)
+    expect(raises(wins[1]) - moving).toBeLessThanOrEqual(4)
+    effects.stop()
+  })
+
   it('logs the requested and actual window bounds if Windows still clamps the overlay', () => {
     const { effects, wins } = setup()
     effects.configure(config)

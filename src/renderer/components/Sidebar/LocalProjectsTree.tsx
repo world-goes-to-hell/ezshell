@@ -1,12 +1,13 @@
 import { useState, type DragEvent, type MouseEvent, type ReactNode } from 'react'
-import { RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolder3Line, RiGitBranchLine, RiPlayLine } from 'react-icons/ri'
+import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolder3Line, RiFolderOpenLine, RiGitBranchLine, RiPlayLine } from 'react-icons/ri'
 import type { LocalProjectState } from '../../hooks/useLocalProjects'
 import type { LocalDevelopmentTask } from '../../types'
 import { folderLabel, pathKey } from '../../lib/localWorkspaceTree'
 import { confirmDialog } from '../../stores/confirmStore'
+import { toast } from '../../stores/toastStore'
 import { TerminalContextMenu, type TerminalMenuItem } from '../Terminal/TerminalContextMenu'
 import { LocalSessionAgents } from './LocalSessionAgents'
-import { RunPresetsSection } from './RunPresetsSection'
+import { RunPresetAddButton, RunPresetsSection, requestAddRunPreset } from './RunPresetsSection'
 
 export interface WorktreeNode {
   path: string
@@ -108,6 +109,21 @@ export function LocalProjectsTree({
 }: LocalProjectsTreeProps) {
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [taskMenu, setTaskMenu] = useState<TaskMenu | null>(null)
+  // The project row's menu: its folder in the file manager
+  const [folderMenu, setFolderMenu] = useState<{ position: { x: number; y: number }; folder: string; name: string } | null>(null)
+  const canOpenFolder = typeof window.electronAPI.localProjectOpenFolder === 'function'
+  const openInExplorer = async (folder: string) => {
+    const result = await window.electronAPI.localProjectOpenFolder?.(folder).catch(() => null)
+    if (!result?.success) toast.error('파일 탐색기로 열지 못했습니다', result && !result.success ? result.error : undefined)
+  }
+  const openFolderMenu = (event: MouseEvent<HTMLElement>, folder: string, name: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = event.clientX === 0 && event.clientY === 0 ? event.currentTarget.getBoundingClientRect() : null
+    setFolderMenu({ position: { x: rect?.left ?? event.clientX, y: rect?.bottom ?? event.clientY }, folder, name })
+  }
+  const folderItem = (folder: string): TerminalMenuItem[] => canOpenFolder
+    ? [{ label: '파일 탐색기로 열기', icon: RiFolderOpenLine, onSelect: () => void openInExplorer(folder) }] : []
   const openTasks = async (event: MouseEvent<HTMLElement>, worktree: WorktreeNode) => {
     event.preventDefault()
     event.stopPropagation()
@@ -133,14 +149,17 @@ export function LocalProjectsTree({
   const taskItems = (menu: TaskMenu): TerminalMenuItem[] => {
     const { result, worktree } = menu
     const tasks = result?.success ? result.tasks : []
+    // The card keeps no place for a project without presets: adding one is also offered here
+    const add: TerminalMenuItem[] = typeof window.electronAPI.runPresetsList === 'function'
+      ? [{ label: '실행 구성 추가…', icon: RiAddLine, onSelect: () => requestAddRunPreset(worktree.path) }] : []
     if (!tasks.length) return [{ icon: RiPlayLine, disabled: true, onSelect: () => {},
-      label: !result ? '기동 명령 찾는 중…' : result.success ? '찾은 기동 명령이 없습니다' : result.error }]
+      label: !result ? '기동 명령 찾는 중…' : result.success ? '찾은 기동 명령이 없습니다' : result.error }, ...add, ...folderItem(worktree.path)]
     const preferred = (worktree.branch?.split('/').pop() || folderLabel(worktree.path)).toLowerCase()
     const match = (task: LocalDevelopmentTask) => Number(task.relative.toLowerCase() === preferred)
-    return [...tasks].sort((a, b) => match(b) - match(a)).map(task => ({
+    return [...[...tasks].sort((a, b) => match(b) - match(a)).map(task => ({
       label: `${task.name} 기동${task.relative === '.' ? '' : ` · ${task.relative}`}`,
       icon: RiPlayLine, onSelect: () => void runTask(worktree, task)
-    }))
+    })), ...add, ...folderItem(worktree.path)]
   }
   // Sessions and tabs are dragged as text/plain (`session:<id>` / the tab id)
   const dropProps = (project: ProjectNode, key: string) => onDropOnProject ? {
@@ -169,7 +188,7 @@ export function LocalProjectsTree({
         const Chevron = isProjectOpen ? RiArrowDownSLine : RiArrowRightSLine
         return (
           <li key={projectKey} className={`local-project${dropTarget === projectKey ? ' is-drop-target' : ''}`} data-project-folder={project.folder} {...dropProps(project, projectKey)}>
-            <div className="local-project-head">
+            <div className="local-project-head" onContextMenu={canOpenFolder ? event => openFolderMenu(event, project.folder, project.name) : undefined}>
               <button
                 type="button"
                 className="local-project-row"
@@ -233,6 +252,7 @@ export function LocalProjectsTree({
                             </span>
                           )}
                         </button>
+                        <RunPresetAddButton folder={worktree.path} />
                         {singleTab && renderTabActions(singleTab.id, singleTab.name)}
                         {hasChildren && (
                           <button
@@ -274,5 +294,8 @@ export function LocalProjectsTree({
       {taskMenu && <TerminalContextMenu key={`${taskMenu.worktree.path}:${taskMenu.position.x}:${taskMenu.position.y}`}
         position={taskMenu.position} top={[]} groups={[]} onClose={() => setTaskMenu(null)}
         target={{ name: folderLabel(taskMenu.worktree.path), hint: '개발 서버', items: taskItems(taskMenu) }} />}
+      {folderMenu && <TerminalContextMenu key={`${folderMenu.folder}:${folderMenu.position.x}:${folderMenu.position.y}`}
+        position={folderMenu.position} top={[]} groups={[]} onClose={() => setFolderMenu(null)}
+        target={{ name: folderMenu.name, hint: '프로젝트', items: folderItem(folderMenu.folder) }} />}
   </>)
 }

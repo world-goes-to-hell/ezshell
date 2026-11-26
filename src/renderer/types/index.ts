@@ -1291,6 +1291,7 @@ declare global {
       localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: AgentChatProvider; resume?: string; replacementFor?: string; restoring?: true }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
       localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
       localProjectDevelopmentTasks: (folder: string) => Promise<{ success: true; tasks: LocalDevelopmentTask[] } | { success: false; error: string }>
+      localProjectOpenFolder?: (folder: string) => Promise<{ success: true } | { success: false; error: string }>
       localProjectDevelopmentStart: (options: { folder: string; id: string; cols: number; rows: number; includeSource: boolean; install: boolean }) =>
         Promise<{ success: true; id: string; name: string; cwd: string; label: string; development: LocalDevelopmentRun } | { success: false; error: string }>
       localProjectDevelopmentChange: (options: { shellId: string; taskId: string; action: 'restart' | 'stop' }) =>
@@ -1461,6 +1462,7 @@ declare global {
       runPresetWorkspaceServers?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; workspace?: string; servers?: WorkspaceServer[] }>
       /** Picks an existing context.xml (JNDI) for a Tomcat preset */
       runPresetChooseContextXml?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; contextXml?: string; label?: string }>
+      runPresetChooseFolder?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { cancelled?: true; relative?: string }>
       runPresetSend?: (worktreeFolder: string, id: string, agentId: string, token: string) => Promise<RunPresetResult>
       onRunPresetState?: (callback: (event: { projectKey: string; worktreeKey: string; id: string; state: RunState; firstAgentAction?: true }) => void) => () => void
       onRuntimesProgress: (callback: (progress: JdkProgress | null) => void) => () => void

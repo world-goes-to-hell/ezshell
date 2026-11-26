@@ -437,7 +437,7 @@ const { check, finish } = createChecks()
   await overlay.shot('quick-capture-marks')
   await clickButton(overlay, '#work')
   check('quick work lists two projects without submitting a capture', await overlay.until(`
-    Array.from(document.querySelector('#project').options).map(option => option.text).join('|') === '프로젝트를 선택하세요|service|tools' &&
+    Array.from(document.querySelector('#project').options).map(option => option.text).join('|') === ${JSON.stringify(`프로젝트를 선택하세요|${path.basename(profile)} / service|${path.basename(profile)} / tools`)} &&
     !document.querySelector('.agent')
   `) && !read('codex-1-chat-sent') && !read('claude-2-chat-sent'), await overlay.js(`Array.from(document.querySelector('#project').options).map(option => option.text).join('|') + ' agents=' + document.querySelectorAll('.agent').length`))
   await chooseProject(overlay, tools)

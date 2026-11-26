@@ -259,14 +259,43 @@ function fixture(backendPort, frontendPort) {
     `))
     await js(`document.querySelectorAll('.terminal-tab .tab-close').forEach(button => button.click())`)
 
+    // 파일 탐색기로 열기 on the project row's and the worktree row's menu (not clicked: it would open Explorer on this PC)
+    const rightClick = selector => js(`(() => {
+      const el = ${selector}
+      if (!el) return false
+      const box = el.getBoundingClientRect()
+      el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: box.left + 20, clientY: box.top + box.height / 2 }))
+      return true
+    })()`)
+    const menuText = `[...document.querySelectorAll('.terminal-menu')].map(menu => menu.textContent).join('|')`
+    const escape = async () => {
+      await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+      await until(`!document.querySelector('.terminal-menu')`)
+    }
+    const projectHead = `[...document.querySelectorAll('.local-project')].find(el =>
+      el.dataset.projectFolder.toLowerCase().replace(/\\\\/g, '/') === ${normalize(repo)})?.querySelector('.local-project-head')`
+    check('right-clicking the project row offers 파일 탐색기로 열기', await rightClick(projectHead) &&
+      await until(`(${menuText}).includes('파일 탐색기로 열기') && (${menuText}).includes('프로젝트')`), await js(menuText))
+    await escape()
+    const worktreeRow = `[...document.querySelectorAll('.local-worktree')].find(el =>
+      el.dataset.worktreePath.toLowerCase().replace(/\\\\/g, '/') === ${normalize(repo)})?.querySelector(':scope > .local-worktree-row')`
+    check('the worktree row’s menu offers 파일 탐색기로 열기 after its start commands', await rightClick(worktreeRow) &&
+      await until(`(${menuText}).includes('파일 탐색기로 열기') && !(${menuText}).includes('찾는 중')`, 8000), await js(menuText))
+    await shot('local-project-open-folder-menu')
+    await escape()
+
     // Run presets on the project card (docs/plan/2026-11-25-local-project-run.md): add one, run it, it
     // becomes ready on its port, crashes with an error, the notice offers the agent hand-off and a restart
     // Each worktree runs the project's presets on its own: the main checkout's card first
     const sectionOf = checkout => `[...document.querySelectorAll('.run-presets')].find(el =>
       el.dataset.runWorktree.toLowerCase().replace(/\\\\/g, '/') === ${normalize(checkout)})`
     const section = sectionOf(repo)
-    check('a project without presets offers to add one', await until(`!!${section}?.querySelector('.run-presets-add')`, 8000))
-    await click(...await center(`${section}.querySelector('.run-presets-add')`))
+    // Without presets the card keeps no place for them: the worktree row has a small add button (2026-11-26)
+    const rowAdd = `[...document.querySelectorAll('.local-worktree')].find(el =>
+      el.dataset.worktreePath.toLowerCase().replace(/\\\\/g, '/') === ${normalize(repo)})?.querySelector(':scope > .local-worktree-row > .run-presets-row-add')`
+    check('a project without presets offers to add one on its row, holding no place on the card', await until(`!!${rowAdd} && !${section}`, 8000))
+    await click(...await center(rowAdd))
     check('the add dialog opens for the project', await until(`!!document.querySelector('.run-preset-dialog')`))
     const setValue = (selector, value) => js(`(() => {
       const el = document.querySelector(${JSON.stringify(selector)})
@@ -283,6 +312,16 @@ function fixture(backendPort, frontendPort) {
     check('a new preset\u2019s name follows the choice until it is typed in', await until(`document.querySelector('#run-preset-name')?.value === 'Tomcat'`))
     await setValue('#run-preset-name', '시험 서버')
     await setValue('#run-preset-folder', '.')
+    // 찾아보기 opens a folder dialog (main checks the pick is inside the worktree): on the folder input's row, not clipped
+    check('the folder input has a 찾아보기 button on its row', await js(`(() => {
+      const input = document.querySelector('#run-preset-folder')?.getBoundingClientRect()
+      const button = document.querySelector('.run-preset-folder-browse')
+      const box = button?.getBoundingClientRect()
+      const dialog = document.querySelector('.run-preset-dialog')?.getBoundingClientRect()
+      return !!input && !!box && button.textContent.trim() === '찾아보기' && box.width >= 48 && input.width >= 160 &&
+        Math.abs((box.top + box.bottom) / 2 - (input.top + input.bottom) / 2) < 4 && box.left >= input.right && box.right <= dialog.right
+    })()`), await js(`document.querySelector('.run-preset-folder-input')?.outerHTML.slice(0, 300)`))
+    await shot('local-run-preset-folder-browse')
     await js(`document.querySelector('input[name="run-preset-kind"][value="task"]').click()`)
     await until(`!!document.querySelector('input[name="run-preset-kind"][value="custom"]') && !document.querySelector('.run-preset-choices')?.textContent.includes('찾는 중')`)
     check('a typed name stays when the kind changes', await js(`document.querySelector('#run-preset-name').value === '시험 서버'`))

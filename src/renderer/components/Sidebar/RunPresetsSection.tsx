@@ -1,6 +1,6 @@
 // The run presets of a local project on its sidebar card (docs/plan/2026-11-25-local-project-run.md,
-// mockups/dev-run-presets.html scenes 1·3·4·5·8): a dashed "add" button when there are none, otherwise a
-// head with 모두 실행 / 모두 중지 and a row per preset with its state and buttons.
+// mockups/dev-run-presets.html scenes 1·3·4·5·8): nothing when there are none (the worktree row has the add
+// button), otherwise a head with 모두 실행 / 모두 중지 and a row per preset with its state and buttons.
 import { useEffect, useState, type MouseEvent } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
@@ -47,6 +47,27 @@ function useNow(ticking: boolean) {
   return now
 }
 
+// A worktree without presets keeps no place on the card (user's request, 2026-11-26): the add is a small
+// button on the worktree row (RunPresetAddButton) and an item of its right-click menu, both through this event
+const ADD_RUN_PRESET_EVENT = 'ezshell:add-run-preset'
+
+export function requestAddRunPreset(folder: string) {
+  window.dispatchEvent(new CustomEvent<string>(ADD_RUN_PRESET_EVENT, { detail: folder }))
+}
+
+/** The worktree row's add button: only while its list came and is empty (with presets, the head has its own) */
+export function RunPresetAddButton({ folder }: { folder: string }) {
+  const empty = useRunPresets(state => selectWorktree(state, folder)?.presets.length === 0)
+  if (!empty || typeof runPresetApi().runPresetsList !== 'function') return null
+  return (
+    // data-run-worktree: like the section, it marks a worktree whose list came
+    <button type="button" className="run-presets-row-add" data-run-worktree={folder} onClick={() => requestAddRunPreset(folder)}
+      title="실행 구성 추가 (백엔드·프론트엔드)" aria-label="실행 구성 추가">
+      <RiAddLine size={14} aria-hidden="true" />
+    </button>
+  )
+}
+
 /** The run presets of a project as one worktree runs them (`folder` is the worktree's) */
 export function RunPresetsSection({ folder, projectName, roots }: { folder: string; projectName: string; roots: string[] }) {
   const project = useRunPresets(state => selectWorktree(state, folder))
@@ -57,6 +78,13 @@ export function RunPresetsSection({ folder, projectName, roots }: { folder: stri
   const rootsKey = roots.join('|')
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (hasApi) void loadRunPresets(folder, roots) }, [folder, hasApi, rootsKey])
+  useEffect(() => {
+    const onAdd = (event: Event) => {
+      if (pathKey((event as CustomEvent<string>).detail) === pathKey(folder)) setEditing('new')
+    }
+    window.addEventListener(ADD_RUN_PRESET_EVENT, onAdd)
+    return () => window.removeEventListener(ADD_RUN_PRESET_EVENT, onAdd)
+  }, [folder])
 
   const presets = project?.presets ?? []
   const states = project?.states ?? {}
@@ -68,16 +96,18 @@ export function RunPresetsSection({ folder, projectName, roots }: { folder: stri
   const now = useNow(ticking)
   if (!hasApi) return null
   // The place is held only while the list is on its way: a refused list shows nothing, as before
-  if (!project) return failed ? null : <RunPresetsPlaceholder count={knownPresetCount(folder)} />
+  const dialog = editing && <RunPresetDialog folder={folder} projectName={projectName} roots={roots}
+    preset={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />
+  if (!project) {
+    const count = knownPresetCount(folder)
+    return failed ? dialog || null : count > 0 ? <RunPresetsPlaceholder count={count} /> : dialog || null
+  }
+  // None yet: nothing on the card, only the dialog when the row's add button opened it
+  if (presets.length === 0) return dialog || null
   const head = runHead(presets, states)
 
   return (
     <div className="run-presets" data-run-worktree={folder}>
-      {presets.length === 0 ? (
-        <button type="button" className="run-presets-add" onClick={() => setEditing('new')}>
-          <RiAddLine size={13} aria-hidden="true" /> 실행 구성 추가 <span className="run-presets-add-hint">(백엔드·프론트엔드)</span>
-        </button>
-      ) : (<>
         <div className="run-presets-head">
           <span>{head.label}</span>
           {head.all === 'stop'
@@ -97,26 +127,22 @@ export function RunPresetsSection({ folder, projectName, roots }: { folder: stri
               onEdit={() => setEditing(preset)} />
           ))}
         </ul>
-      </>)}
-      {editing && <RunPresetDialog folder={folder} projectName={projectName} roots={roots}
-        preset={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
+      {dialog}
     </div>
   )
 }
 
 /**
- * The place of the card's presets while they load: the add button's height, or the head and as many rows
- * as last time, so the rows below do not move when the list comes
+ * The place of the card's presets while they load: the head and as many rows as last time, so the rows
+ * below do not move when the list comes (a card that had none holds no place, as it shows none)
  */
 function RunPresetsPlaceholder({ count }: { count: number }) {
   return (
     <div className="run-presets run-presets-placeholder" aria-hidden="true">
-      {count === 0 ? <div className="run-presets-skeleton" data-kind="add" /> : (<>
-        <div className="run-presets-skeleton" data-kind="head" />
-        <div className="run-presets-list">
-          {Array.from({ length: count }, (_, index) => <div key={index} className="run-presets-skeleton" data-kind="row" />)}
-        </div>
-      </>)}
+      <div className="run-presets-skeleton" data-kind="head" />
+      <div className="run-presets-list">
+        {Array.from({ length: count }, (_, index) => <div key={index} className="run-presets-skeleton" data-kind="row" />)}
+      </div>
     </div>
   )
 }

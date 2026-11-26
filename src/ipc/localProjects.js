@@ -3,6 +3,7 @@ const { promisify } = require('util')
 const fs = require('fs')
 const path = require('path')
 const { requireLocalDirectory } = require('../localShell.js')
+const { isLocalFilePath } = require('../localKeyPath.js')
 const { readRepoTop, clearReadRepoCache, SAFE } = require('../localFiles/git.js')
 const { createDirectorySearch } = require('../localFiles/search.js')
 const { inspectDevelopmentTasks, prepareDevelopmentTask } = require('./localDevelopmentTasks.js')
@@ -241,7 +242,7 @@ function requireSearchQuery(value) {
  * `roots` (src/localFiles/roots.js) checks the folders the workspace panel reads, `git` is
  * src/localFiles/git.js. Requests name a root and a path relative to it.
  */
-function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = null, git: localGit = null, gitCommit = null, openDevelopmentTask, changeDevelopmentTask }) {
+function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = null, git: localGit = null, gitCommit = null, openDevelopmentTask, changeDevelopmentTask, openFolder = null }) {
   const directorySearch = createDirectorySearch()
   let searchGeneration = 0
   let preparation = 0
@@ -280,6 +281,24 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
     })
   }
   handle('local-project-inspect', '폴더의 Git 정보를 읽지 못했습니다.', inspectLocalProject)
+  // 파일 탐색기로 열기 (the sidebar's project and worktree menu). openFolder (shell.openPath) runs a file, so
+  // only a real folder of this PC goes to it: checked before any access, a UNC path can send Windows credentials.
+  if (openFolder) ipcMain.handle('local-project-open-folder', async (event, folder) => {
+    if (!fromMainWindow(event) || event.senderFrame !== event.sender.mainFrame || isLocked()) {
+      return { success: false, error: '잠금 해제 후 본창에서 이용할 수 있습니다.' }
+    }
+    let real
+    try {
+      if (!isLocalFilePath(folder)) throw new Error('not local')
+      real = await fs.promises.realpath(requireLocalDirectory(folder))
+      if (!isLocalFilePath(real) || !(await fs.promises.stat(real)).isDirectory()) throw new Error('not a folder')
+    } catch {
+      return { success: false, error: '폴더를 찾을 수 없습니다.' }
+    }
+    if (!fromMainWindow(event) || isLocked()) return { success: false, error: '잠금 해제 후 본창에서 이용할 수 있습니다.' }
+    const failure = await openFolder(real).catch(() => 'failed')
+    return failure ? { success: false, error: '파일 탐색기로 열지 못했습니다.' } : { success: true }
+  })
   handle('local-worktree-create', '워크트리를 만들지 못했습니다.', createLocalWorktree)
   if (openDevelopmentTask) {
     const preparing = new Map()

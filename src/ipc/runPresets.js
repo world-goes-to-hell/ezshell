@@ -19,7 +19,7 @@ const { createWorkspaceAccess, workspaceServers } = require('./workspaceServers.
 const { javaVersionProbe, javaLogOptions } = require('./developmentEncoding.js')
 const { loadEclipseProject } = require('./eclipseProject.js')
 const { buildEclipse } = require('./eclipseBuild.js')
-const { createRunPresetStore, validatePreset, presetName, publicPreset, presetApproval, projectKey, realDirectory, directoryInProject } = require('./runPresetStore.js')
+const { createRunPresetStore, validatePreset, presetName, presetRelative, publicPreset, presetApproval, projectKey, realDirectory, directoryInProject } = require('./runPresetStore.js')
 
 const READY_TIMEOUT = 300_000
 const USER = 'user'
@@ -818,6 +818,21 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       }
       return { ok: true, workspace: path.basename(root) || '이클립스 워크스페이스', ...result }
     },
+    /** Where the folder dialog opens: the folder already typed when it is inside the worktree, else the worktree */
+    folderDialogStart(project, relative) {
+      return directoryInProject(project.worktree, relative).catch(() => project.worktree)
+    },
+    /** The folder the user picked in that dialog, as the preset's relative path; checked like a saved one */
+    async chooseFolder(project, chosen, allowed) {
+      ensureAllowed(allowed)
+      const real = await realDirectory(chosen)
+      const relative = path.relative(project.worktree, real)
+      if (path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) throw new Error('프로젝트 안의 폴더를 선택해 주세요.')
+      const stored = presetRelative(relative || '.')
+      if (await directoryInProject(project.worktree, stored) !== real) throw new Error('프로젝트 안의 폴더를 선택해 주세요.')
+      ensureAllowed(allowed)
+      return { ok: true, relative: stored }
+    },
     async chooseContextXml(project, file, allowed) {
       ensureAllowed(allowed)
       const { reference } = await workspaceAccess.contextFile(project, file)
@@ -859,7 +874,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   }
 }
 
-function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, chooseWorkspaceFolder = async () => null, chooseContextFile = async () => null }) {
+function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, chooseWorkspaceFolder = async () => null, chooseContextFile = async () => null, chooseProjectFolder = async () => null }) {
   // Accept only the command shown to this frame. Keep earlier install approvals for this batch retry.
   const confirms = new Map()
   // A preview is a snapshot, including the note. Only its originating frame can send it once.
@@ -889,6 +904,10 @@ function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, c
   handle('run-preset-choose-context-xml', async (project, allowed) => {
     const file = await chooseContextFile(project.worktree)
     return file ? controller.chooseContextXml(project, file, allowed) : { ok: false, cancelled: true }
+  })
+  handle('run-preset-choose-folder', async (project, allowed, _frame, relative) => {
+    const chosen = await chooseProjectFolder(await controller.folderDialogStart(project, relative))
+    return chosen ? controller.chooseFolder(project, chosen, allowed) : { ok: false, cancelled: true }
   })
   handle('run-preset-eclipse-import', (project, _allowed, _frame, relative) => controller.eclipseImport(project, relative))
   handle('run-presets-save', (project, allowed, _frame, preset) => controller.save(project, preset, allowed))

@@ -194,7 +194,9 @@ describe('putting pointers in place and back', () => {
   })
 
   it('puts the folder in the script as a quoted literal', () => {
-    expect(helperScript("C:\\Users\\o'brien\\ezShell\\pointer")).toContain("[EzShellPointer]::Run('C:\\Users\\o''brien\\ezShell\\pointer')")
+    expect(helperScript("C:\\Users\\o'brien\\ezShell\\pointer", 4321)).toContain("[EzShellPointer]::Run('C:\\Users\\o''brien\\ezShell\\pointer', 4321)")
+    expect(helperScript('C:\\pointer')).toContain(`[EzShellPointer]::Run('C:\\pointer', ${process.pid})`)
+    for (const app of [0, -1, 1.5, '12; Remove-Item', 2 ** 33]) expect(() => helperScript('C:\\pointer', app)).toThrow()
     expect(() => helperScript('relative\\folder')).toThrow()
     expect(() => helperScript('C:\\a\nb')).toThrow()
   })
@@ -206,5 +208,35 @@ describe('putting pointers in place and back', () => {
     const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
     const output = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file], { encoding: 'utf8', timeout: 60000 })
     expect(output.trim()).toBe('compiled')
+  }, 70000)
+
+  // The effects' pause (docs/fix/2026-11-26-desktop-pointer-effects-intermittent.md): Windows took the effect
+  // windows themselves for a full-screen app (2), they hid, it said 5, they showed: a 2 s flicker everywhere.
+  // Compiles and calls the pure rules only.
+  it.skipIf(process.platform !== 'win32')('pauses for a full-screen foreground window, not for Windows\u2019 own guess', () => {
+    const file = path.join(folder, 'rules.ps1')
+    const monitor = '0, 0, 1920, 1080'
+    const cases = [
+      // shell state, the foreground's full screen → state sent to the app
+      'Adjust(2, $false)', 'Adjust(5, $false)', 'Adjust(5, $true)', 'Adjust(6, $true)', 'Adjust(7, $true)', 'Adjust(0, $true)',
+      'Adjust(1, $false)', 'Adjust(3, $false)', 'Adjust(4, $false)', 'Adjust(2, $true)',
+      // window rect, monitor rect, maximized, has a caption, class, this app's window
+      `FullScreenWindow(0, 0, 1920, 1080, ${monitor}, $false, $false, 'Chrome_WidgetWin_1', $false)`,
+      `FullScreenWindow(-8, -8, 1928, 1088, ${monitor}, $true, $true, 'Notepad', $false)`,
+      `FullScreenWindow(0, 0, 1920, 1040, ${monitor}, $false, $false, 'Game', $false)`,
+      `FullScreenWindow(0, 0, 1920, 1080, ${monitor}, $false, $false, 'Progman', $false)`,
+      `FullScreenWindow(0, 0, 1920, 1080, ${monitor}, $false, $false, 'WorkerW', $false)`,
+      `FullScreenWindow(0, 0, 1920, 1080, ${monitor}, $false, $false, 'Shell_TrayWnd', $false)`,
+      `FullScreenWindow(0, 0, 1920, 1080, ${monitor}, $false, $false, 'Chrome_WidgetWin_1', $true)`,
+      `FullScreenWindow(1920, 0, 3840, 1080, 1920, 0, 3840, 1080, $true, $false, 'UnityWndClass', $false)`
+    ]
+    fs.writeFileSync(file, `$ErrorActionPreference = 'Stop'\nAdd-Type -TypeDefinition @'\n${HELPER_SOURCE}\n'@\n` +
+      cases.map(call => `[EzShellPointer]::${call}`).join('\n') + '\n')
+    const powershell = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+    const output = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file], { encoding: 'utf8', timeout: 60000 })
+    expect(output.trim().split(/\r?\n/)).toEqual([
+      '5', '5', '2', '2', '2', '2', '1', '3', '4', '2',
+      'True', 'False', 'False', 'False', 'False', 'False', 'False', 'True'
+    ])
   }, 70000)
 })
