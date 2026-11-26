@@ -909,7 +909,11 @@ const runtimes = require('./src/runtimes/index.js').createRuntimes({ userData: u
 require('./src/runtimes/ipc.js').registerRuntimesIpc({
   ipcMain, runtimes,
   canUse: event => Boolean(!isAppLocked && fromMainWindow(event) && event.senderFrame && event.senderFrame === event.sender.mainFrame),
-  openExternal: url => shell.openExternal(url)
+  openExternal: url => shell.openExternal(url),
+  chooseTomcatFolder: async () => {
+    const result = await dialog.showOpenDialog(mainWindow, { title: 'Tomcat 6 설치 폴더 선택', properties: ['openDirectory'] });
+    return result.canceled ? null : result.filePaths[0];
+  }
 });
 app.on('will-quit', () => runtimes.cancel());
 const { createRunPresets, registerRunPresetIpc, withSubject } = require('./src/ipc/runPresets.js');

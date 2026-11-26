@@ -107,4 +107,28 @@ function fakeEnhanced({ badJbrChecksum = false, badAgentDigest = false } = {}) {
     ? temurin(url, options, respond) : enhanced(url, options, respond)
 }
 
-module.exports = { zipOf, fixtureRequest, digest, release, jdkFiles, fakeTemurin, fakeEnhanced }
+const tomcatFiles = {
+  'bin/catalina.bat': 'fake-catalina',
+  'bin/bootstrap.jar': 'fake-bootstrap',
+  'conf/server.xml': '<Server />'
+}
+
+function fakeApache({ badChecksum = false } = {}) {
+  const modern = 'https://downloads.apache.org/tomcat/tomcat-11/'
+  const archived = 'https://archive.apache.org/dist/tomcat/tomcat-7/'
+  const packs = [[modern, '11.0.29'], [archived, '7.0.109']].map(([base, version]) => {
+    const folder = `apache-tomcat-${version}`
+    const zip = zipOf(Object.fromEntries(Object.entries(tomcatFiles).map(([file, bytes]) => [`${folder}/${file}`, bytes])))
+    return { base, version, url: `${base}v${version}/bin/${folder}.zip`, zip }
+  })
+  return fixtureRequest(url => {
+    for (const { base, version, url: binary, zip } of packs) {
+      if (url.href === base) return { body: Buffer.from(`<a href="v${version}/">v${version}/</a>`) }
+      if (url.href === `${binary}.sha512`) return { body: Buffer.from(badChecksum ? '0'.repeat(128) : digest(zip, 'sha512')) }
+      if (url.href === binary) return { body: zip }
+    }
+    throw new Error('Unexpected request in the Apache fixture')
+  })
+}
+
+module.exports = { zipOf, fixtureRequest, digest, release, jdkFiles, fakeTemurin, fakeEnhanced, fakeApache, tomcatFiles }

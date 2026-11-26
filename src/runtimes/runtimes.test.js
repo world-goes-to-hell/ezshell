@@ -14,7 +14,7 @@ import { requiredFeature } from './required.js'
 import { createRuntimes } from './index.js'
 import { registerRuntimesIpc } from './ipc.js'
 import providers from './fixtures/providers.json'
-import { digest, fakeEnhanced, fakeTemurin, fixtureRequest, jdkFiles, release, zipOf } from '../../e2e/support/jdkFixture.js'
+import { digest, fakeApache, fakeEnhanced, fakeTemurin, fixtureRequest, jdkFiles, release, tomcatFiles, zipOf } from '../../e2e/support/jdkFixture.js'
 
 const platform = 'win32'
 const arch = 'x64'
@@ -147,9 +147,9 @@ describe('JDK downloads and archives', () => {
 
   function tarOf(entries) {
     const blocks = []
-    for (const { name, body = '', type = 'File', linkpath } of entries) {
+    for (const { name, body = '', type = 'File', linkpath, mode = 0o755 } of entries) {
       const data = Buffer.from(body)
-      const header = new Header({ path: name, size: data.length, mode: 0o755, type, linkpath })
+      const header = new Header({ path: name, size: data.length, mode, type, linkpath })
       header.encode()
       blocks.push(header.block, data, Buffer.alloc((512 - data.length % 512) % 512))
     }
@@ -178,6 +178,27 @@ describe('JDK downloads and archives', () => {
       { name: 'jdk', type: 'Directory' }, { name: 'jdk/lib/jdk', type: 'SymbolicLink', linkpath: '..' }
     ]))
     await expect(extractArchive(archive, target, 'tar.gz')).rejects.toThrow()
+    expect(fs.existsSync(target)).toBe(false)
+  })
+
+  it('accepts an identical repeated Maven TAR directory only for the Maven extraction option', async () => {
+    const folder = { name: 'apache-maven-3.9.16/lib/jansi-native/', type: 'Directory' }
+    const archive = put('maven.tar.gz', tarOf([folder, { name: `${folder.name}file`, body: 'fixture' }, folder]))
+    const target = path.join(root, 'unpack')
+    await expect(extractArchive(archive, target, 'tar.gz')).rejects.toThrow()
+    await extractArchive(archive, target, 'tar.gz', undefined, { allowRepeatedDirectories: true })
+    expect(fs.readFileSync(path.join(target, folder.name, 'file'), 'utf8')).toBe('fixture')
+  })
+
+  it.each([
+    { name: 'apache-maven/lib/', type: 'Directory', mode: 0o777 },
+    { name: 'apache-maven/Lib/', type: 'Directory' },
+    { name: 'apache-maven/./lib/', type: 'Directory' },
+    { name: 'apache-maven/lib', type: 'File' }
+  ])('rejects ambiguous paths with Maven TAR directory deduplication enabled', async ambiguous => {
+    const archive = put('ambiguous.tar.gz', tarOf([{ name: 'apache-maven/lib/', type: 'Directory' }, ambiguous]))
+    const target = path.join(root, 'unpack')
+    await expect(extractArchive(archive, target, 'tar.gz', undefined, { allowRepeatedDirectories: true })).rejects.toThrow()
     expect(fs.existsSync(target)).toBe(false)
   })
 
@@ -292,17 +313,72 @@ describe('JDK inventory and project requirements', () => {
   it('returns neither provider info nor manages files for an unauthorized renderer', async () => {
     const handlers = new Map()
     const runtimes = { list: vi.fn(), available: vi.fn(), install: vi.fn(), cancel: vi.fn(), remove: vi.fn(),
-      hotswapAgentStatus: vi.fn(), installHotswapAgent: vi.fn(), removeHotswapAgent: vi.fn() }
+      hotswapAgentStatus: vi.fn(), installHotswapAgent: vi.fn(), removeHotswapAgent: vi.fn(),
+      listTools: vi.fn(), toolAvailable: vi.fn(), installTool: vi.fn(), removeTool: vi.fn(), registerTomcat6: vi.fn() }
+    const chooseTomcatFolder = vi.fn()
     registerRuntimesIpc({ ipcMain: { handle: (channel, fn) => handlers.set(channel, fn) }, runtimes,
-      canUse: () => false, openExternal: vi.fn() })
-    expect(handlers.get('runtimes-list')({})).toEqual({ jdks: [], hotswapAgent: { installed: false } })
+      canUse: () => false, openExternal: vi.fn(), chooseTomcatFolder })
+    expect(handlers.get('runtimes-list')({})).toEqual({ jdks: [], hotswapAgent: { installed: false }, tools: [] })
     expect(await handlers.get('runtimes-available')({}, 'zulu', 17)).toMatchObject({ jdk: null })
     expect(await handlers.get('runtimes-install')({}, 'zulu', 17)).toMatchObject({ ok: false })
     expect(handlers.get('runtimes-cancel')({})).toBe(false)
     expect(handlers.get('runtimes-remove')({}, 'some-id')).toMatchObject({ ok: false })
     expect(await handlers.get('runtimes-hotswap-install')({})).toMatchObject({ ok: false })
     expect(handlers.get('runtimes-hotswap-remove')({})).toMatchObject({ ok: false })
+    expect(await handlers.get('runtimes-tool-available')({}, 'tomcat', '7')).toMatchObject({ tool: null })
+    expect(await handlers.get('runtimes-tool-install')({}, 'tomcat', '7')).toMatchObject({ ok: false })
+    expect(handlers.get('runtimes-tool-remove')({}, 'tomcat-7.0.109')).toMatchObject({ ok: false })
+    expect(await handlers.get('runtimes-tomcat-register')({})).toMatchObject({ ok: false })
+    expect(chooseTomcatFolder).not.toHaveBeenCalled()
     for (const action of Object.values(runtimes)) expect(action).not.toHaveBeenCalled()
+  })
+})
+
+describe('Apache tools in the runtime library', () => {
+  const manager = (request = fakeApache()) => createRuntimes({ userData: root, platform, arch, home: root, env: {}, request })
+
+  it('checks SHA-512, publishes only a complete artifact, and removes only the app-owned tool', async () => {
+    const runtimes = manager()
+    const build = await runtimes.toolAvailable('tomcat', '7')
+    expect(build).toMatchObject({ id: 'tomcat-7.0.109', tool: 'tomcat', series: '7' })
+    expect(build).not.toHaveProperty('url')
+    expect(build).not.toHaveProperty('sha512')
+    const installed = await runtimes.installTool('tomcat', '7')
+    const reopened = manager()
+    expect(reopened.listTools()).toEqual([installed])
+    expect(reopened.toolHomeOf(installed.id)).toBe(path.join(fs.realpathSync(root), 'runtimes', 'tools', installed.id, 'home'))
+    reopened.removeTool(installed.id)
+    expect(reopened.toolHomeOf(installed.id)).toBeNull()
+    expect(reopened.listTools()).toEqual([])
+    await expect(manager(fakeApache({ badChecksum: true })).installTool('tomcat', '7')).rejects.toThrow(/SHA-512/)
+    expect(fs.readdirSync(path.join(root, 'runtimes', 'tools'))).toEqual([])
+  })
+
+  it('keeps registered Tomcat 6 usable across restarts without publishing or deleting its home', async () => {
+    for (const [name, content] of Object.entries(tomcatFiles)) put(`legacy/${name}`, content)
+    put('legacy/RELEASE-NOTES', 'Apache Tomcat Version 6.0.53\n')
+    const runtimes = manager()
+    const entry = runtimes.registerTomcat6(path.join(root, 'legacy'))
+    expect(entry).toMatchObject({ tool: 'tomcat', series: '6', version: '6.0.53', managed: false, folder: 'legacy' })
+    expect(entry).not.toHaveProperty('home')
+    const reopened = manager()
+    expect(reopened.listTools()).toEqual([entry])
+    expect(reopened.toolHomeOf(entry.id)).toBe(path.join(fs.realpathSync(root), 'legacy'))
+    expect(() => reopened.removeTool(entry.id)).toThrow(/받은 도구만/)
+    await expect(reopened.installTool('tomcat', '6')).rejects.toThrow(/SHA-512/)
+    expect(fs.existsSync(path.join(root, 'legacy', 'bin', 'bootstrap.jar'))).toBe(true)
+  })
+
+  it('rechecks the window lock after the Tomcat directory picker resolves', async () => {
+    const handlers = new Map()
+    let unlocked = true
+    const runtimes = { registerTomcat6: vi.fn() }
+    const pick = vi.fn(async () => { unlocked = false; return root })
+    registerRuntimesIpc({ ipcMain: { handle: (channel, fn) => handlers.set(channel, fn) }, runtimes,
+      canUse: () => unlocked, chooseTomcatFolder: pick })
+    await expect(handlers.get('runtimes-tomcat-register')({})).resolves.toMatchObject({ ok: false })
+    expect(pick).toHaveBeenCalledOnce()
+    expect(runtimes.registerTomcat6).not.toHaveBeenCalled()
   })
 })
 

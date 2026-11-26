@@ -1,14 +1,15 @@
 const { resolveLocalPreviewPath } = require('../agentChat/localPreview.js')
 const { requiredFeature } = require('./required.js')
 const { LICENSE_URLS } = require('./providers.js')
+const { APACHE_LICENSE_URL, APACHE_SERIES } = require('./apacheProviders.js')
 
 const LOCKED = '잠금 해제 후 본창에서 이용할 수 있습니다.'
 const reason = (error, fallback) => error?.code ? fallback : error?.message || fallback
 
-function registerRuntimesIpc({ ipcMain, runtimes, canUse, openExternal }) {
+function registerRuntimesIpc({ ipcMain, runtimes, canUse, openExternal, chooseTomcatFolder }) {
   ipcMain.handle('runtimes-list', event => canUse(event)
-    ? { jdks: runtimes.list(), hotswapAgent: runtimes.hotswapAgentStatus() }
-    : { jdks: [], hotswapAgent: { installed: false } })
+    ? { jdks: runtimes.list(), hotswapAgent: runtimes.hotswapAgentStatus(), tools: runtimes.listTools() }
+    : { jdks: [], hotswapAgent: { installed: false }, tools: [] })
 
   ipcMain.handle('runtimes-available', async (event, vendor, feature) => {
     if (!canUse(event)) return { jdk: null, error: LOCKED }
@@ -35,6 +36,29 @@ function registerRuntimesIpc({ ipcMain, runtimes, canUse, openExternal }) {
     async progress => ({ jdk: await runtimes.install(vendor, feature, progress) }), 'JDK를 받지 못했습니다.'))
   ipcMain.handle('runtimes-hotswap-install', event => install(event,
     progress => runtimes.installHotswapAgent(progress), 'HotswapAgent를 받지 못했습니다.'))
+  ipcMain.handle('runtimes-tool-available', async (event, tool, series) => {
+    if (!canUse(event)) return { tool: null, error: LOCKED }
+    try {
+      const build = await runtimes.toolAvailable(tool, series)
+      return canUse(event) ? { tool: build } : { tool: null, error: LOCKED }
+    } catch (error) { return { tool: null, error: reason(error, 'Apache 배포본을 확인하지 못했습니다.') } }
+  })
+  ipcMain.handle('runtimes-tool-install', (event, tool, series) => install(event,
+    async progress => ({ tool: await runtimes.installTool(tool, series, progress) }), 'Apache 도구를 받지 못했습니다.'))
+  ipcMain.handle('runtimes-tool-remove', (event, id) => {
+    if (!canUse(event)) return { ok: false, error: LOCKED }
+    try { runtimes.removeTool(id); return { ok: true } }
+    catch (error) { return { ok: false, error: reason(error, '도구를 지우지 못했습니다. 사용 중인 실행을 닫고 다시 시도하세요.') } }
+  })
+  ipcMain.handle('runtimes-tomcat-register', async event => {
+    if (!canUse(event)) return { ok: false, error: LOCKED }
+    try {
+      const folder = await chooseTomcatFolder()
+      if (!canUse(event)) return { ok: false, error: LOCKED }
+      if (!folder) return { ok: false, cancelled: true }
+      return { ok: true, tool: runtimes.registerTomcat6(folder) }
+    } catch (error) { return { ok: false, error: reason(error, 'Tomcat 6 폴더를 등록하지 못했습니다.') } }
+  })
 
   ipcMain.handle('runtimes-cancel', event => Boolean(canUse(event) && runtimes.cancel()))
   ipcMain.handle('runtimes-remove', (event, id) => {
@@ -57,8 +81,10 @@ function registerRuntimesIpc({ ipcMain, runtimes, canUse, openExternal }) {
   })
 
   ipcMain.handle('runtimes-open-license', async (event, vendor) => {
-    if (!canUse(event) || typeof vendor !== 'string' || !Object.hasOwn(LICENSE_URLS, vendor)) return false
-    try { await openExternal(LICENSE_URLS[vendor]); return true } catch { return false }
+    if (!canUse(event) || typeof vendor !== 'string') return false
+    const url = Object.hasOwn(APACHE_SERIES, vendor) ? APACHE_LICENSE_URL : Object.hasOwn(LICENSE_URLS, vendor) ? LICENSE_URLS[vendor] : null
+    if (!url) return false
+    try { await openExternal(url); return true } catch { return false }
   })
 }
 

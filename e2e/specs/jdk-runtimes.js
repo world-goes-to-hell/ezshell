@@ -75,6 +75,46 @@ async function run() {
       (async () => !!(${button('HotswapAgent 받기')}) && !!${jbrRow} &&
         !(await window.electronAPI.runtimesList()).hotswapAgent.installed)()
     `))
+
+    await click('Apache 도구 받기')
+    const apacheVersion = `document.querySelector('.apache-tools .jdk-choice-row label:nth-child(2) select')`
+    await js(`((select) => { select.value = '6'; select.dispatchEvent(new Event('change', { bubbles: true })) })(${apacheVersion})`)
+    check('explains the blocked Tomcat 6 download and offers registration and Tomcat 7', await until(`
+      document.querySelector('.apache-tools').textContent.includes('SHA-512') &&
+      !!(${button('Tomcat 6 폴더 등록')}) && !!(${button('Tomcat 7 받기')}) && !(${button('도구 받아 두기')})
+    `))
+    await click('Tomcat 6 폴더 등록')
+    const registered = await until(`
+      (async () => [...document.querySelectorAll('.apache-tools .jdk-list li')].some(row =>
+        row.textContent.includes('Tomcat 6.0.53') && row.textContent.includes('찾은 것')) &&
+        (await window.electronAPI.runtimesList()).tools.some(tool => tool.tool === 'tomcat' && tool.series === '6' && !tool.managed && !tool.home))()
+    `)
+    if (!registered) {
+      const details = await js(`(async () => ({
+        alerts: [...document.querySelectorAll('.jdk-settings [role="alert"]')].map(el => el.textContent.trim()),
+        tools: (await window.electronAPI.runtimesList()).tools?.map(({tool, version, series, managed}) => ({tool, version, series, managed}))
+      }))()`)
+      throw new Error(`Tomcat registration failed: ${JSON.stringify(details)}`)
+    }
+    check('registers an existing Tomcat as a discovered tool without exposing its home', registered)
+    await click('Tomcat 7 받기')
+    check('shows the Tomcat 7 release and license before installing', await until(`
+      ${apacheVersion}?.value === '7' && (${button('Apache 라이선스 보기')})?.title.includes('LICENSE-2.0') &&
+      (${button('도구 받아 두기')})?.disabled === false
+    `))
+    await click('도구 받아 두기')
+    const tomcatRow = `document.querySelector('.apache-tools [aria-label="Tomcat 7.0.109 지우기"]')`
+    check('adds the verified Tomcat to the managed list', await until(`
+      !!${tomcatRow} && (async () => (await window.electronAPI.runtimesList()).tools.some(tool =>
+        tool.id === 'tomcat-7.0.109' && tool.managed && !tool.home))()
+    `))
+    await js(`${tomcatRow}.click()`)
+    if (!await until(`!!(${button('삭제 확인')})`)) throw new Error('Apache removal confirmation missing')
+    await click('삭제 확인')
+    check('removes only the managed Tomcat', await until(`
+      (async () => !${tomcatRow} && (await window.electronAPI.runtimesList()).tools.some(tool =>
+        tool.tool === 'tomcat' && tool.series === '6' && !tool.managed))()
+    `))
   } finally { driver.close() }
 }
 

@@ -6,6 +6,9 @@ const { downloadArchive, SHA256 } = require('./download.js')
 const { findHotswapAgent, AGENT_VERSION, MAX_AGENT_BYTES } = require('./enhancedProviders.js')
 const { extractArchive } = require('./archive.js')
 const { findLocalJdks, unpackedHome, readRelease } = require('./discovery.js')
+const { findApacheBuild, validApacheSelection } = require('./apacheProviders.js')
+const { LOCAL_TOOL_ID, seriesOf, hasApacheToolHome, unpackedApacheHome,
+  inspectLocalTomcat6, findLocalApacheTools } = require('./apacheToolHome.js')
 
 const MAX_INDEX_BYTES = 1024 * 1024
 const LOOKUP_TTL_MS = 5 * 60 * 1000
@@ -14,8 +17,11 @@ const stagingPaths = new Set()
 const TEMPORARY_DIR = /^\.(?:install|remove)-/
 const AGENT = 'hotswap-agent'
 const AGENT_JAR = 'hotswap-agent.jar'
+const TOOLS = 'tools'
 const buildId = ({ vendor, version, arch }) => `${vendor}-${version}-${arch}`
 const publicJdk = ({ home: _home, relativeHome: _relativeHome, ...entry }) => entry
+const toolId = ({ tool, version }) => `${tool}-${version}`
+const publicTool = ({ home: _home, ...entry }) => entry
 const samePath = (left, right) => path.relative(left, right) === ''
 
 function isInside(parent, child) {
@@ -60,6 +66,7 @@ function indexEntry(value, platform) {
 
 function createRuntimes({ userData, platform = process.platform, arch = process.arch, env = process.env, home, request } = {}) {
   const filename = path.join(userData, 'runtimes.json')
+  const localToolsFile = path.join(userData, 'local-apache-tools.json')
   const cache = new Map()
   let operation = null
   let cleanedAtFirstUse = false
@@ -73,13 +80,15 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     } catch { return [] }
   }
 
-  function writeIndex(jdks) {
-    const temporary = `${filename}.${randomUUID()}.part`
+  function writeJson(target, value) {
+    const temporary = `${target}.${randomUUID()}.part`
     try {
-      fs.writeFileSync(temporary, JSON.stringify({ jdks }, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
-      fs.renameSync(temporary, filename)
+      fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
+      fs.renameSync(temporary, target)
     } finally { fs.rmSync(temporary, { force: true }) }
   }
+
+  const writeIndex = jdks => writeJson(filename, { jdks })
 
   function managedBase(create = false, kind = 'jdk') {
     let directory = fs.realpathSync(userData)
@@ -113,6 +122,7 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     cleanedAtFirstUse = true
     cleanStaging('jdk')
     cleanStaging(AGENT)
+    cleanStaging(TOOLS)
   }
 
   function managedHome(entry) {
@@ -141,6 +151,64 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     if (LOCAL_ID.test(id)) return local().find(entry => entry.id === id)?.home ?? null
     const entry = index().find(record => record.id === id)
     return entry ? managedHome(entry) : null
+  }
+
+  function registeredTools() {
+    try {
+      const stat = fs.lstatSync(localToolsFile)
+      if (!stat.isFile() || stat.size > MAX_INDEX_BYTES) return []
+      const paths = JSON.parse(fs.readFileSync(localToolsFile, 'utf8'))
+      return Array.isArray(paths) ? paths.filter(value => typeof value === 'string').slice(0, 100) : []
+    } catch { return [] }
+  }
+
+  const localTools = () => findLocalApacheTools({ env, home, platform, registered: registeredTools() })
+
+  function managedTool(root, id) {
+    const parts = /^(tomcat|maven|ant)-(\d{1,4}\.\d{1,4}\.\d{1,4})$/.exec(id)
+    if (!parts) return null
+    const [, tool, version] = parts
+    const series = seriesOf(tool, version)
+    if (!series || (tool === 'tomcat' && series === '6')) return null
+    try {
+      const directory = path.join(root, id)
+      if (!fs.lstatSync(directory).isDirectory()) return null
+      const record = path.join(directory, 'release.json')
+      const stat = fs.lstatSync(record)
+      if (!stat.isFile() || stat.size > 1024) return null
+      const { sizeBytes } = JSON.parse(fs.readFileSync(record, 'utf8'))
+      if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0) return null
+      const home = path.join(directory, 'home')
+      if (!hasApacheToolHome(home, tool, platform)) return null
+      return { id, tool, version, series, managed: true, sizeBytes, home }
+    } catch { return null }
+  }
+
+  function listTools() {
+    cleanAtFirstUse()
+    let managed = []
+    try {
+      const root = managedBase(false, TOOLS)
+      managed = fs.readdirSync(root).map(id => managedTool(root, id)).filter(Boolean)
+    } catch { /* The tool library may not exist yet. */ }
+    const found = localTools().filter(entry => !managed.some(installed => samePath(installed.home, entry.home)))
+    const sort = (a, b) => a.tool.localeCompare(b.tool) || (b.version ?? '').localeCompare(a.version ?? '', 'en', { numeric: true })
+    return [...managed.sort(sort), ...found.sort(sort)].map(publicTool)
+  }
+
+  function toolHomeOf(id) {
+    cleanAtFirstUse()
+    if (typeof id !== 'string' || id.length > 120) return null
+    if (LOCAL_TOOL_ID.test(id)) return localTools().find(entry => entry.id === id)?.home ?? null
+    try { return managedTool(managedBase(false, TOOLS), id)?.home ?? null } catch { return null }
+  }
+
+  function registerTomcat6(directory) {
+    const entry = inspectLocalTomcat6(directory, platform)
+    if (!entry) throw new Error('선택한 폴더에서 Tomcat 6 설치를 확인할 수 없습니다.')
+    const known = registeredTools().filter(folder => !samePath(folder, entry.home))
+    writeJson(localToolsFile, [entry.home, ...known].slice(0, 100))
+    return publicTool(entry)
   }
 
   function agentRecord(root, version) {
@@ -211,6 +279,24 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     if (!build) return null
     const { url: _url, sha256: _sha256, sha512: _sha512, archive: _archive, ...summary } = build
     return { id: buildId(build), ...summary }
+  }
+
+  async function getToolBuild(tool, series, signal) {
+    if (!validApacheSelection(tool, series)) throw new Error('Apache 도구와 버전 계열을 선택해 주세요.')
+    const key = `tool:${tool}:${series}`
+    const cached = cache.get(key)
+    if (cached && cached.expires > Date.now()) return cached.build
+    const build = await findApacheBuild(tool, series, { platform, request, signal })
+    signal?.throwIfAborted()
+    cache.set(key, { build, expires: Date.now() + LOOKUP_TTL_MS })
+    return build
+  }
+
+  async function toolAvailable(tool, series) {
+    const build = await getToolBuild(tool, series)
+    if (!build) return null
+    const { url: _url, sha512: _sha512, archive: _archive, ...summary } = build
+    return { id: toolId(build), ...summary }
   }
 
   async function withInstallation(kind, vendor, feature, onProgress, run) {
@@ -301,6 +387,39 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     })
   }
 
+  async function installTool(tool, series, onProgress = () => {}) {
+    if (!validApacheSelection(tool, series)) throw new Error('Apache 도구와 버전 계열을 선택해 주세요.')
+    return withInstallation(TOOLS, tool, null, onProgress, async ({ signal, report, stagingIn }) => {
+      const build = await getToolBuild(tool, series, signal)
+      signal.throwIfAborted()
+      if (!build) throw new Error('현재 플랫폼에 맞는 Apache 배포본이 없습니다.')
+      const id = toolId(build)
+      const root = managedBase(true, TOOLS)
+      const current = managedTool(root, id)
+      if (current) return publicTool(current)
+      const destination = path.join(root, id)
+      if (fs.existsSync(destination)) throw new Error('같은 이름의 개발 도구 폴더가 이미 있습니다.')
+      const staging = stagingIn(root)
+      const archive = path.join(staging, `tool.${build.archive}`)
+      report('download', 0, null)
+      const bytes = await downloadArchive(build, archive, { request, signal,
+        onProgress: (received, total) => report('download', received, total) })
+      signal.throwIfAborted()
+      report('unpack', bytes, bytes)
+      const unpack = path.join(staging, 'contents')
+      await extractArchive(archive, unpack, build.archive, signal, { allowRepeatedDirectories: tool === 'maven' })
+      const folder = unpackedApacheHome(unpack, build, platform)
+      const sizeBytes = await installedSize(folder, signal)
+      signal.throwIfAborted()
+      const ready = path.join(staging, 'ready')
+      fs.mkdirSync(ready)
+      fs.renameSync(folder, path.join(ready, 'home'))
+      fs.writeFileSync(path.join(ready, 'release.json'), JSON.stringify({ sizeBytes }), { flag: 'wx', mode: 0o600 })
+      fs.renameSync(ready, destination)
+      return { id, tool, version: build.version, series, managed: true, sizeBytes }
+    })
+  }
+
   function moveAside(root, folder) {
     if (!fs.lstatSync(folder).isDirectory() || !samePath(fs.realpathSync(folder), folder)) throw new Error('보관함 밖의 파일은 지울 수 없습니다.')
     const hidden = path.join(root, `.remove-${process.pid}-${randomUUID()}`)
@@ -329,6 +448,14 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     for (const version of agentsIn(root)) removeInside(root, moveAside(root, path.join(root, version)))
   }
 
+  function removeTool(id) {
+    if (operation) throw new Error('개발 도구를 받은 다음 다시 시도해 주세요.')
+    if (typeof id !== 'string' || id.length > 120 || LOCAL_TOOL_ID.test(id)) throw new Error('ezShell에서 받은 도구만 지울 수 있습니다.')
+    const root = managedBase(false, TOOLS)
+    if (!managedTool(root, id)) throw new Error('ezShell에서 받은 도구만 지울 수 있습니다.')
+    removeInside(root, moveAside(root, path.join(root, id)))
+  }
+
   function cancel() {
     if (!operation || operation.signal.aborted) return false
     operation.abort()
@@ -336,6 +463,7 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
   }
 
   return { list, available, install, remove, cancel, javaHomeOf, isJbr, enhancedJvmArgs,
+    listTools, toolHomeOf, toolAvailable, installTool, removeTool, registerTomcat6,
     hotswapAgentStatus, hotswapAgentPath, installHotswapAgent, removeHotswapAgent }
 }
 

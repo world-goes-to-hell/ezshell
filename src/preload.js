@@ -174,6 +174,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runtimesRemove: (id) => ipcRenderer.invoke('runtimes-remove', id),
   runtimesHotswapInstall: () => ipcRenderer.invoke('runtimes-hotswap-install'),
   runtimesHotswapRemove: () => ipcRenderer.invoke('runtimes-hotswap-remove'),
+  runtimesToolAvailable: (tool, series) => ipcRenderer.invoke('runtimes-tool-available', tool, series),
+  runtimesToolInstall: (tool, series) => ipcRenderer.invoke('runtimes-tool-install', tool, series),
+  runtimesToolRemove: (id) => ipcRenderer.invoke('runtimes-tool-remove', id),
+  runtimesTomcatRegister: () => ipcRenderer.invoke('runtimes-tomcat-register'),
   runtimesRequired: (projectFolder) => ipcRenderer.invoke('runtimes-required', projectFolder),
   runtimesOpenLicense: (vendor) => ipcRenderer.invoke('runtimes-open-license', vendor),
   onRuntimesProgress: (callback) => {

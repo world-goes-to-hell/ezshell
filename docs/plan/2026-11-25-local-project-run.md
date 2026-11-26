@@ -237,6 +237,9 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
 이클립스 가져오기·Maven 우회·실패 진단은 사용자의 실제 프로젝트 정보를 받은 뒤에 한다. 이번에는 프로젝트 정보 없이 되는 것만 만든다.
 
 - **도구 (codex-4):** Tomcat 7·8.5·9·10.1·11, Maven 3.6·3.8·3.9, Ant 1.9·1.10 받기와 이 PC 에서 찾기. Tomcat 6 은 공식 SHA-512 가 없어 받지 않는다 (찾은 것은 쓸 수 있다). main 에 `runtimes.toolHomeOf(id) → 절대 경로 | null`.
+  - **Apache 배포 검증:** 현재 배포본은 `downloads.apache.org`, 이전 배포본은 `archive.apache.org/dist`의 TLS 응답을 신뢰한다. 요청과 리디렉션마다 정확한 HTTPS 호스트 허용 목록을 적용한다. 같은 호스트의 공식 `.sha512`로 파일 손상과 혼동을 검출한 뒤에만 경로를 검사하고 임시 폴더에 풀어 이름 바꾸기로 설치한다. 배포 호스트가 침해되면 파일과 체크섬이 함께 바뀔 수 있다. 이 흐름은 Apache PGP 서명을 검사하지 않는다. [현재 배포본](https://downloads.apache.org/) · [Apache 보관소](https://archive.apache.org/dist/)
+  - **Tomcat 6:** 2026-11-26 확인한 공식 6.0.53 배포에는 SHA-1·MD5 및 PGP 서명만 있다. 이 PC 에서 찾은 폴더를 쓰거나 폴더를 등록할 수 있고, 받기 화면은 Tomcat 7을 제안한다. [Tomcat 6 배포본](https://archive.apache.org/dist/tomcat/tomcat-6/v6.0.53/bin/)
+  - `runtimes-list`의 `tools` 항목은 `id`, `tool`, `version`, `series`, `managed` 및 알려진 폴더 이름·크기를 담는다. 찾은 도구의 버전과 계열을 확인할 수 없으면 각각 `null`이다. 절대 경로는 main 의 조회에서만 돌려준다.
 - **구성 종류 `tomcat` (codex-5 main, claude-1 화면):**
   ```ts
   type TomcatPreset = Preset & { kind: 'tomcat'

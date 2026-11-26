@@ -983,8 +983,20 @@ export interface HotswapAgentStatus {
   installed: boolean
   version?: string
 }
+export type ApacheTool = 'tomcat' | 'maven' | 'ant'
+export interface ApacheToolRuntime {
+  id: string
+  tool: ApacheTool
+  version: string | null
+  series: string | null
+  managed: boolean
+  folder?: string
+  sizeBytes?: number
+}
+export type ApacheToolBuild = { id: string; tool: ApacheTool; version: string; series: string; licenseUrl: string }
+type ApacheToolResult = { ok: true; tool: ApacheToolRuntime } | { ok: false; error?: string; cancelled?: true }
 export interface JdkProgress {
-  vendor: JdkVendor | 'hotswap-agent'
+  vendor: JdkVendor | 'hotswap-agent' | ApacheTool
   feature: number | null
   phase: 'lookup' | 'download' | 'unpack'
   received: number
@@ -1289,15 +1301,19 @@ declare global {
       onPinnedReplyMaximized?: (callback: (maximized: boolean) => void) => () => void
       pinnedReplyGo?: () => void
       onPinnedReplyGo?: (callback: (shellId: string) => void) => () => void
-      runtimesList: () => Promise<{ jdks: JdkRuntime[]; hotswapAgent: HotswapAgentStatus }>
+      runtimesList: () => Promise<{ jdks: JdkRuntime[]; hotswapAgent: HotswapAgentStatus; tools: ApacheToolRuntime[] }>
       runtimesAvailable: (vendor: JdkVendor, feature: number) => Promise<{ jdk: JdkBuild | null; error?: string }>
       runtimesInstall: (vendor: JdkVendor, feature: number) => Promise<{ ok: true; jdk: JdkRuntime } | { ok: false; error?: string; cancelled?: true }>
       runtimesCancel: () => Promise<boolean>
       runtimesRemove: (id: string) => Promise<{ ok: true } | { ok: false; error: string }>
       runtimesHotswapInstall: () => Promise<{ ok: true } | { ok: false; error?: string; cancelled?: true }>
       runtimesHotswapRemove: () => Promise<{ ok: true } | { ok: false; error: string }>
+      runtimesToolAvailable: (tool: ApacheTool, series: string) => Promise<{ tool: ApacheToolBuild | null; error?: string }>
+      runtimesToolInstall: (tool: ApacheTool, series: string) => Promise<ApacheToolResult>
+      runtimesToolRemove: (id: string) => Promise<{ ok: true } | { ok: false; error: string }>
+      runtimesTomcatRegister: () => Promise<ApacheToolResult>
       runtimesRequired: (projectFolder: string) => Promise<{ feature: number | null }>
-      runtimesOpenLicense: (vendor: JdkVendor | 'hotswap-agent') => Promise<boolean>
+      runtimesOpenLicense: (vendor: JdkVendor | 'hotswap-agent' | ApacheTool) => Promise<boolean>
       // Run presets of the local projects (src/ipc/runPresets.js; main window, unlocked). The first
       // argument is the worktree folder of the card: the presets are the project's, the states that worktree's
       runPresetsList?: (worktreeFolder: string) => Promise<RunPresetResult & { projectKey: string; worktreeKey: string; presets: RunPreset[]; states: Record<string, RunState> }>

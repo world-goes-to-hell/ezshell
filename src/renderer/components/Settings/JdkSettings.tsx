@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { takePendingJdkFeature } from '../../lib/settingsNavigation'
 import { formatBytes } from '../../lib/mcpLabels'
-import type { HotswapAgentStatus, JdkBuild, JdkProgress, JdkRuntime, JdkVendor } from '../../types'
+import type { ApacheToolBuild, ApacheToolRuntime, HotswapAgentStatus, JdkBuild, JdkProgress, JdkRuntime, JdkVendor } from '../../types'
+import { ApacheToolSettings } from './ApacheToolSettings'
 import './JdkSettings.css'
 
 const FEATURES = Array.from({ length: 20 }, (_, index) => 25 - index)
@@ -22,6 +23,7 @@ export function JdkSettings() {
   const api = window.electronAPI
   const [jdks, setJdks] = useState<JdkRuntime[] | null>(null)
   const [hotswapAgent, setHotswapAgent] = useState<HotswapAgentStatus | null>(null)
+  const [tools, setTools] = useState<ApacheToolRuntime[] | null>(null)
   // Opened from a run preset's JDK notice (lib/settingsNavigation.ts): 받기 open at that version
   const [asked] = useState(takePendingJdkFeature)
   const [expanded, setExpanded] = useState(asked !== null)
@@ -36,6 +38,7 @@ export function JdkSettings() {
   const [installing, setInstalling] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const [registering, setRegistering] = useState(false)
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
@@ -43,6 +46,7 @@ export function JdkSettings() {
       const runtimes = await api.runtimesList()
       setJdks(runtimes.jdks)
       setHotswapAgent(runtimes.hotswapAgent)
+      setTools(runtimes.tools)
     } catch { setNotice({ text: '개발 도구 목록을 읽지 못했습니다.', error: true }) }
   }, [api])
 
@@ -78,21 +82,37 @@ export function JdkSettings() {
   const legacy = feature === 6 || feature === 7
   const localLegacy = legacy ? jdks?.find(jdk => !jdk.managed && jdk.feature === feature) : undefined
 
-  const install = async (agent = false) => {
-    if (busy || (!agent && !selectedBuild)) return
-    const label = agent ? 'HotswapAgent' : 'JDK'
+  const install = async (agent = false, apache?: ApacheToolBuild) => {
+    if (busy || registering || removing || (!agent && !apache && !selectedBuild)) return
+    const label = apache ? 'Apache 도구' : agent ? 'HotswapAgent' : 'JDK'
     setInstalling(true)
     setNotice(null)
     try {
-      const result = agent
-        ? await api.runtimesHotswapInstall().then(outcome => outcome.ok ? { ...outcome, jdk: null } : outcome)
-        : await api.runtimesInstall(vendor, feature)
+      const result = apache
+        ? await api.runtimesToolInstall(apache.tool, apache.series).then(outcome => outcome.ok ? { ...outcome, version: outcome.tool.version } : outcome)
+        : agent
+          ? await api.runtimesHotswapInstall().then(outcome => outcome.ok ? { ...outcome, version: null } : outcome)
+          : await api.runtimesInstall(vendor, feature).then(outcome => outcome.ok ? { ...outcome, version: outcome.jdk.version } : outcome)
       if (result.ok) {
-        setNotice({ text: result.jdk ? `JDK ${result.jdk.version}을 보관함에 추가했습니다.` : 'HotswapAgent를 보관함에 추가했습니다.' })
+        setNotice({ text: result.version ? `보관함에 ${label} ${result.version} 설치를 완료했습니다.` : 'HotswapAgent를 보관함에 추가했습니다.' })
         await refresh()
       } else setNotice(result.cancelled ? { text: `${label} 받기를 취소했습니다.` } : { text: result.error ?? `${label}를 받지 못했습니다.`, error: true })
     } catch { setNotice({ text: `${label}를 받지 못했습니다.`, error: true }) }
     finally { setInstalling(false); setCancelling(false) }
+  }
+
+  const registerTomcat = async () => {
+    if (busy || removing || registering) return
+    setRegistering(true)
+    setNotice(null)
+    try {
+      const result = await api.runtimesTomcatRegister()
+      if (result.ok) {
+        setNotice({ text: `Tomcat ${result.tool.version} 폴더 등록을 완료했습니다.` })
+        await refresh()
+      } else if (!result.cancelled) setNotice({ text: result.error ?? 'Tomcat 6 폴더를 등록하지 못했습니다.', error: true })
+    } catch { setNotice({ text: 'Tomcat 6 폴더를 등록하지 못했습니다.', error: true }) }
+    finally { setRegistering(false) }
   }
 
   const cancel = async () => {
@@ -101,13 +121,13 @@ export function JdkSettings() {
     catch { setCancelling(false); setNotice({ text: '받기를 취소하지 못했습니다.', error: true }) }
   }
 
-  const remove = async (id: string) => {
-    if (busy || removing) return
+  const remove = async (id: string, apache: boolean) => {
+    if (busy || removing || registering) return
     setRemoving(true)
     setNotice(null)
-    const label = id === AGENT ? 'HotswapAgent' : 'JDK'
+    const label = apache ? 'Apache 도구' : id === AGENT ? 'HotswapAgent' : 'JDK'
     try {
-      const result = id === AGENT ? await api.runtimesHotswapRemove() : await api.runtimesRemove(id)
+      const result = apache ? await api.runtimesToolRemove(id) : id === AGENT ? await api.runtimesHotswapRemove() : await api.runtimesRemove(id)
       if (result.ok) {
         setPendingRemoval(null)
         setNotice({ text: `보관함에서 ${label}를 지웠습니다.` })
@@ -117,10 +137,10 @@ export function JdkSettings() {
     finally { setRemoving(false) }
   }
 
-  const removeButtons = (id: string, label: string) => pendingRemoval === id ? <div className="jdk-actions">
+  const removeButtons = (id: string, label: string, apache = false) => pendingRemoval === id ? <div className="jdk-actions">
     <button type="button" className="btn-secondary" disabled={removing} onClick={() => setPendingRemoval(null)}>취소</button>
-    <button type="button" className="btn-secondary" disabled={busy || removing} onClick={() => void remove(id)}>삭제 확인</button>
-  </div> : <button type="button" className="btn-secondary" disabled={busy || removing} aria-label={`${label} 지우기`} onClick={() => setPendingRemoval(id)}>지우기</button>
+    <button type="button" className="btn-secondary" disabled={busy || removing || registering} onClick={() => void remove(id, apache)}>삭제 확인</button>
+  </div> : <button type="button" className="btn-secondary" disabled={busy || removing || registering} aria-label={`${label} 지우기`} onClick={() => setPendingRemoval(id)}>지우기</button>
 
   const renderList = (managed: boolean) => {
     const visible = jdks?.filter(jdk => jdk.managed === managed)
@@ -163,7 +183,7 @@ export function JdkSettings() {
       </div>
       <div className="jdk-actions">
         <button type="button" className="btn-secondary" title={selectedBuild?.licenseUrl} onClick={() => void api.runtimesOpenLicense(vendor)}>라이선스 보기</button>
-        <button type="button" className="btn-primary" disabled={lookingUp || !selectedBuild || busy || alreadyInstalled} onClick={() => void install()}>
+        <button type="button" className="btn-primary" disabled={lookingUp || !selectedBuild || busy || alreadyInstalled || registering || removing} onClick={() => void install()}>
           {alreadyInstalled ? '받음' : '받아 두기'}
         </button>
       </div>
@@ -183,7 +203,7 @@ export function JdkSettings() {
         : <p className="settings-section-desc">이 버전의 공개 빌드가 없습니다. 이 PC에서 찾은 JDK를 실행 구성에서 선택할 수 있습니다.</p>}
     </div>}
     {busy && <div className="jdk-progress">
-      <span role="status">{cancelling ? '취소 중…' : progress?.phase === 'unpack' ? 'JDK 압축 푸는 중…' : progress?.phase === 'download' ? `받는 중 · ${formatBytes(progress.received)}` : '다운로드 확인 중…'}</span>
+      <span role="status">{cancelling ? '취소 중…' : progress?.phase === 'unpack' ? '압축 푸는 중…' : progress?.phase === 'download' ? `받는 중 · ${formatBytes(progress.received)}` : '다운로드 확인 중…'}</span>
       <progress aria-label="개발 도구 받기 진행률" max={progress?.total ?? undefined} value={progress?.total ? progress.received : undefined} />
       <button type="button" className="btn-secondary" disabled={cancelling} onClick={() => void cancel()}>받기 취소</button>
     </div>}
@@ -198,8 +218,10 @@ export function JdkSettings() {
         {hotswapAgent?.installed ? <>
           <span>받음 · {hotswapAgent.version}</span>
           {removeButtons(AGENT, 'HotswapAgent')}
-        </> : <button type="button" className="btn-primary" disabled={!hotswapAgent || busy || removing} onClick={() => void install(true)}>HotswapAgent 받기</button>}
+        </> : <button type="button" className="btn-primary" disabled={!hotswapAgent || busy || removing || registering} onClick={() => void install(true)}>HotswapAgent 받기</button>}
       </div>
     </section>
+    <ApacheToolSettings tools={tools} busy={busy || removing || registering} onInstall={build => void install(false, build)}
+      onRegisterTomcat={registerTomcat} removeButtons={(id, label) => removeButtons(id, label, true)} />
   </section>
 }
