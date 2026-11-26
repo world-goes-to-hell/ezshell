@@ -14,14 +14,15 @@ const { allowedJar } = require('../runtimes/jarSearch.js')
 const { tomcatInvocation, findJarCandidates, jarSuggestion, mcpJarSuggestion, selectedJarReferences, STALE_JAR } = require('./runJarSuggestions.js')
 const { MAX_PROPOSALS, STALE_PROPOSAL, prepareProposal, proposalStillCurrent, approvedProposalStatus, pendingProposals, agentProposals } = require('./runProposals.js')
 const { prepareHotReload, prepareTomcatReload, javaRunWithOptions, startHotReload, reloadLog, RESULTS: RELOAD_RESULTS } = require('./hotReload.js')
-const { planTomcat, stageTomcat, webDirectory, antTargets, webappCandidates, validContextPath, workspaceVmArguments, tomcatJars } = require('./tomcatRun.js')
+const { planTomcat, stageTomcat, webDirectory, antTargets, webappCandidates, validContextPath, vmOptionTokens, workspaceVmArguments, tomcatJars } = require('./tomcatRun.js')
 const { createWorkspaceAccess, workspaceServers } = require('./workspaceServers.js')
 const { javaVersionProbe, javaLogOptions } = require('./developmentEncoding.js')
 const { loadEclipseProject } = require('./eclipseProject.js')
 const { buildEclipse } = require('./eclipseBuild.js')
-const { createRunPresetStore, validatePreset, presetName, presetRelative, publicPreset, presetApproval, projectKey, realDirectory, directoryInProject } = require('./runPresetStore.js')
+const { createRunPresetStore, validatePreset, presetName, presetRelative, publicPreset, presetApproval, projectKey, realDirectory, directoryInProject, isSpringBootTask } = require('./runPresetStore.js')
+const { createRunBundleStore } = require('./runBundleStore.js')
+const { validateStartOrder, selectStartStages, stopStages, runStartStages, legacyStartOrder } = require('./runStartOrder.js')
 
-const READY_TIMEOUT = 300_000
 const USER = 'user'
 const USER_STOP_MS = 30_000
 const STOP_ALL_TRANSITION_MS = 10_000
@@ -91,17 +92,22 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   toolHomeOf = () => null, toolHomeFor = () => null, toolVersionOf = () => null,
   enhancedJvmArgs = () => null, userData = file && path.dirname(file), prepareReload = prepareHotReload, startReload = startHotReload,
   sendState = () => {}, notifyCrash = () => {}, sendAsUser, now = Date.now, projectOf = resolveProject,
-  prepareTask = prepareDevelopmentTask, jarHome }) {
+  prepareTask = prepareDevelopmentTask, jarHome, bundleStore }) {
   store ??= createRunPresetStore(file)
+  // Run bundles (part 3) are kept apart from the presets: saving a preset or the start order never drops them
+  bundleStore ??= createRunBundleStore(userData && path.join(userData, 'run-bundles.json'))
   const workspaceAccess = createWorkspaceAccess(userData && path.join(userData, 'run-workspace-folders.json'))
   const javaVersion = javaVersionProbe()
   const mavenOptions = { userData, listJdks, javaHomeOf, javaVersion }
   const runs = new Map()
   const byShell = new Map()
   const batches = new Map()
-  const stoppingAll = new Set()
+  const stoppingAll = new Map()
   let reloadSequence = 0
   const getRun = (project, id) => runs.get(runKey(project, id))
+  const orderOf = project => store.startOrder?.(project.key) ?? legacyStartOrder(store.list(project.key))
+  const failedRun = run => run?.state.status === 'crashed' ||
+    (!run?.intentionalExit && Number.isInteger(run?.state.exitCode) && run.state.exitCode !== 0)
 
   function find(project, id) {
     const preset = store.list(project.key).find(item => item.id === id)
@@ -200,7 +206,11 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       closeReload(run)
       run.expectedUrl = undefined
       byShell.set(shellId, run)
-      run.logs = createDevelopmentErrors(now, { tomcat: task.tomcat === true })
+      run.orderLogMatched = false
+      run.intentionalExit = false
+      run.logs = createDevelopmentErrors(now, { tomcat: task.tomcat === true, onOutputLine: line => {
+        if (run.orderLog && line.includes(run.orderLog)) run.orderLogMatched = true
+      } })
       run.jarDiagnosis?.search?.controller.abort(new Error(STALE_JAR))
       run.diagnosis = diagnosisContext(preset, task.mavenFeature)
       run.jarDiagnosis = { invocation: tomcatInvocation(preset), major: task.tomcatMajor }
@@ -238,6 +248,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     } else if (type === 'exit' && ACTIVE.has(run.state.status)) {
       closeReload(run)
       run.logs.finish(event.phase !== 'prepare' && event.phase !== 'launch')
+      run.intentionalExit = Boolean(event.action)
       const crashed = !event.action && (event.failed || (typeof event.exitCode === 'number' && event.exitCode !== 0))
       const buildFailed = crashed && event.phase === 'prepare'
       if (buildFailed) run.logs.addError('ERROR 빌드 실패', run.logs.groups().at(-1)?.lines)
@@ -272,8 +283,11 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       const question = new RunConfirmation('needsInstall', preset.id, defined.installCommand, cwd)
       if (!approve(question)) throw question
     }
+    const env = isSpringBootTask(preset) && preset.port !== undefined
+      ? { ...preset.env, SERVER_PORT: String(preset.port) }
+      : preset.env
     return { ...defined, id: `preset:${preset.id}`, relative: preset.relative, name: preset.name, label: preset.name,
-      javaHome, env: preset.env, enhancedArgs, logEncoding: preset.logEncoding }
+      javaHome, env, enhancedArgs, logEncoding: preset.logEncoding }
   }
 
   function guardAgent(preset, run, action) {
@@ -371,12 +385,13 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
         if (preset.kind === 'tomcat') task = await buildTomcatTask(task, project, preset, withEvents)
         else {
           if (usesMaven(preset)) task = await prepareMavenRun(task, preset, { ...mavenOptions, mavenVersion: wrapperMavenVersion(task) })
-          const javaTask = preset.kind === 'task' && /:(?:maven|gradle)$/.test(preset.taskId)
+          const javaTask = isSpringBootTask(preset)
           const logOptions = javaTask && preset.logEncoding !== 'auto' ? javaLogOptions(preset.logEncoding, await javaVersion(task.javaHome, task.env, task.cwd)) : []
+          const jvmOptions = javaTask ? [...vmOptionTokens(preset.vmArgs ?? ''), ...logOptions] : []
           if (preset.hotReload && preset.hotReload !== 'off') {
             const { enhancedArgs, ...base } = task
-            task = await prepareReload(base, { worktree: project.worktree, kind: preset.taskId, mode: preset.hotReload, args: enhancedArgs, logOptions, userData })
-          } else if (logOptions.length) task = await javaRunWithOptions(task, { kind: preset.taskId, args: logOptions, userData })
+            task = await prepareReload(base, { worktree: project.worktree, kind: preset.taskId, mode: preset.hotReload, args: enhancedArgs, jvmOptions, userData })
+          } else if (jvmOptions.length) task = await javaRunWithOptions(task, { kind: preset.taskId, args: jvmOptions, userData })
         }
         if (verifyActor) await verifyActor()
         ensureAllowed(canAct)
@@ -470,7 +485,23 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
         return { name: preset.name, status: state.status, port: portOf(state.address),
           errors: state.errors, agentControl: preset.agentControl, ...(state.failedAt && { failedAt: state.failedAt }), ...(state.reload && { reload: state.reload }) }
       })
-      return { presets, ...(process.platform === 'win32' && !presets.length && { message: runFolderHint(project.cwd) }) }
+      const batch = batches.get(project.worktreeKey)?.state
+      const bundles = bundleStore.list(project.key, store.list(project.key).map(preset => preset.id))
+      return { presets, ...(bundles.length && { bundles: bundles.map(bundle => bundle.name) }), ...(batch && { startup: { status: batch.status, step: batch.index + 1, total: batch.total, reason: batch.reason } }),
+        ...(process.platform === 'win32' && !presets.length && { message: runFolderHint(project.cwd) }) }
+    }
+    if (request.method === 'run-start-all' || request.method === 'run-stop-all') {
+      const verifyActor = async () => {
+        ensureAllowed(allowed)
+        const current = await agentProject(getAgent(by))
+        if (current.key !== project.key || current.worktreeKey !== project.worktreeKey) throw new Error(MOVED)
+        ensureAllowed(allowed)
+      }
+      // A bundle by name: only its presets, in the project's start order
+      const scope = request.bundle === undefined ? {} : { selected: bundleSelection(project, { name: request.bundle }) }
+      return request.method === 'run-start-all'
+        ? startAll(project, allowed, noApproval, { by, verifyActor, signal, detached: true, ...scope })
+        : stopAll(project, () => allowed() && !signal?.aborted, { by, verifyActor, ...scope })
     }
     const preset = store.list(project.key).find(item => item.name === presetName(request.name))
     if (!preset) throw new Error(process.platform === 'win32' ? `${MISSING} ${runFolderHint(project.cwd)}` : MISSING)
@@ -529,32 +560,154 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     return act(project, preset.id, operation, { by, allowed, verifyActor })
   }
 
-  async function startAll(project, allowed, approve) {
+  function publishBatch(project, batch, phase) {
+    if (batch) batch.state = { total: batch.stages.length, stages: batch.stages.map(stage => stage.ids), ...phase }
+    if (!isLocked()) sendState({ projectKey: project.key, worktreeKey: project.worktreeKey, batch: batch?.state ?? null })
+  }
+
+  function finishBatch(project, batch, cancelled = false) {
+    if (batches.get(project.worktreeKey) !== batch) return
+    for (const { ids } of batch.stages) for (const id of ids) {
+      const run = getRun(project, id)
+      if (run) run.orderLog = undefined
+    }
+    if (cancelled && batch.state) {
+      if (batch.state.status !== 'cancelled') {
+        publishBatch(project, batch, { status: 'cancelled', reason: 'cancelled', index: batch.state.index })
+      }
+    } else {
+      batches.delete(project.worktreeKey)
+      publishBatch(project, null)
+    }
+  }
+
+  async function driveBatch(project, batch, allowed, approve, { by = USER, verifyActor, signal } = {}) {
+    const abort = () => batch.abort()
+    if (signal?.aborted) abort()
+    else signal?.addEventListener('abort', abort, { once: true })
+    const mayStart = () => allowed() && !batch.signal.aborted
+    try {
+      const fail = await runStartStages(batch, {
+        signal: batch.signal, now, check: () => ensureAllowed(mayStart),
+        start: id => act(project, id, 'start', { by, allowed: mayStart, approve, verifyActor }),
+        active: id => ACTIVE.has(getRun(project, id)?.state.status),
+        failed: id => failedRun(getRun(project, id)),
+        meets(id, gate) {
+          const run = getRun(project, id)
+          return gate.kind === 'ready' ? run.state.status === 'running' : run.orderLogMatched
+        },
+        publish: phase => publishBatch(project, batch, phase)
+      })
+      batch.signal.throwIfAborted()
+      if (!fail) {
+        finishBatch(project, batch)
+        return { ok: true }
+      }
+      const { index, ids, reason, error } = fail
+      batch.failure = { index, ids, reason }
+      publishBatch(project, batch, { index, ids, reason, status: 'paused',
+        ...(error && { error: failure(error).error }) })
+      return { ok: true, paused: true, reason, step: index + 1 }
+    } catch (error) {
+      const cancelled = batch.signal.aborted || isLocked()
+      finishBatch(project, batch, cancelled)
+      if (cancelled) return { ok: true, cancelled: true }
+      throw error
+    } finally { signal?.removeEventListener('abort', abort) }
+  }
+
+  async function prepareBatch(project, batch, allowed, approve, { by = USER, verifyActor } = {}) {
+    for (const stage of batch.stages.slice(batch.index)) for (const id of stage.ids) {
+      ensureAllowed(allowed)
+      if (batch.ignored.has(id)) continue
+      let preset = find(project, id)
+      const run = runFor(project, id)
+      if (by !== USER) guardAgent(preset, run, 'start')
+      if (!ACTIVE.has(run.state.status) && (!batch.startedIds.has(id) || failedRun(run))) {
+        preset = confirmCommand(project, preset, by, approve)
+        await freshTask(project, preset, by, approve, allowed)
+        if (verifyActor) await verifyActor()
+      }
+      if (stage.gate.kind === 'log' && run.orderLog !== stage.gate.value) {
+        run.orderLog = stage.gate.value
+        run.orderLogMatched = run.logs.hasOutputLine(run.orderLog)
+      }
+    }
+  }
+
+  async function startAll(project, allowed, approve, { selected, ...actor } = {}) {
     const key = project.worktreeKey
     if (stoppingAll.has(key)) throw new Error('이 워크트리의 실행을 중지하는 중입니다.')
-    if (batches.has(key)) throw new Error('이 워크트리의 구성을 시작하는 중입니다.')
-    const presets = store.list(project.key).filter(preset => preset.inAll)
-    const batch = new AbortController()
+    const previous = batches.get(key)
+    if (previous && previous.state?.status !== 'cancelled') throw new Error('이 워크트리의 구성을 시작하는 중입니다.')
+    const order = orderOf(project)
+    const stages = selectStartStages(order, selected, presetIdsOf(project))
+    if (!stages.length) return { ok: true }
+    const controller = new AbortController()
+    const batch = { ...order, stages, project, index: 0, ignored: new Set(), skippedGates: new Set(), startedIds: new Set(),
+      signal: controller.signal, abort: () => controller.abort() }
     batches.set(key, batch)
-    const mayStart = () => allowed() && !batch.signal.aborted
-    let previous
     try {
-      for (const listed of presets) {
-        if (ACTIVE.has(getRun(project, listed.id)?.state.status)) continue
-        ensureAllowed(mayStart)
-        const preset = confirmCommand(project, find(project, listed.id), USER, approve)
-        await freshTask(project, preset, USER, approve, mayStart)
-      }
-      for (const preset of presets) {
-        if (previous && preset.waitReady) {
-          const { result } = await wait(previous, READY_TIMEOUT, batch.signal)
-          if (result !== 'ready') throw new Error('앞 실행 구성의 시작 완료를 확인하지 못했습니다.')
-        }
-        await act(project, preset.id, 'start', { by: USER, allowed: mayStart, approve })
-        previous = getRun(project, preset.id)
-      }
+      await actor.verifyActor?.()
+      await prepareBatch(project, batch, () => allowed() && !batch.signal.aborted && !actor.signal?.aborted, approve, actor)
+      actor.signal?.throwIfAborted()
+    } catch (error) {
+      finishBatch(project, batch)
+      throw error
+    }
+    if (actor.detached) {
+      // Authorization and folder are verified up front. The accepted run can outlive the agent's request or wake state.
+      void driveBatch(project, batch, () => !isLocked(), approve, { by: actor.by }).catch(() => {})
+      return { ok: true, stages: stages.length }
+    }
+    return driveBatch(project, batch, allowed, approve, actor)
+  }
+
+  async function resumeBatch(project, action, allowed, approve) {
+    ensureAllowed(allowed)
+    if (!['skip', 'retry', 'cancel'].includes(action)) throw new Error('기동 순서 조작을 확인해 주세요.')
+    const batch = batches.get(project.worktreeKey)
+    if (action === 'cancel' && (batch?.state?.status === 'paused' || batch?.state?.status === 'cancelled')) {
+      batch.abort()
+      finishBatch(project, batch)
       return { ok: true }
-    } finally { batches.delete(key) }
+    }
+    if (!batch?.failure || batch.resuming || batch.signal.aborted) throw new Error('멈춘 기동 순서를 찾을 수 없습니다.')
+    const { index, ids, reason } = batch.failure
+    batch.resuming = true
+    const previousIndex = batch.index
+    const previousIgnored = new Set(batch.ignored)
+    const previousGates = new Set(batch.skippedGates)
+    if (action === 'retry') batch.index = index
+    else if (reason === 'timeout') batch.skippedGates.add(index)
+    else ids.forEach(id => batch.ignored.add(id))
+    try {
+      // Repeat confirmation if a preset changed while the batch was paused.
+      await prepareBatch(project, batch, () => allowed() && !batch.signal.aborted, approve)
+    } catch (error) {
+      batch.index = previousIndex
+      batch.ignored = previousIgnored
+      batch.skippedGates = previousGates
+      throw error
+    } finally { batch.resuming = false }
+    batch.failure = null
+    return driveBatch(project, batch, allowed, approve)
+  }
+
+  async function startOne(project, id, choice, allowed, approve) {
+    ensureAllowed(allowed)
+    find(project, id)
+    if (choice !== undefined && !['include', 'only'].includes(choice)) throw new Error('앞 단계 실행 여부를 확인해 주세요.')
+    const order = orderOf(project)
+    const target = order.stages.findIndex(stage => stage.ids.includes(id))
+    const previous = order.stages.slice(0, Math.max(0, target)).flatMap(stage => stage.ids)
+    const missing = previous.filter(id => !ACTIVE.has(getRun(project, id)?.state.status))
+    if (order.askDependencies && missing.length && choice === undefined) {
+      return { needsDependencies: missing.map(id => find(project, id).name) }
+    }
+    return choice === 'include' && previous.length
+      ? startAll(project, allowed, approve, { selected: [...previous, id] })
+      : act(project, id, 'start', { allowed, approve })
   }
 
   async function waitForTransition(transition) {
@@ -568,19 +721,36 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     } finally { clearTimeout(timer) }
   }
 
-  async function stopAll(project, allowed) {
+  async function stopAll(project, allowed, { by = USER, verifyActor, selected } = {}) {
     ensureAllowed(allowed)
     const key = project.worktreeKey
     if (stoppingAll.has(key)) throw new Error('이 워크트리의 실행을 중지하는 중입니다.')
-    stoppingAll.add(key)
-    batches.get(key)?.abort()
-    try {
-      const results = await Promise.allSettled(store.list(project.key).map(async preset => {
+    await verifyActor?.()
+    const scope = selected && new Set(selected)
+    const presets = store.list(project.key).filter(preset => !scope || scope.has(preset.id))
+    const batch = batches.get(key)
+    const affectedBatch = batch && (!scope || batch.stages.some(stage => stage.ids.some(id => scope.has(id))))
+    if (by !== USER) {
+      const affected = new Set(batch?.state?.status !== 'cancelled' && affectedBatch ? batch.stages.flatMap(stage => stage.ids) : [])
+      for (const preset of presets) {
         const run = getRun(project, preset.id)
+        if (scope || run?.busy || ACTIVE.has(run?.state.status)) affected.add(preset.id)
+      }
+      for (const id of affected) guardAgent(find(project, id), getRun(project, id), 'stop')
+    }
+    if (stoppingAll.has(key)) throw new Error('이 워크트리의 실행을 중지하는 중입니다.')
+    stoppingAll.set(key, project.key)
+    if (affectedBatch) {
+      batch.abort()
+      finishBatch(project, batch)
+    }
+    try {
+      const stopOne = async id => {
+        const run = getRun(project, id)
         if (!run) return
         const transition = run.busy
         const stop = async () => {
-          if (ACTIVE.has(run.state.status)) await act(project, preset.id, 'stop', { allowed })
+          if (ACTIVE.has(run.state.status)) await act(project, id, 'stop', { allowed, by, verifyActor })
         }
         try { await waitForTransition(transition) }
         catch (error) {
@@ -589,9 +759,17 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
           throw error
         }
         await stop()
-      }))
-      const failure = results.find(result => result.status === 'rejected')
-      if (failure) throw failure.reason
+      }
+      let firstError
+      const order = orderOf(project)
+      const steps = scope && order.reverseStop
+        ? selectStartStages(order, selected, presets.map(preset => preset.id)).map(stage => stage.ids).reverse()
+        : stopStages(order, presets)
+      for (const ids of steps) {
+        const failed = (await Promise.allSettled(ids.map(stopOne))).find(result => result.status === 'rejected')
+        firstError ??= failed?.reason
+      }
+      if (firstError) throw firstError
       return { ok: true }
     } finally { stoppingAll.delete(key) }
   }
@@ -784,8 +962,38 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     return { ok: true }
   }
 
+  const presetIdsOf = project => store.list(project.key).map(preset => preset.id)
+  /** The presets a bundle starts (by id from the screen, by name from the MCP tools) */
+  const bundleSelection = (project, which) => bundleStore.selection(project.key, presetIdsOf(project), which)
+
   return {
-    projectOf, act, save, remove, send, sendPreview, startAll, stopAll, applySuggestion, dismissProposal, mavenPinStatus, changeMavenPin,
+    projectOf, act, save, remove, send, sendPreview, startOne, startAll, resumeBatch, stopAll, applySuggestion, dismissProposal, mavenPinStatus, changeMavenPin,
+    bundleSelection,
+    saveBundle(project, input, allowed) {
+      ensureAllowed(allowed)
+      return { ok: true, bundles: bundleStore.save(project.key, input, presetIdsOf(project)) }
+    },
+    removeBundle(project, id, allowed) {
+      ensureAllowed(allowed)
+      if (typeof id !== 'string') throw new Error('묶음을 찾지 못했습니다.')
+      return { ok: true, bundles: bundleStore.remove(project.key, id, presetIdsOf(project)) }
+    },
+    saveOrder(project, input, allowed, knownIds) {
+      ensureAllowed(allowed)
+      if ([...stoppingAll.values()].includes(project.key) ||
+        [...batches.values()].some(batch => batch.project.key === project.key && batch.state?.status !== 'cancelled')) {
+        throw new Error('실행이 끝난 뒤 기동 순서를 저장해 주세요.')
+      }
+      const presets = store.list(project.key)
+      if (knownIds !== undefined && (!Array.isArray(knownIds) || knownIds.length !== presets.length
+        || new Set(knownIds).size !== presets.length || presets.some(preset => !knownIds.includes(preset.id)))) {
+        throw new Error('실행 구성이 바뀌었습니다. 기동 순서 창을 다시 열어 주세요.')
+      }
+      const order = validateStartOrder(input, presets)
+      const ids = new Set(order.stages.flatMap(stage => stage.ids))
+      store.write(project.root, presets.map(preset => preset.inAll === ids.has(preset.id) ? preset : { ...preset, inAll: ids.has(preset.id) }), order)
+      return { ok: true }
+    },
     async agentTool(...args) {
       try { return redactRunOutput(await agentTool(...args)) }
       catch (error) {
@@ -798,6 +1006,8 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     list(project) {
       const presets = store.list(project.key)
       return { projectKey: project.key, worktreeKey: project.worktreeKey, presets: presets.map(publicPreset),
+        bundles: bundleStore.list(project.key, presets.map(preset => preset.id)),
+        startOrder: orderOf(project), batch: batches.get(project.worktreeKey)?.state ?? null,
         states: Object.fromEntries(presets.map(preset => [preset.id, getRun(project, preset.id)?.state ?? idle()])) }
     },
     async candidates(project, relative) {
@@ -860,7 +1070,12 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       if (taskId !== `preset:${run.id}` || !['restart', 'stop'].includes(action)) throw new Error(MISSING)
       return act(run.project, run.id, action, { allowed })
     },
-    cancelBatches() { for (const batch of batches.values()) batch.abort() },
+    cancelBatches() {
+      for (const batch of batches.values()) {
+        batch.abort()
+        finishBatch(batch.project, batch, true)
+      }
+    },
     suspendReloads() {
       for (const run of runs.values()) {
         suspendReload(run)
@@ -913,6 +1128,9 @@ function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, c
   handle('run-presets-save', (project, allowed, _frame, preset) => controller.save(project, preset, allowed))
   handle('run-presets-delete', (project, allowed, _frame, id) => controller.remove(project, id, allowed))
   handle('run-presets-reorder', (project, _allowed, _frame, ids) => controller.reorder(project, ids))
+  handle('run-start-order-save', (project, allowed, _frame, input, knownIds) => controller.saveOrder(project, input, allowed, knownIds))
+  handle('run-start-order-resume', (project, allowed, frame, action, config) => withConfirmation(project, allowed, frame, 'resume-order', action, config,
+    approve => controller.resumeBatch(project, action, allowed, approve)))
   async function withConfirmation(project, allowed, frame, action, id, config, execute) {
     const key = JSON.stringify([project.worktreeKey, action, id])
     const previous = confirms.get(key)
@@ -929,11 +1147,17 @@ function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, c
     }
   }
   for (const action of ['start', 'restart', 'stop']) handle(`run-preset-${action}`, (project, allowed, frame, id, config) => {
-    return withConfirmation(project, allowed, frame, action, id, config, approve => controller.act(project, id, action, { allowed, approve }))
+    return withConfirmation(project, allowed, frame, action, id, config, approve => action === 'start'
+      ? controller.startOne(project, id, config?.dependencies, allowed, approve)
+      : controller.act(project, id, action, { allowed, approve }))
   })
-  handle('run-preset-start-all', (project, allowed, frame, config) => withConfirmation(project, allowed, frame, 'start-all', null, config,
-    approve => controller.startAll(project, allowed, approve)))
-  handle('run-preset-stop-all', (project, allowed) => controller.stopAll(project, allowed))
+  // config.bundleId: only that run bundle's presets (part 3); a question asked for one bundle is not answered for another
+  const bundleScope = (project, config) => config?.bundleId === undefined ? {} : { selected: controller.bundleSelection(project, { id: config.bundleId }) }
+  handle('run-preset-start-all', (project, allowed, frame, config) => withConfirmation(project, allowed, frame, 'start-all', config?.bundleId ?? null, config,
+    approve => controller.startAll(project, allowed, approve, bundleScope(project, config))))
+  handle('run-preset-stop-all', (project, allowed, _frame, config) => controller.stopAll(project, allowed, bundleScope(project, config)))
+  handle('run-preset-bundle-save', (project, allowed, _frame, bundle) => controller.saveBundle(project, bundle, allowed))
+  handle('run-preset-bundle-delete', (project, allowed, _frame, id) => controller.removeBundle(project, id, allowed))
   handle('run-preset-errors', (project, _allowed, _frame, id) => controller.errors(project, id))
   handle('run-preset-diagnosis', (project, allowed, _frame, id) => controller.diagnosis(project, id, allowed))
   handle('run-preset-apply-suggestion', (project, allowed, _frame, id, request) => controller.applySuggestion(project, id, request, allowed))

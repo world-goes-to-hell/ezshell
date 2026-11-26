@@ -11,7 +11,7 @@ const session = (over: Partial<AgentHistorySession>): AgentHistorySession => ({
 
 describe('filterSessions', () => {
   const list = [
-    session({ key: 'a', title: '로그 화면', cwd: 'D:\\work\\app' }),
+    session({ key: 'a', title: '로그 화면', cwd: 'D:\\work\\app', role: '개발 B' }),
     session({ key: 'b', title: '사이드바', cwd: 'D:\\work\\app-feature', agent: 'codex', branch: 'feat/side' }),
     session({ key: 'c', title: '', preview: '', hasPrompt: false, cwd: 'D:\\work\\app' })
   ]
@@ -25,6 +25,7 @@ describe('filterSessions', () => {
   it('needs every word, in any field', () => {
     expect(keys({ query: 'codex side', showEmpty: false })).toEqual(['b'])
     expect(keys({ query: 'APP 로그', showEmpty: false })).toEqual(['a'])
+    expect(keys({ query: '개발 b 로그', showEmpty: false })).toEqual(['a'])
     expect(keys({ query: '없는말', showEmpty: false })).toEqual([])
   })
 })

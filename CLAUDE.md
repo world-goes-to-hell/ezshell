@@ -141,6 +141,7 @@ src/renderer/
 - Agent History Content Search (에이전트 기록의 대화 내용 검색) — 대화 본문 검색, 결과 발췌와 읽기 제한 · `AgentHistoryPanel.tsx`, `lib/agentHistory.ts`, `src/agentHistory/search.js` · [docs/architecture/agent-history.md](docs/architecture/agent-history.md)
 - Agent Session Drag (에이전트 기록의 대화를 끌어 놓아 이어서 열기) — 작업 공간 기록에서 끌어서 대화 재개 · `lib/agentSessionDrop.ts`, `hooks/useAgentSessionDrop.ts`, `App.tsx` · [docs/architecture/agent-history.md](docs/architecture/agent-history.md)
 - Sidebar Local Work Tree (로컬 작업: 저장소 → 워크트리 → 탭) — 저장소·워크트리·탭 구성과 표시 · `Sidebar/LocalProjectsTree.tsx`, `hooks/useLocalProjects.ts`, `lib/localWorkspaceTree.ts` · [docs/architecture/sidebar.md](docs/architecture/sidebar.md)
+- Nested Git Repositories (로컬 작업의 하위 Git 저장소) — 브랜치·변경 요약, 포커스에서 가져오기와 빠른 감기 방식의 받기 · `src/ipc/nestedRepositories.js`, `Sidebar/NestedRepositories.tsx` · [docs/architecture/sidebar.md](docs/architecture/sidebar.md)
 - Sidebar Local Terminal List (세션 목록 아래의 로컬 터미널 목록) — 로컬 터미널·연결 서버 목록과 칸 표시 · `Sidebar/LocalTerminalList.tsx`, `lib/localTerminalPane.ts`, `Sidebar/PaneLayoutBadge.tsx`, `lib/localProjectServers.ts` · [docs/architecture/sidebar.md](docs/architecture/sidebar.md)
 - Sidebar Session Tab Badge — 저장 세션의 열린 탭·칸 표시와 포커스 이동 · `lib/sessionTabs.ts`, `lib/paneFocus.ts`, `Sidebar/PaneMap.css` · [docs/architecture/sidebar.md](docs/architecture/sidebar.md)
 - App Name and User Data Folder — 설치 ID, 데이터 폴더와 작업 표시줄 그룹 · `main.js`, `src/userDataDir.js`, `package.json` · [docs/architecture/app-identity.md](docs/architecture/app-identity.md)

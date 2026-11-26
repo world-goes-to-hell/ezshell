@@ -1,0 +1,149 @@
+.nested-repositories-setting,
+.nested-repository-summary,
+.nested-repository-branch,
+.nested-repository-chips,
+.nested-repository-changes,
+.nested-repositories-toggle,
+.nested-repositories-controls,
+.nested-repository-open,
+.nested-repository-pull {
+  display: flex;
+  align-items: center;
+}
+
+.nested-repositories-setting { gap: 8px; margin-block: 8px; }
+.nested-repository-summary { flex: 0 1 auto; min-width: 0; gap: 5px; color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.nested-repository-branch { gap: 3px; min-width: 0; color: var(--text-secondary); }
+.nested-repository-branch > svg { flex: none; }
+.nested-repository-branch > span { overflow: hidden; text-overflow: ellipsis; }
+.nested-repository-behind { color: var(--accent); font-weight: 600; }
+.nested-repository-dirty,
+.nested-repository-ref[data-different],
+.nested-repository-chip[data-kind="branch"],
+.nested-repository-chip[data-kind="dirty"] { color: var(--warning-text, var(--warning, #b36b15)); }
+
+.nested-repository-chips { min-width: 0; gap: 3px; }
+.nested-repository-chip {
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  font: inherit;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.nested-repository-chip[data-kind="branch"] {
+  position: relative;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+}
+/* Keep the full label in layout so shortening it does not change the measured space. */
+.nested-repository-branch-size,
+.nested-repository-branch-label {
+  display: block;
+  padding: 1px 4px;
+  overflow: hidden;
+}
+.nested-repository-branch-size { visibility: hidden; }
+.nested-repository-branch-label {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  max-inline-size: 100%;
+  box-sizing: border-box;
+  border-radius: inherit;
+  background: var(--bg-tertiary);
+  text-overflow: ellipsis;
+}
+.nested-repository-chip[data-kind="behind"] { flex: none; color: var(--accent); cursor: pointer; }
+.nested-repository-chip[data-kind="behind"]:hover:not(:disabled) { background: var(--bg-modifier-hover, var(--bg-secondary)); }
+.nested-repository-chip[data-kind="behind"]:disabled { opacity: .55; cursor: default; }
+
+.nested-repositories {
+  margin: 4px 0 3px;
+  padding-block-start: 3px;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.nested-repositories button:not(.terminal-menu-item) {
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.nested-repositories button:hover:not(:disabled),
+.nested-repositories button[aria-pressed="true"] { background: var(--bg-modifier-hover, var(--bg-tertiary)); }
+.nested-repositories button:disabled { opacity: .55; cursor: default; }
+.nested-repositories-toggle { width: 100%; padding: 4px 5px; gap: 4px; text-align: left; }
+.nested-repositories-controls { justify-content: space-between; gap: 3px; padding: 3px 3px 5px; flex-wrap: wrap; }
+.nested-repository-remote-controls { border-bottom: 1px solid var(--border); }
+.nested-repository-trust { display: inline-flex; align-items: center; gap: 4px; }
+.nested-repository-trust > input { margin: 0 1px; accent-color: var(--accent); }
+.nested-repository-filter { display: flex; gap: 2px; }
+.nested-repository-filter > button,
+.nested-repository-pull { gap: 3px; padding: 3px 5px; white-space: nowrap; }
+.nested-repositories .nested-repository-pull { color: var(--accent); }
+.nested-repository-list { list-style: none; margin: 0; padding: 0; }
+.nested-repository-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 2px; }
+.nested-repository-main { display: flex; align-items: center; min-width: 0; gap: 3px; }
+.nested-repository-open { flex: 1; min-width: 0; gap: 4px; text-align: left; padding: 4px 3px; }
+.nested-repository-open > svg { flex: none; color: var(--text-muted); }
+.nested-repository-name,
+.nested-repository-ref { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nested-repository-name { color: var(--text-primary); }
+.nested-repositories .nested-repository-ref { min-width: 0; max-width: 50%; padding: 2px 4px; color: var(--text-muted); }
+.nested-repositories .nested-repository-ref[data-different] { color: var(--warning-text, var(--warning, #b36b15)); }
+.nested-repository-changes { gap: 3px; white-space: nowrap; }
+.nested-repository-more { display: grid; place-items: center; padding: 3px; }
+.nested-repository-result { grid-column: 1 / -1; margin-inline: 20px 5px; overflow-wrap: anywhere; color: var(--text-muted); font-size: 10px; }
+.nested-repository-result[data-result="received"] { color: var(--accent); }
+.nested-repository-result[data-result="failed"] { color: var(--error, #d74d51); }
+.nested-repository-empty { margin: 3px 5px 6px; color: var(--text-muted); }
+
+.modal-content.nested-branch-dialog { width: min(420px, calc(100vw - 32px)); max-width: none; padding: 18px; }
+.nested-branch-dialog .modal-title { margin: 0 0 4px; }
+.nested-branch-folder {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin: 0 0 14px;
+  overflow-wrap: anywhere;
+}
+.nested-branch-filter { margin-bottom: 8px; }
+.nested-branch-list {
+  max-height: min(36vh, 240px);
+  overflow: auto;
+  list-style: none;
+  margin: 0;
+  padding: 3px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.nested-branch-choice {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 7px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: transparent;
+  cursor: pointer;
+}
+.nested-branch-choice:hover { background: var(--bg-modifier-hover, var(--bg-tertiary)); }
+.nested-branch-choice[aria-pressed="true"] { border-color: var(--accent); background: var(--bg-modifier-hover, var(--bg-tertiary)); }
+.nested-branch-name, .nested-branch-remote { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.nested-branch-name { flex: 1; min-width: 0; }
+.nested-branch-remote { max-width: 28%; color: var(--text-muted); }
+.nested-branch-badge { flex: none; font-size: 10px; color: var(--text-secondary); }
+.nested-branch-message, .nested-branch-error { padding: 6px 0; font-size: 12px; }
+.nested-branch-message { color: var(--text-muted); }
+.nested-branch-error { color: var(--error-text, var(--error)); }

@@ -207,18 +207,21 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     const saved = binding && (roleStore.get(binding.key) ?? binding.inherit)
     return { ...saved, ...pendingRoles.get(id) }
   }
-  const activeRole = id => {
-    const { user, agent } = roleNames(id)
+  const effectiveRole = ({ user, agent } = {}) => {
     if (user) return { role: user, roleSource: 'user' }
     if (agent) return { role: agent, roleSource: 'agent' }
     return { role: null, roleSource: null }
   }
+  const activeRole = id => effectiveRole(roleNames(id))
+  const savedRoleFor = key => effectiveRole(roleStore.get(key)).role
 
   function saveRoles(id, binding, patch) {
+    const previous = savedRoleFor(binding.key)
     roleStore.update(binding.key, { ...pendingRoles.get(id), ...patch }, binding.inherit)
     binding.saved = true
     binding.inherit = undefined
     pendingRoles.delete(id)
+    if (previous !== savedRoleFor(binding.key) && !isLocked()) notify('agent-history-roles-changed')
   }
 
   function setRole(id, input, source) {
@@ -515,7 +518,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     switch (request.method) {
       case 'list': return { agents: [...agents.values()].filter(agent => isConnected(agent.id)).map(({ id, kind, cwd }) => ({ id, kind, cwd, role: activeRole(id).role })), self: from }
       case 'inspect-agent': return inspectAgent(request.id).state
-      case 'run-list': case 'run-start': case 'run-restart': case 'run-stop': case 'run-wait': case 'run-log': case 'run-propose': {
+      case 'run-list': case 'run-start': case 'run-restart': case 'run-stop': case 'run-wait': case 'run-log': case 'run-propose':
+      case 'run-start-all': case 'run-stop-all': {
         const allowed = () => !isLocked() && agentOfToken(request.token) === from && isConnected(from) && !agents.get(from)?.sleeping && !socket.destroyed
         if (!runPresetTool || !allowed()) throw new Error('연결된 로컬 에이전트만 이용할 수 있습니다.')
         socket.setTimeout(request.method === 'run-wait' ? 320_000 : 45_000)
@@ -1324,6 +1328,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
       return deliver(USER, request, agent)
     },
     setUserRole: (id, role) => setRole(id, role, 'user'),
+    savedRoleFor,
     hookEventsOf: id => (hookEvents.get(id) ?? []).map(event => ({ ...event })),
     hookSessionOf: id => hookSessions.get(id) ?? null,
     codexRoleContextOf: id => {

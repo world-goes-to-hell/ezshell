@@ -59,13 +59,14 @@ describe('hot reload launch', () => {
 
   it('only gives bootRun the Gradle JVM arguments, including an agent path with spaces', async () => {
     const args = ['-XX:+AllowEnhancedClassRedefinition', '-javaagent:C:\\Java agents\\hotswap-agent.jar']
+    const jvmOptions = ['-Xmx512m', '-Dserver.port=8181']
     const task = { id: '.:gradle', command: './gradlew bootRun --no-daemon', cwd: root, env: { X: 'Y' } }
-    const launch = await prepareHotReload(task, { worktree: root, userData: root, platform: 'linux', mode: 'enhanced', args, reserve: async () => 52148 })
+    const launch = await prepareHotReload(task, { worktree: root, userData: root, platform: 'linux', mode: 'enhanced', args, jvmOptions, reserve: async () => 52148 })
     const init = path.join(root, 'hot-reload', 'init.gradle')
     expect(launch.command).toBe(`${task.command} -I '${init}'`)
     expect(launch.command).not.toContain('52148')
     expect(launch.env.X).toBe('Y')
-    expect(JSON.parse(launch.env[HOT_ARGS]).slice(1)).toEqual(args)
+    expect(JSON.parse(launch.env[HOT_ARGS]).slice(1)).toEqual([...jvmOptions, ...args])
     expect(await fs.readFile(init, 'utf8')).toBe(INIT_GRADLE)
     expect(INIT_GRADLE).toMatch(/task.name == 'bootRun'/)
     expect(INIT_GRADLE).toContain(`task.environment.remove('${HOT_ARGS}')`)
@@ -78,9 +79,13 @@ describe('hot reload launch', () => {
       <!-- <artifactId>lombok</artifactId> --></dependencies></project>`)
     const task = { id: '.:maven', command: 'mvn spring-boot:run', cwd: root }
     const reserve = vi.fn()
-    const launch = await prepareHotReload(task, { worktree: root, userData: root, mode: 'standard', reserve })
+    const jvmOptions = ['-Xmx512m', '-Dserver.port=8181']
+    const launch = await prepareHotReload(task, { worktree: root, userData: root, mode: 'standard', reserve, jvmOptions })
     expect(await inspectJavaBuild(root)).toEqual({ devtools: true, lombok: false, encoding: 'MS949' })
-    expect(launch).toEqual({ ...task, hotReload: { worktree: root, cwd: root, devtools: true } })
+    expect(launch.hotReload).toEqual({ worktree: root, cwd: root, devtools: true })
+    expect(launch.command).toContain('-Dspring-boot.run.jvmArguments=')
+    expect(process.platform === 'win32' ? launch.env[MAVEN_ARGS] : launch.command).toContain(jvmOptions.join(' '))
+    expect(launch.command).not.toContain('jdwp')
     expect(reserve).not.toHaveBeenCalled()
   })
 })

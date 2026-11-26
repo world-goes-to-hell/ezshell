@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { pathKey } from '../lib/localWorkspaceTree'
 import { crashKey, runError, type PresetDraft } from '../lib/runPresets'
-import type { RunAction, RunErrorGroup, RunPreset, RunPresetResult, RunState } from '../types'
+import type { RunAction, RunBundle, RunErrorGroup, RunPreset, RunPresetOptions, RunPresetResult, RunStartOrder, RunStartProgress, RunState } from '../types'
 import { toast } from './toastStore'
 
 // Run presets of the local projects (docs/plan/2026-11-25-local-project-run.md, stage 1): main keeps the
@@ -21,6 +21,10 @@ export interface WorktreeRuns {
   worktreeKey: string
   presets: RunPreset[]
   states: Record<string, RunState>
+  startOrder?: RunStartOrder
+  batch?: RunStartProgress | null
+  /** The project's run bundles (part 3): the same in every worktree of the project */
+  bundles: RunBundle[]
 }
 
 export interface CrashNotice {
@@ -43,7 +47,7 @@ export interface AgentActionNotice {
 
 /** A question main asked before running (a typed command the first time, an install): RunCommandConfirm shows it */
 /** `action`: a one-off action main describes (exporting or deleting a Maven pin), confirmed like a command */
-export interface RunCommandAsk { key: number; kind: 'custom' | 'install' | 'action'; command: string }
+export interface RunCommandAsk { key: number; kind: 'custom' | 'install' | 'action' | 'dependencies'; command: string }
 
 interface RunPresetState {
   /** By worktree key, as main sends it (the worktree's real path) */
@@ -155,7 +159,8 @@ export async function loadRunPresets(folder: string, roots?: string[]): Promise<
     if (runError(result) && !Array.isArray(result?.presets)) { failed(true); return }
     const worktreeKey = result.worktreeKey || pathKey(folder)
     useRunPresets.setState(({ worktrees, aliases, projectRoots }) => ({
-      worktrees: { ...worktrees, [worktreeKey]: { folder, projectKey: result.projectKey, worktreeKey, presets: result.presets ?? [], states: result.states ?? {} } },
+      worktrees: { ...worktrees, [worktreeKey]: { folder, projectKey: result.projectKey, worktreeKey, presets: result.presets ?? [], states: result.states ?? {},
+        startOrder: result.startOrder, batch: result.batch, bundles: Array.isArray(result.bundles) ? result.bundles : [] } },
       aliases: { ...aliases, [pathKey(folder)]: worktreeKey },
       projectRoots: roots ? { ...projectRoots, [result.projectKey]: roots } : projectRoots
     }))
@@ -236,8 +241,15 @@ function applyState(projectKey: string, worktreeKey: string, id: string, state: 
 
 /** Follows main's state changes; once per window after the first unlock. Returns the cleanup. */
 export function startRunPresets(): () => void {
-  const off = runPresetApi().onRunPresetState?.(({ projectKey, worktreeKey, id, state, firstAgentAction }) =>
-    applyState(projectKey, worktreeKey, id, state, firstAgentAction === true))
+  const off = runPresetApi().onRunPresetState?.(event => {
+    const { projectKey, worktreeKey } = event
+    if ('batch' in event) {
+      useRunPresets.setState(({ worktrees }) => {
+        const entry = worktrees[worktreeKey]
+        return entry?.projectKey === projectKey ? { worktrees: { ...worktrees, [worktreeKey]: { ...entry, batch: event.batch } } } : {}
+      })
+    } else applyState(projectKey, worktreeKey, event.id, event.state, event.firstAgentAction === true)
+  })
   return () => off?.()
 }
 
@@ -266,11 +278,12 @@ export function clearRunPresets() {
   useRunPresets.setState({ worktrees: {}, aliases: {}, projectRoots: {}, notices: [], agentNotices: [], commandAsk: null, failed: {} })
 }
 
-let pendingAnswer: ((yes: boolean) => void) | null = null
+type RunAnswer = boolean | 'only'
+let pendingAnswer: ((answer: RunAnswer) => void) | null = null
 let askSerial = 0
 
 /** Shows main's question in RunCommandConfirm and waits for the answer (one at a time) */
-export function askRunCommand(kind: RunCommandAsk['kind'], command: string): Promise<boolean> {
+function askRunQuestion(kind: RunCommandAsk['kind'], command: string): Promise<RunAnswer> {
   pendingAnswer?.(false)
   return new Promise(resolve => {
     pendingAnswer = resolve
@@ -278,18 +291,23 @@ export function askRunCommand(kind: RunCommandAsk['kind'], command: string): Pro
   })
 }
 
-export function answerRunCommand(yes: boolean) {
+export async function askRunCommand(kind: Exclude<RunCommandAsk['kind'], 'dependencies'>, command: string): Promise<boolean> {
+  return await askRunQuestion(kind, command) === true
+}
+
+export function answerRunCommand(answer: RunAnswer) {
   const resolve = pendingAnswer
   pendingAnswer = null
   useRunPresets.setState({ commandAsk: null })
-  resolve?.(yes)
+  resolve?.(answer)
 }
 
-type Action = 'start' | 'restart' | 'stop' | 'startAll' | 'stopAll'
+type Action = 'start' | 'restart' | 'stop' | 'startAll' | 'stopAll' | 'skipOrder' | 'retryOrder' | 'cancelOrder'
 
 const FAILED: Record<Action, string> = {
   start: '실행하지 못했습니다', restart: '재기동하지 못했습니다', stop: '중지하지 못했습니다',
-  startAll: '모두 실행하지 못했습니다', stopAll: '모두 중지하지 못했습니다'
+  startAll: '모두 실행하지 못했습니다', stopAll: '모두 중지하지 못했습니다',
+  skipOrder: '다음 단계로 가지 못했습니다', retryOrder: '기동을 다시 시도하지 못했습니다', cancelOrder: '기동 순서를 닫지 못했습니다'
 }
 
 /**
@@ -297,16 +315,20 @@ const FAILED: Record<Action, string> = {
  * shown in full before it first runs (`needsConfirm`), a missing install is asked about (`needsInstall`).
  * Each comes alone; the request is sent again with that answer only (main keeps the earlier ones).
  */
-export async function runPresetAction(folder: string, action: Action, id?: string): Promise<boolean> {
+/** `bundle`: 모두 실행 / 모두 중지 of a run bundle only (its presets, in the project's start order) */
+export async function runPresetAction(folder: string, action: Action, id?: string, bundle?: { bundleId?: string }): Promise<boolean> {
   const api = runPresetApi()
-  let options: { confirmCustom?: true; confirmInstall?: true } = {}
+  let options: RunPresetOptions = {}
   const call = (): Promise<Result> | undefined => {
     switch (action) {
       case 'start': return api.runPresetStart?.(folder, id!, options)
       case 'restart': return api.runPresetRestart?.(folder, id!, options)
       case 'stop': return api.runPresetStop?.(folder, id!)
-      case 'startAll': return api.runPresetStartAll?.(folder, options)
-      case 'stopAll': return api.runPresetStopAll?.(folder)
+      case 'startAll': return api.runPresetStartAll?.(folder, bundle?.bundleId ? { ...options, bundleId: bundle.bundleId } : options)
+      case 'stopAll': return bundle?.bundleId ? api.runPresetStopAll?.(folder, { bundleId: bundle.bundleId }) : api.runPresetStopAll?.(folder)
+      case 'skipOrder': return api.runStartOrderResume?.(folder, 'skip', options)
+      case 'retryOrder': return api.runStartOrderResume?.(folder, 'retry', options)
+      case 'cancelOrder': return api.runStartOrderResume?.(folder, 'cancel')
     }
   }
   const entry = worktreeRuns(folder)
@@ -325,16 +347,25 @@ export async function runPresetAction(folder: string, action: Action, id?: strin
       toast.error(FAILED[action], '앱을 다시 시작해 주세요.')
       return false
     }
+    if (result.needsDependencies) {
+      const response = await askRunQuestion('dependencies', result.needsDependencies.join('\n'))
+      if (!response) {
+        if (pending) revealing.delete(pending)
+        return false
+      }
+      options = { dependencies: response === true ? 'include' : 'only' }
+      continue
+    }
     if (result.needsConfirm) {
       const yes = await askRunCommand('custom', result.needsConfirm.command)
       if (!yes) return false
-      options = { confirmCustom: true }
+      options = { dependencies: options.dependencies, confirmCustom: true }
       continue
     }
     if (result.needsInstall) {
       const yes = await askRunCommand('install', result.needsInstall.command)
       if (!yes) return false
-      options = { confirmInstall: true }
+      options = { dependencies: options.dependencies, confirmInstall: true }
       continue
     }
     const error = result.ok === true ? null : runError(result)

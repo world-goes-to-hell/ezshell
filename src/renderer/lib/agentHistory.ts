@@ -14,7 +14,7 @@ export const AGENT_LABELS: Record<LocalAgent, string> = { claude: 'Claude', code
 
 function matchesQuery(session: AgentHistorySession, words: readonly string[]): boolean {
   if (!words.length) return true
-  const text = [session.title, session.preview, session.cwd, session.branch, session.model, session.claudeProfileName, AGENT_LABELS[session.agent]]
+  const text = [session.title, session.preview, session.role, session.cwd, session.branch, session.model, session.claudeProfileName, AGENT_LABELS[session.agent]]
     .filter(Boolean).join('\n').toLowerCase()
   return words.every(word => text.includes(word))
 }
@@ -37,7 +37,7 @@ export const CONTENT_SEARCH_MIN_LENGTH = 2
 
 /**
  * The sessions to list when some matched by what was said in them (`hits`: key → excerpt, from the
- * main process): those matching by title, folder, branch or model, and those whose conversation
+ * main process): those matching by title, role, folder, branch or model, and those whose conversation
  * matched, in the list's order. The empty-session switch applies to both.
  */
 export function withContentMatches(sessions: readonly AgentHistorySession[], filter: AgentHistoryFilter, hits: ReadonlyMap<string, string>): AgentHistorySession[] {

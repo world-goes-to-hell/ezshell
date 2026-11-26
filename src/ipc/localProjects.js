@@ -8,22 +8,28 @@ const { readRepoTop, clearReadRepoCache, SAFE } = require('../localFiles/git.js'
 const { createDirectorySearch } = require('../localFiles/search.js')
 const { searchContent, checkContentQuery } = require('../localFiles/contentSearch.js')
 const { inspectDevelopmentTasks, prepareDevelopmentTask } = require('./localDevelopmentTasks.js')
+const { registerNestedRepositoryIpc } = require('./nestedRepositories.js')
 
 const exec = promisify(execFile)
 const DIRECTORY_LIMIT = 1000
 const COMMIT_LIMIT = 100
-const REPOSITORY_SCAN_LIMIT = 512
+const WORKSPACE_REPOSITORIES = { directoryLimit: 512, skip: name => name === '.git' || name === 'node_modules' }
+const SIDEBAR_REPOSITORIES = {
+  depth: 2, repositoryLimit: 50,
+  skip: name => name.startsWith('.') || name === 'node_modules',
+  stop: name => ['build', 'target', 'dist'].includes(name)
+}
 const REPOSITORY_SCAN_BATCH = 16
 const REPOSITORY_SCAN_TTL_MS = 10000
 const REPOSITORY_SCAN_TIMEOUT_MS = 15000
 const REPOSITORY_SCAN_CACHE_MAX = 20
-const REPOSITORY_SCAN_SKIP = new Set(['.git', 'node_modules'])
 const repositoryScans = new Map()
 const LOG_OPTIONS = ['log', '-z', '--no-color', '--no-show-signature', '--decorate=short', '--encoding=UTF-8', '--format=%H%x00%P%x00%h%x00%an%x00%aI%x00%s%x00%D']
 
-async function git(cwd, args, { timeout = 15000, signal } = {}) {
+async function git(cwd, args, { timeout = 15000, signal, noLazyFetch = false } = {}) {
   const { stdout } = await exec('git', args, {
-    cwd, timeout, signal, windowsHide: true, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024
+    cwd, timeout, signal, windowsHide: true, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+    ...(noLazyFetch && { env: { ...process.env, GIT_NO_LAZY_FETCH: '1' } })
   })
   return stdout
 }
@@ -42,40 +48,53 @@ function parseWorktrees(output, includeHead) {
   })
 }
 
-const listWorktrees = (root, includeHead = false) => git(root, [...SAFE, 'worktree', 'list', '--porcelain', '-z'])
+const listWorktrees = (root, includeHead = false) => git(root, [...SAFE, 'worktree', 'list', '--porcelain', '-z'], { noLazyFetch: true })
   .then(output => parseWorktrees(output, includeHead))
 
-async function findNestedRepositories(root, signal) {
-  const directories = [root]
+async function findNestedRepositories(root, signal, options = SIDEBAR_REPOSITORIES) {
+  const { depth: maxDepth = Infinity, repositoryLimit = Infinity, directoryLimit = Infinity, skip, stop } = options
+  let directories = [root]
+  let scheduled = 1
   const repositories = []
   // Read nearby folders first. Symlinks and dependency trees are excluded from discovery.
-  for (let first = 0; first < directories.length;) {
-    signal.throwIfAborted()
-    const batch = directories.slice(first, first + REPOSITORY_SCAN_BATCH)
-    first += batch.length
-    const visited = await Promise.all(batch.map(async directory => {
-      const real = await fs.promises.realpath(directory).catch(() => null)
-      if (!real || path.relative(directory, real) !== '') return null
-      const entries = await fs.promises.readdir(real, { withFileTypes: true }).catch(() => [])
-      return { real, entries }
-    }))
-    for (const folder of visited) {
-      if (!folder) continue
-      const { real, entries } = folder
-      if (path.relative(root, real) !== '' && entries.some(entry => entry.name === '.git' && (entry.isDirectory() || entry.isFile()))) {
-        repositories.push(real)
-      }
-      for (const entry of entries) {
-        if (directories.length >= REPOSITORY_SCAN_LIMIT) break
-        if (entry.isDirectory() && !REPOSITORY_SCAN_SKIP.has(entry.name.toLowerCase())) directories.push(path.join(real, entry.name))
+  for (let depth = 0; directories.length && depth <= maxDepth; depth++) {
+    const children = []
+    for (let first = 0; first < directories.length; first += REPOSITORY_SCAN_BATCH) {
+      signal.throwIfAborted()
+      const batch = directories.slice(first, first + REPOSITORY_SCAN_BATCH)
+      const visited = await Promise.all(batch.map(async directory => {
+        const info = await fs.promises.lstat(directory).catch(() => null)
+        if (!info?.isDirectory() || info.isSymbolicLink()) return null
+        const real = await fs.promises.realpath(directory).catch(() => null)
+        if (!isLocalFilePath(real) || path.relative(directory, real) !== '') return null
+        const entries = await fs.promises.readdir(real, { withFileTypes: true }).catch(() => [])
+        return { real, entries }
+      }))
+      for (const folder of visited) {
+        if (!folder) continue
+        const { real, entries } = folder
+        if (depth && entries.some(entry => entry.name === '.git' && (entry.isDirectory() || entry.isFile()))) {
+          repositories.push(real)
+          if (repositories.length === repositoryLimit) return repositories
+        }
+        if (depth === maxDepth || (depth && stop?.(path.basename(real).toLowerCase()))) continue
+        for (const entry of entries) {
+          if (scheduled >= directoryLimit) break
+          if (entry.isDirectory() && !skip(entry.name.toLowerCase())) {
+            children.push(path.join(real, entry.name))
+            scheduled++
+          }
+        }
       }
     }
+    directories = children.sort((a, b) => a.localeCompare(b))
   }
   return repositories
 }
 
-function nestedRepositoriesOf(root) {
-  const cached = repositoryScans.get(root)
+function nestedRepositoriesOf(root, sidebar = false) {
+  const cacheKey = `${sidebar ? 'sidebar' : 'workspace'}:${root}`
+  const cached = repositoryScans.get(cacheKey)
   if (cached && cached.until > Date.now()) return cached.read
   const controller = new AbortController()
   let timer
@@ -86,14 +105,15 @@ function nestedRepositoriesOf(root) {
       reject(error)
     }, REPOSITORY_SCAN_TIMEOUT_MS)
   })
-  const read = Promise.race([findNestedRepositories(root, controller.signal), deadline])
+  const options = sidebar ? SIDEBAR_REPOSITORIES : WORKSPACE_REPOSITORIES
+  const read = Promise.race([findNestedRepositories(root, controller.signal, options), deadline])
     .finally(() => clearTimeout(timer))
   const entry = { until: Infinity, read }
-  repositoryScans.delete(root)
-  repositoryScans.set(root, entry)
+  repositoryScans.delete(cacheKey)
+  repositoryScans.set(cacheKey, entry)
   if (repositoryScans.size > REPOSITORY_SCAN_CACHE_MAX) repositoryScans.delete(repositoryScans.keys().next().value)
   entry.read.then(() => { entry.until = Date.now() + REPOSITORY_SCAN_TTL_MS }, () => {
-    if (repositoryScans.get(root) === entry) repositoryScans.delete(root)
+    if (repositoryScans.get(cacheKey) === entry) repositoryScans.delete(cacheKey)
   })
   return entry.read
 }
@@ -243,7 +263,11 @@ function requireSearchQuery(value) {
  * `roots` (src/localFiles/roots.js) checks the folders the workspace panel reads, `git` is
  * src/localFiles/git.js. Requests name a root and a path relative to it.
  */
-function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = null, git: localGit = null, gitCommit = null, openDevelopmentTask, changeDevelopmentTask, openFolder = null }) {
+function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = null, git: localGit = null, gitCommit = null,
+  openDevelopmentTask, changeDevelopmentTask, openFolder = null, confirmNestedGit, nestedRepositoryTrustFile, confirmNestedRepositoryTrust }) {
+  registerNestedRepositoryIpc({ ipcMain, fromMainWindow, isLocked, discover: root => nestedRepositoriesOf(root, true),
+    worktrees: listWorktrees, confirmSettings: confirmNestedGit, trustFile: nestedRepositoryTrustFile,
+    confirmTrust: confirmNestedRepositoryTrust })
   const directorySearch = createDirectorySearch()
   let searchGeneration = 0
   let preparation = 0
@@ -418,4 +442,4 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
   }
 }
 
-module.exports = { registerLocalProjectIpc, inspectLocalProject, createLocalWorktree, listWorkspaceDirectory, readWorkspaceGit }
+module.exports = { registerLocalProjectIpc, inspectLocalProject, createLocalWorktree, listWorkspaceDirectory, readWorkspaceGit, findNestedRepositories }

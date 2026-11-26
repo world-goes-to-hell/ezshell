@@ -20,6 +20,12 @@ const EMPTY_ID = 'abcdef12-1111-4222-8333-777788889999'
 const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
 const jsonl = lines => lines.map(line => JSON.stringify(line)).join('\n') + '\n'
 
+const usedAt = Date.now()
+fs.writeFileSync(path.join(profile, 'agent-roles.json'), JSON.stringify({
+  [`claude:${CLAUDE_ID}`]: { user: '개발 B', agent: '검토 담당', usedAt },
+  [`codex:${CODEX_ID}`]: { user: '개발 D', usedAt }
+}))
+
 const claudeHome = path.join(profile, 'claude-config')
 const claudeProject = path.join(claudeHome, 'projects', 'work-app')
 fs.mkdirSync(claudeProject, { recursive: true })

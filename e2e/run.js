@@ -83,7 +83,8 @@ async function runSpec(name, visible) {
   const env = { ...process.env, EZSHELL_TEST_HIDDEN_WINDOWS: visible ? '0' : '1' }
   const chatFixture = manualClaude || name === 'app-chat-follow-theme' || name === 'local-agent-chat-timestamps'
   const entry = name === 'local-agent-chat-antigravity' && process.platform === 'win32'
-    ? 'e2e/support/antigravityChatApp.js' : chatFixture ? 'e2e/support/agentChatApp.js' : appEntry
+    ? 'e2e/support/antigravityChatApp.js' : chatFixture ? 'e2e/support/agentChatApp.js'
+      : name === 'local-nested-repos' ? 'e2e/support/localNestedReposApp.js' : appEntry
   // The startup spec seeds a profile and launches Electron separately for each palette.
   const app = name === 'startup-theme' ? null : spawn(packaged || require('electron'), [
     ...(packaged ? [] : [path.join(ROOT, entry)]),

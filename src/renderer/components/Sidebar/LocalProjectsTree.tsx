@@ -1,13 +1,24 @@
 import { useState, type DragEvent, type MouseEvent, type ReactNode } from 'react'
-import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolder3Line, RiFolderOpenLine, RiGitBranchLine, RiPlayLine } from 'react-icons/ri'
+import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolder3Line, RiFolderOpenLine, RiGitBranchLine, RiPlayLine, RiTerminalBoxLine } from 'react-icons/ri'
+import { SiNodedotjs, SiSpringboot, SiVuedotjs } from 'react-icons/si'
+import type { IconType } from 'react-icons'
 import type { LocalProjectState } from '../../hooks/useLocalProjects'
 import type { LocalDevelopmentTask } from '../../types'
 import { folderLabel, pathKey } from '../../lib/localWorkspaceTree'
+import { developmentTaskLabel, developmentTaskMenu } from '../../lib/developmentTaskMenu'
+import { presetOfTask, presetSeedOfTask } from '../../lib/runPresets'
+import { useDevelopmentRuns } from '../../lib/developmentRun'
+import { runPresetAction, worktreeRuns } from '../../stores/runPresetStore'
 import { confirmDialog } from '../../stores/confirmStore'
 import { toast } from '../../stores/toastStore'
-import { TerminalContextMenu, type TerminalMenuItem } from '../Terminal/TerminalContextMenu'
+import { TerminalContextMenu, type TerminalMenuGroup, type TerminalMenuItem } from '../Terminal/TerminalContextMenu'
 import { LocalSessionAgents } from './LocalSessionAgents'
 import { RunPresetAddButton, RunPresetsSection, requestAddRunPreset } from './RunPresetsSection'
+import { NestedRepositoryList, NestedRepositorySummary } from './NestedRepositories'
+import { useNestedRepositories, useNestedRepositoryProjects } from '../../stores/nestedRepositoryStore'
+
+const TASK_ICONS: Record<string, IconType> = { 'Spring Boot': SiSpringboot, Vue: SiVuedotjs, Node: SiNodedotjs }
+const taskIcon = (task: LocalDevelopmentTask) => TASK_ICONS[task.name] ?? RiPlayLine
 
 export interface WorktreeNode {
   path: string
@@ -22,6 +33,7 @@ export interface ProjectNode {
   folders: string[]
   name: string
   worktrees: WorktreeNode[]
+  isFolder?: boolean
   /** Shown under the name when Git could not be read */
   note?: string
 }
@@ -60,6 +72,7 @@ export function buildProjectNodes(projects: readonly LocalProjectState[]): Proje
       folders: [folder],
       name: folderLabel(folder),
       worktrees: [{ path: folder, branch: null, isMain: true }],
+      isFolder: !!info,
       note: error ?? (info ? undefined : '읽는 중…')
     })
   }
@@ -76,6 +89,8 @@ interface LocalProjectsTreeProps {
   renderTab: (tabId: string, label?: string) => ReactNode
   renderTabActions: (tabId: string, name: string) => ReactNode
   onOpenWorktree: (project: ProjectNode, worktree: WorktreeNode) => void
+  /** A new local terminal in the worktree, even when one is open there (the row's click goes to that one) */
+  onOpenTerminal?: (project: ProjectNode, worktree: WorktreeNode) => void
   onStartDevelopmentTask?: (folder: string, task: LocalDevelopmentTask) => void
   /** The saved SSH sessions linked to the project ("서버"), drawn above its worktrees */
   renderServers?: (project: ProjectNode) => ReactNode
@@ -105,8 +120,10 @@ type TaskMenu = {
 /** Registered folders → worktrees → the local terminals open in each (with their agents) */
 // Past agent sessions are not listed here: the agent history of the right panel shows them (user's choice)
 export function LocalProjectsTree({
-  nodes, folded, onToggleFold, tabsOf, currentTabId, renderTab, renderTabActions, onOpenWorktree, onStartDevelopmentTask, renderServers, onDropOnProject, onRemoveProject
+  nodes, folded, onToggleFold, tabsOf, currentTabId, renderTab, renderTabActions, onOpenWorktree, onOpenTerminal, onStartDevelopmentTask, renderServers, onDropOnProject, onRemoveProject
 }: LocalProjectsTreeProps) {
+  useNestedRepositoryProjects(nodes.filter(node => !node.note))
+  const nestedSummaries = useNestedRepositories(state => state.summaries)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [taskMenu, setTaskMenu] = useState<TaskMenu | null>(null)
   // The project row's menu: its folder in the file manager
@@ -124,6 +141,15 @@ export function LocalProjectsTree({
   }
   const folderItem = (folder: string): TerminalMenuItem[] => canOpenFolder
     ? [{ label: '파일 탐색기로 열기', icon: RiFolderOpenLine, onSelect: () => void openInExplorer(folder) }] : []
+  const projectItems = (folder: string): TerminalMenuItem[] => {
+    const project = nodes.find(node => node.folder === folder)
+    if (!project?.isFolder || !nestedSummaries[pathKey(folder)]?.count) return folderItem(folder)
+    return [
+      { label: '터미널 실행', icon: RiTerminalBoxLine, onSelect: () => (onOpenTerminal ?? onOpenWorktree)(project, project.worktrees[0]) },
+      { label: '실행 구성 추가…', icon: RiAddLine, onSelect: () => requestAddRunPreset(folder) },
+      ...folderItem(folder)
+    ]
+  }
   const openTasks = async (event: MouseEvent<HTMLElement>, worktree: WorktreeNode) => {
     event.preventDefault()
     event.stopPropagation()
@@ -137,7 +163,24 @@ export function LocalProjectsTree({
       setTaskMenu(current => current === opened ? { ...opened, result: { success: false, error: '기동 명령을 읽지 못했습니다.' } } : current)
     }
   }
+  /** Whether a shell of this worktree runs (or ran) this found command, started from the menu before presets */
+  const startedDirectly = async (worktree: WorktreeNode, task: LocalDevelopmentTask) => {
+    if (!Object.values(useDevelopmentRuns.getState().runs).some(run => run.taskId === task.id)) return false
+    const shells = await window.electronAPI.localShellList?.().catch(() => undefined) ?? []
+    const folder = pathKey(task.relative === '.' ? worktree.path : `${worktree.path}/${task.relative}`)
+    return shells.some(shell => shell.development?.taskId === task.id && !!shell.cwd && pathKey(shell.cwd) === folder)
+  }
   const runTask = async (worktree: WorktreeNode, task: LocalDevelopmentTask) => {
+    // A found command is set up before it runs (2026-11-26 user request): the run preset dialog opens with its
+    // folder and way chosen, and starts it once added; one already saved for it just starts. A folder left out of
+    // the sparse checkout has no files for a preset yet, so it keeps the direct start that brings them in.
+    // A server this command already started the old way keeps going through it, which goes back to its tab.
+    if (!task.includeSource && typeof window.electronAPI.runPresetsList === 'function' && !await startedDirectly(worktree, task)) {
+      const saved = presetOfTask(worktreeRuns(worktree.path)?.presets ?? [], task)
+      if (saved) void runPresetAction(worktree.path, 'start', saved.id)
+      else requestAddRunPreset(worktree.path, presetSeedOfTask(task))
+      return
+    }
     if (task.includeSource || task.installCommand) {
       const actions = [task.includeSource ? `이 워크트리의 sparse checkout에 ${task.relative}/ 폴더를 포함합니다.` : '',
         task.installCommand ? `의존성 설치 명령 ${task.installCommand}` : '', `기동 명령 ${task.command}`].filter(Boolean)
@@ -146,6 +189,19 @@ export function LocalProjectsTree({
     }
     onStartDevelopmentTask?.(worktree.path, task)
   }
+  const taskMenuOf = (menu: TaskMenu) => {
+    const { result, worktree } = menu
+    const preferred = worktree.branch?.split('/').pop() || folderLabel(worktree.path)
+    return developmentTaskMenu(result?.success ? result.tasks : [], preferred)
+  }
+  // Many start commands (an MSA repository) go into one submenu per kind, so the menu stays on screen
+  const taskGroups = (menu: TaskMenu): TerminalMenuGroup[] => taskMenuOf(menu).groups.map(group => ({
+    label: `${group.kind} 기동 · ${group.tasks.length}개`,
+    icon: TASK_ICONS[group.kind] ?? RiPlayLine,
+    items: group.tasks.map(task => ({
+      label: developmentTaskLabel(task, true), icon: taskIcon(task), onSelect: () => void runTask(menu.worktree, task)
+    }))
+  }))
   const taskItems = (menu: TaskMenu): TerminalMenuItem[] => {
     const { result, worktree } = menu
     const tasks = result?.success ? result.tasks : []
@@ -154,14 +210,15 @@ export function LocalProjectsTree({
       ? [{ label: '실행 구성 추가…', icon: RiAddLine, onSelect: () => requestAddRunPreset(worktree.path) }] : []
     // The items that are there from the start come first: the start commands arrive a moment later, and
     // above them they pushed the other items down under the pointer (2026-11-26 user report)
-    const fixed = [...add, ...folderItem(worktree.path)]
+    // 터미널 실행 (user request, 2026-11-26): a new shell in this worktree's folder
+    const project = nodes.find(node => node.worktrees.some(tree => tree.path === worktree.path))
+    const terminal: TerminalMenuItem[] = onOpenTerminal && project
+      ? [{ label: '터미널 실행', icon: RiTerminalBoxLine, onSelect: () => onOpenTerminal(project, worktree) }] : []
+    const fixed = [...terminal, ...add, ...folderItem(worktree.path)]
     if (!tasks.length) return [...fixed, { icon: RiPlayLine, disabled: true, onSelect: () => {},
       label: !result ? '기동 명령 찾는 중…' : result.success ? '찾은 기동 명령이 없습니다' : result.error }]
-    const preferred = (worktree.branch?.split('/').pop() || folderLabel(worktree.path)).toLowerCase()
-    const match = (task: LocalDevelopmentTask) => Number(task.relative.toLowerCase() === preferred)
-    return [...fixed, ...[...tasks].sort((a, b) => match(b) - match(a)).map(task => ({
-      label: `${task.name} 기동${task.relative === '.' ? '' : ` · ${task.relative}`}`,
-      icon: RiPlayLine, onSelect: () => void runTask(worktree, task)
+    return [...fixed, ...taskMenuOf(menu).direct.map(task => ({
+      label: developmentTaskLabel(task), icon: taskIcon(task), onSelect: () => void runTask(worktree, task)
     }))]
   }
   // Sessions and tabs are dragged as text/plain (`session:<id>` / the tab id)
@@ -187,6 +244,7 @@ export function LocalProjectsTree({
       {nodes.map(project => {
         const projectKey = projectFoldKey(project.folder)
         const isProjectOpen = !folded.has(projectKey)
+        const plainNested = project.isFolder && !!nestedSummaries[pathKey(project.folder)]?.count
         const projectWorking = !isProjectOpen && project.worktrees.some(tree => tabsOf(tree.path).some(tab => tab.working))
         const Chevron = isProjectOpen ? RiArrowDownSLine : RiArrowRightSLine
         return (
@@ -204,8 +262,10 @@ export function LocalProjectsTree({
                 <Chevron size={14} className="local-project-chevron" />
                 <RiFolder3Line size={14} className="local-project-icon" />
                 <span className="local-project-name">{project.name}</span>
+                <NestedRepositorySummary project={project.folder} />
                 {project.note && <span className="local-project-note">{project.note}</span>}
               </button>
+              {plainNested && isProjectOpen && <RunPresetAddButton folder={project.folder} />}
               {onRemoveProject && (
                 <button type="button" className="local-project-remove" onClick={() => onRemoveProject(project)}
                   title="목록에서 빼기 (폴더와 열린 터미널은 그대로)" aria-label={`${project.name} 을 목록에서 빼기`}>
@@ -231,6 +291,17 @@ export function LocalProjectsTree({
                   const isCurrent = singleTab?.id === currentTabId
                   const name = folderLabel(worktree.path)
                   const shownNames = [name, project.name, worktree.branch && `${project.name} · ${worktree.branch}`]
+                  const presets = <RunPresetsSection folder={worktree.path} projectName={project.name} roots={project.worktrees.map(tree => tree.path)} />
+                  const nested = <NestedRepositoryList root={worktree.path}
+                    onOpenTerminal={repo => (onOpenTerminal ?? onOpenWorktree)(project, { path: repo.path, branch: repo.error === undefined ? repo.branch : null, isMain: false })}
+                    onAddPreset={relative => requestAddRunPreset(worktree.path, { relative })} />
+                  if (plainNested) return (
+                    <li key={treeKey} className="local-worktree is-folder" data-worktree-path={worktree.path}>
+                      {tabs.length > 0 && <ul className="local-terms-list is-nested">{tabs.map(tab => renderTab(tab.id))}</ul>}
+                      {presets}
+                      {nested}
+                    </li>
+                  )
                   return (
                     <li key={treeKey} className={`local-worktree${tabs.length > 0 ? ' has-tabs' : ''}${isCurrent ? ' is-current' : ''}`}
                       data-worktree-path={worktree.path} data-local-session-id={singleTab?.id}
@@ -284,7 +355,8 @@ export function LocalProjectsTree({
                       )}
                       {/* The project's run presets as this worktree runs them (docs/plan/2026-11-25-local-project-run.md):
                           the presets are shared, each worktree has its own servers and states */}
-                      <RunPresetsSection folder={worktree.path} projectName={project.name} roots={project.worktrees.map(tree => tree.path)} />
+                      {presets}
+                      {nested}
                     </li>
                   )
                 })}
@@ -295,10 +367,10 @@ export function LocalProjectsTree({
       })}
     </ul>
       {taskMenu && <TerminalContextMenu key={`${taskMenu.worktree.path}:${taskMenu.position.x}:${taskMenu.position.y}`}
-        position={taskMenu.position} top={[]} groups={[]} onClose={() => setTaskMenu(null)}
+        position={taskMenu.position} top={[]} groups={taskGroups(taskMenu)} onClose={() => setTaskMenu(null)}
         target={{ name: folderLabel(taskMenu.worktree.path), hint: '개발 서버', items: taskItems(taskMenu) }} />}
       {folderMenu && <TerminalContextMenu key={`${folderMenu.folder}:${folderMenu.position.x}:${folderMenu.position.y}`}
         position={folderMenu.position} top={[]} groups={[]} onClose={() => setFolderMenu(null)}
-        target={{ name: folderMenu.name, hint: '프로젝트', items: folderItem(folderMenu.folder) }} />}
+        target={{ name: folderMenu.name, hint: '프로젝트', items: projectItems(folderMenu.folder) }} />}
   </>)
 }

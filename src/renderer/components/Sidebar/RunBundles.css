@@ -1,0 +1,59 @@
+/* Run bundles (RunBundlePicker, RunBundleDialog): the head's start / stop with the bundle choice */
+.run-bundle-picker { display: inline-flex; flex: none; align-items: stretch; min-width: 0; max-width: 60%; }
+.run-presets-head .run-bundle-picker button { display: inline-flex; align-items: center; }
+.run-bundle-go {
+  gap: 3px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: var(--radius-sm, 4px) 0 0 var(--radius-sm, 4px);
+  background: var(--bg-primary);
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.run-bundle-go[data-action="stop"] { color: var(--error-text, var(--error)); }
+.run-bundle-go:disabled { color: var(--text-muted); cursor: default; }
+.run-bundle-go:hover:not(:disabled) { background: var(--bg-hover); }
+.run-bundle-go-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-bundle-more {
+  padding: 0 2px;
+  border: 1px solid var(--border);
+  border-radius: 0 var(--radius-sm, 4px) var(--radius-sm, 4px) 0;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.run-bundle-more:hover, .run-bundle-more[data-state="open"] { background: var(--bg-hover); color: var(--text-primary); }
+.run-bundle-go:focus-visible, .run-bundle-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.run-bundle-menu { min-width: 200px; }
+.run-bundle-item .run-bundle-check { display: inline-block; width: 15px; flex: none; }
+.run-bundle-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-bundle-count { flex: none; margin-left: 12px; color: var(--text-muted); font-size: 11px; }
+
+.run-bundle-dialog { width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; }
+.run-bundle-form { display: grid; gap: 8px; }
+.run-bundle-presets { display: grid; gap: 3px; margin: 0; padding: 0; border: none; }
+.run-bundle-presets legend { margin-bottom: 4px; padding: 0; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.run-bundle-form label.run-bundle-preset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 400;
+  cursor: pointer;
+}
+.run-bundle-form label.run-bundle-preset[data-on] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--bg-primary)); }
+.run-bundle-form .run-bundle-preset input[type="checkbox"] { flex: none; width: auto; margin: 0; padding: 0; box-shadow: none; accent-color: var(--accent); }
+.run-bundle-preset-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.run-bundle-preset-folder { flex: none; color: var(--text-muted); font-family: var(--font-mono, monospace); font-size: 11px; }

@@ -196,6 +196,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localProjectDevelopmentTasks: (folder) => ipcRenderer.invoke('local-project-development-tasks', folder),
   // The sidebar's 파일 탐색기로 열기 for a project or worktree folder (main checks it is a folder of this PC)
   localProjectOpenFolder: (folder) => ipcRenderer.invoke('local-project-open-folder', folder),
+  localNestedRepositoriesStatus: (request) => ipcRenderer.invoke('local-nested-repositories-status', request),
+  localNestedRepositoriesFetch: (request) => ipcRenderer.invoke('local-nested-repositories-fetch', request),
+  localNestedRepositoriesPreferences: (enabled) => ipcRenderer.invoke('local-nested-repositories-preferences', enabled),
+  localNestedRepositoriesTrust: (request) => ipcRenderer.invoke('local-nested-repositories-trust', request),
+  localNestedRepositoriesPull: (request) => ipcRenderer.invoke('local-nested-repositories-pull', request),
+  localNestedRepositoryBranches: (request) => ipcRenderer.invoke('local-nested-repository-branches', request),
+  localNestedRepositorySwitchBranch: (request) => ipcRenderer.invoke('local-nested-repository-switch-branch', request),
+  onLocalNestedRepositoriesProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress)
+    ipcRenderer.on('local-nested-repositories-progress', listener)
+    return () => ipcRenderer.removeListener('local-nested-repositories-progress', listener)
+  },
   localProjectDevelopmentStart: (options) => ipcRenderer.invoke('local-project-development-start', options),
   localProjectDevelopmentChange: (options) => ipcRenderer.invoke('local-project-development-change', options),
   runPresetsList: (folder) => ipcRenderer.invoke('run-presets-list', folder),
@@ -210,11 +222,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runPresetsSave: (folder, preset) => ipcRenderer.invoke('run-presets-save', folder, preset),
   runPresetsDelete: (folder, id) => ipcRenderer.invoke('run-presets-delete', folder, id),
   runPresetsReorder: (folder, ids) => ipcRenderer.invoke('run-presets-reorder', folder, ids),
+  runStartOrderSave: (folder, order, knownIds) => ipcRenderer.invoke('run-start-order-save', folder, order, knownIds),
+  runStartOrderResume: (folder, action, options) => ipcRenderer.invoke('run-start-order-resume', folder, action, options),
   runPresetStart: (folder, id, options) => ipcRenderer.invoke('run-preset-start', folder, id, options),
   runPresetRestart: (folder, id, options) => ipcRenderer.invoke('run-preset-restart', folder, id, options),
   runPresetStop: (folder, id) => ipcRenderer.invoke('run-preset-stop', folder, id),
   runPresetStartAll: (folder, options) => ipcRenderer.invoke('run-preset-start-all', folder, options),
-  runPresetStopAll: (folder) => ipcRenderer.invoke('run-preset-stop-all', folder),
+  runPresetStopAll: (folder, options) => ipcRenderer.invoke('run-preset-stop-all', folder, options),
+  runPresetBundleSave: (folder, bundle) => ipcRenderer.invoke('run-preset-bundle-save', folder, bundle),
+  runPresetBundleDelete: (folder, id) => ipcRenderer.invoke('run-preset-bundle-delete', folder, id),
   runPresetErrors: (folder, id) => ipcRenderer.invoke('run-preset-errors', folder, id),
   runPresetDiagnosis: (folder, id) => ipcRenderer.invoke('run-preset-diagnosis', folder, id),
   runPresetMavenPinStatus: (folder, id) => ipcRenderer.invoke('run-preset-maven-pin-status', folder, id),
@@ -253,6 +269,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentHistoryDetail: (shellId, key) => ipcRenderer.invoke('agent-history-detail', shellId, key),
   agentHistorySearch: (shellId, query) => ipcRenderer.invoke('agent-history-search', shellId, query),
   agentHistoryOpenFolder: (shellId, key) => ipcRenderer.invoke('agent-history-open-folder', shellId, key),
+  onAgentHistoryRolesChanged: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('agent-history-roles-changed', handler);
+    return () => ipcRenderer.removeListener('agent-history-roles-changed', handler);
+  },
   localShellAttach: (id) => ipcRenderer.invoke('local-shell-attach', id),
   onLocalShellInboxDraft: (callback) => {
     const listener = (_event, notice) => callback(notice);

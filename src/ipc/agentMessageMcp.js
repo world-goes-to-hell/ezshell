@@ -225,6 +225,15 @@ async function main() {
     server.registerTool(`run_${action}`, { description: `${action[0].toUpperCase() + action.slice(1)} a project preset by name in your worktree. Requires agentControl.`, inputSchema: { name: runName } },
       ({ name }, extra) => call({ method: `run-${action}`, name }, extra?.signal))
   }
+  const bundle = z.string().trim().min(1).max(20).optional().describe('A run bundle name from run_list: only its presets, in the project’s start order.')
+  server.registerTool('run_start_all', {
+    description: 'Start included presets (or a run bundle’s presets) in your worktree in the project’s configured stages. Requires agentControl on each preset and any earlier user approvals. Use run_list to check the current stage.',
+    inputSchema: { bundle }
+  }, ({ bundle }, extra) => call({ method: 'run-start-all', ...(bundle ? { bundle } : {}) }, extra?.signal))
+  server.registerTool('run_stop_all', {
+    description: 'Cancel the current staged startup and stop running project presets (or a run bundle’s presets) in your worktree. Uses the project’s stop order. Requires agentControl on each affected preset.',
+    inputSchema: { bundle }
+  }, ({ bundle }, extra) => call({ method: 'run-stop-all', ...(bundle ? { bundle } : {}) }, extra?.signal))
   server.registerTool('run_wait', {
     description: 'Wait up to 300 seconds for readiness or the next hot reload result in your worktree. Works with agent control off.',
     inputSchema: { name: runName, seconds: z.number().int().min(1).max(300).optional(), until: z.enum(['ready', 'reload']).optional() }

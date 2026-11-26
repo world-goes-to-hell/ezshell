@@ -2,16 +2,20 @@
 
 [공통 작업 규칙과 기능별 목록](../../CLAUDE.md)
 
-사이드바 **로컬 작업**의 실행 구성은 프로젝트의 서버 시작 방법을 저장한다. 구성은 프로젝트에서 공유하고, 실행 상태·오류·제안·터미널은 워크트리별로 둔다. 구성이 없는 워크트리는 카드에 자리를 두지 않고, 워크트리 줄에 마우스를 올리면 보이는 `+`(`RunPresetAddButton`)와 우클릭 메뉴의 `실행 구성 추가…`로 추가한다 (2026-11-26 사용자 요청). 그 메뉴는 처음부터 있는 항목(`실행 구성 추가…`, `파일 탐색기로 열기`)을 위에 두고, 조금 늦게 오는 기동 명령(`기동 명령 찾는 중…` 자리)을 그 아래에 붙인다: 위에 두면 명령이 도착하며 다른 항목을 포인터 아래에서 밀어냈다. 구현 규칙은 이 문서를 기준으로 본다. 단계별 결정, 버전 검증 표본과 다운로드 공급자의 신뢰 기준은 [설계 기록](../plan/2026-11-25-local-project-run.md)에 있다.
+사이드바 **로컬 작업**의 실행 구성은 프로젝트의 서버 시작 방법을 저장한다. 구성은 프로젝트에서 공유하고, 실행 상태·오류·제안·터미널은 워크트리별로 둔다. 구성이 없는 워크트리는 카드에 자리를 두지 않고, 워크트리 줄에 마우스를 올리면 보이는 `+`(`RunPresetAddButton`)와 우클릭 메뉴의 `실행 구성 추가…`로 추가한다 (2026-11-26 사용자 요청). 그 메뉴는 처음부터 있는 항목(`실행 구성 추가…`, `파일 탐색기로 열기`)을 위에 두고, 조금 늦게 오는 기동 명령(`기동 명령 찾는 중…` 자리)을 그 아래에 붙인다: 위에 두면 명령이 도착하며 다른 항목을 포인터 아래에서 밀어냈다. 기동 명령을 고르면 바로 띄우지 않고, 그 폴더와 실행 방법을 고른 실행 구성 추가 창을 연다 (2026-11-26 사용자 요청, `presetSeedOfTask`). 메뉴의 id `backend:gradle` 은 창의 후보 id `.:gradle` 로 바꿔 넘긴다. 창의 버튼은 `추가만`·`추가하고 실행`이고 Enter 는 `추가하고 실행`이다. 같은 명령의 구성이 이미 있으면 창 없이 그 구성을 실행한다 (`presetOfTask`). 예외는 두 가지다. sparse checkout 에서 빠진 폴더의 명령(`includeSource`)은 구성으로 만들 파일이 아직 없어서 예전처럼 확인 뒤 바로 기동한다. 예전 방식으로 이미 띄운 셸이 그 워크트리에 있으면 그 탭으로 돌아간다. 구현 규칙은 이 문서를 기준으로 본다. 단계별 결정, 버전 검증 표본과 다운로드 공급자의 신뢰 기준은 [설계 기록](../plan/2026-11-25-local-project-run.md)에 있다.
 
 ## 구성과 실행 흐름
 
 - main은 기본 체크아웃을 프로젝트 키로, 카드가 속한 실제 체크아웃을 워크트리 키로 잡는다. Git이 없는 프로젝트는 해당 로컬 폴더를 쓴다. 목록과 `run-preset-state` 이벤트의 워크트리 키는 렌더러의 `pathKey`와 같은 규칙을 따른다. `userData/run-presets.json`에 UUID·이름·워크트리 기준 폴더(`relative`)·실행 옵션을 저장하고, 읽을 때 다시 검증한다. 쓰기는 임시 파일을 만든 뒤 이름을 바꾸어 반영한다.
 - `task`는 main이 찾은 Spring Boot의 Gradle `bootRun --no-daemon`·Maven `spring-boot:run`, 또는 패키지 매니저의 Node 개발 스크립트다. Gradle과 Maven은 프로젝트 래퍼를 우선한다. `--no-daemon`은 이미 떠 있는 Gradle 데몬이 PTY 밖에서 서버를 실행하는 일을 막는다. 일반 기동 후보에서 sparse checkout 포함이 필요한 경우, 의존성 설치가 필요한 경우에는 각각 해당 확인을 거친다. `custom`은 사용자가 입력한 한 줄 명령이다. `tomcat`은 웹 폴더와 Tomcat을 선택하고 Ant·Maven·이클립스식 준비 빌드를 선택할 수 있다.
+- 찾은 Spring Boot 실행 구성에는 선택적으로 실행 포트(1~65535)와 한 줄 VM 인자를 저장할 수 있다. 입력한 포트는 해당 실행의 `SERVER_PORT` 환경 변수로 전달한다. VM 인자는 Gradle의 `bootRun` 앱 JVM 또는 Maven 플러그인의 `spring-boot.run.jvmArguments`에 전달한다. Maven POM에 `jvmArguments`를 직접 고정하면 그 설정이 우선한다. 두 값을 비워 두면 프로젝트가 정한 값을 사용하며, 포트나 인자를 바꾸면 실행 전에 다시 확인한다.
 - 구성 창의 폴더는 직접 입력하거나 **찾아보기**로 고른다. 찾아보기는 main이 워크트리(입력된 폴더가 그 안에 있으면 그 폴더)에서 폴더 선택 창을 열고, 고른 폴더의 실제 경로를 저장 때와 같은 `directoryInProject`로 확인해 상대 경로로 돌려준다 (`run-preset-choose-folder`). 바깥을 가리키는 연결 폴더와 `.git`은 거부한다.
 - `runPresets.js`의 `freshTask`가 실제 실행 폴더와 후보를 다시 확정한다. `src/localShell.js`는 같은 개발 탭에 준비와 서버를 이어 붙인다. Ant·Maven 준비는 빌드 PTY에서 실행하고, 이클립스식 준비는 main이 `javac`를 실행하며 출력을 같은 탭으로 보낸다. 준비 성공 뒤에만 서버를 시작한다. Windows는 PowerShell 일회 실행의 실제 종료 코드를 전달하고, Unix는 로그인 셸에서 후보 명령을 `exec`한다.
 - 사이드바 행은 좁은 폭에서도 상태와 버튼을 모두 보인다: 이름이 먼저 줄어들고(전체 이름은 행의 툴팁), 오류 수는 경고 아이콘과 숫자로, 실행 중 주소가 있으면 포트 표시가 브라우저 열기를 겸해 따로 열기 버튼을 두지 않는다 (`lib/runPresets.ts` `runButtons`, 화면 시험 `local-development-tasks` 가 오류 수를 붙인 행의 버튼이 행 안에 있는지 잰다).
-- `모두 실행`은 `inAll`인 구성을 저장 순서대로 시작한다. 대상의 확인을 시작 전에 마치고, `waitReady`인 구성은 직전 구성의 시작 완료를 기다린다. `모두 중지`는 해당 워크트리의 일괄 시작을 취소하고 이미 뜬 실행을 중지한다. `notify`와 `agentControl`은 구성별 스위치다.
+- 실행 구성 머리의 `기동 순서…`에서 프로젝트의 단계를 편집한다. 같은 단계의 구성은 동시에 시작하고, 새 단계나 모두 실행에서 제외한 곳으로 구성을 옮길 수 있다. 순서가 없는 기존 형식은 `inAll` 구성만 목록 순서대로 한 단계씩 두고, 다음 구성의 `waitReady`를 앞 단계의 기다림 기준으로 쓴다. 새 구성은 맨 끝 단계에 넣고, 삭제·제외한 구성은 순서에서 뺀다.
+- 시작하기 전에 실행 내용과 필요한 설치를 확인한다. 단계 기준은 기존 시작 완료 표시, 실행 중인 구성의 서버 로그에 지정 문구가 나옴, 지정한 헬스 URL이 HTTP 2xx를 반환함, 기다리지 않음 중 하나다. 헬스 확인은 `http://127.0.0.1`·`http://localhost`·`http://[::1]`에만 접속하고 리디렉션을 따라가지 않는다. 다음 단계로 갈 때까지 워크트리별로 진행과 기다림 시간을 표시한다. 정상 종료와 수동 중지는 다음 단계를 막지 않는다. 시간 초과나 비정상 종료로 멈추면 로그를 보고, 조건을 다시 확인하거나, 건너뛰어 다음 실행을 이어갈 수 있다. `취소`를 누르면 이미 띄운 서비스는 유지하고 기동 순서만 닫는다.
+- 기본 대기 시간은 5분이다. 시간을 넘겨도 계속 진행할지, 모두 중지할 때 뒤 단계부터 중지할지, 한 구성만 실행할 때 꺼진 앞 단계도 띄울지 물을지를 순서 화면에서 정한다. 일괄 시작이나 중지가 진행 중이면 프로젝트의 순서를 저장할 수 없다. `모두 중지`는 해당 워크트리의 일괄 시작을 취소한다. 앱이 잠겨 일괄 시작이 취소되면 잠금 해제 뒤 상태를 보여 준다. `notify`와 `agentControl`은 구성별 스위치다.
+- 실행 묶음은 머리의 `모두 실행` 자리에서 고른다(▾: 묶음 목록·`전체`·`묶음 만들기…`). main은 묶음에 든 구성만 프로젝트의 기동 단계대로 띄운다(`selectStartStages`). 기동 순서에 없는 묶음 구성은 구성 목록 순서대로 한 단계씩 뒤에 붙이고, 역순 중지는 그 단계부터 멈춘다. 묶음은 `userData/run-bundles.json`에 프로젝트 키별로 저장한다(`runBundleStore.js`). 읽을 때 삭제된 구성 ID를 빼고, 비면 그 묶음을 버린다. 마지막으로 고른 묶음은 이 PC의 `localStorage`에만 기억한다.
 - 중지는 개발 프로세스 트리를 끝낸다. Windows는 `taskkill /T /F`, Unix는 PTY 프로세스 그룹을 쓴다. 재기동은 종료와 발견된 로컬 포트의 해제를 확인한 뒤 같은 셸 ID에 새 PTY를 붙인다. ConPTY가 새 화면을 지우기 전에 이전 출력을 스크롤백으로 보낸다. 종료한 탭에는 로그가 남는다. 창만 다시 불러오면 main에 남은 탭과 로그를 붙이고, 앱 프로세스를 다시 시작했을 때 저장된 탭은 일반 셸로 복원한다. [로컬 PTY의 수명과 복원](local-terminal.md)
 
 **바꾸면 안 되는 것**
@@ -94,8 +98,9 @@ ezShell은 파싱 전에 열린 XML 파일의 동일성을 확인하고 Maven �
 
 | 도구 | 동작 |
 | --- | --- |
-| `run_list` | 구성 이름·상태·포트·오류 수·에이전트 조작 허용 여부와 바로 반영 상태를 읽는다. |
+| `run_list` | 구성 이름·상태·포트·오류 수·에이전트 조작 허용 여부와 바로 반영 상태를 읽는다. 일괄 기동 중이면 `startup`에 현재 단계와 멈춤 이유를 제공한다. |
 | `run_start` · `run_restart` · `run_stop` | 저장된 구성 이름으로 실행·재기동·중지한다. |
+| `run_start_all` · `run_stop_all` | 기동 순서대로 모두 실행·중지한다. `bundle`(묶음 이름, `run_list` 의 `bundles`)을 주면 그 묶음의 구성만 다룬다. |
 | `run_wait` | `until: 'ready'` 또는 `'reload'`를 기다린다. 제한 시간은 1~300초다. |
 | `run_log` | 최근 로그 최대 400줄, 또는 `errors: true`로 오류 묶음·진단·자기 제안 상태를 읽는다. |
 | `run_propose` | `run_log`의 최신 제안 ID로 미러 변경·사용자 설정 제외·JAR 추가 중 하나를 본창에 제시한다. 실행마다 최근 제안 최대 5개를 둔다. |
@@ -103,11 +108,14 @@ ezShell은 파싱 전에 열린 XML 파일의 동일성을 확인하고 Maven �
 **바꾸면 안 되는 것**
 
 - 잠금 중에는 모든 `run_*`를 거부한다. `agentControl`은 시작·재기동·중지에 적용한다. 조회·대기·제안에는 적용하지 않는다. 사용자가 현재 워크트리에서 직접 중지한 뒤 30초 동안은 에이전트의 시작·재기동을 막는다. 에이전트가 처음 구성을 시작하거나 재기동하면 누가 조작했는지 안내하고, 안내 여부는 프로젝트 구성에 저장한다.
+- 묶음 저장·삭제는 본창 IPC(`run-preset-bundle-save`·`-delete`)만 받고 main 이 다시 검사한다(`runBundles.js`): 이름 1~20자 한 줄·제어 문자 없음·프로젝트에 같은 이름 없음, 프로젝트에 없는 구성 ID 거부, 묶음 20개까지. 모두 실행의 확인 질문은 묶음 ID 별로 따로 기억해 한 묶음에서 받은 답을 다른 묶음에 쓰지 않는다.
 - 도구는 저장된 이름을 사용한다. 임의 명령·폴더·셸 ID 입력, 구성 저장, 사용자 실행 확인은 본창 권한으로 남겨 둔다. 에이전트 시작으로 실행되는 빌드 스크립트는 에이전트 샌드박스 밖인 ezShell 로컬 PTY에서 사용자 권한을 갖는다. 제안의 JAR 후보는 프로젝트 상대 경로나 좌표만 MCP로 돌려준다. 최신 진단의 ID와 사용자 적용 경계는 본창 진단과 같다.
 
 **파일 지도** — 도구 등록·인증 전달은 [agentMessageMcp.js](../../src/ipc/agentMessageMcp.js)·[agentMessages.js](../../src/ipc/agentMessages.js), 워크트리·권한·실행은 [runPresets.js](../../src/ipc/runPresets.js)의 `agentProject`·`agentTool`에서 본다. [메시지 MCP와 셸 연결](mcp-and-agent-messages.md)
 
 ## 확인할 시험
 
+- 기동 순서의 변환·검증·동시 실행·대기 기준은 [runStartOrder.test.js](../../src/ipc/runStartOrder.test.js)에서 확인한다. 순서 편집과 일괄 실행·실패 복구 화면은 `npm run e2e -- local-start-order`로 확인한다.
+- 실행 묶음은 [runBundles.test.js](../../src/ipc/runBundles.test.js)·[runBundleStore.test.js](../../src/ipc/runBundleStore.test.js)·[runPresetBundles.test.js](../../src/ipc/runPresetBundles.test.js)(IPC·에이전트 도구)와 [lib/runBundles.test.ts](../../src/renderer/lib/runBundles.test.ts)에서 확인한다.
 - 구성·권한·진단은 [runPresets.test.js](../../src/ipc/runPresets.test.js)와 같은 폴더의 `runDiagnosis`·`runSuggestions`·`developmentErrors` 테스트에서 확인한다. 준비·재기동 PTY 수명은 [localShell.test.js](../../src/localShell.test.js), 바로 반영과 Tomcat은 [hotReload.test.js](../../src/ipc/hotReload.test.js)·[tomcatRun.test.js](../../src/ipc/tomcatRun.test.js)를 본다.
 - 화면은 바꾼 기능의 명세만 실행한다. 구성과 Maven 실행은 `npm run e2e -- local-development-tasks`, 에이전트 제안은 `npm run e2e -- local-run-proposals`, 도구 보관함은 `npm run e2e -- jdk-runtimes`다. [시험 범위](../../CLAUDE.md#build--run)

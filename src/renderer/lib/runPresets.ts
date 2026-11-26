@@ -103,6 +103,23 @@ export function runFolderLabel(relative: string): string {
   return clean ? `${clean}/` : './'
 }
 
+/**
+ * A start command the worktree menu found, as the preset dialog's choice: its folder and the candidate main
+ * lists there (`.:gradle`; the menu's id is `backend:gradle`). The menu opens the dialog with it instead of
+ * starting the command, so the user sets the run up first (2026-11-26 user request).
+ */
+export function presetSeedOfTask(task: { id: string; relative: string }): { relative: string; taskId: string } {
+  const relative = task.relative.replace(/\\/g, '/').replace(/^\.\/?/, '').replace(/\/+$/, '')
+  return { relative, taskId: `.:${task.id.slice(task.id.lastIndexOf(':') + 1)}` }
+}
+
+/** The saved preset that runs this found command, if there is one: the menu starts it instead of adding another */
+export function presetOfTask(presets: readonly RunPreset[], task: { id: string; relative: string }): RunPreset | undefined {
+  const seed = presetSeedOfTask(task)
+  const clean = (relative: string) => relative.replace(/\\/g, '/').replace(/^\.\/?/, '').replace(/\/+$/, '')
+  return presets.find(preset => preset.kind === 'task' && preset.taskId === seed.taskId && clean(preset.relative) === seed.relative)
+}
+
 /** The divider localShell writes at a restart (src/localShell.js): the search starts below the last one */
 export const RESTART_DIVIDER = '개발 서버 재기동'
 
@@ -187,6 +204,8 @@ export interface PresetDraft {
   inAll: boolean
   waitReady: boolean
   hotReload: HotReload
+  springPortText: string
+  springVmArgs: string
   // kind 'tomcat'
   tomcat: string
   webapp: string
@@ -218,16 +237,20 @@ const MAVEN_DEFAULTS = { mavenRunner: '', mavenSplit: 'auto' as const, mavenPin:
 const TOMCAT_DEFAULTS = { tomcat: '', webapp: '', contextPath: '/', portText: '8080', vmArgs: '', prepareTool: 'none' as const, antTarget: '', mavenGoals: '', contextXml: '', extraLibs: [] as string[] }
 
 export function emptyDraft(): PresetDraft {
-  return { name: '', relative: '', kind: 'task', command: '', jdk: 'system', envText: '', notify: true, agentControl: true, inAll: true, waitReady: false, hotReload: 'off', logEncoding: 'auto', ...MAVEN_DEFAULTS, ...TOMCAT_DEFAULTS }
+  return { name: '', relative: '', kind: 'task', command: '', jdk: 'system', envText: '', notify: true, agentControl: true, inAll: true, waitReady: false, hotReload: 'off',
+    springPortText: '', springVmArgs: '', logEncoding: 'auto', ...MAVEN_DEFAULTS, ...TOMCAT_DEFAULTS }
 }
 
 export function draftOf(preset: RunPreset): PresetDraft {
+  const spring = isSpringBootTask(preset.kind, preset.taskId)
   return {
     id: preset.id, name: preset.name, relative: preset.relative, kind: preset.kind, taskId: preset.taskId,
     command: preset.command ?? '', jdk: preset.jdk || 'system',
     envText: Object.entries(preset.env ?? {}).map(([key, value]) => `${key}=${value}`).join('\n'),
     notify: preset.notify, agentControl: preset.agentControl, inAll: preset.inAll, waitReady: preset.waitReady,
     hotReload: preset.hotReload ?? 'off',
+    springPortText: spring && preset.port !== undefined ? String(preset.port) : '',
+    springVmArgs: spring ? preset.vmArgs ?? '' : '',
     logEncoding: preset.logEncoding ?? 'auto',
     mavenRunner: preset.mavenRunner ?? '',
     mavenSplit: preset.mavenSplit === undefined ? 'auto' : preset.mavenSplit ? 'on' : 'off',
@@ -273,6 +296,16 @@ export function presetFromDraft(draft: PresetDraft): { preset: Omit<RunPreset, '
   }
   const tomcat = draft.kind === 'tomcat' ? tomcatFromDraft(draft) : null
   if (tomcat && 'error' in tomcat) return tomcat
+  const spring = isSpringBootTask(draft.kind, draft.taskId)
+  const portText = draft.springPortText.trim()
+  const springPort = spring && portText ? Number(portText) : undefined
+  if (springPort !== undefined && (!/^\d+$/.test(portText) || !Number.isInteger(springPort) || springPort < 1 || springPort > 65535)) {
+    return { error: '실행 포트는 1~65535 사이의 숫자로 입력해 주세요.' }
+  }
+  if (spring && (draft.springVmArgs.length > 4096 || /[\x00-\x08\x0a-\x1f\x7f\u2028\u2029]/u.test(draft.springVmArgs))) {
+    return { error: 'VM 인자는 한 줄로 4096자까지 입력해 주세요.' }
+  }
+  const springVmArgs = spring ? draft.springVmArgs.trim() : ''
   const env = parseEnvText(draft.envText)
   if ('error' in env) return env
   return {
@@ -282,6 +315,8 @@ export function presetFromDraft(draft: PresetDraft): { preset: Omit<RunPreset, '
       relative: draft.relative.replace(/\\/g, '/').replace(/^\.\/?/, '').replace(/\/+$/, '') || '.',
       kind: draft.kind,
       ...(draft.kind === 'task' ? { taskId: draft.taskId } : draft.kind === 'custom' ? { command } : {}),
+      ...(springPort !== undefined && { port: springPort }),
+      ...(springVmArgs && { vmArgs: springVmArgs }),
       jdk: draft.jdk || 'system',
       env: env.env,
       notify: draft.notify,
@@ -401,6 +436,7 @@ export function hasAdvancedValues(draft: PresetDraft): boolean {
 /** Whether the preset runs what was typed or chosen as is (asked once more before it first runs, and after a change) */
 export function hasRunContent(draft: PresetDraft): boolean {
   if (draft.kind === 'custom') return !!draft.command.trim()
+  if (isSpringBootTask(draft.kind, draft.taskId) && (draft.springPortText.trim() || draft.springVmArgs.trim())) return true
   if (usesMaven(draft) && (!!draft.mavenRunner || draft.mavenSplit !== 'auto' || draft.mavenPin || draft.mavenSource === 'pinned')) return true
   return draft.kind === 'tomcat' && (!!draft.vmArgs.trim() || draft.prepareTool !== 'none' || !!draft.contextXml || draft.extraLibs.length > 0)
 }

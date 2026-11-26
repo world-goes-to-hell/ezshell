@@ -395,6 +395,7 @@ export interface AgentHistorySession {
   version: string | null
   title: string
   preview: string
+  role?: string
   hasPrompt: boolean
   created: number | null
   updated: number
@@ -822,6 +823,63 @@ export interface LocalProjectInfo {
   gitMissing: boolean
 }
 
+export type NestedRepositoryStatus = {
+  folder: string
+  path: string
+} & ({ error: string } | {
+  error?: undefined
+  branch: string | null
+  hasUpstream: boolean
+  upstreamGone: boolean
+  ahead: number
+  behind: number
+  changed: number
+  fetchError?: string
+})
+
+export type NestedRepositoryPullResult = { folder: string } & (
+  { kind: 'queued' | 'running' }
+  | { kind: 'received'; count: number; status: NestedRepositoryStatus }
+  | { kind: 'skipped'; reason: string; message: string; status?: NestedRepositoryStatus }
+  | { kind: 'failed'; message: string }
+)
+
+export interface NestedRepositoryGroup {
+  root: string
+  manualOnly?: boolean
+  repositories: NestedRepositoryStatus[]
+}
+
+export interface NestedRepositoryBranch {
+  name: string
+  remote?: string
+  current: boolean
+}
+
+interface NestedRepositoryRequest {
+  project: string
+  root: string
+  folder: string
+}
+
+export interface NestedRepositoryPreferences {
+  autoFetchEnabled: boolean
+}
+
+export interface NestedRepositoryTrust extends NestedRepositoryPreferences {
+  trusted: boolean
+}
+
+interface NestedRepositoryProjectRequest {
+  project: string
+  roots: string[]
+  excluded: string[]
+}
+
+type NestedRepositoryProjectResult =
+  | ({ success: true; groups: NestedRepositoryGroup[] } & NestedRepositoryTrust)
+  | { success: false; error: string }
+
 export interface LocalDevelopmentTask {
   id: string
   name: string
@@ -945,9 +1003,9 @@ export interface RunPreset {
   webapp?: string
   /** '/' or '/name' */
   contextPath?: string
-  /** HTTP port (8080 by default) */
+  /** HTTP port for Tomcat (default 8080) or Spring Boot (optional override). */
   port?: number
-  /** One line, into CATALINA_OPTS (confirmed before it first runs, like a typed command) */
+  /** JVM arguments on one line for Tomcat or Spring Boot, confirmed before use. */
   vmArgs?: string
   /** The build before the server (run in `relative`) */
   prepare?: RunPrepare
@@ -1014,6 +1072,14 @@ export interface RunReload {
 }
 
 /** `preparing`: the build before the server (a Tomcat preset's prepare) */
+/** A saved choice of a project's presets to start and stop together; the order is the project's start order */
+export interface RunBundle {
+  id: string
+  /** 1 to 20 characters */
+  name: string
+  presetIds: string[]
+}
+
 export type RunStatus = 'idle' | 'preparing' | 'starting' | 'running' | 'stopped' | 'crashed'
 
 export interface RunAction {
@@ -1098,9 +1164,26 @@ export interface RunPresetResult {
   error?: string
   needsConfirm?: { command: string }
   needsInstall?: { command: string }
+  needsDependencies?: string[]
 }
 
-export type RunPresetOptions = { confirmCustom?: true; confirmInstall?: true }
+export type RunPresetOptions = { confirmCustom?: true; confirmInstall?: true; dependencies?: 'include' | 'only' }
+
+export type RunStageGate = { kind: 'none' | 'ready' } | { kind: 'log' | 'url'; value: string }
+export interface RunStartOrder {
+  stages: { ids: string[]; gate: RunStageGate }[]
+  timeoutSeconds: number
+  onTimeout: 'pause' | 'continue'
+  reverseStop: boolean
+  askDependencies: boolean
+}
+
+export type RunStartProgress = { index: number; total: number; stages: string[][] } & (
+  | { status: 'starting' }
+  | { status: 'waiting'; gate: RunStageGate; since: number; ids: string[] }
+  | { status: 'paused'; reason: 'timeout' | 'exited' | 'startFailed'; ids: string[]; error?: string }
+  | { status: 'cancelled'; reason: 'cancelled' }
+)
 
 export interface JdkRuntime {
   id: string
@@ -1318,6 +1401,19 @@ declare global {
       localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
       localProjectDevelopmentTasks: (folder: string) => Promise<{ success: true; tasks: LocalDevelopmentTask[] } | { success: false; error: string }>
       localProjectOpenFolder?: (folder: string) => Promise<{ success: true } | { success: false; error: string }>
+      localNestedRepositoriesStatus?: (request: NestedRepositoryProjectRequest & { fetch: boolean }) => Promise<NestedRepositoryProjectResult>
+      localNestedRepositoriesFetch?: (request: NestedRepositoryProjectRequest) => Promise<NestedRepositoryProjectResult>
+      localNestedRepositoriesPreferences?: (enabled?: boolean) =>
+        Promise<({ success: true } & NestedRepositoryPreferences) | { success: false; error: string }>
+      localNestedRepositoriesTrust?: (request: { project: string; enabled: boolean }) =>
+        Promise<({ success: true } & NestedRepositoryTrust) | { success: false; error: string }>
+      localNestedRepositoriesPull?: (request: { project: string; root: string; folders: string[]; requestId: string }) =>
+        Promise<{ success: true; results: NestedRepositoryPullResult[] } | { success: false; error: string }>
+      localNestedRepositoryBranches?: (request: NestedRepositoryRequest) =>
+        Promise<{ success: true; branches: NestedRepositoryBranch[] } | { success: false; error: string }>
+      localNestedRepositorySwitchBranch?: (request: NestedRepositoryRequest & { branch: Pick<NestedRepositoryBranch, 'name' | 'remote'> }) =>
+        Promise<{ success: true; status: NestedRepositoryStatus } | { success: false; error: string }>
+      onLocalNestedRepositoriesProgress?: (callback: (progress: { requestId: string; result: NestedRepositoryPullResult }) => void) => () => void
       localProjectDevelopmentStart: (options: { folder: string; id: string; cols: number; rows: number; includeSource: boolean; install: boolean }) =>
         Promise<{ success: true; id: string; name: string; cwd: string; label: string; development: LocalDevelopmentRun } | { success: false; error: string }>
       localProjectDevelopmentChange: (options: { shellId: string; taskId: string; action: 'restart' | 'stop' }) =>
@@ -1341,6 +1437,7 @@ declare global {
       agentHistoryList?: (shellId: string) => Promise<{ success: true; project: string; sessions: AgentHistorySession[] } | { success: false; error: string }>
       agentHistoryDetail?: (shellId: string, key: string) => Promise<({ success: true } & AgentHistoryDetail) | { success: false; error: string }>
       agentHistoryOpenFolder?: (shellId: string, key: string) => Promise<{ success: true } | { success: false; error: string }>
+      onAgentHistoryRolesChanged?: (callback: () => void) => () => void
       localWorktreeCreate: (options: { folder: string; branch: string; base: string }) => Promise<({ success: true } & LocalWorktree) | { success: false; error: string }>
       localShellAttach?: (id: string) => Promise<{ backlog: string; exited: boolean; exitCode: number | null; inboxDraftBlocked?: boolean; development?: LocalDevelopmentRun } | null>
       onLocalShellInboxDraft?: (callback: (notice: { id: string; blocked: boolean }) => void) => () => void
@@ -1462,16 +1559,22 @@ declare global {
       runtimesOpenLicense: (vendor: JdkVendor | 'hotswap-agent' | DevelopmentTool) => Promise<boolean>
       // Run presets of the local projects (src/ipc/runPresets.js; main window, unlocked). The first
       // argument is the worktree folder of the card: the presets are the project's, the states that worktree's
-      runPresetsList?: (worktreeFolder: string) => Promise<RunPresetResult & { projectKey: string; worktreeKey: string; presets: RunPreset[]; states: Record<string, RunState> }>
+      runPresetsList?: (worktreeFolder: string) => Promise<RunPresetResult & { projectKey: string; worktreeKey: string; presets: RunPreset[]; states: Record<string, RunState>; bundles?: RunBundle[]; startOrder?: RunStartOrder; batch?: RunStartProgress | null }>
       runPresetsCandidates?: (projectFolder: string, relative: string) => Promise<RunPresetResult & { candidates: RunCandidate[] }>
       runPresetsSave?: (projectFolder: string, preset: Partial<RunPreset>) => Promise<RunPresetResult & { preset?: RunPreset }>
       runPresetsDelete?: (projectFolder: string, id: string) => Promise<RunPresetResult>
       runPresetsReorder?: (projectFolder: string, ids: string[]) => Promise<RunPresetResult>
+      runStartOrderSave?: (folder: string, order: RunStartOrder, knownIds?: string[]) => Promise<RunPresetResult>
+      runStartOrderResume?: (folder: string, action: 'skip' | 'retry' | 'cancel', options?: RunPresetOptions) => Promise<RunPresetResult>
       runPresetStart?: (projectFolder: string, id: string, options?: RunPresetOptions) => Promise<RunPresetResult>
       runPresetRestart?: (projectFolder: string, id: string, options?: RunPresetOptions) => Promise<RunPresetResult>
       runPresetStop?: (projectFolder: string, id: string) => Promise<RunPresetResult>
-      runPresetStartAll?: (projectFolder: string, options?: RunPresetOptions) => Promise<RunPresetResult>
-      runPresetStopAll?: (projectFolder: string) => Promise<RunPresetResult>
+      /** bundleId: start only that bundle's presets, in the project's start order */
+      runPresetStartAll?: (projectFolder: string, options?: RunPresetOptions & { bundleId?: string }) => Promise<RunPresetResult>
+      runPresetStopAll?: (projectFolder: string, options?: { bundleId?: string }) => Promise<RunPresetResult>
+      /** Saves a bundle (a new one without id) of the project; the project's bundles after it */
+      runPresetBundleSave?: (projectFolder: string, bundle: { id?: string; name: string; presetIds: string[] }) => Promise<RunPresetResult & { bundles?: RunBundle[] }>
+      runPresetBundleDelete?: (projectFolder: string, id: string) => Promise<RunPresetResult & { bundles?: RunBundle[] }>
       runPresetErrors?: (projectFolder: string, id: string) => Promise<RunPresetResult & { groups: RunErrorGroup[] }>
       runPresetDiagnosis?: (worktreeFolder: string, id: string) => Promise<RunPresetResult & { suggestions?: RunSuggestion[] }>
       runPresetMavenPinStatus?: (worktreeFolder: string, id: string) => Promise<RunPresetResult & { pinned?: boolean }>
@@ -1492,7 +1595,9 @@ declare global {
       runPresetChooseContextXml?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; contextXml?: string; label?: string }>
       runPresetChooseFolder?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { cancelled?: true; relative?: string }>
       runPresetSend?: (worktreeFolder: string, id: string, agentId: string, token: string) => Promise<RunPresetResult>
-      onRunPresetState?: (callback: (event: { projectKey: string; worktreeKey: string; id: string; state: RunState; firstAgentAction?: true }) => void) => () => void
+      onRunPresetState?: (callback: (event: { projectKey: string; worktreeKey: string } & (
+        { id: string; state: RunState; firstAgentAction?: true } | { batch: RunStartProgress | null }
+      )) => void) => () => void
       onRuntimesProgress: (callback: (progress: JdkProgress | null) => void) => () => void
       oracleClientStatus?: () => Promise<OracleClientStatus | { success: false; error: string }>
       oracleClientInstall?: () => Promise<OracleClientStatus | { success: false; error: string }>

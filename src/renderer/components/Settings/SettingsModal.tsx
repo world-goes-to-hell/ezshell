@@ -15,6 +15,7 @@ import { AgentMessageMcpSetup } from '../Mcp/AgentMessageMcpSetup'
 import { AgentIdleSettings } from './AgentIdleSettings'
 import { AgentHooksSettings } from './AgentHooksSettings'
 import { JdkSettings } from './JdkSettings'
+import { NestedRepositorySettings } from '../Sidebar/NestedRepositories'
 import { ClaudeProfilesSettings } from './ClaudeProfilesSettings'
 import { RemoteAccessSettings } from '../RemoteAccess/RemoteAccessSettings'
 import '../../styles/settings.css'
@@ -193,7 +194,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                     </div>
                   </Tabs.Content>
                   <Tabs.Content value="development" className="settings-tab-content">
-                    <div className="settings-content"><JdkSettings /></div>
+                    <div className="settings-content"><NestedRepositorySettings /><JdkSettings /></div>
                   </Tabs.Content>
                   <Tabs.Content value="claude-accounts" className="settings-tab-content">
                     <div className="settings-content"><ClaudeProfilesSettings onOpen={() => onOpenChange(false)} /></div>

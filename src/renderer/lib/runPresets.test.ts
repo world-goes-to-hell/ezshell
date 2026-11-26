@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   firstErrorRow, agentActionNotice, agentNoticeName, withObject, withSubject, runCommandLabel, agentActionNote, crashKey, draftOf, emptyDraft, parseEnvText, presetFromDraft, runButtons, runError, runFolderLabel,
   runHead, runKind, runPills, runPort, type RunPreset, type RunState,
-  confirmSections, looksSecret, secretCommandArgNames, secretEnvNames, secretVmArgNames, usesMaven, hasAdvancedValues, hasRunContent, suggestPresetName, usesJdk, shortPath, workspaceServerFill, eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
+  confirmSections, looksSecret, secretCommandArgNames, secretEnvNames, secretVmArgNames, usesMaven, hasAdvancedValues, hasRunContent, suggestPresetName, usesJdk, shortPath, workspaceServerFill, eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY, presetOfTask, presetSeedOfTask
 } from './runPresets'
 
 const preset = (over: Partial<RunPreset> = {}): RunPreset => ({
@@ -91,6 +91,18 @@ describe('the preset form', () => {
     const saved = preset({ env: { A: '1', B: 'x=y' }, hotReload: 'standard' })
     const again = presetFromDraft(draftOf(saved))
     expect(again).toEqual({ preset: saved })
+  })
+
+  it('round-trips optional Spring Boot launch settings and validates the port', () => {
+    const saved = preset({ taskId: '.:maven', hotReload: 'off', port: 8181, vmArgs: '-Xmx512m' })
+    const draft = draftOf(saved)
+    expect(draft).toMatchObject({ springPortText: '8181', springVmArgs: '-Xmx512m', portText: '8080', vmArgs: '' })
+    expect(presetFromDraft(draft)).toEqual({ preset: saved })
+    expect(hasRunContent(draft)).toBe(true)
+    expect(presetFromDraft({ ...draft, springPortText: '0x100' })).toHaveProperty('error')
+    const defaults = presetFromDraft({ ...draft, springPortText: '', springVmArgs: '' })
+    expect(defaults).not.toHaveProperty('preset.port')
+    expect(defaults).not.toHaveProperty('preset.vmArgs')
   })
 })
 
@@ -484,5 +496,24 @@ describe('values that look like secrets, and the run confirmation (hardening)', 
     expect(confirmSections('Maven 실행 JDK temurin-17\n프로젝트 JDK로 Maven 컴파일·테스트 켜기')).toEqual([
       { title: 'Maven 실행 JDK temurin-17', body: '프로젝트 JDK로 Maven 컴파일·테스트 켜기' }
     ])
+  })
+})
+
+describe('a start command from the worktree menu (opens the dialog first, 2026-11-26)', () => {
+  it('names the folder and the candidate main lists there', () => {
+    expect(presetSeedOfTask({ id: 'backend:gradle', relative: 'backend' })).toEqual({ relative: 'backend', taskId: '.:gradle' })
+    expect(presetSeedOfTask({ id: '.:node', relative: '.' })).toEqual({ relative: '', taskId: '.:node' })
+    expect(presetSeedOfTask({ id: 'apps/web:node', relative: 'apps/web' })).toEqual({ relative: 'apps/web', taskId: '.:node' })
+  })
+
+  it('finds the saved preset that runs it, whatever way its folder was written', () => {
+    const backend = preset({ id: 'b', relative: './backend/', taskId: '.:gradle' })
+    const root = preset({ id: 'r', relative: '.', taskId: '.:node' })
+    const custom = preset({ id: 'c', relative: 'backend', kind: 'custom', taskId: undefined, command: 'gradle bootRun' })
+    const presets = [custom, backend, root]
+    expect(presetOfTask(presets, { id: 'backend:gradle', relative: 'backend' })?.id).toBe('b')
+    expect(presetOfTask(presets, { id: '.:node', relative: '.' })?.id).toBe('r')
+    expect(presetOfTask(presets, { id: 'frontend:node', relative: 'frontend' })).toBeUndefined()
+    expect(presetOfTask(presets, { id: 'backend:maven', relative: 'backend' })).toBeUndefined()
   })
 })

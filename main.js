@@ -1145,12 +1145,32 @@ const localProjectIpc = require('./src/ipc/localProjects.js').registerLocalProje
   gitCommit: require('./src/localFiles/gitCommit.js'),
   openDevelopmentTask: (task, size, allowed) => getLocalShells().openDevelopmentTask(task, size, allowed),
   changeDevelopmentTask: (id, taskId, action, allowed) => runPresets.changeFromShell(id, taskId, action, allowed),
-  openFolder: folder => shell.openPath(folder)
+  openFolder: folder => shell.openPath(folder),
+  nestedRepositoryTrustFile: path.join(userDataPath, 'nested-repository-trust.json'),
+  confirmNestedRepositoryTrust: async ({ directory }) => {
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning', title: '자동으로 원격 확인',
+      message: '이 로컬 작업에서 자동으로 원격을 확인할까요?',
+      detail: `${directory}\n\n이 폴더의 저장소 설정(.git/config)을 그대로 따라 Git을 자동으로 실행합니다. 직접 받았거나 믿을 수 있는 저장소만 켜세요.`,
+      buttons: ['취소', '신뢰하고 켜기'], defaultId: 0, cancelId: 0
+    });
+    return response === 1;
+  },
+  confirmNestedGit: async ({ directory, keys }) => {
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning', title: '저장소 설정 확인 필요',
+      message: 'Git이 이 저장소의 설정에 지정된 외부 명령을 실행할 수 있습니다.',
+      detail: `${directory}\n\n${keys.join('\n').slice(0, 500)}`,
+      buttons: ['취소', '설정 확인 후 받기'], defaultId: 0, cancelId: 0
+    });
+    return response === 1;
+  }
 });
 // Past Claude Code and Codex sessions of this PC, for the right panel (src/agentHistory)
 const agentHistory = require('./src/agentHistory/history.js').createAgentHistory({ claudeProfiles: claudeProfiles.roots });
 require('./src/agentHistory/ipc.js').registerAgentHistoryIpc({
-  ipcMain, fromMainWindow, isLocked: () => isAppLocked, history: agentHistory,
+  ipcMain, fromMainWindow: event => fromMainWindow(event) && event.senderFrame === event.sender.mainFrame,
+  isLocked: () => isAppLocked, history: agentHistory, roleForSession: agentMessages.savedRoleFor,
   folderForShell: id => localShells?.list().find(entry => entry.id === id)?.cwd,
   openPath: folder => shell.openPath(folder)
 });

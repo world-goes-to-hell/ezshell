@@ -3,17 +3,17 @@
 // fields, a name (filled in from them until the user types one), the JDK for Java runs, and the two
 // switches about errors and agents. The rest waits under 고급, which opens by itself when something in it
 // is set. main checks all of it again; what runs as typed is shown in full and confirmed before it first runs.
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
-import { RiFolder3Line, RiPlayLine } from 'react-icons/ri'
+import { RiArrowRightSLine, RiFolder3Line, RiPlayLine } from 'react-icons/ri'
 import { RunPresetTomcatAdvanced, RunPresetTomcatFields } from './RunPresetTomcatFields'
 import { RunPresetMavenFields } from './RunPresetMavenFields'
 import {
-  draftOf, emptyDraft, hasAdvancedValues, hasRunContent, hotReloadChoice, hotReloadToSave, LOG_ENCODINGS, presetFromDraft,
-  PLAIN_TEXT_WARNING, secretCommandArgNames, secretEnvNames, suggestPresetName, usesJdk, usesMaven,
+  draftOf, emptyDraft, hasAdvancedValues, hasRunContent, hotReloadChoice, hotReloadToSave, isSpringBootTask, LOG_ENCODINGS, presetFromDraft,
+  PLAIN_TEXT_WARNING, secretCommandArgNames, secretEnvNames, secretVmArgNames, suggestPresetName, usesJdk, usesMaven,
   type HotReload, type PresetDraft, type RunCandidate, type RunPreset
 } from '../../lib/runPresets'
-import { draftKey, dropDraft, keepDraft, reloadProjectPresets, runPresetApi, takeDraft, worktreeRuns } from '../../stores/runPresetStore'
+import { draftKey, dropDraft, keepDraft, reloadProjectPresets, runPresetAction, runPresetApi, takeDraft, worktreeRuns } from '../../stores/runPresetStore'
 import { JdkRequirementNotice } from '../Settings/JdkSettings'
 import { openSettingsTab } from '../../lib/settingsNavigation'
 import type { ApacheToolRuntime, HotswapAgentStatus, JdkRuntime, LogEncoding } from '../../types'
@@ -36,12 +36,25 @@ const HOT_RELOAD_OPTIONS: Array<{ value: HotReload; label: string; detail?: stri
 const VENDOR_NAMES: Record<string, string> = { temurin: 'Eclipse Temurin', zulu: 'Azul Zulu', jbr: 'JetBrains Runtime' }
 const jdkLabel = (jdk: JdkRuntime) => [VENDOR_NAMES[jdk.vendor] ?? jdk.vendor, `JDK ${jdk.feature}`, jdk.version && `(${jdk.version})`, jdk.managed ? '' : '· 이 PC'].filter(Boolean).join(' ')
 
-export function RunPresetDialog({ folder, projectName, preset, onClose }: {
-  folder: string; projectName: string; roots: string[]; preset: RunPreset | null; onClose: () => void
+export function RunPresetDialog({ folder, projectName, preset, seed, onClose }: {
+  folder: string; projectName: string; roots: string[]; preset: RunPreset | null
+  /** A start command the worktree menu found: its folder and way are chosen, and the run starts once added */
+  seed?: { relative: string; taskId?: string }
+  onClose: () => void
 }) {
-  // The input kept when the user went to fetch a JDK comes back when the dialog opens again
+  // The input kept when the user went to fetch a JDK comes back when the dialog opens again; a found start
+  // command chosen from the menu starts over from that command instead
   const keyOfDraft = draftKey(worktreeRuns(folder)?.projectKey ?? folder, preset?.id ?? null)
-  const [draft, setDraft] = useState<PresetDraft>(() => takeDraft(keyOfDraft) ?? (preset ? draftOf(preset) : emptyDraft()))
+  const [draft, setDraft] = useState<PresetDraft>(() => {
+    const kept = takeDraft(keyOfDraft)
+    if (preset) return kept ?? draftOf(preset)
+    if (seed) return { ...emptyDraft(), kind: 'task', relative: seed.relative, taskId: seed.taskId }
+    return kept ?? emptyDraft()
+  })
+  // 추가하고 실행 (the form's only submit button, so Enter starts too) or 추가만, which sends the form itself
+  const startAfter = useRef(!!seed?.taskId)
+  const formRef = useRef<HTMLFormElement>(null)
+  const formId = useId()
   const close = () => { dropDraft(keyOfDraft); onClose() }
   const [folders, setFolders] = useState<string[]>([])
   const [candidates, setCandidates] = useState<RunCandidate[] | null>(null)
@@ -126,6 +139,8 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
   // Back to the ways found: the chosen one if it is still there, otherwise the first
   const chooseTask = () => set({ kind: 'task', taskId: candidates?.some(item => item.taskId === draft.taskId) ? draft.taskId : candidates?.[0]?.taskId ?? draft.taskId })
   const candidate = candidates?.find(item => item.taskId === draft.taskId)
+  const spring = isSpringBootTask(draft.kind, draft.taskId)
+  const springVmSecrets = spring ? secretVmArgNames(draft.springVmArgs) : []
 
   const suggested = suggestPresetName({ kind: draft.kind, relative: draft.relative, taskId: draft.taskId, command: candidate?.command, contextPath: draft.contextPath })
   useEffect(() => {
@@ -167,6 +182,7 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
       }
       await reloadProjectPresets(folder)
       close()
+      if (!preset && startAfter.current) void runPresetAction(folder, 'start', result.preset.id)
     } catch {
       setError('구성을 저장하지 못했습니다.')
     } finally {
@@ -201,11 +217,14 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
             // Editing: no field takes the focus (the name is already there); adding: the kind comes first
             if (preset) { event.preventDefault(); contentRef.current?.focus() }
           }}>
-          <Dialog.Title className="modal-title">
-            <RiPlayLine size={18} aria-hidden="true" />
-            {preset ? '실행 구성 수정' : '실행 구성 추가'} · {projectName}
+          <Dialog.Title className="modal-title run-preset-title">
+            <span className="run-preset-title-icon"><RiPlayLine size={19} aria-hidden="true" /></span>
+            <span className="run-preset-title-copy">
+              <span>{preset ? '실행 구성 수정' : '실행 구성 추가'}</span>
+              <span className="run-preset-project" title={projectName}>{projectName}</span>
+            </span>
           </Dialog.Title>
-          <form onSubmit={submit} className="run-preset-form">
+          <form id={formId} ref={formRef} onSubmit={submit} className="run-preset-form">
             <div className="run-preset-kinds" role="radiogroup" aria-label="실행할 것">
               {([['task', '찾은 실행 방법', chooseTask], ['tomcat', 'Tomcat', chooseTomcat], ['custom', '직접 입력', () => set({ kind: 'custom' })]] as const).map(([value, label, choose]) => (
                 <label key={value} className="run-preset-kind-tab" data-on={draft.kind === value || undefined}>
@@ -238,10 +257,30 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
                     <label key={item.taskId} className="run-preset-choice" data-on={draft.taskId === item.taskId || undefined}>
                       <input type="radio" name="run-preset-task" checked={draft.taskId === item.taskId}
                         onChange={() => set({ kind: 'task', taskId: item.taskId })} />
-                      <code>{item.command}</code>
-                      <em>{item.name}</em>
+                      <span className="run-preset-choice-copy">
+                        <span>{item.name}</span>
+                        <code title={item.command}>{item.command}</code>
+                      </span>
                     </label>
                   ))}
+                </div>
+              </div>
+            )}
+            {spring && (
+              <div className="run-preset-fields run-preset-spring-fields">
+                <div className="form-group">
+                  <label htmlFor="run-preset-spring-port">실행 포트</label>
+                  <input id="run-preset-spring-port" inputMode="numeric" value={draft.springPortText} placeholder="프로젝트 기본값"
+                    onChange={event => set({ springPortText: event.target.value })} autoComplete="off" />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="run-preset-spring-vmargs">VM 인자</label>
+                  <input id="run-preset-spring-vmargs" className="run-preset-command" value={draft.springVmArgs}
+                    placeholder="예: -Xmx1g -Dspring.profiles.active=local"
+                    onChange={event => set({ springVmArgs: event.target.value })} spellCheck={false} autoComplete="off" />
+                  {springVmSecrets.length > 0 && (
+                    <small className="run-preset-warn run-preset-secret-warn" role="note">{PLAIN_TEXT_WARNING} ({springVmSecrets.map(name => `-D${name}`).join(', ')})</small>
+                  )}
                 </div>
               </div>
             )}
@@ -259,18 +298,20 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
               <RunPresetTomcatFields folder={folder} relative={relative} draft={draft} set={set} tomcats={tomcats}
                 onToSettings={toSettings} />
             )}
-            <div className="form-group">
-              <label htmlFor="run-preset-name">이름</label>
-              <input id="run-preset-name" value={draft.name} maxLength={20} placeholder="예: 백엔드"
-                onChange={event => { setNameTouched(true); set({ name: event.target.value }) }} spellCheck={false} autoComplete="off" />
+            <div className={jdkUp ? 'run-preset-fields' : undefined}>
+              <div className="form-group">
+                <label htmlFor="run-preset-name">이름</label>
+                <input id="run-preset-name" value={draft.name} maxLength={20} placeholder="예: 백엔드"
+                  onChange={event => { setNameTouched(true); set({ name: event.target.value }) }} spellCheck={false} autoComplete="off" />
+              </div>
+              {jdkUp && jdkField}
             </div>
-            {jdkUp && jdkField}
-            <div className="run-preset-switches">
+            <div className="run-preset-switches run-preset-permissions">
               <Switch on={draft.notify} onChange={notify => set({ notify })} label="오류가 나면 알리기" />
               <Switch on={draft.agentControl} onChange={agentControl => set({ agentControl })} label="이 프로젝트의 에이전트가 실행·재기동·중지하고 로그를 읽게 허용" />
             </div>
             <details className="run-preset-advanced" open={advancedOpen} onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
-              <summary>고급</summary>
+              <summary><RiArrowRightSLine size={17} aria-hidden="true" />고급 설정</summary>
               <div className="run-preset-advanced-body">
                 <div className="form-group run-preset-reload" role="radiogroup" aria-label="바로 반영" data-usable={reloadChoice.usable || undefined}>
                   <span className="run-preset-field-label">바로 반영 <span className="run-preset-hint">(Java 수정을 재기동 없이)</span></span>
@@ -283,11 +324,13 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
                           <input type="radio" name="run-preset-reload" value={option.value} checked={hotReload === option.value} disabled={disabled}
                             onChange={() => set({ hotReload: option.value })} />
                           <strong>{option.label}</strong>
-                          {option.detail && <small>{option.detail}</small>}
                         </label>
                       )
                     })}
                   </div>
+                  {reloadChoice.usable && hotReload !== 'off' && (
+                    <small className="run-preset-hint run-preset-reload-reason">{HOT_RELOAD_OPTIONS.find(option => option.value === hotReload)?.detail}</small>
+                  )}
                   {!reloadChoice.usable && <small className="run-preset-hint run-preset-reload-reason">{reloadChoice.reason}</small>}
                   {/* What 확장 needs, once the user turned hot reload on (otherwise it is the disabled option's tooltip) */}
                   {runtimesKnown && reloadChoice.usable && !reloadChoice.enhanced && hotReload !== 'off' && (
@@ -309,31 +352,39 @@ export function RunPresetDialog({ folder, projectName, preset, onClose }: {
                     <small className="run-preset-warn run-preset-secret-warn" role="note">{PLAIN_TEXT_WARNING} ({secretEnvNames(draft.envText).join(', ')})</small>
                   )}
                 </div>
-                <div className="form-group">
-                  <label htmlFor="run-preset-log-encoding">로그 인코딩</label>
-                  <select id="run-preset-log-encoding" value={draft.logEncoding} onChange={event => set({ logEncoding: event.target.value as LogEncoding })}
-                    title="앱의 기본 문자 집합은 VM 설정을 따릅니다">
-                    {LOG_ENCODINGS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
-                  <small className="run-preset-hint">로그 표시만 바뀝니다. 한글이 깨지면 MS949 를 고르세요.</small>
-                </div>
-                <div className="run-preset-switches">
-                  <Switch on={draft.inAll} onChange={inAll => set({ inAll })} label="모두 실행에 포함" />
-                  <Switch on={draft.waitReady} onChange={waitReady => set({ waitReady })} label="모두 실행 때 앞 구성이 뜬 뒤 실행" />
+                <div className="run-preset-fields run-preset-run-settings">
+                  <div className="form-group">
+                    <label htmlFor="run-preset-log-encoding">로그 인코딩</label>
+                    <select id="run-preset-log-encoding" value={draft.logEncoding} onChange={event => set({ logEncoding: event.target.value as LogEncoding })}>
+                      {LOG_ENCODINGS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="run-preset-switches">
+                    <Switch on={draft.inAll} onChange={inAll => set({ inAll })} label="모두 실행에 포함" />
+                    <small>단계와 기다림 조건은 실행 구성 메뉴의 기동 순서에서 정합니다.</small>
+                  </div>
                 </div>
               </div>
             </details>
-            {/* Said once: what runs as typed (a command, a Tomcat's VM arguments, build, context.xml, jars) */}
+            {/* Say once that entered runtime options are confirmed before they run. */}
             {/* A Maven mirror or -s applied from a diagnosis is run content too (main asks again for it) */}
             {(hasRunContent(draft) || (!!preset?.mavenMirrors?.length && draft.kind !== 'custom') || preset?.mavenUserSettings === false) && (
-              <small className="run-preset-warn run-preset-confirm-note">그대로 실행되는 내용(직접 입력한 명령, VM 인자·기동 전 빌드·컨텍스트 설정 파일·추가 lib·진단에서 적용한 Maven 설정)은 처음 실행할 때와 바뀐 뒤에 한 번 더 확인합니다.</small>
+              <small className="run-preset-warn run-preset-confirm-note">실행 포트·VM 인자·직접 입력한 명령 등 실행에 적용되는 설정은 처음 실행할 때와 바뀐 뒤에 한 번 더 확인합니다.</small>
             )}
+          </form>
+          <div className="run-preset-footer">
             {error && <p className="run-preset-error" role="alert">{error}</p>}
             <div className="modal-actions">
               <button type="button" className="btn-secondary modal-btn" onClick={close} disabled={saving}>취소</button>
-              <button type="submit" className="btn-primary modal-btn" disabled={saving}>{preset ? '저장' : '추가'}</button>
+              {preset || !seed?.taskId
+                ? <button form={formId} type="submit" className="btn-primary modal-btn" disabled={saving}>{preset ? '저장' : '추가'}</button>
+                : <>
+                    <button type="button" className="btn-secondary modal-btn" disabled={saving}
+                      onClick={() => { startAfter.current = false; formRef.current?.requestSubmit() }}>추가만</button>
+                    <button form={formId} type="submit" className="btn-primary modal-btn" disabled={saving} onClick={() => { startAfter.current = true }}>추가하고 실행</button>
+                  </>}
             </div>
-          </form>
+          </div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

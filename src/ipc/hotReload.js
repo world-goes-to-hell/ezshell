@@ -117,14 +117,14 @@ async function javaRunWithOptions(task, { kind = task.id, args = [], jdwp, userD
   return { ...task, command: `${task.command} -I ${shellArgument(init, platform)}`, env: { ...task.env, [HOT_ARGS]: JSON.stringify(jvmArgs) } }
 }
 
-async function prepareHotReload(task, { worktree, kind = task.id, mode, args = [], logOptions = [], userData, platform = process.platform, reserve = freePort }) {
+async function prepareHotReload(task, { worktree, kind = task.id, mode, args = [], jvmOptions = [], userData, platform = process.platform, reserve = freePort }) {
   const build = await inspectJavaBuild(task.cwd)
   if (build.devtools) {
-    const launch = await javaRunWithOptions(task, { kind, args: logOptions, userData, platform })
+    const launch = await javaRunWithOptions(task, { kind, args: jvmOptions, userData, platform })
     return { ...launch, hotReload: { devtools: true, worktree, cwd: task.cwd } }
   }
   const port = await reserve()
-  const launch = await javaRunWithOptions(task, { kind, args: [...logOptions, ...args], jdwp: jdwpOption(port), userData, platform })
+  const launch = await javaRunWithOptions(task, { kind, args: [...jvmOptions, ...args], jdwp: jdwpOption(port), userData, platform })
   return { ...launch, hotReload: { port, worktree, cwd: task.cwd, mode }, filterOutput: portFilter(port) }
 }
 

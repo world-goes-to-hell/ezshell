@@ -43,7 +43,7 @@ function ProjectHistory({ shellId }: { shellId: string }) {
   const [contentHits, setContentHits] = useState<{ query: string; hits: ReadonlyMap<string, string> } | null>(null)
   const [isSearchingContent, setIsSearchingContent] = useState(false)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (keepDetails = false) => {
     const id = ++request.current
     setIsLoading(true)
     const result = await window.electronAPI.agentHistoryList?.(shellId).catch(() => null)
@@ -59,14 +59,18 @@ function ProjectHistory({ shellId }: { shellId: string }) {
     setProject(result.project)
     setSessions(result.sessions)
     // A row whose transcript changed reads its detail again when it is opened
-    setDetails({})
+    if (!keepDetails) setDetails({})
   }, [shellId])
 
   // The work panel stays open beside the terminals: the scope follows the tab in front. Listing again
   // is cheap (main reads only the transcripts that changed).
   useEffect(() => {
+    const stopRoles = window.electronAPI.onAgentHistoryRolesChanged?.(() => void load(true))
     void load()
-    return () => { request.current++ }
+    return () => {
+      stopRoles?.()
+      request.current++
+    }
   }, [load])
 
   useEffect(() => {
@@ -134,7 +138,7 @@ function ProjectHistory({ shellId }: { shellId: string }) {
           <input
             type="search"
             value={query}
-            placeholder="제목, 폴더, 브랜치, 모델, 대화 내용으로 찾기"
+            placeholder="제목, 역할, 폴더, 브랜치, 모델, 대화 내용으로 찾기"
             aria-label="에이전트 기록 찾기"
             onChange={event => setQuery(event.target.value)}
             onKeyDown={event => {
@@ -191,6 +195,7 @@ function ProjectHistory({ shellId }: { shellId: string }) {
                       </span>
                     )
                   })()}
+                  {session.role && <span className="agent-history-session-role" title={session.role}>{session.role}</span>}
                   <span className="agent-history-title">{session.title || '(질문 없음)'}</span>
                   <span className="agent-history-time" title={new Date(session.updated).toLocaleString('ko-KR')}>{relativeTime(session.updated, now)}</span>
                 </span>

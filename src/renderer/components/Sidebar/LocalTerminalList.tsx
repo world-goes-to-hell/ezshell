@@ -441,6 +441,7 @@ export function LocalTerminalList({ fillAvailableSpace = false, workingTabs, ser
               renderTab={renderTab}
               renderTabActions={renderTabActions}
               onOpenWorktree={openWorktree}
+              onOpenTerminal={onOpenFolder ? (project, worktree) => onOpenFolder(worktree.path, worktree.branch ? `${project.name} · ${worktree.branch}` : folderLabel(worktree.path)) : undefined}
               onStartDevelopmentTask={onStartDevelopmentTask}
               renderServers={renderServers}
               onDropOnProject={linkDropped}

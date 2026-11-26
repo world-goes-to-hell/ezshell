@@ -293,7 +293,48 @@ function fixture(backendPort, frontendPort) {
     check('the worktree row’s menu offers 파일 탐색기로 열기 after its start commands', await rightClick(worktreeRow) &&
       await until(`(${menuText}).includes('파일 탐색기로 열기') && !(${menuText}).includes('찾는 중')`, 8000), await js(menuText))
     await shot('local-project-open-folder-menu')
+    // 터미널 실행 (user request, 2026-11-26): a new shell in the worktree's folder, even with one open there
+    check('the worktree row\u2019s menu starts with 터미널 실행', await js(`${menuLabels}[0] === '터미널 실행'`), await js(`${menuLabels}.join(' | ')`))
+    const shellsIn = `(async () => (await window.electronAPI.localShellList()).filter(shell => shell.cwd &&
+      shell.cwd.toLowerCase().replace(/\\\\/g, '/').replace(/\\/+$/, '') === ${normalize(repo)}).length)()`
+    // The tabs closed above go one by one: opening a terminal before they are gone keeps them open
     await escape()
+    await until(`!document.querySelector('.terminal-tab')`, 10000)
+    await rightClick(worktreeRow)
+    await until(`(${menuText}).includes('터미널 실행')`, 8000)
+    const shellsBefore = await js(shellsIn)
+    await driver.pick('터미널 실행')
+    check('터미널 실행 opens a new local terminal in the worktree folder', await until(`(async () => (await ${shellsIn}) === ${shellsBefore + 1})()`, 8000),
+      JSON.stringify({ before: shellsBefore, after: await js(shellsIn) }))
+    // Closed again: the checks below start with no tab open
+    await js(`document.querySelector('.terminal-tab.active .tab-close')?.click()`)
+    if (await until(`!!${confirm}`, 1500)) await js(`${confirm}.click()`)
+    await until(`!document.querySelector('.terminal-tab')`, 5000)
+    await rightClick(worktreeRow)
+    await until(`(${menuText}).includes('Spring Boot 기동 · backend')`, 8000)
+    // A found command on disk is set up before it runs (2026-11-26 user request): the run preset dialog opens
+    // with its folder and way chosen, offering 추가하고 실행; cancelling leaves nothing saved or started.
+    // Compared before and after: tabs closed above may still be closing (one close at a time)
+    const runState = () => js(`Promise.all([window.electronAPI.localShellList(), window.electronAPI.runPresetsList(${JSON.stringify(repo)})])
+      .then(([shells, list]) => JSON.stringify({ shells: shells.filter(shell => !shell.exited).map(shell => shell.id).sort(), presets: list?.presets?.length ?? -1 }))`)
+    const beforeMenuPick = await runState()
+    await driver.pick('Spring Boot 기동 · backend')
+    check('a found start command opens the preset dialog filled in from it', await until(`(() => {
+      const dialog = document.querySelector('.run-preset-dialog')
+      const chosen = dialog?.querySelector('input[name="run-preset-task"]:checked')?.closest('.run-preset-choice')
+      const buttons = [...(dialog?.querySelectorAll('.modal-actions button') ?? [])].map(button => button.textContent.trim())
+      return document.querySelector('#run-preset-folder')?.value === 'backend' &&
+        document.querySelector('input[name="run-preset-kind"][value="task"]')?.checked &&
+        chosen?.textContent.includes('bootRun') && buttons.join('|') === '취소|추가만|추가하고 실행'
+    })()`, 8000), await js(`document.querySelector('.run-preset-dialog')?.textContent`))
+    await shot('local-development-preset-from-menu')
+    await js(`[...document.querySelectorAll('.run-preset-dialog .modal-actions button')].find(button => button.textContent.trim() === '취소').click()`)
+    const closedDialog = await until(`!document.querySelector('.run-preset-dialog')`)
+    await sleep(500)
+    const afterCancel = await runState()
+    const [before, after] = [JSON.parse(beforeMenuPick), JSON.parse(afterCancel)]
+    check('cancelling the filled-in dialog starts and saves nothing', closedDialog && after.presets === before.presets &&
+      after.shells.every(id => before.shells.includes(id)), `${beforeMenuPick} → ${afterCancel}`)
 
     // Run presets on the project card (docs/plan/2026-11-25-local-project-run.md): add one, run it, it
     // becomes ready on its port, crashes with an error, the notice offers the agent hand-off and a restart
@@ -335,6 +376,16 @@ function fixture(backendPort, frontendPort) {
     await js(`document.querySelector('input[name="run-preset-kind"][value="task"]').click()`)
     await until(`!!document.querySelector('input[name="run-preset-kind"][value="custom"]') && !document.querySelector('.run-preset-choices')?.textContent.includes('찾는 중')`)
     check('a typed name stays when the kind changes', await js(`document.querySelector('#run-preset-name').value === '시험 서버'`))
+    await setValue('#run-preset-folder', 'backend')
+    if (!await until(`document.querySelector('#run-preset-spring-port')?.value === '' && !!document.querySelector('#run-preset-spring-vmargs')`)) {
+      throw new Error('The found Spring Boot task did not show the optional port and VM arguments')
+    }
+    await setValue('#run-preset-spring-port', '8181')
+    await setValue('#run-preset-spring-vmargs', '-Xmx512m -Dapp.token=fixture-option')
+    check('Spring Boot exposes the optional launch settings and warns about plain-text secrets', await until(`
+      document.querySelector('#run-preset-spring-port')?.value === '8181' &&
+      document.querySelector('.run-preset-secret-warn')?.textContent.includes('-Dapp.token')`))
+    await setValue('#run-preset-folder', '.')
     // Stage 2: Tomcat is a kind of its own, with its fields, and hot reload can be picked for it
     await js(`document.querySelector('input[name="run-preset-kind"][value="tomcat"]').click()`)
     check('Tomcat shows its fields: the Tomcat (or where to fetch one), web folder, context path, port, VM arguments, build', await until(`(() => {
@@ -387,6 +438,28 @@ function fixture(backendPort, frontendPort) {
     check('a Maven build shows Maven\u2019s settings under 고급', await until(`
       !!document.querySelector('.run-preset-advanced .run-preset-maven #run-preset-maven-runner') &&
       document.querySelectorAll('.run-preset-maven input[name="run-preset-maven-source"]').length === 2`))
+    check('a short, narrow run dialog scrolls its settings and keeps the title and submit button in place', await js(`(() => {
+      const dialog = document.querySelector('.run-preset-dialog')
+      const form = dialog.querySelector('.run-preset-form')
+      const title = dialog.querySelector('.run-preset-title')
+      const submit = dialog.querySelector('button[type="submit"]')
+      const original = { width: dialog.style.width, maxHeight: dialog.style.maxHeight, scrollTop: form.scrollTop }
+      dialog.style.width = '380px'
+      dialog.style.maxHeight = '420px'
+      try {
+        const headerTop = title.getBoundingClientRect().top
+        const buttonTop = submit.getBoundingClientRect().top
+        form.scrollTop = form.scrollHeight
+        return form.scrollTop > 0 && form.scrollWidth <= form.clientWidth + 1 && submit.form === form &&
+          title.getBoundingClientRect().top === headerTop && submit.getBoundingClientRect().top === buttonTop &&
+          submit.getBoundingClientRect().bottom <= dialog.getBoundingClientRect().bottom
+      } finally {
+        dialog.style.width = original.width
+        dialog.style.maxHeight = original.maxHeight
+        form.scrollTop = original.scrollTop
+      }
+    })()`))
+    await shot('local-run-preset-advanced')
     await js(`document.querySelector('input[name="run-preset-kind"][value="custom"]').click()`)
     const server = path.join(__dirname, '..', 'support', 'devRunServer.js')
     await until(`!!document.querySelector('.run-preset-command')`)
@@ -563,11 +636,17 @@ function fixture(backendPort, frontendPort) {
         fs.writeFileSync(path.join(folder, '_remote.repositories'), 'demo-1.jar>legacy=\\n');
       }
       fs.writeFileSync('received.json', JSON.stringify(args));
+      const property = '-Dspring-boot.run.jvmArguments=';
+      const jvmOptions = args.find(arg => arg.startsWith(property))?.slice(property.length);
+      fs.writeFileSync('received-spring-options.json', JSON.stringify({
+        port: process.env.SERVER_PORT,
+        vmArgs: process.env.EZSHELL_HOT_RELOAD_MAVEN_OPTIONS ?? jvmOptions
+      }));
       console.log('BUILD SUCCESS');
     `)
     const folderArg = JSON.stringify(maven)
     const savedMaven = await js(`window.electronAPI.runPresetsSave(${folderArg}, ${JSON.stringify({
-      name: 'Maven 설정 시험', kind: 'task', taskId: '.:maven', notify: false
+      name: 'Maven 설정 시험', kind: 'task', taskId: '.:maven', notify: false, port: 8181, vmArgs: '-Xmx512m -Dlabel="local backend"'
     })})`)
     if (!savedMaven?.preset) throw new Error('Could not create the Maven diagnosis fixture')
     const mavenId = savedMaven.preset.id
@@ -575,7 +654,9 @@ function fixture(backendPort, frontendPort) {
     const diagnose = `window.electronAPI.runPresetDiagnosis(${args})`
     const mavenState = `(await window.electronAPI.runPresetsList(${folderArg})).states[${JSON.stringify(mavenId)}]?.status`
     const initialMaven = await js(`window.electronAPI.runPresetStart(${args})`)
-    if (!initialMaven.needsConfirm?.command.includes('.:maven') || !(await js(`window.electronAPI.runPresetStart(${args}, { confirmCustom: true })`)).ok) {
+    if (!initialMaven.needsConfirm?.command.includes('Spring Boot 실행 포트\n8181') ||
+        !initialMaven.needsConfirm.command.includes('Spring Boot VM 인자\n-Xmx512m -Dlabel="local backend"') ||
+        !(await js(`window.electronAPI.runPresetStart(${args}, { confirmCustom: true })`)).ok) {
       throw new Error('The first Maven run did not require and accept approval')
     }
     if (!await until(`(async () => ${mavenState} === 'crashed' &&
@@ -597,9 +678,13 @@ function fixture(backendPort, frontendPort) {
     const received = JSON.parse(fs.readFileSync(path.join(maven, 'received.json'), 'utf8'))
     const settings = path.join(fs.realpathSync(profile), 'runtimes', 'maven-settings', `${mavenId}.xml`)
     check('the Maven launcher receives a single absolute settings filename',
-      received.length === 3 && received[0] === 'spring-boot:run' && received[1] === '-gs' &&
+      received.length === 4 && received[0] === 'spring-boot:run' && received[1] === '-gs' &&
       path.dirname(path.dirname(received[2])) === path.dirname(settings) && path.basename(received[2]) === path.basename(settings) &&
       fs.readFileSync(settings, 'utf8').includes('<mirrorOf>legacy</mirrorOf>'))
+    const springOptions = JSON.parse(fs.readFileSync(path.join(maven, 'received-spring-options.json'), 'utf8'))
+    check('the Maven launcher receives the port and quoted JVM options',
+      received[3]?.startsWith('-Dspring-boot.run.jvmArguments=') &&
+      springOptions.port === '8181' && springOptions.vmArgs === '-Xmx512m "-Dlabel=local backend"')
 
     const enabledPin = await js(`window.electronAPI.runPresetsSave(${folderArg}, ${JSON.stringify({ ...accepted.preset, mavenPin: true })})`)
     const pinStatus = `window.electronAPI.runPresetMavenPinStatus(${args})`

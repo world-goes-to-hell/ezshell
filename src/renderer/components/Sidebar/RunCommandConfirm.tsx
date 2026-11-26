@@ -15,8 +15,31 @@ import './RunPresets.css'
 export function RunCommandConfirm() {
   const ask = useRunPresets(state => state.commandAsk)
   if (!ask) return null
+  if (ask.kind === 'dependencies') return <RunDependenciesDialog key={ask.key} names={ask.command} />
   // Keyed by the question so the arming starts over for each one
   return <RunCommandDialog key={ask.key} kind={ask.kind} command={ask.command} />
+}
+
+function RunDependenciesDialog({ names }: { names: string }) {
+  const cancel = useRef<HTMLButtonElement>(null)
+  return (
+    <Dialog.Root open onOpenChange={open => { if (!open) answerRunCommand(false) }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="modal-overlay" />
+        <Dialog.Content className="modal-content run-command-dialog"
+          onOpenAutoFocus={event => { event.preventDefault(); cancel.current?.focus() }}>
+          <Dialog.Title className="modal-title">앞 단계도 함께 띄울까요?</Dialog.Title>
+          <Dialog.Description className="run-command-lead">다음 구성은 앞 단계에 있고 아직 실행되지 않았습니다.</Dialog.Description>
+          <pre className="run-command-text">{names}</pre>
+          <div className="modal-actions">
+            <button ref={cancel} type="button" className="btn-secondary modal-btn" onClick={() => answerRunCommand(false)}>취소</button>
+            <button type="button" className="btn-secondary modal-btn" onClick={() => answerRunCommand('only')}>이 구성만 실행</button>
+            <button type="button" className="btn-primary modal-btn" onClick={() => answerRunCommand(true)}>앞 단계도 실행</button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  )
 }
 
 const TEXTS = {

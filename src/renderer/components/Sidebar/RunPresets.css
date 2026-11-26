@@ -159,19 +159,82 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
 .terminal-menu-item.run-presets-danger { color: var(--error-text, var(--error)); }
 
 /* The add / edit dialog */
-.run-preset-dialog { width: min(520px, calc(100vw - 32px)); }
-.run-preset-form { display: grid; gap: 4px; }
+.modal-content.run-preset-dialog {
+  container: run-preset / inline-size;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(600px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 40px);
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.run-preset-dialog .run-preset-title {
+  gap: 12px;
+  margin: 0;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  font-size: 17px;
+  line-height: 1.35;
+}
+.run-preset-title-icon {
+  display: grid;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-secondary));
+  color: var(--accent);
+}
+.run-preset-title-copy { display: grid; gap: 2px; min-width: 0; }
+.run-preset-project { overflow: hidden; color: var(--text-secondary); font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.run-preset-form {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  padding: 16px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.run-preset-form .form-group { min-width: 0; margin-bottom: 0; }
+.run-preset-form .form-group > label { font-size: 13px; }
+.run-preset-form .form-group > :is(input, select) { min-width: 0; padding: 8px 10px; font-size: 13px; }
+.run-preset-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.run-preset-spring-fields { grid-template-columns: minmax(124px, 1fr) minmax(0, 2.4fr); }
+.run-preset-permissions {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+.run-preset-footer {
+  display: grid;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+.run-preset-footer .modal-actions { flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; border: 0; }
+.run-preset-footer .modal-btn { padding: 8px 16px; min-width: 64px; }
+.run-preset-footer .run-preset-error { max-height: 4em; overflow-y: auto; overflow-wrap: anywhere; }
+@container run-preset (max-width: 420px) {
+  .run-preset-fields { grid-template-columns: minmax(0, 1fr); }
+  .run-preset-form, .run-preset-footer, .run-preset-dialog .run-preset-title { padding-inline: 14px; }
+}
 .run-preset-field-label { display: block; margin-bottom: 4px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
 .run-preset-hint { color: var(--text-muted); font-size: 11px; font-weight: 400; }
 .run-preset-warn { color: var(--warning); font-size: 11px; }
 .run-preset-folder-input { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
-.run-preset-folder-input input { flex: 1; font-family: var(--font-mono, monospace); }
+.run-preset-folder-input input { flex: 1; min-width: 0; font-family: var(--font-mono, monospace); }
 .run-preset-choices { display: grid; gap: 4px; }
 .run-preset-choice {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 5px 8px;
+  gap: 10px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 4px);
   background: var(--bg-primary);
@@ -180,8 +243,8 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
 }
 .run-preset-choice[data-on] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--bg-primary)); }
 .run-preset-choice input { margin: 0; accent-color: var(--accent); }
-.run-preset-choice code { font-family: var(--font-mono, monospace); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.run-preset-choice em { margin-left: auto; flex: none; font-style: normal; color: var(--text-muted); font-size: 11px; }
+.run-preset-choice-copy { display: grid; gap: 2px; min-width: 0; font-weight: 600; }
+.run-preset-choice code { font-family: var(--font-mono, monospace); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
 .run-preset-command { font-family: var(--font-mono, monospace); }
 .run-preset-switches { display: grid; gap: 6px; margin: 4px 0 2px; }
 .run-preset-switch { position: relative; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-primary); cursor: pointer; }
@@ -298,9 +361,19 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
 }
 .run-preset-form textarea:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 .run-preset-form .run-preset-folder-input input { padding: 8px 10px; }
-.run-preset-form .run-preset-folder-browse { flex: none; min-width: 0; padding: 7px 12px; font-size: 12px; white-space: nowrap; }
+.run-preset-form .run-preset-folder-browse {
+  flex: none;
+  min-width: 0;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.run-preset-form .run-preset-folder-browse:hover { background: var(--bg-hover); }
 .run-preset-form .run-preset-command { padding: 8px 10px; font-size: 12px; }
-.run-preset-dialog { max-height: calc(100vh - 48px); overflow-y: auto; }
 
 /* Narrow sidebar: a row keeps all its buttons */
 .run-presets { margin-left: 14px; margin-right: 2px; }
@@ -309,6 +382,10 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
 .run-preset-name { max-width: 34%; }
 /* With a name or folder to show beside no state, the name may take what is free */
 .run-preset[data-status="idle"] .run-preset-name, .run-preset[data-status="stopped"] .run-preset-name { max-width: 50%; }
+.run-preset-main:has(> .nested-repository-chips) > .run-preset-name {
+  flex-shrink: 0;
+  max-width: max(6.5em, 42%);
+}
 
 /* The notice's buttons on one line where they fit */
 .run-crash-actions .modal-btn,
@@ -336,13 +413,11 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
 }
 
 /* 바로 반영 in the dialog (stage 3): three options side by side, the reason when it is fixed to 끄기 */
-.run-preset-reload-options { display: grid; grid-template-columns: 0.6fr 1fr 1fr; gap: 4px; }
+.run-preset-reload-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
 .run-preset-form .form-group label.run-preset-reload-option {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-content: start;
-  column-gap: 6px;
-  row-gap: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-bottom: 0;
   padding: 6px 8px;
   border: 1px solid var(--border);
@@ -355,7 +430,6 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
 }
 .run-preset-form .form-group .run-preset-reload-option input[type="radio"] { width: auto; margin: 1px 0 0; padding: 0; box-shadow: none; accent-color: var(--accent); }
 .run-preset-reload-option strong { font-weight: 600; }
-.run-preset-reload-option small { grid-column: 1 / -1; color: var(--text-muted); font-size: 10.5px; line-height: 1.35; }
 .run-preset-form .form-group label.run-preset-reload-option[data-on] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--bg-primary)); }
 .run-preset-form .form-group label.run-preset-reload-option[data-disabled] { cursor: not-allowed; opacity: 0.5; }
 .run-preset-reload-reason { display: block; margin-top: 4px; }
@@ -427,7 +501,6 @@ button.run-preset-reload-chip:focus-visible { outline: 2px solid var(--accent); 
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 2px;
-  margin-bottom: 10px;
   padding: 2px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md, 6px);
@@ -451,12 +524,12 @@ button.run-preset-reload-chip:focus-visible { outline: 2px solid var(--accent); 
 .run-preset-form .run-preset-kind-tab input[type="radio"] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .run-preset-form .run-preset-kind-tab:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.run-preset-advanced { margin: 4px 0 2px; border-top: 1px solid var(--border); }
+.run-preset-advanced { border-top: 1px solid var(--border); }
 .run-preset-advanced > summary {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 0 6px;
+  gap: 4px;
+  padding: 8px 2px;
   color: var(--text-secondary);
   font-size: 12.5px;
   font-weight: 600;
@@ -464,11 +537,12 @@ button.run-preset-reload-chip:focus-visible { outline: 2px solid var(--accent); 
   list-style: none;
 }
 .run-preset-advanced > summary::-webkit-details-marker { display: none; }
-.run-preset-advanced > summary::before { content: '▸'; font-size: 10px; transition: transform 0.15s; }
-.run-preset-advanced[open] > summary::before { transform: rotate(90deg); }
+.run-preset-advanced > summary svg { flex: none; transition: transform var(--transition-fast); }
+.run-preset-advanced[open] > summary svg { transform: rotate(90deg); }
 .run-preset-advanced > summary:hover { color: var(--text-primary); }
 .run-preset-advanced > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
-.run-preset-advanced-body { display: grid; gap: 4px; padding-bottom: 4px; }
+.run-preset-advanced-body { display: grid; gap: 12px; padding: 5px 0 2px; }
+.run-preset-run-settings { padding-top: 10px; border-top: 1px solid var(--border); align-items: center; }
 .run-preset-confirm-note { display: block; margin: 4px 0 2px; }
 
 /* A JDK notice in the dialog reads like the other notes (it is a warning button in Settings) */
@@ -513,7 +587,8 @@ button.run-preset-reload-chip:focus-visible { outline: 2px solid var(--accent); 
 .run-preset[data-status] .run-preset-proposal-line + * { margin-top: 0; }
 
 /* Maven's settings under 고급 (RunPresetMavenFields) */
-.run-preset-maven { container-type: inline-size; display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm, 4px); background: var(--bg-primary); }
+.run-preset-maven { container-type: inline-size; display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-primary); }
+.run-preset-maven > .run-preset-field-label { margin-bottom: 0; }
 .run-preset-maven-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
 .run-preset-maven-row select { width: 100%; }
 .run-preset-maven-source { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0; }
@@ -536,7 +611,7 @@ button.run-preset-reload-chip:focus-visible { outline: 2px solid var(--accent); 
 .run-preset-maven-pin { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; color: var(--text-secondary); }
 .run-preset-maven-pin > svg { flex: none; }
 .run-preset-form button.run-preset-link-danger { color: var(--error-text, var(--error)); }
-@container (max-width: 400px) { .run-preset-maven-row { grid-template-columns: 1fr; } }
+@container (max-width: 330px) { .run-preset-maven-row { grid-template-columns: minmax(0, 1fr); } }
 .run-preset-secret-warn { display: block; margin-top: 3px; }
 
 /* The run confirmation with several parts: titled sections, what changed first */

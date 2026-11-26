@@ -3,6 +3,21 @@ import { Text } from '@codemirror/state'
 import { scanProblems } from '../renderer/lib/logProblems'
 import { createDevelopmentErrors } from './developmentErrors.js'
 
+it('reports and remembers marker lines only from the server phase', () => {
+  const actual = []
+  const log = createDevelopmentErrors(Date.now, { onOutputLine: line => actual.push(line) })
+  log.feed('build only phrase\nold fragment', false)
+  log.feed('server chunked ')
+  log.feed('phrase\n')
+  log.addError('synthetic only')
+  expect(actual).toEqual(['server chunked phrase'])
+  expect(log.lines()).toContain('build only phrase')
+  expect(log.hasOutputLine('build only phrase')).toBe(false)
+  expect(log.hasOutputLine('old fragment')).toBe(false)
+  expect(log.hasOutputLine('synthetic only')).toBe(false)
+  expect(log.hasOutputLine('server chunked phrase')).toBe(true)
+})
+
 describe('development task output', () => {
   it('recognizes the locale-independent Tomcat startup logger only for a server run', () => {
     const log = createDevelopmentErrors(() => 99, { tomcat: true })

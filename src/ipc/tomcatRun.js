@@ -17,14 +17,14 @@ const MODELS = ['maven', 'ant', 'eclipse']
 const BAD_ARGUMENTS = 'Tomcat VM 인자를 한 줄에 입력하고 공백이 있는 인자는 따옴표로 묶어 주세요.'
 const BAD_WEBAPP = '워크트리 안에서 WEB-INF가 있는 웹 폴더를 선택해 주세요.'
 
-function vmOptionTokens(raw) {
-  if (typeof raw !== 'string' || raw.length > 4096 || /[\x00-\x08\x0a-\x1f\x7f\u2028\u2029]/u.test(raw)) throw new Error(BAD_ARGUMENTS)
+function vmOptionTokens(raw, invalid = BAD_ARGUMENTS) {
+  if (typeof raw !== 'string' || raw.length > 4096 || /[\x00-\x08\x0a-\x1f\x7f\u2028\u2029]/u.test(raw)) throw new Error(invalid)
   const tokens = []
   let word = ''
   let quote = ''
   const finish = () => {
     if (!word) return
-    if (!word.startsWith('-') || word === '-') throw new Error(BAD_ARGUMENTS)
+    if (!word.startsWith('-') || word === '-') throw new Error(invalid)
     tokens.push(word)
     word = ''
   }
@@ -35,7 +35,7 @@ function vmOptionTokens(raw) {
     else if (/\s/u.test(char)) finish()
     else word += char
   }
-  if (quote) throw new Error(BAD_ARGUMENTS)
+  if (quote) throw new Error(invalid)
   finish()
   return tokens
 }
@@ -435,4 +435,4 @@ async function stageTomcat(plan, { preset, task, worktree, userData, prepareRelo
   } catch (error) { await base.cleanup(); throw error }
 }
 
-module.exports = { validateTomcat, validContextPath, workspaceVmArguments, antTargets, webDirectory, webappCandidates, planTomcat, stageTomcat, tomcatLayout, tomcatJars, tomcatConfiguration, catalinaOptions, closeTomcatBases }
+module.exports = { validateTomcat, validContextPath, vmOptionTokens, workspaceVmArguments, antTargets, webDirectory, webappCandidates, planTomcat, stageTomcat, tomcatLayout, tomcatJars, tomcatConfiguration, catalinaOptions, closeTomcatBases }

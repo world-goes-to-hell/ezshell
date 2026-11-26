@@ -28,7 +28,7 @@ async function projectOf(folder) {
  * Agent session history for the right panel. The main window only, and not while locked: the
  * summaries hold the start of conversations. Not offered to MCP, remote access or agent messages.
  */
-function registerAgentHistoryIpc({ ipcMain, fromMainWindow, isLocked, history, folderForShell, openPath }) {
+function registerAgentHistoryIpc({ ipcMain, fromMainWindow, isLocked, history, roleForSession, folderForShell, openPath }) {
   const allowed = event => fromMainWindow(event) && !isLocked()
   const refused = { success: false, error: '잠금 해제 후 본창에서 이용할 수 있습니다.' }
   const noProject = { success: false, error: '프로젝트의 로컬 터미널을 선택해 주세요.' }
@@ -45,7 +45,12 @@ function registerAgentHistoryIpc({ ipcMain, fromMainWindow, isLocked, history, f
       if (!allowed(event)) return refused
       const { sessions } = await history.list()
       // Locked while scanning: what was read is dropped by clear(), do not hand it over either
-      return allowed(event) ? { success: true, project: project.name, sessions: sessions.filter(session => project.includes(session.cwd)) } : refused
+      if (!allowed(event)) return refused
+      const projectSessions = sessions.filter(session => project.includes(session.cwd)).map(session => {
+        const role = roleForSession(session.key)
+        return role ? { ...session, role } : session
+      })
+      return { success: true, project: project.name, sessions: projectSessions }
     } catch {
       return { success: false, error: '에이전트 기록을 읽지 못했습니다.' }
     }

@@ -62,26 +62,26 @@ export function RunPresetMavenFields({ folder, presetId, draft, set, jdks }: {
         <div className="form-group">
           <label htmlFor="run-preset-maven-runner">Maven 실행 JDK</label>
           <select id="run-preset-maven-runner" value={draft.mavenRunner} onChange={event => set({ mavenRunner: event.target.value })}>
-            <option value="">자동</option>
+            <option value="">{tomcat ? '자동' : '자동 (구성 JDK)'}</option>
             {managed.map(jdk => <option key={jdk.id} value={jdk.id}>{jdkName(jdk)}</option>)}
             {!runnerKnown && <option value={draft.mavenRunner}>{draft.mavenRunner} (보관함에 없음)</option>}
           </select>
         </div>
         <div className="form-group">
-          <label htmlFor="run-preset-maven-split">프로젝트 JDK 로 컴파일·테스트</label>
+          <label htmlFor="run-preset-maven-split">프로젝트 JDK로 컴파일·테스트</label>
           <select id="run-preset-maven-split" value={draft.mavenSplit} onChange={event => set({ mavenSplit: event.target.value as PresetDraft['mavenSplit'] })}>
-            <option value="auto">{tomcat ? '기본 (프로젝트 JDK 가 17 미만이면 켬)' : '기본 (끔)'}</option>
+            <option value="auto">{tomcat ? '자동 (JDK 17 미만이면 켬)' : '기본 (끔)'}</option>
             <option value="on">켜기</option>
             <option value="off">끄기</option>
           </select>
         </div>
       </div>
       <small className="run-preset-hint">
-        자동은 구성 JDK 로 Maven 을 실행합니다{tomcat ? ' (프로젝트 JDK 가 17 미만이면 보관함의 JDK 17·21)' : ''}.
-        {!tomcat && ' Spring Boot 앱은 플러그인 설정에 따라 Maven 실행 JDK 에서 뜰 수 있습니다.'}
+        {tomcat ? '자동은 구성 JDK를 사용합니다. JDK 17 미만이면 보관함의 JDK 17·21을 선택합니다.'
+          : '플러그인 설정에 따라 Spring Boot 앱도 Maven 실행 JDK를 사용할 수 있습니다.'}
       </small>
       <div className="run-preset-maven-source" role="radiogroup" aria-label="Maven 빌드 저장소">
-        {([['online', '온라인 저장소'], ['pinned', '보관본 (성공한 빌드의 의존성)']] as const).map(([value, label]) => (
+        {([['online', '온라인 저장소'], ['pinned', '보관본 사용']] as const).map(([value, label]) => (
           <label key={value} className="run-preset-maven-choice" data-on={draft.mavenSource === value || undefined}>
             <input type="radio" name="run-preset-maven-source" value={value} checked={draft.mavenSource === value}
               onChange={() => set({ mavenSource: value })} />

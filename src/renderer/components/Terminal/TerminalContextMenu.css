@@ -17,6 +17,11 @@
   box-shadow: var(--shadow-md);
   color: var(--text-secondary);
   font-size: 13px;
+  /* A long list (many start commands of an MSA repository) scrolls inside the window instead of being cut off.
+     Radix sets this on the menu and its submenus: the room left on the side it opened */
+  max-height: var(--radix-dropdown-menu-content-available-height, calc(100vh - 16px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .terminal-menu-item {

@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } fro
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createRunPresets, registerRunPresetIpc, resolveProject, withSubject } from './runPresets.js'
+import { HOT_ARGS, MAVEN_ARGS } from './hotReload.js'
 import { commandHash, createRunPresetStore, presetApproval, projectKey, realDirectory, validatePreset } from './runPresetStore.js'
 import { pathKey } from '../renderer/lib/localWorkspaceTree'
 import { withSubject as rendererSubject } from '../renderer/lib/runPresets'
@@ -71,8 +72,8 @@ async function fixture(options = {}) {
   const agent = (method, name, fields = {}) => controller.agentTool('agent-1', { method: `run-${method}`, name, ...fields }, allowed)
   const list = () => controller.list(project)
   const start = async (id, command = 'npm run dev') => {
-    expect(await invoke('run-preset-start', id)).toEqual({ needsConfirm: { command: expect.stringContaining(command) } })
-    expect(await invoke('run-preset-start', id, { confirmCustom: true })).toEqual({ ok: true })
+    expect(await invoke('run-preset-start', id, { dependencies: 'only' })).toEqual({ needsConfirm: { command: expect.stringContaining(command) } })
+    expect(await invoke('run-preset-start', id, { confirmCustom: true, dependencies: 'only' })).toEqual({ ok: true })
   }
   return { file, outside, folder, subfolder, checkout, checkoutSubfolder, project, controller, makeController, allowed, event, handlers, ipc,
     state, list, operations, emit, save, start, invoke, invokeCheckout, agent, sendAsUser, sendState, notifyCrash, shellTasks }
@@ -88,6 +89,196 @@ async function mavenFixtureJdk(root, name, version) {
 }
 
 describe('saved project runs', () => {
+  it('persists a staged order and inherits it in another worktree', async () => {
+    const f = await fixture()
+    const a = await f.save('a')
+    const b = await f.save('b')
+    const manual = await f.save('manual')
+    const order = { ...f.list().startOrder, stages: [{ ids: [b.id, a.id], gate: { kind: 'none' } }] }
+    expect(await f.invoke('run-start-order-save', order, [a.id, b.id])).toMatchObject({ ok: false })
+    expect(await f.invoke('run-start-order-save', order, [a.id, b.id, manual.id])).toEqual({ ok: true })
+    expect(f.makeController().list(f.project).startOrder).toEqual(order)
+    expect((await f.invokeCheckout('run-presets-list')).startOrder).toEqual(order)
+    expect(f.list().presets.find(preset => preset.id === manual.id).inAll).toBe(false)
+    const next = await f.save('new')
+    expect(f.list().startOrder.stages).toEqual([...order.stages, { ids: [next.id], gate: { kind: 'none' } }])
+    await f.invoke('run-presets-delete', b.id)
+    expect(f.makeController().list(f.project).startOrder.stages[0].ids).toEqual([a.id])
+  })
+
+  it('pauses on a missing log, can skip it, and stops in reverse stage order', async () => {
+    const f = await fixture()
+    const db = await f.save('db')
+    const api = await f.save('api')
+    const web = await f.save('web')
+    await f.invoke('run-start-order-save', {
+      ...f.list().startOrder, timeoutSeconds: 1,
+      stages: [{ ids: [db.id, api.id], gate: { kind: 'log', value: 'healthy' } }, { ids: [web.id], gate: { kind: 'none' } }]
+    })
+    const start = f.controller.startAll(f.project, f.allowed, () => true)
+    await vi.waitFor(() => expect(f.list().batch).toMatchObject({ status: 'waiting', ids: [db.id, api.id] }))
+    const dbShell = f.operations.find(([, name]) => name === 'db')[2]
+    f.emit(dbShell, { type: 'data', data: 'service healthy\n' })
+    f.state.now += 1001
+    expect(await start).toMatchObject({ paused: true, step: 1, reason: 'timeout' })
+    expect(f.list().batch).toMatchObject({ status: 'paused', ids: [api.id] })
+    expect(await f.invoke('run-start-order-resume', 'skip')).toEqual({ ok: true })
+    expect(f.operations.at(-1).slice(0, 2)).toEqual(['start', 'web'])
+    await f.controller.stopAll(f.project, f.allowed)
+    const stops = f.operations.filter(([action]) => action === 'stop').map(([, name]) => name)
+    expect(stops[0]).toBe('web')
+    expect(stops.slice(1).sort()).toEqual(['api', 'db'])
+  })
+
+  it.each([{ exitCode: 0 }, { exitCode: 130, action: 'stop' }])(
+    'accepts a successful or intentional exit ($exitCode) while waiting for readiness', async event => {
+      const f = await fixture()
+      await f.save('prepare')
+      await f.save('web', { waitReady: true })
+      const run = f.controller.startAll(f.project, f.allowed, () => true)
+      await vi.waitFor(() => expect(f.list().batch?.status).toBe('waiting'))
+      f.emit('local:1', { ...event, type: 'exit' })
+      expect(await run).toEqual({ ok: true })
+      expect(f.operations.map(([, name]) => name)).toEqual(['prepare', 'web'])
+    }
+  )
+
+  it('includes selected presets outside the saved order and stops them in reverse when selected', async () => {
+    const f = await fixture()
+    const a = await f.save('a')
+    const manual1 = await f.save('manual1', { inAll: false })
+    const manual2 = await f.save('manual2', { inAll: false })
+    const selected = [manual2.id, a.id, manual1.id]
+    await f.controller.startAll(f.project, f.allowed, () => true, { selected })
+    expect(f.operations.map(([, name]) => name)).toEqual(['a', 'manual1', 'manual2'])
+    await f.controller.stopAll(f.project, f.allowed, { selected })
+    expect(f.operations.slice(3).map(([, name]) => name)).toEqual(['manual2', 'manual1', 'a'])
+  })
+
+  it('uses only terminal server output for a saved log gate, including an already running service', async () => {
+    const f = await fixture()
+    const back = await f.save('back')
+    const front = await f.save('front')
+    await f.start(back.id)
+    f.emit('local:1', { type: 'data', phase: 'prepare', data: 'fixture healthy\n' })
+    await f.invoke('run-start-order-save', { ...f.list().startOrder, timeoutSeconds: 1, stages: [
+      { ids: [back.id], gate: { kind: 'log', value: 'fixture healthy' } }, { ids: [front.id], gate: { kind: 'none' } }
+    ] })
+    const run = f.controller.startAll(f.project, f.allowed, () => true)
+    await vi.waitFor(() => expect(f.list().batch?.status).toBe('waiting'))
+    f.emit('local:1', { type: 'data', phase: 'launch', data: 'fixture healthy\n' })
+    f.state.now += 1001
+    expect(await run).toMatchObject({ paused: true, reason: 'timeout' })
+    f.emit('local:1', { type: 'data', phase: 'server', data: 'fixture heal' })
+    f.emit('local:1', { type: 'data', phase: 'server', data: 'thy\n' })
+    expect(await f.invoke('run-start-order-resume', 'retry')).toEqual({ ok: true })
+    expect(f.operations.map(([, name]) => name)).toEqual(['back', 'front'])
+  })
+
+  it('protects queued presets from agent stop-all, refuses changes from other worktrees and can dismiss a pause without stopping services', async () => {
+    const f = await fixture()
+    const back = await f.save('back')
+    const protectedPreset = await f.save('protected', { agentControl: false, waitReady: true })
+    await f.invoke('run-start-order-save', { ...f.list().startOrder, timeoutSeconds: 1 })
+    const run = f.controller.startAll(f.project, f.allowed, () => true)
+    await vi.waitFor(() => expect(f.list().batch?.status).toBe('waiting'))
+    await expect(f.agent('stop-all')).rejects.toThrow('에이전트 조작')
+    expect(await f.invokeCheckout('run-start-order-save', f.list().startOrder)).toMatchObject({ ok: false, error: expect.stringContaining('실행이 끝난 뒤') })
+    f.state.now += 1001
+    expect(await run).toMatchObject({ paused: true, reason: 'timeout' })
+    expect(await f.invoke('run-start-order-resume', 'cancel')).toEqual({ ok: true })
+    expect(f.list().batch).toBeNull()
+    expect(f.list().states[back.id].status).toBe('starting')
+    expect(f.list().states[protectedPreset.id].status).toBe('idle')
+    expect(await f.invoke('run-start-order-save', f.list().startOrder)).toEqual({ ok: true })
+  })
+
+  it('remembers a cancelled phase after the app unlocks and permits dismissing it', async () => {
+    const f = await fixture()
+    await f.save('back')
+    await f.save('web', { waitReady: true })
+    const run = f.controller.startAll(f.project, f.allowed, () => true)
+    await vi.waitFor(() => expect(f.list().batch?.status).toBe('waiting'))
+    f.state.locked = true
+    f.controller.cancelBatches()
+    expect(await run).toEqual({ ok: true, cancelled: true })
+    f.state.locked = false
+    expect((await f.invoke('run-presets-list')).batch).toMatchObject({ status: 'cancelled', reason: 'cancelled', index: 0 })
+    expect(await f.invoke('run-start-order-resume', 'cancel')).toEqual({ ok: true })
+    expect(f.list().batch).toBeNull()
+    expect(f.operations.map(([, name]) => name)).toEqual(['back'])
+  })
+
+  it('asks about earlier stages for a single start and can start only the chosen preset', async () => {
+    const f = await fixture()
+    await f.save('db', { command: 'node db.js' })
+    const web = await f.save('web', { command: 'node web.js' })
+    expect(await f.invoke('run-preset-start', web.id)).toEqual({ needsDependencies: ['db'] })
+    expect(await f.invoke('run-preset-start', web.id, { dependencies: 'only' })).toEqual({ needsConfirm: { command: 'node web.js' } })
+    expect(await f.invoke('run-preset-start', web.id, { dependencies: 'only', confirmCustom: true })).toEqual({ ok: true })
+    expect(f.operations.map(operation => operation[1])).toEqual(['web'])
+  })
+
+  it('continues an authorized agent batch after acceptance and refuses unauthorized presets before starting', async () => {
+    const f = await fixture()
+    const back = await f.save('back')
+    const front = await f.save('front', { waitReady: true })
+    const restricted = await f.save('restricted', { agentControl: false, inAll: false })
+    const store = createRunPresetStore(f.file)
+    store.write(f.folder, store.list(f.project.key).map(preset => ({ ...preset, confirmedHash: presetApproval(preset).hash })))
+    const controller = f.makeController({ store })
+    const agent = method => controller.agentTool(f.state.agentId, { method: `run-${method}` }, () => f.allowed() && f.state.bound)
+    expect(await agent('start-all')).toMatchObject({ ok: true, stages: 2 })
+    await vi.waitFor(() => expect(controller.list(f.project).batch).toMatchObject({ status: 'waiting' }))
+    expect(await agent('list')).toMatchObject({ startup: { status: 'waiting', step: 1, total: 2 } })
+    f.state.bound = false
+    f.emit('local:1', { type: 'data', data: 'VITE ready in 12 ms\n' })
+    await vi.waitFor(() => expect(controller.list(f.project).batch).toBeNull())
+    expect(f.operations.map(operation => operation[1])).toEqual(['back', 'front'])
+    f.state.bound = true
+    await agent('stop-all')
+    const order = controller.list(f.project).startOrder
+    controller.saveOrder(f.project, { ...order, stages: [...order.stages, { ids: [restricted.id], gate: { kind: 'none' } }] }, f.allowed)
+    await expect(agent('start-all')).rejects.toThrow('에이전트 조작')
+    expect(f.operations.filter(operation => operation[0] === 'restart')).toHaveLength(0)
+    expect(controller.list(f.project).states[back.id].status).toBe('stopped')
+    expect(controller.list(f.project).states[front.id].status).toBe('stopped')
+  })
+
+  it.each(['gradle', 'maven'])('passes the Spring Boot port and VM arguments to the %s server launch after confirmation', async tool => {
+    const f = await fixture()
+    if (tool === 'gradle') await writeFile(path.join(f.folder, 'build.gradle'), "plugins { id 'org.springframework.boot' }")
+    else await writeFile(path.join(f.folder, 'pom.xml'), '<project>spring-boot-maven-plugin</project>')
+    const vmArgs = '-Xmx256m -Dlabel="local backend"'
+    const saved = await f.save('백엔드', { kind: 'task', taskId: `.:${tool}`, port: 8181, vmArgs, env: { SERVER_PORT: '8888' } })
+    expect(f.makeController().list(f.project).presets[0]).toMatchObject({ port: 8181, vmArgs })
+    await f.start(saved.id, `Spring Boot 실행 포트\n8181\n\nSpring Boot VM 인자\n${vmArgs}`)
+    const task = f.shellTasks.get('local:1')
+    expect(task.env.SERVER_PORT).toBe('8181')
+    if (tool === 'gradle') {
+      expect(task.command).toContain('init.gradle')
+      expect(JSON.parse(task.env[HOT_ARGS])).toEqual(['-Xmx256m', '-Dlabel=local backend'])
+    } else {
+      const arg = '-Xmx256m "-Dlabel=local backend"'
+      expect(task.command).toContain('-Dspring-boot.run.jvmArguments=')
+      expect(process.platform === 'win32' ? task.env[MAVEN_ARGS] : task.command).toContain(arg)
+    }
+    const edited = await f.save('백엔드', { ...saved, port: 8282, vmArgs: '-Xmx512m' })
+    expect(await f.invoke('run-preset-restart', edited.id)).toMatchObject({
+      needsConfirm: { command: expect.stringContaining('Spring Boot 실행 포트\n8282\n\nSpring Boot VM 인자\n-Xmx512m') }
+    })
+    expect(f.operations).toHaveLength(1)
+  })
+
+  it('validates Spring Boot options and leaves omitted options on their default path', () => {
+    const input = { name: '백엔드', kind: 'task', taskId: '.:gradle' }
+    const validate = fields => validatePreset({ ...input, ...fields }, 'cfd63b4a-5bb8-4381-8642-f6f8dd7ac8fd')
+    expect(validate()).not.toHaveProperty('port')
+    expect(validate()).not.toHaveProperty('vmArgs')
+    for (const port of [0, 65536, 8080.2, '8080']) expect(() => validate({ port })).toThrow('실행 포트')
+    for (const vmArgs of ['-Dfoo="open', '-Xmx256m\n-Xms64m', 'run']) expect(() => validate({ vmArgs })).toThrow('VM 인자')
+    expect(() => validate({ hotReload: 'standard', vmArgs: '-Xrunjdwp:server=y' })).toThrow('JDWP')
+  })
   it('keeps agent proposals separate from the preset until the user approves or dismisses them', async () => {
     const f = await fixture()
     await writeFile(path.join(f.folder, 'pom.xml'), '<project>spring-boot-maven-plugin</project>')
@@ -382,8 +573,8 @@ describe('saved project runs', () => {
     expect(task.launchNotice).toBeUndefined()
     f.emit(shellId, { type: 'exit', exitCode: 0 })
     expect((await f.invoke('run-presets-save', { ...enhanced, mavenRunner: 'managed-17' })).preset.mavenRunner).toBe('managed-17')
-    expect(await f.invoke('run-preset-start', enhanced.id)).toHaveProperty('needsConfirm')
-    expect(await f.invoke('run-preset-start', enhanced.id, { confirmCustom: true })).toMatchObject({
+    expect(await f.invoke('run-preset-start', enhanced.id, { dependencies: 'only' })).toHaveProperty('needsConfirm')
+    expect(await f.invoke('run-preset-start', enhanced.id, { confirmCustom: true, dependencies: 'only' })).toMatchObject({
       ok: false, error: expect.stringContaining('같은 JetBrains Runtime')
     })
   })
@@ -878,7 +1069,7 @@ describe('saved project runs', () => {
     const { id } = preset
     await f.start(id)
     const other = await f.invokeCheckout('run-presets-list')
-    expect(other).toEqual({ projectKey: pathKey(f.folder), worktreeKey: pathKey(f.checkout), presets: [preset],
+    expect(other).toMatchObject({ projectKey: pathKey(f.folder), worktreeKey: pathKey(f.checkout), presets: [preset],
       states: { [id]: { status: 'idle', errors: 0 } } })
     expect(f.shellTasks.get('local:1').cwd).toBe(f.subfolder)
     f.state.cwd = f.checkoutSubfolder

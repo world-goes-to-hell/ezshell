@@ -194,6 +194,36 @@ function edgePoints({ rect, dpr }, edge, depths) {
     check(name + ' distinguishes the gap from the card surface', idle.gapContrast >= 1.3, idle.gapContrast.toFixed(2) + ':1')
   }
 
+  async function checkGlowEdge() {
+    const glow = `document.getAnimations().find(animation => animation.animationName === 'agent-work-breathe' && animation.effect.target === ${pane})`
+    await showChat(true)
+    await js("document.documentElement.dataset.agentWorkStyle = 'glow'")
+    await setWorking(true)
+    await requireState('!!' + glow, 'the working glow has no animation')
+    await js('document.activeElement?.blur()')
+    await requireState(`!${pane}.matches(':focus-within')`, 'the chat still has focus')
+
+    const points = edgePoints(await snapshot('glow'), 'right', [-2, 0, 1, 4, 9, 28])
+    const paintAt = async time => {
+      await js(`(() => { const glow = ${glow}; glow.pause(); glow.currentTime = ${time} })()`)
+      await sleep(40)
+      return pixelsOf(await screenshotData(), points)
+    }
+    const dim = await paintAt(0)
+    const bright = await paintAt(2200)
+    const difference = bright.map((pixel, point) => pixel.reduce((sum, channel, index) =>
+      sum + Math.abs(channel - dim[point][index]), 0))
+    const [gap, cardBorder, innerEdge, innerTrack, fade, surface] = difference
+    check('the glow leaves the divider and card border clear', gap === 0 && cardBorder === 0, JSON.stringify(difference))
+    check('the glow starts just inside the card border and fades inward', innerEdge > innerTrack && innerTrack > fade &&
+      fade > surface, JSON.stringify(difference))
+    await driver.shot('local-agent-pane-glow')
+
+    await setWorking(false)
+    await js("document.documentElement.dataset.agentWorkStyle = 'trace'")
+    await showChat(false)
+  }
+
   async function compareCards(name, after) {
     await send('DOM.enable')
     await send('CSS.enable')
@@ -381,6 +411,7 @@ function edgePoints({ rect, dpr }, edge, depths) {
       }
     }
     if (capture !== 'before') {
+      await checkGlowEdge()
       await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
       await js(terminal + '.focus()')
       // A CUP position past the terminal dimensions marks the bottom-right cell.

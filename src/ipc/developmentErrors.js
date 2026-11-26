@@ -17,10 +17,11 @@ function cleanLogLine(text) {
   return stripVTControlCharacters(text.replace(TERMINAL_STRING, '')).replace(/[\x00-\x08\x0a-\x1f\x7f-\x9f\p{Cf}]/gu, '').slice(0, MAX_LINE_CHARS)
 }
 
-function createDevelopmentErrors(now = Date.now, { tomcat = false } = {}) {
+function createDevelopmentErrors(now = Date.now, { tomcat = false, onOutputLine } = {}) {
   const lines = []
   const groups = []
   let fragment = ''
+  let fragmentReadiness
   let endedWithCR = false
   let previous = ''
   let inside = false
@@ -29,9 +30,9 @@ function createDevelopmentErrors(now = Date.now, { tomcat = false } = {}) {
   let readyAt
   let tomcatStartHeader = false
 
-  function pushLine(line) {
+  function pushLine(line, readiness = false) {
     if (lines.length === MAX_LOG_LINES) lines.shift()
-    lines.push(line)
+    lines.push({ line, readiness })
   }
 
   function pushGroup(report) {
@@ -41,8 +42,9 @@ function createDevelopmentErrors(now = Date.now, { tomcat = false } = {}) {
 
   function consume(raw, readiness) {
     const line = cleanLogLine(raw)
-    pushLine(line)
+    pushLine(line, readiness)
     if (readiness) {
+      onOutputLine?.(line)
       if (tomcat) {
         if ((TOMCAT_START.test(line) && TOMCAT_INFO.test(line)) ||
           (tomcatStartHeader && /^(?:INFO|정보):/.test(line)) || /\bServer startup in\b/.test(line)) readyAt ??= now()
@@ -68,9 +70,14 @@ function createDevelopmentErrors(now = Date.now, { tomcat = false } = {}) {
 
   function feed(chunk, readiness = true) {
     if (!chunk.length) return
+    if (fragment && fragmentReadiness !== readiness) {
+      consume(fragment, fragmentReadiness)
+      fragment = ''
+    }
     const rows = (fragment + (endedWithCR && chunk.startsWith('\n') ? chunk.slice(1) : chunk)).split(/\r\n|\n|\r/)
     endedWithCR = chunk.endsWith('\r')
     fragment = rows.pop().slice(0, MAX_LINE_CHARS)
+    fragmentReadiness = readiness
     for (const row of rows) consume(row, readiness)
   }
 
@@ -82,13 +89,14 @@ function createDevelopmentErrors(now = Date.now, { tomcat = false } = {}) {
       for (const line of report) pushLine(line)
     },
     finish(readiness = true) {
-      if (fragment) consume(fragment, readiness)
+      if (fragment) consume(fragment, readiness && fragmentReadiness)
       fragment = ''
       endedWithCR = false
     },
     state: () => ({ address, readyAt, errors: groups.length }),
     groups: () => groups.map(item => ({ ...item, lines: [...item.lines] })),
-    lines: (count = MAX_LOG_LINES) => lines.slice(-count)
+    lines: (count = MAX_LOG_LINES) => lines.slice(-count).map(({ line }) => line),
+    hasOutputLine: text => lines.some(({ line, readiness }) => readiness && line.includes(text))
   }
 }
 

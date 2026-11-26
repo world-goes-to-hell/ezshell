@@ -28,6 +28,7 @@ const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
 
   const rows = `[...document.querySelectorAll('.agent-history-row')]`
   const titles = `${rows}.map(row => row.querySelector('.agent-history-title').textContent)`
+  const firstRole = `${rows}[0]?.querySelector('.agent-history-session-role')?.textContent`
   const worktree = folder => `[...document.querySelectorAll('.local-worktree')].find(row => row.dataset.worktreePath === ${JSON.stringify(folder)})`
   const open = async folder => {
     if (!await until(`!!${worktree(folder)}`, 10000)) throw new Error(`Worktree row did not appear: ${folder}`)
@@ -61,10 +62,11 @@ const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
   check('the count covers only the project and its linked worktree', await js(`
     document.querySelector('.agent-history-count').textContent === '1개 표시 · 프로젝트 2개'
   `))
+  check('the saved user role appears next to the Claude title', await js(`${firstRole} === '개발 B'`))
 
   await js(`document.querySelector('.agent-history-empty-toggle input').click()`)
   check('the empty session in the linked worktree can be shown', await until(`
-    ${rows}.length === 2 && ${rows}[0].querySelector('.agent-history-meta').textContent.includes('work branch')
+    ${rows}.length === 2 && ${rows}[0].querySelector('.agent-history-meta').textContent.includes('work branch') && !${firstRole}
   `, 3000))
   await js(`document.querySelector('.agent-history-empty-toggle input').click()`)
 
@@ -74,6 +76,10 @@ const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
 
   // Words only in the answers (not in the titles or folders): found by the conversation search
   const setQuery = (value) => js(`(() => { const set = ${SET}; set(document.querySelector('.agent-history-search input'), ${JSON.stringify(value)}) })()`)
+  await setQuery('개발 B 로그')
+  check('search matches the saved role together with the title', await until(`
+    document.querySelector('.agent-history-search input')?.value === '개발 B 로그' && ${rows}.length === 1 && ${firstRole} === '개발 B'
+  `, 3000))
   await setQuery('고쳤습니다')
   check('a word said only in an answer finds that session', await until(`JSON.stringify(${titles}) === JSON.stringify(['로그 화면 개선'])`, 8000), await js(`JSON.stringify(${titles})`))
   check('with an excerpt of the conversation, the word marked', await until(`document.querySelector('.agent-history-snippet mark')?.textContent === '고쳤습니다'`, 3000),
@@ -88,6 +94,7 @@ const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
     const detail = await window.electronAPI.agentHistoryDetail(shell, 'codex:${CODEX_ID}')
     return result?.success && result.matches.length === 0 && detail?.success === false
   })()`))
+  await js(`document.querySelector('.agent-history-search input').focus()`)
   await escape()
   check('Esc in the search clears it and keeps the panel open',
     await until(`${rows}.length === 1 && document.querySelector('.agent-history-search input').value === ''`, 3000) &&
@@ -112,6 +119,15 @@ const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
   check('the shell starts Claude Code with --resume in the session folder',
     !!launch && launch.args.join(' ').includes(`--resume ${CLAUDE_ID}`) && path.normalize(launch.cwd) === path.join(profile, 'work app'),
     JSON.stringify(launch))
+  const setRole = role => js(`(async () => {
+    const snapshot = await window.electronAPI.agentMessagesSnapshot()
+    const agent = snapshot.agents.find(agent => agent.active && agent.resumeId === '${CLAUDE_ID}')
+    return agent && (await window.electronAPI.agentMessageSetRole(agent.id, ${JSON.stringify(role)})).success
+  })()`)
+  check('an edited role updates the open history panel', await setRole('개발 리드') &&
+    await until(`${firstRole} === '개발 리드'`, 5000))
+  check('clearing the user role shows the saved agent role', await setRole('') &&
+    await until(`${firstRole} === '검토 담당'`, 5000))
   // A press in the new terminal does not move the docked panel aside
   await until(`[...document.querySelectorAll('.local-terminal-pane')].some(el => getComputedStyle(el).visibility === 'visible')`, 8000)
   const [px, py] = await center(`[...document.querySelectorAll('.local-terminal-pane')].find(el => getComputedStyle(el).visibility === 'visible')`)
@@ -125,6 +141,7 @@ const CODEX_ID = '01a1ec18-9b8a-71c1-839d-2e31c010300f'
     JSON.stringify(${titles}) === JSON.stringify(['사이드바 검색칸을 만들어 줘']) && !document.querySelector('.agent-history-detail')
   `))
   check('the compressed Codex session shows its branch', await js(`${rows}[0].textContent.includes('main') && ${rows}[0].querySelector('.agent-history-agent.is-codex')?.getAttribute('aria-label') === 'Codex'`))
+  check('the Codex row shows its own saved role', await js(`${firstRole} === '개발 D'`))
   await setQuery('넣었습니다')
   check('the compressed Codex conversation is searchable within its project', await until(`
     document.querySelector('.agent-history-snippet mark')?.textContent === '넣었습니다'
