@@ -87,7 +87,15 @@ function fixture(backendPort, frontendPort) {
     await driver.pick(name)
   }
   const activeTab = `document.querySelector('.terminal-tab.active')`
-  const backendChip = `document.querySelector('.development-status-chip[aria-label^="Spring Boot"]')`
+  const activeBrowser = `document.querySelector('.terminal-tab.active[data-browser-tab]')`
+  const browserView = `document.querySelector('.browser-review[data-browser-tab-id]')`
+  const browserVisible = `${activeBrowser}?.dataset.tabId === ${browserView}?.dataset.browserTabId &&
+    ${browserView}?.checkVisibility({ visibilityProperty: true })`
+  const runtimeErrors = () => driver.events
+    .filter(event => event.method === 'Runtime.exceptionThrown' ||
+      (event.method === 'Log.entryAdded' && event.params.entry.level === 'error'))
+    .map(event => event.params.exceptionDetails?.exception?.description ?? event.params.entry?.text)
+    .slice(-6)
   const readServer = async port => {
     try { return await (await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1000) })).text() }
     catch { return null }
@@ -144,6 +152,7 @@ function fixture(backendPort, frontendPort) {
     await js(`${confirm}.click()`)
     check('Gradle runs bootRun in the backend worktree terminal', await until(`${activeTab}?.textContent.includes('Spring Boot · backend') && ${inTerminal('Received bootRun')}`))
     const runningBackend = await js(`${activeTab}.dataset.tabId`)
+    const backendChip = `document.querySelector('.development-status-chip[data-development-shell="${runningBackend}"]')`
     const originalServer = await waitServer(backendPort, value => value?.startsWith('Development fixture '))
     check('the running process is marked in the sidebar and tab and its port appears', await until(`
       ${backendChip}?.dataset.status === 'running' && ${backendChip}.textContent.includes(':${backendPort}') &&
@@ -183,11 +192,14 @@ function fixture(backendPort, frontendPort) {
     await driver.pick('재기동')
     const restartedServer = await waitServer(backendPort, value => value?.startsWith('Development fixture ') && value !== originalServer)
     const restartedTab = await until(`
-      document.querySelectorAll('.terminal-tab').length === 2 && ${activeTab}.dataset.tabId === ${JSON.stringify(runningBackend)} &&
-      ${backendChip}?.dataset.status === 'running' && ${inTerminal('Received bootRun')}
+      document.querySelectorAll('.terminal-tab').length === 2 && ${activeTab}?.dataset.tabId === ${JSON.stringify(runningBackend)} &&
+      ${backendChip}?.dataset.status === 'running' &&
+      ${backendChip}.querySelector('.development-status-port')?.textContent === ':${backendPort}' && ${inTerminal('Received bootRun')}
     `)
-    check('restart reuses the tab and starts a different process on the same port', Boolean(restartedServer) && restartedTab,
-      !restartedServer || !restartedTab ? JSON.stringify({ originalServer, restartedServer, restartedTab }) : undefined)
+    if (!restartedServer || !restartedTab) {
+      throw new Error(`The restarted backend was not ready in the same tab: ${JSON.stringify({ originalServer, restartedServer, restartedTab, backendPort })}`)
+    }
+    check('restart reuses the tab and starts a different process on the same port', true)
     const backendViewport = `document.querySelector('[data-local-shell-id="${runningBackend}"] .xterm-viewport')`
     let dividerVisible = false
     let previousOutputVisible = false
@@ -200,11 +212,33 @@ function fixture(backendPort, frontendPort) {
     check('the restart divider and previous output can be reached in scrollback', dividerVisible && previousOutputVisible)
     await js(`${backendViewport}.scrollTop = ${backendViewport}.scrollHeight`)
 
+    await send('Runtime.enable')
+    await send('Log.enable')
     await click(...await center(backendChip), 'right')
     await driver.pick('브라우저로 열기')
-    check('the discovered server opens in an app browser tab', await until(`${activeTab}?.hasAttribute('data-browser-tab') &&
-      window.electronAPI.browserReviewState(${activeTab}.dataset.tabId).then(state => state?.url === 'http://127.0.0.1:${backendPort}/')`))
-    await click(...await center(backendChip), 'right')
+    const browserOpened = await until(`(async () => {
+      if (!(${browserVisible})) return false
+      const state = await window.electronAPI.browserReviewState(${activeBrowser}.dataset.tabId)
+      return state?.url === 'http://127.0.0.1:${backendPort}/' && !state.loading && !state.error
+    })()`)
+    if (!browserOpened) {
+      const state = await js(`(async () => {
+        const active = ${activeTab}
+        const page = ${activeBrowser} && await window.electronAPI.browserReviewState(${activeBrowser}.dataset.tabId)
+        return { tab: active?.dataset.tabId, port: ${backendChip}?.querySelector('.development-status-port')?.textContent,
+          url: page?.url, loading: page?.loading, error: page?.error }
+      })()`)
+      const errors = runtimeErrors()
+      const missingChunk = errors.some(error => /ERR_FILE_NOT_FOUND|Failed to fetch dynamically imported module/.test(error))
+      const hint = missingChunk ? '\nA rebuild can remove a lazy chunk from the shared out/ folder. Rerun after the build finishes.' : ''
+      throw new Error(`The discovered server did not open at the expected address: ${JSON.stringify({
+        backendPort, server: await readServer(backendPort), state, errors
+      })}${hint}`)
+    }
+    check('the discovered server opens in an app browser tab', browserOpened)
+    const logAnchor = await center(backendChip)
+    if (!logAnchor) throw new Error('The backend chip is missing after opening its browser tab')
+    await click(...logAnchor, 'right')
     await driver.pick('로그 보기')
     check('logs focus the same development tab', await until(`${activeTab}.dataset.tabId === ${JSON.stringify(runningBackend)}`))
     await click(...await center(activeTab), 'right')
