@@ -124,7 +124,7 @@ async function run() {
     for (const [tool, series, name, version] of [['gradle', 'current', 'Gradle', '9.9.2'], ['node', 'lts', 'Node.js', '26.13.1']]) {
       await js(`((select) => { select.value = '${tool}'; select.dispatchEvent(new Event('change', { bubbles: true })) })(${toolSelect})`)
       check(`shows ${name} ${version} and its license`, await until(`
-        ${apacheVersion}?.value === '${series}' && !!(${button('도구 라이선스 보기')})?.title &&
+        ${apacheVersion}?.value === '${series}' && !!(${button(`${name} 라이선스 보기`)})?.title &&
         document.querySelector('.apache-tools .jdk-download').textContent.includes('${name} ${version}') &&
         (${button('도구 받아 두기')})?.disabled === false
       `))

@@ -1,11 +1,12 @@
 // The fields of a Tomcat run preset in the add / edit dialog (docs/plan/2026-11-25-local-project-run.md,
-// stage 2 first batch): which Tomcat, the web folder with WEB-INF, the context path and port, the VM
-// arguments and the build before the server. main makes a CATALINA_BASE of its own for the preset; the VM
-// arguments and the build are shown and confirmed before they first run, like a typed command.
-// `이클립스 설정에서 채우기` (second batch) fills the web folder and context path from the Eclipse project's
-// settings and shows what else it read; the user saves. Third batch: a server of an Eclipse workspace fills
-// the VM arguments, port, context and its context.xml; the context.xml (JNDI) is pointed at, never copied
-// into the preset; jars approved from a diagnosis are listed and can only be taken away here.
+// stage 2): which Tomcat, the web folder with WEB-INF, the context path and port and the build before the
+// server first (RunPresetTomcatFields); the VM arguments, the context.xml and the approved jars under 고급
+// (RunPresetTomcatAdvanced). main makes a CATALINA_BASE of its own for the preset; what runs as typed is
+// confirmed before it first runs, like a typed command (the dialog says it once, at the bottom).
+// Quick fills: `이클립스 설정` fills the web folder and context path from the Eclipse project's settings and
+// shows what else it read; `워크스페이스 서버` fills the VM arguments, port, context and context.xml from a
+// server of an Eclipse workspace. The user saves. The context.xml (JNDI) is pointed at, never copied into the
+// preset; jars approved from a diagnosis can only be taken away here.
 import { useEffect, useState } from 'react'
 import { RiCloseLine, RiDownloadLine, RiFileCodeLine, RiFolder3Line, RiServerLine } from 'react-icons/ri'
 import { eclipseFill, eclipseSummary, shortPath, workspaceServerFill, type PresetDraft } from '../../lib/runPresets'
@@ -87,7 +88,6 @@ export function RunPresetTomcatFields({ folder, relative, draft, set, tomcats, o
   // The servers of an Eclipse workspace the user picked: to choose one from
   const [workspace, setWorkspace] = useState<{ name: string; servers: WorkspaceServer[] } | { error: string } | null>(null)
   const [filledFrom, setFilledFrom] = useState<string | null>(null)
-  const [contextError, setContextError] = useState<string | null>(null)
   const canWorkspace = typeof window.electronAPI.runPresetWorkspaceServers === 'function'
   const readWorkspace = async () => {
     const read = window.electronAPI.runPresetWorkspaceServers
@@ -110,39 +110,34 @@ export function RunPresetTomcatFields({ folder, relative, draft, set, tomcats, o
     set(workspaceServerFill(server))
     setFilledFrom(server.name)
   }
-  const chooseContextXml = async () => {
-    const choose = window.electronAPI.runPresetChooseContextXml
-    if (!choose) return
-    try {
-      const result = await choose(folder)
-      setContextError(null)
-      if (result?.ok && result.contextXml) set({ contextXml: result.contextXml, contextXmlLabel: result.label })
-      else if (result?.ok === false && !result.cancelled) setContextError(result.error || 'context.xml 을 고르지 못했습니다.')
-    } catch { /* nothing chosen */ }
-  }
 
+  const where = relative === '.' ? '프로젝트 폴더' : relative
   const known = tomcats?.some(tool => tool.id === draft.tomcat)
   return (
     <div className="run-preset-tomcat">
-      {canImport && (
+      {(canImport || canWorkspace) && (
         <div className="run-preset-eclipse">
-          <button type="button" className="run-preset-eclipse-btn" onClick={() => void importEclipse()} disabled={reading}>
-            <RiDownloadLine size={13} aria-hidden="true" /> {reading ? '읽는 중…' : '이클립스 설정에서 채우기'}
-          </button>
-          <span className="run-preset-hint">{relative === '.' ? '프로젝트 폴더' : relative}의 .classpath·.settings 를 읽어 웹 폴더와 컨텍스트 경로를 채웁니다. 저장해야 반영됩니다.</span>
+          <div className="run-preset-quick-fill">
+            <span className="run-preset-hint">빠르게 채우기</span>
+            {canImport && (
+              <button type="button" className="run-preset-eclipse-btn" onClick={() => void importEclipse()} disabled={reading}
+                title={`${where}의 .classpath·.settings 를 읽어 웹 폴더와 컨텍스트 경로를 채웁니다`}>
+                <RiDownloadLine size={13} aria-hidden="true" /> {reading ? '읽는 중…' : '이클립스 설정'}
+              </button>
+            )}
+            {canWorkspace && (
+              <button type="button" className="run-preset-eclipse-btn" onClick={() => void readWorkspace()} disabled={reading}
+                title="이클립스 워크스페이스 폴더를 고르면 Servers 의 server.xml·context.xml 과 실행 설정의 VM 인자를 읽습니다">
+                <RiServerLine size={13} aria-hidden="true" /> 워크스페이스 서버
+              </button>
+            )}
+          </div>
+          <span className="run-preset-hint">가져온 값은 칸만 채웁니다. 저장해야 반영됩니다.</span>
           {eclipse && ('error' in eclipse
             ? <p className="run-preset-warn" role="alert">{eclipse.error}</p>
             : <ul className="run-preset-eclipse-read" aria-label="이클립스 설정에서 읽은 것">
                 {eclipse.lines.map((line, index) => <li key={index}>{line}</li>)}
               </ul>)}
-        </div>
-      )}
-      {canWorkspace && (
-        <div className="run-preset-eclipse run-preset-workspace">
-          <button type="button" className="run-preset-eclipse-btn" onClick={() => void readWorkspace()} disabled={reading}>
-            <RiServerLine size={13} aria-hidden="true" /> 워크스페이스 서버 설정에서 채우기
-          </button>
-          <span className="run-preset-hint">이클립스 워크스페이스 폴더를 고르면 Servers 의 server.xml·context.xml 과 실행 설정의 VM 인자를 읽습니다. 저장해야 반영됩니다.</span>
           {workspace && ('error' in workspace
             ? <p className="run-preset-warn" role="alert">{workspace.error}</p>
             : (
@@ -156,7 +151,7 @@ export function RunPresetTomcatFields({ folder, relative, draft, set, tomcats, o
                     </span>
                   </label>
                 ))}
-                {filledFrom && <small className="run-preset-hint">{filledFrom} 의 값으로 채웠습니다. 아래 칸에서 확인하고 저장하세요.</small>}
+                {filledFrom && <small className="run-preset-hint">{filledFrom} 의 값으로 채웠습니다. VM 인자·context.xml 은 고급에 있습니다.</small>}
               </div>
             ))}
         </div>
@@ -201,6 +196,59 @@ export function RunPresetTomcatFields({ folder, relative, draft, set, tomcats, o
       </div>
       {/* main opens the HTTP connector on the loopback only (src/ipc/tomcatRun.js) */}
       <small className="run-preset-hint run-preset-tomcat-local">이 PC 에서만 열립니다 (http://127.0.0.1:{draft.portText || '8080'}{draft.contextPath.trim() || '/'}).</small>
+      <div className="form-group" role="radiogroup" aria-label="기동 전 빌드">
+        <span className="run-preset-field-label">기동 전 빌드 <span className="run-preset-hint">({where}에서)</span></span>
+        <div className="run-preset-reload-options run-preset-prepare-options">
+          {([['none', '없음'], ['ant', 'Ant 타깃'], ['maven', 'Maven 목표'], ['eclipse', '이클립스식']] as const).map(([value, label]) => (
+            <label key={value} className="run-preset-reload-option" data-on={draft.prepareTool === value || undefined}>
+              <input type="radio" name="run-preset-prepare" value={value} checked={draft.prepareTool === value}
+                onChange={() => set({ prepareTool: value })} />
+              <strong>{label}</strong>
+            </label>
+          ))}
+        </div>
+        {draft.prepareTool === 'ant' && (
+          targets !== null && targets.length === 0 ? (
+            <small className="run-preset-warn">{targetsError ?? '이 폴더의 build.xml 에서 타깃을 찾지 못했습니다. 폴더를 확인해 주세요.'}</small>
+          ) : (
+            <select aria-label="Ant 타깃" value={draft.antTarget} onChange={event => set({ antTarget: event.target.value })}>
+              {!draft.antTarget && <option value="">{targets === null ? '찾는 중…' : '타깃 고르기'}</option>}
+              {targets?.map(target => <option key={target} value={target}>{target}</option>)}
+              {draft.antTarget && targets !== null && !targets.includes(draft.antTarget) && <option value={draft.antTarget}>{draft.antTarget} (build.xml 에 없음)</option>}
+            </select>
+          )
+        )}
+        {draft.prepareTool === 'eclipse' && (
+          <small className="run-preset-hint run-preset-prepare-note">build.xml 없이 이클립스 설정(.classpath 의 소스·lib)으로 javac 컴파일합니다. 결과는 프로젝트가 아니라 앱 폴더에 둡니다.</small>
+        )}
+        {draft.prepareTool === 'maven' && (
+          <input className="run-preset-command" aria-label="Maven 목표" value={draft.mavenGoals} placeholder="예: clean package"
+            onChange={event => set({ mavenGoals: event.target.value })} spellCheck={false} autoComplete="off" />
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** A Tomcat preset's fields under 고급: the VM arguments, the context.xml (JNDI) and the approved jars */
+export function RunPresetTomcatAdvanced({ folder, draft, set }: {
+  folder: string
+  draft: PresetDraft
+  set: (patch: Partial<PresetDraft>) => void
+}) {
+  const [contextError, setContextError] = useState<string | null>(null)
+  const chooseContextXml = async () => {
+    const choose = window.electronAPI.runPresetChooseContextXml
+    if (!choose) return
+    try {
+      const result = await choose(folder)
+      setContextError(null)
+      if (result?.ok && result.contextXml) set({ contextXml: result.contextXml, contextXmlLabel: result.label })
+      else if (result?.ok === false && !result.cancelled) setContextError(result.error || 'context.xml 을 고르지 못했습니다.')
+    } catch { /* nothing chosen */ }
+  }
+  return (
+    <div className="run-preset-tomcat-advanced">
       <div className="form-group">
         <label htmlFor="run-preset-vmargs">VM 인자 <span className="run-preset-hint">(한 줄, CATALINA_OPTS)</span></label>
         <input id="run-preset-vmargs" className="run-preset-command" value={draft.vmArgs} placeholder="예: -Xmx1g -Dspring.profiles.active=local"
@@ -239,39 +287,6 @@ export function RunPresetTomcatFields({ folder, relative, draft, set, tomcats, o
           </ul>
           <small className="run-preset-hint">더하는 것은 실행 진단에서만 합니다.</small>
         </div>
-      )}
-      <div className="form-group" role="radiogroup" aria-label="기동 전 빌드">
-        <span className="run-preset-field-label">기동 전 빌드 <span className="run-preset-hint">({relative === '.' ? '프로젝트 폴더' : relative}에서)</span></span>
-        <div className="run-preset-reload-options run-preset-prepare-options">
-          {([['none', '없음'], ['ant', 'Ant 타깃'], ['maven', 'Maven 목표'], ['eclipse', '이클립스식']] as const).map(([value, label]) => (
-            <label key={value} className="run-preset-reload-option" data-on={draft.prepareTool === value || undefined}>
-              <input type="radio" name="run-preset-prepare" value={value} checked={draft.prepareTool === value}
-                onChange={() => set({ prepareTool: value })} />
-              <strong>{label}</strong>
-            </label>
-          ))}
-        </div>
-        {draft.prepareTool === 'ant' && (
-          targets !== null && targets.length === 0 ? (
-            <small className="run-preset-warn">{targetsError ?? '이 폴더의 build.xml 에서 타깃을 찾지 못했습니다. 폴더를 확인해 주세요.'}</small>
-          ) : (
-            <select aria-label="Ant 타깃" value={draft.antTarget} onChange={event => set({ antTarget: event.target.value })}>
-              {!draft.antTarget && <option value="">{targets === null ? '찾는 중…' : '타깃 고르기'}</option>}
-              {targets?.map(target => <option key={target} value={target}>{target}</option>)}
-              {draft.antTarget && targets !== null && !targets.includes(draft.antTarget) && <option value={draft.antTarget}>{draft.antTarget} (build.xml 에 없음)</option>}
-            </select>
-          )
-        )}
-        {draft.prepareTool === 'eclipse' && (
-          <small className="run-preset-hint run-preset-prepare-note">build.xml 없이 이클립스 설정(.classpath 의 소스·lib)으로 javac 컴파일합니다. 결과는 프로젝트가 아니라 앱 폴더에 둡니다.</small>
-        )}
-        {draft.prepareTool === 'maven' && (
-          <input className="run-preset-command" aria-label="Maven 목표" value={draft.mavenGoals} placeholder="예: clean package"
-            onChange={event => set({ mavenGoals: event.target.value })} spellCheck={false} autoComplete="off" />
-        )}
-      </div>
-      {(draft.vmArgs.trim() || draft.prepareTool !== 'none' || draft.contextXml || draft.extraLibs.length > 0) && (
-        <small className="run-preset-warn">VM 인자·기동 전 빌드·컨텍스트 설정 파일·추가 lib 은 실행 내용입니다. 처음 실행할 때와 바뀐 뒤에 한 번 더 확인합니다.</small>
       )}
     </div>
   )

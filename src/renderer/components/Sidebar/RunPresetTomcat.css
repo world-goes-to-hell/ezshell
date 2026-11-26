@@ -70,10 +70,15 @@
 .run-preset-server small { font-size: 11px; color: var(--text-muted); }
 .run-preset-context-xml { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--text-secondary); }
 .run-preset-context-xml > svg { flex: none; }
-.run-preset-context-xml-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, monospace); }
+.run-preset-context-xml-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, monospace); }
 .run-preset-extra-libs { display: grid; gap: 3px; margin: 0 0 3px; padding: 0; list-style: none; }
 .run-preset-extra-libs li { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm, 4px); background: var(--bg-primary); }
 .run-preset-extra-libs code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, monospace); font-size: 11.5px; color: var(--text-primary); }
-.run-preset-tomcat button.run-preset-extra-lib-remove { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: none; border-radius: var(--radius-sm, 4px); background: none; color: var(--text-muted); cursor: pointer; }
-.run-preset-tomcat button.run-preset-extra-lib-remove:hover { background: var(--bg-hover); color: var(--error-text, var(--error)); }
-.run-preset-tomcat button.run-preset-extra-lib-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.run-preset-tomcat-advanced button.run-preset-extra-lib-remove { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: none; border-radius: var(--radius-sm, 4px); background: none; color: var(--text-muted); cursor: pointer; }
+.run-preset-tomcat-advanced button.run-preset-extra-lib-remove:hover { background: var(--bg-hover); color: var(--error-text, var(--error)); }
+.run-preset-tomcat-advanced button.run-preset-extra-lib-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* 빠르게 채우기: the two quick fills on one line, what they read under them */
+.run-preset-quick-fill { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.run-preset-quick-fill > .run-preset-hint { margin-right: 2px; }
+.run-preset-tomcat-advanced { display: grid; gap: 4px; }

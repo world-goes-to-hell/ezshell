@@ -344,6 +344,44 @@ export function runError(result: unknown): string | null {
   return null
 }
 
+// --- The dialog's layout: a name to start from, Java or not, the 고급 section ---
+
+/**
+ * A name for a new preset from what was chosen, until the user types one: the folder's name, the context
+ * of a Tomcat, or the kind of the way found ("Spring Boot"); 20 characters at most
+ */
+export function suggestPresetName({ kind, relative, taskId, command, contextPath }: {
+  kind: RunPreset['kind']; relative: string; taskId?: string; command?: string; contextPath?: string
+}): string {
+  const folder = relative.replace(/\\/g, '/').replace(/^\.\/?/, '').replace(/\/+$/, '').split('/').pop() ?? ''
+  const context = (contextPath ?? '').replace(/^\/+/, '').trim()
+  const name = kind === 'tomcat' ? context || folder || 'Tomcat'
+    : kind === 'task' ? folder || (taskId ? KIND_NAMES[runKind({ kind, taskId, command, name: '' })] : '')
+    : folder
+  return [...name].slice(0, MAX_NAME).join('')
+}
+
+/** Whether the run needs a JDK: Tomcat, and the Java ways main finds (a typed command picks its JDK under 고급) */
+export function usesJdk(preset: Pick<RunPreset, 'kind' | 'taskId' | 'command'>): boolean {
+  if (preset.kind === 'tomcat') return true
+  if (preset.kind !== 'task') return false
+  const kind = runKind({ ...preset, name: '' })
+  return kind === 'spring' || kind === 'java'
+}
+
+/** Whether the 고급 section opens by itself: something in it differs from a new preset's */
+export function hasAdvancedValues(draft: PresetDraft): boolean {
+  return !!draft.envText.trim() || draft.logEncoding !== 'auto' || draft.hotReload !== 'off' || !draft.inAll || draft.waitReady
+    || (draft.kind === 'tomcat' && (!!draft.vmArgs.trim() || !!draft.contextXml || draft.extraLibs.length > 0))
+    || (draft.kind === 'custom' && draft.jdk !== 'system')
+}
+
+/** Whether the preset runs what was typed or chosen as is (asked once more before it first runs, and after a change) */
+export function hasRunContent(draft: PresetDraft): boolean {
+  if (draft.kind === 'custom') return !!draft.command.trim()
+  return draft.kind === 'tomcat' && (!!draft.vmArgs.trim() || draft.prepareTool !== 'none' || !!draft.contextXml || draft.extraLibs.length > 0)
+}
+
 // --- Eclipse workspace servers, context.xml, log encoding (stage 2, third batch) ---
 
 export const LOG_ENCODINGS: Array<{ value: LogEncoding; label: string }> = [

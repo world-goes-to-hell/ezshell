@@ -70,7 +70,7 @@ export function ApacheToolSettings({ tools, busy, onInstall, onRegisterTomcat, r
         </select></label>
       </div>
       <div className="jdk-actions">
-        <button type="button" className="btn-secondary" title={selected?.licenseUrl} onClick={() => void api.runtimesOpenLicense(tool)}>{tool === 'gradle' || tool === 'node' ? '도구 라이선스 보기' : 'Apache 라이선스 보기'}</button>
+        <button type="button" className="btn-secondary" title={selected?.licenseUrl} onClick={() => void api.runtimesOpenLicense(tool)}>{tool === 'gradle' || tool === 'node' ? `${option.name} 라이선스 보기` : 'Apache 라이선스 보기'}</button>
         {tomcat6 ? <>
           <button type="button" className="btn-secondary" disabled={busy} onClick={() => void onRegisterTomcat()}>Tomcat 6 폴더 등록</button>
           <button type="button" className="btn-secondary" disabled={busy} onClick={() => setSeries('7')}>Tomcat 7 받기</button>
@@ -82,7 +82,7 @@ export function ApacheToolSettings({ tools, busy, onInstall, onRegisterTomcat, r
         {foundTomcat6 && <p className="settings-section-desc">찾은 Tomcat 6을 실행 구성에서 선택할 수 있습니다.</p>}
       </> : lookingUp ? <p className="settings-section-desc" role="status">배포본 확인 중…</p>
         : lookupError ? <div className="jdk-actions" role="alert"><span>{lookupError}</span><button type="button" className="btn-secondary" onClick={() => setRetry(value => value + 1)}>다시 확인</button></div>
-        : selected ? <p className="settings-section-desc">{option.name} {selected.version}</p>
+        : selected ? <p className="settings-section-desc">받을 버전: {option.name} {selected.version}</p>
         : <p className="settings-section-desc">현재 플랫폼에 맞는 공개 배포본이 없습니다.</p>}
     </div>}
     {!tools ? <p className="settings-section-desc">목록 확인 중…</p> : tools.length === 0 ? <p className="settings-section-desc">받았거나 찾은 빌드·실행 도구가 없습니다.</p> : <ul className="jdk-list">

@@ -240,9 +240,18 @@ function fixture(backendPort, frontendPort) {
       Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(value)})
       el.dispatchEvent(new Event('input', { bubbles: true }))
     })()`)
+    // The dialog's layout (review, 2026-11-26): the kind first, 고급 folded, a name that follows the choice
+    check('the dialog starts with the kind and keeps 고급 folded', await until(`
+      [...document.querySelectorAll('.run-preset-kind-tab')].map(tab => tab.textContent.trim()).join('|') === '찾은 실행 방법|Tomcat|직접 입력' &&
+      document.querySelector('.run-preset-advanced')?.open === false &&
+      [...document.querySelectorAll('.run-preset-form .run-preset-switch')].filter(item => item.checkVisibility()).length === 2`))
+    await js(`document.querySelector('input[name="run-preset-kind"][value="tomcat"]').click()`)
+    check('a new preset\u2019s name follows the choice until it is typed in', await until(`document.querySelector('#run-preset-name')?.value === 'Tomcat'`))
     await setValue('#run-preset-name', '시험 서버')
     await setValue('#run-preset-folder', '.')
-    await until(`[...document.querySelectorAll('.run-preset-choice')].some(c => c.textContent.includes('직접 입력'))`)
+    await js(`document.querySelector('input[name="run-preset-kind"][value="task"]').click()`)
+    await until(`!!document.querySelector('input[name="run-preset-kind"][value="custom"]') && !document.querySelector('.run-preset-choices')?.textContent.includes('찾는 중')`)
+    check('a typed name stays when the kind changes', await js(`document.querySelector('#run-preset-name').value === '시험 서버'`))
     // Stage 2: Tomcat is a kind of its own, with its fields, and hot reload can be picked for it
     await js(`document.querySelector('input[name="run-preset-kind"][value="tomcat"]').click()`)
     check('Tomcat shows its fields: the Tomcat (or where to fetch one), web folder, context path, port, VM arguments, build', await until(`(() => {
@@ -250,7 +259,7 @@ function fixture(backendPort, frontendPort) {
       if (!box) return false
       const tomcat = !!box.querySelector('#run-preset-tomcat') || box.textContent.includes('설정 > 개발 도구에서 받기')
       return tomcat && !!box.querySelector('#run-preset-webapp') && box.querySelector('#run-preset-context')?.value === '/' &&
-        box.querySelector('#run-preset-port')?.value === '8080' && !!box.querySelector('#run-preset-vmargs') &&
+        box.querySelector('#run-preset-port')?.value === '8080' && !!document.querySelector('.run-preset-tomcat-advanced #run-preset-vmargs') &&
         box.querySelectorAll('input[name="run-preset-prepare"]').length === 4
     })()`))
     // 이클립스 설정에서 채우기: main reads the module's Eclipse settings; the web folder is kept from the worktree
@@ -267,24 +276,31 @@ function fixture(backendPort, frontendPort) {
     check('바로 반영 can be picked for a Tomcat preset', await until(`
       !!document.querySelector('.run-preset-reload')?.dataset.usable &&
       !document.querySelector('input[name="run-preset-reload"][value="standard"]').disabled`))
+    // The debugger note shows once hot reload is on (not before)
+    const debuggerNote = `document.querySelector('.run-preset-reload')?.textContent.includes('바로 반영을 켜면 이 실행에 IDE 디버거를 붙일 수 없습니다.')`
+    const noteBefore = await js(debuggerNote)
+    await js(`document.querySelector('input[name="run-preset-reload"][value="standard"]').click()`)
+    check('the debugger note shows when hot reload is turned on', !noteBefore && await until(debuggerNote))
+    await js(`document.querySelector('input[name="run-preset-reload"][value="off"]').click()`)
     // Second batch: the Eclipse-style build (compiled with the Eclipse settings, without build.xml)
     await js(`document.querySelector('input[name="run-preset-prepare"][value="eclipse"]').click()`)
     // Third batch: a workspace's servers and a context.xml are picked in main's folder chooser (not driven
     // here); the dialog offers both, says the passwords stay in the original file, and lists no extra libs yet
     check('Tomcat offers the workspace servers and a context.xml that is pointed at, not saved', await until(`(() => {
       const box = document.querySelector('.run-preset-tomcat')
-      return !!box && [...box.querySelectorAll('.run-preset-eclipse-btn')].some(b => b.textContent.includes('워크스페이스 서버 설정에서 채우기')) &&
-        box.textContent.includes('비밀번호는 저장하지 않고 실행 때 원본에서 읽습니다') &&
-        [...box.querySelectorAll('.run-preset-context-xml .run-preset-link')].some(b => b.textContent.trim() === '고르기') &&
-        !box.querySelector('.run-preset-extra-libs')
+      const advanced = document.querySelector('.run-preset-advanced .run-preset-tomcat-advanced')
+      return !!box && !!advanced && [...box.querySelectorAll('.run-preset-eclipse-btn')].some(b => b.textContent.includes('워크스페이스 서버')) &&
+        advanced.textContent.includes('비밀번호는 저장하지 않고 실행 때 원본에서 읽습니다') &&
+        [...advanced.querySelectorAll('.run-preset-context-xml .run-preset-link')].some(b => b.textContent.trim() === '고르기') &&
+        !advanced.querySelector('.run-preset-extra-libs')
     })()`))
     check('the Eclipse-style build says what it does', await until(`
       document.querySelector('.run-preset-tomcat .run-preset-prepare-note')?.textContent.includes('build.xml 없이 이클립스 설정')`))
     await js(`document.querySelector('input[name="run-preset-prepare"][value="maven"]').click()`)
     check('a build before the server is warned about as a command that runs', await until(`
       !!document.querySelector('.run-preset-tomcat [aria-label="Maven 목표"]') &&
-      document.querySelector('.run-preset-tomcat > .run-preset-warn')?.textContent.includes('처음 실행할 때')`))
-    await js(`[...document.querySelectorAll('.run-preset-choice')].find(c => c.textContent.includes('직접 입력')).querySelector('input').click()`)
+      document.querySelector('.run-preset-confirm-note')?.textContent.includes('처음 실행할 때')`))
+    await js(`document.querySelector('input[name="run-preset-kind"][value="custom"]').click()`)
     const server = path.join(__dirname, '..', 'support', 'devRunServer.js')
     await until(`!!document.querySelector('.run-preset-command')`)
     // Two spaces on purpose: the question must show the command as it runs
@@ -292,13 +308,12 @@ function fixture(backendPort, frontendPort) {
     await setValue('.run-preset-command', typed)
     check('a typed command is warned about in the dialog', await js(`!!document.querySelector('.run-preset-warn')`))
     // Stage 3: hot reload is for Spring Boot runs only; a typed command (the Node fixture) keeps it off
-    check('바로 반영 is fixed to 끄기 for a typed command, with the reason and the debugger note', await until(`(() => {
+    check('바로 반영 is fixed to 끄기 for a typed command, with the reason', await until(`(() => {
       const field = document.querySelector('.run-preset-reload')
       if (!field || field.dataset.usable) return false
       const radio = value => field.querySelector('input[name="run-preset-reload"][value="' + value + '"]')
       return radio('off')?.checked && !radio('off').disabled && radio('standard')?.disabled && radio('enhanced')?.disabled &&
-        /Spring Boot.* 실행에서만 됩니다\./.test(field.textContent) &&
-        field.textContent.includes('바로 반영을 켜면 이 실행에 IDE 디버거를 붙일 수 없습니다.')
+        /Spring Boot.* 실행에서만 됩니다\./.test(field.textContent)
     })()`))
     // The log encoding is for every kind (this typed command too) and is saved with the preset
     check('the log encoding offers 자동·UTF-8·MS949', await js(`[...document.querySelectorAll('#run-preset-log-encoding option')].map(o => o.value).join(',') === 'auto,utf-8,ms949'`))

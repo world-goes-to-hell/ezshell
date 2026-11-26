@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   firstErrorRow, agentActionNotice, agentNoticeName, withObject, withSubject, runCommandLabel, agentActionNote, crashKey, draftOf, emptyDraft, parseEnvText, presetFromDraft, runButtons, runError, runFolderLabel,
   runHead, runKind, runPills, runPort, sendPreview, type RunPreset, type RunState,
-  shortPath, workspaceServerFill, eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
+  hasAdvancedValues, hasRunContent, suggestPresetName, usesJdk, shortPath, workspaceServerFill, eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY
 } from './runPresets'
 
 const preset = (over: Partial<RunPreset> = {}): RunPreset => ({
@@ -372,5 +372,51 @@ describe('workspace servers, context.xml, log encoding, extra libs (stage 2, thi
     const task = presetFromDraft({ ...draftOf(preset()), logEncoding: 'utf-8', contextXml: 'x', extraLibs: ['y'] })
     expect('preset' in task && task.preset).toMatchObject({ logEncoding: 'utf-8' })
     expect('preset' in task && ('contextXml' in task.preset || 'extraLibs' in task.preset)).toBe(false)
+  })
+})
+
+describe('the dialog layout (review, 2026-11-26)', () => {
+  it('suggests a name from the folder, the Tomcat context or the kind found', () => {
+    expect(suggestPresetName({ kind: 'task', relative: 'backend/', taskId: 'backend:gradle' })).toBe('backend')
+    expect(suggestPresetName({ kind: 'task', relative: '.', taskId: '.:gradle', command: 'gradlew bootRun' })).toBe('Spring Boot')
+    expect(suggestPresetName({ kind: 'task', relative: '.', taskId: 'frontend:npm:dev', command: 'npm run dev' })).toBe('Node')
+    expect(suggestPresetName({ kind: 'task', relative: '.' })).toBe('')
+    expect(suggestPresetName({ kind: 'tomcat', relative: 'legacy', contextPath: '/shop' })).toBe('shop')
+    expect(suggestPresetName({ kind: 'tomcat', relative: 'legacy', contextPath: '/' })).toBe('legacy')
+    expect(suggestPresetName({ kind: 'tomcat', relative: '.', contextPath: '/' })).toBe('Tomcat')
+    expect(suggestPresetName({ kind: 'custom', relative: '.' })).toBe('')
+    expect([...suggestPresetName({ kind: 'custom', relative: 'a'.repeat(30) })]).toHaveLength(20)
+  })
+
+  it('knows which runs need a JDK', () => {
+    expect(usesJdk({ kind: 'tomcat' })).toBe(true)
+    expect(usesJdk({ kind: 'task', taskId: '.:maven', command: 'mvnw spring-boot:run' })).toBe(true)
+    expect(usesJdk({ kind: 'task', taskId: 'frontend:npm:dev', command: 'npm run dev' })).toBe(false)
+    expect(usesJdk({ kind: 'custom', command: 'java -jar app.jar' })).toBe(false)
+  })
+
+  it('opens 고급 by itself only when something in it is set', () => {
+    const fresh = emptyDraft()
+    expect(hasAdvancedValues(fresh)).toBe(false)
+    expect(hasAdvancedValues({ ...fresh, envText: 'A=1' })).toBe(true)
+    expect(hasAdvancedValues({ ...fresh, logEncoding: 'ms949' })).toBe(true)
+    expect(hasAdvancedValues({ ...fresh, hotReload: 'standard' })).toBe(true)
+    expect(hasAdvancedValues({ ...fresh, inAll: false })).toBe(true)
+    expect(hasAdvancedValues({ ...fresh, waitReady: true })).toBe(true)
+    expect(hasAdvancedValues({ ...fresh, kind: 'tomcat', vmArgs: '-Xmx1g' })).toBe(true)
+    expect(hasAdvancedValues({ ...fresh, kind: 'tomcat', extraLibs: ['lib/a.jar'] })).toBe(true)
+    expect(hasAdvancedValues({ ...fresh, kind: 'custom', jdk: 'zulu-8' })).toBe(true)
+    // A task's JDK is not under 고급
+    expect(hasAdvancedValues({ ...fresh, kind: 'task', jdk: 'zulu-8' })).toBe(false)
+  })
+
+  it('says once that what runs as typed is confirmed', () => {
+    const fresh = emptyDraft()
+    expect(hasRunContent(fresh)).toBe(false)
+    expect(hasRunContent({ ...fresh, kind: 'custom', command: ' ' })).toBe(false)
+    expect(hasRunContent({ ...fresh, kind: 'custom', command: 'npm start' })).toBe(true)
+    expect(hasRunContent({ ...fresh, kind: 'tomcat' })).toBe(false)
+    expect(hasRunContent({ ...fresh, kind: 'tomcat', prepareTool: 'eclipse' })).toBe(true)
+    expect(hasRunContent({ ...fresh, kind: 'tomcat', contextXml: 'conf/context.xml' })).toBe(true)
   })
 })
