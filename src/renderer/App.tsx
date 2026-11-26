@@ -53,6 +53,7 @@ import { focusTabPane } from './lib/paneFocus'
 import { MAIN_PANE, paneIds } from './lib/splitTree'
 import type { LocalDevelopmentTask } from './types'
 import { useTabGroups } from './hooks/useTabGroups'
+import { localTerminalChoices } from './lib/tabGroups'
 import { HandoffProjectsContext } from './components/AgentChat/HandoffProjectsContext'
 import { useTabStripScroll } from './hooks/useTabStripScroll'
 import { addScreenRefusal, dragDivider, evenSizes } from './lib/screenPanes'
@@ -1084,9 +1085,15 @@ function App() {
     return () => window.removeEventListener(REVEAL_RUN_SHELL_EVENT, onReveal)
   }, [])
 
-  const handleOpenLocalFromTabStrip = (pane?: number) => {
+  // The + menu's local terminal: in the work's folder (its worktree), or in the front tab's folder below it
+  const localFoldersFor = (pane?: number) => {
     const front = pane === undefined ? useTerminalStore.getState().activeTerminalId : shownSplitPanes[pane]?.activeTerminalId ?? null
-    void handleOpenLocalTerminal({ cwd: groupView.localFolder(front) }, pane)
+    const folder = groupView.localFolder(front)
+    return localTerminalChoices(folder, folder ? groupView.worktreeForFolder(folder)?.path : undefined)
+  }
+  const handleOpenLocalFromTabStrip = (pane?: number, where: 'root' | 'here' = 'root') => {
+    const folders = localFoldersFor(pane)
+    void handleOpenLocalTerminal({ cwd: where === 'here' ? folders.here ?? folders.root : folders.root }, pane)
   }
 
   const addBrowserTab = useCallback((id: string, pane?: number) => {
@@ -1399,7 +1406,8 @@ function App() {
         duplicateLabel={label}
         onDuplicate={() => void handleDuplicateTab(paneActiveId)}
         {...tabConnectionActions}
-        onLocalTerminal={() => handleOpenLocalFromTabStrip(pane)}
+        onLocalTerminal={where => handleOpenLocalFromTabStrip(pane, where)}
+        localFolders={localFoldersFor(pane)}
         onOpenBrowser={() => void handleOpenBrowser(pane)}
       />
     )
@@ -1787,7 +1795,8 @@ function App() {
                       duplicateLabel={activeDuplicateLabel}
                       onDuplicate={() => void handleDuplicateTab(activeTerminalId)}
                       {...tabConnectionActions}
-                      onLocalTerminal={() => handleOpenLocalFromTabStrip()}
+                      onLocalTerminal={where => handleOpenLocalFromTabStrip(undefined, where)}
+                      localFolders={localFoldersFor()}
                       onOpenBrowser={() => void handleOpenBrowser()}
                     />
                   </div>

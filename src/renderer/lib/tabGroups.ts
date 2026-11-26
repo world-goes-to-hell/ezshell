@@ -62,6 +62,18 @@ export function localFolderForGroup(
 }
 
 /**
+ * The + menu's local terminal choices (2026-11-26 user request: in the mbris-new work, with the backend tab in
+ * front, the shell opened in backend and there was no way to open one in mbris-new). `root`: the worktree
+ * holding the folder (or the folder); `here`: the folder itself, only when it is a folder below that root.
+ */
+export function localTerminalChoices(folder: string | undefined, worktree: string | undefined): { root?: string; here?: string } {
+  if (!folder) return {}
+  const root = worktree ?? folder
+  const inside = pathKey(folder) !== pathKey(root) && pathKey(folder).startsWith(`${pathKey(root).replace(/\/$/, '')}/`)
+  return inside ? { root, here: folder } : { root }
+}
+
+/**
  * The group of one tab. An SSH tab belongs to a work only when it was opened from that work (its
  * `workGroup`: the work's 서버 row or + menu, kept when tabs are restored). A session opened from the
  * session list is a general tab even when it is linked to a project (2026-11-20 user decision: it went

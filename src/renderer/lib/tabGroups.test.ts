@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalInfo } from '../stores/terminalStore'
-import { GENERAL_GROUP, groupOfTab, groupTabs, localFolderForGroup, stepTab, workTabsByWorktree, type GroupProject } from './tabGroups'
+import { GENERAL_GROUP, groupOfTab, groupTabs, localFolderForGroup, localTerminalChoices, stepTab, workTabsByWorktree, type GroupProject } from './tabGroups'
 
 const local = (id: string, cwd: string): TerminalInfo => ({ id, host: '이 PC', username: '', connected: true, local: { shell: 'PowerShell', cwd } })
 const ssh = (id: string, saved: string | null): TerminalInfo => ({ id, host: 'h', username: 'u', connected: true, connectConfig: { host: 'h', port: 22, username: 'u', savedSessionId: saved } as TerminalInfo['connectConfig'] })
@@ -116,6 +116,20 @@ describe('the tab strip’s local shell folder', () => {
   it('uses the original folder spelling for unregistered work when available', () => {
     expect(localFolderForGroup('folder:d:/work/other', projects, undefined, 'D:\\Work\\Other', [])).toBe('D:\\Work\\Other')
     expect(localFolderForGroup(GENERAL_GROUP, projects, undefined, undefined, [])).toBeUndefined()
+  })
+})
+
+describe('the + menu’s local terminal', () => {
+  it('opens in the work’s folder, and offers the front tab’s folder too when it is a folder below it', () => {
+    const work = String.raw`D:\WORK\mbris-new`
+    expect(localTerminalChoices(String.raw`D:\WORK\mbris-new\backend`, work)).toEqual({ root: work, here: String.raw`D:\WORK\mbris-new\backend` })
+    expect(localTerminalChoices('d:/work/MBRIS-NEW/backend/src', work)).toEqual({ root: work, here: 'd:/work/MBRIS-NEW/backend/src' })
+    expect(localTerminalChoices(work, work)).toEqual({ root: work })
+    expect(localTerminalChoices(String.raw`D:\WORK\mbris-new\ `.trim(), work)).toEqual({ root: work })
+    // A folder outside any registered worktree (a folder work): that folder only
+    expect(localTerminalChoices(String.raw`D:\other\app`, undefined)).toEqual({ root: String.raw`D:\other\app` })
+    expect(localTerminalChoices(String.raw`D:\WORK\mbris-new-old`, work)).toEqual({ root: work })
+    expect(localTerminalChoices(undefined, work)).toEqual({})
   })
 })
 

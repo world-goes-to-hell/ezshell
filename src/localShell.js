@@ -449,7 +449,20 @@ function trackTerminalModes(entry, data) {
 }
 
 /** The tracked modes as sequences that draw nothing, written after the backlog to a new screen */
-const modeSequences = entry => Object.entries(entry.modes).map(([mode, on]) => `\x1b[?${mode}${on ? 'h' : 'l'}`).join('');
+const modeSequences = entry => Object.entries(entry.modes ?? {}).map(([mode, on]) => `\x1b[?${mode}${on ? 'h' : 'l'}`).join('');
+
+/**
+ * The modes of a shell the session host kept (handOver puts them in its meta): the host keeps the last
+ * 256KB of output only, and a CLI switches bracketed paste on once at its start. Without them (an app before
+ * 2.38.1 handed the shell over) a Claude or Codex has it on, as both keep it while running; the wake reads
+ * their composer only with it on (2026-11-26: "입력칸을 찾지 못했습니다" after the update).
+ */
+function keptModes(modes, agent) {
+  if (modes && typeof modes === 'object' && !Array.isArray(modes)) {
+    return Object.fromEntries(Object.entries(modes).filter(([mode, on]) => TRACKED_MODES.has(mode) && typeof on === 'boolean'));
+  }
+  return agent === 'claude' || agent === 'codex' ? { '2004': true } : {};
+}
 
 function trackTerminalOsc(entry, data, platform, replyToProbe = true) {
   const output = entry.oscTail + data;
@@ -1248,11 +1261,12 @@ function createLocalShells({
         cwd: pick(meta.cwd), launchDirectory: pick(meta.launchDirectory) ?? cwd, launchIdentity: keptLaunchIdentity(meta.launchIdentity),
         reportedDirectory: pick(meta.reportedDirectory),
         reportStatus: status => reportShellStatus(entry, registration?.setStatus, status),
-        backlog: typeof shell.buffer === 'string' ? shell.buffer.slice(-BACKLOG_CHARS) : '', modes: {}, modeTail: '',
+        backlog: typeof shell.buffer === 'string' ? shell.buffer.slice(-BACKLOG_CHARS) : '', modes: keptModes(meta.modes, agent), modeTail: '',
         exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: '',
         activeAt: now, openedAt: now, sleeping: null, adopted: true, resumeId
       };
-      // What the screen was left in (bracketed paste, the title's working sign): read again from the output
+      // What the screen was left in (bracketed paste, the title's working sign): the kept modes, then what the
+      // kept output still says
       trackTerminalModes(entry, entry.backlog);
       trackTerminalOsc(entry, entry.backlog, platform, false);
       if (registration) {
@@ -1260,7 +1274,8 @@ function createLocalShells({
         // The wake reads the CLI's composer from its own screen, which starts empty, and an idle CLI draws
         // nothing until something changes: the chat view's send failed ("입력칸을 찾지 못했습니다") until the
         // terminal was shown and resized it. It gets what the host kept, as the tab's terminal does.
-        if (entry.backlog) entry.inbox?.writeOutput(entry.backlog);
+        // The modes after it, as a reloaded tab gets them: the switches may be older than the kept output.
+        entry.inbox?.writeOutput(entry.backlog + modeSequences(entry));
       }
       shells.set(shell.id, entry);
       listen(shell.id, entry);
@@ -1284,7 +1299,9 @@ function createLocalShells({
         agent: entry.agent ?? null, cwd: entry.cwd, launchDirectory: entry.launchDirectory,
         reportedDirectory: entry.reportedDirectory ?? null,
         launchIdentity: identity ? { directory: identity.directory, dev: String(identity.dev), ino: String(identity.ino) } : null,
-        resumeId: entry.resumeId ?? null
+        resumeId: entry.resumeId ?? null,
+        // Bracketed paste and cursor keys: the next app reads the composer only with them (keptModes)
+        modes: { ...entry.modes }
       });
     }
     const staying = [...shells].filter(([, entry]) => !entry.pty?.hosted);
@@ -1515,7 +1532,8 @@ function createLocalShells({
   function attach(id) {
     const entry = shells.get(id);
     if (!entry) return null;
-    return { backlog: entry.backlog.slice(-BACKLOG_CHARS), exited: entry.exited, exitCode: entry.exitCode,
+    // The modes after the output: a switch sent before the kept output began still holds (bracketed paste)
+    return { backlog: entry.backlog.slice(-BACKLOG_CHARS) + modeSequences(entry), exited: entry.exited, exitCode: entry.exitCode,
       ...(entry.inboxDraftBlocked && { inboxDraftBlocked: true }), ...(entry.development && { development: entry.development }) };
   }
 

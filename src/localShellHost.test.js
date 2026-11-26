@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -150,9 +150,46 @@ describe('local shells in the session host', () => {
     expect(shells.chatAgentId('local:3')).toBe('claude-4')
   })
 
+  // 2026-11-26, after updating to 2.38.0: still "입력칸을 찾지 못했습니다" for a Codex that had worked 20 minutes.
+  // The host keeps the last 256KB only: the CLI's bracketed paste switch (sent once at its start) was cut off,
+  // and the composer is read only with it on. The modes now go with the handover; without them (an older app
+  // handed the shell over) a Claude or Codex is taken to have it on, as both always do while running.
+  it.each([
+    ['handed over with its modes', { '2004': true }, true],
+    ['handed over by an older app, without modes', undefined, true],
+    ['handed over with the switch off', { '2004': false }, false]
+  ])('reads the composer of an agent whose start fell out of the kept output (%s)', async (_name, modes, sends) => {
+    const fixture = JSON.parse(readFileSync(new URL('./ipc/fixtures/agent-inbox-pty/codex-100x24-warning.json', import.meta.url), 'utf8'))
+    const host = fakeHost()
+    const agents = { adopt: vi.fn(() => ({ close: vi.fn(), setStatus: vi.fn() })), adoptShell: vi.fn(), agentsOfShell: vi.fn(() => ['codex-13']), register: vi.fn(), registerShell: vi.fn(() => ({})),
+      unreadFor: () => [], unhandledFor: () => [] }
+    const { shells } = setup({ host, agents })
+    const buffer = fixture.phases.idle.frame.replaceAll('[?2004h', '')
+    shells.adopt([{ id: 'local:5', pid: 4300, cols: fixture.cols, rows: fixture.rows, meta: { agent: 'codex', ...(modes ? { modes } : {}) }, buffer, exited: false }])
+    const written = vi.spyOn(host.remotes.get('local:5').remote.pty, 'write')
+    const result = await Promise.race([shells.chatSend('local:5', 'still there?'), new Promise(resolve => setTimeout(() => resolve('pending'), 3000))])
+    if (sends) {
+      expect(result).not.toMatchObject({ reason: 'no-composer' })
+      expect(written.mock.calls.map(([data]) => data).join('')).toContain('still there?')
+    } else {
+      expect(result).toMatchObject({ ok: false, reason: 'no-composer' })
+    }
+    // The tab's terminal gets the same modes after the kept output when it attaches
+    expect(shells.attach('local:5')?.backlog.endsWith(sends ? '[?2004h' : '[?2004l')).toBe(true)
+  })
+
+  it('hands the shell’s terminal modes over with it', () => {
+    const host = fakeHost()
+    const { shells } = setup({ host })
+    const { id } = shells.open({ cols: 100, rows: 30, cwd: DIR })
+    host.remotes.get(id).remote.data('[?2004h[?1h ready')
+    shells.handOver()
+    expect(host.setMeta).toHaveBeenCalledWith(id, expect.objectContaining({ modes: { '1': true, '2004': true } }))
+  })
+
   // 2026-11-26 user report: after the update, sending from the chat view failed with "에이전트의 입력칸을 찾지
   // 못했습니다" until the terminal was shown once. The wake's screen started empty and an idle CLI draws nothing.
-  it.each(['claude-100x24-idle', 'codex-100x24-idle'])('reads an adopted agent’s screen from what the host kept (%s), so the chat sends at once', async name => {
+  it.each(readdirSync(new URL('./ipc/fixtures/agent-inbox-pty/', import.meta.url)).filter(name => name.endsWith('.json')).map(name => name.slice(0, -5)))('reads an adopted agent’s screen from what the host kept (%s), so the chat sends at once', async name => {
     const fixture = JSON.parse(readFileSync(new URL(`./ipc/fixtures/agent-inbox-pty/${name}.json`, import.meta.url), 'utf8'))
     const host = fakeHost()
     const registration = { close: vi.fn(), setStatus: vi.fn() }

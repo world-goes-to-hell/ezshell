@@ -8,14 +8,18 @@ interface NewTabMenuProps {
   onDuplicate: () => void
   onPickSession: () => void
   onNewSession: () => void
-  /** A terminal of this PC */
-  onLocalTerminal: () => void
+  /** A terminal of this PC: in the work's folder, or ('here') in the front tab's folder */
+  onLocalTerminal: (where?: 'root' | 'here') => void
+  /** Where those open (lib/tabGroups.ts localTerminalChoices); `here` only when it is a folder below `root` */
+  localFolders?: { root?: string; here?: string }
   onOpenBrowser: () => void
   /** Extra class for the + button (the split pane header styles it like its other buttons) */
   triggerClassName?: string
 }
 
-export function NewTabMenu({ duplicateLabel, onDuplicate, onPickSession, onNewSession, onLocalTerminal, onOpenBrowser, triggerClassName }: NewTabMenuProps) {
+const folderName = (folder: string) => folder.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || folder
+
+export function NewTabMenu({ duplicateLabel, onDuplicate, onPickSession, onNewSession, onLocalTerminal, localFolders, onOpenBrowser, triggerClassName }: NewTabMenuProps) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
@@ -37,10 +41,20 @@ export function NewTabMenu({ duplicateLabel, onDuplicate, onPickSession, onNewSe
             <RiServerLine size={16} />
             <span>기존 세션 선택…</span>
           </DropdownMenu.Item>
-          <DropdownMenu.Item className="new-tab-menu-item" onSelect={onLocalTerminal}>
+          <DropdownMenu.Item className="new-tab-menu-item" onSelect={() => onLocalTerminal('root')} title={localFolders?.root}>
             <RiComputerLine size={16} />
             <span>로컬 터미널</span>
           </DropdownMenu.Item>
+          {localFolders?.here && (
+            <DropdownMenu.Item className="new-tab-menu-item" onSelect={() => onLocalTerminal('here')} title={localFolders.here}
+              data-local-here="true">
+              <RiComputerLine size={16} />
+              <div className="new-tab-menu-text">
+                <span>로컬 터미널 · {folderName(localFolders.here)}</span>
+                <span className="new-tab-menu-sub">앞 탭의 폴더</span>
+              </div>
+            </DropdownMenu.Item>
+          )}
           <DropdownMenu.Item className="new-tab-menu-item" onSelect={onOpenBrowser}>
             <RiGlobalLine size={16} />
             <span>브라우저 열기</span>

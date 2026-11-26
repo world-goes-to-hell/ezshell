@@ -174,6 +174,27 @@ const { check, finish } = createChecks()
     `))
     await js(`${active}.querySelector('.tab-close').click()`)
 
+    // 2026-11-26 user report: with a tab in a folder below the work (mbris-new\backend) in front, the plus
+    // menu's shell opened there and there was no way to open one in the work's folder
+    const backend = path.join(alpha, 'backend')
+    fs.mkdirSync(backend, { recursive: true })
+    await js(`window.dispatchEvent(new CustomEvent('ezshell:open-local-terminal', { detail: ${JSON.stringify({ cwd: backend, workspaceLabel: 'backend' })} }))`)
+    check('a shell in a folder below the work joins the work', await until(`${tabs}.length === 2 && ${selectName} === 'alpha' && ${cwdIs(backend)}`, 10000))
+    await fromNewTabMenu('로컬 터미널')
+    check('the plus menu’s shell opens in the work’s folder, not the front tab’s', await until(`${tabs}.length === 3 && ${cwdIs(alpha)}`, 10000))
+    await js(`${active}.querySelector('.tab-close').click()`)
+    await until(`${tabs}.length === 2`)
+    await js(`[...document.querySelectorAll('.terminal-tab')].find(tab => tab.offsetParent && tab.textContent.includes('backend'))?.click()`)
+    await until(`${cwdIs(backend)}`, 5000)
+    await fromNewTabMenu('로컬 터미널 · backend앞 탭의 폴더')
+    check('the plus menu also offers the front tab’s folder below the work', await until(`${tabs}.length === 3 && ${cwdIs(backend)} && ${active}?.dataset.tabId !== undefined`, 10000))
+    // Only the two shells opened here: the work's first tab stays for the checks below
+    for (let index = 0; index < 2; index++) {
+      await js(`${tabs}.find(tab => tab.dataset.tabId !== ${JSON.stringify(alphaId)})?.querySelector('.tab-close').click()`)
+      await sleep(300)
+    }
+    await until(`${tabs}.length === 1 && ${tabs}[0].dataset.tabId === ${JSON.stringify(alphaId)}`, 5000)
+
     await js(`${open('alpha-feature')}.click()`)
     check('the feature worktree has its own badge in the same project', await until(`${selectName} === 'alpha' && ${badge(active)}?.textContent === 'feature' && ${cwdIs(feature)}`))
     await fromNewTabMenu('브라우저 열기')
