@@ -426,7 +426,13 @@ const { setupAutoUpdater, installsUpdateOnQuit } = require('./src/ipc/updates.js
   ipcMain, app, shell, sessionsFilePath,
   // Declared further down the file: looked up when a request arrives, not now
   fromMainWindow: (event) => fromMainWindow(event),
-  get mainWindow() { return mainWindow; }
+  get mainWindow() { return mainWindow; },
+  testUpdateRestart: !app.isPackaged && process.env.EZSHELL_TEST_UPDATE_RESTART === '1',
+  // Restarting to install: the session host keeps the shells for the app the installer starts
+  async beforeUpdateRestart() {
+    restartingForUpdate = true;
+    await sessionHost.keep(SESSION_KEEP_MS);
+  }
 });
 
 // App windows show only the app's own page. The browser view has a separate session and policy.
@@ -448,6 +454,7 @@ app.whenReady().then(() => {
   // replaces it with quit / edit / window only. Other platforms have no menu (frameless windows).
   if (process.platform === 'darwin') Menu.setApplicationMenu(Menu.buildFromTemplate(macMenuTemplate(app.name)));
   createWindow();
+  void startSessionHost().catch(error => console.error('[sessionHost] start failed:', error.message));
   startMcp();
   if (fs.existsSync(agentBridgeFile)) {
     void agentMessages.enableExternalBridge().catch(error => console.error('Failed to start the agent message bridge:', error.code || error.name));
@@ -679,11 +686,44 @@ const sendToLocalWindow = (channel, payload) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 };
 let localShells = null;
+// The session host: local shells live in a process started from a copy of the runtime outside the install
+// folder, so they go on while the app restarts to install an update (src/sessionHost/,
+// docs/plan/2026-11-26-sessions-survive-update.md). Windows only; elsewhere shells stay in the app.
+const SESSION_KEEP_MS = 3 * 60 * 1000;
+let restartingForUpdate = false;
+const sessionRuntime = require('./src/sessionHost/runtimeCopy.js').createRuntimeCopy({
+  packaged: app.isPackaged,
+  execPath: process.execPath,
+  mainDir: __dirname,
+  // node-pty is unpacked from app.asar (its native files must be real files)
+  ptyDir: path.dirname(require.resolve('node-pty/package.json')).replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`),
+  localAppData: process.env.LOCALAPPDATA
+});
+const sessionHost = require('./src/sessionHost/client.js').createSessionHostClient({
+  stateFolder: userDataPath,
+  runtime: () => sessionRuntime.current()
+});
+/** At start: the host (taking back one an earlier app kept), then the shells it kept */
+async function startSessionHost() {
+  // Screen-test apps that replace node-pty's spawn in this process (e2e/support/*App.js)
+  if (process.env.EZSHELL_TEST_NO_SESSION_HOST === '1') return;
+  await sessionRuntime.prepare();
+  if (!(await sessionHost.start())) return;
+  const kept = sessionHost.takeAdoptable();
+  if (kept.length > 0) getLocalShells().adopt(kept);
+}
 const agentBridgeFile = path.join(userDataPath, 'agent-message-connection');
 const claudeRoot = require('./src/agentHistory/history.js').agentRoots(process.env, require('os').homedir()).claude;
 // Claude's 5-hour and weekly windows over time: the chat view's percent per question (its transcript has none)
 const claudeLimitHistory = require('./src/agentChat/limitHistory.js').createLimitHistory();
+// An update's handover for the agents that outlive the app in the session host (src/ipc/agentHandoff.js):
+// the pipe and folder their CLIs keep are listened on again at start, the rest comes back after the unlock
+const agentHandoff = require('./src/ipc/agentHandoff.js');
+const agentHandoffFiles = { file: path.join(userDataPath, 'agent-handoff.json'), endpointFile: path.join(userDataPath, 'agent-handoff-endpoint.json') };
 const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages({
+  // The agents' message MCP, hooks and status lines start from the runtime copy outside the install folder
+  agentRuntime: () => sessionRuntime.current(),
+  handoffEndpoint: agentHandoff.readHandoffEndpoint(agentHandoffFiles),
   notify: (channel, payload) => {
     if (channel === 'agent-usage' && payload?.usage?.agent === 'claude') claudeLimitHistory.record(payload.usage);
     sendToLocalWindow(channel, payload);
@@ -702,6 +742,15 @@ const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages(
   roleFile: path.join(userDataPath, 'agent-roles.json'),
   codexHookTrustFile: path.join(userDataPath, 'codex-hook-mode')
 });
+/**
+ * After the unlock: the agents of the app before the update, on the pipe this app took over at start. The
+ * handles the session host's shells took before the unlock (agentMessages adopt) get their agents. Nothing to take, or
+ * a record that cannot be opened: the agents register anew, as before.
+ */
+function restoreAgentHandoff() {
+  if (!agentMessages.awaitingHandoff()) return;
+  agentMessages.importHandoff(agentHandoff.takeAgentHandoff({ ...agentHandoffFiles, masterPassword: currentMasterPassword }));
+}
 const localTerminalClipboard = require('./src/ipc/localTerminalClipboard.js').createLocalTerminalClipboard(clipboard, nativeImage);
 async function selectAgentImages(title) {
   const { filePaths, canceled } = await dialog.showOpenDialog(mainWindow, {
@@ -769,7 +818,9 @@ function getLocalShells() {
       send: sendToLocalWindow,
       agents: agentMessages,
       onInboxDraftBlocked: alertAgentEscalation,
-      readClaudeSessions: () => readClaudeSessions(claudeRoot)
+      readClaudeSessions: () => readClaudeSessions(claudeRoot),
+      host: sessionHost,
+      runtimeExe: () => sessionRuntime.current()?.exe ?? null
     });
   }
   return localShells;
@@ -815,6 +866,12 @@ ipcMain.handle('local-shell-decline-codex-hooks', (event, id) =>
 );
 // A reloaded window has no tabs but the shells kept running: it takes them back (lib/localShellAdopt.ts)
 ipcMain.handle('local-shell-list', (event) => (fromMainWindow(event) && !isAppLocked && localShells ? localShells.list() : []));
+// Before the restart for an update: which shell sits in which pane, kept by the session host for the
+// next window (the window checks it again when it reads it back, lib/localReloadLayout.ts)
+ipcMain.handle('local-shell-keep-layout', (event, layout) => {
+  if (fromMainWindow(event) && !isAppLocked && Array.isArray(layout)) sessionHost.setLayout(layout);
+});
+ipcMain.handle('local-shell-kept-layout', (event) => (fromMainWindow(event) && !isAppLocked ? sessionHost.takeKeptLayout() : null));
 ipcMain.handle('local-shell-current-directory', (event, id) =>
   fromMainWindow(event) && !isAppLocked ? localShells?.currentDirectory(id) ?? null : null
 );
@@ -849,8 +906,21 @@ app.on('will-quit', () => {
   // from starting the exe again meanwhile (docs/fix/2026-11-24-update-uninstall-failed-2.md)
   const updating = installsUpdateOnQuit();
   if (updating) agentMessages.pauseExternalBridge();
-  localShells?.closeAll({ killTrees: updating });
-  agentMessages.stop();
+  const handingOver = updating && restartingForUpdate && sessionHost.ready();
+  if (handingOver) {
+    // The shells in the session host wait there for the app the installer starts (keep was sent before
+    // the quit); the others end with their trees
+    localShells?.handOver();
+    sessionHost.release();
+  } else {
+    localShells?.closeAll({ killTrees: updating });
+    sessionHost.shutdown();
+  }
+  // Their agents' registrations and inboxes go to the next app, sealed with the master password
+  const handedOver = handingOver && agentHandoff.saveAgentHandoff({
+    ...agentHandoffFiles, record: agentMessages.exportHandoff(), masterPassword: currentMasterPassword
+  });
+  agentMessages.stop({ handOver: handedOver });
 });
 ipcMain.handle('agent-messages-state', event =>
   fromMainWindow(event) && !isAppLocked ? agentMessages.snapshot() : null
@@ -1267,6 +1337,7 @@ ipcMain.handle('setup-master-password', async (event, { password }) => {
   savedSessionRecords = null;
   currentMasterPassword = password;
   isAppLocked = false;
+  restoreAgentHandoff();
   runPresets.resumeReloads();
   localShells?.wakeInboxes();
   void remoteAccess.start();
@@ -1288,6 +1359,7 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
     savedSessionRecords = null;
     currentMasterPassword = password;
     isAppLocked = false;
+    restoreAgentHandoff();
     runPresets.resumeReloads();
     localShells?.wakeInboxes();
     resealSessionsFile();

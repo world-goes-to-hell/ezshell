@@ -42,6 +42,48 @@ function claudeSettings(enabled) {
   })
 }
 
+const HANDOFF_FORMAT = 'ezshell-agent-handoff'
+const HANDOFF_VERSION = 1
+const tokenDigest = token => createHash('sha256').update(token).digest('hex')
+const DIGEST = /^[0-9a-f]{64}$/
+const AGENT_ID = /^(?:codex|claude|antigravity)-[1-9]\d{0,8}$/
+const SHELL_ID = /^local:[1-9]\d{0,8}$/
+
+/**
+ * The executable and scripts the agents in a local shell start on their own. With the session host's
+ * runtime copy (`{ exe, appRoot }`, src/sessionHost/runtimeCopy.js) they live outside the install folder,
+ * so an agent that survives an update never holds it (the installer stops every process under it); the
+ * scripts are the one-file bundles of out/main/agent-runtime (electron.vite.config.ts). Without a copy (not
+ * made yet, or it failed) this app's own files, as before: that shell does not outlive an update.
+ */
+function agentRuntimePaths(runtime, execPath, ipcDir) {
+  if (runtime && typeof runtime.exe === 'string' && typeof runtime.appRoot === 'string' &&
+      path.isAbsolute(runtime.exe) && path.isAbsolute(runtime.appRoot)) {
+    const script = name => path.join(runtime.appRoot, 'agent-runtime', name + '.js')
+    return {
+      exe: runtime.exe, copied: true, mcp: script('agentMessageMcp'), cli: script('agentMessageCli'),
+      hook: script('agentHookReport'), usage: script('agentUsageReport'), antigravity: script('antigravityStatusReport')
+    }
+  }
+  return {
+    exe: execPath, copied: false, mcp: path.join(ipcDir, 'agentMessageMcp.js'), cli: path.join(ipcDir, 'agentMessageCli.js'),
+    hook: path.join(ipcDir, '..', 'agentHookReport.js'), usage: path.join(ipcDir, 'agentUsageReport.js'),
+    antigravity: path.join(ipcDir, 'antigravityStatusReport.js')
+  }
+}
+
+/** The pipe and file folder an update's handover keeps (agentHandoff.js): the same ones, or none */
+function validEndpoint(endpoint, platform, temp = tmpdir()) {
+  if (!endpoint || typeof endpoint.pipe !== 'string' || typeof endpoint.directory !== 'string') return null
+  const { pipe, directory } = endpoint
+  if (!path.isAbsolute(directory) || path.dirname(directory) !== path.resolve(temp) ||
+      !/^ezshell-agent-[A-Za-z0-9]{6}$/.test(path.basename(directory))) return null
+  const pipeOk = platform === 'win32'
+    ? /^\\\\\.\\pipe\\ezshell-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(pipe)
+    : pipe === path.join(directory, 'messages.sock')
+  return pipeOk ? { pipe, directory } : null
+}
+
 function writeAgentFile(file, data) {
   const temporary = file + '.' + randomUUID()
   try {
@@ -53,9 +95,17 @@ function writeAgentFile(file, data) {
 }
 
 function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onInboxRead, bindLocalAgent, reportLocalAntigravity, onAgentHook,
-  inspectLocalAgent, onEscalate, runPresetTool,
+  inspectLocalAgent, onEscalate, runPresetTool, agentRuntime, handoffEndpoint,
   bridgeFile, roleFile, codexHookTrustFile, platform = process.platform, home = homedir(), now = Date.now }) {
   const instanceBridgeFile = bridgeFile ? `${bridgeFile}.${process.pid}` : null
+  // An update's handover left this pipe and folder for the agents that outlived the old app: listen on the
+  // same ones, and take no requests until their registrations are back (importHandoff, after the unlock)
+  // or given up (discardHandoff). Otherwise an agent reconnecting meanwhile would be taken for a new one.
+  let keptEndpoint = validEndpoint(handoffEndpoint, platform)
+  let awaitingHandoff = Boolean(keptEndpoint)
+  // Credentials handed over by the old app, as SHA-256 digests (the raw tokens never reach the disk)
+  const handedTokens = new Map()
+  const handedShellTokens = new Map()
   const agents = new Map()
   const roleStore = createAgentRoleStore(roleFile)
   const roleSessions = new Map()
@@ -88,6 +138,10 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   let pipe
   let antigravityStatusForward
   let antigravityReportSequence = 0
+  // The agent an app-issued token belongs to: this run's, or one handed over by the app before the update
+  const agentOfToken = token => typeof token !== 'string' ? undefined : tokens.get(token) ?? handedTokens.get(tokenDigest(token))
+  const shellOfToken = token => typeof token !== 'string' ? undefined : shellTokens.get(token) ?? handedShellTokens.get(tokenDigest(token))
+  const runtimePaths = () => agentRuntimePaths(agentRuntime?.() ?? null, process.execPath, __dirname)
   let hooksEnabled = true
   let codexHookMode = 'pending'
   if (codexHookTrustFile) {
@@ -441,10 +495,11 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   }
 
   function respond(request, socket) {
+    if (awaitingHandoff) throw new Error('ezShell이 다시 시작하는 중입니다.')
     const hookReport = request?.method === 'agent-event' || request?.method === 'stop-check'
     // Reports from a CLI started in a plain local shell can use its shell token.
     if ((request?.method === 'usage' || hookReport) && typeof request.shellToken === 'string') {
-      const shellId = shellTokens.get(request.shellToken)
+      const shellId = shellOfToken(request.shellToken)
       if (!shellId) throw new Error('ezShell 로컬 터미널에서 실행해 주세요.')
       if (isLocked()) throw new Error('먼저 앱 잠금을 해제해 주세요.')
       const kind = hookReport ? request.kind : 'claude'
@@ -452,14 +507,14 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
       if (hookReport) return receiveHook(agent, request)
       return { stored: agent ? setUsage(agent.id, request.usage) : false }
     }
-    const from = tokens.get(request?.token)
+    const from = agentOfToken(request?.token)
     if (!from) throw new Error('활성 ezShell 에이전트 세션에서 실행해 주세요.')
     if (isLocked()) throw new Error('먼저 앱 잠금을 해제해 주세요.')
     switch (request.method) {
       case 'list': return { agents: [...agents.values()].filter(agent => isConnected(agent.id)).map(({ id, kind, cwd }) => ({ id, kind, cwd, role: activeRole(id).role })), self: from }
       case 'inspect-agent': return inspectAgent(request.id).state
       case 'run-list': case 'run-start': case 'run-restart': case 'run-stop': case 'run-wait': case 'run-log': case 'run-propose': {
-        const allowed = () => !isLocked() && tokens.get(request.token) === from && isConnected(from) && !agents.get(from)?.sleeping && !socket.destroyed
+        const allowed = () => !isLocked() && agentOfToken(request.token) === from && isConnected(from) && !agents.get(from)?.sleeping && !socket.destroyed
         if (!runPresetTool || !allowed()) throw new Error('연결된 로컬 에이전트만 이용할 수 있습니다.')
         socket.setTimeout(request.method === 'run-wait' ? 320_000 : 45_000)
         const lifetime = new AbortController()
@@ -633,8 +688,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   }
 
   async function reportAntigravity(request, socket) {
-    const shellId = shellTokens.get(request.token)
-    const isCurrent = () => Boolean(shellId && shellTokens.get(request.token) === shellId && !isLocked() && !socket.destroyed)
+    const shellId = shellOfToken(request.token)
+    const isCurrent = () => Boolean(shellId && shellOfToken(request.token) === shellId && !isLocked() && !awaitingHandoff && !socket.destroyed)
     const status = antigravityStatusFromInput(request.value, platform)
     if (!isCurrent() || !status || !Number.isSafeInteger(request.pid) || request.pid <= 0) return { stored: false }
     const sequence = ++antigravityReportSequence
@@ -648,9 +703,10 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   }
 
   async function watchMcp(request, socket) {
+    if (awaitingHandoff) throw new Error('ezShell이 다시 시작하는 중입니다.')
     const { kind } = request
     let token = request.token
-    let id = tokens.get(token)
+    let id = agentOfToken(token)
     const external = id === undefined
     let binding
     let authorized = false
@@ -661,7 +717,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
       const waking = request.wakeToken !== undefined
       const localClaude = request.shellToken !== undefined
       const shellToken = waking ? request.wakeToken : request.shellToken
-      const shellId = shellTokens.get(shellToken)
+      const shellId = shellOfToken(shellToken)
       const validKind = localClaude ? !waking && kind === 'claude' : localKind || (!waking && kind === 'aside')
       if (!validKind || (waking || localClaude ? !shellId : !bridgeFile || token !== bridgeToken)
         || typeof request.cwd !== 'string' || !path.isAbsolute(request.cwd) || request.cwd.length > 4096) {
@@ -671,7 +727,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
         ? await bindLocalAgent?.({ pid: request.pid, kind, shellId, cwd: request.cwd })
         : undefined
       if (socket.destroyed) return
-      if (shellId && (!attach || shellTokens.get(shellToken) !== shellId)) throw new Error('ezShell 로컬 터미널 연결을 확인할 수 없습니다.')
+      if (shellId && (!attach || shellOfToken(shellToken) !== shellId)) throw new Error('ezShell 로컬 터미널 연결을 확인할 수 없습니다.')
       let authorizedId
       const authorizeBinding = (existingId, resuming = false, sameLiveCli = false) => {
         if (existingId) {
@@ -800,7 +856,11 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     })
   }
 
-  function stop() {
+  /**
+   * handOver: an update restarts the app and the agents in the session host live on. The files their CLIs
+   * read again (settings, MCP configs, the ezshell command) stay for the next app (exportHandoff).
+   */
+  function stop({ handOver = false } = {}) {
     escalated.clear()
     reconnects.clear()
     hookEvents.clear()
@@ -815,6 +875,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     if (instanceBridgeFile) {
       try { fs.unlinkSync(instanceBridgeFile) } catch {}
     }
+    if (directory && handOver) directory = undefined
     if (directory) {
       try { fs.unlinkSync(path.join(directory, platform === 'win32' ? 'ezshell.cmd' : 'ezshell')) } catch {}
       try { fs.unlinkSync(path.join(directory, 'agent-mcp.json')) } catch {}
@@ -831,9 +892,13 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   }
 
   async function start() {
-    directory = fs.mkdtempSync(path.join(tmpdir(), 'ezshell-agent-'))
+    // The folder and pipe an update handed over, while the folder is still there; new ones otherwise
+    const kept = keptEndpoint && fs.existsSync(keptEndpoint.directory) ? keptEndpoint : null
+    if (keptEndpoint && !kept) discardHandoff()
+    directory = kept ? kept.directory : fs.mkdtempSync(path.join(tmpdir(), 'ezshell-agent-'))
     writeAgentFile(path.join(directory, CODEX_HOOK_MODE_FILE), runtimeCodexMode() + '\n')
-    pipe = platform === 'win32' ? '\\\\.\\pipe\\ezshell-' + randomUUID() : path.join(directory, 'messages.sock')
+    pipe = kept ? kept.pipe : platform === 'win32' ? '\\\\.\\pipe\\ezshell-' + randomUUID() : path.join(directory, 'messages.sock')
+    if (kept && platform !== 'win32') try { fs.unlinkSync(pipe) } catch {}
     const command = platform === 'win32'
       ? '@echo off\r\nsetlocal DisableDelayedExpansion\r\nset ELECTRON_RUN_AS_NODE=1\r\n"%EZSHELL_CLI_EXE%" "%EZSHELL_CLI_SCRIPT%" %*\r\n'
       : '#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "$EZSHELL_CLI_EXE" "$EZSHELL_CLI_SCRIPT" "$@"\n'
@@ -865,9 +930,22 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
         '@echo off\r\nsetlocal DisableDelayedExpansion\r\nset "ELECTRON_RUN_AS_NODE=1"\r\n"%EZSHELL_CLI_EXE%" "%EZSHELL_ANTIGRAVITY_STATUS_SCRIPT%"\r\n', { mode: 0o700 })
     }
     server = net.createServer(connect)
-    await new Promise((resolve, reject) => {
+    try {
+      await listenOn(pipe)
+    } catch (error) {
+      if (!kept) throw error
+      // The handed-over pipe is taken (the old app has not let go): a new one, and the agents start over
+      discardHandoff()
+      pipe = platform === 'win32' ? '\\\\.\\pipe\\ezshell-' + randomUUID() : path.join(directory, 'messages.sock')
+      server = net.createServer(connect)
+      await listenOn(pipe)
+    }
+  }
+
+  function listenOn(address) {
+    return new Promise((resolve, reject) => {
       server.once('error', reject)
-      server.listen(pipe, () => { server.off('error', reject); resolve() })
+      server.listen(address, () => { server.off('error', reject); resolve() })
     })
   }
 
@@ -883,7 +961,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   async function enableExternalBridge() {
     if (!bridgeFile) throw new Error('메시지 MCP 설정 경로가 없습니다.')
     await ready()
-    const fields = [process.execPath, path.join(__dirname, 'agentMessageMcp.js'), pipe, bridgeToken]
+    const paths = runtimePaths()
+    const fields = [paths.exe, paths.mcp, pipe, bridgeToken]
     if (fields.some(field => /[\r\n]/.test(field))) throw new Error('메시지 MCP 파일 경로에 줄바꿈이 있습니다.')
     const record = fields.join('\n') + '\n'
     // A CLI launched inside ezShell uses its own app's bridge, even if another window starts later.
@@ -930,23 +1009,29 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     bindRoleSession(id, resumeId, true)
     changed()
     const key = Object.keys(shellEnv).find(name => platform === 'win32' ? name.toUpperCase() === 'PATH' : name === 'PATH') ?? 'PATH'
+    const paths = runtimePaths()
     const env = {
       ...shellEnv,
       [key]: directory + (shellEnv[key] ? path.delimiter + shellEnv[key] : ''),
       EZSHELL_AGENT_ID: id,
       EZSHELL_AGENT_PIPE: pipe,
       EZSHELL_AGENT_TOKEN: token,
-      EZSHELL_CLI_EXE: process.execPath,
-      EZSHELL_CLI_SCRIPT: path.join(__dirname, 'agentMessageCli.js'),
-      EZSHELL_AGENT_MCP_SCRIPT: path.join(__dirname, 'agentMessageMcp.js'),
+      EZSHELL_CLI_EXE: paths.exe,
+      EZSHELL_CLI_SCRIPT: paths.cli,
+      EZSHELL_AGENT_MCP_SCRIPT: paths.mcp,
       EZSHELL_AGENT_MCP_CONFIG: path.join(directory, 'agent-mcp.json'),
       // Claude only: its status line reports usage to the app instead of drawing rows (agentUsageReport.js)
       EZSHELL_AGENT_SETTINGS: path.join(directory, CLAUDE_SETTINGS_FILE),
-      EZSHELL_AGENT_USAGE_SCRIPT: path.join(__dirname, 'agentUsageReport.js'),
-      EZSHELL_AGENT_HOOK_SCRIPT: path.join(__dirname, '..', 'agentHookReport.js')
+      EZSHELL_AGENT_USAGE_SCRIPT: paths.usage,
+      EZSHELL_AGENT_HOOK_SCRIPT: paths.hook
     }
+    return { env, ...agentHandle(id, () => tokens.delete(token)) }
+  }
+
+  /** What localShell.js holds for an agent it runs: status reports and the end of its CLI */
+  function agentHandle(id, revokeToken) {
     const stopReceiving = () => {
-      tokens.delete(token)
+      revokeToken()
       reconnects.delete(id)
       const lease = mcpReady.get(id)
       mcpReady.delete(id)
@@ -956,7 +1041,6 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
       }
     }
     return {
-      env,
       setStatus: (status, source) => setStatus(id, status, source),
       finish(exitCode) {
         const agent = agents.get(id)
@@ -1050,21 +1134,23 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     forgetShell(shellId)
     const token = randomUUID()
     shellTokens.set(token, shellId)
+    const paths = runtimePaths()
     return {
       EZSHELL_SHELL_TOKEN: token,
       EZSHELL_AGENT_PIPE: pipe,
-      EZSHELL_CLI_EXE: process.execPath,
-      EZSHELL_AGENT_MCP_SCRIPT: path.join(__dirname, 'agentMessageMcp.js'),
+      EZSHELL_CLI_EXE: paths.exe,
+      EZSHELL_CLI_SCRIPT: paths.cli,
+      EZSHELL_AGENT_MCP_SCRIPT: paths.mcp,
       EZSHELL_AGENT_WAKE_MCP_CONFIG: path.join(directory, 'agent-wake-mcp.json'),
       EZSHELL_AGENT_SHELL_MCP_CONFIG: path.join(directory, 'agent-shell-mcp.json'),
       EZSHELL_AGENT_SETTINGS: path.join(directory, CLAUDE_SETTINGS_FILE),
-      EZSHELL_AGENT_USAGE_SCRIPT: path.join(__dirname, 'agentUsageReport.js'),
-      EZSHELL_AGENT_HOOK_SCRIPT: path.join(__dirname, '..', 'agentHookReport.js'),
+      EZSHELL_AGENT_USAGE_SCRIPT: paths.usage,
+      EZSHELL_AGENT_HOOK_SCRIPT: paths.hook,
       EZSHELL_CODEX_HOOK_MODE_FILE: path.join(directory, CODEX_HOOK_MODE_FILE),
       EZSHELL_CODEX_HOOK_ARGS: JSON.stringify(CODEX_HOOK_ARGS),
       EZSHELL_CODEX_HOOK_NONCE: createHash('sha256').update('codex-hooks:' + token).digest('hex').slice(0, 24),
       EZSHELL_ANTIGRAVITY_SETTINGS: path.join(directory, 'antigravity-settings.json'),
-      EZSHELL_ANTIGRAVITY_STATUS_SCRIPT: path.join(__dirname, 'antigravityStatusReport.js'),
+      EZSHELL_ANTIGRAVITY_STATUS_SCRIPT: paths.antigravity,
       ...(platform === 'win32' ? { EZSHELL_ANTIGRAVITY_STATUS_COMMAND: `"${path.join(directory, 'antigravity-status.cmd')}"` } : {}),
       EZSHELL_ANTIGRAVITY_STATUS_FORWARD: antigravityStatusForward
     }
@@ -1072,6 +1158,144 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
 
   function forgetShell(shellId) {
     for (const [token, id] of shellTokens) if (id === shellId) shellTokens.delete(token)
+    for (const [digest, id] of handedShellTokens) if (id === shellId) handedShellTokens.delete(digest)
+  }
+
+  /**
+   * What an update hands to the next app for the agents that outlive it in the session host: the pipe and
+   * folder their CLIs already use, their registrations and inboxes, and their credentials as SHA-256
+   * digests only. agentHandoff.js seals it with the master password; the raw tokens never reach the disk.
+   */
+  function exportHandoff() {
+    if (!pipe || !directory) return null
+    const hex = buffer => Buffer.from(buffer).toString('hex')
+    return {
+      format: HANDOFF_FORMAT, version: HANDOFF_VERSION, savedAt: now(),
+      endpoint: { pipe, directory }, serial,
+      agents: [...agents.values()].map(agent => ({ ...agent })),
+      tokens: [...[...tokens].map(([token, id]) => [tokenDigest(token), id]), ...handedTokens],
+      shellTokens: [...[...shellTokens].map(([token, id]) => [tokenDigest(token), id]), ...handedShellTokens],
+      reconnects: [...reconnects].map(([id, credential]) => [id, hex(credential.digest), credential.expiresAt]),
+      messages: messages.map(message => ({ ...message })),
+      roleSessions: [...roleSessions].map(([id, binding]) => [id, { ...binding }]),
+      hookSessions: [...hookSessions]
+    }
+  }
+
+  const validIdList = (list, idPattern, limit) => Array.isArray(list) && list.length <= limit &&
+    list.every(entry => Array.isArray(entry) && entry.length === 2 && DIGEST.test(entry[0]) && idPattern.test(entry[1]))
+
+  /**
+   * Back after the unlock (agentHandoff.js opened the record): the agents, their inboxes and credentials of
+   * the app before the update, on the pipe this app listens on. Anything malformed: nothing is taken and
+   * the agents start over (discardHandoff), as before this feature.
+   */
+  function importHandoff(record) {
+    const endpoint = validEndpoint(record?.endpoint, platform)
+    const ok = record?.format === HANDOFF_FORMAT && record.version === HANDOFF_VERSION && endpoint &&
+      keptEndpoint && endpoint.pipe === keptEndpoint.pipe && endpoint.directory === keptEndpoint.directory &&
+      Number.isSafeInteger(record.serial) && record.serial >= 0 &&
+      Array.isArray(record.agents) && record.agents.length <= 1000 &&
+      record.agents.every(agent => agent && AGENT_ID.test(agent.id) && ['codex', 'claude', 'antigravity'].includes(agent.kind) &&
+        (agent.shellId === undefined || agent.shellId === '' || SHELL_ID.test(agent.shellId))) &&
+      validIdList(record.tokens, AGENT_ID, 2000) && validIdList(record.shellTokens, SHELL_ID, 2000) &&
+      Array.isArray(record.reconnects) && record.reconnects.length <= 1000 &&
+      record.reconnects.every(entry => Array.isArray(entry) && AGENT_ID.test(entry[0]) && DIGEST.test(entry[1]) && Number.isFinite(entry[2])) &&
+      Array.isArray(record.messages) && record.messages.length <= MAX_MESSAGES &&
+      record.messages.every(message => message && typeof message.id === 'string' && typeof message.text === 'string' && message.text.length <= MAX_TEXT) &&
+      Array.isArray(record.roleSessions) && Array.isArray(record.hookSessions)
+    if (!ok) return discardHandoff()
+    const known = new Set(record.agents.map(agent => agent.id))
+    for (const agent of record.agents) {
+      // A handed-over agent is waiting for its MCP to connect again; nothing in this app holds its lease yet
+      agents.set(agent.id, { ...agent })
+    }
+    serial = Math.max(serial, record.serial)
+    for (const [digest, id] of record.tokens) if (known.has(id)) handedTokens.set(digest, id)
+    for (const [digest, shellId] of record.shellTokens) handedShellTokens.set(digest, shellId)
+    const time = now()
+    for (const [id, digest, expiresAt] of record.reconnects) {
+      if (known.has(id) && expiresAt > time) reconnects.set(id, { digest: Buffer.from(digest, 'hex'), expiresAt })
+    }
+    messages.push(...record.messages.map(message => ({ ...message })))
+    for (const entry of record.roleSessions) {
+      if (Array.isArray(entry) && known.has(entry[0]) && entry[1] && typeof entry[1] === 'object') roleSessions.set(entry[0], { ...entry[1] })
+    }
+    for (const entry of record.hookSessions) {
+      if (Array.isArray(entry) && known.has(entry[0]) && typeof entry[1] === 'string') hookSessions.set(entry[0], entry[1])
+    }
+    keptEndpoint = null
+    awaitingHandoff = false
+    revision++
+    settleAdoptions()
+    changed()
+    return true
+  }
+
+  /** No record, an expired or unreadable one: take requests again; the surviving agents register anew */
+  function discardHandoff() {
+    keptEndpoint = null
+    awaitingHandoff = false
+    settleAdoptions()
+    return false
+  }
+
+  // Shells the session host brought back ask for their agents before the unlock, while the record is still
+  // sealed: they get a handle at once and the agent behind it when the record is opened (or none)
+  const pendingAdoptions = []
+  function settleAdoptions() {
+    for (const settle of pendingAdoptions.splice(0)) settle()
+  }
+
+  /**
+   * For a shell the session host kept through an update (localShell.js adopt): the handle register() gives
+   * (setStatus / finish / close), for the agent of this kind the old app ran in that shell. null when there
+   * is no handover. Calls made before the record is opened are kept (the last status, an end) and applied then.
+   */
+  function adopt(kind, shellId) {
+    if (!['claude', 'codex', 'antigravity'].includes(kind) || !SHELL_ID.test(String(shellId))) return null
+    const find = () => [...agents.values()].find(agent => agent.shellId === shellId && agent.active && agent.kind === kind)?.id
+    if (!awaitingHandoff) {
+      const id = find()
+      return id ? adoptAgent(id) : null
+    }
+    let handle = null
+    let settled = false
+    let lastStatus = null
+    let ending = null
+    pendingAdoptions.push(() => {
+      settled = true
+      const id = find()
+      handle = id ? adoptAgent(id) : null
+      if (!handle) return
+      if (lastStatus) handle.setStatus(...lastStatus)
+      if (ending) handle[ending.method](...ending.args)
+    })
+    return {
+      setStatus: (...args) => (settled ? handle?.setStatus(...args) : void (lastStatus = args)),
+      finish: (...args) => (settled ? handle?.finish(...args) : void (ending ??= { method: 'finish', args })),
+      close: (...args) => (settled ? handle?.close(...args) : void (ending ??= { method: 'close', args }))
+    }
+  }
+
+  /**
+   * The shell token of a shell the session host kept: it comes back with the record (handedShellTokens), so
+   * nothing is issued here. Calling registerShell for such a shell would revoke the token its CLIs still use.
+   */
+  function adoptShell(shellId) {
+    return SHELL_ID.test(String(shellId))
+  }
+
+  /** The agents of a shell the session host brought back (localShell.js re-attaches them with adoptAgent) */
+  const agentsOfShell = shellId => [...agents.values()].filter(agent => agent.shellId === shellId && agent.active).map(agent => agent.id)
+
+  /** The same handle register() gives, for an agent handed over by the app before the update */
+  function adoptAgent(id) {
+    const agent = agents.get(id)
+    if (!agent?.active) return null
+    return agentHandle(id, () => {
+      for (const [digest, agentId] of handedTokens) if (agentId === id) handedTokens.delete(digest)
+    })
   }
 
   /** For a window that starts (or reloads) after the reports came in */
@@ -1084,6 +1308,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
 
   return {
     ready, enableExternalBridge, pauseExternalBridge, register, stop, snapshot, unreadFor, unhandledFor,
+    exportHandoff, importHandoff, discardHandoff, awaitingHandoff: () => awaitingHandoff, agentsOfShell, adoptAgent, adopt, adoptShell,
     sendAsUser: request => deliver(USER, request),
     setUserRole: (id, role) => setRole(id, role, 'user'),
     hookEventsOf: id => (hookEvents.get(id) ?? []).map(event => ({ ...event })),
@@ -1106,4 +1331,4 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   }
 }
 
-module.exports = { createAgentMessages }
+module.exports = { createAgentMessages, agentRuntimePaths, validEndpoint }

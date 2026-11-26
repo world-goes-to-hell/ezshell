@@ -2,12 +2,13 @@ import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 import fs from 'fs'
+import { buildSync } from 'esbuild'
 
 // CommonJS modules main.js loads at runtime with require('./src/...'); they are not bundled
 const MAIN_RUNTIME_MODULES = ['crypto.js', 'commandHistory.js', 'sshConnectionTest.js', 'localFileOps.js', 'sftpSymlinks.js', 'sftpUploadCheck.js', 'userDataDir.js', 'navigationGuard.js', 'updateChecker.js', 'sshAlgorithms.js', 'rootSwitch.js', 'localShell.js', 'windowState.js', 'sftpListing.js', 'lastVersion.js', 'localPlaces.js', 'localKeyPath.js', 'manualUpdate.js', 'sharedConn.js', 'macMenu.js', 'nativeBackdrop.js', 'sftpDownloadDir.js', 'detachedPlaces.js', 'restoreTabs.js', 'sessionSecrets.js', 'agentIdle.js', 'agentHookReport.js', 'globalDoubleTab.js', 'quickCapture.js', 'quickCaptureOverlay.js', 'quickCaptureEditor.js', 'testWindows.js', 'globalPointer.js', 'globalPointerEffects.js']
 
 // Directories under src/ that main.js loads at runtime; copied whole, without their tests
-const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient', 'remoteAccess', 'sessionImport', 'containers', 'ipc', 'agentHistory', 'agentChat', 'localFiles', 'runtimes']
+const MAIN_RUNTIME_DIRECTORIES = ['mcp', 'sessionLog', 'hostKeys', 'remoteFiles', 'dbClient', 'remoteAccess', 'sessionImport', 'containers', 'ipc', 'agentHistory', 'agentChat', 'localFiles', 'runtimes', 'sessionHost']
 
 // The main process serves these beside the remote access page. Names match VENDOR in server.js.
 const REMOTE_ACCESS_VENDOR: Record<string, string> = {
@@ -21,6 +22,38 @@ const REMOTE_ACCESS_VENDOR: Record<string, string> = {
   'title-bar.css': 'src/renderer/styles/app/title-bar.css',
   'agent-work-trace.css': 'src/renderer/styles/app/agent-work-trace.css',
   'terminal-tabs.css': 'src/renderer/styles/app/terminal-tabs.css'
+}
+
+// Scripts that agents in a local shell start on their own (message MCP, hooks, status lines, the ezshell
+// command). Each is bundled into one file under out/main/agent-runtime: the session host's runtime copy
+// carries that folder outside the install folder, so a running agent never holds the install folder
+// during an update (docs/plan/2026-11-26-sessions-survive-update.md). Names are what agentRuntimePaths expects.
+const AGENT_RUNTIME_ENTRIES: Record<string, string> = {
+  agentMessageMcp: 'src/ipc/agentMessageMcp.js',
+  agentMessageCli: 'src/ipc/agentMessageCli.js',
+  agentHookReport: 'src/agentHookReport.js',
+  agentUsageReport: 'src/ipc/agentUsageReport.js',
+  antigravityStatusReport: 'src/ipc/antigravityStatusReport.js'
+}
+
+function agentRuntimePlugin() {
+  return {
+    name: 'agent-runtime',
+    closeBundle() {
+      const outdir = path.resolve(__dirname, 'out/main/agent-runtime')
+      fs.rmSync(outdir, { recursive: true, force: true })
+      buildSync({
+        entryPoints: Object.fromEntries(Object.entries(AGENT_RUNTIME_ENTRIES).map(([name, file]) => [name, path.resolve(__dirname, file)])),
+        outdir,
+        bundle: true,
+        platform: 'node',
+        format: 'cjs',
+        target: 'node22',
+        external: ['electron'],
+        logLevel: 'warning'
+      })
+    }
+  }
 }
 
 function copyCryptoPlugin() {
@@ -53,7 +86,7 @@ function copyCryptoPlugin() {
 
 export default defineConfig({
   main: {
-    plugins: [copyCryptoPlugin()],
+    plugins: [copyCryptoPlugin(), agentRuntimePlugin()],
     build: {
       rollupOptions: {
         input: {

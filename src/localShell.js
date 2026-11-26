@@ -542,7 +542,9 @@ function isProcessAlive(pid) {
 }
 
 const processName = name => name.split(/[\\/]/).at(-1).toLowerCase().replace(/\.exe$/, '');
-const appRuntime = processName(process.execPath);
+// The app's exe, and its copy outside the install folder (src/sessionHost/runtimeCopy.js EXE_NAME) that the
+// agents' message MCP, hooks and status lines run from once it is ready
+const appRuntimes = new Set([processName(process.execPath), 'ezshell-sessions']);
 
 async function antigravityConversationIsCurrent(root, sessionId, startedAt, platform) {
   if (!root || !SESSION_ID.test(sessionId) || !(startedAt > 0)) return false;
@@ -588,6 +590,10 @@ function createLocalShells({
   timedProcessTree = () => processList({ platform }), commandLine = pid => processCommandLine(pid, { platform }),
   readClaudeSessions, onInboxDraftBlocked, antigravityRoot = antigravityBrainRoot(),
   killTrees = pids => killProcessTreesSync(pids, platform),
+  // The session host (src/sessionHost/client.js): shells opened there outlive an app restarting for an update
+  host = null,
+  // The runtime copy's exe, when it is ready: the Antigravity status reporter runs from it
+  runtimeExe = () => null,
   stopDevelopmentProcess = pty => stopDeveloperTree(pty, platform, processAlive), waitDevelopmentPort = waitDeveloperPort
 }) {
   const shells = new Map();
@@ -879,7 +885,8 @@ function createLocalShells({
       if (!executable && platform === 'linux') executable = await fs.promises.readlink(`/proc/${pid}/exe`).catch(() => null);
       if (!executable && platform === 'darwin') executable = helper.name;
       const imageKey = platform === 'win32' ? value => path.win32.normalize(value).toLowerCase() : value => value;
-      if (!executable || imageKey(executable) !== imageKey(process.execPath)) return;
+      const ours = [process.execPath, runtimeExe()].filter(Boolean).map(imageKey);
+      if (!executable || !ours.includes(imageKey(executable))) return;
     }
     const visited = new Set();
     let cliPid;
@@ -905,7 +912,7 @@ function createLocalShells({
           if (name !== (platform === 'win32' ? 'cmd' : 'sh')) return;
           statusShellSeen = true;
         }
-        if (name === 'node' || name === appRuntime) {
+        if (name === 'node' || appRuntimes.has(name)) {
           runtimePid ??= parent;
           if (cliPid) runtimeAboveCli = true;
         }
@@ -1049,7 +1056,7 @@ function createLocalShells({
         const process = processes.get(session.pid);
         if (!process) continue;
         claudeChecks.set(key, null);
-        if (!sessionPids.has(session.pid) || !['claude', 'node', 'bun', appRuntime].includes(processName(process.name))) continue;
+        if (!sessionPids.has(session.pid) || !(['claude', 'node', 'bun'].includes(processName(process.name)) || appRuntimes.has(processName(process.name)))) continue;
         let parent = process.parent;
         const visited = new Set([session.pid]);
         while (parent > 0 && !candidates.has(parent) && !sessionPids.has(parent) && !visited.has(parent)) {
@@ -1074,7 +1081,7 @@ function createLocalShells({
       if (!match) continue;
       const { id, entry, ptyPid, startedAt, session } = match;
       if (shells.get(id) !== entry || entry.exited || entry.sleeping || entry.pty.pid !== ptyPid || !processAlive(session.pid)) continue;
-      const managedId = entry.registration?.env.EZSHELL_AGENT_ID;
+      const managedId = entry.registration?.env?.EZSHELL_AGENT_ID;
       if (managedId && entry.agent === 'claude') {
         if (entry.managedClaudePid && entry.managedClaudePid !== session.pid) continue;
         entry.managedClaudePid = session.pid;
@@ -1130,13 +1137,16 @@ function createLocalShells({
       if (agent === 'antigravity' && !shellUsageEnv.EZSHELL_ANTIGRAVITY_SETTINGS) {
         throw new Error('Antigravity 상태 연결을 시작할 수 없습니다.');
       }
-      pty = spawn(shell.file, args, {
+      const options = {
         name: TERMINAL_TYPE,
         cols: columns,
         rows: lines,
         cwd: launchIdentity?.directory ?? workingDirectory,
         env: { ...(registration?.env ?? shellEnv), ...shellUsageEnv }
-      });
+      };
+      pty = host?.ready()
+        ? host.spawn(id, shell.file, args, options, { agent: agent ?? null, cwd: directory === undefined ? null : workingDirectory, launchDirectory: workingDirectory, resumeId })
+        : spawn(shell.file, args, options);
     } catch (error) {
       agents?.forgetShell?.(id);
       registration?.close();
@@ -1153,7 +1163,7 @@ function createLocalShells({
       reportStatus: status => reportShellStatus(entry, registration?.setStatus, status),
       backlog: '', modes: {}, modeTail: '', exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: '',
       // Last sign of work (status, typing, a line sent to the agent) and the sleep it may be in (agentIdle.js)
-      activeAt: openedAt, openedAt, sleeping: null
+      activeAt: openedAt, openedAt, sleeping: null, resumeId
     };
     const nonce = shellUsageEnv.EZSHELL_CODEX_HOOK_NONCE;
     if (!agent && platform === 'win32' && nonce) {
@@ -1165,6 +1175,12 @@ function createLocalShells({
     if (codexHooks) startCodexReview(id, entry);
     if (registration) observeInbox(id, entry);
     shells.set(id, entry);
+    listen(id, entry);
+    return { id, name: shell.name, ...(directory === undefined ? {} : { cwd: workingDirectory }) };
+  }
+
+  function listen(id, entry) {
+    const { pty, registration } = entry;
     pty.onData((data) => {
       if (!entry.exited) {
         trackTerminalOsc(entry, data, platform);
@@ -1193,7 +1209,82 @@ function createLocalShells({
       else registration?.close();
       send('local-shell-exit', { id, exitCode });
     });
-    return { id, name: shell.name, ...(directory === undefined ? {} : { cwd: workingDirectory }) };
+  }
+
+  /**
+   * At start, before any shell opens: the shells an earlier app left running in the session host when it
+   * quit to install an update (host.takeAdoptable). They come back under their ids, with what they printed;
+   * an agent in one gets its message registration back from agents.adopt (the earlier app handed it over).
+   */
+  // The launch folder an earlier app verified, kept only if that path is still the same folder (dev/ino):
+  // the meta came back from another process, so it is checked here, never trusted
+  function keptLaunchIdentity(kept) {
+    if (platform !== 'win32' || !kept || typeof kept.directory !== 'string' || typeof kept.dev !== 'string' || typeof kept.ino !== 'string') return null;
+    const current = launchedDirectoryIdentity(kept.directory);
+    return current && current.directory === kept.directory && String(current.dev) === kept.dev && String(current.ino) === kept.ino ? current : null;
+  }
+
+  function adopt(kept) {
+    const adopted = [];
+    for (const shell of Array.isArray(kept) ? kept : []) {
+      const number = /^local:(\d{1,9})$/.exec(shell?.id ?? '')?.[1];
+      if (!number || shells.has(shell.id) || shell.exited) continue;
+      const meta = shell.meta && typeof shell.meta === 'object' ? shell.meta : {};
+      const pick = value => (typeof value === 'string' && path.isAbsolute(value) ? value : null);
+      const agent = ['claude', 'codex'].includes(meta.agent) ? meta.agent : undefined;
+      const resumeId = typeof meta.resumeId === 'string' && SESSION_ID.test(meta.resumeId) ? meta.resumeId : null;
+      const pty = host.adopt(shell);
+      const handle = agent ? agents?.adopt?.(agent, shell.id, { resumeId }) ?? null : null;
+      // register() gives the agent id in env: here it is known only once the handover is opened (after the unlock)
+      const registration = handle && Object.defineProperty({ ...handle }, 'env', {
+        get: () => ({ EZSHELL_AGENT_ID: agents.agentsOfShell?.(shell.id)?.[0] })
+      });
+      agents?.adoptShell?.(shell.id);
+      const now = Date.now();
+      const codexInput = agent === 'codex' ? { hasDraft: false, submitted: false } : null;
+      const entry = {
+        pty, agent, registration, codexInput, cols: size(shell.cols, 80), rows: size(shell.rows, 24), composing: false,
+        codexActivity: codexInput ? codexActivityFor(resumeId) : null, wakeMcp: false,
+        cwd: pick(meta.cwd), launchDirectory: pick(meta.launchDirectory) ?? cwd, launchIdentity: keptLaunchIdentity(meta.launchIdentity),
+        reportedDirectory: pick(meta.reportedDirectory),
+        reportStatus: status => reportShellStatus(entry, registration?.setStatus, status),
+        backlog: typeof shell.buffer === 'string' ? shell.buffer.slice(-BACKLOG_CHARS) : '', modes: {}, modeTail: '',
+        exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: '',
+        activeAt: now, openedAt: now, sleeping: null, adopted: true, resumeId
+      };
+      // What the screen was left in (bracketed paste, the title's working sign): read again from the output
+      trackTerminalModes(entry, entry.backlog);
+      trackTerminalOsc(entry, entry.backlog, platform, false);
+      if (registration) observeInbox(shell.id, entry);
+      shells.set(shell.id, entry);
+      listen(shell.id, entry);
+      nextId = Math.max(nextId, Number(number) + 1);
+      adopted.push(shell.id);
+    }
+    return adopted;
+  }
+
+  /**
+   * Quitting to install an update. Shells in the session host go on there for the next app (the host was
+   * told to wait for it before the quit began); every other shell ends with its whole tree, as before.
+   */
+  function handOver() {
+    for (const [id, entry] of shells) {
+      if (!entry.pty?.hosted || entry.exited) continue;
+      // The launch folder stays apart from what the screen reported: only the verified launch folder
+      // (launchIdentity, checked again by adopt) grants run_* authority. dev/ino are BigInt, sent as text.
+      const identity = entry.launchIdentity;
+      host.setMeta(id, {
+        agent: entry.agent ?? null, cwd: entry.cwd, launchDirectory: entry.launchDirectory,
+        reportedDirectory: entry.reportedDirectory ?? null,
+        launchIdentity: identity ? { directory: identity.directory, dev: String(identity.dev), ino: String(identity.ino) } : null,
+        resumeId: entry.resumeId ?? null
+      });
+    }
+    const staying = [...shells].filter(([, entry]) => !entry.pty?.hosted);
+    const pids = staying.filter(([, entry]) => !entry.exited && Number.isInteger(entry.pty?.pid) && entry.pty.pid > 0).map(([, entry]) => entry.pty.pid);
+    if (pids.length > 0) killTrees(pids);
+    for (const [id] of staying) close(id);
   }
 
   function setDevelopment(id, entry, patch) {
@@ -1652,7 +1743,7 @@ function createLocalShells({
   }
 
   return {
-    open, openDevelopmentTask, changeDevelopmentTask, drainDevelopmentTasks, attach, write, pasteClipboardImage, resize, close, closeAll, bindAgentProcess, reportAntigravityStatus, currentDirectory, runAuthorityDirectory,
+    open, openDevelopmentTask, changeDevelopmentTask, drainDevelopmentTasks, attach, write, pasteClipboardImage, resize, close, closeAll, adopt, handOver, bindAgentProcess, reportAntigravityStatus, currentDirectory, runAuthorityDirectory,
     /**
      * Every shell, oldest first. The shells outlive their tabs, so a window that reloaded (and lost
      * all its tabs) takes these back; otherwise they kept running unseen, agents included.
@@ -1750,7 +1841,7 @@ function createLocalShells({
     },
     chatAgentId(id) {
       const entry = shells.get(id);
-      return hasAgent(entry) ? entry.externalAgent?.id ?? entry.registration?.env.EZSHELL_AGENT_ID : null;
+      return hasAgent(entry) ? entry.externalAgent?.id ?? entry.registration?.env?.EZSHELL_AGENT_ID : null;
     },
     codexSpeedOf(id) {
       const entry = shells.get(id);

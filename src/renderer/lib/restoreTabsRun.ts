@@ -13,6 +13,8 @@ export interface RestoreDeps {
   openLocal: (tab: Extract<RestoreTab, { kind: 'local' }>) => Promise<string | null>
   /** Tells how far it got */
   onProgress?: (done: number, total: number) => void
+  /** The open tab of a local shell the session host kept through the update, or null */
+  keptTabOf?: (shellId: string) => string | null
 }
 
 export interface RestoreOutcome {
@@ -112,11 +114,13 @@ function layOut(record: RestoreRecord, ids: Array<string | null>): void {
 
 export async function restoreTabs(record: RestoreRecord, deps: RestoreDeps): Promise<RestoreOutcome> {
   const outcome: RestoreOutcome = { opened: 0, failed: [], quick: [] }
-  const ids: Array<string | null> = record.tabs.map(() => null)
-  const total = record.tabs.filter(tab => tab.kind !== 'quick').length
+  // Tabs whose shell went on through the update are open already: they only take their place in the layout
+  const ids: Array<string | null> = record.tabs.map(tab => (tab.kind === 'local' && tab.shellId ? deps.keptTabOf?.(tab.shellId) ?? null : null))
+  const total = record.tabs.filter((tab, index) => tab.kind !== 'quick' && !ids[index]).length
   let done = 0
   for (const [index, tab] of record.tabs.entries()) {
     if (tab.kind === 'quick') { outcome.quick.push(tab); continue }
+    if (ids[index]) continue
     try {
       if (tab.kind === 'ssh') {
         const opened = await deps.openSaved(tab.savedSessionId, tab.workGroup)

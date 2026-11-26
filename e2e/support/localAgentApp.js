@@ -3,6 +3,8 @@ const { app, clipboard, ClipboardItem, dialog, ipcMain, nativeImage, Notificatio
 const fs = require('fs')
 const path = require('path')
 const pty = require('node-pty')
+// pty.spawn is replaced below: shells must open in this process, not in the session host
+process.env.EZSHELL_TEST_NO_SESSION_HOST = '1'
 const { PROMPT, BUSY_PROMPT, REMIND_PROMPT } = require('../../src/ipc/agentInboxWake.js')
 const { createFakeAskDialog } = require('./fakeAskDialog.js')
 require('../../out/main/src/testWindows.js').createTestWindows(require('electron'))

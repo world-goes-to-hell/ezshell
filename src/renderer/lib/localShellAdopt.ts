@@ -2,7 +2,7 @@ import type { AgentChatProvider, LocalDevelopmentRun } from '../types'
 import { useTerminalStore } from '../stores/terminalStore'
 import { folderName } from './agentHistory'
 import { adoptLocalPaneShell, getLocalPaneShellId } from './localPaneShells'
-import { planReloadedTabs, snapshotLocalTabs, takeReloadLayout, writeReloadLayout } from './localReloadLayout'
+import { planReloadedTabs, readReloadLayout, snapshotLocalTabs, takeReloadLayout, writeReloadLayout } from './localReloadLayout'
 import { queueChatView } from './pendingChatViews'
 import { isChatShown } from '../stores/agentChatStore'
 import type { PaneId } from './splitTree'
@@ -38,18 +38,29 @@ export function adoptedTitle(shell: LiveLocalShell, index: number): string {
   return index === 0 ? shell.name : `${shell.name} (${index + 1})`
 }
 
-/** Called once after the first unlock; returns how many tabs came back */
-export async function adoptOrphanLocalShells(): Promise<number> {
+// Shells the session host kept while the app restarted for an update (main took them back at start):
+// their tabs come back here, so the restore notice does not open them a second time
+const keptAfterUpdate = new Set<string>()
+export const keptLocalShells = (): ReadonlySet<string> => keptAfterUpdate
+
+/**
+ * Called once after the first unlock; how many tabs came back, and whether they are shells that went on
+ * through an update (the layout then comes from the session host, written before the restart)
+ */
+export async function adoptOrphanLocalShells(): Promise<{ count: number; afterUpdate: boolean }> {
   let shells: LiveLocalShell[]
   try {
     shells = (await window.electronAPI.localShellList?.()) ?? []
   } catch {
-    return 0
+    return { count: 0, afterUpdate: false }
   }
   const store = useTerminalStore.getState()
   const hasLocalTabs = Array.from(store.terminals.values()).some(info => info.local)
   // Read (and removed) even when nothing is adopted: it belongs to the page that just went away
-  const saved = takeReloadLayout()
+  let saved = takeReloadLayout()
+  const keptLayout = await window.electronAPI.localShellKeptLayout?.().catch(() => null)
+  const afterUpdate = Array.isArray(keptLayout)
+  if (saved.length === 0 && afterUpdate) saved = readReloadLayout(keptLayout)
   const { adopt, close } = planAdoption(shells, hasLocalTabs)
   for (const id of close) window.electronAPI.localShellClose?.(id)
   // Tabs as they were before the reload, each pane on its own shell again
@@ -76,10 +87,14 @@ export async function adoptOrphanLocalShells(): Promise<number> {
       local: { shell: shell.name, ...(shell.cwd ? { cwd: shell.cwd, workspaceLabel: folderName(shell.cwd) } : {}) }
     })
   })
-  return tabs.length + loose.length
+  if (afterUpdate) for (const id of [...tabs.map(tab => tab.mainShellId), ...loose.map(shell => shell.id)]) keptAfterUpdate.add(id)
+  return { count: tabs.length + loose.length, afterUpdate }
 }
+
+/** Which shell sits in which pane of which tab, now */
+export const currentLocalLayout = () => snapshotLocalTabs(useTerminalStore.getState().terminals, getLocalPaneShellId, isChatShown)
 
 /** Called when the page goes away (a reload included): the layout the next page needs to put the shells back */
 export function rememberLocalLayout(): void {
-  writeReloadLayout(snapshotLocalTabs(useTerminalStore.getState().terminals, getLocalPaneShellId, isChatShown))
+  writeReloadLayout(currentLocalLayout())
 }

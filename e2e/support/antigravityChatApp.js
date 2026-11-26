@@ -3,6 +3,8 @@ const { execFileSync } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 const pty = require('node-pty')
+// pty.spawn is replaced below: shells must open in this process, not in the session host
+process.env.EZSHELL_TEST_NO_SESSION_HOST = '1'
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
 const home = path.join(profile, 'agy-home')

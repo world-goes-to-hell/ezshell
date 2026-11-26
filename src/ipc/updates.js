@@ -145,8 +145,18 @@ function registerUpdateIpc(ctx) {
     }
   });
 
-  ipcMain.handle('install-update', () => {
+  ipcMain.handle('install-update', async () => {
     if (USES_MANUAL_UPDATE) return;
+    // The session host is told to keep the local shells for the next app before the quit begins
+    // (main.js, src/sessionHost/client.js keep). A failure there only means they end, as before.
+    try { await ctx.beforeUpdateRestart?.(); } catch { /* install anyway */ }
+    // Screen tests only (never a packaged app): the same quit with no installer, so a spec can start the
+    // app again on the same profile and see the local shells kept (e2e/specs/local-keep-through-update.js)
+    if (ctx.testUpdateRestart) {
+      updateReady = true;
+      app.quit();
+      return;
+    }
     // Silent: the installer runs without its pages, into the folder the app is installed in, and starts
     // the app again when it is done
     autoUpdater.quitAndInstall(true, true);

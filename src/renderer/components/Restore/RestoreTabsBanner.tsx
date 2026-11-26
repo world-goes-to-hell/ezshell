@@ -1,6 +1,7 @@
 import { RiHistoryLine, RiCloseLine, RiLoader4Line, RiErrorWarningLine } from 'react-icons/ri'
 import { reopenable, type RestoreRecord, type RestoreTab } from '../../lib/restoreTabs'
 import type { RestoreOutcome } from '../../lib/restoreTabsRun'
+import { keptLocalShells } from '../../lib/localShellAdopt'
 import './RestoreTabsBanner.css'
 
 export type RestoreBannerState =
@@ -22,7 +23,7 @@ const quickTabsOf = (state: RestoreBannerState) =>
 
 export function RestoreTabsBanner({ state, onRestore, onClose, onReconnect }: RestoreTabsBannerProps) {
   const quick = quickTabsOf(state)
-  const count = state.phase === 'ask' ? reopenable(state.record).length : 0
+  const count = state.phase === 'ask' ? reopenable(state.record, keptLocalShells()).length : 0
   const when = state.phase === 'ask' && state.source === 'close' ? '지난번에' : '업데이트 전에'
   return (
     <div className="restore-tabs-banner" role="status">

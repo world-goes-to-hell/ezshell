@@ -45,7 +45,7 @@ import { sideWord } from './lib/paneDropZones'
 import { MERGE_BLOCKED_TITLE, mergeChoices, type MergeChoice } from './lib/tabMerge'
 import { mergeTabIntoPane } from './lib/tabToPane'
 import { setRestoreSource } from './lib/updateInstall'
-import { buildRestoreRecord, readRestoreRecord, type RecordSource, type RestoreTab } from './lib/restoreTabs'
+import { buildRestoreRecord, readRestoreRecord, reopenable, type RecordSource, type RestoreTab } from './lib/restoreTabs'
 import { restoreTabs } from './lib/restoreTabsRun'
 import { RestoreTabsBanner, type RestoreBannerState } from './components/Restore/RestoreTabsBanner'
 import { closeLocalPaneShells, getLocalPaneShellId, localTabShellIds } from './lib/localPaneShells'
@@ -67,7 +67,7 @@ import { changeDevelopmentRun, developmentRunsForTab, useDevelopmentRunEvents, u
 import { TabRenameDialog } from './components/Terminal/TabRenameDialog'
 import { DUPLICATE_TAB_EVENT, OPEN_SNIPPET_MANAGER_EVENT } from './components/Terminal/useTerminalContextMenu'
 import { RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './lib/agentHistory'
-import { adoptOrphanLocalShells, rememberLocalLayout } from './lib/localShellAdopt'
+import { adoptOrphanLocalShells, keptLocalShells, rememberLocalLayout } from './lib/localShellAdopt'
 import { startAgentSleep } from './stores/agentSleepStore'
 import { startAgentHooks } from './stores/agentHooksStore'
 import { clearRunPresets, REVEAL_RUN_SHELL_EVENT, startRunPresets, type RevealRunShell } from './stores/runPresetStore'
@@ -1161,8 +1161,12 @@ function App() {
   useEffect(() => {
     if (isLocked || isCheckingLock || orphanShellsCheckedRef.current) return
     orphanShellsCheckedRef.current = true
-    void adoptOrphanLocalShells().then(count => {
-      if (count > 0) toast.info('로컬 터미널을 다시 열었습니다', `화면을 다시 불러오기 전에 실행 중이던 셸 ${count}개`)
+    void adoptOrphanLocalShells().then(({ count, afterUpdate }) => {
+      if (count > 0) {
+        toast.info('로컬 터미널을 다시 열었습니다', afterUpdate
+          ? `업데이트하는 동안 셸 ${count}개가 끊기지 않고 계속 실행되었습니다`
+          : `화면을 다시 불러오기 전에 실행 중이던 셸 ${count}개`)
+      }
       setOrphanShellsAdopted(true)
     })
   }, [isLocked, isCheckingLock])
@@ -1181,17 +1185,19 @@ function App() {
   const restoreCheckedRef = useRef(false)
   // Once, after the first unlock: the main process gives the record only once and removes it
   useEffect(() => {
-    if (isLocked || isCheckingLock || areSessionsLoading || restoreCheckedRef.current
+    // After the shells kept through an update came back as tabs: the notice leaves those out
+    if (isLocked || isCheckingLock || areSessionsLoading || !orphanShellsAdopted || restoreCheckedRef.current
       || typeof window.electronAPI.restoreTabsTake !== 'function') return
     restoreCheckedRef.current = true
     window.electronAPI.restoreTabsTake()
       .then((taken) => {
         const record = taken ? readRestoreRecord(taken.record) : null
-        if (record) setRestoreBanner({ phase: 'ask', record, source: taken?.source ?? 'update' })
+        const offered = record && (reopenable(record, keptLocalShells()).length > 0 || record.tabs.some(tab => tab.kind === 'quick'))
+        if (record && offered) setRestoreBanner({ phase: 'ask', record, source: taken?.source ?? 'update' })
       })
       .catch(() => { /* nothing to offer */ })
       .finally(() => setRestoreReady(true))
-  }, [isLocked, isCheckingLock, areSessionsLoading])
+  }, [isLocked, isCheckingLock, areSessionsLoading, orphanShellsAdopted])
 
   useEffect(() => {
     const send = window.electronAPI.restoreTabsCheckpoint
@@ -1232,7 +1238,7 @@ function App() {
   const handleRestoreTabs = async () => {
     if (restoreBanner?.phase !== 'ask') return
     const { record } = restoreBanner
-    const total = record.tabs.filter(tab => tab.kind !== 'quick').length
+    const total = reopenable(record, keptLocalShells()).length
     setRestoreBanner({ phase: 'running', done: 0, total })
     const outcome = await restoreTabs(record, {
       openSaved: async (savedSessionId, workGroup) => {
@@ -1242,7 +1248,13 @@ function App() {
         return result.success && result.sessionId ? { id: result.sessionId } : { error: result.error || '연결하지 못했습니다.' }
       },
       openLocal: (tab) => openLocalWithAgents(tab, handleOpenLocalTerminal, undefined, undefined, true),
-      onProgress: (done) => setRestoreBanner({ phase: 'running', done, total })
+      onProgress: (done) => setRestoreBanner({ phase: 'running', done, total }),
+      // A local shell that went on through the update came back with its tab already
+      keptTabOf: (shellId) => {
+        if (!keptLocalShells().has(shellId)) return null
+        for (const [id, info] of useTerminalStore.getState().terminals) if (info.local && (info.local.shellId ?? id) === shellId) return id
+        return null
+      }
     })
     setRestoreBanner(outcome.failed.length === 0 && outcome.quick.length === 0 ? null : { phase: 'done', outcome })
     if (outcome.failed.length === 0) toast.success('탭을 다시 열었습니다', `이전에 열려 있던 탭 ${outcome.opened}개`)

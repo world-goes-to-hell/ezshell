@@ -247,6 +247,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('local-shell-inbox-draft', listener);
   },
   localShellList: () => ipcRenderer.invoke('local-shell-list'),
+  localShellKeepLayout: (layout) => ipcRenderer.invoke('local-shell-keep-layout', layout),
+  localShellKeptLayout: () => ipcRenderer.invoke('local-shell-kept-layout'),
   localShellCurrentDirectory: (id) => ipcRenderer.invoke('local-shell-current-directory', id),
   localShellClipboard: (id) => ipcRenderer.invoke('local-shell-clipboard', id),
   localShellHasWorkingAgent: (ids) => ipcRenderer.invoke('local-shell-working-agent', ids),

@@ -6,6 +6,8 @@ const fs = require('fs')
 const path = require('path')
 const zlib = require('zlib')
 const pty = require('node-pty')
+// pty.spawn is replaced below: shells must open in this process, not in the session host
+process.env.EZSHELL_TEST_NO_SESSION_HOST = '1'
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
 const work = path.join(profile, 'work app')

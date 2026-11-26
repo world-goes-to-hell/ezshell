@@ -4,6 +4,7 @@
 import { buildRestoreRecord, reopenable, type RecordSource } from './restoreTabs'
 import { confirmDialog } from '../stores/confirmStore'
 import { toast } from '../stores/toastStore'
+import { currentLocalLayout } from './localShellAdopt'
 
 // App knows the tabs, the popped-out ones included; the update notice does not
 let sourceOf: (() => RecordSource) | null = null
@@ -48,5 +49,7 @@ export async function installUpdateKeepingTabs(): Promise<void> {
       }
     }
   }
+  // Local shells go on through the restart (the session host): which pane each sits in, for the next window
+  try { await api.localShellKeepLayout?.(currentLocalLayout()) } catch { /* the shells come back as tabs of their own */ }
   await api.installUpdate?.()
 }

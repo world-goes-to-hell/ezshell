@@ -1318,6 +1318,10 @@ declare global {
       onLocalShellInboxDraft?: (callback: (notice: { id: string; blocked: boolean }) => void) => () => void
       /** Shells main still runs, for a reloaded window to take back as tabs */
       localShellList?: () => Promise<Array<{ id: string; name: string; exited: boolean; cwd: string | null; agent: AgentChatProvider | null; development?: LocalDevelopmentRun }>>
+      /** Before restarting for an update: the tab layout of the local shells, kept for the next window */
+      localShellKeepLayout?: (layout: unknown[]) => Promise<void>
+      /** After that restart: the layout, once (null when no shell was kept) */
+      localShellKeptLayout?: () => Promise<unknown[] | null>
       localShellCurrentDirectory: (id: string) => Promise<string | null>
       localShellClipboard?: (id: string) => Promise<{ success: true; text: string } | { success: false; error: string }>
       localShellHasWorkingAgent?: (ids: string[]) => Promise<boolean>

@@ -1,6 +1,5 @@
 // Each agent launches this MCP server with its own message service credentials.
-const { McpServer, z } = require('../mcp/sdk.js')
-const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js')
+const { McpServer, StdioServerTransport, z } = require('../mcp/sdkStdio.js')
 const fs = require('node:fs')
 const net = require('node:net')
 const path = require('node:path')

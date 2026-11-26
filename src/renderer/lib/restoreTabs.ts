@@ -13,12 +13,13 @@ export const LOCAL_RESTORE_MAX_PANES = 64
 const LOCAL_RESTORE_MAX_DEPTH = LOCAL_RESTORE_MAX_PANES - 1
 const MAX_OTHER_TABS = 50
 const MAX_TEXT = 500
+const LOCAL_SHELL_ID = /^local:\d{1,9}$/
 
 export type RestoreTab =
   | { kind: 'ssh'; savedSessionId: string; title?: string; color?: string; splitTree?: SplitNode; paneSeq?: number; currentPath?: string; sftpPath?: string; workGroup?: string }
   /** Not saved as a session: shown so the user can connect again (no password is kept) */
   | { kind: 'quick'; title?: string; host: string; port: number; username: string; authType?: 'password' | 'privateKey'; privateKeyPath?: string; workGroup?: string }
-  | { kind: 'local'; title?: string; splitTree?: SplitNode; paneSeq?: number; cwd?: string; workspaceLabel?: string; agents?: RestoreAgent[] }
+  | { kind: 'local'; title?: string; splitTree?: SplitNode; paneSeq?: number; cwd?: string; workspaceLabel?: string; agents?: RestoreAgent[]; shellId?: string }
   /** A DB tab opened with a saved account, on the SSH tab at index `parent` */
   | { kind: 'db'; parent: number; savedAccountId: string; title?: string }
 
@@ -93,7 +94,13 @@ function tabOf(info: TerminalInfo, sftpPath: string | null, agents: RestoreAgent
   const paneSeq = splitTree ? info.paneSeq : undefined
   if (info.local) {
     const kept = agents.filter(isRestoreAgent).slice(0, LOCAL_RESTORE_MAX_PANES)
-    return { kind: 'local', title, splitTree, paneSeq, cwd: path(info.local.cwd), workspaceLabel: text(info.local.workspaceLabel), ...(kept.length ? { agents: kept } : {}) }
+    // The tab's own shell: when the session host kept it through an update, the tab comes back with it
+    // instead of being opened again (lib/localShellAdopt.ts)
+    const shellId = info.local.shellId ?? info.id
+    return {
+      kind: 'local', title, splitTree, paneSeq, cwd: path(info.local.cwd), workspaceLabel: text(info.local.workspaceLabel), ...(kept.length ? { agents: kept } : {}),
+      ...(LOCAL_SHELL_ID.test(shellId ?? '') ? { shellId } : {})
+    }
   }
   const config = info.connectConfig
   if (!config) return null
@@ -233,7 +240,8 @@ function readTab(value: unknown, index: number): RestoreTab | null {
       const agents = (Array.isArray(t.agents) ? t.agents : []).slice(0, LOCAL_RESTORE_MAX_PANES * 2)
         .filter(isRestoreAgent).filter(a => panes.has(a.pane) && !seen.has(a.pane) && seen.add(a.pane))
         .map(({ pane, agent, sessionId, chat }) => ({ pane, agent, ...(sessionId ? { sessionId } : {}), ...(chat ? { chat } : {}) }))
-      return { kind: 'local', title, splitTree: tree, paneSeq, cwd: path(t.cwd), workspaceLabel: text(t.workspaceLabel), ...(agents.length ? { agents } : {}) }
+      const shellId = typeof t.shellId === 'string' && LOCAL_SHELL_ID.test(t.shellId) ? t.shellId : undefined
+      return { kind: 'local', title, splitTree: tree, paneSeq, cwd: path(t.cwd), workspaceLabel: text(t.workspaceLabel), ...(agents.length ? { agents } : {}), ...(shellId ? { shellId } : {}) }
     }
     case 'db': {
       const savedAccountId = text(t.savedAccountId, 100)
@@ -312,4 +320,9 @@ export function cdCommand(folder: string | undefined): string | null {
 }
 
 /** What the notice counts: tabs that are opened again on their own */
-export const reopenable = (record: RestoreRecord) => record.tabs.filter(tab => tab.kind !== 'quick')
+/** A local tab whose shell the session host kept through the update: it is open again already */
+export const isKeptLocalTab = (tab: RestoreTab, kept: ReadonlySet<string>): boolean =>
+  tab.kind === 'local' && !!tab.shellId && kept.has(tab.shellId)
+
+export const reopenable = (record: RestoreRecord, kept: ReadonlySet<string> = new Set()) =>
+  record.tabs.filter(tab => tab.kind !== 'quick' && !isKeptLocalTab(tab, kept))

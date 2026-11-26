@@ -68,6 +68,16 @@ describe('agents in local tabs', () => {
     expect(back?.tabs[0]).toMatchObject({ agents: [{ pane: 'main', agent: 'claude' }] })
   })
 
+  it('keeps the tab\'s own shell, so a shell kept through the update is not opened again', () => {
+    const record = buildRestoreRecord(source([local('local:4'), local('local:9', { local: { shell: 'PowerShell', shellId: 'local:12' } })]))
+    expect(record.tabs.map(tab => tab.kind === 'local' && tab.shellId)).toEqual(['local:4', 'local:12'])
+    const back = readRestoreRecord(JSON.parse(JSON.stringify(record)))!
+    expect(back.tabs.map(tab => tab.kind === 'local' && tab.shellId)).toEqual(['local:4', 'local:12'])
+    expect(readRestoreRecord({ version: 1, tabs: [{ kind: 'local', shellId: '../x' }] })!.tabs[0]).not.toHaveProperty('shellId')
+    expect(reopenable(back, new Set(['local:12']))).toHaveLength(1)
+    expect(reopenable(back)).toHaveLength(2)
+  })
+
   it('leaves agents out when none ran', () => {
     expect(buildRestoreRecord(source([local('local:1')])).tabs[0]).not.toHaveProperty('agents')
   })
