@@ -281,6 +281,15 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
   - 처음은 전체, 다음부터는 바뀐 소스만 (수정 시각과 클래스 비교, 지운 소스의 클래스는 지운다). 컴파일 오류는 빌드 실패와 오류 묶음.
   - 바로 반영의 출력 폴더도 이 폴더다.
 
+### 2단계 셋째 묶음: 워크스페이스 서버 설정·JNDI·로그 인코딩·jar 찾기 (2026-11-26, PL 결정. 사용자 확인 전)
+- **워크스페이스 서버 설정 가져오기 (codex-5 main, claude-1 화면):** 구성 창에서 이클립스 워크스페이스 폴더를 한 번 고르면 `Servers/<서버 이름>-config/` 의 `server.xml`·`context.xml` 과 `.metadata/.plugins/org.eclipse.debug.core/.launches/*.launch` 의 VM 인자를 읽어 채운다. 고른 폴더 안의 그 파일들만 읽는다 (크기 상한, XML 안전 파싱).
+- **JNDI·컨텍스트 설정 파일 (codex-5):** Tomcat 구성에 `contextXml?: string`(프로젝트·워크스페이스 안의 기존 `context.xml` 경로)을 둔다. 실행할 때 그 파일의 `<Resource>`·`<Environment>`·`<Parameter>` 만 CATALINA_BASE 의 컨텍스트에 옮겨 넣는다.
+  - 바꾸면 안 되는 것: DB 비밀번호 같은 값을 `run-presets.json` 에 저장하지 않는다 (그 파일은 평문). 원본 파일을 가리키고 실행 때 읽어 base 안에만 쓴다. base 폴더는 실행이 끝나면 지운다.
+  - 파일 경로는 확인 해시에 넣는다. JDBC 드라이버 jar 가 Tomcat `lib` 에 없으면 진단이 알린다 (jar 찾기와 연결).
+- **로그 인코딩 (codex-5):** 구성마다 `logEncoding: 'auto' | 'utf-8' | 'ms949'`. auto 는 UTF-8 로 읽다가 잘못된 바이트가 이어지면 MS949 로 바꾼다. Tomcat·Java 실행에는 지정 인코딩에 맞춰 `-Dfile.encoding`·`-Dsun.stdout.encoding`(JDK 18+ 는 `stdout.encoding`)을 넣는다.
+- **jar 찾기 (codex-4):** `ClassNotFoundException`·`NoClassDefFoundError` 진단에 그 클래스가 든 jar 후보(프로젝트 lib·`~/.m2`·Gradle 캐시)를 붙인다. 승인하면 Tomcat 구성의 `extraLibs`(프로젝트·`~/.m2`·Gradle 캐시 안의 jar 경로)에 더하고, 실행 때 `/WEB-INF/lib` 로 붙인다. 확인 해시에 넣는다.
+- **보관함 넓히기 (codex-4):** Gradle(공식 `.sha256`), Node LTS(`SHASUMS256.txt`) 받기와 찾기.
+
 ## 3단계: 바로 반영 (JRebel 처럼 재기동 없이 Java 수정 적용)
 - **목표:** Java 파일을 저장하면(사용자든 에이전트든) 몇 초 안에 실행 중인 서버에 반영한다. 안 되는 변경이면 "재기동이 필요합니다" 와 재기동 버튼을 띄운다.
 - **흐름:**
