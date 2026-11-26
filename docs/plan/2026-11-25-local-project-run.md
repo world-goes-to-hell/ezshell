@@ -233,6 +233,31 @@ type RunState = { status: 'idle' | 'starting' | 'running' | 'stopped' | 'crashed
   - 변경은 사용자가 화면에서 보고 승인할 때만 반영한다. 클래스패스·VM 인자는 실행 내용이라 에이전트가 직접 바꾸지 못한다.
 - **보관함 넓히기:** Maven·Ant·Gradle·Tomcat·Node 받기. Apache 는 SHA-512, Node 는 SHASUMS. 1단계 JDK 보관함과 같은 규칙을 따른다.
 
+### 2단계 첫 묶음: 도구 받기와 Tomcat 실행 (2026-11-26, PL 결정. 사용자 확인 전)
+이클립스 가져오기·Maven 우회·실패 진단은 사용자의 실제 프로젝트 정보를 받은 뒤에 한다. 이번에는 프로젝트 정보 없이 되는 것만 만든다.
+
+- **도구 (codex-4):** Tomcat 7·8.5·9·10.1·11, Maven 3.6·3.8·3.9, Ant 1.9·1.10 받기와 이 PC 에서 찾기. Tomcat 6 은 공식 SHA-512 가 없어 받지 않는다 (찾은 것은 쓸 수 있다). main 에 `runtimes.toolHomeOf(id) → 절대 경로 | null`.
+- **구성 종류 `tomcat` (codex-5 main, claude-1 화면):**
+  ```ts
+  type TomcatPreset = Preset & { kind: 'tomcat'
+    tomcat: string        // 보관함·찾은 Tomcat 의 id
+    webapp: string        // 프로젝트 루트 기준, WEB-INF 가 든 펼친 웹 폴더 (WebContent, src/main/webapp, target/<이름>)
+    contextPath: string   // '/' 또는 '/이름'
+    port: number          // HTTP, 기본 8080
+    vmArgs: string        // 한 줄, CATALINA_OPTS 에 들어감
+    prepare?: { tool: 'ant', target: string } | { tool: 'maven', goals: string }  // 기동 전 빌드
+  }
+  ```
+  - `vmArgs`·`prepare` 는 실행 내용이다. 직접 입력 명령과 같이 본창에서만 저장하고, 확인 해시에 넣어 바뀌면 다시 확인받는다. 에이전트·MCP 는 고칠 수 없다.
+  - Ant 타깃은 실행할 때 `build.xml` 의 `<target name>` 목록에 있는지 다시 본다. Ant·Maven 은 보관함의 것, 없으면 PATH.
+  - 준비가 실패하면 "빌드 실패" 로 멈춤 처리하고 서버를 띄우지 않는다.
+- **CATALINA_BASE:** 실행마다 `userData/runtimes/tomcat-base/<구성 id>/` 를 다시 만든다.
+  - 설치된 Tomcat(`CATALINA_HOME`)의 `conf/` 를 복사하고 `server.xml` 의 HTTP 포트를 구성 값으로, 종료 포트는 `-1`, AJP 커넥터는 뺀다. `Host` 의 `autoDeploy`·`deployOnStartup` 은 끄고 `appBase` 는 base 안의 빈 폴더.
+  - `conf/Catalina/localhost/<컨텍스트>.xml`(루트는 `ROOT.xml`)에 `<Context docBase="<웹 폴더 실제 경로>"/>`. 웹 폴더는 워크트리 안이어야 한다 (실제 경로 검사).
+  - `logs`·`temp`·`work` 도 base 안. 바꾸면 안 되는 것: `CATALINA_HOME` 의 파일은 읽기만 한다.
+- **실행:** `<home>\bin\catalina.bat run` (mac·Linux `catalina.sh run`). PTY 환경에만 `CATALINA_HOME`·`CATALINA_BASE`·`JAVA_HOME`·`CATALINA_OPTS`. 시작 완료 `Server startup in`, 오류 `SEVERE`·배포 실패 (1단계 판정에 이미 있음).
+- **바로 반영 (Tomcat):** `CATALINA_OPTS` 에 JDWP 인자. Tomcat 은 웹 앱 클래스가 `java.class.path` 에 없으므로 클래스패스를 JVM 에 묻지 않고 만든다: `WEB-INF/classes` + `WEB-INF/lib/*.jar` + `CATALINA_HOME/lib/*.jar`. 출력은 `WEB-INF/classes`, 소스 루트는 이클립스 `.classpath` 의 `src` 항목, 없으면 `src/main/java`·`src`. JSP·정적 파일은 Tomcat 이 스스로 다시 읽는다.
+
 ## 3단계: 바로 반영 (JRebel 처럼 재기동 없이 Java 수정 적용)
 - **목표:** Java 파일을 저장하면(사용자든 에이전트든) 몇 초 안에 실행 중인 서버에 반영한다. 안 되는 변경이면 "재기동이 필요합니다" 와 재기동 버튼을 띄운다.
 - **흐름:**
