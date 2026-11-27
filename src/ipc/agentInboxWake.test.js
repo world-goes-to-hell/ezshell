@@ -697,6 +697,44 @@ describe('wake an idle agent with unread messages', () => {
     await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r']]))
   })
 
+  it('pastes once into a starting Claude that shows its notice late, then presses Enter (2026-11-27 user report)', async () => {
+    // A new session drew its empty composer before it read input: the notice came 2 s later, and a second
+    // paste had gone in meanwhile, leaving the notice twice with no Enter
+    vi.useFakeTimers()
+    try {
+      const { write, state } = setup()
+      state.busy = true
+      state.running = false
+      state.unknown = true
+      state.ids.push('first')
+      wake.writeOutput(paintedClaudeDraft(''))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(write.mock.calls).toEqual([[paste]])
+      for (let i = 0; i < 8; i++) {
+        wake.writeOutput(paintedClaudeDraft(''))
+        await vi.advanceTimersByTimeAsync(400)
+      }
+      expect(write.mock.calls).toEqual([[paste]])
+      wake.writeOutput(paintedClaudeDraft(PROMPT))
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(write.mock.calls).toEqual([[paste], ['\r']])
+    } finally { vi.useRealTimers() }
+  })
+
+  it('submits a notice that went in twice instead of leaving it in the composer', async () => {
+    vi.useFakeTimers()
+    try {
+      const { write, state } = setup()
+      state.ids.push('first')
+      wake.writeOutput(paintedClaudeDraft(''))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(write.mock.calls).toEqual([[paste]])
+      wake.writeOutput(paintedClaudeDraft(PROMPT + PROMPT))
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(write.mock.calls).toEqual([[paste], ['\r']])
+    } finally { vi.useRealTimers() }
+  })
+
   it('does not wake an unknown agent while its screen keeps changing', async () => {
     const { write, state } = setup('codex')
     state.busy = true

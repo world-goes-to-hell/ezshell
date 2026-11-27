@@ -203,6 +203,32 @@ test('keeps repositories with unreadable status visible and explains ownership e
   expect(statuses.lock.error).toHaveLength(500)
 })
 
+// 2026-11-27 user report: the remote moved from http:// to https://, where no login was saved, and the
+// check showed Git Credential Manager's English lines as they came
+test('says in Korean that a Git login is needed when the server asks for one', async () => {
+  const project = await fixtureDirectory()
+  const stderr = {
+    missing: "warning: missing OAuth configuration for speciesgit.coreit.co.kr - see https://aka.ms/gcm/gitlab for more information\n" +
+      "fatal: Cannot prompt because user interactivity has been disabled.\n" +
+      "fatal: could not read Username for 'https://speciesgit.coreit.co.kr': terminal prompts disabled",
+    denied: "remote: HTTP Basic: Access denied\nfatal: Authentication failed for 'https://git.example.invalid/x.git/'",
+    other: 'fatal: unable to access: Could not resolve host: git.example.invalid'
+  }
+  await Promise.all(Object.keys(stderr).map(name => fs.mkdir(path.join(project, name, '.git'), { recursive: true })))
+  const worker = createNestedRepositories({ discover, runGit: async (directory, args) => {
+    if (args[0] === 'rev-parse') return directory
+    throw Object.assign(new Error(), { stderr: stderr[path.basename(directory)] })
+  } })
+  const [{ repositories }] = await worker.status(project, [project], 'local', check)
+  const statuses = Object.fromEntries(repositories.map(item => [item.folder, item]))
+  for (const name of ['missing', 'denied']) {
+    expect(statuses[name].error).toMatch(/^Git 로그인이 필요합니다\. /)
+    expect(statuses[name].error).toContain('https 주소에 쓰이지 않습니다')
+    expect(statuses[name].error).not.toMatch(/OAuth|terminal prompts/)
+  }
+  expect(statuses.other.error).toContain('Could not resolve host')
+})
+
 test('blocks risky configuration during automatic refresh and prompts before a manual update', async () => {
   const fixture = await fixtureDirectory()
   const project = path.join(fixture, 'work')

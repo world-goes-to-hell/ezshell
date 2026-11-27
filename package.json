@@ -165,7 +165,7 @@
       "artifactName": "ezShell-${version}-${arch}.${ext}"
     },
     "nsis": {
-      "include": "scripts/windows-explorer.nsh",
+      "include": "scripts/windows-installer.nsh",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "installerIcon": "assets/icon.ico",

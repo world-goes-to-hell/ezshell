@@ -10,6 +10,8 @@ import { toast } from '../../stores/toastStore'
 import { TerminalContextMenu } from '../Terminal/TerminalContextMenu'
 import { NestedRepositoryBranchDialog } from './NestedRepositoryBranchDialog'
 import { NestedRepositoryRemoteDialog } from './NestedRepositoryRemoteDialog'
+import { GitLoginButton } from './GitLoginButton'
+import { needsGitLogin } from '../../lib/gitLogin'
 import './NestedRepositories.css'
 
 export function NestedRepositorySettings() {
@@ -203,10 +205,12 @@ export function NestedRepositoryList({ root, onAddPreset }: {
                 onClick={event => openMenu(event, repo)}><RiMoreLine size={14} /></button>
               {result && <span className="nested-repository-result" data-result={result.kind} role="status">
                 {pullLabel(result)}{'message' in result && ` · ${result.message}`}
+                {result.kind === 'failed' && needsGitLogin(result.message) && <GitLoginButton directory={repo.path} label={repo.folder} />}
                 {result.kind === 'failed' && <RemoteAction folder={repo.folder} open={setRemoteFolder} />}
               </span>}
               {!result && repo.error && <span className="nested-repository-result" data-result="failed">{repo.error}</span>}
               {!result && state?.fetchError && <span className="nested-repository-result" data-result="failed">가져오기 실패 · {state.fetchError}
+                {needsGitLogin(state.fetchError) && <GitLoginButton directory={repo.path} label={repo.folder} />}
                 <RemoteAction folder={repo.folder} open={setRemoteFolder} /></span>}
               {!result && state?.upstreamGone && <span className="nested-repository-result" data-result="skipped">원격 브랜치가 지워졌습니다.</span>}
             </li>
@@ -231,6 +235,7 @@ export function NestedRepositoryList({ root, onAddPreset }: {
       {branchFolder && <NestedRepositoryBranchDialog project={group.project} root={root} folder={branchFolder}
         onClose={() => setBranchFolder(null)} />}
       {remoteFolder && <NestedRepositoryRemoteDialog project={group.project} root={root} folder={remoteFolder}
+        directory={repositories.find(repo => repo.folder === remoteFolder)?.path}
         onClose={() => setRemoteFolder(null)} />}
     </section>
   )

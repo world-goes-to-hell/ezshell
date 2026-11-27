@@ -13,19 +13,26 @@ export type PaneGestureAction =
   | { kind: 'split'; axis: SplitAxis; ratio: number }
   /** A scribble over the pane: closes it as 이 칸 닫기 does */
   | { kind: 'close' }
+  /** A scribble over the only pane of a tab: closes the tab as 탭 닫기 does (2026-11-27 user request) */
+  | { kind: 'close-tab' }
 
-const OPERATIONS = { merge: '병합', split: '분할', close: '닫기' } as const
-const QUESTIONS = { merge: '병합하시겠습니까', split: '분할하시겠습니까', close: '닫으시겠습니까' } as const
+/** Asks App to close a tab through 탭 닫기 (its agent question and shell cleanup); detail: the tab ID */
+export const CLOSE_TAB_EVENT = 'ezshell:close-tab'
+
+const OPERATIONS = { merge: '병합', split: '분할', close: '닫기', 'close-tab': '탭 닫기' } as const
+const QUESTIONS = { merge: '병합하시겠습니까', split: '분할하시겠습니까', close: '닫으시겠습니까', 'close-tab': '닫으시겠습니까' } as const
 
 /**
  * Why closing `pane` needs a question (lib/paneCloseRisk.ts), or null. Its screen is read where it is
  * drawn; a pane not found (not drawn yet) is not asked about.
  */
-function closingPaneRisk(tabId: string, pane: PaneId): string | null {
+function closingPaneRisk(tabId: string, pane: PaneId, { withAgent = true } = {}): string | null {
   const wrapper = existingTabHost(tabId)?.querySelector(`[data-pane="${pane.replace(/["\\]/g, '')}"]`)
   const terminal = wrapper ? terminalWithin(wrapper) : null
   const shellId = getLocalPaneShellId(tabId, pane)
   const agent = shellId ? useAgentMessagesStore.getState().snapshot.agents.find(entry => entry.active && entry.shellId === shellId)?.kind : undefined
+  // 탭 닫기 asks about a tab's agents itself; a second question about the same agent is left out
+  if (agent && !withAgent) return null
   if (!terminal) return agent ? paneCloseRisk({ agent, alternate: false, cursorLine: '' }) : null
   const buffer = terminal.buffer.active
   // The cursor's line up to the cursor (a prompt's blank may be unwritten: ConPTY moves the cursor past
@@ -52,6 +59,20 @@ export async function commitPaneGesture(tabId: string, from: PaneId, action: Pan
     const current = tabOf()
     return isVisible() && current && current.splitTree === original.splitTree && current.paneSeq === original.paneSeq
       && panes.every((pane, index) => getLocalPaneShellId(tabId, pane) === shellIds[index])
+  }
+
+  if (action.kind === 'close-tab') {
+    // A program other than an agent (tail -f, vim, a build) is asked about here, as a scribbled pane is
+    const risk = closingPaneRisk(tabId, from, { withAgent: false })
+    if (risk && !await confirmDialog({
+      title: '탭 닫기',
+      message: `이 탭에서 ${risk}. 탭을 닫으면 셸과 그 안의 프로그램이 함께 종료됩니다. 닫을까요?`,
+      confirmLabel: '탭 닫기',
+      cancelLabel: '취소',
+      danger: true
+    })) return
+    if (isCurrent()) window.dispatchEvent(new CustomEvent(CLOSE_TAB_EVENT, { detail: tabId }))
+    return
   }
 
   const hasWorkingAgent = workingShellCandidates.length ? window.electronAPI.localShellHasWorkingAgent : undefined

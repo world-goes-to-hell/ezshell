@@ -106,7 +106,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const [showHistory, setShowHistory] = useState(false)
   const [usageActions, setUsageActions] = useState<HTMLSpanElement | null>(null)
   const agentWork = useAgentMessagesStore(state => {
-    const agent = state.snapshot.agents.find(item => item.shellId === shellId)
+    const agent = shellAgentOf(state.snapshot.agents, shellId)
     if (!agent) return undefined
     return !exit && isAgentWorking(agent) ? 'working' : 'idle'
   })

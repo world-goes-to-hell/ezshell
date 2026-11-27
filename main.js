@@ -432,17 +432,14 @@ function createWindow() {
 }
 
 // Updates and the "업데이트 내용" state: src/ipc/updates.js
-const { setupAutoUpdater, installsUpdateOnQuit } = require('./src/ipc/updates.js').registerUpdateIpc({
-  ipcMain, app, shell, sessionsFilePath,
+const { setupAutoUpdater, finishQuit, isInstallingOnQuit } = require('./src/ipc/updates.js').registerUpdateIpc({
+  ipcMain, app, dialog, shell, sessionsFilePath,
   // Declared further down the file: looked up when a request arrives, not now
   fromMainWindow: (event) => fromMainWindow(event),
   get mainWindow() { return mainWindow; },
   testUpdateRestart: !app.isPackaged && process.env.EZSHELL_TEST_UPDATE_RESTART === '1',
-  // Restarting to install: the session host keeps the shells for the app the installer starts
-  async beforeUpdateRestart() {
-    restartingForUpdate = true;
-    await sessionHost.keep(SESSION_KEEP_MS);
-  }
+  keepSessionsForUpdate: () => sessionHost.keep(SESSION_KEEP_MS),
+  finishSessionQuit
 });
 
 // App windows show only the app's own page. The browser view has a separate session and policy.
@@ -556,14 +553,14 @@ const pendingExplorerFiles = new Set(explorerFile ? [explorerFile] : []);
 let openingExplorerFiles = false;
 
 async function openExplorerFiles() {
-  if (!mainWindowRevealed || isAppLocked || openingExplorerFiles || !pendingExplorerFiles.size) return;
+  if (!mainWindowRevealed || isAppLocked || isInstallingOnQuit() || openingExplorerFiles || !pendingExplorerFiles.size) return;
   openingExplorerFiles = true;
   try {
     const { resolveExplorerFile } = require('./src/localFiles/explorerOpen.js');
     for (const requested of pendingExplorerFiles) {
-      if (isAppLocked) break;
+      if (isAppLocked || isInstallingOnQuit()) break;
       const file = await resolveExplorerFile(requested);
-      if (isAppLocked) break;
+      if (isAppLocked || isInstallingOnQuit()) break;
       pendingExplorerFiles.delete(requested);
       const result = file && remoteFileIpc.openLocalFile(file.path, '이 PC', { previewText: file.previewText });
       if (!result?.ok) {
@@ -577,6 +574,7 @@ async function openExplorerFiles() {
 
 if (isWindows) {
   app.on('second-instance', (_event, _args, _cwd, data) => {
+    if (isInstallingOnQuit()) return;
     const requested = data?.explorerFile;
     if (typeof requested === 'string' && requested && pendingExplorerFiles.size < 20) {
       pendingExplorerFiles.add(requested);
@@ -752,7 +750,6 @@ let localShells = null;
 // folder, so they go on while the app restarts to install an update (src/sessionHost/,
 // docs/plan/2026-11-26-sessions-survive-update.md). Windows only; elsewhere shells stay in the app.
 const SESSION_KEEP_MS = 3 * 60 * 1000;
-let restartingForUpdate = false;
 const sessionRuntime = require('./src/sessionHost/runtimeCopy.js').createRuntimeCopy({
   packaged: app.isPackaged,
   execPath: process.execPath,
@@ -774,6 +771,8 @@ const sessionHost = sessionHostClient.createSessionHostClient({
 // unlock that can come before the session host was found, and the window then offered the kept tabs again
 // as new ones (2026-11-26 user report: every session twice, chats back as terminals). It waits for the start.
 let sessionHostStarting = null;
+// The shells the session host brought back at this start: the handed-over agents of any other shell are retired
+let keptShellIds = [];
 const SESSION_HOST_WAIT_MS = 15000;
 function sessionHostStarted() {
   if (!sessionHostStarting) return Promise.resolve();
@@ -790,7 +789,7 @@ async function startSessionHost() {
   if (testDelay > 0) await new Promise(resolve => setTimeout(resolve, Math.min(testDelay, 30000)));
   if (!(await sessionHost.start())) return;
   const kept = sessionHost.takeAdoptable();
-  if (kept.length > 0) getLocalShells().adopt(kept);
+  if (kept.length > 0) keptShellIds = getLocalShells().adopt(kept);
 }
 const agentBridgeFile = path.join(userDataPath, 'agent-message-connection');
 const claudeRoot = require('./src/agentHistory/history.js').agentRoots(process.env, require('os').homedir()).claude;
@@ -836,6 +835,9 @@ const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages(
 function restoreAgentHandoff() {
   if (!agentMessages.awaitingHandoff()) return;
   agentMessages.importHandoff(agentHandoff.takeAgentHandoff({ ...agentHandoffFiles, masterPassword: currentMasterPassword }));
+  // Agents whose shells did not come back (a new session host, a shell that ended) end once the host's start
+  // is over: the whole start, not the window's 15-second wait, so a shell adopted late keeps its agent
+  void (sessionHostStarting ?? Promise.resolve()).then(() => agentMessages.retireLostShells(keptShellIds));
 }
 const localTerminalClipboard = require('./src/ipc/localTerminalClipboard.js').createLocalTerminalClipboard(clipboard, nativeImage);
 async function selectAgentImages(title) {
@@ -1060,16 +1062,14 @@ ipcMain.handle('local-shell-clipboard', async (event, id) => {
   }
 });
 app.on('will-quit', () => localTerminalClipboard.dispose());
-app.on('will-quit', () => {
-  // The installer runs right after this and must find nothing holding the install folder: end the shells'
-  // whole trees (their agents and the agents' message MCP, this app's exe) and keep CLIs in other terminals
-  // from starting the exe again meanwhile (docs/fix/2026-11-24-update-uninstall-failed-2.md)
-  const updating = installsUpdateOnQuit();
+app.on('will-quit', finishQuit);
+
+function finishSessionQuit({ updating, keepShells }) {
+  // End the trees that still use this install, and stop other CLIs from starting the shared bridge again.
   if (updating) agentMessages.pauseExternalBridge();
-  const handingOver = updating && restartingForUpdate && sessionHost.ready();
+  const handingOver = keepShells && sessionHost.ready();
   if (handingOver) {
-    // The shells in the session host wait there for the app the installer starts (keep was sent before
-    // the quit); the others end with their trees
+    // The host has acknowledged keep. Its shells wait for the new app while the other trees end.
     localShells?.handOver();
     sessionHost.release();
   } else {
@@ -1081,7 +1081,7 @@ app.on('will-quit', () => {
     ...agentHandoffFiles, record: agentMessages.exportHandoff(), masterPassword: currentMasterPassword
   });
   agentMessages.stop({ handOver: handedOver });
-});
+}
 ipcMain.handle('agent-messages-state', event =>
   fromMainWindow(event) && !isAppLocked ? agentMessages.snapshot() : null
 );

@@ -1082,13 +1082,18 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     if (attempt) {
       const { expires, mode, prompt, ids } = attempt
       const expected = compact(prompt)
-      const exact = input?.text === expected && !input.suggestion
-      const visibleExact = !visible?.historical && visible?.text === expected
+      // The notice once, or repeated when an earlier paste showed late (a session still starting reads its
+      // input after drawing the composer, 2026-11-27 user report): either way only our own line
+      const ours = text => !!text && text.length % expected.length === 0 && text.length <= expected.length * 3
+        && expected.repeat(text.length / expected.length) === text
+      const exact = ours(input?.text) && !input.suggestion
+      const visibleExact = !visible?.historical && ours(visible?.text)
       // After expiry a matching cursor row alone could belong to history above the real editor.
       const cursorOnly = !expiredWake && (kind !== 'codex' || !visible)
       const rendered = !shellAtCursor() && (visibleExact || (exact && cursorOnly))
       if (rendered) {
         userDraft = false
+        attempt.seen = true
         attempt.visibleUntil = now + WAKE_HIDDEN_TIMEOUT
       } else if (now >= attempt.visibleUntil) {
         stage = null
@@ -1098,7 +1103,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       }
       const blocked = rendered && chatBlocked()
       const canSubmit = !working || (mode === 'busy' && running && !hookWorking)
-      const verified = matchedEditor(input, visible, text => text === expected)
+      const verified = matchedEditor(input, visible, ours)
       const recoveryUntil = attempt.visibleUntil
       if (rendered && verified && parentInput(targetOf(verified)) && canSubmit && !blocked) {
         // Finish once even when the agent already read the message inside its running turn.
@@ -1139,6 +1144,10 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       // Claude redraws the same queue hint while processing a paste. Keep one attempt until
       // the new draft appears or the recovery window expires, even though this hint is empty.
       if (input?.queueHint) return
+      // A paste not drawn yet is still on its way: a CLI that is starting draws its empty composer before
+      // it reads input. Pasting again would put the notice in twice (2026-11-27 user report); the attempt
+      // ends at visibleUntil and a fresh paste follows then.
+      if (!attempt.seen) return
     }
     if (!parentInput(targetOf(input)) || shellAtCursor() || chatBlocked()) return
     // State not reported yet: look again once the screen has been still long enough

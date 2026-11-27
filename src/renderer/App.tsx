@@ -21,6 +21,7 @@ import type { SharedSession } from './lib/sessionShare'
 import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/QuickConnectModal'
 import { LocalProjectDialog, type LocalProjectTerminal } from './components/Modal/LocalProjectDialog'
 import { OPEN_LOCAL_TERMINAL_EVENT } from './lib/localProjectList'
+import { typeWhenShellSettles } from './lib/gitLogin'
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
 import { NewTabMenu } from './components/Terminal/NewTabMenu'
 import { TabWorktreeBadge } from './components/Terminal/TabWorktreeBadge'
@@ -70,6 +71,7 @@ import { DevelopmentTabDots } from './components/Terminal/DevelopmentRunStatus'
 import { changeDevelopmentRun, developmentRunsForTab, useDevelopmentRunEvents, useDevelopmentRuns } from './lib/developmentRun'
 import { TabRenameDialog } from './components/Terminal/TabRenameDialog'
 import { DUPLICATE_TAB_EVENT, OPEN_SNIPPET_MANAGER_EVENT } from './components/Terminal/useTerminalContextMenu'
+import { CLOSE_TAB_EVENT } from './lib/paneGesture'
 import { folderName, RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './lib/agentHistory'
 import { adoptOrphanLocalShells, keptLocalShells, rememberLocalLayout } from './lib/localShellAdopt'
 import { startAgentSleep } from './stores/agentSleepStore'
@@ -875,11 +877,18 @@ function App() {
   useEffect(() => {
     const onDuplicate = (event: Event) => { void handleDuplicateTab((event as CustomEvent<string>).detail) }
     const onSnippets = () => setSnippetManagerOpen(true)
+    // An Alt+drag scribble over the only pane of a tab (lib/paneGesture.ts)
+    const onCloseTab = (event: Event) => {
+      const id = (event as CustomEvent<unknown>).detail
+      if (typeof id === 'string' && useTerminalStore.getState().terminals.has(id)) void requestCloseTabs([id])
+    }
     window.addEventListener(DUPLICATE_TAB_EVENT, onDuplicate)
     window.addEventListener(OPEN_SNIPPET_MANAGER_EVENT, onSnippets)
+    window.addEventListener(CLOSE_TAB_EVENT, onCloseTab)
     return () => {
       window.removeEventListener(DUPLICATE_TAB_EVENT, onDuplicate)
       window.removeEventListener(OPEN_SNIPPET_MANAGER_EVENT, onSnippets)
+      window.removeEventListener(CLOSE_TAB_EVENT, onCloseTab)
     }
   })
 
@@ -1186,8 +1195,12 @@ function App() {
   })
   useEffect(() => {
     const onOpen = (event: Event) => {
-      const { cwd, agent, workspaceLabel } = (event as CustomEvent<Partial<LocalProjectTerminal> | null>).detail ?? {}
-      void handleOpenLocalTerminal({ cwd, agent, workspaceLabel })
+      const { cwd, agent, workspaceLabel, input } = (event as CustomEvent<Partial<LocalProjectTerminal> & { input?: string } | null>).detail ?? {}
+      void handleOpenLocalTerminal({ cwd, agent, workspaceLabel }).then(tabId => {
+        // A command typed in for the user to run (the Git login of a nested repository, lib/gitLogin.ts): no Enter
+        const shellId = tabId && typeof input === 'string' && !agent ? getLocalPaneShellId(tabId, MAIN_PANE) : null
+        if (shellId) void typeWhenShellSettles(shellId, input!)
+      })
     }
     window.addEventListener(OPEN_LOCAL_TERMINAL_EVENT, onOpen)
     return () => window.removeEventListener(OPEN_LOCAL_TERMINAL_EVENT, onOpen)

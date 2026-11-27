@@ -395,6 +395,24 @@ function edgePoints({ rect, dpr }, edge, depths) {
     await showChat(true)
     await setChatTheme('카톡 모드', 'chat-kakao')
 
+    if (capture !== 'before') {
+      await setWorking(true)
+      const shellId = await js(pane + '.dataset.localShellId')
+      const chatWorking = cover + "?.querySelector('.agent-chat-status')?.dataset.status === 'working'"
+      await requireState(chatWorking + ' && !!' + trace, 'the Claude chat and its work trace did not start')
+      const staleAgent = path.join(profile, 'stale-shell-agent')
+      fs.writeFileSync(staleAgent, '')
+      await send('Page.reload')
+      await sleep(1500)
+      await unlock(driver)
+      await requireState(`window.electronAPI.agentMessagesSnapshot().then(state => state.agents.some(agent =>
+        agent.id === 'claude-0' && agent.shellId === ${JSON.stringify(shellId)}))`, 'the restored snapshot has no stale agent')
+      check('the restored Claude chat follows its working agent when an older agent shares the shell ID', await until(
+        pane + '?.dataset.localShellId === ' + JSON.stringify(shellId) + ' && ' + chatWorking +
+        ' && ' + trace + "?.playState === 'running'", 15000))
+      fs.unlinkSync(staleAgent)
+    }
+
     const appThemes = [['Minimal Dark', 'minimal-dark'], ['Minimal Light', 'minimal-light']]
     for (const layout of ['single', 'split']) {
       if (layout === 'split') {

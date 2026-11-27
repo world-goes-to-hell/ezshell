@@ -3,28 +3,36 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { RiLinksLine } from 'react-icons/ri'
 import type { NestedRepositoryRemote, NestedRepositoryRemoteResult } from '../../types'
 import { showNestedRepositoryStatus } from '../../stores/nestedRepositoryStore'
+import { needsGitLogin } from '../../lib/gitLogin'
+import { GitLoginButton } from './GitLoginButton'
 
-type Note = { kind: 'busy' | 'ok' | 'error'; text: string }
+/** login: the check failed for want of a Git login, for this remote name or typed address (GitLoginButton) */
+type Note = { kind: 'busy' | 'ok' | 'error'; text: string; login?: { target?: string } }
 type Draft = { url: string; pushUrl?: string }
 interface Scope { project: string; root: string; folder: string }
+/** Where a Git login terminal opens (the repository's folder), and closing the dialog so it shows */
+interface Login { directory?: string; folder: string; onOpen: () => void }
 
 const httpsOf = (url: string) => url.replace(/^http:\/\//i, 'https://')
 const failure = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 
 async function testAddress(scope: Scope, target: { name?: string; url?: string }): Promise<Note> {
   const result = await window.electronAPI.localNestedRepositoryTestRemote?.({ ...scope, target }).catch(() => undefined)
-  return result?.success
-    ? { kind: 'ok', text: `연결됨 · 브랜치 ${result.heads}개` }
-    : { kind: 'error', text: result?.error ?? '원격 연결을 확인하지 못했습니다.' }
+  if (result?.success) return { kind: 'ok', text: `연결됨 · 브랜치 ${result.heads}개` }
+  const text = result?.error ?? '원격 연결을 확인하지 못했습니다.'
+  return { kind: 'error', text, ...(needsGitLogin(text) && { login: { target: target.name ?? target.url } }) }
 }
 
-function NoteLine({ note }: { note?: Note }) {
+function NoteLine({ note, login }: { note?: Note; login: Login }) {
   if (!note) return null
-  return <p className="nested-remote-note" data-kind={note.kind} role={note.kind === 'error' ? 'alert' : 'status'}>{note.text}</p>
+  return <p className="nested-remote-note" data-kind={note.kind} role={note.kind === 'error' ? 'alert' : 'status'}>{note.text}
+    {note.login && login.directory && <GitLoginButton directory={login.directory} label={login.folder} target={note.login.target}
+      onOpen={login.onOpen} />}</p>
 }
 
-function RemoteCard({ scope, remote, busy, run }: {
+function RemoteCard({ scope, remote, busy, run, login }: {
   scope: Scope
+  login: Login
   remote: NestedRepositoryRemote
   busy: boolean
   run: (task: () => Promise<NestedRepositoryRemoteResult | undefined>, done: string) => Promise<Note>
@@ -79,12 +87,13 @@ function RemoteCard({ scope, remote, busy, run }: {
       <button type="button" className="btn-primary" disabled={busy || (!urlChanged && !pushChanged) || !draft.url.trim()}
         onClick={() => void save()}>저장</button>
     </div>
-    <NoteLine note={note} />
+    <NoteLine note={note} login={login} />
   </li>
 }
 
-export function NestedRepositoryRemoteDialog({ project, root, folder, onClose }: Scope & { onClose: () => void }) {
+export function NestedRepositoryRemoteDialog({ project, root, folder, directory, onClose }: Scope & { directory?: string; onClose: () => void }) {
   const scope: Scope = { project, root, folder }
+  const login: Login = { directory, folder, onOpen: onClose }
   const [remotes, setRemotes] = useState<NestedRepositoryRemote[] | null>(null)
   const [loadError, setLoadError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -140,7 +149,7 @@ export function NestedRepositoryRemoteDialog({ project, root, folder, onClose }:
           {!remotes && <p className="nested-branch-message" role="status">원격을 읽는 중…</p>}
           {loadError && <p className="nested-branch-error" role="alert">{loadError}</p>}
           {remotes && remotes.length > 0 && <ul className="nested-remote-list" aria-label="원격">
-            {remotes.map(remote => <RemoteCard key={remote.name} scope={scope} remote={remote} busy={busy} run={run} />)}
+            {remotes.map(remote => <RemoteCard key={remote.name} scope={scope} remote={remote} busy={busy} run={run} login={login} />)}
           </ul>}
           {remotes && !loadError && <form className="nested-remote nested-remote-add" aria-label="원격 추가"
             onSubmit={event => { event.preventDefault(); void add() }}>
@@ -162,7 +171,7 @@ export function NestedRepositoryRemoteDialog({ project, root, folder, onClose }:
               }}>연결 확인</button>
               <button type="submit" className="btn-primary" disabled={busy || !added.name.trim() || !added.url.trim()}>추가</button>
             </div>
-            <NoteLine note={addNote} />
+            <NoteLine note={addNote} login={login} />
           </form>}
           <div className="modal-actions">
             <Dialog.Close type="button" className="btn-secondary modal-btn" disabled={busy}>닫기</Dialog.Close>

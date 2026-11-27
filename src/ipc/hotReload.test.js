@@ -261,6 +261,48 @@ describe('hot reload worker', () => {
     expect(events.watcher.close).toHaveBeenCalledTimes(1)
   })
 
+  it('sends a rejected or uncompiled class again with later edits so a caller never runs ahead of its callee', async () => {
+    const events = fakeWatch()
+    const requestFile = path.join(source, 'Request.java')
+    const controllerFile = path.join(source, 'Controller.java')
+    await Promise.all([fs.writeFile(requestFile, 'class Request {}'), fs.writeFile(controllerFile, 'class Controller {}')])
+    const request = { name: 'demo/Request', bytes: Buffer.from('request') }
+    const controller = { name: 'demo/Controller', bytes: Buffer.from('controller') }
+    const added = Object.assign(new Error('added'), { name: 'JdwpError', code: 63, reason: '메서드 추가', signature: 'Ldemo/Request;' })
+    const vm = { canRedefine: async () => true, classPaths: async () => ({ baseDir: root, classpaths: [output] }),
+      redefine: vi.fn().mockRejectedValueOnce(added).mockRejectedValueOnce(added).mockResolvedValue({ redefined: 2, notLoaded: [] }),
+      close: vi.fn(), onClose: vi.fn() }
+    const compile = vi.fn().mockResolvedValueOnce([request]).mockResolvedValueOnce([request, controller])
+      .mockRejectedValueOnce(Object.assign(new Error('diagnostic'), { stderr: 'error' })).mockResolvedValueOnce([request, controller])
+      .mockResolvedValue([])
+    const report = vi.fn()
+    leases.push(startHotReload({ port: 58140, cwd: root, worktree: root }, { env: {}, pid: 6, running: () => true,
+      onState: report, watchSource: events.watch, connect: async () => vm, verifyListener: async () => true,
+      makeCompiler: () => compile, readClassInfo: vi.fn(), quiet: 10 }))
+    await vi.waitFor(() => expect(events.watch).toHaveBeenCalled())
+    const both = { root: { output, source, moduleRoot: root }, sources: [requestFile, controllerFile], classpath: [output] }
+
+    // 1) The new method on the request class is refused
+    events.changed('Request.java')
+    await vi.waitFor(() => expect(report).toHaveBeenCalledWith(expect.objectContaining({ status: 'restartNeeded' }), undefined))
+    // 2) The controller that calls it goes in the same request, so the JVM refuses both instead of running the new call
+    events.changed('Controller.java')
+    await vi.waitFor(() => expect(vm.redefine).toHaveBeenCalledTimes(2))
+    expect(compile).toHaveBeenNthCalledWith(2, both)
+    expect(vm.redefine).toHaveBeenNthCalledWith(2, [{ signature: 'Ldemo/Request;', bytes: request.bytes },
+      { signature: 'Ldemo/Controller;', bytes: controller.bytes }], { signal: expect.any(AbortSignal) })
+    // 3) A compile error keeps the files too; 4) once the change can be applied, nothing is carried any more
+    events.changed('Controller.java')
+    await vi.waitFor(() => expect(report).toHaveBeenCalledWith(expect.objectContaining({ status: 'compileError' }), expect.anything()))
+    expect(compile).toHaveBeenNthCalledWith(3, both)
+    events.changed('Controller.java')
+    await vi.waitFor(() => expect(report).toHaveBeenCalledWith(expect.objectContaining({ status: 'applied', classes: 2 }), undefined))
+    expect(compile).toHaveBeenNthCalledWith(4, both)
+    events.changed('Controller.java')
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(5))
+    expect(compile).toHaveBeenNthCalledWith(5, { ...both, sources: [controllerFile] })
+  })
+
   it('reconnects before the next edit and reports structure changes, diagnostics, and an uncertain result', async () => {
     const events = fakeWatch()
     let disconnected

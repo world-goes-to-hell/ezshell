@@ -199,12 +199,12 @@ export function SplitChrome({ tabId, tree, containerRef }: SplitChromeProps) {
   const merge = action?.kind === 'merge' ? action : null
   const to = merge && layout.panes.find(entry => entry.pane === merge.to)?.rect
   const split = action?.kind === 'split' ? action : null
-  const closing = action?.kind === 'close'
+  const closing = action?.kind === 'close' || action?.kind === 'close-tab'
   const gesture = (
     <>
       <canvas ref={canvas} className={`pane-merge-trail${trail ? ` is-${trail}` : ''}`} aria-hidden="true" />
       {from && !closing && <div className="pane-merge-preview is-source" style={paneBox(from, PANE_DIVIDER_PX)} aria-hidden="true" />}
-      {from && closing && <div className="pane-merge-preview is-closing" style={paneBox(from, PANE_DIVIDER_PX)} aria-hidden="true"><span>놓으면 이 칸을 닫습니다 · Esc 취소</span></div>}
+      {from && closing && <div className="pane-merge-preview is-closing" style={paneBox(from, PANE_DIVIDER_PX)} aria-hidden="true"><span>{action?.kind === 'close-tab' ? '놓으면 이 탭을 닫습니다' : '놓으면 이 칸을 닫습니다'} · Esc 취소</span></div>}
       {merge && <div className="pane-merge-preview is-area" style={paneBox(merge.expanded, PANE_DIVIDER_PX)} aria-hidden="true" />}
       {to && <div className="pane-merge-preview is-destination" style={paneBox(to, PANE_DIVIDER_PX)} aria-hidden="true"><span>놓으면 이 셸을 닫습니다</span></div>}
       {from && split && <div className={`pane-gesture-divider is-${split.axis}`} style={dividerBox({ ...split, path: '', region: from }, PANE_DIVIDER_PX)} aria-hidden="true" />}

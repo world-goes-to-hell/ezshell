@@ -11,6 +11,26 @@ const parent = path.join(profile, 'git-parent')
 const source = path.join(profile, 'source')
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, windowsHide: true, stdio: 'pipe', encoding: 'utf8' }).trim()
 
+// An HTTPS server on this PC that answers every Git request with 401 (a self-signed certificate made with
+// openssl, Git for Windows ships one); null without openssl
+async function loginServer() {
+  const openssl = ['openssl', 'C:\\Program Files\\Git\\usr\\bin\\openssl.exe', 'C:\\Program Files\\Git\\mingw64\\bin\\openssl.exe']
+    .find(command => { try { execFileSync(command, ['version'], { stdio: 'ignore', windowsHide: true }); return true } catch { return false } })
+  if (!openssl) return null
+  const key = path.join(profile, 'login.key')
+  const cert = path.join(profile, 'login.crt')
+  execFileSync(openssl, ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'],
+    { stdio: 'ignore', windowsHide: true })
+  let count = 0
+  const server = require('node:https').createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, (request, response) => {
+    count++
+    response.writeHead(401, { 'WWW-Authenticate': 'Basic realm="fixture"', 'Content-Type': 'text/plain' })
+    response.end('login needed')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  return { port: server.address().port, requests: () => count, close: () => server.close() }
+}
+
 function commit(cwd, filename) {
   fs.writeFileSync(path.join(cwd, filename), filename)
   git(cwd, 'add', '--', filename)
@@ -230,7 +250,47 @@ function fixture() {
       && git(orders, 'remote').split(/\r?\n/).includes('backup'))
     await js(`${button(backup, '한 번 더 누르면 지웁니다')}.click()`)
     check('the second press removes the remote', await until(`!${backup}`) && git(orders, 'remote') === 'origin')
-    await js(`${button(remoteDialog, '닫기')}.click()`)
+
+    // A server asking for a login Git cannot give with its prompts off (2026-11-27 user report: an https
+    // remote with only the http:// login saved): a Korean notice and 터미널에서 로그인
+    const login = await loginServer()
+    if (login) {
+      try {
+        git(orders, 'config', '--local', 'http.sslVerify', 'false')
+        // Git Credential Manager writes what it detects for a new host to the user's global config
+        // (credential.https://127.0.0.1:<port>.provider); named here, it detects and writes nothing
+        git(orders, 'config', '--local', 'credential.provider', 'generic')
+        const loginUrl = `https://127.0.0.1:${login.port}/team/orders.git`
+        await fill('새 원격 주소', loginUrl)
+        await js(`${button(addForm, '연결 확인')}.click()`)
+        check('a server asking for a login says so in Korean and offers 터미널에서 로그인', await until(
+          `${addForm}?.textContent.includes('Git 로그인이 필요합니다') && !${addForm}.textContent.includes('terminal prompts')
+            && !!${button(addForm, '터미널에서 로그인')}`, 40000), await js(`${addForm}?.textContent`))
+        const shellsBefore = (await js('window.electronAPI.localShellList()')).map(shell => shell.id)
+        // Git Credential Manager looks at the server first: count from here, so a command run by itself shows
+        const requestsBefore = login.requests()
+        await js(`${button(addForm, '터미널에서 로그인')}.click()`)
+        const typed = `git ls-remote --heads -- ${loginUrl}`
+        check('터미널에서 로그인 closes the dialog and types the command in a terminal of the repository, without running it', await until(`(async () => {
+          if (${remoteDialog}) return false
+          const shells = await window.electronAPI.localShellList()
+          if (shells.length !== ${shellsBefore.length + 1}) return false
+          // The new one: an orders terminal was opened earlier in this spec
+          const shell = shells.find(item => !${JSON.stringify(shellsBefore)}.includes(item.id))
+          if (shell?.cwd?.toLowerCase() !== ${JSON.stringify(orders.toLowerCase())}) return false
+          const state = shell && await window.electronAPI.localShellAttach(shell.id)
+          // PowerShell colors the command and wraps it at the terminal's width
+          const screen = state ? state.backlog.replace(/\\x1b\\[[0-9;?]*[ -\\/]*[@-~]/g, '').replace(/[\\r\\n]/g, '') : ''
+          return screen.includes(${JSON.stringify(typed)}) && !screen.includes('could not read Username')
+        })()`, 20000) && login.requests() === requestsBefore, `requests ${requestsBefore} → ${login.requests()}`)
+        await shot('local-nested-repos-git-login')
+      } finally {
+        login.close()
+      }
+    } else {
+      console.log('SKIP  login check: openssl not found to make a test certificate')
+      await js(`${button(remoteDialog, '닫기')}.click()`)
+    }
     if (!await until(`!${remoteDialog}`)) throw new Error('The remote dialog did not close')
 
     await js(`${row('services/catalog')}.querySelector('.nested-repository-more').click()`)

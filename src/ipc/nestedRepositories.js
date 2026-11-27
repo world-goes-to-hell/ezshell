@@ -29,9 +29,20 @@ const samePath = (a, b) => path.relative(a, b) === ''
 const key = value => process.platform === 'win32' ? value.toLowerCase() : value
 const withinProject = (project, folder) => sameOrInside(key(project), key(folder))
 
+// The server asked for a login that Git could not give: none saved for this address (often a remote moved
+// from http:// to https://, which Git Credential Manager keeps apart), or a wrong one. Git runs here with its
+// prompts off (nestedGit.js), so the user logs in once from a terminal. The screen offers that
+// (lib/gitLogin.ts keys on this opening sentence: keep the two the same).
+const GIT_LOGIN_NEEDED = 'Git 로그인이 필요합니다.'
+const LOGIN_FAILURE = /could not read (?:Username|Password)|terminal prompts disabled|Authentication failed|HTTP Basic: Access denied|Invalid username or password/i
+
 function messageOf(error, fallback) {
   const message = error?.stderr?.trim() || (!error?.code && error?.message) || fallback
   if (/dubious ownership/i.test(message)) return '이 폴더의 소유자가 달라 Git이 읽기를 거부했습니다.'
+  if (LOGIN_FAILURE.test(message)) {
+    return `${GIT_LOGIN_NEEDED} 이 PC 에 이 주소의 로그인 정보가 없거나 맞지 않습니다. 터미널에서 한 번 로그인하면 저장되어 다음부터 쓰입니다. ` +
+      '(http 주소에 저장된 정보는 https 주소에 쓰이지 않습니다.)'
+  }
   return redactRunSecrets(stripVTControlCharacters(message))
     .replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 500) || fallback
 }

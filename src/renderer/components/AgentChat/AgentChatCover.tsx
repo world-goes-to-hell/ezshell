@@ -22,6 +22,7 @@ import { outputFileName } from '../../lib/terminalText'
 import { TerminalContextMenu, type TerminalMenuGroup, type TerminalMenuItem } from '../Terminal/TerminalContextMenu'
 import { webLinkItems } from '../Terminal/TerminalWebLinkMenu'
 import { chatTextForClipboard, diffLineKind, echoOutputId, isAgentChatProvider, sentImageKey, shellAgentOf, visibleSendTime, waitingItemIds, type SentChatImages } from '../../lib/agentChatItems'
+import { agentIdentityStatus } from '../../lib/agentIdentity'
 import { turnUsageSpots, turnUsageText } from '../../lib/agentTurnUsage'
 import { toast } from '../../stores/toastStore'
 import { AgentChatSubagents } from './AgentChatSubagents'
@@ -58,6 +59,7 @@ const STATUS_LABELS: Record<string, string> = {
   working: '작업 중',
   starting: '시작 중',
   blocked: '응답 필요',
+  reply: '답장 대기',
   sleeping: '잠듦',
   unknown: '',
   error: '오류',
@@ -493,6 +495,8 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   const status = chat?.state === 'ended' ? 'ended'
     : chat?.approval ? 'blocked'
       : (antigravity ? chat?.status : agent?.status) ?? 'unknown'
+  // The same reply-wait status as the sidebar and pane indicator. Keep the CLI status for input decisions.
+  const displayedStatus = agent ? agentIdentityStatus({ ...agent, status }).status : status
   // Claude's AskUserQuestion: answered on the chat's own card while its dialog shows (and while the card's
   // answer is on its way: the dialog is out of reach meanwhile), unless it went to the terminal
   const askSending = useAskQuestionStore(state => state.sending.get(shellId))
@@ -545,6 +549,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     && !folderTrust && !sending, onShowTerminal)
   const replyId = chat?.reply?.sendId
   const idle = status === 'idle'
+  const headerStatus = STATUS_LABELS[displayedStatus] || (antigravity && idle ? '입력 대기' : '')
   const canReply = !isOver && !composerBlocked && status !== 'error' && (!antigravity || idle)
   const canAddQuote = canReply && !subagent && !sending && !pasting && !stopping && !changingSpeed && quotes.length < CHAT_QUOTE_LIMIT
   const canStop = !antigravity && canReply && (status === 'working' || Boolean(replyId))
@@ -579,6 +584,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   if (canReply) {
     if (stopping) progressLabel = '중지하는 중…'
     else if (sending) progressLabel = '보내는 중…'
+    else if (displayedStatus === 'reply') progressLabel = '답장 대기…'
     else if (replyId) progressLabel = replyWaiting ? '앞 작업 진행 중…' : '답변 생성 중…'
     else if (status === 'working') progressLabel = '작업 중…'
   }
@@ -1310,10 +1316,10 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
           aria-label={`제목 복사 · ${title}`} onClick={() => void copyToClipboard(title)}>
           {title}
         </button>
-        {(STATUS_LABELS[status] || (antigravity && idle)) && (
-          <span className="agent-chat-status" data-status={status}>
-            {status === 'working' && <RiLoader4Line className="agent-chat-spin" aria-hidden />}
-            {antigravity && idle ? '입력 대기' : STATUS_LABELS[status]}
+        {headerStatus && (
+          <span className="agent-chat-status" data-status={displayedStatus}>
+            {displayedStatus === 'working' && <RiLoader4Line className="agent-chat-spin" aria-hidden />}
+            {headerStatus}
           </span>
         )}
         {!antigravity && mailAgent && (
@@ -1455,7 +1461,8 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
       {!isOver && (
         <div className="agent-chat-composer">
           {progressLabel && <p className="agent-chat-reply-progress" role="status">
-            <RiLoader4Line className="agent-chat-spin" aria-hidden />{progressLabel}
+            {(displayedStatus !== 'reply' || stopping || sending) && <RiLoader4Line className="agent-chat-spin" aria-hidden />}
+            {progressLabel}
           </p>}
           {kind === 'claude' && forceToken && (draftImages.text || draftImages.images.length > 0) && (
             <div className="agent-chat-force-send">

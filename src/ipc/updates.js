@@ -4,13 +4,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const { autoUpdater } = require('electron-updater');
 const { createUpdateChecker } = require('../updateChecker.js');
 const manualUpdate = require('../manualUpdate.js');
 const lastVersion = require('../lastVersion.js');
 
-function registerUpdateIpc(ctx) {
-  const { ipcMain, app, shell, fromMainWindow, sessionsFilePath } = ctx;
+function registerUpdateIpc(ctx, autoUpdater = require('electron-updater').autoUpdater) {
+  const { ipcMain, app, dialog, shell, fromMainWindow, sessionsFilePath } = ctx;
 
   const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
   // Coming back to the window checks again, but not more often than this
@@ -22,9 +21,14 @@ function registerUpdateIpc(ctx) {
   // user to its page (src/manualUpdate.js). The page address is kept here, the window never sends one.
   const USES_MANUAL_UPDATE = process.platform === 'darwin';
   let manualUpdateUrl = null;
-  // A downloaded update installs when the app quits (autoInstallOnAppQuit, and quitAndInstall below):
-  // main.js then clears what would hold the install folder (localShell closeAll, the agent bridge)
   let updateReady = false;
+  let restartRequested = false;
+  let installingOnQuit = false;
+  let installerError = null;
+  // If a window vetoed an explicit restart, closing the last window later is an ordinary quit.
+  app.on('window-all-closed', () => {
+    if (!installingOnQuit) restartRequested = false;
+  });
 
   async function checkManualUpdate() {
     const result = await manualUpdate.checkLatest({ currentVersion: app.getVersion() });
@@ -48,7 +52,8 @@ function registerUpdateIpc(ctx) {
       return;
     }
     autoUpdater.autoDownload = false;
-    autoUpdater.autoInstallOnAppQuit = true;
+    // Own the quit sequence so the install starts only after the application's shutdown work.
+    autoUpdater.autoInstallOnAppQuit = false;
 
     // A running app used to check only at start, so a release made while it ran went unnoticed
     const updateChecker = createUpdateChecker({
@@ -93,6 +98,10 @@ function registerUpdateIpc(ctx) {
     });
 
     autoUpdater.on('error', (err) => {
+      if (installingOnQuit) {
+        installerError = err;
+        return;
+      }
       // A failed download lets the checks start again
       updateChecker.setStage('idle');
       if (!updateChecker.isQuiet()) sendUpdateStatus('error', { message: err.message });
@@ -109,6 +118,46 @@ function registerUpdateIpc(ctx) {
     if (ctx.mainWindow && !ctx.mainWindow.isDestroyed()) {
       ctx.mainWindow.webContents.send('update-status', { status, ...data });
     }
+  }
+
+  async function installAfterShutdown() {
+    let keepShells = false;
+    if (restartRequested) {
+      try { keepShells = await ctx.keepSessionsForUpdate() === true; } catch { /* The normal cleanup ends the shells. */ }
+    }
+    let started = false;
+    try {
+      ctx.finishSessionQuit({ updating: true, keepShells });
+      // install() uses the downloaded update and the same silent/elevation path as quitAndInstall().
+      // In a screen test the same shutdown runs without executing an installer.
+      installerError = null;
+      started = ctx.testUpdateRestart || autoUpdater.install(true, restartRequested);
+    } catch (error) {
+      installerError = error;
+    } finally {
+      // Let the updater's spawn-error handler try elevation before exiting. The windows and all
+      // will-quit handlers have already run, so exit does not repeat their cleanup or the handoff.
+      setImmediate(() => {
+        const succeeded = started && !installerError;
+        if (!succeeded) {
+          if (installerError) console.error('[Update] Could not launch the installer:', installerError.message);
+          dialog.showErrorBox('ezShell 업데이트', '설치 프로그램을 시작하지 못했습니다. ezShell을 다시 열고 업데이트를 다시 시도해 주세요.');
+        }
+        app.exit(succeeded ? 0 : 1);
+      });
+    }
+  }
+
+  function finishQuit(event) {
+    if (!updateReady) {
+      ctx.finishSessionQuit({ updating: false, keepShells: false });
+      return;
+    }
+    event.preventDefault();
+    if (installingOnQuit) return;
+    installingOnQuit = true;
+    // Other synchronous will-quit listeners also get to finish before the installer starts.
+    setImmediate(() => { void installAfterShutdown(); });
   }
 
 
@@ -152,21 +201,15 @@ function registerUpdateIpc(ctx) {
     }
   });
 
-  ipcMain.handle('install-update', async () => {
+  ipcMain.handle('install-update', (event) => {
     if (USES_MANUAL_UPDATE) return;
-    // The session host is told to keep the local shells for the next app before the quit begins
-    // (main.js, src/sessionHost/client.js keep). A failure there only means they end, as before.
-    try { await ctx.beforeUpdateRestart?.(); } catch { /* install anyway */ }
-    // Screen tests only (never a packaged app): the same quit with no installer, so a spec can start the
-    // app again on the same profile and see the local shells kept (e2e/specs/local-keep-through-update.js)
-    if (ctx.testUpdateRestart) {
-      updateReady = true;
-      app.quit();
-      return;
+    if (!fromMainWindow(event) || !event.senderFrame || event.senderFrame !== event.sender.mainFrame || !updateReady) {
+      throw new Error('업데이트 설치를 시작할 수 없습니다.');
     }
-    // Silent: the installer runs without its pages, into the folder the app is installed in, and starts
-    // the app again when it is done
-    autoUpdater.quitAndInstall(true, true);
+    if (installingOnQuit) return;
+    restartRequested = true;
+    // A window can still veto the quit. Keep the shells and start the installer only after it commits.
+    app.quit();
   });
 
   // Open a known release page on macOS, or the project's downloads after an automatic download failed.
@@ -197,7 +240,7 @@ function registerUpdateIpc(ctx) {
     lastVersion.writeLastVersion(lastVersionPath(), app.getVersion());
   });
 
-  return { setupAutoUpdater, installsUpdateOnQuit: () => updateReady };
+  return { setupAutoUpdater, finishQuit, isInstallingOnQuit: () => installingOnQuit };
 }
 
 module.exports = { registerUpdateIpc };

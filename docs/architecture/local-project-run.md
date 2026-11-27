@@ -52,7 +52,7 @@
 
 ## 바로 반영
 
-- `hotReload`는 `off`·`standard`·`enhanced`이고 옛 구성에서 값이 없으면 `off`다. Spring Boot 후보와 Tomcat에서 사용할 수 있다. 표준은 실행에 붙은 JDWP로 이미 로드된 Java 클래스를 재정의한다. 필드·메서드 추가와 같은 변경을 JVM이 거부하면 카드에 재기동 필요를 표시한다. 확장은 보관함의 JBR 17·21과 검증된 HotswapAgent로 더 많은 구조 변경을 처리한다. 클래스 구조에 따라 재기동이 필요할 수 있다.
+- `hotReload`는 `off`·`standard`·`enhanced`이고 옛 구성에서 값이 없으면 `off`다. Spring Boot 후보와 Tomcat에서 사용할 수 있다. 표준은 실행에 붙은 JDWP로 이미 로드된 Java 클래스를 재정의한다. 필드·메서드 추가와 같은 변경을 JVM이 거부하면 카드에 재기동 필요를 표시한다. 바꾸면 안 되는 것: 거부되거나 컴파일되지 않았거나 반영 여부를 확인하지 못한 소스는 다음 저장 때 새 변경과 한 요청으로 다시 보낸다 (`hotReload.js`의 `carried`). 따로 보내면 메서드를 새로 부르는 클래스만 반영되어 `NoSuchMethodError`가 난다 (`docs/fix/2026-11-27-hot-reload-partial-apply.md`). 확장은 보관함의 JBR 17·21과 검증된 HotswapAgent로 더 많은 구조 변경을 처리한다. 클래스 구조에 따라 재기동이 필요할 수 있다.
 - Spring Boot는 실행 중인 JVM의 클래스패스를 읽고 해당 워크트리의 출력 폴더와 `src/main/java`를 짝짓는다. 기존 DevTools 의존성이 있으면 `jcmd`로 그 JVM의 클래스패스를 확인하고 바뀐 Java 소스를 컴파일한다. 다시 로드하는 일은 DevTools가 처리한다. Tomcat은 웹 앱의 클래스 출력과 웹 앱·Tomcat 라이브러리, 웹 앱의 Java 소스를 사용한다. JSP·정적 파일은 Tomcat이 읽는다.
 - 소스 변경을 짧게 묶어 구성 JDK의 `javac`로 컴파일하고, 기존 클래스의 Java 버전과 빌드의 소스 인코딩을 따른다. Maven은 Spring Boot 플러그인의 JVM 인자 속성, Gradle은 앱 데이터의 `bootRun` 초기화 스크립트, Tomcat은 `CATALINA_OPTS`를 쓴다. 바로 반영 이벤트와 컴파일 오류가 카드와 `run_*` 결과로 간다.
 

@@ -169,8 +169,23 @@
 .nested-remote-field { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 8px; font-size: 12px; }
 .nested-remote-field > span { color: var(--text-secondary); }
 .nested-remote-field input { min-width: 0; font-family: var(--font-mono, monospace); font-size: 12px; }
-.nested-remote-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.nested-remote-actions button { padding: 4px 10px; font-size: 12px; }
+.nested-remote-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+/* One size for both kinds: the global .btn-primary adds a top margin and has no border, .btn-secondary has one */
+.nested-remote-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 28px;
+  min-width: 64px;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.nested-remote-actions .btn-secondary { border-color: var(--border-color); }
 .nested-remote-actions button:disabled { opacity: 0.45; cursor: default; }
 .nested-remote-remove:focus-visible, .nested-remote-remove:hover { color: var(--error-text, var(--error, #d74d51)); }
 .nested-remote-note { margin: 0; font-size: 11px; overflow-wrap: anywhere; color: var(--text-muted); }

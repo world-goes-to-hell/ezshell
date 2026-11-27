@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useConfirmStore } from '../stores/confirmStore'
 import { useTerminalStore, type TerminalInfo } from '../stores/terminalStore'
 import { adoptLocalPaneShell, releaseLocalPaneShell } from './localPaneShells'
-import { commitPaneGesture, type PaneGestureAction } from './paneGesture'
+import { CLOSE_TAB_EVENT, commitPaneGesture, type PaneGestureAction } from './paneGesture'
 import { closeTabPane, mergePanes } from './paneToTab'
 import { MAIN_PANE, paneId, paneIds, singlePane } from './splitTree'
 import { useAgentMessagesStore } from '../components/Terminal/AgentMessages'
@@ -16,6 +16,7 @@ const visible = () => true
 const split = { kind: 'split', axis: 'row', ratio: 0.5 } satisfies PaneGestureAction
 const merge = { kind: 'merge', to: MAIN_PANE, expanded: { x: 0, y: 0, w: 1, h: 1 } } satisfies PaneGestureAction
 const close = { kind: 'close' } satisfies PaneGestureAction
+const closeTab = { kind: 'close-tab' } satisfies PaneGestureAction
 const query = vi.fn<(_: string[]) => Promise<boolean>>()
 const store = useTerminalStore.getState
 const terminal = () => store().terminals.get(tabId)
@@ -187,6 +188,39 @@ describe('Alt+drag session confirmation', () => {
     answer(false)
     await pending
     expect(mergePanes).not.toHaveBeenCalled()
+  })
+
+  it('a scribble over the only pane closes the tab the way 탭 닫기 does (2026-11-27 user request)', async () => {
+    openLocal('local:only')
+    const dispatchEvent = vi.fn()
+    vi.stubGlobal('window', { electronAPI: { localShellHasWorkingAgent: query }, dispatchEvent })
+    await commitPaneGesture(tabId, MAIN_PANE, closeTab, visible)
+    expect(dispatchEvent).toHaveBeenCalledTimes(1)
+    const event = dispatchEvent.mock.calls[0][0] as CustomEvent<string>
+    expect(event.type).toBe(CLOSE_TAB_EVENT)
+    expect(event.detail).toBe(tabId)
+    // 탭 닫기 asks about agents itself: no second question here
+    expect(query).not.toHaveBeenCalled()
+    expect(question()).toBeNull()
+    expect(closeTabPane).not.toHaveBeenCalled()
+  })
+
+  it('leaves the agent question of a scribbled single-pane tab to 탭 닫기', async () => {
+    openLocal('local:only')
+    const dispatchEvent = vi.fn()
+    vi.stubGlobal('window', { electronAPI: { localShellHasWorkingAgent: query }, dispatchEvent })
+    useAgentMessagesStore.setState({ snapshot: { revision: 1, agents: [{ id: 'claude-1', kind: 'claude', active: true, shellId: 'local:only' } as AgentMessageSession], messages: [] } })
+    await commitPaneGesture(tabId, MAIN_PANE, closeTab, visible)
+    expect(question()).toBeNull()
+    expect(dispatchEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not close a single-pane tab that changed while the scribble was released', async () => {
+    openLocal('local:only')
+    const dispatchEvent = vi.fn()
+    vi.stubGlobal('window', { electronAPI: { localShellHasWorkingAgent: query }, dispatchEvent })
+    await commitPaneGesture(tabId, MAIN_PANE, closeTab, () => false)
+    expect(dispatchEvent).not.toHaveBeenCalled()
   })
 
   it('leaves an SSH split independent of local activity', async () => {

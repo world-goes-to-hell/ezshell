@@ -106,6 +106,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
   // Credentials handed over by the old app, as SHA-256 digests (the raw tokens never reach the disk)
   const handedTokens = new Map()
   const handedShellTokens = new Map()
+  // Handed-over agents that ran in a local shell: kept only if the session host brings that shell back (retireLostShells)
+  const handedShellAgents = new Set()
   const agents = new Map()
   const roleStore = createAgentRoleStore(roleFile)
   const roleSessions = new Map()
@@ -1217,6 +1219,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     for (const agent of record.agents) {
       // A handed-over agent is waiting for its MCP to connect again; nothing in this app holds its lease yet
       agents.set(agent.id, { ...agent })
+      if (agent.active && agent.shellId) handedShellAgents.add(agent.id)
     }
     serial = Math.max(serial, record.serial)
     for (const [digest, id] of record.tokens) if (known.has(id)) handedTokens.set(digest, id)
@@ -1238,6 +1241,37 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     settleAdoptions()
     changed()
     return true
+  }
+
+  /**
+   * Once the session host is done bringing shells back (main, after the unlock): a handed-over agent whose
+   * shell is not among them lost its CLI with that shell. Left active, it never connected again and, the new
+   * shells being numbered from local:1 again, showed on whichever new tab took its old id: every agent twice
+   * (2026-11-27 user report, docs/fix/2026-11-27-ghost-agents-after-update.md). It ends, on no shell, kept
+   * only for its messages; its handed-over credentials go.
+   */
+  function retireLostShells(keptShellIds) {
+    const kept = new Set(keptShellIds)
+    let retired = false
+    for (const id of handedShellAgents) {
+      const agent = agents.get(id)
+      if (!agent || kept.has(agent.shellId) || isConnected(id)) continue
+      for (const [digest, agentId] of handedTokens) if (agentId === id) handedTokens.delete(digest)
+      reconnects.delete(id)
+      clearUsage(id)
+      forgetHookData(id)
+      stopWaiting(id)
+      if (messages.some(message => message.from === id || message.to === id)) {
+        const { sleeping, ...rest } = agent
+        agents.set(id, { ...rest, shellId: '', active: false, status: 'ended' })
+      } else {
+        forgetAgent(id)
+      }
+      retired = true
+    }
+    handedShellAgents.clear()
+    for (const [digest, shellId] of handedShellTokens) if (!kept.has(shellId)) handedShellTokens.delete(digest)
+    if (retired) changed()
   }
 
   /** No record, an expired or unreadable one: take requests again; the surviving agents register anew */
@@ -1316,7 +1350,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
 
   return {
     ready, enableExternalBridge, pauseExternalBridge, register, stop, snapshot, unreadFor, unhandledFor,
-    exportHandoff, importHandoff, discardHandoff, awaitingHandoff: () => awaitingHandoff, agentsOfShell, adoptAgent, adopt, adoptShell,
+    exportHandoff, importHandoff, discardHandoff, retireLostShells, awaitingHandoff: () => awaitingHandoff, agentsOfShell, adoptAgent, adopt, adoptShell,
     sendAsUser: request => deliver(USER, request),
     // Main's request launcher has just opened this local shell. Its first request can wait for
     // the MCP lease to connect, including while the CLI is asking the user to trust the folder.

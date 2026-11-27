@@ -44,7 +44,7 @@ function canCancelSplitOrMerge(drag: Drag): boolean {
 }
 
 const refit = () => requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
-const FAILURES = { merge: '분할 칸을 병합하지 못했습니다', split: '터미널을 분할하지 못했습니다', close: '칸을 닫지 못했습니다' } as const
+const FAILURES = { merge: '분할 칸을 병합하지 못했습니다', split: '터미널을 분할하지 못했습니다', close: '칸을 닫지 못했습니다', 'close-tab': '탭을 닫지 못했습니다' } as const
 
 /** Alt+drag is captured before xterm starts a text selection or sends a mouse event to the shell. */
 export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElement | null>) {
@@ -77,7 +77,8 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
         gesture.turns = scribbleTurns(gesture.points.slice(gesture.scribbleFrom))
         gesture.scribble = gesture.turns >= SCRIBBLE_TURNS
       }
-      if (gesture.scribble) return leafCount(tree) > 1 ? { kind: 'close' } : null
+      // The only pane of a tab closes the tab (2026-11-27 user request), as 탭 닫기 does
+      if (gesture.scribble) return leafCount(tree) > 1 ? { kind: 'close' } : { kind: 'close-tab' }
       if (!target || target.isVacant) return null
       if (target.pane !== gesture.from) {
         const merge = mergePaneLayout(tree, gesture.from, target.pane, tab.paneSeq, kind)
@@ -95,7 +96,7 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
       if (nearStart && canCancelSplitOrMerge(gesture)) gesture.leftPane = false
       const action = actionAt(gesture)
       if (action && !nearStart) gesture.canReturnToCancel = true
-      const canCancel = action?.kind === 'close' || canCancelSplitOrMerge(gesture)
+      const canCancel = action?.kind === 'close' || action?.kind === 'close-tab' || canCancelSplitOrMerge(gesture)
       const cancelling = canCancel && nearStart
       return { action: cancelling ? null : action, canCancel, cancelling }
     }
@@ -164,12 +165,8 @@ export function usePaneGesture(tabId: string, container: RefObject<HTMLDivElemen
         return
       }
       const { from } = drag
-      const scribbled = drag.scribble
       stop(true)
-      if (!action) {
-        if (scribbled) toast.info('칸을 닫지 않았습니다', '칸이 하나뿐인 탭은 탭 닫기로 닫아 주세요.')
-        return
-      }
+      if (!action) return
       moving = true
       const failure = FAILURES[action.kind]
       const isVisible = () => !disposed && !isTabHostPreviewed(tabId) && root.isConnected && getComputedStyle(root).visibility === 'visible'
