@@ -220,6 +220,20 @@ function fixture(backendPort, frontendPort) {
       if (dividerVisible && previousOutputVisible) break
     }
     check('the restart divider and previous output can be reached in scrollback', dividerVisible && previousOutputVisible)
+    // 맨 위로 / 맨 아래로 over the server log (2026-11-27 user request)
+    const jump = label => `document.querySelector('[data-local-shell-id="${runningBackend}"] .terminal-scroll-jump button[aria-label="${label}"]')`
+    check('the server log offers 맨 위로 and 맨 아래로 once it has scrollback', await until(`!!${jump('맨 위로')} && !!${jump('맨 아래로')}`, 3000))
+    await click(...await center(jump('맨 위로')))
+    check('맨 위로 shows the first line of the log and the way back down stands out', await until(`
+      ${backendViewport}.scrollTop === 0 && ${jump('맨 위로')}.disabled && !${jump('맨 아래로')}.disabled &&
+      !${jump('맨 아래로')}.parentElement.hasAttribute('data-following')`, 3000))
+    await shot('local-development-log-jump')
+    await click(...await center(jump('맨 아래로')))
+    check('맨 아래로 returns to the newest line and the buttons fade while following it', await until(`(() => {
+      const view = ${backendViewport}
+      return view.scrollHeight - view.clientHeight - view.scrollTop < 2 && ${jump('맨 아래로')}.disabled &&
+        ${jump('맨 아래로')}.parentElement.hasAttribute('data-following')
+    })()`, 3000))
     await js(`${backendViewport}.scrollTop = ${backendViewport}.scrollHeight`)
 
     await send('Runtime.enable')
@@ -518,8 +532,7 @@ function fixture(backendPort, frontendPort) {
       ${inTerminal('VITE v5.4.0 ready')}`, 15000))
     check('once ready the row shows its port', await until(`${presetRow}?.dataset.status === 'running' &&
       /:\\d+/.test(${presetRow}.querySelector('.run-preset-pill[data-kind="port"]')?.textContent ?? '')`, 10000))
-    // 2026-11-26 user report: with its port and "오류 20", the row pushed 중지 and 더 보기 out of the sidebar.
-    // An error count is put beside the port for the measure: every button stays inside the row, the name gives way.
+    // An error count shares the details line with the port while the name and actions stay above.
     const fits = await js(`(() => {
       const row = ${presetRow}
       const state = row.querySelector('.run-preset-state')
@@ -530,16 +543,18 @@ function fixture(backendPort, frontendPort) {
       extra.dataset.kind = 'err'
       state.append(extra)
       const box = row.getBoundingClientRect()
-      const buttons = [...row.querySelectorAll('.run-preset-main > .run-preset-btn, .run-preset-main > button')]
+      const main = row.querySelector('.run-preset-main')
+      const buttons = [...main.querySelectorAll('.run-preset-btn')]
       const out = buttons.filter(button => { const b = button.getBoundingClientRect(); return b.width < 16 || b.right > box.right - 1 || b.left < box.left })
-      const name = row.querySelector('.run-preset-name')
+      const name = main.querySelector('.run-preset-name')
       const port = row.querySelector('.run-preset-pill[data-kind="port"]')
       const result = { buttons: buttons.length, portOpens: port?.tagName === 'BUTTON' && /브라우저로 열기/.test(port.getAttribute('aria-label') ?? ''), out: out.map(b => b.getAttribute('aria-label')), nameWidth: Math.round(name.getBoundingClientRect().width), row: Math.round(box.width),
-        parts: [...row.querySelector('.run-preset-main').children].map(el => el.className.split(' ')[0].replace('run-preset-', '') + ':' + Math.round(el.getBoundingClientRect().width)).join(' ') }
+        detailsBelow: state.getBoundingClientRect().top >= main.getBoundingClientRect().bottom &&
+          [port, extra].every(pill => pill.getBoundingClientRect().right <= box.right - 1) }
       extra.remove()
       return result
     })()`)
-    check('a running row with its port and an error count keeps all its buttons inside, its port opens the browser', fits.buttons >= 3 && fits.portOpens && fits.out.length === 0 && fits.nameWidth >= 20, JSON.stringify(fits))
+    check('a running row keeps its name and actions above the port and error count', fits.buttons >= 3 && fits.portOpens && fits.detailsBelow && fits.out.length === 0 && fits.nameWidth >= 20, JSON.stringify(fits))
     // The row tells the preset server's state (the tab of a local shell is its id)
     const presetShell = await js(`${activeTab}?.dataset.tabId`)
     // The tab keeps its status dot (seen with the sidebar folded); only the text chip is left to the card

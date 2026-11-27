@@ -203,6 +203,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localNestedRepositoriesPull: (request) => ipcRenderer.invoke('local-nested-repositories-pull', request),
   localNestedRepositoryBranches: (request) => ipcRenderer.invoke('local-nested-repository-branches', request),
   localNestedRepositorySwitchBranch: (request) => ipcRenderer.invoke('local-nested-repository-switch-branch', request),
+  localNestedRepositoryRemotes: (request) => ipcRenderer.invoke('local-nested-repository-remotes', request),
+  localNestedRepositorySetRemote: (request) => ipcRenderer.invoke('local-nested-repository-set-remote', request),
+  localNestedRepositoryRemoveRemote: (request) => ipcRenderer.invoke('local-nested-repository-remove-remote', request),
+  localNestedRepositoryTestRemote: (request) => ipcRenderer.invoke('local-nested-repository-test-remote', request),
   onLocalNestedRepositoriesProgress: (callback) => {
     const listener = (_event, progress) => callback(progress)
     ipcRenderer.on('local-nested-repositories-progress', listener)
@@ -388,6 +392,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentChatClose: (shellId) => ipcRenderer.send('agent-chat-close', shellId),
   agentChatReadClipboard: (shellId) => ipcRenderer.invoke('agent-chat-read-clipboard', shellId),
   agentChatPickImages: (shellId) => ipcRenderer.invoke('agent-chat-pick-images', shellId),
+  agentChatDropImages: (shellId, paths) => ipcRenderer.invoke('agent-chat-drop-images', shellId, paths),
   agentChatPreviewImage: (shellId, imageId) => ipcRenderer.invoke('agent-chat-preview-image', { shellId, imageId }),
   agentChatRemoveImage: (shellId, imageId) => ipcRenderer.send('agent-chat-remove-image', { shellId, imageId }),
   agentChatSend: (shellId, text, imageIds, retry, forceToken) => ipcRenderer.invoke('agent-chat-send', { shellId, text, imageIds, retry, forceToken }),

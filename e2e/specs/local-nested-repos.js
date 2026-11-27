@@ -67,14 +67,20 @@ function fixture() {
     check('Git parent keeps its worktree and recognizes its submodule', await until(
       `[...document.querySelectorAll('.local-project')].some(card => card.dataset.projectFolder === ${JSON.stringify(parent)}
         && card.querySelector('.local-worktree-row') && card.querySelector('.nested-repositories-toggle')?.textContent.includes('1개'))`))
-    check('default sidebar keeps the full preset name and shortens the branch without hiding the pull chip', await until(
+    check('the preset name and actions have their own line above the folder and Git details', await until(
       `(() => {
-        const name = ${preset}?.querySelector('.run-preset-name')
+        const line = ${preset}?.querySelector('.run-preset-main')
+        const name = line?.querySelector('.run-preset-name')
+        const details = ${preset}?.querySelector('.run-preset-details')
+        const folder = details?.querySelector('.run-preset-folder')
         const branch = ${chip('branch')}
         const incoming = ${chip('behind')}
         return name?.textContent === '카탈로그 실행' && name.scrollWidth === name.clientWidth
-          && branch?.title === 'feature/catalog' && branch.querySelector('.nested-repository-branch-label').textContent === 'catalog'
-          && incoming?.textContent === '↓1' && incoming.getBoundingClientRect().right <= ${preset}.getBoundingClientRect().right
+          && !!line.querySelector('[data-action="start"]') && !!line.querySelector('[aria-label="카탈로그 실행 더 보기"]')
+          && details?.contains(branch) && details.contains(incoming) && folder?.textContent === 'services/catalog/'
+          && details.getBoundingClientRect().top >= line.getBoundingClientRect().bottom
+          && branch.title === 'feature/catalog' && incoming.textContent === '↓1'
+          && incoming.getBoundingClientRect().right <= ${preset}.getBoundingClientRect().right
       })()`))
     await js(`${section}.querySelector('.nested-repositories-toggle').click()`)
     const trustSwitch = `${section}?.querySelector('[role="switch"]')`
@@ -172,6 +178,60 @@ function fixture() {
       `${branchDialog}?.querySelector('[role="alert"]')?.textContent.includes('수정하거나 스테이징한 파일')`)
       && git(catalog, 'branch', '--show-current') === 'main')
     await js(`[...${branchDialog}.querySelectorAll('button')].find(button => button.textContent === '취소').click()`)
+
+    // Remote addresses (2026-11-27 user request): a pull refused for an http:// remote is fixed from its row
+    const orders = path.join(project, 'orders')
+    const remoteRepo = path.join(profile, 'remote.git')
+    const httpUrl = 'http://git.example.invalid/team/orders.git'
+    fs.rmSync(path.join(orders, 'draft'))
+    git(orders, 'remote', 'set-url', 'origin', httpUrl)
+    await js(`${row('orders')}.querySelector('.nested-repository-more').click()`)
+    if (!await until(`!!${menuItem('최신으로 받기')}`)) throw new Error('Missing repository pull item')
+    await js(`${menuItem('최신으로 받기')}.click()`)
+    const remoteAction = `${row('orders')}?.querySelector('.nested-repository-result-action')`
+    check('a pull refused for an http:// remote offers to change the address', await until(
+      `${row('orders')}?.querySelector('[data-result="failed"]')?.textContent.includes('HTTPS, SSH') && !!${remoteAction}`))
+    await js(`${remoteAction}.click()`)
+    const remoteDialog = 'document.querySelector(".nested-remote-dialog")'
+    const origin = `${remoteDialog}?.querySelector('[data-remote="origin"]')`
+    const addForm = `${remoteDialog}?.querySelector('.nested-remote-add')`
+    const backup = `${remoteDialog}?.querySelector('[data-remote="backup"]')`
+    const button = (scope, label) => `[...(${scope}?.querySelectorAll('button') ?? [])].find(button =>
+      button.textContent.trim() === ${JSON.stringify(label)})`
+    check('the remote dialog shows the address and why fetching refuses it', await until(
+      `${origin}?.querySelector('input')?.value === ${JSON.stringify(httpUrl)} && ${origin}.textContent.includes('받을 수 없음')`))
+    await shot('local-nested-repos-remotes')
+    await js(`${button(origin, 'HTTPS 로 바꾸기')}.click()`)
+    const httpsUrl = httpUrl.replace('http://', 'https://')
+    check('HTTPS 로 바꾸기 fills in the https address', await until(`${origin}.querySelector('input').value === ${JSON.stringify(httpsUrl)}`))
+    await js(`${button(origin, '저장')}.click()`)
+    check('saving writes the address and clears the refusal in the dialog and the row', await until(
+      `${origin}?.textContent.includes('저장했습니다') && !${origin}.textContent.includes('받을 수 없음')
+        && !!${row('orders')} && !${row('orders')}.querySelector('[data-result="failed"]')`)
+      && git(orders, 'config', 'remote.origin.url') === httpsUrl)
+
+    const fill = async (label, text) => {
+      await js(`(() => { const input = ${addForm}.querySelector('[aria-label="${label}"]'); input.focus(); input.select() })()`)
+      await type(text)
+    }
+    await fill('새 원격 이름', 'secret')
+    await fill('새 원격 주소', 'https://user:pw@git.example.invalid/team/orders.git')
+    await js(`${button(addForm, '추가')}.click()`)
+    check('an address with a password is refused', await until(`${addForm}?.textContent.includes('비밀번호가 든 주소')`)
+      && !git(orders, 'remote').split(/\r?\n/).includes('secret'))
+    await fill('새 원격 이름', 'backup')
+    await fill('새 원격 주소', remoteRepo)
+    await js(`${button(addForm, '연결 확인')}.click()`)
+    check('the connection check reaches a remote on this PC before adding it', await until(`${addForm}?.textContent.includes('연결됨 · 브랜치')`, 15000))
+    await js(`${button(addForm, '추가')}.click()`)
+    check('a remote can be added', await until(`!!${backup}`) && git(orders, 'config', 'remote.backup.url') === remoteRepo)
+    await js(`${button(backup, '삭제')}.click()`)
+    check('removing a remote asks for a second press', await until(`!!${button(backup, '한 번 더 누르면 지웁니다')}`)
+      && git(orders, 'remote').split(/\r?\n/).includes('backup'))
+    await js(`${button(backup, '한 번 더 누르면 지웁니다')}.click()`)
+    check('the second press removes the remote', await until(`!${backup}`) && git(orders, 'remote') === 'origin')
+    await js(`${button(remoteDialog, '닫기')}.click()`)
+    if (!await until(`!${remoteDialog}`)) throw new Error('The remote dialog did not close')
 
     await js(`${row('services/catalog')}.querySelector('.nested-repository-more').click()`)
     if (!await until(`!!${menuItem('따로 로컬 작업으로 올리기')}`)) throw new Error('Missing repository promotion')

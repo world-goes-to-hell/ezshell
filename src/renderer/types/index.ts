@@ -180,7 +180,7 @@ export interface ConfigDefinition {
 export type RemoteFileLoaded = RemoteFileLoadedBase & (
   | { kind: 'text'; editable: true; content: string; canWrite: boolean; draft?: RemoteFileDraft }
   /** `pace: 'command'`: each look runs a command on the server (a container's log), so looks are further apart */
-  | { kind: 'text'; editable: false; content: string; truncated: boolean; size: number; follow: RemoteFileFollow; pace?: 'command' }
+  | { kind: 'text'; editable: false; content: string; truncated: boolean; size: number; follow?: RemoteFileFollow; pace?: 'command' }
   | { kind: 'image' | 'pdf'; mime: string; size: number; data: Uint8Array<ArrayBuffer> }
 )
 
@@ -856,6 +856,20 @@ export interface NestedRepositoryBranch {
   current: boolean
 }
 
+/** A remote in the repository's own config (password parts shown as ***) */
+export interface NestedRepositoryRemote {
+  name: string
+  url: string
+  pushUrl?: string
+  /** Why fetching refuses this address (http://, a share, ...) */
+  problem?: string
+  hasPassword?: boolean
+}
+
+export type NestedRepositoryRemoteResult =
+  | { success: true; remotes: NestedRepositoryRemote[]; status: NestedRepositoryStatus }
+  | { success: false; error: string }
+
 interface NestedRepositoryRequest {
   project: string
   root: string
@@ -1413,6 +1427,14 @@ declare global {
         Promise<{ success: true; branches: NestedRepositoryBranch[] } | { success: false; error: string }>
       localNestedRepositorySwitchBranch?: (request: NestedRepositoryRequest & { branch: Pick<NestedRepositoryBranch, 'name' | 'remote'> }) =>
         Promise<{ success: true; status: NestedRepositoryStatus } | { success: false; error: string }>
+      localNestedRepositoryRemotes?: (request: NestedRepositoryRequest) =>
+        Promise<{ success: true; remotes: NestedRepositoryRemote[] } | { success: false; error: string }>
+      localNestedRepositorySetRemote?: (request: NestedRepositoryRequest & {
+        remote: { name: string; url?: string; pushUrl?: string; add?: boolean }
+      }) => Promise<NestedRepositoryRemoteResult>
+      localNestedRepositoryRemoveRemote?: (request: NestedRepositoryRequest & { name: string }) => Promise<NestedRepositoryRemoteResult>
+      localNestedRepositoryTestRemote?: (request: NestedRepositoryRequest & { target: { name?: string; url?: string } }) =>
+        Promise<{ success: true; heads: number } | { success: false; error: string }>
       onLocalNestedRepositoriesProgress?: (callback: (progress: { requestId: string; result: NestedRepositoryPullResult }) => void) => () => void
       localProjectDevelopmentStart: (options: { folder: string; id: string; cols: number; rows: number; includeSource: boolean; install: boolean }) =>
         Promise<{ success: true; id: string; name: string; cwd: string; label: string; development: LocalDevelopmentRun } | { success: false; error: string }>
@@ -1507,6 +1529,8 @@ declare global {
         { ok: true; kind: 'text'; text: string } | AgentChatImagesResult
       >
       agentChatPickImages?: (shellId: string) => Promise<AgentChatImagesResult>
+      /** Pictures dropped on the chat, by their paths on this PC (main checks them again) */
+      agentChatDropImages?: (shellId: string, paths: string[]) => Promise<AgentChatImagesResult>
       agentChatPreviewImage?: (shellId: string, imageId: string) => Promise<{ ok: true; data: Uint8Array<ArrayBuffer> } | { ok: false; error: string }>
       agentChatRemoveImage?: (shellId: string, imageId: string) => void
       agentChatSend?: (shellId: string, text: string, imageIds?: string[], retry?: { acceptedAt: number; transcriptId: string; ignoreIds: string[] }, forceToken?: string) => Promise<AgentChatSendResult>

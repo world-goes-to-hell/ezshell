@@ -189,7 +189,8 @@
 }
 
 /* Parts of a dialog with a fill of their own would show as a different shade on the dialog */
-[data-surface="glass"] .settings-modal-header {
+[data-surface="glass"] .settings-modal-header,
+[data-surface="glass"] .settings-tabs-list {
   background: transparent;
 }
 

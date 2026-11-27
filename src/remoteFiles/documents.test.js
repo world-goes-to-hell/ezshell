@@ -489,6 +489,38 @@ describe('files on this PC', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('someone else\n')
   })
 
+  it('lets Explorer preview the end of a large local log without write or follow access', async () => {
+    const file = path.join(dir, 'service.log.1')
+    fs.writeFileSync(file, 'FIRST LINE\n' + 'INFO repeated message\n'.repeat(260000) + 'ERROR last line\n')
+    const docs = setup()
+    const { docId } = docs.registerLocal({ root: dir, path: file, mode: 'preview', previewText: true })
+    docs.attach(docId, 7)
+    const loaded = await docs.load(7, docId)
+    expect(loaded).toMatchObject({ local: true, kind: 'text', editable: false, mode: 'preview', truncated: true })
+    expect(loaded.follow).toBeUndefined()
+    expect(loaded.content).not.toContain('FIRST LINE')
+    expect(loaded.content.endsWith('ERROR last line\n')).toBe(true)
+    expect(() => docs.review(7, docId, 'replacement')).toThrow()
+  })
+
+  it('does not show a large binary file as text even when its tail is readable', async () => {
+    const file = path.join(dir, 'binary.dat')
+    fs.writeFileSync(file, '\0' + 'INFO repeated message\n'.repeat(260000))
+    const docs = setup()
+    const { docId } = docs.registerLocal({ root: dir, path: file, mode: 'preview', previewText: true })
+    docs.attach(docId, 7)
+    await expect(docs.load(7, docId)).rejects.toThrow(localRead.MESSAGES.notText)
+  })
+
+  it('keeps the end of a long UTF-8 line even when its last byte is a newline', async () => {
+    const file = path.join(dir, 'output')
+    fs.writeFileSync(file, '한'.repeat(2 * 1024 * 1024) + '\n')
+    const { text, truncated } = await localRead.readTextPreview(file)
+    expect(truncated).toBe(true)
+    expect(text.startsWith('한')).toBe(true)
+    expect(text.endsWith('한\n')).toBe(true)
+  })
+
   it('offers the file at Git HEAD in the backup list, readable by name only', async () => {
     const file = path.join(dir, 'a.txt')
     fs.writeFileSync(file, 'now\n')

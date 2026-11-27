@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { droppedFilePaths, dropUploadStatus } from './droppedFiles'
+import { droppedFilePaths, dropUploadStatus, terminalDropText, CHAT_IMAGE_FILE } from './droppedFiles'
 
 describe('droppedFilePaths', () => {
   it('uses file.path where the runtime still has it', () => {
@@ -30,3 +30,35 @@ describe('dropUploadStatus', () => {
     expect(dropUploadStatus(3, 0)).toBe('3개 파일 업로드 시작')
   })
 })
+
+describe('terminalDropText', () => {
+  it('pastes a plain path as it is, with a space to type on after it', () => {
+    expect(terminalDropText(['C:\\work\\shot.png'])).toBe('C:\\work\\shot.png ')
+  })
+
+  it('quotes a path the shell would split or read, as a pasted screenshot path is', () => {
+    expect(terminalDropText(['C:\\My Files\\a.txt'])).toBe("'C:\\My Files\\a.txt' ")
+    expect(terminalDropText(['D:\\R&D\\b.txt'])).toBe("'D:\\R&D\\b.txt' ")
+    expect(terminalDropText(['D:\\x (1)\\c.txt'])).toBe("'D:\\x (1)\\c.txt' ")
+    expect(terminalDropText(["D:\\it's\\d.txt"])).toBe("'D:\\it''s\\d.txt' ")
+    expect(terminalDropText(["/home/me/it's here.txt"], 'posix')).toBe("'/home/me/it'\\''s here.txt' ")
+  })
+
+  it('puts several files on one line, separated by spaces', () => {
+    expect(terminalDropText(['C:\\a.png', 'C:\\b c.png'])).toBe("C:\\a.png 'C:\\b c.png' ")
+  })
+
+  it('pastes nothing for no path, and leaves out a path with a line break that would press Enter', () => {
+    expect(terminalDropText([])).toBe('')
+    expect(terminalDropText(['', 'C:\\a\r\nb.txt'])).toBe('')
+    expect(terminalDropText(['C:\\a\nb.txt', 'C:\\ok.txt'])).toBe('C:\\ok.txt ')
+  })
+})
+
+describe('CHAT_IMAGE_FILE', () => {
+  it('takes the pictures the chat can attach', () => {
+    expect(['a.png', 'B.JPG', 'c.jpeg'].every(name => CHAT_IMAGE_FILE.test(name))).toBe(true)
+    expect(['d.gif', 'e.txt', 'png'].some(name => CHAT_IMAGE_FILE.test(name))).toBe(false)
+  })
+})
+

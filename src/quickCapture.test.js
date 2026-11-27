@@ -141,6 +141,27 @@ describe('the quick screen capture', () => {
     expect(await capture.start()).toBe(true)
   })
 
+  it('waits for the effects to be hidden and releases only the cancelled capture while it waits', async () => {
+    let completeHide
+    const ready = new Promise(resolve => { completeHide = resolve })
+    const resume = vi.fn()
+    const nextResume = vi.fn()
+    const pausePointerEffects = vi.fn().mockReturnValueOnce({ ready, resume })
+      .mockReturnValueOnce({ ready: Promise.resolve(), resume: nextResume })
+    const { capture, desktopCapturer, windows } = setup(undefined, { pausePointerEffects })
+    const first = capture.start()
+    expect(desktopCapturer.getSources).not.toHaveBeenCalled()
+    capture.cancelCapture()
+    const next = capture.start()
+    completeHide()
+    expect(await first).toBe(false)
+    expect(await next).toBe(true)
+    expect(resume).toHaveBeenCalledOnce()
+    expect(nextResume).toHaveBeenCalledOnce()
+    expect(windows[0].destroy.mock.invocationCallOrder[0]).toBeLessThan(nextResume.mock.invocationCallOrder[0])
+    expect(desktopCapturer.getSources).toHaveBeenCalledOnce()
+  })
+
   it('never captures while locked or opens multiple overlays', async () => {
     const { capture, desktopCapturer, clipboard, windows, isAvailable } = setup()
     isAvailable.mockReturnValue(false)

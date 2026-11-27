@@ -40,3 +40,21 @@ export function dropUploadStatus(queued: number, missing: number): string {
   if (missing > 0) return `${queued}개 파일 업로드 시작 · ${missing}개는 위치를 알 수 없어 제외`
   return `${queued}개 파일 업로드 시작`
 }
+
+/** Images the chat attaches as pictures (as its 이미지 첨부 button does); other dropped files go in as paths */
+export const CHAT_IMAGE_FILE = /\.(png|jpe?g)$/i
+
+/**
+ * What a drop on a local terminal types: the files' paths on one line, quoted where the shell would split or
+ * read them, then a space (2026-11-27 user request). The same quoting as a pasted screenshot's path
+ * (src/ipc/localTerminalClipboard.js saveImage), which Claude Code and Codex take as an attachment. A path
+ * with a control character is left out: a line break in it would press Enter.
+ */
+export function terminalDropText(paths: readonly string[], platform: 'win32' | 'posix' = 'win32'): string {
+  const quoted = paths
+    .filter(item => item && !/[\x00-\x1f\x7f]/.test(item))
+    .map(item => platform === 'win32'
+      ? (/[\s'&()$!;`,{}@#]/.test(item) ? `'${item.replace(/'/g, "''")}'` : item)
+      : (/[^\w./-]/.test(item) ? `'${item.replace(/'/g, "'\\''")}'` : item))
+  return quoted.length ? quoted.join(' ') + ' ' : ''
+}

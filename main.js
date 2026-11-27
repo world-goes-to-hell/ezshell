@@ -20,6 +20,11 @@ if (!app.commandLine.hasSwitch('user-data-dir')) {
   }));
 }
 
+const isWindows = process.platform === 'win32';
+const explorerFile = isWindows ? app.commandLine.getSwitchValue('open-explorer-file') : '';
+// Explorer starts another process for each file. Forward the request before starting any services.
+if (isWindows && !app.requestSingleInstanceLock({ explorerFile })) process.exit(0);
+
 // Windows groups taskbar buttons by AppUserModelID. The installer's shortcuts (pinned, Start menu)
 // carry build.appId; the windows had no ID of their own, and a live-view window showed up as a second
 // ezShell button (Electron can fall back to its own "electron.app.<name>" ID). Keep in sync with
@@ -94,6 +99,7 @@ const { withHostKeyCheck, hostKeyMessage } = require('./src/hostKeys/hostKeyChec
 const { createHostKeyPrompter } = require('./src/hostKeys/hostKeyPrompt.js');
 
 let mainWindow;
+let mainWindowRevealed = false;
 
 // Window / taskbar icon, copied next to the bundle at build time (electron.vite.config.ts). Set on every window so
 // the taskbar shows it even where the exe still carries Electron's icon (`npm run dev` runs electron.exe).
@@ -293,6 +299,7 @@ function createStartupSplash(placement, rendererUrl) {
 }
 
 function createWindow() {
+  mainWindowRevealed = false;
   // Opens where it was closed (also after an update restarts the app), if that place is still on a screen
   const windowStatePath = path.join(app.getPath('userData'), 'window-state.json');
   const lastPlace = windowState.usableState(
@@ -352,6 +359,8 @@ function createWindow() {
     clearTimeout(startupTimeout);
     if (lastPlace?.isMaximized && !mainWindowFill) win.maximize();
     win.show();
+    mainWindowRevealed = true;
+    void openExplorerFiles();
     if (rendererUrl) win.webContents.openDevTools();
   };
   const startupTimeout = setTimeout(() => {
@@ -437,16 +446,16 @@ const { setupAutoUpdater, installsUpdateOnQuit } = require('./src/ipc/updates.js
 });
 
 // App windows show only the app's own page. The browser view has a separate session and policy.
-app.on('web-contents-created', (event, contents) => {
-  if (browserReview.ownsPage(contents)) return;
-  const devUrls = [
+const rendererNavigation = {
+  rendererFile: path.join(__dirname, '../renderer/index.html'),
+  devUrls: [
     process.env.ELECTRON_RENDERER_URL,
     process.argv.includes('--dev') ? DEV_RENDERER_URL : null
-  ].filter(Boolean);
-  navigationGuard.guardWebContents(contents, {
-    rendererFile: path.join(__dirname, '../renderer/index.html'),
-    devUrls
-  });
+  ].filter(Boolean)
+};
+app.on('web-contents-created', (event, contents) => {
+  if (browserReview.ownsPage(contents)) return;
+  navigationGuard.guardWebContents(contents, rendererNavigation);
 });
 
 app.whenReady().then(() => {
@@ -543,6 +552,43 @@ const remoteFileIpc = registerRemoteFileIpc({
   }
 });
 
+const pendingExplorerFiles = new Set(explorerFile ? [explorerFile] : []);
+let openingExplorerFiles = false;
+
+async function openExplorerFiles() {
+  if (!mainWindowRevealed || isAppLocked || openingExplorerFiles || !pendingExplorerFiles.size) return;
+  openingExplorerFiles = true;
+  try {
+    const { resolveExplorerFile } = require('./src/localFiles/explorerOpen.js');
+    for (const requested of pendingExplorerFiles) {
+      if (isAppLocked) break;
+      const file = await resolveExplorerFile(requested);
+      if (isAppLocked) break;
+      pendingExplorerFiles.delete(requested);
+      const result = file && remoteFileIpc.openLocalFile(file.path, '이 PC', { previewText: file.previewText });
+      if (!result?.ok) {
+        dialog.showErrorBox('ezShell로 열기', result?.error ?? '이 PC의 파일을 찾거나 열 수 없습니다.');
+      }
+    }
+  } finally {
+    openingExplorerFiles = false;
+  }
+}
+
+if (isWindows) {
+  app.on('second-instance', (_event, _args, _cwd, data) => {
+    const requested = data?.explorerFile;
+    if (typeof requested === 'string' && requested && pendingExplorerFiles.size < 20) {
+      pendingExplorerFiles.add(requested);
+    }
+    if (!requested || isAppLocked) {
+      if (mainWindow?.isDestroyed()) createWindow();
+      else if (mainWindowRevealed) revealMainWindow();
+    }
+    void openExplorerFiles();
+  });
+}
+
 // ==================== DB 클라이언트 창 ====================
 // One window per database connection, reached through a channel of the tab's SSH connection
 // (no port is opened on this PC). Read-only; see src/dbClient.
@@ -603,6 +649,10 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
   },
   isAvailable: () => process.platform === 'win32' && !isAppLocked && mainWindow && !mainWindow.isDestroyed()
     && !(mainWindow.isFocused() && shortcutRecorder === mainWindow.webContents),
+  pausePointerEffects: () => globalPointerEffects.pauseForCapture(BrowserWindow.getAllWindows()
+    .filter(win => win.isVisible() && !win.isMinimized())
+    .map(win => win.webContents)
+    .filter(contents => navigationGuard.isAllowedNavigation(contents.getURL(), rendererNavigation))),
   listAgents: () => agentMessages.snapshot().agents
     .filter(agent => agent.active && agent.kind !== 'antigravity' && localShells?.chatAgentId(agent.shellId) === agent.id)
     .map(({ id, shellId, kind, cwd, role, status }) => ({ id, shellId, kind, cwd, role, status })),
@@ -1240,7 +1290,7 @@ const agentChatIpc = require('./src/agentChat/ipc.js').registerAgentChatIpc({
       const failure = await shell.openPath(target);
       if (failure) throw new Error(failure);
     },
-    openLocalFile: (target, line) => remoteFileIpc.openLocalFile(target, '에이전트 대화', line)
+    openLocalFile: (target, line) => remoteFileIpc.openLocalFile(target, '에이전트 대화', { line })
   }
 });
 
@@ -1480,6 +1530,7 @@ ipcMain.handle('setup-master-password', async (event, { password }) => {
   runPresets.resumeReloads();
   localShells?.wakeInboxes();
   void remoteAccess.start();
+  void openExplorerFiles();
 
   return { success: true };
 });
@@ -1504,6 +1555,7 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
     localShells?.wakeInboxes();
     resealSessionsFile();
     void remoteAccess.start();
+    void openExplorerFiles();
     return { success: true };
   }
 

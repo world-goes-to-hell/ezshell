@@ -44,6 +44,8 @@ import { allSlashCommands, draftFor, isSlashCommand, matchSlashCommands, type Sl
 import { useAgentScreenReturnStore } from '../../stores/agentScreenReturnStore'
 import { useAgentScreenWatch } from './useAgentScreenWatch'
 import { ClaudeProfileMenu } from './ClaudeProfileMenu'
+import { CHAT_IMAGE_FILE, terminalDropText } from '../../lib/droppedFiles'
+import { dropPlatform, useFileDrop } from '../../hooks/useFileDrop'
 import type { ChatAppearance } from '../../themes/chatThemes'
 import './AgentChat.css'
 import './AgentChatThemes.css'
@@ -895,11 +897,12 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     box.focus()
   }
 
-  const readIntoDraft = async (box: HTMLTextAreaElement, source: 'clipboard' | 'files') => {
-    if (antigravity && source === 'files') return
+  const readIntoDraft = async (box: HTMLTextAreaElement, source: 'clipboard' | 'files' | 'drop', dropped: string[] = []) => {
+    if (antigravity && source !== 'clipboard') return
+    const dropImages = window.electronAPI.agentChatDropImages
     const read = source === 'clipboard'
       ? window.electronAPI.agentChatReadClipboard
-      : window.electronAPI.agentChatPickImages
+      : source === 'drop' ? (dropImages && ((id: string) => dropImages(id, dropped))) : window.electronAPI.agentChatPickImages
     if (!read || box.readOnly || pastePending.current || sendPending.current) return
     const errorTitle = source === 'clipboard' ? '붙여넣기 실패' : '이미지 첨부 실패'
     const { value: original, selectionStart, selectionEnd } = box
@@ -911,7 +914,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
       setAttachments(current => current.filter(image => used.has(image)))
       return true
     }
-    if (source === 'files') reclaimUnused()
+    if (source !== 'clipboard') reclaimUnused()
     if (!attachments.length) nextAttachmentNumber.current = 0
     pastePending.current = true
     setPasting(true)
@@ -959,9 +962,28 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     } finally {
       pastePending.current = false
       setPasting(false)
-      if (source === 'files' && boxRef.current === box) box.focus()
+      if (source !== 'clipboard' && boxRef.current === box) box.focus()
     }
   }
+
+  // Files dropped on the chat (2026-11-27 user request): pictures are attached as by 이미지 첨부, other files
+  // go in at the caret as their paths (quoted as in the terminal)
+  const dropIntoDraft = (paths: string[]) => {
+    const box = boxRef.current
+    if (!box || box.readOnly || composerBlocked || pastePending.current || sendPending.current) {
+      toast.error('첨부하지 못했습니다', '지금은 입력칸에 넣을 수 없습니다.')
+      return
+    }
+    const images = antigravity || !window.electronAPI.agentChatDropImages ? [] : paths.filter(item => CHAT_IMAGE_FILE.test(item))
+    const text = terminalDropText(paths.filter(item => !images.includes(item)), dropPlatform())
+    if (text) {
+      const start = box.selectionStart
+      placeDraft(box, box.value.slice(0, start) + text + box.value.slice(box.selectionEnd), start + text.length)
+    }
+    if (images.length) void readIntoDraft(box, 'drop', images)
+    else box.focus()
+  }
+  const fileDrop = useFileDrop(dropIntoDraft, !isOver)
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     if (antigravity || composerBlocked || !window.electronAPI.agentChatReadClipboard
@@ -1270,7 +1292,10 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     <div className="agent-chat-cover" ref={coverRef} tabIndex={-1} role="region" aria-label="에이전트 채팅"
       data-chat-theme={appearance?.id} data-chat-bubbles={appearance?.bubbles || undefined}
       style={appearance?.style}
-      onKeyDown={onCoverKeyDown} onContextMenu={onContextMenu}>
+      onKeyDown={onCoverKeyDown} onContextMenu={onContextMenu} {...fileDrop.handlers}>
+      {fileDrop.dropping && (
+        <div className="file-drop-overlay" aria-hidden="true">{antigravity ? '놓으면 파일 경로를 입력칸에 넣습니다' : '놓으면 첨부합니다 (이미지는 사진으로, 다른 파일은 경로로)'}</div>
+      )}
       <div className="agent-chat-parent" inert={Boolean(subagent)}>
       <header className="agent-chat-head">
         {kind && ProviderIcon && (

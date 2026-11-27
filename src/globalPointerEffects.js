@@ -48,6 +48,8 @@ function createGlobalPointerEffects({ BrowserWindow, getScreen, preload, loadPag
   let screen
   let displays = []
   let paused = true
+  let notificationPaused = true
+  let capturePause = null
   let timer
   let lastPoint = null
   let lastMoveAt = 0
@@ -186,7 +188,12 @@ function createGlobalPointerEffects({ BrowserWindow, getScreen, preload, loadPag
 
   function onNotificationState(state) {
     if (!config) return
-    const next = state === null || (state >= 1 && state <= 4)
+    notificationPaused = state === null || (state >= 1 && state <= 4)
+    updatePause()
+  }
+
+  function updatePause() {
+    const next = notificationPaused || capturePause !== null
     if (next === paused) return
     paused = next
     lastSent = lastPoint = null
@@ -205,6 +212,32 @@ function createGlobalPointerEffects({ BrowserWindow, getScreen, preload, loadPag
     updatePolling()
   }
 
+  /** Hide both the desktop effects and the app's own canvas before reading the screen. */
+  function pauseForCapture(renderers) {
+    const settle = !paused || renderers.length > 0
+    const token = {}
+    capturePause = token
+    updatePause()
+    const hidden = Promise.all(renderers.map(async contents => {
+      // Each insertion has its own key, so an earlier capture's cleanup cannot unhide the next one.
+      let key
+      try { key = await contents.insertCSS('.pointer-effects-canvas { display: none !important; }') } catch { /* Navigated or closed */ }
+      return () => {
+        if (key && !contents.isDestroyed()) void contents.removeInsertedCSS(key).catch(() => {})
+      }
+    }))
+    return {
+      ready: settle ? hidden : null,
+      resume() {
+        if (capturePause === token) {
+          capturePause = null
+          updatePause()
+        }
+        void hidden.then(remove => { for (const restore of remove) restore() })
+      }
+    }
+  }
+
   function stop() {
     wanted = null
     halt()
@@ -213,7 +246,7 @@ function createGlobalPointerEffects({ BrowserWindow, getScreen, preload, loadPag
   function halt() {
     if (!config) return
     config = null
-    paused = true
+    paused = notificationPaused = true
     updatePolling()
     setWatching(false)
     for (const event of DISPLAY_EVENTS) screen.removeListener(event, syncDisplays)
@@ -247,7 +280,7 @@ function createGlobalPointerEffects({ BrowserWindow, getScreen, preload, loadPag
   }
 
   return {
-    configure, onNotificationState, stop,
+    configure, onNotificationState, pauseForCapture, stop,
     /** The app locked: no effects until it is unlocked, then the same choices (the window sends them only on change) */
     suspend: halt,
     resume() { if (wanted && !config) configure(wanted) },

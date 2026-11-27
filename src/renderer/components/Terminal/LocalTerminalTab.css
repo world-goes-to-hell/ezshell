@@ -217,3 +217,20 @@
   color: var(--accent);
   cursor: pointer;
 }
+
+/* Files dragged over a local terminal or its chat (hooks/useFileDrop.ts): where they go when let go */
+.file-drop-overlay {
+  position: absolute;
+  inset: 6px;
+  z-index: 20; /* above the chat cover (5) and the pane's focus outline (10) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-md, 6px);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+}

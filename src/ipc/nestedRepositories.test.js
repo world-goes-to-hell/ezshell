@@ -594,3 +594,78 @@ test('requests confirmation before a branch switch with a local filter configura
   allow = true
   expect(await switchBranch()).toMatchObject({ branch: 'other' })
 }, 15000)
+
+test('lists and changes remotes with the same address checks as fetching', async () => {
+  const fixture = await fixtureDirectory()
+  const project = path.join(fixture, 'work')
+  const directory = path.join(project, 'service')
+  const bare = path.join(fixture, 'remote.git')
+  await git(fixture, 'init', '--bare', '-b', 'main', bare)
+  await git(fixture, 'init', '-b', 'main', directory)
+  await commit(directory, 'initial')
+  await git(bare, 'fetch', directory, 'main:main')
+  await git(directory, 'remote', 'add', 'origin', 'http://git.example.invalid/team/service.git')
+  await git(directory, 'config', 'remote.origin.pushurl', 'git@git.example.invalid:team/service.git')
+  await git(directory, 'remote', 'add', 'mirror', 'https://user:secret@git.example.invalid/team/service.git')
+  const commands = []
+  const worker = createNestedRepositories({ discover, runGit: (cwd, args, options) => {
+    commands.push({ args, options })
+    return nestedGit.git(cwd, args, options)
+  } })
+
+  const listed = await worker.remotes(project, 'service', check)
+  expect(listed).toEqual([
+    { name: 'origin', url: 'http://git.example.invalid/team/service.git', pushUrl: 'git@git.example.invalid:team/service.git',
+      problem: expect.stringContaining('HTTPS, SSH') },
+    { name: 'mirror', url: 'https://user:***@git.example.invalid/team/service.git', hasPassword: true }
+  ])
+  expect(JSON.stringify(listed)).not.toContain('secret')
+  await expect(worker.remotes(project, '../remote.git', check)).rejects.toThrow('발견된 하위 저장소')
+
+  const change = remote => worker.setRemote(project, 'service', remote, check)
+  await expect(change({ name: 'origin', url: 'http://git.example.invalid/other.git' })).rejects.toThrow('HTTPS, SSH')
+  await expect(change({ name: 'origin', url: 'https://user:pass@git.example.invalid/x.git' })).rejects.toThrow('비밀번호')
+  await expect(change({ name: 'origin', url: '\\\\server\\share\\repo.git' })).rejects.toThrow('UNC')
+  await expect(change({ name: 'origin', url: '--upload-pack=calc' })).rejects.toThrow('원격 주소')
+  await expect(change({ name: 'unknown', url: 'https://git.example.invalid/x.git' })).rejects.toThrow('목록')
+  await expect(change({ name: '-x', url: bare, add: true })).rejects.toThrow('원격 이름')
+  await expect(change({ name: 'mirror', url: bare, add: true })).rejects.toThrow('이미 있는')
+  expect(await git(directory, 'config', 'remote.origin.url')).toBe('http://git.example.invalid/team/service.git')
+
+  const changed = await change({ name: 'origin', url: 'https://git.example.invalid/team/service.git', pushUrl: '' })
+  expect(changed.remotes[0]).toEqual({ name: 'origin', url: 'https://git.example.invalid/team/service.git' })
+  expect(changed.status).toMatchObject({ folder: 'service', branch: 'main' })
+  expect(await git(directory, 'config', '--get-all', 'remote.origin.pushurl').catch(() => '')).toBe('')
+  await change({ name: 'origin', pushUrl: 'ssh://git@git.example.invalid/team/service.git' })
+  expect(await git(directory, 'config', 'remote.origin.pushurl')).toBe('ssh://git@git.example.invalid/team/service.git')
+  expect(await git(directory, 'config', 'remote.origin.url')).toBe('https://git.example.invalid/team/service.git')
+
+  const added = await change({ name: 'backup', url: bare, add: true })
+  expect(added.remotes.map(remote => remote.name)).toEqual(['origin', 'mirror', 'backup'])
+  expect(await worker.testRemote(project, 'service', { url: bare }, check)).toEqual({ heads: 1 })
+  expect(await worker.testRemote(project, 'service', { name: 'backup' }, check)).toEqual({ heads: 1 })
+  await expect(worker.testRemote(project, 'service', { url: 'http://git.example.invalid/x.git' }, check)).rejects.toThrow('HTTPS, SSH')
+  await expect(worker.testRemote(project, 'service', { name: 'unknown' }, check)).rejects.toThrow('목록')
+  expect(commands.filter(command => command.options?.network).map(command => command.args[0])).toEqual(['ls-remote', 'ls-remote'])
+
+  const removed = await worker.removeRemote(project, 'service', { name: 'mirror' }, check)
+  expect(removed.remotes.map(remote => remote.name)).toEqual(['origin', 'backup'])
+  await expect(worker.removeRemote(project, 'service', { name: 'mirror' }, check)).rejects.toThrow('목록')
+}, 20000)
+
+test('asks to confirm risky repository settings before changing a remote', async () => {
+  const project = await fixtureDirectory()
+  const directory = path.join(project, 'service')
+  await git(project, 'init', '-b', 'main', directory)
+  await commit(directory, 'initial')
+  await git(directory, 'remote', 'add', 'origin', 'http://git.example.invalid/service.git')
+  await git(directory, 'config', '--local', 'filter.fixture.smudge', 'git')
+  let allow = false
+  const worker = createNestedRepositories({ discover, confirmSettings: async () => allow })
+  const change = () => worker.setRemote(project, 'service', { name: 'origin', url: 'https://git.example.invalid/service.git' }, check)
+  await expect(change()).rejects.toThrow('저장소 설정 확인 필요')
+  expect(await git(directory, 'config', 'remote.origin.url')).toBe('http://git.example.invalid/service.git')
+  allow = true
+  await change()
+  expect(await git(directory, 'config', 'remote.origin.url')).toBe('https://git.example.invalid/service.git')
+}, 15000)

@@ -50,3 +50,7 @@
 
 - main은 `claude-profiles.json`에 이름과 ID를 저장한다. 추가 계정은 ID별 폴더를 해당 Claude 실행의 `CLAUDE_CONFIG_DIR`로 지정한다. 이 폴더의 인증 정보와 설정은 Claude Code가 관리한다. 계정 선택 IPC는 잠금 해제 상태의 본창 주 프레임에서 받으며, 화면으로는 이름과 ID를 돌려준다.
 - 채팅 기록과 사용자 슬래시 명령은 해당 셸의 프로필 폴더에서 찾고, 질문별 Claude 한도는 프로필별 상태 줄 보고로 계산한다. 기록 목록과 탭 복원은 `claude:<프로필 ID>:<세션 ID>`로 지정한다. 기본 계정과 Codex는 기존 기록 키를 쓴다. Windows 세션 보관 프로세스로 셸을 이어 붙일 때도 프로필 ID를 함께 넘긴다.
+
+## 파일 끌어 놓기
+
+채팅 화면에 파일을 끌어 놓으면 PNG·JPG 는 `이미지 첨부` 처럼 첨부 이미지가 되고, 그 밖의 파일은 입력칸의 커서 자리에 경로로 들어간다 (`AgentChatCover.tsx` 의 `dropIntoDraft`, `hooks/useFileDrop.ts`). 이미지는 IPC `agent-chat-drop-images`(경로 목록)로 main 이 읽는다. 바꾸면 안 되는 것: main 은 경로를 다시 검사한다. 1~8개, `isLocalFilePath`(네트워크·장치 경로 거부), `.png`/`.jpg`/`.jpeg` 만 받고, 읽기는 `이미지 첨부` 와 같은 `imageDrafts.pick` 이 한다 (일반 파일인지·크기·디코딩 검사). Antigravity 채팅은 이미지를 받지 않아 모든 파일이 경로로 들어간다.

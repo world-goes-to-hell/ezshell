@@ -1,0 +1,54 @@
+/* Jump buttons over a server's start log (TerminalScrollJump.tsx). Bottom right, clear of xterm's scrollbar;
+   faint while the log follows its newest line, plain once the user has scrolled up into it. */
+.terminal-scroll-jump {
+  position: absolute;
+  right: 18px;
+  bottom: 10px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md, 6px);
+  background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  transition: opacity 0.15s ease;
+}
+
+.terminal-scroll-jump[data-following] {
+  opacity: 0.45;
+}
+
+.terminal-scroll-jump[data-following]:hover,
+.terminal-scroll-jump:focus-within {
+  opacity: 1;
+}
+
+.terminal-scroll-jump > button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.terminal-scroll-jump > button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-primary);
+}
+
+.terminal-scroll-jump > button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Scrolled up while the server keeps writing: the way back to the newest line stands out */
+.terminal-scroll-jump:not([data-following]) > button:last-child {
+  color: var(--accent);
+}

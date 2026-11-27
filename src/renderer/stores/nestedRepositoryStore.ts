@@ -251,6 +251,22 @@ export async function switchNestedRepositoryBranch(root: string, folder: string,
   })
 }
 
+/** A repository read again after its remotes changed: the old fetch or pull failure no longer applies */
+export function showNestedRepositoryStatus(root: string, folder: string, status: NestedRepositoryStatus) {
+  const id = pathKey(root)
+  const group = useNestedRepositories.getState().groups[id]
+  if (!group) return
+  revisions.set(pathKey(group.project), ++sequence)
+  useNestedRepositories.setState(state => {
+    const progress = state.progress[id] ?? {}
+    return {
+      ...updatedRepositories(state, id, [status]),
+      progress: { ...state.progress, [id]: Object.fromEntries(Object.entries(progress).filter(([key, item]) =>
+        key !== folder || pullPending(item))) }
+    }
+  })
+}
+
 export async function pullNestedRepositories(root: string, repositories: NestedRepositoryStatus[]) {
   const id = pathKey(root)
   const state = useNestedRepositories.getState()

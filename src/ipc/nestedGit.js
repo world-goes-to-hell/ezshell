@@ -195,6 +195,48 @@ async function checkRemote(directory, url) {
   }
 }
 
+// A password written into the address stays in .git/config as plain text
+const PASSWORD_IN_URL = /^([a-z][\w+.-]*:\/\/[^/@?#:]*):[^/@?#]*@/i
+const hasRemotePassword = url => PASSWORD_IN_URL.test(url)
+const maskRemoteUrl = url => url.replace(PASSWORD_IN_URL, '$1:***@')
+
+async function remoteProblem(directory, { url, vcs }) {
+  if (vcs && !['https', 'ssh', 'file'].includes(vcs)) return PROTOCOL_BLOCKED
+  try { await checkRemote(directory, url) } catch (error) { return error.message }
+  return undefined
+}
+
+/** The remotes written in this repository's own config, in file order, passwords hidden */
+async function readRemotes(directory, runGit) {
+  const output = await optionalGit(directory, ['config', '--local', '--null', '--get-regexp', '^remote\\..+\\.(url|pushurl|vcs)$'], runGit)
+  const remotes = new Map()
+  for (const [name, value] of configEntries(output)) {
+    const match = /^remote\.(.+)\.(url|pushurl|vcs)$/i.exec(name)
+    if (!match) continue
+    const remote = remotes.get(match[1]) ?? {}
+    const field = match[2].toLowerCase()
+    if (remote[field] === undefined) remotes.set(match[1], { ...remote, [field]: value })
+  }
+  return Promise.all([...remotes].filter(([, remote]) => remote.url !== undefined).map(async ([name, remote]) => {
+    const problem = await remoteProblem(directory, remote)
+    return {
+      name, url: maskRemoteUrl(remote.url),
+      ...(remote.pushurl !== undefined && { pushUrl: maskRemoteUrl(remote.pushurl) }),
+      ...(problem && { problem }),
+      ...((hasRemotePassword(remote.url) || hasRemotePassword(remote.pushurl ?? '')) && { hasPassword: true })
+    }
+  }))
+}
+
+/** An address the user typed for a remote: only what fetching accepts, and no password */
+async function remoteAddress(directory, url) {
+  const value = typeof url === 'string' ? url.trim() : ''
+  if (!value || value.length > 2048 || value.startsWith('-')) throw new Error('원격 주소를 확인해 주세요.')
+  if (hasRemotePassword(value)) throw new Error('비밀번호가 든 주소는 저장할 수 없습니다. 비밀번호를 빼고 입력해 주세요.')
+  await checkRemote(directory, value)
+  return value
+}
+
 async function upstreamFetch(directory, branch, runGit) {
   if (!branch) return null
   const head = `refs/heads/${branch}`
@@ -229,4 +271,5 @@ async function fetchCurrent(directory, branch, runGit, check, { automatic = fals
     ...(upstream ? [upstream.refspec] : [])], { network: true, sshCommand })
 }
 
-module.exports = { git, gitEnvironment, inspectLocalSettings, checkRemote, fetchCurrent, optionalGit, readBranches }
+module.exports = { git, gitEnvironment, inspectLocalSettings, checkRemote, fetchCurrent, optionalGit, readBranches,
+  readRemotes, remoteAddress, remoteProblem, maskRemoteUrl, trimLine }

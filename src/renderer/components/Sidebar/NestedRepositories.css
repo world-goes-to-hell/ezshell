@@ -147,3 +147,42 @@
 .nested-branch-message, .nested-branch-error { padding: 6px 0; font-size: 12px; }
 .nested-branch-message { color: var(--text-muted); }
 .nested-branch-error { color: var(--error-text, var(--error)); }
+
+.modal-content.nested-remote-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
+.nested-remote-list { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 8px; }
+.nested-remote {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+.nested-remote-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.nested-remote-problem {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--error, #d74d51) 14%, transparent);
+  color: var(--error-text, var(--error, #d74d51));
+  font-size: 10px;
+}
+.nested-remote-field { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 8px; font-size: 12px; }
+.nested-remote-field > span { color: var(--text-secondary); }
+.nested-remote-field input { min-width: 0; font-family: var(--font-mono, monospace); font-size: 12px; }
+.nested-remote-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.nested-remote-actions button { padding: 4px 10px; font-size: 12px; }
+.nested-remote-actions button:disabled { opacity: 0.45; cursor: default; }
+.nested-remote-remove:focus-visible, .nested-remote-remove:hover { color: var(--error-text, var(--error, #d74d51)); }
+.nested-remote-note { margin: 0; font-size: 11px; overflow-wrap: anywhere; color: var(--text-muted); }
+.nested-remote-note[data-kind="ok"] { color: var(--accent); }
+.nested-remote-note[data-kind="error"] { color: var(--error-text, var(--error, #d74d51)); }
+.nested-repository-result-action {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

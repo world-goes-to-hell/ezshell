@@ -10,6 +10,7 @@ const EDIT_MAX_BYTES = 5 * MB
 const MEDIA_MAX_BYTES = 50 * MB
 const TEXT_WHOLE_MAX_BYTES = 5 * MB
 const TEXT_TAIL_BYTES = 1 * MB
+const TEXT_PROBE_BYTES = 8 * 1024
 
 const MESSAGES = {
   notFile: '일반 파일이 아닙니다.',
@@ -50,16 +51,14 @@ async function readRange(target, start, length) {
 }
 
 /** Strict UTF-8 (a NUL byte means binary); null when it is not text */
-function decodeStrict(data) {
+function decodeStrict(data, partial = false) {
   if (data.includes(0)) return null
   try {
-    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(data)
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(data, { stream: partial })
   } catch {
     return null
   }
 }
-const decodeLoosely = (data) => (data.includes(0) ? null : new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }).decode(data))
-
 async function canWrite(target) {
   try {
     const handle = await fs.promises.open(target, 'r+')
@@ -82,13 +81,22 @@ async function readForEdit(target, { maxBytes = EDIT_MAX_BYTES } = {}) {
 async function readTextPreview(target) {
   const stats = await statFile(target)
   const truncated = stats.size > TEXT_WHOLE_MAX_BYTES
+  if (truncated && decodeStrict(await readRange(target, 0, TEXT_PROBE_BYTES), true) === null) {
+    throw new LocalFileError(MESSAGES.notText)
+  }
   const start = truncated ? stats.size - TEXT_TAIL_BYTES : 0
   let data = await readRange(target, start, stats.size - start)
   if (truncated) {
     const firstBreak = data.indexOf(0x0a)
-    if (firstBreak >= 0) data = data.subarray(firstBreak + 1)
+    if (firstBreak >= 0 && firstBreak < data.length - 1) data = data.subarray(firstBreak + 1)
+    else {
+      // A long line can start outside the window, in the middle of a UTF-8 character.
+      let offset = 0
+      while (offset < Math.min(3, data.length) && (data[offset] & 0xc0) === 0x80) offset++
+      data = data.subarray(offset)
+    }
   }
-  const text = decodeLoosely(data)
+  const text = decodeStrict(data, truncated)
   if (text === null) throw new LocalFileError(MESSAGES.notText)
   return { path: target, size: stats.size, text, truncated }
 }

@@ -16,21 +16,25 @@ interface RemotePreviewViewProps {
 
 function MediaPreview({ file }: { file: Extract<PreviewFile, { kind: 'image' | 'pdf' }> }) {
   const url = useMemo(() => URL.createObjectURL(new Blob([file.data], { type: file.mime })), [file])
+  const name = fileNameOf(file.path, file.local)
   const [isActualSize, setIsActualSize] = useState(false)
+  const [failed, setFailed] = useState(false)
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null)
   useEffect(() => () => URL.revokeObjectURL(url), [url])
 
   if (file.kind === 'pdf') {
-    return <iframe className="remote-file-pdf" src={url} title={fileNameOf(file.path)} />
+    return <iframe className="remote-file-pdf" src={url} title={name} />
   }
+  if (failed) return <div className="remote-file-message" role="alert">이미지를 표시할 수 없습니다.</div>
   return (
     <div className={`remote-file-image-stage${isActualSize ? ' is-actual' : ''}`}>
       <img
         src={url}
-        alt={fileNameOf(file.path)}
+        alt={name}
         className="remote-file-image"
         onClick={() => setIsActualSize(actual => !actual)}
         onLoad={(event) => setDimensions({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+        onError={() => setFailed(true)}
         title={isActualSize ? '창에 맞추기' : '원래 크기로 보기'}
       />
       {dimensions && <span className="remote-file-image-info">{dimensions.width} × {dimensions.height} · {formatBytes(file.size)}</span>}
@@ -41,7 +45,7 @@ function MediaPreview({ file }: { file: Extract<PreviewFile, { kind: 'image' | '
 /** Looking at a server file: image, PDF, or text (a log can be followed). Nothing here writes to the server. */
 export function RemotePreviewView({ docId, file, onRefresh }: RemotePreviewViewProps) {
   if (file.kind === 'text') return <RemoteLogView docId={docId} file={file} onRefresh={onRefresh} />
-  const name = fileNameOf(file.path)
+  const name = fileNameOf(file.path, file.local)
   const actions = (
     <button type="button" className="title-bar-btn popout-title-action" onClick={onRefresh} title="새로고침" aria-label="새로고침">
       <RiRefreshLine size={16} />

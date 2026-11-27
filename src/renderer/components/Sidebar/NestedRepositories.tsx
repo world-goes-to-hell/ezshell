@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react'
 import { RiArrowDownSLine, RiArrowRightSLine, RiDownloadLine, RiFolderOpenLine, RiGitBranchLine,
-  RiMoreLine, RiPlayLine, RiRobot2Line, RiTerminalBoxLine } from 'react-icons/ri'
+  RiLinksLine, RiMoreLine, RiPlayLine, RiRobot2Line, RiTerminalBoxLine } from 'react-icons/ri'
 import { folderLabel, pathKey } from '../../lib/localWorkspaceTree'
 import { OPEN_LOCAL_TERMINAL_EVENT, readLocalProjects, writeLocalProjects } from '../../lib/localProjectList'
 import type { LocalAgent, NestedRepositoryPullResult, NestedRepositoryStatus } from '../../types'
@@ -9,6 +9,7 @@ import { changedRepository, checkNestedRepositoryRemote, pullNestedRepositories,
 import { toast } from '../../stores/toastStore'
 import { TerminalContextMenu } from '../Terminal/TerminalContextMenu'
 import { NestedRepositoryBranchDialog } from './NestedRepositoryBranchDialog'
+import { NestedRepositoryRemoteDialog } from './NestedRepositoryRemoteDialog'
 import './NestedRepositories.css'
 
 export function NestedRepositorySettings() {
@@ -91,6 +92,12 @@ function pullLabel(result: NestedRepositoryPullResult) {
   }
 }
 
+/** A failed pull or fetch: the remote address is often why (http://, a moved server) */
+function RemoteAction({ folder, open }: { folder: string; open: (folder: string) => void }) {
+  return <button type="button" className="nested-repository-result-action" onClick={() => open(folder)}
+    aria-label={`${folder} 원격 주소 바꾸기`}>원격 주소 바꾸기</button>
+}
+
 export function NestedRepositoryList({ root, onAddPreset }: {
   root: string
   onAddPreset: (relative: string) => void
@@ -106,6 +113,7 @@ export function NestedRepositoryList({ root, onAddPreset }: {
   const [showAll, setShowAll] = useState(false)
   const [menu, setMenu] = useState<{ repository: NestedRepositoryStatus; position: { x: number; y: number } } | null>(null)
   const [branchFolder, setBranchFolder] = useState<string | null>(null)
+  const [remoteFolder, setRemoteFolder] = useState<string | null>(null)
   if (!group?.repositories.length) return null
   const { repositories, branch } = group
   const active = repositories.some(repo => pullPending(progress?.[repo.folder]))
@@ -195,9 +203,11 @@ export function NestedRepositoryList({ root, onAddPreset }: {
                 onClick={event => openMenu(event, repo)}><RiMoreLine size={14} /></button>
               {result && <span className="nested-repository-result" data-result={result.kind} role="status">
                 {pullLabel(result)}{'message' in result && ` · ${result.message}`}
+                {result.kind === 'failed' && <RemoteAction folder={repo.folder} open={setRemoteFolder} />}
               </span>}
               {!result && repo.error && <span className="nested-repository-result" data-result="failed">{repo.error}</span>}
-              {!result && state?.fetchError && <span className="nested-repository-result" data-result="failed">가져오기 실패 · {state.fetchError}</span>}
+              {!result && state?.fetchError && <span className="nested-repository-result" data-result="failed">가져오기 실패 · {state.fetchError}
+                <RemoteAction folder={repo.folder} open={setRemoteFolder} /></span>}
               {!result && state?.upstreamGone && <span className="nested-repository-result" data-result="skipped">원격 브랜치가 지워졌습니다.</span>}
             </li>
           })}
@@ -212,6 +222,7 @@ export function NestedRepositoryList({ root, onAddPreset }: {
           { label: '최신으로 받기', icon: RiDownloadLine, disabled: pullPending(progress?.[menu.repository.folder]),
             onSelect: () => void pullNestedRepositories(root, [menu.repository]) },
           { label: '브랜치 바꾸기…', icon: RiGitBranchLine, onSelect: () => setBranchFolder(menu.repository.folder) },
+          { label: '원격 주소…', icon: RiLinksLine, onSelect: () => setRemoteFolder(menu.repository.folder) },
           { label: '기동 설정…', icon: RiPlayLine, onSelect: () => onAddPreset(menu.repository.folder) },
           { label: '로컬 터미널 열기', icon: RiTerminalBoxLine, onSelect: () => openTerminal(menu.repository) },
           { label: '파일 탐색기로 열기', icon: RiFolderOpenLine, onSelect: () => void openExplorer(menu.repository) },
@@ -219,6 +230,8 @@ export function NestedRepositoryList({ root, onAddPreset }: {
         ] }} />}
       {branchFolder && <NestedRepositoryBranchDialog project={group.project} root={root} folder={branchFolder}
         onClose={() => setBranchFolder(null)} />}
+      {remoteFolder && <NestedRepositoryRemoteDialog project={group.project} root={root} folder={remoteFolder}
+        onClose={() => setRemoteFolder(null)} />}
     </section>
   )
 }
