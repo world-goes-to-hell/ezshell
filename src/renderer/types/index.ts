@@ -1046,6 +1046,8 @@ export type LogEncoding = 'auto' | 'utf-8' | 'ms949'
 /** A server of an Eclipse workspace (Servers/<name>-config, its .launch VM arguments), to fill a Tomcat preset */
 export interface WorkspaceServer {
   name: string
+  source?: string
+  webapp?: string
   port?: number
   vmArgs?: string
   contextPath?: string
@@ -1626,7 +1628,8 @@ declare global {
       /** Reads the Eclipse settings of a folder of the project (.classpath, .settings) for a Tomcat preset */
       runPresetEclipseImport?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { draft?: EclipseImportDraft; notes?: string[] }>
       /** Picks an Eclipse workspace folder (main's chooser) and reads its servers */
-      runPresetWorkspaceServers?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; workspace?: string; servers?: WorkspaceServer[] }>
+      runPresetWorkspaceServers?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; workspace?: string; servers?: WorkspaceServer[]; notes?: string[] }>
+      runPresetIdeServers?: (worktreeFolder: string, relative: string, pickFile?: boolean) => Promise<RunPresetResult & { cancelled?: true; servers?: WorkspaceServer[]; notes?: string[] }>
       /** Picks an existing context.xml (JNDI) for a Tomcat preset */
       runPresetChooseContextXml?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; contextXml?: string; label?: string }>
       runPresetChooseFolder?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { cancelled?: true; relative?: string }>

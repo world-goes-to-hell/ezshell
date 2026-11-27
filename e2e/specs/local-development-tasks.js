@@ -46,6 +46,24 @@ function fixture(backendPort, frontendPort) {
   fs.writeFileSync(path.join(repo, 'legacy', '.settings', 'org.eclipse.wst.common.component'),
     '<?xml version="1.0"?><project-modules id="moduleCoreId"><wb-module deploy-name="shop"><wb-resource deploy-path="/" source-path="/WebContent"/><property name="context-root" value="shop"/></wb-module></project-modules>\n')
   fs.writeFileSync(path.join(repo, 'legacy', '.settings', 'org.eclipse.jdt.core.prefs'), 'org.eclipse.jdt.core.compiler.compliance=1.8\n')
+  const module = path.join(repo, 'legacy')
+  fs.mkdirSync(path.join(module, '.run'))
+  fs.mkdirSync(path.join(module, '.vscode'))
+  fs.mkdirSync(path.join(module, 'tomcat', 'conf'), { recursive: true })
+  fs.writeFileSync(path.join(module, '.run', 'Tomcat.run.xml'), `
+    <component name="ProjectRunConfigurationManager">
+      <configuration name="IDEA 로컬 서버" type="#com.intellij.j2ee.web.tomcat.TomcatRunConfigurationFactory" factoryName="Local">
+        <server-settings><option name="HTTP_PORT" value="8181"/></server-settings>
+        <deployment><file path="$PROJECT_DIR$/WebContent"><settings><option name="CONTEXT_PATH" value="/idea"/></settings></file></deployment>
+        <ConfigurationWrapper RunnerId="Run"><option name="VM_PARAMETERS" value="-Xmx512m -Ddb.password=fixture-secret"/></ConfigurationWrapper>
+      </configuration>
+    </component>`)
+  fs.writeFileSync(path.join(module, '.vscode', 'launch.json'), JSON.stringify({ configurations: [
+    { name: 'VS Code 로컬 서버', type: 'java', request: 'launch', mainClass: 'org.apache.catalina.startup.Bootstrap',
+      vmArgs: ['-Dcatalina.base=tomcat', '-Xms128m'] }
+  ] }))
+  fs.writeFileSync(path.join(module, 'tomcat', 'conf', 'server.xml'),
+    '<Server><Service><Connector port="8182"/><Engine><Host><Context path="/vscode"/></Host></Engine></Service></Server>')
   fs.writeFileSync(path.join(repo, 'backend', 'build.gradle'), "plugins { id 'org.springframework.boot' }\n")
   fs.writeFileSync(path.join(repo, 'backend', 'gradlew.bat'), '@echo off\r\nnode run.cjs %*\r\n')
   fs.writeFileSync(path.join(repo, 'backend', 'gradlew'), '#!/bin/sh\nexec node run.cjs "$@"\n', { mode: 0o755 })
@@ -444,6 +462,27 @@ function fixture(backendPort, frontendPort) {
     })()`))
     check('the Eclipse-style build says what it does', await until(`
       document.querySelector('.run-preset-tomcat .run-preset-prepare-note')?.textContent.includes('build.xml 없이 이클립스 설정')`))
+    await setValue('#run-preset-folder', 'legacy')
+    const ideButton = `[...document.querySelectorAll('.run-preset-eclipse-btn')].find(button => button.textContent.includes('IntelliJ·VS Code 설정'))`
+    await js(`${ideButton}.click()`)
+    const importChoice = name => `[...document.querySelectorAll('.run-preset-servers label')].find(label => label.textContent.includes(${JSON.stringify(name)}))?.querySelector('input')`
+    check('automatically finds IntelliJ and VS Code Tomcat choices in the selected module', await until(`
+      !!${importChoice('IDEA 로컬 서버')} && !!${importChoice('VS Code 로컬 서버')} &&
+      !document.querySelector('.run-preset-eclipse-read') &&
+      document.querySelector('.run-preset-eclipse').textContent.includes('설정 파일 선택')`, 8000))
+    await js(`${importChoice('IDEA 로컬 서버')}.click()`)
+    check('IntelliJ fills the web folder, port, context and filtered VM arguments', await until(`
+      document.querySelector('#run-preset-webapp').value === 'legacy/WebContent' &&
+      document.querySelector('#run-preset-port').value === '8181' &&
+      document.querySelector('#run-preset-context').value === '/idea' &&
+      document.querySelector('#run-preset-vmargs').value === '-Xmx512m'`))
+    await js(`${importChoice('VS Code 로컬 서버')}.click()`)
+    check('VS Code fills the port and context from the project server configuration', await until(`
+      document.querySelector('#run-preset-port').value === '8182' &&
+      document.querySelector('#run-preset-context').value === '/vscode' &&
+      document.querySelector('#run-preset-vmargs').value === '-Xms128m'`))
+    await shot('local-run-preset-ide-import')
+    await setValue('#run-preset-folder', '.')
     await js(`document.querySelector('input[name="run-preset-prepare"][value="maven"]').click()`)
     check('a build before the server is warned about as a command that runs', await until(`
       !!document.querySelector('.run-preset-tomcat [aria-label="Maven 목표"]') &&

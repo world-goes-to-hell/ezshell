@@ -113,7 +113,7 @@ test('reports branch, upstream and changes for actual repositories and only fast
   expect(await git(path.join(project, 'behind'), 'rev-parse', 'HEAD')).toBe(previous)
 }, 30000)
 
-test('discovers real repositories at two levels and recognizes a submodule within a Git parent', async () => {
+test('discovers real repositories at three levels and recognizes a submodule within a Git parent', async () => {
   const fixture = await fixtureDirectory()
   const project = path.join(fixture, 'work')
   await fs.mkdir(project)
@@ -121,20 +121,20 @@ test('discovers real repositories at two levels and recognizes a submodule withi
   await git(fixture, 'init', '-b', 'main', 'source')
   await commit(path.join(fixture, 'source'), 'initial')
   await git(project, '-c', 'protocol.file.allow=always', 'submodule', 'add', '../source', 'module')
-  for (const name of ['build', 'area/valid', 'area/folder/too-deep', '.hidden/repo', 'build/repo', 'target/repo', 'dist/repo', 'node_modules/repo']) {
+  for (const name of ['build', 'area/valid', 'area/folder/third', 'area/folder/sub/too-deep', '.hidden/repo', 'build/repo', 'target/repo', 'dist/repo', 'node_modules/repo']) {
     const folder = path.join(project, name)
     await fs.mkdir(folder, { recursive: true })
     await git(folder, 'init', '-b', 'main')
   }
   await fs.symlink(path.join(fixture, 'source'), path.join(project, 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
   const paths = await discover(project)
-  expect(paths.map(folder => path.relative(project, folder).split(path.sep).join('/'))).toEqual(['build', 'module', 'area/valid'])
+  expect(paths.map(folder => path.relative(project, folder).split(path.sep).join('/'))).toEqual(['build', 'module', 'area/valid', 'area/folder/third'])
   const { repo } = await readWorkspaceGit(project)
-  expect(repo.nestedRepositories).toContain(path.join(project, 'area', 'folder', 'too-deep'))
+  expect(repo.nestedRepositories).toContain(path.join(project, 'area', 'folder', 'sub', 'too-deep'))
   expect(repo.nestedRepositories).toContain(path.join(project, 'build', 'repo'))
   const worker = createNestedRepositories({ discover })
   const [{ repositories }] = await worker.status(project, [project], 'local', check)
-  expect(repositories.map(state => state.folder)).toEqual(['build', 'module', 'area/valid'])
+  expect(repositories.map(state => state.folder)).toEqual(['build', 'module', 'area/valid', 'area/folder/third'])
   for (let index = 0; index < 55; index++) await fs.mkdir(path.join(project, `capped-${index}`, '.git'), { recursive: true })
   expect(await discover(project)).toHaveLength(50)
 }, 15000)

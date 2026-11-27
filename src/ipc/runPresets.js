@@ -16,6 +16,7 @@ const { MAX_PROPOSALS, STALE_PROPOSAL, prepareProposal, proposalStillCurrent, ap
 const { prepareHotReload, prepareTomcatReload, javaRunWithOptions, startHotReload, reloadLog, RESULTS: RELOAD_RESULTS } = require('./hotReload.js')
 const { planTomcat, stageTomcat, webDirectory, antTargets, webappCandidates, validContextPath, vmOptionTokens, workspaceVmArguments, tomcatJars } = require('./tomcatRun.js')
 const { createWorkspaceAccess, workspaceServers } = require('./workspaceServers.js')
+const { importTomcatIde } = require('./tomcatIdeImport.js')
 const { javaVersionProbe, javaLogOptions } = require('./developmentEncoding.js')
 const { loadEclipseProject } = require('./eclipseProject.js')
 const { buildEclipse } = require('./eclipseBuild.js')
@@ -1098,6 +1099,13 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     },
     async antTargets(project, relative) { return { ok: true, targets: await antTargets(await directoryInProject(project.worktree, relative)) } },
     async webapps(project) { return { ok: true, folders: await webappCandidates(project.worktree) } },
+    async ideServers(project, relative, file, allowed) {
+      ensureAllowed(allowed)
+      const cwd = await directoryInProject(project.worktree, relative)
+      const result = await importTomcatIde(project.worktree, cwd, file, allowed)
+      ensureAllowed(allowed)
+      return { ok: true, ...result }
+    },
     async workspaceServers(project, folder, allowed) {
       ensureAllowed(allowed)
       const root = await workspaceAccess.selectedRoot(folder)
@@ -1170,7 +1178,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   }
 }
 
-function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, chooseWorkspaceFolder = async () => null, chooseContextFile = async () => null, chooseProjectFolder = async () => null }) {
+function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, chooseWorkspaceFolder = async () => null, chooseContextFile = async () => null, chooseProjectFolder = async () => null, chooseIdeFile = async () => null }) {
   // Accept only the command shown to this frame. Keep earlier install approvals for this batch retry.
   const confirms = new Map()
   // A preview is a snapshot, including the note. Only its originating frame can send it once.
@@ -1193,6 +1201,11 @@ function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, c
   handle('run-presets-candidates', (project, _allowed, _frame, relative) => controller.candidates(project, relative))
   handle('run-preset-ant-targets', (project, _allowed, _frame, relative) => controller.antTargets(project, relative))
   handle('run-preset-webapps', project => controller.webapps(project))
+  handle('run-preset-ide-servers', async (project, allowed, _frame, relative, pickFile) => {
+    if (pickFile !== true) return controller.ideServers(project, relative, undefined, allowed)
+    const file = await chooseIdeFile(await controller.folderDialogStart(project, relative))
+    return file ? controller.ideServers(project, relative, file, allowed) : { ok: false, cancelled: true }
+  })
   handle('run-preset-workspace-servers', async (project, allowed) => {
     const folder = await chooseWorkspaceFolder(project.worktree)
     return folder ? controller.workspaceServers(project, folder, allowed) : { ok: false, cancelled: true }

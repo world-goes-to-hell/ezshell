@@ -1,5 +1,5 @@
-import { useState, type CSSProperties, type DragEvent, type MouseEvent, type ReactNode } from 'react'
-import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolder3Line, RiFolderOpenLine, RiGitBranchLine, RiPlayLine, RiTerminalBoxLine } from 'react-icons/ri'
+import { useMemo, useState, type CSSProperties, type DragEvent, type MouseEvent, type ReactNode } from 'react'
+import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolder3Line, RiFolderOpenLine, RiGitBranchLine, RiPaletteLine, RiPlayLine, RiTerminalBoxLine } from 'react-icons/ri'
 import { SiNodedotjs, SiSpringboot, SiVuedotjs } from 'react-icons/si'
 import type { IconType } from 'react-icons'
 import type { LocalProjectState } from '../../hooks/useLocalProjects'
@@ -17,6 +17,9 @@ import { LocalSessionAgents } from './LocalSessionAgents'
 import { RunPresetAddButton, RunPresetsSection, requestAddRunPreset } from './RunPresetsSection'
 import { NestedRepositoryList, NestedRepositorySummary } from './NestedRepositories'
 import { useNestedRepositories, useNestedRepositoryProjects } from '../../stores/nestedRepositoryStore'
+import { assignProjectHues } from '../../lib/localProjectColors'
+import { useProjectColors } from '../../hooks/useProjectColors'
+import { ProjectColorDialog } from './ProjectColorDialog'
 
 const TASK_ICONS: Record<string, IconType> = { 'Spring Boot': SiSpringboot, Vue: SiVuedotjs, Node: SiNodedotjs }
 const taskIcon = (task: LocalDevelopmentTask) => TASK_ICONS[task.name] ?? RiPlayLine
@@ -112,14 +115,6 @@ export interface WorktreeTab {
 export const projectFoldKey = (folder: string) => `p:${pathKey(folder)}`
 export const worktreeFoldKey = (path: string) => `w:${pathKey(path)}`
 
-const PROJECT_HUES = [245, 170, 72, 294, 135, 35, 210, 330]
-
-function projectHue(project: ProjectNode): number {
-  const key = projectKeyOf(project)
-  let hash = 2166136261
-  for (let i = 0; i < key.length; i++) hash = Math.imul(hash ^ key.charCodeAt(i), 16777619)
-  return PROJECT_HUES[(hash >>> 0) % PROJECT_HUES.length]
-}
 
 type TaskMenu = {
   position: { x: number; y: number }
@@ -138,6 +133,10 @@ export function LocalProjectsTree({
   const [taskMenu, setTaskMenu] = useState<TaskMenu | null>(null)
   // The project row's menu: its folder in the file manager
   const [folderMenu, setFolderMenu] = useState<{ position: { x: number; y: number }; folder: string; name: string } | null>(null)
+  // Card colours: picked per project, the rest shared out by count and order (lib/localProjectColors.ts)
+  const colorSettings = useProjectColors()
+  const projectHues = useMemo(() => assignProjectHues(nodes.map(projectKeyOf), colorSettings), [nodes, colorSettings])
+  const [colorTarget, setColorTarget] = useState<{ key: string; name: string } | null>(null)
   const canOpenFolder = typeof window.electronAPI.localProjectOpenFolder === 'function'
   const openInExplorer = async (folder: string) => {
     const result = await window.electronAPI.localProjectOpenFolder?.(folder).catch(() => null)
@@ -151,13 +150,16 @@ export function LocalProjectsTree({
   }
   const folderItem = (folder: string): TerminalMenuItem[] => canOpenFolder
     ? [{ label: '파일 탐색기로 열기', icon: RiFolderOpenLine, onSelect: () => void openInExplorer(folder) }] : []
+  const colorItem = (project: ProjectNode | undefined): TerminalMenuItem[] => project
+    ? [{ label: '색상…', icon: RiPaletteLine, onSelect: () => setColorTarget({ key: projectKeyOf(project), name: project.name }) }] : []
   const projectItems = (folder: string): TerminalMenuItem[] => {
     const project = nodes.find(node => node.folder === folder)
-    if (!project?.isFolder || !nestedSummaries[pathKey(folder)]?.count) return folderItem(folder)
+    if (!project?.isFolder || !nestedSummaries[pathKey(folder)]?.count) return [...folderItem(folder), ...colorItem(project)]
     return [
       { label: '터미널 실행', icon: RiTerminalBoxLine, onSelect: () => (onOpenTerminal ?? onOpenWorktree)(project, project.worktrees[0]) },
       { label: '실행 구성 추가…', icon: RiAddLine, onSelect: () => requestAddRunPreset(folder) },
-      ...folderItem(folder)
+      ...folderItem(folder),
+      ...colorItem(project)
     ]
   }
   const openTasks = async (event: MouseEvent<HTMLElement>, worktree: WorktreeNode) => {
@@ -259,8 +261,8 @@ export function LocalProjectsTree({
         const Chevron = isProjectOpen ? RiArrowDownSLine : RiArrowRightSLine
         return (
           <li key={projectKey} className={`local-project${dropTarget === projectKey ? ' is-drop-target' : ''}`} data-project-folder={project.folder}
-            style={{ '--local-project-hue': projectHue(project) } as CSSProperties} {...dropProps(project, projectKey)}>
-            <div className="local-project-head" onContextMenu={canOpenFolder ? event => openFolderMenu(event, project.folder, project.name) : undefined}>
+            style={{ '--local-project-hue': projectHues[projectKeyOf(project)] } as CSSProperties} {...dropProps(project, projectKey)}>
+            <div className="local-project-head" onContextMenu={event => openFolderMenu(event, project.folder, project.name)}>
               <button
                 type="button"
                 className="local-project-row"
@@ -382,5 +384,8 @@ export function LocalProjectsTree({
       {folderMenu && <TerminalContextMenu key={`${folderMenu.folder}:${folderMenu.position.x}:${folderMenu.position.y}`}
         position={folderMenu.position} top={[]} groups={[]} onClose={() => setFolderMenu(null)}
         target={{ name: folderMenu.name, hint: '프로젝트', items: projectItems(folderMenu.folder) }} />}
+      {colorTarget && <ProjectColorDialog projectKey={colorTarget.key} name={colorTarget.name}
+        autoHue={assignProjectHues(nodes.map(projectKeyOf), { ...colorSettings, manual: Object.fromEntries(Object.entries(colorSettings.manual).filter(([key]) => key !== colorTarget.key)) })[colorTarget.key] ?? colorSettings.baseHue}
+        onClose={() => setColorTarget(null)} />}
   </>)
 }

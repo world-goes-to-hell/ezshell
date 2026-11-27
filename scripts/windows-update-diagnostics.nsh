@@ -177,6 +177,22 @@ Function ezShellWriteUninstallFailure
   ${If} $ezShellUninstallProbeFailures > 20
     !insertmacro ezShellWriteUninstallLine "Total probe failures: $ezShellUninstallProbeFailures (first 20 shown)."
   ${EndIf}
+  ; Which processes still use the old install folder: its exe, or a command line naming it (an Electron
+  ; copy running a script from its app.asar is not ended by the installer). 2026-11-27: the 2.40.1 -> 2.41.0
+  ; update failed on a locked app.asar and the log could not say who held it. The command line itself is
+  ; not written (it can carry arguments), only whether it names the folder.
+  !insertmacro ezShellWriteUninstallLine "Processes using the old install directory:"
+  nsExec::ExecToStack `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "$$d = '$0'; $$all = Get-CimInstance Win32_Process; $$by = @{}; foreach ($$p in $$all) { $$by[[int]$$p.ProcessId] = $$p }; $$all | Where-Object { ($$_.ExecutablePath -and $$_.ExecutablePath.StartsWith($$d, [StringComparison]::OrdinalIgnoreCase)) -or ($$_.CommandLine -and $$_.CommandLine.IndexOf($$d, [StringComparison]::OrdinalIgnoreCase) -ge 0) } | Select-Object -First 15 | ForEach-Object { $$parent = $$by[[int]$$_.ParentProcessId]; '{0} {1} parent={2} {3} started={4:HH:mm:ss} exe={5}' -f $$_.ProcessId, $$_.Name, $$_.ParentProcessId, $$parent.Name, $$_.CreationDate, $$_.ExecutablePath }"`
+  Pop $3 ; exit code, or "error" when PowerShell could not start
+  Pop $4 ; output
+  ${If} $3 != 0
+    !insertmacro ezShellWriteUninstallLine "(the process list could not be read: $3)"
+  ${ElseIf} $4 == ""
+    !insertmacro ezShellWriteUninstallLine "(none)"
+  ${Else}
+    Push "$4$\r$\n"
+    Call ezShellWriteUninstallLine
+  ${EndIf}
   System::Call 'kernel32::CloseHandle(p $ezShellUninstallLog) i'
   DetailPrint "Update diagnosis: $2"
 FunctionEnd

@@ -5,9 +5,10 @@
 // confirmed before it first runs, like a typed command (the dialog says it once, at the bottom).
 // Quick fills: `이클립스 설정` fills the web folder and context path from the Eclipse project's settings and
 // shows what else it read; `워크스페이스 서버` fills the VM arguments, port, context and context.xml from a
-// server of an Eclipse workspace. The user saves. The context.xml (JNDI) is pointed at, never copied into the
-// preset; jars approved from a diagnosis can only be taken away here.
-import { useEffect, useState } from 'react'
+// server of an Eclipse workspace. `IntelliJ·VS Code 설정` fills the same fields from an IDE's Tomcat launch.
+// The context.xml (JNDI) is pointed at, never copied into the preset; jars approved from a diagnosis can
+// only be taken away here.
+import { useEffect, useRef, useState } from 'react'
 import { RiCloseLine, RiDownloadLine, RiFileCodeLine, RiFolder3Line, RiServerLine } from 'react-icons/ri'
 import { eclipseFill, eclipseSummary, PLAIN_TEXT_WARNING, secretVmArgNames, shortPath, workspaceServerFill, type PresetDraft } from '../../lib/runPresets'
 import type { WorkspaceServer } from '../../types'
@@ -61,61 +62,80 @@ export function RunPresetTomcatFields({ folder, relative, draft, set, tomcats, o
     return () => { active = false; window.clearTimeout(timer) }
   }, [folder, relative, wantsAnt])
 
-  // The Eclipse project's settings, read when asked: what was read, or why not
-  const [eclipse, setEclipse] = useState<{ lines: string[] } | { error: string } | null>(null)
+  const importKey = JSON.stringify([folder, relative])
+  const currentImportKey = useRef(importKey)
+  currentImportKey.current = importKey
+  const [eclipseResult, setEclipseResult] = useState<{ key: string; lines: string[] } | { key: string; error: string } | null>(null)
+  const [resultList, setResultList] = useState<{
+    key: string; kind: 'workspace' | 'ide'; name: string; servers: WorkspaceServer[]; notes: string[]; error?: string
+  } | null>(null)
+  const [selectedServer, setSelectedServer] = useState<number | null>(null)
   const [reading, setReading] = useState(false)
+  const eclipse = eclipseResult?.key === importKey ? eclipseResult : null
+  const importedServers = resultList?.key === importKey ? resultList : null
   const canImport = typeof runPresetApi().runPresetEclipseImport === 'function'
+  const canWorkspace = typeof window.electronAPI.runPresetWorkspaceServers === 'function'
+  const canIde = typeof window.electronAPI.runPresetIdeServers === 'function'
   const importEclipse = async () => {
     const read = runPresetApi().runPresetEclipseImport
     if (!read || reading) return
     setReading(true)
+    setResultList(null)
     try {
       const result = await read(folder, relative)
+      if (currentImportKey.current !== importKey) return
       if (result?.ok === false || !result?.draft) {
-        setEclipse({ error: result?.error || '이클립스 설정을 읽지 못했습니다.' })
+        setEclipseResult({ key: importKey, error: result?.error || '이클립스 설정을 읽지 못했습니다.' })
         return
       }
       const imported = { ...result.draft, sources: Array.isArray(result.draft.sources) ? result.draft.sources : [], libs: Array.isArray(result.draft.libs) ? result.draft.libs : [] }
       set(eclipseFill(imported, relative))
-      setEclipse({ lines: eclipseSummary(imported, Array.isArray(result.notes) ? result.notes : []) })
+      setEclipseResult({ key: importKey, lines: eclipseSummary(imported, Array.isArray(result.notes) ? result.notes : []) })
     } catch {
-      setEclipse({ error: '이클립스 설정을 읽지 못했습니다.' })
+      if (currentImportKey.current === importKey) setEclipseResult({ key: importKey, error: '이클립스 설정을 읽지 못했습니다.' })
     } finally {
       setReading(false)
     }
   }
 
-  // The servers of an Eclipse workspace the user picked: to choose one from
-  const [workspace, setWorkspace] = useState<{ name: string; servers: WorkspaceServer[] } | { error: string } | null>(null)
-  const [filledFrom, setFilledFrom] = useState<string | null>(null)
-  const canWorkspace = typeof window.electronAPI.runPresetWorkspaceServers === 'function'
-  const readWorkspace = async () => {
-    const read = window.electronAPI.runPresetWorkspaceServers
-    if (!read || reading) return
+  const readServers = async (kind: 'workspace' | 'ide', pickFile = false) => {
+    if (reading) return
+    const label = kind === 'ide' ? 'IntelliJ·VS Code 설정' : '이클립스 워크스페이스'
+    const empty = kind === 'ide' ? '이 프로젝트에서 Tomcat 실행 설정을 찾지 못했습니다.' : '이 워크스페이스의 Servers 폴더에서 Tomcat 설정을 찾지 못했습니다.'
     setReading(true)
     try {
-      const result = await read(folder)
-      if (result?.cancelled) return
-      if (result?.ok === false) { setWorkspace({ error: result.error || '워크스페이스를 읽지 못했습니다.' }); return }
+      const result = await (kind === 'ide' ? window.electronAPI.runPresetIdeServers?.(folder, relative, pickFile)
+        : window.electronAPI.runPresetWorkspaceServers?.(folder))
+      if (currentImportKey.current !== importKey || result?.cancelled) return
+      setEclipseResult(null)
+      if (!result?.ok) throw new Error(result?.error || `${label}을 읽지 못했습니다.`)
       const servers = Array.isArray(result?.servers) ? result.servers.filter(server => server && typeof server.name === 'string') : []
-      setWorkspace(servers.length ? { name: result.workspace || '워크스페이스', servers } : { error: '이 워크스페이스에서 Tomcat 서버 설정을 찾지 못했습니다 (Servers 폴더).' })
-      setFilledFrom(null)
-    } catch {
-      setWorkspace({ error: '워크스페이스를 읽지 못했습니다.' })
+      const name = 'workspace' in result && typeof result.workspace === 'string' ? result.workspace : label
+      const notes = Array.isArray(result.notes) ? result.notes : []
+      setResultList({ key: importKey, kind, name, servers, notes, error: servers.length ? undefined : empty })
+      const pick = kind === 'ide' && servers.length === 1
+      setSelectedServer(pick ? 0 : null)
+      if (pick) set(workspaceServerFill(servers[0]))
+    } catch (error) {
+      if (currentImportKey.current === importKey) {
+        setEclipseResult(null)
+        setResultList({ key: importKey, kind, name: label, servers: [], notes: [],
+          error: error instanceof Error ? error.message : `${label}을 읽지 못했습니다.` })
+      }
     } finally {
       setReading(false)
     }
   }
-  const chooseServer = (server: WorkspaceServer) => {
+  const chooseServer = (server: WorkspaceServer, index: number) => {
     set(workspaceServerFill(server))
-    setFilledFrom(server.name)
+    setSelectedServer(index)
   }
 
   const where = relative === '.' ? '프로젝트 폴더' : relative
   const known = tomcats?.some(tool => tool.id === draft.tomcat)
   return (
     <div className="run-preset-tomcat">
-      {(canImport || canWorkspace) && (
+      {(canImport || canWorkspace || canIde) && (
         <div className="run-preset-eclipse">
           <div className="run-preset-quick-fill">
             <span className="run-preset-hint">빠르게 채우기</span>
@@ -126,9 +146,14 @@ export function RunPresetTomcatFields({ folder, relative, draft, set, tomcats, o
               </button>
             )}
             {canWorkspace && (
-              <button type="button" className="run-preset-eclipse-btn" onClick={() => void readWorkspace()} disabled={reading}
+              <button type="button" className="run-preset-eclipse-btn" onClick={() => void readServers('workspace')} disabled={reading}
                 title="이클립스 워크스페이스 폴더를 고르면 Servers 의 server.xml·context.xml 과 실행 설정의 VM 인자를 읽습니다">
                 <RiServerLine size={13} aria-hidden="true" /> 워크스페이스 서버
+              </button>
+            )}
+            {canIde && (
+              <button type="button" className="run-preset-eclipse-btn" onClick={() => void readServers('ide')} disabled={reading}>
+                <RiFileCodeLine size={13} aria-hidden="true" /> IntelliJ·VS Code 설정
               </button>
             )}
           </div>
@@ -138,22 +163,29 @@ export function RunPresetTomcatFields({ folder, relative, draft, set, tomcats, o
             : <ul className="run-preset-eclipse-read" aria-label="이클립스 설정에서 읽은 것">
                 {eclipse.lines.map((line, index) => <li key={index}>{line}</li>)}
               </ul>)}
-          {workspace && ('error' in workspace
-            ? <p className="run-preset-warn" role="alert">{workspace.error}</p>
-            : (
-              <div className="run-preset-servers" role="radiogroup" aria-label={`${workspace.name} 의 서버`}>
-                {workspace.servers.map(server => (
-                  <label key={server.name} className="run-preset-server" data-on={filledFrom === server.name || undefined}>
-                    <input type="radio" name="run-preset-server" checked={filledFrom === server.name} onChange={() => chooseServer(server)} />
+          {importedServers && <>
+            {importedServers.error && <p className="run-preset-warn" role="alert">{importedServers.error}</p>}
+            {importedServers.servers.length > 0 && (
+              <div className="run-preset-servers" role="radiogroup" aria-label={`${importedServers.name} 의 서버`}>
+                {importedServers.servers.map((server, index) => (
+                  <label key={`${index}:${server.name}`} className="run-preset-server" data-on={selectedServer === index || undefined}>
+                    <input type="radio" name="run-preset-server" checked={selectedServer === index} onChange={() => chooseServer(server, index)} />
                     <span>
                       <strong>{server.name}</strong>
-                      <small>{[server.port && `포트 ${server.port}`, server.contextPath && `경로 ${server.contextPath}`, server.vmArgs && 'VM 인자', server.contextXml && 'context.xml'].filter(Boolean).join(' · ') || '읽은 값 없음'}</small>
+                      <small>{[server.source, server.webapp, server.port && `포트 ${server.port}`, server.contextPath && `경로 ${server.contextPath}`, server.vmArgs && 'VM 인자', server.contextXml && 'context.xml'].filter(Boolean).join(' · ') || '읽은 값 없음'}</small>
                     </span>
                   </label>
                 ))}
-                {filledFrom && <small className="run-preset-hint">{filledFrom} 의 값으로 채웠습니다. VM 인자·context.xml 은 고급에 있습니다.</small>}
+                {selectedServer !== null && importedServers.servers[selectedServer] && (
+                  <small className="run-preset-hint">{importedServers.servers[selectedServer].name} 값으로 채웠습니다. VM 인자·context.xml은 고급에 있습니다.</small>
+                )}
               </div>
-            ))}
+            )}
+            {importedServers.notes.map(note => <small key={note} className="run-preset-hint">{note}</small>)}
+            {importedServers.kind === 'ide' && (
+              <button type="button" className="run-preset-eclipse-btn" disabled={reading} onClick={() => void readServers('ide', true)}>설정 파일 선택…</button>
+            )}
+          </>}
         </div>
       )}
       <div className="form-group">

@@ -459,6 +459,7 @@ export const LOG_ENCODINGS: Array<{ value: LogEncoding; label: string }> = [
 /** The fields a server of an Eclipse workspace fills (the user saves them) */
 export function workspaceServerFill(server: WorkspaceServer): Partial<PresetDraft> {
   const patch: Partial<PresetDraft> = {}
+  if (server.webapp) patch.webapp = server.webapp
   if (typeof server.vmArgs === 'string' && server.vmArgs.trim()) patch.vmArgs = server.vmArgs.replace(/[\r\n]+/g, ' ').trim()
   if (Number.isInteger(server.port) && server.port! > 0 && server.port! <= 65535) patch.portText = String(server.port)
   const context = server.contextPath?.trim()

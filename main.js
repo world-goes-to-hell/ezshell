@@ -464,7 +464,12 @@ app.whenReady().then(() => {
   sessionHostStarting = startSessionHost().catch(error => console.error('[sessionHost] start failed:', error.message));
   startMcp();
   if (fs.existsSync(agentBridgeFile)) {
-    void agentMessages.enableExternalBridge().catch(error => console.error('Failed to start the agent message bridge:', error.code || error.name));
+    // After the runtime copy is ready (startSessionHost prepares it first): written before it, the shared
+    // bridge named the install folder's exe and a script inside its app.asar, so every Claude/Codex using
+    // the global ezshell-cli-mcp ran an ezShell.exe there that held app.asar while an update installed
+    // (docs/fix/2026-11-27-update-uninstall-failed-again.md).
+    void sessionHostStarting.then(() => agentMessages.enableExternalBridge())
+      .catch(error => console.error('Failed to start the agent message bridge:', error.code || error.name));
   }
 
   // Auto-updater setup (production only)
@@ -1234,6 +1239,11 @@ const runPresetIpc = registerRunPresetIpc({
   chooseContextFile: async defaultPath => {
     const result = await dialog.showOpenDialog(mainWindow, { title: 'Tomcat 컨텍스트 XML 선택', defaultPath,
       properties: ['openFile'], filters: [{ name: 'XML', extensions: ['xml'] }] });
+    return result.canceled ? null : result.filePaths[0];
+  },
+  chooseIdeFile: async defaultPath => {
+    const result = await dialog.showOpenDialog(mainWindow, { title: 'Tomcat 실행 설정 파일 선택', defaultPath,
+      properties: ['openFile'], filters: [{ name: 'IDE 실행 설정', extensions: ['xml', 'json', 'jsonc'] }, { name: '모든 파일', extensions: ['*'] }] });
     return result.canceled ? null : result.filePaths[0];
   }
 });

@@ -714,6 +714,26 @@ describe('saved project runs', () => {
     expect(approval).toEqual({ needsConfirm: { command: expect.stringContaining(`Tomcat 컨텍스트 설정 파일\n${reference}`) } })
   })
 
+  it('reads a Tomcat IDE file only from the main-frame file picker and leaves the preset store untouched', async () => {
+    const f = await fixture()
+    const config = path.join(f.outside, 'Tomcat profile.json')
+    await writeFile(config, JSON.stringify({
+      id: 'Workspace Tomcat', 'org.jboss.tools.rsp.server.typeId': 'org.jboss.ide.eclipse.as.server.tomcat.90',
+      'server.http.port': '8180'
+    }))
+    const handlers = new Map()
+    const chooseIdeFile = vi.fn(async () => config)
+    registerRunPresetIpc({ ipcMain: { handle: (key, handle) => handlers.set(key, handle) }, controller: f.controller,
+      fromMainWindow: event => event.sender === f.event.sender, isLocked: () => f.state.locked, chooseIdeFile })
+    const importServers = (event, pick) => handlers.get('run-preset-ide-servers')(event, f.folder, '.', pick, config)
+    expect(await importServers({ ...f.event, senderFrame: {} }, true)).toMatchObject({ ok: false })
+    expect(await importServers(f.event, config)).toMatchObject({ ok: true, servers: [] })
+    expect(chooseIdeFile).not.toHaveBeenCalled()
+    expect(await importServers(f.event, true)).toMatchObject({ ok: true, servers: [{ name: 'Workspace Tomcat', port: 8180 }] })
+    expect(chooseIdeFile).toHaveBeenCalledExactlyOnceWith(f.folder)
+    expect((await f.invoke('run-presets-list')).presets).toEqual([])
+  })
+
   it('fills the folder from the main-frame folder dialog, only with a folder inside the worktree', async () => {
     const f = await fixture()
     const api = path.join(f.folder, 'backend', 'api')

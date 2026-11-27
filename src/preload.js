@@ -221,6 +221,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runPresetWebapps: (folder) => ipcRenderer.invoke('run-preset-webapps', folder),
   runPresetEclipseImport: (folder, relative) => ipcRenderer.invoke('run-preset-eclipse-import', folder, relative),
   runPresetWorkspaceServers: folder => ipcRenderer.invoke('run-preset-workspace-servers', folder),
+  runPresetIdeServers: (folder, relative, pickFile) => ipcRenderer.invoke('run-preset-ide-servers', folder, relative, pickFile),
   runPresetChooseContextXml: folder => ipcRenderer.invoke('run-preset-choose-context-xml', folder),
   // The run preset's folder from a folder dialog at the worktree; main returns it relative, checked inside the worktree
   runPresetChooseFolder: (folder, relative) => ipcRenderer.invoke('run-preset-choose-folder', folder, relative),

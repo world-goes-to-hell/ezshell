@@ -1458,10 +1458,14 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
             placeholder: `[PastedContent${Array.from(text).length}chars]`
           } : null
           const now = Date.now()
-          const draft = relaxed ? { text: compactText, target, verify, eraseCount: Array.from(text).length + lines } : null
+          // Claude Code turns a final `\` + Enter into a new line instead of sending (2026-11-27 user report). A space
+          // after it lets Enter submit; Claude drops the space from the recorded line (checked with Claude Code 2.1.332).
+          // Codex submits such a line as it is. Matching uses the text without spaces either way.
+          const pasted = kind === 'claude' && text.endsWith('\\') ? text + ' ' : text
+          const draft = relaxed ? { text: compactText, target, verify, eraseCount: Array.from(pasted).length + lines } : null
           chat = {
             text: compactText, length, lines, codexSpeed, probe, verify: verifySend, terminalInput: [],
-            claudeImages, codexImages, draft, paste: pasteOf(files?.[0] ?? text),
+            claudeImages, codexImages, draft, paste: pasteOf(files?.[0] ?? pasted),
             // The CLI reads and decodes image files before its native image tokens appear.
             timeout: images ? IMAGE_INPUT_TIMEOUT : relaxed ? CHAT_INPUT_TIMEOUT : INPUT_TIMEOUT,
             resolve, timer: null

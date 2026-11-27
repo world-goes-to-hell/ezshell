@@ -1193,6 +1193,29 @@ describe('a line sent from the chat view (submitText)', () => {
     expect(write).not.toHaveBeenCalled()
   })
 
+  it('ends a Claude line that ends with a backslash with a space, so Enter submits it (2026-11-27 user report)', async () => {
+    // Claude Code turns `\` + Enter into a new line (it removed the backslash and kept the draft); with a space
+    // after it Enter submits, and the transcript records the line without the space (checked with Claude Code 2.1.332)
+    const { rawWrite } = chatSetup()
+    wake.writeOutput(claudeDraft(''))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const sent = wake.submitText('버그인가\\')
+    await vi.waitFor(() => expect(rawWrite.mock.calls).toEqual([['\x1b[200~버그인가\\ \x1b[201~']]))
+    wake.writeOutput(claudeDraft('버그인가\\ '))
+    await expect(sent).resolves.toEqual({ ok: true })
+    expect(rawWrite.mock.calls.at(-1)).toEqual(['\r'])
+  })
+
+  it('pastes a Codex line that ends with a backslash as it is (Codex submits it)', async () => {
+    const { rawWrite } = chatSetup('codex')
+    wake.writeOutput(codexDraft(''))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const sent = wake.submitText('버그인가\\')
+    await vi.waitFor(() => expect(rawWrite.mock.calls).toEqual([['\x1b[200~버그인가\\\x1b[201~']]))
+    wake.writeOutput(codexDraft('버그인가\\'))
+    await expect(sent).resolves.toEqual({ ok: true })
+  })
+
   it('also sends while the agent works (Claude takes the line for its next turn)', async () => {
     const { rawWrite } = chatSetup('codex', { busy: true })
     wake.writeOutput(codexDraft(''))
