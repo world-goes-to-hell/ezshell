@@ -5,7 +5,7 @@ import path from 'node:path'
 import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createSessionHost } from './host.js'
-import { createSessionHostClient, STATE_FILE } from './client.js'
+import { createSessionHostClient, STATE_FILE, DEV_STATE_FILE } from './client.js'
 
 const until = async (check, ms = 3000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 10))) if (check()) return
@@ -133,5 +133,34 @@ describe.skipIf(process.platform !== 'win32')('the app and its session host', ()
     hosts[0].host.endAll()
     await until(() => exits.length === 1)
     expect(app.ready()).toBe(false)
+  })
+
+  it('a second app does not take the shells of one still working: it starts its own host', async () => {
+    const first = client()
+    await first.start()
+    first.spawn('local:1', 'powershell.exe', [], options)
+    await until(() => ptys.length === 1)
+    const second = client()
+    expect(await second.start()).toBe(true)
+    expect(hosts).toHaveLength(2)
+    expect(second.ready()).toBe(true)
+    expect(second.takeAdoptable()).toEqual([])
+    // The first app still owns its host and shell
+    expect(first.ready()).toBe(true)
+    expect(ptys[0].killed).toBe(false)
+  })
+
+  it('a dev run keeps its own state file, apart from the installed app', async () => {
+    const installed = client()
+    await installed.start()
+    const dev = createSessionHostClient({ stateFolder: folder, runtime, stateName: DEV_STATE_FILE, spawn: startHosts(hosts, ptys), env: { PATH: 'C:\\Windows' } })
+    expect(await dev.start()).toBe(true)
+    expect(hosts).toHaveLength(2)
+    expect(fs.existsSync(path.join(folder, STATE_FILE))).toBe(true)
+    expect(fs.existsSync(path.join(folder, DEV_STATE_FILE))).toBe(true)
+    dev.shutdown()
+    // The dev run's quit leaves the installed app's state for its next start
+    expect(fs.existsSync(path.join(folder, STATE_FILE))).toBe(true)
+    expect(installed.ready()).toBe(true)
   })
 })

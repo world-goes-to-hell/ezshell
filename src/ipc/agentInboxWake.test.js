@@ -2361,6 +2361,48 @@ describe('the agent\'s prompt with choices, answered from the chat view', () => 
     expect(wake.approvalPrompt()).toMatchObject({ question: '어떤 과일을 넣을까요?', options: [], usesTerminalInput: true })
   })
 
+  it('reads Claude’s question without a notice box drawn over the dialog’s top right (2026-11-27)', async () => {
+    promptSetup('claude')
+    // The box's bottom border lies on the blank row under the tab strip (this PC's ko-ui plugin notice):
+    // read as the question's first row, the chat matched no question and showed no card
+    wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + [
+      '대화 내용'.padEnd(56) + '╭' + '─'.repeat(20) + '╮',
+      '─'.repeat(60) + '│ ko-ui' + ' '.repeat(14) + '│',
+      '←  ☐ 과일  ☐ 색  ✔ Submit  →'.padEnd(60) + '│ 새 항목 8개 발견   │',
+      ' '.repeat(60) + '╰' + '─'.repeat(20) + '╯',
+      '│ 어떤 과일을 넣을까요?', '',
+      '❯ 1. Apple', '  2. Banana', '  3. Type something.', '─'.repeat(40),
+      '  4. Chat about this', '', 'Enter to select · Tab/Arrow keys to navigate · Esc to cancel'
+    ].join('\r\n'))
+    await settle()
+    expect(wake.approvalPrompt()).toMatchObject({ question: '어떤 과일을 넣을까요?', options: [], usesTerminalInput: true })
+    // Lower, the box covers the end of the question's row: its text is not known (the chat's card takes the
+    // waiting question), rather than a piece the chat could match to no question
+    wake.writeOutput('\x1b[2J\x1b[H' + [
+      '─'.repeat(40) + ' '.repeat(20) + '╭' + '─'.repeat(20) + '╮',
+      '←  ☐ 과일  ☐ 색  ✔ Submit  →'.padEnd(60) + '│ ko-ui' + ' '.repeat(14) + '│',
+      '│ 어떤 과일을 넣을까요? 고른 과일은 모두 바구니에 담아 ╰' + '─'.repeat(20) + '╯',
+      '│ 보냅니다.', '',
+      '❯ 1. Apple', '  2. Banana', '  3. Type something.', '─'.repeat(40),
+      '  4. Chat about this', '', 'Enter to select · Tab/Arrow keys to navigate · Esc to cancel'
+    ].join('\r\n'))
+    await settle()
+    const covered = createAgentInboxWake({ kind: 'claude', cols: 100, rows: 24, pendingMessages: () => [], isWorking: () => true, write: vi.fn(() => true) })
+    covered.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + [
+      '─'.repeat(40) + ' '.repeat(20) + '╭' + '─'.repeat(20) + '╮',
+      '←  ☐ 과일  ☐ 색  ✔ Submit  →'.padEnd(60) + '│ ko-ui' + ' '.repeat(14) + '│',
+      '│ 어떤 과일을 넣을까요? 고른 과일은 모두 바구니에 담아 ╰' + '─'.repeat(20) + '╯',
+      '│ 보냅니다.', '',
+      '❯ 1. Apple', '  2. Banana', '  3. Type something.', '─'.repeat(40),
+      '  4. Chat about this', '', 'Enter to select · Tab/Arrow keys to navigate · Esc to cancel'
+    ].join('\r\n'))
+    await settle()
+    expect(covered.approvalPrompt()).toMatchObject({ question: null, options: [], usesTerminalInput: true })
+    // The question read before the box came stays (the same dialog)
+    expect(wake.approvalPrompt()).toMatchObject({ question: '어떤 과일을 넣을까요?', usesTerminalInput: true })
+    covered.close?.()
+  })
+
   it('recognizes Claude’s question with previews though its full-width rows wrap into the next ones', async () => {
     promptSetup('claude')
     // The CLI pads its rule and the preview rows to the pane's width and goes on without a line break,

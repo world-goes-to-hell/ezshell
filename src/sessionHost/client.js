@@ -9,6 +9,7 @@ const { randomBytes } = require('node:crypto')
 const { spawn: spawnProcess } = require('node:child_process')
 
 const STATE_FILE = 'session-host.json'
+const DEV_STATE_FILE = 'session-host-dev.json'
 const CONNECT_TRIES = 40
 const CONNECT_GAP_MS = 150
 const REPLY_MS = 5000
@@ -56,9 +57,11 @@ function remotePty(id, send) {
  * @param {object} deps
  * @param {string} deps.stateFolder where the pipe name and token are kept for the next app (userData)
  * @param {() => ({ exe: string, ptyDir: string, hostScript: string } | null)} deps.runtime the runtime copy (runtimeCopy.js)
+ * @param {string} [deps.stateName] the state file's name: a dev run keeps its own (DEV_STATE_FILE), since it
+ *   shares the user data folder with the installed app and must not find that app's host
  */
-function createSessionHostClient({ stateFolder, runtime, spawn = spawnProcess, connect = net.connect, platform = process.platform, env = process.env }) {
-  const stateFile = path.join(stateFolder, STATE_FILE)
+function createSessionHostClient({ stateFolder, runtime, stateName = STATE_FILE, spawn = spawnProcess, connect = net.connect, platform = process.platform, env = process.env }) {
+  const stateFile = path.join(stateFolder, stateName)
   const remotes = new Map()
   let socket = null
   let adoptable = []
@@ -125,10 +128,14 @@ function createSessionHostClient({ stateFolder, runtime, spawn = spawnProcess, c
 
   async function greet(connection, token) {
     socket = connection
+    lost = false
     attachSocket(connection)
     const hello = nextReply('hello')
+    // A host that turns this app away (another app works in it: host.js) closes at once
+    const closed = new Promise((_, reject) => connection.once('close', () => reject(new Error('the session host turned this app away'))))
+    closed.catch(() => {})
     send({ type: 'hello', token })
-    await hello
+    await Promise.race([hello, closed])
   }
 
   /** The host of an earlier app that kept its shells for this one, if there is one */
@@ -148,6 +155,8 @@ function createSessionHostClient({ stateFolder, runtime, spawn = spawnProcess, c
     } catch {
       connection.destroy()
       socket = null
+      // A reply still awaited from that host would take the new host's reply (received() gives it to the first)
+      waiting = []
       return false
     }
   }
@@ -233,4 +242,4 @@ function createSessionHostClient({ stateFolder, runtime, spawn = spawnProcess, c
   }
 }
 
-module.exports = { createSessionHostClient, remotePty, STATE_FILE }
+module.exports = { createSessionHostClient, remotePty, STATE_FILE, DEV_STATE_FILE }

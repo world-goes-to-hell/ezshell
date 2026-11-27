@@ -150,6 +150,20 @@ function fixture() {
         && ${card}?.querySelector('.nested-repository-summary .nested-repository-branch')?.textContent === 'main'`)
       && git(catalog, 'branch', '--show-current') === 'main')
 
+    await js(`${row('services/catalog')}.querySelector('.nested-repository-open').click()`)
+    const hasShell = name => `(() => {
+      const tab = [...document.querySelectorAll('.terminal-tab[data-tab-id^="local:"]')].find(tab =>
+        tab.querySelector('[data-tab-label]')?.textContent === ${JSON.stringify(name)})
+      return !!tab && [...${card}.querySelectorAll('.local-terms-item')].some(item =>
+        item.dataset.localSessionId === tab.dataset.tabId && item.querySelector('.local-terms-name')?.textContent === ${JSON.stringify(name)})
+    })()`
+    check('a nested repository row names its terminal for the repository folder in the tab and sidebar', await until(hasShell('catalog · main')))
+    await js(`${row('orders')}.querySelector('.nested-repository-more').click()`)
+    if (!await until(`!!${menuItem('로컬 터미널 열기')}`)) throw new Error('Missing repository terminal item')
+    await js(`${menuItem('로컬 터미널 열기')}.click()`)
+    check('another repository on the same branch has its own title when opened via the menu',
+      await until(`${hasShell('orders · main')} && ${hasShell('catalog · main')}`))
+
     fs.appendFileSync(path.join(catalog, 'initial'), '\nlocal change')
     await js(`${row('services/catalog')}.querySelector('.nested-repository-ref').click()`)
     if (!await until(`!!${branch('feature/catalog')}`)) throw new Error('Branch label did not open the branch dialog')

@@ -293,7 +293,6 @@ export function LocalProjectsTree({
                   const shownNames = [name, project.name, worktree.branch && `${project.name} · ${worktree.branch}`]
                   const presets = <RunPresetsSection folder={worktree.path} projectName={project.name} roots={project.worktrees.map(tree => tree.path)} />
                   const nested = <NestedRepositoryList root={worktree.path}
-                    onOpenTerminal={repo => (onOpenTerminal ?? onOpenWorktree)(project, { path: repo.path, branch: repo.error === undefined ? repo.branch : null, isMain: false })}
                     onAddPreset={relative => requestAddRunPreset(worktree.path, { relative })} />
                   if (plainNested) return (
                     <li key={treeKey} className="local-worktree is-folder" data-worktree-path={worktree.path}>

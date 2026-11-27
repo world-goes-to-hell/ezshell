@@ -463,6 +463,14 @@ function fixture(backendPort, frontendPort) {
     await js(`document.querySelector('input[name="run-preset-kind"][value="custom"]').click()`)
     const server = path.join(__dirname, '..', 'support', 'devRunServer.js')
     await until(`!!document.querySelector('.run-preset-command')`)
+    // A typed command starts from the way found in the folder (2026-11-27), and follows the folder until typed in
+    await setValue('#run-preset-folder', 'backend')
+    check('a typed command starts filled with the command found in the folder', await until(`
+      /gradlew(\\.bat)? bootRun/.test(document.querySelector('.run-preset-command')?.value ?? '') &&
+      !!document.querySelector('.run-preset-command-found')`), await js(`document.querySelector('.run-preset-command')?.value`))
+    await setValue('#run-preset-folder', '.')
+    check('the filled command follows the folder while untouched (none found: empty, with the example)', await until(`
+      document.querySelector('.run-preset-command')?.value === '' && !document.querySelector('.run-preset-command-found')`))
     // Two spaces on purpose: the question must show the command as it runs
     const typed = `node "${server}" --crash-after  5000`
     await setValue('.run-preset-command', typed)

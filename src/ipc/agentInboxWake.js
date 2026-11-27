@@ -6,6 +6,7 @@ const { isAgentPickerScreen } = require('./agentPicker.js')
 const { PROMPT, BUSY_PROMPT, REMIND_PROMPT } = require('./agentInboxPrompts.js')
 const { claudeQueueVisible, claudeLoginStage } = require('../agentChat/commandScreen.js')
 const { isCodexHookTrustScreen } = require('./codexHookLaunch.js')
+const { splitOverlayBox, withoutOverlayBox } = require('./cliOverlayBox.js')
 const STOP_WAKE_TIMEOUT = 15_000
 const STOP_WAKE_THINKING_RECHECK = 5000
 const STOP_WAKE_MAX_WAIT = 120_000
@@ -123,15 +124,19 @@ function claudeQuestionPrompt(rows, bare, bottom, previous) {
   if (tabs < 0 && firstChoice < 0) return null
 
   const lines = []
+  let covered = false
   for (let row = firstChoice - 1; row > tabs; row--) {
     const text = bare(row).trim()
     if (isClaudeRule(rows[row]) || (lines.length && !text)) break
     if (!text) continue
     // If the heading is cropped, only use the visibly marked question, never preceding log output.
     if (tabs < 0 && !/^\s*[│┃|]/u.test(rows[row])) break
+    if (splitOverlayBox(rows[row]).cut) covered = true
     lines.unshift(text)
   }
-  const question = lines.join(' ').slice(0, 1000)
+  // A notice box over the end of its rows (cliOverlayBox.js) leaves a piece of the question that matches
+  // none: not known then (the chat's card takes the waiting question), or as read before the box came
+  const question = covered ? '' : lines.join(' ').slice(0, 1000)
   if (!question && previous) return previous
   return { question: question || null, detail: [], options: [], selected: null, signature: JSON.stringify(['claude-question', question]), usesTerminalInput: true }
 }
@@ -492,7 +497,9 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       else raws.push(text)
       previous = cells
     }
-    const bare = index => (raws[index] ?? '').replace(/^\s*[│┃|]\s?/u, '').replace(/\s*[│┃|]\s*$/u, '')
+    // A plugin's notice box over the top right goes first: its "╰──╯" on the blank row under the tab strip
+    // was read as the question's first row (cliOverlayBox.js)
+    const bare = index => withoutOverlayBox(raws[index] ?? '').replace(/^\s*[│┃|]\s?/u, '').replace(/\s*[│┃|]\s*$/u, '')
     const top = 0
     let last = raws.length - 1
     while (last > top && !bare(last).trim()) last--

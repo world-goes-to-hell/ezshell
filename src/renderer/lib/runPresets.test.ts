@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   firstErrorRow, agentActionNotice, agentNoticeName, withObject, withSubject, runCommandLabel, agentActionNote, crashKey, draftOf, emptyDraft, parseEnvText, presetFromDraft, runButtons, runError, runFolderLabel,
   runHead, runKind, runPills, runPort, type RunPreset, type RunState,
-  confirmSections, looksSecret, secretCommandArgNames, secretEnvNames, secretVmArgNames, usesMaven, hasAdvancedValues, hasRunContent, suggestPresetName, usesJdk, shortPath, workspaceServerFill, eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY, presetOfTask, presetSeedOfTask
+  confirmSections, looksSecret, secretCommandArgNames, secretEnvNames, secretVmArgNames, usesMaven, hasAdvancedValues, hasRunContent, suggestPresetName, suggestCustomCommand, usesJdk, shortPath, workspaceServerFill, eclipseFill, eclipseSummary, tomcatFromDraft, isRunActive, hotReloadChoice, hotReloadToSave, isSpringBootTask, reloadAge, reloadChip, reloadTicks, HOT_RELOAD_SPRING_ONLY, presetOfTask, presetSeedOfTask
 } from './runPresets'
 
 const preset = (over: Partial<RunPreset> = {}): RunPreset => ({
@@ -398,6 +398,17 @@ describe('the dialog layout (review, 2026-11-26)', () => {
     expect(suggestPresetName({ kind: 'tomcat', relative: '.', contextPath: '/' })).toBe('Tomcat')
     expect(suggestPresetName({ kind: 'custom', relative: '.' })).toBe('')
     expect([...suggestPresetName({ kind: 'custom', relative: 'a'.repeat(30) })]).toHaveLength(20)
+  })
+
+  it('starts a typed command from the way found in the folder: the chosen one, else the first', () => {
+    const found = [
+      { taskId: '.:gradle', name: 'Spring Boot', command: '.\\gradlew.bat bootRun --no-daemon' },
+      { taskId: '.:node', name: 'Node', command: 'npm.cmd run dev' }
+    ]
+    expect(suggestCustomCommand(found, '.:node')).toBe('npm.cmd run dev')
+    expect(suggestCustomCommand(found, 'other:gradle')).toBe('.\\gradlew.bat bootRun --no-daemon')
+    expect(suggestCustomCommand(found, undefined)).toBe('.\\gradlew.bat bootRun --no-daemon')
+    expect(suggestCustomCommand([], '.:gradle')).toBe('')
   })
 
   it('knows which runs need a JDK', () => {

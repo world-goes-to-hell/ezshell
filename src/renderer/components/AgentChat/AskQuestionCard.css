@@ -74,6 +74,17 @@
   white-space: pre;
   user-select: text;
 }
+/* All previews in one cell, so the box is as large as the largest and keeps its size from choice to choice */
+.agent-ask-preview-stack { display: grid; }
+.agent-ask-preview-text {
+  grid-area: 1 / 1;
+  margin: 0;
+  font: inherit;
+  white-space: inherit;
+  visibility: hidden;
+}
+/* inherit, not visible: a hidden tab's card must stay hidden (docs/fix/2026-11-25-chat-time-shows-through-hidden-tab.md) */
+.agent-ask-preview-text[data-shown] { visibility: inherit; }
 .agent-ask-option {
   display: flex;
   align-items: flex-start;

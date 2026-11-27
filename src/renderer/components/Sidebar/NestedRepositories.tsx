@@ -91,9 +91,8 @@ function pullLabel(result: NestedRepositoryPullResult) {
   }
 }
 
-export function NestedRepositoryList({ root, onOpenTerminal, onAddPreset }: {
+export function NestedRepositoryList({ root, onAddPreset }: {
   root: string
-  onOpenTerminal: (repository: NestedRepositoryStatus) => void
   onAddPreset: (relative: string) => void
 }) {
   const id = pathKey(root)
@@ -119,9 +118,12 @@ export function NestedRepositoryList({ root, onOpenTerminal, onAddPreset }: {
       ? event.currentTarget.getBoundingClientRect() : null
     setMenu({ repository, position: { x: rect?.left ?? event.clientX, y: rect?.bottom ?? event.clientY } })
   }
-  const openAgent = (repository: NestedRepositoryStatus, agent: LocalAgent) => {
+  const openTerminal = (repository: NestedRepositoryStatus, agent?: LocalAgent) => {
+    const name = folderLabel(repository.path)
+    const branch = repository.error === undefined ? repository.branch : null
+    const workspaceLabel = !agent && branch ? `${name} · ${branch}` : name
     window.dispatchEvent(new CustomEvent(OPEN_LOCAL_TERMINAL_EVENT, {
-      detail: { cwd: repository.path, workspaceLabel: folderLabel(repository.path), agent }
+      detail: { cwd: repository.path, workspaceLabel, agent }
     }))
   }
   const promote = (repository: NestedRepositoryStatus) => {
@@ -174,7 +176,7 @@ export function NestedRepositoryList({ root, onOpenTerminal, onAddPreset }: {
               onContextMenu={event => openMenu(event, repo)}>
               <div className="nested-repository-main">
                 <button type="button" className="nested-repository-open" aria-label={`${repo.folder}에서 터미널 열기`}
-                  title={repo.path} onClick={() => onOpenTerminal(repo)}>
+                  title={repo.path} onClick={() => openTerminal(repo)}>
                   <RiGitBranchLine size={13} aria-hidden="true" />
                   <span className="nested-repository-name">{repo.folder}</span>
                 </button>
@@ -203,15 +205,15 @@ export function NestedRepositoryList({ root, onOpenTerminal, onAddPreset }: {
       </>}
       {menu && <TerminalContextMenu position={menu.position} onClose={() => setMenu(null)} top={[]}
         groups={[{ label: '에이전트 열기', icon: RiRobot2Line, items: [
-          { label: 'Claude Code', icon: RiRobot2Line, onSelect: () => openAgent(menu.repository, 'claude') },
-          { label: 'Codex', icon: RiRobot2Line, onSelect: () => openAgent(menu.repository, 'codex') }
+          { label: 'Claude Code', icon: RiRobot2Line, onSelect: () => openTerminal(menu.repository, 'claude') },
+          { label: 'Codex', icon: RiRobot2Line, onSelect: () => openTerminal(menu.repository, 'codex') }
         ] }]}
         target={{ name: menu.repository.folder, hint: '하위 저장소', items: [
           { label: '최신으로 받기', icon: RiDownloadLine, disabled: pullPending(progress?.[menu.repository.folder]),
             onSelect: () => void pullNestedRepositories(root, [menu.repository]) },
           { label: '브랜치 바꾸기…', icon: RiGitBranchLine, onSelect: () => setBranchFolder(menu.repository.folder) },
           { label: '기동 설정…', icon: RiPlayLine, onSelect: () => onAddPreset(menu.repository.folder) },
-          { label: '로컬 터미널 열기', icon: RiTerminalBoxLine, onSelect: () => onOpenTerminal(menu.repository) },
+          { label: '로컬 터미널 열기', icon: RiTerminalBoxLine, onSelect: () => openTerminal(menu.repository) },
           { label: '파일 탐색기로 열기', icon: RiFolderOpenLine, onSelect: () => void openExplorer(menu.repository) },
           { label: '따로 로컬 작업으로 올리기', icon: RiFolderOpenLine, onSelect: () => promote(menu.repository) }
         ] }} />}

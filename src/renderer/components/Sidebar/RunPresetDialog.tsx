@@ -10,7 +10,7 @@ import { RunPresetTomcatAdvanced, RunPresetTomcatFields } from './RunPresetTomca
 import { RunPresetMavenFields } from './RunPresetMavenFields'
 import {
   draftOf, emptyDraft, hasAdvancedValues, hasRunContent, hotReloadChoice, hotReloadToSave, isSpringBootTask, LOG_ENCODINGS, presetFromDraft,
-  PLAIN_TEXT_WARNING, secretCommandArgNames, secretEnvNames, secretVmArgNames, suggestPresetName, usesJdk, usesMaven,
+  PLAIN_TEXT_WARNING, secretCommandArgNames, secretEnvNames, secretVmArgNames, suggestCustomCommand, suggestPresetName, usesJdk, usesMaven,
   type HotReload, type PresetDraft, type RunCandidate, type RunPreset
 } from '../../lib/runPresets'
 import { draftKey, dropDraft, keepDraft, reloadProjectPresets, runPresetAction, runPresetApi, takeDraft, worktreeRuns } from '../../stores/runPresetStore'
@@ -146,6 +146,16 @@ export function RunPresetDialog({ folder, projectName, preset, seed, onClose }: 
   useEffect(() => {
     if (!nameTouched && suggested !== draft.name) setDraft(current => ({ ...current, name: suggested }))
   }, [nameTouched, suggested, draft.name])
+
+  // A typed command starts from the way found in the folder, and follows it until the user types in it
+  // (a saved typed command is kept as it is)
+  const [commandTouched, setCommandTouched] = useState(() => !!draft.command)
+  const foundCommand = candidates === null ? null : suggestCustomCommand(candidates, draft.taskId)
+  useEffect(() => {
+    if (draft.kind === 'custom' && !commandTouched && foundCommand !== null && foundCommand !== draft.command) {
+      setDraft(current => ({ ...current, command: foundCommand }))
+    }
+  }, [draft.kind, commandTouched, foundCommand, draft.command])
 
   const javaRun = usesJdk({ kind: draft.kind, taskId: draft.taskId, command: candidate?.command })
   // The JDK stays in sight for a Java run, or when one was chosen; a typed command picks it under 고급
@@ -287,7 +297,8 @@ export function RunPresetDialog({ folder, projectName, preset, seed, onClose }: 
             {draft.kind === 'custom' && (
               <div className="form-group">
                 <input className="run-preset-command" value={draft.command} placeholder="예: ./gradlew bootRun --args='--spring.profiles.active=local'"
-                  onChange={event => set({ command: event.target.value })} spellCheck={false} autoComplete="off" aria-label="실행할 명령" />
+                  onChange={event => { setCommandTouched(true); set({ command: event.target.value }) }} spellCheck={false} autoComplete="off" aria-label="실행할 명령" />
+                {!commandTouched && !!draft.command && <small className="run-preset-hint run-preset-command-found">이 폴더에서 찾은 실행 명령을 넣어 두었습니다. 필요하면 고쳐서 쓰세요.</small>}
                 <small className="run-preset-warn">직접 입력한 명령은 그대로 실행됩니다.</small>
                 {secretCommandArgNames(draft.command).length > 0 && (
                   <small className="run-preset-warn run-preset-secret-warn" role="note">{PLAIN_TEXT_WARNING} ({secretCommandArgNames(draft.command).join(', ')})</small>

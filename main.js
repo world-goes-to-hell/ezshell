@@ -711,8 +711,12 @@ const sessionRuntime = require('./src/sessionHost/runtimeCopy.js').createRuntime
   ptyDir: path.dirname(require.resolve('node-pty/package.json')).replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`),
   localAppData: process.env.LOCALAPPDATA
 });
-const sessionHost = require('./src/sessionHost/client.js').createSessionHostClient({
+const sessionHostClient = require('./src/sessionHost/client.js');
+const sessionHost = sessionHostClient.createSessionHostClient({
   stateFolder: userDataPath,
+  // `npm run dev` shares the installed app's user data folder: with the same state file it took over the
+  // installed app's host and every shell ended with the dev run (2026-11-27 user report)
+  stateName: app.isPackaged ? sessionHostClient.STATE_FILE : sessionHostClient.DEV_STATE_FILE,
   runtime: () => sessionRuntime.current()
 });
 /** At start: the host (taking back one an earlier app kept), then the shells it kept */

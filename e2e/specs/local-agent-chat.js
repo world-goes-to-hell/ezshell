@@ -588,19 +588,33 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   fs.unlinkSync(file('claude-1-ask-submitted'))
   const photo = [{ question: '카드에 넣을 사진의 출처를 정해 주세요.', header: '유형별 사진', multiSelect: false, options: [
     { label: '기존 아이콘으로 유형 카드 (Recommended)', description: '아이콘', preview: '+----------+\n| [아이콘] |\n+----------+' },
-    { label: '이미지 파일을 받아서 적용', description: '파일', preview: '+--------+\n| upload |\n+--------+' }
+    { label: '이미지 파일을 받아서 적용', description: '파일', preview: '+--------+\n| upload |\n|        |\n|        |\n|        |\n|        |\n+--------+' },
+    { label: '나중에 정하기', description: '보류' }
   ] }]
   fs.appendFileSync(firstTranscript, askTool('a-ask-3', 'toolu_ask_3', photo))
   fs.writeFileSync(file('claude-1-program-status'), 'state=working:app=claude')
   fs.writeFileSync(file('claude-1-ask-dialog'), JSON.stringify(photo))
   check('a question with previews shows as a card with the first choice’s preview and no typed answer', await until(`
-    ${askCard}?.textContent.includes('카드에 넣을 사진') && ${askCard}.querySelector('.agent-ask-preview')?.textContent.includes('[아이콘]') &&
+    ${askCard}?.textContent.includes('카드에 넣을 사진') && ${askCard}.querySelector('.agent-ask-preview-text[data-shown]')?.textContent.includes('[아이콘]') &&
     ![...${askCard}.querySelectorAll('.agent-ask-option')].some(button => button.textContent.includes('직접 입력'))
   `, 8000))
+  // The card keeps its height from choice to choice (2026-11-27 user report: the preview box took the shown
+  // preview's size, the card grew and shrank, and the choices moved under the pointer)
+  const askHeight = () => js(`Math.round(${askCard}.getBoundingClientRect().height)`)
+  const heightBefore = await askHeight()
+  const later = `[...${askCard}.querySelectorAll('.agent-ask-option')].find(button => button.textContent.includes('나중에 정하기'))`
+  // The choices take the pointer once the card is armed (a disabled button gets no pointer events)
+  await until(`(${later})?.disabled === false`, 3000)
+  const [laterX, laterY] = await center(later)
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: laterX, y: laterY })
+  const saysNone = await until(`${askCard}.querySelector('.agent-ask-preview-text[data-shown]')?.textContent.includes('미리보기가 없는')`, 3000)
+  const heightPointed = await askHeight()
+  check('pointing at a choice without a preview says so and keeps the card’s height', saysNone && heightPointed === heightBefore,
+    JSON.stringify({ saysNone, heightBefore, heightPointed }))
   await clickAskOption('이미지 파일을 받아서 적용')
   check('picking a choice shows its preview and does not send yet', await until(`
-    ${askCard}?.querySelector('.agent-ask-preview')?.textContent.includes('upload') && !${askCard}.querySelector('.agent-ask-sending')
-  `, 3000) && !read('claude-1-ask-submitted'))
+    ${askCard}?.querySelector('.agent-ask-preview-text[data-shown]')?.textContent.includes('upload') && !${askCard}.querySelector('.agent-ask-sending')
+  `, 3000) && !read('claude-1-ask-submitted') && (await askHeight()) === heightBefore)
   await shot('local-agent-chat-ask-preview')
   await clickAsk('.agent-ask-send')
   check('its send button answers the dialog with the picked choice', (await waitFor(() => read('claude-1-ask-submitted'))) === JSON.stringify(['이미지 파일을 받아서 적용']))

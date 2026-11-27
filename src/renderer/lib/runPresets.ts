@@ -2,7 +2,7 @@
 // the types of the IPC contract and the words and buttons a preset row shows. Kept free of React so the
 // rules are tested on their own.
 
-import type { EclipseImportDraft, HotReload, HotswapAgentStatus, JdkRuntime, LogEncoding, RunAction, RunPrepare, RunPreset, RunState, WorkspaceServer } from '../types'
+import type { EclipseImportDraft, HotReload, HotswapAgentStatus, JdkRuntime, LogEncoding, RunAction, RunCandidate, RunPrepare, RunPreset, RunState, WorkspaceServer } from '../types'
 export type { HotReload, RunAction, RunCandidate, RunErrorGroup, RunPrepare, RunPreset, RunReload, RunState, RunStatus } from '../types'
 
 export const IDLE_STATE: RunState = { status: 'idle', errors: 0 }
@@ -409,6 +409,14 @@ export function suggestPresetName({ kind, relative, taskId, command, contextPath
     : kind === 'task' ? folder || (taskId ? KIND_NAMES[runKind({ kind, taskId, command, name: '' })] : '')
     : folder
   return [...name].slice(0, MAX_NAME).join('')
+}
+
+/**
+ * The command a typed run starts from, until the user types in it (2026-11-27 user request): the way found
+ * in the folder that was chosen, else the first found; '' when none was found (the box shows its example)
+ */
+export function suggestCustomCommand(candidates: readonly Pick<RunCandidate, 'taskId' | 'command'>[], taskId: string | undefined): string {
+  return (candidates.find(item => item.taskId === taskId) ?? candidates[0])?.command ?? ''
 }
 
 /** Whether the run needs a JDK: Tomcat, and the Java ways main finds (a typed command picks its JDK under 고급) */
