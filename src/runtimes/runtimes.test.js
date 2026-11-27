@@ -441,7 +441,8 @@ describe('enhanced Java runtimes', () => {
     expect(reopened.hotswapAgentStatus()).toEqual({ installed: true, version: '2.0.5' })
     expect(reopened.enhancedJvmArgs(temurin.id)).toBeNull()
     expect(reopened.enhancedJvmArgs(jbr.id)).toEqual([
-      '-XX:+AllowEnhancedClassRedefinition', '-XX:HotswapAgent=external', `-javaagent:${jar}`
+      '-XX:+AllowEnhancedClassRedefinition', '-XX:HotswapAgent=external', `-javaagent:${jar}`,
+      '--add-opens=java.base/sun.nio.ch=ALL-UNNAMED', '--add-opens=java.base/java.io=ALL-UNNAMED'
     ])
 
     fs.writeFileSync(jar, 'agent-fixturE')

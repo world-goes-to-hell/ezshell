@@ -31,8 +31,11 @@ function writeState(file, state) {
 function remotePty(id, send) {
   const dataListeners = []
   const exitListeners = []
+  const spawned = Promise.withResolvers()
   const pty = {
     pid: 0,
+    // The pid comes with the host's answer to spawn (0 when it could not start the shell)
+    spawned: spawned.promise,
     onData: listener => { dataListeners.push(listener); return { dispose() { dataListeners.splice(dataListeners.indexOf(listener) >>> 0, 1) } } },
     onExit: listener => { exitListeners.push(listener); return { dispose() { exitListeners.splice(exitListeners.indexOf(listener) >>> 0, 1) } } },
     write: data => send({ type: 'write', id, data }),
@@ -43,6 +46,10 @@ function remotePty(id, send) {
   let ended = false
   const control = {
     pty,
+    started: pid => {
+      pty.pid = pid
+      spawned.resolve(pid)
+    },
     data: data => dataListeners.forEach(listener => listener(data)),
     exit: exitCode => {
       if (ended) return
@@ -87,8 +94,9 @@ function createSessionHostClient({ stateFolder, runtime, stateName = STATE_FILE,
     const remote = typeof message.id === 'string' ? remotes.get(message.id) : undefined
     if (message.type === 'data') return remote?.data(message.data)
     if (message.type === 'exit') return remote?.exit(message.exitCode)
-    if (message.type === 'spawned' && remote) remote.pty.pid = message.pid
+    if (message.type === 'spawned' && remote) remote.started(message.pid)
     if (message.type === 'spawn-error' && remote) {
+      remote.started(0)
       remote.data(`\r\n[셸을 열지 못했습니다: ${message.message}]\r\n`)
       remote.exit(-1)
     }
@@ -205,7 +213,7 @@ function createSessionHostClient({ stateFolder, runtime, stateName = STATE_FILE,
   /** A kept shell of the earlier app, as a node-pty-shaped shell again */
   function adopt(shell) {
     const remote = remotePty(shell.id, send)
-    remote.pty.pid = shell.pid
+    remote.started(shell.pid)
     remotes.set(shell.id, remote)
     return remote.pty
   }

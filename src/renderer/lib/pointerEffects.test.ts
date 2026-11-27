@@ -66,6 +66,29 @@ it('draws each ghost with the image and hotspot used where it was recorded', () 
   expect(drawImage.mock.calls).toEqual([[arrow.image, 18, 38], [text.image, 54, 24]])
 })
 
+it('draws and expires each new moving and press effect', () => {
+  const moves = ['snow', 'notes', 'wind', 'firefly'] as const
+  const clicks = ['square', 'orbit', 'confetti', 'shutter', 'bloom'] as const
+  const paint = vi.fn()
+  const path = vi.fn()
+  const ctx = {
+    clearRect: path, save: path, restore: path, translate: path, rotate: path, beginPath: path, moveTo: path, lineTo: path,
+    quadraticCurveTo: path, closePath: path, arc: path, ellipse: path, rect: path, roundRect: path,
+    stroke: paint, fill: paint, fillRect: paint
+  } as unknown as CanvasRenderingContext2D
+  for (const [move, click] of [...moves.map(move => [move, 'none'] as const), ...clicks.map(click => ['none', click] as const)]) {
+    const state = createEffectState()
+    const settings = config({ move, click })
+    addMove(state, move, 70, 40, 100, 2, settings.ink, settings.dark, true)
+    addClick(state, click, 70, 40, 100, 2, settings.ink, settings.dark)
+    paint.mockClear()
+    drawFrame(ctx, state, 160, 90, 280, 16, settings)
+    expect(paint, `${move} / ${click}`).toHaveBeenCalled()
+    prune(state, 2000)
+    expect(needsFrame(state, settings)).toBe(false)
+  }
+})
+
 it('draws legible word bubbles in every app palette and keeps them inside the canvas', () => {
   const rgb = (hex: string): Rgb => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)) as Rgb
   for (const { id, colors } of PRESET_THEMES) {

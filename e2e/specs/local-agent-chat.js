@@ -1887,10 +1887,11 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     if (!await until(`!!${element}?.querySelector('.agent-chat-profile')`, 5000)) throw new Error('Claude profile chat did not open')
     return `${element}.querySelector('.agent-chat-profile')`
   }
-  const pickProfile = async (trigger, name) => {
+  const pickProfile = async (trigger, name, action = 'new') => {
     await click(...await center(trigger))
-    const option = `[...document.querySelectorAll('.new-tab-menu [role="menuitem"]')].find(item => item.textContent.trim() === ${JSON.stringify(name)})`
-    if (!await until(`!!${option}`, 5000)) throw new Error(`Claude account menu option missing: ${name}`)
+    const option = `[...document.querySelectorAll('.new-tab-menu [role="menuitem"][data-profile-action=${JSON.stringify(action)}]')]
+      .find(item => item.dataset.profileName === ${JSON.stringify(name)})`
+    if (!await until(`!!${option}`, 5000)) throw new Error(`Claude account menu option missing: ${name} (${action})`)
     await click(...await center(option))
   }
   await click(...await center('document.querySelector(\'[aria-label="업무 테스트 열기"]\')'))
@@ -1929,6 +1930,41 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('resume uses the transcript owner and passes the session ID to Claude', resumedAgent?.claudeProfileId === workProfile.id &&
     await waitFor(() => read(resumedAgent.id + '-argv').includes(SESSIONS[0])))
   if (resumed.success) await js(`window.electronAPI.localShellClose(${JSON.stringify(resumed.id)})`)
+
+  // "이 대화를 이어서": the personal account's conversation goes on under the work account in the same pane
+  const workRoot = path.join(profile, 'claude-profiles', workProfile.id)
+  const personalRoot = path.join(profile, 'claude-profiles', personalProfile.id)
+  fs.writeFileSync(path.join(profile, personalAgent.id + '-hook-session'), SESSIONS[0])
+  fs.writeFileSync(path.join(profile, personalAgent.id + '-hooks'), JSON.stringify([{ event: 'SessionStart' }]))
+  check('the personal Claude reports its session through the hooks', !!await waitFor(() => js(`window.electronAPI.agentMessagesSnapshot().then(state =>
+    state.agents.find(agent => agent.id === ${JSON.stringify(personalAgent.id)} && agent.statusSource === 'hook'))`)))
+  const tabsBefore = await js(`document.querySelectorAll('.terminal-tab').length`)
+  await js(`window.__oldProfileTab = document.querySelector('[data-local-shell-id="${personalAgent.shellId}"]').closest('.local-terminal-tab')`)
+  const personalTab = await js(`document.querySelector('[data-local-shell-id="${personalAgent.shellId}"]').dataset.localTabId`)
+  await click(...await center(`document.querySelector(${JSON.stringify(`.terminal-tab[data-tab-id=${JSON.stringify(personalTab)}]`)})`))
+  if (!await until(`getComputedStyle(window.__oldProfileTab).visibility !== 'hidden' && !!${privateButton}`, 5000)) {
+    throw new Error('the personal Claude tab did not come to the front')
+  }
+  await pickProfile(privateButton, workProfile.name, 'continue')
+  const continued = await waitFor(() => js(`window.electronAPI.agentMessagesSnapshot().then(state => state.agents.find(agent =>
+    agent.active && agent.claudeProfileId === ${JSON.stringify(workProfile.id)} && agent.shellId !== ${JSON.stringify(workAgent.shellId)}))`))
+  check('continuing under another account starts Claude with that account and the same session', !!continued &&
+    await waitFor(() => read(continued.id + '-argv').includes(SESSIONS[0])) &&
+    (await inAgent(continued.id, 'echo %CLAUDE_CONFIG_DIR%')).stdout.trim() === workRoot)
+  check('the conversation is copied to the other account, keeping what was there', continued &&
+    fs.readFileSync(path.join(workRoot, 'projects', 'test', `${SESSIONS[0]}.jsonl`), 'utf8').includes('개인 테스트 대화') &&
+    fs.readdirSync(path.join(workRoot, 'projects', 'test')).some(name => name.startsWith(`${SESSIONS[0]}.jsonl.before-`)) &&
+    fs.readFileSync(path.join(personalRoot, 'projects', 'test', `${SESSIONS[0]}.jsonl`), 'utf8').includes('개인 테스트 대화'))
+  check('the new Claude takes the pane of the old one, which closes', continued && await until(`
+    document.querySelector('[data-local-shell-id="${continued.shellId}"]')?.dataset.localTabId === ${JSON.stringify(personalTab)} &&
+    !document.querySelector('[data-local-shell-id="${personalAgent.shellId}"]') &&
+    document.querySelectorAll('.terminal-tab').length === ${tabsBefore}
+  `, 8000) && !(await js(`window.electronAPI.agentMessagesSnapshot().then(state =>
+    state.agents.some(agent => agent.active && agent.id === ${JSON.stringify(personalAgent.id)}))`)))
+  check('the pane stays a chat, now on the work account', continued && await until(`
+    (document.querySelector('[data-local-shell-id="${continued.shellId}"]')?.querySelector('.agent-chat-profile')?.textContent ?? '')
+      .includes(${JSON.stringify(workProfile.name)})
+  `, 10000))
 
   // Locking drops every conversation
   await js(`document.activeElement?.blur(); document.body.focus()`)

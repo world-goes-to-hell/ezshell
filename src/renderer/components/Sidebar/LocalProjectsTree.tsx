@@ -1,10 +1,11 @@
-import { useState, type DragEvent, type MouseEvent, type ReactNode } from 'react'
+import { useState, type CSSProperties, type DragEvent, type MouseEvent, type ReactNode } from 'react'
 import { RiAddLine, RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolder3Line, RiFolderOpenLine, RiGitBranchLine, RiPlayLine, RiTerminalBoxLine } from 'react-icons/ri'
 import { SiNodedotjs, SiSpringboot, SiVuedotjs } from 'react-icons/si'
 import type { IconType } from 'react-icons'
 import type { LocalProjectState } from '../../hooks/useLocalProjects'
 import type { LocalDevelopmentTask } from '../../types'
 import { folderLabel, pathKey } from '../../lib/localWorkspaceTree'
+import { projectKeyOf } from '../../lib/localProjectServers'
 import { developmentTaskLabel, developmentTaskMenu } from '../../lib/developmentTaskMenu'
 import { presetOfTask, presetSeedOfTask } from '../../lib/runPresets'
 import { useDevelopmentRuns } from '../../lib/developmentRun'
@@ -110,6 +111,15 @@ export interface WorktreeTab {
 
 export const projectFoldKey = (folder: string) => `p:${pathKey(folder)}`
 export const worktreeFoldKey = (path: string) => `w:${pathKey(path)}`
+
+const PROJECT_HUES = [245, 170, 72, 294, 135, 35, 210, 330]
+
+function projectHue(project: ProjectNode): number {
+  const key = projectKeyOf(project)
+  let hash = 2166136261
+  for (let i = 0; i < key.length; i++) hash = Math.imul(hash ^ key.charCodeAt(i), 16777619)
+  return PROJECT_HUES[(hash >>> 0) % PROJECT_HUES.length]
+}
 
 type TaskMenu = {
   position: { x: number; y: number }
@@ -248,7 +258,8 @@ export function LocalProjectsTree({
         const projectWorking = !isProjectOpen && project.worktrees.some(tree => tabsOf(tree.path).some(tab => tab.working))
         const Chevron = isProjectOpen ? RiArrowDownSLine : RiArrowRightSLine
         return (
-          <li key={projectKey} className={`local-project${dropTarget === projectKey ? ' is-drop-target' : ''}`} data-project-folder={project.folder} {...dropProps(project, projectKey)}>
+          <li key={projectKey} className={`local-project${dropTarget === projectKey ? ' is-drop-target' : ''}`} data-project-folder={project.folder}
+            style={{ '--local-project-hue': projectHue(project) } as CSSProperties} {...dropProps(project, projectKey)}>
             <div className="local-project-head" onContextMenu={canOpenFolder ? event => openFolderMenu(event, project.folder, project.name) : undefined}>
               <button
                 type="button"

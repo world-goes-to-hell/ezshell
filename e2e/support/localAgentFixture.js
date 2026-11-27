@@ -158,6 +158,10 @@ if (!manualChatOnly || (mcpConfig && mcpConfig === process.env.EZSHELL_AGENT_SHE
 const hooksPath = path.join(profile, id + '-hooks')
 const hookLogPath = path.join(profile, id + '-hook-log')
 const hookSession = require('crypto').randomUUID()
+// `<id>-hook-session`: the session ID the hooks report instead (a test that needs to know it)
+const hookSessionId = () => {
+  try { return fs.readFileSync(path.join(profile, id + '-hook-session'), 'utf8').trim() } catch { return hookSession }
+}
 const hookPrompts = new Map()
 const promptUuid = name => {
   if (!hookPrompts.has(name)) hookPrompts.set(name, require('crypto').randomUUID())
@@ -197,7 +201,7 @@ function runHook(step) {
   child.on('error', error => log({ error: error.message }))
   const input = JSON.stringify({
     hook_event_name: step.event,
-    session_id: hookSession,
+    session_id: hookSessionId(),
     ...(step.prompt ? { prompt_id: promptUuid(step.prompt) } : {}),
     ...(step.tool ? { tool_use_id: step.tool, tool_name: 'Bash' } : {}),
     ...(step.event === 'Stop' ? { stop_hook_active: step.active === true } : {}),

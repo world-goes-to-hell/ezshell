@@ -856,6 +856,14 @@ export interface NestedRepositoryBranch {
   current: boolean
 }
 
+/** How to switch over local edits Git refused to overwrite (src/ipc/nestedCheckout.js) */
+export type NestedCheckoutMode = 'smart' | 'force'
+
+/** smart: edits applied again (conflicts listed, stash kept when any) · force: edits kept only as a stash backup */
+export type NestedCheckoutResult =
+  | { kind: 'smart'; conflicts: string[]; stash?: string }
+  | { kind: 'force'; stash?: string }
+
 /** A remote in the repository's own config (password parts shown as ***) */
 export interface NestedRepositoryRemote {
   name: string
@@ -905,6 +913,7 @@ export interface LocalDevelopmentTask {
 
 export interface LocalDevelopmentRun {
   taskId: string
+  runPreset?: true
   name: string
   label: string
   status: 'starting' | 'running' | 'stopping' | 'exited'
@@ -1411,6 +1420,7 @@ declare global {
       localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: AgentChatProvider; resume?: string; replacementFor?: string; restoring?: true; claudeProfileId?: string; reuseClaudeProfile?: true }) => Promise<{ success: true; id: string; name: string; cwd?: string; reused?: true } | { success: false; error: string }>
       claudeProfilesList: () => Promise<ClaudeProfilesResult>
       claudeProfileSave: (request: { id?: string; name: string }) => Promise<ClaudeProfilesResult>
+      claudeProfileSwitchInPlace?: (request: { shellId: string; profileId: string }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
       onLocalAgentRequestOpened: (callback: (opened: { id: string; name: string; cwd: string; workspaceLabel: string }) => void) => () => void
       localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
       localProjectDevelopmentTasks: (folder: string) => Promise<{ success: true; tasks: LocalDevelopmentTask[] } | { success: false; error: string }>
@@ -1425,8 +1435,10 @@ declare global {
         Promise<{ success: true; results: NestedRepositoryPullResult[] } | { success: false; error: string }>
       localNestedRepositoryBranches?: (request: NestedRepositoryRequest) =>
         Promise<{ success: true; branches: NestedRepositoryBranch[] } | { success: false; error: string }>
-      localNestedRepositorySwitchBranch?: (request: NestedRepositoryRequest & { branch: Pick<NestedRepositoryBranch, 'name' | 'remote'> }) =>
-        Promise<{ success: true; status: NestedRepositoryStatus } | { success: false; error: string }>
+      localNestedRepositorySwitchBranch?: (request: NestedRepositoryRequest & {
+        branch: Pick<NestedRepositoryBranch, 'name' | 'remote'>; mode?: NestedCheckoutMode
+      }) => Promise<{ success: true; status: NestedRepositoryStatus; checkout?: NestedCheckoutResult }
+        | { success: true; localChanges: string[] } | { success: false; error: string }>
       localNestedRepositoryRemotes?: (request: NestedRepositoryRequest) =>
         Promise<{ success: true; remotes: NestedRepositoryRemote[] } | { success: false; error: string }>
       localNestedRepositorySetRemote?: (request: NestedRepositoryRequest & {

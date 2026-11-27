@@ -7,6 +7,7 @@ const { eclipseTestSource } = require('./eclipseProject.js')
 const { javaCharset, javaLogOptions, windowsConsoleEncoding } = require('./developmentEncoding.js')
 const { mavenVersionFromHome } = require('../runtimes/apacheToolHome.js')
 const { allowedJar, jarHasClass, jarClassName, copyCheckedJar } = require('../runtimes/jarSearch.js')
+const { ownerExited } = require('./runScratch.js')
 
 const XML_LIMIT = 256 * 1024
 const TOOL_TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/
@@ -247,8 +248,8 @@ async function makeBase(userData, id, conf, configure, encoding) {
     try {
       const owner = Number(match[1])
       if (owner) {
-        try { process.kill(owner, 0); continue }
-        catch (error) { if (error.code !== 'ESRCH') continue }
+        // A server handed over by the app before an update still runs on its base (runScratch.js)
+        if (!ownerExited(owner)) continue
       } else if (Date.now() - (await fs.stat(orphan)).mtimeMs < LEGACY_BASE_MAX_AGE) continue
       await removeBase(orphan)
     } catch { /* Retry on the next launch if the directory is busy. */ }

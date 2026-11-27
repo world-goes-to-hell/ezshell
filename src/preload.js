@@ -169,6 +169,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localShellOpen: (options) => ipcRenderer.invoke('local-shell-open', options),
   claudeProfilesList: () => ipcRenderer.invoke('claude-profiles-list'),
   claudeProfileSave: (request) => ipcRenderer.invoke('claude-profile-save', request),
+  claudeProfileSwitchInPlace: (request) => ipcRenderer.invoke('claude-profile-switch-in-place', request),
   onLocalAgentRequestOpened: (callback) => {
     const listener = (_event, opened) => callback(opened)
     ipcRenderer.on('local-agent-request-opened', listener)

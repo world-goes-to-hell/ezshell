@@ -21,6 +21,8 @@ const { loadEclipseProject } = require('./eclipseProject.js')
 const { buildEclipse } = require('./eclipseBuild.js')
 const { createRunPresetStore, validatePreset, presetName, presetRelative, publicPreset, presetApproval, projectKey, realDirectory, directoryInProject, isSpringBootTask } = require('./runPresetStore.js')
 const { createRunBundleStore } = require('./runBundleStore.js')
+const { protectScratchOwner, reapRunScratch } = require('./runScratch.js')
+const { describeHandover, handedRun, adoptedTask } = require('./runHandover.js')
 const { validateStartOrder, selectStartStages, stopStages, runStartStages, legacyStartOrder } = require('./runStartOrder.js')
 
 const USER = 'user'
@@ -92,7 +94,9 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   toolHomeOf = () => null, toolHomeFor = () => null, toolVersionOf = () => null,
   enhancedJvmArgs = () => null, userData = file && path.dirname(file), prepareReload = prepareHotReload, startReload = startHotReload,
   sendState = () => {}, notifyCrash = () => {}, sendAsUser, now = Date.now, projectOf = resolveProject,
-  prepareTask = prepareDevelopmentTask, jarHome, bundleStore }) {
+  prepareTask = prepareDevelopmentTask, jarHome, bundleStore,
+  // Scratch of runs handed over by the app before an update (runScratch.js)
+  protectScratch = protectScratchOwner, reapScratch = () => reapRunScratch(userData) }) {
   store ??= createRunPresetStore(file)
   // Run bundles (part 3) are kept apart from the presets: saving a preset or the start order never drops them
   bundleStore ??= createRunBundleStore(userData && path.join(userData, 'run-bundles.json'))
@@ -261,6 +265,82 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     }
   }
 
+  // Runs handed over by the app before an update (runHandover.js). Their scratch is kept from the first moment
+  // (holdKeptScratch, before the start's reap) until the server ends or the run is refused.
+  const keptScratch = new Map()
+
+  function holdKeptScratch(records) {
+    for (const { id, development } of records) {
+      if (typeof id !== 'string' || keptScratch.has(id)) continue
+      const owner = development?.run?.scratchOwner
+      keptScratch.set(id, protectScratch(Number.isSafeInteger(owner) ? owner : 0))
+    }
+  }
+
+  function releaseKeptScratch(id) {
+    const release = keptScratch.get(id)
+    keptScratch.delete(id)
+    release?.()
+  }
+
+  // The run goes on as after a start: its log from what the server printed, the state the old app had
+  function resumeRun(run, task, preset, shellId, handed, buffer) {
+    run.expectedUrl = undefined
+    byShell.set(shellId, run)
+    run.orderLogMatched = false
+    run.intentionalExit = false
+    const logs = createDevelopmentErrors(now, { tomcat: task.tomcat === true, onOutputLine: line => {
+      if (run.orderLog && line.includes(run.orderLog)) run.orderLogMatched = true
+    } })
+    logs.feed(typeof buffer === 'string' ? buffer : '', true)
+    // The start line may be older than the kept output: the old app's ready time stays
+    run.logs = handed.readyAt === undefined ? logs
+      : { ...logs, state: () => { const state = logs.state(); return { ...state, readyAt: handed.readyAt, address: state.address ?? handed.address } } }
+    run.diagnosis = diagnosisContext(preset, undefined)
+    run.jarDiagnosis = { invocation: tomcatInvocation(preset), major: undefined }
+    run.jarOffered = undefined
+    run.proposals = []
+    const state = run.logs.state()
+    update(run, { status: state.readyAt !== undefined ? 'running' : 'starting', startedAt: handed.startedAt ?? now(), shellId,
+      exitCode: null, failedAt: undefined, address: state.readyAt !== undefined ? handed.expectedUrl ?? state.address : undefined,
+      readyAt: state.readyAt, reload: undefined, proposals: undefined, errors: state.errors })
+  }
+
+  /**
+   * A server the app before an update handed over: its preset is checked again (same project, preset and folder)
+   * and the task to go on with is returned. Throws when it cannot be taken back; the caller then ends the server.
+   */
+  async function adoptRun({ id: shellId, development, buffer }) {
+    try {
+      if (typeof shellId !== 'string') throw new Error('넘겨받은 실행 정보가 올바르지 않습니다.')
+      const handed = handedRun(development)
+      const project = await projectOf(handed.worktree)
+      if (project.key !== projectKey(handed.projectRoot) || project.worktreeKey !== projectKey(handed.worktree)) throw new Error(MOVED)
+      const preset = find(project, handed.presetId)
+      if (development.taskId !== `preset:${preset.id}`) throw new Error(MOVED)
+      const cwd = await directoryInProject(project.worktree, preset.relative)
+      if (projectKey(cwd) !== projectKey(development.cwd)) throw new Error(MOVED)
+      const run = runFor(project, preset.id)
+      if (run.state.shellId || ACTIVE.has(run.state.status)) throw new Error('이 실행 구성은 이미 실행 중입니다.')
+      const javaHome = preset.jdk === 'system' ? undefined : (await Promise.resolve(javaHomeOf(preset.jdk)).catch(() => null)) ?? undefined
+      const release = keptScratch.get(shellId) ?? protectScratch(handed.scratchOwner)
+      keptScratch.delete(shellId)
+      let ended = false
+      const cleanup = async () => {
+        if (ended) return
+        ended = true
+        release()
+        await reapScratch().catch(() => {})
+      }
+      const task = adoptedTask(handed, { preset, cwd, worktree: project.worktree, javaHome, cleanup })
+      resumeRun(run, task, preset, shellId, handed, buffer)
+      return { ...task, runPreset: true, onEvent: event => onEvent(run, event, task, preset), handover: () => describeHandover(run, task) }
+    } catch (error) {
+      releaseKeptScratch(shellId)
+      throw error
+    }
+  }
+
   function ensureAllowed(allowed) {
     if (isLocked() || !allowed()) throw new Error(NOT_ALLOWED)
   }
@@ -379,7 +459,8 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       return true
     }
     const makeTask = async () => {
-      const withEvents = task => ({ ...task, onEvent: event => onEvent(run, event, task, preset) })
+      const withEvents = task => ({ ...task, runPreset: true, onEvent: event => onEvent(run, event, task, preset),
+        handover: () => describeHandover(run, task) })
       let task = await freshTask(project, preset, by, approve, canAct)
       try {
         if (preset.kind === 'tomcat') task = await buildTomcatTask(task, project, preset, withEvents)
@@ -968,7 +1049,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
 
   return {
     projectOf, act, save, remove, send, sendPreview, startOne, startAll, resumeBatch, stopAll, applySuggestion, dismissProposal, mavenPinStatus, changeMavenPin,
-    bundleSelection,
+    bundleSelection, holdKeptScratch, adoptRun, releaseKeptScratch,
     saveBundle(project, input, allowed) {
       ensureAllowed(allowed)
       return { ok: true, bundles: bundleStore.save(project.key, input, presetIdsOf(project)) }

@@ -735,6 +735,49 @@ describe('wake an idle agent with unread messages', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it('keeps one paste through focus reports while a new Codex has not drawn it yet (2026-11-27 user report)', async () => {
+    // The tab's terminal answers Codex's focus tracking (?1004h) with ESC[O / ESC[I as windows change focus.
+    // Each report dropped the attempt, and the still empty composer got the notice again: five in a row, no Enter.
+    vi.useFakeTimers()
+    try {
+      const { write, state } = setup('codex')
+      state.ids.push('first')
+      wake.writeOutput(codexDraft(''))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(write.mock.calls).toEqual([[paste]])
+      for (const report of ['\x1b[O', '\x1b[I', '\x1b[O\x1b[I', '\x1b]11;rgb:0000/0000/0000\x07', '\x1b[?62;22c']) {
+        wake.userInput(report)
+        wake.writeOutput(codexDraft(''))
+        await vi.advanceTimersByTimeAsync(300)
+      }
+      expect(write.mock.calls).toEqual([[paste]])
+      wake.writeOutput(codexDraft(PROMPT))
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(write.mock.calls).toEqual([[paste], ['\r']])
+    } finally { vi.useRealTimers() }
+  })
+
+  it('does not paste again over keys the user typed before the first paste showed', async () => {
+    vi.useFakeTimers()
+    try {
+      const { write, state } = setup('codex')
+      state.ids.push('first')
+      wake.writeOutput(codexDraft(''))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(write.mock.calls).toEqual([[paste]])
+      wake.userInput('a')
+      for (let i = 0; i < 6; i++) {
+        wake.writeOutput(codexDraft(''))
+        await vi.advanceTimersByTimeAsync(400)
+      }
+      expect(write.mock.calls).toEqual([[paste]])
+      // Both arrive: the user's key with our notice is the user's draft now, never submitted
+      wake.writeOutput(codexDraft(PROMPT + 'a'))
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(write.mock.calls).toEqual([[paste]])
+    } finally { vi.useRealTimers() }
+  })
+
   it('does not wake an unknown agent while its screen keeps changing', async () => {
     const { write, state } = setup('codex')
     state.busy = true

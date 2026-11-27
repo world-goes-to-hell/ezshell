@@ -8,6 +8,7 @@ const { redactRunSecrets } = require('./runSecrets.js')
 const { git, inspectLocalSettings, fetchCurrent, optionalGit, readBranches, readRemotes, remoteAddress, remoteProblem,
   trimLine } = require('./nestedGit.js')
 const { createNestedRepositoryTrust } = require('./nestedRepositoryTrust.js')
+const { MODES: CHECKOUT_MODES, overwrittenFiles, checkoutWithChanges } = require('./nestedCheckout.js')
 
 const FETCH_INTERVAL = 10 * 60_000
 const MAX_PARALLEL = 4
@@ -320,10 +321,13 @@ function createNestedRepositories({ discover, runGit = git, now = Date.now, conf
     })
   }
 
-  async function switchBranch(root, folder, { name, remote }, check) {
+  // mode: undefined tries a plain switch and returns { localChanges } when Git refuses over local edits;
+  // 'smart' / 'force' then switch with those edits (nestedCheckout.js).
+  async function switchBranch(root, folder, { name, remote }, check, { mode } = {}) {
     if (typeof name !== 'string' || !name || name.startsWith('-') || (remote !== undefined && typeof remote !== 'string')) {
       throw new Error('목록에서 바꿀 브랜치를 선택해 주세요.')
     }
+    if (mode !== undefined && !CHECKOUT_MODES.has(mode)) throw new Error('체크아웃 방식을 확인할 수 없습니다.')
     const directory = await discoveredRepository(root, folder, check)
     return queue(directory, async () => {
       const settings = await settingsOf(root, directory, check)
@@ -337,17 +341,26 @@ function createNestedRepositories({ discover, runGit = git, now = Date.now, conf
       if (!chosen) throw new Error('이 브랜치는 현재 목록에 없습니다. 목록을 다시 열어 주세요.')
       await runGit(directory, ['check-ref-format', '--branch', chosen.name])
       await settingsUnchanged(root, directory, settings, check)
-      if ((await readStatus(directory, runGit, 'no')).changed) {
-        throw new Error('수정하거나 스테이징한 파일이 있습니다. 변경을 정리한 뒤 브랜치를 바꿔 주세요.')
-      }
       check()
       const args = chosen.remote
         ? ['-c', chosen.name, '--track', '--', `refs/remotes/${chosen.remote}/${chosen.name}`]
         : ['--', chosen.name]
-      try { await runGit(directory, ['switch', '--no-guess', '--no-overwrite-ignore', ...args]) }
-      catch (error) { throw branchSwitchError(error, settings.partialClone) }
-      try { return publicStatus(root, directory, await readStatus(directory, runGit)) }
-      catch (error) { return { folder, path: directory, error: messageOf(error, READ_FAILED) } }
+      const switchNow = () => runGit(directory, ['switch', '--no-guess', '--no-overwrite-ignore', ...args])
+        .catch(error => { throw branchSwitchError(error, settings.partialClone) })
+      let checkout
+      if (mode) {
+        const from = trimLine(await optionalGit(directory, ['symbolic-ref', '--quiet', '--short', 'HEAD'], runGit)) || 'HEAD'
+        checkout = await checkoutWithChanges({ directory, runGit, mode, from, to: chosen.name, switchNow })
+      } else {
+        try { await runGit(directory, ['switch', '--no-guess', '--no-overwrite-ignore', ...args]) }
+        catch (error) {
+          const localChanges = overwrittenFiles(error.stderr)
+          if (localChanges) return { localChanges }
+          throw branchSwitchError(error, settings.partialClone)
+        }
+      }
+      try { return { ...publicStatus(root, directory, await readStatus(directory, runGit)), ...(checkout && { checkout }) } }
+      catch (error) { return { folder, path: directory, error: messageOf(error, READ_FAILED), ...(checkout && { checkout }) } }
     })
   }
 
@@ -607,9 +620,10 @@ function registerNestedRepositoryIpc({ ipcMain, fromMainWindow, isLocked, discov
     service.removeRemote(await branchRoot(project, root, folder), folder, { name }, check))
   handle('local-nested-repository-test-remote', '원격 연결을 확인하지 못했습니다.', async ({ project, root, folder, target } = {}, check) =>
     service.testRemote(await branchRoot(project, root, folder), folder, { name: target?.name, url: target?.url }, check))
-  handle('local-nested-repository-switch-branch', '브랜치를 바꾸지 못했습니다.', async ({ project, root, folder, branch } = {}, check) => ({
-    status: await service.switchBranch(await branchRoot(project, root, folder), folder, branch ?? {}, check)
-  }))
+  handle('local-nested-repository-switch-branch', '브랜치를 바꾸지 못했습니다.', async ({ project, root, folder, branch, mode } = {}, check) => {
+    const { localChanges, checkout, ...status } = await service.switchBranch(await branchRoot(project, root, folder), folder, branch ?? {}, check, { mode })
+    return localChanges ? { localChanges } : { status, ...(checkout && { checkout }) }
+  })
 }
 
 module.exports = { createNestedRepositories, parseStatus, registerNestedRepositoryIpc }

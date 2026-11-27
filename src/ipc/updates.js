@@ -240,7 +240,10 @@ function registerUpdateIpc(ctx, autoUpdater = require('electron-updater').autoUp
     lastVersion.writeLastVersion(lastVersionPath(), app.getVersion());
   });
 
-  return { setupAutoUpdater, finishQuit, isInstallingOnQuit: () => installingOnQuit };
+  // The user pressed 재시작 on a downloaded update: the quit hands the session host's shells and run preset
+  // servers to the next app (keepSessionsForUpdate at will-quit). Read at before-quit, which comes first.
+  const isRestartingForUpdate = () => updateReady && restartRequested;
+  return { setupAutoUpdater, finishQuit, isInstallingOnQuit: () => installingOnQuit, isRestartingForUpdate };
 }
 
 module.exports = { registerUpdateIpc };

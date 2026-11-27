@@ -1,7 +1,10 @@
 // Windows desktop effects. Electron screen coordinates and window bounds are both in DIPs.
-const MOVE_EFFECTS = ['none', 'spot', 'ghost', 'sparkle', 'rainbow', 'comet', 'bubble', 'petal', 'pixel', 'paw']
-const CLICK_EFFECTS = ['none', 'press', 'ripple', 'pulse', 'heart', 'firework', 'starpop', 'word', 'ink']
-const CURSOR_SETS = ['system', 'big', 'contrast', 'fine', 'paw', 'jelly', 'star', 'heart', 'pixel']
+const MOVE_EFFECTS = ['none', 'spot', 'ghost', 'sparkle', 'rainbow', 'comet', 'bubble', 'petal', 'pixel', 'paw', 'snow', 'notes', 'wind', 'firefly']
+const CLICK_EFFECTS = ['none', 'press', 'ripple', 'pulse', 'heart', 'firework', 'starpop', 'word', 'ink', 'square', 'orbit', 'confetti', 'shutter', 'bloom']
+const CURSOR_SETS = [
+  'system', 'big', 'contrast', 'fine', 'paw', 'jelly', 'star', 'heart', 'pixel',
+  'dart', 'obsidian', 'origami', 'fountain', 'crystal', 'leaf', 'droplet', 'bolt', 'moon'
+]
 const LEVELS = [1, 2, 3]
 const SIZES = [32, 48, 64]
 const DISPLAY_EVENTS = ['display-added', 'display-removed', 'display-metrics-changed']

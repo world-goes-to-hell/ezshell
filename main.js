@@ -432,7 +432,7 @@ function createWindow() {
 }
 
 // Updates and the "업데이트 내용" state: src/ipc/updates.js
-const { setupAutoUpdater, finishQuit, isInstallingOnQuit } = require('./src/ipc/updates.js').registerUpdateIpc({
+const { setupAutoUpdater, finishQuit, isInstallingOnQuit, isRestartingForUpdate } = require('./src/ipc/updates.js').registerUpdateIpc({
   ipcMain, app, dialog, shell, sessionsFilePath,
   // Declared further down the file: looked up when a request arrives, not now
   fromMainWindow: (event) => fromMainWindow(event),
@@ -790,6 +790,27 @@ async function startSessionHost() {
   if (!(await sessionHost.start())) return;
   const kept = sessionHost.takeAdoptable();
   if (kept.length > 0) keptShellIds = getLocalShells().adopt(kept);
+  // Run preset servers the app before the update handed over: their scratch is kept at once (the start's reap
+  // waits for this function), then each run is checked against its saved preset and taken back or ended.
+  const keptRuns = kept.length > 0 ? getLocalShells().takeKeptDevelopment() : [];
+  if (keptRuns.length > 0) {
+    runPresets.holdKeptScratch(keptRuns);
+    void Promise.allSettled(keptRuns.map(adoptKeptRun));
+  }
+}
+async function adoptKeptRun(record) {
+  let task;
+  try {
+    task = await runPresets.adoptRun(record);
+    getLocalShells().adoptDevelopment(record.id, task);
+  } catch (error) {
+    console.warn('[runPresets] Could not take back a run after the update:', error.message);
+    getLocalShells().dropKeptDevelopment(record.id);
+    if (task) {
+      task.onEvent({ type: 'closed', shellId: record.id, wasRunning: false });
+      await task.cleanup?.();
+    }
+  }
 }
 const agentBridgeFile = path.join(userDataPath, 'agent-message-connection');
 const claudeRoot = require('./src/agentHistory/history.js').agentRoots(process.env, require('os').homedir()).claude;
@@ -971,6 +992,28 @@ for (const [channel, operation] of [['claude-profiles-list', claudeProfiles.list
     catch (error) { return { success: false, error: error.code ? 'Claude 계정 설정을 저장할 수 없습니다.' : error.message }; }
   });
 }
+// The same conversation under another account, in the same pane (docs/plan/2026-11-27-claude-account-switch-in-place.md)
+const claudeAccountSwitch = require('./src/agentChat/claudeAccountSwitch.js').createClaudeAccountSwitch({
+  shells: () => getLocalShells(),
+  profileRoot: (id, create) => claudeProfiles.rootFor(id, create),
+  defaultRoot: claudeRoot
+});
+ipcMain.handle('claude-profile-switch-in-place', (event, request) => {
+  if (!fromClaudeProfilesWindow(event)) return { success: false, error: '잠금 해제 후 본창에서 이용할 수 있습니다.' };
+  try {
+    const shellId = request?.shellId;
+    const local = getLocalShells();
+    const previousAgentId = typeof shellId === 'string' ? local.chatAgentId(shellId) : null;
+    const { role } = agentMessages.snapshot().agents.find(agent => agent.id === previousAgentId) ?? {};
+    const opened = claudeAccountSwitch.switchInPlace({ shellId, profileId: request?.profileId });
+    // The new Claude is a new agent: it keeps the name the pane had
+    const agentId = local.chatAgentId(opened.id);
+    if (role && agentId) { try { agentMessages.setUserRole(agentId, role); } catch { /* the role stays with the old pane */ } }
+    return { success: true, ...opened };
+  } catch (error) {
+    return { success: false, error: error.code ? 'Claude 계정을 바꿀 수 없습니다.' : error.message };
+  }
+});
 
 ipcMain.handle('local-shell-open', async (event, size) => {
   if (!fromMainWindow(event)) return { success: false, error: '본창에서만 열 수 있습니다.' };
@@ -1045,7 +1088,7 @@ ipcMain.on('local-shell-composing', (event, { id, value }) => {
   if (fromMainWindow(event) && typeof value === 'boolean') localShells?.setComposing(id, value);
 });
 ipcMain.on('local-shell-resize', (event, { id, cols, rows }) => { if (fromMainWindow(event)) localShells?.resize(id, cols, rows); });
-ipcMain.on('local-shell-close', (event, id) => { if (fromMainWindow(event)) localShells?.close(id); });
+ipcMain.on('local-shell-close', (event, id) => { if (fromMainWindow(event)) localShells?.close(id, { keepRunPreset: true }); });
 ipcMain.handle('local-shell-clipboard', async (event, id) => {
   const canPaste = () => fromMainWindow(event) && !isAppLocked && localShells?.isRunning(id);
   const empty = { success: true, text: '' };
@@ -1149,7 +1192,8 @@ app.on('will-quit', () => runtimes.cancel());
 const { createRunPresets, registerRunPresetIpc, withSubject } = require('./src/ipc/runPresets.js');
 const { reapRunScratch, waitRunCleanup } = require('./src/ipc/runScratch.js');
 const { closeTomcatBases } = require('./src/ipc/tomcatRun.js');
-void app.whenReady().then(() => reapRunScratch(userDataPath)).catch(() => {});
+// After the session host's start: a server handed over by the app before an update keeps that app's scratch
+void app.whenReady().then(() => sessionHostStarting).then(() => reapRunScratch(userDataPath)).catch(() => {});
 const runPresets = createRunPresets({
   file: path.join(userDataPath, 'run-presets.json'),
   getShells: getLocalShells,
@@ -1476,8 +1520,12 @@ app.on('before-quit', (event) => {
   const shutdown = mcpController?.shutdown().catch(() => {});
   runPresets.cancelBatches();
   runPresets.suspendReloads();
-  const draining = localShells ? localShells.drainDevelopmentTasks() : waitRunCleanup();
-  const development = draining ? draining.then(closeTomcatBases) : closeTomcatBases();
+  // Restarting for an update: the run preset servers in the session host go on for the next app, with their
+  // Tomcat bases (docs/plan/2026-11-27-run-presets-survive-update.md). Bases left by other runs are reaped
+  // at a later start, once no handed-over server of this app uses them.
+  const keepHosted = isRestartingForUpdate() && sessionHost.ready();
+  const draining = localShells ? localShells.drainDevelopmentTasks({ keepHosted }) : waitRunCleanup();
+  const development = keepHosted ? draining : draining ? draining.then(closeTomcatBases) : closeTomcatBases();
   if (!mustWait && !development) return;
   event.preventDefault();
   let timer;

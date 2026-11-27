@@ -35,6 +35,9 @@ const CLAUDE_CLEAR_DRAFT = '\x15'.repeat(29) + '\x0b'.repeat(29)
 // input once its empty composer has stayed unchanged this long (three fresh agents never woke)
 const QUIET_MS = 1500
 const submitKey = data => /^(?:\r|\n|\x1b\[13(?:;1)?u)$/.test(data)
+// What the tab's terminal answers by itself, not keys: focus reports (the CLI's ?1004h), device attributes,
+// OSC colour replies, mode and keyboard-flag reports, DCS replies. They leave the composer alone.
+const TERMINAL_REPORTS = /^(?:\x1b\[[IO]|\x1b\[[?>][\d;]*c|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[\?[\d;]*\$y|\x1b\[\?\d*u|\x1bP[^\x1b]*\x1b\\)+$/
 const compact = text => text.replace(/\s/g, '')
 const CODEX_STATUS_FOOTER = /(?:^|\s)\d{1,3}% context left(?:\s*·\s*⚠\uFE0F?\s+\d+ warnings?\s*·\s*f2 to view)?\s*$/iu
 // All whitespace has already been removed, including visual line breaks inside a Claude chip.
@@ -162,6 +165,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   let stage = null
   // Remember who pasted the notice even if a redraw hides its composer at the deadline.
   let expiredWake = null
+  let unseenPasteUntil = 0
   let wakeRecoveryAfter = wakeRecovery.blocked ? 0 : undefined
   let draftBlockSince
   let draftBlockTimer
@@ -1070,6 +1074,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     const due = waiting.length > 0 || remind.length > 0
     const input = due || attempt ? composer() : null
     const visible = due || attempt ? visibleComposer() : null
+    if ((input?.text && !input.suggestion) || (visible?.text && !visible.suggestion)) unseenPasteUntil = 0
     if (!attempt && waiting.length && !shellAtCursor() && !chatBlocked()) {
       const mode = recoverWakeMode(editorWithBounds(input, visible))
       if (mode) {
@@ -1155,6 +1160,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     // Busy but not in a task (starting up, approval prompt, unknown): wait as before
     if (!due || hookWorking || (working && !running) || !emptyEditor(input, visible)) return
     if (now < holdUntil) { schedule(holdUntil - now); return }
+    if (now < unseenPasteUntil) { schedule(unseenPasteUntil - now); return }
     userDraft = false
     emptyClaudeTarget = null
     const mode = waiting.length ? (working ? 'busy' : 'idle') : 'remind'
@@ -1296,7 +1302,18 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       previous.map(draft => draft.displayed).join('') === input.text
   }
 
+  // A paste the CLI had not drawn when the user's keys took the attempt away: it still lands, so no
+  // second notice into the composer that only looks empty until then
+  function rememberUnseenPaste() {
+    const pending = stage ?? expiredWake
+    if (pending && !pending.seen) unseenPasteUntil = Math.max(unseenPasteUntil, pending.visibleUntil)
+  }
+
   function userInput(data) {
+    // The terminal's own replies are not typing: they used to drop the attempt while a new Codex had not
+    // drawn the paste yet, and the notice went in again on each focus change (2026-11-27 user report)
+    if (TERMINAL_REPORTS.test(data)) return
+    rememberUnseenPaste()
     const editingQueue = kind === 'claude' && /^(?:\x1b\[A|\x1bOA|\x10)$/.test(data) && composer()?.queueHint
     finishApprovalAnswer({ ok: false, reason: 'changed' })
     forceSendOffer = null
@@ -1535,6 +1552,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     setComposing(value) {
       composing = value
       if (value) {
+        rememberUnseenPaste()
         forceSendOffer = null
         emptyClaudeTarget = null
         expiredWake = null

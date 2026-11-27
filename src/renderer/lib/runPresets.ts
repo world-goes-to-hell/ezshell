@@ -55,8 +55,7 @@ export function runButtons(state: RunState): RunButton[] {
   switch (state.status) {
     case 'preparing':
     case 'starting': return ['log', 'stop']
-    // With an address its port pill opens it (no room for a separate button in the sidebar's width)
-    case 'running': return state.address ? ['restart', 'stop'] : ['log', 'restart', 'stop']
+    case 'running': return ['log', 'restart', 'stop']
     case 'crashed': return ['log', 'restart']
     default: return state.shellId ? ['start', 'log'] : ['start']
   }

@@ -109,6 +109,17 @@ describe('readReloadLayout', () => {
 })
 
 describe('planReloadedTabs', () => {
+  it('restores an open run preset log while keeping unseen preset shells in the background', () => {
+    const development = { taskId: 'preset:fixture', runPreset: true, name: 'Fixture', label: 'Fixture',
+      status: 'running', exitCode: null, url: null } as const
+    const background = shell('local:4', { development })
+    const openedLog = shell('local:1', { exited: true, development: { ...development, status: 'exited', exitCode: 1 } })
+    const regular = shell('local:5')
+    const layout = saved({ splitTree: undefined, paneSeq: undefined, panes: {} })
+    expect(planReloadedTabs([background, openedLog, regular], [layout])).toEqual({ tabs: [layout], loose: [regular] })
+    expect(planReloadedTabs([background, openedLog, regular], [])).toEqual({ tabs: [], loose: [regular] })
+  })
+
   it('puts the pane shells back into their tab', () => {
     const { tabs, loose } = planReloadedTabs([shell('local:1'), shell('local:2'), shell('local:3')], [saved()])
     expect(loose).toEqual([])

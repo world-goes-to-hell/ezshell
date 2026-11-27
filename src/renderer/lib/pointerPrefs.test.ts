@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_POINTER_PREFS, hasEffects, parsePointerPrefs } from './pointerPrefs'
-import { CURSOR_SETS, CURSOR_STATES, cursorHotspot, cursorSet, cursorSvg, cursorValue } from './pointerCursors'
+import { CLICK_EFFECTS, DEFAULT_POINTER_PREFS, hasEffects, MOVE_EFFECTS, parsePointerPrefs } from './pointerPrefs'
+import { CURSOR_SETS, CURSOR_SET_IDS, CURSOR_STATES, cursorHotspot, cursorSet, cursorSvg, cursorValue } from './pointerCursors'
+import { CLICK_EFFECT_CARDS, MOVE_EFFECT_CARDS } from '../components/Settings/pointerEffectList'
 import { inkFor } from './pointerInk'
 import { contrastRatio } from './colorContrast'
 import { collectUiSettings, parseUiSettingsFile } from './uiSettingsBackup'
@@ -23,19 +24,27 @@ describe('pointer prefs', () => {
   })
 
   it('travels in the screen settings backup as its checked form', () => {
-    const value = JSON.stringify({ set: 'pixel', size: 48, move: 'pixel', click: 'press', effectsOutsideApp: true, extra: 'dropped' })
+    const value = JSON.stringify({ set: 'origami', size: 48, move: 'wind', click: 'shutter', effectsOutsideApp: true, extra: 'dropped' })
     const file = collectUiSettings(key => (key === 'pointerPrefs' ? value : null), { shortcutIds: [] }, new Date(0))
-    expect(JSON.parse(file.settings.pointerPrefs!)).toEqual({ ...DEFAULT_POINTER_PREFS, set: 'pixel', size: 48, move: 'pixel', click: 'press', effectsOutsideApp: true })
+    expect(JSON.parse(file.settings.pointerPrefs!)).toEqual({ ...DEFAULT_POINTER_PREFS, set: 'origami', size: 48, move: 'wind', click: 'shutter', effectsOutsideApp: true })
     const read = parseUiSettingsFile(JSON.stringify(file), { shortcutIds: [] })
     expect(read.ok && read.import.values.some(({ entry }) => entry.key === 'pointerPrefs')).toBe(true)
     const broken = parseUiSettingsFile(JSON.stringify({ ...file, settings: { ...file.settings, pointerPrefs: 'not json', terminalFileZone: 'on' } }), { shortcutIds: [] })
     expect(broken.ok && broken.import.invalid).toBe(1)
   })
+
+  it('shows one card for every saved effect in each group', () => {
+    expect(MOVE_EFFECT_CARDS.map(card => card.id)).toEqual(MOVE_EFFECTS)
+    expect(CLICK_EFFECT_CARDS.map(card => card.id)).toEqual(CLICK_EFFECTS)
+    expect(MOVE_EFFECTS).toHaveLength(14)
+    expect(CLICK_EFFECTS).toHaveLength(14)
+  })
 })
 
 describe('pointer images', () => {
   it('draws every state of every set as a sized SVG', () => {
-    expect(CURSOR_SETS.map(set => set.id)).toEqual(['system', 'big', 'contrast', 'fine', 'paw', 'jelly', 'star', 'heart', 'pixel'])
+    expect(CURSOR_SETS.map(set => set.id)).toEqual(CURSOR_SET_IDS)
+    expect(new Set(CURSOR_SET_IDS).size).toBe(18)
     for (const set of CURSOR_SETS) {
       for (const state of CURSOR_STATES) {
         const svg = cursorSvg(set, state, 48)

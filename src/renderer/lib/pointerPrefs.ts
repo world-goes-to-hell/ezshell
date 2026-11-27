@@ -4,8 +4,8 @@ import { CURSOR_SET_IDS, CURSOR_SIZES, type CursorSetId, type CursorSize } from 
 
 export const POINTER_PREFS_KEY = 'pointerPrefs'
 
-export const MOVE_EFFECTS = ['none', 'spot', 'ghost', 'sparkle', 'rainbow', 'comet', 'bubble', 'petal', 'pixel', 'paw'] as const
-export const CLICK_EFFECTS = ['none', 'press', 'ripple', 'pulse', 'heart', 'firework', 'starpop', 'word', 'ink'] as const
+export const MOVE_EFFECTS = ['none', 'spot', 'ghost', 'sparkle', 'rainbow', 'comet', 'bubble', 'petal', 'pixel', 'paw', 'snow', 'notes', 'wind', 'firefly'] as const
+export const CLICK_EFFECTS = ['none', 'press', 'ripple', 'pulse', 'heart', 'firework', 'starpop', 'word', 'ink', 'square', 'orbit', 'confetti', 'shutter', 'bloom'] as const
 export type MoveEffect = typeof MOVE_EFFECTS[number]
 export type ClickEffect = typeof CLICK_EFFECTS[number]
 export type EffectLevel = 1 | 2 | 3

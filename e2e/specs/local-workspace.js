@@ -13,6 +13,10 @@ const { check, finish } = createChecks()
   const { send, js, until, shot } = driver
   const q = (selector) => `document.querySelector(${JSON.stringify(selector)})`
   const profile = process.env.E2E_PROFILE
+  const registerProjects = (...folders) => js(`
+    localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify(folders))})
+    window.dispatchEvent(new Event('ezshell:local-projects-changed'))
+  `)
 
   // A repository with a commit and a second worktree on branch "feature"
   const repo = path.join(profile, 'work app')
@@ -33,7 +37,7 @@ const { check, finish } = createChecks()
   `))
 
   // Registered the way the 로컬 작업 dialog does it
-  await js(`localStorage.setItem('ezshell.localProjects', JSON.stringify([${JSON.stringify(repo)}])); window.dispatchEvent(new Event('ezshell:local-projects-changed'))`)
+  await registerProjects(repo)
   const worktreeRow = (dir) => `[...document.querySelectorAll('.local-worktree')].find(el => el.dataset.worktreePath.toLowerCase() === ${JSON.stringify(dir.toLowerCase())})`
   check('the registered folder shows up with its two worktrees', await until(`${q('.local-project-name')}?.textContent === 'work app' && document.querySelectorAll('.local-worktree').length === 2`, 15000),
     await js(`${q('.local-terms')}?.textContent`))
@@ -162,8 +166,38 @@ const { check, finish } = createChecks()
   await js(`${q('.local-project-row')}.click()`)
   check('and opens again', await until(`document.querySelectorAll('.local-worktree').length === 2`))
 
+  const otherProject = path.join(profile, 'work api')
+  fs.mkdirSync(otherProject)
+  const projectCard = folder => `[...document.querySelectorAll('.local-project')].find(card => card.dataset.projectFolder === ${JSON.stringify(folder)})`
+  const mainCard = projectCard(repo)
+  const secondCard = projectCard(otherProject)
+  await registerProjects(repo, otherProject)
+  if (!await until(`!!${secondCard}?.querySelector('.local-worktree-open')`, 15000)) throw new Error('Second project did not load')
+  const boundaries = await js(`(() => {
+    const cards = [${mainCard}, ${secondCard}]
+    const borders = cards.map(card => getComputedStyle(card))
+    const heads = cards.map(card => getComputedStyle(card.querySelector('.local-project-head')).backgroundColor)
+    return { colors: borders.map(style => style.borderInlineStartColor), widths: borders.map(style => style.borderInlineStartWidth), heads,
+      gap: cards[1].getBoundingClientRect().top - cards[0].getBoundingClientRect().bottom }
+  })()`)
+  check('adjacent projects have separated frames and their own header tint', boundaries.gap >= 8 &&
+    boundaries.widths.every(width => width === '3px') && boundaries.colors[0] !== boundaries.colors[1] &&
+    boundaries.heads[0] !== boundaries.heads[1], JSON.stringify(boundaries))
+  await shot('local-workspace-projects')
+  await js(`${secondCard}.querySelector('.local-project-row').click()`)
+  check('folding one project keeps its header and leaves the neighbor open', await until(`
+    ${secondCard}.querySelector('.local-project-row').getAttribute('aria-expanded') === 'false' &&
+    !${secondCard}.querySelector('.local-worktrees') && ${mainCard}.querySelectorAll('.local-worktree').length === 2
+  `))
+  await registerProjects(otherProject, repo)
+  check('project colors stay with their folders after reordering', await until(`
+    ${q('.local-project')} === ${secondCard} &&
+    getComputedStyle(${mainCard}).borderInlineStartColor === ${JSON.stringify(boundaries.colors[0])} &&
+    getComputedStyle(${secondCard}).borderInlineStartColor === ${JSON.stringify(boundaries.colors[1])}
+  `))
+
   // Taking the project off the list: a second registered folder of the same repository goes with it
-  await js(`localStorage.setItem('ezshell.localProjects', JSON.stringify([${JSON.stringify(repo)}, ${JSON.stringify(feature)}])); window.dispatchEvent(new Event('ezshell:local-projects-changed'))`)
+  await registerProjects(repo, feature)
   await sleep(1500)
   check('a worktree registered as well adds no second project', await js(`document.querySelectorAll('.local-project').length === 1`))
   const tabsBefore = await js(`document.querySelectorAll('.terminal-tab').length`)

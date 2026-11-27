@@ -267,9 +267,15 @@ function createRuntimes({ userData, platform = process.platform, arch = process.
     return Boolean(entry && managedHome(entry))
   }
 
+  // HotswapAgent reads private JDK fields to learn which file a stream came from (its MyBatis plugin
+  // does this for every mapper XML). On Java 17+ that throws unless the packages are opened, and the
+  // app fails to start with "Cannot resolve reference to bean 'sqlSessionFactory'".
+  // See docs/fix/2026-11-27-enhanced-reload-mybatis-add-opens.md.
+  const HOTSWAP_AGENT_OPENS = ['--add-opens=java.base/sun.nio.ch=ALL-UNNAMED', '--add-opens=java.base/java.io=ALL-UNNAMED']
+
   function enhancedJvmArgs(id) {
     const jar = isJbr(id) ? hotswapAgentPath() : null
-    return jar ? ['-XX:+AllowEnhancedClassRedefinition', '-XX:HotswapAgent=external', `-javaagent:${jar}`] : null
+    return jar ? ['-XX:+AllowEnhancedClassRedefinition', '-XX:HotswapAgent=external', `-javaagent:${jar}`, ...HOTSWAP_AGENT_OPENS] : null
   }
 
   async function getBuild(vendor, feature, signal) {

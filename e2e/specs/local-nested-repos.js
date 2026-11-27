@@ -190,14 +190,48 @@ function fixture() {
     check('another repository on the same branch has its own title when opened via the menu',
       await until(`${hasShell('orders · main')} && ${hasShell('catalog · main')}`))
 
+    // Smart checkout (2026-11-27 user request): an edit the target branch also changed opens the checkout problem step
+    const fixtureCommit = ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qam']
+    git(catalog, 'config', '--local', 'core.autocrlf', 'false')
+    git(catalog, 'switch', '-q', '-c', 'e2e/conflict')
+    fs.appendFileSync(path.join(catalog, 'initial'), '\nbranch change')
+    git(catalog, ...fixtureCommit, 'conflict')
+    git(catalog, 'switch', '-q', 'main')
     fs.appendFileSync(path.join(catalog, 'initial'), '\nlocal change')
-    await js(`${row('services/catalog')}.querySelector('.nested-repository-ref').click()`)
-    if (!await until(`!!${branch('feature/catalog')}`)) throw new Error('Branch label did not open the branch dialog')
-    await js(`${branch('feature/catalog')}.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`)
-    check('switching on a dirty worktree is blocked and leaves the current branch intact', await until(
-      `${branchDialog}?.querySelector('[role="alert"]')?.textContent.includes('수정하거나 스테이징한 파일')`)
+    const dialogButton = label => `[...${branchDialog}.querySelectorAll('button')].find(button => button.textContent === ${JSON.stringify(label)})`
+    const openConflictProblem = async () => {
+      await js(`${row('services/catalog')}.querySelector('.nested-repository-ref').click()`)
+      if (!await until(`!!${branch('e2e/conflict')}`)) throw new Error('Branch label did not open the branch dialog')
+      await js(`${branch('e2e/conflict')}.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`)
+      return until(`${branchDialog}?.querySelector('.nested-checkout-problem[data-step="choose"]')
+        ?.querySelector('.nested-checkout-files')?.textContent === 'initial'
+        && ${branchDialog}.querySelector('.modal-title').textContent.includes('체크아웃 문제')`)
+    }
+    check('an overlapping edit lists the file with force, smart and cancel choices and changes nothing',
+      await openConflictProblem() && !!await js(`!!${dialogButton('강제 체크아웃')} && !!${dialogButton('스마트 체크아웃')}`)
+      && git(catalog, 'branch', '--show-current') === 'main' && git(catalog, 'stash', 'list') === '')
+    await shot('local-nested-repos-checkout-problem')
+    await js(`${dialogButton('체크아웃 안 함')}.click()`)
+    check('checkout cancelled returns to the branch list on the same branch', await until(`!!${branch('e2e/conflict')}`)
       && git(catalog, 'branch', '--show-current') === 'main')
-    await js(`[...${branchDialog}.querySelectorAll('button')].find(button => button.textContent === '취소').click()`)
+    await js(`${dialogButton('취소')}.click()`)
+    await until(`!${branchDialog}`)
+
+    if (!await openConflictProblem()) throw new Error('Checkout problem step did not open again')
+    await js(`${dialogButton('스마트 체크아웃')}.click()`)
+    check('smart checkout switches, applies the edit again and lists the conflict while keeping the stash', await until(
+      `${branchDialog}?.querySelector('.nested-checkout-problem[data-step="done"]')?.textContent.includes('충돌')
+        && ${branchDialog}.querySelector('.nested-checkout-files')?.textContent === 'initial'
+        && ${row('services/catalog')}?.querySelector('.nested-repository-ref')?.textContent.trim() === 'e2e/conflict'`)
+      && git(catalog, 'branch', '--show-current') === 'e2e/conflict'
+      && git(catalog, 'stash', 'list', '--format=%s').includes('ezShell 스마트 체크아웃: main → e2e/conflict')
+      && fs.readFileSync(path.join(catalog, 'initial'), 'utf8').includes('<<<<<<<'))
+    await shot('local-nested-repos-checkout-conflict')
+    await js(`${dialogButton('닫기')}.click()`)
+    await until(`!${branchDialog}`)
+    git(catalog, 'reset', '-q', '--hard')
+    git(catalog, 'switch', '-q', 'main')
+    git(catalog, 'stash', 'clear')
 
     // Remote addresses (2026-11-27 user request): a pull refused for an http:// remote is fixed from its row
     const orders = path.join(project, 'orders')

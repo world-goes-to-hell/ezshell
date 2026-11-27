@@ -550,7 +550,94 @@ test('lists current and remote-only branches offline and switches from detached 
   expect(nestedGit.gitEnvironment({ inherited: {} })).toHaveProperty('GIT_ALLOW_PROTOCOL', '')
 }, 15000)
 
-test('blocks dirty and in-progress checkouts and protects untracked files when switching branches', async () => {
+// main and other share `initial`; `shared` has five lines and other changed line 5.
+async function smartCheckoutFixture() {
+  const project = await fixtureDirectory()
+  const directory = path.join(project, 'service')
+  await git(project, 'init', '-b', 'main', directory)
+  await git(directory, 'config', '--local', 'core.autocrlf', 'false')
+  await commit(directory, 'initial')
+  const shared = path.join(directory, 'shared')
+  await fs.writeFile(shared, 'one\ntwo\nthree\nfour\nfive\n')
+  await git(directory, 'add', 'shared')
+  await git(directory, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'shared')
+  await git(directory, 'switch', '-c', 'other')
+  await fs.writeFile(shared, 'one\ntwo\nthree\nfour\nfive on other\n')
+  await git(directory, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-am', 'other')
+  await git(directory, 'switch', 'main')
+  const worker = createNestedRepositories({ discover })
+  const switchTo = (name, mode) => worker.switchBranch(project, 'service', { name }, check, mode && { mode })
+  return { project, directory, shared, switchTo }
+}
+const stashes = directory => git(directory, 'stash', 'list', '--format=%s')
+
+test('carries changes the target branch does not touch and reports overlapping ones without changing anything', async () => {
+  const { directory, shared, switchTo } = await smartCheckoutFixture()
+  await fs.writeFile(path.join(directory, 'initial'), 'edited')
+  expect(await switchTo('other')).toMatchObject({ branch: 'other', changed: 1 })
+  expect(await fs.readFile(path.join(directory, 'initial'), 'utf8')).toBe('edited')
+  expect(await switchTo('main')).toMatchObject({ branch: 'main' })
+
+  await fs.writeFile(shared, 'one edited\ntwo\nthree\nfour\nfive\n')
+  expect(await switchTo('other')).toEqual({ localChanges: ['shared'] })
+  await git(directory, 'add', 'shared')
+  expect(await switchTo('other')).toEqual({ localChanges: ['shared'] })
+  expect(await git(directory, 'branch', '--show-current')).toBe('main')
+  expect(await fs.readFile(shared, 'utf8')).toBe('one edited\ntwo\nthree\nfour\nfive\n')
+  expect(await stashes(directory)).toBe('')
+}, 15000)
+
+test('smart checkout puts the changes aside, switches and applies them again', async () => {
+  const { directory, shared, switchTo } = await smartCheckoutFixture()
+  await fs.writeFile(shared, 'one edited\ntwo\nthree\nfour\nfive\n')
+  await fs.writeFile(path.join(directory, 'notes'), 'untracked stays')
+  expect(await switchTo('other', 'smart')).toMatchObject({ branch: 'other', checkout: { kind: 'smart', conflicts: [] } })
+  expect(await fs.readFile(shared, 'utf8')).toBe('one edited\ntwo\nthree\nfour\nfive on other\n')
+  expect(await fs.readFile(path.join(directory, 'notes'), 'utf8')).toBe('untracked stays')
+  expect(await stashes(directory)).toBe('')
+}, 15000)
+
+test('smart checkout keeps the stash and lists files when applying the changes conflicts', async () => {
+  const { directory, shared, switchTo } = await smartCheckoutFixture()
+  await fs.writeFile(shared, 'one\ntwo\nthree\nfour\nfive on main\n')
+  const result = await switchTo('other', 'smart')
+  expect(result).toMatchObject({ branch: 'other', checkout: { kind: 'smart', conflicts: ['shared'] } })
+  expect(result.checkout.stash).toMatch(/^ezShell 스마트 체크아웃: main → other/)
+  expect(await stashes(directory)).toContain('ezShell 스마트 체크아웃: main → other')
+  expect(await fs.readFile(shared, 'utf8')).toContain('<<<<<<<')
+}, 15000)
+
+test('smart checkout restores the changes on the original branch when the switch itself fails', async () => {
+  const { directory, shared, switchTo } = await smartCheckoutFixture()
+  await git(directory, 'switch', 'other')
+  await commit(directory, 'collision')
+  await git(directory, 'switch', 'main')
+  await fs.writeFile(shared, 'one\ntwo\nthree\nfour\nfive on main\n')
+  await git(directory, 'add', 'shared')
+  await fs.writeFile(path.join(directory, 'collision'), 'keep my file')
+  await expect(switchTo('other', 'smart')).rejects.toThrow('추적하지 않는 파일을 덮어씁니다')
+  expect(await git(directory, 'branch', '--show-current')).toBe('main')
+  expect(await git(directory, 'diff', '--cached', '--name-only')).toBe('shared')
+  expect(await fs.readFile(shared, 'utf8')).toBe('one\ntwo\nthree\nfour\nfive on main\n')
+  expect(await fs.readFile(path.join(directory, 'collision'), 'utf8')).toBe('keep my file')
+  expect(await stashes(directory)).toBe('')
+}, 15000)
+
+test('force checkout switches to the target version and keeps the discarded changes as a stash backup', async () => {
+  const { directory, shared, switchTo } = await smartCheckoutFixture()
+  await fs.writeFile(shared, 'one\ntwo\nthree\nfour\nfive on main\n')
+  await fs.writeFile(path.join(directory, 'notes'), 'untracked stays')
+  const result = await switchTo('other', 'force')
+  expect(result).toMatchObject({ branch: 'other', checkout: { kind: 'force' } })
+  expect(await git(directory, 'status', '--porcelain', '--untracked-files=no')).toBe('')
+  expect(result.checkout.stash).toMatch(/^ezShell 강제 체크아웃 백업: main → other/)
+  expect(await fs.readFile(shared, 'utf8')).toBe('one\ntwo\nthree\nfour\nfive on other\n')
+  expect(await fs.readFile(path.join(directory, 'notes'), 'utf8')).toBe('untracked stays')
+  expect(await stashes(directory)).toContain('ezShell 강제 체크아웃 백업: main → other')
+  await expect(switchTo('main', 'sideways')).rejects.toThrow('체크아웃 방식')
+}, 15000)
+
+test('blocks in-progress checkouts and protects untracked files when switching branches', async () => {
   const project = await fixtureDirectory()
   const directory = path.join(project, 'service')
   await git(project, 'init', '-b', 'main', directory)
@@ -560,11 +647,6 @@ test('blocks dirty and in-progress checkouts and protects untracked files when s
   await git(directory, 'switch', 'main')
   const worker = createNestedRepositories({ discover })
   const switchBranch = () => worker.switchBranch(project, 'service', { name: 'other' }, check)
-  await fs.writeFile(path.join(directory, 'initial'), 'edited')
-  await expect(switchBranch()).rejects.toThrow('수정하거나 스테이징한 파일')
-  await git(directory, 'add', 'initial')
-  await expect(switchBranch()).rejects.toThrow('수정하거나 스테이징한 파일')
-  await git(directory, 'restore', '--source=HEAD', '--staged', '--worktree', '--', 'initial')
 
   for (const marker of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'rebase-merge', 'sequencer']) {
     const file = path.join(directory, '.git', marker)

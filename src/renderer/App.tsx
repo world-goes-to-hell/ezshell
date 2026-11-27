@@ -61,6 +61,7 @@ import { addScreenRefusal, dragDivider, evenSizes } from './lib/screenPanes'
 import { TabGroupChips } from './components/Terminal/TabGroupChips'
 import { agentKindsByShell, agentsOfLocalTab, openLocalWithAgents } from './lib/restoreAgents'
 import { OPEN_CLAUDE_PROFILE_EVENT, useClaudeProfiles, type OpenClaudeProfile } from './lib/claudeProfiles'
+import { continueUnderClaudeProfile } from './lib/claudeAccountContinue'
 import { useAgentScreenReturnStore } from './stores/agentScreenReturnStore'
 import { useAgentUsageStore } from './stores/agentUsageStore'
 import { UpdateNotification } from './components/Update/UpdateNotification'
@@ -1026,7 +1027,12 @@ function App() {
     if (!unlockedOnce) return
     void useClaudeProfiles.getState().load().catch(() => {})
     const open = async (event: Event) => {
-      const { profileId, shellId } = (event as CustomEvent<OpenClaudeProfile>).detail
+      const { profileId, shellId, mode } = (event as CustomEvent<OpenClaudeProfile>).detail
+      if (mode === 'continue' && shellId) {
+        const switched = await continueUnderClaudeProfile(shellId, profileId).catch(() => ({ ok: false as const, error: undefined }))
+        if (!switched.ok) toast.error('Claude 계정을 바꾸지 못했습니다', switched.error)
+        return
+      }
       const current = useTerminalStore.getState()
       const active = current.activeTerminalId ? current.terminals.get(current.activeTerminalId) : undefined
       try {
@@ -1088,9 +1094,7 @@ function App() {
     }
   }
 
-  // A run preset's server (the card's 로그 / ▶, the crash notice): its tab to the front, made from main's
-  // shell list when the server has none yet (an agent started it, or the tab was closed); with an error
-  // line, scrolled to the first line that has it
+  // Focus the log viewer or attach a new one to the preset shell, including after the run has ended.
   const revealRunShellTab = async ({ shellId, label, errorLine }: RevealRunShell) => {
     const findPane = () => {
       const store = useTerminalStore.getState()
@@ -1104,13 +1108,16 @@ function App() {
     let found = findPane()
     if (!found) {
       const shells = await window.electronAPI.localShellList?.().catch(() => undefined)
-      const shell = shells?.find(item => item.id === shellId && !item.exited)
-      if (!shell) {
-        toast.error('서버의 터미널을 찾지 못했습니다', label)
-        return
-      }
-      addLocalTerminalTab({ id: shell.id, name: shell.name, cwd: shell.cwd ?? undefined }, label)
       found = findPane()
+      if (!found) {
+        const shell = shells?.find(item => item.id === shellId && item.development?.runPreset)
+        if (!shell) {
+          toast.error('서버의 터미널을 찾지 못했습니다', label)
+          return
+        }
+        addLocalTerminalTab({ id: shell.id, name: shell.name, cwd: shell.cwd ?? undefined }, label)
+        found = findPane()
+      }
     }
     if (!found) return
     focusTabPane(useTerminalStore.getState().focusTerminal, found.tabId, found.pane)

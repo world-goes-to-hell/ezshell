@@ -486,7 +486,8 @@ function fixture(backendPort, frontendPort) {
     check('the filled command follows the folder while untouched (none found: empty, with the example)', await until(`
       document.querySelector('.run-preset-command')?.value === '' && !document.querySelector('.run-preset-command-found')`))
     // Two spaces on purpose: the question must show the command as it runs
-    const typed = `node "${server}" --crash-after  5000`
+    const crashFile = '.ezshell-crash-test'
+    const typed = `node "${server}" --crash-file  ${crashFile}`
     await setValue('.run-preset-command', typed)
     check('a typed command is warned about in the dialog', await js(`!!document.querySelector('.run-preset-warn')`))
     // Stage 3: hot reload is for Spring Boot runs only; a typed command (the Node fixture) keeps it off
@@ -515,6 +516,8 @@ function fixture(backendPort, frontendPort) {
       return list.presets?.find(item => item.name === '시험 서버')?.logEncoding === 'utf-8'
     })()`))
     await shot('local-run-preset-idle')
+    const tabsBeforeStart = await js(`[...document.querySelectorAll('.terminal-tab')].map(tab => tab.dataset.tabId)`)
+    const activeBeforeStart = await js(`${activeTab}?.dataset.tabId ?? null`)
     await click(...await center(`${presetRow}.querySelector('[data-action="start"]')`))
     const ask = `document.querySelector('.run-command-dialog')`
     check('the typed command is shown exactly, spaces kept, before it first runs', await until(`
@@ -528,10 +531,23 @@ function fixture(backendPort, frontendPort) {
     await until(`!!${ask}`)
     await sleep(900)
     await js(`[...${ask}.querySelectorAll('button')].find(b => b.textContent.trim() === '실행').click()`)
-    check('the preset starts and its tab comes to the front', await until(`['starting', 'running'].includes(${presetRow}?.dataset.status) &&
-      ${inTerminal('VITE v5.4.0 ready')}`, 15000))
     check('once ready the row shows its port', await until(`${presetRow}?.dataset.status === 'running' &&
       /:\\d+/.test(${presetRow}.querySelector('.run-preset-pill[data-kind="port"]')?.textContent ?? '')`, 10000))
+    const readRun = async () => js(`(async () => {
+      const list = await window.electronAPI.runPresetsList(${JSON.stringify(repo)})
+      return list.states[list.presets.find(item => item.name === '시험 서버').id]
+    })()`)
+    const { shellId: presetShell, startedAt: presetStarted, address: presetAddress } = await readRun()
+    const presetTab = `document.querySelector('.terminal-tab[data-tab-id="${presetShell}"]')`
+    const presetListItem = `document.querySelector('.local-terms-item[data-local-session-id="${presetShell}"]')`
+    const tabsAfterStart = await js(`[...document.querySelectorAll('.terminal-tab')].map(tab => tab.dataset.tabId)`)
+    check('starting a preset leaves the tab bar and terminal list unchanged',
+      JSON.stringify(tabsAfterStart) === JSON.stringify(tabsBeforeStart) &&
+      await js(`(${activeTab}?.dataset.tabId ?? null) === ${JSON.stringify(activeBeforeStart)} && !${presetListItem}`))
+    const logButton = `${presetRow}.querySelector('[data-action="log"]')`
+    await click(...await center(logButton))
+    const presetLogOpen = `${activeTab}?.dataset.tabId === ${JSON.stringify(presetShell)} && ${inTerminal('VITE v5.4.0 ready')}`
+    check('로그 보기 opens the preset log and its existing output', await until(presetLogOpen, 10000))
     // An error count shares the details line with the port while the name and actions stay above.
     const fits = await js(`(() => {
       const row = ${presetRow}
@@ -555,15 +571,29 @@ function fixture(backendPort, frontendPort) {
       return result
     })()`)
     check('a running row keeps its name and actions above the port and error count', fits.buttons >= 3 && fits.portOpens && fits.detailsBelow && fits.out.length === 0 && fits.nameWidth >= 20, JSON.stringify(fits))
-    // The row tells the preset server's state (the tab of a local shell is its id)
-    const presetShell = await js(`${activeTab}?.dataset.tabId`)
     // The tab keeps its status dot (seen with the sidebar folded); only the text chip is left to the card
     check('the old development chip leaves a preset server alone, the tab keeps its dot', await js(`!document.querySelector('.development-status-chip[data-development-shell="' + ${JSON.stringify(presetShell)} + '"]') &&
       !!${activeTab}?.querySelector('.development-status-dot')`), String(presetShell))
     await shot('local-run-preset-running')
+    const closePresetLog = async () => {
+      await js(`${presetTab}.querySelector('.tab-close').click()`)
+      return until(`!${presetTab} && !${presetListItem}`)
+    }
+    const logClosed = await closePresetLog()
+    const { shellId: liveShell, startedAt: liveStarted, status: liveStatus } = await readRun()
+    const response = await waitServer(Number(new URL(presetAddress).port), value => value === 'ready')
+    check('closing a log removes both entries and leaves the same service responding', logClosed &&
+      liveShell === presetShell && liveStarted === presetStarted && liveStatus === 'running' && response === 'ready')
+    await click(...await center(logButton))
+    check('로그 보기 reattaches to the same run with its earlier output', await until(presetLogOpen, 10000))
+    await closePresetLog()
+    fs.writeFileSync(path.join(repo, crashFile), '')
     check('a crash turns the row red and tells the exit code', await until(`${presetRow}?.dataset.status === 'crashed' &&
-      ${presetRow}.textContent.includes('종료 1')`, 15000))
+      ${presetRow}.textContent.includes('종료 1') && !${presetTab}`, 15000))
+    fs.unlinkSync(path.join(repo, crashFile))
     const notice = `document.querySelector('.run-crash')`
+    await until(`!!${notice}`)
+    await js(`[...${notice}.querySelectorAll('button')].find(b => b.textContent.includes('로그 보기')).click()`)
     check('the crash notice masks the credential while the terminal shows the original output', await until(`
       ${notice}?.textContent.includes('Internal server error: fixture failed pwd=****') &&
       !${notice}.textContent.includes('fixture-terminal-only') && ${inTerminal('fixture-terminal-only')}`, 5000))
@@ -592,8 +622,10 @@ function fixture(backendPort, frontendPort) {
       await js(`${diagnosis}?.textContent`))
     await js(`[...${diagnosis}.querySelectorAll('button')].find(b => b.textContent.trim() === '닫기').click()`)
     await until(`!${diagnosis}`)
-    // Another tab in front first: a click that reached the row would bring the preset's log tab forward
-    await js(`[...document.querySelectorAll('.terminal-tab')].find(tab => tab.dataset.tabId !== ${JSON.stringify(presetShell)})?.click()`)
+    // A separate terminal in front: a click that reached the row would bring the preset's log tab forward
+    await rightClick(worktreeRow)
+    await until(`(${menuText}).includes('터미널 실행')`)
+    await driver.pick('터미널 실행')
     await until(`${activeTab}?.dataset.tabId !== ${JSON.stringify(presetShell)}`)
     const tabBeforeDiagnosis = await js(`${activeTab}?.dataset.tabId`)
     await click(...await center(`${presetRow}.querySelector('[aria-label$="더 보기"]')`))
@@ -605,9 +637,9 @@ function fixture(backendPort, frontendPort) {
       JSON.stringify({ before: tabBeforeDiagnosis, after: await js(`${activeTab}?.dataset.tabId`), presetShell }))
     await js(`[...${diagnosis}.querySelectorAll('button')].find(b => b.textContent.trim() === '닫기').click()`)
     await until(`!${diagnosis}`)
+    await closePresetLog()
     await js(`[...${notice}.querySelectorAll('button')].find(b => b.textContent.includes('다시 실행')).click()`)
-    check('다시 실행 starts it again and takes the notice away', await until(`['starting', 'running'].includes(${presetRow}?.dataset.status) && !${notice}`, 10000))
-    // It crashes again by design: stop it first so the next crash does not race the end of the spec
+    check('다시 실행 starts it in the background and takes the notice away', await until(`['starting', 'running'].includes(${presetRow}?.dataset.status) && !${notice} && !${presetTab}`, 10000))
     await until(`${presetRow}?.dataset.status === 'running'`, 10000)
     await click(...await center(`${presetRow}.querySelector('[data-action="stop"]')`))
     check('■ stops the preset (stopped, not crashed)', await until(`${presetRow}?.dataset.status === 'stopped' && !${notice}`, 10000))
