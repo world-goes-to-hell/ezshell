@@ -680,6 +680,8 @@ export interface AgentMessage {
   text: string
   replyTo?: string
   replyStatus?: 'completed' | 'deferred'
+  /** Sent with urgent: true: also typed into the recipient's chat while it works */
+  urgent?: boolean
   /** Browser request as entered in the app, apart from the element context sent to the agent. */
   reviewRequest?: { text: string; url: string; selector: string; imageCount?: number }
   sentAt: number
@@ -928,8 +930,10 @@ export interface WorkspaceDirectoryEntry {
   kind: 'directory' | 'file' | 'link'
 }
 
+export type WorkspaceSearchRange = [start: number, end: number]
+
 export interface WorkspaceDirectorySearchResult {
-  entries: (WorkspaceDirectoryEntry & { path: string })[]
+  entries: (WorkspaceDirectoryEntry & { path: string; ranges?: WorkspaceSearchRange[] })[]
   truncated: boolean
   /** Installed/generated folders (node_modules, build…) the default search lists but does not read */
   skipped?: { count: number; names: string[] }
@@ -940,7 +944,7 @@ export interface WorkspaceDirectorySearchResult {
 /** 프로젝트 검색's content search (src/localFiles/contentSearch.js): lines per file, paths relative with / */
 export interface WorkspaceContentSearchResult {
   engine: 'git' | 'scan'
-  files: { path: string; matches: { line: number; text: string }[] }[]
+  files: { path: string; matches: { line: number; text: string; ranges?: WorkspaceSearchRange[] }[] }[]
   /** A limit was reached (lines, files, lines per file, time): there is more */
   truncated: boolean
 }
@@ -979,6 +983,26 @@ export interface WorkspaceGitFile {
   path: string
   kind: WorkspaceGitFileKind
   from?: string
+}
+
+/**
+ * Which agents changed an uncommitted file (docs/plan/2026-11-28-agent-file-owners.md): main matches the file's
+ * change to the agent whose tool was running then. Two or more agents: the file overlaps.
+ */
+export interface WorkspaceFileOwner {
+  /** Relative to the repository top, `/` separated, as in git status */
+  path: string
+  /** Most recent first */
+  agents: { id: string; kind: 'claude' | 'codex'; role?: string; lastAt: number }[]
+  /** Several agents ran a tool when it changed: they are all listed, the match is a guess */
+  uncertain: boolean
+}
+
+/** A repository the user froze (merging): the other agents were told to stop; `except` keeps working */
+export interface WorkspaceFreeze {
+  since: number
+  except?: { id: string; role?: string }
+  reason?: string
 }
 
 export interface WorkspaceGitStatus {
@@ -1137,6 +1161,8 @@ export interface RunProposal {
 
 export interface RunState {
   status: RunStatus
+  /** First detection after two failed health checks. Present only while running and unresponsive. */
+  unresponsive?: { since: number }
   exitCode?: number | null
   address?: string
   startedAt?: number
@@ -1202,6 +1228,7 @@ export interface RunPresetResult {
 }
 
 export type RunPresetOptions = { confirmCustom?: true; confirmInstall?: true; dependencies?: 'include' | 'only' }
+export type RunPresetScope = { bundleId?: string; presetIds?: readonly string[] }
 
 export type RunStageGate = { kind: 'none' | 'ready' } | { kind: 'log' | 'url'; value: string }
 export interface RunStartOrder {
@@ -1466,13 +1493,24 @@ declare global {
       onLocalShellDevelopmentState?: (callback: (event: { id: string; development: LocalDevelopmentRun | null }) => void) => () => void
       workspaceDirectoryList: (folder: string, relative?: string) => Promise<{ success: true; entries: WorkspaceDirectoryEntry[]; total: number } | { success: false; error: string }>
       workspaceDirectoryPrepare?: (root: string, refresh?: boolean, includeAll?: boolean) => Promise<{ success: true } | { success: false; error: string }>
-      workspaceDirectorySearch?: (root: string, query: string, includeAll?: boolean) => Promise<({ success: true } & WorkspaceDirectorySearchResult) | { success: false; error: string }>
-      workspaceContentSearch?: (root: string, query: string, caseSensitive?: boolean) => Promise<({ success: true } & WorkspaceContentSearchResult) | { success: false; error: string }>
+      workspaceDirectorySearch?: (root: string, query: string, includeAll?: boolean, regex?: boolean) => Promise<({ success: true } & WorkspaceDirectorySearchResult) | { success: false; error: string }>
+      workspaceContentSearch?: (root: string, query: string, caseSensitive?: boolean, regex?: boolean) => Promise<({ success: true } & WorkspaceContentSearchResult) | { success: false; error: string }>
       workspaceGitStatus?: (root: string) => Promise<{ success: true; repo: WorkspaceGitStatus | null } | { success: false; error: string }>
       workspaceGitCommitFiles?: (root: string, hash: string) => Promise<{ success: true; files: WorkspaceGitFile[] } | { success: false; error: string }>
       workspaceGitDiff?: (root: string, file: string, hash?: string) => Promise<({ success: true } & WorkspaceGitDiff) | { success: false; error: string }>
       /** Commits the ticked files of the change list (paths relative to the repository top) */
       workspaceGitCommit?: (root: string, files: string[], message: string) => Promise<{ success: true; hash: string; shortHash: string; count: number; warning?: string } | { success: false; error: string }>
+      /** The agents that changed the uncommitted files of the repository `root` (the same root as workspaceGitCommit) */
+      workspaceFileOwners?: (root: string) => Promise<{ success: true; owners: WorkspaceFileOwner[]; freeze?: WorkspaceFreeze | null } | { success: false; error: string }>
+      /** Freezes (tells the other agents of the repository to stop, `except` keeps working) or thaws the repository `root` (repo.top) */
+      /** The diagnostics bundle (docs/plan/2026-11-28-diagnostics.md): readable text, and the errors of the last 24 hours */
+      diagnosticsReport?: () => Promise<{ success: true; text: string; errors: number } | { success: false; error: string }>
+      /** main builds the bundle again and writes it where the user picks */
+      diagnosticsSave?: () => Promise<{ success: true; path: string } | { success: false; cancelled: true } | { success: false; error: string }>
+      diagnosticsOpenLogs?: () => Promise<{ success: boolean }>
+      workspaceFileFreeze?: (root: string, frozen: boolean, except?: string, reason?: string) => Promise<{ success: true; freeze: WorkspaceFreeze | null } | { success: false; error: string }>
+      /** The owners of a repository changed (at most every 0.5s): read them again. Returns the cleanup. */
+      onWorkspaceFileOwnersChanged?: (callback: (event: { root: string }) => void) => () => void
       /** A file on this PC in the file window; `relative` is relative to `root` */
       localFileOpen?: (root: string, relative: string, mode: 'edit' | 'preview', label?: string, options?: { compareHead?: boolean; line?: number }) => Promise<{ success: true } | { success: false; error: string }>
       localFileReveal?: (root: string, relative: string) => Promise<{ success: true } | { success: false; error: string }>
@@ -1610,7 +1648,7 @@ declare global {
       runtimesOpenLicense: (vendor: JdkVendor | 'hotswap-agent' | DevelopmentTool) => Promise<boolean>
       // Run presets of the local projects (src/ipc/runPresets.js; main window, unlocked). The first
       // argument is the worktree folder of the card: the presets are the project's, the states that worktree's
-      runPresetsList?: (worktreeFolder: string) => Promise<RunPresetResult & { projectKey: string; worktreeKey: string; presets: RunPreset[]; states: Record<string, RunState>; bundles?: RunBundle[]; startOrder?: RunStartOrder; batch?: RunStartProgress | null }>
+      runPresetsList?: (worktreeFolder: string) => Promise<RunPresetResult & { projectKey: string; worktreeKey: string; presets: RunPreset[]; states: Record<string, RunState>; bundles?: RunBundle[]; startOrder?: RunStartOrder; startOrderConfigured?: boolean; batch?: RunStartProgress | null }>
       runPresetsCandidates?: (projectFolder: string, relative: string) => Promise<RunPresetResult & { candidates: RunCandidate[] }>
       runPresetsSave?: (projectFolder: string, preset: Partial<RunPreset>) => Promise<RunPresetResult & { preset?: RunPreset }>
       runPresetsDelete?: (projectFolder: string, id: string) => Promise<RunPresetResult>
@@ -1621,8 +1659,8 @@ declare global {
       runPresetRestart?: (projectFolder: string, id: string, options?: RunPresetOptions) => Promise<RunPresetResult>
       runPresetStop?: (projectFolder: string, id: string) => Promise<RunPresetResult>
       /** bundleId: start only that bundle's presets, in the project's start order */
-      runPresetStartAll?: (projectFolder: string, options?: RunPresetOptions & { bundleId?: string }) => Promise<RunPresetResult>
-      runPresetStopAll?: (projectFolder: string, options?: { bundleId?: string }) => Promise<RunPresetResult>
+      runPresetStartAll?: (projectFolder: string, options?: RunPresetOptions & RunPresetScope) => Promise<RunPresetResult>
+      runPresetStopAll?: (projectFolder: string, options?: RunPresetScope) => Promise<RunPresetResult>
       /** Saves a bundle (a new one without id) of the project; the project's bundles after it */
       runPresetBundleSave?: (projectFolder: string, bundle: { id?: string; name: string; presetIds: string[] }) => Promise<RunPresetResult & { bundles?: RunBundle[] }>
       runPresetBundleDelete?: (projectFolder: string, id: string) => Promise<RunPresetResult & { bundles?: RunBundle[] }>

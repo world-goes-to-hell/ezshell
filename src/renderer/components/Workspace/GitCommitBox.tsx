@@ -1,7 +1,9 @@
 // The commit box of the workspace panel's "변경" tab: a message, a button that commits the ticked
 // files (docs/plan/2026-11-24-workspace-git-commit.md), and Git's words when it refused.
 import type { KeyboardEvent } from 'react'
-import { RiGitCommitLine } from 'react-icons/ri'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import { RiArrowDownSLine, RiGitCommitLine, RiRobot2Line } from 'react-icons/ri'
+import { agentName, type AgentFiles } from '../../lib/fileOwners'
 import { forgetAfterCommit } from '../../lib/gitReadCache'
 import { toast } from '../../stores/toastStore'
 import { draftOf, useGitCommitStore } from '../../stores/gitCommitStore'
@@ -37,8 +39,13 @@ async function commitDraft(top: string, paths: string[], onDone: () => void): Pr
   }
 }
 
-/** `waiting`: the changes shown are an earlier list being read again (after a commit, a refresh) */
-export function GitCommitBox({ top, paths, waiting = false, onCommitted }: { top: string; paths: string[]; waiting?: boolean; onCommitted: () => void }) {
+/**
+ * `waiting`: the changes shown are an earlier list being read again (after a commit, a refresh).
+ * `agents`: the agents that changed files of the list; picking one ticks exactly its files (`onPickAgent`).
+ */
+export function GitCommitBox({ top, paths, waiting = false, onCommitted, agents = [], onPickAgent }: {
+  top: string; paths: string[]; waiting?: boolean; onCommitted: () => void; agents?: readonly AgentFiles[]; onPickAgent?: (paths: string[]) => void
+}) {
   const draft = useGitCommitStore(state => draftOf(state.repos, top))
   const setMessage = useGitCommitStore(state => state.setMessage)
   const count = paths.length
@@ -55,6 +62,29 @@ export function GitCommitBox({ top, paths, waiting = false, onCommitted }: { top
     : `선택한 ${count.toLocaleString()}개 파일 커밋`
   return (
     <div className="workspace-commit-box" data-busy={draft.busy || undefined}>
+      {agents.length > 0 && onPickAgent && (
+        <DropdownMenu.Root modal={false}>
+          <DropdownMenu.Trigger asChild>
+            <button type="button" className="workspace-commit-agents" disabled={draft.busy || waiting}
+              title="한 에이전트가 고친 파일만 고릅니다 (지금 선택을 바꿉니다)">
+              <RiRobot2Line size={14} aria-hidden="true" />
+              <span>에이전트로 고르기</span>
+              <RiArrowDownSLine size={14} aria-hidden="true" />
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content className="terminal-menu workspace-commit-agent-menu" align="start" sideOffset={4} collisionPadding={8}>
+              {agents.map(({ agent, paths: files, shared }) => (
+                <DropdownMenu.Item key={agent.id} className="terminal-menu-item workspace-commit-agent" data-kind={agent.kind} onSelect={() => onPickAgent(files)}
+                  title={shared ? `다른 에이전트도 고친 파일 ${shared}개가 함께 골라집니다` : undefined}>
+                  <span className="workspace-commit-agent-name">{agentName(agent)}</span>
+                  <span className="workspace-commit-agent-count">{files.length}개{shared > 0 && <span className="workspace-git-overlap">겹침 {shared}</span>}</span>
+                </DropdownMenu.Item>
+              ))}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      )}
       <textarea
         className="workspace-commit-message"
         rows={2}

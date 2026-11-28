@@ -18,6 +18,14 @@ const messagePrompt = id => {
 }
 const MESSAGE_PROMPT = /^ezShell message [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} is waiting for you: read it now with read_inbox, then handle it\.$/i
 
-const isInboxPrompt = text => inboxPrompts.has(text.trim()) || MESSAGE_PROMPT.test(text.trim())
+// An agent's send_message with urgent: true (2026-11-28 user request): goes in through the same chat send path
+// while the recipient works, so it reads the message before finishing its current task. Built only by main.
+const urgentPrompt = id => {
+  if (!MESSAGE_ID.test(id)) throw new Error('메시지를 확인해 주세요.')
+  return `Urgent ezShell message ${id}: pause your current task, read it now with read_inbox and handle it first.`
+}
+const URGENT_PROMPT = /^Urgent ezShell message [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}: pause your current task, read it now with read_inbox and handle it first\.$/i
 
-module.exports = { PROMPT, BUSY_PROMPT, REMIND_PROMPT, isInboxPrompt, messagePrompt, MESSAGE_ID }
+const isInboxPrompt = text => inboxPrompts.has(text.trim()) || MESSAGE_PROMPT.test(text.trim()) || URGENT_PROMPT.test(text.trim())
+
+module.exports = { PROMPT, BUSY_PROMPT, REMIND_PROMPT, isInboxPrompt, messagePrompt, urgentPrompt, MESSAGE_ID }

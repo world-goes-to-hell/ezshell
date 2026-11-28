@@ -203,7 +203,8 @@ function runHook(step) {
     hook_event_name: step.event,
     session_id: hookSessionId(),
     ...(step.prompt ? { prompt_id: promptUuid(step.prompt) } : {}),
-    ...(step.tool ? { tool_use_id: step.tool, tool_name: 'Bash' } : {}),
+    // `toolName`: a file editing tool (`Edit`) for the file owners (local-agent-file-owners); Bash otherwise
+    ...(step.tool ? { tool_use_id: step.tool, tool_name: step.toolName ?? 'Bash' } : {}),
     ...(step.event === 'Stop' ? { stop_hook_active: step.active === true } : {}),
     ...(step.event === 'SessionStart' ? { source: 'startup' } : {})
   })

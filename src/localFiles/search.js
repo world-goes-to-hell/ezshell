@@ -5,6 +5,7 @@
 const fs = require('fs')
 const path = require('path')
 const { sameOrInside } = require('./roots.js')
+const { compileSearchPattern, runRegexSearch } = require('./regexSearch.js')
 
 const RESULT_LIMIT = 200
 const ENTRY_LIMIT = 200000
@@ -335,9 +336,26 @@ function createDirectorySearch({ now = Date.now, watch = defaultWatch } = {}) {
   return {
     clear,
     prepare(root, refresh, includeAll) { indexOf(root, refresh === true, includeAll === true) },
-    async search(root, query, signal, _worktreeOnly, includeAll) {
+    async search(root, query, signal, _worktreeOnly, includeAll, regex) {
       signal.throwIfAborted()
       const index = indexOf(root, false, includeAll === true)
+      if (regex) {
+        compileSearchPattern(query, false)
+        while (!index.finished) {
+          signal.throwIfAborted()
+          index.controller.signal.throwIfAborted()
+          await index.changed
+        }
+        if (index.error) throw index.error
+        const listing = index.list()
+        const paths = listing.filter(entry => entry.kind === 'file').map(entry => entry.path)
+        const result = await runRegexSearch({ type: 'paths', paths, query, limit: RESULT_LIMIT }, { signal, timeout: TIME_LIMIT_MS })
+        return {
+          entries: result.entries.sort((a, b) => a.path.localeCompare(b.path)),
+          truncated: result.truncated || index.truncated,
+          ...(includeAll === true ? { includedAll: true } : skippedOf(listing))
+        }
+      }
       const terms = normalized(query).split(/\s+/)
       let matches = []
       let source = null

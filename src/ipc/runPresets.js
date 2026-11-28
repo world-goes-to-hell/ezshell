@@ -25,7 +25,8 @@ const { createRunPresetStore, validatePreset, presetName, presetRelative, public
 const { createRunBundleStore } = require('./runBundleStore.js')
 const { protectScratchOwner, reapRunScratch } = require('./runScratch.js')
 const { describeHandover, handedRun, adoptedTask } = require('./runHandover.js')
-const { validateStartOrder, selectStartStages, stopStages, runStartStages, legacyStartOrder } = require('./runStartOrder.js')
+const { validateStartOrder, selectStartStages, stopStages, runStartStages, legacyStartOrder,
+  runHealthTarget, createRunHealthMonitor } = require('./runStartOrder.js')
 
 const USER = 'user'
 const USER_STOP_MS = 30_000
@@ -96,7 +97,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   toolHomeOf = () => null, toolHomeFor = () => null, toolVersionOf = () => null,
   enhancedJvmArgs = () => null, userData = file && path.dirname(file), prepareReload = prepareHotReload, startReload = startHotReload,
   sendState = () => {}, notifyCrash = () => {}, sendAsUser, now = Date.now, projectOf = resolveProject,
-  prepareTask = prepareDevelopmentTask, jarHome, bundleStore,
+  prepareTask = prepareDevelopmentTask, jarHome, bundleStore, probeHealth,
   // Scratch of runs handed over by the app before an update (runScratch.js)
   protectScratch = protectScratchOwner, reapScratch = () => reapRunScratch(userData) }) {
   store ??= createRunPresetStore(file)
@@ -112,6 +113,8 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   let reloadSequence = 0
   const getRun = (project, id) => runs.get(runKey(project, id))
   const orderOf = project => store.startOrder?.(project.key) ?? legacyStartOrder(store.list(project.key))
+  const health = createRunHealthMonitor({ now, probe: probeHealth,
+    onChange: (run, unresponsive) => update(run, { unresponsive }) })
   const failedRun = run => run?.state.status === 'crashed' ||
     (!run?.intentionalExit && Number.isInteger(run?.state.exitCode) && run.state.exitCode !== 0)
 
@@ -130,9 +133,26 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     return run
   }
 
+  function refreshHealthTarget(run, next, order) {
+    const gate = next.status === 'running'
+      ? (order ?? orderOf(run.project)).stages.find(stage => stage.ids.includes(run.id))?.gate : undefined
+    return health.setTarget(run, runHealthTarget(gate, next.address))
+  }
+
+  function refreshProjectHealth(project) {
+    const order = orderOf(project)
+    for (const run of runs.values()) {
+      if (run.project.key === project.key && refreshHealthTarget(run, run.state, order)) update(run, { unresponsive: undefined })
+    }
+  }
+
   function update(run, patch, firstAgentAction = false) {
     if (Object.entries(patch).every(([key, value]) => run.state[key] === value)) return
-    run.state = { ...run.state, ...patch }
+    const next = { ...run.state, ...patch }
+    if ((next.status !== run.state.status || next.address !== run.state.address) && refreshHealthTarget(run, next)) {
+      next.unresponsive = undefined
+    }
+    run.state = next
     for (const settle of run.waiters) settle()
     if (!isLocked()) sendState({ projectKey: run.project.key, worktreeKey: run.project.worktreeKey,
       id: run.id, state: run.state, ...(firstAgentAction && { firstAgentAction: true }) })
@@ -235,7 +255,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       for (const driver of task.missingJdbcDrivers ?? []) {
         run.logs.addError('ERROR Tomcat JNDI JDBC 드라이버를 찾을 수 없습니다.', [`java.lang.ClassNotFoundException: ${driver}`])
       }
-      if (task.missingJdbcDrivers?.length) updateLogs(run)
+      if (task.missingJdbcDrivers?.length || (run.expectedUrl && run.state.status === 'running')) updateLogs(run)
       if (task.hotReload) {
         const env = task.projectJavaHome ? { ...event.env, JAVA_HOME: task.projectJavaHome } : event.env
         run.reloadLaunch = { config: task.hotReload, pid: event.pid, env }
@@ -290,7 +310,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
 
   // The run goes on as after a start: its log from what the server printed, the state the old app had
   function resumeRun(run, task, preset, shellId, handed, buffer) {
-    run.expectedUrl = undefined
+    run.expectedUrl = handed.expectedUrl ?? undefined
     byShell.set(shellId, run)
     run.orderLogMatched = false
     run.intentionalExit = false
@@ -569,7 +589,8 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       const presets = store.list(project.key).map(preset => {
         const state = getRun(project, preset.id)?.state ?? idle()
         return { name: preset.name, status: state.status, port: portOf(state.address),
-          errors: state.errors, agentControl: preset.agentControl, ...(state.failedAt && { failedAt: state.failedAt }), ...(state.reload && { reload: state.reload }) }
+          errors: state.errors, agentControl: preset.agentControl, ...(state.unresponsive && { unresponsive: state.unresponsive }),
+          ...(state.failedAt && { failedAt: state.failedAt }), ...(state.reload && { reload: state.reload }) }
       })
       const batch = batches.get(project.worktreeKey)?.state
       const bundles = bundleStore.list(project.key, store.list(project.key).map(preset => preset.id))
@@ -871,6 +892,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       && (run.busy || ACTIVE.has(run.state.status)))) throw new Error(MOVED)
     if (userData) removeMavenSettings({ userData, presetId: id })
     store.write(project.root, store.list(project.key).filter(preset => preset.id !== id))
+    refreshProjectHealth(project)
     for (const run of instances) {
       closeReload(run)
       if (run.state.shellId) {
@@ -935,6 +957,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
     if (approval && previous?.confirmedHash === approval.hash) next.confirmedHash = previous.confirmedHash
     if (previous?.agentActionNotified) next.agentActionNotified = true
     store.write(project.root, previous ? current.map(item => item.id === id ? next : item) : [...current, next])
+    refreshProjectHealth(project)
     if (previous) for (const run of runs.values()) {
       if (run.id === id && run.project.key === project.key) expireProposals(run, next)
     }
@@ -1051,10 +1074,17 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
   const presetIdsOf = project => store.list(project.key).map(preset => preset.id)
   /** The presets a bundle starts (by id from the screen, by name from the MCP tools) */
   const bundleSelection = (project, which) => bundleStore.selection(project.key, presetIdsOf(project), which)
+  function presetSelection(project, ids) {
+    const known = new Set(presetIdsOf(project))
+    if (!Array.isArray(ids) || !ids.length || ids.length > known.size || ids.some(id => !known.has(id))) {
+      throw new Error('선택한 실행 구성을 다시 확인해 주세요.')
+    }
+    return [...new Set(ids)].sort()
+  }
 
   return {
     projectOf, act, save, remove, send, sendPreview, startOne, startAll, resumeBatch, stopAll, applySuggestion, dismissProposal, mavenPinStatus, changeMavenPin,
-    bundleSelection, holdKeptScratch, adoptRun, releaseKeptScratch,
+    bundleSelection, presetSelection, holdKeptScratch, adoptRun, releaseKeptScratch,
     saveBundle(project, input, allowed) {
       ensureAllowed(allowed)
       return { ok: true, bundles: bundleStore.save(project.key, input, presetIdsOf(project)) }
@@ -1078,6 +1108,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       const order = validateStartOrder(input, presets)
       const ids = new Set(order.stages.flatMap(stage => stage.ids))
       store.write(project.root, presets.map(preset => preset.inAll === ids.has(preset.id) ? preset : { ...preset, inAll: ids.has(preset.id) }), order)
+      refreshProjectHealth(project)
       return { ok: true }
     },
     async agentTool(...args) {
@@ -1093,7 +1124,8 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       const presets = store.list(project.key)
       return { projectKey: project.key, worktreeKey: project.worktreeKey, presets: presets.map(publicPreset),
         bundles: bundleStore.list(project.key, presets.map(preset => preset.id)),
-        startOrder: orderOf(project), batch: batches.get(project.worktreeKey)?.state ?? null,
+        startOrder: orderOf(project), startOrderConfigured: store.hasStartOrder?.(project.key) ?? false,
+        batch: batches.get(project.worktreeKey)?.state ?? null,
         states: Object.fromEntries(presets.map(preset => [preset.id, getRun(project, preset.id)?.state ?? idle()])) }
     },
     async candidates(project, relative) {
@@ -1153,6 +1185,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       const current = store.list(project.key)
       if (!Array.isArray(ids) || ids.length !== current.length || new Set(ids).size !== ids.length) throw new Error('구성 순서를 확인해 주세요.')
       store.write(project.root, ids.map(id => find(project, id)))
+      refreshProjectHealth(project)
       return { ok: true }
     },
     errors(project, id) { return { groups: redactRunOutput(getRun(project, find(project, id).id)?.logs.groups() ?? []) } },
@@ -1176,6 +1209,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       }
     },
     resumeReloads() { for (const run of runs.values()) openReload(run) },
+    stopHealthChecks() { health.close() },
     stopReloads() {
       for (const run of runs.values()) closeReload(run)
     }
@@ -1249,11 +1283,21 @@ function registerRunPresetIpc({ ipcMain, controller, fromMainWindow, isLocked, c
       ? controller.startOne(project, id, config?.dependencies, allowed, approve)
       : controller.act(project, id, action, { allowed, approve }))
   })
-  // config.bundleId: only that run bundle's presets (part 3); a question asked for one bundle is not answered for another
-  const bundleScope = (project, config) => config?.bundleId === undefined ? {} : { selected: controller.bundleSelection(project, { id: config.bundleId }) }
-  handle('run-preset-start-all', (project, allowed, frame, config) => withConfirmation(project, allowed, frame, 'start-all', config?.bundleId ?? null, config,
-    approve => controller.startAll(project, allowed, approve, bundleScope(project, config))))
-  handle('run-preset-stop-all', (project, allowed, _frame, config) => controller.stopAll(project, allowed, bundleScope(project, config)))
+  function batchScope(project, config) {
+    if (config?.presetIds !== undefined) {
+      if (config.bundleId !== undefined) throw new Error('묶음과 구성을 한 번에 선택할 수 없습니다.')
+      return { selected: controller.presetSelection(project, config.presetIds) }
+    }
+    return config?.bundleId === undefined ? {} : { selected: controller.bundleSelection(project, { id: config.bundleId }) }
+  }
+  handle('run-preset-start-all', (project, allowed, frame, config) => {
+    const scope = batchScope(project, config)
+    // Keep confirmations attached to both the bundle and the presets being started.
+    const key = [config?.bundleId ?? null, scope.selected ?? null]
+    return withConfirmation(project, allowed, frame, 'start-all', key, config,
+      approve => controller.startAll(project, allowed, approve, scope))
+  })
+  handle('run-preset-stop-all', (project, allowed, _frame, config) => controller.stopAll(project, allowed, batchScope(project, config)))
   handle('run-preset-bundle-save', (project, allowed, _frame, bundle) => controller.saveBundle(project, bundle, allowed))
   handle('run-preset-bundle-delete', (project, allowed, _frame, id) => controller.removeBundle(project, id, allowed))
   handle('run-preset-errors', (project, _allowed, _frame, id) => controller.errors(project, id))

@@ -19,7 +19,8 @@
     "typecheck": "tsc --noEmit",
     "build:icon": "electron scripts/build-icon.cjs",
     "test": "vitest run",
-    "e2e": "node e2e/run.js"
+    "e2e": "node e2e/run.js",
+    "check:agent-cli": "node scripts/agent-cli-check.cjs"
   },
   "author": "SungKwan",
   "license": "PolyForm-Noncommercial-1.0.0",

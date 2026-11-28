@@ -338,6 +338,9 @@ const { check, finish } = createChecks()
   await openLocalAgent(main, 'codex', service)
   await openLocalAgent(main, 'claude', tools)
   if (!(await waitFor(() => read('codex-1-tools') && read('claude-2-tools')))) throw new Error('fake agents did not start')
+  const bypass = '--dangerously-bypass-approvals-and-sandbox'
+  check('a regular Codex launch uses the CLI defaults for sandbox and approvals',
+    !JSON.parse(read('codex-1-argv') || '[]').includes(bypass))
   const claudeRole = '리뷰어' + 'W'.repeat(17)
   const assigned = await main.js(`window.electronAPI.agentMessageSetRole('claude-2', ${JSON.stringify(claudeRole)})`)
   if (!assigned?.success) throw new Error('Could not assign the test role: ' + assigned?.error)
@@ -741,8 +744,32 @@ const { check, finish } = createChecks()
     captureRequest?.text.includes('새 세션에서 이 화면을 확인해 주세요.') && captureImage && fs.existsSync(captureImage))
   newCapture.close()
 
+  const codexFolder = file('new-capture-codex')
+  fs.mkdirSync(codexFolder)
+  fs.writeFileSync(file('test-agent-request-folder'), codexFolder)
+  const codexCapture = await openCapture('Codex에서 이 캡처를 확인해 주세요.')
+  await clickButton(codexCapture, '#work')
+  await clickButton(codexCapture, '#new-capture-session summary')
+  await clickClosing(codexCapture, '.new-capture-providers [data-kind="codex"]')
+  const codexAgent = `window.electronAPI.agentMessagesSnapshot().then(({ agents }) => agents.find(agent =>
+    agent.kind === 'codex' && agent.mcpConnected && agent.cwd === ${JSON.stringify(codexFolder)}))`
+  const openedCodex = await main.until(`${codexAgent}.then(agent => !!agent && !!document.querySelector('.terminal-tab[data-tab-id="' + agent.shellId + '"]'))`)
+    ? await main.js(codexAgent) : null
+  const codexArgs = JSON.parse(read(`${openedCodex?.id}-argv`) || '[]')
+  check('quick capture opens the new Codex with the configured bypass flag and local MCP',
+    !!openedCodex && codexArgs.includes(bypass) && codexArgs.includes('--no-daemon'))
+  const codexRequest = openedCodex && await main.js(`window.electronAPI.agentMessagesSnapshot().then(({ messages }) =>
+    messages.find(message => message.to === ${JSON.stringify(openedCodex.id)}))`)
+  const codexImage = codexRequest?.text.split('\n').find(line => path.isAbsolute(line) && line.endsWith('.png'))
+  check('the new Codex inbox receives the comment and screenshot',
+    codexRequest?.text.includes('Codex에서 이 캡처를 확인해 주세요.') && codexImage && fs.existsSync(codexImage))
+  codexCapture.close()
+
   // Closing a capture with Esc is not an error either (it used to report "Render frame was disposed")
   check('no capture reported an error, closed ones included', read('capture-error') === '', read('capture-error'))
+  await main.js(`window.electronAPI.agentMessagesSnapshot().then(({ agents }) => Promise.all(
+    agents.filter(agent => agent.active).map(agent => window.electronAPI.localShellClose(agent.shellId))
+  ))`)
   main.close()
   finish()
 })().catch(error => { console.error(error); process.exit(1) })

@@ -6,7 +6,7 @@ export const WORKSPACE_MIN_WIDTH = 280
 export const WORKSPACE_MAX_WIDTH = 720
 export const WORKSPACE_DEFAULT_WIDTH = 380
 
-export type WorkspaceSection = 'history' | 'files' | 'changes' | 'git'
+export type WorkspaceSection = 'history' | 'files' | 'changes' | 'git' | 'run'
 
 export interface WorkspacePanelPrefs {
   isOpen: boolean

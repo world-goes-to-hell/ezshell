@@ -125,6 +125,13 @@ function parseStatus(output) {
   return { staged, changed, untracked, truncated: entries.length >= LIST_MAX }
 }
 
+/** The paths `git status` lists for a repository top (relative, `/`): who changed them is src/ipc/agentFileOwners.js */
+async function changedPaths(top) {
+  const output = await run(top, ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
+    { env: { ...process.env, LC_ALL: 'C' } })
+  return statusEntries(output).map(entry => entry.path)
+}
+
 /**
  * `git diff --numstat -z`: { path: [added, removed] }, null counts for a binary file. A rename comes as
  * "a\tr\t" then the old and the new path; it is kept under the new path.
@@ -336,7 +343,7 @@ async function fileHistory(folder, target) {
 }
 
 module.exports = {
-  repoTop, readRepoTop, clearReadRepoCache, repoFolders, status, commitFiles, fileDiff, fileAt, fileHistory,
+  repoTop, readRepoTop, clearReadRepoCache, repoFolders, status, changedPaths, commitFiles, fileDiff, fileAt, fileHistory,
   parseStatusBranch, parseStatus, statusEntries, parseNameStatus, parseNumstat, repoPath, requireRepoPath,
   SAFE, LIST_MAX, OUTPUT_MAX_BYTES
 }

@@ -4,7 +4,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
 import { motion, AnimatePresence } from 'framer-motion'
 import { modalOverlayVariants, modalContentVariants } from '../../lib/animation/variants'
-import { RiCloseFill, RiSettings3Fill, RiPaletteFill, RiKeyboardLine, RiDatabaseLine, RiTerminalBoxLine, RiPlugLine, RiSmartphoneLine, RiMailLine, RiCodeSSlashLine, RiUserSettingsLine } from 'react-icons/ri'
+import { RiCloseFill, RiSettings3Fill, RiPaletteFill, RiKeyboardLine, RiDatabaseLine, RiTerminalBoxLine, RiPlugLine, RiSmartphoneLine, RiMailLine, RiCodeSSlashLine, RiUserSettingsLine, RiStethoscopeLine } from 'react-icons/ri'
 import type { IconType } from 'react-icons'
 import { ThemeSettings } from './ThemeSettings'
 import { ShortcutsPanel } from './ShortcutsPanel'
@@ -16,9 +16,12 @@ import { AgentMessageMcpSetup } from '../Mcp/AgentMessageMcpSetup'
 import { AgentIdleSettings } from './AgentIdleSettings'
 import { AgentHooksSettings } from './AgentHooksSettings'
 import { JdkSettings } from './JdkSettings'
+import { RunSummarySettings } from './RunSummarySettings'
 import { NestedRepositorySettings } from '../Sidebar/NestedRepositories'
 import { ClaudeProfilesSettings } from './ClaudeProfilesSettings'
 import { RemoteAccessSettings } from '../RemoteAccess/RemoteAccessSettings'
+import { DiagnosticsSettings } from './DiagnosticsSettings'
+import { hasDiagnostics } from '../../lib/diagnostics'
 import '../../styles/settings.css'
 
 // The categories, in the left column and in the narrow dialog's list (2026-11-27 user request: eight in a
@@ -31,8 +34,12 @@ const SETTINGS_CATEGORIES: ReadonlyArray<{ value: string; label: string; Icon: I
   { value: 'mcp', label: 'MCP', Icon: RiPlugLine },
   { value: 'remote', label: '원격 접속', Icon: RiSmartphoneLine },
   { value: 'development', label: '개발 도구', Icon: RiCodeSSlashLine },
-  { value: 'claude-accounts', label: 'Claude 계정', Icon: RiUserSettingsLine }
+  { value: 'claude-accounts', label: 'Claude 계정', Icon: RiUserSettingsLine },
+  // Bug reports (docs/plan/2026-11-28-diagnostics.md); shown once main offers it
+  { value: 'diagnostics', label: '진단 정보', Icon: RiStethoscopeLine }
 ]
+
+const shownCategories = () => SETTINGS_CATEGORIES.filter(category => category.value !== 'diagnostics' || hasDiagnostics())
 
 interface SettingsModalProps {
   open: boolean
@@ -90,11 +97,11 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                   <label className="settings-category-picker">
                     <span>설정 항목</span>
                     <select value={activeTab} onChange={event => setActiveTab(event.target.value)}>
-                      {SETTINGS_CATEGORIES.map(category => <option key={category.value} value={category.value}>{category.label}</option>)}
+                      {shownCategories().map(category => <option key={category.value} value={category.value}>{category.label}</option>)}
                     </select>
                   </label>
                   <Tabs.List className="settings-tabs-list" aria-label="설정">
-                    {SETTINGS_CATEGORIES.map(({ value, label, Icon }) => (
+                    {shownCategories().map(({ value, label, Icon }) => (
                       <Tabs.Trigger key={value} value={value} className="settings-tab-trigger">
                         <Icon size={18} aria-hidden="true" />
                         {label}
@@ -196,11 +203,16 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                     </div>
                   </Tabs.Content>
                   <Tabs.Content value="development" className="settings-tab-content">
-                    <div className="settings-content"><NestedRepositorySettings /><JdkSettings /></div>
+                    <div className="settings-content"><RunSummarySettings /><NestedRepositorySettings /><JdkSettings /></div>
                   </Tabs.Content>
                   <Tabs.Content value="claude-accounts" className="settings-tab-content">
                     <div className="settings-content"><ClaudeProfilesSettings onOpen={() => onOpenChange(false)} /></div>
                   </Tabs.Content>
+                  {hasDiagnostics() && (
+                    <Tabs.Content value="diagnostics" className="settings-tab-content">
+                      <div className="settings-content"><DiagnosticsSettings /></div>
+                    </Tabs.Content>
+                  )}
                 </Tabs.Root>
               </motion.div>
             </Dialog.Content>

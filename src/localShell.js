@@ -307,7 +307,9 @@ fi
 exit $?
 '`;
 
-function shellArgs(shell, agent, platform, withMessaging, resume, codexHooks, restoring, claudeProfile) {
+const CODEX_BYPASS = '--dangerously-bypass-approvals-and-sandbox';
+
+function shellArgs(shell, agent, platform, withMessaging, resume, codexHooks, restoring, claudeProfile, codexMode) {
   const resumed = resumeArgs(agent, resume);
   if (agent === undefined) {
     if (platform !== 'win32' || !/^(?:powershell|pwsh)(?:\.exe)?$/i.test(path.win32.basename(shell.file))) return shell.args;
@@ -333,12 +335,17 @@ else { Write-Host 'Antigravity CLI를 찾을 수 없습니다.' }
   // A shared Codex server starts MCP outside this terminal and may reuse another session's
   // configuration. Check for the flag so older versions can still start normally.
   const useLocalCodex = withMessaging && agent === 'codex';
+  const bypass = agent === 'codex' && codexMode === 'bypass' && !resume && !restoring;
   if (platform !== 'win32') {
     const options = !withMessaging ? '' : agent === 'codex'
       ? codexConfig.map((value, index) => ` -c "${value}${index === 0 ? '$EZSHELL_CLI_EXE' : ''}"`).join('')
       : ' --mcp-config "$EZSHELL_AGENT_MCP_CONFIG" --settings "$EZSHELL_AGENT_SETTINGS"';
     const hooks = codexHooks ? ' ' + quoteCodexHookArgs() : '';
-    const launch = useLocalCodex
+    const noDaemon = useLocalCodex ? 'case "$help" in *--no-daemon*) set -- --no-daemon "$@" ;; esac; ' : '';
+    const bypassFlag = String.raw`if printf "%s\n" "$help" | grep -Eq "^[[:space:]]*${CODEX_BYPASS}([=[:space:]]|$)"; then set -- ${CODEX_BYPASS} "$@"; fi; `;
+    const launch = bypass
+      ? `exec /bin/sh -c 'help=$(codex --help 2>/dev/null); ${noDaemon}${bypassFlag}exec codex "$@"' ezshell-codex${options}${hooks}`
+      : useLocalCodex
       ? `exec /bin/sh -c 'case "$(codex --help 2>/dev/null)" in *--no-daemon*) exec codex${resumed} --no-daemon "$@" ;; *) exec codex${resumed} "$@" ;; esac' ezshell-codex${options}${hooks}`
       : `exec ${claudeProfile ? posixClaudeProfile : ''}${agent}${resumed}${options}`;
     return [...shell.args, '-i', '-c', launch];
@@ -347,11 +354,15 @@ else { Write-Host 'Antigravity CLI를 찾을 수 없습니다.' }
   const options = !withMessaging ? '' : agent === 'codex'
     ? codexConfig.map((value, index) => ` -c "${value}${index === 0 ? '$env:EZSHELL_CLI_EXE' : ''}"`).join('')
     : ' --mcp-config "$env:EZSHELL_AGENT_MCP_CONFIG" --settings "$env:EZSHELL_AGENT_SETTINGS"';
-  const localFlag = useLocalCodex
-    ? "$ezShellArgs = @(); if ((& $cli --help 2>$null) -match '^\\s*--no-daemon(?:\\s|$)') { $ezShellArgs += '--no-daemon' }; "
+  const codexHelp = useLocalCodex || bypass
+    ? '$ezShellArgs = @(); $ezCodexHelp = @(& $cli --help 2>$null); '
+    : '';
+  const localFlag = useLocalCodex ? "if ($ezCodexHelp -match '^\\s*--no-daemon(?:\\s|$)') { $ezShellArgs += '--no-daemon' }; " : '';
+  const bypassFlag = bypass
+    ? String.raw`if ($ezCodexHelp -match '^\s*${CODEX_BYPASS}(?:[=\s]|$)') { $ezShellArgs += '${CODEX_BYPASS}' }; `
     : '';
   const hooks = codexHooks ? `${POWERSHELL_CODEX_HOOK_ARGS}\n$ezShellArgs += @(Get-EzShellCodexHookArgs $cli ${restoring ? '$true' : '$false'}); ` : '';
-  const launch = `$cli = Get-Command ${agent}.exe,${agent}.cmd,${agent} -ErrorAction SilentlyContinue | Select-Object -First 1; if (!$cli) { Write-Host '${agent} CLI를 찾을 수 없습니다.'; exit 127 }; ${localFlag}${hooks}& $cli${resumed}${useLocalCodex ? ' @ezShellArgs' : ''}${options}; exit $LASTEXITCODE`;
+  const launch = `$cli = Get-Command ${agent}.exe,${agent}.cmd,${agent} -ErrorAction SilentlyContinue | Select-Object -First 1; if (!$cli) { Write-Host '${agent} CLI를 찾을 수 없습니다.'; exit 127 }; ${codexHelp}${localFlag}${bypassFlag}${hooks}& $cli${resumed}${useLocalCodex || bypass ? ' @ezShellArgs' : ''}${options}; exit $LASTEXITCODE`;
   return [...shell.args, '-Command', (claudeProfile ? powershellClaudeProfile : '') + launch];
 }
 
@@ -383,10 +394,9 @@ const PROGRAM_STATUS_REPLY = '\x1b]7501;?:states=idle,working,done,blocked,error
 const PROGRAM_STATES = { idle: 'idle', working: 'working', done: 'idle', blocked: 'blocked', error: 'error', clear: 'unknown' };
 const PROGRESS_STATES = ['idle', 'working', 'error', 'working', 'working'];
 
-// A spinner frame on its own in the title means the agent is working: braille dots (Codex, older
-// Claude Code) or half/quarter circles (Claude Code since 2026: ◐◑, idle shows ✳). Recorded from the
-// real CLIs; Claude Code sends no program status report, so its title is all there is.
-const WORKING_TITLE = /(?:^|\s)[⠁-⣿◐-◓◴-◷](?:\s|$)/u;
+// The title rules (spinner frames, `Starting`, `Action Required`) live in ipc/agentTitleStatus.js, shared with
+// the CLI check (scripts/agent-cli-check.cjs)
+const { titleStatusOf } = require('./ipc/agentTitleStatus.js');
 const LONG_HOOK_TURN_MS = 120_000;
 
 function agentStatus(entry) {
@@ -514,10 +524,9 @@ function trackTerminalOsc(entry, data, platform, replyToProbe = true) {
       if (state) entry.titleStatus = PROGRESS_STATES[Number(state)];
     } else {
       const title = value.trim();
-      if (!title || /(?:^|[\\/])(?:cmd|powershell|pwsh)\.exe(?:\s|$)/i.test(title)) continue;
-      if (/^\[\s*[!.]\s*\]\s*Action Required\b/i.test(title)) entry.titleStatus = 'blocked';
-      else if (/^Starting\b/i.test(title)) entry.titleStatus = 'starting';
-      else entry.titleStatus = WORKING_TITLE.test(title) || /^(?:Working|Thinking)\b/i.test(title) ? 'working' : 'idle';
+      const titleStatus = titleStatusOf(title);
+      if (!titleStatus) continue;
+      entry.titleStatus = titleStatus;
       if (entry.agent === 'claude' && replyToProbe) {
         const status = entry.titleStatus === 'working' ? 'working' : /(?:^|\s)✳(?:\s|$)/u.test(title) ? 'idle' : null;
         const at = Date.now();
@@ -1136,7 +1145,8 @@ function createLocalShells({
     }, AGENT_PROCESS_CHECK_MS).unref?.();
   }
 
-  function open({ cols, rows, cwd: directory, agent, resume, replacementFor, restoring, claudeProfileId, reuseClaudeProfile } = {}) {
+  // Launch mode is supplied by the main process, outside the options received over local-shell-open.
+  function open({ cols, rows, cwd: directory, agent, resume, replacementFor, restoring, claudeProfileId, reuseClaudeProfile } = {}, { codexMode } = {}) {
     const previous = replacementFor === undefined ? undefined : shells.get(replacementFor);
     if (replacementFor !== undefined) {
       if (!previous || !resume) throw new Error('바꿀 셸을 찾지 못했습니다.');
@@ -1161,7 +1171,7 @@ function createLocalShells({
     const id = `local:${nextId++}`;
     const automatic = restoring === true;
     const codexHooks = agent === 'codex' && injectCodexHooks(agents?.codexHookMode?.(), automatic);
-    const args = shellArgs(shell, agent, platform, Boolean(agents), resume, codexHooks, automatic, Boolean(configDir));
+    const args = shellArgs(shell, agent, platform, Boolean(agents), resume, codexHooks, automatic, Boolean(configDir), codexMode);
     const columns = previous?.cols ?? size(cols, 80);
     const lines = previous?.rows ?? size(rows, 24);
     const shellEnv = localTerminalEnvironment(env, platform);

@@ -56,7 +56,7 @@ function resolveShots(list, earlierCount, imageSize) {
 function createQuickCapture({
   desktopCapturer, clipboard, ClipboardItem, BrowserWindow, getDisplay, isAvailable, nativeImage = null,
   listAgents = () => [], repoFolders = async () => [], storeAttachment, sendCapture, sendNewCapture, focusWindow = () => {},
-  onSent = () => {}, onError = () => {}, pausePointerEffects = () => null,
+  onSent = () => {}, onError = () => {}, pausePointerEffects = () => null, appWindowRects = () => [],
   delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 }) {
   let active = null
@@ -169,6 +169,16 @@ function createQuickCapture({
       const display = getDisplay()
       run.display = display
       const { bounds, scaleFactor } = display
+      // ezShell's own windows on screen now (DIP), before the overlay opens: a capture that overlaps one is about
+      // ezShell, and its request carries the app's state (docs/plan/2026-11-28-diagnostics.md)
+      let appRects = []
+      try { appRects = appWindowRects() } catch { appRects = [] }
+      const regionAboutApp = region => appRects.some(rect => {
+        const left = bounds.x + region.x / scaleFactor
+        const top = bounds.y + region.y / scaleFactor
+        return left < rect.x + rect.width && rect.x < left + region.width / scaleFactor &&
+          top < rect.y + rect.height && rect.y < top + region.height / scaleFactor
+      })
       const sources = await wait(
         (async () => {
           if (pointerEffects?.ready) {
@@ -253,6 +263,7 @@ function createQuickCapture({
           return false
         }
         const cropOf = shot => shot.source === -1 ? image.crop(shot.region) : earlier[shot.source].crop
+        const aboutAppOf = shot => shot.source === -1 ? regionAboutApp(shot.region) : earlier[shot.source].aboutApp === true
         // Each capture with the user's marks when the overlay drew any (checked against main's size), else main's crop
         const pictureOf = shot => {
           const size = shot.source === -1 ? shot.region : earlier[shot.source].crop.getSize()
@@ -263,7 +274,7 @@ function createQuickCapture({
             outcome = 'invalid'
             return false
           }
-          run.captures = shots.map(shot => ({ crop: shot.dropped ? pictureOf(shot) : cropOf(shot), marks: shot.marks }))
+          run.captures = shots.map(shot => ({ crop: shot.dropped ? pictureOf(shot) : cropOf(shot), marks: shot.marks, aboutApp: aboutAppOf(shot) }))
           run.comment = capture.comment.slice(0, MAX_COMMENT)
           outcome = 'paused'
           return false
@@ -300,9 +311,10 @@ function createQuickCapture({
               return stored.attachments
             }
             const folder = projects.find(project => project.folder === capture.folder)?.folder
+            const aboutApp = shots.some(aboutAppOf)
             const result = await wait(newSession
-              ? sendNewCapture(capture.kind, folder, win, available, capture.comment, attachments)
-              : sendCapture(agent, capture.comment, attachments, available))
+              ? sendNewCapture(capture.kind, folder, win, available, capture.comment, attachments, aboutApp)
+              : sendCapture(agent, capture.comment, attachments, available, aboutApp))
             if (!available()) return false
             if (result.ok) {
               if (newSession) onSent({ id: result.agentId }, true)

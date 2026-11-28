@@ -40,6 +40,24 @@ describe('run preset store', () => {
     stop()
   })
 
+  it('applies an unresponsive state and its recovery as full worktree snapshots', async () => {
+    let listener: ((event: unknown) => void) | undefined
+    vi.stubGlobal('window', Object.assign(new EventTarget(), { electronAPI: {
+      runPresetsList: async () => ({ ok: true, projectKey: 'c:/work/app', worktreeKey: 'c:/work/app-feature', presets: [preset], states: {} }),
+      onRunPresetState: (callback: (event: unknown) => void) => { listener = callback; return () => {} }
+    } }))
+    const stop = startRunPresets()
+    await loadRunPresets(TREE)
+    const event = { projectKey: 'c:/work/app', worktreeKey: 'c:/work/app-feature', id: 'p1' }
+    const state = { status: 'running', errors: 0 }
+    listener?.({ ...event, state: { ...state, unresponsive: { since: 60_000 } } })
+    expect(worktreeRuns(TREE)?.states.p1).toEqual({ ...state, unresponsive: { since: 60_000 } })
+    listener?.({ ...event, state })
+    expect(worktreeRuns(TREE)?.states.p1).toEqual(state)
+    expect(useRunPresets.getState().notices).toEqual([])
+    stop()
+  })
+
   it('keeps an agent’s first action on a worktree no card has read, and tells it', async () => {
     let listener: ((event: unknown) => void) | undefined
     const api = {

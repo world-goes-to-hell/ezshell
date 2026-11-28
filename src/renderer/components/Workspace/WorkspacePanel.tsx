@@ -1,11 +1,12 @@
 import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react'
-import { RiChatHistoryLine, RiCloseLine, RiFileEditLine, RiFolder3Line, RiGitBranchLine } from 'react-icons/ri'
+import { RiChatHistoryLine, RiCloseLine, RiFileEditLine, RiFolder3Line, RiGitBranchLine, RiPlayCircleLine } from 'react-icons/ri'
 import { useWorkspacePanelStore } from '../../stores/workspacePanelStore'
 import { WORKSPACE_DEFAULT_WIDTH, clampWorkspaceWidth, type WorkspaceSection } from '../../lib/workspacePanel'
 import { AgentHistoryPanel } from '../AgentHistory/AgentHistoryPanel'
 import { useWorkspaceDirectory } from '../../hooks/useWorkspaceDirectory'
 import { WorkspaceFiles, WorkspaceGit, WorkspaceNote } from './WorkspaceBrowser'
 import { WorkspaceChanges } from './WorkspaceChanges'
+import { WorkspaceRuns } from './WorkspaceRuns'
 import { relativeInside } from '../../lib/workspaceDetails'
 import { prefetchWorkspaceGit } from '../../lib/workspaceGitReads'
 import './Workspace.css'
@@ -14,7 +15,8 @@ const SECTIONS: ReadonlyArray<{ id: WorkspaceSection; label: string; Icon: typeo
   { id: 'history', label: '대화 기록', Icon: RiChatHistoryLine },
   { id: 'files', label: '파일', Icon: RiFolder3Line },
   { id: 'changes', label: '변경', Icon: RiFileEditLine },
-  { id: 'git', label: 'Git 기록', Icon: RiGitBranchLine }
+  { id: 'git', label: 'Git 기록', Icon: RiGitBranchLine },
+  { id: 'run', label: '실행', Icon: RiPlayCircleLine }
 ]
 const KEY_STEP = 24
 const REVEAL_WAIT_MS = 3000
@@ -139,6 +141,7 @@ export function WorkspacePanel() {
       </header>
       <div className="workspace-content" id="workspace-content" role="tabpanel" aria-labelledby={`workspace-tab-${section}`}>
         {section === 'history' ? <AgentHistoryPanel />
+          : section === 'run' ? <WorkspaceRuns folder={folder} />
           : folder ? (section === 'files' ? <WorkspaceFiles key={folder} folder={folder} onRevealed={finishReveal}
               reveal={reveal && revealRelative !== null ? { relative: revealRelative, seq: reveal.seq } : null} />
             : section === 'changes' ? <WorkspaceChanges folder={folder} /> : <WorkspaceGit folder={folder} />)

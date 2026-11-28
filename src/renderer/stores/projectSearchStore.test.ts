@@ -39,4 +39,16 @@ describe('project search store', () => {
     const saved = JSON.parse(stored.get(savedState)!).state
     expect(saved).toEqual({ history: { file: ['README'], content: ['needle'] } })
   })
+
+  it('keeps regex searches separate and opens selected text as literal text', () => {
+    const state = () => search.getState()
+    state().keep('task\\d+', true)
+    state().record('content', 'task\\d+', true)
+    state().show('content')
+    expect(state().open).toMatchObject({ regex: true, query: 'task\\d+' })
+    expect(state().history.content).toEqual([])
+    expect(JSON.parse(stored.get(savedState)!).state.regexHistory.content).toEqual(['task\\d+'])
+    state().show('content', '[selected text]')
+    expect(state().open).toMatchObject({ regex: false, query: '[selected text]' })
+  })
 })

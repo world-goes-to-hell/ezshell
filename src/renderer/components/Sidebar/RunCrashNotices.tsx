@@ -125,7 +125,11 @@ const within = (path: string, root: string) => {
   return a === b || a.startsWith(b.endsWith('/') ? b : `${b}/`)
 }
 
-function RunSendDialog({ notice, preset, onClose }: Sending & { onClose: () => void }) {
+export function RunSendDialog({ notice, preset, onClose }: {
+  notice: Pick<CrashNotice, 'folder' | 'projectKey'> & Partial<Pick<CrashNotice, 'key'>>
+  preset: RunPreset
+  onClose: () => void
+}) {
   const snapshot = useAgentMessagesStore(store => store.snapshot)
   const projectRoots = useRunPresets(store => store.projectRoots[notice.projectKey])
   // Every worktree of the project, as the sidebar lists them (and the card's own folder)
@@ -165,7 +169,7 @@ function RunSendDialog({ notice, preset, onClose }: Sending & { onClose: () => v
         return
       }
       toast.success('에이전트에게 보냈습니다', target)
-      dismissCrash(notice.key)
+      if (notice.key) dismissCrash(notice.key)
       onClose()
     } catch {
       toast.error('에이전트에게 보내지 못했습니다')

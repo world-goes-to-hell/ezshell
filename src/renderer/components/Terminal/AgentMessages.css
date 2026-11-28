@@ -187,6 +187,7 @@
 .agent-message-meta { margin: 3px 2px 0; gap: 8px; color: var(--text-secondary); font-size: 10px; }
 .agent-message-group[data-side='right'] .agent-message-meta { justify-content: flex-end; }
 .agent-read-state[data-state='unread'] { color: var(--text-link); font-weight: 600; }
+.agent-message-urgent { color: var(--error-text); font-weight: 700; }
 .agent-message-thread mark, .agent-message-thread-heading mark { background: var(--accent); color: var(--on-accent); }
 .agent-message-thread:focus-visible { outline: 2px solid var(--text-link); outline-offset: -2px; }
 .agent-message-expand:focus-visible { outline: 2px solid var(--text-link); outline-offset: 1px; }

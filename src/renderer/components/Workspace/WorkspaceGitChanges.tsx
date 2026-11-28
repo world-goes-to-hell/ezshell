@@ -3,7 +3,10 @@
 // opens in the file window too.
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { RiArrowDownSLine, RiArrowRightSLine, RiExternalLinkLine, RiFolderLine, RiFolderOpenLine, RiGitBranchLine } from 'react-icons/ri'
-import type { WorkspaceGitFile, WorkspaceGitStatus } from '../../types'
+import type { WorkspaceFileOwner, WorkspaceGitFile, WorkspaceGitStatus } from '../../types'
+import { agentChip, agentsWithFiles, overlaps, ownersByPath, ownersTitle } from '../../lib/fileOwners'
+import { useFileOwners } from './useFileOwners'
+import { RepoFreeze } from './RepoFreeze'
 import { FILE_KIND_LABELS, FILE_KIND_MARKS, splitPath } from '../../lib/workspaceDetails'
 import { buildChangeTree, formatCount, mergeChanges, totalLines, type ChangeNode, type ChangedFile } from '../../lib/gitChangeTree'
 import { checkState, isSelectable, selectablePaths, toggleOne, togglePaths, type CheckState } from '../../lib/gitCommitSelection'
@@ -24,6 +27,20 @@ interface FileRowProps {
   tree?: { depth: number; changed: ChangedFile }
   /** The file's box in the change list */
   select?: { checked: boolean; disabled: boolean; onToggle: () => void }
+  /** The agents that changed it (an uncommitted file; docs/plan/2026-11-28-agent-file-owners.md) */
+  owner?: WorkspaceFileOwner
+}
+
+/** Who changed a file: the most recent agent's role, and the overlap when another agent changed it too */
+function OwnerChips({ owner }: { owner: WorkspaceFileOwner }) {
+  const [first] = owner.agents
+  if (!first) return null
+  return (
+    <span className="workspace-git-owners" title={ownersTitle(owner)} data-overlap={overlaps(owner) || undefined} data-uncertain={owner.uncertain || undefined}>
+      <span className="workspace-git-owner" data-kind={first.kind}>{agentChip(first)}{owner.uncertain && '?'}</span>
+      {overlaps(owner) && <span className="workspace-git-overlap">겹침 {owner.agents.length}</span>}
+    </span>
+  )
 }
 
 /** "+12 −3" of a file; nothing for a binary file */
@@ -37,7 +54,7 @@ function LineCounts({ added, removed }: { added: number | null; removed: number 
   )
 }
 
-function GitFileRow({ root, file, hash, label, tree, select }: FileRowProps) {
+function GitFileRow({ root, file, hash, label, tree, select, owner }: FileRowProps) {
   const [isOpen, setIsOpen] = useState(false)
   const split = splitPath(file.path)
   const name = split.name
@@ -70,6 +87,7 @@ function GitFileRow({ root, file, hash, label, tree, select }: FileRowProps) {
           {!tree && <span className="workspace-git-mark" data-kind={file.kind} aria-label={FILE_KIND_LABELS[file.kind]}>{FILE_KIND_MARKS[file.kind]}</span>}
           <span className="workspace-git-file-name" dir="auto">{name}</span>
           {folder && <span className="workspace-git-file-folder" dir="auto">{folder}</span>}
+          {owner && <OwnerChips owner={owner} />}
           {tree && <LineCounts added={tree.changed.added} removed={tree.changed.removed} />}
           {tree && (
             <span className="workspace-git-mark" data-kind={file.kind} data-staged={tree.changed.staged || undefined}
@@ -103,6 +121,8 @@ function CheckBox({ state, disabled = false, label, title, onToggle }: {
 }
 
 interface TreeSelection {
+  /** The agents of each file, by path (empty until main offers them) */
+  owners: ReadonlyMap<string, WorkspaceFileOwner>
   selected: ReadonlySet<string>
   disabled: boolean
   onFile: (path: string) => void
@@ -119,7 +139,7 @@ function ChangeTree({ nodes, root, label, depth, folded, onFold, selection }: {
         if (node.kind === 'file') {
           const canSelect = isSelectable(node.file)
           return (
-            <GitFileRow key={node.path} root={root} file={node.file} label={label} tree={{ depth, changed: node.file }} select={{
+            <GitFileRow key={node.path} root={root} file={node.file} label={label} tree={{ depth, changed: node.file }} owner={selection.owners.get(node.path)} select={{
               checked: canSelect && selection.selected.has(node.path),
               disabled: selection.disabled || !canSelect,
               onToggle: () => selection.onFile(node.path)
@@ -192,6 +212,9 @@ export function ChangeList({ folder, revision, label, onCommitted }: { folder: s
   const selected = draft?.selected ?? NOTHING
   const chosen = useMemo(() => selectable.filter(path => selected.has(path)), [selectable, selected])
   useEffect(() => { if (top) applyStatus(top, files) }, [top, files, applyStatus])
+  const { owners, freeze, reload: reloadOwners } = useFileOwners(top, revision)
+  const ownerMap = useMemo(() => ownersByPath(owners), [owners])
+  const agents = useMemo(() => agentsWithFiles(owners, selectable), [owners, selectable])
   if (state.status === 'loading') return <p className="workspace-diff-note">변경 사항을 읽는 중…</p>
   if (state.status === 'error') return <p className="workspace-diff-note is-error">{state.message}</p>
   const repo = state.value
@@ -200,6 +223,7 @@ export function ChangeList({ folder, revision, label, onCommitted }: { folder: s
   // Ticking an earlier list (one from before a commit) could commit what is already committed
   const busy = draft?.busy === true || stale
   const selection: TreeSelection = {
+    owners: ownerMap,
     selected,
     disabled: busy,
     onFile: path => setSelected(top, toggleOne(selected, path)),
@@ -207,7 +231,9 @@ export function ChangeList({ folder, revision, label, onCommitted }: { folder: s
   }
   return (
     <div className="workspace-changes" data-refreshing={stale || undefined} aria-busy={stale || undefined}>
-      {count > 0 && <GitCommitBox top={top} paths={chosen} waiting={stale} onCommitted={onCommitted} />}
+      <RepoFreeze key={top} top={top} freeze={freeze} onChanged={reloadOwners} />
+      {count > 0 && <GitCommitBox top={top} paths={chosen} waiting={stale} onCommitted={onCommitted}
+        agents={agents} onPickAgent={paths => setSelected(top, new Set(paths))} />}
       <section className="workspace-uncommitted" data-empty={count === 0 || undefined} aria-label="커밋하지 않은 변경">
         <div className="workspace-uncommitted-head">
           {count > 0 && <CheckBox state={checkState(selectable, selected)} disabled={busy || selectable.length === 0}

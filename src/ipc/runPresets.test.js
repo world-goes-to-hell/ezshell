@@ -89,6 +89,54 @@ async function mavenFixtureJdk(root, name, version) {
 }
 
 describe('saved project runs', () => {
+  it('publishes health loss and recovery while a run stays active, and clears health when the run exits', async () => {
+    vi.useFakeTimers()
+    const url = 'http://127.0.0.1:8181/health'
+    const address = 'http://localhost:8182'
+    let healthy = false
+    const probeHealth = vi.fn(async target => target.kind === 'url' && healthy)
+    const f = await fixture({ probeHealth })
+    const api = await f.save('api', { agentControl: false })
+    const web = await f.save('web')
+    const script = await f.save('script')
+    await f.invoke('run-start-order-save', { ...f.list().startOrder, stages: [
+      { ids: [api.id], gate: { kind: 'url', value: url } },
+      { ids: [web.id], gate: { kind: 'ready' } },
+      { ids: [script.id], gate: { kind: 'log', value: 'ready' } }
+    ] })
+    for (const preset of [api, web, script]) await f.start(preset.id)
+    const data = (preset, text) => f.emit(f.list().states[preset.id].shellId, { type: 'data', data: text })
+    data(api, 'Server ready in 11 ms\n')
+    data(web, `Local: ${address}/\n`)
+    data(script, 'Script ready in 11 ms\n')
+    const tick = async () => { f.state.now += 30_000; await vi.advanceTimersByTimeAsync(30_000) }
+
+    await tick()
+    expect(probeHealth.mock.calls.map(([target]) => target)).toEqual([{ kind: 'url', value: url }, { kind: 'port', value: address }])
+    expect(f.list().states[api.id].unresponsive).toBeUndefined()
+    await tick()
+    const since = f.state.now
+    expect(f.sendState).toHaveBeenCalledWith(expect.objectContaining({ id: api.id,
+      state: expect.objectContaining({ status: 'running', unresponsive: { since } }) }))
+    expect((await f.agent('list')).presets).toEqual([
+      expect.objectContaining({ name: 'api', status: 'running', agentControl: false, unresponsive: { since } }),
+      expect.objectContaining({ name: 'web', status: 'running', unresponsive: { since } }),
+      expect.not.objectContaining({ unresponsive: expect.anything() })
+    ])
+
+    healthy = true
+    await tick()
+    expect(f.sendState).toHaveBeenCalledWith(expect.objectContaining({ id: api.id,
+      state: expect.objectContaining({ status: 'running', unresponsive: undefined }) }))
+    expect(f.list().states[api.id].unresponsive).toBeUndefined()
+    expect(f.list().states[web.id].unresponsive).toEqual({ since })
+    f.emit(f.list().states[web.id].shellId, { type: 'exit', exitCode: 1 })
+    expect(f.list().states[web.id]).toMatchObject({ status: 'crashed', unresponsive: undefined })
+    await f.invoke('run-preset-stop', api.id)
+    await tick()
+    expect(probeHealth).toHaveBeenCalledTimes(6)
+  })
+
   it('persists a staged order and inherits it in another worktree', async () => {
     const f = await fixture()
     const a = await f.save('a')
@@ -673,8 +721,9 @@ describe('saved project runs', () => {
     const task = f.shellTasks.get(shellId)
     const runtime = await task.preparation.finish(new AbortController().signal)
     f.emit(shellId, { type: 'prepared' })
-    runtime.onEvent({ type: 'launched', shellId, pid: 17, env: runtime.env })
     f.emit(shellId, { type: 'data', phase: 'server', data: 'INFO Server startup in 108 milliseconds\n' })
+    expect(f.list().states[saved.id].address).toBeUndefined()
+    runtime.onEvent({ type: 'launched', shellId, pid: 17, env: runtime.env })
     expect((await f.agent('list')).presets[0]).toMatchObject({ status: 'running', port: 8080 })
     expect(f.list().states[saved.id].address).toBe('http://127.0.0.1:8080/')
     await runtime.cleanup()

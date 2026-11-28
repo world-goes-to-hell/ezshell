@@ -1,0 +1,27 @@
+/* 설정 > 진단 정보 (DiagnosticsSettings) */
+.diagnostics-summary {
+  margin: 4px 0 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.diagnostics-summary[data-errors] { color: var(--warning-text, var(--warning)); font-weight: 600; }
+.diagnostics-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.diagnostics-actions button { display: inline-flex; align-items: center; gap: 5px; }
+.diagnostics-preview { margin-top: 12px; }
+.diagnostics-preview summary { color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.diagnostics-preview pre {
+  max-height: 320px;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}

@@ -9,16 +9,23 @@ import { useProjectSearchStore, type ProjectSearchMode } from '../../stores/proj
 import { useShortcutsStore } from '../../stores/shortcutsStore'
 import { useWorkspaceDirectory } from '../../hooks/useWorkspaceDirectory'
 import { matchesBinding } from '../../lib/shortcutMatch'
-import { contentRows, createDoubleShift, highlightParts, splitPath } from '../../lib/projectSearch'
+import { contentRows, createDoubleShift, highlightParts, highlightRanges, splitPath } from '../../lib/projectSearch'
 import { completeSearch } from '../../lib/projectSearchHistory'
 import { findQueryFromSelection } from '../../lib/terminalText'
 import { openWorkspaceFile } from '../Workspace/WorkspaceDetails'
-import type { WorkspaceContentSearchResult, WorkspaceDirectorySearchResult } from '../../types'
+import type { WorkspaceContentSearchResult, WorkspaceDirectorySearchResult, WorkspaceSearchRange } from '../../types'
 import './ProjectSearch.css'
 
 const FILE_DELAY_MS = 120
 const CONTENT_DELAY_MS = 300
 const CONTENT_MIN = 2
+const REGEX_EXAMPLES = { file: '\\.tsx$', content: 'TODO|FIXME' }
+
+function invalidPattern(query: string): boolean {
+  try { new RegExp(query, 'u'); return false } catch { return true }
+}
+
+const marked = (parts: ReturnType<typeof highlightParts>) => parts.map((part, at) => part.hit ? <mark key={at}>{part.text}</mark> : part.text)
 
 /** The text selected on the page (a chat, a file list), one line, as the query to start from */
 const selectedText = () => findQueryFromSelection(window.getSelection()?.toString() ?? '', 200)
@@ -51,7 +58,7 @@ export function ProjectSearchKeys() {
   return null
 }
 
-type FileHit = { path: string }
+type FileHit = { path: string; ranges?: WorkspaceSearchRange[] }
 
 export function ProjectSearch() {
   const open = useProjectSearchStore(state => state.open)
@@ -64,6 +71,7 @@ export function ProjectSearch() {
   const [root, setRoot] = useState<string | null>(null)
   const [mode, setMode] = useState<ProjectSearchMode>('file')
   const [query, setQuery] = useState('')
+  const [regex, setRegex] = useState(false)
   const [caseSensitive, setCaseSensitive] = useState(false)
   const [includeAll, setIncludeAll] = useState(false)
   const [files, setFiles] = useState<FileHit[]>([])
@@ -79,7 +87,8 @@ export function ProjectSearch() {
   const pendingSelection = useRef<[number, number] | null>(null)
   // Each completion renders again: the next letter of the same completion leaves the text as it was
   const [completions, setCompletions] = useState(0)
-  const history = useProjectSearchStore(state => state.history[mode])
+  const history = useProjectSearchStore(state => (regex ? state.regexHistory : state.history)[mode])
+  const patternError = regex && !!query.trim() && invalidPattern(query)
   // Where the keys were (a terminal, a chat): focused again when the search closes
   const returnFocus = useRef<HTMLElement | null>(null)
 
@@ -96,11 +105,12 @@ export function ProjectSearch() {
     }
     setMode(open.mode)
     setQuery(open.query)
+    setRegex(open.regex)
     setSelected(0)
     window.setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select() }, 0)
   }, [open])
 
-  useEffect(() => { if (open) keep(query) }, [open, query, keep])
+  useEffect(() => { if (open) keep(query, regex) }, [open, query, regex, keep])
 
   useLayoutEffect(() => {
     const range = pendingSelection.current
@@ -127,24 +137,28 @@ export function ProjectSearch() {
   useEffect(() => {
     if (!open || !root) return
     const text = query
-    const ready = mode === 'file' ? text.trim().length > 0 : text.trim().length >= CONTENT_MIN
+    const ready = text.trim().length >= (mode === 'content' && !regex ? CONTENT_MIN : 1)
     const id = ++request.current
-    if (!ready) {
-      setFiles([]); setContent(null); setTruncated(false); setSearching(false); setError(null)
+    setFiles([])
+    setContent(null)
+    setTruncated(false)
+    setError(null)
+    if (!ready || patternError) {
+      setSearching(false)
       return
     }
     setSearching(true)
     const timer = window.setTimeout(async () => {
       try {
         if (mode === 'file') {
-          const result = await window.electronAPI.workspaceDirectorySearch?.(root, text.trim(), includeAll)
+          const result = await window.electronAPI.workspaceDirectorySearch?.(root, regex ? text : text.trim(), includeAll, regex)
           if (id !== request.current) return
           if (!result?.success) { setError(result?.error ?? '파일을 찾지 못했습니다.'); setFiles([]); return }
           const found = (result as WorkspaceDirectorySearchResult).entries.filter(entry => entry.kind === 'file')
-          setFiles(found.map(entry => ({ path: entry.path })))
+          setFiles(found)
           setTruncated(result.truncated)
         } else {
-          const result = await window.electronAPI.workspaceContentSearch?.(root, text, caseSensitive)
+          const result = await window.electronAPI.workspaceContentSearch?.(root, text, caseSensitive, regex)
           if (id !== request.current) return
           if (!result?.success) { setError(result?.error ?? '내용을 검색하지 못했습니다.'); setContent(null); return }
           setContent(result)
@@ -158,8 +172,8 @@ export function ProjectSearch() {
         if (id === request.current) setSearching(false)
       }
     }, mode === 'file' ? FILE_DELAY_MS : CONTENT_DELAY_MS)
-    return () => window.clearTimeout(timer)
-  }, [open, root, mode, query, caseSensitive, includeAll])
+    return () => { window.clearTimeout(timer); request.current++ }
+  }, [open, root, mode, query, regex, patternError, caseSensitive, includeAll])
 
   const rows = useMemo(() => (content ? contentRows(content.files) : []), [content])
   const lineRows = useMemo(() => rows.filter(row => row.kind === 'line'), [rows])
@@ -174,6 +188,7 @@ export function ProjectSearch() {
   if (!open) return null
 
   const complete = (value: string) => {
+    if (regex) return
     const full = completeSearch(value, history)
     if (!full) return
     pendingSelection.current = [value.length, full.length]
@@ -202,23 +217,38 @@ export function ProjectSearch() {
   const pick = (index: number) => {
     if (!root) return
     if (recent.length) { chooseRecent(index); return }
-    const text = mode === 'file' ? query.trim() : query
+    if (searching || patternError || error) return
+    const text = mode === 'file' && !regex ? query.trim() : query
     if (mode === 'file') {
       const hit = files[index]
       if (!hit) return
-      record(mode, text)
+      record(mode, text, regex)
       close()
       void openWorkspaceFile(root, hit.path, splitPath(hit.path).name)
     } else {
       const row = lineRows[index]
       if (!row || row.kind !== 'line') return
-      record(mode, text)
+      record(mode, text, regex)
       close()
       void openWorkspaceFile(root, row.path, `${splitPath(row.path).name}:${row.line}`, { line: row.line })
     }
   }
 
+  const toggleRegex = () => {
+    setRegex(value => !value)
+    setSelected(0)
+    inputRef.current?.focus()
+  }
+
   const onKeyDown = (event: React.KeyboardEvent) => {
+    if (event.nativeEvent.isComposing) return
+    if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.code === 'KeyR') {
+      event.preventDefault()
+      event.stopPropagation()
+      if (!event.repeat) toggleRegex()
+      return
+    }
+    if (event.target !== inputRef.current && (event.key === 'Enter' || event.key === ' ')) return
     if (event.key === 'Escape') { event.preventDefault(); close(); return }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
@@ -226,13 +256,18 @@ export function ProjectSearch() {
       return
     }
     if (event.key === 'Enter') { event.preventDefault(); pick(selected); return }
-    if (event.key === 'Tab') { event.preventDefault(); setMode(current => (current === 'file' ? 'content' : 'file')); setSelected(0) }
+    if (event.key === 'Tab' && !event.shiftKey && event.target === inputRef.current) {
+      event.preventDefault()
+      setMode(current => current === 'file' ? 'content' : 'file')
+      setSelected(0)
+    }
   }
 
   const projectName = root ? splitPath(root.replace(/\\/g, '/').replace(/\/$/, '')).name : null
+  const validation = patternError ? '올바른 정규식이 아닙니다. 괄호나 특수 문자를 확인해 주세요.' : null
   const hint = !folder
     ? (isLoading ? '프로젝트를 확인하는 중…' : '로컬 작업 탭에서 쓸 수 있습니다. 로컬 터미널 탭을 앞에 두고 다시 열어 주세요.')
-    : error ?? (mode === 'content' && query.trim().length > 0 && query.trim().length < CONTENT_MIN ? `${CONTENT_MIN}자 이상 입력해 주세요.`
+    : validation ?? error ?? (mode === 'content' && !regex && query.trim().length > 0 && query.trim().length < CONTENT_MIN ? `${CONTENT_MIN}자 이상 입력해 주세요.`
       : searching && count === 0 ? '찾는 중…'
       : query.trim() && !searching && count === 0 ? '찾은 것이 없습니다.' : null)
 
@@ -255,22 +290,34 @@ export function ProjectSearch() {
         </div>
         <div className="project-search-input">
           <RiSearchLine size={17} aria-hidden="true" />
-          <input ref={inputRef} value={query} onChange={change} spellCheck={false} autoComplete="off"
+          <input ref={inputRef} value={query} onChange={change} spellCheck={false} autoComplete="off" maxLength={200}
             onCompositionEnd={event => {
               const target = event.currentTarget
               if (target.selectionStart === target.value.length) complete(target.value)
             }}
-            placeholder={mode === 'file' ? '파일 이름이나 경로 일부' : '파일 내용에서 찾을 글'} aria-label={mode === 'file' ? '찾을 파일 이름' : '찾을 내용'}
+            placeholder={regex ? (mode === 'file' ? '파일 경로 정규식' : '파일 내용 정규식') : (mode === 'file' ? '파일 이름이나 경로 일부' : '파일 내용에서 찾을 글')}
+            aria-label={mode === 'file' ? '찾을 파일 이름' : '찾을 내용'} aria-invalid={patternError || undefined}
+            aria-describedby={patternError ? 'project-search-pattern-error' : undefined}
             role="combobox" aria-expanded={count > 0} aria-controls="project-search-list" />
           {searching && <span className="project-search-spin" aria-hidden="true" />}
+          <button type="button" className="project-search-regex" title="정규식 (Alt+R)" aria-label="정규식" aria-keyshortcuts="Alt+R"
+            aria-pressed={regex} onMouseDown={event => event.preventDefault()} onClick={toggleRegex}>.*</button>
           <label className="project-search-option">
             {mode === 'file'
               ? <><input type="checkbox" checked={includeAll} onChange={event => setIncludeAll(event.target.checked)} />모두 포함</>
               : <><input type="checkbox" checked={caseSensitive} onChange={event => setCaseSensitive(event.target.checked)} />대소문자 구분</>}
           </label>
         </div>
+        {regex && !query.trim() && folder && <div className="project-search-example">
+          <span>예시</span>
+          <button type="button" onClick={() => { setQuery(REGEX_EXAMPLES[mode]); setSelected(0); inputRef.current?.focus() }}>
+            <code>{REGEX_EXAMPLES[mode]}</code>
+          </button>
+          <span>{mode === 'file' ? '.tsx로 끝나는 파일' : 'TODO 또는 FIXME가 있는 줄'}</span>
+        </div>}
         <div className="project-search-list" id="project-search-list" role="listbox" ref={listRef}>
-          {hint && <div className="project-search-empty">{hint}</div>}
+          {hint && <div className="project-search-empty" id={patternError ? 'project-search-pattern-error' : undefined}
+            role={patternError || error ? 'alert' : undefined}>{hint}</div>}
           {!hint && recent.length > 0 && <div className="project-search-recent-head">최근 검색</div>}
           {!hint && recent.map((text, index) => (
             <div key={text} role="option" aria-selected={index === selected} className="project-search-row is-recent"
@@ -279,7 +326,7 @@ export function ProjectSearch() {
               <span className="project-search-name">{text}</span>
               <button type="button" className="project-search-forget" title="기록에서 지우기" aria-label={`${text} 기록에서 지우기`}
                 onMouseDown={event => event.preventDefault()}
-                onClick={event => { event.stopPropagation(); forget(mode, text); setSelected(0) }}>
+                onClick={event => { event.stopPropagation(); forget(mode, text, regex); setSelected(0) }}>
                 <RiCloseLine size={13} aria-hidden="true" />
               </button>
             </div>
@@ -290,8 +337,9 @@ export function ProjectSearch() {
               <div key={hit.path} role="option" aria-selected={index === selected} className="project-search-row is-file"
                 onMouseMove={() => setSelected(index)} onClick={() => pick(index)}>
                 <RiFileLine size={14} aria-hidden="true" />
-                <span className="project-search-name">{highlightParts(name, query.trim(), false).map((part, at) => part.hit ? <mark key={at}>{part.text}</mark> : part.text)}</span>
-                <span className="project-search-folder">{parent}</span>
+                <span className="project-search-name">{marked(regex ? highlightRanges(name, hit.ranges ?? [], hit.path.length - name.length)
+                  : highlightParts(name, query.trim(), false))}</span>
+                <span className="project-search-folder">{regex ? marked(highlightRanges(parent, hit.ranges ?? [])) : parent}</span>
               </div>
             )
           })}
@@ -311,7 +359,8 @@ export function ProjectSearch() {
               <div key={`l:${row.path}:${row.line}`} role="option" aria-selected={row.index === selected} className="project-search-row is-line"
                 onMouseMove={() => setSelected(row.index)} onClick={() => pick(row.index)}>
                 <span className="project-search-line">{row.line}</span>
-                <code className="project-search-text">{highlightParts(row.text.trim(), query, caseSensitive).map((part, at) => part.hit ? <mark key={at}>{part.text}</mark> : part.text)}</code>
+                <code className="project-search-text">{marked(regex ? highlightRanges(row.text, row.ranges ?? [])
+                  : highlightParts(row.text.trim(), query, caseSensitive))}</code>
               </div>
             )
           })}

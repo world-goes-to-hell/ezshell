@@ -297,6 +297,15 @@ async function run() {
     const nextInbox = await mcp('claude-2', 'read_inbox')
     check('the follow-up reaches the same agent inbox', nextInbox.messages.some(message => message.id === nextRequest.id))
     check('the notification count clears when the agent reads the message', await until(`${chatBell}?.dataset.unread === 'false'`))
+    // 2026-11-28 user request: the bell lists the messages not handled yet; picking one asks the agent to handle it now
+    await driver.click(...await driver.center(chatBell))
+    const bellItem = `[...document.querySelectorAll('.agent-mail-bell-menu .agent-mail-bell-item')].find(item => item.textContent.includes('Please check the next change'))`
+    check('the bell lists a message read but not answered yet, with its sender', await until(`${bellItem}?.querySelector('.agent-mail-bell-state')?.textContent === '읽음 · 답 없음' &&
+      ${bellItem}.querySelector('.agent-mail-bell-from')?.textContent.startsWith('codex-1')`))
+    await driver.shot('local-agent-chat-bell')
+    await driver.click(...await driver.center(bellItem))
+    check('picking it puts the fixed line naming that message into the agent', await waitFor(() =>
+      read('claude-2-input').includes(`ezShell message ${nextRequest.id} is waiting for you: read it now with read_inbox, then handle it.`)))
     await mcp('claude-2', 'acknowledge_message', { message_id: nextRequest.id })
     await js(`${chatBell}.closest('.agent-chat-cover').focus()`)
     await toggleChat()

@@ -172,6 +172,10 @@ function updateConnectionState(sessionId, state) {
 
 // 세션 저장 경로
 const userDataPath = app.getPath('userData');
+// Errors nothing else keeps, for the diagnostics (docs/plan/2026-11-28-diagnostics.md): it only watches
+const errorLog = require('./src/ipc/errorLog.js').createErrorLog({ directory: path.join(userDataPath, 'logs') });
+errorLog.watchProcess();
+errorLog.watchApp(app);
 const sessionsFilePath = path.join(userDataPath, 'sessions.json');
 const foldersFilePath = path.join(userDataPath, 'folders.json');
 const settingsFilePath = path.join(userDataPath, 'settings.json');
@@ -376,6 +380,7 @@ function createWindow() {
     browserReview.close();
   });
   win.webContents.on('render-process-gone', () => globalPointerEffects.stop());
+  errorLog.watchConsole(win.webContents, '본창');
   win.webContents.ipc.on('app-startup-ready', (event) => {
     if (!starting || event.senderFrame !== win.webContents.mainFrame) return;
     startupSplash.revealWhenReady(reveal, () => win.webContents.executeJavaScript(
@@ -502,6 +507,19 @@ const localRoots = createLocalRoots({
     return [...live.map(shellEntry => shellEntry.cwd), ...current.filter(Boolean)];
   },
   repoFolders: localGit.repoFolders
+});
+
+// Which agent changed which uncommitted file (docs/plan/2026-11-28-agent-file-owners.md): the repository
+// is watched, and a change is matched to the agent whose tool was open at that time (its hooks)
+const agentFileOwners = require('./src/ipc/agentFileOwners.js').createAgentFileOwners({
+  repoTopOf: localGit.repoTop,
+  changedPaths: localGit.changedPaths,
+  agentOf: id => agentMessages.agentInfo(id),
+  listAgents: () => agentMessages.snapshot().agents.filter(agent => agent.active && ['claude', 'codex'].includes(agent.kind))
+    .map(({ id, kind, cwd }) => ({ id, kind, cwd })),
+  // Overlap and freeze notices, in the user's name: the user froze the repository, the overlap is the app's own
+  send: (id, text, { urgent }) => agentMessages.sendAsUser({ to: id, text, ...(urgent ? { urgent: true } : {}) }),
+  notify: top => { if (!isAppLocked) mainWindow?.webContents.send('workspace-file-owners-changed', { root: top }); }
 });
 
 const remoteDocuments = createRemoteDocuments({
@@ -661,14 +679,26 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
     .map(({ id, shellId, kind, cwd, role, status }) => ({ id, shellId, kind, cwd, role, status })),
   repoFolders: localGit.repoFolders,
   storeAttachment: image => ({ preview: imagePreview(image), file: localTerminalClipboard.storeImage(image) }),
-  sendCapture: (...args) => agentChatIpc.sendCapture(...args),
-  sendNewCapture: (kind, folder, parent, current, comment, attachments) => openAgentRequest({
-    kind, folder, parent, current,
-    request: () => ({
-      text: ['캡처 화면에 대한 요청입니다.', comment.trim(), '첨부한 화면 파일을 열어 확인해 주세요.',
-        attachments().map(({ file }) => file).join('\n')].filter(Boolean).join('\n\n')
-    })
-  }),
+  // A capture of ezShell itself carries a few lines of its state: versions, agents, recent errors
+  // (docs/plan/2026-11-28-diagnostics.md). The windows are measured before the capture overlay opens.
+  appWindowRects: () => BrowserWindow.getAllWindows().filter(win => !win.isDestroyed() && win.isVisible() && !win.isMinimized())
+    .map(win => win.getBounds()),
+  sendCapture: async (target, comment, attachments, available, aboutApp) => {
+    const state = aboutApp ? await captureState() : null;
+    const text = state ? [comment.trim() || '첨부한 화면을 확인해 주세요.', state].join('\n\n') : comment;
+    return agentChatIpc.sendCapture(target, text, attachments, available);
+  },
+  sendNewCapture: async (kind, folder, parent, current, comment, attachments, aboutApp) => {
+    const state = aboutApp ? await captureState() : null;
+    return openAgentRequest({
+      kind, folder, parent, current,
+      codexMode: 'bypass',
+      request: () => ({
+        text: ['캡처 화면에 대한 요청입니다.', comment.trim(), '첨부한 화면 파일을 열어 확인해 주세요.',
+          attachments().map(({ file }) => file).join('\n'), state].filter(Boolean).join('\n\n')
+      })
+    });
+  },
   focusWindow: win => globalDoubleTab.focusCapture(win.getNativeWindowHandle()),
   onSent: ({ id }, newSession) => {
     if (newSession && !hiddenTestWindows) setImmediate(() => { if (!isAppLocked) revealMainWindow(); });
@@ -827,6 +857,7 @@ const claudeLimitHistories = new Map();
 // the pipe and folder their CLIs keep are listened on again at start, the rest comes back after the unlock
 const agentHandoff = require('./src/ipc/agentHandoff.js');
 const agentHandoffFiles = { file: path.join(userDataPath, 'agent-handoff.json'), endpointFile: path.join(userDataPath, 'agent-handoff-endpoint.json') };
+const { urgentPrompt } = require('./src/ipc/agentInboxPrompts.js');
 const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages({
   // The agents' message MCP, hooks and status lines start from the runtime copy outside the install folder
   agentRuntime: () => sessionRuntime.current(),
@@ -842,8 +873,20 @@ const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages(
   },
   isLocked: () => isAppLocked,
   onInboxChanged: id => localShells?.wakeInbox(id),
+  // send_message with urgent: true. The fixed line naming the message goes through the chat send path, which
+  // also types while the agent works (the bell's path). Only the chat agent of that local shell.
+  onUrgentMessage: ({ shellId, agentId, messageId }) => {
+    const agent = localShells?.agentOf(shellId);
+    if (!agent || !['claude', 'codex'].includes(agent.kind) || localShells.chatAgentId(shellId) !== agentId) return;
+    localShells.chatSend(shellId, urgentPrompt(messageId)).catch(() => { /* The normal notice still announces it. */ });
+  },
   onInboxRead: id => localShells?.confirmStopDelivery(id),
-  onAgentHook: (shellId, agentId, event, options) => localShells?.reportAgentHook(shellId, agentId, event, options),
+  onAgentHook: (shellId, agentId, event, options) => {
+    const accepted = localShells?.reportAgentHook(shellId, agentId, event, options);
+    const cwd = accepted && agentMessages.agentInfo(agentId)?.cwd;
+    if (cwd) agentFileOwners.hook(agentId, { kind: event.kind, cwd, report: event });
+    return accepted;
+  },
   inspectLocalAgent: (shellId, agentId) => localShells?.inspectAgent(shellId, agentId),
   runPresetTool: (id, request, allowed, signal) => runPresets.agentTool(id, request, allowed, signal),
   onEscalate: alertAgentEscalation,
@@ -951,7 +994,7 @@ function getLocalShells() {
 
 // Both desktop request composers use the native folder picker. A project or browser opener only
 // suggests where to start the picker. Only the folder the user selects is used for the new shell.
-async function openAgentRequest({ kind, folder, parent, current, request }) {
+async function openAgentRequest({ kind, folder, parent, current, request, codexMode }) {
   if (kind !== 'claude' && kind !== 'codex') return { ok: false, error: 'Claude Code 또는 Codex를 선택해 주세요.' };
   const allowed = () => !isAppLocked && !parent.isDestroyed() && current();
   const cancelled = { ok: false, cancelled: true };
@@ -974,7 +1017,7 @@ async function openAgentRequest({ kind, folder, parent, current, request }) {
 
     const message = request();
     const local = getLocalShells();
-    const opened = local.open({ cwd, agent: kind, cols: 80, rows: 24 });
+    const opened = local.open({ cwd, agent: kind, cols: 80, rows: 24 }, { codexMode });
     const agentId = local.chatAgentId(opened.id);
     try {
       agentMessages.sendToNewSession(opened.id, { ...message, to: agentId });
@@ -1130,6 +1173,57 @@ function finishSessionQuit({ updating, keepShells }) {
   });
   agentMessages.stop({ handOver: handedOver });
 }
+// Diagnostics (docs/plan/2026-11-28-diagnostics.md): text for a bug report, without messages or secrets
+const diagnostics = require('./src/ipc/diagnostics.js').createDiagnostics({
+  appVersion: app.getVersion(),
+  errorLog,
+  agents: () => isAppLocked ? null : agentMessages.snapshot().agents.filter(agent => agent.active)
+    .map(({ id, kind, role, status, statusSource, mcpConnected, sleeping }) => ({ id, kind, role, status, statusSource, mcpConnected, sleeping })),
+  codexHookMode: () => {
+    try { return fs.readFileSync(path.join(userDataPath, 'codex-hook-mode'), 'utf8').trim() || null; } catch { return null; }
+  },
+  shellCount: () => localShells ? localShells.list().filter(entry => !entry.exited).length : 0,
+  // Screen tests put fake `claude`/`codex` first on PATH (e2e/support/localAgentApp.js): asking those for a
+  // version would start a fake agent in the middle of a test
+  ...(process.env.EZSHELL_TEST_AGENT_PROFILE ? { exec: (_command, _options, done) => done(new Error('screen test')) } : {})
+});
+// The CLI versions take a few seconds the first time: ask early so a capture does not wait for them
+setTimeout(() => { void diagnostics.cliVersion('claude'); void diagnostics.cliVersion('codex'); }, 20_000).unref();
+// At most 1.5 seconds: a capture request goes out without the state rather than late
+function captureState() {
+  return Promise.race([diagnostics.summary().catch(() => null), new Promise(resolve => setTimeout(resolve, 1500, null))]);
+}
+// Also while locked (a lock screen problem is reported too): the report then leaves the agents out
+const diagnosticsAllowed = event => fromMainWindow(event) && Boolean(event.senderFrame) && event.senderFrame === event.sender.mainFrame;
+ipcMain.handle('diagnostics-report', async event => {
+  if (!diagnosticsAllowed(event)) return { success: false, error: '본창에서 이용할 수 있습니다.' };
+  try {
+    return { success: true, ...await diagnostics.report() };
+  } catch {
+    return { success: false, error: '진단 정보를 만들지 못했습니다.' };
+  }
+});
+ipcMain.handle('diagnostics-save', async event => {
+  if (!diagnosticsAllowed(event)) return { success: false, error: '본창에서 이용할 수 있습니다.' };
+  try {
+    const { text } = await diagnostics.report();
+    const day = new Date().toISOString().slice(0, 10);
+    const chosen = await dialog.showSaveDialog(mainWindow, {
+      title: '진단 정보 저장', defaultPath: path.join(app.getPath('downloads'), `ezshell-diagnostics-${day}.md`),
+      filters: [{ name: '진단 정보', extensions: ['md', 'txt'] }]
+    });
+    if (chosen.canceled || !chosen.filePath) return { success: false, cancelled: true };
+    await fs.promises.writeFile(chosen.filePath, text, 'utf8');
+    return { success: true, path: chosen.filePath };
+  } catch {
+    return { success: false, error: '진단 정보를 저장하지 못했습니다.' };
+  }
+});
+ipcMain.handle('diagnostics-open-logs', async event => {
+  if (!diagnosticsAllowed(event)) return { success: false };
+  await fs.promises.mkdir(errorLog.directory, { recursive: true }).catch(() => {});
+  return { success: !(await shell.openPath(errorLog.directory)) };
+});
 ipcMain.handle('agent-messages-state', event =>
   fromMainWindow(event) && !isAppLocked ? agentMessages.snapshot() : null
 );
@@ -1259,10 +1353,13 @@ const runPresetIpc = registerRunPresetIpc({
     return result.canceled ? null : result.filePaths[0];
   }
 });
-app.on('will-quit', () => runPresets.stopReloads());
+app.on('will-quit', () => {
+  runPresets.stopReloads();
+  runPresets.stopHealthChecks();
+});
 const localProjectIpc = require('./src/ipc/localProjects.js').registerLocalProjectIpc({
   ipcMain, fromMainWindow, isLocked: () => isAppLocked, roots: localRoots, git: localGit,
-  gitCommit: require('./src/localFiles/gitCommit.js'),
+  gitCommit: require('./src/localFiles/gitCommit.js'), fileOwners: agentFileOwners,
   openDevelopmentTask: (task, size, allowed) => getLocalShells().openDevelopmentTask(task, size, allowed),
   changeDevelopmentTask: (id, taskId, action, allowed) => runPresets.changeFromShell(id, taskId, action, allowed),
   openFolder: folder => shell.openPath(folder),
@@ -1658,6 +1755,7 @@ ipcMain.handle('lock-app', async (event, restoreRecord) => {
   savedSessionRecords = null;
   mcpController?.onLocked();
   localProjectIpc.clearSearches();
+  agentFileOwners.clear();
   agentHistory.clear();
   agentChats.closeAll();
   agentChatPins.closeAll();
@@ -1758,6 +1856,7 @@ ipcMain.handle('reset-master-password', async () => {
   savedSessionRecords = null;
   mcpController?.onLocked();
   localProjectIpc.clearSearches();
+  agentFileOwners.clear();
   agentHistory.clear();
   agentChats.closeAll();
   agentChatPins.closeAll();

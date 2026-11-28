@@ -258,14 +258,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   workspaceDirectoryList: (folder, relative = '') => ipcRenderer.invoke('workspace-directory-list', { root: folder, path: relative }),
   workspaceDirectoryPrepare: (root, refresh, includeAll) => ipcRenderer.invoke('workspace-directory-prepare', { root, refresh, includeAll }),
-  workspaceDirectorySearch: (root, query, includeAll) => ipcRenderer.invoke('workspace-directory-search', { root, query, includeAll }),
+  workspaceDirectorySearch: (root, query, includeAll, regex) => ipcRenderer.invoke('workspace-directory-search', { root, query, includeAll, regex: regex === true }),
   workspaceGitStatus: (root) => ipcRenderer.invoke('workspace-git-status', root),
   workspaceGitCommitFiles: (root, hash) => ipcRenderer.invoke('workspace-git-commit-files', { root, hash }),
   workspaceGitDiff: (root, file, hash) => ipcRenderer.invoke('workspace-git-diff', { root, file, hash }),
   workspaceGitCommit: (root, files, message) => ipcRenderer.invoke('workspace-git-commit', { root, files, message }),
+  // Which agent changed each uncommitted file (docs/plan/2026-11-28-agent-file-owners.md)
+  workspaceFileOwners: (root) => ipcRenderer.invoke('workspace-file-owners', { root }),
+  workspaceFileFreeze: (root, frozen, except, reason) => ipcRenderer.invoke('workspace-file-freeze', { root, frozen, except, reason }),
+  // 진단 정보 (docs/plan/2026-11-28-diagnostics.md): main builds the text, saves it and opens the log folder
+  diagnosticsReport: () => ipcRenderer.invoke('diagnostics-report'),
+  diagnosticsSave: () => ipcRenderer.invoke('diagnostics-save'),
+  diagnosticsOpenLogs: () => ipcRenderer.invoke('diagnostics-open-logs'),
+  onWorkspaceFileOwnersChanged: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('workspace-file-owners-changed', listener);
+    return () => ipcRenderer.removeListener('workspace-file-owners-changed', listener);
+  },
   localFileOpen: (root, relative, mode, label, options) => ipcRenderer.invoke('local-file-open', { root, path: relative, mode, label, compareHead: options?.compareHead === true, ...(Number.isSafeInteger(options?.line) ? { line: options.line } : {}) }),
   // 프로젝트 검색 (Ctrl+Shift+F): the lines holding the text in the files of a folder main knows
-  workspaceContentSearch: (root, query, caseSensitive) => ipcRenderer.invoke('workspace-content-search', { root, query, caseSensitive: caseSensitive === true }),
+  workspaceContentSearch: (root, query, caseSensitive, regex) => ipcRenderer.invoke('workspace-content-search', { root, query, caseSensitive: caseSensitive === true, regex: regex === true }),
   localFileReveal: (root, relative) => ipcRenderer.invoke('local-file-reveal', { root, path: relative }),
   workspaceGitLog: (folder, allBranches) => ipcRenderer.invoke('workspace-git-log', { folder, allBranches }),
   workspaceGitUpstream: (root) => ipcRenderer.invoke('workspace-git-upstream', root),

@@ -77,6 +77,15 @@ describe('workspace directory search index', () => {
     expect(await paths('old')).toEqual(['Old.txt'])
   })
 
+  it('matches regex against project-relative file paths using the same index', async () => {
+    mkdir('src/folder.ts')
+    write('src/Task-04.TS')
+    write('src/task.ts')
+    write('task-12.ts')
+    const result = await search.search(root, '^src/task-\\d+\\.ts$', new AbortController().signal, false, false, true)
+    expect(result.entries).toEqual([{ path: 'src/Task-04.TS', name: 'Task-04.TS', kind: 'file', ranges: [[0, 14]] }])
+  })
+
   it('scans nested folders in parallel, skipping .git', async () => {
     for (let i = 0; i < 40; i++) {
       mkdir(`d${i}/inner`)

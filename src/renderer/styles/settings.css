@@ -1,5 +1,16 @@
 /* Settings Modal Styles */
 
+.settings-run-threshold {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.form-group.settings-run-threshold input { width: 6rem; }
+
 .claude-profile-list {
   display: grid;
   gap: 6px;

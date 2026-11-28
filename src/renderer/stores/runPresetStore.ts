@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { pathKey } from '../lib/localWorkspaceTree'
 import { crashKey, runError, type PresetDraft } from '../lib/runPresets'
-import type { RunAction, RunBundle, RunErrorGroup, RunPreset, RunPresetOptions, RunPresetResult, RunStartOrder, RunStartProgress, RunState } from '../types'
+import type { RunAction, RunBundle, RunErrorGroup, RunPreset, RunPresetOptions, RunPresetResult, RunPresetScope, RunStartOrder, RunStartProgress, RunState } from '../types'
 import { toast } from './toastStore'
 
 // Run presets of the local projects (docs/plan/2026-11-25-local-project-run.md, stage 1): main keeps the
@@ -22,6 +22,7 @@ export interface WorktreeRuns {
   presets: RunPreset[]
   states: Record<string, RunState>
   startOrder?: RunStartOrder
+  startOrderConfigured?: boolean
   batch?: RunStartProgress | null
   /** The project's run bundles (part 3): the same in every worktree of the project */
   bundles: RunBundle[]
@@ -158,7 +159,8 @@ export async function loadRunPresets(folder: string, roots?: string[]): Promise<
     const worktreeKey = result.worktreeKey || pathKey(folder)
     useRunPresets.setState(({ worktrees, aliases, projectRoots }) => ({
       worktrees: { ...worktrees, [worktreeKey]: { folder, projectKey: result.projectKey, worktreeKey, presets: result.presets ?? [], states: result.states ?? {},
-        startOrder: result.startOrder, batch: result.batch, bundles: Array.isArray(result.bundles) ? result.bundles : [] } },
+        startOrder: result.startOrder, startOrderConfigured: result.startOrderConfigured, batch: result.batch,
+        bundles: Array.isArray(result.bundles) ? result.bundles : [] } },
       aliases: { ...aliases, [pathKey(folder)]: worktreeKey },
       projectRoots: roots ? { ...projectRoots, [result.projectKey]: roots } : projectRoots
     }))
@@ -232,7 +234,7 @@ function applyState(projectKey: string, worktreeKey: string, id: string, state: 
   if (firstAgentAction) tellAgentAction({ projectKey, worktreeKey, id, state }, entry.folder)
 }
 
-/** Follows main's state changes; once per window after the first unlock. Returns the cleanup. */
+/** Follows main's full state snapshots, including presence and recovery of unresponsive; once after first unlock. */
 export function startRunPresets(): () => void {
   const off = runPresetApi().onRunPresetState?.(event => {
     const { projectKey, worktreeKey } = event
@@ -307,8 +309,8 @@ const FAILED: Record<Action, string> = {
  * shown in full before it first runs (`needsConfirm`), a missing install is asked about (`needsInstall`).
  * Each comes alone; the request is sent again with that answer only (main keeps the earlier ones).
  */
-/** `bundle`: 모두 실행 / 모두 중지 of a run bundle only (its presets, in the project's start order) */
-export async function runPresetAction(folder: string, action: Action, id?: string, bundle?: { bundleId?: string }): Promise<boolean> {
+/** A batch can act on a bundle or a subset of the worktree's presets. */
+export async function runPresetAction(folder: string, action: Action, id?: string, scope?: RunPresetScope): Promise<boolean> {
   const api = runPresetApi()
   let options: RunPresetOptions = {}
   const call = (): Promise<Result> | undefined => {
@@ -316,8 +318,8 @@ export async function runPresetAction(folder: string, action: Action, id?: strin
       case 'start': return api.runPresetStart?.(folder, id!, options)
       case 'restart': return api.runPresetRestart?.(folder, id!, options)
       case 'stop': return api.runPresetStop?.(folder, id!)
-      case 'startAll': return api.runPresetStartAll?.(folder, bundle?.bundleId ? { ...options, bundleId: bundle.bundleId } : options)
-      case 'stopAll': return bundle?.bundleId ? api.runPresetStopAll?.(folder, { bundleId: bundle.bundleId }) : api.runPresetStopAll?.(folder)
+      case 'startAll': return api.runPresetStartAll?.(folder, { ...options, ...scope })
+      case 'stopAll': return scope ? api.runPresetStopAll?.(folder, scope) : api.runPresetStopAll?.(folder)
       case 'skipOrder': return api.runStartOrderResume?.(folder, 'skip', options)
       case 'retryOrder': return api.runStartOrderResume?.(folder, 'retry', options)
       case 'cancelOrder': return api.runStartOrderResume?.(folder, 'cancel')

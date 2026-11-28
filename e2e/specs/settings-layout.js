@@ -43,8 +43,10 @@ const { check, finish } = createChecks()
       orientation: document.querySelector('.settings-tabs-list').getAttribute('aria-orientation')
     }
   })()`)
-  check('the wide dialog is 980px with a 180px column of the eight categories, each name whole',
-    wide.width === 980 && wide.listWidth === 180 && wide.count === 8 && wide.column && wide.labelsWhole && wide.contentRight, JSON.stringify(wide))
+  // 진단 정보 shows once main offers it (docs/plan/2026-11-28-diagnostics.md)
+  const categories = await js(`typeof window.electronAPI.diagnosticsReport === 'function'`) ? 9 : 8
+  check(`the wide dialog is 980px with a 180px column of the ${categories} categories, each name whole`,
+    wide.width === 980 && wide.listWidth === 180 && wide.count === categories && wide.column && wide.labelsWhole && wide.contentRight, JSON.stringify(wide))
   check('the column is a vertical tab list and the narrow list is hidden', wide.orientation === 'vertical' && !(await js(visible('.settings-category-picker'))))
   await shot('settings-layout-wide')
 

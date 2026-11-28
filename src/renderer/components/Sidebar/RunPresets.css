@@ -58,6 +58,21 @@
 .run-presets-head button:disabled { color: var(--text-muted); cursor: default; }
 .run-presets-head .run-presets-head-add { color: var(--text-secondary); padding: 1px 3px; }
 
+.run-presets-summary > span { flex: 0 0 auto; white-space: nowrap; }
+.run-presets-summary button { flex: none; white-space: nowrap; }
+.run-presets-summary .run-summary-running { color: var(--success); }
+.run-presets-summary .run-summary-crashed { color: var(--error-text, var(--error)); }
+.run-presets-summary .run-summary-unresponsive { color: var(--warning); }
+.run-presets-summary .run-summary-panel { margin-left: auto; padding-inline: 2px; }
+.run-context-menu { max-width: min(320px, calc(100vw - 16px)); }
+.run-context-trigger > svg { flex: none; }
+.run-context-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-context-stage + .run-context-stage { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 4px; }
+.run-context-stage > .run-context-trigger:first-child,
+.run-context-stage-label { color: var(--text-muted); font-size: 11px; }
+.run-context-stage-label { padding: 5px 8px; }
+.run-context-stage > .run-context-trigger:not(:first-child) { padding-inline-start: 16px; }
+
 .run-presets-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; margin: 0; padding: 0; list-style: none; }
 
 .run-preset {
@@ -79,6 +94,8 @@
 }
 .run-preset[data-status="running"] { border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
 .run-preset[data-status="crashed"] { border-color: var(--error); background: color-mix(in srgb, var(--error) 7%, var(--bg-primary)); }
+.run-preset[data-unresponsive] { border-color: color-mix(in srgb, var(--warning) 65%, var(--border)); }
+.run-preset-star { flex: none; color: var(--warning); }
 .run-preset-failure-line {
   display: flex;
   align-items: center;
@@ -145,6 +162,7 @@ button.run-preset-failure-line:hover span { text-decoration: underline; }
 .run-preset-pill[data-kind="port"] { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); font-family: var(--font-mono, monospace); }
 .run-preset-pill[data-kind="err"] { background: color-mix(in srgb, var(--error) 15%, transparent); color: var(--error-text, var(--error)); }
 .run-preset-pill[data-kind="wait"] { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.run-preset-pill[data-kind="unresponsive"] { background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); }
 button.run-preset-pill { cursor: pointer; }
 .run-preset-pill.is-count { display: inline-flex; align-items: center; gap: 2px; padding: 0 5px; font-family: var(--font-mono, monospace); }
 button.run-preset-pill:hover { text-decoration: underline; }

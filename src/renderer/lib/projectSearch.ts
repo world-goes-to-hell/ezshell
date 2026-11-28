@@ -1,5 +1,6 @@
 // 프로젝트 검색 (docs/plan/2026-11-26-project-search.md): Shift twice opens the file search, Ctrl+Shift+F the
 // content search, both on the folder of the local tab in front.
+import type { WorkspaceContentSearchResult, WorkspaceSearchRange } from '../types'
 
 /** Two Shift taps within this, from the first release to the second press, open the file search */
 export const DOUBLE_SHIFT_MS = 400
@@ -54,17 +55,33 @@ export function highlightParts(text: string, query: string, caseSensitive: boole
   return parts.length ? parts : [{ text, hit: false }]
 }
 
+/** Marks ranges found by the search worker, including a slice of a longer path. */
+export function highlightRanges(text: string, ranges: readonly WorkspaceSearchRange[], offset = 0): { text: string; hit: boolean }[] {
+  const parts: { text: string; hit: boolean }[] = []
+  let from = 0
+  for (const [start, end] of ranges) {
+    const at = Math.max(0, start - offset)
+    const to = Math.min(text.length, end - offset)
+    if (to <= at) continue
+    if (at > from) parts.push({ text: text.slice(from, at), hit: false })
+    parts.push({ text: text.slice(at, to), hit: true })
+    from = to
+  }
+  if (from < text.length) parts.push({ text: text.slice(from), hit: false })
+  return parts
+}
+
 export type ContentRow =
   | { kind: 'file'; path: string; count: number }
-  | { kind: 'line'; path: string; line: number; text: string; index: number }
+  | { kind: 'line'; path: string; line: number; text: string; index: number; ranges?: WorkspaceSearchRange[] }
 
 /** File heads and their lines in one list; `index` counts the lines only (what the arrows move through) */
-export function contentRows(files: readonly { path: string; matches: readonly { line: number; text: string }[] }[]): ContentRow[] {
+export function contentRows(files: WorkspaceContentSearchResult['files']): ContentRow[] {
   const rows: ContentRow[] = []
   let index = 0
   for (const file of files) {
     rows.push({ kind: 'file', path: file.path, count: file.matches.length })
-    for (const match of file.matches) rows.push({ kind: 'line', path: file.path, line: match.line, text: match.text, index: index++ })
+    for (const match of file.matches) rows.push({ kind: 'line', path: file.path, ...match, index: index++ })
   }
   return rows
 }

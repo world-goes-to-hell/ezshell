@@ -76,8 +76,13 @@ const bin = path.join(profile, 'fake-agents')
 fs.mkdirSync(bin)
 const envKey = Object.keys(process.env).find(key => key.toLowerCase() === 'path') ?? 'PATH'
 const system = process.env.SystemRoot && path.join(process.env.SystemRoot, 'System32')
+// A spec whose main runs Git (local-agent-file-owners: EZSHELL_TEST_GIT=1 from e2e/run.js) keeps the folder of git
+// from the real PATH, after the fake agents so they still come first. Other specs keep the narrow PATH.
+const gitFolder = process.env.EZSHELL_TEST_GIT === '1'
+  ? (process.env[envKey] ?? '').split(path.delimiter).find(folder => folder && fs.existsSync(path.join(folder, process.platform === 'win32' ? 'git.exe' : 'git')))
+  : undefined
 // node-pty 1.1 on Windows checks only PATH entries which end in a semicolon.
-process.env[envKey] = [bin, ...(system ? [path.join(system, 'WindowsPowerShell', 'v1.0'), system] : ['/usr/bin', '/bin'])].join(path.delimiter)
+process.env[envKey] = [bin, ...(system ? [path.join(system, 'WindowsPowerShell', 'v1.0'), system] : ['/usr/bin', '/bin']), ...(gitFolder ? [gitFolder] : [])].join(path.delimiter)
 process.env.EZSHELL_TEST_AGENT_PROFILE = profile
 process.env.EZSHELL_TEST_AGENT_EXE = process.execPath
 process.env.EZSHELL_TEST_AGENT_SCRIPT = path.join(__dirname, 'localAgentFixture.js')
@@ -85,7 +90,9 @@ process.env.EZSHELL_TEST_AGENT_SCRIPT = path.join(__dirname, 'localAgentFixture.
 if (!process.env.EZSHELL_TEST_MANUAL_CLAUDE_CHAT) fs.writeFileSync(path.join(profile, 'agent-message-connection'), '')
 for (const name of ['codex', 'claude']) {
   if (process.platform === 'win32') {
-    const help = name === 'codex' ? 'if "%~1"=="--help" (echo   --no-daemon& exit /b 0)\r\n' : ''
+    const help = name === 'codex' ? [
+      'if "%~1"=="--help" (', '  echo   --no-daemon', '  echo   --dangerously-bypass-approvals-and-sandbox', '  exit /b 0', ')', ''
+    ].join('\r\n') : ''
     fs.writeFileSync(path.join(bin, name + '.cmd'), '@echo off\r\nsetlocal\r\n' + help + 'set ELECTRON_RUN_AS_NODE=1\r\n"%EZSHELL_TEST_AGENT_EXE%" "%EZSHELL_TEST_AGENT_SCRIPT%" ' + name + ' %*\r\n')
   } else {
     fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "$EZSHELL_TEST_AGENT_EXE" "$EZSHELL_TEST_AGENT_SCRIPT" ' + name + ' "$@"\n', { mode: 0o700 })

@@ -1,6 +1,6 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { RiCloseLine, RiExternalLinkLine, RiFileCopyLine, RiFileLine, RiFolderOpenLine, RiGlobalLine, RiLink, RiWindowLine } from 'react-icons/ri'
+import { RiCloseLine, RiCodeLine, RiExternalLinkLine, RiFileCopyLine, RiFileLine, RiFolderOpenLine, RiGlobalLine, RiLink, RiWindowLine } from 'react-icons/ri'
 import { formatBytes } from '../../lib/mcpLabels'
 import { isMarkdownFile } from '../../lib/markdownRender'
 import { isWorkspaceWebDocument } from '../../lib/workspaceDetails'
@@ -55,14 +55,53 @@ function CodePreview({ file }: { file: Extract<ChatLinkPreviewData, { kind: 'tex
   </>
 }
 
+/**
+ * An HTML file as a page (2026-11-28 user request, the default for .html): a blob document in a frame with no
+ * permissions at all (`sandbox=""`: no scripts, forms, popups or navigation of the app; its own opaque origin), so
+ * the file cannot reach the app. Files next to it (images, styles) and scripts do not load: 브라우저로 열기 serves
+ * the folder for that.
+ */
+function HtmlPreview({ file }: { file: Extract<ChatLinkPreviewData, { kind: 'text' }> }) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    const blobUrl = URL.createObjectURL(new Blob([file.text], { type: 'text/html' }))
+    setUrl(blobUrl)
+    return () => URL.revokeObjectURL(blobUrl)
+  }, [file.text])
+  if (!url) return null
+  return <>
+    <iframe className="chat-link-preview-html" src={url} title={file.name} sandbox="" referrerPolicy="no-referrer" />
+    <p className="chat-link-preview-note">스크립트와 옆 파일(이미지·스타일)은 불러오지 않습니다. 동작까지 보려면 위의 ‘브라우저로 열기’를 누릅니다.</p>
+  </>
+}
+
+/** Rendered (page, markdown) or source: an HTML or markdown file opens rendered; a link to a line opens the source */
+type TextView = 'rendered' | 'source'
+
+function TextPreview({ file }: { file: Extract<ChatLinkPreviewData, { kind: 'text' }> }) {
+  const html = isHtmlFile(file.name)
+  const renders = html || isMarkdownFile(file.name)
+  const [view, setView] = useState<TextView>(file.line ? 'source' : 'rendered')
+  const rendered = renders && view === 'rendered'
+  return <>
+    {renders && <div className="chat-link-preview-views" role="group" aria-label="보기 방식">
+      <button type="button" aria-pressed={rendered} onClick={() => setView('rendered')}>
+        {html ? <><RiGlobalLine size={13} aria-hidden />브라우저 보기</> : <><RiFileLine size={13} aria-hidden />문서 보기</>}
+      </button>
+      <button type="button" aria-pressed={!rendered} onClick={() => setView('source')}><RiCodeLine size={13} aria-hidden />소스 보기</button>
+    </div>}
+    {rendered ? (html ? <HtmlPreview file={file} /> : <MarkdownPreview text={file.text} />) : <CodePreview file={file} />}
+    {file.truncated && <p className="chat-link-preview-note">파일의 앞부분만 표시합니다.</p>}
+  </>
+}
+
+const isHtmlFile = (name: string) => /\.html?$/i.test(name)
+
 function PreviewBody({ file }: { file: ChatLinkPreviewData }) {
   switch (file.kind) {
     case 'image':
     case 'pdf': return <MediaPreview file={file} />
-    case 'text': return <>
-      {!file.line && isMarkdownFile(file.name) ? <MarkdownPreview text={file.text} /> : <CodePreview file={file} />}
-      {file.truncated && <p className="chat-link-preview-note">파일의 앞부분만 표시합니다.</p>}
-    </>
+    case 'text': return <TextPreview key={`${file.path}:${file.line ?? ''}`} file={file} />
     case 'directory': return <>
       {file.entries.length ? <ul className="chat-link-preview-directory">
         {file.entries.map(({ name, kind }) => {

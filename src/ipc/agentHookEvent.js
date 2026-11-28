@@ -10,6 +10,12 @@ const NOTIFICATIONS = new Set(['permission_prompt', 'elicitation_dialog', 'idle_
 const START_SOURCES = new Set(['startup', 'resume', 'clear', 'compact', 'fork'])
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const IDENTIFIER = /^[a-z0-9][a-z0-9_-]{0,99}$/i
+// Tool names kept from the hook input: a question dialog, and the tools that write files (whose time tells
+// src/ipc/agentFileOwners.js which agent changed a file). Only these names; never a tool's arguments.
+const TOOLS = {
+  claude: new Set(['AskUserQuestion', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']),
+  codex: new Set(['apply_patch'])
+}
 const isUuid = value => typeof value === 'string' && UUID.test(value)
 const isIdentifier = value => typeof value === 'string' && IDENTIFIER.test(value)
 const SUBAGENT_DIALOG_EVENTS = new Set(['PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied'])
@@ -22,7 +28,7 @@ function validateAgentHookEvent(input) {
   if (sessionId !== undefined && !isUuid(sessionId)) return null
   if (promptId !== undefined && !(kind === 'claude' ? isUuid(promptId) : isIdentifier(promptId))) return null
   if (toolUseId !== undefined && !isIdentifier(toolUseId)) return null
-  if (tool !== undefined && (kind !== 'claude' || tool !== 'AskUserQuestion')) return null
+  if (tool !== undefined && (!TOOLS[kind].has(tool) || (tool !== 'AskUserQuestion' && event !== 'PreToolUse'))) return null
   if (event === 'Notification' ? !NOTIFICATIONS.has(notification) : notification !== undefined) return null
   if (source !== undefined && (event !== 'SessionStart' || !START_SOURCES.has(source))) return null
   if (stopHookActive !== undefined && (event !== 'Stop' || typeof stopHookActive !== 'boolean')) return null
@@ -50,7 +56,7 @@ function eventFromHookFields(kind, fields, startedAt, subagent) {
     sessionId: fields.session_id,
     promptId: kind === 'codex' ? fields.turn_id : fields.prompt_id,
     toolUseId: fields.tool_use_id,
-    tool: kind === 'claude' && fields.tool_name === 'AskUserQuestion' ? 'AskUserQuestion' : undefined,
+    tool: TOOLS[kind]?.has(fields.tool_name) && (fields.tool_name === 'AskUserQuestion' || event === 'PreToolUse') ? fields.tool_name : undefined,
     notification: event === 'Notification' ? fields.notification_type : undefined,
     source: event === 'SessionStart' && START_SOURCES.has(fields.source) ? fields.source : undefined,
     stopHookActive: event === 'Stop' && typeof fields.stop_hook_active === 'boolean' ? fields.stop_hook_active : undefined

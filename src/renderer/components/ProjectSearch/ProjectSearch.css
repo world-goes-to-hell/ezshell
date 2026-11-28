@@ -28,6 +28,42 @@
 .project-search-input > input::placeholder { color: var(--text-muted); }
 .project-search-option { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 12px; white-space: nowrap; cursor: pointer; }
 .project-search-option input { margin: 0; accent-color: var(--accent); }
+.project-search-regex {
+  flex: none;
+  min-width: 30px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: 600 14px var(--font-mono, monospace);
+  cursor: pointer;
+}
+.project-search-regex:hover { background: var(--bg-hover); }
+.project-search-regex[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+  color: var(--text-primary);
+}
+.project-search-input:has([aria-invalid="true"]) { border-bottom-color: var(--error-text, var(--error)); }
+.project-search-empty[role="alert"] { color: var(--error-text, var(--error)); }
+.project-search-example {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.project-search-example button {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.project-search-example button:hover { background: var(--bg-hover); }
 .project-search-spin {
   width: 12px; height: 12px; border: 2px solid var(--accent-alpha); border-top-color: var(--accent); border-radius: 50%;
   animation: project-search-spin 0.8s linear infinite;

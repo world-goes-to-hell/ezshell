@@ -230,7 +230,8 @@ function createRunPresetStore(file) {
     catch (error) { delete preset.agentActionNotified; throw error }
     return true
   }
-  return { list, startOrder, roots: () => [...projects.values()].map(project => project.root), write, markAgentAction }
+  return { list, startOrder, hasStartOrder: key => Boolean(projects.get(key)?.startOrder),
+    roots: () => [...projects.values()].map(project => project.root), write, markAgentAction }
 }
 
 module.exports = { createRunPresetStore, validatePreset, presetName, presetRelative, publicPreset, commandHash, presetApproval, projectKey, realDirectory, directoryInProject, isSpringBootTask }

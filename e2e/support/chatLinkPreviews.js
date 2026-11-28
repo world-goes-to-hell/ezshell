@@ -164,6 +164,9 @@ async function checkChatLinkPreviews({ driver, cover, shellId, profile, addAnswe
     ${inPanel('.md-image')}?.textContent.includes('구성도') && !${inPanel('.markdown-body img, .markdown-body b')}
   `))
   await shot('local-agent-chat-preview-markdown')
+  check('a Markdown file offers 문서 보기 and 소스 보기, rendered first', await js(`
+    [...${panel}.querySelectorAll('.chat-link-preview-views button')].map(b => b.textContent.trim() + ':' + b.getAttribute('aria-pressed')).join('|') === '문서 보기:true|소스 보기:false'
+  `))
   await close()
 
   await open('preview/release/', 'release')
@@ -218,6 +221,18 @@ async function checkChatLinkPreviews({ driver, cover, shellId, profile, addAnswe
   check('the preview IPC rejects a path the conversation did not show', missing?.ok === false)
 
   const webAnchor = await open(webPath, 'byte-daemon.html')
+  // 2026-11-28 user request: an HTML file opens as a page by default (a frame with no permissions), its source a click away
+  const viewButton = label => `[...${panel}.querySelectorAll('.chat-link-preview-views button')].find(b => b.textContent.trim() === ${JSON.stringify(label)})`
+  const pageFrame = inPanel('iframe.chat-link-preview-html')
+  check('an HTML file opens in 브라우저 보기 by default, in a frame with no permissions', await until(`
+    ${viewButton('브라우저 보기')}?.getAttribute('aria-pressed') === 'true' &&
+    ${pageFrame}?.getAttribute('sandbox') === '' && ${pageFrame}.src.startsWith('blob:')
+  `))
+  await shot('local-agent-chat-preview-html')
+  await js(`${viewButton('소스 보기')}.click()`)
+  check('소스 보기 shows the HTML source', await until(`!${pageFrame} && ${inPanel('.cm-content')}?.textContent.includes('<h1>Byte Daemon</h1>')`))
+  await js(`${viewButton('브라우저 보기')}.click()`)
+  check('브라우저 보기 shows the page again', await until(`!!${pageFrame}`))
   const browserButton = `[...${panel}.querySelectorAll('.chat-link-preview-actions button')].find(b => b.textContent.trim() === '브라우저로 열기')`
   const closeBrowserTab = async () => {
     const target = await findPage(page => page.url.startsWith('ezshell-workspace://') && page.url.endsWith(`/${webPath}`), 8000)

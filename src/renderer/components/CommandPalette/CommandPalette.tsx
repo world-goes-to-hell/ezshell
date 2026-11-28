@@ -18,6 +18,7 @@ import { formatRelativeTime } from '../../utils/timeFormat'
 import { getFolderPath } from '../../lib/sessionPicker'
 import { isSshTab } from '../../lib/sessionTabs'
 import { openAgentMessages } from '../Terminal/AgentMessages'
+import { copyDiagnostics, hasDiagnostics } from '../../lib/diagnostics'
 import './CommandPalette.css'
 
 interface CommandPaletteProps {
@@ -157,6 +158,18 @@ export function CommandPalette({ onNewConnection, onQuickConnect, onOpenSettings
         category: 'command',
         action: onOpenStats,
         keywords: ['stats', 'statistics', 'usage', 'dashboard', '통계', '사용량', '접속'],
+      })
+    }
+
+    // For bug reports (docs/plan/2026-11-28-diagnostics.md): versions, agent states and recent errors, no messages
+    if (hasDiagnostics()) {
+      items.push({
+        id: 'diagnostics-copy',
+        title: '진단 정보 복사',
+        subtitle: '버그를 알릴 때 붙일 버전·에이전트 상태·최근 오류 (메시지·비밀 값 없음)',
+        category: 'command',
+        action: () => void copyDiagnostics(),
+        keywords: ['diagnostics', 'bug', 'report', 'error', 'log', 'version', '진단', '버그', '오류', '로그', '버전', '신고'],
       })
     }
 

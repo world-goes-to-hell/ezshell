@@ -53,11 +53,11 @@ const { check, finish } = createChecks()
       return {
         aligned: Math.abs(tabs.top - header.top) < 1 && Math.abs(tabs.bottom - header.bottom) < 1,
         labels: [...workspace.querySelectorAll('[role=tab]')].map(tab => tab.getAttribute('aria-label')),
-        iconOnly: workspace.textContent.trim() === '' && workspace.querySelectorAll('[role=tab] > svg').length === 4
+        iconOnly: workspace.textContent.trim() === '' && workspace.querySelectorAll('[role=tab] > svg').length === 5
       }
     })()`)
     check('the icon-only workspace tabs align with the main tab strip and retain their names',
-      tabStrip.aligned && tabStrip.iconOnly && tabStrip.labels.join(',') === '대화 기록,파일,변경,Git 기록', JSON.stringify(tabStrip))
+      tabStrip.aligned && tabStrip.iconOnly && tabStrip.labels.join(',') === '대화 기록,파일,변경,Git 기록,실행', JSON.stringify(tabStrip))
 
     await section('files')
     // The files are a tree now: each entry is a .workspace-tree-item with its own row button

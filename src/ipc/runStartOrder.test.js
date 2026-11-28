@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
-import { legacyStartOrder, reconcileStartOrder, restoreStartOrder, runStartStages, selectStartStages, stopStages, validateStartOrder } from './runStartOrder.js'
+import { createRunHealthMonitor, legacyStartOrder, probeRunHealth, reconcileStartOrder, restoreStartOrder,
+  runHealthTarget, runStartStages, selectStartStages, stopStages, validateStartOrder } from './runStartOrder.js'
 
 const stage = (ids, kind = 'none', value) => ({ ids, gate: { kind, ...(value !== undefined && { value }) } })
 const presets = [
@@ -11,6 +12,81 @@ const presets = [
   { id: 'web', inAll: true }
 ]
 const defaults = legacyStartOrder(presets)
+
+describe('running preset health checks', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('uses HTTP 2xx without redirects for a URL gate and a TCP connection for a ready gate', async () => {
+    const visited = []
+    let status = 302
+    const server = createServer((request, response) => {
+      visited.push(request.url)
+      response.writeHead(status, { Location: '/other' }).end()
+    })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    try {
+      const { port } = server.address()
+      const signal = AbortSignal.timeout(3000)
+      const target = runHealthTarget({ kind: 'url', value: `http://localhost:${port}/health?probe=1` })
+      expect(await probeRunHealth(target, signal)).toBe(false)
+      status = 204
+      expect(await probeRunHealth(target, signal)).toBe(true)
+      expect(await probeRunHealth(runHealthTarget({ kind: 'ready' }, `https://127.0.0.1:${port}/app`), signal)).toBe(true)
+      expect(visited).toEqual(['/health?probe=1', '/health?probe=1'])
+      const outside = 'http://192.0.2.1:8080/health'
+      expect(runHealthTarget({ kind: 'url', value: outside })).toBeNull()
+      expect(runHealthTarget({ kind: 'ready' }, outside)).toBeNull()
+      expect(runHealthTarget({ kind: 'ready' })).toBeNull()
+      expect(runHealthTarget({ kind: 'log' }, `http://127.0.0.1:${port}`)).toBeNull()
+    } finally {
+      server.close()
+      await once(server, 'close')
+    }
+  })
+
+  it('bounds concurrency and abandons each pending probe after three seconds', async () => {
+    vi.useFakeTimers()
+    const probe = vi.fn(() => new Promise(() => {}))
+    const onChange = vi.fn()
+    const monitor = createRunHealthMonitor({ probe, onChange })
+    const target = { kind: 'port', value: 'http://127.0.0.1:8000' }
+    for (let run = 0; run < 5; run++) monitor.setTarget(run, target)
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(probe).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(probe).toHaveBeenCalledTimes(4)
+    await vi.advanceTimersByTimeAsync(2_999)
+    expect(probe).toHaveBeenCalledTimes(4)
+    expect(probe.mock.calls.every(([, signal]) => !signal.aborted)).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(probe).toHaveBeenCalledTimes(5)
+    expect(probe.mock.calls.slice(0, 4).every(([, signal]) => signal.aborted)).toBe(true)
+    monitor.close()
+    expect(probe.mock.calls[4][1].aborted).toBe(true)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(onChange).not.toHaveBeenCalled()
+    expect(probe).toHaveBeenCalledTimes(5)
+  })
+
+  it('cancels an in-flight check and ignores its result when the target changes', async () => {
+    vi.useFakeTimers()
+    const pending = Promise.withResolvers()
+    const probe = vi.fn().mockResolvedValueOnce(false).mockReturnValueOnce(pending.promise).mockResolvedValue(false)
+    const onChange = vi.fn()
+    const monitor = createRunHealthMonitor({ probe, onChange })
+    monitor.setTarget('app', { kind: 'url', value: 'http://127.0.0.1/health' })
+    await vi.advanceTimersByTimeAsync(60_000)
+    monitor.setTarget('app', { kind: 'url', value: 'http://127.0.0.1/new-health' })
+    expect(probe.mock.calls[1][1].aborted).toBe(true)
+    pending.resolve(false)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(onChange).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(onChange).toHaveBeenCalledWith('app', { since: Date.now() })
+    monitor.close()
+  })
+})
 
 describe('project start order', () => {
   it('migrates in order and uses the following included preset’s wait flag', () => {

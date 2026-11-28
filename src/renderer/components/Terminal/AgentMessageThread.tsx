@@ -63,6 +63,7 @@ function MessageBubble({ message, original, state, term, name }: {
       </div>
       <footer className="agent-message-meta">
         <time dateTime={sentAt.toISOString()} title={sentAt.toLocaleString()}>{timeFormat.format(sentAt)}</time>
+        {message.urgent && <span className="agent-message-urgent" title="작업 중이어도 받는 에이전트의 채팅에 바로 알렸습니다">긴급</span>}
         <span className="agent-read-state" data-state={state} title={message.seenAt ? new Date(message.seenAt).toLocaleString() : undefined}>
           <Icon aria-hidden="true" />{label}
         </span>

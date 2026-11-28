@@ -82,6 +82,30 @@ describe('project content search', () => {
     expect(match.text.startsWith('…')).toBe(true)
   })
 
+  it.each(['git', 'scan'])('matches regex captures and reports the actual highlighted text (%s)', async engine => {
+    if (engine === 'git') git('init', '-q')
+    write('src/a.txt', 'Task12: work\nTASK3: done\nno task\n\n')
+    write('node_modules/a.txt', 'Task4: dependency\n')
+    write('.gitignore', 'ignored.txt\n')
+    if (engine === 'git') write('ignored.txt', 'Task5: ignored\n')
+    const result = await searchContent(root, '^task\\d+(?=:)', { regex: true })
+    expect(result.engine).toBe(engine)
+    expect(result.files).toEqual([{ path: 'src/a.txt', matches: [
+      { line: 1, text: 'Task12: work', ranges: [[0, 6]] },
+      { line: 2, text: 'TASK3: done', ranges: [[0, 5]] }
+    ] }])
+    expect(summary(await searchContent(root, '^Task\\d+', { regex: true, caseSensitive: true }))).toEqual({ 'src/a.txt': ['1:Task12: work'] })
+    expect(summary(await searchContent(root, '^$', { regex: true }))).toEqual({ 'src/a.txt': ['4:'] })
+    await expect(searchContent(root, '[', { regex: true })).rejects.toThrow('올바른 정규식')
+  })
+
+  it('keeps regex highlights aligned when a long line is shortened', async () => {
+    write('min.js', `${'a'.repeat(2000)}task567${'b'.repeat(2000)}\n`)
+    const [match] = (await searchContent(root, 'task\\d+', { regex: true })).files[0].matches
+    expect(match.text.startsWith('…')).toBe(true)
+    expect(match.ranges.map(([start, end]) => match.text.slice(start, end))).toEqual(['task567'])
+  })
+
   it('refuses an empty, multi-line or overly long query and stops when cancelled', async () => {
     for (const query of ['', '   ', 'a\nb', 'x'.repeat(201), 42, null]) expect(() => checkContentQuery(query)).toThrow()
     expect(checkContentQuery('  spaced  ')).toBe('  spaced  ')

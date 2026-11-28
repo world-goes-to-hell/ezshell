@@ -78,7 +78,7 @@ async function runSpec(name, visible) {
   const sshd = sshDir ? await startSshd(sshDir) : null
   // E2E_APP: a packaged ezShell.exe (release/<version>/win-unpacked) instead of the build in out/
   const packaged = process.env.E2E_APP
-  const appEntry = { 'jdk-runtimes': 'e2e/support/jdkRuntimesApp.js', 'quick-capture': 'e2e/support/quickCaptureApp.js', 'browser-review': 'e2e/support/localAgentApp.js', 'local-agent-messages': 'e2e/support/localAgentApp.js', 'local-agent-hooks': 'e2e/support/localAgentApp.js', 'local-agent-pane-map': 'e2e/support/localAgentApp.js', 'local-agent-tab-close': 'e2e/support/localAgentApp.js', 'local-agent-usage': 'e2e/support/localAgentApp.js', 'local-work-overview': 'e2e/support/localAgentApp.js', 'local-agent-history': 'e2e/support/agentHistoryApp.js', 'ssh-agent-drop': 'e2e/support/agentHistoryApp.js', 'local-restore-agents': 'e2e/support/agentHistoryApp.js', 'local-agent-chat': 'e2e/support/agentChatApp.js', 'local-agent-pane-contrast': 'e2e/support/agentChatApp.js', 'local-agent-chat-scroll': 'e2e/support/agentChatApp.js', 'local-agent-chat-images': 'e2e/support/agentChatApp.js', 'local-agent-sleep': 'e2e/support/agentSleepApp.js' }[name] ?? 'out/main/index.js'
+  const appEntry = { 'jdk-runtimes': 'e2e/support/jdkRuntimesApp.js', 'quick-capture': 'e2e/support/quickCaptureApp.js', 'browser-review': 'e2e/support/localAgentApp.js', 'local-agent-messages': 'e2e/support/localAgentApp.js', 'local-agent-hooks': 'e2e/support/localAgentApp.js', 'local-agent-file-owners': 'e2e/support/localAgentApp.js', 'local-agent-pane-map': 'e2e/support/localAgentApp.js', 'local-agent-tab-close': 'e2e/support/localAgentApp.js', 'local-agent-usage': 'e2e/support/localAgentApp.js', 'local-work-overview': 'e2e/support/localAgentApp.js', 'local-agent-history': 'e2e/support/agentHistoryApp.js', 'ssh-agent-drop': 'e2e/support/agentHistoryApp.js', 'local-restore-agents': 'e2e/support/agentHistoryApp.js', 'local-agent-chat': 'e2e/support/agentChatApp.js', 'local-agent-pane-contrast': 'e2e/support/agentChatApp.js', 'local-agent-chat-scroll': 'e2e/support/agentChatApp.js', 'local-agent-chat-images': 'e2e/support/agentChatApp.js', 'local-agent-sleep': 'e2e/support/agentSleepApp.js' }[name] ?? 'out/main/index.js'
   const manualClaude = name === 'local-agent-chat-manual'
   const env = { ...process.env, EZSHELL_TEST_HIDDEN_WINDOWS: visible ? '0' : '1' }
   const chatFixture = manualClaude || name === 'app-chat-follow-theme' || name === 'local-agent-chat-timestamps'
@@ -91,7 +91,7 @@ async function runSpec(name, visible) {
     `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`, ...APP_FLAGS
   ], {
     cwd: ROOT, stdio: 'ignore',
-    env: manualClaude ? { ...env, EZSHELL_TEST_MANUAL_CLAUDE_CHAT: '1' } : env
+    env: manualClaude ? { ...env, EZSHELL_TEST_MANUAL_CLAUDE_CHAT: '1' } : name === 'local-agent-file-owners' ? { ...env, EZSHELL_TEST_GIT: '1' } : env
   })
   try {
     if (app && !(await waitUntil(portAnswers, 60000))) throw new Error('the app did not open its debugging port')

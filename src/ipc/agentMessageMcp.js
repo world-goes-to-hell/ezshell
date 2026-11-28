@@ -21,6 +21,7 @@ const instructions = [
   'After sending a request, continue other work or finish your turn.',
   notifiedReply,
   'Use check_sent to see whether the recipient has read and answered. A busy agent reads mail when its current task ends, so unread can be normal for a while.',
+  'Set urgent on send_message only when the recipient must pause its current task now (for example: stop editing shared files). An urgent message you receive comes first: pause your task, handle it, then continue.',
   'Before sending again, call inspect_agent: resend only if it is idle and the message is still unread, use escalate if it waits for a human decision, otherwise wait or tell the user.',
   'When several agents work together, set your role with set_role so others can find you.',
   'In your answers, write local file paths as inline code (for example `src/app.js:12`): the ezShell chat view turns them into links.'
@@ -196,8 +197,11 @@ async function main() {
   }, ({ role }) => call({ method: 'set-role', role }))
   server.registerTool('send_message', {
     description: 'Send a task or note to another ezShell agent by ID (list_agents shows IDs and roles). The recipient cannot see your conversation, so include the context it needs. After sending a task, continue other work or finish your turn. ' + (aside ? 'Check read_inbox for replies.' : 'ezShell notifies you when the result arrives.'),
-    inputSchema: { to: id, text, request_id: id.optional().describe('Reuse this ID when retrying the same send.') }
-  }, ({ to, text, request_id }) => call({ method: 'send', to, text, requestId: request_id }))
+    inputSchema: {
+      to: id, text, request_id: id.optional().describe('Reuse this ID when retrying the same send.'),
+      urgent: z.boolean().optional().describe('Only when the recipient must pause its current task and handle this first (for example: stop editing files now). The notice goes into its chat even while it works; otherwise a busy recipient reads messages when its task ends.')
+    }
+  }, ({ to, text, request_id, urgent }) => call({ method: 'send', to, text, requestId: request_id, ...(urgent ? { urgent: true } : {}) }))
   server.registerTool('read_inbox', {
     description: 'Read messages sent to you. Returns messages you have not answered yet by default. Reading marks them read for the sender. Reply with the result (or acknowledge) after handling.',
     inputSchema: { unread_only: z.boolean().default(true) }
@@ -219,7 +223,7 @@ async function main() {
   }, ({ message_id }) => call({ method: 'ack', id: message_id }))
 
   const runName = z.string().trim().min(1).max(40)
-  server.registerTool('run_list', { description: 'List the project presets and their status in your local shell’s worktree, including presets with agent control off.' },
+  server.registerTool('run_list', { description: 'List project presets and their status in your local shell’s worktree, including presets with agent control off. An unresponsive preset has unresponsive.since in epoch milliseconds.' },
     (_args, extra) => call({ method: 'run-list' }, extra?.signal))
   for (const action of ['start', 'restart', 'stop']) {
     server.registerTool(`run_${action}`, { description: `${action[0].toUpperCase() + action.slice(1)} a project preset by name in your worktree. Requires agentControl.`, inputSchema: { name: runName } },

@@ -164,6 +164,40 @@
   border: 0;
 }
 
+/* An HTML file as a page (HtmlPreview): white like a browser, whatever the chat theme */
+.chat-link-preview-html {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}
+
+/* Rendered or source, for HTML and markdown files */
+.chat-link-preview-views {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.chat-link-preview-views button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-link-preview-views button:hover { background: var(--bg-modifier-hover); color: var(--text-primary); }
+.chat-link-preview-views button[aria-pressed="true"] { border-color: var(--border); background: var(--bg-primary); color: var(--text-primary); font-weight: 600; }
+.chat-link-preview-views button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
 .chat-link-preview-body :is(.remote-file-editor, .markdown-preview) {
   flex: 1;
   min-height: 0;

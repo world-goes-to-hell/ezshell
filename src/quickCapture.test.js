@@ -260,6 +260,28 @@ describe('the quick screen capture', () => {
     expect(storeAttachment).toHaveBeenCalledOnce()
     expect(clipboard.write).not.toHaveBeenCalled()
   })
+  // docs/plan/2026-11-28-diagnostics.md: the request carries ezShell's state only when the capture shows ezShell
+  it.each([
+    ['overlaps an ezShell window', [{ x: -700, y: 500, width: 100, height: 100 }], true],
+    ['shows only other programs', [{ x: 0, y: 0, width: 800, height: 600 }, { x: -1280, y: 0, width: 200, height: 400 }], false],
+    ['has no ezShell window on screen', [], false]
+  ])('tells the sender whether the region %s', async (_name, rects, aboutApp) => {
+    const agent = { id: 'codex-2', kind: 'codex', shellId: 'local:2', cwd: path.resolve('service') }
+    const sendCapture = vi.fn(async () => ({ ok: true }))
+    const sendNewCapture = vi.fn(async () => ({ ok: true, agentId: 'codex-3' }))
+    const request = { action: 'send', agentId: agent.id, region: selection, comment: '' }
+    const { capture } = setup([{ action: 'targets' }, request], {
+      listAgents: () => [agent], storeAttachment: () => ({ file: 'a.png' }), sendCapture, appWindowRects: () => rects
+    })
+    expect(await capture.start()).toBe(true)
+    expect(sendCapture.mock.calls[0][4]).toBe(aboutApp)
+    const fresh = setup([{ action: 'send-new', kind: 'codex', region: selection, comment: '' }], {
+      storeAttachment: () => ({ file: 'a.png' }), sendNewCapture, appWindowRects: () => rects
+    })
+    expect(await fresh.capture.start()).toBe(true)
+    expect(sendNewCapture.mock.calls[0][6]).toBe(aboutApp)
+  })
+
   it('copies and sends the region with the marks drawn on it, and only a mark image of the chosen size', async () => {
     const marked = { toPNG: () => Buffer.from('marked png') }
     const nativeImage = {

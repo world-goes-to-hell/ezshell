@@ -1,0 +1,166 @@
+.workspace-runs,
+.workspace-run-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  font-size: 12px;
+}
+
+.workspace-runs {
+  --run-ok: var(--success, #268764);
+  --run-crash: var(--danger, #c64e4a);
+  --run-warning: var(--warning, #ac760e);
+}
+
+.workspace-runs-project,
+.workspace-runs-controls {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-runs-project,
+.workspace-runs-stats,
+.workspace-runs-commands,
+.workspace-runs-search,
+.workspace-runs-recovery {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.workspace-runs-project select { flex: 1; font-weight: 600; }
+
+.workspace-runs-total,
+.workspace-runs-matches { color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.workspace-runs-matches { margin-inline-start: auto; }
+.workspace-runs-controls { display: grid; gap: 5px; }
+.workspace-runs-commands { flex-wrap: wrap; }
+.workspace-runs-commands select { flex: 1 1 72px; }
+
+.workspace-runs select,
+.workspace-runs-search {
+  min-width: 0;
+  min-height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.workspace-runs select { max-width: 100%; padding-inline: 5px; text-overflow: ellipsis; }
+.workspace-runs-search { padding-inline: 6px 2px; color: var(--text-secondary); }
+.workspace-runs-search:focus-within { border-color: var(--accent); }
+.workspace-runs-search input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.workspace-runs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 1px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.workspace-runs button:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.workspace-runs button:disabled { opacity: .48; cursor: default; }
+.workspace-runs button:focus-visible,
+.workspace-runs select:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.workspace-runs-commands button,
+.workspace-runs-recovery button { border-color: var(--border); }
+.workspace-runs-stats button { font-variant-numeric: tabular-nums; }
+.workspace-runs-stats button[aria-pressed='true'] { background: var(--accent-alpha); border-color: var(--accent); color: var(--text-primary); }
+.workspace-runs-stats [data-run-status='running'] span { color: var(--run-ok); }
+.workspace-runs-stats [data-run-status='crashed'] span { color: var(--run-crash); }
+.workspace-runs-stats [data-run-status='unresponsive'] span { color: var(--run-warning); }
+
+.workspace-runs-progress { display: grid; gap: 4px; font-size: 11px; }
+.workspace-runs-progress [role='status'] { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.workspace-runs-progress[data-paused] [role='status'] { color: var(--run-crash); }
+.workspace-runs-progress progress { width: 100%; height: 5px; accent-color: var(--accent); }
+.workspace-runs-recovery { flex-wrap: wrap; }
+
+.workspace-runs-scroll { flex: 1; min-height: 0; overflow: auto; }
+.workspace-runs-table { width: 100%; table-layout: fixed; border-spacing: 0; }
+.workspace-runs-table .run-col-step { width: 29px; }
+.workspace-runs-table .run-col-status { width: 14px; }
+.workspace-runs-table .run-col-port { width: 46px; }
+.workspace-runs-table .run-col-branch { width: 19%; }
+.workspace-runs-table .run-col-actions { width: 49px; }
+.workspace-runs-table th,
+.workspace-runs-table td { padding: 3px 4px; text-align: start; }
+
+.workspace-runs-table thead { position: sticky; top: 0; z-index: 1; }
+.workspace-runs-table thead th {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.workspace-runs-group th { padding: 2px 5px; background: var(--bg-hover); border-bottom: 1px solid var(--border); }
+.workspace-runs-group[data-current] th { box-shadow: inset 2px 0 0 var(--accent); background: var(--accent-alpha); }
+.workspace-runs-group th > div { display: flex; align-items: center; gap: 5px; min-height: 22px; }
+.workspace-runs-group th small { margin-inline-end: auto; color: var(--text-secondary); font-weight: 400; }
+.workspace-runs-group button { font-size: 11px; }
+.workspace-runs-row td { border-bottom: 1px solid var(--border); }
+.workspace-runs-row:hover td,
+.workspace-runs-row[data-selected] td { background: var(--accent-alpha); }
+.workspace-runs-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.workspace-runs-row[data-run-status='crashed'] { --run-row-color: var(--run-crash); }
+.workspace-runs-row[data-run-status='unresponsive'] { --run-row-color: var(--run-warning); }
+.workspace-runs-row[data-run-status='running'] { --run-row-color: var(--run-ok); }
+.workspace-runs-row[data-run-status='starting'],
+.workspace-runs-row[data-run-status='preparing'] { --run-row-color: var(--accent); }
+.run-state-dot {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--run-row-color, var(--text-muted));
+}
+
+.run-cell-step,
+.run-cell-port,
+.run-cell-branch {
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.workspace-runs-table .run-cell-step { text-align: center; }
+.run-cell-port,
+.run-cell-branch { font-family: var(--font-mono); }
+.workspace-runs .run-cell-port button { min-height: 19px; padding-inline: 0; color: var(--accent); }
+.run-cell-branch[data-different] { color: var(--run-warning); }
+.run-cell-name { min-width: 0; }
+.run-cell-name > span { display: flex; align-items: center; gap: 3px; }
+.run-cell-name > span > svg { flex-shrink: 0; color: var(--run-warning); }
+.run-cell-name strong,
+.run-cell-name small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-cell-name strong { font-weight: 550; }
+.run-cell-name small { color: var(--run-row-color, var(--text-secondary)); font-size: 10px; }
+.workspace-runs-table td:last-child { padding-inline: 1px; }
+.run-cell-actions { display: flex; align-items: center; justify-content: end; gap: 1px; }

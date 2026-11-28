@@ -135,6 +135,52 @@ async function findPage(match, timeout) {
       lineFile ? await lineFile.page.js(`document.querySelector('.cm-activeLine')?.textContent ?? 'no active line'`) : 'no window')
     if (lineFile) await closeFile(lineFile)
 
+    await js('window.focus()')
+    await focusTerminal()
+    await shiftTap()
+    await shiftTap()
+    const regex = `document.querySelector('.project-search-regex')`
+    await until(`!!${regex} && (${selectedMode}).includes('파일')`)
+    await setQuery('')
+    await js(`${regex}.click()`)
+    check('file search offers a regex example and keeps focus in the query', await until(`
+      ${regex}?.getAttribute('aria-pressed') === 'true' && document.activeElement === ${box} &&
+      document.querySelector('.project-search-example code')?.textContent === ${JSON.stringify('\\.tsx$')}
+    `))
+    await setQuery('^src/app/Order.*\\.java$')
+    check('the filename regex matches an entire relative path and highlights both parts', await until(`
+      ${fileRow}?.querySelector('.project-search-name mark')?.textContent === 'OrderService.java' &&
+      ${fileRow}.querySelector('.project-search-folder mark')?.textContent === 'src/app'
+    `, 10000))
+    await driver.shot('project-search-regex-file')
+    await key('rawKeyDown', 'Escape', 'Escape', 27)
+    await until(`!${dialog}`)
+
+    await focusTerminal()
+    await ctrlShiftF()
+    check('the content shortcut keeps the regex mode and starts in the content tab', await until(`
+      (${selectedMode}).includes('내용') && ${regex}?.getAttribute('aria-pressed') === 'true'
+    `))
+    await setQuery('[')
+    check('an unfinished regex shows an inline error and clears stale results', await until(`
+      ${box}?.getAttribute('aria-invalid') === 'true' && (${results}).includes('올바른 정규식') &&
+      !document.querySelector('.project-search-row.is-line')
+    `))
+    await setQuery('needle-(?:in-project|elsewhere)')
+    check('content regex highlights matched text and keeps git ignore rules', await until(`
+      ${box}?.getAttribute('aria-invalid') === null && document.querySelector('.project-search-row.is-line mark')?.textContent === 'needle-in-project' &&
+      (${results}).includes('250') && !(${results}).includes('ignored.log') && !(${results}).includes('index.js')
+    `, 10000))
+    await driver.shot('project-search-regex-content')
+    await key('rawKeyDown', 'r', 'KeyR', 82, 1)
+    await key('keyUp', 'r', 'KeyR', 82)
+    check('Alt+R switches back to literal search without replacing the query', await until(`
+      ${regex}?.getAttribute('aria-pressed') === 'false' && ${box}?.value === 'needle-(?:in-project|elsewhere)' &&
+      (${results}).includes('찾은 것이 없습니다')
+    `))
+    await key('rawKeyDown', 'Escape', 'Escape', 27)
+    await until(`!${dialog}`)
+
     // Without a local tab in front there is no project
     await js(`document.querySelectorAll('.terminal-tab .tab-close').forEach(button => button.click())`)
     await until(`!document.querySelector('.local-terminal-pane')`, 5000)

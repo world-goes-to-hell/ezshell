@@ -654,3 +654,129 @@
 .is-tree .workspace-git-file-name { flex: 0 1 auto; min-width: 0; font-weight: 500; }
 .is-tree .workspace-git-mark { margin-inline-start: 4px; }
 .is-tree .workspace-git-mark[data-staged] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 60%, transparent); }
+
+/* Which agent changed an uncommitted file (docs/plan/2026-11-28-agent-file-owners.md): its role, and the overlap
+   when another agent changed it too */
+.workspace-git-owners {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+.workspace-git-owner {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-git-owner[data-kind="codex"] { background: color-mix(in srgb, var(--text-secondary) 16%, transparent); }
+.workspace-git-overlap {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+  color: var(--warning-text, var(--warning));
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.workspace-git-owners + .workspace-git-lines { margin-inline-start: auto; }
+
+/* The commit box's "에이전트로 고르기" */
+.workspace-commit-agents {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.workspace-commit-agents:hover:not(:disabled),
+.workspace-commit-agents[data-state="open"] { background: var(--bg-modifier-hover); color: var(--text-primary); }
+.workspace-commit-agents:disabled { opacity: .6; cursor: default; }
+.workspace-commit-agent-menu { min-width: 220px; }
+.workspace-commit-agent-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-commit-agent-count { display: inline-flex; flex: none; align-items: center; gap: 4px; margin-left: 12px; color: var(--text-muted); font-size: 11px; }
+
+/* Freezing the repository (RepoFreeze): a button, its small form, and the band while frozen */
+.workspace-freeze-open {
+  display: inline-flex;
+  align-self: flex-end;
+  align-items: center;
+  gap: 4px;
+  margin: 6px 8px 0;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.workspace-freeze-open:hover { background: var(--bg-modifier-hover); color: var(--text-primary); }
+.workspace-freeze-form {
+  display: grid;
+  gap: 6px;
+  margin: 8px 8px 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-size: 12px;
+}
+.workspace-freeze-note { margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.4; }
+.workspace-freeze-field { display: grid; gap: 3px; color: var(--text-secondary); }
+.workspace-freeze-field :is(select, input) {
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+}
+.workspace-freeze-error { margin: 0; color: var(--error-text, var(--error)); font-size: 11px; }
+.workspace-freeze-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.workspace-freeze-actions button { padding: 3px 10px; font-size: 12px; }
+.workspace-freeze-band {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 8px 0;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--text-link) 45%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text-link) 12%, var(--bg-primary));
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.workspace-freeze-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-freeze-thaw {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.workspace-freeze-thaw:hover:not(:disabled) { background: var(--bg-modifier-hover); }

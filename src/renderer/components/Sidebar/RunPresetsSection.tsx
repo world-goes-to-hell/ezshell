@@ -1,11 +1,11 @@
 // The run presets of a local project on its sidebar card (docs/plan/2026-11-25-local-project-run.md,
 // mockups/dev-run-presets.html scenes 1·3·4·5·8): nothing when there are none (the worktree row has the add
-// button), otherwise a head with 모두 실행 / 모두 중지 and a row per preset with its state and buttons.
+// button). Large projects show the summary from docs/plan/2026-11-28-run-panel.md.
 import { useEffect, useState, type MouseEvent } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
-  RiAddLine, RiDeleteBinLine, RiEditLine, RiExternalLinkLine, RiFileList3Line, RiFlashlightLine,
-  RiLightbulbLine, RiMoreFill, RiPlayFill, RiRefreshLine, RiStethoscopeLine, RiStopFill, RiTerminalLine, RiErrorWarningFill
+  RiAddLine, RiExternalLinkLine, RiFileList3Line, RiFlashlightLine,
+  RiLightbulbLine, RiMoreFill, RiPlayFill, RiRefreshLine, RiStarFill, RiStopFill, RiTerminalLine, RiErrorWarningFill
 } from 'react-icons/ri'
 import { SiApachetomcat, SiNodedotjs, SiSpringboot, SiVite, SiVuedotjs } from 'react-icons/si'
 import { FaJava } from 'react-icons/fa'
@@ -14,19 +14,25 @@ import {
   type RunButton, type RunPreset, type RunState
 } from '../../lib/runPresets'
 import {
-  fetchRunErrors, knownPresetCount, loadRunPresets, reloadProjectPresets, revealRunShell, runPresetAction, runPresetApi, selectWorktree,
-  useRunPresets
+  fetchRunErrors, knownPresetCount, loadRunPresets, revealRunShell, runPresetAction, runPresetApi, selectWorktree,
+  useRunPresets, type WorktreeRuns
 } from '../../stores/runPresetStore'
-import { confirmDialog } from '../../stores/confirmStore'
 import { pathKey } from '../../lib/localWorkspaceTree'
-import { toast } from '../../stores/toastStore'
 import { RunPresetDialog } from './RunPresetDialog'
 import { NestedRepositoryRunChips } from './NestedRepositories'
 import { RunStartOrderDialog } from './RunStartOrderDialog'
 import { RunBundlePicker } from './RunBundlePicker'
-import type { RunStartProgress } from '../../types'
+import { RunBundleDialog } from './RunBundleDialog'
+import { RunSendDialog } from './RunCrashNotices'
+import type { RunBundle, RunStartProgress } from '../../types'
 import { RunSuggestionsDialog } from './RunSuggestions'
 import { cleanProposals, proposalSummary } from '../../lib/runSuggestions'
+import { openRunPanel, runPresetActions, runProjectActions, runStageActions, type RunActionItem } from '../../lib/runPresetActions'
+import { writeBundleChoice } from '../../lib/runBundles'
+import { isUnresponsiveRun, sidebarRunSummary } from '../../lib/runSidebarSummary'
+import { toggleRunPresetPin, useRunSummary } from '../../stores/runSummaryStore'
+import { RunSummaryHead } from './RunSummaryHead'
+import { RunMenuActions, RunPresetContextMenu, type RunContextGroup } from './RunPresetContextMenu'
 import './RunPresets.css'
 
 const KIND_ICONS = { spring: SiSpringboot, vue: SiVuedotjs, vite: SiVite, node: SiNodedotjs, java: FaJava, tomcat: SiApachetomcat, custom: RiTerminalLine }
@@ -37,6 +43,25 @@ const BUTTONS: Record<RunButton, { label: string; Icon: typeof RiPlayFill }> = {
   stop: { label: '중지', Icon: RiStopFill },
   open: { label: '브라우저로 열기', Icon: RiExternalLinkLine },
   log: { label: '로그 보기', Icon: RiFileList3Line }
+}
+
+const NO_PINS: readonly string[] = []
+const ROW_MENU_ACTIONS = new Set(['edit', 'diagnose', 'pin', 'delete'])
+const BUNDLE_ACTIONS = new Set(['startBundle', 'stopBundle', 'editBundle', 'deleteBundle'])
+
+function presetMenuGroups(runs: WorktreeRuns): RunContextGroup[] {
+  const byId = new Map(runs.presets.map(preset => [preset.id, preset]))
+  const groups = (runs.startOrder?.stages ?? []).flatMap(({ ids }, index) => {
+    const presets = ids.flatMap(id => {
+      const preset = byId.get(id)
+      if (!preset) return []
+      byId.delete(id)
+      return [preset]
+    })
+    return presets.length ? [{ label: `${index + 1}단계`, presets, actions: runStageActions(runs, ids) }] : []
+  })
+  if (byId.size > 0) groups.push({ label: groups.length ? '기동 순서에서 제외' : '실행 구성', presets: [...byId.values()], actions: [] })
+  return groups
 }
 
 /** Seconds tick only while a row shows a count (starting, an agent's recent action) */
@@ -81,7 +106,13 @@ export function RunPresetsSection({ folder, projectName, roots }: { folder: stri
   const failed = useRunPresets(state => !!state.failed[pathKey(folder)])
   const [editing, setEditing] = useState<RunPreset | 'new' | null>(null)
   const [ordering, setOrdering] = useState(false)
+  const [diagnosing, setDiagnosing] = useState<RunPreset | null>(null)
+  const [sending, setSending] = useState<RunPreset | null>(null)
+  const [bundleEditing, setBundleEditing] = useState<RunBundle | 'new' | null>(null)
+  const [context, setContext] = useState<{ x: number; y: number; presetId?: string; focusOnEscape?: HTMLElement } | null>(null)
   const [seed, setSeed] = useState<RunPresetSeed | undefined>(undefined)
+  const threshold = useRunSummary(state => state.threshold)
+  const pins = useRunSummary(state => state.pins[project?.projectKey ?? '']) ?? NO_PINS
   const hasApi = typeof runPresetApi().runPresetsList === 'function'
 
   const rootsKey = roots.join('|')
@@ -100,9 +131,12 @@ export function RunPresetsSection({ folder, projectName, roots }: { folder: stri
 
   const presets = project?.presets ?? []
   const states = project?.states ?? {}
+  const isSummary = presets.length > threshold
+  const summary = sidebarRunSummary(presets, states, pins)
+  const visiblePresets = isSummary ? summary.visible : presets
   const progress = project?.batch
   const batch = progress?.status === 'cancelled' ? null : progress
-  const ticking = batch?.status === 'waiting' || presets.some(preset => {
+  const ticking = batch?.status === 'waiting' || visiblePresets.some(preset => {
     const state = states[preset.id]
     return state?.status === 'starting' || state?.status === 'preparing' || (!!state?.lastAction && state.lastAction.by !== 'user' && Date.now() - state.lastAction.at < AGENT_ACTION_MS)
       || reloadTicks(state, Date.now())
@@ -115,20 +149,47 @@ export function RunPresetsSection({ folder, projectName, roots }: { folder: stri
     onClose={() => { setEditing(null); setSeed(undefined) }} />
   if (!project) {
     const count = knownPresetCount(folder)
-    return failed ? dialog || null : count > 0 ? <RunPresetsPlaceholder count={count} /> : dialog || null
+    return failed ? dialog || null : count > 0 ? <RunPresetsPlaceholder count={count > threshold ? 0 : count} /> : dialog || null
   }
   // None yet: nothing on the card, only the dialog when the row's add button opened it
   if (presets.length === 0) return dialog || null
   const head = runHead(presets, states)
+  const add = () => { setSeed(undefined); setEditing('new') }
+  const actionsFor = (preset: RunPreset) => runPresetActions({ runs: project, preset, pinned: pins.includes(preset.id),
+    onTogglePin: () => toggleRunPresetPin(project.projectKey, preset.id), onEdit: () => setEditing(preset),
+    onDiagnose: () => setDiagnosing(preset), onSend: () => setSending(preset) })
+  const projectActions = (bundle?: RunBundle) => runProjectActions({ runs: project, bundle, onAdd: add,
+    onOrder: () => setOrdering(true), onNewBundle: () => setBundleEditing('new'),
+    onEditBundle: () => { if (bundle) setBundleEditing(bundle) } })
+  const targetPreset = context && presets.find(preset => preset.id === context.presetId)
+  const showContext = (target: Element, x: number, y: number, focusOnEscape?: HTMLElement) => {
+    const presetId = target.closest<HTMLElement>('.run-preset')?.dataset.runPreset
+    setContext({ x, y, presetId, focusOnEscape })
+  }
 
   return (
-    <div className="run-presets" data-run-worktree={folder}>
-        <div className="run-presets-head">
+    <div className="run-presets" data-run-worktree={folder} data-run-summary={isSummary || undefined}
+      onContextMenu={event => {
+        if (!(event.target instanceof Element) || !event.currentTarget.contains(event.target)) return
+        event.preventDefault()
+        event.stopPropagation()
+        showContext(event.target, event.clientX, event.clientY)
+      }}
+      onKeyDown={event => {
+        if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+        if (!(event.target instanceof HTMLElement) || !event.currentTarget.contains(event.target)) return
+        event.preventDefault()
+        event.stopPropagation()
+        const box = event.target.getBoundingClientRect()
+        showContext(event.target, box.left, box.bottom, event.target)
+      }}>
+        {isSummary ? <RunSummaryHead count={presets.length} counts={summary.counts} onOpen={status => openRunPanel(folder, { status })} />
+          : <div className="run-presets-head">
           <span>{batch ? `실행 · ${batch.index + 1}/${batch.total}단계` : head.label}</span>
           {batch
             ? <button type="button" onClick={() => void runPresetAction(folder, 'stopAll')}><RiStopFill size={11} aria-hidden="true" /> 모두 중지</button>
             : <RunBundlePicker folder={folder} runs={project} />}
-          <button type="button" className="run-presets-head-add" onClick={() => { setSeed(undefined); setEditing('new') }} title="실행 구성 추가" aria-label="실행 구성 추가">
+          <button type="button" className="run-presets-head-add" onClick={add} title="실행 구성 추가" aria-label="실행 구성 추가">
             <RiAddLine size={12} aria-hidden="true" />
           </button>
           {project.startOrder && <DropdownMenu.Root modal={false}>
@@ -141,20 +202,32 @@ export function RunPresetsSection({ folder, projectName, roots }: { folder: stri
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>}
-        </div>
+        </div>}
         {batch && <progress className="run-start-progress" aria-label="기동 순서 진행" max={batch.total} value={batch.index + 1} />}
         {(progress?.status === 'paused' || progress?.status === 'cancelled') &&
           <StartOrderRecovery folder={folder} batch={progress} presets={presets} states={states} />}
-        <ul className="run-presets-list">
-          {presets.map(preset => (
+        {visiblePresets.length > 0 && <ul className="run-presets-list">
+          {visiblePresets.map(preset => (
             <RunPresetRow key={preset.id} folder={folder} preset={preset} state={states[preset.id] ?? IDLE_STATE} now={now}
               step={batch?.stages.findIndex(ids => ids.includes(preset.id))} batch={batch}
-              onEdit={() => setEditing(preset)} />
+              pinned={pins.includes(preset.id)} actions={actionsFor(preset)} showAllActions={isSummary}
+              onDiagnose={() => setDiagnosing(preset)} />
           ))}
-        </ul>
+        </ul>}
+      {context && <RunPresetContextMenu key={`${context.presetId ?? ''}:${context.x}:${context.y}`} position={context}
+        actions={targetPreset ? actionsFor(targetPreset) : projectActions().filter(item => !BUNDLE_ACTIONS.has(item.id))}
+        actionsFor={actionsFor} groups={targetPreset ? [] : presetMenuGroups(project)}
+        bundles={targetPreset ? [] : project.bundles.map(bundle => ({ id: bundle.id, label: bundle.name,
+          actions: projectActions(bundle).filter(item => BUNDLE_ACTIONS.has(item.id)) }))}
+        onClose={() => setContext(null)} />}
       {dialog}
       {ordering && project.startOrder && <RunStartOrderDialog folder={folder} projectName={projectName} presets={presets}
         order={project.startOrder} onClose={() => setOrdering(false)} />}
+      {diagnosing && <RunSuggestionsDialog folder={folder} presetId={diagnosing.id} presetName={diagnosing.name}
+        proposals={cleanProposals(states[diagnosing.id]?.proposals)} onClose={() => setDiagnosing(null)} />}
+      {sending && <RunSendDialog notice={{ folder, projectKey: project.projectKey }} preset={sending} onClose={() => setSending(null)} />}
+      {bundleEditing && <RunBundleDialog folder={folder} runs={project} bundle={bundleEditing === 'new' ? null : bundleEditing}
+        onClose={() => setBundleEditing(null)} onSaved={saved => { writeBundleChoice(project.projectKey, saved); setBundleEditing(null) }} />}
     </div>
   )
 }
@@ -167,9 +240,9 @@ function RunPresetsPlaceholder({ count }: { count: number }) {
   return (
     <div className="run-presets run-presets-placeholder" aria-hidden="true">
       <div className="run-presets-skeleton" data-kind="head" />
-      <div className="run-presets-list">
+      {count > 0 && <div className="run-presets-list">
         {Array.from({ length: count }, (_, index) => <div key={index} className="run-presets-skeleton" data-kind="row" />)}
-      </div>
+      </div>}
     </div>
   )
 }
@@ -198,15 +271,15 @@ function StartOrderRecovery({ folder, batch, presets, states }: {
   </div>
 }
 
-function RunPresetRow({ folder, preset, state, now, step, batch, onEdit }: {
-  folder: string; preset: RunPreset; state: RunState; now: number; step?: number; batch?: RunStartProgress | null; onEdit: () => void
+function RunPresetRow({ folder, preset, state, now, step, batch, pinned, actions, showAllActions, onDiagnose }: {
+  folder: string; preset: RunPreset; state: RunState; now: number; step?: number; batch?: RunStartProgress | null
+  pinned: boolean; actions: RunActionItem[]; showAllActions: boolean; onDiagnose: () => void
 }) {
   const kind = runKind(preset)
   const KindIcon = KIND_ICONS[kind]
   const pills = runPills(state, now)
   const buttons = runButtons(state)
   const note = agentActionNote(state.lastAction, now)
-  const [diagnosing, setDiagnosing] = useState(false)
   const reload = reloadChip(state, now)
   // Agents' proposals waiting for the user (newest first): a line under the row, reviewed in the diagnosis
   const proposals = cleanProposals(state.proposals)
@@ -217,25 +290,10 @@ function RunPresetRow({ folder, preset, state, now, step, batch, onEdit }: {
     if (toFirstError) errorLine = (await fetchRunErrors(folder, preset.id))[0]?.lines.find(line => line.trim())
     revealRunShell({ shellId: state.shellId, label: preset.name, errorLine })
   }
-  const open = async () => {
-    if (!state.address) return
-    try {
-      const result = await window.electronAPI.browserReviewOpenLink(state.address, 'internal', { folder })
-      if (!result.success) toast.error('브라우저 열기', result.error)
-    } catch { toast.error('브라우저를 열지 못했습니다') }
-  }
   const press = (button: RunButton) => (event: MouseEvent) => {
     event.stopPropagation()
-    if (button === 'log') void showLog()
-    else if (button === 'open') void open()
-    else void runPresetAction(folder, button, preset.id)
-  }
-  const remove = async () => {
-    const yes = await confirmDialog({ title: '실행 구성 삭제', message: `${preset.name} 구성을 지웁니다. 실행 중이면 먼저 중지해 주세요.`, confirmLabel: '삭제', danger: true })
-    if (!yes) return
-    const result = await runPresetApi().runPresetsDelete?.(folder, preset.id).catch(() => undefined)
-    if (!result || result.ok === false) toast.error('구성을 지우지 못했습니다', result?.error)
-    void reloadProjectPresets(folder)
+    const action = actions.find(item => item.id === button)
+    if (action?.enabled) void action.run()
   }
   const waiting = batch?.status === 'waiting' && batch.ids.includes(preset.id) ? batch : null
   const seconds = waiting ? Math.max(0, Math.floor((now - waiting.since) / 1000)) : 0
@@ -243,12 +301,15 @@ function RunPresetRow({ folder, preset, state, now, step, batch, onEdit }: {
   const queued = batch && step !== undefined && step > batch.index
 
   const crashed = state.status === 'crashed'
+  const unresponsive = isUnresponsiveRun(state)
   const failureReason = crashed ? state.failureReason : undefined
   return (
     <li className="run-preset" data-run-preset={preset.id} data-status={state.status} data-agent-acted={note ? 'true' : undefined}
+      data-unresponsive={unresponsive || undefined} data-pinned={pinned || undefined}
       onClick={() => { if (state.shellId) void showLog() }}
       title={state.shellId ? `${preset.name} · 로그 보기` : preset.name} data-reload={state.reload && reload ? state.reload.status : undefined}>
       <div className="run-preset-main">
+        {pinned && <RiStarFill className="run-preset-star" role="img" aria-label="고정한 실행 구성" size={11} />}
         <span className="run-preset-kind" data-kind={kind} aria-hidden="true"><KindIcon size={11} /></span>
         <span className="run-preset-name">{preset.name}</span>
         {buttons.map(button => {
@@ -272,14 +333,7 @@ function RunPresetRow({ folder, preset, state, now, step, batch, onEdit }: {
             {/* A portal too: a picked item's click must not reach the row (which opens the log) */}
             <DropdownMenu.Content className="terminal-menu sidebar-popover" side="bottom" align="end" sideOffset={4} collisionPadding={8}
               onClick={event => event.stopPropagation()}>
-              <DropdownMenu.Item className="terminal-menu-item" onSelect={onEdit}><RiEditLine size={15} aria-hidden="true" /> 수정</DropdownMenu.Item>
-              {typeof window.electronAPI.runPresetDiagnosis === 'function' && (
-                <DropdownMenu.Item className="terminal-menu-item" onSelect={() => setDiagnosing(true)}>
-                  <RiStethoscopeLine size={15} aria-hidden="true" /> 실행 진단
-                </DropdownMenu.Item>
-              )}
-              <DropdownMenu.Separator className="terminal-menu-separator" />
-              <DropdownMenu.Item className="terminal-menu-item run-presets-danger" onSelect={() => void remove()}><RiDeleteBinLine size={15} aria-hidden="true" /> 삭제</DropdownMenu.Item>
+              <RunMenuActions actions={showAllActions ? actions : actions.filter(item => ROW_MENU_ACTIONS.has(item.id))} />
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
@@ -287,6 +341,7 @@ function RunPresetRow({ folder, preset, state, now, step, batch, onEdit }: {
       <div className="run-preset-details">
         {step !== undefined && step >= 0 && <span className="run-start-step" aria-label={`${step + 1}단계`}>{step + 1}</span>}
         <NestedRepositoryRunChips root={folder} relative={preset.relative} runningSince={state.status === 'running' && (!preset.hotReload || preset.hotReload === 'off') ? state.startedAt : undefined} />
+        {unresponsive && <span className="run-preset-pill" data-kind="unresponsive">응답 없음</span>}
         {note
           ? <span className="run-preset-note" role="status">{note}</span>
           : (state.status === 'idle' || state.status === 'stopped') && <span className="run-preset-folder">{runFolderLabel(preset.relative)}</span>}
@@ -308,7 +363,7 @@ function RunPresetRow({ folder, preset, state, now, step, batch, onEdit }: {
       {failureReason && (typeof window.electronAPI.runPresetDiagnosis === 'function'
         ? <button type="button" className="run-preset-failure-line" title={failureReason}
             aria-label={`${failureReason} 실행 진단 보기`}
-            onClick={event => { event.stopPropagation(); setDiagnosing(true) }}>
+            onClick={event => { event.stopPropagation(); onDiagnose() }}>
             <RiErrorWarningFill size={11} aria-hidden="true" />
             <span>{failureReason}</span>
           </button>
@@ -318,12 +373,6 @@ function RunPresetRow({ folder, preset, state, now, step, batch, onEdit }: {
           </div>)}
       {(waitingText || queued) && <div className="run-start-wait" data-wait={waiting?.gate.kind ?? 'queued'}
         title={waiting && 'value' in waiting.gate ? waiting.gate.value : undefined}>{waitingText || '앞 단계 대기'}</div>}
-      {/* The dialog is a portal, but its clicks still bubble through React to the row (which opens the log) */}
-      {diagnosing && (
-        <span hidden onClick={event => event.stopPropagation()}>
-          <RunSuggestionsDialog folder={folder} presetId={preset.id} presetName={preset.name} proposals={proposals} onClose={() => setDiagnosing(false)} />
-        </span>
-      )}
       {/* Keep the hot reload line from watching to the result so the row does not jump at each save. */}
       {reload && (
         <div className="run-preset-reload-line">
@@ -341,7 +390,7 @@ function RunPresetRow({ folder, preset, state, now, step, batch, onEdit }: {
             <strong>{proposals[0].by}</strong> 제안 · {proposalSummary(proposals[0])}{proposals.length > 1 ? ` 외 ${proposals.length - 1}개` : ''}
           </span>
           <button type="button" className="run-preset-proposal-btn" title="진단 창에서 제안을 보고 직접 적용하거나 버립니다"
-            onClick={event => { event.stopPropagation(); setDiagnosing(true) }}>보기</button>
+            onClick={event => { event.stopPropagation(); onDiagnose() }}>보기</button>
         </div>
       )}
     </li>

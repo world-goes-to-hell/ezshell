@@ -11,9 +11,17 @@ export interface WorkspaceReveal {
   fallback: () => void
 }
 
+export type RunPanelStatus = 'running' | 'crashed' | 'unresponsive'
+export interface RunPanelTarget {
+  folder: string
+  presetId?: string
+  status?: RunPanelStatus
+}
+
 interface WorkspacePanelState extends WorkspacePanelPrefs {
   section: WorkspaceSection
   reveal: WorkspaceReveal | null
+  runTarget: RunPanelTarget | null
   revealFolder: (request: Omit<WorkspaceReveal, 'seq' | 'at'>) => void
   /** Clears the request, only if it is still that one */
   finishReveal: (seq: number) => void
@@ -45,6 +53,7 @@ export const useWorkspacePanelStore = create<WorkspacePanelState>((set, get) => 
   ...load(),
   section: 'history',
   reveal: null,
+  runTarget: null,
   revealFolder: (request) => {
     set({ isOpen: true, section: 'files', reveal: { ...request, seq: (get().reveal?.seq ?? 0) + 1, at: Date.now() } })
     save({ isOpen: true, width: get().width })
@@ -71,3 +80,8 @@ export const useWorkspacePanelStore = create<WorkspacePanelState>((set, get) => 
   },
   setSection: (section) => set({ section })
 }))
+
+export function openRunPanel(folder: string, options?: Omit<RunPanelTarget, 'folder'>) {
+  useWorkspacePanelStore.setState({ runTarget: { folder, ...options } })
+  useWorkspacePanelStore.getState().open('run')
+}

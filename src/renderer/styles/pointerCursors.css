@@ -17,7 +17,7 @@
   .agent-chat-log, .agent-chat-subagent-preview, .agent-chat-approval-detail, .agent-chat-quote-preview,
   .chat-link-preview-path, .agent-ask-question, .agent-ask-preview, .agent-ask-review dd, .agent-ask-summary dd,
   .pinned-reply-body, .markdown-body, .connection-test-detail, .remote-access-address code,
-  .workspace-commit-meta code, .workspace-diff-text, .transfer-error-message,
+  .workspace-commit-meta code, .workspace-diff-text, .transfer-error-message, .diagnostics-preview pre,
   .cm-editor .cm-content
 ) {
   cursor: var(--ez-cursor-text, text);

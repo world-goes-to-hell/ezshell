@@ -94,7 +94,7 @@ function writeAgentFile(file, data) {
   }
 }
 
-function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onInboxRead, bindLocalAgent, reportLocalAntigravity, onAgentHook,
+function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onUrgentMessage = () => {}, onInboxRead, bindLocalAgent, reportLocalAntigravity, onAgentHook,
   inspectLocalAgent, onEscalate, runPresetTool, agentRuntime, handoffEndpoint,
   bridgeFile, roleFile, codexHookTrustFile, platform = process.platform, home = homedir(), now = Date.now }) {
   const instanceBridgeFile = bridgeFile ? `${bridgeFile}.${process.pid}` : null
@@ -418,12 +418,15 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     if (replyStatus !== undefined && (replyTo === undefined || !['completed', 'deferred'].includes(replyStatus))) {
       throw new Error('답장 상태를 확인해 주세요.')
     }
+    if (request.urgent !== undefined && typeof request.urgent !== 'boolean') throw new Error('긴급 표시를 확인해 주세요.')
+    const urgent = request.urgent === true
     const original = replyTo === undefined ? null : messages.find(item => item.id === replyTo && item.to === from)
     if (replyTo !== undefined && !original) throw new Error('답장할 메시지를 찾을 수 없습니다.')
     const to = original ? original.from : request.to
     const existing = requestId && messages.find(item => item.from === from && item.requestId === requestId)
     if (existing) {
-      if (existing.to !== to || existing.text !== text || existing.replyTo !== replyTo || existing.replyStatus !== replyStatus) {
+      if (existing.to !== to || existing.text !== text || existing.replyTo !== replyTo || existing.replyStatus !== replyStatus ||
+          Boolean(existing.urgent) !== urgent) {
         throw new Error('같은 요청 ID에 다른 내용이 있습니다.')
       }
       return { id: existing.id }
@@ -434,6 +437,7 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     if (messages.length >= MAX_MESSAGES) throw new Error('이번 실행의 메시지 한도에 도달했습니다.')
     const message = { id: randomUUID(), from, to, text, replyTo, requestId, sentAt: Date.now(), read: false, seenAt: null }
     if (replyStatus) message.replyStatus = replyStatus
+    if (urgent) message.urgent = true
     if (from === USER && request.reviewRequest) message.reviewRequest = request.reviewRequest
     messages.push(message)
     if (original) original.read = true
@@ -445,7 +449,11 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
     }
     changed({ id: message.id, from, to, toShell: agents.get(to)?.shellId })
     const recipient = agents.get(to)?.shellId
-    if (recipient && !deliveredToWaiter && isConnected(to)) onInboxChanged(recipient)
+    if (recipient && !deliveredToWaiter && isConnected(to)) {
+      onInboxChanged(recipient)
+      // Urgent: also into the recipient's chat while it works (a sleeping agent wakes on the normal notice)
+      if (urgent && !agents.get(to)?.sleeping) onUrgentMessage({ shellId: recipient, agentId: to, messageId: message.id })
+    }
     return { id: message.id }
   }
 
@@ -1362,6 +1370,11 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onIn
       return deliver(USER, request, agent)
     },
     setUserRole: (id, role) => setRole(id, role, 'user'),
+    /** An agent's kind, working folder and role now (src/ipc/agentFileOwners.js), or null */
+    agentInfo(id) {
+      const agent = agents.get(id)
+      return agent ? { kind: agent.kind, cwd: agent.cwd, ...(activeRole(id).role ? { role: activeRole(id).role } : {}) } : null
+    },
     savedRoleFor,
     hookEventsOf: id => (hookEvents.get(id) ?? []).map(event => ({ ...event })),
     hookSessionOf: id => hookSessions.get(id) ?? null,

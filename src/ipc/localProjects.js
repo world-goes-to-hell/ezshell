@@ -290,7 +290,7 @@ function requireSearchQuery(value) {
  * `roots` (src/localFiles/roots.js) checks the folders the workspace panel reads, `git` is
  * src/localFiles/git.js. Requests name a root and a path relative to it.
  */
-function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = null, git: localGit = null, gitCommit = null,
+function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = null, git: localGit = null, gitCommit = null, fileOwners = null,
   openDevelopmentTask, changeDevelopmentTask, openFolder = null, confirmNestedGit, nestedRepositoryTrustFile, confirmNestedRepositoryTrust }) {
   registerNestedRepositoryIpc({ ipcMain, fromMainWindow, isLocked, discover: root => nestedRepositoriesOf(root, true),
     worktrees: listWorktrees, confirmSettings: confirmNestedGit, trustFile: nestedRepositoryTrustFile,
@@ -314,8 +314,8 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
   }
   const handleSearch = (channel, fallback, run) => {
     let pending
-    handle(channel, fallback, async ({ root, query, worktreeOnly, includeAll } = {}) => {
-      const term = requireSearchQuery(query)
+    handle(channel, fallback, async ({ root, query, worktreeOnly, includeAll, regex } = {}) => {
+      const term = regex === true && channel === 'workspace-directory-search' ? checkContentQuery(query) : requireSearchQuery(query)
       const generation = searchGeneration
       pending?.abort()
       const controller = new AbortController()
@@ -324,7 +324,7 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
         const folder = await roots.resolveRoot(root)
         controller.signal.throwIfAborted()
         checkSearch(generation)
-        const result = await run(folder, term, controller.signal, worktreeOnly === true, includeAll === true)
+        const result = await run(folder, term, controller.signal, worktreeOnly === true, includeAll === true, regex === true)
         checkSearch(generation)
         return result
       } finally {
@@ -405,6 +405,24 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
   })
   if (roots && localGit) {
     handle('workspace-git-status', '커밋하지 않은 변경을 읽지 못했습니다.', async (root) => localGit.status(await roots.resolveRoot(root)))
+    // Which agent changed each uncommitted file (src/ipc/agentFileOwners.js): paths relative to the same top as the status
+    if (fileOwners) {
+      handle('workspace-file-owners', '파일을 고친 에이전트를 읽지 못했습니다.', async ({ root } = {}) =>
+        fileOwners.owners(await localGit.readRepoTop(await roots.resolveRoot(root))))
+      // The user freezes a repository (a merge): its other agents are told to stop changing files. Messages
+      // go out in the user's name, so only the main window's own frame, unlocked, for a repository of a shell.
+      ipcMain.handle('workspace-file-freeze', async (event, { root, frozen, except, reason } = {}) => {
+        if (!fromMainWindow(event) || event.senderFrame !== event.sender.mainFrame || isLocked()) {
+          return { success: false, error: '잠금 해제 후 본창에서 이용할 수 있습니다.' }
+        }
+        try {
+          const top = await localGit.readRepoTop(await roots.resolveRepoRoot(root))
+          return { success: true, ...await fileOwners.freeze(top, { frozen, except, reason }) }
+        } catch (error) {
+          return { success: false, error: error.userMessage || error.message || '동결을 바꾸지 못했습니다.' }
+        }
+      })
+    }
     handle('workspace-git-commit-files', '커밋의 파일을 읽지 못했습니다.', async ({ root, hash } = {}) => localGit.commitFiles(await roots.resolveRoot(root), hash))
     // `file` is relative to the repository top (as the status and commit lists give it)
     handle('workspace-git-diff', '변경 내용을 읽지 못했습니다.', async ({ root, hash, file } = {}) =>
@@ -448,14 +466,14 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
     handleSearch('workspace-directory-search', '폴더를 검색하지 못했습니다.', directorySearch.search)
     // 프로젝트 검색's content search: a new one ends the one before (its git grep is stopped)
     let contentSearch = null
-    handle('workspace-content-search', '파일 내용을 검색하지 못했습니다.', async ({ root, query, caseSensitive } = {}) => {
+    handle('workspace-content-search', '파일 내용을 검색하지 못했습니다.', async ({ root, query, caseSensitive, regex } = {}) => {
       checkContentQuery(query)
       contentSearch?.abort()
       const controller = new AbortController()
       contentSearch = controller
       try {
         const folder = await roots.resolveRoot(root)
-        const result = await searchContent(folder, query, { caseSensitive: caseSensitive === true, signal: controller.signal })
+        const result = await searchContent(folder, query, { caseSensitive: caseSensitive === true, regex: regex === true, signal: controller.signal })
         if (isLocked()) throw new Error('잠금 해제 후 이용할 수 있습니다.')
         return result
       } finally {
