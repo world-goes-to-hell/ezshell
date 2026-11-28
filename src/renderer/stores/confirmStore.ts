@@ -13,6 +13,12 @@ export interface ConfirmOptions {
   server?: { name: string; color?: string }
   /** Destructive action: red confirm button */
   danger?: boolean
+  /**
+   * Focus starts on the confirm button even for a destructive action, so Enter confirms. For questions the user
+   * asked for by choosing the action itself (closing a local tab from its menu); a destructive question that comes
+   * up on its own keeps cancel first.
+   */
+  enterConfirms?: boolean
 }
 
 interface ConfirmRequest extends ConfirmOptions {

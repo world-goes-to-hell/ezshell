@@ -147,7 +147,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   `, 5000))
   await openChatActions(0)
   check('the three chat actions are directly available in the right-click menu', await until(`
-    ['채팅 닫고 터미널로 전환', '메시지', '질문 목록'].every(label =>
+    ['터미널 모드', '메시지', '질문 목록'].every(label =>
       [...document.querySelectorAll('.terminal-menu > .terminal-menu-item')].some(item => item.textContent.trim() === label)
     )
   `))
@@ -167,7 +167,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('closing the question list returns focus to the composer', await until(`
     !${cover(0)}.querySelector('.agent-chat-questions') && document.activeElement === ${composer(0)}
   `))
-  await chooseChatAction(0, '채팅 닫고 터미널로 전환')
+  await chooseChatAction(0, '터미널 모드')
   check('choosing the terminal action returns focus to the same pane terminal', await until(`
     !${cover(0)} && document.activeElement === ${pane(0)}.querySelector('.xterm-helper-textarea')
   `))
@@ -728,7 +728,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     check('restore returns to the original size', await pin.until(`
       ${maximize}.getAttribute('aria-label') === '최대화' && innerWidth === ${normalWidth} && innerHeight === ${normalHeight}
     `, 3000), await pin.js('[innerWidth, innerHeight]'))
-    await chooseChatAction(0, '채팅 닫고 터미널로 전환')
+    await chooseChatAction(0, '터미널 모드')
     await until(`!${cover(0)}`, 3000)
     await pin.js(`${maximize}.click()`)
     await pin.until(maximized, 3000)
@@ -795,7 +795,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   await reportSession('manual-claude', SESSIONS[1])
 
   await click(...await center(pane(1)), 'right')
-  const showChatItem = `[...document.querySelectorAll('.terminal-menu-item')].find(i => i.textContent.startsWith('채팅으로 보기 ('))`
+  const showChatItem = `[...document.querySelectorAll('.terminal-menu-item')].find(i => i.textContent.startsWith('채팅 모드 ('))`
   await until(`!!${showChatItem}`, 4000)
   await click(...await center(showChatItem))
   check('both panes of the tab show their chats at the same time', await until(`!!${cover(0)} && !!${cover(1)}`, 5000))
@@ -969,7 +969,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   // Not in the transcript yet (Claude writes a slash command only when it is done): a look at the
   // terminal and back keeps it shown (2026-11-20 user report: a /compact sent from the chat vanished)
   check('the sent line shows in the chat at once', await until(`[...${cover(0)}.querySelectorAll('.agent-chat-user')].some(bubble => bubble.textContent.includes(${JSON.stringify(numberedLead)}))`, 3000), await coverText(0))
-  await chooseChatAction(0, '채팅 닫고 터미널로 전환')
+  await chooseChatAction(0, '터미널 모드')
   await until(`!${cover(0)}`, 3000)
   await js(`${pane(0)}.querySelector('.xterm-helper-textarea').focus()`)
   await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
@@ -1037,7 +1037,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     [...${cover(0)}.querySelectorAll('.agent-chat-user .agent-chat-bubble')].filter(bubble => bubble.textContent === '스크린샷 첨부').length === 1 &&
     ${sentImageWidths('스크린샷 첨부')} === '1'
   `))
-  await chooseChatAction(0, '채팅 닫고 터미널로 전환')
+  await chooseChatAction(0, '터미널 모드')
   await until(`!${cover(0)}`)
   await js(`${pane(0)}.querySelector('.xterm-helper-textarea').focus()`)
   await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
@@ -1205,7 +1205,7 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
     return saved.includes('나\n첫 칸 질문') && saved.includes('세 이미지 비교해 줘.') && !saved.includes('둘째 칸 질문')
   }))
   await openChatMenu()
-  await driver.pick('채팅 닫고 터미널로 전환')
+  await driver.pick('터미널 모드')
   check('the context menu closes only this chat and focuses its original live terminal', await until(`
     !${cover(0)} && !!${cover(1)} && ${pane(0)}.dataset.localShellId === ${JSON.stringify(firstShell)}
     && document.activeElement?.classList.contains('xterm-helper-textarea')
@@ -1247,11 +1247,11 @@ async function reportSession(agent, sessionId, rateLimits = undefined) {
   check('the chat still follows the transcript and offers an input box', await until(`
     ${cover(1)}?.textContent.includes('연결이 끊겨도 새 답변을 표시합니다.') && !!${cover(1)}.querySelector('.agent-chat-input')
   `))
-  await chooseChatAction(1, '채팅 닫고 터미널로 전환')
+  await chooseChatAction(1, '터미널 모드')
   await until(`!${cover(1)}`)
   const [rightX, rightY] = await center(pane(1))
   await click(rightX, rightY, 'right')
-  const chatMenu = `[...document.querySelectorAll('.terminal-menu-item')].find(item => item.textContent.startsWith('채팅으로 보기 ('))`
+  const chatMenu = `[...document.querySelectorAll('.terminal-menu-item')].find(item => item.textContent.startsWith('채팅 모드 ('))`
   check('the terminal menu can reopen the disconnected agent’s chat', await until(`!!${chatMenu} && !${chatMenu}.hasAttribute('data-disabled')`))
   await js(`${chatMenu}.click()`)
   check('the reopened chat shows the same conversation', await until(`${cover(1)}?.textContent.includes('연결이 끊겨도 새 답변을 표시합니다.')`))

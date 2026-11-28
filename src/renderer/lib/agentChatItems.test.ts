@@ -90,6 +90,9 @@ describe('reconciling messages sent in the chat', () => {
     ['Cafe\u0301', 'Café'],
     ['✅ ❤️ 🇰🇷 👩‍💻 e\u0301', '🇰🇷 👩💻 e'],
     ['👍🏽 1️⃣', '👍 1'],
+    // A quoted reply whose arrows Codex on Windows dropped (2026-11-28: the bubble showed twice)
+    ['> **작업 공간 → Git 기록 → 원격과 비교**를 추가했습니다.\n\n그러니까 현재 위치?', '> **작업 공간  Git 기록  원격과 비교**를 추가했습니다.\n\n그러니까 현재 위치?'],
+    ['A ≥ B ← C', 'A  B  C'],
     ['앞에 본문\n붙인 글', '앞에 본문\n<pasted_content id="1">붙인 글</pasted_content id="1">'],
     ['붙인 글', '<pasted_content>붙인 글</pasted_content>']
   ])('reconciles %j as recorded by the CLI in %j', (text, recorded) => {

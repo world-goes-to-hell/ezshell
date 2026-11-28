@@ -22,7 +22,7 @@ async function run() {
     await send('Emulation.setFocusEmulationEnabled', { enabled: true })
     await openLocalAgent(driver, undefined, profile)
     const pane = "document.querySelector('.local-terminal-pane[data-local-shell-id]')"
-    const menuItem = "[...document.querySelectorAll('.terminal-menu-item')].find(item => item.textContent.startsWith('채팅으로 보기 ('))"
+    const menuItem = "[...document.querySelectorAll('.terminal-menu-item')].find(item => item.textContent.startsWith('채팅 모드 ('))"
     const chat = `${pane}.querySelector('.agent-chat-cover')`
     if (!await until(`/PS [A-Z]:/.test(${pane}?.textContent ?? '')`)) throw new Error('PowerShell did not start')
     const shellId = await js(`${pane}.dataset.localShellId`)

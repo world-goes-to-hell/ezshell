@@ -4,6 +4,7 @@ import { takePendingSnapshot } from '../lib/terminalSnapshots'
 import { findTabPane } from '../lib/sessionTabs'
 import { addScreen, buildScreens, paneIndex, screenOfTab, screensOf, withoutTab, type PaneRef, type ScreenDirection, type ScreenLayout, type ScreenPane } from '../lib/screenPanes'
 import { linkConnected, linkDisconnected, linkReconnecting } from '../lib/connectionLost'
+import { forgetTab, lastViewedTab, noteTabViewed } from '../lib/tabRecency'
 import type { SSHConnectConfig } from '../hooks/useSSH'
 
 export interface TerminalInfo {
@@ -209,13 +210,22 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     // terminal output can contain secrets
     takePendingSnapshot(sessionId)
 
-    const newLayout = screens(state, { panes: withoutTab(state.layout.panes, sessionId), allIds: [...newTerminals.keys()] })
-    // The closed tab was in front: the front tab of the focused screen, else the last tab
+    // A screen whose front tab closes shows the tab of that screen seen just before it (lib/tabRecency.ts)
+    const panes = withoutTab(state.layout.panes, sessionId).map(pane => pane.activeTerminalId === sessionId
+      ? { ...pane, activeTerminalId: lastViewedTab(pane.terminalIds) } : pane)
+    const closedIn = screenOfTab(state.layout.panes, sessionId)
+    const wasFront = state.activeTerminalId === sessionId
+    // The tab in front closes: the one seen just before it in the same screen (A B C: B, then C, close C → B)
+    const previous = wasFront && closedIn >= 0 ? lastViewedTab(panes[closedIn].terminalIds) : null
+    if (previous && closedIn >= 0) panes[closedIn] = { ...panes[closedIn], activeTerminalId: previous }
+    const newLayout = screens(state, { panes, allIds: [...newTerminals.keys()] })
+    forgetTab(sessionId)
+    // Otherwise the front tab of the focused screen, else the last tab
     let newActiveId = state.activeTerminalId
-    if (state.activeTerminalId === sessionId) {
+    if (wasFront) {
       const focused = newLayout.panes[newLayout.activePane ?? 0]?.activeTerminalId
       const remaining = Array.from(newTerminals.keys())
-      newActiveId = focused ?? (remaining.length > 0 ? remaining[remaining.length - 1] : null)
+      newActiveId = previous ?? focused ?? (remaining.length > 0 ? remaining[remaining.length - 1] : null)
     }
 
     return {
@@ -561,3 +571,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     get().setFontSize(DEFAULT_FONT_SIZE)
   }
 }))
+
+// Each tab brought to the front is noted, so closing the front tab can go back to the one seen before it
+useTerminalStore.subscribe((state, previous) => {
+  if (state.activeTerminalId && state.activeTerminalId !== previous.activeTerminalId) noteTabViewed(state.activeTerminalId)
+})

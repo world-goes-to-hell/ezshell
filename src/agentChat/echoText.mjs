@@ -4,6 +4,9 @@ const STORED_IMAGE_PATH = /(?:^|[/\\])ezshell-clipboard-[\w-]+[/\\][a-f0-9-]{36}
 const CLAUDE_PASTE = /<pasted_content(?:\s[^>]*)?>([\s\S]*?)<\/pasted_content(?:\s[^>]*)?>/g
 const PASTE_MARKS = /[\u0300-\u036f\u200d\ufe0e\ufe0f\u20e3\p{Emoji_Modifier}]/gu
 const PASTE_SPACE = /\s/gu
+// Real Codex on Windows drops some symbols from pasted input (seen: ✅ ❤ →). Only symbols outside ASCII and
+// inside the BMP: an emoji such as 🐈 is kept and must match, so a different emoji stays a different message.
+const droppedByCli = char => char.length === 1 && char.charCodeAt(0) >= 0x80 && /\p{S}/u.test(char)
 
 const exactEchoText = (recorded, sent) => recorded === sent
 
@@ -17,8 +20,7 @@ function normalizedEchoText(message, sent) {
   let start = 0
   for (const char of original) {
     if (displayed.startsWith(char, start)) start += char.length
-    // Real Codex on Windows can drop both of these glyphs from pasted input.
-    else if (char !== '✅' && char !== '❤') return false
+    else if (!droppedByCli(char)) return false
   }
   return start === displayed.length
 }

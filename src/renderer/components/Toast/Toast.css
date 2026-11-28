@@ -150,6 +150,33 @@
   color: var(--text-primary);
 }
 
+.copied-text-agent-dialog {
+  width: min(540px, 90vw);
+  max-width: 90vw;
+}
+
+.copied-text-agent-dialog textarea {
+  display: block;
+  width: 100%;
+  min-height: 72px;
+  max-height: 45vh;
+  padding: 10px 12px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-family: monospace;
+  line-height: 1.5;
+}
+
+.copied-text-agent-dialog [role="status"],
+.copied-text-agent-error {
+  margin: 8px 0 0;
+  color: var(--error-text);
+  font-size: 13px;
+}
+
 /* Border accent based on type */
 .toast-success {
   border-left: 3px solid var(--success);

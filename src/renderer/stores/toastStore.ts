@@ -11,6 +11,7 @@ export interface Toast {
   duration?: number  // ms, 0 = no auto-dismiss
   dismissible?: boolean
   action?: { label: string; run: () => void }
+  copiedText?: string
 }
 
 interface ToastState {

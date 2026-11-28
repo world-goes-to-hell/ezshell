@@ -243,6 +243,7 @@ function RunPresetRow({ folder, preset, state, now, step, batch, onEdit }: {
   const queued = batch && step !== undefined && step > batch.index
 
   const crashed = state.status === 'crashed'
+  const failureReason = crashed ? state.failureReason : undefined
   return (
     <li className="run-preset" data-run-preset={preset.id} data-status={state.status} data-agent-acted={note ? 'true' : undefined}
       onClick={() => { if (state.shellId) void showLog() }}
@@ -306,6 +307,17 @@ function RunPresetRow({ folder, preset, state, now, step, batch, onEdit }: {
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
       </div>
+      {failureReason && (typeof window.electronAPI.runPresetDiagnosis === 'function'
+        ? <button type="button" className="run-preset-failure-line" title={failureReason}
+            aria-label={`${failureReason} 실행 진단 보기`}
+            onClick={event => { event.stopPropagation(); setDiagnosing(true) }}>
+            <RiErrorWarningFill size={11} aria-hidden="true" />
+            <span>{failureReason}</span>
+          </button>
+        : <div className="run-preset-failure-line" title={failureReason}>
+            <RiErrorWarningFill size={11} aria-hidden="true" />
+            <span>{failureReason}</span>
+          </div>)}
       {(waitingText || queued) && <div className="run-start-wait" data-wait={waiting?.gate.kind ?? 'queued'}
         title={waiting && 'value' in waiting.gate ? waiting.gate.value : undefined}>{waitingText || '앞 단계 대기'}</div>}
       {/* The dialog is a portal, but its clicks still bubble through React to the row (which opens the log) */}

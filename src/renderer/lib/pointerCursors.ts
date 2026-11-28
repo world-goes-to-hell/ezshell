@@ -68,6 +68,24 @@ const TIP_OUT = [0.387, 0.922] as const
 const tipReach = (style: Pick<Style, 'sw'>, k: number) => style.sw * k
 const RESIZE = '<path d="M3.5 16L10 10.5V21.5Z"/><path d="M28.5 16L22 10.5V21.5Z"/><rect x="9" y="14.8" width="14" height="2.4"/><rect x="14.5" y="6" width="3" height="20" rx="1.5"/>'
 
+/**
+ * The text pointer (I-beam). Its stem is a 1-unit line on the hotspot's pixel column (x 16..17) with at most a
+ * 1-unit outline, whatever the set's line width: a stem as wide as a character (the high contrast one was 7 units)
+ * hid which gap between two characters a drag starts from. The serifs keep the set's width so it stays visible.
+ */
+export const TEXT_STEM = { x: 16.5, width: 1, maxOutline: 1 }
+function textBeam(o: Style, outline: string) {
+  const edge = Math.min(o.sw, TEXT_STEM.maxOutline)
+  const serifs = `M${TEXT_STEM.x - 4.5} 5h9M${TEXT_STEM.x - 4.5} 27h9`
+  const stem = `M${TEXT_STEM.x} 5v22`
+  // Every outline first, then the colors: the stem's outline does not cut through the serifs
+  return `<g fill="none" stroke-linecap="${o.cap}" stroke-linejoin="${o.join}">` +
+    `<path d="${serifs}" stroke="${outline}" stroke-width="${o.lw + o.sw * 2}"/>` +
+    `<path d="${stem}" stroke="${outline}" stroke-width="${TEXT_STEM.width + edge * 2}" stroke-linecap="butt"/>` +
+    `<path d="${serifs}" stroke="${o.line}" stroke-width="${o.lw}"/>` +
+    `<path d="${stem}" stroke="${o.line}" stroke-width="${TEXT_STEM.width}" stroke-linecap="butt"/></g>`
+}
+
 /** A vector set: every state from the same rules, `override` replaces some of them */
 function vectorSet(style: Partial<Style>, override?: (tools: Tools) => Partial<Shapes>): Shapes {
   const o: Style = {
@@ -94,7 +112,7 @@ function vectorSet(style: Partial<Style>, override?: (tools: Tools) => Partial<S
       svg: two(handShape) + `<path d="M13 22v3M17.5 21v4M22 22v3" fill="none" stroke="${o.stroke}" stroke-width="1.1" stroke-linecap="round"/>`,
       hotspot: [13.5, 3]
     },
-    text: { svg: line('M11.5 5h9M16 5v22M11.5 27h9', o.line, o.lw), hotspot: [16, 16] },
+    text: { svg: textBeam(o, outline), hotspot: [16, 16] },
     wait: {
       svg: ring(9, 3.6, o.fill) + `<path d="M16 7A9 9 0 0 1 25 16" fill="none" stroke="${o.accent}" stroke-width="3.6" stroke-linecap="round"/>`,
       hotspot: [16, 16]
@@ -166,7 +184,12 @@ const PX_COL: Rect[] = [[4, 15, 24, 2], [4, 15, 2, 2], [6, 13, 2, 6], [8, 11, 2,
 const PIXEL: Shapes = {
   default: { svg: grid(PX_ARROW), hotspot: [1, 1] },
   pointer: { svg: grid(PX_HAND), hotspot: [9, 1] },
-  text: { svg: blocks([[8, 4, 16, 2], [15, 4, 2, 24], [8, 26, 16, 2]]), hotspot: [16, 16] },
+  // The stem is one unit on the hotspot's column with a one-unit edge (TEXT_STEM), not a 2-unit block in a 2-unit frame
+  text: {
+    svg: '<rect x="15" y="4" width="3" height="24" fill="#000" shape-rendering="crispEdges"/>' + blocks([[8, 4, 16, 2], [8, 26, 16, 2]]) +
+      '<rect x="16" y="4" width="1" height="24" fill="#fff" shape-rendering="crispEdges"/>',
+    hotspot: [16, 16]
+  },
   wait: {
     svg: blocks([[8, 4, 16, 2], [8, 26, 16, 2], [10, 6, 12, 2], [12, 8, 8, 2], [14, 10, 4, 2], [15, 12, 2, 8], [14, 20, 4, 2], [12, 22, 8, 2], [10, 24, 12, 2]],
       '#fff', [[14, 20, 4, 2], [12, 22, 8, 2], [10, 24, 12, 2]]),

@@ -40,7 +40,7 @@ async function run() {
     return js(next)
   }
   async function showChat(id) {
-    const menu = `[...document.querySelectorAll('.terminal-menu-item')].find(item => item.textContent.startsWith('채팅으로 보기 ('))`
+    const menu = `[...document.querySelectorAll('.terminal-menu-item')].find(item => item.textContent.startsWith('채팅 모드 ('))`
     await click(...await center(pane(id)), 'right')
     if (!await until(`!!${menu} && ${menu}.getAttribute('aria-disabled') !== 'true' && !${menu}.hasAttribute('data-disabled')`)) {
       throw new Error('Antigravity chat menu is unavailable')

@@ -10,6 +10,7 @@ const { customCommands } = require('./slashCommands.js')
 const { createImageDrafts } = require('./imageDrafts.js')
 const { cleanAnswer } = require('./askQuestions.js')
 const { prepareHandoff } = require('./handoff.js')
+const { messagePrompt, MESSAGE_ID } = require('../ipc/agentInboxPrompts.js')
 
 const SHELL_ID = /^local:\d+$/
 const MAX_TEXT = 16_000
@@ -121,7 +122,7 @@ const PICKER_REASONS = {
  * pins: answers pinned into windows of their own (pins.js); showShell(shellId): the main window
  * brings that shell's pane forward as a chat
  */
-function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells, clipboard, selectImages, links, pins = null, showShell = null, notifyCapture = () => {}, handoff = null }) {
+function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells, clipboard, selectImages, links, pins = null, showShell = null, notifyCapture = () => {}, handoff = null, inbox = null }) {
   const allowed = event => fromMainWindow(event) && !isLocked()
   const fromChatWindow = event => allowed(event) && Boolean(event.senderFrame && event.senderFrame === event.sender?.mainFrame)
   const shellIdOf = value => (typeof value === 'string' && SHELL_ID.test(value) ? value : null)
@@ -351,6 +352,21 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   ipcMain.on('agent-chat-remove-image', (event, request) => {
     if (allowed(event) && typeof request?.imageId === 'string') imageDrafts.remove(shellIdOf(request.shellId), [request.imageId])
   })
+  // The chat's bell: "지금 알리기" on one message. Only a message this agent has not handled yet, and only the fixed
+  // line naming it (messagePrompt), through the chat's send path (waits for its turn while the agent works)
+  ipcMain.handle('agent-inbox-notify', async (event, request) => {
+    if (!allowed(event)) return locked
+    const id = shellIdOf(request?.shellId)
+    const messageId = request?.messageId
+    if (!id || typeof messageId !== 'string' || !MESSAGE_ID.test(messageId)) return { ok: false, error: '메시지를 찾지 못했습니다.' }
+    const local = shells()
+    const agent = local?.agentOf(id)
+    if (!agent || !CHAT_PROVIDERS.has(agent.kind) || agent.kind === 'antigravity') return { ok: false, error: REASONS['not-agent'] }
+    if (!inbox?.unhandledFor(id).includes(messageId)) return { ok: false, error: '이미 처리했거나 이 에이전트에게 온 메시지가 아닙니다.' }
+    const result = await local.chatSend(id, messagePrompt(messageId))
+    return allowed(event) ? chatSendResult(result) : locked
+  })
+
   ipcMain.handle('agent-chat-send', async (event, request) => {
     if (!allowed(event)) return locked
     const id = shellIdOf(request?.shellId)

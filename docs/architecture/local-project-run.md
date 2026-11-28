@@ -45,6 +45,7 @@
 
 **바꾸면 안 되는 것**
 
+- 예상치 못한 종료에는 실행 구성 줄과 실패 알림에 원인 한 줄을 표시한다. 기존 실행 진단에서 인식한 원인이나 최근의 구체적인 오류 내용을 사용한다. 근거가 없으면 확인된 종료 코드만 안내한다. 원인은 본창에 전달하기 전에 자격 증명을 가리고 다음 실행에서 지운다.
 - 터미널의 색·제어 문자열을 진단과 MCP 반환값에서 정리한다. MCP 실행 도구의 응답, 화면 오류 묶음과 진단, 에이전트에게 전달할 본문, 제안 메모에 들어 있는 자격 증명 패턴을 `****`로 가린다. 제안 메모는 가린 값으로 보관하고 터미널은 원래 출력을 표시한다. 제안은 원래 실행과 최신 진단 ID에 묶는다. 실행이나 관련 구성이 바뀌면 다시 검증하며, 에이전트의 제안 등록은 사용자 승인 전까지 구성이나 실행을 바꾸지 않는다. 사용자 승인으로 넣는 미러·JAR은 일반 구성 저장 요청의 임의 필드로 추가할 수 없다.
 
 **파일 지도** — 주소·오류·진단은 [developmentProcess.js](../../src/ipc/developmentProcess.js)·[developmentErrors.js](../../src/ipc/developmentErrors.js)·[runDiagnosis.js](../../src/ipc/runDiagnosis.js), 진단 적용·제안은 [runSuggestions.js](../../src/ipc/runSuggestions.js)·[runJarSuggestions.js](../../src/ipc/runJarSuggestions.js)·[runProposals.js](../../src/ipc/runProposals.js), 화면은 [RunSuggestions.tsx](../../src/renderer/components/Sidebar/RunSuggestions.tsx)·[RunPresetsSection.tsx](../../src/renderer/components/Sidebar/RunPresetsSection.tsx)에서 본다. [공통 로그 수준 규칙](terminal-logs.md)

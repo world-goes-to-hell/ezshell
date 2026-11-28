@@ -9,6 +9,7 @@ const { createDirectorySearch } = require('../localFiles/search.js')
 const { searchContent, checkContentQuery } = require('../localFiles/contentSearch.js')
 const { inspectDevelopmentTasks, prepareDevelopmentTask } = require('./localDevelopmentTasks.js')
 const { registerNestedRepositoryIpc } = require('./nestedRepositories.js')
+const { git: gitOffline } = require('./nestedGit.js')
 
 const exec = promisify(execFile)
 const DIRECTORY_LIMIT = 1000
@@ -194,6 +195,30 @@ function parseCommits(log) {
     commits.push({ hash, parents: parents ? parents.split(' ') : [], shortHash, author, time, subject, refs: refs ? refs.split(', ') : [] })
   }
   return commits
+}
+
+async function readWorkspaceUpstream(root) {
+  const read = args => gitOffline(root, args)
+  const top = (await read(['rev-parse', '--show-toplevel'])).replace(/\r?\n$/, '')
+  if (path.relative(root, top) !== '') throw new Error('비교할 Git 저장소를 확인하지 못했습니다.')
+  const branch = await read(['symbolic-ref', '--quiet', 'HEAD']).then(text => text.trim(), missingHead)
+  if (!branch) return { comparison: null }
+  const output = await read(['for-each-ref', '--count=1',
+    '--format=%(refname)%00%(objectname)%00%(upstream)%00%(upstream:short)', '--', branch])
+  const [ref, head, upstream, name] = output.trimEnd().split('\0')
+  if (ref !== branch || !upstream?.startsWith('refs/remotes/')) return { comparison: null }
+  const target = await read(['rev-parse', '--verify', '--quiet', '--end-of-options', `${upstream}^{commit}`])
+    .then(text => text.trim(), missingHead)
+  if (!target) return { comparison: { upstream: name, status: 'missing' } }
+
+  const [ahead, behind] = (await read(['rev-list', '--left-right', '--count', `${head}...${target}`, '--']))
+    .trim().split(/\s+/).map(Number)
+  const commits = range => read([...LOG_OPTIONS, '--topo-order', `--max-count=${COMMIT_LIMIT}`, range, '--']).then(parseCommits)
+  const [outgoing, incoming] = await Promise.all([
+    ahead ? commits(`${target}..${head}`) : [],
+    behind ? commits(`${head}..${target}`) : []
+  ])
+  return { comparison: { upstream: name, branch: branch.slice('refs/heads/'.length), head, status: 'compared', ahead, behind, outgoing, incoming } }
 }
 
 async function searchWorkspaceGit(root, query, signal, worktreeOnly) {
@@ -405,6 +430,11 @@ function registerLocalProjectIpc({ ipcMain, fromMainWindow, isLocked, roots = nu
     return readWorkspaceGit(cwd, allBranches === true)
   })
   if (roots) {
+    handle('workspace-git-upstream', '원격 추적 브랜치와 비교하지 못했습니다.', async root => {
+      const directory = await roots.resolveRoot(root, { refreshWorktreesOnMiss: true })
+      if (!isLocalFilePath(directory)) throw new Error('이 PC의 Git 저장소만 비교할 수 있습니다.')
+      return readWorkspaceUpstream(directory)
+    })
     handle('workspace-directory-prepare', '폴더를 검색하지 못했습니다.', async ({ root, refresh, includeAll } = {}) => {
       const generation = searchGeneration
       const request = ++preparation

@@ -64,6 +64,7 @@ function CrashCard({ notice, onSend }: { notice: CrashNotice; onSend: (sending: 
           <button type="button" className="run-crash-diagnose" onClick={() => setDiagnosing(true)}>진단 보기</button>
         )}
       </div>
+      {state.failureReason && <p className="run-crash-reason">{state.failureReason}</p>}
       {group && group.lines.length > 0 && <pre className="run-crash-log">{group.lines.slice(0, 12).join('\n')}</pre>}
       <div className="run-crash-actions">
         <button type="button" className="btn-secondary modal-btn" disabled={!state.shellId}

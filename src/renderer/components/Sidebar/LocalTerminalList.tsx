@@ -299,7 +299,9 @@ export function LocalTerminalList({ fillAvailableSpace = false, workingTabs, ser
       title: '로컬 터미널 탭 닫기',
       message: `‘${name}’ 탭을 닫을까요?\n이 탭에 열려 있는 세션이 모두 종료됩니다.`,
       confirmLabel: '모두 종료',
-      danger: true
+      danger: true,
+      // Asked right after choosing 닫기 on that tab: Enter goes ahead (2026-11-28 user request)
+      enterConfirms: true
     })
     if (!confirmed) return
 

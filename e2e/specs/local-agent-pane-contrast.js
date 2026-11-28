@@ -87,7 +87,7 @@ function edgePoints({ rect, dpr }, edge, depths) {
     if (Boolean(await js('!!' + chat)) !== on) {
       if (on && frame !== pane) {
         await click(...await center(frame), 'right')
-        const item = "[...document.querySelectorAll('.terminal-menu-item')].find(button => button.textContent.startsWith('채팅으로 보기 ('))"
+        const item = "[...document.querySelectorAll('.terminal-menu-item')].find(button => button.textContent.startsWith('채팅 모드 ('))"
         await requireState(`!!${item} && !${item}.hasAttribute('data-disabled')`, 'the pane has no chat action')
         await click(...await center(item))
       } else {

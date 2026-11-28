@@ -1,12 +1,18 @@
 // A browser tab takes the name of the page it shows (its <title>), the host when the page has none.
 const http = require('node:http')
-const { connect, createChecks, selectThemeTab, SET, unlock } = require('../support/driver')
+const { connect, createChecks, pageProblems, selectThemeTab, SET, unlock } = require('../support/driver')
 
 const { check, finish } = createChecks()
 
 async function run() {
   const longTitle = '길게 표시되는 브라우저 페이지 제목 '.repeat(8) + '제목 끝'
+  let completedAlerts = 0
   const server = http.createServer((request, response) => {
+    if (request.url === '/alert-completed') {
+      completedAlerts++
+      response.writeHead(204).end()
+      return
+    }
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     if (request.url.startsWith('/untitled')) {
       response.end('<meta charset=utf-8><p>제목 없음</p>')
@@ -56,6 +62,63 @@ async function run() {
 
     await main.js(`window.electronAPI.browserReviewAction(${JSON.stringify(id)}, { type: 'back' })`)
     check('going back shows the earlier page title again', await main.until(`${tabText}.includes('첫 페이지')`, 10000))
+
+    await main.send('Log.enable')
+    await navigate(id, origin + '/alerts')
+    const alertPage = await connect(target => target.url === origin + '/alerts', { focus: false })
+    const modal = `document.querySelector('.browser-page-alert[role="alertdialog"]')`
+    const alertText = '변경 사항이 저장되었습니다.\n<b>그대로 표시되는 메시지</b>'
+    const alert = () => alertPage.js(`(() => {
+      setTimeout(async () => {
+        window.alert(${JSON.stringify(alertText)})
+        await fetch('/alert-completed', { cache: 'no-store' })
+        window.completedAlerts = (window.completedAlerts ?? 0) + 1
+      }, 0)
+      return true
+    })()`)
+    try {
+      await alert()
+      const visible = await main.until(`
+        ${modal}?.checkVisibility() && ${modal}.querySelector('.modal-title')?.textContent === '페이지 알림' &&
+        ${modal}.querySelector('.browser-page-alert-source')?.textContent === ${JSON.stringify(host)} &&
+        ${modal}.querySelector('.browser-page-alert-message')?.textContent === ${JSON.stringify(alertText)} &&
+        !${modal}.querySelector('b') && document.activeElement === ${modal}.querySelector('button')
+      `)
+      check('a page alert shows its origin and plain message in the app modal, with the confirm button focused', visible)
+      if (!visible) throw new Error('The browser did not display the page alert')
+      check('page JavaScript waits while the app alert is open', completedAlerts === 0)
+      await main.shot('browser-page-alert')
+      await main.enter()
+      check('Enter dismisses the alert and the page continues once', await main.until(`!${modal}`) &&
+        await alertPage.until('window.completedAlerts === 1') && completedAlerts === 1)
+      await alert()
+      await main.until(`!!${modal}`)
+      for (const type of ['rawKeyDown', 'keyUp']) {
+        await main.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+      }
+      check('Escape also dismisses an alert and unblocks the page', await main.until(`!${modal}`) &&
+        await alertPage.until('window.completedAlerts === 2') && completedAlerts === 2)
+
+      const foregroundId = await openBrowserTab()
+      await alert()
+      check('an alert waits in its background tab', await main.until(`!${modal} && ${stateOf(id)}.then(state => !!state.alert)`))
+      await main.js(`document.querySelector('.terminal-tab[data-tab-id="${id}"]').click()`)
+      check('selecting the tab shows its pending alert', await main.until(`!!${modal}`))
+      await main.js(`${modal}.querySelector('button').click()`)
+      await alertPage.until('window.completedAlerts === 3')
+      await closeTab(foregroundId)
+
+      await alert()
+      await main.until(`!!${modal}`)
+      await navigate(id, origin + '/untitled')
+      check('navigation clears the old alert before displaying the next page', await main.until(`
+        !${modal} && ${stateOf(id)}.then(state => state?.url.endsWith('/untitled') && !state.loading && !state.alert)
+      `))
+      const problems = await pageProblems(main)
+      check('the app alert produces no renderer errors or CSP refusals', problems.length === 0, JSON.stringify(problems))
+    } finally {
+      alertPage.close()
+    }
 
     const regularTab = id => `document.querySelector('.terminal-tab[data-tab-id="${id}"]')`
     const tabLabel = `${regularTab(id)}?.querySelector('[data-tab-label]')`

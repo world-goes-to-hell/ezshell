@@ -9,7 +9,8 @@ import './ConfirmDialog.css'
 
 /**
  * Shows the question asked with confirmDialog(). Mount once per window.
- * Focus starts on the confirm button, or on cancel for destructive actions so a habitual Enter does not delete.
+ * Focus starts on the confirm button, or on cancel for destructive actions so a habitual Enter does not delete
+ * (unless the question says `enterConfirms`).
  */
 export function ConfirmDialogHost() {
   const request = useConfirmStore(state => state.request)
@@ -29,7 +30,7 @@ export function ConfirmDialogHost() {
               asChild
               onOpenAutoFocus={(e) => {
                 e.preventDefault()
-                ;(request.danger ? cancelRef : confirmRef).current?.focus()
+                ;(request.danger && !request.enterConfirms ? cancelRef : confirmRef).current?.focus()
               }}
             >
               <motion.div

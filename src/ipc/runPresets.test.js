@@ -994,7 +994,7 @@ describe('saved project runs', () => {
     f.emit('local:1', { type: 'exit', exitCode: 1 })
     f.emit('local:1', { type: 'exit', exitCode: 1 })
     expect(f.notifyCrash).toHaveBeenCalledExactlyOnceWith('project', 'web')
-    expect(f.list().states[id]).toMatchObject({ status: 'crashed', exitCode: 1, errors: 1 })
+    expect(f.list().states[id]).toMatchObject({ status: 'crashed', exitCode: 1, errors: 1, failureReason: 'failed password=****' })
     const lines = ['ERROR failed password=****', '    at fixture (main.js:1:2)']
     expect(await f.agent('log', 'web', { lines: 2 })).toEqual({ lines })
     expect(await f.invoke('run-preset-errors', id)).toEqual({ groups: [{ at: 100, lines }] })
@@ -1010,6 +1010,9 @@ describe('saved project runs', () => {
     await f.start(silent.id)
     f.emit('local:2', { type: 'exit', exitCode: 1 })
     expect(f.notifyCrash).toHaveBeenCalledTimes(1)
+    expect(f.list().states[silent.id].failureReason).toBe('종료 코드 1만 확인됩니다. 로그를 확인해 주세요.')
+    expect(await f.invoke('run-preset-restart', silent.id)).toEqual({ ok: true })
+    expect(f.list().states[silent.id].failureReason).toBeUndefined()
   })
 
   it('previews the exact body from the main frame and keeps it when the run changes before sending', async () => {

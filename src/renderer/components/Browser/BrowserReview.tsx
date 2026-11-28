@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { ClipboardEvent, FormEvent } from 'react'
+import * as Dialog from '@radix-ui/react-dialog'
 import {
   RiArrowDownSLine, RiArrowLeftLine, RiArrowRightLine, RiBookmark3Line, RiCloseLine,
-  RiCodeSSlashLine, RiCursorLine, RiGlobalLine, RiImageAddLine, RiKey2Line, RiRefreshLine, RiSendPlane2Line, RiToolsLine
+  RiCodeSSlashLine, RiCursorLine, RiGlobalLine, RiImageAddLine, RiInformationLine, RiKey2Line, RiRefreshLine, RiSendPlane2Line, RiToolsLine
 } from 'react-icons/ri'
 import type { BrowserReviewAction, BrowserReviewProjects, BrowserReviewState, LocalAgentStatus } from '../../types'
 import { chooseProject, chooseRecipient } from '../../lib/browserReviewProjects'
 import { BrowserAddressBar } from './BrowserAddressBar'
 import { uncoveredBox } from '../../lib/browserViewClip'
 import { hasBookmark, useBrowserBookmarkStore } from '../../stores/browserBookmarkStore'
+import { useTerminalStore } from '../../stores/terminalStore'
 import { BrowserReviewHistory } from './BrowserReviewHistory'
 import { BrowserLoginsDialog } from './BrowserLoginsDialog'
 import { BrowserDataImportDialog } from './BrowserDataImportDialog'
@@ -32,6 +34,32 @@ type BrowserTool = 'element-picker'
 const trimFolder = (folder: string) => folder.replace(/[\\/]+$/, '').toLowerCase()
 const sameFolder = (a: string, b: string) => trimFolder(a) === trimFolder(b)
 
+function BrowserPageAlert({ alert, onDismiss }: { alert: NonNullable<BrowserReviewState['alert']>; onDismiss: () => void }) {
+  const confirm = useRef<HTMLButtonElement>(null)
+  return (
+    <Dialog.Root open onOpenChange={open => { if (!open) onDismiss() }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="modal-overlay browser-page-alert-overlay" />
+        <Dialog.Content role="alertdialog" className="modal-content browser-page-alert"
+          onPointerDownOutside={event => event.preventDefault()}
+          onOpenAutoFocus={event => { event.preventDefault(); confirm.current?.focus() }}>
+          <div className="browser-page-alert-header">
+            <RiInformationLine size={21} aria-hidden="true" />
+            <div>
+              <Dialog.Title className="modal-title">페이지 알림</Dialog.Title>
+              {alert.source && <p className="browser-page-alert-source" title={alert.source} dir="auto">{alert.source}</p>}
+            </div>
+          </div>
+          <Dialog.Description className="browser-page-alert-message" tabIndex={0} dir="auto">{alert.message}</Dialog.Description>
+          <div className="modal-actions">
+            <button ref={confirm} type="button" className="btn-primary modal-btn" onClick={onDismiss}>확인</button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  )
+}
+
 export default function BrowserReview({ tabId, isVisible, onActivate }: {
   tabId: string
   isVisible: boolean
@@ -43,6 +71,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const importButton = useRef<HTMLButtonElement>(null)
   const loginsButton = useRef<HTMLButtonElement>(null)
   const [state, setState] = useState<BrowserReviewState | null>(null)
+  const isActive = useTerminalStore(store => store.activeTerminalId === tabId)
   const [agentId, setAgentId] = useState('')
   const [newSessionKind, setNewSessionKind] = useState<'claude' | 'codex' | null>(null)
   // The agents by project (main groups a repository's worktrees), and the project the request goes to
@@ -74,6 +103,7 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
   const projectFieldId = `${elementPickerId}-project`
   const draftFieldId = `${elementPickerId}-draft`
   const url = state?.url ?? ''
+  const alert = isVisible && isActive ? state?.alert : null
   const localFile = state?.localFile
   const localPreview = localFile !== undefined
   const selection = state?.selection
@@ -289,6 +319,8 @@ export default function BrowserReview({ tabId, isVisible, onActivate }: {
 
   return (
     <section className="browser-review" data-browser-tab-id={tabId} aria-label="브라우저">
+      {alert && <BrowserPageAlert key={alert.id} alert={alert}
+        onDismiss={() => void act({ type: 'dismiss-alert', alertId: alert.id })} />}
       <header className="browser-review-toolbar">
         <div className="browser-review-navigation">
           <button type="button" title="뒤로" aria-label="뒤로" disabled={!state?.canGoBack} onClick={() => void act({ type: 'back' })}>

@@ -84,6 +84,24 @@
   font-size: 12px;
 }
 
+.local-terminal-restart {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-tertiary, var(--bg-primary));
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.local-terminal-restart:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.local-terminal-restart:disabled {
+  opacity: 0.5;
+}
+
 /* One shell in a pane: the whole tab when it is not split, a placed box (lib/splitTree.ts) when it is */
 .local-terminal-pane {
   --pane-card-radius: 0px;

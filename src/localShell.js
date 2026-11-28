@@ -728,6 +728,7 @@ function createLocalShells({
         return status !== 'idle' && !(entry.externalAgent && status === 'unknown');
       },
       isRunningTask: () => agentStatus(entry) === 'working',
+      isStarting: () => agentStatus(entry) === 'starting',
       // Nothing reported yet (a CLI just started): the wake waits for a still, empty composer instead
       isUnknown: () => agentStatus(entry) === 'unknown',
       isLive: () => shells.get(id)?.inbox === inbox && hasAgent(entry),

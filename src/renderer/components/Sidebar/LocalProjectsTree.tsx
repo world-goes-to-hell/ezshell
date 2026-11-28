@@ -247,6 +247,9 @@ export function LocalProjectsTree({
         const plainNested = project.isFolder && !!nestedSummaries[pathKey(project.folder)]?.count
         const projectWorking = !isProjectOpen && project.worktrees.some(tree => tabsOf(tree.path).some(tab => tab.working))
         const Chevron = isProjectOpen ? RiArrowDownSLine : RiArrowRightSLine
+        // One worktree only: its folder name is the project's and its branch goes on the project's line, so the
+        // row under it does not repeat them (2026-11-28 user request); the row names its terminal instead
+        const lone = project.worktrees.length === 1 ? project.worktrees[0] : undefined
         return (
           <li key={projectKey} className={`local-project${dropTarget === projectKey ? ' is-drop-target' : ''}`} data-project-folder={project.folder} {...dropProps(project, projectKey)}>
             <div className="local-project-head" onContextMenu={canOpenFolder ? event => openFolderMenu(event, project.folder, project.name) : undefined}>
@@ -262,6 +265,12 @@ export function LocalProjectsTree({
                 <Chevron size={14} className="local-project-chevron" />
                 <RiFolder3Line size={14} className="local-project-icon" />
                 <span className="local-project-name">{project.name}</span>
+                {lone?.branch && (
+                  <span className="local-project-branch" title={lone.branch}>
+                    <RiGitBranchLine size={11} aria-hidden="true" />
+                    <span className="local-worktree-branch-name">{lone.branch}</span>
+                  </span>
+                )}
                 <NestedRepositorySummary project={project.folder} />
                 {project.note && <span className="local-project-note">{project.note}</span>}
               </button>
@@ -290,6 +299,8 @@ export function LocalProjectsTree({
                   const worktreeWorking = hasChildren && !isTreeOpen && childTabs.some(tab => tab.working)
                   const isCurrent = singleTab?.id === currentTabId
                   const name = folderLabel(worktree.path)
+                  const merged = lone === worktree
+                  const rowName = merged ? (singleTab && !singleTab.name.startsWith(project.name) ? singleTab.name : '로컬 터미널') : name
                   const shownNames = [name, project.name, worktree.branch && `${project.name} · ${worktree.branch}`]
                   const presets = <RunPresetsSection folder={worktree.path} projectName={project.name} roots={project.worktrees.map(tree => tree.path)} />
                   const nested = <NestedRepositoryList root={worktree.path}
@@ -303,7 +314,7 @@ export function LocalProjectsTree({
                     </li>
                   )
                   return (
-                    <li key={treeKey} className={`local-worktree${tabs.length > 0 ? ' has-tabs' : ''}${isCurrent ? ' is-current' : ''}`}
+                    <li key={treeKey} className={`local-worktree${tabs.length > 0 ? ' has-tabs' : ''}${isCurrent ? ' is-current' : ''}${merged ? ' is-lone' : ''}`}
                       data-worktree-path={worktree.path} data-local-session-id={singleTab?.id}
                       data-agent-work={worktreeWorking ? 'working' : undefined}>
                       <div className="local-worktree-row" onContextMenu={onStartDevelopmentTask ? event => void openTasks(event, worktree) : undefined}>
@@ -316,10 +327,10 @@ export function LocalProjectsTree({
                         >
                           <span className={`local-worktree-dot${tabs.some(tab => tab.kind === 'local' && tab.connected) ? ' is-on' : ''}`} aria-hidden="true" />
                           <span className="local-worktree-label">
-                            <span className="local-worktree-name">{name}</span>
+                            <span className="local-worktree-name">{rowName}</span>
                             {worktree.isMain && project.worktrees.length > 1 && <span className="local-worktree-tag">기본</span>}
                           </span>
-                          {worktree.branch && (
+                          {worktree.branch && !merged && (
                             <span className="local-worktree-branch" title={worktree.branch}>
                               <RiGitBranchLine size={11} aria-hidden="true" />
                               <span className="local-worktree-branch-name">{worktree.branch}</span>

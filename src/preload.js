@@ -262,6 +262,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   workspaceContentSearch: (root, query, caseSensitive) => ipcRenderer.invoke('workspace-content-search', { root, query, caseSensitive: caseSensitive === true }),
   localFileReveal: (root, relative) => ipcRenderer.invoke('local-file-reveal', { root, path: relative }),
   workspaceGitLog: (folder, allBranches) => ipcRenderer.invoke('workspace-git-log', { folder, allBranches }),
+  workspaceGitUpstream: (root) => ipcRenderer.invoke('workspace-git-upstream', root),
   workspaceGitSearch: (root, query, worktreeOnly) => ipcRenderer.invoke('workspace-git-search', { root, query, worktreeOnly }),
   localWorktreeCreate: (options) => ipcRenderer.invoke('local-worktree-create', options),
   // Past Claude Code and Codex sessions (right panel); only keys from the list go back
@@ -298,6 +299,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('local-shell-sleep', listener);
   },
   agentMessagesSnapshot: () => ipcRenderer.invoke('agent-messages-state'),
+  agentMessageSendCopiedText: (to, text) => ipcRenderer.invoke('agent-message-send-copied-text', to, text),
   agentMessageSetRole: (id, role) => ipcRenderer.invoke('agent-message-set-role', id, role),
   browserReviewOpen: () => ipcRenderer.invoke('browser-review-open'),
   browserReviewOpenWorkspace: (root, relative) => ipcRenderer.invoke('browser-review-open-workspace', root, relative),
@@ -396,6 +398,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentChatToggleSpeed: (shellId, speed) => ipcRenderer.invoke('agent-chat-toggle-speed', { shellId, speed }),
   agentChatInterrupt: (shellId) => ipcRenderer.invoke('agent-chat-interrupt', shellId),
   agentChatTakeBack: (shellId, texts) => ipcRenderer.invoke('agent-chat-take-back', { shellId, texts }),
+  agentInboxNotify: (shellId, messageId) => ipcRenderer.invoke('agent-inbox-notify', { shellId, messageId }),
   agentChatAnswer: (shellId, key, signature) => ipcRenderer.invoke('agent-chat-answer', { shellId, key, signature }),
   agentChatAnswerQuestions: (shellId, itemId, answers) => ipcRenderer.invoke('agent-chat-answer-questions', { shellId, itemId, answers }),
   agentChatCommandWatch: (shellId) => ipcRenderer.invoke('agent-chat-command-watch', shellId),

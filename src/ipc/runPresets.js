@@ -4,6 +4,7 @@ const { inspectLocalProject } = require('./localProjects.js')
 const { inspectDevelopmentTasks, prepareDevelopmentTask } = require('./localDevelopmentTasks.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { createDevelopmentErrors, MAX_LOG_LINES } = require('./developmentErrors.js')
+const { describeRunFailure } = require('./runDiagnosis.js')
 const { redactRunSecrets, redactRunOutput } = require('./runSecrets.js')
 const { usesMaven, mavenFields, diagnosisContext, presetSuggestions, suggestedMavenFields, wrapperMavenVersion } = require('./runSuggestions.js')
 const { prepareMavenRun } = require('./runMaven.js')
@@ -217,7 +218,7 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       run.jarOffered = undefined
       run.proposals = []
       update(run, { status: event.phase === 'prepare' ? 'preparing' : 'starting', startedAt: now(), shellId,
-        exitCode: null, failedAt: undefined, address: undefined, readyAt: undefined, reload: undefined, proposals: undefined, errors: 0 })
+        exitCode: null, failedAt: undefined, failureReason: undefined, address: undefined, readyAt: undefined, reload: undefined, proposals: undefined, errors: 0 })
       return
     }
     if (run.state.shellId !== shellId) return
@@ -251,10 +252,13 @@ function createRunPresets({ store, file, getShells, getAgent, isLocked, javaHome
       run.intentionalExit = Boolean(event.action)
       const crashed = !event.action && (event.failed || (typeof event.exitCode === 'number' && event.exitCode !== 0))
       const buildFailed = crashed && event.phase === 'prepare'
+      const failureReason = crashed
+        ? describeRunFailure({ lines: run.logs.lines(), exitCode: event.exitCode, maven: Boolean(run.diagnosis?.invocation) })
+        : undefined
       if (buildFailed) run.logs.addError('ERROR 빌드 실패', run.logs.groups().at(-1)?.lines)
       const logState = run.logs.state()
       update(run, { ...logState, address: logState.readyAt !== undefined ? run.expectedUrl ?? logState.address : undefined,
-        status: crashed ? 'crashed' : 'stopped', exitCode: event.exitCode, ...(buildFailed && { failedAt: 'prepare' }) })
+        status: crashed ? 'crashed' : 'stopped', exitCode: event.exitCode, failureReason, ...(buildFailed && { failedAt: 'prepare' }) })
       const preset = store.list(run.project.key).find(item => item.id === run.id)
       if (preset) expireProposals(run, preset)
       if (crashed && preset?.notify && !isLocked()) notifyCrash(path.basename(run.project.root) || '로컬 프로젝트', preset.name)

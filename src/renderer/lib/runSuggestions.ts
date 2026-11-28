@@ -17,6 +17,9 @@ export function suggestionTitle(item: RunSuggestion): string {
     case 'jndi': return item.name ? `JNDI 이름을 찾지 못함: ${item.name}` : 'JNDI 이름을 찾지 못함'
     case 'sourceEncoding': return `소스 인코딩이 맞지 않음${item.encoding ? ` (${item.encoding})` : ''}`
     case 'portInUse': return item.port ? `포트 ${item.port} 사용 중` : '포트 사용 중'
+    case 'databaseConnection': return `DB 점검 필요 · ${item.port ? `${item.port} 포트 ` : ''}연결 ${item.reason === 'timeout' ? '시간 초과' : '실패'}`
+    case 'databaseAuth': return 'DB 점검 필요 · 로그인 또는 접속 권한 오류'
+    case 'databaseMissing': return 'DB 설정 점검 · 지정한 데이터베이스 없음'
     case 'mavenHttpBlocked': return `HTTP 저장소가 차단됨${repo(item)}`
     case 'mavenRepositoryUnavailable':
       return item.reason === 'unknownHost' ? `저장소 주소를 찾을 수 없음${repo(item)}`

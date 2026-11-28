@@ -9,6 +9,15 @@ const inboxPrompts = new Set([
   'New ezShell message while you are busy: read it with read_inbox and confirm it now with send_receipt, saying what you will finish first; handle it after your current task.'
 ])
 
-const isInboxPrompt = text => inboxPrompts.has(text.trim())
+// The user's "지금 알리기" on one message (the chat's bell, agent-inbox-notify): names the message so the agent
+// handles that one now, even while busy. Built only by main from a message id it checked.
+const MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const messagePrompt = id => {
+  if (!MESSAGE_ID.test(id)) throw new Error('메시지를 확인해 주세요.')
+  return `ezShell message ${id} is waiting for you: read it now with read_inbox, then handle it.`
+}
+const MESSAGE_PROMPT = /^ezShell message [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} is waiting for you: read it now with read_inbox, then handle it\.$/i
 
-module.exports = { PROMPT, BUSY_PROMPT, REMIND_PROMPT, isInboxPrompt }
+const isInboxPrompt = text => inboxPrompts.has(text.trim()) || MESSAGE_PROMPT.test(text.trim())
+
+module.exports = { PROMPT, BUSY_PROMPT, REMIND_PROMPT, isInboxPrompt, messagePrompt, MESSAGE_ID }

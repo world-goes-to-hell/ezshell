@@ -1031,6 +1031,18 @@ app.on('will-quit', () => {
 ipcMain.handle('agent-messages-state', event =>
   fromMainWindow(event) && !isAppLocked ? agentMessages.snapshot() : null
 );
+ipcMain.handle('agent-message-send-copied-text', (event, to, text) => {
+  if (!fromMainWindow(event) || !event.senderFrame || event.senderFrame !== event.sender.mainFrame || isAppLocked) {
+    return { success: false, error: '메인 창에서 잠금을 해제해 주세요.' };
+  }
+  if (typeof to !== 'string' || to === 'user') return { success: false, error: '받을 에이전트를 선택해 주세요.' };
+  try {
+    agentMessages.sendAsUser({ to, text });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
 ipcMain.handle('agent-hooks-configure', (event, config) => {
   if (!fromMainWindow(event) || isAppLocked) return { success: false };
   const result = agentMessages.configureHooks(config);
@@ -1218,6 +1230,8 @@ const agentChatIpc = require('./src/agentChat/ipc.js').registerAgentChatIpc({
     agents: () => agentMessages.snapshot().agents,
     send: request => agentMessages.sendAsUser(request)
   },
+  // The chat's bell: which messages the agent of a shell has not handled yet (agent-inbox-notify checks against it)
+  inbox: { unhandledFor: shellId => agentMessages.unhandledFor(shellId) },
   showShell: (shellId) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();

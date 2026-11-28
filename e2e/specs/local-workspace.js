@@ -71,16 +71,18 @@ const { check, finish } = createChecks()
   const cancel = q('.confirm-dialog .btn-secondary')
   const confirm = q('.confirm-dialog .btn-danger')
   await js(`${closeFeature}.click()`)
-  check('the worktree tab close warns that every session in the tab will end', await until(`
+  // Asked right after choosing to close the tab: Enter goes ahead, Escape or 취소 keeps it
+  check('the worktree tab close warns that every session in the tab will end, with 모두 종료 focused for Enter', await until(`
     ${q('.confirm-dialog-message')}?.textContent.includes('이 탭에 열려 있는 세션이 모두 종료됩니다.') &&
-    ${confirm}?.textContent === '모두 종료' && document.activeElement === ${cancel} && ${featureSession} === ${featureId}
+    ${confirm}?.textContent === '모두 종료' && document.activeElement === ${confirm} && ${featureSession} === ${featureId}
   `))
-  await driver.enter()
-  check('cancel keeps the worktree tab open', await until(`!${question} && ${featureSession} === ${featureId}`))
+  await driver.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await driver.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  check('Escape keeps the worktree tab open', await until(`!${question} && ${featureSession} === ${featureId}`))
   await js(`${closeFeature}.click()`)
-  await until(`!!${confirm}`)
-  await js(`${confirm}.click()`)
-  check('confirm closes the worktree tab and leaves the other tab open', await until(`
+  await until(`!!${confirm} && document.activeElement === ${confirm}`)
+  await driver.enter()
+  check('Enter closes the worktree tab and leaves the other tab open', await until(`
     !${featureSession} && !${closeFeature} && ${otherSession} === ${otherId}
   `))
   await js(`${worktreeRow(feature)}.querySelector('.local-worktree-open').click()`)

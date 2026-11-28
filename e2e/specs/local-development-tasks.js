@@ -541,9 +541,21 @@ function fixture(backendPort, frontendPort) {
     check('a crash turns the row red and tells the exit code', await until(`${presetRow}?.dataset.status === 'crashed' &&
       ${presetRow}.textContent.includes('종료 1')`, 15000))
     const notice = `document.querySelector('.run-crash')`
+    const failureReason = `${presetRow}?.querySelector('.run-preset-failure-line')`
+    check('the stopped row and notice explain the failure with credentials redacted by default', await until(`
+      ${failureReason}?.textContent.includes('Internal server error: fixture failed pwd=****') &&
+      ${notice}?.querySelector('.run-crash-reason')?.textContent.includes('Internal server error: fixture failed pwd=****') &&
+      !${failureReason}.textContent.includes('fixture-terminal-only')`))
     check('the crash notice masks the credential while the terminal shows the original output', await until(`
       ${notice}?.textContent.includes('Internal server error: fixture failed pwd=****') &&
       !${notice}.textContent.includes('fixture-terminal-only') && ${inTerminal('fixture-terminal-only')}`, 5000))
+    check('the crash notice action buttons share a height and top edge', await js(`
+      (() => {
+        const buttons = [...(${notice}?.querySelectorAll('.run-crash-actions > button') ?? [])]
+          .map(button => button.getBoundingClientRect())
+        return buttons.length === 3 && buttons[0].height > 0 && buttons.every(button =>
+          Math.abs(button.y - buttons[0].y) < 1 && Math.abs(button.height - buttons[0].height) < 1)
+      })()`))
     await shot('local-run-preset-crash')
     await js(`${notice}.querySelector('.btn-primary').click()`)
     // The preview is main's text (what goes out): the name, the folder relative to the project, the errors
@@ -583,7 +595,8 @@ function fixture(backendPort, frontendPort) {
     await js(`[...${diagnosis}.querySelectorAll('button')].find(b => b.textContent.trim() === '닫기').click()`)
     await until(`!${diagnosis}`)
     await js(`[...${notice}.querySelectorAll('button')].find(b => b.textContent.includes('다시 실행')).click()`)
-    check('다시 실행 starts it again and takes the notice away', await until(`['starting', 'running'].includes(${presetRow}?.dataset.status) && !${notice}`, 10000))
+    check('다시 실행 clears both the notice and the previous failure reason', await until(
+      `['starting', 'running'].includes(${presetRow}?.dataset.status) && !${notice} && !${failureReason}`, 10000))
     // It crashes again by design: stop it first so the next crash does not race the end of the spec
     await until(`${presetRow}?.dataset.status === 'running'`, 10000)
     await click(...await center(`${presetRow}.querySelector('[data-action="stop"]')`))
@@ -713,6 +726,35 @@ function fixture(backendPort, frontendPort) {
     check('deleting the preset removes temporary and online settings while retaining the pin',
       (await js(`window.electronAPI.runPresetsDelete(${args})`)).ok && !fs.existsSync(settings) && !fs.existsSync(received[2]) &&
       fs.readdirSync(path.join(profile, 'runtimes', 'maven-pinned', mavenId)).some(name => name.startsWith('repo-')))
+
+    const dbFolder = path.join(profile, 'database startup fixture')
+    fs.mkdirSync(dbFolder)
+    fs.writeFileSync(path.join(dbFolder, 'fail.cjs'), `
+      console.error('ERROR o.h.engine.jdbc.spi.SqlExceptionHelper : Socket fail to connect to host:address=(host=localhost)(port=3306)(type=primary). Connection refused: getsockopt')
+      console.error('[ERROR] Process terminated with exit code: 1')
+      console.error('[ERROR] [Help 1] http://example.test/help')
+      process.exitCode = 1
+    `)
+    const dbArg = JSON.stringify(dbFolder)
+    const database = await js(`window.electronAPI.runPresetsSave(${dbArg}, {
+      name: 'DB 기동 시험', kind: 'custom', command: 'node fail.cjs', notify: false
+    })`)
+    if (!database?.preset) throw new Error('Could not save the DB failure fixture')
+    await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([dbFolder, repo]))});
+      window.dispatchEvent(new Event('ezshell:local-projects-changed'))`)
+    const dbRow = `document.querySelector('.run-preset[data-run-preset="${database.preset.id}"]')`
+    if (!await until(`!!${dbRow}`)) throw new Error('Could not find the DB failure fixture row')
+    const dbArgs = `${dbArg}, ${JSON.stringify(database.preset.id)}`
+    const dbQuestion = await js(`window.electronAPI.runPresetStart(${dbArgs})`)
+    if (!dbQuestion.needsConfirm?.command.includes('node fail.cjs')) throw new Error(`Unexpected DB fixture confirmation: ${JSON.stringify(dbQuestion)}`)
+    const dbRun = await js(`window.electronAPI.runPresetStart(${dbArgs}, { confirmCustom: true })`)
+    check('a startup failure identifies the DB and port on the row without a notification', dbRun.ok &&
+      await until(`${dbRow}?.querySelector('.run-preset-failure-line')?.textContent === 'DB 점검 필요 · 3306 포트 연결 실패'`) &&
+      !await js(`!!document.querySelector('.run-crash[data-run-preset="${database.preset.id}"]')`), JSON.stringify(dbRun))
+    await shot('local-run-preset-db-failure')
+    await js(`${dbRow}?.querySelector('.run-preset-failure-line')?.click()`)
+    check('the failure reason opens the DB diagnosis with a connection check', await until(
+      `${diagnosis}?.querySelector('.run-suggestion')?.textContent.includes('설정한 호스트와 포트에서 접속할 수 있는지')`))
   } finally { driver.close() }
   finish()
 })().catch(error => { console.error(error); process.exit(1) })

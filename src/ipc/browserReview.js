@@ -16,6 +16,7 @@ const WORLD = 1001
 const LOGIN_WORLD = 1002
 const MAX_REQUEST = 4000
 const MAX_TITLE_CHARS = 300
+const MAX_ALERT_CHARS = 10_000
 const VIEWPORT_WORLD = 1003
 const PICK_SCRIPT = `(${pickBrowserElement})(${describeBrowserElement})`
 const VIEWPORT_SCRIPT = `(${readReviewViewport})(${describeBrowserElement}`
@@ -123,10 +124,48 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
     }
     contents.on(workspace ? 'will-frame-navigate' : 'will-navigate', guardNavigation)
     contents.on('will-redirect', guardNavigation)
-    const ui = { url: '', title: '', loading: false, error: '', picking: false, selection: null }
+    const ui = { url: '', title: '', loading: false, error: '', picking: false, selection: null, alert: null }
     let generation = 0
     let hasBounds = false
     let visible = false
+    let alertReply = null
+    let focusAfterAlert = false
+
+    function finishAlert(accepted) {
+      if (accepted !== true) focusAfterAlert = false
+      if (!alertReply) return
+      const reply = alertReply
+      alertReply = null
+      ui.alert = null
+      if (accepted !== undefined) reply(accepted, '')
+      showPage()
+      publish()
+    }
+
+    // Electron 45 supplies its native dialog through a per-WebContents listener. Keep it for
+    // other dialog types and fall back to Electron if a later version changes the listener.
+    const dialogListeners = contents.listeners('-run-dialog')
+    if (dialogListeners.length === 1) {
+      const [nativeDialog] = dialogListeners
+      contents.removeListener('-run-dialog', nativeDialog)
+      contents.on('-run-dialog', (info, reply) => {
+        if (info.dialogType !== 'alert' || contents.getLastWebPreferences()?.disableDialogs) {
+          return nativeDialog.call(contents, info, reply)
+        }
+        if (alertReply || win.isDestroyed()) return reply(true, '')
+        const file = localDocument(info.frame.url)
+        const source = file ? path.posix.basename(file) : webUrl(info.frame.origin)?.host ?? ''
+        const { messageText } = info
+        const message = messageText.length > MAX_ALERT_CHARS ? `${messageText.slice(0, MAX_ALERT_CHARS)}…` : messageText
+        focusAfterAlert = visible && contents.isFocused()
+        alertReply = reply
+        ui.alert = { id: randomUUID(), source, message }
+        showPage()
+        publish()
+      })
+      // Chromium has already cancelled the page's wait when Electron emits this event.
+      contents.on('-cancel-dialogs', () => finishAlert())
+    }
 
     function state() {
       return {
@@ -199,10 +238,15 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
       ui.picking = false
     }
     function showPage() {
-      const show = hasBounds && Boolean(ui.url) && !ui.error
-      if (visible === show) return
-      visible = show
-      page.setVisible(show)
+      const show = hasBounds && Boolean(ui.url) && !ui.error && !ui.alert
+      if (visible !== show) {
+        visible = show
+        page.setVisible(show)
+      }
+      if (show && focusAfterAlert) {
+        focusAfterAlert = false
+        if (!win.isDestroyed() && win.isFocused()) contents.focus()
+      }
     }
     function bounds(rect) {
       if (!rect) {
@@ -230,6 +274,7 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
       publish()
     }
     function load(url) {
+      finishAlert(false)
       navigation(url)
       // Loading failures are reported by did-fail-load. ERR_ABORTED can be a click or a redirect.
       void contents.loadURL(url).catch(() => {})
@@ -271,6 +316,7 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
       publish()
     })
     contents.on('render-process-gone', () => {
+      finishAlert()
       resetSelection()
       ui.loading = false
       ui.error = '페이지가 닫혔습니다. 주소를 다시 열어 주세요.'
@@ -377,10 +423,16 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
           return success
         }
         case 'back':
-          if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack()
+          if (contents.navigationHistory.canGoBack()) {
+            finishAlert(false)
+            contents.navigationHistory.goBack()
+          }
           return success
         case 'forward':
-          if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward()
+          if (contents.navigationHistory.canGoForward()) {
+            finishAlert(false)
+            contents.navigationHistory.goForward()
+          }
           return success
         case 'reload':
           if (workspace && ui.error && ui.url) {
@@ -388,10 +440,16 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
             return success
           }
           if (ui.error) return action({ type: 'navigate', address: ui.url })
-          if (ui.url) contents.reload()
+          if (ui.url) {
+            finishAlert(false)
+            contents.reload()
+          }
           return success
         case 'devtools':
           toggleDevTools()
+          return success
+        case 'dismiss-alert':
+          if (ui.alert?.id === request.alertId) finishAlert(true)
           return success
         case 'pick': return pick()
         case 'cancel':
@@ -459,6 +517,7 @@ function registerBrowserReview({ fromMainWindow, resolveWorkspaceRoot, fromTermi
       state, publish, bounds, action, currentLoginOrigin, fill, persistent, load, remote,
       close() {
         generation++
+        finishAlert(false)
         if (workspace) workspacePreviews.delete(workspace.host)
         // Its developer tools window goes with the tab (closing the app locks or closes every tab)
         if (!contents.isDestroyed() && contents.isDevToolsOpened()) contents.closeDevTools()

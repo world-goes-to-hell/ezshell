@@ -139,11 +139,12 @@ function claudeQuestionPrompt(rows, bare, bottom, previous) {
 /**
  * isWorking: not waiting for input (also while starting up, unknown or asking for approval).
  * isRunningTask: in the middle of a task, the only busy state that gets the busy notice.
+ * isStarting: a fresh CLI starting up before its first turn (Codex connecting its MCP servers).
  */
 /**
  * write: our wake lines (gated on mail by the caller); rawWrite: a chat line the user sent (submitText)
  */
-function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMessages = () => [], isWorking, isRunningTask = () => false, isUnknown = () => false, isLive = () => true, isBlocked = () => false, isHookWorking = () => false, messageSeenAt = () => null, quietMs = QUIET_MS, draftNoticeMs = WAKE_DRAFT_NOTICE_AFTER, write, rawWrite = write, parentInput = () => true, onApprovalChange, onDraftBlockChange, wakeRecovery = { blocked: false } }) {
+function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMessages = () => [], isWorking, isRunningTask = () => false, isStarting = () => false, isUnknown = () => false, isLive = () => true, isBlocked = () => false, isHookWorking = () => false, messageSeenAt = () => null, quietMs = QUIET_MS, draftNoticeMs = WAKE_DRAFT_NOTICE_AFTER, write, rawWrite = write, parentInput = () => true, onApprovalChange, onDraftBlockChange, wakeRecovery = { blocked: false } }) {
   const screen = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true })
   const antigravity = kind === 'antigravity'
   const dispatched = new Set()
@@ -1090,7 +1091,11 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
         return
       }
       const blocked = rendered && chatBlocked()
-      const canSubmit = !working || (mode === 'busy' && running && !hookWorking)
+      // A fresh Codex shows a still title for a moment before it spins up its MCP servers, and the
+      // notice can land in that gap. Codex takes Enter while starting ("Waiting for startup", "tab to
+      // queue message") and runs the line once ready, so submit the notice already in its composer.
+      const codexStarting = kind === 'codex' && working && !running && !hookWorking && isStarting()
+      const canSubmit = !working || (mode === 'busy' && running && !hookWorking) || codexStarting
       const verified = matchedEditor(input, visible, text => text === expected)
       const recoveryUntil = attempt.visibleUntil
       if (rendered && verified && parentInput(targetOf(verified)) && canSubmit && !blocked) {

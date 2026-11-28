@@ -3,7 +3,7 @@
 // the agent's transcript (src/agentChat) with a box that types into the agent's own composer.
 import { memo, useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent, type ToggleEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { RiArrowDownLine, RiArrowUpLine, RiChat1Line, RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolder3Line, RiFolderOpenLine, RiGlobalLine, RiImageAddLine, RiListUnordered, RiLoader4Line, RiMailLine, RiNotification3Line, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiTimeLine, RiToolsLine } from 'react-icons/ri'
+import { RiArrowDownLine, RiArrowUpLine, RiChat1Line, RiCheckboxBlankCircleLine, RiCheckboxCircleLine, RiCheckboxMultipleLine, RiClipboardLine, RiCloseLine, RiFileCopyLine, RiFileTextLine, RiFlashlightLine, RiFolder3Line, RiFolderOpenLine, RiGlobalLine, RiImageAddLine, RiListUnordered, RiLoader4Line, RiMailLine, RiPushpinLine, RiSave3Line, RiSendPlane2Line, RiStopCircleLine, RiTerminalBoxLine, RiTimeLine, RiToolsLine } from 'react-icons/ri'
 import type { AgentChatApproval, AgentChatBackgroundShells, AgentChatItem, AgentChatQuestion, AgentChatQuestionContext, AgentMessageSession, CodexSpeedMode } from '../../types'
 import { isUnconfirmedSend, useAgentChatStore } from '../../stores/agentChatStore'
 import { chatLinesToTakeBack, draftWithTakenBack, takeBackQueued } from '../../lib/chatTakeBack'
@@ -45,6 +45,7 @@ import { useAgentScreenReturnStore } from '../../stores/agentScreenReturnStore'
 import { useAgentScreenWatch } from './useAgentScreenWatch'
 import { ClaudeProfileMenu } from './ClaudeProfileMenu'
 import type { ChatAppearance } from '../../themes/chatThemes'
+import { AgentMailBell } from './AgentMailBell'
 import './AgentChat.css'
 import './AgentChatThemes.css'
 
@@ -409,7 +410,6 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   const agent = useAgentMessagesStore(state => shellAgentOf(state.snapshot.agents, shellId))
   const { agent: mailAgent, count: unreadMail } = usePaneAgentMail(shellId)
   const location = useAgentPaneLocation(mailAgent)
-  const notificationLabel = unreadMail ? `읽지 않은 메시지 ${unreadMail}개` : '메시지 알림'
   const toggleKeys = useShortcutsStore(state => state.getEffectiveKeys('toggle-agent-chat'))
   const [draft, setDraft] = useState('')
   const [subagentId, setSubagentId] = useState<string | null>(null)
@@ -1226,7 +1226,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
         icon: RiFileCopyLine, disabled: !canExport,
         onSelect: () => void exportConversation('copy')
       },
-      { label: '채팅 닫고 터미널로 전환', icon: RiTerminalBoxLine, onSelect: onShowTerminal }
+      { label: '터미널 모드', icon: RiTerminalBoxLine, onSelect: onShowTerminal }
     )
     if (!antigravity) contextItems.push(
       {
@@ -1291,12 +1291,8 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
             {antigravity && idle ? '입력 대기' : STATUS_LABELS[status]}
           </span>
         )}
-        {!antigravity && mailAgent && (
-          <span className="agent-chat-notification" role="img" title={notificationLabel} aria-label={notificationLabel} data-unread={unreadMail > 0}>
-            <RiNotification3Line size={15} aria-hidden="true" />
-            {unreadMail > 0 && <span className="agent-mail-count" aria-hidden="true">{unreadMail > 99 ? '99+' : unreadMail}</span>}
-          </span>
-        )}
+        {/* Opens the messages not handled yet; picking one asks the agent to handle it now (AgentMailBell) */}
+        {!antigravity && mailAgent && <AgentMailBell shellId={shellId} agent={mailAgent} unread={unreadMail} tabId={tabId} />}
         {kind === 'claude' && <ClaudeProfileMenu shellId={shellId} profileId={agent?.claudeProfileId} />}
         <AgentChatThemePicker toolbar menuStyle={appearance?.style} />
       </header>

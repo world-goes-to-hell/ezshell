@@ -413,12 +413,53 @@ const { check, finish } = createChecks()
     await clearSearch()
     check('clearing Git search restores the commit graph', await until(`!!document.querySelector('.workspace-git-graph') && !${commit}`))
 
+    // Git history compares the project repository, including when it has no nested repositories.
+    const compareUpstream = `document.querySelector('.workspace-upstream-toggle')`
+    await js(`${compareUpstream}.click()`)
+    check('the upstream comparison explains when there is no tracking branch', await until(`
+      document.querySelector('.workspace-note')?.textContent.includes('비교할 원격 추적 브랜치가 없습니다')
+    `))
+    const localHead = git('rev-parse', 'HEAD').trim()
+    const localStatus = git('status', '--porcelain')
+    git('remote', 'add', 'origin', repo)
+    git('config', 'branch.main.remote', 'origin')
+    git('config', 'branch.main.merge', 'refs/heads/main')
+    await refreshPanel()
+    check('an unfetched upstream is distinct from matching histories', await until(`
+      document.querySelector('.workspace-note')?.textContent.includes('origin/main의 원격 추적 정보가 없습니다')
+    `))
+    const remoteHead = git('commit-tree', 'HEAD^{tree}', '-p', 'HEAD^', '-m', 'Remote-only commit').trim()
+    git('update-ref', 'refs/remotes/origin/main', remoteHead)
+    await refreshPanel()
+    const outgoing = `document.querySelector('section[aria-label="보낼 커밋"]')`
+    const incoming = `document.querySelector('section[aria-label="받을 커밋"]')`
+    check('the project Git history separates outgoing and incoming commits', await until(`
+      document.querySelector('.workspace-upstream-target span')?.textContent === 'main ↔ origin/main' &&
+      ${outgoing}?.querySelector('h3').textContent === '보낼 커밋 1개' &&
+      ${incoming}?.querySelector('h3').textContent === '받을 커밋 1개' &&
+      ${outgoing}.querySelector('.workspace-commit-subject')?.textContent === 'Commit from the panel' &&
+      ${incoming}.querySelector('.workspace-commit-subject')?.textContent === 'Remote-only commit'
+    `))
+    await js(`${incoming}.querySelector('.workspace-git-detail').click()`)
+    check('an incoming commit opens its changed files', await until(`
+      ${incoming}?.querySelector('.workspace-git-commit-files')?.textContent.includes('new.txt')
+    `))
+    await driver.shot('local-workspace-git-upstream')
+    git('update-ref', 'refs/remotes/origin/main', localHead)
+    await refreshPanel()
+    check('refresh sees a changed tracking ref and leaves the project files and HEAD as they were', await until(`
+      ${outgoing}?.querySelector('h3').textContent === '보낼 커밋 0개' && ${incoming}?.querySelector('h3').textContent === '받을 커밋 0개'
+    `) && git('rev-parse', 'HEAD').trim() === localHead && git('status', '--porcelain') === localStatus)
+    await js(`${compareUpstream}.click()`)
+    check('leaving the comparison restores history', await until(`!!document.querySelector('.workspace-git-graph')`))
+
     // ---- Folders main does not know are refused ----
     const outside = JSON.stringify(os.tmpdir())
     const refused = await js(`Promise.all([
       window.electronAPI.workspaceDirectoryList(${outside}),
       window.electronAPI.workspaceDirectorySearch(${outside}, 'app'),
       window.electronAPI.workspaceGitSearch(${outside}, 'app'),
+      window.electronAPI.workspaceGitUpstream(${outside}),
       window.electronAPI.localFileOpen(${JSON.stringify(repo)}, '../outside.txt', 'edit'),
       window.electronAPI.browserReviewOpenWorkspace(${outside}, 'outside.html'),
       window.electronAPI.browserReviewOpenWorkspace(${JSON.stringify(repo)}, '../outside.html'),
@@ -427,7 +468,7 @@ const { check, finish } = createChecks()
       window.electronAPI.workspaceGitCommit(${outside}, ['app.txt'], 'outside'),
       window.electronAPI.workspaceGitCommit(${JSON.stringify(repo)}, ['../outside.txt'], 'outside')
     ]).then(results => results.map(r => r.success))`)
-    check('unapproved workspace paths, non-web files, a bad commit hash and commits outside are refused', refused.length === 10 && refused.every(result => result === false), JSON.stringify(refused))
+    check('unapproved workspace paths, non-web files, a bad commit hash and commits outside are refused', refused.length === 11 && refused.every(result => result === false), JSON.stringify(refused))
     await driver.shot('local-workspace-files')
   } finally {
     driver.close()

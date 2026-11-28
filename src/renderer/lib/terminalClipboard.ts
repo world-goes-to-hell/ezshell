@@ -4,7 +4,7 @@ import { toast, useToastStore } from '../stores/toastStore'
 
 // A selection gesture ends on mouseup; waiting a tick lets xterm finish updating it
 const SELECTION_SETTLE_MS = 0
-const COPY_TOAST_DURATION_MS = 2000
+const COPY_TOAST_DURATION_MS = 8000
 
 /** Copy text to the clipboard and show a short confirmation toast. */
 export async function copyToClipboard(text: string): Promise<boolean> {
@@ -16,7 +16,8 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       type: 'success',
       title: '복사됨',
       message: lineCount > 1 ? `${lineCount}줄을 클립보드에 복사했습니다` : `${text.length}자를 클립보드에 복사했습니다`,
-      duration: COPY_TOAST_DURATION_MS
+      duration: COPY_TOAST_DURATION_MS,
+      copiedText: text.trim() ? text : undefined,
     })
     return true
   } catch (error) {

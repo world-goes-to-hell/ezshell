@@ -8,6 +8,7 @@ import type { WorktreeNode } from '../Sidebar/LocalProjectsTree'
 import { TabWorktreeBadge } from './TabWorktreeBadge'
 import { useTabStripScroll } from '../../hooks/useTabStripScroll'
 import { DevelopmentTabDots } from './DevelopmentRunStatus'
+import { middleClickClose } from '../../lib/middleClickClose'
 
 interface SplitPaneTabBarProps {
   paneType: 'primary' | 'secondary'
@@ -101,6 +102,7 @@ export function SplitPaneTabBar({
               onDragEnd={() => onTabDragEnd?.()}
               onClick={() => onTabSelect(terminalId)}
               onContextMenu={event => onTabContextMenu?.(event, terminalId)}
+              {...middleClickClose(() => onTabClose(terminalId))}
               title={displayName}
               style={tabStyle}
             >

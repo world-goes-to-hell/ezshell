@@ -116,6 +116,7 @@ import { openSessionLogFolder, toggleSessionLog } from './lib/sessionLogActions'
 import './styles/sessionLog.css'
 import { McpActivityWindow } from './components/Mcp/McpActivityWindow'
 import { reconnectFailureText } from './lib/connectionLost'
+import { middleClickClose } from './lib/middleClickClose'
 // Only the server file window uses the code editor: loaded there, not in the main window
 const RemoteFileWindow = lazy(() => import('./components/RemoteFile/RemoteFileWindow').then(module => ({ default: module.RemoteFileWindow })))
 // The editor and grid are loaded only in DB windows
@@ -1795,6 +1796,7 @@ function App() {
                           className={`terminal-tab ${sessionId === activeTerminalId ? 'active' : ''} ${terminal.hasActivity ? 'has-activity' : ''} ${draggingTabId === sessionId ? 'dragging' : ''}`}
                           onClick={() => setActiveTerminal(sessionId)}
                           onContextMenu={(e) => handleTabContextMenu(e, sessionId)}
+                          {...middleClickClose(() => void requestCloseTabs([sessionId]))}
                           draggable
                           // motion.div treats onDragStart/onDragEnd as its own gesture props
                           // and never forwards them to the DOM, so use the capture variants
@@ -2122,7 +2124,7 @@ function App() {
         </div>
       )}
 
-      <ToastContainer />
+      <ToastContainer allowAgentSend />
       <RunCrashNotices />
       <RunCommandConfirm />
       <UpdateNotification />

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolderLine, RiGitBranchLine, RiGitCommitLine, RiRefreshLine, RiSearchLine } from 'react-icons/ri'
-import type { WorkspaceDirectorySearchResult, WorkspaceGitRepository, WorkspaceGitSearchResult } from '../../types'
+import { RiArrowDownSLine, RiArrowRightSLine, RiCloseLine, RiFolderLine, RiGitBranchLine, RiGitCommitLine, RiGitMergeLine, RiRefreshLine, RiSearchLine } from 'react-icons/ri'
+import type { WorkspaceDirectorySearchResult, WorkspaceGitCommit, WorkspaceGitRepository, WorkspaceGitSearchResult, WorkspaceGitUpstreamComparison } from '../../types'
 import { workspaceGitGraph, type GitGraphRow } from '../../lib/workspaceGitGraph'
 import { folderName } from '../../lib/agentHistory'
 import { TreeLevel, TreeRevealContext, WorkspaceFileResults, type TreeReveal } from './WorkspaceDetails'
@@ -174,8 +174,10 @@ function GraphRow({ row, lanes, isHead }: { row: GitGraphRow; lanes: number; isH
   )
 }
 
-function GitLog({ repo, searching, found }: { repo: WorkspaceGitRepository; searching: boolean; found: SearchAnswer<WorkspaceGitSearchResult> | null }) {
-  const graph = useMemo(() => searching ? null : workspaceGitGraph(repo.commits), [repo.commits, searching])
+function GitCommitList({ root, head, commits, label, showGraph = false }: {
+  root: string; head: string | null; commits: WorkspaceGitCommit[]; label: string; showGraph?: boolean
+}) {
+  const graph = useMemo(() => showGraph ? workspaceGitGraph(commits) : null, [commits, showGraph])
   // The commits opened to show the files they changed
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
   const toggle = (hash: string) => setOpened(previous => {
@@ -184,7 +186,44 @@ function GitLog({ repo, searching, found }: { repo: WorkspaceGitRepository; sear
     else next.add(hash)
     return next
   })
-  const label = folderName(repo.root)
+  if (!commits.length) return null
+  return (
+    <ol className="workspace-git-list" aria-label={label}>
+      {commits.map((commit, index) => {
+        const isHead = commit.hash === head
+        const isOpen = opened.has(commit.hash)
+        const Chevron = isOpen ? RiArrowDownSLine : RiArrowRightSLine
+        return (
+          <li key={commit.hash} className="workspace-git-commit" data-merge={commit.parents.length > 1 || undefined} data-open={isOpen || undefined}>
+            <div className="workspace-git-commit-row">
+              {graph ? <GraphRow row={graph.rows[index]} lanes={graph.laneCount} isHead={isHead} />
+                : <RiGitCommitLine size={16} className="workspace-git-search-marker" aria-hidden="true" />}
+              <button
+                type="button"
+                className="workspace-git-detail"
+                aria-expanded={isOpen}
+                onClick={() => toggle(commit.hash)}
+                title={`${commit.subject}\n${commit.hash}\n${commit.author} · ${new Date(commit.time).toLocaleString('ko-KR')}\n눌러서 바뀐 파일 보기`}
+              >
+                <Chevron size={14} className="workspace-commit-chevron" aria-hidden="true" />
+                <span className="workspace-commit-subject" dir="auto">{commit.subject || '(제목 없음)'}</span>
+                <span className="workspace-commit-meta">
+                  <code>{commit.shortHash}</code>
+                  <span className="workspace-commit-author">{commit.author}</span>
+                  {commit.refs.length > 0 && <span className="workspace-commit-refs" title={commit.refs.join(', ')}>{commit.refs.join(' · ')}</span>}
+                  <time dateTime={commit.time}>{date.format(new Date(commit.time))}</time>
+                </span>
+              </button>
+            </div>
+            {isOpen && <div className="workspace-git-commit-files"><CommitFiles root={root} hash={commit.hash} label={folderName(root)} /></div>}
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+function GitLog({ repo, searching, found }: { repo: WorkspaceGitRepository; searching: boolean; found: SearchAnswer<WorkspaceGitSearchResult> | null }) {
   if (searching && !found) return <WorkspaceNote>Git 기록을 검색하는 중…</WorkspaceNote>
   if (searching && found && !found.success) return <WorkspaceNote error>{found.error}</WorkspaceNote>
   const commits = searching && found?.success ? found.commits : repo.commits
@@ -192,40 +231,54 @@ function GitLog({ repo, searching, found }: { repo: WorkspaceGitRepository; sear
   return (
     <>
       {searching && <WorkspaceNote>{found?.success && found.hasMore ? `최근 검색 결과 ${commits.length}개 표시` : `검색 결과 ${commits.length}개`}</WorkspaceNote>}
-      <ol className="workspace-git-list" aria-label={searching ? 'Git 커밋 검색 결과' : 'Git 커밋 기록'}>
-        {commits.map((commit, index) => {
-          const isHead = commit.hash === repo.head
-          const isOpen = opened.has(commit.hash)
-          const Chevron = isOpen ? RiArrowDownSLine : RiArrowRightSLine
-          return (
-            <li key={commit.hash} className="workspace-git-commit" data-merge={commit.parents.length > 1 || undefined} data-open={isOpen || undefined}>
-              <div className="workspace-git-commit-row">
-                {graph ? <GraphRow row={graph.rows[index]} lanes={graph.laneCount} isHead={isHead} />
-                  : <RiGitCommitLine size={16} className="workspace-git-search-marker" aria-hidden="true" />}
-                <button
-                  type="button"
-                  className="workspace-git-detail"
-                  aria-expanded={isOpen}
-                  onClick={() => toggle(commit.hash)}
-                  title={`${commit.subject}\n${commit.hash}\n${commit.author} · ${new Date(commit.time).toLocaleString('ko-KR')}\n눌러서 바뀐 파일 보기`}
-                >
-                  <Chevron size={14} className="workspace-commit-chevron" aria-hidden="true" />
-                  <span className="workspace-commit-subject" dir="auto">{commit.subject || '(제목 없음)'}</span>
-                  <span className="workspace-commit-meta">
-                    <code>{commit.shortHash}</code>
-                    <span className="workspace-commit-author">{commit.author}</span>
-                    {commit.refs.length > 0 && <span className="workspace-commit-refs" title={commit.refs.join(', ')}>{commit.refs.join(' · ')}</span>}
-                    <time dateTime={commit.time}>{date.format(new Date(commit.time))}</time>
-                  </span>
-                </button>
-              </div>
-              {isOpen && <div className="workspace-git-commit-files"><CommitFiles root={repo.root} hash={commit.hash} label={label} /></div>}
-            </li>
-          )
-        })}
-      </ol>
+      <GitCommitList root={repo.root} head={repo.head} commits={commits} showGraph={!searching}
+        label={searching ? 'Git 커밋 검색 결과' : 'Git 커밋 기록'} />
       {!searching && repo.hasMore && <WorkspaceNote>최근 {repo.commits.length}개 커밋 표시</WorkspaceNote>}
     </>
+  )
+}
+
+function GitUpstreamComparison({ root }: { root: string }) {
+  const [answer, setAnswer] = useState<SearchAnswer<{ comparison: WorkspaceGitUpstreamComparison | null }> | null>(null)
+  useEffect(() => {
+    let active = true
+    const load = async () => {
+      try {
+        const result = await window.electronAPI.workspaceGitUpstream(root)
+        if (active) setAnswer(result)
+      } catch {
+        if (active) setAnswer({ success: false, error: '원격 추적 브랜치와 비교하지 못했습니다.' })
+      }
+    }
+    void load()
+    return () => { active = false }
+  }, [root])
+
+  if (!answer) return <WorkspaceNote>원격 추적 브랜치와 비교하는 중…</WorkspaceNote>
+  if (!answer.success) return <WorkspaceNote error>{answer.error}</WorkspaceNote>
+  const { comparison } = answer
+  if (!comparison) return <WorkspaceNote>비교할 원격 추적 브랜치가 없습니다.</WorkspaceNote>
+  if (comparison.status === 'missing') return <WorkspaceNote>{comparison.upstream}의 원격 추적 정보가 없습니다.</WorkspaceNote>
+
+  const { branch, head, upstream } = comparison
+  const groups = [
+    { label: '보낼 커밋', count: comparison.ahead, commits: comparison.outgoing },
+    { label: '받을 커밋', count: comparison.behind, commits: comparison.incoming }
+  ]
+  return (
+    <div className="workspace-upstream-results">
+      <div className="workspace-upstream-target">
+        <span title={`${branch} ↔ ${upstream}`}>{branch} ↔ {upstream}</span>
+        <small>마지막으로 가져온 원격 정보 기준</small>
+      </div>
+      {groups.map(({ label, count, commits }) => (
+        <section key={label} aria-label={label}>
+          <h3>{label} {count}개</h3>
+          {count > 0 && <GitCommitList root={root} head={head} commits={commits} label={label} />}
+          {count > commits.length && <WorkspaceNote>최근 {commits.length}개 커밋 표시</WorkspaceNote>}
+        </section>
+      ))}
+    </div>
   )
 }
 
@@ -236,8 +289,10 @@ export function WorkspaceGit({ folder }: { folder: string }) {
   const repoRoot = repo?.root
   const scope = repo ? `${repo.allBranches ? 'all' : 'checkout'}:${repo.root}` : ''
   const [search, setSearch] = useState<{ scope: string; query: string } | null>(null)
+  const [comparisonScope, setComparisonScope] = useState<string | null>(null)
+  const comparing = comparisonScope === scope
   const query = search && search.scope === scope ? search.query : ''
-  const term = query.trim()
+  const term = comparing ? '' : query.trim()
   const found = useWorkspaceSearch<WorkspaceGitSearchResult>(repoRoot ?? '', term, revision, repo?.allBranches === false ? searchCheckoutGit : searchGit)
   return (
     <>
@@ -246,9 +301,15 @@ export function WorkspaceGit({ folder }: { folder: string }) {
         : !data?.success ? <WorkspaceNote error>{data?.error ?? 'Git 기록을 읽지 못했습니다.'}</WorkspaceNote>
         : data.repo ? (
           <>
-            <WorkspaceSearchBox label="Git 이력 검색" placeholder="커밋 메시지, 작성자, 해시" query={query}
-              onChange={value => setSearch({ scope, query: value })} />
-            <GitLog key={scope} repo={data.repo} searching={Boolean(term)} found={found} />
+             <button type="button" className="workspace-upstream-toggle" aria-pressed={comparing}
+               onClick={() => setComparisonScope(comparing ? null : scope)}>
+               <RiGitMergeLine size={15} aria-hidden="true" /> 원격과 비교
+             </button>
+             {comparing ? <GitUpstreamComparison key={`${scope}:${data.repo.branch}:${data.repo.head}:${revision}`} root={data.repo.root} /> : <>
+               <WorkspaceSearchBox label="Git 이력 검색" placeholder="커밋 메시지, 작성자, 해시" query={query}
+                 onChange={value => setSearch({ scope, query: value })} />
+               <GitLog key={scope} repo={data.repo} searching={Boolean(term)} found={found} />
+             </>}
           </>
         )
         : <WorkspaceNote>{gitMissingNote(data.reason)}</WorkspaceNote>}

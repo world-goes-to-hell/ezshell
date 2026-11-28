@@ -1072,6 +1072,61 @@ async function run() {
       roleRecord()?.user === '나' && roleRecord()?.agent === 'MCP 역할 갱신' &&
       await until(`(${codexSnapshot}).then(agent => !!agent?.layoutKey && !agent.resumeId && agent.role === '나')`),
       JSON.stringify(roleRecord()))
+
+    await closeMessages()
+    await until(`!${dialog}`)
+    const terminal = `([...document.querySelectorAll('.local-terminal-pane .xterm')]
+      .find(item => getComputedStyle(item).visibility === 'visible' && item.getBoundingClientRect().width > 0))`
+    const openTerminalMenu = async () => {
+      const point = await driver.center(terminal)
+      if (!point) throw new Error('missing visible terminal for the copied text test')
+      await driver.click(...point, 'right')
+    }
+    await js(`navigator.clipboard.writeText = async text => { window.copiedTextForAgent = text };
+      navigator.clipboard.readText = async () => window.copiedTextForAgent`)
+    const copyAction = `document.querySelector('.toast-success .toast-action')`
+    const copiedDialog = `document.querySelector('.copied-text-agent-dialog')`
+    const draft = `${copiedDialog}?.querySelector('textarea')`
+    const select = `${copiedDialog}?.querySelector('select')`
+    const sendButton = `${copiedDialog}?.querySelector('button[type=submit]')`
+    const openCopiedDraft = async () => {
+      await openTerminalMenu()
+      await driver.pick('모두 선택')
+      await openTerminalMenu()
+      await driver.pick('복사')
+      if (!(await until(`${copyAction}?.textContent === '에이전트에 보내기'`, 3500))) {
+        throw new Error('missing copied text toast action')
+      }
+      const copied = await js('window.copiedTextForAgent')
+      await js(`window.copiedTextForAgent = 'the clipboard changed after copying'`)
+      await driver.click(...await driver.center(copyAction))
+      return copied
+    }
+    const beforeCopy = await js(`window.electronAPI.agentMessagesSnapshot().then(state => state.messages.length)`)
+    const canceledText = await openCopiedDraft()
+    check('the copy toast opens the exact copied text and waits for a recipient', Boolean(canceledText?.includes('\n')) &&
+      await until(`${draft}?.value === ${JSON.stringify(canceledText.replace(/\r\n?/g, '\n'))} && ${sendButton}.disabled`))
+    await js(`${copiedDialog}.querySelector('button[type=button]').click()`)
+    check('canceling the copied text draft leaves the inboxes alone', await until(`!${copiedDialog}`) &&
+      await js(`window.electronAPI.agentMessagesSnapshot().then(state => state.messages.length === ${beforeCopy})`))
+
+    const sentText = await openCopiedDraft()
+    check('the copied text picker shows the active agent and its workspace', await until(`
+      [...${select}.options].some(option => option.value === 'claude-7' && option.textContent.includes('other workspace'))
+    `))
+    await js(`(() => {
+      const recipient = ${select}
+      recipient.value = 'claude-7'
+      recipient.dispatchEvent(new Event('change', { bubbles: true }))
+    })()`)
+    await driver.click(...await driver.center(sendButton))
+    check('sending copied text delivers the captured original once to the chosen inbox', await until(`!${copiedDialog}`) &&
+      (await mcp('claude-7', 'read_inbox')).messages.filter(message => message.from === 'user' && message.text === sentText).length === 1)
+    check('the copied text IPC rejects missing agents, user as recipient, and oversized bodies', await js(`Promise.all([
+      window.electronAPI.agentMessageSendCopiedText('codex-999', 'unknown'),
+      window.electronAPI.agentMessageSendCopiedText('user', 'self'),
+      window.electronAPI.agentMessageSendCopiedText('claude-7', 'x'.repeat(8001)),
+    ]).then(results => results.every(result => !result.success))`))
   } finally {
     driver.close()
   }

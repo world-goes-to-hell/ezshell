@@ -30,7 +30,9 @@ const { check, finish } = createChecks()
     await unlock(driver)
     await js(`localStorage.setItem('ezshell.localProjects', ${JSON.stringify(JSON.stringify([alpha, beta]))});
       window.dispatchEvent(new Event('ezshell:local-projects-changed'))`)
-    const open = name => `[...document.querySelectorAll('.local-worktree')].find(w => w.querySelector('.local-worktree-name')?.textContent === ${JSON.stringify(name)})?.querySelector('.local-worktree-open')`
+    // A project with one worktree shows its name only on the project's line (the row names its terminal)
+    const open = name => `([...document.querySelectorAll('.local-worktree')].find(w => w.querySelector('.local-worktree-name')?.textContent === ${JSON.stringify(name)}) ??
+      [...document.querySelectorAll('.local-project')].find(p => p.querySelector('.local-project-name')?.textContent === ${JSON.stringify(name)})?.querySelector('.local-worktree.is-lone'))?.querySelector('.local-worktree-open')`
     await until(`!!${open('alpha')} && !!${open('beta')}`, 15000)
     const tabs = `[...document.querySelectorAll('.terminal-tabs .terminal-tab')]`
     const selectName = `document.querySelector('.tab-group-select .tab-group-select-name')?.textContent`

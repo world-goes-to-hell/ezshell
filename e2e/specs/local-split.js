@@ -122,6 +122,35 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   let t = await texts()
   check('each pane is its own shell', /PANE-ONE/.test(t[0]) && !/PANE-TWO/.test(t[0]) && /PANE-TWO/.test(t[1]) && !/PANE-ONE/.test(t[1]), JSON.stringify(t.map(x => x.slice(-60))))
 
+  // ---- 터미널 재시작: a new shell in the folder the old one was in, in the same pane ----
+  const shellIds = () => js(`${PANES}.map(el => el.dataset.localShellId)`)
+  const beforeRestart = await shellIds()
+  await js(`${PANES}[1].querySelector('.xterm-helper-textarea').focus()`)
+  await send('Input.insertText', { text: 'cd C:/Windows' })
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+  await until(`/PS C:.Windows>/.test(${PANES}[1]?.textContent || '')`, 30000)
+  r = await rects()
+  await click(r[1][0] + r[1][2] / 2, r[1][1] + r[1][3] / 2, 'right'); await until(`!!document.querySelector('.terminal-menu-item')`, 4000); await sleep(150)
+  const folderBefore = await js(`window.electronAPI.localShellCurrentDirectory(${JSON.stringify(beforeRestart[1])})`)
+  check('the local terminal menu offers 터미널 재시작', await js(`!!${item('터미널 재시작')} && !${item('터미널 재시작')}.hasAttribute('data-disabled')`), String(folderBefore))
+  await pick('터미널 재시작')
+  const restarted = await until(`(() => { const ids = ${PANES}.map(el => el.dataset.localShellId); return ids.length === 2 && ids[0] === ${JSON.stringify(beforeRestart[0])} && !!ids[1] && ids[1] !== ${JSON.stringify(beforeRestart[1])} })()`, 15000)
+  check('터미널 재시작 puts a new shell in the same pane and leaves the other pane alone', restarted, JSON.stringify([beforeRestart, await shellIds()]))
+  check('the new shell starts in the folder the old one was in, without its output', await until(`/PS C:.Windows>/.test(${PANES}[1]?.textContent || '') && !/PANE-TWO/.test(${PANES}[1].textContent)`, 60000) &&
+    /PANE-ONE/.test((await texts())[0]), String((await texts())[1] || '').slice(-120))
+  check('the old shell is closed', await until(`window.electronAPI.localShellList().then(list => !list.some(shell => shell.id === ${JSON.stringify(beforeRestart[1])} && !shell.exited))`, 10000))
+  // A shell that ended offers the same restart on its notice
+  const exitedId = (await shellIds())[1]
+  await js(`${PANES}[1].querySelector('.xterm-helper-textarea').focus()`)
+  await send('Input.insertText', { text: 'exit' })
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+  check('an ended shell shows a restart button on its notice', await until(`!!${PANES}[1]?.querySelector('.local-terminal-restart')`, 20000))
+  await js(`${PANES}[1].querySelector('.local-terminal-restart').click()`)
+  check('the button restarts the pane with a new shell', await until(`(() => { const pane = ${PANES}[1]; return !!pane && pane.dataset.localShellId !== ${JSON.stringify(exitedId)} && !pane.querySelector('.local-terminal-exit') && /PS [A-Z]:/.test(pane.textContent) })()`, 60000))
+  await typeIn(1, 'echo PANE-TWO')
+
   // ---- The pane that takes the keyboard is outlined (the test window may sit behind others) ----
   await send('Emulation.setFocusEmulationEnabled', { enabled: true })
   const outlines = () => js(`${PANES}.map(el => { const s = getComputedStyle(el, '::before'); return s.content !== 'none' && s.borderTopWidth === '2px' })`)

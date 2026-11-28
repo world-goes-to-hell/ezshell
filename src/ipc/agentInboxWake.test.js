@@ -28,6 +28,7 @@ function setup(kind = 'claude', cols = 100, onApprovalChange, onDraftBlockChange
     messageSeenAt: id => state.seen?.get(id),
     isWorking: () => state.busy,
     isRunningTask: () => state.busy && state.running,
+    isStarting: () => state.starting === true,
     write, onApprovalChange, onDraftBlockChange, wakeRecovery
   })
   return { write, state }
@@ -680,6 +681,31 @@ describe('wake an idle agent with unread messages', () => {
     state.busy = false
     wake.writeOutput(claudeDraft(''))
     await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste]]))
+  })
+
+  // 2026-11-28 user report: a capture sent to a new Codex session stayed in its composer. Codex showed a
+  // still title for ~0.1s before spinning up its MCP servers, the notice landed in that gap, and the
+  // spinner (status 'starting') held the Enter back. Codex takes Enter while starting.
+  it('submits the notice a fresh Codex got just before it started connecting its MCP servers', async () => {
+    const { write, state } = setup('codex')
+    state.ids.push('first')
+    wake.writeOutput(codexDraft(''))
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste]]))
+    Object.assign(state, { busy: true, running: false, starting: true })
+    // The real frame: Codex swaps its footer for this hint while starting with a draft
+    wake.writeOutput(codexDraft(PROMPT) + '\r\n\r\n  tab to queue message\x1b[1;' + (PROMPT.length + 3) + 'H')
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r']]))
+  })
+
+  it('keeps holding the notice while a Claude session starts up', async () => {
+    const { write, state } = setup('claude')
+    state.ids.push('first')
+    wake.writeOutput(claudeDraft(''))
+    await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste]]))
+    Object.assign(state, { busy: true, running: false, starting: true })
+    wake.writeOutput(claudeDraft(PROMPT))
+    await new Promise(resolve => setTimeout(resolve, 1800))
+    expect(write.mock.calls).toEqual([[paste]])
   })
 
   it('wakes a fresh agent whose state was never reported once its empty composer stays quiet', async () => {

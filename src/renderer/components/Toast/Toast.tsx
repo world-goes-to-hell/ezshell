@@ -6,6 +6,7 @@ import './Toast.css'
 
 interface ToastProps {
   toast: ToastType
+  action?: ToastType['action']
 }
 
 const icons = {
@@ -15,7 +16,7 @@ const icons = {
   info: RiInformationLine,
 }
 
-export function Toast({ toast }: ToastProps) {
+export function Toast({ toast, action }: ToastProps) {
   const removeToast = useToastStore((state) => state.removeToast)
   const reducedMotion = useReducedMotion()
   const Icon = icons[toast.type]
@@ -38,9 +39,9 @@ export function Toast({ toast }: ToastProps) {
       <div className="toast-content">
         <div className="toast-title">{toast.title}</div>
         {toast.message && <div className="toast-message">{toast.message}</div>}
-        {toast.action && (
-          <button type="button" className="toast-action" onClick={() => { removeToast(toast.id); toast.action?.run() }}>
-            {toast.action.label}
+        {action && (
+          <button type="button" className="toast-action" onClick={() => { removeToast(toast.id); action.run() }}>
+            {action.label}
           </button>
         )}
       </div>

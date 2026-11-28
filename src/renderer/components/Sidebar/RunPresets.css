@@ -80,6 +80,23 @@
 }
 .run-preset[data-status="running"] { border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
 .run-preset[data-status="crashed"] { border-color: var(--error); background: color-mix(in srgb, var(--error) 7%, var(--bg-primary)); }
+.run-preset-failure-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0 6px 5px 8px;
+  border: none;
+  background: none;
+  color: var(--error-text, var(--error));
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+}
+.run-preset-failure-line svg { flex: none; }
+.run-preset-failure-line span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.run-preset-failure-line { cursor: pointer; }
+button.run-preset-failure-line:hover span { text-decoration: underline; }
 .run-preset[data-agent-acted] { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
 
 .run-preset-kind {
@@ -304,6 +321,7 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
 .run-crash-diagnose { margin-left: auto; padding: 0; border: none; background: none; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
 .run-crash-diagnose:hover { text-decoration: underline; }
 .run-crash-diagnose:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
+.run-crash-reason { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .run-crash-log {
   max-height: 140px;
   margin: 0;
@@ -318,8 +336,21 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
   white-space: pre-wrap;
   word-break: break-all;
 }
-.run-crash-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.run-crash-actions .modal-btn { display: inline-flex; align-items: center; gap: 5px; }
+.run-crash-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.run-crash-actions .modal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 32px;
+  margin-top: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.run-crash-actions .modal-btn svg { flex: none; }
 
 /* The send dialog */
 .run-send-dialog { width: min(420px, calc(100vw - 32px)); display: grid; gap: 8px; }
@@ -387,8 +418,6 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
   max-width: max(6.5em, 42%);
 }
 
-/* The notice's buttons on one line where they fit */
-.run-crash-actions .modal-btn,
 .run-send-dialog .modal-actions .modal-btn { min-width: 0; padding: 6px 10px; font-size: 12px; }
 .run-send-agent .agent-identity-badge { flex: 1; min-width: 0; max-width: none; }
 

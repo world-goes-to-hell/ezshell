@@ -12,6 +12,7 @@
 `)를 보내 줄을 바꾼다 (`lib/agentNewline.ts`). xterm 은 Enter 와 Shift+Enter 를 같은 `
 ` 로 보낸다. 이 순서는 Claude Code 자체의 `/terminal-setup` 이 Shift+Enter 에 거는 값이고, Codex 0.170.0 도 줄바꿈으로 받는 것을 확인했다. 바꾸면 안 되는 것: 일반 PowerShell 에서는 보내지 않는다 (PSReadLine 에서 ESC 는 입력 중인 줄을 지운다). 화면 테스트 `local-agent-usage`.
 - 분할하면 각 칸에 테마 모서리와 1px 카드 테두리가 생긴다 (`LocalTerminalTab.css`). 키보드를 받는 칸은 가장자리의 강조색 2px 선으로 표시한다. 칸 안쪽에 덧그리는 층이라 xterm 크기가 바뀌지 않는다. 상태를 따로 두지 않는다. 화면 시험 `local-split` 에서 구분선 끌기, 손잡이, 빈 자리, Alt 끌기 미리보기도 확인한다.
+- 터미널 재시작: 우클릭 메뉴 맨 위 묶음의 `터미널 재시작`과 셸이 끝난 칸 알림의 `새 셸로 재시작` 버튼 (`lib/localShellRestart.ts`). 옛 셸이 있던 폴더에서 새 셸을 먼저 연다. 폴더는 main 의 `local-shell-current-directory` 값으로, 프롬프트가 OSC 7 로 알린 로컬 폴더이고 없으면 처음 연 폴더다. 새 셸을 같은 칸에 넣은 뒤 옛 셸을 닫으므로, 열기가 실패하면 칸이 그대로 남는다. 셸 id 가 바뀌어 새 xterm 으로 그린다 (옛 출력은 남지 않는다). 탭의 폴더(`local.cwd`)는 바꾸지 않는다 (탭 묶음·워크트리 표시·새 칸의 폴더가 이 값을 따른다). 에이전트가 돌던 셸은 확인을 받는다 (에이전트도 함께 끝난다). Claude 계정 환경 같은 실행 옵션은 이어받지 않고 일반 셸로 연다. 실행 구성으로 띄운 개발 서버 칸에서는 끄고 실행 구성의 재기동을 쓰게 한다. 화면 시험 `local-split`.
 - 바꾸면 안 되는 것: `local-shell-*` IPC 는 본창에서 온 것만 받는다. MCP 도구나 휴대폰에서 로컬 셸을 직접 열거나 입력하는 경로를 만들지 않는다 (PC 에서 임의 명령을 실행하는 통로가 된다). 휴대폰의 에이전트 글 보내기는 [`Remote Access`](remote-access.md)의 설정과 `chatSend` 규칙을 지난다.
 - 패키징: `node-pty` 는 사전 빌드(N-API)를 쓴다. `build.asarUnpack` 의 `node_modules/node-pty/**` 와 `npmRebuild: false` 를 지우지 말 것 (asar 안에서는 셸 실행 파일을 띄울 수 없고, 다시 빌드하려면 Visual Studio 빌드 도구가 필요하다). 새 `src/*.js` 라서 `MAIN_RUNTIME_MODULES` 에 있다.
 

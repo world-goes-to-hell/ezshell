@@ -4,11 +4,13 @@ import { readTerminalScrollback } from '../../lib/terminalScrollback'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
-import { RiToolsLine, RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine, RiCloseLine, RiChat3Line, RiHistoryLine } from 'react-icons/ri'
+import { RiToolsLine, RiLayoutColumnLine, RiSplitCellsHorizontal, RiSplitCellsVertical, RiLayoutGridLine, RiCloseLine, RiChat3Line, RiHistoryLine, RiRestartLine } from 'react-icons/ri'
 import { useThemeStore } from '../../stores/themeStore'
 import { FOLLOW_APP_CHAT_THEME, chatAppearance } from '../../themes/chatThemes'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { toast } from '../../stores/toastStore'
+import { confirmDialog } from '../../stores/confirmStore'
+import { restartLocalPaneShell } from '../../lib/localShellRestart'
 import { copyToClipboard, enableCopyOnSelect, isPasteShortcut } from '../../lib/terminalClipboard'
 import { createRightClickFilter } from '../../lib/rightClickReports'
 import { MAIN_PANE, singlePane, layoutOf, paneIds, equalize, paneBox, type PaneId } from '../../lib/splitTree'
@@ -94,6 +96,9 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const fitRef = useRef<FitAddon | null>(null)
   const pasteRef = useRef<(() => void) | undefined>(undefined)
   const [exit, setExit] = useState<{ code: number | null } | null>(null)
+  // A development server started from a run preset: restarted there (실행 구성), not as a plain shell
+  const [development, setDevelopment] = useState(false)
+  const [restarting, setRestarting] = useState(false)
   const [inboxDraftBlocked, setInboxDraftBlocked] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [showHistory, setShowHistory] = useState(false)
@@ -158,6 +163,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     const host = hostRef.current
     if (!host) return
     setExit(null)
+    setDevelopment(false)
     const { fontSize: size, fontFamily: family } = useTerminalStore.getState()
     const terminal = new Terminal({
       theme: useThemeStore.getState().getTerminalTheme(),
@@ -298,6 +304,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     const stopDevelopment = window.electronAPI.onLocalShellDevelopmentState?.(({ id, development }) => {
       if (id !== shellId || !development) return
       receivedDevelopment = true
+      setDevelopment(true)
       if (development.status === 'starting' || development.status === 'running') setExit(null)
       if (development.status === 'exited') setExit({ code: development.exitCode })
     })
@@ -315,6 +322,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
         return
       }
       if (state.backlog) terminal.write(state.backlog)
+      if (state.development) setDevelopment(true)
       if (!receivedInboxDraft) setInboxDraftBlocked(Boolean(state.inboxDraftBlocked))
       if (state.exited && !receivedDevelopment) setExit({ code: state.exitCode })
     })
@@ -394,6 +402,24 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     logHighlightRef.current?.setPaused(covered)
   }, [inlineQuestion, isChat])
 
+  const restart = async (): Promise<void> => {
+    if (restarting || development) return
+    // An agent (or anything else) running in it ends with the old shell
+    if (!exit && agentWork !== undefined && !await confirmDialog({
+      title: '터미널 재시작',
+      message: '이 셸에서 에이전트가 돌고 있습니다. 재시작하면 에이전트가 끝나고 같은 폴더에서 새 셸이 열립니다.',
+      confirmLabel: '재시작',
+      danger: true
+    })) return
+    setRestarting(true)
+    try {
+      const result = await restartLocalPaneShell(tabId, pane, shellId)
+      if (!result.ok) toast.error('터미널을 재시작하지 못했습니다', result.error)
+    } finally {
+      setRestarting(false)
+    }
+  }
+
   const onContextMenu = (event: MouseEvent): void => {
     event.preventDefault()
     setMenu({ x: event.clientX, y: event.clientY })
@@ -455,10 +481,16 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       ...items.top,
       { label: '명령어 기록', icon: RiHistoryLine, disabled: !!exit || !!chatAgent, onSelect: () => setShowHistory(true) },
       {
-        label: chatAgent ? `채팅으로 보기 (${chatKey})` : '채팅으로 보기 (에이전트가 돌고 있지 않음)',
+        label: chatAgent ? `채팅 모드 (${chatKey})` : '채팅 모드 (에이전트가 돌고 있지 않음)',
         icon: RiChat3Line,
         disabled: !chatAgent,
         onSelect: () => showChat(shellId)
+      },
+      {
+        label: development ? '터미널 재시작 (실행 구성에서 재기동해 주세요)' : '터미널 재시작',
+        icon: RiRestartLine,
+        disabled: development || restarting,
+        onSelect: () => void restart()
       }
     ]
     const split = getSplitMenu()
@@ -536,6 +568,9 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
         <div className="local-terminal-exit" role="status">
           셸이 종료되었습니다{exit.code !== null && exit.code !== 0 ? ` (종료 코드 ${exit.code})` : ''}.
           {pane === MAIN_PANE && !tab?.isSplit ? ' 탭을 닫아 주세요.' : ' 우클릭 메뉴의 `분할` > `이 칸 닫기` 로 닫아 주세요.'}
+          {!development && (
+            <button type="button" className="local-terminal-restart" disabled={restarting} onClick={() => void restart()}>새 셸로 재시작</button>
+          )}
         </div>
       )}
       {menu && groups && top && (

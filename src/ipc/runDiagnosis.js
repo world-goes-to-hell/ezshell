@@ -1,5 +1,6 @@
 const { cleanLogLine, MAX_LOG_LINES } = require('./developmentErrors.js')
 const { classifyDetail } = require('./logLevels.mjs')
+const { redactRunSecrets } = require('./runSecrets.js')
 const { projectMirrorId } = require('../runtimes/mavenSettings.js')
 
 const MESSAGES = {
@@ -8,6 +9,9 @@ const MESSAGES = {
   jndi: '실행 구성의 JNDI 데이터소스 이름과 서버의 등록 내용을 확인하세요.',
   sourceEncoding: '소스 파일과 컴파일 설정의 인코딩이 일치하는지 확인하세요.',
   portInUse: '실행 포트를 사용 중인 프로세스를 확인하세요.',
+  databaseConnection: 'DB가 실행 중이고 설정한 호스트와 포트에서 접속할 수 있는지 확인하세요.',
+  databaseAuth: 'DB 사용자 이름, 비밀번호, 접속 권한을 확인하세요.',
+  databaseMissing: '설정한 데이터베이스 이름과 DB에 해당 데이터베이스가 있는지 확인하세요.',
   mavenHttpBlocked: '차단된 HTTP 저장소를 대신할 HTTPS 주소나 로컬 보관소를 확인하세요.',
   mavenRepositoryUnavailable: '저장소 주소와 접속 가능 여부를 확인하세요.',
   mavenUnauthorized: 'Maven 저장소 접근 권한을 확인하세요.',
@@ -29,6 +33,11 @@ const SELECTED_MIRROR = /\bUsing mirror\s+([A-Za-z0-9][A-Za-z0-9_.-]{0,135})\s+\
 const PORT_BUSY = /\bEADDRINUSE\b|\baddress already in use\b|\bPort\s+\d+\s+(?:is|was)\s+(?:already )?in use\b/i
 const PORT_CONTEXT = /\b(?:http|https|ajp)-(?:jsse-|openssl-)?(?:nio2?|apr|bio)-([0-9]{1,5})\b|\bConnector\[(?:HTTP|AJP)\/[\d.]+-([0-9]{1,5})\]/i
 const OBSOLETE_JVM_OPTION = /\bUnrecognized VM option ['"](?:[+-])?(MaxPermSize|PermSize|UseConcMarkSweepGC|UseParNewGC|CMSIncrementalMode|UseCMSCompactAtFullCollection|CMSClassUnloadingEnabled|AggressiveOpts)(?:=[^'"\r\n]*)?['"]/i
+
+const DATABASE_LOG = /\b(?:SqlExceptionHelper|JDBCConnectionException|PSQLException)\b|\b(?:org\.mariadb\.jdbc|com\.mysql|org\.postgresql|com\.microsoft\.sqlserver\.jdbc)\.|\bjdbc:[\w+-]+:|\bSocket fail to connect to host:address=\(host=/i
+const CONNECTION_REFUSED = /\b(?:ECONNREFUSED|connection refused)\b|\bConnection to\s+\S+\s+refused\b/i
+const CONNECTION_TIMEOUT = /\b(?:ETIMEDOUT|(?:connection|connect) timed out|connect timeout)\b/i
+const STACK_FRAME = /^\s*(?:at\s|\.\.\. \d+|Traceback\b|File ")/
 
 function positiveInteger(value, limit) {
   const number = Number(value)
@@ -56,6 +65,29 @@ function busyPort(line, nearby) {
     return positiveInteger(context?.[1] ?? context?.[2], 65535)
   }).filter(Boolean))
   return ports.size === 1 ? ports.values().next().value : null
+}
+
+function connectionPort(line) {
+  const named = /\bport\s*(?:=\s*)?(\d{1,5})(?!\d)/i.exec(line)?.[1]
+  const endpoint = /(?:\b(?:ECONNREFUSED|ETIMEDOUT|connection to|connect to)\s+|\bjdbc:[\w+-]+:\/\/)(?:\[[\da-f:]+\]|[\w.-]+):(\d{1,5})(?!\d)/i.exec(line)?.[1]
+  return positiveInteger(named ?? endpoint, 65535)
+}
+
+function inspectDatabase(line, preceding, errorLine, add) {
+  // A nested socket exception inherits the immediately enclosing error, skipping frames.
+  const parent = errorLine && /^\s*Caused by:/i.test(line)
+    ? preceding.find(row => !STACK_FRAME.test(row)) : undefined
+  const evidence = DATABASE_LOG.test(line) ? line
+    : parent && DATABASE_LOG.test(parent) && classifyDetail(parent).level === 'error' ? parent : undefined
+  if (!evidence) return
+  if (/\b(?:access denied for user|password authentication failed|login failed for user|SQLState\s*:\s*28(?:000|P01))\b/i.test(line)) {
+    add('databaseAuth')
+  } else if (/\bunknown database\b|\bdatabase ['"][^'"]+['"] does not exist\b/i.test(line)) {
+    add('databaseMissing')
+  } else if (CONNECTION_REFUSED.test(line) || CONNECTION_TIMEOUT.test(line)) {
+    add('databaseConnection', { port: connectionPort(line) ?? connectionPort(evidence),
+      reason: CONNECTION_REFUSED.test(line) ? 'refused' : 'timeout' })
+  }
 }
 
 function repositoryId(line) {
@@ -147,7 +179,8 @@ function diagnoseRun({ groups = [], lines = [], mirrors = [], maven = true } = {
     let rawError
     for (const [index, line] of rows.entries()) {
       // Include a short stack trace or a Tomcat connector description in the same diagnostic.
-      const nearby = [line, ...rows.slice(Math.max(0, index - 6), index).reverse(), ...rows.slice(index + 1, index + 4)]
+      const preceding = rows.slice(Math.max(0, index - 6), index).reverse()
+      const nearby = [line, ...preceding, ...rows.slice(index + 1, index + 4)]
       const detail = classifyDetail(line)
       if (detail.explicit || /^\s*Exception in thread\b/.test(line)) rawError = detail.level === 'error'
       else if (detail.level !== 'error') rawError = undefined
@@ -169,6 +202,7 @@ function diagnoseRun({ groups = [], lines = [], mirrors = [], maven = true } = {
         add('sourceEncoding', encoding ? { encoding } : {})
       }
       if (PORT_BUSY.test(line)) add('portInUse', { port: busyPort(line, nearby) })
+      if (!detail.explicit || detail.level === 'error') inspectDatabase(line, preceding, errorLine, add)
       if (/\bCould not transfer artifact\b/i.test(line)) transferContext = line
       inspectMaven(line, nearby, transferContext, add)
       const obsolete = maven && OBSOLETE_JVM_OPTION.exec(line)?.[1]
@@ -182,4 +216,95 @@ function diagnoseRun({ groups = [], lines = [], mirrors = [], maven = true } = {
   return results.filter(item => item.repositoryId || !detailed.has(withoutRepository(item)))
 }
 
-module.exports = { diagnoseRun }
+const FAILURE_SUMMARY_LIMIT = 160
+const EXIT_FOOTER = /^(?:\[Help \d+\]|https?:\/\/|(?:APPLICATION FAILED TO START|BUILD (?:FAILURE|FAILED))\b|FAILURE:\s+Build failed\b|To see the full stack trace\b|Re-run Maven\b|For more information about the errors\b|Run with --(?:stacktrace|info|debug|scan)\b|Get more help at\b)|\b(?:process (?:terminated|exited) with exit code|returned exit code)\b/i
+const FAILURE_DETAIL = /\[vite\]\s+Internal server error\b|\berror TS\d+\b|\b(?:could not find or load main class|command not found|is not recognized as an internal or external command)\b/i
+const FAILURE_REASONS = {
+  portInUse: ({ port }) => `실행 포트 점검 · ${port ? `${port} ` : ''}포트 사용 중`,
+  databaseConnection: ({ port, reason }) => `DB 점검 필요 · ${port ? `${port} 포트 ` : ''}연결 ${reason === 'timeout' ? '시간 초과' : '실패'}`,
+  databaseAuth: () => 'DB 점검 필요 · 로그인 또는 접속 권한 오류',
+  databaseMissing: () => 'DB 설정 점검 · 지정한 데이터베이스 없음',
+  jdkVersion: ({ requiredFeature, preview }) => preview ? 'JDK 점검 · Java 미리보기 기능 설정 불일치'
+    : requiredFeature ? `JDK 점검 · Java ${requiredFeature} 이상 필요` : 'JDK 점검 · 클래스 버전 불일치',
+  missingClass: ({ className }) => `의존성 점검 · ${className} 클래스 없음`,
+  jndi: ({ name }) => `DB 설정 점검 · JNDI 데이터소스 ${name} 없음`,
+  sourceEncoding: () => '빌드 설정 점검 · 소스 인코딩 불일치',
+  mavenHttpBlocked: () => 'Maven 저장소 점검 · HTTP 접속 차단',
+  mavenRepositoryUnavailable: ({ reason }) => reason === 'unknownHost'
+    ? 'Maven 저장소 점검 · 호스트 이름 조회 실패' : 'Maven 저장소 점검 · 저장소 주소를 찾을 수 없음',
+  mavenUnauthorized: () => 'Maven 저장소 점검 · 인증 실패',
+  mavenTls: () => 'Maven 저장소 점검 · TLS 연결 실패',
+  mavenArtifactMissing: ({ artifact }) => `Maven 의존성 점검 · ${artifact} 없음`,
+  mavenPluginJdk: ({ requiredFeature }) => requiredFeature ? `Maven 빌드 점검 · Java ${requiredFeature} 지원 JDK 필요`
+    : 'Maven 빌드 점검 · 플러그인과 JDK 버전 불일치',
+  mavenObsoleteJvmOption: ({ option }) => `JVM 옵션 점검 · ${option}은 현재 JDK에서 지원하지 않음`
+}
+
+const OTHER_FAILURES = [
+  [/\bFailed to configure a DataSource:.*['"]url['"] attribute is not specified\b/i, 'DB 설정 점검 · 데이터소스 URL 누락'],
+  [/\bFailed to configure a DataSource\b/i, 'DB 설정 점검 · 데이터소스 구성 실패'],
+  [/\bJAVA_HOME\b.*(?:not (?:set|defined)|invalid)|\bNo Java installation\b/i, 'JDK 점검 · Java 실행 환경을 찾을 수 없음'],
+  [/\bUnrecognized VM option\b|\bCould not create the Java Virtual Machine\b/i, 'JVM 옵션 점검 · Java 가상 머신 시작 실패'],
+  [/\b(?:ERR_PNPM_UNSUPPORTED_ENGINE|EBADENGINE)\b/i, 'Node.js 버전 점검 · 프로젝트 요구 버전과 불일치'],
+  [/\b(?:Cannot find module|ERR_MODULE_NOT_FOUND)\b/i, '의존성 점검 · Node 모듈을 찾을 수 없음'],
+  [/\b(?:ERESOLVE unable to resolve dependency tree|Could not resolve all (?:files|dependencies) for configuration)\b/i,
+    '의존성 점검 · 빌드에 필요한 패키지 또는 버전을 해결하지 못함'],
+  [/\b(?:error TS\d+|compilation (?:failed|failure)|cannot find symbol)\b/i, '빌드 점검 · 컴파일 오류'],
+  [/\b(?:EACCES|EPERM|permission denied|access is denied)\b/i, '권한 점검 · 파일 또는 실행 권한 부족'],
+  [/\b(?:OutOfMemoryError|JavaScript heap out of memory|Could not reserve enough space for object heap)\b/i, '메모리 점검 · 실행에 필요한 메모리 부족'],
+  [/\b(?:getaddrinfo (?:ENOTFOUND|EAI_AGAIN)|UnknownHostException)\b/i, '연결 대상 점검 · 호스트 이름 조회 실패'],
+  [/\b(?:ENOENT|no such file or directory|could not find or load main class|command not found|is not recognized as an internal or external command)\b/i,
+    '실행 환경 점검 · 필요한 파일 또는 명령을 찾을 수 없음']
+]
+
+function otherFailureReason(line) {
+  const setting = /\bCould not resolve placeholder ['"]([\w.-]{1,80})['"]/i.exec(line)?.[1]
+  if (setting) return `설정 점검 · ${setting} 값 누락`
+  if (CONNECTION_REFUSED.test(line) || CONNECTION_TIMEOUT.test(line)) {
+    const port = connectionPort(line)
+    return `연결 대상 점검 · ${port ? `${port} 포트 ` : ''}연결 ${CONNECTION_REFUSED.test(line) ? '실패' : '시간 초과'}`
+  }
+  return OTHER_FAILURES.find(([pattern]) => pattern.test(line))?.[1]
+}
+
+function failureLine(line) {
+  return line.trim().replace(/^(?:\[(?:ERROR|ERR|FATAL|SEVERE|vite)\]\s*|(?:ERROR|ERR|FATAL|SEVERE)[\s:]+|Caused by:\s*)+/i, '')
+}
+
+function failureSummary(text) {
+  const summary = redactRunSecrets(text).replace(/\s+/g, ' ').trim()
+  return summary.length > FAILURE_SUMMARY_LIMIT ? `${summary.slice(0, FAILURE_SUMMARY_LIMIT - 1)}…` : summary
+}
+
+function describeRunFailure({ lines = [], exitCode, maven = false } = {}) {
+  const rows = lines.slice(-MAX_LOG_LINES).map(cleanLogLine)
+  const findings = diagnoseRun({ lines: rows, maven })
+  const last = findings.findLast(item => FAILURE_REASONS[item.kind])
+  if (last) {
+    const specific = ['portInUse', 'databaseConnection'].includes(last.kind) && !last.port
+      ? findings.findLast(item => item.kind === last.kind && item.reason === last.reason && item.port) ?? last : last
+    return failureSummary(FAILURE_REASONS[specific.kind](specific))
+  }
+  const other = rows.map(line => {
+    const detail = classifyDetail(line)
+    return detail.explicit && detail.level !== 'error' ? undefined : otherFailureReason(line)
+  }).findLast(Boolean)
+  if (other) return failureSummary(other)
+
+  const description = rows.findLastIndex(line => /^\s*(?:Description|\* What went wrong):\s*$/.test(line))
+  if (description >= 0 && rows.slice(0, description).some(line => /APPLICATION FAILED TO START|FAILURE:\s+Build failed/i.test(line))) {
+    const reason = rows.slice(description + 1).find(line => line.trim())
+    if (reason && !/^\s*(?:Action|\*[^:]*):/.test(reason)) return failureSummary(failureLine(reason))
+  }
+  const detail = rows.findLast(line => {
+    if (STACK_FRAME.test(line)) return false
+    const text = failureLine(line)
+    return !!text && !EXIT_FOOTER.test(text) &&
+      (classifyDetail(line).level === 'error' || FAILURE_DETAIL.test(line))
+  })
+  if (detail) return failureSummary(failureLine(detail))
+  return Number.isInteger(exitCode) ? `종료 코드 ${exitCode}만 확인됩니다. 로그를 확인해 주세요.`
+    : '오류 원인을 확인하지 못했습니다. 로그를 확인해 주세요.'
+}
+
+module.exports = { diagnoseRun, describeRunFailure }

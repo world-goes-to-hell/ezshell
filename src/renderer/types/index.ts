@@ -724,6 +724,7 @@ export interface BrowserReviewState {
   title: string
   /** The page's developer tools window is open */
   devToolsOpen: boolean
+  alert: { id: string; source: string; message: string } | null
   loading: boolean
   error: string
   picking: boolean
@@ -736,6 +737,7 @@ export interface BrowserReviewState {
 export type BrowserReviewAction =
   | { type: 'navigate'; address: string }
   | { type: 'back' | 'forward' | 'reload' | 'pick' | 'cancel' | 'devtools' }
+  | { type: 'dismiss-alert'; alertId: string }
   | { type: 'send'; agentId: string; text: string; selectionId: string; imageIds?: string[] }
   | { type: 'send-new'; kind: 'claude' | 'codex'; projectFolder?: string; text: string; selectionId: string; imageIds?: string[] }
 export type BrowserReviewResult = { success: true } | { success: false; error: string; cancelled?: true }
@@ -943,6 +945,10 @@ export interface WorkspaceGitRepository {
 
 export type WorkspaceGitSearchResult = Pick<WorkspaceGitRepository, 'commits' | 'hasMore'>
 
+export type WorkspaceGitUpstreamComparison =
+  | { upstream: string; status: 'missing' }
+  | { upstream: string; status: 'compared'; branch: string; head: string; ahead: number; behind: number; outgoing: WorkspaceGitCommit[]; incoming: WorkspaceGitCommit[] }
+
 export type WorkspaceGitFileKind = 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'conflict' | 'untracked'
 
 /** A changed file, its path relative to the repository top (forward slashes) */
@@ -1119,6 +1125,8 @@ export interface RunState {
   proposals?: RunProposal[]
   /** crashed: the build before the server failed (the server was not started) */
   failedAt?: 'prepare'
+  /** Redacted explanation of the last unexpected exit, cleared on the next start. */
+  failureReason?: string
 }
 
 export interface RunCandidate {
@@ -1135,6 +1143,7 @@ export interface RunErrorGroup {
 export interface RunSuggestion {
   id: string
   kind: 'missingClass' | 'jdkVersion' | 'jndi' | 'sourceEncoding' | 'portInUse' | 'mavenHttpBlocked'
+    | 'databaseConnection' | 'databaseAuth' | 'databaseMissing'
     | 'mavenRepositoryUnavailable' | 'mavenUnauthorized' | 'mavenTls' | 'mavenArtifactMissing' | 'mavenPluginJdk' | 'mavenUserMirror'
     | 'mavenPinnedAvailable' | 'mavenObsoleteJvmOption'
   message: string
@@ -1145,7 +1154,7 @@ export interface RunSuggestion {
   jarSearchIncomplete?: boolean
   repositoryId?: string
   mirrorId?: string
-  reason?: 'notFound' | 'unknownHost'
+  reason?: 'notFound' | 'unknownHost' | 'refused' | 'timeout'
   artifact?: string
   className?: string
   requiredFeature?: number | null
@@ -1432,6 +1441,7 @@ declare global {
       localFileOpen?: (root: string, relative: string, mode: 'edit' | 'preview', label?: string, options?: { compareHead?: boolean; line?: number }) => Promise<{ success: true } | { success: false; error: string }>
       localFileReveal?: (root: string, relative: string) => Promise<{ success: true } | { success: false; error: string }>
       workspaceGitLog: (folder: string, allBranches?: boolean) => Promise<{ success: true; repo: WorkspaceGitRepository } | { success: true; repo: null; reason: 'git-missing' | 'not-repo' } | { success: false; error: string }>
+      workspaceGitUpstream: (root: string) => Promise<{ success: true; comparison: WorkspaceGitUpstreamComparison | null } | { success: false; error: string }>
       workspaceGitSearch?: (root: string, query: string, worktreeOnly?: boolean) => Promise<({ success: true } & WorkspaceGitSearchResult) | { success: false; error: string }>
       agentHistorySearch?: (shellId: string, query: string) => Promise<{ success: true; matches: { key: string; snippet: string }[] } | { success: false; cancelled?: boolean; error: string }>
       agentHistoryList?: (shellId: string) => Promise<{ success: true; project: string; sessions: AgentHistorySession[] } | { success: false; error: string }>
@@ -1451,6 +1461,7 @@ declare global {
       localShellClipboard?: (id: string) => Promise<{ success: true; text: string } | { success: false; error: string }>
       localShellHasWorkingAgent?: (ids: string[]) => Promise<boolean>
       agentMessagesSnapshot: () => Promise<AgentMessagesSnapshot | null>
+      agentMessageSendCopiedText: (to: string, text: string) => Promise<{ success: true } | { success: false; error: string }>
       agentMessageSetRole: (id: string, role: string) => Promise<{ success: true } | { success: false; error: string }>
       browserReviewOpen: () => Promise<{ success: true; id: string } | { success: false; error: string }>
       browserReviewOpenWorkspace: (root: string, relative: string) => Promise<BrowserReviewResult>
@@ -1516,6 +1527,8 @@ declare global {
       agentChatInterrupt?: (shellId: string) => Promise<boolean>
       /** After Esc: clears the CLI composer if it holds exactly these chat lines */
       agentChatTakeBack?: (shellId: string, texts: string[]) => Promise<{ ok: boolean; reason?: string }>
+      /** The chat's bell: asks the agent to handle one message it has not handled yet, now */
+      agentInboxNotify?: (shellId: string, messageId: string) => Promise<AgentChatSendResult>
       agentChatAnswer?: (shellId: string, key: string, signature: string) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       agentChatAnswerQuestions?: (shellId: string, itemId: string, answers: AgentAskAnswer[]) => Promise<{ ok: true } | { ok: false; reason?: string; error: string }>
       /** After a slash command was sent: it ran (output: what Codex printed), asks a question, or opened a screen */

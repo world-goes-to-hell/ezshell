@@ -10,6 +10,45 @@
   font-size: 13px;
 }
 
+.modal-overlay.browser-page-alert-overlay { z-index: 110; }
+.modal-content.browser-page-alert { width: min(420px, 90vw); z-index: 111; }
+
+.browser-page-alert-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.browser-page-alert-header > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.browser-page-alert-header > div { min-width: 0; }
+.browser-page-alert-header .modal-title { margin: 0; }
+
+.browser-page-alert-source {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-page-alert-message {
+  max-height: min(42vh, 340px);
+  margin: 0;
+  overflow: auto;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .browser-review-toolbar {
   display: flex;
   align-items: center;

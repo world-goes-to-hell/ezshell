@@ -9,6 +9,7 @@ import { buildProjectNodes, type ProjectNode, type WorktreeNode } from '../compo
 import { projectKeyOf } from '../lib/localProjectServers'
 import { groupOfTab, groupTabs, localFolderForGroup, projectOfFolder, type GroupProject, type TabGroup } from '../lib/tabGroups'
 import { pathKey, worktreeOf } from '../lib/localWorkspaceTree'
+import { lastViewedTab } from '../lib/tabRecency'
 
 export interface TabGroupView {
   groups: TabGroup[]
@@ -57,8 +58,9 @@ export function useTabGroups(unlocked: boolean): TabGroupView {
     if (closed && before && before !== activeGroup) {
       const stay = groups.find(group => group.key === before)
       if (stay && stay.tabIds.length > 0) {
+        // The tab of that work seen most recently (lib/tabRecency.ts), as in one strip
         const last = store.lastTab[before]
-        terminalState.setActiveTerminal(last && stay.tabIds.includes(last) ? last : stay.tabIds[stay.tabIds.length - 1])
+        terminalState.setActiveTerminal(lastViewedTab(stay.tabIds) ?? (last && stay.tabIds.includes(last) ? last : stay.tabIds[stay.tabIds.length - 1]))
         return
       }
     }
